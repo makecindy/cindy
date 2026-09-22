@@ -17,6 +17,7 @@ import type {
   CindyMakeTestAction,
 } from '../../shared/cindyMakeSession.js';
 import { parseCindyMakeBuildLogs } from '../../shared/cindyMakeSession.js';
+import { parseCindyMakeBuildDiagnostic } from '../../shared/cindyMakeBuildDiagnostic.js';
 import { createMakeTestController, type MakeTestContext } from './testController.js';
 import { launchMakeTest, makeTestError, verifyMakeTestWorkspace } from './testRunner.js';
 import {
@@ -26,6 +27,11 @@ import {
 import { cindyMakeManager } from './manager.js';
 import { isCindyMakeWorktreePath, makeSourceRoot, makeSourceCheckoutPath } from './sourcePaths.js';
 import { historyBuildRollback } from './buildRollback.js';
+import {
+  getCindyMakeHistory,
+  recoverHistoryBuildRollback,
+  integrateCompletionForBuild,
+} from './historyRuntime.js';
 import {
   buildCindyPersonal,
   personalArtifactPath,
@@ -58,7 +64,14 @@ function readCompletion(agentMeta: string | null): CindyMakeCompletionMeta {
         const logs = parseCindyMakeBuildLogs(meta.personal.logs);
         return {
           ...meta,
-          personal: { ...meta.personal, ...(logs ? { logs } : {}) },
+          personal: {
+            ...meta.personal,
+            ...(logs ? { logs } : {}),
+            diagnostic:
+              meta.personal.status === 'failed'
+                ? parseCindyMakeBuildDiagnostic(meta.personal.diagnostic)
+                : undefined,
+          },
         };
       }
       return meta;
@@ -203,7 +216,8 @@ async function save(
 export const cindyMakeTestController = createMakeTestController({
   load,
   save,
-  claimBuild: () => cindyMakeManager.claimPersonalBuild(),
+  claimBuild: (context) =>
+    cindyMakeManager.claimPersonalBuild([context.sessionId], () => context.isCurrent()),
   onBuildState: (context, state) => {
     if (!context.isCurrent()) throw makeTestError('unavailable');
     const store = captureMakeHistoryStore();
@@ -258,6 +272,9 @@ export const cindyMakeTestController = createMakeTestController({
         const buildEnv = await personalBuildEnvironment(env, git.path);
         await publish({ status: 'waiting', preparationStep: 'original' });
         await rememberOriginalVersion(node.path);
+        await integrateCompletionForBuild(context, signal, publish);
+        signal.throwIfAborted();
+        if (!context.isCurrent()) throw makeTestError('unavailable');
         const historyStore = captureMakeHistoryStore();
         enteredBuilder = true;
         return await buildCindyPersonal(
@@ -296,8 +313,9 @@ export const cindyMakeTestController = createMakeTestController({
     return untilAborted(work, waiting.signal)
       .catch(async (error) => {
         if (!enteredBuilder && context.isCurrent()) {
-          const { recoverHistoryBuildRollback } = await import('./historyRuntime.js');
-          if (context.isCurrent()) await recoverHistoryBuildRollback(true);
+          const merge = cindyMakeManager.getState().upstreamMerge;
+          if (context.isCurrent() && !(merge?.hasWorkspace && merge.status !== 'merged'))
+            await recoverHistoryBuildRollback(true);
         }
         throw error;
       })
@@ -398,8 +416,6 @@ export async function actCindyMakeTest(
     if (action === 'build' && !cindyMakeTestController.isBuilding(sessionId)) {
       await cindyMakeTestController.stopTestForBuild(sessionId);
       const context = await load(sessionId, completionId);
-      const { getCindyMakeHistory, actCindyMakeHistory, recoverHistoryBuildRollback } =
-        await import('./historyRuntime.js');
       let history = await getCindyMakeHistory(context.runId);
       if (!context.isCurrent()) throw makeTestError('unavailable');
       if (history.busy) throw makeTestError('unavailable');
@@ -407,24 +423,6 @@ export async function actCindyMakeTest(
         await recoverHistoryBuildRollback();
         history = await getCindyMakeHistory(context.runId);
         if (!context.isCurrent() || history.busy) throw makeTestError('unavailable');
-      }
-      if (
-        !['integrated', 'unchanged'].includes(
-          history.items.find((item) => item.runId === context.runId)?.integration ?? '',
-        )
-      ) {
-        const item = history.items.find((item) => item.runId === context.runId);
-        const updated = await actCindyMakeHistory(
-          context.runId,
-          item?.actions?.includes('reapply') ? 'reapply' : 'integrate',
-        );
-        if (
-          updated.items.find((item) => item.runId === context.runId)?.integration !== 'integrated'
-        )
-          return save(context, {
-            lastAction: 'build',
-            personal: { status: 'failed', error: 'conflict' },
-          });
       }
     }
     return await cindyMakeTestController.act(

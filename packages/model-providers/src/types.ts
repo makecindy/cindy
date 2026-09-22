@@ -263,6 +263,14 @@ export interface ModelCost {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  /** Pi-compatible rates used when input tokens strictly exceed this threshold. */
+  tiers?: Array<{
+    inputTokensAbove: number;
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  }>;
 }
 
 /**

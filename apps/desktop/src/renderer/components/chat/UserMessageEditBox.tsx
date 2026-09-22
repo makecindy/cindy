@@ -16,11 +16,9 @@
  * isTurnRunning 与 renderer 状态的毫秒级尾差由
  * commitEditAndResendWithRunningRetry 的有限重试消化。
  *
- * 文件回滚提示:mount 时静默跑一次 rewindPreview(dryRun),上一轮有文件改动
- * 时在按钮左侧给一行小字("发送将撤销上一轮 N 个文件的改动"),不弹完整
- * Dialog —— 这是相对 Codex(完全不提示文件不会回滚)的体验差异化。preview
- * 失败(老消息无 checkpoint 等)只是不显示提示,不阻塞发送(commit 链路自带
- * forkSession 兜底,与 RewindPreviewDialog 的 Empty 态同语义)。
+ * 文件回滚提示:mount 时静默跑一次 rewindPreview(dryRun)。上一轮有文件改动
+ * 时在按钮左侧给一行小字;conversation-only 时明确告诉用户文件不会恢复,
+ * 避免静默叠加旧改动。preview 失败不阻塞发送。
  *
  * 键盘:Enter 发送(与主 composer 一致)、Shift+Enter 换行、Esc 取消。
  * 附件:v1 不支持编辑态增删,原消息附件由编排层原样重建重发(chips 在
@@ -131,8 +129,10 @@ export function UserMessageEditBox({
   // 运行中发送的挂起标记:等 sessionRunning 翻 false 后由 effect 接力提交。
   const pendingSendRef = useRef(false);
   const waitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // null = preview 未返回/失败(不显示提示);number = 上一轮改动的文件数。
-  const [rollbackFileCount, setRollbackFileCount] = useState<number | null>(null);
+  // null = preview 未返回/失败(不显示提示)。
+  const [rollbackHint, setRollbackHint] = useState<
+    { kind: 'files'; count: number } | { kind: 'conversation-only' } | null
+  >(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // 静默 preview 文件回滚影响。失败/软拒绝都归 null(不提示、不阻塞)。
@@ -147,7 +147,9 @@ export function UserMessageEditBox({
         if (cancelled) return;
         const fileCount = result.filesChanged?.length ?? 0;
         if (result.canRewind && fileCount > 0) {
-          setRollbackFileCount(fileCount);
+          setRollbackHint({ kind: 'files', count: fileCount });
+        } else if (result.canRewind && result.conversationOnly) {
+          setRollbackHint({ kind: 'conversation-only' });
         }
       })
       .catch(() => {
@@ -236,6 +238,7 @@ export function UserMessageEditBox({
           ...(preservedAgentReferences ? { agentReferences: preservedAgentReferences } : {}),
           ...(preservedPastedTextRanges ? { pastedTextRanges: preservedPastedTextRanges } : {}),
           ...(preservedSlashCommandRanges !== undefined ? { slashCommandRanges: preservedSlashCommandRanges } : {}),
+          ...(rollbackHint?.kind === 'conversation-only' ? { allowFileRestore: false } : {}),
         });
       }
       submittingRef.current = false;
@@ -260,7 +263,7 @@ export function UserMessageEditBox({
       submittingRef.current = false;
       setSubmitting(false);
     }
-  }, [sessionId, messageClientId, text, initialText, initialSubmitText, images, files, workingDir, quotesEncoded, agentReferences, pastedTextRanges, slashCommandRanges, onSent, onCommitOverride, t]);
+  }, [sessionId, messageClientId, text, initialText, initialSubmitText, images, files, workingDir, quotesEncoded, agentReferences, pastedTextRanges, slashCommandRanges, rollbackHint, onSent, onCommitOverride, t]);
 
   const handleSend = useCallback(() => {
     if (!canSend || submittingRef.current) return;
@@ -346,9 +349,14 @@ export function UserMessageEditBox({
         )}
       />
       <div className="mt-2 flex items-center justify-end gap-2">
-        {rollbackFileCount !== null && rollbackFileCount > 0 && (
+        {rollbackHint?.kind === 'files' && (
           <span className="min-w-0 flex-1 truncate text-left text-11 text-[var(--text-tertiary)]">
-            {t('chat.userMessage.editRollbackHint', { count: rollbackFileCount })}
+            {t('chat.userMessage.editRollbackHint', { count: rollbackHint.count })}
+          </span>
+        )}
+        {rollbackHint?.kind === 'conversation-only' && (
+          <span className="min-w-0 flex-1 truncate text-left text-11 text-[var(--text-tertiary)]">
+            {t('chat.userMessage.editConversationOnlyHint')}
           </span>
         )}
         <button

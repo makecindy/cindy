@@ -1,3 +1,6 @@
+import { useNativeGlassGroupStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
+import { NativeChromeBackButton } from "@/platform/chrome/NativeChromeBackButton.ios";
+import { navigationChrome } from "@/theme/tokens";
 import { Host } from "@expo/ui";
 import {
   Button,
@@ -17,14 +20,11 @@ import {
   accessibilityElement,
   accessibilityLabel,
   background,
-  buttonBorderShape,
   buttonStyle,
-  controlSize,
   contentShape,
   disabled,
   frame,
   foregroundStyle,
-  glassEffect,
   labelStyle,
   shapes,
 } from "@expo/ui/swift-ui/modifiers";
@@ -37,7 +37,6 @@ import {
   fontWeight,
   useTheme,
 } from "@/theme";
-import { useLiquidGlassAvailable } from "./useLiquidGlassAvailable";
 import { BlurBackdrop } from "./BlurBackdrop";
 import type {
   SessionHeaderNativeActionsProps,
@@ -93,6 +92,8 @@ export function SessionHeaderNativeTitle({ title,
   pinned, syncing, syncingImmediately, notice }: SessionHeaderNativeTitleProps) {
   const { colors } = useTheme();
   const style = {
+    alignSelf: 'center' as const,
+    maxWidth: '100%' as const,
     borderRadius: radius.pill,
     minHeight: 44,
     justifyContent: "center" as const,
@@ -117,7 +118,7 @@ export function SessionHeaderNativeTitle({ title,
     </Text>
   );
   return (
-    <View style={{ flex: 1, minWidth: 0 }}>
+    <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
       <View style={style}>
         <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} />
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
@@ -146,30 +147,7 @@ export function SessionHeaderNativeBack({
   label,
   onPress,
 }: SessionHeaderNativeBackProps) {
-  const { colors, mode } = useTheme();
-  const glass = useLiquidGlassAvailable();
-  return (
-    <Host
-      colorScheme={mode}
-      seedColor={colors.textPrimary}
-      ignoreSafeArea="all"
-      style={{ width: 44, height: 44 }}
-    >
-      <Button
-        label={label}
-        systemImage="chevron.backward"
-        onPress={onPress}
-        testID="session.backButton"
-        modifiers={[
-          labelStyle("iconOnly"),
-          buttonStyle(glass ? "glass" : "bordered"),
-          buttonBorderShape("circle"),
-          controlSize("large"),
-          frame({ width: 44, height: 44 }),
-        ]}
-      />
-    </Host>
-  );
+  return <NativeChromeBackButton label={label} onPress={onPress} testID="session.backButton" />;
 }
 
 /** Native SwiftUI buttons share one system capsule. */
@@ -184,27 +162,22 @@ export function SessionHeaderNativeActions({
   onAction,
 }: SessionHeaderNativeActionsProps) {
   const { colors, mode } = useTheme();
-  const glass = useLiquidGlassAvailable();
+  const groupStyle = useNativeGlassGroupStyle();
   const iconModifiers = [
     labelStyle("iconOnly"),
     buttonStyle("borderless"),
-    controlSize("large"),
-    frame({ width: 44, height: 44 }),
+    frame({ width: navigationChrome.target, height: navigationChrome.target }),
   ];
   return (
     <Host
       colorScheme={mode}
       seedColor={colors.textPrimary}
       ignoreSafeArea="all"
-      style={{ width: 132, height: 44 }}
+      style={{ width: navigationChrome.target * 3, height: navigationChrome.target }}
     >
       <HStack
         spacing={0}
-        modifiers={[
-          ...(glass
-            ? [glassEffect({ glass: { variant: "regular" }, shape: "capsule" })]
-            : [background(colors.surfaceElevated, shapes.capsule())]),
-        ]}
+        modifiers={groupStyle}
       >
         <Button
           onPress={onDesktop}
@@ -255,7 +228,7 @@ function SessionHeaderIcon({
     <VStack
       spacing={0}
       modifiers={[
-        frame({ width: 44, height: 44 }),
+        frame({ width: navigationChrome.target, height: navigationChrome.target }),
         contentShape(shapes.rectangle()),
       ]}
     >

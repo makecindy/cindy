@@ -81,6 +81,22 @@ describe('buildSnapshotFilePlan', () => {
     ]);
   });
 
+  it('does not execute repository-local fsmonitor when reading git status', async () => {
+    const marker = path.join(testRoot, 'fsmonitor-ran');
+    const script = path.join(testRoot, 'fsmonitor.js');
+    await fs.writeFile(
+      script,
+      `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran');\nprocess.exit(0);\n`,
+    );
+    await git(repoPath, ['config', 'core.fsmonitor', `node ${JSON.stringify(script)}`]);
+    await writeRepoFile(repoPath, 'src/app.ts', 'export const value = 1;\n');
+
+    const plan = await buildSnapshotFilePlan(repoPath);
+
+    expect(plan.includedFiles.map((file) => file.path)).toEqual(['src/app.ts']);
+    await expect(fs.access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('skips sensitive paths while allowing env templates', async () => {
     await writeRepoFile(repoPath, '.env', 'TOKEN=secret\n');
     await writeRepoFile(repoPath, 'config/secrets.json', '{}\n');

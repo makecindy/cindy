@@ -238,6 +238,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   const post = (message) => postMessage({ ...message, epoch });
   const clamp = (v) => Math.max(0, Math.min(1, v));
   let fillHeight = false;
+  let fitToInsets = false;
+  const usesViewportInsets = () => viewerSized || fitToInsets;
   let panAnimation = null,
     viewportRightInset = 0,
     viewportLeftInset = 0,
@@ -246,6 +248,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     keyboardViewportInset = 0,
     portraitKeyboardTopInset = 0;
   let keyboardViewportOpen = false;
+  let keyboardFitWidth = null;
   let cursorNeedsEntry = true,
     manualViewMoved = false,
     followRest = null;
@@ -255,7 +258,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   const usableHeight = () =>
     Math.max(1, stage.clientHeight - viewportTopInset - viewportBottomInset);
   const viewportHeight = () =>
-    viewerSized ? usableHeight() : Math.max(1, stage.clientHeight);
+    usesViewportInsets() ? usableHeight() : Math.max(1, stage.clientHeight);
   const viewportWidth = () =>
     Math.max(
       1,
@@ -267,13 +270,13 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   // The usable center is (topInset + stageHeight) / 2, so shift by topInset / 2.
   // Keep the fitted size and cap the shift when the desktop is too tall to fit.
   const verticalOffset = (height) =>
-    (viewerSized ? viewportTopInset : 0) +
+    (usesViewportInsets() ? viewportTopInset : 0) +
     (fillHeight
       ? 0
       : Math.min(
           Math.max(
             0,
-            portraitKeyboardTopInset - (viewerSized ? viewportTopInset : 0),
+            portraitKeyboardTopInset - (usesViewportInsets() ? viewportTopInset : 0),
           ) / 2,
           Math.max(0, (viewportHeight() - height) / 2),
         ));
@@ -286,14 +289,16 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
             height: dh * desktopScale,
           }
         : transform(
-            viewportWidth(),
+            keyboardFitWidth?.stageWidth === stage.clientWidth
+              ? keyboardFitWidth.width : viewportWidth(),
             viewportHeight(),
             dw,
             dh,
             zoom,
             fx,
             fy,
-            fillHeight && !viewerSized,
+            // Mobile fits both axes; retain Desktop scale semantics.
+            config.desktop ? fillHeight && !viewerSized : false,
           );
     return {
       ...r,
@@ -350,7 +355,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       picture.y + picture.height >= vh;
     const seg = coversStage
       ? null
-      : backgroundSegments(vw, vh, dw, dh, fillHeight, config.desktop);
+      : backgroundSegments(vw, vh, dw, dh, config.desktop ? fillHeight : false, config.desktop);
     if (!seg) {
       bg.style.display = "none";
       bgRects = null;
@@ -571,7 +576,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     const minX = Math.min(right - 1, left + 8 + hotX),
       minY = Math.min(
         bottom - 1,
-        (viewerSized ? viewportTopInset : 0) + 8 + hotY,
+        (usesViewportInsets() ? viewportTopInset : 0) + 8 + hotY,
       );
     return {
       minX,
@@ -642,7 +647,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (config.nativeMedia && epoch)
       post({
         type: "nativeViewport",
-        fillHeight,
+        fillHeight: false,
         x: r.x,
         y: r.y,
         width: r.width,
@@ -2047,6 +2052,20 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           status.style.color = message.color;
         break;
       }
+      case "nativeTouchpad": {
+        if (!nativeMouseControls || !control) break;
+        if (message.tap === true) {
+          if (!heldMouse.size) { click(); flush(); }
+          break;
+        }
+        if (!Number.isFinite(message.dx) || !Number.isFinite(message.dy)) break;
+        moveTouchpad(message.dx, message.dy);
+        queue({ kind: "move", x: cx, y: cy });
+        touchCursor = { x: cx, y: cy };
+        touchCursorVisible = true;
+        render();
+        break;
+      }
       case "nativeMouse": {
         if (
           !nativeMouseControls ||
@@ -2083,8 +2102,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           keyboardOpen = fillHeight && message.keyboardOpen === true;
         const keepHorizontal =
           fillHeight && (keyboardOpen || keyboardViewportOpen);
+        // Hiding the rail for the keyboard must not enlarge a width-fitted desktop.
+        if (keyboardOpen && (!keyboardViewportOpen || !keyboardFitWidth)) {
+          keyboardFitWidth = { stageWidth: stage.clientWidth, width: viewportWidth() };
+        }
+        if (!keyboardOpen) keyboardFitWidth = null;
         // Opening is observable before the native keyboard has a measured height.
         keyboardViewportOpen = keyboardOpen;
+        const fitChanged = fitToInsets !== (message.fitToInsets === true);
+        fitToInsets = message.fitToInsets === true;
         const previousOffset = portraitKeyboardTopInset;
         if (Number.isFinite(message.portraitKeyboardTopInset))
           portraitKeyboardTopInset = Math.max(
@@ -2149,10 +2175,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           followRest = { fx, fy, zoom };
           render();
         } else if (
+          fitChanged ||
           sideInsetsChanged ||
           offsetChanged ||
-          (viewerSized && previousTopInset !== viewportTopInset) ||
-          (viewerSized && previousBottomInset !== viewportBottomInset)
+          (usesViewportInsets() && previousTopInset !== viewportTopInset) ||
+          (usesViewportInsets() && previousBottomInset !== viewportBottomInset)
         ) {
           settlePan();
           render();
@@ -2226,6 +2253,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           receiveCursor(message.cursor);
         break;
       case "viewport":
+        if (fillHeight !== (message.fillHeight === true)) keyboardFitWidth = null;
         fillHeight = message.fillHeight === true;
         release();
         render();

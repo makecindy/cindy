@@ -2460,9 +2460,15 @@
     },
     "gitSafety": {
       "title": "Git セーフティ",
-      "autoSnapshotTitle": "Git セーフティ保存点",
-      "description": "Agent の編集後にプロジェクトの Git リポジトリへ隠し保存点を自動記録します。ブランチに commit は追加されません。有効な場合のみ Codex rewind を表示します。",
-      "toggleAria": "Git セーフティ保存点を切り替え",
+      "autoSnapshotTitle": "ファイル復元ポイント",
+      "description": "Cindy が隠しファイル復元ポイントを記録する範囲を選択します。ファイル復元のコストだけに影響し、会話の巻き戻しには影響しません。",
+      "modeAria": "ファイル復元ポイントのモード",
+      "modes": {
+        "off": "オフ",
+        "existingGit": "既存の Git プロジェクトのみ",
+        "allProjects": "新しい空のプロジェクトも含める"
+      },
+      "toggleAria": "ファイル復元ポイントのモード",
       "saveFailed": "Git セーフティ設定の保存に失敗しました"
     },
     "feishuBot": {
@@ -4962,7 +4968,9 @@
           "stateChanged": "操作中にアカウント、プラグイン、またはリリースが変更されました。最新の状態を確認して、もう一度お試しください。",
           "accessDenied": "このプラグイン操作は許可されていないか、キャンセルされました。",
           "notConfigured": "この環境ではプラグインマーケットを利用できません。",
-          "invalidPackage": "このプラグインパッケージは無効か、現在の Cindy バージョンではサポートされていません。",
+          "invalidPackage": "プラグインパッケージに問題があるため、インストールできません。発行元にお問い合わせください。",
+          "downloadTimeout": "プラグインのダウンロードがタイムアウトしました。しばらくしてからもう一度お試しください。",
+          "downloadFailed": "プラグインのダウンロードに失敗しました。接続を確認して、もう一度お試しください。",
           "brokerRedirectPortRequired": "このプラグインは認可 broker を宣言していますが、同じ OAuth 設定に redirectPort がないため、プラグインマーケットからインストールできません。発行元にこのフィールドを追加して新しいバージョンを公開するよう連絡してください。"
         },
         "securityTitle": "インストールと権限",
@@ -7428,6 +7436,14 @@
     }
   },
   "bots": {
+    "devicePicker": {
+      "local": "この端末",
+      "title": "端末を切り替え",
+      "switchDevice": "端末を切り替え（現在：{{device}}）",
+      "unread": "未読メッセージあり",
+      "otherUnread": "他の端末に未読メッセージがあります",
+      "remotePlaceholder": "{{device}}の{{name}}にメッセージを送信…"
+    },
     "creationName": "名前",
     "settingsBack": "設定に戻る",
     "sidebar": {
@@ -9299,6 +9315,7 @@
       "editCancel": "キャンセル",
       "editSend": "送信",
       "editRollbackHint": "送信すると前のターンで変更された {{count}} 個のファイルが元に戻ります",
+      "editConversationOnlyHint": "送信してもプロジェクトファイルは復元されず、前回のファイル変更は残ります",
       "forkErrors": {
         "unsupportedHistory": "この位置に対応する過去のエージェントセッションを利用できないため、ここから新しいセッションを始められません",
         "noPriorAssistant": "AI の返信より後のメッセージから新しいセッションを始めてください",
@@ -9318,7 +9335,9 @@
       "viewThread": "スレッドの文脈を見る ({{count}})"
     },
     "rewind": {
-      "noFilesToRollback": "ロールバック対象のファイルはありません。会話履歴のみ切り詰めます",
+      "noFilesToRollback": "復元できるプロジェクトファイルの変更は検出されませんでした",
+      "conversationOnlyNotice": "利用できるファイル復元ポイントがありません。このメッセージ以降のチャットが削除され、プロジェクトファイルは復元されません",
+      "gitSafetyDisabledNotice": "Git のファイル復元ポイントが無効です。設定で有効にしてください。このメッセージ以降のチャットが削除され、プロジェクトファイルは復元されません",
       "errors": {
         "noPriorAssistantPreview": "AI の返信の後ろにある質問で rewind してください（この前に assistant の返信がありません）",
         "sessionRunning": "タスクの停止待ちがタイムアウトしました。もう一度巻き戻してください",
@@ -9333,11 +9352,11 @@
         "errorDescription": "この Session ではファイルの checkpointing が有効になっていないため、ツールで変更されたファイルを戻せません。",
         "calculating": "rewind の影響を計算中…",
         "noChanges": "ロールバックが必要なファイル変更はありません",
-        "continueWillTruncate": "続行しても以降の会話は切り詰められます",
+        "continueWillTruncate": "続行すると、このメッセージ以降のチャットが削除されます",
         "noPerFileDiff": "この SDK バージョンはファイル単位の diff プレビューに対応していません",
         "summaryDefault": "このメッセージ以降の会話は破棄され、作業ディレクトリ内の {{count}} 件のファイルがその時点に戻ります。",
-        "summaryRunning": "実行中のタスクを停止し、このメッセージ以降の会話と対応するファイル変更を巻き戻します。",
-        "summaryEmpty": "このメッセージ以降の会話は破棄されます。ファイルは変更されず、履歴のみ切り詰めます。",
+        "summaryRunning": "実行中のタスクを停止し、このメッセージ以降の会話を巻き戻します。ファイルを復元できるかは停止後まで確定しません。",
+        "summaryEmpty": "このメッセージ以降のチャットが削除されます。プロジェクトファイルは変更されません。",
         "summaryEmptyWithNote": "このメッセージ以降の会話は破棄されます。",
         "runningNotice": "タスクはまだ実行中です。確認するとタスクを停止し、最新の状態から巻き戻します。",
         "runningQueueNotice": "送信待ちのメッセージは一時停止したまま保持され、自動送信されません。",
@@ -10391,7 +10410,7 @@
     },
     "empty": {
       "promptHeading": "自動化がまだありません",
-      "promptDescription": "cron 自動化を作成して、Claude Code、Codex、または Pi にプロンプトをスケジュール実行させましょう。"
+      "promptDescription": "cron 自動化を作成して、プロンプトをスケジュール実行させましょう。"
     },
     "usageLimitRecovery": {
       "name": "利用上限リセット後にタスクを続行",
@@ -12998,6 +13017,14 @@
       "localMain": "ローカル main",
       "lookupUnavailable": "取得できませんでした",
       "comparisonUnavailable": "ローカル main との差分は未取得",
+      "personalStatus": {
+        "suffix": "（{{status}}）",
+        "upToDate": "最新です",
+        "updateAvailable": "更新あり",
+        "unverified": "バージョン状態は未確認",
+        "upToDateDescription": "個人版のコードには{{target}}の更新がすべて含まれています",
+        "personalChanges": "個人版の変更履歴が {{ahead}} 件追加"
+      },
       "comparison": {
         "same": "ローカル main と同じ SHA",
         "personalAhead": "ローカル main を含み、個人版の変更履歴が {{ahead}} 件追加",
@@ -13040,6 +13067,16 @@
       "description": "今回の変更を個人版にマージし、チェックとパッケージ化が完了してから新しい個人版として保存します。",
       "readyHint": "インストーラー {{name}} を作成しました。保存先フォルダーを開けます。",
       "failedStep": "失敗したステップ：{{step}}",
+      "diagnostic": {
+        "outOfMemory": "パッケージ作成プロセスがメモリ上限を超えました。Cindy を更新して再生成してください。再び失敗する場合は、以下のエラーを報告してください。",
+        "timeout": "生成に 1 時間以上かかったため停止しました。以下の記録を確認して再試行してください。",
+        "exitCode": "プロセスの終了コード：{{code}}",
+        "unavailable": "この生成では具体的なエラーが保存されていません。原因を記録するには再生成してください。"
+      },
+      "mergeStep": {
+        "conflicts": "競合を解決中…",
+        "cleanup": "マージ用ファイルを削除中…"
+      },
       "preparationStep": {
         "environment": "ビルド環境を準備中…",
         "original": "現在のバージョンを確認中…"
@@ -13061,6 +13098,8 @@
       "buildLog": {
         "title": "ビルド記録",
         "steps": {
+          "resolving-conflicts": "競合を解決",
+          "cleaning-merge": "マージ用ファイルを削除",
           "environment": "ビルド環境を準備",
           "original": "現在のバージョンを確認",
           "merging": "変更を統合",
@@ -13140,7 +13179,7 @@
         "selectItem": "{{title}} を選択",
         "hint": "古い順にマージし、最後に新しいバージョンを1つ作成します。",
         "confirmTitle": "{{count}} 件の変更を含む個人版を作成しますか？",
-        "confirmDescription": "選択した変更を以下の順序でマージし、すべて成功したら新しいバージョンを1つ作成します。選択した変更の隔離版が起動中の場合は先に停止します。競合が発生した場合は停止し、マージ済みの変更を保持します。競合を解消してから、再度作成を開始してください。未解決の競合がない場合、キャンセルや失敗時は保存済みバージョンに含まれていないマージを取り消し、各セッションの元の変更を保持します。",
+        "confirmDescription": "選択した変更を以下の順序でマージし、すべて成功したら新しいバージョンを1つ作成します。選択した変更の隔離版が起動中の場合は先に停止します。競合は関連セッションで解決し、完了後に一時ファイルを削除して自動的に作成を続けます。制作を停止すると関連セッションも停止し、一時的な競合修正を破棄します。元の変更と保存済みバージョンは保持します。",
         "start": "作成を確定",
         "progress": "マージ中 {{current}} / {{total}}: {{title}}",
         "restartTest": "隔離版を再起動"
@@ -13149,6 +13188,10 @@
       "buildDescription": "現在の個人版ソースから新しいバージョンを生成します。未取り込みの過去の変更は含まれません。",
       "building": "個人版を生成中…",
       "stop": "制作を停止",
+      "stopConfirm": {
+        "title": "今回の制作を停止しますか？",
+        "description": "競合を解決中のセッションも停止し、一時的な競合修正とファイルを破棄します。保存済みバージョンに含まれていないマージも取り消します。元のセッションの変更、やり取りの履歴、保存済みバージョンは保持します。"
+      },
       "stopping": "停止中…",
       "progress": {
         "waiting": "開始を待機中",

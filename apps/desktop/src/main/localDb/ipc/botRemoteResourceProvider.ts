@@ -1,3 +1,8 @@
+import { getWorkingStatusCopy } from '../../maker-ipc/workingStatus.js';
+import { WORKING_PHASES } from '../../../shared/workingStatus.js';
+import { resolveSystemLocale } from '../../../shared/locale.js';
+import type { botRemoteManagement } from './botRemoteManagement.js';
+import { editorCopy } from './botRemoteEditors.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../device-link/broadcast-tap.js';
 import {
   getBotRemoteResourceSource,
@@ -17,7 +22,7 @@ import {
 let registered = false;
 
 /** Register the Bot module through the same API future host modules use. */
-export function registerBotRemoteResourceProvider(): void {
+export function registerBotRemoteResourceProvider(management?: typeof botRemoteManagement): void {
   if (registered) return;
   remoteResourceRegistry.register({
     collection: {
@@ -26,6 +31,7 @@ export function registerBotRemoteResourceProvider(): void {
       title: TEAMMATES_TITLE,
       placement: 'home-scope',
       icon: { name: 'users', fallbackText: '••' },
+      ...(management ? { actions: [{ id: 'open-create', label: editorCopy.create }] } : {}),
     },
     async list(_context, request) {
       const rawQuery = request.query?.trim().toLocaleLowerCase() ?? '';
@@ -44,18 +50,44 @@ export function registerBotRemoteResourceProvider(): void {
         items,
       };
     },
-    async get(_context, request) {
+    async get(context, request) {
+      if (management && (request.ref.id === 'create' || request.ref.id.startsWith('settings:'))) {
+        return management.getEditor(context, request.ref.id, request.client.locale);
+      }
+      if (request.ref.id.startsWith('working:')) {
+        const [botId, phase, extra] = request.ref.id.slice('working:'.length).split('/');
+        if (extra !== undefined || !botId || !WORKING_PHASES.includes(phase as typeof WORKING_PHASES[number]))
+          throw new RemoteResourceRegistryError('NOT_FOUND', 'Unknown working status');
+        const scope = captureDataOwnerBroadcastScope();
+        const [source] = visibleBotRemoteResourceSources([await getBotRemoteResourceSource(botId)]);
+        if (!source?.canonicalSessionId || !isDataOwnerBroadcastScopeCurrent(scope))
+          throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+        const result = await getWorkingStatusCopy({ sessionId: source.canonicalSessionId, phase, locale: resolveSystemLocale(request.client.locale) });
+        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
+        return { ref: request.ref, revision: String(source.currentVersion), display: { title: source.name }, links: [],
+          blocks: [{ id: 'working', primitive: 'status', fallbackMarkdown: result.text ?? '' }] };
+      }
       const [source] = visibleBotRemoteResourceSources([
         await getBotRemoteResourceSource(request.ref.id),
       ]);
       if (!source) {
         throw new RemoteResourceRegistryError('NOT_FOUND', 'remote resource does not exist');
       }
-      return { ...botRemoteResourceFromSource(source), teammateMessaging: { version: 1, available: source.status === 'active' } };
+      const resource = management && request.client.primitives.includes('form') ? await management.get(context, source.id) : management && source.invitation ? await management.getInvitation(context, source.id) : botRemoteResourceFromSource(source);
+      if (management && request.client.primitives.includes('form')) {
+        for (const page of ['avatar', 'skills', 'connections'] as const) {
+          const block = resource.blocks?.find(block => block.id === page);
+          const data = { entries: [{ id: page, title: editorCopy[page], resourceId: `settings:${source.id}/${page}` }] };
+          if (block) block.data = data;
+          else resource.blocks?.push({ id: page, primitive: 'list', fallbackMarkdown: '', data });
+        }
+      }
+      return { ...resource, teammateMessaging: { version: 1, available: source.status === 'active' } };
     },
     async invoke(context, request) {
       const scope = captureDataOwnerBroadcastScope();
       if (request.actionId !== 'send-message' && request.actionId !== 'verify-message' && request.actionId !== 'message-receipt') {
+        if (management) return management.invoke(context, request);
         throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Unknown teammate action');
       }
       const input = request.input;

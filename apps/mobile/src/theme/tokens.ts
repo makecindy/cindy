@@ -781,3 +781,21 @@ export const motionEasing = {
   /** 位置 / 尺寸插值 */
   move: [0.4, 0, 0.2, 1],
 } as const;
+
+/** Shared size for floating iOS navigation/menu controls (points). */
+export const navigationChrome = {
+  target: 44,
+  // Match navigation foreground polarity; backing stays local to the glass shape.
+  clear: {
+    light: {
+      foreground: '#000000',
+      scrim: 'rgba(255, 255, 255, 0.35)',
+      selected: 'rgba(0, 0, 0, 0.10)',
+    },
+    dark: {
+      foreground: '#FFFFFF',
+      scrim: 'rgba(0, 0, 0, 0.35)',
+      selected: 'rgba(255, 255, 255, 0.18)',
+    },
+  },
+} as const;

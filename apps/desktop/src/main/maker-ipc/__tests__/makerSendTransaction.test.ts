@@ -104,6 +104,63 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
 }
 
 describe('maker SEND transaction', () => {
+  it.each([false, true])(
+    'captures product state before preparation and resumes only at dispatch (persist=%s)',
+    async (persist) => {
+      const dispatch = vi.fn();
+      const prepareProductTurn = vi.fn(() => dispatch);
+      const { deps, session } = createDeps({
+        prepareProductTurn,
+        prepareUnhealthySession: vi.fn(async () => {
+          expect(prepareProductTurn).toHaveBeenCalledExactlyOnceWith('session-1');
+          expect(dispatch).not.toHaveBeenCalled();
+        }),
+      });
+      vi.mocked(session.send).mockImplementation(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        expect(dispatch).not.toHaveBeenCalled();
+        opts?.onDispatching?.();
+        expect(dispatch).toHaveBeenCalledOnce();
+        return { accepted: true };
+      });
+      await createMakerSendTransaction(deps).sendToAgentAccepted(
+        'session-1',
+        'continue',
+        undefined,
+        persist ? { persistUserMessage: { clientId: 'input', content: 'continue' } } : undefined,
+      );
+      expect(dispatch).toHaveBeenCalledOnce();
+    },
+  );
+  it.each(['stop', 'rejected'] as const)(
+    'does not resume product work when %s wins after message persistence',
+    async (reason) => {
+      const dispatch = vi.fn();
+      const { deps, session } = createDeps({
+        prepareProductTurn: () => dispatch,
+        assertBeforeVendorDispatch: () => {
+          throw new Error('stale input');
+        },
+      });
+      vi.mocked(session.send).mockImplementation(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        if (reason === 'rejected') opts?.onDispatching?.();
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
+      });
+      const sending = createMakerSendTransaction(deps).sendToAgentAccepted(
+        'session-1',
+        'continue',
+        undefined,
+        {
+          persistUserMessage: { clientId: 'input', content: 'continue' },
+        },
+      );
+      if (reason === 'rejected') await expect(sending).rejects.toThrow('stale input');
+      else await expect(sending).resolves.toMatchObject({ accepted: false });
+      expect(deps.createDbMessage).toHaveBeenCalledOnce();
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
   it('dispatches a bound lazy session after one timed-out probe without probing again at bootstrap', async () => {
     const h = createPreflightHarness();
     h.io.stat.mockRejectedValue(filesystemError('WORKDIR_PROBE_TIMEOUT'));

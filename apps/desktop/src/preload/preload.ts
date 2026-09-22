@@ -3950,7 +3950,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('log-upload:settings-get'),
   setLogUploadCrashAuto: (enabled: boolean): Promise<LogUploadSettingsPayload> =>
     ipcRenderer.invoke('log-upload:set-crash-auto', enabled === true),
-  /** 恢复默认:删掉开关 override,重新跟随当前版本默认值(默认关闭)。 */
+  /** 恢复默认:删掉 override,重新跟随当前版本默认的“已有 Git 项目”模式。 */
   resetLogUploadCrashAuto: (): Promise<LogUploadSettingsPayload> =>
     ipcRenderer.invoke('log-upload:reset-crash-auto'),
   /** 手动上传一次。失败以 IPC 错误码返回(LOG_UPLOAD_* / PRIVACY_CONSENT_REQUIRED)。 */
@@ -6910,22 +6910,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:chat-embedding:reset', owner),
 
     // Git safety workflow —— 控制 turn end 自动 XDT snapshot commit。
-    // 默认 false; Codex rewind 按钮跟随该开关显示。
+    // 三态默认只覆盖已有 Git 项目；Codex 对话编辑不依赖此开关。
     gitSafetyGet: (): Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }> => ipcRenderer.invoke('maker:git-safety:get'),
     gitSafetySet: (
-      enabled: boolean,
+      mode: 'off' | 'existing-git' | 'all-projects' | boolean,
     ): Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
-    }> => ipcRenderer.invoke('maker:git-safety:set', enabled),
+    }> => ipcRenderer.invoke('maker:git-safety:set', mode),
     gitSafetyReset: (): Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }> => ipcRenderer.invoke('maker:git-safety:reset'),
 
@@ -7246,7 +7255,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     rewindCommit: (
       sessionId: string,
       clientId: string,
-      opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean },
+      opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean; allowFileRestore?: boolean },
     ): Promise<unknown> => ipcRenderer.invoke('maker:rewind:commit', sessionId, clientId, opts),
     fork: (sourceSessionId: string, messageClientId: string): Promise<unknown> =>
       ipcRenderer.invoke('maker:fork', sourceSessionId, messageClientId),

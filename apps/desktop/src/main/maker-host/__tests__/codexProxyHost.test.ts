@@ -3092,6 +3092,11 @@ describe('codex proxy host', () => {
     ["Invalid 'input[2].call_id': 'fc_old'. Expected an ID that begins with 'ctc'.", null],
     ["Invalid 'input[2].id': 'fc_old'. Expected an ID that begins with 'msg'.", null],
     ["Invalid 'input[2].id': 'unknown_old'. Expected an ID that begins with 'ctc'.", null],
+    // issue #4023: legacy call_ item ids are rewritten to whichever dialect the target asks for.
+    ["Invalid 'input[5].id': 'call_00_nRi4LX3KqCkex4kDJqBo0978'. Expected an ID that begins with 'ctc'.", 'tool_item_id'],
+    [JSON.stringify({ error: { message: "Invalid \"input[5].id\": \"call_fn\". Expected an ID that begins with \"fc\"." } }), 'tool_item_id'],
+    ["Invalid 'input[5].call_id': 'call_fn'. Expected an ID that begins with 'ctc'.", null],
+    ["Invalid 'input[5].id': 'CALL_fn'. Expected an ID that begins with 'ctc'.", null],
     ["Invalid 'input[2].id': 'FC_old'. Expected an ID that begins with 'ctc'.", null],
     ['invalid_value', null],
   ])('arms recovery only for repairable tool item errors: %s', async (message, expected) => {

@@ -5330,8 +5330,9 @@ export function CCAgentSessionView({
                   messages={messages}
                   placeholder={
                     botChatIdentity
-                      ? t(botComposerPlaceholderKey(botChatIdentity.name), {
+                      ? t(botChatIdentity.deviceId ? 'bots.devicePicker.remotePlaceholder' : botComposerPlaceholderKey(botChatIdentity.name), {
                           name: botChatIdentity.name,
+                          device: botChatIdentity.deviceName || botChatIdentity.deviceId,
                         })
                       : t('ccAgent.layout.chatPlaceholder')
                   }
@@ -5953,7 +5954,7 @@ function RunningStatusBar({
     !isHidden && !reconnecting && usageMeta.kind === 'rate'
       ? latestRateText !== null
         ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
-        : t('chat.runningStatus.waitingSample')
+        : null
       : null;
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
@@ -5971,7 +5972,6 @@ function RunningStatusBar({
       (!workflowWaiting &&
         !sideTaskRunning &&
         !backgroundTasksRunning &&
-        Boolean(rateText) &&
         usageMeta.kind === 'rate'));
   // A pinned panel keeps its anchor mounted through idle and subsequent turns.
   // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在

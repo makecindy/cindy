@@ -2460,9 +2460,15 @@
     },
     "gitSafety": {
       "title": "Git 安全",
-      "autoSnapshotTitle": "Git 安全儲存點",
-      "description": "Agent 修改後自動在專案 Git 倉庫裡記錄隱藏儲存點，不會在你的分支上產生 commit。只有開啟後才顯示 Codex rewind 入口。",
-      "toggleAria": "切換 Git 安全儲存點",
+      "autoSnapshotTitle": "檔案恢復點",
+      "description": "選擇 Cindy 記錄隱藏檔案恢復點的範圍。這只影響檔案恢復成本，不影響對話回退。",
+      "modeAria": "檔案恢復點模式",
+      "modes": {
+        "off": "關閉",
+        "existingGit": "僅已有 Git 專案",
+        "allProjects": "包括新的空專案"
+      },
+      "toggleAria": "檔案恢復點模式",
       "saveFailed": "儲存 Git 安全設定失敗"
     },
     "feishuBot": {
@@ -4961,7 +4967,9 @@
           "stateChanged": "操作期間帳號、插件或版本已發生變化，請確認最新狀態後重試。",
           "accessDenied": "當前插件操作不被允許，或操作已取消。",
           "notConfigured": "當前環境未提供插件市場。",
-          "invalidPackage": "該插件包無效，或當前 Cindy 版本不支援它。",
+          "invalidPackage": "插件安裝包異常，無法安裝，請聯絡釋出者。",
+          "downloadTimeout": "插件下載逾時，請稍後重試。",
+          "downloadFailed": "插件下載失敗，請檢查網路後重試。",
           "brokerRedirectPortRequired": "此插件宣告了授權 broker，但同一項 OAuth 設定缺少 redirectPort，無法從插件市場安裝。請聯絡釋出者補上該欄位並重新釋出。"
         },
         "securityTitle": "安裝與權限",
@@ -7428,6 +7436,14 @@
     }
   },
   "bots": {
+    "devicePicker": {
+      "local": "本機",
+      "title": "切換裝置",
+      "switchDevice": "切換裝置，目前為{{device}}",
+      "unread": "有未讀訊息",
+      "otherUnread": "其他裝置有未讀訊息",
+      "remotePlaceholder": "傳送給{{device}}上的 {{name}}…"
+    },
     "creationName": "名字",
     "settingsBack": "返回設定",
     "sidebar": {
@@ -9298,6 +9314,7 @@
       "editCancel": "取消",
       "editSend": "傳送",
       "editRollbackHint": "傳送將撤銷上一輪對 {{count}} 個檔案的改動",
+      "editConversationOnlyHint": "傳送不會恢復專案檔案，上一輪的檔案改動會保留",
       "forkErrors": {
         "unsupportedHistory": "目標位置對應的歷史引擎會話已不可用，無法從這裡開啟新任務",
         "noPriorAssistant": "請在 AI 回覆之後的訊息上開啟新任務",
@@ -9317,7 +9334,9 @@
       "viewThread": "檢視 thread 上下文 ({{count}})"
     },
     "rewind": {
-      "noFilesToRollback": "沒有可回滾的檔案，僅會截斷對話歷史",
+      "noFilesToRollback": "沒有偵測到可恢復的專案檔案改動",
+      "conversationOnlyNotice": "目前無法恢復專案檔案，因為沒有可用的 Git 保存點；繼續後會移除這則訊息之後的對話記錄，專案檔案不會回到之前的狀態",
+      "gitSafetyDisabledNotice": "Git 安全保存點未開啟，因此目前無法恢復專案檔案。請在設定中開啟後再使用檔案恢復；繼續後會移除這則訊息之後的對話記錄，專案檔案不會回到之前的狀態",
       "errors": {
         "noPriorAssistantPreview": "請在 AI 回覆之後的提問上 rewind（這條之前沒有 assistant 回覆）",
         "sessionRunning": "等待任務停止超時，請重新回退",
@@ -9332,11 +9351,11 @@
         "errorDescription": "這個任務的檔案 checkpointing 未啟用，無法回退被工具改動過的檔案。",
         "calculating": "正在計算回退影響…",
         "noChanges": "沒有需要回滾的檔案改動",
-        "continueWillTruncate": "繼續回退仍會截斷後續訊息",
+        "continueWillTruncate": "繼續後會移除這則訊息之後的對話記錄",
         "noPerFileDiff": "該 SDK 版本不支援單檔案 diff 預覽",
         "summaryDefault": "後續訊息會被丟棄，工作目錄裡的 {{count}} 個檔案會回退到那一刻。",
-        "summaryRunning": "當前執行會被停止；後續訊息和對應檔案改動會被回退。",
-        "summaryEmpty": "後續訊息會被丟棄。沒有檔案被改動，僅截斷歷史。",
+        "summaryRunning": "當前任務會被停止；這則訊息之後的對話會被回退。停止前無法確認專案檔案是否會恢復。",
+        "summaryEmpty": "這則訊息之後沒有偵測到專案檔案改動，繼續後會移除後續對話記錄。",
         "summaryEmptyWithNote": "後續訊息會被丟棄。",
         "runningNotice": "任務仍在執行。確認後會先停止任務，再按最新狀態執行回退。",
         "runningQueueNotice": "排隊訊息會保留並暫停，不會自動傳送。",
@@ -10391,7 +10410,7 @@
     },
     "empty": {
       "promptHeading": "暫無自動化",
-      "promptDescription": "建立一個 cron 自動化，讓 Claude Code、Codex 或 Pi 按計劃執行你的 Prompt。"
+      "promptDescription": "建立一個 cron 自動化，按計劃執行你的 Prompt。"
     },
     "usageLimitRecovery": {
       "name": "用量恢復後繼續任務",
@@ -12998,6 +13017,14 @@
       "localMain": "本機 main",
       "lookupUnavailable": "查詢失敗",
       "comparisonUnavailable": "本機 main 的差距尚未讀取",
+      "personalStatus": {
+        "suffix": "（{{status}}）",
+        "upToDate": "已是最新",
+        "updateAvailable": "有更新",
+        "unverified": "版本狀態未確認",
+        "upToDateDescription": "個人版程式碼已包含{{target}}的全部更新",
+        "personalChanges": "另有 {{ahead}} 筆個人修改記錄"
+      },
       "comparison": {
         "same": "與本機 main 的 SHA 相同",
         "personalAhead": "已包含本機 main，另有 {{ahead}} 筆個人修改記錄",
@@ -13040,6 +13067,16 @@
       "description": "將本次修改與個人版合併，檢查和打包通過後儲存為新個人版。",
       "readyHint": "安裝套件 {{name}} 已產生，可開啟所在目錄。",
       "failedStep": "失敗步驟：{{step}}",
+      "diagnostic": {
+        "outOfMemory": "打包程式超出了記憶體上限。請更新 Cindy 後重新產生；若仍失敗，請回報下方錯誤。",
+        "timeout": "產生時間超過 1 小時，已停止。請檢查下方記錄後重試。",
+        "exitCode": "程式結束代碼：{{code}}",
+        "unavailable": "這次產生沒有儲存具體錯誤，請重新產生以記錄失敗原因。"
+      },
+      "mergeStep": {
+        "conflicts": "正在處理衝突…",
+        "cleanup": "正在清理合併檔案…"
+      },
       "preparationStep": {
         "environment": "正在準備產生環境…",
         "original": "正在檢查目前版本…"
@@ -13061,6 +13098,8 @@
       "buildLog": {
         "title": "產生記錄",
         "steps": {
+          "resolving-conflicts": "處理衝突",
+          "cleaning-merge": "清理合併檔案",
           "environment": "準備產生環境",
           "original": "檢查目前版本",
           "merging": "合入修改",
@@ -13140,7 +13179,7 @@
         "selectItem": "選取 {{title}}",
         "hint": "由舊到新依序合入，統一產生一個新版本。",
         "confirmTitle": "製作包含 {{count}} 項變更的個人版？",
-        "confirmDescription": "所選變更將依下列順序逐項合入，全部成功後只產生一個新版本。已啟動的所選隔離版會先停止。遇到衝突時停止製作並保留已合入變更，處理後可重新開始製作。沒有待處理衝突時，取消或產生失敗會撤回尚未產生成功版本的合入，保留各任務的原始變更。",
+        "confirmDescription": "所選變更將依下列順序逐項合入，全部成功後只產生一個新版本。已啟動的所選隔離版會先停止。遇到衝突會進入處理衝突步驟，可開啟關聯任務查看；處理完成後自動清理暫存檔案並繼續產生。停止製作也會停止關聯任務並捨棄暫存的衝突修改，原任務修改和已產生版本會保留。",
         "start": "確認製作",
         "progress": "正在合入 {{current}} / {{total}}：{{title}}",
         "restartTest": "重新啟動隔離版"
@@ -13149,6 +13188,10 @@
       "buildDescription": "將目前的個人原始碼產生為新版本，尚未合入的歷史改動不會包含在內。",
       "building": "正在產生個人版…",
       "stop": "停止製作",
+      "stopConfirm": {
+        "title": "停止本次製作？",
+        "description": "會同時停止本次處理衝突的任務，捨棄暫存的衝突修改，清理暫存檔案，並撤回尚未產生成功版本的合入。原製作任務的修改、交流記錄和已產生版本會保留。"
+      },
       "stopping": "正在停止…",
       "progress": {
         "waiting": "等待開始",

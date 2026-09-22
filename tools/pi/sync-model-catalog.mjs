@@ -18,6 +18,7 @@ const PI_CATALOG_BASE = "https://pi.dev/api/models/providers";
 import {
   applyKnownXaiCorrections,
   applyPinnedXaiAdditions,
+  applyGrok47CatalogAddition,
 } from "./xai-catalog-corrections.mjs";
 import {
   applyAstraCatalogAdditions,
@@ -49,7 +50,9 @@ function catalogEntries(providerId, value) {
 async function main() {
   const providers = {};
   const previous = JSON.parse(await fs.readFile(SNAPSHOT_PATH, "utf8"));
-  const PROVIDER_IDS = Object.keys(previous.providers).filter(id => id !== '.manifest').sort();
+  const PROVIDER_IDS = Object.keys(previous.providers)
+    .filter((id) => id !== ".manifest")
+    .sort();
   let newestModified = 0;
   const inputIndex = process.argv.indexOf("--input");
   const inputPath = inputIndex >= 0 ? process.argv[inputIndex + 1] : undefined;
@@ -76,16 +79,14 @@ async function main() {
         throw new Error(`Input catalog lacks provider '${providerId}'`);
     }
     for (const providerId of Object.keys(input)) {
-      if (providerId === '.manifest') continue;
+      if (providerId === ".manifest") continue;
       if (!(providerId in input))
         throw new Error(`Input catalog lacks provider '${providerId}'`);
       providers[providerId] = catalogEntries(providerId, input[providerId]);
     }
   } else {
     // Refresh the complete imported catalog, including channels not curated as GUI presets.
-    const providerIds = [
-      ...new Set(PROVIDER_IDS),
-    ].sort();
+    const providerIds = [...new Set(PROVIDER_IDS)].sort();
     for (const providerId of providerIds) {
       const response = await fetch(
         `${PI_CATALOG_BASE}/${encodeURIComponent(providerId)}`,
@@ -107,6 +108,7 @@ async function main() {
     }
   }
   if (providers.xai) providers.xai = applyKnownXaiCorrections(providers.xai);
+  applyGrok47CatalogAddition(providers);
   applyAstraCatalogAdditions(providers);
   if (bundlePath) {
     applyPinnedAstraCorrections(providers, sourceVersion);

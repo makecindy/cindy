@@ -114,14 +114,16 @@ export async function createPluginDraftSession(params: {
     source: 'plugin' as const,
     ...(params.title ? { title: params.title } : {}),
   };
-  // 与 local-db:sessions:create 同流程:空目录且用户开了快照才会 git init,
-  // 非空目录/未开快照原样跳过(projectGitBootstrap 自带守卫)。
+  // 与 local-db:sessions:create 同流程:只有“所有项目”模式才会给空目录 git init,
+  // 已有 Git 项目仍可在“已有 Git 项目”模式下记录保存点。
+  const gitSafety = readGitSafetySettings();
   await ensureProjectGitInitialized({
     workingDir: insertRow.workingDir,
     workspaceKind: insertRow.workspaceKind,
     remoteHostId: insertRow.remoteHostId,
     sessionId: id,
-    autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
+    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
+    autoInitProjectGit: gitSafety.autoInitProjectGit,
     source: 'plugin-workspace-session',
   });
   if (params.shouldContinue && !params.shouldContinue()) return null;
@@ -204,12 +206,14 @@ export async function createGhostErrandSession(params: {
     ...(params.title ? { title: params.title } : {}),
   };
   // 与既有 create 同流程;dialogue 目录由 projectGitBootstrap 自带守卫跳过。
+  const gitSafety = readGitSafetySettings();
   await ensureProjectGitInitialized({
     workingDir: insertRow.workingDir,
     workspaceKind: insertRow.workspaceKind,
     remoteHostId: insertRow.remoteHostId,
     sessionId: id,
-    autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
+    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
+    autoInitProjectGit: gitSafety.autoInitProjectGit,
     source: 'plugin-errand-session',
   });
   await db.insert(sessions).values(insertRow);

@@ -382,6 +382,13 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
         WHERE bot_id = ? AND role = 'canonical' AND archived_at IS NULL`)
         .run(nextVersion, id);
     }
+    if (p.canonicalPermissionMode !== undefined) {
+      const mode = expectString(p.canonicalPermissionMode, 'canonicalPermissionMode');
+      if (!['ask', 'auto', 'bypassPermissions'].includes(mode)) throw new Error('Invalid canonical permission mode');
+      db.prepare(`UPDATE sessions SET permission_mode = ? WHERE id IN
+        (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role = 'canonical' AND archived_at IS NULL)`)
+        .run(mode, id);
+    }
     return { currentVersion: nextVersion };
   })();
 }

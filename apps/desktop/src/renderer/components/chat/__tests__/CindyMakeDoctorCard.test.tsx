@@ -244,7 +244,7 @@ describe('Make upstream step', () => {
       expect(document.querySelector('.animate-spinner')).toBeNull();
       expect(screen.getByRole('status').textContent).toBe(`cindyMake.source.${status}`);
       expect(screen.getByRole('status').className).toContain(
-        status === 'failed' ? 'text-[var(--status-danger)]' : 'text-[var(--text-secondary)]',
+        status === 'failed' ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]',
       );
       expect(screen.queryByRole('button', { name: 'cindyMake.upstream.personal' })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'cindyMake.prepare.retry' }));
@@ -272,7 +272,7 @@ describe('Make upstream step', () => {
       expect(document.querySelector('.animate-spinner')).toBeNull();
       expect(screen.getByRole('status').textContent).toBe(`cindyMake.upstream.${status}`);
       expect(screen.getByRole('status').className).toContain(
-        status === 'failed' ? 'text-[var(--status-danger)]' : 'text-[var(--text-secondary)]',
+        status === 'failed' ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]',
       );
       expect(screen.queryByRole('button', { name: 'cindyMake.upstream.personal' })).toBeNull();
     },

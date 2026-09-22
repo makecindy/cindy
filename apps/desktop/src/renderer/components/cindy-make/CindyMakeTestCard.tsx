@@ -21,6 +21,7 @@ import { CindyMakeBuildProgress } from './CindyMakeBuildProgress';
 import { CindyMakeBuildFailure } from './CindyMakeBuildFailure';
 import { cindyMakeBuildStatusKey } from './cindyMakeBuildStatus';
 import { CindyMakeTestStep } from './CindyMakeTestStep';
+import { useCindyMakeBuildStop } from './useCindyMakeBuildStop';
 
 type CompletedTestProps = {
   sessionId: string;
@@ -83,7 +84,7 @@ function CindyMakeTestRecovery({ sessionId, recovery }: RecoveryTestProps) {
       description={t('cindyMake.test.resume.description')}
     >
       {failed && (
-        <p role="alert" className="text-12 text-[var(--status-danger)]">
+        <p role="alert" className="text-12 text-[var(--error-fg)]">
           {t('cindyMake.test.resume.failed')}
         </p>
       )}
@@ -135,10 +136,15 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
     sharedBuild?.buildId === meta.personal?.buildId &&
     meta.personal &&
     ['ready', 'failed'].includes(meta.personal.status)
-      ? meta.personal
+      ? {
+          ...meta.personal,
+          mergeSessionId: meta.personal.mergeSessionId ?? sharedBuild?.mergeSessionId,
+        }
       : (sharedBuild ?? meta.personal);
   const versions = useCindyVersions(!!personal?.versionId, personal?.versionId);
-  const [stoppingBuild, setStoppingBuild] = useState(false);
+  const { stop: confirmStopBuild, stopping: stoppingBuild } = useCindyMakeBuildStop(
+    personal && !['ready', 'failed'].includes(personal.status) ? personal.buildId : undefined,
+  );
   const buildRequest = useRef(0);
   const [error, setError] = useState<{
     mode: 'test' | 'build';
@@ -263,16 +269,14 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
   const stopping = building && (stoppingBuild || displayBuild?.stopping === true);
   const stopBuild = async () => {
     if (!personal?.buildId || stopping || !current()) return;
-    setStoppingBuild(true);
-    buildRequest.current += 1;
-    try {
-      const state = await window.electronAPI.cancelCindyMakePersonal(personal.buildId);
-      if (current()) setSharedBuild(state.build);
-    } catch {
-      if (current()) setError({ mode: 'build', code: 'unavailable' });
-    } finally {
-      if (current()) setStoppingBuild(false);
-    }
+    await confirmStopBuild(
+      current,
+      (state) => {
+        buildRequest.current += 1;
+        setSharedBuild(state.build);
+      },
+      () => setError({ mode: 'build', code: 'unavailable' }),
+    );
   };
   const switching = !!versions.pending || versions.state?.switching === true;
   const usingPersonal = !!personal?.versionId && versions.state?.currentId === personal.versionId;
@@ -323,12 +327,12 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
       }
     >
       {versions.error && (
-        <p role="alert" className="text-12 text-[var(--status-danger)]">
+        <p role="alert" className="text-12 text-[var(--error-fg)]">
           {t('cindyMake.versions.errors.' + versions.error)}
         </p>
       )}
       {errorCode && !buildMode && (
-        <p role="alert" className="text-12 text-[var(--status-danger)]">
+        <p role="alert" className="text-12 text-[var(--error-fg)]">
           {t('cindyMake.test.errors.' + errorCode)}
         </p>
       )}

@@ -1911,6 +1911,24 @@ describe('nodeRuntimeBroker · 权限与协议', () => {
     broker.destroyAll();
   });
 
+  it('已接收的悬空 OAuth 声明在运行时拒绝，不读取静态凭证或启动 Worker', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.secretBindings = [{
+      key: 'access_token', label: 'Account', methods: ['run'], oauthSecret: 'future_account',
+    }];
+    const readSecret = vi.fn();
+    const resolveOauthSecret = vi.fn();
+    const spawnProcess = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost, readSecret, resolveOauthSecret, spawnProcess });
+    try {
+      expect(await broker.handleRequest('node-ghost', rpcRequest('run')))
+        .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(readSecret).not.toHaveBeenCalled();
+      expect(resolveOauthSecret).not.toHaveBeenCalled();
+      expect(spawnProcess).not.toHaveBeenCalled();
+    } finally { broker.destroyAll(); }
+  });
+
   it('OAuth 刷新跨越停用再启用时不把旧调用交给新 Worker', async () => {
     const ghost = fakeGhost();
     ghost.manifest.network = { hosts: ['example.test'], secrets: [{

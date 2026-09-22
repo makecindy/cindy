@@ -32,10 +32,13 @@ import {
 import type { CindyMakePersonalBuildState } from '../../shared/cindyMakeSession.js';
 import { commitLocalFiles, commitPersonalFiles, MAKE_GIT_IDENTITY } from './localHistory.js';
 import { createPersonalBuildCleanup } from './personalBuildCleanup.js';
+import { createMakeBuildOutput, makeBuildErrorDiagnostic } from './buildDiagnostic.js';
+import { createMakeBuildLineOutput, runMakeBuildStep } from './buildProgress.js';
+import type { CindyMakeBuildDiagnostic } from '../../shared/cindyMakeBuildDiagnostic.js';
 
 type BuildError = NonNullable<CindyMakePersonalBuildState['error']>;
-export function personalBuildError(code: BuildError): Error & { code: BuildError } {
-  return Object.assign(new Error(code), { code });
+export function personalBuildError(code: BuildError, diagnostic?: CindyMakeBuildDiagnostic) {
+  return Object.assign(new Error(code), { code, ...(diagnostic ? { diagnostic } : {}) });
 }
 export type PersonalArtifact = Required<
   Pick<CindyMakePersonalBuildState, 'artifactDirectory' | 'artifactName' | 'sha256' | 'commit'>
@@ -90,6 +93,7 @@ export function runPersonalPackageCommand(
   env: NodeJS.ProcessEnv,
   signal: AbortSignal,
   spawn: PtySpawnFn = defaultPtySpawn,
+  onOutput?: (line: string) => void,
 ): Promise<void> {
   signal.throwIfAborted();
   // Only the builder's resolved commit may cross the otherwise clean child environment.
@@ -97,18 +101,35 @@ export function runPersonalPackageCommand(
   if (migrationBase !== undefined && !/^[0-9a-f]{40,64}$/i.test(migrationBase))
     throw personalBuildError('changed');
   return new Promise((resolve, reject) => {
-    const child = spawn(node, args, {
-      cwd,
-      env: {
-        ...makeTestEnvironment(env),
-        ...(migrationBase ? { XDT_MIGRATION_BASE_REF: migrationBase } : {}),
-      },
-      cols: 4096,
-      rows: 30,
-      name: 'xterm-256color',
+    const output = createMakeBuildOutput();
+    const lineOutput = createMakeBuildLineOutput(
+      onOutput
+        ? (line) => {
+            if (!signal.aborted) onOutput(line);
+          }
+        : undefined,
+    );
+    let child: ReturnType<PtySpawnFn>;
+    try {
+      child = spawn(node, args, {
+        cwd,
+        env: {
+          ...makeTestEnvironment(env),
+          ...(migrationBase ? { XDT_MIGRATION_BASE_REF: migrationBase } : {}),
+        },
+        cols: 4096,
+        rows: 30,
+        name: 'xterm-256color',
+      });
+    } catch (error) {
+      output.append(error instanceof Error ? error.message : '');
+      reject(personalBuildError('buildFailed', output.failure()));
+      return;
+    }
+    child.onData((chunk) => {
+      output.append(chunk);
+      lineOutput.append(chunk);
     });
-    // Drain output so compiler progress cannot block the process; raw logs never cross the build boundary.
-    child.onData(() => {});
     const abort = () => {
       try {
         child.kill();
@@ -126,8 +147,10 @@ export function runPersonalPackageCommand(
     child.onExit(({ exitCode }) => {
       clearTimeout(timeout);
       signal.removeEventListener('abort', abort);
+      lineOutput.finish();
       if (signal.aborted) reject(personalBuildError('interrupted'));
-      else if (timedOut || exitCode !== 0) reject(personalBuildError('buildFailed'));
+      else if (timedOut || exitCode !== 0)
+        reject(personalBuildError('buildFailed', output.failure(exitCode, timedOut)));
       else resolve();
     });
     if (signal.aborted) abort();
@@ -229,9 +252,9 @@ export async function buildCindyPersonal(
     let adopted = false;
     let rollbackHistory: (() => Promise<void>) | undefined;
     const report = (next: CindyMakePersonalBuildState) => publish(next);
-    const pnpm = (args: string[]) => {
+    const pnpm = (args: string[], onOutput: (line: string) => void) => {
       check();
-      return (deps.pnpm ?? runSourcePnpm)(environment, args, source, signal);
+      return (deps.pnpm ?? runSourcePnpm)(environment, args, source, signal, undefined, onOutput);
     };
     const recoveryGit: ContentGit = (args, cwd, indexFile) => {
       checkCurrent();
@@ -252,7 +275,7 @@ export async function buildCindyPersonal(
     };
     try {
       check();
-      await report({ status: 'merging' });
+      if (editingTask) await report({ status: 'merging' });
       await verifyTask();
       const canonicalSource = await realpath(source);
       if ((await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim() !== CINDY_PERSONAL_BRANCH)
@@ -346,14 +369,33 @@ export async function buildCindyPersonal(
       if (!/^[0-9a-f]{40,64}$/i.test(migrationBase)) throw personalBuildError('changed');
       check();
       try {
-        await report({ status: 'checking', checkStep: 'dependencies' });
-        await pnpm(['install', '--frozen-lockfile', '--prefer-offline', '--prod=false']);
-        await report({ status: 'checking', checkStep: 'tests' });
-        await pnpm(['test:unit:related']);
-        await report({ status: 'checking', checkStep: 'types' });
-        await pnpm(['--recursive', '--workspace-concurrency=1', '--if-present', 'typecheck']);
-      } catch {
-        throw personalBuildError(signal.aborted ? 'interrupted' : 'checksFailed');
+        await runMakeBuildStep(
+          { status: 'checking', checkStep: 'dependencies' },
+          signal,
+          report,
+          (onLine) =>
+            pnpm(['install', '--frozen-lockfile', '--prefer-offline', '--prod=false'], onLine),
+        );
+        await runMakeBuildStep(
+          { status: 'checking', checkStep: 'tests' },
+          signal,
+          report,
+          (onLine) => pnpm(['test:unit:related'], onLine),
+        );
+        await runMakeBuildStep(
+          { status: 'checking', checkStep: 'types' },
+          signal,
+          report,
+          (onLine) =>
+            pnpm(['--recursive', '--workspace-concurrency=1', '--if-present', 'typecheck'], onLine),
+        );
+      } catch (error) {
+        const output = createMakeBuildOutput();
+        output.append(error instanceof Error ? error.message : '');
+        throw personalBuildError(
+          signal.aborted ? 'interrupted' : 'checksFailed',
+          signal.aborted ? undefined : (makeBuildErrorDiagnostic(error) ?? output.failure()),
+        );
       }
       check();
       await assertSource(candidateTree);
@@ -380,24 +422,27 @@ export async function buildCindyPersonal(
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
-      await report({ status: 'packaging' });
       check();
       await cleanup.captureManifest();
-      await (deps.packageCommand ?? runPersonalPackageCommand)(
-        node,
-        [
-          path.join(source, 'apps', 'desktop', 'scripts', 'package-desktop.mjs'),
-          '--platform',
-          process.platform,
-          '--arch',
-          process.arch,
-          '--region',
-          region,
-          '--no-sign',
-        ],
-        source,
-        { ...environment, XDT_MIGRATION_BASE_REF: migrationBase },
-        signal,
+      await runMakeBuildStep({ status: 'packaging' }, signal, report, (onLine) =>
+        (deps.packageCommand ?? runPersonalPackageCommand)(
+          node,
+          [
+            path.join(source, 'apps', 'desktop', 'scripts', 'package-desktop.mjs'),
+            '--platform',
+            process.platform,
+            '--arch',
+            process.arch,
+            '--region',
+            region,
+            '--no-sign',
+          ],
+          source,
+          { ...environment, XDT_MIGRATION_BASE_REF: migrationBase },
+          signal,
+          undefined,
+          onLine,
+        ),
       );
       check();
       await assertSource(candidateTree);

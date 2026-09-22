@@ -1456,12 +1456,14 @@ export function registerSessionIpc(
     }
     // body 透传 agentKind / orcaRole 给 mapper；非法值已由上方校验拦截，默认值由 mapper 兜底。
     const insertRow = sessionCreateToRow(id, { ...createBody, workspaceKind, workingDir }, now);
+    const gitSafety = readGitSafetySettings();
     await ensureProjectGitInitialized({
       workingDir: insertRow.workingDir,
       workspaceKind: insertRow.workspaceKind,
       remoteHostId: insertRow.remoteHostId,
       sessionId: id,
-      autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
+      autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
+      autoInitProjectGit: gitSafety.autoInitProjectGit,
       source: 'local-db:sessions:create',
     });
     const resource =

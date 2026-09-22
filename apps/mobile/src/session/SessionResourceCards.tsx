@@ -76,6 +76,23 @@ export function SessionResourceCards({
               </Text>
             ) : null}
             <View style={styles.actions}>
+              {resource.links
+                .filter(
+                  (link) =>
+                    link.rel !== 'conversation' &&
+                    link.label &&
+                    link.target.kind === 'session',
+                )
+                .map((link) => (
+                  <MainWindowActionButton
+                    key={link.rel}
+                    action={{
+                      label: resolveRemoteText(link.label!, i18n.language),
+                      disabled: !state.fresh,
+                      onPress: () => state.openLink(resource, link),
+                    }}
+                  />
+                ))}
               {resource.actions?.map((action) => (
                 <MainWindowActionButton
                   key={action.id}

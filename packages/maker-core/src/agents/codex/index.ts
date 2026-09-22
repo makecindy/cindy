@@ -11530,6 +11530,13 @@ export class CodexAgent extends BaseAgent {
           || overloadRetryPending()
           || yieldContinuationInFlight
           || activeYieldContinuationClaim() != null;
+        log.info('Codex session forced retirement received', {
+          threadId,
+          turnId: currentTurnId,
+          reason,
+          hadPendingWork,
+          pendingToolCount: pendingToolItemIds.size,
+        });
         if (!hadPendingWork) {
           log.info('idle Codex session invalidated by forced host retirement', { threadId });
           eventQueue.end();
@@ -14565,11 +14572,24 @@ export class CodexAgent extends BaseAgent {
         });
       }
     }
-    for (const [key, host] of this.hosts) {
-      this.beginHostRetirement(key, host, 'CodexAgent.dispose()');
+    // `dispose()` is normally used during app shutdown, but auth/config
+    // boundaries can reach it while a turn is still attached.  Retiring a
+    // host silently clears its subscribers; without the same structured
+    // notification used by `retireHostKey(..., failIfActive: false)`, an
+    // in-flight Computer Use turn remains busy forever after its transport
+    // disappears. Notify hosts before retirement so the
+    // session can emit its terminal interruption and release its input/turn
+    // ownership.
+    const hostsToRetire = new Map<string, AppServerHost>();
+    for (const [key, host] of this.hosts) hostsToRetire.set(key, host);
+    for (const [key, entry] of this.retiringHosts) {
+      if (!hostsToRetire.has(key)) hostsToRetire.set(key, entry.host);
     }
-    const retirements = Array.from(this.retiringHosts, ([key, entry]) =>
-      this.beginHostRetirement(key, entry.host, 'CodexAgent.dispose()'));
+    const retirements: Promise<void>[] = [];
+    for (const [key, host] of hostsToRetire) {
+      host.notifySubscribersOfForcedRetire('CodexAgent.dispose()');
+      retirements.push(this.beginHostRetirement(key, host, 'CodexAgent.dispose()'));
+    }
     for (const key of this.hosts.keys()) {
       this.hostGenerations.set(key, (this.hostGenerations.get(key) ?? 0) + 1);
     }

@@ -60,6 +60,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   return (
     <SheetModal
       visible={p.visible}
+      onClosed={p.onClosed}
       onBackdropPress={p.onClose}
       onRequestClose={p.onBack ?? p.onClose}
       keyboardAvoiding

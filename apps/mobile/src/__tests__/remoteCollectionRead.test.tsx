@@ -26,16 +26,19 @@ vi.mock('expo-router', async () => {
   return { useFocusEffect: (effect: () => void | (() => void)) => useEffect(effect, [effect]), useLocalSearchParams: () => h.params, useRouter: () => ({}) };
 });
 vi.mock('react-i18next', () => ({ useTranslation: () => h.translation }));
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: 'div' }));
-vi.mock('lucide-react-native', () => ({ ChevronRight: () => null }));
-vi.mock('@/components/AppText', () => ({ Text: 'span' }));
+vi.mock('lucide-react-native', () => ({ ChevronRight: () => null, RefreshCw: () => null }));
+vi.mock('@/components/AppText', () => ({ Text: 'span', TextInput: 'input' }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowEmptyState: () => null, StatusDot: () => null }));
 vi.mock('@/platform/chrome', () => ({ SimpleStackHeader: () => null, simpleScreenSafeAreaEdges: () => [] }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' }, accountGeneration: 1 }) }));
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
-vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) }));
+vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) }));
+vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => '' }));
+vi.mock('@/utils/useMinuteNow', () => ({ useMinuteNow: () => 0 }));
 vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => h.push }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ isRemoteResourceHostOnline: () => true, readRemoteCollectionCache: () => [], writeRemoteCollectionCache: () => {} }));
@@ -56,7 +59,7 @@ it('opening a companion only navigates; unread survives until the destination co
   const root = createRoot(container);
   try {
     await act(async () => root.render(createElement(RemoteCollectionScreen)));
-    const button = container.querySelector<HTMLButtonElement>('[data-testid="remoteResources.item.bot-1"]');
+    const button = container.querySelector<HTMLButtonElement>('[data-testid="teammates.item.mac.bot-1"]');
     expect(button).not.toBeNull();
     await act(async () => button!.click());
     expect(h.push).toHaveBeenCalledWith(expect.objectContaining({ pathname: '/resources/[collectionId]/[resourceId]' }));

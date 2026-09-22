@@ -27,6 +27,7 @@ import { CindyMakeBuildLog } from './CindyMakeBuildLog';
 import { CindyMakeBuildProgress } from './CindyMakeBuildProgress';
 import { CindyMakeBuildFailure } from './CindyMakeBuildFailure';
 import { cindyMakeBuildStatusKey } from './cindyMakeBuildStatus';
+import { useCindyMakeBuildStop } from './useCindyMakeBuildStop';
 
 type Filter = 'all' | 'pending' | 'integrated' | 'ended';
 /** Historical facts and allowed actions come from Main; an old button cannot authorize a write. */
@@ -142,15 +143,20 @@ export function CindyMakeHistoryPanel({
   const allChecked =
     selectable.length > 0 && selectable.every((item) => checkedIds.includes(item.runId));
   const currentBuild = (item: CindyMakeHistoryState['items'][number]) =>
-    item.operation === 'build' ||
-    (!item.operation && ['ready', 'ended'].includes(item.lifecycle) && !item.test)
-      ? item.build
-      : undefined;
+    state?.batch?.runId === item.runId &&
+    state.build &&
+    !['ready', 'failed'].includes(state.build.status)
+      ? state.build
+      : item.operation === 'build' ||
+          (!item.operation && ['ready', 'ended'].includes(item.lifecycle) && !item.test)
+        ? item.build
+        : undefined;
   const statusKey = (item: CindyMakeHistoryState['items'][number]) => {
+    const build = currentBuild(item);
+    if (build && !['ready', 'failed'].includes(build.status)) return cindyMakeBuildStatusKey(build);
     if (item.conflict) return 'cindyMake.history.conflict';
     if (item.operationError) return 'cindyMake.history.actionFailed';
     if (item.operation && item.operation !== 'build') return 'cindyMake.history.working';
-    const build = currentBuild(item);
     if (build) return cindyMakeBuildStatusKey(build);
     return item.test
       ? 'cindyMake.test.status.' + item.test.status
@@ -393,18 +399,21 @@ export function CindyMakeHistoryPanel({
     !building &&
     (state.build.status === 'failed' ||
       !items.some((item) => state.build?.buildId && item.build?.buildId === state.build.buildId));
-  const stopping = building && state?.build?.stopping === true;
+  const { stop: confirmStopBuild, stopping: stoppingBuild } = useCindyMakeBuildStop(
+    building ? state?.build?.buildId : undefined,
+  );
+  const stopping = building && (stoppingBuild || state?.build?.stopping === true);
   const stopBuild = async () => {
     const buildId = state?.build?.buildId;
     if (!building || !buildId || stopping || !isDataOwnerGenerationCurrent(owner)) return;
-    try {
-      update(await window.electronAPI.cancelCindyMakePersonal(buildId));
-    } catch {
-      if (isDataOwnerGenerationCurrent(owner)) {
+    await confirmStopBuild(
+      () => isDataOwnerGenerationCurrent(owner),
+      update,
+      () => {
         toast.error(t('cindyMake.history.actionFailed'));
-        await refresh();
-      }
-    }
+        void refresh();
+      },
+    );
   };
   const openInstaller = async () => {
     if (acting.current || !isDataOwnerGenerationCurrent(owner)) return;
@@ -541,7 +550,7 @@ export function CindyMakeHistoryPanel({
           <div
             role="status"
             aria-live="polite"
-            className="space-y-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] p-4"
+            className="space-y-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated-soft)] p-4"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="flex min-w-0 items-start gap-2">
@@ -575,17 +584,21 @@ export function CindyMakeHistoryPanel({
         {showGlobalResult && state?.build?.status === 'failed' && (
           <div className="space-y-3">
             <CindyMakeBuildFailure build={state.build} />
+            <CindyMakeBuildProgress build={state.build} />
             <CindyMakeBuildLog build={state.build} />
           </div>
         )}
         {showGlobalResult && state?.build?.status === 'ready' && (
-          <p role="status" className="text-12 text-[var(--text-secondary)]">
-            {t(
-              !state.build.versionId
-                ? 'cindyMake.history.buildStatus.installerReady'
-                : cindyMakeBuildStatusKey(state.build),
-            )}
-          </p>
+          <div className="space-y-2">
+            <p role="status" className="text-12 text-[var(--text-secondary)]">
+              {t(
+                !state.build.versionId
+                  ? 'cindyMake.history.buildStatus.installerReady'
+                  : cindyMakeBuildStatusKey(state.build),
+              )}
+            </p>
+            <CindyMakeBuildProgress build={state.build} />
+          </div>
         )}
         {state?.build?.status === 'ready' &&
           !state.build.versionId &&
@@ -686,7 +699,7 @@ export function CindyMakeHistoryPanel({
                 role={selectedError ? 'alert' : 'status'}
                 className={cn(
                   'text-12',
-                  selectedError ? 'text-[var(--status-danger)]' : 'text-[var(--text-secondary)]',
+                  selectedError ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]',
                 )}
               >
                 {t(
@@ -700,6 +713,9 @@ export function CindyMakeHistoryPanel({
               {!selectedIsGlobalFailure && (
                 <>
                   <CindyMakeBuildFailure build={selectedBuild} />
+                  {selectedBuild && ['ready', 'failed'].includes(selectedBuild.status) && (
+                    <CindyMakeBuildProgress build={selectedBuild} />
+                  )}
                   <CindyMakeBuildLog build={selectedBuild} />
                 </>
               )}

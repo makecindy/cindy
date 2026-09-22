@@ -106,7 +106,7 @@ export function CindyMakeVersionsPanel({
               )}
           </div>
           {versions.error && (
-            <p role="alert" className="text-12 text-[var(--status-danger)]">
+            <p role="alert" className="text-12 text-[var(--error-fg)]">
               {t('cindyMake.versions.errors.' + versions.error)}
             </p>
           )}

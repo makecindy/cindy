@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
@@ -27,6 +27,7 @@ const cases = [
     locale: 'en',
     resource: en,
     title: 'Make history',
+    conflict: 'Resolving conflicts…',
     build: 'Generate personal version',
     integrate: 'Integrate into personal version',
     counts: '1 total · 1 pending integration · 0 integrated',
@@ -36,6 +37,7 @@ const cases = [
     locale: 'zh-CN',
     resource: zhCN,
     title: '制作历史',
+    conflict: '正在处理冲突…',
     build: '生成个人版',
     integrate: '合入个人版',
     counts: '共 1 次 · 待合入 1 次 · 已合入 0 次',
@@ -45,6 +47,7 @@ const cases = [
     locale: 'zh-TW',
     resource: zhTW,
     title: '製作歷史',
+    conflict: '正在處理衝突…',
     build: '產生個人版',
     integrate: '合入個人版',
     counts: '共 1 次 · 待合入 1 次 · 已合入 0 次',
@@ -54,6 +57,7 @@ const cases = [
     locale: 'ja',
     resource: ja,
     title: '制作履歴',
+    conflict: '競合を解決中…',
     build: '個人版を生成',
     integrate: '個人版に取り込む',
     counts: '合計 1 件 · 未取り込み 1 件 · 取り込み済み 0 件',
@@ -63,6 +67,7 @@ const cases = [
     locale: 'ko',
     resource: ko,
     title: '제작 기록',
+    conflict: '충돌 해결 중…',
     build: '개인 버전 생성',
     integrate: '개인 버전에 반영',
     counts: '전체 1회 · 반영 대기 1회 · 반영 완료 0회',
@@ -110,12 +115,78 @@ afterEach(() => {
 
 describe('Cindy Make history with real translations', () => {
   it.each(cases)(
+    'shows conflict resolution, cleanup and automatic continuation in $locale',
+    async ({ locale, resource, conflict }) => {
+      const state = await window.electronAPI.getCindyMakeHistory();
+      state.busy = true;
+      state.canBuild = false;
+      state.batch = { current: 1, total: 1, runId: 'aaaa', title: 'Example make' };
+      state.items[0].conflict = true;
+      state.items[0].actions = ['open'];
+      state.build = {
+        status: 'merging',
+        mergeStep: 'conflicts',
+        buildId: 'build-1',
+        logs: [{ step: 'resolving-conflicts', at: 1 }],
+      };
+      const i18n = createInstance();
+      await i18n.use(initReactI18next).init({
+        lng: locale,
+        fallbackLng: false,
+        defaultNS: 'common',
+        resources: { [locale]: { common: resource } },
+      });
+      const view = render(
+        <MemoryRouter>
+          <I18nextProvider i18n={i18n}>
+            <CindyMakeHistoryPanel />
+          </I18nextProvider>
+        </MemoryRouter>,
+      );
+      expect((await screen.findAllByText(conflict)).length).toBeGreaterThan(1);
+      expect(view.container.querySelector('[aria-current="step"]')?.textContent).toBe(
+        resource.cindyMake.personal.buildLog.steps['resolving-conflicts'],
+      );
+      expect(screen.queryByRole('alert')).toBeNull();
+      state.items[0].conflict = false;
+      state.build = {
+        ...state.build,
+        mergeStep: 'cleanup',
+        logs: [...state.build.logs!, { step: 'cleaning-merge', at: 2 }],
+      };
+      fireEvent(window, new Event('focus'));
+      await waitFor(() =>
+        expect(view.container.querySelector('[aria-current="step"]')?.textContent).toBe(
+          resource.cindyMake.personal.buildLog.steps['cleaning-merge'],
+        ),
+      );
+      state.build = {
+        status: 'checking',
+        checkStep: 'tests',
+        buildId: 'build-1',
+        logs: state.build.logs,
+      };
+      fireEvent(window, new Event('focus'));
+      await screen.findAllByText(resource.cindyMake.personal.checkStep.tests);
+      expect(view.container.querySelector('[aria-current="step"]')?.textContent).toBe(
+        resource.cindyMake.history.progress.checking,
+      );
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(view.container.textContent).not.toMatch(/cindyMake\.|\?{2,}|\uFFFD/);
+    },
+  );
+  it.each(cases)(
     'shows the live test stage and useful failure text in $locale',
     async ({ locale, resource }) => {
       const state = await window.electronAPI.getCindyMakeHistory();
       state.busy = true;
       state.canBuild = false;
-      state.build = { status: 'checking', checkStep: 'tests', buildId: 'build-1' };
+      state.build = {
+        status: 'checking',
+        checkStep: 'tests',
+        buildId: 'build-1',
+        outputLine: 'Test Files 57 passed; token=fake-secret',
+      };
       const i18n = createInstance();
       await i18n.use(initReactI18next).init({
         lng: locale,
@@ -131,6 +202,11 @@ describe('Cindy Make history with real translations', () => {
         </MemoryRouter>,
       );
       expect(await screen.findByText(resource.cindyMake.personal.checkStep.tests)).toBeTruthy();
+      expect(screen.getByText('Test Files 57 passed; token=[REDACTED]').getAttribute('role')).toBe(
+        'status',
+      );
+      expect(screen.queryByRole('button', { name: resource.cindyMake.merge.openTask })).toBeNull();
+      expect(view.container.textContent).not.toContain('fake-secret');
       expect(screen.getByRole('button', { name: resource.cindyMake.history.stop })).toBeTruthy();
       state.busy = false;
       state.canBuild = true;
@@ -138,6 +214,7 @@ describe('Cindy Make history with real translations', () => {
         state.build = { status: 'failed', error };
         fireEvent(window, new Event('focus'));
         expect(await screen.findByText(resource.cindyMake.personal.errors[error])).toBeTruthy();
+        expect(screen.queryByText('Test Files 57 passed; token=[REDACTED]')).toBeNull();
         expect(view.container.textContent).not.toMatch(/cindyMake\.|\{\{|\?{2,}|\uFFFD/);
       }
     },

@@ -939,6 +939,8 @@ interface CCAgentSdkSessionIdPayload {
  */
 interface RewindFilesResultPayload {
   canRewind: boolean;
+  conversationOnly?: boolean;
+  gitSafetyDisabled?: boolean;
   error?: string;
   filesChanged?: string[];
   insertions?: number;
@@ -2184,7 +2186,7 @@ interface ElectronAPI {
   // 永不上报,凭证与邮箱在上传前被自动抹除(实现见 main/log-upload/)。
   getLogUploadSettings: () => Promise<LogUploadSettingsPayload>;
   setLogUploadCrashAuto: (enabled: boolean) => Promise<LogUploadSettingsPayload>;
-  /** 恢复默认:删掉开关 override,重新跟随当前版本默认值(默认关闭)。 */
+  /** 恢复默认:删掉 override,重新跟随当前版本默认的“已有 Git 项目”模式。 */
   resetLogUploadCrashAuto: () => Promise<LogUploadSettingsPayload>;
   /**
    * 手动上传一次;成功返回可报的上传编号。失败以 IPC 错误码区分:
@@ -6285,19 +6287,28 @@ interface ElectronAPI {
 
     /** Git 安全保存点开关 — 控制 agent turn 后是否自动创建 XDT savepoint commit */
     gitSafetyGet: () => Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }>;
-    /** 立即生效; Codex rewind 入口跟随此开关显示 */
-    gitSafetySet: (enabled: boolean) => Promise<{
+    /** 立即生效; mode controls snapshot capture and empty-project bootstrap. */
+    gitSafetySet: (mode: 'off' | 'existing-git' | 'all-projects' | boolean) => Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }>;
     gitSafetyReset: () => Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }>;
 
@@ -6486,7 +6497,7 @@ interface ElectronAPI {
     rewindCommit: (
       sessionId: string,
       clientId: string,
-      opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean },
+      opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean; allowFileRestore?: boolean },
     ) => Promise<import('@/lib/ccAgent.types').Session>;
     forkStripEncrypted: (sourceSessionId: string) => Promise<import('@/lib/ccAgent.types').Session>;
     /**

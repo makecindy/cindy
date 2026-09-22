@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
@@ -61,7 +61,11 @@ describe('Cindy Make source summary', () => {
         status: 'unavailable',
         channel: 'dev',
       });
-      expect(screen.getByRole('status').textContent).toBe(expected);
+      expect(screen.getByText(expected)).toBeTruthy();
+      expect(screen.getByRole('status').getAttribute('aria-label')).toBe(
+        'cindy-personal · 版本状态未确认',
+      );
+      expect(screen.getByRole('status').className).not.toContain('--status-success');
       expect(screen.getAllByTitle(commit!).length).toBeGreaterThan(0);
       expect(screen.getAllByTitle(source.mainCommit!).length).toBeGreaterThan(0);
       expect(screen.queryByText(source.baseCommit!.slice(0, 12))).toBeNull();
@@ -105,7 +109,7 @@ describe('Cindy Make source summary', () => {
   );
 
   it('collapses matching main hashes into one green value without an arrow or stale counts', async () => {
-    const { container } = await show({}, 'zh-CN', {
+    await show({}, 'zh-CN', {
       status: 'ready',
       channel: 'dev',
       ref: 'main',
@@ -117,9 +121,125 @@ describe('Cindy Make source summary', () => {
     expect(hash.className).toContain('--status-success');
     expect(screen.getAllByTitle(source.mainCommit!)).toHaveLength(1);
     expect(screen.getByText('本地 main').className).toContain('--status-success');
-    expect(container.querySelector('svg')).toBeNull();
+    expect(hash.closest('dd')?.querySelector('svg')).toBeNull();
     expect(screen.getByText('与线上 main 一致，落后 0 条修改记录')).toBeTruthy();
     expect(screen.queryByText(/main 落后/)).toBeNull();
+  });
+
+  it.each(Object.keys(locales) as (keyof typeof locales)[])(
+    'marks personal changes on top of the latest online version as up to date in %s',
+    async (locale) => {
+      const { container } = await show({ personalAhead: 1, personalBehind: 0 }, locale, {
+        status: 'ready',
+        channel: 'dev',
+        ref: 'main',
+        commit: source.mainCommit!,
+      });
+      const status = screen.getByRole('status');
+      const copy = locales[locale].cindyMake.overview.personalStatus;
+      const label = `cindy-personal${copy.suffix.replace('{{status}}', copy.upToDate)}`;
+      expect(status.textContent).toBe(label);
+      expect(status.getAttribute('aria-label')).toBe(`cindy-personal · ${copy.upToDate}`);
+      expect(status.firstElementChild?.tagName.toLowerCase()).toBe('svg');
+      expect(status.lastElementChild?.textContent).toBe(label);
+      expect(status.className).toContain('--status-success');
+      expect(
+        screen.getByText(copy.suffix.replace('{{status}}', copy.upToDate).trim()),
+      ).toBeTruthy();
+      expect(screen.getByText(copy.personalChanges.replace('{{ahead}}', '1'))).toBeTruthy();
+      expect(screen.getByText('cindy-personal').closest('dt')).toBe(status.closest('dt'));
+      expect(screen.getByTitle(source.commit!).closest('dd')).toBe(
+        status.closest('dt')?.nextElementSibling,
+      );
+      expect(container.textContent).not.toMatch(/cindyMake[.]|[{][{]|[?][?]|�/);
+      fireEvent.focus(status);
+      expect((await screen.findByRole('tooltip')).textContent).toBe(
+        `${copy.upToDate} · ${copy.upToDateDescription.replace(
+          '{{target}}',
+          locales[locale].cindyMake.source.details.latest.dev,
+        )}`,
+      );
+    },
+  );
+
+  it.each([
+    { personalAhead: 0, personalBehind: 2 },
+    { personalAhead: 3, personalBehind: 2 },
+  ])('marks missing official updates even with personal changes: %o', async (difference) => {
+    await show(difference, 'zh-CN', {
+      status: 'ready',
+      channel: 'dev',
+      ref: 'main',
+      commit: source.mainCommit!,
+    });
+    const status = screen.getByRole('status', { name: 'cindy-personal · 有更新' });
+    expect(status.textContent).toBe('cindy-personal（有更新）');
+    expect(status.className).toContain('--upgrade-banner-fg');
+    expect(status.firstElementChild?.tagName.toLowerCase()).toBe('svg');
+    expect(screen.getByText('（有更新）')).toBeTruthy();
+    fireEvent.focus(status);
+    expect((await screen.findByRole('tooltip')).textContent).toBe('有更新');
+  });
+
+  it.each([
+    [0, 0, '有更新'],
+    [1, 0, '有更新'],
+    [4, 1, '有更新'],
+    [4, 0, '版本状态未确认'],
+  ] as const)(
+    'does not mistake an outdated local main for latest (%s ahead, %s behind)',
+    async (personalAhead, personalBehind, expected) => {
+      await show(
+        {
+          commit: personalAhead === 0 ? source.mainCommit : source.commit,
+          personalAhead,
+          personalBehind,
+        },
+        'zh-CN',
+        {
+          status: 'ready',
+          channel: 'dev',
+          ref: 'main',
+          commit: 'e'.repeat(40),
+          ahead: 0,
+          behind: 3,
+        },
+      );
+      expect(screen.getByRole('status').getAttribute('aria-label')).toBe(
+        `cindy-personal · ${expected}`,
+      );
+      expect(screen.getByRole('status').className).not.toContain('--status-success');
+    },
+  );
+
+  it.each([source.mainCommit, undefined])(
+    'recognizes personal matching online directly when local main is %s',
+    async (mainCommit) => {
+      await show({ mainCommit }, 'zh-CN', {
+        status: 'ready',
+        channel: 'dev',
+        ref: 'main',
+        commit: source.commit!,
+      });
+      expect(screen.getByRole('status', { name: 'cindy-personal · 已是最新' })).toBeTruthy();
+      expect(screen.queryByText(/个人修改记录/)).toBeNull();
+    },
+  );
+
+  it('recognizes a personal branch containing main ahead of the latest release', async () => {
+    await show({ personalAhead: 1, personalBehind: 0 }, 'zh-CN', {
+      status: 'ready',
+      channel: 'release',
+      ref: 'v2.0.0',
+      commit: 'e'.repeat(40),
+      ahead: 3,
+      behind: 0,
+    });
+    const status = screen.getByRole('status', { name: 'cindy-personal · 已是最新' });
+    fireEvent.focus(status);
+    expect((await screen.findByRole('tooltip')).textContent).toBe(
+      '已是最新 · 个人版代码已包含最新正式版的全部更新',
+    );
   });
 
   it('shows a lookup failure rather than treating cached origin/main as latest', async () => {
@@ -167,20 +287,19 @@ describe('Cindy Make source summary', () => {
     'keeps local and online main together above personal in %s',
     async (locale) => {
       const { container } = await show({}, locale);
-      expect(
-        Array.from(container.querySelectorAll('dt')).map((label) => label.textContent),
-      ).toEqual([
-        locales[locale].cindyMake.overview.localMain,
-        locales[locale].cindyMake.overview.personal,
-      ]);
-      expect(container.querySelectorAll('dl > dd')).toHaveLength(2);
+      const labels = container.querySelectorAll('dt');
+      expect(labels).toHaveLength(2);
+      expect(labels[0].textContent).toBe(locales[locale].cindyMake.overview.localMain);
+      expect(within(labels[1]).getByText(locales[locale].cindyMake.overview.personal)).toBeTruthy();
+      expect(within(labels[1]).getByRole('status')).toBeTruthy();
+      expect(container.querySelectorAll('dl > div > dd')).toHaveLength(2);
       expect(
         screen.getByText(locales[locale].cindyMake.source.details.latest.dev).closest('dd'),
       ).toBe(screen.getByTitle(source.mainCommit!).closest('dd'));
       for (const commit of [source.commit!, source.mainCommit!]) {
         expect(screen.getByText(commit.slice(0, 12)).title).toBe(commit);
       }
-      expect(screen.getByText('cindy-personal').tagName).toBe('DT');
+      expect(screen.getByText('cindy-personal').closest('dt')).toBe(labels[1]);
       expect(screen.queryByText('personal')).toBeNull();
       for (const hidden of [
         source.currentBranch!,
@@ -202,9 +321,8 @@ describe('Cindy Make source summary', () => {
       ahead: 0,
       behind: 23,
     });
-    expect(screen.getByRole('status').textContent).toBe(
-      '尚缺本地 main 的 2 条修改记录，另有 3 条个人修改记录',
-    );
+    expect(screen.getByRole('status', { name: 'cindy-personal · 有更新' })).toBeTruthy();
+    expect(screen.getByText('尚缺本地 main 的 2 条修改记录，另有 3 条个人修改记录')).toBeTruthy();
     const online = screen.getByText('e'.repeat(12)).closest('dd')!;
     expect(online.textContent).toContain('本地 main 落后 23 条修改记录');
     expect(within(online).queryByText(/领先 2/)).toBeNull();
@@ -239,7 +357,7 @@ describe('Cindy Make source summary', () => {
       ref: 'main',
       commit: source.mainCommit!,
     });
-    expect(screen.getByRole('status').textContent).toBe('与本地 main 的 SHA 相同');
+    expect(screen.getByRole('status', { name: 'cindy-personal · 已是最新' })).toBeTruthy();
     expect(screen.getByText('与线上 main 一致，落后 0 条修改记录')).toBeTruthy();
   });
 
@@ -252,7 +370,8 @@ describe('Cindy Make source summary', () => {
       ahead: 0,
       behind: 0,
     });
-    expect(screen.getByRole('status').textContent).toBe('SHA 与本地 main 不同，差距未知');
+    expect(screen.getByRole('status', { name: 'cindy-personal · 版本状态未确认' })).toBeTruthy();
+    expect(screen.getByText('SHA 与本地 main 不同，差距未知')).toBeTruthy();
     expect(screen.getByText('本地 main 的差距未读取')).toBeTruthy();
     expect(screen.queryByText(/与线上 main 一致/)).toBeNull();
   });
@@ -273,7 +392,7 @@ describe('Cindy Make source summary', () => {
     expect(online.closest('[class*="--status-success"]')).not.toBeNull();
     expect(online.closest('dd')).toBe(local.closest('dd'));
     expect(local.closest('dd')?.querySelector('svg')).not.toBeNull();
-    expect(container.querySelectorAll('dl > dd')).toHaveLength(2);
+    expect(container.querySelectorAll('dl > div > dd')).toHaveLength(2);
     expect(screen.getByText('本地 main 落后 3 条修改记录')).toBeTruthy();
   });
 
@@ -281,9 +400,14 @@ describe('Cindy Make source summary', () => {
     'renders translated personal differences without unresolved text in %s',
     async (locale) => {
       const { container } = await show({ personalAhead: 1, personalBehind: 0 }, locale);
-      expect(screen.getByRole('status').textContent).toBe(
-        locales[locale].cindyMake.overview.comparison.personalAhead.replace('{{ahead}}', '1'),
+      expect(screen.getByRole('status').getAttribute('aria-label')).toBe(
+        `cindy-personal · ${locales[locale].cindyMake.overview.personalStatus.unverified}`,
       );
+      expect(
+        screen.getByText(
+          locales[locale].cindyMake.overview.comparison.personalAhead.replace('{{ahead}}', '1'),
+        ),
+      ).toBeTruthy();
       expect(container.textContent).not.toMatch(/cindyMake\.|\{\{|\?\?|�/);
     },
   );

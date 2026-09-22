@@ -542,7 +542,10 @@ describe('Settings > Cindy Make', () => {
     expect(within(card).getAllByText('d'.repeat(12))).toHaveLength(2);
     expect(within(card).queryByText('b'.repeat(12))).toBeNull();
     expect(within(card).queryByText('c'.repeat(12))).toBeNull();
-    expect(within(card).getByRole('status').textContent).toBe('cindyMake.overview.comparison.same');
+    expect(within(card).getByRole('status').getAttribute('aria-label')).toBe(
+      'cindyMake.overview.personal · cindyMake.overview.personalStatus.unverified',
+    );
+    expect(within(card).getByText('cindyMake.overview.comparison.same')).toBeTruthy();
     expect(within(card).queryByText('cindyMake.merge.status.merged')).toBeNull();
   });
   it.each([
@@ -1226,9 +1229,10 @@ describe('Settings > Cindy Make', () => {
       const sourceReads = h.api.getCindyMakeSourceStatus.mock.calls.length;
       await h.pushSource({ status: 'ready', path: source.path });
       expect(h.api.getCindyMakeSourceStatus).toHaveBeenCalledTimes(sourceReads + 1);
-      expect(within(sourceCard).getByRole('status').textContent).toBe(
-        'cindyMake.overview.comparison.unknown',
+      expect(within(sourceCard).getByRole('status').getAttribute('aria-label')).toBe(
+        'cindyMake.overview.personal · cindyMake.overview.personalStatus.unverified',
       );
+      expect(within(sourceCard).getByText('cindyMake.overview.comparison.unknown')).toBeTruthy();
       expect(
         within(sourceCard).queryByRole('button', { name: 'cindyMake.merge.getLatest' }),
       ).toBeTruthy();

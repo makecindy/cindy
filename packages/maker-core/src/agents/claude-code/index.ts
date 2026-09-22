@@ -302,26 +302,6 @@ function isProviderRoutedModel(model: string): boolean {
   return !model.startsWith('claude-');
 }
 
-/**
- * 结果感知的硬中断目前覆盖 DeepSeek、原生 Claude 与 xai Grok 系列
- * (Grok 为 2026-08 维护者确认新增:单 turn 在 4 个不同 Grep 里轮转上千次调用的实锤)。
- * 其他 provider-routed 模型需要独立确认产品口径,不能因共用 Claude Code harness
- * 就自动扩大行为。会话级判断用 maker-core 公开 model id(deepseek/…、xai/…);
- * sidechain 的判断来自 SDK 流内的原始 id(可能是裸 deepseek-… / grok-… 形态,
- * 同 toSdkModelString 的双形态),因此按家族前缀匹配,不带 [1m] 的 SDK 改写。
- * grok 家族按 model-providers classification 口径同时认三种形态:xai/(订阅直连)、
- * x-ai/(网关命名空间,toSdkModelString 原样透传)与裸 grok-(sidechain 原始 id)。
- */
-function shouldUseToolLoopGuard(model: string): boolean {
-  return (
-    model.startsWith('deepseek')
-    || model.startsWith('claude-')
-    || model.startsWith('xai/')
-    || model.startsWith('x-ai/')
-    || model.startsWith('grok-')
-  );
-}
-
 /** URL → host(路由决策日志用,失败返回 undefined,不抛)。 */
 function hostOfUrl(url: string | undefined): string | undefined {
   if (!url) return undefined;
@@ -2610,14 +2590,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         return decision;
       });
     };
-    // guard 桶常驻(每 turn 清空):适用性不再是会话级一票制,而是每个 scope 单独判。
+    // All models share the same detector, with independent per-sidechain history.
     const toolLoopGuards = new Map<string | null, ToolLoopGuard>();
     /**
-     * guard 适用性判定用的模型:sidechain 用该 subagent 的实际模型
+     * 错误归属用的模型:sidechain 用该 subagent 的实际模型
      * (Agent 异步回执的 resolvedModel 优先,其次 sidechain 流内消息的 model),
      * 两者都未知时回落会话模型(维持旧行为);顶层恒用会话模型。
-     * 否则 claude 会话下的 provider-routed subagent 会被越权硬中断,
-     * provider-routed 会话下的 claude subagent 反而失去保护(PR #2779 review 指出)。
      * runtimeState 声明在后,仅在 forward loop 回调期调用,无 TDZ 风险。
      */
     const toolLoopGuardModelForScope = (parentToolUseId?: string): string => {
@@ -2629,8 +2607,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       return mutableModel;
     };
-    const getToolLoopGuard = (parentToolUseId?: string): ToolLoopGuard | null => {
-      if (!shouldUseToolLoopGuard(toolLoopGuardModelForScope(parentToolUseId))) return null;
+    const getToolLoopGuard = (parentToolUseId?: string): ToolLoopGuard => {
       const scopeKey = parentToolUseId ?? null;
       let guard = toolLoopGuards.get(scopeKey);
       if (!guard) {
@@ -6862,7 +6839,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             triggerAutoCompactIfNeeded();
           }
         }
-        // 适用性在 getToolLoopGuard 里按已更新的 mutableModel 逐 scope 判,这里只清状态。
+        // A model change begins a fresh observation history in every scope.
         resetToolLoopGuards();
         if (exploreInheritCapNeedsRebuild && liveEnv && !opts.remoteHostId) {
           applyExploreInheritCapEnv(liveEnv, sdkModel, 'replace');

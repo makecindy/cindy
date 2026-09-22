@@ -17,6 +17,135 @@ function feed(
 }
 
 describe('ToolLoopGuard', () => {
+  it.each([6, 20])('detects long stable read rotations with %i distinct calls', (distinct) => {
+    const guard = new ToolLoopGuard();
+    for (let i = 0; i < 128; i++) {
+      const position = i % distinct;
+      const verdict = feed(guard, String(i), 'grep', { pattern: `symbol-${position}` }, `file-${position}: match`);
+      expect(verdict.kind).toBe(i === 127 ? 'hard' : 'ok');
+      if (i === 127) expect(verdict).toMatchObject({ reason: 'rotation', count: 128 });
+    }
+  });
+
+  it('does not treat changed read results or intervening writes as a stable rotation', () => {
+    for (const mode of ['changing-output', 'write', 'new-input'] as const) {
+      const guard = new ToolLoopGuard();
+      for (let i = 0; i < 512; i++) {
+        if (mode === 'write' && i % 64 === 0) {
+          expect(feed(guard, `write-${i}`, 'edit', { file: `file-${i}` }, 'updated').kind).toBe('ok');
+        }
+        const input = { pattern: `symbol-${mode === 'new-input' ? i : i % 20}` };
+        const output = `match-${mode === 'changing-output' ? i : i % 20}`;
+        expect(feed(guard, `read-${i}`, 'grep', input, output).kind).toBe('ok');
+      }
+    }
+  });
+
+  it('detects a stale search cycle despite occasional output reordering', () => {
+    const guard = new ToolLoopGuard();
+    let verdict: ToolLoopGuardVerdict = { kind: 'ok' };
+    for (let i = 0; i < 128; i++) {
+      verdict = feed(guard, String(i), 'find', { pattern: `file-${i % 20}` },
+        i % 25 === 0 ? `reordered-${i}` : `match-${i % 20}`);
+    }
+    expect(verdict).toMatchObject({ kind: 'hard', reason: 'rotation', count: 128 });
+  });
+
+  it('does not interrupt investigations regularly discovering new inputs', () => {
+    const guard = new ToolLoopGuard();
+    for (let i = 0; i < 512; i++) {
+      const position = i % 8 === 0 ? `new-${i}` : `known-${i % 20}`;
+      expect(feed(guard, String(i), 'grep', { pattern: position }, position).kind).toBe('ok');
+    }
+  });
+
+  it.each(['write_stdin', 'wait', 'sleep', 'subagent'])('keeps %s polling out of loop fingerprints', (name) => {
+    const guard = new ToolLoopGuard();
+    for (let i = 0; i < 150; i++) {
+      expect(feed(guard, String(i), name, { action: 'status' }, 'running').kind).toBe('ok');
+    }
+  });
+
+  it('resets long read evidence on a new turn', () => {
+    const guard = new ToolLoopGuard();
+    for (let turn = 0; turn < 3; turn++) {
+      guard.resetTurn();
+      for (let i = 0; i < 100; i++) {
+        expect(feed(guard, `${turn}-${i}`, 'find', { pattern: `file-${i % 20}` }, `file-${i % 20}`).kind).toBe('ok');
+      }
+    }
+  });
+
+  it.each(['exec', 'Bash', 'bash'])('keeps successful log-tail polling alive through %s', (name) => {
+    const guard = new ToolLoopGuard();
+    const script = 'tail -8 /tmp/unit-gate.log; tail -5 /tmp/publish-gate.log';
+    // Sanitized shape from a completed quota-fix task waiting on the unit gate.
+    const command = name === 'exec' ? `/bin/zsh -lc '${script}'` : script;
+    for (let i = 0; i < 150; i++) {
+      expect(feed(guard, String(i), name, { command }, 'another unit gate is running').kind).toBe('ok');
+    }
+  });
+
+  it.each([
+    ['powershell', String.raw`Get-Content -Tail 8 C:\logs\gate.log`],
+    ['powershell', String.raw`Get-Content -LiteralPath 'C:\Build Logs\gate.log' -Tail 8`],
+    ['exec', String.raw`Get-Content -Tail 8 -Path C:\logs\gate.log; Get-Content C:\logs\other.log -Tail 5`],
+    ['exec', String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "Get-Content -Tail 8 C:\logs\gate.log"`],
+    ['exec', String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "get-content -literalpath C:\logs\gate.log -tail 8"`],
+  ])('keeps Windows log polling alive through %s', (name, command) => {
+    const guard = new ToolLoopGuard();
+    for (let i = 0; i < 150; i++) {
+      expect(feed(guard, String(i), name, { command }, 'waiting for test gate').kind).toBe('ok');
+    }
+  });
+
+  it.each([
+    String.raw`Get-Content C:\src\source.ts -Tail 8`,
+    String.raw`Get-Content C:\logs\gate.log`,
+    String.raw`Get-Content C:\logs\gate.log -Tail 8; npm test`,
+    String.raw`Get-Content C:\logs\gate.log -Tail 8 > C:\logs\out.log`,
+    String.raw`Get-Content "$env:TEMP\gate.log" -Tail 8`,
+    String.raw`Get-Content C:\logs\gate.log -Tail 8 | Select-String failed`,
+  ])('does not exempt ambiguous or mixed PowerShell: %s', (command) => {
+    const guard = new ToolLoopGuard();
+    let verdict: ToolLoopGuardVerdict = { kind: 'ok' };
+    for (let i = 0; i < 4; i++) verdict = feed(guard, String(i), 'powershell', { command }, 'unchanged');
+    expect(verdict.kind).toBe('hard');
+  });
+
+  it('keeps failing PowerShell log reads in the repeat detector', () => {
+    const guard = new ToolLoopGuard();
+    let verdict: ToolLoopGuardVerdict = { kind: 'ok' };
+    for (let i = 0; i < 4; i++) verdict = feed(guard, String(i), 'powershell',
+      { command: String.raw`Get-Content C:\logs\gate.log -Tail 8` }, 'file not found', true);
+    expect(verdict.kind).toBe('hard');
+  });
+
+  it.each([
+    'tail -8 source.ts',
+    'tail -8 /tmp/gate.log; npm test',
+    'tail -8 /tmp/gate.log > /tmp/output.log',
+    'tail -8 $(pwd)/gate.log',
+    'tail -8 /tmp/gate.log | grep failed',
+  ])('does not exempt an ambiguous or mixed shell command: %s', (command) => {
+    const guard = new ToolLoopGuard();
+    let verdict: ToolLoopGuardVerdict = { kind: 'ok' };
+    for (let i = 0; i < 4; i++) verdict = feed(guard, String(i), 'exec', { command }, 'unchanged');
+    expect(verdict.kind).toBe('hard');
+  });
+
+  it('does not exempt failing log polls or erase ordinary loops between successful polls', () => {
+    const failed = new ToolLoopGuard();
+    const ordinary = new ToolLoopGuard();
+    for (let i = 0; i < 4; i++) {
+      const failure = feed(failed, String(i), 'bash', { command: 'tail -8 /tmp/gate.log' }, 'not found', true);
+      const read = feed(ordinary, `read-${i}`, 'read', { path: 'source.ts' }, 'same source');
+      expect(failure.kind).toBe(i === 3 ? 'hard' : 'ok');
+      expect(read.kind).toBe(i === 3 ? 'hard' : 'ok');
+      expect(feed(ordinary, `poll-${i}`, 'exec', { command: 'tail -8 /tmp/gate.log' }, 'waiting').kind).toBe('ok');
+    }
+  });
+
   // ── 第 1 层: 连续 name+input+output 完全相同 ──────────────────────────────
   it('在连续完全相同达到阈值时判 consecutive', () => {
     const g = new ToolLoopGuard(); // consecutiveLimit 默认 4

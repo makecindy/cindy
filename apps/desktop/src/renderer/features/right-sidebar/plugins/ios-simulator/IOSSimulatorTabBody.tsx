@@ -2448,7 +2448,7 @@ export function IOSSimulatorTabBody({
                         )}
                     </div>
                     {nativeRecoveryEligible && (
-                      <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-[var(--surface-subtle)] px-2.5 py-2 text-10 text-[var(--text-secondary)]">
+                      <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-[var(--surface-chip)] px-2.5 py-2 text-10 text-[var(--text-secondary)]">
                         <span
                           role={nativeRecoveryFailed ? 'alert' : undefined}
                           aria-live={nativeRecoveryFailed ? 'assertive' : 'polite'}

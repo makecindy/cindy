@@ -353,7 +353,10 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(html).toMatch(
       /#xdt-content\.share-stage\s*\{[\s\S]*?display: flex;[\s\S]*?flex-direction: column;[\s\S]*?gap: 16px;/,
     );
-    expect(shareBarSource).toContain('height: 44,');
+    expect(shareBarSource).toContain('<HomeHeaderGlassButton');
+    const chromeStyle = readFileSync(resolve(process.cwd(), 'src/platform/chrome/nativeGlassButtonStyle.ios.ts'), 'utf8');
+    expect(chromeStyle).toContain('size = navigationChrome.target');
+    expect(chromeStyle).toContain(': { width: size, height: size })');
     expect(shareBarSource).toContain('minHeight: 44,');
     expect(shareBarSource).toContain('minWidth: 112,');
     expect(shareBarSource).toContain('fontSize: typeScale.body,');

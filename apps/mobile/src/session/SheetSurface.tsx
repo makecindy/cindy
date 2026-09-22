@@ -1,3 +1,5 @@
+import { useContext, useMemo } from 'react';
+import { FloatingSheetContext, usePaneViewport } from '@/platform/AdaptiveWindowContext';
 /**
  * SheetSurface —— 可拖动底部浮窗的「面板表面」(从 ContextSheet 抽出,非 Modal)。
  *
@@ -75,8 +77,11 @@ export function SheetSurface({
   const styles = useThemedStyles(makeSheetSurfaceStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const viewport = usePaneViewport();
+  const floating = useContext(FloatingSheetContext);
+  const boundedHeights = useMemo(() => ({ half: Math.min(heights.half, viewport.height), full: Math.min(heights.full, viewport.height) }), [heights, viewport.height]);
   const drag = useContextSheetDrag({
-    heights,
+    heights: boundedHeights,
     onDismiss: onClose,
     onSnapChange,
     snap,
@@ -87,8 +92,10 @@ export function SheetSurface({
       style={[
         styles.sheet,
         variant === 'tasksheet' && styles.sheetTasksheet,
-        { paddingBottom: bottomInset },
+        { paddingBottom: floating ? spacing.md : bottomInset },
+        floating && { borderRadius: radius.container },
         drag.animatedStyle,
+        { maxHeight: "100%" },
       ]}
       testID={testID}
     >

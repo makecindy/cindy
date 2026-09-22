@@ -1906,12 +1906,14 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       childSessionId = prepared.sessionId;
       input.session = { ...input.session, workingDir: prepared.workingDir, workspaceKind: 'project' };
     }
+    const gitSafety = readGitSafetySettings();
     await ensureProjectGitInitialized({
       workingDir: input.session.workingDir,
       workspaceKind: input.session.workspaceKind ?? 'dialogue',
       remoteHostId: null,
       sessionId: childSessionId,
-      autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
+      autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
+      autoInitProjectGit: gitSafety.autoInitProjectGit,
       source: 'bot-delegation',
     }).catch(async error => {
       if (input.useWorktree) await deps.discardUnusedWorktree?.(childSessionId);

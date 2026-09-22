@@ -1,4 +1,5 @@
 import { Modal, Pressable, StyleSheet } from 'react-native';
+import { ModalContentArea } from '@/platform/ModalContentArea';
 import { useTranslation } from 'react-i18next';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionGroup } from '@/components/MobilePrimitives';
@@ -35,6 +36,7 @@ export function RenameDeviceModal({
   const canSave = draft.trim().length > 0 && !saving;
   return (
     <Modal
+      supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
       animationType="fade"
       transparent
       visible={visible}
@@ -45,6 +47,7 @@ export function RenameDeviceModal({
         onPress={onCancel}
         testID="home.renameDevice.backdrop"
       >
+        <ModalContentArea>
         <Pressable
           style={styles.renameDeviceCard}
           onPress={() => undefined}
@@ -101,6 +104,7 @@ export function RenameDeviceModal({
             testID="home.renameDevice.actions"
           />
         </Pressable>
+        </ModalContentArea>
       </Pressable>
     </Modal>
   );

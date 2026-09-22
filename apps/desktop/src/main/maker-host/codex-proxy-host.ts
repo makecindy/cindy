@@ -229,8 +229,12 @@ const CODEX_BODY_RECOVERY_RULES = [
 function isRepairableToolItemIdError(errorText: string): boolean {
   // Codex additionalDetails may contain an escaped JSON error inside another error envelope.
   const text = errorText.replace(/\\+(?=["'])/g, '');
-  const match = /Invalid\s+["']input\[\d+\]\.id["']:\s*["'](fc|fco|ctc|ctco)_[^"']+["']\.?\s+Expected an ID that begins with ["'](fc|fco|ctc|ctco)_?["']/i.exec(text);
+  const match = /Invalid\s+["']input\[\d+\]\.id["']:\s*["'](fc|fco|ctc|ctco|call)_[^"']+["']\.?\s+Expected an ID that begins with ["'](fc|fco|ctc|ctco)_?["']/i.exec(text);
   if (!match) return false;
+  // Legacy `call_…` item ids (issue #4023) are rewritten to whichever tool dialect the target
+  // asks for, so any of the four expected prefixes is repairable. Case-sensitive like the
+  // normalizer's `startsWith('call_')`: an upper-case prefix would not be rewritten on retry.
+  if (match[1] === 'call') return true;
   return ({ fc: 'ctc', fco: 'ctco', ctc: 'fc', ctco: 'fco' } as Record<string, string>)[match[1]!]
     === match[2]!;
 }

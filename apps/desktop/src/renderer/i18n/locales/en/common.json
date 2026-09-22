@@ -2461,9 +2461,15 @@
     },
     "gitSafety": {
       "title": "Git Safety",
-      "autoSnapshotTitle": "Git safety snapshots",
-      "description": "Automatically record hidden savepoints in the project's Git repository after agent edits — no commits are added to your branch. Codex rewind is shown only when this is enabled.",
-      "toggleAria": "Toggle Git safety snapshots",
+      "autoSnapshotTitle": "File recovery points",
+      "description": "Choose when Cindy records hidden file recovery points. This affects file recovery cost, not conversation rewind.",
+      "modeAria": "File recovery point mode",
+      "modes": {
+        "off": "Off",
+        "existingGit": "Existing Git projects only",
+        "allProjects": "Include new empty projects"
+      },
+      "toggleAria": "File recovery point mode",
       "saveFailed": "Failed to save Git safety setting"
     },
     "feishuBot": {
@@ -4963,7 +4969,9 @@
           "stateChanged": "The account, plugin, or release changed during this operation. Review the latest state and try again.",
           "accessDenied": "This plugin operation is not permitted or was cancelled.",
           "notConfigured": "The plugin market is not available in this environment.",
-          "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy.",
+          "invalidPackage": "This plugin package is invalid and cannot be installed. Contact the publisher.",
+          "downloadTimeout": "The plugin download timed out. Please try again later.",
+          "downloadFailed": "The plugin download failed. Check your connection and try again.",
           "brokerRedirectPortRequired": "This plugin declares an authorization broker but is missing redirectPort in the same OAuth configuration, so it cannot be installed from the plugin marketplace. Contact the publisher to add the field and publish a new release."
         },
         "securityTitle": "Install and permissions",
@@ -7430,6 +7438,14 @@
     }
   },
   "bots": {
+    "devicePicker": {
+      "local": "This Device",
+      "title": "Switch Device",
+      "switchDevice": "Switch device, currently {{device}}",
+      "unread": "Unread messages",
+      "otherUnread": "Unread messages on other devices",
+      "remotePlaceholder": "Message {{name}} on {{device}}…"
+    },
     "creationName": "Name",
     "settingsBack": "Back to Settings",
     "sidebar": {
@@ -9305,6 +9321,7 @@
       "editCancel": "Cancel",
       "editSend": "Send",
       "editRollbackHint": "Sending will undo changes to {{count}} file(s) from the last turn",
+      "editConversationOnlyHint": "Sending will not restore project files; previous file changes will remain",
       "forkErrors": {
         "unsupportedHistory": "The historical agent session for this point is unavailable, so a new session can't be started from here",
         "noPriorAssistant": "Start a new session from a message that follows an AI reply",
@@ -9324,7 +9341,9 @@
       "viewThread": "View thread context ({{count}})"
     },
     "rewind": {
-      "noFilesToRollback": "No files to roll back, only chat history will be truncated",
+      "noFilesToRollback": "No restorable project file changes were detected",
+      "conversationOnlyNotice": "Project files cannot be restored because no Git savepoint is available. Continuing will remove the chat after this message; files will not return to their earlier state",
+      "gitSafetyDisabledNotice": "Git safety savepoints are disabled, so project files cannot be restored. Enable them in Settings to restore files; continuing will remove the chat after this message",
       "errors": {
         "noPriorAssistantPreview": "Please rewind from a question that follows an AI reply (this one has no prior assistant reply)",
         "sessionRunning": "The task did not stop in time — retry the rewind",
@@ -9339,11 +9358,11 @@
         "errorDescription": "File checkpointing is not enabled for this Session — files modified by tools cannot be rolled back.",
         "calculating": "Calculating rewind impact…",
         "noChanges": "No file changes to roll back",
-        "continueWillTruncate": "Continuing will still truncate subsequent messages",
+        "continueWillTruncate": "Continuing will remove the chat after this message",
         "noPerFileDiff": "This SDK version does not support per-file diff preview",
         "summaryDefault": "Subsequent messages after this will be discarded, and {{count}} files in the working directory will be rolled back to that moment.",
-        "summaryRunning": "The current task will stop. Subsequent messages and the corresponding file changes will be rewound.",
-        "summaryEmpty": "Subsequent messages will be discarded. No files were changed; only history is truncated.",
+        "summaryRunning": "The current task will stop. Later messages will be rewound. File restoration cannot be confirmed until the task has stopped.",
+        "summaryEmpty": "No project file changes were detected after this message. Continuing will remove the later chat.",
         "summaryEmptyWithNote": "Subsequent messages will be discarded.",
         "runningNotice": "The task is still running. Confirming will stop it before recalculating and applying the rewind.",
         "runningQueueNotice": "Queued messages will be kept paused and will not be sent automatically.",
@@ -10406,7 +10425,7 @@
     },
     "empty": {
       "promptHeading": "No Automations yet",
-      "promptDescription": "Create a cron Automation to let Claude Code, Codex, or Pi run your prompt on a schedule."
+      "promptDescription": "Create a cron Automation to run your prompt on a schedule."
     },
     "usageLimitRecovery": {
       "name": "Continue Task After Usage Resets",
@@ -13015,6 +13034,14 @@
       "localMain": "Local main",
       "lookupUnavailable": "Lookup failed",
       "comparisonUnavailable": "Local main comparison unavailable",
+      "personalStatus": {
+        "suffix": " ({{status}})",
+        "upToDate": "Up to Date",
+        "updateAvailable": "Update Available",
+        "unverified": "Version Status Unverified",
+        "upToDateDescription": "Personal source includes all updates from {{target}}",
+        "personalChanges": "Personal change records: {{ahead}}"
+      },
       "comparison": {
         "same": "Same SHA as local main",
         "personalAhead": "Includes local main · personal change records: {{ahead}}",
@@ -13057,6 +13084,16 @@
       "description": "Merge these changes with your personal version, then save the new version after checks and packaging pass.",
       "readyHint": "Installer {{name}} is ready. Open its folder to install it.",
       "failedStep": "Failed during: {{step}}",
+      "diagnostic": {
+        "outOfMemory": "The packaging process exceeded its memory limit. Update Cindy and generate again. If it still fails, report the error below.",
+        "timeout": "Generation stopped after exceeding 1 hour. Check the records below and retry.",
+        "exitCode": "Process exit code: {{code}}",
+        "unavailable": "This attempt did not save the specific error. Generate again to capture the cause."
+      },
+      "mergeStep": {
+        "conflicts": "Resolving conflicts…",
+        "cleanup": "Cleaning up merge files…"
+      },
       "preparationStep": {
         "environment": "Preparing the build environment…",
         "original": "Checking the current version…"
@@ -13078,6 +13115,8 @@
       "buildLog": {
         "title": "Build log",
         "steps": {
+          "resolving-conflicts": "Resolve conflicts",
+          "cleaning-merge": "Clean up merge files",
           "environment": "Prepare build environment",
           "original": "Check current version",
           "merging": "Merge changes",
@@ -13157,7 +13196,7 @@
         "selectItem": "Select {{title}}",
         "hint": "Merge oldest to newest, then generate one new version.",
         "confirmTitle": "Make a personal version with {{count}} changes?",
-        "confirmDescription": "The selected changes will be merged in the order below, then one new version will be generated after all merges succeed. Running isolated tests for these changes will stop first. A conflict stops the build and keeps already merged changes; resolve it, then start a new build. When no conflict is pending, cancellation or failure rolls back merges that have not produced a saved version, keeping each task's original changes.",
+        "confirmDescription": "The selected changes will be merged in the order below, then one new version will be generated. Running isolated tests for these changes will stop first. Conflicts will be handled in a linked task; once resolved, temporary files will be cleaned up and generation will continue automatically. Stopping the build also stops that task and discards temporary conflict edits. Original task changes and saved versions will be kept.",
         "start": "Confirm Build",
         "progress": "Merging {{current}} / {{total}}: {{title}}",
         "restartTest": "Restart Isolated Version"
@@ -13166,6 +13205,10 @@
       "buildDescription": "Generate a new version from the current personal source. Changes not yet integrated are excluded.",
       "building": "Generating personal version…",
       "stop": "Stop making",
+      "stopConfirm": {
+        "title": "Stop making this version?",
+        "description": "This also stops its conflict-resolution task, discards temporary conflict edits, cleans up temporary files, and undoes merges that have not produced a saved version. Original task changes, task history, and saved versions will be kept."
+      },
       "stopping": "Stopping…",
       "progress": {
         "waiting": "Waiting to start",

@@ -70,7 +70,7 @@ describe("iOS chrome presenters stay on the system menu path", () => {
       "utf8",
     );
     const home = readTextLf(
-      resolve(process.cwd(), "app/devices/index.tsx"),
+      resolve(process.cwd(), "src/session/HomeSurface.tsx"),
       "utf8",
     );
     const pullDown = readTextLf(

@@ -6,6 +6,7 @@ import type {
   MakeFeatureMergePlan,
 } from '../../shared/cindyMakeMerge.js';
 import { CINDY_PERSONAL_BRANCH, makeSourceCheckoutPath, makeSourceRoot } from './sourcePaths.js';
+import { removeMergeWorktreeResidue } from './mergeCleanupResidue.js';
 
 import {
   snapshotContent,
@@ -105,43 +106,118 @@ export async function cleanupMergedCandidate(
   userData: string,
   state: CindyMakeMergeState,
   git: MergeGit,
+  canCleanup: () => boolean = () => !state.sessionId,
 ): Promise<boolean> {
   if (
     state.status !== 'merged' ||
-    state.sessionId ||
+    !canCleanup() ||
     !state.commit ||
     !COMMIT.test(state.commit) ||
     !state.tree ||
     !/^[0-9a-f]{40,64}$/i.test(state.tree)
   )
     return false;
+  git = ownedGit(git, canCleanup);
   const worktree = mergeWorktree(userData, state.id);
   const branchRef = 'refs/heads/' + mergeBranch(state.id);
   const source = await assertSource(userData, git);
-  const tip = (await git(['rev-parse', '--verify', branchRef + '^{commit}'], source)).trim();
-  if (tip !== state.commit) return false;
-  await git(['merge-base', '--is-ancestor', tip, CINDY_PERSONAL_BRANCH], source);
-  const workspace = await lstat(worktree).catch((error) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw error;
-  });
-  if (workspace) {
+  const exists = (target: string) =>
+    lstat(target).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    });
+  const branchTip = async () => {
+    try {
+      return (
+        await git(['rev-parse', '--verify', '--quiet', branchRef + '^{commit}'], source)
+      ).trim();
+    } catch (error) {
+      if ((error as { exitCode?: number }).exitCode !== 1) throw error;
+      return undefined;
+    }
+  };
+  const unregistered = async () =>
+    !(await git(['worktree', 'list', '--porcelain', '-z'], source))
+      .split('\0')
+      .some(
+        (entry) =>
+          entry === 'branch ' + branchRef ||
+          (entry.startsWith('worktree ') && samePath(entry.slice(9), worktree)),
+      );
+  const workspace = await exists(worktree);
+  let tip = await branchTip();
+  const legacy = !state.strategy && !state.feature;
+  if (!workspace && !tip) return unregistered();
+  if (tip && tip !== state.commit && !legacy) return false;
+  if ((await git(['rev-parse', state.commit + '^{tree}'], source)).trim() !== state.tree)
+    return false;
+  try {
+    await git(['merge-base', '--is-ancestor', state.commit, CINDY_PERSONAL_BRANCH], source);
+  } catch (error) {
+    if ((error as { exitCode?: number }).exitCode !== 1) throw error;
+    // Packaging may already have restored the source while a Windows file lock deferred cleanup.
+    const retained = (
+      await git(['rev-parse', '--verify', 'refs/cindy-make/failed-builds/' + state.commit], source)
+    ).trim();
+    if (retained !== state.commit) return false;
+  }
+  let removalError: unknown;
+  const marker = path.join(worktree, '.git');
+  const retainLegacyTip = async () => {
+    if (legacy && tip)
+      await git(
+        ['update-ref', 'refs/cindy-make/backups/' + state.id + '/legacy-merge/' + tip, tip],
+        source,
+      );
+  };
+  if (workspace && (await exists(marker))) {
+    if (!tip) return false;
     await verifyMergeWorktree(userData, state, git);
-    await assertNoGitOperation(git, worktree);
     if (
       (await snapshotContent(git, worktree)) !== state.tree ||
       (await git(['rev-parse', 'HEAD'], worktree)).trim() !== tip
     )
       return false;
+    if (legacy) {
+      // Old file-only adoption committed in the personal checkout, leaving the
+      // candidate dirty and sometimes still in its original merge. Finish only
+      // that already-adopted tree, retaining its distinct history before removal.
+      if (
+        (await gitOperationExists(git, worktree, 'MERGE_HEAD')) &&
+        (await git(['rev-parse', 'MERGE_HEAD'], worktree)).trim() !== state.upstreamCommit
+      )
+        return false;
+      const normalized = await commitLocalFiles(
+        git,
+        worktree,
+        'Cindy Make: preserve completed legacy merge',
+        true,
+        state.tree,
+      );
+      tip = normalized.commit;
+      await retainLegacyTip();
+    } else await assertNoGitOperation(git, worktree);
     // Git also refuses tracked/untracked edits made after the snapshot check.
-    await git(['worktree', 'remove', worktree], source);
+    try {
+      await git(['-c', 'core.longpaths=true', 'worktree', 'remove', worktree], source);
+    } catch (error) {
+      removalError = error;
+    }
   }
 
-  // A prior cleanup may have removed the directory already. Never delete a ref
-  // still checked out elsewhere, or a tip changed after the adoption check.
-  const worktrees = await git(['worktree', 'list', '--porcelain', '-z'], source);
-  if (worktrees.split('\0').includes('branch ' + branchRef)) return false;
-  await git(['update-ref', '--no-deref', '-d', branchRef, tip], source);
+  if (!(await unregistered()) || (await exists(marker))) {
+    if (removalError) throw removalError;
+    return false;
+  }
+  // A successful Git exit does not prove the physical directory is gone. Older
+  // cleanups could also delete the ref first; adoption still has to be retained.
+  if ((await exists(worktree)) && !(await removeMergeWorktreeResidue(worktree, canCleanup)))
+    return false;
+  if (!(await unregistered())) return false;
+  // Keep the exact branch until the directory is gone, and preserve a changed tip.
+  await retainLegacyTip();
+  if (tip) await git(['update-ref', '--no-deref', '-d', branchRef, tip], source);
+  else if (await branchTip()) return false;
   return true;
 }
 
@@ -195,6 +271,63 @@ export async function cancelUpstreamMerge(
   const worktrees = await git(['worktree', 'list', '--porcelain', '-z'], source);
   if (worktrees.split('\0').includes('branch ' + branchRef)) throw mergeError('busy');
   await git(['update-ref', '--no-deref', '-d', branchRef, tip], source);
+}
+
+/** Discard a confirmed, stopped build candidate. Original task/source checkouts are never removed. */
+export async function discardFeatureMerge(
+  userData: string,
+  state: CindyMakeMergeState,
+  git: MergeGit,
+  canCleanup: () => boolean,
+): Promise<boolean> {
+  if (!state.feature || !state.cancellationRequested || !canCleanup()) return false;
+  git = ownedGit(git, canCleanup);
+  const source = await assertSource(userData, git);
+  const worktree = mergeWorktree(userData, state.id);
+  const branchRef = 'refs/heads/' + mergeBranch(state.id);
+  const exists = (target: string) =>
+    lstat(target).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    });
+  const tip = (
+    await git(['rev-parse', '--verify', '--quiet', branchRef + '^{commit}'], source).catch(
+      (error) => {
+        if ((error as { exitCode?: number }).exitCode === 1) return '';
+        throw error;
+      },
+    )
+  ).trim();
+  const marker = path.join(worktree, '.git');
+  let removalError: unknown;
+  if (await exists(marker)) {
+    if (!COMMIT.test(tip)) return false;
+    await verifyMergeWorktree(userData, state, git);
+    // Conflict edits are disposable only on this explicit cancellation path,
+    // after the resolver has exited. A single force still respects worktree locks.
+    try {
+      await git(['-c', 'core.longpaths=true', 'worktree', 'remove', '--force', worktree], source);
+    } catch (error) {
+      removalError = error;
+    }
+  }
+  const unregistered = async () =>
+    !(await git(['worktree', 'list', '--porcelain', '-z'], source))
+      .split('\0')
+      .some(
+        (entry) =>
+          entry === 'branch ' + branchRef ||
+          (entry.startsWith('worktree ') && samePath(entry.slice(9), worktree)),
+      );
+  if (!(await unregistered()) || (await exists(marker))) {
+    if (removalError) throw removalError;
+    return false;
+  }
+  if ((await exists(worktree)) && !(await removeMergeWorktreeResidue(worktree, canCleanup)))
+    return false;
+  if (!(await unregistered())) return false;
+  if (tip) await git(['update-ref', '--no-deref', '-d', branchRef, tip], source);
+  return true;
 }
 
 /** Rebase only in the retained candidate, then move the clean personal checkout to its result. */

@@ -2,7 +2,11 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { cloneElement, type ReactElement, type ReactNode } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+beforeAll(() => { HTMLElement.prototype.scrollIntoView = vi.fn(); });
+afterAll(() => { HTMLElement.prototype.scrollIntoView = originalScrollIntoView; });
 
 vi.mock('@/hooks/useProviderOnboarding', () => ({
   useProviderOnboarding: () => ({ visible: false }),
@@ -19,6 +23,7 @@ vi.mock('react-i18next', () => ({
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  observeSession: vi.fn(),
   profiles: [] as unknown[],
   remoteBots: [] as import('../remoteBotRoster').RemoteBot[],
   devices: [] as Array<{ deviceId: string; name: string; isSelf: boolean }>,
@@ -26,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   unread: {} as Record<string, number>,
   groupMessages: new Map<string, unknown[]>(),
   pathname: '/bots',
+  params: {} as { botId?: string; deviceId?: string },
   collapsed: false,
   refreshBotProfiles: vi.fn(),
   setBotHidden: vi.fn(async () => undefined),
@@ -45,17 +51,20 @@ vi.mock('@/state/agentIslandActivity', () => ({
   useAgentIslandActivityMap: () => mocks.islandActivity,
 }));
 vi.mock('@/hooks/useSessionRunningStatus', () => ({
-  useSessionRunningStatus: () => ({
+  useSessionRunningStatus: (sessionId: string | undefined) => {
+    mocks.observeSession(sessionId);
+    return ({
     runningSessionIds: new Set<string>(),
     notifications: new Set<string>(),
     clearNotification: vi.fn(),
-  }),
+    });
+  },
 }));
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
   useLocation: () => ({ pathname: mocks.pathname, search: '', hash: '' }),
-  useParams: () => ({}),
+  useParams: () => mocks.params,
 }));
 vi.mock('../../feature-context', () => ({
   useSidebarCollapsedState: () => mocks.collapsed,
@@ -125,6 +134,7 @@ beforeEach(() => {
   window.localStorage.clear();
   resetBotReadStateForTests();
   mocks.navigate.mockReset();
+  mocks.observeSession.mockReset();
   mocks.refreshBotProfiles.mockReset();
   mocks.setBotHidden.mockReset();
   mocks.setBotPinned.mockReset();
@@ -136,6 +146,7 @@ beforeEach(() => {
   mocks.unread = {};
   mocks.groupMessages = new Map();
   mocks.pathname = '/bots';
+  mocks.params = {};
   mocks.collapsed = false;
   mocks.profiles = [];
   mocks.remoteBots = [];
@@ -164,6 +175,153 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+});
+
+describe('one Cindy entry across devices', () => {
+  const remote = (deviceId: string, deviceName: string, extra = {}) => ({
+    id: 'cindy-default', deviceId, deviceName, name: 'Cindy', avatar: '🤖', avatarColor: 'violet',
+    description: '', preview: `${deviceName} preview`, activityAt: 1, sessionId: `${deviceId}-chat`, online: true, ...extra,
+  });
+
+  it('keeps the original local row and only offers switching while another Cindy exists', async () => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy', lastMessagePreview: 'Local preview' })];
+    const view = await renderSidebar();
+    expect(screen.queryByRole('combobox', { name: /bots.devicePicker.switchDevice/ })).toBeNull();
+    expect(screen.queryByTestId('cindy-device-row')).toBeNull();
+    expect(screen.queryByText('bots.devicePicker.local')).toBeNull();
+    expect(screen.getByText('bots.remote.online')).toBeTruthy();
+    fireEvent.click(screen.getByText('Local preview').closest('button')!);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/cindy-default');
+
+    mocks.remoteBots = [remote('cloud', 'Cloud', { online: false })];
+    view.rerender(cloneElement(mocks.registered.node as ReactElement));
+    expect(screen.getAllByRole('combobox', { name: /bots.devicePicker.switchDevice/ })).toHaveLength(1);
+    expect(screen.getAllByTestId('cindy-device-row')).toHaveLength(1);
+    expect(screen.getByText('Local preview')).toBeTruthy();
+
+    mocks.remoteBots = [];
+    view.rerender(cloneElement(mocks.registered.node as ReactElement));
+    expect(screen.queryByRole('combobox', { name: /bots.devicePicker.switchDevice/ })).toBeNull();
+    expect(screen.queryByTestId('cindy-device-row')).toBeNull();
+    expect(screen.queryByText('bots.devicePicker.local')).toBeNull();
+    expect(screen.getByText('bots.remote.online')).toBeTruthy();
+    expect(screen.getByText('Local preview')).toBeTruthy();
+  });
+
+  it('keeps the original remote row when it is the only Cindy', async () => {
+    mocks.remoteBots = [remote('cloud', 'Cloud', { online: false })];
+    await renderSidebar();
+    expect(screen.queryByRole('combobox', { name: /bots.devicePicker.switchDevice/ })).toBeNull();
+    expect(screen.queryByTestId('cindy-device-row')).toBeNull();
+    expect(screen.getByText('bots.remote.offline · Cloud')).toBeTruthy();
+    fireEvent.click(screen.getByText('Cloud preview').closest('button')!);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/cloud/cindy-default');
+  });
+
+  it('defaults to local Cindy while leaving custom same-name teammates separate', async () => {
+    mocks.profiles = [{ ...bot({ id: 'cindy-default', name: 'Cindy', lastMessagePreview: 'Local preview' }), templateId: 'cindy' }];
+    mocks.remoteBots = [remote('cloud', 'Cloud'), remote('mac', 'Mac'), { ...remote('other', 'Office'), id: 'custom', preview: 'Custom preview' }];
+    await renderSidebar();
+    expect(screen.getAllByTestId('cindy-device-row')).toHaveLength(1);
+    expect(screen.getByText('Local preview')).toBeTruthy();
+    expect(screen.getByText('Custom preview')).toBeTruthy();
+    expect(screen.queryByText('Cloud preview')).toBeNull();
+    expect(screen.queryByText('Mac preview')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cindy · bots.devicePicker.local' }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/cindy-default');
+  });
+
+  it('follows the selected remote chat and returns to local when visiting another teammate', async () => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Renamed Cindy', lastMessagePreview: 'Local preview' }), bot({ id: 'writer', name: 'Writer' })];
+    mocks.remoteBots = [remote('cloud', 'Cloud'), remote('mac', 'Mac')];
+    const view = await renderSidebar();
+    const trigger = screen.getByRole('combobox', { name: /bots.devicePicker.switchDevice/ });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const cloud = await screen.findByRole('option', { name: /Cloud/ });
+    fireEvent.click(cloud);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/cloud/cindy-default');
+    mocks.params = { deviceId: 'cloud', botId: 'cindy-default' };
+    view.rerender(cloneElement(mocks.registered.node as ReactElement));
+    expect(screen.getByText('Cloud preview')).toBeTruthy();
+    expect(screen.queryByText('Local preview')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cindy · Cloud' }).getAttribute('aria-current')).toBe('page');
+    expect(mocks.observeSession).toHaveBeenLastCalledWith('cloud-chat');
+    mocks.params = { botId: 'writer' };
+    view.rerender(cloneElement(mocks.registered.node as ReactElement));
+    expect(screen.getByText('Local preview')).toBeTruthy();
+    expect(screen.queryByText('Cloud preview')).toBeNull();
+    const localEntry = screen.getByRole('button', { name: 'Renamed Cindy · bots.devicePicker.local' });
+    expect(localEntry.hasAttribute('aria-current')).toBe(false);
+    fireEvent.click(localEntry);
+    expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/cindy-default');
+  });
+
+  it('keeps local Skill matches visible after grouping Cindy devices', async () => {
+    mocks.profiles = [
+      {
+        ...bot({ id: 'cindy-default', name: 'Cindy', lastMessagePreview: 'Local preview' }),
+        skills: ['web-research'],
+      },
+      ...Array.from({ length: 7 }, (_, index) => bot({ id: `other-${index}`, name: `Other ${index}` })),
+    ];
+    mocks.remoteBots = [remote('cloud', 'Cloud')];
+    await renderSidebar();
+
+    fireEvent.change(screen.getByLabelText('bots.list.search'), { target: { value: 'WEB-RESEARCH' } });
+    expect(screen.getAllByTestId('cindy-device-row')).toHaveLength(1);
+    expect(screen.getByText('Local preview')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cindy · bots.devicePicker.local' }));
+    expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/cindy-default');
+
+    fireEvent.change(screen.getByLabelText('bots.list.search'), { target: { value: 'unmatched-skill' } });
+    expect(screen.queryByTestId('cindy-device-row')).toBeNull();
+  });
+
+  it('keeps remote unread discoverable without opening the chat or switching away from local', async () => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy' })];
+    mocks.remoteBots = [remote('cloud', 'Cloud', { lastReplyAt: 20, readAt: 10, online: false })];
+    await renderSidebar();
+    expect(screen.getByLabelText('bots.devicePicker.otherUnread')).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('combobox', { name: /bots.devicePicker.switchDevice/ }), { key: 'ArrowDown' });
+    const cloud = await screen.findByRole('option', { name: /Cloud/ });
+    expect(cloud.textContent).toContain('bots.remote.offline');
+    expect(cloud.getAttribute('aria-selected')).toBe('false');
+    expect(screen.getByLabelText('bots.devicePicker.unread')).toBeTruthy();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('prefers local Cindy when local profiles arrive after the remote roster', async () => {
+    mocks.remoteBots = [remote('cloud', 'Cloud'), remote('mac', 'Mac')];
+    const view = await renderSidebar();
+    expect(screen.getByText('Cloud preview')).toBeTruthy();
+
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy', lastMessagePreview: 'Local preview' })];
+    view.rerender(cloneElement(mocks.registered.node as ReactElement));
+    expect(screen.getByText('Local preview')).toBeTruthy();
+    expect(screen.queryByText('Cloud preview')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cindy · bots.devicePicker.local' })).toBeTruthy();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('follows a remote deep link and falls back to local if that device is removed', async () => {
+    mocks.profiles = [bot({ id: 'cindy-default', name: 'Cindy', lastMessagePreview: 'Local preview' })];
+    mocks.remoteBots = [remote('cloud', 'Cloud')];
+    mocks.params = { botId: 'cindy-default', deviceId: 'cloud' };
+    const view = await renderSidebar();
+    expect(screen.getByText('Cloud preview')).toBeTruthy();
+    mocks.remoteBots = [];
+    view.rerender(cloneElement(mocks.registered.node as ReactElement));
+    expect(screen.getByText('Local preview')).toBeTruthy();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it('offers a remote-only group without recreating a deleted local Cindy', async () => {
+    mocks.remoteBots = [remote('cloud', 'Cloud'), remote('mac', 'Mac')];
+    await renderSidebar();
+    expect(screen.getAllByTestId('cindy-device-row')).toHaveLength(1);
+    expect(screen.queryByText('bots.devicePicker.local')).toBeNull();
+    expect(screen.getByText('Cloud preview')).toBeTruthy();
+  });
 });
 
 describe('teammate host labels', () => {

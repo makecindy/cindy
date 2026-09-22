@@ -2460,9 +2460,15 @@
     },
     "gitSafety": {
       "title": "Git 안전",
-      "autoSnapshotTitle": "Git 안전 저장점",
-      "description": "Agent 편집 후 프로젝트 Git 저장소에 숨겨진 저장점을 자동으로 기록합니다. 브랜치에 commit이 추가되지 않습니다. 켜져 있을 때만 Codex rewind를 표시합니다.",
-      "toggleAria": "Git 안전 저장점 전환",
+      "autoSnapshotTitle": "파일 복구 지점",
+      "description": "Cindy가 숨겨진 파일 복구 지점을 기록할 범위를 선택합니다. 파일 복구 비용에만 영향을 주며 대화 되돌리기에는 영향을 주지 않습니다.",
+      "modeAria": "파일 복구 지점 모드",
+      "modes": {
+        "off": "끔",
+        "existingGit": "기존 Git 프로젝트만",
+        "allProjects": "새 빈 프로젝트 포함"
+      },
+      "toggleAria": "파일 복구 지점 모드",
       "saveFailed": "Git 안전 설정 저장에 실패했습니다"
     },
     "feishuBot": {
@@ -4962,7 +4968,9 @@
           "stateChanged": "작업 중 계정, 플러그인 또는 릴리스가 변경되었습니다. 최신 상태를 확인한 후 다시 시도해 주세요.",
           "accessDenied": "이 플러그인 작업은 허용되지 않았거나 취소되었습니다.",
           "notConfigured": "이 환경에서는 플러그인 마켓을 사용할 수 없습니다.",
-          "invalidPackage": "이 플러그인 패키지가 올바르지 않거나 현재 Cindy 버전에서 지원되지 않습니다.",
+          "invalidPackage": "플러그인 패키지에 문제가 있어 설치할 수 없습니다. 게시자에게 문의해 주세요.",
+          "downloadTimeout": "플러그인 다운로드 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.",
+          "downloadFailed": "플러그인을 다운로드하지 못했습니다. 네트워크 연결을 확인한 후 다시 시도해 주세요.",
           "brokerRedirectPortRequired": "이 플러그인은 인증 broker를 선언했지만 같은 OAuth 설정에 redirectPort가 없어 플러그인 마켓에서 설치할 수 없습니다. 게시자에게 이 필드를 추가해 새 버전을 게시해 달라고 알려 주세요."
         },
         "securityTitle": "설치 및 권한",
@@ -7428,6 +7436,14 @@
     }
   },
   "bots": {
+    "devicePicker": {
+      "local": "이 기기",
+      "title": "기기 전환",
+      "switchDevice": "기기 전환, 현재 {{device}}",
+      "unread": "읽지 않은 메시지",
+      "otherUnread": "다른 기기에 읽지 않은 메시지가 있어요",
+      "remotePlaceholder": "{{device}}의 {{name}}에게 메시지 보내기…"
+    },
     "creationName": "이름",
     "settingsBack": "설정으로 돌아가기",
     "sidebar": {
@@ -9299,6 +9315,7 @@
       "editCancel": "취소",
       "editSend": "전송",
       "editRollbackHint": "전송하면 이전 턴에서 변경된 파일 {{count}}개가 되돌려집니다",
+      "editConversationOnlyHint": "전송해도 프로젝트 파일은 복원되지 않으며, 이전 파일 변경은 그대로 남습니다",
       "forkErrors": {
         "unsupportedHistory": "이 지점에 해당하는 이전 에이전트 세션을 사용할 수 없어 여기서 새 세션을 시작할 수 없습니다",
         "noPriorAssistant": "AI 응답 뒤의 메시지에서 새 세션을 시작해 주세요",
@@ -9318,7 +9335,9 @@
       "viewThread": "스레드 컨텍스트 보기 ({{count}})"
     },
     "rewind": {
-      "noFilesToRollback": "롤백할 파일이 없습니다. 대화 기록만 잘립니다",
+      "noFilesToRollback": "복원할 수 있는 프로젝트 파일 변경이 감지되지 않았습니다",
+      "conversationOnlyNotice": "사용할 수 있는 파일 복원 지점이 없습니다. 계속하면 이 메시지 이후의 채팅이 삭제되고 프로젝트 파일은 복원되지 않습니다",
+      "gitSafetyDisabledNotice": "Git 파일 복원 지점이 비활성화되어 있습니다. 설정에서 켜세요. 계속하면 이 메시지 이후의 채팅이 삭제되고 프로젝트 파일은 복원되지 않습니다",
       "errors": {
         "noPriorAssistantPreview": "AI 응답 뒤의 질문에서 rewind 하세요(이전에 assistant 응답이 없습니다)",
         "sessionRunning": "작업 중지 대기 시간이 초과되었습니다. 다시 되돌리세요",
@@ -9333,11 +9352,11 @@
         "errorDescription": "이 Session에서는 파일 checkpointing이 활성화되어 있지 않아 도구가 수정한 파일을 되돌릴 수 없습니다.",
         "calculating": "rewind 영향 계산 중…",
         "noChanges": "롤백이 필요한 파일 변경이 없습니다",
-        "continueWillTruncate": "계속해도 이후 대화는 잘립니다",
+        "continueWillTruncate": "계속하면 이 메시지 이후의 채팅이 삭제됩니다",
         "noPerFileDiff": "이 SDK 버전은 파일별 diff 미리보기를 지원하지 않습니다",
         "summaryDefault": "이 메시지 이후의 대화는 폐기되며, 작업 디렉터리의 {{count}}개 파일이 그 시점으로 되돌아갑니다.",
-        "summaryRunning": "실행 중인 작업을 중지하고 이 메시지 이후의 대화와 관련 파일 변경을 되돌립니다.",
-        "summaryEmpty": "이 메시지 이후의 대화는 폐기됩니다. 파일은 변경되지 않았으며, 기록만 잘립니다.",
+        "summaryRunning": "실행 중인 작업을 중지하고 이 메시지 이후의 대화를 되돌립니다. 파일을 복원할 수 있는지는 중지 후에야 확인할 수 있습니다.",
+        "summaryEmpty": "이 메시지 이후의 채팅이 삭제됩니다. 프로젝트 파일은 변경되지 않았습니다.",
         "summaryEmptyWithNote": "이 메시지 이후의 대화는 폐기됩니다.",
         "runningNotice": "작업이 아직 실행 중입니다. 확인하면 작업을 중지한 뒤 최신 상태를 기준으로 되돌립니다.",
         "runningQueueNotice": "대기 중인 메시지는 일시 중지된 상태로 유지되며 자동 전송되지 않습니다.",
@@ -10391,7 +10410,7 @@
     },
     "empty": {
       "promptHeading": "자동화가 아직 없습니다",
-      "promptDescription": "cron 자동화를 만들어 Claude Code, Codex 또는 Pi로 프롬프트를 일정에 따라 실행하세요."
+      "promptDescription": "cron 자동화를 만들어 프롬프트를 일정에 따라 실행하세요."
     },
     "usageLimitRecovery": {
       "name": "사용량 제한 재설정 후 작업 계속",
@@ -12998,6 +13017,14 @@
       "localMain": "로컬 main",
       "lookupUnavailable": "조회 실패",
       "comparisonUnavailable": "로컬 main의 차이 미확인",
+      "personalStatus": {
+        "suffix": " ({{status}})",
+        "upToDate": "최신 상태",
+        "updateAvailable": "업데이트 있음",
+        "unverified": "버전 상태 미확인",
+        "upToDateDescription": "개인 버전 코드에 {{target}}의 모든 업데이트가 포함되어 있습니다",
+        "personalChanges": "개인 변경 기록 {{ahead}}개 추가"
+      },
       "comparison": {
         "same": "로컬 main과 SHA가 같음",
         "personalAhead": "로컬 main을 포함하며 개인 변경 기록 {{ahead}}개 추가",
@@ -13040,6 +13067,16 @@
       "description": "이번 수정 사항을 개인 버전에 병합하고, 검사와 패키징을 통과한 후 새 개인 버전으로 저장합니다.",
       "readyHint": "설치 파일 {{name}}이 준비되었습니다. 저장된 폴더를 열 수 있습니다.",
       "failedStep": "실패한 단계: {{step}}",
+      "diagnostic": {
+        "outOfMemory": "패키징 프로세스가 메모리 한도를 초과했습니다. Cindy를 업데이트한 후 다시 생성하세요. 계속 실패하면 아래 오류를 제보하세요.",
+        "timeout": "생성 시간이 1시간을 초과하여 중단되었습니다. 아래 기록을 확인한 후 다시 시도하세요.",
+        "exitCode": "프로세스 종료 코드: {{code}}",
+        "unavailable": "이번 생성에서는 구체적인 오류가 저장되지 않았습니다. 원인을 기록하려면 다시 생성하세요."
+      },
+      "mergeStep": {
+        "conflicts": "충돌 해결 중…",
+        "cleanup": "병합 파일 정리 중…"
+      },
       "preparationStep": {
         "environment": "빌드 환경 준비 중…",
         "original": "현재 버전 확인 중…"
@@ -13061,6 +13098,8 @@
       "buildLog": {
         "title": "빌드 기록",
         "steps": {
+          "resolving-conflicts": "충돌 해결",
+          "cleaning-merge": "병합 파일 정리",
           "environment": "빌드 환경 준비",
           "original": "현재 버전 확인",
           "merging": "수정 사항 병합",
@@ -13140,7 +13179,7 @@
         "selectItem": "{{title}} 선택",
         "hint": "오래된 변경부터 병합한 뒤 새 버전 하나를 생성합니다.",
         "confirmTitle": "변경 {{count}}개를 포함한 개인 버전을 만들까요?",
-        "confirmDescription": "선택한 변경을 아래 순서대로 병합하고 모두 성공하면 새 버전 하나를 생성합니다. 선택한 변경의 격리 버전이 실행 중이면 먼저 중지합니다. 충돌이 발생하면 중단하고 이미 병합된 변경은 유지합니다. 충돌을 해결한 뒤 다시 만들 수 있습니다. 해결되지 않은 충돌이 없을 때 취소하거나 실패하면 저장된 버전에 포함되지 않은 병합을 되돌리고 각 세션의 원래 변경은 유지합니다.",
+        "confirmDescription": "선택한 변경을 아래 순서대로 병합하고 모두 성공하면 새 버전 하나를 생성합니다. 선택한 변경의 격리 버전이 실행 중이면 먼저 중지합니다. 충돌은 연결된 세션에서 해결하며, 완료되면 임시 파일을 정리하고 자동으로 생성을 계속합니다. 제작을 중지하면 연결된 세션도 중지하고 임시 충돌 수정을 삭제합니다. 원래 변경과 저장된 버전은 유지됩니다.",
         "start": "만들기 확인",
         "progress": "병합 중 {{current}} / {{total}}: {{title}}",
         "restartTest": "격리 버전 다시 시작"
@@ -13149,6 +13188,10 @@
       "buildDescription": "현재 개인 소스로 새 버전을 생성합니다. 아직 반영하지 않은 이전 변경 사항은 포함되지 않습니다.",
       "building": "개인 버전 생성 중…",
       "stop": "제작 중지",
+      "stopConfirm": {
+        "title": "이번 제작을 중지할까요?",
+        "description": "충돌을 해결 중인 세션도 중지하고 임시 충돌 수정과 파일을 삭제합니다. 저장된 버전에 포함되지 않은 병합도 되돌립니다. 원래 세션의 변경, 대화 기록, 저장된 버전은 유지됩니다."
+      },
       "stopping": "중지 중…",
       "progress": {
         "waiting": "시작 대기 중",

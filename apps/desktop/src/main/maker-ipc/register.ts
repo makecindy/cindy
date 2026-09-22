@@ -121,6 +121,7 @@ import {
   buildDeferredRuntimeSelectionProfile,
   nextDeferredModelWindowRetry,
   planUserRuntimeModelSwitch,
+  shouldSkipColdPiWindowRehydration,
 } from '../../shared/runtimeModelSwitchGate.js';
 import type { DesktopCommandContext } from '../commands/index.js';
 import { getDesktopCommandRegistry } from '../commands/index.js';
@@ -611,7 +612,11 @@ import { cindyMakeManager } from '../cindy-make/manager.js';
 import { assertCindyMakeWorkspace, withCindyMakeProjectUse } from '../cindy-make/projectAccess.js';
 import { isCindyMakeWorktreePath, isCindyMakeManagedWorktreePath } from '../cindy-make/sourcePaths.js';
 import { assertCindyMakeTaskReady, configureCindyMakeTaskSender, CINDY_MAKE_TASK_DISPATCH } from '../cindy-make/taskRuntime.js';
-import { finishUpstreamMergeTurn, assertUpstreamMergeTaskWritable } from '../cindy-make/upstreamMergeRuntime.js';
+import {
+  finishUpstreamMergeTurn,
+  interruptUpstreamMergeTurn,
+  prepareUpstreamMergeTurn,
+} from '../cindy-make/upstreamMergeRuntime.js';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { piPackageCommandDiagnostic } from '../maker-host/pi-package-diagnostic.js';
 import {
@@ -814,6 +819,10 @@ import {
 } from '../maker-host/codex-local-sessions.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
+import {
+  getSessionLastLiveUsage,
+  rememberSessionLastLiveUsage,
+} from './sessionLastLiveUsage.js';
 import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexPlanState.js';
 import { buildCompletedPlanGuardNote, buildPlanReconcileNote } from './planReconcile.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
@@ -1127,6 +1136,10 @@ import {
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { openMainWindowSession } from '../deepLink.js';
 import { handleSessionEvent, type SessionEventDependencies } from './sessionEventPipeline.js';
+import {
+  createDeferredProductTurnFailureGate,
+  type ProductTurnFailureOwner,
+} from './productTurnFailureOwner.js';
 import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
@@ -1285,8 +1298,20 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
   // 3–20 秒之后),onTurnErrorEvent 无 agentMeta 时按 register 记录的 turnDedupId 做多窗
   // dedup(saveTurnStartedAtForDeferred 已在压住那一刻存好 turn 开始时刻)。
   persistSuppressedError: (sessionId, detail) => onTurnErrorEvent(sessionId, detail, null),
-  surfaceSuppressedError: (sessionId, detail) =>
-    surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail),
+  surfaceSuppressedError: (sessionId, detail) => {
+    surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail);
+    // L3 may run after a provider replacement or a newer user turn. Resolve
+    // the exact deferred owner before interrupting the product task; a bare
+    // session id can otherwise stop the replacement turn.
+    deferredProductTurnFailureGate.settle(
+      sessionId,
+      isCurrentProductTurnFailureOwner,
+      (owner) => {
+        void interruptProductTurn(sessionId, owner).catch(() =>
+          log.warn('Could not interrupt product turn follow-up'));
+      },
+    );
+  },
   // L3：auto-resume 放弃后，用当初压住的 capture 恰好一次收口 Orca status / auto-bridge。
   // L2 flush/discard 不会走到这里，避免「还在重试却已经把异常终止桥给 Lead」。
   finalizeOrcaSuppressedTerminal: (sessionId, payload) => {
@@ -1344,6 +1369,7 @@ function resetAutomaticRecoveryForExplicitStop(sessionId: string): void {
   silentStopAutoResumeGuard.noteSessionReset(sessionId);
   interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
   autoResumeBookkeeping.teardown(sessionId);
+  deferredProductTurnFailureGate.clearSession(sessionId);
 }
 
 function autoResumeAttemptToken(item: AgentInputQueuedMessage): number | null {
@@ -4378,6 +4404,8 @@ interface WiredSessionCloseContext {
   preserveAutoResumeIntent: boolean;
 }
 
+const deferredProductTurnFailureGate = createDeferredProductTurnFailureGate();
+
 /** Desktop adapters for the instance-owned binding and synchronous close lifecycle. */
 const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSessionCloseContext>({
   log,
@@ -4390,6 +4418,11 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
   onBind: (session: WiredSession) => {
     advanceSessionTurnBoundaryGeneration(session.id);
     bindContinuationOnlyAutoResumeLease(session);
+    // Auth/gateway and context-overflow recovery can replace the provider
+    // runtime before the old renderer reports its final deferred error. Move
+    // that logical owner to the replacement; the actual dispatch boundary
+    // below retires it if a newer turn has already started.
+    deferredProductTurnFailureGate.rebindSession(session.id, session);
   },
   broadcastStatus: (session: WiredSession, status) => {
     broadcastToAllWindows(MAKER_PUSH.STATUS_CHANGED, { sessionId: session.id, status });
@@ -4432,8 +4465,14 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     botCompactRuntimeRefreshCoordinator.clearForClosedSession(session);
     cancelDirectAbortReconciliation(session.id);
     pendingFailedTurnAssistantPersistId.delete(session.id);
+    // An explicit close has no replacement turn to inherit the deferred
+    // receipt. Retire it before late renderer callbacks can arrive.
+    deferredProductTurnFailureGate.clearSession(session.id, session);
   },
   finalizeClosedSession: (session: WiredSession, context) => {
+    // 关闭前固化 live 用量（见 sessionLastLiveUsage.ts）：冷 Pi 切模的窗口核实
+    // 预检用它代替可能低报的 DB 快照（Greptile P1）。
+    rememberSessionLastLiveUsage(session.id, session.getUsageSnapshot?.());
     finalizeSessionClose(context.closedDirectAbortBoundary !== null, {
       clearTurnState: () => {
         sessionTurnActivityTracker.deleteSession(session.id);
@@ -4446,13 +4485,56 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
   },
 });
 
+function isCurrentProductTurnFailureOwner(owner: ProductTurnFailureOwner): boolean {
+  const bound = sessionBindings.getSession(owner.sessionId);
+  // A closed owner may still receive its renderer's final deferred-persist IPC.
+  // If a replacement is already bound, the old identity is stale; while no
+  // replacement exists, the captured Session/generation remains authoritative.
+  if (bound && bound !== owner.session) return false;
+  if (owner.session.instanceId !== owner.instanceId) return false;
+  try {
+    return owner.session.getTurnGeneration() === owner.generation;
+  } catch {
+    return false;
+  }
+}
+
+async function finishProductTurn(
+  sessionId: string,
+  owner?: ProductTurnFailureOwner,
+): Promise<void> {
+  if (owner) {
+    deferredProductTurnFailureGate.clear(owner);
+    if (!isCurrentProductTurnFailureOwner(owner)) return;
+  }
+  await finishUpstreamMergeTurn(sessionId);
+}
+
+async function interruptProductTurn(
+  sessionId: string,
+  owner?: ProductTurnFailureOwner,
+): Promise<void> {
+  if (owner) {
+    deferredProductTurnFailureGate.clear(owner);
+    if (!isCurrentProductTurnFailureOwner(owner)) return;
+  }
+  await interruptUpstreamMergeTurn(sessionId);
+}
+
 /** Remaining domain cleanup stays in its original order, after input coordination. */
 function cleanupClosedSessionRuntime(session: WiredSession): void {
   // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
   pendingCredentialSwitchHolder?.onSessionClosed(session.id);
   deferredCodexRestartHolder?.onSessionSettled();
   agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
-  refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
+  try {
+    refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
+  } catch (error) {
+    log.warn('optional remote MCP refresh failed during session close', {
+      sessionId: session.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   gitSnapshotCoordinator?.onSessionClosed(session.id);
   clearOrcaMcpHydrated(session.id);
   knownNonOrcaSessionIds.delete(session.id);
@@ -4483,7 +4565,9 @@ function cleanupClosedSessionRuntime(session: WiredSession): void {
 // operation. Capturing these services when wiring a Session would freeze the
 // pre-initialization or previous runtime value for later events.
 const sessionEventDependencies: SessionEventDependencies = {
-  onSuccessfulProductTurn: finishUpstreamMergeTurn,
+  onSuccessfulProductTurn: finishProductTurn,
+  onUnsuccessfulProductTurn: interruptProductTurn,
+  deferUnsuccessfulProductTurn: (owner) => deferredProductTurnFailureGate.defer(owner),
   get botCompactRuntimeRefreshCoordinator() { return botCompactRuntimeRefreshCoordinator; },
   get attemptBotCompactRuntimeRefresh() { return attemptBotCompactRuntimeRefresh; },
   get botDelegationServiceHolder() { return botDelegationServiceHolder; },
@@ -7489,6 +7573,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // holder 供各 turn 收口路径调用。远端 CC 走 holder 的 detach 补偿
   // (bridge 重建 / 端口重绑已让 fresh 失效时重建 query)。
   refreshRemoteCodexMcpOnTurnSettledHolder = (sessionId: string): void => {
+    // Shutdown closes sessions while the dynamic Maker facade rejects access.
+    // No remote reconfiguration belongs to the departing owner's boundary.
+    if (isAppSessionBoundaryPending()) return;
     const session = maker.getSession(sessionId);
     const remoteHostId = session?.remoteHostId;
     if (!remoteHostId) return;
@@ -8624,7 +8711,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     anchorClientId: string,
     opts: SessionSendOptions,
   ): Promise<SessionSendResult> {
-    assertUpstreamMergeTaskWritable(session.id);
+    const dispatchMergeTurn = prepareUpstreamMergeTurn(session.id);
     if (!session.remoteHostId && isCindyMakeWorktreePath(app.getPath('userData'), session.workDir)) {
       if (cindyMakeManager.isTaskPreparing(session.id))
         throwIpcError('PRECONDITION_FAILED', 'Cindy Make is still preparing this task');
@@ -8651,6 +8738,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               await gitSnapshotCoordinator.onTurnStart(session.id);
               baselineStarted = true;
             }
+          },
+          onDispatching: () => {
+            opts.onDispatching?.();
+            // A real provider dispatch supersedes any deferred receipt from a
+            // previous recovery attempt. Clear only at this irreversible
+            // boundary; preparation can still be rejected before dispatch.
+            deferredProductTurnFailureGate.clearSession(session.id);
+            dispatchMergeTurn?.();
           },
         });
         if (turnChangeSetStarted && !sendResult.accepted) {
@@ -12322,6 +12417,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return listMessagesForAgentHandoff(sessionId, 100, undefined, 'authorization');
   };
   const { sendToAgentAccepted: sendToAgentAcceptedUnlocked } = createMakerSendTransaction({
+    prepareProductTurn: (sessionId) => {
+      const dispatch = prepareUpstreamMergeTurn(sessionId);
+      return dispatch
+        ? () => {
+            // This is the transaction path's actual vendor-dispatch boundary.
+            deferredProductTurnFailureGate.clearSession(sessionId);
+            dispatch();
+          }
+        : undefined;
+    },
     readAutoReviewHistory,
     readScheduledPermissions: getSessionFsSnapshot,
     getSession: (sessionId) => maker.getSession(sessionId),
@@ -15247,6 +15352,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const sid = requireSessionId(sessionId);
     const remote = isDeviceLinkInvoke();
     await assertRemoteInputControlBoundary(sid, remote, opts, 'stop');
+    // Some providers acknowledge Stop without emitting another terminal event.
+    // Close the native build's wait at this authorized, shared Stop boundary.
+    const makeInterrupted = interruptUpstreamMergeTurn(sid).catch(() =>
+      log.warn('Could not interrupt merge task after explicit stop'),
+    );
     if (!remote) reviewRunControl.noteReviewerStopRequested(sid);
     // Main 是本机窗口与 Device Link 控制端的 Stop 汇合点；先记账再触发 abort，
     // 任何 renderer 后续请求推荐都会从同一 ledger fail-closed。
@@ -15273,7 +15383,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!inputCoordinator.hasPendingQueuedWork(sid)) {
       getAgentIslandService()?.notifyQueueEmptied(sid);
     }
-    await goalPause;
+    await Promise.all([goalPause, makeInterrupted]);
     return result;
   });
 
@@ -15315,6 +15425,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ? (agentMetaRaw as AgentMeta)
           : null;
       const persistId = onTurnErrorEvent(sid, errData, agentMeta);
+      deferredProductTurnFailureGate.settle(
+        sid,
+        isCurrentProductTurnFailureOwner,
+        (owner) => {
+          void interruptProductTurn(sid, owner).catch(() =>
+            log.warn('Could not interrupt product turn after deferred recovery failure'),
+          );
+        },
+        { data: errData, meta: agentMeta },
+      );
       getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);
       return persistId;
     },
@@ -16118,6 +16238,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
       let liveSessionBeforeRouteChange = maker.getSession(sessionId);
       let rehydratedColdPiRuntime: typeof liveSessionBeforeRouteChange = undefined;
+      // 冷 Pi 但没做活进程窗口核验（本轮新增：目标窗口对已知占用有余量、压力预检证明
+      // 核实不可能改变结论，于是跳过了冷启动核实）：目标 route 照常落定，由下一次发送
+      // 按目标窗口懒创建；apply 之后的终态活进程核验必须同步跳过，否则只会换成
+      // 'Pi target runtime could not be verified'。
+      let coldPiRouteWithoutLiveWindowCheck = false;
       const targetProviderId =
         effectiveProviderId === undefined
           ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)
@@ -16184,25 +16309,64 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           );
         }
         if (!liveSessionBeforeRouteChange) {
-          try {
-            await rehydrateColdPiRuntimeForWindowVerification(sessionId);
-          } catch {
-            throwIpcError(
-              localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
-              'Pi current runtime could not be verified; runtime selection was not changed',
-            );
+          // 冷启动核实(2~3s)只在它可能改变决策时才做：目标窗口对**已知占用**已到
+          // danger/overflow 才可能需要缩窗交接 / 二次确认；有余量时任何「当前窗口」
+          // 读数都不会触发交接（见 assessRuntimeModelSwitchGate 的 fail-open 矩阵），
+          // 让用户白等一次 Pi 冷启动就是纯卡顿（2026-09-21 实报）。
+          // 占用取 runtime **关闭时固化的 live 读数**（sessionLastLiveUsage），
+          // 不读 sessions.context_tokens：后者只在 turn 正常收尾时落库，中断 / 崩溃
+          // 后可能低报真实占用，拿它证明「目标还有余量」会绕过缩窗交接
+          // （Greptile P1，2026-09-21）；进程重启 / 硬杀后没有缓存时自动回退到核实。
+          // 无原生会话的冷 Pi 也不在本预检范围内（维持既有 fail-closed 语义）。
+          const coldPiLastLiveUsage = getSessionLastLiveUsage(sessionId);
+          const coldPiTargetContextWindow = lookupVerifiedContextWindow(
+            (_agentKind, modelId, pid) =>
+              resolveConfiguredContextWindow(getActiveCatalog(), 'pi', pid, modelId),
+            model,
+            targetRouteProviderId,
+            'pi',
+          );
+          const skipColdPiWindowVerification =
+            !!runtimeStatus.sdkSessionId &&
+            shouldSkipColdPiWindowRehydration({
+              contextTokens: coldPiLastLiveUsage?.contextTokens ?? null,
+              targetContextWindow: coldPiTargetContextWindow,
+            });
+          if (skipColdPiWindowVerification) {
+            coldPiRouteWithoutLiveWindowCheck = true;
+            log.info('set-model: skipped cold Pi window verification', {
+              sessionId,
+              reason: 'target-window-has-headroom',
+              contextTokens: coldPiLastLiveUsage?.contextTokens ?? null,
+              contextWindow: coldPiLastLiveUsage?.contextWindow ?? null,
+              capturedAtMs: coldPiLastLiveUsage?.capturedAtMs ?? null,
+              targetContextWindow: coldPiTargetContextWindow,
+              fromModel: currentRuntimeModel ?? null,
+              toModel: model,
+              currentProviderId,
+              nextProviderId: targetRouteProviderId,
+            });
+          } else {
+            try {
+              await rehydrateColdPiRuntimeForWindowVerification(sessionId);
+            } catch {
+              throwIpcError(
+                localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
+                'Pi current runtime could not be verified; runtime selection was not changed',
+              );
+            }
+            liveSessionBeforeRouteChange = maker.getSession(sessionId);
+            if (!liveSessionBeforeRouteChange) {
+              throwIpcError(
+                localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
+                'Pi current runtime could not be verified; runtime selection was not changed',
+              );
+            }
+            rehydratedColdPiRuntime = liveSessionBeforeRouteChange;
+            currentRuntimeModel = liveSessionBeforeRouteChange.model;
+            runtimeRouteChanged =
+              currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
           }
-          liveSessionBeforeRouteChange = maker.getSession(sessionId);
-          if (!liveSessionBeforeRouteChange) {
-            throwIpcError(
-              localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
-              'Pi current runtime could not be verified; runtime selection was not changed',
-            );
-          }
-          rehydratedColdPiRuntime = liveSessionBeforeRouteChange;
-          currentRuntimeModel = liveSessionBeforeRouteChange.model;
-          runtimeRouteChanged =
-            currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
         }
       }
       let targetContextWindow: number | undefined;
@@ -16638,7 +16802,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           runtimeAgentKind === 'pi' &&
           runtimeRouteChanged &&
           result.status !== 'deferred' &&
-          !modelWindowRebuilt
+          !modelWindowRebuilt &&
+          !coldPiRouteWithoutLiveWindowCheck
         ) {
           if (!piSessionAfterRouteChange) {
             restoreControlStores();

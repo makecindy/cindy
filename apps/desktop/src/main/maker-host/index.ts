@@ -802,6 +802,10 @@ export function listBotCreationCapabilities(input: Parameters<ReturnType<typeof 
   return createDesktopBotCapabilityService().forCreation(input);
 }
 
+export function listBotSettingsCapabilities(input: Parameters<ReturnType<typeof createBotCapabilityService>['forSettings']>[0]) {
+  return createDesktopBotCapabilityService().forSettings(input);
+}
+
 /** Settings IPC reuses the model-side catalog at its save boundary. */
 export async function validateBotCapabilityAdditions(update: BotCapabilityUpdate): Promise<void> {
   await createDesktopBotCapabilityService().validateAdditions(update);

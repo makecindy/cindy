@@ -1704,7 +1704,7 @@ my-ghost/
   // 声明 false 逐个关闭。当前一批:maximize(撑满内容区)、detach(在独立
   // 窗口中打开)、minimize(最小化面板;恢复入口由用户偏好决定为浮动气泡或
   // 左侧栏)。标题条本体恒由主机绘制、
-  // 关不掉;未知键拒装;position:"tab" 时声明本字段拒装
+  // 关不掉;未知键保留但不生效;position:"tab" 时声明本字段拒装
   // 一级主视图是独立能力，见 §4.20。使用时直接声明：
   // "mainView": { "title": "工作台", "icon": "puzzle", "html": "main-view.html" }
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
@@ -4488,7 +4488,7 @@ Cindy 统一归类、随机选择与排序，同批每个场景和每个插件�
   也长在这里)。你的 panel.html 只画标题条以下的部分,**不要自己再画一条
   标题栏**。不想要某颗系统按钮时在身份卡声明
   \`"systemButtons": { "maximize": false, "detach": false, "minimize": false }\`
-  逐个关闭(缺省全开;标题条本体关不掉;未知键拒装;\`position:"tab"\` 由插件页
+  逐个关闭(缺省全开;标题条本体关不掉;未知键保留但不生效;\`position:"tab"\` 由插件页
   自绘头,没有这套标准头,声明本字段拒装);
 - 与电子脑同源,用 \`BroadcastChannel('<自定名>')\` 通信(电子脑发,面板收);
 - 取自己的媒体:\`cindy-ghost://<id>/media/<指纹><后缀>\`(主机查账验归属,别人的图 404);
@@ -4663,20 +4663,28 @@ Cindy 统一归类、随机选择与排序，同批每个场景和每个插件�
 - 其余要求(目录命名、审核流程等)以该仓根部的 \`CONTRIBUTING.md\` 为准,提交前
   在仓内跑一遍 \`node --test .tests/\` 自查。
 
-## 9. 常见拒装原因速查
+## 9. 兼容性与常见拒装原因
+
+插件开发不应受当前客户端能力注册进度限制。未知顶层能力、对象扩展字段、能力动作
+与订阅事件保留为声明，不因此阻断发布或安装，也不因此获得执行权限。
+插件必须检查所需接口是否存在并处理不支持响应：可选功能局部降级，必要能力缺失时
+提示升级，不影响其它可用功能；权限拒绝、账号失效和网络错误不能当作不支持绕过。
+\`minCindyVersion\` 是兼容声明与分发依据，不是运行时能力探测；手动安装、旧版
+或其它分发渠道仍可能让不适配客户端安装插件，不能省略上述兼容处理。
+旧客户端已有拒装逻辑无法追改；整体协议格式变化仍受 schemaVersion 校验。
 
 - \`id\` 不合法(大写/下划线/超长)· 声明了 command 但没有 tools · command 与已装意识撞名
   · **未声明 command**:不拒装,但插件页"使用"按钮禁用,用户无法通过插件页一键启用
     或用 $command 点名;AI 工具调用不受影响(见 §2 说明)
 - \`tools\` 为空 · panel 详单缺少实际形态(既没有 html，也不是有效的 tab/停靠配置)
-- mainView.html 文件缺失/路径不安全、icon 不在系统图标白名单，或 mainView 含未知字段
+- mainView.html 文件缺失/路径不安全、icon 不在系统图标白名单
 - settingsHtml 路径不合法/文件不在包里 · settingsHeight 越界(160–800)或没配 settingsHtml 单独声明
-- panel.systemButtons 格式错(不是对象、未知键、值非布尔,或 position:"tab" 时声明——插件页内面板没有标准头)
+- panel.systemButtons 格式错(不是对象、已知键的值非布尔,或 position:"tab" 时声明——插件页内面板没有标准头)
 - keywords(已废弃字段,旧包兼容保留,新意识别写)有单字词 · kind 写了但不是 "chip"(可省略) · schemaVersion 不是 3 · 缺 minCindyVersion
-- cindy 详单格式错(未知类目/动作、空数组)
+- cindy 详单格式错(已知类目的动作不是合法标识、空数组或重复动作)
 - agent 详单格式错(background / errand / schedule 存在但不是 true；基础点击触发请写 \`agent: {}\`)
 - node 详单格式错(entry 不是包内 CommonJS .js/.cjs、protocol 不在 json-rpc-stdio / mcp-stdio、
-  写了 command/args/shell/env、resident 又写 idleTimeoutSeconds)
+  resident 又写 idleTimeoutSeconds)；未知 command/args/shell/env 只保留，不传给进程启动器
 - id 用了 \`cindy-\` / \`filo-\` / \`xd-\` 前缀(官方保留,正式版用户通道拒装;给自己的意识换个前缀)
 - network 详单格式错(hosts 缺失/裸 TLD/IP/带端口/通配不在最左、secret 缺 inject、
   inject.format 没有 {value} 占位、inject.header 用了 Host/Cookie 等协议关键头、

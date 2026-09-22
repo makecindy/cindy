@@ -242,6 +242,7 @@ function harness() {
   const activity = new SessionTurnActivityTracker();
   const deps = {
     onSuccessfulProductTurn: vi.fn(async () => {}),
+    onUnsuccessfulProductTurn: vi.fn(async () => {}),
     log,
     botCompactRuntimeRefreshCoordinator: { noteBoundary: vi.fn() },
     attemptBotCompactRuntimeRefresh: vi.fn(),
@@ -454,6 +455,7 @@ describe('production Session event pipeline', () => {
       h.emit(event('done', { status }));
       await microtasks();
       expect(h.deps.onSuccessfulProductTurn).toHaveBeenCalledTimes(status === 'completed' ? 1 : 0);
+      expect(h.deps.onUnsuccessfulProductTurn).toHaveBeenCalledTimes(status === 'completed' ? 0 : 1);
       await h.dispose();
     },
   );
@@ -520,6 +522,7 @@ describe('production Session event pipeline', () => {
     vi.setSystemTime(3000);
     h.emit(event('done', {}, { source, turnContinuationId: 0 }));
     expect(h.deps.onSuccessfulProductTurn).not.toHaveBeenCalled();
+    expect(h.deps.onUnsuccessfulProductTurn).not.toHaveBeenCalled();
     expect(h.activity.isSessionInTurn('task')).toBe(true);
     expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
     expect(effects.fn('turn-drain')).not.toHaveBeenCalled();
@@ -666,6 +669,7 @@ describe('production Session event pipeline', () => {
     expect(effects.fn('markAssistantTurnCompleted')).not.toHaveBeenCalled();
     expect(h.deps.autoResumeBookkeeping.stashOrcaSuppressedTerminal).toHaveBeenCalledOnce();
     expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+    expect(h.deps.onUnsuccessfulProductTurn).not.toHaveBeenCalled();
     await h.dispose();
   });
 

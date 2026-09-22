@@ -164,6 +164,7 @@ export interface NormalizedAttachment {
 export interface NormalizedToolMedia {
   kind: 'image' | 'video' | 'audio';
   url: string;
+  mimeType?: string;
   title?: string;
   previewable: boolean;
   actions?: NormalizedToolMediaActions;

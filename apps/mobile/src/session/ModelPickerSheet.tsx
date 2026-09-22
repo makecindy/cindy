@@ -68,6 +68,7 @@ export interface ModelPickerSheetProps {
   unified?: UnifiedMobilePickerOptions;
   visible: boolean;
   onClose(): void;
+  onClosed?(): void;
   // —— 模型目录(与旧 drop-up 面板同口径) ——
   providers: readonly ProviderView[];
   /** 被控端「模型显示/隐藏」override 快照(useDeviceProviders 透传);undefined = 不过滤。 */
@@ -128,6 +129,7 @@ export function ModelPickerSheet(props: ModelPickerSheetProps) {
 function LegacyModelPickerSheet({
   visible,
   onClose,
+  onClosed,
   providers,
   modelVisibilityOverrides,
   flatOptions,
@@ -485,7 +487,7 @@ function LegacyModelPickerSheet({
             ) : null);
   if (Platform.OS === 'ios') {
     return (
-      <ComposerSheet nativeContent visible={visible} onClose={onClose} backLabel={t('models.picker.backToModels')}
+      <ComposerSheet nativeContent visible={visible} onClose={onClose} onClosed={onClosed} backLabel={t('models.picker.backToModels')}
         title={view.kind === 'models' ? t('models.picker.title') : secondaryTitle}
         onBack={view.kind === 'models' ? undefined : backToModels} testID={testID}>
         {view.kind === 'models' ? <>
@@ -502,6 +504,7 @@ function LegacyModelPickerSheet({
 
   return (
     <SheetModal
+      onClosed={onClosed}
       backdropTestID={`${testID}.backdrop`}
       keyboardAvoiding
       keyboardAvoidingBehavior={keyboardAvoidingBehavior}

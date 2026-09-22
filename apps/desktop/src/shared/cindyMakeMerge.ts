@@ -56,6 +56,8 @@ export interface CindyMakeMergeState {
   sessionId?: string;
   /** A retained candidate must not be removed by source preparation/reset. */
   hasWorkspace?: boolean;
+  /** Adoption succeeded; disposable files/ref still need cleanup before another operation. */
+  cleanupPending?: boolean;
   /** Persisted before cleanup so interruption retries cancellation, never starts a resolution task. */
   cancellationRequested?: boolean;
   ownedByAnotherAccount?: boolean;

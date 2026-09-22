@@ -23,7 +23,7 @@ const h = vi.hoisted(() => ({
   rollbackGuard: undefined as ((commit: string) => boolean) | undefined,
   publishedCommit: vi.fn(() => true),
   pendingRollback: false,
-  historyIntegrate: vi.fn(async () => ({ items: [{ runId: 'run', integration: 'integrated' }] })),
+  historyIntegrate: vi.fn(),
   history: vi.fn(async () => ({ items: [{ runId: 'run', integration: 'integrated' }] })),
 }));
 vi.mock('../historyOwner.js', () => ({
@@ -37,7 +37,7 @@ vi.mock('../historyOwner.js', () => ({
 }));
 vi.mock('../historyRuntime.js', () => ({
   getCindyMakeHistory: h.history,
-  actCindyMakeHistory: h.historyIntegrate,
+  integrateCompletionForBuild: h.historyIntegrate,
   recoverHistoryBuildRollback: h.recoverBuild,
 }));
 vi.mock('../buildRollback.js', () => ({
@@ -158,6 +158,7 @@ beforeEach(() => {
   h.verify.mockReset().mockResolvedValue(undefined);
   h.build.mockReset().mockResolvedValue(installer);
   h.recoverBuild.mockReset().mockResolvedValue(undefined);
+  h.historyIntegrate.mockReset().mockResolvedValue(undefined);
   h.artifactPath.mockReset().mockResolvedValue(path.join(os.tmpdir(), 'installer.exe'));
   h.current = true;
   h.pendingRollback = false;
@@ -188,6 +189,64 @@ beforeEach(() => {
 afterEach(() => cindyMakeTestController.stopAll());
 
 describe('Cindy Make test IPC ownership and persistence', () => {
+  it('keeps the card building through conflict resolution and cleanup, then packages once', async () => {
+    let resolved!: () => void;
+    let cleaned!: () => void;
+    h.historyIntegrate.mockImplementationOnce(async (_task, _signal, publish) => {
+      expect(cindyMakeTestController.isBuilding('session')).toBe(true);
+      expect(cindyMakeManager.getState().personalBuildSessionIds).toEqual(['session']);
+      await publish({ status: 'merging', mergeStep: 'conflicts' });
+      await new Promise<void>((done) => {
+        resolved = done;
+      });
+      await publish({ status: 'merging', mergeStep: 'cleanup' });
+      await new Promise<void>((done) => {
+        cleaned = done;
+      });
+    });
+    const personal = () => JSON.parse(String(h.card.agentMeta)).cindyMakeCompletion.personal;
+    await actCindyMakeTest('session', 'completion', 'build');
+    await vi.waitFor(() => expect(resolved).toBeTypeOf('function'));
+    expect(personal()).toMatchObject({ status: 'merging', mergeStep: 'conflicts' });
+    expect(personal().error).toBeUndefined();
+    expect(h.build).not.toHaveBeenCalled();
+    resolved();
+    await vi.waitFor(() => expect(cleaned).toBeTypeOf('function'));
+    expect(personal()).toMatchObject({ status: 'merging', mergeStep: 'cleanup' });
+    expect(h.build).not.toHaveBeenCalled();
+    cleaned();
+    await vi.waitFor(() => expect(cindyMakeTestController.isBuilding('session')).toBe(false));
+    expect(h.build).toHaveBeenCalledOnce();
+    expect(personal()).toMatchObject({ status: 'ready' });
+    expect(personal().logs.map((entry: { step: string }) => entry.step)).toEqual([
+      'environment',
+      'original',
+      'resolving-conflicts',
+      'cleaning-merge',
+      'ready',
+    ]);
+  });
+  it('does not package after cancellation during conflict handling', async () => {
+    let signal!: AbortSignal;
+    h.historyIntegrate.mockImplementationOnce(async (_task, abort: AbortSignal, publish) => {
+      signal = abort;
+      await publish({ status: 'merging', mergeStep: 'conflicts' });
+      await new Promise<void>((resolve) =>
+        abort.addEventListener('abort', () => resolve(), { once: true }),
+      );
+      // Even a late successful resolution must pass the build cancellation check.
+    });
+    await actCindyMakeTest('session', 'completion', 'build');
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    await cindyMakeTestController.cancelBuild(cindyMakeTestController.activeBuild()!.buildId!);
+    await vi.waitFor(() => expect(cindyMakeTestController.isBuilding('session')).toBe(false));
+    expect(signal.aborted).toBe(true);
+    expect(h.build).not.toHaveBeenCalled();
+    expect(JSON.parse(String(h.card.agentMeta)).cindyMakeCompletion.personal).toMatchObject({
+      status: 'failed',
+      error: 'cancelled',
+    });
+  });
   it('reports a stop failure without inspecting or modifying personal source', async () => {
     const stop = vi
       .spyOn(cindyMakeTestController, 'stopTestForBuild')
@@ -461,9 +520,11 @@ describe('Cindy Make test IPC ownership and persistence', () => {
     await actCindyMakeTest('session', 'completion', 'build');
     await vi.waitFor(() => expect(h.recoverBuild).toHaveBeenCalledWith(true));
     expect(cindyMakeTestController.isBuilding('session')).toBe(true);
+    expect(cindyMakeManager.getState().personalBuildSessionIds).toEqual(['session']);
     expect(h.build).not.toHaveBeenCalled();
     release();
     await vi.waitFor(() => expect(cindyMakeTestController.isBuilding('session')).toBe(false));
+    expect(cindyMakeManager.getState().personalBuildSessionIds).toBeUndefined();
     expect(JSON.parse(String(h.card.agentMeta)).cindyMakeCompletion.personal).toMatchObject({
       status: 'failed',
       error: 'environment',
@@ -478,7 +539,11 @@ describe('Cindy Make test IPC ownership and persistence', () => {
     await actCindyMakeTest('session', 'completion', 'build');
     await vi.waitFor(() => expect(cindyMakeTestController.isBuilding('session')).toBe(false));
     expect(h.recoverBuild).toHaveBeenCalledExactlyOnceWith();
-    expect(h.historyIntegrate).toHaveBeenCalledWith('run', 'integrate');
+    expect(h.historyIntegrate).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'run', completionId: 'completion' }),
+      expect.any(AbortSignal),
+      expect.any(Function),
+    );
     expect(h.build).toHaveBeenCalledOnce();
   });
   it('reports incomplete automatic cleanup instead of claiming the source was restored', async () => {
@@ -517,10 +582,12 @@ describe('Cindy Make test IPC ownership and persistence', () => {
     await actCindyMakeTest('session', 'completion', 'continue');
     expect(cancelled).toBe(true);
     expect(cindyMakeTestController.isUsingWorkspace(String(h.row.workingDir))).toBe(true);
+    expect(cindyMakeManager.getState().personalBuildSessionIds).toEqual(['session']);
     finishCleanup();
     await vi.waitFor(() =>
       expect(cindyMakeTestController.isUsingWorkspace(String(h.row.workingDir))).toBe(false),
     );
+    expect(cindyMakeManager.getState().personalBuildSessionIds).toBeUndefined();
     expect(JSON.parse(String(h.card.agentMeta)).cindyMakeCompletion).toMatchObject({
       continuedAt: expect.any(Number),
       personal: { status: 'failed', error: 'interrupted' },

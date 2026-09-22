@@ -435,8 +435,9 @@ export const MAKER_INVOKE = {
   CHAT_EMBEDDING_SET: 'maker:chat-embedding:set',
   CHAT_EMBEDDING_RESET: 'maker:chat-embedding:reset',
   /**
-   * Git safety workflow: automatic XDT snapshot commits and the dependent
-   * Codex file rewind entry. Default false; SET writes a user override.
+   * Git safety workflow: three-state automatic XDT savepoint policy. File
+   * rewind remains available as conversation-only rewind when no savepoint
+   * exists; SET writes a user override.
    */
   GIT_SAFETY_GET: 'maker:git-safety:get',
   GIT_SAFETY_SET: 'maker:git-safety:set',

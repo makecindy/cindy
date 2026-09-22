@@ -495,19 +495,19 @@ describe('Claude Code tool-loop guard runtime integration', () => {
     expect(result.interruptCalls).toBe(1);
   });
 
-  it('未确认的 provider-routed 模型不扩展自动硬中断范围', async () => {
+  it.each(['codex/gpt-5.5', 'google/gemini-3.8-flash', 'kimi/k2.8'])(
+    '%s provider-routed 模型同样检测工具循环', async (model) => {
     const result = await runStableAbabLoop(
-      await startSessionWithStream('codex/gpt-5.5'),
+      await startSessionWithStream(model),
       'run a provider-routed investigation',
       'toolu_provider_boundary',
     );
 
-    expect(result.loopError).toBeUndefined();
-    expect(result.interruptCalls).toBe(0);
+    expect(result.loopError).toMatchObject({ data: { reason: 'tool_use_loop_detected', model } });
+    expect(result.interruptCalls).toBe(1);
   });
 
-  it('claude 会话下 provider-routed 模型 sidechain 的稳定 ABAB 循环不触发硬中断', async () => {
-    // sidechain 流内消息报的是 SDK 原始 id(无 codex/ 前缀),guard 适用性按它判。
+  it('provider-routed sidechain 同样中断循环并保留真实模型归属', async () => {
     const result = await runStableAbabLoop(
       await startSessionWithStream('claude-opus-5'),
       'delegate the investigation to a codex subagent',
@@ -515,8 +515,8 @@ describe('Claude Code tool-loop guard runtime integration', () => {
       { parentToolUseId: 'toolu_agent_codex', model: 'gpt-5.6-sol' },
     );
 
-    expect(result.loopError).toBeUndefined();
-    expect(result.interruptCalls).toBe(0);
+    expect(result.loopError).toMatchObject({ data: { reason: 'tool_use_loop_detected', model: 'gpt-5.6-sol' } });
+    expect(result.interruptCalls).toBe(1);
   });
 
   it('provider-routed 会话下 claude 模型 sidechain 的稳定 ABAB 循环仍会中断', async () => {

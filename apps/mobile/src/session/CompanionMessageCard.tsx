@@ -8,6 +8,8 @@ import {
   GitPullRequestClosed,
   GitPullRequestDraft,
   Square,
+  MessageCircle,
+  ChevronRight,
 } from 'lucide-react-native';
 import {
   MAX_STATUS_QUERIES,
@@ -91,7 +93,7 @@ function CompanionMessageCardContent({ message }: { message: NormalizedRemoteMes
   return (
     <Pressable
       accessibilityRole="button"
-      style={styles.card}
+      style={styles.privateTrace}
       onPress={() =>
         router.push({
           pathname: '/companions/direct/[threadId]',
@@ -103,12 +105,16 @@ function CompanionMessageCardContent({ message }: { message: NormalizedRemoteMes
         })
       }
     >
-      <Text style={styles.title}>
+      <MessageCircle size={iconSize.md} color={styles.note.color} />
+      <View style={{ flex: 1 }}>
+      <Text style={styles.note}>
         {t('devices.companions.privateChat', { name: meta.peerBotName })}
       </Text>
       <Text numberOfLines={2} style={styles.note}>
         {meta.preview}
       </Text>
+      </View>
+      <ChevronRight size={iconSize.md} color={styles.note.color} />
     </Pressable>
   );
 }
@@ -416,7 +422,8 @@ function CompanionTaskCard({
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
-    card: {
+    privateTrace: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44, paddingVertical: spacing.sm },
+  card: {
       marginVertical: spacing.sm,
       padding: spacing.md,
       gap: spacing.xs,
