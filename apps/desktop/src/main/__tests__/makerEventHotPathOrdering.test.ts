@@ -30,12 +30,16 @@ describe('maker:event hot path ordering', () => {
     const code = source.slice(start, source.indexOf('\n// Keep holder reads', start));
     const js = transpileModule(code, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
     const cleared = vi.fn();
+    // 任务级窗口预算的应用去重表也在这一段的 `delete` 里（见 register.ts 的
+    // cleanupClosedSessionRuntime）：沙箱必须把它当依赖注入，否则抽样执行会 ReferenceError。
+    const appliedContextWindowBudgets = new Map<string, number | null>([['departing-task', 300_000]]);
     const deps = {
       pendingCredentialSwitchHolder: null, deferredCodexRestartHolder: null,
       agentInputCoordinatorHolder: null,
       refreshRemoteCodexMcpOnTurnSettledHolder: () => { throw new Error('App session is switching'); },
       gitSnapshotCoordinator: { onSessionClosed: vi.fn() },
       clearOrcaMcpHydrated: vi.fn(), knownNonOrcaSessionIds: new Set(),
+      appliedContextWindowBudgets,
       lastReportedCostUsdBySession: new Map(), lastReportedModelUsageBySession: new Map(),
       turnModelPromiseBySession: new Map(), turnUsageContextBySession: new Map(),
       productTurnWallClockTracker: { clear: cleared }, productTurnUsageTargetTracker: { clear: vi.fn() },
@@ -46,6 +50,8 @@ describe('maker:event hot path ordering', () => {
     const cleanup = new Function(...Object.keys(deps), `${js}; return cleanupClosedSessionRuntime;`)(...Object.values(deps));
     expect(() => cleanup({ id: 'departing-task' })).not.toThrow();
     expect(cleared).toHaveBeenCalledWith('departing-task');
+    // 关闭任务时必须把窗口预算的去重记账一起清掉，否则同 id 的替换实例会沿用旧值。
+    expect(appliedContextWindowBudgets.has('departing-task')).toBe(false);
     expect(deps.clearSessionPersistState).toHaveBeenCalledWith('departing-task');
     expect(deps.handleAgentIslandSessionClosedAfterCleanup).toHaveBeenCalledWith('departing-task', 'process-closed');
   });
