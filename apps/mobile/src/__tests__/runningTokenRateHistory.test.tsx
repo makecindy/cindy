@@ -102,3 +102,48 @@ it('keeps measured zero distinct from missing data', () => {
   expect(report({ outputTokens: 0, generationDurationMs: 0 })).toBe('waiting');
   expect(report({ generationDurationMs: 1000 })).toBe('0');
 });
+
+it('does not show the previous rate before the next remote turn starts', () => {
+  report();
+  expect(report({ outputTokens: 1100, generationDurationMs: 12_000 })).toBe('50');
+  act(() => root.unmount());
+  root = createRoot(host);
+  current = {
+    ...current,
+    startedAt: null,
+    streaming: true,
+    outputTokens: 1100,
+    generationDurationMs: 12_000,
+  };
+  act(() => root.render(<Probe key={current.sessionKey} {...current} />));
+  expect(host.textContent).toBe('waiting');
+
+  act(() => root.unmount());
+  root = createRoot(host);
+  current = { ...current, streaming: false };
+  act(() => root.render(<Probe key={current.sessionKey} {...current} />));
+  expect(host.textContent).toBe('waiting');
+});
+
+it('drops the previous rate when a new local turn starts during the terminal linger', () => {
+  report();
+  expect(report({ outputTokens: 1100, generationDurationMs: 12_000 })).toBe('50');
+  expect(
+    report({
+      startedAt: null,
+      outputTokens: 1140,
+      generationDurationMs: 14_000,
+      streaming: false,
+    }),
+  ).toBe('20');
+  expect(report({ streaming: true })).toBe('waiting');
+  expect(
+    report({
+      startedAt: 2,
+      outputTokens: 0,
+      generationDurationMs: 0,
+      streaming: true,
+    }),
+  ).toBe('waiting');
+  expect(report({ outputTokens: 40, generationDurationMs: 1000 })).toBe('40');
+});

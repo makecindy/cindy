@@ -9459,6 +9459,7 @@ export default function SessionScreen() {
                     sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}
                     startedAt={composerActivityStartedAtMs}
                     rateStartedAt={remoteSessionRunStatus.startedAt}
+                    streaming={isSessionStreaming}
                     tokenUsage={composerActivityTokenUsage}
                     outputTokens={remoteSessionRunStatus.outputTokens}
                     generationDurationMs={remoteSessionRunStatus.generationDurationMs}
@@ -11210,6 +11211,7 @@ function ComposerActivityStatus({
   sideTaskRunning,
   startedAt,
   rateStartedAt,
+  streaming,
   tokenUsage,
   outputTokens,
   generationDurationMs,
@@ -11222,6 +11224,7 @@ function ComposerActivityStatus({
   sideTaskRunning: boolean;
   startedAt: number | null;
   rateStartedAt: number | null;
+  streaming: boolean;
   tokenUsage: number;
   outputTokens: number;
   generationDurationMs: number;
@@ -11255,6 +11258,7 @@ function ComposerActivityStatus({
     outputTokens,
     generationDurationMs,
     generationReliable: generationReliable && visible && !reconnectAttempt && !sideTaskRunning,
+    streaming,
   });
 
   if (!visible) return null;

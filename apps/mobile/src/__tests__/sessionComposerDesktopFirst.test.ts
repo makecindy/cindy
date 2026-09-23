@@ -224,6 +224,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}');
     expect(source).toContain('startedAt={composerActivityStartedAtMs}');
     expect(source).toContain('rateStartedAt={remoteSessionRunStatus.startedAt}');
+    expect(source).toContain('streaming={isSessionStreaming}');
     expect(source).toContain('startedAt: rateStartedAt,');
     expect(source).toContain('tokenUsage={composerActivityTokenUsage}');
     expect(source).toContain('outputTokens={remoteSessionRunStatus.outputTokens}');
