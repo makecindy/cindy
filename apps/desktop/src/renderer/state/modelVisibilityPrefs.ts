@@ -155,16 +155,27 @@ function latchInitializationCorruption(ownerId: string): void {
   recordInitializationFailure('preferences-corrupt');
 }
 
+function clearInitializationCorruption(ownerId: string): void {
+  if (ownerId !== activeOwnerId || !isActiveInitializationCorrupt()) return;
+  initializationCorruptOwner = null;
+}
+
 function initializationKey(ownerId: string): string {
   return `${INITIALIZATION_KEY_PREFIX}.${encodeURIComponent(ownerId)}`;
 }
 function readInitialization(ownerId: string): InitializationReadResult {
   const raw = window.localStorage.getItem(initializationKey(ownerId));
-  if (raw === null) return { state: null, corrupt: false };
+  if (raw === null) {
+    // A deleted record is a successful read of current storage, not evidence of
+    // the previously observed corrupt bytes. Reloading must be able to recover.
+    clearInitializationCorruption(ownerId);
+    return { state: null, corrupt: false };
+  }
   try {
     const parsed = JSON.parse(raw);
     const strings = (value: unknown): string[] => Array.isArray(value)
       ? value.filter((item): item is string => typeof item === 'string') : [];
+    clearInitializationCorruption(ownerId);
     return { state: { eligibleForDefaults: parsed?.eligibleForDefaults === true,
       defaults: sanitize(parsed?.defaults), scopes: strings(parsed?.scopes), followCatalogKeys: strings(parsed?.followCatalogKeys) }, corrupt: false };
   } catch {
