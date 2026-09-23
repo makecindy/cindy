@@ -2617,7 +2617,11 @@
         "allProjects": "新しい空のプロジェクトも含める"
       },
       "toggleAria": "ファイル復元ポイントのモード",
-      "saveFailed": "Git セーフティ設定の保存に失敗しました"
+      "saveFailed": "Git セーフティ設定の保存に失敗しました",
+      "unsavedTitle": "未保存の変更があります",
+      "unsavedDescription": "移動すると、このメモリへの変更は破棄されます。",
+      "discard": "変更を破棄",
+      "continueEditing": "編集を続ける"
     },
     "feishuBot": {
       "title": "Feishu / Lark ボット",
@@ -7721,8 +7725,41 @@
       "restarted": "再起動しました。メッセージを送信して続けられます。"
     },
     "backToChat": "チャットに戻る",
-    "memoryRecovery": {
-      "action": "メモリをオンに戻す"
+    "memory": {
+      "title": "メモリ",
+      "enabled": "メモリを使う",
+      "disabledHint": "オフです。メモリの読み取りも保存もしません",
+      "search": "メモリを検索",
+      "empty": "まだメモリはありません",
+      "noResults": "一致するメモリはありません",
+      "loadFailed": "メモリを読み込めませんでした",
+      "types": {
+        "user": "あなたについて",
+        "feedback": "あなたの要望",
+        "project": "プロジェクト",
+        "reference": "参考"
+      },
+      "today": "今日",
+      "updated": "{{time}} に更新",
+      "edit": "編集",
+      "delete": "削除",
+      "cancel": "キャンセル",
+      "done": "完了",
+      "titleLabel": "タイトル",
+      "bodyLabel": "内容",
+      "tooLong": "長すぎます。短くすると保存されます",
+      "deleteTitle": "このメモリを削除しますか？",
+      "deleteDescription": "{{name}}は今後「{{title}}」を参照しません。",
+      "deleted": "削除しました",
+      "deleteFailed": "削除できませんでした",
+      "changedTitle": "{{name}}がこのメモリを更新しました",
+      "useLatest": "最新の内容を使う",
+      "keepMine": "自分の変更を残す",
+      "saveFailed": "保存できませんでした",
+      "unsavedTitle": "未保存の変更があります",
+      "unsavedDescription": "移動すると、このメモリへの変更は破棄されます。",
+      "discard": "変更を破棄",
+      "continueEditing": "編集を続ける"
     },
     "profileSaveFailed": "仲間設定を保存できませんでした。変更は適用されていません。",
     "modelLabel": "モデル",

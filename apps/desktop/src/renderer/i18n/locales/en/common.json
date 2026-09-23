@@ -2618,7 +2618,11 @@
         "allProjects": "Include new empty projects"
       },
       "toggleAria": "File recovery point mode",
-      "saveFailed": "Failed to save Git safety setting"
+      "saveFailed": "Failed to save Git safety setting",
+      "unsavedTitle": "Unsaved Changes",
+      "unsavedDescription": "Leaving will discard these changes to the memory.",
+      "discard": "Discard Changes",
+      "continueEditing": "Keep Editing"
     },
     "feishuBot": {
       "title": "Feishu / Lark Bot",
@@ -7723,8 +7727,41 @@
       "restarted": "Restarted. Send a message to continue."
     },
     "backToChat": "Back to chat",
-    "memoryRecovery": {
-      "action": "Turn memory back on"
+    "memory": {
+      "title": "Memory",
+      "enabled": "Use memory",
+      "disabledHint": "Off. Memories aren't read or saved.",
+      "search": "Search memories",
+      "empty": "No memories yet",
+      "noResults": "No matching memories",
+      "loadFailed": "Memories couldn't be loaded",
+      "types": {
+        "user": "About you",
+        "feedback": "Your preferences",
+        "project": "Projects",
+        "reference": "References"
+      },
+      "today": "Today",
+      "updated": "Updated {{time}}",
+      "edit": "Edit",
+      "delete": "Delete",
+      "cancel": "Cancel",
+      "done": "Done",
+      "titleLabel": "Title",
+      "bodyLabel": "Content",
+      "tooLong": "Too long. Shorten it to save.",
+      "deleteTitle": "Delete this memory?",
+      "deleteDescription": "{{name}} will no longer refer to “{{title}}”.",
+      "deleted": "Deleted",
+      "deleteFailed": "The memory couldn't be deleted",
+      "changedTitle": "{{name}} just updated this memory",
+      "useLatest": "Use latest",
+      "keepMine": "Keep my changes",
+      "saveFailed": "Not saved",
+      "unsavedTitle": "Unsaved Changes",
+      "unsavedDescription": "Leaving will discard these changes to the memory.",
+      "discard": "Discard Changes",
+      "continueEditing": "Keep Editing"
     },
     "profileSaveFailed": "Teammate settings could not be saved. No changes were applied.",
     "modelLabel": "Model",

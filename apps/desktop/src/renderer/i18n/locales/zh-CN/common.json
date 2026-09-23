@@ -2617,7 +2617,11 @@
         "allProjects": "包括新的空项目"
       },
       "toggleAria": "文件恢复点模式",
-      "saveFailed": "保存 Git 安全设置失败"
+      "saveFailed": "保存 Git 安全设置失败",
+      "unsavedTitle": "尚有未保存的修改",
+      "unsavedDescription": "离开后会丢弃这次对记忆的修改。",
+      "discard": "放弃修改",
+      "continueEditing": "继续编辑"
     },
     "feishuBot": {
       "title": "飞书 / Lark 机器人",
@@ -7721,8 +7725,41 @@
       "restarted": "已重启，发送消息即可继续。"
     },
     "backToChat": "返回对话",
-    "memoryRecovery": {
-      "action": "重新开启记忆"
+    "memory": {
+      "title": "记忆",
+      "enabled": "开启记忆",
+      "disabledHint": "已关闭，不会读取或保存记忆",
+      "search": "搜索记忆",
+      "empty": "还没有记忆",
+      "noResults": "没有找到相关记忆",
+      "loadFailed": "记忆读取失败",
+      "types": {
+        "user": "关于你",
+        "feedback": "你的要求",
+        "project": "项目",
+        "reference": "参考"
+      },
+      "today": "今天",
+      "updated": "{{time}} 更新",
+      "edit": "编辑",
+      "delete": "删除",
+      "cancel": "取消",
+      "done": "完成",
+      "titleLabel": "标题",
+      "bodyLabel": "内容",
+      "tooLong": "内容太长，缩短后才会保存",
+      "deleteTitle": "删除这条记忆？",
+      "deleteDescription": "{{name}}之后不会再参考「{{title}}」。",
+      "deleted": "已删除",
+      "deleteFailed": "删除失败",
+      "changedTitle": "{{name}}刚更新了这条记忆",
+      "useLatest": "用最新内容",
+      "keepMine": "保留我的修改",
+      "saveFailed": "没有保存成功",
+      "unsavedTitle": "尚有未保存的修改",
+      "unsavedDescription": "离开后会丢弃这次对记忆的修改。",
+      "discard": "放弃修改",
+      "continueEditing": "继续编辑"
     },
     "profileSaveFailed": "伙伴设置未能保存，变更没有生效。",
     "modelLabel": "模型",
