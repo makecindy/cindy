@@ -1925,7 +1925,8 @@ describe('session-context 宿主铸造', () => {
         },
       }),
     );
-    expect(dispatchMock.mock.calls[0]?.[0]).not.toHaveProperty('namespace');
+    const dispatched = dispatchMock.mock.calls.at(0)?.at(0) as Record<string, unknown> | undefined;
+    expect(dispatched).not.toHaveProperty('namespace');
   });
 
   it('剥除上游伪造值，并按会话权限注入可信只读状态', async () => {

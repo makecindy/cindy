@@ -7326,7 +7326,7 @@ export function registerGhostIpc(): void {
     if (type === 'routine-request') {
       const owner = activeOwnerScopeKey();
       const ghost = findGhostForInstanceId(id);
-      return handleRoutineRequest(ghost, payload, getRoutineEngine, () => {
+      return handleRoutineRequest(ghost ?? undefined, payload, getRoutineEngine, () => {
         if (activeOwnerScopeKey() !== owner || !ghost) return false;
         const current = findGhostForInstanceId(id);
         return Boolean(

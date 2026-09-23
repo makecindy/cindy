@@ -19,6 +19,7 @@ const runtime = vi.hoisted(() => ({
     manifest: Record<string, unknown>;
     dir: string;
     enabled: boolean;
+    namespace?: string | null;
     approval?: GhostInstallApproval;
     trust?: GhostTrustInfo;
   }>,
@@ -183,6 +184,7 @@ vi.mock('../download.js', () => ({
 }));
 
 import type {
+  PluginDownloadResponse,
   PluginRemovalNotice,
   VisiblePluginDetail,
   VisiblePluginSummary,
@@ -400,7 +402,7 @@ function harness(items: VisiblePluginSummary[], removals: PluginRemovalNotice[] 
         },
       } satisfies VisiblePluginDetail;
     }),
-    download: vi.fn(async () => ({
+    download: vi.fn(async (): Promise<PluginDownloadResponse> => ({
       url: 'https://downloads.test.invalid/plugin.cindy',
       expiresAt: '2099-01-01T00:00:00.000Z',
       sha256: 'a'.repeat(64),

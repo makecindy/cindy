@@ -63,6 +63,7 @@ import {
   commitNamespaceMigration,
   createNamespaceMigrationStore,
   censusNamespaceMigration,
+  type NamespaceCensusCandidate,
   isPendingNamespaceGhost,
   pendingNamespaceGhostIds,
   planNamespaceCommit,
@@ -630,7 +631,7 @@ export class GhostManager {
     return {};
   }
 
-  private rootInstallCensusCandidates(): Parameters<typeof censusNamespaceMigration>[1] {
+  private rootInstallCensusCandidates(): NamespaceCensusCandidate[] {
     const root = this.contentRootDir();
     let entries: fs.Dirent[];
     try {
@@ -638,7 +639,7 @@ export class GhostManager {
     } catch {
       return [];
     }
-    const candidates: Parameters<typeof censusNamespaceMigration>[1] = [];
+    const candidates: NamespaceCensusCandidate[] = [];
     for (const entry of entries) {
       if (entry.name.startsWith('.') || entry.name === PLUGIN_NS_INSTALL_ROOT) continue;
       if (!isValidGhostId(entry.name)) continue;
