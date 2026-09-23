@@ -2435,8 +2435,10 @@ export function ProviderConnectionDialog({
                   <span>{t('settings.providers.connection.modelCount', { count: f.models.filter((model) => model.id.trim()).length })}</span>
                   <span className="text-12">{t('settings.providers.connection.modelsAutomatic')}</span>
                   <FormField id={fieldId(`${activeTab}:manualModel`)} label={t('settings.providers.connection.manualModel')} error={errorFor(`${activeTab}:manualModel`)}>
-                    {(control) => <SettingsTextInput {...control} surface="ivory" value={manualModel}
-                      onChange={setManualModel} />}
+                        {(control) => (
+                          <SettingsTextInput {...control} surface="ivory" value={manualModel}
+                      onChange={setManualModel} />
+                        )}
                   </FormField>
                   <Button variant="secondary" disabled={!manualModel.trim()} onClick={() => {
                     const ids = [...new Set(manualModel.split(/[,\n]/).map((id) => id.trim()).filter(Boolean))];
@@ -2709,47 +2711,37 @@ export function ProviderConnectionDialog({
               </>
             )}
 
-            {/* 测试连接：用当前 Tab 表单值发最小探测请求（与真实会话同路由口径，未保存也能测）。
-                OAuth 形态隐藏——登录前无凭证可测，保存并授权后可在供应商行验证。 */}
+                {/* 预设模板（仅新建态、有预设时显示）：下拉选择，选中即预填 baseUrl / 模型清单，
+                    用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，按构建区域排序）。 */}
             {authMode !== 'oauth' && (
               <div className="flex min-h-[32px] flex-wrap items-center gap-2.5">
-                <button
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      compact
+                      loading={test[activeTab].status === 'testing'}
                   type="button"
                   onClick={() => void handleTest()}
                   disabled={test[activeTab].status === 'testing'}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-12 font-medium transition-colors active:scale-[0.98]',
-                    'border-[var(--settings-input-border)] text-[var(--settings-section-title)] hover:bg-[var(--surface-hover)]',
-                    test[activeTab].status === 'testing' && 'cursor-not-allowed opacity-60',
-                  )}
-                >
-                  {test[activeTab].status === 'testing' ? (
-                    <Spinner size={13} />
-                  ) : (
-                    <Plug size={13} />
-                  )}
-                  {test[activeTab].status === 'testing'
-                    ? t('settings.providers.custom.test.testing')
-                    : t('settings.providers.custom.test.button')}
-                </button>
-                {/* 获取模型列表：GET 该供应商的列模型端点，成功后开勾选弹层填进上方模型行。
-                  disabled 用 anyFetching（单飞）：另一 Tab 在途时本 Tab 也不许发起。 */}
-                <button
+                    >
+                      <Plug size={13} />
+                      {t('settings.providers.custom.test.button')}
+                    </Button>
+                    {/* 预设模板（仅新建态、有预设时显示）：下拉选择，选中即预填 baseUrl / 模型清单，
+                        用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，按构建区域排序）。 */}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      compact
+                      loading={fetchingModels[activeTab]}
                   ref={modelPickerTriggerRef}
                   type="button"
                   onClick={() => void handleFetchModels()}
                   disabled={anyFetching}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-12 font-medium transition-colors active:scale-[0.98]',
-                    'border-[var(--settings-input-border)] text-[var(--settings-section-title)] hover:bg-[var(--surface-hover)]',
-                    anyFetching && 'cursor-not-allowed opacity-60',
-                  )}
-                >
-                  {fetchingModels[activeTab] ? <Spinner size={13} /> : <RefreshCw size={13} />}
-                  {fetchingModels[activeTab]
-                    ? t('settings.providers.custom.fetch.fetching')
-                    : t('settings.providers.custom.fetch.button')}
-                </button>
+                    >
+                      <RefreshCw size={13} />
+                      {t('settings.providers.custom.fetch.button')}
+                    </Button>
                 {test[activeTab].status === 'ok' && (
                   <span
                     className="flex items-center gap-1 text-12"
@@ -2779,7 +2771,7 @@ export function ProviderConnectionDialog({
             onClick={() => {
               if (!savingRef.current) onClose();
             }}
-            className="bg-transparent border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]"
+            palette="confirmation"
           >
             {t('settings.providers.custom.cancel')}
           </Button>
@@ -2789,7 +2781,8 @@ export function ProviderConnectionDialog({
             size="lg"
             loading={saving}
             onClick={() => void handleSave()}
-            className="min-w-[96px] border-transparent bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] enabled:hover:border-transparent enabled:active:border-transparent enabled:hover:bg-[var(--confirm-btn-primary-hover)] enabled:active:bg-[var(--confirm-btn-primary-hover)]"
+            palette="confirmation"
+            className="min-w-[96px]"
           >
             {t('settings.providers.custom.save')}
           </Button>
@@ -2879,30 +2872,32 @@ export function ProviderConnectionDialog({
                 {t('settings.providers.custom.imageGenerationReload.description')}
               </Dialog.Description>
               <div className="mt-6 flex flex-wrap justify-end gap-2.5">
-                <button
+                <Button
+                  variant="secondary"
+                  size="lg"
                   type="button"
                   disabled={saving}
                   onClick={() => {
                     imageGenerationReloadConfirmationRef.current = null;
                     setImageGenerationReloadConfirmation(null);
                   }}
-                  className="inline-flex min-w-[96px] items-center justify-center rounded-full border border-[var(--confirm-btn-secondary-border)] bg-transparent px-6 py-2.5 text-13 font-medium text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)] focus-visible:ring-2 focus-visible:ring-[var(--confirm-btn-secondary-border)] disabled:opacity-50"
+                  className="min-w-[96px]"
                 >
                   {t('settings.providers.custom.imageGenerationReload.cancel')}
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  tone="danger-solid"
+                  loading={saving}
                   id="custom-provider-image-generation-reload-primary"
                   type="button"
                   disabled={saving}
                   onClick={() => void saveWithImageGenerationRestartPolicy('interrupt')}
-                  className="inline-flex min-w-[96px] items-center justify-center rounded-full bg-[hsl(var(--destructive))] px-6 py-2.5 text-13 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
+                  className="min-w-[96px]"
                 >
-                  {saving ? (
-                    <Spinner size={14} />
-                  ) : (
-                    t('settings.providers.custom.imageGenerationReload.interrupt')
-                  )}
-                </button>
+                  {t('settings.providers.custom.imageGenerationReload.interrupt')}
+                </Button>
               </div>
             </Dialog.Content>
           </Dialog.Portal>
@@ -3096,31 +3091,20 @@ export function ModelPickerOverlay({
           </div>
           {/* Footer */}
           <div className="flex justify-end gap-2.5 px-5 py-3.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className={cn(
-                'inline-flex items-center justify-center rounded-full border bg-transparent px-5 py-2 text-13 font-medium transition-colors active:scale-[0.98]',
-                'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)] hover:bg-[var(--confirm-btn-secondary-hover)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              )}
-            >
+            <Button variant="secondary" size="md" compact type="button" onClick={onClose}>
               {t('settings.providers.custom.cancel')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="cta"
+              size="md"
+              compact
               ref={primaryButtonRef}
               type="button"
               onClick={onConfirm}
               disabled={picker.selected.size === 0}
-              className={cn(
-                'inline-flex items-center justify-center rounded-full px-5 py-2 text-13 font-medium transition-colors active:scale-[0.98]',
-                'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                picker.selected.size === 0 && 'cursor-not-allowed opacity-50',
-              )}
             >
               {t('settings.providers.custom.fetch.confirm', { count: picker.selected.size })}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

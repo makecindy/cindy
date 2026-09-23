@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * RemoteHostDetail — Phase B per-host expandable detail.
  *
@@ -507,23 +508,18 @@ export function StartRemoteSessionPanel({ hostId }: StartRemoteSessionPanelProps
             fontFamily: 'var(--app-font-code, var(--app-font-code-default))',
           }}
         />
-        <button
+        <Button
+          variant="secondary"
+          size="md"
+          compact
+          loading={busy}
           type="button"
           onClick={handleStart}
           disabled={busy || !workdir.trim()}
-          className={cn(
-            'flex h-8 items-center gap-1 rounded-full px-3 text-12 font-medium border',
-            (busy || !workdir.trim()) && 'cursor-not-allowed opacity-60',
-          )}
-          style={{
-            backgroundColor: 'var(--settings-btn-secondary-bg)',
-            borderColor: 'var(--settings-btn-secondary-border)',
-            color: 'var(--settings-btn-secondary-text)',
-          }}
         >
-          {busy ? <Spinner size={12} /> : <Play size={12} />}
+          <Play size={12} />
           {t('settings.remote.startSession.start')}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -602,75 +598,55 @@ function AgentInstallRow({
         </div>
         <div className="flex items-center gap-2">
           {onSyncAuth && (
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
+              compact
+              loading={syncAuthBusy}
               type="button"
               onClick={onSyncAuth}
               disabled={busy || syncAuthBusy}
               title={t('settings.remote.detail.button.syncAuthTip')}
-              className={cn(
-                'flex h-7 items-center gap-1 rounded-full px-3 text-12 leading-none border',
-                (busy || syncAuthBusy) && 'cursor-not-allowed opacity-60',
-              )}
-              style={{
-                backgroundColor: 'transparent',
-                borderColor: 'var(--settings-btn-secondary-border)',
-                color: 'var(--settings-btn-secondary-text)',
-              }}
             >
-              {syncAuthBusy ? <Spinner size={12} /> : <Upload size={12} />}
+              <Upload size={12} />
               <span className="relative top-px">{t('settings.remote.detail.button.syncAuth')}</span>
-            </button>
+            </Button>
           )}
           {installed && (
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
+              compact
               type="button"
               onClick={onUninstall}
               disabled={busy}
-              className={cn(
-                'flex h-7 items-center rounded-full px-3 text-12 leading-none border',
-                busy && 'cursor-not-allowed opacity-60',
-              )}
-              style={{
-                backgroundColor: 'transparent',
-                borderColor: 'var(--settings-btn-secondary-border)',
-                color: 'var(--settings-btn-secondary-text)',
-              }}
             >
               <span className="relative top-px">{t('settings.remote.detail.button.uninstall')}</span>
-            </button>
+            </Button>
           )}
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
+            compact
             type="button"
             onClick={onInstall}
             disabled={busy}
-            className={cn(
-              'flex h-7 items-center rounded-full px-3 text-12 leading-none font-medium border',
-              busy && 'cursor-not-allowed opacity-60',
-            )}
-            style={{
-              backgroundColor: 'var(--settings-btn-secondary-bg)',
-              borderColor: 'var(--settings-btn-secondary-border)',
-              color: 'var(--settings-btn-secondary-text)',
-            }}
           >
             <span className="relative top-px">{installed
               ? t('settings.remote.detail.button.reinstall')
               : t('settings.remote.detail.button.install')}</span>
-          </button>
+          </Button>
           {!installing && !installed && (
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
+              compact
               type="button"
               onClick={onProbe}
               disabled={busy}
-              className="flex h-7 items-center rounded-full px-3 text-12 leading-none border"
-              style={{
-                backgroundColor: 'transparent',
-                borderColor: 'var(--settings-btn-secondary-border)',
-                color: 'var(--settings-integration-subtitle)',
-              }}
             >
               <span className="relative top-px">{t('settings.remote.detail.button.refresh')}</span>
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -779,23 +755,18 @@ function QuickTestPanel({ hostId, availableKinds }: QuickTestPanelProps) {
             }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && !running) void run(); }}
           />
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
+            loading={running}
             type="button"
             onClick={run}
             disabled={running || !prompt.trim()}
-            className={cn(
-              'flex h-8 items-center gap-1 rounded-full px-3 text-13 leading-none font-medium border',
-              (running || !prompt.trim()) && 'cursor-not-allowed opacity-60',
-            )}
-            style={{
-              backgroundColor: 'var(--settings-btn-secondary-bg)',
-              borderColor: 'var(--settings-btn-secondary-border)',
-              color: 'var(--settings-btn-secondary-text)',
-            }}
           >
-            {running ? <Spinner size={14} /> : <Play size={14} />}
+            <Play size={14} />
             <span className="relative top-px">{t('settings.remote.detail.button.run')}</span>
-          </button>
+          </Button>
         </div>
 
         {result && <QuickTestResult result={result} />}

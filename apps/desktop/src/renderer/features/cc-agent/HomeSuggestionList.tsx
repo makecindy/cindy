@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -133,35 +134,35 @@ export function HomeSuggestionList({
         })}
       </div>
       <div className="mt-0.5 flex items-center gap-1.5 pl-1.5">
-        <button
+        <Button
+          variant="secondary"
+          size="xs"
+          compact
+          tone="quiet"
           type="button"
           data-testid="home-suggestions-shuffle"
           onClick={() => setBatch((previous) => draw(previous))}
-          className={cn(
-            'inline-flex items-center gap-1 rounded-lg px-2 py-1 text-12',
-            'text-[var(--text-secondary)] opacity-0 transition-opacity',
-            'group-hover/sug:opacity-100 hover:bg-[var(--surface-hover)]',
-          )}
+          className="opacity-0 group-hover/sug:opacity-100 focus-visible:opacity-100"
         >
           <Shuffle size={11} strokeWidth={2} />
           {t('newChat.homeSuggestions.shuffle')}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="secondary"
+          size="xs"
+          compact
+          tone="quiet"
           type="button"
           data-testid="home-suggestions-dismiss"
           onClick={() => {
             setHomeSuggestionsHidden(true);
             setHidden(true);
           }}
-          className={cn(
-            'inline-flex items-center gap-1 rounded-lg px-2 py-1 text-12',
-            'text-[var(--text-secondary)] opacity-0 transition-opacity',
-            'group-hover/sug:opacity-100 hover:bg-[var(--surface-hover)]',
-          )}
+          className="opacity-0 group-hover/sug:opacity-100 focus-visible:opacity-100"
         >
           <X size={11} strokeWidth={2} />
           {t('newChat.homeSuggestions.dismiss')}
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,9 +1,9 @@
+import { Button } from '@/components/ui/button';
 import { useId } from 'react';
 import { Download, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Spinner } from '@/components/ui/spinner';
-import { cn } from '@/lib/utils';
+
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
 import { GhostPluginIcon } from './GhostPluginIcon';
@@ -86,32 +86,26 @@ export function MarketPluginDetailView({
               </div>
             </div>
             {onInstall ? (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                compact
+                loading={busy}
                 type="button"
                 onClick={onInstall}
                 disabled={actionDisabled}
                 aria-label={t(actionKey)}
                 aria-busy={busy || undefined}
-                aria-describedby={
-                  replacementDescription ? replacementDescriptionId : undefined
-                }
-                className={cn(
-                  'plugin-detail-primary-action inline-flex h-10 min-w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-13 font-medium',
-                  'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                  'transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--accent-hover)] active:scale-[0.98]',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
-                )}
+                aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
+                className="plugin-detail-primary-action min-w-[104px] whitespace-nowrap"
               >
-                {busy ? (
-                  <Spinner size={14} />
-                ) : (
+                {!busy && (
                   <>
                     <Download size={15} aria-hidden="true" />
                     {t(actionKey)}
                   </>
                 )}
-              </button>
+              </Button>
             ) : null}
           </div>
           <p

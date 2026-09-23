@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { GitBranch, MessageSquareText, Sparkles, Download } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -98,13 +99,16 @@ export function HelpSection({ onAskHelp }: HelpSectionProps) {
             <div className={sectionTitleClass}>{t('settings.help.qnaTitle')}</div>
             <p className={sectionDescClass}>{t('settings.help.qnaDescription')}</p>
           </div>
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={onAskHelp}
-            className="shrink-0 rounded-full border border-[var(--settings-theme-card-border)] px-4 py-2 text-12 font-medium text-[var(--settings-section-title)] transition-colors hover:bg-[var(--settings-theme-card-border)]/40"
+            className="shrink-0"
           >
             {t('settings.help.openAssistant')}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

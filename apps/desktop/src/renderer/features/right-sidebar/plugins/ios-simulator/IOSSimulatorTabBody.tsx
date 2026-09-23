@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import {
   useCallback,
   useEffect,
@@ -2919,12 +2920,17 @@ function ActionButton({
   onClick(): void;
 }) {
   return (
-    <button
+    <Button
+      variant="secondary"
+      size="md"
+      compact
+      loading={spinning}
+      allowWhileLoading
       type="button"
       onClick={onClick}
       disabled={disabled}
       aria-describedby={describedBy}
-      className="inline-flex h-8 shrink-0 select-none items-center gap-1.5 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-11 text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-default disabled:opacity-50"
+      className="select-none"
     >
       {spinning ? (
         <span className="inline-flex animate-spin motion-reduce:animate-none" aria-hidden="true">
@@ -2934,7 +2940,7 @@ function ActionButton({
         <Icon size={12} aria-hidden="true" />
       )}
       {label}
-    </button>
+    </Button>
   );
 }
 

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * UserMessageEditBox
  * ---------------------------------------------------------------------------
@@ -359,35 +360,29 @@ export function UserMessageEditBox({
             {t('chat.userMessage.editConversationOnlyHint')}
           </span>
         )}
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
           type="button"
           onClick={onCancel}
           disabled={submitting}
-          className={cn(
-            'h-7 shrink-0 rounded-full px-3 text-12 font-medium',
-            'border border-[var(--msg-user-border)] bg-transparent',
-            'text-[var(--text-secondary)]',
-            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
-            'disabled:opacity-40 disabled:pointer-events-none',
-          )}
+          className="shrink-0"
         >
           {t('chat.userMessage.editCancel')}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="cta"
+          size="sm"
+          compact
+          loading={submitting}
           type="button"
           onClick={handleSend}
           disabled={!canSend}
-          className={cn(
-            'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-3',
-            'text-12 font-medium',
-            'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-            'hover:opacity-90 transition-opacity',
-            'disabled:opacity-40 disabled:pointer-events-none',
-          )}
+          className="shrink-0"
         >
-          {submitting && <Spinner size={12} />}
           {t('chat.userMessage.editSend')}
-        </button>
+        </Button>
       </div>
     </div>
   );

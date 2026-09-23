@@ -59,6 +59,7 @@ export function Select({
     >
       <SelectPrimitive.Trigger asChild>
         <Button
+          pressFeedback={false}
           id={id}
           variant="secondary"
           size="lg"
@@ -71,7 +72,7 @@ export function Select({
             'min-w-0 max-w-full justify-between gap-2 px-3 font-normal [-webkit-app-region:no-drag]',
             className,
             (error || (invalid !== undefined && invalid !== false && invalid !== 'false')) &&
-              'border-[var(--error-border)] focus-visible:border-[var(--error-fg)] focus-visible:ring-[var(--error-fg)]',
+              '[--button-face-border:var(--error-border)] focus-visible:[--button-face-border:var(--error-fg)] focus-visible:ring-[var(--error-fg)]',
           )}
         >
           <span className={cn('min-w-0 truncate text-left', triggerAdornment && 'flex-1')}>
