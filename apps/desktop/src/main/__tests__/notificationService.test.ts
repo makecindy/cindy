@@ -592,6 +592,56 @@ describe('notificationService — channels 分发', () => {
 
 
 describe('teammate reply previews', () => {
+  it('reconciles an accepted fallback after preview recovery without hiding the next turn', async () => {
+    const { initNotificationService } = await freshService();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      readSessionNotificationPreview.mockRejectedValueOnce(new Error('db busy'));
+      initNotificationService(baseDeps(makeFeishuIm('owner')));
+      const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+
+      await invokeHandler(payload);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+      await invokeHandler(payload);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+
+      readSessionNotificationPreview.mockResolvedValue({
+        teammateName: 'Cindy', eventId: 'turn:900:950',
+        reply: { clientId: 'old-final', text: 'Already delivered' },
+      });
+      await invokeHandler(payload);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+
+      readSessionNotificationPreview.mockResolvedValue({
+        teammateName: 'Cindy', eventId: 'turn:1100:1200',
+        reply: { clientId: 'new-final', text: 'New answer' },
+      });
+      await invokeHandler(payload);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('does not consume fallback dedupe when no channel accepted it', async () => {
+    const { initNotificationService } = await freshService();
+    readSessionNotificationPreview.mockRejectedValueOnce(new Error('db busy'));
+    sendMobileSessionNotify.mockReturnValueOnce(false);
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, mobile: true } };
+
+    await invokeHandler(payload);
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:100:200' });
+    await invokeHandler(payload);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    await invokeHandler(payload);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+  });
+
   it('retries the same final reply after a mobile-only send was rejected, then dedupes the accepted send', async () => {
     const { initNotificationService } = await freshService();
     readSessionNotificationPreview.mockResolvedValue({

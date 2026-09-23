@@ -97,7 +97,8 @@ interface ShowSessionEventPayload {
 // 时就回收掉，导致 click handler 丢失甚至触发异常事件。用 Set 持引用，等
 // close/click 后再 release。
 const liveNotifications = new Set<Notification>();
-const notifiedReplies = new Map<string, string>();
+type NotifiedReply = { eventId: string } | { fallbackSentAt: number };
+const notifiedReplies = new Map<string, NotifiedReply>();
 // A slow transcript must not indefinitely hide a completion or an action request.
 const NOTIFICATION_PREVIEW_WAIT_MS = 1_000;
 
@@ -219,7 +220,21 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const notificationTitle = preview?.teammateName ?? safeTitle;
         const eventId = preview?.eventId;
         const eventKey = `${generation}:${sessionId}`;
-        if (eventId && notifiedReplies.get(eventKey) === eventId) return;
+        const notified = notifiedReplies.get(eventKey);
+        if (kind === 'done' && notified) {
+          if (!eventId) return;
+          if ('eventId' in notified && notified.eventId === eventId) return;
+          if ('fallbackSentAt' in notified) {
+            // An accepted fallback had no DB identity. Once persistence recovers,
+            // reconcile it with the turn that was already running when sent.
+            // A turn started afterwards is new, even if it finishes immediately.
+            const startedAt = /^turn:(\d+):\d+$/.exec(eventId)?.[1];
+            if (startedAt && Number(startedAt) < notified.fallbackSentAt) {
+              notifiedReplies.set(eventKey, { eventId });
+              return;
+            }
+          }
+        }
         const fallbackBody = teammate ? getTeammateNotificationFallback() : undefined;
         let accepted = false;
         if (wantDesktop && kind === 'done') {
@@ -244,7 +259,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         }
         // A disconnected or incapable relay has not accepted the event. A later
         // idle signal may retry the same semantic turn once a channel recovers.
-        if (eventId && accepted) notifiedReplies.set(eventKey, eventId);
+        if (kind === 'done' && accepted) {
+          notifiedReplies.set(eventKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
+        }
       })().catch((err) => log.warn('[notification] reply notification failed (non-fatal)', err));
 
       if (wantFeishu) {
