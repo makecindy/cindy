@@ -213,6 +213,14 @@ describe('Bot profile deletion transaction', () => {
     });
   });
 
+  it('keeps inbound delegation targets until the final delete transaction', async () => {
+    sqlite.prepare('INSERT INTO bot_delegations VALUES (?, ?, ?)').run('delegation-1', 'bot-2', 'bot-1');
+    await h.tx!('bots.prepareProfileDeletion', { botId: 'bot-1' });
+    expect(sqlite.prepare('SELECT target_bot_id FROM bot_delegations').pluck().get()).toBe('bot-1');
+    await commitBotProfileDeletion({ botId: 'bot-1', sessionIds: [], keepTaskHistory: false });
+    expect(sqlite.prepare('SELECT target_bot_id FROM bot_delegations').pluck().get()).toBeNull();
+  });
+
   it('atomically detaches kept transcripts and removes the Profile', async () => {
     await commitBotProfileDeletion({
       botId: 'bot-1',

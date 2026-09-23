@@ -1,11 +1,15 @@
 import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { tx as runWorkerTx } from '../../localDb/worker/opHandlers/tx.js';
 
-const h = vi.hoisted(() => ({ db: null as ReturnType<typeof drizzle> | null }));
+const h = vi.hoisted(() => ({
+  sqlite: null as Database.Database | null,
+}));
 
 vi.mock('../../localDb/client/current.js', () => ({
-  getDbClient: () => ({ drizzle: h.db }),
+  getDbClient: () => ({
+    tx: (name: string, args: unknown) => runWorkerTx(h.sqlite!, { name, args } as never),
+  }),
 }));
 
 import { persistPermissionModeWithoutRuntime, profilePermissionForSessionMode } from '../sessionPermissionPersistence.js';
@@ -46,7 +50,7 @@ describe('permission persistence without a live runtime', () => {
 
   beforeEach(() => {
     sqlite = createDatabase();
-    h.db = drizzle(sqlite);
+    h.sqlite = sqlite;
   });
 
   it('maps only the teammate permission values', () => {
@@ -64,5 +68,15 @@ describe('permission persistence without a live runtime', () => {
   it('does not report success when the session row is missing', async () => {
     await expect(persistPermissionModeWithoutRuntime('missing', 'ask')).resolves.toBe(false);
     expect(sqlite.prepare('SELECT permission_mode FROM sessions').pluck().get()).toBe('ask');
+  });
+
+  it('does not replace a newer profile version with a stale capabilities snapshot', async () => {
+    sqlite.prepare('UPDATE bot_profiles SET current_version = 3 WHERE id = ?').run('bot-1');
+    sqlite.prepare('INSERT INTO bot_profile_versions VALUES (?, ?, ?)').run('bot-1', 3, '{"permissions":"ask","memory":false}');
+    await expect(persistPermissionModeWithoutRuntime('chat', 'auto')).resolves.toBe(true);
+    expect(JSON.parse(sqlite.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE version = 3').pluck().get() as string))
+      .toEqual({ permissions: 'auto', memory: false });
+    expect(JSON.parse(sqlite.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE version = 2').pluck().get() as string))
+      .toEqual({ permissions: 'ask', memory: true });
   });
 });

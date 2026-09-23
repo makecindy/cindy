@@ -94,6 +94,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     const started = binding;
     const sequence = ++generation.current;
     setError(false);
+    setDeleteFailure(false);
     try {
       const next = await read();
       if (current.current === started && generation.current === sequence) {
@@ -107,7 +108,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     }
   }, [binding, read]);
   useEffect(() => {
-    setModelStage('profile'); setConflict(null); setEditor(null); setEditorPanel(null); setEditorLoading(false); setData(null); setPage('home'); setValues({}); setReceipt(null); setConfirmation(null); setDeleted(false); setError(false); setEditing(false); setBusy(false);
+    setModelStage('profile'); setConflict(null); setEditor(null); setEditorPanel(null); setEditorLoading(false); setData(null); setPage('home'); setValues({}); setReceipt(null); setConfirmation(null); setDeleted(false); setError(false); setDeleteFailure(false); setEditing(false); setBusy(false);
     return () => { generation.current++; };
   }, [binding]);
   useEffect(() => { if (visible && online) void refresh(); }, [visible, online, refresh]);
@@ -115,7 +116,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const openEditor = async (resourceId: string) => {
     if (inFlight.current || !online || !resource) return;
     const started = binding; const sequence = ++generation.current;
-    setConflict(null); setEditorResourceId(resourceId); setPage('editor'); setEditor(null); setEditorPanel(null); setEditorLoading(true); setEditing(false); setError(false);
+    setConflict(null); setEditorResourceId(resourceId); setPage('editor'); setEditor(null); setEditorPanel(null); setEditorLoading(true); setEditing(false); setError(false); setDeleteFailure(false);
     try {
       await openLink(deviceId);
       const next = await loadCompanionProfile(invoke, deviceId, { ...resource.ref, collectionId, id: resourceId }, i18n.language);
@@ -135,7 +136,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         await openEditor(`settings:${resource?.ref.id}/${next === 'personalSkills' ? 'skills' : next}`);
       })(); return;
     }
-    setConflict(null); setEditor(null); setEditorPanel(null); setPage(next); setReceipt(null); setError(false); setConfirmation(null); setEditing(false);
+    setConflict(null); setEditor(null); setEditorPanel(null); setPage(next); setReceipt(null); setError(false); setDeleteFailure(false); setConfirmation(null); setEditing(false);
     setValues(data?.panels.find(item => item.id === next)?.values ?? {});
   };
   const submit = async (target: ProfilePanel, confirmed = false): Promise<boolean> => {

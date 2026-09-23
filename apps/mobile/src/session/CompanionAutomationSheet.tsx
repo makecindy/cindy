@@ -19,10 +19,17 @@ import { useRoutineCronFields } from './useRoutineCronFields';
 import { emptyRoutineDefinition, getRoutineActionId, parseRoutineDetail, parseRoutineSummaries, routineDraftValid, type RoutineDefinition, type RoutineDetail, type RoutineSummary, type RoutineTrigger } from './companionRoutines';
 
 function automationFailure(error: unknown, tr: (key: string) => string): string {
+  const code = typeof (error as { code?: unknown } | null)?.code === 'string'
+    ? (error as { code: string }).code
+    : '';
   const text = error instanceof Error ? error.message : String(error);
-  if (text.includes('DEVICE_OFFLINE') || text.includes('NOT_CONNECTED')) return tr('offline');
-  if (text.includes('CHANNEL_NOT_ALLOWED') || text.includes('unsupported')) return tr('unsupported');
+  if (code === 'unsupported' || code === 'CHANNEL_NOT_ALLOWED' || text.includes('CHANNEL_NOT_ALLOWED')) return tr('unsupported');
+  if (code === 'DEVICE_OFFLINE' || code === 'NOT_CONNECTED' || text.includes('DEVICE_OFFLINE') || text.includes('NOT_CONNECTED')) return tr('offline');
   return tr('failed');
+}
+
+function unsupportedAutomationError(): Error {
+  return Object.assign(new Error('unsupported'), { code: 'unsupported' });
 }
 
 export function CompanionAutomationSheet({ visible, onClose, collectionId, botId, deviceId, deviceName, online }: {
@@ -133,7 +140,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       let runRevision = detail?.revision ?? 0;
       if (actionId === 'routine-run' && dirty) {
         const saveId = getRoutineActionId(resource, 'routine-save');
-        if (!saveId) throw new Error(tr('unsupported'));
+        if (!saveId) throw unsupportedAutomationError();
         await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, { collectionId, resourceRef: resource.ref, actionId: saveId,
           input: { revision: runRevision, definition: draft } }, i18n.language);
         if (!valid(scope, page)) return;
@@ -146,7 +153,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
         setResource(runResource); setDetail(next); runRevision = next.revision;
       }
       const nextCapability = getRoutineActionId(runResource, actionId);
-      if (!nextCapability) throw new Error(tr('unsupported'));
+      if (!nextCapability) throw unsupportedAutomationError();
       await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, {
         collectionId, resourceRef: runResource.ref, actionId: nextCapability,
         input: { revision: runRevision, requestId: requestId.current,
