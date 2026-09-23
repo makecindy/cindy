@@ -186,6 +186,7 @@ function sameIdentity(
     left.runtime?.runtimeIdentifier === right.runtime?.runtimeIdentifier &&
     left.runtime?.runtimeBuildVersion === right.runtime?.runtimeBuildVersion &&
     left.runtime?.xcodeBuild === right.runtime?.xcodeBuild &&
+    left.runtime?.developerDirectory === right.runtime?.developerDirectory &&
     left.runtime?.architecture === right.runtime?.architecture
   );
 }

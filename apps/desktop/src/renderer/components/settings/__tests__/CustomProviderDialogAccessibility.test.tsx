@@ -208,6 +208,242 @@ async function renderNewImageGenerationReloadConfirmation(onSaved = vi.fn(), onC
 }
 
 describe('ProviderConnectionDialog accessibility', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)(
+    'preserves existing %s configuration when saving unchanged or renaming', async agent => {
+      const initial: CustomProviderConfig = {
+        id: 'existing-connection', name: 'Existing connection',
+        runtimes: { [agent]: {
+          baseUrl: 'https://existing.example.test/v1', wireProtocol: 'openai-chat',
+          modelsUrl: 'https://existing.example.test/catalog',
+          headers: { 'x-custom-option': 'existing-option' },
+          ...(agent === 'pi' ? { piCatalogProviderId: 'openai' } : {}),
+          ...(agent === 'codex' ? { supportsImageGeneration: true } : {}),
+          models: [{ id: 'custom-chat', name: 'User chosen name', contextWindow: 64000,
+            api: 'openai-responses', mode: 'chat',
+            modalities: { input: ['text', 'image'], output: ['text'] },
+            officialDocs: 'https://existing.example.test/docs',
+            discoveredMetadata: { contextWindow: 128000, supportsImageInput: true },
+            discoveredCost: { input: 2, output: 8, cacheRead: 0.2 },
+            defaultEnabled: false, supportsImageInput: false, reasoning: true,
+            reasoningEfforts: ['low', 'high'], reasoningDefaultEffort: 'high', nameExplicit: true,
+            ...(agent === 'pi' ? { piApi: 'openai-responses' } : {}),
+            route: { baseUrl: 'https://existing.example.test/independent?version=1',
+              wireProtocol: 'openai-responses', requestPath: '/responses' } },
+          { id: 'inherited-model', name: 'Inherited model' }],
+        } },
+      };
+      const before = structuredClone(initial);
+      customProviderMocks.readCustomProviderKey.mockResolvedValue('qa-invalid-saved-key');
+      // Keep the draft open after the first attempt so the same fixture can exercise renaming.
+      customProviderMocks.updateCustomProvider.mockRejectedValueOnce(new Error('Save failed'));
+      const user = userEvent.setup();
+      render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+      await waitForInitialDialogFocus();
+      await screen.findByText('settings.providers.custom.fields.apiKeySaved');
+      await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
+      await waitFor(() => expect(window.electronAPI.maker.testProviderConnection).toHaveBeenCalledWith({
+        kind: 'saved', providerId: initial.id, agent,
+      }));
+      await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+      await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+      const nameInput = screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder');
+      await user.clear(nameInput);
+      await user.type(nameInput, 'Renamed connection');
+      await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+      await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledTimes(2));
+      for (const [config, keys] of customProviderMocks.updateCustomProvider.mock.calls) {
+        expect(config.runtimes).toEqual(initial.runtimes);
+        expect(keys).toEqual({});
+        expect(JSON.stringify(config)).not.toContain('modelRouteBaseUrl');
+      }
+      expect(customProviderMocks.updateCustomProvider.mock.calls[1][0].name).toBe('Renamed connection');
+      expect(initial).toEqual(before);
+    },
+  );
+
+  it.each(['claude', 'codex'] as const)('preserves existing native %s configuration when renaming', async native => {
+    const initial: CustomProviderConfig = {
+      id: 'existing-native', name: 'Existing native', auth: { method: 'oauth', native },
+      runtimes: native === 'claude'
+        ? { 'claude-code': { baseUrl: 'https://api.anthropic.com', models: [] } }
+        : { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [] } },
+    };
+    const user = userEvent.setup();
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    const nameInput = screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder');
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Renamed native');
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledWith(
+      { ...initial, name: 'Renamed native' }, {},
+    ));
+  });
+
+  it('leaves existing configuration untouched when an endpoint edit is cancelled', async () => {
+    const initial = modelRoutedCodexProvider();
+    const before = structuredClone(initial);
+    const onClose = vi.fn();
+    customProviderMocks.readCustomProviderKey.mockResolvedValue('qa-invalid-saved-key');
+    const user = userEvent.setup();
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={onClose} />);
+    await waitForInitialDialogFocus();
+    expect(customProviderMocks.updateCustomProvider).not.toHaveBeenCalled();
+    await user.clear(screen.getByLabelText('settings.providers.custom.fields.baseUrl'));
+    await user.type(screen.getByLabelText('settings.providers.custom.fields.baseUrl'), 'http://127.0.0.1:8000/v2');
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.cancel' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(customProviderMocks.updateCustomProvider).not.toHaveBeenCalled();
+    expect(customProviderMocks.createCustomProvider).not.toHaveBeenCalled();
+    expect(initial).toEqual(before);
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)(
+    'rebases saved %s model routes for both testing and saving an edited HTTP endpoint', async agent => {
+      const initial: CustomProviderConfig = {
+        id: 'edited-endpoint', name: 'Edited endpoint', auth: { method: 'apiKey' },
+        runtimes: { [agent]: {
+          baseUrl: 'https://old.example.test/v1', wireProtocol: 'openai-chat',
+          models: [{ id: 'test-model', name: 'Test Model',
+            route: { baseUrl: 'https://old.example.test/v1', wireProtocol: 'openai-chat' } },
+          { id: 'special-model', name: 'Special Model',
+            route: { baseUrl: 'https://old.example.test/special', wireProtocol: 'anthropic-messages', requestPath: '/messages' } }],
+        } },
+      };
+      customProviderMocks.readCustomProviderKey.mockResolvedValue('old-key');
+      const user = userEvent.setup();
+      render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+      await waitForInitialDialogFocus();
+      await screen.findByText('settings.providers.custom.fields.apiKeySaved');
+      const baseUrl = screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder');
+      await user.clear(baseUrl);
+      await user.type(baseUrl, 'http://127.0.0.1:8000/v2');
+      await user.type(screen.getByLabelText('settings.providers.custom.fields.apiKey'), 'new-key');
+      await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
+      await waitFor(() => expect(window.electronAPI.maker.testProviderConnection).toHaveBeenCalledWith({
+        kind: 'adhoc', spec: expect.objectContaining({ agent, baseUrl: 'http://127.0.0.1:8000/v2',
+          wireProtocol: 'openai-chat', apiKey: 'new-key' }),
+      }));
+      await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+      await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+      const saved = customProviderMocks.updateCustomProvider.mock.calls[0][0].runtimes[agent];
+      expect(saved.baseUrl).toBe('http://127.0.0.1:8000/v2');
+      expect(saved.models[0].route).toEqual({ baseUrl: saved.baseUrl, wireProtocol: 'openai-chat' });
+      expect(saved.models[1].route).toEqual({ baseUrl: 'http://127.0.0.1:8000/special',
+        wireProtocol: 'anthropic-messages', requestPath: '/messages' });
+      expect(initial.runtimes[agent]!.models[0].route!.baseUrl).toBe('https://old.example.test/v1');
+    },
+  );
+
+  it('preserves original model routes after clearing, editing and reverting the endpoint', async () => {
+    const initial = modelRoutedCodexProvider();
+    customProviderMocks.readCustomProviderKey.mockResolvedValue('saved-key');
+    const user = userEvent.setup();
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    await screen.findByText('settings.providers.custom.fields.apiKeySaved');
+    const baseUrl = screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder');
+    await user.clear(baseUrl);
+    await user.type(baseUrl, 'http://127.0.0.1:8000/v2');
+    await user.clear(baseUrl);
+    await user.type(baseUrl, initial.runtimes.codex!.baseUrl);
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+    expect(customProviderMocks.updateCustomProvider.mock.calls[0][0].runtimes.codex.models[0].route)
+      .toEqual(initial.runtimes.codex!.models[0].route);
+  });
+
+  it.each([
+    { targetBase: undefined, nextSource: 'http://127.0.0.1:8000/v2' },
+    { targetBase: 'https://other.example.test/v1', nextSource: 'http://127.0.0.1:8000/v2' },
+    { targetBase: 'https://old.example.test/special', nextSource: 'https://old.example.test/v2' },
+  ])('keeps route provenance when filling Codex ($targetBase) after editing Pi', async ({ targetBase, nextSource }) => {
+    customProviderMocks.updateCustomProvider.mockRejectedValueOnce(new Error('Save failed'));
+    const initial: CustomProviderConfig = {
+      id: 'runtime-fill-route', name: 'Runtime fill route', auth: { method: 'apiKey' },
+      runtimes: {
+        pi: { baseUrl: 'https://old.example.test/v1', wireProtocol: 'openai-chat', models: [
+          { id: 'chat', name: 'Chat', route: { baseUrl: 'https://old.example.test/v1', wireProtocol: 'openai-chat' } },
+          { id: 'special', name: 'Special', route: { baseUrl: 'https://old.example.test/special', wireProtocol: 'anthropic-messages' } },
+        ] },
+        ...(targetBase ? { codex: { baseUrl: targetBase,
+          models: [{ id: 'previous', name: 'Previous' }] } } : {}),
+      },
+    };
+    customProviderMocks.readCustomProviderKey.mockResolvedValue('saved-key');
+    const user = userEvent.setup();
+    render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    await screen.findByText('settings.providers.custom.fields.apiKeySaved');
+    await user.clear(screen.getByLabelText('settings.providers.custom.fields.baseUrl'));
+    await user.type(screen.getByLabelText('settings.providers.custom.fields.baseUrl'), nextSource);
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.runtimeFill.action' }));
+    const overwrite = screen.queryByRole('button', { name: 'settings.providers.custom.runtimeFill.continue' });
+    if (overwrite) {
+      await user.click(overwrite);
+      await user.click(screen.getByRole('button', { name: 'settings.providers.custom.runtimeFill.applyOverwrite' }));
+    } else {
+      await user.click(screen.getByRole('button', { name: 'settings.providers.custom.runtimeFill.apply' }));
+    }
+    await user.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+    const filled = customProviderMocks.updateCustomProvider.mock.calls[0][0];
+    for (const agent of ['claude-code', 'codex', 'pi']) {
+      expect(filled.runtimes[agent].models[0].route.baseUrl).toBe(nextSource);
+      expect(filled.runtimes[agent].models[1].route).toEqual({
+        baseUrl: new URL(nextSource).origin + '/special', wireProtocol: 'anthropic-messages',
+      });
+    }
+    // A failed save keeps the draft open; another edit must still use the copied routes' origin.
+    const finalBase = 'http://127.0.0.1:9000/v3';
+    await user.clear(screen.getByLabelText('settings.providers.custom.fields.baseUrl'));
+    await user.type(screen.getByLabelText('settings.providers.custom.fields.baseUrl'), finalBase);
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
+    await waitFor(() => expect(window.electronAPI.maker.testProviderConnection).toHaveBeenCalledWith({
+      kind: 'adhoc', spec: expect.objectContaining({ agent: 'codex', baseUrl: finalBase }),
+    }));
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledTimes(2));
+    const edited = customProviderMocks.updateCustomProvider.mock.calls[1][0].runtimes.codex;
+    expect(edited.models[0].route.baseUrl).toBe(finalBase);
+    expect(edited.models[1].route.baseUrl).toBe('http://127.0.0.1:9000/special');
+  });
+
+  it('probes the rebased route instead of the saved route after filling only models', async () => {
+    const chat = { id: 'chat', name: 'Chat', route: {
+      baseUrl: 'https://host.example/v1', wireProtocol: 'openai-chat' as const,
+    } };
+    const source = { baseUrl: 'https://host.example/v1', wireProtocol: 'openai-chat' as const,
+      models: [chat, { id: 'extra', name: 'Extra' }] };
+    const initial: CustomProviderConfig = {
+      id: 'models-only-fill', name: 'Models only fill', auth: { method: 'apiKey' },
+      runtimes: { pi: source, 'claude-code': source,
+        codex: { ...source, baseUrl: 'https://host.example/v2', models: [chat] } },
+    };
+    customProviderMocks.readCustomProviderKey.mockResolvedValue('saved-key');
+    const user = userEvent.setup();
+    render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    await screen.findByText('settings.providers.custom.fields.apiKeySaved');
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.runtimeFill.action' }));
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.runtimeFill.continue' }));
+    await user.click(screen.getByRole('checkbox', { name: /settings.providers.custom.runtimeFill.fields.endpointBundle/ }));
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.runtimeFill.applyOverwrite' }));
+    await user.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
+    await waitFor(() => expect(window.electronAPI.maker.testProviderConnection).toHaveBeenCalledWith({
+      kind: 'adhoc', spec: expect.objectContaining({ agent: 'codex', baseUrl: 'https://host.example/v2' }),
+    }));
+    await screen.findByText('settings.providers.custom.test.ok');
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+    const saved = customProviderMocks.updateCustomProvider.mock.calls[0][0].runtimes.codex;
+    expect(saved.baseUrl).toBe('https://host.example/v2');
+    expect(saved.models[0].route.baseUrl).toBe(saved.baseUrl);
+    expect(saved.models.map((model: { id: string }) => model.id)).toEqual(['chat', 'extra']);
+  });
+
   it.each(['target-model', 'flux-image-x'])('keeps %s in standard model settings instead of a second editor', async (modelId) => {
     const initial: CustomProviderConfig = {
       id: 'deep-link-provider',

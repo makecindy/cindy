@@ -9,10 +9,11 @@ import {
   cacheRemoteResourceItems, readRemoteResourceSnapshot,
   remoteResourceCacheRevision, subscribeRemoteResourceCache,
 } from '@/device-link/remoteResourceCache';
-import { isRemoteResourceHostOnline, readRemoteCollectionCache, writeRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
+import { remoteResourceConnectionState, isRemoteResourceHostOnline, readRemoteCollectionCache, writeRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { listRemoteCollection, mergeRemoteCollectionHostShards, normalizeRemoteCollectionItems,
   type HostedRemoteCollectionItem, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import { startBoundedStartupRead } from './mobileHomeStartup';
 
 /** One roster reader for resource routes, home and the picker. Host shards reconcile independently. */
@@ -49,10 +50,10 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
     return () => { cancelled = true; generation.current += 1; };
   }, [binding, collectionId, owner, user?.id]);
 
-  const refresh = useCallback(async (visible = true) => {
+  const read = useCallback(async (visible: boolean, isStale: () => boolean) => {
     if (!enabled || !active.current || hydrated !== binding || !collectionId) return;
     const expected = ++generation.current;
-    const current = () => generation.current === expected && bindingRef.current === binding && active.current;
+    const current = () => !isStale() && generation.current === expected && bindingRef.current === binding && active.current;
     setState((old) => ({ ...old, loading: true, refreshing: visible, error: null }));
     const next: HostedRemoteCollectionItem[] = [];
     const succeeded = new Set<string>();
@@ -84,6 +85,13 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
     });
   }, [binding, collectionId, connectionEpoch, enabled, getPresenceAvailability, hydrated, i18n.language, invoke, openLink, presenceKey, status, t, targets]);
 
+  // Phase pushes can arrive faster than a roster RPC. Keep one active read and
+  // one latest follow-up, using the same coordinator as other remote snapshots.
+  const requestRefresh = useRemoteSyncCoordinator(
+    (run) => read(run.reasons.includes('visible'), run.isStale), binding,
+  );
+  const refresh = useCallback((visible = true) => requestRefresh({ reason: visible ? 'visible' : 'changed' }), [read, requestRefresh]);
+
   // Persist after commit, never from a React state updater (which may be replayed).
   useEffect(() => {
     if (state.binding !== binding || state.loading || hydrated !== binding) return;
@@ -114,5 +122,6 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
     refreshing: ownState && state.refreshing,
     error: ownState ? state.error : null,
     isOnline, refresh,
+    connectionState: (host: RemoteResourceHostTarget) => ownState ? remoteResourceConnectionState(status, getPresenceAvailability(host.deviceId)) : null,
   };
 }

@@ -18,6 +18,15 @@ const STREAM_RAW =
 afterEach(cleanup);
 
 describe('ErrorMessageCard', () => {
+  it('shows a blocked input explanation directly without treating it as a failed reply', () => {
+    const message = 'Please remove the credential before sending: api_key=private-test-value';
+    render(createElement(ErrorMessageCard, { kind: 'blocked-input', message }));
+    expect(screen.getByText('Please remove the credential before sending: api_key=[REDACTED]')).toBeTruthy();
+    expect(screen.queryByText(/private-test-value/)).toBeNull();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    expect(screen.queryByText('chat.errorBanner.networkShowRaw')).toBeNull();
+  });
+
   it('uses the same model access guidance for persisted failures as the live banner', () => {
     render(createElement(ErrorMessageCard, {
       message: 'Failed to authenticate. API Error: 403 user not allowed to access model',
@@ -67,18 +76,20 @@ describe('ErrorMessageCard', () => {
     expect(screen.queryByText('logic.errors.toolUseLoopDetectedWithCount')).toBeNull();
   });
 
-  it('keeps genuine OpenAI errors as-is without an expander', () => {
+  it('keeps unknown provider errors in details behind a localized summary', () => {
     const raw = 'OpenAI API error (400): invalid_prompt';
     render(createElement(ErrorMessageCard, { message: raw }));
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.queryByText(raw)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(raw)).toBeTruthy();
-    expect(screen.queryByText('chat.errorBanner.networkShowRaw')).toBeNull();
   });
 
-  it('unwraps LiteLLM envelopes and still offers the original', () => {
+  it('localizes LiteLLM envelopes and still offers the original', () => {
     const raw =
       'OpenAI API error (400): {"message":"litellm.BadRequestError: XaiException - too long"}';
     render(createElement(ErrorMessageCard, { message: raw }));
-    expect(screen.getByText('XaiException - too long')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
     expect(screen.queryByText(raw)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(raw)).toBeTruthy();
@@ -97,7 +108,7 @@ describe('ErrorMessageCard', () => {
       code: '400',
     })}`;
     render(createElement(ErrorMessageCard, { message: raw }));
-    expect(screen.getByText('Upstream rejected the request!')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
     expect(screen.queryByText(raw)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(raw)).toBeTruthy();

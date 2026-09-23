@@ -71,7 +71,7 @@ describe('remote Orca Worker creation context', () => {
     // 任一远程路径都不得回退到 controller key 判定。
     expect(selector).toContain('if (!deviceId) {');
     expect(selector).toContain('if (subscriptionDirectDisabledReason(id)) return true;');
-    expect(selector).toContain("if (provider?.source === 'user') return false;");
+    expect(selector).toContain("if (isCustomRoutedProvider(provider)) return false;");
     expect(selector).toContain("return id.startsWith('codex/') && !hasSavedKey;");
     expect(selector).toContain("if (remoteModelListStatus !== 'ready') return true;");
     expect(selector).toContain(

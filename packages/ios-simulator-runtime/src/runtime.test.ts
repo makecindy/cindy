@@ -151,6 +151,43 @@ describe("parseSimctlListJson", () => {
 });
 
 describe("createIOSSimulatorRuntime", () => {
+  it("pins version and device probes to the captured selection across a global Xcode switch", async () => {
+    // These are remote Apple-tool paths, independent of the test host OS.
+    const first = "/Applications/Xcode A.app/Contents/Developer";
+    const second = "/Applications/Xcode B.app/Contents/Developer";
+    let selected = first;
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(async (command, _args, options) => {
+      if (command === "/usr/bin/xcode-select") {
+        const captured = selected;
+        selected = second;
+        return { stdout: captured, stderr: "", exitCode: 0 };
+      }
+      expect(options?.env?.DEVELOPER_DIR).toBe(first);
+      return {
+        stdout: command === "/usr/bin/xcodebuild"
+          ? "Xcode 27.0\nBuild version 27A266a" : SIMCTL_LIST,
+        stderr: "",
+        exitCode: 0,
+      };
+    });
+    vi.stubEnv("DEVELOPER_DIR", undefined);
+    try {
+      const report = await createIOSSimulatorRuntime({
+        platform: "darwin",
+        commandRunner: { run },
+      }).inspect();
+      expect(report).toMatchObject({
+        ready: true,
+        xcodeSelectPath: first,
+        xcodeVersion: "Xcode 27.0\nBuild version 27A266a",
+      });
+      expect(run).toHaveBeenCalledTimes(3);
+      expect(selected).toBe(second);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("returns a ready report from structured Apple tooling output", async () => {
     const commandRunner = runnerForSimctl();
     const report = await createIOSSimulatorRuntime({

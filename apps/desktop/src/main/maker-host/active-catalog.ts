@@ -1,4 +1,8 @@
-import { projectProviderMediaModels } from '@cindy/model-providers';
+import {
+  projectProviderMediaModels,
+  isCustomRoutedProvider,
+  isOrganizationManagedProvider,
+} from '@cindy/model-providers';
 import {
   applyExistingModelLocalPatch,
   applyLocalModelCatalogOverrides,
@@ -115,6 +119,7 @@ let baseUnverifiedXdMediaKinds: ReadonlySet<CatalogXdMediaKind> = new Set([
 let trustedCustomProviderRegistry: Catalog['modelRegistry'] = BUNDLED_CATALOG.modelRegistry;
 /** 用户自定义供应商(已 buildUserProvider 展开的标准 Provider),追加在 base 之后。 */
 let custom: Provider[] = [];
+let managed: Provider[] = [];
 /** 当前 owner 的原始配置；仅用于 Registry 热更新后的运行时重投影。 */
 let customConfigs: CustomProviderConfig[] | null = null;
 /**
@@ -1178,29 +1183,36 @@ function computeMerged(): Catalog {
     // Bind the public image definition before applying any account discovery or overrides.
     // Copying the final builtin connection would leak its Platform-key membership/preferences.
     const openaiDefinition = providerSources.find((provider) => provider.id === 'openai');
-    const accounts = custom.map((provider) => {
-      if (!isOpenAiSubscriptionProvider(provider)) return provider;
-      const bindId = (id: string): string => id.replace(/^openai\//, `${provider.id}/`);
-      const defaults = openaiDefinition?.imageDefaults;
-      return {
-        ...provider,
-        imageModels: openaiDefinition?.imageModels?.map((model) => ({
-          ...model,
-          id: bindId(model.id),
-        })),
-        imageDefaults: defaults ? {
-          standard: bindId(defaults.standard),
-          ...(defaults.draft ? { draft: bindId(defaults.draft) } : {}),
-          ...(defaults.best ? { best: bindId(defaults.best) } : {}),
-        } : undefined,
-      };
-    });
+    const managedIds = new Set(managed.map((provider) => provider.id));
+    const accounts = custom
+      .filter((provider) => !managedIds.has(provider.id))
+      .map((provider) => {
+        if (!isOpenAiSubscriptionProvider(provider)) return provider;
+        const bindId = (id: string): string => id.replace(/^openai\//, `${provider.id}/`);
+        const defaults = openaiDefinition?.imageDefaults;
+        return {
+          ...provider,
+          imageModels: openaiDefinition?.imageModels?.map((model) => ({
+            ...model,
+            id: bindId(model.id),
+          })),
+          imageDefaults: defaults
+            ? {
+                standard: bindId(defaults.standard),
+                ...(defaults.draft ? { draft: bindId(defaults.draft) } : {}),
+                ...(defaults.best ? { best: bindId(defaults.best) } : {}),
+              }
+            : undefined,
+        };
+      });
     providers = [...providers, ...accounts];
   }
+  if (managed.length > 0) providers = [...providers, ...managed];
 
   // 通用 OAuth 供应商的发现模型(additions-only,per provider × agent;内置与自定义同待遇)。
   if (discoveredByProvider.size > 0) {
     providers = providers.map((p) => {
+      if (isOrganizationManagedProvider(p)) return p;
       const byAgent = discoveredByProvider.get(p.id);
       if (!byAgent) return p;
       let next = p;
@@ -1212,6 +1224,7 @@ function computeMerged(): Catalog {
   }
   if (discoveredMediaByProvider.size > 0) {
     providers = providers.map((provider) => {
+      if (isOrganizationManagedProvider(provider)) return provider;
       const snapshot = discoveredMediaByProvider.get(provider.id);
       if (!snapshot) return provider;
       let next = provider;
@@ -1575,7 +1588,7 @@ function computeMerged(): Catalog {
           // Per-Harness declarations own membership; Registry metadata contributes
           // shared model intent without manufacturing another Harness route.
           const entry =
-            agent === 'pi' && (provider.source !== 'user' || !!provider.auth.native) && provider.id !== 'xd'
+            agent === 'pi' && (!isCustomRoutedProvider(provider) || !!provider.auth.native) && provider.id !== 'xd'
               ? findModelRegistryRoute(
                   b.modelRegistry,
                   metadataProviderId,
@@ -1596,7 +1609,7 @@ function computeMerged(): Catalog {
           // Apply to each built-in GPT route, including subscription and discount aliases.
           // Never enlarge smaller models or overwrite BYOM / explicit preference overrides.
           const conservativeGptDefault =
-            (provider.source !== 'user' || !!provider.auth.native) &&
+            (!isCustomRoutedProvider(provider) || !!provider.auth.native) &&
             ['openai', 'xd'].includes(metadataProviderId) &&
             /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(model.id) &&
             model.contextWindow > 272_000 &&
@@ -1673,7 +1686,7 @@ function computeMerged(): Catalog {
           const metadataProviderId = providerCatalogId(provider);
           if (
             (b.modelRegistry?.schemaVersion ?? 0) >= 4 &&
-            (provider.source !== 'user' || !!provider.auth.native) &&
+            (!isCustomRoutedProvider(provider) || !!provider.auth.native) &&
             (provider.id === 'xd' || agent === 'pi')
           ) {
             next = applyModelMetadata(
@@ -1691,7 +1704,7 @@ function computeMerged(): Catalog {
             );
           }
           if (
-            (provider.source !== 'user' || !!provider.auth.native) &&
+            (!isCustomRoutedProvider(provider) || !!provider.auth.native) &&
             ['openai', 'xd'].includes(metadataProviderId) &&
             /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(next.id) &&
             next.contextWindow > 272_000 &&
@@ -2033,6 +2046,12 @@ export function getLocalCatalogOverridesSnapshot(): ModelCatalogOverrides {
 /** 最近一次合并的 registry 实体化告警(单 route 隔离;刷新路径读走打日志/计数)。 */
 export function getModelPlaneWarnings(): readonly ModelPlaneWarning[] {
   return lastPlanWarnings;
+}
+
+/** Complete directory for the current authenticated enterprise. */
+export function setManagedProviders(providers: Provider[]): void {
+  managed = [...providers];
+  markChanged();
 }
 
 /**

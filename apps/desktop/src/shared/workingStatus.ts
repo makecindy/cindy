@@ -1,4 +1,4 @@
-export { WORKING_PHASES, publicToolPhase, publicToolResultPhase, hasPublicWorkingSubject, WORKING_PHASE_KEYS, type WorkingPhase, type PlainAgentPhase } from '@cindy/maker-shared';
+export { WORKING_PHASES, isCompactingWorkingStatus, readWorkingPhase, publicToolPhase, publicToolResultPhase, hasPublicWorkingSubject, WORKING_PHASE_KEYS, type WorkingPhase, type PlainAgentPhase } from '@cindy/maker-shared';
 import type { WorkingPhase } from '@cindy/maker-shared';
 import type { SupportedLocale } from './locale.js';
 

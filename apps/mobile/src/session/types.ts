@@ -183,6 +183,7 @@ export interface RemoteSerializedAttachment {
 }
 
 export interface QueuedRemoteMessage {
+  durableDelivery?: true;
   clientId: string;
   text: string;
   persistedContent: string;

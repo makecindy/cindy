@@ -11,6 +11,7 @@
  */
 
 import { projectProviderMediaModels } from './providerMediaModels.js';
+import { mimoPresetName } from './mimoPresentation.js';
 import { validModelMetadata } from './modelMetadataLayers.js';
 import { parseModelRegistry } from './modelAccessValidator.js';
 
@@ -755,10 +756,12 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
  * (缺省回落 `name`)。纯呈现选择,不影响预设 id / 创建后的供应商命名语义。
  */
 export function presetDisplayName(
-  preset: Pick<ProviderPreset, 'name' | 'nameEn' | 'nameZhTW'>,
+  preset: Pick<ProviderPreset, 'name' | 'nameEn' | 'nameZhTW'> & { id?: string },
   locale: string,
 ): string {
   const normalizedLocale = locale.toLowerCase().replaceAll('_', '-');
+  const mimoName = mimoPresetName(preset.id, normalizedLocale);
+  if (mimoName) return mimoName;
   if (normalizedLocale === 'zh-tw' || normalizedLocale.startsWith('zh-hant')) {
     return preset.nameZhTW ?? preset.name;
   }

@@ -27,3 +27,15 @@ export function providerCatalogId(provider: Pick<Provider, 'id' | 'auth'>): stri
     : provider.auth.native === 'xai' ? 'xai'
     : isOpenAiSubscriptionProvider(provider) ? 'openai' : provider.id;
 }
+
+/** Custom-routed providers share Pi/Codex/Claude native routing and credential injection. */
+export function isCustomRoutedProvider(provider: Pick<Provider, 'source'> | null | undefined): boolean {
+  return provider?.source === 'user' || provider?.source === 'organization';
+}
+
+/** Enterprise-owned connection; only local model preferences are editable. */
+export function isOrganizationManagedProvider(
+  provider: Pick<Provider, 'source'> | null | undefined,
+): boolean {
+  return provider?.source === 'organization';
+}

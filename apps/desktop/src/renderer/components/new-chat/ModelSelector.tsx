@@ -108,6 +108,7 @@ import {
   findCatalogModel,
   nativeDefaultSourceId,
   getModel,
+  isCustomRoutedProvider,
   modelSupportsFastMode,
   providerOffersModel,
   resolveModelIconKind,
@@ -1581,7 +1582,7 @@ function ModelSelectorContentView({
       // 同前缀模型由该供应商自身配置路由(codex-proxy-host 按会话显式供应商解析,
       // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
       // 为 null,无供应商概念)与内置来源保持原前缀判定。
-      if (provider?.source === 'user') return false;
+      if (isCustomRoutedProvider(provider)) return false;
       return id.startsWith('codex/') && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;

@@ -476,6 +476,10 @@
     "deleteOne": "刪除本條訊息"
   },
   "tail": {
+    "requestFormatError": "應用程式送出的請求格式有誤，本次回覆未能完成。",
+    "replyFailed": "本次回覆未能完成。請查看錯誤詳情以瞭解原因。",
+    "showErrorDetails": "查看錯誤詳情",
+    "hideErrorDetails": "收起錯誤詳情",
     "interrupted": "任務執行到一半時應用退出，已被中斷。",
     "continueTask": "繼續任務",
     "retry": "重試",
@@ -503,5 +507,28 @@
     "noExtraDirsSummary": "當前沒有附加目錄",
     "attachmentUploadFailed": "附件上傳失敗，可重試或刪除這條訊息。",
     "authGateHint": "{{agent}} 在這臺電腦上還沒有已連線的模型供應商，傳送會失敗。請在電腦端 {{appName}} 的「設定 → 模型供應商」完成配置。"
+  },
+  "outbox": {
+    "legacyPlanRecovery": "這臺電腦暫不支援在計畫模式下恢復待傳訊息。請關閉計畫模式，或更新電腦上的 Cindy 後重試",
+    "creationRecoveryRequired": "請先重試建立任務，再刪除首則訊息；這則訊息仍保存著後續訊息所需的任務恢復資訊。",
+    "confirmationRequired": "電腦暫時無法確認是否收到這則訊息。請核對訊息記錄，或更新電腦上的 Cindy 後重試。",
+    "taskCleared": "傳送後，這個任務已被清空。訊息仍保存在手機上，請核對後處理。",
+    "restoreFailed": "暫時無法恢復待傳訊息，已保存的內容沒有刪除。請重新啟動 App 後重試。",
+    "recoveryTarget": "恢復這個任務時請保留原來的電腦，後續訊息仍保存在手機上。",
+    "taskAlreadyCreated": "電腦上已建立這個任務，已保存的訊息會在原任務中繼續傳送。"
+  },
+  "remoteError": {
+    "REMOTE_DAEMON_CLOSED": "遠端連線已中斷（daemon 可能正在升級或重啟）。本輪已結束 — 請重新傳送。",
+    "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法訪問本地檔案/圖片附件。請直接貼上內容。",
+    "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時無法給出判斷（網路或服務波動），需要審批的操作已轉由你來確認。想少被打斷，可以把任務切到「預設權限」自行掌控。",
+    "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自動審批沒完成，確認也沒有送到或沒有被點。這次拒絕不是你點的。",
+    "REMOTE_COMPAT_MODE_UNSUPPORTED": "遠端 Claude Code 任務無法透過本地相容 Proxy 路由(內部錯誤，請反饋)。",
+    "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 憑據尚未就緒(登入後由服務端自動下發)。請稍候重試；若持續出現，請到 設定 → 模型供應商 檢查 Cindy AI 連線狀態。",
+    "REMOTE_LOCAL_ONLY_PROVIDER": "此模型供應商是本機專屬服務（如 Ollama），SSH 遠端任務無法存取本機位址。請改用 Cindy AI 閘道，或選擇遠端主機可達的模型供應商。",
+    "DEVICE_LINK_CONTROL_DISABLED": "已關閉對該裝置的控制，訊息未傳送。",
+    "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件傳輸失敗，訊息未傳送。請重試。",
+    "MCP_APPROVAL_AUTO_BLOCKED": "這次工具呼叫被自動審核攔截，未收到你手動拒絕的紀錄。",
+    "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "權限確認逾時，未收到有效的確認結果。僅憑逾時無法判斷你是否點過按鈕。",
+    "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "這次權限確認未完成，未收到你手動拒絕的紀錄。"
   }
 }

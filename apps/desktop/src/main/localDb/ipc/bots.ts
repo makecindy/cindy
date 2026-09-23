@@ -394,6 +394,7 @@ async function readCanonicalChatPreview(
   repliesOnly = false,
 ): Promise<{ preview: string | null; createdAt: number | null; role: BotChatRole | null }> {
   if (!canonicalSessionId) return { preview: null, createdAt: null, role: null };
+  const running = getMakerIfReady()?.getSession(canonicalSessionId)?.isTurnRunning?.() === true;
   const rows = await db
     .select({
       role: messages.role,
@@ -405,6 +406,8 @@ async function readCanonicalChatPreview(
       and(
         eq(messages.sessionId, canonicalSessionId),
         repliesOnly ? eq(messages.role, 'assistant') : inArray(messages.role, ['user', 'assistant']),
+        // During generation, prose blocks are progress. Only a sealed answer is a reply preview.
+        ...(running ? [sql`(${messages.role} != 'assistant' OR json_extract(${messages.agentMeta}, '$.turnCompleted') = 1)`] : []),
         isNull(messages.rewindAt),
         sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
         sql`(${messages.agentMeta} IS NULL OR json_type(${messages.agentMeta}, '$.botDirectMessage') IS NULL)`,

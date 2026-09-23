@@ -107,6 +107,15 @@ it('preserves search, mode switching, account switching and logout actions', asy
   await act(async () => h.drawer.onLogout()); expect(h.auth.logout).toHaveBeenCalledOnce();
 });
 
+it('returns to the roster when the already-active companion mode is selected', async () => {
+  const onClose = vi.fn();
+  await act(async () => root.render(<CompanionNavigationDrawer open onClose={onClose} onSearch={() => {}} />));
+  await act(async () => h.drawer.onModeChange('teammates'));
+  expect(onClose).toHaveBeenCalledOnce(); expect(h.chooseMode).not.toHaveBeenCalled();
+  await act(async () => h.drawer.onClosed());
+  expect(h.chooseMode).toHaveBeenCalledExactlyOnceWith('teammates');
+});
+
 it.each(['account', 'companion'])('drops a queued navigation action when the %s scope changes', async (change) => {
   const render = (scope: string) => act(async () => root.render(<CompanionNavigationDrawer key={scope} open onClose={() => {}} onSearch={() => {}} />));
   await render('old');

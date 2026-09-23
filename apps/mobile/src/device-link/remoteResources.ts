@@ -145,10 +145,14 @@ function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
   const timestamp = normalizeRemoteTimestamp(record.timestamp);
   const avatar = normalizeRemoteAvatar(record.avatar);
   const status = normalizeRemoteStatus(record.status);
+  const generation = recordOf(record.generation);
+  const generationPhase = boundedString(generation?.phase, 80);
+  const generationStartedAt = normalizeRemoteTimestamp(generation?.startedAt);
   return {
     title,
     ...(subtitle ? { subtitle } : {}),
     ...(preview ? { preview } : {}),
+    ...(generationPhase ? { generation: { phase: generationPhase, startedAt: generationStartedAt ?? null } } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(normalizeRemoteTimestamp(record.lastReplyAt) !== undefined ? { lastReplyAt: record.lastReplyAt as number } : {}),
     ...(avatar ? { avatar } : {}),

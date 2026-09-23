@@ -26,11 +26,15 @@ const mocks = vi.hoisted(() => {
   return {
     service,
     reset: vi.fn(),
+    cancelRemoteOptimisticSendsForDataOwnerBoundary: vi.fn(),
+    reconcileSessionsAfterDataOwnerRollback: vi.fn(async () => undefined),
     getMe: vi.fn(async () => ({ role: 'user' })),
     clearWorkersCache: vi.fn(),
     setModelVisibilityOwner: vi.fn(),
     invalidateProvidersSnapshot: vi.fn(),
     preloadLocalCatalogSnapshot: vi.fn(async () => undefined),
+    setMemorySettingsOwner: vi.fn(),
+    bootstrapMemorySettingsFromMain: vi.fn(async () => undefined),
     confirm: vi.fn(async () => true),
     emitAuth(state: unknown) {
       authStateListener?.(state);
@@ -50,6 +54,12 @@ const mocks = vi.hoisted(() => {
 vi.mock('@/lib/authService', () => ({
   createAuthService: () => mocks.service,
 }));
+vi.mock('@/lib/makerChatStore', () => ({
+  cancelRemoteOptimisticSendsForDataOwnerBoundary:
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary,
+  reconcileSessionsAfterDataOwnerRollback: mocks.reconcileSessionsAfterDataOwnerRollback,
+  setCurrentUserName: vi.fn(),
+}));
 vi.mock('@/lib/sessionsStore', () => ({
   sessionsStore: { reset: mocks.reset },
 }));
@@ -65,6 +75,10 @@ vi.mock('@/lib/providersSnapshotStore', () => ({
 }));
 vi.mock('@/lib/localCatalogSnapshot', () => ({
   preloadLocalCatalogSnapshot: mocks.preloadLocalCatalogSnapshot,
+}));
+vi.mock('@/lib/memorySettingsStore', () => ({
+  setMemorySettingsOwner: mocks.setMemorySettingsOwner,
+  bootstrapMemorySettingsFromMain: mocks.bootstrapMemorySettingsFromMain,
 }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: mocks.confirm }),
@@ -83,6 +97,7 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import {
   __testing as dataOwnerGenerationTesting,
   getDataOwnerGeneration,
+  setDataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import {
   __resetForTest as resetEnginePrefs,
@@ -148,11 +163,15 @@ describe('AuthContext session cache boundaries', () => {
 
   beforeEach(() => {
     mocks.reset.mockClear();
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary.mockClear();
+    mocks.reconcileSessionsAfterDataOwnerRollback.mockClear();
     mocks.getMe.mockClear();
     mocks.clearWorkersCache.mockClear();
     mocks.setModelVisibilityOwner.mockClear();
     mocks.invalidateProvidersSnapshot.mockClear();
     mocks.preloadLocalCatalogSnapshot.mockClear();
+    mocks.setMemorySettingsOwner.mockClear();
+    mocks.bootstrapMemorySettingsFromMain.mockClear();
     dataOwnerGenerationTesting.reset();
     mocks.service.consumeAccountDeletionRestoredNotice.mockClear();
     restoredToast.mockClear();
@@ -203,6 +222,130 @@ describe('AuthContext session cache boundaries', () => {
     expect(mocks.reset).toHaveBeenCalledTimes(4);
   });
 
+  it('does not finalize restored turns during the first owner hydration', async () => {
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBe('account-a'));
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenCalledWith({
+      finalizeSessions: false,
+    });
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).not.toHaveBeenCalledWith({
+      finalizeSessions: true,
+    });
+
+    act(() => mocks.emitAuth(authState('account-b')));
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: true,
+    });
+  });
+
+  it('preserves the owner when the first snapshot is a boundary-pending projection', async () => {
+    setDataOwnerGeneration('account-a', 1);
+    mocks.service.initialize.mockResolvedValue({ ...authState(null), ownerGeneration: 1 });
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBeNull());
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: false,
+    });
+
+    act(() => mocks.emitAuth(authState('account-a')));
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: false,
+    });
+    expect(mocks.reconcileSessionsAfterDataOwnerRollback).toHaveBeenCalledOnce();
+    expect(view.result.current.dataOwnerId).toBe('account-a');
+    expect(mocks.setMemorySettingsOwner).toHaveBeenLastCalledWith('account-a');
+    expect(mocks.bootstrapMemorySettingsFromMain).toHaveBeenCalled();
+  });
+
+  it('preserves a pending rollback when the first snapshot has no owner stamp', async () => {
+    mocks.service.initialize.mockResolvedValue({ ...authState(null), ownerGeneration: 1 });
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBeNull());
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).not.toHaveBeenCalledWith({
+      finalizeSessions: true,
+    });
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary.mockClear();
+
+    act(() => mocks.emitAuth(authState('account-a')));
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: false,
+    });
+    expect(mocks.reconcileSessionsAfterDataOwnerRollback).toHaveBeenCalledOnce();
+    expect(view.result.current.dataOwnerId).toBe('account-a');
+  });
+
+  it('preserves a generation-zero pending rollback from a startup-local boundary', async () => {
+    // A renderer opened while a process that started in local mode is leaving
+    // that owner receives the transient signed-out projection at generation 0.
+    // The explicit pending marker disambiguates it from a stable signed-out
+    // startup snapshot.
+    mocks.service.initialize.mockResolvedValue({
+      ...authState(null),
+      ownerGeneration: 0,
+      ownerBoundaryPending: true,
+    });
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBeNull());
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).not.toHaveBeenCalledWith({
+      finalizeSessions: true,
+    });
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary.mockClear();
+
+    act(() => mocks.emitAuth({ ...localAuthState(), ownerGeneration: 0 }));
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: false,
+    });
+    expect(mocks.reconcileSessionsAfterDataOwnerRollback).toHaveBeenCalledOnce();
+    expect(view.result.current.dataOwnerId).toBe('local-v1');
+  });
+
+  it('finalizes a committed owner change after a first pending snapshot', async () => {
+    mocks.service.initialize.mockResolvedValue({
+      ...authState(null),
+      ownerGeneration: 1,
+      ownerBoundaryPending: true,
+    });
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBeNull());
+
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary.mockClear();
+    act(() => mocks.emitAuth({ ...authState('account-b'), ownerGeneration: 2 }));
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: true,
+    });
+    expect(view.result.current.dataOwnerId).toBe('account-b');
+  });
+
+  it('finalizes a fresh renderer when a pending projection commits to null', async () => {
+    mocks.service.initialize.mockResolvedValue({
+      ...authState(null),
+      ownerGeneration: 1,
+      ownerBoundaryPending: true,
+    });
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBeNull());
+
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary.mockClear();
+    act(() => mocks.emitAuth({ ...authState(null), ownerGeneration: 2 }));
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: true,
+    });
+    expect(mocks.reset).toHaveBeenCalled();
+    expect(mocks.clearWorkersCache).toHaveBeenCalled();
+    expect(mocks.setMemorySettingsOwner).toHaveBeenLastCalledWith(null);
+    expect(mocks.bootstrapMemorySettingsFromMain).toHaveBeenCalled();
+    expect(view.result.current.dataOwnerId).toBeNull();
+  });
+
   it('resets sessions when authentication expires', async () => {
     renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(mocks.service.initialize).toHaveBeenCalled());
@@ -235,6 +378,203 @@ describe('AuthContext session cache boundaries', () => {
       expect(mocks.preloadLocalCatalogSnapshot).toHaveBeenCalledOnce();
     },
   );
+
+  it('does not finalize on a same-owner push while an auth boundary is pending', async () => {
+    let rejectLogout!: (error: Error) => void;
+    mocks.service.logout.mockReturnValueOnce(
+      new Promise<void>((_resolve, reject) => {
+        rejectLogout = reject;
+      }),
+    );
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBe('account-a'));
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary.mockClear();
+
+    let logout!: Promise<void>;
+    act(() => {
+      logout = view.result.current.logout();
+    });
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenCalledWith({
+      finalizeSessions: false,
+    });
+
+    act(() => mocks.emitAuth({ ...authState('account-a'), ownerGeneration: 2 }));
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: false,
+    });
+
+    await act(async () => {
+      rejectLogout(new Error('logout failed'));
+      await expect(logout).rejects.toThrow('logout failed');
+    });
+  });
+
+  it('finalizes once when a successful logout commits the null owner after the pending projection', async () => {
+    let resolveLogout!: () => void;
+    mocks.service.logout.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveLogout = resolve;
+      }),
+    );
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBe('account-a'));
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary.mockClear();
+
+    let logout!: Promise<void>;
+    act(() => {
+      logout = view.result.current.logout();
+    });
+    act(() => mocks.emitAuth({ ...authState(null), ownerGeneration: 1 }));
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: false,
+    });
+
+    act(() => {
+      mocks.emitAuth(authState(null));
+      resolveLogout();
+    });
+    await act(async () => {
+      await logout;
+    });
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: true,
+    });
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenCalledTimes(2);
+
+    act(() => mocks.emitAuth(authState(null)));
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])('finalizes exitLocalMode once with a preceding commit push: %s', async (pushCommit) => {
+    mocks.service.initialize.mockResolvedValue(localAuthState());
+    const committedState = { ...authState(null), ownerGeneration: 4 };
+    mocks.service.exitLocalMode.mockImplementationOnce(async () => {
+      mocks.emitAuth({ ...authState(null), ownerGeneration: 3 });
+      expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenCalledTimes(1);
+      expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+        finalizeSessions: false,
+      });
+      if (pushCommit) mocks.emitAuth(committedState);
+      return committedState;
+    });
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBe('local-v1'));
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary.mockClear();
+
+    await act(async () => {
+      await view.result.current.exitLocalMode();
+    });
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: true,
+    });
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenCalledTimes(2);
+    expect(getDataOwnerGeneration()).toEqual({ dataOwnerId: null, generation: 4 });
+    act(() => mocks.emitAuth(committedState));
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not consume the rollback marker on a same-owner push during teardown', async () => {
+    let rejectLogout!: (error: Error) => void;
+    mocks.service.logout.mockReturnValueOnce(
+      new Promise<void>((_resolve, reject) => {
+        rejectLogout = reject;
+      }),
+    );
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBe('account-a'));
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary.mockClear();
+
+    let logout!: Promise<void>;
+    act(() => {
+      logout = view.result.current.logout();
+    });
+
+    act(() => mocks.emitAuth({ ...authState(null), ownerGeneration: 1 }));
+    act(() => mocks.emitAuth({ ...authState('account-a'), ownerGeneration: 1 }));
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: false,
+    });
+    expect(mocks.reconcileSessionsAfterDataOwnerRollback).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      rejectLogout(new Error('logout failed'));
+      await expect(logout).rejects.toThrow('logout failed');
+    });
+    expect(mocks.reconcileSessionsAfterDataOwnerRollback).toHaveBeenCalledTimes(2);
+    expect(getDataOwnerGeneration().dataOwnerId).toBe('account-a');
+  });
+
+  it('keeps a newer renderer pending marker when an older boundary settles first', async () => {
+    let resolveLogout!: () => void;
+    mocks.service.logout.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveLogout = resolve;
+      }),
+    );
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBe('account-a'));
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary.mockClear();
+    mocks.reconcileSessionsAfterDataOwnerRollback.mockClear();
+
+    let logout!: Promise<void>;
+    act(() => {
+      logout = view.result.current.logout();
+    });
+    act(() =>
+      mocks.emitAuth({ ...authState(null), ownerGeneration: 1, ownerBoundaryPending: true }),
+    );
+    act(() => mocks.emitAuth({ ...authState('account-b'), ownerGeneration: 2 }));
+    // A second window starts another boundary after the first commit but
+    // before the first window receives its own IPC promise settlement.
+    act(() =>
+      mocks.emitAuth({ ...authState(null), ownerGeneration: 2, ownerBoundaryPending: true }),
+    );
+
+    await act(async () => {
+      resolveLogout();
+      await logout;
+    });
+    act(() => mocks.emitAuth({ ...authState('account-b'), ownerGeneration: 2 }));
+
+    expect(mocks.reconcileSessionsAfterDataOwnerRollback).toHaveBeenCalledOnce();
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).not.toHaveBeenLastCalledWith({
+      finalizeSessions: true,
+    });
+  });
+
+  it('reconciles Main runtime on IPC rejection without a rollback push', async () => {
+    let rejectLogout!: (error: Error) => void;
+    mocks.service.logout.mockReturnValueOnce(
+      new Promise<void>((_resolve, reject) => {
+        rejectLogout = reject;
+      }),
+    );
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBe('account-a'));
+    mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary.mockClear();
+
+    let logout!: Promise<void>;
+    act(() => {
+      logout = view.result.current.logout();
+    });
+    act(() => mocks.emitAuth({ ...authState(null), ownerGeneration: 1 }));
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: false,
+    });
+
+    await act(async () => {
+      rejectLogout(new Error('logout failed'));
+      await expect(logout).rejects.toThrow('logout failed');
+    });
+
+    expect(mocks.cancelRemoteOptimisticSendsForDataOwnerBoundary).toHaveBeenLastCalledWith({
+      finalizeSessions: false,
+    });
+    expect(mocks.reconcileSessionsAfterDataOwnerRollback).toHaveBeenCalledTimes(1);
+    expect(getDataOwnerGeneration().dataOwnerId).toBe('account-a');
+  });
 
   it('keeps a newer pushed owner when an older auth boundary later rejects', async () => {
     let rejectLogout!: (error: Error) => void;
@@ -291,6 +631,42 @@ describe('AuthContext session cache boundaries', () => {
 
     expect(getDataOwnerGeneration().dataOwnerId).toBe('account-a');
     expect(mocks.preloadLocalCatalogSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the rollback marker for each overlapping boundary rejection', async () => {
+    let rejectFirst!: (error: Error) => void;
+    let rejectSecond!: (error: Error) => void;
+    mocks.service.logout
+      .mockReturnValueOnce(
+        new Promise<void>((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<void>((_resolve, reject) => {
+          rejectSecond = reject;
+        }),
+      );
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBe('account-a'));
+    mocks.reconcileSessionsAfterDataOwnerRollback.mockClear();
+
+    const first = view.result.current.logout();
+    const second = view.result.current.logout();
+    act(() => mocks.emitAuth({ ...authState(null), ownerGeneration: 1 }));
+    act(() => mocks.emitAuth({ ...authState(null), ownerGeneration: 1 }));
+
+    await act(async () => {
+      rejectFirst(new Error('first logout failed'));
+      await expect(first).rejects.toThrow('first logout failed');
+    });
+    expect(mocks.reconcileSessionsAfterDataOwnerRollback).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      rejectSecond(new Error('second logout failed'));
+      await expect(second).rejects.toThrow('second logout failed');
+    });
+    expect(mocks.reconcileSessionsAfterDataOwnerRollback).toHaveBeenCalledTimes(2);
   });
 
   it('restores a locally committed owner when the next boundary fails before an auth push', async () => {

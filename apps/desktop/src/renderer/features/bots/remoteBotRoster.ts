@@ -1,3 +1,4 @@
+import { readWorkingPhase, type WorkingPhase } from '../../../shared/workingStatus';
 export interface RemoteBot {
   id: string;
   deviceId: string;
@@ -10,6 +11,8 @@ export interface RemoteBot {
   activityAt: number;
   sessionId: string | null;
   online: boolean;
+  connectionKnown?: boolean;
+  generation?: { phase: WorkingPhase; startedAt: number | null };
   lastReplyAt?: number;
   readAt?: number;
 }
@@ -67,6 +70,11 @@ export function parseRemoteBots(value: unknown, deviceId: string, deviceName: st
       sessionId: typeof sessionId === 'string' && sessionId ? sessionId : null,
       lastReplyAt: typeof display.lastReplyAt === 'number' && Number.isFinite(display.lastReplyAt) && display.lastReplyAt >= 0 ? display.lastReplyAt : undefined,
       online: true,
+      connectionKnown: true,
+      ...(typeof record(display.generation).phase === 'string' ? { generation: {
+        phase: readWorkingPhase(record(display.generation).phase) ?? 'processing',
+        startedAt: typeof record(display.generation).startedAt === 'number' && Number.isFinite(record(display.generation).startedAt) ? record(display.generation).startedAt as number : null,
+      } } : {}),
     };
   });
 }

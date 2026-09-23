@@ -7,10 +7,11 @@
  * 设计:
  *   - Claude/Codex 在 prepare 成功后优先读 getReadyBinaryPath(),必要时可读受管缓存；
  *     Pi 是可选资产，只允许使用本次 prepare 成功的路径，失败时不能复用旧缓存。
- *   - 进程内按 binaryPath 缓存结果, 同一 binary 只 spawn 一次。
+ *   - Claude/Codex 按 binaryPath 缓存结果；Pi 现读，以反映受管／原生更新。
  *   - 5s 超时, 失败时返回 { error }。
  */
 
+import { registerPiKernelIpc } from './pi-kernel.js';
 import { ipcMain } from 'electron';
 import { execFile } from 'node:child_process';
 
@@ -72,6 +73,7 @@ function spawnVersion(binaryPath: string): Promise<string> {
 }
 
 export function registerMakerBinaryVersionIpc(): void {
+  registerPiKernelIpc();
   log.info('registering maker:agent:binary-version IPC handler');
 
   ipcMain.handle(
@@ -87,14 +89,14 @@ export function registerMakerBinaryVersionIpc(): void {
         return { kind: agentKind, binaryPath: null, version: null, error: 'binary_not_ready' };
       }
 
-      const cached = versionCache.get(binaryPath);
+      const cached = agentKind === 'pi' ? undefined : versionCache.get(binaryPath);
       if (cached) {
         return { kind: agentKind, binaryPath, version: cached };
       }
 
       try {
         const version = await spawnVersion(binaryPath);
-        versionCache.set(binaryPath, version);
+        if (agentKind !== 'pi') versionCache.set(binaryPath, version);
         return { kind: agentKind, binaryPath, version };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

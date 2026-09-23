@@ -54,6 +54,7 @@ export type RemoteSessionListMessage = RemoteSessionListMessageLike;
 export type RemoteSessionLiveActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
 export interface RemoteSessionLiveActivity {
+  workingPhase?: string;
   sessionId: string;
   phase: RemoteSessionLiveActivityPhase;
   compactDetail: string;

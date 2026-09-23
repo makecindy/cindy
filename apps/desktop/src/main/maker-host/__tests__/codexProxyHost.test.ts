@@ -4491,6 +4491,73 @@ describe('codex proxy host', () => {
       return current;
     }
 
+    it('独立 xAI 账号(auth.native=xai、id 非 xai)的会话同样走 xAI 兼容改写:tool-less compact 不会带着 tool_choice 裸发(#4888)', async () => {
+      const host = await freshCodexProxyHost();
+      const { buildUserProvider } = await import('@cindy/model-providers');
+      const { setCustomProviders } = await import('../active-catalog.js');
+      // 目录里独立账号 provider 的 id 不是字面量 'xai',仅 auth.native 标记为 xAI 系。
+      setCustomProviders([buildUserProvider({
+        id: 'grok-second',
+        name: 'Second Grok',
+        auth: { method: 'oauth', native: 'xai' },
+        runtimes: {},
+      })]);
+      try {
+        const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+        mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+          url: 'http://127.0.0.1:43210',
+          dispose: vi.fn(async () => undefined),
+        });
+        await host.ensureCodexProxyReady();
+        host.registerComposed('session-xai-account', 'thread-xai-account', 'PRODUCT_PROMPT');
+        setSessionProvider('session-xai-account', 'grok-second');
+        const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+        const ctx = { method: 'POST', url: '/responses/compact', headers: { 'thread-id': 'thread-xai-account' } };
+        let current: unknown = {
+          model: 'xai/grok-4.5',
+          instructions: 'BASE_PROMPT\n\nPRODUCT_PROMPT',
+          reasoning: { effort: 'high', summary: 'auto' },
+          tools: [],
+          tool_choice: 'auto',
+          input: [{ role: 'user', content: '压缩上下文' }],
+        };
+        for (const transform of transforms) {
+          const next = transform(current, ctx);
+          if (next !== null && next !== undefined) current = next;
+        }
+        clearSessionProvider('session-xai-account');
+        const out = current as Record<string, unknown>;
+        // 与 first-party 'xai' 会话同口径:补上 x_search,tool_choice 才有工具可选。
+        expect(out.tools).toEqual([{ type: 'x_search' }]);
+        expect(out.tool_choice).toBe('auto');
+        expect(out.instructions).toBeUndefined();
+        // reasoning 能力按该账号目录(由 xai 根装配)解析:通用 Grok 保留 reasoning。
+        expect(out.reasoning).toEqual({ effort: 'high', summary: 'auto' });
+      } finally {
+        setCustomProviders([]);
+      }
+    });
+
+    it('独立 xAI 账号目录暂未包含当前模型时,按具体模型回退 first-party xai 目录,不误判成不支持 reasoning(#4892 review)', async () => {
+      const { resolveXaiCodexCatalogModel } = await import('../codex-proxy-host.js');
+      const model = (id: string, efforts: string[]) => ({ id, name: id, efforts, defaultEffort: efforts[0] ?? 'medium' });
+      const providers = [
+        { id: 'xai', models: { codex: [model('xai/grok-4.5', ['low', 'medium', 'high']), model('xai/grok-code-fast', [])] } },
+        // 账号级发现快照落后:只含 grok-4.7,没有会话正在用的 grok-4.5。
+        { id: 'grok-third', models: { codex: [model('xai/grok-4.7', ['low', 'medium', 'high', 'xhigh'])] } },
+      ] as never;
+      // 账号命中自己的模型时不回退。
+      expect(resolveXaiCodexCatalogModel(providers, 'grok-third', 'xai/grok-4.7')?.efforts).toHaveLength(4);
+      // 账号 provider 存在但该模型未命中 → 回退 first-party xai 的同名模型(保留 reasoning)。
+      expect(resolveXaiCodexCatalogModel(providers, 'grok-third', 'xai/grok-4.5')?.efforts).toHaveLength(3);
+      // 编码系模型即使回退也仍是 0 档位,不会被误放行。
+      expect(resolveXaiCodexCatalogModel(providers, 'grok-third', 'xai/grok-code-fast')?.efforts).toHaveLength(0);
+      // 两边都没有 → undefined(调用方按不支持 reasoning 处理)。
+      expect(resolveXaiCodexCatalogModel(providers, 'grok-third', 'xai/grok-unknown')).toBeUndefined();
+      // first-party xai 自身不重复回退。
+      expect(resolveXaiCodexCatalogModel(providers, 'xai', 'xai/grok-4.7')).toBeUndefined();
+    });
+
     it('请求原本没有 tools 时也补上 x_search(Grok 默认就该能搜 X)', async () => {
       const out = (await runXaiTransforms('no-tools', {
         model: 'xai/grok-4.5',
@@ -7889,6 +7956,119 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
     }
   });
 
+  it('rewrites BYOK image aliases per Provider over HTTP, including multipart and frozen hosts', async () => {
+    const received: Array<{ path: string; body: Buffer; headers: Record<string, string | string[] | undefined> }> = [];
+    const upstream = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        received.push({ path: req.url ?? '', body: Buffer.concat(chunks), headers: req.headers });
+        res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const host = await freshCodexProxyHost();
+    const actualProxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>(
+      '@cindy/anthropic-compat-proxy',
+    );
+    mockState.createAnthropicCompatProxy.mockImplementation(actualProxy.createAnthropicCompatProxy);
+    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+    const { buildByokProvider } = await import('../../model-access/byokProvider.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const providers = ['byok-a', 'byok-b'].map((id) => buildByokProvider({
+      provider: {
+        id, name: id, connectionRevision: 1,
+        models: [{ id: `${id}/chat`, mode: 'chat', agents: ['codex'], currency: 'CNY',
+          perAgent: { codex: { wireProtocol: 'openai-responses' } } }],
+        imageBinding: { enabled: true, modelId: 'gpt-image-2', wireModel: 'gpt-image-2',
+          litellmModel: `${id}/gpt-image-2`, supportsEdit: true },
+      },
+      credential: { providerId: id, status: 'ready', connectionRevision: 1,
+        endpoint: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
+        apiKey: `fake-${id}` },
+    }));
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, ...providers] };
+    setActiveCatalog(catalog);
+    setCustomProviderKeyReader((id) => providers.some((p) => p.id === id) ? `fake-${id}` : null);
+    const routes = deriveCodexCustomProviderRoutes(catalog);
+    host.setCodexAppliedCustomProviderRoutes(routes);
+    expect(routes.every((route) => route.routing.imageModel)).toBe(true);
+    const payload = { model: 'gpt-image-2', prompt: 'draw', quality: 'auto', vendor_field: 'retain',
+      input: [{ type: 'custom_tool_call', id: 'fc_original', call_id: 'call_original' }] };
+    try {
+      await host.ensureCodexProxyReady();
+      await host.ensureCodexCustomContextProxyReady('byok-image-test', 'env-key', routes);
+      // A frozen Host must use its own binding even after the global snapshot changes.
+      host.setCodexAppliedCustomProviderRoutes(routes.map((route) => ({ ...route,
+        routing: { ...route.routing, imageModel: { ...route.routing.imageModel!, litellmModel: 'wrong-global-alias' } },
+      })));
+      for (const route of routes) {
+        const endpoint = host.getCodexCustomContextProxyEndpoint('byok-image-test');
+        for (const operation of ['generations', 'edits']) {
+          const response = await fetch(`${endpoint}/_cindy/custom-provider/${route.routeId}/images/${operation}`, {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+          });
+          expect(response.status).toBe(200);
+          await response.text();
+          const request = received.at(-1)!;
+          expect(request.path).toBe(`/v1/images/${operation}`);
+          expect(request.headers.authorization).toBe(`Bearer fake-${route.providerId}`);
+          expect(JSON.parse(request.body.toString())).toEqual({ ...payload, model: `${route.providerId}/gpt-image-2` });
+          expect(request.headers['content-length']).toBe(String(request.body.length));
+        }
+        const pixels = new Uint8Array([0, 255, 128, 13, 10, 77]);
+        const form = new FormData();
+        form.set('model', 'gpt-image-2');
+        form.set('prompt', 'edit');
+        form.append('image[]', new Blob([pixels], { type: 'image/png' }), 'input.png');
+        form.append('image[]', new Blob([pixels], { type: 'image/png' }), 'input-2.png');
+        form.set('mask', new Blob([pixels], { type: 'image/png' }), 'mask.png');
+        const response = await fetch(`${endpoint}/_cindy/custom-provider/${route.routeId}/images/edits`, {
+          method: 'POST', body: form,
+        });
+        expect(response.status).toBe(200);
+        await response.text();
+        const request = received.at(-1)!;
+        const uploaded = await new Response(new Uint8Array(request.body), {
+          headers: { 'content-type': String(request.headers['content-type']) },
+        }).formData();
+        expect(uploaded.get('model')).toBe(`${route.providerId}/gpt-image-2`);
+        expect(uploaded.get('prompt')).toBe('edit');
+        expect(uploaded.getAll('image[]')).toHaveLength(2);
+        const file = uploaded.getAll('image[]')[0] as File;
+        expect(file.name).toBe('input.png');
+        expect(file.type).toBe('image/png');
+        expect(new Uint8Array(await file.arrayBuffer())).toEqual(pixels);
+        expect(new Uint8Array(await (uploaded.get('mask') as File).arrayBuffer())).toEqual(pixels);
+        expect(request.headers.authorization).toBe(`Bearer fake-${route.providerId}`);
+        expect(request.headers['content-length']).toBe(String(request.body.length));
+      }
+      host.setCodexAppliedCustomProviderRoutes(routes);
+      const response = await fetch(`${host.getCodexProxyEndpoint()}/_cindy/custom-provider/${routes[0]!.routeId}/images/generations`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(JSON.parse(received.at(-1)!.body.toString()).model).toBe('byok-a/gpt-image-2');
+      const count = received.length;
+      const rejected = await fetch(`${host.getCodexProxyEndpoint()}/_cindy/custom-provider/${routes[0]!.routeId}/images/generations`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...payload, model: 'byok-b/gpt-image-2' }),
+      });
+      expect(rejected.status).toBe(502);
+      await rejected.text();
+      expect(received).toHaveLength(count);
+    } finally {
+      await host.disposeCodexProxy();
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setCustomProviderKeyReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
   it.each([{ efforts: [] }, { efforts: ['high'] }, { efforts: ['high', 'max'] }] as const)('reconciles frozen namespaced Responses capabilities $efforts over HTTP without rewriting native fields or image JSON', async ({ efforts }) => {
     const received: Array<{ path: string; body: string }> = [];
     const upstream = createServer((req, res) => {
@@ -7917,6 +8097,13 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
         models: [{ id: 'codex/native-model', name: 'Native model', reasoning: true, reasoningEfforts: [...efforts] }],
       } },
     });
+    // A local custom Provider must keep image requests opaque even if a stale or
+    // experimental config happens to carry the BYOK-only binding shape.
+    provider.routing.codex!.imageModel = {
+      wireModel: 'gpt-image-2',
+      litellmModel: 'local/should-not-rewrite',
+      supportsEdit: true,
+    };
     const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
     setActiveCatalog(catalog);
     setCustomProviderKeyReader(() => 'fake-native-key');

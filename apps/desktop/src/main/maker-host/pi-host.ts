@@ -1,5 +1,6 @@
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
 import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
+import { mergeByokNativeConfigs } from '../model-access/byokProvider.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 /**
@@ -784,7 +785,10 @@ class DesktopPiAuthAdapter implements AuthAdapter {
     if (providerId) {
       const storageProviderId = storedCustomProviderId(providerId);
       try {
-        const custom = (await listCustomProvidersWithSecureHeaders()).find(
+        const custom = mergeByokNativeConfigs(
+          await listCustomProvidersWithSecureHeaders(),
+          getActiveCatalog().providers,
+        ).find(
           (provider) => provider.id === storageProviderId && provider.runtimes.pi,
         );
         if (custom) {
@@ -1767,7 +1771,7 @@ export async function resolvePiNativeProviders(ctx: {
     }
   }
   const custom = buildPiNativeProvidersFromConfigs(
-    configs,
+    mergeByokNativeConfigs(configs, getActiveCatalog().providers),
     readCustomProviderKey,
     (id, reason) => log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
     bundledModels ?? undefined,

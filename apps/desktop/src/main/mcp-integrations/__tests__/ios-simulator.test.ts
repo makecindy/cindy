@@ -8980,6 +8980,8 @@ describe('iOS Simulator host', () => {
       expect.objectContaining({
         instanceId: instance.instanceId,
         simulatorUdid: READY_REPORT.devices[0]!.udid,
+        xcodeBuild: READY_REPORT.xcodeVersion,
+        developerDirectory: READY_REPORT.xcodeSelectPath,
       }),
     );
     expect(driverManager.stop).toHaveBeenCalledWith(instance.instanceId);

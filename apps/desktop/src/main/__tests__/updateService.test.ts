@@ -320,7 +320,7 @@ describe('installation version repair scope', () => {
   });
 });
 
-describe('binary version checks after a user-requested update', () => {
+describe('binary version checks after an applied update', () => {
   beforeEach(() => {
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
@@ -330,7 +330,7 @@ describe('binary version checks after a user-requested update', () => {
     });
   });
 
-  it('writes the target-version marker only when the user actually applies the update', async () => {
+  it('writes the target-version marker only when the update is actually applied', async () => {
     const service = await freshUpdateService('darwin');
     const { consumeStartupBinaryUpdateMarker } = await import('../agent-binaries/startup-update');
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
@@ -351,15 +351,19 @@ describe('binary version checks after a user-requested update', () => {
     }
   });
 
-  it('does not write the marker for an automatic update relaunch', async () => {
+  it('writes the same marker for an automatic update relaunch', async () => {
     const service = await freshUpdateService('darwin');
+    const { consumeStartupBinaryUpdateMarker } = await import('../agent-binaries/startup-update');
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     service.initUpdateService();
     try {
       await service.checkForUpdate(updateManifest());
+      const markerPath = path.join(TEST_USER_DATA, 'agent-binary-update-once.json');
+      expect(fs.existsSync(markerPath)).toBe(false);
       await expect(ipcHandlers.get('update-relaunch-auto')?.({}, 'dark')).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => { expect(spawnProcess).toHaveBeenCalledOnce(); });
-      expect(fs.existsSync(path.join(TEST_USER_DATA, 'agent-binary-update-once.json'))).toBe(false);
+      expect(JSON.parse(fs.readFileSync(markerPath, 'utf8'))).toMatchObject({ version: '0.0.65' });
+      expect(consumeStartupBinaryUpdateMarker(TEST_USER_DATA, '0.0.65')).toBe(true);
     } finally {
       service.stopUpdateService();
       exitSpy.mockRestore();

@@ -992,16 +992,13 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain('recordSessionTurnSpend(session.id, turnMoney);');
     expect(claudeDoneSource).toContain('subscriptionEstimate ?? unpricedSubscriptionValueMarker()');
     expect(claudeDoneSource).toContain('money: modelRowMoney,');
-    // 订阅轮 (Claude Anthropic 订阅或 bridge 订阅直连) 打 #billing=subscription 标记,
+    // 订阅轮复用计费解析结果打 #billing=subscription 标记,
     // 仪表盘按订阅估算价折算; 其余轮仍写归一化裸 id。
     expect(claudeDoneSource).toMatch(
-      /model:\s*isClaudeSubscriptionValueRow \|\| isBridgeSubscriptionRow\s*\?\s*claudeSubscriptionUsageModelKey\(m\.model\)\s*:\s*m\.model,/,
+      /model:\s*isSubscriptionValueRow\s*\?\s*claudeSubscriptionUsageModelKey\(m\.model\)\s*:\s*m\.model,/,
     );
     expect(claudeDoneSource).toContain(
-      'isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model)',
-    );
-    expect(claudeDoneSource).toContain(
-      "m.source === 'subscription' && isSubscriptionDirectRoute(m.model)",
+      "const isSubscriptionValueRow = m.source === 'subscription'",
     );
     expect(claudeDoneSource).toContain('const subscriptionTurnEstimates: RegionalMoney[] = [];');
     expect(claudeDoneSource).toMatch(
@@ -1029,7 +1026,9 @@ describe('maker:event hot path ordering', () => {
     expect(claudeCostFallback).toMatch(
       /buildClaudeTurnUsageDetails\(\s*undefined,\s*undefined,\s*resolvedModel,/,
     );
-    expect(claudeCostFallback).toContain("if (route !== 'provider-api')");
+    expect(claudeCostFallback).toContain(
+      "if (route !== 'provider-api' || turnContext.accessKind === 'managed')",
+    );
   });
 
   it('pi subscription turns estimate value from the shared reference-price helper', () => {

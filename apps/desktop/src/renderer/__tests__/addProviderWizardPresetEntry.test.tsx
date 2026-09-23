@@ -15,8 +15,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildUserProvider, BUNDLED_CATALOG, parseModelsListResponse, modelProtocolComparison, type ProviderView } from '@cindy/model-providers';
 
+const testI18n = vi.hoisted(() => ({ language: 'zh-CN' }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: testI18n }),
 }));
 
 vi.mock('@/hooks/useCodexAuth', () => ({
@@ -242,6 +243,38 @@ function renderWizard(presetId: string) {
   );
 }
 
+it.each([
+  ['zh-CN', '小米'],
+  ['zh-TW', '小米'],
+  ['en', 'Xiaomi'],
+])('finds the displayed MiMo brand in %s', async (language, query) => {
+  testI18n.language = language;
+  const presets = BUNDLED_CATALOG.presets!.filter(p =>
+    ['xiaomi-token-plan-ams', 'xiaomi-token-plan-sgp'].includes(p.id),
+  );
+  expect(presets).toHaveLength(2);
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [...presets, deepseekPreset] });
+  render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await screen.findByText('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('settings.providers.wizard.searchPlaceholder'), { target: { value: query } });
+  expect(screen.getAllByText('settings.providers.models.subscriptionProduct')).toHaveLength(2);
+  expect(screen.queryByText('DeepSeek')).toBeNull();
+});
+
+it.each(['xiaomi-mimo-token-plan-cn', 'xiaomi-token-plan-ams', 'xiaomi-token-plan-sgp'])(
+  'presents %s as a subscription with the dedicated key hint', async id => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset, deepseekPreset] });
+    render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+    const hint = await screen.findByText('settings.providers.models.subscriptionProduct');
+    fireEvent.click(hint.closest('button')!);
+    expect(await screen.findByPlaceholderText('tp-…')).toBeTruthy();
+    expect(screen.getByText('settings.providers.wizard.mimoTokenPlanNote')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'settings.providers.wizard.setupLink.apiKey' }).getAttribute('href')).toBe('https://platform.xiaomimimo.com/token-plan');
+    expect(screen.queryByPlaceholderText('sk-…')).toBeNull();
+  },
+);
+
 it.each(['openrouter', 'minimax-cn', 'minimax-global', 'moonshot-kimi-code', 'github-copilot', 'nous'])(
   'shows the same sign-in/API choice in the supplier list and connection page for %s', async id => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
@@ -261,6 +294,7 @@ it.each(['openrouter', 'minimax-cn', 'minimax-global', 'moonshot-kimi-code', 'gi
 );
 
 beforeEach(() => {
+  testI18n.language = 'zh-CN';
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       onProviderOAuthProgress: vi.fn(() => () => undefined),
@@ -1249,7 +1283,11 @@ it('preserves OAuth-discovered prices for every engine when finishing model sele
     }),
   });
   renderWizard('openrouter');
-  fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.authorize' }));
+  fireEvent.click(await screen.findByRole(
+    'button',
+    { name: 'settings.providers.button.authorize' },
+    { timeout: 5000 },
+  ));
   fireEvent.click(await screen.findByText('OAuth discovered model'));
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
   await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());

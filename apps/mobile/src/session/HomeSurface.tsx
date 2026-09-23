@@ -1,3 +1,4 @@
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import type { HomeMode } from './homeViewPreferenceStore';
 import { TaskTagDots } from '@/session/TaskTags';
 import { ResidentHomeList, useResidentHomeList } from './ResidentHomeList';
@@ -203,7 +204,7 @@ import {
 } from '@/session/homeSections';
 import {
   readHomeViewPreferences,
-  saveHomeViewPreferences,
+  saveHomeViewPreferences as persistHomeViewPreferences,
   type HomeViewPreferences,
 } from '@/session/homeViewPreferenceStore';
 import {
@@ -403,6 +404,14 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   const styles = useThemedStyles(makeStyles);
   const { colors, mode } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
+  const saveHomeViewPreferences = useCallback((patch: Parameters<typeof persistHomeViewPreferences>[0]) => {
+    const owner = getMobileAuthOwner();
+    return persistHomeViewPreferences(patch).catch(() => {
+      if (isMobileAuthOwnerCurrent(owner)) {
+        Alert.alert(t('devices.list.alert.actionFailed'), t('models.unified.saveFailed'));
+      }
+    });
+  }, [t]);
   // 所有前进导航(进会话 / 新建 / 设置 / 组页面)统一走守卫 push:列表卡顿时的
   // 连点会各自触发一次裸 push,把同一页压进栈 N 层(返回也要 N 次)。
   const push = useGuardedPush();

@@ -17,6 +17,7 @@ import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval
 import { isCodexAccountProvider, codexAccountHome, setCodexAccountRetirement } from './codex-account-auth.js';
 import { CodexThreadLocations } from './codex-thread-locations.js';
 import { getActiveAppSession } from '../appSessionState.js';
+import { getActiveAuthRealm } from '../authManager.js';
 import { getCustomProvider, updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderService.js';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease, type WorktreeRuntimeLease } from '../worktree/runtimeLeases';
@@ -949,6 +950,11 @@ export function getMaker(): Maker {
           && session.instanceId === sessionInstanceId
           && session.getStatus() === 'active'
           && !session.remoteHostId);
+      },
+      isCurrentGrokLoginCaller: (sessionId: string, sessionInstanceId: string) => {
+        const session = _maker?.getSession(sessionId);
+        return Boolean(session && session.instanceId === sessionInstanceId
+          && session.getStatus() === 'active' && !isAppSessionBoundaryPending());
       },
       // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
       // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
@@ -1949,11 +1955,25 @@ export function getMaker(): Maker {
         return storage;
       },
       createCodexAuthTokenReader: (providerId) => {
-        const ownerScope = activeOwnerScopeKey();
+        const owner = getActiveAppSession();
+        const authRealm = getActiveAuthRealm();
+        const assertOwner = () => {
+          const current = getActiveAppSession();
+          if (isAppSessionBoundaryPending() || _codexAgent !== codexAgent ||
+              getActiveAuthRealm() !== authRealm ||
+              current.mode !== owner.mode || current.dataOwnerId !== owner.dataOwnerId) {
+            throw new Error('Codex authentication owner changed');
+          }
+        };
         return async () => {
-          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
+          // Same-owner Ghost repair advances the scope generation while retaining
+          // this Maker and its live tasks. Fence each read, not the reader's lifetime.
+          // The agent identity also rejects old readers after logout/login to the same owner.
+          assertOwner();
+          const ownerScope = activeOwnerScopeKey();
           const state = await desktopCodexAuthAdapter.getState({ credentialMode: 'oauth-bearer', providerId });
-          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
+          assertOwner();
+          if (activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
           const credentials = state.authenticated ? desktopCodexAuthAdapter.readOneShotCreds(providerId) : null;
           if (!credentials) throw new Error('Codex account credentials are unavailable');
           return { accessToken: credentials.accessToken, chatgptAccountId: credentials.accountId };

@@ -141,15 +141,16 @@ describe('CCAgentSessionView 接线不变式', () => {
     expect(sessionViewSrc).toContain('const handleStopSession = useCallback');
     expect(sessionViewSrc).toContain('if (remoteSessionUnavailable)');
     expect(sessionViewSrc).toContain('onStop={handleStopSession}');
-    expect(sessionHeaderSrc).toMatch(
-      /<DropdownMenuItem[\s\S]*?disabled=\{remoteWritesBlocked\}[\s\S]*?onSelect=\{handleOpenInNewWindow\}[\s\S]*?openInNewWindow/,
+    for (const source of [sessionHeaderSrc, sessionItemSrc, sessionCardSrc]) {
+      expect(source).toMatch(/<SessionTaskMenu[\s\S]*?writeBlocked=\{remoteWritesBlocked\}/);
+      expect(source).toMatch(/onOpenInNewWindow=\{handleOpenInNewWindow(?:Select)?\}/);
+    }
+    const menuSource = readFileSync(
+      resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'SessionTaskMenu.tsx'),
+      'utf8',
     );
-    expect(sessionItemSrc).toMatch(
-      /<DropdownMenuItem[\s\S]*?disabled=\{remoteWritesBlocked\}[\s\S]*?onSelect=\{handleOpenInNewWindowSelect\}[\s\S]*?openInNewWindow/,
-    );
-    expect(sessionCardSrc).toMatch(
-      /<DropdownMenuItem[\s\S]*?disabled=\{remoteWritesBlocked\}[\s\S]*?onSelect=\{handleOpenInNewWindowSelect\}[\s\S]*?openInNewWindow/,
-    );
+    expect(menuSource).toContain("item('openInNewWindow', onOpenInNewWindow, writeBlocked)");
+    expect(menuSource).toContain('disabled={disabled}');
   });
   it('live / 历史错误横幅都携带 SSH 与 device-link 执行端归属', () => {
     expect(sessionViewSrc).toMatch(

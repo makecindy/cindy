@@ -5,6 +5,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { isValidElement } from 'react';
 import { CindyMakeSection } from '../CindyMakeSection';
 import type { CindyMakeMergeState, CindyMakeMergeRequest } from '../../../../shared/cindyMakeMerge';
+import type { CindyMakePersonalBuildState } from '../../../../shared/cindyMakeSession';
 import { startMakeDoctor } from '@/lib/cindyMakeDoctor';
 import { setCindyMakeForceManagedTools } from '@/lib/cindyMakeSettings';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
@@ -45,7 +46,11 @@ type Api = Parameters<typeof startMakeDoctor>[1];
 type Listener = Parameters<NonNullable<Api>['onDesktopCommandTriggered']>[0];
 type Result = Awaited<ReturnType<NonNullable<Api>['executeDesktopCommand']>>;
 
-function harness(history: { busy: boolean; activeWork?: boolean } = { busy: false }) {
+function harness(
+  history: { busy: boolean; activeWork?: boolean; build?: CindyMakePersonalBuildState } = {
+    busy: false,
+  },
+) {
   const listeners = new Set<Listener>();
   const sourceListeners = new Set<(status: MakeSourceStatus) => void>();
   const stateListeners = new Set<(state: CindyMakeGlobalState) => void>();
@@ -1412,6 +1417,20 @@ describe('Settings > Cindy Make', () => {
       ),
     );
     expect(h.starts()).toHaveLength(3);
+  });
+
+  it('disables manual source sync while a personal version is being built', async () => {
+    const h = harness({ busy: true, activeWork: true, build: { status: 'checking' } });
+    h.api.getCindyMakeSourceStatus.mockResolvedValue({
+      status: 'ready',
+      path: 'managed-source',
+      ref: 'main',
+    });
+    renderVersions(<CindyMakeSection />);
+    const button = await screen.findByRole('button', { name: 'cindyMake.merge.getLatest' });
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(button);
+    expect(h.api.cindyMakeMerge).not.toHaveBeenCalled();
   });
 
   it('confirms and starts clearing the source without re-pulling it', async () => {

@@ -2747,3 +2747,22 @@ it('launches a new Azure deployment with the bound connection API and configured
     { ...BUNDLED_CATALOG, providers: [provider] });
   expect(result.providers[0]?.models[0]).toMatchObject({ id: 'deployment-new', api: 'azure-openai-responses', contextWindow: 64000 });
 });
+
+it('serializes mixed-protocol enterprise models with their own gateway base URLs', async () => {
+  const { buildByokProvider, byokNativeConfigs } = await import('../../model-access/byokProvider.js');
+  const protocols = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const;
+  const provider = buildByokProvider({ provider: {
+    id: 'byok-mixed', name: 'Enterprise', connectionRevision: 1,
+    models: protocols.map((protocol) => ({ id: `byok-mixed/${protocol}`, name: protocol, agents: ['pi'], currency: 'CNY', contextWindow: 128000,
+      perAgent: { pi: { wireProtocol: protocol } } })),
+  }, credential: { providerId: 'byok-mixed', connectionRevision: 1, status: 'ready', endpoint: 'https://gateway.example/gateway/v1/', apiKey: 'test-only' } });
+  const result = buildPiNativeProvidersFromConfigs(byokNativeConfigs([provider]), () => 'test-only');
+  expect(result.providers).toHaveLength(1);
+  for (const [index, api] of protocols.entries()) {
+    const model = result.providers[0]!.models![index]!;
+    expect(model.api).toBe(api);
+    expect(model.baseUrl ?? result.providers[0]!.baseUrl).toBe(
+      api === 'anthropic-messages' ? 'https://gateway.example/gateway' : 'https://gateway.example/gateway/v1',
+    );
+  }
+});

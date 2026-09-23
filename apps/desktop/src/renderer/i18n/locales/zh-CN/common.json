@@ -1089,7 +1089,7 @@
     },
     "about": {
       "title": "关于",
-      "description": "应用与已集成 Agent 的运行时版本。所有版本号在启动时由主进程自动探测。",
+      "description": "应用与已集成 Agent 的运行时版本。",
       "appVersionLabel": "应用版本号",
       "claudeCodeVersionLabel": "Claude Code 版本号",
       "codexVersionLabel": "Codex 版本号",
@@ -1282,6 +1282,33 @@
         "reconcileFailed": "体检失败",
         "reconcileHealthy": "账实一致，没有发现异常。",
         "reconcileIssues": "发现异常：无账文件 {{orphans}} 个({{orphanSize}})、缺失文件 {{missing}} 个、无法识别 {{stray}} 个。详细清单见应用日志。"
+      },
+      "piKernel": {
+        "manage": "管理 Pi 版本",
+        "checking": "检查中…",
+        "checkFailed": "检查失败",
+        "available": "有更新",
+        "lookup": "准备中…",
+        "download": "下载中…",
+        "verify": "验证中…",
+        "activate": "切换中…",
+        "update": "升级 Pi 上游版本",
+        "restore": "恢复 Cindy 正式版",
+        "check": "检查更新",
+        "releaseNotes": "Pi 更新说明",
+        "checkedAt": "上次检查：{{time}}",
+        "updateTitle": "升级到 Pi {{version}}？",
+        "restoreTitle": "恢复 Pi {{version}}？",
+        "updateDescription": "此版本由 Pi 上游发布，可能存在 Cindy 兼容性问题，可随时恢复 Cindy 正式版。已有任务继续使用当前版本。",
+        "restoreDescription": "安装 Cindy 线上正式版分发的 Pi，即使版本较低。已有任务继续使用当前版本。",
+        "updateConfirm": "升级",
+        "restoreConfirm": "恢复",
+        "installed": "Pi {{version}} 已就绪，新任务将使用此版本。",
+        "versionChanged": "线上版本已变化，请重新检查后安装。",
+        "busy": "已有 Pi 更新正在进行。",
+        "installFailed": "Pi 安装失败，仍使用原版本。请检查网络和磁盘空间后重试。",
+        "openFailed": "无法打开更新说明。",
+        "restartRequired": "Pi {{version}} 已安装，重启 Cindy 后可用。"
       }
     },
     "apiKey": {
@@ -1671,6 +1698,7 @@
         }
       },
       "xai": {
+        "deviceLogin": "用设备码登录",
         "logoutConfirm": {
           "title": "断开 xAI(SuperGrok)？",
           "description": "断开后，Cindy 将无法使用这份 Grok 订阅。",
@@ -2350,6 +2378,7 @@
         "endpointLabel": "{{agent}} 基础 URL",
         "noAuthNote": "此 Proxy 无需客户端密钥；Cindy 会在转发前移除 CLI 的订阅凭证。",
         "signIn": "登录",
+        "mimoTokenPlanNote": "请使用 MiMo Token Plan 页面提供的专属 API Key (tp-…)。调用消耗订阅配额，不能与按量付费 API Key 混用。",
         "setupLink": {
           "apiKey": "获取 API Key",
           "account": "注册或登录",
@@ -2543,6 +2572,13 @@
         "modelCount": "已配置 {{count}} 个模型",
         "modelsAutomatic": "模型资料自动获取。单个模型的设置在模型列表中调整。",
         "manualModel": "模型 ID（无法自动获取时填写）"
+      },
+      "byok": {
+        "managed": "由企业管理连接与模型",
+        "refresh": "刷新企业配置",
+        "refreshFailed": "企业配置暂时无法刷新，请稍后重试。",
+        "pending": "凭据准备中",
+        "unavailable": "暂时不可用"
       }
     },
     "experimental": {
@@ -7687,6 +7723,7 @@
       "deleteDescription": "删除 {{name}} 后，伙伴的资料、记忆、工作目录、通道连接与自动化任务将被移除，无法撤销。任务历史与独立 worktree会保留。",
       "working": "正在更新…",
       "actionFailed": "操作未完成，请稍后重试。",
+      "deleteFailed": "删除没有完成。",
       "restart": "重启伙伴",
       "restartDescription": "停止当前运行并重新准备，保留对话记录、记忆和文件。",
       "restarting": "正在重启…",
@@ -7796,6 +7833,7 @@
     },
     "permissionRequest": "{{name}} 想请你确认一下",
     "remote": {
+      "unknown": "连接状态未知",
       "online": "在线",
       "offline": "离线",
       "thisDevice": "这台电脑",
@@ -8955,6 +8993,8 @@
       "failed": "图片生成失败，请重试"
     },
     "errorBanner": {
+      "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
+      "replyFailed": "本次回复未能完成。请查看错误详情以了解原因。",
       "retryTitle": "重新发送最后一条消息",
       "cancelTitle": "关闭错误提示",
       "retry": "重试",
@@ -9701,6 +9741,7 @@
       "reviewingChecks": "正在核对检查结果…",
       "replying": "正在回复…",
       "processing": "正在处理…",
+      "organizingConversation": "正在整理对话…",
       "thinking": "正在思考…",
       "generating": "正在生成…",
       "editingFiles": "正在编辑文件…",
@@ -10794,8 +10835,8 @@
         "automatic": "自动",
         "manually": "手动",
         "session": "任务",
-        "silentRun": "静默运行",
-        "silentRunTooltip": "开启后，任务成功完成时默认不提醒。若任务说明中要求在特定情况提醒，AI 会在满足条件时主动上报；失败和异常仍会提醒。",
+        "silentRun": "检查没事不说话",
+        "silentRunTooltip": "仅报告变化或问题。提醒和定时发送可关闭此项。",
         "silentRunInfoAria": "查看静默运行规则",
         "finishSendToFeishu": "完成时发送到飞书机器人",
         "finishSendToWecomGroup": "完成时发送到企业微信群",
@@ -10911,7 +10952,7 @@
         "intervalChip": "完成后计时 · {{schedule}}"
       },
       "scheduleMenu": {
-        "intervalMinutes": "Minutes（每 N 分钟）",
+        "intervalMinutes": "分钟（每 N 分钟）",
         "interval": "Hourly（每 N 小时）",
         "daily": "Daily（每天）",
         "weekdays": "Weekdays（工作日）",
@@ -10932,7 +10973,10 @@
         "minuteLabel": "分钟",
         "scheduleHourAria": "计划小时",
         "scheduleMinuteAria": "计划分钟",
-        "openTimePickerAria": "打开时间选择器"
+        "intervalMinutesAria": "重复间隔（分钟）",
+        "openTimePickerAria": "打开时间选择器",
+        "minuteIntervalHint": "仅支持能整除 60 的分钟间隔：1、2、3、4、5、6、10、12、15、20、30 分钟；60 分钟请选择“每 1 小时”。",
+        "unsupportedMinuteInterval": "该自动化使用了 {{count}} 分钟的旧 Cron 设置；请选择一个可用间隔来修正它。"
       },
       "model": {
         "loading": "加载模型中…",
@@ -12881,7 +12925,8 @@
       "success": "已完成",
       "failed": "运行失败",
       "interrupted": "已中断",
-      "cancelled": "已取消"
+      "cancelled": "已取消",
+      "skipped": "已检查 · 未唤醒模型"
     },
     "sourceStatus": {
       "listening": "监听中",
@@ -12892,7 +12937,13 @@
       "equals": "等于",
       "contains": "包含",
       "not-equals": "不等于"
-    }
+    },
+    "quiet": "检查没事不说话",
+    "quietHint": "仅报告变化或问题。提醒和定时发送可关闭此项。",
+    "checkCommand": "前置检查命令",
+    "checkHint": "可选。在电脑上先检查：退出码 2 跳过本轮，0 继续执行，异常仍会报告。清空可移除。",
+    "timeoutMs": "检查超时（毫秒，留空不限时）",
+    "advancedSettings": "高级设置"
   },
   "cindyMakeDoctor": {
     "description": "检查本机构建 Cindy 所需的环境。用法：/cindy-make-doctor",
@@ -13220,6 +13271,7 @@
       "usingHint": "正在使用最新个人版。",
       "errors": {
         "busy": "还有任务、测试或构建正在进行，请结束后再切换或删除版本。",
+        "building": "正在生成个人版，请等待完成或停止制作后再切换版本。",
         "incompatible": "数据结构不同，暂时不能切换到这份版本。请基于当前原版重新生成个人版。",
         "unavailable": "无法读取这份版本，请重新生成后重试。",
         "launchFailed": "未能启动目标版本，当前版本已保留。",
@@ -13463,6 +13515,7 @@
       "getLatest": "同步最新源码",
       "taskTitle": "处理源码更新冲突",
       "updateHint": "更新官方源码，并保留个人改动。",
+      "buildingHint": "个人版正在生成，完成或停止制作后才能同步源码。",
       "confirmTitle": "更新到最新源码？",
       "confirmDescription": "会保留你的个人改动。如有冲突，会先询问是否创建任务处理。",
       "conflictConfirm": {

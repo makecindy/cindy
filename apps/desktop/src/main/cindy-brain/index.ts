@@ -387,6 +387,7 @@ import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-hos
 import {
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
+  isOrganizationManagedProvider,
   isProviderDisabled,
   type MediaCapability,
   xaiApiOfficialRuntimeAgents,
@@ -438,6 +439,8 @@ import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
 import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
+import { createByokImageChannel, pruneDynamicImageChannels, registerByokImageChannels } from './byokImageChannel.js';
+import { readByokCredential, readByokInferenceBase } from '../model-access/byokCredentials.js';
 import { createXaiVideoProvider } from '../cindy-proxy-media/video/providers/xai.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import {
@@ -4120,6 +4123,7 @@ function getGhostImageCapabilities(
  * 后续来源(gemini / openai / xai)在各自 PR 里追加注册。
  */
 const registeredCodexImageAccounts = new Set<string>();
+const registeredByokImageAccounts = new Set<string>();
 let imageChannelRegistrySingleton: ImageChannelRegistry | null = null;
 function getImageChannelRegistry(): ImageChannelRegistry {
   if (!imageChannelRegistrySingleton) {
@@ -4260,8 +4264,10 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     });
     imageChannelRegistrySingleton = registry;
   }
-  for (const provider of getActiveCatalog().providers) {
-    if (provider.auth.native !== 'codex' || registeredCodexImageAccounts.has(provider.id)) continue;
+  const imageProviders = getActiveCatalog().providers;
+  pruneDynamicImageChannels(imageChannelRegistrySingleton, imageProviders, registeredCodexImageAccounts, registeredByokImageAccounts);
+  for (const provider of imageProviders) {
+    if (isOrganizationManagedProvider(provider) || provider.auth.native !== 'codex' || registeredCodexImageAccounts.has(provider.id)) continue;
     const providerId = provider.id;
     imageChannelRegistrySingleton.register(providerId, createCodexImageChannel({
       providerId,
@@ -4273,6 +4279,30 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     }));
     registeredCodexImageAccounts.add(providerId);
   }
+  // Organization BYOK image models get their own channel. Do not reuse xd /
+  // openai / gemini / xai: those stay personal or gateway routes. Chat-only
+  // BYOK is skipped until the catalog grows imageModels. Closures read the
+  // live member key and inference origin so rotate/logout flip ready().
+  registerByokImageChannels(
+    imageChannelRegistrySingleton,
+    imageProviders,
+    registeredByokImageAccounts,
+    (provider) => {
+      const providerId = provider.id;
+      return createByokImageChannel({
+        brandLabel: provider.name,
+        getApiKey: () => readByokCredential(providerId, 'image'),
+        getBaseUrl: () => readByokInferenceBase(providerId),
+        getSupportsEdit: () => {
+          const current = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+          return (current?.imageModels ?? []).some((model) => model.modalities?.input.includes('image') === true);
+        },
+        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+        beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, providerId),
+        logger: log,
+      });
+    },
+  );
   return imageChannelRegistrySingleton;
 }
 

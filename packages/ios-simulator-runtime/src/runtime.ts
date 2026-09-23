@@ -85,7 +85,7 @@ export function createIOSSimulatorRuntime(
           ["Select an absolute Xcode.app/Contents/Developer directory."],
         );
       }
-      const commandOptions =
+      let commandOptions =
         requestedDeveloperDir || signal
           ? {
               ...(requestedDeveloperDir
@@ -115,6 +115,13 @@ export function createIOSSimulatorRuntime(
         }
         xcodeSelectPath = selected.stdout.trim();
       }
+
+      // Pin all subsequent probes to the selection captured above. The global
+      // selection can change while these commands (or later WDA builds) run.
+      commandOptions = {
+        ...commandOptions,
+        env: { ...process.env, DEVELOPER_DIR: xcodeSelectPath },
+      };
 
       const version = await runner.run(
         XCODEBUILD,

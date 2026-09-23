@@ -4,6 +4,7 @@ import { ResidentHomeListProvider } from '@/session/ResidentHomeList';
 import { AndroidUpdateSheet } from '@/update/AndroidUpdateSheet';
 import { PeerFileTransport } from '@/device-link/peerFileTransport';
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
+import { MobileOutboxBridge } from '@/session/MobileOutboxBridge';
 import {
   DarkTheme as NavigationDarkTheme,
   DefaultTheme as NavigationLightTheme,
@@ -363,6 +364,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
       <DeviceLinkProvider>
         <PeerFileTransport />
         <PrecreatedWorktreeRecoveryBridge />
+        <MobileOutboxBridge />
         <HomeEntryProvider>
           <NavigationGate />
         </HomeEntryProvider>

@@ -102,6 +102,16 @@ export interface RoutingDecision {
    * classifications and an HTTP status after the real upstream request starts.
    */
   forwardLifecycle?: ForwardLifecycleObserver;
+  /**
+   * Optional body rewrite bound to this route, including opaque multipart requests.
+   * Runs after the JSON transform chain (even when that chain is bypassed). A rejection
+   * fails the request locally; dispatch-generation and body-size checks still apply.
+   * contentType must describe the returned bytes, including any new multipart boundary.
+   */
+  transformRequestBody?: (
+    body: Buffer,
+    ctx: RequestTransformCtx,
+  ) => { body: Buffer; contentType?: string } | Promise<{ body: Buffer; contentType?: string }>;
 }
 
 /**
@@ -217,7 +227,8 @@ export interface ProxyOptions {
   /** Host-owned, request-frozen enforcement before routing, including opaque/local-handler paths.
    * Throws fail closed. Ordinary requests return null and retain their zero-copy response path. */
   requestGuard?: (ctx: RequestTransformCtx) => {
-    transformBody: (body: Buffer) => Buffer;
+    // Egress receives the resolved route; ingress has no upstream yet.
+    transformBody: (body: Buffer, ctx?: RequestTransformCtx) => Buffer;
     response: (headers: Readonly<Record<string, number | string | string[] | undefined>>) => Transform;
   } | null;
   /** Optional message enforcement. Requires uncompressed RFC6455 negotiation. */

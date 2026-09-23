@@ -397,6 +397,16 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 
 **Desktop Permission decisions, user-approved 2026-09-11 after actual-component comparison:** Allow once remains the visual main action using `perm-allow-*`; deny and session-scoped allow remain secondary. Retain neutral operation information: Desktop has no trusted risk-level field, and `autoReviewUnavailable` is not a risk conclusion. No invented danger variant or command-based risk inference. Keep the request in the composer area with title → description → scrollable operation → right-aligned wrapping actions, at the existing density. Use Button with a narrow local-alias adaptation; apply §5's existing pill-button and keycap treatments. Keep long scoped rules bounded by the column and available in the Tip. Labels, order, shortcuts, IME/editable-focus guards, submitting and failure recovery remain owned by the existing permission flow. This decision does not cover permission mode selectors, account/plugin authorization lifecycles or Mobile layout; Mobile is deferred to its own phase.
 
+### About: harness versions
+
+Each harness occupies one compact row. Pi shows the executable's actual version and a short
+check/update status in that row. Its pill trigger opens a menu containing upstream update,
+restore Cindy release, check again, and release notes; source versions never become permanently
+expanded rows. Upstream compatibility risk appears only in the install confirmation. Installation
+progress remains inside the row. Menus use the existing container and inner-row geometry, and
+all states use semantic colors in both Light and Dark.
+
+
 ## 5. Layout Principles
 
 ### Spacing System
@@ -413,6 +423,8 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 - Reading-width content (settings forms, document previews) is centered with a comfortable max width; full-bleed content (chat stream, file tree) fills its region.
 
 ### Mobile iOS navigation chrome / iPhone Duo
+
+- Explicitly selecting Teammates in the mobile home or chat drawer opens the teammate list, even with one teammate or when Teammates is already active. The mode switch itself never enters a chat; picking a teammate opens it. Keep cold-start recovery of a verified remembered teammate separate from this explicit navigation. Teammate rows share the task list typography: 18pt semibold titles with 28pt line height, 15pt regular previews with 26pt line height, and 13pt metadata with 22pt line height.
 
 - Wide Home and task-sidebar presentations share one native list instance in `ResidentHomeListProvider`, outside route lifetimes. Route slots supply layout and callbacks; do not key the host by task/route or restore a cached offset over its live scroll position. Collapse/expand its bounds, keep native headers outside its touch area, and pause hidden row subscriptions. Narrow screens retain their route-local list.
 
