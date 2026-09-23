@@ -11133,6 +11133,30 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     ]);
   });
 
+  it.each([false, true])('Pi 候选恢复沿用 durable progress 判定，hasProgress=%s', async (hasProgress) => {
+    const h = createHarness();
+    const sid = 'bot-pi-candidate-recovery';
+    const item = makeItem('q-pi', 'original request with possible side effects');
+    const info = { ...TAKEOVER_INFO, reason: 'pi-gateway-drop', error: 'Connection error.' };
+    h.setResumableTurnErrorTakeover(info);
+    h.setHasAssistantProgressAfter(async () => hasProgress);
+    h.isResumableTurnErrorCandidate.mockImplementation((signals, input) =>
+      signals.reason === 'pi-gateway-drop' && input?.clientId === item.clientId);
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', info.error, { reason: info.reason });
+    await flush();
+    expect(h.isResumableTurnErrorCandidate).toHaveBeenCalledWith(
+      { message: info.error, reason: info.reason }, expect.objectContaining({ clientId: item.clientId }),
+    );
+    expect(latestProjection(h.projections).error).toBeNull();
+    expect(await h.coordinator.autoRetryLastError(sid, info.sessionTotal)).toBe('resumed');
+    await flush();
+    const sent = h.sendToAgent.mock.calls[1]?.[1];
+    expect(sent).toEqual({ type: 'user', content: hasProgress ? CONTINUE_AFTER_ERROR_PROMPT : item.text });
+  });
+
   it('scheduler 来源复用同一套自动续跑并保留 run origin', async () => {
     const h = createHarness();
     const sid = 'resumable-error-scheduler';

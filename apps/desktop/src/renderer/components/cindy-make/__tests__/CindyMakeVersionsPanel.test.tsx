@@ -178,4 +178,16 @@ describe('Cindy Make local versions', () => {
     const remove = await screen.findByRole('button', { name: 'cindyMake.versions.remove' });
     expect((remove as HTMLButtonElement).disabled).toBe(true);
   });
+  it('disables switching while the personal version is being built', async () => {
+    render(<CindyMakeVersionsPanel buildRunning />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'cindyMake.overview.switchVersion' }),
+    );
+    const switchButton = await screen.findByRole('button', {
+      name: 'cindyMake.versions.errors.building',
+    });
+    expect((switchButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(switchButton);
+    expect(h.act).not.toHaveBeenCalled();
+  });
 });

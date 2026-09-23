@@ -31,6 +31,9 @@ import { i18n } from '@/i18n';
 import type { InputProjection, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
 import {
   localizeAgentError,
+  requiresAgentErrorConfigurationChange,
+  localizeUnclassifiedAgentError,
+  unclassifiedAgentErrorI18nKey,
   parseMobileToolLoopErrorDetails,
   type MobileToolLoopErrorDetails,
 } from '@/session/agentErrorI18n';
@@ -39,8 +42,10 @@ export interface SessionTailErrorBanner {
   kind: 'error-tail';
   /** 错误行 clientId:忽略(dismiss)与本地隐藏态都按它归属。 */
   clientId: string;
-  /** 展示文案(agent 未鉴权与工具循环错误会本地化,其余保持原文)。 */
+  /** 本地化展示文案；未知错误的技术原文放入 rawError。 */
   text: string;
+  rawError?: string;
+  summaryKey?: string;
   /** 主按钮语义:中断标记行 →「继续任务」;普通失败行 →「重试」。 */
   continueKind: 'interrupted' | 'error';
   /**
@@ -104,9 +109,11 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
-      text: nonRetryableGuidance ?? agentErrorGuidance ?? tail.text,
+      text: nonRetryableGuidance ?? agentErrorGuidance ?? localizeUnclassifiedAgentError(tail.text),
+      rawError: tail.text,
+      ...(!nonRetryableGuidance && !agentErrorGuidance ? { summaryKey: unclassifiedAgentErrorI18nKey(tail.text) } : {}),
       continueKind: tail.reason === APP_EXIT_INTERRUPTED_REASON ? 'interrupted' : 'error',
-      retryable: nonRetryableGuidance === null,
+      retryable: nonRetryableGuidance === null && !requiresAgentErrorConfigurationChange(tail.text),
     };
   }
   // 历史中断行优先;无 error-tail 才轮到 session 双时间戳判定(对齐桌面互斥渲染)。

@@ -8,6 +8,7 @@ import { BotPortraitPicker } from './BotPortraitPicker';
 import {
   ArrowLeft,
   Bot,
+  Brain,
   Camera,
   Check,
   ChevronRight,
@@ -56,6 +57,7 @@ import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotRoutines } from './BotRoutines';
+import { BotMemorySettings } from './BotMemorySettings';
 import {
   botSettingsChanges,
   normalizeBotSettingsPayload,
@@ -132,22 +134,27 @@ export function BotSettings({
     | 'history'
     | 'advanced'
     | 'routines'
+    | 'memory'
   >('home');
   const routineLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const memoryLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const memoryBackRef = useRef<(() => Promise<boolean>) | null>(null);
   const pageTitle =
-    page === 'model'
-      ? t('bots.settingsTabs.model')
-      : page === 'routines'
-        ? t('routines.title')
-        : page === 'history'
-          ? t('bots.historySearch.title')
-          : page === 'advanced'
-            ? t('bots.homeFolder.title')
-            : page === 'capabilities'
-              ? t('bots.capabilities.title')
-              : page === 'personality'
-                ? t('bots.profile.personality')
-                : t('bots.profile.title');
+    page === 'memory'
+      ? t('bots.memory.title')
+      : page === 'model'
+        ? t('bots.settingsTabs.model')
+        : page === 'routines'
+          ? t('routines.title')
+          : page === 'history'
+            ? t('bots.historySearch.title')
+            : page === 'advanced'
+              ? t('bots.homeFolder.title')
+              : page === 'capabilities'
+                ? t('bots.capabilities.title')
+                : page === 'personality'
+                  ? t('bots.profile.personality')
+                  : t('bots.profile.title');
   const [folderError, setFolderError] = useState<string | null>(null);
   const avatarInFlight = useRef(false);
   const [avatarBusy, setAvatarBusy] = useState(false);
@@ -210,6 +217,7 @@ export function BotSettings({
     if (avatarInFlight.current) return false;
     await autosave.flush();
     if (autosave.isDirty()) return false;
+    if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
     return (await routineLeaveRef.current?.()) ?? true;
   }, [autosave.flush, autosave.isDirty]);
   useEffect(() => {
@@ -220,7 +228,7 @@ export function BotSettings({
     };
   }, [beforeCloseRef, canLeave]);
   const go = (next: typeof page) => {
-    if (!autosave.isDirty() && !routineLeaveRef.current) {
+    if (!autosave.isDirty() && !routineLeaveRef.current && !memoryLeaveRef.current) {
       setPage(next);
       return;
     }
@@ -361,6 +369,7 @@ export function BotSettings({
   const settingsRows = [
     ['profile', Info, t('bots.profile.title')],
     ['personality', UserRound, t('bots.profile.personality')],
+    ['memory', Brain, t('bots.memory.title')],
     ['model', Sparkles, t('bots.settingsTabs.model')],
     ['capabilities', Settings2, t('bots.capabilities.title')],
     ['routines', Clock3, t('routines.title')],
@@ -375,7 +384,12 @@ export function BotSettings({
             <div className="flex min-w-0 items-center gap-2">
               <button
                 type="button"
-                onClick={() => void go('home')}
+                onClick={() =>
+                  void (async () => {
+                    if (page === 'memory' && (await memoryBackRef.current?.())) return;
+                    go('home');
+                  })()
+                }
                 aria-label={t('bots.settingsBack')}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
               >
@@ -579,15 +593,9 @@ export function BotSettings({
         ) : null}
         {page === 'advanced' ? (
           <div className="mt-4 flex flex-col gap-5 px-3">
-            <div className="flex items-start gap-3">
-              <FolderOpen size={16} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />
+            <div className="flex items-center gap-3">
+              <FolderOpen size={16} className="shrink-0 text-[var(--text-tertiary)]" />
               <div className="min-w-0 flex-1">
-                <p className="text-12 leading-5 text-[var(--text-secondary)]">
-                  {t('bots.homeFolder.description')}
-                </p>
-                <p className="mt-1 break-words text-11 leading-5 text-[var(--text-tertiary)] [overflow-wrap:anywhere]">
-                  {t('bots.homeFolder.contents')}
-                </p>
                 <Button
                   variant="secondary"
                   size="lg"
@@ -602,22 +610,9 @@ export function BotSettings({
                         setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
                     });
                   }}
-                  className="mt-3"
                 >
                   {t('bots.homeFolder.open')}
                 </Button>
-                {!capabilities.memory ? (
-                  <Button
-                    variant="secondary"
-                    size="lg"
-                    compact
-                    type="button"
-                    onClick={() => updateCapability('memory', true)}
-                    className="ml-2 mt-3"
-                  >
-                    {t('bots.memoryRecovery.action')}
-                  </Button>
-                ) : null}
                 {folderError ? (
                   <p className="mt-2 text-11 text-[var(--text-danger)]" role="alert">
                     {folderError}
@@ -626,6 +621,16 @@ export function BotSettings({
               </div>
             </div>
           </div>
+        ) : null}
+        {page === 'memory' ? (
+          <BotMemorySettings
+            botId={bot.id}
+            botName={name}
+            memoryEnabled={capabilities.memory}
+            onMemoryEnabledChange={(enabled) => updateCapability('memory', enabled)}
+            backRef={memoryBackRef}
+            leaveRef={memoryLeaveRef}
+          />
         ) : null}
         {page === 'routines' ? (
           <BotRoutines embedded botId={bot.id} beforeLeaveRef={routineLeaveRef} />

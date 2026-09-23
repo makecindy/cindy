@@ -12,13 +12,18 @@ beforeEach(() => {
 });
 const state = 's'.repeat(43);
 const resources: Array<{ close(): unknown }> = [];
-afterEach(() => {
-  for (const resource of resources.splice(0)) resource.close();
-  for (const server of sockets.servers.values()) {
-    server.close();
-    server.closeAllConnections();
+afterEach(async () => {
+  try {
+    await Promise.all([...resources.splice(0), ...sockets.servers.values()].map((resource) => {
+      if (!(resource instanceof http.Server)) return resource.close();
+      return new Promise<void>((resolve) => {
+        resource.close(() => resolve());
+        resource.closeAllConnections();
+      });
+    }));
+  } finally {
+    vi.restoreAllMocks();
   }
-  vi.restoreAllMocks();
 });
 
 function offer(port: number, hostname = 'localhost'): PluginOauthOffer {
@@ -68,8 +73,9 @@ it.each(['127.0.0.1', '::1'])(
     const other = first === '::1' ? '127.0.0.1' : '::1';
     expect(await request(other, port)).toBe(409);
     expect(deliver).toHaveBeenCalledExactlyOnceWith({ state, error: 'access_denied' });
-    listener.close();
-    listener.close();
+    const closing = listener.close();
+    expect(listener.close()).toBe(closing);
+    await closing;
     // Both ports are released, including on an idempotent cancellation.
     expect([...sockets.servers.values()].every((server) => !server.listening)).toBe(true);
   },
@@ -210,3 +216,38 @@ it.each(['EAFNOSUPPORT', 'EADDRNOTAVAIL'])(
     ).rejects.toThrow('OAUTH_BRIDGE_UNAVAILABLE');
   },
 );
+
+it('waits for both server close callbacks, including repeated cancellation', async () => {
+  const port = 12345;
+  const listener = await listenForOauthCallback(offer(port), async () => {}, () => {});
+  resources.push(listener);
+  const original = http.Server.prototype.close;
+  const completions: Array<() => void> = [];
+  vi.spyOn(http.Server.prototype, 'close').mockImplementation(function (
+    this: http.Server,
+    callback?: (error?: Error) => void,
+  ) {
+    return original.call(this, (error) => {
+      completions.push(() => callback?.(error));
+    });
+  });
+  let finished = false;
+  const closing = listener.close();
+  try {
+    expect(closing).toBeInstanceOf(Promise);
+    expect(listener.close()).toBe(closing);
+    void closing.then(() => { finished = true; });
+    await vi.waitFor(() => expect(completions).toHaveLength(2));
+    expect(finished).toBe(false);
+    completions.shift()!();
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    completions.shift()!();
+    await closing;
+    expect(finished).toBe(true);
+  } finally {
+    vi.restoreAllMocks();
+    for (const complete of completions.splice(0)) complete();
+  }
+  expect([...sockets.servers.values()].every((server) => !server.listening)).toBe(true);
+});

@@ -71,6 +71,8 @@ export interface RemoteResourceDisplay {
   title: RemoteText;
   subtitle?: RemoteText;
   preview?: RemoteText;
+  /** Ephemeral public generation state. Absent when idle; never a connectivity signal. */
+  generation?: { phase: string; startedAt: number | null };
   timestamp?: number;
   /** Latest visible reply in host time; controllers keep their own read position. */
   lastReplyAt?: number;

@@ -71,6 +71,7 @@ const h = await vi.hoisted(async () => {
   closeSession: vi.fn(async () => undefined),
   getSession: vi.fn(() => null as {
     capabilities?: { manualCompact?: { supported?: boolean } };
+    isTurnRunning?: () => boolean;
     compactSession: (instructions?: string) => Promise<unknown>;
     setPermissionMode?: (mode: string) => Promise<void>;
   } | null),
@@ -2960,6 +2961,21 @@ describe('Bots list conversation projection', () => {
     expect(single.lastMessagePreview).toBe('Two checks are still red.');
   });
 
+  it('keeps public commentary out of local and remote preview reads while generating', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'user', role: 'user', content: 'Question', createdAt: 1000 });
+    for (let n = 0; n < 8; n++) insertMessage(sessionId, { id: `progress-${n}`, role: 'assistant', content: 'Tool preamble', createdAt: 2000 + n });
+    h.getSession.mockReturnValue({ isTurnRunning: () => true, compactSession: vi.fn() });
+    const single = await invoke('local-db:bots:get', 'bot-1');
+    expect(single.lastMessagePreview).toBe('Question');
+    const { getBotRemoteResourceSource } = await import('../bots');
+    expect((await getBotRemoteResourceSource('bot-1')).lastMessagePreview).toBe('Question');
+    insertMessage(sessionId, { id: 'sealed', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true }, createdAt: 3000 });
+    expect((await getBotRemoteResourceSource('bot-1')).lastMessagePreview).toBe('Final answer');
+    h.getSession.mockReturnValue(null);
+    expect((await invoke('local-db:bots:get', 'bot-1')).lastMessagePreview).toBe('Final answer');
+  });
+
   it('reports no conversation for a Bot whose canonical task is still empty', async () => {
     await canonicalFor('bot-1');
     const single = await invoke('local-db:bots:get', 'bot-1');
@@ -3782,9 +3798,6 @@ describe('Bot Session task end-to-end runtime', () => {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
     });
     const sqlite = h.sqlite!;
-    const before = sqlite.prepare("SELECT * FROM bot_profiles WHERE id = 'bot-a'").get();
-    const beforeSession = sqlite.prepare("SELECT * FROM sessions WHERE id = 'session-1'").get();
-    const beforeLink = sqlite.prepare("SELECT * FROM bot_session_links WHERE session_id = 'session-1'").get();
     let release!: () => void;
     const barrier = new Promise<void>((resolve) => { release = resolve; });
     let entered!: () => void;
@@ -3792,7 +3805,7 @@ describe('Bot Session task end-to-end runtime', () => {
     const realTx = h.tx!;
     h.tx = async (name, args) => {
       const result = await realTx(name, args);
-      if (order === 'delete-first' && name === 'bots.assertNoSharedHistory') {
+      if (order === 'delete-first' && name === 'bots.prepareProfileDeletion') {
         entered();
         await barrier;
       }
@@ -3827,15 +3840,10 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(sqlite.prepare('SELECT * FROM bot_direct_messages').all()).toEqual([]);
     } else {
       expect(firstResult).toMatchObject({ status: 'fulfilled', value: { ok: true } });
-      expect(secondResult).toMatchObject({ status: 'rejected', reason: { code: 'BOT_SHARED_HISTORY_REFERENCED' } });
-      expect(sqlite.prepare("SELECT * FROM bot_profiles WHERE id = 'bot-a'").get()).toEqual(before);
-      expect(sqlite.prepare("SELECT * FROM sessions WHERE id = 'session-1'").get()).toEqual(beforeSession);
-      expect(sqlite.prepare("SELECT * FROM bot_session_links WHERE session_id = 'session-1'").get()).toEqual(beforeLink);
-      expect(h.closeSession).not.toHaveBeenCalled();
+      expect(secondResult, secondResult.status === 'rejected' ? String(secondResult.reason) : '').toMatchObject({ status: 'fulfilled', value: { status: 'deleted' } });
+      expect(sqlite.prepare("SELECT id FROM bot_profiles WHERE id = 'bot-a'").get()).toBeUndefined();
       expect(sqlite.prepare('SELECT * FROM bot_direct_message_threads').all()).toHaveLength(1);
       expect(sqlite.prepare('SELECT * FROM bot_direct_messages').all()).toHaveLength(1);
-      await expect(lifecycle.run({ botId: 'bot-a', action: 'pause' })).resolves.toMatchObject({ status: 'paused' });
-      await expect(lifecycle.run({ botId: 'bot-a', action: 'resume' })).resolves.toMatchObject({ status: 'active' });
     }
   });
 

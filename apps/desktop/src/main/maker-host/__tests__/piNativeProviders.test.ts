@@ -44,6 +44,7 @@ import {
   resolvePiBundledModelById,
   resolvePiCindyGatewayModelApi,
   resolvePiCindyGatewayModelSpec,
+  pruneAnthropicCompatForLink,
   type PiBundledModelInfo,
 } from '../pi-host.js';
 import { getActiveCatalog, setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels, setXaiDiscoveredModels, setLocalCatalogOverrides } from '../active-catalog.js';
@@ -927,10 +928,13 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       { id: 'google/gemini-3.7-flash', agents: ['pi'] },
     ]);
 
-    expect(resolvePiCindyGatewayModelSpec('xd', 'claude-opus-5')).toMatchObject({
+    const gatewayClaude = resolvePiCindyGatewayModelSpec('xd', 'claude-opus-5');
+    expect(gatewayClaude).toMatchObject({
       api: 'anthropic-messages',
-      compat: { forceAdaptiveThinking: true, supportsStrictTools: true },
+      compat: { forceAdaptiveThinking: true },
     });
+    // #4982: xd 网关的 Anthropic-Messages schema 不认 tools[].strict / tool_removal,按链路裁掉。
+    expect(gatewayClaude?.compat).not.toHaveProperty('supportsStrictTools');
     expect(resolvePiCindyGatewayModelSpec('xd', 'gpt-5.6-sol')).toMatchObject({
       api: 'openai-responses',
       compat: {
@@ -2746,4 +2750,71 @@ it('launches a new Azure deployment with the bound connection API and configured
   const result = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined,
     { ...BUNDLED_CATALOG, providers: [provider] });
   expect(result.providers[0]?.models[0]).toMatchObject({ id: 'deployment-new', api: 'azure-openai-responses', contextWindow: 64000 });
+});
+
+it('serializes mixed-protocol enterprise models with their own gateway base URLs', async () => {
+  const { buildByokProvider, byokNativeConfigs } = await import('../../model-access/byokProvider.js');
+  const protocols = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const;
+  const provider = buildByokProvider({ provider: {
+    id: 'byok-mixed', name: 'Enterprise', connectionRevision: 1,
+    models: protocols.map((protocol) => ({ id: `byok-mixed/${protocol}`, name: protocol, agents: ['pi'], currency: 'CNY', contextWindow: 128000,
+      perAgent: { pi: { wireProtocol: protocol } } })),
+  }, credential: { providerId: 'byok-mixed', connectionRevision: 1, status: 'ready', endpoint: 'https://gateway.example/gateway/v1/', apiKey: 'test-only' } });
+  const result = buildPiNativeProvidersFromConfigs(byokNativeConfigs([provider]), () => 'test-only');
+  expect(result.providers).toHaveLength(1);
+  for (const [index, api] of protocols.entries()) {
+    const model = result.providers[0]!.models![index]!;
+    expect(model.api).toBe(api);
+    expect(model.baseUrl ?? result.providers[0]!.baseUrl).toBe(
+      api === 'anthropic-messages' ? 'https://gateway.example/gateway' : 'https://gateway.example/gateway/v1',
+    );
+  }
+});
+
+describe('Anthropic compat per-link pruning (#4982 / #4983)', () => {
+  const probedClaude = (id: string): PiBundledModelInfo => ({
+    ...piBundledModel(id, 'anthropic-messages'),
+    compat: {
+      forceAdaptiveThinking: true,
+      supportsStrictTools: true,
+      supportsMidConvoToolChanges: true,
+      supportsMidConvoEffort: true,
+      supportsMidConvoSystemMessages: true,
+    },
+  });
+
+  it('subscription direct link drops the MidConvo flags but keeps strict and mid-conv system messages', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const bundled = probedClaude('claude-opus-5');
+    const { providers } = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map([['anthropic', new Map([['claude-opus-5', bundled]])]]),
+    );
+    const anthropic = providers.find((provider) => provider.id === 'anthropic');
+    const model = anthropic?.models.find((candidate) => candidate.wireId === 'claude-opus-5');
+    expect(model?.compat).toEqual({
+      forceAdaptiveThinking: true,
+      supportsStrictTools: true,
+      supportsMidConvoSystemMessages: true,
+    });
+    // The probe catalog shared with other links must not be mutated.
+    expect(bundled.compat).toMatchObject({ supportsMidConvoToolChanges: true, supportsMidConvoEffort: true });
+  });
+
+  it('gateway link additionally drops strict tools and never touches non-Anthropic APIs', () => {
+    expect(pruneAnthropicCompatForLink({
+      forceAdaptiveThinking: true,
+      supportsStrictTools: true,
+      supportsMidConvoToolChanges: true,
+      supportsMidConvoEffort: true,
+      supportsMidConvoSystemMessages: true,
+    }, 'gateway')).toEqual({ forceAdaptiveThinking: true, supportsMidConvoSystemMessages: true });
+    // Nothing to prune → same reference (no needless clone) and undefined passthrough.
+    const plain = { forceAdaptiveThinking: true };
+    expect(pruneAnthropicCompatForLink(plain, 'gateway')).toBe(plain);
+    expect(pruneAnthropicCompatForLink(undefined, 'subscription')).toBeUndefined();
+    setXdGatewayModels([{ id: 'moonshot/kimi-k3', agents: ['pi'] }]);
+    expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3')?.compat).toMatchObject({ thinkingFormat: 'openai' });
+  });
 });

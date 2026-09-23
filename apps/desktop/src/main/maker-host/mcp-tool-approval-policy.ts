@@ -223,8 +223,8 @@ export function getDesktopMcpToolApprovalPolicy(
   context: McpToolApprovalContext,
 ): McpToolApprovalPolicy {
   const { serverName, toolName, toolParams } = context;
-  // Codex 的 elicitation 不总是带 toolName（0.142.5 / 0.144.1 会省略），拿不到工具名
-  // 时这条精确规则自然不命中，回落到下面的 server 级判定，与改动前行为一致。
+  // Codex 的 elicitation 不总是带 toolName（0.142.5 / 0.144.1 会省略）。
+  // 精确只读规则此时不命中；helper 等敏感 server 在下方按 payload 单独判定。
   if (toolName && READ_ONLY_MCP_TOOLS.has(`${serverName}::${toolName}`)) {
     return 'auto-approve';
   }
@@ -241,14 +241,24 @@ export function getDesktopMcpToolApprovalPolicy(
   // uploads local files under the signed-in account. Review each action instead
   // of reusing the trusted helper server shortcut/grant. Session modes still apply.
   if (serverName === 'cindy_helper') {
-    if (toolName === 'move_session' || toolName === 'publish_skill') return 'prompt-each-time';
-    if (!toolName || toolName === 'call_tool') {
-      const params = readJsonObject(toolParams);
-      const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
-      if (!innerName || innerName === 'move_session' || innerName === 'publish_skill') {
-        return 'prompt-each-time';
-      }
+    const params = readJsonObject(toolParams);
+    const progressive = toolName === 'call_tool' || !toolName;
+    const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
+    const args = progressive ? readJsonObject(params?.args) : params;
+    // Codex can omit tool_name when same-server calls overlap. A direct tool's
+    // input may also have a `name` field (routine_save does), so only treat an
+    // exact name/args envelope as a progressive call without the outer name.
+    if (!toolName && (!params || !innerName || !args ||
+      Object.keys(params).some((key) => key !== 'name' && key !== 'args'))) {
+      return 'prompt-each-time';
     }
+    const action = progressive ? innerName : toolName;
+    if (toolName === 'call_tool' && (!innerName || !args)) return 'prompt-each-time';
+    // Installing or saving a host command uses the session's existing approval flow.
+    if (action === 'schedule_set_pre_run_hook' || (action === 'routine_save' && args?.preRunHook != null)) {
+      return 'prompt-each-time';
+    }
+    if (action === 'move_session' || action === 'publish_skill') return 'prompt-each-time';
   }
   // Choosing a new Worker root delegates filesystem access. Do not let the
   // trusted-server shortcut or a cached server grant authorize another root.

@@ -182,6 +182,7 @@ const receipt: MakeFeatureReceipt = {
   taskTree: 'e'.repeat(40),
 };
 beforeEach(() => {
+  cindyMakeManager.setVersionSwitchingProbe(() => false);
   vi.clearAllMocks();
   store.readBuild.mockReset();
   store.saveBuild.mockReset();
@@ -508,6 +509,12 @@ describe('history Main admission and owner boundary', () => {
       activeWork: false,
       canBuild: false,
     });
+  });
+  it('does not offer or start a personal build during a version handoff', async () => {
+    cindyMakeManager.setVersionSwitchingProbe(() => true);
+    expect(await getCindyMakeHistory('aaaa')).toMatchObject({ busy: true, canBuild: false });
+    await expect(generateHistoryPersonalVersion()).rejects.toThrow('busy');
+    expect(h.build).not.toHaveBeenCalled();
   });
   it('keeps builds and integrations blocked until cancellation finishes even if its directory is gone', async () => {
     h.state.upstreamMerge = {

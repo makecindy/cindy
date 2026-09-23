@@ -1,4 +1,5 @@
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
+import { companionConversationItems } from '@/session/companionConversationPresentation';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
 import { RecentMessageHistories, MessageHistoryOverlay } from '@/session/RecentMessageHistories';
@@ -3548,7 +3549,7 @@ export default function SessionScreen() {
         commitRead('active', fetchActiveSessionSnapshot, (activeSessionSnapshot) => {
           remoteSessionStore.setActiveSessionSnapshots(
             deviceId,
-            Array.isArray(activeSessionSnapshot.activeSessions) ? activeSessionSnapshot.activeSessions : [],
+            activeSessionSnapshot.activeSessions,
             activeSessionSnapshot.activityEpochAtFetchStart,
           );
         }),
@@ -5594,8 +5595,8 @@ export default function SessionScreen() {
     ],
   );
   const messageListItems = useMemo(
-    () => mergePendingSendItems(renderWindow.items, pendingSendItems, optimisticClientIds),
-    [pendingSendItems, renderWindow.items, optimisticClientIds],
+    () => mergePendingSendItems(companionChat ? companionConversationItems(renderWindow.items) : renderWindow.items, pendingSendItems, optimisticClientIds),
+    [companionChat, pendingSendItems, renderWindow.items, optimisticClientIds],
   );
   const companionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionResource?.ref.id ?? '',
     active: companionChat && showComposerActivity, messages, reconnectAttempt: remoteSessionRunStatus.reconnectAttempt });
@@ -5606,10 +5607,11 @@ export default function SessionScreen() {
       : activePendingKind === 'ask_user_question' ? 'answer'
       : activePendingKind === 'plan_review' ? 'planReview' : 'attention'}`)
     : companionWorkingLabel;
-  const hasLiveWorkGroup = messageListItems.some(item => item.type === 'work_group' && item.isStreaming);
+  // Hiding progress can change visible rows without changing the underlying stream structure.
+  const companionItemsStructureKey = companionChat ? messageListItems.map(item => item.key).join('\u0000') : null;
   const messageListStructureKey = useMemo(
     () => ({}),
-    [pendingSendItems, renderItemsStructureKey, optimisticClientIds],
+    [pendingSendItems, renderItemsStructureKey, optimisticClientIds, companionItemsStructureKey],
   );
   const shareExpandableBlockIds = useMemo(
     () => (shareSelectionActive ? collectConversationShareBlockIds(messageListItems) : []),
@@ -9212,7 +9214,7 @@ export default function SessionScreen() {
                     imageAnnotation={collaborationReadOnlyReason ? undefined : composerAnnotations.chatAnnotation}
                     queueFooter={(
                       <>
-                        {companionChat && !hasLiveWorkGroup && !companionInlineInteraction ? <CompanionWorkingStatus label={companionWorkingLabel} /> : null}
+                        {companionChat && !companionInlineInteraction ? <CompanionWorkingStatus label={companionWorkingLabel} /> : null}
                         {companionInlineInteraction && !shareSelectionActive ? <InteractionPanel
                           embedded
                           companion={companionChat}
@@ -9284,23 +9286,41 @@ export default function SessionScreen() {
           />
         ) : null}
         {!isSharedTaskAccessRevoked && <View
+          pointerEvents="box-none"
+          testID="session.bottomViewport"
+          style={[
+            StyleSheet.absoluteFill,
+            { zIndex: 10 },
+            // Clip the complete touch tree at the usable region, not at the
+            // measured composer height. Held cards can extend above the input
+            // while neither cards nor oversized inputs can cross a reservation.
+            adaptiveWindow.regions.length > 0 && {
+              left: Math.max(0, composerRegion.x - paneLayout.detail.x),
+              right: Math.max(0, paneLayout.detail.x + paneLayout.detail.width - composerRegion.x - composerRegion.width),
+              top: composerRegion.y,
+              bottom: windowDimensions.height - composerRegion.y - composerRegion.height,
+              overflow: 'hidden',
+            },
+          ]}
+        ><View
           ref={bottomOverlayRef}
           onLayout={handleBottomOverlayLayout}
           pointerEvents="box-none"
           style={[
             styles.sessionBottomLayer,
-            // Keep held rate cards in the original touch tree without clipping them.
+            // The outer viewport owns reservation clipping; keep the held card
+            // attached to its original responder for release/cancel delivery.
             sessionOperationLayout.composerSlot === 'editable' && { overflow: 'visible' },
             adaptiveWindow.regions.length > 0 && {
-              left: Math.max(0, composerRegion.x - paneLayout.detail.x),
-              right: Math.max(0, paneLayout.detail.x + paneLayout.detail.width - composerRegion.x - composerRegion.width),
               maxHeight: composerRegion.height,
             },
             nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
               && styles.sessionBottomFloating,
             shareSelectionActive && { overflow: 'visible' },
-            { bottom: Math.max(nativeShellLayout.keyboardBottomInset, adaptiveWindow.regions.length > 0
-              ? windowDimensions.height - composerRegion.y - composerRegion.height - insets.bottom : 0) },
+            // Region already excludes the keyboard. Its boundary clips only
+            // the existing safe-area padding, without lifting the input twice.
+            { bottom: adaptiveWindow.regions.length > 0
+              ? -insets.bottom : nativeShellLayout.keyboardBottomInset },
           ]}
           testID="session.bottomLayer"
         >
@@ -9563,7 +9583,7 @@ export default function SessionScreen() {
           ) : null}
           </View>
         </View>
-        }
+        </View>}
       </ComposerKeyboardAvoidingView>
       </PaneViewportProvider>
 

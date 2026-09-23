@@ -37,6 +37,8 @@ const {
     customConnected: true,
     mediaReady: false,
     customOverride: null as ProviderView | null,
+    loading: false,
+    error: null as { reason: 'storage-quota' } | null,
   },
   wizardSpy: vi.fn(),
 }));
@@ -112,7 +114,7 @@ vi.mock('@/hooks/useProviders', () => ({
     }
     return {
       providers:
-        providerSnapshotState.dataOwnerId === authState.dataOwnerId ? [...byId.values()] : [],
+        providerSnapshotState.dataOwnerId === authState.dataOwnerId && !providerSnapshotState.loading ? [...byId.values()] : [],
       providerOrder:
         providerSnapshotState.dataOwnerId === authState.dataOwnerId
           ? providerSnapshotState.order
@@ -121,7 +123,8 @@ vi.mock('@/hooks/useProviders', () => ({
         providerSnapshotState.dataOwnerId === authState.dataOwnerId
           ? providerSnapshotState.ownerGeneration
           : null,
-      loading: providerSnapshotState.dataOwnerId !== authState.dataOwnerId,
+      loading: providerSnapshotState.dataOwnerId !== authState.dataOwnerId || providerSnapshotState.loading,
+      error: providerSnapshotState.error,
       refetch: refetchProvidersSpy,
     };
   },
@@ -211,6 +214,8 @@ beforeEach(() => {
   providerSnapshotState.customConnected = true;
   providerSnapshotState.mediaReady = false;
   providerSnapshotState.customOverride = null;
+  providerSnapshotState.loading = false;
+  providerSnapshotState.error = null;
   providerSnapshotState.order = ['anthropic', 'xd', 'custom'];
   scanResult = { detections: [] };
   (window as unknown as { electronAPI: unknown }).electronAPI = {
@@ -230,6 +235,19 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  it('keeps a recovery action accessible when the first complete catalog could not be published', async () => {
+    providerSnapshotState.loading = true;
+    providerSnapshotState.error = { reason: 'storage-quota' };
+    refetchProvidersSpy.mockResolvedValue(true);
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    expect(screen.getByRole('status').textContent).toContain('catalogRecovery.quota');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' }));
+    });
+    expect(refetchProvidersSpy).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('switch', { name: 'Custom model' })).toBeNull();
+  });
+
   it.each([
     ['openrouter-existing', 'oauth', true],
     ['openrouter-new', 'oauth', false],

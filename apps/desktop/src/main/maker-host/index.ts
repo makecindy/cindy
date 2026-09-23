@@ -17,6 +17,8 @@ import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval
 import { isCodexAccountProvider, codexAccountHome, setCodexAccountRetirement } from './codex-account-auth.js';
 import { CodexThreadLocations } from './codex-thread-locations.js';
 import { getActiveAppSession } from '../appSessionState.js';
+import { remoteCodexProvider } from './ssh-codex-models.js';
+import { getActiveAuthRealm } from '../authManager.js';
 import { getCustomProvider, updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderService.js';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease, type WorktreeRuntimeLease } from '../worktree/runtimeLeases';
@@ -139,7 +141,7 @@ import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-re
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
 import { getSessionFastMode } from './session-effort-store.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
-import { getRemoteSshPool, broadcastSilentInstallStatus } from '../remote-ssh/index.js';
+import { getRemoteSshPool, broadcastSilentInstallStatus, ensureRemoteAgentInstalledOrInstall } from '../remote-ssh/index.js';
 import {
   getRemoteAgentProxyEnv,
   reconcileCodexAgentProxyEnv,
@@ -949,6 +951,11 @@ export function getMaker(): Maker {
           && session.instanceId === sessionInstanceId
           && session.getStatus() === 'active'
           && !session.remoteHostId);
+      },
+      isCurrentGrokLoginCaller: (sessionId: string, sessionInstanceId: string) => {
+        const session = _maker?.getSession(sessionId);
+        return Boolean(session && session.instanceId === sessionInstanceId
+          && session.getStatus() === 'active' && !isAppSessionBoundaryPending());
       },
       // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
       // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
@@ -1949,11 +1956,25 @@ export function getMaker(): Maker {
         return storage;
       },
       createCodexAuthTokenReader: (providerId) => {
-        const ownerScope = activeOwnerScopeKey();
+        const owner = getActiveAppSession();
+        const authRealm = getActiveAuthRealm();
+        const assertOwner = () => {
+          const current = getActiveAppSession();
+          if (isAppSessionBoundaryPending() || _codexAgent !== codexAgent ||
+              getActiveAuthRealm() !== authRealm ||
+              current.mode !== owner.mode || current.dataOwnerId !== owner.dataOwnerId) {
+            throw new Error('Codex authentication owner changed');
+          }
+        };
         return async () => {
-          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
+          // Same-owner Ghost repair advances the scope generation while retaining
+          // this Maker and its live tasks. Fence each read, not the reader's lifetime.
+          // The agent identity also rejects old readers after logout/login to the same owner.
+          assertOwner();
+          const ownerScope = activeOwnerScopeKey();
           const state = await desktopCodexAuthAdapter.getState({ credentialMode: 'oauth-bearer', providerId });
-          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
+          assertOwner();
+          if (activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
           const credentials = state.authenticated ? desktopCodexAuthAdapter.readOneShotCreds(providerId) : null;
           if (!credentials) throw new Error('Codex account credentials are unavailable');
           return { accessToken: credentials.accessToken, chatgptAccountId: credentials.accountId };
@@ -2843,6 +2864,40 @@ export function resetCodexModelBackfillState(): void {
  */
 export function getMakerIfReady(): Maker | null {
   return _maker;
+}
+
+export async function listSshCodexProviders(hostId: string) {
+  const owner = getActiveAppSession().generation;
+  const remote = getRemoteSshPool().get(hostId);
+  if (!remote || remote.getStatus() !== 'ready') throw new Error('SSH host is not connected');
+  let changed = false;
+  const stop = remote.onStatus((snapshot) => {
+    if (snapshot.status !== 'ready') changed = true;
+  });
+  const assertCurrent = () => {
+    if (changed || getActiveAppSession().generation !== owner ||
+        getRemoteSshPool().get(hostId) !== remote || remote.getStatus() !== 'ready') {
+      throw new Error('SSH model request is stale');
+    }
+  };
+  try {
+    await ensureRemoteAgentInstalledOrInstall(hostId, 'codex');
+    assertCurrent();
+    getMaker();
+    const agent = _codexAgent;
+    if (!agent) throw new Error('Codex is not ready');
+    const models = await agent.listRemoteModels(hostId);
+    assertCurrent();
+    if (_codexAgent !== agent) throw new Error('Codex runtime changed');
+    return [remoteCodexProvider(models)];
+  } finally {
+    stop();
+  }
+}
+
+export async function disposeRemoteCodexHostAfterRestart(hostId: string, ownerGeneration: number): Promise<void> {
+  if (getActiveAppSession().generation !== ownerGeneration) return;
+  await _codexAgent?.disposeRemoteHostAfterRestart(hostId);
 }
 
 /** Register Pi after a managed runtime retry and notify local renderers. */

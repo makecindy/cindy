@@ -148,6 +148,10 @@ export function resetSubscriptionAccountCaches(): void {
 export async function loginSubscriptionAccount(
   providerId: string,
   isCurrent: () => boolean,
+  options?: {
+    method?: 'browser' | 'device';
+    onDeviceCode?: (code: { userCode: string; verificationUrl: string; expiresAt: number }) => void;
+  },
 ): Promise<{
   ok: boolean;
   reason?: string;
@@ -156,6 +160,7 @@ export async function loginSubscriptionAccount(
 }> {
   const kind = subscriptionAccountKind(providerId);
   if (!kind) throw new Error('Unknown subscription account');
+  if (kind !== 'xai' && options?.method === 'device') throw new Error('Device login is only available for Grok');
   const scope = activeOwnerScopeKey();
   const key = `${scope}:${providerId}`;
   if (logins.has(key)) return { ok: false, reason: 'login_in_progress' };
@@ -210,7 +215,12 @@ export async function loginSubscriptionAccount(
             persist,
             backfill: async () => {},
           })
-        : await runGrokOAuthLogin({ isCurrent: current, persist }, providerId);
+        : await runGrokOAuthLogin({
+            isCurrent: current,
+            persist,
+            method: options?.method,
+            onDeviceCode: options?.onDeviceCode,
+          }, providerId);
     if (!current()) {
       restoreWrittenCredentials();
       return { ok: false, reason: 'login_cancelled' };

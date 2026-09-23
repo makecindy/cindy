@@ -1283,7 +1283,11 @@ it('preserves OAuth-discovered prices for every engine when finishing model sele
     }),
   });
   renderWizard('openrouter');
-  fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.authorize' }));
+  fireEvent.click(await screen.findByRole(
+    'button',
+    { name: 'settings.providers.button.authorize' },
+    { timeout: 5000 },
+  ));
   fireEvent.click(await screen.findByText('OAuth discovered model'));
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
   await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());

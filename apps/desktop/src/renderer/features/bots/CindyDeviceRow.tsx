@@ -25,7 +25,7 @@ export function CindyDeviceRow({
   current: CindyDeviceOption;
   options: readonly CindyDeviceOption[];
   selected: boolean;
-  subtitle: string;
+  subtitle: ReactNode;
   timestamp: string;
   typing?: boolean;
   onOpen: () => void;
@@ -59,8 +59,7 @@ export function CindyDeviceRow({
       <span className="pointer-events-none relative shrink-0">
         <BotAvatar bot={bot} size="md" />
         <BotConnectionStatus
-          online={current.online}
-          activityLabel={typing ? subtitle : undefined}
+          online={'deviceId' in bot && bot.connectionKnown === false ? null : current.online}
           deviceName={current.label}
         />
       </span>
@@ -99,7 +98,7 @@ export function CindyDeviceRow({
         />
         <span
           className={cn('truncate text-12 leading-4', mutedClass, typing && 'italic')}
-          title={subtitle}
+          title={typeof subtitle === 'string' ? subtitle : undefined}
         >
           {subtitle}
         </span>

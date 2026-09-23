@@ -1026,7 +1026,9 @@ describe('maker:event hot path ordering', () => {
     expect(claudeCostFallback).toMatch(
       /buildClaudeTurnUsageDetails\(\s*undefined,\s*undefined,\s*resolvedModel,/,
     );
-    expect(claudeCostFallback).toContain("if (route !== 'provider-api')");
+    expect(claudeCostFallback).toContain(
+      "if (route !== 'provider-api' || turnContext.accessKind === 'managed')",
+    );
   });
 
   it('pi subscription turns estimate value from the shared reference-price helper', () => {

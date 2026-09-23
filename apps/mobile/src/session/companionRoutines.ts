@@ -10,9 +10,10 @@ export type RoutineTrigger =
   | { id: string; kind: 'cron'; expression: string; timezone: string }
   | { id: string; kind: 'interval'; intervalMs: number }
   | { id: string; kind: 'event'; sourceId: string; eventType: string; filters: { field: string; operator: 'equals' | 'contains' | 'not-equals'; value: string }[] };
-export interface RoutineDefinition { name: string; prompt: string; enabled: boolean; triggers: RoutineTrigger[] }
+export interface RoutineDefinition { name: string; prompt: string; enabled: boolean; triggers: RoutineTrigger[]; silentWhenIdle?: boolean; preRunHook?: { command: string; timeoutMs?: number } | null }
 export interface RoutineSummary { id: string; name: string; enabled: boolean; revision: number; activity?: 'queued' | 'running'; triggers: Array<Record<string, unknown>> }
 export interface RoutineDetail {
+  supportsPreRunCheck?: boolean;
   id: string | null; revision: number; editable: boolean; input: RoutineDefinition | null;
   sources: { id: string; name: string; status: string; events: { type: string; name: string; fields: string[] }[] }[];
   history: { id: string; status: string; createdAt: number; finishedAt?: number; resultText?: string; error?: string }[];
@@ -38,7 +39,18 @@ export function parseRoutineDefinition(raw: unknown): RoutineDefinition | null {
       triggers.push({ id: r.id, kind: 'event', sourceId: r.sourceId, eventType: r.eventType, filters });
     } else return null;
   }
-  return { name: v.name, prompt: v.prompt, enabled: v.enabled, triggers };
+  if (v.silentWhenIdle !== undefined && typeof v.silentWhenIdle !== 'boolean') return null;
+  let preRunHook: RoutineDefinition['preRunHook'];
+  if (v.preRunHook === null) preRunHook = null;
+  else if (v.preRunHook !== undefined) {
+    const hook = record(v.preRunHook);
+    if (!hook || !bounded(hook.command, 32000) || !hook.command.trim()
+      || (hook.timeoutMs !== undefined && (!Number.isSafeInteger(hook.timeoutMs) || Number(hook.timeoutMs) <= 0))) return null;
+    preRunHook = { command: hook.command, ...(hook.timeoutMs === undefined ? {} : { timeoutMs: Number(hook.timeoutMs) }) };
+  }
+  return { name: v.name, prompt: v.prompt, enabled: v.enabled, triggers,
+    ...(v.silentWhenIdle === undefined ? {} : { silentWhenIdle: v.silentWhenIdle as boolean }),
+    ...(preRunHook === undefined ? {} : { preRunHook }) };
 }
 export function parseRoutineSummaries(raw: unknown): RoutineSummary[] {
   const items = record(raw)?.items;
@@ -56,7 +68,11 @@ export function parseRoutineDetail(raw: unknown): RoutineDetail {
   if (!r || (r.id !== null && !bounded(r.id, 128)) || !Number.isSafeInteger(r.revision) || typeof r.editable !== 'boolean' || !Array.isArray(r.sources) || !Array.isArray(r.history)) throw new Error('Invalid automation detail');
   const input = r.input === null ? null : parseRoutineDefinition(r.input);
   if (r.input !== null && input === null) throw new Error('Unsupported automation definition');
-  return { id: r.id as string | null, revision: Number(r.revision), editable: r.editable, input,
+  return { supportsPreRunCheck: r.supportsPreRunCheck === true, id: r.id as string | null, revision: Number(r.revision), editable: r.editable,
+    // Older saved routines were quiet when this field was absent. Keep their
+    // visible choice while blank new forms continue to start with false.
+    input: input && r.id !== null && r.supportsPreRunCheck === true
+      ? { ...input, silentWhenIdle: input.silentWhenIdle ?? true } : input,
     sources: r.sources.slice(0, 64).flatMap((raw) => {
       const s = record(raw);
       if (!s || !bounded(s.id) || !bounded(s.name) || !bounded(s.status) || !Array.isArray(s.events)) return [];
@@ -68,14 +84,14 @@ export function parseRoutineDetail(raw: unknown): RoutineDetail {
     history: r.history.slice(0, 20).flatMap((raw) => {
       const h = record(raw);
       if (!h || !bounded(h.id, 128) || !bounded(h.status) || typeof h.createdAt !== 'number' || !Number.isFinite(h.createdAt)) return [];
-      return [{ id: h.id, status: ['queued', 'running', 'success', 'failed', 'interrupted', 'cancelled'].includes(h.status) ? h.status : 'unknown', createdAt: h.createdAt,
+      return [{ id: h.id, status: ['queued', 'running', 'success', 'failed', 'interrupted', 'cancelled', 'skipped'].includes(h.status) ? h.status : 'unknown', createdAt: h.createdAt,
         ...(typeof h.finishedAt === 'number' ? { finishedAt: h.finishedAt } : {}),
         ...(bounded(h.resultText, 2000) ? { resultText: h.resultText } : {}),
         ...(bounded(h.error, 1000) ? { error: h.error } : {}) }];
     }) };
 }
 export function emptyRoutineDefinition(): RoutineDefinition {
-  return { name: '', prompt: '', enabled: true, triggers: [{ id: 'daily', kind: 'cron', expression: '0 9 * * *', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }] };
+  return { name: '', prompt: '', enabled: true, silentWhenIdle: false, triggers: [{ id: 'daily', kind: 'cron', expression: '0 9 * * *', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }] };
 }
 export function routineDraftValid(draft: RoutineDefinition): boolean {
   return Boolean(draft.name.trim() && draft.prompt.trim() && draft.triggers.length && parseRoutineDefinition(draft)

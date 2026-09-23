@@ -35,6 +35,7 @@
     "create": "New"
   },
   "resources": {
+    "connectionUnknown": "Connection unknown",
     "hostOffline": "Offline",
     "titleFallback": "Resources",
     "loading": "Loading…",
@@ -296,6 +297,8 @@
       "noDevice": "No device available. Turn on remote control on the desktop, then sync again."
     },
     "alert": {
+      "cacheSaveFailed": "Could not save offline cache",
+      "cacheSaveFailedDetail": "Check the available storage on your phone. You can continue online, but some content may be unavailable offline.",
       "actionFailed": "Action failed",
       "renameFailed": "Rename failed",
       "deleteTitle": "Delete session?",
@@ -594,6 +597,8 @@
       },
       "boundSessionA11y": "Bind session {{name}}",
       "intervalPlaceholder": "Leave empty to use cron",
+      "intervalHint": "For minute intervals, use 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, or 30 minutes. For whole-hour intervals, enter a multiple of 60 from 60 to 1380 minutes (1–23 hours).",
+      "intervalPreservedHint": "This task's exact interval is {{duration}} and will be preserved until you edit or clear it.",
       "workspace": {
         "project": "Project",
         "dialogue": "Chat"
@@ -731,7 +736,8 @@
         "workingDir": "Enter a project directory",
         "effort": "Reasoning effort must be one of: {{values}}",
         "intervalPositiveInteger": "The interval in minutes must be a positive integer",
-        "intervalUnsupported": "Minute intervals support 1–59 minutes, or whole-hour intervals from 1–23 hours"
+        "preRunHookTimeout": "Check timeout must be a positive whole number of milliseconds",
+        "intervalUnsupported": "Minute intervals must divide an hour: use 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, or 30 minutes, or whole-hour intervals from 1–23 hours"
       },
       "schedule": {
         "paused": "Paused",
@@ -855,6 +861,7 @@
       "continueEditing": "Continue Editing",
       "discard": "Discard Changes",
       "invalid": "Check the name, instructions, and trigger settings, then save again.",
+      "failed": "The automation change did not finish.",
       "everyMinutes": "Every {{count}} minutes",
       "everyMinutes_one": "Every {{count}} minute",
       "everyMinutes_other": "Every {{count}} minutes",
@@ -922,7 +929,14 @@
       "timezone": "Time Zone",
       "monthly": "Monthly",
       "monthDay": "Day of month",
-      "saveAndRun": "Save and run"
+      "saveAndRun": "Save and run",
+      "advanced": "Advanced settings",
+      "quiet": "Stay quiet when checks find nothing",
+      "quietHint": "Report changes or problems only. Turn off for reminders and scheduled messages.",
+      "checkCommand": "Pre-run check command",
+      "checkHint": "Optional. Checks on the computer before each run: exit 2 skips the run, exit 0 continues, errors stay visible. Clear to remove.",
+      "timeoutMs": "Check timeout (ms, blank for no limit)",
+      "skipped": "Checked · model skipped"
     },
     "openNavigation": "Open navigation",
     "openProfile": "View {{name}}'s profile",
@@ -936,6 +950,7 @@
       "thinking": "Thinking…",
       "replying": "Replying…",
       "processing": "Working…",
+      "compacting": "Organizing the conversation…",
       "reading-memory": "Reading memory…",
       "saving-memory": "Saving memory…",
       "deleting-memory": "Deleting memory…",
@@ -992,6 +1007,7 @@
     "offline": "Reconnect to {{deviceName}} to continue. Your edits are retained.",
     "hostUpgrade": "Update Cindy on {{deviceName}} and retry, or edit this teammate’s settings there.",
     "readFailed": "Couldn’t confirm the latest state. Refresh before retrying; the action may already have completed. Your edits are retained.",
+    "deleteFailed": "The teammate was not deleted.",
     "artifactsEmpty": "No artifacts yet. Ask your teammate to create something.",
     "openSourceTask": "Open Source Session",
     "modelFollowsDefault": "Follow the default model chain",

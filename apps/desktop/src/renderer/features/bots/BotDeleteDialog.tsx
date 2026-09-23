@@ -75,7 +75,7 @@ export function BotDeleteDialog({
           </div>
           {failed ? (
             <p className="mt-3 text-11 text-[var(--text-danger)]" role="alert">
-              {t('bots.lifecycle.actionFailed')}
+              {t('bots.lifecycle.deleteFailed')}
             </p>
           ) : null}
           <div className="mt-5 flex justify-end gap-2">

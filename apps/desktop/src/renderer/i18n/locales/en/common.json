@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "Settings",
+    "search": {
+      "ariaLabel": "Search settings",
+      "placeholder": "Search settings",
+      "resultsLabel": "Settings search results",
+      "noResults": "No matching settings",
+      "clear": "Clear search"
+    },
     "back": "Back",
     "defaults": {
       "customizedBadge": "Custom",
@@ -1082,11 +1089,18 @@
     },
     "about": {
       "title": "About",
-      "description": "Runtime versions of the app and integrated agents. All version numbers are detected by the main process at startup.",
+      "description": "Runtime versions of the app and integrated Agents.",
       "appVersionLabel": "App version",
       "claudeCodeVersionLabel": "Claude Code version",
       "codexVersionLabel": "Codex version",
       "piVersionLabel": "Pi version",
+      "harnessUpdateButton": "Update {{name}}",
+      "harnessUpdateTitle": "Update {{name}}",
+      "harnessUpdateDescription": "Cindy will restart and update {{name}} when it starts. Current version: {{currentVersion}}. Online version: {{latestVersion}}.",
+      "harnessUpdateConfirm": "Restart and Update {{name}}",
+      "harnessUpdateCancel": "Cancel",
+      "harnessUpdateBusyDescription": "Tasks are currently in progress and restarting will interrupt them. Restart and update anyway?",
+      "harnessUpdateFailed": "Could not schedule the Agent update. Please try again later.",
       "logsDirLabel": "Logs directory",
       "openLogsDir": "Open",
       "openLogsDirTooltip": "Open the logs directory in the system file manager",
@@ -1275,6 +1289,33 @@
         "reconcileFailed": "Check failed",
         "reconcileHealthy": "Ledger and disk match. No issues found.",
         "reconcileIssues": "Issues found: {{orphans}} untracked files ({{orphanSize}}), {{missing}} missing files, {{stray}} unrecognized entries. See the app log for the full list."
+      },
+      "piKernel": {
+        "manage": "Manage Pi version",
+        "checking": "Checking…",
+        "checkFailed": "Check failed",
+        "available": "Update available",
+        "lookup": "Preparing…",
+        "download": "Downloading…",
+        "verify": "Verifying…",
+        "activate": "Switching…",
+        "update": "Update from Pi GitHub",
+        "restore": "Restore Cindy release",
+        "check": "Check for updates",
+        "releaseNotes": "Pi release notes",
+        "checkedAt": "Last checked: {{time}}",
+        "updateTitle": "Update Pi to {{version}}?",
+        "restoreTitle": "Restore Pi {{version}}?",
+        "updateDescription": "This version is published by Pi and may not be compatible with Cindy. You can restore the Cindy release at any time. Existing sessions keep their current version.",
+        "restoreDescription": "Install the version distributed with the current Cindy release, even if it is older. Existing sessions keep their current version.",
+        "updateConfirm": "Update",
+        "restoreConfirm": "Restore",
+        "installed": "Pi {{version}} is ready for new sessions.",
+        "versionChanged": "The published version changed. Check again before installing.",
+        "busy": "Another Pi update is in progress.",
+        "installFailed": "Pi installation failed. The previous version is still selected. Check your connection and available disk space, then retry.",
+        "openFailed": "Could not open the release notes.",
+        "restartRequired": "Pi {{version}} is installed. Restart Cindy to enable Pi."
       }
     },
     "apiKey": {
@@ -1664,6 +1705,7 @@
         }
       },
       "xai": {
+        "deviceLogin": "Sign in with a code",
         "logoutConfirm": {
           "title": "Disconnect xAI (SuperGrok)?",
           "description": "Cindy will no longer use this Grok subscription.",
@@ -1720,6 +1762,15 @@
       }
     },
     "providers": {
+      "catalogRecovery": {
+        "pending": "Model settings are not ready yet. Wait a moment, then reload the models.",
+        "legacy": "Previous model settings are temporarily unavailable. Close other Cindy instances, then reload the models.",
+        "corrupt": "Saved model settings could not be read. Your settings have been kept. Contact support for help recovering them.",
+        "quota": "Model settings could not be saved because local storage has reached its limit. Contact support for help, then reload the models.",
+        "storage": "Local model settings could not be read or saved. Reload the models; if this continues, contact support.",
+        "catalog": "The model list could not be updated. Reload the models to try again.",
+        "retry": "Reload Models"
+      },
       "title": "Providers",
       "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per session.",
       "import": {
@@ -2538,6 +2589,13 @@
         "modelCount": "{{count}} models configured",
         "modelsAutomatic": "Model details are imported automatically. Adjust individual models in the model list.",
         "manualModel": "Model IDs (if discovery is unavailable)"
+      },
+      "byok": {
+        "managed": "Managed by your organization",
+        "refresh": "Refresh enterprise settings",
+        "refreshFailed": "Enterprise settings could not be refreshed. Try again later.",
+        "pending": "Preparing credentials",
+        "unavailable": "Temporarily unavailable"
       }
     },
     "experimental": {
@@ -7683,14 +7741,48 @@
       "deleteDescription": "Deleting {{name}} permanently removes the teammate’s profile, memory, working directory, channel connections and automated tasks. Task history and separate worktrees are retained.",
       "working": "Updating…",
       "actionFailed": "The action did not finish. Try again shortly.",
+      "deleteFailed": "The teammate was not deleted.",
       "restart": "Restart teammate",
       "restartDescription": "Stop the current run and prepare a fresh start. Conversation history, memories, and files are kept.",
       "restarting": "Restarting…",
       "restarted": "Restarted. Send a message to continue."
     },
     "backToChat": "Back to chat",
-    "memoryRecovery": {
-      "action": "Turn memory back on"
+    "memory": {
+      "title": "Memory",
+      "enabled": "Use memory",
+      "disabledHint": "Off. Memories aren't read or saved.",
+      "search": "Search memories",
+      "empty": "No memories yet",
+      "noResults": "No matching memories",
+      "loadFailed": "Memories couldn't be loaded",
+      "types": {
+        "user": "About you",
+        "feedback": "Your preferences",
+        "project": "Projects",
+        "reference": "References"
+      },
+      "today": "Today",
+      "updated": "Updated {{time}}",
+      "edit": "Edit",
+      "delete": "Delete",
+      "cancel": "Cancel",
+      "done": "Done",
+      "titleLabel": "Title",
+      "bodyLabel": "Content",
+      "tooLong": "Too long. Shorten it to save.",
+      "deleteTitle": "Delete this memory?",
+      "deleteDescription": "{{name}} will no longer refer to “{{title}}”.",
+      "deleted": "Deleted",
+      "deleteFailed": "The memory couldn't be deleted",
+      "changedTitle": "{{name}} just updated this memory",
+      "useLatest": "Use latest",
+      "keepMine": "Keep my changes",
+      "saveFailed": "Not saved",
+      "unsavedTitle": "Unsaved Changes",
+      "unsavedDescription": "Leaving will discard these changes to the memory.",
+      "discard": "Discard Changes",
+      "continueEditing": "Keep Editing"
     },
     "profileSaveFailed": "Teammate settings could not be saved. No changes were applied.",
     "modelLabel": "Model",
@@ -7792,6 +7884,7 @@
     },
     "permissionRequest": "{{name}} needs your go-ahead",
     "remote": {
+      "unknown": "Connection unknown",
       "online": "Online",
       "offline": "Offline",
       "thisDevice": "This computer",
@@ -8955,6 +9048,8 @@
       "failed": "Couldn't generate the image — try again"
     },
     "errorBanner": {
+      "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
+      "replyFailed": "This reply could not be completed. Check the error details for more information.",
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
       "retry": "Retry",
@@ -9710,6 +9805,7 @@
       "reviewingChecks": "Reviewing check results…",
       "replying": "Replying…",
       "processing": "Working…",
+      "organizingConversation": "Organizing the conversation…",
       "thinking": "Thinking…",
       "generating": "Generating…",
       "editingFiles": "Editing files…",
@@ -10803,8 +10899,8 @@
         "automatic": "Automatic",
         "manually": "Manually",
         "session": "Session",
-        "silentRun": "Silent run",
-        "silentRunTooltip": "When enabled, successful runs do not notify by default. If the task prompt asks to notify under specific conditions, AI will report when those conditions are met. Failures and errors still notify.",
+        "silentRun": "Stay quiet when checks find nothing",
+        "silentRunTooltip": "Report changes or problems only. Turn off for reminders and scheduled messages.",
         "silentRunInfoAria": "View silent run rules",
         "finishSendToFeishu": "Finish Send To FeishuBot",
         "finishSendToWecomGroup": "Send result to WeCom group",
@@ -10920,7 +11016,7 @@
         "intervalChip": "After completion · {{schedule}}"
       },
       "scheduleMenu": {
-        "intervalMinutes": "Minutes (every N minutes)",
+        "intervalMinutes": "Minutes (Every N Minutes)",
         "interval": "Hourly (every N hours)",
         "daily": "Daily (every day)",
         "weekdays": "Weekdays",
@@ -10941,7 +11037,10 @@
         "minuteLabel": "Minute",
         "scheduleHourAria": "Schedule hour",
         "scheduleMinuteAria": "Schedule minute",
-        "openTimePickerAria": "Open time picker"
+        "intervalMinutesAria": "Repeat Interval (Minutes)",
+        "openTimePickerAria": "Open time picker",
+        "minuteIntervalHint": "Only minute intervals that divide an hour are available: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, or 30 minutes. For 60 minutes, choose 1 hour.",
+        "unsupportedMinuteInterval": "This task uses the legacy {{count}}-minute Cron setting. Choose an available interval to correct it."
       },
       "model": {
         "loading": "Loading models…",
@@ -12892,7 +12991,8 @@
       "success": "Completed",
       "failed": "Failed",
       "interrupted": "Interrupted",
-      "cancelled": "Cancelled"
+      "cancelled": "Cancelled",
+      "skipped": "Checked · model skipped"
     },
     "sourceStatus": {
       "listening": "Listening",
@@ -12903,7 +13003,13 @@
       "equals": "Equals",
       "contains": "Contains",
       "not-equals": "Does Not Equal"
-    }
+    },
+    "quiet": "Stay quiet when checks find nothing",
+    "quietHint": "Report changes or problems only. Turn off for reminders and scheduled messages.",
+    "checkCommand": "Pre-run check command",
+    "checkHint": "Optional. Checks on the computer before each run: exit 2 skips the run, exit 0 continues, errors stay visible. Clear to remove.",
+    "timeoutMs": "Check timeout (ms, blank for no limit)",
+    "advancedSettings": "Advanced settings"
   },
   "cindyMakeDoctor": {
     "description": "Check the local environment for building Cindy. Usage: /cindy-make-doctor",
@@ -13231,6 +13337,7 @@
       "usingHint": "You are using the latest personal version.",
       "errors": {
         "busy": "Tasks, tests or builds are still running. Finish them before switching or deleting a version.",
+        "building": "Your personal version is being built. Wait for it to finish or stop the build before switching versions.",
         "incompatible": "The data structures differ. Rebuild your personal version from the current original version before switching.",
         "unavailable": "This version could not be read. Rebuild it and try again.",
         "launchFailed": "The target version could not start. The current version has been kept.",
@@ -13476,6 +13583,7 @@
       "getLatest": "Sync latest source",
       "taskTitle": "Resolve Source Update Conflicts",
       "updateHint": "Update official source and reapply your personal changes.",
+      "buildingHint": "A personal version is being built. Wait for it to finish or stop it before syncing source.",
       "confirmTitle": "Update to the latest source?",
       "confirmDescription": "Your personal changes will be kept. If conflicts occur, you will be asked before a resolution session starts.",
       "conflictConfirm": {

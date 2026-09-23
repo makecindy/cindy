@@ -27,7 +27,8 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(wiring).toContain('providerService: getDesktopProviderService()');
     expect(wiring).toContain('getCatalog: getActiveCatalog');
     expect(routingSource).toContain('waitForDiscovery: true');
-    expect(registerSource).toContain('getProviderRoutingContext,');
+    expect(registerSource).toContain('getProviderRoutingContext: async (agent, remoteHostId)');
+    expect(registerSource).toContain('sshCodexWorkerRoutingContext(await readSshCodexModelList({ id: remoteHostId }, listSshCodexProviders))');
   });
 
   it('resumes an idle parent with the stored provider so Bot completions can wake it', () => {

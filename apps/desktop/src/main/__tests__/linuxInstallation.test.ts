@@ -4,7 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { findLinuxUserInstallation, isDebianManagedInstallation, missingLinuxUserInstallTools, linuxUserDesktopName } from '../linuxInstallation';
+import {
+  checkDebianManagedInstallation,
+  findLinuxUserInstallation,
+  isDebianManagedInstallation,
+  missingLinuxUserInstallTools,
+  linuxUserDesktopName,
+} from '../linuxInstallation';
 import { stageLinuxBuildInfo } from '../../../forge-linux';
 import { buildLinuxUpdateScript } from '../updateScriptLinux';
 import { allDeepLinkSchemes } from '@cindy/maker-shared/brand-identity';
@@ -17,6 +23,44 @@ describe('Linux install routing', () => {
     expect(isDebianManagedInstallation('/usr/lib/cindy/Cindy', () => 'unrelated: /usr/lib/cindy/Cindy\n')).toBe(false);
     expect(isDebianManagedInstallation('/usr/lib/cindy/Cindy', () => { throw new Error('no dpkg'); })).toBe(false);
   });
+
+  it('distinguishes a failed ownership query from confirmed non-ownership', () => {
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => 'unrelated: /usr/lib/cindy/Cindy\n'))
+      .toEqual({ status: 'not-managed' });
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => 'cindy: /usr/lib/cindy/Cindy\n'))
+      .toEqual({ status: 'managed' });
+    const timeout = Object.assign(new Error('dpkg-query timed out'), { code: 'ETIMEDOUT', signal: 'SIGTERM' });
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => { throw timeout; }))
+      .toEqual({ status: 'error', error: timeout });
+    const denied = Object.assign(new Error('spawnSync /usr/bin/dpkg-query EACCES'), {
+      code: 'EACCES', status: null, signal: null,
+    });
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => { throw denied; }))
+      .toEqual({ status: 'error', error: denied });
+    const queryFailed = Object.assign(new Error('Command failed: /usr/bin/dpkg-query -S /usr/lib/cindy/Cindy'), {
+      status: 2, signal: null,
+    });
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => { throw queryFailed; }))
+      .toEqual({ status: 'error', error: queryFailed });
+  });
+
+  it('maps dpkg-query exit status 1 to confirmed non-ownership', () => {
+    const noMatch = Object.assign(
+      new Error('Command failed: /usr/bin/dpkg-query -S /home/devuser/custom-builds/Cindy'),
+      { status: 1, signal: null },
+    );
+    expect(checkDebianManagedInstallation('/home/devuser/custom-builds/Cindy', () => { throw noMatch; }))
+      .toEqual({ status: 'not-managed' });
+  });
+
+  it('maps a missing dpkg-query binary to confirmed non-ownership', () => {
+    const missingBinary = Object.assign(new Error('spawnSync /usr/bin/dpkg-query ENOENT'), {
+      code: 'ENOENT', status: null, signal: null,
+    });
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => { throw missingBinary; }))
+      .toEqual({ status: 'not-managed' });
+  });
+
   it('reports missing portable dependencies', () => {
     expect(missingLinuxUserInstallTools(() => true)).toEqual([]);
     expect(missingLinuxUserInstallTools((name) => name !== 'bsdtar')).toEqual(['bsdtar']);

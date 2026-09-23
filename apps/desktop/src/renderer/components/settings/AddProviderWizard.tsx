@@ -384,6 +384,7 @@ export function AddProviderWizard({
     offersManagedOllamaInstall(window.electronAPI.platform),
   );
   const [loggingIn, setLoggingIn] = useState(false);
+  const [xaiDeviceLogin, setXaiDeviceLogin] = useState(false);
   const genericOAuthProviderId =
     sel?.kind === 'oauth' && sel.provider.auth.oauth ? sel.provider.id : null;
   const genericDeviceFlow =
@@ -396,7 +397,7 @@ export function AddProviderWizard({
     beginOwnedLogin: beginGenericOwnedLogin,
     cancelOwnedLogin: cancelGenericOwnedLogin,
   } = useProviderOAuthDeviceCode(genericOAuthProviderId, {
-    observeProgress: genericDeviceFlow || (sel?.kind === 'oauth' && sel.provider.id === 'openai'),
+    observeProgress: genericDeviceFlow || (sel?.kind === 'oauth' && ['openai', 'xai'].includes(sel.provider.id)),
     browserLoginRef: accountLoginRef,
   });
   // Step 3 拉取态
@@ -778,14 +779,15 @@ export function AddProviderWizard({
 
   // ── OAuth 授权（渠道登录后进入模型选择，原生订阅沿用已有流程）────────────────────
   const handleAuthorize = useCallback(
-    async (override?: ProviderView) => {
-      const selected = override ?? (sel?.kind === 'oauth' ? sel.provider : undefined);
+    async (method: 'browser' | 'device' = 'browser') => {
+      const selected = sel?.kind === 'oauth' ? sel.provider : undefined;
       if (!selected) return;
       const attempt = ++oauthAttemptRef.current;
       let id = selected.id;
       const preset = presets.find(p => p.id === id && providerPresetOAuth(p.id));
       clearGenericDeviceCode();
       setLoggingIn(true);
+      setXaiDeviceLogin(selected.id === 'xai' && method === 'device');
       try {
         let ok = false;
         if (id === 'openai' || id === 'anthropic' || id === 'xai' || preset) {
@@ -803,7 +805,10 @@ export function AddProviderWizard({
             }, {});
             created = true;
             if (accountLoginRef.current !== login) return;
-            const result = await window.electronAPI.maker.providerOAuthLogin(id, { ownerId: login.ownerId });
+            const result = await window.electronAPI.maker.providerOAuthLogin(id, {
+              ownerId: login.ownerId,
+              ...(brand === 'xai' ? { method } : {}),
+            });
             if (accountLoginRef.current !== login || result.reason === 'login_cancelled') return;
             // A late success belongs to a cancelled wizard until ownership is checked.
             // Keep ok false so finally also removes credentials committed before cancellation.
@@ -870,7 +875,10 @@ export function AddProviderWizard({
         toast.error(t('settings.providers.wizard.authorizeFailed', { name: selected.name }));
       } finally {
         // A cancelled account login may settle after a retry or local login has started.
-        if (!accountLoginRef.current && !localLoginRef.current) setLoggingIn(false);
+        if (oauthAttemptRef.current === attempt && !accountLoginRef.current && !localLoginRef.current) {
+          setLoggingIn(false);
+          setXaiDeviceLogin(false);
+        }
       }
     },
     [sel, presets, clearGenericDeviceCode, beginGenericOwnedLogin, onDone, t],
@@ -894,6 +902,7 @@ export function AddProviderWizard({
     else cancelGenericOwnedLogin();
     clearGenericDeviceCode();
     setLoggingIn(false);
+    setXaiDeviceLogin(false);
   }, [sel, clearGenericDeviceCode, cancelGenericOwnedLogin]);
 
   /** 关闭向导:授权等待中先取消再关,不留挂起的 login runner。保存中不能关，避免删掉正在落盘的 OAuth 连接。 */
@@ -1811,6 +1820,11 @@ export function AddProviderWizard({
                               : 'settings.providers.button.authorize',
                       )}
                     </Button>
+                    {sel.provider.id === 'xai' && (
+                      <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize('device')}>
+                        {t('settings.connections.xai.deviceLogin')}
+                      </Button>
+                    )}
                   </>
                 )}
                 {/* 替代路径:API 用户没有订阅,OAuth 对其是错误路径——切到该渠道的
@@ -1834,7 +1848,7 @@ export function AddProviderWizard({
                   </Button>
                 )}
               </div>
-              {genericDeviceFlow && loggingIn && (
+              {(genericDeviceFlow || xaiDeviceLogin) && loggingIn && (
                 <OAuthDeviceCodeCard deviceCode={genericDeviceCode} />
               )}
               {loggingIn && browserUrl && <OAuthBrowserLink url={browserUrl} />}

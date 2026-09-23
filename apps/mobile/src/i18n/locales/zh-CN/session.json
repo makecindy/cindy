@@ -479,6 +479,10 @@
     "deleteOne": "删除本条消息"
   },
   "tail": {
+    "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
+    "replyFailed": "本次回复未能完成。请查看错误详情以了解原因。",
+    "showErrorDetails": "查看错误详情",
+    "hideErrorDetails": "收起错误详情",
     "interrupted": "任务执行到一半时应用退出，已被中断。",
     "continueTask": "继续任务",
     "retry": "重试",
@@ -515,5 +519,19 @@
     "restoreFailed": "暂时无法恢复待发消息，已保存的内容没有删除。请重启 App 后重试。",
     "recoveryTarget": "恢复这个任务时请保留原来的电脑，后续消息仍保存在手机上。",
     "taskAlreadyCreated": "电脑上已创建这个任务，已保存的消息会在原任务中继续发送。"
+  },
+  "remoteError": {
+    "REMOTE_DAEMON_CLOSED": "远端连接已中断（daemon 可能正在升级或重启）。本轮已结束 — 请重新发送。",
+    "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
+    "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。想少被打断，可以把任务切到「默认权限」自行掌控。",
+    "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批没完成，确认也没有送到或没有被点。这次拒绝不是你点的。",
+    "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 任务无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
+    "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
+    "REMOTE_LOCAL_ONLY_PROVIDER": "该模型供应商是本机专属服务（如 Ollama），SSH 远端任务无法访问本机地址。请改用 Cindy AI 网关，或选择远端主机可达的模型供应商。",
+    "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
+    "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。",
+    "MCP_APPROVAL_AUTO_BLOCKED": "这次工具调用被自动审核拦截，未收到你手动拒绝的记录。",
+    "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "权限确认超时，未收到有效的确认结果。仅凭超时无法判断你是否点过按钮。",
+    "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "这次权限确认未完成，未收到你手动拒绝的记录。"
   }
 }

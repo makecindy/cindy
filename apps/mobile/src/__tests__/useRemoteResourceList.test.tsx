@@ -6,7 +6,7 @@ import type { HostedRemoteCollectionItem, RemoteResourceHostTarget } from '@/dev
 const h = vi.hoisted(() => ({
   auth: { user: { id: 'owner' }, accountGeneration: 1 },
   link: { connectionEpoch: 1, status: 'online', presenceVersion: 1, getPresenceAvailability: vi.fn(() => true as boolean | null),
-    invoke: vi.fn(), openLink: vi.fn(), onRemoteResourceChanged: vi.fn(() => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
+    invoke: vi.fn(), openLink: vi.fn(), onRemoteResourceChanged: vi.fn((_listener: (deviceId: string, payload: { collectionId: string }) => void) => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
   translation: { t: (key: string) => key, i18n: { language: 'en' } },
   list: vi.fn(), cached: [] as HostedRemoteCollectionItem[], persist: vi.fn(), snapshot: vi.fn(),
 }));
@@ -122,4 +122,33 @@ it('waits for each host link before reading and recovers a failed handshake with
   h.link.openLink.mockResolvedValue(undefined); h.link.connectionEpoch++;
   await render();
   expect(result.isOnline(targets[1])).toBe(true);
+});
+
+
+it.each([false, true])('coalesces generation invalidations while reading and drains the latest roster (failed=%s)', async (failed) => {
+  let settle!: (value: unknown) => void;
+  let reject!: (error: Error) => void;
+  h.list.mockReturnValue(new Promise((resolve, fail) => { settle = resolve; reject = fail; }));
+  await render();
+  const notify = h.link.onRemoteResourceChanged.mock.calls.at(-1)![0];
+  await act(async () => { for (let n = 0; n < 20; n++) notify('mac', { collectionId: 'teammates' }); });
+  // Each host has one request, with just one follow-up roster read queued.
+  expect(h.list).toHaveBeenCalledTimes(2);
+  h.list.mockResolvedValue({ items: [item('latest-final')] });
+  await act(async () => failed ? reject(new Error('stale read failed')) : settle({ items: [item('old-phase')] }));
+  expect(h.list).toHaveBeenCalledTimes(4);
+  expect(result.items.map(row => row.item.ref.id)).toEqual(['latest-final', 'latest-final']);
+  expect(result.loading).toBe(false);
+});
+
+it('drops queued invalidations when the picker closes', async () => {
+  let settle!: (value: unknown) => void;
+  h.list.mockReturnValue(new Promise(resolve => { settle = resolve; }));
+  await render();
+  const notify = h.link.onRemoteResourceChanged.mock.calls.at(-1)![0];
+  await act(async () => notify('mac', { collectionId: 'teammates' }));
+  await render(false);
+  await act(async () => settle({ items: [item('late')] }));
+  expect(h.list).toHaveBeenCalledTimes(2);
+  expect(result.items).toEqual([]);
 });

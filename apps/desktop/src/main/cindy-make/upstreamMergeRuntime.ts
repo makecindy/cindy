@@ -321,6 +321,14 @@ export async function actUpstreamMerge(raw: unknown): Promise<CindyMakeMergeStat
   }).createOptions;
   if (!controller || unavailable)
     throwIpcError('PRECONDITION_FAILED', 'Upstream merge is unavailable');
+  let releaseManualSync: (() => void) | undefined;
+  if (action === 'update') {
+    try {
+      releaseManualSync = cindyMakeManager.claimManualSourceSync();
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', 'busy');
+    }
+  }
   try {
     return action === 'update'
       ? await controller.update(options)
@@ -331,6 +339,8 @@ export async function actUpstreamMerge(raw: unknown): Promise<CindyMakeMergeStat
           : controller.status();
   } catch {
     throwIpcError('PRECONDITION_FAILED', 'Upstream merge is unavailable');
+  } finally {
+    releaseManualSync?.();
   }
 }
 

@@ -1,10 +1,8 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCompanionGenerationCopy } from './useCompanionGenerationCopy';
+import { useMemo, useSyncExternalStore } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_PROTOCOL_VERSION } from '@cindy/device-link';
-import { hasPublicWorkingSubject } from '@cindy/maker-shared';
-import { useDeviceLink } from '@/device-link/DeviceLinkContext';
-import { useAuth } from '@/auth/AuthContext';
+import { isCompactingWorkingStatus, readWorkingPhase } from '@cindy/maker-shared';
 import { Text } from '@/components/AppText';
 import { spacing, typeScale, useTheme } from '@/theme';
 import { remoteSessionStore, type RemoteSessionRunStatus } from './remoteSessionStore';
@@ -16,33 +14,15 @@ export function useCompanionWorkingLabel({ sessionId, deviceId, botId, active, m
   sessionId: string; deviceId: string; botId: string; active: boolean;
   messages: readonly RemoteMessage[]; reconnectAttempt: RemoteSessionRunStatus['reconnectAttempt'];
 }) {
-  const { t, i18n } = useTranslation();
-  const { invoke } = useDeviceLink();
-  const { accountGeneration } = useAuth();
+  const { t } = useTranslation();
   const activity = useSyncExternalStore(remoteSessionStore.subscribe, () => remoteSessionStore.getSessionLiveActivity(sessionId));
-  const { phase, turnId } = useMemo(() => companionWorkingPhase(messages), [messages]);
-  const shown = active && activity?.phase !== 'needs-interaction' && activity?.phase !== 'error' && (!!reconnectAttempt || phase !== null);
-  const scope = JSON.stringify([accountGeneration, deviceId, botId, sessionId, turnId, phase, i18n.language, shown, !!reconnectAttempt]);
-  const [caption, setCaption] = useState<{ scope: string; text: string } | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    if (shown && phase && hasPublicWorkingSubject(phase) && !reconnectAttempt) {
-      void invoke<unknown>(deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{ client: {
-        protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: ['status'], locale: i18n.language,
-      }, ref: { collectionId: 'teammates', kind: 'bot', id: `working:${botId}/${phase}` } }]).then(value => {
-        if (cancelled || !value || typeof value !== 'object') return;
-        const blocks = (value as { blocks?: unknown }).blocks;
-        if (!Array.isArray(blocks)) return;
-        const text = blocks.find(block => block?.id === 'working' && block.primitive === 'status')?.fallbackMarkdown;
-        if (typeof text === 'string' && text.trim() && text.length <= 160) setCaption({ scope, text });
-      }).catch(() => { /* Older hosts retain the local factual caption. */ });
-    }
-    return () => { cancelled = true; };
-  }, [scope, invoke]);
+  const { phase: fallbackPhase, turnId } = useMemo(() => companionWorkingPhase(messages), [messages]);
+  const phase = readWorkingPhase(activity?.workingPhase) ?? (isCompactingWorkingStatus(activity?.compactDetail) ? 'compacting' : fallbackPhase);
+  const shown = active && activity?.phase !== 'needs-interaction' && activity?.phase !== 'error' && activity?.phase !== 'completed' && (!!reconnectAttempt || phase !== null);
+  const copy = useCompanionGenerationCopy({ deviceId, botId, phase, active: shown && !reconnectAttempt, turnId });
   if (!shown) return null;
   return reconnectAttempt ? t(reconnectAttempt.kind === 'overload' ? 'session.screen.modelBusyRetrying'
-    : reconnectAttempt.kind === 'rate-limit' ? 'session.screen.rateLimitRetrying' : 'session.screen.networkReconnecting')
-    : caption?.scope === scope ? caption.text : t(`devices.companions.working.${phase ?? 'thinking'}`);
+    : reconnectAttempt.kind === 'rate-limit' ? 'session.screen.rateLimitRetrying' : 'session.screen.networkReconnecting') : copy;
 }
 
 export function CompanionWorkingStatus({ label }: { label: string | null }) {

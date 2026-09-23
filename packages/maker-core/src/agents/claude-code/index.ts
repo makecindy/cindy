@@ -2598,7 +2598,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       const scopeKey = parentToolUseId ?? null;
       let guard = toolLoopGuards.get(scopeKey);
       if (!guard) {
-        guard = new ToolLoopGuard();
+        guard = new ToolLoopGuard({
+          // Different inputs can be legitimate corrections, even when the
+          // tool keeps reporting the same error category. Match Pi/Codex:
+          // keep exact repetition/rotation guards, not category-only retries.
+          contractConsecutiveLimit: Number.POSITIVE_INFINITY,
+        });
         toolLoopGuards.set(scopeKey, guard);
       }
       return guard;

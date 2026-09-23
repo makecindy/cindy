@@ -353,6 +353,35 @@ describe('serverApiFetch', () => {
     expect(logged).toContain('code=SKILL_NOT_FOUND'); // 业务 code 仍记(它不是身份)
   });
 
+  it.each(['providers', 'credentials'])('logs the BYOK %s endpoint and allowed upstream code without response details', async (endpoint) => {
+    mocks.netFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      json: async () => ({
+        error: { code: 'ORG_AI_GATEWAY_ERROR', message: 'private upstream body' },
+        apiKey: 'invalid-test-secret',
+      }),
+    });
+    const path = `/api/model-access/byok/${endpoint}`;
+    await expect(serverApiFetch(`${path}?schemaVersion=1`, {
+      baseUrl: 'https://model-access.example.com',
+      redactErrorDetails: true,
+      logLabel: path,
+      allowedRedactedErrorCodes: ['ORG_AI_GATEWAY_ERROR'],
+    })).rejects.toMatchObject({ code: 'ORG_AI_GATEWAY_ERROR', message: '请求失败 (502)' });
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'serverApiFetch.redacted_not_ok',
+      `path=${path}`,
+      'method=GET',
+      'status=502',
+      'code=ORG_AI_GATEWAY_ERROR',
+    );
+    const logged = JSON.stringify(mocks.logger.warn.mock.calls);
+    expect(logged).not.toContain('private upstream body');
+    expect(logged).not.toContain('invalid-test-secret');
+    expect(logged).not.toContain('schemaVersion');
+  });
+
   it('surfaces only explicitly allowed business codes on redacted requests', async () => {
     mocks.getAccessToken.mockReturnValue('token-a');
     mocks.netFetch
@@ -401,6 +430,7 @@ describe('serverApiFetch', () => {
     });
 
     const logged = JSON.stringify(mocks.logger.warn.mock.calls);
+    expect(logged).toContain('code=PLAN_CHANGE_NOT_AVAILABLE');
     expect(logged).not.toContain('private subscription detail');
     expect(logged).not.toContain('PRIVATE_SUBSCRIPTION_STATE');
   });

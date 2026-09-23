@@ -30,13 +30,16 @@ const tabButton = (active: boolean) => `rounded-full px-3 py-1 text-12 leading-5
   active ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover-soft)]'}`;
 
 /** Owner controls use the same task host locally and through own-device control. */
-export function SharedTaskButton({ session }: { session: Session }) {
+export function SharedTaskButton({ session, dialogControl }: {
+  session: Session;
+  dialogControl?: { onDismiss: () => void; returnFocus: () => void };
+}) {
   const { t } = useTranslation();
   const { dataOwnerId } = useAuth();
   const ownerGeneration = getDataOwnerGeneration().generation;
   const peer = session.deviceLinkDeviceId ? parseSharedTaskPeer(session.deviceLinkDeviceId) : null;
   const guestSharedTaskId = peer?.role === 'host' ? peer.sharedTaskId : undefined;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(Boolean(dialogControl));
   const [tab, setTab] = useState<SharedTaskTab>('current');
   const [state, setState] = useState<SharedTaskHostState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -44,6 +47,13 @@ export function SharedTaskButton({ session }: { session: Session }) {
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [busy, setBusy] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
+  useEffect(() => {
+    // Rejoining hands off to a second dialog; keep the menu-owned flow mounted until both close.
+    if (!open && !joinOpen && dialogControl) {
+      dialogControl.onDismiss();
+      dialogControl.returnFocus();
+    }
+  }, [open, joinOpen, dialogControl]);
   const pending = useRef(false);
   const epoch = useRef(0);
   const host = useCallback((command: SharedTaskHostCommand) => session.deviceLinkDeviceId
@@ -278,15 +288,16 @@ export function SharedTaskButton({ session }: { session: Session }) {
   const confirmation = confirm ? confirmCopy(confirm) : null;
   return <>
     <Dialog.Root open={open} onOpenChange={(next) => { if (!pending.current) { setOpen(next); if (!next) setConfirm(null); } }}>
-      <Dialog.Trigger asChild>
+      {!dialogControl && <Dialog.Trigger asChild>
         <Button variant="secondary" size="lg" style={WINDOW_NO_DRAG_STYLE} className="ml-2 w-9 bg-transparent p-0" aria-label={t('sharedTask.title')} title={t('sharedTask.title')}>
           <Users size={18} aria-hidden />
         </Button>
-      </Dialog.Trigger>
+      </Dialog.Trigger>}
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-[10001] max-h-[calc(100dvh-32px)] w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-[var(--text-primary)]"
           aria-describedby={undefined}
+          onCloseAutoFocus={dialogControl ? (event) => { event.preventDefault(); if (!joinOpen) dialogControl.returnFocus(); } : undefined}
           onEscapeKeyDown={(event) => { if (pending.current || confirm) event.preventDefault(); }}
           onInteractOutside={(event) => { if (pending.current || confirm) event.preventDefault(); }}>
           <div className="mb-4 flex items-center justify-between gap-2">

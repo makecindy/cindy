@@ -46,7 +46,9 @@ import {
   cronExprToIntervalMs,
   intervalMsToCronExpr,
   resolveScheduleTimingPresentation,
+  resolveIntervalMinutesPresetValue,
   switchScheduleTimingMode,
+  SUPPORTED_INTERVAL_MINUTES,
 } from '../cronCodexPreset';
 
 const tapsvcProvider: ProviderView = {
@@ -363,9 +365,14 @@ describe('schedule timing mode conversion', () => {
   });
 
   it('converts only the minute/hour presets supported by the timing-mode switch', () => {
+    expect(SUPPORTED_INTERVAL_MINUTES).toEqual([1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30]);
     expect(cronExprToIntervalMs('*/10 * * * *')).toBe(10 * 60_000);
     expect(intervalMsToCronExpr(10 * 60_000)).toBe('*/10 * * * *');
     expect(intervalMsToCronExpr(2 * 60 * 60_000)).toBe('0 */2 * * *');
+    expect(cronExprToIntervalMs('*/28 * * * *')).toBeUndefined();
+    expect(cronExprToIntervalMs('*/59 * * * *')).toBeUndefined();
+    expect(intervalMsToCronExpr(28 * 60_000)).toBeUndefined();
+    expect(intervalMsToCronExpr(59 * 60_000)).toBeUndefined();
     expect(intervalMsToCronExpr(90_000)).toBeUndefined();
   });
 
@@ -387,6 +394,36 @@ describe('schedule timing mode conversion', () => {
     expect(switchScheduleTimingMode('*/2 * * * *', undefined, 'interval')).toEqual({
       cronExpr: '*/2 * * * *',
       intervalMs: 2 * 60_000,
+    });
+  });
+
+  it('preserves legacy unsupported minute Crons when switching to interval mode', () => {
+    expect(switchScheduleTimingMode('*/28 * * * *', undefined, 'interval')).toEqual({
+      cronExpr: '*/28 * * * *',
+      intervalMs: 28 * 60_000,
+    });
+    expect(switchScheduleTimingMode('*/59 * * * *', undefined, 'interval')).toEqual({
+      cronExpr: '*/59 * * * *',
+      intervalMs: 59 * 60_000,
+    });
+  });
+
+  it('falls back to a supported minute preset after an exact legacy interval', () => {
+    expect(resolveIntervalMinutesPresetValue({ mode: 'intervalMinutes', intervalMinutes: 28 })).toBe(5);
+    expect(resolveIntervalMinutesPresetValue({ mode: 'intervalMinutes', intervalMinutes: 20 })).toBe(20);
+    expect(resolveIntervalMinutesPresetValue({ mode: 'interval', intervalMinutes: 20 })).toBe(5);
+  });
+
+  it.each([7, 28, 59])('switches legacy %i-minute intervals using the authoritative value', (minutes) => {
+    const result = switchScheduleTimingMode('*/5 * * * *', minutes * 60_000, 'cron');
+    expect(result).toEqual({ cronExpr: `*/${minutes} * * * *`, intervalMs: undefined });
+    expect(switchScheduleTimingMode(result.cronExpr, undefined, 'interval')).toEqual({
+      cronExpr: result.cronExpr, intervalMs: minutes * 60_000,
+    });
+    // Conversion compatibility must not reintroduce these values into new presets.
+    expect(intervalMsToCronExpr(minutes * 60_000)).toBeUndefined();
+    expect(resolveScheduleTimingPresentation('*/5 * * * *', minutes * 60_000)).toEqual({
+      kind: 'intervalExact',
     });
   });
 });

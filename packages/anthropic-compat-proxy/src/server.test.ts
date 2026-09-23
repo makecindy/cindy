@@ -253,6 +253,27 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     expect(transformResponse).toHaveBeenCalledOnce();
   });
 
+  it.each(['reject', 'oversize', 'stale'])('does not forward a route body rewrite that is %s', async (mode) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => res.end('{}'));
+    upstreamClose = upstream.close;
+    let current = true;
+    const rewrite = vi.fn(async () => {
+      if (mode === 'reject') throw new Error('Invalid request');
+      if (mode === 'stale') current = false;
+      return { body: Buffer.from('x'.repeat(mode === 'oversize' ? 200 : 2)) };
+    });
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      maxRequestBodyBytes: 100,
+      bypassRequestTransforms: () => true,
+      routingTransform: () => ({ transformRequestBody: rewrite, dispatchGenerationValid: () => current }),
+    });
+    const result = await post(proxy.url, { model: 'test' });
+    expect(result.status).toBe(mode === 'reject' ? 502 : mode === 'oversize' ? 413 : 503);
+    expect(rewrite).toHaveBeenCalledOnce();
+    expect(upstream.bodies).toEqual([]);
+  });
+
   it('can preserve an image request body without changing normal response transforms', async () => {
     const upstream = await startFakeUpstream((_idx, _body, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });

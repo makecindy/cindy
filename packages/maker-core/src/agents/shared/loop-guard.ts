@@ -121,6 +121,8 @@ export function classifyToolContractError(
  */
 const LOOP_GUARD_EXEMPT_TOOL_NAMES = new Set([
   'TaskOutput', 'write_stdin', 'wait', 'sleep',
+  // Codex translates native subagent waits to this name, often with a stable result.
+  'collab:wait',
   // Codex translator retains the namespace of host dynamic tools.
   'dynamic:functions:write_stdin', 'dynamic:functions:wait',
   'dynamic:clock:sleep', 'mcp:clock:sleep',

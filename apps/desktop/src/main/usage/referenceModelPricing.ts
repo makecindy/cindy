@@ -15,6 +15,7 @@ import {
   subscriptionDirectPriceQuote,
 } from '../../shared/modelPriceQuote.js';
 import type { ModelPriceQuote, ModelPricingCatalog } from '../../shared/regionalMoney.js';
+import { getByokPricing } from '../model-access/byokPricing.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { accountReferencePriceQuote as providerReferencePriceQuote } from './accountReferencePrice.js';
 import {
@@ -60,7 +61,7 @@ export function getReferenceModelPricing(): ModelPricingCatalog {
       }
     }
   }
-  return applyModelPriceOverrides(pricing, registry);
+  return { ...applyModelPriceOverrides(pricing, registry), ...getByokPricing() };
 }
 
 export function broadcastReferenceModelPricing(): void {

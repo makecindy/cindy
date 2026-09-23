@@ -324,6 +324,8 @@ export const MAKER_INVOKE = {
   AGENT_STATUS: 'maker:agent:status',
   // Agent 二进制 --version 输出 (About 面板用) —— spawn binary, 进程内缓存
   AGENT_BINARY_VERSION: 'maker:agent:binary-version',
+  PI_KERNEL_STATE: 'maker:agent:pi-kernel-state',
+  PI_KERNEL_INSTALL: 'maker:agent:pi-kernel-install',
   // Agent 今日累计 (取代老 codex:usage:today) —— 走 host 的 readAgentTodayUsage
   USAGE_TODAY: 'maker:usage:today',
   USAGE_ACCOUNT: 'maker:usage:account',

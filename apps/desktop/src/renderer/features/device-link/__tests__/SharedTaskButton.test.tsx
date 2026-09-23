@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { createElement } from 'react';
+import { createElement, useRef, useState } from 'react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { act, fireEvent, waitFor, within } from '@testing-library/react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -45,6 +46,33 @@ afterEach(async () => {
   container.remove();
   document.body.innerHTML = '';
 });
+it('opens from an overflow menu and restores focus to that menu after closing', async () => {
+  function MenuHarness() {
+    const [open, setOpen] = useState(false);
+    const trigger = useRef<HTMLButtonElement>(null);
+    return <>
+      <DropdownMenu>
+        <DropdownMenuTrigger ref={trigger}>More</DropdownMenuTrigger>
+        <DropdownMenuContent onCloseAutoFocus={(event) => { if (open) event.preventDefault(); }}>
+          <DropdownMenuItem onSelect={() => setOpen(true)}>Share</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {open && <SharedTaskButton session={ownerSession} dialogControl={{ onDismiss: () => setOpen(false), returnFocus: () => trigger.current?.focus() }} />}
+    </>;
+  }
+  await act(async () => root.render(<MenuHarness />));
+  expect(container.querySelectorAll('button')).toHaveLength(1);
+  const more = within(document.body).getByRole('button', { name: 'More' });
+  await act(async () => { fireEvent.keyDown(more, { key: 'Enter' }); });
+  await act(async () => { fireEvent.click(within(document.body).getByRole('menuitem', { name: 'Share' })); });
+  await waitFor(() => expect(within(document.body).queryByRole('menu')).toBeNull());
+  const dialog = within(document.body).getByRole('dialog');
+  expect(dialog.contains(document.activeElement)).toBe(true);
+  await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'sharedTask.dismiss' })); });
+  await waitFor(() => expect(within(document.body).queryByRole('dialog')).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(more));
+});
+
 it('renders an upgrade instruction when an old host rejects the new channel', async () => {
   state.host.mockRejectedValue(new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] unsupported'));
   const body = await openWindow(ownerSession);
