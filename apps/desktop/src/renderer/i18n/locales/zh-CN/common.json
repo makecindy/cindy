@@ -7794,7 +7794,17 @@
       "offline": "离线",
       "thisDevice": "这台电脑",
       "offlineDescription": "{{name}} 暂时离线，{{device}} 重新联网后就能继续聊。",
-      "preparing": "正在等伙伴准备好…"
+      "preparing": "正在等伙伴准备好…",
+      "settings": {
+        "discardTitle": "放弃更改？",
+        "discardBody": "你的更改尚未保存到远程电脑。",
+        "discard": "放弃更改",
+        "refreshRequired": "无法确认设置的最新状态。请重新读取远程电脑的设置后再保存。",
+        "reload": "重新读取设置",
+        "unavailable": "这台电脑暂未提供可编辑的设置。请更新该电脑上的 Cindy 后重试。",
+        "imageTooLarge": "图片超出远程设置的大小限制，请选择更小的图片。",
+        "conflict": "这些设置已在远程电脑上更改。重新读取会放弃你与之冲突的编辑。"
+      }
     },
     "capabilities": {
       "title": "能力",

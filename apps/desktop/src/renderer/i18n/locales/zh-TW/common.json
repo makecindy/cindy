@@ -7794,7 +7794,17 @@
       "offline": "離線",
       "thisDevice": "這台電腦",
       "offlineDescription": "{{name}} 暫時離線，{{device}} 重新連線後就能繼續聊。",
-      "preparing": "正在等夥伴準備好…"
+      "preparing": "正在等夥伴準備好…",
+      "settings": {
+        "discardTitle": "捨棄變更？",
+        "discardBody": "你的變更尚未儲存至遠端電腦。",
+        "discard": "捨棄變更",
+        "refreshRequired": "無法確認設定的最新狀態。請重新讀取遠端電腦的設定後再儲存。",
+        "reload": "重新讀取設定",
+        "unavailable": "這台電腦尚未提供可編輯的設定。請更新該電腦上的 Cindy 後重試。",
+        "imageTooLarge": "圖片超出遠端設定的大小限制，請選擇更小的圖片。",
+        "conflict": "這些設定已在遠端電腦上變更。重新讀取會捨棄你與之衝突的編輯。"
+      }
     },
     "capabilities": {
       "title": "能力",

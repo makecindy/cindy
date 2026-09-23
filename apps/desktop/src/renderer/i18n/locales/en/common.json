@@ -7796,7 +7796,17 @@
       "offline": "Offline",
       "thisDevice": "This computer",
       "offlineDescription": "{{name}} is offline. Reconnect {{device}} to continue.",
-      "preparing": "Waiting for this teammate to get ready…"
+      "preparing": "Waiting for this teammate to get ready…",
+      "settings": {
+        "discardTitle": "Discard changes?",
+        "discardBody": "Your changes have not been saved to the remote computer.",
+        "discard": "Discard changes",
+        "refreshRequired": "Settings could not be confirmed. Reload from the remote computer before saving again.",
+        "reload": "Reload settings",
+        "unavailable": "This computer does not provide editable settings. Update Cindy on that computer and try again.",
+        "imageTooLarge": "This image is too large for remote settings. Choose a smaller image.",
+        "conflict": "These settings changed on the remote computer. Reloading will discard your conflicting edits."
+      }
     },
     "capabilities": {
       "title": "Capabilities",

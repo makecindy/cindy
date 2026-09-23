@@ -47,9 +47,8 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
     >
       <button
         type="button"
-        onClick={bot.deviceId ? undefined : openSettings}
-        title={bot.deviceName || t('bots.settings')}
-        disabled={Boolean(bot.deviceId)}
+        onClick={openSettings}
+        title={t('bots.settings')}
         className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1 text-13 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
         style={WINDOW_NO_DRAG_STYLE}
       >
@@ -57,8 +56,9 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
         <span className="min-w-0 truncate">{bot.name}</span>
       </button>
       {isCindy ? <CindyHeaderDevicePicker bot={bot} /> : null}
-      {!bot.deviceId || !isCindy ? <div className="ml-auto flex shrink-0 items-center gap-1">
-        {!bot.deviceId ? <button
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        {bot.deviceId && !isCindy ? <span className="truncate text-12 text-[var(--text-tertiary)]">{bot.deviceName}</span> : null}
+        <button
           type="button"
           onClick={openSettings}
           aria-label={t('bots.settings')}
@@ -66,8 +66,8 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
           style={WINDOW_NO_DRAG_STYLE}
         >
           <Settings2 size={15} />
-        </button> : <span className="truncate text-12 text-[var(--text-tertiary)]">{bot.deviceName}</span>}
-      </div> : null}
+        </button>
+      </div>
     </div>
   );
 }

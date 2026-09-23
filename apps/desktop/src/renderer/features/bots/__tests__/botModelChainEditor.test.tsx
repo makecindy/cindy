@@ -365,3 +365,21 @@ it('allows explicitly choosing a backup when no valid default is available', () 
   fireEvent.click(within(details).getByRole('button', { name: 'choose-official-codex-model' }));
   expect(change).toHaveBeenLastCalledWith([primary, { harness: 'codex', model: 'gpt-5.6-sol', providerId: 'openai', effort: 'medium', fastMode: true }]);
 });
+
+it('uses a device catalog and never seeds a remote backup with a local default', () => {
+  defaultModel.model = 'local-only-model';
+  roster.loaded = false;
+  const primary = { harness: 'codex' as const, model: 'host-model', providerId: 'host-provider', effort: '', fastMode: false };
+  const change = vi.fn();
+  const view = render(<BotModelChainEditor deviceId="office" value={[primary]} onChange={change} />);
+  expect(modelSelectorProps).toHaveBeenLastCalledWith(expect.objectContaining({ deviceId: 'office', disabled: false, excludeSubscriptionDirect: false }));
+  const details = view.container.querySelector('details')!;
+  details.open = true;
+  fireEvent(details, new Event('toggle'));
+  fireEvent.click(screen.getByText('bots.modelChain.add'));
+  expect(change).not.toHaveBeenCalled();
+  expect(screen.queryByTestId('model-selector-local-only-model')).toBeNull();
+  fireEvent.click(within(details).getByRole('button', { name: 'choose-official-codex-model' }));
+  expect(change).toHaveBeenCalledWith([primary, expect.objectContaining({ model: 'gpt-5.6-sol' })]);
+  roster.loaded = true;
+});

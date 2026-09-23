@@ -7794,7 +7794,17 @@
       "offline": "오프라인",
       "thisDevice": "이 컴퓨터",
       "offlineDescription": "{{name}} 님이 오프라인입니다. {{device}}에 다시 연결하면 계속할 수 있어요.",
-      "preparing": "준비가 끝나기를 기다리고 있어요…"
+      "preparing": "준비가 끝나기를 기다리고 있어요…",
+      "settings": {
+        "discardTitle": "변경 사항을 버릴까요?",
+        "discardBody": "변경 사항이 원격 컴퓨터에 아직 저장되지 않았습니다.",
+        "discard": "변경 사항 버리기",
+        "refreshRequired": "설정의 최신 상태를 확인할 수 없습니다. 원격 컴퓨터에서 설정을 다시 불러온 후 저장하세요.",
+        "reload": "설정 다시 불러오기",
+        "unavailable": "이 컴퓨터에서는 설정을 편집할 수 없습니다. 해당 컴퓨터의 Cindy를 업데이트한 후 다시 시도하세요.",
+        "imageTooLarge": "원격 설정의 이미지 크기 제한을 초과했습니다. 더 작은 이미지를 선택하세요.",
+        "conflict": "원격 컴퓨터에서 설정이 변경되었습니다. 다시 불러오면 충돌하는 편집 내용이 삭제됩니다."
+      }
     },
     "capabilities": {
       "title": "기능",

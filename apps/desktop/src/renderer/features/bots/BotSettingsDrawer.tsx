@@ -6,6 +6,9 @@ import { matchPath, useBlocker, useLocation, useNavigate, useSearchParams } from
 import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 import { BotSettings } from './BotsHomeView';
 import { useBotProfiles } from './botStore';
+import { useRemoteBots } from './useRemoteBots';
+import { RemoteBotSettings } from './RemoteBotSettings';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 /** Route-owned compact drawer that keeps the current teammate chat mounted below it. */
 export function BotSettingsDrawer() {
@@ -14,10 +17,15 @@ export function BotSettingsDrawer() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const bots = useBotProfiles();
+  const remoteBots = useRemoteBots();
+  const remoteMatch = matchPath('/bots/remote/:deviceId/:botId', location.pathname);
   const match =
-    matchPath('/bots/:botId/*', location.pathname) ?? matchPath('/bots/:botId', location.pathname);
+    remoteMatch ? null : matchPath('/bots/:botId/*', location.pathname) ?? matchPath('/bots/:botId', location.pathname);
   const bot = bots.find((candidate) => candidate.id === match?.params.botId) ?? null;
-  const open = searchParams.get('settings') === '1' && bot !== null;
+  const remoteBot = remoteBots.find(candidate => candidate.deviceId === remoteMatch?.params.deviceId && candidate.id === remoteMatch?.params.botId) ?? null;
+  const identity = remoteBot ?? bot;
+  const open = searchParams.get('settings') === '1' && identity !== null;
+  const owner = getDataOwnerGeneration();
 
   const allowNavigation = useRef(false);
   const pendingGuard = useRef<Promise<boolean> | null>(null);
@@ -80,7 +88,7 @@ export function BotSettingsDrawer() {
   // and sidebar navigation. BotSettings' own Back action already checked it.
   const close = () => performClose(false);
 
-  if (!bot) return null;
+  if (!identity) return null;
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && close()}>
@@ -102,8 +110,13 @@ export function BotSettingsDrawer() {
                 <X size={17} />
               </Dialog.Close>
             </header>
-            <BotPronounProvider bot={bot}>
-              <BotSettings
+            <BotPronounProvider bot={identity}>
+              {remoteBot ? <RemoteBotSettings
+                key={JSON.stringify([owner.dataOwnerId, owner.generation, remoteBot.deviceId, remoteBot.id])}
+                bot={remoteBot}
+                beforeCloseRef={beforeCloseRef}
+                onBack={performClose}
+              /> : bot ? <BotSettings
                 key={bot.id}
                 beforeCloseRef={beforeCloseRef}
                 bot={bot}
@@ -116,7 +129,7 @@ export function BotSettingsDrawer() {
                       : `/bots/${bot.id}/session/${sessionId}`;
                   navigate(route, { state: searchJump ? { searchJump } : undefined });
                 }}
-              />
+              /> : null}
             </BotPronounProvider>
           </Dialog.Content>
         </Dialog.Overlay>

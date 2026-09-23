@@ -12,6 +12,9 @@ const NativeAbortController = transferableAbortController().constructor;
 beforeEach(() => vi.stubGlobal('AbortController', NativeAbortController));
 afterEach(() => vi.unstubAllGlobals());
 
+vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [{ id: 'bot-1', deviceId: 'host-1', name: 'Remote', online: true }] }));
+vi.mock('../RemoteBotSettings', () => ({ RemoteBotSettings: ({ bot }: { bot: { deviceId: string } }) => <div data-testid="remote-settings">{bot.deviceId}</div> }));
+
 const guard = vi.hoisted(() => vi.fn(async () => true));
 const nativeAbortController = transferableAbortController();
 beforeEach(() => {
@@ -195,3 +198,11 @@ describe('BotSettingsDrawer', () => {
     expect(screen.getByTestId('chat-underlay')).toBeTruthy();
   });
 });
+
+ it('routes remote settings by device and bot identity rather than the local profile', async () => {
+    render(<RouterProvider router={createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+      initialEntries: ['/bots/remote/host-1/bot-1?settings=1'],
+    })} />);
+    expect((await screen.findByTestId('remote-settings')).textContent).toBe('host-1');
+    expect(screen.queryByTestId('simple-bot-settings')).toBeNull();
+  });

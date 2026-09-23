@@ -69,20 +69,21 @@ describe('BotSessionContentHeader', () => {
     expect(view.container.innerHTML).toBe(originalHeader);
   });
 
-  it('keeps the static device label and read-only header for a sole remote Cindy', () => {
+  it('keeps the device label and opens settings for a sole remote Cindy', () => {
     deviceData.remote = [remoteCindy];
     render(<BotSessionContentHeader bot={remoteCindy} />);
     expect(screen.queryByRole('combobox', { name: 'bots.devicePicker.switchDevice' })).toBeNull();
     expect(screen.getByText('Cloud')).toBeTruthy();
-    expect(screen.getAllByRole('button')).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'Cindy' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getAllByRole('button')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Cindy' }));
+    expect(navigate).toHaveBeenCalledWith('/bots/bot-1/session/sess-1?settings=1');
   });
 
   it('offers the same device switch in a remote Cindy header and returns to the local route', async () => {
     deviceData.local = [localCindy];
     deviceData.remote = [remoteCindy];
     render(<BotSessionContentHeader bot={deviceData.remote[0]} />);
-    expect(screen.queryByRole('button', { name: 'bots.settings' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'bots.settings' })).toBeTruthy();
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'bots.devicePicker.switchDevice' }), { key: 'ArrowDown' });
     fireEvent.click(await screen.findByRole('option', { name: /bots.devicePicker.local/ }));
     expect(navigate).toHaveBeenCalledWith('/bots/local-cindy');
@@ -112,10 +113,11 @@ describe('BotSessionContentHeader', () => {
     expect(screen.getAllByRole('button')).toHaveLength(2);
   });
 
-  it('keeps remote teammate identity read-only without local settings or routine controls', () => {
+  it('opens remote teammate settings without adding routine controls', () => {
     render(<BotSessionContentHeader bot={{ ...bot, deviceId: 'remote-1', deviceName: 'Office' }} />);
-    expect(screen.getByRole('button', { name: '小可' }).hasAttribute('disabled')).toBe(true);
-    expect(screen.queryByRole('button', { name: 'bots.settings' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '小可' }));
+    expect(navigate).toHaveBeenCalledWith('/bots/bot-1/session/sess-1?settings=1');
+    expect(screen.getByRole('button', { name: 'bots.settings' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'routines.title' })).toBeNull();
     expect(screen.getByText('Office')).toBeTruthy();
   });

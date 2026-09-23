@@ -37,6 +37,7 @@ export function BotModelChainEditor({
   disabled = false,
   hiddenVendors = [],
   remote = false,
+  deviceId,
   label,
   onRestoreDefault,
   onNavigateToProviders,
@@ -46,6 +47,8 @@ export function BotModelChainEditor({
   disabled?: boolean;
   hiddenVendors?: MakerVendor[];
   remote?: boolean;
+  /** Device-link settings use the host catalog, never the controller's defaults. */
+  deviceId?: string;
   label?: string;
   onRestoreDefault?: () => void;
   onNavigateToProviders?: () => void;
@@ -63,11 +66,11 @@ export function BotModelChainEditor({
   // roster. Remote callers supply their own device's hiddenVendors instead.
   const visibleVendors = (['pi', 'codex', 'cc'] as const)
     .filter((vendor) => !hiddenVendors.includes(vendor))
-    .filter((vendor) => remote || (loaded && availableVendors.has(vendor)));
+    .filter((vendor) => deviceId || remote || (loaded && availableVendors.has(vendor)));
   const unifiedAgents = visibleVendors.map(agentKindFor);
 
   const replace = (index: number, patch: Partial<BotModelRoute>) => {
-    if (disabled || (!remote && !loaded)) return;
+    if (disabled || (!deviceId && !remote && !loaded)) return;
     if (pendingRoute && index === routes.length) {
       const next = { ...pendingRoute, ...patch };
       if (next.model && routes.length < BOT_MODEL_CHAIN_MAX) {
@@ -95,7 +98,9 @@ export function BotModelChainEditor({
     );
     const vendor = unused ?? visibleVendors[0];
     if (!vendor) return;
-    const route = defaultRoute(vendor);
+    const route = deviceId
+      ? { harness: harnessFor(vendor), model: '', providerId: null, effort: '', fastMode: false }
+      : defaultRoute(vendor);
     if (route.model) onChange([...routes, route]);
     else setPendingRoute(route);
   };
@@ -103,7 +108,8 @@ export function BotModelChainEditor({
   const picker = (route: BotModelRoute, index: number) => (
     <div className="min-w-0 flex-1">
       <ModelSelector
-        disabled={disabled || (!remote && !loaded)}
+        disabled={disabled || (!deviceId && !remote && !loaded)}
+        deviceId={deviceId}
         vendorKey={vendorFor(route.harness)}
         modelId={route.model}
         effort={route.effort}
@@ -117,7 +123,7 @@ export function BotModelChainEditor({
         onModelChange={(model) => replace(index, { model })}
         onEffortChange={(effort) => replace(index, { effort })}
         onFastModeChange={(fastMode) => replace(index, { fastMode })}
-        onNavigateToProviders={remote ? undefined : onNavigateToProviders}
+        onNavigateToProviders={deviceId || remote ? undefined : onNavigateToProviders}
         configurationEnabled
         unifiedPanel
         unifiedAgents={unifiedAgents}
