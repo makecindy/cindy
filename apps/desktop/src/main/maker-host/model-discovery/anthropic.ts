@@ -294,21 +294,41 @@ function fallbackEffortBaseline(id: string): { efforts: Effort[]; defaultEffort:
   return { efforts, defaultEffort: pickDefaultEffort(efforts) };
 }
 
+/** CLI 菜单里的 `default` 指针条目,不是一个独立模型(见 mapAnthropicSdkModels)。 */
+function isDefaultPointerEntry(entry: unknown): boolean {
+  return !!entry && typeof entry === 'object' && (entry as { value?: unknown }).value === 'default';
+}
+
 /**
  * SDK `supportedModels()` 条目 → 映射结果。纯函数。
  * 只收 `claude` 开头的显式版本 id(规则 10:禁止 opus/sonnet 裸别名进目录)。
  * ModelInfo 的能力字段全部 optional:字段在场时 SDK 是能力权威(supportsEffort=false =
  * 不可调);**字段缺席 = 该字段未知**,按 modelRegistry 基线 / 确定性默认合成,
  * 合并时保留该字段已精化的旧值——不能把「CLI 没填」解读成「不支持」而抹掉档位。
+ *
+ * id 取 `resolvedModel` 优先、`value` 回落:CLI 菜单把每条产品线的**最新版**收在别名
+ * 后面(`default` / `opus[1m]` / `sonnet`),真实版本 id 只出现在 resolvedModel 里。
+ * 规则 10 要挡的是「裸别名进目录」,不是「带别名的条目整条丢掉」——只读 value 时这些
+ * 条目一律不以 `claude` 开头而被过滤,于是 HTTP `/v1/models` 明明返回了的新模型
+ * (2026-09 的 Opus 5.5 / Sonnet 5)在 SDK 快照里恒缺席;该快照又是存在性写入,
+ * 会把 HTTP 刚拉到的新模型从清单里抹掉,新模型因此永远进不了 UI。
  */
 export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
   if (!Array.isArray(raw)) return [];
   const out: SdkMappedModel[] = [];
   const seen = new Set<string>();
-  for (const entry of raw) {
+  // `default` 只是「当前默认模型」的指针,displayName / description 讲的是默认档本身
+  // (「Default (recommended)」)而不是模型名。放到最后处理,让具名条目先占住 seen:
+  // 常态下它指向的模型另有具名条目而被去重跳过,只有当它是唯一来源时才兜底落地。
+  const ordered = [
+    ...raw.filter((entry) => !isDefaultPointerEntry(entry)),
+    ...raw.filter((entry) => isDefaultPointerEntry(entry)),
+  ];
+  for (const entry of ordered) {
     if (!entry || typeof entry !== 'object') continue;
     const e = entry as {
       value?: unknown;
+      resolvedModel?: unknown;
       displayName?: unknown;
       description?: unknown;
       supportsEffort?: unknown;
@@ -316,7 +336,9 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
       supportsFastMode?: unknown;
     };
     if (typeof e.value !== 'string' || e.value.length === 0) continue;
-    const id = normalizeModelId(e.value);
+    const rawId =
+      typeof e.resolvedModel === 'string' && e.resolvedModel.length > 0 ? e.resolvedModel : e.value;
+    const id = normalizeModelId(rawId);
     if (!id.startsWith('claude') || seen.has(id)) continue;
     seen.add(id);
     const hasEffortInfo = e.supportsEffort !== undefined || e.supportedEffortLevels !== undefined;
