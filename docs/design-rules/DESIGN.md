@@ -402,7 +402,7 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 
 ### Mobile iOS navigation chrome / iPhone Duo
 
-- Explicitly selecting Teammates in the mobile home or chat drawer opens the teammate list, even with one teammate or when Teammates is already active. The mode switch itself never enters a chat; picking a teammate opens it. Keep cold-start recovery of a verified remembered teammate separate from this explicit navigation.
+- Explicitly selecting Teammates in the mobile home or chat drawer opens the teammate list, even with one teammate or when Teammates is already active. The mode switch itself never enters a chat; picking a teammate opens it. Keep cold-start recovery of a verified remembered teammate separate from this explicit navigation. Teammate rows share the task list typography: 18pt semibold titles with 28pt line height, 15pt regular previews with 26pt line height, and 13pt metadata with 22pt line height.
 
 - Wide Home and task-sidebar presentations share one native list instance in `ResidentHomeListProvider`, outside route lifetimes. Route slots supply layout and callbacks; do not key the host by task/route or restore a cached offset over its live scroll position. Collapse/expand its bounds, keep native headers outside its touch area, and pause hidden row subscriptions. Narrow screens retain their route-local list.
 
