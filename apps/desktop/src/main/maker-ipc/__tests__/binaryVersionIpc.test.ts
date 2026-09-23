@@ -194,6 +194,20 @@ describe('maker:agent:binary-version', () => {
     });
   });
 
+
+  it('does not advertise an update whose sha256 the downloader would reject', async () => {
+    h.versions.set('/managed/codex', 'codex-cli 0.145.0');
+    for (const sha256 of ['', 'not-hex', 'abcd', 'g'.repeat(64), 'a'.repeat(63), 'a'.repeat(65)]) {
+      const asset = installable('0.146.0');
+      asset.sha256 = sha256;
+      h.fetchManifest.mockResolvedValue({ codexPackage: asset });
+      await expect(invoke('codex', { checkLatest: true })).resolves.toMatchObject({
+        latestVersion: null,
+        updateAvailable: false,
+      });
+    }
+  });
+
   it('rejects malformed options', async () => {
     await expect(invoke('codex', { checkLatest: 'yes' })).rejects.toThrow();
     await expect(invoke('codex', 'checkLatest')).rejects.toThrow();

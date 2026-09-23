@@ -83,10 +83,14 @@ const MANIFEST_FIELD: Record<AgentBinaryKind, string> = {
   pi: 'pi',
 };
 
+// downloader/index.ts rejects anything that is not exactly 64 hex chars.
+const DOWNLOAD_SHA256 = /^[0-9a-fA-F]{64}$/;
+
 function latestVersionFor(kind: AgentBinaryKind, manifest: Manifest | null): string | null {
   if (!manifest) return null;
   const asset = getVendorAsset(manifest, MANIFEST_FIELD[kind]);
   if (!asset || !vendorAssetMatchesPlatform(asset, getPlatformKey())) return null;
+  if (!DOWNLOAD_SHA256.test(asset.sha256)) return null;
   return asset.version;
 }
 
