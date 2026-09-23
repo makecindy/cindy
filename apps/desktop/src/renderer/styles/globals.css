@@ -1920,6 +1920,18 @@ mark.doc-search-mark [class] {
   color: inherit;
 }
 
+/* Settings search navigation briefly marks the section selected from the
+   sidebar. Reuse the existing dual-theme search tokens instead of baking a
+   light-only color into the settings surface. */
+.settings-search-target-highlight {
+  outline: 1px solid hsl(var(--search-match-active-fg));
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px hsl(var(--search-match-active-bg) / 0.28);
+  transition:
+    outline-color var(--motion-fast) var(--motion-ease-move),
+    box-shadow var(--motion-fast) var(--motion-ease-move);
+}
+
 @layer utilities {
   .text-sidebar-item-active-foreground {
     color: var(--sidebar-item-active-foreground);

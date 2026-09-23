@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "設定",
+    "search": {
+      "ariaLabel": "搜尋設定",
+      "placeholder": "搜尋設定",
+      "resultsLabel": "設定搜尋結果",
+      "noResults": "沒有符合的設定",
+      "clear": "清除搜尋"
+    },
     "back": "返回",
     "defaults": {
       "customizedBadge": "已自定義",
@@ -1087,6 +1094,13 @@
       "claudeCodeVersionLabel": "Claude Code 版本號",
       "codexVersionLabel": "Codex 版本號",
       "piVersionLabel": "Pi 版本號",
+      "harnessUpdateButton": "更新 {{name}}",
+      "harnessUpdateTitle": "更新 {{name}}",
+      "harnessUpdateDescription": "Cindy 將重新啟動，並在啟動時更新 {{name}}。目前版本 {{currentVersion}}，線上版本 {{latestVersion}}。",
+      "harnessUpdateConfirm": "重新啟動並更新 {{name}}",
+      "harnessUpdateCancel": "取消",
+      "harnessUpdateBusyDescription": "目前有任務進行中，重新啟動會中斷它們。確定要立即重新啟動並更新嗎？",
+      "harnessUpdateFailed": "無法安排 Agent 更新，請稍後再試。",
       "logsDirLabel": "日誌目錄",
       "openLogsDir": "開啟",
       "openLogsDirTooltip": "在系統檔案管理器中開啟日誌目錄",

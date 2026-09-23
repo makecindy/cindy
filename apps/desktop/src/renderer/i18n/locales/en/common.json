@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "Settings",
+    "search": {
+      "ariaLabel": "Search settings",
+      "placeholder": "Search settings",
+      "resultsLabel": "Settings search results",
+      "noResults": "No matching settings",
+      "clear": "Clear search"
+    },
     "back": "Back",
     "defaults": {
       "customizedBadge": "Custom",
@@ -1087,6 +1094,13 @@
       "claudeCodeVersionLabel": "Claude Code version",
       "codexVersionLabel": "Codex version",
       "piVersionLabel": "Pi version",
+      "harnessUpdateButton": "Update {{name}}",
+      "harnessUpdateTitle": "Update {{name}}",
+      "harnessUpdateDescription": "Cindy will restart and update {{name}} when it starts. Current version: {{currentVersion}}. Online version: {{latestVersion}}.",
+      "harnessUpdateConfirm": "Restart and Update {{name}}",
+      "harnessUpdateCancel": "Cancel",
+      "harnessUpdateBusyDescription": "Tasks are currently in progress and restarting will interrupt them. Restart and update anyway?",
+      "harnessUpdateFailed": "Could not schedule the Agent update. Please try again later.",
       "logsDirLabel": "Logs directory",
       "openLogsDir": "Open",
       "openLogsDirTooltip": "Open the logs directory in the system file manager",

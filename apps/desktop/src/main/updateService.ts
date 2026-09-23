@@ -2243,6 +2243,25 @@ export function initUpdateService(): void {
     app.quit();
   });
 
+  // About → Agent version update: keep the same graceful app relaunch lifecycle,
+  // but ask the next startup to refresh managed harness binaries before they are
+  // exposed to Maker. The marker is consumed once by agent-binaries/prepare and
+  // is scoped to the harness the user confirmed; Pi has its own kernel manager.
+  ipcMain.handle('update-harness-relaunch', (event, kind: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (kind !== 'claude-code' && kind !== 'codex') {
+      throwIpcError('INVALID_PARAMS', 'kind required (claude-code | codex)');
+    }
+    const cancelMarker = writeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion(), [kind]);
+    if (!cancelMarker) {
+      throwIpcError('INTERNAL', 'failed to schedule harness update');
+    }
+    log.info(`harness update relaunch requested: ${kind}`);
+    app.relaunch({ args: process.argv.slice(1) });
+    app.quit();
+    return { accepted: true };
+  });
+
   ipcMain.on('update-set-relaunch-theme', (_event, theme: 'light' | 'dark') => {
     if (theme === 'light' || theme === 'dark') {
       resolvedRelaunchTheme = theme;

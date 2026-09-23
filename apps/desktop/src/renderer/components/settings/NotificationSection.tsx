@@ -33,7 +33,7 @@ export function NotificationSection() {
         )}
       >
         <div className="flex min-w-0 flex-col gap-1">
-          <p
+          <p id="settings-search-settings-notifications-sessionDoneLabel"
             className="text-13 font-medium text-[var(--settings-section-sublabel)]"
             style={{ letterSpacing: '0.12px' }}
           >

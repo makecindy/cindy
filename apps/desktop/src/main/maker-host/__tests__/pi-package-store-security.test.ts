@@ -4223,15 +4223,40 @@ describe('Pi package executable-code boundary', () => {
     ]);
     const store = await import('../pi-package-store.js');
     const listener = vi.fn();
+    const tokenPaths = new Set([
+      'cindy-package-runtime-change-token',
+      'cindy-package-change-token',
+      'cindy-package-view-change-token',
+    ].map((name) => path.resolve(tokenDir, name)));
+    const initialReadsClosed = new Set<string>();
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      const tokenPath = path.resolve(String(target));
+      if (!tokenPaths.delete(tokenPath)) return originalOpen(target, flags, mode);
+      // Exercise slow initial I/O: a 50 ms sleep must not stand in for readiness.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const handle = await originalOpen(target, flags, mode);
+      return {
+        stat: () => handle.stat(),
+        readFile: (...args: Parameters<typeof handle.readFile>) => handle.readFile(...args),
+        close: async () => {
+          await handle.close();
+          initialReadsClosed.add(tokenPath);
+        },
+      } as Awaited<ReturnType<typeof fs.open>>;
+    }) as typeof fs.open);
     const unsubscribe = store.onPiPackagesChanged(listener);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // All three baseline values must be captured before publishing the peer edge.
+      await vi.waitFor(() => expect(initialReadsClosed.size).toBe(3));
+      expect(listener).not.toHaveBeenCalled();
       await fs.writeFile(path.join(tokenDir, filename), `${nextToken}\n`);
       await vi.waitFor(() => expect(listener).toHaveBeenCalledWith(expectedOrigin), {
         timeout: 2_000,
       });
     } finally {
       unsubscribe();
+      openSpy.mockRestore();
     }
   });
 

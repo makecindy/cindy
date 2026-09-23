@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "设置",
+    "search": {
+      "ariaLabel": "搜索设置",
+      "placeholder": "搜索设置",
+      "resultsLabel": "设置搜索结果",
+      "noResults": "没有匹配的设置",
+      "clear": "清除搜索"
+    },
     "back": "返回",
     "defaults": {
       "customizedBadge": "已自定义",
@@ -1087,6 +1094,13 @@
       "claudeCodeVersionLabel": "Claude Code 版本号",
       "codexVersionLabel": "Codex 版本号",
       "piVersionLabel": "Pi 版本号",
+      "harnessUpdateButton": "更新 {{name}}",
+      "harnessUpdateTitle": "更新 {{name}}",
+      "harnessUpdateDescription": "将重启 Cindy，并在启动时更新 {{name}}。当前版本 {{currentVersion}}，线上版本 {{latestVersion}}。",
+      "harnessUpdateConfirm": "重启并更新 {{name}}",
+      "harnessUpdateCancel": "取消",
+      "harnessUpdateBusyDescription": "当前有任务正在进行中，重启会打断它们。确定要立即重启并更新吗？",
+      "harnessUpdateFailed": "无法安排 Agent 更新，请稍后重试。",
       "logsDirLabel": "日志目录",
       "openLogsDir": "打开",
       "openLogsDirTooltip": "在系统文件管理器中打开日志目录",

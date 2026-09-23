@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "設定",
+    "search": {
+      "ariaLabel": "設定を検索",
+      "placeholder": "設定を検索",
+      "resultsLabel": "設定の検索結果",
+      "noResults": "一致する設定はありません",
+      "clear": "検索をクリア"
+    },
     "back": "戻る",
     "defaults": {
       "customizedBadge": "カスタム",
@@ -1087,6 +1094,13 @@
       "claudeCodeVersionLabel": "Claude Code バージョン",
       "codexVersionLabel": "Codex バージョン",
       "piVersionLabel": "Pi バージョン",
+      "harnessUpdateButton": "{{name}}を更新",
+      "harnessUpdateTitle": "{{name}}を更新",
+      "harnessUpdateDescription": "Cindy を再起動すると、起動時に {{name}} を更新します。現在のバージョン: {{currentVersion}}。オンラインのバージョン: {{latestVersion}}。",
+      "harnessUpdateConfirm": "再起動して{{name}}を更新",
+      "harnessUpdateCancel": "キャンセル",
+      "harnessUpdateBusyDescription": "進行中のタスクがあります。再起動すると中断されます。それでも今すぐ再起動して更新しますか？",
+      "harnessUpdateFailed": "Agent の更新を準備できませんでした。しばらくしてからもう一度お試しください。",
       "logsDirLabel": "ログディレクトリ",
       "openLogsDir": "開く",
       "openLogsDirTooltip": "システムのファイルマネージャーでログディレクトリを開く",

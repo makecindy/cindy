@@ -2892,7 +2892,7 @@ export function ProvidersSection() {
                 </>
               )}
             </div>
-            <div
+            <div id="settings-search-settings-providers-addProvider"
               className="border-t p-2"
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
