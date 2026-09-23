@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { MediaScrubber } from '@/components/ui/media-scrubber';
 import sliderCss from '@/components/ui/slider.css?inline';
+import { Button } from '@/components/ui/button';
 /**
  * GhostToolCard — 消息流「意识卡片」(卡槽③海报模式)。
  *
@@ -756,27 +757,20 @@ function GhostCardCanvas({
               {linkAsk}
             </div>
             <div className="mt-2.5 flex items-center justify-end gap-1.5">
-              <button
+              <Button
+                variant="secondary"
+                tone="quiet"
+                size="xs"
+                compact
                 type="button"
                 autoFocus
                 onClick={() => setLinkAsk(null)}
-                className="h-6 cursor-pointer rounded-md px-2 text-xs transition-colors"
-                style={{ color: 'var(--text-secondary)' }}
               >
                 {t('chat.ghostCall.linkConfirmCancel')}
-              </button>
-              <button
-                type="button"
-                onClick={confirmOpenLink}
-                className="h-6 cursor-pointer rounded-md border px-2.5 text-xs font-medium transition-colors hover:bg-[var(--msg-table-header-bg)]"
-                style={{
-                  backgroundColor: 'var(--msg-tool-card-bg)',
-                  borderColor: 'var(--msg-tool-card-border)',
-                  color: 'var(--msg-tool-card-text)',
-                }}
-              >
+              </Button>
+              <Button variant="secondary" size="xs" compact type="button" onClick={confirmOpenLink}>
                 {t('chat.ghostCall.linkConfirmOpen')}
-              </button>
+              </Button>
             </div>
           </div>
         </>

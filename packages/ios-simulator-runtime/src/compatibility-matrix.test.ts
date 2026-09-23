@@ -130,19 +130,60 @@ describe("iOS Simulator compatibility matrix", () => {
       resolveIOSSimulatorNativeReleaseCompatibility({
         hostOsRelease: "25.3.0",
         xcodeVersion: "Xcode 26.4\nBuild version 17E192",
-        runtimeIdentifier:
-          "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
         runtimeBuildVersion: "23E244",
         architecture: "arm64",
       }),
     ).toEqual({
-      matrixVersion: 1,
-      matchedCaseId:
-        "darwin-25.3.0_xcode-26.4-17E192_ios-26.4-23E244_arm64",
+      matrixVersion: 2,
+      matchedCaseId: "darwin-25.3.0_xcode-26.4-17E192_ios-26.4-23E244_arm64",
       sidecar: "eligible",
       h264Stream: "eligible",
       continuousInput: "eligible",
       multiTouch: "eligible",
+    });
+  });
+
+  it("promotes Xcode 27 after functional video and screen-addressed HID checks", () => {
+    expect(
+      resolveIOSSimulatorNativeReleaseCompatibility({
+        hostOsRelease: "27.0.0",
+        xcodeVersion: "Xcode 27.0\nBuild version 27A266a",
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+        runtimeBuildVersion: "24A434",
+        architecture: "arm64",
+      }),
+    ).toMatchObject({
+      matrixVersion: 2,
+      matchedCaseId: "darwin-27.0.0_xcode-27.0-27A266a_ios-27.0-24A434_arm64",
+      sidecar: "eligible",
+      h264Stream: "eligible",
+      continuousInput: "eligible",
+      multiTouch: "eligible",
+    });
+  });
+
+  it.each([
+    { hostOsRelease: "27.0.1" },
+    { xcodeVersion: "Xcode 27.1\nBuild version 27A9269" },
+    { xcodeVersion: "Xcode 27.0\nBuild version 27A266b" },
+    { runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-1" },
+    { runtimeBuildVersion: "24A435" },
+    { architecture: "x86_64" as const },
+  ])("does not extrapolate Xcode 27 evidence to a near miss: %#", (patch) => {
+    expect(
+      resolveIOSSimulatorNativeReleaseCompatibility({
+        hostOsRelease: "27.0.0",
+        xcodeVersion: "Xcode 27.0\nBuild version 27A266a",
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+        runtimeBuildVersion: "24A434",
+        architecture: "arm64",
+        ...patch,
+      }),
+    ).toMatchObject({
+      matchedCaseId: null,
+      sidecar: "unknown",
+      h264Stream: "unknown",
     });
   });
 
@@ -182,8 +223,7 @@ describe("iOS Simulator compatibility matrix", () => {
       resolveIOSSimulatorNativeReleaseCompatibility({
         hostOsRelease: patch.hostOsRelease,
         xcodeVersion: patch.xcodeVersion,
-        runtimeIdentifier:
-          "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
         runtimeBuildVersion: patch.runtimeBuildVersion,
         architecture: patch.architecture,
       }),
@@ -201,8 +241,7 @@ describe("iOS Simulator compatibility matrix", () => {
       resolveIOSSimulatorNativeReleaseCompatibility({
         hostOsRelease: "25.3.0",
         xcodeVersion: "Xcode 26.4\nBuild version 17E192",
-        runtimeIdentifier:
-          "com.apple.CoreSimulator.SimRuntime.iOS-26-3",
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-3",
         runtimeBuildVersion: "23E244",
         architecture: "arm64",
       }),

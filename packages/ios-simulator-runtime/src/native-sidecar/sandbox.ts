@@ -1,7 +1,8 @@
 import os from "node:os";
 import path from "node:path";
+import { iosSimulatorKitFrameworkDirectories } from "./xcode.js";
 
-export const IOS_SIMULATOR_NATIVE_SIDECAR_SANDBOX_PROFILE_VERSION = 1 as const;
+export const IOS_SIMULATOR_NATIVE_SIDECAR_SANDBOX_PROFILE_VERSION = 2 as const;
 export const IOS_SIMULATOR_NATIVE_SIDECAR_SANDBOX_EXECUTABLE =
   "/usr/bin/sandbox-exec";
 
@@ -26,7 +27,8 @@ export interface IOSSimulatorNativeSidecarSandboxPolicy {
   platform: NodeJS.Platform;
   sandboxExecutablePath: string;
   homeDirectory: string;
-  developerDirectory: string;
+  /** Null is resolved from xcode-select by the process manager before launch. */
+  developerDirectory: string | null;
   coreSimulatorRoot: string;
   temporaryRoot: string;
 }
@@ -146,13 +148,13 @@ export function createIOSSimulatorNativeSidecarSandboxPolicy(
       dialect,
     ),
     homeDirectory,
-    developerDirectory: requireAbsolutePath(
-      input.developerDirectory ??
-        process.env.DEVELOPER_DIR ??
-        "/Applications/Xcode.app/Contents/Developer",
-      "developerDirectory",
-      dialect,
-    ),
+    developerDirectory: input.developerDirectory
+      ? requireAbsolutePath(
+          input.developerDirectory,
+          "developerDirectory",
+          dialect,
+        )
+      : null,
     coreSimulatorRoot: requireAbsolutePath(
       input.coreSimulatorRoot ??
         dialect.join(homeDirectory, "Library", "Developer", "CoreSimulator"),
@@ -226,7 +228,7 @@ export function createIOSSimulatorNativeSidecarSandboxProfile(
     dialect,
   );
   const developerDirectory = requireAbsolutePath(
-    policy.developerDirectory,
+    policy.developerDirectory ?? "",
     "developerDirectory",
     dialect,
   );
@@ -281,6 +283,10 @@ export function createIOSSimulatorNativeSidecarSandboxProfile(
     '  (subpath "/Library/Developer/DeviceKit")',
     '  (subpath "/Library/Developer/PrivateFrameworks")',
     `  (subpath ${sbplString(developerDirectory)})`,
+    ...iosSimulatorKitFrameworkDirectories(developerDirectory).map(
+      (directory) =>
+        `  (subpath ${sbplString(dialect.join(directory, "SimulatorKit.framework"))})`,
+    ),
     `  (literal ${sbplString(binaryPath)}))`,
     pathRule(
       "file-read-metadata file-test-existence",
@@ -291,6 +297,14 @@ export function createIOSSimulatorNativeSidecarSandboxProfile(
       "file-read-metadata file-test-existence",
       "path-ancestors",
       developerDirectory,
+    ),
+    ...iosSimulatorKitFrameworkDirectories(developerDirectory).map(
+      (directory) =>
+        pathRule(
+          "file-read-metadata file-test-existence",
+          "path-ancestors",
+          dialect.join(directory, "SimulatorKit.framework"),
+        ),
     ),
     pathRule(
       "file-read-metadata file-test-existence",
@@ -385,7 +399,7 @@ export function createIOSSimulatorNativeSidecarSandboxLaunchPlan(
     PATH: input.environment.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
     LANG: input.environment.LANG ?? "en_US.UTF-8",
     HOME: input.policy.homeDirectory,
-    DEVELOPER_DIR: input.policy.developerDirectory,
+    DEVELOPER_DIR: input.policy.developerDirectory ?? undefined,
     TMPDIR: `${input.temporaryDirectory}${path.posix.sep}`,
     CINDY_IOS_SIDECAR_METAL_CACHE_DIR: path.posix.join(
       input.temporaryDirectory,

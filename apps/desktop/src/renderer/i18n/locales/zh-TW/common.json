@@ -1082,7 +1082,7 @@
     },
     "about": {
       "title": "關於",
-      "description": "應用與已整合 Agent 的執行時版本。所有版本號在啟動時由主處理程序自動探測。",
+      "description": "應用程式與已整合 Agent 的執行階段版本。",
       "appVersionLabel": "應用版本號",
       "claudeCodeVersionLabel": "Claude Code 版本號",
       "codexVersionLabel": "Codex 版本號",
@@ -1275,6 +1275,33 @@
         "reconcileFailed": "體檢失敗",
         "reconcileHealthy": "帳實一致，沒有發現異常。",
         "reconcileIssues": "發現異常：無帳檔案 {{orphans}} 個({{orphanSize}})、缺失檔案 {{missing}} 個、無法識別 {{stray}} 個。詳細清單見應用日誌。"
+      },
+      "piKernel": {
+        "manage": "管理 Pi 版本",
+        "checking": "檢查中…",
+        "checkFailed": "檢查失敗",
+        "available": "有更新",
+        "lookup": "準備中…",
+        "download": "下載中…",
+        "verify": "驗證中…",
+        "activate": "切換中…",
+        "update": "升級 Pi 上游版本",
+        "restore": "恢復 Cindy 正式版",
+        "check": "檢查更新",
+        "releaseNotes": "Pi 更新說明",
+        "checkedAt": "上次檢查：{{time}}",
+        "updateTitle": "升級至 Pi {{version}}？",
+        "restoreTitle": "恢復 Pi {{version}}？",
+        "updateDescription": "此版本由 Pi 上游發布，可能存在 Cindy 相容性問題，可隨時恢復 Cindy 正式版。既有任務繼續使用目前版本。",
+        "restoreDescription": "安裝 Cindy 線上正式版分發的 Pi，即使版本較低。既有任務繼續使用目前版本。",
+        "updateConfirm": "升級",
+        "restoreConfirm": "恢復",
+        "installed": "Pi {{version}} 已就緒，新任務將使用此版本。",
+        "versionChanged": "線上版本已變更，請重新檢查後安裝。",
+        "busy": "已有 Pi 更新正在進行。",
+        "installFailed": "Pi 安裝失敗，仍使用原版本。請檢查網路與磁碟空間後重試。",
+        "openFailed": "無法開啟更新說明。",
+        "restartRequired": "Pi {{version}} 已安裝，重新啟動 Cindy 後可用。"
       }
     },
     "apiKey": {
@@ -2343,6 +2370,7 @@
         "endpointLabel": "{{agent}} 基礎 URL",
         "noAuthNote": "此 Proxy 無需客戶端金鑰；Cindy 會在轉發前移除 CLI 的訂閱憑證。",
         "signIn": "登入",
+        "mimoTokenPlanNote": "請使用 MiMo Token Plan 頁面提供的專屬 API Key (tp-…)。呼叫會消耗訂閱配額，不能與按量付費 API Key 混用。",
         "setupLink": {
           "apiKey": "取得 API Key",
           "account": "註冊或登入",

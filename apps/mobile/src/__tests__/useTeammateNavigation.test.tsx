@@ -39,7 +39,9 @@ describe('header/home shared navigation', () => {
     const owner = homeNavigationOwner(h.user);
     await saveHomeNavigationPreferences(owner, { mode: 'teammates', lastTeammate: teammateIdentity(teammate) });
     await render(); expect(result.mode).toBe('teammates'); expect(result.lastTeammate?.resourceId).toBe('writer');
+    expect(result.restoreLastTeammate).toBe(true);
     await act(async () => result.chooseMode('tasks'));
+    expect(result.restoreLastTeammate).toBe(false);
     expect(h.dismissTo).toHaveBeenCalledWith('/devices');
     expect(await readHomeNavigationPreferences(owner)).toEqual({ mode: 'tasks', lastTeammate: teammateIdentity(teammate) });
   });
@@ -104,8 +106,11 @@ describe('header/home shared navigation', () => {
     await render();
     let change!: Promise<void>;
     await act(async () => { change = result.setMode('teammates'); });
+    expect(result.hydrated).toBe(false);
+    expect(result.restoreLastTeammate).toBe(false);
     await act(async () => { finish(JSON.stringify({ mode: 'tasks', lastTeammate: teammateIdentity(teammate) })); await change; });
     expect(result.mode).toBe('teammates'); expect(result.lastTeammate).toEqual(teammateIdentity(teammate));
+    expect(result.restoreLastTeammate).toBe(false);
   });
   it('does not let a hung preference read blank home forever or a late mode hijack the fallback task list', async () => {
     vi.useFakeTimers();

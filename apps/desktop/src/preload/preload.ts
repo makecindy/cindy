@@ -7299,6 +7299,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onLoginProgress: fanOutMakerAuthLoginProgress,
     },
 
+    piKernel: {
+      getState: (check = false): Promise<import('../shared/piKernel').PiKernelState> =>
+        ipcRenderer.invoke('maker:agent:pi-kernel-state', check),
+      install: (request: import('../shared/piKernel').PiKernelInstallRequest): Promise<import('../shared/piKernel').PiKernelState> =>
+        ipcRenderer.invoke('maker:agent:pi-kernel-install', request),
+    },
+
     // ── Agent 联合状态 (取代老 electronAPI.codex.binary.getStatus) ──────────
     agent: {
       getStatus: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>

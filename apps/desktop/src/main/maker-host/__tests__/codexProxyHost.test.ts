@@ -4491,6 +4491,73 @@ describe('codex proxy host', () => {
       return current;
     }
 
+    it('独立 xAI 账号(auth.native=xai、id 非 xai)的会话同样走 xAI 兼容改写:tool-less compact 不会带着 tool_choice 裸发(#4888)', async () => {
+      const host = await freshCodexProxyHost();
+      const { buildUserProvider } = await import('@cindy/model-providers');
+      const { setCustomProviders } = await import('../active-catalog.js');
+      // 目录里独立账号 provider 的 id 不是字面量 'xai',仅 auth.native 标记为 xAI 系。
+      setCustomProviders([buildUserProvider({
+        id: 'grok-second',
+        name: 'Second Grok',
+        auth: { method: 'oauth', native: 'xai' },
+        runtimes: {},
+      })]);
+      try {
+        const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+        mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+          url: 'http://127.0.0.1:43210',
+          dispose: vi.fn(async () => undefined),
+        });
+        await host.ensureCodexProxyReady();
+        host.registerComposed('session-xai-account', 'thread-xai-account', 'PRODUCT_PROMPT');
+        setSessionProvider('session-xai-account', 'grok-second');
+        const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+        const ctx = { method: 'POST', url: '/responses/compact', headers: { 'thread-id': 'thread-xai-account' } };
+        let current: unknown = {
+          model: 'xai/grok-4.5',
+          instructions: 'BASE_PROMPT\n\nPRODUCT_PROMPT',
+          reasoning: { effort: 'high', summary: 'auto' },
+          tools: [],
+          tool_choice: 'auto',
+          input: [{ role: 'user', content: '压缩上下文' }],
+        };
+        for (const transform of transforms) {
+          const next = transform(current, ctx);
+          if (next !== null && next !== undefined) current = next;
+        }
+        clearSessionProvider('session-xai-account');
+        const out = current as Record<string, unknown>;
+        // 与 first-party 'xai' 会话同口径:补上 x_search,tool_choice 才有工具可选。
+        expect(out.tools).toEqual([{ type: 'x_search' }]);
+        expect(out.tool_choice).toBe('auto');
+        expect(out.instructions).toBeUndefined();
+        // reasoning 能力按该账号目录(由 xai 根装配)解析:通用 Grok 保留 reasoning。
+        expect(out.reasoning).toEqual({ effort: 'high', summary: 'auto' });
+      } finally {
+        setCustomProviders([]);
+      }
+    });
+
+    it('独立 xAI 账号目录暂未包含当前模型时,按具体模型回退 first-party xai 目录,不误判成不支持 reasoning(#4892 review)', async () => {
+      const { resolveXaiCodexCatalogModel } = await import('../codex-proxy-host.js');
+      const model = (id: string, efforts: string[]) => ({ id, name: id, efforts, defaultEffort: efforts[0] ?? 'medium' });
+      const providers = [
+        { id: 'xai', models: { codex: [model('xai/grok-4.5', ['low', 'medium', 'high']), model('xai/grok-code-fast', [])] } },
+        // 账号级发现快照落后:只含 grok-4.7,没有会话正在用的 grok-4.5。
+        { id: 'grok-third', models: { codex: [model('xai/grok-4.7', ['low', 'medium', 'high', 'xhigh'])] } },
+      ] as never;
+      // 账号命中自己的模型时不回退。
+      expect(resolveXaiCodexCatalogModel(providers, 'grok-third', 'xai/grok-4.7')?.efforts).toHaveLength(4);
+      // 账号 provider 存在但该模型未命中 → 回退 first-party xai 的同名模型(保留 reasoning)。
+      expect(resolveXaiCodexCatalogModel(providers, 'grok-third', 'xai/grok-4.5')?.efforts).toHaveLength(3);
+      // 编码系模型即使回退也仍是 0 档位,不会被误放行。
+      expect(resolveXaiCodexCatalogModel(providers, 'grok-third', 'xai/grok-code-fast')?.efforts).toHaveLength(0);
+      // 两边都没有 → undefined(调用方按不支持 reasoning 处理)。
+      expect(resolveXaiCodexCatalogModel(providers, 'grok-third', 'xai/grok-unknown')).toBeUndefined();
+      // first-party xai 自身不重复回退。
+      expect(resolveXaiCodexCatalogModel(providers, 'xai', 'xai/grok-4.7')).toBeUndefined();
+    });
+
     it('请求原本没有 tools 时也补上 x_search(Grok 默认就该能搜 X)', async () => {
       const out = (await runXaiTransforms('no-tools', {
         model: 'xai/grok-4.5',

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { REMOTE_RESOURCE_GET_CHANNEL, type RemoteResourceGetRequest } from '@cindy/device-link';
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
@@ -109,13 +110,15 @@ export function RemoteBotSessionView() {
       </p>
       {sessionId && bot?.online && !failed ? <Spinner size={18} /> : null}
       {failed ? (
-        <button
+        <Button
+          variant="secondary"
+          size="md"
+          compact
           type="button"
-          className="rounded-lg border border-[var(--border-default)] px-3 py-2 text-13 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
           onClick={() => setRetry((n) => n + 1)}
         >
           {t('bots.retry')}
-        </button>
+        </Button>
       ) : null}
     </main>
   );

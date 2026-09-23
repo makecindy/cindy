@@ -32,6 +32,7 @@ import { buildCopyFromTheme, onLocalThemesChange, refreshLocalThemes } from '@/t
 import { toast } from '@/lib/toast';
 import { isLocalThemeId } from '../../../shared/local-themes';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
@@ -184,19 +185,16 @@ function LocalThemeIconButton({
 }) {
   return (
     <Tip text={label}>
-      <button
+      <Button
+        variant="secondary"
+        size="lg"
+        className="w-9 px-0"
         type="button"
         aria-label={label}
         onClick={onClick}
-        className={cn(
-          'flex h-9 w-9 items-center justify-center rounded-xl',
-          'border border-[var(--settings-input-border)]',
-          'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-          'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-        )}
       >
         <Icon size={16} />
-      </button>
+      </Button>
     </Tip>
   );
 }
@@ -659,21 +657,16 @@ export function AppearanceSection() {
               </p>
             </div>
             <Tip text={t('settings.appearance.font.reset')}>
-              <button
+              <Button
+                variant="secondary"
+                className="w-8 px-0"
                 type="button"
                 aria-label={t('settings.appearance.font.reset')}
                 onClick={resetUiSize}
                 disabled={uiSize === DEFAULT_UI_FONT_SIZE}
-                className={cn(
-                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl',
-                  'border border-[var(--settings-input-border)]',
-                  'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                  'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-                  'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-[var(--settings-input-bg)]',
-                )}
               >
                 <RefreshCw size={14} />
-              </button>
+              </Button>
             </Tip>
           </div>
 
@@ -744,21 +737,16 @@ export function AppearanceSection() {
               </p>
             </div>
             <Tip text={t('settings.appearance.font.reset')}>
-              <button
+              <Button
+                variant="secondary"
+                className="w-8 px-0"
                 type="button"
                 aria-label={t('settings.appearance.font.reset')}
                 onClick={resetCodeSize}
                 disabled={codeSize === DEFAULT_CODE_FONT_SIZE}
-                className={cn(
-                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl',
-                  'border border-[var(--settings-input-border)]',
-                  'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                  'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-                  'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-[var(--settings-input-bg)]',
-                )}
               >
                 <RefreshCw size={14} />
-              </button>
+              </Button>
             </Tip>
           </div>
 

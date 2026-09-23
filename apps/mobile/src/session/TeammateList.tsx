@@ -119,9 +119,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   body: { flex: 1, minWidth: 0, gap: spacing.xs, borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: spacing.md },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
-  preview: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  time: { color: colors.textTertiary, fontSize: typeScale.caption },
-  meta: { color: colors.textTertiary, fontSize: typeScale.caption },
+  // Match task rows in HomeListVisuals: title, preview and metadata keep the same hierarchy.
+  title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.subtitle, fontWeight: fontWeight.semibold, lineHeight: lineHeight.listTitle },
+  preview: { color: colors.textSecondary, fontSize: typeScale.code, fontWeight: fontWeight.regular, lineHeight: lineHeight.subtitle },
+  time: { color: colors.textTertiary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.body },
+  meta: { color: colors.textTertiary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.body },
   unread: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: colors.textPrimary },
 });

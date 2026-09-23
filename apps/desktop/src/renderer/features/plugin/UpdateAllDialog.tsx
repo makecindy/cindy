@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * Batch plugin update dialog: rows stream through the unified Main install
  * transaction and only expose progress here.
@@ -130,23 +131,15 @@ export function UpdateAllDialog({
             ))}
           </div>
           <div className="flex items-center justify-end gap-2 border-t-[0.5px] border-[var(--border-default)] px-6 py-4">
-            <button
+            <Button
+              variant={finished ? 'cta' : 'secondary'}
+              size="lg"
+              compact
               type="button"
               onClick={onClose}
-              className={cn(
-                'inline-flex h-9 items-center rounded-full px-5 text-13 font-medium',
-                finished
-                  ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]'
-                  : 'border border-[var(--border-default)] text-[var(--text-primary)] hover:bg-[var(--surface-hover-soft)]',
-                'transition-colors duration-150 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              )}
             >
-              {t(
-                finished
-                  ? 'settings.ghosts.updateAll.doneAction'
-                  : 'settings.ghosts.updateAll.background',
-              )}
-            </button>
+              {t(finished ? 'settings.ghosts.updateAll.doneAction' : 'settings.ghosts.updateAll.background')}
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

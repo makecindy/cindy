@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * KeyboardShortcutsSection — Settings「键盘快捷键」tab 的主区块。
  *
@@ -508,13 +509,16 @@ export function KeyboardShortcutsSection() {
               </span>
 
               {isRecording ? (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  compact
+                  tone="quiet"
                   type="button"
                   onClick={() => setRecordingId(null)}
-                  className="shrink-0 rounded-md px-2 py-1 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-chip)] transition-colors"
                 >
                   {t('settings.shortcuts.cancel')}
-                </button>
+                </Button>
               ) : (
                 <div className="flex shrink-0 items-center gap-1">
                   <button

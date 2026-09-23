@@ -48,3 +48,4 @@ export * from "./pluginSecretSubmission.js";
 export * from "./pluginConnectionSubmission.js";
 export * from "./pluginDeviceAuthorization.js";
 export * from "./pluginOauthAuthentication.js";
+export * from "./inputDelivery.js";

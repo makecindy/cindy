@@ -227,6 +227,8 @@ export interface AgentInputQueuedMessage {
   /** Host-owned text-only input; retained by queue persistence and retry. */
   toolsDisabled?: boolean;
   clientId: string;
+  /** Opt-in: a cancelled delivery ID must never become a fresh enqueue on reconnect. */
+  durableDelivery?: true;
   text: string;
   /**
    * Host-owned receipt for the first acceptance boundary.  The controlled

@@ -1,4 +1,5 @@
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
+import { Button } from '@/components/ui/button';
 import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
@@ -246,12 +247,15 @@ export function TurnChangesCard({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {changeSet.isReversible && (
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              tone="quiet"
+              loading={applying}
               type="button"
               disabled={applying}
-              title={appliesCapturedSubset
-                ? t('chat.turnChanges.partialActionHint')
-                : undefined}
+              title={appliesCapturedSubset ? t('chat.turnChanges.partialActionHint') : undefined}
               aria-label={t(
                 appliesCapturedSubset
                   ? workspaceState === 'undone'
@@ -262,34 +266,23 @@ export function TurnChangesCard({
                     : 'chat.turnChanges.undoAria',
               )}
               onClick={() => void applyTurnChange()}
-              className={cn(
-                'flex h-8 items-center gap-1.5 rounded-lg px-2 text-13 font-medium',
-                'text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
             >
-              {applying
-                ? <LoaderCircle size={15} className="animate-spin" />
-                : workspaceState === 'undone'
-                  ? <Redo2 size={15} />
-                  : <Undo2 size={15} />}
-              {t(
-                workspaceState === 'undone'
-                  ? 'chat.turnChanges.reapply'
-                  : 'chat.turnChanges.undo',
+              {applying ? (
+                <LoaderCircle size={15} className="animate-spin" />
+              ) : workspaceState === 'undone' ? (
+                <Redo2 size={15} />
+              ) : (
+                <Undo2 size={15} />
               )}
-            </button>
+              {t(workspaceState === 'undone' ? 'chat.turnChanges.reapply' : 'chat.turnChanges.undo')}
+            </Button>
           )}
           {files.length > 0 && (
             // 零文件卡没有可展示的 diff,审查面板必然为空;这类卡只承担
             // 「有变更但未记录」的警示职责,不提供死路入口。
-            <button
-              type="button"
-              onClick={() => openReview()}
-              className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
-            >
+            <Button variant="secondary" size="md" compact type="button" onClick={() => openReview()}>
               {t('chat.turnChanges.review')}
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -319,16 +312,16 @@ export function TurnChangesCard({
             </button>
           )}
           {expanded && omittedCount > 0 && (
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              tone="quiet"
               type="button"
               onClick={() => openReview()}
-              className={cn(
-                'flex h-8 items-center gap-1 rounded-lg px-2 text-13 text-[var(--text-secondary)]',
-                'transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-              )}
             >
               {t('chat.turnChanges.reviewRemaining', { count: omittedCount })}
-            </button>
+            </Button>
           )}
           {expanded && files.length > MAX_VISIBLE_FILES && (
             <button

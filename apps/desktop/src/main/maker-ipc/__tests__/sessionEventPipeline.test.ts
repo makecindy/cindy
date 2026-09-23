@@ -1413,6 +1413,44 @@ describe('usage through the production event pipeline', () => {
     await h.dispose();
   });
 
+  it.each(['subscription', 'unpriced', 'api'] as const)(
+    'records MiMo Claude Code usage using its billing route (%s)', async (mode) => {
+      const h = harness();
+      pricing(true);
+      effects.fn('getSessionProvider').mockReturnValue('mimo-account');
+      effects.fn('getActiveCatalog').mockReturnValue({ providers: [{
+        id: 'mimo-account', auth: { method: 'apiKey' },
+        access: { kind: mode === 'api' ? 'api' : 'subscription' },
+      }] });
+      if (mode === 'unpriced') {
+        effects.fn('getCodexProviderSubscriptionValuePrice').mockReturnValue(undefined);
+        effects.fn('getSubscriptionDirectValuePrice').mockReturnValue(undefined);
+        effects.fn('getModelPriceQuote').mockReturnValue(undefined);
+      }
+      h.emit(event('done', {
+        total_cost_usd: 2,
+        modelUsageCumulativeStartsAtZero: true,
+        modelUsage: { 'mimo-v2-pro': { inputTokens: 100, outputTokens: 20, costUSD: 2 } },
+        usageSegmentsComplete: true,
+        usageSegments: [{ ...segment, model: 'mimo-v2-pro', cacheReadTokens: 0 }],
+      }, { source: 'claude-code' }));
+      await microtasks();
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+        model: mode === 'api' ? 'mimo-v2-pro' : 'mimo-v2-pro#billing=subscription',
+        inputTokensDelta: 100, outputTokensDelta: 20,
+        money: expect.objectContaining({ kind: mode === 'api' ? 'actual-cost' : 'value-estimate' }),
+      }));
+      expect(effects.fn('recordTurnSpend')).toHaveBeenCalledTimes(mode === 'api' ? 1 : 0);
+      expect(effects.fn('recordSessionTurnSpend')).toHaveBeenCalledTimes(mode === 'api' ? 1 : 0);
+      if (mode === 'subscription') {
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+          money: expect.objectContaining({ kind: 'value-estimate', amount: expect.any(Number) }),
+        }));
+      }
+      await h.dispose();
+    },
+  );
+
   it.each([[false, false], [true, false], [false, true], [true, true]])('keeps independent Claude subscription accounting out of actual spend (fallback=%s, deleted=%s)', async (fallback, deleted) => {
     const h = harness();
     pricing(true);

@@ -1,7 +1,7 @@
-import { iconSize } from '@/theme';
+import { iconSize, spacing } from '@/theme';
 import { Fragment, useEffect } from 'react';
 import { Button, HStack, Image, Picker, ProgressView, RNHostView, Spacer, Text, TextField, Toggle, useNativeState } from '@expo/ui/swift-ui';
-import { accessibilityLabel, buttonStyle, contentShape, shapes, disabled, font, foregroundStyle, frame, lineLimit, listRowInsets, pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
+import { accessibilityLabel, alignmentGuide, buttonStyle, contentShape, shapes, disabled, font, foregroundStyle, frame, lineLimit, listRowInsets, pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText, type RemoteActionField } from '@cindy/device-link';
 import { View } from 'react-native';
@@ -31,6 +31,9 @@ export function CompanionNativeField({ field, values, onChange, busy }: { field:
     modifiers={[disabled(busy), accessibilityLabel(label), ...(field.kind === 'multiline' ? [lineLimit({ min: 3, max: 8 })] : [])]} /></Section>;
 }
 const AVATAR_SIZE = 48;
+// SF Symbols have different intrinsic widths; the title column must not depend on the glyph.
+const ROW_ICON_WIDTH = iconSize.xxl;
+const ROW_GAP = spacing.md;
 const Field = CompanionNativeField;
 
 export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
@@ -39,8 +42,8 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
   const label = (value: Parameters<typeof resolveRemoteText>[0]) => resolveRemoteText(value, i18n.language);
   const note = (text: string, error = false) => <Section><Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(error ? colors.errorText : colors.textSecondary)]}>{text}</Text></Section>;
   const action = (text: string, press: () => void, blocked = false, destructive = false) => <Button onPress={press} modifiers={[buttonStyle('plain'), listRowInsets({ top: 4, bottom: 4, leading: 16, trailing: 16 }), disabled(blocked || p.busy), frame({ minHeight: 44 }), ...(destructive ? [foregroundStyle(colors.destructive)] : [])]}><HStack modifiers={[frame({ maxWidth: Infinity, minHeight: 44 }), contentShape(shapes.rectangle())]}><Text>{text}</Text><Spacer /></HStack></Button>;
-  const row = (id: string, symbol: string, onPress = () => p.onOpen(id)) => <Button onPress={onPress} modifiers={[buttonStyle('plain'), listRowInsets({ top: 4, bottom: 4, leading: 16, trailing: 16 })]} testID={`companionProfile.${id}`}>
-    <HStack spacing={12} modifiers={[frame({ maxWidth: Infinity, minHeight: 44 }), contentShape(shapes.rectangle())]}><Image systemName={symbol as never} size={iconSize.action} modifiers={[foregroundStyle(colors.textSecondary)]} /><Text>{tr(id)}</Text><Spacer /><Image systemName="chevron.right" size={iconSize.xs} /></HStack>
+  const row = (id: string, symbol: string, onPress = () => p.onOpen(id)) => <Button onPress={onPress} modifiers={[buttonStyle('plain'), listRowInsets({ top: 4, bottom: 4, leading: 16, trailing: 16 }), alignmentGuide('listRowSeparatorLeading', ROW_ICON_WIDTH + ROW_GAP)]} testID={`companionProfile.${id}`}>
+    <HStack spacing={ROW_GAP} modifiers={[frame({ maxWidth: Infinity, minHeight: 44 }), contentShape(shapes.rectangle())]}><Image systemName={symbol as never} size={iconSize.action} modifiers={[foregroundStyle(colors.textSecondary), frame({ width: ROW_ICON_WIDTH })]} /><Text>{tr(id)}</Text><Spacer /><Image systemName="chevron.right" size={iconSize.xs} /></HStack>
   </Button>;
   const panel = (target?: ProfilePanel) => target?.action ? <>
     {target.id === 'capability' && target.text ? note(target.text) : null}

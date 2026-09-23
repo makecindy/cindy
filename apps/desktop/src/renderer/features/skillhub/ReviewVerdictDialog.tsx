@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ReviewVerdictDialog — WARN and BLOCK review result dialogs.
  *
@@ -67,19 +68,9 @@ function GrayPillButton({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'inline-flex h-8 items-center justify-center rounded-full px-4',
-        'text-sm font-medium',
-        'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)]',
-        'hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-        'transition-colors',
-      )}
-    >
+    <Button variant="primary" size="md" compact type="button" onClick={onClick}>
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -91,20 +82,9 @@ function WhitePillButton({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'inline-flex h-8 items-center justify-center rounded-full px-4',
-        'text-sm font-normal',
-        'border bg-[var(--cmd-palette-bg)]',
-        'border-[var(--confirm-btn-secondary-border)] text-[var(--settings-btn-secondary-text)]',
-        'hover:bg-[var(--surface-hover)]',
-        'transition-colors',
-      )}
-    >
+    <Button variant="secondary" size="md" compact type="button" onClick={onClick}>
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -229,21 +209,12 @@ export function ReviewVerdictDialog({
               </>
             ) : (
               // PASS / BLOCK — single primary action (Spec primary: #262626/#d4d4d4)
-              <button
-                type="button"
-                onClick={onCancel}
-                className={cn(
-                  'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-4',
-                  'text-sm font-medium',
-                  'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)] hover:bg-[var(--lightbox-cta-hover)]',
-                  'transition-colors',
-                )}
-              >
+              <Button variant="cta" size="md" compact type="button" onClick={onCancel}>
                 {isPass
                   ? <CheckCircle size={14} className="shrink-0" />
                   : <AlertTriangle size={14} className="shrink-0" />}
                 {primaryLabel ?? (isPass ? t('skillhub.scanResult.dismiss') : t('skillhub.reviewVerdict.returnToFix'))}
-              </button>
+              </Button>
             )}
           </div>
         </Dialog.Content>

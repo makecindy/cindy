@@ -1,4 +1,3 @@
-import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -12,6 +11,7 @@ import { getRemoteOauthContext, type RemoteOauthContext } from '../context.js';
 import { assistPluginOauth, listenForOauthCallback, parseOauthOffer } from '../controller.js';
 import { GhostOauthAccountManager } from '../../cindy-brain/ghostOauthAccounts.js';
 import { cancelActiveGhostOauthFlow } from '../../cindy-brain/ghostOauthFlow.js';
+import { ephemeralCallbackPorts } from './ephemeralCallbackPorts.js';
 
 const action = {
   requestId: 'request-1',
@@ -415,16 +415,13 @@ describe('real local loopback callback and cloud-owned account exchange', () => 
       expect(serialized).not.toContain(value);
   });
   it('binds exact path, method, state and CORS without consuming malformed requests', async () => {
-    const probe = http.createServer();
-    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
-    const port = (probe.address() as { port: number }).port;
-    await new Promise<void>((r) => probe.close(() => r()));
-    const specific = { ...offer, callbackUrl: `http://127.0.0.1:${port}/callback` };
+    const sockets = ephemeralCallbackPorts();
+    const specific = offer;
     const deliver = vi.fn(async () => {});
     const listener = await listenForOauthCallback(specific, deliver, () => {});
     try {
       const request = async (query: string, init?: RequestInit) => {
-        const response = await fetch(specific.callbackUrl + query, init);
+        const response = await sockets.fetch(specific.callbackUrl + query, init);
         await response.text();
         return response.status;
       };
@@ -450,9 +447,15 @@ describe('real local loopback callback and cloud-owned account exchange', () => 
       expect(await request('?state=' + state + '&code=synthetic-code')).toBe(200);
       expect(await request('?state=' + state + '&code=synthetic-code')).toBe(409);
       expect(deliver).toHaveBeenCalledOnce();
-      await expect(listenForOauthCallback(specific, deliver, () => {})).rejects.toThrow();
+      sockets.listen.mockRestore();
+      const occupied = {
+        ...specific,
+        callbackUrl: `http://127.0.0.1:${sockets.port('127.0.0.1')}/callback`,
+      };
+      await expect(listenForOauthCallback(occupied, deliver, () => {})).rejects.toThrow();
     } finally {
       listener.close();
+      sockets.listen.mockRestore();
     }
   });
   it('never interprets a remote address, credential or command as a callback destination', () => {

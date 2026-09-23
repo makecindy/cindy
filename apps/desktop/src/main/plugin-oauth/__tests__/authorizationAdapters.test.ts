@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PluginAuthorizationRequest } from '@cindy/device-link';
 import { openPluginAuthorizationCard } from '../deviceCard.js';
 import { GhostSetupInteractionBridge } from '../../cindy-brain/ghostSetupInteractionBridge.js';
@@ -12,17 +12,23 @@ import {
   OauthHostIdentity,
 } from '../authentication.js';
 
+import { ephemeralCallbackPorts } from './ephemeralCallbackPorts.js';
+
+let sockets: ReturnType<typeof ephemeralCallbackPorts>;
+beforeEach(() => {
+  sockets = ephemeralCallbackPorts();
+});
 const cleanups: Array<() => void> = [];
-afterEach(() => cleanups.splice(0).forEach((close) => close()));
-async function unusedPort() {
-  const server = http.createServer();
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-  const port = (server.address() as { port: number }).port;
-  await new Promise<void>((r) => server.close(() => r()));
-  return port;
-}
-async function loopback() {
-  const callbackUrl = 'http://127.0.0.1:' + (await unusedPort()) + '/cli/callback';
+afterEach(() => {
+  cleanups.splice(0).forEach((close) => close());
+  for (const server of sockets.servers.values()) {
+    server.close();
+    server.closeAllConnections();
+  }
+  vi.restoreAllMocks();
+});
+async function loopback(port = 12345) {
+  const callbackUrl = 'http://127.0.0.1:' + port + '/cli/callback';
   const state = 'cli_state_0123456789';
   const url = new URL('https://provider.example/authorize');
   url.search = new URLSearchParams({
@@ -214,16 +220,15 @@ describe('generic authorization through the signed Host bridge', () => {
   });
 
   it('does not take a callback port already owned by another local process', async () => {
-    const request = await loopback(),
-      h = harness(request);
+    sockets.listen.mockRestore();
     const server = http.createServer((_req, res) => res.end('existing-listener'));
-    await new Promise<void>((r) =>
-      server.listen(Number(new URL(request.callbackUrl).port), '127.0.0.1', r),
-    );
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const request = await loopback((server.address() as { port: number }).port);
     cleanups.push(() => {
       server.close();
       server.closeAllConnections();
     });
+    const h = harness(request);
     const open = vi.fn();
     await expect(h.assist(open)).rejects.toThrow();
     expect(open).not.toHaveBeenCalled();
@@ -287,14 +292,14 @@ describe('generic authorization through the signed Host bridge', () => {
       browserDone = r;
     });
     const assisting = h.assist(async () => {
-      const bad = await fetch(request.callbackUrl + '?state=wrong&code=synthetic');
+      const bad = await sockets.fetch(request.callbackUrl + '?state=wrong&code=synthetic');
       expect(bad.status).toBe(400);
-      const result = await fetch(
+      const result = await sockets.fetch(
         request.callbackUrl + '?state=' + request.state + '&code=synthetic-callback',
       );
       expect(result.status).toBe(200);
       expect(await result.text()).not.toContain('synthetic-callback');
-      const repeated = await fetch(
+      const repeated = await sockets.fetch(
         request.callbackUrl + '?state=' + request.state + '&code=synthetic-callback',
       );
       expect(repeated.status).toBe(409);
@@ -310,14 +315,14 @@ describe('generic authorization through the signed Host bridge', () => {
     await expect(assisting).resolves.toEqual({ accepted: true });
     for (const secret of ['synthetic-callback', request.state, request.url, request.callbackUrl])
       expect(JSON.stringify([h.wire, h.events])).not.toContain(secret);
-    await expect(fetch(request.callbackUrl)).rejects.toThrow();
+    await expect(sockets.fetch(request.callbackUrl)).rejects.toThrow();
   });
 
   it('cannot turn a provider denial into a successful card even if the CLI misreports success', async () => {
     const request = await loopback(),
       h = harness(request);
     const assisting = h.assist(async () => {
-      await fetch(request.callbackUrl + '?state=' + request.state + '&error=access_denied');
+      await sockets.fetch(request.callbackUrl + '?state=' + request.state + '&error=access_denied');
     });
     const rejection = expect(assisting).rejects.toThrow();
     await expect(h.card.result).resolves.toEqual({
@@ -370,11 +375,10 @@ describe('generic authorization through the signed Host bridge', () => {
   });
 
   it('keeps local CLI listeners in control of their own callback port', async () => {
-    const request = await loopback();
+    sockets.listen.mockRestore();
     const server = http.createServer((_req, res) => res.end('CLI callback'));
-    await new Promise<void>((r) =>
-      server.listen(Number(new URL(request.callbackUrl).port), '127.0.0.1', r),
-    );
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const request = await loopback((server.address() as { port: number }).port);
     cleanups.push(() => {
       server.close();
       server.closeAllConnections();

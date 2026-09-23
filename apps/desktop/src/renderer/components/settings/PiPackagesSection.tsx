@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, Puzzle, RefreshCw, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -340,7 +341,11 @@ export function PiPackagesSection() {
               mono
               className="min-w-0 flex-1"
             />
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              loading={busy?.action === 'install'}
               type="button"
               disabled={loadState === 'loading' || !available || !installSource || Boolean(busy)}
               onClick={() => {
@@ -351,11 +356,10 @@ export function PiPackagesSection() {
                 void runMutation('install', installSource);
               }}
               aria-busy={busy?.action === 'install'}
-              className={cn(ACTION_CLASS, 'shrink-0')}
             >
               {busy?.action === 'install' ? <Spinner size={14} /> : <Puzzle size={14} />}
               {t('settings.piPackages.install')}
-            </button>
+            </Button>
           </div>
           <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
           <p className="px-4 py-3 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
@@ -390,10 +394,10 @@ export function PiPackagesSection() {
             <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
               {t('settings.piPackages.loadFailed')}
             </p>
-            <button type="button" onClick={() => void load()} className={ACTION_CLASS}>
+            <Button variant="secondary" size="md" compact type="button" onClick={() => void load()}>
               <RefreshCw size={14} />
               {t('settings.piPackages.retry')}
-            </button>
+            </Button>
           </div>
         )}
 

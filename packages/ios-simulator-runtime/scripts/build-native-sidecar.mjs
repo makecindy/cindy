@@ -17,6 +17,10 @@ import {
   decideNativeSidecarBuild,
   parseMachOArchitectures,
 } from "./native-sidecar-build-policy.mjs";
+import {
+  normalizeIOSSimulatorDeveloperDirectory,
+  resolveIOSSimulatorKitBinary,
+} from "../src/native-sidecar/xcode-layout.mjs";
 
 const execFileAsync = promisify(execFile);
 const packageRoot = path.resolve(
@@ -32,6 +36,11 @@ const desktopResourceRoot = path.resolve(
   "resources",
 );
 const source = path.join(packageRoot, "native", "ios-simulator-sidecar.swift");
+const hidCompatibilitySource = path.join(
+  packageRoot,
+  "native",
+  "hid-compatibility.swift",
+);
 const shimSources = {
   arm64: path.join(packageRoot, "native", "ios-simulator-sidecar-arm64.s"),
   x86_64: path.join(packageRoot, "native", "ios-simulator-sidecar-x86_64.s"),
@@ -71,34 +80,23 @@ const architecture =
 const targetArchitectures =
   architecture === "universal" ? ["x86_64", "arm64"] : [architecture];
 
-const developerDir =
-  process.env.DEVELOPER_DIR ??
-  (
-    await execFileAsync("xcode-select", ["-p"], {
-      maxBuffer: 1024 * 1024,
-    })
-  ).stdout.trim();
-if (!path.isAbsolute(developerDir)) {
-  throw new Error(
-    "[ios-simulator-sidecar] build failed: developer directory must be absolute",
-  );
-}
-const simulatorKitFrameworks = path.join(
-  developerDir,
-  "Library",
-  "PrivateFrameworks",
+const developerDir = normalizeIOSSimulatorDeveloperDirectory(
+  process.env.DEVELOPER_DIR?.trim() ||
+    (
+      await execFileAsync("/usr/bin/xcode-select", ["-p"], {
+        timeout: 5_000,
+        maxBuffer: 16_384,
+      })
+    ).stdout,
 );
-const simulatorKitBinary = path.join(
-  simulatorKitFrameworks,
-  "SimulatorKit.framework",
-  "SimulatorKit",
-);
+const toolchainEnvironment = { ...process.env, DEVELOPER_DIR: developerDir };
+const simulatorKitBinary = await resolveIOSSimulatorKitBinary(developerDir);
 
 async function inspectSimulatorKitArchitectures() {
   const { stdout } = await execFileAsync(
     "xcrun",
     ["lipo", "-archs", simulatorKitBinary],
-    { maxBuffer: 1024 * 1024 },
+    { maxBuffer: 1024 * 1024, env: toolchainEnvironment },
   );
   const architectures = parseMachOArchitectures(stdout);
   if (architectures.length === 0) {
@@ -117,16 +115,22 @@ async function writeHelperBuildResult(result) {
 }
 
 async function compileArchitecture(targetArchitecture, output) {
+  // Swift requires top-level executable code to be named main.swift when
+  // compiling it alongside independently testable support files.
+  const sourceStaging = await mkdtemp(
+    path.join(os.tmpdir(), "cindy-ios-sidecar-source-"),
+  );
+  const mainSource = path.join(sourceStaging, "main.swift");
   const outputDir = path.dirname(output);
   const shimObject = path.join(
     outputDir,
     `ios-simulator-sidecar-shim-${targetArchitecture}.o`,
   );
-  await mkdir(outputDir, { recursive: true });
-  await rm(output, { force: true });
-  await rm(shimObject, { force: true });
-
   try {
+    await mkdir(outputDir, { recursive: true });
+    await rm(output, { force: true });
+    await rm(shimObject, { force: true });
+    await copyFile(source, mainSource);
     await execFileAsync(
       "xcrun",
       [
@@ -138,13 +142,14 @@ async function compileArchitecture(targetArchitecture, output) {
         "-o",
         shimObject,
       ],
-      { maxBuffer: 1024 * 1024 },
+      { maxBuffer: 1024 * 1024, env: toolchainEnvironment },
     );
     await execFileAsync(
       "xcrun",
       [
         "swiftc",
-        source,
+        mainSource,
+        hidCompatibilitySource,
         shimObject,
         "-O",
         "-target",
@@ -153,10 +158,6 @@ async function compileArchitecture(targetArchitecture, output) {
         "/Library/Developer/PrivateFrameworks",
         "-framework",
         "CoreSimulator",
-        "-F",
-        simulatorKitFrameworks,
-        "-framework",
-        "SimulatorKit",
         "-framework",
         "Accelerate",
         "-framework",
@@ -171,17 +172,14 @@ async function compileArchitecture(targetArchitecture, output) {
         "-rpath",
         "-Xlinker",
         "/Library/Developer/PrivateFrameworks",
-        "-Xlinker",
-        "-rpath",
-        "-Xlinker",
-        simulatorKitFrameworks,
         "-o",
         output,
       ],
-      { maxBuffer: 1024 * 1024 },
+      { maxBuffer: 1024 * 1024, env: toolchainEnvironment },
     );
     await chmod(output, 0o755);
   } finally {
+    await rm(sourceStaging, { recursive: true, force: true });
     await rm(shimObject, { force: true });
   }
 }
@@ -304,7 +302,7 @@ async function buildHelperBundle() {
       await execFileAsync(
         "xcrun",
         ["lipo", "-create", ...thinOutputs, "-output", executable],
-        { maxBuffer: 1024 * 1024 },
+        { maxBuffer: 1024 * 1024, env: toolchainEnvironment },
       );
     }
     await chmod(executable, 0o755);

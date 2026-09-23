@@ -1031,6 +1031,7 @@ describe("WdaProcessManager", () => {
       stop: vi.fn(async () => undefined),
     } satisfies WdaProcessManagerOptions["nativeCapabilityProvider"];
     const harness = await createHarness(nativeManager);
+    const developerDirectory = "/Applications/Xcode A.app/Contents/Developer";
     const running = await harness.manager.start({
       instanceId: "instance-a",
       simulatorUdid: UDID,
@@ -1038,8 +1039,21 @@ describe("WdaProcessManager", () => {
       runtimeIdentifier: "runtime",
       runtimeBuildVersion: "runtime-build",
       xcodeBuild: "build",
+      developerDirectory,
       architecture: "arm64",
     });
+    expect(harness.run).toHaveBeenCalledWith(
+      "/usr/bin/xcodebuild",
+      expect.any(Array),
+      expect.objectContaining({
+        env: expect.objectContaining({ DEVELOPER_DIR: developerDirectory }),
+      }),
+    );
+    expect(harness.launch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({ DEVELOPER_DIR: developerDirectory }),
+      }),
+    );
     expect(nativeManager.start).toHaveBeenCalledTimes(1);
     expect(nativeManager.start).toHaveBeenCalledWith({
       instanceId: "instance-a",
@@ -1049,6 +1063,7 @@ describe("WdaProcessManager", () => {
         runtimeIdentifier: "runtime",
         runtimeBuildVersion: "runtime-build",
         xcodeBuild: "build",
+        developerDirectory,
         architecture: "arm64",
       },
     });
@@ -1111,6 +1126,7 @@ describe("WdaProcessManager", () => {
           runtimeIdentifier: "runtime",
           runtimeBuildVersion: "runtime-build",
           xcodeBuild: "build",
+          developerDirectory,
           architecture: "arm64",
         },
       },

@@ -7,7 +7,6 @@ import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { recordSessionTurnSpend } from '../sessionSpendBroadcaster.js';
 import { recordSchedulerTurnCost, recordTurnUsageOnMessage } from '../turnCostBroadcaster.js';
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
-import { isClaudeSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
 import {
@@ -29,7 +28,6 @@ import {
   billingRouteForExplicitProvider,
   buildClaudeTurnUsageDetails,
   computePriceQuoteTurnMoney,
-  isAnthropicModel,
   normalizeTurnUsageSegments,
   normalizeModelIdForPricing,
   resolveClaudeTurnCostSinks,
@@ -268,19 +266,15 @@ export function recordSessionClaudeTurnUsage(
         }));
         // 按模型记账 (首页仪表盘"按模型拆分"): 保留 provider/SKU 前缀，
         // `codex/` 等预算路由必须精确命中自己的报价，不能回落到裸模型的另一折扣。
-        // 订阅轮打 #billing=subscription 标记(Claude 订阅:Anthropic 模型 + cost=0),
-        // 或 bridge 订阅轮(chatgpt// xai/ 前缀,source==='subscription');两类均需触发
-        // rebroadcastTodaySpend 刷新首页仪表盘。
+        // 订阅分类复用计费解析结果，覆盖显式 Token Plan 与 bridge 订阅路由。
+        // 同一判据驱动估值、模型行标记与首页仪表盘刷新。
         const modelUsageWrites: Promise<unknown>[] = [];
         const subscriptionTurnEstimates: RegionalMoney[] = [];
         let hasSubscriptionValueRow = false;
         for (const m of perModel) {
-          const isClaudeSubscriptionValueRow =
-            isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model);
-          const isBridgeSubscriptionRow =
-            m.source === 'subscription' && isSubscriptionDirectRoute(m.model);
+          const isSubscriptionValueRow = m.source === 'subscription';
           const subscriptionEstimate =
-            isClaudeSubscriptionValueRow || isBridgeSubscriptionRow
+            isSubscriptionValueRow
               ? computePriceQuoteTurnMoney(
                   m.deltas,
                   (sessionProviderForBilling
@@ -293,19 +287,19 @@ export function recordSessionClaudeTurnUsage(
           if (subscriptionEstimate?.amount) {
             subscriptionTurnEstimates.push(subscriptionEstimate);
           }
-          if (isClaudeSubscriptionValueRow || isBridgeSubscriptionRow)
+          if (isSubscriptionValueRow)
             hasSubscriptionValueRow = true;
           const modelRowMoney =
             m.money?.kind === 'actual-cost'
               ? m.money
-              : isClaudeSubscriptionValueRow || isBridgeSubscriptionRow
+              : isSubscriptionValueRow
                 ? (subscriptionEstimate ?? deps.unpricedSubscriptionValueMarker())
                 : null;
           modelUsageWrites.push(
             recordModelTurnUsage({
               agentKind: 'claude-code',
               model:
-                isClaudeSubscriptionValueRow || isBridgeSubscriptionRow
+                isSubscriptionValueRow
                   ? claudeSubscriptionUsageModelKey(m.model)
                   : m.model,
               // The subscription suffix lets the existing schema reconstruct this amount as

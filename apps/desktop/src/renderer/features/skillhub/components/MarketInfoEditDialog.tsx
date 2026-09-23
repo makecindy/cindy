@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * MarketInfoEditDialog — 编辑市场展示信息(显示名/描述/分类)。
  * 列表卡片菜单与详情页「编辑信息」共用;弹窗形态,关闭即回到来源页,
@@ -272,33 +273,26 @@ export function MarketInfoEditDialog({
           </div>
 
           <div className="flex items-center justify-end gap-2 p-4">
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               onClick={() => onOpenChange(false)}
-              className={cn(
-                'inline-flex h-8 items-center justify-center rounded-full px-4',
-                'text-sm font-normal border bg-[var(--cmd-palette-bg)]',
-                'border-[var(--confirm-btn-secondary-border)] text-[var(--settings-btn-secondary-text)]',
-                'hover:bg-[var(--surface-hover)] transition-colors',
-              )}
             >
               {t('skillhub.publishDialog.cancel')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="cta"
+              size="md"
+              compact
+              loading={saving}
               type="button"
               disabled={loading || saving || Boolean(loadError) || invalid || readOnly}
               onClick={() => void handleSave()}
-              className={cn(
-                'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-4',
-                'text-sm font-medium leading-none',
-                'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]',
-                'hover:bg-[var(--lightbox-cta-hover)] transition-colors',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
             >
-              {saving ? <Spinner size={14} /> : null}
-              {saving ? t('skillhub.visibilityEditor.saving') : t('skillhub.visibilityEditor.save')}
-            </button>
+              { t('skillhub.visibilityEditor.save')}
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

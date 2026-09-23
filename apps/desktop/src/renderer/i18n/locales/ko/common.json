@@ -1082,7 +1082,7 @@
     },
     "about": {
       "title": "정보",
-      "description": "앱과 통합된 Agent의 런타임 버전. 모든 버전 번호는 시작 시 메인 프로세스가 자동 감지합니다.",
+      "description": "앱 및 통합된 Agent의 런타임 버전입니다.",
       "appVersionLabel": "앱 버전",
       "claudeCodeVersionLabel": "Claude Code 버전",
       "codexVersionLabel": "Codex 버전",
@@ -1275,6 +1275,33 @@
         "reconcileFailed": "진단에 실패했습니다",
         "reconcileHealthy": "장부와 디스크가 일치합니다. 이상이 없습니다.",
         "reconcileIssues": "이상 발견: 장부에 없는 파일 {{orphans}}개({{orphanSize}}), 누락된 파일 {{missing}}개, 인식할 수 없는 항목 {{stray}}개. 전체 목록은 앱 로그를 확인하세요."
+      },
+      "piKernel": {
+        "manage": "Pi 버전 관리",
+        "checking": "확인 중…",
+        "checkFailed": "확인 실패",
+        "available": "업데이트 있음",
+        "lookup": "준비 중…",
+        "download": "다운로드 중…",
+        "verify": "검증 중…",
+        "activate": "전환 중…",
+        "update": "Pi 최신 버전으로 업데이트",
+        "restore": "Cindy 정식 버전 복원",
+        "check": "업데이트 확인",
+        "releaseNotes": "Pi 릴리스 노트",
+        "checkedAt": "마지막 확인: {{time}}",
+        "updateTitle": "Pi {{version}}으로 업데이트할까요?",
+        "restoreTitle": "Pi {{version}}을 복원할까요?",
+        "updateDescription": "Pi에서 배포한 버전으로, Cindy와 호환되지 않을 수 있습니다. 언제든 Cindy 정식 버전으로 복원할 수 있습니다. 기존 세션은 현재 버전을 계속 사용합니다.",
+        "restoreDescription": "더 낮은 버전이더라도 Cindy 정식 릴리스에서 배포하는 Pi를 설치합니다. 기존 세션은 현재 버전을 계속 사용합니다.",
+        "updateConfirm": "업데이트",
+        "restoreConfirm": "복원",
+        "installed": "새 세션부터 Pi {{version}}을 사용합니다.",
+        "versionChanged": "배포 버전이 변경되었습니다. 다시 확인한 후 설치해 주세요.",
+        "busy": "다른 Pi 업데이트가 진행 중입니다.",
+        "installFailed": "Pi 설치에 실패하여 이전 버전을 계속 사용합니다. 네트워크와 디스크 여유 공간을 확인한 후 다시 시도해 주세요.",
+        "openFailed": "릴리스 노트를 열 수 없습니다.",
+        "restartRequired": "Pi {{version}}이 설치되었습니다. Cindy를 재시작하면 사용할 수 있습니다."
       }
     },
     "apiKey": {
@@ -2343,6 +2370,7 @@
         "endpointLabel": "{{agent}} 기본 URL",
         "noAuthNote": "이 프록시는 클라이언트 키가 필요하지 않습니다. Cindy는 전달 전에 CLI 구독 자격 증명을 제거합니다.",
         "signIn": "로그인",
+        "mimoTokenPlanNote": "MiMo Token Plan 페이지의 전용 API 키 (tp-…)를 사용하세요. 호출 시 구독 할당량이 사용됩니다. 종량제 API 키와 혼용할 수 없습니다.",
         "setupLink": {
           "apiKey": "API 키 받기",
           "account": "가입 또는 로그인",
