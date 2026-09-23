@@ -2582,7 +2582,8 @@
       },
       "localAccount": {
         "useClaude": "使用本機 Claude Code 帳號",
-        "unavailable": "找不到可用的本機登入，請先在對應應用程式登入，或新增獨立帳號。"
+        "unavailable": "無法讀取本機 Claude Code 登入，請先在終端機執行 claude 並登入，或在 Cindy 登入獨立帳號",
+        "rejected": "本機 Claude Code 登入已失效，請在終端機執行 claude 並用 /login 重新登入，或在 Cindy 登入獨立帳號；此入口不讀取 Claude 桌面 App 登入"
       },
       "connection": {
         "modelCount": "已設定 {{count}} 個模型",

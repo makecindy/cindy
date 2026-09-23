@@ -2582,7 +2582,8 @@
       },
       "localAccount": {
         "useClaude": "ローカルの Claude Code アカウントを使用",
-        "unavailable": "利用できるローカルログインがありません。元のアプリにログインするか、別のアカウントを追加してください。"
+        "unavailable": "ローカルの Claude Code のログインを読み取れません。ターミナルで claude を実行してログインするか、Cindy で別のアカウントにログインしてください。",
+        "rejected": "ローカルの Claude Code のログインは無効です。ターミナルで claude を実行して /login で再ログインするか、Cindy で別のアカウントにログインしてください。この機能は Claude デスクトップアプリのログインを読み取りません。"
       },
       "connection": {
         "modelCount": "{{count}} 個のモデルを設定済み",

@@ -2582,7 +2582,8 @@
       },
       "localAccount": {
         "useClaude": "로컬 Claude Code 계정 사용",
-        "unavailable": "사용 가능한 로컬 로그인이 없습니다. 해당 앱에 로그인하거나 별도 계정을 추가하세요."
+        "unavailable": "로컬 Claude Code 로그인을 읽을 수 없습니다. 터미널에서 claude를 실행해 로그인하거나 Cindy에서 별도 계정으로 로그인하세요.",
+        "rejected": "로컬 Claude Code 로그인이 더 이상 유효하지 않습니다. 터미널에서 claude를 실행해 /login으로 다시 로그인하거나 Cindy에서 별도 계정으로 로그인하세요. 이 기능은 Claude 데스크톱 앱의 로그인을 읽지 않습니다."
       },
       "connection": {
         "modelCount": "모델 {{count}}개 설정됨",

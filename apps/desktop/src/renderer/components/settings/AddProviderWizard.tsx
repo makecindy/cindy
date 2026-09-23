@@ -767,8 +767,10 @@ export function AddProviderWizard({
       const result = await window.electronAPI.maker.claudeOAuthLogin(loginKey);
       if (localLoginRef.current !== login) return;
       if (result.ok) onDone('anthropic');
-      else if (result.reason !== 'login_cancelled') toast.error(t('settings.providers.localAccount.unavailable'));
-    } catch { if (localLoginRef.current === login) toast.error(t('settings.providers.localAccount.unavailable')); }
+      else if (result.reason === 'local_rejected') toast.error(t('settings.providers.localAccount.rejected'));
+      else if (result.reason === 'local_unavailable') toast.error(t('settings.providers.localAccount.unavailable'));
+      else if (result.reason !== 'login_cancelled') toast.error(t('settings.connections.claude.toast.loginFailed'));
+    } catch { if (localLoginRef.current === login) toast.error(t('settings.connections.claude.toast.loginFailed')); }
     finally {
       if (localLoginRef.current === login) {
         localLoginRef.current = null;

@@ -2583,7 +2583,8 @@
       },
       "localAccount": {
         "useClaude": "Use local Claude Code account",
-        "unavailable": "No local sign-in is available. Sign in to the source app or add a separate account."
+        "unavailable": "Could not read a local Claude Code sign-in. Run claude in a terminal and sign in, or sign in to a separate account in Cindy.",
+        "rejected": "The local Claude Code sign-in is no longer valid. Run claude in a terminal and use /login, or sign in to a separate account in Cindy. This option does not read the Claude desktop app sign-in."
       },
       "connection": {
         "modelCount": "{{count}} models configured",

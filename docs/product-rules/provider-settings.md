@@ -116,3 +116,10 @@ OpenAI、Claude 和 Grok 都允许新增独立登录账号。每次新增生成�
 - 本机 Claude 刷新被服务端明确拒绝时，仅在现有绑定文件记录该次凭证的 SHA-256 摘要。
   重启或手动断开不清除这个标记；同一凭证不能重新连接，来源工具更新凭证或更换账号后可重新连接。
   不删除系统凭证，不新增凭证明文副本，不为正常手动断开后的恢复增加网络验证。
+
+本机 Claude 连接失败时，区分无法读取来源登录与当前凭证已被服务端拒绝；后者引导在
+终端 Claude Code 中通过 `/login` 重新登录，或在 Cindy 登录独立账号。该入口只读取
+Claude Code 登录，不读取 Claude 桌面 App 登录。未知错误保留登录失败提示，取消不显示错误。
+此分类不清除拒绝标记、不重试已拒绝凭证，也不新增凭证来源；向导与已有连接详情保持一致。
+回归见 `claudeNativeConnection.test.ts`、`claudeLocalLoginCancellation.test.ts`、
+`addProviderWizardOpenAiAuth.test.tsx` 与 `providersSectionAssetModule.test.tsx`。

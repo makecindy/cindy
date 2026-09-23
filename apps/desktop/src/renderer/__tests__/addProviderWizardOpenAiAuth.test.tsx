@@ -69,6 +69,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
   ProviderLogoMark: () => null,
 }));
 
+import { toast } from '@/lib/toast';
 import { AddProviderWizard } from '@/components/settings/AddProviderWizard';
 import { invalidatePendingCodexLogin } from '@/hooks/codexAuthLogin';
 
@@ -191,6 +192,32 @@ afterEach(() => {
 });
 
 describe('AddProviderWizard — OpenAI 授权边界', () => {
+  it.each([
+    ['local_rejected', 'settings.providers.localAccount.rejected'],
+    ['local_unavailable', 'settings.providers.localAccount.unavailable'],
+    ['unexpected_failure', 'settings.connections.claude.toast.loginFailed'],
+    ['login_cancelled', null],
+  ])('explains the local Claude failure %s without completing login', async (reason, key) => {
+    triggerLogin.mockResolvedValue({ ok: false, authorized: false, reason });
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id: 'anthropic' }]}
+      entry={{ kind: 'builtin', providerId: 'anthropic' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    const button = await screen.findByText('settings.providers.localAccount.useClaude');
+    await act(async () => { fireEvent.click(button); });
+    if (key) expect(toast.error).toHaveBeenCalledExactlyOnceWith(key);
+    else expect(toast.error).not.toHaveBeenCalled();
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it('does not report missing local credentials when the Claude IPC call fails', async () => {
+    triggerLogin.mockRejectedValue(new Error('test IPC failure'));
+    render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id: 'anthropic' }]}
+      entry={{ kind: 'builtin', providerId: 'anthropic' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+    const button = await screen.findByText('settings.providers.localAccount.useClaude');
+    await act(async () => { fireEvent.click(button); });
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('settings.connections.claude.toast.loginFailed');
+  });
+
   it.each(['openai', 'anthropic'].flatMap(id => ['cancel', 'unmount'].map(exit => ({ id, exit }))))('discards local $id completion after $exit', async ({ id, exit }) => {
     let finish!: (value: unknown) => void;
     triggerLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));
