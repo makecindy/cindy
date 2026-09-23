@@ -859,6 +859,89 @@ fn apply_descriptor(handle: HANDLE, descriptor: &str) -> Result<()> {
     Ok(())
 }
 
+fn inherit_parent_acl(handle: HANDLE) -> Result<()> {
+    // Drop DACL protection and keep the current ACL so Windows copies inherited
+    // ACEs from the restored parent. Updater-created files otherwise keep the
+    // administrator-only ACL written at create time.
+    let mut dacl = ptr::null_mut();
+    let mut sd = ptr::null_mut();
+    let get = unsafe {
+        GetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut dacl,
+            ptr::null_mut(),
+            &mut sd,
+        )
+    };
+    if get != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(get as i32));
+    }
+    let set = unsafe {
+        SetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            dacl,
+            ptr::null_mut(),
+        )
+    };
+    unsafe {
+        LocalFree(sd);
+    }
+    if set != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(set as i32));
+    }
+    Ok(())
+}
+
+fn extra_code_descendants(root: &Path, captured: &[(PathBuf, String)]) -> Result<Vec<PathBuf>> {
+    let mut extras = Vec::new();
+    let mut pending = vec![root.to_owned()];
+    while let Some(path) = pending.pop() {
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return denied();
+        }
+        if metadata.is_dir() {
+            for item in std::fs::read_dir(&path)? {
+                let child = item?.path();
+                let name = child
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(error)?;
+                if is_excluded_data_name(name) {
+                    continue;
+                }
+                pending.push(child);
+            }
+        }
+        let captured_path = captured
+            .iter()
+            .any(|(existing, _)| same_listed_path(existing, &path) || same_file(existing, &path));
+        if !captured_path && !same_listed_path(root, &path) {
+            extras.push(path);
+        }
+        if extras.len() + pending.len() > 100_000 {
+            return denied();
+        }
+    }
+    // Shallowest first: a nested extra must inherit from a parent that has
+    // already dropped CODE_DACL, not from another still-protected extra.
+    extras.sort_by(|a, b| {
+        a.components()
+            .count()
+            .cmp(&b.components().count())
+            .then_with(|| a.as_os_str().cmp(b.as_os_str()))
+    });
+    Ok(extras)
+}
+
 fn secure_code_with_descriptor(path: &Path, descriptor: &str) -> Result<()> {
     let handle = open_for_acl(path)?;
     apply_descriptor(handle.0, descriptor)
@@ -1173,6 +1256,20 @@ impl AclSnapshot {
         pinned.sort_by(|(a, _, _), (b, _, _)| restore_depth(a, b));
         for (_, handle, descriptor) in &pinned {
             apply_descriptor(handle.0, descriptor)?;
+        }
+        // Updater-created files are outside the first-install snapshot and keep
+        // the protected CODE_DACL. After snapshot paths are restored, re-inherit
+        // those extra descendants from their restored parent so a standard user
+        // can update or delete the tree after the service is removed.
+        if let Some(root) = root {
+            if root.exists() {
+                for path in extra_code_descendants(root, &self.paths)? {
+                    if allowed(&path) && path.exists() {
+                        let handle = open_for_acl(&path)?;
+                        inherit_parent_acl(handle.0)?;
+                    }
+                }
+            }
         }
         drop(ancestor_pins);
         Ok(())
@@ -1880,6 +1977,42 @@ mod tests {
         assert!(tree
             .restore_allowed(|path| path.ends_with("missing"))
             .is_ok());
+    }
+    #[test]
+    fn restore_reinherits_descendants_created_after_the_snapshot() {
+        let fixture = Fixture::new();
+        let nested = fixture.0.join("Cindy");
+        let child = nested.join("resources");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(child.join("app.asar"), b"fixture").unwrap();
+        let sid = token_user_sid(
+            token(unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() })
+                .unwrap()
+                .0,
+        )
+        .unwrap();
+        for path in [&nested, &child] {
+            secure_code_with_descriptor(path, &format!("O:{sid}D:(A;OICI;FA;;;{sid})")).unwrap();
+        }
+        let snapshot = AclSnapshot::capture(&[nested.clone(), child.clone()]).unwrap();
+        let extra_dir = child.join("app.asar.unpacked");
+        let extra = extra_dir.join("addon.node");
+        std::fs::create_dir_all(&extra_dir).unwrap();
+        std::fs::write(&extra, b"payload").unwrap();
+        for path in [&extra_dir, &extra] {
+            secure_code_with_descriptor(path, &format!("O:{sid}D:P(A;;FRWO;;;{sid})")).unwrap();
+        }
+        assert!(std::fs::OpenOptions::new()
+            .write(true)
+            .open(&extra)
+            .is_err());
+        snapshot.restore_in(Some(&nested), |_| true).unwrap();
+        std::fs::write(&extra, b"writable again").unwrap();
+        let extra_sd = descriptor(&extra);
+        assert!(
+            !extra_sd.contains("D:P"),
+            "updater-created objects must re-inherit the restored parent ACL: {extra_sd}"
+        );
     }
     #[test]
     fn reinstall_keeps_the_first_captured_restore_record() {
