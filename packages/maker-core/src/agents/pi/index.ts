@@ -5985,16 +5985,39 @@ export class PiAgent extends BaseAgent {
       }
     };
 
-    const assertImageInputSupported = (images: readonly PiPromptImage[]): void => {
+    const assertImageInputSupported = async (images: readonly PiPromptImage[]): Promise<void> => {
       if (images.length === 0) return;
-      const nativeModel = nativeProviderById
-        .get(mutablePiProviderId)
-        ?.models.find((candidate) => candidate.id === resolveNativeModelId(mutablePiProviderId, mutableModel));
-      const supportsImageInput =
-        mutablePiProviderId === PI_PROVIDER_ID
-          ? gatewayImageInputByModel.get(mutableModel) === true
-          : nativeModel !== undefined && (nativeModel.input ?? ['text', 'image']).includes('image');
-      if (supportsImageInput) return;
+      // 目录未声明 input 时按**支持**图片处理（上游 #4854：未知能力默认放行，不再一律拒收），
+      // 与本文件其余判定口径一致；本机声明面（override）只用来把「确实不支持」的模型挡下来。
+      const supportsNow = (): boolean => {
+        if (mutablePiProviderId === PI_PROVIDER_ID) {
+          return gatewayImageInputByModel.get(mutableModel) === true;
+        }
+        const nativeModel = nativeProviderById
+          .get(mutablePiProviderId)
+          ?.models.find(
+            (candidate) => candidate.id === resolveNativeModelId(mutablePiProviderId, mutableModel),
+          );
+        return nativeModel !== undefined && (nativeModel.input ?? ['text', 'image']).includes('image');
+      };
+      // 双向对账必须先于信任快照：声明可能从「支持」被改成「不支持」，此时旧快照仍是 true，
+      // 先查 supportsNow() 会直接把图片放给一个已声明不支持的模型。对账在判定之前跑
+      // (目录未声明 / 与快照一致时只花一次内存查找)。
+      // send / steer 不在会话串行链上，这里补链：switch_session / set_model 不得与在途控制
+      // RPC(心跳 setModel、compact)交错；switchModel 路径已在链内，故不在那边重复加锁。
+      // 无图消息在第一行 return，纯文本发送仍是零成本。
+      await runExclusivePiRpc(() =>
+        refreshImageCapabilityOnSwitch(mutableModel, mutablePiProviderId),
+      );
+      // 宿主快照已对齐但子进程还没吃到新清单（回合在跑，重载被延后）：本次不得放行 —— 图片
+      // 会发给一个仍按旧清单判定的子进程。缓存已对齐，下一轮回合结束/下一次同步点自动生效。
+      if (imageCapabilityReloadPending && supportsNow()) {
+        throw new Error(
+          '[PI_IMAGE_CAPABILITY_REFRESH_FAILED] 图片输入能力已更新，但子进程要等当前回合结束后才能加载新清单；' +
+            '请稍后重发这张图（或切一次模型）。',
+        );
+      }
+      if (supportsNow()) return;
       throw new PiImageInputUnsupportedError();
     };
 
@@ -6037,7 +6060,7 @@ export class PiAgent extends BaseAgent {
         );
       }
       throw new Error(
-        '[PI_CATALOG_RELOAD_UNCONFIRMED] 模型目录重载未确认，已终止本任务。请重新打开任务后再切换模型。',
+        '[PI_CATALOG_RELOAD_UNCONFIRMED] 模型目录重载未确认，已终止本任务。请重新打开任务后重试。',
       );
     };
     const restoreNativeCatalog = async (
@@ -6154,6 +6177,277 @@ export class PiAgent extends BaseAgent {
         return false;
       }
     };
+    /**
+     * 图片能力对账的「宿主快照已改、子进程清单未重载」标记。回合在跑时不重建子会话
+     * (switch_session 会按 CLI 路由重建 AgentSession，打断在跑的回合)，此时只对齐宿主
+     * 快照(准入门立即生效)，由下一次空闲对账(心跳 / 发图 / 切模)补重载。
+     */
+    let imageCapabilityReloadPending = false;
+    /**
+     * 把 models.json 的新清单交给子进程。与 xAI 热刷新同口径：set_model 不重读 models.json，
+     * 只有 switch_session → createRuntime → ModelConfig.load 才让子进程加载新清单。
+     * 无 sdkSessionId 时无法 switch_session，只保证 host 侧(准入门读的快照)已对齐。
+     */
+    const reloadImageCapabilityIntoChild = async (
+      model: string,
+      rollbackBaseline?: PiNativeProviderSpec[],
+    ): Promise<void> => {
+      const sessionPath = sdkSessionId;
+      if (!sessionPath) {
+        imageCapabilityReloadPending = false;
+        return;
+      }
+      let reloaded;
+      try {
+        reloaded = await proc.request({ type: 'switch_session', sessionPath });
+      } catch (err) {
+        // reject/超时 = 不知道子进程有没有吃到新 models.json，回滚和放行都可能分叉。
+        return await terminateUnconfirmedCatalogReload(err);
+      }
+      if (!reloaded.success) {
+        // 本次对账刚写过目录就回滚回旧快照；若是早先推迟的补重载（没有本次基线），保留
+        // pending —— 宿主快照已生效，下一次空闲对账继续重试。
+        if (rollbackBaseline) await restoreNativeCatalogOrTerminate(rollbackBaseline);
+        imageCapabilityReloadPending = rollbackBaseline === undefined;
+        throw new Error(
+          `[PI_IMAGE_CAPABILITY_REFRESH_FAILED] 图片输入能力更新未生效：子进程重载被拒（${reloaded.error ?? 'unknown'}）。` +
+            (rollbackBaseline
+              ? '本次变更已回滚，可重试或切换模型后再试。'
+              : '稍后会自动重试；若持续失败请重新打开任务。'),
+        );
+      }
+      // switch_session 按进程启动时的 --provider/--model 重建 AgentSession（与本文件其余 4 处
+      // switch_session 同一坑，见 switchModel 内注释）：重建后子进程回到 spawn 路由，而宿主与
+      // 子代理快照仍以为在当前路由上 —— 同路由 no-op、发图、steer 之后都不会再打 set_model，
+      // 提示词会发给错误的模型且没有任何报错。
+      // 但重放**不能无条件发**：spawn 能靠 custom model id 跑在 Pi 自带目录没有的路由上
+      // （如 SuperGrok），对这种路由重发 set_model 反而会被 Pi 拒（见 switchModel 开头同路由
+      // no-op 的说明与对应测试）—— 先 get_state 读回，读回就等于当前路由时什么都不做。
+      let verifiedModel: { provider?: unknown; id?: unknown } | null | undefined;
+      try {
+        const verified = await proc.request({ type: 'get_state' });
+        if (!verified.success) throw new Error(`get_state failed: ${verified.error ?? 'unknown'}`);
+        verifiedModel = (
+          verified.data as { model?: { provider?: unknown; id?: unknown } | null } | undefined
+        )?.model;
+      } catch (err) {
+        // 读不到状态 = 不知道子进程在哪条路由上，放行与回滚都可能分叉。
+        return await terminateUnconfirmedCatalogReload(err);
+      }
+      const routeMatches =
+        verifiedModel?.provider === mutablePiProviderId && verifiedModel.id === mutableWireModel;
+      if (!routeMatches) {
+        let reapplied;
+        try {
+          reapplied = await proc.request({
+            type: 'set_model',
+            provider: mutablePiProviderId,
+            modelId: mutableWireModel,
+          });
+        } catch (err) {
+          // 请求本身失败 = 变更结果未知。
+          return await terminateUnconfirmedCatalogReload(err);
+        }
+        if (!reapplied.success) {
+          // 子进程确实没被切回当前路由：继续用它会静默发到错误的模型上，而保留 pending
+          // 重试也修不好“已经跑在错路由上”这个事实 —— 终止（fail-closed）。
+          return await terminateUnconfirmedCatalogReload(
+            reapplied.error ?? 'set_model rejected during image capability reload',
+          );
+        }
+        let reverifiedModel: { provider?: unknown; id?: unknown } | null | undefined;
+        try {
+          const reverified = await proc.request({ type: 'get_state' });
+          if (!reverified.success) {
+            throw new Error(`get_state failed: ${reverified.error ?? 'unknown'}`);
+          }
+          reverifiedModel = (
+            reverified.data as { model?: { provider?: unknown; id?: unknown } | null } | undefined
+          )?.model;
+        } catch (err) {
+          return await terminateUnconfirmedCatalogReload(err);
+        }
+        if (
+          reverifiedModel?.provider !== mutablePiProviderId ||
+          reverifiedModel.id !== mutableWireModel
+        ) {
+          return await terminateUnconfirmedCatalogReload(
+            `route read-back mismatch (expected ${String(mutablePiProviderId)}/${mutableWireModel}, ` +
+              `got ${String(reverifiedModel?.provider)}/${String(reverifiedModel?.id)})`,
+          );
+        }
+      }
+      imageCapabilityReloadPending = false;
+      this.deps.logger.debug('pi image capability refresh reloaded', {
+        model,
+        provider: mutablePiProviderId,
+      });
+    };
+    /**
+     * 会话启动后用户可能才在设置里声明图片输入(本机目录 override)。快照是 startSession 一次
+     * 性解析的、Pi 的 set_model 又不重读 models.json —— 旧会话里「声明完仍被
+     * assertImageInputSupported 拒收」。切模是用户可见的自然同步点:目标模型的**目录声明**与
+     * 会话快照不一致时,只对齐该模型的 input(不整体换 providers:活会话的 env/代理 token 是
+     * 启动时注入的,整体换会踩 xAI 热刷新已知的坑),原子热写 models.json,再让子进程加载
+     * (见 reloadImageCapabilityIntoChild;回合在跑时只对齐宿主快照).
+     * 心跳会反复下发同路由(见 switchModel 开头的同路由 no-op),所以对账只做一次目录内存查找:
+     * 无变化零 I/O。目录未声明(undefined)按 override 的「缺字段继承」语义不动快照。
+     * 网关(xd)模型的图片能力不在本机声明面内(设置里也没有该入口),不走此路径。
+     */
+    const refreshImageCapabilityOnSwitch = async (
+      nextModel: string,
+      nextRequestedProviderId: string | null | undefined,
+    ): Promise<void> => {
+      const specProviderId = resolveProviderForModel(nextModel, nextRequestedProviderId);
+      if (specProviderId === PI_PROVIDER_ID) {
+        this.deps.logger.debug('pi image capability refresh skipped', {
+          reason: 'gateway-route',
+          model: nextModel,
+        });
+        return;
+      }
+      const fresh = this.deps.readModelImageInput?.(
+        resolveSourceProvider(specProviderId),
+        nextModel,
+      );
+      if (fresh === undefined && !imageCapabilityReloadPending) {
+        this.deps.logger.debug('pi image capability refresh skipped', {
+          reason: 'catalog-undeclared',
+          model: nextModel,
+          provider: specProviderId,
+        });
+        return;
+      }
+      const specModelId = resolveNativeModelId(specProviderId, nextModel);
+      const currentSpec = nativeProviderById.get(specProviderId)
+        ?.models.find((candidate) => candidate.id === specModelId);
+      const wantsImage = fresh === true;
+      // 快照基线口径必须与准入门一致（上游 #4854）：目录未声明 input 时按「支持图片」算，
+      // 否则对一个没写 input 的模型声明 false 会被当成「无变化」，声明永远落不下去。
+      const hadImage = (currentSpec?.input ?? ['text', 'image']).includes('image');
+      const mismatch = fresh !== undefined && hadImage !== wantsImage;
+      if (!mismatch && !imageCapabilityReloadPending) {
+        this.deps.logger.debug('pi image capability refresh skipped', {
+          reason: 'matches-snapshot',
+          model: nextModel,
+          provider: specProviderId,
+        });
+        return;
+      }
+      if (mismatch) {
+        // 会话快照里根本没有这条模型行（启动后才新增的 BYOM/目录行）：nextProviders 是在旧
+        // 快照的 models 数组上 map，写不出这一行 —— 写盘是空操作，却会置 pending 并触发一次
+        // 有终止风险的子进程重载，而准入门读的快照始终没变（声明永远不会生效）。显式跳过。
+        if (currentSpec === undefined) {
+          this.deps.logger.warn('pi image capability refresh skipped', {
+            reason: 'row-not-in-snapshot',
+            model: nextModel,
+            provider: specProviderId,
+          });
+          return;
+        }
+        // inheritModels 的订阅行只有带 api/catalogAddition 才写进 models.json(见 writeModelsJson
+        // 的 models 过滤):这类行改 input 落不到子进程,只翻宿主快照会造成 host/child 分叉。
+        // 当前目录数据里订阅行都带 api,这里显式挡住未来的例外。
+        const providerSpec = nativeProviders.find((candidate) => candidate.id === specProviderId);
+        if (
+          providerSpec?.inheritModels === true &&
+          currentSpec.api === undefined &&
+          currentSpec.catalogAddition !== true
+        ) {
+          this.deps.logger.warn('pi image capability refresh skipped', {
+            reason: 'row-not-materialized',
+            model: nextModel,
+            provider: specProviderId,
+          });
+          return;
+        }
+        this.deps.logger.info('pi image capability refresh applying', {
+          model: nextModel,
+          provider: specProviderId,
+          wantsImage,
+          hadImage,
+        });
+      }
+
+      const rollbackBaseline = mismatch ? nativeProviders.slice() : undefined;
+      if (rollbackBaseline) {
+        const previousProviders = rollbackBaseline;
+        const nextProviders: PiNativeProviderSpec[] = previousProviders.map((provider) =>
+          provider.id !== specProviderId
+            ? provider
+            : {
+                ...provider,
+                models: provider.models.map((modelSpec) =>
+                  modelSpec.id !== specModelId
+                    ? modelSpec
+                    : {
+                        ...modelSpec,
+                        input: (wantsImage
+                          ? ['text', 'image']
+                          : ['text']) as Array<'text' | 'image'>,
+                      },
+                ),
+              },
+        );
+        try {
+          const written = await this.writeModelsJson(
+            configHome,
+            nextProviders,
+            retainedRuntimeModel,
+            authProviderId,
+            {
+              remote,
+              fileOps,
+              contextWindow: ctx.contextWindow || startupContextWindow,
+              workingContextWindow: ctx.workingContextWindow,
+              piCompactionPct: sessionPiAutoCompactPct,
+              packages: nativePackagePaths,
+              disabledSkills: disabledSkillLaunch,
+            },
+          );
+          nativeProviders = nextProviders;
+          nativeProviderById.clear();
+          nativeProviderBySourceId.clear();
+          for (const spec of nextProviders) {
+            if (spec.id === PI_PROVIDER_ID) continue;
+            nativeProviderById.set(spec.id, spec);
+            nativeProviderBySourceId.set(spec.sourceProviderId ?? spec.id, spec);
+          }
+          gatewayApiByModel.clear();
+          for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
+          gatewayImageInputByModel.clear();
+          for (const [key, value] of written.gatewayImageInputByModel) {
+            gatewayImageInputByModel.set(key, value);
+          }
+          imageCapabilityReloadPending = true;
+        } catch (err) {
+          // 原子写保证盘上要么是旧的完整文件要么是新的完整文件；回滚把两种情况都收敛成旧状态，
+          // 与内存一致(写失败时内存还没换)。
+          this.deps.logger.warn('pi image capability refresh persist failed', {
+            model: nextModel,
+            provider: specProviderId,
+            message: err instanceof Error ? err.message : String(err),
+          });
+          await restoreNativeCatalogOrTerminate(previousProviders);
+          throw new Error(
+            `[PI_IMAGE_CAPABILITY_REFRESH_FAILED] 图片输入能力更新写入失败，本次变更已回滚：` +
+              `${err instanceof Error ? err.message : String(err)}。请重试；若持续失败请重新打开任务。`,
+          );
+        }
+      }
+      if (!imageCapabilityReloadPending) return;
+      // 回合运行中不重建子会话：switch_session 会按 CLI 路由重建 AgentSession，把在跑的回合
+      // 打断/错配。宿主快照已对齐(准入门立即生效)，子进程清单留到下一次空闲对账再加载。
+      if (ctx.isStreaming || ctx.pendingHostTurnStartToken) {
+        this.deps.logger.debug('pi image capability refresh deferred', {
+          reason: 'turn-running',
+          model: nextModel,
+        });
+        return;
+      }
+      await reloadImageCapabilityIntoChild(nextModel, rollbackBaseline);
+    };
     const switchModel = async (
       model: string,
       setOpts?: { providerId?: string | null; effort?: Effort },
@@ -6208,6 +6502,9 @@ export class PiAgent extends BaseAgent {
           );
         }
       };
+      // 能力对账必须在同路由 no-op **之前**:心跳与「声明后切回同模型」走的都是那条早返回。
+      // 无目录变化时这里只花一次内存查找(见函数注释),心跳不受影响。
+      await refreshImageCapabilityOnSwitch(model, requestedProviderId);
       if (
         model === mutableModel &&
         requestedProviderId !== undefined &&
@@ -6568,6 +6865,9 @@ export class PiAgent extends BaseAgent {
           );
         }
       }
+      // 本次 switch_session + set_model + get_state 已把新 models.json 完整载入子进程：
+      // 早先因回合在跑而被推迟的图片能力对账随这次重载一并生效。
+      imageCapabilityReloadPending = false;
       // The parent route and target-window settings are now confirmed. Clear the
       // pending marker last; failure keeps subagent delegation disabled but does
       // not misreport the parent switch itself.
@@ -6659,7 +6959,9 @@ export class PiAgent extends BaseAgent {
           let { text, images } = await buildPiPrompt(message, { remote });
           const pinnedSkill = sendOpts?.[PINNED_SKILL_INVOCATION];
           rejectIfCancelled(sendOpts, 'send');
-          assertImageInputSupported(images);
+          await assertImageInputSupported(images);
+          // 对账可能 await 过(仅目录已声明的失败路径)，期间 signal 可能被撤：投递前再查一次。
+          rejectIfCancelled(sendOpts, 'send');
           setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
           reviewIntentUpdated = true;
           const managedPackageRoute = await routeManagedPackageCommand(
@@ -6903,7 +7205,9 @@ export class PiAgent extends BaseAgent {
         }
         let { text, images } = await buildPiPrompt(message, { remote });
         rejectIfCancelled(sendOpts, 'steer');
-        assertImageInputSupported(images);
+        await assertImageInputSupported(images);
+        // 同上：对账 await 后重新确认未被取消。
+        rejectIfCancelled(sendOpts, 'steer');
         setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
         // A steered channel message can add confirmation requirements to the
         // running turn, but must not remove the current sender's restrictions.

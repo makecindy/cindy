@@ -5553,6 +5553,13 @@ interface ElectronAPI {
       limit: number | null,
       owner: import('../shared/modelContextLimit').ModelContextLimitOwner,
     ) => Promise<import('../shared/modelContextLimit').ModelContextLimitView>;
+    getModelCatalogImageInput: (
+      target: import('../shared/modelCatalogImageInput').ModelCatalogImageInputTarget,
+    ) => Promise<import('../shared/modelCatalogImageInput').ModelCatalogImageInputView>;
+    setModelCatalogImageInput: (
+      target: import('../shared/modelCatalogImageInput').ModelCatalogImageInputTarget,
+      value: boolean | null,
+    ) => Promise<import('../shared/modelCatalogImageInput').ModelCatalogImageInputView>;
     resetModelContextLimit: (
       target: import('../shared/modelContextLimit').ModelContextLimitTarget,
       owner: import('../shared/modelContextLimit').ModelContextLimitOwner,

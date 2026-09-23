@@ -30,6 +30,34 @@ vi.mock('@/hooks/useModelContextLimit', () => ({
     };
   },
 }));
+const imageInputMocks = vi.hoisted(() => ({
+  setValue: vi.fn(async () => true),
+  target: vi.fn(),
+  value: null as boolean | null,
+  isCustomized: false,
+  diverged: false,
+  errorReason: undefined as string | undefined,
+  saving: false,
+  loading: false,
+}));
+vi.mock('@/hooks/useModelCatalogImageInput', () => ({
+  useModelCatalogImageInput: (target: unknown) => {
+    imageInputMocks.target(target);
+    return {
+      value: imageInputMocks.value,
+      isCustomized: imageInputMocks.isCustomized,
+      diverged: imageInputMocks.diverged,
+      errorReason: imageInputMocks.errorReason,
+      loading: imageInputMocks.loading,
+      saving: imageInputMocks.saving,
+      error: false,
+      setValue: imageInputMocks.setValue,
+    };
+  },
+}));
+vi.mock('@/lib/toast', () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
   isModelEnabled: (_agent: unknown, _provider: unknown, model: { defaultEnabled?: boolean }) => model.defaultEnabled !== false,
@@ -96,6 +124,12 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.limit = null;
+  imageInputMocks.value = null;
+  imageInputMocks.isCustomized = false;
+  imageInputMocks.diverged = false;
+  imageInputMocks.errorReason = undefined;
+  imageInputMocks.saving = false;
+  imageInputMocks.loading = false;
   vi.mocked(getProviderModelEffort).mockReset();
 });
 
@@ -177,6 +211,33 @@ describe('model advanced editor', () => {
     expect(mocks.setLimit).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the trailing token readout on the typed value until the write lands', async () => {
+    // 提交后写入是异步的（hook 先 loading、仍持有旧 limit）。修复前抽屉在 blur 瞬间丢掉草稿，
+    // 说明行会先退回旧的 400,000、等回声到了再跳 500,000 —— 用户实测到的「闪一下旧值」。
+    mocks.limit = 400_000;
+    let release: () => void = () => {};
+    mocks.setLimit.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    draw();
+    const input = screen.getByRole('textbox') as HTMLInputElement;
+    expect(input.value).toBe('400');
+    fireEvent.change(input, { target: { value: '500' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(500_000);
+    // 写入在途：说明行必须继续显示刚输入的值。
+    expect(screen.getByText(/advanced\.contextLimitRoute 500,000/)).toBeTruthy();
+    expect(screen.queryByText(/advanced\.contextLimitRoute 400,000/)).toBeNull();
+    // 回声落地（hook 此时已持有新值）后再收口：仍然是新值，不回退。
+    mocks.limit = 500_000;
+    release();
+    await waitFor(() => expect(screen.getByText(/advanced\.contextLimitRoute 500,000/)).toBeTruthy());
+    expect(screen.queryByText(/advanced\.contextLimitRoute 400,000/)).toBeNull();
+  });
+
   it.each(['cindy-local-ollama', 'ollama', 'cindy-local-lmstudio'])('keeps %s editable at 1K even when the catalog advertises a large window', (id) => {
     render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id, source: 'user' }));
     const input = screen.getByRole('textbox');
@@ -200,6 +261,231 @@ describe('model advanced editor', () => {
     expect(mocks.setLimit).toHaveBeenCalledWith(floor * 1000);
   });
 
+
+  // 上游未声明容量时不能把「工作默认值」印成「上游最大上下文」：自定义连接的 200K 是兜底，
+  // 而运行期窗口其实取模型级上下文上限（用户实测报障：圆环 1.0M / 这里 200K）。
+  function withoutCapacity(over: Partial<CatalogModel> = {}): CatalogModel {
+    const { contextWindowMax: _omit, ...rest } = model;
+    return { ...rest, contextWindow: 200_000, ...over };
+  }
+
+  it('shows "not declared" instead of the working default when the provider declares no capacity', () => {
+    draw(withoutCapacity());
+    // 这一行只报「容量未声明」：不再把工作默认值（200K 兜底，或目录给的 1M）当成容量塞进这一格。
+    expect(
+      screen.getAllByText('settings.providers.models.advanced.undeclared').length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText('200,000')).toBeNull();
+    expect(screen.queryByText('settings.providers.models.advanced.tokensApprox')).toBeNull();
+    // 工作窗口仍然可见 —— 在「上下文上限」那行的说明里（未设上限时取目录默认值）。
+    // 那行带插值（t 的 mock 会拼上 tokens），所以用正则而非精确匹配。
+    expect(screen.getByText(/advanced\.contextLimitRoute/)).toBeTruthy();
+  });
+
+  it('shows the window upstream handed down even when no capacity is declared', () => {
+    // opencode-go 的 deepseek-v4.1-flash 就是这种：没有 contextWindowMax，但预设/服务端目录
+    // 下发了窗口（buildUserProvider 会带上 contextWindowVerified）→ 这行要显示该窗口，而不是「未声明」。
+    draw({ ...withoutCapacity(), contextWindow: 1_048_576, contextWindowVerified: true });
+    expect(screen.getByText('1,048,576')).toBeTruthy();
+    // 「约 X」只由规格那一行渲染（「未声明」这个 key 在抽屉里另有多处，不能拿它判负）。
+    expect(screen.getByText('settings.providers.models.advanced.tokensApprox')).toBeTruthy();
+  });
+
+  it('lets the user declare an undeclared image capability from the drawer', async () => {
+    // 上游未声明图片能力时 Pi 会在客户端拒收图片，而此前没有任何可点的声明入口。
+    draw();
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    // 未声明时显示「跟随目录」。
+    expect(trigger.textContent).toContain('settings.providers.models.advanced.imageInputOverride.inherit');
+
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', {
+        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
+      }),
+    );
+    await waitFor(() => expect(imageInputMocks.setValue).toHaveBeenCalledWith(true));
+  });
+
+  it('shows a declared capability and can return to following the catalog', async () => {
+    imageInputMocks.value = false;
+    imageInputMocks.isCustomized = true;
+    draw();
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    expect(trigger.textContent).toContain('settings.providers.models.advanced.imageInputOverride.declaredFalse');
+
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', {
+        name: 'settings.providers.models.advanced.imageInputOverride.inherit',
+      }),
+    );
+    await waitFor(() => expect(imageInputMocks.setValue).toHaveBeenCalledWith(null));
+  });
+
+  it('allows re-selecting the current value to repair a split across engine keys', async () => {
+    // 各引擎键分叉（手工改文件/旧版单键写入的存量数据）时，同值 no-op 会把“重选当前项”
+    // 挡掉 —— 分叉永远修不掉，UI 显示一侧而运行期读另一侧。diverged 时必须放行写入。
+    imageInputMocks.value = true;
+    imageInputMocks.isCustomized = true;
+    imageInputMocks.diverged = true;
+    draw();
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', {
+        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
+      }),
+    );
+    await waitFor(() => expect(imageInputMocks.setValue).toHaveBeenCalledWith(true));
+  });
+
+  it('skips the write when the user picks the state it is already in', async () => {
+    imageInputMocks.value = true;
+    imageInputMocks.isCustomized = true;
+    draw();
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', {
+        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
+      }),
+    );
+    expect(imageInputMocks.setValue).not.toHaveBeenCalled();
+  });
+
+  it('keeps the control usable and visually stable while a provider refresh refetches', () => {
+    // 写入后 main 广播 PROVIDER_CHANGED，hook 会重读；重读期间值原样保留，
+    // 既不禁用也不改透明度 —— 否则一次切换会出现两次明暗跳变（用户报障：闪一下）。
+    imageInputMocks.loading = true;
+    draw();
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    expect(trigger).toHaveProperty('disabled', false);
+    expect(trigger.className).not.toContain('disabled:opacity');
+    expect(trigger.className).not.toContain('opacity-60');
+  });
+
+  it('reports a failed declaration instead of silently keeping the optimistic value', async () => {
+    const { toast } = await import('@/lib/toast');
+    imageInputMocks.setValue.mockResolvedValueOnce(false);
+    draw();
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', {
+        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
+      }),
+    );
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        'settings.providers.models.advanced.imageInputOverride.saveFailed',
+      ),
+    );
+  });
+
+  it('shows the actionable reason from main when a hand-edited file blocks the write', async () => {
+    // store 拒绝写入时给出「先修正 model-catalog-overrides.json」的指引；只显示通用
+    // 「保存失败」会让用户反复失败却看不到唯一的修复方式。
+    const { toast } = await import('@/lib/toast');
+    imageInputMocks.setValue.mockResolvedValueOnce(false);
+    imageInputMocks.errorReason = '请先修正 model-catalog-overrides.json';
+    draw();
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', {
+        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
+      }),
+    );
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        'settings.providers.models.advanced.imageInputOverride.saveFailedWithReason',
+      ),
+    );
+  });
+
+  it('covers every harness id of the row when declaring image capability', async () => {
+    // openai 行的主展示引擎是 codex（gpt-6），而运行期消费该能力的 Pi 侧 id 是 chatgpt/gpt-6。
+    // 只写主引擎的 id 时 Pi 永远读不到声明，UI 却会显示「已声明」。
+    const piModel = { ...model, id: 'chatgpt/gpt-6' };
+    render(
+      <ModelAdvancedDrawer
+        provider={provider}
+        row={{
+          id: model.id,
+          name: model.name,
+          avail: ['codex', 'pi'],
+          byAgent: { codex: model, pi: piModel },
+        }}
+        open
+        onOpenChange={vi.fn()}
+        pricePresentationOf={() => null}
+        onDisable={vi.fn()}
+        disabled={false}
+        paymentRequired={false}
+      />,
+    );
+
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', {
+        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
+      }),
+    );
+    await waitFor(() => expect(imageInputMocks.setValue).toHaveBeenCalledWith(true));
+    // 声明目标必须带上 Pi 侧 id（写盘/读取都按该 id 精确匹配）。
+    const targets = imageInputMocks.target.mock.calls.map((call) => call[0]);
+    expect(targets).toContainEqual(
+      expect.objectContaining({
+        providerId: 'openai',
+        agent: 'codex',
+        modelId: 'gpt-6',
+        relatedTargets: [expect.objectContaining({ agent: 'pi', modelId: 'chatgpt/gpt-6' })],
+      }),
+    );
+  });
+
+  it('warns when the limit exceeds a verified upstream window without a declared max', () => {
+    // 「已验证窗口但无 contextWindowMax」的模型此前不会告警：填到窗口以上也静默接受。
+    mocks.limit = 1_200_000;
+    draw({ ...withoutCapacity(), contextWindow: 1_048_576, contextWindowVerified: true });
+    expect(
+      screen.getByText('settings.providers.models.advanced.contextLimitOverWindow'),
+    ).toBeTruthy();
+  });
+
+  it('does not offer the local declaration for the server-controlled gateway provider', () => {
+    render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id: 'xd' }));
+    expect(
+      screen.getByRole('button', {
+        name: 'settings.providers.models.advanced.imageInputOverride.label',
+      }),
+    ).toHaveProperty('disabled', true);
+  });
+
+  it('does not warn about the limit exceeding an undeclared capacity', () => {
+    // 未声明容量时拿 200K 工作默认值当告警基线会误报「已超出当前显示的窗口」。
+    mocks.limit = 1_200_000;
+    draw(withoutCapacity());
+    expect(screen.queryByText('settings.providers.models.advanced.contextLimitOverWindow')).toBeNull();
+  });
 
   it('keeps useful identity fields without exposing internal defaults, normal lifecycle or raw descriptions', () => {
     draw({ ...model, status: 'active', defaultEnabled: false, description: 'GPT for coding tasks' });

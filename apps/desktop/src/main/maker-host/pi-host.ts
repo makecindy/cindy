@@ -1982,6 +1982,13 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     },
     registerPiProxySession,
     resolvePiNativeProviders: (ctx) => resolvePiNativeProviders(ctx),
+    // 旧会话切模时的能力对账读这里：活动目录已含本机 override 合并(applyExistingModelLocalPatch
+    // 在末位，local 永远最高)，所以用户刚声明的「图片输入」能被读到。查不到(provider/model
+    // 不在目录)返回 undefined → 调用方按「未声明」不动会话快照。
+    readModelImageInput: (providerId, modelId) =>
+      getActiveCatalog()
+        .providers.find((provider) => provider.id === providerId)
+        ?.models.pi?.find((model) => model.id === modelId)?.supportsImageInput,
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
     // `cindy` is the gateway fallback block even when the session starts on a subscription or

@@ -37,6 +37,7 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
+import { useModelCatalogImageInput } from '@/hooks/useModelCatalogImageInput';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
   isModelEnabled,
@@ -258,6 +259,50 @@ export function ModelAdvancedDrawer({
     [contextAgent, contextModel, provider.id, row, chatAgents],
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
+  // 图片输入能力的本地声明。与上下文上限同一个目标形状；agent 只用于目录成员校验。
+  // 必须覆盖该行全部引擎的 id：运行期真正消费这个能力的只有 Pi，而桥接投影两端 id 不同
+  // （openai 行：codex 用 gpt-5.6-sol、pi 用 chatgpt/gpt-5.6-sol）—— 只写主展示引擎的 id，
+  // Pi 侧读不到（override 按 providerId:modelId 精确匹配），UI 却会显示「已声明」。
+  const imageInputTarget = useMemo(() => {
+    if (!open || !primaryAgent || !primaryModel) return null;
+    const relatedTargets = (row?.avail ?? [])
+      .filter((agent) => agent !== primaryAgent)
+      .flatMap((agent) => {
+        const model = row?.byAgent[agent];
+        return model ? [{ providerId: provider.id, agent, modelId: model.id }] : [];
+      });
+    return {
+      providerId: provider.id,
+      agent: primaryAgent,
+      modelId: primaryModel.id,
+      ...(relatedTargets.length > 0 ? { relatedTargets } : {}),
+    };
+  }, [open, primaryAgent, primaryModel, provider.id, row]);
+  const imageInput = useModelCatalogImageInput(imageInputTarget);
+  // 'inherit' = 删除本机 override，回到跟随供应商。失败由 hook 回读真值，这里只负责提示。
+  const setImageInput = async (next: string) => {
+    const value = next === 'inherit' ? null : next === 'true';
+    // 已经是该状态就别再写一次：免掉一次空写入引起的全量目录刷新与广播。但各引擎键分叉时
+    // 必须放行 —— 否则“重选当前项”被 no-op 挡掉，分叉永远修不掉（UI 显示一侧、运行期读另一侧）。
+    const already =
+      value === null ? !imageInput.isCustomized : imageInput.isCustomized && value === imageInput.value;
+    if (already && !imageInput.diverged) {
+      return;
+    }
+    const persisted = await imageInput.setValue(value);
+    if (!persisted) {
+      // main 在这条路径上会给出可执行指引（手改文件里有无法保留的条目时要先修文件）：
+      // 把它带进提示，否则用户反复保存失败却看不到唯一的修复方式。
+      const reason = imageInput.errorReason;
+      toast.error(
+        reason
+          ? t('settings.providers.models.advanced.imageInputOverride.saveFailedWithReason', {
+              message: reason,
+            })
+          : t('settings.providers.models.advanced.imageInputOverride.saveFailed'),
+      );
+    }
+  };
   const setModelApi = async (agent: AgentKind, api: PiModelApi) => {
     if (protocolSaving || provider.source !== 'user' || provider.auth?.native || !row?.byAgent[agent]) return;
     const config = providerViewToCustomProviderConfig(provider);
@@ -286,6 +331,14 @@ export function ModelAdvancedDrawer({
 
 
   const [ctxDraft, setCtxDraft] = useState('');
+  // 提交后写入是异步的：hook 先置 loading、等 IPC 回声才落新值。若提交瞬间就丢掉草稿，
+  // 说明行会先退回**旧的** effectiveLimit、回声到了再跳新值 —— 用户实测到的「闪一下旧值」。
+  // 这里把「提交在途」也当成还在编辑：显示值继续取草稿，直到写入收口。
+  const [ctxCommitting, setCtxCommitting] = useState(false);
+  // 提交代次：目标（模型/agent/provider）一变或又一次提交开始，旧提交的 finally 就不许再
+  // 清掉新的 committing 状态 —— 否则 A 写未完成时切到 B 并提交，A 完成会把 B 的「提交在途」
+  // 提前收掉，B 在写入期间重新显示旧的 effectiveLimit（本次修改要消除的闪回原地复活）。
+  const ctxCommitGen = useRef(0);
   const ctxDirtyRef = useRef(false);
   const defaultWindow = contextAgent === 'codex' && ctx.codexContext
     ? ctx.codexContext.contextWindow : contextModel?.contextWindow ?? 0;
@@ -296,10 +349,26 @@ export function ModelAdvancedDrawer({
     .filter((window): window is number => typeof window === 'number' && Number.isFinite(window) && window > 0);
   const minimumContextK = isLocalRuntimeBetaProviderId(provider.id)
     ? 1 : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
-  const routeWindow = primaryModel?.contextWindowMax ?? primaryModel?.contextWindow ?? 0;
+  // 「上游最大上下文」这一行显示上游**确实下发过**的窗口，来源按优先级：
+  //   1) contextWindowMax —— 路由/网关声明的容量；
+  //   2) contextWindowVerified === true 的 contextWindow —— 用户或预设显式配置的窗口
+  //      （预设/服务端目录给自定义连接下发窗口就走这里，例如 opencode-go 的 deepseek-v4.1-flash = 1M）；
+  //   3) 都没有 → 未声明。
+  // 第 3 条必须排除「自定义模型缺元数据时的 200K 兜底」：那个常量在 user-provider.ts 里
+  // 明确写着「仅用于展示」，不带 contextWindowVerified —— 把它印成上游下发的窗口，会让用户
+  // 以为容量只有 200K，而运行期窗口其实取模型级上下文上限（实测报障：圆环 1.0M、这里 200K）。
+  const declaredCapacity = primaryModel?.contextWindowMax ?? 0;
+  const declaredWindow =
+    declaredCapacity > 0
+      ? declaredCapacity
+      : primaryModel?.contextWindowVerified === true
+        ? (primaryModel.contextWindow ?? 0)
+        : 0;
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
     ctxDirtyRef.current = false;
+    ctxCommitGen.current += 1;
+    setCtxCommitting(false);
     setCtxDraft('');
     setPriceDialogOpen(false);
   }, [open, primaryAgent, primaryModel?.id, provider.id]);
@@ -315,10 +384,18 @@ export function ModelAdvancedDrawer({
   const commitCtxDraft = useCallback(() => {
     if (!ctxDirtyRef.current || ctxInvalid || ctx.loading) return;
     ctxDirtyRef.current = false;
-    void ctx.setLimit(ctxDraft.trim() === '' ? null : parsedTokens);
+    const generation = (ctxCommitGen.current += 1);
+    setCtxCommitting(true);
+    // hook 的 promise 在它把新值（或失败回滚后的值）写进 state 之后才 resolve，
+    // 所以这里收口不会再产生一帧旧值。仅当没有更新的提交/重置发生时才能清状态。
+    void Promise.resolve(ctx.setLimit(ctxDraft.trim() === '' ? null : parsedTokens)).finally(() => {
+      if (ctxCommitGen.current === generation) setCtxCommitting(false);
+    });
   }, [ctx, ctxDraft, ctxInvalid, parsedTokens]);
   const resetCtx = useCallback(() => {
     ctxDirtyRef.current = false;
+    ctxCommitGen.current += 1;
+    setCtxCommitting(false);
     setCtxDraft(defaultWindow > 0 ? editableContextK(defaultWindow) : '');
     void ctx.reset();
   }, [ctx, defaultWindow]);
@@ -375,12 +452,22 @@ export function ModelAdvancedDrawer({
   const protocols = modelProtocolComparison(provider, row.byAgent);
   const protocolLabel = (api: PiModelApi | null) =>
     api ? MODEL_PROTOCOL_LABEL[api] ?? null : t('settings.providers.models.advanced.undeclared');
-  const displayedLimit = ctxDirtyRef.current
+  const displayedLimit = ctxDirtyRef.current || ctxCommitting
     ? ctxDraft.trim() === ''
       ? defaultWindow
       : parsedTokens
     : effectiveLimit;
-  const editRouteWindow = contextModel?.contextWindowMax ?? defaultWindow;
+  // 只有「上游声明的容量」比它小时才该告警；未声明容量时拿工作默认值当窗口会误报
+  // （自定义连接上 200K 只是兜底，不是任何人的声明）。来源与上方「上游最大上下文」同一套：
+  // contextWindowMax → 已验证的 contextWindow → 未声明，否则「已验证窗口但无 max」的模型
+  // 把限制填到窗口以上也不会告警。
+  const editCapacity = contextModel?.contextWindowMax ?? 0;
+  const editRouteWindow =
+    editCapacity > 0
+      ? editCapacity
+      : contextModel?.contextWindowVerified === true
+        ? (contextModel.contextWindow ?? 0)
+        : 0;
   const overRouteWindow =
     editRouteWindow > 0 &&
     displayedLimit !== null &&
@@ -507,7 +594,13 @@ export function ModelAdvancedDrawer({
                         if (model) {
                           // 同一模型在不同引擎下的元数据差异如实标出来 —— 这些值来自目录的
                           // perAgent 覆盖，用户看到「Codex 下 272K / 6 档」才知道差异是真的。
-                          if (model.contextWindow > 0 && model.contextWindow !== routeWindow) {
+                          if (
+                            model.contextWindow > 0 &&
+                            model.contextWindow !==
+                              (declaredWindow > 0
+                                ? declaredWindow
+                                : (primaryModel?.contextWindow ?? 0))
+                          ) {
                             notes.push(approxTokens(model.contextWindow));
                           }
                           if (
@@ -772,18 +865,18 @@ export function ModelAdvancedDrawer({
 
                   <Section title={t('settings.providers.models.advanced.spec')}>
                     <Row label={t('settings.providers.models.advanced.contextWindow')}>
-                      {routeWindow > 0 ? (
+                      {declaredWindow > 0 ? (
                         <>
-                          {formatExactTokens(routeWindow, locale)}
+                          {formatExactTokens(declaredWindow, locale)}
                           <span className="ml-1 text-11 text-[var(--text-tertiary)]">
                             {t('settings.providers.models.advanced.tokensApprox', {
-                              approx: approxTokens(routeWindow),
+                              approx: approxTokens(declaredWindow),
                             })}
                           </span>
                         </>
                       ) : (
                         <span className="text-[var(--text-tertiary)]">
-                          {t('settings.providers.models.advanced.catalogMissing')}
+                          {t('settings.providers.models.advanced.undeclared')}
                         </span>
                       )}
                     </Row>
@@ -800,20 +893,63 @@ export function ModelAdvancedDrawer({
                     hint={t('settings.providers.models.advanced.capabilityHint')}
                   >
                     <Row label={t('settings.providers.models.advanced.imageInput')}>
-                      <span
-                        title={
-                          primaryModel.modalities || primaryModel.supportsImageInput !== undefined
-                            ? t('settings.providers.models.advanced.catalogCapabilities')
-                            : t(`settings.providers.models.advanced.visionSource.${vision}`)
-                        }
-                      >
-                        <CapabilityValue
-                          state={
-                            vision === 'vision' ? true : vision === 'no-vision' ? false : undefined
-                          }
-                          label={t(`settings.providers.models.advanced.vision.${vision}`)}
-                        />
-                      </span>
+                      {/*
+                        三态声明：目录未声明图片能力时，Pi 会在客户端就拒收图片（请求根本不出网），
+                        用户此前没有任何可点的入口去声明它 —— 报错文案让人去开的开关并不存在。
+                        这里把状态与声明合成一个控件：图标+文案保留「目录怎么说」的事实，
+                        下拉写本机目录 override（不改连接配置，preset 连接因此仍跟随官方目录）。
+                      */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            // 只在真写入期间禁用。刷新期间(hook 收到 PROVIDER_CHANGED 会重读)
+                            // 值原样保留，禁用它只会造成一次多余的明暗跳变；透明度也不动 ——
+                            // 与同抽屉协议控件一致(disabled 但不改 opacity)。
+                            disabled={imageInput.saving || provider.id === 'xd'}
+                            aria-label={t('settings.providers.models.advanced.imageInputOverride.label')}
+                            title={
+                              primaryModel.modalities || primaryModel.supportsImageInput !== undefined
+                                ? t('settings.providers.models.advanced.catalogCapabilities')
+                                : t(`settings.providers.models.advanced.visionSource.${vision}`)
+                            }
+                            className="inline-flex items-center gap-1 rounded-full px-2 py-1 hover:bg-[var(--surface-hover)]"
+                          >
+                            <CapabilityValue
+                              state={
+                                vision === 'vision' ? true : vision === 'no-vision' ? false : undefined
+                              }
+                              label={t(`settings.providers.models.advanced.vision.${vision}`)}
+                            />
+                            <span className="text-11 text-[var(--text-tertiary)]">
+                              {imageInput.isCustomized
+                                ? imageInput.value === true
+                                  ? t('settings.providers.models.advanced.imageInputOverride.declaredTrue')
+                                  : t('settings.providers.models.advanced.imageInputOverride.declaredFalse')
+                                : t('settings.providers.models.advanced.imageInputOverride.inherit')}
+                            </span>
+                            <ChevronDown size={12} className="inline" aria-hidden />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="z-[10003]" align="end">
+                          <DropdownMenuRadioGroup
+                            value={
+                              imageInput.isCustomized ? String(imageInput.value) : 'inherit'
+                            }
+                            onValueChange={(next) => void setImageInput(next)}
+                          >
+                            <DropdownMenuRadioItem value="inherit">
+                              {t('settings.providers.models.advanced.imageInputOverride.inherit')}
+                            </DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="true">
+                              {t('settings.providers.models.advanced.imageInputOverride.declaredTrue')}
+                            </DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="false">
+                              {t('settings.providers.models.advanced.imageInputOverride.declaredFalse')}
+                            </DropdownMenuRadioItem>
+                          </DropdownMenuRadioGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </Row>
                     {primaryModel.modalities &&
                       (['input', 'output'] as const).map((direction) => (

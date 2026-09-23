@@ -266,6 +266,15 @@ export const MAKER_INVOKE = {
   MODEL_CONTEXT_LIMIT_GET: 'maker:model-context-limit:get',
   MODEL_CONTEXT_LIMIT_SET: 'maker:model-context-limit:set',
   MODEL_CONTEXT_LIMIT_RESET: 'maker:model-context-limit:reset',
+  /**
+   * 单模型图片输入能力的本地 override(设置 → 模型 → 高级设置)。
+   * 上游未声明该能力时「未知」是真实状态，用户必须能显式声明支持/不支持；
+   * 写入本机目录 override(不写回连接配置，preset 连接因此仍跟随官方目录)。
+   * value=null 表示删除 override、回到跟随供应商。设置类写操作：仅本机主页面可调，
+   * **不进 device-link allowlist**(远程改被控端全局设置越权)。
+   */
+  MODEL_CATALOG_IMAGE_INPUT_GET: 'maker:model-catalog-image-input:get',
+  MODEL_CATALOG_IMAGE_INPUT_SET: 'maker:model-catalog-image-input:set',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
   // local-db:sessions:update (跟 SET_MODEL / sessionService.update 双 IPC 协调先例一致)
   SET_EXTRA_DIRS: 'maker:set-extra-dirs',

@@ -1,4 +1,5 @@
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
+import { ModelCatalogOverrideLossError } from '../maker-host/model-catalog-override-store.js';
 /**
  * provider:* IPC handlers。
  *
@@ -434,6 +435,29 @@ export interface ProviderHandlerDeps {
   readModelContextLimit?(target: ModelPriceOverrideTarget): ModelContextLimitView;
   validateModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number): Promise<void>;
   writeModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number | null): void | Promise<void>;
+  /**
+   * 单模型图片输入能力的本地目录 override。value=null 删除 override(回到跟随目录)；
+   * isCustomized 让 UI 区分「跟随目录」与「显式声明了一个等于目录的值」。
+   * 可选 —— 未注入(单测最小桩)时对应 handler 报 INTERNAL 而不是静默成功。
+   */
+  readModelCatalogImageInput?(target: ModelPriceOverrideTarget): ModelCatalogImageInputView;
+  /**
+   * 写入该行**全部引擎**的 id(桥接两端 id 不同：运行期消费能力的 pi 侧与主展示引擎不同，
+   * 只写一边会让声明对运行期完全无效)。单次调用内原子写所有 key。
+   */
+  writeModelCatalogImageInput?(
+    targets: readonly ModelPriceOverrideTarget[],
+    value: boolean | null,
+  ): void | Promise<void>;
+  /** 写入后把 override 文件重新注入 active-catalog(写盘不会自动生效)。 */
+  syncLocalCatalogOverrides?(): void;
+}
+
+/** 图片输入能力的读回视图。 */
+export interface ModelCatalogImageInputView {
+  /** null = 没有本地声明(跟随目录)。 */
+  value: boolean | null;
+  isCustomized: boolean;
 }
 
 /** 上下文上限的读回视图(与写入返回同形，UI 一次拿齐当前值与是否自定义)。 */
@@ -1851,6 +1875,133 @@ export function registerProviderHandlers(
             throwIpcError('INTERNAL', 'failed to reset model context limit');
           }
           return readContextTargets(targets);
+        }),
+      );
+    },
+  );
+
+  const requireCatalogImageInputDeps = (): {
+    read: NonNullable<ProviderHandlerDeps['readModelCatalogImageInput']>;
+    write: NonNullable<ProviderHandlerDeps['writeModelCatalogImageInput']>;
+  } => {
+    if (!deps.readModelCatalogImageInput || !deps.writeModelCatalogImageInput) {
+      throwIpcError('INTERNAL', 'model catalog image input override is not wired');
+    }
+    return {
+      read: deps.readModelCatalogImageInput,
+      write: deps.writeModelCatalogImageInput,
+    };
+  };
+  const parseCatalogImageInputTarget = (input: unknown): ModelPriceOverrideTarget =>
+    parsePriceTarget(input);
+  /**
+   * SET/GET 的行目标：主目标 + 同行的其它引擎 id（relatedTargets）。与上下文上限同一套校验：
+   * 必须同 provider、agent 不重复。写/读都覆盖全部 id —— 运行期读的是 pi 侧 id，主展示引擎
+   * 的 id 与它不一定相同。
+   */
+  const parseCatalogImageInputTargets = (input: unknown): ModelPriceOverrideTarget[] => {
+    const target = parseCatalogImageInputTarget(input);
+    const related = (input as { relatedTargets?: unknown }).relatedTargets;
+    if (related === undefined) return [target];
+    if (!Array.isArray(related) || related.length > 2) {
+      throwIpcError('INVALID_PARAMS', 'invalid related image input targets');
+    }
+    const targets = [target, ...related.map(parsePriceTarget)];
+    if (
+      targets.some((candidate) => candidate.providerId !== target.providerId) ||
+      new Set(targets.map((candidate) => candidate.agent)).size !== targets.length
+    ) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'image input targets must name distinct harnesses of one provider',
+      );
+    }
+    return targets;
+  };
+  /** 多目标读回：任一声明即视为已声明，取第一个非空值（写入总是一起写，正常情况下同步）。 */
+  const readCatalogImageInputTargets = (targets: readonly ModelPriceOverrideTarget[]) => {
+    const { read } = requireCatalogImageInputDeps();
+    const views = targets.map((target) => read(target));
+    // 展示值优先取运行期真正消费该能力的引擎（Pi）那一侧：它才是“会不会真的收图”的答案。
+    // 仅当各引擎声明不一致（手改文件/旧版单键写入的存量数据）时两者才会不同。
+    const piIndex = targets.findIndex((target) => target.agent === 'pi');
+    const ordered = piIndex >= 0 ? [views[piIndex]!, ...views.filter((_, i) => i !== piIndex)] : views;
+    const firstNonNull = ordered.find((view) => view.value !== null)?.value ?? null;
+    const head = views[0]!;
+    return {
+      value: firstNonNull,
+      isCustomized: views.some((view) => view.isCustomized),
+      // 任一引擎与首个引擎的 (value, isCustomized) 不同 = 分叉（含“一边声明、一边跟随目录”）。
+      // UI 据此允许“重选当前项”把各引擎键写回一致。
+      ...(views.some((view) => view.value !== head.value || view.isCustomized !== head.isCustomized)
+        ? { diverged: true }
+        : {}),
+    };
+  };
+  // value 只在 SET 上校验：GET 请求本来就没有这个字段。
+  const parseCatalogImageInputValue = (input: unknown): boolean | null => {
+    const value = (input as { value?: unknown }).value;
+    if (value !== null && typeof value !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'image input override value must be boolean or null');
+    }
+    return value;
+  };
+
+  registry.handle(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_GET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const targets = parseCatalogImageInputTargets(input);
+    // 读不做目录成员校验：目录漂移后 UI 仍要能显示并清掉指向已下架 id 的陈旧 override。
+    return readCatalogImageInputTargets(targets);
+  });
+
+  registry.handle(
+    MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET,
+    async (event, input: unknown) => {
+      assertTrustedProviderMutationSender(event);
+      const targets = parseCatalogImageInputTargets(input);
+      const target = targets[0]!;
+      const value = parseCatalogImageInputValue(input);
+      const { write } = requireCatalogImageInputDeps();
+      // 网关模型的能力声明由服务端目录控制，不开放本机 override：按钮已 disable，但受信
+      // renderer 能绕过按钮直接调 preload，所以在这里再拒一次（与价格 override 同一道门）。
+      if (target.providerId === 'xd') {
+        throwIpcError('INVALID_PARAMS', 'Cindy AI Gateway model capabilities are server-controlled');
+      }
+      const ownerAtIngress = captureProviderOwnerSession();
+      return withProviderConfigMutation(target.providerId, () =>
+        enqueuePriceMutation(async () => {
+          // 目录成员校验必须在队列内：它带着 await，放在队列外会拿旧账号目录校验、再把结果
+          // 落到新账号的文件里（与价格/上下文上限两个姊妹 handler 同一顺序）。
+          // value=null 是「恢复跟随目录」，不校验成员 —— 目录漂移后的陈旧 override 必须能清掉。
+          if (value !== null) {
+            for (const candidate of targets) await requirePriceTargetModel(candidate);
+          }
+          assertProviderMutationOwner(
+            ownerAtIngress,
+            'active account changed before persisting image input override',
+          );
+          try {
+            await write(targets, value);
+          } catch (err) {
+            log.warn('model catalog image input override persist failed', {
+              providerId: target.providerId,
+              agent: target.agent,
+              modelId: target.modelId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            // 手改文件里有本版本无法保留的条目：把指引带给用户（可执行），而不是「保存失败」。
+            if (err instanceof ModelCatalogOverrideLossError) {
+              throwIpcError('PRECONDITION_FAILED', err.message);
+            }
+            throwIpcError('INTERNAL', 'failed to persist model catalog image input override');
+          }
+          // 写盘不会自动生效：先重读 override 注入活动目录，再刷新目录并广播
+          // PROVIDER_CHANGED（不是 pricing 通道 —— 能力变了要让 renderer 重拉 provider
+          // 视图，抽屉据此刷新；价格通道只推价格）。
+          deps.syncLocalCatalogOverrides?.();
+          await refreshCatalogAfterCommit();
+          deps.broadcastChanged();
+          return readCatalogImageInputTargets(targets);
         }),
       );
     },
