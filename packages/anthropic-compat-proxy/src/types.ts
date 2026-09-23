@@ -227,7 +227,8 @@ export interface ProxyOptions {
   /** Host-owned, request-frozen enforcement before routing, including opaque/local-handler paths.
    * Throws fail closed. Ordinary requests return null and retain their zero-copy response path. */
   requestGuard?: (ctx: RequestTransformCtx) => {
-    transformBody: (body: Buffer) => Buffer;
+    // Egress receives the resolved route; ingress has no upstream yet.
+    transformBody: (body: Buffer, ctx?: RequestTransformCtx) => Buffer;
     response: (headers: Readonly<Record<string, number | string | string[] | undefined>>) => Transform;
   } | null;
   /** Optional message enforcement. Requires uncompressed RFC6455 negotiation. */

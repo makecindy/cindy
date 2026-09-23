@@ -3207,8 +3207,9 @@ function createCodexProxyHandle(
       return path.kind !== 'not-custom-provider-route'
         && !(path.kind === 'route' && path.pathKind === 'responses');
     },
-    requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), ctx),
-    webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers))),
+    requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), ctx, isChatGptUpstreamBase),
+    // Accepted WebSockets route exclusively to CODEX_OAUTH_UPSTREAM (see resolver below).
+    webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), true),
     transformResponse: (ctx) => {
       const response = {
         contentType: ctx.responseHeaders['content-type'] ?? '',

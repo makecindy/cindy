@@ -51,6 +51,7 @@ import {
   isCindyGatewayProviderId,
   isGatewayProxyTokenInvalidError,
   redactSensitiveText,
+  parseAgentErrorCode,
 } from '@cindy/maker-shared/error-redaction';
 import {
   formatRemoteError,
@@ -217,31 +218,6 @@ const MAX_REMOTE_AUTH_RETRIES = 2;
 const CLEAR_SESSION_GUARD_TIMEOUT_MS = 500;
 const REMOTE_CONTENT_TRUNCATED_PLACEHOLDER = '[remote content truncated: payload too large]';
 
-/**
- * maker-core 远端分支把不可恢复的远端错误编码成 `[REMOTE_*] 英文兜底文案` 的
- * message(见 packages/maker-core/src/agents/claude-code/index.ts)。renderer
- * 直接显示会裸露英文 code,这里把已知 code 映射成 i18n 文案(规则 17)。未知
- * code / 漏翻时回退到去掉 `[CODE]` 前缀的英文原文,绝不把 `[REMOTE_*]` 显给用户。
- */
-const BRACKET_ERROR_CODE_RE = /(?:^|: Error: )\[([A-Z0-9_]+)\]\s*([\s\S]*)$/;
-const REMOTE_ERROR_CODE_RE = /(?:^|: Error: )\[(REMOTE_[A-Z_]+)\]\s*([\s\S]*)$/;
-const DEVICE_LINK_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
-  'DEVICE_LINK_CONTROL_DISABLED',
-  'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
-] as const);
-/**
- * 非 `REMOTE_*` / 非 device-link 的会话级提示码 —— agent runtime 用同一套
- * `[CODE] fallback text` 约定把「这件事用户该知道」告诉 renderer,不新增事件类型。
- * 未登记的 code 仍然回退到英文兜底文案(绝不把 `[CODE]` 裸露给用户)。
- */
-const AGENT_RUNTIME_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
-  // Distinguish review availability, blocked calls, and missing confirmations.
-  'AUTO_REVIEW_UNAVAILABLE',
-  'AUTO_REVIEW_CONFIRM_UNDELIVERED',
-  'MCP_APPROVAL_AUTO_BLOCKED',
-  'MCP_APPROVAL_CONFIRMATION_TIMEOUT',
-  'MCP_APPROVAL_CONFIRMATION_UNAVAILABLE',
-] as const);
 const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   SESSION_SYNC_CHANNEL,
   'maker:event',
@@ -329,22 +305,24 @@ function resolveEstimatedTurnCostUsd(
     : rawCostUsd;
 }
 
+/** Translation candidate only; callers must check their active i18n resources.
+ * Unknown-code fallback text is diagnostic content, not curated guidance. */
+export function remoteErrorI18nKey(msg: string): string | undefined {
+  const parsed = parseAgentErrorCode(msg);
+  return parsed ? `chat.remoteError.${parsed.code}` : undefined;
+}
+
 export function decodeRemoteErrorMessage(msg: string): string {
-  const bracketMatch = BRACKET_ERROR_CODE_RE.exec(msg);
-  const bracketCode = bracketMatch?.[1];
-  if (
-    bracketCode &&
-    (DEVICE_LINK_CHAT_ERROR_CODES.has(bracketCode) ||
-      AGENT_RUNTIME_CHAT_ERROR_CODES.has(bracketCode))
-  ) {
-    return i18n.t(`chat.remoteError.${bracketCode}`, {
-      defaultValue: bracketMatch[2] || msg,
-    });
-  }
-  const m = REMOTE_ERROR_CODE_RE.exec(msg);
-  if (!m) return msg;
-  const fallback = m[2] || msg;
-  return i18n.t(`chat.remoteError.${m[1]}`, { defaultValue: fallback });
+  const parsed = parseAgentErrorCode(msg);
+  return parsed
+    ? i18n.t(`chat.remoteError.${parsed.code}`, { defaultValue: parsed.fallback })
+    : msg;
+}
+
+/** Keep known codes for the banner's active locale; retain unknown-code fallback behavior. */
+export function remoteErrorMessageForBanner(msg: string): string {
+  const key = remoteErrorI18nKey(msg);
+  return key && i18n.exists(key) ? msg : decodeRemoteErrorMessage(msg);
 }
 // 专门给"出现在用户面前的红色 ErrorBanner"打日志,scope 以 `maker/` 开头
 // 是为了让它落在统一 agent 流(agent-*.ndjson,跟 agent runtime 抛出的底层错误同一份,
@@ -6179,7 +6157,7 @@ export function handleStreamEvent(
               ? i18n.t('logic.errors.silentStopExhausted')
               : reason === 'codex-auto-review-unavailable'
                 ? i18n.t('logic.errors.codexAutoReviewUnavailable')
-                : decodeRemoteErrorMessage(safeErrMsg);
+                : remoteErrorMessageForBanner(safeErrMsg);
       const isTerminalError = isTerminalErrorData(event.data);
       // 终态错误 = turn 收口（含失败）：清掉该 session 的「正在识别图片中」toast，
       // 避免视觉桥未输出就终结时 loading toast 残留（done/abort/terminal error 兜底）。

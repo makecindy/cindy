@@ -206,7 +206,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { toast } from '@/lib/toast';
 import {
   buildCreateOptsForCurrentSession,
-  decodeRemoteErrorMessage,
+  remoteErrorMessageForBanner,
   makerChatStore,
   type AgentTaskUpdate,
   type MessageDeliveryMode,
@@ -2105,14 +2105,14 @@ export function CCAgentSessionView({
     syntheticContinuationQueued || continuationInFlightClientId !== null;
   const errorTailKind: 'interrupted' | 'error' =
     errorTailMsg?.errorReason === APP_EXIT_INTERRUPTED_REASON ? 'interrupted' : 'error';
-  // 普通失败行传给 ErrorBanner 的错误文本:**保持 raw**(只解码 [REMOTE_*]
-  // bracket code,不做 reason→i18n 转换,review P2)—— ErrorBanner 的门控判定
+  // 普通失败行传给 ErrorBanner 的错误文本:**保持 raw**(包括可识别的
+  // bracket code,由 ErrorBanner 按当前语言翻译)—— ErrorBanner 的门控判定
   // (codex thread not found / 401 / invalid-encrypted 等)靠对原文的正则命中,
   // i18n 化会让不可重试错误漏过门控;live 报错时 banner 显示的本来也是 raw
   // message,重载后同文案反而更一致。
   const errorTailText = useMemo(() => {
     if (!errorTailMsg || errorTailKind !== 'error') return '';
-    return decodeRemoteErrorMessage(errorTailMsg.content);
+    return remoteErrorMessageForBanner(errorTailMsg.content);
   }, [errorTailKind, errorTailMsg]);
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。

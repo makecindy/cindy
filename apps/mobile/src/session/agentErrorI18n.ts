@@ -1,3 +1,4 @@
+import { isResponsesLiteParallelToolCallsError, parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
 
 export type MobileToolLoopErrorKind = 'consecutive' | 'pingpong' | 'rotation' | 'contract';
@@ -55,4 +56,27 @@ export function localizeAgentError(
   if (reason !== 'tool_use_loop_detected') return null;
   if (!toolLoop) return i18n.t('session.tail.toolUseLoopDetected');
   return i18n.t(TOOL_LOOP_I18N_KEYS[toolLoop.kind], { count: toolLoop.count });
+}
+
+/** Unknown provider messages stay in diagnostic details, never in the localized summary. */
+export function unclassifiedAgentErrorI18nKey(message: string): string {
+  const parsed = parseAgentErrorCode(message);
+  const key = parsed ? `session.remoteError.${parsed.code}` : null;
+  if (key && i18n.exists(key)) return key;
+  return isResponsesLiteParallelToolCallsError(message)
+    ? 'session.tail.requestFormatError'
+    : 'session.tail.replyFailed';
+}
+
+export function localizeUnclassifiedAgentError(message: string): string {
+  return i18n.t(unclassifiedAgentErrorI18nKey(message));
+}
+
+/** Resending unchanged content cannot fix these explicit configuration failures. */
+export function requiresAgentErrorConfigurationChange(message: string): boolean {
+  const code = parseAgentErrorCode(message)?.code;
+  return code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
+    || code === 'REMOTE_COMPAT_MODE_UNSUPPORTED'
+    || code === 'REMOTE_LOCAL_ONLY_PROVIDER'
+    || code === 'DEVICE_LINK_CONTROL_DISABLED';
 }

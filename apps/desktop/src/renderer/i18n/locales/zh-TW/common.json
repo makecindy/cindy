@@ -9020,6 +9020,8 @@
       "failed": "圖片生成失敗，請重試"
     },
     "errorBanner": {
+      "requestFormatError": "應用程式送出的請求格式有誤，本次回覆未能完成。",
+      "replyFailed": "本次回覆未能完成。請查看錯誤詳情以瞭解原因。",
       "retryTitle": "重新傳送最後一條訊息",
       "cancelTitle": "關閉錯誤提示",
       "retry": "重試",

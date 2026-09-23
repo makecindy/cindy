@@ -9021,6 +9021,8 @@
       "failed": "이미지를 생성하지 못했습니다. 다시 시도해 주세요"
     },
     "errorBanner": {
+      "requestFormatError": "앱이 보낸 요청 형식에 문제가 있어 답변을 완료하지 못했습니다.",
+      "replyFailed": "답변을 완료하지 못했습니다. 오류 세부 정보에서 원인을 확인하세요.",
       "retryTitle": "마지막 메시지 다시 보내기",
       "cancelTitle": "오류 알림 닫기",
       "retry": "다시 시도",

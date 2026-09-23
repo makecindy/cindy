@@ -55,7 +55,9 @@ describe('resolveSessionTailBanner — error-tail', () => {
     expect(state).toEqual({
       kind: 'error-tail',
       clientId: 'e1',
-      text: 'process exited unexpectedly',
+      text: i18n.t('session.tail.replyFailed'),
+      rawError: 'process exited unexpectedly',
+      summaryKey: 'session.tail.replyFailed',
       continueKind: 'error',
       retryable: true,
     });

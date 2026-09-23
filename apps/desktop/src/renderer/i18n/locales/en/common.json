@@ -9027,6 +9027,8 @@
       "failed": "Couldn't generate the image — try again"
     },
     "errorBanner": {
+      "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
+      "replyFailed": "This reply could not be completed. Check the error details for more information.",
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
       "retry": "Retry",

@@ -2482,7 +2482,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     if (requestGuard) {
       // Compatibility transforms may reintroduce provider-hosted tools. Apply
       // the same frozen policy at the final outbound boundary as well.
-      try { outBody = requestGuard.transformBody(outBody); }
+      try { outBody = requestGuard.transformBody(outBody, transformCtx); }
       catch { res.destroy(); return; }
     }
     if (outBody.length > maxBodyBytes) {

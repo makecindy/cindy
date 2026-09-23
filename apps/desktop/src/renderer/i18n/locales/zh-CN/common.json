@@ -9021,6 +9021,8 @@
       "failed": "图片生成失败，请重试"
     },
     "errorBanner": {
+      "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
+      "replyFailed": "本次回复未能完成。请查看错误详情以了解原因。",
       "retryTitle": "重新发送最后一条消息",
       "cancelTitle": "关闭错误提示",
       "retry": "重试",
