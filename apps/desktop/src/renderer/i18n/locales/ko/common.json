@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "설정",
+    "search": {
+      "ariaLabel": "설정 검색",
+      "placeholder": "설정 검색",
+      "resultsLabel": "설정 검색 결과",
+      "noResults": "일치하는 설정이 없습니다",
+      "clear": "검색 지우기"
+    },
     "back": "뒤로",
     "defaults": {
       "customizedBadge": "사용자 지정",
@@ -1088,6 +1095,13 @@
       "claudeCodeVersionLabel": "Claude Code 버전",
       "codexVersionLabel": "Codex 버전",
       "piVersionLabel": "Pi 버전",
+      "harnessUpdateButton": "{{name}} 업데이트",
+      "harnessUpdateTitle": "{{name}} 업데이트",
+      "harnessUpdateDescription": "Cindy가 다시 시작되며 시작할 때 {{name}}을(를) 업데이트합니다. 현재 버전: {{currentVersion}}. 온라인 버전: {{latestVersion}}.",
+      "harnessUpdateConfirm": "다시 시작하고 {{name}} 업데이트",
+      "harnessUpdateCancel": "취소",
+      "harnessUpdateBusyDescription": "진행 중인 작업이 있어 재시작하면 중단됩니다. 그래도 지금 다시 시작하고 업데이트할까요?",
+      "harnessUpdateFailed": "Agent 업데이트를 예약하지 못했습니다. 잠시 후 다시 시도해 주세요.",
       "logsDirLabel": "로그 디렉터리",
       "openLogsDir": "열기",
       "openLogsDirTooltip": "시스템 파일 관리자에서 로그 디렉터리 열기",
@@ -1749,6 +1763,15 @@
       }
     },
     "providers": {
+      "catalogRecovery": {
+        "pending": "모델 설정이 아직 준비되지 않았습니다. 잠시 후 모델을 다시 불러오세요.",
+        "legacy": "이전 모델 설정을 일시적으로 읽을 수 없습니다. 실행 중인 다른 Cindy를 종료한 후 모델을 다시 불러오세요.",
+        "corrupt": "저장된 모델 설정을 읽을 수 없습니다. 기존 설정은 보존되어 있습니다. 복구하려면 지원팀에 문의하세요.",
+        "quota": "로컬 저장소의 한도에 도달하여 모델 설정을 저장할 수 없습니다. 지원팀에 문의한 후 모델을 다시 불러오세요.",
+        "storage": "이 컴퓨터의 모델 설정을 읽거나 저장할 수 없습니다. 모델을 다시 불러오고, 문제가 계속되면 지원팀에 문의하세요.",
+        "catalog": "모델 목록을 업데이트할 수 없습니다. 모델을 다시 불러오세요.",
+        "retry": "모델 다시 불러오기"
+      },
       "title": "모델 제공자",
       "subtitle": "모델을 선택할 때의 소스입니다. 각 소스는 지원하는 모델과 과금 방식을 제공하며, 세션별로 전환할 수 있습니다.",
       "import": {

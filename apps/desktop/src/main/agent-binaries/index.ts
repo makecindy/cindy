@@ -48,14 +48,15 @@ import {
 } from '../manifestService.js';
 import { ProgressNormalizer } from '../updateProgressNormalizer.js';
 import { createLogger } from '../logger.js';
-import { consumeStartupBinaryUpdateMarker } from './startup-update.js';
+import { consumeStartupBinaryUpdateMarker, type StartupBinaryUpdateScope } from './startup-update.js';
 
-let startupCheckForUpdates: boolean | undefined;
+let startupUpdateScope: StartupBinaryUpdateScope | undefined;
 
-function resolveUpdateCheck(checkForUpdates?: boolean): boolean {
-  startupCheckForUpdates ??= app.isPackaged
+function resolveUpdateCheck(kind: AgentBinaryKind, checkForUpdates?: boolean): boolean {
+  startupUpdateScope ??= app.isPackaged
     && consumeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion());
-  return checkForUpdates ?? startupCheckForUpdates;
+  if (checkForUpdates !== undefined) return checkForUpdates;
+  return startupUpdateScope === true || (Array.isArray(startupUpdateScope) && startupUpdateScope.includes(kind));
 }
 
 /**
@@ -390,7 +391,7 @@ export async function prepare(
     return { ready: false, error: `${kind} dev binary not found for ${getPlatformKey()}`, downloaded: false };
   }
 
-  opts = { ...opts, checkForUpdates: resolveUpdateCheck(opts.checkForUpdates) };
+  opts = { ...opts, checkForUpdates: resolveUpdateCheck(kind, opts.checkForUpdates) };
 
   // ── packaged Linux: CDN manifest 段优先,失败静默回落 runtime fallback ─────
   // 2026-08 起 Linux 与 mac/win 同链:scripts 侧发版把 claude/codex 资产上传
@@ -672,7 +673,7 @@ export async function peekNeedsDownload(
 ): Promise<boolean> {
   // dev 模式永不下载 (findDevBinary 命中 / 缺失都不走 OSS)
   if (!app.isPackaged) return false;
-  opts = { ...opts, checkForUpdates: resolveUpdateCheck(opts.checkForUpdates) };
+  opts = { ...opts, checkForUpdates: resolveUpdateCheck(kind, opts.checkForUpdates) };
   // Linux(cc/codex):manifest 有段 → 走通用 CDN peek(与 mac/win 同口径);
   // 无段(旧 canary / 首发渠道)→ 只看私有 fallback 是否已就位(fs 快查)。
   // peek 时 manifest 未缓存则做一次跨 vendor 的短超时探测(3s,single-flight +

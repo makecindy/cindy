@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "Settings",
+    "search": {
+      "ariaLabel": "Search settings",
+      "placeholder": "Search settings",
+      "resultsLabel": "Settings search results",
+      "noResults": "No matching settings",
+      "clear": "Clear search"
+    },
     "back": "Back",
     "defaults": {
       "customizedBadge": "Custom",
@@ -1088,6 +1095,13 @@
       "claudeCodeVersionLabel": "Claude Code version",
       "codexVersionLabel": "Codex version",
       "piVersionLabel": "Pi version",
+      "harnessUpdateButton": "Update {{name}}",
+      "harnessUpdateTitle": "Update {{name}}",
+      "harnessUpdateDescription": "Cindy will restart and update {{name}} when it starts. Current version: {{currentVersion}}. Online version: {{latestVersion}}.",
+      "harnessUpdateConfirm": "Restart and Update {{name}}",
+      "harnessUpdateCancel": "Cancel",
+      "harnessUpdateBusyDescription": "Tasks are currently in progress and restarting will interrupt them. Restart and update anyway?",
+      "harnessUpdateFailed": "Could not schedule the Agent update. Please try again later.",
       "logsDirLabel": "Logs directory",
       "openLogsDir": "Open",
       "openLogsDirTooltip": "Open the logs directory in the system file manager",
@@ -1749,6 +1763,15 @@
       }
     },
     "providers": {
+      "catalogRecovery": {
+        "pending": "Model settings are not ready yet. Wait a moment, then reload the models.",
+        "legacy": "Previous model settings are temporarily unavailable. Close other Cindy instances, then reload the models.",
+        "corrupt": "Saved model settings could not be read. Your settings have been kept. Contact support for help recovering them.",
+        "quota": "Model settings could not be saved because local storage has reached its limit. Contact support for help, then reload the models.",
+        "storage": "Local model settings could not be read or saved. Reload the models; if this continues, contact support.",
+        "catalog": "The model list could not be updated. Reload the models to try again.",
+        "retry": "Reload Models"
+      },
       "title": "Providers",
       "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per session.",
       "import": {
