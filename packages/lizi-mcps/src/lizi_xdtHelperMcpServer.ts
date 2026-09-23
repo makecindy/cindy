@@ -852,7 +852,8 @@ export function createXdtHelperMcpServer(
   }
   if (deps.botRoutines) {
     registerBotRoutineTools(registry, deps.botRoutines,
-      () => resolveLiziMcpSessionContext(sessionCtx).sessionId);
+      () => resolveLiziMcpSessionContext(sessionCtx).sessionId,
+      () => resolveLiziMcpSessionContext(sessionCtx));
   }
 
   registerStartSessionTaskEntry(registry, deps, sessionCtx);

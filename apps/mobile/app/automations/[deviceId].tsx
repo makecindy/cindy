@@ -65,6 +65,7 @@ import {
   applyMobileTemplateParams,
   applyScheduleWireCompat,
   ScheduleModelSelectionUnsupportedError,
+  SchedulePreRunHookUnsupportedError,
   applyTemplateToMobileScheduleDraft,
   buildMobileScheduleInput,
   createMobileScheduleDraft,
@@ -160,6 +161,7 @@ export default function AutomationsScreen() {
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [formMode, setFormMode] = useState<'create' | 'edit' | null>(null);
   const [formDraft, setFormDraft] = useState<MobileScheduleDraft | null>(null);
+  const [supportsSchedulePreRunHook, setSupportsSchedulePreRunHook] = useState(false);
   const [formScheduleId, setFormScheduleId] = useState<string | null>(null);
   const [formError, setFormError] = useState<
     string | ScheduleDraftValidation | TemplateParamValidation | null
@@ -343,6 +345,7 @@ export default function AutomationsScreen() {
   }, [deviceId, maker, openLink, subscribe]);
 
   const startCreateSchedule = useCallback(() => {
+    setSupportsSchedulePreRunHook(false);
     setFormMode('create');
     setFormScheduleId(null);
     setFormError(null);
@@ -356,6 +359,7 @@ export default function AutomationsScreen() {
   }, [loadTemplates, selectedSchedule]);
 
   const startEditSchedule = useCallback((schedule: RemoteSchedule) => {
+    setSupportsSchedulePreRunHook(false);
     setFormMode('edit');
     setFormScheduleId(schedule.id);
     setFormError(null);
@@ -366,6 +370,7 @@ export default function AutomationsScreen() {
   }, []);
 
   const closeScheduleForm = useCallback(() => {
+    setSupportsSchedulePreRunHook(false);
     setFormMode(null);
     setFormScheduleId(null);
     setFormDraft(null);
@@ -374,6 +379,20 @@ export default function AutomationsScreen() {
     setTemplateParamValues({});
     setTemplatePromptDirty(false);
   }, []);
+
+  useEffect(() => {
+    if (!formDraft) return;
+    let active = true;
+    void maker.getCapabilities(formDraft.agentKind)
+      .then((raw) => {
+        const caps = raw as { supportsSchedulePreRunHook?: boolean } | null;
+        if (active) setSupportsSchedulePreRunHook(caps?.supportsSchedulePreRunHook === true);
+      })
+      .catch(() => {
+        if (active) setSupportsSchedulePreRunHook(false);
+      });
+    return () => { active = false; };
+  }, [formDraft?.agentKind, formMode, maker]);
 
   const selectTemplate = useCallback((template: RemoteScheduleTemplate) => {
     const defaults = createTemplateParamDefaults(template);
@@ -455,11 +474,13 @@ export default function AutomationsScreen() {
       const caps = await maker.getCapabilities(resolvedDraft.agentKind).catch(() => null) as {
         supportsScheduleIntervalNullClear?: boolean;
         supportsScheduleModelSelection?: boolean;
+        supportsSchedulePreRunHook?: boolean;
       } | null;
       const supportsModelSelection = caps?.supportsScheduleModelSelection === true;
       const wireInput = applyScheduleWireCompat(input, {
         supportsIntervalNullClear: caps?.supportsScheduleIntervalNullClear === true,
         supportsModelSelection,
+        supportsPreRunHook: caps?.supportsSchedulePreRunHook === true,
       });
       const saved = await (async () => {
         if (formMode === 'edit' && formScheduleId) {
@@ -485,7 +506,7 @@ export default function AutomationsScreen() {
       }
       await loadSchedules().catch(() => undefined);
     } catch (err) {
-      setFormError(err instanceof ScheduleModelSelectionUnsupportedError
+      setFormError(err instanceof ScheduleModelSelectionUnsupportedError || err instanceof SchedulePreRunHookUnsupportedError
         ? t('deviceLink.remoteError.channelNotAllowed') : formatRemoteError(err));
     } finally {
       setBusyAction(null);
@@ -902,6 +923,7 @@ export default function AutomationsScreen() {
             templates={templates}
             templatesLoading={templatesLoading}
             sessions={bindableSessions}
+            supportsPreRunHook={supportsSchedulePreRunHook}
           />
         )}
 
@@ -1060,6 +1082,7 @@ function ScheduleFormCard({
   templates,
   templatesLoading,
   sessions,
+  supportsPreRunHook,
 }: {
   busy: boolean;
   draft: MobileScheduleDraft;
@@ -1078,10 +1101,12 @@ function ScheduleFormCard({
   templates: readonly RemoteScheduleTemplate[];
   templatesLoading: boolean;
   sessions: readonly RemoteSession[];
+  supportsPreRunHook: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n } = useTranslation();
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const setField = <K extends keyof MobileScheduleDraft>(key: K, value: MobileScheduleDraft[K]) => {
     onChange({ ...draft, [key]: value });
   };
@@ -1444,6 +1469,24 @@ function ScheduleFormCard({
           value={draft.timezone}
         />
       </View>
+
+      <MainWindowRowButton accessibilityLabel={t('devices.companions.automation.advanced')} expanded={advancedOpen} onPress={() => setAdvancedOpen(!advancedOpen)} testID="automations.form.advanced"><Text style={styles.fieldLabel}>{t('devices.companions.automation.advanced')}</Text></MainWindowRowButton>
+      {advancedOpen ? <View style={styles.fieldGroup}>
+        {draft.executionMode !== 'script' ? <ToggleRow active={draft.silentWhenIdle} disabled={busy}
+          label={t('devices.companions.automation.quiet')} onPress={() => setField('silentWhenIdle', !draft.silentWhenIdle)} testID="automations.form.quiet" /> : null}
+        {draft.executionMode !== 'script' ? <Text style={styles.fieldLabel}>{t('devices.companions.automation.quietHint')}</Text> : null}
+        {supportsPreRunHook ? <>
+          <Text style={styles.fieldLabel}>{t('devices.companions.automation.checkCommand')}</Text>
+          <TextInput accessibilityLabel={t('devices.companions.automation.checkCommand')} autoCapitalize="none" editable={!busy} multiline style={styles.input}
+            value={draft.preRunHook?.command ?? ''} onChangeText={(command) => setField('preRunHook', command ? { ...draft.preRunHook, command } : null)} />
+          <Text style={styles.fieldLabel}>{t('devices.companions.automation.checkHint')}</Text>
+          {draft.preRunHook ? <>
+            <Text style={styles.fieldLabel}>{t('devices.companions.automation.timeoutMs')}</Text>
+            <TextInput accessibilityLabel={t('devices.companions.automation.timeoutMs')} keyboardType="numeric" editable={!busy} style={styles.input}
+              value={draft.preRunHook.timeoutMs === undefined ? '' : String(draft.preRunHook.timeoutMs)} onChangeText={(value) => setField('preRunHook', { ...draft.preRunHook!, timeoutMs: value ? Number(value) : undefined })} />
+          </> : null}
+        </> : null}
+      </View> : null}
 
       <ToggleRow
         active={draft.notifyDesktop}

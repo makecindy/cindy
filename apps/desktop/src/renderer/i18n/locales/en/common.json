@@ -10874,8 +10874,8 @@
         "automatic": "Automatic",
         "manually": "Manually",
         "session": "Session",
-        "silentRun": "Silent run",
-        "silentRunTooltip": "When enabled, successful runs do not notify by default. If the task prompt asks to notify under specific conditions, AI will report when those conditions are met. Failures and errors still notify.",
+        "silentRun": "Stay quiet when checks find nothing",
+        "silentRunTooltip": "Report changes or problems only. Turn off for reminders and scheduled messages.",
         "silentRunInfoAria": "View silent run rules",
         "finishSendToFeishu": "Finish Send To FeishuBot",
         "finishSendToWecomGroup": "Send result to WeCom group",
@@ -12966,7 +12966,8 @@
       "success": "Completed",
       "failed": "Failed",
       "interrupted": "Interrupted",
-      "cancelled": "Cancelled"
+      "cancelled": "Cancelled",
+      "skipped": "Checked · model skipped"
     },
     "sourceStatus": {
       "listening": "Listening",
@@ -12977,7 +12978,13 @@
       "equals": "Equals",
       "contains": "Contains",
       "not-equals": "Does Not Equal"
-    }
+    },
+    "quiet": "Stay quiet when checks find nothing",
+    "quietHint": "Report changes or problems only. Turn off for reminders and scheduled messages.",
+    "checkCommand": "Pre-run check command",
+    "checkHint": "Optional. Checks on the computer before each run: exit 2 skips the run, exit 0 continues, errors stay visible. Clear to remove.",
+    "timeoutMs": "Check timeout (ms, blank for no limit)",
+    "advancedSettings": "Advanced settings"
   },
   "cindyMakeDoctor": {
     "description": "Check the local environment for building Cindy. Usage: /cindy-make-doctor",

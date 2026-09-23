@@ -3,6 +3,7 @@ import {
   applyMobileTemplateParams,
   applyScheduleWireCompat,
   ScheduleModelSelectionUnsupportedError,
+  SchedulePreRunHookUnsupportedError,
   applyTemplateToMobileScheduleDraft,
   buildMobileScheduleInput,
   createMobileScheduleDraft,
@@ -611,4 +612,38 @@ describe('mixed-version scheduled model selections', () => {
     const input = { ...buildMobileScheduleInput(createMobileScheduleDraft(schedule())), targetSessionId: 'bound' };
     expect(applyScheduleWireCompat(input, { supportsIntervalNullClear: true })).toBe(input);
   });
+});
+
+
+it('round trips advanced check configuration without changing legacy quiet choices', () => {
+  expect(createMobileScheduleDraft(null).silentWhenIdle).toBe(false);
+  expect(createMobileScheduleDraft(schedule()).silentWhenIdle).toBe(false);
+  const hook = { command: 'node check.mjs', timeoutMs: 7000 };
+  const draft = createMobileScheduleDraft(schedule({ silentWhenIdle: false, preRunHook: hook }));
+  expect(buildMobileScheduleInput(draft)).toMatchObject({ silentWhenIdle: false, preRunHook: hook });
+  expect(buildMobileScheduleInput({ ...draft, preRunHook: null })).toHaveProperty('preRunHook', null);
+});
+
+it('requires a positive safe-integer timeout before saving a mobile pre-run check', () => {
+  const draft = createMobileScheduleDraft(schedule());
+  for (const timeoutMs of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    expect(validateMobileScheduleDraft({ ...draft, preRunHook: { command: 'node check.mjs', timeoutMs } }))
+      .toMatchObject({ field: 'preRunHook', messageKey: 'devices.automations.presentation.validation.preRunHookTimeout' });
+  }
+  for (const timeoutMs of [undefined, 1, 7000]) {
+    expect(validateMobileScheduleDraft({ ...draft, preRunHook: { command: 'node check.mjs', timeoutMs } })).toBeNull();
+  }
+  expect(validateMobileScheduleDraft({ ...draft, preRunHook: null })).toBeNull();
+});
+
+it('rejects pre-run install and removal when an older host cannot persist either', () => {
+  const draft = createMobileScheduleDraft(schedule());
+  const base = buildMobileScheduleInput(draft);
+  const options = { supportsIntervalNullClear: true, supportsModelSelection: true };
+  expect(applyScheduleWireCompat(base, options)).toBe(base);
+  for (const preRunHook of [{ command: 'node check.mjs' }, null]) {
+    const input = { ...base, preRunHook };
+    expect(() => applyScheduleWireCompat(input, options)).toThrow(SchedulePreRunHookUnsupportedError);
+    expect(applyScheduleWireCompat(input, { ...options, supportsPreRunHook: true })).toBe(input);
+  }
 });

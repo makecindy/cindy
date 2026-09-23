@@ -10859,8 +10859,8 @@
         "automatic": "自动",
         "manually": "手动",
         "session": "任务",
-        "silentRun": "静默运行",
-        "silentRunTooltip": "开启后，任务成功完成时默认不提醒。若任务说明中要求在特定情况提醒，AI 会在满足条件时主动上报；失败和异常仍会提醒。",
+        "silentRun": "检查没事不说话",
+        "silentRunTooltip": "仅报告变化或问题。提醒和定时发送可关闭此项。",
         "silentRunInfoAria": "查看静默运行规则",
         "finishSendToFeishu": "完成时发送到飞书机器人",
         "finishSendToWecomGroup": "完成时发送到企业微信群",
@@ -12949,7 +12949,8 @@
       "success": "已完成",
       "failed": "运行失败",
       "interrupted": "已中断",
-      "cancelled": "已取消"
+      "cancelled": "已取消",
+      "skipped": "已检查 · 未唤醒模型"
     },
     "sourceStatus": {
       "listening": "监听中",
@@ -12960,7 +12961,13 @@
       "equals": "等于",
       "contains": "包含",
       "not-equals": "不等于"
-    }
+    },
+    "quiet": "检查没事不说话",
+    "quietHint": "仅报告变化或问题。提醒和定时发送可关闭此项。",
+    "checkCommand": "前置检查命令",
+    "checkHint": "可选。在电脑上先检查：退出码 2 跳过本轮，0 继续执行，异常仍会报告。清空可移除。",
+    "timeoutMs": "检查超时（毫秒，留空不限时）",
+    "advancedSettings": "高级设置"
   },
   "cindyMakeDoctor": {
     "description": "检查本机构建 Cindy 所需的环境。用法：/cindy-make-doctor",

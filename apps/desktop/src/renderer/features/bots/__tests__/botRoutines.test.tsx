@@ -127,7 +127,7 @@ it('saves enabled state and does not run a routine just by saving', async () => 
   const api = setup();
   render(<BotRoutines botId="bot" />);
   fireEvent.click(await screen.findByText('Daily report'));
-  fireEvent.click(screen.getByRole('switch'));
+  fireEvent.click(screen.getByRole('switch', { name: 'routines.enabled' }));
   fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
   await waitFor(() => expect(api.save).toHaveBeenCalledWith('bot', expect.objectContaining({ enabled: false }), 'daily'));
   expect(api.runNow).not.toHaveBeenCalled();
@@ -162,4 +162,28 @@ it('keeps unsaved instructions when leaving is cancelled and clears the register
   expect(await guard.current!()).toBe(true);
   view.unmount();
   expect(guard.current).toBeNull();
+});
+
+it('saves advanced quiet and pre-run settings without executing a check on open', async () => {
+  const api = setup();
+  render(<BotRoutines botId="bot" />);
+  fireEvent.click(await screen.findByText('Daily report'));
+  expect(api.save).not.toHaveBeenCalled();
+  expect(api.runNow).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText('routines.advancedSettings'));
+  expect(screen.getByRole('switch', { name: 'routines.quiet' }).getAttribute('aria-checked')).toBe('true');
+  fireEvent.click(screen.getByRole('switch', { name: 'routines.quiet' }));
+  fireEvent.change(screen.getByLabelText('routines.checkCommand'), { target: { value: 'node check.mjs' } });
+  fireEvent.change(screen.getByLabelText('routines.timeoutMs'), { target: { value: '3000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
+  await waitFor(() => expect(api.save).toHaveBeenCalledWith('bot', expect.objectContaining({ silentWhenIdle: false, preRunHook: { command: 'node check.mjs', timeoutMs: 3000 } }), 'daily'));
+  expect(api.runNow).not.toHaveBeenCalled();
+});
+
+it('starts a new unclassified routine with delivery enabled', async () => {
+  setup();
+  render(<BotRoutines botId="bot" />);
+  fireEvent.click(screen.getByRole('button', { name: 'routines.add' }));
+  fireEvent.click(screen.getByText('routines.advancedSettings'));
+  expect(screen.getByRole('switch', { name: 'routines.quiet' }).getAttribute('aria-checked')).toBe('false');
 });

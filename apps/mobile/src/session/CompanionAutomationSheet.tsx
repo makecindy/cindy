@@ -28,6 +28,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
   const { colors } = useTheme();
   const { accountGeneration } = useAuth();
   const { invoke, openLink, onRemoteResourceChanged, connectionEpoch, subscribe, unsubscribe } = useDeviceLink();
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [resource, setResource] = useState<RemoteResource | null>(null);
   const [items, setItems] = useState<RoutineSummary[]>([]);
@@ -196,6 +197,14 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
           {field(tr('name'), draft.name, (name) => setDraft({ ...draft, name }))}
           <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('enabled')}</Text><Switch accessibilityLabel={tr('enabled')} disabled={busy} value={draft.enabled} onValueChange={(enabled) => setDraft({ ...draft, enabled })} trackColor={{ true: colors.textSecondary }} /></View>
           {field(tr('instructions'), draft.prompt, (prompt) => setDraft({ ...draft, prompt }), true)}
+          {detail?.supportsPreRunCheck ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: advancedOpen }} onPress={() => setAdvancedOpen(!advancedOpen)} style={styles.row}><Text style={styles.label}>{tr('advanced')}</Text></Pressable> : null}
+          {detail?.supportsPreRunCheck && advancedOpen ? <View style={styles.group}>
+            <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('quiet')}</Text><Switch accessibilityLabel={tr('quiet')} disabled={busy} value={draft.silentWhenIdle ?? false} onValueChange={(silentWhenIdle) => setDraft({ ...draft, silentWhenIdle })} trackColor={{ true: colors.textSecondary }} /></View>
+            <Text style={styles.secondary}>{tr('quietHint')}</Text>
+            {field(tr('checkCommand'), draft.preRunHook?.command ?? '', (command) => setDraft({ ...draft, preRunHook: command ? { ...draft.preRunHook, command } : null }), true)}
+            <Text style={styles.secondary}>{tr('checkHint')}</Text>
+            {draft.preRunHook ? field(tr('timeoutMs'), draft.preRunHook.timeoutMs === undefined ? '' : String(draft.preRunHook.timeoutMs), (value) => setDraft({ ...draft, preRunHook: { ...draft.preRunHook!, timeoutMs: value ? Number(value) : undefined } })) : null}
+          </View> : null}
           <Text style={styles.heading}>{tr('triggers')}</Text>
           {draft.triggers.map((trigger, index) => <View key={`${draftGeneration}:${trigger.id}`} style={styles.group}>
             {choose(tr('triggerType'), trigger.kind, ['cron', 'interval', 'event'].map((value) => ({ value, label: tr(value) })), (kind) => updateTrigger(index, kind === 'interval' ? { id: trigger.id, kind, intervalMs: 3_600_000 } : kind === 'event' ? { id: trigger.id, kind, sourceId: '', eventType: '', filters: [] } : { id: trigger.id, kind: 'cron', expression: '0 9 * * *', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }))}

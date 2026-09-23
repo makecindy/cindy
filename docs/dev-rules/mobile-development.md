@@ -106,6 +106,9 @@ pnpm --filter mobile test:smoke
 
 ### 中国大陆版微信个人登录
 
+- 微信开放平台的移动应用配置修正并完成双平台真机验收前，iOS / Android 登录页暂时隐藏
+  微信入口；开关位于 `src/auth/mobileSocialLoginMode.ts`，不移除原生 SDK 或构建配置，
+  以便配置修正后恢复。此处仅改 JS 行为，不额外触发原生冷更。
 - 复用 `xdt-wechat-login`：iOS/Android 拉起微信取临时 code，再由 auth-server 交换。
   PC 使用同一服务端的网站应用扫码入口。登录结果统一进入手机号补绑或身份选择流程。
 - 在 Mobile `.env`（本地）或打包机环境中成对填写
@@ -116,11 +119,22 @@ pnpm --filter mobile test:smoke
 - 仅 cn 和显式配置的 dev 构建消费微信配置；Global 忽略残留值。全空关闭入口，
   半配置或非法 Universal Link 在原生配置生成前报错。首次启用需重新出原生包，
   仅 OTA 无法添加回调配置；按下方冷更规则比对 fingerprint。
-- 真机验证 iOS Universal Link/AASA、Android 包名/签名与 WXEntryActivity，覆盖
+- iOS config plugin 按[微信官方接入说明](https://developers.weixin.qq.com/doc/oplatform/Mobile_App/Access_Guide/iOS.html)
+  生成 `weixin`、`weixinULAPI`、`weixinURLParamsAPI` 三项查询白名单，并保留 AppID URL Scheme
+  与 Universal Link 的 Associated Domains。遗漏白名单需重建原生包，不能通过 JS 热更补齐。
+- 恢复入口前真机验证 iOS Universal Link/AASA、Android 包名/签名与 WXEntryActivity，覆盖
   同意授权、取消、未安装微信、回到前台超时后重试。iOS Simulator 不支持微信授权。
-  iOS 登录页仅在 OpenSDK 确认已安装微信后显示微信入口；Android 保持入口可见，点击时
-  再由原生桥确认微信是否可用。凭据获取前仍须二次检查安装状态，不能只依赖页面显隐。
+  入口恢复后，iOS 登录页仅在 OpenSDK 确认已安装微信后显示微信入口；Android 保持入口
+  可见，点击时再由原生桥确认微信是否可用。凭据获取前仍须二次检查安装状态，不能只依赖页面显隐。
   未绑手机号须短信验证，已绑用户免短信；用同一微信在 PC 和两种手机上确认账号一致。
+
+- 微信 OpenSDK 的 `oauth` / `refreshToken` 回调会同时到达原生 delegate 与 Expo Router；
+  Universal Link 校验还会回跳配置路径下的 `<AppID>/?_wechat_sdk_biz_data=…`，Router 可能
+  将 HTTPS 链接转成 Cindy scheme 或路径形式，这些形式也必须识别；仅按路径与参数名分类，
+  不解析 SDK 的不透明 payload。
+  `app/+native-intent.ts` 只负责将这些非页面链接送回首页，避免 404 展示授权参数。
+  微信 code/state 仍只由原生 SDK 校验，不得复用 auth-server `/auth` 的 PKCE 交换。
+  真机回归需分别覆盖微信已在后台与微信冷启动，确认回跳后继续完成登录而非进入错误页。
 
 - 模拟器与真机排错：
   [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md)。

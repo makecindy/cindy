@@ -736,6 +736,7 @@
         "workingDir": "Enter a project directory",
         "effort": "Reasoning effort must be one of: {{values}}",
         "intervalPositiveInteger": "The interval in minutes must be a positive integer",
+        "preRunHookTimeout": "Check timeout must be a positive whole number of milliseconds",
         "intervalUnsupported": "Minute intervals must divide an hour: use 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, or 30 minutes, or whole-hour intervals from 1–23 hours"
       },
       "schedule": {
@@ -927,7 +928,14 @@
       "timezone": "Time Zone",
       "monthly": "Monthly",
       "monthDay": "Day of month",
-      "saveAndRun": "Save and run"
+      "saveAndRun": "Save and run",
+      "advanced": "Advanced settings",
+      "quiet": "Stay quiet when checks find nothing",
+      "quietHint": "Report changes or problems only. Turn off for reminders and scheduled messages.",
+      "checkCommand": "Pre-run check command",
+      "checkHint": "Optional. Checks on the computer before each run: exit 2 skips the run, exit 0 continues, errors stay visible. Clear to remove.",
+      "timeoutMs": "Check timeout (ms, blank for no limit)",
+      "skipped": "Checked · model skipped"
     },
     "openNavigation": "Open navigation",
     "openProfile": "View {{name}}'s profile",
