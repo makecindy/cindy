@@ -105,7 +105,7 @@ export function resolveSettingsSearchEntry(
   return SETTINGS_SEARCH_ENTRIES.find(
     (entry) =>
       entry.tab === tab &&
-      [entry.id, entry.id.split('.').at(-1) ?? '', entry.targetId].some(
+      [entry.id, entry.id.split('.').at(-1) ?? '', entry.targetId, ...(entry.aliases ?? [])].some(
         (alias) => normalizeSettingsSearchText(alias) === normalized,
       ),
   ) ?? null;

@@ -55,10 +55,15 @@ describe('settings search catalog', () => {
 
   it('resolves both short and catalog section deep links', () => {
     expect(resolveSettingsSearchTarget('general', 'notifications')).toBe('settings-notifications');
+    expect(resolveSettingsSearchTarget('general', 'collaboration')).toBe('settings-collaboration');
     expect(resolveSettingsSearchTarget('general', 'general.language')).toBe(
       'settings-search-target-general-language',
     );
     expect(resolveSettingsSearchTarget('general', 'missing')).toBeNull();
+  });
+
+  it('resolves declared aliases in deep links', () => {
+    expect(resolveSettingsSearchTarget('im-bot', 'Slack')).toBe('cindy-im-slack');
   });
 
   it('indexes always-visible personal IM channels', () => {
