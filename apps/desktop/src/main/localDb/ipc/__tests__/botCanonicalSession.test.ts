@@ -6,6 +6,7 @@ import { setMainLocale } from '../../../i18n';
 import Database from 'better-sqlite3';
 import { AgentInputCoordinator } from '../../../maker-ipc/agent-input-coordinator';
 import { createSessionQueueControlService } from '../../../maker-ipc/sessionQueueControl';
+import { createMessage } from '../messages';
 import { authorizeSessionQueueItem, rebuildSessionQueueItem } from '../../../maker-ipc/sessionControlService';
 import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue';
 import type { ProviderView } from '@cindy/model-providers';
@@ -3468,6 +3469,7 @@ describe('Bot Session task end-to-end runtime', () => {
     resolveInteraction?: NonNullable<
       Parameters<typeof createBotDelegationService>[0]['resolveInteraction']
     >;
+    onResultReceiptPersisted?: () => Promise<void>;
   } = {}) {
     const accountReady = options.accountReady ?? (() => true);
     const started: StartedTurn[] = [];
@@ -3701,6 +3703,18 @@ describe('Bot Session task end-to-end runtime', () => {
       } } : {}),
       readCallerRuntime: options.readCallerRuntime,
       readCallerPermission: options.readCallerPermission,
+      persistTimelineMessage: options.onResultReceiptPersisted ? async params => {
+        await createMessage(params.sessionId, {
+          clientId: params.clientId,
+          role: params.role,
+          content: params.content,
+          createdAt: params.createdAt,
+          agentMeta: params.agentMeta as Parameters<typeof createMessage>[1]['agentMeta'],
+        });
+        if (params.clientId.startsWith('bot-delegation-result:')) {
+          await options.onResultReceiptPersisted?.();
+        }
+      } : undefined,
       dispatch,
       abortSession,
       closeSession,
@@ -5910,6 +5924,42 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(results.every(row => JSON.parse(row.agent_meta).botCollaboration.result.artifacts[0].absolutePath === '/reports/report.pdf')).toBe(true);
       expect(runtime.started.filter(turn => turn.sessionId === first.childSessionId)).toHaveLength(1);
       expect(runtime.started.filter(turn => turn.sessionId === second.childSessionId)).toHaveLength(1);
+    } finally { runtime.dispose(); }
+  });
+
+  it('rehomes a result receipt when its parent is physically deleted after persistence', async () => {
+    await seedPair();
+    let replacementSessionId: string | undefined;
+    const runtime = createDelegationRuntime({
+      onResultReceiptPersisted: async () => {
+        if (replacementSessionId) return;
+        // The receipt was committed, then parent deletion cascades it away
+        // before the completion wake-up can be delivered.
+        h.sqlite!.prepare("DELETE FROM sessions WHERE id = 'session-1'").run();
+        const recovered = await invoke('local-db:bots:create-canonical-session', {
+          botId: 'bot-a',
+          expectedCanonicalSessionId: null,
+          expectedProfileVersion: 1,
+        });
+        replacementSessionId = recovered.canonicalSessionId as string;
+      },
+    });
+    try {
+      const started = await runtime.delegation.startSessionTask({
+        callerSessionId: 'session-1', objective: 'Preserve the final report',
+      });
+      if (!started.ok) throw new Error('Task did not start');
+      await runtime.settleChild(started.childSessionId, '[Report](https://example.com/report.pdf)');
+
+      expect(replacementSessionId).toBeTruthy();
+      expect(h.sqlite!.prepare('SELECT session_id, agent_meta FROM messages WHERE client_id = ?')
+        .get(`bot-delegation-result:${started.delegationId}:1`)).toMatchObject({
+        session_id: replacementSessionId,
+        agent_meta: expect.stringContaining('https://example.com/report.pdf'),
+      });
+      expect(h.sqlite!.prepare('SELECT completion_delivered_at FROM bot_delegations WHERE id = ?')
+        .pluck().get(started.delegationId)).not.toBeNull();
+      expect(runtime.started.some(turn => turn.sessionId === replacementSessionId)).toBe(true);
     } finally { runtime.dispose(); }
   });
 
