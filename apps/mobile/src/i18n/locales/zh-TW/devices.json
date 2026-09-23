@@ -736,6 +736,7 @@
         "workingDir": "請輸入專案目錄",
         "effort": "推理強度只能是 {{values}}",
         "intervalPositiveInteger": "間隔分鐘必須是正整數",
+        "preRunHookTimeout": "檢查逾時必須是正整數毫秒",
         "intervalUnsupported": "分鐘間隔必須可整除 60：請選擇 1、2、3、4、5、6、10、12、15、20 或 30 分鐘，或 1–23 小時的整點間隔"
       },
       "schedule": {
@@ -927,7 +928,14 @@
       "timezone": "時區",
       "monthly": "每月",
       "monthDay": "每月幾號",
-      "saveAndRun": "儲存並執行"
+      "saveAndRun": "儲存並執行",
+      "advanced": "進階設定",
+      "quiet": "檢查沒事不說話",
+      "quietHint": "僅回報變化或問題。提醒和定時傳送可關閉此項。",
+      "checkCommand": "前置檢查命令",
+      "checkHint": "選填。在電腦上先檢查：結束代碼 2 跳過本次執行，0 繼續執行，異常仍會回報。清空可移除。",
+      "timeoutMs": "檢查逾時（毫秒，留空不限時）",
+      "skipped": "已檢查 · 未喚醒模型"
     },
     "openNavigation": "開啟導覽",
     "openProfile": "查看 {{name}} 的資料",

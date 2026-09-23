@@ -6014,7 +6014,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
     providerOAuthLogin: (
       providerId: string,
-      options?: { ownerId?: string },
+      options?: { ownerId?: string; method?: 'browser' | 'device' },
     ): Promise<{ ok: boolean; reason?: string }> =>
       ipcRenderer.invoke('maker:provider:oauth:login', providerId, options),
     providerOAuthLogout: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> =>
@@ -7052,8 +7052,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:claude-oauth:cancel', loginKey),
 
     // xAI(SuperGrok 订阅)OAuth —— 与 claudeOAuth* 同形态。
-    xaiOAuthLogin: (): Promise<{ ok: boolean; authorized: boolean; reason?: string }> =>
-      ipcRenderer.invoke('maker:xai-oauth:login'),
+    xaiOAuthLogin: (method?: 'browser' | 'device'): Promise<{ ok: boolean; authorized: boolean; reason?: string }> =>
+      ipcRenderer.invoke('maker:xai-oauth:login', method),
     xaiOAuthLogout: (ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }): Promise<{ authorized: boolean }> =>
       ipcRenderer.invoke('maker:xai-oauth:logout', ownerScope),
     xaiOAuthCancel: (): Promise<{ authorized: boolean }> =>

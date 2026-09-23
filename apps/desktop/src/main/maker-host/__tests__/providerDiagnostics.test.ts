@@ -11,6 +11,11 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
+const probeLog = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+vi.mock('../logger-adapter', () => ({
+  createMakerLogger: () => ({ ...probeLog, child: () => probeLog }),
+}));
+
 import { BUNDLED_CATALOG, buildUserProvider, PROVIDER_MODEL_CATALOG, providerPresetOAuth } from '@cindy/model-providers';
 
 import { classifyProviderError } from '../../../shared/providerErrors.js';
@@ -27,6 +32,7 @@ import { setCustomProviders } from '../active-catalog.js';
 afterEach(() => {
   setCustomProviders([]);
   setDiagnosticsKeyReader(() => null);
+  probeLog.warn.mockClear();
 });
 
 describe('classifyProviderError', () => {
@@ -324,6 +330,57 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
       },
     );
     expect(r).toMatchObject({ ok: false, code: 'UPSTREAM_UNREACHABLE' });
+  });
+
+  it('失败探测在主进程留痕:字段含 agent/model/上游 origin/status/分类码/脱敏摘要,不含路径与凭证(#4954)', async () => {
+    const r = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://opencode.example/zen/go/v1?token=secret-q', modelId: 'kimi-k2', apiKey: 'sk-live-abcdef123456', wireProtocol: 'openai-chat' },
+      async () => fakeResponse(400, '{"error":{"message":"model kimi-k2 is not served by this endpoint","authorization":"Bearer sk-live-abcdef123456"}}'),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'UNKNOWN', status: 400 });
+    expect(probeLog.warn).toHaveBeenCalledTimes(1);
+    const [msg, ctx] = probeLog.warn.mock.calls[0] as [string, Record<string, unknown>];
+    expect(msg).toBe('provider connection probe failed');
+    expect(ctx).toMatchObject({ agent: 'codex', model: 'kimi-k2', upstream: 'https://opencode.example', wireProtocol: 'openai-chat', status: 400, code: 'UNKNOWN' });
+    expect(typeof ctx.latencyMs).toBe('number');
+    expect(String(ctx.detail)).toContain('not served by this endpoint');
+    // 路径、query 与凭证不得进入日志。
+    const serialized = JSON.stringify(ctx);
+    expect(serialized).not.toContain('/zen/go/v1');
+    expect(serialized).not.toContain('secret-q');
+    expect(serialized).not.toContain('sk-live-abcdef123456');
+  });
+
+  it('拿到 SSE 响应头后读首帧中断:异常照常抛出,但主进程已留痕(#4963 review)', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.error(new Error('socket hang up')); },
+    });
+    await expect(runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://x.example/v1', modelId: 'm', apiKey: 'k', wireProtocol: 'openai-chat' },
+      async () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    )).rejects.toThrow('socket hang up');
+    expect(probeLog.warn).toHaveBeenCalledTimes(1);
+    expect(probeLog.warn.mock.calls[0][1]).toMatchObject({ code: 'UNKNOWN', model: 'm', upstream: 'https://x.example' });
+    expect(String((probeLog.warn.mock.calls[0][1] as Record<string, unknown>).detail)).toContain('socket hang up');
+  });
+
+  it('成功探测不写 warn 日志', async () => {
+    await runProviderProbe(
+      { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
+      async () => fakeResponse(200, '{}'),
+    );
+    expect(probeLog.warn).not.toHaveBeenCalled();
+  });
+
+  it('网络层失败同样留痕(无 status,带分类码)', async () => {
+    const err = new Error('fetch failed');
+    (err as Error & { cause?: { code: string } }).cause = { code: 'ECONNREFUSED' };
+    await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://nope.example', modelId: 'm' },
+      async () => { throw err; },
+    );
+    expect(probeLog.warn).toHaveBeenCalledTimes(1);
+    expect(probeLog.warn.mock.calls[0][1]).toMatchObject({ code: 'UPSTREAM_UNREACHABLE', upstream: 'https://nope.example', status: undefined });
   });
 
   it('openai-chat 探测:200 text/event-stream → ok', async () => {

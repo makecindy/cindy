@@ -5411,7 +5411,7 @@ interface ElectronAPI {
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
     providerOAuthLogin: (
       providerId: string,
-      options?: { ownerId?: string },
+      options?: { ownerId?: string; method?: 'browser' | 'device' },
     ) => Promise<{ ok: boolean; reason?: string }>;
     providerOAuthLogout: (
       providerId: string,
@@ -6400,8 +6400,8 @@ interface ElectronAPI {
     }) => Promise<{ authorized: boolean }>;
     /** 取消对应登录尝试。 */
     claudeOAuthCancel: (loginKey?: string) => Promise<{ authorized: boolean }>;
-    /** 拉起浏览器 OAuth 登录 xAI(SuperGrok 订阅);成功写 safeStorage。reason 在失败时给出 */
-    xaiOAuthLogin: () => Promise<{ ok: boolean; authorized: boolean; reason?: string }>;
+    /** 启动 xAI 浏览器或设备码 OAuth 登录；成功写 safeStorage。 */
+    xaiOAuthLogin: (method?: 'browser' | 'device') => Promise<{ ok: boolean; authorized: boolean; reason?: string }>;
     /** 登出 xAI(清本机 safeStorage 的 xai 凭证) */
     xaiOAuthLogout: (ownerScope?: {
       dataOwnerId: string | null;

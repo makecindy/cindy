@@ -1692,6 +1692,7 @@
         }
       },
       "xai": {
+        "deviceLogin": "使用裝置碼登入",
         "logoutConfirm": {
           "title": "斷開 xAI(SuperGrok)？",
           "description": "中斷後，Cindy 將無法使用這份 Grok 訂閱。",
@@ -10829,8 +10830,8 @@
         "automatic": "自動",
         "manually": "手動",
         "session": "任務",
-        "silentRun": "靜默執行",
-        "silentRunTooltip": "開啟後，任務成功完成時預設不提醒。若任務說明中要求在特定情況提醒，AI 會在滿足條件時主動上報；失敗和異常仍會提醒。",
+        "silentRun": "檢查沒事不說話",
+        "silentRunTooltip": "僅回報變化或問題。提醒和定時傳送可關閉此項。",
         "silentRunInfoAria": "檢視靜默執行規則",
         "finishSendToFeishu": "完成時傳送到飛書機器人",
         "finishSendToWecomGroup": "完成時傳送到企業微信群",
@@ -12919,7 +12920,8 @@
       "success": "已完成",
       "failed": "執行失敗",
       "interrupted": "已中斷",
-      "cancelled": "已取消"
+      "cancelled": "已取消",
+      "skipped": "已檢查 · 未喚醒模型"
     },
     "sourceStatus": {
       "listening": "監聽中",
@@ -12930,7 +12932,13 @@
       "equals": "等於",
       "contains": "包含",
       "not-equals": "不等於"
-    }
+    },
+    "quiet": "檢查沒事不說話",
+    "quietHint": "僅回報變化或問題。提醒和定時傳送可關閉此項。",
+    "checkCommand": "前置檢查命令",
+    "checkHint": "選填。在電腦上先檢查：結束代碼 2 跳過本次執行，0 繼續執行，異常仍會回報。清空可移除。",
+    "timeoutMs": "檢查逾時（毫秒，留空不限時）",
+    "advancedSettings": "進階設定"
   },
   "cindyMakeDoctor": {
     "description": "檢查本機建置 Cindy 所需的環境。用法：/cindy-make-doctor",

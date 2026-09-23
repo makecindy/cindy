@@ -1692,6 +1692,7 @@
         }
       },
       "xai": {
+        "deviceLogin": "コードでログイン",
         "logoutConfirm": {
           "title": "xAI(SuperGrok)を切断しますか?",
           "description": "Cindy はこの Grok サブスクリプションを使用できなくなります。",
@@ -10829,8 +10830,8 @@
         "automatic": "自動",
         "manually": "手動",
         "session": "セッション",
-        "silentRun": "サイレント実行",
-        "silentRunTooltip": "オンにすると、正常完了時はデフォルトで通知しません。タスク説明で特定条件の通知を求めている場合、AI が条件を満たしたときに自動で上報します。失敗や異常は引き続き通知されます。",
+        "silentRun": "確認で変化がなければ通知しない",
+        "silentRunTooltip": "変化や問題のみ報告します。リマインダーや定時送信ではオフにできます。",
         "silentRunInfoAria": "サイレント実行のルールを表示",
         "finishSendToFeishu": "完了時に Feishu Bot に送信",
         "finishSendToWecomGroup": "完了時に WeCom グループへ送信",
@@ -12919,7 +12920,8 @@
       "success": "完了",
       "failed": "失敗",
       "interrupted": "中断",
-      "cancelled": "キャンセル済み"
+      "cancelled": "キャンセル済み",
+      "skipped": "確認済み · モデル起動なし"
     },
     "sourceStatus": {
       "listening": "受信中",
@@ -12930,7 +12932,13 @@
       "equals": "一致",
       "contains": "含む",
       "not-equals": "一致しない"
-    }
+    },
+    "quiet": "確認で変化がなければ通知しない",
+    "quietHint": "変化や問題のみ報告します。リマインダーや定時送信ではオフにできます。",
+    "checkCommand": "事前確認コマンド",
+    "checkHint": "任意。コンピューターで先に確認します。終了コード 2 は今回の実行をスキップし、0 は続行します。エラーは報告されます。空欄で解除します。",
+    "timeoutMs": "確認のタイムアウト（ミリ秒、空欄は無制限）",
+    "advancedSettings": "詳細設定"
   },
   "cindyMakeDoctor": {
     "description": "Cindy のビルドに必要なローカル環境を確認します。使い方：/cindy-make-doctor",

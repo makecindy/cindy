@@ -133,10 +133,18 @@ function requireProviderOAuthOwnerId(value: unknown, required = false): string |
   return value;
 }
 
-function requireProviderOAuthLoginOptions(value: unknown): { ownerId?: string } {
+function requireProviderOAuthLoginOptions(value: unknown): {
+  ownerId?: string;
+  method?: 'browser' | 'device';
+} {
   if (value === undefined) return {};
   const options = providerOAuthOptions(value);
-  return { ownerId: requireProviderOAuthOwnerId(options.ownerId) };
+  if (options.method !== undefined && options.method !== 'browser' && options.method !== 'device')
+    throwIpcError('INVALID_PARAMS', 'method must be browser or device');
+  return {
+    ownerId: requireProviderOAuthOwnerId(options.ownerId),
+    method: options.method as 'browser' | 'device' | undefined,
+  };
 }
 
 function requireProviderOAuthCancelOptions(value: unknown): {
@@ -333,6 +341,8 @@ export interface ProviderHandlerDeps {
     providerId: string,
     isCurrent: () => boolean,
     onBrowserUrl?: (url: string | null) => void,
+    method?: 'browser' | 'device',
+    onDeviceCode?: (code: { userCode: string; verificationUrl: string; expiresAt: number }) => void,
   ): Promise<{
     ok: boolean;
     reason?: string;
@@ -2335,8 +2345,10 @@ export function registerProviderHandlers(
       if (deps.isOrganizationManagedProviderId(id)) {
         throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
       }
-      const { ownerId } = requireProviderOAuthLoginOptions(rawOptions);
+      const { ownerId, method } = requireProviderOAuthLoginOptions(rawOptions);
       const sender = providerOAuthRendererSender(event);
+      if (method === 'device' && !ownerId)
+        throwIpcError('INVALID_PARAMS', 'device login requires an initiating window');
       if (ownerId && !sender) {
         throwIpcError('INVALID_PARAMS', 'ownerId requires an Electron sender');
       }
@@ -2372,6 +2384,14 @@ export function registerProviderHandlers(
               providerId: id, ownerId, phase: 'browser-url', url,
             });
           } catch { /* A closed renderer must not interrupt credential cleanup. */ }
+        }, method, (code) => {
+          if (!ownerId || !sender || !isOAuthMutationCurrent(id, generation) ||
+              !providerMutationOwnerMatches(ownerAtIngress)) return;
+          try {
+            sender.send?.(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+              providerId: id, phase: 'device-code', ...code,
+            });
+          } catch { /* The login still runs if its initiating window closes. */ }
         });
         if (isOAuthMutationCurrent(id, generation)) {
           if (result.ok) {

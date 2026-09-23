@@ -1692,6 +1692,7 @@
         }
       },
       "xai": {
+        "deviceLogin": "코드로 로그인",
         "logoutConfirm": {
           "title": "xAI(SuperGrok) 연결을 해제할까요?",
           "description": "Cindy에서 이 Grok 구독을 사용할 수 없게 됩니다.",
@@ -10829,8 +10830,8 @@
         "automatic": "자동",
         "manually": "수동",
         "session": "세션",
-        "silentRun": "조용히 실행",
-        "silentRunTooltip": "켜면 작업이 성공적으로 완료되어도 기본적으로 알림을 보내지 않습니다. 작업 프롬프트에서 특정 조건에 알림을 요청한 경우, AI가 조건이 충족될 때 직접 보고합니다. 실패와 오류는 계속 알림을 보냅니다.",
+        "silentRun": "확인 결과 변화가 없으면 알리지 않기",
+        "silentRunTooltip": "변화나 문제만 보고합니다. 리마인더와 예약 메시지는 이 옵션을 끌 수 있습니다.",
         "silentRunInfoAria": "조용히 실행 규칙 보기",
         "finishSendToFeishu": "완료 시 Feishu Bot에 전송",
         "finishSendToWecomGroup": "완료 시 WeCom 그룹으로 전송",
@@ -12919,7 +12920,8 @@
       "success": "완료됨",
       "failed": "실패함",
       "interrupted": "중단됨",
-      "cancelled": "취소됨"
+      "cancelled": "취소됨",
+      "skipped": "확인 완료 · 모델 실행 건너뜀"
     },
     "sourceStatus": {
       "listening": "수신 중",
@@ -12930,7 +12932,13 @@
       "equals": "같음",
       "contains": "포함",
       "not-equals": "같지 않음"
-    }
+    },
+    "quiet": "확인 결과 변화가 없으면 알리지 않기",
+    "quietHint": "변화나 문제만 보고합니다. 리마인더와 예약 메시지는 이 옵션을 끌 수 있습니다.",
+    "checkCommand": "사전 확인 명령",
+    "checkHint": "선택 사항입니다. 컴퓨터에서 먼저 확인합니다. 종료 코드 2는 이번 실행을 건너뛰고, 0은 계속합니다. 오류는 보고됩니다. 비우면 제거됩니다.",
+    "timeoutMs": "확인 제한 시간(ms, 비우면 제한 없음)",
+    "advancedSettings": "고급 설정"
   },
   "cindyMakeDoctor": {
     "description": "Cindy 빌드에 필요한 로컬 환경을 확인합니다. 사용법: /cindy-make-doctor",
