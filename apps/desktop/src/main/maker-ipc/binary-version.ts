@@ -90,7 +90,10 @@ function latestVersionFor(kind: AgentBinaryKind, manifest: Manifest | null): str
   if (!manifest) return null;
   const asset = getVendorAsset(manifest, MANIFEST_FIELD[kind]);
   if (!asset || !vendorAssetMatchesPlatform(asset, getPlatformKey())) return null;
+  // download() rejects a non-hex sha256; a non-positive expectedSize makes a
+  // normal Content-Length fail the transport check and keep the old runtime.
   if (!DOWNLOAD_SHA256.test(asset.sha256)) return null;
+  if (!Number.isFinite(asset.size) || asset.size <= 0) return null;
   return asset.version;
 }
 

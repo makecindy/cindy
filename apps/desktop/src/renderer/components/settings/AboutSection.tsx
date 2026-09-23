@@ -160,7 +160,7 @@ function AgentVersionRow({
         currentVersion,
         latestVersion,
       }),
-      confirmText: t('settings.about.harnessUpdateConfirm'),
+      confirmText: t('settings.about.harnessUpdateConfirm', { name: label }),
       cancelText: t('settings.about.harnessUpdateCancel'),
       autoFocusConfirm: true,
     });
@@ -180,7 +180,7 @@ function AgentVersionRow({
       const interrupt = await confirm({
         title: t('settings.about.harnessUpdateTitle', { name: label }),
         description: t('settings.about.harnessUpdateBusyDescription', { name: label }),
-        confirmText: t('settings.about.harnessUpdateConfirm'),
+        confirmText: t('settings.about.harnessUpdateConfirm', { name: label }),
         cancelText: t('settings.about.harnessUpdateCancel'),
       });
       if (!interrupt) return;

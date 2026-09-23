@@ -208,6 +208,20 @@ describe('maker:agent:binary-version', () => {
     }
   });
 
+
+  it('does not advertise an update whose size the downloader would reject', async () => {
+    h.versions.set('/managed/codex', 'codex-cli 0.145.0');
+    for (const size of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const asset = installable('0.146.0');
+      asset.size = size;
+      h.fetchManifest.mockResolvedValue({ codexPackage: asset });
+      await expect(invoke('codex', { checkLatest: true })).resolves.toMatchObject({
+        latestVersion: null,
+        updateAvailable: false,
+      });
+    }
+  });
+
   it('rejects malformed options', async () => {
     await expect(invoke('codex', { checkLatest: 'yes' })).rejects.toThrow();
     await expect(invoke('codex', 'checkLatest')).rejects.toThrow();
