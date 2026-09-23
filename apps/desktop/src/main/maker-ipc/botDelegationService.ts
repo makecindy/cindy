@@ -788,7 +788,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
    *
    * 投递目标：优先冻结的父任务；父任务已被恢复流程替换时，改投发起 Bot 当前的
    * 主任务。完成信号属于 Bot 本人，不属于损坏的旧任务。两者都不在（Bot 已
-   * 暂停/归档)才放弃投递,此时卡片终态仍然可见,不算静默丢失。
+   * 暂停/归档）时只延后模型唤醒；每次执行的结果回执仍写入冻结的父任务。
    */
   const deliverCompletion = async (params: {
     id: string;
@@ -834,16 +834,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       clearCompletionRetryTimer(params.id);
       return false;
     }
-    const targetSessionId = await requesterLiveSessionId(params.requestingBotId, params.parentSessionId);
-    if (!targetSessionId) {
-      log.warn('skip Bot delegation completion: requester has no live task', {
-        delegationId: params.id,
-        requestingBotId: params.requestingBotId,
-        parentSessionId: params.parentSessionId,
-      });
-      scheduleCompletionRetry(params, attempt);
-      return false;
-    }
     const taskSubject = '后台任务';
     const statusLine =
       params.status === 'completed'
@@ -871,20 +861,28 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         clearCompletionRetryTimer(params.id);
         return false;
       }
+      // Preserve the result in the conversation that started this execution.
+      // Its requester need not still be live to show this receipt in history.
+      const receiptSessionId = params.parentSessionId
+        ?? await requesterLiveSessionId(params.requestingBotId, null);
+      if (!receiptSessionId) {
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
       const child = params.childSessionId ? await getDbClient().drizzle
         .select({ workingDir: sessions.workingDir }).from(sessions)
         .where(eq(sessions.id, params.childSessionId)).get() : undefined;
       // Durable, per-execution receipt: retries reuse the same message identity.
       // Publish before waking the teammate so queued/hidden model work cannot hide results.
       await persistTimelineMessage({
-        sessionId: targetSessionId,
+        sessionId: receiptSessionId,
         clientId: BOT_DELEGATION_CLIENT_ID.resultRun(params.id, params.runSequence),
         role: 'assistant',
         content: params.resultSummary || params.objective,
         agentMeta: {
           botCollaboration: {
             ...await collaborationMeta(params, 'delegation-result'),
-            parentSessionId: targetSessionId,
+            parentSessionId: receiptSessionId,
             result: {
               workingDir: child?.workingDir ?? '',
               runSequence: params.runSequence,
@@ -900,6 +898,16 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         },
       });
       if (!(await completionStillPending())) return false;
+      const targetSessionId = await requesterLiveSessionId(params.requestingBotId, params.parentSessionId);
+      if (!targetSessionId) {
+        log.warn('defer Bot delegation wake-up: requester has no live task', {
+          delegationId: params.id,
+          requestingBotId: params.requestingBotId,
+          parentSessionId: params.parentSessionId,
+        });
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
       const dispatched = await deps.dispatch({
         targetSessionId,
         message: completionMessage,
