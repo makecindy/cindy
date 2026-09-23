@@ -19,7 +19,7 @@ export const SETTINGS_SEARCH_MODULES = Object.values(modules).sort((a, b) => a.o
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = SETTINGS_SEARCH_MODULES.flatMap((module) => module.entries);
 
 export function normalizeSettingsSearchText(value: string): string {
-  return value.normalize('NFKC').toLocaleLowerCase().trim().replace(/\s+/g, ' ');
+  return value.normalize('NFKC').toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
 export function buildSettingsSearchDocuments(
