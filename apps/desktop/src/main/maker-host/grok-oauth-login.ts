@@ -50,6 +50,8 @@ const OIDC_DISCOVERY_URL = 'https://auth.x.ai/.well-known/openid-configuration';
 // discovery 失败时的兜底端点(已实测,与 discovery 返回一致)。
 const FALLBACK_AUTHORIZE_URL = 'https://auth.x.ai/oauth2/authorize';
 const FALLBACK_TOKEN_URL = 'https://auth.x.ai/oauth2/token';
+const FALLBACK_DEVICE_URL = 'https://auth.x.ai/oauth2/device/code';
+const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 const SCOPE = 'openid profile email offline_access grok-cli:access api:access';
 // xAI 注册的固定回调(不可改端口 / 主机)。
 const REDIRECT_PORT = 56121;
@@ -101,15 +103,22 @@ function assertXaiHttps(url: string, label: string): string {
 
 async function resolveEndpoints(
   signal: AbortSignal,
-): Promise<{ authorize: string; token: string }> {
+): Promise<{ authorize: string; token: string; device: string }> {
   try {
     const res = await outboundFetch(OIDC_DISCOVERY_URL, { signal });
     if (res.ok) {
-      const j = (await res.json()) as { authorization_endpoint?: string; token_endpoint?: string };
+      const j = (await res.json()) as {
+        authorization_endpoint?: string;
+        token_endpoint?: string;
+        device_authorization_endpoint?: string;
+      };
       if (j.authorization_endpoint && j.token_endpoint) {
         return {
           authorize: assertXaiHttps(j.authorization_endpoint, 'authorize'),
           token: assertXaiHttps(j.token_endpoint, 'token'),
+          device: j.device_authorization_endpoint
+            ? assertXaiHttps(j.device_authorization_endpoint, 'device')
+            : FALLBACK_DEVICE_URL,
         };
       }
     }
@@ -119,7 +128,122 @@ async function resolveEndpoints(
     if (signal.aborted) throw err instanceof Error ? err : new Error('login_cancelled');
     /* 其余错误落兜底端点 */
   }
-  return { authorize: FALLBACK_AUTHORIZE_URL, token: FALLBACK_TOKEN_URL };
+  return {
+    authorize: FALLBACK_AUTHORIZE_URL,
+    token: FALLBACK_TOKEN_URL,
+    device: FALLBACK_DEVICE_URL,
+  };
+}
+
+export interface GrokDeviceCode {
+  userCode: string;
+  verificationUrl: string;
+  expiresAt: number;
+}
+
+async function waitForDevicePoll(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw new Error('login_cancelled');
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      signal.removeEventListener('abort', cancelled);
+      resolve();
+    }
+    function cancelled() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', cancelled);
+      reject(new Error('login_cancelled'));
+    }
+    signal.addEventListener('abort', cancelled, { once: true });
+  });
+}
+
+async function pollDeviceAuthorization(
+  deviceEndpoint: string,
+  tokenEndpoint: string,
+  signal: AbortSignal,
+  onDeviceCode?: (code: GrokDeviceCode) => void,
+): Promise<TokenResponse> {
+  const response = await outboundFetch(deviceEndpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: XAI_CLIENT_ID,
+      scope: SCOPE,
+      referrer: 'xdt-maker',
+    }).toString(),
+    signal,
+  });
+  if (!response.ok) throw new Error(`Device authorization failed (${response.status})`);
+  const payload = (await response.json()) as {
+    device_code?: unknown;
+    user_code?: unknown;
+    verification_uri?: unknown;
+    verification_uri_complete?: unknown;
+    expires_in?: unknown;
+    interval?: unknown;
+  };
+  if (
+    typeof payload.device_code !== 'string' ||
+    !payload.device_code ||
+    typeof payload.user_code !== 'string' ||
+    !payload.user_code ||
+    typeof payload.verification_uri !== 'string'
+  )
+    throw new Error('Invalid device authorization response');
+  const verificationUrl = assertXaiHttps(payload.verification_uri, 'verification');
+  const completeUrl =
+    typeof payload.verification_uri_complete === 'string'
+      ? assertXaiHttps(payload.verification_uri_complete, 'verification')
+      : verificationUrl;
+  const serverExpiresIn = Number(payload.expires_in);
+  const expiresIn =
+    Number.isFinite(serverExpiresIn) && serverExpiresIn > 0
+      ? Math.max(1, Math.min(serverExpiresIn, 30 * 60))
+      : 5 * 60;
+  const expiresAt = Date.now() + expiresIn * 1000;
+  onDeviceCode?.({
+    userCode: payload.user_code,
+    verificationUrl: completeUrl,
+    expiresAt,
+  });
+  const serverInterval = Number(payload.interval);
+  let interval =
+    Number.isFinite(serverInterval) && serverInterval > 0
+      ? Math.max(5, Math.min(serverInterval, 30))
+      : 5;
+  while (Date.now() < expiresAt) {
+    await waitForDevicePoll(Math.min(interval * 1000, Math.max(0, expiresAt - Date.now())), signal);
+    if (Date.now() >= expiresAt) break;
+    const tokenResponse = await outboundFetch(tokenEndpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: DEVICE_GRANT,
+        client_id: XAI_CLIENT_ID,
+        device_code: payload.device_code,
+      }).toString(),
+      signal,
+    });
+    if (tokenResponse.ok) {
+      const token = (await tokenResponse.json()) as TokenResponse;
+      if (!token.access_token) throw new Error('token 响应缺 access_token');
+      return token;
+    }
+    const body = (await tokenResponse.json().catch(() => ({}))) as {
+      error?: unknown;
+    };
+    if (body.error === 'authorization_pending') continue;
+    if (body.error === 'slow_down') {
+      interval = Math.min(interval + 5, 30);
+      continue;
+    }
+    if (body.error === 'expired_token') throw new Error('timeout');
+    if (body.error === 'access_denied' || body.error === 'authorization_denied')
+      throw new Error('access_denied');
+    throw new Error(`Device token exchange failed (${tokenResponse.status})`);
+  }
+  throw new Error('timeout');
 }
 
 function buildAuthUrl(
@@ -463,6 +587,11 @@ export function cancelGrokOAuthLogin(providerId?: string): void {
   _currentListener?.close();
 }
 
+/** Whether any xAI login owns the one process-wide authorization slot. */
+export function isGrokOAuthLoginInProgress(): boolean {
+  return _currentAbort !== null;
+}
+
 let credentialSequence = 0;
 /** Refresh mutex, token cache and invalidation generation belong to one owner/account. */
 function createGrokAccount(providerId: string) {
@@ -564,6 +693,9 @@ function createGrokAccount(providerId: string) {
   }
 
   async function runGrokOAuthLogin(opts?: {
+    method?: 'browser' | 'device';
+    cancellationSignal?: AbortSignal;
+    onDeviceCode?: (code: GrokDeviceCode) => void;
     onProgress?: (msg: string) => void;
     onAuthorizationUrl?: (url: string) => void;
     assertCurrent?: () => void;
@@ -577,76 +709,84 @@ function createGrokAccount(providerId: string) {
     const challenge = genChallenge(verifier);
     const state = genState();
     const nonce = genState();
-    const listener = new CallbackListener();
+    const listener = opts?.method === 'device' ? null : new CallbackListener();
     const abort = new AbortController();
+    const cancelFromCaller = () => abort.abort();
+    if (opts?.cancellationSignal?.aborted) abort.abort();
+    else opts?.cancellationSignal?.addEventListener('abort', cancelFromCaller, { once: true });
     _currentListener = listener;
     _currentAbort = abort;
     _currentLoginKey = `${scope}:${providerId}`;
 
     let timer: ReturnType<typeof setTimeout> | null = null;
     try {
-      const { authorize, token } = await resolveEndpoints(abort.signal);
+      const { authorize, token, device } = await resolveEndpoints(abort.signal);
       // resolveEndpoints 的 fetch 可被 abort,但 signal 可能在 await 返回后才被标记(race);
       // 显式检查避免在已取消状态下继续开回调 server 或开浏览器。
       if (abort.signal.aborted || !currentScope() || opts?.isCurrent?.() === false)
         throw new Error('login_cancelled');
-      await listener.start();
+      if (listener) await listener.start();
       // listener.start() 同理:start 完成前取消会在后续 code-wait promise 被捕获,
       // 但 addEventListener 对已 aborted signal 不会再 fire —— 在此处提前检查保证不开浏览器。
       if (abort.signal.aborted || !currentScope() || opts?.isCurrent?.() === false)
         throw new Error('login_cancelled');
-      const authUrl = buildAuthUrl(authorize, challenge, state, nonce);
+      let tok: TokenResponse;
+      if (!listener) {
+        tok = await pollDeviceAuthorization(device, token, abort.signal, opts?.onDeviceCode);
+      } else {
+        const authUrl = buildAuthUrl(authorize, challenge, state, nonce);
 
-      // 必须先注册 code 等待(挂上 server 的 request handler + 超时 + 取消),再开浏览器 ——
-      // 已授权的浏览器可能在 openExternal 返回前就完成重定向,晚注册会丢掉那次回调请求,
-      // 登录只能干等到超时。
-      const codePromise = new Promise<string>((resolve, reject) => {
-        if (abort.signal.aborted) {
-          reject(new Error('login_cancelled'));
-          return;
-        }
-        timer = setTimeout(() => reject(new Error('timeout')), LOGIN_TIMEOUT_MS);
-        abort.signal.addEventListener('abort', () => reject(new Error('login_cancelled')), {
-          once: true,
+        // 必须先注册 code 等待(挂上 server 的 request handler + 超时 + 取消),再开浏览器 ——
+        // 已授权的浏览器可能在 openExternal 返回前就完成重定向,晚注册会丢掉那次回调请求,
+        // 登录只能干等到超时。
+        const codePromise = new Promise<string>((resolve, reject) => {
+          if (abort.signal.aborted) {
+            reject(new Error('login_cancelled'));
+            return;
+          }
+          timer = setTimeout(() => reject(new Error('timeout')), LOGIN_TIMEOUT_MS);
+          abort.signal.addEventListener('abort', () => reject(new Error('login_cancelled')), {
+            once: true,
+          });
+          listener.waitForCode(state).then(resolve, reject);
         });
-        listener.waitForCode(state).then(resolve, reject);
-      });
-      // 预挂 no-op catch:openExternal 抛错走外层 catch 后,codePromise 稍后的 reject(超时/取消)
-      // 不能变成 unhandled rejection;下方 await 仍能拿到同一 rejection,不受影响。
-      codePromise.catch(() => {
-        /* handled at await site */
-      });
+        // 预挂 no-op catch:openExternal 抛错走外层 catch 后,codePromise 稍后的 reject(超时/取消)
+        // 不能变成 unhandled rejection;下方 await 仍能拿到同一 rejection,不受影响。
+        codePromise.catch(() => {
+          /* handled at await site */
+        });
 
-      opts?.onProgress?.('opening-browser');
-      opts?.onAuthorizationUrl?.(authUrl);
-      log.info('opening browser for xai oauth', { port: REDIRECT_PORT });
-      await shell.openExternal(authUrl);
+        opts?.onProgress?.('opening-browser');
+        opts?.onAuthorizationUrl?.(authUrl);
+        log.info('opening browser for xai oauth', { port: REDIRECT_PORT });
+        await shell.openExternal(authUrl);
 
-      const code = await codePromise;
+        const code = await codePromise;
 
-      opts?.onProgress?.('exchanging');
-      // form-encoded + PKCE 二次校验(challenge/method 再发一次)。
-      const res = await outboundFetch(token, {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          client_id: XAI_CLIENT_ID,
-          code,
-          redirect_uri: REDIRECT_URI,
-          code_verifier: verifier,
-          code_challenge: challenge,
-          code_challenge_method: 'S256',
-        }).toString(),
-        signal: abort.signal,
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        throw new Error(`Token exchange failed (${res.status}): ${body.slice(0, 200)}`);
+        opts?.onProgress?.('exchanging');
+        // form-encoded + PKCE 二次校验(challenge/method 再发一次)。
+        const res = await outboundFetch(token, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            client_id: XAI_CLIENT_ID,
+            code,
+            redirect_uri: REDIRECT_URI,
+            code_verifier: verifier,
+            code_challenge: challenge,
+            code_challenge_method: 'S256',
+          }).toString(),
+          signal: abort.signal,
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => '');
+          throw new Error(`Token exchange failed (${res.status}): ${body.slice(0, 200)}`);
+        }
+        tok = (await res.json()) as TokenResponse;
+        if (!tok.access_token) throw new Error('token 响应缺 access_token');
+        verifyIdTokenNonce(tok.id_token, nonce);
       }
-      const tok = (await res.json()) as TokenResponse;
-      if (!tok.access_token) throw new Error('token 响应缺 access_token');
-      verifyIdTokenNonce(tok.id_token, nonce);
 
       // token exchange 的 fetch 带 signal,但 res.json() / nonce 校验期间到达的 abort
       // 不会中断已 resolve 的响应体 —— 落盘前最后检查,保证"已取消"的登录绝不写凭证。
@@ -662,17 +802,21 @@ function createGrokAccount(providerId: string) {
       _blobCache = next;
       if (providerId === 'xai') bindNativeProviderAuth('xai');
       advanceGrokOAuthCredentialGeneration();
-      listener.succeed();
+      listener?.succeed();
       log.info('xai oauth login success', { scope: tok.scope });
       return { ok: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      listener.fail(msg);
+      listener?.fail(msg);
       log.warn('xai oauth login failed', { error: msg });
-      return { ok: false, reason: abort.signal.aborted ? 'login_cancelled' : msg };
+      return {
+        ok: false,
+        reason: abort.signal.aborted ? 'login_cancelled' : msg,
+      };
     } finally {
+      opts?.cancellationSignal?.removeEventListener('abort', cancelFromCaller);
       if (timer) clearTimeout(timer);
-      listener.close();
+      listener?.close();
       if (_currentListener === listener) _currentListener = null;
       if (_currentAbort === abort) {
         _currentAbort = null;

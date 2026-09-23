@@ -1691,6 +1691,7 @@
         }
       },
       "xai": {
+        "deviceLogin": "Sign in with a code",
         "logoutConfirm": {
           "title": "Disconnect xAI (SuperGrok)?",
           "description": "Cindy will no longer use this Grok subscription.",

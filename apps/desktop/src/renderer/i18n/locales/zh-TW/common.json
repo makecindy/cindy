@@ -1691,6 +1691,7 @@
         }
       },
       "xai": {
+        "deviceLogin": "使用裝置碼登入",
         "logoutConfirm": {
           "title": "斷開 xAI(SuperGrok)？",
           "description": "中斷後，Cindy 將無法使用這份 Grok 訂閱。",

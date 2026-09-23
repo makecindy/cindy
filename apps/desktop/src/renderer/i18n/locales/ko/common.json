@@ -1691,6 +1691,7 @@
         }
       },
       "xai": {
+        "deviceLogin": "코드로 로그인",
         "logoutConfirm": {
           "title": "xAI(SuperGrok) 연결을 해제할까요?",
           "description": "Cindy에서 이 Grok 구독을 사용할 수 없게 됩니다.",
