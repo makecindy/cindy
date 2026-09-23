@@ -1147,7 +1147,7 @@ export class GhostNodeRuntimeBroker {
     entry: WorkerEntry,
     message: Extract<GhostNodeChildToHostMessage, { type: 'device-authorize' | 'plugin-authorize' }>,
   ): void {
-    const ghostId = entry.ghost.manifest.id;
+    const ghostId = GhostNodeRuntimeBroker.instanceId(entry.ghost);
     const pending = entry.pending.get(message.rpcId);
     const reply = (ok: boolean, result?: Awaited<PluginAuthorizationHandle['result']>) =>
       this.replyToWorker(entry, message.type === 'device-authorize'
