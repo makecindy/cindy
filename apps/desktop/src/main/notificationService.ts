@@ -204,6 +204,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // Capture at IPC arrival, not after the asynchronous preview: a newer
       // turn can begin while the current completion waits on persistence.
       const signal = kind === 'done' ? getSessionNotificationTurnSignal(sessionId) : undefined;
+      // A late idle for the previous turn must not claim the identity of a
+      // newer turn that is still running, even if preview persistence stalls.
+      if (signal && !signal.ended) return;
       const ownerScope = captureDataOwnerBroadcastScope();
       const safeTitle = title.trim() || sessionId.slice(0, 8);
       const wantDesktop = channels?.desktop ?? true;

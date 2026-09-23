@@ -123,7 +123,7 @@ vi.mock('../messagePersistBroadcaster', () => ({
   drainPersistQueue: () => drainPersistQueue(),
 }));
 const drainSessionActiveTurnWrites = vi.fn((_sessionId: string): Promise<void> => Promise.resolve());
-const getSessionNotificationTurnSignal = vi.fn((_sessionId: string): { id: string; fallbackEventId: string } | undefined => undefined);
+const getSessionNotificationTurnSignal = vi.fn((_sessionId: string): { id: string; fallbackEventId: string; ended: boolean } | undefined => undefined);
 vi.mock('../localDb/sessionActiveTurn', () => ({
   drainSessionActiveTurnWrites: (sessionId: string) => drainSessionActiveTurnWrites(sessionId),
   getSessionNotificationTurnSignal: (sessionId: string) => getSessionNotificationTurnSignal(sessionId),
@@ -330,7 +330,7 @@ describe('notificationService — channels 分发', () => {
     const { initNotificationService } = await freshService();
     const feishuIm = makeFeishuIm('owner');
     initNotificationService(baseDeps(feishuIm));
-    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200' });
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200', ended: true });
     getMobileNotifyGeneration.mockReturnValueOnce(7).mockReturnValueOnce(8);
     const payload = {
       sessionId: 's1', title: 'Cindy', kind: 'done',
@@ -351,7 +351,7 @@ describe('notificationService — channels 分发', () => {
     const { initNotificationService } = await freshService();
     const feishuIm = makeFeishuIm('owner');
     initNotificationService(baseDeps(feishuIm));
-    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200' });
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200', ended: true });
     const payload = { sessionId: 's1', title: 'Cindy', kind: 'done', channels: { desktop: true, feishu: true } };
 
     await invokeHandler(payload);
@@ -360,6 +360,32 @@ describe('notificationService — channels 分发', () => {
 
     expect(notificationCtor).toHaveBeenCalledTimes(2);
     expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(2);
+  });
+
+  it('late done cannot consume a newer running turn’s notification identity', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    const payload = {
+      sessionId: 's1', title: 'Cindy', kind: 'done',
+      channels: { desktop: true, mobile: true, feishu: true },
+    };
+    getSessionNotificationTurnSignal.mockReturnValue({
+      id: 'signal:2', fallbackEventId: 'turn:300:300:signal-2', ended: false,
+    });
+
+    await invokeHandler(payload); // delayed turn A terminal while turn B runs
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+
+    getSessionNotificationTurnSignal.mockReturnValue({
+      id: 'signal:2', fallbackEventId: 'turn:300:400:signal-2', ended: true,
+    });
+    await invokeHandler(payload); // turn B's own terminal
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
   });
 
   it.each(['error', 'needs-reply'])('%s desktop notice does not wait for the transcript', async (kind) => {
@@ -741,11 +767,11 @@ describe('teammate reply previews', () => {
     const { initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('owner')));
     const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
-    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:1', fallbackEventId: 'turn:100:200:signal-1' });
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:1', fallbackEventId: 'turn:100:200:signal-1', ended: true });
     readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:100:200' });
     await invokeHandler(payload);
 
-    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:2', fallbackEventId: 'turn:300:400:signal-2' });
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:2', fallbackEventId: 'turn:300:400:signal-2', ended: true });
     readSessionNotificationPreview.mockRejectedValue(new Error('db busy'));
     await invokeHandler(payload);
     expect(notificationCtor).toHaveBeenCalledTimes(2);
@@ -766,7 +792,7 @@ describe('teammate reply previews', () => {
       accept = () => resolve({ messageId: 'sent' });
     }));
     initNotificationService(baseDeps(feishuIm));
-    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:3', fallbackEventId: 'turn:500:600:signal-3' });
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:3', fallbackEventId: 'turn:500:600:signal-3', ended: true });
     readSessionNotificationPreview.mockImplementationOnce(async () => ({ teammateName: 'Cindy' }))
       .mockRejectedValueOnce(new Error('db busy'));
     const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, feishu: true } };

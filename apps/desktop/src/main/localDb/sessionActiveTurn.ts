@@ -158,11 +158,12 @@ const _writeChains = new Map<string, Promise<void>>();
 const _notificationTurns = new Map<string, { startedAt: number; sequence: number; endedAt?: number }>();
 let _notificationTurnSequence = 0;
 
-export function getSessionNotificationTurnSignal(sessionId: string): { id: string; fallbackEventId: string } | undefined {
+export function getSessionNotificationTurnSignal(sessionId: string): { id: string; fallbackEventId: string; ended: boolean } | undefined {
   const turn = _notificationTurns.get(sessionId);
   if (!turn) return undefined;
   return {
     id: `signal:${turn.sequence}`,
+    ended: turn.endedAt !== undefined,
     // The mobile deduper can reconcile an anonymous scheduler completion by
     // terminal time even while SQLite is unavailable.
     fallbackEventId: `turn:${turn.startedAt}:${turn.endedAt ?? turn.startedAt}:signal-${turn.sequence}`,

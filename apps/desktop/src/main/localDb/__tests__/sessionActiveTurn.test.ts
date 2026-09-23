@@ -125,12 +125,14 @@ describe('sessionActiveTurn', () => {
     markSessionTurnStarted('s-1');
     const firstSignal = getSessionNotificationTurnSignal('s-1');
     expect(firstSignal?.id).toMatch(/^signal:\d+$/);
+    expect(firstSignal?.ended).toBe(false);
     await vi.waitFor(async () => {
       expect((await readMarks(client, 's-1'))?.active_turn_started_at).toBeTypeOf('number');
     });
 
     markSessionTurnEnded('s-1');
     expect(getSessionNotificationTurnSignal('s-1')?.id).toBe(firstSignal?.id);
+    expect(getSessionNotificationTurnSignal('s-1')?.ended).toBe(true);
     expect(getSessionNotificationTurnSignal('s-1')?.fallbackEventId).toMatch(/^turn:\d+:\d+:signal-\d+$/);
     await vi.waitFor(async () => {
       const row = await readMarks(client, 's-1');
@@ -139,6 +141,7 @@ describe('sessionActiveTurn', () => {
     });
     markSessionTurnStarted('s-1');
     expect(getSessionNotificationTurnSignal('s-1')?.id).not.toBe(firstSignal?.id);
+    expect(getSessionNotificationTurnSignal('s-1')?.ended).toBe(false);
     await drainSessionActiveTurnWrites('s-1');
   });
 

@@ -863,7 +863,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       }
       // Preserve the result in the conversation that started this execution.
       // Its requester need not still be live to show this receipt in history.
-      const receiptSessionId = params.parentSessionId
+      // A deleted parent's FK may have been cleared after this completion
+      // snapshot was taken. Recheck existence on every retry, then use the
+      // replacement canonical task if the original history is gone.
+      const originalParent = params.parentSessionId ? await getDbClient().drizzle
+        .select({ id: sessions.id }).from(sessions)
+        .where(eq(sessions.id, params.parentSessionId)).get() : undefined;
+      const receiptSessionId = originalParent?.id
         ?? await requesterLiveSessionId(params.requestingBotId, null);
       if (!receiptSessionId) {
         scheduleCompletionRetry(params, attempt);
