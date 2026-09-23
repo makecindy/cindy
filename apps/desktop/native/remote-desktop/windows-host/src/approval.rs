@@ -361,6 +361,62 @@ pub fn remove(clean_vault: bool) -> Result<()> {
     Ok(())
 }
 
+/// Overlay upgrades keep the SCM grant. CODE_DACL is not inherited, so files
+/// replaced in $INSTDIR would otherwise fail protect_application() and drop
+/// Settings from updateRequired to unavailable. Re-harden the approved tree
+/// without rewriting the first-install restore record or replacing the service.
+pub fn reprotect() -> Result<()> {
+    if installation::development_identity().is_some() {
+        return Ok(());
+    }
+    // Overlay upgrades of installs that never enabled lock-screen control
+    // must not prompt UAC. Only an existing grant needs re-hardening.
+    if !crate::service::registered().unwrap_or(false)
+        && !installation::leftover_installation().unwrap_or(false)
+    {
+        return Ok(());
+    }
+    security::require_elevated()?;
+    security::prepare_elevated_identity_query();
+    let approval = Approval::read()?;
+    let source = std::env::current_exe()?.canonicalize()?;
+    let target = Installation::for_source(&source)?;
+    if approval.service != target.name {
+        return denied();
+    }
+    let (ancestors, frozen) = security::freeze_code_tree(&approval.application)?;
+    let (main, hash) =
+        security::authenticate_application_code(&approval.application, &approval.executable)?;
+    security::confirm_frozen_tree(&frozen)?;
+    let mut captured = security::CapturedTree::from_frozen(frozen)?;
+    security::confirm_application_code(
+        &main,
+        &approval.application.join(&approval.executable),
+        &hash,
+    )?;
+    let existing = read_restore_record(&target.directory)?;
+    if !(existing.is_some() && captured.snapshot.paths.is_empty()) {
+        if let Some(combined) = security::AclSnapshot::combined(existing, captured.snapshot.clone())
+        {
+            write_protected_record(
+                &target.directory,
+                installation::ACL_RESTORE,
+                &combined.encode(),
+            )?;
+        }
+    }
+    captured.harden()?;
+    security::confirm_application_code(
+        &main,
+        &approval.application.join(&approval.executable),
+        &hash,
+    )?;
+    security::protect_application(&approval.application)?;
+    captured.commit();
+    drop(ancestors);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,6 +515,9 @@ mod tests {
         let remove = include_str!("approval.rs")
             .split("pub fn remove(")
             .nth(1)
+            .unwrap()
+            .split("pub fn reprotect(")
+            .next()
             .unwrap();
         assert!(remove.contains("if clean_vault"));
         assert!(

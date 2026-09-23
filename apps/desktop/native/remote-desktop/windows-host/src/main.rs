@@ -61,6 +61,8 @@ fn run() -> Result<()> {
             legacy_cleanup::remove_saved_credentials()?;
             service::elevate("--uninstall --skip-vault-cleanup")
         }
+        Some("--reprotect") if args.len() == 1 => approval::reprotect(),
+        Some("--elevate-reprotect") if args.len() == 1 => service::elevate("--reprotect"),
         Some("--status") => {
             println!(
                 "{}",
@@ -167,5 +169,26 @@ mod tests {
             uninit.find("cindy_remote_service_done").unwrap() < uninit.find("--uninstall").unwrap()
         );
         assert!(!uninit.contains("approval::remove"));
+        let install = include_str!("../../../../resources/installer.nsh")
+            .split("!macro customInstall")
+            .nth(1)
+            .unwrap()
+            .split("!macroend")
+            .next()
+            .unwrap();
+        assert!(
+            install.find("${If} ${isUpdated}").unwrap() < install.find("--reprotect").unwrap(),
+            "overlay upgrades must re-harden $INSTDIR after files are replaced"
+        );
+        assert!(install.contains("--elevate-reprotect"));
+        let run = include_str!("main.rs")
+            .split("fn run()")
+            .nth(1)
+            .unwrap()
+            .split("fn main()")
+            .next()
+            .unwrap();
+        assert!(run.contains("approval::reprotect()"));
+        assert!(run.contains("service::elevate(\"--reprotect\")"));
     }
 }

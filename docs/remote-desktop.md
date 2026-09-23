@@ -999,8 +999,11 @@ already stopping. Setup copies host/input bytes through an exclusive handle afte
 Authenticode verification against the elevated helper, then re-checks the destination.
 Removal deletes only the
 fixed service payload and authorization files, never the user's application directory.
-The existing application uninstall/upgrade hook removes the service; a subsequent
-application upgrade therefore still requires enabling lock screen control again.
+NSIS overlay upgrades keep the AUTO_START service and Program Files grant. After
+`$INSTDIR` files are replaced, the helper re-hardens the application tree so
+`protect_application()` still accepts it. Settings then reports `updateRequired`
+until the user updates the helper, instead of dropping to `missing` or
+`unavailable`. A real uninstall still stops the service first.
 
 Desktop transitions terminate the old input helper, including pending batches
 and long text input. The service reports a fixed `desktop_changed` completion

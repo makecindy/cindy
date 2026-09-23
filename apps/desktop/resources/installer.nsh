@@ -58,6 +58,18 @@
 !macro customInstall
   ${If} ${isUpdated}
     !insertmacro cindyRestoreUpgradeShortcuts
+    ; CODE_DACL is not inherited. Files replaced into $INSTDIR would fail
+    ; protect_application() and drop Settings from updateRequired to unavailable.
+    IfFileExists "$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" 0 cindy_remote_reprotect_done
+    nsExec::ExecToStack '"$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" --reprotect'
+    Pop $R0
+    Pop $R1
+    ${If} $R0 != 0
+      nsExec::ExecToStack '"$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" --elevate-reprotect'
+      Pop $R0
+      Pop $R1
+    ${EndIf}
+    cindy_remote_reprotect_done:
   ${EndIf}
   ; 注册文件夹右键菜单 "通过 <区域名> 打开" (与 main/folderContextMenu.ts 写的是同一组键)。
   ; 双重保险:installer 写一次让首装即可用, app 启动时的 registerFolderContextMenu()

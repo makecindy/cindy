@@ -35,5 +35,8 @@ describe('Windows NSIS include paths', () => {
       uninit.indexOf('${If} ${isUpdated}'),
     );
     expect(uninit.indexOf('cindy_remote_service_done')).toBeLessThan(uninit.indexOf('--uninstall'));
+    const install = installer.split('!macro customInstall')[1].split('!macroend')[0];
+    expect(install.indexOf('${If} ${isUpdated}')).toBeLessThan(install.indexOf('--reprotect'));
+    expect(install).toContain('--elevate-reprotect');
   });
 });
