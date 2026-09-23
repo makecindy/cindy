@@ -15872,14 +15872,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     );
   });
 
-  ipcMain.handle(MAKER_INVOKE.LIST_ACTIVE, () => {
-    return maker.listActiveSessions().map((s) => ({
-      sessionId: s.id,
-      agentKind: s.agentKind,
-      workDir: s.workDir,
-      capabilities: s.capabilities,
-      isTurnRunning: s.isTurnRunning(),
-    }));
+  ipcMain.handle(MAKER_INVOKE.LIST_ACTIVE, (_event, options?: unknown) => {
+    const activityService = getAgentIslandService();
+    const activityById = new Map(activityService?.getSessionActivitySnapshots()
+      .map((activity) => [activity.sessionId, activity] as const) ?? []);
+    const sessions = maker.listActiveSessions().map((s) => {
+      const activity = activityById.get(s.id);
+      return {
+        sessionId: s.id,
+        agentKind: s.agentKind,
+        workDir: s.workDir,
+        capabilities: s.capabilities,
+        isTurnRunning: s.isTurnRunning(),
+        ...(activityService ? {
+          activityPhase: activity?.phase ?? 'idle',
+          activityAttention: activity?.attention ?? false,
+        } : {}),
+      };
+    });
+    // Only an opted-in controller may treat an absent runtime as idle. Legacy
+    // callers keep the array response and its original absence semantics.
+    if (options && typeof options === 'object' && !Array.isArray(options)
+      && (options as Record<string, unknown>).summary === true
+      && (options as Record<string, unknown>).snapshotVersion === 2) {
+      return { format: 'active-sessions-v2', sessions };
+    }
+    return sessions;
   });
 
   ipcMain.handle(
