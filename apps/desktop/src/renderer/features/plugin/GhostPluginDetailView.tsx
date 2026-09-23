@@ -4,11 +4,11 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
  *
  * Inputs: the renderer-safe Plugin detail model plus the installed Ghost when available.
  * Outputs: accessible detail interactions, Host-owned configuration rows, a single-row responsive
- * action hero, and the sticky top bar carrying the back affordance and macOS window-drag region.
+ * action hero with the shared Switch, and the sticky top bar with back and macOS window dragging.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   AppWindow,
@@ -178,6 +178,7 @@ export function GhostPluginDetailView({
 }: GhostPluginDetailViewProps) {
   const { t } = useTranslation();
   const { scrolled, onScroll } = usePluginDetailScrolled();
+  const enableSwitchId = useId();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
@@ -359,25 +360,18 @@ export function GhostPluginDetailView({
                 </button>
               ) : null}
               {/* 启用开关带明确文字(设计定稿):状态一目了然,点文字同样可切换。 */}
-              <button
-                type="button"
-                role="switch"
-                onClick={() => {
-                  // 未批准的安装不可切换启用(点了 Main 也会拒);与 updateBusy 同级门控。
-                  if (!toggleDisabled && !needsReapproval) onToggle(!enabled);
-                }}
-                disabled={toggleDisabled || needsReapproval}
-                aria-checked={enabled}
-                aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
+              <label
+                htmlFor={enableSwitchId}
                 className={cn(
                   'flex shrink-0 items-center gap-2 rounded-full py-1 pl-3 pr-1 transition-colors duration-150',
-                  'hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  'disabled:cursor-not-allowed disabled:opacity-60',
+                  'hover:bg-[var(--surface-hover-soft)]',
+                  toggleDisabled || needsReapproval ? 'cursor-not-allowed' : 'cursor-pointer',
                 )}
               >
                 <span
                   className={cn(
                     'text-12',
+                    (toggleDisabled || needsReapproval) && 'opacity-60',
                     enabled ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
                   )}
                 >
@@ -387,25 +381,14 @@ export function GhostPluginDetailView({
                       : 'settings.ghosts.detail.disabledLabel',
                   )}
                 </span>
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    'inline-flex h-5 w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors',
-                    enabled
-                      ? 'bg-[var(--switch-track-on)]'
-                      : 'bg-[var(--switch-track-off)]',
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'block h-4 w-4 rounded-full ring-0 transition-transform',
-                      enabled
-                        ? 'translate-x-4 bg-background'
-                        : 'translate-x-0 bg-[var(--switch-thumb-off)]',
-                    )}
-                  />
-                </span>
-              </button>
+                <Switch
+                  id={enableSwitchId}
+                  checked={enabled}
+                  disabled={toggleDisabled || needsReapproval}
+                  onCheckedChange={onToggle}
+                  aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
+                />
+              </label>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
