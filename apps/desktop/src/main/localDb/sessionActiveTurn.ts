@@ -153,6 +153,11 @@ function notifyTurnEndedPersisted(sessionId: string, endedAt: number, context: u
 /** started / ended 的 per-session 写链:只做 UPDATE 排队保序,无读改写。 */
 const _writeChains = new Map<string, Promise<void>>();
 
+/** Wait for the turn-marker writes already queued for this session. */
+export function drainSessionActiveTurnWrites(sessionId: string): Promise<void> {
+  return _writeChains.get(sessionId) ?? Promise.resolve();
+}
+
 /** 返回链上本次写完成(含失败吞错)的 promise,供需要落库确认的调用方 await。 */
 function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
   const prev = _writeChains.get(sessionId) ?? Promise.resolve();

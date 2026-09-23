@@ -121,6 +121,10 @@ const drainPersistQueue = vi.fn((): Promise<void> => Promise.resolve());
 vi.mock('../messagePersistBroadcaster', () => ({
   drainPersistQueue: () => drainPersistQueue(),
 }));
+const drainSessionActiveTurnWrites = vi.fn((_sessionId: string): Promise<void> => Promise.resolve());
+vi.mock('../localDb/sessionActiveTurn', () => ({
+  drainSessionActiveTurnWrites: (sessionId: string) => drainSessionActiveTurnWrites(sessionId),
+}));
 
 interface FakeFeishuIM {
   getOwnerOpenId: ReturnType<typeof vi.fn>;
@@ -152,6 +156,7 @@ async function freshService() {
     return text ? { reply: { clientId: 'reply-id', text }, eventId: 'reply-id' } : {};
   });
   drainPersistQueue.mockClear();
+  drainSessionActiveTurnWrites.mockReset().mockResolvedValue(undefined);
   const service = await import('../notificationService');
   const { setMainLocale } = await import('../i18n');
   // 既有分发断言以简中为基准；需要验证其它语言的用例会在调用前显式切换。
@@ -270,7 +275,8 @@ describe('notificationService — channels 分发', () => {
     expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ title: 'Cindy', body: '有新回复' }));
-    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'turn:100:200', fallbackBody: '有新回复' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ fallbackBody: '有新回复' }));
+    expect((sendMobileSessionNotify.mock.calls[0] as unknown as [Record<string, unknown>])[0]).not.toHaveProperty('eventId');
     release();
     await vi.advanceTimersByTimeAsync(0);
     await registeredHandlers.get('notification:show-session-event')!({}, payload);
@@ -610,6 +616,40 @@ describe('notificationService — channels 分发', () => {
 
 
 describe('teammate reply previews', () => {
+  it('waits for the current turn marker before using a persisted reply identity', async () => {
+    const { initNotificationService } = await freshService();
+    const oldPreview = {
+      teammateName: 'Cindy', eventId: 'turn:100:200',
+      reply: { clientId: 'old-final', text: 'Previous answer' },
+    };
+    const newPreview = {
+      teammateName: 'Cindy', eventId: 'turn:300:400',
+      reply: { clientId: 'new-final', text: 'Current answer' },
+    };
+    readSessionNotificationPreview.mockResolvedValue(oldPreview);
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+    let releaseMarker!: () => void;
+    let markerPersisted = false;
+    const markerBarrier = new Promise<void>((resolve) => {
+      releaseMarker = () => { markerPersisted = true; resolve(); };
+    });
+    drainSessionActiveTurnWrites.mockReturnValueOnce(markerBarrier);
+    readSessionNotificationPreview.mockImplementation(async () => markerPersisted ? newPreview : oldPreview);
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+
+    releaseMarker();
+    await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(2));
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ body: 'Current answer' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ eventId: 'turn:300:400' }));
+  });
+
   it('reconciles an accepted fallback after preview recovery without hiding the next turn', async () => {
     const { initNotificationService } = await freshService();
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);

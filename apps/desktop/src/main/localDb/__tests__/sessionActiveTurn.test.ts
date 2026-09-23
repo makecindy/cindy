@@ -154,6 +154,21 @@ describe('sessionActiveTurn', () => {
     expect(row!.last_turn_ended_at!).toBeGreaterThanOrEqual(row!.active_turn_started_at!);
   });
 
+  it('drains the queued turn markers before a completion reader uses them', async () => {
+    const { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } =
+      await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-notification');
+
+    markSessionTurnStarted('s-notification');
+    markSessionTurnEnded('s-notification');
+    await drainSessionActiveTurnWrites('s-notification');
+
+    const row = await readMarks(client, 's-notification');
+    expect(row?.active_turn_started_at).toBeTypeOf('number');
+    expect(row?.last_turn_ended_at).toBeGreaterThanOrEqual(row!.active_turn_started_at!);
+  });
+
   it('markSessionTurnEnded honors endedAtOverride so deferred writes keep the frozen timestamp', async () => {
     const { markSessionTurnStarted, markSessionTurnEnded } = await import('../sessionActiveTurn.js');
     const client = createTestDbClient();

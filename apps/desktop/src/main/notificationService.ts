@@ -31,6 +31,7 @@ import { markSessionNeedsAttention } from './appBadgeService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-link';
 import { notificationPreview } from './notificationPreview';
 import { readSessionNotificationPreview, type SessionNotificationPreview } from './localDb/sessionNotificationPreview';
+import { drainSessionActiveTurnWrites } from './localDb/sessionActiveTurn';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './device-link/broadcast-tap';
 import { latestMessageText } from './localDb/latestMessageText';
 import { drainPersistQueue } from './messagePersistBroadcaster';
@@ -214,14 +215,18 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             await Promise.race([
               (async () => {
                 if (kind === 'done') {
-                  // Read identity/turn first so a blocked write still has the correct
-                  // teammate fallback and any already-durable semantic event id.
-                  // This snapshot may predate the terminal write; its suppress
-                  // flag is not authoritative for this completion.
-                  preview = await readSessionNotificationPreview(sessionId, false);
+                  // Read the teammate identity first so a blocked write still
+                  // has the correct fallback. This snapshot may predate the
+                  // terminal marker, so its turn ID is not authoritative.
+                  const identity = await readSessionNotificationPreview(sessionId, false);
+                  // The turn marker may still be queued separately from the
+                  // message broadcaster. Keep only the teammate name here;
+                  // an old event ID must never identify this completion.
+                  preview = { teammateName: identity.teammateName };
                 }
                 if (finished || !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
                 await drainPersistQueue();
+                if (kind === 'done') await drainSessionActiveTurnWrites(sessionId);
                 if (finished || !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
                 if (kind === 'done') {
                   preview = await readSessionNotificationPreview(sessionId);
