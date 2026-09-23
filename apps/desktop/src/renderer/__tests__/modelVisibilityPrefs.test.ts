@@ -160,6 +160,30 @@ describe('initialization failure diagnostics', () => {
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'kept-off', defaultEnabled: true })).toBe(false);
   });
 
+  it('删除损坏的 owner 偏好后，同一生命周期内重新加载可恢复目录', async () => {
+    ownerClaim.profileOrigin = 'existing';
+    const key = 'xdt:modelVisibilityPrefs:v1.owner.owner-a';
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
+    memStorage.setItem(key, '{ damaged owner preferences');
+    const prefs = await loadModuleForOwner();
+    const catalog = {
+      id: 'xd', agents: ['pi'], routing: {},
+      models: { pi: [{ id: 'recovered', defaultEnabled: true }] },
+    } as unknown as ProviderView;
+
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(false);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBe('preferences-corrupt');
+    expect(memStorage.getItem(key)).toBe('{ damaged owner preferences');
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'recovered', defaultEnabled: true })).toBe(false);
+
+    memStorage.removeItem(key);
+    expect(await prefs.migrateModelVisibilityDefaults('owner-a', 1, [catalog])).toBe(true);
+    expect(prefs.getModelVisibilityInitializationFailure('owner-a', 1)).toBeNull();
+    expect(memStorage.getItem(key)).toBeNull();
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'recovered', defaultEnabled: false })).toBe(false);
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'recovered', defaultEnabled: true })).toBe(true);
+  });
+
   it('保留损坏的 initialization，直到显式恢复默认后才允许目录迁移', async () => {
     ownerClaim.profileOrigin = 'existing';
     const initializationKey = 'xdt:modelVisibilityPrefs:v1.initialization.owner.owner-a';

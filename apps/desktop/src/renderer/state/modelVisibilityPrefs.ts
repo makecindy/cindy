@@ -373,7 +373,7 @@ function parseStoredMap(raw: string | null): { map: VisibilityMap; corrupt: bool
 function readStoredMap(raw: string | null): VisibilityMap {
   const parsed = parseStoredMap(raw);
   if (parsed.corrupt) mapCorrupt = true;
-  else if (raw !== null && raw !== '' && !adoptionSourceCorrupt) mapCorrupt = false;
+  else if (!adoptionSourceCorrupt) mapCorrupt = false;
   return parsed.map;
 }
 
