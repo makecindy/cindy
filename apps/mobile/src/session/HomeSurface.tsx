@@ -808,8 +808,8 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
             assertCurrentScope();
             const epoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
             // Old hosts ignore this optional projection and still return the full snapshot.
-            const active = await invoke<unknown[]>(device.deviceId, 'maker:list-active', [
-              { summary: true },
+            const active = await invoke<unknown>(device.deviceId, 'maker:list-active', [
+              { summary: true, snapshotVersion: 2 },
             ]).catch((err) => {
               if (isOptionalActiveSessionSnapshotError(err)) return null;
               throw err;
@@ -844,7 +844,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
           device.name,
           nextSessions,
         );
-        if (Array.isArray(activeSessions)) {
+        if (activeSessions !== null) {
           remoteSessionStore.setActiveSessionSnapshots(
             device.deviceId,
             activeSessions,

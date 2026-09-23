@@ -569,8 +569,15 @@ function projectInvokeResultForTunnel(
   const options = args[0];
   if (channel === 'maker:list-active' && options && typeof options === 'object'
     && !Array.isArray(options) && 'summary' in options && options.summary === true
-    && Array.isArray(result)) {
-    return result.map((item: unknown) => {
+    && (Array.isArray(result) || (
+      'snapshotVersion' in options && options.snapshotVersion === 2
+      && result && typeof result === 'object' && !Array.isArray(result)
+      && 'format' in result && result.format === 'active-sessions-v2'
+      && 'sessions' in result && Array.isArray(result.sessions)
+    ))) {
+    const complete = !Array.isArray(result);
+    const rows = complete ? (result as { sessions: unknown[] }).sessions : result;
+    const projected = rows.map((item: unknown) => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
       const row = item as Record<string, unknown>;
       return {
@@ -580,6 +587,7 @@ function projectInvokeResultForTunnel(
           ? { activityPhase: row.activityPhase, activityAttention: row.activityAttention } : {}),
       };
     });
+    return complete ? { format: 'active-sessions-v2', sessions: projected } : projected;
   }
   if (channel === 'maker:schedule:list-sidebar-index-runs') {
     return capScheduleSidebarIndexForTunnel(result);

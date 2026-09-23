@@ -383,6 +383,23 @@ describe('active runtime summary projection', () => {
     }]);
   });
 
+  it('preserves the opt-in complete snapshot envelope while projecting its runtime rows', () => {
+    const projected = __testing.projectInvokeResultForTunnel(
+      'maker:list-active', { format: 'active-sessions-v2', sessions: rows },
+      false, [{ summary: true, snapshotVersion: 2 }],
+    );
+    expect(projected).toEqual({ format: 'active-sessions-v2', sessions: [
+      { sessionId: 'session-0', isTurnRunning: true },
+      { sessionId: 'session-1', isTurnRunning: false },
+    ] });
+    expect(__testing.projectInvokeResultForTunnel(
+      'maker:list-active', rows, false, [{ summary: true, snapshotVersion: 2 }],
+    )).toEqual([
+      { sessionId: 'session-0', isTurnRunning: true },
+      { sessionId: 'session-1', isTurnRunning: false },
+    ]);
+  });
+
   it.each([[], [null], [{ summary: false }], [{ summary: 'true' }]])(
     'preserves the complete response for legacy or non-opt-in callers (%j)', (...args) => {
       expect(__testing.projectInvokeResultForTunnel('maker:list-active', rows, false, args))

@@ -4069,14 +4069,16 @@ export const remoteSessionStore = {
 
   setActiveSessionSnapshots(
     deviceId: string,
-    list: readonly unknown[],
+    response: unknown,
     activityEpochAtFetchStart = makerActivityEpoch,
   ): void {
-    // `maker:list-active` returns only currently active sessions. Absence is not
-    // an idle assertion: the request can have started before a turn and complete
-    // after a live delta, or a stale reconnect response can race a newer push.
-    // Only explicit boolean states in the snapshot may change a session's run
-    // state; terminal maker/activity events remain the idle authority.
+    // Only the opted-in v2 envelope asserts a complete runtime list. Legacy
+    // arrays can come from old hosts, where absence must retain its old meaning.
+    const completeResponse = isRecord(response) && response.format === 'active-sessions-v2'
+      && Array.isArray(response.sessions) ? response : null;
+    const list: readonly unknown[] = completeResponse
+      ? completeResponse.sessions as unknown[]
+      : (Array.isArray(response) ? response : []);
     const snapshotStates = new Map<string, {
       running: boolean;
       activityPhase: string | null;
@@ -4131,6 +4133,25 @@ export const remoteSessionStore = {
         startedAt: running ? (current.startedAt ?? Date.now()) : null,
       });
       changed = writeSessionRunStatus(sessionId, next) || changed;
+    }
+    if (completeResponse) {
+      for (const [sessionId, indexedDeviceId] of sessionDeviceIndex) {
+        if (indexedDeviceId !== deviceId || snapshotStates.has(sessionId)
+          || (sessionMakerActivityEpochs.get(sessionId) ?? 0) > activityEpochAtFetchStart) continue;
+        // A runtime absent from a complete host snapshot has ended. Do not
+        // discard a newer live push that arrived while this read was in flight.
+        changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
+        changed = writeMakerTurnRunning(sessionId, false) || changed;
+        changed = deleteSessionLiveActivity(sessionId) || changed;
+        const current = readSessionRunStatus(sessionId);
+        changed = writeSessionRunStatus(sessionId, {
+          ...current,
+          isRunning: false,
+          reconnectAttempt: null,
+          sideTaskRunning: false,
+          startedAt: null,
+        }) || changed;
+      }
     }
     if (changed) emit();
   },

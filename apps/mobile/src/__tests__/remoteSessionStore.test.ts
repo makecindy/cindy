@@ -2822,6 +2822,45 @@ describe('remoteSessionStore', () => {
     }
   });
 
+  it('clears a missed error and stale running state for a runtime absent from a complete snapshot', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setDeviceSessions('dev-2', 'Mac mini', [session('s2')]);
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+    remoteSessionStore.applySessionActivity('dev-2', {
+      sessionId: 's2', phase: 'error', attention: true,
+    });
+    remoteSessionStore.setSessionRunning('s1', true);
+
+    // A legacy host also returns an empty array, without claiming completeness.
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', []);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', {
+      format: 'active-sessions-v2', sessions: [],
+    });
+
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toBeNull();
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
+    expect(remoteSessionStore.getSessionLiveActivity('s2')).toMatchObject({ phase: 'error', attention: true });
+  });
+
+  it('does not let a delayed complete snapshot clear a newer activity push', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const epoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', {
+      format: 'active-sessions-v2', sessions: [],
+    }, epoch);
+
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
+  });
+
   it('clears stale reconnect progress from an active snapshot without erasing newer retry events', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
