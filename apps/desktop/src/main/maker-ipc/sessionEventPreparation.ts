@@ -1,3 +1,4 @@
+import { isQuietScheduledOutput } from '../scheduler-host/silent-output.js';
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
 import type {
@@ -159,6 +160,7 @@ export function prepareSessionEvent(
     };
   }
   if (event.type === 'text' && event.standaloneText === true) {
+    if (isQuietScheduledOutput(event) && !event.runtimeRecovery) return;
     // Deliver through the existing persisted-row channel only. Sending a text
     // event as well would let older renderers adopt the notice as their active
     // assistant stream and overwrite/misdate the next model reply.
@@ -233,7 +235,7 @@ export function prepareSessionEvent(
     return;
   }
   if (event.type === 'image' && event.source === 'codex') {
-    void deps.broadcastCodexImageAsToolResult(session.id, event);
+    if (!isQuietScheduledOutput(event)) void deps.broadcastCodexImageAsToolResult(session.id, event);
     return;
   }
   if (event.type === 'plan_mode_changed') {

@@ -10,7 +10,6 @@ import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { getRemoteResource, invokeRemoteResourceAction } from '@/device-link/remoteResources';
-import { formatRemoteError } from '@/device-link/remoteStatus';
 import { CompanionChoice } from './CompanionChoice';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, radius, spacing, typeScale, lineHeight } from '@/theme/tokens';
@@ -18,6 +17,22 @@ import { CompanionSheet } from './CompanionSheet';
 import { CompanionAutomationNativeView } from './CompanionAutomationNativeView';
 import { useRoutineCronFields } from './useRoutineCronFields';
 import { emptyRoutineDefinition, getRoutineActionId, parseRoutineDetail, parseRoutineSummaries, routineDraftValid, type RoutineDefinition, type RoutineDetail, type RoutineSummary, type RoutineTrigger } from './companionRoutines';
+
+function automationFailure(error: unknown, tr: (key: string) => string): string {
+  const code = typeof (error as { code?: unknown } | null)?.code === 'string'
+    ? (error as { code: string }).code
+    : '';
+  const text = error instanceof Error ? error.message : String(error);
+  if (code === 'unsupported' || code === 'CHANNEL_NOT_ALLOWED' || text.includes('CHANNEL_NOT_ALLOWED')) return tr('unsupported');
+  if (code === 'DEVICE_OFFLINE' || code === 'NOT_CONNECTED' || text.includes('DEVICE_OFFLINE') || text.includes('NOT_CONNECTED')) return tr('offline');
+  // A host validation sentence is the actionable reason. Raw codes and JSON stay behind the localized summary.
+  if (text && !text.startsWith('[') && !text.startsWith('{') && !/^[A-Z0-9_]+$/.test(text)) return text;
+  return tr('failed');
+}
+
+function unsupportedAutomationError(): Error {
+  return Object.assign(new Error('unsupported'), { code: 'unsupported' });
+}
 
 export function CompanionAutomationSheet({ visible, onClose, collectionId, botId, deviceId, deviceName, online }: {
   visible: boolean; onClose(): void; collectionId: string; botId: string; deviceId: string; deviceName: string; online: boolean;
@@ -28,6 +43,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
   const { colors } = useTheme();
   const { accountGeneration } = useAuth();
   const { invoke, openLink, onRemoteResourceChanged, connectionEpoch, subscribe, unsubscribe } = useDeviceLink();
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [resource, setResource] = useState<RemoteResource | null>(null);
   const [items, setItems] = useState<RoutineSummary[]>([]);
@@ -127,7 +143,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       let runRevision = detail?.revision ?? 0;
       if (actionId === 'routine-run' && dirty) {
         const saveId = getRoutineActionId(resource, 'routine-save');
-        if (!saveId) throw new Error(tr('unsupported'));
+        if (!saveId) throw unsupportedAutomationError();
         await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, { collectionId, resourceRef: resource.ref, actionId: saveId,
           input: { revision: runRevision, definition: draft } }, i18n.language);
         if (!valid(scope, page)) return;
@@ -140,7 +156,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
         setResource(runResource); setDetail(next); runRevision = next.revision;
       }
       const nextCapability = getRoutineActionId(runResource, actionId);
-      if (!nextCapability) throw new Error(tr('unsupported'));
+      if (!nextCapability) throw unsupportedAutomationError();
       await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, {
         collectionId, resourceRef: runResource.ref, actionId: nextCapability,
         input: { revision: runRevision, requestId: requestId.current,
@@ -149,7 +165,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       if (!valid(scope, page)) return;
       if (actionId === 'routine-run') { await load(); }
       else open(null);
-    } catch (e) { if (valid(scope, page)) setError(formatRemoteError(e)); }
+    } catch (e) { if (valid(scope, page)) setError(automationFailure(e, tr)); }
     finally { if (operationGeneration.current === operation) { inFlight.current = false; if (current.current.identity === scope) setBusy(false); } }
   };
   const button = (label: string, onPress: () => void, destructive = false, disabled = false) => (
@@ -196,6 +212,14 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
           {field(tr('name'), draft.name, (name) => setDraft({ ...draft, name }))}
           <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('enabled')}</Text><Switch accessibilityLabel={tr('enabled')} disabled={busy} value={draft.enabled} onValueChange={(enabled) => setDraft({ ...draft, enabled })} trackColor={{ true: colors.textSecondary }} /></View>
           {field(tr('instructions'), draft.prompt, (prompt) => setDraft({ ...draft, prompt }), true)}
+          {detail?.supportsPreRunCheck ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: advancedOpen }} onPress={() => setAdvancedOpen(!advancedOpen)} style={styles.row}><Text style={styles.label}>{tr('advanced')}</Text></Pressable> : null}
+          {detail?.supportsPreRunCheck && advancedOpen ? <View style={styles.group}>
+            <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('quiet')}</Text><Switch accessibilityLabel={tr('quiet')} disabled={busy} value={draft.silentWhenIdle ?? false} onValueChange={(silentWhenIdle) => setDraft({ ...draft, silentWhenIdle })} trackColor={{ true: colors.textSecondary }} /></View>
+            <Text style={styles.secondary}>{tr('quietHint')}</Text>
+            {field(tr('checkCommand'), draft.preRunHook?.command ?? '', (command) => setDraft({ ...draft, preRunHook: command ? { ...draft.preRunHook, command } : null }), true)}
+            <Text style={styles.secondary}>{tr('checkHint')}</Text>
+            {draft.preRunHook ? field(tr('timeoutMs'), draft.preRunHook.timeoutMs === undefined ? '' : String(draft.preRunHook.timeoutMs), (value) => setDraft({ ...draft, preRunHook: { ...draft.preRunHook!, timeoutMs: value ? Number(value) : undefined } })) : null}
+          </View> : null}
           <Text style={styles.heading}>{tr('triggers')}</Text>
           {draft.triggers.map((trigger, index) => <View key={`${draftGeneration}:${trigger.id}`} style={styles.group}>
             {choose(tr('triggerType'), trigger.kind, ['cron', 'interval', 'event'].map((value) => ({ value, label: tr(value) })), (kind) => updateTrigger(index, kind === 'interval' ? { id: trigger.id, kind, intervalMs: 3_600_000 } : kind === 'event' ? { id: trigger.id, kind, sourceId: '', eventType: '', filters: [] } : { id: trigger.id, kind: 'cron', expression: '0 9 * * *', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }))}

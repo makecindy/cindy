@@ -325,24 +325,19 @@ describe('Bot lifecycle coordinator', () => {
     "INSERT INTO bot_delegations VALUES ('shared', 'bot-1', 'other-bot')",
     "INSERT INTO bot_direct_message_threads VALUES ('shared', 'bot-1', 'other-bot')",
     "INSERT INTO bot_direct_messages VALUES ('shared', 'other-bot', 'bot-1')",
-  ])('preserves the active Bot and canonical task when shared history blocks deletion: %s', async (insert) => {
+  ])('deletes the Bot without clearing existing shared-history rows: %s', async (insert) => {
     sqlite.exec(insert);
-    const beforeProfile = row(sqlite, 'bot_profiles', 'bot-1');
-    const beforeSession = row(sqlite, 'sessions', 'canonical');
-    const beforeLink = row(sqlite, 'bot_session_links', 'link-canonical');
+    const sharedRows = sqlite.prepare('SELECT * FROM bot_delegations').all().length
+      + sqlite.prepare('SELECT * FROM bot_direct_message_threads').all().length
+      + sqlite.prepare('SELECT * FROM bot_direct_messages').all().length;
     await expect(service().run({
       botId: 'bot-1', action: 'delete', confirmName: 'Helper', keepTaskHistory: true,
-    })).rejects.toMatchObject({ code: 'BOT_SHARED_HISTORY_REFERENCED' });
-    expect(row(sqlite, 'bot_profiles', 'bot-1')).toEqual(beforeProfile);
-    expect(row(sqlite, 'sessions', 'canonical')).toEqual(beforeSession);
-    expect(row(sqlite, 'bot_session_links', 'link-canonical')).toEqual(beforeLink);
-    expect(closeSession).not.toHaveBeenCalled();
-    expect(cancelDelegationsForBot).not.toHaveBeenCalled();
-    expect(deleteProfileAndDetachSessions).not.toHaveBeenCalled();
-    expect(sqlite.prepare('SELECT * FROM bot_lifecycle_events').all()).toEqual([]);
-    // Its existing runtime was never closed, and normal lifecycle controls remain usable.
-    await expect(service().run({ botId: 'bot-1', action: 'pause' })).resolves.toMatchObject({ status: 'paused' });
-    await expect(service().run({ botId: 'bot-1', action: 'resume' })).resolves.toMatchObject({ status: 'active' });
+    })).resolves.toMatchObject({ status: 'deleted' });
+    expect(sqlite.prepare("SELECT id FROM bot_profiles WHERE id = 'bot-1'").get()).toBeUndefined();
+    expect(sqlite.prepare('SELECT * FROM bot_delegations').all().length
+      + sqlite.prepare('SELECT * FROM bot_direct_message_threads').all().length
+      + sqlite.prepare('SELECT * FROM bot_direct_messages').all().length).toBe(sharedRows);
+    expect(deleteProfileAndDetachSessions).toHaveBeenCalled();
   });
 
   it('pauses, archives and detaches sessions when permanently deleting a Bot', async () => {

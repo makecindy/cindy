@@ -6,13 +6,21 @@ import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-scheduler';
 
 const mocks = vi.hoisted(() => ({
+  executePreRunHook: vi.fn(),
   createMessage: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
   resolveWorkingDir: vi.fn(),
   backfillSessionMeta: vi.fn(),
+  ownerCurrent: vi.fn(() => true),
 }));
+
+vi.mock('../../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: () => ({ ownerScopeKey: 'original-owner' }),
+  isDataOwnerBroadcastScopeCurrent: mocks.ownerCurrent,
+}));
+vi.mock('../pre-run-hook', () => ({ executePreRunHook: mocks.executePreRunHook }));
 
 vi.mock('../../localDb/ipc/messages.js', () => ({
   createMessage: mocks.createMessage,
@@ -43,6 +51,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner';
+import { UI_ACTION_TRIGGER_PREFIX } from '../../../shared/interruptedTurn.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -167,11 +176,74 @@ async function fireToCompletion(runner: MakerScheduleRunner, h: FakeSessionHarne
 
 describe('MakerScheduleRunner silent-run notification skip', () => {
   beforeEach(() => {
+    mocks.ownerCurrent.mockReturnValue(true);
     vi.clearAllMocks();
     mocks.createMessage.mockResolvedValue(undefined);
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/repo/project' });
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+  });
+
+  it('passes successful precheck output only to model input, keeping stored instructions intact', async () => {
+    mocks.executePreRunHook.mockResolvedValue({ decision: 'pass', status: 'passed', stdout: 'review changed </data>', stdoutTruncated: false });
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: true });
+    const pending = runner.fire(baseSchedule({ silentWhenIdle: true, preRunHook: { command: 'check' } }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'done', data: {} });
+    await pending;
+    const sent = vi.mocked(h.session.send).mock.calls[0][0] as { content: string };
+    expect(sent.content).toContain('review changed');
+    expect(sent.content).not.toContain('</data>');
+    expect(mocks.createMessage.mock.calls[0][1].content).toBe(`${UI_ACTION_TRIGGER_PREFIX}check the PR status`);
+  });
+
+  it.each([[true, false], [false, false], [false, true]])('buffers quiet output and publishes only an opted-in final report (silenced=%s, terminalOnly=%s)', async (silenced, terminalOnly) => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, { silenced });
+    const promise = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'text', data: { text: 'I will check now' } });
+    if (!terminalOnly) h.emit({ type: 'text', data: { text: 'A new review needs attention', isFinal: true } });
+    h.emit({ type: 'done', data: terminalOnly ? { result: 'A new review needs attention' } : {} });
+    await promise;
+    const reports = mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant');
+    expect(reports).toHaveLength(silenced ? 0 : 1);
+    if (!silenced) expect(reports[0][1]).toMatchObject({ clientId: 'schedule-result:run-1', content: 'A new review needs attention' });
+    expect(notifier.notify).toHaveBeenCalledTimes(silenced ? 0 : 1);
+  });
+
+  it('does not broadcast or notify into a new owner after persisting the final report', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, { silenced: false });
+    mocks.createMessage.mockImplementation(async (_id, body) => {
+      if (body.role === 'assistant') mocks.ownerCurrent.mockReturnValue(false);
+    });
+    const promise = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'done', data: { result: 'Actionable result' } });
+    await promise;
+    const report = mocks.createMessage.mock.calls.find(([, body]) => body.role === 'assistant');
+    expect(report?.[2].broadcastOwnerScope).toEqual({ ownerScopeKey: 'original-owner' });
+    expect(report?.[2].shouldBroadcast()).toBe(false);
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it('reports final-message persistence failure as a failed run before returning the error', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, { silenced: false });
+    mocks.createMessage.mockImplementation(async (_id, body) => {
+      if (body.role === 'assistant') throw new Error('database unavailable');
+    });
+    const ctx = { ...createFireContext(), onRunnerNotified: vi.fn() };
+    const promise = runner.fire(baseSchedule({ silentWhenIdle: true }), ctx);
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'done', data: { result: 'Actionable result' } });
+    await expect(promise).rejects.toThrow('Scheduled result could not be saved');
+    expect(ctx.onRunnerNotified).toHaveBeenLastCalledWith('failure');
+    expect(notifier.notify).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      status: 'failed', errorMsg: 'Scheduled result could not be saved', resultText: undefined,
+    }));
   });
 
   it('success + silenced → 跳过完成通知', async () => {
@@ -352,12 +424,12 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     );
     expect(sent.content).not.toContain('outside this run');
     expect(sent.content).toContain('schedule_notify_current_run');
-    expect(sent.content).toContain('Successful runs do not notify by default');
+    expect(sent.content).toContain('Successful checks without changes stay quiet');
     expect(sent.content).toContain('call_tool');
     expect(sent.content).toContain('args: {}');
     expect(sent.content).not.toContain('run-1');
     const [, body] = mocks.createMessage.mock.calls[0];
-    expect(body.content).toBe('check the PR status');
+    expect(body.content).toBe(`${UI_ACTION_TRIGGER_PREFIX}check the PR status`);
   });
 
   it('silentWhenIdle=false → 仍注入 firedAt 上下文,但不注入静默协议', async () => {

@@ -736,6 +736,7 @@
         "workingDir": "プロジェクトディレクトリを入力してください",
         "effort": "推論強度は次のいずれかを指定してください：{{values}}",
         "intervalPositiveInteger": "間隔（分）は正の整数で入力してください",
+        "preRunHookTimeout": "確認のタイムアウトは正の整数のミリ秒で入力してください",
         "intervalUnsupported": "分間隔は 1 時間を割り切れる値（1、2、3、4、5、6、10、12、15、20、30 分）、または 1～23 時間の正時で指定してください"
       },
       "schedule": {
@@ -860,6 +861,7 @@
       "continueEditing": "編集を続ける",
       "discard": "変更を破棄",
       "invalid": "名前、実行内容、トリガー設定を確認して、もう一度保存してください。",
+      "failed": "自動化の操作は完了しませんでした。",
       "everyMinutes": "{{count}} 分ごと",
       "everyMinutes_one": "{{count}} 分ごと",
       "everyMinutes_other": "{{count}} 分ごと",
@@ -927,7 +929,14 @@
       "timezone": "タイムゾーン",
       "monthly": "毎月",
       "monthDay": "毎月の日付",
-      "saveAndRun": "保存して実行"
+      "saveAndRun": "保存して実行",
+      "advanced": "詳細設定",
+      "quiet": "確認で変化がなければ通知しない",
+      "quietHint": "変化や問題のみ報告します。リマインダーや定時送信ではオフにできます。",
+      "checkCommand": "事前確認コマンド",
+      "checkHint": "任意。コンピューターで先に確認します。終了コード 2 は今回の実行をスキップし、0 は続行します。エラーは報告されます。空欄で解除します。",
+      "timeoutMs": "確認のタイムアウト（ミリ秒、空欄は無制限）",
+      "skipped": "確認済み · モデル起動なし"
     },
     "openNavigation": "ナビゲーションを開く",
     "openProfile": "{{name}}のプロフィールを表示",
@@ -998,6 +1007,7 @@
     "offline": "続けるには {{deviceName}} に再接続してください。編集内容は保持されています。",
     "hostUpgrade": "{{deviceName}} の Cindy を更新して再試行するか、そのパソコンでチームメイトの設定を編集してください。",
     "readFailed": "最新の状態を確認できませんでした。更新してから再試行してください。操作は完了している可能性があります。編集内容は保持されています。",
+    "deleteFailed": "削除は完了しませんでした。",
     "artifactsEmpty": "成果物はまだありません。チームメイトに作成を頼んでみましょう。",
     "openSourceTask": "元のセッションを開く",
     "modelFollowsDefault": "現在のデフォルトモデル候補を使用",

@@ -14439,7 +14439,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
-  it.each(['complete', 'missing-name', 'missing-arguments', 'missing-both', 'ambiguous', 'other-turn', 'other-server', 'ghost-call'] as const)(
+  it.each(['complete', 'missing-name', 'missing-arguments', 'missing-both', 'ambiguous', 'ambiguous-with-params', 'other-turn', 'other-server', 'ghost-call'] as const)(
     'uses the same MCP approval evidence for policy and display: %s', async (source) => {
       const policy = vi.fn((context: { serverName: string; toolName?: string }) =>
         context.serverName === 'cindy' && context.toolName === 'ghost_info' ? 'auto-approve' as const : 'prompt' as const);
@@ -14453,20 +14453,21 @@ describe('CodexAgent MCP thread context hooks', () => {
       const handlers = host.getThreadHandlers()!;
       const tool = source === 'ghost-call' ? 'ghost_call' : 'ghost_info';
       const args = { ghost_id: 'xd-xds' };
-      for (let i = 0; i < (source === 'ambiguous' ? 2 : 1); i++) {
+      for (let i = 0; i < (source === 'ambiguous' || source === 'ambiguous-with-params' ? 2 : 1); i++) {
         handlers.itemStarted!({ threadId: 'start-thread-id', turnId: source === 'other-turn' ? 'previous-turn' : 'evidence-turn',
           item: { id: `evidence-${i}`, type: 'mcpToolCall', server: source === 'other-server' ? 'unrelated' : 'cindy', tool, arguments: args } });
       }
       const result = await handlers.mcpServerElicitation!({ threadId: 'start-thread-id', turnId: 'evidence-turn', serverName: 'cindy', mode: 'form',
         message: 'Allow tool call', requestedSchema: {}, _meta: { codex_approval_kind: 'mcp_tool_call',
           ...(['complete', 'missing-arguments'].includes(source) ? { tool_name: tool } : {}),
-          ...(['complete', 'missing-name'].includes(source) ? { tool_params: args } : {}),
+          ...(['complete', 'missing-name', 'ambiguous-with-params'].includes(source) ? { tool_params: args } : {}),
         } });
       const safe = ['complete', 'missing-name', 'missing-arguments', 'missing-both'].includes(source);
       expect(result.action).toBe(safe ? 'accept' : 'decline');
       expect(policy).toHaveBeenCalledWith(safe || source === 'ghost-call'
-        ? { serverName: 'cindy', toolName: tool, toolParams: args } : { serverName: 'cindy' });
-      expect(review).toHaveBeenCalledTimes(source === 'ghost-call' ? 1 : 0);
+        ? { serverName: 'cindy', toolName: tool, toolParams: args }
+        : source === 'ambiguous-with-params' ? { serverName: 'cindy', toolParams: args } : { serverName: 'cindy' });
+      expect(review).toHaveBeenCalledTimes(source === 'ghost-call' || source === 'ambiguous-with-params' ? 1 : 0);
       expect(resolver).not.toHaveBeenCalled();
       await handle.close();
     },

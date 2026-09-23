@@ -120,6 +120,8 @@ export function BotRoutines({
       prompt: value.prompt,
       enabled: value.enabled,
       triggers: value.triggers,
+      silentWhenIdle: value.silentWhenIdle ?? true,
+      preRunHook: value.preRunHook ?? null,
     });
   const saved = routines.find((item) => item.id === selected);
   const dirty =
@@ -208,7 +210,7 @@ export function BotRoutines({
             variant="secondary"
             onClick={() => {
               setSelected('new');
-              setDraft({ name: '', prompt: '', enabled: true, triggers: [] });
+              setDraft({ name: '', prompt: '', enabled: true, triggers: [], silentWhenIdle: false });
             }}
           >
             <Plus size={14} />
@@ -268,7 +270,7 @@ export function BotRoutines({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <label className="flex items-center gap-2">
               <Switch
-                checked={draft.enabled}
+                aria-label={t('routines.enabled')} checked={draft.enabled}
                 onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
               />
               {t(draft.enabled ? 'routines.enabled' : 'routines.paused')}
@@ -307,6 +309,23 @@ export function BotRoutines({
               onChange={(prompt) => setDraft({ ...draft, prompt })}
             />
           </label>
+          <details className="space-y-3">
+            <summary className="min-h-8 cursor-pointer rounded-full py-2 focus-visible:outline focus-visible:outline-[var(--focus-ring)]">{t('routines.advancedSettings')}</summary>
+            <label className="flex min-h-8 items-center gap-2">
+              <Switch aria-label={t('routines.quiet')} checked={draft.silentWhenIdle ?? true} onCheckedChange={(silentWhenIdle) => setDraft({ ...draft, silentWhenIdle })} />
+              {t('routines.quiet')}
+            </label>
+            <p className="text-12 text-[var(--text-secondary)]">{t('routines.quietHint')}</p>
+            <label className="block space-y-2">
+              <span>{t('routines.checkCommand')}</span>
+              <Textarea rows={3} value={draft.preRunHook?.command ?? ''} onChange={(command) => setDraft({ ...draft, preRunHook: command ? { ...draft.preRunHook, command } : null })} />
+            </label>
+            <p className="text-12 text-[var(--text-secondary)]">{t('routines.checkHint')}</p>
+            {draft.preRunHook && <label className="block space-y-2">
+              <span>{t('routines.timeoutMs')}</span>
+              <Input type="number" min={1} value={draft.preRunHook.timeoutMs === undefined ? '' : String(draft.preRunHook.timeoutMs)} onChange={(value) => setDraft({ ...draft, preRunHook: { ...draft.preRunHook!, timeoutMs: value ? Number(value) : undefined } })} />
+            </label>}
+          </details>
           <div className="space-y-2">
             <h3 className="text-[var(--text-secondary)]">{t('routines.when')}</h3>
             <div className="space-y-3 rounded-xl border border-[var(--border-default)] p-3">
@@ -488,7 +507,7 @@ export function BotRoutines({
                   <span aria-label={t(`routines.status.${run.status}`)}>
                     {run.status === 'running' || run.status === 'queued' ? (
                       <Spinner size={15} />
-                    ) : run.status === 'success' ? (
+                    ) : run.status === 'success' || run.status === 'skipped' ? (
                       <Check size={15} />
                     ) : run.status === 'failed' || run.status === 'interrupted' ? (
                       <CircleAlert size={15} />

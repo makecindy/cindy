@@ -51,6 +51,29 @@ afterEach(() => {
 });
 
 describe('mobile native app config', () => {
+  it('generates all three official WeChat query schemes without dropping existing callbacks', async () => {
+    const withWechatLogin = require(resolve(process.cwd(), 'modules/xdt-wechat-login/plugin/index.js'));
+    const config = withWechatLogin({ name: 'Test app', slug: 'test-app' }, {
+      appId: 'wx-test-mobile',
+      universalLink: 'https://login.example.com/app/',
+    });
+    const result = await config.mods.ios.infoPlist({
+      ...config,
+      modResults: {
+        LSApplicationQueriesSchemes: ['existing-app', 'weixin'],
+        CFBundleURLTypes: [{ CFBundleURLSchemes: ['cindycn'] }],
+      },
+      modRequest: { platform: 'ios', modName: 'infoPlist' },
+    });
+    expect(result.modResults.LSApplicationQueriesSchemes).toEqual([
+      'existing-app', 'weixin', 'weixinULAPI', 'weixinURLParamsAPI',
+    ]);
+    expect(result.modResults.CFBundleURLTypes).toEqual([
+      { CFBundleURLSchemes: ['cindycn'] },
+      { CFBundleURLName: 'wx-test-mobile', CFBundleURLSchemes: ['wx-test-mobile'] },
+    ]);
+  });
+
   it('enables the existing WeChat SDK plugin only for configured CN builds', () => {
     const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
     process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = 'cn';

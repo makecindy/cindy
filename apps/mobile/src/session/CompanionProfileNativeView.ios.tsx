@@ -62,7 +62,7 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
   return <ComposerSheet visible={p.visible} title={p.title} onClose={p.onClose} onClosed={p.onClosed} onBack={p.onBack}
     nativeContent preventDismiss={p.dirty || p.busy || !!p.confirmation} testID="companionProfile">
     {!p.online ? note(tr('offline')) : null}
-    {p.error ? <>{note(tr('readFailed'), true)}<Section>{action(t('devices.resources.retry'), p.onRetry, !p.online)}{p.dirty ? action(t('devices.companions.automation.discard'), () => p.onDiscard(false), false, true) : null}</Section></> : null}
+    {p.error ? <>{note(p.errorLabel || tr('readFailed'), true)}<Section>{action(t('devices.resources.retry'), p.onRetry, !p.online)}{p.dirty ? action(t('devices.companions.automation.discard'), () => p.onDiscard(false), false, true) : null}</Section></> : null}
     {p.conflict ? <>{note(tr('changed'), true)}<Section>{action(tr('discardAndReload'), () => p.onDiscard(true), false, true)}</Section></> : null}
     {p.receipt ? note(p.receipt) : null}
     {p.deleted ? <Section>{action(t('shared.closePanel'), p.onClose)}</Section> : p.confirmation?.action?.confirmation ? <>

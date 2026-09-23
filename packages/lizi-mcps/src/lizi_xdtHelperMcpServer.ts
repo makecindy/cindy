@@ -8,6 +8,7 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
  *  - server name = `cindy_helper`,essential(常开,不可被用户关闭)
  *  - 所有工具走 `list_tools` / `call_tool` 两个入口,渐进式发现:
  *    - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
+ *    - 'auth'    : 由 Host 保存凭证的供应商授权
  *    - 'history' : 只读查询本地数据库聊天历史与输入队列 (list_workdirs /
  *                  list_sessions / list_session_queue / get_chat_history /
  *                  search_chat_history)
@@ -32,6 +33,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/botRoutineTools.js';
+import { registerGrokLoginTools, type GrokLoginCallbacks } from './xdt-helper/grok_login.js';
 import { jsonObjectArg } from './json-object-arg.js';
 
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
@@ -120,7 +122,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'control', 'history', 'feedback', 'handoff', 'skills', 'bots'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'bots'] as const;
 
 interface SessionTaskCallbacks {
   startSessionTask(params: {
@@ -621,6 +623,7 @@ export type ControlDispatchOutcome =
 
 export interface XdtHelperMcpDeps {
   logger?: LiziMcpLogger;
+  grokLogin?: GrokLoginCallbacks;
   /** Host-owned runtime classification used to keep Bot tasks on a narrow surface. */
   resolveSurface?: (input: {
     sessionId: string;
@@ -719,17 +722,21 @@ export function createXdtHelperMcpServer(
     const sessionId = context.sessionId;
     const remoteBotOnly = !!context.remoteHostId && context.agentKind !== 'pi';
     const defaultCategories = new Set(CATEGORY_ENUM.filter((category) => category !== 'bots'));
-    if (!sessionId || !deps.resolveSurface) return remoteBotOnly ? new Set() : defaultCategories;
+    if (!sessionId) return remoteBotOnly ? new Set() : defaultCategories;
+    if (!deps.resolveSurface) return remoteBotOnly ? new Set(['auth']) : defaultCategories;
     const surface = await deps.resolveSurface({ sessionId }).catch(() => 'restricted' as const);
     // Bot-specific memory, Skills, messaging, delegation and durable notes all
     // live in this single category. Cindy-wide history/control/feedback/handoff
     // stay out of the Bot's discovery loop.
-    if (surface === 'bot') return new Set(['bots', 'cindy']);
-    return remoteBotOnly || surface === 'restricted' ? new Set() : defaultCategories;
+    if (surface === 'bot') return new Set(['bots', 'cindy', 'auth']);
+    if (surface === 'restricted') return new Set();
+    return remoteBotOnly ? new Set(['auth']) : defaultCategories;
   };
 
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
   registerGetCapabilitiesTool(registry);
+  if (deps.grokLogin)
+    registerGrokLoginTools(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.grokLogin);
   registerGetCurrentSessionIdTool(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
   });
@@ -852,7 +859,8 @@ export function createXdtHelperMcpServer(
   }
   if (deps.botRoutines) {
     registerBotRoutineTools(registry, deps.botRoutines,
-      () => resolveLiziMcpSessionContext(sessionCtx).sessionId);
+      () => resolveLiziMcpSessionContext(sessionCtx).sessionId,
+      () => resolveLiziMcpSessionContext(sessionCtx));
   }
 
   registerStartSessionTaskEntry(registry, deps, sessionCtx);

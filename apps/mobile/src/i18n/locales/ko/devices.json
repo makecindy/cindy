@@ -736,6 +736,7 @@
         "workingDir": "프로젝트 디렉터리를 입력하세요",
         "effort": "추론 강도는 다음 중 하나여야 합니다: {{values}}",
         "intervalPositiveInteger": "분 간격은 양의 정수여야 합니다",
+        "preRunHookTimeout": "검사 제한 시간은 양의 정수(밀리초)여야 합니다",
         "intervalUnsupported": "분 간격은 1시간을 나눌 수 있는 값(1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30분) 또는 1~23시간의 정시 간격만 지원합니다"
       },
       "schedule": {
@@ -860,6 +861,7 @@
       "continueEditing": "계속 편집",
       "discard": "변경 사항 버리기",
       "invalid": "이름, 실행 지침, 트리거 설정을 확인한 후 다시 저장하세요.",
+      "failed": "자동화 작업을 완료하지 못했습니다.",
       "everyMinutes": "{{count}}분마다",
       "everyMinutes_one": "{{count}}분마다",
       "everyMinutes_other": "{{count}}분마다",
@@ -927,7 +929,14 @@
       "timezone": "시간대",
       "monthly": "매월",
       "monthDay": "매월 날짜",
-      "saveAndRun": "저장 후 실행"
+      "saveAndRun": "저장 후 실행",
+      "advanced": "고급 설정",
+      "quiet": "확인 결과 변화가 없으면 알리지 않기",
+      "quietHint": "변화나 문제만 보고합니다. 리마인더와 예약 메시지는 이 옵션을 끌 수 있습니다.",
+      "checkCommand": "사전 확인 명령",
+      "checkHint": "선택 사항입니다. 컴퓨터에서 먼저 확인합니다. 종료 코드 2는 이번 실행을 건너뛰고, 0은 계속합니다. 오류는 보고됩니다. 비우면 제거됩니다.",
+      "timeoutMs": "확인 제한 시간(ms, 비우면 제한 없음)",
+      "skipped": "확인 완료 · 모델 실행 건너뜀"
     },
     "openNavigation": "탐색 메뉴 열기",
     "openProfile": "{{name}} 프로필 보기",
@@ -998,6 +1007,7 @@
     "offline": "계속하려면 {{deviceName}}에 다시 연결하세요. 편집 내용은 유지됩니다.",
     "hostUpgrade": "{{deviceName}}의 Cindy를 업데이트하고 다시 시도하거나 해당 컴퓨터에서 팀원 설정을 편집하세요.",
     "readFailed": "최신 상태를 확인하지 못했습니다. 새로 고친 후 다시 시도하세요. 작업이 이미 완료되었을 수 있습니다. 편집 내용은 유지됩니다.",
+    "deleteFailed": "삭제가 완료되지 않았습니다.",
     "artifactsEmpty": "아직 결과물이 없습니다. 팀원에게 만들어 달라고 요청하세요.",
     "openSourceTask": "원본 세션 열기",
     "modelFollowsDefault": "현재 기본 모델 후보 사용",

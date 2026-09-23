@@ -736,6 +736,7 @@
         "workingDir": "请输入项目目录",
         "effort": "推理强度只能是 {{values}}",
         "intervalPositiveInteger": "间隔分钟必须是正整数",
+        "preRunHookTimeout": "检查超时必须是正整数毫秒",
         "intervalUnsupported": "分钟间隔必须能整除 60：请选择 1、2、3、4、5、6、10、12、15、20 或 30 分钟，或 1–23 小时的整点间隔"
       },
       "schedule": {
@@ -860,6 +861,7 @@
       "continueEditing": "继续编辑",
       "discard": "放弃更改",
       "invalid": "请检查名称、执行说明和触发设置后重新保存。",
+      "failed": "自动化操作没有完成。",
       "everyMinutes": "每 {{count}} 分钟",
       "everyMinutes_one": "每 {{count}} 分钟",
       "everyMinutes_other": "每 {{count}} 分钟",
@@ -927,7 +929,14 @@
       "timezone": "时区",
       "monthly": "每月",
       "monthDay": "每月几号",
-      "saveAndRun": "保存并运行"
+      "saveAndRun": "保存并运行",
+      "advanced": "高级设置",
+      "quiet": "检查没事不说话",
+      "quietHint": "仅报告变化或问题。提醒和定时发送可关闭此项。",
+      "checkCommand": "前置检查命令",
+      "checkHint": "可选。在电脑上先检查：退出码 2 跳过本轮，0 继续执行，异常仍会报告。清空可移除。",
+      "timeoutMs": "检查超时（毫秒，留空不限时）",
+      "skipped": "已检查 · 未唤醒模型"
     },
     "openNavigation": "打开导航",
     "openProfile": "查看 {{name}} 的资料",
@@ -998,6 +1007,7 @@
     "offline": "请重新连接 {{deviceName}} 后继续，未保存的编辑已保留。",
     "hostUpgrade": "请更新 {{deviceName}} 上的 Cindy 后重试，或在那台电脑上编辑伙伴设置。",
     "readFailed": "暂时无法确认最新状态。请刷新后再试，操作可能已经完成。你的编辑已保留。",
+    "deleteFailed": "删除没有完成。",
     "artifactsEmpty": "还没有成果，可以让伙伴创作一些内容。",
     "openSourceTask": "打开来源任务",
     "modelFollowsDefault": "跟随当前默认模型链",

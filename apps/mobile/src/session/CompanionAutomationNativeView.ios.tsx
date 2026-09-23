@@ -1,5 +1,5 @@
-import { Fragment } from 'react';
-import { Button, HStack, Image, Picker, ProgressView, Spacer, Text, TextField, Toggle, VStack, useNativeState } from '@expo/ui/swift-ui';
+import { Fragment, useState } from 'react';
+import { Button, DisclosureGroup, HStack, Image, Picker, ProgressView, Spacer, Text, TextField, Toggle, VStack, useNativeState } from '@expo/ui/swift-ui';
 import { accessibilityLabel, buttonStyle, contentShape, disabled, font, foregroundStyle, frame, keyboardType, lineLimit, pickerStyle, shapes, tag, textInputAutocapitalization, textSelection } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { randomUUID } from 'expo-crypto';
@@ -71,6 +71,7 @@ function FieldRow(props: Parameters<typeof Field>[0]) {
 }
 
 export function CompanionAutomationNativeView(p: CompanionAutomationNativeViewProps) {
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const { t, i18n } = useTranslation();
   const { colors } = useTheme();
   const tr = (key: string) => t(`devices.companions.automation.${key}`);
@@ -106,6 +107,13 @@ export function CompanionAutomationNativeView(p: CompanionAutomationNativeViewPr
           <Toggle label={tr('enabled')} isOn={draft.enabled} onIsOnChange={enabled => p.onChange(d => d && ({ ...d, enabled }))} modifiers={[disabled(p.busy)]} />
         </Section>
         <Section title={tr('instructions')}><Field label={tr('instructions')} value={draft.prompt} onChange={prompt => p.onChange(d => d && ({ ...d, prompt }))} busy={p.busy} multiline /></Section>
+        {p.detail?.supportsPreRunCheck ? <Section><DisclosureGroup label={tr('advanced')} isExpanded={advancedOpen} onIsExpandedChange={setAdvancedOpen}>
+          <Toggle label={tr('quiet')} isOn={draft.silentWhenIdle ?? false} onIsOnChange={silentWhenIdle => p.onChange(d => d && ({ ...d, silentWhenIdle }))} modifiers={[disabled(p.busy)]} />
+          <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}>{tr('quietHint')}</Text>
+          <FieldRow label={tr('checkCommand')} value={draft.preRunHook?.command ?? ''} onChange={command => p.onChange(d => d && ({ ...d, preRunHook: command ? { ...d.preRunHook, command } : null }))} busy={p.busy} multiline literal />
+          <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}>{tr('checkHint')}</Text>
+          {draft.preRunHook ? <FieldRow label={tr('timeoutMs')} value={draft.preRunHook.timeoutMs === undefined ? '' : String(draft.preRunHook.timeoutMs)} onChange={value => p.onChange(d => d && ({ ...d, preRunHook: { ...d.preRunHook!, timeoutMs: value ? Number(value) : undefined } }))} busy={p.busy} numeric /> : null}
+        </DisclosureGroup></Section> : null}
         {draft.triggers.map((trigger, index) => <Section key={trigger.id} title={tr('triggers')}>
           <Choice label={tr('triggerType')} value={trigger.kind} options={['cron', 'interval', 'event'].map(value => ({ value, label: tr(value) }))} blocked={p.busy || !p.online}
             onChange={kind => updateTrigger(index, kind === 'interval' ? { id: trigger.id, kind, intervalMs: 3_600_000 } : kind === 'event' ? { id: trigger.id, kind, sourceId: '', eventType: '', filters: [] } : { id: trigger.id, kind: 'cron', expression: '0 9 * * *', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' })} />

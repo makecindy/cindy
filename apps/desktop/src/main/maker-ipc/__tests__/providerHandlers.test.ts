@@ -4053,6 +4053,41 @@ describe('provider:oauth mutation ordering', () => {
     await login;
   });
 
+  it('routes Grok device codes only to the owning renderer', async () => {
+    const harness = new IpcHarness();
+    const send = vi.fn();
+    let progress!: (code: { userCode: string; verificationUrl: string; expiresAt: number }) => void;
+    let finish!: (result: { ok: boolean }) => void;
+    let receivedMethod: string | undefined;
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ ...owner }),
+      assertTrustedSender: (event: any) => { event.sender.send = send; },
+      oauthLogin: async (_id, _current, _onBrowserUrl, method, onDeviceCode) => {
+        receivedMethod = method;
+        progress = onDeviceCode!;
+        return new Promise(resolve => { finish = resolve; });
+      },
+    }));
+    await expect(harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_LOGIN,
+      'grok-account', { method: 'device' })).rejects.toThrow(/INVALID_PARAMS/);
+    const login = harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'grok-account', {
+      ownerId: 'attempt-grok', method: 'device',
+    });
+    await vi.waitFor(() => expect(progress).toBeDefined());
+    expect(receivedMethod).toBe('device');
+    progress({ userCode: 'ABCD-1234', verificationUrl: 'https://auth.x.ai/device', expiresAt: 12345 });
+    expect(send).toHaveBeenCalledExactlyOnceWith(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+      providerId: 'grok-account', phase: 'device-code', userCode: 'ABCD-1234',
+      verificationUrl: 'https://auth.x.ai/device', expiresAt: 12345,
+    });
+    owner.generation++;
+    progress({ userCode: 'LATE-1234', verificationUrl: 'https://auth.x.ai/device', expiresAt: 12345 });
+    expect(send).toHaveBeenCalledTimes(1);
+    finish({ ok: false });
+    await login;
+  });
+
   it('invalidates post-login work when the provider is edited before discovery finishes', async () => {
     mountDb();
     const harness = new IpcHarness();
