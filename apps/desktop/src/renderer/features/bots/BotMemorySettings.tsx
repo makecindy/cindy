@@ -467,24 +467,31 @@ function MemoryEditor({
       clearTimeout(timer.current);
       timer.current = null;
     }
-    if (inFlight.current) await inFlight.current;
+    if (inFlight.current) return inFlight.current;
     if (blocked.current) return false;
     if (!isDirty()) return true;
     if (!isValid()) return false;
-    const next = { ...draft.current };
     const run = (async () => {
       setState('saving');
       try {
-        const result = await memoryApi().update({
-          botId,
-          filename: saved.current.filename,
-          title: next.title,
-          body: next.body,
-          expectedUpdatedAt: saved.current.updatedAt,
-        });
-        saved.current = result;
-        onSaved(result);
-        setState(isDirty() ? 'idle' : 'saved');
+        // Edits made while a save is in flight must also reach disk before leaving.
+        while (isDirty()) {
+          if (!isValid()) {
+            setState('idle');
+            return false;
+          }
+          const next = { ...draft.current };
+          const result = await memoryApi().update({
+            botId,
+            filename: saved.current.filename,
+            title: next.title,
+            body: next.body,
+            expectedUpdatedAt: saved.current.updatedAt,
+          });
+          saved.current = result;
+          onSaved(result);
+        }
+        setState('saved');
         return true;
       } catch (error) {
         if (isConflict(error)) {

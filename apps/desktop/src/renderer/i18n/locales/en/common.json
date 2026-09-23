@@ -2618,11 +2618,7 @@
         "allProjects": "Include new empty projects"
       },
       "toggleAria": "File recovery point mode",
-      "saveFailed": "Failed to save Git safety setting",
-      "unsavedTitle": "Unsaved Changes",
-      "unsavedDescription": "Leaving will discard these changes to the memory.",
-      "discard": "Discard Changes",
-      "continueEditing": "Keep Editing"
+      "saveFailed": "Failed to save Git safety setting"
     },
     "feishuBot": {
       "title": "Feishu / Lark Bot",

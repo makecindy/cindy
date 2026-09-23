@@ -159,6 +159,26 @@ describe('BotMemorySettings', () => {
     expect(screen.getByText('bots.autosave.saved')).toBeTruthy();
   });
 
+  it('flushes edits typed during an in-flight save before allowing the page to close', async () => {
+    const { leaveRef } = renderMemory();
+    await openDetail();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.memory.edit' }));
+    let finish!: (value: BotMemoryDetail) => void;
+    api.update.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'bots.memory.bodyLabel' }), { target: { value: 'First edit' } });
+    let leaving!: Promise<boolean>;
+    await act(async () => { leaving = leaveRef.current!(); });
+    fireEvent.change(screen.getByRole('textbox', { name: 'bots.memory.bodyLabel' }), { target: { value: 'Second edit' } });
+    await act(async () => {
+      finish({ ...detail, body: 'First edit', updatedAt: '2026-09-23T12:00:00.000Z' });
+      expect(await leaving).toBe(true);
+    });
+    expect(api.update).toHaveBeenCalledTimes(2);
+    expect(api.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      body: 'Second edit', expectedUpdatedAt: '2026-09-23T12:00:00.000Z',
+    }));
+  });
+
   it('does not save an over-limit body', async () => {
     const { leaveRef } = renderMemory();
     await openDetail();

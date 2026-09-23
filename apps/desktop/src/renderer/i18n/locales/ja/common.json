@@ -2617,11 +2617,7 @@
         "allProjects": "新しい空のプロジェクトも含める"
       },
       "toggleAria": "ファイル復元ポイントのモード",
-      "saveFailed": "Git セーフティ設定の保存に失敗しました",
-      "unsavedTitle": "未保存の変更があります",
-      "unsavedDescription": "移動すると、このメモリへの変更は破棄されます。",
-      "discard": "変更を破棄",
-      "continueEditing": "編集を続ける"
+      "saveFailed": "Git セーフティ設定の保存に失敗しました"
     },
     "feishuBot": {
       "title": "Feishu / Lark ボット",

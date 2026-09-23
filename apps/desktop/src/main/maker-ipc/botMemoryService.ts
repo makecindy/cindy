@@ -4,9 +4,8 @@
  * - 存储、MEMORY.md 索引与 FTS 由 maker-core 的 store 维护;这里不另建一份。
  * - 摘要(description)是模型读目录用的钩子,界面不展示。用户改正文时按正文首句
  *   确定性刷新,不调用模型;只改标题时保留原摘要。
- * - store 本身是 last-write-wins。伙伴可能在用户编辑期间写同一条,所以保存 / 删除前
- *   比对打开时看到的 updatedAt,不一致就拒绝(BOT_MEMORY_CHANGED),交给用户看最新内容。
- *   同一条记忆在本进程内串行,避免两次保存交错;与伙伴工具之间仍有极短的检查-写入窗口。
+ * - 保存 / 删除在共享 storage 互斥内比对 updatedAt，与伙伴工具写入串行；
+ *   不一致就拒绝(BOT_MEMORY_CHANGED)，交给用户看最新内容。
  * - 运行中的伙伴在会话启动时冻结了记忆目录。改动后合并请求一次运行时刷新,
  *   让下一轮拿到新目录;刷新失败不影响已经落盘的改动。
  */
@@ -41,6 +40,7 @@ const FILENAME_RE = /^(user|feedback|project|reference)_[a-z0-9_-]{1,64}\.md$/;
 
 interface BotMemoryOwner {
   canonicalSessionId: string | null;
+  assertCurrent?: () => void;
 }
 
 export interface BotMemoryServiceDeps {
@@ -106,6 +106,7 @@ const byNewest = (a: BotMemorySummary, b: BotMemorySummary) =>
 
 function translateStoreError(error: unknown): never {
   if (error instanceof MemoryError) {
+    if (error.code === 'version-conflict') throwIpcError('PRECONDITION_FAILED', BOT_MEMORY_CHANGED);
     if (error.code === 'not-found') throwIpcError('NOT_FOUND', 'Memory not found');
     if (error.code === 'not-ready')
       throwIpcError('PRECONDITION_FAILED', 'Memory is not ready; retry');
@@ -141,7 +142,10 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
     const owner = await deps.readBot(botId);
     if (!owner) throwIpcError('NOT_FOUND', 'Teammate not found');
     try {
-      return { store: await deps.getStore(buildBotMemoryScopeKey(botId)), owner };
+      owner.assertCurrent?.();
+      const store = await deps.getStore(buildBotMemoryScopeKey(botId));
+      owner.assertCurrent?.();
+      return { store, owner };
     } catch (error) {
       return translateStoreError(error);
     }
@@ -156,7 +160,12 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
       sessionId,
       setTimer(() => {
         pendingRefresh.delete(sessionId);
-        void deps.requestRefresh(sessionId).catch(() => {});
+        try {
+          owner.assertCurrent?.();
+          void deps.requestRefresh(sessionId).catch(() => {});
+        } catch {
+          // The initiating account has left; never refresh another account's runtime.
+        }
       }, REFRESH_COALESCE_MS),
     );
   }
@@ -236,10 +245,9 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
           current.body === body
             ? current.frontmatter.description
             : botMemoryDescriptionFromBody(body) || title;
-        await store
-          .write({ type, name: current.slug, title, description, body, mode: 'update' })
-          .catch(translateStoreError);
-        const saved = toDetail(await store.read(filename).catch(translateStoreError));
+        const saved = toDetail(await store
+          .update(filename, expected, { title, description, body })
+          .catch(translateStoreError));
         scheduleRefresh(owner);
         return saved;
       });
@@ -251,7 +259,7 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
       const { store, owner } = await storeOf(input.botId);
       await serialized(`${input.botId}/${filename}`, async () => {
         await readCurrent(store, filename, expected);
-        await store.delete(filename).catch(translateStoreError);
+        await store.delete(filename, expected).catch(translateStoreError);
       });
       scheduleRefresh(owner);
     },

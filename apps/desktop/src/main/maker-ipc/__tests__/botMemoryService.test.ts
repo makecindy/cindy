@@ -53,7 +53,8 @@ function setup(options: { bot?: { canonicalSessionId: string | null } | null } =
     list: () => storage.list(),
     read: (filename: string) => storage.read(filename),
     write: (opts: Parameters<MemoryStorage['write']>[0]) => storage.write(opts),
-    delete: (filename: string) => storage.delete(filename),
+    update: (...args: Parameters<MemoryStorage['update']>) => storage.update(...args),
+    delete: (...args: Parameters<MemoryStorage['delete']>) => storage.delete(...args),
     search: vi.fn(async () => hits),
   } as unknown as MakerMemoryStore;
   const timers: Array<() => void> = [];
@@ -154,6 +155,29 @@ describe('bot memory service', () => {
     expect((await storage.read(opened.filename)).body).toBe('伙伴改过的正文');
     flushTimers();
     expect(requestRefresh).not.toHaveBeenCalled();
+  });
+
+  it('edits legacy double-prefix memories without renaming or changing another shard', async () => {
+    const original = 'feedback_verify-before-claiming.md';
+    const legacy = 'feedback_feedback_verify-before-claiming.md';
+    await fs.copyFile(path.join(dir, original), path.join(dir, legacy));
+    const { service } = setup();
+    const current = await service.read('bot-1', legacy);
+    await service.update({ ...current, botId: 'bot-1', title: 'Legacy edit', expectedUpdatedAt: current.updatedAt });
+    expect((await storage.read(legacy)).frontmatter.title).toBe('Legacy edit');
+    expect((await storage.read(original)).frontmatter.title).toBe('说结论前核实');
+    expect(await storage.getIndex()).toContain(`[${legacy}] Legacy edit`);
+  });
+
+  it('does not open a store after the initiating account changes during the profile read', async () => {
+    const getStore = vi.fn();
+    const service = createBotMemoryService({
+      getStore,
+      readBot: async () => ({ canonicalSessionId: 'old', assertCurrent: () => { throw new Error('account changed'); } }),
+      requestRefresh: vi.fn(),
+    });
+    await expect(service.list('bot-1')).rejects.toThrow('account changed');
+    expect(getStore).not.toHaveBeenCalled();
   });
 
   it('validates title and body limits before writing', async () => {

@@ -2617,11 +2617,7 @@
         "allProjects": "包括新的空專案"
       },
       "toggleAria": "檔案恢復點模式",
-      "saveFailed": "儲存 Git 安全設定失敗",
-      "unsavedTitle": "尚有未儲存的修改",
-      "unsavedDescription": "離開後會捨棄這次對記憶的修改。",
-      "discard": "捨棄修改",
-      "continueEditing": "繼續編輯"
+      "saveFailed": "儲存 Git 安全設定失敗"
     },
     "feishuBot": {
       "title": "飛書 / Lark 機器人",

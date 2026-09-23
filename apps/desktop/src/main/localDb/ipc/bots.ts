@@ -1819,12 +1819,16 @@ export function registerBotIpc(): void {
       return manager.getStore(scopeKey, { skipDisabledCheck: true });
     },
     async readBot(botId) {
+      const owner = captureBotOperationOwner();
       const [row] = await getDbClient()
         .drizzle.select({ status: botProfiles.status, canonicalSessionId: botProfiles.canonicalSessionId })
         .from(botProfiles)
         .where(eq(botProfiles.id, botId))
         .limit(1);
-      return row && row.status !== 'deleting' ? { canonicalSessionId: row.canonicalSessionId } : null;
+      owner.assertCurrent();
+      return row && row.status !== 'deleting'
+        ? { canonicalSessionId: row.canonicalSessionId, assertCurrent: owner.assertCurrent }
+        : null;
     },
     requestRefresh: (sessionId) => requestBotRuntimeEpochRefresh(sessionId, 'resource'),
   });
