@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "設定",
+    "search": {
+      "ariaLabel": "設定を検索",
+      "placeholder": "設定を検索",
+      "resultsLabel": "設定の検索結果",
+      "noResults": "一致する設定はありません",
+      "clear": "検索をクリア"
+    },
     "back": "戻る",
     "defaults": {
       "customizedBadge": "カスタム",

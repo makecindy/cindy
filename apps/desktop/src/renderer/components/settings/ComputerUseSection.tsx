@@ -1305,7 +1305,7 @@ export function ComputerUseSection({
               <Globe size={16} className="text-[var(--settings-section-title)]" />
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
-              <p className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
+              <p id="settings-search-settings-computerUse-browser-title" className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
                 {t('settings.computerUse.browser.title')}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
@@ -1403,7 +1403,7 @@ export function ComputerUseSection({
               <MonitorCog size={16} className="text-[var(--settings-section-title)]" />
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
-              <p className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
+              <p id="settings-search-settings-computerUse-directControl-title" className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
                 {t('settings.computerUse.directControl.title')}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
@@ -1422,7 +1422,7 @@ export function ComputerUseSection({
         {window.electronAPI.platform === 'darwin' ? (
           <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-4">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-13 font-medium text-[var(--settings-section-title)]">
+              <p id="settings-search-settings-computerUse-directControl-permissions-title" className="text-13 font-medium text-[var(--settings-section-title)]">
                 {t('settings.computerUse.directControl.permissions.title')}
               </p>
               {computerInstallPending || computerPermissionPending ? (
@@ -1448,7 +1448,7 @@ export function ComputerUseSection({
               )}
             </div>
 
-            <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+            <div id="settings-search-settings-computerUse-directControl-permissions-accessibilityLabel" className="mt-3 grid gap-2.5 sm:grid-cols-2">
               <ComputerPermissionRow
                 label={t('settings.computerUse.directControl.permissions.accessibilityLabel')}
                 iconSrc={accessibilityPermissionIcon}
@@ -1472,6 +1472,7 @@ export function ComputerUseSection({
                   )
                 }
               />
+              <div id="settings-search-settings-computerUse-directControl-permissions-screenRecordingLabel">
               <ComputerPermissionRow
                 label={t('settings.computerUse.directControl.permissions.screenRecordingLabel')}
                 iconSrc={screenRecordingPermissionIcon}
@@ -1495,6 +1496,7 @@ export function ComputerUseSection({
                   )
                 }
               />
+              </div>
             </div>
           </div>
         ) : null}
@@ -1641,7 +1643,7 @@ export function ComputerUseSection({
               <Smartphone size={16} className="text-[var(--settings-section-title)]" />
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
-              <p className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
+              <p id="settings-search-settings-computerUse-android-title" className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
                 {t('settings.computerUse.android.title')}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
@@ -1807,7 +1809,7 @@ export function ComputerUseSection({
         ) : null}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
           <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">
+            <p id="settings-search-settings-computerUse-android-adb-title" className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">
               {t('settings.computerUse.android.adb.title')}
             </p>
             <p className="min-w-0 break-all text-12 leading-[1.5] text-[var(--settings-section-desc)]">

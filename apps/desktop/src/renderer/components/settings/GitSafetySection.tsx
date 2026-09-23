@@ -51,7 +51,7 @@ export function GitSafetySection() {
       >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+            <p id="settings-search-settings-gitSafety-autoSnapshotTitle" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
               {t('settings.gitSafety.autoSnapshotTitle')}
             </p>
             <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">{t('settings.gitSafety.description')}</p>

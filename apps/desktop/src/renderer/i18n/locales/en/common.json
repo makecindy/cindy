@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "Settings",
+    "search": {
+      "ariaLabel": "Search settings",
+      "placeholder": "Search settings",
+      "resultsLabel": "Settings search results",
+      "noResults": "No matching settings",
+      "clear": "Clear search"
+    },
     "back": "Back",
     "defaults": {
       "customizedBadge": "Custom",

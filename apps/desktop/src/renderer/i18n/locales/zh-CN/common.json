@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "设置",
+    "search": {
+      "ariaLabel": "搜索设置",
+      "placeholder": "搜索设置",
+      "resultsLabel": "设置搜索结果",
+      "noResults": "没有匹配的设置",
+      "clear": "清除搜索"
+    },
     "back": "返回",
     "defaults": {
       "customizedBadge": "已自定义",

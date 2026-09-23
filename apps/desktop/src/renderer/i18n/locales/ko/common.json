@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "설정",
+    "search": {
+      "ariaLabel": "설정 검색",
+      "placeholder": "설정 검색",
+      "resultsLabel": "설정 검색 결과",
+      "noResults": "일치하는 설정이 없습니다",
+      "clear": "검색 지우기"
+    },
     "back": "뒤로",
     "defaults": {
       "customizedBadge": "사용자 지정",
