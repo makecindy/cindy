@@ -1927,7 +1927,9 @@ mark.doc-search-mark [class] {
   outline: 1px solid hsl(var(--search-match-active-fg));
   outline-offset: 2px;
   box-shadow: 0 0 0 4px hsl(var(--search-match-active-bg) / 0.28);
-  transition: outline-color 160ms ease, box-shadow 160ms ease;
+  transition:
+    outline-color var(--motion-fast) var(--motion-ease-move),
+    box-shadow var(--motion-fast) var(--motion-ease-move);
 }
 
 @layer utilities {
