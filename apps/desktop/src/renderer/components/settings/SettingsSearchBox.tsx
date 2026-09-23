@@ -4,6 +4,7 @@ import { Search, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Input } from '@/components/ui/input';
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { SettingsTab, VisibleSettingsTab } from '@/lib/tabLabels';
 import {
@@ -92,18 +93,20 @@ export function SettingsSearchBox({ visibleTabIds, searchContext, onSelect }: Se
           }}
           trailing={
             hasQuery ? (
-              <button
-                type="button"
-                aria-label={t('settings.search.clear')}
-                onClick={() => {
-                  setQuery('');
-                  setActiveIndex(0);
-                  inputRef.current?.focus();
-                }}
-                className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-[var(--settings-section-sublabel)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] hover:text-[var(--settings-section-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-              >
-                <X size={14} aria-hidden="true" />
-              </button>
+              <Tip text={t('settings.search.clear')}>
+                <button
+                  type="button"
+                  aria-label={t('settings.search.clear')}
+                  onClick={() => {
+                    setQuery('');
+                    setActiveIndex(0);
+                    inputRef.current?.focus();
+                  }}
+                  className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-[var(--settings-section-sublabel)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] hover:text-[var(--settings-section-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              </Tip>
             ) : undefined
           }
         />
