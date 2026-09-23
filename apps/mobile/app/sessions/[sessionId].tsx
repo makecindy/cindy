@@ -3548,7 +3548,7 @@ export default function SessionScreen() {
         commitRead('active', fetchActiveSessionSnapshot, (activeSessionSnapshot) => {
           remoteSessionStore.setActiveSessionSnapshots(
             deviceId,
-            Array.isArray(activeSessionSnapshot.activeSessions) ? activeSessionSnapshot.activeSessions : [],
+            activeSessionSnapshot.activeSessions,
             activeSessionSnapshot.activityEpochAtFetchStart,
           );
         }),

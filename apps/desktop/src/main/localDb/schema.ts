@@ -486,7 +486,7 @@ export const botDirectMessageThreads = sqliteTable(
   'bot_direct_message_threads',
   {
     id: text('id').primaryKey(),
-    /** Local Bot ids or deviceId::botId addresses, lexically ordered. Lifecycle deletion guards shared history. */
+    /** Local Bot ids or deviceId::botId addresses, lexically ordered. Deletion keeps these rows. */
     botAId: text('bot_a_id').notNull(),
     botBId: text('bot_b_id').notNull(),
     status: text('status', { enum: ['active', 'closed'] })

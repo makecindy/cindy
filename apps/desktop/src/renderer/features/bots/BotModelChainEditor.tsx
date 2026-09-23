@@ -244,7 +244,6 @@ export function BotModelChainEditor({
                 {t('bots.model.restoreDefault')}
               </Button>
             ) : null}
-            <p className="text-11 leading-5">{t('bots.modelChain.description')}</p>
           </div>
         ) : null}
       </details>
