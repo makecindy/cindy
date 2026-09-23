@@ -5,9 +5,8 @@
  *   - macOS / Linux / Windows：统一走 Electron 原生 `Notification`。
  *   - 点通知后把窗口拉到前台，并通过 `notification:focus-session` 把 sessionId
  *     广播给 renderer，由 renderer 路由跳转。
- *   - 新增飞书通道:payload.channels.feishu === true 时,额外通过 feishuIm
- *     给当前 bot owner 私聊发一条 markdown 文本(复用 scheduler-host/notifier
- *     的同源 API,不新增通道机制)。
+ *   - 飞书通道：payload.channels.feishu === true 时通过 feishuIm 给当前 owner
+ *     私聊发通知。伙伴回复用纯文本，普通任务沿用 markdown；复用现有 IM API。
  *
  * Windows AUMID（AppUserModelID）契约：
  *   - 运行时由 main/bootstrap-electron.ts 通过 `app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID)`
@@ -100,7 +99,8 @@ interface ShowSessionEventPayload {
 const liveNotifications = new Set<Notification>();
 type NotifiedReply = { eventId: string } | { fallbackSentAt: number };
 const notifiedReplies = new Map<string, NotifiedReply>();
-type ReplyNotificationChannel = 'desktop' | 'mobile';
+const pendingFeishuReplies = new Set<string>();
+type ReplyNotificationChannel = 'desktop' | 'mobile' | 'feishu';
 
 function replyNotificationKey(generation: number, sessionId: string, channel: ReplyNotificationChannel): string {
   return `${generation}:${sessionId}:${channel}`;
@@ -251,6 +251,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const eventId = preview?.eventId;
         const desktopKey = replyNotificationKey(generation, sessionId, 'desktop');
         const mobileKey = replyNotificationKey(generation, sessionId, 'mobile');
+        const feishuKey = replyNotificationKey(generation, sessionId, 'feishu');
         const fallbackBody = teammate ? getTeammateNotificationFallback() : undefined;
         if (wantDesktop && kind === 'done' && !wasReplyNotified(desktopKey, eventId)) {
           try {
@@ -278,9 +279,24 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             log.warn('[notification] mobile reply notification failed (non-fatal)', err);
           }
         }
+        if (wantFeishu && kind === 'done' && !wasReplyNotified(feishuKey, eventId)) {
+          const pendingKey = `${feishuKey}:${eventId ?? 'pending'}`;
+          if (!pendingFeishuReplies.has(pendingKey)) {
+            pendingFeishuReplies.add(pendingKey);
+            try {
+              const body = teammate ? notificationPreview(detail ?? '') || fallbackBody : undefined;
+              const accepted = await sendFeishuMessage(feishuIm, notificationTitle, kind, body);
+              if (accepted) {
+                notifiedReplies.set(feishuKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
+              }
+            } finally {
+              pendingFeishuReplies.delete(pendingKey);
+            }
+          }
+        }
       })().catch((err) => log.warn('[notification] reply notification failed (non-fatal)', err));
 
-      if (wantFeishu) {
+      if (wantFeishu && kind !== 'done') {
         await sendFeishuMessage(feishuIm, safeTitle, kind);
       }
     },
@@ -358,23 +374,30 @@ async function sendFeishuMessage(
   feishuIm: FeishuIM,
   safeTitle: string,
   kind: SessionEventKind,
-): Promise<void> {
+  teammateBody?: string,
+): Promise<boolean> {
   const ownerOpenId = feishuIm.getOwnerOpenId();
   if (!ownerOpenId) {
     log.warn('[notification] feishu skipped: no bot owner bound (user must DM the bot once)');
-    return;
+    return false;
   }
   try {
-    await feishuIm.sendMarkdownText(
-      ownerOpenId,
-      getSessionExternalNotificationText(safeTitle, kind),
-    );
+    if (teammateBody) {
+      await feishuIm.sendText(ownerOpenId, `${safeTitle}\n${teammateBody}`);
+    } else {
+      await feishuIm.sendMarkdownText(
+        ownerOpenId,
+        getSessionExternalNotificationText(safeTitle, kind),
+      );
+    }
+    return true;
   } catch (err) {
     // 飞书 SDK 包了一层 axios; 400 等业务错误的真正 message 在 response.data 里,
     // 显式拆出来 log。与 scheduler-host/notifier.ts 的 catch 写法对齐。
     const r = (err as { response?: { data?: unknown; status?: number } }).response;
     log.warn(
-      `[notification] feishu sendMarkdownText failed status=${r?.status ?? 'n/a'} body=${JSON.stringify(r?.data ?? null)} target=...${ownerOpenId.slice(-8)}`,
+      `[notification] feishu send failed status=${r?.status ?? 'n/a'} body=${JSON.stringify(r?.data ?? null)} target=...${ownerOpenId.slice(-8)}`,
     );
+    return false;
   }
 }

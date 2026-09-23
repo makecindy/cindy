@@ -128,12 +128,14 @@ vi.mock('../localDb/sessionActiveTurn', () => ({
 
 interface FakeFeishuIM {
   getOwnerOpenId: ReturnType<typeof vi.fn>;
+  sendText: ReturnType<typeof vi.fn>;
   sendMarkdownText: ReturnType<typeof vi.fn>;
 }
 
 function makeFeishuIm(ownerOpenId: string | null): FakeFeishuIM {
   return {
     getOwnerOpenId: vi.fn(() => ownerOpenId),
+    sendText: vi.fn(async () => ({ messageId: 'msg-plain' })),
     sendMarkdownText: vi.fn(async () => ({ messageId: 'msg-1' })),
   };
 }
@@ -177,7 +179,7 @@ const flushAsync = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 const baseDeps = (feishuIm: FakeFeishuIM) => ({
   getWindow: () => null,
   // 实参在主进程是 FeishuIM, 测试里用结构兼容的 fake 就够 — 仅访问
-  // getOwnerOpenId / sendMarkdownText 两个方法。
+  // getOwnerOpenId / sendText / sendMarkdownText 三个方法。
   feishuIm: feishuIm as unknown as Parameters<
     Awaited<ReturnType<typeof freshService>>['initNotificationService']
   >[0]['feishuIm'],
@@ -272,10 +274,11 @@ describe('notificationService — channels 分发', () => {
     }));
     const payload = { sessionId: 's1', title: 'Cindy', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } };
     await registeredHandlers.get('notification:show-session-event')!({}, payload);
-    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendText).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ title: 'Cindy', body: '有新回复' }));
     expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ fallbackBody: '有新回复' }));
+    expect(feishuIm.sendText).toHaveBeenCalledWith('ou_owner', 'Cindy\n有新回复');
     expect((sendMobileSessionNotify.mock.calls[0] as unknown as [Record<string, unknown>])[0]).not.toHaveProperty('eventId');
     release();
     await vi.advanceTimersByTimeAsync(0);
@@ -283,6 +286,7 @@ describe('notificationService — channels 分发', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
     expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
   });
 
   it('does not treat a pre-drain running snapshot as a reason to lose the completion fallback', async () => {
@@ -512,6 +516,82 @@ describe('notificationService — channels 分发', () => {
       'ou_owner',
       'Cindy · 任务「Hello」已完成 ✓',
     );
+    expect(feishuIm.sendText).not.toHaveBeenCalled();
+  });
+
+  it('伙伴飞书通知使用本轮最终答复的纯文本摘要，重复终态不重发', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    initNotificationService(baseDeps(feishuIm));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Cindy', eventId: 'turn:100:200',
+      ...(includeReply ? { reply: { clientId: 'final-1', text: '## **修好了**\n[结果](https://example.com)' } } : {}),
+    }));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, feishu: true } };
+
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendText).toHaveBeenCalledWith('ou_owner', 'Cindy\n修好了 结果');
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+  });
+
+  it('伙伴最终答复没有可读正文时飞书使用本地化新回复兜底', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    initNotificationService(baseDeps(feishuIm));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Mika', eventId: 'turn:300:400',
+      ...(includeReply ? { reply: { clientId: 'final-2', text: '![image](https://example.com/chart.png)' } } : {}),
+    }));
+
+    await invokeHandler({ sessionId: 'bot-main', title: 'Old title', kind: 'done', channels: { desktop: false, feishu: true } });
+
+    expect(feishuIm.sendText).toHaveBeenCalledWith('ou_owner', 'Mika\n有新回复');
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+  });
+
+  it('飞书发送失败不消耗伙伴回复去重标记，恢复后重试一次', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    feishuIm.sendText.mockRejectedValueOnce(new Error('offline'));
+    initNotificationService(baseDeps(feishuIm));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Cindy', eventId: 'turn:500:600',
+      ...(includeReply ? { reply: { clientId: 'final-3', text: '继续处理' } } : {}),
+    }));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, feishu: true } };
+
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(2);
+    expect(feishuIm.sendText).toHaveBeenLastCalledWith('ou_owner', 'Cindy\n继续处理');
+  });
+
+  it('飞书发送尚未确认时，同一轮并发终态只发送一次', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    let accept!: () => void;
+    feishuIm.sendText.mockImplementationOnce(() => new Promise((resolve) => {
+      accept = () => resolve({ messageId: 'msg-pending' });
+    }));
+    initNotificationService(baseDeps(feishuIm));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Cindy', eventId: 'turn:700:800',
+      ...(includeReply ? { reply: { clientId: 'final-4', text: '并发完成' } } : {}),
+    }));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, feishu: true } };
+
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+    accept();
+    await flushAsync();
+    await invokeHandler(payload);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
   });
 
   it('error kind → 桌面与飞书都显示执行失败', async () => {
@@ -610,7 +690,7 @@ describe('notificationService — channels 分发', () => {
 
     expect(notificationCtor).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]![0]).toContain('feishu sendMarkdownText failed');
+    expect(warn.mock.calls[0]![0]).toContain('feishu send failed');
   });
 });
 
