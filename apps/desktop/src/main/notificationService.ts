@@ -103,8 +103,8 @@ const pendingFeishuReplies = new Set<string>();
 const pendingFeishuFallbacks = new Map<string, number>();
 type ReplyNotificationChannel = 'desktop' | 'mobile' | 'feishu';
 
-function replyNotificationKey(generation: number, sessionId: string, channel: ReplyNotificationChannel): string {
-  return `${generation}:${sessionId}:${channel}`;
+function replyNotificationKey(scope: string | number, sessionId: string, channel: ReplyNotificationChannel): string {
+  return `${scope}:${sessionId}:${channel}`;
 }
 
 function wasReplyNotified(key: string, eventId: string | undefined): boolean {
@@ -262,9 +262,12 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const notificationTitle = preview?.teammateName ?? safeTitle;
         const eventId = signal?.id ?? preview?.eventId;
         const mobileEventId = preview?.eventId ?? signal?.fallbackEventId;
-        const desktopKey = replyNotificationKey(generation, sessionId, 'desktop');
+        // A device-link handoff advances only the mobile send generation. It
+        // must not make an already accepted desktop/Feishu reply eligible again.
+        const ownerKey = ownerScope.ownerScopeKey ?? JSON.stringify(ownerScope.ownerStamp ?? null);
+        const desktopKey = replyNotificationKey(ownerKey, sessionId, 'desktop');
         const mobileKey = replyNotificationKey(generation, sessionId, 'mobile');
-        const feishuKey = replyNotificationKey(generation, sessionId, 'feishu');
+        const feishuKey = replyNotificationKey(ownerKey, sessionId, 'feishu');
         const fallbackBody = teammate ? getTeammateNotificationFallback() : undefined;
         if (wantDesktop && kind === 'done' && !wasReplyNotified(desktopKey, eventId)) {
           try {

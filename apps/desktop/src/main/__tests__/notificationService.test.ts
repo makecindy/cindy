@@ -113,8 +113,9 @@ vi.mock('../localDb/latestMessageText', () => ({
 const readSessionNotificationPreview = vi.fn(async (_sessionId: string, _includeReply = true): Promise<import('../localDb/sessionNotificationPreview').SessionNotificationPreview> => ({}));
 vi.mock('../localDb/sessionNotificationPreview', () => ({ readSessionNotificationPreview }));
 let ownerScopeCurrent = true;
+let ownerScopeKey = 'account-a:1';
 vi.mock('../device-link/broadcast-tap', () => ({
-  captureDataOwnerBroadcastScope: () => ({}),
+  captureDataOwnerBroadcastScope: () => ({ ownerScopeKey }),
   isDataOwnerBroadcastScopeCurrent: () => ownerScopeCurrent,
 }));
 const drainPersistQueue = vi.fn((): Promise<void> => Promise.resolve());
@@ -150,6 +151,7 @@ async function freshService() {
   warn.mockClear();
   notificationSupported = true;
   ownerScopeCurrent = true;
+  ownerScopeKey = 'account-a:1';
   markSessionNeedsAttention.mockClear();
   sendMobileSessionNotify.mockReset().mockReturnValue(true);
   getMobileNotifyGeneration.mockClear();
@@ -322,6 +324,42 @@ describe('notificationService — channels 分发', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(notificationCtor).not.toHaveBeenCalled();
     expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+  });
+
+  it('device-link handoff does not resend accepted desktop or Feishu replies', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200' });
+    getMobileNotifyGeneration.mockReturnValueOnce(7).mockReturnValueOnce(8);
+    const payload = {
+      sessionId: 's1', title: 'Cindy', kind: 'done',
+      channels: { desktop: true, mobile: true, feishu: true },
+    };
+
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+    // Mobile retains its own generation so a new link can accept the signal.
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ generation: 8 }));
+  });
+
+  it('a new data owner keeps its own desktop and Feishu dedupe scope', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200' });
+    const payload = { sessionId: 's1', title: 'Cindy', kind: 'done', channels: { desktop: true, feishu: true } };
+
+    await invokeHandler(payload);
+    ownerScopeKey = 'account-b:2';
+    await invokeHandler(payload);
+
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(2);
   });
 
   it.each(['error', 'needs-reply'])('%s desktop notice does not wait for the transcript', async (kind) => {
