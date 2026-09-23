@@ -579,15 +579,9 @@ export function BotSettings({
         ) : null}
         {page === 'advanced' ? (
           <div className="mt-4 flex flex-col gap-5 px-3">
-            <div className="flex items-start gap-3">
-              <FolderOpen size={16} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />
+            <div className="flex items-center gap-3">
+              <FolderOpen size={16} className="shrink-0 text-[var(--text-tertiary)]" />
               <div className="min-w-0 flex-1">
-                <p className="text-12 leading-5 text-[var(--text-secondary)]">
-                  {t('bots.homeFolder.description')}
-                </p>
-                <p className="mt-1 break-words text-11 leading-5 text-[var(--text-tertiary)] [overflow-wrap:anywhere]">
-                  {t('bots.homeFolder.contents')}
-                </p>
                 <Button
                   variant="secondary"
                   size="lg"
@@ -602,7 +596,6 @@ export function BotSettings({
                         setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
                     });
                   }}
-                  className="mt-3"
                 >
                   {t('bots.homeFolder.open')}
                 </Button>

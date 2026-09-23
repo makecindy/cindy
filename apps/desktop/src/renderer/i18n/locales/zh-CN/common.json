@@ -7715,6 +7715,7 @@
       "deleteDescription": "删除 {{name}} 后，伙伴的资料、记忆、工作目录、通道连接与自动化任务将被移除，无法撤销。任务历史与独立 worktree会保留。",
       "working": "正在更新…",
       "actionFailed": "操作未完成，请稍后重试。",
+      "deleteFailed": "删除没有完成。",
       "restart": "重启伙伴",
       "restartDescription": "停止当前运行并重新准备，保留对话记录、记忆和文件。",
       "restarting": "正在重启…",

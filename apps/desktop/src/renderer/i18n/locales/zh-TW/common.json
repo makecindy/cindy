@@ -7715,6 +7715,7 @@
       "deleteDescription": "刪除 {{name}} 後，夥伴的資料、記憶、工作目錄、通道連線與自動化任務將被移除，無法復原。任務歷史與獨立 worktree會保留。",
       "working": "正在更新…",
       "actionFailed": "操作未完成，請稍後重試。",
+      "deleteFailed": "刪除沒有完成。",
       "restart": "重新啟動夥伴",
       "restartDescription": "停止目前執行並重新準備，保留對話記錄、記憶和檔案。",
       "restarting": "正在重新啟動…",

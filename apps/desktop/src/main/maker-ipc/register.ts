@@ -446,6 +446,7 @@ import {
 } from './botDirectMessageService.js';
 import { restartBotRuntime } from './botRuntimeRestart.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
+import { isSessionPermissionMode, persistPermissionModeWithoutRuntime } from './sessionPermissionPersistence.js';
 import { updateBotRoutineLifecycle } from '../routines/service.js';
 import {
   createBotCompactRuntimeRefreshCoordinator,
@@ -17442,14 +17443,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('INVALID_PARAMS', 'sessionId + mode required');
       }
       await assertReviewSettingsUnlocked(sessionId);
+      if (!isSessionPermissionMode(mode)) {
+        throwIpcError('INVALID_PARAMS', 'invalid permission mode');
+      }
       const sess = maker.getSession(sessionId);
       if (!sess) {
-        log.debug('set-permission-mode: session not found, no-op', { sessionId });
-        return;
+        const persisted = await persistPermissionModeWithoutRuntime(sessionId, mode);
+        if (!persisted) throwIpcError('NOT_FOUND', 'session not found');
+        broadcastSessionPatched(sessionId, { permissionMode: mode });
+        return true;
       }
       await sess.setPermissionMode(
         mode as 'ask' | 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions',
       );
+      return true;
     },
   );
 

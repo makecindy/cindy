@@ -10,7 +10,6 @@ import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { getRemoteResource, invokeRemoteResourceAction } from '@/device-link/remoteResources';
-import { formatRemoteError } from '@/device-link/remoteStatus';
 import { CompanionChoice } from './CompanionChoice';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, radius, spacing, typeScale, lineHeight } from '@/theme/tokens';
@@ -18,6 +17,13 @@ import { CompanionSheet } from './CompanionSheet';
 import { CompanionAutomationNativeView } from './CompanionAutomationNativeView';
 import { useRoutineCronFields } from './useRoutineCronFields';
 import { emptyRoutineDefinition, getRoutineActionId, parseRoutineDetail, parseRoutineSummaries, routineDraftValid, type RoutineDefinition, type RoutineDetail, type RoutineSummary, type RoutineTrigger } from './companionRoutines';
+
+function automationFailure(error: unknown, tr: (key: string) => string): string {
+  const text = error instanceof Error ? error.message : String(error);
+  if (text.includes('DEVICE_OFFLINE') || text.includes('NOT_CONNECTED')) return tr('offline');
+  if (text.includes('CHANNEL_NOT_ALLOWED') || text.includes('unsupported')) return tr('unsupported');
+  return tr('failed');
+}
 
 export function CompanionAutomationSheet({ visible, onClose, collectionId, botId, deviceId, deviceName, online }: {
   visible: boolean; onClose(): void; collectionId: string; botId: string; deviceId: string; deviceName: string; online: boolean;
@@ -149,7 +155,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       if (!valid(scope, page)) return;
       if (actionId === 'routine-run') { await load(); }
       else open(null);
-    } catch (e) { if (valid(scope, page)) setError(formatRemoteError(e)); }
+    } catch (e) { if (valid(scope, page)) setError(automationFailure(e, tr)); }
     finally { if (operationGeneration.current === operation) { inFlight.current = false; if (current.current.identity === scope) setBusy(false); } }
   };
   const button = (label: string, onPress: () => void, destructive = false, disabled = false) => (

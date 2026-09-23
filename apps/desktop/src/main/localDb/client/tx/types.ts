@@ -51,7 +51,7 @@ export type DbTxName =
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
   | 'bots.deleteProfile'
-  | 'bots.assertNoSharedHistory'
+  | 'bots.prepareProfileDeletion'
   | 'im.rotateSession'
   | 'wechatActivateBindingEpoch'
   | 'wechatCommitPollBatch'
@@ -1215,7 +1215,7 @@ export type DbTxArgsByName = {
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
   'bots.deleteProfile': BotsDeleteProfileArgs;
-  'bots.assertNoSharedHistory': { botId: string };
+  'bots.prepareProfileDeletion': { botId: string };
   'im.rotateSession': ImRotateSessionArgs;
   wechatActivateBindingEpoch: WechatActivateBindingEpochArgs;
   wechatCommitPollBatch: WechatCommitPollBatchArgs;
@@ -1293,7 +1293,7 @@ export type DbTxResultByName = {
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
-  'bots.assertNoSharedHistory': undefined;
+  'bots.prepareProfileDeletion': undefined;
   'im.rotateSession': ImRotateSessionResult;
   wechatActivateBindingEpoch: WechatActivateBindingEpochResult;
   wechatCommitPollBatch: WechatCommitPollBatchResult;

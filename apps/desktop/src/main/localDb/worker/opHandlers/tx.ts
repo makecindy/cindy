@@ -141,8 +141,9 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return botsArchiveLifecycle(db, txArgs);
     case 'bots.deleteProfile':
       return botsDeleteProfile(db, txArgs);
-    case 'bots.assertNoSharedHistory':
-      return assertBotHasNoSharedHistory(db, expectString(asRecord(txArgs, 'args').botId, 'botId'));
+    case 'bots.prepareProfileDeletion':
+      detachSharedHistoryForProfileDeletion(db, expectString(asRecord(txArgs, 'args').botId, 'botId'));
+      return undefined;
     case 'im.rotateSession':
       return imRotateSession(db, txArgs);
     case 'wechatActivateBindingEpoch':
@@ -1017,20 +1018,36 @@ function botsArchiveLifecycle(db: Database.Database, args: unknown): { sessions:
   })();
 }
 
-/** Shared preflight and final transaction guard: deleting a profile must never cascade shared history. */
-function assertBotHasNoSharedHistory(db: Database.Database, botId: string): void {
-  const sharedHistory = db.prepare(`SELECT 1 WHERE
-    EXISTS (SELECT 1 FROM bot_delegations
-      WHERE target_bot_id = ? OR (requesting_bot_id = ? AND target_bot_id IS NOT NULL))
-    OR EXISTS (SELECT 1 FROM bot_direct_message_threads
-      WHERE bot_a_id = ? OR bot_b_id = ?)
-    OR EXISTS (SELECT 1 FROM bot_direct_messages
-      WHERE sender_bot_id = ? OR recipient_bot_id = ?)`)
-    .get(botId, botId, botId, botId, botId, botId);
-  if (sharedHistory) throw Object.assign(
-    new Error('Bot 有共享委派或私聊历史，不能永久删除'),
-    { code: 'BOT_SHARED_HISTORY_REFERENCED' },
-  );
+function tableColumns(db: Database.Database, table: string): Set<string> {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
+}
+
+/**
+ * Keep the other teammate's records when this profile row goes away.
+ * Delegation targets are foreign keys; null them before delete so cascade cannot
+ * remove the requester's task. Direct messages are address text, not profile keys.
+ */
+function detachSharedHistoryForProfileDeletion(db: Database.Database, botId: string): void {
+  const delegationColumns = tableColumns(db, 'bot_delegations');
+  if (delegationColumns.has('target_bot_id')) {
+    db.prepare('UPDATE bot_delegations SET target_bot_id = NULL WHERE target_bot_id = ?').run(botId);
+  }
+  const messageColumns = tableColumns(db, 'bot_direct_messages');
+  const profileColumns = tableColumns(db, 'bot_profiles');
+  if (!messageColumns.has('sender_bot_id') || !messageColumns.has('sender_name') || !profileColumns.has('display_name')) return;
+  const profile = db.prepare('SELECT display_name AS name FROM bot_profiles WHERE id = ?').get(botId) as
+    { name?: string } | undefined;
+  const name = profile?.name?.trim();
+  if (!name) return;
+  db.prepare(`UPDATE bot_direct_messages
+    SET sender_name = ?
+    WHERE sender_bot_id = ? AND (sender_name IS NULL OR sender_name = '')`).run(name, botId);
+  if (messageColumns.has('recipient_bot_id') && messageColumns.has('recipient_name')) {
+    db.prepare(`UPDATE bot_direct_messages
+      SET recipient_name = ?
+      WHERE recipient_bot_id = ? AND (recipient_name IS NULL OR recipient_name = '')`).run(name, botId);
+  }
 }
 
 function botsDeleteProfile(
@@ -1058,9 +1075,9 @@ function botsDeleteProfile(
       { code: 'PRECONDITION_FAILED' },
     );
 
-    // Profile foreign keys cascade into history shared with surviving Bots.
-    // Check both delegation roles and actual message references before any mutation.
-    assertBotHasNoSharedHistory(db, botId);
+    // Profile foreign keys cascade into delegations that target this Bot.
+    // Detach those references first; direct-message rows are not profile keys.
+    detachSharedHistoryForProfileDeletion(db, botId);
 
     const allSessionIds = [...new Set(sessionIds)];
     if (sessionIds.length > 0) {

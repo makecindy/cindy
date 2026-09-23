@@ -67,6 +67,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [deleteFailure, setDeleteFailure] = useState(false);
   const [conflict, setConflict] = useState<{ page: string; next: CompanionProfileData } | null>(null);
   const [receipt, setReceipt] = useState<RemoteText | null>(null);
   const [confirmation, setConfirmation] = useState<ProfilePanel | null>(null);
@@ -140,7 +141,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const submit = async (target: ProfilePanel, confirmed = false): Promise<boolean> => {
     if (!target.action || target.action.disabled || inFlight.current || !online || !resource || conflict?.page === page) return false;
     if (target.action.confirmation && !confirmed) { setConfirmation(target); return false; }
-    inFlight.current = true; generation.current++; setBusy(true); setError(false); setReceipt(null);
+    inFlight.current = true; generation.current++; setBusy(true); setError(false); setDeleteFailure(false); setReceipt(null);
     const started = binding;
     try {
       const response = await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, {
@@ -175,7 +176,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       } catch { setError(true); }
       return true;
     } catch {
-      if (current.current === started) { setError(true); setConfirmation(null); }
+      if (current.current === started) { setError(true); setDeleteFailure(target.id === 'delete'); setConfirmation(null); }
       return false;
     } finally {
       inFlight.current = false;
@@ -257,7 +258,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     visible={visible && modelStage === 'profile'} title={confirmation?.action?.confirmation ? label(confirmation.action.confirmation.title) : page === 'editor' && editor ? label(editor.resource.display.title) : t(`devices.companionProfile.${titleKey}`)}
     name={name} page={page} deviceId={deviceId} deviceName={deviceName} resource={resource} data={data} editor={editor} panel={panel}
     values={editing ? values : panel?.values ?? values} busy={busy} online={online} dirty={dirty} loading={editorLoading}
-    error={error} conflict={conflict?.page === page} receipt={receipt && !confirmation ? label(receipt) : null} confirmation={confirmation} deleted={deleted}
+    error={error} errorLabel={deleteFailure ? t('devices.companionProfile.deleteFailed') : undefined} conflict={conflict?.page === page} receipt={receipt && !confirmation ? label(receipt) : null} confirmation={confirmation} deleted={deleted}
     artifacts={sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery')}
     onClose={dismiss} onClosed={afterClosed} onBack={page !== 'home' || confirmation ? () => void leave(false) : undefined}
     onOpen={open}
@@ -274,7 +275,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       title={confirmation?.action?.confirmation ? label(confirmation.action.confirmation.title) : page === 'editor' && editor ? label(panel?.title ?? editor.resource.display.title) : t(`devices.companionProfile.${titleKey}`)} testID="companionProfile">
     <View style={styles.content}>
       {!online ? note('offline') : null}
-      {error ? <View accessibilityRole="alert">{note('readFailed')}<MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: busy || !online, onPress: () => { if (page === 'editor') void retryEditor(); else void refresh(); } }} />
+      {error ? <View accessibilityRole="alert">{note(deleteFailure ? 'deleteFailed' : 'readFailed')}<MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: busy || !online, onPress: () => { if (page === 'editor') void retryEditor(); else void refresh(); } }} />
         {dirty ? <MainWindowActionButton action={{ label: t('devices.companions.automation.discard'), tone: 'danger', disabled: busy, onPress: () => discardDraft(false) }} /> : null}
       </View> : null}
       {conflict?.page === page ? <View accessibilityRole="alert">{note('changed')}<MainWindowActionButton action={{ label: t('devices.companionProfile.discardAndReload'), tone: 'danger', disabled: busy, onPress: () => discardDraft(true) }} /></View> : null}
@@ -317,7 +318,6 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         {actionPanel('skills')?.entries?.length ? row('personalSkills', Sparkles) : renderPanel(actionPanel('skills'))}{actionPanel('connections')?.entries?.length ? row('connections', Settings2) : renderPanel(actionPanel('connections'))}
       </> : page === 'artifacts' ? sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery') : page === 'direct' ? actionPanel('direct') ? <><Text selectable style={styles.body}>{actionPanel('direct')!.text || t('devices.companionProfile.directEmpty')}</Text></> : note('directRecovery') : <>
         {page === 'profile' && actionPanel('avatar')?.entries?.length ? row('avatar', UserRound) : null}
-        {page === 'models' && typeof panel?.followsDefault === 'boolean' ? note(panel.followsDefault ? 'modelFollowsDefault' : 'modelOverride') : null}
         {page === 'models' && panel?.action ? models : renderPanel(panel)}
         {(page === 'profile' || page === 'memory') && panel && !panel.action ? note('largeProfileRecovery') : null}
         {page === 'memory' && actionPanel('notes')?.action ? row('notes', Brain) : null}
@@ -459,8 +459,8 @@ function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: Pr
           </Pressable>
         </NativePullDownMenu>
           {!fieldDisabled && openSelect === field.id ? <View style={styles.group}>
-            <TextInput accessibilityLabel={`${label} ${t('devices.companionProfile.searchOptions')}`} placeholder={t('devices.companionProfile.searchOptions')}
-              value={selectQuery} onChangeText={setSelectQuery} style={styles.input} placeholderTextColor={colors.textTertiary} />
+            {field.id === 'permissions' ? null : <TextInput accessibilityLabel={`${label} ${t('devices.companionProfile.searchOptions')}`} placeholder={t('devices.companionProfile.searchOptions')}
+              value={selectQuery} onChangeText={setSelectQuery} style={styles.input} placeholderTextColor={colors.textTertiary} />}
             <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={styles.optionScroll}>
               {options.filter(option => resolveRemoteText(option.label, i18n.language).toLocaleLowerCase().includes(selectQuery.trim().toLocaleLowerCase())).map(option =>
                 <ContextSheetRow key={option.value} icon={null} label={resolveRemoteText(option.label, i18n.language)} disabled={optionDisabled(option)}
