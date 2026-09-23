@@ -12,6 +12,7 @@ interface Flight {
   abort: AbortController;
   state: GrokLoginState;
   codeReady: Promise<GrokLoginState>;
+  settled: Promise<void>;
 }
 
 let flight: Flight | null = null;
@@ -32,6 +33,14 @@ function currentOwner(): string | null {
 export async function startGrokDeviceLogin(): Promise<GrokLoginState> {
   const owner = currentOwner();
   if (!owner) throw new Error('Owner unavailable');
+  if (flight && flight.owner !== owner) {
+    const previous = flight;
+    previous.abort.abort();
+    previous.state = { status: 'failed', reason: 'cancelled' };
+    await previous.settled;
+    if (flight === previous) flight = null;
+    if (currentOwner() !== owner) throw new Error('Owner unavailable');
+  }
   if (hasGrokOAuthLogin()) return { status: 'connected' };
   if (
     flight?.owner === owner &&
@@ -44,9 +53,15 @@ export async function startGrokDeviceLogin(): Promise<GrokLoginState> {
   const codeReady = new Promise<GrokLoginState>((resolve) => {
     reportCode = resolve;
   });
-  const next: Flight = { owner, abort: new AbortController(), state: { status: 'idle' }, codeReady };
+  const next: Flight = {
+    owner,
+    abort: new AbortController(),
+    state: { status: 'idle' },
+    codeReady,
+    settled: Promise.resolve(),
+  };
   flight = next;
-  void runGrokOAuthLogin({
+  next.settled = runGrokOAuthLogin({
     method: 'device',
     cancellationSignal: next.abort.signal,
     onDeviceCode: (code: GrokDeviceCode) => {
