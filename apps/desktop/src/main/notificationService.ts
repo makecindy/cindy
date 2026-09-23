@@ -184,6 +184,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // a timeout is not a dedupe window and never causes a second late toast.
       void (async () => {
         let preview: SessionNotificationPreview | undefined;
+        let postDrainPreviewReady = false;
         let detail: string | undefined;
         if (kind === 'done' || (kind === 'needs-reply' && channels?.mobile === true)) {
           let finished = false;
@@ -193,7 +194,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
               (async () => {
                 if (kind === 'done') {
                   // Read identity/turn first so a blocked write still has the correct
-                  // teammate fallback, suppression and semantic event id.
+                  // teammate fallback and any already-durable semantic event id.
+                  // This snapshot may predate the terminal write; its suppress
+                  // flag is not authoritative for this completion.
                   preview = await readSessionNotificationPreview(sessionId, false);
                 }
                 if (finished || !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
@@ -201,6 +204,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
                 if (finished || !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
                 if (kind === 'done') {
                   preview = await readSessionNotificationPreview(sessionId);
+                  postDrainPreviewReady = true;
                   detail = preview.reply?.text;
                 } else {
                   detail = await latestMessageText(sessionId, 'assistant');
@@ -215,7 +219,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             clearTimeout(timer);
           }
         }
-        if (!isDataOwnerBroadcastScopeCurrent(ownerScope) || preview?.suppress) return;
+        if (!isDataOwnerBroadcastScopeCurrent(ownerScope) || (postDrainPreviewReady && preview?.suppress)) return;
         const teammate = !!preview?.teammateName;
         const notificationTitle = preview?.teammateName ?? safeTitle;
         const eventId = preview?.eventId;

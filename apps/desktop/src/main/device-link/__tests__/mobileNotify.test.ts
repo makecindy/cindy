@@ -88,6 +88,22 @@ describe('MobileNotifyDeduper', () => {
     expect(deduper.shouldSend('s1', 'done', 1)).toBe(true);
     expect(deduper.shouldSend('s2', 'done', 2)).toBe(true);
   });
+
+  it('reconciles an accepted anonymous scheduler push with the same durable turn', () => {
+    const deduper = new MobileNotifyDeduper();
+    deduper.recordSent('session', 'done', 1_000);
+    expect(deduper.shouldSend('session', 'done', 1_001, 'turn:900:950')).toBe(false);
+    expect(deduper.shouldSend('session', 'done', 10_000, 'turn:900:950')).toBe(false);
+    expect(deduper.shouldSend('session', 'done', 1_200, 'turn:950:1100')).toBe(true);
+    expect(deduper.shouldSend('session', 'done', 10_100, 'turn:10050:10075')).toBe(true);
+  });
+
+  it('keeps an anonymous scheduler push out of the recent identified completion window', () => {
+    const deduper = new MobileNotifyDeduper();
+    deduper.recordSent('session', 'done', 1_000, 'turn:900:950');
+    expect(deduper.shouldSend('session', 'done', 1_001)).toBe(false);
+    expect(deduper.shouldSend('session', 'done', 6_000)).toBe(true);
+  });
 });
 
 it('uses final-message identity for completed replies, allowing distinct replies within five seconds', () => {

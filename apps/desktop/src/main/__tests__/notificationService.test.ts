@@ -279,6 +279,24 @@ describe('notificationService — channels 分发', () => {
     expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
   });
 
+  it('does not treat a pre-drain running snapshot as a reason to lose the completion fallback', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    vi.useFakeTimers();
+    let release!: () => void;
+    drainPersistQueue.mockReturnValueOnce(new Promise<void>((resolve) => { release = resolve; }));
+    readSessionNotificationPreview.mockResolvedValueOnce({ teammateName: 'Cindy', suppress: true });
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+
+    await registeredHandlers.get('notification:show-session-event')!({}, payload);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ title: 'Cindy', body: '有新回复' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
   it('drops the bounded fallback after the data owner changes', async () => {
     const { initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('owner')));
