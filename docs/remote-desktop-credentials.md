@@ -145,6 +145,12 @@ presentation surface. Empty login windows are allowed; unknown siblings and
 multiple actionable surfaces fail closed. Revalidation follows the original
 window and secure field even if the window list is reordered. See
 `MacScreenUnlock.swift` and `MacUnlockProfileTests.swift` for selection and regressions.
+Abort cleanup revalidates only the original window's subtree, retaining the
+console account, signed process and exact secure-field identity checks. A sibling
+becoming actionable or unreadable still prevents submission, but cannot by itself
+prevent clearing the password already written to the original field. Cleanup never
+falls back to a replacement window. `MacUnlockWindowCollectorTests.swift` covers
+these sibling transitions alongside traversal budgets and object mapping.
 On a two-display Mac, the old preparation probe failed with
 `CREDENTIAL_UNLOCK_UNAVAILABLE` while the updated probe returned `fieldReady: true`
 on the same locked session. This checks field preparation only, not password

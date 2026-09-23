@@ -34,6 +34,40 @@ final class MacUnlockWindowCollectorTests: XCTestCase {
       children: wideChildren))
     XCTAssertEqual(reads, 256)
   }
+  func testCleanupRetainsOriginalObjectsWhenSiblingBecomesActionable() throws {
+    func read(_ id: Int, _ parent: Int?) -> MacUnlockProfile.Node {
+      node(id == 22 ? 12 : id, parent)
+    }
+    func expandedChildren(_ id: Int) -> [Int] {
+      if id == 20 { return [22] }
+      return children(id)
+    }
+    let original = try MacUnlockWindowCollector.collect(windows: [0, 10], equal: ==, read: read, children: children)
+    let originalField = original.elements[try MacUnlockProfile.selectField(original.nodes).field]
+    // Submission must abort once a second actionable surface appears.
+    XCTAssertThrowsError(try MacUnlockWindowCollector.collect(windows: [20, 10], equal: ==,
+      read: read, children: expandedChildren))
+    let cleanup = try MacUnlockWindowCollector.collect(windows: [20, 10], cleanupWindow: original.elements[0],
+      equal: ==, read: read, children: expandedChildren)
+    XCTAssertEqual(cleanup.elements[try MacUnlockProfile.selectField(cleanup.nodes).field], originalField)
+    XCTAssertEqual(cleanup.elements, [10, 11, 12])
+  }
+  func testCleanupDoesNotReadBrokenSiblingOrFallBackToReplacementWindow() throws {
+    let cleanup = try MacUnlockWindowCollector.collect(windows: [0, 10], cleanupWindow: 10, equal: ==,
+      read: { id, parent in
+        if id == 0 { throw CredentialError.unlockUnavailable }
+        return self.node(id, parent)
+      }, children: children)
+    XCTAssertEqual(cleanup.elements, [10, 11, 12])
+    XCTAssertThrowsError(try MacUnlockWindowCollector.collect(windows: [10], cleanupWindow: 99,
+      equal: ==, read: node, children: children))
+    XCTAssertThrowsError(try MacUnlockWindowCollector.collect(windows: [10, 10], cleanupWindow: 10,
+      equal: ==, read: node, children: children))
+  }
+  func testCleanupStillRejectsAnInvalidOriginalSecureField() {
+    XCTAssertThrowsError(try MacUnlockWindowCollector.collect(windows: [0, 10], cleanupWindow: 10,
+      equal: ==, read: { id, parent in self.node(id == 12 ? 99 : id, parent) }, children: children))
+  }
   func testTimeBudgetIsNotResetForSecondWindow() {
     var time = 0.0
     var reads: [Int] = []
