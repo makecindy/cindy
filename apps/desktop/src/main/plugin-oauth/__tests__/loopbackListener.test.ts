@@ -6,9 +6,12 @@ import { listenForOauthCallback } from '../loopbackListener.js';
 
 const state = 's'.repeat(43);
 const resources: Array<{ close(): unknown }> = [];
-afterEach(() => {
-  for (const resource of resources.splice(0)) resource.close();
-  vi.restoreAllMocks();
+afterEach(async () => {
+  try {
+    await Promise.all(resources.splice(0).map((resource) => resource.close()));
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 async function bind(host: string, port = 0) {
@@ -16,7 +19,10 @@ async function bind(host: string, port = 0) {
     res.writeHead(204);
     res.end();
   });
-  resources.push(server);
+  resources.push({ close: () => new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    server.closeAllConnections();
+  }) });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen({ host, port, ipv6Only: host === '::1' }, () => {
@@ -82,8 +88,9 @@ it.each(['127.0.0.1', '::1'])(
     const other = first === '::1' ? '127.0.0.1' : '::1';
     expect(await request(other, port)).toBe(409);
     expect(deliver).toHaveBeenCalledExactlyOnceWith({ state, error: 'access_denied' });
-    listener.close();
-    listener.close();
+    const closing = listener.close();
+    expect(listener.close()).toBe(closing);
+    await closing;
     // Both ports are released, including on an idempotent cancellation.
     await bind('127.0.0.1', port);
     await bind('::1', port);
@@ -193,3 +200,39 @@ it.each(['EAFNOSUPPORT', 'EADDRNOTAVAIL'])(
     ).rejects.toThrow('OAUTH_BRIDGE_UNAVAILABLE');
   },
 );
+
+it('waits for both server close callbacks, including repeated cancellation', async () => {
+  const port = await unusedPort();
+  const listener = await listenForOauthCallback(offer(port), async () => {}, () => {});
+  resources.push(listener);
+  const original = http.Server.prototype.close;
+  const completions: Array<() => void> = [];
+  vi.spyOn(http.Server.prototype, 'close').mockImplementation(function (
+    this: http.Server,
+    callback?: (error?: Error) => void,
+  ) {
+    return original.call(this, (error) => {
+      completions.push(() => callback?.(error));
+    });
+  });
+  let finished = false;
+  const closing = listener.close();
+  try {
+    expect(closing).toBeInstanceOf(Promise);
+    expect(listener.close()).toBe(closing);
+    void closing.then(() => { finished = true; });
+    await vi.waitFor(() => expect(completions).toHaveLength(2));
+    expect(finished).toBe(false);
+    completions.shift()!();
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    completions.shift()!();
+    await closing;
+    expect(finished).toBe(true);
+  } finally {
+    vi.restoreAllMocks();
+    for (const complete of completions.splice(0)) complete();
+  }
+  await bind('127.0.0.1', port);
+  await bind('::1', port);
+});
