@@ -25,7 +25,14 @@ export interface RateHistory {
 }
 
 export function emptyRateHistory(startedAt: number | null): RateHistory {
-  return { startedAt, baseline: null, lastReport: null, samples: [], peak: 0, latestRate: null };
+  return {
+    startedAt,
+    baseline: null,
+    lastReport: null,
+    samples: [],
+    peak: 0,
+    latestRate: null,
+  };
 }
 
 const MAX_RATE_SAMPLES = 60;
@@ -49,10 +56,17 @@ export function recordRunningTokenRate(
   const reset =
     history.startedAt !== startedAt ||
     (previous !== null &&
-      (generationDurationMs < previous.durationMs || outputTokens < previous.outputTokens));
+      (generationDurationMs < previous.durationMs ||
+        outputTokens < previous.outputTokens));
   // Reset only the measurement baseline; completed intervals remain in the chart.
   const current = reset
-    ? { ...history, startedAt, baseline: null, lastReport: null, latestRate: null }
+    ? {
+        ...history,
+        startedAt,
+        baseline: null,
+        lastReport: null,
+        latestRate: null,
+      }
     : history;
   if (
     !generationReliable ||
@@ -84,7 +98,8 @@ export function recordRunningTokenRate(
   // A time-only refresh cannot close a token interval: the matching usage may
   // arrive later in a batch. Keep both counters anchored to the last sample.
   // An explicitly empty output stream can still measure zero throughput.
-  if (outputTokens > 0 && outputTokens === previous?.outputTokens) return observed;
+  if (outputTokens > 0 && outputTokens === previous?.outputTokens)
+    return observed;
   if (durationDelta === 0) {
     // A corrected count without a matching time cannot produce a rate.
     return { ...observed, baseline };
@@ -129,7 +144,10 @@ export function loadCachedRateHistory(sessionKey: string): RateHistory | null {
   return cached;
 }
 
-export function saveCachedRateHistory(sessionKey: string, history: RateHistory): void {
+export function saveCachedRateHistory(
+  sessionKey: string,
+  history: RateHistory,
+): void {
   // 没有采样点就没有可恢复的图表，不必占缓存名额。
   if (history.samples.length === 0) return;
   rateHistoryBySession.delete(sessionKey);

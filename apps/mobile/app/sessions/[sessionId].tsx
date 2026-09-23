@@ -1,3 +1,4 @@
+import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionConversationItems } from '@/session/companionConversationPresentation';
 import { useRunningTokenRateHistory } from '@/session/useRunningTokenRateHistory';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
@@ -5,7 +6,7 @@ import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
 import { RecentMessageHistories, MessageHistoryOverlay } from '@/session/RecentMessageHistories';
 import { rememberRecentTask } from '@/session/recentTasks';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
-import { keyboardControlRegion } from '@/platform/windowGeometry';
+import { keyboardControlRegion, type LayoutRect } from '@/platform/windowGeometry';
 import { useAdaptiveWindow, PaneViewportProvider } from '@/platform/AdaptiveWindowContext';
 import { useSessionHeaderHeight } from '@/session/useSessionHeaderHeight';
 import { sessionPaneLayout } from '@/session/sessionPaneLayout';
@@ -2656,8 +2657,8 @@ export default function SessionScreen() {
   const horizontalSystemHeader = Platform.OS === 'ios' && adaptiveWindow.barEdge === 'none'
     && !paneLayout.persistent && !shareSelectionActive && !companionChat;
   const composerRegion = keyboardControlRegion(adaptiveWindow, keyboardState.height);
-  const detailViewport = useMemo(() => ({ width: paneLayout.detail.width, height: windowDimensions.height }),
-    [paneLayout.detail.width, windowDimensions.height]);
+  const detailViewport = useMemo(() => ({ x: paneLayout.detail.x, y: paneLayout.detail.y, width: paneLayout.detail.width, height: windowDimensions.height }),
+    [paneLayout.detail.x, paneLayout.detail.y, paneLayout.detail.width, windowDimensions.height]);
   const nativeShellLayout = useMemo(() => buildSessionNativeShellLayout({
     attachmentPickerOpen: false,
     keyboardHeight: keyboardState.height,
@@ -9286,21 +9287,41 @@ export default function SessionScreen() {
           />
         ) : null}
         {!isSharedTaskAccessRevoked && <View
+          pointerEvents="box-none"
+          testID="session.bottomViewport"
+          style={[
+            StyleSheet.absoluteFill,
+            { zIndex: 10 },
+            // Clip the complete touch tree at the usable region, not at the
+            // measured composer height. Held cards can extend above the input
+            // while neither cards nor oversized inputs can cross a reservation.
+            adaptiveWindow.regions.length > 0 && {
+              left: Math.max(0, composerRegion.x - paneLayout.detail.x),
+              right: Math.max(0, paneLayout.detail.x + paneLayout.detail.width - composerRegion.x - composerRegion.width),
+              top: composerRegion.y,
+              bottom: windowDimensions.height - composerRegion.y - composerRegion.height,
+              overflow: 'hidden',
+            },
+          ]}
+        ><View
           ref={bottomOverlayRef}
           onLayout={handleBottomOverlayLayout}
           pointerEvents="box-none"
           style={[
             styles.sessionBottomLayer,
+            // The outer viewport owns reservation clipping; keep the held card
+            // attached to its original responder for release/cancel delivery.
+            sessionOperationLayout.composerSlot === 'editable' && { overflow: 'visible' },
             adaptiveWindow.regions.length > 0 && {
-              left: Math.max(0, composerRegion.x - paneLayout.detail.x),
-              right: Math.max(0, paneLayout.detail.x + paneLayout.detail.width - composerRegion.x - composerRegion.width),
               maxHeight: composerRegion.height,
             },
             nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
               && styles.sessionBottomFloating,
             shareSelectionActive && { overflow: 'visible' },
-            { bottom: Math.max(nativeShellLayout.keyboardBottomInset, adaptiveWindow.regions.length > 0
-              ? windowDimensions.height - composerRegion.y - composerRegion.height - insets.bottom : 0) },
+            // Region already excludes the keyboard. Its boundary clips only
+            // the existing safe-area padding, without lifting the input twice.
+            { bottom: adaptiveWindow.regions.length > 0
+              ? -insets.bottom : nativeShellLayout.keyboardBottomInset },
           ]}
           testID="session.bottomLayer"
         >
@@ -9453,8 +9474,9 @@ export default function SessionScreen() {
                   ]}
                 >
                   <ComposerActivityStatus
-                    key={JSON.stringify([auth.user?.id, deviceId, sessionId])}
-                    sessionKey={JSON.stringify([auth.user?.id, deviceId, sessionId])}
+                    availableRegion={composerRegion}
+                    key={JSON.stringify([auth.accountGeneration, deviceId, sessionId])}
+                    sessionKey={JSON.stringify([auth.accountGeneration, deviceId, sessionId])}
                     reconnectAttempt={remoteSessionRunStatus.reconnectAttempt}
                     sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}
                     startedAt={composerActivityStartedAtMs}
@@ -9564,7 +9586,7 @@ export default function SessionScreen() {
           ) : null}
           </View>
         </View>
-        }
+        </View>}
       </ComposerKeyboardAvoidingView>
       </PaneViewportProvider>
 
@@ -11206,12 +11228,13 @@ function ComposerRuntimePill({
 }
 
 function ComposerActivityStatus({
+  availableRegion,
   sessionKey,
   reconnectAttempt,
   sideTaskRunning,
   startedAt,
-  rateStartedAt,
-  streaming,
+  rateStartedAt = startedAt,
+  streaming = false,
   tokenUsage,
   outputTokens,
   generationDurationMs,
@@ -11219,12 +11242,13 @@ function ComposerActivityStatus({
   generationActive,
   visible,
 }: {
+  availableRegion?: LayoutRect;
   sessionKey: string;
   reconnectAttempt: RemoteSessionRunStatus['reconnectAttempt'];
   sideTaskRunning: boolean;
   startedAt: number | null;
-  rateStartedAt: number | null;
-  streaming: boolean;
+  rateStartedAt?: number | null;
+  streaming?: boolean;
   tokenUsage: number;
   outputTokens: number;
   generationDurationMs: number;
@@ -11250,11 +11274,12 @@ function ComposerActivityStatus({
     return () => clearInterval(interval);
   }, [startedAt, visible]);
 
+  // Elapsed uses the local fallback. Sampling keeps the raw remote start so a
+  // terminal null is not a new turn, and a local send is not the previous rate.
+  const samplerStartedAt = rateStartedAt === undefined ? startedAt : rateStartedAt;
   const rateHistory = useRunningTokenRateHistory({
     sessionKey,
-    // Terminal reports clear the remote start. Keep null so the sampler can
-    // finish the existing turn; the local elapsed fallback is not a new turn.
-    startedAt: rateStartedAt,
+    startedAt: samplerStartedAt,
     outputTokens,
     generationDurationMs,
     generationReliable: generationReliable && visible && !reconnectAttempt && !sideTaskRunning,
@@ -11267,11 +11292,47 @@ function ComposerActivityStatus({
   const tokenCount = formatComposerActivityTokenCount(tokenUsage);
   const tokenText = t('session.screen.tokenCount', { tokens: tokenCount });
   const tokenA11yText = t('session.screen.tokenCountFull', { tokens: tokenCount });
-  const rateValue = formatComposerActivityRateValue(rateHistory.latestRate);
+  const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt);
+  const rateValue = formatComposerActivityRateValue(showElapsedOnly ? null : rateHistory.latestRate);
+  const canShowRateDetails = !showElapsedOnly
+    && generationReliable
+    && outputTokens > 0
+    && Number.isFinite(outputTokens)
+    && Number.isFinite(generationDurationMs)
+    && generationDurationMs > 0;
   const rateText = rateValue
     ? t('session.screen.tokenRate', { rate: rateValue })
     : null;
-  const showUsageMeta = Boolean(rateText) || tokenUsage > 0;
+  const showUsageMeta = !showElapsedOnly && (Boolean(rateText) || tokenUsage > 0);
+  const usageMeta = (
+    <View style={[styles.composerActivityPill, styles.composerActivityMeta]}>
+      <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} style={styles.composerActivityPillBackdrop} />
+      <Text style={styles.composerActivityMetaText}>{elapsedText}</Text>
+      {showUsageMeta ? (
+        <>
+          <Text style={styles.composerActivityMetaText}>·</Text>
+          {rateText ? (
+            <Text
+              accessibilityLabel={rateText}
+              style={styles.composerActivityMetaText}
+            >
+              {rateText}
+            </Text>
+          ) : (
+            <>
+              <ArrowDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+              <Text
+                accessibilityLabel={tokenA11yText}
+                style={styles.composerActivityMetaText}
+              >
+                {tokenText}
+              </Text>
+            </>
+          )}
+        </>
+      ) : null}
+    </View>
+  );
   // 三类进度共用这一个 attempt 字段, 但说法必须分开: 模型容量、请求限流与传输层重连
   // 的用户含义不同，混用会把用户引向错误的排查方向。
   const activityText = reconnectAttempt
@@ -11286,11 +11347,11 @@ function ComposerActivityStatus({
 
   return (
     <View
-      pointerEvents="none"
+      pointerEvents="box-none"
       style={styles.composerActivityStatus}
       testID="session.composerActivityStatus"
     >
-      <View style={[styles.composerActivityPill, styles.composerActivityPrimary]}>
+      <View pointerEvents="none" style={[styles.composerActivityPill, styles.composerActivityPrimary]}>
         <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} style={styles.composerActivityPillBackdrop} />
         <Sparkles color={colors.statusAccent} size={iconSize.sm} strokeWidth={iconStroke.regular} />
         <Text numberOfLines={1} style={styles.composerActivityStatusText}>{activityText}</Text>
@@ -11300,33 +11361,20 @@ function ComposerActivityStatus({
           </Text>
         ) : null}
       </View>
-      <View style={[styles.composerActivityPill, styles.composerActivityMeta]}>
-        <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} style={styles.composerActivityPillBackdrop} />
-        <Text style={styles.composerActivityMetaText}>{elapsedText}</Text>
-        {!sideTaskRunning && showUsageMeta ? (
-          <>
-            <Text style={styles.composerActivityMetaText}>·</Text>
-            {rateText ? (
-              <Text
-                accessibilityLabel={rateText}
-                style={styles.composerActivityMetaText}
-              >
-                {rateText}
-              </Text>
-            ) : (
-              <>
-                <ArrowDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-                <Text
-                  accessibilityLabel={tokenA11yText}
-                  style={styles.composerActivityMetaText}
-                >
-                  {tokenText}
-                </Text>
-              </>
-            )}
-          </>
-        ) : null}
-      </View>
+      <RunningTokenRatePopover
+        key={sessionKey}
+        enabled={canShowRateDetails}
+        availableRegion={availableRegion}
+        sessionKey={sessionKey}
+        startedAt={samplerStartedAt}
+        history={rateHistory}
+        outputTokens={outputTokens}
+        generationDurationMs={generationDurationMs}
+        generationReliable={generationReliable && !showElapsedOnly}
+        label={showUsageMeta ? `${elapsedText} · ${rateText ?? tokenA11yText}` : elapsedText}
+      >
+        {usageMeta}
+      </RunningTokenRatePopover>
     </View>
   );
 }
@@ -11758,7 +11806,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   composerActivityStatus: {
     alignItems: 'center',
     flexDirection: 'row',
-    height: 25,
+    minHeight: 44,
     justifyContent: 'space-between',
     paddingHorizontal: spacing.xs,
   },

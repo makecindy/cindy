@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   emptyRateHistory,
   loadCachedRateHistory,
@@ -38,9 +38,20 @@ export function useRunningTokenRateHistory(input: {
     if (startedAt !== null) return cached;
     return { ...cached, baseline: null, lastReport: null, latestRate: null };
   });
+  const loadedSessionKey = useRef(sessionKey);
   useEffect(() => {
     setHistory((previous) => {
-      const recorded = recordRunningTokenRate(previous, {
+      const switched = loadedSessionKey.current !== sessionKey;
+      loadedSessionKey.current = sessionKey;
+      const cached = switched && sessionKey ? loadCachedRateHistory(sessionKey) : null;
+      const seeded = !switched
+        ? previous
+        : !cached
+          ? emptyRateHistory(startedAt)
+          : startedAt === null
+            ? { ...cached, baseline: null, lastReport: null, latestRate: null }
+            : cached;
+      const recorded = recordRunningTokenRate(seeded, {
         startedAt,
         outputTokens,
         generationDurationMs,
@@ -57,7 +68,7 @@ export function useRunningTokenRateHistory(input: {
       }
       return recorded;
     });
-  }, [startedAt, outputTokens, generationDurationMs, generationReliable, streaming]);
+  }, [sessionKey, startedAt, outputTokens, generationDurationMs, generationReliable, streaming]);
   useEffect(() => {
     if (sessionKey) saveCachedRateHistory(sessionKey, history);
   }, [sessionKey, history]);

@@ -225,14 +225,16 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('startedAt={composerActivityStartedAtMs}');
     expect(source).toContain('rateStartedAt={remoteSessionRunStatus.startedAt}');
     expect(source).toContain('streaming={isSessionStreaming}');
-    expect(source).toContain('startedAt: rateStartedAt,');
+    expect(source).toContain('startedAt: samplerStartedAt,');
     expect(source).toContain('tokenUsage={composerActivityTokenUsage}');
     expect(source).toContain('outputTokens={remoteSessionRunStatus.outputTokens}');
     expect(source).toContain('generationDurationMs={remoteSessionRunStatus.generationDurationMs}');
     expect(source).toContain('ArrowDown');
-    expect(source).toContain('{!sideTaskRunning && showUsageMeta ? (');
+    expect(source).toContain('const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt);');
+    expect(source).toContain('const canShowRateDetails = !showElapsedOnly');
+    expect(source).toContain('enabled={canShowRateDetails}');
     expect(source).toContain('generationActive={remoteSessionRunStatus.generationActive}');
-    expect(source).toContain('const showUsageMeta = Boolean(rateText) || tokenUsage > 0;');
+    expect(source).toContain('const showUsageMeta = !showElapsedOnly && (Boolean(rateText) || tokenUsage > 0);');
     expect(source).toContain("t('session.screen.tokenCount'");
     expect(source).toContain("t('session.screen.tokenCountFull'");
     expect(source).toContain("t('session.screen.tokenRate'");
@@ -247,7 +249,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('composerActivityMetaText');
     expect(source).toContain('composerActivityFrame');
     expect(source).toContain('marginTop: spacing.lg');
-    expect(source).toContain('height: 25');
+    // The formerly passive rate is now a touch target, with a full 44pt status row.
+    expect(source).toMatch(/composerActivityStatus: \{[^}]*minHeight: 44/s);
     expect(source).toContain('composerActivityStatusText');
     expect(source).toContain('composerActivityProgressText');
     expect(composerStatusCallIndex).toBeGreaterThan(-1);
@@ -383,6 +386,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('onLayout={handleBottomOverlayLayout}');
     expect(source).toContain('bottomOverlayHeight={bottomOverlayHeight}');
     expect(source).toContain('styles.sessionBottomLayer,');
+    expect(source).toContain("sessionOperationLayout.composerSlot === 'editable' && { overflow: 'visible' }");
     expect(source).toContain('testID="session.bottomLayer"');
     expect(source).toContain('testID="session.bottomContent"');
     expect(source).toContain("paddingBottom: sessionOperationLayout.composerSlot === 'pending-interaction'");
