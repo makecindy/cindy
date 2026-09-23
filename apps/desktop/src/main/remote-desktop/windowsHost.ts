@@ -101,11 +101,23 @@ export async function uninstallWindowsDesktopSupportFrom(
   };
   if (!existsSync(native.binary)) return;
   progress?.('removing');
-  await exec(native.binary, ['--elevate-uninstall'], {
-    timeout: 130_000,
-    maxBuffer: 1024,
-    windowsHide: true,
-  });
+  const hidden = { maxBuffer: 1024, windowsHide: true } as const;
+  let status = '';
+  try {
+    const { stdout } = await exec(native.binary, ['--status'], {
+      ...hidden,
+      timeout: REMOTE_DESKTOP_OFFER_BUDGET.platformStatusMs,
+    });
+    status = stdout.trim();
+  } catch {
+    // A helper that cannot report status may still have leftover SCM/ACL state.
+  }
+  if (status === 'missing') return;
+  try {
+    await exec(native.binary, ['--uninstall'], { ...hidden, timeout: 130_000 });
+  } catch {
+    await exec(native.binary, ['--elevate-uninstall'], { ...hidden, timeout: 130_000 });
+  }
 }
 
 export async function configureWindowsDesktopSupport(

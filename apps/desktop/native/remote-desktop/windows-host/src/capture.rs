@@ -392,6 +392,21 @@ mod tests {
             }
         }
         unsafe {
+            let mut composed = 0;
+            if windows_sys::Win32::Graphics::Dwm::DwmIsCompositionEnabled(&mut composed) < 0
+                || composed == 0
+            {
+                return;
+            }
+            let desktop = windows_sys::Win32::System::StationsAndDesktops::OpenInputDesktop(
+                0,
+                0,
+                windows_sys::Win32::System::StationsAndDesktops::DESKTOP_READOBJECTS,
+            );
+            if desktop.is_null() {
+                return;
+            }
+            windows_sys::Win32::System::StationsAndDesktops::CloseDesktop(desktop);
             assert_eq!(
                 screen_copy_operation(),
                 SRCCOPY,

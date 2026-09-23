@@ -103,11 +103,7 @@ describe('Windows lock screen service setup', () => {
     );
     try {
       await uninstallWindowsDesktopSupportFrom(customResources);
-      expect(runtime.exec).toHaveBeenCalledWith(
-        path.join(customResources, 'tools', 'remote-desktop', 'cindy-windows-desktop-host.exe'),
-        ['--elevate-uninstall'],
-        expect.objectContaining({ windowsHide: true }),
-      );
+      expect(runtime.exec.mock.calls.map((call) => call[1])).toEqual([['--status'], ['--uninstall']]);
     } finally {
       rmSync(customResources, { recursive: true, force: true });
     }
@@ -116,6 +112,45 @@ describe('Windows lock screen service setup', () => {
   it('skips personal-version uninstall when that snapshot has no helper', async () => {
     await uninstallWindowsDesktopSupportFrom(path.join(os.tmpdir(), 'cindy-missing-resources'));
     expect(runtime.exec).not.toHaveBeenCalled();
+  });
+
+  it('does not request elevation when a personal version never had a lock-screen service', async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    mkdirSync(path.join(customResources, 'tools', 'remote-desktop'), { recursive: true });
+    writeFileSync(
+      path.join(customResources, 'tools', 'remote-desktop', 'cindy-windows-desktop-host.exe'),
+      'helper',
+    );
+    runtime.exec.mockResolvedValue({ stdout: 'missing\n' });
+    try {
+      await uninstallWindowsDesktopSupportFrom(customResources);
+      expect(runtime.exec.mock.calls.map((call) => call[1])).toEqual([['--status']]);
+    } finally {
+      rmSync(customResources, { recursive: true, force: true });
+    }
+  });
+
+  it('elevates personal-version uninstall only after an unelevated removal fails', async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    mkdirSync(path.join(customResources, 'tools', 'remote-desktop'), { recursive: true });
+    writeFileSync(
+      path.join(customResources, 'tools', 'remote-desktop', 'cindy-windows-desktop-host.exe'),
+      'helper',
+    );
+    runtime.exec
+      .mockResolvedValueOnce({ stdout: 'unavailable\n' })
+      .mockRejectedValueOnce(new Error('access denied'))
+      .mockResolvedValueOnce({ stdout: '' });
+    try {
+      await uninstallWindowsDesktopSupportFrom(customResources);
+      expect(runtime.exec.mock.calls.map((call) => call[1])).toEqual([
+        ['--status'],
+        ['--uninstall'],
+        ['--elevate-uninstall'],
+      ]);
+    } finally {
+      rmSync(customResources, { recursive: true, force: true });
+    }
   });
 
   it('does not treat a running service as authorization for another caller', async () => {
