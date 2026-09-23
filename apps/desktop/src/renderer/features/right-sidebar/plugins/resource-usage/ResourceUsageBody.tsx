@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /** 「资源用量」：单层紧凑进程表，数据与终止授权均由 main 提供。 */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -393,16 +394,18 @@ function LocalResourceUsageBody({
 
       <div className="resource-usage-footer">
         <div className="resource-usage-action-hint" title={actionHint}>{actionHint}</div>
-        <button
+        <Button
+          variant="secondary"
+          size="md"
+          compact
           type="button"
-          className="resource-usage-terminate"
           disabled={!selected?.terminable}
           onClick={() => {
             if (selected?.terminable) setPendingKill(selected);
           }}
         >
           {t('rightSidebar.resourceUsage.terminate')}
-        </button>
+        </Button>
       </div>
 
       <ConfirmDialog

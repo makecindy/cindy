@@ -1588,14 +1588,18 @@ function XdGatewayHeader({
                 )}
               </p>
             </div>
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
+              tone="quiet"
+              compact
+              loading={assetState.kind === 'loading'}
               type="button"
               disabled={assetState.kind === 'loading'}
               onClick={refreshAccount}
-              className="rounded-full px-3 py-1.5 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
             >
               {t('settings.providers.xd.asset.refresh')}
-            </button>
+            </Button>
           </>
         ) : assetState.kind === 'quota' ? (
           <>
@@ -2740,19 +2744,17 @@ export function ProvidersSection() {
               className="border-t p-2"
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
-              <button
+              <Button
+                variant="secondary"
+                size="lg"
                 ref={addProviderButtonRef}
                 type="button"
                 onClick={() => setWizard({})}
-                className="flex h-9 w-full items-center justify-center gap-1.5 rounded-full border border-dashed text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                style={{
-                  borderColor: 'var(--settings-btn-secondary-border)',
-                  color: 'var(--settings-section-desc)',
-                }}
+                className="w-full"
               >
                 <Plus size={15} />
                 {t('settings.providers.addProvider')}
-              </button>
+              </Button>
             </div>
           </div>
 

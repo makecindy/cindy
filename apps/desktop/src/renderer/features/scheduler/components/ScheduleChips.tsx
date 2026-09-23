@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -1313,19 +1314,18 @@ export function ThreadPickerInline({ value, onSelect, onOpen, reference }: {
             ))}
           </select>
           {onOpen && hasRealValue && !referenceUnavailable && (
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              tone="quiet"
               type="button"
               onClick={() => onOpen(value)}
               title={t('scheduler.editor.runSession.card.open')}
-              className={cn(
-                'inline-flex h-[34px] shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium',
-                'text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
-                'transition-colors focus:outline-none',
-              )}
             >
               <ExternalLink size={12} strokeWidth={1.75} aria-hidden />
               {t('scheduler.editor.runSession.card.open')}
-            </button>
+            </Button>
           )}
         </>
       )}

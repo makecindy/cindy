@@ -1,4 +1,5 @@
 import { pickFileIcon } from '@/components/ui/file-type-icon';
+import { Button } from '@/components/ui/button';
 /**
  * Unified composer suggestion panel (command-palette F2 / F5, `@` + `+`).
  *
@@ -504,7 +505,10 @@ export function AtMentionPanel({
             <div className="text-12 text-[var(--cmd-palette-item-meta)] px-[12px] text-center">
               {state.kind === 'error' ? state.message : ''}
             </div>
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
+              compact
               type="button"
               onMouseDown={(e) => {
                 e.preventDefault();
@@ -512,13 +516,9 @@ export function AtMentionPanel({
               onClick={() => {
                 onRetry();
               }}
-              className={cn(
-                'h-[28px] px-[12px] rounded-full text-12 font-medium',
-                'bg-[var(--cmd-palette-item-hover)] text-[var(--cmd-palette-item-text)]',
-              )}
             >
               {t('newChat.atMention.retry')}
-            </button>
+            </Button>
           </div>
         )}
         {showEmptyState && (

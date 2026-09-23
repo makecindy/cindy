@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames';
 /**
@@ -717,16 +718,20 @@ export function ModelAdvancedDrawer({
                         );
                       })}
                       {visibilityCustomized && !paymentRequired && selectionAvailable && (
-                        <button
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          tone="quiet"
+                          compact
                           type="button"
                           onClick={async () => {
                             if (!await resetModelVisibilities(provider.id, visibilityTargets))
                               toast.error(t('settings.providers.models.visibilityWriteFailed'));
                           }}
-                          className="mt-2 rounded-full px-2 py-1 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]"
+                          className="mt-2"
                         >
                           {t('settings.providers.models.advanced.restoreDefault')}
-                        </button>
+                        </Button>
                       )}
                     </Section>
                   )}
@@ -760,17 +765,21 @@ export function ModelAdvancedDrawer({
                         (a) =>
                           getProviderModelEffort(a, provider.id, row.byAgent[a]!.id) !== undefined,
                       ) && (
-                        <button
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          tone="quiet"
+                          compact
                           type="button"
                           disabled={paymentRequired}
                           onClick={() => {
                             for (const a of chatAgents)
                               clearProviderModelEffort(a, provider.id, row.byAgent[a]!.id);
                           }}
-                          className="mt-2 rounded-full px-2 py-1 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]"
+                          className="mt-2"
                         >
                           {t('settings.providers.models.advanced.restoreDefault')}
-                        </button>
+                        </Button>
                       )}
                     </Section>
                   )}
@@ -1047,29 +1056,35 @@ export function ModelAdvancedDrawer({
               </div>
             </div>
 
-            {/* 动作区:准入轴与本机文件。与上面的显示轴刻意隔开一段留白 ——
-                  它们不是同一件事,放在一起会让人以为关了开关就等于停用。 */}
+            {/* Missing manufacturer metadata does not make a configured
+                outbound protocol unconfirmed. Keep that distinction in
+                the manufacturer reference when one is declared. */}
             {!paymentRequired && (
               <div className="flex shrink-0 flex-col gap-2 border-t border-[var(--settings-theme-card-border)] px-5 py-3">
-                <button
+                <Button
+                  variant="secondary"
+                  size="md"
+                  compact
                   type="button"
                   disabled={disabled && !selectionAvailable}
                   onClick={() => onDisable(row)}
-                  className="h-8 rounded-full disabled:opacity-50 border border-[var(--settings-btn-secondary-border)] text-13 text-[var(--settings-btn-secondary-text)] transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
                 >
                   {disabled
                     ? t('settings.providers.models.enableModel')
                     : t('settings.providers.models.disableModel')}
-                </button>
+                </Button>
                 {isLocalOllama && onDeleteLocal && (
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    tone="danger"
+                    compact
                     type="button"
                     onClick={() => onDeleteLocal(row)}
-                    className="flex h-8 items-center justify-center gap-1.5 rounded-full text-13 text-[var(--error-flat)] transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
                   >
                     <Trash2 size={13} />
                     {t('settings.providers.local.deleteModel')}
-                  </button>
+                  </Button>
                 )}
               </div>
             )}

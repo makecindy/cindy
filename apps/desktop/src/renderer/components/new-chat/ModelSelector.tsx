@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName, matchesModelName } from '@/lib/modelDisplayNames';
 import {
@@ -566,14 +567,18 @@ function RemoteModelLoadNotice({
         <p className={cn(compact ? 'text-11 leading-[1.45]' : 'text-xs leading-[1.45]')}>
           {t('newChat.modelSelector.remoteLoadFailed')}
         </p>
-        <button
+        <Button
+          variant="secondary"
+          tone="danger"
+          size="xs"
+          compact
           type="button"
           onClick={onRetry}
-          className="mt-1 inline-flex h-6 items-center gap-1 rounded-full px-2 text-xs font-medium text-[var(--error-fg-strong)] hover:bg-[var(--surface-hover)]"
+          className="mt-1"
         >
           <RefreshCw size={12} />
           {t('newChat.modelSelector.retryRemoteModels')}
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import {
   Fragment,
   useCallback,
@@ -987,17 +988,20 @@ export function SearchFilterMenu({
             {t('ccAgent.search.filter.label')}
           </span>
           {activeCount > 0 && (
-            <button
+            <Button
+              variant="secondary"
+              size="xxs"
+              compact
+              tone="quiet"
               type="button"
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
                 onReset();
               }}
-              className="shrink-0 rounded-full px-2 py-0.5 text-xs text-[var(--text-tertiary)] hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--text-primary)]"
             >
               {t('ccAgent.search.filter.reset')}
-            </button>
+            </Button>
           )}
         </div>
 

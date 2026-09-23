@@ -1,4 +1,5 @@
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
+import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * TextLightbox
@@ -593,23 +594,18 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
             >
               {t('chat.textLightbox.oversizeBody', { size: oversizeSizeText, limit: oversizeLimitMb })}
             </div>
-            <button
+            <Button
+              variant="cta"
+              size="lg"
+              compact
               type="button"
               onClick={openInSystem}
               disabled={!localActionsReady}
-              className={cn(
-                'mt-2 inline-flex items-center gap-2 rounded-[9999px]',
-                'bg-[var(--lightbox-cta-bg)] px-5 py-[10px]',
-                'text-14 font-medium text-[var(--lightbox-cta-fg)]',
-                'transition-colors',
-                localActionsReady
-                  ? 'hover:bg-[var(--lightbox-cta-hover)] cursor-pointer'
-                  : 'opacity-40 cursor-not-allowed',
-              )}
+              className="mt-2"
             >
               <ExternalLink size={14} />
               {t('chat.textLightbox.openInSystem')}
-            </button>
+            </Button>
           </div>
         )}
 

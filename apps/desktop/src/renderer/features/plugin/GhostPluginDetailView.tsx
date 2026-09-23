@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * Plugin detail presentation for configuration, Tools, permissions, and factual metadata.
@@ -288,22 +289,21 @@ export function GhostPluginDetailView({
               style={WINDOW_NO_DRAG_STYLE}
             >
               {needsReapproval && !detail.builtin && onReapprove ? (
-                <button
+                <Button
+                  variant="secondary"
+                  size="lg"
                   type="button"
                   onClick={onReapprove}
                   disabled={updateBusy}
-                  className={cn(
-                    'inline-flex h-10 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 text-13 font-medium text-[var(--text-primary)]',
-                    'transition-[background-color,border-color,transform,opacity] duration-150 hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
-                  )}
                 >
                   {t('settings.ghosts.reapproval.action')}
-                </button>
+                </Button>
               ) : updateVersion ? (
                 // 更新提级(设计定稿):有新版本时黑色主 CTA 直达市场更新确认流。
-                <button
+                <Button
+                  variant="cta"
+                  size="lg"
+                  loading={updateBusy}
                   type="button"
                   onClick={onUpdate}
                   disabled={updateBusy}
@@ -313,41 +313,24 @@ export function GhostPluginDetailView({
                       : t('settings.ghosts.market.updateTo', { version: updateVersion })
                   }
                   aria-busy={updateBusy || undefined}
-                  className={cn(
-                    'inline-flex h-10 items-center justify-center gap-1.5 rounded-full px-5 text-13 font-medium',
-                    'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                    'transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--accent-hover)] active:scale-[0.98]',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    'disabled:cursor-wait disabled:opacity-60 disabled:active:scale-100',
-                  )}
                 >
-                  {updateBusy ? (
-                    <Spinner size={14} />
-                  ) : (
                     <>
                       <ArrowUp size={14} aria-hidden="true" />
                       {updateVersion === detail.version
                         ? t('settings.ghosts.market.update')
                         : t('settings.ghosts.market.updateTo', { version: updateVersion })}
                     </>
-                  )}
-                </button>
+                </Button>
               ) : null}
               {primaryAction !== 'manage' ? (
-                <button
+                <Button
+                  variant={updateVersion ? 'secondary' : 'cta'}
+                  size="lg"
                   type="button"
                   onClick={onUse}
                   disabled={!primaryEnabled}
                   title={!enabled ? t('settings.ghosts.detail.useDisabled') : undefined}
-                  className={cn(
-                    'plugin-detail-primary-action inline-flex h-10 min-w-[88px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 text-13 font-medium',
-                    updateVersion
-                      ? 'border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] hover:bg-[var(--surface-hover-soft)]'
-                      : 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]',
-                    'transition-[background-color,transform,opacity] duration-150 active:scale-[0.98]',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
-                  )}
+                  className="plugin-detail-primary-action min-w-[88px] whitespace-nowrap"
                 >
                   {primaryAction === 'command' || primaryAction === 'capability' ? (
                     <MessageCircle size={14} aria-hidden="true" />
@@ -357,7 +340,7 @@ export function GhostPluginDetailView({
                       ? 'settings.ghosts.detail.useAction'
                       : 'settings.ghosts.detail.chatAction',
                   )}
-                </button>
+                </Button>
               ) : null}
               {/* 启用开关带明确文字(设计定稿):状态一目了然,点文字同样可切换。 */}
               <label

@@ -367,7 +367,6 @@ function BotsSidebarContent() {
           <SidebarIconButton
             icon={ArrowLeft}
             label={t('sidebar.backToSessions')}
-            variant="rail"
             onClick={() => navigateToView('cc-agent')}
           />
         )}

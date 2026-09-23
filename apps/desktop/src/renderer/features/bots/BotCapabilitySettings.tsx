@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { ChevronDown } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useBotTranslation } from './botPronounContext';
@@ -204,13 +205,16 @@ export function BotCapabilitySettings({
           <p className="text-12 text-[var(--text-secondary)]">{t('bots.capabilities.loading')}</p>
         ) : null}
         {error ? (
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            tone="danger"
+            compact
             type="button"
             onClick={refresh}
-            className="rounded-full px-4 py-2 text-12 text-[var(--text-danger)]"
           >
             {t('bots.retry')}
-          </button>
+          </Button>
         ) : null}
         {kinds.map((kind) => {
           const rows = [...(entries[kind] ?? [])];

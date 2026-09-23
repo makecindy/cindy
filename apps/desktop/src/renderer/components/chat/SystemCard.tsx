@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * SystemCard
  * ---------------------------------------------------------------------------
@@ -1285,14 +1286,17 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
         )}
         <span className="min-w-0 flex-1 font-medium">{t(`chat.systemCard.review.${status}`)}</span>
         {reviewerSessionId && (
-          <button
+          <Button
+            variant="secondary"
+            size="xs"
+            compact
+            tone="quiet"
             type="button"
             onClick={() => navigate(`/cc-agent/${reviewerSessionId}`)}
-            className="flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted/50"
           >
             {t('chat.systemCard.review.openTask')}
             <ArrowRight size={12} />
-          </button>
+          </Button>
         )}
       </div>
       {status === 'running' && (

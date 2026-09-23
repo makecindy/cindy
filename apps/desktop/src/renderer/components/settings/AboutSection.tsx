@@ -10,11 +10,12 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ExternalLink, FolderOpen, Loader2, Upload } from 'lucide-react';
+import { ExternalLink, FolderOpen, Upload } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
+import { Button } from '@/components/ui/button';
 import { useExperimentalFlag } from '@/hooks/useExperimentalFeatures';
 import { useAutoUpdateSettings } from '@/hooks/useAutoUpdateSettings';
 import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
@@ -209,22 +210,18 @@ function LegalLinkRow({ label, url }: { label: string; url: string }) {
   return (
     <div className="flex items-center justify-between gap-3 px-[18px] py-4">
       <span className="select-none text-13 text-[var(--settings-section-sublabel)]">{label}</span>
-      <button
+      <Button
+        variant="secondary"
+        size="lg"
         aria-label={t('settings.about.legal.viewDocument', { document: label })}
-        className={cn(
-          '-mr-1 flex select-none items-center gap-1.5 rounded-full px-6 py-2.5',
-          'text-12 font-medium text-[var(--settings-section-title)]',
-          'border border-[var(--settings-theme-card-border)]',
-          'transition-colors hover:bg-[var(--surface-hover)] active:scale-[0.98]',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]',
-        )}
+        className="-mr-1 select-none"
         onClick={() => void handleOpen()}
         title={url}
         type="button"
       >
         {t('settings.about.legal.viewDocument', { document: label })}
         <ExternalLink aria-hidden size={13} strokeWidth={1.7} />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -536,21 +533,17 @@ function OpenLogsRow() {
       <span className="text-13 text-[var(--settings-section-sublabel)]">
         {t('settings.about.logsDirLabel')}
       </span>
-      <button
+      <Button
+        variant="secondary"
+        size="sm"
         type="button"
         onClick={handleOpen}
-        className={cn(
-          'flex items-center gap-1.5 rounded-md px-2.5 py-1 -mr-1',
-          'text-12 font-medium text-[var(--settings-section-title)]',
-          'border border-[var(--settings-theme-card-border)]',
-          'hover:bg-[var(--settings-theme-card-border)]/40',
-          'transition-colors',
-        )}
+        className="-mr-1 px-2.5"
         title={t('settings.about.openLogsDirTooltip')}
       >
         <FolderOpen size={13} />
         {t('settings.about.openLogsDir')}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -705,32 +698,19 @@ function UploadLogsRow() {
             </p>
           )}
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           type="button"
           onClick={() => void handleUpload()}
           disabled={!state.manualUploadAvailable || uploading || state.loading}
-          className={cn(
-            'flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 -mr-1',
-            'text-12 font-medium text-[var(--settings-section-title)]',
-            'border border-[var(--settings-theme-card-border)]',
-            'transition-colors hover:bg-[var(--settings-theme-card-border)]/40',
-            'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
-          )}
+          loading={uploading}
+          className="-mr-1 px-2.5"
           title={t('settings.about.logUpload.uploadTooltip')}
         >
-          {/* 动画必须挂在 HTML 元素上并只用 transform / opacity(工程规范 §7):
-              图标本身是 SVG,所以旋转挂外层 span 而不是 <Loader2 className="animate-spin">。 */}
-          {uploading ? (
-            <span className="inline-flex animate-spin">
-              <Loader2 size={13} />
-            </span>
-          ) : (
-            <Upload size={13} />
-          )}
-          {uploading
-            ? t('settings.about.logUpload.uploading')
-            : t('settings.about.logUpload.uploadButton')}
-        </button>
+          <Upload size={13} />
+          {t('settings.about.logUpload.uploadButton')}
+        </Button>
       </div>
     </div>
   );

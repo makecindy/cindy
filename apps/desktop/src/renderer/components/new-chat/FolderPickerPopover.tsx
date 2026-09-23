@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import {
   CircleAlert,
   Folder,
@@ -360,15 +361,19 @@ export function FolderPickerPopover({
                         })}
                       </p>
                       {deviceScope.retry && (
-                        <button
+                        <Button
+                          variant="secondary"
+                          size="xs"
+                          compact
+                          tone="danger"
                           type="button"
                           disabled={selectionPending}
                           onClick={deviceScope.retry}
-                          className="mt-1 inline-flex h-6 items-center gap-1 rounded-full px-2 text-xs font-medium text-[var(--error-fg-strong)] hover:bg-[var(--surface-hover)]"
+                          className="mt-1"
                         >
                           <RefreshCw size={12} />
                           {t('newChat.folderPicker.retryRemoteProjects')}
-                        </button>
+                        </Button>
                       )}
                     </div>
                   </div>
