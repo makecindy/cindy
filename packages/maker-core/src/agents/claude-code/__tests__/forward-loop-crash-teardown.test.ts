@@ -55,7 +55,7 @@ function createNoopLogger(): Logger {
   return logger;
 }
 
-function createDeps(): AgentDeps {
+function createDeps(overrides: Partial<AgentDeps> = {}): AgentDeps {
   const auth: AuthAdapter = {
     async getState() {
       return { authenticated: true };
@@ -74,6 +74,7 @@ function createDeps(): AgentDeps {
     runtimeConfig: {},
     binaryPath: process.execPath,
     logger: createNoopLogger(),
+    ...overrides,
   };
 }
 
@@ -147,7 +148,7 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startCrashableSession() {
+async function startCrashableSession(depOverrides: Partial<AgentDeps> = {}) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
@@ -170,7 +171,7 @@ async function startCrashableSession() {
     return fakeQuery;
   });
 
-  const agent = new ClaudeCodeAgent(createDeps());
+  const agent = new ClaudeCodeAgent(createDeps(depOverrides));
   const handle = await agent.startSession({
     sessionId: 'session-crash',
     model: 'claude-opus-4-6',
@@ -211,8 +212,41 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent forward loop crash teardown', () => {
+  it('revokes proxy auth when query construction fails before a handle is returned', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const disposeProxySession = vi.fn();
+    sdkMock.query.mockImplementation(() => {
+      throw new Error('query startup failed');
+    });
+    const agent = new ClaudeCodeAgent(createDeps({
+      getClaudeProxySessionAuth: () => ({
+        sessionId: 'session-startup-failure',
+        token: 'proxy-token',
+        dispose: disposeProxySession,
+      }),
+    }));
+
+    await expect(agent.startSession({
+      sessionId: 'session-startup-failure',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    })).rejects.toThrow('query startup failed');
+
+    expect(disposeProxySession).toHaveBeenCalledTimes(1);
+  });
+
   it('mid-turn stream crash tears the handle down with a full failure tail', async () => {
-    const { handle, stream, events, collected } = await startCrashableSession();
+    const disposeProxySession = vi.fn();
+    const { handle, stream, events, collected } = await startCrashableSession({
+      getClaudeProxySessionAuth: () => ({
+        sessionId: 'session-crash',
+        token: 'proxy-token',
+        dispose: disposeProxySession,
+      }),
+    });
 
     await handle.send({ type: 'user', content: 'hello' });
     expect(handle.isTurnRunning?.()).toBe(true);
@@ -239,6 +273,7 @@ describe('ClaudeCodeAgent forward loop crash teardown', () => {
 
     // handle 死透: turn 不再 in-flight, 后续 send 立刻失败而不是进黑洞排队。
     expect(handle.isTurnRunning?.()).toBe(false);
+    expect(disposeProxySession).toHaveBeenCalledTimes(1);
     await expect(handle.send({ type: 'user', content: 'are you there?' })).rejects.toThrow(
       /input queue is closed/i,
     );

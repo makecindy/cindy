@@ -150,6 +150,40 @@ describe('buildClaudeEnv', () => {
     }
   });
 
+  it('appends host-managed proxy headers after auth headers without allowing duplicates', async () => {
+    const env = await buildClaudeEnv(
+      createAuthAdapter({ ANTHROPIC_CUSTOM_HEADERS: 'x-tenant: acme\nCookie: cindy-cc-session=stale' }),
+      {},
+      {
+        proxyHeaders: {
+          Cookie: 'cindy-cc-session=session-1; cindy-cc-token=token-1',
+        },
+      },
+    );
+
+    expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe(
+      'x-tenant: acme\nCookie: cindy-cc-session=session-1; cindy-cc-token=token-1',
+    );
+  });
+
+  it('drops proxy headers the Anthropic SDK debug logger would not redact', async () => {
+    // XDT_CC_DEBUG_NET=1 sets ANTHROPIC_LOG=debug, and the SDK then writes every
+    // request header into sessions/<id>/cc-debug.raw.log. Redaction is keyed on the
+    // header name, so a session proof sent under any other name lands on disk in
+    // plain text while it is still valid and replayable against the loopback proxy.
+    const env = await buildClaudeEnv(createAuthAdapter({}), {}, {
+      proxyHeaders: {
+        Cookie: 'cindy-cc-session=session-1; cindy-cc-token=redacted-token',
+        'x-cindy-cc-session-token': 'leaked-token',
+      },
+    });
+
+    expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe(
+      'Cookie: cindy-cc-session=session-1; cindy-cc-token=redacted-token',
+    );
+    expect(env.ANTHROPIC_CUSTOM_HEADERS).not.toContain('leaked-token');
+  });
+
   it('evaluates function-form behaviorFlags with the spawn route context', async () => {
     const behaviorFlags = vi.fn(() => ({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0' }));
 

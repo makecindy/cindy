@@ -1248,7 +1248,11 @@ export class ClaudeCodeAgent extends BaseAgent {
       credentialMode,
       authState.authSource,
     );
+    const proxySessionAuth = !opts.remoteHostId && opts.sessionId
+      ? this.deps.getClaudeProxySessionAuth?.(opts.sessionId, opts.sessionInstanceId) ?? null
+      : null;
 
+    try {
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
     const sdkModelFor = (model: string): string => this.sdkModelFor(model);
@@ -1306,6 +1310,15 @@ export class ClaudeCodeAgent extends BaseAgent {
       credentialMode,
       sessionProviderId: opts.providerId ?? null,
       activeModel: sdkModel,
+      // Cookie(而非 `x-cindy-cc-*` 自定义头):Debug 日志开关打开时 SDK 会把完整请求
+      // headers 写进 sessions/<id>/cc-debug.raw.log,而它的脱敏白名单按 header 名写死
+      // (x-api-key / authorization / cookie / set-cookie)。自定义头会让这份**会话存活
+      // 期间一直有效**的路由证明明文落盘。详见 anthropic-compat-proxy-host.ts 的常量注释。
+      proxyHeaders: proxySessionAuth
+        ? {
+            Cookie: `cindy-cc-session=${proxySessionAuth.sessionId}; cindy-cc-token=${proxySessionAuth.token}`,
+          }
+        : undefined,
       modelContextWindows,
       smallFastModel,
       // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
@@ -3947,6 +3960,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       runningBackgroundTasks.clear();
       terminalBackgroundTaskIds.clear();
       closed = true;
+      proxySessionAuth?.dispose();
       try { dismissAllPending('session_closed', 'deny'); } catch (e) {
         log.warn(`${logLabel}: dismissAllPending threw`, { error: String(e) });
       }
@@ -6547,6 +6561,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         turnInFlight = false;
         clearBridgeState();
         closed = true;
+        proxySessionAuth?.dispose();
         try {
           // 任何挂着的 interaction 强制 deny + emit dismissed, 防止 host 卡住等永远不会来的回应
           dismissAllPending('session_closed', 'deny');
@@ -7130,6 +7145,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
 
     return handle;
+    } catch (error) {
+      // No handle escapes a failed startup, so this is its only lifecycle owner.
+      proxySessionAuth?.dispose();
+      throw error;
+    }
   }
 
   // ── Memory 实现 ────────────────────────────────────────────────────────
