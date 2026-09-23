@@ -95,6 +95,38 @@ struct MacUnlockProfile {
   }
 }
 
+/// The production traversal, with AX reads and the monotonic clock injectable
+/// so budget and object-mapping regressions can be tested without a real login.
+enum MacUnlockWindowCollector {
+  static func collect<Element>(windows: [Element],
+    now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+    equal: (Element, Element) -> Bool,
+    read: (Element, Int?) throws -> MacUnlockProfile.Node,
+    children: (Element) throws -> [Element]) throws -> (elements: [Element], nodes: [MacUnlockProfile.Node]) {
+    guard !windows.isEmpty, windows.count <= 16 else { throw CredentialError.unlockUnavailable }
+    let deadline = now() + 2
+    var elements: [Element] = [], nodes: [MacUnlockProfile.Node] = []
+    var visited: [Element] = []
+    func visit(_ element: Element, parent: Int?, depth: Int) throws {
+      guard now() < deadline, depth <= 12, visited.count < 256,
+        !visited.contains(where: { equal($0, element) }) else { throw CredentialError.unlockUnavailable }
+      visited.append(element)
+      let index = nodes.count
+      elements.append(element)
+      nodes.append(try read(element, parent))
+      for child in try children(element) { try visit(child, parent: index, depth: depth + 1) }
+    }
+    var surfaces: [(elements: [Element], nodes: [MacUnlockProfile.Node])] = []
+    for window in windows {
+      elements = []; nodes = []
+      try visit(window, parent: nil, depth: 0)
+      surfaces.append((elements, nodes))
+    }
+    guard now() < deadline else { throw CredentialError.unlockUnavailable }
+    return surfaces[try MacUnlockProfile.selectWindow(surfaces.map { $0.nodes })]
+  }
+}
+
 /// Kernel start time is available for loginwindow even when NSWorkspace has no
 /// launchDate. Bind PID reuse checks to the same OS process and owning user.
 struct MacUnlockProcessIdentity: Equatable {
@@ -264,16 +296,9 @@ final class MacScreenUnlocker {
       let code, SecCodeCheckValidity(code, [], requirement) == errSecSuccess else { throw CredentialError.invalidIdentity }
     let root = AXUIElementCreateApplication(app.processIdentifier)
     AXUIElementSetMessagingTimeout(root, 0.25)
-    guard let windows = try value(root, kAXWindowsAttribute) as? [AXUIElement],
-      !windows.isEmpty, windows.count <= 16 else { throw CredentialError.unlockUnavailable }
+    guard let windows = try value(root, kAXWindowsAttribute) as? [AXUIElement] else { throw CredentialError.unlockUnavailable }
     let names = try account.unambiguousDisplayNames()
-    let deadline = ProcessInfo.processInfo.systemUptime + 2
-    var elements: [AXUIElement] = [], nodes: [MacUnlockProfile.Node] = []
-    var visited: [AXUIElement] = []
-    func visit(_ element: AXUIElement, parent: Int?, depth: Int) throws {
-      guard ProcessInfo.processInfo.systemUptime < deadline, depth <= 12, visited.count < 256,
-        !visited.contains(where: { CFEqual($0, element) }) else { throw CredentialError.unlockUnavailable }
-      visited.append(element)
+    let selected = try MacUnlockWindowCollector.collect(windows: windows, equal: { CFEqual($0, $1) }, read: { element, parent in
       AXUIElementSetMessagingTimeout(element, 0.1)
       guard let role = try value(element, kAXRoleAttribute) as? String, !role.isEmpty else { throw CredentialError.unlockUnavailable }
       let subrole = try value(element, kAXSubroleAttribute) as? String ?? ""
@@ -293,23 +318,12 @@ final class MacScreenUnlocker {
       if identifier == "FocusedUser", role == kAXStaticTextRole {
         matches = names.contains(try value(element, kAXValueAttribute) as? String ?? "")
       }
-      let index = nodes.count
-      elements.append(element)
-      nodes.append(.init(parent: parent, role: role, subrole: subrole, identifier: identifier,
+      return .init(parent: parent, role: role, subrole: subrole, identifier: identifier,
         enabled: try value(element, kAXEnabledAttribute) as? Bool == true, writable: writable.boolValue,
-        press: (actions as? [String])?.contains(kAXPressAction) == true, matchesAccount: matches))
-      if let children = try value(element, kAXChildrenAttribute) as? [AXUIElement] {
-        for child in children { try visit(child, parent: index, depth: depth + 1) }
-      }
-    }
-    var surfaces: [(elements: [AXUIElement], nodes: [MacUnlockProfile.Node])] = []
-    for window in windows {
-      elements = []; nodes = []
-      try visit(window, parent: nil, depth: 0)
-      surfaces.append((elements, nodes))
-    }
-    guard ProcessInfo.processInfo.systemUptime < deadline else { throw CredentialError.unlockUnavailable }
-    let selected = surfaces[try MacUnlockProfile.selectWindow(surfaces.map { $0.nodes })]
+        press: (actions as? [String])?.contains(kAXPressAction) == true, matchesAccount: matches)
+    }, children: { element in
+      try value(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
+    })
     return (app, launch, code, selected.elements, selected.nodes)
   }
   private func validate(_ target: Target, account: MacSystemAccount) throws -> Snapshot {
