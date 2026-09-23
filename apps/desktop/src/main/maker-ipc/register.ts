@@ -15866,7 +15866,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   ipcMain.handle(MAKER_INVOKE.LIST_ACTIVE, () => {
-    const activityById = new Map(getAgentIslandService()?.listSessionActivitySnapshots()
+    const activityService = getAgentIslandService();
+    const activityById = new Map(activityService?.getSessionActivitySnapshots()
       .map((activity) => [activity.sessionId, activity] as const) ?? []);
     return maker.listActiveSessions().map((s) => {
       const activity = activityById.get(s.id);
@@ -15876,9 +15877,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         workDir: s.workDir,
         capabilities: s.capabilities,
         isTurnRunning: s.isTurnRunning(),
-        ...(activity ? {
-          activityPhase: activity.phase,
-          activityAttention: activity.attention,
+        ...(activityService ? {
+          activityPhase: activity?.phase ?? 'idle',
+          activityAttention: activity?.attention ?? false,
         } : {}),
       };
     });

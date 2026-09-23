@@ -4115,6 +4115,7 @@ export const remoteSessionStore = {
             sessionId,
             phase: activityPhase,
             compactDetail: previous?.phase === activityPhase ? previous.compactDetail : '',
+            workingPhase: previous?.phase === activityPhase ? previous.workingPhase : undefined,
             interactionKind: previous?.phase === activityPhase ? previous.interactionKind : undefined,
             attention: activityAttention,
           }) || changed;

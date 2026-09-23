@@ -370,11 +370,16 @@ describe('active runtime summary projection', () => {
     const projected = __testing.projectInvokeResultForTunnel(
       'maker:list-active', [{
         ...rows[0], activityPhase: 'running', activityAttention: false,
+      }, {
+        ...rows[1], activityPhase: 'idle', activityAttention: false,
       }], false, [{ summary: true }],
     );
     expect(projected).toEqual([{
       sessionId: 'session-0', isTurnRunning: true,
       activityPhase: 'running', activityAttention: false,
+    }, {
+      sessionId: 'session-1', isTurnRunning: false,
+      activityPhase: 'idle', activityAttention: false,
     }]);
   });
 

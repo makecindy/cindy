@@ -2764,6 +2764,15 @@ describe('remoteSessionStore', () => {
     }]);
     expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'running', attention: false });
     expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'running', attention: false, workingPhase: 'testing',
+    });
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{
+      sessionId: 's1', isTurnRunning: true,
+      activityPhase: 'running', activityAttention: false,
+    }]);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')?.workingPhase).toBe('testing');
   });
 
   it('does not let a delayed activity snapshot erase a newer error push', () => {
@@ -2777,6 +2786,18 @@ describe('remoteSessionStore', () => {
       activityPhase: 'completed', activityAttention: false,
     }], epoch);
     expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
+  });
+
+  it('clears a cached error when the host explicitly reports no remaining activity', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{
+      sessionId: 's1', isTurnRunning: false,
+      activityPhase: 'idle', activityAttention: false,
+    }]);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toBeNull();
   });
 
   it('does not treat an absent active-session row as an idle assertion', () => {
