@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/FileTypeIcon';
 /**
  * QuoteCapsule — 「N 处引用」胶囊(chat-text-quote,对照桌面 Codex 风格)。
  *
@@ -13,7 +14,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileText, MessageSquareQuote, X } from 'lucide-react-native';
+import { MessageSquareQuote, X } from 'lucide-react-native';
 import { Modal, Pressable, ScrollView, View, useWindowDimensions } from 'react-native';
 import { Text } from '@/components/AppText';
 import { quoteSourceDisplayLabel, type ChatQuote } from '@cindy/maker-shared/chat-quotes';
@@ -134,7 +135,7 @@ export function QuoteCapsule({ quotes, variant, onClear, testIDPrefix = 'quoteCa
                     </Text>
                     {quote.sourcePath ? (
                       <View style={styles.previewSourceRow}>
-                        <FileText color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+                        <FileTypeIcon name={quote.sourcePath} color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
                         <Text numberOfLines={1} style={styles.previewSourceText}>
                           {quoteSourceDisplayLabel(quote)}
                         </Text>

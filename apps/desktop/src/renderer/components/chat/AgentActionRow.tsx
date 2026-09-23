@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * AgentActionRow
  * ---------------------------------------------------------------------------
@@ -46,7 +47,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
-import { Check, ChevronDown, ChevronRight, File as FileIcon } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   describeToolUse,
@@ -1017,7 +1018,7 @@ export function AgentActionRow({
             'min-w-0 max-w-full',
           )}
         >
-          <FileIcon size={12} className="shrink-0 text-[var(--chat-input-chip-icon)]" />
+          <FileTypeIcon name={chipFilePath} size={12} className="shrink-0 text-[var(--chat-input-chip-icon)]" />
           <span className="truncate">{displayParam.text}</span>
         </span>
       );

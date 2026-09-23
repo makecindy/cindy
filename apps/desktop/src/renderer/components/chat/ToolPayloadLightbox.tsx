@@ -34,6 +34,7 @@ import { useTranslation } from 'react-i18next';
 import { cn, basename } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Tooltip } from '@/components/ui/tooltip';
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 
 import { DiffView } from './DiffView';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
@@ -338,7 +339,11 @@ export function ToolPayloadLightbox({
                   'text-left cursor-pointer',
                 )}
               >
-                <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                {singleDiffFile ? (
+                  <FileTypeIcon name={singleDiffFile.filePath} size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                ) : (
+                  <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                )}
                 <span
                   className={cn(
                     'font-semibold text-14',

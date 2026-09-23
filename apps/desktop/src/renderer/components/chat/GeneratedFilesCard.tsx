@@ -1,3 +1,5 @@
+import { FileTypeTile } from '@/components/ui/file-type-tile';
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * GeneratedFilesCard — 每个 user turn 结尾的「本轮产出文件」卡。
  * ---------------------------------------------------------------------------
@@ -30,7 +32,7 @@
 
 import { CHAT_FOCUS_CLASS, CHAT_COLOR_TRANSITION_CLASS } from './chatChrome';
 import { memo, useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, FileImage, FileText, Globe2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Globe2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
@@ -378,7 +380,7 @@ function GeneratedFileChip({
                 </span>
               </span>
               <span className="shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--text-secondary)]">
-                <FileText size={15} aria-hidden="true" />
+                <FileTypeIcon name={file.name} size={15} aria-hidden="true" />
               </span>
             </span>
           </>
@@ -393,7 +395,7 @@ function GeneratedFileChip({
               />
             ) : (
               <span className="flex h-[104px] w-full items-center justify-center border-b border-[var(--border-default)] bg-[var(--surface-hover)] text-[var(--text-tertiary)]">
-                <FileImage size={24} aria-hidden="true" />
+                <FileTypeIcon name={file.name} size={24} aria-hidden="true" />
               </span>
             )}
             <span className="flex min-w-0 items-center gap-2 px-3 py-2.5">
@@ -419,7 +421,7 @@ function GeneratedFileChip({
         ) : botFile ? (
           <span className="flex min-h-[64px] min-w-0 items-center gap-3 px-3 py-2.5">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-hover)] text-[var(--text-secondary)]">
-              <FileText size={16} aria-hidden="true" />
+              <FileTypeTile name={file.name} />
             </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-13 font-medium text-[var(--text-primary)]">
@@ -434,7 +436,7 @@ function GeneratedFileChip({
           </span>
         ) : (
           <>
-            <FileText size={14} className="shrink-0 opacity-70" />
+            <FileTypeIcon name={file.name} size={14} className="shrink-0 opacity-70" />
             <span className="truncate">{file.name}</span>
           </>
         )}

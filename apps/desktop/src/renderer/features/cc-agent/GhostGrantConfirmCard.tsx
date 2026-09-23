@@ -1,3 +1,4 @@
+import { FileTypeTile } from '@/components/ui/file-type-tile';
 /**
  * GhostGrantConfirmCard
  * ---------------------------------------------------------------------------
@@ -17,7 +18,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Check, File, FileAudio, FileVideo, Folder, X } from 'lucide-react';
+import { Check, Folder, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -131,7 +132,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
               />
             ) : (
               <span className="flex size-12 shrink-0 items-center justify-center rounded-[6px] border border-[var(--chat-input-border)] text-[var(--status-bar-meta)]">
-                <ItemIcon isDirectory={item.isDirectory} mimeType={item.mimeType} />
+                {item.isDirectory ? <Folder className="size-5" /> : <FileTypeTile name={item.name} mimeType={item.mimeType} />}
               </span>
             )}
             <div className="min-w-0">
@@ -199,13 +200,6 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
       </div>
     </div>
   );
-}
-
-function ItemIcon({ isDirectory, mimeType }: { isDirectory?: boolean; mimeType?: string }) {
-  if (isDirectory) return <Folder className="size-5" />;
-  if (mimeType?.startsWith('video/')) return <FileVideo className="size-5" />;
-  if (mimeType?.startsWith('audio/')) return <FileAudio className="size-5" />;
-  return <File className="size-5" />;
 }
 
 function formatBytes(bytes: number): string {

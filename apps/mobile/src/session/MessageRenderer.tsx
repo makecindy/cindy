@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionMessageActions } from './CompanionMessageActions';
 import { useMessageHistoryActive, useMessageHistoryPositioning } from './messageHistoryActivity';
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
@@ -30,7 +31,6 @@ import {
   Copy,
   Ellipsis,
   ExternalLink,
-  File as FileIcon,
   Layers,
   ListTodo,
   LoaderCircle,
@@ -6546,7 +6546,7 @@ function FileChip({
       testID={fileChipTestId(path ?? name)}
     >
       <View style={[styles.fileIconFrame, { width: layout.fileChipIconWidth }]}>
-        <FileIcon color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        <FileTypeIcon name={name || path} color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
       </View>
       <View style={styles.fileText}>
         <Text style={styles.fileName} numberOfLines={1}>{preview.title}</Text>

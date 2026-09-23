@@ -1,10 +1,10 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
   FileDiff,
-  FileText,
   LoaderCircle,
   Redo2,
   Undo2,
@@ -69,7 +69,7 @@ function TurnChangeFileRow({
         onContextMenu={contextMenu.onContextMenu}
         className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
       >
-        <FileText size={15} className="shrink-0 text-[var(--text-secondary)]" />
+        <FileTypeIcon name={file.path} size={15} className="shrink-0 text-[var(--text-secondary)]" />
         <span className="min-w-0 flex-1 truncate text-13 text-[var(--text-primary)]">
           {file.path}
         </span>

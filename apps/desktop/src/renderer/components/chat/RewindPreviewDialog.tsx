@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * RewindPreviewDialog
  * ---------------------------------------------------------------------------
@@ -397,9 +398,8 @@ function BodyDefault({ files }: { files: string[] }) {
                 idx > 0 && 'border-t border-[var(--board)]',
               )}
             >
-              <FileText
+              <FileTypeIcon name={path}
                 size={14}
-                strokeWidth={1.75}
                 className="shrink-0 text-[var(--cmd-palette-item-meta)]"
               />
               <span

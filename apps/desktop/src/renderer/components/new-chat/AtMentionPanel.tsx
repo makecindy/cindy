@@ -1,3 +1,4 @@
+import { pickFileIcon } from '@/components/ui/file-type-icon';
 /**
  * Unified composer suggestion panel (command-palette F2 / F5, `@` + `+`).
  *
@@ -29,7 +30,6 @@ import {
   Bot,
   Check,
   ClipboardList,
-  File as FileIcon,
   Folder as FolderIcon,
   FolderPlus,
   Globe2,
@@ -379,7 +379,7 @@ export function AtMentionPanel({
                 ? Bot
               : item.type === 'plugin-command' || item.type === 'plugin-resource'
                 ? Plug
-              : FileIcon;
+              : pickFileIcon(item.name);
 
     return (
       <button

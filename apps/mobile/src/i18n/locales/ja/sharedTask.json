@@ -44,8 +44,6 @@
   "enterTask": "タスクを開く",
   "inviteBoxTitle": "仲間に招待を送信",
   "roleGuest": "ゲスト",
-  "roleOwnedBadge": "自分が共有",
-  "roleJoinedBadge": "参加中",
   "removeShort": "削除",
   "removeNamedTitle": "{{name}}を削除しますか？",
   "shareCurrent": "現在のタスクを共有",
