@@ -11,9 +11,11 @@ export function GhostMainViewHost() {
   const { ghostId = '' } = useParams<{ ghostId: string }>();
   const navigate = useNavigate();
   const { routeCapable } = useGhostMainViews();
-  const item = routeCapable.find((candidate) => candidate.ghostId === ghostId);
+  const byInstance = routeCapable.find((candidate) => candidate.instanceId === ghostId);
+  const byGhostId = routeCapable.filter((candidate) => candidate.ghostId === ghostId);
+  const item = byInstance ?? (byGhostId.length === 1 ? byGhostId[0] : undefined);
   const runtimeState = useGhostRuntimeState(
-    item ? installedGhostStoragePart(item.installedGhost) : ghostId,
+    item ? item.instanceId : ghostId,
   );
 
   useEffect(() => {

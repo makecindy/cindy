@@ -31,6 +31,7 @@ const runtime = vi.hoisted(() => ({
   pendingCalls: false,
   runningErrand: false,
   cindyWork: false,
+  busyQueryIds: [] as string[],
   generatedInstallDirs: [] as string[],
   installOrigins: new Map<string, 'manual' | 'agent-forge'>(),
   installOriginError: false,
@@ -162,9 +163,18 @@ vi.mock('../../cindy-brain/index.js', () => ({
     });
     return installed;
   },
-  hasPendingGhostCalls: vi.fn(() => runtime.pendingCalls),
-  hasRunningGhostErrand: vi.fn(() => runtime.runningErrand),
-  hasRunningGhostCindyWork: vi.fn(() => runtime.cindyWork),
+  hasPendingGhostCalls: vi.fn((id: string) => {
+    runtime.busyQueryIds.push(id);
+    return runtime.pendingCalls;
+  }),
+  hasRunningGhostErrand: vi.fn((id: string) => {
+    runtime.busyQueryIds.push(id);
+    return runtime.runningErrand;
+  }),
+  hasRunningGhostCindyWork: vi.fn((id: string) => {
+    runtime.busyQueryIds.push(id);
+    return runtime.cindyWork;
+  }),
   isBuiltinGhostRemovedByUser: (id: string) => runtime.builtinRemoved.has(id),
   uninstallGhostAndCleanup: runtime.uninstall,
 }));
@@ -214,6 +224,7 @@ afterEach(() => {
   runtime.pendingCalls = false;
   runtime.runningErrand = false;
   runtime.cindyWork = false;
+  runtime.busyQueryIds = [];
   for (const dir of runtime.generatedInstallDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -2907,6 +2918,40 @@ describe('PluginMarketService migration and defaultInstall', () => {
     },
   );
 
+  it('uses the namespaced storage part as the busy key', async () => {
+    const item = summary({
+      ghostId: 'helper',
+      namespace: 'acme',
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-ns-busy-'));
+    roots.push(installDir);
+    const ghostDir = path.join(installDir, '_ns', 'acme', 'helper');
+    fs.mkdirSync(ghostDir, { recursive: true });
+    fs.writeFileSync(path.join(ghostDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: ghostDir, enabled: true, namespace: 'acme' }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item, { namespace: 'acme', scope: 'organization', organizationId: 'org-1' }),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    runtime.pendingCalls = true;
+    runtime.install.mockImplementation(async () => {
+      throw new Error('should not install while namespaced instance is busy');
+    });
+
+    await h.service.snapshot();
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(runtime.busyQueryIds).toContain('_ns__acme__helper');
+    expect(runtime.busyQueryIds).not.toContain('helper');
+  });
+
   it('does not re-check the server-selected organization upgrade against the client version', async () => {
     const item = summary({
       scope: 'organization',
@@ -3967,6 +4012,39 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
     expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
   });
+
+  it('does not uninstall a public sibling when the org instance is already gone', async () => {
+    const publicItem = summary({ ghostId: 'helper' });
+    const orgItem = summary({
+      id: `c${'d'.repeat(24)}`,
+      ghostId: 'helper',
+      namespace: 'acme',
+      scope: 'organization',
+      organizationId: 'org-1',
+    });
+    const h = harness([publicItem, orgItem]);
+    h.ledger.upsertInstallation(recordForTest(publicItem, { namespace: null }));
+    h.ledger.upsertInstallation(
+      recordForTest(orgItem, {
+        namespace: 'acme',
+        scope: 'organization',
+        organizationId: 'org-1',
+      }),
+    );
+    runtime.ghosts = [ghostEntry('helper')];
+
+    await expect(h.service.uninstall(orgItem.id)).resolves.toEqual({ ok: true });
+
+    expect(runtime.uninstall).not.toHaveBeenCalled();
+    expect(runtime.ghosts).toHaveLength(1);
+    expect(h.ledger.installationForPlugin({ ghostId: 'helper', namespace: 'acme' })?.installed).toBe(
+      false,
+    );
+    expect(h.ledger.installationForPlugin({ ghostId: 'helper', namespace: null })?.installed).toBe(
+      true,
+    );
+  });
+
 });
 
 function recordForTest(

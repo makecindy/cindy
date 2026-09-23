@@ -3,6 +3,7 @@ import {
   createPluginLogicalIdentity,
   deliveryNamespaceFields,
   downloadIdentityMatchesPlugin,
+  findConflictingGhostCommand,
   findInstalledGhostByIdentity,
   findInstalledGhostByInstanceId,
   isGhostInstanceId,
@@ -10,9 +11,11 @@ import {
   resolveInstalledGhost,
   knownDeliveryNamespacesDiffer,
   parsePluginInstallRelId,
+  parsePluginInstanceId,
   parsePluginLogicalIdentityKey,
   parsePluginStoragePart,
   pluginInstallRelId,
+  pluginLedgerRecordKey,
   pluginLogicalIdentityKey,
   pluginStoragePart,
   isValidPluginStoragePart,
@@ -195,6 +198,12 @@ describe('plugin logical identity', () => {
     expect(isGhostInstanceId('_ns__acme__helper')).toBe(true);
     expect(isGhostInstanceId('_ns/acme/helper')).toBe(true);
     expect(isGhostInstanceId('../helper')).toBe(false);
+    expect(parsePluginInstanceId('helper')).toEqual({ namespace: null, ghostId: 'helper' });
+    expect(parsePluginInstanceId('_ns/acme/helper')).toEqual({ namespace: 'acme', ghostId: 'helper' });
+    expect(parsePluginInstanceId('_ns__acme__helper')).toEqual({
+      namespace: 'acme',
+      ghostId: 'helper',
+    });
     expect(findInstalledGhostByInstanceId(ghosts, 'helper')).toBe(root);
     expect(findInstalledGhostByInstanceId(ghosts, '_ns__acme__helper')).toBe(enterprise);
     expect(findInstalledGhostByInstanceId(ghosts, 'xd-feishu')).toBe(inPlace);
@@ -222,6 +231,38 @@ describe('plugin logical identity', () => {
       relId: '_ns/acme/helper',
       storagePart: '_ns__acme__helper',
     });
+  });
+
+
+  it('uses JSON-safe ledger keys that distinguish same-name identities', () => {
+    expect(pluginLedgerRecordKey({ ghostId: 'helper' })).toBe('helper');
+    expect(pluginLedgerRecordKey({ ghostId: 'helper', namespace: null })).toBe('helper');
+    expect(pluginLedgerRecordKey({ ghostId: 'helper', namespace: 'acme' })).toBe(
+      '_ns__acme__helper',
+    );
+  });
+
+  it('only treats the same command as a conflict inside one namespace', () => {
+    const root = { manifest: { id: 'helper', command: 'Draw' }, namespace: null as string | null };
+    const org = {
+      manifest: { id: 'helper', command: 'draw' },
+      namespace: 'acme',
+      dir: '/brain/_ns/acme/helper',
+    };
+    expect(
+      findConflictingGhostCommand([root], 'Draw', { incomingNamespace: 'acme' }),
+    ).toBeUndefined();
+    expect(findConflictingGhostCommand([root], 'Draw', { incomingNamespace: null })).toBe(root);
+    expect(
+      findConflictingGhostCommand([root, org], 'Draw', {
+        incomingNamespace: 'acme',
+        exemptPhysicalRelId: '_ns/acme/helper',
+      }),
+    ).toBeUndefined();
+    const legacy = { manifest: { id: 'old', command: 'Draw' } };
+    expect(findConflictingGhostCommand([legacy], 'draw', { incomingNamespace: null })).toBe(
+      legacy,
+    );
   });
 
 });

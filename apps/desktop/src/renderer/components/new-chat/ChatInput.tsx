@@ -192,8 +192,10 @@ import { SlashCommandPalette } from './SlashCommandPalette';
 import {
   expandGhostCommand,
   findGhostByCommand,
-  parseGhostCommandWord,
+  formatGhostCommandToken,
+  parseGhostCommandToken,
 } from '@/cindy-brain/ghostCommand';
+import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -2993,7 +2995,11 @@ export function ChatInput({
   );
   const pluginAvailableIds = useMemo(
     () =>
-      new Set(ghostsForCommand.filter((ghost) => ghost.enabled).map((ghost) => ghost.manifest.id)),
+      new Set(
+        ghostsForCommand
+          .filter((ghost) => ghost.enabled)
+          .map((ghost) => installedGhostStoragePart(ghost)),
+      ),
     [ghostsForCommand],
   );
   // 统一建议面板的插件条目(旧 `+` 菜单口径的并集):可用项可选,无指令或
@@ -3009,7 +3015,8 @@ export function ChatInput({
       const hasCommand = !!ghost.manifest.command;
       const hostCapability = remoteHostId ? null : hostCapabilityForGhost(ghost);
       const hasComposerEntry = hasCommand || hostCapability !== null;
-      const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasComposerEntry;
+      const instanceId = installedGhostStoragePart(ghost);
+      const selectable = pluginAvailableIds.has(instanceId) && hasComposerEntry;
       const entryKey = ghost.manifest.command ?? hostCapability ?? '';
       return {
         item: {
@@ -3019,19 +3026,19 @@ export function ChatInput({
             ghost.manifest.command ??
             (hostCapability
               ? `cindy://host-capability/${hostCapability}`
-              : `cindy://plugin/${ghost.manifest.id}`),
-          pluginId: ghost.manifest.id,
+              : `cindy://plugin/${instanceId}`),
+          pluginId: instanceId,
           ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
           sourceLabel: entryKey,
           _nameLower: `${ghost.manifest.name} ${entryKey}`.toLowerCase(),
-          _relPathLower: `${entryKey} ${ghost.manifest.id}`.toLowerCase(),
+          _relPathLower: `${entryKey} ${instanceId}`.toLowerCase(),
         },
         ...(selectable
           ? {}
           : {
               disabled: true,
               disabledReason: t(
-                !pluginAvailableIds.has(ghost.manifest.id)
+                !pluginAvailableIds.has(instanceId)
                   ? 'extraDirs.pluginDisabled'
                   : ghost.manifest.skill
                     ? 'extraDirs.pluginAgentInvoked'
@@ -3938,9 +3945,7 @@ export function ChatInput({
     if (!draft) return;
 
     if (draft.pendingGhostId) {
-      const ghost = ghostsForCommand.find(
-        (candidate) => candidate.manifest.id === draft.pendingGhostId,
-      );
+      const ghost = findInstalledGhostByInstanceId(ghostsForCommand, draft.pendingGhostId);
       if (!ghost) return;
       saveComposerDraft(
         storageKey,
@@ -3956,8 +3961,9 @@ export function ChatInput({
     }
 
     if (draft.pendingHostCapabilityGhostId) {
-      const ghost = ghostsForCommand.find(
-        (candidate) => candidate.manifest.id === draft.pendingHostCapabilityGhostId,
+      const ghost = findInstalledGhostByInstanceId(
+        ghostsForCommand,
+        draft.pendingHostCapabilityGhostId,
       );
       // 远程/未解析归属不恢复 Host capability 芯片(与 `+` 菜单和发送路径的
       // fail-closed 同口径):SSH(remoteHostId)或 device-link(deviceLinkDeviceId
@@ -4266,8 +4272,8 @@ export function ChatInput({
         (g) =>
           ({
             kind: 'desktop',
-            name: g.manifest.command!,
-            description: `${g.manifest.name} · ${t('settings.ghosts.commandPaletteTag')}`,
+            name: formatGhostCommandToken(g)!,
+            description: `${g.manifest.name} · ${t('settings.ghosts.commandPaletteTag')}${g.namespace ? ` · ${g.namespace}` : ''}`,
           }) as UnifiedCommand,
       );
   }, [ghostsForCommand, isGhostSigil, t]);
@@ -4919,8 +4925,9 @@ export function ChatInput({
       if (selectedItem.type === 'file-picker') return;
       if (selectedItem.type === 'plugin-command') {
         if (!selectedItem.pluginId) return;
-        const ghost = installedGhostsRef.current.find(
-          (candidate) => candidate.manifest.id === selectedItem.pluginId,
+        const ghost = findInstalledGhostByInstanceId(
+          installedGhostsRef.current,
+          selectedItem.pluginId,
         );
         if (!ghost?.enabled) return;
 
@@ -5436,7 +5443,7 @@ export function ChatInput({
           installedGhostsRef.current,
           workingDirRef.current,
         );
-        const ghostCommandWord = parseGhostCommandWord(text);
+        const ghostCommandToken = parseGhostCommandToken(text);
         // Host-capability 芯片同样计入最近插件使用(与 $command 路径对齐)：
         // 从 eligibleGhosts 解析出仍有效(启用 + workdir + manifest 一致 + 非远程会话)
         // 的 host 插件对象交给 usedGhost，使发送后 markUsed 能更新该插件的最近使用排序。
@@ -5444,13 +5451,13 @@ export function ChatInput({
           hostCapability !== undefined && !remoteHostId && deviceLinkDeviceId === null
             ? eligibleGhosts.find(
                 (g) =>
-                  g.manifest.id === hostCapability.ghostId &&
+                  installedGhostStoragePart(g) === hostCapability.ghostId &&
                   g.enabled &&
                   hostCapabilityForGhost(g) === hostCapability.capability,
               )
             : undefined;
-        const usedGhost = ghostCommandWord
-          ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
+        const usedGhost = ghostCommandToken
+          ? findGhostByCommand(eligibleGhosts, ghostCommandToken.word, ghostCommandToken.namespace)
           : (hostCapabilityGhost ?? null);
         const textToSend = expandGhostCommand(text, eligibleGhosts);
         // 发送前校验 host-capability 插件仍处于启用且 workdir 可用的状态。

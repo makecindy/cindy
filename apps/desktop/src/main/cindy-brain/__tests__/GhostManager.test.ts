@@ -2657,6 +2657,26 @@ describe('GhostManager · install', () => {
     ]);
   });
 
+
+  it('reads namespaced receipts from storage part and install rel id', async () => {
+    const organizationOrigin = forgeInstallOriginForMembership('org');
+    const result = await manager.install(
+      await makeCindy('hello-org.cindy', goodManifest()),
+      {
+        namespace: 'acme',
+        ...(organizationOrigin ? { installOrigin: organizationOrigin } : {}),
+      },
+    );
+    expect(result).toHaveProperty('ghost');
+    expect(manager.readEffectiveInstallOrigin('_ns__acme__hello')).toBe('agent-forge');
+    expect(manager.readEffectiveInstallOrigin('_ns/acme/hello')).toBe('agent-forge');
+    expect(manager.readApprovedInstallOriginStrict('_ns__acme__hello')).toBe('agent-forge');
+    expect(manager.approvedInstallEvidence('_ns__acme__hello')?.packageSha256).toEqual(
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+    );
+    expect(manager.readEffectiveInstallOrigin('hello')).toBe('manual');
+  });
+
   it('returns the quarantined projection when install journal cleanup fails', async () => {
     const store = (
       manager as unknown as {
@@ -2918,6 +2938,19 @@ describe('GhostManager · install', () => {
     );
     expect('ghost' in ok).toBe(true);
     expect(manager.list().map((g) => g.manifest.id)).toEqual(['alpha', 'gamma']);
+  });
+
+  it('allows the same command in a different namespace', async () => {
+    await manager.install(
+      await makeCindy('root.cindy', chipManifestWithCommand('helper', 'Draw')),
+      { namespace: null },
+    );
+    const org = await manager.install(
+      await makeCindy('org.cindy', chipManifestWithCommand('helper', 'draw')),
+      { namespace: 'acme' },
+    );
+    expect('ghost' in org).toBe(true);
+    expect(manager.list()).toHaveLength(2);
   });
 });
 

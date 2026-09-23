@@ -202,7 +202,7 @@ describe('market Ghost session boundary', () => {
     );
     const managerUpdateIndex = helperBody.indexOf('manager.update(cindyFilePath,');
     const detachIndex = helperBody.indexOf(
-      'marketLedger.markRemoved(inspected.manifest.id, null)',
+      'marketLedger.markRemovedRecord(marketRecord, null)',
     );
 
     expect(captureIndex).toBeGreaterThan(-1);
@@ -222,6 +222,7 @@ describe('market Ghost session boundary', () => {
     expect(oauthLockIndex).toBeGreaterThan(detachIndex);
     expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
     expect(helperBody).toContain('marketLedger.restoreInstallation(');
+    expect(helperBody).toContain('...(previousGhost ? deliveryNamespaceFields(previousGhost) : {})');
     expect(helperBody).not.toContain('marketLedger.isDefaultInstallSuppressed(');
     expect(helperBody).not.toContain('marketInstallSubject');
     expect(helperBody).toContain('用户显式卸载，不得产生 default-install opt-out');

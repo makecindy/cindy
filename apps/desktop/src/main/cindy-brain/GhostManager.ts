@@ -13,6 +13,7 @@ import {
 import { authorDeclaredNamespaceReason, isValidPluginNamespace } from '@cindy/plugin-protocol';
 import {
   createPluginLogicalIdentity,
+  findConflictingGhostCommand,
   findInstalledGhostByIdentity,
   hasDeliveryNamespace,
   installedGhostLogicalIdentity,
@@ -1249,6 +1250,13 @@ export class GhostManager {
     return logicalRel;
   }
 
+  /** Receipts live under install rel id (helper or _ns/acme/helper), including in-place org dirs. */
+  private approvalRelIdFor(id: string): string | null {
+    const identity = parsePluginStoragePart(id) ?? parsePluginInstallRelId(id);
+    if (!identity) return null;
+    return this.resolvePhysicalRelId(id) ?? pluginInstallRelId(identity);
+  }
+
   private isRealDirChildRel(relId: string): boolean {
     return this.isRealDirChild(this.contentRootDir(), relId);
   }
@@ -1316,8 +1324,10 @@ export class GhostManager {
   /** 只认显式 Forge 安装写入的来源；未知/手动来源一律按 manual。 */
   readEffectiveInstallOrigin(id: string): 'manual' | 'agent-forge' {
     this.ensureCurrentOwnerContextSync();
+    const relId = this.approvalRelIdFor(id);
+    if (!relId) return 'manual';
     try {
-      const approval = this.readApproval(id);
+      const approval = this.readApproval(relId);
       if (approval.state !== 'approved') return 'manual';
       return effectiveInstallOrigin(approval.receipt);
     } catch {
@@ -1331,7 +1341,11 @@ export class GhostManager {
    */
   readApprovedInstallOriginStrict(id: string): 'manual' | 'agent-forge' {
     this.ensureCurrentOwnerContextSync();
-    const approval = this.readApproval(id);
+    const relId = this.approvalRelIdFor(id);
+    if (!relId) {
+      throw new Error('approved Plugin receipt is unavailable: invalid-id');
+    }
+    const approval = this.readApproval(relId);
     if (approval.state !== 'approved') {
       throw new Error(`approved Plugin receipt is unavailable: ${approval.state}`);
     }
@@ -1347,7 +1361,7 @@ export class GhostManager {
     this.ensureCurrentOwnerContextSync();
     const identity = parsePluginStoragePart(id) ?? parsePluginInstallRelId(id);
     if (!identity) return null;
-    const relId = this.resolvePhysicalRelId(id) ?? pluginInstallRelId(identity);
+    const relId = this.approvalRelIdFor(id) ?? pluginInstallRelId(identity);
     if (this.hasPendingMutationJournal(relId)) return null;
     const approval = this.readApproval(relId);
     if (approval.state !== 'approved') return null;
@@ -2986,10 +3000,9 @@ export class GhostManager {
     // 与本机已装意识撞名即拒——不静默改名(确定性),由用户抽离旧的或
     // 作者换名解决。大小写折叠比较,防 /Draw 与 /draw 并存互踩。
     if (manifest.command !== undefined) {
-      const commandFold = manifest.command.toLowerCase();
-      const holder = this.list().find(
-        (g) => g.manifest.command !== undefined && g.manifest.command.toLowerCase() === commandFold,
-      );
+      const holder = findConflictingGhostCommand(this.list(), manifest.command, {
+        incomingNamespace: identity.namespace,
+      });
       if (holder) {
         return {
           rejection: {
@@ -3242,13 +3255,10 @@ export class GhostManager {
 
     // 指令查重同 install,但豁免自己(新版本沿用/改名自己的指令都合法)。
     if (manifest.command !== undefined) {
-      const commandFold = manifest.command.toLowerCase();
-      const holder = this.list().find(
-        (g) =>
-          g.manifest.id !== manifest.id &&
-          g.manifest.command !== undefined &&
-          g.manifest.command.toLowerCase() === commandFold,
-      );
+      const holder = findConflictingGhostCommand(this.list(), manifest.command, {
+        incomingNamespace: identity.namespace,
+        exemptPhysicalRelId: relId,
+      });
       if (holder) {
         return {
           rejection: {

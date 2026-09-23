@@ -104,6 +104,7 @@ import {
 import { withGhostInstallLock } from './ghostInstallLock.js';
 import {
   createPluginLogicalIdentity,
+  findConflictingGhostCommand,
   findInstalledGhostByIdentity,
   findInstalledGhostByInstanceId,
   installedGhostLogicalIdentity,
@@ -113,6 +114,7 @@ import {
   installedGhostStoragePart,
   isGhostInstanceId,
   parsePluginInstallRelId,
+  parsePluginInstanceId,
   parsePluginStoragePart,
   pluginInstallRelId,
   pluginStoragePart,
@@ -2812,9 +2814,7 @@ function classifyPendingNamespaceForGhost(
 function readInstalledGhostManifestIdentity(
   ghostId: string,
 ): InstalledMarketManifestIdentity | null {
-  const ghost = getGhostManager()
-    .list()
-    .find((candidate) => candidate.manifest.id === ghostId);
+  const ghost = findGhostForInstanceId(ghostId);
   if (!ghost) return null;
   const result = readInstalledGhostManifestSnapshot(
     ghost.dir,
@@ -2859,7 +2859,7 @@ function getGhostFirstPartyFactsLoader(): GhostFirstPartyFactsLoader {
   if (!ghostFirstPartyFactsLoaderSingleton) {
     ghostFirstPartyFactsLoaderSingleton = loadGhostFirstPartyFactsLoader({
       readInstalledBuiltin: (ghostId) => findGhostForInstanceId(ghostId)?.builtin === true,
-      readMarketInstallation: (ghostId) => getPluginMarketLedger().installationForGhost(ghostId),
+      readMarketInstallation: (ghostId) => getPluginMarketLedger().installationForLookup(ghostId),
       readApprovedPackageSha256: (ghostId) =>
         getGhostManager().approvedInstallEvidence(ghostId)?.packageSha256 ?? null,
       lookupOrganizationPrefix: (orgId) =>
@@ -6071,7 +6071,12 @@ async function updateLocalGhostPackageLocked(
   await getGhostNodeRuntimeBroker().stopAndWait(previousGhost ? installedGhostStoragePart(previousGhost) : inspected.manifest.id);
   let marketRecord: PluginMarketInstallationRecord | null;
   try {
-    marketRecord = marketLedger.installationForGhost(inspected.manifest.id);
+    marketRecord = previousGhost
+      ? marketLedger.installationForPlugin({
+          ghostId: previousGhost.manifest.id,
+          ...deliveryNamespaceFields(previousGhost),
+        })
+      : marketLedger.installationForGhost(inspected.manifest.id);
   } catch (error) {
     if (previousGhost) spawnIfResident(previousGhost);
     log.warn('failed to verify Plugin provenance before local update', {
@@ -6097,11 +6102,11 @@ async function updateLocalGhostPackageLocked(
       });
     }
   };
-  if (detachMarketRecord) {
+  if (detachMarketRecord && marketRecord) {
     try {
       // 先持久化切断自动更新路由，再改真实包。普通本地/Forge 换源不是
       // 用户显式卸载，不得产生 default-install opt-out。
-      marketLedger.markRemoved(inspected.manifest.id, null);
+      marketLedger.markRemovedRecord(marketRecord, null);
     } catch (error) {
       restoreMarketRecord();
       if (previousGhost) spawnIfResident(previousGhost);
@@ -6128,6 +6133,7 @@ async function updateLocalGhostPackageLocked(
         expectedPackageSha256,
         expectedInstalledApproval,
         ...(installOrigin ? { installOrigin } : {}),
+        ...(previousGhost ? deliveryNamespaceFields(previousGhost) : {}),
         ...(previousGhost
           ? {
               beforePackageCommit: () =>
@@ -6543,10 +6549,17 @@ export async function uninstallGhostAndCleanup(
   id: string,
   options?: { skipMarketLedger?: boolean },
 ): Promise<void> {
-  // 按 ghostId 与装入/更新互斥:卸载与同 id 的市场/本地装入不得交错,否则
-  // 市场装入的"目标是否已装"判定会被本卸载在其落位前抽走(反之亦然)。
-  return withGhostInstallLock(id, () =>
-    withActiveOwnerGhostOauthMutationLock(id, () => uninstallGhostAndCleanupLocked(id, options)),
+  // Install lock is the catalog ghostId so public and org instances of the
+  // same name stay serial. OAuth/vault lock is the storage part, never a
+  // slashy `_ns/acme/helper.lock` path.
+  const identity = parsePluginInstanceId(id);
+  if (!identity) {
+    throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
+  }
+  return withGhostInstallLock(identity.ghostId, () =>
+    withActiveOwnerGhostOauthMutationLock(pluginStoragePart(identity), () =>
+      uninstallGhostAndCleanupLocked(id, options),
+    ),
   );
 }
 
@@ -8041,16 +8054,12 @@ export function registerGhostIpc(): void {
           return false;
         }
         // 指令查重(同 install/update):与当前已装撞名即拒,排除自身。
-        const commandFold = probe.manifest.command?.toLowerCase();
-        if (commandFold === undefined) return true;
-        return !manager
-          .list()
-          .some(
-            (g) =>
-              g.manifest.id !== probe.manifest.id &&
-              g.manifest.command !== undefined &&
-              g.manifest.command.toLowerCase() === commandFold,
-          );
+        if (probe.manifest.command === undefined) return true;
+        const current = findGhostForInstanceId(String(id));
+        return !findConflictingGhostCommand(manager.list(), probe.manifest.command, {
+          incomingNamespace: current && hasDeliveryNamespace(current) ? current.namespace : null,
+          exemptPhysicalRelId: current ? installedGhostPhysicalRelId(current) : undefined,
+        });
       },
     });
     switch (result.status) {

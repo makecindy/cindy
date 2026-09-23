@@ -187,9 +187,14 @@ export function isValidPluginStoragePart(value: unknown): value is string {
   return typeof value === 'string' && parsePluginStoragePart(value) !== null;
 }
 
+/** Runtime / UI instance id: helper, _ns/acme/helper, or _ns__acme__helper. */
+export function parsePluginInstanceId(value: string): PluginLogicalIdentity | null {
+  return parsePluginInstallRelId(value) ?? parsePluginStoragePart(value);
+}
+
 /** Runtime / UI instance id: storage part or install rel id. */
 export function isGhostInstanceId(value: unknown): value is string {
-  return isValidPluginStoragePart(value) || isValidPluginInstallRelId(value);
+  return typeof value === 'string' && parsePluginInstanceId(value) !== null;
 }
 
 export function installedGhostPhysicalRelId(ghost: {
@@ -348,4 +353,70 @@ export function formatInstalledGhostAmbiguity(
     return namespace === null ? `root/${ghostId}` : `${namespace}/${ghostId}`;
   });
   return `插件 ${ghostId} 存在多个实例（${labels.join('、')}）。请指定 namespace：null 表示 root，字符串表示企业 orgSlug。`;
+}
+
+/** JSON-safe ledger / map key. Root and legacy stay `ghostId`; org uses storage part. */
+export function pluginLedgerRecordKey(plugin: {
+  ghostId: string;
+  namespace?: string | null;
+}): string {
+  if (hasDeliveryNamespace(plugin) && plugin.namespace !== null) {
+    return pluginStoragePart(createPluginLogicalIdentity(plugin.namespace, plugin.ghostId));
+  }
+  return plugin.ghostId;
+}
+
+export function pluginIdentityFromLedgerRecord(plugin: {
+  ghostId: string;
+  namespace?: string | null;
+}): PluginLogicalIdentity {
+  return createPluginLogicalIdentity(
+    hasDeliveryNamespace(plugin) ? plugin.namespace : null,
+    plugin.ghostId,
+  );
+}
+
+/**
+ * Same slash-command in a different known namespace may coexist.
+ * A legacy (unstamped) holder still conflicts with everyone.
+ */
+export function findConflictingGhostCommand<
+  T extends {
+    manifest: { id: string; command?: string };
+    dir?: string;
+    namespace?: string | null;
+  },
+>(
+  ghosts: readonly T[],
+  command: string,
+  opts: {
+    incomingNamespace: string | null;
+    exemptPhysicalRelId?: string;
+  },
+): T | undefined {
+  const fold = command.toLowerCase();
+  return ghosts.find((ghost) => {
+    if (ghost.manifest.command === undefined) return false;
+    if (ghost.manifest.command.toLowerCase() !== fold) return false;
+    if (opts.exemptPhysicalRelId !== undefined) {
+      const rel = installedGhostPhysicalRelId({
+        manifest: { id: ghost.manifest.id },
+        dir: ghost.dir,
+        namespace: ghost.namespace,
+      });
+      if (rel === opts.exemptPhysicalRelId) return false;
+    }
+    if (!hasDeliveryNamespace(ghost)) return true;
+    return ghost.namespace === opts.incomingNamespace;
+  });
+}
+
+export function listGhostsByCommand<
+  T extends { enabled?: boolean; manifest: { command?: string } },
+>(ghosts: readonly T[], word: string, enabledOnly = true): T[] {
+  const fold = word.toLowerCase();
+  return ghosts.filter((ghost) => {
+    if (enabledOnly && ghost.enabled === false) return false;
+    return ghost.manifest.command !== undefined && ghost.manifest.command.toLowerCase() === fold;
+  });
 }

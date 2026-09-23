@@ -93,7 +93,7 @@ describe('loadGhostFirstPartyFactsLoader', () => {
     }
   });
 
-  it('uses logical ghostId for privilege matching and install rel id for receipt lookups', () => {
+  it('keeps logical ghostId for privilege matching and looks up the market row by instance id', () => {
     const seen = {
       builtin: [] as string[],
       origin: [] as string[],
@@ -127,7 +127,7 @@ describe('loadGhostFirstPartyFactsLoader', () => {
     expect(seen.builtin).toEqual(['_ns__acme__acme-tool']);
     expect(seen.origin).toEqual(['_ns/acme/acme-tool']);
     expect(seen.approved).toEqual(['_ns/acme/acme-tool']);
-    expect(seen.market).toEqual(['acme-tool']);
+    expect(seen.market).toEqual(['_ns__acme__acme-tool']);
     expect(resolveGhostFirstPartyPrivilege(loaded.facts)).toEqual({
       brokerEligible: true,
       hostPrimitiveEligible: false,

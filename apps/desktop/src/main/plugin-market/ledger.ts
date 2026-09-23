@@ -4,6 +4,14 @@ import path from 'node:path';
 import { isValidPluginNamespace, type PluginScope } from '@cindy/plugin-protocol';
 import { ghostManifestToLegacyV2DigestFormat } from '../../shared/ghost.js';
 import {
+  hasDeliveryNamespace,
+  parsePluginInstallRelId,
+  parsePluginStoragePart,
+  pluginLedgerRecordKey,
+  PLUGIN_NS_INSTALL_ROOT,
+  type PluginLogicalIdentity,
+} from '../../shared/pluginIdentity.js';
+import {
   atomicWriteFileSync,
   readAtomicFileSync,
 } from '../utils/atomicWriteFile.js';
@@ -12,6 +20,8 @@ const LEDGER_SCHEMA_VERSION = 1;
 
 /** 自定义市场溯源的独立账本文件名（与 ledger.v1.json 同目录）。 */
 const CUSTOM_LEDGER_FILE = 'custom-ledger.v1.json';
+/** 同 ghostId 跨 namespace 共存时，企业记录进这个旧客户端不会碰的文件。 */
+export const NS_LEDGER_FILE = 'ns-ledger.v1.json';
 
 /** 服务端市场安装的溯源来源（旧版本也认识的封闭集合）。 */
 const SERVER_SOURCES = new Set(['market', 'legacy-adopted']);
@@ -92,6 +102,40 @@ function emptyLedger(): PluginMarketLedgerData {
     installations: {},
     defaultInstallOptOuts: {},
   };
+}
+
+function isOrgNamespaceRecord(record: PluginMarketInstallationRecord): boolean {
+  return hasDeliveryNamespace(record) && record.namespace !== null;
+}
+
+function indexInstallation(
+  installations: Record<string, PluginMarketInstallationRecord>,
+  record: PluginMarketInstallationRecord,
+): void {
+  installations[pluginLedgerRecordKey(record)] = record;
+}
+
+function recordsForGhostId(
+  installations: Record<string, PluginMarketInstallationRecord>,
+  ghostId: string,
+): PluginMarketInstallationRecord[] {
+  return Object.values(installations).filter((record) => record.ghostId === ghostId);
+}
+
+function uniqueRecordForGhostId(
+  installations: Record<string, PluginMarketInstallationRecord>,
+  ghostId: string,
+): PluginMarketInstallationRecord | null {
+  const matches = recordsForGhostId(installations, ghostId);
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+function uniqueInstalledRecordForGhostId(
+  installations: Record<string, PluginMarketInstallationRecord>,
+  ghostId: string,
+): PluginMarketInstallationRecord | null {
+  const matches = recordsForGhostId(installations, ghostId).filter((record) => record.installed);
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 function isCustomRecord(record: PluginMarketInstallationRecord): boolean {
@@ -178,8 +222,11 @@ function readInstallationsFile(filePath: string): InstallationsFileRead {
     return { kind: 'invalid', installations: {}, raw: value };
   }
   const installations: Record<string, PluginMarketInstallationRecord> = {};
-  for (const [ghostId, record] of Object.entries(rawInstallations)) {
-    if (validRecord(record) && record.ghostId === ghostId) installations[ghostId] = record;
+  for (const [key, record] of Object.entries(rawInstallations)) {
+    if (!validRecord(record)) continue;
+    const logicalKey = pluginLedgerRecordKey(record);
+    if (key !== record.ghostId && key !== logicalKey) continue;
+    installations[logicalKey] = record;
   }
   return { kind: 'ok', installations, raw: value };
 }
@@ -239,23 +286,33 @@ export class PluginMarketLedger {
     return path.join(path.dirname(this.filePath()), CUSTOM_LEDGER_FILE);
   }
 
-  private readFiles(): { main: InstallationsFileRead; custom: InstallationsFileRead } {
+  private nsFilePath(): string {
+    return path.join(path.dirname(this.filePath()), NS_LEDGER_FILE);
+  }
+
+  private readFiles(): {
+    main: InstallationsFileRead;
+    custom: InstallationsFileRead;
+    namespaced: InstallationsFileRead;
+  } {
     return {
       main: readInstallationsFile(this.filePath()),
       custom: readInstallationsFile(this.customFilePath()),
+      namespaced: readInstallationsFile(this.nsFilePath()),
     };
   }
 
   private mergeInstallations(
     main: InstallationsFileRead,
     custom: InstallationsFileRead,
+    namespaced: InstallationsFileRead,
   ): PluginMarketLedgerData {
     const installations: Record<string, PluginMarketInstallationRecord> = {};
-    for (const [ghostId, record] of Object.entries(main.installations)) {
+    for (const [key, record] of Object.entries(main.installations)) {
       // 主账本里的自定义记录是早期开发版写入的存量,一并纳入(下次写入时归位)。
-      installations[ghostId] = record;
+      installations[key] = record;
     }
-    for (const [ghostId, record] of Object.entries(custom.installations)) {
+    for (const [key, record] of Object.entries(custom.installations)) {
       if (!isCustomRecord(record)) continue; // 自定义账本只承载自定义溯源
       // 两个文件出现同一 ghostId 只发生在降级窗口:旧版本只写主账本(比如降级后
       // 卸载了自定义安装、又从服务端装了同 ghostId),custom 账本里留着它不认识、
@@ -263,8 +320,13 @@ export class PluginMarketLedger {
       // 来源,并允许该来源提供更新 —— 必须按"实际安装状态 + 时间"消解,平手保
       // 主账本(冲突本身即意味着旧版操作过主账本)。胜出后由任意一次写入按 source
       // 归位,败方记录随整份重写被清掉。
-      const existing = installations[ghostId];
-      installations[ghostId] = existing ? preferRecord(existing, record) : record;
+      const existing = installations[key];
+      installations[key] = existing ? preferRecord(existing, record) : record;
+    }
+    for (const [key, record] of Object.entries(namespaced.installations)) {
+      if (!isOrgNamespaceRecord(record)) continue;
+      const existing = installations[key];
+      installations[key] = existing ? preferRecord(existing, record) : record;
     }
 
     const defaultInstallOptOuts: Record<string, string[]> = {};
@@ -281,12 +343,41 @@ export class PluginMarketLedger {
   }
 
   read(): PluginMarketLedgerData {
-    const { main, custom } = this.readFiles();
-    return this.mergeInstallations(main, custom);
+    const { main, custom, namespaced } = this.readFiles();
+    // Collision org rows live only in the sidecar. Treat a corrupt sidecar as a
+    // hard failure so the next rewrite cannot persist installations: {}.
+    if (namespaced.kind === 'invalid') {
+      throw new Error('Plugin namespace ledger is unreadable');
+    }
+    return this.mergeInstallations(main, custom, namespaced);
   }
 
   installationForGhost(ghostId: string): PluginMarketInstallationRecord | null {
-    return this.read().installations[ghostId] ?? null;
+    return uniqueRecordForGhostId(this.read().installations, ghostId);
+  }
+
+  installationsForGhost(ghostId: string): PluginMarketInstallationRecord[] {
+    return recordsForGhostId(this.read().installations, ghostId);
+  }
+
+  installationForIdentity(identity: PluginLogicalIdentity): PluginMarketInstallationRecord | null {
+    return this.read().installations[pluginLedgerRecordKey(identity)] ?? null;
+  }
+
+  installationForPlugin(plugin: {
+    ghostId: string;
+    namespace?: string | null;
+  }): PluginMarketInstallationRecord | null {
+    return this.read().installations[pluginLedgerRecordKey(plugin)] ?? null;
+  }
+
+  /**
+   * Resolve a runtime/UI id to a ledger row.
+   * `_ns/...` and `_ns__...` are org instance ids. A bare ghostId prefers the
+   * root row, then a unique remaining row (in-place org plugins).
+   */
+  installationForLookup(id: string): PluginMarketInstallationRecord | null {
+    return this.recordForLookup(this.read().installations, id);
   }
 
   /**
@@ -297,11 +388,18 @@ export class PluginMarketLedger {
   lookupInstallationForOidc(
     ghostId: string,
   ): { kind: 'absent' } | { kind: 'found'; record: PluginMarketInstallationRecord } | { kind: 'invalid' } {
-    const { main, custom } = this.readFiles();
-    if (main.kind === 'invalid' || custom.kind === 'invalid') return { kind: 'invalid' };
-    const record = this.mergeInstallations(main, custom).installations[ghostId];
+    const { main, custom, namespaced } = this.readFiles();
+    if (main.kind === 'invalid' || custom.kind === 'invalid' || namespaced.kind === 'invalid') {
+      return { kind: 'invalid' };
+    }
+    const merged = this.mergeInstallations(main, custom, namespaced).installations;
+    const record = this.recordForLookup(merged, ghostId);
     if (record) return { kind: 'found', record };
-    if (rawMentionsGhost(main, ghostId) || rawMentionsGhost(custom, ghostId)) {
+    if (
+      rawMentionsGhost(main, ghostId) ||
+      rawMentionsGhost(custom, ghostId) ||
+      rawMentionsGhost(namespaced, ghostId)
+    ) {
       return { kind: 'invalid' };
     }
     return { kind: 'absent' };
@@ -309,7 +407,7 @@ export class PluginMarketLedger {
 
   upsertInstallation(record: PluginMarketInstallationRecord): void {
     const data = this.read();
-    data.installations[record.ghostId] = record;
+    this.putRecord(data, record);
     this.write(data);
   }
 
@@ -320,12 +418,12 @@ export class PluginMarketLedger {
   stampNamespaceIfAbsent(ghostId: string, namespace: string | null): boolean {
     if (namespace !== null && !isValidPluginNamespace(namespace)) return false;
     const data = this.read();
-    const current = data.installations[ghostId];
+    const current = uniqueRecordForGhostId(data.installations, ghostId);
     if (!current) return false;
     if (Object.prototype.hasOwnProperty.call(current, 'namespace')) {
       return current.namespace === namespace;
     }
-    data.installations[ghostId] = { ...current, namespace };
+    this.replaceRecord(data, current, { ...current, namespace });
     this.write(data);
     return true;
   }
@@ -341,12 +439,12 @@ export class PluginMarketLedger {
   ): boolean {
     if (!/^[a-f0-9]{64}$/.test(rawManifestSha256)) return false;
     const data = this.read();
-    const current = data.installations[expected.ghostId];
+    const current = data.installations[pluginLedgerRecordKey(expected)];
     if (!current || canonicalJson(current) !== canonicalJson(expected)) return false;
     if (current.rawManifestSha256 !== undefined) {
       return current.rawManifestSha256 === rawManifestSha256;
     }
-    data.installations[current.ghostId] = { ...current, rawManifestSha256 };
+    this.replaceRecord(data, current, { ...current, rawManifestSha256 });
     this.write(data);
     return true;
   }
@@ -366,13 +464,13 @@ export class PluginMarketLedger {
       return false;
     }
     const data = this.read();
-    const current = data.installations[expected.ghostId];
+    const current = data.installations[pluginLedgerRecordKey(expected)];
     if (!current || canonicalJson(current) !== canonicalJson(expected)) return false;
-    data.installations[current.ghostId] = {
+    this.replaceRecord(data, current, {
       ...current,
       manifestDigest,
       rawManifestSha256,
-    };
+    });
     this.write(data);
     return true;
   }
@@ -383,7 +481,7 @@ export class PluginMarketLedger {
     optOut?: { userId: string; suppressed: boolean },
   ): void {
     const data = this.read();
-    data.installations[record.ghostId] = record;
+    this.putRecord(data, record);
     if (optOut) {
       const suppressedPluginIds = data.defaultInstallOptOuts[optOut.userId] ?? [];
       if (optOut.suppressed) {
@@ -417,7 +515,7 @@ export class PluginMarketLedger {
       return false;
     }
     const data = this.read();
-    const current = data.installations[expected.ghostId];
+    const current = data.installations[pluginLedgerRecordKey(expected)];
     if (
       !current
       || current.installed
@@ -426,7 +524,7 @@ export class PluginMarketLedger {
     ) {
       return false;
     }
-    data.installations[current.ghostId] = {
+    this.replaceRecord(data, current, {
       ...current,
       source:
         current.scope === 'organization' && current.source === 'market'
@@ -435,7 +533,7 @@ export class PluginMarketLedger {
       installed: true,
       updatedAt: new Date().toISOString(),
       ...(rawManifestSha256 !== undefined ? { rawManifestSha256 } : {}),
-    };
+    });
     const remainingOptOuts = (data.defaultInstallOptOuts[userId] ?? []).filter(
       (pluginId) => pluginId !== current.pluginId,
     );
@@ -447,16 +545,23 @@ export class PluginMarketLedger {
 
   markRemoved(ghostId: string, userId: string | null): void {
     const data = this.read();
-    const record = data.installations[ghostId];
+    const record = this.recordForLookup(data.installations, ghostId);
     if (!record) return;
-    data.installations[ghostId] = {
-      ...record,
+    this.markRemovedRecord(record, userId);
+  }
+
+  markRemovedRecord(record: PluginMarketInstallationRecord, userId: string | null): void {
+    const data = this.read();
+    const current = data.installations[pluginLedgerRecordKey(record)];
+    if (!current) return;
+    this.replaceRecord(data, current, {
+      ...current,
       installed: false,
       updatedAt: new Date().toISOString(),
-    };
+    });
     if (userId) {
       data.defaultInstallOptOuts[userId] = [
-        ...new Set([...(data.defaultInstallOptOuts[userId] ?? []), record.pluginId]),
+        ...new Set([...(data.defaultInstallOptOuts[userId] ?? []), current.pluginId]),
       ];
     }
     this.write(data);
@@ -466,23 +571,89 @@ export class PluginMarketLedger {
     return this.read().defaultInstallOptOuts[userId]?.includes(pluginId) ?? false;
   }
 
+  private recordForLookup(
+    installations: Record<string, PluginMarketInstallationRecord>,
+    id: string,
+  ): PluginMarketInstallationRecord | null {
+    if (
+      id.startsWith(`${PLUGIN_NS_INSTALL_ROOT}/`) ||
+      id.startsWith(`${PLUGIN_NS_INSTALL_ROOT}__`)
+    ) {
+      const parsed = parsePluginInstallRelId(id) ?? parsePluginStoragePart(id);
+      return parsed ? installations[pluginLedgerRecordKey(parsed)] ?? null : null;
+    }
+    const root = installations[id];
+    if (root && root.ghostId === id && !isOrgNamespaceRecord(root)) {
+      if (root.installed) return root;
+      return uniqueInstalledRecordForGhostId(installations, id) ?? root;
+    }
+    return uniqueRecordForGhostId(installations, id);
+  }
+
+  private putRecord(
+    data: PluginMarketLedgerData,
+    record: PluginMarketInstallationRecord,
+  ): void {
+    data.installations[pluginLedgerRecordKey(record)] = record;
+  }
+
+  private replaceRecord(
+    data: PluginMarketLedgerData,
+    previous: PluginMarketInstallationRecord,
+    next: PluginMarketInstallationRecord,
+  ): void {
+    const previousKey = pluginLedgerRecordKey(previous);
+    const nextKey = pluginLedgerRecordKey(next);
+    if (previousKey !== nextKey) delete data.installations[previousKey];
+    data.installations[nextKey] = next;
+  }
+
   private write(data: PluginMarketLedgerData): void {
     // 按 source 分仓落盘:主账本只出现旧版本认识的 source,自定义溯源全部进
     // 独立文件。混写过的存量(早期开发版)由此在任意一次写入时自动归位。
+    // 同 ghostId 的企业记录在会与 root 或其他 namespace 撞车时写入 ns 账本,
+    // 避免旧客户端按 ghostId 键覆盖掉另一份身份。
+    // 撞车时企业行从 v1 搬到 sidecar:必须先写 sidecar(只加不减),再改写 v1。
+    // 若先改 v1 再写 sidecar,中途崩溃会丢掉唯一一份企业溯源。
     const server: Record<string, PluginMarketInstallationRecord> = {};
     const custom: Record<string, PluginMarketInstallationRecord> = {};
-    for (const [ghostId, record] of Object.entries(data.installations)) {
-      if (isCustomRecord(record)) custom[ghostId] = record;
-      else if (SERVER_SOURCES.has(record.source)) server[ghostId] = record;
+    const namespaced: Record<string, PluginMarketInstallationRecord> = {};
+    const byGhostId = new Map<string, PluginMarketInstallationRecord[]>();
+    for (const record of Object.values(data.installations)) {
+      const group = byGhostId.get(record.ghostId) ?? [];
+      group.push(record);
+      byGhostId.set(record.ghostId, group);
+    }
+    const place = (
+      record: PluginMarketInstallationRecord,
+      dest: Record<string, PluginMarketInstallationRecord>,
+      key: string,
+    ): void => {
+      dest[key] = record;
+    };
+    for (const group of byGhostId.values()) {
+      const orgRecords = group.filter(isOrgNamespaceRecord);
+      const rootRecords = group.filter((record) => !isOrgNamespaceRecord(record));
+      const collision = orgRecords.length > 0 && (rootRecords.length > 0 || orgRecords.length > 1);
+      if (!collision) {
+        for (const record of group) {
+          const dest = isCustomRecord(record) ? custom : SERVER_SOURCES.has(record.source) ? server : null;
+          if (dest) place(record, dest, record.ghostId);
+        }
+        continue;
+      }
+      for (const record of rootRecords) {
+        const dest = isCustomRecord(record) ? custom : SERVER_SOURCES.has(record.source) ? server : null;
+        if (dest) place(record, dest, record.ghostId);
+      }
+      for (const record of orgRecords) {
+        namespaced[pluginLedgerRecordKey(record)] = record;
+      }
     }
     atomicWriteFileSync(
-      this.filePath(),
+      this.nsFilePath(),
       `${JSON.stringify(
-        {
-          schemaVersion: LEDGER_SCHEMA_VERSION,
-          installations: server,
-          defaultInstallOptOuts: data.defaultInstallOptOuts,
-        },
+        { schemaVersion: LEDGER_SCHEMA_VERSION, installations: namespaced },
         null,
         2,
       )}\n`,
@@ -491,6 +662,18 @@ export class PluginMarketLedger {
       this.customFilePath(),
       `${JSON.stringify(
         { schemaVersion: LEDGER_SCHEMA_VERSION, installations: custom },
+        null,
+        2,
+      )}\n`,
+    );
+    atomicWriteFileSync(
+      this.filePath(),
+      `${JSON.stringify(
+        {
+          schemaVersion: LEDGER_SCHEMA_VERSION,
+          installations: server,
+          defaultInstallOptOuts: data.defaultInstallOptOuts,
+        },
         null,
         2,
       )}\n`,
