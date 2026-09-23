@@ -1082,7 +1082,7 @@
     },
     "about": {
       "title": "情報",
-      "description": "アプリと統合された Agent のランタイムバージョン。すべてのバージョン番号は起動時にメインプロセスが自動検出します。",
+      "description": "アプリと統合された Agent のランタイムバージョン。",
       "appVersionLabel": "アプリのバージョン",
       "claudeCodeVersionLabel": "Claude Code バージョン",
       "codexVersionLabel": "Codex バージョン",
@@ -1275,6 +1275,33 @@
         "reconcileFailed": "診断に失敗しました",
         "reconcileHealthy": "台帳とディスクは一致しています。異常はありません。",
         "reconcileIssues": "異常を検出: 台帳にないファイル {{orphans}} 件({{orphanSize}})、欠損ファイル {{missing}} 件、認識できない項目 {{stray}} 件。詳細はアプリログをご覧ください。"
+      },
+      "piKernel": {
+        "manage": "Pi のバージョンを管理",
+        "checking": "確認中…",
+        "checkFailed": "確認に失敗",
+        "available": "更新あり",
+        "lookup": "準備中…",
+        "download": "ダウンロード中…",
+        "verify": "検証中…",
+        "activate": "切り替え中…",
+        "update": "Pi の最新版に更新",
+        "restore": "Cindy 正式版に戻す",
+        "check": "更新を確認",
+        "releaseNotes": "Pi リリースノート",
+        "checkedAt": "最終確認：{{time}}",
+        "updateTitle": "Pi {{version}} に更新しますか？",
+        "restoreTitle": "Pi {{version}} に戻しますか？",
+        "updateDescription": "Pi が公開したバージョンです。Cindy と互換性がない場合があります。いつでも Cindy 正式版に戻せます。既存のセッションは現在のバージョンを使い続けます。",
+        "restoreDescription": "バージョンが古い場合でも、Cindy 正式版で配布中の Pi をインストールします。既存のセッションは現在のバージョンを使い続けます。",
+        "updateConfirm": "更新",
+        "restoreConfirm": "戻す",
+        "installed": "Pi {{version}} は新しいセッションから使用されます。",
+        "versionChanged": "公開バージョンが変わりました。再確認してからインストールしてください。",
+        "busy": "別の Pi 更新が進行中です。",
+        "installFailed": "Pi のインストールに失敗しました。以前のバージョンを引き続き使用します。ネットワークとディスクの空き容量を確認し、再試行してください。",
+        "openFailed": "リリースノートを開けませんでした。",
+        "restartRequired": "Pi {{version}} をインストールしました。Cindy を再起動すると使用できます。"
       }
     },
     "apiKey": {

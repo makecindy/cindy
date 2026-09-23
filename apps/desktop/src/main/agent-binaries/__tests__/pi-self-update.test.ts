@@ -72,6 +72,8 @@ describe('Pi standalone core update', () => {
     const { root, current, deps } = await fixture(platform);
     const result = await installPiBinaryUpdate(root, current, false, deps, platform, 'arm64');
     expect(result.version).toBe('0.85.1');
+    expect(path.basename(path.dirname(result.binaryPath))).toMatch(/^0\.85\.1-/);
+    if (platform !== 'win32') expect((await fs.stat(result.binaryPath)).mode & 0o777).toBe(0o755);
     expect(await fs.readFile(current, 'utf8')).toBe('old-running-runtime');
     expect(await fs.readFile(path.join(path.dirname(result.binaryPath), 'README.md'), 'utf8')).toBe('assets');
     expect(await fs.readFile(path.join(path.dirname(result.binaryPath), '.verified'), 'utf8')).toBe('a'.repeat(64));
@@ -91,6 +93,16 @@ describe('Pi standalone core update', () => {
     deps.probe = vi.fn(async () => '0.86.0');
     expect(await installPiBinaryUpdate(root, current, false, deps, 'darwin', 'arm64')).toEqual({ binaryPath: current, version: '0.86.0' });
     expect(deps.download).not.toHaveBeenCalled();
+  });
+  it('supports the current upstream Windows asset names', () => {
+    const data = release('win32');
+    data.assets[0].name = data.assets[0].name.replace('win32', 'windows');
+    data.assets[0].browser_download_url = data.assets[0].browser_download_url.replace('win32', 'windows');
+    expect(parsePiRelease(data, 'win32', 'arm64')).toMatchObject({ format: 'zip', executable: 'pi.exe' });
+  });
+  it('rejects prereleases and malformed asset collections', () => {
+    expect(() => parsePiRelease({ ...release(), prerelease: true }, 'darwin', 'arm64')).toThrow('Invalid');
+    expect(() => parsePiRelease({ ...release(), assets: {} }, 'darwin', 'arm64')).toThrow('verified asset');
   });
   it('rejects missing digests and changed asset hosts before downloading', () => {
     const data = release(); data.assets[0].digest = '';

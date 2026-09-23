@@ -1082,7 +1082,7 @@
     },
     "about": {
       "title": "关于",
-      "description": "应用与已集成 Agent 的运行时版本。所有版本号在启动时由主进程自动探测。",
+      "description": "应用与已集成 Agent 的运行时版本。",
       "appVersionLabel": "应用版本号",
       "claudeCodeVersionLabel": "Claude Code 版本号",
       "codexVersionLabel": "Codex 版本号",
@@ -1275,6 +1275,33 @@
         "reconcileFailed": "体检失败",
         "reconcileHealthy": "账实一致，没有发现异常。",
         "reconcileIssues": "发现异常：无账文件 {{orphans}} 个({{orphanSize}})、缺失文件 {{missing}} 个、无法识别 {{stray}} 个。详细清单见应用日志。"
+      },
+      "piKernel": {
+        "manage": "管理 Pi 版本",
+        "checking": "检查中…",
+        "checkFailed": "检查失败",
+        "available": "有更新",
+        "lookup": "准备中…",
+        "download": "下载中…",
+        "verify": "验证中…",
+        "activate": "切换中…",
+        "update": "升级 Pi 上游版本",
+        "restore": "恢复 Cindy 正式版",
+        "check": "检查更新",
+        "releaseNotes": "Pi 更新说明",
+        "checkedAt": "上次检查：{{time}}",
+        "updateTitle": "升级到 Pi {{version}}？",
+        "restoreTitle": "恢复 Pi {{version}}？",
+        "updateDescription": "此版本由 Pi 上游发布，可能存在 Cindy 兼容性问题，可随时恢复 Cindy 正式版。已有任务继续使用当前版本。",
+        "restoreDescription": "安装 Cindy 线上正式版分发的 Pi，即使版本较低。已有任务继续使用当前版本。",
+        "updateConfirm": "升级",
+        "restoreConfirm": "恢复",
+        "installed": "Pi {{version}} 已就绪，新任务将使用此版本。",
+        "versionChanged": "线上版本已变化，请重新检查后安装。",
+        "busy": "已有 Pi 更新正在进行。",
+        "installFailed": "Pi 安装失败，仍使用原版本。请检查网络和磁盘空间后重试。",
+        "openFailed": "无法打开更新说明。",
+        "restartRequired": "Pi {{version}} 已安装，重启 Cindy 后可用。"
       }
     },
     "apiKey": {

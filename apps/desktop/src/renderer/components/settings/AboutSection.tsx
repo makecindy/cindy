@@ -20,6 +20,7 @@ import { useAutoUpdateSettings } from '@/hooks/useAutoUpdateSettings';
 import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
 import { useLogUploadSettings } from '@/hooks/useLogUploadSettings';
 import { extractIpcError } from '@/utils/ipcError';
+import { PiKernelVersionRow } from './PiKernelVersionRow';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
@@ -94,7 +95,6 @@ export function AgentVersionsRows() {
   const { t } = useTranslation();
   const claudeCode = useAgentBinaryVersion('claude-code');
   const codex = useAgentBinaryVersion('codex');
-  const pi = useAgentBinaryVersion('pi');
 
   return (
     <>
@@ -110,11 +110,7 @@ export function AgentVersionsRows() {
         dim={!codex.version}
       />
       <Divider />
-      <InfoRow
-        label={t('settings.about.piVersionLabel')}
-        value={renderVersion(pi, t)}
-        dim={!pi.version}
-      />
+      <PiKernelVersionRow />
       <Divider />
     </>
   );

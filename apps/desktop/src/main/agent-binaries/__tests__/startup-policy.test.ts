@@ -208,6 +208,30 @@ describe('shared startup policy through the real binary preparation chain', () =
   });
 });
 
+describe('explicit Pi selection on startup', () => {
+  it('keeps a restored lower version across restart and never resurrects higher leftovers', async () => {
+    installManaged('pi', '3.0.0');
+    const version = '1.0.0';
+    const directory = `${version}-00000000-0000-0000-0000-000000000001`;
+    const selected = writeExecutable(path.join(mocks.userDataDir, 'pi', directory, 'pi'), version);
+    fs.writeFileSync(path.join(path.dirname(selected), '.verified'), 'verified');
+    fs.writeFileSync(path.join(mocks.userDataDir, 'pi', 'selected.json'), JSON.stringify({ schema: 1, source: 'official', version, directory }));
+    await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: true, path: selected, downloaded: false });
+    await reloadBinaries();
+    await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: true, path: selected });
+    expect(binaries.getReadyBinaryPath('pi')).toBe(selected);
+    expect(mocks.download).not.toHaveBeenCalled();
+    mocks.remoteManifest = null;
+    await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: false, error: 'manifest_failed' });
+    expect(binaries.getReadyBinaryPath('pi')).toBeUndefined();
+    mocks.remoteManifest = releaseManifest();
+    await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: true, path: selected });
+    fs.unlinkSync(selected);
+    await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: false, error: 'pi_selection_invalid' });
+    expect(binaries.getReadyBinaryPath('pi')).toBeUndefined();
+  });
+});
+
 describe('Linux local discovery before any update download', () => {
   it('keeps the previously used system Codex when a newer CDN release appears on the next startup', async () => {
     await reloadBinaries('linux');

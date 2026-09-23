@@ -6552,6 +6552,11 @@ interface ElectronAPI {
       ) => () => void;
     };
 
+    piKernel: {
+      getState: (check?: boolean) => Promise<import('../shared/piKernel').PiKernelState>;
+      install: (request: import('../shared/piKernel').PiKernelInstallRequest) => Promise<import('../shared/piKernel').PiKernelState>;
+    };
+
     /* ── Agent 联合状态 (binary + auth, 取代老 codex.binary.getStatus) ── */
     agent: {
       getStatus: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{

@@ -1,4 +1,4 @@
-import { installPiBinaryUpdate } from './pi-self-update.js';
+import { createPiKernelManager, type PiKernelManager } from './pi-kernel-manager.js';
 /**
  * apps/desktop/src/main/agent-binaries/index.ts
  *
@@ -249,13 +249,15 @@ function getBase(kind: AgentBinaryKind): BinaryProvisioner {
 
 const lastReadyPath = new Map<AgentBinaryKind, string>();
 
-/** Called only by the authorized Pi management service while holding its mutation lock. */
+let piKernelManager: PiKernelManager | undefined;
+export function getPiKernelManager(): PiKernelManager {
+  return piKernelManager ??= createPiKernelManager(path.join(app.getPath('userData'), 'pi'),
+    () => lastReadyPath.get('pi'), binary => { lastReadyPath.set('pi', binary); });
+}
+
+/** Managed commands and About use the same installer and durable selection. */
 export async function updateReadyPiBinary(force: boolean): Promise<string> {
-  const current = lastReadyPath.get('pi');
-  if (!current) throw new Error('Pi is not installed in Cindy');
-  const result = await installPiBinaryUpdate(path.join(app.getPath('userData'), 'pi'), current, force);
-  lastReadyPath.set('pi', result.binaryPath);
-  return result.version;
+  return getPiKernelManager().install({ source: 'upstream', force });
 }
 
 export function getReadyBinaryPath(kind: AgentBinaryKind): string | undefined {
@@ -349,6 +351,29 @@ export async function prepare(
 ): Promise<PrepareResult> {
   const cfg = CONFIG[kind];
   const { step, totalSteps, broadcastProgress = true, broadcastFailure = true } = opts;
+
+  if (kind === 'pi') {
+    try {
+      const manager = getPiKernelManager();
+      if (manager.hasSelection()) {
+        // Preserve the existing packaged offline policy; an explicit selection only
+        // changes version arbitration, not whether startup requires a manifest.
+        if (app.isPackaged && !await fetchManifest(undefined, opts.signal).catch(() => null)) {
+          lastReadyPath.delete('pi');
+          return { ready: false, error: 'manifest_failed', downloaded: false };
+        }
+        const selected = await manager.selectedBinary(opts.signal);
+        if (selected) {
+          lastReadyPath.set('pi', selected);
+          return { ready: true, path: selected, downloaded: false };
+        }
+      }
+    } catch {
+      // Do not resurrect a higher leftover version after an explicit downgrade.
+      lastReadyPath.delete('pi');
+      return { ready: false, error: 'pi_selection_invalid', downloaded: false };
+    }
+  }
 
   // ── dev mode 短路 (与老 vendor/{claude,codex}/binaryProvisioner.ts 等价) ──
   if (!app.isPackaged) {
