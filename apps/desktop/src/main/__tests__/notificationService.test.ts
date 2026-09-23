@@ -122,8 +122,10 @@ vi.mock('../messagePersistBroadcaster', () => ({
   drainPersistQueue: () => drainPersistQueue(),
 }));
 const drainSessionActiveTurnWrites = vi.fn((_sessionId: string): Promise<void> => Promise.resolve());
+const getSessionNotificationTurnSignal = vi.fn((_sessionId: string): { id: string; fallbackEventId: string } | undefined => undefined);
 vi.mock('../localDb/sessionActiveTurn', () => ({
   drainSessionActiveTurnWrites: (sessionId: string) => drainSessionActiveTurnWrites(sessionId),
+  getSessionNotificationTurnSignal: (sessionId: string) => getSessionNotificationTurnSignal(sessionId),
 }));
 
 interface FakeFeishuIM {
@@ -159,6 +161,7 @@ async function freshService() {
   });
   drainPersistQueue.mockClear();
   drainSessionActiveTurnWrites.mockReset().mockResolvedValue(undefined);
+  getSessionNotificationTurnSignal.mockReset().mockReturnValue(undefined);
   const service = await import('../notificationService');
   const { setMainLocale } = await import('../i18n');
   // 既有分发断言以简中为基准；需要验证其它语言的用例会在调用前显式切换。
@@ -696,6 +699,75 @@ describe('notificationService — channels 分发', () => {
 
 
 describe('teammate reply previews', () => {
+  it('delivers a later turn when its preview fails after the previous turn was identified', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:1', fallbackEventId: 'turn:100:200:signal-1' });
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:100:200' });
+    await invokeHandler(payload);
+
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:2', fallbackEventId: 'turn:300:400:signal-2' });
+    readSessionNotificationPreview.mockRejectedValue(new Error('db busy'));
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ eventId: 'turn:300:400:signal-2' }));
+
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:300:400' });
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a fallback Feishu send in flight under the same turn signal after preview recovery', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    let accept!: () => void;
+    feishuIm.sendText.mockImplementationOnce(() => new Promise((resolve) => {
+      accept = () => resolve({ messageId: 'sent' });
+    }));
+    initNotificationService(baseDeps(feishuIm));
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'signal:3', fallbackEventId: 'turn:500:600:signal-3' });
+    readSessionNotificationPreview.mockImplementationOnce(async () => ({ teammateName: 'Cindy' }))
+      .mockRejectedValueOnce(new Error('db busy'));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: false, feishu: true } };
+    await invokeHandler(payload);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+
+    readSessionNotificationPreview.mockResolvedValue({
+      teammateName: 'Cindy', eventId: 'turn:500:600', reply: { clientId: 'final', text: 'Current answer' },
+    });
+    await invokeHandler(payload);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+    accept();
+    await flushAsync();
+    await invokeHandler(payload);
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles an unidentified Feishu send still in flight when a durable turn ID appears', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    let accept!: () => void;
+    feishuIm.sendMarkdownText.mockImplementationOnce(() => new Promise((resolve) => {
+      accept = () => resolve({ messageId: 'sent' });
+    }));
+    initNotificationService(baseDeps(feishuIm));
+    readSessionNotificationPreview.mockRejectedValueOnce(new Error('db busy'));
+    const payload = { sessionId: 'legacy', title: 'Task', kind: 'done', channels: { desktop: false, feishu: true } };
+    await invokeHandler(payload);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+
+    readSessionNotificationPreview.mockResolvedValue({ eventId: 'turn:100:200' });
+    await invokeHandler(payload);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+    accept();
+    await flushAsync();
+    await invokeHandler(payload);
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+  });
+
   it('waits for the current turn marker before using a persisted reply identity', async () => {
     const { initNotificationService } = await freshService();
     const oldPreview = {

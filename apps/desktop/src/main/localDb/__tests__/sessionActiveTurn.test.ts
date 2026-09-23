@@ -118,21 +118,28 @@ describe('sessionActiveTurn', () => {
   }
 
   it('markSessionTurnStarted / markSessionTurnEnded write the two timestamps', async () => {
-    const { markSessionTurnStarted, markSessionTurnEnded } = await import('../sessionActiveTurn.js');
+    const { markSessionTurnStarted, markSessionTurnEnded, getSessionNotificationTurnSignal, drainSessionActiveTurnWrites } = await import('../sessionActiveTurn.js');
     const client = createTestDbClient();
     await seedSession(client, 's-1');
 
     markSessionTurnStarted('s-1');
+    const firstSignal = getSessionNotificationTurnSignal('s-1');
+    expect(firstSignal?.id).toMatch(/^signal:\d+$/);
     await vi.waitFor(async () => {
       expect((await readMarks(client, 's-1'))?.active_turn_started_at).toBeTypeOf('number');
     });
 
     markSessionTurnEnded('s-1');
+    expect(getSessionNotificationTurnSignal('s-1')?.id).toBe(firstSignal?.id);
+    expect(getSessionNotificationTurnSignal('s-1')?.fallbackEventId).toMatch(/^turn:\d+:\d+:signal-\d+$/);
     await vi.waitFor(async () => {
       const row = await readMarks(client, 's-1');
       expect(row?.last_turn_ended_at).toBeTypeOf('number');
       expect(row!.last_turn_ended_at!).toBeGreaterThanOrEqual(row!.active_turn_started_at!);
     });
+    markSessionTurnStarted('s-1');
+    expect(getSessionNotificationTurnSignal('s-1')?.id).not.toBe(firstSignal?.id);
+    await drainSessionActiveTurnWrites('s-1');
   });
 
   it('per-session write chain keeps started/ended landing order for very short turns', async () => {

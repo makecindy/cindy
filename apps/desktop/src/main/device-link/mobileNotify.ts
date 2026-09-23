@@ -83,7 +83,7 @@ export class MobileNotifyDeduper {
         // and the renderer's durable turn ID can describe the same run. A turn
         // already finished when that frame was sent is the same completion;
         // a later completed turn keeps its own notification even if it started earlier.
-        const endedAt = /^turn:\d+:(\d+)$/.exec(eventId)?.[1];
+        const endedAt = /^turn:\d+:(\d+)(?::signal-\d+)?$/.exec(eventId)?.[1];
         if (endedAt ? Number(endedAt) <= anonymousAt : now - anonymousAt < this.windowMs) {
           this.lastEvent.set(key, eventId);
           return false;

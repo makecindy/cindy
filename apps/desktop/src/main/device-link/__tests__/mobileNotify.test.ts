@@ -74,6 +74,12 @@ describe('buildSessionNotifyPayload', () => {
 });
 
 describe('MobileNotifyDeduper', () => {
+  it('uses the terminal boundary of a fallback signal to distinguish a later turn from scheduler output', () => {
+    const deduper = new MobileNotifyDeduper();
+    deduper.recordSent('session', 'done', 250);
+    expect(deduper.shouldSend('session', 'done', 260, 'turn:100:200:signal-1')).toBe(false);
+    expect(deduper.shouldSend('session', 'done', 410, 'turn:300:400:signal-2')).toBe(true);
+  });
   it('同 session + kind 窗口内只放行一次,窗口滚动后恢复', () => {
     const deduper = new MobileNotifyDeduper(5_000);
     expect(deduper.shouldSend('s1', 'done', 0)).toBe(true);

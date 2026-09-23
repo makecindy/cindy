@@ -30,7 +30,7 @@ import { markSessionNeedsAttention } from './appBadgeService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-link';
 import { notificationPreview } from './notificationPreview';
 import { readSessionNotificationPreview, type SessionNotificationPreview } from './localDb/sessionNotificationPreview';
-import { drainSessionActiveTurnWrites } from './localDb/sessionActiveTurn';
+import { drainSessionActiveTurnWrites, getSessionNotificationTurnSignal } from './localDb/sessionActiveTurn';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './device-link/broadcast-tap';
 import { latestMessageText } from './localDb/latestMessageText';
 import { drainPersistQueue } from './messagePersistBroadcaster';
@@ -100,6 +100,7 @@ const liveNotifications = new Set<Notification>();
 type NotifiedReply = { eventId: string } | { fallbackSentAt: number };
 const notifiedReplies = new Map<string, NotifiedReply>();
 const pendingFeishuReplies = new Set<string>();
+const pendingFeishuFallbacks = new Map<string, number>();
 type ReplyNotificationChannel = 'desktop' | 'mobile' | 'feishu';
 
 function replyNotificationKey(generation: number, sessionId: string, channel: ReplyNotificationChannel): string {
@@ -109,7 +110,7 @@ function replyNotificationKey(generation: number, sessionId: string, channel: Re
 function wasReplyNotified(key: string, eventId: string | undefined): boolean {
   const notified = notifiedReplies.get(key);
   if (!notified) return false;
-  if (!eventId) return true;
+  if (!eventId) return !('eventId' in notified);
   if ('eventId' in notified) return notified.eventId === eventId;
   // An accepted fallback had no DB identity. Once persistence recovers,
   // reconcile it with the turn that was already running when sent.
@@ -120,6 +121,14 @@ function wasReplyNotified(key: string, eventId: string | undefined): boolean {
     return true;
   }
   return false;
+}
+
+function isFeishuReplyPending(key: string, eventId: string | undefined): boolean {
+  if (pendingFeishuReplies.has(`${key}:${eventId ?? 'pending'}`)) return true;
+  const fallbackSentAt = pendingFeishuFallbacks.get(key);
+  if (fallbackSentAt === undefined || !eventId) return false;
+  const startedAt = /^turn:(\d+):\d+$/.exec(eventId)?.[1];
+  return startedAt !== undefined && Number(startedAt) < fallbackSentAt;
 }
 // A slow transcript must not indefinitely hide a completion or an action request.
 const NOTIFICATION_PREVIEW_WAIT_MS = 1_000;
@@ -192,6 +201,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       assertValidSessionEventPayload(payload);
       const { sessionId, title, kind, channels } = payload;
       const generation = getMobileNotifyGeneration();
+      // Capture at IPC arrival, not after the asynchronous preview: a newer
+      // turn can begin while the current completion waits on persistence.
+      const signal = kind === 'done' ? getSessionNotificationTurnSignal(sessionId) : undefined;
       const ownerScope = captureDataOwnerBroadcastScope();
       const safeTitle = title.trim() || sessionId.slice(0, 8);
       const wantDesktop = channels?.desktop ?? true;
@@ -248,7 +260,8 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         if (!isDataOwnerBroadcastScopeCurrent(ownerScope) || (postDrainPreviewReady && preview?.suppress)) return;
         const teammate = !!preview?.teammateName;
         const notificationTitle = preview?.teammateName ?? safeTitle;
-        const eventId = preview?.eventId;
+        const eventId = signal?.id ?? preview?.eventId;
+        const mobileEventId = preview?.eventId ?? signal?.fallbackEventId;
         const desktopKey = replyNotificationKey(generation, sessionId, 'desktop');
         const mobileKey = replyNotificationKey(generation, sessionId, 'mobile');
         const feishuKey = replyNotificationKey(generation, sessionId, 'feishu');
@@ -270,7 +283,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           try {
             const accepted = sendMobileSessionNotify({
               sessionId, title: notificationTitle, kind, generation, ...(detail ? { detail } : {}),
-              ...(fallbackBody ? { fallbackBody } : {}), ...(eventId ? { eventId } : {}),
+              ...(fallbackBody ? { fallbackBody } : {}), ...(mobileEventId ? { eventId: mobileEventId } : {}),
             });
             if (kind === 'done' && accepted) {
               notifiedReplies.set(mobileKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
@@ -281,8 +294,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         }
         if (wantFeishu && kind === 'done' && !wasReplyNotified(feishuKey, eventId)) {
           const pendingKey = `${feishuKey}:${eventId ?? 'pending'}`;
-          if (!pendingFeishuReplies.has(pendingKey)) {
+          if (!isFeishuReplyPending(feishuKey, eventId)) {
             pendingFeishuReplies.add(pendingKey);
+            if (!eventId) pendingFeishuFallbacks.set(feishuKey, Date.now());
             try {
               const body = teammate ? notificationPreview(detail ?? '') || fallbackBody : undefined;
               const accepted = await sendFeishuMessage(feishuIm, notificationTitle, kind, body);
@@ -291,6 +305,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
               }
             } finally {
               pendingFeishuReplies.delete(pendingKey);
+              if (!eventId) pendingFeishuFallbacks.delete(feishuKey);
             }
           }
         }
