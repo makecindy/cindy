@@ -3,12 +3,14 @@ import { act, createElement as el } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 vi.mock('react-native', () => ({
-  View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
+  View: ({ children, testID, style }: any) => el('div', { 'data-testid': testID, style: Object.assign({}, ...[style].flat().filter(Boolean)) }, children),
   Pressable: ({ children, testID, accessibilityLabel, disabled, onPress }: any) => el('button', { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress }, children),
   ActivityIndicator: () => null, RefreshControl: () => null,
   StyleSheet: { create: (v: unknown) => v, hairlineWidth: 1 },
   FlatList: ({ ListHeaderComponent, ListEmptyComponent, data, renderItem }: any) => el('div', null, ListHeaderComponent, data.length ? data.map((item: any) => renderItem({ item })) : ListEmptyComponent),
 }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: async () => ({ blocks: [] }) }) }));
+vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {} }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => el('span', null, children), TextInput: () => null }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowEmptyState: ({ title, copy }: any) => el('div', null, title, copy) }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
@@ -16,7 +18,7 @@ vi.mock('lucide-react-native', () => ({ RefreshCw: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' } }) }));
-vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) }));
+vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: { statusDone: 'green', statusError: 'red', textTertiary: 'gray' } }), typeScale: { footnote: 12 } }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ isRemoteResourceUnread: () => false }));
 vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => '' }));
 vi.mock('@/utils/useMinuteNow', () => ({ useMinuteNow: () => Date.now() }));
@@ -51,4 +53,34 @@ it('shows readable message previews rather than Markdown delimiters or link targ
     loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
   expect(node.textContent).toContain('Ready — Weekly brief notes.md');
   expect(node.textContent).not.toMatch(/\*\*|https:\/\/|`/);
+});
+
+it('shows shared public generation instead of raw preview without changing online dot', async () => {
+  const busy = { ...item, item: { ...item.item, display: { ...item.item.display,
+    preview: 'Raw tool commentary', generation: { phase: 'replying', startedAt: 1 } } } };
+  await act(async () => root.render(el(TeammateList, { items: [busy], error: null, isOnline: () => true,
+    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  expect(node.textContent).toContain('devices.companions.working.replying');
+  expect(node.textContent).not.toContain('Raw tool commentary');
+  expect((node.querySelector('[data-testid="teammate.connection"]') as HTMLElement).style.backgroundColor).toBe('green');
+  await render(null, false);
+  expect((node.querySelector('[data-testid="teammate.connection"]') as HTMLElement).style.backgroundColor).toBe('red');
+  expect(node.textContent).not.toContain('devices.companions.working.replying');
+  await render('Model error', true);
+  expect((node.querySelector('[data-testid="teammate.connection"]') as HTMLElement).style.backgroundColor).toBe('green');
+});
+
+it('keeps the connection green when the list cannot be used, and unknown neutral', async () => {
+  for (const connected of [true, null]) {
+    await act(async () => root.render(el(TeammateList, { items: [item], error: 'API failed', isOnline: () => false,
+      connectionState: () => connected, loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+    expect(node.textContent).not.toContain('devices.resources.hostOffline');
+    const dot = node.querySelector('[data-testid="teammate.connection"]') as HTMLElement;
+    expect(dot.style.backgroundColor).not.toBe('red');
+    if (connected) expect(dot.style.backgroundColor).toBe('green');
+    else {
+      expect(dot.style.backgroundColor).toBe('gray');
+      expect(node.textContent).toContain('devices.resources.connectionUnknown');
+    }
+  }
 });

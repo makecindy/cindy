@@ -46,6 +46,7 @@ import {
   setAnthropicDiscoveredModels,
   setCustomProviders,
   setDiscoveredCodexModels,
+  setManagedProviders,
   setXdGatewayModels,
 } from '../active-catalog.js';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store.js';
@@ -1427,6 +1428,44 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
       },
     });
     expect(newDecision?.routing).not.toHaveProperty('headerOverride');
+  });
+
+  it('does not inject stale personal headers into organization-managed routes', async () => {
+    const providerId = 'byok-header-isolation';
+    const routing: RoutingDescriptor = {
+      upstream: 'https://gateway.example.invalid/v1',
+      authStrategy: 'api-key-header',
+      wireProtocol: 'openai-responses',
+    };
+    setManagedProviders([{
+      id: providerId, name: 'Enterprise', source: 'organization',
+      auth: { method: 'managed' }, access: { kind: 'managed' }, agents: ['codex'],
+      models: { codex: [] }, routing: { codex: routing },
+    }]);
+    setCustomProviderKeyReader(() => 'managed-member-key');
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer stale-personal-key',
+      'x-personal-tenant': 'must-not-leak',
+    }));
+
+    try {
+      const resolved = await resolveFrozenProviderRouteDecision(
+        providerId,
+        routing,
+        getProviderRouteCredentialRevision(providerId),
+        'codex',
+        KEY,
+      );
+      expect(resolved?.decision).toMatchObject({
+        upstreamOverride: 'https://gateway.example.invalid/v1',
+        headerOverride: { authorization: 'Bearer managed-member-key' },
+      });
+      expect(resolved?.decision?.headerOverride).not.toHaveProperty('x-personal-tenant');
+    } finally {
+      setManagedProviders([]);
+      setCustomProviderKeyReader(() => null);
+      setCustomProviderHeaderReader(() => null);
+    }
   });
 
   it('精确请求路径只覆盖带 model 的推理请求，不改写无 body 的控制面请求', () => {

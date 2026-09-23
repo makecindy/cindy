@@ -24,6 +24,7 @@ import {
   type ProviderModelDiscoveryFailure,
   type ProviderView,
   type Provider,
+  isCustomRoutedProvider,
 } from '@cindy/model-providers';
 
 const log = createLogger('provider-service');
@@ -167,7 +168,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         connected[p.id] = deps.codexAccountConnected?.(p.id) ?? false;
       } else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
         connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
-      } else if (p.source === 'user') {
+      } else if (isCustomRoutedProvider(p)) {
         connected[p.id] = deps.customApiKeyConnected?.(p) ?? false;
       }
       // 内置 API-key 供应商(如 Gemini 图像来源):连接 = key 已存。与自定义供应商

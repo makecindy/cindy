@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * KeyboardShortcutsSection — Settings「键盘快捷键」tab 的主区块。
  *
@@ -92,7 +93,7 @@ function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
         <Package size={18} aria-hidden="true" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate text-13 font-medium text-[var(--text-primary)]">
+        <span id="settings-search-settings-shortcuts-accessories-title" className="truncate text-13 font-medium text-[var(--text-primary)]">
           {t('settings.shortcuts.accessories.title')}
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
@@ -508,13 +509,16 @@ export function KeyboardShortcutsSection() {
               </span>
 
               {isRecording ? (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  compact
+                  tone="quiet"
                   type="button"
                   onClick={() => setRecordingId(null)}
-                  className="shrink-0 rounded-md px-2 py-1 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-chip)] transition-colors"
                 >
                   {t('settings.shortcuts.cancel')}
-                </button>
+                </Button>
               ) : (
                 <div className="flex shrink-0 items-center gap-1">
                   <button

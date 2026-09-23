@@ -1,13 +1,16 @@
 import { createHash } from 'node:crypto';
 
-import type {
-  Catalog,
-  CustomProviderConfig,
-  Effort,
-  Provider,
-  RoutingDescriptor,
+import {
+  buildUserProvider,
+  isCustomRoutedProvider,
+  isOrganizationManagedProvider,
+  storedCustomProviderId,
+  type Catalog,
+  type CustomProviderConfig,
+  type Effort,
+  type Provider,
+  type RoutingDescriptor,
 } from '@cindy/model-providers';
-import { buildUserProvider, storedCustomProviderId } from '@cindy/model-providers';
 
 import {
   CODEX_GATEWAY_ENV_KEY,
@@ -88,8 +91,15 @@ function effectiveModelWireProtocol(
   return model.route?.wireProtocol ?? routing.wireProtocol ?? 'openai-responses';
 }
 
-function frozenRoutingDescriptor(routing: RoutingDescriptor): RoutingDescriptor {
-  const frozen = { ...routing };
+function frozenRoutingDescriptor(
+  routing: RoutingDescriptor,
+  keepImageModel: boolean,
+): RoutingDescriptor {
+  const frozen = {
+    ...routing,
+    ...(keepImageModel && routing.imageModel ? { imageModel: { ...routing.imageModel } } : {}),
+  };
+  if (!keepImageModel) delete frozen.imageModel;
   // Custom headers are credentials. Keep them out of the Host snapshot; values are read at request
   // time behind provider-route's credential generation gate.
   delete frozen.headerOverride;
@@ -101,7 +111,7 @@ function frozenRoutingDescriptor(routing: RoutingDescriptor): RoutingDescriptor 
 }
 
 function routeForProvider(provider: Provider): CodexCustomProviderRoute | null {
-  if (provider.source !== 'user' || !provider.agents.includes('codex')) return null;
+  if (!isCustomRoutedProvider(provider) || !provider.agents.includes('codex')) return null;
   const routing = provider.routing.codex;
   if (!routing || routing.disabled) return null;
   const capabilities: CodexCustomProviderCapabilities = {
@@ -114,7 +124,7 @@ function routeForProvider(provider: Provider): CodexCustomProviderRoute | null {
   const responseModelIds = responseModels.map((model) => model.id);
   if (responseModelIds.length === 0) return null;
   const routeId = stableRouteId(storedCustomProviderId(provider.id));
-  const frozenRouting = frozenRoutingDescriptor(routing);
+  const frozenRouting = frozenRoutingDescriptor(routing, isOrganizationManagedProvider(provider));
   return {
     providerId: provider.id,
     routeId,

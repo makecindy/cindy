@@ -154,6 +154,16 @@ describe('shared startup policy through the real binary preparation chain', () =
     expect(mocks.download).toHaveBeenCalledTimes(2);
   });
 
+  it('limits a harness-scoped marker to the confirmed harness', async () => {
+    writeStartupBinaryUpdateMarker(mocks.userDataDir, '2.0.0', ['codex']);
+    installManaged('claude-code');
+    installManaged('codex');
+    await expect(binaries.peekNeedsDownload('claude-code')).resolves.toBe(false);
+    await expect(binaries.peekNeedsDownload('codex')).resolves.toBe(true);
+    await expect(binaries.prepare('claude-code', quiet)).resolves.toMatchObject({ ready: true });
+    expect(mocks.download).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('Pi background recovery inherits checkForUpdates=%s without caller flags', async (allowUpdates) => {
     if (allowUpdates) writeStartupBinaryUpdateMarker(mocks.userDataDir, '2.0.0');
     const localPath = installManaged('pi');
@@ -205,6 +215,30 @@ describe('shared startup policy through the real binary preparation chain', () =
     await binaries.prepare('pi', quiet);
     expect(fs.existsSync(path.join(mocks.userDataDir, 'agent-binary-update-once.json'))).toBe(true);
     expect(mocks.download).not.toHaveBeenCalled();
+  });
+});
+
+describe('explicit Pi selection on startup', () => {
+  it('keeps a restored lower version across restart and never resurrects higher leftovers', async () => {
+    installManaged('pi', '3.0.0');
+    const version = '1.0.0';
+    const directory = `${version}-00000000-0000-0000-0000-000000000001`;
+    const selected = writeExecutable(path.join(mocks.userDataDir, 'pi', directory, 'pi'), version);
+    fs.writeFileSync(path.join(path.dirname(selected), '.verified'), 'verified');
+    fs.writeFileSync(path.join(mocks.userDataDir, 'pi', 'selected.json'), JSON.stringify({ schema: 1, source: 'official', version, directory }));
+    await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: true, path: selected, downloaded: false });
+    await reloadBinaries();
+    await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: true, path: selected });
+    expect(binaries.getReadyBinaryPath('pi')).toBe(selected);
+    expect(mocks.download).not.toHaveBeenCalled();
+    mocks.remoteManifest = null;
+    await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: false, error: 'manifest_failed' });
+    expect(binaries.getReadyBinaryPath('pi')).toBeUndefined();
+    mocks.remoteManifest = releaseManifest();
+    await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: true, path: selected });
+    fs.unlinkSync(selected);
+    await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: false, error: 'pi_selection_invalid' });
+    expect(binaries.getReadyBinaryPath('pi')).toBeUndefined();
   });
 });
 

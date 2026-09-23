@@ -26,6 +26,27 @@ export class SshModelSelectionError extends Error {
   }
 }
 
+/** Resolve new SSH Codex tasks from the execution host, never the controller login. */
+export async function loadSshSessionModelSelection(
+  hostId: string, args: Parameters<typeof resolveSshSessionModelSelection>[0] = {
+    agentKind: 'codex', providers: [], loading: false, loadFailed: false,
+  },
+): Promise<ReturnType<typeof resolveSshSessionModelSelection>> {
+  if (args.agentKind !== 'codex') return resolveSshSessionModelSelection(args);
+  try {
+    const providers = await window.electronAPI.remoteSsh.listCodexModels(hostId);
+    return resolveSshSessionModelSelection({
+      ...args, providers, loading: false, loadFailed: false,
+      // Callers carry controller draft preferences, not a choice for this host.
+      // The remote projection puts its default first and supplies its own effort.
+      preferred: undefined,
+      getPresetEffort: undefined, getPresetFast: undefined,
+    });
+  } catch {
+    return { ok: false, reason: 'catalog-error' };
+  }
+}
+
 /** Resolve catalog models within the SSH adapter's implemented routing boundary.
  * Codex uses the remote default login: controller gateway/custom/account routes
  * are not forwarded by maker-host, and thread/start sends the model unchanged.
@@ -35,7 +56,7 @@ export function resolveSshSessionModelSelection(args: {
   loading: boolean;
   loadFailed: boolean;
   agentKind: AgentKind;
-  preferred: { model: string; providerId?: string | null; effort: Effort; fastMode: boolean };
+  preferred?: { model: string; providerId?: string | null; effort: Effort; fastMode: boolean };
   getPresetEffort?: (agent: AgentKind, providerId: string, model: string) => Effort | undefined;
   getPresetFast?: (agent: AgentKind, providerId: string, model: string) => boolean | undefined;
 }):
@@ -45,7 +66,7 @@ export function resolveSshSessionModelSelection(args: {
   if (args.loading) return { ok: false, reason: 'catalog-loading' };
   const { agentKind, preferred } = args;
   // Do not silently move an explicitly selected connection to another account.
-  if (agentKind === 'codex' && preferred.providerId && preferred.providerId !== 'openai') {
+  if (agentKind === 'codex' && preferred?.providerId && preferred.providerId !== 'openai') {
     return { ok: false, reason: 'unsupported-codex-source' };
   }
   const routeProviders =
@@ -65,7 +86,7 @@ export function resolveSshSessionModelSelection(args: {
   const models = deriveModelsFromProviders(providers, agentKind, {
     admissionFiltered: true,
   }).filter((model) => !isSubscriptionDirectModel(model.id));
-  const model = models.some((candidate) => candidate.id === preferred.model)
+  const model = preferred && models.some((candidate) => candidate.id === preferred.model)
     ? preferred.model
     : models[0]?.id;
   if (!model) return { ok: false, reason: 'no-route' };
@@ -73,7 +94,7 @@ export function resolveSshSessionModelSelection(args: {
   // A stale preference may be replaced only while creating a new task. Pin the
   // selected source so runtime defaults cannot return to a local-only account.
   const providerId =
-    effectiveSourceIdForModel(providers, preferred.providerId, model, agentKind) ??
+    effectiveSourceIdForModel(providers, preferred?.providerId, model, agentKind) ??
     effectiveSourceIdForModel(providers, null, model, agentKind);
   const provider = providers.find((candidate) => candidate.id === providerId);
   const descriptor = provider && getModel(provider, model, agentKind);
@@ -83,13 +104,13 @@ export function resolveSshSessionModelSelection(args: {
     model,
     providerId,
     effort: resolveNewMakerDraftEffort({
-      currentEffort: preferred.effort,
+      currentEffort: preferred?.effort ?? descriptor.defaultEffort ?? descriptor.efforts[0] ?? 'medium',
       presetEffort: args.getPresetEffort?.(agentKind, providerId, model),
       efforts: descriptor.efforts,
       defaultEffort: descriptor.defaultEffort,
     }),
     fastMode:
       descriptor.supportsFastMode === true &&
-      (args.getPresetFast?.(agentKind, providerId, model) ?? preferred.fastMode),
+      (args.getPresetFast?.(agentKind, providerId, model) ?? preferred?.fastMode ?? false),
   };
 }

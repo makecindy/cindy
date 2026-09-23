@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ToolPayloadLightbox
  * ---------------------------------------------------------------------------
@@ -541,30 +542,12 @@ export function ToolPayloadLightbox({
               'border-t border-[var(--msg-tool-card-border)]',
             )}
           >
-            <button
-              type="button"
-              onClick={handleClose}
-              className={cn(
-                'h-8 rounded-full border px-4 text-12 font-medium',
-                'border-[var(--border-default)] bg-[var(--surface-elevated)]',
-                'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-              )}
-            >
+            <Button variant="secondary" size="md" compact type="button" onClick={handleClose}>
               {textEdit.cancelLabel}
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveText}
-              className={cn(
-                'h-8 rounded-full px-4 text-12 font-medium',
-                'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                'hover:opacity-90 transition-opacity',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-              )}
-            >
+            </Button>
+            <Button variant="cta" size="md" compact type="button" onClick={handleSaveText}>
               {textEdit.saveLabel}
-            </button>
+            </Button>
           </div>
         )}
       </div>

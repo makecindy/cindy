@@ -40,10 +40,14 @@ const spawnProcess = vi.fn(() => ({
   on: vi.fn(),
 }));
 const findLinuxUserInstallation = vi.fn(() => null);
-const isDebianManagedInstallation = vi.fn(() => false);
+const checkDebianManagedInstallation = vi.fn<() =>
+  | { status: 'managed' }
+  | { status: 'not-managed' }
+  | { status: 'error'; error: unknown }
+>(() => ({ status: 'not-managed' }));
 const missingLinuxUserInstallTools = vi.fn(() => [] as string[]);
 vi.mock('../linuxInstallation', () => ({
-  findLinuxUserInstallation, isDebianManagedInstallation, missingLinuxUserInstallTools,
+  findLinuxUserInstallation, checkDebianManagedInstallation, missingLinuxUserInstallTools,
 }));
 const checkWindowsUpdaterPrerequisites = vi.fn<
   () => { satisfied: boolean; missingFiles: string[] }
@@ -59,6 +63,7 @@ const logInfo = vi.fn();
 const logWarn = vi.fn();
 const logError = vi.fn();
 const logDebug = vi.fn();
+const maskPath = vi.fn((value: string) => value);
 
 vi.mock('electron', () => ({
   app: {
@@ -176,7 +181,7 @@ vi.mock('../logger', () => ({
     error: logError,
     debug: logDebug,
   }),
-  maskPath: (value: string) => value,
+  maskPath,
 }));
 
 function setPlatform(value: NodeJS.Platform): void {
@@ -267,8 +272,8 @@ beforeEach(() => {
   spawnProcess.mockClear();
   findLinuxUserInstallation.mockReset();
   findLinuxUserInstallation.mockReturnValue(null);
-  isDebianManagedInstallation.mockReset();
-  isDebianManagedInstallation.mockReturnValue(false);
+  checkDebianManagedInstallation.mockReset();
+  checkDebianManagedInstallation.mockReturnValue({ status: 'not-managed' });
   missingLinuxUserInstallTools.mockReset();
   missingLinuxUserInstallTools.mockReturnValue([]);
   checkWindowsUpdaterPrerequisites.mockReset();
@@ -282,6 +287,7 @@ beforeEach(() => {
   logWarn.mockReset();
   logError.mockReset();
   logDebug.mockReset();
+  maskPath.mockClear();
   resetUpdateServiceFixture();
 });
 afterEach(() => {
@@ -320,7 +326,7 @@ describe('installation version repair scope', () => {
   });
 });
 
-describe('binary version checks after a user-requested update', () => {
+describe('binary version checks after an applied update', () => {
   beforeEach(() => {
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
@@ -330,7 +336,38 @@ describe('binary version checks after a user-requested update', () => {
     });
   });
 
-  it('writes the target-version marker only when the user actually applies the update', async () => {
+  it('schedules a one-time refresh of only the confirmed harness before a graceful relaunch', async () => {
+    const service = await freshUpdateService('darwin');
+    const { consumeStartupBinaryUpdateMarker } = await import('../agent-binaries/startup-update');
+    service.initUpdateService();
+    try {
+      const relaunch = ipcHandlers.get('update-harness-relaunch');
+      expect(relaunch).toBeTypeOf('function');
+      expect(relaunch?.({ sender: { id: 1 } }, 'codex')).toEqual({ accepted: true });
+      expect(appRelaunch).toHaveBeenCalledWith({ args: process.argv.slice(1) });
+      expect(appQuit).toHaveBeenCalled();
+      expect(consumeStartupBinaryUpdateMarker(TEST_USER_DATA, appGetVersion())).toEqual(['codex']);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it.each([undefined, 'pi', 'gemini'])('rejects a harness relaunch for %s without restarting', async (kind) => {
+    const service = await freshUpdateService('darwin');
+    const { consumeStartupBinaryUpdateMarker } = await import('../agent-binaries/startup-update');
+    service.initUpdateService();
+    try {
+      const relaunch = ipcHandlers.get('update-harness-relaunch');
+      expect(() => relaunch?.({ sender: { id: 1 } }, kind)).toThrow();
+      expect(appRelaunch).not.toHaveBeenCalled();
+      expect(appQuit).not.toHaveBeenCalled();
+      expect(consumeStartupBinaryUpdateMarker(TEST_USER_DATA, appGetVersion())).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('writes the target-version marker only when the update is actually applied', async () => {
     const service = await freshUpdateService('darwin');
     const { consumeStartupBinaryUpdateMarker } = await import('../agent-binaries/startup-update');
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
@@ -351,15 +388,19 @@ describe('binary version checks after a user-requested update', () => {
     }
   });
 
-  it('does not write the marker for an automatic update relaunch', async () => {
+  it('writes the same marker for an automatic update relaunch', async () => {
     const service = await freshUpdateService('darwin');
+    const { consumeStartupBinaryUpdateMarker } = await import('../agent-binaries/startup-update');
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     service.initUpdateService();
     try {
       await service.checkForUpdate(updateManifest());
+      const markerPath = path.join(TEST_USER_DATA, 'agent-binary-update-once.json');
+      expect(fs.existsSync(markerPath)).toBe(false);
       await expect(ipcHandlers.get('update-relaunch-auto')?.({}, 'dark')).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => { expect(spawnProcess).toHaveBeenCalledOnce(); });
-      expect(fs.existsSync(path.join(TEST_USER_DATA, 'agent-binary-update-once.json'))).toBe(false);
+      expect(JSON.parse(fs.readFileSync(markerPath, 'utf8'))).toMatchObject({ version: '0.0.65' });
+      expect(consumeStartupBinaryUpdateMarker(TEST_USER_DATA, '0.0.65')).toBe(true);
     } finally {
       service.stopUpdateService();
       exitSpy.mockRestore();
@@ -562,7 +603,107 @@ function linuxInstallerManifest(version = '0.0.65') {
   };
 }
 
+function expectProbeFailureLog(
+  label: string,
+  fields: { reason: string; status: number | null; code: string | null; signal: string | null },
+  leakedPath: string,
+): void {
+  const detail = logError.mock.calls.find((call) => call[0] === label)?.[1];
+  expect(typeof detail).toBe('string');
+  const text = String(detail);
+  expect(text).not.toContain(leakedPath);
+  expect(text).not.toContain('devuser');
+  expect(text).not.toContain('Command failed');
+  expect(JSON.parse(text)).toEqual({ ...fields, path: TEST_EXE });
+  expect(maskPath).toHaveBeenCalledWith(TEST_EXE);
+}
+
 describe('checkForUpdate Linux installer flow', () => {
+  it('keeps a staged update ready when the Debian ownership check fails', async () => {
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const leakedPath = '/home/devuser/custom-builds/Cindy';
+    checkDebianManagedInstallation.mockReturnValue({
+      status: 'error',
+      error: Object.assign(new Error(`Command failed: /usr/bin/dpkg-query -S ${leakedPath}`), {
+        code: 'ETIMEDOUT', status: null, signal: 'SIGTERM',
+      }),
+    });
+    const service = await freshUpdateService('linux', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(linuxInstallerManifest())).resolves.toBe('ready');
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+        status: 'ready', version: '0.0.65', errorCode: undefined,
+      }));
+      const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+      expect(info.applyAttempts).toBeUndefined();
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', info.fileName))).toBe(true);
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(logError.mock.calls.map((call) => String(call[0]))).toContain(
+        'Linux Debian ownership check failed: %s',
+      );
+      expectProbeFailureLog('Linux Debian ownership check failed: %s', {
+        reason: 'timeout', status: null, code: 'ETIMEDOUT', signal: 'SIGTERM',
+      }, leakedPath);
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('keeps the staged update when the Debian recheck fails after preflight', async () => {
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const leakedPath = '/home/devuser/custom-builds/Cindy';
+    checkDebianManagedInstallation
+      .mockReturnValueOnce({ status: 'managed' })
+      .mockReturnValueOnce({
+        status: 'error',
+        error: Object.assign(new Error(`Command failed: /usr/bin/dpkg-query -S ${leakedPath}`), {
+          status: 2, signal: null,
+        }),
+      });
+    const service = await freshUpdateService('linux', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      const manifest = linuxInstallerManifest();
+      manifest.app.installer.sha256 = 'ab'.repeat(32);
+      await expect(service.checkForUpdate(manifest)).resolves.toBe('ready');
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => expect(logError.mock.calls.map((call) => String(call[0]))).toContain(
+        'Linux Debian ownership recheck failed: %s',
+      ));
+      const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+      expect(checkDebianManagedInstallation).toHaveBeenCalledTimes(2);
+      expect(info.applyAttempts).toBeUndefined();
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', info.fileName))).toBe(true);
+      expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+        status: 'ready', version: '0.0.65', errorCode: undefined,
+      });
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(logError.mock.calls.map((call) => String(call[0]))).toContain(
+        'Linux Debian ownership recheck failed: %s',
+      );
+      expectProbeFailureLog('Linux Debian ownership recheck failed: %s', {
+        reason: 'query-failed', status: 2, code: null, signal: null,
+      }, leakedPath);
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
   it('does not quit or increment attempts for an unmanaged Linux installation', async () => {
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });

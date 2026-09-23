@@ -1,4 +1,4 @@
-import { providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider } from '@cindy/model-providers';
+import { providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
 import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoint } from '@cindy/model-providers';
 /**
  * AddProviderWizard —— 「添加供应商」三步向导(2026-07 模型供应商重构)。
@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Info, Plus, Search } from 'lucide-react';
 
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
@@ -383,6 +384,7 @@ export function AddProviderWizard({
     offersManagedOllamaInstall(window.electronAPI.platform),
   );
   const [loggingIn, setLoggingIn] = useState(false);
+  const [xaiDeviceLogin, setXaiDeviceLogin] = useState(false);
   const genericOAuthProviderId =
     sel?.kind === 'oauth' && sel.provider.auth.oauth ? sel.provider.id : null;
   const genericDeviceFlow =
@@ -395,7 +397,7 @@ export function AddProviderWizard({
     beginOwnedLogin: beginGenericOwnedLogin,
     cancelOwnedLogin: cancelGenericOwnedLogin,
   } = useProviderOAuthDeviceCode(genericOAuthProviderId, {
-    observeProgress: genericDeviceFlow || (sel?.kind === 'oauth' && sel.provider.id === 'openai'),
+    observeProgress: genericDeviceFlow || (sel?.kind === 'oauth' && ['openai', 'xai'].includes(sel.provider.id)),
     browserLoginRef: accountLoginRef,
   });
   // Step 3 拉取态
@@ -537,6 +539,7 @@ export function AddProviderWizard({
     q
       ? sortedPresets.filter(
           (p) =>
+            presetDisplayName(p, i18n.language).toLowerCase().includes(q) ||
             p.name.toLowerCase().includes(q) ||
             (p.nameEn?.toLowerCase().includes(q) ?? false) ||
             (p.nameZhTW?.toLowerCase().includes(q) ?? false),
@@ -776,14 +779,15 @@ export function AddProviderWizard({
 
   // ── OAuth 授权（渠道登录后进入模型选择，原生订阅沿用已有流程）────────────────────
   const handleAuthorize = useCallback(
-    async (override?: ProviderView) => {
-      const selected = override ?? (sel?.kind === 'oauth' ? sel.provider : undefined);
+    async (method: 'browser' | 'device' = 'browser') => {
+      const selected = sel?.kind === 'oauth' ? sel.provider : undefined;
       if (!selected) return;
       const attempt = ++oauthAttemptRef.current;
       let id = selected.id;
       const preset = presets.find(p => p.id === id && providerPresetOAuth(p.id));
       clearGenericDeviceCode();
       setLoggingIn(true);
+      setXaiDeviceLogin(selected.id === 'xai' && method === 'device');
       try {
         let ok = false;
         if (id === 'openai' || id === 'anthropic' || id === 'xai' || preset) {
@@ -801,7 +805,10 @@ export function AddProviderWizard({
             }, {});
             created = true;
             if (accountLoginRef.current !== login) return;
-            const result = await window.electronAPI.maker.providerOAuthLogin(id, { ownerId: login.ownerId });
+            const result = await window.electronAPI.maker.providerOAuthLogin(id, {
+              ownerId: login.ownerId,
+              ...(brand === 'xai' ? { method } : {}),
+            });
             if (accountLoginRef.current !== login || result.reason === 'login_cancelled') return;
             // A late success belongs to a cancelled wizard until ownership is checked.
             // Keep ok false so finally also removes credentials committed before cancellation.
@@ -868,7 +875,10 @@ export function AddProviderWizard({
         toast.error(t('settings.providers.wizard.authorizeFailed', { name: selected.name }));
       } finally {
         // A cancelled account login may settle after a retry or local login has started.
-        if (!accountLoginRef.current && !localLoginRef.current) setLoggingIn(false);
+        if (oauthAttemptRef.current === attempt && !accountLoginRef.current && !localLoginRef.current) {
+          setLoggingIn(false);
+          setXaiDeviceLogin(false);
+        }
       }
     },
     [sel, presets, clearGenericDeviceCode, beginGenericOwnedLogin, onDone, t],
@@ -892,6 +902,7 @@ export function AddProviderWizard({
     else cancelGenericOwnedLogin();
     clearGenericDeviceCode();
     setLoggingIn(false);
+    setXaiDeviceLogin(false);
   }, [sel, clearGenericDeviceCode, cancelGenericOwnedLogin]);
 
   /** 关闭向导:授权等待中先取消再关,不留挂起的 login runner。保存中不能关，避免删掉正在落盘的 OAuth 连接。 */
@@ -1647,13 +1658,19 @@ export function AddProviderWizard({
                           name: presetDisplayName(p, i18n.language),
                         })}
                         name={presetDisplayName(p, i18n.language)}
-                        meta={t(
-                          providerPresetOAuth(p.id)
-                            ? 'settings.providers.wizard.metaLoginOrApi'
-                            : p.authMethod === 'none'
-                              ? 'settings.providers.wizard.metaNoAuth'
-                              : 'settings.providers.wizard.metaApiKey',
-                        )}
+                        meta={
+                          isMimoTokenPlanPreset(p)
+                            ? t('settings.providers.models.subscriptionProduct', {
+                                product: 'MiMo Token Plan',
+                              })
+                            : t(
+                                providerPresetOAuth(p.id)
+                                  ? 'settings.providers.wizard.metaLoginOrApi'
+                                  : p.authMethod === 'none'
+                                    ? 'settings.providers.wizard.metaNoAuth'
+                                    : 'settings.providers.wizard.metaApiKey',
+                              )
+                        }
                         beta={isLocalRuntimeBetaProviderId(p.id)}
                         onClick={() => pickPreset(p)}
                       />
@@ -1768,45 +1785,33 @@ export function AddProviderWizard({
               <div className="flex flex-wrap items-center gap-2">
                 {/* 等待授权中按钮变「取消」(与详情头对称),不禁用——浏览器流挂起时用户必须能中止重试。 */}
                 {loggingIn ? (
-                  <button
-                    type="button"
-                    onClick={cancelAuthorize}
-                    className="flex h-9 items-center justify-center gap-2 rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                    style={{
-                      backgroundColor: 'var(--settings-btn-secondary-bg)',
-                      borderColor: 'var(--settings-btn-secondary-border)',
-                      color: 'var(--settings-btn-secondary-text)',
-                    }}
-                  >
+                  <Button variant="secondary" size="lg" type="button" onClick={cancelAuthorize}>
                     <Spinner size={13} />
                     {t('settings.providers.button.cancel')}
-                  </button>
+                  </Button>
                 ) : (
                   <>
                     {sel.provider.id === 'openai' && !localOpenAiAlreadyAdded && (
-                      <button type="button" onClick={() => void useLocalOpenAiAccount()}
-                        className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                        style={{ backgroundColor: 'var(--settings-btn-secondary-bg)', borderColor: 'var(--settings-btn-secondary-border)', color: 'var(--settings-btn-secondary-text)' }}>
+                      <Button
+                        variant="secondary"
+                        size="lg"
+                        type="button"
+                        onClick={() => void useLocalOpenAiAccount()}
+                      >
                         {t('settings.providers.openai.useLocalAccount')}
-                      </button>
+                      </Button>
                     )}
                     {sel.provider.id === 'anthropic' && !providers.some(p => p.id === 'anthropic' && !p.removed && (p.connected || p.removed === false)) && (
-                      <button type="button" onClick={() => void useLocalClaudeAccount()}
-                        className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium hover:bg-[var(--surface-hover)]"
-                        style={{ backgroundColor: 'var(--settings-btn-secondary-bg)', borderColor: 'var(--settings-btn-secondary-border)', color: 'var(--settings-btn-secondary-text)' }}>
+                      <Button
+                        variant="secondary"
+                        size="lg"
+                        type="button"
+                        onClick={() => void useLocalClaudeAccount()}
+                      >
                         {t('settings.providers.localAccount.useClaude')}
-                      </button>
+                      </Button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => void handleAuthorize()}
-                      className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
-                      style={{
-                        backgroundColor: 'var(--settings-btn-secondary-bg)',
-                        borderColor: 'var(--settings-btn-secondary-border)',
-                        color: 'var(--settings-btn-secondary-text)',
-                      }}
-                    >
+                    <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize()}>
                       {t(
                         ['openai', 'anthropic', 'xai'].includes(sel.provider.id)
                             ? 'settings.providers.openai.addIndependentAccount'
@@ -1814,7 +1819,12 @@ export function AddProviderWizard({
                               ? 'settings.providers.wizard.authorizeWithDeviceCode'
                               : 'settings.providers.button.authorize',
                       )}
-                    </button>
+                    </Button>
+                    {sel.provider.id === 'xai' && (
+                      <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize('device')}>
+                        {t('settings.connections.xai.deviceLogin')}
+                      </Button>
+                    )}
                   </>
                 )}
                 {/* 替代路径:API 用户没有订阅,OAuth 对其是错误路径——切到该渠道的
@@ -1822,22 +1832,23 @@ export function AddProviderWizard({
                     与「授权」并排的次级描边按钮(White Pill):小灰字形态用户根本
                     注意不到(2026-07-24 实测)。 */}
                 {(OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find(p => p.id === sel.provider.id)) && (
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="lg"
                     type="button"
-                    onClick={() => pickPreset((OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find(p => p.id === sel.provider.id))!, true)}
+                    onClick={() =>
+                      pickPreset(
+                        (OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find((p) => p.id === sel.provider.id))!,
+                        true,
+                      )
+                    }
                     disabled={loggingIn}
-                    className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
-                    style={{
-                      backgroundColor: 'transparent',
-                      borderColor: 'var(--settings-btn-secondary-border)',
-                      color: 'var(--text-primary)',
-                    }}
                   >
                     {t('settings.providers.wizard.useApiKey')}
-                  </button>
+                  </Button>
                 )}
               </div>
-              {genericDeviceFlow && loggingIn && (
+              {(genericDeviceFlow || xaiDeviceLogin) && loggingIn && (
                 <OAuthDeviceCodeCard deviceCode={genericDeviceCode} />
               )}
               {loggingIn && browserUrl && <OAuthBrowserLink url={browserUrl} />}
@@ -1924,12 +1935,15 @@ export function AddProviderWizard({
                   <SettingsTextInput
                     value={apiKey}
                     onChange={setApiKey}
-                    placeholder="sk-…"
+                    placeholder={isMimoTokenPlanPreset(sel.preset) ? 'tp-…' : 'sk-…'}
                     size="md"
                     mono
                     secret
                     secretTipContentClassName="z-[10001]"
                   />
+                  {isMimoTokenPlanPreset(sel.preset) && (
+                    <InfoLine text={t('settings.providers.wizard.mimoTokenPlanNote')} />
+                  )}
                 </div>
               ) : (
                 <InfoLine text={t('settings.providers.wizard.noAuthNote')} />
@@ -2104,18 +2118,16 @@ export function AddProviderWizard({
                                 color: 'var(--settings-section-title)',
                               }}
                             />
-                            <button
+                            <Button
+                              variant="secondary"
+                              size="lg"
                               type="button"
                               onClick={() => addManualModel(agent)}
                               disabled={!manualModelIds[agent]?.trim()}
-                              className="flex h-9 shrink-0 items-center justify-center rounded-full border px-4 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
-                              style={{
-                                borderColor: 'var(--settings-btn-secondary-border)',
-                                color: 'var(--settings-btn-secondary-text)',
-                              }}
+                              compact
                             >
                               {t('settings.providers.wizard.addManualModel')}
-                            </button>
+                            </Button>
                           </span>
                         </label>
                       ))}
@@ -2163,65 +2175,43 @@ export function AddProviderWizard({
             {t('settings.providers.wizard.back')}
           </button>
           <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={handleClose}
-              disabled={saving}
-              className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
-              style={{
-                borderColor: 'var(--settings-btn-secondary-border)',
-                color: 'var(--text-primary)',
-              }}
-            >
+            <Button variant="secondary" size="lg" type="button" onClick={handleClose} disabled={saving}>
               {t('settings.providers.wizard.cancel')}
-            </button>
+            </Button>
             {sel?.kind === 'builtinApiKey' && step === 2 && (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                loading={saving}
                 type="button"
                 onClick={() => void handleSaveBuiltinApiKey()}
                 disabled={saving || apiKey.trim().length === 0}
-                className={cn(
-                  'flex h-9 items-center justify-center gap-2 rounded-full px-5 text-13 font-medium transition-opacity',
-                  saving || apiKey.trim().length === 0
-                    ? 'cursor-not-allowed opacity-50'
-                    : 'hover:opacity-90',
-                )}
-                style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
               >
-                {saving && <Spinner size={13} />}
                 {t('settings.providers.wizard.finish')}
-              </button>
+              </Button>
             )}
             {sel?.kind === 'preset' && step === 2 && (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
                 type="button"
                 onClick={() => void startFetch()}
                 disabled={!presetCanContinue}
-                className={cn(
-                  'flex h-9 items-center justify-center rounded-full px-6 text-13 font-medium transition-opacity',
-                  !presetCanContinue ? 'cursor-not-allowed opacity-50' : 'hover:opacity-90',
-                )}
-                style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
               >
                 {t('settings.providers.wizard.next')}
-              </button>
+              </Button>
             )}
             {sel?.kind === 'preset' && step === 3 && (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                loading={saving}
                 type="button"
                 onClick={() => void handleFinish()}
                 disabled={saving || fetchState.status === 'fetching' || checkedCount === 0}
-                className={cn(
-                  'flex h-9 items-center justify-center gap-2 rounded-full px-6 text-13 font-medium transition-opacity',
-                  saving || fetchState.status === 'fetching' || checkedCount === 0
-                    ? 'cursor-not-allowed opacity-50'
-                    : 'hover:opacity-90',
-                )}
-                style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
               >
-                {saving && <Spinner size={13} />}
                 {t('settings.providers.wizard.finish')}
-              </button>
+              </Button>
             )}
           </div>
         </div>

@@ -77,6 +77,8 @@ export interface SendToSessionDeps {
 // 这是 LLM 点进 handoff 类目、看到本工具后的行为说明;选类目阶段的协同规避另见
 // lizi_xdtHelperMcpServer.ts 的 D_LIST_TOOLS(handoff 类目介绍)。
 const DESCRIPTION = [
+  "⚠️【硬规则:发给已有任务时 target_session_id 必传】上层要求把消息发给某个已存在的任务(session / thread)时,必须传 target_session_id;不知道目标 id 就先用 history 类目的 list_sessions 查到再调用,不要省略。只有明确要为某个业务对象新建一个专属任务时才省略该参数——省略不会报错,而是静默新建一个任务、把消息当作首条输入并立刻跑一轮(返回 wake_kind=created + note)。把 created 误当成「已投给既有任务」会凭空多出一个任务并消耗 token。",
+  "",
   '⚠️【不要用于"开协同 / 多 worker"】本工具 create 模式产出的是普通独立 session,不进入 Orca 协同分组或 Lead 右侧 worker 栏。用户明确要协同 team/worker 时才使用 cindy_orca；外部业务对象(issue / jira / pr)需要独立项目 session 时使用本工具。',
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
@@ -108,6 +110,17 @@ const DESCRIPTION = [
 ].join("\n");
 
 /**
+ * create 模式成功返回附带的说明:明确告诉调用方「这是新建、不是投给既有任务」以及
+ * 后果(本轮已触发),避免调用方漏传 target_session_id 时把 created 误读为投递成功(#4884)。
+ */
+export function createdNote(targetSessionId: string): string {
+  return (
+    `已新建任务 ${targetSessionId}(wake_kind=created),本条消息作为其首条输入,本轮已触发。` +
+    "这不是投递到既有任务;若原意是发给某个已存在的任务,请用 list_sessions 找到目标 id 后带 target_session_id 重发,并停止或归档这个多出来的任务。"
+  );
+}
+
+/**
  * 注册 send_to_session 到 XdtHelperToolRegistry(handoff 类目),经 call_tool 调用。
  * 范式对齐 set_current_session_title.ts:host 通过 deps 注入 getSessionContext +
  * sendToSession 回调,工具层只做 ctx 解析 + 结果整形,不持有业务逻辑。
@@ -127,7 +140,8 @@ export function registerSendToSessionTool(
         .optional()
         .describe(
           `目标 ${BRAND_NAME} session 的 business id(UUID)。` +
-            "省略 → create:新建一个专属 session 并在返回里回传新建 id;提供 → jump 到该既有 session。",
+            "要发给已有任务时必传(不知道 id 先用 list_sessions 查);提供 → jump 到该既有 session。" +
+            "省略 → create:静默新建一个专属 session 并立刻跑一轮,返回里回传新建 id——仅在明确要新建专属任务时省略。",
         ),
       message: z
         .string()
@@ -218,6 +232,9 @@ export function registerSendToSessionTool(
         target_session_id: result.targetSessionId,
         agent_kind: result.agentKind,
         wake_kind: result.wakeKind,
+        ...(result.wakeKind === "created"
+          ? { note: createdNote(result.targetSessionId) }
+          : {}),
         target_title: result.targetTitle,
         target_last_user_send_at: result.targetLastUserSendAt,
         ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),

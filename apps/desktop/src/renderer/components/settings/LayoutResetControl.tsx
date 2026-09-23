@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { RotateCcw } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -47,22 +48,20 @@ export function LayoutResetControl() {
         </p>
       </div>
 
-      <button
+      <Button
+        variant="secondary"
+        size="md"
+        compact
+        loading={resetting}
         type="button"
         onClick={() => void handleReset()}
         disabled={resetting}
         aria-label={t('settings.appearance.layout.reset')}
-        className={cn(
-          'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-12 font-medium',
-          'border border-[var(--settings-input-border)]',
-          'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-          'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-          'disabled:cursor-wait disabled:opacity-60',
-        )}
+        className="shrink-0"
       >
         <RotateCcw size={14} aria-hidden />
         {t('settings.appearance.layout.reset')}
-      </button>
+      </Button>
     </div>
   );
 }

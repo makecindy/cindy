@@ -1,5 +1,6 @@
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
 import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
+import { mergeByokNativeConfigs } from '../model-access/byokProvider.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 /**
@@ -672,7 +673,9 @@ export function buildPiSubscriptionNativeProviders(
         const compatibleCorrection = correction?.api === api ? correction : null;
         const thinking = compatibleCorrection?.thinkingLevelMap
           ?? officialThinking?.thinkingLevelMap ?? template?.thinkingLevelMap;
-        const compat = compatibleCorrection?.compat ?? officialThinking?.compat ?? template?.compat;
+        const compat = sourceProviderId === 'anthropic'
+          ? pruneAnthropicCompatForLink(template?.compat, 'subscription')
+          : compatibleCorrection?.compat ?? officialThinking?.compat ?? template?.compat;
         const cost = catalogCostForPiNative(model.cost) ?? template?.cost;
         const listedIds = listedModelIdsByProvider?.get(piProviderId)
           ?? listedPiModelIds(bundledModelsByProvider)?.get(piProviderId);
@@ -784,7 +787,10 @@ class DesktopPiAuthAdapter implements AuthAdapter {
     if (providerId) {
       const storageProviderId = storedCustomProviderId(providerId);
       try {
-        const custom = (await listCustomProvidersWithSecureHeaders()).find(
+        const custom = mergeByokNativeConfigs(
+          await listCustomProvidersWithSecureHeaders(),
+          getActiveCatalog().providers,
+        ).find(
           (provider) => provider.id === storageProviderId && provider.runtimes.pi,
         );
         if (custom) {
@@ -1086,6 +1092,43 @@ function xaiOfficialCapabilityCorrection(
       supportsReasoningEffort: reasoningCompatEnabled(official.compat),
     },
   };
+}
+
+/**
+ * 按链路裁剪 Anthropic Messages 的 Pi compat 能力位(#4982 / #4983)。
+ * Pi 目录探测把 Anthropic 直连的新格式能力位(tool `strict`、消息内 `tool_removal` 块、
+ * 逐轮 effort)原样带进每条链路的 models.json:
+ *   - xd 网关的 Anthropic-Messages schema 尚不接受 `tools[].strict` 与 `tool_removal`,
+ *     Opus 5 / 5.5 每条消息 400;
+ *   - Anthropic 订阅直连接受 `strict`,但 Pi 发出的 mid-conversation beta 名与 Anthropic
+ *     现要求的 `inline-tools-2026-09-15` 不符,第二轮起 400。
+ * `supportsMidConvoSystemMessages` 两条链路都被接受,保留。
+ * 恢复条件:网关 schema 补齐 `strict` / `tool_removal` 后去掉网关侧 `supportsStrictTools`
+ * 裁剪;Pi 上游补发正确 beta(或对不支持端点降级)并随内核更新进入 Cindy 后去掉两个
+ * MidConvo 裁剪。只改客户端生成的 models.json,不改代理与上游。
+ */
+const GATEWAY_UNSUPPORTED_ANTHROPIC_COMPAT: readonly string[] = [
+  'supportsStrictTools',
+  'supportsMidConvoToolChanges',
+  'supportsMidConvoEffort',
+];
+const SUBSCRIPTION_UNSUPPORTED_ANTHROPIC_COMPAT: readonly string[] = [
+  'supportsMidConvoToolChanges',
+  'supportsMidConvoEffort',
+];
+
+export function pruneAnthropicCompatForLink(
+  compat: Record<string, unknown> | undefined,
+  link: 'gateway' | 'subscription',
+): Record<string, unknown> | undefined {
+  if (!compat) return compat;
+  const unsupported = link === 'gateway'
+    ? GATEWAY_UNSUPPORTED_ANTHROPIC_COMPAT
+    : SUBSCRIPTION_UNSUPPORTED_ANTHROPIC_COMPAT;
+  if (!unsupported.some((key) => key in compat)) return compat;
+  const next = { ...compat };
+  for (const key of unsupported) delete next[key];
+  return next;
 }
 
 function officialPiModels(providerId: string): PiNativeModelSpec[] | null {
@@ -1639,6 +1682,7 @@ export function resolvePiCindyGatewayModelSpec(
   const compatibleBundled = bundled?.api === api ? bundled : undefined;
   const compatibleProbed = probed?.api === api ? probed : undefined;
   let compat = compatibleProbed?.compat ?? compatibleBundled?.compat;
+  if (api === 'anthropic-messages') compat = pruneAnthropicCompatForLink(compat, 'gateway');
   // Gateway routing needs Pi's native session identity on every Chat/Messages request.
   // This is a Gateway transport policy, not a change to direct BYOM/subscription providers.
   if (api === 'openai-completions' || api === 'anthropic-messages') {
@@ -1767,7 +1811,7 @@ export async function resolvePiNativeProviders(ctx: {
     }
   }
   const custom = buildPiNativeProvidersFromConfigs(
-    configs,
+    mergeByokNativeConfigs(configs, getActiveCatalog().providers),
     readCustomProviderKey,
     (id, reason) => log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
     bundledModels ?? undefined,

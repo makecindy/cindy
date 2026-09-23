@@ -4004,7 +4004,6 @@ function CollapsedView({
       <SidebarIconButton
         icon={CirclePlus}
         label={t('ccAgent.layout.new')}
-        variant="rail"
         onClick={handleNewCCS}
       />
       {/* 自动化 rail 入口 —— 仅导航,不再显示未读 dot(与展开态 SidebarTopNav 一致,
@@ -4014,7 +4013,6 @@ function CollapsedView({
         label={t('ccAgent.layout.automations')}
         aria-label={t('ccAgent.layout.automations')}
         aria-current={onScheduleMatch ? 'page' : undefined}
-        variant="rail"
         active={Boolean(onScheduleMatch)}
         onClick={handleNavScheduled}
       />
@@ -4024,7 +4022,6 @@ function CollapsedView({
       <SidebarIconButton
         icon={Plug}
         label={t('sidebar.tabs.plugins')}
-        variant="rail"
         active={activeKey === 'plugins'}
         aria-current={activeKey === 'plugins' ? 'page' : undefined}
         showDot={hasGhostUnread}

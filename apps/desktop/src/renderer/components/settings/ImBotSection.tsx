@@ -19,8 +19,9 @@
  */
 
 import { Lightbulb } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
@@ -72,14 +73,22 @@ function PersonalGroupContent({
   showDiscord,
   showLark,
   showTelegram,
+  targetChannel,
+  activation,
 }: {
   showDiscord: boolean;
   showLark: boolean;
   showTelegram: boolean;
+  targetChannel: 'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | null;
+  activation: number;
 }) {
   const [expandedChannel, setExpandedChannel] = useState<
     'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | null
-  >(null);
+  >(targetChannel);
+
+  useLayoutEffect(() => {
+    if (targetChannel) setExpandedChannel(targetChannel);
+  }, [targetChannel, activation]);
 
   const toggle = (channel: 'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk') => {
     setExpandedChannel((current) => (current === channel ? null : channel));
@@ -117,6 +126,7 @@ function PersonalGroupContent({
 export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup | null }) {
   const { t } = useTranslation();
   const { mode, dataOwnerId, user } = useAuth();
+  const { entry, activation } = useSettingsSearchNavigation();
   const identity: ImBotIdentity = {
     region: CURRENT_CINDY_REGION,
     mode,
@@ -126,6 +136,8 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
   const discordVisible = showDiscordBot(identity);
   const larkVisible = showLarkBot(identity);
   const telegramVisible = showTelegramBot(identity);
+  const targetChannel = (['wechat', 'wecom', 'feishu', 'discord', 'telegram', 'dingtalk'] as const)
+    .find((channel) => entry?.targetId === 'personal-im-' + channel) ?? null;
   const cindySectionRef = useRef<HTMLElement | null>(null);
   const personalSectionRef = useRef<HTMLElement | null>(null);
   const effectiveTargetGroup = targetGroup
@@ -195,6 +207,8 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
             showDiscord={discordVisible}
             showLark={larkVisible}
             showTelegram={telegramVisible}
+            targetChannel={targetChannel}
+            activation={activation}
           />
         </section>
       </div>

@@ -166,6 +166,39 @@ describe('schedule model', () => {
     });
   });
 
+  it('counts only active failures in mobile schedule rows and overview', () => {
+    const olderFailure = run({ id: 'failure', status: 'failed', firedAt: NOW - 120_000 });
+    const recovered = [
+      olderFailure,
+      run({ id: 'success', status: 'success', firedAt: NOW - 60_000, readAt: NOW }),
+    ];
+    const currentSchedule = schedule({});
+    const overview = (runs: RemoteScheduleRun[]) => summarizeAutomationOverview(
+      [currentSchedule], new Map([[currentSchedule.id, runs]]), NOW,
+    ).unreadRunCount;
+
+    expect(countUnreadRuns(recovered, NOW)).toBe(0);
+    expect(summarizeSchedule(currentSchedule, recovered, NOW).unreadCount).toBe(0);
+    expect(overview(recovered)).toBe(0);
+    expect(olderFailure.readAt).toBeUndefined();
+    expect(summarizeRun(olderFailure, NOW).unread).toBe(true);
+
+    const unreadSuccess = recovered.map((item) => item.id === 'success'
+      ? { ...item, readAt: undefined } : item);
+    expect(countUnreadRuns(unreadSuccess, NOW)).toBe(1);
+    expect(overview(unreadSuccess)).toBe(1);
+
+    const otherScheduleSuccess = run({
+      id: 'other-success', scheduleId: 'sched-2', status: 'success',
+      firedAt: NOW - 30_000, readAt: NOW,
+    });
+    expect(countUnreadRuns([olderFailure, otherScheduleSuccess], NOW)).toBe(1);
+
+    const newFailure = run({ id: 'new-failure', status: 'interrupted', firedAt: NOW - 15_000 });
+    expect(countUnreadRuns([...recovered, newFailure], NOW)).toBe(1);
+    expect(overview([...recovered, newFailure])).toBe(1);
+  });
+
   it('folds repeated persistent-session runs by session id', () => {
     const displayRuns = displayRunsForMobile([
       run({ id: 'old-same-session', sessionId: 's1', firedAt: NOW - 2000 }),
@@ -183,7 +216,7 @@ describe('schedule model', () => {
     const runs = [
       run({ id: 'running', status: 'running', readAt: undefined }),
       run({ id: 'failed', status: 'failed', errorMsg: 'boom', readAt: undefined }),
-      run({ id: 'read', status: 'success', readAt: NOW }),
+      run({ id: 'read', status: 'success', readAt: NOW, firedAt: NOW - 120_000 }),
     ];
 
     expect(countUnreadRuns(runs, NOW)).toBe(1);

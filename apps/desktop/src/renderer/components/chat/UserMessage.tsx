@@ -1797,6 +1797,7 @@ export function UserMessage({
                 {blockedByGhost && (
                   <div className="mt-1.5">
                     <ErrorMessageCard
+                      kind="blocked-input"
                       message={blockedByGhost.reason || t('chat.ghostHook.blockedFallback')}
                     />
                   </div>

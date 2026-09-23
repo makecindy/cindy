@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -133,13 +134,15 @@ export function MyPublishesSection({
           </h2>
           <span className="text-13 tabular-nums text-[var(--text-tertiary)]">{releases.length}</span>
         </button>
-        <button
+        <Button
+          variant="secondary"
+          size="lg"
           type="button"
           onClick={onPublish}
-          className="inline-flex h-9 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="shrink-0"
         >
           {t('settings.ghosts.publish.action')}
-        </button>
+        </Button>
       </div>
       {expanded ? (
         <div className="space-y-2">
@@ -159,13 +162,17 @@ export function MyPublishesSection({
                   {percent !== null ? ` · ${percent}%` : ''}
                 </p>
               </div>
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
+                tone="quiet"
+                compact
                 type="button"
                 onClick={() => void window.electronAPI.pluginPublisher.cancel(active.transferId)}
-                className="shrink-0 rounded-full px-3 py-1 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover-soft)]"
+                className="shrink-0"
               >
                 {t('settings.ghosts.publish.cancel')}
-              </button>
+              </Button>
             </div>
           ) : null}
           {releases.map((release) => {

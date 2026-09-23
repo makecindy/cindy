@@ -66,6 +66,47 @@ function policy(
 }
 
 describe('iOS Simulator Desktop native admission policy', () => {
+  it('admits the functionally verified Xcode 27 video and HID combination', () => {
+    const resolved = resolveIOSSimulatorDesktopAdmissionPolicy({
+      packaged: true,
+      platform: 'darwin',
+      architecture: 'arm64',
+      hostOsRelease: '27.0.0',
+      artifact: ARTIFACT,
+      start: {
+        ...START,
+        runtime: {
+          runtimeIdentifier: 'com.apple.CoreSimulator.SimRuntime.iOS-27-0',
+          runtimeBuildVersion: '24A434',
+          xcodeBuild: 'Xcode 27.0\nBuild version 27A266a',
+          architecture: 'arm64',
+        },
+      },
+      developmentRequests: { h264Stream: false, continuousInput: false },
+    });
+    const decision = evaluateIOSSimulatorNativeCapabilityAdmission({
+      policy: resolved,
+      processState: 'running',
+      requireVerifiedCompatibility: true,
+      detectedCapabilities: {
+        accessibility: false,
+        sessions: false,
+        jpegStream: false,
+        h264Stream: true,
+        bgraStream: false,
+        discreteInput: false,
+        continuousInput: true,
+        multiTouch: true,
+      },
+    });
+    expect(decision.launch).toMatchObject({ allowed: true });
+    expect(decision.capabilities.h264Stream).toMatchObject({ active: true });
+    expect(decision.capabilities.continuousInput).toMatchObject({
+      active: true,
+    });
+    expect(decision.capabilities.multiTouch).toMatchObject({ active: true });
+  });
+
   it('auto-requests independently promoted packaged capabilities', () => {
     const resolved = policy();
     expect(resolved).toMatchObject({

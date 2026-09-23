@@ -69,7 +69,12 @@ import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
 import { buildLinuxUpdateScript, normalizeLinuxDebSha256 } from './updateScriptLinux';
-import { findLinuxUserInstallation, isDebianManagedInstallation, missingLinuxUserInstallTools, type LinuxUserInstallation } from './linuxInstallation';
+import {
+  checkDebianManagedInstallation,
+  findLinuxUserInstallation,
+  missingLinuxUserInstallTools,
+  type LinuxUserInstallation,
+} from './linuxInstallation';
 import { linuxPasswordStoreRelaunchArgs } from './linuxPasswordStore';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion';
 import { disposeAndroidAdb } from './mcp-integrations/android';
@@ -245,6 +250,35 @@ function setStatus(status: UpdateStatus, extra?: Partial<UpdateStatusPayload>): 
   if (status === 'ready' && !startupUpdateCheckInProgress && !extra?.errorCode) {
     void evaluateAutoRelaunch('status-ready');
   }
+}
+
+function formatLinuxProbeError(error: unknown, exePath: string): string {
+  const details = error && typeof error === 'object'
+    ? error as { code?: unknown; status?: unknown; signal?: unknown }
+    : {};
+  const code = typeof details.code === 'string' && /^[A-Za-z0-9_]+$/.test(details.code)
+    ? details.code
+    : null;
+  const status = typeof details.status === 'number' && Number.isInteger(details.status)
+    ? details.status
+    : null;
+  const signal = typeof details.signal === 'string' && /^[A-Za-z0-9]+$/.test(details.signal)
+    ? details.signal
+    : null;
+  const reason = code === 'ETIMEDOUT' || (signal !== null && status === null)
+    ? 'timeout'
+    : code === 'ENOENT' || code === 'EACCES' || code === 'EPERM'
+      ? 'not-executable'
+      : 'query-failed';
+  // execFileSync's message embeds the queried path. Log only controlled
+  // fields; the path goes through maskPath on its own.
+  return JSON.stringify({
+    reason,
+    status,
+    code,
+    signal,
+    path: maskPath(exePath),
+  });
 }
 
 function blockWindowsUpdaterForMissingRuntime(missingFiles: readonly string[]): false {
@@ -1776,12 +1810,28 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
     // Do not change installation strategy after the preflight (there is an
     // await while reclaiming runners). A changed layout must fail closed.
     const now = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+    const debianCheck = installation ? null : checkDebianManagedInstallation(exePath);
+    if (debianCheck?.status === 'error') {
+      log.error('Linux Debian ownership recheck failed: %s', formatLinuxProbeError(debianCheck.error, exePath));
+      isRelaunching = false;
+      autoRelaunchInProgress = false;
+      // A transient ownership probe failure is not evidence that the install
+      // changed. Keep the verified .deb staged so the user can retry, and do
+      // not consume an apply attempt. checkExistingPatch deletes the .deb
+      // after three recorded attempts.
+      setStatus('ready', { version: readyVersion ?? undefined });
+      return;
+    }
     if (installation
       ? !now || now.prefix !== installation.prefix || now.current !== installation.current
         || now.region !== installation.region || !readyVersion
-      : now !== null || !isDebianManagedInstallation(exePath)) {
+      : now !== null || debianCheck?.status !== 'managed') {
       throw new Error('Linux installation changed after preflight');
     }
+    // Count the attempt only after the recheck confirms we will launch.
+    // Incrementing earlier let three transient recheck failures burn the
+    // staged .deb on the next startup.
+    incrementApplyAttempts();
     script = buildLinuxUpdateScript({
       pid, debPath, sha256, sizeBytes, exePath, lockFilePath, logPath,
       userInstallation: installation ? { ...installation, version: readyVersion! } : undefined,
@@ -1850,10 +1900,10 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
   });
 }
 
-async function executeRelaunch(theme: 'light' | 'dark', checkForBinaryUpdates = false): Promise<void> {
+async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
   if (isCindyPersonalRuntime()) return;
   try {
-    await executeRelaunchUnguarded(theme, checkForBinaryUpdates);
+    await executeRelaunchUnguarded(theme);
   } catch (err) {
     log.error('executeRelaunch() failed: %s', err instanceof Error ? err.stack ?? err.message : String(err));
     try {
@@ -1873,7 +1923,7 @@ async function executeRelaunch(theme: 'light' | 'dark', checkForBinaryUpdates = 
   }
 }
 
-async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryUpdates: boolean): Promise<void> {
+async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> {
   if (isRelaunching) {
     log.info('executeRelaunch() skipped — already in progress');
     return;
@@ -1948,9 +1998,19 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
     const exePath = app.getPath('exe');
     const installation = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
     linuxInstallation = installation;
+    const debianCheck = installation ? null : checkDebianManagedInstallation(exePath);
+    if (debianCheck?.status === 'error') {
+      log.error('Linux Debian ownership check failed: %s', formatLinuxProbeError(debianCheck.error, exePath));
+      isRelaunching = false;
+      autoRelaunchInProgress = false;
+      // Keep the verified installer staged. A transient dpkg-query failure is
+      // not evidence that this executable belongs to an unsupported layout.
+      setStatus('ready', { version: readyVersion ?? undefined });
+      return;
+    }
     const supported = installation
       ? installation.region === CURRENT_CINDY_REGION && missingLinuxUserInstallTools().length === 0
-      : isDebianManagedInstallation(exePath);
+      : debianCheck?.status === 'managed';
     if (!supported) {
       log.error('Linux installation cannot self-update; use the installation guide or its package manager');
       isRelaunching = false;
@@ -1982,7 +2042,9 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
     maskPath(readyFilePath), fs.statSync(readyFilePath).size,
   );
 
-  if (checkForBinaryUpdates && readyVersion) {
+  // Every applied app update — manual, idle or startup auto-relaunch — checks
+  // agent binaries once on the next launch; ordinary launches do not.
+  if (readyVersion) {
     cancelStartupBinaryUpdateCheck = writeStartupBinaryUpdateMarker(app.getPath('userData'), readyVersion);
   }
 
@@ -1992,13 +2054,13 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
       break;
     case 'darwin':
       // Increment immediately before starting the platform executor so a
-      // failed updater can be bounded across restarts. Windows does this only
-      // after its final app-local/System32 Runtime check inside the executor.
+      // failed updater can be bounded across restarts. Windows and Linux do
+      // this only after the last in-executor check that can still keep the
+      // staged patch for retry (Windows Runtime, Linux ownership recheck).
       incrementApplyAttempts();
       executeUpdateMacOS(readyFilePath);
       break;
     case 'linux':
-      incrementApplyAttempts();
       executeUpdateLinux(readyFilePath, linuxInstallation);
       break;
     default:
@@ -2039,7 +2101,7 @@ export function initUpdateService(): void {
     // default and the .env'd-out look most users have.
     const resolved = theme === 'light' || theme === 'dark' ? theme : 'dark';
     resolvedRelaunchTheme = resolved;
-    void executeRelaunch(resolved, true);
+    void executeRelaunch(resolved);
   });
 
   ipcMain.handle(
@@ -2179,6 +2241,25 @@ export function initUpdateService(): void {
     // relaunch arguments retain the original native command line.
     app.relaunch({ args: process.argv.slice(1) });
     app.quit();
+  });
+
+  // About → Agent version update: keep the same graceful app relaunch lifecycle,
+  // but ask the next startup to refresh managed harness binaries before they are
+  // exposed to Maker. The marker is consumed once by agent-binaries/prepare and
+  // is scoped to the harness the user confirmed; Pi has its own kernel manager.
+  ipcMain.handle('update-harness-relaunch', (event, kind: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (kind !== 'claude-code' && kind !== 'codex') {
+      throwIpcError('INVALID_PARAMS', 'kind required (claude-code | codex)');
+    }
+    const cancelMarker = writeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion(), [kind]);
+    if (!cancelMarker) {
+      throwIpcError('INTERNAL', 'failed to schedule harness update');
+    }
+    log.info(`harness update relaunch requested: ${kind}`);
+    app.relaunch({ args: process.argv.slice(1) });
+    app.quit();
+    return { accepted: true };
   });
 
   ipcMain.on('update-set-relaunch-theme', (_event, theme: 'light' | 'dark') => {

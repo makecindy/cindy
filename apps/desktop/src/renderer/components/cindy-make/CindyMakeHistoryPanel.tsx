@@ -41,6 +41,8 @@ export function CindyMakeHistoryPanel({
   onState?: (state: CindyMakeHistoryState) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const translateRef = useRef(t);
+  translateRef.current = t;
   const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
   const make = useCindyMakeState();
@@ -48,6 +50,7 @@ export function CindyMakeHistoryPanel({
     owner: ReturnType<typeof getDataOwnerGeneration>;
     value: CindyMakeHistoryState;
   }>();
+  const snapshotRef = useRef(snapshot);
   const state =
     snapshot && isDataOwnerGenerationCurrent(snapshot.owner) ? snapshot.value : undefined;
   const [selectedId, select] = useState('');
@@ -57,10 +60,29 @@ export function CindyMakeHistoryPanel({
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [pending, setPending] = useState<string>();
   const [failed, setFailed] = useState(false);
+  // A failed build is persisted so it can still be retried, but an old failure
+  // should not reappear as a fresh red banner every time this panel is opened.
+  const [showBuildFailure, setShowBuildFailure] = useState(false);
   const request = useRef(0);
   const acting = useRef(false);
   const actionGeneration = useRef(0);
   const owner = getDataOwnerGeneration();
+  const notifyBuildResult = useCallback(
+    (previous: CindyMakeHistoryState['build'], next: CindyMakeHistoryState['build']) => {
+      if (
+        !previous ||
+        !next ||
+        (previous.status === next.status && previous.buildId === next.buildId)
+      )
+        return;
+      if (next.status === 'ready') {
+        toast.success(translateRef.current('cindyMake.personal.status.ready'));
+      } else if (next.status === 'failed' && next.error !== 'cancelled') {
+        toast.error(translateRef.current('cindyMake.personal.errors.' + (next.error ?? 'unavailable')));
+      }
+    },
+    [],
+  );
   const refresh = useCallback(async () => {
     if (!window.electronAPI.getCindyMakeHistory) {
       setFailed(true);
@@ -70,15 +92,29 @@ export function CindyMakeHistoryPanel({
     try {
       const next = await window.electronAPI.getCindyMakeHistory(selectedId || undefined);
       if (isDataOwnerGenerationCurrent(owner) && generation === request.current) {
+        const previousBuild = snapshotRef.current?.value.build;
+        const nextBuild = next.build;
+        notifyBuildResult(previousBuild, nextBuild);
+        if (nextBuild?.status !== 'failed') {
+          setShowBuildFailure(false);
+        } else if (
+          previousBuild &&
+          (previousBuild.status !== 'failed' || previousBuild.buildId !== nextBuild.buildId)
+        ) {
+          setShowBuildFailure(true);
+        }
         setSnapshot({ owner, value: next });
+        snapshotRef.current = { owner, value: next };
         setFailed(false);
       }
     } catch {
       if (isDataOwnerGenerationCurrent(owner) && generation === request.current) setFailed(true);
     }
-  }, [owner, selectedId]);
+  }, [notifyBuildResult, owner, selectedId]);
   useEffect(() => {
     setSnapshot(undefined);
+    snapshotRef.current = undefined;
+    setShowBuildFailure(false);
     setPending(undefined);
     setSelecting(false);
     setCheckedIds([]);
@@ -89,6 +125,9 @@ export function CindyMakeHistoryPanel({
       actionGeneration.current += 1;
     };
   }, [owner]);
+  useEffect(() => {
+    if (!active) setShowBuildFailure(false);
+  }, [active]);
   useEffect(() => {
     if (!active) return;
     const timer = window.setInterval(() => {
@@ -179,6 +218,7 @@ export function CindyMakeHistoryPanel({
         : undefined;
   const selectedIsGlobalFailure =
     state?.build?.status === 'failed' &&
+    showBuildFailure &&
     !!state.build.buildId &&
     selectedBuild?.buildId === state.build.buildId;
   const building = !!state?.build && !['ready', 'failed'].includes(state.build.status);
@@ -213,7 +253,19 @@ export function CindyMakeHistoryPanel({
   const update = (next: CindyMakeHistoryState) => {
     request.current += 1;
     if (isDataOwnerGenerationCurrent(owner)) {
+      const previousBuild = snapshotRef.current?.value.build;
+      const nextBuild = next.build;
+      notifyBuildResult(previousBuild, nextBuild);
+      if (nextBuild?.status !== 'failed') {
+        setShowBuildFailure(false);
+      } else if (
+        previousBuild &&
+        (previousBuild.status !== 'failed' || previousBuild.buildId !== nextBuild.buildId)
+      ) {
+        setShowBuildFailure(true);
+      }
       setSnapshot({ owner, value: next });
+      snapshotRef.current = { owner, value: next };
       setFailed(false);
     }
   };
@@ -435,8 +487,9 @@ export function CindyMakeHistoryPanel({
   const showGlobalResult =
     state?.build &&
     !building &&
-    (state.build.status === 'failed' ||
-      !items.some((item) => state.build?.buildId && item.build?.buildId === state.build.buildId));
+    ((state.build.status === 'failed' && showBuildFailure) ||
+      (state.build.status === 'ready' &&
+        !items.some((item) => state.build?.buildId && item.build?.buildId === state.build.buildId)));
   const { stop: confirmStopBuild, stopping: stoppingBuild } = useCindyMakeBuildStop(
     building ? state?.build?.buildId : undefined,
   );

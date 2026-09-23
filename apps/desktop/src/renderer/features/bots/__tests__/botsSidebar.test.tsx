@@ -18,7 +18,7 @@ vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: translate }),
+  useTranslation: () => ({ t: translate, i18n: { resolvedLanguage: 'en' } }),
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -383,7 +383,8 @@ describe('teammate host labels', () => {
     mocks.devices = [{ deviceId: 'local-device', name: 'MBP-M5', isSelf: true }];
     mocks.islandActivity.set('local-bot-chat', { sessionId: 'local-bot-chat', phase: 'running', compactDetail });
     const view = await renderSidebar();
-    expect(screen.getByText(compactDetail)).toBeTruthy();
+    expect(screen.queryByText(compactDetail)).toBeNull();
+    expect(screen.getByText('ccAgent.agentStatus.processing')).toBeTruthy();
     expect(screen.queryByText('bots.remote.online')).toBeNull();
     expect(view.container.innerHTML).not.toContain('MBP-M5');
     expect(view.container.innerHTML).not.toContain('bots.remote.thisDevice');
@@ -402,12 +403,12 @@ describe('teammate host labels', () => {
     ] }];
     mocks.islandActivity.set('delegated', { sessionId: 'delegated', phase: 'running', compactDetail: ' ' });
     await renderSidebar();
-    expect(screen.getByText('bots.list.typing')).toBeTruthy();
+    expect(screen.getByText('ccAgent.agentStatus.processing')).toBeTruthy();
     expect(screen.queryByText('bots.remote.online')).toBeNull();
   });
 
   it('keeps offline status without a device name or a dangling separator', () => {
-    render(<BotConnectionStatus inline online={false} deviceName=" " activityLabel="Thinking" />);
+    render(<BotConnectionStatus inline online={false} deviceName=" " />);
     expect(screen.getByText('bots.remote.offline').getAttribute('title')).toBe('bots.remote.offline');
   });
 
@@ -462,7 +463,7 @@ describe('BotsSidebar 「正在输入…」', () => {
     mocks.islandActivity = new Map([['bot-1-chat', { sessionId: 'bot-1-chat', phase: 'running' }]]);
     const view = await renderSidebar();
 
-    expect(view.container.textContent).toContain('bots.list.typing');
+    expect(view.container.textContent).toContain('ccAgent.agentStatus.processing');
     // 进行中时不再同时挂上一句说过什么 —— 这一行只回答「TA 现在怎么样」。
     expect(view.container.textContent).not.toContain('Two checks are still red');
   });
@@ -482,7 +483,7 @@ describe('BotsSidebar 「正在输入…」', () => {
     ]);
     const view = await renderSidebar();
 
-    expect(view.container.textContent).not.toContain('bots.list.typing');
+    expect(view.container.textContent).not.toContain('ccAgent.agentStatus.processing');
     expect(view.container.textContent).toContain('Two checks are still red on #2829');
   });
 
@@ -493,7 +494,7 @@ describe('BotsSidebar 「正在输入…」', () => {
     ]);
     const view = await renderSidebar();
 
-    expect(view.container.textContent).not.toContain('bots.list.typing');
+    expect(view.container.textContent).not.toContain('ccAgent.agentStatus.processing');
     expect(view.container.textContent).toContain('Delivery steward');
   });
 
@@ -503,7 +504,7 @@ describe('BotsSidebar 「正在输入…」', () => {
     mocks.islandActivity = new Map([['bot-1-chat', { sessionId: 'bot-1-chat', phase: 'running' }]]);
     await renderSidebar();
 
-    const line = screen.getByText('bots.list.typing');
+    const line = screen.getByText('ccAgent.agentStatus.processing').closest('span.italic') as HTMLElement;
     expect(line).toBeTruthy();
     expect(line?.className).toContain('italic');
     expect(line?.className).toContain('text-[var(--sidebar-list-muted)]');

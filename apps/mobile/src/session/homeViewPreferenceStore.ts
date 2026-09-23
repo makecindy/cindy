@@ -30,7 +30,7 @@ export interface HomeViewPreferencePatch {
 }
 
 export async function readHomeViewPreferences(): Promise<HomeViewPreferences> {
-  const raw = await AsyncStorage.getItem(STORAGE_KEY).catch(() => null);
+  const raw = await AsyncStorage.getItem(STORAGE_KEY);
   if (!raw) return emptyPreferences();
   try {
     return normalizeStoredPreferences(JSON.parse(raw));
@@ -51,7 +51,10 @@ export function saveHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
 }
 
 async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise<void> {
-  const current = await readHomeViewPreferences();
+  // A failed read (including corrupt JSON) is not an empty preference record.
+  // Preserve it rather than replacing unrelated choices with defaults.
+  const raw = await AsyncStorage.getItem(STORAGE_KEY);
+  const current = raw === null ? emptyPreferences() : normalizeStoredPreferences(JSON.parse(raw));
   const next: HomeViewPreferences = {
     groupByProject: patch.groupByProject ?? current.groupByProject,
     groupDialogue: patch.groupDialogue ?? current.groupDialogue,
@@ -64,7 +67,7 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
       ? normalizeDevice(patch.selectedDevice)
       : current.selectedDevice,
   };
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(serializePreferences(next))).catch(() => undefined);
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(serializePreferences(next)));
 }
 
 export async function clearHomeViewPreferences(): Promise<void> {

@@ -2,6 +2,7 @@ import type { WorktreeRecycleAction, WorktreeRecycleStatus } from '../shared/wor
 import { FAVORITE_HOST_READY, FAVORITE_HOST_REQUEST, FAVORITE_HOST_REPLY, FAVORITE_HOST_CHANGED, type ModelFavoritesHostApi } from '../shared/modelFavoritesSync';
 import { invokeOpenPath } from './openPath';
 import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '../shared/pngClipboard';
+import type { ByokStatus } from '../shared/modelAccess.js';
 import type { LocalPluginOauthRequest, LocalPluginSecretRequest } from '../shared/pluginOauth';
 import { REMOTE_VIEWER } from '../shared/remoteDesktopViewer';
 import type { RoutineInput } from '@cindy/maker-scheduler';
@@ -2008,6 +2009,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ── 网关凭据自动下发(model-access,shared/modelAccess.ts) ──
   modelAccess: {
+    getByokStatus: (): Promise<ByokStatus> => ipcRenderer.invoke('model-access:byok-status'),
+    retryByok: (): Promise<ByokStatus> => ipcRenderer.invoke('model-access:byok-retry'),
     getStatus: (): Promise<ModelAccessStatusPayload> =>
       ipcRenderer.invoke('model-access:get-status'),
     retry: (): Promise<ModelAccessStatusPayload> => ipcRenderer.invoke('model-access:retry'),
@@ -2612,6 +2615,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     isCustomized?: boolean;
   }> => ipcRenderer.invoke('update-channel-settings-reset'),
   relaunchForChannelChange: (): Promise<void> => ipcRenderer.invoke('update-channel-relaunch'),
+  /** Restart once; the next startup refreshes only the confirmed managed harness first. */
+  relaunchForHarnessUpdate: (kind: 'claude-code' | 'codex'): Promise<{ accepted: true }> =>
+    ipcRenderer.invoke('update-harness-relaunch', kind),
   probeBetaChannel: (): Promise<{ available: boolean }> =>
     ipcRenderer.invoke('update-channel-probe-beta'),
   setUpdateRelaunchTheme: (theme: 'light' | 'dark'): void => {
@@ -4764,6 +4770,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Two-step UX: check first (so renderer can build the right confirm
     // dialog), then sync explicitly after user confirmation. The renderer
     // is the trust boundary — sync handler does NOT itself prompt.
+    listCodexModels: (id: string): Promise<import('@cindy/model-providers').ProviderView[]> =>
+      ipcRenderer.invoke('maker:remote-ssh:list-codex-models', { id }),
     checkCodexAuth: (
       id: string,
     ): Promise<{
@@ -5401,6 +5409,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:bots:create-canonical-session', body),
       history: (botId: string): Promise<unknown[]> =>
         ipcRenderer.invoke('local-db:bots:history', botId),
+      memory: {
+        list: (botId: string, query?: string): Promise<unknown> =>
+          ipcRenderer.invoke('local-db:bots:memory:list', botId, query),
+        read: (botId: string, filename: string): Promise<unknown> =>
+          ipcRenderer.invoke('local-db:bots:memory:read', botId, filename),
+        update: (body: unknown): Promise<unknown> =>
+          ipcRenderer.invoke('local-db:bots:memory:update', body),
+        delete: (body: unknown): Promise<void> =>
+          ipcRenderer.invoke('local-db:bots:memory:delete', body),
+      },
     },
     conversations: {
       search: (request: unknown): Promise<unknown> =>
@@ -6011,7 +6029,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
     providerOAuthLogin: (
       providerId: string,
-      options?: { ownerId?: string },
+      options?: { ownerId?: string; method?: 'browser' | 'device' },
     ): Promise<{ ok: boolean; reason?: string }> =>
       ipcRenderer.invoke('maker:provider:oauth:login', providerId, options),
     providerOAuthLogout: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> =>
@@ -7049,8 +7067,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:claude-oauth:cancel', loginKey),
 
     // xAI(SuperGrok 订阅)OAuth —— 与 claudeOAuth* 同形态。
-    xaiOAuthLogin: (): Promise<{ ok: boolean; authorized: boolean; reason?: string }> =>
-      ipcRenderer.invoke('maker:xai-oauth:login'),
+    xaiOAuthLogin: (method?: 'browser' | 'device'): Promise<{ ok: boolean; authorized: boolean; reason?: string }> =>
+      ipcRenderer.invoke('maker:xai-oauth:login', method),
     xaiOAuthLogout: (ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }): Promise<{ authorized: boolean }> =>
       ipcRenderer.invoke('maker:xai-oauth:logout', ownerScope),
     xaiOAuthCancel: (): Promise<{ authorized: boolean }> =>
@@ -7299,6 +7317,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onLoginProgress: fanOutMakerAuthLoginProgress,
     },
 
+    piKernel: {
+      getState: (check = false): Promise<import('../shared/piKernel').PiKernelState> =>
+        ipcRenderer.invoke('maker:agent:pi-kernel-state', check),
+      install: (request: import('../shared/piKernel').PiKernelInstallRequest): Promise<import('../shared/piKernel').PiKernelState> =>
+        ipcRenderer.invoke('maker:agent:pi-kernel-install', request),
+    },
+
     // ── Agent 联合状态 (取代老 electronAPI.codex.binary.getStatus) ──────────
     agent: {
       getStatus: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
@@ -7306,12 +7331,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** spawn 当前应用使用的 binary `--version`, 进程内缓存。About 面板用。 */
       getBinaryVersion: (
         agentKind: 'claude-code' | 'codex' | 'pi',
+        options?: { checkLatest?: boolean },
       ): Promise<{
         kind: 'claude-code' | 'codex' | 'pi';
         binaryPath: string | null;
         version: string | null;
+        latestVersion: string | null;
+        updateAvailable: boolean;
         error?: string;
-      }> => ipcRenderer.invoke('maker:agent:binary-version', agentKind),
+      }> => ipcRenderer.invoke('maker:agent:binary-version', agentKind, options),
     },
 
     // ── Agent 今日累计 (取代老 electronAPI.codex.usage.* + electronAPI.onUsageTodaySpendChanged) ─

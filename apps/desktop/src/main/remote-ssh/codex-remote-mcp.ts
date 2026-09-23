@@ -317,7 +317,41 @@ function isManagedResidueLine(line: string): boolean {
  * 会留在 end 标记之外, 累积两份就是 TOML duplicate-key, codex 起不来 (#4776)。
  */
 function isManagedScalarLine(t: string): boolean {
-  return /^(url|bearer_token_env_var|enabled|startup_timeout_sec|tool_timeout_sec)\s*=/.test(t);
+  return managedScalarKey(t) !== null;
+}
+
+function managedScalarKey(t: string): string | null {
+  const m = /^(url|bearer_token_env_var|enabled|startup_timeout_sec|tool_timeout_sec)\s*=/.exec(t);
+  return m ? m[1] : null;
+}
+
+/**
+ * begin 标记**之前**的旧版残留 (#4946):旧合并剥受管段时在 `enabled` 处停手, 把该标量组
+ * 留在前一个 table 之下, 再把重建段追加到文末 —— 每刷新一次就多叠一组, 全部堆在 begin
+ * 之前。只回看紧邻 begin 的连续「空行 / 受管标量」段, 仅当某个受管键在段内出现不止一次
+ * (TOML 本已非法, 重复即证明其来自被剥掉的受管 table) 才把该键的全部副本剥掉;
+ * 只出现一次的键 (用户自己写在 begin 前的合法配置) 原样保留, 遇到 header 或其他 key 即停。
+ */
+function stripDuplicatedManagedScalarsBeforeBegin(kept: string[]): void {
+  let start = kept.length;
+  while (start > 0) {
+    const t = kept[start - 1].trim();
+    if (t !== '' && !isManagedScalarLine(t)) break;
+    start -= 1;
+  }
+  const run = kept.slice(start);
+  const counts = new Map<string, number>();
+  for (const line of run) {
+    const key = managedScalarKey(line.trim());
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  if (![...counts.values()].some((n) => n > 1)) return;
+  const cleaned = run.filter((line) => {
+    const key = managedScalarKey(line.trim());
+    return !(key && (counts.get(key) ?? 0) > 1);
+  });
+  kept.length = start;
+  kept.push(...cleaned);
 }
 
 /**
@@ -327,7 +361,8 @@ function isManagedScalarLine(t: string): boolean {
  *   - managed 段原位剥除后在文末重建 (TOML 与顺序无关, 幂等收敛);
  *     orphan begin (缺 end) 只剥连续的 managed 残留形态行, 不波及用户配置;
  *     end 之后紧跟的受管标量 (旧版本留下的 enabled / timeout 孤儿) 一并剥除,
- *     同样遇到 header 或其他 key 即停;
+ *     同样遇到 header 或其他 key 即停; begin 之前重复堆叠的受管标量组 (更旧版本的
+ *     真实输出, #4946) 按重复键剥除, 见 stripDuplicatedManagedScalarsBeforeBegin;
  *   - managed 段之外用户手写的同名 `[mcp_servers.<name>]` table 一并剥离
  *     (重复 table 是非法 TOML, codex 会直接起不来), 由 managed 段接管,
  *     名字经 strippedUserServers 返回给调用方记 warn;
@@ -351,6 +386,7 @@ export function mergeManagedMcpBlock(
   for (const line of existing.split('\n')) {
     const t = line.trim();
     if (t === MANAGED_BEGIN) {
+      stripDuplicatedManagedScalarsBeforeBegin(kept);
       inManaged = true;
       afterManagedEnd = false;
       continue;

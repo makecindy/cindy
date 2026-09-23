@@ -1,4 +1,5 @@
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
+import { Button } from '@/components/ui/button';
 /**
  * RewindPreviewDialog
  * ---------------------------------------------------------------------------
@@ -255,30 +256,18 @@ export function RewindPreviewDialog({
             {!isError ? (
               <>
                 <AlertDialog.Cancel asChild>
-                  <button
-                    type="button"
-                    className={cn(
-                      'inline-flex items-center justify-center rounded-full px-6 py-2.5 text-14',
-                      'border bg-transparent transition-colors',
-                      'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                      'hover:bg-[var(--confirm-btn-secondary-hover)]',
-                    )}
+                  <Button variant="secondary" size="lg" type="button"
                   >
                     {t('chat.rewind.dialog.cancel')}
-                  </button>
+                  </Button>
                 </AlertDialog.Cancel>
-                <button
+                <Button
+                  variant="cta"
+                  size="lg"
+                  loading={committing}
                   type="button"
                   onClick={handleConfirm}
                   disabled={!canConfirm}
-                  className={cn(
-                    'inline-flex items-center justify-center gap-1.5 rounded-full px-6 py-2.5 text-14 font-medium',
-                    'transition-colors',
-                    // 主题反色（按设计稿，避开 ConfirmDialog 的 destructive 红）
-                    'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)]',
-                    'hover:bg-[var(--confirm-btn-primary-hover)]',
-                    'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:opacity-50',
-                  )}
                 >
                   {committing ? (
                     <Spinner size={14} strokeWidth={2} />
@@ -296,21 +285,14 @@ export function RewindPreviewDialog({
                           ? 'chat.rewind.dialog.confirmRunning'
                           : 'chat.rewind.dialog.confirm',
                       )}
-                </button>
+                </Button>
               </>
             ) : (
               <AlertDialog.Cancel asChild>
-                <button
-                  type="button"
-                  className={cn(
-                    'inline-flex items-center justify-center rounded-full px-6 py-2.5 text-14 font-medium',
-                    // Error 态：Cancel 升级为黑底主按钮
-                    'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)]',
-                    'hover:bg-[var(--confirm-btn-primary-hover)] transition-colors',
-                  )}
+                <Button variant="cta" size="lg" type="button"
                 >
                   {t('chat.rewind.dialog.acknowledge')}
-                </button>
+                </Button>
               </AlertDialog.Cancel>
             )}
           </div>

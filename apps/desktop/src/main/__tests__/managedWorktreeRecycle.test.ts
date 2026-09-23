@@ -92,6 +92,8 @@ describe('shared worktree recycling', () => {
   it('limits simultaneous recycling of distinct resources to one', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
+    let markEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { markEntered = resolve; });
     let active = 0;
     let peak = 0;
     let checked = 0;
@@ -100,13 +102,23 @@ describe('shared worktree recycling', () => {
       state.registry.set(candidate.sessionId, candidate);
       return recycleManagedWorktree(candidate, { canRemove: async () => {
         active++; peak = Math.max(peak, active); checked++;
+        markEntered();
         try { await gate; return false; } finally { active--; }
       } });
     });
+    // Observe every job immediately and drain them before fixture cleanup,
+    // including when an assertion or filesystem operation fails.
+    const settled = Promise.allSettled(jobs);
     try {
-      await vi.waitFor(() => expect(active).toBe(1));
+      // Journal/lock I/O can exceed waitFor's default 1s on Windows CI.
+      // Synchronize on entry instead; the suite timeout still bounds a hang.
+      await Promise.race([entered, settled]);
+      expect(active).toBe(1);
       expect(checked).toBe(1);
-    } finally { release(); }
+    } finally {
+      release();
+      await settled;
+    }
     expect(await Promise.all(jobs)).toEqual(Array(12).fill(false));
     expect(checked).toBe(12); expect(peak).toBe(1);
   });

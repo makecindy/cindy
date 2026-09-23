@@ -312,10 +312,10 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
     if (profile.status === 'deleting') {
       throwIpcError('PRECONDITION_FAILED', 'Bot 已在永久删除流程中');
     }
-    // Reject known shared history before pausing live work or archiving its canonical link.
-    // The profile lock excludes concurrent shared-history writers until deletion finishes.
-    // The final transaction retains its own guard as the database safety boundary.
-    await getDbClient().tx('bots.assertNoSharedHistory', { botId: request.botId });
+    // Hold the profile lock before pausing so a concurrent message cannot land halfway.
+    // Active delegations are cancelled while their target id is still intact. Historical
+    // foreign keys are detached only inside the final delete transaction.
+    await getDbClient().tx('bots.prepareProfileDeletion', { botId: request.botId });
     assertOwnerUnchanged();
     let preparationWarnings: string[] = [];
     if (profile.status !== 'archived') {

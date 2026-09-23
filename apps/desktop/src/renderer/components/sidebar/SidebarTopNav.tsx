@@ -156,7 +156,6 @@ export function SidebarTopNav({
         <SidebarIconButton
           icon={BotsActionIcon}
           label={botsActionLabel}
-          variant="rail"
           onClick={() => navigateToView(isBotsView ? 'cc-agent' : 'bots')}
         />
       </div>

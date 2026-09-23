@@ -67,6 +67,7 @@ describe('Main-owned Cindy Make task lifecycle', () => {
   it('reserves one build across entry points and ignores an old release after retry', () => {
     const manager = new CindyMakeManager();
     const release = manager.claimPersonalBuild();
+    expect(manager.isPersonalBuildRunning()).toBe(true);
     expect(manager.hasActiveWork()).toBe(true);
     expect(() => manager.claimPersonalBuild()).toThrow('personal build is running');
     release();
@@ -74,7 +75,59 @@ describe('Main-owned Cindy Make task lifecycle', () => {
     release();
     expect(manager.hasActiveWork()).toBe(true);
     releaseRetry();
+    expect(manager.isPersonalBuildRunning()).toBe(false);
     expect(manager.hasActiveWork()).toBe(false);
+  });
+  it('rejects a new build claim while an application version is switching', () => {
+    const manager = new CindyMakeManager();
+    manager.setVersionSwitchingProbe(() => true);
+    expect(manager.isVersionSwitching()).toBe(true);
+    expect(() => manager.claimPersonalBuild()).toThrow('version switch is running');
+    expect(manager.isPersonalBuildRunning()).toBe(false);
+    manager.setVersionSwitchingProbe(() => false);
+    const release = manager.claimPersonalBuild();
+    expect(manager.isPersonalBuildRunning()).toBe(true);
+    release();
+  });
+  it('rejects a build claim while the source is in use', async () => {
+    const manager = new CindyMakeManager();
+    await manager.withProjectUse('source', async () => {
+      expect(() => manager.claimPersonalBuild()).toThrow('source work is running');
+      expect(manager.isPersonalBuildRunning()).toBe(false);
+    });
+    const release = manager.claimPersonalBuild();
+    release();
+  });
+  it('keeps manual source sync and personal build claims mutually exclusive', () => {
+    const manager = new CindyMakeManager();
+    const releaseSync = manager.claimManualSourceSync();
+    expect(manager.hasActiveWork()).toBe(true);
+    expect(() => manager.claimPersonalBuild()).toThrow('manual source sync is running');
+    releaseSync();
+    const releaseBuild = manager.claimPersonalBuild();
+    expect(() => manager.claimManualSourceSync()).toThrow('personal build or source sync is running');
+    releaseBuild();
+    expect(manager.hasActiveWork()).toBe(false);
+  });
+  it('keeps build claims blocked until a retained source conflict is settled', () => {
+    const manager = new CindyMakeManager();
+    manager.setUpstreamMerge({
+      id: 'merge',
+      status: 'conflict',
+      ref: 'main',
+      upstreamCommit: 'a'.repeat(40),
+      hasWorkspace: true,
+    });
+    expect(() => manager.claimPersonalBuild()).toThrow('upstream merge is pending');
+    manager.setUpstreamMerge({
+      id: 'merge',
+      status: 'cancelled',
+      ref: 'main',
+      upstreamCommit: 'a'.repeat(40),
+      hasWorkspace: false,
+    });
+    const release = manager.claimPersonalBuild();
+    release();
   });
   it('publishes only the current build owners and clears them when the lease settles', () => {
     const manager = new CindyMakeManager();

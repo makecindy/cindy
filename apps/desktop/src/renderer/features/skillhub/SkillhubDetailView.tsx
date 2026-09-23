@@ -1,4 +1,5 @@
 import { pickFileIcon } from '@/components/ui/file-type-icon';
+import { Button } from '@/components/ui/button';
 /**
  * SkillhubDetailView — local content controller inside the shared /skillhub/detail page.
  *
@@ -522,27 +523,23 @@ function SkillUsagePanel({
           </dl>
 
           {canDiagnose && (
-            <button
+            <Button
+              variant="cta"
+              size="md"
+              compact
+              loading={diagnoseLoading}
               type="button"
               onClick={onDiagnose}
               disabled={diagnoseDisabled || diagnoseLoading}
-              className={cn(
-                'inline-flex h-8 w-full items-center justify-center gap-2 rounded-full px-2 text-xs font-medium',
-                'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                'hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60',
-              )}
+              className="w-full"
             >
-              {diagnoseLoading ? (
-                <Spinner size={13} />
-              ) : (
-                <Search size={13} className="shrink-0" />
-              )}
+              {diagnoseLoading ? <Spinner size={13} /> : <Search size={13} className="shrink-0" />}
               <span className="truncate">
                 {diagnoseLoading
                   ? t('skillhub.detail.usageDiagnosisStarting')
                   : t('skillhub.detail.usageDiagnose')}
               </span>
-            </button>
+            </Button>
           )}
 
           <div className="flex flex-col gap-2 rounded-xl border border-[var(--cmd-palette-border)] px-3 py-2.5">
@@ -811,19 +808,16 @@ function DiagnosisAgentPickerDialog({
           </div>
 
           <div className="mt-5 flex justify-end">
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               disabled={loading}
               onClick={() => onOpenChange(false)}
-              className={cn(
-                'inline-flex h-8 items-center rounded-full border px-3 text-sm',
-                'border-[var(--cmd-palette-border)] bg-[var(--settings-btn-secondary-bg)]',
-                'text-[var(--msg-assistant-text)] hover:bg-[var(--surface-hover)]',
-                'disabled:cursor-not-allowed disabled:opacity-60',
-              )}
             >
               {t('skillhub.detail.usageDiagnosisCancel')}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>
@@ -1947,116 +1941,99 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
             View-mode actions live in the else-branch below. */}
         {editMode ? (
           <div className="flex shrink-0 items-center gap-2" style={WINDOW_NO_DRAG_STYLE}>
-            <button
+            <Button
+              variant="secondary"
+              size="lg"
               type="button"
               onClick={() => { void cancelEdit(); }}
               disabled={saving}
-              className={cn(
-                'flex h-9 shrink-0 items-center gap-2 rounded-full border px-[18px]',
-                'text-sm font-medium',
-                'border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--settings-btn-secondary-text)]',
-                'hover:bg-[var(--surface-hover)]',
-                'disabled:opacity-50 disabled:cursor-not-allowed',
-                'transition-colors',
-              )}
+              className="shrink-0"
             >
               <X size={14} className="shrink-0" />
               <span>{t('skillhub.detail.cancel')}</span>
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="cta"
+              size="lg"
+              loading={saving}
               type="button"
               onClick={() => { void saveEdit(); }}
               disabled={saving || !dirty}
-              className={cn(
-                'flex h-9 shrink-0 items-center gap-2 rounded-full px-[18px]',
-                'text-sm font-medium',
-                'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]',
-                'hover:bg-[var(--lightbox-cta-hover)]',
-                'disabled:opacity-50 disabled:cursor-not-allowed',
-                'transition-colors',
-              )}
+              className="shrink-0"
             >
               <Save size={14} className="shrink-0" />
-              <span>{saving ? t('skillhub.detail.saving') : t('skillhub.detail.save')}</span>
-            </button>
+              <span>{t('skillhub.detail.save')}</span>
+            </Button>
           </div>
-        ) : (isSkill || entry.kind === 'command') && (
-          <div className="flex shrink-0 items-center gap-2" style={WINDOW_NO_DRAG_STYLE}>
-            {/* command kind:只有 [编辑] 按钮,不参与 publish/install 流程,
-                独立分支,不被 isSkill 的 detailReady 节流。 */}
+        ) : (
+          (isSkill || entry.kind === 'command') && (
+            <div className="flex shrink-0 items-center gap-2" style={WINDOW_NO_DRAG_STYLE}>
+              {/* relative top-[1px]: optical correction — Inter's cap sits high in
+                  the line-box at small sizes, so text-only nudge gets it level
+                  with the icon center without affecting layout. */}
             {entry.kind === 'command' && !editButtonState.hidden && (
               <Tip text={editButtonState.tip}>
-                <button
-                  type="button"
-                  onClick={() => { void enterEditMode(); }}
-                  disabled={editButtonState.disabled}
-                  className={cn(
-                    'flex h-9 shrink-0 items-center gap-2 rounded-full border px-[18px]',
-                    'text-sm font-medium',
-                    'border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--settings-btn-secondary-text)]',
-                    'hover:bg-[var(--surface-hover)]',
-                    'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent',
-                    'transition-colors',
-                  )}
+                  <Button
+                    variant="secondary"
+                    size="lg"
+                    type="button"
+                    onClick={() => { void enterEditMode(); }}
+                    disabled={editButtonState.disabled}
+                    className="shrink-0"
                 >
                   <Pencil size={14} className="shrink-0" />
                   <span>{t('skillhub.detail.edit')}</span>
-                </button>
+                  </Button>
               </Tip>
             )}
 
             {/* skill 按钮组 — detailAction.status 保证市场状态/动作互斥 */}
             {isSkill && detailState && (
               <>
-            {entry && <LocalSkillControls skill={entry} disabled={marketActionRunning || editMode}
+                  {entry && (
+                    <LocalSkillControls skill={entry} disabled={marketActionRunning || editMode}
               onUninstalled={() => {
                 clearLastEntryId();
                 clearHistory();
                 if (onUninstalled) onUninstalled();
                 else navigate(backTargetRoute, { state: { skillhubHome: navState?.skillhubHome } });
-              }} />}
+              }} />
+                  )}
             {/* 编辑入口 */}
             {!editButtonState.hidden && (
               <Tip text={editButtonState.tip}>
-                <button
-                  type="button"
-                  onClick={() => { void enterEditMode(); }}
-                  disabled={editButtonState.disabled}
-                  className={cn(
-                    'flex h-9 shrink-0 items-center gap-2 rounded-full border px-[18px]',
-                    'text-sm font-medium',
-                    'border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--settings-btn-secondary-text)]',
-                    'hover:bg-[var(--surface-hover)]',
-                    'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent',
-                    'transition-colors',
-                  )}
+                      <Button
+                        variant="secondary"
+                        size="lg"
+                        type="button"
+                        onClick={() => { void enterEditMode(); }}
+                        disabled={editButtonState.disabled}
+                        className="shrink-0"
                 >
                   <Pencil size={14} className="shrink-0" />
                   <span>{t('skillhub.detail.edit')}</span>
-                </button>
+                      </Button>
               </Tip>
             )}
             {/* My published skill, local is clean. */}
-            {detailAction?.kind === 'published-tag' && (
-              isPublishedReviewing && identityPolicy.canWrite ? (
-                <button
+                  {detailAction?.kind === 'published-tag' &&
+                    (isPublishedReviewing && identityPolicy.canWrite ? (
+                      <Button
+                        variant="secondary"
+                        size="lg"
                   type="button"
                   onClick={openPublish}
-                  className={cn(
-                    'flex h-9 shrink-0 items-center gap-2 rounded-full border border-transparent px-[18px]',
-                    'text-sm font-medium',
-                    'bg-[var(--settings-btn-secondary-bg)] text-[var(--msg-assistant-text)]',
-                    'hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                    'transition-colors',
-                  )}
-                >
-                  {publishedStatus === 'pending' ? <Clock3 size={14} /> : <Spinner size={14} />}
+                        className="shrink-0"
+                        loading={publishedStatus !== 'pending'}
+                        allowWhileLoading
+                      >
+                        <Clock3 size={14} />
                   <span>
                     {publishedStatus
                       ? t(publishedStatusLabelKey(publishedStatus))
                       : t('skillhub.detail.reviewing')}
                   </span>
-                </button>
+                      </Button>
               ) : (
                 <span className={cn(
                   'inline-flex h-9 items-center gap-1.5 rounded-full border px-[14px]',
@@ -2084,117 +2061,101 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
             {detailAction?.kind === 'publish-new-version' && (
               <>
                 {isPublishedReviewing ? (
-                  <button
+                        <Button
+                          variant="secondary"
+                          size="lg"
                     type="button"
                     onClick={openPublish}
-                    className={cn(
-                      'flex h-[35px] shrink-0 items-center gap-2 rounded-full border border-transparent px-[18px]',
-                      'text-sm font-medium',
-                      'bg-[var(--settings-btn-secondary-bg)] text-[var(--msg-assistant-text)]',
-                      'hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                      'transition-colors',
-                    )}
-                  >
-                    {publishedStatus === 'pending' ? <Clock3 size={14} /> : <Spinner size={14} />}
+                          className="shrink-0"
+                          loading={publishedStatus !== 'pending'}
+                          allowWhileLoading
+                        >
+                          <Clock3 size={14} />
                     <span>
                       {publishedStatus
                         ? t(publishedStatusLabelKey(publishedStatus))
                         : t('skillhub.detail.reviewing')}
                     </span>
-                  </button>
-                ) : (
-                  <button
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="cta"
+                          size="lg"
                     type="button"
                     onClick={openPublish}
-                    className={cn(
-                      'flex h-[35px] shrink-0 items-center gap-2 rounded-full border border-transparent px-[18px]',
-                      'text-sm font-medium',
-                      'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)] hover:bg-[var(--lightbox-cta-hover)]',
-                      'transition-colors',
-                    )}
+                          className="shrink-0"
                   >
                     <Upload size={14} className="shrink-0" />
                     <span>{t('skillhub.detail.publishNewVersion')}</span>
-                  </button>
+                        </Button>
                 )}
                 {isOutdated && detailState.latestVersion !== null && (
-                  <button
+                        <Button
+                          variant="secondary"
+                          size="lg"
+                          loading={marketActionRunning}
                     type="button"
                     onClick={() => {
                       const latestVersion = detailState.latestVersion;
                       if (latestVersion) void handleUpdateInstalled(latestVersion, { confirmLocalChanges: true });
                     }}
                     disabled={marketActionRunning}
-                    className={cn(
-                      'flex h-[35px] shrink-0 items-center gap-2 rounded-full border px-[18px]',
-                      'text-sm font-medium',
-                      'border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--settings-btn-secondary-text)]',
-                      'hover:bg-[var(--surface-hover)]',
-                      'disabled:opacity-50 disabled:cursor-not-allowed',
-                      'transition-colors',
-                    )}
+                          className="shrink-0"
                   >
                     <ArrowUp size={14} className="shrink-0" />
                     <span>
-                      {marketActionRunning
-                        ? t('skillhub.detail.updating')
-                        : t('skillhub.detail.updateToVersion', { version: detailState.latestVersion })}
-                    </span>
-                  </button>
+                            {t('skillhub.detail.updateToVersion', { version: detailState.latestVersion })}
+                          </span>
+                        </Button>
                 )}
               </>
             )}
 
-            {/* Server explicitly has no market record; first-publish flow. */}
-            {detailAction?.kind === 'publish-to-market' && (
-              <button
+                  {/* relative top-[1px]: optical correction — Inter's cap sits high in
+                      the line-box at small sizes, so text-only nudge gets it level
+                      with the icon center without affecting layout. */}
+                  {detailAction?.kind === 'publish-to-market' && (
+                    <Button
+                      variant="cta"
+                      size="lg"
                 type="button"
                 onClick={openPublish}
-                className={cn(
-                  'flex h-[35px] shrink-0 items-center gap-2 rounded-full border border-transparent px-[18px]',
-                  'text-sm font-medium',
-                  'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)] hover:bg-[var(--lightbox-cta-hover)]',
-                  'transition-colors',
-                )}
+                      className="shrink-0"
               >
                 <Upload size={14} className="shrink-0" />
                 <span>{t('skillhub.detail.publishToMarket')}</span>
-              </button>
+                    </Button>
             )}
 
             {/* Server confirms a newer version exists. */}
             {detailAction?.kind === 'update' && (
-              <button
+                    <Button
+                      variant="cta"
+                      size="lg"
+                      loading={marketActionRunning}
                 type="button"
                 onClick={() => { void handleUpdateInstalled(detailAction.latestVersion); }}
                 disabled={marketActionRunning}
-                className={cn(
-                  'flex h-[35px] shrink-0 items-center gap-2 rounded-full border border-transparent px-[18px]',
-                  'text-sm font-medium',
-                  'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)] hover:bg-[var(--lightbox-cta-hover)]',
-                  'disabled:opacity-50 disabled:cursor-not-allowed',
-                  'transition-colors',
-                )}
+                      className="shrink-0"
               >
                 <ArrowUp size={14} className="shrink-0" />
                 <span>
-                  {marketActionRunning
-                    ? t('skillhub.detail.updating')
-                    : t('skillhub.detail.updateToVersion', { version: detailAction.latestVersion })}
-                </span>
-              </button>
+                        {t('skillhub.detail.updateToVersion', { version: detailAction.latestVersion })}
+                      </span>
+                    </Button>
             )}
               </>
             )}
           </div>
+          )
         )}
         </>}
       />
       {renderNavigation?.(requestLeaveEditMode, saving || marketActionRunning)}
 
-      {/* v0.2.2: save-error banner — only in edit mode after a failed save.
-          Stays put while user retries (doesn't auto-dismiss).
-          左缘对齐 sidebar cell (pl-3),右缘对齐 content cell (pr-8) */}
+      {/* relative top-[1px]: optical correction — Inter's cap sits high in
+          the line-box at small sizes, so text-only nudge gets it level
+          with the icon center without affecting layout. */}
       {editMode && saveError && (
         <div className="shrink-0 pl-3 pr-8 pt-4">
           <div className={cn(

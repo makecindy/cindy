@@ -329,6 +329,7 @@ import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabiliti
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
+import { useSshCodexProviders } from '@/hooks/useSshCodexProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
 import {
@@ -1892,9 +1893,12 @@ export function ChatInput({
   }, [activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
   // 供应商连接态。effectiveSourceId / sendProviderId / dispatchSend 预检用它。device-link 远程会话 /
   // 草稿用**被控端**供应商目录(隧道),否则用本机(两 hook 都无条件调用,按 deviceLinkDeviceId 取)。
+  const sshCodexHostId = currentModelAgentKind === 'codex' && !deviceLinkDeviceId ? remoteHostId : null;
+  const sshCodexProviders = useSshCodexProviders(sshCodexHostId);
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceLinkDeviceId ?? undefined);
-  const providers = deviceLinkDeviceId ? remoteProviders.providers : localProviders.providers;
+  const providers = deviceLinkDeviceId ? remoteProviders.providers
+    : sshCodexHostId ? sshCodexProviders.providers : localProviders.providers;
   const sendProviders = filterChatBridgedCodexProviders(
     providers,
     currentModelAgentKind ?? 'codex',
@@ -1918,7 +1922,7 @@ export function ChatInput({
   });
   const providersLoading = deviceLinkDeviceId
     ? remoteModelListStatus === 'loading'
-    : localProvidersLoading;
+    : sshCodexHostId ? sshCodexProviders.status === 'loading' : localProvidersLoading;
   // 统一模型选择器(model-selector-unified M5 / M6)在 composer 上的开关 —— **能力级**那一半
   // 下方还会核对任务引擎是否已确认；不再叠加本地样式偏好。
   //
@@ -1945,9 +1949,16 @@ export function ChatInput({
   // 已有 device-link 任务在断链时仍有 pinned deviceId + renderer outbox 可接住发送，
   // 不能因为被控端 provider 目录暂时拉不到就禁用 composer。远程草稿没有既有 session
   // 可以排队，仍与本地任务一样保留来源门禁。
-  const enforceConnectedSourceGate = !sessionId || !deviceLinkDeviceId;
+  // model/list only advertises selectable models. An unchanged native SSH route
+  // may resume a hidden model; main verifies the persisted host/thread/route.
+  const preserveSshCodexRoute = !!sessionId && !!sshCodexHostId &&
+    !!activeModel && activeModel === (runtimeEffective?.model ?? initialModel) &&
+    (activeProviderId ?? null) === (runtimeEffective ? runtimeEffective.providerId ?? null : initialProviderId ?? null) &&
+    (!activeProviderId || activeProviderId === 'openai');
+  const enforceConnectedSourceGate = (!sessionId || !deviceLinkDeviceId) && !preserveSshCodexRoute;
   const remoteModelListBlocked =
-    !!deviceLinkDeviceId && enforceConnectedSourceGate && remoteModelListStatus !== 'ready';
+    (!!deviceLinkDeviceId && enforceConnectedSourceGate && remoteModelListStatus !== 'ready') ||
+    (!!sshCodexHostId && sshCodexProviders.status !== 'ready');
   // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
   // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
   // 会对着一个 image/embedding 端点放行,而不是显示这里的"去连接"空态。已建会话
@@ -1979,6 +1990,7 @@ export function ChatInput({
   const selectedSourceDisconnected =
     !!sessionId &&
     !deviceLinkDeviceId &&
+    !preserveSshCodexRoute &&
     isSelectedSourceDisconnected({
       providers,
       agent: currentModelAgentKind,
@@ -2011,6 +2023,7 @@ export function ChatInput({
   //   - device-link 必须使用被控端镜像 override;旧被控端拿不到镜像时宁可无记忆,也不掺控制端本机。
   useProviderModelMemoryVersion();
   const modelMemory = useMemo<ModelMemoryAccessors | undefined>(() => {
+    if (sshCodexHostId) return undefined;
     // device-link 远程草稿 / 会话:用纯显示镜像 override(读被控端全局预设、写穿被控端)。
     if (modelMemoryOverride) return modelMemoryOverride;
     if (deviceLinkDeviceId) return undefined;
@@ -2027,12 +2040,13 @@ export function ChatInput({
       clearEffort: clearProviderModelEffort,
       clearFast: clearProviderModelFast,
     };
-  }, [deviceLinkDeviceId, modelMemoryOverride]);
+  }, [deviceLinkDeviceId, modelMemoryOverride, sshCodexHostId]);
 
   // 把「用户在当前来源下选定的 (model, effort)」记进模型全局预设,供其它非活跃行和之后的
   // 模型切换恢复。agent / 来源缺失(未知模型 / 0 已连接来源)/ device-link 无镜像时静默跳过。
   const rememberProviderChoice = useCallback(
     (modelId: string, eff: Effort) => {
+      if (sshCodexHostId) return;
       const kind = currentModelAgentKind;
       if (kind && effectiveSourceId && modelId) {
         if (modelMemory?.setChoice) {
@@ -2042,7 +2056,7 @@ export function ChatInput({
         }
       }
     },
-    [currentModelAgentKind, effectiveSourceId, modelMemory, deviceLinkDeviceId],
+    [currentModelAgentKind, effectiveSourceId, modelMemory, deviceLinkDeviceId, sshCodexHostId],
   );
 
   const folderOpen = folderPickerOpen ?? internalFolderOpen;
@@ -5313,7 +5327,7 @@ export function ChatInput({
         // device-link 模型清单未结算或真实读取失败时禁止发送。模型选择器会同步显示
         // loading / error；这里兜住快捷键、语音等间接派发入口，避免旧快照继续路由。
         if (remoteModelListBlocked) {
-          if (remoteModelListStatus === 'error') {
+          if (remoteModelListStatus === 'error' || (sshCodexHostId && sshCodexProviders.status === 'error')) {
             toast.error(t('newChat.modelSelector.remoteLoadFailed'));
           } else {
             toast.warning(t('newChat.modelSelector.remoteLoading'));
@@ -5886,6 +5900,8 @@ export function ChatInput({
       remoteProviders.unsupported,
       remoteModelListBlocked,
       remoteModelListStatus,
+      sshCodexHostId,
+      sshCodexProviders.status,
       confirmDialog,
       navigate,
       planModeEntry,
@@ -6076,7 +6092,7 @@ export function ChatInput({
       resolveFastSupported({
         deviceId: deviceLinkDeviceId ?? undefined,
         deviceProviders: remoteProviders.providers,
-        localProviders: localProviders.providers,
+        localProviders: providers,
         capabilities:
           currentModelAgentKind === 'codex'
             ? codexCaps.capabilities
@@ -6090,7 +6106,7 @@ export function ChatInput({
     [
       deviceLinkDeviceId,
       remoteProviders.providers,
-      localProviders.providers,
+      providers,
       currentModelAgentKind,
       ccCaps.capabilities,
       codexCaps.capabilities,
@@ -6124,7 +6140,7 @@ export function ChatInput({
       } = {},
     ) => {
       const agentKind = opts.agentKind ?? currentModelAgentKind;
-      if (!sessionId || !agentKind || !modelId) return;
+      if (!sessionId || !agentKind || !modelId || sshCodexHostId) return;
       const activeProviderId =
         opts.activeProviderId !== undefined ? opts.activeProviderId : selectedProviderId;
       const memoryProviderId =
@@ -6171,7 +6187,7 @@ export function ChatInput({
           log.warn('session draft model preference sync failed:', err);
         });
     },
-    [sessionId, deviceLinkDeviceId, currentModelAgentKind, selectedProviderId, effectiveSourceId],
+    [sessionId, deviceLinkDeviceId, currentModelAgentKind, selectedProviderId, effectiveSourceId, sshCodexHostId],
   );
 
   const persistFastModeChange = useCallback(
@@ -6272,6 +6288,9 @@ export function ChatInput({
       requireDestructiveConfirmation = false,
     ): Promise<boolean | number> => {
       if (!sessionId) return true;
+      // Main owns SSH Codex window protection and deferred application. A new/failed
+      // task has no verified window yet; don't silently swallow its selection.
+      if (remoteHostId && runtimeAgentKind === 'codex' && !requireDestructiveConfirmation) return true;
       const agentStatus = makerChatStore.getSnapshot(sessionId).agentStatus;
       const contextTokens = requireDestructiveConfirmation
         ? verifiedContextTokens
@@ -6352,7 +6371,7 @@ export function ChatInput({
       ) {
         return true;
       }
-      // SSH 不做远端 handoff。缩窗判据的任一事实未知时继续关闭。
+      // Other SSH harnesses retain their existing admission until adapted separately.
       if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;
       if (!requireDestructiveConfirmation && (!trustedContextTokens || trustedContextTokens <= 0)) {
         return true;
@@ -6560,7 +6579,7 @@ export function ChatInput({
         const fastCapable = resolveFastSupported({
           deviceId: deviceLinkDeviceId ?? undefined,
           deviceProviders: remoteProviders.providers,
-          localProviders: localProviders.providers,
+          localProviders: providers,
           capabilities:
             targetAgentKind === 'codex'
               ? codexCaps.capabilities
@@ -6787,7 +6806,7 @@ export function ChatInput({
       modelMemory,
       deviceLinkDeviceId,
       remoteProviders.providers,
-      localProviders.providers,
+      providers,
       ccCaps.capabilities,
       codexCaps.capabilities,
       piCaps.capabilities,
@@ -8785,6 +8804,8 @@ export function ChatInput({
                     : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
                 >
                   {!sessionModelLoading && <ModelSelector
+                    providersOverride={sshCodexHostId ? sshCodexProviders.providers : undefined}
+                    providersOverrideState={sshCodexHostId ? sshCodexProviders : undefined}
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去
                     // 会让"当前选中的那一行"在合并行上错位,也会把归一化 id 顺着
@@ -8822,7 +8843,7 @@ export function ChatInput({
                             activeModel,
                             enabled,
                           );
-                        } else if (!deviceLinkDeviceId) {
+                        } else if (!deviceLinkDeviceId && !sshCodexHostId) {
                           setProviderModelThinking(
                             currentModelAgentKind,
                             effectiveSourceId,

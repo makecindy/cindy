@@ -389,6 +389,7 @@ import {
   deliverCindyVersionOpenEvents,
   finishCindyVersionStartup,
   isCindyVersionLaunchPending,
+  isCindyVersionSwitching,
   watchCindyVersionStartupResult,
 } from './cindy-make/versionStartup.js';
 import {
@@ -819,6 +820,7 @@ import {
   logoutGrok,
   hasGrokOAuthLogin,
 } from './maker-host/grok-oauth-login.js';
+import { setGrokDeviceLoginConnectedHandler } from './maker-host/grok-device-login-service.js';
 import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
 import { clearXaiMediaModels } from './maker-host/model-discovery/xai-media.js';
 import {
@@ -5170,50 +5172,71 @@ const registerIpcHandlers = () => {
     })();
   });
 
+  const finishXaiLogin = async (owner: string): Promise<boolean> => {
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+    void retainProviderPresentationAfterAuthChange('xai');
+    resetProviderModelAutoRefreshCooldowns('xai');
+    await clearXaiSubscriptionUsageSnapshot();
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+    clearXaiDiscoveredModels();
+    await discardXaiModelsDiskCache();
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+    clearXaiMediaModels();
+    clearXaiRateLimitSnapshot();
+    await syncXaiSubscriptionUsageForAuthChange();
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+    broadcastXaiAuthStateChanged();
+    void refreshXaiModelsFromHttp();
+    void refreshProviderModelsManually('xai').catch((error) => {
+      createLogger('xai-model-refresh').warn('xAI models refresh after login failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return true;
+  };
+  setGrokDeviceLoginConnectedHandler(async (owner) => {
+    await finishXaiLogin(owner);
+  });
+
   // xAI(SuperGrok 订阅)OAuth —— 与 claude-oauth 同形态。登录成功后 bridge 的 xai provider 立即可用
   // (buildHeaders 每请求现取 token);连接态由 renderer refetch listProviders 时现读 hasGrokOAuthLogin。
-  ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGIN, async (event) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGIN, async (event, method?: 'browser' | 'device') => {
     assertTrustedAppRendererEvent(event);
+    if (method !== undefined && method !== 'browser' && method !== 'device')
+      throwIpcError('INVALID_ARGUMENT', 'Invalid xAI login method');
     const owner = activeOwnerScopeKey();
     // reason 是 renderer 决定提示用的结构化数据,不抛 throwIpcError(规则 13 查询型例外)。
     // 登录成功即生效:订阅直连 handler 每请求经 buildHeaders 现取凭证,无需任何"就绪"步骤。
-    const result = await runGrokOAuthLogin();
+    const result = await runGrokOAuthLogin({
+      method,
+      onDeviceCode:
+        method === 'device'
+          ? (code) => {
+              if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return;
+              try {
+                if (!event.sender.isDestroyed())
+                  event.sender.send(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+                    providerId: 'xai',
+                    phase: 'device-code',
+                    ...code,
+                  });
+              } catch {
+                /* window closed while auth continues */
+              }
+            }
+          : undefined,
+    });
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
       return { ok: false, reason: 'login_cancelled', authorized: false };
-    if (result.ok) {
-      void retainProviderPresentationAfterAuthChange('xai');
-      resetProviderModelAutoRefreshCooldowns('xai');
-      // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
-      // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
-      await clearXaiSubscriptionUsageSnapshot();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
-        return { ok: false, reason: 'login_cancelled', authorized: false };
-      // 登录可直接覆盖旧 SuperGrok 账号：先清旧世代内存，再直接读新账号官方清单。
-      // 这里不能先恢复同一 Cindy owner 的磁盘 LKG，否则 A→B 重登会短暂展示 A 的成员。
-      clearXaiDiscoveredModels();
-      await discardXaiModelsDiskCache();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
-        return { ok: false, reason: 'login_cancelled', authorized: false };
-      // 登录可直接覆盖旧账号凭证。先跨授权边界清掉旧账号发现快照，再补拉新账号；
-      // 旧在途请求由 discovery generation + owner scope 双重守卫作废。
-      clearXaiMediaModels();
-      // 登录成功后广播 provider 变更 —— 其它已打开的窗口(聊天/模型选择器等)跟随刷新
-      // xAI 连接态,不再等 remount/手动刷新(对齐 CLAUDE_OAUTH_LOGIN 的 broadcastClaudeAuthStateChanged)。
-      // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
-      clearXaiRateLimitSnapshot();
-      await syncXaiSubscriptionUsageForAuthChange();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
-        return { ok: false, reason: 'login_cancelled', authorized: false };
-      broadcastXaiAuthStateChanged();
-      void refreshXaiModelsFromHttp();
-      void refreshProviderModelsManually('xai').catch((error) => {
-        createLogger('xai-model-refresh').warn('xAI models refresh after login failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-      return { ok: true, authorized: true };
-    }
-    return { ok: false, reason: result.reason ?? 'unknown', authorized: hasGrokOAuthLogin() };
+    if (result.ok)
+      return (await finishXaiLogin(owner))
+        ? { ok: true, authorized: true }
+        : { ok: false, reason: 'login_cancelled', authorized: false };
+    return {
+      ok: false,
+      reason: result.reason ?? 'unknown',
+      authorized: hasGrokOAuthLogin(),
+    };
   });
   ipcMain.handle(
     MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT,
@@ -7647,8 +7670,10 @@ const registerIpcHandlers = () => {
       throwIpcError('PRECONDITION_FAILED', 'unavailable');
     }
   });
+  cindyMakeManager.setVersionSwitchingProbe(isCindyVersionSwitching);
   configureCindyVersions(
     () => cindyMakeTestController.hasActiveJobs() || cindyMakeManager.hasActiveWork(),
+    () => cindyMakeManager.isPersonalBuildRunning(),
   );
   ipcMain.handle('app:cindy-versions-state', async (event) => {
     assertTrustedAppRendererEvent(event);

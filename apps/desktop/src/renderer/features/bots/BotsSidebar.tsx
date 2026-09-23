@@ -1,3 +1,4 @@
+import { BotGenerationLabel } from './BotGenerationLabel';
 import { botRosterLabel } from '../../../shared/botCreation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -367,7 +368,6 @@ function BotsSidebarContent() {
           <SidebarIconButton
             icon={ArrowLeft}
             label={t('sidebar.backToSessions')}
-            variant="rail"
             onClick={() => navigateToView('cc-agent')}
           />
         )}
@@ -429,11 +429,12 @@ function BotsSidebarContent() {
               const selected = Boolean(routeCindy);
               const activity = local ? botRunningActivity(local) : undefined;
               const subtitle = local ? botListSubtitle(local) : null;
-              const subtitleText = activity ? activity.compactDetail?.trim() || t('bots.list.typing')
+              const subtitleText = activity ? <BotGenerationLabel sessionId={activity.sessionId} phase={activity.workingPhase} startedAt={activity.startedAtMs} />
+                : 'deviceId' in bot && bot.online && bot.generation ? <BotGenerationLabel sessionId={bot.sessionId ?? undefined} {...bot.generation} remote={{ deviceId: bot.deviceId, botId: bot.id }} />
                 : subtitle ? subtitle.kind === 'placeholder' ? t('bots.list.startChat') : subtitle.text
                   : 'preview' in bot ? bot.preview || bot.description || t('bots.list.startChat') : '';
               return <CindyDeviceRow key="cindy-devices" current={currentCindy} options={cindyOptions}
-                selected={selected} typing={Boolean(activity)} subtitle={subtitleText}
+                selected={selected} typing={Boolean(activity || ('deviceId' in bot && bot.online && bot.generation))} subtitle={subtitleText}
                 timestamp={formatBotListTimestamp(local
                   ? botListTimestampAt({ lastMessageAt: local.lastMessageAt, working: Boolean(activity) }, now)
                   : 'activityAt' in bot ? bot.activityAt : 0, now)}
@@ -464,11 +465,11 @@ function BotsSidebarContent() {
                   <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
                     onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`)}
                     className={cn('flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', selected ? 'bg-sidebar-item-active text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
-                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus online={bot.online} deviceName={deviceName} /></span>
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus online={bot.connectionKnown === false ? null : bot.online} deviceName={deviceName} /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="truncate text-14 leading-5">{bot.name}</span>
-                      <BotConnectionStatus inline online={bot.online} deviceName={deviceName} className={selected ? 'opacity-70' : 'text-[var(--text-secondary)]'} />
-                      <span className="truncate text-12 leading-4 text-[var(--sidebar-list-muted)]">{bot.preview || bot.description || t('bots.list.startChat')}</span>
+                      <BotConnectionStatus inline online={bot.connectionKnown === false ? null : bot.online} deviceName={deviceName} className={selected ? 'opacity-70' : 'text-[var(--text-secondary)]'} />
+                      <span className="truncate text-12 leading-4 text-[var(--sidebar-list-muted)]">{bot.online && bot.generation ? <BotGenerationLabel sessionId={bot.sessionId ?? undefined} {...bot.generation} remote={{ deviceId: bot.deviceId, botId: bot.id }} /> : bot.preview || bot.description || t('bots.list.startChat')}</span>
                     </span>
                     {!selected && isRemoteBotUnread(bot) ? <span aria-label={t('bots.list.unread', { count: 1 })} className="size-[7px] shrink-0 rounded-full bg-[var(--bot-unread-bg)]" /> : null}
                     <span className="w-10 shrink-0 self-start pt-0.5 text-right text-11 tabular-nums text-[var(--sidebar-list-muted)]">{formatBotListTimestamp(bot.activityAt, now)}</span>
@@ -484,7 +485,7 @@ function BotsSidebarContent() {
               const activity = botRunningActivity(bot);
               const typing = Boolean(activity);
               const subtitleText = typing
-                ? activity?.compactDetail?.trim() || t('bots.list.typing')
+                ? <BotGenerationLabel sessionId={activity?.sessionId} phase={activity?.workingPhase} startedAt={activity?.startedAtMs} />
                 : subtitle.kind === 'placeholder'
                   ? t('bots.list.startChat')
                   : subtitle.text;
@@ -535,7 +536,7 @@ function BotsSidebarContent() {
                     className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
                     {/* Keep the existing avatar size alongside identity and message preview. */}
-                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus activityLabel={typing ? subtitleText : undefined} /></span>
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-baseline gap-2">
                         {bot.pinnedAt ? (
@@ -576,7 +577,7 @@ function BotsSidebarContent() {
                             mutedClass,
                             typing && 'italic',
                           )}
-                          title={subtitleText}
+                          title={typeof subtitleText === 'string' ? subtitleText : undefined}
                         >
                           {subtitleText}
                         </span>

@@ -383,6 +383,13 @@
   },
   "settings": {
     "title": "設定",
+    "search": {
+      "ariaLabel": "設定を検索",
+      "placeholder": "設定を検索",
+      "resultsLabel": "設定の検索結果",
+      "noResults": "一致する設定はありません",
+      "clear": "検索をクリア"
+    },
     "back": "戻る",
     "defaults": {
       "customizedBadge": "カスタム",
@@ -1082,11 +1089,18 @@
     },
     "about": {
       "title": "情報",
-      "description": "アプリと統合された Agent のランタイムバージョン。すべてのバージョン番号は起動時にメインプロセスが自動検出します。",
+      "description": "アプリと統合された Agent のランタイムバージョン。",
       "appVersionLabel": "アプリのバージョン",
       "claudeCodeVersionLabel": "Claude Code バージョン",
       "codexVersionLabel": "Codex バージョン",
       "piVersionLabel": "Pi バージョン",
+      "harnessUpdateButton": "{{name}}を更新",
+      "harnessUpdateTitle": "{{name}}を更新",
+      "harnessUpdateDescription": "Cindy を再起動すると、起動時に {{name}} を更新します。現在のバージョン: {{currentVersion}}。オンラインのバージョン: {{latestVersion}}。",
+      "harnessUpdateConfirm": "再起動して{{name}}を更新",
+      "harnessUpdateCancel": "キャンセル",
+      "harnessUpdateBusyDescription": "進行中のタスクがあります。再起動すると中断されます。それでも今すぐ再起動して更新しますか？",
+      "harnessUpdateFailed": "Agent の更新を準備できませんでした。しばらくしてからもう一度お試しください。",
       "logsDirLabel": "ログディレクトリ",
       "openLogsDir": "開く",
       "openLogsDirTooltip": "システムのファイルマネージャーでログディレクトリを開く",
@@ -1275,6 +1289,33 @@
         "reconcileFailed": "診断に失敗しました",
         "reconcileHealthy": "台帳とディスクは一致しています。異常はありません。",
         "reconcileIssues": "異常を検出: 台帳にないファイル {{orphans}} 件({{orphanSize}})、欠損ファイル {{missing}} 件、認識できない項目 {{stray}} 件。詳細はアプリログをご覧ください。"
+      },
+      "piKernel": {
+        "manage": "Pi のバージョンを管理",
+        "checking": "確認中…",
+        "checkFailed": "確認に失敗",
+        "available": "更新あり",
+        "lookup": "準備中…",
+        "download": "ダウンロード中…",
+        "verify": "検証中…",
+        "activate": "切り替え中…",
+        "update": "Pi の最新版に更新",
+        "restore": "Cindy 正式版に戻す",
+        "check": "更新を確認",
+        "releaseNotes": "Pi リリースノート",
+        "checkedAt": "最終確認：{{time}}",
+        "updateTitle": "Pi {{version}} に更新しますか？",
+        "restoreTitle": "Pi {{version}} に戻しますか？",
+        "updateDescription": "Pi が公開したバージョンです。Cindy と互換性がない場合があります。いつでも Cindy 正式版に戻せます。既存のセッションは現在のバージョンを使い続けます。",
+        "restoreDescription": "バージョンが古い場合でも、Cindy 正式版で配布中の Pi をインストールします。既存のセッションは現在のバージョンを使い続けます。",
+        "updateConfirm": "更新",
+        "restoreConfirm": "戻す",
+        "installed": "Pi {{version}} は新しいセッションから使用されます。",
+        "versionChanged": "公開バージョンが変わりました。再確認してからインストールしてください。",
+        "busy": "別の Pi 更新が進行中です。",
+        "installFailed": "Pi のインストールに失敗しました。以前のバージョンを引き続き使用します。ネットワークとディスクの空き容量を確認し、再試行してください。",
+        "openFailed": "リリースノートを開けませんでした。",
+        "restartRequired": "Pi {{version}} をインストールしました。Cindy を再起動すると使用できます。"
       }
     },
     "apiKey": {
@@ -1664,6 +1705,7 @@
         }
       },
       "xai": {
+        "deviceLogin": "コードでログイン",
         "logoutConfirm": {
           "title": "xAI(SuperGrok)を切断しますか?",
           "description": "Cindy はこの Grok サブスクリプションを使用できなくなります。",
@@ -1720,6 +1762,15 @@
       }
     },
     "providers": {
+      "catalogRecovery": {
+        "pending": "モデル設定の準備ができていません。しばらく待ってからモデルを再読み込みしてください。",
+        "legacy": "以前のモデル設定を一時的に読み込めません。他の Cindy を終了してから、モデルを再読み込みしてください。",
+        "corrupt": "保存済みのモデル設定を読み込めません。元の設定は保持されています。復旧についてサポートにお問い合わせください。",
+        "quota": "ローカルストレージが上限に達したため、モデル設定を保存できません。サポートにお問い合わせのうえ、モデルを再読み込みしてください。",
+        "storage": "このコンピューターのモデル設定を読み込むか保存することができません。モデルを再読み込みし、問題が続く場合はサポートにお問い合わせください。",
+        "catalog": "モデル一覧を更新できません。モデルを再読み込みして再試行してください。",
+        "retry": "モデルを再読み込み"
+      },
       "title": "モデルプロバイダー",
       "subtitle": "モデルを選ぶときのソースです。各ソースは対応するモデルと課金方式を提供し、セッションごとに切り替えられます。",
       "import": {
@@ -2343,6 +2394,7 @@
         "endpointLabel": "{{agent}} ベース URL",
         "noAuthNote": "このプロキシにクライアントキーは不要です。Cindy は転送前に CLI のサブスクリプション認証情報を削除します。",
         "signIn": "ログイン",
+        "mimoTokenPlanNote": "MiMo Token Plan ページの専用 API キー (tp-…) を使用してください。呼び出しにはサブスクの利用枠が使われます。従量課金の API キーは使用できません。",
         "setupLink": {
           "apiKey": "API キーを取得",
           "account": "登録・ログイン",
@@ -2536,6 +2588,13 @@
         "modelCount": "{{count}} 個のモデルを設定済み",
         "modelsAutomatic": "モデル情報は自動取得されます。個別の設定はモデル一覧から変更できます。",
         "manualModel": "モデル ID（自動取得できない場合）"
+      },
+      "byok": {
+        "managed": "組織が接続とモデルを管理",
+        "refresh": "組織設定を更新",
+        "refreshFailed": "組織設定を更新できませんでした。しばらくしてから再試行してください。",
+        "pending": "認証情報を準備中",
+        "unavailable": "一時的に利用できません"
       }
     },
     "experimental": {
@@ -7680,14 +7739,48 @@
       "deleteDescription": "{{name}} を削除すると、プロフィール、記憶、作業ディレクトリ、チャンネル接続、自動化タスクが完全に削除されます。タスク履歴と独立したworktreeは保持されます。",
       "working": "更新中…",
       "actionFailed": "操作が完了しませんでした。しばらくしてから再試行してください。",
+      "deleteFailed": "削除は完了しませんでした。",
       "restart": "チームメイトを再起動",
       "restartDescription": "現在の実行を停止して再開の準備をします。会話履歴、メモリ、ファイルは保持されます。",
       "restarting": "再起動中…",
       "restarted": "再起動しました。メッセージを送信して続けられます。"
     },
     "backToChat": "チャットに戻る",
-    "memoryRecovery": {
-      "action": "メモリをオンに戻す"
+    "memory": {
+      "title": "メモリ",
+      "enabled": "メモリを使う",
+      "disabledHint": "オフです。メモリの読み取りも保存もしません",
+      "search": "メモリを検索",
+      "empty": "まだメモリはありません",
+      "noResults": "一致するメモリはありません",
+      "loadFailed": "メモリを読み込めませんでした",
+      "types": {
+        "user": "あなたについて",
+        "feedback": "あなたの要望",
+        "project": "プロジェクト",
+        "reference": "参考"
+      },
+      "today": "今日",
+      "updated": "{{time}} に更新",
+      "edit": "編集",
+      "delete": "削除",
+      "cancel": "キャンセル",
+      "done": "完了",
+      "titleLabel": "タイトル",
+      "bodyLabel": "内容",
+      "tooLong": "長すぎます。短くすると保存されます",
+      "deleteTitle": "このメモリを削除しますか？",
+      "deleteDescription": "{{name}}は今後「{{title}}」を参照しません。",
+      "deleted": "削除しました",
+      "deleteFailed": "削除できませんでした",
+      "changedTitle": "{{name}}がこのメモリを更新しました",
+      "useLatest": "最新の内容を使う",
+      "keepMine": "自分の変更を残す",
+      "saveFailed": "保存できませんでした",
+      "unsavedTitle": "未保存の変更があります",
+      "unsavedDescription": "移動すると、このメモリへの変更は破棄されます。",
+      "discard": "変更を破棄",
+      "continueEditing": "編集を続ける"
     },
     "profileSaveFailed": "仲間設定を保存できませんでした。変更は適用されていません。",
     "modelLabel": "モデル",
@@ -7789,6 +7882,7 @@
     },
     "permissionRequest": "{{name}} が確認をお願いしています",
     "remote": {
+      "unknown": "接続状態不明",
       "online": "オンライン",
       "offline": "オフライン",
       "thisDevice": "このコンピュータ",
@@ -8948,6 +9042,8 @@
       "failed": "画像を生成できませんでした。もう一度お試しください"
     },
     "errorBanner": {
+      "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
+      "replyFailed": "返信を完了できませんでした。原因を確認するには、エラーの詳細をご覧ください。",
       "retryTitle": "最後のメッセージを再送信",
       "cancelTitle": "エラーを閉じる",
       "retry": "再試行",
@@ -9694,6 +9790,7 @@
       "reviewingChecks": "チェック結果を確認しています…",
       "replying": "返信中…",
       "processing": "処理中…",
+      "organizingConversation": "会話を整理しています…",
       "thinking": "考え中…",
       "generating": "生成中…",
       "editingFiles": "ファイルを編集中…",
@@ -10787,8 +10884,8 @@
         "automatic": "自動",
         "manually": "手動",
         "session": "セッション",
-        "silentRun": "サイレント実行",
-        "silentRunTooltip": "オンにすると、正常完了時はデフォルトで通知しません。タスク説明で特定条件の通知を求めている場合、AI が条件を満たしたときに自動で上報します。失敗や異常は引き続き通知されます。",
+        "silentRun": "確認で変化がなければ通知しない",
+        "silentRunTooltip": "変化や問題のみ報告します。リマインダーや定時送信ではオフにできます。",
         "silentRunInfoAria": "サイレント実行のルールを表示",
         "finishSendToFeishu": "完了時に Feishu Bot に送信",
         "finishSendToWecomGroup": "完了時に WeCom グループへ送信",
@@ -10904,7 +11001,7 @@
         "intervalChip": "完了後に計時 · {{schedule}}"
       },
       "scheduleMenu": {
-        "intervalMinutes": "Minutes（N 分ごと）",
+        "intervalMinutes": "分（N 分ごと）",
         "interval": "Hourly（N 時間ごと）",
         "daily": "Daily（毎日）",
         "weekdays": "Weekdays（平日）",
@@ -10925,7 +11022,10 @@
         "minuteLabel": "分",
         "scheduleHourAria": "スケジュール時",
         "scheduleMinuteAria": "スケジュール分",
-        "openTimePickerAria": "時刻ピッカーを開く"
+        "intervalMinutesAria": "繰り返し間隔（分）",
+        "openTimePickerAria": "時刻ピッカーを開く",
+        "minuteIntervalHint": "1 時間を割り切れる分間隔のみ使用できます：1、2、3、4、5、6、10、12、15、20、30 分。60 分の場合は「1 時間ごと」を選択してください。",
+        "unsupportedMinuteInterval": "このタスクは {{count}} 分の旧 Cron 設定を使用しています。利用可能な間隔を選んで修正してください。"
       },
       "model": {
         "loading": "モデルを読み込み中…",
@@ -12874,7 +12974,8 @@
       "success": "完了",
       "failed": "失敗",
       "interrupted": "中断",
-      "cancelled": "キャンセル済み"
+      "cancelled": "キャンセル済み",
+      "skipped": "確認済み · モデル起動なし"
     },
     "sourceStatus": {
       "listening": "受信中",
@@ -12885,7 +12986,13 @@
       "equals": "一致",
       "contains": "含む",
       "not-equals": "一致しない"
-    }
+    },
+    "quiet": "確認で変化がなければ通知しない",
+    "quietHint": "変化や問題のみ報告します。リマインダーや定時送信ではオフにできます。",
+    "checkCommand": "事前確認コマンド",
+    "checkHint": "任意。コンピューターで先に確認します。終了コード 2 は今回の実行をスキップし、0 は続行します。エラーは報告されます。空欄で解除します。",
+    "timeoutMs": "確認のタイムアウト（ミリ秒、空欄は無制限）",
+    "advancedSettings": "詳細設定"
   },
   "cindyMakeDoctor": {
     "description": "Cindy のビルドに必要なローカル環境を確認します。使い方：/cindy-make-doctor",
@@ -13213,6 +13320,7 @@
       "usingHint": "最新の個人版を使用しています。",
       "errors": {
         "busy": "タスク、テスト、ビルドが実行中です。終了してから切り替えまたは削除してください。",
+        "building": "個人版をビルド中です。完了を待つか、ビルドを停止してからバージョンを切り替えてください。",
         "incompatible": "データ構造が異なります。現在のオリジナル版から個人版を再度ビルドしてください。",
         "unavailable": "このバージョンを読み込めません。再度ビルドしてお試しください。",
         "launchFailed": "対象のバージョンを起動できませんでした。現在のバージョンは保持されています。",
@@ -13456,6 +13564,7 @@
       "getLatest": "最新ソースを同期",
       "taskTitle": "ソース更新時の競合を解決",
       "updateHint": "公式ソースを更新し、個人の変更を保持します。",
+      "buildingHint": "個人版をビルド中です。完了を待つか停止してからソースを同期してください。",
       "confirmTitle": "最新ソースに更新しますか？",
       "confirmDescription": "個人の変更は保持されます。競合が発生した場合は、解決用セッションを開始する前に確認します。",
       "conflictConfirm": {

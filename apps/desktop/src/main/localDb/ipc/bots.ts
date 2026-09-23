@@ -28,7 +28,7 @@ import {
 } from '../schema';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
-import { requireString, throwIpcError } from '../../utils/ipcValidate.js';
+import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import { isBotVisibleRemotely } from './botRemoteVisibility.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from './botRemoteSessionAccess.js';
 import { setRemoteBotSessionLookup } from '../../device-link/remoteBotSessionBoundary.js';
@@ -94,6 +94,7 @@ import { getResolvedMainLocale } from '../../i18n.js';
 import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../shared/locale.js';
 import { normalizeBotWelcomeContext, type BotWelcomeContext } from '../../../shared/botWelcomeContext';
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
+import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
 
 const log = createLogger('bots');
 
@@ -394,6 +395,7 @@ async function readCanonicalChatPreview(
   repliesOnly = false,
 ): Promise<{ preview: string | null; createdAt: number | null; role: BotChatRole | null }> {
   if (!canonicalSessionId) return { preview: null, createdAt: null, role: null };
+  const running = getMakerIfReady()?.getSession(canonicalSessionId)?.isTurnRunning?.() === true;
   const rows = await db
     .select({
       role: messages.role,
@@ -405,6 +407,8 @@ async function readCanonicalChatPreview(
       and(
         eq(messages.sessionId, canonicalSessionId),
         repliesOnly ? eq(messages.role, 'assistant') : inArray(messages.role, ['user', 'assistant']),
+        // During generation, prose blocks are progress. Only a sealed answer is a reply preview.
+        ...(running ? [sql`(${messages.role} != 'assistant' OR json_extract(${messages.agentMeta}, '$.turnCompleted') = 1)`] : []),
         isNull(messages.rewindAt),
         sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
         sql`(${messages.agentMeta} IS NULL OR json_type(${messages.agentMeta}, '$.botDirectMessage') IS NULL)`,
@@ -1806,6 +1810,74 @@ export function registerBotIpc(): void {
       expectedProfileVersion: Number(body.expectedProfileVersion),
       recoverMissingOnly: body.recoverMissingOnly === true,
     });
+  });
+
+  const memory = createBotMemoryService({
+    async getStore(scopeKey) {
+      const manager = getMakerIfReady()?.makerMemory;
+      if (!manager) throwIpcError('MAKER_MEMORY_NOT_READY', 'Memory is not ready');
+      return manager.getStore(scopeKey, { skipDisabledCheck: true });
+    },
+    async readBot(botId) {
+      const owner = captureBotOperationOwner();
+      const [row] = await getDbClient()
+        .drizzle.select({ status: botProfiles.status, canonicalSessionId: botProfiles.canonicalSessionId })
+        .from(botProfiles)
+        .where(eq(botProfiles.id, botId))
+        .limit(1);
+      owner.assertCurrent();
+      return row && row.status !== 'deleting'
+        ? { canonicalSessionId: row.canonicalSessionId, assertCurrent: owner.assertCurrent }
+        : null;
+    },
+    requestRefresh: (sessionId) => requestBotRuntimeEpochRefresh(sessionId, 'resource'),
+  });
+  /** Bind each memory operation to the account that started it. */
+  const withMemoryOwner = async <T>(run: () => Promise<T>): Promise<T> => {
+    const owner = captureBotOperationOwner();
+    const result = await run();
+    owner.assertCurrent();
+    return result;
+  };
+  ipcMain.handle('local-db:bots:memory:list', async (event, rawBotId: unknown, rawQuery: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const query = rawQuery === undefined || rawQuery === null ? '' : readText(rawQuery, 'query', 200);
+    return withMemoryOwner(() => memory.list(botId, query));
+  });
+  ipcMain.handle('local-db:bots:memory:read', async (event, rawBotId: unknown, rawFilename: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    return withMemoryOwner(() => memory.read(botId, rawFilename));
+  });
+  ipcMain.handle('local-db:bots:memory:update', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const body = requireObject(raw);
+    const botId = readText(body.botId, 'botId', 128, true);
+    if (typeof body.title !== 'string' || typeof body.body !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'Invalid memory');
+    }
+    return withMemoryOwner(() =>
+      memory.update({
+        botId,
+        filename: body.filename as string,
+        title: body.title as string,
+        body: body.body as string,
+        expectedUpdatedAt: body.expectedUpdatedAt as string,
+      }),
+    );
+  });
+  ipcMain.handle('local-db:bots:memory:delete', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const body = requireObject(raw);
+    const botId = readText(body.botId, 'botId', 128, true);
+    await withMemoryOwner(() =>
+      memory.delete({
+        botId,
+        filename: body.filename as string,
+        expectedUpdatedAt: body.expectedUpdatedAt as string,
+      }),
+    );
   });
 
   ipcMain.handle('local-db:bots:history', async (event, rawBotId: unknown) => {

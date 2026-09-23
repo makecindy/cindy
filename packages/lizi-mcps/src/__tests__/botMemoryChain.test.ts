@@ -31,7 +31,18 @@ import path from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Real better-sqlite3 + FTS rebuild on a temp disk. Windows CI shards this
+// package next to other sqlite tests, and Defender can make that synchronous
+// work exceed Vitest's default 5s — the learned-prefix case then times out
+// and afterEach unlinks fts.db while the handle is still closing (EBUSY).
+// Same bounded Windows allowance as maker-core memory/contacts sqlite tests;
+// assertions stay unchanged.
+vi.setConfig({
+  testTimeout: process.platform === 'win32' ? 30_000 : 5_000,
+  hookTimeout: process.platform === 'win32' ? 30_000 : 10_000,
+});
 
 import {
   MakerMemoryManager,
@@ -111,7 +122,14 @@ afterEach(async () => {
   // Windows cannot remove fts.db while the manager still owns an open connection.
   manager.dispose();
   for (const database of databases) expect(database.open).toBe(false);
-  await rm(root, { recursive: true, force: true });
+  try {
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'EBUSY' && code !== 'EPERM' && code !== 'EACCES') throw error;
+    // Defender / indexer can keep fts.db briefly after close. Leave the temp
+    // directory for the OS, matching maker-core memory scope-resolver cleanup.
+  }
 });
 
 /**

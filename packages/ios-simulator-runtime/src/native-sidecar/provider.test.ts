@@ -199,6 +199,40 @@ function createSupervisor(input: {
 }
 
 describe("HostIOSSimulatorSidecarSupervisor", () => {
+  it("does not coalesce pending starts from different Xcode installations", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { supervisor } = createSupervisor({
+      resolve: async () => {
+        await gate;
+        return bundledArtifact();
+      },
+    });
+    const start = {
+      ...START,
+      runtime: {
+        ...START.runtime!,
+        developerDirectory: "/Applications/Xcode A.app/Contents/Developer",
+      },
+    };
+    const first = supervisor.start(start);
+    try {
+      await expect(supervisor.start({
+        ...start,
+        runtime: {
+          ...start.runtime,
+          developerDirectory: "/Applications/Xcode B.app/Contents/Developer",
+        },
+      })).rejects.toMatchObject({ code: "ARTIFACT_CHANGED" });
+    } finally {
+      release();
+      await first;
+      await supervisor.stop(start.instanceId);
+    }
+  });
+
   it("forwards updater force-exit aborts to the bound Host runtime", async () => {
     const { supervisor, runtimes } = createSupervisor({
       resolve: () => bundledArtifact(),

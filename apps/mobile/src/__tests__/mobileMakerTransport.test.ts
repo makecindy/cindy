@@ -443,7 +443,7 @@ describe("mobile maker transport", () => {
       {
         deviceId: "dev-1",
         channel: "maker:list-active",
-        args: [{ summary: true }],
+        args: [{ summary: true, snapshotVersion: 2 }],
       },
     ]);
   });

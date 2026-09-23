@@ -34,9 +34,12 @@ import {
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
+import { createMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { buildRouteDecision, providerRoutingForModel } from './provider-route.js';
+
+const log = createMakerLogger('provider-probe');
 
 /** 探测请求超时。 */
 const PROBE_TIMEOUT_MS = 10_000;
@@ -272,11 +275,67 @@ function networkErrorCode(err: unknown): string {
   return 'UNKNOWN_NETWORK_ERROR';
 }
 
-/** 跑一次探测请求并分类结果。fetch 可注入（单测）。 */
+/** 上游 origin(协议 + host + 端口),不带路径 / query / 凭证——只用于日志定位。 */
+function probeUpstreamOrigin(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).origin;
+  } catch {
+    return '<invalid-url>';
+  }
+}
+
+/** 进日志的摘要上限;分类器给出的 detail 已经过 redactSensitiveText,这里只再兜一层凭证头形态与长度。 */
+const PROBE_DETAIL_MAX_CHARS = 512;
+function sanitizeProbeDetail(detail: string | undefined): string | undefined {
+  if (!detail) return undefined;
+  return detail
+    .replace(/(authorization|x-api-key|x-goog-api-key)(["'\s:=]+)[^\s"',}]+/gi, '$1$2<redacted>')
+    .slice(0, PROBE_DETAIL_MAX_CHARS);
+}
+
+/**
+ * 「测试连接」失败在主进程留痕(#4954):渲染层只拿到分类码,非鉴权 / 非网络类的 4xx 会落成
+ * 「未知错误,请查看日志」,而此前主进程一行都不写,日志里无迹可循。字段不含路径 / query / 凭证。
+ */
+function logProbeFailure(spec: ProviderProbeSpec, result: ProviderTestResult): ProviderTestResult {
+  if (result.ok) return result;
+  const detail = sanitizeProbeDetail(result.detail);
+  log.warn('provider connection probe failed', {
+    agent: spec.agent,
+    provider: spec.catalogPresetId ?? 'custom',
+    model: spec.modelId,
+    upstream: probeUpstreamOrigin(spec.baseUrl),
+    wireProtocol: spec.wireProtocol ?? spec.api ?? 'default',
+    status: result.status,
+    code: result.code,
+    latencyMs: result.latencyMs,
+    detail,
+  });
+  return detail === result.detail ? result : { ...result, detail };
+}
+
+/** 跑一次探测请求并分类结果。fetch 可注入（单测）。失败一律经 logProbeFailure 留痕。 */
 export async function runProviderProbe(
   spec: ProviderProbeSpec,
   // 默认吃系统代理:探测必须与真实会话同口径,否则代理用户会被误判成「连不通」。
   fetchImpl: typeof fetch = outboundFetch,
+): Promise<ProviderTestResult> {
+  const start = Date.now();
+  try {
+    return logProbeFailure(spec, await runProviderProbeUnlogged(spec, fetchImpl));
+  } catch (err) {
+    // 拿到响应头后读首帧时连接中断(readFirstSsePayload 抛错)、请求装配抛错等异常路径
+    // 同样要留痕,否则仍是「未知错误、日志无迹」;异常本身原样抛给 IPC,不改变错误语义。
+    const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    logProbeFailure(spec, { ok: false, code: 'UNKNOWN', latencyMs: Date.now() - start,
+      detail: `probe threw before classification: ${message}` });
+    throw err;
+  }
+}
+
+async function runProviderProbeUnlogged(
+  spec: ProviderProbeSpec,
+  fetchImpl: typeof fetch,
 ): Promise<ProviderTestResult> {
   if (spec.authMethod === 'none' && !isLoopbackProviderUrl(spec.baseUrl)) {
     throw new TypeError('no-auth provider probes require a loopback URL');

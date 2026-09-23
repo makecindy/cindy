@@ -4069,26 +4069,36 @@ export const remoteSessionStore = {
 
   setActiveSessionSnapshots(
     deviceId: string,
-    list: readonly unknown[],
+    response: unknown,
     activityEpochAtFetchStart = makerActivityEpoch,
   ): void {
-    // `maker:list-active` returns only currently active sessions. Absence is not
-    // an idle assertion: the request can have started before a turn and complete
-    // after a live delta, or a stale reconnect response can race a newer push.
-    // Only explicit boolean states in the snapshot may change a session's run
-    // state; terminal maker/activity events remain the idle authority.
-    const snapshotStates = new Map<string, boolean>();
+    // Only the opted-in v2 envelope asserts a complete runtime list. Legacy
+    // arrays can come from old hosts, where absence must retain its old meaning.
+    const completeResponse = isRecord(response) && response.format === 'active-sessions-v2'
+      && Array.isArray(response.sessions) ? response : null;
+    const list: readonly unknown[] = completeResponse
+      ? completeResponse.sessions as unknown[]
+      : (Array.isArray(response) ? response : []);
+    const snapshotStates = new Map<string, {
+      running: boolean;
+      activityPhase: string | null;
+      activityAttention: unknown;
+    }>();
     for (const item of list) {
       if (!isRecord(item)) continue;
       const sessionId = readString(item, 'sessionId');
       if (sessionId && typeof item.isTurnRunning === 'boolean') {
         const indexedDeviceId = sessionDeviceIndex.get(sessionId);
         if (indexedDeviceId && indexedDeviceId !== deviceId) continue;
-        snapshotStates.set(sessionId, item.isTurnRunning);
+        snapshotStates.set(sessionId, {
+          running: item.isTurnRunning,
+          activityPhase: readString(item, 'activityPhase'),
+          activityAttention: item.activityAttention,
+        });
       }
     }
     let changed = false;
-    for (const [sessionId, running] of snapshotStates) {
+    for (const [sessionId, { running, activityPhase, activityAttention }] of snapshotStates) {
       if (!running) {
         changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
         changed = writeMakerTurnRunning(sessionId, false) || changed;
@@ -4096,6 +4106,25 @@ export const remoteSessionStore = {
       const current = readSessionRunStatus(sessionId);
       const hasNewerMakerActivity = (sessionMakerActivityEpochs.get(sessionId) ?? 0)
         > activityEpochAtFetchStart;
+      // A fresh host snapshot can repair a missed activity clear while the phone was
+      // backgrounded. Old hosts omit these optional fields, so keep their push-only path.
+      if (!hasNewerMakerActivity && typeof activityAttention === 'boolean'
+        && (isRemoteSessionLiveActivityPhase(activityPhase) || activityPhase === 'idle')) {
+        if (activityPhase === 'running' || activityPhase === 'needs-interaction'
+          || (activityAttention && activityPhase !== 'idle')) {
+          const previous = sessionLiveActivity.get(sessionId);
+          changed = writeSessionLiveActivity(sessionId, {
+            sessionId,
+            phase: activityPhase,
+            compactDetail: previous?.phase === activityPhase ? previous.compactDetail : '',
+            workingPhase: previous?.phase === activityPhase ? previous.workingPhase : undefined,
+            interactionKind: previous?.phase === activityPhase ? previous.interactionKind : undefined,
+            attention: activityAttention,
+          }) || changed;
+        } else {
+          changed = deleteSessionLiveActivity(sessionId) || changed;
+        }
+      }
       const next = clearLiveGenerationOnWideRunStart(current, {
         ...current,
         isRunning: running,
@@ -4104,6 +4133,25 @@ export const remoteSessionStore = {
         startedAt: running ? (current.startedAt ?? Date.now()) : null,
       });
       changed = writeSessionRunStatus(sessionId, next) || changed;
+    }
+    if (completeResponse) {
+      for (const [sessionId, indexedDeviceId] of sessionDeviceIndex) {
+        if (indexedDeviceId !== deviceId || snapshotStates.has(sessionId)
+          || (sessionMakerActivityEpochs.get(sessionId) ?? 0) > activityEpochAtFetchStart) continue;
+        // A runtime absent from a complete host snapshot has ended. Do not
+        // discard a newer live push that arrived while this read was in flight.
+        changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
+        changed = writeMakerTurnRunning(sessionId, false) || changed;
+        changed = deleteSessionLiveActivity(sessionId) || changed;
+        const current = readSessionRunStatus(sessionId);
+        changed = writeSessionRunStatus(sessionId, {
+          ...current,
+          isRunning: false,
+          reconnectAttempt: null,
+          sideTaskRunning: false,
+          startedAt: null,
+        }) || changed;
+      }
     }
     if (changed) emit();
   },
@@ -4506,6 +4554,7 @@ export const remoteSessionStore = {
     const sessionId = readString(payload, 'sessionId');
     const phase = readString(payload, 'phase');
     if (!sessionId || !isRemoteSessionLiveActivityPhase(phase)) return;
+    markSessionMakerActivity(sessionId);
     const compactDetail = typeof payload.compactDetail === 'string' ? payload.compactDetail : '';
     let changed = false;
     if (phase === 'running' || phase === 'needs-interaction') {
@@ -4513,6 +4562,7 @@ export const remoteSessionStore = {
         sessionId,
         phase,
         compactDetail,
+        workingPhase: readString(payload, 'workingPhase') ?? undefined,
         interactionKind: readString(payload, 'interactionKind') ?? undefined,
         attention: payload.attention === true,
       };

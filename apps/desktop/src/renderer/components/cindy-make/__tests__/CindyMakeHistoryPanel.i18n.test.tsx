@@ -15,12 +15,12 @@ import { CindyMakeHistoryPanel } from '../CindyMakeHistoryPanel';
 import { CindyMakeVersionsPanel } from '../CindyMakeVersionsPanel';
 import { CindyMakeMergeNotice } from '../CindyMakeMergeNotice';
 
-const h = vi.hoisted(() => ({ make: {} }));
+const h = vi.hoisted(() => ({ make: {}, error: vi.fn(), success: vi.fn() }));
 vi.mock('@/lib/cindyMakeState', () => ({ useCindyMakeState: () => h.make }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: async () => false }),
 }));
-vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: h.error, success: h.success } }));
 
 const cases = [
   {
@@ -84,6 +84,8 @@ function strings(value: Record<string, unknown>, prefix = ''): Array<[string, st
 }
 
 beforeEach(() => {
+  h.error.mockClear();
+  h.success.mockClear();
   setDataOwnerGeneration('history-real-locales');
   const state: CindyMakeHistoryState = {
     busy: false,
@@ -187,6 +189,7 @@ describe('Cindy Make history with real translations', () => {
         buildId: 'build-1',
         outputLine: 'Test Files 57 passed; token=fake-secret',
       };
+      vi.stubGlobal('electronAPI', { getCindyMakeHistory: async () => structuredClone(state) });
       const i18n = createInstance();
       await i18n.use(initReactI18next).init({
         lng: locale,
@@ -211,8 +214,16 @@ describe('Cindy Make history with real translations', () => {
       state.busy = false;
       state.canBuild = true;
       for (const error of ['checksFailed', 'cleanupFailed'] as const) {
+        if (error === 'cleanupFailed') {
+          state.build = { status: 'checking', buildId: 'build-2', checkStep: 'tests' };
+          fireEvent(window, new Event('focus'));
+          await screen.findAllByText(resource.cindyMake.personal.checkStep.tests);
+        }
         state.build = { status: 'failed', error };
         fireEvent(window, new Event('focus'));
+        await waitFor(() =>
+          expect(h.error).toHaveBeenCalledWith(resource.cindyMake.personal.errors[error]),
+        );
         expect(await screen.findByText(resource.cindyMake.personal.errors[error])).toBeTruthy();
         expect(screen.queryByText('Test Files 57 passed; token=[REDACTED]')).toBeNull();
         expect(view.container.textContent).not.toMatch(/cindyMake\.|\{\{|\?{2,}|\uFFFD/);

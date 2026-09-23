@@ -5,7 +5,7 @@ export interface CompanionProfileNativeViewProps {
   visible: boolean; title: string; name: string; page: string; deviceId: string; deviceName: string;
   resource: RemoteResource | null; data: CompanionProfileData | null; editor: CompanionProfileData | null;
   panel?: ProfilePanel; values: ProfileValues; busy: boolean; online: boolean; dirty: boolean;
-  loading: boolean; error: boolean; conflict: boolean; receipt: string | null;
+  loading: boolean; error: boolean; errorLabel?: string; conflict: boolean; receipt: string | null;
   confirmation: ProfilePanel | null; deleted: boolean; artifacts: ReactNode; models: ReactNode;
   onClose(): void; onClosed?(): void; onBack?(): void; onOpen(page: string): void;
   onChange(values: ProfileValues): void; onSubmit(panel: ProfilePanel, confirmed?: boolean): void;

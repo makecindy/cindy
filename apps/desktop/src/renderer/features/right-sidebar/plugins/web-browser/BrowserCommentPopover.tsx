@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * BrowserCommentPopover —— 页面评论的宿主侧输入气泡。
  *
@@ -369,17 +370,17 @@ export function BrowserCommentPopover({
             );
           })}
           <div className="flex justify-end">
-            <button
+            <Button
+              variant="secondary"
+              size="xxs"
+              compact
+              tone="quiet"
               type="button"
               onClick={handleResetStyles}
               disabled={submitting}
-              className={cn(
-                'flex h-5 items-center rounded px-1.5 text-11',
-                'text-[var(--text-tertiary)] hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
-              )}
             >
               {t('rightSidebar.browser.styleReset')}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -406,31 +407,28 @@ export function BrowserCommentPopover({
           <span />
         )}
         <div className="flex items-center gap-1.5">
-          <button
+          <Button
+            variant="secondary"
+            size="xs"
+            compact
+            tone="quiet"
             type="button"
             onClick={onCancel}
             disabled={submitting}
-            className={cn(
-              'flex h-6 items-center rounded-md px-2 text-12',
-              'text-[var(--text-secondary)] hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
-              submitting && 'opacity-40',
-            )}
           >
             {t('rightSidebar.browser.commentCancel')}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="cta"
+            size="xs"
+            compact
+            loading={submitting}
             type="button"
             onClick={handleSubmit}
             disabled={!canSubmit}
-            className={cn(
-              'flex h-6 items-center rounded-md px-2.5 text-12 font-medium',
-              'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-              'hover:bg-[var(--accent-hover)]',
-              !canSubmit && 'cursor-not-allowed opacity-40',
-            )}
           >
             {t('rightSidebar.browser.commentSubmit')}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

@@ -6,6 +6,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { useFeishuBot, type FeishuBotService, type FeishuBotStatus } from '@/hooks/useFeishuBot';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { savedCredentialsNoteKey, shouldShowSavedCredentialsCard } from './feishuBotPresentation';
@@ -295,20 +296,18 @@ function SavedCredentialsCard(props: {
         </div>
       </div>
       <div className="flex gap-2 pt-1">
-        <button
+        <Button
+          variant="secondary"
+          size="lg"
+          loading={props.isClearing}
           type="button"
           onClick={props.onClear}
           disabled={props.isClearing}
-          className={cn(
-            'flex h-[36px] flex-1 items-center justify-center gap-1.5 rounded-full',
-            'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-            'text-12 font-medium text-[var(--settings-btn-secondary-text)]',
-            props.isClearing && 'cursor-not-allowed opacity-40',
-          )}
+          className="flex-1"
         >
-          {props.isClearing ? <Spinner size={13} /> : <Trash2 size={13} />}
+          <Trash2 size={13} />
           {t('settings.feishuBot.connected.clear')}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -443,21 +442,17 @@ function ManualConfig(props: {
         </div>
       </div>
 
-      <button
+      <Button
+        variant="cta"
+        size="lg"
+        loading={props.isSaving}
         type="button"
         onClick={props.onSave}
         disabled={!props.canSave}
-        className={cn(
-          'flex h-[42px] w-full items-center justify-center gap-1.5 rounded-full',
-          'bg-[var(--settings-btn-primary-bg)] border border-[var(--settings-btn-primary-border)]',
-          'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-          'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)]',
-          !props.canSave && 'cursor-not-allowed opacity-40',
-        )}
+        className="w-full"
       >
-        {props.isSaving ? <Spinner size={14} /> : null}
         {t('settings.feishuBot.bind')}
-      </button>
+      </Button>
     </div>
   );
 }

@@ -1,7 +1,18 @@
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
 import { clearCodexTextOnlyPolicies, codexTextOnlyRequestGuard, codexTextOnlyWebSocketTransforms, isCodexTextOnly } from './codex-text-only-policy.js';
-import { resolveConversationSessionHeaders, withChatBridgeUserAgent, overrideHeadersCaseInsensitive } from '@cindy/responses-chat-bridge';
-import { providerModelRecord, type Effort } from '@cindy/model-providers';
+import {
+  resolveConversationSessionHeaders,
+  withChatBridgeUserAgent,
+  overrideHeadersCaseInsensitive,
+} from '@cindy/responses-chat-bridge';
+import {
+  isCustomRoutedProvider,
+  providerCatalogId,
+  providerModelRecord,
+  type CatalogModel,
+  type Effort,
+  type Provider,
+} from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning } from '@cindy/model-compat';
@@ -124,6 +135,7 @@ import { outboundFetch } from './outbound-fetch.js';
 import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
+import { createCodexImageModelRewrite } from './codex-image-model-rewrite.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import {
   CODEX_IMAGE_GENERATION_ACTOR_HEADER,
@@ -1108,10 +1120,10 @@ function createChatBridgeDecision(
   const { headers } = buildLocalHandlerHeaders(route, 'codex');
   const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
   const realModel = rewriteChatBridgeModel(wireModel, stripPrefix);
-  // localHandler 绕过 proxy 的 responseObserver,自定义(user)供应商的上游错误不会被
+  // localHandler 绕过 proxy 的 responseObserver,自定义(user/organization)供应商的上游错误不会被
   // createProviderUpstreamErrorObserver 看到。这里显式把非 2xx 上游错误喂回同一广播通道,
   // 让 Chat 桥接会话与透明自定义供应商一样弹结构化 providerError.* 提示。内置来源不广播
-  // (与 observer 的 user-only 语义一致)。
+  // (与 observer 的 custom-routed 语义一致)。
   const providerId = route.providerId;
   const providerName = getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
   const baseCapabilities: ChatBridgeCapabilities = isGoogleGeminiChatUpstream(
@@ -1139,7 +1151,7 @@ function createChatBridgeDecision(
   const capabilities = systemMessagePolicy
     ? { ...routedCapabilities, systemMessagePolicy }
     : routedCapabilities;
-  const onUpstreamError = route.providerSource === 'user'
+  const onUpstreamError = isCustomRoutedProvider({ source: route.providerSource })
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
       }
@@ -1463,7 +1475,7 @@ function createAnthropicBridgeDecision(
   const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
   const supportsPromptCaching =
     isXdGatewayBridge || isOfficialAnthropicUpstream(upstreamBase);
-  const onUpstreamError = route.providerSource === 'user'
+  const onUpstreamError = isCustomRoutedProvider({ source: route.providerSource })
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
       }
@@ -1622,16 +1634,46 @@ function xaiRealModelId(model: unknown): string | null {
   return model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
 }
 
-function supportsXaiReasoning(model: string | null): boolean {
+/**
+ * xAI 系 provider 判定:first-party `xai`,以及「设置 → 添加 xAI 账号」接入的独立账号
+ * (目录里 id 各不相同、`auth.native === 'xai'`,与 `providerCatalogId` 同源)。
+ * 返回实际账号 provider id,供路由归属与目录能力查询按该账号解析;非 xAI 系返回 null。
+ */
+function xaiCompatProviderId(providerId: string | null | undefined): string | null {
+  if (!providerId) return null;
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+  if (!provider) return providerId === 'xai' ? providerId : null;
+  return providerCatalogId(provider) === 'xai' ? providerId : null;
+}
+
+/**
+ * 按 xAI 系 provider 解析某个 codex 目录模型:先查该账号 provider,**具体模型**未命中
+ * (账号级发现快照暂未包含它)时回退 first-party `xai`,而不只在 provider 不存在时回退——
+ * 否则通用 Grok 会被误判成不支持 reasoning、现有会话的 reasoning 配置与回放项被剥掉。
+ */
+export function resolveXaiCodexCatalogModel(
+  providers: ReadonlyArray<Pick<Provider, 'id' | 'models'>>,
+  providerId: string,
+  namespacedModel: string,
+): CatalogModel | undefined {
+  const findModel = (id: string) =>
+    (providers.find((provider) => provider.id === id)?.models.codex ?? []).find(
+      (candidate) => candidate.id === namespacedModel,
+    );
+  return findModel(providerId) ?? (providerId === 'xai' ? undefined : findModel('xai'));
+}
+
+function supportsXaiReasoning(model: string | null, providerId: string = 'xai'): boolean {
   if (!model) return true;
-  const xaiProvider = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-  const namespacedModel = `xai/${model}`;
-  const catalogModel = (xaiProvider?.models.codex ?? []).find((candidate) => candidate.id === namespacedModel);
+  const catalogModel = resolveXaiCodexCatalogModel(getActiveCatalog().providers, providerId, `xai/${model}`);
   return (catalogModel?.efforts.length ?? 0) > 0;
 }
 
-function stripUnsupportedXaiReasoning(body: Record<string, unknown>): Record<string, unknown> | null {
-  if (supportsXaiReasoning(xaiRealModelId(body.model))) return null;
+function stripUnsupportedXaiReasoning(
+  body: Record<string, unknown>,
+  providerId: string = 'xai',
+): Record<string, unknown> | null {
+  if (supportsXaiReasoning(xaiRealModelId(body.model), providerId)) return null;
 
   let changed = false;
   const next: Record<string, unknown> = { ...body };
@@ -1779,13 +1821,17 @@ function createXaiResponsesCompatTransform(): RequestTransform {
     const explicitProviderId = providerContext.providerId;
     const inferredProviderId =
       explicitProviderId ?? (typeof body.model === 'string' ? inferProviderIdForModel(body.model, 'codex') : null);
-    if (inferredProviderId !== 'xai') return null;
+    // first-party `xai` 与独立 xAI 账号(auth.native = 'xai',id 各异)都发往 api.x.ai,
+    // 必须走同一套改写;只认字面量 'xai' 会让独立账号会话裸发 —— tool-less 的
+    // /responses/compact 带着 tool_choice 直达上游即报「tool_choice 有、tools 为空」(#4888)。
+    const xaiProviderId = xaiCompatProviderId(inferredProviderId);
+    if (!xaiProviderId) return null;
     // 与路由的 scope 门同源:xai 会话里非 xai/ 前缀的请求会被 resolveSessionRouteDecision
     // 放回默认路由(ChatGPT/网关),body 不能再按 xAI 语义改写(挪 instructions / 剥
     // reasoning 会破坏默认上游的请求),transform 是否生效必须与路由是否捕获一致。
     const wireModel = providerContext.subagentRoute?.catalogModel
       ?? (typeof body.model === 'string' ? body.model : undefined);
-    if (!providerRoutingServesWireModel('xai', 'codex', wireModel)) return null;
+    if (!providerRoutingServesWireModel(xaiProviderId, 'codex', wireModel)) return null;
     let changed = false;
     let current = moveInstructionsIntoInput(body);
     if (current) changed = true;
@@ -1828,14 +1874,14 @@ function createXaiResponsesCompatTransform(): RequestTransform {
       }
     }
 
-    const withoutUnsupportedReasoning = stripUnsupportedXaiReasoning(current);
+    const withoutUnsupportedReasoning = stripUnsupportedXaiReasoning(current, xaiProviderId);
     if (withoutUnsupportedReasoning) {
       current = withoutUnsupportedReasoning;
       changed = true;
     }
 
     const withNormalizedInputItems = sanitizeXaiModelInputBody(current, {
-      supportsReasoning: supportsXaiReasoning(xaiRealModelId(current.model)),
+      supportsReasoning: supportsXaiReasoning(xaiRealModelId(current.model), xaiProviderId),
     });
     if (withNormalizedInputItems) {
       current = withNormalizedInputItems;
@@ -2723,6 +2769,9 @@ function resolveCodexCustomProviderRoutingDecision(
         ...(headerDelete.size > 0 ? { headerDelete: [...headerDelete] } : {}),
         ...(parsed.pathKind === 'images'
           ? {
+              ...(frozenRouting.imageModel ? {
+                transformRequestBody: createCodexImageModelRewrite(frozenRouting.imageModel),
+              } : {}),
               forwardLifecycle: createCodexImageGenerationForwardLifecycleObserver(
                 parsed.routeId,
                 imagePathClass,
@@ -3154,12 +3203,13 @@ function createCodexProxyHandle(
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);
-      // Image payloads (including JSON) retain their byte-for-byte bypass.
+      // Images skip chat transforms. Only a route-bound deployment alias may rewrite them.
       return path.kind !== 'not-custom-provider-route'
         && !(path.kind === 'route' && path.pathKind === 'responses');
     },
-    requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), ctx),
-    webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers))),
+    requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), ctx, isChatGptUpstreamBase),
+    // Accepted WebSockets route exclusively to CODEX_OAUTH_UPSTREAM (see resolver below).
+    webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), true),
     transformResponse: (ctx) => {
       const response = {
         contentType: ctx.responseHeaders['content-type'] ?? '',

@@ -1,5 +1,6 @@
 import { alignModelApiRoute, providerInterfaceModelRoute, hasDeclaredProviderInterface, providerWireProtocolForApi, providerBaseUrlForApi } from './providerInterfaceRoutes.js';
 import { nativeModelAgents } from './modelProtocol.js';
+import { isMimoTokenPlanProvider } from './mimoPresentation.js';
 import { resolveCatalogModelNativeApi, resolveModelNativeApi } from './modelRegistry.js';
 import { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime, canonicalProviderEndpoint } from './providerEndpointTemplate.js';
 import { PI_MODEL_APIS } from "./types.js";
@@ -666,8 +667,12 @@ export function buildUserProvider(
       : noAuth
         ? { method: "none" }
         : { method: "apiKey" },
-    // API key / 无鉴权代理都属于用户自备接口；通用 OAuth 可能订阅也可能按量，未声明前不猜。
-    ...(isOAuth ? {} : { access: { kind: "api" as const } }),
+    // Authentication and billing are independent: MiMo Token Plan uses an API key.
+    ...(isOAuth ? {} : {
+      access: !noAuth && isMimoTokenPlanProvider({ routing, models })
+        ? { kind: 'subscription' as const, product: 'MiMo Token Plan' }
+        : { kind: 'api' as const },
+    }),
     routing,
     models,
   };

@@ -160,7 +160,7 @@ describe('设置页与会话挂载读的是同一份磁盘事实', () => {
     expect(cindy.baseline.skill.name).toBe('teammate-guide');
     expect(cindy.baseline.pluginRoot).not.toContain('bot-cindy');
     const source = await fs.readFile(fresh.baseline.skill.filePath, 'utf8');
-    for (const tool of ['start_session_task', 'send_to_agent', 'create_teammate', 'get_app_default_model', 'set_app_default_model', 'save_teammate_skill', 'ghost_call'])
+    for (const tool of ['start_session_task', 'send_to_agent', 'create_teammate', 'get_app_default_model', 'set_app_default_model', 'save_teammate_skill', 'ghost_call', 'routine_list', 'schedule_set_pre_run_hook', 'schedule_notify_current_run'])
       expect(source).toContain(tool);
     expect(cindy.skills).toEqual([]);
     expect(fresh.skills).toEqual([]);

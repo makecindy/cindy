@@ -11,8 +11,11 @@ it('tracks public tool subjects and never claims a returned tool is still runnin
   expect(companionWorkingPhase([...input, row('tool_result', 'failure', { toolUseId: 't' })]).phase).toBe('reviewing-memory');
   expect(companionWorkingPhase([...input, row('tool_result', 'foreign result', { toolUseId: 'other' })]).phase).toBe('saving-memory');
 });
-it('hands the reply position to actual content or an interaction card', () => {
-  for (const final of [row('assistant', { text: 'Hello' }), row('assistant', 'Hello'), row('ask_user'), row('plan_review'), row('error')]) {
+it('keeps generation visible during assistant text and yields to required interactions', () => {
+  for (const text of [row('assistant', { text: 'Hello' }), row('assistant', 'Hello')]) {
+    expect(companionWorkingPhase([row('user'), text]).phase).toBe('replying');
+  }
+  for (const final of [row('ask_user'), row('plan_review'), row('error')]) {
     expect(companionWorkingPhase([row('user'), final]).phase).toBeNull();
   }
 });

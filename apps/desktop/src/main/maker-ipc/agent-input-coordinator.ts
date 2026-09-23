@@ -393,7 +393,10 @@ export interface AgentInputCoordinatorDeps {
    * 但**红横幅与 error 行落库都发生在决策之前**。用这个判定把那两件事先按住，
    * 决策落定后再放行（见 `isAutoResumeDeferred`）。
    */
-  isResumableTurnErrorCandidate?: (signals: InterruptedTurnErrorSignals) => boolean;
+  isResumableTurnErrorCandidate?: (
+    signals: InterruptedTurnErrorSignals,
+    item?: AgentInputQueuedMessage | null,
+  ) => boolean;
   /**
    * 一条被 `isAutoResumeDeferred` 按住的 error 最终**没能走到决策**（用户气泡持久化失败等），
    * host 必须把压住的 error 行补落，否则那次中断在历史里彻底消失（不变量 I2）。
@@ -1088,6 +1091,11 @@ export class AgentInputCoordinator {
 
   getProjection(sessionId: string): AgentInputProjection {
     return this.toProjection(sessionId, this.getState(sessionId));
+  }
+
+  /** Retry a failed current snapshot without rewriting successful or unrestored queues. */
+  retryQueueSnapshotPersistence(sessionId: string): void {
+    this.maybePersistQueueSnapshot(sessionId);
   }
 
   /**
@@ -3429,7 +3437,7 @@ export class AgentInputCoordinator {
         state.activeTurn = null;
         state.stickyError = null;
         const schedulerItem = active.item && isSchedulerOriginItem(active.item);
-        const resumableCandidate = this.isResumableTurnErrorCandidate(sessionId, message, signals);
+        const resumableCandidate = this.isResumableTurnErrorCandidate(sessionId, message, signals, active.item);
         const outcome = this.setActiveTurnRecovery(state, active.item, {
           allowSchedulerAutoResume: Boolean(schedulerItem && resumableCandidate),
         });
@@ -3490,7 +3498,7 @@ export class AgentInputCoordinator {
         // 所以先用纯判定问一句「这条有可能被接管吗」：有可能就**先不设 error** —— 否则接管
         // 成功时用户已经先看过一帧红横幅，违反「接管态为真时 error 必为 null」(不变量 I1,
         // greptile P1)。判定为假（认证失效、协议错等确定性失败）时照旧立刻呈现，不受影响。
-        const resumableCandidate = this.isResumableTurnErrorCandidate(sessionId, message, signals);
+        const resumableCandidate = this.isResumableTurnErrorCandidate(sessionId, message, signals, active.item);
         recordPendingTerminalEvent(active, {
           type: 'error',
           message,
@@ -5961,10 +5969,14 @@ export class AgentInputCoordinator {
     sessionId: string,
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+    item?: AgentInputQueuedMessage | null,
   ): boolean {
     if (!this.deps.isResumableTurnErrorCandidate) return false;
     try {
-      return this.deps.isResumableTurnErrorCandidate({ ...(signals ?? {}), message }) === true;
+      return this.deps.isResumableTurnErrorCandidate(
+        { ...(signals ?? {}), message },
+        item,
+      ) === true;
     } catch (err) {
       log.warn('isResumableTurnErrorCandidate failed', { sessionId, error: errorMessage(err) });
       return false;

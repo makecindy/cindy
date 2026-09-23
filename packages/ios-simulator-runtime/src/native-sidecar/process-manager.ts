@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { access, chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
+import { resolveIOSSimulatorDeveloperDirectory } from "./xcode.js";
 
 import {
   applyIOSSimulatorNativeCapabilityAdmission,
@@ -62,6 +63,8 @@ export interface IOSSimulatorNativeSidecarStartOptions {
     runtimeIdentifier: string;
     runtimeBuildVersion: string | null;
     xcodeBuild: string;
+    /** Host-inspected installation, retained for this binding and recovery. */
+    developerDirectory?: string;
     architecture: "arm64" | "x86_64";
   };
 }
@@ -165,6 +168,7 @@ interface RetiringSidecarOperation {
 interface IOSSimulatorNativeSidecarSandboxLaunchState {
   diagnostics: IOSSimulatorNativeSidecarSandboxDiagnostics;
   temporaryDirectory: string | null;
+  policy?: IOSSimulatorNativeSidecarSandboxPolicy;
 }
 
 export interface IOSSimulatorNativeSidecarProcessManagerOptions {
@@ -308,6 +312,7 @@ function sameStartIdentity(
     left.runtime.runtimeIdentifier === right.runtime.runtimeIdentifier &&
     left.runtime.runtimeBuildVersion === right.runtime.runtimeBuildVersion &&
     left.runtime.xcodeBuild === right.runtime.xcodeBuild &&
+    left.runtime.developerDirectory === right.runtime.developerDirectory &&
     left.runtime.architecture === right.runtime.architecture
   );
 }
@@ -1404,10 +1409,13 @@ export class IOSSimulatorNativeSidecarProcessManager {
     const environment = createIOSSimulatorNativeSidecarEnvironment(
       this.#options.environment ?? process.env,
     );
+    if (sandbox.policy?.developerDirectory) {
+      environment.DEVELOPER_DIR = sandbox.policy.developerDirectory;
+    }
     const plan =
-      this.#options.sandboxPolicy && sandbox.temporaryDirectory
+      sandbox.policy && sandbox.temporaryDirectory
         ? createIOSSimulatorNativeSidecarSandboxLaunchPlan({
-            policy: this.#options.sandboxPolicy,
+            policy: sandbox.policy,
             binaryPath: this.#options.binaryPath,
             simulatorUdid: input.simulatorUdid,
             architecture:
@@ -1436,14 +1444,30 @@ export class IOSSimulatorNativeSidecarProcessManager {
     input: IOSSimulatorNativeSidecarStartOptions,
     operation: PendingSidecarOperation,
   ): Promise<IOSSimulatorNativeSidecarSandboxLaunchState> {
-    const policy =
+    let policy =
       this.#options.sandboxPolicy ??
       createIOSSimulatorNativeSidecarSandboxPolicy({
         required: false,
         platform: process.platform,
       });
+    // Prefer the inspected installation over the ambient selection. Legacy
+    // callers without a captured directory resolve once outside the sandbox.
+    // Recovery retains that binding's toolchain and runtime identity. The helper
+    // cannot execute xcode-select, and its framework and device context must
+    // use the same selected installation. Fake channels need no Apple tools.
+    if (policy.platform === "darwin" && !this.#options.createChannel) {
+      policy = {
+        ...policy,
+        developerDirectory: await resolveIOSSimulatorDeveloperDirectory({
+          developerDirectory:
+            input.runtime?.developerDirectory ?? policy.developerDirectory,
+          environment: this.#options.environment ?? process.env,
+        }),
+      };
+    }
     if (!policy.required) {
       const state = {
+        policy,
         diagnostics: createIOSSimulatorNativeSidecarUnsandboxedDiagnostics(),
         temporaryDirectory: null,
       };
@@ -1500,7 +1524,7 @@ export class IOSSimulatorNativeSidecarProcessManager {
         args: [],
         environment: {},
       }).diagnostics;
-      const state = { diagnostics, temporaryDirectory };
+      const state = { diagnostics, temporaryDirectory, policy };
       this.#lastSandbox.set(input.instanceId, diagnostics);
       operation.sandbox = state;
       return state;
