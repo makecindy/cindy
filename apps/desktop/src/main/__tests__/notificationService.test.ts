@@ -763,6 +763,41 @@ describe('notificationService — channels 分发', () => {
 
 
 describe('teammate reply previews', () => {
+  it('drops a completion whose preview wait spans a later completed turn', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    const payload = {
+      sessionId: 'bot-main', title: 'Cindy', kind: 'done',
+      channels: { desktop: true, mobile: true, feishu: true },
+    };
+    const turnA = { id: 'signal:A', fallbackEventId: 'turn:100:200:signal-A', ended: true };
+    const turnB = { id: 'signal:B', fallbackEventId: 'turn:300:400:signal-B', ended: true };
+    let currentSignal = turnA;
+    getSessionNotificationTurnSignal.mockImplementation(() => currentSignal);
+    let releaseFirstDrain!: () => void;
+    drainPersistQueue.mockImplementationOnce(() => new Promise<void>(resolve => {
+      releaseFirstDrain = resolve;
+    }));
+    readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
+      teammateName: 'Cindy', eventId: 'turn:300:400',
+      ...(includeReply ? { reply: { clientId: 'final-B', text: 'Turn B answer' } } : {}),
+    }));
+
+    await invokeHandler(payload); // A is waiting for persistence.
+    currentSignal = turnB;
+    await invokeHandler(payload); // B completes and sends its own reply.
+    releaseFirstDrain();
+    await flushAsync();
+
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ body: 'Turn B answer' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ detail: 'Turn B answer' }));
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendText).toHaveBeenCalledWith('owner', 'Cindy\nTurn B answer');
+  });
+
   it('delivers a later turn when its preview fails after the previous turn was identified', async () => {
     const { initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('owner')));

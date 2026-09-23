@@ -261,6 +261,12 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           }
         }
         if (!isDataOwnerBroadcastScopeCurrent(ownerScope) || (postDrainPreviewReady && preview?.suppress)) return;
+        // Preview enrichment can outlive an entire later turn. Never send that
+        // later reply under the terminal signal captured for this IPC event.
+        if (kind === 'done') {
+          const currentSignal = getSessionNotificationTurnSignal(sessionId);
+          if (currentSignal?.id !== signal?.id || (currentSignal && !currentSignal.ended)) return;
+        }
         const teammate = !!preview?.teammateName;
         const notificationTitle = preview?.teammateName ?? safeTitle;
         const eventId = signal?.id ?? preview?.eventId;
