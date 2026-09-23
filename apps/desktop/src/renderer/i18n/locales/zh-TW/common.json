@@ -7732,8 +7732,41 @@
       "restarted": "已重新啟動，傳送訊息即可繼續。"
     },
     "backToChat": "返回對話",
-    "memoryRecovery": {
-      "action": "重新開啟記憶"
+    "memory": {
+      "title": "記憶",
+      "enabled": "開啟記憶",
+      "disabledHint": "已關閉，不會讀取或儲存記憶",
+      "search": "搜尋記憶",
+      "empty": "還沒有記憶",
+      "noResults": "找不到相關記憶",
+      "loadFailed": "無法讀取記憶",
+      "types": {
+        "user": "關於你",
+        "feedback": "你的要求",
+        "project": "專案",
+        "reference": "參考"
+      },
+      "today": "今天",
+      "updated": "{{time}} 更新",
+      "edit": "編輯",
+      "delete": "刪除",
+      "cancel": "取消",
+      "done": "完成",
+      "titleLabel": "標題",
+      "bodyLabel": "內容",
+      "tooLong": "內容太長，縮短後才會儲存",
+      "deleteTitle": "刪除這條記憶？",
+      "deleteDescription": "{{name}}之後不會再參考「{{title}}」。",
+      "deleted": "已刪除",
+      "deleteFailed": "刪除失敗",
+      "changedTitle": "{{name}}剛更新了這條記憶",
+      "useLatest": "使用最新內容",
+      "keepMine": "保留我的修改",
+      "saveFailed": "沒有儲存成功",
+      "unsavedTitle": "尚有未儲存的修改",
+      "unsavedDescription": "離開後會捨棄這次對記憶的修改。",
+      "discard": "捨棄修改",
+      "continueEditing": "繼續編輯"
     },
     "profileSaveFailed": "夥伴設定未能儲存，變更沒有生效。",
     "modelLabel": "模型",

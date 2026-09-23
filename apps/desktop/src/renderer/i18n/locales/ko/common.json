@@ -7732,8 +7732,41 @@
       "restarted": "다시 시작했습니다. 메시지를 보내 계속하세요."
     },
     "backToChat": "채팅으로 돌아가기",
-    "memoryRecovery": {
-      "action": "메모리 다시 켜기"
+    "memory": {
+      "title": "메모리",
+      "enabled": "메모리 사용",
+      "disabledHint": "꺼져 있어 메모리를 읽거나 저장하지 않습니다",
+      "search": "메모리 검색",
+      "empty": "아직 메모리가 없습니다",
+      "noResults": "일치하는 메모리가 없습니다",
+      "loadFailed": "메모리를 불러오지 못했습니다",
+      "types": {
+        "user": "나에 대해",
+        "feedback": "요청 사항",
+        "project": "프로젝트",
+        "reference": "참고"
+      },
+      "today": "오늘",
+      "updated": "{{time}} 업데이트",
+      "edit": "편집",
+      "delete": "삭제",
+      "cancel": "취소",
+      "done": "완료",
+      "titleLabel": "제목",
+      "bodyLabel": "내용",
+      "tooLong": "너무 깁니다. 줄이면 저장됩니다",
+      "deleteTitle": "이 메모리를 삭제할까요?",
+      "deleteDescription": "{{name}}은(는) 앞으로 “{{title}}”을(를) 참고하지 않습니다.",
+      "deleted": "삭제됨",
+      "deleteFailed": "삭제하지 못했습니다",
+      "changedTitle": "{{name}}이(가) 방금 이 메모리를 업데이트했습니다",
+      "useLatest": "최신 내용 사용",
+      "keepMine": "내 변경 유지",
+      "saveFailed": "저장하지 못했습니다",
+      "unsavedTitle": "저장하지 않은 변경 사항",
+      "unsavedDescription": "나가면 이 메모리에 대한 변경 사항이 삭제됩니다.",
+      "discard": "변경 사항 버리기",
+      "continueEditing": "계속 편집"
     },
     "profileSaveFailed": "동료 설정을 저장하지 못했습니다. 변경 사항은 적용되지 않았습니다.",
     "modelLabel": "모델",

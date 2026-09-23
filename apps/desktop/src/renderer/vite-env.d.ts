@@ -4756,6 +4756,20 @@ interface ElectronAPI {
         session: import('@/lib/ccAgent.types').Session;
       }>;
       history: (botId: string) => Promise<unknown[]>;
+      memory: {
+        list: (
+          botId: string,
+          query?: string,
+        ) => Promise<import('../shared/botMemory').BotMemorySummary[]>;
+        read: (
+          botId: string,
+          filename: string,
+        ) => Promise<import('../shared/botMemory').BotMemoryDetail>;
+        update: (
+          body: import('../shared/botMemory').BotMemoryUpdateInput,
+        ) => Promise<import('../shared/botMemory').BotMemoryDetail>;
+        delete: (body: import('../shared/botMemory').BotMemoryDeleteInput) => Promise<void>;
+      };
     };
     conversations: {
       search: (
