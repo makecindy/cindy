@@ -1244,8 +1244,8 @@ export function GhostPluginPage({
         attachments: existing?.attachments ?? [],
         quotes: existing?.quotes ?? [],
         browserComments: existing?.browserComments ?? [],
-        ...(ghost.manifest.command ? { pendingGhostId: ghost.manifest.id } : {}),
-        ...(usesHostCapabilityEntry ? { pendingHostCapabilityGhostId: ghost.manifest.id } : {}),
+        ...(ghost.manifest.command ? { pendingGhostId: installedGhostStoragePart(ghost) } : {}),
+        ...(usesHostCapabilityEntry ? { pendingHostCapabilityGhostId: installedGhostStoragePart(ghost) } : {}),
         focusAtEnd: existing?.focusAtEnd === true,
       });
       resetDraftWorkspaceTargets();

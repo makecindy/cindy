@@ -49,6 +49,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { findInstalledGhostByInstanceId } from '../../../shared/pluginIdentity';
 import {
   getGhostCardSnapshot,
   listSpawnCards,
@@ -888,7 +889,7 @@ export function GhostToolCard({
 }): ReactNode {
   const { t } = useTranslation();
   const installedGhosts = useInstalledGhosts();
-  const ghost = installedGhosts.find((g) => g.manifest.id === ghostId);
+  const ghost = findInstalledGhostByInstanceId(installedGhosts, ghostId);
   const name = ghost?.manifest.name ?? ghostId;
   const icon = ghost?.iconDataUrl ?? null;
   // 主机主题变量块(白名单 token → :root):注进 srcDoc 头部,意识可选用

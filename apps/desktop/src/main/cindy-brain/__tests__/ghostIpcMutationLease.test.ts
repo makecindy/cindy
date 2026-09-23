@@ -61,7 +61,8 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     const outerStart = source.indexOf('export async function uninstallGhostAndCleanup');
     expect(outerStart).toBeGreaterThan(-1);
     const outer = source.slice(outerStart, source.indexOf('\n}', outerStart));
-    expect(outer).toContain('withGhostInstallLock(');
+    expect(outer).toContain('withGhostInstallLock(identity.ghostId');
+    expect(outer).toContain('pluginStoragePart(identity)');
     const start = source.indexOf('async function uninstallGhostAndCleanupLocked');
     expect(start).toBeGreaterThan(-1);
     const fn = source.slice(start, source.indexOf('\n}', start));

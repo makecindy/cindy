@@ -27,6 +27,8 @@ import type { Node as PMNode } from '@tiptap/pm/model';
 import {
   findGhostByCommand,
   findGhostByCommandIncludingDisabled,
+  ghostCommandTokenLength,
+  parseGhostCommandToken,
 } from '@/cindy-brain/ghostCommand';
 import type { InstalledGhost } from '../../../shared/ghost';
 
@@ -40,9 +42,6 @@ interface GhostCommandPluginState {
 
 /** 触发符字符集——与 ChatInput 的 GHOST_SIGIL_CHARS / COMMAND_RE 同一套。 */
 const SIGILS = new Set(['$', '＄', '¥', '￥']);
-
-/** 指令词形状:紧跟触发符的连续非空白,≤32 字符(同 COMMAND_RE)。 */
-const WORD_RE = /^(\S{1,32})/;
 
 /**
  * 头像 data URL 白名单形状:只接受 base64 图片,其它一律回退幽灵图标。
@@ -91,11 +90,11 @@ export function findGhostCommandMatch(
         if (first) {
           const i = first.index;
           if (!SIGILS.has(text[i])) return null;
-          const word = WORD_RE.exec(text.slice(i + 1))?.[1];
+          const token = parseGhostCommandToken(text.slice(i));
           // `$` 后直接空白 / 节点结束(相邻 text 节点会被 ProseMirror 合并,
           // 词不可能续在下个节点里)→ 无指令词。
-          if (!word) return null;
-          const after = i + 1 + word.length;
+          if (!token) return null;
+          const after = i + 1 + ghostCommandTokenLength(token);
           if (after < text.length) {
             // 命中 32 字符上限但 run 未断 → 超长,发送期同样不匹配。
             if (!/\s/.test(text[after])) return null;
@@ -106,8 +105,8 @@ export function findGhostCommandMatch(
             if (next && next.type.name !== 'hardBreak') return null;
           }
           const ghost = options.includeDisabled
-            ? findGhostByCommandIncludingDisabled(ghosts, word)
-            : findGhostByCommand(ghosts, word);
+            ? findGhostByCommandIncludingDisabled(ghosts, token.word, token.namespace)
+            : findGhostByCommand(ghosts, token.word, token.namespace);
           if (!ghost) return null;
           return { from: childPos + i, to: childPos + after, ghost };
         }

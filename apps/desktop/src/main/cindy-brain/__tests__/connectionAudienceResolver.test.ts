@@ -489,6 +489,39 @@ describe('installed Plugin Connection audience resolver', () => {
     expect(resolver.resolve('mivo-canvas', identity)).toBeNull();
   });
 
+  it('resolves a namespaced instance id to the plugin slug audience', () => {
+    const readInstalledManifestIdentity = vi.fn((id: string) =>
+      id === '_ns__acme__plugin-a'
+        ? {
+            manifest,
+            rawManifestSha256: ghostManifestDigest(manifest),
+            legacyManifestDigest: ghostManifestDigest(manifest),
+            legacyManifestDigests: [ghostManifestDigest(manifest)],
+          }
+        : null,
+    );
+    const readMarketInstallation = vi.fn((id: string) =>
+      id === '_ns__acme__plugin-a'
+        ? { kind: 'found' as const, record: { ...marketInstallation, namespace: 'acme' } }
+        : { kind: 'absent' as const },
+    );
+    const readInstallOrigin = vi.fn(() => 'manual' as const);
+    const resolver = loadConnectionAudienceResolver({
+      readInstalledManifestIdentity,
+      readMarketInstallation,
+      readInstallOrigin,
+    });
+    expect(resolver.resolve('_ns__acme__plugin-a', identity)).toEqual({
+      membershipId: 'membership-1',
+      audience: 'org-example:plugin-a',
+      pluginSlug: 'plugin-a',
+      allowedHosts: ['service-a.x.test'],
+    });
+    expect(readInstalledManifestIdentity).toHaveBeenCalledWith('_ns__acme__plugin-a');
+    expect(readMarketInstallation).toHaveBeenCalledWith('_ns__acme__plugin-a');
+    expect(readInstallOrigin).toHaveBeenCalledWith('_ns__acme__plugin-a');
+  });
+
   it('requires the managed secret target to match a declared exact host', () => {
     const resolver = loadConnectionAudienceResolver({
       ...resolverOptions(),

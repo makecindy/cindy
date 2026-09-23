@@ -11,17 +11,27 @@ import {
   COMMAND_TOOLS_JSON_MAX_BYTES,
   commandDirectiveSegments,
   expandGhostCommand,
+  findGhostByCommand,
   mentionDirectiveSegments,
+  formatGhostCommandInsertion,
+  formatGhostCommandToken,
+  parseGhostCommandToken,
   parseGhostCommandWord,
   splitGhostDirective,
 } from '../cindy-brain/ghostCommand';
 import type { InstalledGhost } from '../../shared/ghost';
 
-function ghost(command: string | undefined, enabled = true): InstalledGhost {
+function ghost(
+  command: string | undefined,
+  enabled = true,
+  opts: { id?: string; namespace?: string | null } = {},
+): InstalledGhost {
+  const id = opts.id ?? 'art';
+  const namespace = opts.namespace;
   return {
     manifest: {
       schemaVersion: 2,
-      id: 'art',
+      id,
       name: '画图',
       version: '1.0.0',
       kind: 'chip',
@@ -29,8 +39,9 @@ function ghost(command: string | undefined, enabled = true): InstalledGhost {
       tools: [{ name: 'gen_image', description: 'x' }],
       ...(command !== undefined ? { command } : {}),
     },
-    dir: '/fake',
+    dir: namespace ? `/fake/_ns/${namespace}/${id}` : '/fake',
     enabled,
+    ...(namespace !== undefined ? { namespace } : {}),
   } as InstalledGhost;
 }
 
@@ -43,12 +54,30 @@ describe('parseGhostCommandWord', () => {
     expect(parseGhostCommandWord('$ 画图')).toBeNull();
   });
 
+  it('optional /namespace qualifier is not part of the command word', () => {
+    expect(parseGhostCommandWord('$draw/acme a cat')).toBe('draw');
+    expect(parseGhostCommandToken('$draw/acme a cat')).toEqual({ word: 'draw', namespace: 'acme' });
+    expect(parseGhostCommandToken('$画图/acme 一只猫')).toEqual({ word: '画图', namespace: 'acme' });
+    expect(parseGhostCommandToken('$draw')).toEqual({ word: 'draw', namespace: null });
+    expect(parseGhostCommandToken('$draw/')).toBeNull();
+    expect(parseGhostCommandToken('$draw/ACME')).toBeNull();
+  });
+
   it('全角变体触发符同权(中文输入法 Shift+4 产出 ￥ 不必切半角)', () => {
     expect(parseGhostCommandWord('￥画图 一只猫')).toBe('画图'); // U+FFE5 全角人民币
     expect(parseGhostCommandWord('＄画图 一只猫')).toBe('画图'); // U+FF04 全角美元
     expect(parseGhostCommandWord('¥draw a cat')).toBe('draw'); // U+00A5 半角 ¥
     expect(parseGhostCommandWord('价格是 ￥100')).toBeNull(); // 非开头不触发
     expect(parseGhostCommandWord('￥ 画图')).toBeNull(); // 触发符后不能有空白
+  });
+});
+
+describe('formatGhostCommandToken', () => {
+  it('qualifies organization instances and leaves root unqualified', () => {
+    expect(formatGhostCommandToken(ghost('draw'))).toBe('draw');
+    expect(formatGhostCommandToken(ghost('draw', true, { namespace: null }))).toBe('draw');
+    expect(formatGhostCommandToken(ghost('draw', true, { namespace: 'acme' }))).toBe('draw/acme');
+    expect(formatGhostCommandInsertion(ghost('draw', true, { namespace: 'acme' }))).toBe('$draw/acme');
   });
 });
 
@@ -83,6 +112,21 @@ describe('expandGhostCommand', () => {
 
   it('未提及意识的普通消息零改动', () => {
     expect(expandGhostCommand('画一张猫', [ghost('画图')])).toBe('画一张猫');
+  });
+
+  it('$draw/acme selects the namespaced instance; bare $draw stays unique-or-ambiguous', () => {
+    const root = ghost('draw', true, { id: 'art', namespace: null });
+    const org = ghost('draw', true, { id: 'art', namespace: 'acme' });
+    const qualified = expandGhostCommand('$draw/acme a cat', [root, org]);
+    expect(qualified).toContain('[插件指令]');
+    expect(qualified).toContain('id: _ns__acme__art');
+    const split = splitGhostDirective(qualified);
+    expect(split?.directive).toMatchObject({ kind: 'command', ghostId: '_ns__acme__art', command: 'draw' });
+    expect(findGhostByCommand([root, org], 'draw', 'acme')).toBe(org);
+    expect(findGhostByCommand([root, org], 'draw')).toBeNull();
+    const ambiguous = expandGhostCommand('$draw a cat', [root, org]);
+    expect(ambiguous).toContain('存在多个实例');
+    expect(expandGhostCommand('$draw/globex a cat', [root, org])).toBe('$draw/globex a cat');
   });
 });
 

@@ -47,6 +47,7 @@ import {
   type HostCapabilityDirectiveDisplay,
 } from '@/cindy-brain/hostCapabilityInvocation';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { findInstalledGhostByInstanceId } from '../../../shared/pluginIdentity';
 
 /**
  * 「提及 → 兑现」关联(方案 2):Map<userMessageClientId, Set<被召唤 ghostId>>。
@@ -263,8 +264,10 @@ export function GhostSummonCard({
   // 头像按 ghostId 实时查已装清单:消息文本里只固化 id/名字,头像跟随当前
   // 安装状态(意识被卸下后自然回退幽灵图标,不缓存失效数据)。
   const installedGhosts = useInstalledGhosts();
+  const ghostByInstanceId = (ghostId: string) =>
+    findInstalledGhostByInstanceId(installedGhosts, ghostId);
   const iconByGhostId = (ghostId: string): string | null =>
-    installedGhosts.find((g) => g.manifest.id === ghostId)?.iconDataUrl ?? null;
+    ghostByInstanceId(ghostId)?.iconDataUrl ?? null;
   // 「提及 → 兑现」:本条消息触发的那一轮,AI 真召唤了哪些意识。
   const fulfillment = useContext(GhostFulfillmentContext);
   const fulfilledIds = messageClientId ? fulfillment.get(messageClientId) : undefined;
@@ -341,7 +344,7 @@ export function GhostSummonCard({
       : directive.kind === 'mention'
         ? fulfilled
         : directive.ghostIds.map((id) => {
-            const g = installedGhosts.find((x) => x.manifest.id === id);
+            const g = ghostByInstanceId(id);
             return {
               name: g?.manifest.name ?? id,
               ghostId: id,
@@ -352,7 +355,7 @@ export function GhostSummonCard({
   if (cardGhosts.length === 0) return null;
   // 命中已装意识时取实时安装态(头像/版本号);已卸下则都不显示,
   // 与消息文本里固化的 id/名字解耦(不缓存失效数据)。
-  const installedGhost = installedGhosts.find((g) => g.manifest.id === cardGhosts[0].ghostId);
+  const installedGhost = ghostByInstanceId(cardGhosts[0].ghostId);
   // 版本号统一 v 前缀展示(身份卡 version 是自由字符串,作者已带 v 时不重复);
   // 多意识并列时不展示(版本归属不明)。
   const versionLabel =

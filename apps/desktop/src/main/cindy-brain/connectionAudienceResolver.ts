@@ -11,6 +11,7 @@
  */
 import { isValidGhostId, isValidGhostNetworkHostPattern } from '../../shared/ghost.js';
 import type { GhostManifest } from '../../shared/ghost.js';
+import { parsePluginInstanceId } from '../../shared/pluginIdentity.js';
 import type { PluginMarketInstallationRecord } from '../plugin-market/ledger.js';
 import {
   verifyInstalledMarketManifest,
@@ -108,17 +109,19 @@ export function loadConnectionAudienceResolver(
 ): ConnectionAudienceResolver {
   return {
     resolve(ghostId, identity) {
+      const pluginSlug = parsePluginInstanceId(ghostId)?.ghostId ?? ghostId;
       const reject = (reason: string): null => {
         options.log?.warn('ghost Connection audience resolution rejected', {
           ghostId,
+          pluginSlug,
           reason,
         });
         return null;
       };
-      if (!isValidGhostId(ghostId) || !PLUGIN_SLUG_RE.test(ghostId)) {
+      if (!isValidGhostId(pluginSlug) || !PLUGIN_SLUG_RE.test(pluginSlug)) {
         return reject('plugin-id-invalid');
       }
-      if (isReservedConnectionPluginSlug(ghostId)) {
+      if (isReservedConnectionPluginSlug(pluginSlug)) {
         return reject('plugin-id-reserved');
       }
       if (identity.membershipKind !== 'org') return reject('membership-not-org');
@@ -131,16 +134,17 @@ export function loadConnectionAudienceResolver(
       const finish = (manifest: GhostManifest): ConnectionAudienceResolution | null => {
         const allowedHosts = declaredOidcTokenHosts(manifest);
         if (allowedHosts.length === 0) return reject('oidc-host-declaration-missing');
-        const audience = `${identity.orgSlug}:${ghostId}`;
+        const audience = `${identity.orgSlug}:${pluginSlug}`;
         if (audience.length > 64) return reject('audience-too-long');
         options.log?.info('ghost Connection audience resolved', {
           ghostId,
+          pluginSlug,
           allowedHostCount: allowedHosts.length,
         });
         return {
           membershipId: identity.membershipId,
           audience,
-          pluginSlug: ghostId,
+          pluginSlug,
           allowedHosts,
         };
       };
@@ -160,14 +164,14 @@ export function loadConnectionAudienceResolver(
         const prefixLookup = options.lookupOrganizationPrefix?.(identity.orgId);
         const prefix =
           prefixLookup && prefixLookup.kind === 'known' ? prefixLookup.pluginPrefix : null;
-        if (prefix && PLUGIN_PREFIX_PATTERN.test(prefix) && ghostId.startsWith(`${prefix}-`)) {
+        if (prefix && PLUGIN_PREFIX_PATTERN.test(prefix) && pluginSlug.startsWith(`${prefix}-`)) {
           const approvedSha = options.readApprovedPackageSha256?.(ghostId) ?? null;
           if (!approvedSha || !/^[a-f0-9]{64}$/.test(approvedSha)) {
             return reject('forge-package-sha-missing');
           }
           const identitySnapshot = readManifestIdentity();
           if (!identitySnapshot) return reject('plugin-not-installed');
-          if (identitySnapshot.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+          if (identitySnapshot.manifest.id !== pluginSlug) return reject('plugin-id-mismatch');
           return finish(identitySnapshot.manifest);
         }
       }
@@ -192,10 +196,10 @@ export function loadConnectionAudienceResolver(
       if (!installation) {
         // Named exception after the org gate and before market-missing reject.
         // Any persisted market row, including installed:false, still takes digest.
-        if (ghostId === LOCAL_OIDC_ALLOWLIST_GHOST_ID) {
+        if (pluginSlug === LOCAL_OIDC_ALLOWLIST_GHOST_ID) {
           const allowlisted = readManifestIdentity();
           if (!allowlisted) return reject('plugin-not-installed');
-          if (allowlisted.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+          if (allowlisted.manifest.id !== pluginSlug) return reject('plugin-id-mismatch');
           const allowlistedHosts = declaredOidcTokenHosts(allowlisted.manifest);
           if (
             allowlistedHosts.length !== 1 ||
@@ -226,7 +230,7 @@ export function loadConnectionAudienceResolver(
         return reject('installed-manifest-read-failed');
       }
       if (!identitySnapshot) return reject('plugin-not-installed');
-      if (identitySnapshot.manifest.id !== ghostId) return reject('plugin-id-mismatch');
+      if (identitySnapshot.manifest.id !== pluginSlug) return reject('plugin-id-mismatch');
       if (!verifyInstalledMarketManifest(installation, identitySnapshot)) {
         return reject('installed-manifest-identity-mismatch');
       }

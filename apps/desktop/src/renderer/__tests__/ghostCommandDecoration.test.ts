@@ -49,7 +49,7 @@ const doc = (...paras: PMNode[]) => schema.nodes.doc.create(null, paras);
 
 function makeGhost(
   command: string,
-  opts: { enabled?: boolean; icon?: string; id?: string } = {},
+  opts: { enabled?: boolean; icon?: string; id?: string; namespace?: string | null } = {},
 ): InstalledGhost {
   const manifest: GhostManifest = {
     schemaVersion: 2,
@@ -66,6 +66,7 @@ function makeGhost(
     enabled: opts.enabled ?? true,
     approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
     ...(opts.icon ? { iconDataUrl: opts.icon } : {}),
+    ...(opts.namespace !== undefined ? { namespace: opts.namespace } : {}),
   };
 }
 
@@ -77,6 +78,15 @@ describe('findGhostCommandMatch — 位置语义与发送期同源', () => {
     // 段落内容从 pos 1 起:$ 在 1,词 2 字,to = 1 + 3
     expect(m).toMatchObject({ from: 1, to: 4 });
     expect(m?.ghost.manifest.id).toBe('ghost-画图');
+  });
+
+  it('`$draw/acme` covers the qualifier and selects that namespace', () => {
+    const root = makeGhost('draw', { id: 'art', namespace: null });
+    const org = makeGhost('draw', { id: 'art', namespace: 'acme' });
+    const m = findGhostCommandMatch(doc(p(txt('$draw/acme a cat'))), [root, org]);
+    expect(m).toMatchObject({ from: 1, to: 11 });
+    expect(m?.ghost.namespace).toBe('acme');
+    expect(findGhostCommandMatch(doc(p(txt('$draw a cat'))), [root, org])).toBeNull();
   });
 
   it('全角触发符(￥/＄)同权命中', () => {

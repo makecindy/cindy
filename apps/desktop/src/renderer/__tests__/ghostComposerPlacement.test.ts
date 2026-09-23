@@ -87,6 +87,15 @@ describe('placeGhostAtComposerStart', () => {
     expect(editor.state.selection.to).toBe(editor.state.doc.content.size - 1);
   });
 
+  it('qualifies a namespaced Plugin command', () => {
+    const editor = editorWith('keep going');
+    const selected = ghost('draw', 'art');
+    selected.namespace = 'acme';
+    selected.dir = '/tmp/_ns/acme/art';
+    expect(placeGhostAtComposerStart(editor, selected, [selected])).toBe(true);
+    expect(editor.getText()).toBe('$draw/acme keep going');
+  });
+
   it('replaces an existing Plugin command instead of stacking commands', () => {
     const current = ghost('mivo');
     const selected = ghost('feishu');
@@ -280,6 +289,18 @@ describe('placeHostCapabilityAtComposerStart', () => {
     });
     expect(editor.getText()).toBe(' 帮我调试登录流程');
     expect(editor.state.selection.to).toBe(editor.state.doc.content.size - 1);
+  });
+
+  it('stores a namespaced Host-capability pluginId as the physical instance id', () => {
+    const selected = hostCapabilityGhost();
+    selected.namespace = 'acme';
+    selected.dir = '/tmp/_ns/acme/ios-simulator';
+    const editor = editorWith('帮我调试登录流程');
+
+    expect(placeHostCapabilityAtComposerStart(editor, selected, [selected])).toBe(true);
+    expect(findHostCapabilityChipMatch(editor.state.doc)?.attrs.pluginId).toBe(
+      '_ns__acme__ios-simulator',
+    );
   });
 
   it('replaces an existing command and keeps a single invocation at message start', () => {

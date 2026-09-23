@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  NS_LEDGER_FILE,
   PluginMarketLedger,
   type PluginMarketInstallationRecord,
 } from '../ledger';
@@ -507,4 +508,128 @@ describe('PluginMarketLedger', () => {
     const custom = JSON.parse(fs.readFileSync(customPath, 'utf8'));
     expect(Object.keys(custom.installations)).toEqual(['cindy-custom']);
   });
+
+  it('keeps same-name root and organization rows and writes the org row to the ns sidecar', () => {
+    const { filePath, ledger } = harness();
+    ledger.upsertInstallation(record({ ghostId: 'helper', namespace: null, pluginId: `c${'a'.repeat(24)}` }));
+    ledger.upsertInstallation(
+      record({
+        ghostId: 'helper',
+        namespace: 'acme',
+        pluginId: `c${'b'.repeat(24)}`,
+        scope: 'organization',
+        organizationId: 'org_1',
+      }),
+    );
+    expect(ledger.installationForPlugin({ ghostId: 'helper', namespace: null })).toMatchObject({
+      namespace: null,
+      pluginId: `c${'a'.repeat(24)}`,
+    });
+    expect(ledger.installationForPlugin({ ghostId: 'helper', namespace: 'acme' })).toMatchObject({
+      namespace: 'acme',
+      pluginId: `c${'b'.repeat(24)}`,
+    });
+    expect(ledger.installationForGhost('helper')).toBeNull();
+    expect(ledger.installationsForGhost('helper')).toHaveLength(2);
+    expect(ledger.installationForLookup('helper')).toMatchObject({ namespace: null });
+    expect(ledger.installationForLookup('_ns__acme__helper')).toMatchObject({ namespace: 'acme' });
+    const main = JSON.parse(fs.readFileSync(filePath, 'utf8')) as {
+      installations: Record<string, { namespace?: string | null }>;
+    };
+    expect(main.installations.helper).toMatchObject({ namespace: null });
+    expect(main.installations.helper).not.toHaveProperty('namespace', 'acme');
+    const sidecar = JSON.parse(
+      fs.readFileSync(path.join(path.dirname(filePath), NS_LEDGER_FILE), 'utf8'),
+    ) as { installations: Record<string, { namespace?: string | null; ghostId: string }> };
+    expect(sidecar.installations['_ns__acme__helper']).toMatchObject({
+      ghostId: 'helper',
+      namespace: 'acme',
+    });
+  });
+
+  it('skips an uninstalled public row when a unique live organization row remains', () => {
+    const { ledger } = harness();
+    ledger.upsertInstallation(
+      record({
+        ghostId: 'helper',
+        namespace: null,
+        pluginId: `c${'a'.repeat(24)}`,
+        installed: false,
+      }),
+    );
+    ledger.upsertInstallation(
+      record({
+        ghostId: 'helper',
+        namespace: 'acme',
+        pluginId: `c${'b'.repeat(24)}`,
+        scope: 'organization',
+        organizationId: 'org_1',
+      }),
+    );
+    expect(ledger.installationForLookup('helper')).toMatchObject({
+      namespace: 'acme',
+      installed: true,
+    });
+    expect(ledger.lookupInstallationForOidc('helper')).toMatchObject({
+      kind: 'found',
+      record: { namespace: 'acme', installed: true },
+    });
+  });
+
+  it('still returns the public tombstone when nothing remains installed', () => {
+    const { ledger } = harness();
+    ledger.upsertInstallation(
+      record({ ghostId: 'helper', namespace: null, installed: false }),
+    );
+    expect(ledger.installationForLookup('helper')).toMatchObject({
+      namespace: null,
+      installed: false,
+    });
+  });
+
+  it('keeps a unique organization row in the main ledger keyed by ghostId', () => {
+    const { filePath, ledger } = harness();
+    ledger.upsertInstallation(record({ ghostId: 'xd-feishu', namespace: 'xd' }));
+    expect(ledger.installationForGhost('xd-feishu')).toMatchObject({ namespace: 'xd' });
+    const main = JSON.parse(fs.readFileSync(filePath, 'utf8')) as {
+      installations: Record<string, { namespace?: string | null }>;
+    };
+    expect(main.installations['xd-feishu']).toMatchObject({ namespace: 'xd' });
+    expect(fs.existsSync(path.join(path.dirname(filePath), NS_LEDGER_FILE))).toBe(true);
+    const sidecar = JSON.parse(
+      fs.readFileSync(path.join(path.dirname(filePath), NS_LEDGER_FILE), 'utf8'),
+    ) as { installations: Record<string, unknown> };
+    expect(sidecar.installations).toEqual({});
+  });
+
+  it("does not wipe namespaced org rows when ns-ledger JSON is unreadable", () => {
+    const { filePath, ledger } = harness();
+    ledger.upsertInstallation(
+      record({ ghostId: "helper", namespace: null, pluginId: `c${"a".repeat(24)}` }),
+    );
+    ledger.upsertInstallation(
+      record({
+        ghostId: "helper",
+        namespace: "acme",
+        pluginId: `c${"b".repeat(24)}`,
+        scope: "organization",
+        organizationId: "org_1",
+      }),
+    );
+    const nsPath = path.join(path.dirname(filePath), NS_LEDGER_FILE);
+    const before = fs.readFileSync(nsPath, "utf8");
+    fs.writeFileSync(nsPath, "{not-json");
+    expect(() => ledger.read()).toThrow(/namespace ledger is unreadable/i);
+    expect(() =>
+      ledger.upsertInstallation(record({ ghostId: "other", pluginId: `c${"c".repeat(24)}` })),
+    ).toThrow(/namespace ledger is unreadable/i);
+    expect(fs.readFileSync(nsPath, "utf8")).toBe("{not-json");
+    expect(ledger.lookupInstallationForOidc("helper")).toEqual({ kind: "invalid" });
+    fs.writeFileSync(nsPath, before);
+    expect(ledger.installationForPlugin({ ghostId: "helper", namespace: "acme" })).toMatchObject({
+      namespace: "acme",
+      pluginId: `c${"b".repeat(24)}`,
+    });
+  });
+
 });

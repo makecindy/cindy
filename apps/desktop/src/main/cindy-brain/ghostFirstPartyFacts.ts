@@ -156,7 +156,7 @@ export function loadGhostFirstPartyFactsLoader(
         marketRecord = overrides.marketRecord;
       } else {
         try {
-          const installation = options.readMarketInstallation(logicalGhostId);
+          const installation = options.readMarketInstallation(ghostId);
           marketRecord = installation
             ? toMarketRecord(installation, options.readApprovedPackageSha256(installRelId))
             : null;
