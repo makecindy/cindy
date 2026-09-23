@@ -36,6 +36,7 @@ export type GhostSetupEnsureResult =
         | 'GHOST_NOT_FOUND'
         | 'GHOST_ASLEEP'
         | 'GHOST_DISABLED_IN_WORKDIR'
+        | 'GHOST_AMBIGUOUS'
         | 'TOOL_NOT_FOUND';
       message: string;
       setup?: GhostSetupAssessment;
@@ -46,8 +47,13 @@ export type GhostSetupTargetValidation =
   | {
       ok: false;
       errorCode:
-        'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'TOOL_NOT_FOUND';
+        | 'GHOST_NOT_FOUND'
+        | 'GHOST_ASLEEP'
+        | 'GHOST_DISABLED_IN_WORKDIR'
+        | 'GHOST_AMBIGUOUS'
+        | 'TOOL_NOT_FOUND';
       message: string;
+      candidates?: Array<{ ghostId: string; namespace: string | null }>;
     };
 
 export type GhostSetupActionResult =

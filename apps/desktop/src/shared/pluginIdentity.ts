@@ -1,6 +1,10 @@
 import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 import { isValidGhostId } from './ghost.js';
 
+function isGhostIdValue(id: string): boolean {
+  return isValidGhostId(id);
+}
+
 /**
  * A missing namespace is an old wire protocol state, not the root namespace.
  * Once an installation is committed, callers must use a known identity with
@@ -94,10 +98,9 @@ export function knownDeliveryNamespacesDiffer(
 }
 
 export function sameDeliveryNamespaceState(left: object, right: object): boolean {
-  const leftHas = hasDeliveryNamespace(left);
-  const rightHas = hasDeliveryNamespace(right);
-  if (leftHas !== rightHas) return false;
-  return !leftHas || left.namespace === right.namespace;
+  if (hasDeliveryNamespace(left) !== hasDeliveryNamespace(right)) return false;
+  if (!hasDeliveryNamespace(left) || !hasDeliveryNamespace(right)) return true;
+  return left.namespace === right.namespace;
 }
 
 export function downloadIdentityMatchesPlugin(
@@ -118,7 +121,7 @@ export function downloadIdentityMatchesPlugin(
     download.pluginId !== undefined ||
     download.releaseId !== undefined ||
     download.ghostId !== undefined ||
-    hasDeliveryNamespace(download);
+    Object.prototype.hasOwnProperty.call(download, 'namespace');
   if (!hasDownloadIdentity) return true;
   return (
     download.pluginId === plugin.id &&
@@ -138,7 +141,7 @@ export function pluginInstallRelId(identity: PluginLogicalIdentity): string {
 }
 
 export function parsePluginInstallRelId(value: string): PluginLogicalIdentity | null {
-  if (isValidGhostId(value)) return { namespace: null, ghostId: value };
+  if (isGhostIdValue(value)) return { namespace: null, ghostId: value };
   const parts = value.split('/');
   if (
     parts.length === 3 &&
@@ -167,7 +170,7 @@ export function pluginStoragePart(identity: PluginLogicalIdentity): string {
 }
 
 export function parsePluginStoragePart(value: string): PluginLogicalIdentity | null {
-  if (isValidGhostId(value)) return { namespace: null, ghostId: value };
+  if (isGhostIdValue(value)) return { namespace: null, ghostId: value };
   const prefix = `${PLUGIN_NS_INSTALL_ROOT}__`;
   if (!value.startsWith(prefix)) return null;
   const rest = value.slice(prefix.length);
