@@ -900,46 +900,50 @@ fn inherit_parent_acl(handle: HANDLE) -> Result<()> {
     Ok(())
 }
 
-fn extra_code_descendants(root: &Path, captured: &[(PathBuf, String)]) -> Result<Vec<PathBuf>> {
+fn pin_extra_code_descendants(root: &Path, captured: &[(PathBuf, String)]) -> Result<Vec<Handle>> {
     let mut extras = Vec::new();
-    let mut pending = vec![root.to_owned()];
-    while let Some(path) = pending.pop() {
-        let metadata = std::fs::symlink_metadata(&path)?;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return denied();
-        }
-        if metadata.is_dir() {
-            for item in std::fs::read_dir(&path)? {
-                let child = item?.path();
-                let name = child
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .ok_or_else(error)?;
-                if is_excluded_data_name(name) {
-                    continue;
-                }
-                pending.push(child);
+    pin_extra_tree(&mut extras, root.to_owned(), root, captured)?;
+    Ok(extras)
+}
+
+fn pin_extra_tree(
+    extras: &mut Vec<Handle>,
+    path: PathBuf,
+    root: &Path,
+    captured: &[(PathBuf, String)],
+) -> Result<()> {
+    // Open while parents still have CODE_DACL. Reopening by path after restore
+    // would follow a junction swapped into an unpinned extra directory.
+    let handle = open_for_acl(&path)?;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(handle.0, &mut info) } == 0
+        || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return denied();
+    }
+    let captured_path = captured
+        .iter()
+        .any(|(existing, _)| same_listed_path(existing, &path) || same_file(existing, &path));
+    let keep = !captured_path && !same_listed_path(root, &path);
+    let raw = handle.0;
+    if keep {
+        extras.push(handle);
+    }
+    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        for (name, attributes) in directory_children(raw)? {
+            if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return denied();
+            }
+            if is_excluded_data_name(&name) {
+                continue;
+            }
+            pin_extra_tree(extras, path.join(name), root, captured)?;
+            if extras.len() > 100_000 {
+                return denied();
             }
         }
-        let captured_path = captured
-            .iter()
-            .any(|(existing, _)| same_listed_path(existing, &path) || same_file(existing, &path));
-        if !captured_path && !same_listed_path(root, &path) {
-            extras.push(path);
-        }
-        if extras.len() + pending.len() > 100_000 {
-            return denied();
-        }
     }
-    // Shallowest first: a nested extra must inherit from a parent that has
-    // already dropped CODE_DACL, not from another still-protected extra.
-    extras.sort_by(|a, b| {
-        a.components()
-            .count()
-            .cmp(&b.components().count())
-            .then_with(|| a.as_os_str().cmp(b.as_os_str()))
-    });
-    Ok(extras)
+    Ok(())
 }
 
 fn secure_code_with_descriptor(path: &Path, descriptor: &str) -> Result<()> {
@@ -1253,24 +1257,29 @@ impl AclSnapshot {
                 pinned.push((path, handle, descriptor));
             }
         }
+        // Pin updater-created descendants before any captured parent becomes
+        // user-writable. CreateFile follows intermediate junctions; a handle
+        // taken while CODE_DACL still denies replacement is the object inherit
+        // must change.
+        let extra_pins = if let Some(root) = root {
+            if root.exists() {
+                pin_extra_code_descendants(root, &self.paths)?
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
         pinned.sort_by(|(a, _, _), (b, _, _)| restore_depth(a, b));
         for (_, handle, descriptor) in &pinned {
             apply_descriptor(handle.0, descriptor)?;
         }
-        // Updater-created files are outside the first-install snapshot and keep
-        // the protected CODE_DACL. After snapshot paths are restored, re-inherit
-        // those extra descendants from their restored parent so a standard user
-        // can update or delete the tree after the service is removed.
-        if let Some(root) = root {
-            if root.exists() {
-                for path in extra_code_descendants(root, &self.paths)? {
-                    if allowed(&path) && path.exists() {
-                        let handle = open_for_acl(&path)?;
-                        inherit_parent_acl(handle.0)?;
-                    }
-                }
-            }
+        // Extra handles were opened parent-first. Inherit in that order so a
+        // nested extra sees a parent that has already dropped CODE_DACL.
+        for handle in &extra_pins {
+            inherit_parent_acl(handle.0)?;
         }
+        drop(extra_pins);
         drop(ancestor_pins);
         Ok(())
     }
@@ -2006,6 +2015,8 @@ mod tests {
             .write(true)
             .open(&extra)
             .is_err());
+        // restore_in pins extras before captured parents regain write, then
+        // inherits through those handles rather than reopening by path.
         snapshot.restore_in(Some(&nested), |_| true).unwrap();
         std::fs::write(&extra, b"writable again").unwrap();
         let extra_sd = descriptor(&extra);
