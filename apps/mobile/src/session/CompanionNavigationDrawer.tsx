@@ -29,7 +29,7 @@ export function CompanionNavigationDrawer({ open, onClose, onSearch }: { open: b
   return <>
     <HomeChromeDrawer open={open} user={auth.user} loggingOut={loggingOut} mode="teammates"
       onClose={() => { pending.current = null; onClose(); }} onClosed={finish}
-      onModeChange={mode => afterClose(() => { if (mode !== 'teammates') void navigation.chooseMode(mode); })}
+      onModeChange={mode => afterClose(() => { void navigation.chooseMode(mode); })}
       onOpenSearch={() => afterClose(onSearch)} onOpenDevices={() => afterClose(() => push('/devices/manage'))}
       onOpenSettings={() => afterClose(() => push('/settings'))} onOpenAccounts={() => afterClose(() => setAccounts(true))}
       onLogout={() => {
