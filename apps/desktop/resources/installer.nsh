@@ -123,9 +123,15 @@
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 !macroend
 
-; Runs before removing files, including the old-version uninstall during upgrade.
-; Never leave a SYSTEM service referring to a removed or partially updated image.
+; Runs before removing files. Real uninstall must stop the SYSTEM service first.
+; Overlay upgrades keep the Program Files grant; the SCM image is that copy.
 !macro customUnInit
+  ${If} ${isUpdated}
+    ; Overlay upgrades keep the Program Files grant and AUTO_START service.
+    ; The SCM image is that protected copy, not $INSTDIR. After files are
+    ; replaced, Settings reports updateRequired until the user updates the helper.
+    Goto cindy_remote_service_done
+  ${EndIf}
   IfFileExists "$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" 0 cindy_remote_service_done
   nsExec::ExecToStack '"$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" --uninstall'
   Pop $R0

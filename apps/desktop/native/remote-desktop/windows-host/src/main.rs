@@ -150,4 +150,22 @@ mod tests {
         );
         assert!(status.contains("\"unavailable\""));
     }
+    #[test]
+    fn overlay_upgrade_keeps_the_lock_screen_grant() {
+        let uninit = include_str!("../../../../resources/installer.nsh")
+            .split("!macro customUnInit")
+            .nth(1)
+            .unwrap()
+            .split("!macroend")
+            .next()
+            .unwrap();
+        assert!(
+            uninit.find("${If} ${isUpdated}").unwrap() < uninit.find("--uninstall").unwrap(),
+            "overlay upgrades must not run --uninstall"
+        );
+        assert!(
+            uninit.find("cindy_remote_service_done").unwrap() < uninit.find("--uninstall").unwrap()
+        );
+        assert!(!uninit.contains("approval::remove"));
+    }
 }
