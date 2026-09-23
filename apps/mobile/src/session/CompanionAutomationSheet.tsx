@@ -25,6 +25,8 @@ function automationFailure(error: unknown, tr: (key: string) => string): string 
   const text = error instanceof Error ? error.message : String(error);
   if (code === 'unsupported' || code === 'CHANNEL_NOT_ALLOWED' || text.includes('CHANNEL_NOT_ALLOWED')) return tr('unsupported');
   if (code === 'DEVICE_OFFLINE' || code === 'NOT_CONNECTED' || text.includes('DEVICE_OFFLINE') || text.includes('NOT_CONNECTED')) return tr('offline');
+  // A host validation sentence is the actionable reason. Raw codes and JSON stay behind the localized summary.
+  if (text && !text.startsWith('[') && !text.startsWith('{') && !/^[A-Z0-9_]+$/.test(text)) return text;
   return tr('failed');
 }
 
