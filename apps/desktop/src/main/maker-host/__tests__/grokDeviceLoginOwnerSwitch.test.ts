@@ -21,7 +21,7 @@ vi.mock('../grok-oauth-login.js', () => ({
       session.signals.push(opts.cancellationSignal);
       opts.onDeviceCode({
         verificationUrl: 'https://auth.x.ai/device',
-        userCode: session.owner === 'owner-a' ? 'AAAA-1111' : 'BBBB-2222',
+        userCode: ['AAAA-1111', 'BBBB-2222', 'CCCC-3333'][session.signals.length - 1],
         expiresAt: Date.now() + 60_000,
       });
       return new Promise<{ ok: false; reason: string }>((resolve) => {
@@ -43,7 +43,7 @@ import {
 } from '../grok-device-login-service.js';
 import { runGrokOAuthLogin } from '../grok-oauth-login.js';
 
-it('releases the previous owner’s OAuth slot before starting a new owner’s device login', async () => {
+it('releases the OAuth slot after an owner switch or cancellation before a new device login', async () => {
   expect(await startGrokDeviceLogin()).toMatchObject({ userCode: 'AAAA-1111' });
 
   session.owner = 'owner-b';
@@ -54,6 +54,15 @@ it('releases the previous owner’s OAuth slot before starting a new owner’s d
   expect(second).toEqual(first);
   expect(grokDeviceLoginStatus()).toEqual(first);
   expect(runGrokOAuthLogin).toHaveBeenCalledTimes(2);
+
+  expect(cancelGrokDeviceLogin()).toEqual({ status: 'failed', reason: 'cancelled' });
+  const [retry, concurrentRetry] = await Promise.all([
+    startGrokDeviceLogin(),
+    startGrokDeviceLogin(),
+  ]);
+  expect(retry).toMatchObject({ userCode: 'CCCC-3333' });
+  expect(concurrentRetry).toEqual(retry);
+  expect(runGrokOAuthLogin).toHaveBeenCalledTimes(3);
 
   cancelGrokDeviceLogin();
 });

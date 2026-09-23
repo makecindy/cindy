@@ -33,7 +33,7 @@ function currentOwner(): string | null {
 export async function startGrokDeviceLogin(): Promise<GrokLoginState> {
   const owner = currentOwner();
   if (!owner) throw new Error('Owner unavailable');
-  if (flight && flight.owner !== owner) {
+  if (flight && (flight.owner !== owner || flight.state.status === 'failed')) {
     const previous = flight;
     previous.abort.abort();
     previous.state = { status: 'failed', reason: 'cancelled' };
