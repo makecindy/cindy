@@ -1,3 +1,4 @@
+import { pickFileIcon } from '@/components/ui/file-type-icon';
 /**
  * SkillhubDetailView — local content controller inside the shared /skillhub/detail page.
  *
@@ -22,7 +23,7 @@ import { LocalSkillControls } from './components/LocalSkillControls';
 import { OfficialSkillBadge } from './components/OfficialSkillBadge';
 
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertCircle, AlertTriangle, ArrowUp, Bot, CheckCircle, ChevronDown, ChevronRight, Clock3, FileText, Folder, FolderOpen, Globe, type LucideIcon, Package, Pencil, Save, Search, SquareTerminal, Upload, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, ArrowUp, Bot, CheckCircle, ChevronDown, ChevronRight, Clock3, Folder, FolderOpen, Globe, type LucideIcon, Package, Pencil, Save, Search, SquareTerminal, Upload, X } from 'lucide-react';
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -908,7 +909,7 @@ function FileTreeRow({ entry, parentDir, depth, currentPath, onSelectFile }: Fil
   };
 
   const Caret = expanded ? ChevronDown : ChevronRight;
-  const TypeIcon = entry.kind === 'dir' ? (expanded ? FolderOpen : Folder) : FileText;
+  const TypeIcon = entry.kind === 'dir' ? (expanded ? FolderOpen : Folder) : pickFileIcon(entry.name);
   const isSelected = entry.kind !== 'dir' && currentPath === fullPath;
 
   return (

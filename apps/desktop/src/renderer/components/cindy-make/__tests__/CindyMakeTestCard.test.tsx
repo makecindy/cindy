@@ -651,6 +651,45 @@ describe('completion card in the input area', () => {
     await waitFor(() => expect(switchVersion).toHaveBeenCalledWith('switch', 'personal'));
     expect(h.api.mock.calls.some(([, , action]) => action === 'open-build')).toBe(false);
   });
+  it('keeps switching to an updated personal version available while an isolated test is starting', async () => {
+    const switchVersion = vi.fn().mockResolvedValue({
+      currentId: 'original',
+      selectedId: 'original',
+      versions: [],
+      switching: true,
+    });
+    vi.stubGlobal('electronAPI', {
+      cindyMakeTest: h.api,
+      getCindyVersions: vi.fn().mockResolvedValue({
+        currentId: 'original',
+        selectedId: 'original',
+        personalUpdateAvailable: true,
+        switching: false,
+        versions: [
+          { id: 'original', kind: 'original', available: true, compatible: true },
+          { id: 'personal', kind: 'personal', available: true, compatible: true },
+        ],
+      }),
+      actCindyVersion: switchVersion,
+    });
+    render(
+      <CindyMakeTestCard
+        sessionId="session"
+        completionId="completion"
+        meta={{
+          ...meta,
+          test: { status: 'starting', step: 'dependencies' },
+          personal: { status: 'ready', versionId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' },
+        }}
+      />,
+    );
+    const update = await screen.findByRole('button', {
+      name: 'cindyMake.versions.updatePersonal',
+    });
+    expect((update as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(update);
+    await waitFor(() => expect(switchVersion).toHaveBeenCalledWith('switch', 'personal'));
+  });
   it('offers regeneration after the personal version was deleted instead of reviving a historical build', async () => {
     vi.stubGlobal('electronAPI', {
       cindyMakeTest: h.api,

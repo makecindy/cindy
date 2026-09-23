@@ -7,7 +7,6 @@ const h = vi.hoisted(() => ({
   currentId: 'original',
   selectedId: 'original',
   current: true,
-  busy: false,
   switching: false,
   handoff: vi.fn(),
   quit: vi.fn(),
@@ -17,9 +16,6 @@ vi.mock('electron', () => ({ app: { getPath: () => h.profile, quit: h.quit } }))
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => ({}),
   isDataOwnerBroadcastScopeCurrent: () => h.current,
-}));
-vi.mock('../../relaunchBusyActivityIpc.js', () => ({
-  readRelaunchBlockingActivity: async () => ({ busy: h.busy }),
 }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -65,7 +61,6 @@ beforeEach(async () => {
   h.currentId = 'original';
   h.selectedId = 'original';
   h.current = true;
-  h.busy = false;
   h.switching = false;
   const executable = path.join(h.profile, 'original.exe');
   await writeFile(executable, 'original');
@@ -87,7 +82,7 @@ afterEach(async () => {
   await rm(h.profile, { recursive: true, force: true });
 });
 describe('version management main boundary', () => {
-  it('allows switching and returning to original after preparation settles in the real manager', async () => {
+  it('allows switching and returning to original while preparation is still running', async () => {
     setPersonal();
     const manager = new CindyMakeManager();
     configureCindyVersions(() => manager.hasActiveWork());
@@ -113,12 +108,11 @@ describe('version management main boundary', () => {
         onError: () => {},
       },
     );
-    await expect(actCindyVersion('switch', id)).rejects.toThrow('busy');
+    await actCindyVersion('switch', id);
+    expect(h.handoff).toHaveBeenCalledWith(id, expect.any(Function));
     release();
     await manager.waitForTask('version-prepare');
     expect(manager.taskReport('version-prepare')?.status).toBe('completed');
-    await actCindyVersion('switch', id);
-    expect(h.handoff).toHaveBeenCalledWith(id, expect.any(Function));
     h.currentId = id;
     await actCindyVersion('switch', 'original');
     expect(h.handoff).toHaveBeenLastCalledWith('original', expect.any(Function));
@@ -138,8 +132,8 @@ describe('version management main boundary', () => {
     await actCindyVersion('switch', 'original');
     expect(h.handoff).toHaveBeenCalledWith('original', expect.any(Function));
     expect(manager.getState().upstreamMerge).toEqual(conflict);
-    h.busy = true;
-    await expect(actCindyVersion('switch', 'original')).rejects.toThrow('busy');
+    await actCindyVersion('switch', 'original');
+    expect(h.handoff).toHaveBeenLastCalledWith('original', expect.any(Function));
   });
   it('projects Dev as the original without creating a registry on a read', async () => {
     expect(await getCindyVersions()).toMatchObject({
@@ -180,14 +174,14 @@ describe('version management main boundary', () => {
     await expect(actCindyVersion(action, target)).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     expect(h.handoff).not.toHaveBeenCalled();
   });
-  it('blocks switching during build or other running work and never quits on a failed handoff', async () => {
+  it('allows switching during build or other running work and never quits on a failed handoff', async () => {
     setPersonal();
     configureCindyVersions(() => true);
-    await expect(actCindyVersion('switch', id)).rejects.toThrow('busy');
+    await actCindyVersion('switch', id);
+    expect(h.handoff).toHaveBeenCalledWith(id, expect.any(Function));
     configureCindyVersions(() => false);
-    h.busy = true;
-    await expect(actCindyVersion('switch', id)).rejects.toThrow('busy');
-    h.busy = false;
+    await actCindyVersion('switch', id);
+    expect(h.handoff).toHaveBeenLastCalledWith(id, expect.any(Function));
     h.handoff.mockRejectedValueOnce(
       Object.assign(new Error('incompatible'), { code: 'incompatible' }),
     );
@@ -220,6 +214,9 @@ describe('version management main boundary', () => {
     writeVersionJson(path.join(versionsRoot(h.profile), 'selected.json'), { id });
     await expect(actCindyVersion('remove', id)).rejects.toThrow('busy');
     writeVersionJson(path.join(versionsRoot(h.profile), 'selected.json'), { id: 'original' });
+    configureCindyVersions(() => true);
+    await expect(actCindyVersion('remove', id)).rejects.toThrow('busy');
+    configureCindyVersions(() => false);
     await actCindyVersion('remove', id);
     await expect(access(path.join(directory, 'runtime'))).rejects.toThrow();
     await expect(access(path.join(directory, 'version.json'))).resolves.toBeUndefined();

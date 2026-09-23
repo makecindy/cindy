@@ -15,6 +15,10 @@ import {
 } from '../topics.js';
 
 describe('topicForPush', () => {
+  it('routes historical file summaries only to the owning task', () => {
+    expect(topicForPush('maker:turn-change-set:updated', { sessionId: 's1' })).toBe('session:s1');
+    expect(topicForPush('maker:turn-change-set:updated', {})).toBeNull();
+  });
   it('delivers companion task state to the parent and private-thread changes to the account topic', () => {
     expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: 'parent', childSessionId: 'child' })).toBe('session:parent');
     expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: null })).toBeNull();

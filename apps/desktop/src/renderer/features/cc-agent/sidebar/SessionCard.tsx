@@ -29,7 +29,7 @@ import type {
   ReactNode,
   RefObject,
 } from 'react';
-import { Archive, ChevronRight, EllipsisVertical, Undo } from 'lucide-react';
+import { Archive, ChevronRight, Crown, EllipsisVertical, Undo } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { withSidebarNavigation, type SidebarNavigationProps } from './sidebarNavigation';
 
@@ -157,6 +157,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   isFirst = false,
   hideBottomDivider = false,
   navigationOnly = false,
+  sharedTaskRole,
 }: SessionCardProps & SidebarNavigationProps) {
   const { t } = useTranslation();
   const cindyMakeActivity = useCindyMakeActivity(session);
@@ -614,6 +615,22 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const titlePrefixNode = (
     <>
       {statusIconNode}
+      {sharedTaskRole === 'owned' ? (
+        <>
+          <span className="inline-block w-1.5" aria-hidden />
+          <span
+            className="inline-flex h-[1em] w-3 items-center justify-center"
+            data-testid={`shared-task-role-slot-owned-${session.id}`}
+          >
+            <Crown
+              size={12}
+              strokeWidth={1.8}
+              className="text-[var(--warning-fg)]"
+              aria-label={t('sharedTask.roleHost')}
+            />
+          </span>
+        </>
+      ) : null}
       {showScheduleBindingBadge || showAutomationTimer ? (
         <span className={CARD_TITLE_META_SLOT_CLASS}>{renderAutomationMeta(10)}</span>
       ) : null}

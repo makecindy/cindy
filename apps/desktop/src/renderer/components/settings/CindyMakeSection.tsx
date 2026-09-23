@@ -370,6 +370,9 @@ export function CindyMakeSection() {
         hidden={activeTab !== 'versions'}
       >
         <div className="flex flex-col gap-[18px]">
+          <Button className="self-start" onClick={() => setCreateOpen(true)}>
+            {t('settings.cindyMake.create.title')}
+          </Button>
           <div className="flex items-start justify-between gap-4 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-5">
             <div className="min-w-0">
               <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
@@ -401,9 +404,6 @@ export function CindyMakeSection() {
               aria-label={t('settings.cindyMake.syncBeforeBuild.ariaLabel')}
             />
           </div>
-          <Button className="self-start" onClick={() => setCreateOpen(true)}>
-            {t('settings.cindyMake.create.title')}
-          </Button>
           <CindyMakeVersionsPanel
             active={activeTab === 'versions'}
             busy={historyState?.activeWork ?? historyState?.busy}

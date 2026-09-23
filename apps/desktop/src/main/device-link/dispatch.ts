@@ -313,6 +313,15 @@ export function setRemoteReviewInputGuard(guard: RemoteReviewInputGuard | null):
   remoteReviewInputGuard = guard;
 }
 
+// Local renderer IPC keeps its sender guard; remote mutations enter the shared action here.
+type RemoteTurnChangeAction = (
+  sessionId: unknown, id: unknown, action: unknown, assertAccess: () => Promise<void>,
+) => Promise<unknown>;
+let remoteTurnChangeAction: RemoteTurnChangeAction | null = null;
+export function setRemoteTurnChangeAction(handler: RemoteTurnChangeAction): void {
+  remoteTurnChangeAction = handler;
+}
+
 /**
  * xAI 订阅余量读取器(register.ts 在 usage 面就绪后注入)。该 channel 的 ipcMain
  * handler 挂了 assertTrustedSender(合成 event 必然不可信,那道闸不为远程放宽),
@@ -3902,7 +3911,21 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
       () =>
-          payload.channel === TASK_TAG_CHANNEL
+          payload.channel === 'maker:turn-change-set:apply'
+            ? (() => {
+                if (!remoteTurnChangeAction) throw new Error('[UNSUPPORTED_CAPABILITY] Turn restore is unavailable');
+                return remoteTurnChangeAction(args[0], args[1], args[2], async () => {
+                  // Recheck after queueing / Git preflight, immediately before the write.
+                  await assertRemoteBotInvocationAllowed(args, payload.channel);
+                  if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) {
+                    throw new Error('[NOT_FOUND] Session does not exist');
+                  }
+                  if (!readDeviceLinkSettings().remoteControlEnabled || isControllerRevoked(src)) {
+                    throw new Error('[ACCESS_REVOKED] Remote control is no longer allowed');
+                  }
+                });
+              })()
+            : payload.channel === TASK_TAG_CHANNEL
             ? executeTaskTags(args[0] as TaskTagRequest)
             : dispatchLocalInvoke(
         payload.channel,
@@ -4038,6 +4061,7 @@ export const __testing = {
     setBroadcastTapListener(null);
     presenceOfflineCheck = null;
     remoteReviewInputGuard = null;
+    remoteTurnChangeAction = null;
     remoteXaiSubscriptionUsageReader = null;
     remoteClaudeSubscriptionUsageReader = null;
   },

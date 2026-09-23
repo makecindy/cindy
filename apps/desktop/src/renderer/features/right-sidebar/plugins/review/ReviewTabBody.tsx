@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 /**
  * ReviewTabBody — unified workspace and recorded-message review panel.
@@ -1460,7 +1461,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
             desc={
               error === REVIEW_TURN_LOCAL_ONLY_ERROR
                 ? t('rightSidebar.review.turn.localOnly')
-                : error
+                : localizeReviewError(error)
             }
             actionLabel={t('rightSidebar.review.refresh')}
             onAction={refreshAll}
@@ -3501,8 +3502,9 @@ function ReviewFileTreeRow({
           'flex h-7 w-full min-w-0 items-center pr-2 text-left text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
           active && 'bg-[var(--surface-chip)] text-[var(--text-primary)]',
         )}
-        style={{ paddingLeft: paddingLeft + 18 }}
+        style={{ paddingLeft }}
       >
+        <FileTypeIcon name={node.path} size={12} className="mr-1 shrink-0" />
         <span className="min-w-0 truncate">{node.name}</span>
       </button>
     </Tip>
@@ -4548,6 +4550,7 @@ function FileRow({
           ) : (
             <ChevronRight size={12} className="shrink-0 text-[var(--text-tertiary)]" />
           )}
+          <FileTypeIcon name={diff.path} size={14} className="shrink-0 text-[var(--text-secondary)]" />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-13 font-medium text-[var(--text-primary)]">
               {fileName}

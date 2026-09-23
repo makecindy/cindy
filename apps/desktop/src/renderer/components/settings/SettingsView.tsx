@@ -89,7 +89,12 @@ export function SettingsView() {
   // 与 billing 的 canAccessBillingSettings 无关 —— #2785 维护者裁决。
   const canAccessUsage = canAccessUsageSettings({ mode });
   const versions = useCindyVersions(!import.meta.env.DEV);
-  const canAccessCindyMake = canAccessCindyMakeSettings(import.meta.env.DEV, versions.state);
+  const canAccessCindyMake = canAccessCindyMakeSettings(
+    import.meta.env.DEV,
+    versions.state,
+    /-beta(?:\.|$)/i.test(window.electronAPI.appVersion ?? ''),
+    user,
+  );
 
   const activeTab = useMemo<SettingsTab>(() => {
     const raw = rawTab;

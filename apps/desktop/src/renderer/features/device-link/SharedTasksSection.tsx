@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, FileText, Plus } from 'lucide-react';
+import { ChevronDown, ChevronRight, Crown, FileText, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer, type SharedTaskOwnedItem } from '@cindy/device-link';
 import { Button } from '@/components/ui/button';
-import { SegmentedControl } from '@/components/ui/segmented-control';
 import { SessionCard } from '@/features/cc-agent/sidebar/SessionCard';
 import { SessionItem } from '@/features/cc-agent/sidebar/SessionItem';
+import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
 import type { SessionMoveTarget } from '@/features/cc-agent/sidebar/sessionMoveTarget';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import { useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
@@ -22,6 +22,19 @@ import { sharedTaskErrorKey } from './sharedTaskCompatibility';
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 const ignoreTaskAction = () => {};
 type SharedTaskSessionAction = 'delete' | 'archive' | 'archive-now' | 'unarchive';
+type SharedTaskRow = {
+  key: string;
+  role: 'owned' | 'joined';
+  session?: Session;
+  owned?: SharedTaskOwnedItem;
+  order: number;
+};
+
+function sharedTaskActivity(session?: Session): number | null {
+  if (!session) return null;
+  const activity = sessionActivityMs(session);
+  return activity > 0 ? activity : null;
+}
 
 interface SharedTasksSectionProps {
   activeSessionId?: string | null;
@@ -48,7 +61,6 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
   const [collapsed, setCollapsed] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const [owned, setOwned] = useState<SharedTaskOwnedItem[]>([]);
-  const [tab, setTab] = useState<'owned' | 'joined'>('joined');
   const [opening, setOpening] = useState<string | null>(null);
   const pending = useRef(false);
   const epoch = useRef(0);
@@ -79,8 +91,25 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
       document.removeEventListener('visibilitychange', refresh);
     };
   }, [isAuthenticated, dataOwnerId, generation]);
-  const both = owned.length > 0 && joined.length > 0;
-  const visibleTab = both ? tab : owned.length ? 'owned' : 'joined';
+  const rows = useMemo(() => {
+    const result: SharedTaskRow[] = [];
+    for (const item of owned) {
+      const session = item.local
+        ? localSessions.find(candidate => candidate.id === item.sessionId && !candidate.deviceLinkDeviceId)
+        : sessions.find(candidate => candidate.id === item.sessionId && candidate.deviceLinkDeviceId === item.hostDeviceId);
+      result.push({ key: item.sharedTaskId, role: 'owned', session, owned: item, order: result.length });
+    }
+    for (const session of joined) {
+      result.push({ key: session.id, role: 'joined', session, order: result.length });
+    }
+    return result.sort((left, right) => {
+      const leftActivity = sharedTaskActivity(left.session);
+      const rightActivity = sharedTaskActivity(right.session);
+      if (leftActivity === null) return rightActivity === null ? left.order - right.order : 1;
+      if (rightActivity === null) return -1;
+      return rightActivity - leftActivity || left.order - right.order;
+    });
+  }, [joined, localSessions, owned, sessions]);
   const openOwned = async (item: SharedTaskOwnedItem) => {
     if (item.sessionId === activeSessionId || pending.current) return;
     const owner = getDataOwnerGeneration();
@@ -97,7 +126,7 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
     } catch (error) { if (current()) toast.error(t(sharedTaskErrorKey(error))); }
     finally { if (current()) { pending.current = false; setOpening(null); } }
   };
-  const renderTask = (session: Session, onClick: () => void, key: string, navigationOnly: boolean, sharedTaskId?: string) => {
+  const renderTask = (session: Session, onClick: () => void, key: string, navigationOnly: boolean, role: 'owned' | 'joined', sharedTaskId?: string) => {
     const props = {
       session,
       navigationOnly,
@@ -113,6 +142,7 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
       onTogglePin: navigationOnly ? ignoreTaskAction : onTogglePin,
       onMoveSession: navigationOnly ? undefined : onMoveSession,
       projectOptions: navigationOnly ? [] : projectOptions,
+      sharedTaskRole: role,
     };
     return mode === 'list'
       ? <SessionCard key={key} {...props} variant="list" />
@@ -126,39 +156,42 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
       event.stopPropagation();
     }}>
     <div className="flex min-h-8 items-center justify-between gap-2">
-      {both ? <SegmentedControl role="tablist" fullWidth className="min-w-0 flex-1"
-        aria-label={t('sharedTask.title')} value={visibleTab} onValueChange={value => { setTab(value); setCollapsed(false); }}
-        options={[
-          { value: 'owned', label: t('sharedTask.ownedTab') },
-          { value: 'joined', label: t('sharedTask.joinedTab') },
-        ]} optionClassName="px-1.5" /> : <button type="button" aria-expanded={!collapsed} onClick={() => setCollapsed(value => !value)}
+      <button type="button" aria-expanded={!collapsed} onClick={() => setCollapsed(value => !value)}
         className="flex min-h-8 min-w-0 items-center gap-1.5 rounded-full px-2 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]">
         {collapsed ? <ChevronRight size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
-        {t(visibleTab === 'owned' ? 'sharedTask.ownedSection' : 'sharedTask.joinedSection')}
-      </button>}
+        {t('sharedTask.title')}
+      </button>
       <Button variant="secondary" className="w-8 shrink-0 border-transparent bg-transparent p-0" aria-label={t('sharedTask.join')} title={t('sharedTask.join')} onClick={() => setJoinOpen(true)}><Plus size={16} aria-hidden /></Button>
     </div>
-    {(!collapsed || both) && visibleTab === 'owned' && owned.map(item => {
-      const session = item.local
-        ? localSessions.find(candidate => candidate.id === item.sessionId && !candidate.deviceLinkDeviceId)
-        : sessions.find(candidate => candidate.id === item.sessionId && candidate.deviceLinkDeviceId === item.hostDeviceId);
-      if (session) return <div key={item.sharedTaskId} aria-busy={opening === item.sharedTaskId || undefined}>
-        {renderTask(session, () => void openOwned(item), item.sharedTaskId, false, item.sharedTaskId)}
+    {!collapsed && rows.map(row => {
+      if (row.role === 'joined') {
+        const session = row.session;
+        if (!session) return null;
+        return renderTask(session,
+          () => { if (session.id !== activeSessionId) onSelect(session.id); }, row.key, true, 'joined');
+      }
+      const item = row.owned;
+      if (!item) return null;
+      if (row.session) return <div key={row.key} aria-busy={opening === item.sharedTaskId || undefined}>
+        {renderTask(row.session, () => void openOwned(item), row.key, false, 'owned', item.sharedTaskId)}
       </div>;
       // Account discovery can precede the host's session mirror. Keep navigation available
       // without inventing a preview, activity timestamp or Agent identity.
-      return <button key={item.sharedTaskId} type="button"
+      return <button key={row.key} type="button"
         aria-current={item.sessionId === activeSessionId ? 'page' : undefined} disabled={!!opening} aria-busy={opening === item.sharedTaskId || undefined}
-        onClick={() => void openOwned(item)} title={item.title}
+        onClick={() => void openOwned(item)} aria-label={item.title + ', ' + t('sharedTask.roleHost')} title={item.title}
         className={cn('flex w-full items-center gap-2.5 text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           mode === 'list' ? 'min-h-14 rounded-lg px-2.5 py-2' : 'h-8 rounded-full pl-3 pr-2',
           item.sessionId === activeSessionId ? 'bg-sidebar-item-active text-sidebar-item-active-foreground' : 'text-foreground hover:bg-sidebar-item-hover')}>
-        <FileText size={12} className="shrink-0" aria-hidden />
+        <span className="flex w-[15px] shrink-0 items-center justify-center">
+          <FileText size={12} aria-hidden />
+        </span>
+        <span className="flex w-3 shrink-0 items-center justify-center" data-testid={`shared-task-role-slot-owned-${item.sessionId}`}>
+          <Crown size={12} strokeWidth={1.8} className="text-[var(--warning-fg)]" aria-label={t('sharedTask.roleHost')} />
+        </span>
         <span className="truncate">{item.title}</span>
       </button>;
     })}
-    {(!collapsed || both) && visibleTab === 'joined' && joined.map(session => renderTask(session,
-      () => { if (session.id !== activeSessionId) onSelect(session.id); }, session.id, true))}
   </section>}
     <JoinSharedTaskDialog open={joinOpen} onOpenChange={setJoinOpen} />
   </>;

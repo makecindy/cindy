@@ -32,7 +32,7 @@ import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
-import { Archive, ChevronRight, EllipsisVertical, Play, Undo } from 'lucide-react';
+import { Archive, ChevronRight, Crown, EllipsisVertical, Play, Undo } from 'lucide-react';
 import { withSidebarNavigation, type SidebarNavigationProps } from './sidebarNavigation';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
@@ -257,6 +257,8 @@ export function SidebarTitleMarquee({ children, className, title }: SidebarTitle
 export interface SessionItemProps {
   /** Shared-group entries reuse the presentation without task-management actions or selection. */
   navigationOnly?: boolean;
+  /** Shared-group identity mark. Only owners show a crown; joined tasks match ordinary rows. */
+  sharedTaskRole?: 'owned' | 'joined';
   session: Session;
   isActive: boolean;
   /** F-SB-7: Whether this session's agent is currently running. */
@@ -345,6 +347,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   sourceLabel,
   insideAutomationGroup = false,
   navigationOnly = false,
+  sharedTaskRole,
 }: SessionItemProps & SidebarNavigationProps) {
   const { t } = useTranslation();
   const cindyMakeActivity = useCindyMakeActivity(session);
@@ -1019,6 +1022,19 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           showAttentionDot={false}
         />
       </span>
+      {sharedTaskRole === 'owned' ? (
+        <span
+          className="flex w-3 shrink-0 items-center justify-center"
+          data-testid={`shared-task-role-slot-owned-${session.id}`}
+        >
+          <Crown
+            size={12}
+            strokeWidth={1.8}
+            className="text-[var(--warning-fg)]"
+            aria-label={t('sharedTask.roleHost')}
+          />
+        </span>
+      ) : null}
 
       {isEditing ? (
         <SessionRenameInput

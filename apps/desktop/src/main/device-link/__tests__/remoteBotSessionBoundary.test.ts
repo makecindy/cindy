@@ -5,6 +5,15 @@ import {
 
 afterEach(() => setRemoteBotSessionLookup(null));
 
+it.each(['turn-list', 'turn-get'])('rechecks nested %s targets before returning remote snapshots', async (op) => {
+  let hidden = false;
+  setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'visible');
+  const args = [{ op, payload: { sessionId: 'task', ids: ['set'] } }];
+  await assertRemoteBotInvocationAllowed(args, 'git-review:remote-op');
+  hidden = true;
+  await expect(assertRemoteBotInvocationAllowed(args, 'git-review:remote-op')).rejects.toThrow('[NOT_FOUND]');
+});
+
 it('bounds single-lookup adapters, deduplicates checks and preserves collection order', async () => {
   let active = 0;
   let peak = 0;

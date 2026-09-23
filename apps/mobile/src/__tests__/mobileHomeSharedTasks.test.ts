@@ -135,26 +135,28 @@ describe('shared role row wiring', () => {
   it('adds roles only to the existing shared group and still hides an empty group', () => {
     expect(source).toContain('ListHeaderComponent={sharedRows.length > 0 ?');
     expect(source.match(/sharedRole={row.role}/g)).toHaveLength(1);
-    expect(source).toContain('testID="home.sharedOwnerRoleBadge"');
+    expect(source).toContain('testID={`home.sharedRoleSlot.owned.${row.task.sessionId}`}');
   });
 
-  it('keeps empty-preview roles in the second line, after existing trailing icons', () => {
-    expect(source).toContain('const showPreviewLine = !!preview?.trim() || showSchedule || showPinned || !!sharedRole;');
+  it('uses a fixed title-side role slot and only renders a crown for owners', () => {
+    expect(source).toContain('const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;');
     const row = source.slice(source.indexOf('function HomeSessionRowInner('), source.indexOf('function AutomationGroupChildren('));
-    const badge = row.indexOf('<View style={styles.sharedRoleBadge}');
-    expect(badge).toBeGreaterThan(row.indexOf('<View style={styles.sessionPreviewRow}>'));
-    expect(badge).toBeGreaterThan(row.indexOf('<View style={styles.sessionTrailingIcons}>'));
-    expect(row).toContain("sharedRole === 'owned' ? 'sharedTask.roleOwnedBadge' : 'sharedTask.roleJoinedBadge'");
-  });
-
-  it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko'])('provides distinct role copy in %s', (locale) => {
-    const copy = JSON.parse(readFileSync(resolve(process.cwd(), 'src/i18n/locales', locale, 'sharedTask.json'), 'utf8'));
-    expect(copy.roleOwnedBadge).toBeTruthy();
-    expect(copy.roleJoinedBadge).toBeTruthy();
-    expect(copy.roleOwnedBadge).not.toBe(copy.roleJoinedBadge);
-    if (locale === 'zh-CN') {
-      expect(copy.roleOwnedBadge).toBe('我开启');
-      expect(copy.roleJoinedBadge).toBe('已加入');
-    }
+    const roleSlot = row.indexOf('testID={`home.sharedRoleSlot.owned.${item.session.id}`}');
+    expect(roleSlot).toBeGreaterThan(row.indexOf('<SessionStatusMark'));
+    expect(roleSlot).toBeLessThan(row.indexOf('styles.sessionListContent'));
+    expect(row).toContain("{sharedRole === 'owned' ? (");
+    expect(row).not.toContain('{sharedRole ? (');
+    expect(row).not.toContain('accessibilityElementsHidden');
+    expect(row).not.toContain('importantForAccessibility');
+    expect(row).toContain("const accessibilityTitle = sharedRole === 'owned' ? item.title + ', ' + t('sharedTask.roleHost') : item.title;");
+    expect(row).toContain("t('devices.list.a11y.openAutomationLatest', { title: accessibilityTitle })");
+    expect(row).toContain("t('devices.list.a11y.automationTask', { title: accessibilityTitle })");
+    expect(row).toContain('accessibilityLabel={accessibilityLabel}');
+    expect(row).toContain('accessible={false}');
+    expect(row).not.toContain("accessibilityLabel={t('sharedTask.roleHost')}");
+    expect(row).not.toContain('sharedRoleBadge');
+    expect(row).toContain('color={colors.warningFg}');
+    expect(source).not.toContain('roleOwnedBadge');
+    expect(source).not.toContain('roleJoinedBadge');
   });
 });

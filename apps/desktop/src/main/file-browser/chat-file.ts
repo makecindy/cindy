@@ -40,6 +40,8 @@ export interface ChatFileFetchArgs {
   workdir: string;
   /** 目标文件在远端机器上的绝对路径。 */
   absPath: string;
+  /** Optional generated-command evidence window, using timestamps from the owning device. */
+  modifiedWindow?: { startMs: number; endMs: number | null };
 }
 
 /**
@@ -133,6 +135,27 @@ export async function statChatFile(
 ): Promise<ChatFileStatVerdict> {
   const { origin, workdir, absPath } = args ?? ({} as ChatFileFetchArgs);
   if (!workdir || !absPath || !origin) return 'nonfile';
+  const window = args.modifiedWindow;
+  if (
+    window &&
+    (!Number.isFinite(window.startMs) ||
+      (window.endMs !== null &&
+        (!Number.isFinite(window.endMs) || window.endMs <= window.startMs)))
+  ) {
+    return 'nonfile';
+  }
+  const verdictFor = (stat: ChatFileStat): ChatFileStatVerdict => {
+    if (
+      window &&
+      (stat.type !== 'file' ||
+        !Number.isFinite(stat.mtimeMs) ||
+        stat.mtimeMs < window.startMs ||
+        (window.endMs !== null && stat.mtimeMs >= window.endMs))
+    ) {
+      return 'nonfile';
+    }
+    return stat.type === 'file' ? 'file' : stat.type === 'directory' ? 'directory' : 'nonfile';
+  };
   const relPath = toWorkdirRel(workdir, absPath);
   if (origin.kind === 'ssh') {
     if (!origin.remoteHostId) return 'nonfile';
@@ -140,7 +163,7 @@ export async function statChatFile(
     if (!relPath) return 'nonfile';
     try {
       const stat = await deps.sshStat(origin.remoteHostId, workdir, relPath);
-      return stat.type === 'file' ? 'file' : stat.type === 'directory' ? 'directory' : 'nonfile';
+      return verdictFor(stat);
     } catch (err) {
       return classifyStatError(err);
     }
@@ -151,7 +174,7 @@ export async function statChatFile(
   if (!relPath) return 'unknown';
   try {
     const stat = await deps.deviceStat(origin.deviceId, workdir, relPath);
-    return stat.type === 'file' ? 'file' : stat.type === 'directory' ? 'directory' : 'nonfile';
+    return verdictFor(stat);
   } catch (err) {
     return classifyStatError(err);
   }

@@ -1398,6 +1398,51 @@ describe('new session model', () => {
     ]);
   });
 
+  it('excludes worker-only directories before limiting recent workspace picks', () => {
+    const sessions = [
+      ...Array.from({ length: 6 }, (_, index) => remoteSession(`worker-${index}`, {
+        orcaRole: 'worker',
+        workingDir: `/scratch/worker-${index}`,
+        userSendAt: '2026-01-01T00:10:00.000Z',
+      })),
+      remoteSession('lead', {
+        orcaRole: 'lead',
+        workingDir: '/repo/lead',
+        userSendAt: '2026-01-01T00:05:00.000Z',
+      }),
+      remoteSession('ordinary', { workingDir: '/repo/ordinary' }),
+    ];
+
+    const options = buildRecentWorkspaceOptions(sessions);
+    expect(options.map((option) => option.workingDir)).toEqual(['/repo/lead', '/repo/ordinary']);
+    expect(pickInitialNewSessionWorkspace('', options)).toBe('/repo/lead');
+    expect(buildRecentWorkspaceOptions(sessions.slice(0, 6))).toEqual([]);
+  });
+
+  it('does not let workers change a user project count, activity, or ordering', () => {
+    const userSessions = [
+      remoteSession('older', {
+        workingDir: '/repo/shared',
+        userSendAt: '2026-01-01T00:01:00.000Z',
+      }),
+      remoteSession('newer', {
+        workingDir: '/repo/newer',
+        userSendAt: '2026-01-01T00:05:00.000Z',
+      }),
+    ];
+    const workers = ['/repo/shared', '/repo/shared/.cindy-worktrees/worker'].map((workingDir, index) =>
+      remoteSession(`worker-${index}`, {
+        orcaRole: 'worker',
+        workingDir,
+        userSendAt: '2026-01-01T00:10:00.000Z',
+      }),
+    );
+
+    expect(buildRecentWorkspaceOptions([...workers, ...userSessions])).toEqual(
+      buildRecentWorkspaceOptions(userSessions),
+    );
+  });
+
   it('folds managed worktree sessions into their base repo project', () => {
     const options = buildRecentWorkspaceOptions([
       remoteSession('base', {

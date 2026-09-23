@@ -44,8 +44,6 @@
   "enterTask": "Enter Task",
   "inviteBoxTitle": "Send the invitation to your teammates",
   "roleGuest": "Guest",
-  "roleOwnedBadge": "Shared by me",
-  "roleJoinedBadge": "Joined",
   "removeShort": "Remove",
   "removeNamedTitle": "Remove {{name}}?",
   "shareCurrent": "Share Current Task",

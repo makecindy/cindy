@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
 import type { ReactNode } from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Session } from '@/lib/ccAgent.types';
+import type { ProjectNode } from '../features/cc-agent/lib/projectGrouping';
 import {
   ProjectsSection,
   type ProjectsSectionProps,
@@ -26,14 +28,30 @@ vi.mock('../features/cc-agent/sidebar/MainListScopeHeader', () => ({
   MainListScopeHeader: ({ fold }: { fold: { label: string; onClick: () => void } | null }) =>
     fold ? <button onClick={fold.onClick}>{fold.label}</button> : null,
 }));
-vi.mock('@/components/sidebar/SortableList', () => ({ SortableList: () => null }));
-vi.mock('../features/cc-agent/sidebar/sections/ProjectNode', () => ({ ProjectNode: () => null }));
+vi.mock('@/components/sidebar/SortableList', () => ({
+  SortableList: ({
+    items,
+    renderItem,
+  }: {
+    items: ProjectNode[];
+    renderItem: (item: ProjectNode) => ReactNode;
+  }) => <>{items.map(renderItem)}</>,
+}));
+vi.mock('../features/cc-agent/sidebar/sections/ProjectNode', () => ({
+  ProjectNode: ({ project }: { project: ProjectNode }) => <span>{project.displayName}</span>,
+}));
 // Keep device grouping real; the header bridge is outside this rendering test.
 vi.mock('../features/cc-agent/sidebar/DeviceSectionHeader', () => ({
   DeviceSectionHeader: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 vi.mock('../features/cc-agent/sidebar/sections/UnclassifiedSection', () => ({
-  UnclassifiedSection: () => null,
+  UnclassifiedSection: ({ sessions }: { sessions: Session[] }) => (
+    <>
+      {sessions.map((session) => (
+        <span key={session.id}>{session.title}</span>
+      ))}
+    </>
+  ),
 }));
 vi.mock('@/features/bots/BotAvatar', () => ({ BotAvatar: () => <span>Bot avatar</span> }));
 vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({ SessionItem: () => null }));
@@ -152,4 +170,104 @@ describe('Online device headers without tasks', () => {
     render(<ProjectsSection {...props(false)} bots={[]} allProjectKeysForOrder={[]} />);
     expect(screen.queryByText('Remote device')).toBeNull();
   });
+});
+
+describe('Cindy Make sidebar entry', () => {
+  function makeProps(groupDevice: boolean, custom: boolean) {
+    const p = props(groupDevice);
+    const make = {
+      id: 'make',
+      title: 'Make task',
+      source: 'cindy-make',
+      status: 'active',
+      createdAt: '2026-09-17T00:00:00Z',
+      updatedAt: '2026-09-17T00:00:00Z',
+    } as Session;
+    const ordinary = {
+      ...make,
+      id: 'ordinary',
+      source: undefined,
+      title: 'Ordinary draft',
+      createdAt: '2026-09-22T00:00:00Z',
+      updatedAt: '2026-09-22T00:00:00Z',
+    };
+    p.unclassified = [ordinary, make];
+    p.projects = [
+      {
+        projectKey: 'local:/ordinary',
+        displayName: 'Ordinary project',
+        workingDir: '/ordinary',
+        scope: 'local',
+        remoteHostId: null,
+        deviceLinkDeviceId: null,
+        deviceLinkDeviceName: null,
+        deviceLinkConnectionStatus: null,
+        segments: 1,
+        sessions: [ordinary],
+        latestActivityAt: ordinary.updatedAt,
+      },
+    ];
+    p.filter.projectOrder = custom ? 'custom' : 'activity';
+    p.filter.manualProjectOrder = ['local:/ordinary'];
+    return p;
+  }
+
+  it.each([false, true])(
+    'renders Make before projects and drafts with device grouping %s',
+    (groupDevice) => {
+      for (const custom of [false, true]) {
+        render(<ProjectsSection {...makeProps(groupDevice, custom)} />);
+        const make = screen.getByText('settings.cindyMake.title');
+        const project = screen.getByText('Ordinary project');
+        expect(
+          make.compareDocumentPosition(project) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        if (!groupDevice) {
+          expect(
+            make.compareDocumentPosition(screen.getByText('Ordinary draft')) &
+              Node.DOCUMENT_POSITION_FOLLOWING,
+          ).toBeTruthy();
+        }
+        expect(screen.getAllByText('settings.cindyMake.title')).toHaveLength(1);
+        cleanup();
+      }
+    },
+  );
+
+  it('opens the settings creation dialog without toggling the group and resets it after cancel', async () => {
+    render(<ProjectsSection {...makeProps(false, false)} />);
+    const header = screen.getByText('settings.cindyMake.title').closest('[role="button"]')!;
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    const create = within(header as HTMLElement).getByRole('button', {
+      name: 'settings.cindyMake.create.title',
+    });
+    fireEvent.click(create);
+    const dialog = await screen.findByRole('dialog', { name: 'settings.cindyMake.create.title' });
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.change(within(dialog).getByRole('textbox'), {
+      target: { value: 'Change the sidebar' },
+    });
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'settings.cindyMake.create.cancel' }),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(create);
+    const reopened = await screen.findByRole('dialog');
+    expect((within(reopened).getByRole('textbox') as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it.each([false, true])(
+    'does not open a local creation dialog from remote-only Make with device grouping %s',
+    (groupDevice) => {
+      const p = makeProps(groupDevice, false);
+      p.projects = [];
+      p.unclassified = p.unclassified
+        .filter((session) => session.source === 'cindy-make')
+        .map((session) => ({ ...session, deviceLinkDeviceId: 'remote' }));
+      render(<ProjectsSection {...p} />);
+      expect(screen.getByText('settings.cindyMake.title')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'settings.cindyMake.create.title' })).toBeNull();
+    },
+  );
 });

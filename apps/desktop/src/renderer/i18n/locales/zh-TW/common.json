@@ -12951,6 +12951,12 @@
     }
   },
   "cindyMake": {
+    "remote": {
+      "refresh": "重新整理狀態",
+      "syncing": "正在同步 Cindy Make 狀態…",
+      "offline": "重新連線遠端電腦後即可繼續。",
+      "failed": "無法更新 Cindy Make 狀態，請重新整理後繼續。"
+    },
     "beta": "Beta",
     "preflight": {
       "closeTitle": "關閉 Cindy Make？",

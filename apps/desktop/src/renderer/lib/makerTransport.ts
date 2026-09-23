@@ -96,6 +96,7 @@ export interface RoutableMaker {
   forkStripEncrypted: FullMaker['forkStripEncrypted'];
   rewindPreview: FullMaker['rewindPreview'];
   rewindCommit: FullMaker['rewindCommit'];
+  applyTurnChangeSet: FullMaker['applyTurnChangeSet'];
   getContextUsage: FullMaker['getContextUsage'];
   setExtraDirs: FullMaker['setExtraDirs'];
   setWritableDirs: FullMaker['setWritableDirs'];
@@ -176,6 +177,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     listBotDelegations: t('maker:bot-delegations:list') as FullMaker['listBotDelegations'],
     cancelBotDelegation: t('maker:bot-delegation:cancel') as FullMaker['cancelBotDelegation'],
     getBotDirectMessageThread: t('maker:bot-direct-message-thread:get') as FullMaker['getBotDirectMessageThread'],
+    applyTurnChangeSet: t('maker:turn-change-set:apply') as FullMaker['applyTurnChangeSet'],
     send: t('maker:send') as FullMaker['send'],
     setModel: (async (...args: SetModelArgs) =>
       invokeRemote(
@@ -290,7 +292,7 @@ export function makerApiForSticky(sessionId: string): RoutableMaker {
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
 }
 
-/** Subscribe to local exact-turn updates; remote sessions deliberately fail closed in this phase. */
+/** Subscribe to summaries from the owning device; exact patches are fetched on demand. */
 export function subscribeTurnChangeSetUpdated(
   sessionId: string,
   cb: (payload: TurnChangeSetUpdatedPayload) => void,
@@ -304,9 +306,13 @@ export function subscribeTurnChangeSetUpdated(
         cb(payload as TurnChangeSetUpdatedPayload);
       });
     }
-    // Exact patches can exceed the 2 MiB device-link frame. This phase fails closed for
-    // controlled sessions instead of truncating a patch and presenting it as exact.
-    return () => {};
+    return window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
+      if (push.deviceId !== deviceId || push.channel !== 'maker:turn-change-set:updated') return;
+      if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
+      const payload = push.payload as Partial<TurnChangeSetUpdatedPayload> | null;
+      if (payload?.sessionId !== sessionId || payload.summary?.sessionId !== sessionId) return;
+      cb(payload as TurnChangeSetUpdatedPayload);
+    });
   };
 
   let currentDeviceId = getStickySessionDeviceId(sessionId);

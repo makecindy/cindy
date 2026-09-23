@@ -24,7 +24,16 @@ import { isCindyMakeFamilySource } from '../../../../../shared/cindyMakeMerge';
  *   manualProjectOrder。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -115,6 +124,12 @@ import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import { resolveCollapsedProjectAttentionTone } from '../projectCollapsedAttention';
+
+const CindyMakeCreateDialog = lazy(() =>
+  import('@/components/cindy-make/CindyMakeCreateDialog').then((module) => ({
+    default: module.CindyMakeCreateDialog,
+  })),
+);
 
 /** 手动排序只从项目标题行起手。点击折叠仍走标题行；SortableJS 的
  *  fallbackTolerance + ignoreNextClick 把点击和拖拽分开。 */
@@ -338,6 +353,7 @@ export function ProjectsSection({
   // 段级收起已随「全部任务 = 范围下拉」取消(2026-08-13 用户定稿):标题的点击
   // 语义让给机器范围切换;「想要紧凑」由右侧「收起所有分组」承接。
   const [showAllProjects, setShowAllProjects] = useCollapsibleShowAll(false);
+  const [makeCreateOpen, setMakeCreateOpen] = useState(false);
   // 设备段各自的「显示全部」(2026-08-13 复核 P2:共用一个标志会让点任一段的
   // 段内按钮把所有段一起展开——按钮看起来是段内操作,作用域也必须是段内)。
   const [expandedDeviceSections, setExpandedDeviceSections] = useState<ReadonlySet<string>>(
@@ -776,9 +792,7 @@ export function ProjectsSection({
     (entry) => entry.kind !== 'project' || collapsed.has(entry.project.projectKey),
   );
   const allGroupsCollapsed =
-    allVisibleProjectGroupsCollapsed &&
-    allSessionGroupsCollapsed &&
-    allAutomationGroupsCollapsed;
+    allVisibleProjectGroupsCollapsed && allSessionGroupsCollapsed && allAutomationGroupsCollapsed;
   const hasDeviceLayer = deviceGroupingActive && deviceSections.length > 0;
   const allDevicesCollapsed =
     hasDeviceLayer &&
@@ -1003,6 +1017,8 @@ export function ProjectsSection({
       const createDisabled =
         (dialogueDeviceTarget === undefined ? isCreateDialogueDisabled : false) ||
         targetDeviceOffline;
+      // The settings dialog creates on this computer; never expose it on a remote-only group.
+      const canCreateMake = entry.sessions.some((session) => !session.deviceLinkDeviceId);
       return (
         <SessionGroupNode
           key={`${entry.kind}:${dialogueGroupKey}`}
@@ -1011,12 +1027,21 @@ export function ProjectsSection({
           foldExemptSessionIds={lampFoldExemptIds}
           groupTitle={isMake ? t('settings.cindyMake.title') : undefined}
           groupIcon={
-            isMake ? <Hammer size={15} strokeWidth={1.8} className="shrink-0" aria-hidden /> : undefined
+            isMake ? (
+              <Hammer size={15} strokeWidth={1.8} className="shrink-0" aria-hidden />
+            ) : undefined
           }
           collapsed={isCollapsed}
           onToggle={() => setDialogueCollapsed([groupKey], !isCollapsed)}
-          onCreateDialogue={isMake ? undefined : () => onCreateDialogue(dialogueDeviceTarget)}
-          isCreateDisabled={createDisabled}
+          onCreateDialogue={
+            isMake
+              ? canCreateMake
+                ? () => setMakeCreateOpen(true)
+                : undefined
+              : () => onCreateDialogue(dialogueDeviceTarget)
+          }
+          createLabel={isMake ? t('settings.cindyMake.create.title') : undefined}
+          isCreateDisabled={isMake ? false : createDisabled}
           createDisabledReason={
             targetDeviceOffline ? t('ccAgent.remoteSession.actionsUnavailable') : undefined
           }
@@ -1044,6 +1069,11 @@ export function ProjectsSection({
 
   return (
     <div className="flex flex-col gap-0.5 w-full">
+      {makeCreateOpen && (
+        <Suspense fallback={null}>
+          <CindyMakeCreateDialog onOpenChange={setMakeCreateOpen} />
+        </Suspense>
+      )}
       {/* 范围标题恒在:无列表内容时仍画这一行,不把设置入口一起摘掉。 */}
       <MainListScopeHeader
         filter={filter}
@@ -1063,6 +1093,10 @@ export function ProjectsSection({
       />
       {hasMainListContent ? (
         <div className="relative flex flex-col gap-1 pt-1 pr-0 pl-3">
+          {!deviceGroupingActive &&
+            visibleMixedEntries
+              .filter((entry) => entry.kind === 'cindy-make-group')
+              .map((entry) => renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY))}
           {!deviceGroupingActive ? (
             <UnclassifiedSection
               sessions={unclassified.filter((session) => !isCindyMakeFamilySource(session.source))}
@@ -1084,7 +1118,7 @@ export function ProjectsSection({
             />
           ) : null}
           {/* 混排渲染(D / E 期):
-              - 自定义项目顺序:模型保证项目行连续在前 → 项目段走 SortableList,
+              - 自定义项目顺序:Cindy Make 固定在前,项目段走 SortableList,
                 其后是散排对话 / 对话组。折叠+溢出时禁用拖拽,点「显示全部」后再拖。
                 可与设备分组叠加:每段各自拖本段项目。
               - 按最近活动:按 deviceSections 切段(设备分组开启时),段内项目行与
@@ -1103,7 +1137,7 @@ export function ProjectsSection({
                 renderItem={(project) => renderProjectNode(project)}
               />
               {visibleMixedEntries
-                .filter((entry) => entry.kind !== 'project')
+                .filter((entry) => entry.kind !== 'project' && entry.kind !== 'cindy-make-group')
                 .map((entry) => renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY))}
             </>
           ) : deviceGroupingActive ? (
@@ -1200,6 +1234,11 @@ export function ProjectsSection({
                             <>
                               {customProjectOrder ? (
                                 <>
+                                  {sectionView.visibleEntries
+                                    .filter((entry) => entry.kind === 'cindy-make-group')
+                                    .map((entry) =>
+                                      renderNonProjectEntry(entry, key, sectionDialogueTarget),
+                                    )}
                                   <SortableList
                                     items={sectionProjects}
                                     getId={getProjectId}
@@ -1216,7 +1255,11 @@ export function ProjectsSection({
                                     renderItem={(project) => renderProjectNode(project)}
                                   />
                                   {sectionView.visibleEntries
-                                    .filter((entry) => entry.kind !== 'project')
+                                    .filter(
+                                      (entry) =>
+                                        entry.kind !== 'project' &&
+                                        entry.kind !== 'cindy-make-group',
+                                    )
                                     .map((entry) =>
                                       renderNonProjectEntry(entry, key, sectionDialogueTarget),
                                     )}
@@ -1247,11 +1290,13 @@ export function ProjectsSection({
             </div>
           ) : (
             <div className="flex flex-col gap-1">
-              {visibleMixedEntries.map((entry) =>
-                entry.kind === 'project'
-                  ? renderProjectNode(entry.project)
-                  : renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY),
-              )}
+              {visibleMixedEntries
+                .filter((entry) => entry.kind !== 'cindy-make-group')
+                .map((entry) =>
+                  entry.kind === 'project'
+                    ? renderProjectNode(entry.project)
+                    : renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY),
+                )}
             </div>
           )}
           {/* 全局「显示全部」只属于未按设备分组的单段路径;设备分组下折叠与 footer 都在段内。 */}
@@ -1433,9 +1478,9 @@ export function SessionGroupNode({
                 onPointerDown={(e) => e.stopPropagation()}
                 onKeyDown={(e) => e.stopPropagation()}
                 className={cn(
-                  'flex size-5 shrink-0 items-center justify-center rounded-md',
+                  'flex size-6 shrink-0 items-center justify-center rounded-full',
                   'text-sidebar-action-icon hover:text-foreground',
-                  'hover:bg-sidebar-item-hover focus:outline-none',
+                  'hover:bg-sidebar-item-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                   'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
                 )}
               >

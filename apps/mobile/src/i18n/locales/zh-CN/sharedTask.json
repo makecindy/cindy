@@ -44,8 +44,6 @@
   "enterTask": "进入任务",
   "inviteBoxTitle": "将邀请发给你的伙伴",
   "roleGuest": "访客",
-  "roleOwnedBadge": "我开启",
-  "roleJoinedBadge": "已加入",
   "removeShort": "移除",
   "removeNamedTitle": "移除{{name}}？",
   "shareCurrent": "共享当前任务",
