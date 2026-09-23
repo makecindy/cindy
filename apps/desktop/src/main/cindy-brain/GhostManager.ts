@@ -3035,7 +3035,7 @@ export class GhostManager {
       } catch (error) {
         // No package bytes were published. Clear the prepared journal so a
         // cancelled request cannot leave an installation waiting for recovery.
-        await this.receiptStore.clearPendingMutation(manifest.id);
+        await this.receiptStore.clearPendingMutation(relId);
         this.untrustedApprovals.delete(this.isolationKey(relId));
         throw error;
       }
@@ -3080,7 +3080,7 @@ export class GhostManager {
         // receipt.packageSha256 与标记相符即判已提交、幂等清理。
         if (!tombstoneClearPending) {
           try {
-            await this.receiptStore.clearPendingMutation(manifest.id);
+            await this.receiptStore.clearPendingMutation(relId);
             this.untrustedApprovals.delete(this.isolationKey(relId));
           } catch {
             // Keep quarantine while the durable journal remains.
@@ -3094,7 +3094,7 @@ export class GhostManager {
       } catch (error) {
         try {
           await fs.promises.rm(finalDir, { recursive: true, force: true });
-          await this.receiptStore.clearPendingMutation(manifest.id);
+          await this.receiptStore.clearPendingMutation(relId);
           this.untrustedApprovals.delete(this.isolationKey(relId));
         } catch (rollbackError) {
           // Keep the install journal whenever rollback cannot prove the published
@@ -3310,7 +3310,7 @@ export class GhostManager {
     this.untrustedApprovals.add(this.isolationKey(relId));
     const clearUpdateQuarantineAfterRollback = async (): Promise<void> => {
       try {
-        await this.receiptStore.clearPendingMutation(manifest.id);
+        await this.receiptStore.clearPendingMutation(relId);
         this.untrustedApprovals.delete(this.isolationKey(relId));
       } catch {
         // Keep the in-process quarantine if the journal cannot be cleared;
@@ -3469,7 +3469,7 @@ export class GhostManager {
     }
     // receipt 已就位 = 事务提交,清标记后再回收 backup;顺序保证"标记在 ⟺ 可能未提交"。
     try {
-      await this.receiptStore.clearPendingMutation(manifest.id);
+      await this.receiptStore.clearPendingMutation(relId);
       this.untrustedApprovals.delete(this.isolationKey(relId));
     } catch {
       // Keep quarantine while the durable journal remains; recovery retries it.

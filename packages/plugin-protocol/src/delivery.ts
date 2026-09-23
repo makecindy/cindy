@@ -486,11 +486,11 @@ export function parseListPluginsResponse(value: unknown): ListPluginsResponse {
   const currentOrganization = parseCurrentOrganization(raw.currentOrganization);
   if (currentOrganization?.orgSlug !== undefined) {
     for (const item of [...plugins, ...removals]) {
+      if (item.scope !== 'organization') continue;
       if (
-        item.scope === 'organization' &&
-        item.namespace !== undefined &&
-        (item.organizationId !== currentOrganization.organizationId ||
-          item.namespace !== currentOrganization.orgSlug)
+        item.namespace === undefined ||
+        item.organizationId !== currentOrganization.organizationId ||
+        item.namespace !== currentOrganization.orgSlug
       ) {
         throw new PluginProtocolError('response 企业 namespace 与 currentOrganization 不一致');
       }

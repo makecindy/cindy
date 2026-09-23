@@ -1585,6 +1585,59 @@ describe('GhostManager · 装入/更新崩溃窗口恢复(事务标记)', () => 
     expect(retried).toMatchObject({ ghost: { manifest: { id: 'hello' }, enabled: true } });
   });
 
+  it('clears namespaced install and update journals by physical instance id', async () => {
+    const file = await makeCindy('ns-journal.cindy', goodManifest());
+    const nsPending = path.join(workDir, 'ghosts-install-state', '_ns', 'acme', '.pending-hello.json');
+    const rootPending = pendingMarkerPath();
+    const controller = new AbortController();
+    const writePending = GhostInstallReceiptStore.prototype.writePendingMutation;
+    const pendingSpy = vi.spyOn(GhostInstallReceiptStore.prototype, 'writePendingMutation')
+      .mockImplementation(async function (this: GhostInstallReceiptStore, ...args) {
+        await writePending.apply(this, args);
+        controller.abort();
+      });
+    try {
+      await expectRejection(
+        await manager.install(file, {
+          namespace: 'acme',
+          beforePackagePlacement: () => controller.signal.throwIfAborted(),
+        }),
+        'io',
+      );
+      expect(fs.existsSync(nsPending)).toBe(false);
+      expect(fs.existsSync(rootPending)).toBe(false);
+    } finally {
+      pendingSpy.mockRestore();
+    }
+
+    const installed = await manager.install(file, { namespace: 'acme' });
+    expect(installed).toMatchObject({
+      ghost: { manifest: { id: 'hello' }, namespace: 'acme' },
+    });
+    expect(fs.existsSync(nsPending)).toBe(false);
+    expect(fs.existsSync(rootPending)).toBe(false);
+    expect(fs.existsSync(path.join(rootDir, '_ns', 'acme', 'hello', 'ghost.json'))).toBe(true);
+
+    const recovered = freshManager();
+    expect(recovered.list()).toEqual([
+      expect.objectContaining({
+        namespace: 'acme',
+        approval: expect.objectContaining({ state: 'approved' }),
+      }),
+    ]);
+
+    const bumped = await makeCindy('ns-journal-v2.cindy', { ...goodManifest(), version: '1.0.1' });
+    const updated = await manager.update(bumped, {
+      expectedInstalledApproval: ghostInstallApprovalToken(
+        (installed as { ghost: InstalledGhost }).ghost.approval,
+      ),
+      namespace: 'acme',
+    });
+    expect('ghost' in updated).toBe(true);
+    expect(fs.existsSync(nsPending)).toBe(false);
+    expect(fs.existsSync(rootPending)).toBe(false);
+  });
+
   it('崩溃的装入(有 finalDir、无 receipt、有 install 标记)被恢复删除,不被迁移收编', async () => {
     // install 在 rename(staging→final) 之后、写 receipt 之前崩溃:finalDir 完整、无
     // receipt、无 ledger。若不处理,迁移会把它(崩溃窗口内可能被改过 manifest)当 legacy
@@ -2579,6 +2632,10 @@ describe('GhostManager · install', () => {
     });
     expect(fs.existsSync(path.join(rootDir, 'hello', 'ghost.json'))).toBe(true);
     expect(fs.existsSync(path.join(rootDir, '_ns', 'acme', 'hello', 'ghost.json'))).toBe(true);
+    expect(fs.existsSync(path.join(workDir, 'ghosts-install-state', '_ns', 'acme', '.pending-hello.json'))).toBe(
+      false,
+    );
+    expect(fs.existsSync(path.join(workDir, 'ghosts-install-state', '.pending-hello.json'))).toBe(false);
     const listed = manager.list();
     expect(listed).toHaveLength(2);
     expect(listed.map((item) => [item.namespace ?? null, item.manifest.id])).toEqual(
