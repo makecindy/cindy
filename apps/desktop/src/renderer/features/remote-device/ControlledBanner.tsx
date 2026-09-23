@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ControlledBanner —— 被控端可见性指示。
  *
@@ -281,10 +282,14 @@ export function ControlledBanner({
           aria-hidden
         />
         <span className="min-w-0 truncate text-12 text-[var(--text-primary)]">{label}</span>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          tone="quiet"
+          compact
           type="button"
           onClick={hasMultipleControllers ? onViewControllers : () => void onRevoke()}
-          className="flex min-w-0 max-w-[45%] shrink items-center gap-1 rounded-full px-2 py-0.5 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+          className="min-w-0 max-w-[45%] shrink"
         >
           {hasMultipleControllers ? (
             <Eye size={13} className="shrink-0" />
@@ -296,7 +301,7 @@ export function ControlledBanner({
               ? t('remoteDevice.viewControllers')
               : t('remoteDevice.revokeAccess')}
           </span>
-        </button>
+        </Button>
         {composerSessionId && (
           <button
             type="button"

@@ -1235,33 +1235,22 @@ function DatabaseCleanupDialog({
                   </div>
                   <div className="mt-6 flex shrink-0 justify-end gap-2.5">
                     <AlertDialog.Cancel asChild>
-                      <button
-                        type="button"
-                        className={cn(
-                          'inline-flex min-w-[96px] items-center justify-center rounded-full border px-6 py-2.5 text-13 font-medium',
-                          'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                          'transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
-                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                        )}
-                      >
+                      <Button variant="secondary" size="lg" type="button" className="min-w-[96px]">
                         {t('settings.about.storage.cancelButton')}
-                      </button>
+                      </Button>
                     </AlertDialog.Cancel>
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      tone="danger-solid"
                       ref={confirmButtonRef}
                       type="button"
                       disabled={insufficientSpace || scanned.messageCount === 0}
                       onClick={onConfirm}
-                      className={cn(
-                        'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                        'bg-[hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)]',
-                        'transition-colors hover:opacity-90',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                        'disabled:cursor-not-allowed disabled:opacity-50',
-                      )}
+                      className="min-w-[96px]"
                     >
                       {t('settings.about.storage.dbSlimmingConfirmButton')}
-                    </button>
+                    </Button>
                   </div>
                 </>
               )
@@ -1292,21 +1281,16 @@ function CardButton({
   busy?: boolean;
 }) {
   return (
-    <button
+    <Button
+      variant={emphasis ? 'cta' : 'secondary'}
+      size="sm"
+      compact
       type="button"
       onClick={onClick}
       disabled={disabled}
       aria-busy={busy || undefined}
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-12 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-        'border border-[var(--settings-theme-card-border)]',
-        'disabled:cursor-default disabled:opacity-60',
-        emphasis
-          ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] border-transparent enabled:hover:opacity-90'
-          : 'text-[var(--settings-section-title)] enabled:hover:bg-[var(--settings-theme-card-border)]/40',
-      )}
     >
       {children}
-    </button>
+    </Button>
   );
 }

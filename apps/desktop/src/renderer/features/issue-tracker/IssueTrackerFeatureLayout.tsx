@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * IssueTrackerFeatureLayout — 「我的 Issue」页
  * ---------------------------------------------------------------------------
@@ -304,18 +305,16 @@ function EmptyGuide({
         {t('issueAgent.redirect.descriptionAfter')}
       </p>
 
-      <button
+      <Button
+        variant="cta"
+        size="lg"
         type="button"
         onClick={() => window.electronAPI.openExternal(GITHUB_ISSUES_URL)}
-        className={cn(
-          'mt-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-full px-5',
-          'text-sm font-medium transition-colors',
-          'bg-foreground text-background hover:opacity-90',
-        )}
+        className="mt-2"
       >
         {t('issueAgent.redirect.cta')}
         <ExternalLink size={14} />
-      </button>
+      </Button>
     </div>
   );
 }

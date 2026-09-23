@@ -29,6 +29,7 @@ import {
   Smartphone,
 } from 'lucide-react';
 
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import accessibilityPermissionIcon from '@/assets/system-settings/accessibility-icon.png';
 import screenRecordingPermissionIcon from '@/assets/system-settings/screen-recording-icon.png';
@@ -1352,19 +1353,21 @@ export function ComputerUseSection({
                 : t('settings.computerUse.browser.notDetected')}
             </p>
             {availability.detected ? (
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
+                className="px-3"
                 type="button"
                 onClick={handleOpenForLogin}
-                className={ACTION_BUTTON_CLASS}
               >
                 <LogIn size={12} className="shrink-0" />
                 {t('settings.computerUse.browser.openForLogin')}
-              </button>
+              </Button>
             ) : (
-              <button type="button" onClick={handleDownload} className={ACTION_BUTTON_CLASS}>
+              <Button variant="secondary" size="sm" className="px-3" type="button" onClick={handleDownload}>
                 <Download size={12} className="shrink-0" />
                 {t('settings.computerUse.browser.download')}
-              </button>
+              </Button>
             )}
           </div>
         ) : null}
@@ -1430,19 +1433,18 @@ export function ComputerUseSection({
                     : t('settings.computerUse.directControl.authorizing')}
                 </span>
               ) : (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="px-2.5"
+                  loading={computerPermissionRecheckPending}
                   type="button"
                   onClick={() => void handleRecheckComputerStatus()}
                   disabled={computerPermissionRecheckPending}
-                  className={cn(ACTION_BUTTON_CLASS, 'h-6 px-2.5')}
                 >
-                  {computerPermissionRecheckPending ? (
-                    <Spinner size={12} />
-                  ) : (
-                    <RefreshCw size={12} className="shrink-0" />
-                  )}
+                  <RefreshCw size={12} className="shrink-0" />
                   {t('settings.computerUse.directControl.permissions.recheck')}
-                </button>
+                </Button>
               )}
             </div>
 
@@ -1532,17 +1534,18 @@ export function ComputerUseSection({
                           version: driverUpdate.latestVersion,
                         })}
                   </span>
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="px-2.5"
+                    loading={driverUpdatePending}
                     type="button"
                     onClick={() => void handleUpdateDriver()}
                     disabled={driverUpdatePending || computerInstallPending}
-                    className={cn(ACTION_BUTTON_CLASS, 'h-6 px-2.5')}
                   >
                     <Download size={12} className="shrink-0" />
-                    {driverUpdatePending
-                      ? t('settings.computerUse.directControl.update.updating')
-                      : t('settings.computerUse.directControl.update.action')}
-                  </button>
+                    {t('settings.computerUse.directControl.update.action')}
+                  </Button>
                 </>
               ) : null}
             </div>
@@ -1602,14 +1605,16 @@ export function ComputerUseSection({
               ) : null}
             </div>
             <div>
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
+                className="px-3"
                 type="button"
                 onClick={handleOpenCuaProject}
-                className={ACTION_BUTTON_CLASS}
               >
                 <ExternalLink size={12} className="shrink-0" />
                 {t('settings.computerUse.directControl.openSourceProject')}
-              </button>
+              </Button>
             </div>
           </div>
         ) : null}
@@ -1751,15 +1756,18 @@ export function ComputerUseSection({
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
+              className="px-3"
+              loading={androidStatusPending}
               type="button"
               onClick={() => void handleRefreshAndroidStatus()}
               disabled={androidStatusPending}
-              className={ACTION_BUTTON_CLASS}
             >
               <RefreshCw size={12} className="shrink-0" />
               {t('settings.computerUse.android.refresh')}
-            </button>
+            </Button>
           </div>
         </div>
         {androidConnectionGuideKind ? (
@@ -1825,22 +1833,26 @@ export function ComputerUseSection({
                 'disabled:opacity-50',
               )}
             />
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
+              className="px-3"
               type="button"
               onClick={() => void handleSaveAndroidAdbPath()}
               disabled={!androidAdbPathCanSave || androidAdbPathBusy}
-              className={ACTION_BUTTON_CLASS}
             >
               {t('settings.computerUse.android.adb.save')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="px-3"
               type="button"
               onClick={() => void handleUseDefaultAndroidAdbPath()}
               disabled={androidAdbPathBusy}
-              className={ACTION_BUTTON_CLASS}
             >
               {t('settings.computerUse.android.adb.useDefault')}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

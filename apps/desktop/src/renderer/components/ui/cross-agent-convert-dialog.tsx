@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * CrossAgentConvertDialog — 跨 Agent 工作区互转弹窗（步骤列表样式）。
  *
@@ -111,39 +112,27 @@ export function CrossAgentConvertDialog({
           </ul>
 
           <div className="mt-6 flex justify-end gap-2.5">
-            <button
+            <Button
+              variant="secondary"
+              palette="confirmation"
+              size="lg"
               type="button"
               disabled={isRunning}
               onClick={onCancel}
-              className={cn(
-                'inline-flex items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                'active:scale-[0.98]',
-                'border bg-transparent',
-                'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                'hover:bg-[var(--confirm-btn-secondary-hover)]',
-                'focus-visible:ring-[var(--confirm-btn-secondary-border)]',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
             >
               {phaseText.cancel}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="cta"
+              palette="confirmation"
+              size="lg"
+              loading={isRunning}
               type="button"
               disabled={isRunning}
               onClick={onConfirm}
-              className={cn(
-                'inline-flex items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                'active:scale-[0.98]',
-                'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)]',
-                'hover:bg-[var(--confirm-btn-primary-hover)]',
-                'focus-visible:ring-[var(--confirm-btn-primary-bg)]',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
             >
               {phaseText.primary}
-            </button>
+            </Button>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>

@@ -1,6 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
 import { Tip, type TipProps } from '@/components/ui/tooltip';
+import '../ui/button.css';
 
 /**
  * ChromeIconButton —— 标题栏 28px 圆形图标按钮基元。
@@ -14,7 +15,7 @@ import { Tip, type TipProps } from '@/components/ui/tooltip';
  * 快捷键逻辑由各调用方自行注册，不进入本组件。
  */
 const CHROME_ICON_BUTTON_CLASS =
-  'inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]';
+  'cindy-button-frame inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors enabled:hover:[--button-face-bg:var(--surface-hover)] enabled:active:[--button-face-bg:var(--surface-hover)] enabled:hover:text-[var(--text-primary)]';
 
 export function ChromeIconButton({
   children,

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useState } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 
@@ -197,17 +198,24 @@ export function BotModelChainEditor({
             {pendingRoute && routes.length < BOT_MODEL_CHAIN_MAX ? (
               <div className="flex min-w-0 items-center gap-2">
                 {picker(pendingRoute, routes.length)}
-                <button
+                <Button
+                  variant="secondary"
+                  tone="quiet"
+                  size="md"
+                  compact
                   type="button"
                   disabled={disabled}
                   onClick={() => setPendingRoute(null)}
-                  className="h-8 rounded-lg px-3 text-12"
                 >
                   {t('bots.cancel')}
-                </button>
+                </Button>
               </div>
             ) : null}
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              tone="quiet"
+              compact
               type="button"
               disabled={
                 disabled ||
@@ -216,25 +224,25 @@ export function BotModelChainEditor({
                 visibleVendors.length === 0
               }
               onClick={add}
-              className={cn(
-                'inline-flex h-8 items-center gap-2 rounded-full px-3 text-12',
-                'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40',
-              )}
             >
               <Plus size={14} />
               {t('bots.modelChain.add')}
-            </button>
+            </Button>
             {onRestoreDefault ? (
-              <button
+              <Button
+                variant="secondary"
+                size="md"
+                tone="quiet"
+                compact
                 type="button"
                 disabled={disabled}
                 onClick={() => {
                   if (!disabled) onRestoreDefault();
                 }}
-                className="ml-2 h-8 rounded-full px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                className="ml-2"
               >
                 {t('bots.model.restoreDefault')}
-              </button>
+              </Button>
             ) : null}
             <p className="text-11 leading-5">{t('bots.modelChain.description')}</p>
           </div>

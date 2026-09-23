@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Info, Plus, Search } from 'lucide-react';
 
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
@@ -1768,45 +1769,33 @@ export function AddProviderWizard({
               <div className="flex flex-wrap items-center gap-2">
                 {/* 等待授权中按钮变「取消」(与详情头对称),不禁用——浏览器流挂起时用户必须能中止重试。 */}
                 {loggingIn ? (
-                  <button
-                    type="button"
-                    onClick={cancelAuthorize}
-                    className="flex h-9 items-center justify-center gap-2 rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                    style={{
-                      backgroundColor: 'var(--settings-btn-secondary-bg)',
-                      borderColor: 'var(--settings-btn-secondary-border)',
-                      color: 'var(--settings-btn-secondary-text)',
-                    }}
-                  >
+                  <Button variant="secondary" size="lg" type="button" onClick={cancelAuthorize}>
                     <Spinner size={13} />
                     {t('settings.providers.button.cancel')}
-                  </button>
+                  </Button>
                 ) : (
                   <>
                     {sel.provider.id === 'openai' && !localOpenAiAlreadyAdded && (
-                      <button type="button" onClick={() => void useLocalOpenAiAccount()}
-                        className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                        style={{ backgroundColor: 'var(--settings-btn-secondary-bg)', borderColor: 'var(--settings-btn-secondary-border)', color: 'var(--settings-btn-secondary-text)' }}>
+                      <Button
+                        variant="secondary"
+                        size="lg"
+                        type="button"
+                        onClick={() => void useLocalOpenAiAccount()}
+                      >
                         {t('settings.providers.openai.useLocalAccount')}
-                      </button>
+                      </Button>
                     )}
                     {sel.provider.id === 'anthropic' && !providers.some(p => p.id === 'anthropic' && !p.removed && (p.connected || p.removed === false)) && (
-                      <button type="button" onClick={() => void useLocalClaudeAccount()}
-                        className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium hover:bg-[var(--surface-hover)]"
-                        style={{ backgroundColor: 'var(--settings-btn-secondary-bg)', borderColor: 'var(--settings-btn-secondary-border)', color: 'var(--settings-btn-secondary-text)' }}>
+                      <Button
+                        variant="secondary"
+                        size="lg"
+                        type="button"
+                        onClick={() => void useLocalClaudeAccount()}
+                      >
                         {t('settings.providers.localAccount.useClaude')}
-                      </button>
+                      </Button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => void handleAuthorize()}
-                      className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
-                      style={{
-                        backgroundColor: 'var(--settings-btn-secondary-bg)',
-                        borderColor: 'var(--settings-btn-secondary-border)',
-                        color: 'var(--settings-btn-secondary-text)',
-                      }}
-                    >
+                    <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize()}>
                       {t(
                         ['openai', 'anthropic', 'xai'].includes(sel.provider.id)
                             ? 'settings.providers.openai.addIndependentAccount'
@@ -1814,7 +1803,7 @@ export function AddProviderWizard({
                               ? 'settings.providers.wizard.authorizeWithDeviceCode'
                               : 'settings.providers.button.authorize',
                       )}
-                    </button>
+                    </Button>
                   </>
                 )}
                 {/* 替代路径:API 用户没有订阅,OAuth 对其是错误路径——切到该渠道的
@@ -1822,19 +1811,20 @@ export function AddProviderWizard({
                     与「授权」并排的次级描边按钮(White Pill):小灰字形态用户根本
                     注意不到(2026-07-24 实测)。 */}
                 {(OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find(p => p.id === sel.provider.id)) && (
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="lg"
                     type="button"
-                    onClick={() => pickPreset((OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find(p => p.id === sel.provider.id))!, true)}
+                    onClick={() =>
+                      pickPreset(
+                        (OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find((p) => p.id === sel.provider.id))!,
+                        true,
+                      )
+                    }
                     disabled={loggingIn}
-                    className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
-                    style={{
-                      backgroundColor: 'transparent',
-                      borderColor: 'var(--settings-btn-secondary-border)',
-                      color: 'var(--text-primary)',
-                    }}
                   >
                     {t('settings.providers.wizard.useApiKey')}
-                  </button>
+                  </Button>
                 )}
               </div>
               {genericDeviceFlow && loggingIn && (
@@ -2104,18 +2094,16 @@ export function AddProviderWizard({
                                 color: 'var(--settings-section-title)',
                               }}
                             />
-                            <button
+                            <Button
+                              variant="secondary"
+                              size="lg"
                               type="button"
                               onClick={() => addManualModel(agent)}
                               disabled={!manualModelIds[agent]?.trim()}
-                              className="flex h-9 shrink-0 items-center justify-center rounded-full border px-4 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
-                              style={{
-                                borderColor: 'var(--settings-btn-secondary-border)',
-                                color: 'var(--settings-btn-secondary-text)',
-                              }}
+                              compact
                             >
                               {t('settings.providers.wizard.addManualModel')}
-                            </button>
+                            </Button>
                           </span>
                         </label>
                       ))}
@@ -2163,65 +2151,43 @@ export function AddProviderWizard({
             {t('settings.providers.wizard.back')}
           </button>
           <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={handleClose}
-              disabled={saving}
-              className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
-              style={{
-                borderColor: 'var(--settings-btn-secondary-border)',
-                color: 'var(--text-primary)',
-              }}
-            >
+            <Button variant="secondary" size="lg" type="button" onClick={handleClose} disabled={saving}>
               {t('settings.providers.wizard.cancel')}
-            </button>
+            </Button>
             {sel?.kind === 'builtinApiKey' && step === 2 && (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                loading={saving}
                 type="button"
                 onClick={() => void handleSaveBuiltinApiKey()}
                 disabled={saving || apiKey.trim().length === 0}
-                className={cn(
-                  'flex h-9 items-center justify-center gap-2 rounded-full px-5 text-13 font-medium transition-opacity',
-                  saving || apiKey.trim().length === 0
-                    ? 'cursor-not-allowed opacity-50'
-                    : 'hover:opacity-90',
-                )}
-                style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
               >
-                {saving && <Spinner size={13} />}
                 {t('settings.providers.wizard.finish')}
-              </button>
+              </Button>
             )}
             {sel?.kind === 'preset' && step === 2 && (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
                 type="button"
                 onClick={() => void startFetch()}
                 disabled={!presetCanContinue}
-                className={cn(
-                  'flex h-9 items-center justify-center rounded-full px-6 text-13 font-medium transition-opacity',
-                  !presetCanContinue ? 'cursor-not-allowed opacity-50' : 'hover:opacity-90',
-                )}
-                style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
               >
                 {t('settings.providers.wizard.next')}
-              </button>
+              </Button>
             )}
             {sel?.kind === 'preset' && step === 3 && (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                loading={saving}
                 type="button"
                 onClick={() => void handleFinish()}
                 disabled={saving || fetchState.status === 'fetching' || checkedCount === 0}
-                className={cn(
-                  'flex h-9 items-center justify-center gap-2 rounded-full px-6 text-13 font-medium transition-opacity',
-                  saving || fetchState.status === 'fetching' || checkedCount === 0
-                    ? 'cursor-not-allowed opacity-50'
-                    : 'hover:opacity-90',
-                )}
-                style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
               >
-                {saving && <Spinner size={13} />}
                 {t('settings.providers.wizard.finish')}
-              </button>
+              </Button>
             )}
           </div>
         </div>

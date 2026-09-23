@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * SelectionQuoteButton — 聊天消息流的"选中文字 → 添加到对话"浮动按钮。
  *
@@ -265,12 +266,15 @@ export function SelectionQuoteButton({
   };
 
   return createPortal(
-    <button
+    <Button
+      variant="secondary"
+      size="sm"
+      compact
       type="button"
       // mousedown 先于 click 触发浏览器清选区;preventDefault 保住选区与按钮。
       onMouseDown={(e) => e.preventDefault()}
       onClick={handleAdd}
-      className="fixed z-[60] flex w-max items-center gap-2.5 whitespace-nowrap rounded-full px-3 py-1.5 text-12 shadow-[var(--shadow-menu)]"
+      className="fixed z-[60] w-max whitespace-nowrap shadow-[var(--shadow-menu)]"
       style={{
         left: clamp(anchor.x, BUTTON_MIN_X_PX, window.innerWidth - BUTTON_RIGHT_MARGIN_PX),
         top:
@@ -284,14 +288,11 @@ export function SelectionQuoteButton({
                 ),
               ),
         transform: anchor.placement === 'above' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
-        backgroundColor: 'var(--surface-elevated)',
-        border: '1px solid var(--border-default)',
-        color: 'var(--text-primary)',
       }}
     >
       <MessageSquarePlus className="h-3.5 w-3.5" />
       {t('chat.quote.addToChat')}
-    </button>,
+    </Button>,
     document.body,
   );
 }

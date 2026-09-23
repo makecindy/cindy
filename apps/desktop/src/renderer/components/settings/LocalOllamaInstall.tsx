@@ -1,8 +1,8 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
-import { Spinner } from '@/components/ui/spinner';
 import type { LocalRuntimeInstallProgress } from '../../../shared/localModelRuntime';
 import { DownloadMeter } from './DownloadMeter';
 
@@ -135,32 +135,26 @@ export function LocalOllamaInstall({
       )}
       <div className="flex flex-wrap gap-2">
         {canInstall && (
-          <button
+          <Button
+            variant="cta"
+            size="lg"
+            loading={installing}
             type="button"
             disabled={installing}
             onClick={() => void handleInstall()}
-            className="flex h-9 items-center justify-center gap-2 rounded-full px-4 text-13 font-medium"
-            style={{
-              backgroundColor: 'var(--accent-cta-bg)',
-              color: 'var(--surface-on-card)',
-            }}
           >
-            {installing && <Spinner size={13} />}
             {t('settings.providers.local.installInCindy')}
-          </button>
+          </Button>
         )}
         {installing && (
-          <button
+          <Button
+            variant="secondary"
+            size="lg"
             type="button"
             onClick={() => void window.electronAPI.maker.localModelInstallAbort()}
-            className="flex h-9 items-center justify-center rounded-full border px-4 text-13 font-medium"
-            style={{
-              borderColor: 'var(--settings-btn-secondary-border)',
-              color: 'var(--settings-btn-secondary-text)',
-            }}
           >
             {t('settings.providers.local.installCancel')}
-          </button>
+          </Button>
         )}
       </div>
     </div>

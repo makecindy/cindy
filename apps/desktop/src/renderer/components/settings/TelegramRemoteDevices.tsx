@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * TelegramRemoteDevices —— 个人 Telegram bot 设置卡里的「我的其他设备」区块。
  *
@@ -231,29 +232,24 @@ export function TelegramRemoteDevices({ selfAppId }: { selfAppId: string | null 
                 <span className="truncate text-11 text-[var(--settings-source-meta)]">{detail}</span>
               </div>
               {canTakeOffline ? (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  compact
+                  loading={busyDeviceId === d.deviceId}
                   type="button"
                   onClick={() => void takeOffline(d.deviceId, status.appId!)}
                   disabled={busyDeviceId !== null}
-                  className={cn(
-                    'flex h-[28px] shrink-0 items-center justify-center gap-1.5 rounded-full px-3',
-                    'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-                    'text-11 font-medium text-[var(--settings-btn-secondary-text)]',
-                    busyDeviceId !== null && 'cursor-not-allowed opacity-40',
-                  )}
                 >
                   {busyDeviceId === d.deviceId ? (
-                    <span
-                      className="inline-flex animate-spin motion-reduce:animate-none"
-                      aria-hidden
-                    >
+                    <span className="inline-flex animate-spin motion-reduce:animate-none" aria-hidden>
                       <Loader2 size={12} />
                     </span>
                   ) : (
                     <PowerOff size={12} />
                   )}
                   {t('settings.telegramBot.remoteDevices.takeOffline')}
-                </button>
+                </Button>
               ) : null}
             </div>
           );

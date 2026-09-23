@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -5,7 +6,6 @@ import { Camera, Check, ChevronDown, Plus } from 'lucide-react';
 import cindyPortrait from '@/assets/bot-presets/cindy.png';
 import { Tip } from '@/components/ui/tooltip';
 import gallery from '../../../../resources/teammate-portrait-gallery.png';
-import { Spinner } from '@/components/ui/spinner';
 import { BOT_AVATAR_MAX_BYTES } from '../../../shared/botAvatarValue';
 
 export const BOT_PORTRAIT_COUNT = 17;
@@ -172,30 +172,37 @@ export function BotPortraitPicker({
             </div>
             {token && (
               <div className="mt-3 flex gap-1 border-t border-[var(--border-default)] pt-2">
-                <button
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  tone="quiet"
+                  loading={busy}
                   type="button"
                   disabled={busy}
                   onClick={() => void generate()}
-                  className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-full text-12 hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                  className="flex-1"
                 >
-                  {busy && <Spinner size={12} />}
                   {t('bots.guided.generateAvatar')}
-                </button>
+                </Button>
               </div>
             )}
             {candidate && (
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                tone="quiet"
                 type="button"
                 onClick={() => {
                   onChange(candidate);
                   setOpen(false);
                 }}
-                className="mt-2 flex w-full items-center gap-3 rounded-full p-1 text-12 hover:bg-[var(--surface-hover)]"
+                className="mt-2 w-full h-auto min-h-12 justify-start p-1 gap-3"
               >
                 <img src={candidate} alt="" className="h-10 w-10 rounded-full" />
                 <span>{t('bots.guided.useAvatar')}</span>
                 <Check size={14} />
-              </button>
+              </Button>
             )}
             {error && (
               <p role="alert" className="mt-2 text-12 text-[var(--text-danger)]">

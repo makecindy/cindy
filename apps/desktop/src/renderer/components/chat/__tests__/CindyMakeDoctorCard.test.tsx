@@ -137,7 +137,7 @@ describe('Make upstream step', () => {
     fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.personal' }));
     expect(choose).toHaveBeenCalledWith('personal');
     expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' }).className).toContain(
-      'border-[var(--border-default)]',
+      '[--button-face-border:var(--border-default)]',
     );
     fireEvent.click(screen.getByText('cindyMakeDoctor.details'));
     expect(screen.getByText('cindyMakeDoctor.checks.git')).toBeTruthy();

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
@@ -587,7 +588,10 @@ export function BotSettings({
                 <p className="mt-1 break-words text-11 leading-5 text-[var(--text-tertiary)] [overflow-wrap:anywhere]">
                   {t('bots.homeFolder.contents')}
                 </p>
-                <button
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  compact
                   type="button"
                   disabled={!bot.homeDir}
                   onClick={() => {
@@ -598,18 +602,21 @@ export function BotSettings({
                         setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
                     });
                   }}
-                  className="mt-3 h-9 rounded-full border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                  className="mt-3"
                 >
                   {t('bots.homeFolder.open')}
-                </button>
+                </Button>
                 {!capabilities.memory ? (
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="lg"
+                    compact
                     type="button"
                     onClick={() => updateCapability('memory', true)}
-                    className="ml-2 mt-3 h-9 rounded-full border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                    className="ml-2 mt-3"
                   >
                     {t('bots.memoryRecovery.action')}
-                  </button>
+                  </Button>
                 ) : null}
                 {folderError ? (
                   <p className="mt-2 text-11 text-[var(--text-danger)]" role="alert">
@@ -923,10 +930,24 @@ export function BotsHomeView() {
     );
   }
 
-  if (selectedBot.invitation && selectedBot.invitation.stage !== 'ready' && !selectedBot.canonicalSessionId)
+  if (
+    selectedBot.invitation && selectedBot.invitation.stage !== 'ready' && !selectedBot.canonicalSessionId
+  )
     return (
       <main className="flex h-full items-center justify-center px-6" role="main">
-        {selectedBot.invitation.stage === 'failed' ? <button type="button" className="h-10 rounded-full px-5 text-13 hover:bg-[var(--surface-hover)]" onClick={() => void retryBotInvitation(selectedBot.id)}>{t('commonUi.retry')}</button> : <Spinner size={20} />}
+        {selectedBot.invitation.stage === 'failed' ? (
+          <Button
+            variant="secondary"
+            size="lg"
+            tone="quiet"
+            type="button"
+            onClick={() => void retryBotInvitation(selectedBot.id)}
+          >
+            {t('commonUi.retry')}
+          </Button>
+        ) : (
+          <Spinner size={20} />
+        )}
       </main>
     );
 
@@ -940,13 +961,15 @@ export function BotsHomeView() {
           {/* 文案写着「请重试」,却没有任何能按的东西 —— 只能切走再切回来才会重建
               (2026-08-21 实测撞上一次瞬时失败)。这里补上真正的重试入口。 */}
           {selectedBot ? (
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               onClick={() => void retryCanonicalSessionCreation(selectedBot)}
-              className="h-8 rounded-full border border-[var(--border-default)] px-4 text-12 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
             >
               {t('commonUi.retry')}
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : (

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * Host-rendered errand (派活取件) preferences for a Plugin that declares
  * `agent.errand`. Settings 详情与 Plugin 详情共用(同 CindyCapabilityPrefs)。
@@ -246,17 +247,17 @@ export function GhostErrandPrefs({
               <X size={13} />
             </button>
           ) : null}
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={() => void pickWorkingDir()}
-            className={cn(
-              'flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 text-[var(--settings-input-text)] hover:bg-[var(--surface-hover)]',
-              appearance === 'plugin' ? 'text-13 leading-5' : 'text-12',
-            )}
+            className="shrink-0"
           >
             <FolderOpen size={13} />
             {t('settings.ghosts.detail.errandPrefs.workdirPick')}
-          </button>
+          </Button>
         </div>,
       )}
     </div>
