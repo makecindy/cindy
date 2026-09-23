@@ -689,7 +689,27 @@ describe('teammate reply previews', () => {
     await invokeHandler(payload);
     await invokeHandler(payload);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
-    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries only the missing channel after a fallback was delivered', async () => {
+    const { initNotificationService } = await freshService();
+    readSessionNotificationPreview.mockRejectedValueOnce(new Error('db busy'));
+    sendMobileSessionNotify.mockReturnValueOnce(false);
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    const payload = { sessionId: 'bot-main', title: 'Cindy', kind: 'done', channels: { desktop: true, mobile: true } };
+
+    await invokeHandler(payload);
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', eventId: 'turn:100:200' });
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
+    await invokeHandler(payload);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(2);
   });
 
   it('does not mark an unsupported desktop toast as delivered when mobile is also offline', async () => {

@@ -99,6 +99,27 @@ interface ShowSessionEventPayload {
 const liveNotifications = new Set<Notification>();
 type NotifiedReply = { eventId: string } | { fallbackSentAt: number };
 const notifiedReplies = new Map<string, NotifiedReply>();
+type ReplyNotificationChannel = 'desktop' | 'mobile';
+
+function replyNotificationKey(generation: number, sessionId: string, channel: ReplyNotificationChannel): string {
+  return `${generation}:${sessionId}:${channel}`;
+}
+
+function wasReplyNotified(key: string, eventId: string | undefined): boolean {
+  const notified = notifiedReplies.get(key);
+  if (!notified) return false;
+  if (!eventId) return true;
+  if ('eventId' in notified) return notified.eventId === eventId;
+  // An accepted fallback had no DB identity. Once persistence recovers,
+  // reconcile it with the turn that was already running when sent.
+  // A turn started afterwards is new, even if it finishes immediately.
+  const startedAt = /^turn:(\d+):\d+$/.exec(eventId)?.[1];
+  if (startedAt && Number(startedAt) < notified.fallbackSentAt) {
+    notifiedReplies.set(key, { eventId });
+    return true;
+  }
+  return false;
+}
 // A slow transcript must not indefinitely hide a completion or an action request.
 const NOTIFICATION_PREVIEW_WAIT_MS = 1_000;
 
@@ -223,48 +244,34 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const teammate = !!preview?.teammateName;
         const notificationTitle = preview?.teammateName ?? safeTitle;
         const eventId = preview?.eventId;
-        const eventKey = `${generation}:${sessionId}`;
-        const notified = notifiedReplies.get(eventKey);
-        if (kind === 'done' && notified) {
-          if (!eventId) return;
-          if ('eventId' in notified && notified.eventId === eventId) return;
-          if ('fallbackSentAt' in notified) {
-            // An accepted fallback had no DB identity. Once persistence recovers,
-            // reconcile it with the turn that was already running when sent.
-            // A turn started afterwards is new, even if it finishes immediately.
-            const startedAt = /^turn:(\d+):\d+$/.exec(eventId)?.[1];
-            if (startedAt && Number(startedAt) < notified.fallbackSentAt) {
-              notifiedReplies.set(eventKey, { eventId });
-              return;
-            }
-          }
-        }
+        const desktopKey = replyNotificationKey(generation, sessionId, 'desktop');
+        const mobileKey = replyNotificationKey(generation, sessionId, 'mobile');
         const fallbackBody = teammate ? getTeammateNotificationFallback() : undefined;
-        let accepted = false;
-        if (wantDesktop && kind === 'done') {
+        if (wantDesktop && kind === 'done' && !wasReplyNotified(desktopKey, eventId)) {
           try {
-            accepted = showDesktopSessionEvent(getWindow, {
+            const accepted = showDesktopSessionEvent(getWindow, {
               sessionId, title: notificationTitle, kind, teammate,
               body: teammate ? notificationPreview(detail ?? '') || fallbackBody : undefined,
             });
+            if (accepted) {
+              notifiedReplies.set(desktopKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
+            }
           } catch (err) {
             log.warn('[notification] desktop reply notification failed (non-fatal)', err);
           }
         }
-        if (channels?.mobile === true) {
+        if (channels?.mobile === true && (kind !== 'done' || !wasReplyNotified(mobileKey, eventId))) {
           try {
-            accepted = sendMobileSessionNotify({
+            const accepted = sendMobileSessionNotify({
               sessionId, title: notificationTitle, kind, generation, ...(detail ? { detail } : {}),
               ...(fallbackBody ? { fallbackBody } : {}), ...(eventId ? { eventId } : {}),
-            }) || accepted;
+            });
+            if (kind === 'done' && accepted) {
+              notifiedReplies.set(mobileKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
+            }
           } catch (err) {
             log.warn('[notification] mobile reply notification failed (non-fatal)', err);
           }
-        }
-        // A disconnected or incapable relay has not accepted the event. A later
-        // idle signal may retry the same semantic turn once a channel recovers.
-        if (kind === 'done' && accepted) {
-          notifiedReplies.set(eventKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
         }
       })().catch((err) => log.warn('[notification] reply notification failed (non-fatal)', err));
 
