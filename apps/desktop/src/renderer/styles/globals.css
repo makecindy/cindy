@@ -652,14 +652,15 @@ html:lang(ko) {
 
 /* Keep the caret and surrounding prose a consistent, readable distance from
    every composer pill. This is external spacing, independent of chip padding. */
-.ProseMirror :is(
-  [data-mention-chip],
-  [data-pasted-text-chip],
-  [data-composer-quote],
-  .ghost-cmd-pill,
-  .slash-cmd-pill,
-  .quick-start-pill
-) {
+.ProseMirror
+  :is(
+    [data-mention-chip],
+    [data-pasted-text-chip],
+    [data-composer-quote],
+    .ghost-cmd-pill,
+    .slash-cmd-pill,
+    .quick-start-pill
+  ) {
   margin-inline: 4px;
 }
 
@@ -1132,8 +1133,10 @@ body.resizing-pane [data-ghost-webview] {
 
 /* 分享选择模式会在消息 wrapper 左侧动态挂载绝对定位的选择框。该元素需要真实
    消息盒参与布局与绘制；继续使用视口外 intrinsic 占位会让长消息末尾的选择框
-   被压缩或裁切。仅让可分享消息退出隔离，常态和工具类条目继续保留渲染跳过。 */
-.msg-stream-items[data-share-selection-active] > [data-share-message-id] {
+   被压缩或裁切。伙伴消息的分享 wrapper 位于含时间分组的条目内部，也必须让
+   外层条目退出隔离；常态和工具类条目继续保留渲染跳过。 */
+.msg-stream-items[data-share-selection-active] > [data-share-message-id],
+.msg-stream-items[data-share-selection-active] > :has([data-share-message-id]) {
   content-visibility: visible;
   contain-intrinsic-size: none;
 }
@@ -1158,12 +1161,7 @@ body.resizing-pane [data-ghost-webview] {
   position: absolute;
   inset: 0;
   width: 45%;
-  background: linear-gradient(
-    100deg,
-    transparent 10%,
-    var(--text-primary) 50%,
-    transparent 90%
-  );
+  background: linear-gradient(100deg, transparent 10%, var(--text-primary) 50%, transparent 90%);
   transform: translateX(-120%);
   animation: brand-loading-sheen 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
