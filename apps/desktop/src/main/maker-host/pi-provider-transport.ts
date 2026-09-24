@@ -12,12 +12,13 @@ import * as googleVertex from '@earendil-works/pi-ai/api/google-vertex';
 import * as azureOpenaiResponses from '@earendil-works/pi-ai/api/azure-openai-responses';
 import * as bedrockConverseStream from '@earendil-works/pi-ai/api/bedrock-converse-stream';
 import * as mistralConversations from '@earendil-works/pi-ai/api/mistral-conversations';
-import { PI_REASONING_EFFORTS, PROVIDER_MODEL_CATALOG, providerEndpointBindings, providerModelRecord, providerModelAdapterId, providerPresetModelRecord, type CatalogModel, type ProviderModelRecord, type PiModelApi } from '@cindy/model-providers';
+import { PI_REASONING_EFFORTS, PROVIDER_MODEL_CATALOG, providerEndpointBindings, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, type CatalogModel, type ProviderModelRecord, type PiModelApi } from '@cindy/model-providers';
 
 export function invocationModelRecord(model: CatalogModel, upstream: string, api?: PiModelApi): ProviderModelRecord | undefined {
   const selected = model.api ?? api;
   const known = providerModelRecord(model.id, upstream, selected)
-    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected) : undefined);
+    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected) : undefined)
+    ?? providerModelGenerationRecord(model.id, upstream, selected, model.catalogPresetId);
   if (!selected && !known) return undefined;
   return {
     ...(known ?? {}), id: model.id, name: model.name, upstream,

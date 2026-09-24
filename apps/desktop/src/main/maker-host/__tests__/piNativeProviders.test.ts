@@ -2830,3 +2830,19 @@ it('carries Sub2API capacity, images, efforts and Fast from discovery into nativ
     contextWindow: 1050000, input: ['text', 'image'], supportsFastMode: true, reasoning: true,
     thinkingLevelMap: { high: 'high', max: 'max' } });
 });
+
+
+it('materializes a future GPT generation with inherited parameters in native Pi', () => {
+  const config = { id: 'future-sub2api', name: 'Sub2API', runtimes: { pi: {
+    baseUrl: 'https://relay.example/v1', wireProtocol: 'openai-responses' as const,
+    models: mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: [{ id: 'gpt-9-sol' }] })!),
+  } } };
+  const provider = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  const result = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined,
+    { ...BUNDLED_CATALOG, providers: [provider] });
+  expect(result.providers[0]).toMatchObject({ id: 'future-sub2api', baseUrl: 'https://relay.example/v1', api: 'openai-responses' });
+  expect(result.providers[0]?.models[0]).toMatchObject({ id: 'gpt-9-sol',
+    contextWindow: 1050000, maxTokens: 128000, input: ['text', 'image'], reasoning: true,
+    thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high' } });
+  expect(result.providers[0]?.models[0]?.cost).toBeUndefined();
+});

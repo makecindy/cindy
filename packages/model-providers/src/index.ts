@@ -313,7 +313,7 @@ export { runtimeUserModelMetadata } from "./modelMetadataLayers.js";
 
 export { PROVIDER_MEDIA_FIELDS, providerMediaField, projectProviderMediaModels } from "./providerMediaModels.js";
 
-export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
+export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
 
 export { parseModelsListResponse, isOpenRouterModelsUrl } from "./modelDiscovery.js";
 

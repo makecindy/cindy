@@ -328,8 +328,12 @@ describe("buildUserProvider (per-runtime)", () => {
         oldRegistry.models = oldRegistry.models.filter(
           (model) => !["openai/gpt-6-sol", "openai/gpt-6-luna"].includes(model.modelRef ?? model.id),
         );
+        // Without current-generation catalog data, compatible Responses routes now
+        // inherit the previous generation; Messages/Chat do not borrow its protocol.
         expect(buildUserProvider(config, { modelRegistry: oldRegistry }).models[agent]?.[0])
-          .toMatchObject({ efforts: [], defaultEffort: null });
+          .toMatchObject(agent === 'codex'
+            ? { efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' }
+            : { efforts: [], defaultEffort: null });
         const provider = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
         expect(provider.models[agent]?.[0]).toMatchObject({
           id,

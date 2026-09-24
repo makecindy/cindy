@@ -164,6 +164,7 @@ export function resolveModelMetadata(
   agent?: string,
   providerDefaults?: ModelMetadata,
   declaredDefaultEffort?: ModelMetadata["defaultEffort"],
+  generationDefaults?: ModelMetadata,
 ): ModelMetadata {
   const ids = [modelId];
   if (providerId === "openai" && modelId.startsWith("chatgpt/"))
@@ -201,6 +202,7 @@ export function resolveModelMetadata(
           providerDefaults,
         );
   const result = mergeModelMetadata(
+    generationDefaults,
     defaults,
     live,
     // A Harness's suggested default is not a model capability. Keep the shared

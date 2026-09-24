@@ -40,6 +40,27 @@ describe('Pi-owned transport for Cindy harnesses', () => {
     expect(sent?.service_tier).toBe(supportsFastMode ? 'priority' : undefined);
   });
 
+  it('sends inherited reasoning for a future model through the Responses serializer', async () => {
+    const upstream = 'https://relay.example/v1';
+    const provider = buildUserProvider({ id: 'future-relay', name: 'Relay', runtimes: {
+      codex: { baseUrl: upstream, wireProtocol: 'openai-responses', models:
+        mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: [{ id: 'gpt-9-sol' }] })!) },
+    } });
+    const row = invocationModelRecord(provider.models.codex![0], upstream, 'openai-responses')!;
+    let sent: Record<string, unknown> | undefined;
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url, init) => {
+      expect(String(url)).toBe(`${upstream}/responses`);
+      sent = JSON.parse(String(init?.body));
+      return new Response('data: {"type":"response.completed","response":{"id":"r","status":"completed","output":[],"usage":{"input_tokens":0,"output_tokens":0}}}\n\n',
+        { headers: { 'content-type': 'text/event-stream' } });
+    } });
+    await (await send('https://unused.invalid', { body: JSON.stringify({
+      model: row.id, input: 'hello', reasoning: { effort: 'high' }, stream: true,
+    }) })).text();
+    expect(sent).toMatchObject({ model: 'gpt-9-sol', reasoning: { effort: 'high' } });
+    expect(row.cost).toBeUndefined();
+  });
+
   it('reconciles saved max when capabilities narrow, disappear and return', async () => {
     const request = { model: 'changing-model', input: 'hello', reasoning: { effort: 'max' }, stream: true };
     for (const efforts of [['high', 'max'], ['high'], [], ['high', 'max']] as const) {

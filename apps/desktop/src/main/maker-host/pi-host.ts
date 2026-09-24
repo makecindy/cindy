@@ -54,7 +54,7 @@ import {
   runtimeCustomProviderId,
   storedCustomProviderId,
 } from '@cindy/model-providers';
-import { providerCatalogForPi, providerModelRecord } from '@cindy/model-providers';
+import { providerCatalogForPi, providerModelRecord, providerModelGenerationRecord } from '@cindy/model-providers';
 import type {
   Catalog,
   ModelCost,
@@ -1279,7 +1279,9 @@ export function buildPiNativeProvidersFromConfigs(
       const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl,
         model.api ?? model.piApi ?? (model.route ? model.route.wireProtocol : rt.wireProtocol),
         !model.api && !model.piApi && !model.route)
-        ?? ((model.api ?? model.piApi) ? providerPresetModelRecord(rt.catalogPresetId, model.id, model.api ?? model.piApi) : undefined);
+        ?? ((model.api ?? model.piApi) ? providerPresetModelRecord(rt.catalogPresetId, model.id, model.api ?? model.piApi) : undefined)
+        ?? providerModelGenerationRecord(model.id, model.route?.baseUrl ?? rt.baseUrl,
+          model.api ?? model.piApi ?? (model.route ? model.route.wireProtocol : rt.wireProtocol), rt.catalogPresetId);
       if (!row || !PI_NATIVE_APIS.has(row.execution.pi.api as PiNativeApi)) return undefined;
       return {
         id: row.id, name: row.name, baseUrl: row.upstream,
