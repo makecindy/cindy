@@ -4,6 +4,7 @@ import {
   canOfferMarketInstall,
   ghostReapprovalRoute,
   marketReviewTargetsInstalledGhost,
+  findInstalledGhostForMarketItem,
   marketItemMatchesInstalledGhost,
   orderPluginCatalogItems,
   pluginPresentationOrigin,
@@ -222,6 +223,50 @@ describe('orderPluginCatalogItems', () => {
   });
 });
 
+
+describe('findInstalledGhostForMarketItem', () => {
+  const root = {
+    manifest: { id: 'helper', version: '1.0.0' },
+    dir: '/ghosts/helper',
+  };
+  const namespaced = {
+    manifest: { id: 'helper', version: '9.0.0' },
+    namespace: 'xd',
+    dir: '/ghosts/_ns/xd/helper',
+  };
+  const inPlace = {
+    manifest: { id: 'helper', version: '1.2.0' },
+    namespace: 'xd',
+    dir: '/ghosts/helper',
+  };
+
+  it('binds a namespaced market row to that logical instance', () => {
+    expect(
+      findInstalledGhostForMarketItem([namespaced, root], {
+        ghostId: 'helper',
+        namespace: 'xd',
+      }),
+    ).toBe(namespaced);
+  });
+
+  it('binds a public market row to the physical root, not a namespaced twin', () => {
+    expect(
+      findInstalledGhostForMarketItem([namespaced, root], { ghostId: 'helper' }),
+    ).toBe(root);
+  });
+
+  it('keeps an in-place stamped plugin on a public market row', () => {
+    expect(
+      findInstalledGhostForMarketItem([inPlace], { ghostId: 'helper' }),
+    ).toBe(inPlace);
+  });
+
+  it('does not fall through to a namespaced-only twin for a public row', () => {
+    expect(
+      findInstalledGhostForMarketItem([namespaced], { ghostId: 'helper' }),
+    ).toBeUndefined();
+  });
+});
 describe('marketItemMatchesInstalledGhost', () => {
   it('requires namespace agreement once both sides are known', () => {
     expect(
