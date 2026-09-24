@@ -26,7 +26,7 @@ describe('new model generation defaults', () => {
         const model = provider.models[agent]![0]!;
         expect(model).toMatchObject({ id, name: id, efforts: previous.efforts,
           defaultEffort: previous.defaultEffort, contextWindow: previous.contextWindow,
-          maxOutput: previous.maxOutput, supportsImageInput: true });
+          maxOutput: previous.maxOutput, supportsImageInput: true, contextWindowVerified: false });
         expect(model.cost).toBeUndefined();
         expect(model.userModelConfig).toEqual(saved[0]);
       }
@@ -66,6 +66,27 @@ describe('new model generation defaults', () => {
     refreshed[0]!.contextWindow = 16000;
     refreshed[0]!.reasoning = false;
     expect(build(refreshed).models.pi![0]).toMatchObject({ efforts: [], defaultEffort: null, contextWindow: 16000 });
+  });
+
+  it('verifies only the target window across engines, including declarations equal to inherited defaults', () => {
+    const initial: [ProviderRuntimeModelConfig, ProviderRuntimeModelConfig] = [
+      { id: 'private-6-sol', name: 'Old', discoveredMetadata: { contextWindow: 64000 } },
+      { id: 'private-7-sol', name: 'New' },
+    ];
+    for (const target of [
+      initial[1],
+      { ...initial[1], discoveredMetadata: { contextWindow: 64000 } },
+      { ...initial[1], contextWindow: 32000 },
+    ]) {
+      const provider = build([initial[0], target]);
+      for (const agent of ['codex', 'pi', 'claude-code'] as const) {
+        expect(provider.models[agent]![0]).toMatchObject({ contextWindowVerified: true });
+        expect(provider.models[agent]![1]).toMatchObject({
+          contextWindow: target.contextWindow ?? 64000,
+          contextWindowVerified: target !== initial[1],
+        });
+      }
+    }
   });
 
   it('does not inherit from another variant, protocol, private namespace or endpoint', () => {
