@@ -67,6 +67,55 @@ describe('ChatInput model source switching wiring', () => {
     expect(modelChange).toMatch(/maker\.setModel\(\s*sessionId,\s*newModelId,\s*undefined,/);
   });
 
+  it('snapshots the target model thinking intent into the atomic selection', () => {
+    const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
+    const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
+    const handleStart = chatInputSource.indexOf(
+      'const handleProviderChange = useCallback(',
+      providerStart,
+    );
+    const modelChange = chatInputSource.slice(modelStart, providerStart);
+    const providerChange = chatInputSource.slice(providerStart, handleStart);
+
+    // 意图计算统一走 resolveModelThinkingIntent：缺记忆按 UI 默认开，来源/引擎未知时不猜。
+    expect(chatInputSource).toMatch(
+      /function resolveModelThinkingIntent\([\s\S]*?getThinking[\s\S]*?\?\?\s*true[\s\S]*?\n\}/,
+    );
+    // 换模型：本地 + 远程两条原子选择都带上；缺意图时不传（Pi 侧保持现状）。
+    expect(modelChange).toMatch(/const nextThinking = resolveModelThinkingIntent\(\{/);
+    expect(modelChange.match(/thinking: nextThinking/g)).toHaveLength(2);
+    // 失败回滚同样要带（与换来源分支对称）：否则回滚那次不下发档位，Pi 会停在
+    // 失败那次收敛后的档位上。
+    expect(modelChange).toMatch(/const rollbackThinking = resolveModelThinkingIntent\(\{/);
+    expect(modelChange.match(/thinking: rollbackThinking/g)).toHaveLength(1);
+    // 换来源（含失败回滚）同样要带，否则切到 Pi 新路由时旧档位会残留。
+    expect(
+      providerChange.match(/const targetThinking = resolveModelThinkingIntent\(\{/g),
+    ).toHaveLength(2);
+    expect(providerChange).toMatch(/const rollbackThinking = resolveModelThinkingIntent\(\{/);
+    expect(providerChange.match(/thinking: targetThinking/g)).toHaveLength(2);
+    expect(providerChange.match(/thinking: rollbackThinking/g)).toHaveLength(1);
+  });
+
+  it('replays the thinking intent through agent-switch staging and thinking toggles', () => {
+    const agentSwitchStart = chatInputSource.indexOf('const performAgentSwitch = useCallback(');
+    const agentSwitchEnd = chatInputSource.indexOf(
+      'const handleUnifiedDraftSelect = useCallback(',
+      agentSwitchStart,
+    );
+    const agentSwitch = chatInputSource.slice(agentSwitchStart, agentSwitchEnd);
+    // switchSessionAgent 的第 7 参必须带上目标 (引擎,来源,模型) 的思考意图。
+    expect(agentSwitch).toMatch(/const targetThinking =[\s\S]*?getThinking/);
+    expect(agentSwitch).toMatch(/switchSessionAgent\([\s\S]*?targetThinking,\s*\);/);
+
+    const toggleStart = chatInputSource.indexOf('onThinkingChange={async (enabled) => {');
+    const toggleEnd = chatInputSource.indexOf('modelMemory={modelMemory}', toggleStart);
+    const toggle = chatInputSource.slice(toggleStart, toggleEnd);
+    // 意图期内切开关必须写回 staged 意图（否则发送结算按旧快照把思考又打开）。
+    expect(toggle).toContain('getAgentSwitchIntent(sessionId)');
+    expect(toggle).toContain('thinking: enabled');
+  });
+
   it('keeps exact-window confirmation local and removes it from device-link calls', () => {
     const guardStart = chatInputSource.indexOf(
       'const confirmModelSwitchContextGuard = useCallback(',

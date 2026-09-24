@@ -3582,6 +3582,623 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("re-applies the retained thinking level to the target model after a model switch", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-level-after-switch",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true });
+
+    // Pi 的 set_model 不重置 thinking level：必须在切换完成后按保留档位重下发，
+    // 否则上一个模型的 off/旧档位会漂移给新模型。
+    const switched = captured.requests.slice(beforeSwitch);
+    const setModelIndex = switched.findIndex(
+      (request) => request.type === "set_model" && request.modelId === "model-b",
+    );
+    const levelIndex = switched.findIndex(
+      (request) => request.type === "set_thinking_level",
+    );
+    expect(setModelIndex).toBeGreaterThanOrEqual(0);
+    expect(levelIndex).toBeGreaterThan(setModelIndex);
+    expect(switched[levelIndex]).toEqual({ type: "set_thinking_level", level: "high" });
+    await handle.close();
+  });
+
+  it("turns thinking off after a model switch when the caller reports thinking is off", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-off-after-switch",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: false });
+
+    const switched = captured.requests.slice(beforeSwitch);
+    expect(switched).toContainEqual({ type: "set_thinking_level", level: "off" });
+    await handle.close();
+  });
+
+  it("turns thinking off when the target model has no thinking levels at all", async () => {
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "model-a",
+                  reasoning: true,
+                  thinkingLevelMap: { minimal: null, low: "low", medium: null, high: null, xhigh: null, max: null },
+                },
+                { id: "model-b" },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: [], defaultEffort: null },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-off-non-reasoning-target",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "low",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", {
+      providerId: "native-a",
+      effort: "low",
+      thinkingEnabled: true,
+    });
+
+    // 目标模型声明为不支持思考：明确发 off，不能把上一个模型的档位带过去。
+    const switched = captured.requests.slice(beforeSwitch);
+    expect(switched).toContainEqual({ type: "set_thinking_level", level: "off" });
+    await handle.close();
+  });
+
+  it("falls back to a supported level when the retained effort is unavailable on the target", async () => {
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "model-a",
+                  reasoning: true,
+                  thinkingLevelMap: { minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: null },
+                },
+                {
+                  id: "model-b",
+                  reasoning: true,
+                  thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: null, xhigh: null, max: null },
+                },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "medium"], defaultEffort: "medium" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-effort-fallback",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true });
+
+    // high 不在目标快照：不能保持旧档位（在新模型的 map 里是 null = 关思考），
+    // 必须回落到目标可用档位。
+    const switched = captured.requests.slice(beforeSwitch);
+    expect(switched).toContainEqual({ type: "set_thinking_level", level: "low" });
+    await handle.close();
+  });
+
+  it("prefers the target model default effort when the retained effort is unavailable", async () => {
+    const baseDeps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "native-a",
+            name: "Native A",
+            baseUrl: "http://a.test",
+            api: "openai-responses",
+            models: [
+              {
+                id: "model-a",
+                reasoning: true,
+                thinkingLevelMap: { minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: null },
+              },
+              {
+                id: "model-b",
+                reasoning: true,
+                thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: null, xhigh: null, max: null },
+              },
+            ],
+          },
+        ],
+        env: {},
+      }),
+      [
+        { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "medium"], defaultEffort: "medium" },
+      ],
+    );
+    const agent = new PiAgent({
+      ...baseDeps,
+      resolvePiRuntimeModelDescriptor: (_providerId, modelId) =>
+        modelId === "model-b"
+          ? {
+              id: "model-b",
+              displayName: "B",
+              contextWindow: 200_000,
+              efforts: ["low", "medium"],
+              defaultEffort: "medium",
+            }
+          : null,
+    });
+    const handle = await agent.startSession({
+      sessionId: "thinking-default-effort-fallback",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true });
+
+    expect(captured.requests.slice(beforeSwitch)).toContainEqual({
+      type: "set_thinking_level",
+      level: "medium",
+    });
+    await handle.close();
+  });
+
+  it("applies the target snapshot when a thinking-on switch carries no effort at all", async () => {
+    const baseDeps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "native-a",
+            name: "Native A",
+            baseUrl: "http://a.test",
+            api: "openai-responses",
+            models: [
+              {
+                id: "model-a",
+                reasoning: true,
+                thinkingLevelMap: { minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: null },
+              },
+              {
+                id: "model-b",
+                reasoning: true,
+                thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: null, xhigh: null, max: null },
+              },
+            ],
+          },
+        ],
+        env: {},
+      }),
+      [
+        { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "medium"], defaultEffort: "medium" },
+      ],
+    );
+    const agent = new PiAgent({
+      ...baseDeps,
+      resolvePiRuntimeModelDescriptor: (_providerId, modelId) =>
+        modelId === "model-b"
+          ? {
+              id: "model-b",
+              displayName: "B",
+              contextWindow: 200_000,
+              efforts: ["low", "medium"],
+              defaultEffort: "medium",
+            }
+          : null,
+    });
+    // 无 effort 目录的 BYOM 会话：selection 不带档位、会话也没有保留档位。
+    const handle = await agent.startSession({
+      sessionId: "thinking-no-effort-on-switch",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true });
+
+    // 用户明确要开思考、目标也支持：即使没有可用的期望档位也必须按目标快照收敛，
+    // 不能什么都不发——否则上一个模型的 off 会原样留下（推理进正文）。
+    expect(captured.requests.slice(beforeSwitch)).toContainEqual({
+      type: "set_thinking_level",
+      level: "medium",
+    });
+    await handle.close();
+  });
+
+  it("reopens thinking at the session effort instead of a hardcoded xhigh", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [{ id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } }],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-reopen-keeps-effort",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const before = captured.requests.length;
+
+    await handle.setThinkingEnabled!(true);
+
+    // 显式打开思考要回到会话当前的期望档位（high），而不是固定 xhigh：否则用户
+    // 选好的档位被抹平，紧随其后的切模还会按被抹平的档位归一化。
+    expect(captured.requests.slice(before)).toContainEqual({
+      type: "set_thinking_level",
+      level: "high",
+    });
+    await handle.close();
+  });
+
+  it("keeps the session effort when thinking is toggled off and back on", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [{ id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } }],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-toggle-keeps-effort",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const before = captured.requests.length;
+
+    await handle.setThinkingEnabled!(false);
+    await handle.setThinkingEnabled!(true);
+
+    // 关掉思考不丢档位记忆：再打开要回到用户选的 high，而不是启动档位/默认档。
+    expect(
+      captured.requests
+        .slice(before)
+        .filter((request) => request.type === "set_thinking_level"),
+    ).toEqual([
+      { type: "set_thinking_level", level: "off" },
+      { type: "set_thinking_level", level: "high" },
+    ]);
+    await handle.close();
+  });
+
+  it("retries the post-switch thinking level once before giving up", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    let failNextThinking = false;
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        return {
+          success: true,
+          data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === "set_model") {
+        return { success: true, data: { contextWindow: 200_000 } };
+      }
+      if (command.type === "set_thinking_level") {
+        if (failNextThinking) {
+          failNextThinking = false;
+          return { success: false, error: "transient" };
+        }
+        return { success: true, data: {} };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-retry-after-switch",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const before = captured.requests.length;
+    failNextThinking = true;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true });
+
+    // 瞬时拒绝重试一次：两次下发都发出去，切模本身仍然成功。
+    expect(
+      captured.requests
+        .slice(before)
+        .filter((request) => request.type === "set_thinking_level"),
+    ).toHaveLength(2);
+    await handle.close();
+  });
+
+  it("does not touch the thinking level when the caller sends no thinking intent", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-untouched-without-intent",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a" });
+
+    // 老调用方（无 intent）保持既有语义：只切模型，不动 thinking level。
+    expect(
+      captured.requests
+        .slice(beforeSwitch)
+        .some((request) => request.type === "set_thinking_level"),
+    ).toBe(false);
+    await handle.close();
+  });
+
+  it("keeps the model switch successful when the post-switch thinking level is rejected", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        return {
+          success: true,
+          data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === "set_model") {
+        return { success: true, data: { contextWindow: 200_000 } };
+      }
+      if (command.type === "set_thinking_level") {
+        return { success: false, error: "unsupported level" };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-rejected-after-switch",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+
+    // 档位收敛失败不能把已经确认的模型切换改判成失败（否则上层会回滚 route）。
+    await expect(
+      handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true }),
+    ).resolves.toBeUndefined();
+    expect(handle.model).toBe("model-b");
+    await handle.close();
+  });
+
   it("accepts the low placeholder after switching to a non-reasoning gateway model", async () => {
     const availableModels: readonly ModelDescriptor[] = [
       {

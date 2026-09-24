@@ -6156,7 +6156,7 @@ export class PiAgent extends BaseAgent {
     };
     const switchModel = async (
       model: string,
-      setOpts?: { providerId?: string | null; effort?: Effort },
+      setOpts?: { providerId?: string | null; effort?: Effort; thinkingEnabled?: boolean },
     ): Promise<void> => {
       const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId')
         ? setOpts.providerId
@@ -6579,6 +6579,104 @@ export class PiAgent extends BaseAgent {
           'pi: model switch confirmed but the subagent routing snapshot stayed pending; ' +
             'subagent delegation stays disabled for this session (fail-closed)',
         );
+      }
+      // Pi 的 set_model 不会重置 thinking level：上一个模型留下的 off / 旧档位会原样
+      // 继承给目标模型（典型：从不支持思考的模型切到推理模型后，模型只能把推理写进
+      // 正文）。桌面端在 selection 里携带目标模型的思考开关意图；这里在路由已确认后
+      // 按目标模型的启动快照把档位归一化下发一次，不再让档位跨模型漂移。
+      //
+      // 目标是否支持思考由启动快照判定（models.json 生成口径：gateway 看 efforts
+      // 非空、native 看 reasoning），空档位 ⟺ 不思考——这类模型明确发 off，避免把
+      // 上一个模型的档位带过去（Pi 会把 thinkingLevelMap 里的 null 当成关闭
+      // reasoning）。快照未知时不猜、不动 Pi 现有档位。
+      //
+      // 失败只告警、不抛：模型切换已经成功，抛出会让上层回滚 route / 终止会话，反而
+      // 制造「Pi 已切模、宿主认为没切」的分裂。用户可在 UI 上重新选择。
+      if (setOpts && typeof setOpts.thinkingEnabled === 'boolean') {
+        const requestedEffort = setOpts.effort ?? mutableEffort ?? startupEffort ?? null;
+        const nativeTarget = provider !== PI_PROVIDER_ID
+          ? nativeProviderById.get(provider)?.models.find(
+              (candidate) => candidate.id === resolveNativeModelId(provider, model),
+            )
+          : undefined;
+        const targetReasoning = provider !== PI_PROVIDER_ID
+          ? nativeTarget?.reasoning === true
+          : nextEffortSnapshot === undefined
+            ? undefined
+            : nextEffortSnapshot.length > 0;
+        let level: string | null = null;
+        let appliedEffort: Effort | null = null;
+        if (!setOpts.thinkingEnabled || targetReasoning === false) {
+          level = 'off';
+        } else if (targetReasoning === true) {
+          const usable = nextEffortSnapshot && nextEffortSnapshot.length > 0
+            ? nextEffortSnapshot
+            : undefined;
+          // 用户明确要开思考、目标也支持：即使这次 selection 没带档位（BYOM/无 effort
+          // 目录的会话），也要按启动快照收敛——不能什么都不发，否则上一个模型的 off 会
+          // 原样留下。口径与 reconcilePiStartupEffort 一致：优先目录默认档，否则首档。
+          if (usable) {
+            const preferredDefault =
+              this.deps.resolvePiRuntimeModelDescriptor?.(mutableProviderId ?? null, model)
+                ?.defaultEffort ?? null;
+            const reconciled =
+              requestedEffort && usable.includes(requestedEffort)
+                ? requestedEffort
+                : preferredDefault && usable.includes(preferredDefault)
+                  ? preferredDefault
+                  : usable[0];
+            if (requestedEffort && !usable.includes(requestedEffort)) {
+              // 启动快照（本次 spawn 冻结）与活跃目录可能漂移：此时 Pi 实际跑的档位与
+              // main 持久化/UI 显示的档位不一致，留一条日志便于排障。
+              deps.logger.warn('pi: thinking effort reconciled after model switch', {
+                model,
+                provider,
+                requestedEffort,
+                appliedEffort: reconciled,
+              });
+            } else if (!requestedEffort) {
+              // 会话本来就没期望档位（BYOM/无 effort 目录）：同样要留下观察点，
+              // 否则 DB/投影显示 null 而 Pi 实跑默认档，漂移无从发现。
+              deps.logger.info('pi: thinking level defaulted to the target snapshot after model switch', {
+                model,
+                provider,
+                appliedEffort: reconciled,
+              });
+            }
+            appliedEffort = reconciled;
+            level = effortToPiThinkingLevel(reconciled);
+          }
+        }
+        if (level) {
+          // 拒绝可能是瞬时（例如 Pi 正在处理前一条档位请求）：重试一次再放弃。
+          // 仍失败只告警：模型路由已经确认，抛出会让上层回滚它。
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+              const resp = await proc.request({ type: 'set_thinking_level', level });
+              if (resp.success) {
+                if (appliedEffort) mutableEffort = appliedEffort;
+                break;
+              }
+              if (attempt === 1) {
+                deps.logger.warn('pi: set_thinking_level rejected after model switch', {
+                  model,
+                  provider,
+                  level,
+                  error: resp.error,
+                });
+              }
+            } catch (err) {
+              if (attempt === 1) {
+                deps.logger.warn('pi: set_thinking_level failed after model switch', {
+                  model,
+                  provider,
+                  level,
+                  message: err instanceof Error ? err.message : String(err),
+                });
+              }
+            }
+          }
+        }
       }
     };
 
@@ -7166,7 +7264,7 @@ export class PiAgent extends BaseAgent {
         return (window ?? undefined) !== ctx.workingContextWindow;
       },
 
-      async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
+      async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort; thinkingEnabled?: boolean }): Promise<void> {
         if (reviewMode) return;
         // 会话级串行闸:整段"写待切换快照 → set_model RPC → 落定/回滚"必须是一个临界区。
         // 并发或连点切换(本地 + 远程控制端同时切)若交错,A 写 pending、B 写 pending、A 落定 B 的
@@ -7199,11 +7297,23 @@ export class PiAgent extends BaseAgent {
 
       async setThinkingEnabled(enabled: boolean): Promise<void> {
         if (reviewMode) return;
+        // 打开时回到会话当前的期望档位，而不是固定 xhigh：显式开关不该把用户选好的
+        // max/medium 抹平——否则紧随其后的切模按 mutableEffort 归一化时又会把它降档。
+        // 没有期望档位时才回到历史默认 xhigh。
+        const targetEffort = enabled ? mutableEffort ?? startupEffort ?? null : null;
+        const level = targetEffort
+          ? effortToPiThinkingLevel(targetEffort)
+          : enabled
+            ? 'xhigh'
+            : 'off';
         const resp = await proc.request({
           type: 'set_thinking_level',
-          level: enabled ? 'xhigh' : 'off',
+          level,
         });
         if (!resp.success) throw new Error(`pi set_thinking_level failed: ${resp.error ?? 'unknown'}`);
+        // 只在打开时更新档位记忆：关掉思考不丢档位——档位是用户的独立选择，
+        // 再打开应回到原档位，而不是回落到启动时的档位。
+        if (enabled) mutableEffort = targetEffort ?? 'xhigh';
       },
 
       async setPermissionMode(mode): Promise<void> {

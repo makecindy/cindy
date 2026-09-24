@@ -131,6 +131,30 @@ export function setProviderModelMemoryCache(snapshot: ProviderModelMemorySnapsho
   providerMemoryCache = snapshot;
 }
 
+/**
+ * 局部写入某 (agent, provider, model) 的思考开关。跨引擎切换提交后由主进程调用：
+ * 普通 send 的 lazy-create 只读镜像（不经过 bootstrap），远端推送尚未回流时也能
+ * 读到用户刚选的值，避免新建会话用旧偏好。
+ */
+export function setThinkingEnabledInMemory(
+  agentKind: 'claude-code' | 'codex' | 'pi',
+  providerId: string | null | undefined,
+  model: string | undefined,
+  enabled: boolean,
+): void {
+  if (!providerId || !model) return;
+  const key = `${agentKind}:${providerId}`;
+  const entry = providerMemoryCache?.[key];
+  providerMemoryCache = {
+    ...(providerMemoryCache ?? {}),
+    [key]: {
+      effortByModel: entry?.effortByModel ?? {},
+      fastByModel: entry?.fastByModel ?? {},
+      thinkingByModel: { ...entry?.thinkingByModel, [model]: enabled },
+    },
+  };
+}
+
 export interface WorkerDefaultsFromNewMaker {
   model?: string;
   effort?: string;

@@ -10,6 +10,7 @@ import {
   syncNewMakerDraftCache,
   getNewMakerModelTuning,
   setProviderModelMemoryCache,
+  setThinkingEnabledInMemory,
   type NewMakerDraftSnapshot,
 } from '../newMakerDefaultsCache.js';
 
@@ -132,6 +133,23 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
     ).toBe(false);
     expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'gpt-oss:20b')).toBeUndefined();
     expect(getThinkingEnabledFromMemory('pi', null, 'qwen3.8:27b-mxfp8')).toBeUndefined();
+  });
+
+  it('writes a single thinking switch into the mirror without dropping other entries', () => {
+    setProviderModelMemoryCache({
+      'pi:cindy-local-ollama': {
+        effortByModel: { 'qwen3.8:27b-mxfp8': 'high' },
+        fastByModel: { 'qwen3.8:27b-mxfp8': true },
+        thinkingByModel: { 'qwen3.8:27b-mxfp8': false },
+      },
+      'codex:openai': { effortByModel: {}, fastByModel: {} },
+    });
+
+    // 跨引擎切换提交后主进程局部写入：普通 send 的 lazy-create 只读该镜像。
+    setThinkingEnabledInMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', true);
+
+    expect(getThinkingEnabledFromMemory('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(true);
+    expect(getThinkingEnabledFromMemory('codex', 'openai', 'gpt-5')).toBeUndefined();
   });
 
   it('providerModelMemory 镜像就绪时随返回(device-link 草稿列表行的真实读源)', () => {

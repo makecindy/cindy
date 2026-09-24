@@ -421,6 +421,61 @@ describe('applyRuntimeSetModelChange', () => {
     });
   });
 
+  it('forwards the Pi thinking intent to live setModel', async () => {
+    const sessionId = rememberSession('runtime-set-model-thinking-intent');
+    setSessionProvider(sessionId, 'native-a');
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'local-model',
+        setModel,
+      }),
+      listActiveSessions: () => [],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'target-model',
+      providerId: 'native-a',
+      thinkingEnabled: false,
+    });
+
+    expect(setModel).toHaveBeenCalledWith('target-model', {
+      providerId: 'native-a',
+      thinkingEnabled: false,
+    });
+  });
+
+  it('omits the thinking intent when the caller has none', async () => {
+    const sessionId = rememberSession('runtime-set-model-no-thinking-intent');
+    setSessionProvider(sessionId, 'native-a');
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'local-model',
+        setModel,
+      }),
+      listActiveSessions: () => [],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'target-model',
+      providerId: 'native-a',
+    });
+
+    // 严格匹配：无意图时不得给 runtime 添加 thinkingEnabled 键（保持旧行为）。
+    expect(setModel).toHaveBeenCalledWith('target-model', { providerId: 'native-a' });
+  });
+
   it('hot-applies a same-provider Claude model change while the turn is running',
     async () => {
       // 闸门 fail-open 之后走这条:Opus → Fable / Cindy 同凭证热切,不关会话、不丢 effort。

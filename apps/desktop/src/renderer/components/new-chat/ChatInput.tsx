@@ -1075,6 +1075,28 @@ function deriveSyntheticAtQuery(editor: Editor, anchor: number, rangeEnd: number
   return text;
 }
 
+/**
+ * Pi 切模/切来源时随 selection 携带的目标模型思考开关意图。
+ *
+ * 与思考开关展示同一口径：记忆缺失按 UI 默认（开）处理；引擎/来源/模型未知时
+ * 返回 undefined（不猜、不改 Pi 现状）。Pi 的 set_model 不重置 thinking level，
+ * 不带上这个意图就会让上一个模型的 off/旧档位漂移到新模型。
+ */
+function resolveModelThinkingIntent(input: {
+  kind: Parameters<typeof getProviderModelThinking>[0] | null | undefined;
+  providerId: string | null | undefined;
+  modelId: string | null | undefined;
+  memory: ModelMemoryAccessors | undefined;
+  deviceLinkDeviceId: string | null | undefined;
+}): boolean | undefined {
+  const { kind, providerId, modelId, memory, deviceLinkDeviceId } = input;
+  if (!kind || !providerId || !modelId) return undefined;
+  const remembered =
+    memory?.getThinking?.(kind, providerId, modelId) ??
+    (!deviceLinkDeviceId ? getProviderModelThinking(kind, providerId, modelId) : undefined);
+  return remembered ?? true;
+}
+
 export function ChatInput({
   onSend,
   sessionId,
@@ -6506,10 +6528,11 @@ export function ChatInput({
       targetAgentKind: 'claude-code' | 'codex' | 'pi',
       newModelId: string,
       providerId: string | null = null,
-      // 意图期内的档位/Fast 改动经此显式覆盖(用户手选优先于记忆/默认解析)。
+      // 意图期内的档位/Fast/思考开关改动经此显式覆盖(用户手选优先于记忆/默认解析)。
       overrides?: {
         effort?: Effort;
         fastMode?: boolean;
+        thinking?: boolean;
       },
     ): Promise<boolean> => {
       // ★ 返回值 = **本端请求的完整配置真的落到会话上了没有**(2026-08-17 review 确立
@@ -6578,6 +6601,14 @@ export function ChatInput({
               !!providerId &&
               !!modelMemory &&
               (modelMemory.getFast(targetAgentKind, providerId, newModelId) ?? false);
+        // Pi 的思考开关意图：显式 override 优先，否则按目标 (引擎,来源,模型) 记忆，
+        // 缺记忆按 UI 默认开；没有来源/记忆时不猜（不传该参）。
+        const targetThinking =
+          overrides?.thinking !== undefined
+            ? overrides.thinking
+            : providerId && modelMemory
+              ? (modelMemory.getThinking?.(targetAgentKind, providerId, newModelId) ?? true)
+              : undefined;
 
         // 会话级操作按来源路由:device-link 远程会话隧道到被控端(意图注册表与引擎
         // 交接都在那边),本机会话零变化直连本机 maker。
@@ -6595,6 +6626,7 @@ export function ChatInput({
           providerId,
           newEffort,
           targetFast,
+          targetThinking,
         );
         // device-link 往返期间可以切到另一个任务:同一路由下 ChatInput 会带着新
         // sessionId 继续渲染,sameEngineReselectRef 等闭包也已指向新会话。旧会话的
@@ -7118,6 +7150,17 @@ export function ChatInput({
         fastSupported: modelFastSupported(newModelId, effectiveSourceId),
         requestedFast: restoredFast,
       });
+      // Pi 切模后不重置 thinking level：把目标模型（同来源）的思考开关意图一起放进
+      // 选择快照，让被控端/本机 runtime 在切换成功后收敛档位，避免上一个模型的 off
+      // 残留到新模型（模型只能把推理写进正文）。缺记忆时按 UI 默认（开）处理；
+      // 来源/引擎未知时不猜（不传该字段）。旧被控端会忽略这个额外字段。
+      const nextThinking = resolveModelThinkingIntent({
+        kind: currentModelAgentKind,
+        providerId: effectiveSourceId,
+        modelId: newModelId,
+        memory: modelMemory,
+        deviceLinkDeviceId,
+      });
       try {
         if (sessionId) {
           // 切模型时 fast 恢复该 (供应商, 模型) 的记忆值(对齐 effort);模型不支持 → false。
@@ -7151,7 +7194,8 @@ export function ChatInput({
                   ? ({
                       effort: atomicEffort,
                       fastMode: atomicFast,
-                    } as { effort: string | null; fastMode: boolean })
+                      ...(nextThinking !== undefined ? { thinking: nextThinking } : {}),
+                    } as { effort: string | null; fastMode: boolean; thinking?: boolean })
                   : undefined,
               );
               if (remoteSetModelResult?.superseded) {
@@ -7212,8 +7256,14 @@ export function ChatInput({
                     {
                       effort: atomicEffort,
                       fastMode: atomicFast,
+                      ...(nextThinking !== undefined ? { thinking: nextThinking } : {}),
                       ...(confirmedContextWindow ? { confirmedContextWindow } : {}),
-                    } as { effort: string | null; fastMode: boolean },
+                    } as {
+                      effort: string | null;
+                      fastMode: boolean;
+                      thinking?: boolean;
+                      confirmedContextWindow?: number;
+                    },
                   );
                 },
               );
@@ -7283,10 +7333,20 @@ export function ChatInput({
             localRuntimeSwitchSeqBySessionRef.current.get(sessionId) &&
           !getSessionDeviceId(sessionId)
         ) {
+          // 失败回滚同样要带旧模型的思考意图：否则回滚这次不下发档位，Pi 会停在
+          // 失败那次收敛后的档位（可能是 off），与 UI 显示的旧模型选择不一致。
+          const rollbackThinking = resolveModelThinkingIntent({
+            kind: currentModelAgentKind,
+            providerId: effectiveSourceId,
+            modelId: rollbackModelAfterPersistFailure.model,
+            memory: modelMemory,
+            deviceLinkDeviceId,
+          });
           await window.electronAPI.maker
             .setModel(sessionId, rollbackModelAfterPersistFailure.model, undefined, undefined, {
               effort: activeEffort,
               fastMode,
+              ...(rollbackThinking !== undefined ? { thinking: rollbackThinking } : {}),
             })
             .catch((rollbackErr) => {
               log.warn('model change rollback failed:', rollbackErr);
@@ -7699,6 +7759,13 @@ export function ChatInput({
               ? reconciledFast
               : resolveFast(targetModel, newProviderId),
         });
+        const targetThinking = resolveModelThinkingIntent({
+          kind: currentModelAgentKind,
+          providerId: newProviderId,
+          modelId: targetModel,
+          memory: modelMemory,
+          deviceLinkDeviceId,
+        });
         // 乐观显示目标 (model, effort, provider) + 置灰 selector,等被控端 echo 回流;失败回滚 provider/快照。
         setPendingRemoteSwitch({
           model: targetModel,
@@ -7723,7 +7790,8 @@ export function ChatInput({
               ? ({
                   effort: remoteAtomicEffort,
                   fastMode: restoredFast,
-                } as { effort: string | null; fastMode: boolean })
+                  ...(targetThinking !== undefined ? { thinking: targetThinking } : {}),
+                } as { effort: string | null; fastMode: boolean; thinking?: boolean })
               : undefined,
           );
           if (remoteSetModelResult?.superseded) {
@@ -7794,6 +7862,13 @@ export function ChatInput({
             fastSupported: modelFastSupported(modelId, newProviderId),
             requestedFast,
           });
+          const targetThinking = resolveModelThinkingIntent({
+            kind: currentModelAgentKind,
+            providerId: newProviderId,
+            modelId,
+            memory: modelMemory,
+            deviceLinkDeviceId,
+          });
           const switchSeqBySession = localRuntimeSwitchSeqBySessionRef.current;
           const rollbackSeq = (switchSeqBySession.get(sessionId) ?? 0) + 1;
           switchSeqBySession.set(sessionId, rollbackSeq);
@@ -7820,8 +7895,14 @@ export function ChatInput({
                   {
                     effort: atomicEffort,
                     fastMode: restoredFast,
+                    ...(targetThinking !== undefined ? { thinking: targetThinking } : {}),
                     ...(confirmedContextWindow ? { confirmedContextWindow } : {}),
-                  } as { effort: string | null; fastMode: boolean },
+                  } as {
+                    effort: string | null;
+                    fastMode: boolean;
+                    thinking?: boolean;
+                    confirmedContextWindow?: number;
+                  },
                 );
               },
             );
@@ -7912,10 +7993,18 @@ export function ChatInput({
           rollbackProvider.seq === localRuntimeSwitchSeqBySessionRef.current.get(sessionId) &&
           !isRemoteSession
         ) {
+          const rollbackThinking = resolveModelThinkingIntent({
+            kind: currentModelAgentKind,
+            providerId: rollbackProvider.providerId,
+            modelId: rollbackProvider.model,
+            memory: modelMemory,
+            deviceLinkDeviceId,
+          });
           await window.electronAPI.maker
             .setModel(sessionId, rollbackProvider.model, rollbackProvider.providerId, undefined, {
               effort: activeEffort,
               fastMode,
+              ...(rollbackThinking !== undefined ? { thinking: rollbackThinking } : {}),
             })
             .catch((rollbackErr) => {
               log.warn('provider change rollback failed:', rollbackErr);
@@ -8829,6 +8918,18 @@ export function ChatInput({
                             activeModel,
                             enabled,
                           );
+                        }
+                      }
+                      // 意图期内(点选尚未发送)必须把开关写回 staged 意图：否则结算回放
+                      // 会按登记时的旧快照下发档位，把用户刚关掉的思考又打开(或反之)。
+                      if (sessionId && currentModelAgentKind) {
+                        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+                        if (intent) {
+                          await performAgentSwitch(intent.target, intent.model, intent.providerId, {
+                            ...(intent.effort ? { effort: intent.effort as Effort } : {}),
+                            fastMode: intent.fastMode,
+                            thinking: enabled,
+                          });
                         }
                       }
                       if (sessionId) {
