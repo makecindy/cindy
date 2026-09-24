@@ -202,7 +202,7 @@ export default function RemoteFilePreviewScreen() {
   const reportHtmlPan = useCallback((key: string, wants: boolean) => {
     setHtmlPanPageKey((prev) => (wants ? key : (prev === key ? null : prev)));
   }, []);
-  // Markdown WebView 的纵向滚动保留在内层；明确横滑由内层原生 GestureDetector
+  // Markdown WebView 的纵向滚动和宽公式横移保留在内层；正文明确横滑由文档
   // 回调后在这里驱动同一个 pager，避免 WebView 与 FlatList 争抢触摸序列。
   const reportMarkdownPager = useCallback((key: string, wants: boolean) => {
     setMarkdownPagerPageKey((prev) => (wants ? key : (prev === key ? null : prev)));

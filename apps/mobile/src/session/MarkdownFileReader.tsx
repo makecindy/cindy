@@ -20,15 +20,10 @@ import { WebView } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 
 import { buildSelectableMarkdownHtml } from '@/session/selectableMarkdownHtml';
-import { Gesture, GestureDetector } from '@/platform/gestureHandler';
+import { MARKDOWN_FILE_PAGER_SCRIPT, parseMarkdownPageSwipe } from '@/session/markdownFilePager';
 import { selectionQuoteMenuLabel } from '@/session/selectionQuote';
 import { lineHeight, useTheme } from '@/theme';
 import { spacing, typeScale } from '@/theme/tokens';
-
-const PAGER_PAN_ACTIVE_X = 16;
-const PAGER_PAN_FAIL_Y = 8;
-const PAGER_SWIPE_DISTANCE = 56;
-const PAGER_SWIPE_VELOCITY = 500;
 
 export function MarkdownFileReader({
   markdown,
@@ -91,24 +86,18 @@ export function MarkdownFileReader({
     if (text && text.trim().length > 0) onQuoteSelectionRef.current?.(text);
   }, []);
 
-  // WebView 会在 Android 原生层先接住任何方向的 touch；CSS 无法把轻微横偏
-  // 还给外层 pager。此识别器仅在近似纯横向时激活，纵向一超过 8px 就失败，
-  // 由 WebView 保持与源码 FlatList 相同的连续纵向滚动。
-  const pagerPan = useMemo(() => Gesture.Pan()
-    .activeOffsetX([-PAGER_PAN_ACTIVE_X, PAGER_PAN_ACTIVE_X])
-    .failOffsetY([-PAGER_PAN_FAIL_Y, PAGER_PAN_FAIL_Y])
-    .runOnJS(true)
-    .onEnd((event) => {
-      const isPageSwipe = Math.abs(event.translationX) >= PAGER_SWIPE_DISTANCE
-        || Math.abs(event.velocityX) >= PAGER_SWIPE_VELOCITY;
-      if (!isPageSwipe) return;
-      onPageSwipe?.(event.translationX < 0 ? 'next' : 'previous');
-    }), [onPageSwipe]);
+  // 文档知道触点是否落在宽公式内；原生外层 Pan 无法区分，会抢走公式横移。
+  // 只接收文档完成的翻页手势，滚动和系统文字选择仍由 WebView 处理。
+  const handleMessage = useCallback((event: { nativeEvent: { data: string } }) => {
+    const direction = parseMarkdownPageSwipe(event.nativeEvent.data);
+    if (direction) onPageSwipe?.(direction);
+  }, [onPageSwipe]);
 
   return (
-    <GestureDetector gesture={pagerPan}>
-      <View style={styles.fill} testID={testID}>
+    <View style={styles.fill} testID={testID}>
       <WebView
+        injectedJavaScript={onPageSwipe ? MARKDOWN_FILE_PAGER_SCRIPT : undefined}
+        onMessage={onPageSwipe ? handleMessage : undefined}
         menuItems={quoteEnabled ? quoteMenuItems : undefined}
         onCustomMenuSelection={quoteEnabled ? handleCustomMenuSelection : undefined}
         onShouldStartLoadWithRequest={interceptNavigation}
@@ -117,8 +106,7 @@ export function MarkdownFileReader({
         source={{ html }}
         style={[styles.fill, { backgroundColor: 'transparent' }]}
       />
-      </View>
-    </GestureDetector>
+    </View>
   );
 }
 
@@ -134,5 +122,4 @@ function interceptNavigation(request: ShouldStartLoadRequest): boolean {
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
-  content: { flex: 1, paddingHorizontal: spacing.lg },
 });

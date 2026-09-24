@@ -39,8 +39,8 @@ describe('remote file preview pager wiring', () => {
     // 固定宽度布局 / 放大后需要横向平移,pager 抢走手势就永远看不到超出视口的内容。
     expect(source).toContain("scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key && markdownPagerPageKey !== current.key}");
     const markdownReader = readSource('src/session/MarkdownFileReader.tsx');
-    expect(markdownReader).toContain('Gesture.Pan()');
-    expect(markdownReader).toContain('failOffsetY([-PAGER_PAN_FAIL_Y, PAGER_PAN_FAIL_Y])');
+    expect(markdownReader).toContain('injectedJavaScript={onPageSwipe ? MARKDOWN_FILE_PAGER_SCRIPT : undefined}');
+    expect(markdownReader).toContain('onMessage={onPageSwipe ? handleMessage : undefined}');
     // 让路状态按页 key 存,不存布尔:翻页时新旧两页的上报先后顺序不能决定结果。
     expect(source).toContain('setHtmlPanPageKey((prev) => (wants ? key : (prev === key ? null : prev)))');
     // 只有真的挂着 WebView 的那种组合才要横滑(资源还在取 → 页面是 spinner → 不禁滑);

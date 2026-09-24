@@ -197,7 +197,7 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       margin: 0;
       overflow-x: hidden;
       overscroll-behavior-x: none;
-      touch-action: pan-y;
+      touch-action: auto;
     }
     body {
       box-sizing: border-box;
@@ -213,7 +213,7 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       overflow-y: visible;
       overflow-wrap: anywhere;
       cursor: text;
-      touch-action: pan-y;
+      touch-action: auto;
       -webkit-text-size-adjust: 100%;
       -webkit-tap-highlight-color: transparent;
       -webkit-touch-callout: default !important;
@@ -257,8 +257,7 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
     p, h1, h2, h3, h4, h5, h6, blockquote, pre, table, .list-row {
       margin: 0;
     }
-    /* 文件预览的横向手势专属外层 pager，用来切换相邻文件。
-       HTML/PDF 是内部横移的例外；Markdown 与源码列表一样只接收纵向滚动。 */
+    /* 正文横滑切文件；宽公式保留内部横移，文档手势识别器按触点让路。 */
     /* 标题分三档。改前 h1–h6 全部等于正文字号(只有 font-weight:500 撑),文档里
        完全读不出层级 —— 与聊天消息流同一个缺陷、同一套修法:
          h1  20/28 = 1.400(= desktop h1 比例)
@@ -355,7 +354,7 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       color: inherit;
       text-decoration: underline;
     }
-    /* 直连图片:本模块的唯一消费方 MarkdownFileReader 没有 postMessage bridge,
+    /* 直连图片:MarkdownFileReader 的 bridge 只接翻页，图片没有点击处理，
        生成的 <img> 也不在链接内 —— 点它毫无响应,所以**不带 pointer**(与下面的
        .xdt-image-chip 同一条判据:这个面上「像能点」的反馈一律不给)。
        上一轮只清了 chip、漏了直连图片这对称的另一半,PR #1144 review 实捉。 */
@@ -416,7 +415,8 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
     }
     .xdt-math-block {
       max-width: 100%;
-      overflow-x: hidden;
+      min-width: 0;
+      overflow-x: auto;
       text-align: center;
     }
     .xdt-math-block pre {
