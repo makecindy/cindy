@@ -82,20 +82,10 @@ function models(providerId: string, agent: 'claude-code' | 'codex' | 'pi'): Cata
   return p?.models[agent] ?? [];
 }
 
-function withNativeMetadataAndDefaults(
+function withNativeMetadata(
   providerId: string,
   models: readonly CatalogModel[] = [],
 ): CatalogModel[] {
-  const defaults: Record<string, readonly string[]> = {
-    xai: ['grok-4.6'],
-    anthropic: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
-    openai: [
-      'chatgpt/gpt-6-astra',
-      'chatgpt/gpt-5.6-sol',
-      'chatgpt/gpt-5.6-terra',
-      'chatgpt/gpt-5.6-luna',
-    ],
-  };
   return models.map((model) => {
     const nativeApi = resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, model.id);
     return {
@@ -107,7 +97,6 @@ function withNativeMetadataAndDefaults(
       nativeApi === 'google-generative-ai'
         ? { nativeApi }
         : {}),
-      ...(defaults[providerId]?.includes(model.id) ? {} : { defaultEnabled: false }),
     };
   });
 }
@@ -548,7 +537,7 @@ describe('registry presence 实体化', () => {
     expect(models('anthropic', 'claude-code').map((m) => m.id)).toEqual(['claude-next']);
     expect(models('anthropic', 'codex')).toEqual([]);
     expect(models('anthropic', 'pi')).toEqual(
-      withNativeMetadataAndDefaults(
+      withNativeMetadata(
         'anthropic',
         BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')?.models.pi,
       ),
@@ -1057,7 +1046,7 @@ describe('本地 override(local 永远最高)', () => {
 });
 
 describe('cross-harness defaults', () => {
-  it('keeps curated native/Pi defaults and makes the Claude Code bridge opt-in', () => {
+  it('keeps discovered native/Pi models enabled and makes the Claude Code bridge opt-in', () => {
     setActiveCatalog(baseCatalog([gpt6Entry({ defaultEnabled: true })]));
     expect(models('openai', 'codex').find((m) => m.id === 'gpt-6')?.defaultEnabled).toBe(true);
     expect(
@@ -1065,7 +1054,7 @@ describe('cross-harness defaults', () => {
     ).toBe(false);
     expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')).toBeUndefined();
     expect(models('openai', 'pi')).toEqual(
-      withNativeMetadataAndDefaults(
+      withNativeMetadata(
         'openai',
         BUNDLED_CATALOG.providers.find((p) => p.id === 'openai')?.models.pi,
       ),

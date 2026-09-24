@@ -200,7 +200,7 @@ vi.mock('@/components/settings/AddProviderWizard', () => ({
 
 import { setModelVisibilities } from '@/state/modelVisibilityPrefs';
 import { readCustomProviderKey, updateCustomProvider } from '@/lib/customProviders';
-import { providerPresetOAuth } from '@cindy/model-providers';
+import { buildUserProvider, providerPresetOAuth } from '@cindy/model-providers';
 
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 
@@ -267,7 +267,9 @@ describe('ProvidersSection — 双栏管理', () => {
     };
     providerSnapshotState.order = [id, 'xd'];
     const fetchModels = vi.fn(async () => ({ ok: true, models: [
-      { id: 'old-model', name: 'Old' }, { id: 'new-model', name: 'New' },
+      { id: 'old-model', name: 'Old' },
+      { id: 'new-model', name: 'New', discoveredMetadata: { nativeApi: 'openai-responses' } },
+      { id: 'chat-model', name: 'Chat', discoveredMetadata: { nativeApi: 'openai-completions' } },
     ] }));
     if (id === 'openrouter-retry') fetchModels.mockResolvedValueOnce({ ok: false, models: [] });
     Object.assign(window.electronAPI.maker, { fetchProviderModels: fetchModels });
@@ -292,10 +294,22 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(updateCustomProvider).toHaveBeenCalledWith(expect.objectContaining({ id,
       ...(method === 'oauth' ? { auth: { method, oauth } } : {}),
       runtimes: expect.objectContaining({ codex: expect.objectContaining({ models: expect.arrayContaining([
-        expect.objectContaining({ id: 'new-model', defaultEnabled: false }),
+        expect.objectContaining({ id: 'new-model', discoveredMetadata: { nativeApi: 'openai-responses' } }),
         ...(hasModels ? [expect.objectContaining({ id: 'old-model', contextWindow: 64000, defaultEnabled: false })] : []),
       ]) }) }),
     }), {});
+    const saved = vi.mocked(updateCustomProvider).mock.calls[0]![0];
+    // Refresh adds membership without freezing a visibility choice. Native
+    // projection decides defaults; compatibility still requires an override.
+    for (const modelId of ['new-model', 'chat-model']) {
+      const model = saved.runtimes.codex?.models.find(model => model.id === modelId);
+      expect(model).toBeDefined();
+      expect(model).not.toHaveProperty('defaultEnabled');
+    }
+    const projected = buildUserProvider(saved).models.codex!;
+    expect(projected.find(model => model.id === 'new-model')?.defaultEnabled).toBe(true);
+    expect(projected.find(model => model.id === 'chat-model')?.defaultEnabled).toBe(false);
+    if (hasModels) expect(projected.find(model => model.id === 'old-model')?.defaultEnabled).toBe(false);
     expect(refetchProvidersSpy).toHaveBeenCalled();
   });
   it('dims GPT Image 2 without a ready image channel, independently of chat connection', async () => {
