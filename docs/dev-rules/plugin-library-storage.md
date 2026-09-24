@@ -45,7 +45,15 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 
 1. **不可用 ≠ 空**：meta 损坏 → `unavailable(corrupt)`；binding 漂移 →
    `binding-moved` / `disk-missing`。宿主不自动重建、不清空、不回退写默认根、
-   不触发 GC、不判素材已删。插件侧同样语义写进了 FORGE_GUIDE。
+   不触发 GC、不判素材已删。缓存中的 custom 会话在真实根消失后必须现解
+   binding：`open`/`status` 报 unavailable，不得 `mkdir` 重建空库。custom vault.open
+   不得 recursive mkdir 已消失的用户父目录（父目录不在 → `disk-missing`）；仅在父目录仍在时
+   允许创建 `<parent>/<ghostId>` 子目录。建根边界须复核 binding 的 realpath/dev/ino：同路径新对象是
+   `binding-moved`，不得初始化空库或把 extraDir 授权到错误根。已挂 extraDir 后若 open 进入 drift，必须
+   实际撤 grant。自动 open 失败要把 drift 记进 session，同盘归位后仅 `status` 也须恢复。合法 default
+   首次创建仍可 mkdir。被 rename 走的原件仍在旧目录，不称已删除。同一磁盘对象归位后既有 `open`/`status`
+   恢复，删后重建的同路径是 `binding-moved` 不是原盘回归。Windows st_ino=0 检不出同路径重建，已知限制。
+   插件侧同样语义写进了 FORGE_GUIDE。
 2. **卸载不删**：uninstall 只标 orphaned + 作废会话；binding 保留（用户亲选
    事实不因重装消失）。删除 = 设置页独立破坏性确认 + `trashGhostLibrary`
    （rename 进回收站，漂移时 NOT_FOUND 不误删）。内置插件退役清理
