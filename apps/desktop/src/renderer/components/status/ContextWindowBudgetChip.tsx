@@ -470,7 +470,11 @@ export function ContextWindowBudgetChip({
       <PopoverTrigger asChild>
         <button
           type="button"
-          disabled={isDisabled}
+          // 刻意不用原生 `disabled`：那会把触发器整个移出 Tab 序列 —— 用户实测 Tab 到左边
+          // 用量卡后就再也回不到本卡。只读任务（readOnly）或提交中不该连「看一眼当前档位」
+          // 都做不到；落档能力由档位行自己 disabled 拦住（与 TodaySpendChip 同一套
+          // 「可聚焦、可展开」的底栏卡片语义）。
+          aria-disabled={isDisabled || undefined}
           data-context-window-budget-chip
           onPointerDown={() => { openedByPointerRef.current = true; }}
           onKeyDown={() => { openedByPointerRef.current = false; }}
@@ -501,7 +505,8 @@ export function ContextWindowBudgetChip({
             'inline-flex h-5 shrink-0 items-center rounded-full text-12 font-medium leading-none tabular-nums',
             'text-[var(--msg-tool-card-chevron)] transition-colors hover:text-foreground',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            'disabled:cursor-default disabled:opacity-50',
+            // 只读/提交中仍然可聚焦可展开，但把“不可改”表现在外观上。
+            isDisabled && 'cursor-default opacity-50',
           )}
         >
           {/* `opacity-60` 与货币 chip 的符号完全一致（`TodaySpendChip`：`<span className="tabular-nums
@@ -562,6 +567,13 @@ export function ContextWindowBudgetChip({
             // 本地已知默认值的档位，文案必须如实说明，不能留给用户“能调大”的预期。
             <p className="mt-0.5 text-12 font-normal leading-[1.5] text-[var(--text-secondary)]">
               {t('ccAgent.contextWindowBudget.remoteTightenOnly')}
+            </p>
+          )}
+          {disabled && (
+            // 只读任务：卡片照常可展开（能看当前档位与价带），但档位行不可选 —— 给出原因，
+            // 而不是把所有行默默变灰。
+            <p className="mt-0.5 text-12 font-normal leading-[1.5] text-[var(--text-secondary)]">
+              {t('ccAgent.contextWindowBudget.readOnlyHint')}
             </p>
           )}
         </div>

@@ -9786,6 +9786,7 @@
       "inputPrice": "입력 {{price}}/M",
       "remoteUnsupported": "피제어 기기 버전에서는 이 작업의 컨텍스트 창을 변경할 수 없습니다",
       "remoteTightenOnly": "피제어 기기 상한을 읽을 수 없어 축소 방향만 제공합니다.",
+      "readOnlyHint": "읽기 전용 작업입니다. 단계와 요금 구간은 볼 수 있지만 변경할 수는 없습니다.",
       "shrinkWarning": "현재 {{used}} 사용 중 — 더 작은 창은 먼저 압축하거나 새 창으로 전환합니다.",
       "saveFailed": "컨텍스트 창 저장에 실패했습니다"
     },

@@ -9786,6 +9786,7 @@
       "inputPrice": "輸入 {{price}}/M",
       "remoteUnsupported": "被控裝置版本不支援調整任務上下文視窗",
       "remoteTightenOnly": "被控裝置的上限無法讀取，這裡只提供調小檔。",
+      "readOnlyHint": "唯讀任務：可以查看檔位與價差，但不能修改。",
       "shrinkWarning": "目前已用 {{used}}，換到更小檔位會先觸發壓縮或換窗。",
       "saveFailed": "儲存上下文視窗檔位失敗"
     },

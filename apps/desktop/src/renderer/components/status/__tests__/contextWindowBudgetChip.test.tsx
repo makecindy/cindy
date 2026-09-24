@@ -305,6 +305,27 @@ describe('ContextWindowBudgetChip', () => {
     expect(screen.queryAllByRole('radio').length).toBeGreaterThan(0);
   });
 
+  it('keeps the trigger focusable when the task is read-only', async () => {
+    // 用户实测：Tab 到左边用量卡后按多少次 Tab 都回不到本卡 —— 原生 `disabled` 会把触发器
+    // 整个移出 Tab 序列（左边用量卡没有这道门）。只读任务仍应能“看一眼当前档位与价带”，
+    // 落档能力由档位行自己禁用拦住，并在卡内说明原因。
+    installElectronApi(vi.fn(async () => boundsView({ budget: 500_000, budgetCustomized: true })));
+    renderChip({ disabled: true, providers: null });
+    const trigger = document.querySelector(
+      '[data-context-window-budget-chip]',
+    ) as HTMLButtonElement | null;
+    expect(trigger).not.toBeNull();
+    // 可聚焦 = 不被 Tab 跳过（原生 disabled 属性必须不存在）。
+    expect(trigger!.disabled).toBe(false);
+    expect(trigger!.getAttribute('aria-disabled')).toBe('true');
+    // 仍可展开；档位行全部不可选，且有「只读」说明。
+    fireEvent.click(trigger!);
+    const rows = screen.queryAllByRole('radio') as HTMLButtonElement[];
+    await waitFor(() => { expect(rows.length).toBeGreaterThan(0); });
+    for (const row of rows) expect(row.disabled).toBe(true);
+    expect(screen.getByText('ccAgent.contextWindowBudget.readOnlyHint')).toBeTruthy();
+  });
+
   it('shows the saved tier percentage next to the marker', async () => {
     // 存了 25% 档 → 触发器读 `↕ 25%`（绝对值在 aria-label / 卡片里）。
     // 档位来自权威边界查询（偏好文件里的条目），所以这里要等那次查询回来。

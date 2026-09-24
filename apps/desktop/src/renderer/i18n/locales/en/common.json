@@ -9801,6 +9801,7 @@
       "inputPrice": "input {{price}}/M",
       "remoteUnsupported": "The controlled device does not support changing this task's context window",
       "remoteTightenOnly": "The controlled device ceiling is unavailable, so only smaller tiers are offered here.",
+      "readOnlyHint": "Read-only task: you can review the tiers and price bands, but not change them.",
       "shrinkWarning": "{{used}} already in use — a smaller window compacts or rolls over first.",
       "saveFailed": "Failed to save the context window tier"
     },
