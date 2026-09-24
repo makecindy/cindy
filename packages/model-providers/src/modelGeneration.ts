@@ -29,6 +29,6 @@ export function previousModelGenerations<T>(id: string, candidates: readonly T[]
 }
 /** Inherit capabilities, not identity, documentation, price, routing or membership. */
 export function generationCapabilities(value: ModelMetadata | undefined): ModelMetadata {
-  const { name: _name, description: _description, officialDocs: _docs, group: _group, ...capabilities } = pickModelMetadata(value);
+  const { name: _name, description: _description, officialDocs: _docs, group: _group, mode: _mode, ...capabilities } = pickModelMetadata(value);
   return capabilities;
 }

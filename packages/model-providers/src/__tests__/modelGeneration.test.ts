@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { previousModelGenerations } from '../modelGeneration.js';
 import { buildUserProvider } from '../user-provider.js';
+import { isChatEligible } from '../classification.js';
 import { BUNDLED_CATALOG } from '../builtin.js';
 import { providerModelGenerationRecord, providerModelRecord } from '../providerModelCatalog.js';
 import { parseModelsListResponse } from '../modelDiscovery.js';
@@ -86,6 +87,28 @@ describe('new model generation defaults', () => {
           contextWindowVerified: target !== initial[1],
         });
       }
+    }
+  });
+
+  it.each([
+    ['image_generation', 'imageModels'],
+    ['video_generation', 'videoModels'],
+    ['embedding', 'embeddingModels'],
+  ] as const)('does not inherit %s membership, but preserves the target declaration', (mode, field) => {
+    for (const declared of [false, true]) {
+      const provider = build([
+        { id: 'private-6-sol', name: 'Old', discoveredMetadata: { mode, contextWindow: 64000 } },
+        { id: 'private-7-sol', name: 'New', discoveredMetadata: declared ? { mode } : {} },
+      ]);
+      for (const agent of ['codex', 'pi', 'claude-code'] as const) {
+        const target = provider.models[agent]![1]!;
+        expect(target.contextWindow).toBe(64000);
+        expect(target.mode).toBe(declared ? mode : undefined);
+        expect(isChatEligible(target)).toBe(!declared);
+      }
+      expect(provider[field]?.map(model => model.id)).toEqual(
+        declared ? ['private-6-sol', 'private-7-sol'] : ['private-6-sol'],
+      );
     }
   });
 
