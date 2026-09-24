@@ -112,6 +112,7 @@ const projectPiManagedCommandFailure = ${projectPiManagedCommandFailure.toString
 const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
+  'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
   'CINDY_PI_TURN_TOOL_POLICY',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,

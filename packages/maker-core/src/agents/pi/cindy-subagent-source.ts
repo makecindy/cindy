@@ -794,6 +794,7 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
   const runnerFile = process.env[RUNNER_FILE_ENV];
   const configHome = process.env[CONFIG_HOME_ENV];
   const sourcePermissionFile = process.env[PERMISSION_FILE_ENV];
+  const sourceRequestPrefsFile = process.env.CINDY_PI_MODEL_REQUEST_PREFS_FILE;
   const parentSessionId = process.env[PARENT_SESSION_ENV];
   const runtimeOwnerId = process.env[OWNER_ID_ENV];
   if (!runRoot || !runnerFile || !configHome || !sourcePermissionFile || !parentSessionId || !runtimeOwnerId) {
@@ -821,6 +822,7 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
     childConfigHome: childConfigHome,
     bridgeExtension: bridgeExtension,
     permissionFile: permissionFile,
+    requestPrefsFile: sourceRequestPrefsFile ? join(runDir, 'request-prefs.json') : undefined,
     depth: readDepth() + 1,
     mode: tasks.length > 1 ? 'parallel' : 'single',
     context: context,
@@ -910,6 +912,11 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
       throw new Error('subagent: the parent task was deleted; this launch will not start.');
     }
     try { chmodSync(runDir, 0o700); } catch (err) { /* best effort on Windows */ }
+    if (config.requestPrefsFile) {
+      // Durable children must not depend on the parent's ephemeral control files.
+      copyFileSync(sourceRequestPrefsFile, config.requestPrefsFile);
+      try { chmodSync(config.requestPrefsFile, 0o600); } catch (err) { /* best effort on Windows */ }
+    }
     copyFileSync(sourcePermissionFile, permissionFile);
     try { chmodSync(permissionFile, 0o600); } catch (err) { /* best effort on Windows */ }
     mkdirSync(childConfigHome, { recursive: true, mode: 0o700 });

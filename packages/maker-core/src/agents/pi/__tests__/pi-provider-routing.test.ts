@@ -248,6 +248,7 @@ describe("Pi provider-aware model routing", () => {
     const handle = await agent.startSession({ sessionId: 'native-fast', workingDir: cwd,
       model: 'private-sol', providerId: 'relay', getPriceVariant: () => fast ? 'priority' : 'standard' });
     const file = captured.env.CINDY_PI_MODEL_REQUEST_PREFS_FILE!;
+    expect(JSON.parse(captured.env.CINDY_PI_SECRET_ENV_NAMES!)).toContain('CINDY_PI_MODEL_REQUEST_PREFS_FILE');
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ fast: true, models: [{ provider: 'relay', id: 'private-sol' }] });
     await handle.setFastMode!(false);
     expect(JSON.parse(readFileSync(file, 'utf8')).fast).toBe(false);

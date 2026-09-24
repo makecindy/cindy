@@ -85,7 +85,7 @@ process.stdin.on('data', (chunk) => {
       process.stdout.write(JSON.stringify({ type: 'tool_execution_start', toolName: 'write' }) + '\\n');
       process.stdout.write(JSON.stringify({
         type: 'message_end',
-        message: { role: 'assistant', content: [{ type: 'text', text: 'foreground approved result:' + process.env.CINDY_PI_SESSION_TOKEN }], usage: { input: 2, output: 3, cost: { total: 0.02 } } },
+        message: { role: 'assistant', content: [{ type: 'text', text: 'foreground approved result:' + process.env.CINDY_PI_SESSION_TOKEN + (process.env.CINDY_PI_MODEL_REQUEST_PREFS_FILE ? ':prefs=' + require('node:fs').readFileSync(process.env.CINDY_PI_MODEL_REQUEST_PREFS_FILE, 'utf8') : '') }], usage: { input: 2, output: 3, cost: { total: 0.02 } } },
       }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_settled' }) + '\\n');
@@ -154,8 +154,12 @@ describe('Cindy PI Subagent foreground durable path', () => {
     'waits for the runner and forwards Ask approval through the parent UI',
     async () => {
     const f = await fixture();
+    const requestPrefsFile = path.join(f.root, 'request-prefs.json');
+    const prefs = JSON.stringify({ fast: true, models: [{ provider: 'fixture', id: 'fixture-model' }] });
+    await writeFile(requestPrefsFile, prefs);
     const previous = { ...process.env };
     Object.assign(process.env, {
+      CINDY_PI_MODEL_REQUEST_PREFS_FILE: requestPrefsFile,
       [CINDY_SUBAGENT_ENV.binary]: process.execPath,
       [CINDY_SUBAGENT_ENV.depth]: '0',
       [CINDY_SUBAGENT_ENV.runtimeFile]: f.runtimeFile,
@@ -195,7 +199,14 @@ describe('Cindy PI Subagent foreground durable path', () => {
       const extension = require(f.extensionFile).default as (pi: { registerTool: (tool: unknown) => void }) => Promise<void>;
       await extension({ registerTool: (tool) => Object.assign(registered, tool) });
       expect(registered.execute).toBeTypeOf('function');
-      const input = hostInput(f);
+      const launchInput = hostInput(f);
+      const input = vi.fn(async (title: string, placeholder: string) => {
+        if (title === 'cindy:pi-subagent-runner' && JSON.parse(placeholder).action === 'launch') {
+          // Model the parent closing before the durable runner starts.
+          await rm(requestPrefsFile);
+        }
+        return launchInput(title, placeholder);
+      });
       const result = await registered.execute!(
         'tool-foreground',
         { agent: 'worker', task: 'write the fixture', model: 'claude-fable-5' },
@@ -210,6 +221,9 @@ describe('Cindy PI Subagent foreground durable path', () => {
       const [runId] = await readdir(f.runRoot);
       const configText = await readFile(path.join(f.runRoot, runId, 'config.json'), 'utf8');
       const config = JSON.parse(configText);
+      expect(config.requestPrefsFile).toBe(path.join(f.runRoot, runId, 'request-prefs.json'));
+      expect(result.content[0].text).toContain(':prefs=' + prefs);
+      expect(await readFile(config.requestPrefsFile, 'utf8')).toBe(prefs);
       expect(config.tasks[0]).toMatchObject({
         provider: 'anthropic',
         model: 'claude-fable-5',

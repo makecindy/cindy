@@ -772,6 +772,7 @@ function main() {
       if (task.thinking) args.push('--thinking', task.thinking);
       const childEnv = Object.assign({}, process.env, {
         CINDY_PI_PERMISSION_FILE: config.permissionFile,
+        ...(config.requestPrefsFile ? { CINDY_PI_MODEL_REQUEST_PREFS_FILE: config.requestPrefsFile } : {}),
         PI_CODING_AGENT_DIR: config.childConfigHome,
       });
       const childRg = path.join(config.childConfigHome, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg');

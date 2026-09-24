@@ -5145,6 +5145,7 @@ export class PiAgent extends BaseAgent {
         // 扩展照旧现读快照,能力不受影响。
         CINDY_SUBAGENT_ENV.runtimeFile,
         CINDY_SUBAGENT_ENV.ownerId,
+        'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
         // 受管工具路径同属控制面：不得让获批 bash 改写/替换后影响后续自动放行的 grep/find。
         ...(managedRipgrepPath ? [PI_MANAGED_RG_PATH_ENV] : []),
       ]));

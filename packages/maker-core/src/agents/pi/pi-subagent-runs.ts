@@ -2800,6 +2800,21 @@ async function resumeClaimedPiSubagentRun(
     );
     await fs.writeFile(bridgeExtension, bridgeSource, { mode: 0o600, flag: 'wx' });
     await writeAtomicJson(permissionFile, launch.permissionSnapshot);
+    // Prefer the active parent's preferences, otherwise preserve the durable
+    // run's snapshot when resuming after the parent runtime has gone away.
+    const liveRequestPrefsFile = launch.env.CINDY_PI_MODEL_REQUEST_PREFS_FILE;
+    const sourceRequestPrefsFile = liveRequestPrefsFile || path.join(sourceDir, 'request-prefs.json');
+    delete config.requestPrefsFile;
+    try {
+      const requestPrefs = await fs.readFile(sourceRequestPrefsFile);
+      const requestPrefsFile = path.join(runDir, 'request-prefs.json');
+      await fs.writeFile(requestPrefsFile, requestPrefs, { mode: 0o600, flag: 'wx' });
+      config.requestPrefsFile = requestPrefsFile;
+    } catch (error) {
+      // Legacy/no-Fast runs have no snapshot; an explicitly supplied one must
+      // not silently disappear and change the user's selected tier.
+      if (liveRequestPrefsFile || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
     await fs.writeFile(runnerFile, runnerSource, { mode: 0o600, flag: 'wx' });
     await Promise.all([
       fs.chmod(runDir, 0o700).catch(() => undefined),

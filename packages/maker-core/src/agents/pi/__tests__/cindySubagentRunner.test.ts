@@ -976,6 +976,8 @@ describe('Cindy durable PI Subagent runner', () => {
       'the first generation to complete',
     );
     await waitForClose(fixture.child, fixture.stderr);
+    const prefs = JSON.stringify({ fast: true, models: [{ provider: 'fixture', id: 'fixture-model' }] });
+    await writeFile(path.join(fixture.runDir, 'request-prefs.json'), prefs);
     const resumeTokenCanary = 'resume-parent-token-canary-1234567890';
     const priorConfigPath = path.join(fixture.runDir, 'config.json');
     const priorConfig = JSON.parse(await readFile(priorConfigPath, 'utf8')) as {
@@ -1019,6 +1021,10 @@ describe('Cindy durable PI Subagent runner', () => {
     });
     expect(resumed.tasks[0]?.sessionId).toBe(first.tasks[0]?.sessionId);
     expect(resumed.runtimeOwnerId).toBe('resume-owner');
+    const resumedConfig = JSON.parse(await readFile(path.join(fixture.root, resumedRunId!, 'config.json'), 'utf8'));
+    expect(resumedConfig.requestPrefsFile).toBe(path.join(fixture.root, resumedRunId!, 'request-prefs.json'));
+    await rm(path.join(fixture.runDir, 'request-prefs.json'));
+    expect(await readFile(resumedConfig.requestPrefsFile, 'utf8')).toBe(prefs);
     await expect(readFile(path.join(fixture.root, resumedRunId!, 'permission.json'), 'utf8'))
       .resolves.toContain('/current-parent');
     await expect(readFile(path.join(fixture.root, resumedRunId!, 'pi-home', 'models.json')))
