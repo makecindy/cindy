@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * AskUserQuestionPrompt
  * ---------------------------------------------------------------------------
@@ -468,35 +469,39 @@ function AskUserQuestionForm({
       ) : (
         <>
           {currentIndex > 0 && (
-            <button
+            <Button
+              variant="secondary"
+              palette="confirmation"
+              size="lg"
+              compact
               type="button"
               onClick={handleBack}
-              className={cn(
-                'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
-                'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
-              )}
             >
               <span className="flex items-center gap-1.5">
                 <span>&#8592;</span>
                 <span>{t('chat.askUserQuestion.back')}</span>
               </span>
-            </button>
+            </Button>
           )}
 
-          <button
+          <Button
+            variant="secondary"
+            palette="confirmation"
+            size="lg"
+            compact
             type="button"
             onClick={handleSkip}
-            className={cn(
-              'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
-              'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
-            )}
           >
             {t('chat.askUserQuestion.skip')}
-          </button>
+          </Button>
 
           {(isMultiSelect ||
             (!isLastQuestion && existingAnswer !== undefined && !isMultiSelect)) && (
-            <button
+            <Button
+              variant="secondary"
+              palette="confirmation"
+              size="lg"
+              compact
               type="button"
               onClick={() => {
                 if (isMultiSelect) {
@@ -510,19 +515,9 @@ function AskUserQuestionForm({
                   ? selectedLabels.size === 0 && !customInput.trim()
                   : existingAnswer === undefined
               }
-              className={cn(
-                'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
-                (
-                  isMultiSelect
-                    ? selectedLabels.size === 0 && !customInput.trim()
-                    : existingAnswer === undefined
-                )
-                  ? 'cursor-not-allowed border border-[var(--border-default)] bg-transparent text-[var(--text-disabled-tertiary)] opacity-50'
-                  : 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
-              )}
             >
               {isLastQuestion ? t('chat.askUserQuestion.submit') : t('chat.askUserQuestion.next')}
-            </button>
+            </Button>
           )}
         </>
       )}

@@ -1,0 +1,64 @@
+import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
+import { expect, it } from 'vitest';
+import { buildMobileMessageRenderItems } from '../session/messageRenderModel';
+import { companionConversationItems } from '../session/companionConversationPresentation';
+import type { RemoteMessage } from '../session/types';
+const row = (id: string, role: RemoteMessage['role'], content: unknown, agentMeta: RemoteMessage['agentMeta'] = null): RemoteMessage => ({
+  id, clientId: id, sessionId: 'chat', role, content, agentMeta, toolUseId: null, createdAt: new Date(1000 + Number(id.replace(/\D/g, '') || 0)).toISOString(),
+});
+const bodies = (messages: RemoteMessage[], running: boolean) => companionConversationItems(buildMobileMessageRenderItems(messages, { isSessionStreaming: running }));
+const base = [row('u0', 'user', 'Help'), row('a1', 'assistant', 'Public progress'),
+  row('t2', 'tool_use', { toolName: 'Read', toolUseId: 't', input: { path: 'private' } }),
+  row('r3', 'tool_result', { toolUseId: 't', result: 'technical details' })];
+it('has no process entry or commentary during generation, and retains the completed answer', () => {
+  const active = bodies(base, true);
+  expect(active.map(item => item.type)).toEqual(['message']);
+  expect(JSON.stringify(active)).not.toMatch(/Public progress|technical details/);
+  const complete = bodies([...base, row('a4', 'assistant', 'Answer', { turnCompleted: true })], false);
+  expect(complete.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Answer']);
+  expect(base[1].content).toBe('Public progress');
+});
+it('retains an interrupted/no-final reply and the actual error', () => {
+  const items = bodies([...base, row('a4', 'assistant', 'Useful partial answer'), row('e5', 'error', 'Model failed')], false);
+  expect(JSON.stringify(items)).toContain('Useful partial answer');
+  expect(JSON.stringify(items)).toContain('Model failed');
+  expect(items.some(item => item.type === 'work_group')).toBe(false);
+});
+it('keeps all contiguous blocks of a sealed final answer', () => {
+  const items = bodies([...base, row('a4', 'assistant', 'Part one'), row('a5', 'assistant', 'Part two', { turnCompleted: true })], false);
+  const text = items.filter(item => item.type === 'message').map(item => item.message.body);
+  expect(text).toEqual(['Help', 'Part one', 'Part two']);
+});
+it('keeps delivered attachments without their preamble', () => {
+  const items = bodies([...base, row('a4', 'assistant', '![Picture](https://example.com/picture.png)')], false);
+  expect(JSON.stringify(items)).toContain('picture.png');
+  expect(JSON.stringify(items)).not.toContain('Public progress');
+});
+it('retains required questions and plan decisions in the actual message projection', () => {
+  const items = bodies([...base,
+    row('q4', 'ask_user', { status: 'answered', question: 'Which document?', reply: 'The brief' }),
+    row('p5', 'plan_review', { plan: 'Review the brief', status: 'approved' }),
+  ], false);
+  expect(items.filter(item => item.type === 'message').map(item => item.message.kind))
+    .toEqual(['user', 'assistant', 'ask_user', 'plan_review']);
+  expect(JSON.stringify(items)).toContain('Which document?');
+  expect(JSON.stringify(items)).toContain('Review the brief');
+});
+
+it.each([false, true])('does not seal old commentary across an unloaded history gap (streaming=%s)', (running) => {
+  const at = (message: RemoteMessage, time: number) => ({ ...message, createdAt: new Date(time).toISOString() });
+  const currentStart = 1000 + HISTORY_GAP_SPLIT_MS + 1;
+  const messages = [
+    at(row('a1', 'assistant', 'Old commentary'), 1000),
+    // The intervening user message has not been loaded yet.
+    at(row('a2', 'assistant', 'Current answer, first part'), currentStart),
+    at(row('a3', 'assistant', 'Current answer, last part', { turnCompleted: true }), currentStart + 1),
+  ];
+  const texts = (source: RemoteMessage[]) => bodies(source, running)
+    .filter(item => item.type === 'message').map(item => item.message.body);
+  expect(texts(messages)).toEqual(['Current answer, first part', 'Current answer, last part']);
+  // Once the actual user boundary is loaded, retain the older no-final reply
+  // through the existing per-turn fallback, independently of the newer seal.
+  expect(texts([messages[0], at(row('u2', 'user', 'New question'), currentStart - 1), ...messages.slice(1)]))
+    .toEqual(['Old commentary', 'New question', 'Current answer, first part', 'Current answer, last part']);
+});

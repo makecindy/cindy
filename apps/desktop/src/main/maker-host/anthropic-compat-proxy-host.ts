@@ -45,14 +45,14 @@ import {
 } from '@cindy/anthropic-compat-proxy';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 
-import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
+import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { providerModelRecord } from '@cindy/model-providers';
 import { outboundFetch } from './outbound-fetch.js';
 import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { createClaudeProviderBridge } from './claude-provider-bridge.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
-import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
+import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 import {
   getPiNativeSubscriptionHandler,
   getResponsesBridgeHandler,
@@ -177,10 +177,10 @@ export function setClaudeProxyGatewayKeyReader(fn: () => string | null): void {
   _readGatewayKey = fn;
 }
 
-// cc 是否处于 oauth-spawn —— 由 host 注入(hasClaudeAiOAuth)。退役全局 authMode 后,cc 的 spawn
-// 凭证形态完全由「是否连了 Claude.ai 订阅」决定(见 auth-adapters.getAuthEnv):连了 = oauth-spawn
-// (带 OAuth bearer,默认须换网关 key),否则 = gateway-spawn(自带网关 key,默认 passthrough)。
-// 默认 false:未注入时按 gateway-spawn 处理(passthrough),与未连订阅用户字节级一致。
+// cc 是否处于 oauth-spawn(带订阅 OAuth bearer 经过本 proxy)。Claude 订阅会话现由内置 CLI
+// 用它自己的登录直连 Anthropic、不经本 proxy(见 claude-native-cli),desktop 不再注入 checker:
+// 经 proxy 的 cc 进程一律带网关 key / 占位 key,恒按 gateway-spawn 处理(passthrough)。
+// 保留注入口只为兼容单测与其它 host。
 let _isOAuthSpawn: () => boolean = () => false;
 export function setClaudeProxyOAuthSpawnChecker(fn: () => boolean): void {
   _isOAuthSpawn = fn;
@@ -250,6 +250,31 @@ function refuseExclusiveXaiDefaultGateway(wireModel: string): RoutingDecision {
         },
       });
       res.writeHead(400, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+/**
+ * Claude 订阅只由 CLI 用自己的登录直连 Anthropic(env-builder nativeCliAuth),从不经本 proxy。
+ * 请求走到需要订阅凭证的分支说明子进程 env 不对:本地拒绝,绝不把请求(可能带着 CLI 的
+ * 订阅凭证)转发到 Anthropic。
+ */
+function refuseClaudeSubscriptionViaProxy(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'permission_error',
+          code: 'anthropic_subscription_cli_only',
+          message: 'The Claude subscription is only used by Claude Code with its own login.',
+        },
+      });
+      res.writeHead(403, {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
       });
@@ -504,7 +529,7 @@ function unavailablePiProviderRoute(providerId: string): RoutingDecision {
  *      - 带 x-api-key(= gateway-spawn,cc 自带网关 key)→ passthrough,字节级不变。
  *      - 不带 x-api-key(= oauth-spawn,cc 带订阅 OAuth bearer)→ 默认全量换网关 key
  *        (覆盖 bearer + 删 anthropic-beta,防订阅 token 泄漏到网关);要走订阅须 per-session 选 Anthropic。
- *   **为什么看请求头而非 hasClaudeAiOAuth() live 读**:cc 进程的凭证在 spawn 时冻结,而 OAuth 连接态
+ *   **为什么看请求头而非连接态 live 读**:cc 进程的凭证在 spawn 时冻结,而 OAuth 连接态
  *   可能在会话中途变化(用户在供应商页连/断);live 读(还会每请求 shell-out 读 keychain,慢且与并发的
  *   keychain 写竞争)会与 cc 实际持有的凭证发散,导致 OAuth bearer 被误判 passthrough 泄漏到网关 → 401。
  *   请求头反映的就是 cc 此刻真正握着的凭证,稳健且零 syscall(规则 10 热路径)。
@@ -735,6 +760,9 @@ export function createModelRoutingTransform(): RoutingTransform {
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。
     //    x-claude-code-session-id = cc sdkSessionId,经注入的 resolver 反解成 xdt sessionId。
     if (sessionId) {
+      if (requestAgent === 'claude-code' && selectedProviderId && isClaudeSubscriptionProviderId(selectedProviderId)) {
+        return refuseClaudeSubscriptionViaProxy();
+      }
       // wireModel 传给 scope 门:cc 内部辅助调用(权限 auto 分类器等 claude-* 小模型请求)
       // 不在订阅直连供应商(xai / openai-cc)声明的 modelPrefixes 范围内 → 返回 null,
       // 落到下方 ② 段 spawn 默认路由,分类器照常走网关/直连(issue #886)。
@@ -882,15 +910,15 @@ export function createModelRoutingTransform(): RoutingTransform {
         log.warn('provider-oauth cc spawn 占位 key 且无网关 key; passthrough (预期 401)', { wireModel });
         return null;
       }
-      // 没网关 key:Anthropic 模型只能直连(唯一出路),其余 passthrough + 记一条诊断。
-      // 判据 = 前缀地板 ∪ 目录 anthropic 供应商模型集合(新家族改 OSS 目录即可,无需发版)。
+      // 没有任何 Cindy 注入的凭证:Anthropic 模型只剩「带着 CLI 自己的订阅凭证直连」一条路,
+      // 而订阅会话从不经本 proxy —— 本地拒绝,不中转。判据 = 前缀地板 ∪ 目录 anthropic 模型集合。
       if (isAnthropicWireModel(wireModel, anthropicCatalogModelIds(getActiveCatalog()))) {
-        recordResolvedDefaultRoute('subscription');
-        return { upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM };
+        log.warn('claude request without Cindy credentials refused (subscription is CLI-only)', { wireModel });
+        return refuseClaudeSubscriptionViaProxy();
       }
       if (wireModel) {
         // 无 key 的非 Anthropic 模型 passthrough 大概率 401 —— 路由归属不明确, 不记录。
-        log.warn('claude oauth-spawn but no gateway key; non-anthropic passthrough (可能 401)', { wireModel });
+        log.warn('claude request without key or gateway key; non-anthropic passthrough (可能 401)', { wireModel });
       }
       return null;
     }

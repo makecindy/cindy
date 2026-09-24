@@ -1,10 +1,10 @@
+import { Button } from '@/components/ui/button';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { normalizeBotName } from '../../../shared/botCreation';
-import { Spinner } from '@/components/ui/spinner';
 import { BOT_PORTRAIT_COUNT, BotPortraitPicker, galleryPortrait } from './BotPortraitPicker';
 import { addBotProfileAndWait, BotModelSelectionRequiredError, useBotProfiles, type BotProfile } from './botStore';
 
@@ -57,10 +57,26 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
     }
   };
   const title = t('bots.guided.title');
-  const content = <>
-    <div className="mb-8 flex items-center justify-between gap-4">
-      {inline ? <h1 className="text-20 font-medium">{title}</h1> : <Dialog.Title className="text-20 font-medium">{title}</Dialog.Title>}
-      {!inline && <button type="button" onClick={close} disabled={creating} className="h-9 rounded-full px-4 text-13 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">{t('commonUi.confirmDialog.cancel')}</button>}
+  const content = (
+    <>
+      <div className="mb-8 flex items-center justify-between gap-4">
+        {inline ? (
+          <h1 className="text-20 font-medium">{title}</h1>
+        ) : (
+          <Dialog.Title className="text-20 font-medium">{title}</Dialog.Title>
+        )}
+        {!inline && (
+          <Button
+            variant="secondary"
+            size="lg"
+            tone="quiet"
+            type="button"
+            onClick={close}
+            disabled={creating}
+          >
+            {t('commonUi.confirmDialog.cancel')}
+          </Button>
+        )}
     </div>
     <form onSubmit={event => { event.preventDefault(); void create(); }}>
       <div className="flex items-center gap-5">
@@ -71,22 +87,38 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
             className="mt-2 h-11 w-full rounded-full border border-[var(--border-default)] bg-[var(--confirm-bg)] px-3 text-16 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]" />
         </label>
       </div>
-      {(error || duplicate) && <p role="alert" className="mt-4 text-13 text-[var(--text-danger)]">{duplicate ? t('bots.guided.duplicateName') : error}</p>}
-      {error === t('bots.guided.modelRequired') && <button type="button" className="mt-3 h-9 rounded-full px-4 text-13 hover:bg-[var(--surface-hover)]" onClick={() => navigate('/settings?tab=providers')}>{t('bots.settingsTabs.model')}</button>}
-      <div className="mt-8 flex justify-end">
-        <button type="submit" disabled={creating || !name.trim() || duplicate || !portrait}
-          className="inline-flex h-10 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-6 text-13 font-medium text-[var(--accent-pure-cta-fg)] hover:opacity-90 disabled:opacity-50">
-          {creating ? <Spinner size={14} /> : null}{t('bots.guided.generate')}<ArrowRight size={16} />
-        </button>
+        {(error || duplicate) && (
+          <p role="alert" className="mt-4 text-13 text-[var(--text-danger)]">{duplicate ? t('bots.guided.duplicateName') : error}</p>
+        )}
+        {error === t('bots.guided.modelRequired') && (
+          <button type="button" className="mt-3 h-9 rounded-full px-4 text-13 hover:bg-[var(--surface-hover)]" onClick={() => navigate('/settings?tab=providers')}>{t('bots.settingsTabs.model')}</button>
+        )}
+        <div className="mt-8 flex justify-end">
+          <Button
+            variant="cta"
+            size="lg"
+            loading={creating}
+            type="submit"
+            disabled={creating || !name.trim() || duplicate || !portrait}
+          >
+            {t('bots.guided.generate')}
+            <ArrowRight size={16} />
+          </Button>
       </div>
     </form>
-  </>;
-  if (inline) return <main className="flex h-full items-center justify-center bg-[var(--surface)] px-6 text-[var(--text-primary)]"><div className="w-full max-w-lg">{content}</div></main>;
-  return <Dialog.Root open onOpenChange={open => { if (!open && !creating) close(); }}><Dialog.Portal>
+    </>
+  );
+  if (inline)
+    return (
+      <main className="flex h-full items-center justify-center bg-[var(--surface)] px-6 text-[var(--text-primary)]"><div className="w-full max-w-lg">{content}</div></main>
+    );
+  return (
+    <Dialog.Root open onOpenChange={open => { if (!open && !creating) close(); }}><Dialog.Portal>
     <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
     <Dialog.Content aria-describedby={undefined} onCloseAutoFocus={event => { if (restoreFocus) { event.preventDefault(); restoreFocus(); } }}
       className="fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-32px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-6 text-[var(--text-primary)] outline-none sm:p-8">
       {content}
     </Dialog.Content>
-  </Dialog.Portal></Dialog.Root>;
+  </Dialog.Portal></Dialog.Root>
+  );
 }

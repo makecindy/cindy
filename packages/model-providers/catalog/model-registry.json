@@ -1,7 +1,77 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-22T00:00:00.001Z",
+  "updatedAt": "2026-09-23T00:00:00.005Z",
   "models": [
+    {
+      "id": "openai/gpt-6-sol",
+      "name": "GPT-6 Sol",
+      "status": "active",
+      "sortOrder": 15,
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-6-sol",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "global",
+          "defaults": {
+            "supportsFastMode": true
+          }
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-6-sol",
+      "perAgent": {
+        "codex": {
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
+        }
+      }
+    },
+    {
+      "id": "openai/gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "status": "active",
+      "sortOrder": 16,
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-6-luna",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "global",
+          "defaults": {
+            "supportsFastMode": true
+          }
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-6-luna",
+      "perAgent": {
+        "codex": {
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000
+        }
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-5-5",
+      "name": "Opus 5.5",
+      "status": "active",
+      "sortOrder": -1,
+      "routes": [
+        {
+          "providerId": "anthropic",
+          "modelId": "claude-opus-5-5",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-5-5"
+    },
     {
       "id": "openai/gpt-5.6-sol",
       "name": "GPT-5.6-Sol",
@@ -1920,7 +1990,8 @@
         {
           "providerId": "xd",
           "modelId": "meta/muse-spark-1.2",
-          "agents": ["claude-code", "codex"]
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "global"
         }
       ],
       "modelRef": "meta/muse-spark-1.2"
@@ -1972,7 +2043,8 @@
         {
           "providerId": "xd",
           "modelId": "tencent/hy4-preview",
-          "agents": ["claude-code", "codex"]
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "cn"
         }
       ],
       "nativeApi": "openai-completions",
@@ -2097,6 +2169,66 @@
         }
       ],
       "nativeApi": "xai-videos"
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro",
+      "name": "MiMo V2.6 Pro",
+      "status": "active",
+      "sortOrder": 55,
+      "routes": [
+        {
+          "providerId": "xiaomi-mimo-api-cn",
+          "modelId": "mimo-v2.6-pro",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "cn"
+        },
+        {
+          "providerId": "xiaomi-mimo-token-plan-cn",
+          "modelId": "mimo-v2.6-pro",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "cn"
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "modelRef": "xiaomi/mimo-v2.6-pro"
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-flash",
+      "name": "MiMo V2.6 Flash",
+      "status": "active",
+      "sortOrder": 56,
+      "routes": [
+        {
+          "providerId": "xiaomi-mimo-api-cn",
+          "modelId": "mimo-v2.6-flash",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "cn"
+        },
+        {
+          "providerId": "xiaomi-mimo-token-plan-cn",
+          "modelId": "mimo-v2.6-flash",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "cn"
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "modelRef": "xiaomi/mimo-v2.6-flash"
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+      "name": "MiMo V2.6 Pro UltraSpeed",
+      "status": "active",
+      "sortOrder": 57,
+      "routes": [
+        {
+          "providerId": "xiaomi-mimo-api-cn",
+          "modelId": "mimo-v2.6-pro-ultraspeed",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "cn"
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "modelRef": "xiaomi/mimo-v2.6-pro-ultraspeed"
     }
   ],
   "nativeApiRules": [
@@ -2472,6 +2604,216 @@
     ]
   },
   "baseModels": [
+    {
+      "id": "openai/gpt-6-sol",
+      "aliases": ["gpt-6-sol"],
+      "defaults": {
+        "name": "GPT-6 Sol",
+        "group": "gpt",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium",
+        "supportsImageInput": true
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 2.5,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-09-23"
+              },
+              "maxInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 15.0,
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 5.0,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-09-23"
+              },
+              "minInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 5.0,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-09-23"
+              },
+              "maxInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 8,
+              "outputPerMtok": 30.0,
+              "cacheReadPerMtok": 0.8,
+              "cacheWritePerMtok": 10.0,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-09-23"
+              },
+              "minInputTokens": 272001
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-6-luna",
+      "aliases": ["gpt-6-luna"],
+      "defaults": {
+        "name": "GPT-6 Luna",
+        "group": "gpt",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium",
+        "supportsImageInput": true
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.1,
+              "outputPerMtok": 0.5,
+              "cacheReadPerMtok": 0.01,
+              "cacheWritePerMtok": 0.125,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-09-23"
+              },
+              "maxInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.2,
+              "outputPerMtok": 0.75,
+              "cacheReadPerMtok": 0.02,
+              "cacheWritePerMtok": 0.25,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-09-23"
+              },
+              "minInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 0.2,
+              "outputPerMtok": 1.0,
+              "cacheReadPerMtok": 0.02,
+              "cacheWritePerMtok": 0.25,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-09-23"
+              },
+              "maxInputTokens": 272001
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 0.4,
+              "outputPerMtok": 1.5,
+              "cacheReadPerMtok": 0.04,
+              "cacheWritePerMtok": 0.5,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/pricing",
+                "verifiedAt": "2026-09-23"
+              },
+              "minInputTokens": 272001
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "anthropic/claude-opus-5-5",
+      "aliases": ["claude-opus-5-5"],
+      "defaults": {
+        "name": "Opus 5.5",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium",
+        "supportsImageInput": true
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 5.0,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-09-23"
+              },
+              "cacheWrite1hPerMtok": 8
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 8,
+              "outputPerMtok": 40,
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 10.0,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-09-23"
+              },
+              "cacheWrite1hPerMtok": 16
+            }
+          ]
+        }
+      ]
+    },
     {
       "id": "openai/gpt-5.6-sol",
       "aliases": [
@@ -3620,12 +3962,7 @@
         "name": "Grok 4.7",
         "group": "grok",
         "contextWindow": 500000,
-        "efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
+        "efforts": ["low", "medium", "high", "xhigh"],
         "defaultEffort": "high",
         "supportsImageInput": true
       },
@@ -5174,7 +5511,22 @@
                 "kind": "provider-official",
                 "url": "https://platform.kimi.com/docs/pricing/chat-k3",
                 "verifiedAt": "2026-09-11"
-              }
+              },
+              "effectiveUntil": "2026-09-23"
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 20,
+              "outputPerMtok": 100,
+              "cacheReadPerMtok": 2,
+              "effectiveFrom": "2026-09-23",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.com/",
+                "verifiedAt": "2026-09-23"
+              },
+              "cacheWritePerMtok": 20
             }
           ]
         },
@@ -5192,7 +5544,22 @@
                 "kind": "provider-official",
                 "url": "https://platform.kimi.ai/docs/pricing/chat-k3",
                 "verifiedAt": "2026-09-11"
-              }
+              },
+              "effectiveUntil": "2026-09-23"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.3,
+              "effectiveFrom": "2026-09-23",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/",
+                "verifiedAt": "2026-09-23"
+              },
+              "cacheWritePerMtok": 3
             }
           ]
         }
@@ -5324,7 +5691,27 @@
       "aliases": [],
       "defaults": {
         "name": "Muse Spark 1.2"
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.25,
+              "outputPerMtok": 4.25,
+              "cacheReadPerMtok": 0.15,
+              "effectiveFrom": "2026-09-23",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://dev.meta.ai/docs/pricing-rate-limits",
+                "verifiedAt": "2026-09-23"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "xd/moonshotai-kimi-k3",
@@ -5352,7 +5739,22 @@
                 "kind": "provider-official",
                 "url": "https://platform.kimi.ai/docs/pricing/chat-k3",
                 "verifiedAt": "2026-09-11"
-              }
+              },
+              "effectiveUntil": "2026-09-23"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.3,
+              "effectiveFrom": "2026-09-23",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/",
+                "verifiedAt": "2026-09-23"
+              },
+              "cacheWritePerMtok": 3
             }
           ]
         }
@@ -5372,7 +5774,27 @@
       "defaults": {
         "name": "Hy4 preview",
         "defaultEffort": "medium"
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 6,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 0.3,
+              "effectiveFrom": "2026-09-23",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://cloud.tencent.com/product/tokenhub",
+                "verifiedAt": "2026-09-23"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "qwen/qwen3.5-4b",
@@ -5573,6 +5995,229 @@
           "output": ["embedding"]
         }
       }
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro",
+      "aliases": ["mimo-v2.6-pro"],
+      "defaults": {
+        "name": "MiMo V2.6 Pro",
+        "description": "小米 MiMo V2.6 Pro 全模态推理模型（深度思考为开/关开关，无 reasoning_effort 档位）；1M 上下文 / 128K 最大输出",
+        "group": "china",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "efforts": [],
+        "defaultEffort": null,
+        "supportsImageInput": true
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 6,
+              "cacheReadPerMtok": 0.025,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        },
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.435,
+              "outputPerMtok": 0.87,
+              "cacheReadPerMtok": 0.0036,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-flash",
+      "aliases": ["mimo-v2.6-flash"],
+      "defaults": {
+        "name": "MiMo V2.6 Flash",
+        "description": "小米 MiMo V2.6 Flash 全模态推理模型（深度思考为开/关开关，无 reasoning_effort 档位）；1M 上下文 / 128K 最大输出",
+        "group": "china",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "efforts": [],
+        "defaultEffort": null,
+        "supportsImageInput": true
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 2,
+              "cacheReadPerMtok": 0.02,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        },
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.14,
+              "outputPerMtok": 0.28,
+              "cacheReadPerMtok": 0.0028,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+      "aliases": ["mimo-v2.6-pro-ultraspeed"],
+      "defaults": {
+        "name": "MiMo V2.6 Pro UltraSpeed",
+        "description": "小米 MiMo V2.6 Pro UltraSpeed 低时延定制服务；1M 上下文 / 128K 最大输出",
+        "group": "china",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "efforts": [],
+        "defaultEffort": null
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 30,
+              "outputPerMtok": 60,
+              "cacheReadPerMtok": 0.25,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        },
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4.35,
+              "outputPerMtok": 8.7,
+              "cacheReadPerMtok": 0.036,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "meta/muse-spark-1.3",
+      "aliases": ["muse-spark-1.3"],
+      "defaults": {
+        "name": "Muse Spark 1.3"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.25,
+              "outputPerMtok": 4.25,
+              "cacheReadPerMtok": 0.15,
+              "effectiveFrom": "2026-09-23",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://dev.meta.ai/docs/pricing-rate-limits",
+                "verifiedAt": "2026-09-23"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-3.8-flash",
+      "aliases": ["gemini-3.8-flash"],
+      "defaults": {
+        "name": "Gemini 3.8 Flash"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.75,
+              "outputPerMtok": 3.75,
+              "cacheReadPerMtok": 0.075,
+              "effectiveFrom": "2026-09-23",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-09-23"
+              },
+              "effectiveUntil": "2027-01-01"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 7.5,
+              "cacheReadPerMtok": 0.15,
+              "effectiveFrom": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-09-23"
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }

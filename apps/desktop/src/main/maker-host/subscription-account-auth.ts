@@ -1,13 +1,7 @@
-import { app } from 'electron';
-import path from 'node:path';
-import { createHash } from 'node:crypto';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { genericOAuthSecretIo } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog, setDiscoveredProviderModels, setXaiDiscoveredModels } from './active-catalog.js';
 import { discardXaiModelsDiskCache } from './model-discovery/xai.js';
-import { createClaudeOAuthRefresher, type GetValidOAuthOptions } from './claude-oauth-refresh.js';
-import { type ClaudeAiOAuth, readClaudeAiOAuth } from './claude-credentials-store.js';
-import { runClaudeOAuthLogin, cancelClaudeOAuthLogin } from './claude-oauth-login.js';
 import {
   runGrokOAuthLogin,
   cancelGrokOAuthLogin,
@@ -16,7 +10,6 @@ import {
   logoutGrok,
   resetGrokOAuthMemoryCache,
 } from './grok-oauth-login.js';
-import { outboundFetch } from './outbound-fetch.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('subscription-account-auth');
@@ -24,14 +17,12 @@ let onInvalidated: (providerId: string) => void = () => {};
 export function setSubscriptionAccountInvalidatedHandler(handler: typeof onInvalidated): void {
   onInvalidated = handler;
 }
-type AccountRefreshState = {
-  refresher: ReturnType<typeof createClaudeOAuthRefresher>;
-  invalidatedCredential?: string;
-};
-const refreshers = new Map<string, AccountRefreshState>();
-function credentialFingerprint(raw: string): string {
-  return createHash('sha256').update(raw).digest('hex');
-}
+/**
+ * 独立 Claude 账号已停用的归因。它的凭证是 Cindy 自己跑 OAuth 登录后保存的,而 Claude 订阅
+ * 只允许经官方 Claude Code CLI 自己的登录使用(见 claude-native-cli);已有条目保留在设置里
+ * 供用户查看 / 删除,不再参与任何会话。
+ */
+export const CLAUDE_ACCOUNT_RETIRED_REASON = 'claude_account_retired';
 
 export function subscriptionAccountKind(providerId?: string | null): 'claude' | 'xai' | null {
   const native = getActiveCatalog().providers.find((p) => p.id === providerId)?.auth.native;
@@ -56,84 +47,20 @@ export function isClaudeSubscriptionProviderId(providerId?: string | null): bool
 export function isXaiSubscriptionProviderId(providerId?: string | null): boolean {
   return providerId === 'xai' || subscriptionAccountKind(providerId) === 'xai';
 }
-export function readClaudeAccountOAuth(providerId = 'anthropic'): ClaudeAiOAuth | null {
-  if (providerId === 'anthropic') return readClaudeAiOAuth();
-  if (subscriptionAccountKind(providerId) !== 'claude' || isAppSessionBoundaryPending())
-    return null;
-  try {
-    const raw = genericOAuthSecretIo.read(providerId) ?? 'null';
-    if (refreshers.get(`${activeOwnerScopeKey()}:${providerId}`)?.invalidatedCredential === credentialFingerprint(raw)) return null;
-    const blob = JSON.parse(raw);
-    return typeof blob?.accessToken === 'string' && blob.accessToken ? blob : null;
-  } catch {
-    return null;
-  }
-}
-function claudeAccount(providerId: string) {
-  const scope = activeOwnerScopeKey();
-  const key = `${scope}:${providerId}`;
-  let account = refreshers.get(key);
-  if (!account) {
-    const current = () => activeOwnerScopeKey() === scope && !isAppSessionBoundaryPending();
-    const directory = path.join(
-      app.getPath('userData'),
-      'subscription-accounts',
-      createHash('sha256').update(key).digest('hex'),
-    );
-    const refresher = createClaudeOAuthRefresher({
-      readOAuth: () => (current() ? readClaudeAccountOAuth(providerId) : null),
-      writeOAuth: (oauth) => {
-        if (!current() || !genericOAuthSecretIo.write(providerId, JSON.stringify(oauth)))
-          throw new Error('Failed to save account credentials');
-      },
-      fetchFn: outboundFetch,
-      now: Date.now,
-      lockDir: () => directory,
-      onInvalidGrant: () => {
-        if (!current()) return;
-        const raw = genericOAuthSecretIo.readStrict(providerId);
-        if (raw) account!.invalidatedCredential = credentialFingerprint(raw);
-        account!.refresher.invalidate();
-        if (!genericOAuthSecretIo.remove(providerId)) {
-          log.warn('revoked account credential could not be removed; suppressing retained credential', { providerId });
-        }
-        void clearSubscriptionAccountDiscoveredModels(providerId);
-        onInvalidated(providerId);
-      },
-    });
-    account = { refresher };
-    refreshers.set(key, account);
-  }
-  return account.refresher;
-}
-export async function getValidClaudeAccountOAuth(providerId: string, options?: GetValidOAuthOptions) {
-  const scope = activeOwnerScopeKey();
-  const result = await claudeAccount(providerId).getValidOAuth(options);
-  // The native refresher may return its pre-refresh credential on a failed refresh.
-  // Re-read after invalidation/login so that captured revoked credentials cannot escape.
-  return result && activeOwnerScopeKey() === scope && !isAppSessionBoundaryPending()
-    ? readClaudeAccountOAuth(providerId) : null;
-}
-export async function prepareClaudeAccountUsage(providerId: string): Promise<ClaudeAiOAuth | null> {
-  const scope = activeOwnerScopeKey();
-  const refresher = claudeAccount(providerId);
-  const oauth = await getValidClaudeAccountOAuth(providerId);
-  if (!oauth || activeOwnerScopeKey() !== scope) return null;
-  if (!oauth.subscriptionType) await refresher.backfillSubscriptionProfile(oauth.accessToken);
-  return activeOwnerScopeKey() === scope ? readClaudeAccountOAuth(providerId) : null;
-}
-export function subscriptionAccountState(providerId: string) {
+export function subscriptionAccountState(providerId: string): {
+  authenticated: boolean;
+  identity?: string;
+  errorReason?: string;
+  authSource: 'oauth';
+} {
   const kind = subscriptionAccountKind(providerId);
-  const oauth = kind === 'claude' ? readClaudeAccountOAuth(providerId) : null;
+  if (kind === 'claude') {
+    return { authenticated: false, errorReason: CLAUDE_ACCOUNT_RETIRED_REASON, authSource: 'oauth' };
+  }
   return {
-    authenticated: kind === 'xai' ? hasGrokOAuthLogin(providerId) : !!oauth,
-    identity:
-      kind === 'xai'
-        ? grokAccountIdentity(providerId)
-        : typeof oauth?.identity === 'string'
-          ? oauth.identity
-          : undefined,
-    authSource: 'oauth' as const,
+    authenticated: kind === 'xai' ? hasGrokOAuthLogin(providerId) : false,
+    identity: kind === 'xai' ? grokAccountIdentity(providerId) : undefined,
+    authSource: 'oauth',
   };
 }
 const logins = new Map<string, { cancel: () => void }>();
@@ -142,12 +69,14 @@ export function cancelSubscriptionAccountLogin(providerId: string): void {
 }
 export function resetSubscriptionAccountCaches(): void {
   for (const operation of logins.values()) operation.cancel();
-  for (const account of refreshers.values()) account.refresher.invalidate();
-  refreshers.clear();
 }
 export async function loginSubscriptionAccount(
   providerId: string,
   isCurrent: () => boolean,
+  options?: {
+    method?: 'browser' | 'device';
+    onDeviceCode?: (code: { userCode: string; verificationUrl: string; expiresAt: number }) => void;
+  },
 ): Promise<{
   ok: boolean;
   reason?: string;
@@ -156,6 +85,8 @@ export async function loginSubscriptionAccount(
 }> {
   const kind = subscriptionAccountKind(providerId);
   if (!kind) throw new Error('Unknown subscription account');
+  if (kind === 'claude') return { ok: false, reason: CLAUDE_ACCOUNT_RETIRED_REASON };
+  if (kind !== 'xai' && options?.method === 'device') throw new Error('Device login is only available for Grok');
   const scope = activeOwnerScopeKey();
   const key = `${scope}:${providerId}`;
   if (logins.has(key)) return { ok: false, reason: 'login_in_progress' };
@@ -167,8 +98,7 @@ export async function loginSubscriptionAccount(
   const operation = {
     cancel: () => {
       cancelled = true;
-      if (kind === 'claude') cancelClaudeOAuthLogin(key);
-      else cancelGrokOAuthLogin(providerId);
+      cancelGrokOAuthLogin(providerId);
     },
   };
   logins.set(key, operation);
@@ -179,7 +109,6 @@ export async function loginSubscriptionAccount(
       genericOAuthSecretIo.readStrict(providerId) !== written
     )
       return false;
-    if (kind === 'claude') claudeAccount(providerId).invalidate();
     const restored =
       before === null
         ? genericOAuthSecretIo.remove(providerId)
@@ -196,21 +125,17 @@ export async function loginSubscriptionAccount(
   try {
     const persist = (blob: unknown) => {
       if (!current()) throw new Error('login_cancelled');
-      if (kind === 'claude') claudeAccount(providerId).invalidate();
       const raw = JSON.stringify(blob);
       if (!genericOAuthSecretIo.write(providerId, raw))
         throw new Error('Failed to save account credentials');
       written = raw;
     };
-    const result =
-      kind === 'claude'
-        ? await runClaudeOAuthLogin({
-            loginKey: key,
-            isCurrent: current,
-            persist,
-            backfill: async () => {},
-          })
-        : await runGrokOAuthLogin({ isCurrent: current, persist }, providerId);
+    const result = await runGrokOAuthLogin({
+      isCurrent: current,
+      persist,
+      method: options?.method,
+      onDeviceCode: options?.onDeviceCode,
+    }, providerId);
     if (!current()) {
       restoreWrittenCredentials();
       return { ok: false, reason: 'login_cancelled' };
@@ -238,7 +163,6 @@ export function removeSubscriptionAccountCredentialsReversibly(providerId: strin
   cancelSubscriptionAccountLogin(providerId);
   const scope = activeOwnerScopeKey();
   const previous = genericOAuthSecretIo.readStrict(providerId);
-  if (subscriptionAccountKind(providerId) === 'claude') claudeAccount(providerId).invalidate();
   if (subscriptionAccountKind(providerId) === 'xai') logoutGrok(providerId);
   else if (!genericOAuthSecretIo.remove(providerId))
     throw new Error('Failed to remove account credentials');

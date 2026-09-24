@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * FeishuConflictDialog
  * ---------------------------------------------------------------------------
@@ -99,36 +100,14 @@ export function FeishuConflictDialog({
           {/* Actions */}
           <div className="flex justify-end gap-2 pt-2">
             <AlertDialog.Cancel asChild>
-              <button
-                type="button"
-                onClick={onDismiss}
-                className={cn(
-                  'h-[36px] rounded-full px-4',
-                  'bg-[var(--settings-btn-secondary-bg)]',
-                  'border border-[var(--settings-btn-secondary-border)]',
-                  'text-13 font-medium text-[var(--settings-btn-secondary-text)]',
-                  'hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                  'transition-colors',
-                )}
-              >
+              <Button variant="secondary" size="lg" type="button" onClick={onDismiss}>
                 {t('imBot.conflictDialog.dismiss')}
-              </button>
+              </Button>
             </AlertDialog.Cancel>
             <AlertDialog.Action asChild>
-              <button
-                type="button"
-                onClick={onCreateOwnApp}
-                className={cn(
-                  'h-[36px] rounded-full px-4',
-                  'bg-[var(--settings-btn-primary-bg)]',
-                  'border border-[var(--settings-btn-primary-border)]',
-                  'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-                  'hover:bg-[var(--settings-btn-primary-hover-bg)]',
-                  'transition-colors',
-                )}
-              >
+              <Button variant="cta" size="lg" type="button" onClick={onCreateOwnApp}>
                 {t('imBot.conflictDialog.createOwnApp')}
-              </button>
+              </Button>
             </AlertDialog.Action>
           </div>
         </AlertDialog.Content>

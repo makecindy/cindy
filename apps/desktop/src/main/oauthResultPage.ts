@@ -8,12 +8,23 @@ import { DEEP_LINK_URL_PREFIX } from '../shared/deepLinkSchemes';
 import { LOGIN_CALLBACK_CHIBI } from './assets/loginCallbackAssets';
 
 export type OAuthResultPageLang = 'zh' | 'zh-TW' | 'en' | 'ja' | 'ko';
+
+/** Receipt is not token-exchange success. The authoritative result stays in the cloud card. */
+export function getRemoteOAuthCallbackCopy(lang: OAuthResultPageLang): { title: string; body: string } {
+  return {
+    zh: { title: '已收到授权回调', body: '请返回 Cindy，查看远程设备的授权结果。' },
+    'zh-TW': { title: '已收到授權回呼', body: '請返回 Cindy，查看遠端裝置的授權結果。' },
+    en: { title: 'Authorization callback received', body: 'Return to Cindy to check the authorization result on the remote device.' },
+    ja: { title: '認証コールバックを受信しました', body: 'Cindy に戻り、リモートデバイスの認証結果を確認してください。' },
+    ko: { title: '인증 콜백을 받았습니다', body: 'Cindy로 돌아가 원격 기기의 인증 결과를 확인하세요.' },
+  }[lang];
+}
 export type OAuthResultPageVariant = 'success' | 'warning' | 'error';
 export type OAuthResultPageTheme = 'light' | 'dark';
 
 /** 业务来源(三层 adapter 之一,PR3)。目前仅 desktop-login 切换到 wave4 新品牌卡。 */
 export type OAuthResultPageKind =
-  'desktop-login' | 'ghost-oauth' | 'claude-oauth' | 'xai-oauth' | 'generic-oauth';
+  'desktop-login' | 'ghost-oauth' | 'xai-oauth' | 'generic-oauth';
 
 /** 视觉三分类(三层 adapter 之三,callback-pages-classification.md 页壳改造点 1)。 */
 export type OAuthResultVisualKind = 'success' | 'failure' | 'neutral';

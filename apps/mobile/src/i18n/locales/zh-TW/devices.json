@@ -35,6 +35,7 @@
     "create": "新建"
   },
   "resources": {
+    "connectionUnknown": "連線狀態未知",
     "hostOffline": "離線",
     "titleFallback": "資源",
     "loading": "正在載入…",
@@ -296,6 +297,8 @@
       "noDevice": "沒有可用裝置。請先開啟桌面端遠端控制，然後重新同步。"
     },
     "alert": {
+      "cacheSaveFailed": "離線快取未能儲存",
+      "cacheSaveFailedDetail": "請檢查手機剩餘儲存空間。你仍可連線使用，但部分內容可能無法離線查看。",
       "actionFailed": "操作失敗",
       "renameFailed": "重新命名失敗",
       "deleteTitle": "刪除任務？",
@@ -594,6 +597,8 @@
       },
       "boundSessionA11y": "繫結任務 {{name}}",
       "intervalPlaceholder": "留空則使用 cron",
+      "intervalHint": "分鐘間隔請選擇 1、2、3、4、5、6、10、12、15、20 或 30 分鐘；整小時間隔請輸入 60 的倍數，範圍為 60–1380 分鐘（1–23 小時）。",
+      "intervalPreservedHint": "目前任務的精確間隔為每 {{duration}}；未編輯或清空前會保留。",
       "workspace": {
         "project": "專案",
         "dialogue": "對話"
@@ -731,7 +736,8 @@
         "workingDir": "請輸入專案目錄",
         "effort": "推理強度只能是 {{values}}",
         "intervalPositiveInteger": "間隔分鐘必須是正整數",
-        "intervalUnsupported": "分鐘間隔只支援 1–59 分鐘，或 1–23 小時的整點間隔"
+        "preRunHookTimeout": "檢查逾時必須是正整數毫秒",
+        "intervalUnsupported": "分鐘間隔必須可整除 60：請選擇 1、2、3、4、5、6、10、12、15、20 或 30 分鐘，或 1–23 小時的整點間隔"
       },
       "schedule": {
         "paused": "已暫停",
@@ -855,6 +861,7 @@
       "continueEditing": "繼續編輯",
       "discard": "放棄變更",
       "invalid": "請檢查名稱、執行說明和觸發設定後重新儲存。",
+      "failed": "自動化操作沒有完成。",
       "everyMinutes": "每 {{count}} 分鐘",
       "everyMinutes_one": "每 {{count}} 分鐘",
       "everyMinutes_other": "每 {{count}} 分鐘",
@@ -922,7 +929,14 @@
       "timezone": "時區",
       "monthly": "每月",
       "monthDay": "每月幾號",
-      "saveAndRun": "儲存並執行"
+      "saveAndRun": "儲存並執行",
+      "advanced": "進階設定",
+      "quiet": "檢查沒事不說話",
+      "quietHint": "僅回報變化或問題。提醒和定時傳送可關閉此項。",
+      "checkCommand": "前置檢查命令",
+      "checkHint": "選填。在電腦上先檢查：結束代碼 2 跳過本次執行，0 繼續執行，異常仍會回報。清空可移除。",
+      "timeoutMs": "檢查逾時（毫秒，留空不限時）",
+      "skipped": "已檢查 · 未喚醒模型"
     },
     "openNavigation": "開啟導覽",
     "openProfile": "查看 {{name}} 的資料",
@@ -936,6 +950,7 @@
       "thinking": "正在思考…",
       "replying": "正在回覆…",
       "processing": "正在處理…",
+      "compacting": "正在整理對話…",
       "reading-memory": "正在讀取記憶…",
       "saving-memory": "正在儲存記憶…",
       "deleting-memory": "正在刪除記憶…",
@@ -964,7 +979,9 @@
       "retryFailed": "暫時無法重試，請稍後再試。",
       "leave": "先去忙",
       "avatarSkipped": "暫時用了預設頭像，你隨時可以換一張。"
-    }
+    },
+    "viewResult": "查看結果",
+    "noWrittenResult": "沒有文字結果。"
   },
   "companionProfile": {
     "avatar": "頭像",
@@ -992,6 +1009,7 @@
     "offline": "請重新連接 {{deviceName}} 後繼續，未儲存的編輯已保留。",
     "hostUpgrade": "請更新 {{deviceName}} 上的 Cindy 後重試，或在那台電腦上編輯夥伴設定。",
     "readFailed": "暫時無法確認最新狀態。請重新整理後再試，操作可能已經完成。你的編輯已保留。",
+    "deleteFailed": "刪除沒有完成。",
     "artifactsEmpty": "還沒有成果，可以讓夥伴創作一些內容。",
     "openSourceTask": "開啟來源任務",
     "modelFollowsDefault": "跟隨目前預設模型鏈",

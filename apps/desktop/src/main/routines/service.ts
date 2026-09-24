@@ -111,7 +111,10 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     workspaceKind: 'dialogue',
     useWorktree: false,
     targetSessionId: bot.canonicalSessionId,
-    silentWhenIdle: true,
+    // Rules saved before this preference existed were quiet; only new omissions
+    // are persisted as false by RoutineEngine.
+    silentWhenIdle: routine.silentWhenIdle ?? true,
+    preRunHook: routine.preRunHook ?? undefined,
     notify: { desktop: true, feishu: false },
     status: 'active',
     createdAt: now,
@@ -140,6 +143,7 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     if (!completed) throw new Error('Routine execution record is missing');
     return {
       scheduleRunId: result.runId,
+      skipped: completed.status === 'skipped',
       resultText: completed.resultText,
       ...(completed?.status === 'success' || completed?.status === 'skipped'
         ? {}

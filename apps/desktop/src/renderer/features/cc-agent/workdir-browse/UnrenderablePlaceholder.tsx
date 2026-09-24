@@ -14,7 +14,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { OpenInSystemActions } from './OpenInSystemActions';
-import { pickFileIcon } from './lib/fileIcon';
+import { FileTypeTile } from '@/components/ui/file-type-tile';
 import { basename, dirname, formatBytes, formatMtime, joinPath } from './lib/fileMeta';
 
 export interface UnrenderablePlaceholderProps {
@@ -53,7 +53,6 @@ export function UnrenderablePlaceholder({
 }: UnrenderablePlaceholderProps) {
   const { t } = useTranslation();
   const name = basename(relPath);
-  const Icon = pickFileIcon(name);
   const absPath = joinPath(workdir, relPath);
   const folderPath = joinPath(workdir, dirname(relPath));
 
@@ -65,7 +64,7 @@ export function UnrenderablePlaceholder({
           'bg-[var(--chat-input-chip-bg)]',
         )}
       >
-        <Icon size={32} className="text-[var(--cmd-palette-item-meta)]" />
+        <FileTypeTile name={name} />
       </div>
       <div className="flex flex-col items-center gap-1.5">
         <div className="text-base font-semibold text-foreground">{name}</div>

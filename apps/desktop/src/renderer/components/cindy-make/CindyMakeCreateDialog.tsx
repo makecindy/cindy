@@ -123,7 +123,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
                   rows={5}
                   maxLength={MAX_REQUEST_LENGTH}
                   disabled={starting}
-                  className="min-h-[120px] resize-y"
+                  className="min-h-[120px] resize-y placeholder:opacity-55"
                   onKeyDown={(event) => {
                     if (
                       event.key === 'Enter' &&
@@ -149,7 +149,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
                   variant="secondary"
                   size="lg"
                   disabled={starting}
-                  className="border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]"
+                  palette="confirmation"
                 >
                   {t('settings.cindyMake.create.cancel')}
                 </Button>
@@ -159,7 +159,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
                 size="lg"
                 disabled={!valid}
                 loading={starting}
-                className="border-transparent bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] enabled:hover:border-transparent enabled:active:border-transparent enabled:hover:bg-[var(--confirm-btn-primary-hover)] enabled:active:bg-[var(--confirm-btn-primary-hover)]"
+                palette="confirmation"
               >
                 {t('settings.cindyMake.create.continue')}
               </Button>

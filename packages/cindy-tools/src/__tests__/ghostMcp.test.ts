@@ -1980,6 +1980,55 @@ describe("cindy · 卡槽③(xdt_card_id 提升 + agentToolUseId 提取)", () =>
 });
 
 describe('connect_account transport', () => {
+  it('exposes cloud market discovery/install only when the Host supplies them', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const searchMarket = vi.fn(async () => ({ ok: true, plugins: [] }));
+    const installMarket = vi.fn(async () => ({ ok: true, ghostId: 'example-plugin', installed: true }));
+    const server = createCindyGhostsMcpServer(fakeDeps({ searchMarket, installMarket }));
+    const client = new Client({ name: 'market-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair(); await server.connect(st); await client.connect(ct);
+    try {
+      expect((await client.listTools()).tools.map(t => t.name)).toEqual(expect.arrayContaining(['ghost_market_search', 'ghost_market_install']));
+      await client.callTool({ name: 'ghost_market_search', arguments: { query: 'calendar' } });
+      expect(searchMarket).toHaveBeenCalledWith('calendar');
+      await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'catalog-plugin', release_id: 'release-1' } });
+      expect(installMarket).toHaveBeenCalledWith({ pluginId: 'catalog-plugin', releaseId: 'release-1' }, expect.any(AbortSignal));
+      const rejected = await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'catalog-plugin' } });
+      expect(rejected.isError).toBe(true); expect(installMarket).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+  it('propagates MCP cancellation to the exact Host tool call', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    let aborted!: () => void;
+    const cancelled = new Promise<void>((resolve) => { aborted = resolve; });
+    const server = createCindyGhostsMcpServer(fakeDeps({
+      callGhostTool: async ({ signal }) => {
+        expect(signal).toBeInstanceOf(AbortSignal);
+        started();
+        await new Promise<void>((resolve) => signal!.addEventListener('abort', () => {
+          aborted(); resolve();
+        }, { once: true }));
+        return { ok: false, errorCode: 'INTERNAL', message: 'cancelled' };
+      },
+    }));
+    const client = new Client({ name: 'cancel-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st); await client.connect(ct);
+    try {
+      const controller = new AbortController();
+      const call = client.callTool({ name: 'ghost_call', arguments: {
+        ghost_id: 'art', tool: 'gen_image',
+      } }, undefined, { signal: controller.signal });
+      const rejected = expect(call).rejects.toBeDefined();
+      await ready; controller.abort();
+      await rejected; await cancelled;
+    } finally { await client.close(); await server.close(); }
+  });
+
   it('exposes a Host connection without requiring an installed plugin', async () => {
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
     const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
@@ -1992,10 +2041,34 @@ describe('connect_account transport', () => {
       const tools = await client.listTools();
       expect(tools.tools.some(tool => tool.name === 'connect_account')).toBe(true);
       await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'grok' } });
-      expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined }, expect.any(AbortSignal));
       const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'invented' } });
       expect(rejected.isError).toBe(true);
       expect(connectAccount).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it('forwards MCP cancellation to the ordinary connection waiter', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    let started!: () => void, cancelled!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const aborted = new Promise<void>(resolve => { cancelled = resolve; });
+    const server = createCindyGhostsMcpServer(fakeDeps({ connectAccount: async (_target, signal) => {
+      expect(signal).toBeInstanceOf(AbortSignal); started();
+      return new Promise(resolve => signal!.addEventListener('abort', () => {
+        cancelled(); resolve({ ok: false, errorCode: 'SETUP_CANCELLED' });
+      }, { once: true }));
+    } }));
+    const client = new Client({ name: 'connection-cancel', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st); await client.connect(ct);
+    try {
+      const controller = new AbortController();
+      const result = client.callTool({ name: 'connect_account', arguments: { kind: 'plugin', id: 'calendar' } },
+        undefined, { signal: controller.signal });
+      const rejected = expect(result).rejects.toBeDefined();
+      await ready; controller.abort(); await rejected; await aborted;
     } finally { await client.close(); await server.close(); }
   });
 });
@@ -2027,7 +2100,7 @@ describe('Cindy market MCP transport', () => {
       expect(callGhostTool).not.toHaveBeenCalled();
       await client.callTool({ name: 'ghost_info', arguments: { ghost_id: 'art' } });
       await client.callTool({ name: 'connect_account', arguments: { kind: 'plugin', id: 'art' } });
-      expect(connectAccount).toHaveBeenCalledWith({ kind: 'plugin', id: 'art', reauthorize: undefined });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'plugin', id: 'art', reauthorize: undefined }, expect.any(AbortSignal));
       expect(callGhostTool).not.toHaveBeenCalled();
       // Host authorization continuation retries the original work through the same gateway.
       await client.callTool({ name: 'ghost_call', arguments: { ghost_id: 'art', tool: 'gen_image', args: {} } });

@@ -18,6 +18,49 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
+  it('lets a remote agent start only the scoped Grok device login and returns no credential', async () => {
+    let current = true;
+    const start = vi.fn(async () => ({
+      status: 'pending' as const,
+      verificationUrl: 'https://auth.x.ai/device',
+      userCode: 'ABCD-1234',
+      expiresAt: Date.now() + 120_000,
+    }));
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => 'default',
+      grokLogin: { start, status: async () => ({ status: 'idle' }), cancel: async () => ({ status: 'idle' }) },
+    }, {
+      agentKind: 'codex', workingDir: '', remoteHostId: 'remote-host',
+      getSessionContext: () => current ? {
+        agentKind: 'codex', workingDir: '/remote', remoteHostId: 'remote-host',
+        sessionId: 'remote-session', sessionInstanceId: 'instance-1',
+      } : undefined,
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'grok-remote-auth-test', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      expect(overview.categories).toEqual([{ name: 'auth', tool_count: 3 }]);
+      const result = parsePayload(await client.callTool({
+        name: 'call_tool', arguments: { name: 'start_grok_device_login', args: {} },
+      }));
+      expect(result).toMatchObject({ status: 'pending', userCode: 'ABCD-1234' });
+      expect(JSON.stringify(result)).not.toContain('access_token');
+      expect(start).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'remote-session', sessionInstanceId: 'instance-1', remoteHostId: 'remote-host',
+      }));
+      current = false;
+      const stale = parsePayload(await client.callTool({
+        name: 'call_tool', arguments: { name: 'start_grok_device_login', args: {} },
+      }));
+      expect(stale).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+      expect(start).toHaveBeenCalledTimes(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
   it("creates a teammate through the scoped helper entry", async () => {
     const create = vi.fn(async () => ({
       ok: true as const,

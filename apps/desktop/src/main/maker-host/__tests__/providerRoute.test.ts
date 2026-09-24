@@ -46,6 +46,7 @@ import {
   setAnthropicDiscoveredModels,
   setCustomProviders,
   setDiscoveredCodexModels,
+  setManagedProviders,
   setXdGatewayModels,
 } from '../active-catalog.js';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store.js';
@@ -175,7 +176,7 @@ describe('Pi per-model protocol routing', () => {
 });
 
 describe('implicit local bridge resume routing', () => {
-  it('keeps the connected source when a running session model becomes retired', async () => {
+  it('never resolves a Codex session to the Claude subscription, even for a retired Claude model', async () => {
     setAnthropicDiscoveredModels([
       {
         id: 'claude-retired-live',
@@ -190,10 +191,7 @@ describe('implicit local bridge resume routing', () => {
 
     await expect(
       resolveImplicitLocalBridgeRoute('claude-retired-live', 'codex'),
-    ).resolves.toMatchObject({
-      providerId: 'anthropic',
-      routing: { wireProtocol: 'anthropic-messages' },
-    });
+    ).resolves.toBeNull();
   });
 });
 
@@ -274,23 +272,10 @@ describe('codex: buildRouteDecision no-break 基线', () => {
     );
   });
 
-  it('Anthropic subscription → Claude.ai bearer + OAuth beta,不透传 Codex 账号头', () => {
-    const fromCatalog = buildRouteDecision(
-      descriptor('anthropic', 'codex'),
-      KEY,
-      'codex',
-      null,
-      'claude-subscription-token',
-    );
-    expect(fromCatalog).toEqual({
-      upstreamOverride: 'https://api.anthropic.com',
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
-        authorization: 'Bearer claude-subscription-token',
-      },
-      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
-    });
+  it('Claude 订阅没有 Codex 路由(订阅只归内置 Claude Code CLI)', () => {
+    const anthropic = getActiveCatalog().providers.find((provider) => provider.id === 'anthropic');
+    expect(anthropic?.routing.codex).toBeUndefined();
+    expect(anthropic?.routing.pi).toBeUndefined();
   });
 });
 
@@ -306,21 +291,14 @@ describe('pi: provider-aware Anthropic wire routing', () => {
     });
   });
 
-  it('Anthropic injects the host OAuth token and required OAuth beta headers', async () => {
+  it('Pi 会话选 Claude 订阅 → 无路由(不注入 host OAuth,调用方本地拒绝)', async () => {
     setSessionProvider('s-pi', 'anthropic');
-    setProviderOAuthTokenReader((providerId, agent) =>
-      providerId === 'anthropic' && agent === 'pi' ? Promise.resolve('claude-live-token') : null,
-    );
+    const tokenReader = vi.fn(() => Promise.resolve('claude-live-token'));
+    setProviderOAuthTokenReader(tokenReader);
     await expect(
       Promise.resolve(resolveSessionRouteDecision('s-pi', 'pi', KEY, 'claude-opus-5')),
-    ).resolves.toEqual({
-      upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        authorization: 'Bearer claude-live-token',
-      },
-      headerDelete: ['x-api-key'],
-    });
+    ).resolves.toBeNull();
+    expect(tokenReader).not.toHaveBeenCalled();
   });
 });
 
@@ -459,37 +437,13 @@ describe('resolveSessionRouteDecision (per-session 选择 → 路由;no-break fa
     setProviderOAuthTokenReader(() => null);
   });
 
-  it('codex 会话选 Anthropic → 本地桥读取 Claude.ai OAuth，缺失时也 fail closed', async () => {
+  it('codex 会话选 Claude 订阅 → 无本地桥路由,也不读 Claude.ai token', async () => {
     setSessionProvider('s-anthropic-codex', 'anthropic');
-    setProviderOAuthTokenReader((providerId, agent) =>
-      providerId === 'anthropic' && agent === 'codex'
-        ? Promise.resolve('claude-subscription-token')
-        : null,
-    );
-    const route = await resolveSessionRoute('s-anthropic-codex', 'codex', 'claude-opus-5');
-    expect(route).toMatchObject({
-      providerId: 'anthropic',
-      providerSource: 'builtin',
-      oauthToken: 'claude-subscription-token',
-      routing: {
-        wireProtocol: 'anthropic-messages',
-        authStrategy: 'provider-oauth-header',
-      },
-    });
-    expect(buildLocalHandlerHeaders(route!, 'codex')).toEqual({
-      headers: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
-        authorization: 'Bearer claude-subscription-token',
-      },
-      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
-    });
-
+    const tokenReader = vi.fn(() => Promise.resolve('claude-subscription-token'));
+    setProviderOAuthTokenReader(tokenReader);
+    await expect(resolveSessionRoute('s-anthropic-codex', 'codex', 'claude-opus-5')).resolves.toBeNull();
+    expect(tokenReader).not.toHaveBeenCalled();
     setProviderOAuthTokenReader(() => null);
-    const missing = await resolveSessionRoute('s-anthropic-codex', 'codex', 'claude-opus-5');
-    expect(buildLocalHandlerHeaders(missing!, 'codex').headers.authorization).toBe(
-      'Bearer xdt-missing-provider-oauth-token',
-    );
   });
 
   it('按 catalog modelIdRewrite 剥 xAI 内部前缀', () => {
@@ -1427,6 +1381,44 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
       },
     });
     expect(newDecision?.routing).not.toHaveProperty('headerOverride');
+  });
+
+  it('does not inject stale personal headers into organization-managed routes', async () => {
+    const providerId = 'byok-header-isolation';
+    const routing: RoutingDescriptor = {
+      upstream: 'https://gateway.example.invalid/v1',
+      authStrategy: 'api-key-header',
+      wireProtocol: 'openai-responses',
+    };
+    setManagedProviders([{
+      id: providerId, name: 'Enterprise', source: 'organization',
+      auth: { method: 'managed' }, access: { kind: 'managed' }, agents: ['codex'],
+      models: { codex: [] }, routing: { codex: routing },
+    }]);
+    setCustomProviderKeyReader(() => 'managed-member-key');
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer stale-personal-key',
+      'x-personal-tenant': 'must-not-leak',
+    }));
+
+    try {
+      const resolved = await resolveFrozenProviderRouteDecision(
+        providerId,
+        routing,
+        getProviderRouteCredentialRevision(providerId),
+        'codex',
+        KEY,
+      );
+      expect(resolved?.decision).toMatchObject({
+        upstreamOverride: 'https://gateway.example.invalid/v1',
+        headerOverride: { authorization: 'Bearer managed-member-key' },
+      });
+      expect(resolved?.decision?.headerOverride).not.toHaveProperty('x-personal-tenant');
+    } finally {
+      setManagedProviders([]);
+      setCustomProviderKeyReader(() => null);
+      setCustomProviderHeaderReader(() => null);
+    }
   });
 
   it('精确请求路径只覆盖带 model 的推理请求，不改写无 body 的控制面请求', () => {

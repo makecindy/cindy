@@ -286,23 +286,19 @@ export function InstallTargetPicker({
               })}
             </Dialog.Description>
           </div>
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={() => {
               void handleOtherDirectory();
             }}
             disabled={installing}
-            className={cn(
-              'flex shrink-0 items-center gap-[6px] rounded-full transition-colors',
-              'border border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] text-[var(--settings-btn-secondary-text)]',
-              'enabled:hover:bg-[var(--surface-hover)]',
-              'disabled:opacity-60 disabled:cursor-default',
-            )}
-            style={{ height: '32px', padding: '0 12px', fontSize: 'var(--text-12)', fontWeight: 500 }}
           >
             <FolderOpen size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
             {t('skillhub.installPicker.otherDirectory')}
-          </button>
+          </Button>
         </div>
 
         {bannerError && (

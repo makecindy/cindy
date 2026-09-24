@@ -33,6 +33,7 @@ import { evictTaskTagCatalog } from '../task-tags/taskTagEvents';
  */
 
 import { useEffect, useRef } from 'react';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { useAuth } from '@/contexts/AuthContext';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { createLogger } from '@/lib/logger';
@@ -589,6 +590,8 @@ export function useDeviceLinkRemoteProjects(
           // 要收的那些分片(review: codex 指出上一轮的修复因此无效)。
           const authoritative = new Set(devices.map((d) => d.deviceId));
           for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
+            // SharedTask shards are reconciled against membership, not the own-device directory.
+            if (isSharedTaskPeer(deviceId)) continue;
             if (authoritative.has(deviceId) || eligible.has(deviceId)) continue;
             log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
             clearArchivedSessionRetry(deviceId);

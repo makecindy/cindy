@@ -20,7 +20,7 @@ import type { FavoriteStore } from '@/state/useRemoteModelFavorites';
 
 import { useEffect, useRef, useState } from 'react';
 
-import type { UnifiedModelEntry } from '@cindy/model-providers';
+import { clampEffortToSupported, type UnifiedModelEntry } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
@@ -84,7 +84,7 @@ export interface UnifiedRowActionsOptions {
     effort: Effort | '',
     config: UnifiedSelectedRow,
   ) => ActionResult;
-  /** 没有模型记忆表的设置入口，直接应用完整配置并保持配置菜单打开。 */
+  /** 配置编辑直接应用完整配置，并保持配置菜单打开。 */
   onConfigure?: UnifiedRowActionsOptions['onSelect'];
   /**
    * 清掉「当前选中的收藏」锚点 —— 用户在**同模型的普通模型行**上改了实时深度 / Fast 时用
@@ -111,6 +111,7 @@ export interface UnifiedRowActionsOptions {
          * (same-engine-reselect 清意图);点同一个目标 Harness 的其它模型则更新意图、不再弹确认。
          */
         pendingTarget?: AgentKind;
+        onCrossEngineConfigure?: NonNullable<UnifiedRowActionsOptions['sessionEngineFilter']>['onCrossEngineSelect'];
         onCrossEngineSelect: (args: {
           providerId: string;
           modelId: string;
@@ -404,7 +405,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
   }): Promise<void> => {
     if (!sessionEngineFilter) return Promise.resolve();
     return runLive(() =>
-      sessionEngineFilter.onCrossEngineSelect({
+      (sessionEngineFilter.onCrossEngineConfigure ?? sessionEngineFilter.onCrossEngineSelect)({
         providerId: args.providerId,
         modelId: args.wireModelId,
         targetAgent: args.targetAgent,
@@ -436,7 +437,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     wireModelId: string;
     effort: Effort | null;
   }): ActionResult => {
-    return onSelect(args.anchor.providerId, args.wireModelId, args.effort ?? '', {
+    return (onConfigure ?? onSelect)(args.anchor.providerId, args.wireModelId, args.effort ?? '', {
       engine: args.engine,
       fast: false,
       favoriteUid: null,
@@ -514,7 +515,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         // 按编辑后的目标值(wire id / 引擎)重记这条锚点。草稿分支下面那条 onSelect 里的
         // `favoriteUid: args.uid` 是同一个语义,两条链路必须一致(2026-08-17 review K3)。
         favoriteUid: args.uid,
-        onApplied: () => commitOrRestore(() => sessionEngineFilter?.onCrossEngineSelect({
+        onApplied: () => commitOrRestore(() => sessionEngineFilter && (sessionEngineFilter.onCrossEngineConfigure ?? sessionEngineFilter.onCrossEngineSelect)({
           providerId: args.anchor.providerId,
           modelId: args.config.wireModelId ?? args.anchor.modelId,
           targetAgent: args.config.agent,
@@ -525,14 +526,14 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       });
     }
     return runLive(() =>
-      onSelect(args.anchor.providerId, wireModelId, args.target.effort ?? '', {
+      (onConfigure ?? onSelect)(args.anchor.providerId, wireModelId, args.target.effort ?? '', {
         engine: args.target.engine,
         fast: args.target.fast,
         favoriteUid: args.uid,
         rowModelId: args.anchor.modelId,
       }),
     ).then((applied) => {
-      if (applied) return commitOrRestore(() => onSelect(
+      if (applied) return commitOrRestore(() => (onConfigure ?? onSelect)(
         args.anchor.providerId, args.config.wireModelId ?? args.anchor.modelId,
         args.config.effort ?? '', {
           engine: args.config.engine, fast: args.config.fast,
@@ -609,7 +610,15 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 选中行强制按 live 引擎显示(UnifiedModelPanel.configOf.forceEngine),只写 override
     // 的话显示纹丝不动,胶囊就成了假按钮。
     if (isLiveRow(entry, config)) {
-      const next = resolveEngineConfig?.(entry, engine);
+      const resolved = resolveEngineConfig?.(entry, engine);
+      // Switching the Harness does not express a new depth preference. Keep the
+      // current choice, adapting only when the target cannot execute that tier.
+      // Do not rewrite the source Harness's saved preference on this path.
+      const next = resolved && {
+        ...resolved,
+        effort: resolved.efforts.length === 0 ? null
+          : (clampEffortToSupported(config.effort, resolved.efforts) ?? resolved.effort),
+      };
       if (sessionEngineFilter && sessionAgent !== undefined) {
         const targetAgent = agentKindOfEngine(engine);
         // 已在真实引擎上、也没有待发送意图 → 无事可做。真实引擎未知、或挂着意图时
@@ -617,7 +626,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         if (!shouldCrossEngine(targetAgent)) return;
         // 会话内改选中行的引擎 = 一次跨引擎切换:交给 performAgentSwitch 事务(确认弹窗
         // + 上下文重建)。**不预写全局 override**:用户取消确认时不该留下任何痕迹。
-        return sessionEngineFilter.onCrossEngineSelect({
+        return (sessionEngineFilter.onCrossEngineConfigure ?? sessionEngineFilter.onCrossEngineSelect)({
           providerId: anchor.providerId,
           modelId: next?.wireModelId ?? anchor.modelId,
           targetAgent,
@@ -634,7 +643,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       // (与选中一行同一条链路),行随之按新引擎显示。
       if (next) {
         return runLive(() =>
-          onSelect(anchor.providerId, next.wireModelId ?? anchor.modelId, next.effort ?? '', {
+          (onConfigure ?? onSelect)(anchor.providerId, next.wireModelId ?? anchor.modelId, next.effort ?? '', {
             engine: next.engine,
             fast: next.fast,
             favoriteUid: null,
@@ -976,7 +985,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     if (sessionEngineFilter && shouldCrossEngine(config.agent)) {
       // 收藏锚点一并交出去:会话侧要在事务**真成功后**才把它记成「当前选中的收藏」
       // (取消 / 失败时什么都没换,锚点当然不能动)。同引擎那一路由 onSelect 的 config 带走。
-      return sessionEngineFilter.onCrossEngineSelect({
+      return (configuring && sessionEngineFilter.onCrossEngineConfigure
+        ? sessionEngineFilter.onCrossEngineConfigure
+        : sessionEngineFilter.onCrossEngineSelect)({
         providerId: anchor.providerId,
         modelId: wireModelId,
         targetAgent: config.agent,

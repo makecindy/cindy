@@ -141,15 +141,6 @@ export function BotLifecycleSettings({
               {t('bots.lifecycle.deleteTitle')}
             </button>
           </div>
-          <p className="mt-2 px-3 text-12 leading-5 text-[var(--text-secondary)]">
-            {t(
-              isPaused
-                ? 'bots.lifecycle.pausedDescription'
-                : isArchived
-                  ? 'bots.lifecycle.stoppedDescription'
-                  : 'bots.lifecycle.restartDescription',
-            )}
-          </p>
           {restarted ? (
             <p className="mt-3 text-12 text-[var(--text-secondary)]" role="status">
               {t('bots.lifecycle.restarted')}
@@ -173,9 +164,6 @@ export function BotLifecycleSettings({
       {mode !== 'actions' ? (
         <>
           <div className="px-3 pt-3">
-            <p className="mt-1 text-11 leading-5 text-[var(--text-tertiary)]">
-              {t('bots.historySearch.description')}
-            </p>
             <form
               className="mt-3 flex gap-2"
               onSubmit={(event) => {
@@ -187,7 +175,7 @@ export function BotLifecycleSettings({
                 aria-label={t('bots.historySearch.title')}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder={t('bots.historySearch.placeholder')}
+                placeholder={t('bots.historySearch.search')}
                 className="h-9 min-w-0 flex-1 rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
               />
               <Button

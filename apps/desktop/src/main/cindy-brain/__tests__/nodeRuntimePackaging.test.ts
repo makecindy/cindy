@@ -121,7 +121,10 @@ describe('Node runtime packaging contract', () => {
     );
     // 窄接口冻结挂载,原样模式伪装 argv,不引 child_process 自己生进程。
     expect(worker).toContain('__CINDY_NODE__');
-    expect(worker).toContain('Object.freeze({ spawnEntry })');
+    // Pin the complete public surface, allowing only formatting differences.
+    expect(worker).toMatch(
+      /Object\.freeze\(\{\s*spawnEntry,\s*bindDeviceAuthorization: \(\) => deviceAuthorization\.bind\(\),\s*bindAuthorization: \(\) => authorization\.bind\(\)\s*\}\)/,
+    );
     expect(worker).toContain('GHOST_NODE_CHILD_MODE_FLAG');
     expect(worker).not.toContain("require('node:child_process')");
     expect(worker).not.toContain("from 'node:child_process'");

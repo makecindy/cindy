@@ -9,6 +9,8 @@ import {
 } from '@cindy/maker-core';
 
 import { claudeToolSearchMode } from './claude-behavior-flags.js';
+import { isAnthropicWireModel } from './claude-gateway-config.js';
+import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import {
   CODEX_CINDY_COMPACT_PROVIDER_ID,
   CODEX_SUMMARY_COMPACT_PROVIDER_ID,
@@ -346,6 +348,15 @@ export function shouldCloseSessionForCredentialSwitch(
     if (currentProviderId !== nextProviderId && [current, next].some(
       provider => provider && providerCatalogId(provider) === 'anthropic',
     )) return true;
+    // 未指定来源的会话在没有网关 key 时,Anthropic 模型跑在本机 Claude Code 登录上(CLI 直连,
+    // 进程里没有 proxy 地址),其它模型经 proxy。是哪种取决于 spawn 那一刻,这里回看不到:
+    // 订阅已连接时,隐式一侧换来源、或在 Anthropic 与非 Anthropic 模型之间切换,一律重建。
+    if (
+      (currentProviderId === null || nextProviderId === null) &&
+      (currentProviderId !== nextProviderId ||
+        isAnthropicWireModel(input.currentModel) !== isAnthropicWireModel(input.nextModel)) &&
+      hasClaudeNativeLogin()
+    ) return true;
     // Tool Search is also spawn-time state, independent of the credential family.
     if (claudeToolSearchMode(currentProviderId, currentMode, current?.auth.native) !==
       claudeToolSearchMode(nextProviderId, nextMode, next?.auth.native)) return true;

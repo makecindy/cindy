@@ -15,9 +15,17 @@ export function CindyMakeBuildProgress({ build }: { build?: CindyMakePersonalBui
   const conflicts =
     build.mergeStep === 'conflicts' ||
     build.logs?.some((entry) => entry.step === 'resolving-conflicts');
-  const cleanup = !!build.mergeStep || build.logs?.some((entry) => entry.step === 'cleaning-merge');
+  const cleanup =
+    build.mergeStep === 'cleanup' ||
+    build.mergeStep === 'conflicts' ||
+    build.logs?.some((entry) => entry.step === 'cleaning-merge');
+  const syncing =
+    build.syncLatestSource === true ||
+    build.status === 'syncing' ||
+    build.logs?.some((entry) => entry.step === 'syncing');
   const steps = [
     'waiting',
+    ...(syncing ? ['syncing'] : []),
     'merging',
     ...(conflicts ? ['conflicts'] : []),
     ...(cleanup ? ['cleanup'] : []),
@@ -52,10 +60,10 @@ export function CindyMakeBuildProgress({ build }: { build?: CindyMakePersonalBui
               </span>
               {t(
                 step === 'conflicts'
-                  ? 'cindyMake.personal.buildLog.steps.resolving-conflicts'
-                  : step === 'cleanup'
-                    ? 'cindyMake.personal.buildLog.steps.cleaning-merge'
-                    : 'cindyMake.history.progress.' + step,
+                    ? 'cindyMake.personal.buildLog.steps.resolving-conflicts'
+                    : step === 'cleanup'
+                      ? 'cindyMake.personal.buildLog.steps.cleaning-merge'
+                      : 'cindyMake.history.progress.' + step,
               )}
             </li>
           );

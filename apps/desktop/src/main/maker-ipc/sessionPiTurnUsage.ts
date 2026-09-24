@@ -223,6 +223,7 @@ export function recordSessionPiTurnUsage(
                   providerId: sessionProvider,
                   billingRoute,
                   region: CURRENT_CINDY_REGION,
+                  accessKind: turnContext.accessKind,
                 },
                 segments: pricingSegments,
               }).money;

@@ -4,6 +4,7 @@ import { emptyRoutineDefinition, getRoutineActionId, parseRoutineDefinition, par
 describe('companion automation data boundary', () => {
   it('does not treat an empty new draft as a saved rule', () => {
     const draft = emptyRoutineDefinition();
+    expect(draft.silentWhenIdle).toBe(false);
     expect(routineDraftValid(draft)).toBe(false);
     expect(routineDraftValid({ ...draft, name: 'Daily brief', prompt: 'Summarize my inbox' })).toBe(true);
   });
@@ -35,4 +36,18 @@ describe('companion automation data boundary', () => {
     expect(detail).toMatchObject({ editable: false, input: null, sources: [], history: [] });
     expect(() => parseRoutineDetail({ id: 'a', revision: 1, editable: true, input: { bad: true }, sources: [], history: [] })).toThrow();
   });
+});
+
+
+it('round trips quiet settings and distinguishes model skips without guessing host support', () => {
+  const input = { ...emptyRoutineDefinition(), name: 'Check', prompt: 'Check', silentWhenIdle: false, preRunHook: { command: 'node check.mjs', timeoutMs: 2000 } };
+  expect(parseRoutineDefinition(input)).toEqual(input);
+  expect(parseRoutineDefinition({ ...input, preRunHook: null })?.preRunHook).toBeNull();
+  expect(parseRoutineDefinition({ ...input, preRunHook: { command: 'check', timeoutMs: -1 } })).toBeNull();
+  const detail = { id: 'check', revision: 1, editable: true, input, sources: [], history: [{ id: 'run', status: 'skipped', createdAt: 1 }] };
+  expect(parseRoutineDetail(detail).supportsPreRunCheck).toBe(false);
+  expect(parseRoutineDetail({ ...detail, supportsPreRunCheck: true })).toMatchObject({ supportsPreRunCheck: true, input, history: [{ status: 'skipped' }] });
+  const legacy = { ...detail, input: { name: input.name, prompt: input.prompt, enabled: input.enabled, triggers: input.triggers } };
+  expect(parseRoutineDetail({ ...legacy, supportsPreRunCheck: true }).input?.silentWhenIdle).toBe(true);
+  expect(parseRoutineDetail(legacy).input?.silentWhenIdle).toBeUndefined();
 });

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * RemoteSection — Settings → Remote tab.
  *
@@ -199,63 +200,47 @@ function HostRow({
           <span className="text-12">{t('settings.remote.button.autoConnect')}</span>
         </label>
         {snap.status === 'failed' && (
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={onSetupKey}
             disabled={busy}
             title={t('settings.remote.button.setupKeyTip')}
-            className={cn(
-              'flex h-8 items-center gap-1 justify-center rounded-full px-[14px] text-13 leading-none font-medium transition-colors border',
-              busy && 'cursor-not-allowed opacity-60',
-            )}
-            style={{
-              backgroundColor: 'transparent',
-              borderColor: 'var(--settings-btn-secondary-border)',
-              color: 'var(--settings-btn-secondary-text)',
-            }}
           >
             <KeyRound size={12} />
             <span className="relative top-px">{t('settings.remote.button.setupKey')}</span>
-          </button>
+          </Button>
         )}
         {connectable && (
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={onConnect}
             disabled={busy}
-            className={cn(
-              'flex h-8 items-center justify-center rounded-full px-[14px] text-13 leading-none font-medium transition-colors border',
-              busy && 'cursor-not-allowed opacity-60',
-            )}
-            style={{
-              backgroundColor: 'var(--settings-btn-secondary-bg)',
-              borderColor: 'var(--settings-btn-secondary-border)',
-              color: 'var(--settings-btn-secondary-text)',
-            }}
           >
             <span className="relative top-px">{t('settings.remote.button.connect')}</span>
-          </button>
+          </Button>
         )}
         {disconnectable && (
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={onDisconnect}
             disabled={busy}
-            className={cn(
-              'flex h-8 items-center justify-center rounded-full px-[14px] text-13 leading-none font-medium transition-colors border',
-              busy && 'cursor-not-allowed opacity-60',
-            )}
-            style={{
-              backgroundColor: 'var(--settings-btn-secondary-bg)',
-              borderColor: 'var(--settings-btn-secondary-border)',
-              color: 'var(--settings-btn-secondary-text)',
-            }}
           >
             <span className="relative top-px">{t('settings.remote.button.disconnect')}</span>
-          </button>
+          </Button>
         )}
-        {/* External hosts still expose local preferences. Main independently
-            enforces that their connection fields remain read-only. */}
+        {/* AutoConnect — 启动时是否自动连这个 host. 控件本身不算"动作", 但放
+            在 action chips 区第一位最容易扫到, 也方便快速切换。disabled 仅在
+            busy(connect/disconnect 进行中)时锁住, 避免与正在进行的 transition
+            竞态。 */}
         <button
           type="button"
           onClick={onEdit}
@@ -571,20 +556,20 @@ function HostForm({
                   >
                     {identityFileName}
                   </code>
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    compact
                     type="button"
                     onClick={() => setKeysOpenMode('pick')}
                     disabled={connectionFieldsReadOnly}
-                    className="h-7 rounded-full px-3 text-12 border"
-                    style={{
-                      backgroundColor: 'transparent',
-                      borderColor: 'var(--settings-btn-secondary-border)',
-                      color: 'var(--settings-btn-secondary-text)',
-                    }}
                   >
                     {t('settings.remote.add.auth.pinnedKeyChange')}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    compact
                     type="button"
                     onClick={() => setForm({
                       ...form,
@@ -593,15 +578,9 @@ function HostForm({
                       identityFileName: '',
                     })}
                     disabled={connectionFieldsReadOnly}
-                    className="h-7 rounded-full px-3 text-12 border"
-                    style={{
-                      backgroundColor: 'transparent',
-                      borderColor: 'var(--settings-btn-secondary-border)',
-                      color: 'var(--settings-btn-secondary-text)',
-                    }}
                   >
                     {t('settings.remote.add.auth.pinnedKeyClear')}
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -662,20 +641,20 @@ function HostForm({
                   >
                     {identityFileName}
                   </code>
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    compact
                     type="button"
                     onClick={() => setKeysOpenMode('pinPick')}
                     disabled={connectionFieldsReadOnly}
-                    className="h-7 rounded-full px-3 text-12 border"
-                    style={{
-                      backgroundColor: 'transparent',
-                      borderColor: 'var(--settings-btn-secondary-border)',
-                      color: 'var(--settings-btn-secondary-text)',
-                    }}
                   >
                     {t('settings.remote.add.auth.pinnedKeyChange')}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    compact
                     type="button"
                     onClick={() => setForm({
                       ...form,
@@ -684,31 +663,23 @@ function HostForm({
                       identityFileName: '',
                     })}
                     disabled={connectionFieldsReadOnly}
-                    className="h-7 rounded-full px-3 text-12 border"
-                    style={{
-                      backgroundColor: 'transparent',
-                      borderColor: 'var(--settings-btn-secondary-border)',
-                      color: 'var(--settings-btn-secondary-text)',
-                    }}
                   >
                     {t('settings.remote.add.auth.pinnedKeyClear')}
-                  </button>
+                  </Button>
                 </div>
               ) : (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  compact
                   type="button"
                   onClick={() => setKeysOpenMode('pinPick')}
                   disabled={connectionFieldsReadOnly}
-                  className="self-start inline-flex items-center gap-1 h-7 rounded-full px-3 text-12 leading-none border"
-                  style={{
-                    backgroundColor: 'transparent',
-                    borderColor: 'var(--settings-btn-secondary-border)',
-                    color: 'var(--settings-btn-secondary-text)',
-                  }}
+                  className="self-start"
                 >
                   <KeyRound size={11} />
                   <span className="relative top-px">{t('settings.remote.add.auth.pinnedKeyPick')}</span>
-                </button>
+                </Button>
               )}
               <span
                 className="text-11"
@@ -858,20 +829,21 @@ function HostForm({
       </div>
 
       <div className="flex justify-end gap-2 pt-2">
-        <button
+        <Button
+          variant="secondary"
+          size="md"
+          compact
           type="button"
           onClick={onCancel}
           disabled={busy}
-          className="flex h-8 items-center rounded-full px-[14px] text-13 leading-none font-medium border"
-          style={{
-            backgroundColor: 'transparent',
-            borderColor: 'var(--settings-btn-secondary-border)',
-            color: 'var(--settings-btn-secondary-text)',
-          }}
         >
           <span className="relative top-px">{t('settings.remote.add.cancel')}</span>
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="secondary"
+          size="md"
+          compact
+          loading={busy}
           type="button"
           onClick={() => {
             const next: AddFormState = {
@@ -881,33 +853,17 @@ function HostForm({
             onSubmit(next);
           }}
           disabled={!valid || busy}
-          className={cn(
-            'flex h-8 items-center rounded-full px-[14px] text-13 leading-none font-medium border',
-            (!valid || busy) && 'cursor-not-allowed opacity-60',
-          )}
-          style={{
-            backgroundColor: 'var(--settings-btn-secondary-bg)',
-            borderColor: 'var(--settings-btn-secondary-border)',
-            color: 'var(--settings-btn-secondary-text)',
-          }}
         >
           <span className="relative top-px">{isEdit
             ? t('settings.remote.edit.submit')
             : t('settings.remote.add.submit')}</span>
-        </button>
+        </Button>
       </div>
 
-      {/* hostId=null + hostInline = the unsaved-form case: dialog renders
-          the install command from the form's user/hostname/port instead of
-          looking the host up by id in the pool (the host may not exist
-          there yet for add-mode, or be stale during edit). The onKeyPicked
-          wiring depends on WHY the dialog was opened:
-            pick    → key-file mode picking identityFile (authMethod stays 'key')
-            pinPick → agent mode pinning the agent to one key (authMethod stays 'agent')
-            manage  → pure inspection, no mutation
-          identityFile in both pick/pinPick is the newly selected private-key
-          path. Existing paths stay in Main and are represented here only by a
-          basename plus identityFileUnchanged. */}
+      {/* AutoConnect — 启动时是否自动连这个 host. 控件本身不算"动作", 但放
+          在 action chips 区第一位最容易扫到, 也方便快速切换。disabled 仅在
+          busy(connect/disconnect 进行中)时锁住, 避免与正在进行的 transition
+          竞态。 */}
       <SshKeySetupDialog
         hostId={null}
         hostInline={{
@@ -1314,36 +1270,31 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
           >
             <RefreshCw size={16} />
           </button>
-          {/* Standalone key manager — opens SshKeySetupDialog with hostId=null
-              so the user can browse / generate / unlock keys without first
-              hitting a connection failure on a specific host. */}
-          <button
+          {/* AutoConnect — 启动时是否自动连这个 host. 控件本身不算"动作", 但放
+              在 action chips 区第一位最容易扫到, 也方便快速切换。disabled 仅在
+              busy(connect/disconnect 进行中)时锁住, 避免与正在进行的 transition
+              竞态。 */}
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={() => setKeysManagerOpen(true)}
             title={t('settings.remote.button.manageKeysTip')}
-            className="flex h-8 items-center gap-1.5 rounded-full px-[14px] text-13 leading-none font-medium border"
-            style={{
-              backgroundColor: 'transparent',
-              borderColor: 'var(--settings-btn-secondary-border)',
-              color: 'var(--settings-btn-secondary-text)',
-            }}
           >
             <KeyRound size={14} />
             <span className="relative top-px">{t('settings.remote.button.manageKeys')}</span>
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={() => setAdding((v) => !v)}
-            className="flex h-8 items-center gap-1.5 rounded-full px-[14px] text-13 leading-none font-medium border"
-            style={{
-              backgroundColor: 'var(--settings-btn-secondary-bg)',
-              borderColor: 'var(--settings-btn-secondary-border)',
-              color: 'var(--settings-btn-secondary-text)',
-            }}
           >
             <Plus size={14} />
             <span className="relative top-px">{t('settings.remote.button.add')}</span>
-          </button>
+          </Button>
         </div>
       </div>
 

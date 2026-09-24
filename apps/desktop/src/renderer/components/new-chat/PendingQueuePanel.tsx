@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * PendingQueuePanel
  * ---------------------------------------------------------------------------
@@ -697,19 +698,17 @@ export function PendingQueuePanel({
           )}
           <div className="col-start-3 flex min-w-0 justify-end">
             {paused && onResume && (
-              <button
+              <Button
+                variant="secondary"
+                size="xxs"
+                compact
                 type="button"
                 onClick={onResume}
                 aria-label={t('newChat.pendingQueue.resumeAria')}
-                className={cn(
-                  'flex h-5 min-w-[64px] items-center justify-center rounded-full border px-2',
-                  'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
-                  'text-12 leading-none text-[var(--msg-assistant-text)]',
-                  'hover:bg-[var(--chat-input-chip-bg)]',
-                )}
+                className="min-w-[64px]"
               >
                 {t('newChat.pendingQueue.resumeAction')}
-              </button>
+              </Button>
             )}
           </div>
         </div>

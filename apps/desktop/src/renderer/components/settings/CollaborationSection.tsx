@@ -97,7 +97,7 @@ export function CollaborationSection() {
         {/* Worker Soft Limit */}
         <label className={ROW_CLASS}>
           <span className="flex min-w-0 flex-col gap-1">
-            <span className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+            <span id="settings-search-settings-collaboration-workerSoftLimit" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {t('settings.collaboration.workerSoftLimit')}
             </span>
             <span className={ROW_HINT_CLASS}>
@@ -123,7 +123,7 @@ export function CollaborationSection() {
         {/* Worker Hard Limit */}
         <label className={ROW_CLASS}>
           <span className="flex min-w-0 flex-col gap-1">
-            <span className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+            <span id="settings-search-settings-collaboration-workerHardLimit" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {t('settings.collaboration.workerHardLimit')}
             </span>
             <span className={ROW_HINT_CLASS}>
@@ -152,7 +152,7 @@ export function CollaborationSection() {
         {/* Idle Release Minutes */}
         <label className={ROW_CLASS}>
           <span className="flex min-w-0 flex-col gap-1">
-            <span className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+            <span id="settings-search-settings-collaboration-idleRelease" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {t('settings.collaboration.idleRelease')}
             </span>
             <span className={ROW_HINT_CLASS}>

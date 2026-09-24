@@ -788,7 +788,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
    *
    * 投递目标：优先冻结的父任务；父任务已被恢复流程替换时，改投发起 Bot 当前的
    * 主任务。完成信号属于 Bot 本人，不属于损坏的旧任务。两者都不在（Bot 已
-   * 暂停/归档)才放弃投递,此时卡片终态仍然可见,不算静默丢失。
+   * 暂停/归档）时只延后模型唤醒；每次执行的结果回执仍写入冻结的父任务。
    */
   const deliverCompletion = async (params: {
     id: string;
@@ -834,16 +834,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       clearCompletionRetryTimer(params.id);
       return false;
     }
-    const targetSessionId = await requesterLiveSessionId(params.requestingBotId, params.parentSessionId);
-    if (!targetSessionId) {
-      log.warn('skip Bot delegation completion: requester has no live task', {
-        delegationId: params.id,
-        requestingBotId: params.requestingBotId,
-        parentSessionId: params.parentSessionId,
-      });
-      scheduleCompletionRetry(params, attempt);
-      return false;
-    }
     const taskSubject = '后台任务';
     const statusLine =
       params.status === 'completed'
@@ -871,6 +861,80 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         clearCompletionRetryTimer(params.id);
         return false;
       }
+      // Preserve the result in the conversation that started this execution.
+      // Its requester need not still be live to show this receipt in history.
+      // A deleted parent's FK may have been cleared after this completion
+      // snapshot was taken. Recheck existence on every retry, then use the
+      // replacement canonical task if the original history is gone.
+      const originalParent = params.parentSessionId ? await getDbClient().drizzle
+        .select({ id: sessions.id }).from(sessions)
+        .where(eq(sessions.id, params.parentSessionId)).get() : undefined;
+      const initialReceiptSessionId = originalParent?.id
+        ?? await requesterLiveSessionId(params.requestingBotId, null);
+      if (!initialReceiptSessionId) {
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
+      let receiptSessionId: string = initialReceiptSessionId;
+      const child = params.childSessionId ? await getDbClient().drizzle
+        .select({ workingDir: sessions.workingDir }).from(sessions)
+        .where(eq(sessions.id, params.childSessionId)).get() : undefined;
+      // Durable, per-execution receipt: retries reuse the same message identity.
+      // Publish before waking the teammate so queued/hidden model work cannot hide results.
+      const receiptClientId = BOT_DELEGATION_CLIENT_ID.resultRun(params.id, params.runSequence);
+      const persistResultReceipt = async (sessionId: string): Promise<void> => persistTimelineMessage({
+        sessionId,
+        clientId: receiptClientId,
+        role: 'assistant',
+        content: params.resultSummary || params.objective,
+        agentMeta: {
+          botCollaboration: {
+            ...await collaborationMeta(params, 'delegation-result'),
+            parentSessionId: sessionId,
+            result: {
+              workingDir: child?.workingDir ?? '',
+              runSequence: params.runSequence,
+              status: sessionTaskViewStatus({ status: params.status, lastError: params.lastError ?? null }),
+              // A receipt is the in-app result, not a lock-screen preview. Keep
+              // image and link targets so a result with no prose remains usable.
+              text: params.resultSummary ?? '',
+              ...(params.lastError ? { error: params.lastError.slice(0, 4_000) } : {}),
+              artifacts: artifacts.filter((file) => file.status !== 'deleted')
+                .map((file) => ({ absolutePath: file.absolutePath })),
+            },
+          },
+        },
+      });
+      await persistResultReceipt(receiptSessionId);
+      const ensureResultReceipt = async (): Promise<boolean> => {
+        const existing = await getDbClient().drizzle.select({ id: messages.id })
+          .from(messages)
+          .where(and(eq(messages.sessionId, receiptSessionId), eq(messages.clientId, receiptClientId)))
+          .get();
+        if (existing) return true;
+        // The parent may have been physically removed after the first write.
+        // Rehome the immutable receipt before accepting its completion wake-up.
+        const replacement = await requesterLiveSessionId(params.requestingBotId, null);
+        if (!replacement) return false;
+        receiptSessionId = replacement;
+        await persistResultReceipt(replacement);
+        return true;
+      };
+      if (!(await completionStillPending())) return false;
+      if (!(await ensureResultReceipt())) {
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
+      const targetSessionId = await requesterLiveSessionId(params.requestingBotId, params.parentSessionId);
+      if (!targetSessionId) {
+        log.warn('defer Bot delegation wake-up: requester has no live task', {
+          delegationId: params.id,
+          requestingBotId: params.requestingBotId,
+          parentSessionId: params.parentSessionId,
+        });
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
       const dispatched = await deps.dispatch({
         targetSessionId,
         message: completionMessage,
@@ -885,6 +949,18 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         scheduleCompletionRetry(params, attempt);
         return false;
       }
+      if (!(await ensureResultReceipt())) {
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
+      // The target may have been deleted while dispatch was accepting the
+      // hidden message. A rehomed receipt alone does not wake its replacement.
+      // Leave this run pending so the stable completion ID is dispatched there.
+      const currentTargetSessionId = await requesterLiveSessionId(params.requestingBotId, params.parentSessionId);
+      if (currentTargetSessionId !== targetSessionId) {
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
       const [marked] = await getDbClient().drizzle
         .update(botDelegations)
         .set({ completionDeliveredAt: now(), updatedAt: now() })
@@ -896,8 +972,14 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
             ? isNull(botDelegations.childSessionId)
             : eq(botDelegations.childSessionId, params.childSessionId),
           isNull(botDelegations.completionDeliveredAt),
+          sql`exists (select 1 from ${messages} where ${messages.sessionId} = ${receiptSessionId} and ${messages.clientId} = ${receiptClientId})`,
+          sql`exists (select 1 from ${sessions} where ${sessions.id} = ${targetSessionId} and ${sessions.status} = 'active')`,
         ))
         .returning({ id: botDelegations.id });
+      if (!marked && await completionStillPending()) {
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
       clearCompletionRetryTimer(params.id);
       return !!marked;
     } catch (error) {
@@ -1074,7 +1156,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
             ${messages.agentMeta} IS NULL
             OR json_extract(${messages.agentMeta}, '$.botCollaboration.role') IS NULL
             OR json_extract(${messages.agentMeta}, '$.botCollaboration.role')
-               NOT IN ('delegation-request', 'interjection')
+               NOT IN ('delegation-request', 'interjection', 'delegation-result')
           )`,
         ),
       )

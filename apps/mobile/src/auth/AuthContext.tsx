@@ -862,7 +862,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAllMobileVoiceCredentials().catch(() => undefined),
       clearAllMobileVoiceInputHistories().catch(() => undefined),
       clearAllMobileVoiceDictionaryCaches().catch(() => undefined),
-      clearCachedSessionMessages().catch(() => undefined),
+      clearCachedSessionMessages(),
       clearHistoryDisk(),
       clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
@@ -1074,6 +1074,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         const previousPersistedSessionRaw = await getSecureItem(AUTH_SESSION_KEY);
         try {
+          // Clear unscoped caches before either durable store can name the new
+          // account. Fresh login must also retry a previously failed logout clear.
+          if (replacesActiveSession || userRef.current === null) {
+            runtimeCleanupStarted = true;
+            await clearAccountScopedRuntimeForSwitch();
+            if (authGenerationRef.current !== generation) {
+              throw authCodeError('AUTH_FLOW_SUPERSEDED');
+            }
+            assertLoginFlowCurrent(expectedLoginFlowEpoch);
+          }
           await commitMobileLoginSessions(
             {
               pair: outcome,
@@ -1092,14 +1102,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 throw authCodeError('AUTH_FLOW_SUPERSEDED');
               }
               assertLoginFlowCurrent(expectedLoginFlowEpoch);
-              if (replacesActiveSession) {
-                runtimeCleanupStarted = true;
-                await clearAccountScopedRuntimeForSwitch();
-                if (authGenerationRef.current !== generation) {
-                  throw authCodeError('AUTH_FLOW_SUPERSEDED');
-                }
-                assertLoginFlowCurrent(expectedLoginFlowEpoch);
-              }
 
               await commitWithClearedAccountDeletionReceipt(() => {
                 if (authGenerationRef.current !== generation) {
@@ -2535,15 +2537,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // initial vault snapshot.
             const previousSessionRaw = await getSecureItem(AUTH_SESSION_KEY);
             try {
+              runtimeCleanupStarted = true;
+              await clearAccountScopedRuntimeForSwitch();
+              if (authGenerationRef.current !== generation) {
+                throw authCodeError('AUTH_FLOW_SUPERSEDED');
+              }
               await commitMobileSavedAccountActivation(
                 accountKey,
                 async () => {
                   await writePersistedAuthSession(pair!.refreshToken, realm!);
-                  if (authGenerationRef.current !== generation) {
-                    throw authCodeError('AUTH_FLOW_SUPERSEDED');
-                  }
-                  runtimeCleanupStarted = true;
-                  await clearAccountScopedRuntimeForSwitch();
                   if (authGenerationRef.current !== generation) {
                     throw authCodeError('AUTH_FLOW_SUPERSEDED');
                   }
@@ -3023,11 +3025,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       path: string,
       opts: Omit<ApiFetchOptions, 'token'>,
     ): Promise<T> => {
+      opts.assertCurrent?.();
       const token = await getAccessToken();
+      opts.assertCurrent?.();
       if (!token) throw new Error('UNAUTHENTICATED');
       try {
         return await apiFetchRaw<T>(path, { ...opts, token });
       } catch (error) {
+        opts.assertCurrent?.();
         if (!(error instanceof ApiError) || error.status !== 401) throw error;
         if (error.code === 'ACCOUNT_UNAVAILABLE') {
           if (userRef.current) {
@@ -3038,6 +3043,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!isRefreshableUnauthorizedCode(error.code)) throw error;
 
         const fresh = await refresh();
+        opts.assertCurrent?.();
         if (!fresh) {
           if (userRef.current) await terminateSession();
           throw error;
@@ -3045,6 +3051,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           return await apiFetchRaw<T>(path, { ...opts, token: fresh });
         } catch (retryError) {
+          opts.assertCurrent?.();
           if (
             retryError instanceof ApiError &&
             retryError.status === 401 &&

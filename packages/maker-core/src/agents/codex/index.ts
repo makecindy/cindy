@@ -123,6 +123,7 @@ import {
   parseOverloadError,
 } from '../shared/overload-error.js';
 import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
+import { listCodexModels } from './app-server/list-models.js';
 import { buildCodexEnv } from './env-builder.js';
 import type { CodexErrorInfo } from './app-server/protocol.js';
 import {
@@ -2679,12 +2680,29 @@ export class CodexAgent extends BaseAgent {
     });
   }
 
+  /** Read one SSH host's complete native catalog without publishing it as local discovery. */
+  async listRemoteModels(remoteHostId: string): Promise<CodexModelListResponse['data']> {
+    if (!remoteHostId) throw new Error('SSH host is required');
+    return this.withHostOperation(async () => ({
+      key: hostKey(remoteHostId), host: await this.getHost(remoteHostId),
+    }), async (host, key) => {
+      await host.ensureStartedWithTimeout(CODEX_MODEL_REFRESH_DEADLINE_MS, 'remote model list');
+      const deadline = Date.now() + CODEX_MODEL_REFRESH_DEADLINE_MS;
+      const models = await listCodexModels((cursor) => {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new AppServerRequestTimeoutError('remote model list', CODEX_MODEL_REFRESH_DEADLINE_MS);
+        return host.request<CodexModelListResponse>(Method.ModelList,
+          { cursor, limit: 100, includeHidden: false },
+          { timeoutMs: Math.min(remaining, CODEX_MODEL_LIST_RPC_TIMEOUT_MS) });
+      });
+      if (this.hosts.get(key) !== host) throw new Error('SSH Codex connection changed');
+      return models;
+    });
+  }
+
   /**
    * 向本地 app-server 实时读取完整模型清单并交给宿主。
-   *
-   * 不能只读 `models_cache.json`：OAuth 登录前会按账号边界删掉旧 cache，而登录 CLI
-   * 成功时未必已经触发模型注册表刷新。`model/list` 是官方 app-server 的权威读取面，
-   * 同时也是 cache ready barrier；分页全部读完后才一次性交给宿主，避免 UI 看到半份目录。
+   * 不能只读 models_cache.json：OAuth 登录前会清旧 cache，model/list 也是 cache ready barrier。
    */
   override async refreshLocalModels(options?: RefreshLocalModelsOptions): Promise<boolean> {
     const credentialMode = options?.credentialMode;
@@ -6017,6 +6035,7 @@ export class CodexAgent extends BaseAgent {
       | 'config'
     > {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
+      const permissionProfile = currentWorkspacePermissionProfile();
       const threadContextWindow = effectiveThreadContextWindow(contextLimit);
       const config = {
         // Apply transport defaults before the per-session Bot capability policy.
@@ -6037,6 +6056,15 @@ export class CodexAgent extends BaseAgent {
         } : {}),
         ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig() : {}),
         ...(reviewMode ? reviewPermissionsConfig : {}),
+        // Workspace routing reloads retained config without thread/start's RPC
+        // overrides (Codex 0.156+). Keep the selected permission syntax in that
+        // config too, otherwise our profile definitions have no default and
+        // native account routing fails before the first model request.
+        ...(readonlyReferenceDirsSupported
+          ? permissionProfile
+            ? { default_permissions: permissionProfile }
+            : { sandbox_mode: sandbox }
+          : {}),
         ...(reviewMode
           ? {
               web_search: 'disabled',
@@ -6072,7 +6100,6 @@ export class CodexAgent extends BaseAgent {
           : {}),
         ...(Object.keys(config).length > 0 ? { config } : {}),
       };
-      const permissionProfile = currentWorkspacePermissionProfile();
       if (permissionProfile) {
         return {
           ...shared,
@@ -14660,6 +14687,15 @@ export class CodexAgent extends BaseAgent {
     const keys = new Set([...this.hosts.keys(), ...this.hostPromises.keys()]);
     await Promise.all([...keys].filter((key) => key.startsWith(prefix)).map((key) =>
       this.retireHostKey(key, 'Codex account credentials changed', { failIfActive: false, logPrefix: 'codex account', throwOnShutdownFailure: true })));
+  }
+
+  /** Release a stale SSH connection after its daemon was explicitly restarted. */
+  async disposeRemoteHostAfterRestart(remoteHostId: string): Promise<void> {
+    await this.retireHostKey(hostKey(remoteHostId), 'SSH Codex daemon restarted', {
+      failIfActive: true,
+      logPrefix: 'codex remote restart',
+      throwOnShutdownFailure: true,
+    });
   }
 
   private async disposeLocalHostForCredentialChangeUnlocked(key: string, reason: string): Promise<void> {

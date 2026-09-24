@@ -1,5 +1,5 @@
 /**
- * Regression coverage for Plugin detail section content and interaction behavior.
+ * Regression coverage for Plugin detail sections, shared Switch wiring and interaction behavior.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
@@ -179,6 +179,50 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
+  it('uses the shared Cindy Switch for the plugin enabled control', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onToggle = vi.fn();
+    const view = (disabled = false) => (
+      <GhostPluginDetailView
+        ghost={null}
+        detail={detail}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={onToggle}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={disabled}
+      />
+    );
+    const { rerender } = render(view());
+
+    const toggle = screen.getByRole('switch', {
+      name: 'settings.ghosts.enableAria',
+    });
+    expect(toggle.className).toContain('cindy-switch');
+    expect(toggle.className).toContain('data-[state=checked]:bg-[var(--switch-track-on)]');
+    expect(toggle.firstElementChild?.className).toContain(
+      'data-[state=checked]:bg-[var(--switch-thumb-on)]',
+    );
+    fireEvent.click(toggle);
+    expect(onToggle.mock.calls).toEqual([[false]]);
+    fireEvent.click(screen.getByText('settings.ghosts.detail.enabledLabel'));
+    expect(onToggle.mock.calls).toEqual([[false], [false]]);
+    rerender(view(true));
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByText('settings.ghosts.detail.enabledLabel'));
+    expect(onToggle).toHaveBeenCalledTimes(2);
+  });
+
   it('shows the main-view preference alongside the plugin settings UI', () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -565,7 +609,7 @@ describe('Ghost plugin detail sections', () => {
         ).disabled,
       ).toBe(true);
 
-      // 启用区域是单个 switch 按钮；点文字或轨道都由同一交互处理。
+      // 共享 Switch 和关联文字标签遵循同一禁用门控。
       const toggle = screen.getByRole('switch', {
         name: 'settings.ghosts.enableAria',
       }) as HTMLButtonElement;

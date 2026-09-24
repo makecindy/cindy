@@ -2453,6 +2453,16 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
             logger,
             parsedForTransforms,
           );
+      if (decision?.transformRequestBody) {
+        const rewritten = await decision.transformRequestBody(
+          transformed ?? bodyForTransforms,
+          transformCtx,
+        );
+        transformed = rewritten.body;
+        if (rewritten.contentType) {
+          route.headerOverride = { ...route.headerOverride, 'content-type': rewritten.contentType };
+        }
+      }
     } catch (err) {
       transformsCompleted = true;
       notifyTransformSettlement();
@@ -2472,7 +2482,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     if (requestGuard) {
       // Compatibility transforms may reintroduce provider-hosted tools. Apply
       // the same frozen policy at the final outbound boundary as well.
-      try { outBody = requestGuard.transformBody(outBody); }
+      try { outBody = requestGuard.transformBody(outBody, transformCtx); }
       catch { res.destroy(); return; }
     }
     if (outBody.length > maxBodyBytes) {

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 
+const nativeLogin = vi.hoisted(() => ({ connected: false }));
+vi.mock('../claude-native-auth.js', () => ({ hasClaudeNativeLogin: () => nativeLogin.connected }));
+
 import {
   isCodexThreadModelProviderIdentityMismatch,
   piProxyProviderIdentity,
@@ -15,6 +18,7 @@ import { setActiveCatalog } from '../active-catalog.js';
 afterEach(() => {
   rehydrateCloseSuppression.resetForTest();
   setActiveCatalog(BUNDLED_CATALOG);
+  nativeLogin.connected = false;
 });
 
 describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
@@ -477,6 +481,48 @@ describe('shouldCloseSessionForCredentialSwitch', () => {
       currentModel: 'claude-sonnet-4-6',
       nextModel: 'claude-opus-4-8',
     })).toBe(true);
+  });
+
+  describe('未指定来源的会话可能跑在本机 Claude Code 登录上', () => {
+    const implicit = (next: { providerId: string | null; model: string }, current = 'claude-opus-4-7') => ({
+      agentKind: 'claude-code' as const,
+      currentProviderId: null,
+      nextProviderId: next.providerId,
+      currentModel: current,
+      nextModel: next.model,
+    });
+
+    it('订阅已连接:隐式会话换到显式来源、或在 Claude 与非 Claude 模型间切换,都重建', () => {
+      nativeLogin.connected = true;
+      expect(shouldCloseSessionForCredentialSwitch(implicit({ providerId: 'xd', model: 'claude-opus-4-7' }))).toBe(true);
+      expect(shouldCloseSessionForCredentialSwitch(implicit({ providerId: null, model: 'glm-5' }))).toBe(true);
+      expect(shouldCloseSessionForCredentialSwitch({
+        agentKind: 'claude-code', currentProviderId: 'xd', nextProviderId: null,
+        currentModel: 'claude-opus-4-7', nextModel: 'claude-opus-4-7',
+      })).toBe(true);
+    });
+
+    it('订阅已连接:隐式会话内 Claude 模型之间切换可热切', () => {
+      nativeLogin.connected = true;
+      expect(shouldCloseSessionForCredentialSwitch(implicit({ providerId: null, model: 'claude-sonnet-4-6' }))).toBe(false);
+    });
+
+    it('没连订阅:行为与改动前一致,不因此重建', () => {
+      expect(shouldCloseSessionForCredentialSwitch(implicit({ providerId: null, model: 'glm-5' }))).toBe(false);
+      expect(shouldCloseSessionForCredentialSwitch(implicit({ providerId: null, model: 'claude-sonnet-4-6' }))).toBe(false);
+      expect(shouldCloseSessionForCredentialSwitch({
+        agentKind: 'claude-code', currentProviderId: 'xd', nextProviderId: 'xd',
+        currentModel: 'claude-opus-4-7', nextModel: 'claude-sonnet-4-6',
+      })).toBe(false);
+    });
+
+    it('两侧都是显式来源:不受订阅连接状态影响', () => {
+      nativeLogin.connected = true;
+      expect(shouldCloseSessionForCredentialSwitch({
+        agentKind: 'claude-code', currentProviderId: 'xd', nextProviderId: 'xd',
+        currentModel: 'claude-opus-4-7', nextModel: 'claude-sonnet-4-6',
+      })).toBe(false);
+    });
   });
 
   it('does not close remote Claude sessions for provider switches', () => {

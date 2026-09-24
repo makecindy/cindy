@@ -24,6 +24,8 @@ vi.mock('@legendapp/list/react-native', () => ({
   useRecyclingState: (initial: any) => useState(initial), useViewability: () => {},
 }));
 vi.mock('lucide-react-native', () => ({
+  Database: () => null, FileArchive: () => null, FileAudio: () => null, FileChartColumn: () => null,
+  FileCode: () => null, FileImage: () => null, FileSpreadsheet: () => null, FileText: () => null, FileVideo: () => null,
   ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleStop: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
 }));
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null }));

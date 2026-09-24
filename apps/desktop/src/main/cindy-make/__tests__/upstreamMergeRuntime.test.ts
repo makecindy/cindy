@@ -4,6 +4,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import type { CindyMakeMergeState } from '../../../shared/cindyMakeMerge';
 import type { CindyMakeHistoryRecord, MakeFeatureReceipt } from '../../../shared/cindyMakeHistory';
 import type { MakeBuildRollbackEntry } from '../historyStore';
+import type { MakeSourceStatus } from '../../../shared/cindyMakeDoctor';
 const h = vi.hoisted(() => ({
   saved: null as string | null,
   workspace: false,
@@ -25,11 +26,24 @@ const h = vi.hoisted(() => ({
   head: 'c'.repeat(40),
   tree: 'd'.repeat(40),
   dirty: false,
+  building: false,
+  manualClaimed: false,
   projected: undefined as CindyMakeMergeState | undefined,
+  source: {
+    status: 'ready',
+    path: 'managed-source',
+    channel: 'dev',
+    ref: 'main',
+  } as MakeSourceStatus,
+  fetch: vi.fn(),
 }));
 vi.mock('electron', () => ({
-  app: { getPath: () => path.join(os.tmpdir(), 'make-cancel-unit-no-io') },
-  net: {},
+  app: {
+    getPath: () => path.join(os.tmpdir(), 'make-cancel-unit-no-io'),
+    isPackaged: true,
+    getVersion: () => '1.2.3',
+  },
+  net: { fetch: h.fetch },
 }));
 vi.mock('node:fs', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs')>()),
@@ -82,8 +96,7 @@ vi.mock('../toolchainEnvironment.js', () => ({
   createMakeToolchainEnvironment: async () => ({}),
   resolveMakeToolEnvironment: async () => ({}),
 }));
-vi.mock('../sourcePreparation.js', () => ({ readCurrentCindySourceStatus: async () => ({}) }));
-vi.mock('../latestSourceVersion.js', () => ({ createLatestSourceVersionReader: vi.fn() }));
+vi.mock('../sourcePreparation.js', () => ({ readCurrentCindySourceStatus: async () => h.source }));
 vi.mock('../sourceGit.js', () => ({
   runSourceGit: async (_env: unknown, args: string[]) => h.git(args),
 }));
@@ -107,6 +120,12 @@ vi.mock('../manager.js', () => ({
       }
     },
     isPreparingSource: () => false,
+    isPersonalBuildRunning: () => h.building,
+    claimManualSourceSync: () => {
+      if (h.building || h.manualClaimed) throw Object.assign(new Error('busy'), { code: 'busy' });
+      h.manualClaimed = true;
+      return () => { h.manualClaimed = false; };
+    },
     refreshSourceStatus: async () => {},
   },
 }));
@@ -145,6 +164,11 @@ vi.mock('../upstreamMerge.js', async (importOriginal) => {
   return {
     ...actual,
     verifyMergeWorktree: async () => {},
+    prepareUpstreamMerge: async (_root: string, state: CindyMakeMergeState) => ({
+      ...state,
+      status: 'merged',
+      hasWorkspace: false,
+    }),
     prepareFeatureMerge: async (_root: string, state: CindyMakeMergeState) => {
       h.workspace = true;
       return {
@@ -178,6 +202,8 @@ import {
   integrateMakeHistory,
   waitForMakeHistoryMerge,
   actUpstreamMerge,
+  syncSourceBeforeCindyMakeBuild,
+  syncSourceBeforeCindyMakeTask,
   prepareUpstreamMergeTurn,
   interruptUpstreamMergeTurn,
 } from '../upstreamMergeRuntime';
@@ -190,9 +216,13 @@ beforeEach(() => {
   h.current = 'owner';
   h.phase = [];
   h.projected = undefined;
+  h.source = { status: 'ready', path: 'managed-source', channel: 'dev', ref: 'main' };
+  h.fetch.mockReset();
   h.head = 'c'.repeat(40);
   h.tree = 'd'.repeat(40);
   h.dirty = false;
+  h.building = false;
+  h.manualClaimed = false;
   h.actualRollback = false;
   h.afterReadError = undefined;
   h.refs = new Map();
@@ -253,6 +283,79 @@ beforeEach(() => {
     throw new Error('Unexpected Git command: ' + args.join(' '));
   });
   configureUpstreamMerge(() => h.running);
+});
+it.each(['dev', 'beta', 'release'] as const)(
+  'syncs a packaged personal version using its recorded %s source channel',
+  async (channel) => {
+    const ref = channel === 'dev' ? 'main' : channel === 'beta' ? 'v2.0.0-beta.1' : 'v2.0.0';
+    h.source = { ...h.source, channel, ref };
+    if (channel !== 'dev') {
+      const release = { draft: false, prerelease: channel === 'beta', tag_name: ref };
+      h.fetch.mockResolvedValueOnce(
+        new Response(JSON.stringify(channel === 'beta' ? [release] : release)),
+      );
+    }
+    h.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ sha: 'f'.repeat(40) })));
+    expect(await actUpstreamMerge({ action: 'update' })).toMatchObject({
+      status: 'merged',
+      ref,
+      upstreamCommit: 'f'.repeat(40),
+    });
+    const api = 'https://api.github.com/repos/makecindy/cindy';
+    expect(h.fetch.mock.calls.map(([url]) => url)).toEqual([
+      ...(channel === 'dev'
+        ? []
+        : [channel === 'beta' ? `${api}/releases?per_page=100&page=1` : `${api}/releases/latest`]),
+      `${api}/commits/${ref}`,
+    ]);
+  },
+);
+it('rejects a manual source sync during a personal build without queuing it', async () => {
+  h.building = true;
+  await expect(actUpstreamMerge({ action: 'update' })).rejects.toThrow('busy');
+  expect(h.fetch).not.toHaveBeenCalled();
+  expect(h.projected).toBeUndefined();
+});
+it('releases the manual source reservation after an update', async () => {
+  h.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ sha: 'f'.repeat(40) })));
+  await actUpstreamMerge({ action: 'update' });
+  expect(h.manualClaimed).toBe(false);
+});
+it('uses the same fresh official sync before a task worktree is created', async () => {
+  h.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ sha: 'f'.repeat(40) })));
+  await syncSourceBeforeCindyMakeTask(new AbortController().signal);
+  expect(h.fetch).toHaveBeenCalledOnce();
+  expect(h.projected).toMatchObject({
+    status: 'merged',
+    taskOwned: true,
+    upstreamCommit: 'f'.repeat(40),
+  });
+});
+it('stops task preparation when latest source cannot be fetched', async () => {
+  h.fetch.mockRejectedValue(new Error('offline'));
+  await expect(syncSourceBeforeCindyMakeTask(new AbortController().signal)).rejects.toMatchObject({
+    code: 'unavailable',
+  });
+});
+it('publishes source sync as a distinct personal build step', async () => {
+  h.building = true;
+  h.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ sha: 'f'.repeat(40) })));
+  const publish = vi.fn(async () => {});
+  await syncSourceBeforeCindyMakeBuild(new AbortController().signal, publish);
+  expect(publish).toHaveBeenCalledWith({ status: 'syncing', syncLatestSource: true });
+  expect(h.projected).toMatchObject({
+    status: 'merged',
+    taskOwned: true,
+    upstreamCommit: 'f'.repeat(40),
+  });
+});
+it('reports optional build source sync failures separately from packaging failures', async () => {
+  h.fetch.mockRejectedValue(new Error('offline'));
+  const publish = vi.fn(async () => {});
+  await expect(
+    syncSourceBeforeCindyMakeBuild(new AbortController().signal, publish),
+  ).rejects.toMatchObject({ code: 'sourceSyncFailed' });
+  expect(publish).toHaveBeenCalledWith({ status: 'syncing', syncLatestSource: true });
 });
 async function conflict() {
   return (await integrateMakeHistory({

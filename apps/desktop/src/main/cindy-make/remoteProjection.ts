@@ -23,6 +23,7 @@ export interface MakeRemoteSnapshot {
   completion?: { id: string; meta: CindyMakeCompletionMeta };
   sharedBuild?: CindyMakePersonalBuildState;
   recoverable: boolean;
+  sourceMergePending?: boolean;
 }
 type Translate = (key: string, values?: Record<string, string>) => string;
 
@@ -107,7 +108,9 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
         : (shared ?? meta.personal);
     const building =
       !!personal &&
-      ['waiting', 'checking', 'merging', 'packaging', 'publishing'].includes(personal.status);
+      ['waiting', 'syncing', 'checking', 'merging', 'packaging', 'publishing'].includes(
+        personal.status,
+      );
     const starting = testStatus === 'starting';
     const buildMode =
       !starting &&
@@ -185,7 +188,11 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       testStatus === 'ready' ? 'cindyMake.test.started' : 'cindyMake.test.start',
       starting || building || testStatus === 'ready' || !meta.commit,
     );
-    action(`test:${id}:build`, 'cindyMake.personal.generate', starting || building || !meta.commit);
+    action(
+      `test:${id}:build`,
+      'cindyMake.personal.generate',
+      starting || building || !meta.commit || source.sourceMergePending,
+    );
     if (building && personal?.buildId)
       actions.push({
         id: `build:${personal.buildId}:stop`,
@@ -199,9 +206,13 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
         },
       });
   } else if (!source.busy && source.recoverable) {
-    title = t('cindyMake.test.resume.title');
-    description = t('cindyMake.test.resume.description');
-    action(`resume:${source.revision}`, 'cindyMake.test.resume.action');
+    title = t('cindyMake.test.title');
+    action(`resume:${source.revision}:start`, 'cindyMake.test.start');
+    action(
+      `resume:${source.revision}:build`,
+      'cindyMake.personal.generate',
+      source.sourceMergePending,
+    );
   }
   const fallbackMarkdown = [title, description, ...details].filter(Boolean).join('\n\n');
   return {

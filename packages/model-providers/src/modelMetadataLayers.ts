@@ -160,6 +160,7 @@ export function resolveModelMetadata(
   user?: ModelMetadata,
   agent?: string,
   providerDefaults?: ModelMetadata,
+  declaredDefaultEffort?: ModelMetadata["defaultEffort"],
 ): ModelMetadata {
   const ids = [modelId];
   if (providerId === "openai" && modelId.startsWith("chatgpt/"))
@@ -199,6 +200,15 @@ export function resolveModelMetadata(
   const result = mergeModelMetadata(
     defaults,
     live,
+    // A Harness's suggested default is not a model capability. Keep the shared
+    // model intent (including explicit route/Harness exceptions), then adapt it
+    // to the live effort membership below. Explicit force/user settings still win.
+    defaults.defaultEffort !== undefined
+      ? { defaultEffort: defaults.defaultEffort }
+      : undefined,
+    // Explicit Harness declarations are configuration, not discovery suggestions.
+    // Apply before force/user overrides and the shared capability clamp.
+    { defaultEffort: declaredDefaultEffort },
     matched?.route.forceOverrides,
     user,
   );

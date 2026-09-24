@@ -1,6 +1,6 @@
 import { iconSize } from '@/theme';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Pressable, StyleSheet, Switch, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Platform, Pressable, StyleSheet, Switch, View } from 'react-native';
 import { ChevronRight, Clock3, Plus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { randomUUID } from 'expo-crypto';
@@ -10,12 +10,29 @@ import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { getRemoteResource, invokeRemoteResourceAction } from '@/device-link/remoteResources';
-import { formatRemoteError } from '@/device-link/remoteStatus';
 import { CompanionChoice } from './CompanionChoice';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, radius, spacing, typeScale, lineHeight } from '@/theme/tokens';
 import { CompanionSheet } from './CompanionSheet';
+import { CompanionAutomationNativeView } from './CompanionAutomationNativeView';
+import { useRoutineCronFields } from './useRoutineCronFields';
 import { emptyRoutineDefinition, getRoutineActionId, parseRoutineDetail, parseRoutineSummaries, routineDraftValid, type RoutineDefinition, type RoutineDetail, type RoutineSummary, type RoutineTrigger } from './companionRoutines';
+
+function automationFailure(error: unknown, tr: (key: string) => string): string {
+  const code = typeof (error as { code?: unknown } | null)?.code === 'string'
+    ? (error as { code: string }).code
+    : '';
+  const text = error instanceof Error ? error.message : String(error);
+  if (code === 'unsupported' || code === 'CHANNEL_NOT_ALLOWED' || text.includes('CHANNEL_NOT_ALLOWED')) return tr('unsupported');
+  if (code === 'DEVICE_OFFLINE' || code === 'NOT_CONNECTED' || text.includes('DEVICE_OFFLINE') || text.includes('NOT_CONNECTED')) return tr('offline');
+  // A host validation sentence is the actionable reason. Raw codes and JSON stay behind the localized summary.
+  if (text && !text.startsWith('[') && !text.startsWith('{') && !/^[A-Z0-9_]+$/.test(text)) return text;
+  return tr('failed');
+}
+
+function unsupportedAutomationError(): Error {
+  return Object.assign(new Error('unsupported'), { code: 'unsupported' });
+}
 
 export function CompanionAutomationSheet({ visible, onClose, collectionId, botId, deviceId, deviceName, online }: {
   visible: boolean; onClose(): void; collectionId: string; botId: string; deviceId: string; deviceName: string; online: boolean;
@@ -26,6 +43,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
   const { colors } = useTheme();
   const { accountGeneration } = useAuth();
   const { invoke, openLink, onRemoteResourceChanged, connectionEpoch, subscribe, unsubscribe } = useDeviceLink();
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [resource, setResource] = useState<RemoteResource | null>(null);
   const [items, setItems] = useState<RoutineSummary[]>([]);
@@ -125,7 +143,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       let runRevision = detail?.revision ?? 0;
       if (actionId === 'routine-run' && dirty) {
         const saveId = getRoutineActionId(resource, 'routine-save');
-        if (!saveId) throw new Error(tr('unsupported'));
+        if (!saveId) throw unsupportedAutomationError();
         await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, { collectionId, resourceRef: resource.ref, actionId: saveId,
           input: { revision: runRevision, definition: draft } }, i18n.language);
         if (!valid(scope, page)) return;
@@ -138,7 +156,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
         setResource(runResource); setDetail(next); runRevision = next.revision;
       }
       const nextCapability = getRoutineActionId(runResource, actionId);
-      if (!nextCapability) throw new Error(tr('unsupported'));
+      if (!nextCapability) throw unsupportedAutomationError();
       await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, {
         collectionId, resourceRef: runResource.ref, actionId: nextCapability,
         input: { revision: runRevision, requestId: requestId.current,
@@ -147,7 +165,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       if (!valid(scope, page)) return;
       if (actionId === 'routine-run') { await load(); }
       else open(null);
-    } catch (e) { if (valid(scope, page)) setError(formatRemoteError(e)); }
+    } catch (e) { if (valid(scope, page)) setError(automationFailure(e, tr)); }
     finally { if (operationGeneration.current === operation) { inFlight.current = false; if (current.current.identity === scope) setBusy(false); } }
   };
   const button = (label: string, onPress: () => void, destructive = false, disabled = false) => (
@@ -172,6 +190,11 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
   const updateTrigger = (index: number, value: RoutineTrigger) => setDraft((d) => d && ({ ...d, triggers: d.triggers.map((item, i) => i === index ? value : item) }));
   const choose = (label: string, value: string, options: { value: string; label: string }[], onChange: (value: string) => void) =>
     <CompanionChoice {...{ label, value, options, onChange }} disabled={busy || !online} />;
+  const confirmDelete = () => Alert.alert(tr('deleteTitle'), tr('deleteBody'), [{ text: tr('cancel'), style: 'cancel' }, { text: tr('delete'), style: 'destructive', onPress: () => void act('routine-delete') }]);
+  if (Platform.OS === 'ios') return <CompanionAutomationNativeView
+    {...{ visible, online, busy, loading, dirty, error, selected, draftGeneration, resource, items, detail, draft }}
+    onChange={setDraft} onClose={() => leave(onClose)} onBack={() => leave(() => open(null))}
+    onOpen={open} onRetry={() => void load()} onAct={action => void act(action)} onDelete={confirmDelete} />;
   return <CompanionSheet visible={visible} onClose={() => leave(onClose)} preventDismiss={dirty || busy}
       title={selected ? draft?.name || tr('new') : t('devices.companionProfile.automation')}
       onBack={selected ? () => leave(() => open(null)) : undefined} testID="companion.automationSheet"
@@ -189,6 +212,14 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
           {field(tr('name'), draft.name, (name) => setDraft({ ...draft, name }))}
           <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('enabled')}</Text><Switch accessibilityLabel={tr('enabled')} disabled={busy} value={draft.enabled} onValueChange={(enabled) => setDraft({ ...draft, enabled })} trackColor={{ true: colors.textSecondary }} /></View>
           {field(tr('instructions'), draft.prompt, (prompt) => setDraft({ ...draft, prompt }), true)}
+          {detail?.supportsPreRunCheck ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: advancedOpen }} onPress={() => setAdvancedOpen(!advancedOpen)} style={styles.row}><Text style={styles.label}>{tr('advanced')}</Text></Pressable> : null}
+          {detail?.supportsPreRunCheck && advancedOpen ? <View style={styles.group}>
+            <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('quiet')}</Text><Switch accessibilityLabel={tr('quiet')} disabled={busy} value={draft.silentWhenIdle ?? false} onValueChange={(silentWhenIdle) => setDraft({ ...draft, silentWhenIdle })} trackColor={{ true: colors.textSecondary }} /></View>
+            <Text style={styles.secondary}>{tr('quietHint')}</Text>
+            {field(tr('checkCommand'), draft.preRunHook?.command ?? '', (command) => setDraft({ ...draft, preRunHook: command ? { ...draft.preRunHook, command } : null }), true)}
+            <Text style={styles.secondary}>{tr('checkHint')}</Text>
+            {draft.preRunHook ? field(tr('timeoutMs'), draft.preRunHook.timeoutMs === undefined ? '' : String(draft.preRunHook.timeoutMs), (value) => setDraft({ ...draft, preRunHook: { ...draft.preRunHook!, timeoutMs: value ? Number(value) : undefined } })) : null}
+          </View> : null}
           <Text style={styles.heading}>{tr('triggers')}</Text>
           {draft.triggers.map((trigger, index) => <View key={`${draftGeneration}:${trigger.id}`} style={styles.group}>
             {choose(tr('triggerType'), trigger.kind, ['cron', 'interval', 'event'].map((value) => ({ value, label: tr(value) })), (kind) => updateTrigger(index, kind === 'interval' ? { id: trigger.id, kind, intervalMs: 3_600_000 } : kind === 'event' ? { id: trigger.id, kind, sourceId: '', eventType: '', filters: [] } : { id: trigger.id, kind: 'cron', expression: '0 9 * * *', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }))}
@@ -211,7 +242,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
           {getRoutineActionId(resource, 'routine-run') ? button(tr(dirty ? 'saveAndRun' : 'run'), () => void act('routine-run'), false, !online || detail.history.some((r) => r.status === 'running' || r.status === 'queued')) : null}
           <Text style={styles.heading}>{tr('history')}</Text>
           {detail.history.length ? detail.history.map((run) => <View key={run.id} style={styles.field}><Text style={styles.label}>{tr(run.status)}</Text><Text style={styles.secondary}>{new Date(run.createdAt).toLocaleString(i18n.language)}</Text>{run.resultText ? <Text selectable style={styles.label}>{run.resultText}</Text> : null}{run.error ? <Text selectable style={styles.error}>{run.error}</Text> : null}</View>) : <Text style={styles.empty}>{tr('noRuns')}</Text>}
-          {getRoutineActionId(resource, 'routine-delete') ? button(tr('delete'), () => Alert.alert(tr('deleteTitle'), tr('deleteBody'), [{ text: tr('cancel'), style: 'cancel' }, { text: tr('delete'), style: 'destructive', onPress: () => void act('routine-delete') }]), true, dirty || !online) : null}
+          {getRoutineActionId(resource, 'routine-delete') ? button(tr('delete'), confirmDelete, true, dirty || !online) : null}
         </View> : null}
       </> : null}
   </CompanionSheet>;
@@ -223,30 +254,17 @@ function RoutineCronFields({ trigger, onChange, disabled }: {
   const tr = (key: string) => t(`devices.companions.automation.${key}`);
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const parts = trigger.expression.trim().split(/\s+/);
-  const simple = parts.length === 5 && /^\d+$/.test(parts[0]!) && parts[3] === '*';
-  const monthly = simple && /^\d+$/.test(parts[1]!) && /^\d+$/.test(parts[2]!) && parts[4] === '*';
-  const initial = monthly ? 'monthly' : parts[2] !== '*' ? 'custom' : simple && parts[1] === '*' && parts[4] === '*' ? 'hourly'
-    : simple && /^\d+$/.test(parts[1]!) && parts[4] === '*' ? 'daily'
-      : simple && /^\d+$/.test(parts[1]!) && parts[4] === '1-5' ? 'weekdays'
-        : simple && /^\d+$/.test(parts[1]!) && /^[0-6]$/.test(parts[4]!) ? 'weekly' : 'custom';
-  const [preset, setPreset] = useState(initial);
-  const [hour, setHour] = useState(simple && parts[1] !== '*' ? parts[1]! : '9');
-  const [minute, setMinute] = useState(simple ? parts[0]! : '0');
-  const [day, setDay] = useState(initial === 'monthly' ? parts[2]! : initial === 'weekly' ? parts[4]! : '1');
-  const update = (mode: string, h: string, m: string, d: string) => {
-    if (mode !== 'custom') onChange({ ...trigger, expression: `${m} ${mode === 'hourly' ? '*' : h} ${mode === 'monthly' ? d : '*'} * ${mode === 'weekdays' ? '1-5' : mode === 'weekly' ? d : '*'}` });
-  };
+  const { preset, hour, minute, day, changePreset, changeHour, changeMinute, changeDay } = useRoutineCronFields(trigger, onChange);
   const select = (label: string, value: string, options: { id: string; title: string }[], action: (id: string) => void) =>
     <CompanionChoice label={label} value={value} options={options.map(option => ({ value: option.id, label: option.title }))} onChange={action} disabled={disabled} />;
   return <>
-    {select(tr('repeat'), preset, ['hourly','daily','weekdays','weekly','monthly','custom'].map((id) => ({ id, title: tr(id) })), (mode) => { const nextDay = mode === 'monthly' ? String(Math.max(1, Number(day))) : mode === 'weekly' ? String(Math.min(6, Number(day))) : day; setDay(nextDay); setPreset(mode); update(mode, hour, minute, nextDay); })}
-    {preset === 'monthly' ? select(tr('monthDay'), day, Array.from({ length: 31 }, (_, i) => ({ id: String(i + 1), title: String(i + 1) })), (value) => { setDay(value); update(preset, hour, minute, value); }) : null}
-    {preset === 'weekly' ? select(tr('weekday'), day, Array.from({ length: 7 }, (_, i) => ({ id: String(i), title: tr(`day${i}`) })), (value) => { setDay(value); update(preset, hour, minute, value); }) : null}
+    {select(tr('repeat'), preset, ['hourly','daily','weekdays','weekly','monthly','custom'].map((id) => ({ id, title: tr(id) })), changePreset)}
+    {preset === 'monthly' ? select(tr('monthDay'), day, Array.from({ length: 31 }, (_, i) => ({ id: String(i + 1), title: String(i + 1) })), changeDay) : null}
+    {preset === 'weekly' ? select(tr('weekday'), day, Array.from({ length: 7 }, (_, i) => ({ id: String(i), title: tr(`day${i}`) })), changeDay) : null}
     {preset !== 'custom' ? <View style={styles.row}>
       <Text style={[styles.label, styles.flex]}>{tr('time')}</Text>
-      {preset !== 'hourly' ? <><TextInput accessibilityLabel={tr('hour')} keyboardType="number-pad" maxLength={2} value={hour} editable={!disabled} onChangeText={(h) => { setHour(h); update(preset, h, minute, day); }} style={[styles.input, styles.clockInput]} /><Text style={styles.label}>:</Text></> : null}
-      <TextInput accessibilityLabel={tr('minute')} keyboardType="number-pad" maxLength={2} value={minute} editable={!disabled} onChangeText={(m) => { setMinute(m); update(preset, hour, m, day); }} style={[styles.input, styles.clockInput]} />
+      {preset !== 'hourly' ? <><TextInput accessibilityLabel={tr('hour')} keyboardType="number-pad" maxLength={2} value={hour} editable={!disabled} onChangeText={changeHour} style={[styles.input, styles.clockInput]} /><Text style={styles.label}>:</Text></> : null}
+      <TextInput accessibilityLabel={tr('minute')} keyboardType="number-pad" maxLength={2} value={minute} editable={!disabled} onChangeText={changeMinute} style={[styles.input, styles.clockInput]} />
     </View> : <View style={styles.field}><Text style={styles.secondary}>{tr('cronExpression')}</Text><TextInput accessibilityLabel={tr('cronExpression')} value={trigger.expression} editable={!disabled} onChangeText={(expression) => onChange({ ...trigger, expression })} style={styles.input} /></View>}
     <View style={styles.field}><Text style={styles.secondary}>{tr('timezone')}</Text><TextInput accessibilityLabel={tr('timezone')} value={trigger.timezone} editable={!disabled} onChangeText={(timezone) => onChange({ ...trigger, timezone })} autoCapitalize="none" style={styles.input} /></View>
   </>;

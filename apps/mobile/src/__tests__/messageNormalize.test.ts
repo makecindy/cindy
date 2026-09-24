@@ -1035,8 +1035,9 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0]).toMatchObject({ kind: 'system', label: 'error' });
     expect(items[0].body).toContain('还没有配置可用的 API Key');
     expect(items[0].body).toContain('设置 → 模型供应商');
-    // 非鉴权错误维持原文
-    expect(items[1].body).toBe('something exploded');
+    // 未分类错误使用本地化摘要，技术原文留给详情。
+    expect(items[1].body).toBe(i18n.t('session.tail.replyFailed'));
+    expect(items[1].rawError).toBe('something exploded');
   });
 
   it('localizes a persisted output limit in message history', () => {

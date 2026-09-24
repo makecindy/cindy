@@ -1,6 +1,7 @@
 import { normalizeProviderRequest } from '@cindy/model-compat';
 import { createHash } from 'node:crypto';
-import type { ProviderModelRecord } from '@cindy/model-providers';
+import type { Effort, ProviderModelRecord } from '@cindy/model-providers';
+import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, nativeBridgeApiKey } from './pi-provider-transport.js';
 import { createResponsesHandler, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
 import { ChatSseTranslator, translateResponsesRequestWithContext, type ChatBridgeCapabilities, type ResponsesRequest } from '@cindy/responses-chat-bridge';
@@ -16,7 +17,7 @@ export function createClaudeProviderBridge(options: {
   url: string;
   protocol: 'openai-chat' | 'openai-responses';
   headers: Readonly<Record<string, string>>;
-  efforts: readonly string[];
+  efforts: readonly Effort[];
   capabilities?: ChatBridgeCapabilities;
   model?: ProviderModelRecord;
   providerId?: string;
@@ -32,9 +33,15 @@ export function createClaudeProviderBridge(options: {
     fetchImpl: options.fetchImpl,
   }) : undefined;
   const upstreamFetch: typeof fetch = async (_url, init) => {
+    const responses = JSON.parse(String(init?.body)) as ResponsesRequest;
+    if (responses.reasoning) {
+      const effort = reconcileOutboundReasoningEffort(responses.reasoning.effort, options.efforts);
+      if (effort) responses.reasoning.effort = effort;
+      else delete responses.reasoning.effort;
+      init = { ...init, body: JSON.stringify(responses) };
+    }
     if (nativeFetch) return nativeFetch(_url, init);
     if (options.protocol === 'openai-responses') return options.fetchImpl(options.url, init);
-    const responses = JSON.parse(String(init?.body)) as ResponsesRequest;
     const translated = translateResponsesRequestWithContext(responses, { capabilities: options.capabilities });
     const upstream = await options.fetchImpl(options.url, { ...init, body: JSON.stringify(normalizeProviderRequest(translated.request, { harness: 'claude-code', protocol: 'openai-chat', upstreamBase: options.url, model: responses.model }, { reasoningEffortAlreadyMapped: true })) });
     if (!upstream.ok || !upstream.body) return upstream;

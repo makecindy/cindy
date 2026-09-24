@@ -25,6 +25,7 @@ import {
 } from '@/features/device-link/remoteSessionActivityStore';
 
 import { SessionCard } from '../SessionCard';
+import { SessionItem } from '../SessionItem';
 import { sessionCardVisualCases } from '../__fixtures__/sessionCardVisualCases';
 import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
 
@@ -254,6 +255,77 @@ describe('SessionCard visual cases', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it.each(['list', 'text'] as const)('reuses the %s presentation for shared navigation without task actions', (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, preview: 'Shared message preview' };
+    const onClick = vi.fn();
+    const onRename = vi.fn();
+    const onAction = vi.fn();
+    const onTogglePin = vi.fn();
+    const props = { session, isActive: false, isRunning: false, hasAttentionNotification: false, navigationOnly: true, onClick, onRename, onAction, onTogglePin };
+    const view = render(variant === 'list'
+      ? createElement(SessionCard, { ...props, variant: 'list' })
+      : createElement(SessionItem, props));
+    const row = view.container.querySelector<HTMLElement>('[data-sidebar-navigation-row="true"]')!;
+    expect(row).toBeTruthy();
+    expect(view.container.querySelector('[data-sidebar-session-row="true"]')).toBeNull();
+    expect(row.draggable).toBe(false);
+    expect(row.querySelector('button')).toBeNull();
+    if (variant === 'list') expect(row.textContent).toContain(session.preview);
+    const context = createEvent.contextMenu(row);
+    fireEvent(row, context);
+    expect(context.defaultPrevented).toBe(true);
+    expect(screen.queryByRole('menu')).toBeNull();
+    fireEvent.doubleClick(row);
+    expect(screen.queryByRole('textbox')).toBeNull();
+    fireEvent.pointerDown(row, { button: 0, isPrimary: true });
+    expect(mocks.ensureInitialMessages).not.toHaveBeenCalled();
+    fireEvent.click(row);
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(onClick).toHaveBeenCalledTimes(2);
+    expect(onAction).not.toHaveBeenCalled();
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onTogglePin).not.toHaveBeenCalled();
+  });
+
+  it('uses ordinary running and awaiting preview text in shared navigation rows', () => {
+    const visualCase = sessionCardVisualCases.find(item => item.id === 'short-idle-cc')!;
+    mocks.runningDetailBySession.set(visualCase.session.id, 'Reading shared files');
+    const view = renderCase(visualCase.id, { variant: 'list', navigationOnly: true });
+    expect(screen.getByText('Reading shared files')).toBeTruthy();
+    view.unmount();
+    mocks.runningDetailBySession.clear();
+    mocks.pendingPluginSetupSessionIds.add(visualCase.session.id);
+    renderCase(visualCase.id, { variant: 'list', navigationOnly: true });
+    expect(screen.getByText('等待插件设置')).toBeTruthy();
+  });
+
+  it.each(['list', 'text'] as const)('shows the shared crown only for owners in %s rows', (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, id: `shared-${variant}` };
+    const baseProps = {
+      session,
+      isActive: false,
+      isRunning: false,
+      hasAttentionNotification: false,
+      navigationOnly: true,
+      onClick: vi.fn(),
+      onRename: vi.fn(),
+      onAction: vi.fn(),
+      onTogglePin: vi.fn(),
+    };
+    const renderRow = (sharedTaskRole: 'owned' | 'joined') => render(variant === 'list'
+      ? createElement(SessionCard, { ...baseProps, sharedTaskRole, variant: 'list' })
+      : createElement(SessionItem, { ...baseProps, sharedTaskRole }));
+
+    const joined = renderRow('joined');
+    expect(joined.container.querySelector('[data-testid^="shared-task-role-slot-"]')).toBeNull();
+    joined.unmount();
+
+    const owned = renderRow('owned');
+    const ownerSlot = owned.container.querySelector(`[data-testid="shared-task-role-slot-owned-${session.id}"]`);
+    expect(ownerSlot).toBeTruthy();
+    expect(ownerSlot?.querySelector('svg')?.getAttribute('class')).toContain('text-[var(--warning-fg)]');
   });
 
   it.each([
@@ -864,19 +936,24 @@ describe('SessionCard visual cases', () => {
       expect(confirmPill.className).toContain('min-w-14');
       expect(confirmPill.className).toContain('whitespace-nowrap');
       expect(confirmPill.className).toContain('var(--surface-elevated)');
-      expect(confirmPill.className).not.toContain('transparent');
+      expect(confirmPill.className).not.toContain('[--button-face-bg:transparent]');
       if (variant === 'list') {
         // 让位容器是 time 最近的 div 祖先(time 嵌在 SessionInfoMeta span 内)。
         expect(container.querySelector('time')?.closest('div')?.className).toContain('invisible');
-        const confirmReserve = Array.from(container.querySelectorAll<HTMLElement>('span')).find(
+        const confirmReserve = Array.from(container.querySelectorAll<HTMLElement>('button[aria-hidden="true"]')).find(
           (node) =>
             node.getAttribute('aria-hidden') === 'true' &&
             node.className.includes('w-max') &&
             node.textContent === '归档',
         );
         expect(confirmReserve).toBeTruthy();
-        expect(confirmReserve?.className).toContain('px-[9px]');
-        expect(confirmReserve?.className).toContain('text-11');
+        // The reserved width must use the same primitive geometry as the visible pill.
+        for (const className of ['cindy-button', 'h-[22px]', 'px-3', 'text-13', 'font-medium', 'border', 'whitespace-nowrap', 'w-max', 'min-w-14']) {
+          expect(confirmReserve?.classList.contains(className)).toBe(true);
+          expect(confirmPill.classList.contains(className)).toBe(true);
+        }
+        expect(confirmReserve).toHaveProperty('disabled', true);
+        expect(confirmReserve).toHaveProperty('tabIndex', -1);
         expect(confirmReserve?.className).not.toContain('inline-block h-[22px] w-14');
       }
     },

@@ -555,7 +555,7 @@ describe('registry presence 实体化', () => {
     );
   });
 
-  it('anthropic codex bridge 应用 perAgent.codex 后仍强制 fast=false', () => {
+  it('registry 给 anthropic 声明 codex route 也不生成 Codex bridge(Claude 订阅只供 Claude Code)', () => {
     setActiveCatalog(
       baseCatalog([
         {
@@ -583,11 +583,8 @@ describe('registry presence 实体化', () => {
         } as RegistryEntry,
       ]),
     );
-    expect(models('anthropic', 'codex').find((m) => m.id === 'claude-next')).toMatchObject({
-      efforts: ['low', 'medium'],
-      defaultEffort: 'medium',
-      supportsFastMode: false,
-    });
+    expect(models('anthropic', 'claude-code').map((m) => m.id)).toContain('claude-next');
+    expect(models('anthropic', 'codex')).toEqual([]);
   });
 
   it('Gateway 无模型时 registry 也不能造 XD 实体(xd roots=∅)', () => {
@@ -924,9 +921,20 @@ describe('本地 override(local 永远最高)', () => {
     expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')?.status).toBe('alpha');
   });
 
+  it('never exposes a Pi-only user addition for the Claude subscription', () => {
+    setActiveCatalog(baseCatalog());
+    const parsed = sanitizeModelCatalogOverrides({ additions: {
+      'anthropic:claude-manual': {
+        agents: ['pi'], base: { name: 'User model', contextWindow: 600_000, efforts: ['high'], defaultEffort: 'high' },
+      },
+    } });
+    setLocalCatalogOverrides(parsed.overrides);
+    expect(models('anthropic', 'pi')).toEqual([]);
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+  });
+
   it.each([
     ['openai', 'gpt-manual', 'chatgpt/gpt-manual', 'openai-responses'],
-    ['anthropic', 'claude-manual', 'claude-manual', 'anthropic-messages'],
     ['xai', 'xai/grok-manual', 'grok-manual', 'openai-responses'],
   ] as const)('accepts a Pi-only user addition for %s and retains it across refreshes', (providerId, inputId, piId, api) => {
     setActiveCatalog(baseCatalog());

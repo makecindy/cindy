@@ -33,8 +33,22 @@ const configuredBuildEnv = (configuredExpoExtra.xdtProductionEnv ??
   {}) as Record<string, string>;
 const configuredRegionGoogle = configuredExpoExtra.cindy?.google;
 
-function configuredValue(key: string): string {
-  return process.env[key]?.trim() || configuredBuildEnv[key]?.trim() || '';
+// Expo only inlines static property reads; Hermes has no runtime shell env.
+const configuredPublicEnv = {
+  EXPO_PUBLIC_CINDY_AUTH_REGION: process.env.EXPO_PUBLIC_CINDY_AUTH_REGION,
+  EXPO_PUBLIC_CINDY_AUTH_BASE_URL: process.env.EXPO_PUBLIC_CINDY_AUTH_BASE_URL,
+  EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL:
+    process.env.EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL,
+  EXPO_PUBLIC_XDT_MOBILE_VOICE_LITELLM_BASE_URL:
+    process.env.EXPO_PUBLIC_XDT_MOBILE_VOICE_LITELLM_BASE_URL,
+  EXPO_PUBLIC_CINDY_VOICE_API_BASE_URL:
+    process.env.EXPO_PUBLIC_CINDY_VOICE_API_BASE_URL,
+  EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL:
+    process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL,
+};
+
+function configuredValue(key: keyof typeof configuredPublicEnv): string {
+  return configuredPublicEnv[key]?.trim() || configuredBuildEnv[key]?.trim() || '';
 }
 
 export const AUTH_REGION: CindyAuthRegion = (() => {

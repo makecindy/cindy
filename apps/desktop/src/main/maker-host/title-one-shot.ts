@@ -1,5 +1,5 @@
 import { isOpenAiSubscriptionProvider } from '@cindy/model-providers';
-import { getValidClaudeAccountOAuth, isClaudeSubscriptionProviderId } from './subscription-account-auth.js';
+import { isClaudeSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * title-one-shot —— 会话标题的「单次 HTTP」生成器。
  *
@@ -54,7 +54,6 @@ import { getActiveCatalog } from './active-catalog.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { readClaudeApiKey, readCodexOneShotCreds } from './auth-adapters.js';
-import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import { outboundUndiciFetch } from './outbound-fetch.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { validateTitleOutput } from './title-output-validation.js';
@@ -493,11 +492,9 @@ export async function generateTitleViaProviderResult(
   const readSessionProviderId = deps.readSessionProviderId ?? (async () => null);
   const listConnectedProviders = deps.listConnectedProviders ?? (async () => []);
   const readCodexCreds = deps.readCodexCreds ?? ((providerId?: string) => readCodexOneShotCreds(undefined, providerId));
-  // 走刷新模块而非直读凭证库:cc >= 2.1.198 后凭证库的新鲜度取决于 host 刷新节奏,
-  // 直读会在 token 过期后长期拿死值 → 静默 401 回落启发式标题。getValidClaudeAiOAuth
-  // 临期自动续(非强制语义,失败退回现值,行为不劣于直读)。
-  const readAnthropicOAuth = deps.readAnthropicOAuth ?? ((providerId?: string) =>
-    providerId && providerId !== 'anthropic' ? getValidClaudeAccountOAuth(providerId) : getValidClaudeAiOAuth());
+  // Claude 订阅凭证只在内置 Claude Code CLI 里,Cindy 不持有:缺省没有 anthropic 凭证,
+  // 该 wire 的标题请求一律跳过(回落启发式标题)。
+  const readAnthropicOAuth = deps.readAnthropicOAuth ?? (async () => null);
   const readGatewayKey = deps.readGatewayKey ?? readClaudeApiKey;
 
   // Provider 解析:WYSIWYG,与模型选择器高亮同口径。

@@ -78,8 +78,8 @@ describe('BrowserBackendSubsection', () => {
     const button = screen.getByRole('button', {
       name: 'settings.computerUse.browserBackend.health.recovering',
     });
-    const spinner = button.querySelector('span');
-    expect(spinner?.classList.contains('animate-spinner')).toBe(true);
+    const spinner = button.querySelector('.animate-spinner');
+    expect(spinner).toBeTruthy();
     expect(spinner?.classList.contains('motion-reduce:animate-none')).toBe(true);
     expect(spinner?.classList.contains('animate-spin')).toBe(false);
   });

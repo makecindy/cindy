@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import {
   useCallback,
   useEffect,
@@ -1655,10 +1656,11 @@ export function VoiceInputOverlay() {
                 className="w-full justify-start rounded-[12px] shadow-none"
                 maxWidthClassName="max-w-none"
               />
-              <button
+              <Button
+                variant="cta"
+                size="lg"
                 type="button"
                 tabIndex={-1}
-                className="inline-flex h-9 shrink-0 items-center rounded-full border border-[var(--cmd-palette-border)] bg-[var(--send-btn-bg)] px-3 text-12 font-medium text-[var(--send-btn-icon)] transition hover:opacity-85 active:scale-[0.98]"
                 onFocus={preventOverlayButtonFocus}
                 onPointerDown={(event) => {
                   beginOverlayButtonAction(event);
@@ -1677,7 +1679,7 @@ export function VoiceInputOverlay() {
                         codexRecoveryBusy ? 'checking' : codexRecoveryCheck,
                       ))
                   : t('voiceInputOverlay.retry')}
-              </button>
+              </Button>
             </div>
           ) : displayText ? (
             displayContent
@@ -1696,33 +1698,37 @@ export function VoiceInputOverlay() {
               {permissionPromptHint}
             </span>
             <div className="flex shrink-0 items-center gap-2">
-              <button
+              <Button
+                variant="secondary"
+                size="lg"
                 type="button"
                 tabIndex={-1}
-                className="inline-flex h-9 shrink-0 items-center rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] px-3 text-12 font-medium text-[var(--cmd-palette-item-text)] shadow-sm transition hover:bg-[var(--cmd-palette-item-hover)] active:scale-[0.98]"
                 onFocus={preventOverlayButtonFocus}
                 onPointerDown={(event) => {
                   beginOverlayButtonAction(event);
                   void cancelAndClose();
                 }}
                 onClick={suppressOverlayButtonClick}
+                className="shrink-0 shadow-sm"
               >
                 {t('commonUi.confirmDialog.cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="cta"
+                size="lg"
                 type="button"
                 tabIndex={-1}
-                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-[var(--cmd-palette-border)] bg-[var(--send-btn-bg)] px-3 text-12 font-medium text-[var(--send-btn-icon)] shadow-sm transition hover:opacity-85 active:scale-[0.98]"
                 onFocus={preventOverlayButtonFocus}
                 onPointerDown={(event) => {
                   beginOverlayButtonAction(event);
                   openPermissionPromptSettings();
                 }}
                 onClick={suppressOverlayButtonClick}
+                className="shrink-0 shadow-sm"
               >
                 <Settings className="h-3.5 w-3.5" />
                 {t('voiceInputOverlay.openPermissionSettings')}
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -1731,20 +1737,22 @@ export function VoiceInputOverlay() {
             <span className="min-w-0 text-12 leading-5 text-[var(--cmd-palette-item-meta)]">
               {t('voiceInputOverlay.settingsRecoveryHint')}
             </span>
-            <button
+            <Button
+              variant="cta"
+              size="lg"
               type="button"
               tabIndex={-1}
-              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-[var(--cmd-palette-border)] bg-[var(--send-btn-bg)] px-3 text-12 font-medium text-[var(--send-btn-icon)] shadow-sm transition hover:opacity-85 active:scale-[0.98]"
               onFocus={preventOverlayButtonFocus}
               onPointerDown={(event) => {
                 beginOverlayButtonAction(event);
                 void openReadinessSettings();
               }}
               onClick={suppressOverlayButtonClick}
+              className="shrink-0 shadow-sm"
             >
               <Settings className="h-3.5 w-3.5" />
               {t('voiceInputOverlay.openSettings')}
-            </button>
+            </Button>
           </div>
         )}
         {hasPasteError && (
@@ -1754,35 +1762,39 @@ export function VoiceInputOverlay() {
             </span>
             <div className="flex shrink-0 items-center gap-2">
               {pasteErrorCode === 'permission' && (
-                <button
+                <Button
+                  variant="cta"
+                  size="lg"
                   type="button"
                   tabIndex={-1}
-                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-[var(--cmd-palette-border)] bg-[var(--send-btn-bg)] px-3 text-12 font-medium text-[var(--send-btn-icon)] shadow-sm transition hover:opacity-85 active:scale-[0.98]"
                   onFocus={preventOverlayButtonFocus}
                   onPointerDown={(event) => {
                     beginOverlayButtonAction(event);
                     void openAccessibilitySettings();
                   }}
                   onClick={suppressOverlayButtonClick}
+                  className="shrink-0 shadow-sm"
                 >
                   <Settings className="h-3.5 w-3.5" />
                   {t('voiceInputOverlay.openPermissionSettings')}
-                </button>
+                </Button>
               )}
-              <button
+              <Button
+                variant="secondary"
+                size="lg"
                 type="button"
                 tabIndex={-1}
-                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] px-3 text-12 font-medium text-[var(--cmd-palette-item-text)] shadow-sm transition hover:bg-[var(--cmd-palette-item-hover)] active:scale-[0.98]"
                 onFocus={preventOverlayButtonFocus}
                 onPointerDown={(event) => {
                   beginOverlayButtonAction(event);
                   void copyPendingText();
                 }}
                 onClick={suppressOverlayButtonClick}
+                className="shrink-0 shadow-sm"
               >
                 <Copy className="h-3.5 w-3.5" />
                 {t('voiceInputOverlay.copy')}
-              </button>
+              </Button>
             </div>
           </div>
         )}

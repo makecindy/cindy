@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/FileTypeIcon';
 /**
  * Composer 附件托盘(会话页 / 新建会话页共用)。
  *
@@ -105,6 +106,7 @@ export function ComposerAttachmentTray({
         }
         return (
           <View key={attachment.id} style={styles.chip} testID={`${testIDPrefix}.attachmentChip`}>
+            <FileTypeIcon name={attachment.name} mimeType={attachment.mimeType} />
             <Text numberOfLines={1} style={styles.chipText}>
               {attachmentDisplayLabel(attachment)}
             </Text>
@@ -174,6 +176,7 @@ export function ComposerAttachmentTray({
           ) : (
             <ActivityIndicator color={colors.textSecondary} size="small" />
           )}
+          <FileTypeIcon name={pending.name} />
           <Text numberOfLines={1} style={styles.chipText}>
             {pending.failed ? t('composer.attachments.uploadFailed', { name: pending.name }) : pendingUploadDisplayLabel(pending)}
           </Text>

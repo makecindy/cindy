@@ -398,6 +398,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // —— Rewind / Fork / Title / Context ——
   'maker:rewind:preview',
   'maker:rewind:commit',
+  // Shared action via dispatch injection; local IPC retains its trusted-renderer guard.
+  'maker:turn-change-set:apply',
   'maker:fork',
   'maker:fork-strip-encrypted',
   'maker:generate-title',
@@ -418,6 +420,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 本机查必空)。后台任务面板挂载水合用。老被控端无此 channel → CHANNEL_NOT_ALLOWED
   // → 控制端降级空表(面板退化为事件流 + 消息扫描两源)。
   'maker:session-background-tasks:list',
+  'maker:session-background-activity',
   // Durable PI Subagent truth and process handles live on the data-owning device.
   // Reads and exact controls must execute there; the controller must never fall
   // back to its own pi-agent-home for a remote task.
@@ -606,6 +609,10 @@ export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Se
 
 /** 远程可调用的 invoke channel 全集(被控端 dispatch 前的权威校验依据) */
 export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
+  // Same-account owner controls only; guest task dispatch has its own deny-by-default gate.
+  'maker:shared-task',
+  // Dedicated Host-only OAuth transaction. Args/replies are never forwarded to Renderer.
+  'device-link:plugin-oauth:v3',
   'device-link:remote-desktop:v1',
   ...CORE_INVOKE_CHANNELS,
   ...EXTENDED_INVOKE_CHANNELS,
@@ -640,6 +647,8 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'maker:orca:worker-changed',
   // goal 状态变化(payload 顶层 sessionId → 路由到 session:<id> topic,打开该会话的控制端可见)
   'maker:goal:status-changed',
+  // Bounded historical-turn summary only; full patches are fetched through git-review:remote-op.
+  'maker:turn-change-set:updated',
   'usage:message-turn-cost',
   // 本轮模型降级标记(payload 顶层 sessionId → 默认路由到 session:<id> topic):
   // 控制端把 agent_meta.modelMismatch 实时 patch 进已打开的远程会话消息流。
@@ -721,6 +730,8 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
  * client-agnostic:mobile/web 控制端应使用同一映射(与 allowlist 同为协议契约)。
  */
 export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
+  // Two Git preflight/apply stages each allow 30s, plus snapshot and queue overhead.
+  'maker:turn-change-set:apply': 90_000,
   [FILE_PEER_CHANNEL]: 30_000,
   // Capture renderer readiness + source enumeration + offer, then reply delivery.
   "device-link:remote-desktop:v1": REMOTE_DESKTOP_INVOKE_MS,

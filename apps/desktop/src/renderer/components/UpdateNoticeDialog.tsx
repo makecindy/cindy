@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { Flame, Zap, Wrench, Flower, ChevronDown } from 'lucide-react';
@@ -354,18 +355,9 @@ function PlaceholderBlock({
           <span className="inline-flex items-center gap-2 text-12 text-[var(--cmd-palette-item-meta)]">
             {t('update.notice.loadFailed')}
             {onRetry && (
-              <button
-                type="button"
-                onClick={onRetry}
-                className={cn(
-                  'rounded-md px-2 py-0.5 text-11',
-                  'bg-[var(--chat-input-chip-bg)] hover:bg-[var(--cmd-palette-item-hover)]',
-                  'text-[var(--chat-input-chip-text)]',
-                  'transition-colors focus-visible:outline-none focus-visible:ring-1',
-                )}
-              >
+              <Button variant="secondary" size="xxs" compact type="button" onClick={onRetry}>
                 {t('update.notice.retry')}
-              </button>
+              </Button>
             )}
           </span>
         )}
@@ -1091,24 +1083,12 @@ export function UpdateNoticeDialog({
 
           {/* ---- Footer ---- */}
           <div className="flex justify-center px-7 pt-4 pb-5">
-            {/* Plain button rather than AlertDialog.Action: since the root's
-                onOpenChange is a deliberate no-op (see comment there), we
-                can't rely on AlertDialog.Action calling context.onOpenChange
-                to close the dialog. Hand-wired onClick calls our onDismiss
-                directly — bypasses all Radix internal dismissal machinery. */}
-            <button
-              type="button"
-              onClick={onDismiss}
-              className={cn(
-                'rounded-full px-8 py-2.5 text-14 font-medium',
-                'bg-[var(--chat-input-chip-bg)] text-[var(--chat-input-chip-text)]',
-                'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                'active:scale-[0.98]',
-              )}
-            >
+            {/* flex-wrap + min-w-0: long titles shrink/wrap and an overlong
+                contributor list drops to its own right-aligned line instead of
+                overflowing the dialog at narrow widths. */}
+            <Button variant="primary" size="lg" type="button" onClick={onDismiss}>
               {t('update.notice.gotIt')}
-            </button>
+            </Button>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>

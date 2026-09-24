@@ -1,4 +1,5 @@
 import type { RemoteSession } from '@/session/types';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { localizeRemoteSessionListItem } from '@/session/sessionList';
@@ -15,8 +16,12 @@ export * from '@cindy/maker-shared/mobile-home';
 
 export function buildMobileHomePresentation(options: MobileHomeOptions): MobileHomePresentation {
   const now = options.now ?? Date.now();
-  const base = buildMobileHomePresentationShared({ ...options, localizer: mobilePresentationLocalizer });
-  const deviceFilters = base.deviceFilters.map((filter) => ({
+  // Shared peers route individual tasks, not device scopes. Retain their task
+  // rows, but discard legacy selections of these synthetic device entries.
+  const selectedDeviceId = options.selectedDeviceId && isSharedTaskPeer(options.selectedDeviceId)
+    ? null : options.selectedDeviceId;
+  const base = buildMobileHomePresentationShared({ ...options, selectedDeviceId, localizer: mobilePresentationLocalizer });
+  const deviceFilters = base.deviceFilters.filter((filter) => !filter.deviceId || !isSharedTaskPeer(filter.deviceId)).map((filter) => ({
     ...filter,
     label: filter.deviceId === null ? i18n.t('devices.presentation.home.allDevices') : filter.label,
     statusLabel: filter.waitingCount > 0

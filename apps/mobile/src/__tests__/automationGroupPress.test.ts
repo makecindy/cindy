@@ -10,7 +10,9 @@ const body = source.slice(start, source.indexOf('  return (', start));
 // Execute the actual row handler while keeping native rendering out of this unit test.
 const handler = new Function('group', 'statusTarget', 'attention', 'rightStatus', 'groupExpanded',
   'selectionMode', 'onPressSelection', 'onOpenSession', 'onToggleAutomationGroup', 'item',
+  'sharedRole', 't',
   `${body}\nreturn handlePress;`);
+const translate = (key: string) => key;
 const row = (id: string, time: number): RemoteSessionListItem => ({
   session: { id, status: 'active', createdAt: new Date(time).toISOString(), updatedAt: new Date(time).toISOString() },
   pendingInteractionCount: 0,
@@ -24,13 +26,13 @@ describe('automation group row press', () => {
     const item = { ...latest, automationGroup: { key: 'group', items: [interrupted, latest], sessionCount: 2 } } as RemoteSessionListItem;
     const { status, target } = resolveMobileSessionRowStatus(item, false, expanded);
     const open = vi.fn(); const toggle = vi.fn();
-    handler(item.automationGroup, target, false, status, expanded, false, undefined, open, toggle, item)();
+    handler(item.automationGroup, target, false, status, expanded, false, undefined, open, toggle, item, undefined, translate)();
     if (expanded) { expect(toggle).toHaveBeenCalledWith('group'); expect(open).not.toHaveBeenCalled(); }
     else { expect(open).toHaveBeenCalledWith(interrupted); expect(toggle).not.toHaveBeenCalled(); }
     Object.assign(interrupted.session, { lastTurnEndedAt: 1000 });
     const resolved = resolveMobileSessionRowStatus(item, false, false);
     open.mockClear(); toggle.mockClear();
-    handler(item.automationGroup, resolved.target, false, resolved.status, false, false, undefined, open, toggle, item)();
+    handler(item.automationGroup, resolved.target, false, resolved.status, false, false, undefined, open, toggle, item, undefined, translate)();
     expect(toggle).toHaveBeenCalledWith('group'); expect(open).not.toHaveBeenCalled();
   });
 
@@ -38,9 +40,9 @@ describe('automation group row press', () => {
     const item = row('latest', 2000); const group = { key: 'group' };
     for (const attention of [false, true]) for (const expanded of [false, true]) {
       const open = vi.fn(); const toggle = vi.fn(); const select = vi.fn();
-      handler(group, item, attention, status, expanded, true, select, open, toggle, item)();
+      handler(group, item, attention, status, expanded, true, select, open, toggle, item, undefined, translate)();
       expect(select).toHaveBeenCalledOnce(); expect(open).not.toHaveBeenCalled(); expect(toggle).not.toHaveBeenCalled();
-      handler(group, item, attention, status, expanded, false, select, open, toggle, item)();
+      handler(group, item, attention, status, expanded, false, select, open, toggle, item, undefined, translate)();
       expect(open).toHaveBeenCalledTimes(!expanded && (attention || status === 'error') ? 1 : 0);
       expect(toggle).toHaveBeenCalledTimes(expanded || (!attention && status !== 'error') ? 1 : 0);
     }

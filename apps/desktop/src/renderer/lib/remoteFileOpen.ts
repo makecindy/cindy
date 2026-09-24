@@ -125,6 +125,7 @@ export async function revealRemoteChatFile(
 //     「把 unknown 当结论」这个错误在类型与结构上不可表达,比省一帧重绘值钱。
 
 export type RemotePathVerdict = 'file' | 'directory' | 'nonfile' | 'unknown';
+export type RemoteModifiedWindow = { startMs: number; endMs: number | null };
 
 const VERDICT_CACHE_CAP = 1000;
 /** unknown 负缓存 TTL:链路差时同 key 最多每 30s 重验一次(与移动端同值)。 */
@@ -195,9 +196,18 @@ function scheduleStaleSweep(delayMs: number): void {
   }, Math.max(1, delayMs));
 }
 
-function verdictKey(origin: RemoteFileOrigin, workdir: string, absPath: string): string {
-  const endpoint = origin.kind === 'device' ? `dev:${origin.deviceId}` : `ssh:${origin.remoteHostId}`;
-  return `${endpoint}|${workdir}|${absPath}`;
+function verdictKey(
+  origin: RemoteFileOrigin,
+  workdir: string,
+  absPath: string,
+  modifiedWindow?: RemoteModifiedWindow,
+): string {
+  const endpoint =
+    origin.kind === 'device' ? `dev:${origin.deviceId}` : `ssh:${origin.remoteHostId}`;
+  return (
+    `${endpoint}|${workdir}|${absPath}` +
+    (modifiedWindow ? `|mtime:${modifiedWindow.startMs}:${modifiedWindow.endMs}` : '')
+  );
 }
 
 /** 缓存 key(供订阅方按 key 过滤变化通知)。 */
@@ -205,8 +215,9 @@ export function remotePathVerdictKey(
   origin: RemoteFileOrigin,
   workdir: string,
   absPath: string,
+  modifiedWindow?: RemoteModifiedWindow,
 ): string {
-  return verdictKey(origin, workdir, absPath);
+  return verdictKey(origin, workdir, absPath, modifiedWindow);
 }
 
 /**
@@ -251,8 +262,9 @@ export function verifyRemotePathCached(
   origin: RemoteFileOrigin,
   workdir: string,
   absPath: string,
+  modifiedWindow?: RemoteModifiedWindow,
 ): Promise<RemotePathVerdict> {
-  const key = verdictKey(origin, workdir, absPath);
+  const key = verdictKey(origin, workdir, absPath, modifiedWindow);
   const hit = verdictCache.get(key);
   if (hit) return Promise.resolve(hit);
   const pending = verdictInflight.get(key);
@@ -268,7 +280,12 @@ export function verifyRemotePathCached(
       ? ({ kind: 'device', deviceId: origin.deviceId } as const)
       : ({ kind: 'ssh', remoteHostId: origin.remoteHostId } as const);
   const p = window.electronAPI.fileBrowser
-    .chatStat({ origin: wireOrigin, workdir, absPath })
+    .chatStat({
+      origin: wireOrigin,
+      workdir,
+      absPath,
+      ...(modifiedWindow ? { modifiedWindow } : {}),
+    })
     .then((res) => res.verdict)
     .catch(() => 'unknown' as const)
     .then((verdict) => {

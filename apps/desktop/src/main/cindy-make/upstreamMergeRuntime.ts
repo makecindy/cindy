@@ -19,7 +19,7 @@ import {
   resolveMakeToolEnvironment,
 } from './toolchainEnvironment.js';
 import { readCurrentCindySourceStatus } from './sourcePreparation.js';
-import { createLatestSourceVersionReader } from './latestSourceVersion.js';
+import { createLatestSourceVersionReader, sourceChannel } from './latestSourceVersion.js';
 import { runSourceGit } from './sourceGit.js';
 import { cindyMakeManager } from './manager.js';
 import { validateCindyMakeTaskStart } from './taskRuntime.js';
@@ -173,11 +173,12 @@ export function configureUpstreamMerge(isRunning: (id: string) => boolean): void
       latest: async () => {
         const env = await createMakeToolchainEnvironment(userData);
         const source = await readCurrentCindySourceStatus(root, env);
-        const channel = !app.isPackaged
+        const fallbackChannel = !app.isPackaged
           ? 'dev'
           : /-beta(?:\.|$)/i.test(app.getVersion())
             ? 'beta'
             : 'release';
+        const channel = sourceChannel(source, fallbackChannel);
         // An explicit update gets a fresh pin rather than the Settings display cache.
         const { latestVersion } = await createLatestSourceVersionReader((url, init) =>
           net.fetch(url, init),
@@ -185,8 +186,8 @@ export function configureUpstreamMerge(isRunning: (id: string) => boolean): void
         if (latestVersion?.status !== 'ready') throw mergeError('unavailable');
         return latestVersion;
       },
-      prepare: async (state, publish) =>
-        prepareUpstreamMerge(userData, state, await git(), publish),
+      prepare: async (state, publish, isCurrent) =>
+        prepareUpstreamMerge(userData, state, await git(), publish, isCurrent),
       prepareFeature: async (state, plan, publish, isCurrent) => {
         if (!isCurrent() || isRunning(plan.taskSessionId)) throw mergeError('busy');
         return prepareFeatureMerge(userData, state, plan, await git(), publish, isCurrent);
@@ -225,9 +226,13 @@ export function configureUpstreamMerge(isRunning: (id: string) => boolean): void
             return cindyMakeManager.withProject(root, async () => {
               // Recover before deleting the candidate: the durable after ref
               // covers crashes between source adoption and state/receipt writes.
-              await recoverAppliedMergeReceipt(userData, state, command, canCleanup);
+              if (state.feature)
+                await recoverAppliedMergeReceipt(userData, state, command, canCleanup);
               if (!(await discardFeatureMerge(userData, state, command, canCleanup))) return false;
               if (!canCleanup()) return false;
+              // A completed official sync stays adopted, just like a manual Settings sync.
+              // Only provisional feature receipts participate in build rollback.
+              if (!state.feature) return true;
               // Keep the cancellation receipt until both reclaim and rollback finish.
               // A restart/cleanup retry must undo the same unpublished prefix too.
               await rollbackUnbuiltHistory(
@@ -316,6 +321,14 @@ export async function actUpstreamMerge(raw: unknown): Promise<CindyMakeMergeStat
   }).createOptions;
   if (!controller || unavailable)
     throwIpcError('PRECONDITION_FAILED', 'Upstream merge is unavailable');
+  let releaseManualSync: (() => void) | undefined;
+  if (action === 'update') {
+    try {
+      releaseManualSync = cindyMakeManager.claimManualSourceSync();
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', 'busy');
+    }
+  }
   try {
     return action === 'update'
       ? await controller.update(options)
@@ -326,6 +339,8 @@ export async function actUpstreamMerge(raw: unknown): Promise<CindyMakeMergeStat
           : controller.status();
   } catch {
     throwIpcError('PRECONDITION_FAILED', 'Upstream merge is unavailable');
+  } finally {
+    releaseManualSync?.();
   }
 }
 
@@ -342,6 +357,38 @@ export async function integrateMakeHistory(
 export function assertUpstreamMergeTaskWritable(sessionId: string): void {
   if (controller?.isApplying(sessionId))
     throwIpcError('PRECONDITION_FAILED', 'Upstream merge is being applied');
+}
+
+/** Update the personal baseline before its task branch is created. */
+export async function syncSourceBeforeCindyMakeTask(
+  signal: AbortSignal,
+  options?: CindyMakeTaskOptions,
+): Promise<void> {
+  signal.throwIfAborted();
+  if (!controller || unavailable) throw mergeError('unavailable');
+  const state = await controller.update(options, signal);
+  if (!state) throw mergeError('unavailable');
+  const result = await controller.waitForCompletion(state.id, signal);
+  signal.throwIfAborted();
+  if (result.hasWorkspace || result.cleanupPending) throw mergeError('cancelFailed');
+}
+
+/** Optional build preflight: expose source sync as one build step and keep its errors localizable. */
+export async function syncSourceBeforeCindyMakeBuild(
+  signal: AbortSignal,
+  publish: (state: CindyMakePersonalBuildState) => Promise<void>,
+): Promise<void> {
+  await publish({ status: 'syncing', syncLatestSource: true });
+  try {
+    await syncSourceBeforeCindyMakeTask(signal);
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw personalBuildError(
+      (error as { code?: unknown })?.code === 'cancelFailed'
+        ? 'cleanupFailed'
+        : 'sourceSyncFailed',
+    );
+  }
 }
 
 /** Wait without holding a Git or task route lock: the resolution task needs both to finish. */

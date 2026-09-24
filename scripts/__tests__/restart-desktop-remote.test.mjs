@@ -952,6 +952,17 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 	);
 });
 
+test("devEnvPrefix carries the Cindy Make test-window marker through restart", () => {
+	assert.equal(
+		devEnvPrefix({ XDT_CINDY_MAKE_TEST: "1" }, "darwin"),
+		"XDT_CINDY_MAKE_TEST='1' CINDY_CUA_SMOKE='0' ",
+	);
+	assert.equal(
+		devEnvPrefix({ XDT_CINDY_MAKE_TEST: "1" }, "win32"),
+		'set "XDT_CINDY_MAKE_TEST=1" && set "CINDY_CUA_SMOKE=0" && ',
+	);
+});
+
 test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell", () => {
 	for (const value of [undefined, "", "0", "1", "cursor-goal", "invalid"]) {
 		const env = value === undefined ? {} : { CINDY_CUA_SMOKE: value };

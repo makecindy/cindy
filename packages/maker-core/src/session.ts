@@ -2162,8 +2162,8 @@ export class Session {
       toolLoopGuard: this.agentKind === 'claude-code' ? null : new ToolLoopGuard({
         // These normalized events do not identify model-response batches.
         // Distinct malformed calls can belong to one parallel attempt, so do
-        // not enable the retry-count rule without that evidence. Claude keeps
-        // its existing batch-aware contract rule; repetition rules stay active.
+        // not enable the retry-count rule without that evidence. Claude also
+        // disables category-only retries; repetition rules stay active.
         contractConsecutiveLimit: Number.POSITIVE_INFINITY,
       }),
       pendingToolLoop: null,

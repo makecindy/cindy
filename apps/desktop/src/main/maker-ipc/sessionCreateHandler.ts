@@ -20,6 +20,8 @@ function remoteRouteErrorCode(err: unknown): IpcErrorCode | null {
   if (msg.includes('[REMOTE_PROVIDER_UPDATING]')) return 'REMOTE_PROVIDER_UPDATING';
   if (msg.includes('[REMOTE_PROVIDER_UNSUPPORTED]')) return 'REMOTE_PROVIDER_UNSUPPORTED';
   if (msg.includes('[REMOTE_NATIVE_OAUTH_UNAVAILABLE]')) return 'REMOTE_NATIVE_OAUTH_UNAVAILABLE';
+  // maker-core workspace-settings-guard:工作区设置会改写 Claude 订阅会话的上游 / 鉴权。
+  if (msg.includes('[CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE]')) return 'CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE';
   // 轮 40-w4-t3 HIGH:远端 Pi 会话启动时 Cindy AI gateway endpoint 未就绪 ——
   // maker-core 抛 [REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE](含 raw 实现细节
   // runtimeConfig.remoteEndpoint is empty)。不映射会让用户看到不可操作的英文

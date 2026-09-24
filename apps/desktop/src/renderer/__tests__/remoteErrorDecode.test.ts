@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { decodeRemoteErrorMessage } from '@/lib/makerChatStore';
+import { decodeRemoteErrorMessage, remoteErrorMessageForBanner } from '@/lib/makerChatStore';
 
 describe('decodeRemoteErrorMessage', () => {
   it.each([
@@ -36,6 +36,13 @@ describe('decodeRemoteErrorMessage', () => {
 
   it('decodes remote agent errors while preserving fallback text for missing keys', () => {
     expect(decodeRemoteErrorMessage('[REMOTE_UNKNOWN] fallback message')).toBe('fallback message');
+    expect(remoteErrorMessageForBanner('[REMOTE_UNKNOWN] fallback message')).toBe('fallback message');
+  });
+
+  it('keeps known codes available to live and tail banners while other callers still get translated text', () => {
+    const raw = '[REMOTE_LOCAL_ONLY_PROVIDER] use a different provider';
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
+    expect(decodeRemoteErrorMessage(raw)).not.toBe(raw);
   });
 
   it('maps a missing auto-review confirmation to i18n text, not a user rejection', () => {

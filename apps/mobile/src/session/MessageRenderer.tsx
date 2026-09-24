@@ -1,3 +1,5 @@
+import { AgentErrorDetails } from './AgentErrorDetails';
+import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionMessageActions } from './CompanionMessageActions';
 import { useMessageHistoryActive, useMessageHistoryPositioning } from './messageHistoryActivity';
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
@@ -9,6 +11,7 @@ import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { usePluginResultCard } from './usePluginResultCard';
 import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
+import { sharedTaskAuthorName } from '@cindy/maker-shared';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
@@ -29,7 +32,6 @@ import {
   Copy,
   Ellipsis,
   ExternalLink,
-  File as FileIcon,
   Layers,
   ListTodo,
   LoaderCircle,
@@ -3118,7 +3120,7 @@ function MessageBubble({
   ));
   const bubbleBody = messageQuotes.length > 0
     ? joinChatQuoteTextSegments(quoteSegments)
-    : item.message.body;
+    : item.message.errorSummaryKey ? t(item.message.errorSummaryKey) : item.message.body;
   const sentInlineTokens = useMemo(
     () => (item.message.kind === 'user'
       ? buildVisibleSentInlineTokens(
@@ -3477,6 +3479,8 @@ function MessageBubble({
       ]}
       testID={isUser ? 'message.userBubble' : 'message.agentBubble'}
     >
+      {isUser && sharedTaskAuthorName(item.message.source.agentMeta) ?
+        <Text style={styles.hookSourceTitle}>{sharedTaskAuthorName(item.message.source.agentMeta)}</Text> : null}
       {hasPluginInvocations ? (
         <PluginInvocationHeader
           key={clientId}
@@ -3645,6 +3649,7 @@ function MessageBubble({
       ) : null}
       {attachmentStripNode}
       {hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0) ? bubble : null}
+      {item.message.rawError ? <AgentErrorDetails key={item.message.key} message={item.message.rawError} /> : null}
       {item.message.kind === 'assistant' && item.message.modelMismatch ? (
         // 模型降级提示(对齐桌面 AssistantMessage):所选模型本轮被上游静默替换,
         // 常显在气泡下方,icon 用 warning 橙、文字保持 tertiary 灰阶。
@@ -6543,7 +6548,7 @@ function FileChip({
       testID={fileChipTestId(path ?? name)}
     >
       <View style={[styles.fileIconFrame, { width: layout.fileChipIconWidth }]}>
-        <FileIcon color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        <FileTypeIcon name={name || path} color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
       </View>
       <View style={styles.fileText}>
         <Text style={styles.fileName} numberOfLines={1}>{preview.title}</Text>

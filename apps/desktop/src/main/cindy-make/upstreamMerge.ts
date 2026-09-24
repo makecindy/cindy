@@ -280,7 +280,8 @@ export async function discardFeatureMerge(
   git: MergeGit,
   canCleanup: () => boolean,
 ): Promise<boolean> {
-  if (!state.feature || !state.cancellationRequested || !canCleanup()) return false;
+  if (!(state.feature || state.taskOwned) || !state.cancellationRequested || !canCleanup())
+    return false;
   git = ownedGit(git, canCleanup);
   const source = await assertSource(userData, git);
   const worktree = mergeWorktree(userData, state.id);
@@ -616,7 +617,9 @@ export async function prepareUpstreamMerge(
   initial: CindyMakeMergeState,
   git: MergeGit,
   publish: (state: CindyMakeMergeState) => Promise<void>,
+  isCurrent: () => boolean = () => true,
 ): Promise<CindyMakeMergeState> {
+  git = ownedGit(git, isCurrent);
   const worktree = mergeWorktree(userData, initial.id);
   if (!COMMIT.test(initial.upstreamCommit)) throw mergeError('unavailable');
   const source = await assertSource(userData, git);
@@ -631,11 +634,21 @@ export async function prepareUpstreamMerge(
     () => '',
   );
   if (main.trim()) {
-    // A customized local main is never reset behind the user's back.
+    // A customized local main is never reset behind the user's back. Distinguish
+    // a main that is simply newer than the selected target from a divergent one:
+    // the former is normal when a Dev checkout is compared with an older release.
     try {
       await git(['merge-base', '--is-ancestor', main.trim(), initial.upstreamCommit], source);
-    } catch {
-      throw mergeError('localMain');
+    } catch (error) {
+      // Git exit 1 means "not an ancestor"; other failures cannot prove divergence.
+      if ((error as { exitCode?: number }).exitCode !== 1) throw error;
+      try {
+        await git(['merge-base', '--is-ancestor', initial.upstreamCommit, main.trim()], source);
+      } catch (error) {
+        if ((error as { exitCode?: number }).exitCode !== 1) throw error;
+        throw mergeError('localMain');
+      }
+      throw mergeError('localMainAhead');
     }
     await git(['update-ref', `refs/cindy-make/backups/${initial.id}/main`, main.trim()], source);
   }
@@ -708,5 +721,5 @@ export async function prepareUpstreamMerge(
   }
   // Rebase does not replay edits introduced only in a merge commit. Never silently adopt their loss.
   if (state.rebaseReview) return { ...state, status: 'conflict' };
-  return applyUpstreamMerge(userData, state, git);
+  return applyUpstreamMerge(userData, state, git, isCurrent);
 }

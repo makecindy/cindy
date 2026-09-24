@@ -1,3 +1,5 @@
+import { readWorkingPhase } from '@cindy/maker-shared';
+import { TeammateGenerationLabel } from './TeammateGenerationLabel';
 import { useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -23,6 +25,7 @@ export interface TeammateListProps {
   refreshing: boolean;
   error: string | null;
   isOnline(host: RemoteResourceHostTarget): boolean;
+  connectionState?(host: RemoteResourceHostTarget): boolean | null;
   onRefresh(): void;
   onSelect(item: HostedRemoteCollectionItem): void;
   current?: LastTeammateIdentity | null;
@@ -32,7 +35,7 @@ export interface TeammateListProps {
   onInteract?(): void;
 }
 /** Flat identity list shared by home, collection route and the name picker. No host headings or groups. */
-export function TeammateList({ items, loading, refreshing, error, isOnline, onRefresh, onSelect,
+export function TeammateList({ items, loading, refreshing, error, isOnline, connectionState, onRefresh, onSelect,
   current = null, embedded = false, autoFocusSearch = false, onInteract }: TeammateListProps) {
   const { t, i18n } = useTranslation();
   const { user } = useAuth();
@@ -72,6 +75,9 @@ export function TeammateList({ items, loading, refreshing, error, isOnline, onRe
     const preview = display.preview ? parseMobileMarkdownInlines(resolveRemoteText(display.preview, i18n.language))
       .map(inline => inline.type === 'image' ? inline.alt : inline.text).join('').replace(/\s+/g, ' ').trim() : '';
     const online = isOnline(row.host);
+    const connected = connectionState ? connectionState(row.host) : online;
+    const accessiblePreview = online && display.generation
+      ? t(`devices.companions.working.${readWorkingPhase(display.generation.phase) ?? 'processing'}`) : online ? preview : '';
     const ambiguous = (duplicateNames.get(title.normalize('NFKC').toLocaleLowerCase(i18n.language)) ?? 0) > 1;
     const source = ambiguous ? row.host.deviceName : '';
     const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt);
@@ -79,18 +85,18 @@ export function TeammateList({ items, loading, refreshing, error, isOnline, onRe
     const time = timestamp !== undefined && Number.isFinite(new Date(timestamp).getTime())
       ? formatRemoteSessionSidebarTime(new Date(timestamp).toISOString(), now) : '';
     const selected = sameTeammate(current, teammateIdentity(row));
-    const meta = [!online ? t('devices.resources.hostOffline') : '', source].filter(Boolean).join(' · ');
+    const meta = [connected === false ? t('devices.resources.hostOffline') : connected === null ? t('devices.resources.connectionUnknown') : '', source].filter(Boolean).join(' · ');
     return <Pressable key={row.key} accessibilityRole="button" accessibilityState={{ selected, disabled: !online }}
-      accessibilityLabel={[title, preview, time, unread ? t('devices.companions.unread') : '', meta].filter(Boolean).join(', ')}
+      accessibilityLabel={[title, accessiblePreview, time, unread ? t('devices.companions.unread') : '', meta].filter(Boolean).join(', ')}
       disabled={!online} onPress={() => onSelect(row)} style={({ pressed }) => [styles.row, selected && styles.selected, pressed && styles.pressed]}
       testID={`teammates.item.${row.host.deviceId}.${row.item.ref.id}`}>
-      <View style={styles.avatar}><RemoteCompanionAvatar avatar={display.avatar} deviceId={row.host.deviceId} name={title} online={online} /></View>
+      <View style={styles.avatar}><RemoteCompanionAvatar avatar={display.avatar} deviceId={row.host.deviceId} name={title} online={online} /><View testID="teammate.connection" style={[styles.connection, { backgroundColor: connected === null ? colors.textTertiary : connected ? colors.statusDone : colors.statusError }]} /></View>
       <View style={styles.body}>
         <View style={styles.titleRow}><Text numberOfLines={1} style={styles.title}>{title}</Text>
           {time ? <Text numberOfLines={1} style={styles.time}>{time}</Text> : null}
           {unread ? <View style={styles.unread} accessibilityLabel={t('devices.companions.unread')} /> : null}
         </View>
-        {preview && online ? <Text numberOfLines={1} style={styles.preview}>{preview}</Text> : null}
+        {online && display.generation ? <TeammateGenerationLabel deviceId={row.host.deviceId} botId={row.item.ref.id} generation={display.generation} /> : preview && online ? <Text numberOfLines={1} style={styles.preview}>{preview}</Text> : null}
         {meta ? <Text numberOfLines={1} style={styles.meta}>{meta}</Text> : null}
       </View>
     </Pressable>;
@@ -114,14 +120,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   retry: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, minHeight: 78 },
   avatar: { width: 44, height: 44, borderRadius: radius.pill, backgroundColor: colors.surfaceChip, alignItems: 'center', justifyContent: 'center' },
+  connection: { position: 'absolute', right: 0, bottom: 0, width: 10, height: 10, borderRadius: radius.pill, borderWidth: 2, borderColor: colors.surface },
   selected: { backgroundColor: colors.surfaceChip, borderRadius: radius.container },
   pressed: { opacity: 0.72 },
   body: { flex: 1, minWidth: 0, gap: spacing.xs, borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: spacing.md },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
-  preview: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  time: { color: colors.textTertiary, fontSize: typeScale.caption },
-  meta: { color: colors.textTertiary, fontSize: typeScale.caption },
+  // Match task rows in HomeListVisuals: title, preview and metadata keep the same hierarchy.
+  title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.subtitle, fontWeight: fontWeight.semibold, lineHeight: lineHeight.listTitle },
+  preview: { color: colors.textSecondary, fontSize: typeScale.code, fontWeight: fontWeight.regular, lineHeight: lineHeight.subtitle },
+  time: { color: colors.textTertiary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.body },
+  meta: { color: colors.textTertiary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.body },
   unread: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: colors.textPrimary },
 });
