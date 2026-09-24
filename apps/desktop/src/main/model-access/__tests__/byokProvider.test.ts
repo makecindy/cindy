@@ -172,3 +172,11 @@ it.each([undefined, 64000])('only verifies a future BYOK model window when expli
   expect(provider.models.pi?.[0]?.contextWindow).toBeGreaterThan(0);
   expect(provider.models.pi?.[0]?.contextWindowVerified).toBe(contextWindow !== undefined);
 });
+
+it.each(['byok-a/chat', 'gpt-6-sol'])('preserves an explicit per-engine null default above %s defaults', (id) => {
+  const provider = buildByokProvider({ provider: { id: 'byok-a', name: 'Enterprise', connectionRevision: 1,
+    models: [{ ...chatModel, id, efforts: ['low', 'high'], defaultEffort: 'high',
+      perAgent: { pi: { wireProtocol: 'openai-completions', defaultEffort: null } } }],
+  }, credential });
+  expect(provider.models.pi?.[0]).toMatchObject({ efforts: ['low', 'high'], defaultEffort: null });
+});

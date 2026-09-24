@@ -24,7 +24,7 @@ import {
   applyAstraCatalogAdditions,
   applyPinnedAstraCorrections,
 } from "./openai-catalog-corrections.mjs";
-function catalogEntries(providerId, value) {
+function catalogEntries(providerId, value, incompleteProviders) {
   const entries = Array.isArray(value)
     ? value
     : value && typeof value === "object" && Array.isArray(value.models)
@@ -37,6 +37,7 @@ function catalogEntries(providerId, value) {
   return entries.filter((entry) => {
     if (!entry || typeof entry !== "object" || typeof entry.id !== "string" || entry.provider !== providerId) {
       console.warn(`Skipping invalid model in '${providerId}'`);
+      incompleteProviders.add(providerId);
       return false;
     }
     return true;
@@ -45,6 +46,7 @@ function catalogEntries(providerId, value) {
 
 async function main() {
   const providers = {};
+  const incompleteProviders = new Set();
   const previous = JSON.parse(await fs.readFile(SNAPSHOT_PATH, "utf8"));
   const PROVIDER_IDS = Object.keys(previous.providers)
     .filter((id) => id !== ".manifest")
@@ -72,7 +74,7 @@ async function main() {
       : JSON.parse(await fs.readFile(path.resolve(inputPath), "utf8"));
     for (const providerId of Object.keys(input)) {
       if (providerId === ".manifest") continue;
-      try { providers[providerId] = catalogEntries(providerId, input[providerId]); }
+      try { providers[providerId] = catalogEntries(providerId, input[providerId], incompleteProviders); }
       catch { console.warn(`Keeping previous catalog for '${providerId}': invalid source`); }
     }
   } else {
@@ -104,7 +106,7 @@ async function main() {
         const modified = Date.parse(response.headers.get("last-modified") ?? "");
         if (!Number.isNaN(modified))
           newestModified = Math.max(newestModified, modified);
-        providers[providerId] = catalogEntries(providerId, await response.json());
+        providers[providerId] = catalogEntries(providerId, await response.json(), incompleteProviders);
       } catch { console.warn(`Keeping previous catalog for '${providerId}': source unavailable`); }
     }
   }
@@ -120,7 +122,7 @@ async function main() {
     ? new Date(generatedAtArg).toISOString()
     : new Date(newestModified || Date.now()).toISOString();
   const standard = {
-    ...toCindyCatalog(providers, generatedAt, { previous, onError: () => console.warn('Skipping invalid model; keeping last good record') }),
+    ...toCindyCatalog(providers, generatedAt, { previous, incompleteProviders, onError: () => console.warn('Skipping invalid model; keeping last good record') }),
     ...(sourceVersion ? { sourceVersion } : {}),
   };
   standard.providers = { ...previous.providers, ...standard.providers };

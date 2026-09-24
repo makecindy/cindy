@@ -101,10 +101,11 @@ export function buildByokProvider({ provider, credential }: ByokConnection): Pro
         BUNDLED_CATALOG.modelRegistry, provider.id, model.id,
         { contextWindow: defaults.contextWindow ?? model.contextWindow,
           maxOutputTokens: model.maxOutputTokens, efforts: defaults.efforts ?? model.efforts,
-          defaultEffort: defaults.defaultEffort ?? model.defaultEffort,
+          defaultEffort,
           supportsFastMode: defaults.supportsFastMode ?? model.supportsFastMode,
           modalities: model.modalities,
           supportsImageInput: model.modalities ? model.modalities.input.includes('image') : undefined }, undefined, agent,
+        undefined, defaults.defaultEffort,
       ));
       if (agent === 'pi') {
         resolved.efforts = resolved.efforts.filter(effort => effort !== 'ultra');

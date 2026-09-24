@@ -3,6 +3,17 @@ import { collectModelDiscoveryPages } from '../model-discovery-pages.js';
 
 const endpoint = 'https://models.example/v1/models';
 describe('model list pagination', () => {
+  it('merges later metadata for repeated IDs without dropping earlier fields', async () => {
+    const models = await collectModelDiscoveryPages({ data: [{ id: 'one', name: 'Named model',
+      supports_fast_mode: true, max_output_tokens: 4000 }], next: '?page=2' }, endpoint,
+      async () => ({ data: [{ id: 'one', context_window: 64000, supports_fast_mode: false,
+        efforts: [], defaultEffort: null }] }));
+    expect(models).toHaveLength(1);
+    expect(models?.[0]).toMatchObject({ name: 'Named model', contextWindow: 64000,
+      discoveredMetadata: { contextWindow: 64000, maxOutputTokens: 4000,
+        supportsFastMode: false, efforts: [], defaultEffort: null } });
+  });
+
   it.each([
     [{ has_more: true, last_id: 'one' }, 'after_id=one'],
     [{ nextPageToken: 'two' }, 'pageToken=two'],

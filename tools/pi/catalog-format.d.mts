@@ -25,6 +25,7 @@ export function toCindyProviderModel(row: PiImportModel): ProviderModelRecord;
 export function toCindyCatalog(providers: Record<string, PiImportModel[]>, generatedAt: string, options?: {
   previous?: { providers: Record<string, ProviderModelRecord[]> };
   onError?: (error: unknown) => void;
+  incompleteProviders?: Iterable<string>;
 }): {
   schemaVersion: number;
   generatedAt: string;

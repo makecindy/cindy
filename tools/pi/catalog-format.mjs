@@ -82,7 +82,7 @@ export function toCindyProviderModel(row) {
     execution: {
       pi: {
         api,
-        ...(Object.keys(headers).length ? { headers } : {}),
+        ...(row.headers !== undefined ? { headers } : {}),
         ...(row.thinkingLevelMap
           ? { thinkingLevelMap: row.thinkingLevelMap }
           : {}),
@@ -93,7 +93,8 @@ export function toCindyProviderModel(row) {
   };
 }
 
-export function toCindyCatalog(providers, generatedAt, { previous, onError } = {}) {
+export function toCindyCatalog(providers, generatedAt, { previous, onError, incompleteProviders = [] } = {}) {
+  const incomplete = new Set(incompleteProviders);
   return {
     schemaVersion: 1,
     generatedAt,
@@ -104,15 +105,30 @@ export function toCindyCatalog(providers, generatedAt, { previous, onError } = {
         .map(([id, models]) => [
           id,
           (() => {
-            const converted = new Map((previous?.providers?.[id] ?? []).map(row => [row.id, row]));
+            const prior = new Map((previous?.providers?.[id] ?? []).map(row => [row.id, row]));
+            const converted = new Map();
+            let complete = !incomplete.has(id);
             for (const row of models) {
               try {
-                const next = toCindyProviderModel(row);
-                converted.set(next.id, { ...converted.get(next.id), ...next });
+                const old = prior.get(row?.id);
+                const sameConnection = old?.upstream === (row.baseUrl ?? '') && old?.execution.pi.api === row.api;
+                const adapterDefaults = sameConnection ? old.execution.pi : {};
+                // Convert after filling missing adapter fields, so efforts and
+                // the request mapping stay consistent. Explicit {} replaces.
+                const next = toCindyProviderModel({ ...adapterDefaults, ...row,
+                  ...Object.fromEntries(['headers', 'thinkingLevelMap', 'compat', 'samplingParams']
+                    .filter(key => row[key] === undefined && adapterDefaults[key] !== undefined)
+                    .map(key => [key, adapterDefaults[key]])),
+                });
+                converted.set(next.id, { ...old, ...next });
               } catch (error) {
                 if (!onError) throw error;
+                complete = false;
                 onError(error);
               }
+            }
+            if (!complete) for (const [modelId, old] of prior) {
+              if (!converted.has(modelId)) converted.set(modelId, old);
             }
             return [...converted.values()].sort((a, b) => a.id.localeCompare(b.id));
           })(),

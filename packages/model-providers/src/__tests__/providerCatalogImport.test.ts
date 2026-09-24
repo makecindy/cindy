@@ -102,3 +102,28 @@ it('preserves an explicit unspecified default effort', () => {
   expect(toCindyCatalog({ 'new-vendor': [{ ...model, defaultEffort: null }] }, 'now')
     .providers['new-vendor'][0]).toMatchObject({ efforts: ['high'], defaultEffort: null });
 });
+
+it('removes retired models only after a complete successful provider snapshot', () => {
+  const previous = toCindyCatalog({ 'new-vendor': [model, { ...model, id: 'retired-model' }] }, 'before');
+  const next = toCindyCatalog({ 'new-vendor': [model] }, 'after', { previous });
+  expect(next.providers['new-vendor'].map(row => row.id)).toEqual([model.id]);
+  expect(toCindyCatalog({ 'new-vendor': [] }, 'empty', { previous }).providers['new-vendor']).toEqual([]);
+  expect(toCindyCatalog({ 'new-vendor': [] }, 'incomplete', { previous, incompleteProviders: ['new-vendor'] })
+    .providers['new-vendor']).toEqual(previous.providers['new-vendor']);
+});
+
+it('retains missing adapter fields on the same connection and accepts explicit replacements', () => {
+  const previous = toCindyCatalog({ 'new-vendor': [{ ...model, samplingParams: { temperature: 0.2 } }] }, 'before');
+  const sparse = { ...model, thinkingLevelMap: undefined, compat: undefined, samplingParams: undefined };
+  const kept = toCindyCatalog({ 'new-vendor': [sparse] }, 'after', { previous }).providers['new-vendor'][0];
+  expect(kept.execution.pi).toEqual(previous.providers['new-vendor'][0].execution.pi);
+  expect(kept.efforts).toEqual(['high']);
+  const cleared = toCindyCatalog({ 'new-vendor': [{ ...sparse, thinkingLevelMap: {}, compat: {}, samplingParams: {} }] },
+    'clear', { previous }).providers['new-vendor'][0];
+  expect(cleared.execution.pi).toMatchObject({ thinkingLevelMap: {}, compat: {}, samplingParams: {} });
+  for (const change of [{ api: 'anthropic-messages' }, { baseUrl: 'https://other.example/v1' }]) {
+    const moved = toCindyCatalog({ 'new-vendor': [{ ...sparse, ...change }] }, 'moved', { previous }).providers['new-vendor'][0];
+    expect(moved.execution.pi).not.toHaveProperty('thinkingLevelMap');
+    expect(moved.execution.pi).not.toHaveProperty('compat');
+  }
+});

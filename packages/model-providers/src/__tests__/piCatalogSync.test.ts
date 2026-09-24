@@ -61,7 +61,15 @@ describe("Pi catalog sync upstream precedence", () => {
         };
         const input: Record<string, unknown[]> = { ...piCatalog.providers, openai: [native],
           'new-provider': [{ ...native, id: 'future-model', provider: 'new-provider' }],
+          'partial-provider': [null, { ...native, id: 'partial-new', provider: 'partial-provider' }],
         };
+        const snapshotPath = path.join(catalogDirectory, 'provider-models.json');
+        const oldSnapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+        const oldRow = oldSnapshot.providers.openai[0];
+        oldSnapshot.providers['new-provider'] = [{ ...oldRow, id: 'retired-model' }];
+        oldSnapshot.providers['partial-provider'] = [{ ...oldRow, id: 'partial-old' }];
+        oldSnapshot.providers['offline-provider'] = [{ ...oldRow, id: 'offline-old' }];
+        writeFileSync(snapshotPath, JSON.stringify(oldSnapshot));
         const inputPath = path.join(temporary, "input.json");
         writeFileSync(inputPath, JSON.stringify(input));
         const args: string[] = [];
@@ -97,6 +105,9 @@ describe("Pi catalog sync upstream precedence", () => {
           ),
         );
         expect(result.providers['new-provider'][0]).toMatchObject({ id: 'future-model', contextWindow: 1_060_000 });
+        expect(result.providers['new-provider']).toHaveLength(1);
+        expect(result.providers['partial-provider'].map((row: { id: string }) => row.id)).toEqual(['partial-new', 'partial-old']);
+        expect(result.providers['offline-provider'].map((row: { id: string }) => row.id)).toEqual(['offline-old']);
         expect(result.providers.openai.find((row: { id: string }) => row.id === native.id)).toMatchObject({ id: native.id, name: "Native Astra", contextWindow: 1_060_000, execution: { pi: { compat: { supportsStore: false } } } });
         expect(result.providers["openai-codex"].map((m: { id: string }) => m.id).sort()).toEqual(piCatalog.providers["openai-codex"]!.map(m => m.id).sort());
       } finally {

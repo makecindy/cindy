@@ -1,4 +1,4 @@
-import { parseModelsListResponse, type DiscoveredModel } from '@cindy/model-providers';
+import { mergeModelMetadata, parseModelsListResponse, type DiscoveredModel } from '@cindy/model-providers';
 
 /** Follow catalog cursors only on the original endpoint. Never forward credentials to a next-link host. */
 export async function collectModelDiscoveryPages(
@@ -15,7 +15,16 @@ export async function collectModelDiscoveryPages(
     const parsed = parseModelsListResponse(page, endpoint);
     if (!parsed) return models.size ? [...models.values()] : null;
     for (const model of parsed) {
-      if (!models.has(model.id)) models.set(model.id, model);
+      const previous = models.get(model.id);
+      models.set(model.id, previous ? {
+        ...previous,
+        ...model,
+        name: model.discoveredMetadata?.name ?? previous.discoveredMetadata?.name ?? previous.name,
+        contextWindow: model.contextWindow ?? previous.contextWindow,
+        discoveredMetadata: mergeModelMetadata(previous.discoveredMetadata, model.discoveredMetadata),
+        ...(previous.discoveredCost || model.discoveredCost
+          ? { discoveredCost: { ...previous.discoveredCost, ...model.discoveredCost } } : {}),
+      } : model);
       if (models.size >= 10_000) return [...models.values()];
     }
     if (!page || typeof page !== 'object' || Array.isArray(page)) break;
