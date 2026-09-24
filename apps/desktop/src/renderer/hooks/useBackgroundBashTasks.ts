@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate } from '@/lib/makerChatStore';
 import {
+  canStopAgentTask,
   isRemoteSessionSticky,
   readSessionBackgroundTasks,
   stopAgentTaskFor,
@@ -139,9 +140,14 @@ export function useBackgroundBashTasks(
     };
   }, [sessionId, historyLoaded, snapshotRefreshNonce]);
 
+  // 不能停的会话(共享任务访客 / 归属不可解析的镜像)不列运行集:状态栏的「后台任务
+  // 运行中 / 全部停止」是一个**动作入口** —— 列出来却点不动(必然被拒)就是假 affordance。
+  // 与聊天卡、面板行同口径:三处都过 canStopAgentTask。
+  const canStop = canStopAgentTask(sessionId);
   const tasks = useMemo(
-    () => listRunningBashTasks(taskUpdates, { includePiTasks: remoteSticky }),
-    [remoteSticky, taskUpdates],
+    () =>
+      canStop ? listRunningBashTasks(taskUpdates, { includePiTasks: remoteSticky }) : [],
+    [canStop, remoteSticky, taskUpdates],
   );
 
   // stopAll 读 ref 而非闭包列表:按钮点击时以最新运行集为准,避免陈旧闭包重复停。

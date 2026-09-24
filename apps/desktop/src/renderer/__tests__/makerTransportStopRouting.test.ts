@@ -155,6 +155,28 @@ describe('readSessionBackgroundTasks 权威性标记', () => {
   });
 });
 
+describe('共享任务访客门禁', () => {
+  it('共享任务 peer:可停为 false,且停止拒绝而不是隧道/回退本机', async () => {
+    const { stopAgentTask, invoke } = stubElectron();
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const { sharedTaskGuestPeer } = await import('@cindy/device-link');
+    // 共享任务访客的会话以 peer key 写入注册表(与 CCAgentSessionView 的
+    // isSharedTaskPeer(remoteDeviceId) 同源)。
+    const peerKey = sharedTaskGuestPeer('st-1', 'member-1', 'dev-shared');
+    remoteProjectsStore.setDeviceSessions(peerKey, '共享任务', [sess('shared-1')]);
+    const { canStopAgentTask, stopAgentTaskFor } = await import('@/lib/makerTransport');
+
+    // 被控端(房主)只授权 sharedTaskDispatch 里那批通道,逐任务停止不在其中 →
+    // 门禁判否,UI 不显示 Stop /「全部停止」,也不发注定失败的请求。
+    expect(canStopAgentTask('shared-1')).toBe(false);
+    await expect(stopAgentTaskFor('shared-1', 'bash-1')).rejects.toThrow(
+      /SHARED_TASK_STOP_NOT_AUTHORIZED/,
+    );
+    expect(stopAgentTask).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
 describe('canStopAgentTask 门禁', () => {
   it('本机 / 远程已知设备 → 可停;归属不可解析 → 不可停', async () => {
     stubElectron();

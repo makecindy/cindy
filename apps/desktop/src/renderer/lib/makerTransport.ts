@@ -18,6 +18,7 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import {
@@ -308,15 +309,28 @@ export function makerApiForSticky(sessionId: string): RoutableMaker {
  * 许回退本机:控制端 main 对不属于自己的会话会「幂等成功」,而那正是假成功(任务在被控端
  * 照旧跑)。
  *
+ * `shared-task` → 共享任务访客(peer key,见 isSharedTaskPeer):被控端(房主)只授权
+ * `sharedTaskDispatch` 里那批通道,逐任务停止的 `maker:agent-task:stop` **不在其中**
+ * (产品规则只承诺访客可「停止 Agent」= `maker:input:stop` 停整轮)。会话数据照样能读
+ * (镜像 + 后台任务 list 都已授权),但停止必然被拒 —— 在这里就判否,UI 不显示 Stop /
+ * 「全部停止」,也不发注定失败的请求。
+ *
  * 第三状态靠一个**独立于易失注册表**的信号表达:`knownOwnerTokenFor` 只在会话数据经
  * device-link 受保护镜像读(`readCachedMessages(deviceId, …)`)落地时记入 —— 本机会话
  * 永远不走那条路。它比粘滞缓存更硬:粘滞缓存是「查询时记入」,没查过就没有。
  */
 function stopRouteFor(
   sessionId: string,
-): { kind: 'remote'; deviceId: string } | { kind: 'local' } | { kind: 'unknown' } {
+):
+  | { kind: 'remote'; deviceId: string }
+  | { kind: 'local' }
+  | { kind: 'unknown' }
+  | { kind: 'shared-task' } {
   const deviceId = getStickySessionDeviceId(sessionId);
-  if (deviceId) return { kind: 'remote', deviceId };
+  if (deviceId) {
+    if (isSharedTaskPeer(deviceId)) return { kind: 'shared-task' };
+    return { kind: 'remote', deviceId };
+  }
   if (knownOwnerTokenFor(sessionId) !== undefined) return { kind: 'unknown' };
   return { kind: 'local' };
 }
@@ -347,17 +361,27 @@ export function stopAgentTaskFor(
       ),
     );
   }
+  if (route.kind === 'shared-task') {
+    // 共享任务访客:被控端不授权逐任务停止(只授权 agent.stop 停整轮)。UI 已隐藏入口,
+    // 这里是防御性拒绝 —— 绝不回退本机(那会停掉控制端自己的同 id 任务)。
+    return Promise.reject(
+      new Error(
+        'SHARED_TASK_STOP_NOT_AUTHORIZED: shared-task guests may stop the agent, not individual background tasks',
+      ),
+    );
+  }
   return window.electronAPI.maker.stopAgentTask(sessionId, taskId);
 }
 
 /**
  * Stop 按钮的可用性(与 stopAgentTaskFor 同口径):本机 → 可停;有设备可隧道 → 可停;
- * 确认是镜像来源却拿不到设备(**unknown**)→ **不可**:那条路径上没有任何可信的停止目标,
- * 本地调用会假成功。
+ * 确认是镜像来源却拿不到设备(**unknown**)或共享任务访客(**shared-task**)→ **不可**:
+ * 前者没有任何可信的停止目标(本地调用会假成功),后者的通道本就没被授权。
  */
 export function canStopAgentTask(sessionId: string | null | undefined): boolean {
   if (!sessionId) return false;
-  return stopRouteFor(sessionId).kind !== 'unknown';
+  const kind = stopRouteFor(sessionId).kind;
+  return kind === 'local' || kind === 'remote';
 }
 
 /** Subscribe to summaries from the owning device; exact patches are fetched on demand. */

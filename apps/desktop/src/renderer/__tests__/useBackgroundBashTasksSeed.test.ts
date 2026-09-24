@@ -31,6 +31,7 @@ const transport = vi.hoisted(() => ({
   readSessionBackgroundTasks: vi.fn(),
   listSessionBackgroundTasksFor: vi.fn(),
   stopAgentTaskFor: vi.fn(),
+  canStopAgentTask: vi.fn(() => true),
 }));
 
 vi.mock('@/lib/makerTransport', () => ({
@@ -40,6 +41,7 @@ vi.mock('@/lib/makerTransport', () => ({
   readSessionBackgroundTasks: transport.readSessionBackgroundTasks,
   listSessionBackgroundTasksFor: transport.listSessionBackgroundTasksFor,
   stopAgentTaskFor: transport.stopAgentTaskFor,
+  canStopAgentTask: transport.canStopAgentTask,
 }));
 
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
@@ -70,7 +72,28 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
   afterEach(() => {
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
     mocks.stickyRemoteIds.clear();
+    transport.canStopAgentTask.mockReturnValue(true);
     vi.clearAllMocks();
+  });
+
+  it('不能停的会话(共享任务访客 / 归属不可解析)不列运行集:状态栏不出现假入口', async () => {
+    transport.canStopAgentTask.mockReturnValue(false);
+    const updates = new Map([
+      [
+        't1',
+        {
+          provider: 'claude-code' as const,
+          taskId: 't1',
+          status: 'running' as const,
+          taskType: 'local_bash' as const,
+        },
+      ],
+    ]);
+    const { result } = renderHook(() => useBackgroundBashTasks('shared-1', updates, true));
+    await Promise.resolve();
+    // 状态栏的「后台任务运行中 / 全部停止」是动作入口:点不动就不列(与聊天卡、
+    // 面板行同口径),否则只能反复显示「停止未确认」。
+    expect(result.current.tasks).toEqual([]);
   });
 
   it('候选集在发起 IPC 前捕获,空快照 + 非空候选仍触发 seed(对账信号)', async () => {
