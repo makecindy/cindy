@@ -188,6 +188,26 @@ describe('xAI API sync through the actual picker import', () => {
     expect(inspectXaiImport(zero).rows[0].harnesses.codex.apiReferencePrice?.cacheReadPerMtok).toBe(0);
   });
 
+  it.each([
+    ['all cache prices missing', undefined],
+    ['only long-context cache price missing', 5_000],
+  ] as const)('keeps serialized repeat sync stable with %s', (_case, standardCache) => {
+    const sparseDetails = JSON.parse(JSON.stringify({ models: [{ ...details.models[0],
+      cached_prompt_text_token_price: standardCache,
+      cached_prompt_text_token_price_long_context: undefined }] }));
+    let candidate = build(account, sparseDetails);
+    for (const at of ['2026-09-24T18:00:00.000Z', '2026-09-25T12:00:00.000Z']) {
+      const savedCatalog = parseCatalog(JSON.stringify(candidate.catalog));
+      candidate = buildXaiSyncCandidate(savedCatalog, account, sparseDetails, at);
+      const prices = candidate.catalog.modelRegistry!.baseModels!.find(b => b.id === 'xai/grok-4.8')!.referencePriceGroups![0].prices;
+      expect(prices).toHaveLength(2);
+      expect(prices.every(p => p.effectiveFrom === '2026-09-24' && p.effectiveUntil === undefined)).toBe(true);
+      expect(prices[0].cacheReadPerMtok).toBe(standardCache === undefined ? undefined : 0.5);
+      expect(prices[1]).not.toHaveProperty('cacheReadPerMtok');
+      expect(candidate.gaps[0].fields).toContain('apiCacheReadPrice');
+    }
+  });
+
   it('keeps user capability overrides after import and serializes discovery backend through the old cache envelope', () => {
     const parsed = parseXaiAccountModels(account);
     expect(parseCachedXaiModels(JSON.parse(JSON.stringify({ models: parsed })))).toEqual(parsed);

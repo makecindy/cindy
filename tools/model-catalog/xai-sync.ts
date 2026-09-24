@@ -52,10 +52,11 @@ function tariffs(row: RecordValue, observedAt: string): ModelReferencePrice[] | 
   const longOutput = long('completion_text_token_price_long_context', output);
   if (longInput === undefined || longOutput === undefined) return undefined;
   const longCache = long('cached_prompt_text_token_price_long_context', cache);
+  const { cacheReadPerMtok: _standardCache, ...longBase } = standard;
   return [
     { ...standard, maxInputTokens: Number(threshold) },
-    { ...standard, minInputTokens: Number(threshold), inputPerMtok: longInput,
-      outputPerMtok: longOutput, cacheReadPerMtok: longCache },
+    { ...longBase, minInputTokens: Number(threshold), inputPerMtok: longInput,
+      outputPerMtok: longOutput, ...(longCache !== undefined ? { cacheReadPerMtok: longCache } : {}) },
   ];
 }
 function tariffValue(prices: ModelReferencePrice[]) {
