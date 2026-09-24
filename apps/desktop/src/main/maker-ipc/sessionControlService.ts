@@ -90,7 +90,7 @@ export interface SessionControlServiceDeps {
       harness?: AgentKind;
       model?: string;
       providerId?: string | null;
-      effort?: Effort;
+      effort?: Effort | null;
       fastMode?: boolean;
     };
   }): Promise<SessionRuntimeSetResult>;
@@ -285,7 +285,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         harness?: AgentKind;
         model?: string;
         providerId?: string | null;
-        effort?: Effort;
+        effort?: Effort | null;
         fastMode?: boolean;
       };
     }): Promise<SessionRuntimeSetResult> {

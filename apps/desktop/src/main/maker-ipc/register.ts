@@ -9740,6 +9740,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fastMode: getSessionFastMode(sessionId),
       } : null;
     },
+    taskRoute: {
+      inspect: async (callerSessionId, childSessionId) => {
+        const runtime = await sessionControlService.getSessionRuntime({ targetSessionId: childSessionId });
+        if (!runtime.ok) return runtime;
+        const next = await readBotFallbackCandidate(
+          callerSessionId, runtime.runtime.effectiveProfile, childSessionId,
+        );
+        return {
+          ok: true as const,
+          generation: runtime.runtime.runtimeGeneration,
+          current: runtime.runtime.effectiveProfile,
+          next: next.candidate,
+        };
+      },
+      advance: async (childSessionId, expectedGeneration, route) => {
+        const current = await sessionControlService.getSessionRuntime({ targetSessionId: childSessionId });
+        if (!current.ok) return current;
+        if (current.runtime.runtimeGeneration !== expectedGeneration) {
+          return { ok: false as const, errorCode: 'CONFLICT', message: 'Task runtime changed before model selection' };
+        }
+        const result = await sessionControlService.setSessionRuntime({
+          targetSessionId: childSessionId,
+          expectedGeneration,
+          patch: {
+            ...(current.runtime.effectiveProfile.agentKind === route.agentKind ? {} : { harness: route.agentKind }),
+            model: route.model,
+            providerId: route.providerId,
+            effort: route.effort,
+            fastMode: route.fastMode,
+          },
+        });
+        return result.ok
+          ? { ok: true as const, status: result.status, generation: result.generation }
+          : result;
+      },
+    },
     dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted, dispatcherSessionId }) =>
       dispatchBotSessionMessage({
         targetSessionId,
@@ -11512,6 +11548,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const readBotFallbackCandidate = async (
     sessionId: string,
     current: SessionRuntimeProfile,
+    controlSessionId = sessionId,
   ): Promise<{ isBot: boolean; candidate: SessionRuntimeProfile | null }> => {
     const [row] = await getDbClient()
       .drizzle.select({
@@ -11553,12 +11590,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       : current.agentKind === 'pi'
         ? 'pi'
         : 'claude';
-    const control = getSessionRuntimeControlSnapshot(sessionId);
+    const control = getSessionRuntimeControlSnapshot(controlSessionId);
+    const [controlSession] = controlSessionId === sessionId ? [{ remoteHostId: row.remoteHostId }]
+      : await getDbClient().drizzle.select({ remoteHostId: sessions.remoteHostId })
+        .from(sessions).where(eq(sessions.id, controlSessionId)).limit(1);
     const route = nextBotModelRoute(
       chain,
       { harness: currentHarness, model: current.model, providerId: current.providerId },
       control.visitedRoutes,
-      (candidate) => !row.remoteHostId || candidate.harness === currentHarness,
+      (candidate) => !controlSession?.remoteHostId || candidate.harness === currentHarness,
     );
     return {
       isBot: true,

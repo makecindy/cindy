@@ -87,6 +87,20 @@ const request = {
 };
 
 describe('runtime harness selection', () => {
+  it('keeps a configured default effort instead of inheriting the previous harness effort', async () => {
+    const h = setup();
+    const result = await setSessionRuntimeHarness(h.deps, {
+      ...request, patch: { ...request.patch, effort: null },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      pendingMutation: { profile: { effort: null } },
+    });
+    expect(h.deps.resolve).toHaveBeenCalledWith(expect.objectContaining({ effort: null }), {
+      effort: true, fast: false,
+    });
+  });
+
   it('blocks sending on the old harness when the accepted target becomes unavailable', async () => {
     const h = setup();
     await setSessionRuntimeHarness(h.deps, request);

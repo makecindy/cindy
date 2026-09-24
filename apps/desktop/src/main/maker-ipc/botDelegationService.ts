@@ -48,6 +48,7 @@ import { BOT_DELEGATION_CLIENT_ID } from '../../shared/botCollaboration.js';
 import { ensureBotWorkspaceDir } from './botProfileFolder.js';
 import type { SessionQueuedMessageControlResult, SessionSteerResult, SessionStopResult } from './sessionControlService.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
+import type { SessionRuntimeProfile } from './sessionRuntimeControl.js';
 
 const ACTIVE_DELEGATION_STATUSES = ['queued', 'running', 'waiting'] as const;
 /** 一条补充消息的正文上限：够写清「先别做 X，改做 Y」，又不至于变成另一项任务。 */
@@ -178,6 +179,17 @@ export interface BotDelegationServiceDeps {
   > & { effort?: (typeof sessions.$inferSelect)['effort'] }) | null;
   /** null means the live permission is changing or the caller is closing. */
   readCallerPermission?: (sessionId: string) => string | { mode: string; generation: number } | null;
+  /** Narrow, owner-checked bridge to the ordinary Session runtime controller. */
+  taskRoute?: {
+    inspect(callerSessionId: string, childSessionId: string): Promise<
+      | { ok: true; generation: number; current: SessionRuntimeProfile; next: SessionRuntimeProfile | null }
+      | { ok: false; errorCode: string; message: string }
+    >;
+    advance(childSessionId: string, expectedGeneration: number, route: SessionRuntimeProfile): Promise<
+      | { ok: true; status: 'applied' | 'deferred'; generation: number }
+      | { ok: false; errorCode: string; message: string }
+    >;
+  };
   now?: () => number;
   createId?: () => string;
   maxActiveChildren?: number;
@@ -3034,6 +3046,54 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     };
   });
 
+  const inspectSessionTaskRoute = (callerSessionId: string, taskId: string) =>
+    withTaskOperation(taskId, async () => {
+      const found = await findOwnedSessionTask(callerSessionId, taskId);
+      if (!found.ok) return found;
+      if (!found.row.childSessionId || !deps.taskRoute) {
+        return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task model control is unavailable' };
+      }
+      const inspected = await deps.taskRoute.inspect(callerSessionId, found.row.childSessionId);
+      return inspected.ok ? { ...inspected, selectionToken: inspected.next
+        ? createHash('sha256').update(JSON.stringify([inspected.generation, inspected.next])).digest('hex')
+        : null } : inspected;
+    });
+
+  const advanceSessionTaskRoute = (callerSessionId: string, taskId: string, expectedGeneration: number, selectionToken: string) =>
+    withTaskOperation(taskId, async () => {
+      const found = await findOwnedSessionTask(callerSessionId, taskId);
+      if (!found.ok) return found;
+      const row = found.row;
+      if (!row.childSessionId || !deps.taskRoute) {
+        return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task model control is unavailable' };
+      }
+      const [child] = await getDbClient().drizzle.select({ status: sessions.status })
+        .from(sessions).where(eq(sessions.id, row.childSessionId)).limit(1);
+      if (child?.status !== 'active') {
+        return { ok: false as const, errorCode: 'CHILD_SESSION_INVALID', message: 'Task Session is no longer active' };
+      }
+      if (isActiveDelegation(row.status as DelegationStatus) || deps.taskControl?.isActive(row.childSessionId)) {
+        return { ok: false as const, errorCode: 'TASK_ACTIVE', message: 'Finish or stop the current execution before changing its model' };
+      }
+      const inspected = await deps.taskRoute.inspect(callerSessionId, row.childSessionId);
+      if (!inspected.ok) return inspected;
+      if (inspected.generation !== expectedGeneration) {
+        return { ok: false as const, errorCode: 'CONFLICT', message: 'Task model changed; inspect it again before retrying' };
+      }
+      if (!inspected.next) {
+        return { ok: false as const, errorCode: 'NO_CONFIGURED_ROUTE', message: 'No further configured model route is available' };
+      }
+      const currentToken = createHash('sha256')
+        .update(JSON.stringify([inspected.generation, inspected.next])).digest('hex');
+      if (currentToken !== selectionToken) {
+        return { ok: false as const, errorCode: 'CONFLICT', message: 'Configured route changed; inspect it again before retrying' };
+      }
+      if (deps.taskControl?.isActive(row.childSessionId)) {
+        return { ok: false as const, errorCode: 'TASK_ACTIVE', message: 'Task execution restarted before its model could change' };
+      }
+      return deps.taskRoute.advance(row.childSessionId, expectedGeneration, inspected.next);
+    });
+
   const taskControlView = (row: DelegationRow) => {
     const pause = isActiveDelegation(row.status as DelegationStatus) ? readTaskPause(row) : null;
     const cancelling = isActiveDelegation(row.status as DelegationStatus) && parseRecord(row.permissionSnapshotJson).taskCancelRequested === true;
@@ -3759,6 +3819,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     },
     listDelegations,
     getSessionTask,
+    inspectSessionTaskRoute,
+    advanceSessionTaskRoute,
     restorePauseForSession,
     messageSessionTask,
     stopSessionTask,
