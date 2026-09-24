@@ -3031,6 +3031,9 @@ describe('CodexAgent reference directories', () => {
     expect(config).toMatchObject(selector);
     expect(Object.hasOwn(config, 'default_permissions')).toBe('default_permissions' in selector);
     expect(Object.hasOwn(config, 'sandbox_mode')).toBe('sandbox_mode' in selector);
+    expect(Object.hasOwn(config, `permissions.${profileName}`)).toBe(
+      extraDirs.length > 0 && permissionMode !== 'bypassPermissions',
+    );
     await handle.close();
   });
 
@@ -3105,6 +3108,7 @@ describe('CodexAgent reference directories', () => {
     expect(revokedResume.sandbox).toBe('workspace-write');
     expect(revokedResume.config).toMatchObject({ sandbox_mode: 'workspace-write' });
     expect(revokedResume.config).not.toHaveProperty('default_permissions');
+    expect(revokedResume.config).not.toHaveProperty(`permissions.${profileName}`);
     const turnCalls = host.request.mock.calls.filter(
       ([method]) => method === Method.TurnStart,
     );
