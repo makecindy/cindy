@@ -312,6 +312,34 @@ describe('notificationService — channels 分发', () => {
     expect(notificationCtor).toHaveBeenCalledTimes(1);
   });
 
+  it('sends the current turn fallback when its terminal marker write failed', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    getSessionNotificationTurnSignal.mockReturnValue({
+      id: 'signal:ended', fallbackEventId: 'turn:100:200:signal-ended', ended: true,
+    });
+    // The write chain drained, but its swallowed UPDATE failure left SQLite
+    // with startedAt > endedAt. No old final may be used as the preview.
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', suppress: true });
+    const payload = {
+      sessionId: 'bot-main', title: 'Cindy', kind: 'done',
+      channels: { desktop: true, mobile: true, feishu: true },
+    };
+
+    await invokeHandler(payload);
+    await invokeHandler(payload);
+
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ body: '有新回复' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({
+      fallbackBody: '有新回复', eventId: 'turn:100:200:signal-ended',
+    }));
+    expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
+    expect(feishuIm.sendText).toHaveBeenCalledWith('owner', 'Cindy\n有新回复');
+  });
+
   it('drops the bounded fallback after the data owner changes', async () => {
     const { initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('owner')));

@@ -3470,6 +3470,7 @@ describe('Bot Session task end-to-end runtime', () => {
       Parameters<typeof createBotDelegationService>[0]['resolveInteraction']
     >;
     onResultReceiptPersisted?: () => Promise<void>;
+    onCompletionDispatched?: () => Promise<void>;
   } = {}) {
     const accountReady = options.accountReady ?? (() => true);
     const started: StartedTurn[] = [];
@@ -3661,7 +3662,11 @@ describe('Bot Session task end-to-end runtime', () => {
           return { ok: true as const, targetSessionId: params.targetSessionId, wakeKind: 'queued' as const };
         }
       }
-      return dispatchDirect(params);
+      const result = await dispatchDirect(params);
+      if (result.ok && params.clientId?.startsWith('bot-delegation-completion:')) {
+        await options.onCompletionDispatched?.();
+      }
+      return result;
     });
 
     const abortSession = vi.fn(async (id: string): Promise<void> => { coordinator?.stop(id); });
@@ -5960,6 +5965,42 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(h.sqlite!.prepare('SELECT completion_delivered_at FROM bot_delegations WHERE id = ?')
         .pluck().get(started.delegationId)).not.toBeNull();
       expect(runtime.started.some(turn => turn.sessionId === replacementSessionId)).toBe(true);
+    } finally { runtime.dispose(); }
+  });
+
+  it('retries the completion wake when its original target disappears after dispatch', async () => {
+    await seedPair();
+    let replacementSessionId: string | undefined;
+    const runtime = createDelegationRuntime({
+      onCompletionDispatched: async () => {
+        if (replacementSessionId) return;
+        h.sqlite!.prepare("DELETE FROM sessions WHERE id = 'session-1'").run();
+        const recovered = await invoke('local-db:bots:create-canonical-session', {
+          botId: 'bot-a', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+        });
+        replacementSessionId = recovered.canonicalSessionId as string;
+      },
+    });
+    try {
+      const started = await runtime.delegation.startSessionTask({
+        callerSessionId: 'session-1', objective: 'Keep the report and wake its requester',
+      });
+      if (!started.ok) throw new Error('Task did not start');
+      await runtime.settleChild(started.childSessionId, 'The final report.');
+
+      expect(replacementSessionId).toBeTruthy();
+      expect(h.sqlite!.prepare('SELECT session_id FROM messages WHERE client_id = ?')
+        .get(`bot-delegation-result:${started.delegationId}:1`)).toEqual({ session_id: replacementSessionId });
+      expect(h.sqlite!.prepare('SELECT completion_delivered_at FROM bot_delegations WHERE id = ?')
+        .pluck().get(started.delegationId)).toBeNull();
+      expect(h.sqlite!.prepare('SELECT 1 FROM messages WHERE session_id = ? AND client_id = ?')
+        .get(replacementSessionId, `bot-delegation-completion:${started.delegationId}`)).toBeUndefined();
+
+      await runtime.delegation.restore();
+      expect(h.sqlite!.prepare('SELECT 1 FROM messages WHERE session_id = ? AND client_id = ?')
+        .get(replacementSessionId, `bot-delegation-completion:${started.delegationId}`)).toBeTruthy();
+      expect(h.sqlite!.prepare('SELECT completion_delivered_at FROM bot_delegations WHERE id = ?')
+        .pluck().get(started.delegationId)).not.toBeNull();
     } finally { runtime.dispose(); }
   });
 

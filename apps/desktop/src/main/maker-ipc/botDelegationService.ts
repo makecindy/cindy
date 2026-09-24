@@ -953,6 +953,14 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         scheduleCompletionRetry(params, attempt);
         return false;
       }
+      // The target may have been deleted while dispatch was accepting the
+      // hidden message. A rehomed receipt alone does not wake its replacement.
+      // Leave this run pending so the stable completion ID is dispatched there.
+      const currentTargetSessionId = await requesterLiveSessionId(params.requestingBotId, params.parentSessionId);
+      if (currentTargetSessionId !== targetSessionId) {
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
       const [marked] = await getDbClient().drizzle
         .update(botDelegations)
         .set({ completionDeliveredAt: now(), updatedAt: now() })
@@ -965,6 +973,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
             : eq(botDelegations.childSessionId, params.childSessionId),
           isNull(botDelegations.completionDeliveredAt),
           sql`exists (select 1 from ${messages} where ${messages.sessionId} = ${receiptSessionId} and ${messages.clientId} = ${receiptClientId})`,
+          sql`exists (select 1 from ${sessions} where ${sessions.id} = ${targetSessionId} and ${sessions.status} = 'active')`,
         ))
         .returning({ id: botDelegations.id });
       if (!marked && await completionStillPending()) {

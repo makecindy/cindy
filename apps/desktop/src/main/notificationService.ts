@@ -260,12 +260,18 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             clearTimeout(timer);
           }
         }
-        if (!isDataOwnerBroadcastScopeCurrent(ownerScope) || (postDrainPreviewReady && preview?.suppress)) return;
+        if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
         // Preview enrichment can outlive an entire later turn. Never send that
         // later reply under the terminal signal captured for this IPC event.
+        const currentSignal = kind === 'done' ? getSessionNotificationTurnSignal(sessionId) : undefined;
         if (kind === 'done') {
-          const currentSignal = getSessionNotificationTurnSignal(sessionId);
           if (currentSignal?.id !== signal?.id || (currentSignal && !currentSignal.ended)) return;
+        }
+        if (postDrainPreviewReady && preview?.suppress) {
+          // The terminal marker write may have failed after the in-memory turn
+          // already ended. Keep its generic notice, but never use old DB text.
+          if (kind !== 'done' || !signal?.ended || currentSignal?.id !== signal.id) return;
+          detail = undefined;
         }
         const teammate = !!preview?.teammateName;
         const notificationTitle = preview?.teammateName ?? safeTitle;
