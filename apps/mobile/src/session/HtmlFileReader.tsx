@@ -38,6 +38,7 @@ import { StyleSheet, View } from 'react-native';
 import { WebView, type WebViewProps } from 'react-native-webview';
 import type { ShouldStartLoadRequest, WebViewNavigation } from 'react-native-webview/lib/WebViewTypes';
 
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { interceptHtmlNavigation, interceptSnapshotNavigation } from '@/session/htmlNavigationPolicy';
 import { withHtmlPreviewCsp } from '@/session/htmlPreviewCsp';
 import type { MobileHtmlPreview } from '@/session/mobileHtmlPreview';
@@ -65,6 +66,12 @@ export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInset
     currentPreview.current = preview;
     return () => { currentPreview.current = null; };
   }, [preview]);
+  // Diagnostics only: load outcome and timing per mounted snapshot; the URL carries the snapshot token.
+  const mountedAt = useMemo(() => Date.now(), [preview]);
+  const failed = (event: string, detail: Record<string, unknown>) => {
+    mobileDebugLog('warn', 'files', event, { ms: Date.now() - mountedAt, ...detail });
+    onError();
+  };
   return <View ref={viewRef} onLayout={measure} collapsable={false} style={[styles.fill, viewportStyle]}><View style={styles.viewport}><WebView
     key={preview.url}
     ref={readerRef}
@@ -77,7 +84,11 @@ export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInset
     contentInset={obscuredContentInsets}
     injectedJavaScriptBeforeContentLoaded={script}
     injectedJavaScript={script}
-    onLoadEnd={() => { if (currentPreview.current === preview && script) readerRef.current?.injectJavaScript(script); }}
+    onLoadEnd={({ nativeEvent }) => {
+      if (currentPreview.current !== preview) return;
+      mobileDebugLog('debug', 'files', 'html page load end', { ms: Date.now() - mountedAt, loading: nativeEvent.loading });
+      if (script) readerRef.current?.injectJavaScript(script);
+    }}
     onScroll={({ nativeEvent: { contentOffset } }) => {
       if (currentPreview.current === preview) readerRef.current?.injectJavaScript(browserViewportScrollScript(contentOffset.x, contentOffset.y));
     }}
@@ -89,12 +100,16 @@ export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInset
     setSupportMultipleWindows={false}
     allowFileAccess={false}
     mediaCapturePermissionGrantType="deny"
-    onError={onError}
-    onContentProcessDidTerminate={onError}
-    onRenderProcessGone={onError}
+    onError={({ nativeEvent }) => failed('html page load error', {
+      code: nativeEvent.code, domain: nativeEvent.domain, description: nativeEvent.description,
+    })}
+    onContentProcessDidTerminate={() => failed('html page process terminated', {})}
+    onRenderProcessGone={({ nativeEvent }) => failed('html page process gone', { didCrash: nativeEvent.didCrash })}
     onHttpError={(event) => {
       // Resource failures stay in the page; they must not replace an already loaded document.
-      if (interceptSnapshotNavigation(event.nativeEvent.url, preview.url, preview.documents, preview.onDemand)) onError();
+      const document = interceptSnapshotNavigation(event.nativeEvent.url, preview.url, preview.documents, preview.onDemand);
+      if (document) failed('html page http error', { status: event.nativeEvent.statusCode });
+      else mobileDebugLog('debug', 'files', 'html subresource http error', { status: event.nativeEvent.statusCode });
     }}
     incognito
     style={styles.fill}

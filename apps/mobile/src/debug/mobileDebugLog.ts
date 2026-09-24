@@ -5,7 +5,8 @@ export type MobileDebugScope =
   | "lifecycle"
   | "performance"
   | "scroll"
-  | "keyboard";
+  | "keyboard"
+  | "files";
 export type MobileDebugLevel = "debug" | "info" | "warn" | "error";
 type Sink = (
   level: MobileDebugLevel,

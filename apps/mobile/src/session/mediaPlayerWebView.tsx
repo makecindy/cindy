@@ -10,6 +10,8 @@ import {
 } from '@/session/mediaPlayerWebViewHtml';
 import { createMediaPlayerWebViewLifecycle } from '@/session/mediaPlayerWebViewLifecycle';
 import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
+import { resolvedUrlKind } from '@/debug/fileDiagnostics';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useTheme } from '@/theme';
 
 export function RemoteMediaPlayerWebView({
@@ -35,6 +37,19 @@ export function RemoteMediaPlayerWebView({
   const mountedRef = useRef(true);
   const [reloadGeneration, setReloadGeneration] = useState(0);
   useEffect(() => registerMobileMessageWebView('media'), []);
+  // Diagnostics: which URL scheme reached the player and how its load/playback went (never the URL).
+  const lastLoggedStateRef = useRef<string | null>(null);
+  const loadStartedAtRef = useRef(Date.now());
+  useEffect(() => {
+    lastLoggedStateRef.current = null;
+    loadStartedAtRef.current = Date.now();
+    mobileDebugLog('debug', 'files', 'media player mounted', {
+      kind, mimeType: mimeType ?? null, source: resolvedUrlKind(url), reloadGeneration,
+    });
+  }, [kind, mimeType, reloadGeneration, url]);
+  const logPlayerFailure = useCallback((event: string, detail: Record<string, unknown>) => {
+    mobileDebugLog('warn', 'files', event, { kind, ms: Date.now() - loadStartedAtRef.current, ...detail });
+  }, [kind]);
   const pausePlayback = useCallback(() => {
     webViewRef.current?.postMessage(buildMediaPlayerWebViewCommand('pause'));
   }, []);
@@ -75,8 +90,18 @@ export function RemoteMediaPlayerWebView({
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
     if (!mountedRef.current) return;
     const status = parseMediaPlayerWebViewMessage(event.nativeEvent.data);
+    if (status && status.state !== lastLoggedStateRef.current) {
+      lastLoggedStateRef.current = status.state;
+      mobileDebugLog(status.state === 'error' ? 'warn' : 'debug', 'files', 'media player state', {
+        kind,
+        state: status.state,
+        ms: Date.now() - loadStartedAtRef.current,
+        duration: status.duration ?? null,
+        mediaError: status.error ?? null,
+      });
+    }
     if (status) onStatusChange?.(status);
-  }, [onStatusChange]);
+  }, [kind, onStatusChange]);
 
   return (
     <View style={style} testID={testID}>
@@ -88,6 +113,10 @@ export function RemoteMediaPlayerWebView({
         mediaPlaybackRequiresUserAction={false}
         onLoadEnd={lifecycleRef.current.onLoadEnd}
         onLoadStart={lifecycleRef.current.onLoadStart}
+        onError={({ nativeEvent }) => logPlayerFailure('media player load error', {
+          code: nativeEvent.code, domain: nativeEvent.domain, description: nativeEvent.description,
+        })}
+        onContentProcessDidTerminate={() => logPlayerFailure('media player process terminated', {})}
         onMessage={handleMessage}
         originWhitelist={['*']}
         scrollEnabled={false}

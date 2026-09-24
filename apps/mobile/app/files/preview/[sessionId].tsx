@@ -41,6 +41,8 @@ import { WebView } from 'react-native-webview';
 import type { WebViewNavigation } from 'react-native-webview/lib/WebViewTypes';
 import { Text } from '@/components/AppText';
 import { goBackGuarded } from '@/utils/backGuard';
+import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useAuth } from '@/auth/AuthContext';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -799,19 +801,27 @@ function AvPreviewPage({
     if (!active || requestedRef.current || !workdir) return undefined;
     requestedRef.current = true;
     let cancelled = false;
+    const startedAt = Date.now();
+    mobileDebugLog('debug', 'files', 'av preview fetch start', { kind, size: item.sizeBytes });
     setFailure(null);
     void exportToUrl(item.relPath, item.mtimeMs)
       .then((next) => {
+        mobileDebugLog('debug', 'files', 'av preview fetch done', {
+          kind, ms: Date.now() - startedAt, source: resolvedUrlKind(next), left: cancelled,
+        });
         if (!cancelled) setUrl(next);
       })
       .catch((err) => {
+        mobileDebugLog(cancelled ? 'debug' : 'warn', 'files', 'av preview fetch failed', {
+          kind, ms: Date.now() - startedAt, left: cancelled, error: errorText(err),
+        });
         if (cancelled) return;
         setFailure(formatRemoteError(err));
       });
     return () => {
       cancelled = true;
     };
-  }, [active, exportToUrl, item.mtimeMs, item.relPath, requestEpoch, workdir]);
+  }, [active, exportToUrl, item.mtimeMs, item.relPath, item.sizeBytes, kind, requestEpoch, workdir]);
 
   if (failure) {
     return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.readFailed')}

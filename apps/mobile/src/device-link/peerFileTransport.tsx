@@ -14,6 +14,8 @@ import {
   REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
 } from "@cindy/device-link";
 import { useAuth } from "@/auth/AuthContext";
+import { errorText, nextFileTrace } from "@/debug/fileDiagnostics";
+import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import { useDeviceLink } from "./DeviceLinkContext";
 import {
   DEVICE_LINK_API_BASE_URL,
@@ -153,14 +155,36 @@ export function PeerFileTransport() {
       signal?: AbortSignal,
     ): Promise<LocalMedia | null> => {
       if (!current() || signal?.aborted) throw new Error("FILE_PEER_CANCELLED");
-      if (busy) return null;
+      if (busy) {
+        mobileDebugLog("debug", "files", "direct transfer skipped", { reason: "busy" });
+        return null;
+      }
       busy = true;
+      const trace = nextFileTrace();
+      const startedAt = Date.now();
+      let step = "link";
+      let received = 0;
+      // Distinguishes a transport/view reset (no upload fallback) from ordinary failures.
+      const cancelReason = () =>
+        signal?.aborted
+          ? "aborted"
+          : epoch.current !== generation
+            ? "runtime-reset"
+            : liveView.current !== viewKey
+              ? "connection-changed"
+              : AppState.currentState !== "active"
+                ? "background"
+                : null;
       if (connection && connection.device !== device) close();
       clearTimeout(idle);
       const id = connection?.id ?? randomUUID();
       let remote = connection?.remote,
         target: File | undefined,
         complete = false;
+      mobileDebugLog("debug", "files", "direct transfer start", {
+        trace,
+        reuseConnection: !!remote,
+      });
       const cancel = () => {
         if (current()) void command("close", [id]).catch(() => {});
       };
@@ -170,22 +194,39 @@ export function PeerFileTransport() {
       try {
         await link.openLink(device);
         if (!remote) {
+          step = "caps";
           const caps = (await invoke({ action: "caps" })) as {
             version?: number;
           };
           if (!current() || signal?.aborted)
             throw new Error("FILE_PEER_CANCELLED");
-          if (caps?.version !== 1) return null;
-          const servers = await resolveDesktopIceServers(() =>
-            auth.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
-              baseUrl: DEVICE_LINK_API_BASE_URL,
-              timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
-              cache: "no-store",
-            }),
+          if (caps?.version !== 1) {
+            mobileDebugLog("debug", "files", "direct transfer skipped", {
+              trace,
+              reason: "host-version",
+              version: typeof caps?.version === "number" ? caps.version : null,
+            });
+            return null;
+          }
+          step = "ice-config";
+          const servers = await resolveDesktopIceServers(
+            () =>
+              auth.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
+                baseUrl: DEVICE_LINK_API_BASE_URL,
+                timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
+                cache: "no-store",
+              }),
+            (diagnostic) =>
+              mobileDebugLog("debug", "files", "direct transfer ice config", {
+                trace,
+                ...diagnostic,
+              }),
           );
           if (!current() || signal?.aborted)
             throw new Error("FILE_PEER_CANCELLED");
+          step = "offer";
           const sdp = await command("offer", [id, servers]);
+          step = "host-answer";
           const answer = (await invoke({ action: "offer", sdp })) as {
             connection?: string;
             sdp?: string;
@@ -201,14 +242,28 @@ export function PeerFileTransport() {
           remote = answer.connection;
           if (!current() || signal?.aborted)
             throw new Error("FILE_PEER_CLOSED");
+          step = "answer";
           await command("answer", [id, answer.sdp]);
           connection = { id, remote, device };
+          mobileDebugLog("debug", "files", "direct transfer connected", {
+            trace,
+            ms: Date.now() - startedAt,
+          });
         }
+        step = "open";
         const file = parseFilePeerFile(
           await invoke({ action: "open", connection: remote, url }),
         );
         if (!current() || signal?.aborted) throw new Error("FILE_PEER_CLOSED");
-        if (!canStagePeerMedia(file.size, Paths.availableDiskSpace)) return null;
+        if (!canStagePeerMedia(file.size, Paths.availableDiskSpace)) {
+          mobileDebugLog("debug", "files", "direct transfer skipped", {
+            trace,
+            reason: "storage",
+            size: file.size,
+          });
+          return null;
+        }
+        step = "receive";
         const directory = new Directory(
           Paths.cache,
           "remote-media-share",
@@ -228,6 +283,7 @@ export function PeerFileTransport() {
           )
             throw new Error("FILE_PEER_SIZE");
         } finally {
+          received = sinks.current.get(id)?.offset ?? received;
           sinks.current.delete(id);
           try {
             handle.close();
@@ -239,12 +295,34 @@ export function PeerFileTransport() {
           !recordPeerMedia(result, target.uri, () => {
             if (completed.exists) completed.delete();
           })
-        )
+        ) {
+          mobileDebugLog("debug", "files", "direct transfer skipped", {
+            trace,
+            reason: "staging-budget",
+            size: file.size,
+          });
           return null;
+        }
         target = undefined;
         complete = true;
+        mobileDebugLog("debug", "files", "direct transfer done", {
+          trace,
+          ms: Date.now() - startedAt,
+          size: file.size,
+          mime: file.mimeType,
+        });
         return result;
-      } catch {
+      } catch (error) {
+        const cancelled = cancelReason();
+        mobileDebugLog("warn", "files", "direct transfer failed", {
+          trace,
+          step,
+          ms: Date.now() - startedAt,
+          received,
+          error: errorText(error),
+          // Non-null means the read is rejected instead of falling back to upload.
+          cancelled,
+        });
         if (!current() || signal?.aborted)
           throw new Error("FILE_PEER_CANCELLED");
         return null;
@@ -270,7 +348,12 @@ export function PeerFileTransport() {
     const queueRead = createFileReadQueue();
     const unregister = installPeerFileDownload((device, url, signal) =>
       queueRead('connection', () => transfer(device, url, signal), signal));
+    mobileDebugLog("debug", "files", "direct transfer ready");
     return () => {
+      mobileDebugLog("debug", "files", "direct transfer reset", {
+        busy,
+        pendingCommands: pending.current.size,
+      });
       close();
       ++epoch.current;
       unregister();
@@ -290,6 +373,7 @@ export function PeerFileTransport() {
   }, [foreground, ready, auth.isAuthenticated, viewKey]);
   const handleProcessTerminated = () => {
     if (liveView.current !== viewKey) return;
+    mobileDebugLog("warn", "files", "direct transfer runtime terminated", { crashes });
     setReady(null);
     setCrashes((n) => Math.min(2, n + 1));
   };

@@ -14,6 +14,7 @@ import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { sharedTaskAuthorName } from '@cindy/maker-shared';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
+import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Image as ExpoImage } from 'expo-image';
@@ -7106,13 +7107,21 @@ function MessagePayloadBody({
   const resolve = useCallback((forceRefresh = false) => {
     if (!remoteMedia || !onResolveRemoteMedia) return;
     let cancelled = false;
+    const startedAt = Date.now();
     setRemoteState({ status: 'loading' });
     // 用户主动打开的原图插队头,优先于列表缩略图的懒取件。
     void onResolveRemoteMedia(remoteMedia, { front: true, forceRefresh })
       .then((media) => {
+        mobileDebugLog('debug', 'files', 'message media fetch done', {
+          kind: remoteMedia.kind, ms: Date.now() - startedAt, source: resolvedUrlKind(media.url),
+          previewable: media.previewable, size: media.size, left: cancelled, forceRefresh,
+        });
         if (!cancelled) setRemoteState({ status: 'ready', media });
       })
       .catch((err) => {
+        mobileDebugLog(cancelled ? 'debug' : 'warn', 'files', 'message media fetch failed', {
+          kind: remoteMedia.kind, ms: Date.now() - startedAt, left: cancelled, forceRefresh, error: errorText(err),
+        });
         if (!cancelled) setRemoteState({ status: 'error', message: err instanceof Error ? err.message : String(err) });
       });
     return () => {

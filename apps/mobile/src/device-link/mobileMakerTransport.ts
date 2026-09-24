@@ -38,7 +38,10 @@ import {
   createDeviceFileOperations,
   exportDeviceFile,
   assertFileReadActive,
+  type DeviceFileResult,
 } from "@cindy/device-link";
+import { errorText, mediaExtOf, nextFileTrace } from "@/debug/fileDiagnostics";
+import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import type {
   HistoryViewPage,
   HistoryDetailPage,
@@ -895,28 +898,86 @@ export function createMobileMakerTransport({
           ...(opts?.thumbnail ? { thumbnail: true } : {}),
         },
       ]);
-    return readDeviceFile({
-      stream,
-      peerResultIsTransient: true,
-      isCurrent,
-      discard: (result) => {
-        const uri = peerMediaUri(result);
-        if (uri) releasePeerMedia(uri);
-        else if (
-          isMobileAuthOwnerCurrent(fileOwner) &&
-          typeof result.ossKey === "string" &&
-          result.ossKey.length > 0
-        )
-          opts?.onDiscardOssKey?.(result.ossKey);
-      },
-      signal: opts?.signal,
-      prepare: () => fetch(!opts?.thumbnail),
-      peer: (metadata) =>
-        metadata.size <= FILE_PEER_MAX_BYTES
-          ? tryMobilePeerFile(deviceId, url, opts?.signal)
-          : Promise.resolve(null),
-      fallback: fallback ?? (() => fetch(false)),
+    // Chat thumbnails are high-volume and already covered by the list; trace full-file reads only.
+    const trace = opts?.thumbnail ? 0 : nextFileTrace();
+    const stage = <T>(
+      name: string,
+      run: () => Promise<T>,
+      describe: (value: T) => Record<string, unknown>,
+    ): Promise<T> => {
+      if (!trace) return run();
+      const startedAt = Date.now();
+      return run().then(
+        (value) => {
+          mobileDebugLog("debug", "files", `remote read ${name}`, {
+            trace,
+            ms: Date.now() - startedAt,
+            ...describe(value),
+          });
+          return value;
+        },
+        (error: unknown) => {
+          mobileDebugLog("warn", "files", `remote read ${name} failed`, {
+            trace,
+            ms: Date.now() - startedAt,
+            error: errorText(error),
+          });
+          throw error;
+        },
+      );
+    };
+    const describeResult = (result: DeviceFileResult) => ({
+      size: result.size,
+      mime: result.mimeType,
+      transferRequired: result.transferRequired === true,
+      inline: typeof result.inlineBase64 === "string",
     });
+    if (trace)
+      mobileDebugLog("debug", "files", "remote read start", {
+        trace,
+        ext: mediaExtOf(url),
+        stream,
+      });
+    return stage(
+      "result",
+      () =>
+        readDeviceFile({
+          stream,
+          peerResultIsTransient: true,
+          isCurrent,
+          discard: (result) => {
+            const uri = peerMediaUri(result);
+            if (uri) releasePeerMedia(uri);
+            else if (
+              isMobileAuthOwnerCurrent(fileOwner) &&
+              typeof result.ossKey === "string" &&
+              result.ossKey.length > 0
+            )
+              opts?.onDiscardOssKey?.(result.ossKey);
+          },
+          signal: opts?.signal,
+          prepare: () =>
+            stage("prepare", () => fetch(!opts?.thumbnail), describeResult),
+          peer: (metadata) =>
+            metadata.size <= FILE_PEER_MAX_BYTES
+              ? stage(
+                  "direct",
+                  () => tryMobilePeerFile(deviceId, url, opts?.signal),
+                  (result) => ({ hit: result !== null }),
+                )
+              : Promise.resolve(null),
+          fallback: () =>
+            stage("upload", fallback ?? (() => fetch(false)), describeResult),
+        }),
+      (result) => ({
+        route: peerMediaUri(result)
+          ? "direct"
+          : typeof result.inlineBase64 === "string"
+            ? "inline"
+            : "upload",
+        size: result.size,
+      }),
+    );
   };
 
   return {
@@ -1225,7 +1286,12 @@ export function createMobileMakerTransport({
         assertFileReadActive(signal);
         const fallback = () =>
           exportDeviceFile(retryOp, workdir, relPath, signal);
-        if (!caps.fileRead) return fallback();
+        if (!caps.fileRead) {
+          mobileDebugLog("debug", "files", "file export without direct read", {
+            reason: "host-lacks-file-read",
+          });
+          return fallback();
+        }
         const reference = await retryOp<{
           ok: boolean;
           url: string;

@@ -12,6 +12,7 @@ import {
   parseFilePeerRequest,
   parseFilePeerFile,
   type FilePeerFile,
+  type FilePeerRequest,
 } from '@cindy/device-link';
 import { FILE_PEER_LOCAL, type FilePeerCommand } from '../../shared/filePeer';
 import { DesktopCaptureWindow } from '../remote-desktop/captureWindow';
@@ -19,6 +20,13 @@ import { loadDesktopIceServers } from '../remote-desktop/iceConfig';
 import { resolveAuthorizedMedia } from './mediaFetch';
 import { readDeviceLinkSettings } from './settings-store';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './broadcast-tap';
+import { createLogger } from '../logger.js';
+
+// Local-only diagnostics (scope is not upload-allowlisted): stages, sizes and timings, never paths.
+const log = createLogger('device-link:filePeer');
+const short = (id: string | undefined) => (id ?? '?').slice(0, 8);
+const errorText = (error: unknown) =>
+  (error instanceof Error ? error.message : String(error)).slice(0, 200);
 
 type Owner = ReturnType<typeof captureDataOwnerBroadcastScope>;
 interface Connection {
@@ -35,6 +43,7 @@ interface Source {
   mtime: number;
   offset: number;
   busy: boolean;
+  openedAt: number;
 }
 interface Sink {
   connection: string;
@@ -73,24 +82,31 @@ function touch(id: string) {
     c.incoming &&
     (!settings.remoteControlEnabled || settings.revokedControllers.includes(c.peer))
   ) {
-    stopConnection(id);
+    stopConnection(id, 'revoked');
     throw new Error('FILE_PEER_REVOKED');
   }
   clearTimeout(c.timer);
-  c.timer = setTimeout(() => stopConnection(id), FILE_PEER_IDLE_MS);
+  c.timer = setTimeout(() => stopConnection(id, 'idle'), FILE_PEER_IDLE_MS);
   c.timer.unref();
   return c;
 }
 function track(id: string, peer: string, incoming: boolean) {
   if (connections.size >= 4) throw new Error('FILE_PEER_BUSY');
-  const timer = setTimeout(() => stopConnection(id), FILE_PEER_IDLE_MS);
+  const timer = setTimeout(() => stopConnection(id, 'idle'), FILE_PEER_IDLE_MS);
   timer.unref();
   connections.set(id, { peer, incoming, owner: captureDataOwnerBroadcastScope(), timer });
 }
-function stopConnection(id: string) {
+function stopConnection(id: string, reason: string) {
   const c = connections.get(id);
   if (!c) return;
   connections.delete(id);
+  const unfinished = [...sources.values()].filter((s) => s.connection === id && s.offset < s.size);
+  const detail = `conn=${short(id)} peer=${short(c.peer)} incoming=${c.incoming} reason=${reason}`;
+  if (unfinished.length)
+    log.warn(
+      `closed with unfinished send ${detail} sent=${unfinished.map((s) => `${s.offset}/${s.size}B`).join(',')}`,
+    );
+  else log.debug(`closed ${detail}`);
   clearTimeout(c.timer);
   const out = outgoing.get(c.peer);
   if (out?.id === id) {
@@ -128,7 +144,7 @@ function stopConnection(id: string) {
   }
 }
 export function stopFilePeers(peer?: string) {
-  for (const [id, c] of connections) if (!peer || peer === c.peer) stopConnection(id);
+  for (const [id, c] of connections) if (!peer || peer === c.peer) stopConnection(id, 'stop');
 }
 async function prepareHost(connection: string): Promise<void> {
   touch(connection);
@@ -148,7 +164,8 @@ async function command(c: FilePeerCommand): Promise<string | undefined> {
     const timer = setTimeout(
       () => {
         replies.delete(id);
-        stopConnection(c.connection);
+        log.warn(`host ${c.action} timed out conn=${short(c.connection)}`);
+        stopConnection(c.connection, `${c.action}-timeout`);
         reject(new Error('FILE_PEER_TIMEOUT'));
       },
       c.action === 'receive' ? 60_000 : 15_000,
@@ -160,7 +177,31 @@ async function command(c: FilePeerCommand): Promise<string | undefined> {
 }
 
 export async function requestFilePeer(peer: string, value: unknown): Promise<unknown> {
-  const r = parseFilePeerRequest(value);
+  const startedAt = Date.now();
+  let action = 'invalid';
+  try {
+    const r = parseFilePeerRequest(value);
+    action = r.action;
+    const result = await handleFilePeerRequest(peer, r);
+    const opened = r.action === 'open' ? (result as { size?: number; mimeType?: string }) : null;
+    const connection =
+      r.action === 'offer' ? (result as { connection?: string }).connection : 'connection' in r ? r.connection : undefined;
+    log.debug(
+      `request ${action} ok peer=${short(peer)} ms=${Date.now() - startedAt}` +
+        (connection ? ` conn=${short(connection)}` : '') +
+        (opened ? ` size=${opened.size} mime=${opened.mimeType}` : ''),
+    );
+    return result;
+  } catch (error) {
+    log.warn(`request ${action} failed peer=${short(peer)} ms=${Date.now() - startedAt} error=${errorText(error)}`);
+    throw error;
+  }
+}
+
+async function handleFilePeerRequest(
+  peer: string,
+  r: FilePeerRequest,
+): Promise<unknown> {
   if (r.action === 'caps') return { version: 1, maxBytes: FILE_PEER_MAX_BYTES };
   if (r.action === 'offer') {
     const id = randomUUID();
@@ -168,7 +209,9 @@ export async function requestFilePeer(peer: string, value: unknown): Promise<unk
     try {
       // Cold host readiness and TURN configuration share the outer 30s RPC
       // budget: max(10s, 8s) + 15s command leaves transport headroom.
+      const readyStartedAt = Date.now();
       const [, servers] = await Promise.all([prepareHost(id), loadDesktopIceServers()]);
+      log.debug(`offer host ready conn=${short(id)} ms=${Date.now() - readyStartedAt} iceServers=${servers.length}`);
       const sdp = await command({
         action: 'accept',
         connection: id,
@@ -177,14 +220,14 @@ export async function requestFilePeer(peer: string, value: unknown): Promise<unk
       });
       return { connection: id, sdp };
     } catch (error) {
-      stopConnection(id);
+      stopConnection(id, 'offer-failed');
       throw error;
     }
   }
   const c = touch(r.connection);
   if (!c.incoming || c.peer !== peer) throw new Error('FILE_PEER_DENIED');
   if (r.action === 'close') {
-    stopConnection(r.connection);
+    stopConnection(r.connection, 'peer-close');
     return { ok: true };
   }
   if (c.opening || [...sources.values()].some((s) => s.connection === r.connection))
@@ -196,7 +239,7 @@ export async function requestFilePeer(peer: string, value: unknown): Promise<unk
       resolveAuthorizedMedia({ url: r.url }, FILE_PEER_MAX_BYTES),
       new Promise<never>((_, reject) => {
         deadline = setTimeout(() => {
-          stopConnection(r.connection);
+          stopConnection(r.connection, 'open-timeout');
           reject(new Error('FILE_PEER_TIMEOUT'));
         }, 20_000);
         deadline.unref();
@@ -237,6 +280,7 @@ export async function requestFilePeer(peer: string, value: unknown): Promise<unk
         mtime: stat.mtimeMs,
         offset: 0,
         busy: false,
+        openedAt: Date.now(),
       });
       return { ticket, size: stat.size, mimeType };
     } catch (error) {
@@ -297,10 +341,12 @@ export function registerFilePeerIpc() {
         if (!bytes.length) {
           sources.delete(ticket);
           await s.file.close();
+          log.debug(`send done conn=${short(connection)} size=${s.size} ms=${Date.now() - s.openedAt}`);
         }
         return bytes.toString('base64');
       } catch (error) {
-        stopConnection(connection);
+        log.warn(`send failed conn=${short(connection)} sent=${s.offset}/${s.size}B error=${errorText(error)}`);
+        stopConnection(connection, 'read-failed');
         throw error;
       } finally {
         s.busy = false;
@@ -375,7 +421,7 @@ async function receivePeerFile(peer: string, url: string, invoke: Invoke, signal
   let remote = out.remote,
     directory: string | undefined,
     complete = false;
-  const cancel = () => stopConnection(id);
+  const cancel = () => stopConnection(id, 'aborted');
   try {
     signal?.addEventListener('abort', cancel, { once: true });
     if (!remote) {
@@ -457,7 +503,7 @@ async function receivePeerFile(peer: string, url: string, invoke: Invoke, signal
     signal?.removeEventListener('abort', cancel);
     out.busy = false;
     if (!complete) {
-      stopConnection(id);
+      stopConnection(id, 'incomplete');
       if (outgoing.get(peer) === out) outgoing.delete(peer);
       if (remote && isDataOwnerBroadcastScopeCurrent(owner))
         void invoke(peer, FILE_PEER_CHANNEL, [{ action: 'close', connection: remote }]).catch(
