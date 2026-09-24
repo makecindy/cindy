@@ -12,6 +12,8 @@ import {
   previewProviderImport,
 } from '../providerImport.js';
 
+import { validateCustomProviderConfig } from '../../maker-host/custom-provider-store.js';
+
 const SCOPE = { dataOwnerId: 'owner-a', generation: 1 };
 
 function encodePayload(payload: unknown): string {
@@ -791,3 +793,25 @@ it('accepts a discovered catalog larger than the inline-link limit', () => {
   expect(() => assertProviderImportModels(Array.from({ length: 1000 }, (_, index) =>
     ({ id: `model-${index}`, name: `Model ${index}` })))).not.toThrow();
 });
+
+it.each([
+  [['minimal', 'low', 'high'], 'minimal', ['low', 'high'], undefined],
+  [['minimal', 'low', 'high'], 'high', ['low', 'high'], 'high'],
+  [['minimal'], 'minimal', [], undefined],
+] as const)('imports per-engine reasoning settings through the actual save validator: %j',
+  (efforts, defaultEffort, fixedEfforts, fixedDefault) => {
+    const importId = createDraft(customPayload({ endpoints: [{ protocol: 'openai-responses',
+      baseUrl: 'https://relay.example/v1', targets: ['claude-code', 'codex', 'pi'],
+      models: [{ id: 'new-model', reasoning: true, reasoningEfforts: efforts, reasoningDefaultEffort: defaultEffort }],
+    }] }));
+    previewProviderImport(importId, SCOPE, []);
+    const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+    if (draft.kind !== 'custom') throw new Error('wrong import kind');
+    expect(validateCustomProviderConfig(draft.config)).toEqual({ ok: true });
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const model = draft.config.runtimes[agent]!.models[0];
+      expect(model.reasoning).toBe(true);
+      expect(model.reasoningEfforts).toEqual(agent === 'pi' ? efforts : fixedEfforts);
+      expect(model.reasoningDefaultEffort).toBe(agent === 'pi' ? defaultEffort : fixedDefault);
+    }
+  });

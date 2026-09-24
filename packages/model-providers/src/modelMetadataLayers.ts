@@ -244,6 +244,16 @@ export function resolveModelMetadata(
     matched?.route.forceOverrides,
     user,
   );
+  // Resolve the pair only after all layers: a maximum-only report is a usable
+  // fallback, not a verified working-window report. Never replace a known window.
+  if (result.contextWindow === undefined && result.contextWindowMax !== undefined) {
+    result.contextWindow = result.contextWindowMax;
+    result[inheritedContextWindow] = true;
+  }
+  if (result.contextWindow !== undefined && result.contextWindowMax !== undefined &&
+      result.contextWindowMax < result.contextWindow) {
+    delete result.contextWindowMax;
+  }
   if (result.contextWindow !== undefined &&
       ![defaults, currentLive, matched?.route.forceOverrides, user].some(source => source?.contextWindow !== undefined)) {
     result[inheritedContextWindow] = true;
@@ -414,6 +424,9 @@ export function applyModelMetadata(
       : {}),
     ...(maxOutputTokens !== undefined ? { maxOutput: maxOutputTokens } : {}),
   };
+  if (result.contextWindowMax !== undefined && result.contextWindowMax < result.contextWindow) {
+    delete result.contextWindowMax;
+  }
   if (
     result.efforts.length === 0 ||
     (result.defaultEffort != null &&

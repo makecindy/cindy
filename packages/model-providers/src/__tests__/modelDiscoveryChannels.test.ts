@@ -69,6 +69,28 @@ describe('shared provider discovery', () => {
     }
   });
 
+  it('uses maximum-only discovery as an unverified working fallback without saving it as a report', () => {
+    const discovered = parseModelsListResponse({ data: [{ id: 'private-model', max_context_window: 64000 }] })!;
+    const models = mergeDiscoveredRuntimeModels([], discovered);
+    expect(models[0].discoveredMetadata?.contextWindow).toBeUndefined();
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models },
+      } });
+      expect(provider.models[agent]?.[0]).toMatchObject({
+        contextWindow: 64000, contextWindowMax: 64000, contextWindowVerified: false,
+      });
+      expect(provider.models[agent]?.[0].userModelConfig?.discoveredMetadata?.contextWindow).toBeUndefined();
+    }
+    const refreshed = mergeDiscoveredRuntimeModels(models, parseModelsListResponse({ data: [
+      { id: 'private-model', context_window: 32000 },
+    ] })!);
+    const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+      pi: { baseUrl: 'https://relay.example/v1', models: refreshed },
+    } });
+    expect(provider.models.pi?.[0]).toMatchObject({ contextWindow: 32000, contextWindowMax: 64000, contextWindowVerified: true });
+  });
+
   it('imports Vercel token prices, output capacity, image inputs and declared effort levels', () => {
     const models = parseModelsListResponse({ data: [{ id: 'vendor/new', name: 'New', type: 'language',
       context_window: 128000, max_tokens: 32000,

@@ -633,7 +633,18 @@ function parsePayload(value: unknown): ProviderImportDraft {
     ) {
       fail(`multiple endpoints compete for ${agent}; set explicit targets`);
     }
-    const models = selected.models.map(model => structuredClone(model));
+    const models = selected.models.map(source => {
+      const model = structuredClone(source);
+      // Pi accepts minimal; fixed-protocol runtimes cannot persist that setting.
+      // Keep the shared endpoint record intact for Pi and remove an orphaned default.
+      if (agent !== 'pi' && model.reasoningEfforts) {
+        model.reasoningEfforts = model.reasoningEfforts.filter(effort => effort !== 'minimal');
+        if (model.reasoningDefaultEffort && !model.reasoningEfforts.includes(model.reasoningDefaultEffort)) {
+          delete model.reasoningDefaultEffort;
+        }
+      }
+      return model;
+    });
     runtimes[agent] = {
       wireProtocol: selected.protocol,
       baseUrl: selected.baseUrl,

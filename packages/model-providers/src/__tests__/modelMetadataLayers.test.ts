@@ -68,6 +68,21 @@ it('keeps inherited capacity unverified through resolution and repeated catalog 
     .toMatchObject({ contextWindow: 32000, contextWindowVerified: true });
 });
 
+it('drops an inherited maximum below the current model working window through repeated projection', () => {
+  const r: ModelRegistry = { schemaVersion: 4, updatedAt: registry.updatedAt, models: [],
+    baseModels: [{ id: 'private-6', aliases: [], defaults: { contextWindow: 128000, contextWindowMax: 128000 } }] };
+  const base: CatalogModel = { id: 'private-7', name: 'New', contextWindow: 200000, contextWindowMax: 128000,
+    efforts: [], defaultEffort: null };
+  const resolved = resolveModelMetadata(r, 'supplier', base.id, { contextWindow: 256000 });
+  expect(resolved.contextWindow).toBe(256000);
+  expect(resolved.contextWindowMax).toBeUndefined();
+  const projected = applyModelMetadata(base, resolved);
+  expect(projected).toMatchObject({ contextWindow: 256000, contextWindowVerified: true });
+  const again = applyModelMetadata(projected, resolveModelMetadata(r, 'supplier', base.id, catalogModelMetadata(projected)));
+  expect(again.contextWindowMax).toBeUndefined();
+  expect(again.contextWindow).toBe(256000);
+});
+
 it("honors entry names below route, live, force and user names", () => {
   const r = structuredClone(registry);
   r.models[0].name = "Entry";
