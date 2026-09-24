@@ -2,6 +2,12 @@
 export const markdownPreviewFixture = [
   '# Markdown reading fixture',
   '',
+  'Short inline formula $x^2 + y^2 = z^2$ stays in this paragraph.',
+  '',
+  'Wide inline formula $\\frac{'
+    + Array.from({ length: 32 }, (_, index) => `x_{${index}}`).join(' + ')
+    + '}{2} = \\mathrm{INLINEEND}$ followed by readable text.',
+  '',
   '## Wide formula',
   '',
   '$$',

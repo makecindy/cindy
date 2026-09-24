@@ -418,6 +418,12 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       color: ${mutedColor};
       font-weight: 500;
     }
+    .xdt-math-inline {
+      display: inline-block;
+      max-width: 100%;
+      overflow-x: auto;
+      vertical-align: middle;
+    }
     .xdt-math-block {
       max-width: 100%;
       min-width: 0;

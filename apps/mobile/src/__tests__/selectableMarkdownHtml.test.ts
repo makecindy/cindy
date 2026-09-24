@@ -53,6 +53,7 @@ describe('buildSelectableMarkdownHtml 移动阅读视口', () => {
     expect(css()).toMatch(/table \{[^}]*table-layout:\s*fixed[^}]*width:\s*100%/s);
     expect(css()).toMatch(/th, td \{[^}]*min-width:\s*0[^}]*overflow-wrap:\s*anywhere[^}]*word-break:\s*break-word/s);
     expect(css()).toMatch(/\.xdt-math-block \{[^}]*max-width:\s*100%[^}]*min-width:\s*0[^}]*overflow-x:\s*auto/s);
+    expect(css()).toMatch(/\.xdt-math-inline \{[^}]*display:\s*inline-block[^}]*max-width:\s*100%[^}]*overflow-x:\s*auto/s);
     expect(css()).not.toMatch(/touch-action:\s*pan-x/);
   });
 });

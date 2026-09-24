@@ -2,14 +2,14 @@ import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { MARKDOWN_FILE_PAGER_SCRIPT, parseMarkdownPageSwipe } from '@/session/markdownFilePager';
 
-function reader() {
+function reader(formulaTag = 'DIV', formulaWidth = 1200) {
   const listeners = new Map<string, (event: unknown) => void>();
   const messages: string[] = [];
   const body = { nodeType: 1, parentElement: null };
   const paragraph = { nodeType: 1, tagName: 'P', parentElement: body };
   const formula = {
-    nodeType: 1, tagName: 'DIV', parentElement: body,
-    overflowX: 'auto', scrollWidth: 1200, clientWidth: 380,
+    nodeType: 1, tagName: formulaTag, parentElement: body,
+    overflowX: 'auto', scrollWidth: formulaWidth, clientWidth: 380,
   };
   const formulaChild = { nodeType: 1, tagName: 'SPAN', parentElement: formula };
   let selected = false;
@@ -58,8 +58,8 @@ describe('Markdown reader paging', () => {
     expect(r.messages).toEqual([]);
   });
 
-  it('keeps wide formula drags inside their scroll container, including at its edges', () => {
-    const r = reader();
+  it.each(['DIV', 'SPAN'])('keeps wide %s formula drags inside their scroll container, including at its edges', (tag) => {
+    const r = reader(tag);
     for (const dx of [-200, 200]) {
       r.touch('touchstart', 200, 100, 0, r.formulaChild);
       r.touch('touchmove', 200 + dx, 100, 100, r.formulaChild);
@@ -69,6 +69,14 @@ describe('Markdown reader paging', () => {
     // A subsequent gesture in ordinary text can still page.
     r.touch('touchstart', 200, 300);
     r.touch('touchend', 80, 300, 200);
+    expect(r.messages).toEqual(['markdown-page:next']);
+  });
+
+  it('allows paging over an inline formula that fits without horizontal overflow', () => {
+    const r = reader('SPAN', 380);
+    r.touch('touchstart', 200, 100, 0, r.formulaChild);
+    r.touch('touchmove', 80, 100, 150, r.formulaChild);
+    r.touch('touchend', 80, 100, 200, r.formulaChild);
     expect(r.messages).toEqual(['markdown-page:next']);
   });
 
