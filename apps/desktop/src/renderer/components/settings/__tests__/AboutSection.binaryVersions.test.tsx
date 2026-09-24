@@ -158,6 +158,11 @@ describe('AboutSection agent binary versions', () => {
     await screen.findByText('settings.about.harnessCheckFailed');
     expect(screen.getAllByText('settings.about.harnessCheckFailed')).toHaveLength(1);
     expect(screen.getAllByText('1.0.0')).toHaveLength(2);
+    const status = screen.getByRole('status');
+    expect(status.className).toContain('min-w-0');
+    expect(status.className).not.toContain('shrink-0');
+    expect(status.querySelector('.break-words')).toBeTruthy();
+    expect(status.closest('[class*="overflow-hidden"]')).toBeTruthy();
 
     await openMenu('Codex');
     expect(screen.getByRole('menuitem', { name: /harnessUpdateButton Codex.*—/ }).getAttribute('aria-disabled')).toBe('true');
