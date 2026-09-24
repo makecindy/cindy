@@ -439,6 +439,8 @@ export function IOSSimulatorTabBody({
   const pointerGestureRef = useRef<PointerGesture | null>(null);
   const gestureSequenceRef = useRef(0);
   const streamProfileRef = useRef<StreamProfileName>('balanced');
+  // Transport defaults must not replace a profile the user explicitly selected.
+  const streamProfileCustomizedRef = useRef(false);
   const profileRouteRef = useRef<{
     routeKey: string | null;
     viewerToken: string | null;
@@ -1314,19 +1316,23 @@ export function IOSSimulatorTabBody({
       if (!attachedInstance) return;
       const next = requested === 'experimental60' && !nativeH264Active ? 'high' : requested;
       const previous = streamProfile;
+      const previouslyCustomized = streamProfileCustomizedRef.current;
       setStreamProfile(next);
       streamProfileRef.current = next;
+      streamProfileCustomizedRef.current = true;
       setActionError(null);
       try {
         const result = await sendStreamProfile(next, nativeH264Active);
         if (result && !result.ok) {
           setStreamProfile(previous);
           streamProfileRef.current = previous;
+          streamProfileCustomizedRef.current = previouslyCustomized;
           setActionError(formatActionError(result));
         }
       } catch {
         setStreamProfile(previous);
         streamProfileRef.current = previous;
+        streamProfileCustomizedRef.current = previouslyCustomized;
         setActionError(t('rightSidebar.iosSimulator.operationErrorWithRecovery'));
       }
     },
@@ -1380,6 +1386,7 @@ export function IOSSimulatorTabBody({
   useEffect(() => {
     setStreamProfile('balanced');
     streamProfileRef.current = 'balanced';
+    streamProfileCustomizedRef.current = false;
     nativeProfileAppliedRef.current = null;
     if (!attachedInstance || attachedInstance.lifecycleState !== 'ready') return;
   }, [
@@ -1415,8 +1422,11 @@ export function IOSSimulatorTabBody({
         previous?.nativeSelected ||
         streamProfileRef.current === 'experimental60'
       ) {
-        const nextProfile =
-          streamProfileRef.current === 'experimental60' ? 'high' : streamProfileRef.current;
+        const nextProfile = !streamProfileCustomizedRef.current
+          ? 'balanced'
+          : streamProfileRef.current === 'experimental60'
+            ? 'high'
+            : streamProfileRef.current;
         setStreamProfile(nextProfile);
         streamProfileRef.current = nextProfile;
         void sendStreamProfile(nextProfile, false).catch(() => undefined);
@@ -1428,6 +1438,10 @@ export function IOSSimulatorTabBody({
         void sendStreamProfile(streamProfileRef.current, false).catch(() => undefined);
       }
       return;
+    }
+    if (!streamProfileCustomizedRef.current) {
+      setStreamProfile('high');
+      streamProfileRef.current = 'high';
     }
     const applied = nativeProfileAppliedRef.current;
     if (applied?.routeKey === viewerRouteKey && applied.profile === streamProfileRef.current)
