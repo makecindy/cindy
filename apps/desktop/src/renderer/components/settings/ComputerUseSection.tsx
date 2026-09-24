@@ -7,11 +7,11 @@
  *   - 未探测到时引导去 Chrome 官方下载页
  * 以及「直接操作电脑」能力 (cindy_computer MCP, machine-wide opt-in).
  *
- * 数据流 (规则 7: 先拉数据再渲染, 无 loading 闪屏):
+ * 数据流:
  *   - mount → 并行拉 plugins.getState('browser', workingDir) (取 browser 开关态)
  *     + browser.status()。注意 browser 是 HOSTED_ELSEWHERE, 不在 plugins.list()
  *     里, 必须按 id 直接读单个状态, 否则 find() 永远 undefined。
- *   - 两者都到位后一次性渲染
+ *   - 基础配置到位后渲染;电脑权限与浏览器健康检测独立补齐,不阻塞整页。
  * 浏览器开关读写完全复用 builtin plugin IPC, 不新造持久化通道。
  */
 
@@ -453,6 +453,36 @@ export function ComputerUseSection({
 
   useEffect(() => {
     let cancelled = false;
+    // Machine-wide status is independent of workingDir and may include slow
+    // daemon recovery / TCC probes. Never make it a prerequisite for this page.
+    void window.electronAPI.maker.computer.status({
+      forcePermissionProbe: true,
+      bypassPermissionProbeCache: true,
+      passivePermissionProbeOnly: true,
+    }).catch((err) => {
+      log.warn('computer.status failed', err);
+      return {
+        installed: false,
+        executablePath: null,
+        version: null,
+        daemonRunning: false,
+        installCommand: 'cua-driver install instructions: https://cua.ai/docs/cua-driver',
+        docsUrl: 'https://cua.ai/docs/cua-driver',
+        error: String(err),
+      } as ComputerDriverStatus;
+    }).then((computer) => {
+      if (cancelled) return;
+      // A native permission-guide event may already have supplied newer state.
+      setComputerStatus((current) => current ?? computer);
+      log.debug('computer initial status loaded', getComputerPermissionLogSummary(computer));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     const backendHealthSeq = ++browserBackendHealthSeqRef.current;
     // Start the slow health/recovery path alongside the base reads, but do not
     // include it in their render gate. The Automation cards are useful while
@@ -470,7 +500,7 @@ export function ComputerUseSection({
       }
     })();
     void (async () => {
-      const [browserState, computerState, avail, computer, backendState] = await Promise.all([
+      const [browserState, computerState, avail, backendState] = await Promise.all([
         // `browser` is hidden from plugins.list() (HOSTED_ELSEWHERE), so read its
         // enable state directly by id — list().find() would always be undefined
         // and the toggle would wrongly reset to enabled on every remount.
@@ -486,27 +516,6 @@ export function ComputerUseSection({
           log.warn('browser.status failed', err);
           return { detected: false, browserKind: null, executablePath: null } as BrowserAvailability;
         }),
-        // Entering Automation is the shared refresh boundary for every card.
-        // CuaDriver 0.12.2+ reports its own TCC state without opening the legacy
-        // grant flow. Bypass our prior-result cache so reopening this page
-        // reflects the latest settings without requiring a manual Recheck.
-        window.electronAPI.maker.computer.status({
-          forcePermissionProbe: true,
-          bypassPermissionProbeCache: true,
-          passivePermissionProbeOnly: true,
-        }).catch((err) => {
-          log.warn('computer.status failed', err);
-          return {
-            installed: false,
-            executablePath: null,
-            version: null,
-            daemonRunning: false,
-            installCommand:
-              'cua-driver install instructions: https://cua.ai/docs/cua-driver',
-            docsUrl: 'https://cua.ai/docs/cua-driver',
-            error: String(err),
-          } as ComputerDriverStatus;
-        }),
         window.electronAPI.browserBackend?.getState?.().catch((err) => {
           log.warn('browserBackend.getState failed', err);
           return null;
@@ -519,8 +528,6 @@ export function ComputerUseSection({
       const effectiveComputerEnabled = computerState ? computerState.effectiveEnabled : false;
       setComputerEnabled(effectiveComputerEnabled);
       setAvailability(avail);
-      setComputerStatus(computer);
-      log.debug('computer initial status loaded', getComputerPermissionLogSummary(computer));
       // Phase 5: backend kind 拉不到时(老版本 preload / IPC 缺失)安全 fallback
       // 到 'external',保持现有 Chrome 探测 / 登录 UI 可见 — 总比因为 IPC 失败
       // 让卡片整张瘫成内置态强。
@@ -1205,10 +1212,9 @@ export function ComputerUseSection({
   const automationViewLoading =
     browserEnabled === null
     || computerEnabled === null
-    || availability === null
-    || computerStatus === null;
+    || availability === null;
 
-  // First render: blank until all reads land (no flash, rule 7).
+  // Only base configuration gates the page; runtime probes update independently.
   if (automationViewLoading) {
     return null;
   }
@@ -1221,7 +1227,7 @@ export function ComputerUseSection({
     computerAccessibilityGranted &&
     !computerScreenRecordingGranted;
   const computerReady =
-    computerStatus.installed && isComputerPermissionReady(computerStatus);
+    computerStatus?.installed && isComputerPermissionReady(computerStatus);
   // Persisted opt-in and runtime readiness are separate states. Keeping an
   // unavailable enabled configuration checked lets the user turn it off
   // instead of forcing the only interaction back into onboarding.
@@ -1231,7 +1237,7 @@ export function ComputerUseSection({
     computerEnableIntentRef.current,
   );
   const computerSwitchDisabled =
-    computerTogglePending || computerInstallPending || computerPermissionPending;
+    computerStatus === null || computerTogglePending || computerInstallPending || computerPermissionPending;
 
   const configuredDefaultAndroidDevice =
     androidConfig?.value.defaultDeviceSerial
@@ -1418,208 +1424,217 @@ export function ComputerUseSection({
             aria-label={t('settings.computerUse.directControl.toggleAria')}
           />
         </div>
-        {/* Windows/Linux 没有 macOS TCC 权限,整块隐藏;安装进度改在下方状态行展示。 */}
-        {window.electronAPI.platform === 'darwin' ? (
-          <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-4">
-            <div className="flex items-center justify-between gap-3">
-              <p id="settings-search-settings-computerUse-directControl-permissions-title" className="text-13 font-medium text-[var(--settings-section-title)]">
-                {t('settings.computerUse.directControl.permissions.title')}
-              </p>
-              {computerInstallPending || computerPermissionPending ? (
-                <span className="inline-flex items-center gap-1.5 text-12 text-[var(--settings-section-desc)]">
-                  <Spinner size={12} />
-                  {computerInstallPending
-                    ? t('settings.computerUse.directControl.installing')
-                    : t('settings.computerUse.directControl.authorizing')}
-                </span>
-              ) : (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="px-2.5"
-                  loading={computerPermissionRecheckPending}
-                  type="button"
-                  onClick={() => void handleRecheckComputerStatus()}
-                  disabled={computerPermissionRecheckPending}
-                >
-                  <RefreshCw size={12} className="shrink-0" />
-                  {t('settings.computerUse.directControl.permissions.recheck')}
-                </Button>
-              )}
-            </div>
-
-            <div id="settings-search-settings-computerUse-directControl-permissions-accessibilityLabel" className="mt-3 grid gap-2.5 sm:grid-cols-2">
-              <ComputerPermissionRow
-                label={t('settings.computerUse.directControl.permissions.accessibilityLabel')}
-                iconSrc={accessibilityPermissionIcon}
-                granted={computerAccessibilityGranted}
-                pending={computerAccessibilityPending}
-                actionLabel={
-                  computerAccessibilityPending
-                    ? t('settings.computerUse.directControl.permissionGuide.waiting')
-                    : computerAccessibilityGranted
-                      ? t('settings.computerUse.directControl.permissions.granted')
-                      : t('settings.computerUse.directControl.permissions.grant')
-                }
-                onAction={() =>
-                  void (
-                    computerStatus.installed
-                      ? handleOpenComputerPermission(
-                          MAC_ACCESSIBILITY_SETTINGS_URL,
-                          computerAccessibilityGranted,
-                        )
-                      : handleToggleComputer(true)
-                  )
-                }
-              />
-              <div id="settings-search-settings-computerUse-directControl-permissions-screenRecordingLabel">
-              <ComputerPermissionRow
-                label={t('settings.computerUse.directControl.permissions.screenRecordingLabel')}
-                iconSrc={screenRecordingPermissionIcon}
-                granted={computerScreenRecordingGranted}
-                pending={computerScreenRecordingPending}
-                actionLabel={
-                  computerScreenRecordingPending
-                    ? t('settings.computerUse.directControl.permissionGuide.waiting')
-                    : computerScreenRecordingGranted
-                      ? t('settings.computerUse.directControl.permissions.granted')
-                      : t('settings.computerUse.directControl.permissions.grant')
-                }
-                onAction={() =>
-                  void (
-                    computerStatus.installed
-                      ? handleOpenComputerPermission(
-                          MAC_SCREEN_RECORDING_SETTINGS_URL,
-                          computerScreenRecordingGranted,
-                        )
-                      : handleToggleComputer(true)
-                  )
-                }
-              />
-              </div>
-            </div>
+        {computerStatus === null ? (
+          <div role="status" className="flex items-center gap-2 border-t border-[var(--settings-theme-card-border)] px-4 py-4 text-12 text-[var(--settings-section-desc)]">
+            <Spinner size={12} />
+            {t('settings.computerUse.directControl.status.checking')}
           </div>
-        ) : null}
+        ) : (
+          <>
+            {/* Windows/Linux 没有 macOS TCC 权限,整块隐藏;安装进度改在下方状态行展示。 */}
+            {window.electronAPI.platform === 'darwin' ? (
+              <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p id="settings-search-settings-computerUse-directControl-permissions-title" className="text-13 font-medium text-[var(--settings-section-title)]">
+                    {t('settings.computerUse.directControl.permissions.title')}
+                  </p>
+                  {computerInstallPending || computerPermissionPending ? (
+                    <span className="inline-flex items-center gap-1.5 text-12 text-[var(--settings-section-desc)]">
+                      <Spinner size={12} />
+                      {computerInstallPending
+                        ? t('settings.computerUse.directControl.installing')
+                        : t('settings.computerUse.directControl.authorizing')}
+                    </span>
+                  ) : (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="px-2.5"
+                      loading={computerPermissionRecheckPending}
+                      type="button"
+                      onClick={() => void handleRecheckComputerStatus()}
+                      disabled={computerPermissionRecheckPending}
+                    >
+                      <RefreshCw size={12} className="shrink-0" />
+                      {t('settings.computerUse.directControl.permissions.recheck')}
+                    </Button>
+                  )}
+                </div>
 
-        <div className="relative border-t border-[var(--settings-theme-card-border)] px-4 py-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="text-11 text-[var(--settings-section-desc)]">
-                {computerStatus.installed
-                  ? t('settings.computerUse.directControl.status.version', {
-                      version: computerStatus.version ?? 'cua-driver',
-                    })
-                  : t('settings.computerUse.directControl.notDetected')}
-              </span>
-              {window.electronAPI.platform !== 'darwin' && computerInstallPending ? (
-                <>
-                  <span aria-hidden="true" className="text-11 text-[var(--settings-theme-card-border)]">
-                    ·
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 text-11 text-[var(--settings-section-desc)]">
-                    <Spinner size={12} />
-                    {t('settings.computerUse.directControl.installing')}
-                  </span>
-                </>
-              ) : null}
-              {computerStatus.installed && driverUpdate?.latestVersion ? (
-                <>
-                  <span aria-hidden="true" className="text-11 text-[var(--settings-theme-card-border)]">
-                    ·
-                  </span>
+                <div id="settings-search-settings-computerUse-directControl-permissions-accessibilityLabel" className="mt-3 grid gap-2.5 sm:grid-cols-2">
+                  <ComputerPermissionRow
+                    label={t('settings.computerUse.directControl.permissions.accessibilityLabel')}
+                    iconSrc={accessibilityPermissionIcon}
+                    granted={computerAccessibilityGranted}
+                    pending={computerAccessibilityPending}
+                    actionLabel={
+                      computerAccessibilityPending
+                        ? t('settings.computerUse.directControl.permissionGuide.waiting')
+                        : computerAccessibilityGranted
+                          ? t('settings.computerUse.directControl.permissions.granted')
+                          : t('settings.computerUse.directControl.permissions.grant')
+                    }
+                    onAction={() =>
+                      void (
+                        computerStatus.installed
+                          ? handleOpenComputerPermission(
+                              MAC_ACCESSIBILITY_SETTINGS_URL,
+                              computerAccessibilityGranted,
+                            )
+                          : handleToggleComputer(true)
+                      )
+                    }
+                  />
+                  <div id="settings-search-settings-computerUse-directControl-permissions-screenRecordingLabel">
+                  <ComputerPermissionRow
+                    label={t('settings.computerUse.directControl.permissions.screenRecordingLabel')}
+                    iconSrc={screenRecordingPermissionIcon}
+                    granted={computerScreenRecordingGranted}
+                    pending={computerScreenRecordingPending}
+                    actionLabel={
+                      computerScreenRecordingPending
+                        ? t('settings.computerUse.directControl.permissionGuide.waiting')
+                        : computerScreenRecordingGranted
+                          ? t('settings.computerUse.directControl.permissions.granted')
+                          : t('settings.computerUse.directControl.permissions.grant')
+                    }
+                    onAction={() =>
+                      void (
+                        computerStatus.installed
+                          ? handleOpenComputerPermission(
+                              MAC_SCREEN_RECORDING_SETTINGS_URL,
+                              computerScreenRecordingGranted,
+                            )
+                          : handleToggleComputer(true)
+                      )
+                    }
+                  />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="relative border-t border-[var(--settings-theme-card-border)] px-4 py-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="text-11 text-[var(--settings-section-desc)]">
-                    {driverUpdatePending
-                      ? driverUpdateProgress?.phase === 'installing'
-                        ? t('settings.computerUse.directControl.update.installing')
-                        : t('settings.computerUse.directControl.update.updating')
-                      : t('settings.computerUse.directControl.update.available', {
-                          version: driverUpdate.latestVersion,
-                        })}
+                    {computerStatus.installed
+                      ? t('settings.computerUse.directControl.status.version', {
+                          version: computerStatus.version ?? 'cua-driver',
+                        })
+                      : t('settings.computerUse.directControl.notDetected')}
                   </span>
+                  {window.electronAPI.platform !== 'darwin' && computerInstallPending ? (
+                    <>
+                      <span aria-hidden="true" className="text-11 text-[var(--settings-theme-card-border)]">
+                        ·
+                      </span>
+                      <span className="inline-flex items-center gap-1.5 text-11 text-[var(--settings-section-desc)]">
+                        <Spinner size={12} />
+                        {t('settings.computerUse.directControl.installing')}
+                      </span>
+                    </>
+                  ) : null}
+                  {computerStatus.installed && driverUpdate?.latestVersion ? (
+                    <>
+                      <span aria-hidden="true" className="text-11 text-[var(--settings-theme-card-border)]">
+                        ·
+                      </span>
+                      <span className="text-11 text-[var(--settings-section-desc)]">
+                        {driverUpdatePending
+                          ? driverUpdateProgress?.phase === 'installing'
+                            ? t('settings.computerUse.directControl.update.installing')
+                            : t('settings.computerUse.directControl.update.updating')
+                          : t('settings.computerUse.directControl.update.available', {
+                              version: driverUpdate.latestVersion,
+                            })}
+                      </span>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="px-2.5"
+                        loading={driverUpdatePending}
+                        type="button"
+                        onClick={() => void handleUpdateDriver()}
+                        disabled={driverUpdatePending || computerInstallPending}
+                      >
+                        <Download size={12} className="shrink-0" />
+                        {t('settings.computerUse.directControl.update.action')}
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setComputerDetailsOpen((open) => !open)}
+                  aria-expanded={computerDetailsOpen}
+                  className={cn(
+                    'inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5',
+                    'text-11 font-medium text-[var(--settings-section-desc)]',
+                    'transition-colors hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                  )}
+                >
+                  {computerDetailsOpen
+                    ? t('settings.computerUse.directControl.permissions.hideDetails')
+                    : t('settings.computerUse.directControl.permissions.moreDetails')}
+                  <ChevronDown
+                    size={12}
+                    className={cn(
+                      'transition-transform duration-200',
+                      computerDetailsOpen && 'rotate-180',
+                    )}
+                  />
+                </button>
+              </div>
+              {driverUpdatePending &&
+              driverUpdateProgress?.phase === 'downloading' &&
+              driverUpdateProgress.downloadedBytes !== null &&
+              driverUpdateProgress.totalBytes ? (
+                <div className="absolute inset-x-0 bottom-0 h-[2px] bg-[var(--settings-input-bg)]">
+                  <div
+                    className="h-full bg-[var(--settings-section-title)] transition-[width] duration-500"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        (driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) * 100,
+                      )}%`,
+                    }}
+                  />
+                </div>
+              ) : null}
+            </div>
+
+            {computerDetailsOpen ? (
+              <div className="flex flex-col gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-3.5">
+                <div className="flex flex-col gap-2">
+                  <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                    {t('settings.computerUse.directControl.driverInfo')}
+                  </p>
+                  {window.electronAPI.platform === 'darwin' ? (
+                    <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                      {computerReady
+                        ? t('settings.computerUse.directControl.permissions.runtimeConfirmations')
+                        : t('settings.computerUse.directControl.permissions.macosHint')}
+                    </p>
+                  ) : null}
+                </div>
+                <div>
                   <Button
                     variant="secondary"
                     size="sm"
-                    className="px-2.5"
-                    loading={driverUpdatePending}
+                    className="px-3"
                     type="button"
-                    onClick={() => void handleUpdateDriver()}
-                    disabled={driverUpdatePending || computerInstallPending}
+                    onClick={handleOpenCuaProject}
                   >
-                    <Download size={12} className="shrink-0" />
-                    {t('settings.computerUse.directControl.update.action')}
+                    <ExternalLink size={12} className="shrink-0" />
+                    {t('settings.computerUse.directControl.openSourceProject')}
                   </Button>
-                </>
-              ) : null}
-            </div>
-            <button
-              type="button"
-              onClick={() => setComputerDetailsOpen((open) => !open)}
-              aria-expanded={computerDetailsOpen}
-              className={cn(
-                'inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5',
-                'text-11 font-medium text-[var(--settings-section-desc)]',
-                'transition-colors hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
-                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              )}
-            >
-              {computerDetailsOpen
-                ? t('settings.computerUse.directControl.permissions.hideDetails')
-                : t('settings.computerUse.directControl.permissions.moreDetails')}
-              <ChevronDown
-                size={12}
-                className={cn(
-                  'transition-transform duration-200',
-                  computerDetailsOpen && 'rotate-180',
-                )}
-              />
-            </button>
-          </div>
-          {driverUpdatePending &&
-          driverUpdateProgress?.phase === 'downloading' &&
-          driverUpdateProgress.downloadedBytes !== null &&
-          driverUpdateProgress.totalBytes ? (
-            <div className="absolute inset-x-0 bottom-0 h-[2px] bg-[var(--settings-input-bg)]">
-              <div
-                className="h-full bg-[var(--settings-section-title)] transition-[width] duration-500"
-                style={{
-                  width: `${Math.min(
-                    100,
-                    (driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) * 100,
-                  )}%`,
-                }}
-              />
-            </div>
-          ) : null}
-        </div>
-
-        {computerDetailsOpen ? (
-          <div className="flex flex-col gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-3.5">
-            <div className="flex flex-col gap-2">
-              <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-                {t('settings.computerUse.directControl.driverInfo')}
-              </p>
-              {window.electronAPI.platform === 'darwin' ? (
-                <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-                  {computerReady
-                    ? t('settings.computerUse.directControl.permissions.runtimeConfirmations')
-                    : t('settings.computerUse.directControl.permissions.macosHint')}
-                </p>
-              ) : null}
-            </div>
-            <div>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="px-3"
-                type="button"
-                onClick={handleOpenCuaProject}
-              >
-                <ExternalLink size={12} className="shrink-0" />
-                {t('settings.computerUse.directControl.openSourceProject')}
-              </Button>
-            </div>
-          </div>
-        ) : null}
+                </div>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
 
       <div aria-hidden="true" className="h-px bg-[var(--settings-theme-card-border)]" />

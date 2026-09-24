@@ -128,6 +128,68 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ComputerUseSection browser backend health loading', () => {
+  it('renders other settings while computer permission detection is pending', async () => {
+    const initialComputer = deferred<ComputerDriverStatus>();
+    api.getComputerStatus.mockReturnValueOnce(initialComputer.promise);
+    const { rerender } = render(<ComputerUseSection workingDir="/tmp/project" />);
+
+    expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
+    expect(screen.getByText('settings.computerUse.android.title')).toBeTruthy();
+    const computerToggle = screen.getByRole('switch', {
+      name: 'settings.computerUse.directControl.toggleAria',
+    });
+    expect((computerToggle as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('settings.computerUse.directControl.status.checking')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.directControl.status.notInstalled')).toBeNull();
+    expect(api.getComputerStatus).toHaveBeenCalledWith({
+      forcePermissionProbe: true,
+      bypassPermissionProbeCache: true,
+      passivePermissionProbeOnly: true,
+    });
+
+    fireEvent.click(screen.getByRole('radio', {
+      name: 'settings.computerUse.browserBackend.external.title',
+    }));
+    await waitFor(() => expect(api.setBackendKind).toHaveBeenCalledWith('external'));
+    rerender(<ComputerUseSection workingDir="/tmp/other-project" />);
+    expect(api.getComputerStatus).toHaveBeenCalledTimes(1);
+
+    await act(async () => { initialComputer.resolve(computerUnavailable); });
+    expect((computerToggle as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('settings.computerUse.directControl.status.checking')).toBeNull();
+  });
+
+  it('settles a failed computer probe without hiding the settings', async () => {
+    api.getComputerStatus.mockRejectedValueOnce(new Error('probe failed'));
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.directControl.status.checking')).toBeNull();
+    expect((screen.getByRole('switch', {
+      name: 'settings.computerUse.directControl.toggleAria',
+    }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('preserves a newer native status when the initial probe returns late', async () => {
+    const initialComputer = deferred<ComputerDriverStatus>();
+    api.getComputerStatus.mockReturnValueOnce(initialComputer.promise);
+    vi.mocked(window.electronAPI.maker.computer.checkUpdate).mockResolvedValue({
+      currentVersion: '0.12.2',
+      latestVersion: null,
+      updateAvailable: false,
+      updating: false,
+    });
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    await screen.findByText('settings.computerUse.title');
+    const onStatus = vi.mocked(window.electronAPI.maker.computer.onPermissionGuideStatusChanged)
+      .mock.calls.at(-1)![0];
+    await act(async () => {
+      onStatus({ ...computerUnavailable, installed: true, version: '0.12.2' });
+    });
+    expect(screen.getByText('settings.computerUse.directControl.status.version')).toBeTruthy();
+    await act(async () => { initialComputer.resolve(computerUnavailable); });
+    expect(screen.getByText('settings.computerUse.directControl.status.version')).toBeTruthy();
+  });
+
   it('keeps optional copy diagnostics out of user-facing launch notifications', async () => {
     api.getBackendState.mockResolvedValue({ active: 'external' });
     api.getBackendHealth.mockResolvedValue({
