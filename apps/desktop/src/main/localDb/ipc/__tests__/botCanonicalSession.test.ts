@@ -3471,6 +3471,7 @@ describe('Bot Session task end-to-end runtime', () => {
     >;
     onResultReceiptPersisted?: () => Promise<void>;
     onCompletionDispatched?: () => Promise<void>;
+    onInteractionDispatched?: () => Promise<void>;
   } = {}) {
     const accountReady = options.accountReady ?? (() => true);
     const started: StartedTurn[] = [];
@@ -3665,6 +3666,9 @@ describe('Bot Session task end-to-end runtime', () => {
       const result = await dispatchDirect(params);
       if (result.ok && params.clientId?.startsWith('bot-delegation-completion:')) {
         await options.onCompletionDispatched?.();
+      }
+      if (result.ok && params.clientId?.startsWith('bot-delegation-interaction:')) {
+        await options.onInteractionDispatched?.();
       }
       return result;
     });
@@ -6353,10 +6357,16 @@ describe('Bot Session task end-to-end runtime', () => {
         kind: 'permission' as const,
         requestId: 'permission-1',
         toolName: 'write_file',
-        input: { path: '/tmp/report.md' },
+        input: { path: '/tmp/report.md', token: 'private-credential-value' },
         title: '写入报告',
       };
       await runtime.delegation.handleInteractionStart(started.childSessionId, request);
+      const wake = runtime.dispatch.mock.calls.find(([params]) =>
+        params.clientId === `bot-delegation-interaction:${started.delegationId}:${request.requestId}`,
+      )?.[0].message;
+      expect(wake).toContain('"path":"/tmp/report.md"');
+      expect(wake).toContain('"token":"[REDACTED]"');
+      expect(wake).not.toContain('private-credential-value');
       await expect(
         runtime.delegation.getSessionTask('session-1', started.delegationId),
       ).resolves.toMatchObject({
@@ -6367,6 +6377,7 @@ describe('Bot Session task end-to-end runtime', () => {
           pendingInteraction: {
             requestId: 'permission-1',
             kind: 'permission',
+            summary: '写入报告',
           },
         },
       });
@@ -6390,6 +6401,44 @@ describe('Bot Session task end-to-end runtime', () => {
       });
     } finally {
       runtime.dispose();
+    }
+  });
+
+  it('retries a pending approval wake-up in the replacement canonical task', async () => {
+    await seedPair();
+    vi.useFakeTimers();
+    let replacementSessionId: string | undefined;
+    const runtime = createDelegationRuntime({
+      onInteractionDispatched: async () => {
+        if (replacementSessionId) return;
+        h.sqlite!.prepare("DELETE FROM sessions WHERE id = 'session-1'").run();
+        const recovered = await invoke('local-db:bots:create-canonical-session', {
+          botId: 'bot-a', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+        });
+        replacementSessionId = recovered.canonicalSessionId as string;
+      },
+    });
+    try {
+      const task = await runtime.delegation.startSessionTask({
+        callerSessionId: 'session-1', objective: 'Wait for approval before writing.',
+      });
+      if (!task.ok) throw new Error('Task did not start');
+      const request = { kind: 'permission' as const, requestId: 'replacement-approval', toolName: 'write_file', input: {} };
+      await runtime.delegation.handleInteractionStart(task.childSessionId, request);
+      expect(replacementSessionId).toBeTruthy();
+      const wakeId = `bot-delegation-interaction:${task.delegationId}:${request.requestId}`;
+      expect(h.sqlite!.prepare('SELECT 1 FROM messages WHERE session_id = ? AND client_id = ?')
+        .get(replacementSessionId, wakeId)).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sqlite!.prepare('SELECT 1 FROM messages WHERE session_id = ? AND client_id = ?')
+        .get(replacementSessionId, wakeId)).toBeTruthy();
+      expect(runtime.started.filter(turn => turn.sessionId === replacementSessionId)).toHaveLength(1);
+      expect(await runtime.delegation.getSessionTask(replacementSessionId!, task.delegationId))
+        .toMatchObject({ task: { status: 'waiting', pendingInteraction: { requestId: request.requestId } } });
+    } finally {
+      runtime.dispose();
+      vi.useRealTimers();
     }
   });
 
