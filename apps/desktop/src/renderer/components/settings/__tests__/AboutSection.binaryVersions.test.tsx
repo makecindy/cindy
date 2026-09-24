@@ -164,7 +164,7 @@ describe('AboutSection agent binary versions', () => {
     expect(screen.queryByText('settings.about.harnessCheckedAt')).toBeNull();
   });
 
-  it('checks again from the menu and keeps the last result when that check fails', async () => {
+  it('checks again from the menu, keeps the last version, and disables update when that check fails', async () => {
     mockOnline({ codex: CODEX_UPDATE });
 
     renderRows();
@@ -177,8 +177,26 @@ describe('AboutSection agent binary versions', () => {
     await screen.findByText('settings.about.harnessCheckFailed');
     expect(getBinaryVersion.mock.calls.filter(([kind, options]) => kind === 'codex' && options?.checkLatest)).toHaveLength(2);
     await openMenu('Codex');
-    expect(screen.getByRole('menuitem', { name: /harnessUpdateButton Codex.*1\.1\.0/ }).getAttribute('aria-disabled')).toBeNull();
+    expect(screen.getByRole('menuitem', { name: /harnessUpdateButton Codex.*1\.1\.0/ }).getAttribute('aria-disabled')).toBe('true');
     expect(screen.getByText('settings.about.harnessCheckedAt')).toBeTruthy();
+  });
+
+  it('disables update when a later check rejects before returning a result', async () => {
+    mockOnline({ codex: CODEX_UPDATE });
+
+    renderRows();
+    await screen.findByText('settings.about.harnessUpdateAvailable');
+
+    getBinaryVersion.mockImplementation((kind: 'claude-code' | 'codex', options?: { checkLatest?: boolean }) => {
+      if (kind === 'codex' && options?.checkLatest) return Promise.reject(new Error('ipc closed'));
+      return Promise.resolve(versionResult(kind, options, null));
+    });
+    await openMenu('Codex');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'settings.about.harnessCheck' }));
+
+    await screen.findByText('settings.about.harnessCheckFailed');
+    await openMenu('Codex');
+    expect(screen.getByRole('menuitem', { name: /harnessUpdateButton Codex.*1\.1\.0/ }).getAttribute('aria-disabled')).toBe('true');
   });
 
   it('requires confirmation and relaunches only for the confirmed harness', async () => {

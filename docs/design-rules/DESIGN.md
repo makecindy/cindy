@@ -408,9 +408,11 @@ all states use semantic colors in both Light and Dark.
 
 Claude Code and Codex use the same row, trigger and menu (`HarnessVersionMenuRow`), with only
 the Cindy-maintained version chain: update to the current channel's version (shown right-aligned,
-disabled unless strictly newer), check again, and the last successful check time. There is no
-upstream source, restore or release-notes entry. Updating keeps the existing confirm → busy
-warning → restart flow; the download happens in the normal startup Splash, not in the row.
+disabled unless strictly newer), check again, and the last successful check time. A later failed
+online check keeps that last version in the menu but disables Update: restart re-checks the
+manifest and cannot install from a stale result. There is no upstream source, restore or
+release-notes entry. Updating keeps the existing confirm → busy warning → restart flow; the
+download happens in the normal startup Splash, not in the row.
 
 
 ## 5. Layout Principles

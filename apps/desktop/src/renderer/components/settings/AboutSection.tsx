@@ -96,16 +96,22 @@ function useAgentBinaryVersion(kind: UpdatableAgentKind): { state: AgentVersionS
             loading: false,
             version: latest.version,
             error: latest.error,
-            // Same as Pi: a failed lookup keeps the last known online result and check time.
+            // Keep the last known channel version and check time so the menu
+            // still shows what we last saw. Do not keep Update enabled: a
+            // harness relaunch re-checks the manifest, so a stale
+            // updateAvailable can confirm a version that is not installable
+            // while offline.
             latestVersion: failed ? prev.latestVersion : latest.latestVersion,
-            updateAvailable: failed ? prev.updateAvailable : latest.updateAvailable,
+            updateAvailable: failed ? false : latest.updateAvailable,
             checkFailed: failed,
             checkedAt: failed ? prev.checkedAt : Date.now(),
             checking: false,
           }));
         },
         () => {
-          if (mounted.current) setState((prev) => ({ ...prev, checking: false, checkFailed: true }));
+          if (mounted.current) {
+            setState((prev) => ({ ...prev, checking: false, checkFailed: true, updateAvailable: false }));
+          }
         },
       )
       .finally(() => {
@@ -214,7 +220,7 @@ function AgentVersionRow({
         : '';
 
   const handleUpdate = async () => {
-    if (!currentVersion || !latestVersion) return;
+    if (!updateAvailable || !currentVersion || !latestVersion) return;
     const confirmed = await confirm({
       title: t('settings.about.harnessUpdateTitle', { name }),
       description: t('settings.about.harnessUpdateDescription', {
