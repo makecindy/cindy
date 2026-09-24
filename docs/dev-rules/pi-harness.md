@@ -90,7 +90,14 @@ Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveT
 provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建 runtime。校验完成前
 子代理 route 保持 pending，失败则终止该 live 任务。本地 Pi 跨 proxy 供应商身份切换来源
 （`x-cindy-pi-provider-id` 会变化）或 Orca worker 路由重建会退役旧 runtime（`runtimeRetired`）、
-目标 route 交给下一次发送懒创建；需要缩窗保护时，90% 固定压力线事务必须在退役关闭前完成。
+目标 route 交给下一次发送懒创建；退役前能按目录窗口完成的 90% 固定压力线评估照旧在关闭前
+完成（保护口径不变）。但**目录窗口可能与新进程 `get_state` 回报的 contextWindow 不同**，
+所以下一次发送在消息真正发给模型之前必须用新进程的**实际窗口**重核一次：实际窗口更小且
+旧历史达到 90% 固定压力线时，先走同一目标窗口事务完成 bounded handoff + `context_rebuild`
+再发送（`piRetiredRouteWindowGuard`，接在发送事务的懒创建之后、`Session.send` 之前）。
+核验或保护失败时**不发送这条消息**、不静默改发旧供应商，把消息退回队列并给出可恢复的
+失败状态（用户重试会重新核验）；同一个失败意图不自动重试。冷 Pi 跳过启动期核实
+（`coldPiRouteWithoutLiveWindowCheck`）的 route 走同一套发送前核验。
 不允许保留旧进程只改 provider store —— 旧请求头与新来源不一致会被 proxy 以 403 拒绝。
 Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、

@@ -1258,6 +1258,22 @@ describe('session runtime control wiring', () => {
       "runtimeAgentKind === 'pi' && runtimeRouteChanged && !piRouteChangeRetiresRuntime",
     );
     expect(setModel).toContain('unsupported runtime replacement; runtime selection was not changed');
+
+    // 退役/冷跳过的 route 把「新进程实际窗口」核验挪到下一次发送：register 在 apply 之后
+    // 登记待核验，发送事务在懒创建之后、Session.send 之前核验（piRetiredRouteWindowGuard）。
+    expect(registerSource).toContain('createPiRetiredRouteWindowGuard({');
+    const recordPendingCheck = setModel.indexOf('piRetiredRouteWindowGuardHolder?.record(');
+    expect(recordPendingCheck).toBeGreaterThan(skipLiveVerification);
+    expect(setModel).toContain('(runtimeRetiredForRouteChange || coldPiRouteWithoutLiveWindowCheck)');
+    expect(registerSource).toContain('verifyRetiredRouteWindowBeforeSend:');
+    const guardCall = makerSendSource.indexOf(
+      'await deps.verifyRetiredRouteWindowBeforeSend?.(sessionId);',
+    );
+    const vendorSend = makerSendSource.indexOf('const sendResult = await sess.send(');
+    expect(guardCall).toBeGreaterThan(-1);
+    expect(guardCall).toBeLessThan(vendorSend);
+    // 核验失败必须抛错（pre-accept 回滚 + 队列恢复），不能只记日志后照发。
+    expect(registerSource).toContain("verification.status === 'failed'");
   });
 
   it('refreshes model-only context snapshots against the retained target provider route', () => {

@@ -469,6 +469,11 @@ export interface MakerSendTransactionDeps {
    */
   prepareUnhealthySession?(sessionId: string): Promise<boolean | void>;
   /**
+   * Pi 退役/跳过启动期核实的 route 在「新进程已就绪、消息尚未发给模型」时补一次实际窗口
+   * 核验（必要时先完成缩窗重建）。抛错 = 这条消息不发送，由调用方退回队列。
+   */
+  verifyRetiredRouteWindowBeforeSend?(sessionId: string): Promise<{ rebuilt: boolean } | void>;
+  /**
    * session-agent-switch:pending 交接读取(agentHandoff 注册表)。命中时把交接
    * 文本前置进 wire payload(不影响 persistUserMessage 落库显示内容),并在
    * dispatch 跨过不可逆边界(accepted)后 consume;未 accepted / 抛错保留 pending。
@@ -1057,19 +1062,49 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         }
       }
 
-      if (!sess) {
-        if (!createOpts)
+      /** 懒创建发送目标 runtime；已有可用 session 时直接返回。 */
+      const resolveSendRuntime = async (
+        allowRecoveryCreateOpts: boolean,
+      ): Promise<{ failure: DesktopMakerSendResult } | { session?: MakerSendTransactionSession }> => {
+        if (sess) return {};
+        const supplied =
+          (createOpts as CreateOpts | undefined) ??
+          (allowRecoveryCreateOpts
+            ? await deps.readWorkingDirectoryRecoveryCreateOpts?.(sessionId)
+            : undefined);
+        if (!supplied)
           throwIpcError('NOT_FOUND', `Session ${sessionId} not found and no createOpts provided`);
-        const co = deps.buildCreateOptsWithStderr({ ...(createOpts as CreateOpts), id: sessionId });
+        const co = deps.buildCreateOptsWithStderr({ ...supplied, id: sessionId });
         await deps.reconcileCreateOptsWithDb?.(sessionId, co);
         const lazy = await lazyCreateSession(sessionId, co);
-        if (lazy.kind === 'failure') return lazy.result;
-        sess = lazy.session;
-      }
+        if (lazy.kind === 'failure') return { failure: lazy.result };
+        return { session: lazy.session };
+      };
+
+      const firstRuntime = await resolveSendRuntime(false);
+      if ('failure' in firstRuntime) return firstRuntime.failure;
+      if (firstRuntime.session) sess = firstRuntime.session;
+      if (!sess) throwIpcError('NOT_FOUND', `Session ${sessionId} could not be created`);
 
       if (sess.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
+      // 退役/冷跳过的 Pi route 在这里补真实窗口核验：新进程已经（懒）创建，但消息还没
+      // 落库、也没进 vendor。失败时抛错走 pre-accept 回滚，队首消息保留并可重试。
+      const routeVerification = await deps.verifyRetiredRouteWindowBeforeSend?.(sessionId);
+      if (routeVerification?.rebuilt) {
+        // 缩窗保护刚刚关掉并重建了原生上下文：这条消息必须由**新进程**承接，
+        // 否则会发给已退役的旧对象。
+        sess = undefined;
+        const rebuiltRuntime = await resolveSendRuntime(true);
+        if ('failure' in rebuiltRuntime) return rebuiltRuntime.failure;
+        sess = rebuiltRuntime.session;
+        if (!sess) throwIpcError('NOT_FOUND', `Session ${sessionId} could not be recreated`);
+      }
+      // 缩窗保护可能刚换过 runtime；以下一律用这份核验后的发送目标（常量才能在闭包里
+      // 保持非空收窄，sess 会在重建分支被重新赋值）。
+      const verifiedSession = sess;
+      if (!verifiedSession) throwIpcError('NOT_FOUND', `Session ${sessionId} is not available`);
       if (
         requestedSendOpts.ackInterruptedTurnOnDispatch !== undefined &&
         typeof requestedSendOpts.ackInterruptedTurnOnDispatch !== 'boolean'
@@ -1477,7 +1512,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(typeof (createOpts as { planMode?: unknown } | undefined)?.planMode === 'boolean'
             ? { planMode: (createOpts as { planMode: boolean }).planMode }
             : {}),
-          ...(sess.agentKind === 'pi' &&
+          ...(verifiedSession.agentKind === 'pi' &&
           persistUserMessage &&
           containsManagedAttachment(persistUserMessage.content) &&
           deps.linkPiUserEntry
@@ -1512,7 +1547,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           onAccepted: persistUserMessage
             ? async () => {
                 persistUserMessage.onPersisting?.();
-                deps.previewUserPrompt?.(sess, persistUserMessage.content, {
+                deps.previewUserPrompt?.(verifiedSession, persistUserMessage.content, {
                   source: 'maker_send:onPersisting',
                   clientId: persistUserMessage.clientId,
                 });
