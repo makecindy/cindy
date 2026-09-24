@@ -977,7 +977,8 @@ describe('Cindy durable PI Subagent runner', () => {
     );
     await waitForClose(fixture.child, fixture.stderr);
     const prefs = JSON.stringify({ fast: true, models: [{ provider: 'fixture', id: 'fixture-model' }] });
-    await writeFile(path.join(fixture.runDir, 'request-prefs.json'), prefs);
+    const liveRequestPrefsFile = path.join(fixture.runDir, 'current-parent-prefs.json');
+    await writeFile(liveRequestPrefsFile, prefs);
     const resumeTokenCanary = 'resume-parent-token-canary-1234567890';
     const priorConfigPath = path.join(fixture.runDir, 'config.json');
     const priorConfig = JSON.parse(await readFile(priorConfigPath, 'utf8')) as {
@@ -1001,6 +1002,7 @@ describe('Cindy durable PI Subagent runner', () => {
         runnerFallbackFile: fixture.runnerFile,
         env: {
           ...process.env,
+          CINDY_PI_MODEL_REQUEST_PREFS_FILE: liveRequestPrefsFile,
           CINDY_PI_SESSION_TOKEN: resumeTokenCanary,
           CINDY_TEST_PI_ARGS: fixture.argsFile,
           CINDY_TEST_PI_PROMPTS: fixture.promptsFile,
@@ -1023,7 +1025,7 @@ describe('Cindy durable PI Subagent runner', () => {
     expect(resumed.runtimeOwnerId).toBe('resume-owner');
     const resumedConfig = JSON.parse(await readFile(path.join(fixture.root, resumedRunId!, 'config.json'), 'utf8'));
     expect(resumedConfig.requestPrefsFile).toBe(path.join(fixture.root, resumedRunId!, 'request-prefs.json'));
-    await rm(path.join(fixture.runDir, 'request-prefs.json'));
+    await rm(liveRequestPrefsFile);
     expect(await readFile(resumedConfig.requestPrefsFile, 'utf8')).toBe(prefs);
     await expect(readFile(path.join(fixture.root, resumedRunId!, 'permission.json'), 'utf8'))
       .resolves.toContain('/current-parent');
@@ -1054,6 +1056,7 @@ describe('Cindy durable PI Subagent runner', () => {
         runnerFallbackFile: fixture.runnerFile,
         env: {
           ...process.env,
+          CINDY_PI_MODEL_REQUEST_PREFS_FILE: undefined,
           CINDY_PI_SESSION_TOKEN: resumeTokenCanary,
           CINDY_TEST_PI_ARGS: fixture.argsFile,
           CINDY_TEST_PI_PROMPTS: fixture.promptsFile,
@@ -1073,6 +1076,12 @@ describe('Cindy durable PI Subagent runner', () => {
       return runs.find((run) => run.runId === secondResumedRunId && run.state === 'completed') ?? null;
     });
     expect(secondResumed.tasks[0]?.sessionId).toBe(first.tasks[0]?.sessionId);
+    const secondConfig = JSON.parse(await readFile(path.join(fixture.root, secondResumedRunId!, 'config.json'), 'utf8'));
+    expect(secondConfig.requestPrefsFile).toBeUndefined();
+    await expect(readFile(path.join(fixture.root, secondResumedRunId!, 'request-prefs.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    // The old snapshot still exists, but is no longer authoritative for resume.
+    expect(await readFile(resumedConfig.requestPrefsFile, 'utf8')).toBe(prefs);
     const resumedPrompts = (await readFile(fixture.promptsFile, 'utf8'))
       .trim().split('\n').map((line) => JSON.parse(line) as string);
     expect(resumedPrompts.at(-1)).toBe('continue for a second resumed generation');

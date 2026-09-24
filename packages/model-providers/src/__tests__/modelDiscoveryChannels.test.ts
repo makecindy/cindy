@@ -22,6 +22,23 @@ describe('shared provider discovery', () => {
     }
   });
 
+  it('shrinks a saved discovered working window when a max-only refresh reduces capacity', () => {
+    const original = mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: [
+      { id: 'private-model', context_window: 128000, max_context_window: 256000 },
+    ] })!);
+    const refreshed = mergeDiscoveredRuntimeModels(original, parseModelsListResponse({ data: [
+      { id: 'private-model', max_context_window: 64000 },
+    ] })!);
+    expect(original[0].discoveredMetadata?.contextWindow).toBe(128000);
+    expect(refreshed[0].discoveredMetadata).toMatchObject({ contextWindow: 64000, contextWindowMax: 64000 });
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models: refreshed },
+      } });
+      expect(provider.models[agent]?.[0]).toMatchObject({ contextWindow: 64000, contextWindowMax: 64000 });
+    }
+  });
+
   it('uses max-only discovery as the first working window, ahead of inherited defaults', () => {
     const discovered = parseModelsListResponse({ data: [{ id: 'gpt-9-sol', max_context_window: 32000 }] })!;
     for (const models of [discovered, mergeDiscoveredRuntimeModels([], discovered)]) {

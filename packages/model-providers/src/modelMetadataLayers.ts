@@ -435,12 +435,13 @@ export function mergeDiscoveredRuntimeModels(
       model.discoveredMetadata ?? model,
     );
     const index = models.findIndex((m) => m.id === model.id);
-    // A max-only first discovery establishes a usable window. Sparse refreshes
-    // must not replace an already saved working budget with maximum capacity.
+    // Max-only refreshes preserve smaller working budgets, but a reduced
+    // capacity must bound the old discovered window. User overrides stay separate.
+    const previousWindow = models[index]?.discoveredMetadata?.contextWindow;
     if (discoveredMetadata.contextWindow === undefined &&
         discoveredMetadata.contextWindowMax !== undefined &&
-        models[index]?.discoveredMetadata?.contextWindow === undefined &&
-        models[index]?.contextWindow === undefined) {
+        ((previousWindow === undefined && models[index]?.contextWindow === undefined) ||
+          (previousWindow !== undefined && previousWindow > discoveredMetadata.contextWindowMax))) {
       discoveredMetadata.contextWindow = discoveredMetadata.contextWindowMax;
     }
     if (index < 0)
