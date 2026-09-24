@@ -156,6 +156,20 @@ describe('serverApiFetch', () => {
     expect(mocks.invalidateSession).toHaveBeenCalledWith('account-unavailable');
   });
 
+  it.each(['ACCOUNT_UNAVAILABLE', 'TOKEN_EXPIRED'])('detached teardown %s cannot refresh or invalidate the next account', async (code) => {
+    mocks.getAccessToken.mockReturnValue('test-new-token');
+    mocks.netFetch.mockResolvedValue({ ok: false, status: 401, json: async () => ({ error: { code } }) });
+    await expect(serverApiFetch('/api/resource', {
+      baseUrl: 'https://old-resource.example.test', token: 'test-old-token',
+      skipAutoRefresh: true, skipSessionInvalidation: true,
+    })).rejects.toMatchObject({ code, statusCode: 401 });
+    expect(mocks.netFetch).toHaveBeenCalledWith('https://old-resource.example.test/api/resource',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer test-old-token' }) }));
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.invalidateSession).not.toHaveBeenCalled();
+    expect(mocks.getAccessToken).not.toHaveBeenCalled();
+  });
+
   it.each(['INVALID_TOKEN', 'UNAUTHORIZED'])('%s refresh 一次后重试', async (code) => {
     mocks.getAccessToken.mockReturnValueOnce('token-a').mockReturnValueOnce('token-b');
     mocks.refresh.mockResolvedValue(true);
@@ -339,6 +353,35 @@ describe('serverApiFetch', () => {
     expect(logged).toContain('code=SKILL_NOT_FOUND'); // 业务 code 仍记(它不是身份)
   });
 
+  it.each(['providers', 'credentials'])('logs the BYOK %s endpoint and allowed upstream code without response details', async (endpoint) => {
+    mocks.netFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      json: async () => ({
+        error: { code: 'ORG_AI_GATEWAY_ERROR', message: 'private upstream body' },
+        apiKey: 'invalid-test-secret',
+      }),
+    });
+    const path = `/api/model-access/byok/${endpoint}`;
+    await expect(serverApiFetch(`${path}?schemaVersion=1`, {
+      baseUrl: 'https://model-access.example.com',
+      redactErrorDetails: true,
+      logLabel: path,
+      allowedRedactedErrorCodes: ['ORG_AI_GATEWAY_ERROR'],
+    })).rejects.toMatchObject({ code: 'ORG_AI_GATEWAY_ERROR', message: '请求失败 (502)' });
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'serverApiFetch.redacted_not_ok',
+      `path=${path}`,
+      'method=GET',
+      'status=502',
+      'code=ORG_AI_GATEWAY_ERROR',
+    );
+    const logged = JSON.stringify(mocks.logger.warn.mock.calls);
+    expect(logged).not.toContain('private upstream body');
+    expect(logged).not.toContain('invalid-test-secret');
+    expect(logged).not.toContain('schemaVersion');
+  });
+
   it('surfaces only explicitly allowed business codes on redacted requests', async () => {
     mocks.getAccessToken.mockReturnValue('token-a');
     mocks.netFetch
@@ -387,6 +430,7 @@ describe('serverApiFetch', () => {
     });
 
     const logged = JSON.stringify(mocks.logger.warn.mock.calls);
+    expect(logged).toContain('code=PLAN_CHANGE_NOT_AVAILABLE');
     expect(logged).not.toContain('private subscription detail');
     expect(logged).not.toContain('PRIVATE_SUBSCRIPTION_STATE');
   });

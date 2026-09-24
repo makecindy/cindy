@@ -17,6 +17,9 @@ vi.mock('../../logger', () => ({
 }));
 
 import { rewriteOutboundMedia, __testing } from '../outboundMedia';
+import { buildUserMessageAttachmentPayload } from '../../../renderer/lib/messageAttachmentPayload';
+import { withSharedTaskMedia } from '../sharedTaskMediaContext.js';
+import { assertSharedTaskReferences } from '../sharedTaskDispatch.js';
 import { parseAttachmentOssRef, isAttachmentOssRef } from '../../../shared/attachmentOssRef';
 
 const SHA256 = 'a'.repeat(64);
@@ -38,6 +41,38 @@ beforeEach(() => {
 });
 
 describe('rewriteOutboundMedia — channel gating', () => {
+  it('uploads a real Desktop composer image even when its payload says desktop-host', async () => {
+    const attachment = buildUserMessageAttachmentPayload([{ id: 'image', name: 'a.png', path: '/controller/a.png', url: 'xdt-image://task/a.png', size: 10, ext: '.png', category: 'image', mimeType: 'image/png' }]);
+    expect(attachment.serializedFiles?.[0].pathOrigin).toBe('desktop-host');
+    resolveSafe.mockReturnValue({ absPath: '/cache/a.png', mimeType: 'image/png' });
+    uploadLocalFile.mockResolvedValue({ key: 'cindy/device-link/shared-task/sharedTask/u/a.png', contentType: 'image/png', size: 10, sha256: SHA256 });
+    const item = { files: attachment.serializedFiles, persistedContent: JSON.stringify({ images: attachment.persistImageRefs }), chatMessage: { images: attachment.imageAttachments } };
+    const result = await withSharedTaskMedia('sharedTask', () => rewriteOutboundMedia('maker:input:enqueue', ['task', item]));
+    expect(uploadLocalFile).toHaveBeenCalledWith('/cache/a.png', { contentType: 'image/png' });
+    expect(() => assertSharedTaskReferences(result[1], 'task', 0, 'sharedTask')).not.toThrow();
+  });
+  it('rewrites newly added shared queue-edit attachments and preserves host-owned existing files', async () => {
+    uploadLocalFile.mockResolvedValue({ key: 'cindy/device-link/shared-task/sharedTask/u/new.png', contentType: 'image/png', size: 10, sha256: SHA256 });
+    const item = { files: [{ path: '/host/cache/old.png', pathOrigin: 'desktop-host' }, { path: '/controller/new.png' }], persistedContent: JSON.stringify({ files: [{ path: '/host/cache/old.png' }, { path: '/controller/new.png' }] }) };
+    const result = await withSharedTaskMedia('sharedTask', () => rewriteOutboundMedia('maker:input:update-content', ['task', 'client', item], new Set(['/host/cache/old.png'])));
+    expect(uploadLocalFile).toHaveBeenCalledTimes(1);
+    expect(uploadLocalFile).toHaveBeenCalledWith('/controller/new.png', {});
+    const rewritten = result[2] as typeof item;
+    expect(rewritten.files[0].path).toBe('/host/cache/old.png');
+    expect(parseAttachmentOssRef(rewritten.files[1].path)?.ossKey).toBe('cindy/device-link/shared-task/sharedTask/u/new.png');
+    expect(rewritten.persistedContent).not.toContain('/controller/new.png');
+  });
+  it('rewrites newly added ordinary device-link queue-edit attachments', async () => {
+    uploadLocalFile.mockResolvedValue({ key: 'cindy/device-link/u/new.png', contentType: 'image/png', size: 10, sha256: SHA256 });
+    const item = { files: [{ path: '/target/cache/old.png' }, { path: '/controller/new.png' }], persistedContent: JSON.stringify({ files: [{ path: '/target/cache/old.png' }, { path: '/controller/new.png' }] }) };
+    const result = await rewriteOutboundMedia('maker:input:update-content', ['task', 'client', item], new Set(['/target/cache/old.png']));
+    expect(uploadLocalFile).toHaveBeenCalledTimes(1);
+    expect(uploadLocalFile).toHaveBeenCalledWith('/controller/new.png', {});
+    const rewritten = result[2] as typeof item;
+    expect(rewritten.files[0].path).toBe('/target/cache/old.png');
+    expect(parseAttachmentOssRef(rewritten.files[1].path)?.ossKey).toBe('cindy/device-link/u/new.png');
+    expect(rewritten.persistedContent).not.toContain('/controller/new.png');
+  });
   it('非媒体 channel → 原样,不上传', async () => {
     const args = [{ a: 1 }];
     const out = await rewriteOutboundMedia('maker:set-model', args);
@@ -62,6 +97,17 @@ describe('rewriteOutboundMedia — channel gating', () => {
 });
 
 describe('rewriteQueued — persistedContent 同批改写 + 去重单上传', () => {
+  it('sends a shared Desktop attachment without leaking local optimistic/retry paths', async () => {
+    uploadLocalFile.mockResolvedValue({ key: 'cindy/device-link/shared-task/shared/u/file.pdf', size: 10, contentType: 'application/pdf', sha256: SHA256 });
+    const file = { name: 'file.pdf', path: '/local/file.pdf', mimeType: 'application/pdf', category: 'file' };
+    const input = { text: 'Read this', files: [file], persistedContent: JSON.stringify({ text: 'Read this', files: [{ name: file.name, path: file.path }] }),
+      chatMessage: { role: 'user', content: 'Read this', files: [file], images: [{ url: '/local/preview.png' }], retryFiles: [file], retryMentions: [{ path: '/local/file.pdf' }] } };
+    const result = await withSharedTaskMedia('shared', () => rewriteOutboundMedia('maker:input:enqueue', ['task', input]));
+    expect(() => assertSharedTaskReferences(result[1], 'task', 0, 'shared')).not.toThrow();
+    expect(uploadLocalFile).toHaveBeenCalledTimes(1);
+    expect((result[1] as typeof input).chatMessage).toEqual({ role: 'user', content: 'Read this' });
+    expect(input.chatMessage.files).toEqual([file]);
+  });
   it('files[] 与 persistedContent 的同一附件用同一 OSS 引用,只上传一次', async () => {
     resolveSafe.mockReturnValue({ absPath: '/abs/a.png', mimeType: 'image/png' });
     uploadLocalFile

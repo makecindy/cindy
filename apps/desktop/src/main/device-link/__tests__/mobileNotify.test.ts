@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { NOTIFY_TITLE_MAX_LENGTH } from '@cindy/device-link';
+import { NOTIFY_TITLE_MAX_LENGTH, NOTIFY_BODY_MAX_LENGTH } from '@cindy/device-link';
 import { MobileNotifyDeduper, buildSessionNotifyPayload } from '../mobileNotify';
 
 describe('buildSessionNotifyPayload', () => {
@@ -42,6 +42,14 @@ describe('buildSessionNotifyPayload', () => {
     ).toBe('需要你回覆');
   });
 
+  it.each(['😀'.repeat(240), 'a'.repeat(239) + '😀', '**中文😀** '.repeat(100)])('keeps emoji and mixed Markdown within the wire limit (case %#)', (detail) => {
+    const { body } = buildSessionNotifyPayload({ ...base, detail });
+    expect(body).toBeDefined();
+    expect(body!.length).toBeLessThanOrEqual(NOTIFY_BODY_MAX_LENGTH);
+    expect(body).not.toMatch(/[\uD800-\uDBFF]$/u);
+    expect(body).not.toContain('**');
+  });
+
   it('collapseId 哈希压缩:长 deviceId 也稳定在 32 hex(APNs 64B 上限内),不同会话不同键', () => {
     const longDevice = { ...base, selfDeviceId: 'f'.repeat(64) };
     const a = buildSessionNotifyPayload(longDevice).collapseId;
@@ -66,9 +74,16 @@ describe('buildSessionNotifyPayload', () => {
 });
 
 describe('MobileNotifyDeduper', () => {
+  it('uses the terminal boundary of a fallback signal to distinguish a later turn from scheduler output', () => {
+    const deduper = new MobileNotifyDeduper();
+    deduper.recordSent('session', 'done', 250);
+    expect(deduper.shouldSend('session', 'done', 260, 'turn:100:200:signal-1')).toBe(false);
+    expect(deduper.shouldSend('session', 'done', 410, 'turn:300:400:signal-2')).toBe(true);
+  });
   it('同 session + kind 窗口内只放行一次,窗口滚动后恢复', () => {
     const deduper = new MobileNotifyDeduper(5_000);
     expect(deduper.shouldSend('s1', 'done', 0)).toBe(true);
+    deduper.recordSent('s1', 'done', 0);
     expect(deduper.shouldSend('s1', 'done', 4_999)).toBe(false);
     expect(deduper.shouldSend('s1', 'done', 5_000)).toBe(true);
   });
@@ -79,4 +94,37 @@ describe('MobileNotifyDeduper', () => {
     expect(deduper.shouldSend('s1', 'done', 1)).toBe(true);
     expect(deduper.shouldSend('s2', 'done', 2)).toBe(true);
   });
+
+  it('reconciles an accepted anonymous scheduler push with the same durable turn', () => {
+    const deduper = new MobileNotifyDeduper();
+    deduper.recordSent('session', 'done', 1_000);
+    expect(deduper.shouldSend('session', 'done', 1_001, 'turn:900:950')).toBe(false);
+    expect(deduper.shouldSend('session', 'done', 10_000, 'turn:900:950')).toBe(false);
+    expect(deduper.shouldSend('session', 'done', 1_200, 'turn:950:1100')).toBe(true);
+    expect(deduper.shouldSend('session', 'done', 10_100, 'turn:10050:10075')).toBe(true);
+  });
+
+  it('keeps an anonymous scheduler push out of the recent identified completion window', () => {
+    const deduper = new MobileNotifyDeduper();
+    deduper.recordSent('session', 'done', 1_000, 'turn:900:950');
+    expect(deduper.shouldSend('session', 'done', 1_001)).toBe(false);
+    expect(deduper.shouldSend('session', 'done', 6_000)).toBe(true);
+  });
+});
+
+it('uses final-message identity for completed replies, allowing distinct replies within five seconds', () => {
+  const dedupe = new MobileNotifyDeduper();
+  expect(dedupe.shouldSend('bot', 'done', 100, 'answer-1')).toBe(true);
+  // A relay rejection leaves the first answer eligible for a later attempt.
+  expect(dedupe.shouldSend('bot', 'done', 101, 'answer-1')).toBe(true);
+  dedupe.recordSent('bot', 'done', 101, 'answer-1');
+  expect(dedupe.shouldSend('bot', 'done', 102, 'answer-1')).toBe(false);
+  expect(dedupe.shouldSend('bot', 'done', 101, 'answer-2')).toBe(true);
+  dedupe.recordSent('bot', 'done', 101, 'answer-2');
+  expect(dedupe.shouldSend('bot', 'done', 100_000, 'answer-2')).toBe(false);
+});
+it('sends plain text to APNs, not Markdown or image paths', () => {
+  const payload = { sessionId: 'bot', title: 'Cindy', kind: 'done' as const, selfDeviceId: 'home', fallbackBody: 'New reply' };
+  expect(buildSessionNotifyPayload({ ...payload, detail: '**Report** [ready](https://example.com) `a_b`' }).body).toBe('Report ready a_b');
+  expect(buildSessionNotifyPayload({ ...payload, detail: '![private](/private/file.png)' }).body).toBe('New reply');
 });

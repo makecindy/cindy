@@ -1,3 +1,14 @@
+import { and, desc, inArray, isNull } from 'drizzle-orm';
+import { getDbClient } from '../client/current.js';
+import { botSessionLinks } from '../schema.js';
+import type { BotRemoteResourceSource } from './bots.js';
+import { getAgentIslandService } from '../../agent-island/service.js';
+import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botRemoteResourceInvalidation.js';
+import { getWorkingStatusCopy } from '../../maker-ipc/workingStatus.js';
+import { WORKING_PHASES } from '../../../shared/workingStatus.js';
+import { resolveSystemLocale } from '../../../shared/locale.js';
+import type { botRemoteManagement } from './botRemoteManagement.js';
+import { editorCopy } from './botRemoteEditors.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../device-link/broadcast-tap.js';
 import {
   getBotRemoteResourceSource,
@@ -14,10 +25,28 @@ import {
   visibleBotRemoteResourceSources,
 } from './botRemoteResourceProjection.js';
 
+/** Canonical activity wins, then the newest running delegation, like the local roster. */
+async function runningBotActivities(sources: readonly BotRemoteResourceSource[]) {
+  const running = getAgentIslandService()?.getSessionActivitySnapshots().filter(activity => activity.phase === 'running') ?? [];
+  const bySession = new Map(running.map(activity => [activity.sessionId, activity]));
+  const delegated = sources.length && running.length ? await getDbClient().drizzle
+    .select({ botId: botSessionLinks.botId, sessionId: botSessionLinks.sessionId })
+    .from(botSessionLinks).where(and(
+      inArray(botSessionLinks.botId, sources.map(source => source.id)),
+      inArray(botSessionLinks.sessionId, running.map(activity => activity.sessionId)),
+      inArray(botSessionLinks.role, ['canonical', 'delegation']),
+      isNull(botSessionLinks.archivedAt),
+    )).orderBy(desc(botSessionLinks.createdAt)) : [];
+  return new Map(sources.map(source => [source.id,
+    (source.canonicalSessionId ? bySession.get(source.canonicalSessionId) : undefined)
+      ?? bySession.get(delegated.find(link => link.botId === source.id)?.sessionId ?? ''),
+  ]));
+}
+
 let registered = false;
 
 /** Register the Bot module through the same API future host modules use. */
-export function registerBotRemoteResourceProvider(): void {
+export function registerBotRemoteResourceProvider(management?: typeof botRemoteManagement): void {
   if (registered) return;
   remoteResourceRegistry.register({
     collection: {
@@ -26,8 +55,10 @@ export function registerBotRemoteResourceProvider(): void {
       title: TEAMMATES_TITLE,
       placement: 'home-scope',
       icon: { name: 'users', fallbackText: '••' },
+      ...(management ? { actions: [{ id: 'open-create', label: editorCopy.create }] } : {}),
     },
     async list(_context, request) {
+      const scope = captureDataOwnerBroadcastScope();
       const rawQuery = request.query?.trim().toLocaleLowerCase() ?? '';
       const sources = visibleBotRemoteResourceSources(await listBotRemoteResourceSources());
       const filtered = rawQuery
@@ -35,27 +66,66 @@ export function registerBotRemoteResourceProvider(): void {
             [source.name, source.description]
               .some((value) => value.toLocaleLowerCase().includes(rawQuery)))
         : sources;
-      const items = filtered
-        .slice(0, request.limit ?? 200)
-        .map(botRemoteCollectionItemFromSource);
+      const page = filtered.slice(0, request.limit ?? 200);
+      const activities = await runningBotActivities(page);
+      if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
+      const items = page
+        .map(source => {
+          const item = botRemoteCollectionItemFromSource(source);
+          const activity = activities.get(source.id);
+          if (activity?.phase === 'running' && activity.workingPhase) {
+            item.display.generation = { phase: activity.workingPhase ?? 'processing', startedAt: activity.startedAtMs };
+            item.revision += `:${activity.startedAtMs}:${item.display.generation.phase}`;
+          }
+          return item;
+        });
       return {
         collectionId: TEAMMATES_REMOTE_COLLECTION_ID,
         revision: items.map((item) => item.revision).join('|'),
         items,
       };
     },
-    async get(_context, request) {
+    async get(context, request) {
+      if (management && (request.ref.id === 'create' || request.ref.id.startsWith('settings:'))) {
+        return management.getEditor(context, request.ref.id, request.client.locale);
+      }
+      if (request.ref.id.startsWith('working:')) {
+        const [botId, phase, extra] = request.ref.id.slice('working:'.length).split('/');
+        if (extra !== undefined || !botId || !WORKING_PHASES.includes(phase as typeof WORKING_PHASES[number]))
+          throw new RemoteResourceRegistryError('NOT_FOUND', 'Unknown working status');
+        const scope = captureDataOwnerBroadcastScope();
+        const [source] = visibleBotRemoteResourceSources([await getBotRemoteResourceSource(botId)]);
+        if (!source || !isDataOwnerBroadcastScopeCurrent(scope))
+          throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+        const activity = (await runningBotActivities([source])).get(source.id);
+        if (!activity || !isDataOwnerBroadcastScopeCurrent(scope))
+          throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate is not running');
+        const result = await getWorkingStatusCopy({ sessionId: activity.sessionId, phase, locale: resolveSystemLocale(request.client.locale) });
+        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
+        return { ref: request.ref, revision: String(source.currentVersion), display: { title: source.name }, links: [],
+          blocks: [{ id: 'working', primitive: 'status', fallbackMarkdown: result.text ?? '' }] };
+      }
       const [source] = visibleBotRemoteResourceSources([
         await getBotRemoteResourceSource(request.ref.id),
       ]);
       if (!source) {
         throw new RemoteResourceRegistryError('NOT_FOUND', 'remote resource does not exist');
       }
-      return { ...botRemoteResourceFromSource(source), teammateMessaging: { version: 1, available: source.status === 'active' } };
+      const resource = management && request.client.primitives.includes('form') ? await management.get(context, source.id) : management && source.invitation ? await management.getInvitation(context, source.id) : botRemoteResourceFromSource(source);
+      if (management && request.client.primitives.includes('form')) {
+        for (const page of ['avatar', 'skills', 'connections'] as const) {
+          const block = resource.blocks?.find(block => block.id === page);
+          const data = { entries: [{ id: page, title: editorCopy[page], resourceId: `settings:${source.id}/${page}` }] };
+          if (block) block.data = data;
+          else resource.blocks?.push({ id: page, primitive: 'list', fallbackMarkdown: '', data });
+        }
+      }
+      return { ...resource, teammateMessaging: { version: 1, available: source.status === 'active' } };
     },
     async invoke(context, request) {
       const scope = captureDataOwnerBroadcastScope();
       if (request.actionId !== 'send-message' && request.actionId !== 'verify-message' && request.actionId !== 'message-receipt') {
+        if (management) return management.invoke(context, request);
         throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Unknown teammate action');
       }
       const input = request.input;
@@ -89,6 +159,10 @@ export function registerBotRemoteResourceProvider(): void {
       });
       return { effects: [], teammateMessage };
     },
+  });
+  getAgentIslandService()?.subscribeSessionActivity(({ sessionId, previous, current }) => {
+    if (previous?.phase !== current?.phase || previous?.workingPhase !== current?.workingPhase
+      || previous?.startedAtMs !== current?.startedAtMs) scheduleBotRemoteResourceChangedForSession(sessionId);
   });
   registered = true;
 }

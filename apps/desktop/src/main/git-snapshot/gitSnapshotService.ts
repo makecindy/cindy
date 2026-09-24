@@ -12,6 +12,7 @@ import path from 'node:path';
 
 import { createLogger } from '../logger';
 import { gitExec, GitExecError } from '../worktree/gitExec';
+import { isolatedGitExec, snapshotGitIsolationArgs } from './isolatedGitExec';
 import { gitPathOutput } from '../worktree/gitPathOutput';
 import {
   buildSnapshotFilePlan,
@@ -196,8 +197,7 @@ export async function createSnapshotMarker(
     await withDisabledHooks((hooksPath) =>
       gitExec(
         [
-          '-c',
-          `core.hooksPath=${toGitConfigPath(hooksPath)}`,
+          ...snapshotGitIsolationArgs(hooksPath),
           ...(input.author
             ? ['-c', `user.name=${input.author.name}`, '-c', `user.email=${input.author.email}`]
             : []),
@@ -256,7 +256,7 @@ export async function createSnapshotDetailed(
   const result = await withTemporaryIndex(repoPath, async (extraEnv) => {
     if (stagePathspecs.length > 0) {
       await withPathspecFile(stagePathspecs, (pathspecFile) =>
-        gitExec(
+        isolatedGitExec(
           ['add', '-A', '--pathspec-from-file', pathspecFile, '--pathspec-file-nul'],
           repoPath,
           { extraEnv },
@@ -295,8 +295,7 @@ export async function createSnapshotDetailed(
     await withDisabledHooks((hooksPath) =>
       gitExec(
         [
-          '-c',
-          `core.hooksPath=${toGitConfigPath(hooksPath)}`,
+          ...snapshotGitIsolationArgs(hooksPath),
           ...(input.author
             ? ['-c', `user.name=${input.author.name}`, '-c', `user.email=${input.author.email}`]
             : []),
@@ -504,7 +503,7 @@ export async function createShadowSavepoint(
   return withTemporaryIndex(repoPath, async (extraEnv) => {
     if (stagePathspecs.length > 0) {
       await withPathspecFile(stagePathspecs, (pathspecFile) =>
-        gitExec(
+        isolatedGitExec(
           ['add', '-A', '--pathspec-from-file', pathspecFile, '--pathspec-file-nul'],
           repoPath,
           { extraEnv },
@@ -873,7 +872,7 @@ async function safeGitStdout(
   extraEnv: Record<string, string>,
 ): Promise<string> {
   try {
-    const { stdout } = await gitExec(args, repoPath, { extraEnv });
+    const { stdout } = await isolatedGitExec(args, repoPath, { extraEnv });
     return stdout;
   } catch (err) {
     log.debug('[createSnapshot] git read failed, degrade to empty', {
@@ -903,7 +902,7 @@ async function hasStagedChanges(
   extraEnv: Record<string, string>,
 ): Promise<boolean> {
   try {
-    await gitExec(['diff', '--cached', '--quiet'], repoPath, { extraEnv });
+    await isolatedGitExec(['diff', '--cached', '--quiet'], repoPath, { extraEnv });
   } catch (err) {
     if (err instanceof GitExecError && err.exitCode === 1) return true;
     throw err;
@@ -999,10 +998,6 @@ async function withDisabledHooks<T>(fn: (hooksPath: string) => Promise<T>): Prom
   }
 }
 
-function toGitConfigPath(filePath: string): string {
-  return filePath.replace(/\\/g, '/');
-}
-
 function isUnbornHeadError(err: GitExecError): boolean {
   return /not a valid object name|unknown revision|ambiguous argument|bad revision/i.test(
     err.stderr,
@@ -1021,7 +1016,7 @@ async function removeRenameOldPaths(
 
 async function resetCommittedPaths(repoPath: string, pathspecs: readonly string[]): Promise<void> {
   for (const chunk of chunkPathspecArgs(pathspecs)) {
-    await gitExec(['reset', '-q', '--', ...chunk], repoPath);
+    await isolatedGitExec(['reset', '-q', '--', ...chunk], repoPath);
   }
 }
 

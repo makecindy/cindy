@@ -62,7 +62,7 @@ export function useRemoteBotSync(): void {
               avatar: bot.avatar, avatarColor: bot.avatarColor, description: bot.description, preview: bot.preview,
               activityAt: bot.activityAt, sessionId: typeof bot.sessionId === 'string' ? bot.sessionId : null,
               lastReplyAt: Number.isFinite(bot.lastReplyAt) ? bot.lastReplyAt : undefined,
-              readAt: Number.isFinite(bot.readAt) ? bot.readAt : undefined, online: false,
+              readAt: Number.isFinite(bot.readAt) ? bot.readAt : undefined, online: false, connectionKnown: false,
             }));
           }
         }
@@ -70,7 +70,7 @@ export function useRemoteBotSync(): void {
       publish(cached);
     }
     if (!nextOwner) return;
-    if (!devices) { publish(snapshot.map((bot) => ({ ...bot, online: false }))); return; }
+    if (!devices) { publish(snapshot.map((bot) => ({ ...bot, online: false, connectionKnown: false, generation: undefined }))); return; }
     let disposed = false;
     let relayAvailable = false;
     let statusRevision = 0;
@@ -81,7 +81,7 @@ export function useRemoteBotSync(): void {
     publish(
       snapshot
         .filter((bot) => byId.has(bot.deviceId))
-        .map((bot) => ({ ...bot, online: bot.online && byId.get(bot.deviceId)!.online, deviceName: byId.get(bot.deviceId)!.name })),
+        .map((bot) => ({ ...bot, online: bot.online && byId.get(bot.deviceId)!.online, connectionKnown: byId.get(bot.deviceId)!.online ? bot.connectionKnown : true, deviceName: byId.get(bot.deviceId)!.name })),
     );
     const generations = new Map<string, number>();
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -89,6 +89,8 @@ export function useRemoteBotSync(): void {
     async function refresh(deviceId: string) {
       const host = byId.get(deviceId);
       if (!host?.online || !relayAvailable || !current()) return;
+      // Reachability comes from the live device directory + relay, never from a list/API error.
+      publish(snapshot.map(bot => bot.deviceId === deviceId ? { ...bot, online: true, connectionKnown: true } : bot));
       const epoch = (generations.get(deviceId) ?? 0) + 1;
       generations.set(deviceId, epoch);
       try {
@@ -109,11 +111,9 @@ export function useRemoteBotSync(): void {
         publish([...snapshot.filter((bot) => bot.deviceId !== deviceId), ...bots]);
       } catch {
         if (!current() || generations.get(deviceId) !== epoch) return;
-        // Old hosts do not advertise this API. Keep their cached rows offline;
-        // retry on a real reconnect or change, never downgrade to a local call.
-        publish(
-          snapshot.map((bot) => (bot.deviceId === deviceId ? { ...bot, online: false } : bot)),
-        );
+        // Keep connection evidence and cached identity. An unsupported/failed
+        // resource read does not mean the device disconnected.
+        publish(snapshot.map(bot => bot.deviceId === deviceId ? { ...bot, generation: undefined } : bot));
       }
     }
     // The app's existing remote-session synchronizer owns the sessions topic.
@@ -146,7 +146,7 @@ export function useRemoteBotSync(): void {
       } else {
         for (const id of byId.keys()) generations.set(id, (generations.get(id) ?? 0) + 1);
         publish(
-          snapshot.map((bot) => ({ ...bot, online: false })),
+          snapshot.map((bot) => ({ ...bot, online: false, connectionKnown: state.status === 'stopped' || !byId.get(bot.deviceId)?.online, generation: undefined })),
         );
       }
     });
@@ -156,9 +156,9 @@ export function useRemoteBotSync(): void {
       relayAvailable = state.linkStatus === 'online';
       if (relayAvailable) {
         for (const host of hosts) if (host.online) void refresh(host.deviceId);
-      } else publish(snapshot.map((bot) => ({ ...bot, online: false })));
+      } else publish(snapshot.map((bot) => ({ ...bot, online: false, connectionKnown: state.linkStatus === 'stopped' || !byId.get(bot.deviceId)?.online, generation: undefined })));
     }).catch(() => {
-      if (current() && revision === statusRevision) publish(snapshot.map((bot) => ({ ...bot, online: false })));
+      if (current() && revision === statusRevision) publish(snapshot.map((bot) => ({ ...bot, online: false, connectionKnown: false, generation: undefined })));
     });
     return () => {
       disposed = true;

@@ -15,6 +15,8 @@
 export type BotCollaborationRole =
   /** 父任务：启动时写下的任务卡锚点（空正文，只为承载卡片）。 */
   | 'delegation-request'
+  /** Immutable receipt of one completed execution, separate from the original task anchor. */
+  | 'delegation-result'
   /** 历史：父任务里的目标伙伴结果。 */
   | 'guest-result'
   /** 父任务：发起方给进行中任务追加消息的留痕。 */
@@ -40,10 +42,21 @@ export interface BotCollaborationMeta {
   childSessionId: string | null;
   /** 委派目标摘要，用于卡片折叠态文案。 */
   objective: string;
+  result?: {
+    /** Child task directory on its host; used to resolve remote artifact links. */
+    workingDir?: string;
+    runSequence: number;
+    status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
+    text: string;
+    /** Frozen failure detail, only revealed on demand; never the primary label. */
+    error?: string;
+    artifacts: Array<{ absolutePath: string }>;
+  };
 }
 
 const ROLES = new Set<BotCollaborationRole>([
   'delegation-request',
+  'delegation-result',
   'guest-result',
   'interjection',
   'guest-request',
@@ -73,6 +86,13 @@ export function readBotCollaborationMeta(value: unknown): BotCollaborationMeta |
   const parentSessionId = optionalId(raw.parentSessionId);
   const childSessionId = optionalId(raw.childSessionId);
   if (parentSessionId === undefined || childSessionId === undefined) return null;
+  const receipt = raw as unknown as BotCollaborationMeta;
+  if (receipt.role === 'delegation-result' && (!receipt.result || !Number.isSafeInteger(receipt.result.runSequence)
+    || receipt.result.runSequence < 1 || !['completed', 'failed', 'cancelled', 'timed-out'].includes(receipt.result.status)
+    || (receipt.result.workingDir !== undefined && typeof receipt.result.workingDir !== 'string')
+    || (receipt.result.error !== undefined && typeof receipt.result.error !== 'string')
+    || typeof receipt.result.text !== 'string' || !Array.isArray(receipt.result.artifacts)
+    || receipt.result.artifacts.some((file) => !file || typeof file.absolutePath !== 'string'))) return null;
   return {
     v: 1,
     role: raw.role as BotCollaborationRole,
@@ -83,12 +103,15 @@ export function readBotCollaborationMeta(value: unknown): BotCollaborationMeta |
     toBotName: raw.toBotName,
     parentSessionId,
     childSessionId,
+    ...(receipt.result ? { result: receipt.result } : {}),
     objective: raw.objective,
   };
 }
 
 /** 委派相关消息的幂等 clientId 前缀，main 与测试共用同一份常量。 */
 export const BOT_DELEGATION_CLIENT_ID = {
+  resultRun: (delegationId: string, runSequence: number) =>
+    `bot-delegation-result:${delegationId}:${runSequence}`,
   /** 父任务里的任务卡锚点。 */
   parentRequest: (delegationId: string) => `bot-delegation-request:${delegationId}`,
   /** 父任务里的结果回传（历史值，不可改）。 */

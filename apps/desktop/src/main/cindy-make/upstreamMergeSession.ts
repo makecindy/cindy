@@ -130,7 +130,10 @@ export async function ensureUpstreamMergeSession(
     check();
     emitSessionCreated(id);
   }
-  const clientId = `cindy-make-merge-first-${state.id}`;
+  // Keep the original first-step key for restored tasks. A later delta gets
+  // one new message in this same task, not another task borrowing its worktree.
+  const step = state.feature?.nextStep ?? 0;
+  const clientId = `cindy-make-merge-first-${state.id}${step > 0 ? `-step-${step}` : ''}`;
   const [first] = await db
     .select({ id: messages.id })
     .from(messages)
@@ -138,7 +141,12 @@ export async function ensureUpstreamMergeSession(
     .limit(1);
   check();
   // A persisted first message belongs to the ordinary retry/continue UI, not another dispatch.
-  if (!first && row.status === 'active' && row.clearedAt === null) {
+  if (
+    !first &&
+    row.status === 'active' &&
+    row.clearedAt === null &&
+    !(existing && state.error === 'interrupted')
+  ) {
     await dispatchCindyMakeMergeTask(
       id,
       upstreamMergePrompt(state),

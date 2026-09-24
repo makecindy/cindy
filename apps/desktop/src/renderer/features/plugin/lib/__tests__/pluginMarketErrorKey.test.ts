@@ -17,6 +17,8 @@ describe('pluginMarketErrorKey', () => {
     ['PERMISSION_DENIED', 'accessDenied'],
     ['UNSUPPORTED_CAPABILITY', 'notConfigured'],
     ['GHOST_FILE_INVALID', 'invalidPackage'],
+    ['GHOST_DOWNLOAD_TIMEOUT', 'downloadTimeout'],
+    ['GHOST_DOWNLOAD_FAILED', 'downloadFailed'],
     ['GHOST_BROKER_REDIRECT_PORT_REQUIRED', 'brokerRedirectPortRequired'],
   ])('maps %s to localized market copy', (code, suffix) => {
     expect(pluginMarketErrorKey(serializedIpcError(code))).toBe(
@@ -28,6 +30,14 @@ describe('pluginMarketErrorKey', () => {
     expect(pluginMarketErrorKey(serializedIpcError('GHOST_HOST_UNSUPPORTED'))).toBe(
       'settings.ghosts.errors.hostUnsupported',
     );
+  });
+
+  it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])('has download error copy in %s', (locale) => {
+    for (const code of ['GHOST_FILE_INVALID', 'GHOST_DOWNLOAD_TIMEOUT', 'GHOST_DOWNLOAD_FAILED']) {
+      const key = pluginMarketErrorKey(serializedIpcError(code));
+      expect(i18n.getResource(locale, 'common', key)).toEqual(expect.any(String));
+      expect(i18n.getFixedT(locale)(key)).not.toBe(key);
+    }
   });
 
   it('never exposes a plain main-process error message', () => {

@@ -1,5 +1,6 @@
 import { forwardRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Check } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
@@ -12,6 +13,8 @@ interface SendButtonProps {
   highlighted?: boolean;
   /** Override for the accessible action name when Send visually means Queue. */
   ariaLabel?: string;
+  /** Save reuses the send button shell while queue content is edited in the composer. */
+  action?: 'send' | 'save';
   /** CREATE AGENT 首页按 Figma 185:2724 使用独立私有 token。 */
   visualVariant?: 'default' | 'create-agent';
 }
@@ -36,7 +39,15 @@ function CreateAgentSendIcon() {
  * Stop (streaming):复用 Send 壳样式,仅把内容换成 10×10 圆角 1.5 的停止方块
  */
 export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(function SendButton(
-  { disabled, onClick, isStreaming = false, highlighted = false, ariaLabel, visualVariant = 'default' },
+  {
+    disabled,
+    onClick,
+    isStreaming = false,
+    highlighted = false,
+    ariaLabel,
+    action = 'send',
+    visualVariant = 'default',
+  },
   ref,
 ) {
   const { t } = useTranslation();
@@ -71,7 +82,11 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
             isStreaming ? 'scale-75 opacity-0' : 'scale-100 opacity-100',
           )}
         >
-          <CreateAgentSendIcon />
+          {action === 'save' ? (
+            <Check className="h-4 w-4" strokeWidth={2.4} />
+          ) : (
+            <CreateAgentSendIcon />
+          )}
         </span>
         <span
           className={cn(

@@ -230,7 +230,7 @@ async function makeFixture(options: {
   retryThenSucceed?: boolean;
   outputThenHang?: boolean;
   hangOnMessage?: string;
-  delayExitAfterInputEndMs?: number;
+  holdExitAfterInputEnd?: boolean;
   runtimeOwnerId?: string;
   /** Point this task's sessionDir at an existing *file* so launchTask throws. */
   poisonSessionDirIndex?: number;
@@ -284,6 +284,7 @@ async function makeFixture(options: {
   const promptsFile = path.join(root, 'prompts.jsonl');
   const commandsFile = path.join(root, 'commands.jsonl');
   const stdinEndedFile = path.join(root, 'stdin-ended');
+  const exitReleaseFile = path.join(root, 'release-exit');
   const tokensFile = path.join(root, 'tokens.jsonl');
   const pidsFile = path.join(root, 'child-pids.jsonl');
   const poisonedSessionDir = path.join(root, 'poisoned-session-dir');
@@ -442,9 +443,17 @@ process.stdin.on('end', () => {
   if (process.env.CINDY_TEST_PI_STDIN_ENDED) {
     fs.writeFileSync(process.env.CINDY_TEST_PI_STDIN_ENDED, '1');
   }
-  ${options.surviveStdinEnd
-    ? 'setInterval(() => {}, 1000);'
-    : `setTimeout(() => process.exit(0), ${Math.max(0, options.delayExitAfterInputEndMs ?? 0)});`}
+  ${options.holdExitAfterInputEnd
+    ? `const releaseExit = () => {
+      if (!process.env.CINDY_TEST_PI_EXIT_RELEASE || !fs.existsSync(process.env.CINDY_TEST_PI_EXIT_RELEASE)) return;
+      clearInterval(releaseExitInterval);
+      process.exit(0);
+    };
+    const releaseExitInterval = setInterval(releaseExit, 10);
+    releaseExit();`
+    : options.surviveStdinEnd
+      ? 'setInterval(() => {}, 1000);'
+      : 'process.exit(0);'}
 });
 `, { mode: 0o700 });
   await chmod(fakePiFile, 0o700);
@@ -505,6 +514,7 @@ process.stdin.on('end', () => {
       CINDY_TEST_PI_PROMPTS: promptsFile,
       CINDY_TEST_PI_COMMANDS: commandsFile,
       CINDY_TEST_PI_STDIN_ENDED: stdinEndedFile,
+      CINDY_TEST_PI_EXIT_RELEASE: exitReleaseFile,
       CINDY_TEST_PI_TOKENS: tokensFile,
       CINDY_PI_SESSION_TOKEN: 'parent-session-token-must-not-reach-direct-child',
       CINDY_PI_REMOTE_MCP_SECRET_FIXTURE: 'must-not-reach-child',
@@ -515,7 +525,7 @@ process.stdin.on('end', () => {
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   const fixture = {
-    root, runId, runDir, runnerFile, argsFile, promptsFile, commandsFile, stdinEndedFile,
+    root, runId, runDir, runnerFile, argsFile, promptsFile, commandsFile, stdinEndedFile, exitReleaseFile,
     tokensFile, pidsFile,
     child, stderr: () => stderr,
   };
@@ -647,25 +657,30 @@ describe('Cindy durable PI Subagent runner', () => {
   });
 
   it('rejects controls after the child RPC input has closed but before process exit', async () => {
-    const fixture = await makeFixture({ delayExitAfterInputEndMs: 750 });
-    await waitFor(async () => {
-      try {
-        await readFile(fixture.stdinEndedFile, 'utf8');
-        return true;
-      } catch {
-        return null;
-      }
-    });
-    const [closing] = await listPiSubagentRuns(fixture.root);
-    expect(closing && closing.state !== 'completed' && closing.state !== 'failed').toBe(true);
-    await expect(controlPiSubagentRuns(fixture.root, closing!.runId, 'follow_up', {
-      message: 'too late for this generation',
-    })).resolves.toBe(0);
-    await waitFor(async () => {
-      const [run] = await listPiSubagentRuns(fixture.root);
-      return run?.state === 'completed' ? run : null;
-    });
-    await waitForClose(fixture.child, fixture.stderr);
+    const fixture = await makeFixture({ holdExitAfterInputEnd: true });
+    try {
+      await waitFor(async () => {
+        try {
+          await readFile(fixture.stdinEndedFile, 'utf8');
+          return true;
+        } catch {
+          return null;
+        }
+      });
+      const [closing] = await listPiSubagentRuns(fixture.root);
+      expect(closing && closing.state !== 'completed' && closing.state !== 'failed').toBe(true);
+      await expect(controlPiSubagentRuns(fixture.root, closing!.runId, 'follow_up', {
+        message: 'too late for this generation',
+      })).resolves.toBe(0);
+      await writeFile(fixture.exitReleaseFile, '1');
+      await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'completed' ? run : null;
+      });
+      await waitForClose(fixture.child, fixture.stderr);
+    } finally {
+      await writeFile(fixture.exitReleaseFile, '1').catch(() => undefined);
+    }
   });
 
   it('feeds each durable chain result into the next isolated child', async () => {

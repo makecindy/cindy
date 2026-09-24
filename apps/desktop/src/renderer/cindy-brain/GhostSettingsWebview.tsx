@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CircleAlert, LayoutGrid, MoonStar } from 'lucide-react';
@@ -119,16 +120,9 @@ function CrashedHint({
       >
         {t('settings.ghosts.panelError.crashed')}
       </p>
-      <button
-        type="button"
-        onClick={onReload}
-        className={cn(
-          'rounded-full border border-[var(--border-default)] px-3.5 py-1.5 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-chip)]',
-          appearance === 'plugin' ? 'text-13 leading-5' : 'text-12',
-        )}
-      >
+      <Button variant="secondary" size="sm" compact type="button" onClick={onReload}>
         {t('settings.ghosts.panelError.reload')}
-      </button>
+      </Button>
     </div>
   );
 }

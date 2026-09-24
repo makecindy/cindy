@@ -143,7 +143,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     ['missing default', { reasoningEfforts: ['medium'] }],
     ['null default', { reasoningEfforts: ['medium'], reasoningDefaultEffort: null }],
     ['default outside efforts', { reasoningEfforts: ['low'], reasoningDefaultEffort: 'medium' }],
-  ])('keeps legacy Pi minimal compatibility for %s in both descriptors', (_label, fields) => {
+  ])('does not invent Pi tiers for %s in either descriptor', (_label, fields) => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     // Remote JSON can violate the static CatalogModel type at runtime.
     const entry = {
@@ -151,7 +151,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       ...fields,
     } as unknown as CatalogModel;
     catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [entry];
-    const expected = { efforts: ['minimal', 'low', 'medium', 'high'], defaultEffort: 'medium' };
+    const expected = { efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' };
     expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === entry.id))
       .toMatchObject(expected);
     expect(resolvePiRuntimeModelDescriptor(catalog, 'openai', entry.id)).toMatchObject(expected);
@@ -160,13 +160,11 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
   it('publishes Pi effort controls only when the official catalog has an explicit thinking map', () => {
     const pi = deriveAvailableModels(BUNDLED_CATALOG, 'pi');
     expect(pi.find((m) => m.id === 'grok-4.3')?.efforts).toEqual([
-      'minimal',
       'low',
       'medium',
       'high',
     ]);
     expect(pi.find((m) => m.id === 'grok-4.5')?.efforts).toEqual([
-      'minimal',
       'low',
       'medium',
       'high',
@@ -287,7 +285,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       resolvePiRuntimeModelDescriptor(catalog, 'colliding-non-reasoning', 'grok-4.5'),
     ).toMatchObject({ efforts: [], defaultEffort: null });
     expect(resolvePiRuntimeModelDescriptor(catalog, 'xai', 'grok-4.5')).toMatchObject({
-      efforts: ['minimal', 'low', 'medium', 'high'],
+      efforts: ['low', 'medium', 'high'],
       defaultEffort: 'medium',
     });
   });
@@ -357,6 +355,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     const cc = deriveAvailableModels(BUNDLED_CATALOG, 'claude-code');
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');
     expect(cc.map((m) => m.id)).toEqual([
+      'xai/grok-4.7',
       'xai/grok-4.6',
       'xai/grok-4.5',
       'xai/grok-4.3',
@@ -368,6 +367,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       'xai/grok-code-fast',
     ]);
     expect(codex.map((m) => m.id)).toEqual([
+      'xai/grok-4.7',
       'xai/grok-4.6',
       'xai/grok-4.5',
       'xai/grok-4.3',
@@ -425,6 +425,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(ids).toEqual([
       'claude-opus-4-8',
       'chatgpt/gpt-5.5',
+      'xai/grok-4.7',
       'xai/grok-4.6',
       'xai/grok-4.5',
       'xai/grok-4.3',

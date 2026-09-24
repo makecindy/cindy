@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions, messages } from '../localDb/schema.js';
@@ -11,7 +11,6 @@ import {
   RemoteResourceRegistryError,
 } from '../device-link/remoteResourceRegistry.js';
 import { resolvePreferredSystemLocale } from '../../shared/locale.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { t } from '../i18n.js';
 import { cindyMakeManager } from './manager.js';
 import { actCindyMakeTest } from './testRuntime.js';
@@ -20,7 +19,7 @@ import {
   cancelHistoryPersonalVersion,
   readCindyMakeBuildState,
 } from './historyRuntime.js';
-import { dispatchCindyMakeTask, restoreCindyMakeTaskState, startCindyMakeTask } from './taskRuntime.js';
+import { restoreCindyMakeTaskState, startCindyMakeTask } from './taskRuntime.js';
 import { createMakeRemoteProvider } from './remoteProvider.js';
 import { broadcastMakeRemoteChanged } from './remoteBroadcast.js';
 import { projectMakeRemoteCard, type MakeRemoteSnapshot } from './remoteProjection.js';
@@ -93,6 +92,7 @@ export function registerMakeRemoteResources(isRunning: (id: string) => boolean):
     if (!isCurrent()) throw unavailable();
     let completion: MakeRemoteSnapshot['completion'];
     let recoverable = false;
+    let recoveryId: string | undefined;
     let sawTurnEnd = false;
     for (const row of rows) {
       const meta = parse(row.agentMeta);
@@ -101,12 +101,16 @@ export function registerMakeRemoteResources(isRunning: (id: string) => boolean):
       const done = meta.cindyMakeCompletion as CindyMakeCompletionMeta | undefined;
       if (done && typeof done.reportedAt === 'number' && Number.isFinite(done.reportedAt)) {
         completion = { id: row.clientId, meta: done };
-        if (!sawTurnEnd) recoverable = typeof done.continuedAt === 'number';
+        if (!sawTurnEnd) {
+          recoverable = typeof done.continuedAt === 'number';
+          if (recoverable) recoveryId = row.clientId;
+        }
         break;
       }
       if (!sawTurnEnd && typeof meta.turnCompleted === 'boolean') {
         sawTurnEnd = true;
         recoverable = meta.turnCompleted;
+        if (recoverable) recoveryId = row.clientId;
       }
     }
     if (completion && !completion.meta.continuedAt) {
@@ -117,6 +121,7 @@ export function registerMakeRemoteResources(isRunning: (id: string) => boolean):
       (report) => report.task?.sessionId === sessionId,
     );
     const sharedBuild = readCindyMakeBuildState();
+    const merge = cindyMakeManager.getState().upstreamMerge;
     const snapshot: MakeRemoteSnapshot = {
       sessionId,
       revision: '',
@@ -130,12 +135,14 @@ export function registerMakeRemoteResources(isRunning: (id: string) => boolean):
           ? sharedBuild
           : undefined,
       recoverable,
+      sourceMergePending:
+        !!merge && merge.status !== 'merged' && (merge.hasWorkspace || merge.cancellationRequested),
     };
     snapshot.revision = createHash('sha256')
       .update(JSON.stringify([snapshot, rows[0]?.clientId, session.clearedAt]))
       .digest('hex')
       .slice(0, 24);
-    return { snapshot, session, isCurrent, scope };
+    return { snapshot, session, isCurrent, scope, recoveryId };
   };
   remoteResourceRegistry.register(
     createMakeRemoteProvider({
@@ -146,7 +153,7 @@ export function registerMakeRemoteResources(isRunning: (id: string) => boolean):
           text = text.replaceAll(`{{${name}}}`, value);
         return text;
       },
-      async act(sessionId, actionId, isCurrent, locale) {
+      async act(sessionId, actionId, isCurrent) {
         const state = await load(sessionId);
         if (
           !isCurrent() ||
@@ -164,34 +171,28 @@ export function registerMakeRemoteResources(isRunning: (id: string) => boolean):
         else if (kind === 'prepare' && action === 'retry') {
           const history = await getCindyMakeHistory(id);
           const item = history.items.find((entry) => entry.runId === id);
-          if (!isCurrent() || !state.isCurrent() || item?.sessionId !== sessionId ||
-              !item.actions.includes('retry-prepare')) throw unavailable();
-          await startCindyMakeTask({
-            runId: item.runId, request: item.request, title: item.title.slice(0, 200),
-          }, 0);
-        }
-        else if (kind === 'resume' && id === state.snapshot.revision) {
-          const row = state.session;
-          await dispatchCindyMakeTask(
-            sessionId,
-            t(
-              'cindyMake.test.resume.request',
-              locale ? resolvePreferredSystemLocale([locale]) : undefined,
-            ),
+          if (
+            !isCurrent() ||
+            !state.isCurrent() ||
+            item?.sessionId !== sessionId ||
+            !item.actions.includes('retry-prepare')
+          )
+            throw unavailable();
+          await startCindyMakeTask(
             {
-              id: sessionId,
-              agentKind: dbToMakerAgentKind(row.agentKind),
-              workingDir: row.workingDir,
-              model: row.model,
-              effort: row.effort,
-              providerId: row.providerId,
-              fastMode: row.fastMode,
-              permissionMode: row.permissionMode,
-              planMode: row.planModeEnabled,
+              runId: item.runId,
+              request: item.request,
+              title: item.title.slice(0, 200),
             },
-            () => isCurrent() && state.isCurrent(),
-            randomUUID(),
+            0,
           );
+        } else if (
+          kind === 'resume' &&
+          id === state.snapshot.revision &&
+          state.recoveryId &&
+          (action === 'start' || action === 'build')
+        ) {
+          await actCindyMakeTest(sessionId, state.recoveryId, `resume-${action}`);
         } else throw unavailable();
         broadcastMakeRemoteChanged(sessionId, state.scope);
       },

@@ -64,6 +64,11 @@ export function registerRoutineTools(
       name: z.string().min(1),
       prompt: z.string().min(1),
       enabled: z.boolean(),
+      silentWhenIdle: z.boolean().optional().describe('Set true for checks: no routine chatter, report only when needed via schedule_notify_current_run. Reminders and scheduled delivery default to false. Preserve existing user choices.'),
+      preRunHook: z.object({
+        command: z.string().min(1).max(32000),
+        timeoutMs: z.number().int().positive().optional(),
+      }).nullable().optional().describe('Existing pre-run check: exit 0 wakes the model with stdout; exit 2 skips it; errors/timeouts fail visibly. null removes; omission preserves. Use schedule_set_pre_run_hook to install scripts.'),
       triggers: z
         .array(
           z.discriminatedUnion("kind", [

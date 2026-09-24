@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   cancelSessionOperations: vi.fn(),
   cleanupRemovedSession: vi.fn(),
   runtimeCleanup: vi.fn(),
+  closeSharedTask: vi.fn(),
   removeSessionRefs: vi.fn(),
   hasRegisteredWorktreeForSession: vi.fn(),
   recycleWorktreeForRemovedSession: vi.fn(),
@@ -65,6 +66,7 @@ vi.mock('../cindy-media/ledger', () => ({
   removeSessionRefsIfDeleted: h.removeSessionRefs,
 }));
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
+vi.mock('../device-link/sharedTaskRuntime.js', () => ({ closeSharedTaskForTask: h.closeSharedTask }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn() }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({
   upsertRecentWorkdir: h.upsertRecentWorkdir,
@@ -154,6 +156,7 @@ describe('setSessionsStatusInDb', () => {
         }),
     );
     await setSessionsStatusInDb(ids, 'archived');
+    expect(h.closeSharedTask.mock.calls.map(([id]) => id)).toEqual(ids);
     try {
       await vi.waitFor(() => expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledOnce());
       expect(h.closeSession).toHaveBeenCalledExactlyOnceWith('one');

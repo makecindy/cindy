@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { CindyMakeMergeNotice } from '../CindyMakeMergeNotice';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
@@ -20,12 +20,75 @@ const locales = [
   ['ja', ja, 'ソース更新で競合が発生しました'],
   ['ko', ko, '소스 업데이트 중 충돌 발생'],
 ] as const;
+function CurrentTask() {
+  return <output data-testid="current-task">{useLocation().pathname}</output>;
+}
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
 describe('source conflict confirmation translations', () => {
+  it.each(locales)('renders distinct local main errors in %s', async (locale, resource) => {
+    const i18n = createInstance();
+    await i18n.init({
+      lng: locale,
+      fallbackLng: false,
+      resources: { [locale]: { translation: resource } },
+    });
+    const renderError = (error: 'localMain' | 'localMainAhead') => (
+      <MemoryRouter>
+        <I18nextProvider i18n={i18n}>
+          <CindyMakeMergeNotice
+            state={{
+              id: 'merge',
+              status: 'failed',
+              ref: 'v1.2.3',
+              upstreamCommit: 'a'.repeat(40),
+              error,
+              hasWorkspace: false,
+            }}
+          />
+        </I18nextProvider>
+      </MemoryRouter>
+    );
+    const view = render(renderError('localMain'));
+    expect(screen.getByRole('status').textContent).toContain(resource.cindyMake.merge.errors.localMain);
+    view.rerender(renderError('localMainAhead'));
+    expect(screen.getByRole('status').textContent).toContain(resource.cindyMake.merge.errors.localMainAhead);
+    expect(screen.queryByText(resource.cindyMake.merge.errors.localMain)).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('Cindy Make');
+    expect(screen.getByRole('status').textContent).not.toMatch(/cindyMake[.]|[?]{2,}|�/);
+  });
+  it.each(locales)(
+    'opens retained task records in %s without recreating a cleaned workspace',
+    async (locale, resource) => {
+      const api = vi.fn();
+      vi.stubGlobal('electronAPI', { cindyMakeMerge: api });
+      const i18n = createInstance();
+      await i18n.init({ lng: locale, resources: { [locale]: { translation: resource } } });
+      render(
+        <MemoryRouter>
+          <I18nextProvider i18n={i18n}>
+            <CindyMakeMergeNotice
+              state={{
+                id: 'merge',
+                status: 'merged',
+                ref: 'personal',
+                upstreamCommit: '',
+                sessionId: 'resolver',
+                hasWorkspace: false,
+              }}
+            />
+            <CurrentTask />
+          </I18nextProvider>
+        </MemoryRouter>,
+      );
+      fireEvent.click(screen.getByRole('button', { name: resource.cindyMake.merge.openTask }));
+      expect(screen.getByTestId('current-task').textContent).toBe('/cc-agent/resolver');
+      expect(api).not.toHaveBeenCalled();
+    },
+  );
   it('dismisses an old account prompt without cancelling and lets the current account decide again', async () => {
     const operation = {
       id: '12345678-1234-1234-1234-123456789abc',

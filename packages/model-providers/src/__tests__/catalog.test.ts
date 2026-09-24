@@ -16,7 +16,7 @@ import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 
 import { describe, it, expect } from "vitest";
 
-import { BUNDLED_CATALOG, parseCatalog } from "../catalog.js";
+import { BUNDLED_CATALOG, claudeSubscriptionOnlyForClaudeCode, parseCatalog } from "../catalog.js";
 import {
   buildRegistry,
   sourcesForModel,
@@ -30,6 +30,7 @@ const DYNAMIC_PROVIDER_IDS = ["anthropic", "openai", "xd"] as const;
 
 /** xAI 随包 fallback 元数据清单。 */
 const EXPECTED_XAI_IDS = [
+  "xai/grok-4.7",
   "xai/grok-4.6",
   "xai/grok-4.5",
   "xai/grok-4.3",
@@ -44,6 +45,7 @@ const EXPECTED_XAI_PI_IDS = [
   "grok-4.3",
   "grok-4.5",
   "grok-4.6",
+  "grok-4.7",
   "grok-build-0.1",
 ];
 
@@ -210,7 +212,10 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
         (model) => model.id === "chatgpt/gpt-6",
       ),
     ).toBe(false);
-    expect(provider("anthropic").models.pi).toHaveLength(14);
+    // Claude 订阅只供 Claude Code(CLI 自己的登录),不向 Pi / Codex 提供。
+    expect(provider("anthropic").agents).toEqual(["claude-code"]);
+    expect(provider("anthropic").models.pi).toBeUndefined();
+    expect(provider("anthropic").models.codex).toBeUndefined();
   });
 
   it("xai ships a static fallback list and Pi official metadata", () => {
@@ -532,6 +537,34 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
         expect(p.agents, `${p.id} stray models[${key}]`).toContain(key);
       }
     }
+  });
+});
+
+describe("claudeSubscriptionOnlyForClaudeCode", () => {
+  const builtin = BUNDLED_CATALOG.providers.find((p) => p.id === "anthropic")!;
+
+  it("narrows a remote anthropic entry that still declares Codex / Pi", () => {
+    const remote = {
+      ...builtin,
+      agents: ["claude-code", "codex", "pi"] as AgentKind[],
+      routing: {
+        ...builtin.routing,
+        codex: { upstream: "https://api.anthropic.com", authStrategy: "provider-oauth-header" as const },
+        pi: { upstream: "https://api.anthropic.com", authStrategy: "provider-oauth-header" as const },
+      },
+      models: { "claude-code": [], codex: [{ id: "claude-opus-5" } as CatalogModel], pi: [{ id: "claude-opus-5" } as CatalogModel] },
+    };
+    const narrowed = claudeSubscriptionOnlyForClaudeCode(remote);
+    expect(narrowed.agents).toEqual(["claude-code"]);
+    expect(Object.keys(narrowed.routing)).toEqual(["claude-code"]);
+    expect(narrowed.models).toEqual({ "claude-code": [] });
+    expect(remote.agents).toEqual(["claude-code", "codex", "pi"]);
+  });
+
+  it("returns other providers and an already-narrow anthropic entry unchanged", () => {
+    expect(claudeSubscriptionOnlyForClaudeCode(builtin)).toBe(builtin);
+    const openai = BUNDLED_CATALOG.providers.find((p) => p.id === "openai")!;
+    expect(claudeSubscriptionOnlyForClaudeCode(openai)).toBe(openai);
   });
 });
 

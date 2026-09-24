@@ -1,3 +1,5 @@
+import { Button } from '@/components/ui/button';
+import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
 /**
  * SystemCard
  * ---------------------------------------------------------------------------
@@ -73,6 +75,7 @@ interface SystemCardProps {
     | 'agent-switch'
     | 'bot-session-task-message'
     | 'bot-session-task'
+    | 'bot-session-task-result'
     | 'bot-direct-message'
     | 'bot-authorization'
     | 'context-rebuild';
@@ -1285,14 +1288,17 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
         )}
         <span className="min-w-0 flex-1 font-medium">{t(`chat.systemCard.review.${status}`)}</span>
         {reviewerSessionId && (
-          <button
+          <Button
+            variant="secondary"
+            size="xs"
+            compact
+            tone="quiet"
             type="button"
             onClick={() => navigate(`/cc-agent/${reviewerSessionId}`)}
-            className="flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted/50"
           >
             {t('chat.systemCard.review.openTask')}
             <ArrowRight size={12} />
-          </button>
+          </Button>
         )}
       </div>
       {status === 'running' && (
@@ -1376,6 +1382,8 @@ export function SystemCard({
       return <ReviewCard data={data} workingDir={workingDir} />;
     case 'bot-session-task-message':
       return <BotSessionTaskMessageTrace data={data} />;
+    case 'bot-session-task-result':
+      return <BotSessionTaskResultCard data={data} />;
     case 'bot-session-task':
       return <BotSessionTaskCard data={data} sessionId={sessionId} />;
     case 'bot-authorization':

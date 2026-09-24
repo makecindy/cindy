@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * AddRemoteProjectDialog — pick a folder on a connected remote target.
  *
@@ -28,6 +29,10 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import {
+  SshModelSelectionError,
+  sshModelSelectionErrorKeys,
+} from '@/features/cc-agent/sshSessionModelSelection';
 import { useControllableDevices } from '@/hooks/useControllableDevices';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import {
@@ -325,7 +330,11 @@ export function AddRemoteProjectDialog({
       }
       onOpenChange(false);
     } catch (err) {
-      toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.addRemoteProject.toast.addFailed' })));
+      toast.error(t(
+        err instanceof SshModelSelectionError
+          ? sshModelSelectionErrorKeys[err.reason]
+          : mapIpcErrorToI18nKey(err, { fallback: 'newChat.addRemoteProject.toast.addFailed' }),
+      ));
     } finally {
       setBusy(false);
     }
@@ -650,46 +659,37 @@ export function AddRemoteProjectDialog({
             )}
           </div>
 
-          {/* Footer — 按钮走通用弹窗标准(DESIGN §Dialog / confirm-dialog.tsx):
-              主按钮实心 CTA(--confirm-btn-primary-*),取消描边(--confirm-btn-secondary-*),pill。 */}
+          {/* 未选中时必须有一个 value="" 的项供受控 select 显示(Codex review P1)。
+              缺了它,浏览器会去显示第一个真实 option,而 selectedTarget 仍是 null ——
+              「添加」保持 disabled;若只有一个备选目标,点那个已显示的项也不产生 change
+              事件,弹窗就此卡死。disabled 让它只能被显示、不能被重新选回。
+              这个空态是上一轮「指名设备离线时不静默回落到别的目标」带来的,得配一个占位。 */}
           <div
             className="flex shrink-0 justify-end gap-2.5 px-5 py-3"
             style={{ borderTop: '1px solid var(--border-default)' }}
           >
             <Dialog.Close asChild disabled={busy}>
-              <button
+              <Button
+                variant="secondary"
+                size="lg"
                 type="button"
                 disabled={busy}
-                className={cn(
-                  'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                  'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                  'active:scale-[0.98]',
-                  'border bg-transparent',
-                  'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                  'hover:bg-[var(--confirm-btn-secondary-hover)] focus-visible:ring-[var(--confirm-btn-secondary-border)]',
-                  'disabled:opacity-40',
-                )}
+                className="min-w-[96px]"
               >
                 {t('newChat.addRemoteProject.cancel')}
-              </button>
+              </Button>
             </Dialog.Close>
-            <button
+            <Button
+              variant="cta"
+              size="lg"
+              loading={busy}
               type="button"
               onClick={() => void handleAddProject()}
               disabled={busy || noTargets || !selectedTarget || !path.trim()}
-              className={cn(
-                'inline-flex min-w-[96px] items-center justify-center gap-1 rounded-full px-6 py-2.5 text-13 font-medium',
-                'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                'active:scale-[0.98]',
-                'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)]',
-                'hover:bg-[var(--confirm-btn-primary-hover)] focus-visible:ring-[var(--confirm-btn-primary-bg)]',
-                (busy || noTargets || !selectedTarget || !path.trim()) &&
-                  'cursor-not-allowed opacity-60 hover:bg-[var(--confirm-btn-primary-bg)] active:scale-100',
-              )}
+              className="min-w-[96px]"
             >
-              {busy && <Spinner size={12} />}
               {t('newChat.addRemoteProject.add')}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

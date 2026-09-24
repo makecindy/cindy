@@ -99,10 +99,9 @@ describe('F10 — message stream spacing halved', () => {
 // ── F11: file chip + diff lightbox ─────────────────────────────────────────
 
 describe('F11 — file chip + diff lightbox', () => {
-  it('AgentActionRow imports the chip-style FileIcon + uses chat-input-chip tokens', () => {
-    expect(rowSrc).toMatch(
-      /import\s+\{[^}]*File as FileIcon[^}]*\}\s+from\s+'lucide-react'/,
-    );
+  it('AgentActionRow uses shared file identity + chat-input-chip tokens', () => {
+    expect(rowSrc).toContain("from '@/components/ui/file-type-icon'");
+    expect(rowSrc).toContain('<FileTypeIcon name={chipFilePath}');
     expect(rowSrc).toMatch(/--chat-input-chip-bg/);
     expect(rowSrc).toMatch(/--chat-input-chip-border/);
     expect(rowSrc).toMatch(/--chat-input-chip-text/);

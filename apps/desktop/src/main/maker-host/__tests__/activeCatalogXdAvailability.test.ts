@@ -328,7 +328,7 @@ describe('XD 网关权威模型清单重建', () => {
     ['deepseek/deepseek-v4-flash-vision-exp', 'high'],
     ['tencent/hy4-preview', 'high'],
   ] as const)(
-    '常用模型 %s 的三个 Harness 保留 Gateway 明示的默认、窗口和能力',
+    '常用模型 %s 的三个 Harness 继承公共默认，保留 Gateway 窗口和能力',
     (id, oldDefault) => {
       setActiveCatalog(BUNDLED_CATALOG);
       setXdGatewayModels([
@@ -344,7 +344,8 @@ describe('XD 网关权威模型清单重建', () => {
       ]);
       for (const agent of ['claude-code', 'codex', 'pi'] as const) {
         expect(xdModels(agent)[0]).toMatchObject({
-          defaultEffort: agent === 'pi' ? 'max' : oldDefault,
+          defaultEffort: 'medium',
+          efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
           contextWindow: 987654,
         });
       }
@@ -354,7 +355,7 @@ describe('XD 网关权威模型清单重建', () => {
   it('新的 Server Registry 可更新默认；实际不支持的档位只适配，不增加能力', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     const entry = catalog.modelRegistry!.models.find((m) => m.id === 'xd/z-ai-glm-5.3-flash')!;
-    entry.defaultEffort = 'high';
+    entry.routes[0].defaults = { ...entry.routes[0].defaults, defaultEffort: 'high' };
     setActiveCatalog(catalog);
     setXdGatewayModels([
       {
@@ -560,7 +561,7 @@ describe('XD 网关权威模型清单重建', () => {
     });
   });
 
-  it('服务端决定成员和能力，供应商显式默认优先于 Registry', () => {
+  it('服务端决定成员和能力，Registry 默认优先于供应商推荐', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
       {
@@ -584,7 +585,7 @@ describe('XD 网关权威模型清单重建', () => {
         contextWindow: 272_000,
         contextWindowMax: 372_000,
         efforts: ['low', 'medium', 'high', 'xhigh'],
-        defaultEffort: 'high',
+        defaultEffort: 'medium',
       });
     }
     expect('codexCompatibilityWireProtocol' in xdModels('codex')[0]).toBe(false);
@@ -861,10 +862,8 @@ describe('Anthropic 权威模型清单注入', () => {
     setAnthropicDiscoveredModels([opus]);
     expect(anthropicModels().map((m) => m.id)).toEqual(['claude-opus-4-8']);
     expect(anthropicModels()[0]).toMatchObject({ name: 'Opus 4.8', supportsFastMode: true });
-    expect(anthropicModels('codex')[0]).toMatchObject({
-      name: 'Opus 4.8',
-      supportsFastMode: false,
-    });
+    // Claude 订阅只供 Claude Code,不再投影 Codex bridge。
+    expect(anthropicModels('codex')).toEqual([]);
     setAnthropicDiscoveredModels([]);
     expect(anthropicModels()).toEqual([]);
     expect(anthropicModels('codex')).toEqual([]);

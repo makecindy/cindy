@@ -165,34 +165,23 @@ describe('Cindy Make test flow recovery', () => {
     }
   });
 
-  it('does not reclaim input after Continue Editing until a new result arrives', () => {
+  it('keeps optional actions available after Continue Editing and follows the latest result', () => {
     const base = {
       session: { ...session, status: 'active' as const },
       busy: false,
       historyLoaded: true,
     };
-    expect(
-      getCindyMakeTestRecovery({ ...base, messages: [continued], dismissedId: continued.clientId }),
-    ).toBeNull();
+    expect(getCindyMakeTestRecovery({ ...base, messages: [continued] })).toBe(continued.clientId);
     expect(
       getCindyMakeTestRecovery({
         ...base,
         messages: [continued, request, reply],
-        dismissedId: continued.clientId,
       }),
     ).toBe(reply.clientId);
     expect(
       getCindyMakeTestRecovery({
         ...base,
-        messages: [continued, request, reply],
-        dismissedId: reply.clientId,
-      }),
-    ).toBeNull();
-    expect(
-      getCindyMakeTestRecovery({
-        ...base,
         messages: [continued, request, reply, request, { ...reply, clientId: 'next-reply' }],
-        dismissedId: reply.clientId,
       }),
     ).toBe('next-reply');
   });

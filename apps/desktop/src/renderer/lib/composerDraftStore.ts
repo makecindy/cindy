@@ -122,6 +122,7 @@ const ATTACHED_FILE_SNAPSHOT_KEYS = [
   'annotated',
   'annotationSourceUrl',
   'cacheUrlShared',
+  'stagedPathShared',
 ] as const;
 
 /**

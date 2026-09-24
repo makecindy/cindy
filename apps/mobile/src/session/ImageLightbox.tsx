@@ -14,6 +14,7 @@
  * lightbox 是常黑沉浸语境,黑白系颜色为刻意豁免(对齐桌面 docs/design-rules/cindy-design-system.md overlay/lightbox 语义豁免),不走主题 token。
  */
 import { useNavigation } from 'expo-router';
+import { Image } from 'expo-image';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -84,6 +85,10 @@ import {
   shouldAppendAnnotationPoint,
   type AnnotationStroke,
 } from '@/session/imageAnnotationModel';
+
+// Use the existing SVG-capable decoder for both the preview and full image,
+// retaining the lightbox's native gesture transforms.
+const AnimatedImage = Animated.createAnimatedComponent(Image);
 
 // 缩略图垫底**不**挂在取件态里:它要跨过 loading → ready 的边界继续垫住原图
 // 下载那一段(见 lightboxImageLayers),挂进 loading 分支会在取件完成的瞬间
@@ -417,7 +422,8 @@ export const ImageLightbox = memo(function ImageLightbox({
   const handleShare = useCallback(() => {
     if (!activeImage || !activeUri || !onShareImage || sharingRef.current || submittingRef.current) return;
     const state = resolveMap[activeImage.url];
-    const mimeType = state?.status === 'ready' ? state.media.mimeType : undefined;
+    const mimeType = (state?.status === 'ready' ? state.media.mimeType : undefined)
+      ?? activeImage.payload.media.mimeType;
     const sizeBytes = state?.status === 'ready' ? state.media.size : undefined;
     sharingRef.current = true;
     setSharing(true);
@@ -434,17 +440,19 @@ export const ImageLightbox = memo(function ImageLightbox({
       });
   }, [activeImage, activeUri, onShareImage, resolveMap]);
 
-  // 活跃页 mime(取件结果优先,兜底 uri 后缀):gif / svg 不开放画笔(烧录只留首帧)。
+  // 活跃页 MIME:取件结果优先,保留附件已知类型,最后兜底 URI 后缀。
   const activeResolveState = activeImage ? resolveMap[activeImage.url] : undefined;
-  const activeMimeType = activeResolveState?.status === 'ready'
+  const activeMimeType = ((activeResolveState?.status === 'ready'
     ? activeResolveState.media.mimeType
-    : undefined;
+    : undefined) ?? activeImage?.payload.media.mimeType)?.split(';', 1)[0].trim().toLowerCase();
   const activeLooksGif = !!activeUri && /\.gif(?:[?#]|$)/i.test(activeUri.split('?')[0] ?? activeUri);
+  const activeLooksSvg = !!activeUri && (/\.svg(?:[?#]|$)/i.test(activeUri) || /^data:image\/svg\+xml[;,]/i.test(activeUri));
   const annotateVisible = !!annotation
     && !!activeImage
     && !!activeUri
     && canAnnotateImageMime(activeMimeType)
-    && !activeLooksGif;
+    && !activeLooksGif
+    && !activeLooksSvg;
   // 独立直发(发送到对话):不要求可标注——gif 等不可画的图同样能转发。
   const directSubmitVisible = !!annotation?.allowDirectSubmit && !!activeImage && !!activeUri;
 
@@ -1299,19 +1307,20 @@ const LightboxPage = memo(function LightboxPage({
               绝对定位而非参与 flex:与原图同为 flex 子节点会被 Yoga 各分一半高度。
             */}
             {layers.showPreview && previewUri ? (
-              <Animated.Image
+              <AnimatedImage
                 // 垫底图画不出来时必须撤掉并让 spinner 回来,不能停在纯黑(见
                 // failedPreviewUri)。乐观先渲染而不是等它 onLoad:本地文件解码只要
                 // 一两帧,为它先挂一帧 spinner 反而每次打开都闪一下,与本次「让用户
                 // 感知不到」的目标相反。
                 onError={() => setFailedPreviewUri(previewUri)}
-                resizeMode="contain"
+                contentFit="contain"
+                recyclingKey={previewUri}
                 source={{ uri: previewUri }}
                 style={[styles.pagePreviewLayer, imageStyle]}
                 testID="message.imageLightboxPreviewLayer"
               />
             ) : null}
-            <Animated.Image
+            <AnimatedImage
               // 两条失败路径都要接:可重取的图交父层做一次 forceRefresh 自愈(再失败
               // 落父层 error 态给重试按钮);直连图在本页落失败态,提供原地重试。
               onError={() => {
@@ -1322,12 +1331,13 @@ const LightboxPage = memo(function LightboxPage({
                 // 撤垫底的唯一依据:原图真的有像素了。早于此撤(例如取件一完成
                 // 就撤)就会把下载窗口裸露成黑屏,正是本次修复的起因。
                 setLoadedUri(uri);
-                const source = event.nativeEvent?.source;
+                const source = event.source;
                 if (source && source.width > 0 && source.height > 0) {
                   onNaturalSize(image.key, { width: source.width, height: source.height });
                 }
               }}
-              resizeMode="contain"
+              contentFit="contain"
+              recyclingKey={uri}
               source={{ uri }}
               style={[styles.pageFill, imageStyle]}
             />
@@ -1429,10 +1439,11 @@ const LightboxPage = memo(function LightboxPage({
                 // 取件在途时垫列表缩略图(静态 contain,无缩放手势,点击仍由外层
                 // Pressable 单击关闭接管):首开不黑屏,原图到达切上面手势分支时
                 // 那边继续垫同一张图,两段之间不留空档。
-                <Animated.Image
+                <AnimatedImage
                   // 同上:垫底失败要退回 spinner,不能让取件在途这段变成纯黑。
                   onError={() => setFailedPreviewUri(previewUri)}
-                  resizeMode="contain"
+                  contentFit="contain"
+                  recyclingKey={previewUri}
                   source={{ uri: previewUri }}
                   style={StyleSheet.absoluteFill}
                   testID="message.imageLightboxPreviewLayer"

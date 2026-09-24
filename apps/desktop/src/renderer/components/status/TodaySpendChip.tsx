@@ -799,8 +799,7 @@ export function TodaySpendChip({
   //   - xai/    → SuperGrok 账号周用量(cli-chat-proxy billing) + 尽力显示限流头。
   // 优先级高于 Claude 订阅形态(model 前缀决定实际消耗的额度)。
   const isOpenAiAccount =
-    providerId === 'openai' ||
-    isOpenAiSubscriptionProvider(quotaProviders.find((provider) => provider.id === providerId));
+    providerId === 'openai' || isOpenAiSubscriptionProvider(selectedQuotaProvider);
   const isChatgptBridge =
     (vendorKey === 'cc' || vendorKey === 'pi') &&
     (providerId == null || isOpenAiAccount) &&
@@ -819,8 +818,9 @@ export function TodaySpendChip({
     isCodexBudgetModel && (providerId == null || providerId === 'xd');
   const isCodexXaiProvider =
     vendorKey === 'codex' && (isXaiAccount || (providerId == null && isXaiPrefixedModel));
-  // codex 走订阅价值估算:ChatGPT 订阅需要 oauth-bearer + OpenAI 来源;xAI 由 proxy 注入
-  // SuperGrok OAuth。显式自定义供应商优先于共享 host 的 authInjection 和模型名前缀。
+  // 显式 OpenAI 订阅连接在执行端固定走该账号的 OAuth（独立账号有自己的 host）。
+  // 全局 authInjection 只用于未指定来源的旧任务，不能因本机 Codex 断开或其它
+  // API host 的状态隐藏所选账号的额度。xAI 由 proxy 注入 SuperGrok OAuth。
   // 远端 Codex 的事实在远端 daemon 上,本机只记录 token 价值估算,不写本地 gateway cost。
   // device-link 远程 codex 与 SSH 远程同口径:非 xai / 非折扣模型 / 非显式 XD 即按订阅
   // 形态处理(本机 runtime route 观察对远程关闭,窗口数据走被控端镜像;被控端若是
@@ -836,9 +836,8 @@ export function TodaySpendChip({
     !isCodexXaiProvider &&
     (isRemoteCodexSession ||
       isDeviceLinkRemoteCodexOauth ||
-      (codexAuthInjection === 'oauth-bearer' &&
-        !isCodexGatewayBudgetModel &&
-        (providerId == null || isOpenAiAccount)));
+      (!isCodexGatewayBudgetModel &&
+        (isOpenAiAccount || (providerId == null && codexAuthInjection === 'oauth-bearer'))));
   const isCodexSubscription = isCodexOauth || isCodexXaiProvider;
   const isCodexApi = vendorKey === 'codex' && !isCodexSubscription;
   const isPiGateway =

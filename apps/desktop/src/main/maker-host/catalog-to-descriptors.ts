@@ -22,12 +22,12 @@ import { isLegacyGptContextProfile } from './legacy-context-profiles.js';
  */
 
 import {
-  PI_REASONING_EFFORTS,
   isAgentSelectableModel,
   isModelSelectableForNewRoute,
   type Catalog,
   type CatalogModel,
   type AgentKind,
+  isCustomRoutedProvider,
 } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
 import type { ModelCatalogOverrides } from './model-plane/localCatalogOverrides.js';
@@ -37,51 +37,20 @@ interface ModelCapabilitiesTarget {
   getCapabilities(agent: AgentKind): { availableModels: ModelDescriptor[] };
 }
 
-interface DescriptorProjectionOptions {
-  preserveExplicitPiEfforts?: boolean;
-}
-
-function isOfficialGrok46Id(modelId: string): boolean {
-  return modelId === 'grok-4.6' || modelId.endsWith('/grok-4.6');
-}
-
 interface SeenModelProjection {
   index: number;
-  includesUserProvider: boolean;
-}
-
-function hasValidPiReasoningCapabilities(m: CatalogModel): boolean {
-  const efforts = m.reasoningEfforts;
-  return (
-    Array.isArray(efforts) &&
-    efforts.length > 0 &&
-    efforts.every((effort) => PI_REASONING_EFFORTS.includes(effort)) &&
-    typeof m.reasoningDefaultEffort === 'string' &&
-    efforts.includes(m.reasoningDefaultEffort)
-  );
+  includesCustomRoutedProvider: boolean;
 }
 
 /** CatalogModel → ModelDescriptor。仅透传 ModelDescriptor 需要的字段；可选字段缺省时不写键。 */
-function toDescriptor(
-  m: CatalogModel,
-  agent: AgentKind,
-  options: DescriptorProjectionOptions = {},
-): ModelDescriptor {
-  // 缺少或格式错误的 Pi 能力字段继续走旧目录 minimal 兼容补档。合法独立 Pi 目录的
-  // reasoningEfforts 与 BYOM 声明都是协议能力，不能额外公布 models.json 禁用的档位。
-  const efforts =
-    agent === 'pi' &&
-    options.preserveExplicitPiEfforts !== true &&
-    !hasValidPiReasoningCapabilities(m) &&
-    m.efforts.length > 0 &&
-    !m.efforts.includes('minimal')
-      ? (['minimal', ...m.efforts] as const)
-      : m.efforts;
+function toDescriptor(m: CatalogModel): ModelDescriptor {
+  // The resolved catalog owns capability membership. Projection must not add
+  // Harness aliases: Pi materializes models.json from this same effort list.
   const d: ModelDescriptor = {
     id: m.id,
     displayName: m.name,
     contextWindow: m.contextWindow,
-    efforts,
+    efforts: m.efforts,
     defaultEffort: m.defaultEffort,
   };
   // 刻意**不**透传 contextWindowVerified:availableModels 是跨 provider 去重后的扁平表,
@@ -161,20 +130,16 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       // availableModels 是旧 mobile / device-link 等消费方的新选择清单，不能依赖下游
       // 再理解 retired。运行中会话仍从持久化 model + 完整 catalog 解析实际路由。
       const userProvider = provider.source === 'user';
+      const customRoutedProvider = isCustomRoutedProvider(provider);
       if (isLegacyGptContextProfile(provider, m.id)) continue;
       if (!isModelSelectableForNewRoute(m, { userProvider })) continue;
-      const descriptor = toDescriptor(m, agent, {
-        preserveExplicitPiEfforts:
-          userProvider ||
-          provider.id === 'xd' ||
-          (provider.id === 'xai' && isOfficialGrok46Id(m.id)),
-      });
+      const descriptor = toDescriptor(m);
       const previous = seen.get(m.id);
       if (previous) {
         let merged = out[previous.index];
-        if (agent === 'pi' && (previous.includesUserProvider || userProvider)) {
+        if (agent === 'pi' && (previous.includesCustomRoutedProvider || customRoutedProvider)) {
           merged = intersectPiEffortCapabilities(merged, descriptor);
-          previous.includesUserProvider ||= userProvider;
+          previous.includesCustomRoutedProvider ||= customRoutedProvider;
         }
         // 只有鉴权后的 XD /models 会被 active-catalog 投影成区域默认；公共 Registry 与
         // user provider 均不能借同 id 碰撞改变默认策略。
@@ -184,7 +149,7 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
         out[previous.index] = merged;
         continue;
       }
-      seen.set(m.id, { index: out.length, includesUserProvider: userProvider });
+      seen.set(m.id, { index: out.length, includesCustomRoutedProvider: customRoutedProvider });
       out.push(descriptor);
     }
   }
@@ -205,19 +170,14 @@ export function resolvePiRuntimeModelDescriptor(
 ): ModelDescriptor | null {
   const providers =
     providerId === 'cindy'
-      ? catalog.providers.filter((provider) => provider.source !== 'user')
+      ? catalog.providers.filter((provider) => !isCustomRoutedProvider(provider))
       : providerId
         ? catalog.providers.filter((provider) => provider.id === providerId)
         : catalog.providers;
   for (const provider of providers) {
     const model = (provider.models.pi ?? []).find((candidate) => candidate.id === modelId);
     if (model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
-      return toDescriptor(model, 'pi', {
-        preserveExplicitPiEfforts:
-          provider.source === 'user' ||
-          provider.id === 'xd' ||
-          (provider.id === 'xai' && isOfficialGrok46Id(model.id)),
-      });
+      return toDescriptor(model);
     }
   }
 

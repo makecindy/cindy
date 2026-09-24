@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { once } from 'node:events';
 import type { ServerResponse } from 'node:http';
 import { ChatSseTranslator, translateResponsesRequestWithContext, type ResponsesRequest } from '@cindy/responses-chat-bridge';
@@ -269,8 +270,7 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
       ...(!['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(model.api)
         ? { fetch: diagnosticFetch } : {}),
       signal, maxRetries: 0,
-      reasoning: request.reasoning?.effort && request.reasoning.effort !== 'none'
-        ? request.reasoning.effort as ThinkingLevel : undefined,
+      reasoning: reconcileOutboundReasoningEffort(request.reasoning?.effort, options.row.efforts) as ThinkingLevel | undefined,
       maxTokens: typeof request.max_output_tokens === 'number' ? Math.min(request.max_output_tokens, model.maxTokens) : model.maxTokens,
     });
     const iterator = events[Symbol.asyncIterator]();

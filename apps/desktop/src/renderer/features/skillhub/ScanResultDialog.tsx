@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ScanResultDialog — hub 安全扫描完成后弹出的独立结果弹窗。
  * 通过时简洁提示;未通过时展示原因 + 具体 issues。
@@ -174,11 +175,6 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
         : processingFailure
           ? t('skillhub.scanResult.processingFailedDesc')
           : t('skillhub.scanResult.failedDesc', { status: statusLabel });
-  const footerButtonBaseClass = cn(
-    'inline-flex h-9 min-w-[104px] items-center justify-center gap-1.5 rounded-full px-5',
-    'text-sm font-medium leading-none',
-    'transition-colors',
-  );
 
   async function handleCopyReviewResult(): Promise<void> {
     const gatesToCopy = passed || pendingManualReview ? (result?.gates ?? []) : failedGates;
@@ -338,40 +334,25 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
           {/* Footer */}
           <div className="flex flex-wrap items-center justify-center gap-2 p-5">
             {!passed && !pendingManualReview && (
-              <button
+              <Button
+                variant="secondary"
+                size="lg"
+                compact
                 type="button"
                 onClick={() => void handleCopyReviewResult()}
                 aria-label={t('skillhub.scanResult.copyReviewResult')}
                 title={t('skillhub.scanResult.copyReviewResult')}
-                className={cn(
-                  footerButtonBaseClass,
-                  'h-[38px] px-[22px]',
-                  'border',
-                  'border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)]',
-                  'text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
-                )}
+                className="min-w-[104px]"
               >
-                {copied ? (
-                  <Check size={15} className="shrink-0" />
-                ) : (
-                  <Copy size={15} className="shrink-0" />
-                )}
+                {copied ? <Check size={15} className="shrink-0" /> : <Copy size={15} className="shrink-0" />}
                 {copied
                   ? t('skillhub.scanResult.copiedReviewResult')
                   : t('skillhub.scanResult.copyReviewResult')}
-              </button>
+              </Button>
             )}
-            <button
-              type="button"
-              onClick={onClose}
-              className={cn(
-                footerButtonBaseClass,
-                'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]',
-                'hover:bg-[var(--lightbox-cta-hover)]',
-              )}
-            >
+            <Button variant="cta" size="lg" compact type="button" onClick={onClose} className="min-w-[104px]">
               {t('skillhub.scanResult.dismiss')}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

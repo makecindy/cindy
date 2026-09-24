@@ -35,6 +35,7 @@
     "create": "새로 만들기"
   },
   "resources": {
+    "connectionUnknown": "연결 상태 알 수 없음",
     "hostOffline": "오프라인",
     "titleFallback": "리소스",
     "loading": "불러오는 중…",
@@ -90,13 +91,19 @@
       }
     },
     "sessionList": {
-      "section": { "pinned": "고정됨", "dialogue": "대화" },
+      "section": {
+        "pinned": "고정됨",
+        "dialogue": "대화"
+      },
       "filterWithCount": "{{label}} {{count}}",
       "controlsSummary": "{{filter}} · {{group}}별 그룹",
       "automation": "자동화",
       "sessionCount": "세션 {{count}}개",
       "messageCount": "메시지 {{count}}개",
-      "status": { "archived": "보관됨", "deleted": "삭제됨" },
+      "status": {
+        "archived": "보관됨",
+        "deleted": "삭제됨"
+      },
       "preview": {
         "permission": "권한 승인 대기 중",
         "planReview": "계획 검토 대기 중",
@@ -130,11 +137,26 @@
         }
       },
       "empty": {
-        "search": { "title": "일치하는 세션 없음", "copy": "다른 제목, 프로젝트 경로, 모델 또는 메시지 키워드를 사용해 보세요." },
-        "waiting": { "title": "대기 중인 요청 없음", "copy": "권한 확인, 계획 검토 및 질문이 여기에 표시됩니다." },
-        "automation": { "title": "자동화 세션 없음", "copy": "자동화 실행 후 생성된 세션이 여기에 그룹화됩니다." },
-        "archived": { "title": "보관된 세션 없음", "copy": "세션을 길게 눌러 일괄 보관하거나 삭제할 수 있습니다." },
-        "active": { "title": "이 컴퓨터에 활성 세션이 없습니다", "copy": "컴퓨터에서 세션을 만들거나 계속하면 여기에 표시됩니다." }
+        "search": {
+          "title": "일치하는 세션 없음",
+          "copy": "다른 제목, 프로젝트 경로, 모델 또는 메시지 키워드를 사용해 보세요."
+        },
+        "waiting": {
+          "title": "대기 중인 요청 없음",
+          "copy": "권한 확인, 계획 검토 및 질문이 여기에 표시됩니다."
+        },
+        "automation": {
+          "title": "자동화 세션 없음",
+          "copy": "자동화 실행 후 생성된 세션이 여기에 그룹화됩니다."
+        },
+        "archived": {
+          "title": "보관된 세션 없음",
+          "copy": "세션을 길게 눌러 일괄 보관하거나 삭제할 수 있습니다."
+        },
+        "active": {
+          "title": "이 컴퓨터에 활성 세션이 없습니다",
+          "copy": "컴퓨터에서 세션을 만들거나 계속하면 여기에 표시됩니다."
+        }
       },
       "time": {
         "unknown": "최근 활동 시간 알 수 없음",
@@ -144,7 +166,6 @@
         "hoursAgo_one": "{{count}}시간 전",
         "hoursAgo_other": "{{count}}시간 전",
         "daysAgo_one": "{{count}}일 전",
-        "hoursAgo_other": "{{count}}시간 전",
         "daysAgo_other": "{{count}}일 전",
         "minutes": "{{count}}분",
         "hours": "{{count}}시간",
@@ -161,22 +182,56 @@
       "synced": "동기화됨",
       "unknownComputer": "알 수 없는 컴퓨터",
       "uncategorizedProject": "분류되지 않은 프로젝트",
+      "cindyMake": "Cindy Make",
       "empty": {
-        "search": { "title": "일치하는 결과 없음", "copy": "다른 프로젝트 이름, 세션 제목, 컴퓨터 이름 또는 메시지 키워드를 사용해 보세요." },
-        "waiting": { "title": "대기 중인 요청 없음", "copy": "권한 확인, 계획 검토 및 질문이 여기에 표시됩니다." },
-        "automation": { "title": "자동화 세션 없음", "copy": "자동화 실행 후 생성된 세션이 프로젝트별로 여기에 그룹화됩니다." },
-        "archived": { "title": "보관된 세션 없음", "copy": "전체 또는 활성 필터로 전환해 현재 프로젝트와 세션을 계속 확인하세요." },
-        "noSession": { "title": "아직 세션이 없습니다", "copy": "컴퓨터에서 세션을 만들거나 계속하면 해당 프로젝트와 세션이 여기에 표시됩니다." }
+        "search": {
+          "title": "일치하는 결과 없음",
+          "copy": "다른 프로젝트 이름, 세션 제목, 컴퓨터 이름 또는 메시지 키워드를 사용해 보세요."
+        },
+        "waiting": {
+          "title": "대기 중인 요청 없음",
+          "copy": "권한 확인, 계획 검토 및 질문이 여기에 표시됩니다."
+        },
+        "automation": {
+          "title": "자동화 세션 없음",
+          "copy": "자동화 실행 후 생성된 세션이 프로젝트별로 여기에 그룹화됩니다."
+        },
+        "archived": {
+          "title": "보관된 세션 없음",
+          "copy": "전체 또는 활성 필터로 전환해 현재 프로젝트와 세션을 계속 확인하세요."
+        },
+        "noSession": {
+          "title": "아직 세션이 없습니다",
+          "copy": "컴퓨터에서 세션을 만들거나 계속하면 해당 프로젝트와 세션이 여기에 표시됩니다."
+        }
       },
       "noDevice": {
-        "accessRevoked": { "title": "접근 권한이 철회되었습니다", "copy": "{{names}}에서 이 휴대폰의 원격 접근 권한을 철회했습니다. 접근을 다시 요청하거나 컴퓨터에서 다시 허용하세요." },
-        "remoteDisabled": { "title": "컴퓨터에서 원격 제어 허용", "copy": "{{names}}이 온라인입니다. 컴퓨터에서 휴대폰 제어를 허용하면 됩니다." },
-        "offline": { "title": "컴퓨터에서 Cindy 열기", "copy": "연결한 컴퓨터가 현재 오프라인입니다. 컴퓨터에서 Cindy를 열고 로그인 상태를 유지하면 휴대폰이 자동으로 다시 연결됩니다." },
-        "firstRun": { "title": "컴퓨터의 Cindy 연결", "copy": "현재 Cindy는 컴퓨터에서 실행됩니다. 모바일 앱은 원격 접근을 통해 해당 컴퓨터의 Agent를 사용할 수 있게 합니다." }
+        "accessRevoked": {
+          "title": "접근 권한이 철회되었습니다",
+          "copy": "{{names}}에서 이 휴대폰의 원격 접근 권한을 철회했습니다. 접근을 다시 요청하거나 컴퓨터에서 다시 허용하세요."
+        },
+        "remoteDisabled": {
+          "title": "컴퓨터에서 원격 제어 허용",
+          "copy": "{{names}}이 온라인입니다. 컴퓨터에서 휴대폰 제어를 허용하면 됩니다."
+        },
+        "offline": {
+          "title": "컴퓨터에서 Cindy 열기",
+          "copy": "연결한 컴퓨터가 현재 오프라인입니다. 컴퓨터에서 Cindy를 열고 로그인 상태를 유지하면 휴대폰이 자동으로 다시 연결됩니다."
+        },
+        "firstRun": {
+          "title": "컴퓨터의 Cindy 연결",
+          "copy": "현재 Cindy는 컴퓨터에서 실행됩니다. 모바일 앱은 원격 접근을 통해 해당 컴퓨터의 Agent를 사용할 수 있게 합니다."
+        }
       }
     },
     "bulk": {
-      "action": { "archive": "보관", "delete": "삭제", "pin": "고정", "restore": "복원", "unpin": "고정 해제" },
+      "action": {
+        "archive": "보관",
+        "delete": "삭제",
+        "pin": "고정",
+        "restore": "복원",
+        "unpin": "고정 해제"
+      },
       "title": "작업 {{count}}개 {{action}}",
       "description": "선택한 작업 {{count}}개에 {{action}} 작업을 적용합니다.",
       "descriptionWithSkipped": "선택한 작업 {{count}}개에 {{action}} 작업을 적용하며, 해당하지 않는 {{skippedCount}}개는 건너뜁니다."
@@ -242,6 +297,8 @@
       "noDevice": "사용할 수 있는 기기가 없습니다. 데스크톱에서 원격 제어를 켠 후 다시 동기화하세요."
     },
     "alert": {
+      "cacheSaveFailed": "오프라인 캐시를 저장하지 못했습니다",
+      "cacheSaveFailedDetail": "휴대전화의 남은 저장 공간을 확인해 주세요. 온라인에서는 계속 사용할 수 있지만 일부 콘텐츠는 오프라인에서 볼 수 없을 수 있습니다.",
       "actionFailed": "작업 실패",
       "renameFailed": "이름 변경 실패",
       "deleteTitle": "세션을 삭제할까요?",
@@ -540,6 +597,8 @@
       },
       "boundSessionA11y": "세션 {{name}} 연결",
       "intervalPlaceholder": "비워 두면 cron 사용",
+      "intervalHint": "분 간격은 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30분을 사용하세요. 정수 시간 간격은 60~1380분(1~23시간) 범위에서 60의 배수로 입력하세요.",
+      "intervalPreservedHint": "이 작업의 정확한 간격은 {{duration}}이며, 수정하거나 지우기 전까지 유지됩니다.",
       "workspace": {
         "project": "프로젝트",
         "dialogue": "대화"
@@ -677,7 +736,8 @@
         "workingDir": "프로젝트 디렉터리를 입력하세요",
         "effort": "추론 강도는 다음 중 하나여야 합니다: {{values}}",
         "intervalPositiveInteger": "분 간격은 양의 정수여야 합니다",
-        "intervalUnsupported": "분 간격은 1~59분 또는 1~23시간의 정시 간격만 지원합니다"
+        "preRunHookTimeout": "검사 제한 시간은 양의 정수(밀리초)여야 합니다",
+        "intervalUnsupported": "분 간격은 1시간을 나눌 수 있는 값(1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30분) 또는 1~23시간의 정시 간격만 지원합니다"
       },
       "schedule": {
         "paused": "일시 중지됨",
@@ -764,7 +824,11 @@
     "artifactCount_other": "파일 {{count}}개",
     "prCount_one": "PR {{count}}개",
     "prCount_other": "PR {{count}}개",
-    "duration": {"seconds": "{{n}}초", "minutes": "{{n}}분", "hoursMinutes": "{{h}}시간 {{m}}분"},
+    "duration": {
+      "seconds": "{{n}}초",
+      "minutes": "{{n}}분",
+      "hoursMinutes": "{{h}}시간 {{m}}분"
+    },
     "retrying": "아직 시작하지 못했습니다. 다시 시도 중…",
     "stopTask": "작업 중지",
     "actionFailed": "읽거나 작업을 완료할 수 없습니다",
@@ -780,6 +844,191 @@
       "cancelled": "취소됨",
       "timed-out": "시간 초과",
       "unknown": "상태를 확인할 수 없습니다"
-    }
+    },
+    "title": "팀원",
+    "tasks": "세션",
+    "search": "팀원 검색",
+    "emptyTitle": "아직 팀원이 없습니다",
+    "emptyCopy": "컴퓨터의 Cindy에서 팀원을 만드세요.",
+    "noResults": "일치하는 팀원이 없습니다",
+    "preferenceSaveFailed": "보기 설정을 저장하지 못했습니다. 보기를 다시 전환하세요.",
+    "automation": {
+      "unsupported": "자동화를 관리하려면 컴퓨터의 Cindy를 업데이트한 후 다시 시도하세요.",
+      "changed": "이 자동화가 다른 곳에서 변경되었습니다. 편집 내용은 유지됩니다. 뒤로 돌아가 다시 열면 최신 버전을 불러올 수 있습니다.",
+      "unknown": "알 수 없는 상태",
+      "unsavedTitle": "변경 사항을 버릴까요?",
+      "unsavedBody": "변경 사항이 아직 저장되지 않았습니다.",
+      "continueEditing": "계속 편집",
+      "discard": "변경 사항 버리기",
+      "invalid": "이름, 실행 지침, 트리거 설정을 확인한 후 다시 저장하세요.",
+      "failed": "자동화 작업을 완료하지 못했습니다.",
+      "everyMinutes": "{{count}}분마다",
+      "everyMinutes_one": "{{count}}분마다",
+      "everyMinutes_other": "{{count}}분마다",
+      "paused": "일시 중지됨",
+      "new": "자동화 만들기",
+      "save": "자동화 저장",
+      "offline": "자동화를 관리하려면 컴퓨터에 다시 연결하세요.",
+      "retry": "다시 불러오기",
+      "inProgress": "진행 중",
+      "scheduled": "예약됨",
+      "empty": "아직 자동화가 없습니다. 새로 만들어 시작하세요.",
+      "name": "이름",
+      "enabled": "활성화",
+      "instructions": "실행 지침",
+      "triggers": "트리거",
+      "triggerType": "트리거 유형",
+      "cron": "일정",
+      "interval": "간격",
+      "event": "이벤트",
+      "minutes": "간격(분)",
+      "source": "이벤트 소스",
+      "filterField": "필터 필드",
+      "operator": "조건",
+      "equals": "같음",
+      "contains": "포함",
+      "not-equals": "같지 않음",
+      "filterValue": "필터 값",
+      "removeFilter": "필터 제거",
+      "addFilter": "필터 추가",
+      "removeTrigger": "트리거 제거",
+      "addTrigger": "트리거 추가",
+      "largeDefinition": "이 자동화는 너무 커서 여기서 편집할 수 없습니다. 컴퓨터에서 편집하세요.",
+      "run": "지금 실행",
+      "runTitle": "이 자동화를 지금 실행할까요?",
+      "cancel": "취소",
+      "history": "실행 기록",
+      "noRuns": "아직 실행 기록이 없습니다. 자동화를 실행해 보세요.",
+      "delete": "자동화 삭제",
+      "deleteTitle": "이 자동화를 삭제할까요?",
+      "deleteBody": "이 자동화는 더 이상 실행되지 않습니다. 이 작업은 되돌릴 수 없습니다.",
+      "queued": "시작 대기",
+      "running": "실행 중",
+      "success": "완료",
+      "failed": "실패",
+      "interrupted": "중단됨",
+      "cancelled": "취소됨",
+      "repeat": "반복",
+      "hourly": "매시간",
+      "daily": "매일",
+      "weekdays": "월요일부터 금요일",
+      "weekly": "매주",
+      "custom": "사용자 지정",
+      "weekday": "요일",
+      "day0": "일요일",
+      "day1": "월요일",
+      "day2": "화요일",
+      "day3": "수요일",
+      "day4": "목요일",
+      "day5": "금요일",
+      "day6": "토요일",
+      "time": "시간",
+      "hour": "시",
+      "minute": "분",
+      "cronExpression": "Cron 표현식",
+      "timezone": "시간대",
+      "monthly": "매월",
+      "monthDay": "매월 날짜",
+      "saveAndRun": "저장 후 실행",
+      "advanced": "고급 설정",
+      "quiet": "확인 결과 변화가 없으면 알리지 않기",
+      "quietHint": "변화나 문제만 보고합니다. 리마인더와 예약 메시지는 이 옵션을 끌 수 있습니다.",
+      "checkCommand": "사전 확인 명령",
+      "checkHint": "선택 사항입니다. 컴퓨터에서 먼저 확인합니다. 종료 코드 2는 이번 실행을 건너뛰고, 0은 계속합니다. 오류는 보고됩니다. 비우면 제거됩니다.",
+      "timeoutMs": "확인 제한 시간(ms, 비우면 제한 없음)",
+      "skipped": "확인 완료 · 모델 실행 건너뜀"
+    },
+    "openNavigation": "탐색 메뉴 열기",
+    "openProfile": "{{name}} 프로필 보기",
+    "switchCompanion": "팀원 전환",
+    "activity": {
+      "thinking": "생각 중",
+      "typing": "입력 중",
+      "helping": "처리 중"
+    },
+    "working": {
+      "thinking": "생각 중…",
+      "replying": "답변 중…",
+      "processing": "처리 중…",
+      "compacting": "대화를 정리하는 중…",
+      "reading-memory": "기억을 읽고 있어요…",
+      "saving-memory": "기억을 저장하고 있어요…",
+      "deleting-memory": "기억을 삭제하고 있어요…",
+      "organizing-memory": "기억을 정리하고 있어요…",
+      "reading-file": "파일을 읽고 있어요…",
+      "saving-file": "파일을 수정하고 있어요…",
+      "searching": "웹 검색 중…",
+      "reading-web": "웹 페이지를 읽고 있어요…",
+      "searching-files": "파일을 찾고 있어요…",
+      "testing": "테스트를 실행하고 있어요…",
+      "checking": "코드를 확인하고 있어요…",
+      "reviewing-memory": "기억을 확인하고 있어요…",
+      "reviewing-files": "파일을 확인하고 있어요…",
+      "reviewing-sources": "웹 자료를 확인하고 있어요…",
+      "reviewing-checks": "검사 결과를 확인하고 있어요…"
+    },
+    "invitation": {
+      "title": "만날 준비 중",
+      "waiting": "곧 만나요, {{name}}",
+      "background": "잠시 다른 일을 해도 괜찮아요. 준비는 계속됩니다.",
+      "profile": "자신의 이야기를 쓰고 있어요",
+      "skills": "{{name}}의 컴퓨터를 준비하고 있어요",
+      "avatar": "{{name}}이 새 아바타를 고르고 있어요",
+      "welcome": "첫인사를 준비하고 있어요",
+      "failed": "준비가 잠시 멈췄어요. 완료된 내용은 저장되어 있으니 다시 시도할 수 있어요.",
+      "retryFailed": "지금은 다시 시도할 수 없어요. 잠시 후 시도해 주세요.",
+      "leave": "잠시 나가기",
+      "avatarSkipped": "지금은 기본 아바타를 사용해요. 언제든 바꿀 수 있어요."
+    },
+    "viewResult": "결과 보기",
+    "noWrittenResult": "텍스트 결과가 없습니다."
+  },
+  "companionProfile": {
+    "avatar": "아바타",
+    "emptyEditor": "아직 내용이 없습니다.",
+    "searchOptions": "검색",
+    "changed": "다른 곳에서 변경되었습니다. 저장하지 않은 편집 내용은 유지됩니다.",
+    "discardAndReload": "편집 취소 후 다시 불러오기",
+    "notes": "기억 노트",
+    "create": "새 팀원",
+    "createFailed": "생성 결과를 아직 확인하지 못했습니다. 다시 시도해 확인하세요.",
+    "title": "팀원",
+    "profile": "프로필 및 성격",
+    "memory": "기억",
+    "skills": "스킬 및 연결",
+    "artifacts": "결과물",
+    "direct": "팀원 간 메시지",
+    "automation": "자동화",
+    "settings": "모델 및 권한",
+    "search": "메시지 검색",
+    "models": "모델 후보 목록",
+    "permissions": "작업 권한",
+    "personalSkills": "학습한 스킬",
+    "connections": "참조 중인 스킬 및 연결",
+    "save": "변경 사항 저장",
+    "offline": "계속하려면 {{deviceName}}에 다시 연결하세요. 편집 내용은 유지됩니다.",
+    "hostUpgrade": "{{deviceName}}의 Cindy를 업데이트하고 다시 시도하거나 해당 컴퓨터에서 팀원 설정을 편집하세요.",
+    "readFailed": "최신 상태를 확인하지 못했습니다. 새로 고친 후 다시 시도하세요. 작업이 이미 완료되었을 수 있습니다. 편집 내용은 유지됩니다.",
+    "deleteFailed": "삭제가 완료되지 않았습니다.",
+    "artifactsEmpty": "아직 결과물이 없습니다. 팀원에게 만들어 달라고 요청하세요.",
+    "openSourceTask": "원본 세션 열기",
+    "modelFollowsDefault": "현재 기본 모델 후보 사용",
+    "modelOverride": "이 팀원의 개별 모델 후보 사용 중",
+    "modelsUnavailable": "사용 가능한 모델이 없습니다. 컴퓨터에서 이 팀원의 모델 설정을 확인한 후 새로 고치세요.",
+    "artifactsRecovery": "메시지 카드에서 파일을 열거나 {{deviceName}}에서 파일을 확인하세요.",
+    "directRecovery": "팀원 간 메시지를 불러올 수 없습니다. {{deviceName}}의 Cindy를 업데이트하고 다시 시도하세요.",
+    "directEmpty": "아직 팀원 간 메시지가 없습니다",
+    "skillsEmpty": "아직 개인 스킬이 없습니다. 팀원에게 작업 방법을 기억해 달라고 요청하세요.",
+    "connectionsEmpty": "선택한 스킬이나 연결이 없습니다",
+    "largeProfileRecovery": "이 프로필은 너무 길어 여기서 편집할 수 없습니다. {{deviceName}}에서 전체 프로필을 편집하세요.",
+    "addModel": "대체 모델 추가",
+    "removeModel": "모델 제거",
+    "moveModelUp": "모델 위로 이동",
+    "settingsTitle": "팀원 설정",
+    "name": "이름",
+    "portraitNumber": "아바타 {{number}}",
+    "uploadAvatar": "아바타 업로드",
+    "avatarFailed": "이미지를 열 수 없습니다. 다른 이미지를 선택하세요.",
+    "nameTaken": "이미 사용 중인 이름입니다. 다른 이름을 선택하세요."
   }
 }

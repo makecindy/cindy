@@ -1,28 +1,40 @@
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useGitSafetySettings } from '@/hooks/useGitSafetySettings';
+import type { GitSafetyMode } from '@/lib/gitSafetySettingsStore';
+import { SegmentedControl } from '@/components/ui/segmented-control';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 export function GitSafetySection() {
   const { t } = useTranslation();
-  const { autoSnapshotEnabled, setAutoSnapshotEnabled } = useGitSafetySettings();
+  const { mode, setMode, reset, isCustomized } = useGitSafetySettings();
   const [saving, setSaving] = useState(false);
 
-  const handleToggle = useCallback(
-    (next: boolean) => {
+  const handleModeChange = useCallback(
+    (next: GitSafetyMode) => {
       if (saving) return;
       setSaving(true);
-      void setAutoSnapshotEnabled(next)
+      void setMode(next)
         .catch((err: unknown) => {
           toast.error(err instanceof Error ? err.message : t('settings.gitSafety.saveFailed'));
         })
         .finally(() => setSaving(false));
     },
-    [saving, setAutoSnapshotEnabled, t],
+    [saving, setMode, t],
   );
+
+  const handleReset = useCallback(() => {
+    if (saving) return;
+    setSaving(true);
+    void reset()
+      .catch((err: unknown) => {
+        toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
+      })
+      .finally(() => setSaving(false));
+  }, [reset, saving, t]);
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -39,19 +51,25 @@ export function GitSafetySection() {
       >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+            <p id="settings-search-settings-gitSafety-autoSnapshotTitle" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
               {t('settings.gitSafety.autoSnapshotTitle')}
             </p>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-              {t('settings.gitSafety.description')}
-            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">{t('settings.gitSafety.description')}</p>
           </div>
 
-          <Switch
-            checked={autoSnapshotEnabled}
-            onCheckedChange={handleToggle}
-            aria-label={t('settings.gitSafety.toggleAria')}
+          <SegmentedControl
+            value={mode}
+            onValueChange={handleModeChange}
+            disabled={saving}
+            aria-label={t('settings.gitSafety.modeAria')}
+            options={[
+              { value: 'off', label: t('settings.gitSafety.modes.off') },
+              { value: 'existing-git', label: t('settings.gitSafety.modes.existingGit') },
+              { value: 'all-projects', label: t('settings.gitSafety.modes.allProjects') },
+            ] satisfies ReadonlyArray<{ value: GitSafetyMode; label: string }>}
+            fullWidth
           />
+          <DefaultOverrideControls isCustomized={isCustomized} disabled={saving} onReset={handleReset} />
         </div>
       </div>
     </div>

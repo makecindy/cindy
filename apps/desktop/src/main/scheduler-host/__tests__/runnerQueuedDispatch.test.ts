@@ -116,6 +116,7 @@ const queuedImageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
       authStrategy: 'none',
     },
     responseRoutingByModel: {},
+    responseEffortsByModel: {},
     credentialRevision: 1,
   },
   {
@@ -130,6 +131,7 @@ const queuedImageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
       authStrategy: 'none',
     },
     responseRoutingByModel: {},
+    responseEffortsByModel: {},
     credentialRevision: 1,
   },
 ];
@@ -747,7 +749,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       const firePromise = runner.fire(heartbeatSchedule({ source }), createFireContext());
 
       // 入队参数:发送正文带 firedAt 上下文与静默协议后缀,落库/展示用原始
-      // prompt,origin=scheduler。
+      // prompt 加隐藏触发标记,origin=scheduler。
       await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
       const req = queue.enqueueCalls[0]!;
       expect(req.sessionId).toBe(SESSION_ID);
@@ -759,8 +761,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       expect(req.text).toContain('[Silent scheduled run]');
       expect(req.inheritTargetPlanMode).toBe(true);
       expect(req.persistedContent).toContain('PR #971 heartbeat prompt');
-      if (source === 'user') expect(req.persistedContent).toBe('PR #971 heartbeat prompt');
-      else expect(req.persistedContent).not.toBe('PR #971 heartbeat prompt');
+      expect(req.persistedContent).toBe('[UI_ACTION_TRIGGER]PR #971 heartbeat prompt');
       expect(req.origin).toEqual({
         kind: 'scheduler',
         scheduleId: 'schedule-hb',

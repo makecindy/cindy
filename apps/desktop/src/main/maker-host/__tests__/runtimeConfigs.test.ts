@@ -79,6 +79,29 @@ describe('runtime-configs', () => {
     expect(desktopCodexRuntimeConfig.makerMemoryEnabled).toBe(false);
   });
 
+  it('Claude 订阅会话只注入 Anthropic 一方的子代理覆写;网关会话的覆写语义不变', async () => {
+    let saved = 'chatgpt/gpt-5.5';
+    vi.doMock('../memory-settings-store.js', () => ({
+      readMemorySettings: () => memorySettings,
+    }));
+    vi.doMock('../subagent-model-settings-store.js', () => ({
+      readSubagentModelSettings: () => ({ claudeCode: saved }),
+    }));
+    vi.doMock('../model-disable-store.js', () => ({ readModelDisableOverrides: () => ({}) }));
+    const { buildDesktopClaudeRuntimeConfig } = await import('../runtime-configs.js');
+    const config = buildDesktopClaudeRuntimeConfig(() => 'http://127.0.0.1:1234');
+    const route = config.subagentModelForRoute!;
+
+    // 订阅会话:CLI 直连 Anthropic,订阅桥 / 用户来源的模型用不了。
+    expect(route('anthropic', 'oauth-bearer')).toBeUndefined();
+    expect(route(null, 'oauth-bearer')).toBeUndefined();
+    saved = 'glm-5';
+    expect(route(null, 'oauth-bearer')).toBeUndefined();
+    // 网关会话:订阅前缀由 proxy 按请求路由,照旧注入。
+    saved = 'chatgpt/gpt-5.5';
+    expect(route('xd', 'gateway-key')).toBe('chatgpt/gpt-5.5');
+  });
+
   it('places generic Cindy-side Skill precedence in Claude and Codex only', async () => {
     vi.doMock('../memory-settings-store.js', () => ({
       readMemorySettings: () => memorySettings,
@@ -125,27 +148,27 @@ describe('runtime-configs', () => {
   });
 });
 
-it('uses only the selected independent Claude credentials for native spawn flags', async () => {
+it('never treats a retired independent Claude account as a connected subscription for spawn flags', async () => {
   vi.resetModules();
-  const readAccount = vi.fn(() => ({ accessToken: 'work-token' }));
-  const readBuiltin = vi.fn(() => false);
+  const readBuiltin = vi.fn(() => true);
   vi.doMock('../active-catalog.js', () => ({ getActiveCatalog: () => ({ providers: [
     { id: 'claude-work', auth: { method: 'oauth', native: 'claude' } },
   ] }) }));
-  vi.doMock('../subscription-account-auth.js', () => ({ readClaudeAccountOAuth: readAccount }));
-  vi.doMock('../claude-credentials-store.js', () => ({ hasClaudeAiOAuth: readBuiltin }));
+  vi.doMock('../claude-native-auth.js', () => ({ hasClaudeNativeLogin: readBuiltin }));
   try {
     const { buildDesktopClaudeRuntimeConfig } = await import('../runtime-configs.js');
     const flags = buildDesktopClaudeRuntimeConfig(() => 'http://localhost').behaviorFlags;
     if (typeof flags !== 'function') throw new Error('expected spawn flags');
     expect(flags({ credentialMode: 'provider-oauth', sessionProviderId: 'claude-work' } as never))
-      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '1', ENABLE_TOOL_SEARCH: 'auto' });
-    expect(readAccount).toHaveBeenCalledWith('claude-work');
+      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0', ENABLE_TOOL_SEARCH: 'auto' });
+    // 独立账号不借用本机 Claude Code 登录的连接态。
     expect(readBuiltin).not.toHaveBeenCalled();
+    expect(flags({ credentialMode: 'oauth-bearer', sessionProviderId: 'anthropic' } as never))
+      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '1', ENABLE_TOOL_SEARCH: 'auto' });
+    expect(readBuiltin).toHaveBeenCalledTimes(1);
   } finally {
     vi.doUnmock('../active-catalog.js');
-    vi.doUnmock('../subscription-account-auth.js');
-    vi.doUnmock('../claude-credentials-store.js');
+    vi.doUnmock('../claude-native-auth.js');
     vi.resetModules();
   }
 });

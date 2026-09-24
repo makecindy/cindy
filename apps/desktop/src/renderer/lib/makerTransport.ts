@@ -33,8 +33,35 @@ import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 import { extractIpcError } from '@/utils/ipcError';
 import type { TurnChangeSetUpdatedPayload } from '../../shared/turnChangeSet';
+import type { LocalPluginOauthRequest, LocalPluginSecretRequest, LocalPluginConnectionRequest } from '../../shared/pluginOauth';
 
 type FullMaker = typeof window.electronAPI.maker;
+
+/** The dedicated local Main API owns the browser and encrypted callback; Renderer sees status only. */
+export function assistRemotePluginOauth(
+  sessionId: string,
+  request: Omit<LocalPluginOauthRequest, 'deviceId'>,
+): Promise<{ accepted: boolean }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return Promise.reject(new Error('Remote authorization unavailable'));
+  return window.electronAPI.maker.assistPluginOauth({ deviceId, ...request });
+}
+
+/** This local call goes straight to Main's signed bridge, never makerApiFor/device-link invoke. */
+export function submitRemotePluginSecret(
+  sessionId: string,
+  request: Omit<LocalPluginSecretRequest, 'deviceId'>,
+): Promise<{ accepted: boolean }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return Promise.reject(new Error('Remote authorization unavailable'));
+  return window.electronAPI.maker.submitRemotePluginSecret({ deviceId, ...request });
+}
+
+export function submitRemotePluginConnection(sessionId: string, request: Omit<LocalPluginConnectionRequest, 'deviceId'>): Promise<{ accepted: boolean }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return Promise.reject(new Error('Remote authorization unavailable'));
+  return window.electronAPI.maker.submitRemotePluginConnection({ deviceId, ...request });
+}
 
 /**
  * makerChatStore / ChatInput 经传输层调用的会话操作子集。本地直接复用
@@ -69,6 +96,7 @@ export interface RoutableMaker {
   forkStripEncrypted: FullMaker['forkStripEncrypted'];
   rewindPreview: FullMaker['rewindPreview'];
   rewindCommit: FullMaker['rewindCommit'];
+  applyTurnChangeSet: FullMaker['applyTurnChangeSet'];
   getContextUsage: FullMaker['getContextUsage'];
   setExtraDirs: FullMaker['setExtraDirs'];
   setWritableDirs: FullMaker['setWritableDirs'];
@@ -94,6 +122,7 @@ export interface RoutableMaker {
     | 'move'
     | 'remove'
     | 'updateText'
+    | 'updateContent'
     | 'clearError'
     | 'retryLastError'
     | 'clearSession'
@@ -149,6 +178,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     listBotDelegations: t('maker:bot-delegations:list') as FullMaker['listBotDelegations'],
     cancelBotDelegation: t('maker:bot-delegation:cancel') as FullMaker['cancelBotDelegation'],
     getBotDirectMessageThread: t('maker:bot-direct-message-thread:get') as FullMaker['getBotDirectMessageThread'],
+    applyTurnChangeSet: t('maker:turn-change-set:apply') as FullMaker['applyTurnChangeSet'],
     send: t('maker:send') as FullMaker['send'],
     setModel: (async (...args: SetModelArgs) =>
       invokeRemote(
@@ -206,6 +236,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
       move: t('maker:input:move') as FullMaker['input']['move'],
       remove: t('maker:input:remove') as FullMaker['input']['remove'],
       updateText: t('maker:input:update-text') as FullMaker['input']['updateText'],
+      updateContent: t('maker:input:update-content') as FullMaker['input']['updateContent'],
       clearError: t('maker:input:clear-error') as FullMaker['input']['clearError'],
       retryLastError: t('maker:input:retry-last-error') as FullMaker['input']['retryLastError'],
       clearSession: t('maker:input:clear-session') as FullMaker['input']['clearSession'],
@@ -263,7 +294,7 @@ export function makerApiForSticky(sessionId: string): RoutableMaker {
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
 }
 
-/** Subscribe to local exact-turn updates; remote sessions deliberately fail closed in this phase. */
+/** Subscribe to summaries from the owning device; exact patches are fetched on demand. */
 export function subscribeTurnChangeSetUpdated(
   sessionId: string,
   cb: (payload: TurnChangeSetUpdatedPayload) => void,
@@ -277,9 +308,13 @@ export function subscribeTurnChangeSetUpdated(
         cb(payload as TurnChangeSetUpdatedPayload);
       });
     }
-    // Exact patches can exceed the 2 MiB device-link frame. This phase fails closed for
-    // controlled sessions instead of truncating a patch and presenting it as exact.
-    return () => {};
+    return window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
+      if (push.deviceId !== deviceId || push.channel !== 'maker:turn-change-set:updated') return;
+      if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
+      const payload = push.payload as Partial<TurnChangeSetUpdatedPayload> | null;
+      if (payload?.sessionId !== sessionId || payload.summary?.sessionId !== sessionId) return;
+      cb(payload as TurnChangeSetUpdatedPayload);
+    });
   };
 
   let currentDeviceId = getStickySessionDeviceId(sessionId);

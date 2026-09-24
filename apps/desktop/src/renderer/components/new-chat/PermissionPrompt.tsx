@@ -84,15 +84,15 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
 const actionClass = 'h-auto min-h-9 max-w-full gap-2 px-3 py-1.5';
 const secondaryActionClass = cn(
   actionClass,
-  'border-[var(--chat-input-border)] bg-transparent text-[var(--chat-input-text)]',
-  'enabled:hover:bg-[var(--perm-code-bg)]',
-  'enabled:active:bg-[color-mix(in_srgb,var(--perm-code-bg)_90%,var(--chat-input-text))]',
+  '[--button-face-border:var(--chat-input-border)] [--button-face-bg:transparent] text-[var(--chat-input-text)]',
+  'enabled:hover:[--button-face-bg:var(--perm-code-bg)]',
+  'enabled:active:[--button-face-bg:color-mix(in_srgb,var(--perm-code-bg)_90%,var(--chat-input-text))]',
 );
 const allowActionClass = cn(
   actionClass,
-  'border-[var(--chat-input-border)] bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
-  'enabled:hover:bg-[color-mix(in_srgb,var(--perm-allow-btn-bg)_90%,var(--perm-allow-btn-text))]',
-  'enabled:active:bg-[color-mix(in_srgb,var(--perm-allow-btn-bg)_80%,var(--perm-allow-btn-text))]',
+  '[--button-face-border:var(--chat-input-border)] [--button-face-bg:var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
+  'enabled:hover:[--button-face-bg:color-mix(in_srgb,var(--perm-allow-btn-bg)_90%,var(--perm-allow-btn-text))]',
+  'enabled:active:[--button-face-bg:color-mix(in_srgb,var(--perm-allow-btn-bg)_80%,var(--perm-allow-btn-text))]',
 );
 
 // ---------------------------------------------------------------------------
@@ -232,6 +232,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       <div className="mt-4 flex flex-wrap items-center justify-end gap-2 [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
         {/* Deny */}
         <Button
+          pressFeedback={false}
           variant="secondary"
           size="lg"
           onClick={handleDeny}
@@ -260,6 +261,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
             contentClassName="max-w-[320px] whitespace-pre-line break-all text-left"
           >
             <Button
+              pressFeedback={false}
               variant="secondary"
               size="lg"
               onClick={handleAlwaysAllow}
@@ -283,6 +285,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
         {/* Allow once (primary) */}
         <Button
+          pressFeedback={false}
           variant="secondary"
           size="lg"
           onClick={handleAllowOnce}

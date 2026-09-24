@@ -47,6 +47,26 @@ export function isNativeSocialProviderSupported(
   return !!WECHAT_APP_ID && !!WECHAT_UNIVERSAL_LINK;
 }
 
+/**
+ * Resolves whether a configured native provider should be offered on this
+ * device. WeChat's iOS flow requires the companion app, so App Review builds
+ * hide that entry when the SDK cannot find WeChat. Android keeps the entry and
+ * reports an unavailable provider after a tap, matching the platform's normal
+ * install flow.
+ */
+export async function isNativeSocialProviderAvailable(
+  provider: SocialProvider,
+): Promise<boolean> {
+  if (!isNativeSocialProviderSupported(provider)) return false;
+  if (provider !== 'wechat' || Platform.OS !== 'ios') return true;
+  try {
+    const { isWechatInstalled } = await import('xdt-wechat-login');
+    return await isWechatInstalled();
+  } catch {
+    return false;
+  }
+}
+
 /** Acquires a short-lived native SDK credential. Token exchange always happens in auth-server. */
 export async function acquireNativeSocialCredential(
   provider: SocialProvider,

@@ -19,6 +19,8 @@ export interface ApiFetchOptions {
   body?: unknown;
   timeoutMs?: number;
   cache?: 'no-store';
+  /** Reject stale account-scoped work before transport or auth side effects. */
+  assertCurrent?: () => void;
 }
 
 const DEFAULT_API_TIMEOUT_MS = 20_000;
@@ -43,6 +45,7 @@ export async function apiFetchRaw<T>(
   path: string,
   opts: ApiFetchOptions,
 ): Promise<T> {
+  opts.assertCurrent?.();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   if (opts.cache === 'no-store') {
@@ -106,6 +109,8 @@ export async function apiFetchRaw<T>(
     if (timeoutId) clearTimeout(timeoutId);
   }
 
+  // A late old-account response must not terminate the newly active account.
+  opts.assertCurrent?.();
   if (!response.ok) {
     const error = readError(data);
     const code = error.code ?? `HTTP_${response.status}`;

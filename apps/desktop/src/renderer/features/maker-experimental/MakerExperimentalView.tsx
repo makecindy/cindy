@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * MakerExperimentalView — Maker IPC / agent event 链路的独立诊断页面。
  *
@@ -168,13 +169,24 @@ export function MakerExperimentalView(): ReactElement {
             style={{ flex: 1, padding: '4px 8px', background: 'var(--surface-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border-default)' }}
             placeholder={t('makerExperimental.workingDirPlaceholder')}
           />
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             disabled={!!m.session}
             onClick={async () => {
-              const api = (window as unknown as {
-                electronAPI?: { dialog?: { showOpenDirectory: (p?: { defaultPath?: string }) => Promise<{ success: boolean; path: string | null }> } };
-              }).electronAPI?.dialog;
+              const api = (
+                window as unknown as {
+                  electronAPI?: {
+                    dialog?: {
+                      showOpenDirectory: (p?: {
+                        defaultPath?: string;
+                      }) => Promise<{ success: boolean; path: string | null }>;
+                    };
+                  };
+                }
+              ).electronAPI?.dialog;
               if (!api) {
                 alert(t('makerExperimental.dialogUnavailable'));
                 return;
@@ -182,18 +194,9 @@ export function MakerExperimentalView(): ReactElement {
               const res = await api.showOpenDirectory(workingDir ? { defaultPath: workingDir } : undefined);
               if (res.success && res.path) setWorkingDir(res.path);
             }}
-            style={{
-              padding: '4px 12px',
-              background: 'var(--surface-chip-alt)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border-default)',
-              borderRadius: 4,
-              cursor: m.session ? 'default' : 'pointer',
-              opacity: m.session ? 0.5 : 1,
-            }}
           >
             {t('makerExperimental.selectButton')}
-          </button>
+          </Button>
         </div>
 
         <label htmlFor="maker-experimental-model">{t('makerExperimental.modelLabel')}</label>
@@ -250,17 +253,20 @@ export function MakerExperimentalView(): ReactElement {
         <div></div>
         <div>
           {!m.session ? (
-            <button
-              type="button"
-              onClick={handleCreate}
-              style={{ padding: '6px 16px', background: 'var(--accent-cta-bg)', color: 'var(--accent-pure-cta-fg)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
-            >{t('makerExperimental.createSession')}</button>
+            <Button variant="cta" size="md" compact type="button" onClick={handleCreate}>
+              {t('makerExperimental.createSession')}
+            </Button>
           ) : (
-            <button
+            <Button
+              variant="secondary"
+              tone="danger-solid"
+              size="md"
+              compact
               type="button"
               onClick={() => void m.close()}
-              style={{ padding: '6px 16px', background: 'var(--error-flat)', color: 'var(--accent-pure-cta-fg)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
-            >{t('makerExperimental.closeSession')}</button>
+            >
+              {t('makerExperimental.closeSession')}
+            </Button>
           )}
         </div>
       </div>
@@ -308,11 +314,9 @@ export function MakerExperimentalView(): ReactElement {
               onClick={() => void m.abort()}
               style={{ padding: '6px 16px', background: 'var(--surface-chip)', color: 'var(--text-primary)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
             >{t('makerExperimental.abort')}</button>
-            <button
-              type="button"
-              onClick={m.clearEvents}
-              style={{ padding: '6px 16px', background: 'var(--surface-chip-alt)', color: 'var(--text-primary)', border: 'none', borderRadius: 4, cursor: 'pointer' }}
-            >{t('makerExperimental.clear')}</button>
+            <Button variant="primary" size="md" compact type="button" onClick={m.clearEvents}>
+              {t('makerExperimental.clear')}
+            </Button>
           </div>
         </div>
       )}

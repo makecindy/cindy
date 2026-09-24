@@ -1452,6 +1452,6 @@ describe('远程交互接线不变式', () => {
 
     const start = src.indexOf('function handleSubscriptionFrame');
     expect(start).toBeGreaterThan(-1);
-    expect(src.slice(start, start + 900)).toContain('o.topics.filter(isRemoteSubscriptionTopic)');
+    expect(src.slice(start, src.indexOf("const name = resolveControllerName", start))).toContain('o.topics.filter(isRemoteSubscriptionTopic)');
   });
 });

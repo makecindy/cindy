@@ -1,3 +1,5 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
+import { Button } from '@/components/ui/button';
 /**
  * RewindPreviewDialog
  * ---------------------------------------------------------------------------
@@ -7,10 +9,12 @@
  *   open=true + running → 直接确认 Stop + Rewind，不读取会立刻过期的 preview
  *   open=true + idle    → 进 Loading → 调 rewindPreview(sessionId, clientId)
  *               ├─ filesChanged.length > 0       → Default（文件清单 + summary）
- *               ├─ filesChanged.length == 0      → Empty（"无文件被改动"占位）
+ *               ├─ conversationOnly              → Empty（说明文件恢复不可用）
+ *               ├─ filesChanged.length == 0      → Empty（无文件改动）
  *               └─ canRewind=false 或抛错        → Error（红色 alert + "知道了"）
  *
  *   Confirm 点击（Running / Default / Empty）→ 调 rewindCommit(stopIfRunning=true)
+ *             Empty 额外传 allowFileRestore:false，绑定预览时的 conversation-only 承诺
  *                                             → 成功后 onCommitted(session)
  *                                                  → 失败 toast.error 但保持弹窗开
  *
@@ -43,9 +47,8 @@ type DialogState =
       insertions: number;
       deletions: number;
     }
-  // empty: SDK 报告没有文件需要回滚（canRewind=true + filesChanged=[]，
-  // 或 canRewind=false 但因"该消息无 checkpoint" / "session 未开 checkpointing"
-  // 导致——两种情况语义都是"仅截断对话历史"，让用户继续 Confirm，由后端容错）
+  // empty: 对话可以回退，但文件层面要么没有改动，要么没有可用的恢复点；
+  // note 用于把这两种用户可见结果明确区分。
   | { kind: 'empty'; note?: string }
   // error: 真硬错（IPC 抛错，非 SDK 软拒绝）—— 阻塞 Confirm
   | { kind: 'error'; errorText: string };
@@ -102,13 +105,22 @@ export function RewindPreviewDialog({
             insertions: result.insertions ?? 0,
             deletions: result.deletions ?? 0,
           });
+        } else if (result.canRewind && result.conversationOnly) {
+          // The conversation can still rewind, but there is no file restore
+          // plan (for example a non-Git project or missing savepoints).
+          setState({
+            kind: 'empty',
+            note: result.gitSafetyDisabled
+              ? t('chat.rewind.gitSafetyDisabledNotice')
+              : t('chat.rewind.conversationOnlyNotice'),
+          });
         } else if (result.canRewind) {
-          // 文件层面没有改动可回滚，仅截断对话历史。
+          // 文件层面没有检测到改动，仍允许用户回退聊天记录。
           setState({ kind: 'empty' });
         } else {
           // SDK 软拒绝（最常见："No file checkpoint found for this message"
           // = 该 user 消息之后没有任何工具改文件；或老 session 没开 checkpointing）。
-          // 两种都不影响截断历史，让用户继续 Confirm。错误文案以 note 形式提示。
+          // 对话仍可回退，让用户继续 Confirm；具体原因以 note 形式提示。
           setState({
             kind: 'empty',
             note: result.error || t('chat.rewind.noFilesToRollback'),
@@ -145,7 +157,10 @@ export function RewindPreviewDialog({
     if (state.kind !== 'running' && state.kind !== 'default' && state.kind !== 'empty') return;
     setCommitting(true);
     try {
-      const session = await rewindCommit(sessionId, clientId, { stopIfRunning: true });
+      const session = await rewindCommit(sessionId, clientId, {
+        stopIfRunning: true,
+        ...(state.kind === 'empty' ? { allowFileRestore: false } : {}),
+      });
       onCommitted(session);
       onOpenChange(false);
     } catch (err) {
@@ -241,30 +256,18 @@ export function RewindPreviewDialog({
             {!isError ? (
               <>
                 <AlertDialog.Cancel asChild>
-                  <button
-                    type="button"
-                    className={cn(
-                      'inline-flex items-center justify-center rounded-full px-6 py-2.5 text-14',
-                      'border bg-transparent transition-colors',
-                      'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                      'hover:bg-[var(--confirm-btn-secondary-hover)]',
-                    )}
+                  <Button variant="secondary" size="lg" type="button"
                   >
                     {t('chat.rewind.dialog.cancel')}
-                  </button>
+                  </Button>
                 </AlertDialog.Cancel>
-                <button
+                <Button
+                  variant="cta"
+                  size="lg"
+                  loading={committing}
                   type="button"
                   onClick={handleConfirm}
                   disabled={!canConfirm}
-                  className={cn(
-                    'inline-flex items-center justify-center gap-1.5 rounded-full px-6 py-2.5 text-14 font-medium',
-                    'transition-colors',
-                    // 主题反色（按设计稿，避开 ConfirmDialog 的 destructive 红）
-                    'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)]',
-                    'hover:bg-[var(--confirm-btn-primary-hover)]',
-                    'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:opacity-50',
-                  )}
                 >
                   {committing ? (
                     <Spinner size={14} strokeWidth={2} />
@@ -282,21 +285,14 @@ export function RewindPreviewDialog({
                           ? 'chat.rewind.dialog.confirmRunning'
                           : 'chat.rewind.dialog.confirm',
                       )}
-                </button>
+                </Button>
               </>
             ) : (
               <AlertDialog.Cancel asChild>
-                <button
-                  type="button"
-                  className={cn(
-                    'inline-flex items-center justify-center rounded-full px-6 py-2.5 text-14 font-medium',
-                    // Error 态：Cancel 升级为黑底主按钮
-                    'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)]',
-                    'hover:bg-[var(--confirm-btn-primary-hover)] transition-colors',
-                  )}
+                <Button variant="cta" size="lg" type="button"
                 >
                   {t('chat.rewind.dialog.acknowledge')}
-                </button>
+                </Button>
               </AlertDialog.Cancel>
             )}
           </div>
@@ -384,9 +380,8 @@ function BodyDefault({ files }: { files: string[] }) {
                 idx > 0 && 'border-t border-[var(--board)]',
               )}
             >
-              <FileText
+              <FileTypeIcon name={path}
                 size={14}
-                strokeWidth={1.75}
                 className="shrink-0 text-[var(--cmd-palette-item-meta)]"
               />
               <span

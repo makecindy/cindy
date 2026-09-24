@@ -114,6 +114,11 @@ export interface AttachedFile {
    */
   cacheUrlShared?: boolean;
   /**
+   * `path` points at a staged copy owned by another durable surface. Removing
+   * this draft attachment must not delete that shared staged file.
+   */
+  stagedPathShared?: boolean;
+  /**
    * @deprecated image-local-cache removed blob-URL thumbnails. Setting this
    * is now a compile error so any leftover code path surfaces immediately.
    */

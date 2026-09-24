@@ -12,6 +12,90 @@ const registry = BUNDLED_CATALOG.modelRegistry;
 
 describe("model registry", () => {
   it.each([
+    ["openai", "gpt-6-sol", "gpt-5.6-sol"],
+    ["openai", "gpt-6-luna", "gpt-5.6-luna"],
+    ["anthropic", "claude-opus-5-5", "claude-opus-5"],
+  ])("orders %s/%s before its previous generation", (provider, model, previous) => {
+    const current = findModelRegistryRoute(registry, provider, model)?.entry.sortOrder;
+    const prior = findModelRegistryRoute(registry, provider, previous)?.entry.sortOrder;
+    expect(Number.isFinite(current)).toBe(true);
+    expect(current).toBeLessThan(prior!);
+  });
+
+  it.each([
+    { model: "gpt-6-sol", input: 2, output: 10 },
+    { model: "gpt-6-luna", input: 0.1, output: 0.5 },
+  ])(
+    "resolves $model launch prices across the exact 272K boundary",
+    ({ model, input, output }) => {
+      for (const variant of ["standard", "fast"] as const) {
+        const multiplier = variant === "fast" ? 2 : 1;
+        const options = { at: "2026-09-22", variant, inputTokens: 272_000 };
+        expect(
+          resolveModelReferencePrice(registry, "openai", model, {
+            ...options,
+            at: "2026-09-21",
+          }),
+        ).toBeUndefined();
+        expect(
+          resolveModelReferencePrice(
+            registry,
+            "openai",
+            `chatgpt/${model}`,
+            options,
+          )?.price,
+        ).toMatchObject({
+          inputPerMtok: input * multiplier,
+          outputPerMtok: output * multiplier,
+        });
+        expect(
+          resolveModelReferencePrice(registry, "openai", model, {
+            ...options,
+            inputTokens: 272_001,
+          })?.price,
+        ).toMatchObject({
+          inputPerMtok: input * multiplier * 2,
+          outputPerMtok: output * multiplier * 1.5,
+        });
+        expect(
+          resolveModelReferencePrice(registry, "xd", model, options),
+        ).toBeUndefined();
+      }
+      expect(
+        findModelRegistryRoute(registry, "openai", model, "codex")?.entry,
+      ).toMatchObject({
+        contextWindow: 1_050_000,
+        supportsImageInput: true,
+        perAgent: {
+          codex: { contextWindow: 272_000 },
+          "claude-code": { contextWindow: 272_000 },
+        },
+      });
+    },
+  );
+
+  it("keeps Opus 5.5 cache prices valid across its full window", () => {
+    for (const inputTokens of [1, 200_001, 900_000]) {
+      for (const variant of ["standard", "fast"] as const) {
+        const multiplier = variant === "fast" ? 2 : 1;
+        expect(
+          resolveModelReferencePrice(registry, "anthropic", "claude-opus-5-5", {
+            at: "2026-09-22",
+            variant,
+            inputTokens,
+          })?.price,
+        ).toMatchObject({
+          inputPerMtok: 4 * multiplier,
+          outputPerMtok: 20 * multiplier,
+          cacheReadPerMtok: 0.2 * multiplier,
+          cacheWritePerMtok: 5 * multiplier,
+          cacheWrite1hPerMtok: 8 * multiplier,
+        });
+      }
+    }
+  });
+
+  it.each([
     { variant: "standard" as const, inputPerMtok: 10, cacheWritePerMtok: 12.5 },
     { variant: "fast" as const, inputPerMtok: 20, cacheWritePerMtok: 25 },
   ])(

@@ -20,6 +20,21 @@ import {
 
 import type { SessionSource } from '../../shared/sessionSource.js';
 
+/** Per-profile authority journal. Snapshots are recovery/audit data, not offline grants. */
+export const sharedTaskEvents = sqliteTable('shared_task_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  sharedTaskId: text('shared_task_id').notNull(),
+  sessionId: text('session_id').notNull().references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  kind: text('kind', { enum: ['authority', 'local-close'] }).notNull(),
+  terminal: integer('terminal', { mode: 'boolean' }).notNull(),
+  snapshot: text('snapshot'),
+  recordedAt: integer('recorded_at').notNull(),
+}, (table) => ({
+  uniqueRevision: uniqueIndex('shared_task_events_revision_idx').on(table.sharedTaskId, table.kind, table.revision),
+  bySession: index('shared_task_events_session_idx').on(table.sessionId, table.id),
+}));
+
 const SESSION_SOURCES = [
   'desktop',
   'feishu',
@@ -471,7 +486,7 @@ export const botDirectMessageThreads = sqliteTable(
   'bot_direct_message_threads',
   {
     id: text('id').primaryKey(),
-    /** Local Bot ids or deviceId::botId addresses, lexically ordered. Lifecycle deletion guards shared history. */
+    /** Local Bot ids or deviceId::botId addresses, lexically ordered. Deletion keeps these rows. */
     botAId: text('bot_a_id').notNull(),
     botBId: text('bot_b_id').notNull(),
     status: text('status', { enum: ['active', 'closed'] })

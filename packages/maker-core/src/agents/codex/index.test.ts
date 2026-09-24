@@ -4,8 +4,14 @@ import os from 'node:os';
 import { promises as fs } from 'node:fs';
 import { applyPatch, formatPatch, parsePatch, reversePatch } from 'diff';
 
-import { CodexAgent, isExactNoRolloutThreadResumeError } from './index.js';
+import {
+  CodexAgent,
+  isCodexRollbackMethodRemovedError,
+  isCodexRollbackUnavailableError,
+  isExactNoRolloutThreadResumeError,
+} from './index.js';
 import { CodexForkError } from './fork-error.js';
+import { Session } from '../../session.js';
 import { Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import {
@@ -3012,6 +3018,30 @@ describe('CodexAgent capability routing', () => {
 describe('CodexAgent reference directories', () => {
   const profileName = 'cindy-readonly-references';
 
+  it.each([
+    { permissionMode: 'auto' as const, extraDirs: [], selector: { sandbox_mode: 'workspace-write' } },
+    { permissionMode: 'ask' as const, extraDirs: ['/reference'], selector: { default_permissions: profileName } },
+    { permissionMode: 'bypassPermissions' as const, extraDirs: ['/reference'], selector: { sandbox_mode: 'danger-full-access' } },
+  ])('retains the $permissionMode selection when native workspace routing reloads config (extraDirs=$extraDirs)', async ({ permissionMode, extraDirs, selector }) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'workspace-config-reload', model: 'gpt-6-luna',
+      workingDir: '/repo', remoteHostId: 'builder', permissionMode, extraDirs,
+    });
+    const [, params] = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)!;
+    const config = (params as { config: Record<string, unknown> }).config;
+    // 0.156 reloads the config layer without the RPC sandbox/permissions fields.
+    // A profile declaration alone then fails before any model request is sent.
+    expect(config).toMatchObject(selector);
+    expect(Object.hasOwn(config, 'default_permissions')).toBe('default_permissions' in selector);
+    expect(Object.hasOwn(config, 'sandbox_mode')).toBe('sandbox_mode' in selector);
+    expect(Object.hasOwn(config, `permissions.${profileName}`)).toBe(
+      extraDirs.length > 0 && permissionMode !== 'bypassPermissions',
+    );
+    await handle.close();
+  });
+
   it('marks only explicitly writable additional roots as write in the thread profile', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, undefined, { codexHome: '/tmp/mock-codex-home' });
@@ -3081,6 +3111,9 @@ describe('CodexAgent reference directories', () => {
     )[1] as [string, Record<string, unknown>];
     expect('permissions' in revokedResume).toBe(false);
     expect(revokedResume.sandbox).toBe('workspace-write');
+    expect(revokedResume.config).toMatchObject({ sandbox_mode: 'workspace-write' });
+    expect(revokedResume.config).not.toHaveProperty('default_permissions');
+    expect(revokedResume.config).not.toHaveProperty(`permissions.${profileName}`);
     const turnCalls = host.request.mock.calls.filter(
       ([method]) => method === Method.TurnStart,
     );
@@ -4253,6 +4286,133 @@ describe('CodexAgent.listCustomizations', () => {
 });
 
 describe('CodexAgent.refreshLocalModels', () => {
+  it('reconnects a model-only SSH host after daemon closure without explicit host retirement', async () => {
+    const transports: InstanceType<typeof MockCodexTransport>[] = [];
+    const agent = new CodexAgent(createDeps({}, { getRemoteCodexTransport: () => {
+      const transport = new MockCodexTransport();
+      transport.setMockResponse(Method.ModelList, {
+        result: { data: [{ model: `remote-${transports.length}` }], nextCursor: null },
+      });
+      transports.push(transport);
+      return transport;
+    } }));
+    try {
+      expect(await agent.listRemoteModels('builder')).toEqual([{ model: 'remote-0' }]);
+      await agent.listRemoteModels('other-builder');
+      // Auth sync / proxy reconciliation kills the daemon. The proxy channel
+      // closes even if no Session has ever subscribed to this AppServerHost.
+      await transports[0]!.close('remote daemon stopped after auth sync');
+      const cachedHost = (agent as any).hosts.get('remote:builder');
+      await cachedHost.shutdownPromise;
+      expect(await agent.listRemoteModels('builder')).toEqual([{ model: 'remote-2' }]);
+      expect(transports).toHaveLength(3);
+      expect(transports[1]!.closed).toBe(false);
+      const handle = await agent.startSession({
+        sessionId: 'after-remote-auth-sync', workingDir: '/repo',
+        remoteHostId: 'builder', model: 'remote-2', providerId: 'openai',
+      });
+      expect(transports).toHaveLength(3);
+      expect(transports[2]!.lines.map((line) => JSON.parse(line).method)).toContain(Method.ThreadStart);
+      expect(transports[0]!.lines.map((line) => JSON.parse(line).method)).not.toContain(Method.ThreadStart);
+      await handle.close();
+    } finally {
+      await agent.dispose();
+    }
+  });
+
+  it('rejects an in-flight SSH catalog on daemon closure and allows a fresh retry', async () => {
+    const transports: InstanceType<typeof MockCodexTransport>[] = [];
+    const agent = new CodexAgent(createDeps({}, { getRemoteCodexTransport: () => {
+      const transport = new MockCodexTransport();
+      transports.push(transport);
+      return transport;
+    } }));
+    try {
+      await agent.listRemoteModels('builder');
+      MockCodexTransport.dropModelList = true;
+      const catalog = agent.listRemoteModels('builder');
+      const rejected = expect(catalog).rejects.toThrow('closed');
+      await vi.waitFor(() => {
+        expect(transports[0]!.lines.map((line) => JSON.parse(line).method)
+          .filter((method) => method === Method.ModelList)).toHaveLength(2);
+      });
+      await transports[0]!.close('remote daemon restarted');
+      await rejected;
+      await (agent as any).hosts.get('remote:builder').shutdownPromise;
+      MockCodexTransport.dropModelList = false;
+      expect(await agent.listRemoteModels('builder')).toEqual([]);
+      expect(transports).toHaveLength(2);
+      expect(transports[1]!.closed).toBe(false);
+    } finally {
+      MockCodexTransport.dropModelList = false;
+      await agent.dispose();
+    }
+  });
+
+  it('retires a model-only SSH connection after daemon restart before admitting new catalog reads', async () => {
+    const transports: InstanceType<typeof MockCodexTransport>[] = [];
+    const agent = new CodexAgent(createDeps({}, { getRemoteCodexTransport: () => {
+      const transport = new MockCodexTransport();
+      transports.push(transport);
+      return transport;
+    } }));
+    await agent.listRemoteModels('builder');
+    await agent.listRemoteModels('other-builder');
+    const oldClose = deferred<void>();
+    const originalClose = transports[0]!.close.bind(transports[0]);
+    vi.spyOn(transports[0]!, 'close').mockImplementation(async () => {
+      await oldClose.promise;
+      await originalClose();
+    });
+    const retirement = agent.disposeRemoteHostAfterRestart('builder');
+    const catalog = agent.listRemoteModels('builder');
+    await Promise.resolve();
+    expect(transports).toHaveLength(2);
+    oldClose.resolve();
+    await retirement;
+    await catalog;
+    expect(transports).toHaveLength(3);
+    expect(transports[0]!.closed).toBe(true);
+    expect(transports[1]!.closed).toBe(false);
+    expect(transports[2]!.closed).toBe(false);
+    await agent.dispose();
+  });
+
+  it('does not retire a remote host that still has an attached session', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) =>
+      method === Method.ModelList ? { data: [], nextCursor: null } : undefined);
+    await agent.listRemoteModels('builder');
+    host.activeSubscriptions = 1;
+    await expect(agent.disposeRemoteHostAfterRestart('builder')).rejects.toThrow('active Codex session');
+    expect(host.retire).not.toHaveBeenCalled();
+  });
+
+  it('reads SSH models on the named remote host without publishing them to local discovery', async () => {
+    const publish = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { onCodexLocalModelsListed: publish }));
+    const host = installFakeHost(agent, (method, params) => {
+      if (method !== Method.ModelList) return undefined;
+      return (params as { cursor: string | null }).cursor === null
+        ? { data: [{ model: 'remote-a' }], nextCursor: 'last' }
+        : { data: [{ model: 'remote-b' }], nextCursor: null };
+    });
+    expect(await agent.listRemoteModels('builder')).toEqual([{ model: 'remote-a' }, { model: 'remote-b' }]);
+    expect((agent as any).getHost).toHaveBeenCalledWith('builder');
+    expect(host.ensureStartedWithTimeout).toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect((agent as any).hosts.has('local')).toBe(false);
+  });
+
+  it('drops remote models when the host is retired during discovery', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent, (method) => {
+      if (method !== Method.ModelList) return undefined;
+      (agent as any).hosts.delete('remote:builder');
+      return { data: [{ model: 'old-account' }], nextCursor: null };
+    });
+    await expect(agent.listRemoteModels('builder')).rejects.toThrow('connection changed');
+  });
   it('uses an isolated OpenAI control-plane host without closing provider-oauth sessions', async () => {
     const onCodexLocalModelsListed = vi.fn().mockResolvedValue(undefined);
     const prepareCodexLocalCredentialModeSwitch = vi.fn(async () => {});
@@ -7051,6 +7211,65 @@ describe('CodexAgent MCP thread context hooks', () => {
     await Promise.all([first, second]);
     expect(close).toHaveBeenCalledOnce();
     await handle.close();
+  });
+
+  it('closes an in-flight turn when external dispose retires its host', async () => {
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-dispose-active-turn',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const transport = createdTransports[0];
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+
+    transport.emitMockLine({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-dispose-active' } },
+    });
+    await waitForExpectation(() => {
+      expect(handle.isTurnRunning?.()).toBe(true);
+    });
+
+    await agent.dispose();
+
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'error',
+      data: expect.objectContaining({
+        isTerminal: true,
+        willRetry: false,
+        message: expect.stringContaining('app-server force-retired'),
+      }),
+    });
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'status',
+      data: expect.objectContaining({ status: 'Done', isRunning: false }),
+    });
+
+    await handle.close();
+  });
+
+  it('propagates global disposal through Session closure without replaying the input', async () => {
+    const deps = createDeps();
+    const agent = new CodexAgent(deps);
+    const handle = await agent.startSession({ sessionId: 'dispose-session', model: 'gpt-5.4', workingDir: '/repo' });
+    const send = vi.spyOn(handle, 'send');
+    const session = new Session({ id: 'dispose-session', agentKind: 'codex', workDir: '/repo',
+      handle, capabilities: {} as never, logger: deps.logger, turnStallMs: 0 });
+    const statuses: string[] = [];
+    const events: CoreAgentEvent[] = [];
+    session.onStatusChange((status) => statuses.push(status));
+    session.onEvent((event) => events.push(event));
+    await session.send('perform one input');
+    await Promise.all([agent.dispose(), agent.dispose()]);
+    await waitForExpectation(() => expect(session.getStatus()).toBe('closed'));
+    expect(statuses.filter((status) => status === 'closed')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(1);
+    expect(send).toHaveBeenCalledOnce();
+    expect(handle.isTurnRunning?.()).toBe(false);
   });
 
   it('force-retires one shared local Host under the credential guard and blocks its lazy replacement', async () => {
@@ -14379,7 +14598,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
-  it.each(['complete', 'missing-name', 'missing-arguments', 'missing-both', 'ambiguous', 'other-turn', 'other-server', 'ghost-call'] as const)(
+  it.each(['complete', 'missing-name', 'missing-arguments', 'missing-both', 'ambiguous', 'ambiguous-with-params', 'other-turn', 'other-server', 'ghost-call'] as const)(
     'uses the same MCP approval evidence for policy and display: %s', async (source) => {
       const policy = vi.fn((context: { serverName: string; toolName?: string }) =>
         context.serverName === 'cindy' && context.toolName === 'ghost_info' ? 'auto-approve' as const : 'prompt' as const);
@@ -14393,20 +14612,21 @@ describe('CodexAgent MCP thread context hooks', () => {
       const handlers = host.getThreadHandlers()!;
       const tool = source === 'ghost-call' ? 'ghost_call' : 'ghost_info';
       const args = { ghost_id: 'xd-xds' };
-      for (let i = 0; i < (source === 'ambiguous' ? 2 : 1); i++) {
+      for (let i = 0; i < (source === 'ambiguous' || source === 'ambiguous-with-params' ? 2 : 1); i++) {
         handlers.itemStarted!({ threadId: 'start-thread-id', turnId: source === 'other-turn' ? 'previous-turn' : 'evidence-turn',
           item: { id: `evidence-${i}`, type: 'mcpToolCall', server: source === 'other-server' ? 'unrelated' : 'cindy', tool, arguments: args } });
       }
       const result = await handlers.mcpServerElicitation!({ threadId: 'start-thread-id', turnId: 'evidence-turn', serverName: 'cindy', mode: 'form',
         message: 'Allow tool call', requestedSchema: {}, _meta: { codex_approval_kind: 'mcp_tool_call',
           ...(['complete', 'missing-arguments'].includes(source) ? { tool_name: tool } : {}),
-          ...(['complete', 'missing-name'].includes(source) ? { tool_params: args } : {}),
+          ...(['complete', 'missing-name', 'ambiguous-with-params'].includes(source) ? { tool_params: args } : {}),
         } });
       const safe = ['complete', 'missing-name', 'missing-arguments', 'missing-both'].includes(source);
       expect(result.action).toBe(safe ? 'accept' : 'decline');
       expect(policy).toHaveBeenCalledWith(safe || source === 'ghost-call'
-        ? { serverName: 'cindy', toolName: tool, toolParams: args } : { serverName: 'cindy' });
-      expect(review).toHaveBeenCalledTimes(source === 'ghost-call' ? 1 : 0);
+        ? { serverName: 'cindy', toolName: tool, toolParams: args }
+        : source === 'ambiguous-with-params' ? { serverName: 'cindy', toolParams: args } : { serverName: 'cindy' });
+      expect(review).toHaveBeenCalledTimes(source === 'ghost-call' || source === 'ambiguous-with-params' ? 1 : 0);
       expect(resolver).not.toHaveBeenCalled();
       await handle.close();
     },
@@ -14825,6 +15045,30 @@ describe('CodexAgent MCP thread context hooks', () => {
     pendingDecision.resolve({ kind: 'permission', behavior: 'allow' });
     await handle.close();
   });
+
+  it.each(['gpt-5.4', 'future-native-catalog-model'])(
+    'sends native SSH model %s unchanged through the remote default provider', async (model) => {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, (method) => method === Method.TurnStart
+        ? { turn: { id: 'remote-native-turn' } } : undefined);
+      const handle = await agent.startSession({
+        sessionId: 'session-remote-native-route', model, providerId: 'openai',
+        workingDir: '/repo', permissionMode: 'auto', remoteHostId: 'gpu-box',
+      });
+      try {
+        const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1];
+        expect(startParams).toMatchObject({ model });
+        // SSH does not install controller provider configs. Creation must admit
+        // only native catalog IDs, not gateway aliases or custom connections.
+        expect(startParams).not.toHaveProperty('modelProvider');
+        await handle.send({ type: 'user', content: 'hello' });
+        const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1];
+        expect(turnParams).toMatchObject({ model });
+      } finally {
+        await handle.close();
+      }
+    },
+  );
 
   it('enables the built-in reviewer for remote OAuth-subscription sessions (Auto)', async () => {
     // 远程 daemon 用的是 auth sync 推过去的同一份订阅凭证, reviewer 调用
@@ -23600,7 +23844,7 @@ describe('CodexAgent resume preparation', () => {
     }));
     const host = installFakeHost(agent);
     try {
-      await expect(agent.forkSdkSession({ sourceSdkSessionId: resumeSessionId, workingDir: root })).rejects.toThrow();
+      await expect(agent.forkSdkSession({ sourceSdkSessionId: resumeSessionId, workingDir: root, upToMessageId: undefined })).rejects.toThrow();
       expect(host.getHost).not.toHaveBeenCalled();
       expect(host.request).not.toHaveBeenCalled();
     } finally {
@@ -23865,6 +24109,37 @@ describe('CodexAgent.forkSdkSession', () => {
     await expect(agent.forkSdkSession({ sourceSdkSessionId: 'source', upToMessageId: undefined }))
       .rejects.toMatchObject({ stage: 'thread-fork', cause });
     expect(host.request).toHaveBeenCalledOnce();
+  });
+
+  it('rejects the rollback-only tail trim with a clear error on Codex 0.156.0 (#4994)', async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-codex-home-'));
+    try {
+      const agent = new CodexAgent(createDeps());
+      (agent as unknown as { codexHome: string }).codexHome = codexHome;
+      const sessionsDir = path.join(codexHome, 'sessions', '2026', '09', '24');
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sourceRollout = path.join(sessionsDir, 'rollout-2026-09-24-source-thread-id.jsonl');
+      await fs.writeFile(sourceRollout, `${JSON.stringify({ payload: { type: 'message', role: 'user' } })}\n`, 'utf8');
+      const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.156.0' });
+      const retire = vi.spyOn(agent as any, 'retireHostKey').mockResolvedValue(undefined);
+
+      // 剥离加密 reasoning 的跨供应商 fork 没有原生锚点,以前靠 thread/rollback 裁尾;
+      // 0.156 起该方法已移除,必须在发请求前给出可定位错误,并照常清理已创建子线程。
+      await expect(agent.forkSdkSession({
+        sourceSdkSessionId: 'source-thread-id',
+        upToMessageId: undefined,
+        stripEncryptedReasoning: true,
+        tailTurnsToDrop: 1,
+      })).rejects.toMatchObject({
+        stage: 'thread-rollback',
+        cause: expect.objectContaining({ message: expect.stringMatching(/removed thread\/rollback \(0\.156\.0\+\)/) }),
+      });
+      expect(host.request).not.toHaveBeenCalledWith(Method.ThreadRollback, expect.anything());
+      expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
+      expect(retire).toHaveBeenCalledOnce();
+    } finally {
+      await fs.rm(codexHome, { recursive: true, force: true });
+    }
   });
 
   it('preserves the rollback failure when child cleanup also fails', async () => {
@@ -24555,6 +24830,143 @@ describe('CodexAgent rewind', () => {
     expect(host.request).not.toHaveBeenCalledWith(Method.ThreadFork, expect.anything());
     expect(host.request).not.toHaveBeenCalledWith(Method.ThreadTurnsList, expect.anything());
     await handle.close();
+  });
+
+  // #4994: Codex 0.156.0 移除了 thread/rollback(openai/codex#44915)。编辑重发 /
+  // 「回到此处」不能再白发一次注定 -32600 的请求,要按 userAgent 直接走原生边界 fork。
+  const ROLLBACK_REMOVED_ERROR_TEXT =
+    'codex app-server thread/rollback error -32600: Invalid request: unknown variant `thread/rollback`, expected one of `initialize`, `thread/start`, `thread/fork`, `thread/revert`, `thread/turns/list`';
+
+  it('skips thread/rollback and forks at the native turn boundary on Codex 0.156.0 (#4994)', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+      if (method === Method.ThreadTurnsList) return {
+        data: [
+          { id: 'dropped-turn', status: 'completed', startedAt: 200 },
+          { id: 'boundary-turn', status: 'completed', startedAt: 100 },
+        ], nextCursor: null,
+      };
+    }, { userAgent: 'mock-codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-rollback-removed',
+      model: 'gpt-6-luna',
+      workingDir: '/repo',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    const commitResult = await commitRewindFiles('', '', { tailTurnsToDrop: 1, forkAtTimestampMs: 150_500 });
+
+    expect(host.request).not.toHaveBeenCalledWith(Method.ThreadRollback, expect.anything());
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'start-thread-id',
+      lastTurnId: 'boundary-turn',
+      excludeTurns: true,
+      cwd: '/repo',
+    });
+    expect(commitResult).toEqual({ sdkSessionId: 'fork-thread-id' });
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fork-thread-id', expect.any(Object));
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'session_id',
+      data: 'fork-thread-id',
+      source: 'codex',
+    });
+    await handle.close();
+  });
+
+  it('forks when a daemon of unknown version rejects thread/rollback as an unknown method (#4994)', async () => {
+    const agent = new CodexAgent(createDeps());
+    // 远端 / 版本串不可解析的 daemon 仍先试 rollback;真实 0.156 拒绝文本必须被识别为
+    // 「不可用」而不是裸抛。
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+    }, { userAgent: 'mock-codex/0.153.4' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-rollback-unknown-variant',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 2, lastTurnId: 'persisted-boundary' }))
+      .resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadRollback, {
+      threadId: 'start-thread-id',
+      numTurns: 2,
+    });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
+      threadId: 'start-thread-id', lastTurnId: 'persisted-boundary',
+    }));
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fork-thread-id', expect.any(Object));
+    await handle.close();
+  });
+
+  it('forks with a persisted anchor when a daemon without a parseable version rejects thread/rollback as removed (#5002 P1)', async () => {
+    const agent = new CodexAgent(createDeps());
+    // userAgent 无版本串:版本门控无法判断 fork 能力,但 unknown variant 拒绝已证明
+    // daemon ≥ 0.156.0,有持久化锚点时必须走 fork 而不是报 rewind unavailable。
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+    }, { userAgent: 'codex-remote' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-rollback-removed-unknown-ua',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1, lastTurnId: 'persisted-boundary' }))
+      .resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'start-thread-id',
+      lastTurnId: 'persisted-boundary',
+      excludeTurns: true,
+      cwd: '/repo',
+    });
+    await handle.close();
+  });
+
+  it('resolves the boundary via thread/turns/list when an unversioned daemon has removed thread/rollback (#5002 P1)', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+      if (method === Method.ThreadTurnsList) return {
+        data: [{ id: 'boundary-turn', status: 'completed', startedAt: 100 }], nextCursor: null,
+      };
+    }, { userAgent: 'codex-remote' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-rollback-removed-unknown-ua-list',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1, forkAtTimestampMs: 150_500 }))
+      .resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadTurnsList, expect.objectContaining({ threadId: 'start-thread-id' }));
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({ lastTurnId: 'boundary-turn' }));
+    await handle.close();
+  });
+
+  it('classifies the 0.156 unknown-variant rejection as rollback unavailable (#4994)', () => {
+    expect(isCodexRollbackMethodRemovedError(new Error(ROLLBACK_REMOVED_ERROR_TEXT))).toBe(true);
+    expect(isCodexRollbackUnavailableError(new Error(ROLLBACK_REMOVED_ERROR_TEXT))).toBe(true);
+    expect(isCodexRollbackUnavailableError(new Error('paginated threads do not support thread/rollback'))).toBe(true);
+    expect(isCodexRollbackMethodRemovedError(new Error('codex app-server thread/rollback error -32000: thread not found'))).toBe(false);
+    expect(isCodexRollbackUnavailableError(new Error('unknown variant `thread/fork`'))).toBe(false);
   });
 
   it('re-registers proxy developer instructions for the replacement rollback thread', async () => {

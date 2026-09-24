@@ -154,7 +154,12 @@ export function attachMainOwnedInputBoundary(
  */
 export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   if (!sendOpts || typeof sendOpts !== 'object' || Array.isArray(sendOpts)) return sendOpts;
-  const opts = sendOpts as Record<string, unknown>;
+  let opts = sendOpts as Record<string, unknown>;
+  const persisted = opts.persistUserMessage;
+  if (persisted && typeof persisted === 'object' && !Array.isArray(persisted) && 'sharedTaskAuthor' in persisted) {
+    const { sharedTaskAuthor: _ignoredAuthor, ...content } = persisted as Record<string, unknown>;
+    opts = { ...opts, persistUserMessage: content };
+  }
   if (
     !('fromMobileClient' in opts) &&
     !('fromDeviceLinkClient' in opts) &&
@@ -165,13 +170,15 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
     !('signal' in opts) &&
     !('turnPermissionPolicy' in opts) &&
     !('toolsDisabled' in opts) &&
-    !('origin' in opts)
+    !('origin' in opts) &&
+    !('uiLanguage' in opts)
   ) {
-    return sendOpts;
+    return opts;
   }
   const {
     fromMobileClient: _ignoredMobile,
     fromDeviceLinkClient: _ignoredDeviceLink,
+    uiLanguage: _ignoredUiLanguage,
     expectedInputGeneration: _ignoredGeneration,
     expectedTurnSession: _ignoredTurnSession,
     expectedTurnGeneration: _ignoredTurnGeneration,

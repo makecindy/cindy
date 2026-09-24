@@ -11,7 +11,7 @@ const electronFetch = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({ net: { fetch: electronFetch } }));
 
 const roots: string[] = [];
-afterEach(async () => { vi.unstubAllGlobals(); electronFetch.mockReset(); await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllGlobals(); electronFetch.mockReset(); await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
 function release(platform = 'darwin') {
   const name = `pi-${platform}-arm64.${platform === 'win32' ? 'zip' : 'tar.gz'}`;
   return { tag_name: 'v0.85.1', assets: [{ name, digest: 'sha256:' + 'a'.repeat(64), browser_download_url: `https://github.com/earendil-works/pi/releases/download/v0.85.1/${name}` }] };
@@ -70,13 +70,22 @@ describe('Pi standalone core update', () => {
 
   it.each(['darwin', 'win32'] as const)('publishes a fully probed %s distribution without touching the running one', async platform => {
     const { root, current, deps } = await fixture(platform);
+    const chmod = vi.spyOn(fs, 'chmod');
     const result = await installPiBinaryUpdate(root, current, false, deps, platform, 'arm64');
     expect(result.version).toBe('0.85.1');
+    expect(path.basename(path.dirname(result.binaryPath))).toMatch(/^0\.85\.1-/);
+    const extractionRoot = vi.mocked(deps.extract).mock.calls[0][1];
+    if (platform !== 'win32') {
+      expect(chmod).toHaveBeenCalledWith(path.join(extractionRoot, 'pi', 'pi'), 0o755);
+      // The target asset is Unix, but only a Unix host can expose its executable mode bits.
+      if (process.platform !== 'win32') expect((await fs.stat(result.binaryPath)).mode & 0o777).toBe(0o755);
+    } else {
+      expect(chmod).not.toHaveBeenCalled();
+    }
     expect(await fs.readFile(current, 'utf8')).toBe('old-running-runtime');
     expect(await fs.readFile(path.join(path.dirname(result.binaryPath), 'README.md'), 'utf8')).toBe('assets');
     expect(await fs.readFile(path.join(path.dirname(result.binaryPath), '.verified'), 'utf8')).toBe('a'.repeat(64));
     expect(deps.probe).toHaveBeenCalledTimes(3);
-    const extractionRoot = vi.mocked(deps.extract).mock.calls[0][1];
     await expect(fs.stat(path.dirname(extractionRoot))).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it('leaves the old installation usable when version verification fails', async () => {
@@ -91,6 +100,16 @@ describe('Pi standalone core update', () => {
     deps.probe = vi.fn(async () => '0.86.0');
     expect(await installPiBinaryUpdate(root, current, false, deps, 'darwin', 'arm64')).toEqual({ binaryPath: current, version: '0.86.0' });
     expect(deps.download).not.toHaveBeenCalled();
+  });
+  it('supports the current upstream Windows asset names', () => {
+    const data = release('win32');
+    data.assets[0].name = data.assets[0].name.replace('win32', 'windows');
+    data.assets[0].browser_download_url = data.assets[0].browser_download_url.replace('win32', 'windows');
+    expect(parsePiRelease(data, 'win32', 'arm64')).toMatchObject({ format: 'zip', executable: 'pi.exe' });
+  });
+  it('rejects prereleases and malformed asset collections', () => {
+    expect(() => parsePiRelease({ ...release(), prerelease: true }, 'darwin', 'arm64')).toThrow('Invalid');
+    expect(() => parsePiRelease({ ...release(), assets: {} }, 'darwin', 'arm64')).toThrow('verified asset');
   });
   it('rejects missing digests and changed asset hosts before downloading', () => {
     const data = release(); data.assets[0].digest = '';

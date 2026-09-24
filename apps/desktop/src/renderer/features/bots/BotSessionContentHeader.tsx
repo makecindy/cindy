@@ -16,9 +16,12 @@ import { useTranslation } from 'react-i18next';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { useRegisterContentHeader } from '../feature-context';
 import { BotAvatar } from './BotAvatar';
+import { isCindyDeviceBot } from './cindyDeviceRoster';
+import { CindyHeaderDevicePicker } from './CindyDevicePicker';
 
 export interface BotChatIdentity {
   id: string;
+  templateId?: string;
   deviceId?: string;
   deviceName?: string;
   name: string;
@@ -30,6 +33,7 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+  const isCindy = isCindyDeviceBot(bot);
   const openSettings = () => {
     const search = new URLSearchParams(location.search);
     search.set('settings', '1');
@@ -43,25 +47,30 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
     >
       <button
         type="button"
-        onClick={bot.deviceId ? undefined : openSettings}
+        onClick={openSettings}
         title={bot.deviceName || t('bots.settings')}
-        disabled={Boolean(bot.deviceId)}
-        className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1 text-13 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+        className="flex min-w-0 items-center gap-2 rounded-full px-2 py-1 text-13 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
         style={WINDOW_NO_DRAG_STYLE}
       >
         <BotAvatar bot={bot} size="xs" />
         <span className="min-w-0 truncate">{bot.name}</span>
       </button>
+      {isCindy ? <CindyHeaderDevicePicker bot={bot} /> : null}
       <div className="ml-auto flex shrink-0 items-center gap-1">
-        {!bot.deviceId ? <button
+        {bot.deviceId && !isCindy ? (
+          <span className="max-w-32 truncate text-12 text-[var(--text-tertiary)]">
+            {bot.deviceName}
+          </span>
+        ) : null}
+        <button
           type="button"
           onClick={openSettings}
           aria-label={t('bots.settings')}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
           style={WINDOW_NO_DRAG_STYLE}
         >
           <Settings2 size={15} />
-        </button> : <span className="truncate text-12 text-[var(--text-tertiary)]">{bot.deviceName}</span>}
+        </button>
       </div>
     </div>
   );
@@ -72,13 +81,7 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
  * mounting registers, unmounting clears, and only the route-owning chat instance
  * renders it.
  */
-export function BotSessionContentHeaderRegistration({
-  bot,
-}: {
-  bot: BotChatIdentity;
-}) {
-  useRegisterContentHeader(
-    useMemo(() => <BotSessionContentHeader bot={bot} />, [bot]),
-  );
+export function BotSessionContentHeaderRegistration({ bot }: { bot: BotChatIdentity }) {
+  useRegisterContentHeader(useMemo(() => <BotSessionContentHeader bot={bot} />, [bot]));
   return null;
 }

@@ -152,6 +152,28 @@ function notifyTurnEndedPersisted(sessionId: string, endedAt: number, context: u
 
 /** started / ended 的 per-session 写链:只做 UPDATE 排队保序,无读改写。 */
 const _writeChains = new Map<string, Promise<void>>();
+// Captured synchronously at the running edge, before either durable queue can
+// stall. Notification delivery uses this turn boundary when its DB preview is
+// unavailable; a later turn must never inherit the previous turn's dedupe key.
+const _notificationTurns = new Map<string, { startedAt: number; sequence: number; endedAt?: number }>();
+let _notificationTurnSequence = 0;
+
+export function getSessionNotificationTurnSignal(sessionId: string): { id: string; fallbackEventId: string; ended: boolean } | undefined {
+  const turn = _notificationTurns.get(sessionId);
+  if (!turn) return undefined;
+  return {
+    id: `signal:${turn.sequence}`,
+    ended: turn.endedAt !== undefined,
+    // The mobile deduper can reconcile an anonymous scheduler completion by
+    // terminal time even while SQLite is unavailable.
+    fallbackEventId: `turn:${turn.startedAt}:${turn.endedAt ?? turn.startedAt}:signal-${turn.sequence}`,
+  };
+}
+
+/** Wait for the turn-marker writes already queued for this session. */
+export function drainSessionActiveTurnWrites(sessionId: string): Promise<void> {
+  return _writeChains.get(sessionId) ?? Promise.resolve();
+}
 
 /** 返回链上本次写完成(含失败吞错)的 promise,供需要落库确认的调用方 await。 */
 function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
@@ -165,6 +187,7 @@ function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
 export function markSessionTurnStarted(sessionId: string): void {
   if (_quitFrozen) return;
   const startedAt = Date.now();
+  _notificationTurns.set(sessionId, { startedAt, sequence: ++_notificationTurnSequence });
   chainWrite(sessionId, async () => {
     try {
       await getDbClient()
@@ -196,9 +219,12 @@ export function markSessionTurnStarted(sessionId: string): void {
 export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number): void {
   if (isEndedWriteSuppressed()) return;
   const notifyContext = captureTurnEndedPersistedContext();
+  const endedAt = Math.min(endedAtOverride ?? Date.now(), Date.now());
+  const notificationTurn = _notificationTurns.get(sessionId);
+  if (notificationTurn && notificationTurn.endedAt === undefined) notificationTurn.endedAt = endedAt;
   enqueueEndedWrite(
     sessionId,
-    Math.min(endedAtOverride ?? Date.now(), Date.now()),
+    endedAt,
     notifyContext,
   );
 }
@@ -216,6 +242,8 @@ export function markSessionTurnEndedAfterBarrier(sessionId: string, barrier: Pro
   if (isEndedWriteSuppressed()) return;
   const endedAt = Date.now();
   const notifyContext = captureTurnEndedPersistedContext();
+  const notificationTurn = _notificationTurns.get(sessionId);
+  if (notificationTurn && notificationTurn.endedAt === undefined) notificationTurn.endedAt = endedAt;
   void barrier.then(
     () => enqueueEndedWrite(sessionId, endedAt, notifyContext),
     () => enqueueEndedWrite(sessionId, endedAt, notifyContext),

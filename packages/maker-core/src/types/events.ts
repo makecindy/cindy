@@ -451,6 +451,10 @@ export interface ImageEventData {
 
 export interface RewindFilesResult {
   canRewind: boolean;
+  /** True when conversation rewind can proceed but no file restore plan exists. */
+  conversationOnly?: boolean;
+  /** Git savepoints are disabled, so file restoration was not available. */
+  gitSafetyDisabled?: boolean;
   error?: string;
   filesChanged?: string[];
   insertions?: number;

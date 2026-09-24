@@ -932,6 +932,15 @@ export async function commitShareImport(
         // revalidating the owner so a stale completion cannot be retried into
         // another profile and duplicate the already committed import.
         drafts.delete(opts.draftId);
+        // The transaction already persisted closure intent for the old graph.
+        // Revoke this process's live Host too; another owner consumes the journal.
+        if (conflictExisting.length > 0) {
+          const { closeSharedTaskForTask } = await import('../device-link/sharedTaskRuntime.js');
+          for (const replaced of conflictExisting) {
+            try { await closeSharedTaskForTask(replaced.id, dbClient); }
+            catch { log.warn('shared task runtime cleanup pending after committed import'); }
+          }
+        }
         assertStillValid();
       },
     );

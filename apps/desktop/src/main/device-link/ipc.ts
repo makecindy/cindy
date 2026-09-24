@@ -6,7 +6,16 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { ipcMain } from 'electron';
+import { ipcMain, shell, clipboard } from 'electron';
+import { currentOauthIdentityScope, trustOauthPeer } from '../plugin-oauth/desktopIdentity.js';
+import { RemotePluginOauthUnsupportedError, resolveOauthPeerIdentity } from '../plugin-oauth/identityResolver.js';
+import { getDeviceId } from '../authManager.js';
+import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
+import { PLUGIN_OAUTH_CHANNEL, PLUGIN_OAUTH_LOCAL_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL, PLUGIN_CONNECTION_LOCAL_CHANNEL } from '@cindy/device-link';
+import { handleAssistPluginOauth, handleSubmitPluginSecret, handleSubmitPluginConnection } from '../plugin-oauth/localIpc.js';
+import { LocalDeviceCodeSessions } from '../plugin-oauth/deviceCodeSessions.js';
+import { PLUGIN_OAUTH_DEVICE_CODE_CHANNEL } from '../../shared/pluginOauthDeviceCode.js';
+import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   DeviceLinkError,
@@ -16,7 +25,7 @@ import {
 import { serverApiFetch, ServerApiError } from '../serverApiClient';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
-import type { IpcErrorCode } from '../../shared/ipc-errors';
+import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
 import { decodeRemoteHistory } from '../../shared/remoteHistoryCache';
 import {
   DEVICE_LINK_INVOKE,
@@ -53,6 +62,8 @@ import {
 } from './index';
 import { getActiveControllers } from './dispatch';
 import { rewriteOutboundMedia } from './outboundMedia';
+import { parseSharedTaskPeer } from '@cindy/device-link';
+import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
@@ -141,7 +152,7 @@ export interface DeviceLinkIpcDeps {
    * 出方向附件改写:把消息里的本机附件上传 OSS、替换成引用串(仅 send/steer/enqueue 生效)。
    * 可选 —— 测试可不注入(跳过改写,行为同旧版纯透传)。
    */
-  rewriteOutboundMedia?(channel: string, args: unknown[]): Promise<unknown[]>;
+  rewriteOutboundMedia?(channel: string, args: unknown[], existing?: ReadonlySet<string>): Promise<unknown[]>;
   /** 控制端 main 在越过 device-link 前把相对引用解析为可信、预算化快照。 */
   rewriteOutboundSessionReferences?(channel: string, args: unknown[]): Promise<unknown[]>;
 }
@@ -574,6 +585,8 @@ export async function handleInvoke(
   if (typeof channel !== 'string' || !channel.trim()) {
     throwIpcError('INVALID_PARAMS', 'channel is required');
   }
+  if (channel === PLUGIN_OAUTH_CHANNEL || channel === PLUGIN_SECRET_LOCAL_CHANNEL || channel === PLUGIN_CONNECTION_LOCAL_CHANNEL)
+    throwIpcError('PERMISSION_DENIED', 'Authorization transport is Host-only');
   let callArgs = Array.isArray(args) ? args : [];
 
   // Resolve controller-relative references first. If the source session is
@@ -648,11 +661,36 @@ export async function handleInvoke(
   // 上传失败 → MEDIA_TRANSFER_FAILED,整条消息不发(产品决策:不静默丢附件)。
   if (deps.rewriteOutboundMedia) {
     try {
-      callArgs = await deps.rewriteOutboundMedia(channel, callArgs);
-    } catch (err) {
-      throwIpcError(
-        'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
-        err instanceof Error ? err.message : String(err),
+      const peer = parseSharedTaskPeer(normalizedDeviceId);
+      let existing: ReadonlySet<string> | undefined;
+      let projectionUnavailable = false;
+      if ((!peer || peer.role === 'host') && channel === 'maker:input:update-content') {
+        const projection = await deps.invoke(normalizedDeviceId, 'maker:input:get-projection', [callArgs[0]]);
+        if (projection.ok) {
+          const value = projection.result as { sessionId?: string; pendingQueue?: Array<{ clientId: string; files?: Array<{ path?: string; url?: string }> }> };
+          if (value?.sessionId !== callArgs[0] || !Array.isArray(value.pendingQueue)) throw new Error('Invalid input projection');
+          const item = value.pendingQueue.find((row) => row.clientId === callArgs[1]);
+          if (!item) throw new Error('Queued message is no longer pending');
+          existing = new Set((item.files ?? []).flatMap((file) => [file.path, file.url].filter((ref): ref is string => typeof ref === 'string')));
+          assertControlTargetEnabled(deps, normalizedDeviceId);
+        } else if (projection.error.code !== 'CHANNEL_NOT_ALLOWED') {
+          throw new Error(projection.error.message);
+        } else {
+          projectionUnavailable = true;
+        }
+      }
+      if (projectionUnavailable) {
+        throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Queued content editing is not supported by the target device');
+      }
+      callArgs = await withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
+        () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs));
+     } catch (err) {
+       if (isIpcError(err) && err.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+         throw err;
+       }
+       throwIpcError(
+         'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+         err instanceof Error ? err.message : String(err),
       );
     }
     assertControlTargetEnabled(deps, normalizedDeviceId);
@@ -935,16 +973,21 @@ function finalMirrorCacheReadOwnerToken(
  * 缓存 id 的长度上界。renderer 被 XSS 时可以塞进任意长的 deviceId / sessionId,而 store 随后
  * 会对**完整字符串**做 trim + 正则改写 + sha256(messageFileName / clearDevice),这些都是同步
  * 的 —— 一次调用就能拖住 main(数组与单条字节预算管不到标量字段)(review: codex P1)。
- * 真实 id 是 cuid / uuid 量级(≤ 64),给到 256 已经宽松得离谱。
+ * 普通 id 保持 256 上限;共享连接标识包含 JSON 转义后的物理设备 id,由其 parser 单独限长。
  */
 const MIRROR_CACHE_MAX_ID_LENGTH = 256;
 
 /** opaque owner token 是 32-byte digest 的 base64url(43 字符);宽松上限防异常 renderer。 */
 const MIRROR_CACHE_MAX_OWNER_TOKEN_LENGTH = 128;
 
-function requireCacheId(value: unknown, name: string): string {
+function isCacheIdWithinLimit(id: string, name: 'deviceId' | 'sessionId'): boolean {
+  return id.length <= MIRROR_CACHE_MAX_ID_LENGTH
+    || (name === 'deviceId' && parseSharedTaskPeer(id) !== null);
+}
+
+function requireCacheId(value: unknown, name: 'deviceId' | 'sessionId'): string {
   const id = requireString(value, name);
-  if (id.length > MIRROR_CACHE_MAX_ID_LENGTH) {
+  if (!isCacheIdWithinLimit(id, name)) {
     throwIpcError('INVALID_PARAMS', `${name} is too long`);
   }
   return id;
@@ -1125,7 +1168,7 @@ export async function handleMirrorCachePutSessionList(
     }
     return {
       deviceId: typeof source.deviceId === 'string'
-        && source.deviceId.length <= MIRROR_CACHE_MAX_ID_LENGTH
+        && isCacheIdWithinLimit(source.deviceId, 'deviceId')
         ? source.deviceId
         : undefined,
       deviceName: typeof source.deviceName === 'string'
@@ -1248,6 +1291,56 @@ export async function retryUnsubscribeAfterWindowGone(
 // ─── 注册(Electron adapter)──────────────────────────────────────────────────
 
 export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): void {
+  const deviceCodes = new LocalDeviceCodeSessions();
+  const deviceCodeScope = (event: import('electron').IpcMainInvokeEvent): string => {
+    assertTrustedAppRendererEvent(event);
+    requireDeviceLinkCapability();
+    if (isAppSessionBoundaryPending() || getActiveAppSession().mode !== 'cloud' || event.sender.isDestroyed())
+      throwIpcError('PRECONDITION_FAILED', 'Remote authorization unavailable');
+    const frame = event.senderFrame!;
+    return JSON.stringify([activeOwnerScopeKey(), event.sender.id, frame.processId, frame.routingId]);
+  };
+  // Local-only reads from the initiating frame; never a broadcast, mirror or remote invoke.
+  ipcMain.handle(PLUGIN_OAUTH_DEVICE_CODE_CHANNEL, async (event, raw: unknown) => {
+    const scope = deviceCodeScope(event);
+    try { return await deviceCodes.handle(scope, raw); }
+    catch { throwIpcError('PRECONDITION_FAILED', 'Authorization code unavailable; retry from the current card'); }
+  });
+  const authorizationHandler = (mode: 'oauth' | 'secret' | 'connection') => async (event: import('electron').IpcMainInvokeEvent, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    requireDeviceLinkCapability();
+    try {
+      return await (mode === 'connection' ? handleSubmitPluginConnection : mode === 'secret' ? handleSubmitPluginSecret : handleAssistPluginOauth)({
+        owner: () => !isAppSessionBoundaryPending() && getActiveAppSession().mode === 'cloud' ? activeOwnerScopeKey() : null,
+        assertTarget: deviceId => {
+          if (event.sender.isDestroyed()) throw new Error('OAUTH_BRIDGE_UNAVAILABLE');
+          assertTrustedAppRendererEvent(event);
+          assertControlTargetEnabled(deps, deviceId);
+        },
+        invoke: deps.invoke,
+        localDeviceId: getDeviceId,
+        identity: (deviceId, assertCurrent) => resolveOauthPeerIdentity({scope: currentOauthIdentityScope, invoke: deps.invoke}, deviceId, assertCurrent),
+        trustIdentity: trustOauthPeer,
+        openExternal: url => shell.openExternal(url),
+        copyDeviceCode: code => copyPrivateDeviceCode(clipboard, code),
+        presentBrowserAuthorization: (target, expiresAt, assertCurrent, reopen) =>
+          deviceCodes.presentBrowser(deviceCodeScope(event), target, expiresAt, assertCurrent, reopen),
+        presentDeviceCode: (target, prompt, assertCurrent, clearClipboard) => deviceCodes.present(deviceCodeScope(event), target, prompt, {
+          assertCurrent,
+          clearClipboard,
+          copy: code => { copyPrivateDeviceCode(clipboard, code); },
+          openExternal: url => shell.openExternal(url),
+        }),
+      }, raw);
+    } catch (error) {
+      if (error instanceof RemotePluginOauthUnsupportedError)
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'Update Cindy on the remote device to use remote plugin authorization');
+      throwIpcError('PRECONDITION_FAILED', 'Remote authorization unavailable; retry from the current card');
+    }
+  };
+  ipcMain.handle(PLUGIN_OAUTH_LOCAL_CHANNEL, authorizationHandler('oauth'));
+  ipcMain.handle(PLUGIN_SECRET_LOCAL_CHANNEL, authorizationHandler('secret'));
+  ipcMain.handle(PLUGIN_CONNECTION_LOCAL_CHANNEL, authorizationHandler('connection'));
   const gated =
     <T extends unknown[]>(handler: (...args: T) => unknown) =>
     (...args: T) => {

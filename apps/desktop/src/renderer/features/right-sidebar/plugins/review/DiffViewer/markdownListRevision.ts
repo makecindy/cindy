@@ -42,10 +42,14 @@ const parser = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
 interface ListItemSource {
   prefix: string;
   body: string;
+  /** 本项与下一项之间的原文（含空行）——loose list 的结构就靠它保留。 */
+  gapAfter: string;
 }
 
 interface ParsedList {
   ordered: boolean;
+  /** loose list：项之间（或项内）有空行。 */
+  loose: boolean;
   items: ListItemSource[];
 }
 
@@ -65,9 +69,14 @@ function parseList(source: string): ParsedList | null {
     children?: unknown[];
   };
   if (list.type !== 'list' || !Array.isArray(list.children)) return null;
+  // loose list（项间有空行）本期不接手：mdast 会把尾随空行算进项的源码行范围，逐项重建
+  // 容易把 loose 静默压成 tight（结构与间距变化），所以一律交回块级装饰（宁可少标不可标错）。
+  if ((list as { spread?: boolean }).spread === true) return null;
   const lines = source.split(/\r?\n/);
   const items: ListItemSource[] = [];
-  for (const rawItem of list.children) {
+  const loose = (list as { spread?: boolean }).spread === true;  const rawItems = list.children;
+  for (let index = 0; index < rawItems.length; index += 1) {
+    const rawItem = rawItems[index];
     const item = rawItem as {
       type?: string;
       checked?: boolean | null;
@@ -84,10 +93,17 @@ function parseList(source: string): ParsedList | null {
     if ((item.children ?? []).some((child) => child.type === 'list')) return null;
     const match = /^(\s*(?:[-*+]|\d{1,9}[.)])\s+)([\s\S]*)$/.exec(lines[start - 1] ?? '');
     if (!match) return null;
-    items.push({ prefix: match[1], body: match[2] });
+    // 项间原文（含空行）：用 after 侧的分隔重建，loose / tight 结构才不会静默变化。
+    const nextStart = (rawItems[index + 1] as { position?: { start?: { line?: number } } } | undefined)
+      ?.position?.start?.line;
+    const gapAfter =
+      typeof nextStart === 'number' && nextStart > end
+        ? `\n${lines.slice(end, nextStart - 1).join('\n')}`
+        : '';
+    items.push({ prefix: match[1], body: match[2], gapAfter });
   }
   if (items.length === 0) return null;
-  return { ordered: list.ordered === true, items };
+  return { ordered: list.ordered === true, loose, items };
 }
 
 /** 项正文的「新版侧」文本：去掉删除标记与公式删除包装、展开新增标记（校验用）。 */
@@ -128,7 +144,7 @@ export function buildMarkdownListRevision(before: string, after: string): string
       for (let index = 0; index < count; index += 1) {
         const item = afterList.items[afterIndex];
         if (!item) return null;
-        out.push(item.prefix + item.body);
+        out.push(item.prefix + item.body + item.gapAfter);
         afterIndex += 1;
         beforeIndex += 1;
       }
@@ -165,24 +181,27 @@ export function buildMarkdownListRevision(before: string, after: string): string
         buildMarkdownMathRevision(oldItem.body, newItem.body) ??
         buildMarkdownRevision(oldItem.body, newItem.body);
       if (revised !== null) {
-        out.push(newItem.prefix + revised);
+        out.push(newItem.prefix + revised + newItem.gapAfter);
         continue;
       }
       out.push(newItem.prefix + `{--${oldItem.body}--}`);
-      out.push(newItem.prefix + `{++${newItem.body}++}`);
+      out.push(newItem.prefix + `{++${newItem.body}++}` + newItem.gapAfter);
       removedOnly += 1;
     }
     for (const extraOld of beforeSlice.slice(paired)) {
-      out.push(extraOld.prefix + `{--${extraOld.body}--}`);
+      out.push(extraOld.prefix + `{--${extraOld.body}--}` + extraOld.gapAfter);
       removedOnly += 1;
     }
     for (const extraNew of afterSlice.slice(paired)) {
-      out.push(extraNew.prefix + `{++${extraNew.body}++}`);
+      out.push(extraNew.prefix + `{++${extraNew.body}++}` + extraNew.gapAfter);
     }
   }
   if (beforeIndex !== beforeList.items.length || afterIndex !== afterList.items.length) return null;
 
-  const injected = out.join('\n');
+  // 项间分隔已随各项带入（gapAfter），所以这里直接拼接：`join('\n')` 会把
+  // loose list（项间空行）压成 tight list，预览的结构与间距就静默变了。
+  const injected = out.join('');
+  if (!injected) return null;
   return validateListRevision(injected, afterList, removedOnly) ? injected : null;
 }
 
@@ -198,6 +217,8 @@ function validateListRevision(
   const injectedList = parseList(injected);
   if (!injectedList) return false;
   if (injectedList.ordered !== afterList.ordered) return false;
+  // 结构与间距也要一致：loose / tight 不能静默互换。
+  if (injectedList.loose !== afterList.loose) return false;
   if (injectedList.items.length !== afterList.items.length + removedOnly) return false;
 
   const tree = parseRevisionTree(injected);

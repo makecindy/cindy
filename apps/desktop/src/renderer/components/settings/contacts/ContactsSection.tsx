@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ContactsSection — Settings → 个性化 下的「智能通讯录」小节。
  *
@@ -238,22 +239,14 @@ export function ContactsSection() {
         <div className="flex shrink-0 items-center gap-2">
           {/* 管理入口不随开关禁用: 开关只 gate agent 侧访问, 关闭后用户仍需要
               能进来浏览/清理既有数据(数据 CRUD IPC 通道本就不受 gate) */}
-          <button
-            type="button"
-            onClick={() => setManagerOpen(true)}
-            className={cn(
-              'flex h-[30px] items-center gap-1.5 rounded-lg px-3 text-13 transition-colors',
-              'text-[var(--settings-section-title)] bg-[var(--settings-input-bg)]',
-              'hover:bg-[var(--settings-menu-bg-hover)]',
-            )}
-          >
+          <Button variant="secondary" size="md" compact type="button" onClick={() => setManagerOpen(true)}>
             {t('settings.contacts.manage')}
             {pendingCount > 0 && (
               <span className="rounded-full bg-[var(--status-bar-accent)] px-1.5 text-11 leading-[1.455] text-[var(--accent-pure-cta-fg)]">
                 {pendingCount}
               </span>
             )}
-          </button>
+          </Button>
           <Switch
             checked={enabled}
             disabled={togglePending}
@@ -304,28 +297,23 @@ export function ContactsSection() {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {syncStatus?.enabled && (
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              loading={syncPending}
               type="button"
               onClick={() => void handleSyncNow()}
               disabled={syncPending || syncStatus.onlineDeviceCount === 0}
-              className={cn(
-                'flex h-[30px] items-center gap-1.5 rounded-lg px-3 text-13 transition-colors',
-                'text-[var(--settings-section-title)] bg-[var(--settings-input-bg)]',
-                'hover:bg-[var(--settings-menu-bg-hover)]',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
             >
               <span
-                className={cn(
-                  'inline-flex',
-                  syncPending && 'animate-spinner motion-reduce:animate-none',
-                )}
+                className={cn('inline-flex', syncPending && 'animate-spinner motion-reduce:animate-none')}
                 aria-hidden="true"
               >
                 <RefreshCw size={13} />
               </span>
               {t('settings.contacts.sync.syncNow')}
-            </button>
+            </Button>
           )}
           <Switch
             checked={syncStatus?.enabled ?? false}
@@ -348,19 +336,18 @@ export function ContactsSection() {
             {t('settings.contacts.guide.hint')}
           </p>
           <div>
-            <button
+            <Button
+              variant="cta"
+              size="lg"
+              loading={aiSessionPending}
               type="button"
               onClick={() => void startAiSession()}
               disabled={togglePending || aiSessionPending}
-              className={cn(
-                'flex shrink-0 select-none items-center gap-1.5 rounded-full px-6 py-2.5 text-13 font-medium transition-colors active:scale-[0.98]',
-                'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:opacity-90',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
+              className="shrink-0 select-none"
             >
               <Sparkles size={14} />
               {t('settings.contacts.guide.cta')}
-            </button>
+            </Button>
           </div>
         </div>
       )}

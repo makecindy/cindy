@@ -22,6 +22,7 @@ import {
   type RemoteResourceBlock,
 } from '@cindy/device-link';
 
+import { normalizeRemoteActions, normalizeRemoteBlocks } from './remoteResourceContent';
 import type { RemoteInvoke } from './mobileMakerTransport';
 
 export const MOBILE_REMOTE_RESOURCE_PRIMITIVES = [
@@ -144,10 +145,14 @@ function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
   const timestamp = normalizeRemoteTimestamp(record.timestamp);
   const avatar = normalizeRemoteAvatar(record.avatar);
   const status = normalizeRemoteStatus(record.status);
+  const generation = recordOf(record.generation);
+  const generationPhase = boundedString(generation?.phase, 80);
+  const generationStartedAt = normalizeRemoteTimestamp(generation?.startedAt);
   return {
     title,
     ...(subtitle ? { subtitle } : {}),
     ...(preview ? { preview } : {}),
+    ...(generationPhase ? { generation: { phase: generationPhase, startedAt: generationStartedAt ?? null } } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(normalizeRemoteTimestamp(record.lastReplyAt) !== undefined ? { lastReplyAt: record.lastReplyAt as number } : {}),
     ...(avatar ? { avatar } : {}),
@@ -325,9 +330,10 @@ export async function getRemoteResource(
   target: RemoteResourceHostTarget,
   ref: RemoteResourceRef,
   locale?: string,
+  supportedPrimitives: readonly string[] = [],
 ): Promise<RemoteResource> {
   const raw = await invoke<unknown>(target.deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{
-    client: clientDescriptor(locale),
+    client: { ...clientDescriptor(locale), primitives: [...MOBILE_REMOTE_RESOURCE_PRIMITIVES, ...supportedPrimitives] },
     ref,
   }]);
   const normalized = normalizeRemoteCollectionItem(raw, ref.collectionId);
@@ -335,14 +341,30 @@ export async function getRemoteResource(
     throw new Error('invalid remote resource response');
   }
   const source = recordOf(raw);
+  // Rich forms are consumed only by the dedicated editor, never ordinary resource views.
+  if (supportedPrimitives.some(primitive => ['form', 'routine-list', 'routine-detail'].includes(primitive))) return {
+    ...normalized, actions: normalizeRemoteActions(source?.actions), blocks: normalizeRemoteBlocks(source?.blocks),
+  };
   const actions: RemoteActionDescriptor[] = Array.isArray(source?.actions)
     ? source.actions.slice(0, 16).flatMap((value) => {
         const entry = recordOf(value);
         const id = boundedString(entry?.id, MAX_REMOTE_ID_CHARS);
         const label = normalizeRemoteText(entry?.label, 512);
-        // Forms/confirmations require their own supported interaction. Never execute them silently.
-        if (!entry || !id || !label || entry.fields || entry.confirmation) return [];
-        return [{ id, label, disabled: entry.disabled !== undefined && entry.disabled !== false }];
+        // Forms remain unsupported; a malformed confirmation must never become an unconfirmed action.
+        if (!entry || !id || !label || entry.fields) return [];
+        let confirmation: RemoteActionDescriptor['confirmation'];
+        if (entry.confirmation !== undefined) {
+          const raw = recordOf(entry.confirmation);
+          const title = normalizeRemoteText(raw?.title, 512);
+          const body = raw?.body === undefined ? undefined : normalizeRemoteText(raw.body, 8192);
+          const confirmLabel = raw?.confirmLabel === undefined ? undefined : normalizeRemoteText(raw.confirmLabel, 512);
+          if (!title || body === null || confirmLabel === null) return [];
+          confirmation = { title, ...(body ? { body } : {}), ...(confirmLabel ? { confirmLabel } : {}) };
+        }
+        return [{ id, label, disabled: entry.disabled !== undefined && entry.disabled !== false,
+          ...(entry.tone === 'destructive' ? { tone: 'destructive' } : {}),
+          ...(confirmation ? { confirmation } : {}),
+        }];
       }) : [];
   const blocks: RemoteResourceBlock[] | undefined = Array.isArray(source?.blocks) ? source.blocks.slice(0, 256).flatMap<RemoteResourceBlock>((rawBlock) => {
     const block = recordOf(rawBlock);
@@ -352,6 +374,9 @@ export async function getRemoteResource(
     if (!id || !primitive || fallbackMarkdown === null || fallbackMarkdown.length > 131072) return [];
     // Only the inert media URL primitive is needed here. Never copy arbitrary host data.
     const data = recordOf(block?.data);
+    if (ref.kind === 'bot' && id === 'invitation' && primitive === 'status'
+      && typeof data?.stage === 'string' && ['profile', 'skills', 'avatar', 'welcome', 'ready', 'failed'].includes(data.stage))
+      return [{ id, primitive, fallbackMarkdown, data: { stage: data.stage } }];
     if (primitive === 'session-controls') return [{ id, primitive, fallbackMarkdown,
       data: { input: data?.input === 'available' ? 'available' : 'blocked', busy: data?.busy === true } }];
     const inlineIcon = ref.collectionId === 'plugin-identities' && id === 'icon' && primitive === 'image';

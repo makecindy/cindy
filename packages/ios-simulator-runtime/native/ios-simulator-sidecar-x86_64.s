@@ -4,6 +4,7 @@
 _cindy_simulator_kit_unmasked_surface:
     pushq %r13
     movq %rdi, %r13
-    callq _$s12SimulatorKit15SimDeviceScreenC15unmaskedSurfaceSo9IOSurfaceCSgvg
+    // The second argument is the getter resolved from the selected Xcode.
+    callq *%rsi
     popq %r13
     retq

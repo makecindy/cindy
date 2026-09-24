@@ -34,3 +34,7 @@ export function getSessionExternalNotificationText(title: string, kind: SessionE
   // 等 JavaScript replacement token 不能被解释成模板控制符。
   return t(EXTERNAL_KEY_BY_KIND[kind]).replaceAll('{{title}}', () => title);
 }
+
+export function getTeammateNotificationFallback(): string {
+  return t('settings.notifications.sessionEvent.newReply');
+}

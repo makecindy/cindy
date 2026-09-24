@@ -23,6 +23,7 @@ import {
   ArchiveRestore,
   Copy,
   Link2,
+  LogOut,
   Pencil,
   Pin,
   PinOff,
@@ -49,6 +50,7 @@ import { MainWindowActionGroup } from '@/components/MobilePrimitives';
 import type { MobileMakerTransport, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { writeClipboardText } from '@/session/messageActions';
 import { normalizeExtraDirs } from '@/session/newSession';
@@ -133,6 +135,9 @@ export interface SessionMenuSheetProps {
   onRegenerateTitle(): Promise<{ title: string | null }>;
   /** 打开工作目录(复用文件浏览页);调用方负责关 sheet 并跳转。 */
   onOpenWorkspace(): void;
+  onOpenSharing?: () => void;
+  onLeaveSharing?: () => void;
+  leavingSharing?: boolean;
   onTogglePinned(): void;
   onArchive(): void;
   onRestore(): void;
@@ -167,6 +172,9 @@ export function SessionMenuSheet({
   onRename,
   onRegenerateTitle,
   onOpenWorkspace,
+  onOpenSharing,
+  onLeaveSharing,
+  leavingSharing = false,
   onTogglePinned,
   onArchive,
   onRestore,
@@ -480,10 +488,11 @@ export function SessionMenuSheet({
     [codexRateLimits, i18nInstance.language],
   );
   const workspace = buildSessionInfoWorkspace(session);
-  const showExtraDirs = sessionInfoShowsExtraDirs(session);
+  const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
+  const showExtraDirs = !sharedGuest && sessionInfoShowsExtraDirs(session);
 
-  const mainActions = messageOnly ? [] : actions.filter((action) => action.id !== 'delete' && action.id !== 'archive');
-  const deleteAction = messageOnly ? undefined : actions.find((action) => action.id === 'delete');
+  const mainActions = messageOnly ? [] : actions.filter((action) => sharedGuest ? action.id === 'copyLink' : action.id !== 'delete' && action.id !== 'archive');
+  const deleteAction = messageOnly ? undefined : sharedGuest ? undefined : actions.find((action) => action.id === 'delete');
 
   const confirmCodexReset = useCallback(() => {
     if (!resetSummary?.canReset || codexResetBusy) return;
@@ -586,6 +595,24 @@ export function SessionMenuSheet({
 
           {!messageOnly ? <SessionUsageSummary providerName={providerName} session={session} usage={menuUsage} contextUsage={contextUsage} onPress={openInfo} translucent={Platform.OS === 'ios'} /> : null}
 
+          {!messageOnly && isSharedTaskPeer(session.deviceLinkDeviceId) && onLeaveSharing ? (
+            Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
+              label: t('sharedTask.leave'), danger: true, disabled: leavingSharing,
+              onPress: onLeaveSharing, testID: 'session.leaveSharingButton',
+            }]} /> : <View style={styles.actionGroup}>
+              <MenuActionRow icon={LogOut} label={t('sharedTask.leave')} danger disabled={leavingSharing}
+                onPress={onLeaveSharing} testID="session.leaveSharingButton" />
+            </View>
+          ) : !messageOnly && onOpenSharing && !isSharedTaskPeer(session.deviceLinkDeviceId) ? (
+            Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
+              label: t('sharedTask.title'),
+              onPress: onOpenSharing,
+              testID: 'session.sharingButton',
+            }]} /> : <View style={styles.actionGroup}>
+              <MenuActionRow icon={Link2} label={t('sharedTask.title')}
+                onPress={onOpenSharing} testID="session.sharingButton" />
+            </View>
+          ) : null}
           {Platform.OS === 'ios' ? (
             <SessionDetailsNativeActions actions={mainActions.map(action => ({
               label: action.id === 'copyLink' ? copyLabel(action.label, 'copyLink', t('session.menu.linkCopied')) : action.label,
@@ -747,6 +774,7 @@ export function SessionMenuSheet({
           <View style={styles.infoActionRow}>
             <MenuPillButton
               label={t('session.menu.openDir')}
+              disabled={sharedGuest}
               onPress={onOpenWorkspace}
               testID="session.openWorkspaceButton"
             />

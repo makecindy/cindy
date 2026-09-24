@@ -14,6 +14,7 @@ import { AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { Button } from '@/components/ui/button';
 import type {
   BrowserBackendHealth,
   BrowserBackendHealthReason,
@@ -106,33 +107,25 @@ export function BrowserBackendSubsection({
                 : t('settings.computerUse.browserBackend.health.ready')}
             </span>
           </div>
-          <button
+          <Button
+            variant="secondary"
+            loading={recovering}
+            aria-label={
+              recovering
+                ? t('settings.computerUse.browserBackend.health.recovering')
+                : embeddedHealth.status === 'error'
+                  ? t('settings.computerUse.browserBackend.health.recover')
+                  : t('settings.computerUse.browserBackend.health.reconnect')
+            }
             type="button"
             onClick={onRecover}
             disabled={pending || !embeddedHealth.canRecover}
-            className={cn(
-              'flex h-7 shrink-0 items-center gap-1.5 rounded-full px-3',
-              'bg-[var(--settings-input-bg)] text-12 font-medium',
-              'text-[var(--settings-section-title)] transition-colors',
-              'hover:bg-[var(--surface-chip)]',
-              'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              'disabled:pointer-events-none disabled:opacity-50',
-            )}
           >
-            <span
-              className={cn(
-                'inline-flex shrink-0',
-                recovering && 'animate-spinner motion-reduce:animate-none',
-              )}
-            >
-              <RefreshCw size={12} />
-            </span>
-            {recovering
-              ? t('settings.computerUse.browserBackend.health.recovering')
-              : embeddedHealth.status === 'error'
-                ? t('settings.computerUse.browserBackend.health.recover')
-                : t('settings.computerUse.browserBackend.health.reconnect')}
-          </button>
+            <RefreshCw size={12} />
+            {embeddedHealth.status === 'error'
+              ? t('settings.computerUse.browserBackend.health.recover')
+              : t('settings.computerUse.browserBackend.health.reconnect')}
+          </Button>
         </div>
       ) : null}
     </div>

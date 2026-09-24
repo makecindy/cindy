@@ -1,3 +1,4 @@
+import { mobileProviderAccountTitle } from './mobileModelRowPresentation';
 import { mobileCostMarks, quotaCountdown } from "./mobileModelRowPresentation";
 import { useMobileModelQuotas } from "./useMobileModelQuotas";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -73,6 +74,7 @@ export interface UnifiedMobileGroup {
 export interface UnifiedMobilePickerViewProps {
   visible: boolean;
   onClose(): void;
+  onClosed?(): void;
   onBack?: () => void;
   title: string;
   testID: string;
@@ -301,15 +303,7 @@ export function UnifiedModelPickerSheet(
   const providerName = (id: string) => {
     const provider = p.providers.find((item) => item.id === id);
     if (!provider) return id;
-    const identity =
-      provider.openAiAccount?.identity?.trim() ||
-      provider.subscriptionAccount?.identity?.trim();
-    return [
-      provider.name,
-      identity && !provider.name.includes(identity) ? identity : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    return mobileProviderAccountTitle(provider);
   };
   const matches = (row: UnifiedMobileRow) =>
     !query.trim() ||
@@ -455,6 +449,7 @@ export function UnifiedModelPickerSheet(
     <UnifiedModelPickerView
       visible={p.visible}
       onClose={p.onClose}
+      onClosed={p.onClosed}
       onBack={
         row
           ? () => {

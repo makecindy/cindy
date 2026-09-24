@@ -35,6 +35,13 @@ function contrastRatio(fg: string, bg: string): number {
 }
 
 describe('theme tokens', () => {
+  it('file tile micro labels meet normal-text contrast on both attachment surfaces', () => {
+    for (const colors of [lightColors, darkColors]) {
+      for (const background of [colors.surface, colors.surfaceElevated]) {
+        expect(contrastRatio(colors.textPrimary, background)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
   it('light / dark 色板 key 集合完全一致', () => {
     expect(Object.keys(lightColors).sort()).toEqual(Object.keys(darkColors).sort());
   });
@@ -85,6 +92,11 @@ describe('theme tokens', () => {
     // permAutoAccent:Auto Approval 蓝 #417CDD,L=D 同值(设计定稿 2026-07-17,取代 M2 拆值)。
     expect(lightColors.permAutoAccent).toBe('#417CDD');
     expect(darkColors.permAutoAccent).toBe('#417CDD');
+  });
+
+  it('房主皇冠使用醒目的金色语义 token并跨 light / dark 一致', () => {
+    expect(lightColors.warningFg).toBe('#F3A115');
+    expect(darkColors.warningFg).toBe('#F3A115');
   });
 
   it('CTA 契约:中性反相(light 深底浅字 / dark 浅底深字),对比度 ≥4.5:1(用户红色新规 2026-07-17)', () => {

@@ -23,18 +23,19 @@ function Visit({ messages, enabled = true }: { messages: ChatMessage[]; enabled?
     messages,
     busy: false,
     historyLoaded: true,
-    dismissedId,
   });
   return (
     <>
-      <output data-testid="composer">{recovery ?? 'input'}</output>
+      <output data-testid="composer">input</output>
+      <output data-testid="actions">{recovery}</output>
+      <output data-testid="editing">{dismissedId}</output>
       <output data-testid="navigation">{JSON.stringify(location.state)}</output>
       <button onClick={() => continueEditing(recovery!)}>continue</button>
     </>
   );
 }
 
-it('opens input on a History continuation, consumes the intent, and recovers the next turn', async () => {
+it('consumes History continuation while keeping input and optional actions available', async () => {
   const view = (messages: ChatMessage[]) => (
     <MemoryRouter
       initialEntries={[
@@ -58,17 +59,20 @@ it('opens input on a History continuation, consumes the intent, and recovers the
     { clientId: 'next', role: 'assistant', content: 'Done', turnCompleted: true },
   ];
   result.rerender(view(messages));
-  expect(screen.getByTestId('composer').textContent).toBe('next');
+  expect(screen.getByTestId('composer').textContent).toBe('input');
+  expect(screen.getByTestId('actions').textContent).toBe('next');
   fireEvent.click(screen.getByText('continue'));
   expect(screen.getByTestId('composer').textContent).toBe('input');
-  // A new visit has no stored intent: unfinished testing is recoverable again.
+  expect(screen.getByTestId('editing').textContent).toBe('next');
+  // Reopening preserves input without needing a navigation intent.
   result.unmount();
   render(
     <MemoryRouter initialEntries={['/cc-agent/task']}>
       <Visit messages={[completion]} />
     </MemoryRouter>,
   );
-  expect(screen.getByTestId('composer').textContent).toBe('completion');
+  expect(screen.getByTestId('composer').textContent).toBe('input');
+  expect(screen.getByTestId('actions').textContent).toBe('completion');
 });
 
 it.each([
@@ -89,6 +93,6 @@ it.each([
         <Visit messages={[completion]} enabled={enabled} />
       </MemoryRouter>,
     );
-    expect(screen.getByTestId('composer').textContent).toBe('completion');
+    expect(screen.getByTestId('editing').textContent).toBe('');
   },
 );

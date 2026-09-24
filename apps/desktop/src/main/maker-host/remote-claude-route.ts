@@ -1,4 +1,4 @@
-import { isClaudeSubscriptionProviderId, readClaudeAccountOAuth } from './subscription-account-auth.js';
+import { isClaudeSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * remote-claude-route —— 远端 Claude Code 会话的「路由 materialization」(host 侧)。
  *
@@ -6,10 +6,13 @@ import { isClaudeSubscriptionProviderId, readClaudeAccountOAuth } from './subscr
  * loopback compat-proxy 里(anthropic-compat-proxy-host.ts 的 routingTransform 按请求覆盖
  * upstream + 鉴权头)。远端 cc-mgr 会话够不到这个 proxy,所以必须在 spawn 前把「该会话应走
  * 的真上游 + 鉴权 + 定制请求头」解析好,直接烤进远端 cc 子进程的 env(ANTHROPIC_BASE_URL /
- * ANTHROPIC_API_KEY | ANTHROPIC_AUTH_TOKEN / ANTHROPIC_CUSTOM_HEADERS / CLAUDE_CODE_OAUTH_TOKEN)。
+ * ANTHROPIC_API_KEY | ANTHROPIC_AUTH_TOKEN / ANTHROPIC_CUSTOM_HEADERS)。
+ *
+ * Claude 订阅不下发到远端:订阅凭证只在本机内置 Claude Code CLI 的登录里,Cindy 不读取、
+ * 不转发(见 claude-native-cli)。远端会话选 Claude 订阅一律明确报错。
  *
  * 注入进 maker-core 的 AgentDeps.resolveRemoteClaudeRoute。返回语义见该字段文档:
- *   - RemoteClaudeRoute:native OAuth 订阅 / 自定义 Claude Code 供应商 —— 覆盖 endpoint + 鉴权;
+ *   - RemoteClaudeRoute:自定义 Claude Code 供应商 —— 覆盖 endpoint + 鉴权;
  *   - null:有效路由是 XD 网关(或默认回落网关)—— maker-core 将远端凭证形态回落
  *     'gateway-key'(网关 key + 网关 endpoint),与升级前远端行为一致;
  *   - throw:供应商在远端无法用 cc env 表达(自定义 requestPath / modelIdRewrite / oauth-passthrough),
@@ -30,17 +33,7 @@ import type { RemoteClaudeRoute } from '@cindy/maker-core';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
 import { readClaudeApiKey } from './auth-adapters.js';
-import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
-import { getClaudeAiOAuthForSpawn } from './claude-oauth-refresh.js';
-import { hasClaudeAiOAuth } from './claude-credentials-store.js';
-import { getActiveCatalog } from './active-catalog.js';
 import {
-  ANTHROPIC_DIRECT_UPSTREAM,
-  anthropicCatalogModelIds,
-  isAnthropicWireModel,
-} from './claude-gateway-config.js';
-import {
-  gatewayDefaultRouteDecision,
   isProviderRouteMutationInProgress,
   resolveProviderRouteDecision,
   type ResolvedProviderRouteDecision,
@@ -57,9 +50,12 @@ export async function resolveRemoteClaudeRoute(opts: {
 }): Promise<RemoteClaudeRoute | null> {
   const providerId = opts.providerId?.trim() || null;
 
-  // 内置 Anthropic 的 catalog route 是 oauth-passthrough(本地 cc 子进程自己带订阅 bearer)；
-  // 远端没有这个 bearer 来源，必须由 host 读取 native OAuth token 后显式 materialize。
-  if (providerId && isClaudeSubscriptionProviderId(providerId)) return nativeAnthropicRoute(providerId);
+  // Claude 订阅只能在本机经 CLI 自己的登录使用,远端会话不提供。
+  if (providerId && isClaudeSubscriptionProviderId(providerId)) {
+    throw new Error(
+      '[REMOTE_NATIVE_OAUTH_UNAVAILABLE] Claude subscriptions only run through this desktop\'s own Claude Code login; pick a gateway or API-key model for the remote session.',
+    );
+  }
 
   // 显式选定供应商(非网关)→ 按其 RoutingDescriptor materialize。
   if (providerId && providerId !== 'xd') {
@@ -88,40 +84,9 @@ export async function resolveRemoteClaudeRoute(opts: {
   // 显式 XD 网关 → 走既有网关远端路径(maker-core 侧 null 回落)。
   if (providerId === 'xd') return null;
 
-  // 未显式选供应商(默认):镜像本地 proxy 的默认路由(anthropic-compat-proxy-host ②段)。
-  // 没连订阅 = gateway-spawn,本地 passthrough 网关 → 远端网关(null)。
-  if (!hasClaudeAiOAuth()) return null;
-  // oauth-spawn + 有网关 key(且网关可用):本地「全量换网关 key」防订阅 token 泄漏到网关,
-  // 远端同样走网关(null)——计费归属与实际上游必须与本地一致,不能因为是远端就升级成直连。
-  if (gatewayDefaultRouteDecision(REMOTE_AGENT, readClaudeApiKey())) return null;
-  // oauth-spawn、没网关 key:Anthropic 模型唯一出路是订阅直连(与本地一致)。
-  if (isAnthropicWireModel(opts.model, anthropicCatalogModelIds(getActiveCatalog()))) {
-    return nativeAnthropicRoute();
-  }
-  // 没网关 key 的非 Anthropic 模型:本地 passthrough 必 401;远端回网关路径,由 maker-core
-  // 的 remoteEndpoint guard / gateway-key auth gate 报「缺网关凭据」的真实原因。
+  // 未显式选供应商(默认):远端恒走网关(null)。没有网关 key 时由 maker-core 的
+  // gateway-key auth gate 报「缺网关凭据」的真实原因 —— 远端不会回落到 Claude 订阅。
   return null;
-}
-
-/** 内置 Anthropic 订阅直连:endpoint 取运行时目录 anthropic 描述符 upstream,缺省隐式直连上游。 */
-function nativeAnthropicRoute(providerId = 'anthropic'): RemoteClaudeRoute {
-  const oauth = providerId === 'anthropic' ? getClaudeAiOAuthForSpawn() : readClaudeAccountOAuth(providerId);
-  if (!oauth?.accessToken) {
-    throw new Error(
-      '[REMOTE_NATIVE_OAUTH_UNAVAILABLE] Anthropic subscription is not connected on this desktop; connect Claude.ai or pick a gateway model for the remote session.',
-    );
-  }
-  const descriptor = getActiveCatalog().providers.find((p) => p.id === providerId)?.routing[
-    REMOTE_AGENT
-  ];
-  const endpoint = descriptor?.upstream?.trim() || ANTHROPIC_DIRECT_UPSTREAM;
-  const env = claudeOAuthSpawnEnv(oauth);
-  if (providerId !== 'anthropic') env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID = providerId;
-  const customHeaders = descriptor?.headerOverride;
-  if (customHeaders && Object.keys(customHeaders).length > 0) {
-    env.ANTHROPIC_CUSTOM_HEADERS = serializeCustomHeaders(customHeaders);
-  }
-  return { endpoint, env };
 }
 
 /** 自定义 / 通用 OAuth Claude Code 供应商:把 buildRouteDecision 结论翻成 cc env。 */

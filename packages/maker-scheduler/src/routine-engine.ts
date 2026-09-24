@@ -20,7 +20,7 @@ export interface RoutineRun {
   triggerIds: string[];
   events: Array<{ sourceId: string; event: RoutineEvent }>;
   status:
-    "queued" | "running" | "success" | "failed" | "interrupted" | "cancelled";
+    "queued" | "running" | "success" | "failed" | "interrupted" | "cancelled" | "skipped";
   createdAt: number;
   finishedAt?: number;
   error?: string;
@@ -53,6 +53,7 @@ export interface RoutineEngineDeps {
     error?: string;
     resultText?: string;
     deferred?: boolean;
+    skipped?: boolean;
   }>;
   id(): string;
   now(): number;
@@ -193,8 +194,20 @@ export class RoutineEngine {
     this.notifyChanged();
   }
 
-  async put(botId: string, raw: RoutineInput, id?: string): Promise<Routine> {
-    const input = parseRoutineInput(raw);
+  async put(botId: string, raw: RoutineInput, id?: string, expectedRevision?: number): Promise<Routine> {
+    return this.writeRoutine(botId, raw, { id, expectedRevision });
+  }
+
+  /** A lost remote acknowledgement can be retried, including after a host restart. */
+  async createOnce(botId: string, raw: RoutineInput, creationId: string): Promise<Routine> {
+    if (!/^[a-zA-Z0-9_-]{16,128}$/.test(creationId)) throw new Error("Invalid routine creation ID");
+    return this.writeRoutine(botId, raw, { creationId });
+  }
+
+  private async writeRoutine(botId: string, raw: RoutineInput, options: { id?: string; expectedRevision?: number; creationId?: string }): Promise<Routine> {
+    const { expectedRevision, creationId } = options;
+    const id = options.id ?? creationId;
+    const parsed = parseRoutineInput(raw);
     return this.change((state) => {
       if (this.blockedBots.has(botId)) throw new Error("The teammate is paused");
       if (id && this.removing.has(id)) throw new Error("Routine is being removed");
@@ -203,7 +216,18 @@ export class RoutineEngine {
             (routine) => routine.id === id && routine.botId === botId,
           )
         : undefined;
-      if (id && !existing) throw new Error("Routine not found");
+      // Omitted optional fields from older clients preserve saved choices.
+      const input = parseRoutineInput({
+        ...existing,
+        ...parsed,
+        // Legacy saved definitions may omit this field and must stay quiet.
+        // A newly created, unclassified reminder must retain delivery.
+        ...(!existing && parsed.silentWhenIdle === undefined ? { silentWhenIdle: false } : {}),
+      });
+      if (id && !existing && !creationId) throw new Error("Routine not found");
+      if (creationId && state.routines.some(row => row.id === creationId && row.botId !== botId)) throw new Error("Routine creation ID already used");
+      if (creationId && existing && JSON.stringify(parseRoutineInput(existing)) !== JSON.stringify(input)) throw new Error("Routine already created; refresh before editing");
+      if (expectedRevision !== undefined && existing?.revision !== expectedRevision) throw new Error("Routine changed; refresh before saving");
       if (
         existing &&
         JSON.stringify(parseRoutineInput(existing)) === JSON.stringify(input)
@@ -213,7 +237,7 @@ export class RoutineEngine {
       const now = this.deps.now();
       const routine: Routine = {
         ...input,
-        id: existing?.id ?? this.deps.id(),
+        id: existing?.id ?? creationId ?? this.deps.id(),
         botId,
         revision: (existing?.revision ?? 0) + 1,
         createdAt: existing?.createdAt ?? now,
@@ -248,16 +272,18 @@ export class RoutineEngine {
   }
 
   /** Quiesce execution before host cleanup; failed cleanup leaves a disabled, retryable rule. */
-  async remove(botId: string, id: string, cleanup?: () => Promise<void>): Promise<void> {
+  async remove(botId: string, id: string, cleanup?: () => Promise<void>, expectedRevision?: number): Promise<void> {
     if (!this.state.routines.some((routine) => routine.id === id && routine.botId === botId))
       throw new Error("Routine not found");
     if (this.removing.has(id)) throw new Error("Routine is being removed");
+    if (expectedRevision !== undefined && this.state.routines.find(row => row.id === id && row.botId === botId)?.revision !== expectedRevision) throw new Error("Routine changed; refresh before deleting");
     this.removing.add(id);
-    this.active.get(id)?.abort();
+    if (expectedRevision === undefined) this.active.get(id)?.abort();
     try {
       await this.change((state) => {
         const routine = state.routines.find((row) => row.id === id && row.botId === botId);
         if (!routine) throw new Error("Routine not found");
+        if (expectedRevision !== undefined && routine.revision !== expectedRevision) throw new Error("Routine changed; refresh before deleting");
         routine.enabled = false;
         routine.revision += 1;
         routine.updatedAt = this.deps.now();
@@ -265,6 +291,7 @@ export class RoutineEngine {
         for (const key of Object.keys(state.next))
           if (key.startsWith(`${id}:`)) delete state.next[key];
       });
+      if (expectedRevision !== undefined) this.active.get(id)?.abort();
       // An aborted executor may still be finishing an asynchronous backing write.
       await this.activeTasks.get(id);
       await cleanup?.();
@@ -374,13 +401,14 @@ export class RoutineEngine {
     }
   }
 
-  async runNow(botId: string, id: string): Promise<void> {
+  async runNow(botId: string, id: string, expectedRevision?: number): Promise<void> {
     await this.change((state) => {
       if (this.blockedBots.has(botId)) throw new Error("The teammate is paused");
       const routine = state.routines.find(
         (row) => row.id === id && row.botId === botId,
       );
       if (!routine) throw new Error("Routine not found");
+      if (expectedRevision !== undefined && routine.revision !== expectedRevision) throw new Error("Routine changed; refresh before running");
       if (this.removing.has(id)) throw new Error("Routine is being removed");
       this.enqueue(state, routine, ["manual"]);
     });
@@ -540,6 +568,7 @@ export class RoutineEngine {
       error?: string;
       resultText?: string;
       deferred?: boolean;
+      skipped?: boolean;
     } = {};
     try {
       result = await this.deps.execute(
@@ -579,12 +608,13 @@ export class RoutineEngine {
       }
       const completed = { ...result };
       delete completed.deferred;
+      delete completed.skipped;
       Object.assign(run, completed, {
         status: aborted
           ? "cancelled"
           : result.error
             ? "failed"
-            : "success",
+            : result.skipped ? "skipped" : "success",
         finishedAt,
       });
     };

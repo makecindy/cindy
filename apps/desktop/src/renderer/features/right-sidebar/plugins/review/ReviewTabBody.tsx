@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 /**
  * ReviewTabBody — unified workspace and recorded-message review panel.
@@ -72,6 +73,7 @@ import { gitReviewApiFor, isReviewRemoteOversizeError } from '@/lib/gitReviewTra
 import { makerChatStore } from '@/lib/makerChatStore';
 import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import {
   DropdownMenu,
@@ -1461,7 +1463,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
             desc={
               error === REVIEW_TURN_LOCAL_ONLY_ERROR
                 ? t('rightSidebar.review.turn.localOnly')
-                : error
+                : localizeReviewError(error)
             }
             actionLabel={t('rightSidebar.review.refresh')}
             onAction={refreshAll}
@@ -1919,24 +1921,46 @@ function CommitOrPushDropdown({
     >
       <DropdownMenuTrigger asChild>
         <Tip text={triggerTooltip}>
-          <button
-            type="button"
-            aria-disabled={triggerDisabled}
-            aria-label={t('rightSidebar.review.topAction.label')}
-            onClick={() => {
-              if (!triggerDisabled) setOpen(true);
-            }}
-            className={cn(
-              'inline-flex h-6 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-10 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
-              iconOnly ? 'w-6 justify-center px-0' : 'gap-1 px-2.5',
-              triggerDisabled && 'cursor-not-allowed opacity-50',
-            )}
-          >
-            {pending ? <Spinner size={12} /> : <Check size={12} />}
-            <span className={cn(iconOnly && 'sr-only')}>
-              {t('rightSidebar.review.topAction.label')}
-            </span>
-          </button>
+          {iconOnly ? (
+            <button
+              type="button"
+              aria-disabled={triggerDisabled}
+              aria-label={t('rightSidebar.review.topAction.label')}
+              onClick={() => {
+                if (!triggerDisabled) setOpen(true);
+              }}
+              className={cn(
+                'inline-flex h-6 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-10 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
+                'w-6 justify-center px-0',
+                triggerDisabled && 'cursor-not-allowed opacity-50',
+              )}
+            >
+              {pending ? <Spinner size={12} /> : <Check size={12} />}
+              <span className={cn(iconOnly && 'sr-only')}>
+                {t('rightSidebar.review.topAction.label')}
+              </span>
+            </button>
+          ) : (
+            <Button
+              variant="secondary"
+              size="xs"
+              compact
+              loading={pending}
+              allowWhileLoading
+              type="button"
+              aria-disabled={triggerDisabled}
+              aria-label={t('rightSidebar.review.topAction.label')}
+              onClick={() => {
+                if (!triggerDisabled) setOpen(true);
+              }}
+              className={cn(triggerDisabled && 'cursor-not-allowed opacity-50')}
+            >
+              {pending ? <Spinner size={12} /> : <Check size={12} />}
+              <span className={cn(iconOnly && 'sr-only')}>
+                {t('rightSidebar.review.topAction.label')}
+              </span>
+            </Button>
+          )}
         </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -3502,8 +3526,9 @@ function ReviewFileTreeRow({
           'flex h-7 w-full min-w-0 items-center pr-2 text-left text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
           active && 'bg-[var(--surface-chip)] text-[var(--text-primary)]',
         )}
-        style={{ paddingLeft: paddingLeft + 18 }}
+        style={{ paddingLeft }}
       >
+        <FileTypeIcon name={node.path} size={12} className="mr-1 shrink-0" />
         <span className="min-w-0 truncate">{node.name}</span>
       </button>
     </Tip>
@@ -4263,13 +4288,9 @@ function CenteredState({
       <p className="text-13 font-medium text-[var(--text-primary)]">{title}</p>
       <p className="max-w-[260px] text-11 leading-relaxed text-[var(--text-tertiary)]">{desc}</p>
       {actionLabel && onAction && (
-        <button
-          type="button"
-          onClick={onAction}
-          className="mt-1 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-        >
+        <Button variant="secondary" size="md" compact type="button" onClick={onAction} className="mt-1">
           {actionLabel}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -4294,7 +4315,7 @@ function ActionButton({
   className?: string;
   iconOnly?: boolean;
 }) {
-  const button = (
+  const button = iconOnly ? (
     <button
       type="button"
       aria-label={label}
@@ -4306,12 +4327,31 @@ function ActionButton({
       className={cn(
         'inline-flex h-6 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-10 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50',
         className,
-        iconOnly ? 'w-6 px-0' : 'gap-1 px-2',
+        'w-6 px-0',
       )}
     >
       {pending ? <Spinner size={12} /> : icon}
       <span className={cn(iconOnly && 'sr-only')}>{label}</span>
     </button>
+  ) : (
+    <Button
+      variant="secondary"
+      size="xs"
+      compact
+      loading={pending}
+      allowWhileLoading
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      className={className}
+    >
+      {pending ? <Spinner size={12} /> : icon}
+      <span className={cn(iconOnly && 'sr-only')}>{label}</span>
+    </Button>
   );
   if (!iconOnly && (!disabled || !disabledTooltip)) return button;
   return (
@@ -4549,6 +4589,7 @@ function FileRow({
           ) : (
             <ChevronRight size={12} className="shrink-0 text-[var(--text-tertiary)]" />
           )}
+          <FileTypeIcon name={diff.path} size={14} className="shrink-0 text-[var(--text-secondary)]" />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-13 font-medium text-[var(--text-primary)]">
               {fileName}

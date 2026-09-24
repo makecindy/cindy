@@ -30,7 +30,12 @@ export const MOBILE_MESSAGE_LIST_BOTTOM_PADDING = 132;
 export const MOBILE_NEAR_BOTTOM_THRESHOLD =
   DEFAULT_NEAR_BOTTOM_THRESHOLD + MOBILE_MESSAGE_LIST_BOTTOM_PADDING;
 
-export function mobileMessageListBottomPadding(bottomOverlayHeight?: number): number {
+export function mobileMessageListBottomPadding(bottomOverlayHeight?: number, contentBottomInset?: number): number {
+  // An inline interaction replaces the composer; an explicit inset must not
+  // retain the fallback space reserved for that now-hidden composer.
+  if (typeof contentBottomInset === 'number' && Number.isFinite(contentBottomInset)) {
+    return Math.max(0, Math.ceil(contentBottomInset));
+  }
   if (typeof bottomOverlayHeight !== 'number' || !Number.isFinite(bottomOverlayHeight)) {
     return MOBILE_MESSAGE_LIST_BOTTOM_PADDING;
   }

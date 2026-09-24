@@ -1,5 +1,6 @@
 import { alignModelApiRoute, providerInterfaceModelRoute, hasDeclaredProviderInterface, providerWireProtocolForApi, providerBaseUrlForApi } from './providerInterfaceRoutes.js';
 import { nativeModelAgents } from './modelProtocol.js';
+import { isMimoTokenPlanProvider } from './mimoPresentation.js';
 import { resolveCatalogModelNativeApi, resolveModelNativeApi } from './modelRegistry.js';
 import { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime, canonicalProviderEndpoint } from './providerEndpointTemplate.js';
 import { PI_MODEL_APIS } from "./types.js";
@@ -145,22 +146,6 @@ export function xaiApiOfficialRuntimeAgents(
   );
 }
 
-/**
- * 自定义模型的默认 effort 档位（「参考默认设置」）——与内置当代旗舰模型对齐：
- *   - claude-code：low/medium/high/xhigh/max（同 opus / fable）；
- *   - codex：low/medium/high/xhigh/max（gpt-5.x 同款五档，ultra 仍仅限已登记模型）。
- * 让自定义模型像内置模型一样能在选择器里切 reasoning/thinking 强度（默认 medium）。
- * 端点是否真支持由其后端决定：cc 经 `thinking`、codex 经 reasoning effort 透传，
- * anthropic-compat-proxy 仅对个别内置 model id strip 字段、对自定义 id 一律字节透传。
- * 未登记模型（Registry 无法确认能力）也放开到 max：第三方 Responses 兼容端点普遍
- * 接受与否只有端点方/用户知道，选到不支持的档位会被上游拒绝，用户改选即可；
- * 默认中档；用户显式配置仍优先。
- */
-const CUSTOM_EFFORTS: Partial<Record<AgentKind, Effort[]>> = {
-  "claude-code": ["low", "medium", "high", "xhigh", "max"],
-  codex: ["low", "medium", "high", "xhigh", "max"],
-};
-
 interface RegistryEffortMetadata {
   efforts: Effort[];
   defaultEffort: Effort | null;
@@ -291,7 +276,7 @@ function registrySupportsFastMode(
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
 const AGENT_ORDER: readonly AgentKind[] = ["claude-code", "codex", "pi"];
 
-/** 单个用户填写的模型 → CatalogModel（补默认元数据；effort 按所属 agent 参考内置默认）。 */
+/** 单个用户填写的模型 → CatalogModel（只从已声明的能力补推理档位）。 */
 function toCatalogModel(
   m: ProviderRuntimeModelConfig,
   providerId: string,
@@ -301,15 +286,12 @@ function toCatalogModel(
   metadataProviderId = providerId,
 ): CatalogModel {
   // 显式 runtime 能力优先：reasoning:true 才导出 efforts；false = 明确无思考档。
-  // 字段缺省才走历史 fallback（Pi 空档 / 其它自定义 Provider 的 CUSTOM_EFFORTS）。
+  // 未知能力不借用其它模型的档位；后续仍按目录、预设、实报和用户配置逐层继承。
+  // 空档位只表示不指定推理强度，不代表要求供应商关闭思考。
   const efforts: Effort[] =
     m.reasoning === true
       ? [...(m.reasoningEfforts ?? [])]
-      : m.reasoning === false
-        ? []
-        : agent === "pi"
-          ? []
-          : (CUSTOM_EFFORTS[agent] ?? []);
+      : [];
   const registryEfforts =
     m.reasoning !== undefined || (modelRegistry?.schemaVersion ?? 0) >= 4
       ? undefined
@@ -610,6 +592,9 @@ export function buildUserProvider(
       id: runtimeProviderId,
       name: config.name,
       source: 'user',
+      // 独立 Claude 账号已停用:它的凭证由 Cindy 自己登录并保存,而 Claude 订阅只允许经
+      // 官方 CLI 自己的登录使用。条目保留在设置里供用户查看 / 删除,不再提供给任何 agent。
+      ...(native === 'claude' ? { agents: [] } : {}),
       auth: { method: 'oauth', native },
       routing: Object.fromEntries(Object.entries(identity.routing).map(([agent, route]) => [
         agent, {
@@ -685,8 +670,12 @@ export function buildUserProvider(
       : noAuth
         ? { method: "none" }
         : { method: "apiKey" },
-    // API key / 无鉴权代理都属于用户自备接口；通用 OAuth 可能订阅也可能按量，未声明前不猜。
-    ...(isOAuth ? {} : { access: { kind: "api" as const } }),
+    // Authentication and billing are independent: MiMo Token Plan uses an API key.
+    ...(isOAuth ? {} : {
+      access: !noAuth && isMimoTokenPlanProvider({ routing, models })
+        ? { kind: 'subscription' as const, product: 'MiMo Token Plan' }
+        : { kind: 'api' as const },
+    }),
     routing,
     models,
   };

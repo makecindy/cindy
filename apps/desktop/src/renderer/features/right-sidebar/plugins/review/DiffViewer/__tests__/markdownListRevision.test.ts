@@ -44,6 +44,17 @@ describe('buildMarkdownListRevision — 无序列表', () => {
     expect(revised).toContain('- 其它');
   });
 
+  it('refuses a loose list instead of silently tightening it (regression)', () => {
+    // 项间有空行的 loose list：逐项重建会把空行吃掉（loose → tight，结构与间距静默变化），
+    // 所以这一形态一律返回 null 交回块级装饰（宁可少标，不可标错）。
+    const before = '- 甲\n\n- 乙\n\n- 丙\n';
+    const after = '- 甲\n\n- 乙\n\n- 丙\n\n- 丁\n';
+    expect(buildMarkdownListRevision(before, after)).toBeNull();
+    // 计划层依旧不会静默丢结构：它走块级 removed + added。
+    const plan = buildMarkdownPreviewPlan(after, before);
+    expect(plan.segments.map((segment) => segment.kind)).toContain('removed');
+  });
+
   it('keeps the ordered-list numbering intact', () => {
     const before = '1. 甲\n2. 乙\n';
     const after = '1. 甲\n2. 乙\n3. 丙\n';

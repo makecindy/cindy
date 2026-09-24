@@ -1033,7 +1033,7 @@ describe('pickNewSessionDefaultDevice', () => {
 // 避免锚点(如 deps 数组)变化时 indexOf 失效产生误导性报错。
 describe('new session default device follows the home device filter', () => {
   it('sends deviceExplicit for a home device filter or a checked recommendation target', () => {
-    const homeSource = readTextLf(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
+    const homeSource = readTextLf(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
     // 筛选电脑或推荐指定电脑时带显式标记;普通新建保留记忆回落。
     expect(homeSource).toContain("...(selectedDeviceId || explicitDeviceId ? { deviceExplicit: '1' } : {})");
   });
@@ -1398,6 +1398,51 @@ describe('new session model', () => {
     ]);
   });
 
+  it('excludes worker-only directories before limiting recent workspace picks', () => {
+    const sessions = [
+      ...Array.from({ length: 6 }, (_, index) => remoteSession(`worker-${index}`, {
+        orcaRole: 'worker',
+        workingDir: `/scratch/worker-${index}`,
+        userSendAt: '2026-01-01T00:10:00.000Z',
+      })),
+      remoteSession('lead', {
+        orcaRole: 'lead',
+        workingDir: '/repo/lead',
+        userSendAt: '2026-01-01T00:05:00.000Z',
+      }),
+      remoteSession('ordinary', { workingDir: '/repo/ordinary' }),
+    ];
+
+    const options = buildRecentWorkspaceOptions(sessions);
+    expect(options.map((option) => option.workingDir)).toEqual(['/repo/lead', '/repo/ordinary']);
+    expect(pickInitialNewSessionWorkspace('', options)).toBe('/repo/lead');
+    expect(buildRecentWorkspaceOptions(sessions.slice(0, 6))).toEqual([]);
+  });
+
+  it('does not let workers change a user project count, activity, or ordering', () => {
+    const userSessions = [
+      remoteSession('older', {
+        workingDir: '/repo/shared',
+        userSendAt: '2026-01-01T00:01:00.000Z',
+      }),
+      remoteSession('newer', {
+        workingDir: '/repo/newer',
+        userSendAt: '2026-01-01T00:05:00.000Z',
+      }),
+    ];
+    const workers = ['/repo/shared', '/repo/shared/.cindy-worktrees/worker'].map((workingDir, index) =>
+      remoteSession(`worker-${index}`, {
+        orcaRole: 'worker',
+        workingDir,
+        userSendAt: '2026-01-01T00:10:00.000Z',
+      }),
+    );
+
+    expect(buildRecentWorkspaceOptions([...workers, ...userSessions])).toEqual(
+      buildRecentWorkspaceOptions(userSessions),
+    );
+  });
+
   it('folds managed worktree sessions into their base repo project', () => {
     const options = buildRecentWorkspaceOptions([
       remoteSession('base', {
@@ -1546,8 +1591,8 @@ describe('new session composer surface', () => {
     const atStart = slashEnd;
     const atEnd = newSource.indexOf('const removeAttachment = useCallback', atStart);
     const atSource = newSource.slice(atStart, atEnd);
-    const restoreStart = newSource.indexOf('firstMessageRef.current = stashed.draft.firstMessage;');
-    const restoreEnd = newSource.indexOf('setDraft(stashed.draft);', restoreStart);
+    const restoreStart = newSource.indexOf('const restoreCreationDraft = useCallback');
+    const restoreEnd = newSource.indexOf('setDraft(recovered);', restoreStart);
     const restoreSource = newSource.slice(restoreStart, restoreEnd);
 
     for (const source of [slashSource, atSource]) {
@@ -1557,9 +1602,11 @@ describe('new session composer surface', () => {
         source.indexOf('setFirstMessageSelection(selection)'),
       );
     }
-    expect(restoreSource).toContain('firstMessageRef.current = stashed.draft.firstMessage;');
-    expect(restoreSource).toContain('firstMessageSelectionRef.current = restoredSelection;');
-    expect(restoreSource).toContain('setFirstMessageSelection(restoredSelection);');
+    expect(restoreSource).toContain('firstMessageRef.current = recovered.firstMessage;');
+    expect(restoreSource).toContain('firstMessageSelectionRef.current = selection;');
+    expect(restoreSource).toContain('setFirstMessageSelection(selection);');
+    expect(newSource).toContain('restoreCreationDraft(stashed.draft, [...stashed.attachments]);');
+    expect(newSource).toContain('restoreCreationDraft(record.creation.draft,');
   });
 
   it('does not double-apply the Android safe-area inset to the top navigation', () => {
@@ -1937,7 +1984,7 @@ describe('new session worktree wiring (source locks)', () => {
       recovery,
     );
     const sessionId = newSource.indexOf(
-      'const sessionId = createNewSessionId();',
+      'const sessionId = recovering?.item.sessionId ?? createNewSessionId();',
       pendingGuard,
     );
     const worktreeCreate = newSource.indexOf(

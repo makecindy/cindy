@@ -1,6 +1,7 @@
+import { Button } from '@/components/ui/button';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, Eye, EyeOff, Loader2, Send, Trash2 } from 'lucide-react';
+import { Check, Eye, EyeOff, Send, Trash2 } from 'lucide-react';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Switch } from '@/components/ui/switch';
@@ -143,24 +144,17 @@ export function WecomBotSection({
               </div>
             </div>
           </div>
-          <button
+          <Button
+            variant="secondary"
+            size="lg"
+            loading={isDisconnecting}
             type="button"
             onClick={() => void handleDisconnect()}
             disabled={isDisconnecting}
-            className={cn(
-              'flex h-[36px] items-center justify-center gap-1.5 rounded-full',
-              'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-              'text-12 font-medium text-[var(--settings-btn-secondary-text)]',
-              isDisconnecting && 'cursor-not-allowed opacity-40',
-            )}
           >
-            {isDisconnecting ? (
-              <Loader2 size={13} className="animate-spin" />
-            ) : (
-              <Trash2 size={13} />
-            )}
+            <Trash2 size={13} />
             {t('settings.wecomBot.disconnect')}
-          </button>
+          </Button>
         </div>
       ) : (
         <div className="flex flex-col gap-3">
@@ -214,65 +208,43 @@ export function WecomBotSection({
           )}
           <div className="flex flex-col gap-2 sm:flex-row">
             {botId.trim() && !secret.trim() ? (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                loading={isSaving || status.kind === 'connecting'}
                 type="button"
                 onClick={() => void reconnect()}
                 disabled={!canReconnect}
-                className={cn(
-                  'flex h-[42px] flex-1 items-center justify-center gap-1.5 rounded-full',
-                  'border border-[var(--settings-btn-primary-border)] bg-[var(--settings-btn-primary-bg)]',
-                  'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-                  'hover:bg-[var(--settings-btn-primary-hover-bg)]',
-                  !canReconnect && 'cursor-not-allowed opacity-40',
-                )}
+                className="flex-1"
               >
-                {isSaving || status.kind === 'connecting' ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : null}
-                {isSaving || status.kind === 'connecting'
-                  ? t('settings.wecomBot.connectingAction')
-                  : t('settings.wecomBot.reconnect')}
-              </button>
+                {t('settings.wecomBot.reconnect')}
+              </Button>
             ) : (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                loading={isSaving || status.kind === 'connecting'}
                 type="button"
                 onClick={() => void connect()}
                 disabled={!canConnect}
-                className={cn(
-                  'flex h-[42px] flex-1 items-center justify-center gap-1.5 rounded-full',
-                  'border border-[var(--settings-btn-primary-border)] bg-[var(--settings-btn-primary-bg)]',
-                  'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-                  'hover:bg-[var(--settings-btn-primary-hover-bg)]',
-                  !canConnect && 'cursor-not-allowed opacity-40',
-                )}
+                className="flex-1"
               >
-                {isSaving || status.kind === 'connecting' ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : null}
-                {isSaving || status.kind === 'connecting'
-                  ? t('settings.wecomBot.connectingAction')
-                  : t('settings.wecomBot.connect')}
-              </button>
+                {t('settings.wecomBot.connect')}
+              </Button>
             )}
             {botId.trim() ? (
-              <button
+              <Button
+                variant="secondary"
+                size="lg"
+                loading={isDisconnecting}
                 type="button"
                 onClick={() => void handleDisconnect()}
                 disabled={isDisconnecting}
-                className={cn(
-                  'flex h-[42px] flex-1 items-center justify-center gap-1.5 rounded-full',
-                  'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-                  'text-13 font-medium text-[var(--settings-btn-secondary-text)]',
-                  isDisconnecting && 'cursor-not-allowed opacity-40',
-                )}
+                className="flex-1"
               >
-                {isDisconnecting ? (
-                  <Loader2 size={13} className="animate-spin" />
-                ) : (
-                  <Trash2 size={13} />
-                )}
+                <Trash2 size={13} />
                 {t('settings.wecomBot.disconnect')}
-              </button>
+              </Button>
             ) : null}
           </div>
         </div>
@@ -309,7 +281,10 @@ export function WecomBotSection({
 
         {wecomGroup.configured ? (
           <div className="flex gap-2">
-            <button
+            <Button
+              variant="secondary"
+              size="lg"
+              loading={wecomGroup.busy}
               type="button"
               disabled={wecomGroup.busy}
               onClick={() => {
@@ -318,18 +293,14 @@ export function WecomBotSection({
                   .then(() => toast.success(t('settings.notifications.wecomGroupTestSuccess')))
                   .catch(() => toast.error(t('settings.notifications.wecomGroupTestFailed')));
               }}
-              className={cn(
-                'flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full',
-                'border border-[var(--settings-btn-secondary-border)]',
-                'bg-[var(--settings-btn-secondary-bg)] text-12 font-medium',
-                'text-[var(--settings-btn-secondary-text)]',
-                wecomGroup.busy && 'cursor-not-allowed opacity-40',
-              )}
+              className="flex-1"
             >
-              {wecomGroup.busy ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              <Send size={13} />
               {t('settings.notifications.wecomGroupTest')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="lg"
               type="button"
               disabled={wecomGroup.busy}
               onClick={() => {
@@ -338,17 +309,11 @@ export function WecomBotSection({
                   .then(() => toast.success(t('settings.notifications.wecomGroupCleared')))
                   .catch(() => toast.error(t('settings.notifications.wecomGroupClearFailed')));
               }}
-              className={cn(
-                'flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full',
-                'border border-[var(--settings-btn-secondary-border)]',
-                'bg-[var(--settings-btn-secondary-bg)] text-12 font-medium',
-                'text-[var(--settings-btn-secondary-text)]',
-                wecomGroup.busy && 'cursor-not-allowed opacity-40',
-              )}
+              className="flex-1"
             >
               <Trash2 size={13} />
               {t('settings.notifications.wecomGroupClear')}
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -368,7 +333,10 @@ export function WecomBotSection({
                 'focus:border-[var(--settings-input-border-focus)]',
               )}
             />
-            <button
+            <Button
+              variant="cta"
+              size="lg"
+              loading={wecomGroup.busy}
               type="button"
               disabled={wecomGroup.busy || !webhookUrl.trim()}
               onClick={() => {
@@ -383,17 +351,10 @@ export function WecomBotSection({
                   })
                   .catch(() => toast.error(t('settings.notifications.wecomGroupSaveFailed')));
               }}
-              className={cn(
-                'flex h-[42px] items-center justify-center gap-1.5 rounded-full',
-                'border border-[var(--settings-btn-primary-border)]',
-                'bg-[var(--settings-btn-primary-bg)] text-13 font-medium',
-                'text-[var(--settings-btn-primary-text)]',
-                (wecomGroup.busy || !webhookUrl.trim()) && 'cursor-not-allowed opacity-40',
-              )}
             >
-              {wecomGroup.busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+              <Send size={14} />
               {t('settings.notifications.wecomGroupSaveAndTest')}
-            </button>
+            </Button>
           </div>
         )}
       </div>

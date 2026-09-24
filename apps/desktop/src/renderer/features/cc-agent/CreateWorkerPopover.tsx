@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -859,20 +860,19 @@ export function CreateWorkerPopover({
           />
         </div>
 
-        <button
+        <Button
+          variant="cta"
+          palette="confirmation"
+          size="lg"
+          loading={isSubmitting}
           type="button"
-          className={cn(
-            'w-full rounded-full py-3 text-14 font-medium leading-none transition-colors',
-            canCreate
-              ? 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)]'
-              : 'bg-[var(--surface-chip)] text-[var(--text-tertiary)] cursor-not-allowed',
-          )}
+          className="w-full"
           disabled={!canCreate}
           aria-busy={isSubmitting}
           onClick={handleCreate}
         >
           {resolvedSubmitLabel}
-        </button>
+        </Button>
       </div>
     </div>
   );

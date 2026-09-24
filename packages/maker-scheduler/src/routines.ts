@@ -1,3 +1,4 @@
+import type { PreRunHookConfig } from "./types.js";
 import { nextRun } from "./engine/cron.js";
 
 /** Sources describe events, independently of the connector transporting them. */
@@ -44,6 +45,10 @@ export interface Routine {
   prompt: string;
   enabled: boolean;
   triggers: RoutineTrigger[];
+  /** Omitted on legacy rules: preserve their existing silent behavior; new omissions persist false. */
+  silentWhenIdle?: boolean;
+  /** null explicitly removes the check; omission preserves it on older clients. */
+  preRunHook?: PreRunHookConfig | null;
   revision: number;
   createdAt: number;
   updatedAt: number;
@@ -51,7 +56,7 @@ export interface Routine {
 
 export type RoutineInput = Pick<
   Routine,
-  "name" | "prompt" | "enabled" | "triggers"
+  "name" | "prompt" | "enabled" | "triggers" | "silentWhenIdle" | "preRunHook"
 >;
 
 function record(value: unknown): Record<string, unknown> {
@@ -129,7 +134,20 @@ export function parseRoutineInput(value: unknown): RoutineInput {
   if (new Set(triggers.map((trigger) => trigger.id)).size !== triggers.length) {
     throw new Error("Trigger IDs must be unique");
   }
+  if (input.silentWhenIdle !== undefined && typeof input.silentWhenIdle !== "boolean")
+    throw new Error("silentWhenIdle must be boolean");
+  let preRunHook: PreRunHookConfig | null | undefined;
+  if (input.preRunHook === null) preRunHook = null;
+  else if (input.preRunHook !== undefined) {
+    const hook = record(input.preRunHook);
+    if (hook.timeoutMs !== undefined && (!Number.isSafeInteger(hook.timeoutMs) || Number(hook.timeoutMs) <= 0))
+      throw new Error("Invalid pre-run check timeout");
+    preRunHook = { command: string(hook.command, 32_000),
+      ...(hook.timeoutMs === undefined ? {} : { timeoutMs: Number(hook.timeoutMs) }) };
+  }
   return {
+    ...(input.silentWhenIdle === undefined ? {} : { silentWhenIdle: input.silentWhenIdle as boolean }),
+    ...(preRunHook === undefined ? {} : { preRunHook }),
     name: string(input.name, 200),
     prompt: string(input.prompt, 100_000),
     enabled: input.enabled,

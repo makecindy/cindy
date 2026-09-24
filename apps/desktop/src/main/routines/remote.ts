@@ -1,3 +1,5 @@
+import { getBotRoutineRemoteResource, invokeBotRoutineRemoteAction } from './companionResource.js';
+import type { createBotRemoteSettingsResource } from '../localDb/ipc/botRemoteSettingsResource.js';
 import { randomUUID } from 'node:crypto';
 import type {
   RemoteResource,
@@ -116,7 +118,7 @@ function text(value: unknown): string {
 
 /** Portable resource/action primitives keep the mobile client free of a separate Routine data model. */
 let registered = false;
-export function registerRoutineRemoteResources(): void {
+export function registerRoutineRemoteResources(management?: ReturnType<typeof createBotRemoteSettingsResource>): void {
   if (registered) return;
   registered = true;
   remoteResourceRegistry.register({
@@ -160,7 +162,13 @@ export function registerRoutineRemoteResources(): void {
         ...(offset + limit < items.length ? { nextCursor: String(offset + limit) } : {}),
       };
     },
-    async get(_context, request) {
+    async get(context, request) {
+      if (management && request.ref.id.startsWith('bot:') && request.client.primitives.some(value => value === 'routine-list' || value === 'routine-detail')) {
+        const id = request.ref.id.slice(4);
+        const resource = await getBotRoutineRemoteResource(id);
+        return management.bindResource(context, resource, async () => (await getBotRoutineRemoteResource(id)).revision,
+          request => invokeBotRoutineRemoteAction(id, request));
+      }
       const scope = activeOwnerScopeKey();
       const id = request.ref.id;
       if (id.startsWith('bot:')) {
@@ -302,7 +310,9 @@ export function registerRoutineRemoteResources(): void {
         ],
       };
     },
-    async invoke(_context, request) {
+    async invoke(context, request) {
+      if (management && request.resourceRef?.id.startsWith('bot:')
+        && /^[0-9a-f-]{36}$/.test(request.actionId)) return management.invoke(context, request);
       const scope = activeOwnerScopeKey();
       const id = request.resourceRef?.id;
       if (!id) throw new Error('Routine reference is required');

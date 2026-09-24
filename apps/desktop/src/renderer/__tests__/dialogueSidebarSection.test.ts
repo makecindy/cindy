@@ -209,9 +209,10 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     );
     // 不按设备分组的两条渲染路径不传目标 → 上层沿用作用域推断。
     expect(projectsSectionSource).toContain('renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY)');
-    expect(projectsSectionSource).toContain(
-      'onCreateDialogue={isMake ? undefined : () => onCreateDialogue(dialogueDeviceTarget)}',
-    );
+    // Cindy Make has its own local create dialog; ordinary dialogue groups
+    // still route creation to the owning device.
+    expect(projectsSectionSource).toContain('setMakeCreateOpen(true)');
+    expect(projectsSectionSource).toContain('onCreateDialogue(dialogueDeviceTarget)');
     // 目标设备离线 → 禁用新建并复用远程写保护文案(被控端才是真正的创建方)。
     expect(projectsSectionSource).toContain("t('ccAgent.remoteSession.actionsUnavailable')");
     expect(projectsSectionSource).toMatch(/const targetDeviceOffline = Boolean\(/);

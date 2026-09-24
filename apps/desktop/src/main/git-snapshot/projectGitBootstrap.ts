@@ -27,6 +27,7 @@ export interface ProjectGitBootstrapRequest {
   remoteHostId?: string | null;
   sessionId?: string | null;
   autoSnapshotEnabled?: boolean | null;
+  autoInitProjectGit?: boolean | null;
   source?: string;
 }
 
@@ -52,7 +53,9 @@ function getProjectGitBootstrapSkipReason(request: ProjectGitBootstrapRequest): 
   if (!workingDir) return 'not-local-project';
   if (request.workspaceKind === 'dialogue') return 'not-local-project';
   if (remoteHostId) return 'not-local-project';
-  if (request.autoSnapshotEnabled !== true) return 'git-safety-disabled';
+  if ((request.autoInitProjectGit ?? request.autoSnapshotEnabled) !== true) {
+    return 'git-safety-disabled';
+  }
   return null;
 }
 

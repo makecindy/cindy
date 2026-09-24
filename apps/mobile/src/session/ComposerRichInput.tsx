@@ -98,6 +98,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     useEffect(() => registerMobileMessageWebView('composer'), []);
     const readyRef = useRef(false);
     const webSignatureRef = useRef('');
+    const localDocumentsRef = useRef(new WeakSet<ComposerDocument>());
     const projectedDraft = useMemo(() => composerDocumentProjectedText(document), [document]);
     const webDocumentRef = useRef({ document, draft: projectedDraft, id: 0 });
     const selectionRef = useRef<(ComposerSelection & { draft: string }) | null>(null);
@@ -186,6 +187,10 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     }, [inject]);
 
     useEffect(() => {
+      // A native edit may advance again before React commits its previous
+      // snapshot. Echoes acknowledge that edit; they must not reset the DOM
+      // or caret to an older value. External replacements still apply below.
+      if (localDocumentsRef.current.delete(document)) return;
       const signature = JSON.stringify(document);
       if (signature === webSignatureRef.current) return;
       webSignatureRef.current = signature;
@@ -401,6 +406,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         if (selectionRef.current?.atomRange) selectionRef.current = null;
         webSignatureRef.current = JSON.stringify(normalized);
         webDocumentRef.current = { document: normalized, draft: composerDocumentProjectedText(normalized), id: webDocumentRef.current.id };
+        localDocumentsRef.current.add(normalized);
         onChangeDocument(normalized);
         return;
       }

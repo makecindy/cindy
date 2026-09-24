@@ -3,8 +3,9 @@
  *
  * 回归的是 #294 同族缺陷的另一半:本机 CLI 凭证的自动继承只在「cloud 模式 + 持有
  * legacy 命名空间认领」时才由一次性迁移建立,local 模式 owner 与没跑到迁移的 cloud
- * owner 永远拿不到 —— 设置页与聊天门禁于是各说各话。anthropic 还多一层:清单唯一
- * 来源是动态发现,绑定建立后不补拉一次就会停在「已连接 + 零模型」。
+ * owner 永远拿不到 —— 设置页与聊天门禁于是各说各话。anthropic 还多一层:启动期的磁盘
+ * 清单加载因未绑定而早退,绑定建立后要补一次,否则只剩 Registry presence。Claude 订阅的
+ * 登录态来自内置 CLI(`claude auth status`),Cindy 不读凭证、也不带凭证拉清单。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -20,18 +21,12 @@ const h = vi.hoisted(() => ({
   catalog: null as Catalog | null,
   claudeCredentialPresent: true,
   grokCredentialPresent: true,
-  refreshAnthropicModels: vi.fn(async () => true),
   refreshXaiModels: vi.fn(async () => true),
   loadXaiDiskCache: vi.fn(async () => false),
   refreshXaiMediaModels: vi.fn(async () => true),
   loadAnthropicDiskCache: vi.fn(async () => {}),
   codexLoginWithSideEffects: vi.fn(async () => false),
   codexLoginReadOnly: vi.fn(() => false),
-  anthropicDiscoveryFailure: null as {
-    kind: string;
-    at: string;
-    detail?: string;
-  } | null,
 }));
 
 vi.mock('electron', () => ({
@@ -52,15 +47,20 @@ vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...segments: string[]) => path.join(h.userDataDir, ...segments),
 }));
 
-// 本机凭证库:*Unbound 是「blob 里有凭证吗」,无绑定语义;带绑定的读取叠加 owner 校验,
-// 与真实实现(readClaudeAiOAuth / hasGrokOAuthLogin)的分层一致。
-vi.mock('../claude-credentials-store.js', () => ({
-  readClaudeAiOAuth: () =>
+// 本机 CLI 登录态:*Unbound 是「CLI 登没登录」,无绑定语义;带绑定的读取叠加 owner 校验,
+// 与真实实现(claude-native-auth / hasGrokOAuthLogin)的分层一致。
+vi.mock('../claude-native-auth.js', () => ({
+  hasClaudeNativeLoginUnbound: () => h.claudeCredentialPresent,
+  hasClaudeNativeLogin: () => h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic'),
+}));
+vi.mock('../claude-native-connection.js', () => ({
+  readClaudeNativeLogin: async () =>
     h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic')
-      ? { accessToken: 'fake-token', identity: 'claude@example.test' }
+      ? { loggedIn: true, email: 'claude@example.test' }
       : null,
-  hasClaudeAiOAuthUnbound: () => h.claudeCredentialPresent,
-  hasClaudeAiOAuth: () => h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic'),
+}));
+vi.mock('../claude-native-cli.js', () => ({
+  readClaudeCliLoginStatus: async () => ({ loggedIn: h.claudeCredentialPresent }),
 }));
 vi.mock('../grok-oauth-login.js', () => ({
   grokAccountIdentity: () => 'grok@example.test',
@@ -73,8 +73,6 @@ vi.mock('../grok-oauth-login.js', () => ({
 
 vi.mock('../model-discovery/anthropic.js', () => ({
   loadAnthropicModelsFromDiskCache: h.loadAnthropicDiskCache,
-  refreshAnthropicModelsFromHttp: h.refreshAnthropicModels,
-  getAnthropicModelDiscoveryFailure: () => h.anthropicDiscoveryFailure,
 }));
 vi.mock('../model-discovery/xai.js', () => ({
   clearXaiDiscoveredModels: vi.fn(),
@@ -162,8 +160,6 @@ beforeEach(() => {
   h.catalog = BUNDLED_CATALOG;
   h.claudeCredentialPresent = true;
   h.grokCredentialPresent = true;
-  h.anthropicDiscoveryFailure = null;
-  h.refreshAnthropicModels.mockClear();
   h.refreshXaiModels.mockClear();
   h.loadXaiDiskCache.mockClear();
   h.refreshXaiMediaModels.mockClear();
@@ -198,61 +194,41 @@ describe('native provider connection claim on read', () => {
       expect(switched.find((p) => p.id === id)?.subscriptionAccount?.identity).toBeUndefined();
     }
   });
-  it('认领本机 anthropic 凭证并补拉一次清单(修「已连接 + 零模型」)', async () => {
+  it('认领本机 anthropic 登录并补载一次磁盘清单(修「已连接 + 零模型」)', async () => {
     expect(isNativeProviderAuthBound('anthropic')).toBe(false);
 
     expect((await connectedMap()).anthropic).toBe(true);
     expect(isNativeProviderAuthBound('anthropic')).toBe(true);
     expect(getNativeProviderAuthSource('anthropic')).toBe('native-harness-inherited');
-    // 绑定刚建立 —— 启动期那次发现早被登录态 gate 掉,必须在这里补一次。
-    expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1);
-    // 磁盘缓存同样要补:启动期那次 load 也因未绑定而早退了。不先摆出上次成功的清单,
-    // 这次 HTTP 一旦失败,明明有可用缓存用户还是零模型(PR #548 review)。
-    expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1);
+    // 启动期那次磁盘清单加载因未绑定而早退了,绑定刚建立时必须补一次(PR #548 review)。
+    await vi.waitFor(() => expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1));
 
-    // 已绑定后不再重复认领,也不再反复打网络。
+    // 已绑定后不再重复认领,也不再重复加载。
     await connectedMap();
-    expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1);
     expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1);
   });
 
-  it('首次认领要等缓存与 HTTP 清单完成后再返回本次 provider 快照', async () => {
+  it('首次认领要等磁盘清单补载完成后再返回本次 provider 快照', async () => {
     const anthropic = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')!;
     const modelSeed = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd')!.models[
       'claude-code'
     ]![0]!;
     const cachedModel = { ...modelSeed, id: 'claude-cached', name: 'Claude Cached' };
-    const discoveredModel = { ...modelSeed, id: 'claude-first-fire', name: 'Claude First Fire' };
-    const withAnthropicModel = (model: typeof modelSeed): Catalog => ({
+    const cachedCatalog: Catalog = {
       ...BUNDLED_CATALOG,
       providers: BUNDLED_CATALOG.providers.map((provider) =>
         provider.id === anthropic.id
-          ? {
-              ...provider,
-              models: { ...provider.models, 'claude-code': [model] },
-            }
+          ? { ...provider, models: { ...provider.models, 'claude-code': [cachedModel] } }
           : provider,
       ),
-    });
-    const cachedCatalog = withAnthropicModel(cachedModel);
-    const discoveredCatalog = withAnthropicModel(discoveredModel);
+    };
     let releaseCache!: () => void;
-    let releaseRefresh!: () => void;
     h.loadAnthropicDiskCache.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           releaseCache = () => {
             h.catalog = cachedCatalog;
             resolve();
-          };
-        }),
-    );
-    h.refreshAnthropicModels.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseRefresh = () => {
-            h.catalog = discoveredCatalog;
-            resolve(true);
           };
         }),
     );
@@ -266,32 +242,21 @@ describe('native provider connection claim on read', () => {
     await vi.waitFor(() => expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1));
     const settledBeforeCache = settled;
     releaseCache();
-    await vi.waitFor(() => expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1));
-    const settledBeforeRefresh = settled;
-    releaseRefresh();
 
     const providers = await providersPromise;
     expect(settledBeforeCache).toBe(false);
-    expect(settledBeforeRefresh).toBe(false);
     expect(providers.find((provider) => provider.id === 'anthropic')?.connected).toBe(true);
     expect(
       providers.find((provider) => provider.id === 'anthropic')?.models['claude-code'],
-    ).toEqual([discoveredModel]);
+    ).toEqual([cachedModel]);
   });
 
-  it('普通可信 provider read 不等待首次清单网络，仍先返回 connected + LKG', async () => {
+  it('普通可信 provider read 不等待首次磁盘清单补载，先返回 connected', async () => {
     let releaseCache!: () => void;
-    let releaseRefresh!: () => void;
     h.loadAnthropicDiskCache.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           releaseCache = resolve;
-        }),
-    );
-    h.refreshAnthropicModels.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseRefresh = () => resolve(true);
         }),
     );
 
@@ -300,49 +265,22 @@ describe('native provider connection claim on read', () => {
     await vi.waitFor(() => expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1));
 
     releaseCache();
-    await vi.waitFor(() => expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1));
-    releaseRefresh();
     await listProviders(true, true);
   });
 
-  it('fresh routing read 在 HTTP 失败时仍返回缓存 LKG 与 connected 状态', async () => {
-    const anthropic = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')!;
-    const modelSeed = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd')!.models[
-      'claude-code'
-    ]![0]!;
-    const cachedModel = { ...modelSeed, id: 'claude-cached', name: 'Claude Cached' };
-    h.catalog = {
-      ...BUNDLED_CATALOG,
-      providers: BUNDLED_CATALOG.providers.map((provider) =>
-        provider.id === anthropic.id
-          ? {
-              ...provider,
-              models: { ...provider.models, 'claude-code': [cachedModel] },
-            }
-          : provider,
-      ),
-    };
-    h.refreshAnthropicModels.mockRejectedValueOnce(new Error('network down'));
+  it('fresh routing read 在磁盘清单补载失败时仍返回 connected 状态', async () => {
+    h.loadAnthropicDiskCache.mockRejectedValueOnce(new Error('disk unreadable'));
 
     const providers = await listProviders(true, true);
-    const anthropicView = providers.find((provider) => provider.id === anthropic.id);
-    expect(anthropicView?.connected).toBe(true);
-    expect(anthropicView?.models['claude-code']).toEqual([cachedModel]);
+    expect(providers.find((provider) => provider.id === 'anthropic')?.connected).toBe(true);
   });
 
-  it('并发读取要共等首次认领的同一趟清单刷新', async () => {
+  it('并发读取要共等首次认领的同一趟清单补载', async () => {
     let releaseCache!: () => void;
-    let releaseRefresh!: () => void;
     h.loadAnthropicDiskCache.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           releaseCache = resolve;
-        }),
-    );
-    h.refreshAnthropicModels.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseRefresh = () => resolve(true);
         }),
     );
 
@@ -359,13 +297,8 @@ describe('native provider connection claim on read', () => {
     expect(secondSettled).toBe(false);
 
     releaseCache();
-    await vi.waitFor(() => expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1));
-    expect(secondSettled).toBe(false);
-
-    releaseRefresh();
     const [firstProviders, secondProviders] = await Promise.all([first, second]);
     expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1);
-    expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1);
     expect(firstProviders.find((provider) => provider.id === 'anthropic')?.connected).toBe(true);
     expect(secondProviders.find((provider) => provider.id === 'anthropic')?.connected).toBe(true);
   });
@@ -406,17 +339,10 @@ describe('native provider connection claim on read', () => {
   it('认领等待期间 owner generation 切换时不向新 owner 广播旧 claim', async () => {
     h.grokCredentialPresent = false; // 只观察 Anthropic 的异步认领广播
     let releaseCache!: () => void;
-    let releaseRefresh!: () => void;
     h.loadAnthropicDiskCache.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           releaseCache = resolve;
-        }),
-    );
-    h.refreshAnthropicModels.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseRefresh = () => resolve(true);
         }),
     );
     const onClaimed = vi.fn();
@@ -426,8 +352,6 @@ describe('native provider connection claim on read', () => {
       await vi.waitFor(() => expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1));
       h.generation = 2;
       releaseCache();
-      await vi.waitFor(() => expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1));
-      releaseRefresh();
       await providersPromise;
       expect(onClaimed).not.toHaveBeenCalled();
     } finally {
@@ -449,18 +373,16 @@ describe('native provider connection claim on read', () => {
 
   it('不受信 sender(含 device-link 合成 event)只读,不触发认领与清单拉取', async () => {
     // 这条通道也服务 device-link 与可能不受信的渲染上下文:它们只该拿到只读快照,
-    // 不该顺带写绑定文件、读凭证缓存、发起带凭证的上游请求(PR #548 review)。
+    // 不该顺带写绑定文件、改动清单(PR #548 review)。
     const connected = await connectedMap(false);
     expect(connected.anthropic).toBe(false);
     expect(connected.xai).toBe(false);
     expect(isNativeProviderAuthBound('anthropic')).toBe(false);
-    expect(h.refreshAnthropicModels).not.toHaveBeenCalled();
     expect(h.loadAnthropicDiskCache).not.toHaveBeenCalled();
 
     // 本机主页面读一次即恢复自愈。
     expect((await connectedMap(true)).anthropic).toBe(true);
-    await vi.waitFor(() => expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1));
-    expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1));
   });
 
   it('openai 同样按 sender 分流:不受信只读,不触发 reconcile 的硬链与绑定写入', async () => {
@@ -483,22 +405,14 @@ describe('native provider connection claim on read', () => {
     expect(connected.anthropic).toBe(false);
     expect(connected.xai).toBe(false);
     expect(isNativeProviderAuthBound('anthropic')).toBe(false);
-    expect(h.refreshAnthropicModels).not.toHaveBeenCalled();
+    expect(h.loadAnthropicDiskCache).not.toHaveBeenCalled();
   });
 
-  it('清单发现失败时把归因挂到 ProviderView 上(UI 据此讲明理由而非「正在发现」)', async () => {
-    h.anthropicDiscoveryFailure = {
-      kind: 'network',
-      at: '2026-07-27T00:00:00.000Z',
-      detail: 'TypeError: fetch failed (ENOTFOUND)',
-    };
-
+  it('anthropic 没有 HTTP 清单发现通道,ProviderView 不带发现失败态', async () => {
     const providers = await listProviders();
     const anthropic = providers.find((p) => p.id === 'anthropic');
     expect(anthropic?.connected).toBe(true);
-    expect(anthropic?.modelDiscoveryFailure).toMatchObject({ kind: 'network' });
-    // 没有失败态的供应商不该凭空长出这个字段。
-    expect(providers.find((p) => p.id === 'xai')?.modelDiscoveryFailure).toBeUndefined();
+    expect(anthropic?.modelDiscoveryFailure).toBeUndefined();
   });
 
   it('凭证已属于别的 owner 时保持 fail-closed', async () => {
@@ -509,7 +423,7 @@ describe('native provider connection claim on read', () => {
 
     const connected = await connectedMap();
     expect(connected.anthropic).toBe(false);
-    expect(h.refreshAnthropicModels).not.toHaveBeenCalled();
+    expect(h.loadAnthropicDiskCache).not.toHaveBeenCalled();
   });
 
   it('durable disconnect 后即使本机 Claude 凭证仍在，也不绑定、不发现、不回灌', async () => {
@@ -522,6 +436,5 @@ describe('native provider connection claim on read', () => {
     expect(connected.anthropic).toBe(false);
     expect(isNativeProviderAuthBound('anthropic')).toBe(false);
     expect(h.loadAnthropicDiskCache).not.toHaveBeenCalled();
-    expect(h.refreshAnthropicModels).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,10 @@ import type { AuthRegion, SocialProvider } from '@cindy/auth-client';
 
 export type MobileSocialLoginMode = 'native' | 'browser';
 
+// The mobile app's WeChat Open Platform configuration is being corrected.
+// Keep native integration intact so the entry can return after both platforms pass verification.
+export const MOBILE_WECHAT_LOGIN_ENABLED = false;
+
 /**
  * Chooses the credential path for a provider advertised by auth-server.
  * Native support remains the default; Global Android falls back to the
@@ -12,7 +16,15 @@ export function resolveMobileSocialLoginMode(input: {
   region: AuthRegion;
   platform: string;
   nativeSupported: boolean;
+  wechatLoginEnabled?: boolean;
 }): MobileSocialLoginMode | null {
+  if (
+    input.provider === 'wechat' &&
+    (!(input.wechatLoginEnabled ?? MOBILE_WECHAT_LOGIN_ENABLED) ||
+      input.region !== 'cn')
+  ) {
+    return null;
+  }
   if (input.nativeSupported) return 'native';
   if (
     input.provider === 'apple' &&

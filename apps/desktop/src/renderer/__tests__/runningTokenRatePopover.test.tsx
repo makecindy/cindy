@@ -20,6 +20,31 @@ vi.mock('react-i18next', () => ({
 }));
 afterEach(cleanup);
 
+it('expires the displayed rate without losing history, including after remount', () => {
+  vi.useFakeTimers();
+  try {
+    clearRateHistoryCache();
+    function Probe({ tokens }: { tokens: number }) {
+      const history = useRunningTokenRateHistory({ sessionKey: 'freshness', startedAt: 1,
+        outputTokens: tokens, generationDurationMs: tokens * 10, generationReliable: true });
+      return <div data-testid="rate">{history.latestRate ?? 'waiting'}:{history.samples.length}</div>;
+    }
+    const view = render(<Probe tokens={0} />);
+    view.rerender(<Probe tokens={100} />);
+    expect(screen.getByTestId('rate').textContent).toBe('100:1');
+    act(() => vi.advanceTimersByTime(59_999));
+    expect(screen.getByTestId('rate').textContent).toBe('100:1');
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getByTestId('rate').textContent).toBe('waiting:1');
+    view.unmount();
+    const again = render(<Probe tokens={100} />);
+    expect(screen.getByTestId('rate').textContent).toBe('waiting:1');
+    again.rerender(<Probe tokens={200} />);
+    expect(screen.getByTestId('rate').textContent).toBe('100:2');
+    again.unmount();
+  } finally { clearRateHistoryCache(); vi.useRealTimers(); }
+});
+
 it('distinguishes an unobserved peak from measured zero throughput', () => {
   const props = {
     elapsedText: '1s',

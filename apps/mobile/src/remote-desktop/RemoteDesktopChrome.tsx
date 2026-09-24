@@ -154,6 +154,7 @@ export function RemoteDesktopPanel({
   topInset: number;
   toolbarOnLeft?: boolean;
   toolbarActionCount?: number;
+  railAnchor?: { top: number; right: number };
   title: string;
   caption: string;
   onClose(): void;

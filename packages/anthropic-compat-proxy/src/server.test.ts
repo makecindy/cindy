@@ -253,6 +253,27 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     expect(transformResponse).toHaveBeenCalledOnce();
   });
 
+  it.each(['reject', 'oversize', 'stale'])('does not forward a route body rewrite that is %s', async (mode) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => res.end('{}'));
+    upstreamClose = upstream.close;
+    let current = true;
+    const rewrite = vi.fn(async () => {
+      if (mode === 'reject') throw new Error('Invalid request');
+      if (mode === 'stale') current = false;
+      return { body: Buffer.from('x'.repeat(mode === 'oversize' ? 200 : 2)) };
+    });
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      maxRequestBodyBytes: 100,
+      bypassRequestTransforms: () => true,
+      routingTransform: () => ({ transformRequestBody: rewrite, dispatchGenerationValid: () => current }),
+    });
+    const result = await post(proxy.url, { model: 'test' });
+    expect(result.status).toBe(mode === 'reject' ? 502 : mode === 'oversize' ? 413 : 503);
+    expect(rewrite).toHaveBeenCalledOnce();
+    expect(upstream.bodies).toEqual([]);
+  });
+
   it('can preserve an image request body without changing normal response transforms', async () => {
     const upstream = await startFakeUpstream((_idx, _body, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -4266,5 +4287,27 @@ describe('streaming response validity gate (#2242)', () => {
     proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
 
     await expect(post(proxy.url, { model: 'test-model', stream: true })).rejects.toThrow();
+  });
+});
+
+describe('anthropic-compat-proxy stream gate pending-buffer boundary', () => {
+  it('commits every gated byte when the pending buffer lands exactly on the gate cap', async () => {
+    // 回归:入队条件曾是 `pendingBytes < CAP` 而拒收条件是 `> CAP` —— 累计恰好
+    // 落在 64KiB(回环读常见块大小)时, 后续 chunk 只计数不入队; 事件标记在这些
+    // chunk 里到达并提交后, 它们被永久跳过, 客户端收到中间有缺口的 200 SSE。
+    const pad = 'x'.repeat(64 * 1024);
+    const marker = 'event: message_start\ndata: {"type":"message_start"}\n\n';
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(pad);
+      res.write(marker);
+      res.end();
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+
+    expect(result.status).toBe(200);
+    expect(result.text).toBe(pad + marker);
   });
 });

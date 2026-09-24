@@ -182,6 +182,13 @@
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
+    "currentRate": "直近の速度",
+    "averageRate": "このターンの平均",
+    "rateHistory": "生成速度の推移",
+    "outputTotal": "累計出力",
+    "observedPeak": "ピーク",
+    "tokenRateUnit": "tok/s",
+    "tokenRateDescription": "直近の生成区間の速度。ツール実行と待機は除きます。",
     "networkReconnecting": "再接続中…",
     "modelBusyRetrying": "モデルサービスが混雑、再試行中…",
     "rateLimitRetrying": "リクエストがレート制限されました。再試行中…",
@@ -476,6 +483,10 @@
     "deleteOne": "このメッセージを削除"
   },
   "tail": {
+    "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
+    "replyFailed": "返信を完了できませんでした。原因を確認するには、エラーの詳細をご覧ください。",
+    "showErrorDetails": "エラーの詳細を表示",
+    "hideErrorDetails": "エラーの詳細を隠す",
     "interrupted": "タスクの実行中にアプリが終了したため、中断されました。",
     "continueTask": "タスクを続ける",
     "retry": "再試行",
@@ -503,5 +514,36 @@
     "noExtraDirsSummary": "追加ディレクトリはありません",
     "attachmentUploadFailed": "添付のアップロードに失敗しました。再試行するか、このメッセージを削除してください。",
     "authGateHint": "{{agent}} はこのパソコンに接続済みのモデルプロバイダーがないため、送信は失敗します。パソコンの {{appName}} で「設定 → モデルプロバイダー」を設定してください。"
+  },
+  "outbox": {
+    "legacyPlanRecovery": "このパソコンではプランモードで保存済みメッセージを復元できません。プランモードをオフにするか、パソコンの Cindy を更新して再試行してください。",
+    "creationRecoveryRequired": "先頭のメッセージを削除する前に、セッションの作成を再試行してください。このメッセージには後続メッセージの復元に必要な情報が保存されています。",
+    "confirmationRequired": "このコンピューターではメッセージの受信を確認できません。履歴を確認するか、Cindy を更新してから再試行してください。",
+    "taskCleared": "送信後にこのセッションがクリアされました。メッセージはスマートフォンに保存されています。内容を確認してください。",
+    "restoreFailed": "送信待ちメッセージを復元できませんでした。保存済みの内容は削除されていません。アプリを再起動して再試行してください。",
+    "recoveryTarget": "このセッションを復元する際は元のコンピューターを使用してください。後続のメッセージは保存されています。",
+    "taskAlreadyCreated": "このセッションはコンピューターに作成済みです。保存されたメッセージは元のセッションで送信を再開します。"
+  },
+  "remoteError": {
+    "REMOTE_DAEMON_CLOSED": "リモート接続が切れました。更新中の可能性があります。このターンは終了したので、もう一度送信してください。",
+    "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
+    "AUTO_REVIEW_UNAVAILABLE": "自動レビューが判断できませんでした（ネットワークまたはサービスの一時的な問題）。レビューが必要な操作はご自身での確認に切り替わりました。中断を減らしたい場合は、このタスクをデフォルト権限に切り替えてください。",
+    "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自動レビューを完了できず、確認も完了しませんでした。これはユーザーによる拒否ではありません。",
+    "REMOTE_COMPAT_MODE_UNSUPPORTED": "リモートのタスクでは、このパソコン側の互換経路を使えません。Cindy AI に切り替えるか、このパソコン上のタスクで続けてください。",
+    "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
+    "REMOTE_LOCAL_ONLY_PROVIDER": "このモデルプロバイダーはローカル専用サービス（Ollama など）で、SSH リモートタスクからはアクセスできません。Cindy AI ゲートウェイに切り替えるか、リモートホストから到達可能なプロバイダーを選んでください。",
+    "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
+    "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。",
+    "MCP_APPROVAL_AUTO_BLOCKED": "このツール呼び出しは自動審査でブロックされました。手動で拒否された記録はありません。",
+    "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "権限の確認がタイムアウトし、有効な確認結果を受信できませんでした。タイムアウトだけでは、ボタンをクリックしたかどうかは判断できません。",
+    "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "権限の確認を完了できませんでした。手動で拒否された記録はありません。",
+    "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "このモデルはパソコン側でのリクエスト転送が必要ですが、今のリモート接続では転送できません。Cindy AI に切り替えるか、このパソコン上のタスクで使ってください。",
+    "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "このモデルに切り替えるには別の接続が必要です。新しいタスクを作ってから使ってください。",
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "リモートのタスクでは、まだサブスクリプションのログインを使えません。Cindy AI に切り替えるか、API キーを設定したモデルプロバイダーを選んでください。",
+    "REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE": "リモートの Pi タスクでは、このコンテキスト設定を使えません。Cindy AI に切り替えるか、リモートから到達できるモデルを選んでください。",
+    "REMOTE_PROVIDER_UNSUPPORTED": "リモートのタスクでは、まだこのモデルプロバイダーを使えません。別のプロバイダーに変えるか、このパソコン上のタスクで使ってください。",
+    "REMOTE_PROVIDER_UPDATING": "このモデルプロバイダーの認証情報を更新しています。しばらくしてからもう一度お試しください。",
+    "REMOTE_WORKDIR_UNAVAILABLE": "リモートの作業ディレクトリを今は使えません。そのパソコンにフォルダがまだあるか確認してから、再試行してください。",
+    "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "パソコン側で、このメッセージが送信済みかまだ確認できません。少し待ってから再試行し、同じメッセージを重ねて送らないでください。"
   }
 }

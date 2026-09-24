@@ -39,6 +39,8 @@ import {
   shouldPrependMobileClientPromptNote,
 } from './mobileClientPromptNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
+import { getResolvedMainLocale } from '../i18n.js';
+import { buildUiLanguageErrorNote, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
 import {
   excludeDirectoryGrantConflicts,
   directoryGrantsForRuntime,
@@ -264,9 +266,12 @@ type MakerSendOptions = {
    * 入队时的 async context 早已结束,只靠 isMobileClientInvoke() 实际读不到来源。
    */
   fromMobileClient?: boolean;
+  /** Coordinator-stamped interface language. Direct wire values are stripped. */
+  uiLanguage?: string;
   /** Coordinator-transmitted provenance for device-link input.enqueue. */
   fromDeviceLinkClient?: boolean;
   persistUserMessage?: {
+    sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
     clientId?: unknown;
     content?: unknown;
     agentFacingWireContent?: unknown;
@@ -433,6 +438,8 @@ export interface MakerSendTransactionDeps {
   /** 把 Pi 原生 user entry id 补到已落库的 Cindy user 行，供会话树恢复附件。 */
   linkPiUserEntry?(sessionId: string, clientId: string, piEntryId: string): Promise<boolean | void>;
   beforeDispatchDirectUserTurn?: (sessionId: string) => void | Promise<void>;
+  /** Capture product lifecycle state before async preparation; commit only at vendor dispatch. */
+  prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
   assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;
@@ -519,6 +526,7 @@ type ResolveSessionResult =
   | { kind: 'failure'; result: DesktopMakerSendResult };
 
 function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
+  sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
   clientId: string;
   content: unknown;
   agentFacingWireContent?: IpcUserMessage;
@@ -538,6 +546,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   const persist = sendOpts.persistUserMessage;
   if (!persist || typeof persist.clientId !== 'string') return null;
   return {
+    ...(persist.sharedTaskAuthor ? { sharedTaskAuthor: persist.sharedTaskAuthor } : {}),
     clientId: persist.clientId,
     content: persist.content,
     ...(persist.agentFacingWireContent && typeof persist.agentFacingWireContent === 'object'
@@ -933,6 +942,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       sendOpts,
     ): Promise<DesktopMakerSendResult> {
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+      const dispatchProductTurn = deps.prepareProductTurn?.(sessionId);
       const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
       // session-agent-switch:pending 切换在发送时刻生效(用户语义:「消息真正发出
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
@@ -1250,9 +1260,15 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
           ? buildCindyMakeTaskNote()
           : null;
-      const outgoing = cindyMakeNote
+      const withCindyMakeNote = cindyMakeNote
         ? prependNoteToWireUserMessage(withMobileNote as HandoffWireMessage, cindyMakeNote)
         : withMobileNote;
+      const uiLanguageNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()))
+        : null;
+      const outgoing = uiLanguageNote
+        ? prependNoteToWireUserMessage(withCindyMakeNote as HandoffWireMessage, uiLanguageNote)
+        : withCindyMakeNote;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       let persistUserMessage = readPersistUserMessageOption(so);
       const trustedDesktopQueueReceipt = readTrustedDesktopQueueReceipt(persistUserMessage);
@@ -1520,6 +1536,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                       role: 'user',
                       content: persistUserMessage.content,
                       agentMeta: {
+                        ...(persistUserMessage.sharedTaskAuthor ? { sharedTaskAuthor: persistUserMessage.sharedTaskAuthor } : {}),
                         uuid: so.messageUuid,
                         ...(so.origin?.kind === 'scheduler'
                           ? { autoReviewUserText: { kind: 'scheduled-continuation' } }
@@ -1584,6 +1601,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               );
             }
             deps.assertBeforeVendorDispatch?.(sessionId, finalFenceSendOpts);
+            dispatchProductTurn?.();
             if (userPromptPreviewSessionId) {
               deps.dispatchUserPromptPreview?.(
                 userPromptPreviewSessionId,

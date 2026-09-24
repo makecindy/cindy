@@ -21,7 +21,11 @@ const state = vi.hoisted(() => ({
   publish: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({}) }));
-vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => state.owner }));
+vi.mock('@/contexts/dataOwnerGeneration', () => ({
+  getDataOwnerGeneration: () => state.owner,
+  isDataOwnerGenerationCurrent: (owner: typeof state.owner) =>
+    owner.dataOwnerId === state.owner.dataOwnerId && owner.generation === state.owner.generation,
+}));
 vi.mock('@/lib/sessionStartingStore', () => ({ useStartingSessionIds: () => state.starting }));
 vi.mock('@/lib/sessionBackgroundActivityStore', () => ({
   useBackgroundActivitySessionIds: () => state.background,

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ContactsListPane — 通讯录管理区左列: 搜索 / 过滤 chips / 分组筛选 / 新建 / 列表。
  * 纯展示组件, 状态与数据由 ContactsSection 下发。
@@ -183,17 +184,10 @@ export function ContactsListPane(props: Props) {
               {t(props.query ? 'settings.contacts.list.noResults' : 'settings.contacts.list.empty')}
             </p>
             {!props.query && props.onAiOrganize && (
-              <button
-                type="button"
-                onClick={props.onAiOrganize}
-                className={cn(
-                  'flex h-[30px] items-center gap-1.5 rounded-lg px-3 text-13 font-medium transition-colors',
-                  'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:opacity-90',
-                )}
-              >
+              <Button variant="cta" size="md" compact type="button" onClick={props.onAiOrganize}>
                 <Sparkles size={13} />
                 {t('settings.contacts.guide.cta')}
-              </button>
+              </Button>
             )}
           </div>
         ) : (
@@ -239,16 +233,17 @@ export function ContactsListPane(props: Props) {
               </button>
             ))}
             {props.hasMore && (
-              <button
+              <Button
+                variant="secondary"
+                tone="quiet"
+                size="md"
+                compact
                 type="button"
                 onClick={props.onLoadMore}
-                className={cn(
-                  'mt-1 flex h-8 w-full items-center justify-center rounded-lg text-12 transition-colors',
-                  'text-[var(--settings-section-desc)] hover:bg-[var(--settings-menu-bg-hover)] hover:text-[var(--settings-section-title)]',
-                )}
+                className="mt-1 w-full"
               >
                 {t('settings.contacts.list.loadMore')}
-              </button>
+              </Button>
             )}
           </>
         )}

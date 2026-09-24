@@ -127,7 +127,9 @@
   },
   "rewind": {
     "readError": "无法读取回退预览结果，请重新同步后再试。",
-    "noFilesNote": "没有可回滚的文件，将只截断这条消息之后的对话历史。",
+    "noFilesNote": "这条消息之后没有检测到项目文件改动，继续后会移除后续对话记录。",
+    "conversationOnlyNote": "当前无法恢复项目文件，因为没有可用的 Git 保存点；继续后会移除这条消息之后的对话记录，项目文件不会回到之前的状态。",
+    "gitSafetyDisabledNote": "Git 安全保存点未开启，因此当前无法恢复项目文件。请在电脑端设置中开启；继续后会移除这条消息之后的对话记录。",
     "moreFiles": "另有 {{count}} 个文件",
     "stats": "{{count}} 个文件 · +{{insertions}} / -{{deletions}} 行",
     "gotIt": "知道了",
@@ -141,7 +143,8 @@
     "titleError": "无法回退",
     "detailLoading": "手机端正在向电脑端读取文件回退预览。",
     "detailDefault": "会回滚下面这些文件，并截断这条消息之后的对话历史。",
-    "detailEmpty": "没有文件需要回滚，确认后只会截断这条消息之后的对话历史。",
+    "detailEmpty": "这条消息之后没有检测到项目文件改动。",
+    "detailConversationOnly": "项目文件不会回到之前的状态。",
     "detailError": "电脑端拒绝了这次回退操作。"
   },
   "collab": {
@@ -233,7 +236,9 @@
     "inlineFormActionGeneric": "在电脑端填写一项配置"
   },
   "presentation": {
-    "action": { "submitting": "提交中" },
+    "action": {
+      "submitting": "提交中"
+    },
     "permission": {
       "highRiskTitle": "高风险授权需要二次确认",
       "highRiskDetail": "先核对命令内容，再点一次确认允许；不确定就拒绝。",
@@ -271,6 +276,18 @@
         "plugin_setup": "配置要在电脑端完成，这里可以取消这次请求。",
         "fallback": "手机版会按桌面端的请求顺序处理。"
       }
+    }
+  },
+  "companion": {
+    "operation": "操作",
+    "details": "查看详情",
+    "fields": {
+      "path": "文件",
+      "file_path": "文件",
+      "url": "地址",
+      "command": "命令",
+      "ghost_id": "插件",
+      "tool": "工具"
     }
   }
 }

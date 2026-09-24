@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
@@ -74,7 +75,7 @@ export function BotDeleteDialog({
           </div>
           {failed ? (
             <p className="mt-3 text-11 text-[var(--text-danger)]" role="alert">
-              {t('bots.lifecycle.actionFailed')}
+              {t('bots.lifecycle.deleteFailed')}
             </p>
           ) : null}
           <div className="mt-5 flex justify-end gap-2">
@@ -84,14 +85,18 @@ export function BotDeleteDialog({
             >
               {t('bots.cancel')}
             </Dialog.Close>
-            <button
+            <Button
+              variant="cta"
+              size="lg"
+              compact
+              tone="danger-solid"
+              loading={busy}
               type="button"
               onClick={() => void deleteBot()}
               disabled={busy}
-              className="h-9 rounded-lg bg-[var(--text-danger)] px-4 text-12 font-medium text-white disabled:opacity-50"
             >
               {busy ? t('bots.lifecycle.working') : t('bots.lifecycle.delete')}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

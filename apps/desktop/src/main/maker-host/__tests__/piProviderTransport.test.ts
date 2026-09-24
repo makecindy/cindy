@@ -13,6 +13,47 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  it('reconciles saved max when capabilities narrow, disappear and return', async () => {
+    const request = { model: 'changing-model', input: 'hello', reasoning: { effort: 'max' }, stream: true };
+    for (const efforts of [['high', 'max'], ['high'], [], ['high', 'max']] as const) {
+      const provider = buildUserProvider({ id: 'changing-provider', name: 'Changing provider', runtimes: {
+        codex: { baseUrl: 'https://fixture.example/v1', wireProtocol: 'openai-chat', models: [{
+          id: request.model, name: 'Changing model', reasoning: true, reasoningEfforts: [...efforts],
+        }] },
+      } });
+      const row = invocationModelRecord(provider.models.codex![0], 'https://fixture.example/v1', 'openai-completions')!;
+      let sent: Record<string, unknown> | undefined;
+      const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (_url, init) => {
+        sent = JSON.parse(String(init?.body));
+        return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+      } });
+      expect(await (await send('https://unused.invalid', { body: JSON.stringify(request) })).text()).toContain('response.completed');
+      if (!efforts.length) expect(sent).not.toHaveProperty('reasoning_effort');
+      else expect(sent).toHaveProperty('reasoning_effort', efforts[efforts.length - 1]);
+      expect(request.reasoning.effort).toBe('max');
+    }
+  });
+
+  it('omits stale reasoning effort for a model without a capability declaration', async () => {
+    const provider = buildUserProvider({ id: 'unknown-provider', name: 'Unknown provider', runtimes: {
+      codex: { baseUrl: 'https://unknown.example/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'unknown-model', name: 'Unknown model' }] },
+    } });
+    const row = invocationModelRecord(provider.models.codex![0], 'https://unknown.example/v1', 'openai-completions')!;
+    let sent: Record<string, unknown> | undefined;
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+    } });
+    const response = await send('https://unused.invalid', { body: JSON.stringify({
+      model: row.id, input: 'hello', reasoning: { effort: 'max' }, stream: true,
+    }) });
+    expect(await response.text()).toContain('response.completed');
+    expect(sent).toMatchObject({ model: row.id });
+    expect(sent).not.toHaveProperty('reasoning_effort');
+    expect(sent).not.toHaveProperty('thinking');
+  });
+
   it.each(['ant-ling', 'qwen-token-plan', 'zai', 'together'])('sends the actual %s thinking dialect and model limits', async providerId => {
     const row = PROVIDER_MODEL_CATALOG.providers[providerId].find(row => row.reasoning && row.execution.pi.api === 'openai-completions')!;
     const effort = row.efforts.includes('high') ? 'high' : row.efforts[0];

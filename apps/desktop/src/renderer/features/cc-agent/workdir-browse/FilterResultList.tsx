@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * FilterResultList —— 文件名筛选结果列表。
  *
@@ -8,7 +9,7 @@
  * 抽到 workdir-browse/ 下,RSB plugin 和 doc 模式 sidebar 共用。
  */
 
-import { File as FileIcon } from 'lucide-react';
+
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -84,7 +85,7 @@ export function FilterResultList({
                   : 'text-foreground hover:bg-sidebar-item-hover',
               )}
             >
-              <FileIcon size={14} strokeWidth={1.5} className="shrink-0 text-sidebar-muted" />
+              <FileTypeIcon name={basename} size={14} className="shrink-0 text-sidebar-muted" />
               <span className="flex min-w-0 flex-1 flex-col leading-tight">
                 <span className="truncate">{basename}</span>
                 {dirname && (

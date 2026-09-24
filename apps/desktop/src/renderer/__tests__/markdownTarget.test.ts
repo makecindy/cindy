@@ -116,6 +116,10 @@ describe('classifyMarkdownLinkTarget', () => {
       kind: 'local-image-url',
       href: 'xdt-file://local/?path=%2Ftmp%2Fa.png',
     });
+    expect(classifyMarkdownLinkTarget('xdt-file:///D:/tmp/a%20b.png')).toEqual({
+      kind: 'local-image-url',
+      href: `xdt-file://local/?path=${encodeURIComponent('D:/tmp/a b.png')}`,
+    });
   });
 
   it('turns explicit local links into pending local candidates until fs resolution proves them', () => {

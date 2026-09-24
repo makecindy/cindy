@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { localizedModelName, localizedBrandName, matchesModelName } from '@/lib/modelDisplayNames';
 import { modelManagementState } from './modelManagementState';
 /**
@@ -1094,13 +1095,10 @@ export function UnifiedModelList({
             {unionRows.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-                  >
+                  <Button variant="secondary" size="sm" compact type="button" className="shrink-0">
                     {t('settings.providers.models.manage.menu')}
                     <ChevronDown size={12} aria-hidden />
-                  </button>
+                  </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuLabel>
@@ -1345,15 +1343,17 @@ export function UnifiedModelList({
                       </span>
                     </button>
                     {!hasLockedDisabledRow && (
-                      <button
+                      <Button
+                        variant="secondary"
+                        size="xxs"
+                        compact
+                        tone="quiet"
                         type="button"
                         disabled={!selectionAvailable}
                         onClick={resetDisableOverrides}
-                        className="rounded-lg px-1.5 py-0.5 text-11 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                        style={{ color: 'var(--text-tertiary)' }}
                       >
                         {t('settings.providers.models.enableAllModels')}
-                      </button>
+                      </Button>
                     )}
                   </div>
                   {!collapsed &&
@@ -1400,28 +1400,30 @@ export function UnifiedModelList({
                             </span>
                           )}
                           {!paymentRequired && (
-                            <button
+                            <Button
+                              variant="secondary"
+                              size="xs"
+                              compact
                               type="button"
                               disabled={!selectionAvailable}
                               onClick={() => setRowDisabled(row, false)}
-                              className="ml-auto flex h-6 shrink-0 items-center rounded-full border px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                              style={{
-                                borderColor: 'var(--settings-btn-secondary-border)',
-                                color: 'var(--settings-btn-secondary-text)',
-                              }}
+                              className="ml-auto shrink-0"
                             >
                               {t('settings.providers.models.enableModel')}
-                            </button>
+                            </Button>
                           )}
                           {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
-                            <button
+                            <Button
+                              variant="secondary"
+                              size="xs"
+                              tone="danger"
+                              compact
                               type="button"
                               onClick={() => void deleteInstalledModel(row)}
-                              className="flex h-6 shrink-0 items-center rounded-full px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                              style={{ color: 'var(--error-fg)' }}
+                              className="shrink-0"
                             >
                               {t('settings.providers.local.deleteModel')}
-                            </button>
+                            </Button>
                           )}
                         </div>
                       );

@@ -45,7 +45,7 @@ describe('AboutSection legal links', () => {
       'settings.about.legal.viewDocument:settings.about.legal.termsOfServiceLabel',
     );
     expect(termsButton.className).toContain('px-6');
-    expect(termsButton.className).toContain('py-2.5');
+    expect(termsButton.className).toContain('h-9');
 
     fireEvent.click(termsButton);
     await waitFor(() => expect(openExternal).toHaveBeenCalledWith(LEGAL_LINKS.termsOfService));
