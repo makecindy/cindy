@@ -33,6 +33,11 @@ export interface LibraryBindingRecord {
   grantedAt: number;
   /** 每次重新绑定递增;迁移切换时原子写入。 */
   generation: number;
+  /**
+   * false = 授权后尚未成功建出 `<parent>/<ghostId>`。缺省/true = 已经建过,
+   * ghost 子目录 MISSING 时不得空库重建。旧文件无此字段按已建过处理。
+   */
+  libraryReady?: boolean;
 }
 
 export interface LibraryBindingFileData {
@@ -263,6 +268,7 @@ export class LibraryBindingStore {
         identity,
         grantedAt: this.now,
         generation: (prev?.generation ?? 0) + 1,
+        libraryReady: false,
       };
       data.bindings[ghostId] = record;
       await this.writeData(data);
@@ -284,6 +290,17 @@ export class LibraryBindingStore {
 
   getBinding(ghostId: string): Promise<LibraryBindingRecord | null> {
     return this.readData().then((d) => d.bindings[ghostId] ?? null);
+  }
+
+  /** First successful custom open: persist ready without bumping generation. */
+  async markLibraryReady(ghostId: string): Promise<void> {
+    await this.runSerialized(async () => {
+      const data = await this.readData();
+      const rec = data.bindings[ghostId];
+      if (!rec || rec.libraryReady === true) return;
+      data.bindings[ghostId] = { ...rec, libraryReady: true };
+      await this.writeData(data);
+    });
   }
 
   /**

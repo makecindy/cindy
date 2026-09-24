@@ -3586,7 +3586,10 @@ const st = await cindy.library({ op: 'status' });
 // 只读能力查询:资格审与 op 合法性之后、会话创建之前返回;不打开库、不弹窗
 const caps = await cindy.library({ op: 'capabilities' });
 // caps = { ok:true, op:'capabilities',
-//          capabilities:{ version:1, operations:['clipboardWrite','saveAs'] } }
+//          capabilities:{ version:1,
+//            operations:['clipboardWrite','saveAs','staging.begin',...],
+//            staging:{ version:1, maxTaskBytes, maxTotalBytes,
+//                      maxConcurrentWrites, maxChunkBytes, reserveBytes } } }
 // operations 只表示宿主实现了这些 op,不等于此刻有窗口 / 已授权 / 库可用
 
 // 文件操作(全 Family;写入原子化,大文件走分块流)
@@ -3633,6 +3636,18 @@ await cindy.library({ op: 'db.migrate', dbPath: 'canvas.sqlite', targetVersion: 
           { toVersion: 2, sql: ['CREATE TABLE v2 (a TEXT)'] }] });
 await cindy.library({ op: 'db.backup', dbPath: 'library.sqlite' });  // 宿主命名空间
 await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_check
+
+// 后台暂存(staging.*):独立于可迁移 Library 根,不是第二媒体库,不返回 imageRef。
+const up = await cindy.library({
+  op: 'staging.begin', taskId, sourceRevision, totalBytes, sha256, mime, recovery,
+});
+await cindy.library({ op: 'staging.chunk', stagingId: up.stagingId, seq: 1, content: b64, encoding: 'base64' });
+const receipt = await cindy.library({ op: 'staging.commit', stagingId: up.stagingId });
+// receipt.durable === true 才可当跨退出原件。release 带当前 Library ACK 的 bytes(不是 begin 的 totalBytes),且画布已保存后才调用。
+await cindy.library({
+  op: 'staging.release', stagingId: up.stagingId, path, sha256, bytes,
+  libraryIdentity, libraryGeneration,
+});
 \`\`\`
 
 关键语义(全部由宿主强制):
@@ -3649,6 +3664,7 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
   open/status 失败),非法请求=\`INVALID_REQUEST\`(含非法/越界 dbPath 与未知 op),
   取消=\`CANCELLED\`;成功 open/status 的 \`state:'unavailable'\` 仍用结果体 reason
   (如 disk-missing),不是失败 reason 枚举;查询/传输层本地分类 \`TIMEOUT\` / \`TRANSPORT_ERROR\`;
+- **staging.***:后台暂存,不是媒体库、不弹新 UI。\`staging.read\` 未传 length 默认 16MiB 分片;负数/NaN offset/length 是 \`PATH_INVALID\`。release 必须带当前 Library ACK 的 \`bytes\`(不是 begin 的 \`totalBytes\`),且只在画布保存后调用。父目录 fsync 失败不得 \`durable:true\`。
 - **capabilities**:先查 \`{ op:'capabilities' }\`。仅 \`version===1\` 且
   \`operations\` 为**全部字符串**的数组才有效;额外字段忽略,未知 operation 忽略,
   已知项保留;有效 v1 清单缺少某项才是 unsupported。缺字段、错类型(含数组内混入
