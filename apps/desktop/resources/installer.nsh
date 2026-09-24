@@ -69,6 +69,10 @@
       Pop $R0
       Pop $R1
     ${EndIf}
+    ${If} $R0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "Could not restore lock screen control after this upgrade. Run the installer as administrator and try again."
+      Abort
+    ${EndIf}
     cindy_remote_reprotect_done:
   ${EndIf}
   ; 注册文件夹右键菜单 "通过 <区域名> 打开" (与 main/folderContextMenu.ts 写的是同一组键)。

@@ -181,6 +181,10 @@ mod tests {
             "overlay upgrades must re-harden $INSTDIR after files are replaced"
         );
         assert!(install.contains("--elevate-reprotect"));
+        assert!(
+            install.find("--elevate-reprotect").unwrap() < install.find("Abort").unwrap(),
+            "a failed reprotect must abort the overlay upgrade"
+        );
         let run = include_str!("main.rs")
             .split("fn run()")
             .nth(1)
