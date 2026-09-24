@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -976,6 +977,7 @@ test("parseCliOptions rejects --tier without a value", () => {
 		workspaces: [],
 		excludeWorkspaces: [],
 		workspaceConcurrency: undefined,
+		lock: false,
 		noLock: false,
 		related: false,
 	});
@@ -999,6 +1001,7 @@ test("parseCliOptions supports workspace include and exclude selectors", () => {
 			workspaces: ["desktop", "apps/server", "@cindy/maker-core"],
 			excludeWorkspaces: ["packages/orca-workflow"],
 			workspaceConcurrency: undefined,
+			lock: false,
 			noLock: false,
 			related: false,
 		},
@@ -1037,7 +1040,9 @@ test("workspace concurrency defaults to a bounded CPU count and accepts both CLI
 		() => parseCliOptions(["--workspace-concurrency"]),
 		/requires a positive integer/,
 	);
+	assert.equal(parseCliOptions(["--lock"]).lock, true);
 	assert.equal(parseCliOptions(["--no-lock"]).noLock, true);
+	assert.throws(() => parseCliOptions(["--lock", "--no-lock"]), /cannot be combined/);
 	assert.equal(parseCliOptions(["--related"]).related, true);
 	assert.throws(
 		() => parseCliOptions(["--related", "--all"]),
@@ -1054,23 +1059,19 @@ test("unit CI shard arguments cover valid halves and reject malformed input", ()
 	}
 });
 
-test("test gate lock covers heavy local tiers but skips guard, CI, and explicit bypass", () => {
+test("cross-worktree locking is opt-in and CI never participates", () => {
 	for (const tier of ["unit", "db", "git-integration", "integration", "e2e"]) {
-		assert.equal(shouldUseTestGateLock({ tier, env: {} }), true);
+		assert.equal(shouldUseTestGateLock({ tier, env: {} }), false);
+		assert.equal(shouldUseTestGateLock({ tier, lock: true, env: {} }), true);
 	}
-	assert.equal(shouldUseTestGateLock({ all: true, env: {} }), true);
-	assert.equal(shouldUseTestGateLock({ tier: "guard", env: {} }), false);
-	assert.equal(
-		shouldUseTestGateLock({ tier: "unit", noLock: true, env: {} }),
-		false,
-	);
+	assert.equal(shouldUseTestGateLock({ all: true, env: {} }), false);
+	assert.equal(shouldUseTestGateLock({ all: true, lock: true, env: {} }), true);
+	assert.equal(shouldUseTestGateLock({ tier: "guard", lock: true, env: {} }), false);
+	assert.equal(shouldUseTestGateLock({ lock: true, noLock: true, env: {} }), false);
 	for (const env of [{ CI: "1" }, { CI: "true" }, { GITHUB_ACTIONS: "true" }]) {
-		assert.equal(shouldUseTestGateLock({ tier: "unit", env }), false);
+		assert.equal(shouldUseTestGateLock({ lock: true, env }), false);
 	}
-	assert.equal(
-		shouldUseTestGateLock({ tier: "unit", env: { CI: "false" } }),
-		true,
-	);
+	assert.equal(shouldUseTestGateLock({ lock: true, env: { CI: "false" } }), true);
 });
 
 test("test gate lock identity is stable per clone and normalizes Windows case", () => {
@@ -2218,4 +2219,70 @@ test("printSummary includes complete command line and skipped workspaces", () =>
 		output,
 		/SKIP apps\/heartbeat-server notApplicable: No tests yet/,
 	);
+});
+
+test("CLI runs independently while another worktree budget is held, and waits only with --lock", async () => {
+	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "test-lock-opt-in-")));
+	let heldLock;
+	try {
+		for (const dir of [".git", "scripts/shared", "packages/sample"]) {
+			fs.mkdirSync(path.join(root, dir), { recursive: true });
+		}
+		for (const file of ["test-workspaces.mjs", "test-related.mjs", "test-gate-lock.mjs", "shared/pnpm-invocation.mjs"]) {
+			fs.copyFileSync(path.join(ROOT, "scripts", file), path.join(root, "scripts", file));
+		}
+		fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), 'packages:\n  - "packages/*"\n');
+		fs.writeFileSync(path.join(root, "packages/sample/package.json"), '{"name":"sample"}');
+		fs.writeFileSync(path.join(root, "packages/sample/sample.test.js"), "// test fixture\n");
+		fs.writeFileSync(path.join(root, "scripts/test-workspaces.config.mjs"), `export default ${JSON.stringify({
+			workspaces: [{ name: "sample", cwd: "packages/sample", status: "required", tiers: {
+				unit: { status: "required", command: { type: "packageScript", script: "probe" } },
+			} }],
+		})};`);
+		const pnpmStub = path.join(root, "pnpm-probe.mjs");
+		fs.writeFileSync(pnpmStub, 'import assert from "node:assert/strict"; assert.ok(process.argv.includes("probe")); console.log("PROBE_EXECUTED");');
+		heldLock = await acquireTestGateLock({ repoRoot: root, owner: { pid: process.pid, tier: "unit", cwd: root } });
+		const run = (args, onOutput) => new Promise((resolve, reject) => {
+			const child = spawn(process.execPath, [path.join(root, "scripts/test-workspaces.mjs"), ...args], {
+				env: { ...process.env, CI: "false", GITHUB_ACTIONS: "false", npm_execpath: pnpmStub },
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+			let output = "";
+			let failure;
+			const timer = setTimeout(() => {
+				failure = new Error(`CLI did not finish: ${output}`);
+				child.kill();
+			}, 30_000);
+			for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => {
+				output += chunk.toString();
+				onOutput?.(output);
+			});
+			child.on("error", (error) => { clearTimeout(timer); reject(error); });
+			child.on("close", (code) => {
+				clearTimeout(timer);
+				if (failure) reject(failure);
+				else resolve({ code, output });
+			});
+		});
+		for (const args of [[], ["--no-lock"]]) {
+			const result = await run(args);
+			assert.equal(result.code, 0, result.output);
+			assert.match(result.output, /PASS packages\/sample unit/);
+			assert.doesNotMatch(result.output, /WAIT test gate/);
+		}
+		let releasePromise;
+		const queued = await run(["--lock"], (output) => {
+			if (output.includes("WAIT test gate") && !releasePromise) {
+				releasePromise = heldLock.release();
+				heldLock = undefined;
+			}
+		});
+		await releasePromise;
+		assert.equal(queued.code, 0, queued.output);
+		assert.match(queued.output, /WAIT test gate/);
+		assert.match(queued.output, /PASS packages\/sample unit/);
+	} finally {
+		await heldLock?.release();
+		fs.rmSync(root, { recursive: true, force: true });
+	}
 });

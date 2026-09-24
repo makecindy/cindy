@@ -3561,7 +3561,12 @@ export function BatchActionPill({
           disabled={!writeAction.canWrite || discardAllPending}
           disabledTooltip={!writeAction.canWrite ? writeAction.disabledTooltip : undefined}
           onClick={writeAction.onSectionDiscard}
-          className="pointer-events-auto border-transparent bg-transparent px-2 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          quiet
+          className={cn(
+            'pointer-events-auto',
+            iconOnly &&
+              'border-transparent bg-transparent px-2 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+          )}
           iconOnly={iconOnly}
         />
       )}
@@ -3573,7 +3578,12 @@ export function BatchActionPill({
           disabled={!writeAction.canWrite || allPending}
           disabledTooltip={!writeAction.canWrite ? writeAction.disabledTooltip : undefined}
           onClick={writeAction.onSectionAction}
-          className="pointer-events-auto border-transparent bg-transparent px-2 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          quiet
+          className={cn(
+            'pointer-events-auto',
+            iconOnly &&
+              'border-transparent bg-transparent px-2 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+          )}
           iconOnly={iconOnly}
         />
       )}
@@ -4304,6 +4314,7 @@ function ActionButton({
   onClick,
   className,
   iconOnly = false,
+  quiet = false,
 }: {
   label: string;
   icon: ReactNode;
@@ -4313,6 +4324,7 @@ function ActionButton({
   onClick: () => void;
   className?: string;
   iconOnly?: boolean;
+  quiet?: boolean;
 }) {
   const button = iconOnly ? (
     <button
@@ -4335,6 +4347,7 @@ function ActionButton({
   ) : (
     <Button
       variant="secondary"
+      tone={quiet ? 'quiet' : 'default'}
       size="xs"
       compact
       loading={pending}

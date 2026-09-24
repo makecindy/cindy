@@ -11,7 +11,6 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Globe, Lock, Users, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSkillhubIdentityPolicy } from '../hooks/useSkillhubIdentityPolicy';

@@ -91,11 +91,6 @@ export function OAuthDeviceCodeCard({
                     toast.error(t('settings.providers.wizard.verificationPageOpenFailed')),
                   );
               }}
-              className="flex h-8 items-center gap-1.5 rounded-full border px-3 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-              style={{
-                borderColor: 'var(--settings-btn-secondary-border)',
-                color: 'var(--settings-btn-secondary-text)',
-              }}
             >
               <ExternalLink size={13} />
               {t('settings.providers.wizard.openVerificationPage')}

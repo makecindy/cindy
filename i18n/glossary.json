@@ -2228,6 +2228,18 @@
       },
       "checkCase": false,
       "note": "远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。"
+    },
+    {
+      "id": "invitation-code",
+      "status": "proposed",
+      "en": "Invitation Code",
+      "translations": {
+        "zh-CN": "邀请码",
+        "zh-TW": "邀請碼",
+        "ja": "招待コード",
+        "ko": "초대 코드"
+      },
+      "note": "共享任务加入表单中由房主提供、访客输入的代码；用户要求明确称为邀请码，避免被理解为任意邀请文本。"
     }
   ]
 }

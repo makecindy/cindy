@@ -65,7 +65,6 @@ import {
 import { resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { installGhostFromFile, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
-import { Spinner } from '@/components/ui/spinner';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
@@ -2141,12 +2140,11 @@ export function MarketPluginCard({
             aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
             className="relative z-[1] min-w-[72px] shrink-0"
           >
-            {!pending &&
-              t(
-                item.installState === 'conflict'
-                  ? 'settings.ghosts.market.replace'
-                  : 'settings.ghosts.market.install',
-              )}
+            {t(
+              item.installState === 'conflict'
+                ? 'settings.ghosts.market.replace'
+                : 'settings.ghosts.market.install',
+            )}
           </Button>
         ) : null}
       </div>
@@ -2378,6 +2376,7 @@ export function GhostPluginCard({
               variant="secondary"
               size="sm"
               compact
+              loading={updatePending}
               type="button"
               onClick={stopAnd(onUpdate)}
               disabled={updateBusy}
@@ -2386,21 +2385,10 @@ export function GhostPluginCard({
                 name: item.name,
                 version: updateVersion,
               })}
-              className={cn(
-                'inline-flex h-7 min-w-[72px] items-center justify-center gap-1 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 text-11 font-medium text-[var(--text-primary)]',
-                'transition-colors duration-150 hover:bg-[var(--surface-hover-soft)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                'disabled:cursor-wait disabled:opacity-40',
-              )}
+              className="min-w-[72px]"
             >
-              {updatePending ? (
-                <Spinner size={12} />
-              ) : (
-                <>
-                  <ArrowUp size={11} className="text-[var(--text-secondary)]" aria-hidden="true" />
-                  {t('settings.ghosts.page.updateTo', { version: updateVersion })}
-                </>
-              )}
+              <ArrowUp size={11} className="text-[var(--text-secondary)]" aria-hidden="true" />
+              {t('settings.ghosts.page.updateTo', { version: updateVersion })}
             </Button>
           ) : null}
           <button

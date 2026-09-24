@@ -20,7 +20,6 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X, Copy, Key, KeyRound, Lock, Plus, Server, CheckCircle2, Circle, Unlock, Eye, EyeOff, AlertTriangle } from 'lucide-react';
 
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';

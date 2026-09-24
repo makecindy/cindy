@@ -88,8 +88,7 @@
 }
 
 .resource-usage-sort-button:focus-visible,
-.resource-usage-row:focus-visible,
-.resource-usage-terminate:focus-visible {
+.resource-usage-row:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--focus-ring);
 }
@@ -234,31 +233,6 @@
   line-height: 1.636364;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.resource-usage-terminate {
-  display: inline-flex;
-  min-height: 30px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-default);
-  border-radius: 9999px;
-  background: var(--surface-elevated);
-  padding: 0 12px;
-  color: var(--text-primary);
-  font-size: var(--text-12);
-  font-weight: 500;
-  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
-}
-
-.resource-usage-terminate:hover:not(:disabled) {
-  background: var(--surface-hover);
-}
-
-.resource-usage-terminate:disabled {
-  cursor: default;
-  opacity: 0.4;
 }
 
 @container resource-usage (max-width: 359px) {

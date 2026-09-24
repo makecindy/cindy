@@ -8,7 +8,6 @@ import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import { cn } from '@/lib/utils';
 import {
   BOT_MODEL_CHAIN_MAX,
   type BotHarness,

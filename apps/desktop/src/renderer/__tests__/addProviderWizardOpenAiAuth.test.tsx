@@ -192,6 +192,23 @@ afterEach(() => {
 });
 
 describe('AddProviderWizard — OpenAI 授权边界', () => {
+  it('keeps the inline cancel action named and enabled during authorization', async () => {
+    let finish!: (value: unknown) => void;
+    triggerLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    cancelLogin.mockResolvedValue({});
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[OPENAI_PROVIDER]}
+      entry={{ kind: 'builtin', providerId: 'openai' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(await screen.findByText('settings.providers.openai.useLocalAccount'));
+    const cancel = await screen.findByRole('button', { name: 'settings.providers.button.cancel' });
+    expect((cancel as HTMLButtonElement).disabled).toBe(false);
+    expect(cancel.getAttribute('aria-busy')).toBeNull();
+    fireEvent.click(cancel);
+    expect(cancelLogin).toHaveBeenCalledOnce();
+    await act(async () => { finish({ ok: false, authenticated: false }); });
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
   it.each(['openai', 'anthropic'].flatMap(id => ['cancel', 'unmount'].map(exit => ({ id, exit }))))('discards local $id completion after $exit', async ({ id, exit }) => {
     let finish!: (value: unknown) => void;
     triggerLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));

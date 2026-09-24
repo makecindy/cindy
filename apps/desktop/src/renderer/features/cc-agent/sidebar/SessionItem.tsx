@@ -253,7 +253,7 @@ export function SidebarTitleMarquee({ children, className, title }: SidebarTitle
 }
 
 export interface SessionItemProps {
-  /** Shared-group entries reuse the presentation without task-management actions or selection. */
+  /** Shared guests retain navigation and the leave-sharing menu, without owner actions or selection. */
   navigationOnly?: boolean;
   /** Shared-group identity mark. Only owners show a crown; joined tasks match ordinary rows. */
   sharedTaskRole?: 'owned' | 'joined';
@@ -366,6 +366,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   // 非按住态恒为 null,不惊动 memo。
   const ordinalBadge = useSessionOrdinalBadge(session.id);
   const ordinalBadgeLabel = navigationOnly ? null : ordinalBadge;
+  const canOpenTaskMenu = !navigationOnly || isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
   // 取 userSendAt 与 updatedAt 中较新的值，兼容存量 DB 行（旧版只写 userSendAt），
@@ -966,8 +967,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         }
         e.preventDefault();
         e.stopPropagation();
-        if (navigationOnly) return;
-        prefetchRemovalPreflight();
+        if (!canOpenTaskMenu) return;
+        if (!navigationOnly) prefetchRemovalPreflight();
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
       className={cn(
@@ -1259,7 +1260,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
       {/* 右键菜单：与 ProjectNode 同款 coordinate-anchored DropdownMenu —
           隐形 fixed-position trigger 锚定到 onContextMenu 捕获的鼠标坐标，
           Radix 自动处理打开/关闭、ESC、点外面关闭等行为。 */}
-      {!navigationOnly && !isEditing && (
+      {canOpenTaskMenu && !isEditing && (
         <DropdownMenu
           open={menuPos !== null}
           onOpenChange={(open) => {

@@ -25,14 +25,6 @@ const CARD_CLASS = cn(
   'border border-[var(--settings-theme-card-border)]',
 );
 
-const ACTION_CLASS = cn(
-  'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-12 font-medium',
-  'border border-[var(--settings-theme-card-border)]',
-  'text-[var(--settings-section-sublabel)] transition-colors hover:bg-sidebar-item-hover',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-  'disabled:cursor-not-allowed disabled:opacity-50',
-);
-
 const ICON_ACTION_CLASS = cn(
   'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
   'text-[var(--settings-section-desc)] transition-colors hover:bg-sidebar-item-hover',

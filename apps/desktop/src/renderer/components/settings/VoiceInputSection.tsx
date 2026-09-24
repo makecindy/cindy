@@ -2162,12 +2162,6 @@ export function VoiceInputSection() {
                     }
                     setCustomDictionaryExpanded(!customDictionaryExpanded);
                   }}
-                  className={cn(
-                    'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-12 font-medium transition-colors',
-                    'border border-[var(--settings-btn-secondary-border)]',
-                    'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
-                    'hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                  )}
                 >
                   <span>
                     {t(
