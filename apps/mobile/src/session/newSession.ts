@@ -5,7 +5,11 @@ import {
   deriveOptimisticSessionTitle,
 } from '@cindy/maker-shared/session-title';
 import { i18n } from '@/i18n';
-import type { CreateSessionOptions, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
+import type {
+  CreateSessionOptions,
+  RemoteDirectoryDrive,
+  RemoteDirectoryEntry,
+} from '@/device-link/mobileMakerTransport';
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import type { MobileModelOption } from './agentCapabilities';
 import { effectiveSourceIdForModel } from '@cindy/model-providers/registry';
@@ -280,6 +284,24 @@ export function filterRemoteDirectoryEntries(
 ): readonly RemoteDirectoryEntry[] {
   if (showHiddenDirectories) return entries;
   return entries.filter((entry) => !entry.name.startsWith('.'));
+}
+
+/**
+ * 远端目录浏览的盘符切换项(Windows 被控端 fs:list-dir 的可选 `drives`)。旧被控端缺省、
+ * 字段畸形或只有一个盘时返回空数组——没有可切换的目标就不显示盘符切换。
+ */
+export function normalizeRemoteDirectoryDrives(value: unknown): RemoteDirectoryDrive[] {
+  if (!Array.isArray(value)) return [];
+  const drives: RemoteDirectoryDrive[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const { name, path, current } = item as Record<string, unknown>;
+    if (typeof path !== 'string' || !path || seen.has(path)) continue;
+    seen.add(path);
+    drives.push({ name: typeof name === 'string' && name ? name : path, path, current: current === true });
+  }
+  return drives.length > 1 ? drives : [];
 }
 
 export function buildRecentWorkspaceOptions(

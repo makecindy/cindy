@@ -197,10 +197,19 @@ export interface RemoteDirectoryEntry {
   path: string;
 }
 
+/** Windows 被控端的盘符(fs:list-dir 可选回传);path 为 host-native 根路径,直接用于导航。 */
+export interface RemoteDirectoryDrive {
+  name: string;
+  path: string;
+  current: boolean;
+}
+
 export interface RemoteDirectoryListResult {
   resolvedPath: string;
   entries: RemoteDirectoryEntry[];
   parent: string | null;
+  /** 仅 Windows 新版被控端回传;旧被控端缺省时不显示盘符切换。 */
+  drives?: RemoteDirectoryDrive[];
 }
 
 export interface RemotePathStatResult {

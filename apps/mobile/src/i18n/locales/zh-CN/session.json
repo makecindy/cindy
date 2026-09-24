@@ -318,6 +318,8 @@
     "readingRemoteDir": "正在读取远程目录…",
     "goParentDir": "返回上级目录",
     "parentDir": "上级",
+    "drive": "盘符",
+    "switchToDrive": "切换到 {{name}}",
     "useCurrentRemoteDir": "使用当前远程目录",
     "useCurrent": "使用当前",
     "firstMessagePlaceholder": "输入首条消息",

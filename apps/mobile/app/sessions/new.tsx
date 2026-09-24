@@ -71,6 +71,7 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import type {
   MobileAtResourceItem,
   MobileSlashCommand,
+  RemoteDirectoryDrive,
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
 import { describeAgentAuthError, formatRemoteError, humanizeRemoteError } from '@/device-link/remoteStatus';
@@ -162,6 +163,7 @@ import {
   buildRemoteCreateSessionOptions,
   buildRecentWorkspaceOptions,
   filterRemoteDirectoryEntries,
+  normalizeRemoteDirectoryDrives,
   normalizeCreateSessionResult,
   isNewSessionDraftMissingPayloadOnly,
   parseNewSessionDeviceOptions,
@@ -533,6 +535,8 @@ export default function NewRemoteSessionScreen() {
   const [browsePath, setBrowsePath] = useState('');
   const [browseParent, setBrowseParent] = useState<string | null>(null);
   const [browseEntries, setBrowseEntries] = useState<RemoteDirectoryEntry[]>([]);
+  // Windows 被控端的盘符切换项;读取失败时保留上一次的值,切到读不了的盘(空光驱)后还能切回。
+  const [browseDrives, setBrowseDrives] = useState<RemoteDirectoryDrive[]>([]);
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
   const [showHiddenDirectories, setShowHiddenDirectories] = useState(false);
@@ -1802,6 +1806,7 @@ export default function NewRemoteSessionScreen() {
     setBrowsePath('');
     setBrowseParent(null);
     setBrowseEntries([]);
+    setBrowseDrives([]);
     setBrowseError(null);
     setContextSheetOpen(false);
     // 切换电脑丢弃草稿附件前 best-effort 回收已上传的中转对象(codex review #504)。
@@ -2261,6 +2266,7 @@ export default function NewRemoteSessionScreen() {
       setBrowsePath(result.resolvedPath);
       setBrowseParent(result.parent);
       setBrowseEntries(result.entries);
+      setBrowseDrives(normalizeRemoteDirectoryDrives(result.drives));
     } catch (err) {
       if (seq !== browseSeqRef.current) return;
       setBrowseEntries([]);
@@ -5788,6 +5794,39 @@ export default function NewRemoteSessionScreen() {
                     <Text style={styles.browseActionText}>{t('session.new.useCurrent')}</Text>
                   </Pressable>
                 </View>
+                {browseDrives.length > 0 ? (
+                  <View style={styles.browseDriveRow} testID="newSession.remoteBrowseDrives">
+                    <Text style={styles.browseDriveLabel}>{t('session.new.drive')}</Text>
+                    <ScrollView
+                      horizontal
+                      contentContainerStyle={styles.browseDriveOptions}
+                      keyboardShouldPersistTaps="handled"
+                      showsHorizontalScrollIndicator={false}
+                    >
+                      {browseDrives.map((drive) => (
+                        <Pressable
+                          accessibilityLabel={t('session.new.switchToDrive', { name: drive.name })}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: drive.current, disabled: browseLoading || drive.current }}
+                          disabled={browseLoading || drive.current}
+                          key={drive.path}
+                          onPress={() => void loadBrowsePath(drive.path)}
+                          style={({ pressed }) => [
+                            styles.browseActionButton,
+                            drive.current && styles.browseDriveCurrent,
+                            browseLoading && !drive.current && styles.disabled,
+                            pressed && styles.pressed,
+                          ]}
+                          testID="newSession.remoteBrowseDriveOption"
+                        >
+                          <Text style={[styles.browseActionText, drive.current && styles.browseDriveCurrentText]}>
+                            {drive.name}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  </View>
+                ) : null}
                 <Pressable
                   accessibilityLabel={newSessionText('showHiddenDirectories')}
                   accessibilityRole="checkbox"
@@ -6182,6 +6221,7 @@ export default function NewRemoteSessionScreen() {
         workingDir={draft.workingDir}
         path={browsePath}
         parent={browseParent}
+        drives={browseDrives}
         entries={visibleBrowseEntries}
         loading={browseLoading}
         error={browseError}
@@ -6828,6 +6868,27 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     fontSize: typeScale.caption,
     fontWeight: fontWeight.medium,
+  },
+  browseDriveRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  browseDriveLabel: {
+    color: colors.textSecondary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+  },
+  browseDriveOptions: {
+    gap: spacing.sm,
+  },
+  // 当前盘用实心 cta 底色(与 browseCheckboxChecked 同色),浅色 / 深色都能一眼认出。
+  browseDriveCurrent: {
+    backgroundColor: colors.cta,
+    borderColor: colors.cta,
+  },
+  browseDriveCurrentText: {
+    color: colors.ctaText,
   },
   browseHiddenToggle: {
     alignItems: 'center',

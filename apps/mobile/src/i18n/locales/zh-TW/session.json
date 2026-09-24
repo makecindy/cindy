@@ -322,6 +322,8 @@
     "readingRemoteDir": "正在讀取遠端目錄…",
     "goParentDir": "返回上級目錄",
     "parentDir": "上級",
+    "drive": "磁碟機",
+    "switchToDrive": "切換到 {{name}}",
     "useCurrentRemoteDir": "使用當前遠端目錄",
     "useCurrent": "使用當前",
     "firstMessagePlaceholder": "輸入首條訊息",

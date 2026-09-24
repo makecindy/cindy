@@ -12,6 +12,7 @@ import {
   buildRecentWorkspaceOptions,
   buildRemoteCreateSessionOptions,
   filterRemoteDirectoryEntries,
+  normalizeRemoteDirectoryDrives,
   defaultPermissionModeForNewSessionAgent,
   normalizeCreateSessionResult,
   parseNewSessionDeviceOptions,
@@ -1056,6 +1057,25 @@ describe('new session model', () => {
 
     expect(filterRemoteDirectoryEntries(entries, false).map((entry) => entry.name)).toEqual(['Code']);
     expect(filterRemoteDirectoryEntries(entries, true)).toEqual(entries);
+  });
+
+  it('normalizes Windows drive options from fs:list-dir and hides the switch without a second drive', () => {
+    // 盘符根是被控端 host-native 的 Windows wire 格式,固定写反斜杠。
+    expect(normalizeRemoteDirectoryDrives([
+      { name: 'C:', path: 'C:\\', current: false },
+      { name: 'D:', path: 'D:\\', current: true },
+      { path: 'E:\\' },
+      { name: 'dup', path: 'D:\\', current: false },
+      { name: 'bad' },
+      null,
+    ])).toEqual([
+      { name: 'C:', path: 'C:\\', current: false },
+      { name: 'D:', path: 'D:\\', current: true },
+      { name: 'E:\\', path: 'E:\\', current: false },
+    ]);
+    expect(normalizeRemoteDirectoryDrives([{ name: 'C:', path: 'C:\\', current: true }])).toEqual([]);
+    expect(normalizeRemoteDirectoryDrives(undefined)).toEqual([]);
+    expect(normalizeRemoteDirectoryDrives('C:')).toEqual([]);
   });
 
   it('builds device-link create-session args with desktop remote-project semantics', () => {

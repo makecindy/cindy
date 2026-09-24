@@ -7,7 +7,9 @@
  *     在**被控端**进程执行 —— 被控端 = host,数据真相在它本地 FS。
  *
  * 能力面(只读 + mkdir -p):
- *   - fs:list-dir   列子目录(含 hidden,对齐 SSH `ls -A`;不含文件)
+ *   - fs:list-dir   列子目录(含 hidden,对齐 SSH `ls -A`;不含文件)。Windows 被控端额外回
+ *                   可选 `drives`(盘符列表 + 当前盘),供控制端切到其它盘;旧被控端不回,
+ *                   控制端不显示切换,旧控制端忽略该字段。
  *   - fs:stat-path  判断路径是 dir / file / missing
  *   - fs:mkdir-p    幂等创建目录(用户输入一个尚不存在的项目路径时)
  * **不**提供文件读/写/删/exec —— 仅项目目录选择所需的最小面(allowlist 注释同款理由)。
@@ -25,6 +27,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { throwIpcError, requireObject, requireString } from '../utils/ipcValidate.js';
+import { buildDriveOptions, listWindowsDriveRoots, type FsBrowseDrive } from './windowsDrives.js';
+
+export type { FsBrowseDrive } from './windowsDrives.js';
 
 export interface FsBrowseEntry {
   name: string;
@@ -37,6 +42,12 @@ export interface FsListDirResult {
   entries: FsBrowseEntry[];
   /** host-native 上级目录;已在根则 null。 */
   parent: string | null;
+  /** 仅 Windows:本机盘符(含当前盘标记)。盘符枚举失败或超出等待预算时省略。 */
+  drives?: FsBrowseDrive[];
+}
+export interface FsListDirDeps {
+  platform?: NodeJS.Platform;
+  listDriveRoots?: () => Promise<string[]>;
 }
 export interface FsStatResult {
   kind: 'dir' | 'file' | 'missing';
@@ -66,9 +77,31 @@ export function expandHome(input: string): string {
   return path.resolve(home, raw);
 }
 
+/**
+ * 盘符列表最多等这么久:首次枚举要起 PowerShell,不能拖慢目录打开;超时就先不带盘符返回,
+ * 枚举在后台继续并写入缓存,下一次列目录即可带上。
+ */
+const DRIVE_LIST_WAIT_MS = 1_500;
+
+async function waitForDriveRoots(listDriveRoots: () => Promise<string[]>): Promise<string[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<string[]>((resolve) => {
+    timer = setTimeout(() => resolve([]), DRIVE_LIST_WAIT_MS);
+  });
+  try {
+    return await Promise.race([listDriveRoots().catch(() => []), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** 列出目录下的**子目录**(含 hidden,对齐 SSH `ls -A`;文件不列)。每项带 host-native 绝对路径。 */
-export async function listDir(rawPath: string): Promise<FsListDirResult> {
+export async function listDir(rawPath: string, deps: FsListDirDeps = {}): Promise<FsListDirResult> {
   const resolvedPath = expandHome(rawPath);
+  // 与 readdir 并行;该 promise 永不 reject,readdir 失败提前抛出也不会留下未处理的拒绝。
+  const driveRoots = (deps.platform ?? process.platform) === 'win32'
+    ? waitForDriveRoots(deps.listDriveRoots ?? listWindowsDriveRoots)
+    : null;
   let dirents: Dirent[];
   try {
     // encoding:'utf8' 固定到 name:string 的重载(否则 readdir 返回 string|Buffer 名联合)。
@@ -93,7 +126,10 @@ export async function listDir(rawPath: string): Promise<FsListDirResult> {
   }
   entries.sort((a, b) => a.name.localeCompare(b.name));
   const parent = path.dirname(resolvedPath);
-  return { resolvedPath, entries, parent: parent === resolvedPath ? null : parent };
+  const result: FsListDirResult = { resolvedPath, entries, parent: parent === resolvedPath ? null : parent };
+  const roots = driveRoots ? await driveRoots : [];
+  if (roots.length > 0) result.drives = buildDriveOptions(roots, resolvedPath);
+  return result;
 }
 
 /** 判断路径状态:dir / file / missing(missing 用于「输入了不存在的新项目目录」分支)。 */
