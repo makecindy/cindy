@@ -176,6 +176,20 @@ describe('new model generation defaults', () => {
     }
   });
 
+  it('clears inherited image input after text-only discovery without changing predecessor or output modalities', () => {
+    const source: ProviderRuntimeModelConfig = { id: 'private-6-sol', name: 'Old', discoveredMetadata: {
+      modalities: { input: ['text', 'image'], output: ['text', 'image'] }, supportsImageInput: true,
+    } };
+    const provider = build([source, ...discovered('private-7-sol', { input_modalities: ['text'] })]);
+    for (const agent of ['codex', 'pi', 'claude-code'] as const) {
+      expect(provider.models[agent]![1]).toMatchObject({ supportsImageInput: false,
+        modalities: { input: ['text'], output: ['text', 'image'] } });
+      expect(provider.models[agent]![0]).toMatchObject({ supportsImageInput: true,
+        modalities: { input: ['text', 'image'], output: ['text', 'image'] } });
+    }
+    expect(source.discoveredMetadata?.modalities?.input).toEqual(['text', 'image']);
+  });
+
   it('drops only inherited capacity when the target declares a larger working window', () => {
     for (const ownMax of [undefined, 256000]) {
       const provider = build([

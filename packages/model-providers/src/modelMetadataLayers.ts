@@ -122,7 +122,21 @@ export function pickModelMetadata(value: object | undefined): ModelMetadata {
 export function mergeModelMetadata(
   ...layers: (ModelMetadata | undefined)[]
 ): ModelMetadata {
-  return Object.assign({}, ...layers.map(pickModelMetadata));
+  const result: ModelMetadata = {};
+  for (const layer of layers) {
+    const fields = pickModelMetadata(layer);
+    Object.assign(result, fields);
+    // An explicit image-input denial supersedes lower-priority input modalities.
+    // Do not mutate the source catalog or discard unrelated output capabilities.
+    if (fields.supportsImageInput === false && fields.modalities === undefined &&
+        result.modalities?.input.includes('image')) {
+      result.modalities = {
+        ...result.modalities,
+        input: result.modalities.input.filter((modality) => modality !== 'image'),
+      };
+    }
+  }
+  return result;
 }
 export function findBaseModel(
   registry: ModelRegistry | undefined,
