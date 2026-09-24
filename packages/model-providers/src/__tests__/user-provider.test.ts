@@ -307,6 +307,49 @@ describe("buildUserProvider (per-runtime)", () => {
   });
 
   it.each(["claude-code", "codex", "pi"] as const)(
+    "%s inherits GPT-6 Sol/Luna reasoning for an unknown custom supplier",
+    (agent) => {
+      for (const id of ["gpt-6-sol", "gpt-6-luna", "openai/gpt-6-sol", "openai/gpt-6-luna"]) {
+        const config: CustomProviderConfig = {
+          id: "custom-xdtai",
+          name: "XDTAI",
+          runtimes: {
+            [agent]: {
+              baseUrl: "https://custom.example/v1",
+              models: [{ id, name: id, discoveredMetadata: { supportsImageInput: true } }],
+            },
+          },
+        };
+        const before = structuredClone(config);
+        const oldRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+        oldRegistry.baseModels = oldRegistry.baseModels?.filter(
+          (model) => !["openai/gpt-6-sol", "openai/gpt-6-luna"].includes(model.id),
+        );
+        oldRegistry.models = oldRegistry.models.filter(
+          (model) => !["openai/gpt-6-sol", "openai/gpt-6-luna"].includes(model.modelRef ?? model.id),
+        );
+        expect(buildUserProvider(config, { modelRegistry: oldRegistry }).models[agent]?.[0])
+          .toMatchObject({ efforts: [], defaultEffort: null });
+        const provider = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+        expect(provider.models[agent]?.[0]).toMatchObject({
+          id,
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          defaultEffort: "medium",
+        });
+        expect(provider.routing[agent]?.upstream).toBe("https://custom.example/v1");
+        expect(config).toEqual(before);
+        const stored = config.runtimes[agent]!.models[0];
+        stored.discoveredMetadata = { efforts: ["low", "high"] };
+        expect(buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry }).models[agent]?.[0])
+          .toMatchObject({ efforts: ["low", "high"], defaultEffort: "low" });
+        stored.reasoning = false;
+        expect(buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry }).models[agent]?.[0])
+          .toMatchObject({ efforts: [], defaultEffort: null });
+      }
+    },
+  );
+
+  it.each(["claude-code", "codex", "pi"] as const)(
     "%s leaves unknown reasoning unspecified and preserves declared capabilities",
     (agent) => {
       for (const modelRegistry of [

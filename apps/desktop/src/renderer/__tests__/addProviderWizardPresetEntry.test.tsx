@@ -1347,3 +1347,32 @@ it('keeps legacy curated recommendations selected and newly discovered models un
   const models = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi!.models;
   expect(models.filter(model => model.defaultEnabled !== false).map(model => model.id)).toEqual(['recommended']);
 });
+
+it('sets up Sub2API from one site address and retains discovered capabilities in all engines', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'sub2api')!;
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset] }));
+  const models = parseModelsListResponse({ models: [{ slug: 'private-sol', display_name: 'Private Sol',
+    supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }], default_reasoning_level: 'high',
+    context_window: 272000, max_context_window: 1050000,
+    input_modalities: ['text', 'image'], service_tiers: [{ id: 'priority' }],
+  }] })!;
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models }));
+  vi.mocked(createCustomProvider).mockResolvedValue({ ok: true });
+  renderWizard('sub2api');
+  await screen.findByDisplayValue('Sub2API');
+  fireEvent.change(screen.getAllByDisplayValue('https://{endpoint}/v1')[0], { target: { value: 'https://relay.example/team' } });
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  fireEvent.click(await screen.findByText('Private Sol'));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    const rt = config.runtimes[agent]!;
+    expect(rt.baseUrl).toBe('https://relay.example/team/v1');
+    expect(rt.modelsUrl).toBe('https://relay.example/team/v1/models?client_version=0.147.0');
+    expect(rt.catalogPresetId).toBe('sub2api');
+    expect(rt.models[0].discoveredMetadata).toMatchObject({ efforts: ['low', 'high'],
+      contextWindow: 272000, contextWindowMax: 1050000, supportsFastMode: true, supportsImageInput: true });
+  }
+});

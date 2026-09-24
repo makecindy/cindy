@@ -18,13 +18,16 @@ export function createClaudeProviderBridge(options: {
   protocol: 'openai-chat' | 'openai-responses';
   headers: Readonly<Record<string, string>>;
   efforts: readonly Effort[];
+  supportsFastMode?: boolean;
   capabilities?: ChatBridgeCapabilities;
   model?: ProviderModelRecord;
   providerId?: string;
   nativeUpstream?: string;
   fetchImpl: typeof fetch;
 }): ResponsesBridgeHandler {
-  const nativeFetch = options.model ? createPiProviderFetch({ row: options.model,
+  const nativeFetch = options.model ? createPiProviderFetch({ row: {
+    ...options.model, supportsFastMode: options.supportsFastMode ?? options.model.supportsFastMode,
+  },
     providerId: options.providerId ?? 'custom',
     upstream: options.nativeUpstream,
     apiKey: nativeBridgeApiKey(options.headers),
@@ -42,7 +45,10 @@ export function createClaudeProviderBridge(options: {
     }
     if (nativeFetch) return nativeFetch(_url, init);
     if (options.protocol === 'openai-responses') return options.fetchImpl(options.url, init);
-    const translated = translateResponsesRequestWithContext(responses, { capabilities: options.capabilities });
+    const translated = translateResponsesRequestWithContext(responses, { capabilities: {
+      ...options.capabilities,
+      ...(options.supportsFastMode ? { passthroughFields: [...(options.capabilities?.passthroughFields ?? []), 'service_tier'] } : {}),
+    } });
     const upstream = await options.fetchImpl(options.url, { ...init, body: JSON.stringify(normalizeProviderRequest(translated.request, { harness: 'claude-code', protocol: 'openai-chat', upstreamBase: options.url, model: responses.model }, { reasoningEffortAlreadyMapped: true })) });
     if (!upstream.ok || !upstream.body) return upstream;
     const translator = new ChatSseTranslator(responses.model, { toolContext: translated.toolContext });
@@ -107,6 +113,7 @@ export function createClaudeProviderBridge(options: {
       maxOutputTokensSupported: true,
       supportsReasoning: () => options.efforts.length > 0,
       supportedReasoningEfforts: () => options.efforts,
+      ...(options.supportsFastMode ? { fastServiceTier: 'priority' } : {}),
     }],
     fetchImpl: upstreamFetch,
   });

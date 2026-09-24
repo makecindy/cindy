@@ -1401,13 +1401,14 @@ export function buildPiNativeProvidersFromConfigs(
           m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : undefined;
         const spec = {
           id: m.id,
+          ...(resolved?.supportsFastMode !== undefined ? { supportsFastMode: resolved.supportsFastMode } : {}),
           ...(m.api || m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
           ...(authMethod === 'oauth'
             ? { baseUrl: oauthProxyEndpoint! }
             : modelBaseUrl && modelBaseUrl !== rt.baseUrl ? { baseUrl: modelBaseUrl } : {}),
           name: m.name ?? bundledModel?.name,
           // 下发文件明确写出的上下文优先；本地 Pi 目录只补缺失值。
-          contextWindow: m.contextWindow ?? bundledModel?.contextWindow,
+          contextWindow: resolved?.contextWindowMax ?? m.contextWindow ?? bundledModel?.contextWindow,
           ...(resolved?.maxOutput !== undefined || bundledModel?.maxTokens !== undefined
             ? { maxTokens: resolved?.maxOutput ?? bundledModel?.maxTokens } : {}),
           ...(m.supportsImageInput !== undefined

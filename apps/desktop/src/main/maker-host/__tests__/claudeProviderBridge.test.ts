@@ -12,6 +12,7 @@ async function runBridge(
   onRequest: (url: string, init?: RequestInit) => void,
   extras: Partial<Parameters<typeof createClaudeProviderBridge>[0]> = {},
   effort = 'high',
+  fast = false,
 ) {
   const handler = createClaudeProviderBridge({
     url: `https://supplier.example/v1/${protocol === 'openai-chat' ? 'chat/completions' : 'responses'}`,
@@ -29,7 +30,7 @@ async function runBridge(
     req.on('end', () => {
       void handler.handle({ parsedBody: JSON.parse(Buffer.concat(chunks).toString()),
         ctx: { reqId: 1, method: 'POST', url: req.url!, headers: {} }, res,
-        prefs: { reasoningEffort: effort },
+        prefs: { reasoningEffort: effort, fast },
       }).catch(() => { res.statusCode = 500; res.end(); });
     });
   });
@@ -101,4 +102,14 @@ describe('Claude Code custom provider translation', () => {
     expect(claudeProviderReasoningNamespace(url, 'custom:openrouter-a'))
       .not.toBe(claudeProviderReasoningNamespace(url));
   });
+});
+
+
+it.each(['openai-chat', 'openai-responses'] as const)('sends Fast only when enabled and supported on %s', async protocol => {
+  for (const supported of [true, false, undefined]) for (const fast of [true, false]) {
+    let body: Record<string, unknown> | undefined;
+    await runBridge(protocol, true, chatStream, (_url, init) => { body = JSON.parse(String(init?.body)); },
+      { supportsFastMode: supported }, 'high', fast);
+    expect(body?.service_tier).toBe(supported && fast ? 'priority' : undefined);
+  }
 });

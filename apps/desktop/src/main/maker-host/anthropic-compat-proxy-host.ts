@@ -156,6 +156,7 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
     const handler = createClaudeProviderBridge({
       url: `${base.replace(/\/+$/, '')}/${requestPath.replace(/^\/+/, '')}`,
       protocol, headers: route.headerOverride ?? {}, efforts: model.efforts,
+      supportsFastMode: model.supportsFastMode === true,
       providerId: provider.id,
       ...(row && (protocol === 'openai-chat' || model.api) ? { model: row, nativeUpstream: base } : {}),
       capabilities: {

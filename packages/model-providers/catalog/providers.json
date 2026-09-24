@@ -425,6 +425,34 @@
   ],
   "presets": [
     {
+      "id": "sub2api",
+      "name": "Sub2API",
+      "docsUrl": "https://github.com/Wei-Shaw/sub2api",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://{endpoint}/v1",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-responses",
+          "modelsUrl": "https://{endpoint}/v1/models?client_version=0.147.0",
+          "models": []
+        },
+        "codex": {
+          "baseUrl": "https://{endpoint}/v1",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-responses",
+          "modelsUrl": "https://{endpoint}/v1/models?client_version=0.147.0",
+          "models": []
+        },
+        "pi": {
+          "baseUrl": "https://{endpoint}/v1",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-responses",
+          "modelsUrl": "https://{endpoint}/v1/models?client_version=0.147.0",
+          "models": []
+        }
+      }
+    },
+    {
       "id": "openrouter",
       "name": "OpenRouter",
       "docsUrl": "https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration",

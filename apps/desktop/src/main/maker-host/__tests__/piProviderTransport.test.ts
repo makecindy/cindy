@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
-import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
 import { createPiProviderFetch, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, readBoundedResponseText } from '../pi-provider-transport.js';
 
 vi.mock('@earendil-works/pi-ai/api/openai-completions', async (importOriginal) => ({
@@ -13,6 +13,33 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  it.each([true, false, undefined])('sends discovered Sub2API effort and declared Fast (%s) through the native Chat adapter', async supportsFastMode => {
+    const upstream = 'https://sub2api.example/custom/v1';
+    const models = parseModelsListResponse({ data: [{ id: 'grok-4.7',
+      supportsReasoningEffort: true, reasoningEffort: 'high',
+      context_window: 272000, max_context_window: 1050000, supports_fast_mode: supportsFastMode,
+      reasoningEfforts: ['low', 'medium', 'high', 'xhigh'].map(value => ({ value, label: value })),
+    }] })!;
+    const stored = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels([], models)));
+    const provider = buildUserProvider({ id: 'sub2api', name: 'Sub2API', runtimes: {
+      codex: { baseUrl: upstream, wireProtocol: 'openai-chat', models: stored },
+    } });
+    const row = invocationModelRecord(provider.models.codex![0], upstream, 'openai-completions')!;
+    expect(row.contextWindow).toBe(1050000);
+    let sent: Record<string, unknown> | undefined;
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url, init) => {
+      expect(String(url)).toBe(`${upstream}/chat/completions`);
+      sent = JSON.parse(String(init?.body));
+      return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+    } });
+    const response = await send('https://unused.invalid', { body: JSON.stringify({
+      model: row.id, input: 'hello', reasoning: { effort: 'xhigh' }, service_tier: 'priority', stream: true,
+    }) });
+    expect(await response.text()).toContain('response.completed');
+    expect(sent).toMatchObject({ model: 'grok-4.7', reasoning_effort: 'xhigh' });
+    expect(sent?.service_tier).toBe(supportsFastMode ? 'priority' : undefined);
+  });
+
   it('reconciles saved max when capabilities narrow, disappear and return', async () => {
     const request = { model: 'changing-model', input: 'hello', reasoning: { effort: 'max' }, stream: true };
     for (const efforts of [['high', 'max'], ['high'], [], ['high', 'max']] as const) {

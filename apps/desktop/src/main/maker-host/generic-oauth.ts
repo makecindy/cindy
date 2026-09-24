@@ -827,7 +827,9 @@ export function deriveModelsDiscoveryUrl(baseUrl: string): string {
   url.hash = '';
   let pathname = url.pathname;
   while (pathname.length > 1 && pathname.endsWith('/')) pathname = pathname.slice(0, -1);
-  url.pathname = /\/v\d+$/i.test(pathname)
+  // Codex-compatible relays (including Sub2API) expose /models directly under
+  // /backend-api/codex; inserting /v1 makes discovery fail while inference works.
+  url.pathname = /(?:\/v\d+|\/backend-api\/codex)$/i.test(pathname)
     ? `${pathname}/models`
     : `${pathname === '/' ? '' : pathname}/v1/models`;
   return url.toString();

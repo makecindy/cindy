@@ -16,6 +16,8 @@ export interface ModelMetadata {
   description?: string;
   group?: string;
   contextWindow?: number;
+  /** Upstream capacity, distinct from the recommended working window. */
+  contextWindowMax?: number;
   maxOutputTokens?: number;
   efforts?: ModelEffort[];
   defaultEffort?: ModelEffort | null;
@@ -39,6 +41,7 @@ export const MODEL_METADATA_FIELDS = [
   "description",
   "group",
   "contextWindow",
+  "contextWindowMax",
   "maxOutputTokens",
   "efforts",
   "defaultEffort",
@@ -95,7 +98,7 @@ export function validModelMetadata(value: unknown): value is ModelMetadata {
         typeof v === "string" && v.trim().length > 0 && v.length <= maxLength
       );
     }
-    if (["contextWindow", "maxOutputTokens"].includes(key))
+    if (["contextWindow", "contextWindowMax", "maxOutputTokens"].includes(key))
       return typeof v === "number" && Number.isSafeInteger(v) && v > 0;
     if (key === "efforts")
       return (

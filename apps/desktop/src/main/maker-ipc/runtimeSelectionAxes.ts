@@ -115,7 +115,7 @@ export async function applyRuntimeSelectionAxesWithRecovery(
       await input.session.setEffort(input.effort as Effort);
       input.assertCanCommit?.();
     }
-    if (applyFastMode && input.session.agentKind === 'codex') {
+    if (applyFastMode && (input.session.agentKind === 'codex' || input.session.agentKind === 'pi')) {
       await input.session.setFastMode(input.fastMode);
       input.assertCanCommit?.();
     }

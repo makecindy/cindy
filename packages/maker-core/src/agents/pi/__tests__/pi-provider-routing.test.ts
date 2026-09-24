@@ -234,6 +234,31 @@ describe("Pi provider-aware model routing", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  it("persists native Fast per runtime and updates it before later sends", async () => {
+    let fast = true;
+    const agent = new PiAgent({
+      auth: { getState: async () => ({ authenticated: true, authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' }, binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger, resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({ providers: [{ id: 'relay', name: 'Relay',
+        baseUrl: 'https://relay.example/v1', api: 'openai-responses' as const,
+        models: [{ id: 'private-sol', supportsFastMode: true }, { id: 'no-fast' }] }], env: {} }),
+    });
+    const handle = await agent.startSession({ sessionId: 'native-fast', workingDir: cwd,
+      model: 'private-sol', providerId: 'relay', getPriceVariant: () => fast ? 'priority' : 'standard' });
+    const file = captured.env.CINDY_PI_MODEL_REQUEST_PREFS_FILE!;
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ fast: true, models: [{ provider: 'relay', id: 'private-sol' }] });
+    await handle.setFastMode!(false);
+    expect(JSON.parse(readFileSync(file, 'utf8')).fast).toBe(false);
+    fast = false;
+    await handle.send({ type: 'user', content: 'hello' });
+    expect(JSON.parse(readFileSync(file, 'utf8')).fast).toBe(false);
+    expect(captured.requests.some(request => request.type === 'set_fast_mode')).toBe(false);
+    await handle.close();
+    await vi.waitFor(() => expect(readdirSync(path.join(agentHome, 'runtime'))).not.toContain(path.basename(file)));
+  });
+
   it("uses providerId as the primary key when duplicate model ids exist", async () => {
     const authProviderIds: Array<string | null | undefined> = [];
     const apiResolver = vi.fn((providerId: string | null | undefined) =>

@@ -213,3 +213,28 @@ Desktop 本机目录只有在 providers、capabilities 和当前账号的模型�
 Server 对应入口为 `model-access-server/src/routes/modelCatalog.ts`、`services/catalogSource.ts` 与本仓独立维护的 contracts。
 先确认 Server 分支是否具备目标能力；不要把本仓解析器直接视为 Server 已部署的实现。
 两仓边界遵守 [协议兼容规则](protocol-compatibility.md)。
+
+### Sub2API 与自定义模型发现
+
+- Sub2API 在供应商预设中提供自托管入口；地址与 API Key 由用户填写，不预填公共站点、
+  账号或模型清单。三个引擎共用该站点的 Responses 入口，协议兼容开关仍遵循现有用户偏好。
+- `https://{endpoint}/v1` 是整段自托管地址模板，允许 HTTP(S)、端口和部署前缀；绑定后
+  模型发现 URL 必须落在相同站点。普通站点地址补 `/v1`，已给出的 `/v1` 与
+  `/backend-api/codex` 保留。未完成的模板与内嵌凭证不得发请求或保存。
+- 预设查询 `models?client_version=0.147.0`，取得 Sub2API 的 Codex 格式能力清单；此参数
+  仅协商清单格式，不代表使用者运行该版本 Codex。404/405 时仅去掉该参数查询普通列表，
+  不对鉴权、限流或服务异常做静默回退。新预设随客户端 bundled 合并，旧线上目录缺少该
+  条目也不会遮掉它；不改变已有自定义连接地址。
+- 通用解析器兼容 `supported_reasoning_levels/default_reasoning_level` 与 Grok 的
+  `reasoningEfforts/reasoningEffort/supportsReasoningEffort`；同时读取 `input_modalities`、
+  `service_tiers` 中的 `priority` 和 `max_context_window`。未声明或非法值保持未知，空列表
+  与显式 false 保持关闭，不根据供应商品牌猜能力。
+- `max_context_window` 仅作为连接实报的 `discoveredMetadata.contextWindowMax` 持久化并投影
+  到客户端容量；`context_window` 仍是工作窗口。只有最大容量时可用它作为窗口，二者都给出
+  时不以容量覆盖工作预算；不将 `contextWindowMax` 写入 Registry。刷新保留用户显式覆盖。
+- Fast 不仅是目录字段：Claude 自定义桥按能力将用户选择转换成 `service_tier: priority`，
+  原生适配器保留它；Pi 直连在既有 `before_provider_request` 钩子读取每运行时请求偏好，
+  只对该连接明确支持的 OpenAI 协议模型设置 Fast，关闭时删除该参数。偏好文件只含开关和
+  模型身份，沿用运行时隔离、远端文件操作和退出回收；不改权限文件或凭证。
+- Mobile 与远控消费执行端已有目录和 Fast 设置入口；Pi 也接入原有设置保存／失败恢复流程。
+  不增加 IPC、凭证传输通道或独立模型配置。

@@ -1900,9 +1900,8 @@ export class PiAgent extends BaseAgent {
     return {
       switchModel: { supported: true },
       availableModels: [],
-      // Pi 的 ChatGPT 模型经 Desktop responses bridge 调用。Fast 状态由 host 按
-      // sessionId 注入 bridge prefs,再映射为 Codex `service_tier: priority`；实际
-      // 是否显示开关仍由目录里该 (provider, model, pi) 的 supportsFastMode 门控。
+      // ChatGPT 订阅由 Desktop bridge 注入 Fast；自定义直连由原生请求钩子读取
+      // 本运行时偏好，映射 service_tier: priority。两者均由该连接的能力声明门控。
       hasFastMode: true,
       effort: { supported: true },
       effortLevels: [
@@ -3231,6 +3230,32 @@ export class PiAgent extends BaseAgent {
       runtimeDir,
       `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}${remote ? `-${permissionSnapshotHash}` : ''}.json`,
     );
+    const requestPrefsFile = joinRemotePosixPath(runtimeDir, `request-prefs-${runtimeInstanceId}.json`);
+    const fastModels = nativeProviders.flatMap(provider => provider.models
+      .filter(model => model.supportsFastMode === true)
+      .map(model => ({ provider: provider.id, id: model.wireId ?? model.id })));
+    let requestPrefsWriteChain: Promise<void> = Promise.resolve();
+    let requestPrefsSnapshot: string | undefined;
+    let requestPrefsClosed = false;
+    let nativeFastEnabled = opts.getPriceVariant?.() === 'priority';
+    const writeRequestPrefs = (fast = opts.getPriceVariant ? opts.getPriceVariant() === 'priority' : nativeFastEnabled): Promise<void> => {
+      if (requestPrefsClosed) return Promise.reject(new Error('Pi request preferences are closed'));
+      if (fastModels.length === 0) return Promise.resolve();
+      const snapshot = JSON.stringify({ fast, models: fastModels });
+      if (requestPrefsSnapshot === snapshot) return requestPrefsWriteChain;
+      requestPrefsSnapshot = snapshot;
+      const write = requestPrefsWriteChain.catch(() => {}).then(async () => {
+        try {
+          await writeFile(requestPrefsFile, snapshot);
+          nativeFastEnabled = fast;
+        } catch (error) {
+          if (requestPrefsSnapshot === snapshot) requestPrefsSnapshot = undefined;
+          throw error;
+        }
+      });
+      requestPrefsWriteChain = write;
+      return write;
+    };
     let activeToolsDisabled = false;
     let textOnlyPolicyReady = false;
     const textOnlyInput = (text: string): string => {
@@ -3254,8 +3279,10 @@ export class PiAgent extends BaseAgent {
     const cleanupRuntimeFiles = (): void => {
       if (runtimeFilesCleaned) return;
       runtimeFilesCleaned = true;
+      requestPrefsClosed = true;
       void rmPath(permissionFile);
       void rmPath(subagentRuntimeFile);
+      if (fastModels.length > 0) void requestPrefsWriteChain.finally(() => rmPath(requestPrefsFile)).catch(() => {});
     };
     // 权限档写入串行化 + 代际跳过。并发/连续切档(本地与远程控制端同时切,或用户快速连点)时,
     // 无串行的 fs.writeFile 可能让较早的 Full-access 写在较新的 Ask 写之后落盘 —— bridge 每次
@@ -3361,6 +3388,7 @@ export class PiAgent extends BaseAgent {
       return run;
     };
     await writePermissionFile(requestedPermissionSnapshot);
+    await writeRequestPrefs();
 
     // 子代理运行期快照的写入:代际串行,最新意图胜出(理由同权限档 —— 并发/连续 setModel
     // 时无串行的 writeFile 可能让较早的模型写在较新的之后落盘,子代理就会读到过期模型)。
@@ -5153,6 +5181,7 @@ export class PiAgent extends BaseAgent {
         PI_CODING_AGENT_DIR: configHome,
         [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
+        ...(fastModels.length > 0 ? { CINDY_PI_MODEL_REQUEST_PREFS_FILE: requestPrefsFile } : {}),
         CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
         // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
@@ -6636,6 +6665,7 @@ export class PiAgent extends BaseAgent {
       async send(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'send');
         await waitForSessionRpcIdle();
+        await writeRequestPrefs();
         rejectIfCancelled(sendOpts, 'send');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         // 本轮策略覆盖:无策略显式清 null,不继承上一轮渠道策略(§7.2.5);内部续跑
@@ -7179,6 +7209,11 @@ export class PiAgent extends BaseAgent {
           () => {},
         );
         return run;
+      },
+
+      async setFastMode(enabled: boolean): Promise<void> {
+        if (reviewMode) return;
+        await writeRequestPrefs(enabled);
       },
 
       async setEffort(effort: Effort): Promise<void> {

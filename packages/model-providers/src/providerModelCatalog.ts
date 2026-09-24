@@ -14,6 +14,8 @@ export interface ProviderModelRecord {
   maxOutput?: number;
   modalities: { input: string[]; output: string[] };
   supportsImageInput: boolean;
+  /** Connection-scoped declaration; absent does not authorize a Fast request. */
+  supportsFastMode?: boolean;
   reasoning: boolean;
   efforts: NonNullable<ModelMetadata["efforts"]>;
   defaultEffort: ModelMetadata["defaultEffort"];
