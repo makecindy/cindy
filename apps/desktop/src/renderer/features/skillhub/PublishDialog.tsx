@@ -988,10 +988,7 @@ export function PublishDialog({
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           />
           <Dialog.Content
-            // working 时禁止 outside-click / Escape 直接关——走 cancel confirm 流程
-            onPointerDownOutside={(e) => {
-              if (isWorking && pubState.phase !== 'scanning') e.preventDefault();
-            }}
+            onPointerDownOutside={(event) => event.preventDefault()}
             onEscapeKeyDown={(e) => {
               if (isWorking && pubState.phase !== 'scanning') e.preventDefault();
             }}

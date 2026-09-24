@@ -550,7 +550,7 @@ function XboxGamepadPartEditor({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-[10000] flex max-h-[min(700px,calc(100vh-48px))] w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)] focus:outline-none">
+        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="fixed left-1/2 top-1/2 z-[10000] flex max-h-[min(700px,calc(100vh-48px))] w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)] focus:outline-none">
           <div className="px-6 pb-4 pt-6">
             <Dialog.Title className="text-18 font-medium leading-[1.3]">{title}</Dialog.Title>
             <Dialog.Description className="mt-1 text-13 leading-[1.4] text-[var(--text-secondary)]">

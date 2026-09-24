@@ -205,6 +205,7 @@ export function CustomProviderRuntimeFillOverlay({
         />
         <Dialog.Content
           aria-describedby="custom-provider-runtime-fill-description"
+          onPointerDownOutside={(event) => event.preventDefault()}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             primaryButtonRef.current?.focus();

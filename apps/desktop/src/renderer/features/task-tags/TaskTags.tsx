@@ -517,6 +517,7 @@ export function TaskTagEditor({ session, onClose }: { session: Session; onClose:
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[200] bg-[var(--overlay-modal)]" />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           onDragStart={(e) => e.stopPropagation()}

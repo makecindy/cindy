@@ -227,6 +227,7 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
             'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
             'w-full max-w-[480px] rounded-xl',

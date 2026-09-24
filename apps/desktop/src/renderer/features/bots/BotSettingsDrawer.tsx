@@ -98,6 +98,7 @@ export function BotSettingsDrawer() {
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
         <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]">
           <Dialog.Content
+            onPointerDownOutside={(event) => event.preventDefault()}
             aria-describedby={undefined}
             // CJK IME: Escape during composition only cancels the candidate.
             onEscapeKeyDown={(event) => {

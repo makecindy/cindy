@@ -527,7 +527,6 @@ export function ProviderConnectionDialog({
   const imageGenerationHelpPointerSuppressionFrameRef = useRef<number | null>(null);
   const imageGenerationHelpPointerSuppressionGenerationRef = useRef(0);
   const modelFetchInFlightRef = useRef(false);
-  const scrimRef = useRef<HTMLDivElement>(null);
   const dialogPanelRef = useRef<HTMLDivElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
   // 原生 window listener 的生命周期不跟着每次 render 重绑；layout effect 只把
@@ -668,24 +667,6 @@ export function ProviderConnectionDialog({
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [dismissImageGenerationHelp, dismissTopmostLayer, showImageGenerationHelp]);
-
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      if (event.target !== scrimRef.current) return;
-      if (!childLayerRef.current && !runtimeFillRef.current) return;
-
-      // This must run before Radix's document-capture outside-dismiss. The
-      // scrim gesture belongs to the dialog's current child layer; consuming
-      // it here prevents Radix from committing a closed popover before the
-      // form can settle that layer exactly once.
-      event.preventDefault();
-      event.stopPropagation();
-      dismissTopmostLayer();
-    };
-    window.addEventListener('pointerdown', onPointerDown, { capture: true });
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
-  }, [dismissTopmostLayer]);
 
   useEffect(() => {
     const returnFocusElement =
@@ -2011,18 +1992,8 @@ export function ProviderConnectionDialog({
 
   return (
     <div
-      ref={scrimRef}
       data-custom-provider-dialog-scrim="true"
       className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
-      onPointerDown={(event) => {
-        // pointerdown 时先按当前层级结算，避免 Popover 的 outside-dismiss 在随后
-        // click 前把状态改成 closed，令同一次手势继续误关底层表单。
-        if (event.button === 0 && event.target === event.currentTarget && !saving && !runtimeFill) {
-          event.preventDefault();
-          event.stopPropagation();
-          dismissTopmostLayer();
-        }
-      }}
       onKeyDown={(event) => {
         if (childLayer || runtimeFill || imageGenerationReloadConfirmation) return;
         if (event.key !== 'Tab') return;
@@ -2855,6 +2826,7 @@ export function ProviderConnectionDialog({
             <Dialog.Overlay className="fixed inset-0 z-[10002] bg-[var(--overlay-modal)] data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out" />
             <Dialog.Content
               aria-describedby="custom-provider-image-generation-reload-description"
+              onPointerDownOutside={(event) => event.preventDefault()}
               onOpenAutoFocus={(event) => {
                 event.preventDefault();
                 document.getElementById('custom-provider-image-generation-reload-primary')?.focus();
@@ -2993,6 +2965,7 @@ export function ModelPickerOverlay({
         <Dialog.Content
           ref={contentRef}
           aria-describedby="custom-provider-model-picker-description"
+          onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
             if (event.isComposing || event.keyCode === 229) event.preventDefault();
           }}

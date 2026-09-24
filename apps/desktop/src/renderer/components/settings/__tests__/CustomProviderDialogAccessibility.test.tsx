@@ -501,7 +501,7 @@ describe('ProviderConnectionDialog accessibility', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('asks before manually creating an image Provider and X, Escape, or outside do not create it', async () => {
+  it('asks before manually creating an image Provider and ignores outside clicks', async () => {
     const { confirmation, onClose, onSaved, user } =
       await renderNewImageGenerationReloadConfirmation();
     const pendingId = customProviderMocks.createCustomProvider.mock.calls[0]?.[0].id;
@@ -544,13 +544,12 @@ describe('ProviderConnectionDialog accessibility', () => {
     expect(overlay).not.toBeNull();
     fireEvent.pointerDown(overlay!);
     fireEvent.click(overlay!);
-    await waitFor(() =>
-      expect(
-        screen.queryByRole('dialog', {
-          name: 'settings.providers.custom.imageGenerationReload.title',
-        }),
-      ).toBeNull(),
-    );
+    expect(
+      screen.getByRole('dialog', {
+        name: 'settings.providers.custom.imageGenerationReload.title',
+      }),
+    ).toBeTruthy();
+    await user.click(within(outsideConfirmation).getByRole('button', { name: '取消' }));
     expect(customProviderMocks.createCustomProvider).toHaveBeenCalledTimes(3);
     expect(customProviderMocks.createCustomProvider.mock.calls.map((call) => call[0].id)).toEqual([
       pendingId,
@@ -585,7 +584,7 @@ describe('ProviderConnectionDialog accessibility', () => {
     );
   });
 
-  it('asks before a manual image-generation save and closes via X, Escape, or outside without saving', async () => {
+  it('asks before a manual image-generation save and ignores outside clicks', async () => {
     const { confirmation, onClose, onSaved, user } =
       await renderImageGenerationReloadConfirmation();
     expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledWith(
@@ -639,13 +638,12 @@ describe('ProviderConnectionDialog accessibility', () => {
     expect(overlay).not.toBeNull();
     fireEvent.pointerDown(overlay!);
     fireEvent.click(overlay!);
-    await waitFor(() =>
-      expect(
-        screen.queryByRole('dialog', {
-          name: 'settings.providers.custom.imageGenerationReload.title',
-        }),
-      ).toBeNull(),
-    );
+    expect(
+      screen.getByRole('dialog', {
+        name: 'settings.providers.custom.imageGenerationReload.title',
+      }),
+    ).toBeTruthy();
+    await user.click(within(outsideConfirmation).getByRole('button', { name: '取消' }));
     expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledTimes(3);
     expect(onSaved).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();

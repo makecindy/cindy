@@ -439,6 +439,7 @@ export function ModelAdvancedDrawer({
             )}
           />
           <Dialog.Content
+            onPointerDownOutside={(event) => event.preventDefault()}
             className={cn(
               'fixed inset-0 z-[10001] m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[800px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-xl',
               'border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',

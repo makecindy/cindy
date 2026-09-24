@@ -255,33 +255,22 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('dismisses only the topmost preset menu on a scrim gesture', async () => {
+  it('does not close the provider form on a scrim gesture', async () => {
     i18nState.language = 'zh-TW';
     const { container, onClose } = renderDialog();
 
     const trigger = await findReadyPresetTrigger();
     fireEvent.click(trigger);
-    const option = await screen.findByRole('option', { name: '繁體供應商' });
-    // 等 layout effect 把 childLayer 写进 childLayerRef。只等 option 出现不够:
-    // Windows CI 上 rAF 也可能早于 useLayoutEffect, 第一个 pointerDown 会关整表。
-    await waitFor(() => {
-      expect(option.isConnected).toBe(true);
-    });
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
 
     const scrim = container.firstElementChild as Element;
     fireEvent.pointerDown(scrim);
-    await waitFor(() => {
-      expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
-    });
+    expect(screen.getByRole('option', { name: '繁體供應商' })).not.toBeNull();
     expect(onClose).not.toHaveBeenCalled();
 
     fireEvent.pointerDown(scrim);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('settings.providers.custom.cancel'));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

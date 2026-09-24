@@ -360,6 +360,7 @@ export function MobileDownloadDialog({
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
             'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
             'max-h-[calc(100vh-32px)] w-[400px] max-w-[calc(100vw-32px)] overflow-y-auto overscroll-contain',

@@ -151,6 +151,7 @@ export function AccountSwitcherDialog({
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           ref={contentRef}
           tabIndex={-1}
           className={cn(

@@ -354,6 +354,7 @@ export function AddRemoteProjectDialog({
           style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.4))' }}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className="fixed left-1/2 top-1/2 z-50 flex w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl shadow-[var(--confirm-shadow)]"
           style={{
             backgroundColor: 'var(--surface-elevated, #ffffff)',

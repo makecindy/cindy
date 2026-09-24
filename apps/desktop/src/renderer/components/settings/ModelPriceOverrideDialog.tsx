@@ -200,6 +200,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[10001] bg-[var(--overlay-modal)]" />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
             'fixed left-1/2 top-1/2 z-[10001] w-[520px] max-w-[92vw]',
             '-translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl',

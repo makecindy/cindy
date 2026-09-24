@@ -376,7 +376,7 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus }: {
       onOpenAutoFocus={event => { if (!initialTarget) { event.preventDefault(); codeInput.current?.focus(); } }}
       onCloseAutoFocus={returnFocus ? event => { event.preventDefault(); returnFocus(); } : undefined}
       onEscapeKeyDown={event => { if (pending.current || confirm || target) { event.preventDefault(); if (confirm) cancel(); else if (target) back(); } }}
-      onInteractOutside={event => { if (pending.current || confirm) event.preventDefault(); }}>
+      onInteractOutside={event => event.preventDefault()}>
       <div className="mb-5 flex items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2">
         {target && !confirm && <Button variant="secondary" tone="quiet" size="lg" className="w-9 shrink-0 p-0" aria-label={t('sharedTask.back')} disabled={busy} onClick={back}><ArrowLeft size={18} aria-hidden /></Button>}
         <Dialog.Title className="text-18 font-medium">{confirm ? confirmTitle : t(target ? 'sharedTask.manageSharing' : success ? 'sharedTask.joined' : 'sharedTask.title')}</Dialog.Title></div>

@@ -240,6 +240,7 @@ export function SessionBranchTreeDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className="fixed left-1/2 top-1/2 z-[10001] flex max-h-[min(760px,calc(100vh-48px))] w-[min(620px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border shadow-[var(--confirm-shadow)]"
           style={{ backgroundColor: 'var(--confirm-bg)', borderColor: 'var(--border-default)', WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >

@@ -2325,6 +2325,7 @@ export function VoiceInputSection() {
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                       />
                       <Dialog.Content
+                        onPointerDownOutside={(event) => event.preventDefault()}
                         className={cn(
                           'fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
                           'rounded-[18px] border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
