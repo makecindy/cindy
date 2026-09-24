@@ -1066,6 +1066,87 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       efforts: ['low', 'high'],
     });
   });
+
+  function stubHttpModels(ids: string[]): void {
+    oauthRefreshMock.getValidClaudeAiOAuth.mockResolvedValue({ accessToken: 'test-token' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          data: ids.map((id) => ({ id, display_name: id, type: 'model' })),
+          has_more: false,
+        }),
+      })),
+    );
+  }
+
+  // cc 把最新的 Opus / Sonnet 只以 opus / sonnet 别名下发,规则 10 过滤后 SDK 快照缺这几条。
+  const SDK_SNAPSHOT_WITH_ALIASES = [
+    { value: 'default', displayName: 'Default (recommended)' },
+    { value: 'opus', displayName: 'Opus', description: 'Opus 5.5 · Most capable' },
+    { value: 'sonnet', displayName: 'Sonnet', description: 'Sonnet 5 · Everyday tasks' },
+    { value: 'claude-opus-5', displayName: 'Opus 5' },
+    { value: 'claude-opus-4-8', displayName: 'Opus 4.8' },
+    { value: 'claude-haiku-4-5', displayName: 'Haiku 4.5' },
+  ];
+
+  it('SDK 捕获不删 HTTP 确认过的模型(别名下发的 Opus 5.5 不因会话 init 消失)', async () => {
+    stubHttpModels([
+      'claude-opus-5-5',
+      'claude-sonnet-5',
+      'claude-opus-5',
+      'claude-opus-4-8',
+      'claude-haiku-4-5',
+    ]);
+    await expect(refreshAnthropicModelsFromHttp()).resolves.toBe(true);
+
+    noteAnthropicSdkSupportedModels([
+      ...SDK_SNAPSHOT_WITH_ALIASES,
+      { value: 'claude-brandnew-9', displayName: 'Brand New 9' },
+    ]);
+    // HTTP 顺序保留,SDK 新增的排在末尾;sortOrder 跟随重排。
+    expect(anthropicIds()).toEqual([
+      'claude-opus-5-5',
+      'claude-sonnet-5',
+      'claude-opus-5',
+      'claude-opus-4-8',
+      'claude-haiku-4-5',
+      'claude-brandnew-9',
+    ]);
+    expect(anthropicModel('claude-brandnew-9')?.sortOrder).toBe(5);
+    expect(anthropicModel('claude-opus-4-8')?.name).toBe('Opus 4.8');
+
+    // 只由 SDK 带进来、HTTP 没确认过的条目仍可被 SDK 正常下架。
+    noteAnthropicSdkSupportedModels(SDK_SNAPSHOT_WITH_ALIASES);
+    expect(anthropicIds()).not.toContain('claude-brandnew-9');
+    expect(anthropicIds()).toContain('claude-opus-5-5');
+
+    // 真实下架仍由 HTTP 仲裁。
+    stubHttpModels(['claude-opus-5', 'claude-opus-4-8', 'claude-haiku-4-5']);
+    await expect(refreshAnthropicModelsFromHttp()).resolves.toBe(true);
+    noteAnthropicSdkSupportedModels(SDK_SNAPSHOT_WITH_ALIASES);
+    expect(anthropicIds()).toEqual(['claude-opus-5', 'claude-opus-4-8', 'claude-haiku-4-5']);
+  });
+
+  it('HTTP 存在性记账跨重启持久化:重启后首个 SDK 捕获早于 HTTP 刷新也不丢模型', async () => {
+    stubHttpModels(['claude-opus-5-5', 'claude-sonnet-5', 'claude-opus-5', 'claude-opus-4-8']);
+    await expect(refreshAnthropicModelsFromHttp()).resolves.toBe(true);
+    await waitForAnthropicDiscoveryIdleForTest();
+
+    // 模拟重启:模块态清空,只剩磁盘缓存。
+    resetAnthropicDiscoveryForTest();
+    setAnthropicDiscoveredModels([]);
+    await loadAnthropicModelsFromDiskCache();
+    noteAnthropicSdkSupportedModels(SDK_SNAPSHOT_WITH_ALIASES);
+    expect(anthropicIds()).toEqual([
+      'claude-opus-5-5',
+      'claude-sonnet-5',
+      'claude-opus-5',
+      'claude-opus-4-8',
+      'claude-haiku-4-5',
+    ]);
+  });
 });
 
 describe('HTTP 发现失败的归因与选择性重试', () => {

@@ -84,6 +84,13 @@ const explicitEffortModelIds = new Set<string>();
 const explicitFastModeModelIds = new Set<string>();
 /** HTTP 明说过 max_input_tokens 的模型窗口(id → tokens);SDK 覆盖时优先于启发式规则。 */
 const explicitWindows = new Map<string, number>();
+/**
+ * 最近一次被采纳的 HTTP `/v1/models` 快照里的模型 id。这些模型的存在性只由 HTTP 仲裁:
+ * cc 的 supportedModels 会把当前最新的 Opus / Sonnet 以 `opus` / `sonnet` 裸别名下发,
+ * 被规则 10 过滤后,SDK 快照天然缺这几条;若任由每次会话 init 整体覆盖,刚刷新出来的
+ * claude-opus-5-5 等模型就会消失,选择器报「模型不可用」直到下次手动刷新。
+ */
+const httpConfirmedModelIds = new Set<string>();
 /** 授权边界(登出 / 换号)自增:在途发现若世代已变,结果作废不写回。 */
 let authGeneration = 0;
 let httpRefreshInflight: Promise<boolean> | null = null;
@@ -444,6 +451,32 @@ function mergeCapabilitiesWithPrevious(mapped: readonly CapabilityMappedModel[])
 }
 
 /**
+ * SDK 快照只能新增 / 精化条目,不能删掉 HTTP 确认过的模型(见 httpConfirmedModelIds)。
+ * 有条目被保留时按现值顺序排列(HTTP 新发布在前),SDK 新增的排在末尾并重排 sortOrder;
+ * 没有需要保留的条目时原样返回,行为与修复前一致。
+ */
+function retainHttpConfirmedModels(sdkModels: CatalogModel[]): CatalogModel[] {
+  const sdkById = new Map(sdkModels.map((model) => [model.id, model]));
+  if (!lastApplied.some((m) => httpConfirmedModelIds.has(m.id) && !sdkById.has(m.id))) {
+    return sdkModels;
+  }
+  const out: CatalogModel[] = [];
+  for (const current of lastApplied) {
+    const next = sdkById.get(current.id);
+    if (next) {
+      out.push(next);
+      sdkById.delete(current.id);
+    } else if (httpConfirmedModelIds.has(current.id)) {
+      out.push(current);
+    }
+  }
+  out.push(...sdkById.values());
+  return out.map((model, index) =>
+    model.sortOrder === index ? model : { ...model, sortOrder: index },
+  );
+}
+
+/**
  * HTTP `GET /v1/models` 单页条目数组 → 映射结果。纯函数,对响应形状容错:
  * 能力字段(capabilities.efforts / fast_mode)是 Anthropic 侧未固化的扩展,逐字段识别；
  * effort 认不出时按 modelRegistry 能力基线合成,目录也没有才回落当代旗舰 5 档
@@ -556,6 +589,7 @@ async function applyModels(
         explicitFastModeModelIds: models
           .map((model) => model.id)
           .filter((id) => explicitFastModeModelIds.has(id)),
+        httpModelIds: models.map((model) => model.id).filter((id) => httpConfirmedModelIds.has(id)),
         // 整份重写不得抹掉跨重启的待确认骤减记账(SDK 每会话都会持久化一次)。
         ...(httpShrinkSignature !== null
           ? { pendingShrink: { signature: httpShrinkSignature, streak: httpShrinkStreak } }
@@ -670,6 +704,12 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
     const restoredExplicitFastModeIds = restoreIds(
       (raw as { explicitFastModeModelIds?: unknown }).explicitFastModeModelIds,
     );
+    // 恢复 HTTP 存在性记账:启动后 HTTP 刷新常晚于首个会话 init,否则首次 SDK 捕获
+    // 仍会把只在 HTTP 清单里的模型抹掉。旧版缓存无此字段 = 空集,行为同修复前。
+    httpConfirmedModelIds.clear();
+    for (const id of restoreIds((raw as { httpModelIds?: unknown }).httpModelIds)) {
+      httpConfirmedModelIds.add(id);
+    }
     // Cache versions before per-field provenance did not distinguish
     // mapper fallbacks from API/SDK-declared capabilities. Refresh every
     // non-explicit effort baseline and context window from the current
@@ -740,8 +780,16 @@ export function noteAnthropicSdkSupportedModels(raw: unknown): void {
         : model;
     return { model: base, hasEffortInfo, hasFastModeInfo };
   });
-  const { models, explicitEffortIds, explicitFastModeIds } =
-    mergeCapabilitiesWithPrevious(mappedWithWindows);
+  const sdkMerged = mergeCapabilitiesWithPrevious(mappedWithWindows);
+  const { explicitEffortIds, explicitFastModeIds } = sdkMerged;
+  const models = retainHttpConfirmedModels(sdkMerged.models);
+  // 保留下来的条目原样沿用,能力来源记账也要跟着保留。
+  const sdkIds = new Set(sdkMerged.models.map((model) => model.id));
+  for (const { id } of models) {
+    if (sdkIds.has(id)) continue;
+    if (explicitEffortModelIds.has(id)) explicitEffortIds.add(id);
+    if (explicitFastModeModelIds.has(id)) explicitFastModeIds.add(id);
+  }
   // SDK 通道骤减恒拒绝其**存在性快照**、**不参与收敛**:持续一致的退化 SDK 快照正是
   // 打塌事故的形态,给 SDK 开 streak 收敛等于把事故门重新打开(真退化会一直一致,
   // streak 必然凑齐)。但 cc 当前可能只返回本会话模型这一条,其中明确携带的 capability
@@ -1218,6 +1266,8 @@ export function refreshAnthropicModelsFromHttp(options?: {
     // HTTP 不带能力时只保留明确探测过的旧能力；旧版缓存 / 合成默认用当前目录基线刷新。
     const { models, explicitEffortIds, explicitFastModeIds } =
       mergeCapabilitiesWithPrevious(mapped);
+    httpConfirmedModelIds.clear();
+    for (const model of models) httpConfirmedModelIds.add(model.id);
     log.info(`anthropic models refreshed via HTTP: ${models.length}`);
     // 拿到有效清单 = 发现已恢复,清掉失败态与待执行的重试(放在 apply 之前:apply 只负责
     // 生效,它因世代变化被 gate 掉时新世代会带着自己的触发重来)。
@@ -1247,6 +1297,7 @@ export async function clearAnthropicDiscoveredModels(): Promise<void> {
   explicitWindows.clear();
   explicitEffortModelIds.clear();
   explicitFastModeModelIds.clear();
+  httpConfirmedModelIds.clear();
   resetHttpShrinkStreak();
   await applyModels([], false, generation);
   // 首次发现就失败时 lastApplied 本来就是空,applyModels([]) 会走「清单没变」早退、不广播。
@@ -1269,6 +1320,7 @@ export function resetAnthropicDiscoveryForTest(): void {
   explicitWindows.clear();
   explicitEffortModelIds.clear();
   explicitFastModeModelIds.clear();
+  httpConfirmedModelIds.clear();
   resetHttpShrinkStreak();
   lastFailure = null;
   cancelHttpRetry();
