@@ -1,13 +1,19 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_INVOKE_CHANNEL } from '@cindy/device-link';
+import {
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
+  REMOTE_RESOURCE_GET_CHANNEL,
+  REMOTE_RESOURCE_INVOKE_CHANNEL,
+} from '@cindy/device-link';
 import { RemoteBotSettings } from '../RemoteBotSettings';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 const h = vi.hoisted(() => ({
   invoke: vi.fn(),
   confirm: vi.fn(async () => true),
   model: null as any,
+  portrait: null as any,
+  push: null as any,
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
@@ -15,7 +21,16 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: h.confirm }),
 }));
-vi.mock('../BotPortraitPicker', () => ({ BotPortraitPicker: () => null }));
+vi.mock('../BotPortraitPicker', () => ({
+  BotPortraitPicker: (p: any) => {
+    h.portrait = p;
+    return (
+      <button type="button" onClick={() => p.onChange('data:image/png;base64,cG5n')}>
+        Choose portrait
+      </button>
+    );
+  },
+}));
 vi.mock('../BotModelChainEditor', () => ({
   BotModelChainEditor: (p: any) => {
     h.model = p;
@@ -99,10 +114,24 @@ beforeEach(() => {
     channel === REMOTE_RESOURCE_GET_CHANNEL ? resource() : { effects: [] },
   );
   Object.assign(window, {
-    electronAPI: { deviceLink: { invoke: h.invoke, onRemotePush: () => () => {} } },
+    electronAPI: {
+      deviceLink: {
+        invoke: h.invoke,
+        onRemotePush: (cb: any) => {
+          h.push = cb;
+          return () => {
+            h.push = null;
+          };
+        },
+      },
+    },
   });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 async function open() {
   const view = render(<RemoteBotSettings bot={bot} beforeCloseRef={close} onDeleted={vi.fn()} />);
   await waitFor(() => expect(screen.getByRole('button', { name: 'Models' })).toBeTruthy());
@@ -226,4 +255,107 @@ it('does not treat a refresh failure after a save receipt as an unsaved draft', 
   expect(
     h.invoke.mock.calls.filter((call) => call[1] === REMOTE_RESOURCE_INVOKE_CHANNEL),
   ).toHaveLength(1);
+});
+
+function push(id = 'bot', collectionId = 'teammates', deviceId = 'host') {
+  h.push({
+    deviceId,
+    channel: REMOTE_RESOURCE_CHANGED_CHANNEL,
+    payload: { collectionId, resourceRefs: [{ collectionId, kind: 'bot', id }] },
+  });
+}
+it('submits raw JPEG base64 while preserving the portrait preview data URL', async () => {
+  const avatar = {
+    ...resource(),
+    actions: [
+      {
+        id: 'avatar-grant',
+        label: 'Avatar',
+        fields: [{ id: 'avatarImageBase64', label: 'Avatar', kind: 'text' }],
+      },
+    ],
+    blocks: [
+      {
+        id: 'avatar',
+        title: 'Avatar',
+        primitive: 'form',
+        fallbackMarkdown: '',
+        data: { actionId: 'avatar-grant', values: { avatarImageBase64: '' } },
+      },
+    ],
+  };
+  h.invoke.mockImplementation(async (_: string, channel: string) =>
+    channel === REMOTE_RESOURCE_GET_CHANNEL ? avatar : { effects: [] },
+  );
+  vi.stubGlobal(
+    'Image',
+    class {
+      src = '';
+      decode() {
+        return Promise.resolve();
+      }
+    },
+  );
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    drawImage: vi.fn(),
+  } as any);
+  vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(
+    'data:image/jpeg;base64,/9j/2Q==',
+  );
+  render(<RemoteBotSettings bot={bot} beforeCloseRef={close} onDeleted={vi.fn()} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Avatar' }));
+  fireEvent.click(await screen.findByText('Choose portrait'));
+  await waitFor(() => expect(h.portrait.value).toBe('data:image/jpeg;base64,/9j/2Q=='));
+  fireEvent.click(screen.getByText('bots.save'));
+  await waitFor(() =>
+    expect(h.invoke).toHaveBeenCalledWith('host', REMOTE_RESOURCE_INVOKE_CHANNEL, [
+      expect.objectContaining({ input: { avatarImageBase64: '/9j/2Q==' } }),
+    ]),
+  );
+});
+it('ignores other devices, collections and teammates but refreshes a current child resource', async () => {
+  await open();
+  h.invoke.mockClear();
+  await act(async () => {
+    push('another');
+    push('bot-extra');
+    push('bot', 'plugins');
+    push('bot', 'teammates', 'another-host');
+  });
+  expect(h.invoke).not.toHaveBeenCalled();
+  await act(async () => push('bot/skills'));
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+});
+it('coalesces push bursts into one active read and one trailing read on a slow host', async () => {
+  await open();
+  h.invoke.mockClear();
+  let finish!: (value: unknown) => void;
+  h.invoke.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  await act(async () => push());
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    for (let i = 0; i < 40; i++) push();
+  });
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+  await act(async () => finish(resource()));
+  expect(h.invoke).toHaveBeenCalledTimes(2);
+});
+it('cancels a queued trailing read when the settings unmount', async () => {
+  const view = await open();
+  h.invoke.mockClear();
+  let finish!: (value: unknown) => void;
+  h.invoke.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  await act(async () => push());
+  await act(async () => push());
+  view.unmount();
+  await act(async () => finish(resource()));
+  expect(h.invoke).toHaveBeenCalledTimes(1);
 });

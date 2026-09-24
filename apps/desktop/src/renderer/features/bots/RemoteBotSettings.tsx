@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { ArrowLeft, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
   REMOTE_RESOURCE_INVOKE_CHANNEL,
   resolveRemoteText,
+  parseRemoteResourceChangedPayload,
   type RemoteActionInvokeResponse,
 } from '@cindy/device-link';
 import { Button } from '@/components/ui/button';
@@ -18,6 +19,7 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
+import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import { extractIpcError } from '@/utils/ipcError';
 import { BotModelChainEditor } from './BotModelChainEditor';
 import { BotPortraitPicker } from './BotPortraitPicker';
@@ -88,33 +90,37 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
     (id: string) => readRemoteBotSettings(bot.deviceId, id, i18n.language),
     [bot.deviceId, i18n.language],
   );
-  const load = useCallback(async () => {
-    if (!online.current || inFlight.current) {
-      setLoading(false);
-      return;
-    }
+  const coalesce = useMemo(() => createCoalescedRefresh<void>(), [read, resourceId]);
+  const load = useCallback(() => {
     const token = ++sequence.current;
-    setLoading(true);
-    try {
-      const next = await read(resourceId);
+    return coalesce(async () => {
       if (!current() || token !== sequence.current) return;
-      if (
-        latest.current.dirty &&
-        latest.current.data?.resource.revision !== next.resource.revision
-      ) {
-        setError('conflict');
+      if (!online.current || inFlight.current) {
+        setLoading(false);
         return;
       }
-      setData(next);
-      setError(null);
-      if (!latest.current.dirty)
-        setDraft(next.panels.find((item) => item.id === latest.current.panel?.id)?.values ?? {});
-    } catch {
-      if (current() && token === sequence.current) setError('loadFailed');
-    } finally {
-      if (current() && token === sequence.current) setLoading(false);
-    }
-  }, [read, resourceId]);
+      setLoading(true);
+      try {
+        const next = await read(resourceId);
+        if (!current() || token !== sequence.current) return;
+        if (
+          latest.current.dirty &&
+          latest.current.data?.resource.revision !== next.resource.revision
+        ) {
+          setError('conflict');
+          return;
+        }
+        setData(next);
+        setError(null);
+        if (!latest.current.dirty)
+          setDraft(next.panels.find((item) => item.id === latest.current.panel?.id)?.values ?? {});
+      } catch {
+        if (current() && token === sequence.current) setError('loadFailed');
+      } finally {
+        if (current() && token === sequence.current) setLoading(false);
+      }
+    });
+  }, [coalesce, read, resourceId]);
   useEffect(() => {
     void load();
     return () => {
@@ -124,7 +130,15 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
   useEffect(
     () =>
       window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
+        const payload = parseRemoteResourceChangedPayload(push.payload);
         if (
+          payload?.collectionId === 'teammates' &&
+          (!payload.resourceRefs?.length ||
+            payload.resourceRefs.some(
+              (ref) =>
+                ref.kind === 'bot' &&
+                (ref.id === bot.id || ref.id === resourceId || ref.id.startsWith(`${resourceId}/`)),
+            )) &&
           push.deviceId === bot.deviceId &&
           push.channel === REMOTE_RESOURCE_CHANGED_CHANNEL &&
           isDeviceLinkRemotePushCurrent(push, stamp) &&
@@ -132,7 +146,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
         )
           void load();
       }),
-    [bot.deviceId, load],
+    [bot.deviceId, bot.id, load, resourceId],
   );
 
   const submit = async (
@@ -375,7 +389,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           disabled={disabled}
           value={
             typeof draft.avatarImageBase64 === 'string' && draft.avatarImageBase64
-              ? draft.avatarImageBase64
+              ? `data:image/jpeg;base64,${draft.avatarImageBase64}`
               : undefined
           }
           onChange={(value) => {
@@ -398,7 +412,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
                 const context = canvas.getContext('2d');
                 if (!context) throw new Error('Image unavailable');
                 context.drawImage(image, 0, 0, 128, 128);
-                setDraft({ avatarImageBase64: canvas.toDataURL('image/jpeg', 0.85) });
+                setDraft({ avatarImageBase64: canvas.toDataURL('image/jpeg', 0.85).split(',')[1] });
               })
               .catch(() => {
                 if (
