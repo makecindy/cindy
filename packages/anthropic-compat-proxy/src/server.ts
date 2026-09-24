@@ -234,25 +234,31 @@ function serializeProvenWebSocketHandshake(
 
 /**
  * 往 per-thread 已见 id 缓存写入一条(id 去重)。有界:线程数超限 FIFO 淘汰最老
- * (re-insert 到 Map 末尾近似 LRU),单线程 id 超限丢最老(Set 按插入序)。
+ * (命中线程 re-insert 到 Map 末尾近似 LRU —— 与 rememberProvenWebSocketHandshake
+ * 同款触底,活跃线程不会被后建的线程挤出),单线程 id 超限丢最老(Set 按插入序)。
  */
-function addThreadMintedId(
+export function addThreadMintedId(
   threadMintedIdCache: Map<string, Set<string>>,
   threadIdKey: string,
   id: string,
 ): void {
   let set = threadMintedIdCache.get(threadIdKey);
-  if (!set) {
-    threadMintedIdCache.delete(threadIdKey); // 已存在则触底(近似 LRU)
-    threadMintedIdCache.set(threadIdKey, new Set<string>());
-    set = threadMintedIdCache.get(threadIdKey);
+  if (set) {
+    // 命中触底:重插到 Map 末尾。此前 delete 误放在 `!set` 分支里(对不存在的
+    // key 是 no-op),整个缓存退化成纯 FIFO —— 老而活跃的线程会被后建线程挤出,
+    // 重复 id 检测窗口重新打开。
+    threadMintedIdCache.delete(threadIdKey);
+    threadMintedIdCache.set(threadIdKey, set);
+  } else {
+    set = new Set<string>();
+    threadMintedIdCache.set(threadIdKey, set);
     while (threadMintedIdCache.size > MAX_CACHED_THREADS) {
       const oldest = threadMintedIdCache.keys().next().value as string | undefined;
       if (oldest === undefined) break;
       threadMintedIdCache.delete(oldest);
     }
   }
-  if (set && !set.has(id)) {
+  if (!set.has(id)) {
     set.add(id);
     if (set.size > MAX_IDS_PER_THREAD) {
       const oldestId = set.keys().next().value as string | undefined;

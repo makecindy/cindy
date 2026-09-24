@@ -4289,3 +4289,29 @@ describe('streaming response validity gate (#2242)', () => {
     await expect(post(proxy.url, { model: 'test-model', stream: true })).rejects.toThrow();
   });
 });
+
+describe('anthropic-compat-proxy thread minted-id cache LRU touch', () => {
+  it('refreshes a hit thread to the Map tail so active threads survive eviction', async () => {
+    // 回归:LRU 触底的 delete 曾误放在 `!set` 分支(no-op), 缓存退化纯 FIFO
+    // —— 超过 MAX_CACHED_THREADS 个线程后, 老而活跃的线程被后建线程挤出,
+    // 重复 tool_use id 检测窗口重新打开。
+    const { addThreadMintedId } = await import('./server.js');
+    const MAX_CACHED_THREADS = 1024;
+    const cache = new Map<string, Set<string>>();
+    // 填满缓存, 然后触碰最老的线程 0(活跃), 再新建一个线程触发淘汰。
+    for (let i = 0; i < MAX_CACHED_THREADS; i += 1) {
+      addThreadMintedId(cache, `thread-${i}`, `id-${i}-a`);
+    }
+    addThreadMintedId(cache, 'thread-0', 'id-0-b');
+    addThreadMintedId(cache, `thread-${MAX_CACHED_THREADS}`, 'id-new-a');
+
+    expect(cache.size).toBe(MAX_CACHED_THREADS);
+    // 被淘汰的应是最久未触碰的 thread-1; 活跃的 thread-0 与新线程都在。
+    expect(cache.has('thread-0')).toBe(true);
+    expect(cache.has('thread-1')).toBe(false);
+    expect(cache.has(`thread-${MAX_CACHED_THREADS}`)).toBe(true);
+    // 触底重插必须保留原 Set:此前见过的 id 仍参与重复检测(Greptile review)。
+    expect(cache.get('thread-0')).toContain('id-0-a');
+    expect(cache.get('thread-0')).toContain('id-0-b');
+  });
+});
