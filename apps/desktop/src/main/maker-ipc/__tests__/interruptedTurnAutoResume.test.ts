@@ -15,6 +15,42 @@ import {
 // 判定单测的核心是**白名单收紧**:自动重试一个确定性失败(认证过期、协议错)会反复
 // 烧额度并反复报错,所以只有识别得了的"上游把 turn 打断了"才允许自愈。
 describe('isInterruptedTurnError', () => {
+  const availabilityError = "Error Code null: Service temporarily unavailable. The model's availability is currently degraded.";
+
+  it('recovers code-less service availability errors and opaque HTTP 503 errors', () => {
+    expect(isInterruptedTurnError({ message: availabilityError })).toBe(true);
+    expect(isInterruptedTurnError({ message: 'opaque', errorStatus: 503 })).toBe(true);
+  });
+
+  it.each([400, 401, 402, 403, 404, 413, 429])(
+    'does not override explicit HTTP %s with availability wording', (errorStatus) => {
+      expect(isInterruptedTurnError({ message: availabilityError, errorStatus })).toBe(false);
+    },
+  );
+
+  it.each(
+    ['authentication_failed', 'authentication_error', 'billing_error', 'rate_limit', 'invalid_request', 'permission_error', 'insufficient_quota', 'context_length_exceeded']
+      .flatMap(sdkError => [undefined, 502, 503, 504, 529].map(errorStatus => ({ sdkError, errorStatus }))),
+  )(
+    'does not override $sdkError with availability wording or HTTP $errorStatus', ({ sdkError, errorStatus }) => {
+      expect(isInterruptedTurnError({ message: availabilityError, sdkError, errorStatus })).toBe(false);
+    },
+  );
+
+  it.each([502, 503, 504, 529])('still recovers HTTP %s without a rejection category', (errorStatus) => {
+    expect(isInterruptedTurnError({ message: 'opaque', sdkError: 'server_error', errorStatus })).toBe(true);
+  });
+
+  it('preserves text compatibility for unclassified server errors', () => {
+    expect(isInterruptedTurnError({ message: availabilityError, errorStatus: 500 })).toBe(true);
+    expect(isInterruptedTurnError({ message: 'Selected model is at capacity.', errorStatus: 500 })).toBe(true);
+    expect(isInterruptedTurnError({ message: 'opaque', errorStatus: 500 })).toBe(false);
+  });
+
+  it('does not layer host retries over exhausted Pi retries', () => {
+    expect(isInterruptedTurnError({ message: availabilityError, reason: 'pi-gateway-drop' })).toBe(false);
+  });
+
   it('never automatically resumes a detected tool loop, even with network-like text', () => {
     expect(isInterruptedTurnError({
       reason: 'tool_use_loop_detected', message: 'Request timed out',

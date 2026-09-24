@@ -16,7 +16,7 @@ export function useCompanionGenerationCopy({ deviceId, botId, phase, active, tur
   const [caption, setCaption] = useState<{ scope: string; text: string } | null>(null);
   useEffect(() => {
     let cancelled = false;
-    if (active && phase && hasPublicWorkingSubject(phase)) {
+    if (active && botId && phase && hasPublicWorkingSubject(phase)) {
       void invoke<unknown>(deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{ client: {
         protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: ['status'], locale: i18n.language,
       }, ref: { collectionId: 'teammates', kind: 'bot', id: `working:${botId}/${phase}` } }]).then(value => {

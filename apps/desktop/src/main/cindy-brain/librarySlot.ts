@@ -38,8 +38,11 @@ import type { LibraryDbResult } from './libraryDbCore.js';
 /** 正本相对键:assets/<hash 前 2 位>/<64-hex>/blob.<ext>(不是 <hash>.<ext>)。 */
 const LIBRARY_BLOB_REL_RE = /^assets\/([0-9a-f]{2})\/([0-9a-f]{64})\/blob\.([A-Za-z0-9]+)$/i;
 const LIBRARY_SIDECAR_BASENAME = new Set(['meta.json', 'preview.webp']);
-/** clipboardWrite 单次 PNG 上限:与 library 单次 write 同为 16MiB,必须是有限整数。 */
-export const LIBRARY_CLIPBOARD_WRITE_MAX_BYTES = 16 * 1024 * 1024;
+/**
+ * clipboardWrite 单次 PNG 上限:十进制 20MB(20,000,000 字节,不是 20MiB),必须是有限整数。
+ * 只管剪贴板;library 单次 write 的 16MiB 分块阈值独立,不随此变。
+ */
+export const LIBRARY_CLIPBOARD_WRITE_MAX_BYTES = 20_000_000;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const PNG_IHDR = Buffer.from('IHDR', 'ascii');
 const PNG_IEND = Buffer.from('IEND', 'ascii');

@@ -3451,6 +3451,7 @@ describe('Bot Session task end-to-end runtime', () => {
     withTransferredWorktree?: Parameters<typeof createBotDelegationService>[0]['withTransferredWorktree'];
     prepareWorktree?: Parameters<typeof createBotDelegationService>[0]['prepareWorktree'];
     taskQueue?: Parameters<typeof createBotDelegationService>[0]['taskQueue'];
+    taskRoute?: Parameters<typeof createBotDelegationService>[0]['taskRoute'];
     taskControl?: boolean;
     queueSnapshots?: Map<string, AgentInputQueuedMessage[]>;
     onNativeStarted?: (sessionId: string) => void;
@@ -3696,6 +3697,7 @@ describe('Bot Session task end-to-end runtime', () => {
       reconcileWorktree: options.reconcileWorktree,
       withTransferredWorktree: options.withTransferredWorktree,
       taskQueue: options.taskQueue,
+      taskRoute: options.taskRoute,
       ...(options.taskControl ? { taskControl: {
         steer, stop: stopTurn,
         isActive: (id: string) => pendingTurns.some((turn) => turn.sessionId === id && !turn.queued),
@@ -6885,6 +6887,45 @@ describe('Bot Session task end-to-end runtime', () => {
         h.sqlite!.prepare('SELECT 1 FROM messages WHERE session_id = ? AND client_id = ?')
           .get(currentSessionId, `bot-delegation-request:${started.delegationId}`),
       ).toBeTruthy();
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('lets the requesting teammate choose a configured route only after execution ends', async () => {
+    await seedPair();
+    const current = { agentKind: 'codex' as const, model: 'same-model', providerId: 'subscription', effort: null, fastMode: false };
+    const next = { ...current, providerId: 'paid' };
+    const inspect = vi.fn(async () => ({ ok: true as const, generation: 7, current, next }));
+    const advance = vi.fn(async () => ({ ok: true as const, status: 'applied' as const, generation: 8 }));
+    const runtime = createDelegationRuntime({ taskRoute: { inspect, advance } });
+    try {
+      const started = await runtime.delegation.startSessionTask({
+        callerSessionId: 'session-1', objective: '尝试当前已配置的路线。',
+      });
+      if (!started.ok) throw new Error('Session task did not start');
+      await expect(runtime.delegation.advanceSessionTaskRoute('session-1', started.delegationId, 7, 'old'))
+        .resolves.toMatchObject({ ok: false, errorCode: 'TASK_ACTIVE' });
+      expect(advance).not.toHaveBeenCalled();
+      await runtime.delegation.settleSession({ childSessionId: started.childSessionId, outcome: 'error', error: 'Quota exhausted' });
+      const turnsBeforeSwitch = runtime.started.length;
+      const preview = await runtime.delegation.inspectSessionTaskRoute('session-1', started.delegationId);
+      expect(preview).toMatchObject({ ok: true, current: { providerId: 'subscription' }, next: { providerId: 'paid' } });
+      if (!preview.ok) throw new Error('Expected route preview');
+      await expect(runtime.delegation.advanceSessionTaskRoute('session-1', started.delegationId, 6, preview.selectionToken!))
+        .resolves.toMatchObject({ ok: false, errorCode: 'CONFLICT' });
+      await expect(runtime.delegation.advanceSessionTaskRoute('session-1', started.delegationId, 7, 'old'))
+        .resolves.toMatchObject({ ok: false, errorCode: 'CONFLICT' });
+      await expect(runtime.delegation.advanceSessionTaskRoute('session-1', started.delegationId, 7, preview.selectionToken!))
+        .resolves.toMatchObject({ ok: true, status: 'applied', generation: 8 });
+      expect(advance).toHaveBeenCalledWith(started.childSessionId, 7, next);
+      expect(runtime.started).toHaveLength(turnsBeforeSwitch); // Switching never replays the task.
+      await expect(runtime.delegation.advanceSessionTaskRoute('unowned-session', started.delegationId, 7, preview.selectionToken!))
+        .resolves.toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+      h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run(started.childSessionId);
+      await expect(runtime.delegation.inspectSessionTaskRoute('session-1', started.delegationId))
+        .resolves.toMatchObject({ ok: false, errorCode: 'CHILD_SESSION_INVALID' });
+      expect(inspect).toHaveBeenCalledTimes(4); // No new candidate is shown for an archived child.
     } finally {
       runtime.dispose();
     }

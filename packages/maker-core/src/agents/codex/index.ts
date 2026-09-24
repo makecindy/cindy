@@ -6514,7 +6514,13 @@ export class CodexAgent extends BaseAgent {
     let threadId!: string;
     let sessionRolloutPath: string | undefined;
     const recordNativeThreadLocation = async (thread: { id: string; [key: string]: unknown }): Promise<void> => {
-      if (typeof thread.path !== 'string') return;
+      if (typeof thread.path !== 'string') {
+        // thread/start on a brand-new thread often has no rollout yet. Drop the
+        // previous thread's path so later findRolloutPath / plan fallback cannot
+        // tail the replaced history (#4994).
+        sessionRolloutPath = undefined;
+        return;
+      }
       sessionRolloutPath = thread.path;
       if (opts.remoteHostId || !sessionCodexHome) return;
       await this.deps.recordCodexThreadLocation?.(thread.id, sessionSqliteHome ?? sessionCodexHome, thread.path);
@@ -6879,7 +6885,7 @@ export class CodexAgent extends BaseAgent {
         const resp = await requestProfileLifecycle<ThreadStartResponse>({
           action: 'replacement',
           signal,
-          request: () => host.request<ThreadStartResponse>(retainHistory ? Method.ThreadFork : Method.ThreadStart, {
+          request: () => withMcpDiscoveryContext(() => host.request<ThreadStartResponse>(retainHistory ? Method.ThreadFork : Method.ThreadStart, {
             ...(retainHistory ? { threadId: previousThreadId, excludeTurns: true } : {}),
             cwd: opts.workingDir,
             // Recovery belongs to the running send, whose catalog/window is already frozen.
@@ -6889,7 +6895,7 @@ export class CodexAgent extends BaseAgent {
             ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
             ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
             ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
-          }),
+          })),
           onLateResolve: async (lateResp) => {
             const lateThreadId = lateResp.thread.id;
             if (lateThreadId === previousThreadId) return;
@@ -14158,6 +14164,29 @@ export class CodexAgent extends BaseAgent {
           const unavailableReason = rollbackUnavailableReason ?? 'thread/rollback unavailable';
           const rollbackMethodRemoved = unavailableReason.includes('unknown method')
             || unavailableReason.includes('removed in Codex');
+          if (
+            rewindOpts?.rewindsToNativeThreadStart === true
+            && !normalizeNativeForkTurnId(rewindOpts.lastTurnId)
+            && rewindOpts.forkAtTimestampMs === undefined
+          ) {
+            // 目标是当前原生线程的第一轮(宿主按消息时间线确认):前面没有 turn 可作
+            // fork 边界,裁掉全部 turn 等价于一条空线程。按当前配置新开线程并切过去,
+            // 旧线程与 fork 路径一样保留不动(#4994)。
+            log.info('commitRewindFiles ▶ rewinding to native thread start; replacing with a fresh thread', {
+              threadId,
+              tailTurnsToDrop,
+              reason: unavailableReason,
+            });
+            await replaceThreadWithCurrentProfile();
+            currentTurnId = null;
+            isTurnInFlight = false;
+            log.info('commitRewindFiles ◀ fresh thread replaced rewound thread', {
+              previousThreadId,
+              threadId,
+              tailTurnsToDrop,
+            });
+            return sdkSessionId ? { sdkSessionId } : {};
+          }
           if (!rollbackMethodRemoved && !supportsCodexNativeTurnFork(initResp.userAgent)) {
             throw new Error(
               `Codex app-server ${initResp.userAgent ?? 'unknown'}: ${unavailableReason} and predates native turn fork (0.145.0); rewind is unavailable for this thread`,
@@ -14291,12 +14320,15 @@ export class CodexAgent extends BaseAgent {
 
   private async findRolloutPath(threadId: string, preferredPath?: string, homeOverride?: string): Promise<string> {
     if (preferredPath && !isRemoteLikePath(preferredPath)) {
-      try {
-        const stat = await fs.stat(preferredPath);
-        if (stat.isFile()) return preferredPath;
-      } catch {
-        // Fall through to the normal CODEX_HOME scan when preparation only
-        // returned a stale state-db pointer.
+      const preferredName = path.basename(preferredPath);
+      if (preferredName.startsWith('rollout-') && preferredName.endsWith(`${threadId}.jsonl`)) {
+        try {
+          const stat = await fs.stat(preferredPath);
+          if (stat.isFile()) return preferredPath;
+        } catch {
+          // Fall through to the normal CODEX_HOME scan when preparation only
+          // returned a stale state-db pointer.
+        }
       }
     }
     const codexHome = homeOverride ?? this.codexHome;

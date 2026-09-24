@@ -813,7 +813,8 @@
   },
   "companions": {
     "messageSent": "已傳送補充訊息",
-    "privateChat": "與 {{name}} 的私聊",
+    "sentTo": "已傳訊息給 {{name}}",
+    "receivedFrom": "訊息來自 {{name}}",
     "backgroundTask": "背景任務",
     "openTask": "開啟任務",
     "viewPr": "查看 PR",

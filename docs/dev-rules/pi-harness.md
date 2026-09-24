@@ -281,6 +281,12 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   改判成失败，provider continuation claim 也不能被当作最终结束。
 - Pi 的 `Request was aborted` 只在无当前 generation 的 Host Stop 时归入请求断流失败；
   无错误正文的 bare abort 仍保持取消。复用既有错误收口及重试预算，不重放包命令或工具。
+- Pi 未归类的缺码临时服务故障（如 `Service temporarily unavailable` 或明确的模型
+  availability degraded）由 Cindy 的既有有界续跑守卫兜底；结构化状态／错误类别优先，
+  不把裸 `unavailable`／`degraded` 当重试依据，不伪造 HTTP 503。已有正文或工具结果时
+  发送续跑指令，保留已有结果；用户 Stop 取消待续跑。Pi `auto_retry_end(success=false)`
+  已用尽原生预算时保持 `pi-gateway-drop` 终态，不再叠加 Host 重试。本规则不修改受管
+  Pi 二进制、版本或原生重试上限；原生分类兼容需由 Pi 上游独立修正。
 - SDK 成功与正文入库／交付分开取证。只见 JSONL 成功但 SQLite 缺正文时，不能自动重跑
   已成功的工作；应沿 RPC → translator → Session → persistence 查丢失边界。
 

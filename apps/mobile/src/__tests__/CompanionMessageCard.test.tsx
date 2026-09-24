@@ -51,11 +51,13 @@ vi.mock('@/components/AppText', () => ({
   Text: ({ children }: any) => createElement('span', {}, children),
 }));
 vi.mock('@/theme', () => ({
-  useThemedStyles: () => ({}),
+  useThemedStyles: () => ({ note: {} }),
   useTheme: () => ({ colors: {} }),
 }));
 vi.mock('lucide-react-native', () => ({
   FileText: () => null,
+  ArrowLeftRight: () => null,
+  ChevronRight: () => null,
   GitPullRequest: () => null,
   Square: () => null,
   GitMerge: () => createElement('i', { 'data-testid': 'merged-pr' }),
@@ -613,4 +615,18 @@ it('reveals frozen failure details only after opening the result and its details
   const details = Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'interaction.companion.details');
   await act(async () => details!.click());
   expect(node.textContent).toContain('TIMEOUT: upstream did not finish');
+});
+
+it.each(['sent', 'received'] as const)('keeps a compact %s private-message entry without leaking its body', async (direction) => {
+  const direct = { ...message, key: 'trace', companion: { kind: 'direct', meta: {
+    direction, peerBotName: 'Aster', peerBotId: 'peer', viewerBotId: 'viewer', threadId: 'thread',
+    preview: 'Synthetic private transport body',
+  } } } as NormalizedRemoteMessage;
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: direct })));
+  expect(node.textContent).toContain(`devices.companions.${direction === 'sent' ? 'sentTo' : 'receivedFrom'}`);
+  expect(node.textContent).not.toContain('Synthetic private transport body');
+  await act(async () => node.querySelector('button')!.click());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/companions/direct/[threadId]', params: {
+    deviceId: 'home', threadId: 'thread', botId: 'viewer',
+  } });
 });

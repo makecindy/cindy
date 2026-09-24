@@ -444,6 +444,7 @@ import {
   discardDelegationQueuedInputs,
   type BotDelegationService,
 } from './botDelegationService.js';
+import { createBotSessionTaskRouteBridge } from './botSessionTaskRouteBridge.js';
 import {
   createBotDirectMessageService,
   type BotDirectMessageService,
@@ -9739,6 +9740,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fastMode: getSessionFastMode(sessionId),
       } : null;
     },
+    taskRoute: createBotSessionTaskRouteBridge({
+      getSessionRuntime: params => sessionControlService.getSessionRuntime(params),
+      setSessionRuntime: params => sessionControlService.setSessionRuntime(params),
+      readConfiguredCandidate: (callerSessionId, current, childSessionId) =>
+        readBotFallbackCandidate(callerSessionId, current, childSessionId),
+    }),
     dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted, dispatcherSessionId }) =>
       dispatchBotSessionMessage({
         targetSessionId,
@@ -11511,6 +11518,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const readBotFallbackCandidate = async (
     sessionId: string,
     current: SessionRuntimeProfile,
+    controlSessionId = sessionId,
   ): Promise<{ isBot: boolean; candidate: SessionRuntimeProfile | null }> => {
     const [row] = await getDbClient()
       .drizzle.select({
@@ -11552,12 +11560,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       : current.agentKind === 'pi'
         ? 'pi'
         : 'claude';
-    const control = getSessionRuntimeControlSnapshot(sessionId);
+    const control = getSessionRuntimeControlSnapshot(controlSessionId);
+    const [controlSession] = controlSessionId === sessionId ? [{ remoteHostId: row.remoteHostId }]
+      : await getDbClient().drizzle.select({ remoteHostId: sessions.remoteHostId })
+        .from(sessions).where(eq(sessions.id, controlSessionId)).limit(1);
     const route = nextBotModelRoute(
       chain,
       { harness: currentHarness, model: current.model, providerId: current.providerId },
       control.visitedRoutes,
-      (candidate) => !row.remoteHostId || candidate.harness === currentHarness,
+      (candidate) => !controlSession?.remoteHostId || candidate.harness === currentHarness,
     );
     return {
       isBot: true,

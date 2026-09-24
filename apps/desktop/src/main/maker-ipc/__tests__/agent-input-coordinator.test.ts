@@ -1,6 +1,15 @@
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import {
+  createPiTranslateContext, disposePiTranslateContext, translatePiEvent,
+} from '../../../../../../packages/maker-core/src/agents/pi/translator.js';
+import type { AgentEvent } from '../../../../../../packages/maker-core/src/types/events.js';
+import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger.js';
+import {
+  InterruptedTurnAutoResumeGuard, INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+  isInterruptedTurnError,
+} from '../interruptedTurnAutoResume.js';
 import { createQueuedDispatchReceipts } from '../queuedDispatchReceipts.js';
 import { createOrcaInterAgentDispatcher } from '../orcaInterAgentDispatcher.js';
 import {
@@ -11091,6 +11100,108 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 });
 
 describe('AgentInputCoordinator 中断自动续跑', () => {
+  const availabilityError = "Error Code null: Service temporarily unavailable. The model's availability is currently degraded.";
+
+  // Offline provider -> real Pi translator -> real host classifier/guard ->
+  // coordinator dispatch. The provider and durable DB progress are fixtures;
+  // no model, process or tool is actually invoked.
+  function availabilityInput() {
+    const item = makeItem('q-first', 'original request with possible side effects');
+    return { ...item, model: 'grok-4.7', createOpts: { ...item.createOpts!, agentKind: 'pi' as const, model: 'grok-4.7' } };
+  }
+
+  function availabilityHarness() {
+    const h = createHarness();
+    const guard = new InterruptedTurnAutoResumeGuard({
+      isEnabled: () => true, log: mocks.logger, random: () => 0.5,
+    });
+    h.isResumableTurnErrorCandidate.mockImplementation(isInterruptedTurnError);
+    h.onResumableTurnError.mockImplementation((sid, signals) => {
+      if (!isInterruptedTurnError(signals)) return null;
+      const decision = guard.onInterruptedTurn(sid, Date.now());
+      return decision.action === 'resume' ? { ...decision, error: signals.message } : null;
+    });
+    let durableToolResult = false;
+    h.setHasAssistantProgressAfter(async () => durableToolResult);
+    const logger: Logger = { ...mocks.logger, trace: vi.fn(), fatal: vi.fn(), child: () => logger };
+    async function fail(sid: string, opts: { toolResult?: boolean; nativeExhausted?: boolean } = {}) {
+      const ctx = createPiTranslateContext(logger);
+      const events: AgentEvent[] = [];
+      const queue = { push: (event: AgentEvent) => { events.push(event); }, end: () => {} } as unknown as Parameters<typeof translatePiEvent>[1];
+      const emit = (event: Record<string, unknown>) => translatePiEvent(event as Parameters<typeof translatePiEvent>[0], queue, ctx);
+      try {
+        emit({ type: 'agent_start' });
+        if (opts.toolResult) {
+          emit({ type: 'tool_execution_start', toolCallId: 'completed-tool', toolName: 'read', args: { path: 'fixture.md' } });
+          emit({ type: 'tool_execution_end', toolCallId: 'completed-tool', toolName: 'read', result: { content: [{ type: 'text', text: 'fixture result' }] }, isError: false });
+          expect(events.some(event => event.type === 'tool_result')).toBe(true);
+          durableToolResult = true;
+        }
+        emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: availabilityError } });
+        emit({ type: 'agent_end', messages: [] });
+        expect(events.filter(event => event.type === 'error' || event.type === 'done')).toHaveLength(0);
+        if (opts.nativeExhausted) emit({ type: 'auto_retry_end', success: false, finalError: availabilityError });
+        emit({ type: 'agent_settled' });
+        h.setRunning(false);
+        for (const event of events) {
+          if (event.type === 'error') {
+            const data = event.data as { message: string; isTerminal?: boolean; sdkError?: string; reason?: string; errorStatus?: number };
+            if (data.isTerminal) h.coordinator.onTurnEvent(sid, 'error', data.message, data);
+          } else if (event.type === 'done') h.coordinator.onTurnEvent(sid, 'done');
+        }
+        await flush();
+      } finally { disposePiTranslateContext(ctx); }
+    }
+    return { h, guard, fail };
+  }
+
+  it('continues after a completed tool and stops at the existing host retry budget', async () => {
+    const { h, guard, fail } = availabilityHarness();
+    const sid = 'pi-availability-budget';
+    h.coordinator.enqueue(sid, availabilityInput());
+    await flush();
+    for (let attempt = 1; attempt <= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS; attempt += 1) {
+      await fail(sid, { toolResult: attempt === 1 });
+      expect(latestProjection(h.projections).error).toBeNull();
+      expect(await h.coordinator.autoRetryLastError(sid, attempt)).toBe('resumed');
+      await flush();
+      expect(h.sendToAgent.mock.calls[attempt]?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+      expect(h.sendToAgent.mock.calls[attempt]?.[3]?.persistUserMessage?.autoResume).toBe(true);
+      // Production retires the pending token on the first provider event.
+      expect(guard.noteAttemptEvent(sid, attempt)).toBe(true);
+    }
+    await fail(sid);
+    expect(latestProjection(h.projections).error).not.toBeNull();
+    expect(h.coordinator.isAutoResumePending(sid)).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1 + INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS);
+  });
+
+  it('does not resume an availability error after the user stops during backoff', async () => {
+    const { h, guard, fail } = availabilityHarness();
+    const sid = 'pi-availability-stop';
+    h.coordinator.enqueue(sid, availabilityInput());
+    await flush();
+    await fail(sid, { toolResult: true });
+    h.coordinator.stop(sid);
+    guard.noteSessionReset(sid);
+    expect(await h.coordinator.autoRetryLastError(sid, 1)).toBe('superseded');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(guard.isCurrentAttempt(sid, 1)).toBe(false);
+  });
+
+  it('does not add host retries after Pi reports native availability retry exhaustion', async () => {
+    const { h, fail } = availabilityHarness();
+    const sid = 'pi-availability-native-exhausted';
+    h.coordinator.enqueue(sid, availabilityInput());
+    await flush();
+    await fail(sid, { toolResult: true, nativeExhausted: true });
+    expect(h.onResumableTurnError).toHaveReturnedWith(null);
+    expect(latestProjection(h.projections).error).not.toBeNull();
+    expect(h.coordinator.isAutoResumePending(sid)).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
   // 上游把「已经干到一半」的 turn 打断时,main 守卫自动替用户点一次「继续」。
   // coordinator 这一侧只负责两件事:把带结构化信号的失败告知 host(判据不在这里),
   // 以及提供一条**带 autoResume 标记**的补发路径(标记是额度不自我充值的判据)。

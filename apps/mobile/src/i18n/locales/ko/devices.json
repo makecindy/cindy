@@ -813,7 +813,8 @@
   },
   "companions": {
     "messageSent": "추가 메시지를 보냈습니다",
-    "privateChat": "{{name}} 님과의 대화",
+    "sentTo": "{{name}}에게 메시지를 보냄",
+    "receivedFrom": "{{name}}의 메시지",
     "backgroundTask": "백그라운드 작업",
     "openTask": "작업 열기",
     "viewPr": "PR 보기",

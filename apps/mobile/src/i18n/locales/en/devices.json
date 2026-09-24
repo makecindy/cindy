@@ -813,7 +813,8 @@
   },
   "companions": {
     "messageSent": "Message sent",
-    "privateChat": "Private chat with {{name}}",
+    "sentTo": "Sent a message to {{name}}",
+    "receivedFrom": "Message from {{name}}",
     "backgroundTask": "Background task",
     "openTask": "Open task",
     "viewPr": "View PR",

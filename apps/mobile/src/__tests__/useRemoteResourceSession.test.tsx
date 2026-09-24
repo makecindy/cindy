@@ -8,12 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   get: vi.fn(),
+  language: "en",
   markRead: vi.fn(),
   store: { getSessionDeviceId: vi.fn(), upsertDeviceSession: vi.fn() },
   router: { replace: vi.fn(), setParams: vi.fn() },
   auth: { user: { id: 'owner' }, accountGeneration: 1 },
   link: { invoke: vi.fn(), connectionEpoch: 1, status: 'online', onRemoteResourceChanged: vi.fn(() => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
 }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: h.language } }) }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } }));
 vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
@@ -55,12 +57,16 @@ function screenReadGate(contentRecoveryKey: string | null, contentSyncedKey: str
 }
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
-function Probe({ canMarkRead }: { canMarkRead: boolean }) { useRemoteResourceSession('mac', 'My Mac', 'task-1', canMarkRead); return null; }
+let container: HTMLDivElement;
+function Probe({ canMarkRead }: { canMarkRead: boolean }) {
+  const resource = useRemoteResourceSession('mac', 'My Mac', 'task-1', canMarkRead);
+  return typeof resource?.display.title === 'string' ? resource.display.title : null;
+}
 async function render(canMarkRead = false) {
-  root ??= createRoot(document.createElement('div'));
+  if (!root) { container = document.createElement('div'); root = createRoot(container); }
   await act(async () => root!.render(createElement(Probe, { canMarkRead })));
 }
-beforeEach(() => { vi.clearAllMocks(); h.auth.accountGeneration = 1; h.store.getSessionDeviceId.mockReturnValue(undefined); });
+beforeEach(() => { vi.clearAllMocks(); h.auth.accountGeneration = 1; h.language = "en"; h.store.getSessionDeviceId.mockReturnValue(undefined); });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 
 describe('companion task visibility refresh', () => {
@@ -121,4 +127,16 @@ describe('companion task visibility refresh', () => {
     await act(async () => reject(new Error('[NOT_FOUND] old owner')));
     expect(h.router.replace).not.toHaveBeenCalled();
   });
+});
+
+it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])('sends the viewing locale %s and reloads when it changes', async (locale) => {
+  h.get.mockImplementation(async () => ({ revision: 'same', links: [], display: { title: h.language } }));
+  h.language = locale;
+  await render();
+  expect(h.get).toHaveBeenLastCalledWith(h.link.invoke, { deviceId: 'mac', deviceName: 'My Mac' },
+    { collectionId: 'teammates', id: 'bot-1', kind: 'bot' }, locale);
+  h.language = locale === 'en' ? 'ja' : 'en';
+  await render();
+  expect(h.get.mock.calls.at(-1)?.[3]).toBe(h.language);
+  expect(container.textContent).toBe(h.language);
 });

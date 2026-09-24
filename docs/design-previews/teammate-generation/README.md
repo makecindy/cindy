@@ -46,3 +46,28 @@ node docs/design-previews/teammate-generation/fixtures/capture-mobile-components
 三种运行时均已有真实事件：Claude/Codex 发 `status: Compacting...`，Pi 发 `status: Compacting context…`；成功后发 `compact_boundary`。本次在宿主公共阶段中识别它们，优先于前一个工具结果和旧消息，发布 `compacting`。边界回到思考，后续文本回到回复；停止/错误撤下生成状态，新一轮重新开始。后台手动压缩不伪造前台生成轮。
 
 五语言的列表和输入框使用同一固定本地化文案（简中“正在整理对话…”），不为压缩调用润色模型。既有 1 秒文字切换节奏和 alpha 动画保持；晚到的旧润色结果因阶段变化丢弃。状态机、远程列表、Desktop 真实组件和 Mobile hook 测试覆盖开始、结束、恢复、停止、失败和缓存残留。新增图片仍为离线真实组件 fixture，不是新正式版或手机实机截图。
+
+## 手机主时间线对齐补充
+
+以 `235c3953e3afb60447a29a692d5a3b23e28bcd53` 为对照基线，修复手机正文开关依赖异步资源详情的问题：
+已确认 `source=bot` 的任务在详情暂缺、普通任务路由进入及刷新时继续使用伙伴正文投影；未知任务不提前过滤。
+手机资源读取传入查看端 locale，同一 revision 切语言后仍应用新投影。
+私聊记录与打开路径保留，入口改为与 Desktop 一致的发送方向，不在主时间线打印私聊摘要。
+完成结果回执视为交付，避免恢复它前面的无终态旁白。
+
+新增重现入口：
+
+```sh
+node docs/design-previews/teammate-generation/fixtures/capture-mobile-conversation.cjs
+node docs/design-previews/teammate-generation/fixtures/capture-desktop-conversation.cjs
+```
+
+PNG 位于忽略的 `tmp/teammate-generation-evidence/`：`mobile-chat-before/after-light/dark.png` 与
+`desktop-chat-reference-light/dark.png`。手机图使用真实私聊组件、主题和消息 normalize/render/projection，
+外层导航、正文文本容器、输入框和修改前的工作行是 fixture；前图模拟“已知伙伴但资源详情未到”的真实入口条件。
+桌面参考使用当前真实 `BotDirectMessageCard` 与主题，Desktop 本次没有视觉修改。全部内容为合成数据。
+这些图片已按 Light/Dark 目检；不代表 iPhone、Android 或双设备实机验收，也不证明任一安装包已收到修复。
+
+通用消息封口由宿主为 Claude Code、Codex 和 Pi 写入，手机不按引擎另造过滤规则；回归覆盖完成标记、无价格用量封口、
+实时/历史、附件、问题、错误和结果回执。桌面对应投影、私聊路由、结果卡与润色状态测试作为语义参照。
+原有一秒文案节奏与 alpha 实现未修改；公开阶段沿既有 `workingPhase`/压缩状态传递，旧端保持本地化阶段兜底。

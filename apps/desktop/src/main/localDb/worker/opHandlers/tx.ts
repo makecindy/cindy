@@ -2313,6 +2313,10 @@ function rewindCommit(db: Database.Database, args: unknown): void {
     payload.nativeForkAnchorSessionMap,
   );
   const now = expectNumber(payload.now, 'now');
+  const expectedClearedAt =
+    payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
+      ? null
+      : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
   const rows = db
     .prepare(
       `SELECT id, client_id, role, created_at, agent_meta, tool_use_id
@@ -2368,6 +2372,25 @@ function rewindCommit(db: Database.Database, args: unknown): void {
     : null;
   const updateAgentMeta = db.prepare('UPDATE messages SET agent_meta = ? WHERE id = ?');
   const transaction = db.transaction(() => {
+    const session = db
+      .prepare('SELECT cleared_at FROM sessions WHERE id = ?')
+      .get(sessionId) as { cleared_at: number | null } | undefined;
+    if (!session) {
+      throw Object.assign(new Error(`Session missing: ${sessionId}`), { code: 'NOT_FOUND' });
+    }
+    const currentClearedAt = session.cleared_at ?? null;
+    if ((currentClearedAt ?? -1) !== (expectedClearedAt ?? -1)) {
+      throw Object.assign(
+        new Error(`CLEAR_GENERATION_CHANGED: clear-boundary changed for ${sessionId}`),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
+    if (currentClearedAt !== null && targetCreatedAt <= currentClearedAt) {
+      throw Object.assign(
+        new Error(`CLEAR_GENERATION_CHANGED: target is at or before /clear for ${sessionId}`),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
     for (const id of idsToRewind) updateMessage.run(now, id);
     // 保留下来的消息若持有旧 thread 的原生 turn 锚点,随 thread 替换一起重映射
     // (与 fork.session 复制消息时的处理一致),软删与重映射同一事务。

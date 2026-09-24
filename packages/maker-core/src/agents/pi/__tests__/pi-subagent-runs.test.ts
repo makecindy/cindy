@@ -944,6 +944,10 @@ describe('PI durable subagent run store', () => {
     const foreignLivePid = process.ppid;
     /** A pid that is certainly not running: 2^22 is above every OS pid_max. */
     const deadPid = 4_194_303;
+    /** These cases pin ownership, not stale detection. A default `updatedAt: 20`
+     *  is already expired, so the sync identity probe (Windows: powershell, 5s)
+     *  would starve the 5s test budget. */
+    const live = (): { updatedAt: number } => ({ updatedAt: Date.now() });
 
     async function homeWithRuns(): Promise<{ agentHome: string; root: string }> {
       const agentHome = await makeRoot();
@@ -957,9 +961,11 @@ describe('PI durable subagent run store', () => {
       const foreign = '123e4567-e89b-42d3-a456-426614174061';
       await writeStatus(root, status(mine, {
         runtimeOwnerId: piSubagentRuntimeOwnerId(process.pid, 'scope-mine'),
+        ...live(),
       }));
       await writeStatus(root, status(foreign, {
         runtimeOwnerId: piSubagentRuntimeOwnerId(foreignLivePid, 'scope-foreign'),
+        ...live(),
       }));
 
       // Times out because our own run never goes terminal; what matters is who
@@ -978,6 +984,7 @@ describe('PI durable subagent run store', () => {
       const orphan = '123e4567-e89b-42d3-a456-426614174062';
       await writeStatus(root, status(orphan, {
         runtimeOwnerId: piSubagentRuntimeOwnerId(deadPid, 'scope-crashed'),
+        ...live(),
       }));
 
       await expect(stopAllPiSubagentRunsForExit(agentHome, 150, { hostPid: process.pid }))
@@ -990,7 +997,7 @@ describe('PI durable subagent run store', () => {
     it('fails closed on a legacy owner id that carries no host prefix', async () => {
       const { agentHome, root } = await homeWithRuns();
       const legacy = '123e4567-e89b-42d3-a456-426614174063';
-      await writeStatus(root, status(legacy, { runtimeOwnerId: 'owner-a' }));
+      await writeStatus(root, status(legacy, { runtimeOwnerId: 'owner-a', ...live() }));
 
       await expect(stopAllPiSubagentRunsForExit(agentHome, 150, { hostPid: process.pid }))
         .resolves.toBe(false);
@@ -1005,6 +1012,7 @@ describe('PI durable subagent run store', () => {
       const foreign = '123e4567-e89b-42d3-a456-426614174065';
       await writeStatus(root, status(foreign, {
         runtimeOwnerId: piSubagentRuntimeOwnerId(foreignLivePid, 'scope-foreign'),
+        ...live(),
       }));
 
       // Only the foreign run exists: this host has nothing to stop and must not
@@ -1016,6 +1024,7 @@ describe('PI durable subagent run store', () => {
 
       await writeStatus(root, status(mine, {
         runtimeOwnerId: piSubagentRuntimeOwnerId(process.pid, 'scope-mine'),
+        ...live(),
       }));
       expect(hasActivePiSubagentRunsSync(agentHome, { hostPid: process.pid })).toBe(true);
       expect(requestStopAllPiSubagentRunsSync(agentHome, { hostPid: process.pid })).toBe(1);
