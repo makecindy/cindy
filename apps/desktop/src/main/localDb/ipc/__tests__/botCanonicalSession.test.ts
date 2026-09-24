@@ -6922,6 +6922,10 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(runtime.started).toHaveLength(turnsBeforeSwitch); // Switching never replays the task.
       await expect(runtime.delegation.advanceSessionTaskRoute('unowned-session', started.delegationId, 7, preview.selectionToken!))
         .resolves.toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+      h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run(started.childSessionId);
+      await expect(runtime.delegation.inspectSessionTaskRoute('session-1', started.delegationId))
+        .resolves.toMatchObject({ ok: false, errorCode: 'CHILD_SESSION_INVALID' });
+      expect(inspect).toHaveBeenCalledTimes(4); // No new candidate is shown for an archived child.
     } finally {
       runtime.dispose();
     }

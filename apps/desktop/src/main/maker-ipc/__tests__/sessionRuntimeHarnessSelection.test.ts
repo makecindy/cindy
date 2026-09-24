@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { nextBotModelRoute } from '../../../shared/botModelChain';
+import { createBotSessionTaskRouteBridge } from '../botSessionTaskRouteBridge';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
@@ -11,6 +13,7 @@ import {
   type HarnessRuntimeSelectionDeps,
 } from '../sessionRuntimeHarnessSelection';
 import type { SessionRuntimeProfile } from '../sessionRuntimeControl';
+import type { SessionRuntimeResult } from '../sessionControlService';
 
 function setup(running = false) {
   let generation = 4;
@@ -87,6 +90,62 @@ const request = {
 };
 
 describe('runtime harness selection', () => {
+  it('routes a configured cross-harness task choice through the runtime controller', async () => {
+    const h = setup();
+    const bridge = createBotSessionTaskRouteBridge({
+      getSessionRuntime: async ({ targetSessionId }) => {
+        expect(targetSessionId).toBe('s1');
+        return {
+          ok: true,
+          runtime: {
+            runtimeGeneration: h.deps.generation(targetSessionId),
+            effectiveProfile: h.effective,
+          },
+        } as SessionRuntimeResult;
+      },
+      setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch }) => {
+        expect(patch.harness).toBe('codex');
+        return setSessionRuntimeHarness(h.deps, {
+          targetSessionId,
+          expectedGeneration,
+          patch: { ...patch, harness: patch.harness! },
+        });
+      },
+      readConfiguredCandidate: async (callerSessionId, current, childSessionId) => {
+        expect([callerSessionId, childSessionId]).toEqual(['bot-main', 's1']);
+        const route = nextBotModelRoute([
+          { harness: 'claude', model: 'claude-fable-5', providerId: 'old-provider', effort: 'high', fastMode: false },
+          { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: '', fastMode: false },
+        ], { harness: current.agentKind === 'claude-code' ? 'claude' : current.agentKind,
+          model: current.model, providerId: current.providerId });
+        return { candidate: route ? {
+          agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
+          model: route.model,
+          providerId: route.providerId,
+          effort: null,
+          fastMode: route.fastMode,
+        } satisfies SessionRuntimeProfile : null };
+      },
+    });
+    const preview = await bridge.inspect('bot-main', 's1');
+    expect(preview).toMatchObject({
+      ok: true, generation: 4,
+      next: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' },
+    });
+    if (!preview.ok || !preview.next) throw new Error('Expected configured cross-harness route');
+    expect(await bridge.advance('s1', preview.generation, preview.next)).toMatchObject({
+      ok: true, status: 'deferred', generation: 5,
+    });
+    expect(h.pending.get('s1')).toMatchObject({
+      targetAgentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
+    });
+    expect(pendingHarnessRuntimeMutation(h.pending.get('s1'), 5))
+      .toMatchObject({ profile: { effort: null } });
+    expect(h.close).not.toHaveBeenCalled();
+    await expect(bridge.advance('s1', preview.generation, preview.next))
+      .resolves.toMatchObject({ ok: false, errorCode: 'CONFLICT' });
+  });
+
   it('keeps a configured default effort instead of inheriting the previous harness effort', async () => {
     const h = setup();
     const result = await setSessionRuntimeHarness(h.deps, {

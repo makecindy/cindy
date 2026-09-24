@@ -442,6 +442,7 @@ import {
   discardDelegationQueuedInputs,
   type BotDelegationService,
 } from './botDelegationService.js';
+import { createBotSessionTaskRouteBridge } from './botSessionTaskRouteBridge.js';
 import {
   createBotDirectMessageService,
   type BotDirectMessageService,
@@ -9741,42 +9742,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fastMode: getSessionFastMode(sessionId),
       } : null;
     },
-    taskRoute: {
-      inspect: async (callerSessionId, childSessionId) => {
-        const runtime = await sessionControlService.getSessionRuntime({ targetSessionId: childSessionId });
-        if (!runtime.ok) return runtime;
-        const next = await readBotFallbackCandidate(
-          callerSessionId, runtime.runtime.effectiveProfile, childSessionId,
-        );
-        return {
-          ok: true as const,
-          generation: runtime.runtime.runtimeGeneration,
-          current: runtime.runtime.effectiveProfile,
-          next: next.candidate,
-        };
-      },
-      advance: async (childSessionId, expectedGeneration, route) => {
-        const current = await sessionControlService.getSessionRuntime({ targetSessionId: childSessionId });
-        if (!current.ok) return current;
-        if (current.runtime.runtimeGeneration !== expectedGeneration) {
-          return { ok: false as const, errorCode: 'CONFLICT', message: 'Task runtime changed before model selection' };
-        }
-        const result = await sessionControlService.setSessionRuntime({
-          targetSessionId: childSessionId,
-          expectedGeneration,
-          patch: {
-            ...(current.runtime.effectiveProfile.agentKind === route.agentKind ? {} : { harness: route.agentKind }),
-            model: route.model,
-            providerId: route.providerId,
-            effort: route.effort,
-            fastMode: route.fastMode,
-          },
-        });
-        return result.ok
-          ? { ok: true as const, status: result.status, generation: result.generation }
-          : result;
-      },
-    },
+    taskRoute: createBotSessionTaskRouteBridge({
+      getSessionRuntime: params => sessionControlService.getSessionRuntime(params),
+      setSessionRuntime: params => sessionControlService.setSessionRuntime(params),
+      readConfiguredCandidate: (callerSessionId, current, childSessionId) =>
+        readBotFallbackCandidate(callerSessionId, current, childSessionId),
+    }),
     dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted, dispatcherSessionId }) =>
       dispatchBotSessionMessage({
         targetSessionId,

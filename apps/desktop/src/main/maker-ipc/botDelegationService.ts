@@ -3053,6 +3053,14 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       if (!found.row.childSessionId || !deps.taskRoute) {
         return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task model control is unavailable' };
       }
+      const [child] = await getDbClient().drizzle.select({ status: sessions.status })
+        .from(sessions).where(eq(sessions.id, found.row.childSessionId)).limit(1);
+      if (child?.status !== 'active') {
+        return { ok: false as const, errorCode: 'CHILD_SESSION_INVALID', message: 'Task Session is no longer active' };
+      }
+      if (isActiveDelegation(found.row.status as DelegationStatus) || deps.taskControl?.isActive(found.row.childSessionId)) {
+        return { ok: false as const, errorCode: 'TASK_ACTIVE', message: 'Finish or stop the current execution before changing its model' };
+      }
       const inspected = await deps.taskRoute.inspect(callerSessionId, found.row.childSessionId);
       return inspected.ok ? { ...inspected, selectionToken: inspected.next
         ? createHash('sha256').update(JSON.stringify([inspected.generation, inspected.next])).digest('hex')
