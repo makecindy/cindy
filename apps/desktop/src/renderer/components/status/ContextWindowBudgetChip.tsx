@@ -328,11 +328,14 @@ export function ContextWindowBudgetChip({
 
   const options = useMemo(() => {
     if (effectiveDefaultWindow === null) return [];
-    const base = buildContextWindowBudgetOptions({
-      defaultWindow: effectiveDefaultWindow,
-      maxWindow: effectiveMaxWindow,
-      modelLimit,
-    });
+    // 档位表与行内百分比必须用**同一个基准**：只修显示不修档位，两者会分叉—— 被控端申报的
+    // 上限低于它自己解析出的默认档时（老 main 会把未核实路由的兜底默认当上限发过来），
+    // 基准被抬到默认档，而档位仍按那个旧上限生成，25%/50% 会被 200K 地板过滤掉，
+    // 菜单只剩「当前档 + 模型默认」两行。所以新端直接拿 tierBase（已含保护）当上限。
+    // 老被控端维持原口径：只允许收紧，基准就是那个保守上限（不能拿默认档去抬）。
+    const base = buildContextWindowBudgetOptions(effectiveWindowsReported
+      ? { defaultWindow: effectiveDefaultWindow, maxWindow: tierBase, modelLimit: null }
+      : { defaultWindow: effectiveDefaultWindow, maxWindow: effectiveMaxWindow, modelLimit });
     // 已保存的预算可能不在当前档位集合里（目录默认值变过、或它来自模型级上限口径）。
     // 补一条当前档，避免单选组没有匹配项而显示成空；同样按上限夹紧，否则单选组会
     // 凭空多出比有效值更大的档。
@@ -347,7 +350,7 @@ export function ContextWindowBudgetChip({
     return [...base, { tokens: current, kind: 'current' as const }].sort(
       (a, b) => a.tokens - b.tokens,
     );
-  }, [storedBudget, effectiveDefaultWindow, effectiveMaxWindow, modelLimit, ceiling]);
+  }, [storedBudget, effectiveDefaultWindow, effectiveMaxWindow, effectiveWindowsReported, tierBase, modelLimit, ceiling]);
 
   useEffect(() => {
     if (options.length === 0) return;

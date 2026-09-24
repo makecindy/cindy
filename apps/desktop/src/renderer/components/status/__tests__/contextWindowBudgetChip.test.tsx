@@ -532,13 +532,18 @@ function chipText(): string {
   });
 
   it('clamps the percentage base even if the bounds contradict themselves', async () => {
-    // 防御：旧版被控端 / 手改偏好都可能送来「默认档 > 上限」的组合。展示层宁可把上限档显示成
+    // 防御：老被控端 / 手改偏好都可能送来「默认档 > 上限」的组合。展示层宁可把上限档显示成
     // 不到 100%，也不打出一行 >100%（用户无法解释那个数字）。
+    // 用户远程端实测（2026-09-22）：这类载荷下菜单只剩「20% · 200K」+「100% · 1M 模型默认」
+    // 两行 —— 百分比基准被抬到默认档，档位表却还按那个旧上限生成，25%/50% 被 200K 地板过滤。
+    // 档位与百分比必须同源：修完应是 20%（当前档）/ 25% / 50% / 100%（模型默认）。
     installElectronApi(vi.fn(async () => boundsView({
       defaultWindow: 200_000,
       maxWindow: 200_000,
       modelLimit: 1_000_000,
       defaultEffectiveWindow: 1_000_000,
+      budget: 200_000,
+      budgetCustomized: true,
     })));
 
     renderChip({ providers: null });
@@ -547,6 +552,9 @@ function chipText(): string {
     expect(defaultRow?.getAttribute('data-token')).toBe('1000000');
     // 分母取「上限与默认档里更大的一个」→ 默认档落在 100%，其余档只会更小。
     expect(percentsIn(options).every((percent) => percent <= 100)).toBe(true);
+    // 档位表跟着同一个基准走：25%/50% 不能因为旧上限而消失。
+    expect(tierTokens()).toEqual(['200000', '250000', '500000', '1000000']);
+    expect(percentsIn(options)).toEqual([20, 25, 50, 100]);
   });
 
   it('shows absolute values only when the route has no known ceiling at all', async () => {
