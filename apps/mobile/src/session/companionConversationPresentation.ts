@@ -32,7 +32,16 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
   // A later delivery is already the result. Do not restore its unsealed preamble.
   const deliveredAfter = new Set<string>();
   let delivery = false;
+  let nextMessageAt: number | null = null;
   for (const item of [...flattened].reverse()) {
+    if (item.type === 'message') {
+      const createdAt = Date.parse(item.message.createdAt);
+      if (Number.isFinite(createdAt)) {
+        // A receipt in a newer loaded window cannot suppress an older reply.
+        if (nextMessageAt !== null && nextMessageAt - createdAt > HISTORY_GAP_SPLIT_MS) delivery = false;
+        nextMessageAt = createdAt;
+      }
+    }
     if (item.type === 'message' && item.message.kind === 'user') delivery = false;
     else if (isDelivery(item)) delivery = true;
     else if (delivery) deliveredAfter.add(item.key);
