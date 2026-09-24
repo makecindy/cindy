@@ -29,6 +29,7 @@ import {
 } from '@/lib/statusBarCards';
 
 import { cn } from '@/lib/utils';
+import { handOffTabFromCard } from '@/lib/focusTraversal';
 import { extractIpcError } from '@/utils/ipcError';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
@@ -533,6 +534,18 @@ export function ContextWindowBudgetChip({
         sideOffset={8}
         portalContainer={cardPortalHost}
         className="min-w-[220px] p-1.5"
+        // Radix 给 FocusScope 写死 `loop: true`：Tab 在卡内永远环回，键盘用户一辈子出不了卡。
+        // 把两个 Tab 边缘接过来（capture 先于 Radix 的 bubble handler）：在最后一个/第一个
+        // 可 Tab 元素上把焦点交出卡外，其余卡内 Tab 行为不变。
+        onKeyDownCapture={(event) => {
+          if (event.key !== 'Tab') return;
+          const cardRoot = event.currentTarget;
+          if (!(cardRoot instanceof HTMLElement)) return;
+          if (handOffTabFromCard(cardRoot, event)) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
         // 悬浮打开不抢焦点（鼠标用户不该被移走焦点）；键盘打开保持 Radix 默认，方向键照常可用。
         onOpenAutoFocus={(event) => {
           if (cardOpenSourceRef.current === 'hover') event.preventDefault();

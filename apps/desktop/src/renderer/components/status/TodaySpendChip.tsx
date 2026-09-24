@@ -16,6 +16,7 @@ import type { TFunction } from 'i18next';
 import { summarizeCodexRateLimitReset } from '@cindy/maker-shared/session-controls';
 
 import { cn } from '@/lib/utils';
+import { handOffTabFromCard } from '@/lib/focusTraversal';
 import {
   DAILY_SOFT_LIMIT_FACTOR,
   formatCompactMoney,
@@ -1621,6 +1622,17 @@ export function TodaySpendChip({
         <PopoverContent
           ref={quotaPopoverContentRef}
           portalContainer={quotaPopoverPortalHost}
+          // Radix 给 FocusScope 写死 `loop：true`（见 popover.tsx）：Tab 在卡内永远环回。
+          // 把两个 Tab 边缘接过来，让 Tab 能从卡片走到右边下一枚 chip（用户实测）。
+          onKeyDownCapture={(event) => {
+            if (event.key !== 'Tab') return;
+            const cardRoot = event.currentTarget;
+            if (!(cardRoot instanceof HTMLElement)) return;
+            if (handOffTabFromCard(cardRoot, event)) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
           side="top"
           align="end"
           sideOffset={8}
