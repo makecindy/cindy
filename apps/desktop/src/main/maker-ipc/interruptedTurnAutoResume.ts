@@ -202,14 +202,14 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   if (reason.length > 0) return false;
   // Prefer provider status/tags to text compatibility. In particular, an auth,
   // quota or invalid-request rejection must not become retryable just because
-  // its explanation also mentions a temporarily unavailable service.
+  // its explanation mentions temporary unavailability or also carries a 5xx.
   const status = signals.errorStatus;
   if (status !== undefined && status >= 400 && status < 500) return false;
-  if ([502, 503, 504, 529].includes(status ?? 0)) return true;
   if ([
     'authentication_failed', 'authentication_error', 'billing_error', 'rate_limit',
     'invalid_request', 'permission_error', 'insufficient_quota', 'context_length_exceeded',
   ].includes(signals.sdkError ?? '')) return false;
+  if ([502, 503, 504, 529].includes(status ?? 0)) return true;
   if (isStreamTruncationError(signals)) return true;
   const message = signals.message;
   if (typeof message !== 'string' || message.length === 0) return false;

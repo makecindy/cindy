@@ -28,11 +28,18 @@ describe('isInterruptedTurnError', () => {
     },
   );
 
-  it.each(['authentication_failed', 'authentication_error', 'billing_error', 'rate_limit', 'invalid_request', 'permission_error', 'insufficient_quota', 'context_length_exceeded'])(
-    'does not override %s with availability wording', (sdkError) => {
-      expect(isInterruptedTurnError({ message: availabilityError, sdkError })).toBe(false);
+  it.each(
+    ['authentication_failed', 'authentication_error', 'billing_error', 'rate_limit', 'invalid_request', 'permission_error', 'insufficient_quota', 'context_length_exceeded']
+      .flatMap(sdkError => [undefined, 502, 503, 504, 529].map(errorStatus => ({ sdkError, errorStatus }))),
+  )(
+    'does not override $sdkError with availability wording or HTTP $errorStatus', ({ sdkError, errorStatus }) => {
+      expect(isInterruptedTurnError({ message: availabilityError, sdkError, errorStatus })).toBe(false);
     },
   );
+
+  it.each([502, 503, 504, 529])('still recovers HTTP %s without a rejection category', (errorStatus) => {
+    expect(isInterruptedTurnError({ message: 'opaque', sdkError: 'server_error', errorStatus })).toBe(true);
+  });
 
   it('preserves text compatibility for unclassified server errors', () => {
     expect(isInterruptedTurnError({ message: availabilityError, errorStatus: 500 })).toBe(true);
