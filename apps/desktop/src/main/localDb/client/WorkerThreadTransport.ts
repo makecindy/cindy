@@ -1661,6 +1661,10 @@ function rewindCommit(readyDb, args) {
   const requireLatestUser = payload.requireLatestUser === true;
   const nativeForkAnchorSessionMap = normalizeNativeForkAnchorSessionMap(payload.nativeForkAnchorSessionMap);
   const now = expectNumber(payload.now, 'now');
+  const expectedClearedAt =
+    payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
+      ? null
+      : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
   const rows = readyDb.prepare(
     'SELECT id, client_id, role, created_at, agent_meta, tool_use_id FROM messages WHERE session_id = ? AND rewind_at IS NULL',
   ).all(sessionId);
@@ -1697,6 +1701,23 @@ function rewindCommit(readyDb, args) {
     : null;
   const updateAgentMeta = readyDb.prepare('UPDATE messages SET agent_meta = ? WHERE id = ?');
   readyDb.transaction(() => {
+    const session = readyDb.prepare('SELECT cleared_at FROM sessions WHERE id = ?').get(sessionId);
+    if (!session) {
+      throw Object.assign(new Error('Session missing: ' + sessionId), { code: 'NOT_FOUND' });
+    }
+    const currentClearedAt = session.cleared_at ?? null;
+    if ((currentClearedAt ?? -1) !== (expectedClearedAt ?? -1)) {
+      throw Object.assign(
+        new Error('CLEAR_GENERATION_CHANGED: clear-boundary changed for ' + sessionId),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
+    if (currentClearedAt !== null && targetCreatedAt <= currentClearedAt) {
+      throw Object.assign(
+        new Error('CLEAR_GENERATION_CHANGED: target is at or before /clear for ' + sessionId),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
     for (const id of idsToRewind) updateMessage.run(now, id);
     // Mirror worker/opHandlers/tx.ts: surviving rows that still anchor the old
     // Codex thread are remapped to the replacement thread in the same transaction.

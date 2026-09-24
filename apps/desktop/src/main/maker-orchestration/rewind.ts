@@ -595,6 +595,49 @@ async function loadCodexFileRewindRepoContext(makerSession: { workDir: string; r
  * 线程;否则什么都不传。判定逻辑与 fork 共用,原生 turn 计数含失败/重试轮次,不能拿
  * 可见 user 消息数去数。
  */
+async function readSessionClearedAt(sessionId: string): Promise<number | null> {
+  const [sessionRow] = await getDbClient()
+    .drizzle
+    .select({ clearedAt: sessions.clearedAt })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  return sessionRow?.clearedAt ?? null;
+}
+
+async function rereadSessionClearedAt(sessionId: string): Promise<number | null> {
+  // SDK 副作用前的代次复核必须独立于 rewind.test.ts 的 drizzle select 队列。
+  const row = await getDbClient().queryOne<{ cleared_at: number | null }>(
+    'SELECT cleared_at FROM sessions WHERE id = ?',
+    [sessionId],
+  );
+  return row?.cleared_at ?? null;
+}
+
+function assertTargetVisibleAfterClear(targetCreatedAt: number, clearedAt: number | null): void {
+  if (clearedAt !== null && targetCreatedAt <= clearedAt) {
+    throw rewindError(
+      'REWIND_UNSUPPORTED_HISTORY',
+      '目标消息在 /clear 边界之前,当前引擎的会话历史无法回滚到那里',
+    );
+  }
+}
+
+async function assertClearGenerationUnchanged(
+  sessionId: string,
+  expectedClearedAt: number | null,
+  targetCreatedAt: number,
+): Promise<void> {
+  const clearedAt = await rereadSessionClearedAt(sessionId);
+  if ((clearedAt ?? -1) !== (expectedClearedAt ?? -1)) {
+    throw rewindError(
+      'REWIND_UNSUPPORTED_HISTORY',
+      '会话在回退判定后被 /clear，当前引擎的会话历史无法回滚到原目标',
+    );
+  }
+  assertTargetVisibleAfterClear(targetCreatedAt, clearedAt);
+}
+
 async function loadCodexRewindNativeBoundary(
   sessionId: string,
   ctx: Pick<RewindContext, 'targetCreatedAt' | 'targetRowid'>,
@@ -604,27 +647,18 @@ async function loadCodexRewindNativeBoundary(
   lastTurnId?: string;
   forkAtTimestampMs?: number;
   rewindsToNativeThreadStart?: true;
+  expectedClearedAt: number | null;
 }> {
   const currentSessionMeta = await getMaker().getSessionMeta(sessionId);
   const sdkSessionId =
     activeSdkSessionId(liveSdkSessionId) ??
     activeSdkSessionId(currentSessionMeta?.sdkSessionId ?? undefined);
-  if (!sdkSessionId) return {};
+  if (!sdkSessionId) return { expectedClearedAt: null };
   const db = getDbClient().drizzle;
-  const [sessionRow] = await db
-    .select({ clearedAt: sessions.clearedAt })
-    .from(sessions)
-    .where(eq(sessions.id, sessionId))
-    .limit(1);
-  const clearedAt = sessionRow?.clearedAt ?? null;
-  if (clearedAt !== null && ctx.targetCreatedAt <= clearedAt) {
-    // /clear 之后旧 target 已不在当前原生线程。空时间线不能当成第一轮,否则会换空
-    // 线程并把 clear 之后的新消息一并软删(#4994 review P1)。
-    throw rewindError(
-      'REWIND_UNSUPPORTED_HISTORY',
-      '目标消息在 /clear 边界之前,当前引擎的会话历史无法回滚到那里',
-    );
-  }
+  const clearedAt = await readSessionClearedAt(sessionId);
+  // /clear 之后旧 target 已不在当前原生线程。空时间线不能当成第一轮,否则会换空
+  // 线程并把 clear 之后的新消息一并软删(#4994 review P1)。
+  assertTargetVisibleAfterClear(ctx.targetCreatedAt, clearedAt);
   const beforeTarget =
     ctx.targetRowid === undefined
       ? lt(messages.createdAt, ctx.targetCreatedAt)
@@ -653,9 +687,9 @@ async function loadCodexRewindNativeBoundary(
     .limit(200);
   const rows = [...recent].reverse();
   const lastTurnId = resolveCodexTurnAnchor(rows, sdkSessionId);
-  if (lastTurnId) return { sdkSessionId, lastTurnId };
+  if (lastTurnId) return { sdkSessionId, lastTurnId, expectedClearedAt: clearedAt };
   const forkAtTimestampMs = resolveCodexForkEventTimestamp(rows);
-  if (forkAtTimestampMs !== undefined) return { sdkSessionId, forkAtTimestampMs };
+  if (forkAtTimestampMs !== undefined) return { sdkSessionId, forkAtTimestampMs, expectedClearedAt: clearedAt };
   // 第一轮判定要看完整时间线:切回停泊线程时,更早的片段仍属于当前线程。只取 user 与
   // 边界行,user 正文不参与判定,不读出来。
   const timeline = await db
@@ -680,8 +714,8 @@ async function loadCodexRewindNativeBoundary(
     timeline.map((row) => ({ ...row, agentMeta: null })),
     sdkSessionId,
   )
-    ? { sdkSessionId, rewindsToNativeThreadStart: true }
-    : { sdkSessionId };
+    ? { sdkSessionId, rewindsToNativeThreadStart: true, expectedClearedAt: clearedAt }
+    : { sdkSessionId, expectedClearedAt: clearedAt };
 }
 
 export async function commitRewindAtMessage(
@@ -702,14 +736,23 @@ export async function commitRewindAtMessage(
   // pendingRewindTo, 下次 send 仍走三件套 (forkSession=true CLI 端兜底回滚)。
   let rewindResult: Awaited<ReturnType<typeof makerSession.commitRewindFiles>> | undefined;
   let nativeForkAnchorSessionMap: Array<[string, string]> | undefined;
+  let expectedClearedAt: number | null = null;
   if (ctx.agentKind === 'codex' || ctx.agentKind === 'pi') {
     // thread/rollback 不可用(分页线程 #4421、0.156.0 起已移除 #4994):把 target 之前的
     // 原生 turn 边界(持久化锚点、事件时间戳或线程第一轮标记)一并交给 maker-core,
     // 由它改走 thread/fork 或换空线程。
-    const { sdkSessionId: previousSdkSessionId, ...nativeBoundary } =
+    const {
+      sdkSessionId: previousSdkSessionId,
+      expectedClearedAt: codexExpectedClearedAt,
+      ...nativeBoundary
+    } =
       ctx.agentKind === 'codex'
         ? await loadCodexRewindNativeBoundary(sessionId, ctx, makerSession.sdkSessionId)
-        : {};
+        : { expectedClearedAt: await rereadSessionClearedAt(sessionId) };
+    expectedClearedAt = codexExpectedClearedAt ?? null;
+    // /clear 可能在读完时间线之后、SDK 换空线程之前落库。副作用前再核一次代次,
+    // 最终 rewind.commit 事务再 CAS 同一值(#4994 review P1)。
+    await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
     const commitThreadRollback = () =>
       makerSession.commitRewindFiles('', '', { tailTurnsToDrop: ctx.tailTurnsToDrop, ...nativeBoundary });
     const logCompensationError = (compErr: unknown, rollbackCommit: string | null) => {
@@ -752,18 +795,22 @@ export async function commitRewindAtMessage(
     ) {
       nativeForkAnchorSessionMap = [[previousSdkSessionId, rewindResult.sdkSessionId]];
     }
-  } else if (ctx.userUuid && opts?.allowFileRestore !== false) {
-    rewindResult = await makerSession.commitRewindFiles(ctx.userUuid, ctx.assistantUuid!);
   } else {
-    log.info(
-      opts?.allowFileRestore === false
-        ? `[rewind commit] sid=${sessionId.slice(0, 8)} allowFileRestore=false — skip SDK rewindFiles`
-        : `[rewind commit] sid=${sessionId.slice(0, 8)} userUuid missing — skip SDK rewindFiles, only set pendingRewindTo via empty userUuid path`,
-    );
-    // 走一遍仅为了让 maker-core 设 pendingRewindTo. 它内部 rewindFiles('') 会 SDK 报错,
-    // 我们 catch 了 warn + 继续 (close + 设标记仍执行)。这与老链路 "userUuid 缺时跳过
-    // 文件回滚但保留三件套重启" 行为一致。
-    rewindResult = await makerSession.commitRewindFiles('', ctx.assistantUuid!);
+    expectedClearedAt = await rereadSessionClearedAt(sessionId);
+    await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
+    if (ctx.userUuid && opts?.allowFileRestore !== false) {
+      rewindResult = await makerSession.commitRewindFiles(ctx.userUuid, ctx.assistantUuid!);
+    } else {
+      log.info(
+        opts?.allowFileRestore === false
+          ? `[rewind commit] sid=${sessionId.slice(0, 8)} allowFileRestore=false — skip SDK rewindFiles`
+          : `[rewind commit] sid=${sessionId.slice(0, 8)} userUuid missing — skip SDK rewindFiles, only set pendingRewindTo via empty userUuid path`,
+      );
+      // 走一遍仅为了让 maker-core 设 pendingRewindTo. 它内部 rewindFiles('') 会 SDK 报错,
+      // 我们 catch 了 warn + 继续 (close + 设标记仍执行)。这与老链路 "userUuid 缺时跳过
+      // 文件回滚但保留三件套重启" 行为一致。
+      rewindResult = await makerSession.commitRewindFiles('', ctx.assistantUuid!);
+    }
   }
 
   // ── 段 2：SQLite 事务（软删消息 + 同步写回 replacement sdk_session_id）──
@@ -784,6 +831,7 @@ export async function commitRewindAtMessage(
       preserveMessageUuid: ctx.preserveMessageUuid,
       sdkSessionId: rewindResult?.sdkSessionId,
       now,
+      expectedClearedAt,
       ...(opts?.requireLatestUser ? { requireLatestUser: true } : {}),
       ...(nativeForkAnchorSessionMap ? { nativeForkAnchorSessionMap } : {}),
     });
@@ -793,6 +841,15 @@ export async function commitRewindAtMessage(
   } catch (err) {
     // 原子守卫命中:软删未发生(并发落库的新消息被保住)。必须向上抛而不能
     // 沿用"warn + 继续"——继续会让编辑链路误以为 rewind 成功并触发重发。
+    if (err instanceof Error && err.message.includes('CLEAR_GENERATION_CHANGED')) {
+      log.error(
+        `[rewind commit] sid=${sessionId.slice(0, 8)} /clear 代次在软删临界区内已变——事务未执行(文件回滚可能已发生)`,
+      );
+      throw rewindError(
+        'REWIND_UNSUPPORTED_HISTORY',
+        '会话在回退判定后被 /clear，当前引擎的会话历史无法回滚到原目标',
+      );
+    }
     if (err instanceof Error && err.message.includes('REWIND_TARGET_NOT_LATEST')) {
       log.error(
         `[rewind commit] sid=${sessionId.slice(0, 8)} target 在软删临界区内被新 user 消息超越——事务未执行(文件回滚可能已发生)`,

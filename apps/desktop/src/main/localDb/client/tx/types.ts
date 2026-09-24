@@ -122,6 +122,11 @@ export interface RewindCommitArgs {
    * fork.session 的同名字段),否则后续回退/fork 会把这些锚点当异线程丢弃。
    */
   nativeForkAnchorSessionMap?: Array<[string, string]>;
+  /**
+   * 读历史时看到的 sessions.cleared_at。提交时必须仍相同，否则 /clear 竞态整单回滚。
+   * 省略或 null 表示当时会话未被清空。
+   */
+  expectedClearedAt?: number | null;
   now: number;
 }
 

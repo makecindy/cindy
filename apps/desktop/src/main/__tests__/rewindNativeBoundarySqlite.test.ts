@@ -135,6 +135,8 @@ beforeEach(async () => {
   client = {
     drizzle: db,
     tx: txMock,
+    queryOne: async <T = unknown>(sql: string, params: unknown[] = []) =>
+      sqlite.prepare(sql).get(...params) as T | undefined,
   } as unknown as DbClient;
   setCurrentDbClient(client, 'test-user');
   txMock.mockClear();

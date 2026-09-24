@@ -161,9 +161,10 @@ const txMock = vi.fn((name: string, args: unknown) => {
   txCalls.push({ name, args });
   return Promise.resolve({});
 });
+const queryOneMock = vi.fn(async () => ({ cleared_at: null as number | null }));
 
 vi.mock('../localDb/client/current', () => ({
-  getDbClient: () => ({ drizzle: fakeDb, tx: txMock }),
+  getDbClient: () => ({ drizzle: fakeDb, tx: txMock, queryOne: queryOneMock }),
 }));
 
 let commitRewindAtMessage: typeof import('../maker-orchestration/rewind').commitRewindAtMessage;
@@ -177,6 +178,8 @@ beforeEach(async () => {
   selectQueue.length = 0;
   txCalls.length = 0;
   txMock.mockClear();
+  queryOneMock.mockReset();
+  queryOneMock.mockResolvedValue({ cleared_at: null });
   setLastAssistantTranscriptUuidMock.mockClear();
   previewRewindFilesMock.mockReset();
   commitRewindFilesMock.mockReset();
@@ -1028,6 +1031,26 @@ describe('commitRewindAtMessage', () => {
     await commitRewindAtMessage('sess-1', 'client-id');
 
     expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true });
+    expect(txCalls.find((c) => c.name === 'rewind.commit')?.args).toMatchObject({
+      expectedClearedAt: null,
+    });
+  });
+
+  it('Codex: rechecks /clear generation before replacing the native thread (#4994)', async () => {
+    useFakeSession('codex');
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
+    selectQueue.push([]);
+    selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
+    selectQueue.push([]); // target 之前没有任何行
+    selectQueue.push([]); // 时间线上也没有属于当前线程的 user 行
+    queryOneMock.mockResolvedValueOnce({ cleared_at: 4000 });
+
+    await expect(commitRewindAtMessage('sess-1', 'client-id')).rejects.toMatchObject({
+      code: 'REWIND_UNSUPPORTED_HISTORY',
+    });
+    expect(commitRewindFilesMock).not.toHaveBeenCalled();
+    expect(txCalls).toHaveLength(0);
   });
 
   const agentSwitchRow = (createdAt: number, fromAgentKind: 'cc' | 'codex', fromSdkSessionId: string) => ({
