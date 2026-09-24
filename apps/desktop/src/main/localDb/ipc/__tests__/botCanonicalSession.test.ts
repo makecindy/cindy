@@ -6357,16 +6357,22 @@ describe('Bot Session task end-to-end runtime', () => {
         kind: 'permission' as const,
         requestId: 'permission-1',
         toolName: 'write_file',
-        input: { path: '/tmp/report.md', token: 'private-credential-value' },
+        input: {
+          path: '/tmp/report.md',
+          headers: { 'X-Auth': 'opaque-private-credential' },
+          token: 'private-credential-value',
+        },
         title: '写入报告',
       };
       await runtime.delegation.handleInteractionStart(started.childSessionId, request);
       const wake = runtime.dispatch.mock.calls.find(([params]) =>
         params.clientId === `bot-delegation-interaction:${started.delegationId}:${request.requestId}`,
       )?.[0].message;
-      expect(wake).toContain('"path":"/tmp/report.md"');
-      expect(wake).toContain('"token":"[REDACTED]"');
+      expect(wake).toContain('请求工具: write_file');
+      expect(wake).not.toContain('/tmp/report.md');
+      expect(wake).not.toContain('opaque-private-credential');
       expect(wake).not.toContain('private-credential-value');
+      expect(wake).not.toContain('请求参数');
       await expect(
         runtime.delegation.getSessionTask('session-1', started.delegationId),
       ).resolves.toMatchObject({
