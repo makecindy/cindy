@@ -4,6 +4,8 @@
  */
 let trace = 0;
 
+const MAX_ERROR_TEXT = 300;
+
 /** Correlates the stages of one remote read inside a single exported log. */
 export function nextFileTrace(): number {
   trace = (trace + 1) % 1_000_000;
@@ -27,6 +29,32 @@ export function resolvedUrlKind(url: string): string {
   return scheme ?? "unknown";
 }
 
+/**
+ * Bounded, path-free diagnostic text. Native / SSH / WebView failures often embed
+ * absolute paths or signed URLs; those must not reach the `files` debug records.
+ */
+export function sanitizeDiagnosticText(value: string): string {
+  if (!value) return "";
+  const stripped = value
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"')]+/gi, "[redacted-url]")
+    .replace(/\bdata:[^\s<>"')]+/gi, "[redacted-url]")
+    .replace(/(?:[A-Za-z]:|\\\\)[\\/][^\n<>"']+/g, "[redacted-path]")
+    .replace(
+      /(^|[\s"'=(])(\/(?:Users|home|var|private|data|tmp|srv|mnt|opt|root|storage|sdcard|Applications)\/[^\n<>"']+)/g,
+      "$1[redacted-path]",
+    )
+    .replace(
+      /(^|[\s"'=(])(\/(?:[^/\s<>"')]+\/)+[^/\s<>"')]+)/g,
+      "$1[redacted-path]",
+    )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_ERROR_TEXT);
+  return stripped;
+}
+
 export function errorText(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).slice(0, 300);
+  if (error == null) return "";
+  const raw = error instanceof Error ? error.message : String(error);
+  return sanitizeDiagnosticText(raw);
 }

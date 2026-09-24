@@ -48,6 +48,7 @@ type Download = (
   device: string,
   url: string,
   signal?: AbortSignal,
+  trace?: number,
 ) => Promise<LocalPeerMedia | null>;
 let download: Download | null = null;
 export function installPeerFileDownload(value: Download) {
@@ -60,8 +61,9 @@ export async function tryMobilePeerFile(
   device: string,
   url: string,
   signal?: AbortSignal,
+  trace?: number,
 ) {
-  return download?.(device, url, signal) ?? null;
+  return download?.(device, url, signal, trace) ?? null;
 }
 
 /** Budget includes retained files; reserve room for the consumer copy and keep 256 MiB free. */

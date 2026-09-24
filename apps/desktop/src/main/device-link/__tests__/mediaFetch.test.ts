@@ -24,8 +24,9 @@ vi.mock('../../file-browser/ssh-media.js', () => ({ materializeSshRemoteMedia })
 const getSessionFsSnapshot = vi.hoisted(() => vi.fn());
 vi.mock('../../localDb/ipc/sessions.js', () => ({ getSessionFsSnapshot }));
 
+const logDebug = vi.hoisted(() => vi.fn());
 vi.mock('../../logger.js', () => ({
-  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ info: vi.fn(), debug: logDebug, warn: vi.fn(), error: vi.fn() }),
 }));
 
 const statMock = vi.hoisted(() => vi.fn());
@@ -147,6 +148,7 @@ describe('fetchLocalMediaToOss — scheme 路由', () => {
       }
       expect(uploadLocalFile).not.toHaveBeenCalled();
       expect(close).toHaveBeenCalledOnce();
+      expect(logDebug.mock.calls.flat().join('\n')).not.toMatch(/xdt-|path=|\/cache\//);
     },
   );
   it('xdt-image:// → imageCacheStore.resolveSafe,mime 透传给上传', async () => {

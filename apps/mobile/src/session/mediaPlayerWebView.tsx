@@ -10,7 +10,7 @@ import {
 } from '@/session/mediaPlayerWebViewHtml';
 import { createMediaPlayerWebViewLifecycle } from '@/session/mediaPlayerWebViewLifecycle';
 import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
-import { resolvedUrlKind } from '@/debug/fileDiagnostics';
+import { resolvedUrlKind, sanitizeDiagnosticText } from '@/debug/fileDiagnostics';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useTheme } from '@/theme';
 
@@ -97,7 +97,7 @@ export function RemoteMediaPlayerWebView({
         state: status.state,
         ms: Date.now() - loadStartedAtRef.current,
         duration: status.duration ?? null,
-        mediaError: status.error ?? null,
+        mediaError: status.error ? sanitizeDiagnosticText(status.error) : null,
       });
     }
     if (status) onStatusChange?.(status);
@@ -113,8 +113,9 @@ export function RemoteMediaPlayerWebView({
         mediaPlaybackRequiresUserAction={false}
         onLoadEnd={lifecycleRef.current.onLoadEnd}
         onLoadStart={lifecycleRef.current.onLoadStart}
-        onError={({ nativeEvent }) => logPlayerFailure('media player load error', {
-          code: nativeEvent.code, domain: nativeEvent.domain, description: nativeEvent.description,
+        onError={(event) => logPlayerFailure('media player load error', {
+          code: event?.nativeEvent?.code, domain: event?.nativeEvent?.domain,
+          description: sanitizeDiagnosticText(String(event?.nativeEvent?.description ?? '')),
         })}
         onContentProcessDidTerminate={() => logPlayerFailure('media player process terminated', {})}
         onMessage={handleMessage}

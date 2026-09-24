@@ -442,7 +442,7 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
           mimeOf((uploadExtHint ?? path.extname(absPath)).replace(/^\./, '').toLowerCase()),
       };
       if (before.size > FILE_INLINE_MAX_BYTES) {
-        log.debug(`media:fetch prepare ${url.slice(0, 40)} → transfer size=${before.size} mime=${result.mimeType}`);
+        log.debug(`media:fetch prepare → transfer size=${before.size} mime=${result.mimeType}`);
         return { ...result, transferRequired: true };
       }
       // Bounded read: a growing file cannot allocate an unbounded relay response.
@@ -456,7 +456,7 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
       const after = await file.stat();
       if (after.size !== before.size || after.mtimeMs !== before.mtimeMs)
         throw new Error('REMOTE_FILE_CHANGED');
-      log.debug(`media:fetch prepare ${url.slice(0, 40)} → inline size=${before.size} mime=${result.mimeType}`);
+      log.debug(`media:fetch prepare → inline size=${before.size} mime=${result.mimeType}`);
       return { ...result, inlineBase64: bytes.toString('base64') };
     } finally {
       await file.close();

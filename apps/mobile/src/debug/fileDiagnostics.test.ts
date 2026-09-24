@@ -22,4 +22,22 @@ describe("file diagnostics", () => {
     expect(errorText(new Error("FILE_PEER_CANCELLED"))).toBe("FILE_PEER_CANCELLED");
     expect(errorText("x".repeat(500))).toHaveLength(300);
   });
+
+  it("strips paths and URLs from native, SSH and WebView failures", () => {
+    expect(errorText(new Error("ENOENT: /data/user/0/com.cindy/cache/a.html"))).toBe(
+      "ENOENT: [redacted-path]",
+    );
+    expect(errorText("failed file:///var/mobile/Containers/Data/Application/ABC/tmp/x.html")).toBe(
+      "failed [redacted-url]",
+    );
+    expect(errorText("open E:\\Cindy\\secret\\file.html")).toBe("open [redacted-path]");
+    expect(errorText("ssh: /srv/secret/plot.png")).toBe("ssh: [redacted-path]");
+    expect(errorText("https://oss.example.com/a.mp4?Signature=secret")).toBe("[redacted-url]");
+    expect(
+      errorText(
+        'Error Domain=NSURLErrorDomain Code=-1100 UserInfo={NSErrorFailingURLStringKey=file:///var/mobile/cache/x}',
+      ),
+    ).not.toMatch(/var\/mobile|file:\/\//);
+    expect(errorText("")).toBe("");
+  });
 });

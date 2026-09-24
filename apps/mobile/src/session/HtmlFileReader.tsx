@@ -38,6 +38,7 @@ import { StyleSheet, View } from 'react-native';
 import { WebView, type WebViewProps } from 'react-native-webview';
 import type { ShouldStartLoadRequest, WebViewNavigation } from 'react-native-webview/lib/WebViewTypes';
 
+import { sanitizeDiagnosticText } from '@/debug/fileDiagnostics';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { interceptHtmlNavigation, interceptSnapshotNavigation } from '@/session/htmlNavigationPolicy';
 import { withHtmlPreviewCsp } from '@/session/htmlPreviewCsp';
@@ -84,9 +85,9 @@ export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInset
     contentInset={obscuredContentInsets}
     injectedJavaScriptBeforeContentLoaded={script}
     injectedJavaScript={script}
-    onLoadEnd={({ nativeEvent }) => {
+    onLoadEnd={(event) => {
       if (currentPreview.current !== preview) return;
-      mobileDebugLog('debug', 'files', 'html page load end', { ms: Date.now() - mountedAt, loading: nativeEvent.loading });
+      mobileDebugLog('debug', 'files', 'html page load end', { ms: Date.now() - mountedAt, loading: event?.nativeEvent?.loading });
       if (script) readerRef.current?.injectJavaScript(script);
     }}
     onScroll={({ nativeEvent: { contentOffset } }) => {
@@ -100,11 +101,12 @@ export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInset
     setSupportMultipleWindows={false}
     allowFileAccess={false}
     mediaCapturePermissionGrantType="deny"
-    onError={({ nativeEvent }) => failed('html page load error', {
-      code: nativeEvent.code, domain: nativeEvent.domain, description: nativeEvent.description,
+    onError={(event) => failed('html page load error', {
+      code: event?.nativeEvent?.code, domain: event?.nativeEvent?.domain,
+      description: sanitizeDiagnosticText(String(event?.nativeEvent?.description ?? '')),
     })}
     onContentProcessDidTerminate={() => failed('html page process terminated', {})}
-    onRenderProcessGone={({ nativeEvent }) => failed('html page process gone', { didCrash: nativeEvent.didCrash })}
+    onRenderProcessGone={(event) => failed('html page process gone', { didCrash: event?.nativeEvent?.didCrash })}
     onHttpError={(event) => {
       // Resource failures stay in the page; they must not replace an already loaded document.
       const document = interceptSnapshotNavigation(event.nativeEvent.url, preview.url, preview.documents, preview.onDemand);

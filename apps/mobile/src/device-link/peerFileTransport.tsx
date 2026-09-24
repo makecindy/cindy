@@ -153,14 +153,15 @@ export function PeerFileTransport() {
       device: string,
       url: string,
       signal?: AbortSignal,
+      readTrace?: number,
     ): Promise<LocalMedia | null> => {
       if (!current() || signal?.aborted) throw new Error("FILE_PEER_CANCELLED");
+      const trace = readTrace || nextFileTrace();
       if (busy) {
-        mobileDebugLog("debug", "files", "direct transfer skipped", { reason: "busy" });
+        mobileDebugLog("debug", "files", "direct transfer skipped", { trace, reason: "busy" });
         return null;
       }
       busy = true;
-      const trace = nextFileTrace();
       const startedAt = Date.now();
       let step = "link";
       let received = 0;
@@ -346,8 +347,8 @@ export function PeerFileTransport() {
       }
     };
     const queueRead = createFileReadQueue();
-    const unregister = installPeerFileDownload((device, url, signal) =>
-      queueRead('connection', () => transfer(device, url, signal), signal));
+    const unregister = installPeerFileDownload((device, url, signal, readTrace) =>
+      queueRead('connection', () => transfer(device, url, signal, readTrace), signal));
     mobileDebugLog("debug", "files", "direct transfer ready");
     return () => {
       mobileDebugLog("debug", "files", "direct transfer reset", {

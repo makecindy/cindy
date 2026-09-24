@@ -962,7 +962,7 @@ export function createMobileMakerTransport({
             metadata.size <= FILE_PEER_MAX_BYTES
               ? stage(
                   "direct",
-                  () => tryMobilePeerFile(deviceId, url, opts?.signal),
+                  () => tryMobilePeerFile(deviceId, url, opts?.signal, trace || undefined),
                   (result) => ({ hit: result !== null }),
                 )
               : Promise.resolve(null),
