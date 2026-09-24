@@ -67,6 +67,7 @@
           {
             "id": "xai/grok-4.7",
             "name": "Grok 4.7",
+            "fastModelId": "xai/grok-4.7-build-fast",
             "group": "grok",
             "sortOrder": 47,
             "contextWindow": 500000,
@@ -190,6 +191,7 @@
           {
             "id": "xai/grok-4.7",
             "name": "Grok 4.7",
+            "fastModelId": "xai/grok-4.7-build-fast",
             "group": "grok",
             "sortOrder": 47,
             "contextWindow": 500000,
@@ -313,6 +315,7 @@
           {
             "id": "grok-4.7",
             "name": "Grok 4.7",
+            "fastModelId": "grok-4.7-build-fast",
             "piApi": "openai-responses",
             "group": "grok",
             "sortOrder": 47,

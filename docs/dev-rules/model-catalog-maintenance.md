@@ -76,7 +76,7 @@ Pi 走 `providers[].models.pi`（用户补丁 perAgent.pi 另属合法 schema）
 ## 默认可见性：产品合同与实现差异
 
 [产品合同](configuration-and-overrides.md#模型可见性)：用户开关优先，否则跟随目录 defaultEnabled。
-但 `active-catalog.ts` 的 `selectDefaultModels` 仍可能将订阅/Gateway 的 true 筛成 false；不删除成员或写用户偏好。
+xAI 已直接保留目录默认开关；其他订阅/Gateway 的 `selectDefaultModels` 仍可能将 true 筛成 false，不删除成员或写用户偏好。
 这是待收敛的行为差异，不是合同豁免。排查须同时检查上游值、活动目录值和用户 override；本文不改变行为。
 
 <a id="release"></a>
@@ -163,3 +163,18 @@ app-server 的完整 `model/list`，不使用控制端 OpenAI 登录或网关目
 剥离新增组与引用字段；V4 保留公共资料、本地域及原覆盖语义。各版本响应有独立 ETag。
 旧服务端仍可返回旧目录，新客户端保留旧格式读取；应先部署服务端再发布客户端。
 本次只迁移已有、已核实的价格，不补猜测价格，不改变 XD 的缺价处理。
+
+## xAI 双接口同步与导入验收
+
+新维护入口为 [`tools/model-catalog/sync-xai.mts`](../../tools/model-catalog/sync-xai.mts)，
+用账号 `/models` 与官方 `/language-models` 合并型号和资料，再通过实际活动目录、三引擎
+选择器数据与参考价解析验收。运行方式、凭证边界、缺项报告与实测限制见
+[同步说明](../../tools/model-catalog/README.md)。输出是账号范围的本地导入候选，不可直接
+作为全局 Server 清单发布；它不改用户覆盖，也不以抓取成功代替完整适配。
+
+订阅 Fast 若通过独立上游型号执行，在 `providers.models[agent].fastModelId` 声明同来源、
+同引擎的目标 ID；不能只下发 `supportsFastMode: true`。客户端结合当前账号发现结果计算
+可用性，并在 Claude / Codex / Pi 请求边界统一切模，不再叠加 `service_tier: priority`。
+`null` 可显式撤销映射；缺省保持旧行为。旧客户端忽略新映射，因此执行适配需先随客户端
+发布；后续相同执行方式的新型号可维护目录数据。4.7 的关系与 Fast 价表已由官方文档和
+实测补证，4.6 不从版本号推导 Fast 支持。

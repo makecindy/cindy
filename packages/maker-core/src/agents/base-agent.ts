@@ -1787,6 +1787,13 @@ export interface StartSessionOptions {
    * prices already-started requests with the tariff they actually used.
    */
   getPriceVariant?: () => 'standard' | 'priority';
+  /** Match completed proxy usage to its actual execution tariff, before preference-based pricing. */
+  resolveUsagePriceVariant?: (usage: {
+    threadId?: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+  }) => 'standard' | 'priority' | undefined;
   /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
   thinkingEnabled?: boolean;
   /**

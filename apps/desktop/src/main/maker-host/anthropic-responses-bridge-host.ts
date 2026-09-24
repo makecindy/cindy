@@ -1,3 +1,7 @@
+import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
+import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
+import type { ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
+import { getSessionFastMode } from './session-effort-store.js';
 import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * Desktop 端 anthropic-responses-bridge 装配 ——
@@ -336,6 +340,7 @@ function codexProviderConfig(providerId = 'openai'): BridgeProviderConfig {
 /** xAI(SuperGrok 订阅)provider 配置:xai/ 前缀 → api.x.ai/v1,注入 Grok OAuth Bearer。 */
 function xaiProviderConfig(providerId = 'xai'): BridgeProviderConfig {
   return {
+    fastModel: model => fastModelId(providerId, 'claude-code', `xai/${model}`)?.replace(/^xai\//, ''),
     prefix: XAI_MODEL_PREFIX,
     wireProtocol: 'openai-responses',
     upstreamBase: 'https://api.x.ai/v1',
@@ -695,7 +700,7 @@ function withNativeXaiServerSideTools(
   return toolsChanged ? next : null;
 }
 
-async function pipeNativeResponse(response: Response, res: Parameters<LocalRequestHandler>[0]['res']): Promise<void> {
+async function pipeNativeResponse(response: Response, res: Parameters<LocalRequestHandler>[0]['res'], observer?: ResponseObserverSink): Promise<void> {
   res.writeHead(response.status, nativeResponseHeaders(response));
   if (!response.body) {
     res.end();
@@ -705,7 +710,8 @@ async function pipeNativeResponse(response: Response, res: Parameters<LocalReque
   try {
     while (!res.destroyed) {
       const chunk = await reader.read();
-      if (chunk.done) break;
+      if (chunk.done) { observer?.onEnd?.(); break; }
+      observer?.onData?.(Buffer.from(chunk.value));
       if (!res.write(Buffer.from(chunk.value))) {
         await new Promise<void>((resolve) => {
           const done = (): void => {
@@ -746,6 +752,7 @@ export function getPiNativeSubscriptionHandler(
     const abortOnClose = (): void => controller.abort();
     res.once('close', abortOnClose);
     const scopeAtStart = activeOwnerScopeKey();
+    const fastAtStart = getSessionFastMode(sessionId);
     try {
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       let accessToken: string;
@@ -764,6 +771,7 @@ export function getPiNativeSubscriptionHandler(
       }
       headers['content-type'] = ctx.headers['content-type'] ?? 'application/json';
       headers.accept = ctx.headers.accept ?? 'text/event-stream';
+      let recordUsage: ReturnType<typeof captureUsagePricing> | undefined;
       let outboundBody = rawBody;
       let contentEncoding: string | undefined = ctx.headers['content-encoding'];
       if (isOpenAiSubscriptionProviderId(providerId)) {
@@ -781,11 +789,14 @@ export function getPiNativeSubscriptionHandler(
           ? parsedBody
           : parseJsonRecord(rawBody);
         const sanitized = parsed ? sanitizeXaiModelInputBody(parsed) : null;
-        const current = sanitized ?? parsed;
+        const withFast = parsed ? rewriteFastModel(providerId, 'pi', sanitized ?? parsed, fastAtStart) : null;
+        const current = withFast ?? sanitized ?? parsed;
+        recordUsage = captureUsagePricing(sessionId,
+          withFast && withFast.model !== parsed?.model ? 'priority' : 'standard');
         const withServerTools = current
           ? withNativeXaiServerSideTools(current, upstream.wireProtocol)
           : null;
-        if (sanitized || withServerTools) {
+        if (sanitized || withFast || withServerTools) {
           outboundBody = Buffer.from(JSON.stringify(withServerTools ?? current));
           // The proxy parsed a plain JSON request. After reserializing it the
           // original content encoding, if any, no longer describes the bytes.
@@ -830,7 +841,8 @@ export function getPiNativeSubscriptionHandler(
         res.end(errorBody);
         return;
       }
-      await pipeNativeResponse(response, res);
+      await pipeNativeResponse(response, res, recordUsage
+        ? createUsagePricingObserver(response.headers.get('content-type') ?? '', recordUsage) : undefined);
     } catch (err) {
       if (controller.signal.aborted || res.destroyed) return;
       // Once a 200/SSE response has started, an upstream body failure cannot

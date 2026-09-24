@@ -145,16 +145,8 @@ const discoveredByProvider = new Map<string, Partial<Record<AgentKind, CatalogMo
  * `[]` = 本次发现没有条目，不抹除公共声明。成员保存为 canonical `xai/grok-*`，
  * 补充 Claude/Codex 公共声明；Pi 消费显式的逐 Harness 声明。遗漏不构成禁止。
  */
-export interface XaiDiscoveredModel {
-  id: string;
-  name?: string;
-  description?: string;
-  contextWindow?: number;
-  contextWindowVerified?: boolean;
-  maxOutput?: number;
-  efforts?: CatalogModel['efforts'];
-  defaultEffort?: CatalogModel['defaultEffort'];
-}
+export type { XaiDiscoveredModel } from './model-discovery/xai-models.js';
+import type { XaiDiscoveredModel } from './model-discovery/xai-models.js';
 
 let xaiDiscoveredModels: XaiDiscoveredModel[] | null = null;
 const xaiAccountModels = new Map<string, XaiDiscoveredModel[]>();
@@ -924,6 +916,12 @@ function materializeXaiAccountModels(
   return discovered.map((entry, index) => {
     const catalogModel = xaiCatalogModelById(provider, entry.id, agent);
     const registry = modelRegistryMetaFields('xai', agent, entry.id);
+    // The server catalog may predate a client-known variant. Its bundled visibility
+    // remains a sparse fallback; explicit server and later user choices still win.
+    const bundledEntry = findModelRegistryRoute(BUNDLED_CATALOG.modelRegistry, 'xai', entry.id,
+      agent === 'pi' ? undefined : agent)?.entry;
+    const bundledDefaultEnabled = (agent === 'pi' ? undefined : bundledEntry?.perAgent?.[agent]?.defaultEnabled)
+      ?? bundledEntry?.defaultEnabled;
     const { efforts, defaultEffort } = resolveXaiAccountCapabilities(
       entry,
       registry?.efforts ?? catalogModel?.efforts,
@@ -938,6 +936,7 @@ function materializeXaiAccountModels(
         : registry?.contextWindow !== undefined || catalogModel?.contextWindowVerified === true;
     return {
       ...catalogModel,
+      ...(entry.nativeApi !== undefined ? { nativeApi: entry.nativeApi } : {}),
       discoveredMetadata: {
         ...catalogModelMetadata(entry),
         ...(entry.efforts ? { efforts: canonicalEffortOrder(entry.efforts) } : {}),
@@ -966,7 +965,7 @@ function materializeXaiAccountModels(
         ? { supportsFastMode: registry.supportsFastMode }
         : {}),
       status: registry?.status ?? catalogModel?.status ?? 'active',
-      defaultEnabled: registry?.defaultEnabled ?? catalogModel?.defaultEnabled ?? true,
+      defaultEnabled: registry?.defaultEnabled ?? catalogModel?.defaultEnabled ?? bundledDefaultEnabled ?? true,
     };
   });
 }
@@ -1613,6 +1612,9 @@ function computeMerged(): Catalog {
   // chatgpt/ aliases never hide their sibling Codex route. Explicit user visibility stays external.
   providers = providers.map((provider) => {
     const catalogId = providerCatalogId(provider);
+    // xAI's catalog owns per-harness visibility. Re-ranking account discovery here
+    // silently hid newly synced native models (including separately callable variants).
+    if (catalogId === 'xai') return provider;
     if (!isOpenAiSubscriptionProvider(provider) &&
       ((provider.source === 'user' && !provider.auth.native) || !['anthropic', 'xai'].includes(catalogId)))
       return provider;
@@ -1813,6 +1815,26 @@ function computeMerged(): Catalog {
       }],
       imageDefaults: provider.imageDefaults ? { standard: id } : undefined,
     };
+  });
+  // Execution mappings are provider data, not a guess based on a model's name.
+  // Gate after every overlay so a preference cannot claim a target absent from this account.
+  providers = providers.map(provider => {
+    if (providerCatalogId(provider) !== 'xai' || provider.auth.method !== 'oauth') return provider;
+    const members = provider.id === 'xai' ? xaiDiscoveredModels : xaiAccountModels.get(provider.id);
+    const available = new Set(members?.map(m => m.id.replace(/^xai\//, '')) ?? []);
+    return { ...provider, models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
+      agent, models?.map(model => {
+        const fallback = bundledXai?.models[agent as AgentKind]?.find(m => m.id === model.id);
+        const target = model.fastModelId === undefined ? fallback?.fastModelId : model.fastModelId;
+        if (target === undefined) {
+          return model.supportsFastMode === true ? { ...model, supportsFastMode: false } : model;
+        }
+        return { ...model, fastModelId: target,
+          supportsFastMode: model.supportsFastMode !== false && Boolean(target &&
+            available.has(target.replace(/^xai\//, '')) &&
+            models.some(m => m.id === target && m.status !== 'retired')) };
+      }),
+    ])) };
   });
   return { ...b, modelRegistry, providers };
 }
