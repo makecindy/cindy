@@ -139,19 +139,14 @@ it('keeps restore and delete last for archived tasks and does not expose sharing
   expect(labels()).toEqual(['rename', 'tags', 'copy', 'export', 'unarchive', 'delete']);
 });
 
-it('replaces only the sharing entry for guests and retains the other menu groups', () => {
+it('shows only leave sharing for guests without disabled actions or separators', () => {
   render(
     <Harness target={{ ...session, deviceLinkDeviceId: sharedTaskHostPeer('share', 'device') }} />,
   );
   openMenu();
-  expect(labels()).toEqual(['pin', 'rename', 'move', 'tags', 'copy', 'leaveShort', 'export', 'openInNewWindow', 'archived', 'delete']);
-  expect(screen.getAllByRole('separator')).toHaveLength(3);
-  for (const name of ['pin', 'rename', 'openInNewWindow', 'archived', 'delete']) {
-    expect(screen.getByRole('menuitem', { name }).getAttribute('aria-disabled')).toBe('true');
-  }
-  expect(screen.getByRole('menuitem', { name: 'copy' }).getAttribute('aria-disabled')).not.toBe('true');
-  fireEvent.click(screen.getByRole('menuitem', { name: 'rename' }));
-  expect(state.rename).not.toHaveBeenCalled();
+  expect(labels()).toEqual(['leaveShort']);
+  expect(screen.queryByRole('separator')).toBeNull();
+  expect(screen.getByRole('menuitem', { name: 'leaveShort' }).getAttribute('aria-disabled')).not.toBe('true');
 });
 
 it('opens only a leave confirmation for guests and preserves the task on cancel', async () => {

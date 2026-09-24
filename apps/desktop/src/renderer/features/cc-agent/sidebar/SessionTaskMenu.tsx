@@ -159,14 +159,16 @@ function ActiveSessionTaskMenu({
           if (dialog) event.preventDefault();
         }}
       >
-        {!archived &&
-          !empty &&
-          item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
-        {item('rename', onRename, ownerActionsBlocked)}
-        {move}
-        {tags}
-        {separator}
-        {copy}
+        {!guest && <>
+          {!archived &&
+            !empty &&
+            item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
+          {item('rename', onRename, ownerActionsBlocked)}
+          {move}
+          {tags}
+          {separator}
+          {copy}
+        </>}
         {session.status === 'active' && (hosted && !guest ? (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
@@ -188,18 +190,20 @@ function ActiveSessionTaskMenu({
             {t(guest ? 'sharedTask.leaveShort' : 'sharedTask.title')}
           </DropdownMenuItem>
         ))}
-        {exportShare}
-        {!archived && !empty && (
-          <>
-            {separator}
-            {item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)}
-          </>
-        )}
-        {separator}
-        {archived
-          ? item('unarchive', onUnarchive, ownerActionsBlocked)
-          : !empty && item('archived', onArchive, ownerActionsBlocked)}
-        {item('delete', onDelete, ownerActionsBlocked)}
+        {!guest && <>
+          {exportShare}
+          {!archived && !empty && (
+            <>
+              {separator}
+              {item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)}
+            </>
+          )}
+          {separator}
+          {archived
+            ? item('unarchive', onUnarchive, ownerActionsBlocked)
+            : !empty && item('archived', onArchive, ownerActionsBlocked)}
+          {item('delete', onDelete, ownerActionsBlocked)}
+        </>}
       </DropdownMenuContent>
       {dialog?.kind === 'manage' && (
         <SharedTaskButton
