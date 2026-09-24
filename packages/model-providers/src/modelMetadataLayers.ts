@@ -440,10 +440,18 @@ export function mergeDiscoveredRuntimeModels(
   for (const model of discovered) {
     if (!model.id || !model.name || seen.has(model.id)) continue;
     seen.add(model.id);
-    const discoveredMetadata = pickModelMetadata(
-      model.discoveredMetadata ?? model,
-    );
     const index = models.findIndex((m) => m.id === model.id);
+    const discoveredMetadata = mergeModelMetadata(
+      index >= 0 ? models[index].discoveredMetadata : undefined,
+      pickModelMetadata(model.discoveredMetadata ?? model),
+    );
+    // Sparse refreshes can supply either half of this pair. Validate after merging
+    // with the last snapshot, without shrinking its working window to a bad maximum.
+    if (discoveredMetadata.contextWindow !== undefined &&
+        discoveredMetadata.contextWindowMax !== undefined &&
+        discoveredMetadata.contextWindowMax < discoveredMetadata.contextWindow) {
+      delete discoveredMetadata.contextWindowMax;
+    }
     if (index < 0)
       models.push({
         id: model.id,
@@ -456,7 +464,7 @@ export function mergeDiscoveredRuntimeModels(
       models[index] = {
         ...models[index],
         ...(!models[index].discoveredMetadata ? { nameExplicit: true } : {}),
-        discoveredMetadata: mergeModelMetadata(models[index].discoveredMetadata, discoveredMetadata),
+        discoveredMetadata,
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
       };
   }

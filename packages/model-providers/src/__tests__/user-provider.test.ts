@@ -1753,6 +1753,34 @@ describe('imported model native engine defaults', () => {
     expect(agents.map(agent => provider.models[agent]?.[0]?.defaultEnabled)).toEqual(expected);
   });
 
+  it.each([
+    [null, 'openai-responses', null, [false, false, true]],
+    ['anthropic-messages', 'openai-responses', 'anthropic-messages', [true, false, true]],
+    ['openai-responses', 'anthropic-messages', 'openai-responses', [false, true, true]],
+    [undefined, 'anthropic-messages', 'anthropic-messages', [true, false, true]],
+    [undefined, undefined, 'openai-responses', [false, true, true]],
+  ] as const)('applies current native declaration %s ahead of live %s and bundled fallback',
+    (declaration, live, expectedApi, expectedEnabled) => {
+      const agents = ['claude-code', 'codex', 'pi'] as const;
+      const config: CustomProviderConfig = {
+        id: 'native-default-test', name: 'Test',
+        runtimes: Object.fromEntries(agents.map(agent => [agent, {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses',
+          models: [{ id: 'gpt-6', name: 'GPT 6', discoveredMetadata: { nativeApi: live } }],
+        }])),
+      };
+      const provider = buildUserProvider(config, { modelRegistry: {
+        schemaVersion: 5, updatedAt: '2026-09-24T00:00:00Z',
+        models: [{ id: 'gpt-6', name: 'GPT 6', nativeApi: declaration, routes: [{
+          providerId: config.id, modelId: 'gpt-6', agents: ['claude-code', 'codex'],
+        }] }],
+      } });
+      expect(agents.map(agent => provider.models[agent]?.[0]?.nativeApi)).toEqual(agents.map(() => expectedApi));
+      expect(agents.map(agent => provider.models[agent]?.[0]?.defaultEnabled)).toEqual(expectedEnabled);
+      expect(config.runtimes?.codex?.models[0].discoveredMetadata?.nativeApi).toBe(live);
+    });
+
   it('preserves explicit configuration defaults', () => {
     const provider = buildUserProvider({ id: 'explicit-defaults', name: 'Test', runtimes: {
       pi: { baseUrl: 'https://example.com/v1', models: [{ id: 'test', name: 'Test', api: 'anthropic-messages', defaultEnabled: false }] },
