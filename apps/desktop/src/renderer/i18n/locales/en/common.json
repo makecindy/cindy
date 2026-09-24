@@ -1091,7 +1091,7 @@
       "harnessUpdateFailed": "Could not schedule the Agent update. Please try again later.",
       "harnessManage": "Manage {{name}} version",
       "harnessChecking": "Checking…",
-      "harnessCheckFailed": "Check failed",
+      "harnessCheckFailed": "Couldn't check for updates. Open the menu to try again.",
       "harnessUpdateAvailable": "Update available",
       "harnessCheck": "Check for updates",
       "harnessCheckedAt": "Last checked: {{time}}",

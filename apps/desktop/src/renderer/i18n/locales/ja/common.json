@@ -1091,7 +1091,7 @@
       "harnessUpdateFailed": "Agent の更新を準備できませんでした。しばらくしてからもう一度お試しください。",
       "harnessManage": "{{name}} のバージョンを管理",
       "harnessChecking": "確認中…",
-      "harnessCheckFailed": "確認に失敗",
+      "harnessCheckFailed": "更新を確認できません。メニューを開いて再試行してください。",
       "harnessUpdateAvailable": "更新あり",
       "harnessCheck": "更新を確認",
       "harnessCheckedAt": "最終確認：{{time}}",

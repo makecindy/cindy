@@ -1091,7 +1091,7 @@
       "harnessUpdateFailed": "無法安排 Agent 更新，請稍後再試。",
       "harnessManage": "管理 {{name}} 版本",
       "harnessChecking": "檢查中…",
-      "harnessCheckFailed": "檢查失敗",
+      "harnessCheckFailed": "無法檢查更新，開啟選單再試",
       "harnessUpdateAvailable": "有更新",
       "harnessCheck": "檢查更新",
       "harnessCheckedAt": "上次檢查：{{time}}",
