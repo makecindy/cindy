@@ -65,15 +65,22 @@ export function BotModelChainEditor({
   const onChange = (next: BotModelRoute[]) => {
     if (!disabled) onValueChange(next);
   };
-  // All local entry points, including empty-chain recovery, use the runtime
-  // roster. Remote callers supply their own device's hiddenVendors instead.
+  // Keep the local roster gate and SSH hiddenVendors contract. Device-link
+  // rosters are advisory until loaded: a failed request must not block editing
+  // the target device's independently loaded provider catalog.
+  const waitingForLocalRoster = !remote && !deviceId && !loaded;
   const visibleVendors = (['pi', 'codex', 'cc'] as const)
     .filter((vendor) => !hiddenVendors.includes(vendor))
-    .filter((vendor) => (remote && !deviceId) || (loaded && availableVendors.has(vendor)));
+    .filter(
+      (vendor) =>
+        (remote && !deviceId) ||
+        (deviceId && !loaded) ||
+        (loaded && availableVendors.has(vendor)),
+    );
   const unifiedAgents = visibleVendors.map(agentKindFor);
 
   const replace = (index: number, patch: Partial<BotModelRoute>) => {
-    if (disabled || ((!remote || !!deviceId) && !loaded)) return;
+    if (disabled || waitingForLocalRoster) return;
     if (pendingRoute && index === routes.length) {
       const next = { ...pendingRoute, ...patch };
       if (next.model && routes.length < BOT_MODEL_CHAIN_MAX) {
@@ -111,7 +118,7 @@ export function BotModelChainEditor({
   const picker = (route: BotModelRoute, index: number) => (
     <div className="min-w-0 flex-1">
       <ModelSelector
-        disabled={disabled || ((!remote || !!deviceId) && !loaded)}
+        disabled={disabled || waitingForLocalRoster}
         deviceId={deviceId}
         vendorKey={vendorFor(route.harness)}
         modelId={route.model}
