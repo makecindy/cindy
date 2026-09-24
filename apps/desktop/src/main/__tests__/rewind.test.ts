@@ -251,6 +251,11 @@ async function waitFor(condition: () => boolean): Promise<void> {
   throw new Error('condition was not met');
 }
 
+function enqueueCodexClearGeneration(clearedAt: number | null = null): void {
+  // loadCodexRewindNativeBoundary 在原生边界查询前读 sessions.clearedAt。
+  selectQueue.push([{ clearedAt }]);
+}
+
 function makeSessionRow(over: Partial<Record<string, unknown>> = {}) {
   return {
     id: 'sess-1',
@@ -909,6 +914,7 @@ describe('commitRewindAtMessage', () => {
       makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 }),
       makeUserMessageRow({ clientId: 'later-user', createdAt: 5000 }),
     ]); // Codex tail turns
+    enqueueCodexClearGeneration();
     selectQueue.push([], // Codex 原生边界行(#4421):无锚点
       [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })]); // post-update select
@@ -933,6 +939,7 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeUserMessageRow({ agentMeta: null })]); // target user
     selectQueue.push([]); // agent_switch 边界守卫:无边界
     selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]); // Codex tail turns
+    enqueueCodexClearGeneration();
     selectQueue.push([
       // desc 顺序:最近的在前。上一轮 assistant 带已完成 turn 的原生锚点。
       makeAssistantMessageRow({
@@ -963,6 +970,7 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
     selectQueue.push([]);
     selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
     selectQueue.push([]);
     selectQueue.push([]); // 线程第一轮判定
     selectQueue.push([makeSessionRow({ agentKind: 'codex' })]);
@@ -992,6 +1000,7 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
     selectQueue.push([]);
     selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
     selectQueue.push([
       // 旧数据:assistant 无 nativeForkAnchor;error 行不算真实输出。
       { role: 'error', content: '"boom"', agentMeta: null, createdAt: 2600 },
@@ -1011,6 +1020,7 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
     selectQueue.push([]);
     selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
     selectQueue.push([]); // target 之前没有任何行
     selectQueue.push([]); // 时间线上也没有属于当前线程的 user 行
     selectQueue.push([makeSessionRow({ agentKind: 'codex' })]);
@@ -1032,6 +1042,7 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
     selectQueue.push([]);
     selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
     selectQueue.push([
       // 上一轮失败:只有 error 行,没有锚点也没有真实输出时间。
       { role: 'error', content: '"boom"', agentMeta: null, createdAt: 2600 },
@@ -1052,6 +1063,7 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
     selectQueue.push([]);
     selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
     selectQueue.push([
       agentSwitchRow(2800, 'cc', 'claude-sdk'),
       makeAssistantMessageRow({ createdAt: 2500 }),
@@ -1079,6 +1091,7 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
     selectQueue.push([]);
     selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
     selectQueue.push([
       // 切回停泊的同一条 Codex 线程;旧数据没有锚点。
       agentSwitchRow(2800, 'cc', 'claude-sdk'),
@@ -1105,6 +1118,7 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
     selectQueue.push([]);
     selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
     selectQueue.push([{ role: 'agent_switch', content: '{not-json', agentMeta: null, createdAt: 2800 }]);
     selectQueue.push([{ role: 'agent_switch', content: '{not-json', createdAt: 2800 }]);
     selectQueue.push([makeSessionRow({ agentKind: 'codex' })]);
@@ -1119,6 +1133,7 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
     selectQueue.push([]);
     selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
     selectQueue.push([agentSwitchRow(2800, 'cc', '')]);
     selectQueue.push([agentSwitchRow(2800, 'cc', '')]);
     selectQueue.push([makeSessionRow({ agentKind: 'codex' })]);
@@ -1254,7 +1269,9 @@ describe('commitRewindAtMessage', () => {
     detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
     listSnapshotsMock.mockResolvedValueOnce([]);
     getHeadMock.mockRejectedValueOnce(new Error('unborn HEAD'));
-    selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })], [], // Codex 原生边界行(#4421):无锚点
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
+    selectQueue.push([], // Codex 原生边界行(#4421):无锚点
       [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })]);
 
@@ -1292,7 +1309,9 @@ describe('commitRewindAtMessage', () => {
       ],
       truncated: true,
     });
-    selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })], [], // Codex 原生边界行(#4421):无锚点
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    enqueueCodexClearGeneration();
+    selectQueue.push([], // Codex 原生边界行(#4421):无锚点
       [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })]);
 
@@ -1361,6 +1380,8 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [
       makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 }),
     ]);
+    enqueueCodexClearGeneration();
+    selectQueue.push([], []); // 无锚点 + 线程第一轮判定
 
     await expect(commitRewindAtMessage('sess-1', 'client-id')).rejects.toThrow('thread rollback failed');
 
@@ -1393,6 +1414,9 @@ describe('commitRewindAtMessage', () => {
       [makeUserMessageRow({ agentMeta: null })],
       [], // agent_switch 边界守卫:无边界
       [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })],
+    );
+    enqueueCodexClearGeneration();
+    selectQueue.push(
       [], // Codex 原生边界行(#4421):无锚点
       [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })],
@@ -1442,6 +1466,9 @@ describe('commitRewindAtMessage', () => {
       [makeUserMessageRow({ agentMeta: null })],
       [],
       [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })],
+    );
+    enqueueCodexClearGeneration();
+    selectQueue.push(
       [],
       [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })],
@@ -1465,6 +1492,9 @@ describe('commitRewindAtMessage', () => {
       [makeUserMessageRow({ agentMeta: null })],
       [], // agent_switch 边界守卫:无边界
       [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })],
+    );
+    enqueueCodexClearGeneration();
+    selectQueue.push(
       [], // Codex 原生边界行(#4421):无锚点
       [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })],
@@ -1503,6 +1533,8 @@ describe('commitRewindAtMessage', () => {
       [], // agent_switch 边界守卫:无边界
       [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })],
     );
+    enqueueCodexClearGeneration();
+    selectQueue.push([], []); // 无锚点 + 线程第一轮判定
 
     await expect(commitRewindAtMessage('sess-1', 'client-id')).rejects.toThrow('thread rollback failed');
 

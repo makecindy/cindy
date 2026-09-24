@@ -225,4 +225,21 @@ describe('Codex rewind native boundary SQL (#4994)', () => {
       rewindsToNativeThreadStart: true,
     });
   });
+
+  it('refuses a target at or before /clear instead of treating it as the native thread start', async () => {
+    insertSession({ clearedAt: 2500 });
+    insertMessage({ id: 'old-user', role: 'user', createdAt: 1000 });
+    insertMessage({
+      id: 'old-asst',
+      role: 'assistant',
+      createdAt: 2000,
+      agentMeta: oldAnchorMeta,
+    });
+    insertMessage({ id: 'post-clear', role: 'user', createdAt: 3000 });
+
+    await expect(commitRewindAtMessage('sess-1', 'old-user')).rejects.toMatchObject({
+      code: 'REWIND_UNSUPPORTED_HISTORY',
+    });
+    expect(commitRewindFilesMock).not.toHaveBeenCalled();
+  });
 });

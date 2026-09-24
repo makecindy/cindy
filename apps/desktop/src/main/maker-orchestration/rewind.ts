@@ -611,6 +611,20 @@ async function loadCodexRewindNativeBoundary(
     activeSdkSessionId(currentSessionMeta?.sdkSessionId ?? undefined);
   if (!sdkSessionId) return {};
   const db = getDbClient().drizzle;
+  const [sessionRow] = await db
+    .select({ clearedAt: sessions.clearedAt })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  const clearedAt = sessionRow?.clearedAt ?? null;
+  if (clearedAt !== null && ctx.targetCreatedAt <= clearedAt) {
+    // /clear 之后旧 target 已不在当前原生线程。空时间线不能当成第一轮,否则会换空
+    // 线程并把 clear 之后的新消息一并软删(#4994 review P1)。
+    throw rewindError(
+      'REWIND_UNSUPPORTED_HISTORY',
+      '目标消息在 /clear 边界之前,当前引擎的会话历史无法回滚到那里',
+    );
+  }
   const beforeTarget =
     ctx.targetRowid === undefined
       ? lt(messages.createdAt, ctx.targetCreatedAt)
@@ -622,7 +636,7 @@ async function loadCodexRewindNativeBoundary(
   // context_rebuild 的写入契约是 rewind_at 固定非 NULL,需豁免可见性过滤才能看到边界。
   const inTimeline = and(
     eq(messages.sessionId, sessionId),
-    sql`${messages.createdAt} > COALESCE((SELECT ${sessions.clearedAt} FROM ${sessions} WHERE ${sessions.id} = ${sessionId}), -1)`,
+    sql`${messages.createdAt} > ${clearedAt ?? -1}`,
     beforeTarget,
   );
   // 只需回看到上一条 user / 引擎切换边界;取最近 200 行足够覆盖一轮的工具输出。
