@@ -4394,8 +4394,12 @@ describe('codex proxy host', () => {
   });
 
   describe('xAI 服务端搜索工具(x_search)注入', () => {
-    async function runXaiTransforms(sessionSuffix: string, body: Record<string, unknown>): Promise<unknown> {
+    async function runXaiTransforms(sessionSuffix: string, body: Record<string, unknown>, fastMembers?: string[]): Promise<unknown> {
       const host = await freshCodexProxyHost();
+      if (fastMembers) {
+        const { setXaiDiscoveredModels } = await import('../active-catalog.js');
+        setXaiDiscoveredModels(fastMembers.map(id => ({ id: `xai/${id}`, contextWindow: 500000, nativeApi: 'openai-responses' })));
+      }
       const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
       mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
         url: 'http://127.0.0.1:43210',
@@ -4417,6 +4421,18 @@ describe('codex proxy host', () => {
       clearSessionProvider(sessionId);
       return current;
     }
+
+    it.each([
+      ['grok-4.7', 'priority', true, 'grok-4.7-build-fast', undefined],
+      ['grok-4.7', undefined, true, 'grok-4.7', undefined],
+      ['grok-4.7', 'priority', false, 'grok-4.7', 'priority'],
+      ['grok-4.6', 'priority', true, 'grok-4.6', 'priority'],
+    ] as const)('Fast mapping %s tier=%s available=%s', async (model, tier, available, expected, expectedTier) => {
+      const out = await runXaiTransforms('fast', { model: `xai/${model}`, input: [], service_tier: tier },
+        ['grok-4.7', 'grok-4.6', ...(available ? ['grok-4.7-build-fast'] : [])]) as Record<string, unknown>;
+      expect(out.model).toBe(expected);
+      expect(out.service_tier).toBe(expectedTier);
+    });
 
     it('独立 xAI 账号(auth.native=xai、id 非 xai)的会话同样走 xAI 兼容改写:tool-less compact 不会带着 tool_choice 裸发(#4888)', async () => {
       const host = await freshCodexProxyHost();

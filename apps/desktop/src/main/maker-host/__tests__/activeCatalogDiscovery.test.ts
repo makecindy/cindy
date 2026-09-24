@@ -120,7 +120,7 @@ describe('active-catalog discovered augment', () => {
   it.each([
     ['xai', 'xai', 'grok-4.5', 'grok-4.6'],
   ] as const)(
-    'uses the same default selection for builtin and independent %s accounts',
+    'preserves catalog visibility without reranking builtin and independent %s accounts',
     (id, native, oldId, newId) => {
       const catalog = bundledWithoutRegistry();
       const builtin = catalog.providers.find((provider) => provider.id === id)!;
@@ -152,7 +152,7 @@ describe('active-catalog discovered augment', () => {
             `${providerId}/${agent}: ${listed(providerId)
               .map((model) => model.id)
               .join(',')}`,
-          ).toBe(false);
+          ).toBe(true);
           expect(listed(providerId).find((model) => model.id === newId)?.defaultEnabled).toBe(true);
         }
         expect(listed(api.id).find((model) => model.id === oldId)?.defaultEnabled).toBe(true);

@@ -41,6 +41,8 @@ import {
   getPiNativeSubscriptionHandler,
   type PiNativeSubscriptionHandlerDeps,
 } from '../anthropic-responses-bridge-host.js';
+import { setXaiDiscoveredModels } from '../active-catalog.js';
+import { setSessionFastMode } from '../session-effort-store.js';
 
 function responseRecorder() {
   const response = new EventEmitter() as EventEmitter & {
@@ -91,8 +93,26 @@ function deps(overrides: Partial<PiNativeSubscriptionHandlerDeps> = {}): PiNativ
 
 describe('PI native subscription forwarding', () => {
   afterEach(() => {
+    setXaiDiscoveredModels(null);
+    setSessionFastMode('session-fast', false);
     ownerState.pending = false;
     ownerState.scope = 'cloud:owner-a:1';
+  });
+
+  it.each([['grok-4.7', true, 'grok-4.7-build-fast'], ['grok-4.7', false, 'grok-4.7'],
+    ['grok-4.6', true, 'grok-4.6']] as const)('forwards %s Fast=%s to %s', async (model, fast, expected) => {
+    setXaiDiscoveredModels(['grok-4.7', 'grok-4.7-build-fast', 'grok-4.6'].map(id => ({
+      id: `xai/${id}`, contextWindow: 500000, nativeApi: 'openai-responses',
+    })));
+    setSessionFastMode('session-fast', fast);
+    const injected = deps();
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-fast', injected);
+    const parsedBody = { model, input: 'OK' };
+    await handler({ rawBody: Buffer.from(JSON.stringify(parsedBody)), parsedBody,
+      ctx: { reqId: 1, method: 'POST', url: '/v1/responses', headers: {} }, res: responseRecorder() } as never);
+    const request = JSON.parse(Buffer.from(vi.mocked(injected.fetch).mock.calls[0][1]!.body as Uint8Array).toString());
+    expect(request.model).toBe(expected);
+    expect(request.service_tier).toBeUndefined();
   });
 
   it('forwards Codex Responses bytes unchanged with host-owned ChatGPT auth', async () => {

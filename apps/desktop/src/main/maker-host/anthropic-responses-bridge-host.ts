@@ -1,3 +1,5 @@
+import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
+import { getSessionFastMode } from './session-effort-store.js';
 import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * Desktop 端 anthropic-responses-bridge 装配 ——
@@ -336,6 +338,7 @@ function codexProviderConfig(providerId = 'openai'): BridgeProviderConfig {
 /** xAI(SuperGrok 订阅)provider 配置:xai/ 前缀 → api.x.ai/v1,注入 Grok OAuth Bearer。 */
 function xaiProviderConfig(providerId = 'xai'): BridgeProviderConfig {
   return {
+    fastModel: model => fastModelId(providerId, 'claude-code', `xai/${model}`)?.replace(/^xai\//, ''),
     prefix: XAI_MODEL_PREFIX,
     wireProtocol: 'openai-responses',
     upstreamBase: 'https://api.x.ai/v1',
@@ -746,6 +749,7 @@ export function getPiNativeSubscriptionHandler(
     const abortOnClose = (): void => controller.abort();
     res.once('close', abortOnClose);
     const scopeAtStart = activeOwnerScopeKey();
+    const fastAtStart = getSessionFastMode(sessionId);
     try {
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       let accessToken: string;
@@ -781,11 +785,12 @@ export function getPiNativeSubscriptionHandler(
           ? parsedBody
           : parseJsonRecord(rawBody);
         const sanitized = parsed ? sanitizeXaiModelInputBody(parsed) : null;
-        const current = sanitized ?? parsed;
+        const withFast = parsed ? rewriteFastModel(providerId, 'pi', sanitized ?? parsed, fastAtStart) : null;
+        const current = withFast ?? sanitized ?? parsed;
         const withServerTools = current
           ? withNativeXaiServerSideTools(current, upstream.wireProtocol)
           : null;
-        if (sanitized || withServerTools) {
+        if (sanitized || withFast || withServerTools) {
           outboundBody = Buffer.from(JSON.stringify(withServerTools ?? current));
           // The proxy parsed a plain JSON request. After reserializing it the
           // original content encoding, if any, no longer describes the bytes.

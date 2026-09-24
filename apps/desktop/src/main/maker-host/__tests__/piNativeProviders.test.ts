@@ -2616,6 +2616,29 @@ describe('buildPiNativeProvidersFromConfigs', () => {
 
 
 describe('server metadata reaches every native Pi transport', () => {
+  it('turns the API sync artifact into a native Pi model without an SDK model entry', async () => {
+    const { buildXaiSyncCandidate, inspectXaiImport } = await import('../../../../../../tools/model-catalog/xai-sync.js');
+    const candidate = buildXaiSyncCandidate(BUNDLED_CATALOG, { data: [{
+      id: 'grok-future-api-fixture', name: 'Future model', api_backend: 'responses',
+      context_window: 600_000, max_completion_tokens: 80_000,
+      reasoning_efforts: ['high', 'low'], reasoning_effort: 'high',
+    }] }, { models: [{ id: 'grok-future-api-fixture', input_modalities: ['text'], output_modalities: ['text'],
+      prompt_text_token_price: 20_000, completion_text_token_price: 60_000,
+    }] }, '2026-09-24T12:00:00.000Z');
+    inspectXaiImport(candidate);
+    try {
+      const result = buildPiSubscriptionNativeProviders(getActiveCatalog(), 'http://127.0.0.1:4567',
+        new Map([['xai', new Map()]]));
+      expect(result.providers.find(p => p.id === 'xai')!.models.find(m => m.id === 'grok-future-api-fixture'))
+        .toMatchObject({ wireId: 'grok-future-api-fixture', api: 'openai-responses',
+          contextWindow: 600_000, maxTokens: 80_000, input: ['text'], reasoning: true,
+          thinkingLevelMap: { low: 'low', high: 'high', medium: null } });
+    } finally {
+      setXaiDiscoveredModels(null);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
   it.each(['discovery', 'user-addition'] as const)('carries a new Grok model from %s into local and SSH Pi routes', async (source) => {
     setActiveCatalog(BUNDLED_CATALOG);
     const addition = {

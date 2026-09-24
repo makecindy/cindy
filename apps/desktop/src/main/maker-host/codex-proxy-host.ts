@@ -1,3 +1,4 @@
+import { rewriteFastModel } from './model-fast-mode.js';
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
 import { clearCodexTextOnlyPolicies, codexTextOnlyRequestGuard, codexTextOnlyWebSocketTransforms, isCodexTextOnly } from './codex-text-only-policy.js';
 import {
@@ -1826,6 +1827,8 @@ function createXaiResponsesCompatTransform(): RequestTransform {
       current = withNormalizedInputItems;
       changed = true;
     }
+    const withFast = rewriteFastModel(xaiProviderId, 'codex', current, current.service_tier === 'priority');
+    if (withFast) { current = withFast; changed = true; }
     return changed ? current : null;
   };
 }
