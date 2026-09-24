@@ -68,7 +68,8 @@ export function SharedTaskExitDialog({ target, onDismiss, onComplete }: {
     onOpenChange={(open) => { if (!open && !pending.current) onDismiss(); }}
     title={t(leaving ? 'sharedTask.leaveTitle' : 'sharedTask.cancelTitle')}
     description={t(leaving ? 'sharedTask.leaveBody' : 'sharedTask.closeOneBody')}
-    content={<p className="break-words text-13 font-medium">{target.title}</p>}
+    content={<div><p className="break-words text-13 font-medium">{target.title}</p>
+      <p className="mt-3 text-12 text-[var(--text-secondary)]">{t(leaving ? 'sharedTask.othersUnaffected' : 'sharedTask.recordsKept')}</p></div>}
     cancelText={t(leaving ? 'sharedTask.leaveKeep' : 'sharedTask.closeAllKeep')}
     confirmText={t(leaving ? 'sharedTask.leaveShort' : 'sharedTask.cancelSharing')}
     confirmVariant="destructive" loading={busy} zIndex={10002} maxWidth={440}

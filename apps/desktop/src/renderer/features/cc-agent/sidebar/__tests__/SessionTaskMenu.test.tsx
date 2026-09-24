@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { useRef, useState } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
@@ -23,9 +24,10 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key.split('.').at(-1) }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  remoteProjectsStore: { removeDevice: state.removeDevice },
+  remoteProjectsStore: { removeDevice: state.removeDevice, getDeviceName: () => undefined },
+  isRemoteDeviceMarkedDisconnected: () => false,
 }));
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'owner' }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'owner', isAuthenticated: true }) }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/features/device-link/JoinSharedTaskDialog', () => ({
   JoinSharedTaskDialog: ({ onOpenChange }: { onOpenChange: (open: boolean) => void }) => (
@@ -41,7 +43,7 @@ function Harness({ target = session, blocked = false }: { target?: Session; bloc
   const trigger = useRef<HTMLButtonElement>(null);
   const slot = (text: string) => <DropdownMenuItem>{text}</DropdownMenuItem>;
   return (
-    <div onClick={state.rowClick}>
+    <MemoryRouter><div onClick={state.rowClick}>
       <DropdownMenu open={open} onOpenChange={setOpen}>
         <DropdownMenuTrigger ref={trigger}>More</DropdownMenuTrigger>
         <SessionTaskMenu
@@ -61,7 +63,7 @@ function Harness({ target = session, blocked = false }: { target?: Session; bloc
           exportShare={slot('export')}
         />
       </DropdownMenu>
-    </div>
+    </div></MemoryRouter>
   );
 }
 function openMenu() {
@@ -219,7 +221,7 @@ it('routes the state lookup through the owning remote computer', async () => {
 });
 
 it('opens the existing member management panel from the sharing submenu', async () => {
-  state.host.mockResolvedValue({ available: true, detail: { sharedTaskId: 'share', status: 'active', title: 'Task', guests: [], memberLabels: [], hostDeviceId: 'device' } });
+  state.host.mockResolvedValue({ available: true, detail: { sharedTaskId: 'share', sessionId: 'task', status: 'active', title: 'Task', guests: [], memberLabels: [], hostDeviceId: 'device' } });
   render(<Harness />); openMenu(); await openSharingSubmenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'manageMembers' }));
   const dialog = await screen.findByRole('dialog');
