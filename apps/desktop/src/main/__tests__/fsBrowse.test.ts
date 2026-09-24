@@ -3,7 +3,7 @@
  *
  * 覆盖:list-dir 只回目录(含 hidden,对齐 SSH `ls -A`)、每项带 host-native 绝对 path、
  * `~` 展开、parent 计算、根 parent=null;Windows 追加可选 drives(非 Windows 不枚举、枚举
- * 为空或超出等待预算时省略);stat 三态;mkdir-p 幂等;错误走 throwIpcError。
+ * 为空时省略;超出等待预算时省略 drives 并标 drivesPending);stat 三态;mkdir-p 幂等;错误走 throwIpcError。
  * 断言使用 host-native path 语义;mock node:fs / node:os。
  */
 import path from 'node:path';
@@ -102,6 +102,7 @@ describe('listDir', () => {
     expect(listDriveRoots).toHaveBeenCalledTimes(1);
     expect(res.drives).toEqual(buildDriveOptions(roots, res.resolvedPath));
     expect(res.drives?.map((d) => d.path)).toEqual(expect.arrayContaining(roots));
+    expect(res).not.toHaveProperty('drivesPending');
   });
 
   it('非 Windows 不枚举盘符,也不带 drives 字段', async () => {
@@ -116,15 +117,17 @@ describe('listDir', () => {
     h.readdir.mockResolvedValue([dirent('Code', 'dir')]);
     const empty = await listDir('~', { platform: 'win32', listDriveRoots: async () => [] });
     expect(empty).not.toHaveProperty('drives');
+    expect(empty).not.toHaveProperty('drivesPending');
     const failed = await listDir('~', {
       platform: 'win32',
       listDriveRoots: () => Promise.reject(new Error('boom')),
     });
     expect(failed.entries.map((e) => e.name)).toEqual(['Code']);
     expect(failed).not.toHaveProperty('drives');
+    expect(failed).not.toHaveProperty('drivesPending');
   });
 
-  it('Windows 盘符枚举超出等待预算 → 先不带 drives 返回,不拖慢目录打开', async () => {
+  it('Windows 盘符枚举超出等待预算 → 先不带 drives 返回,并标记 pending 供控制端刷新', async () => {
     vi.useFakeTimers();
     try {
       h.readdir.mockResolvedValueOnce([]);
@@ -133,6 +136,7 @@ describe('listDir', () => {
       const res = await pending;
       expect(res.resolvedPath).toBe(HOME);
       expect(res).not.toHaveProperty('drives');
+      expect(res.drivesPending).toBe(true);
     } finally {
       vi.useRealTimers();
     }

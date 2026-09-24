@@ -8,8 +8,9 @@
  *
  * 能力面(只读 + mkdir -p):
  *   - fs:list-dir   列子目录(含 hidden,对齐 SSH `ls -A`;不含文件)。Windows 被控端额外回
- *                   可选 `drives`(盘符列表 + 当前盘),供控制端切到其它盘;旧被控端不回,
- *                   控制端不显示切换,旧控制端忽略该字段。
+ *                   可选 `drives`(盘符列表 + 当前盘),供控制端切到其它盘;首次枚举超时再回
+ *                   可选 `drivesPending`,控制端可刷新。旧被控端不回,控制端不显示切换,
+ *                   旧控制端忽略新字段。
  *   - fs:stat-path  判断路径是 dir / file / missing
  *   - fs:mkdir-p    幂等创建目录(用户输入一个尚不存在的项目路径时)
  * **不**提供文件读/写/删/exec —— 仅项目目录选择所需的最小面(allowlist 注释同款理由)。
@@ -44,6 +45,8 @@ export interface FsListDirResult {
   parent: string | null;
   /** 仅 Windows:本机盘符(含当前盘标记)。盘符枚举失败或超出等待预算时省略。 */
   drives?: FsBrowseDrive[];
+  /** 仅 Windows:盘符枚举超出等待预算、后台仍在进行。控制端可据此刷新;旧端忽略。 */
+  drivesPending?: boolean;
 }
 export interface FsListDirDeps {
   platform?: NodeJS.Platform;
@@ -79,17 +82,22 @@ export function expandHome(input: string): string {
 
 /**
  * 盘符列表最多等这么久:首次枚举要起 PowerShell,不能拖慢目录打开;超时就先不带盘符返回,
- * 枚举在后台继续并写入缓存,下一次列目录即可带上。
+ * 并标 drivesPending,让控制端在当前目录再拉一次。枚举在后台继续写入缓存。
  */
 const DRIVE_LIST_WAIT_MS = 1_500;
+const DRIVE_WAIT_TIMEOUT = Symbol('drive-wait-timeout');
 
-async function waitForDriveRoots(listDriveRoots: () => Promise<string[]>): Promise<string[]> {
+async function waitForDriveRoots(
+  listDriveRoots: () => Promise<string[]>,
+): Promise<{ roots: string[]; pending: boolean }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<string[]>((resolve) => {
-    timer = setTimeout(() => resolve([]), DRIVE_LIST_WAIT_MS);
+  const expired = new Promise<typeof DRIVE_WAIT_TIMEOUT>((resolve) => {
+    timer = setTimeout(() => resolve(DRIVE_WAIT_TIMEOUT), DRIVE_LIST_WAIT_MS);
   });
   try {
-    return await Promise.race([listDriveRoots().catch(() => []), expired]);
+    const result = await Promise.race([listDriveRoots().catch(() => [] as string[]), expired]);
+    if (result === DRIVE_WAIT_TIMEOUT) return { roots: [], pending: true };
+    return { roots: result, pending: false };
   } finally {
     clearTimeout(timer);
   }
@@ -127,8 +135,9 @@ export async function listDir(rawPath: string, deps: FsListDirDeps = {}): Promis
   entries.sort((a, b) => a.name.localeCompare(b.name));
   const parent = path.dirname(resolvedPath);
   const result: FsListDirResult = { resolvedPath, entries, parent: parent === resolvedPath ? null : parent };
-  const roots = driveRoots ? await driveRoots : [];
-  if (roots.length > 0) result.drives = buildDriveOptions(roots, resolvedPath);
+  const driveWait = driveRoots ? await driveRoots : null;
+  if (driveWait?.roots.length) result.drives = buildDriveOptions(driveWait.roots, resolvedPath);
+  else if (driveWait?.pending) result.drivesPending = true;
   return result;
 }
 

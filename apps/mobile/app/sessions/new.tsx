@@ -163,7 +163,9 @@ import {
   buildRemoteCreateSessionOptions,
   buildRecentWorkspaceOptions,
   filterRemoteDirectoryEntries,
+  isCurrentRemoteBrowseRequest,
   normalizeRemoteDirectoryDrives,
+  shouldRetryRemoteBrowseDrives,
   normalizeCreateSessionResult,
   isNewSessionDraftMissingPayloadOnly,
   parseNewSessionDeviceOptions,
@@ -842,6 +844,8 @@ export default function NewRemoteSessionScreen() {
     setVoiceStartPending(false);
   }, []);
   const browseSeqRef = useRef(0);
+  const selectedDeviceIdRef = useRef(selectedDeviceId);
+  selectedDeviceIdRef.current = selectedDeviceId;
   const capabilitiesSeqRef = useRef(0);
   const slashLoadSeqRef = useRef(0);
   const atLoadSeqRef = useRef(0);
@@ -1790,6 +1794,8 @@ export default function NewRemoteSessionScreen() {
     }
     userTouchedDeviceRef.current = true;
     explicitProviderModelSelectionRef.current = null;
+    browseSeqRef.current += 1;
+    selectedDeviceIdRef.current = option.deviceId;
     setSelectedDeviceId(option.deviceId);
     setSelectedDeviceName(option.name || option.deviceId);
     void saveNewSessionPreferences({
@@ -1807,6 +1813,7 @@ export default function NewRemoteSessionScreen() {
     setBrowseParent(null);
     setBrowseEntries([]);
     setBrowseDrives([]);
+    setBrowseLoading(false);
     setBrowseError(null);
     setContextSheetOpen(false);
     // 切换电脑丢弃草稿附件前 best-effort 回收已上传的中转对象(codex review #504)。
@@ -2252,27 +2259,43 @@ export default function NewRemoteSessionScreen() {
     openLink,
   ]);
 
-  const loadBrowsePath = useCallback(async (targetPath: string) => {
-    if (!selectedDeviceId) return;
-    const seq = ++browseSeqRef.current;
-    setBrowseLoading(true);
-    setBrowseError(null);
+  const loadBrowsePath = useCallback(async (
+    targetPath: string,
+    driveRetryAttempt = 0,
+    reuse?: { seq: number; deviceId: string },
+  ) => {
+    const deviceId = reuse?.deviceId ?? selectedDeviceId;
+    if (!deviceId || selectedDeviceIdRef.current !== deviceId) return;
+    const seq = reuse?.seq ?? ++browseSeqRef.current;
+    const isCurrent = () => isCurrentRemoteBrowseRequest(
+      { seq, deviceId },
+      { seq: browseSeqRef.current, deviceId: selectedDeviceIdRef.current },
+    );
+    if (!reuse) {
+      setBrowseLoading(true);
+      setBrowseError(null);
+    }
     try {
       const result = await withTransientRemoteRetry(async () => {
-        await openLink(selectedDeviceId);
+        await openLink(deviceId);
         return maker.fs.listDir(targetPath.trim() || '~');
       });
-      if (seq !== browseSeqRef.current) return;
+      if (!isCurrent()) return;
       setBrowsePath(result.resolvedPath);
       setBrowseParent(result.parent);
       setBrowseEntries(result.entries);
       setBrowseDrives(normalizeRemoteDirectoryDrives(result.drives));
+      if (!reuse) setBrowseLoading(false);
+      if (shouldRetryRemoteBrowseDrives(result.drivesPending, driveRetryAttempt)) {
+        void loadBrowsePath(result.resolvedPath, driveRetryAttempt + 1, { seq, deviceId });
+      }
     } catch (err) {
-      if (seq !== browseSeqRef.current) return;
+      if (!isCurrent()) return;
+      // 盘符补拉失败时保留已画出的目录;只有首次读取失败才清空并报错。
+      if (reuse) return;
       setBrowseEntries([]);
       setBrowseError(formatRemoteError(err));
-    } finally {
-      if (seq === browseSeqRef.current) setBrowseLoading(false);
+      setBrowseLoading(false);
     }
   }, [selectedDeviceId, maker, openLink]);
 

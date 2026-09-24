@@ -12,7 +12,9 @@ import {
   buildRecentWorkspaceOptions,
   buildRemoteCreateSessionOptions,
   filterRemoteDirectoryEntries,
+  isCurrentRemoteBrowseRequest,
   normalizeRemoteDirectoryDrives,
+  shouldRetryRemoteBrowseDrives,
   defaultPermissionModeForNewSessionAgent,
   normalizeCreateSessionResult,
   parseNewSessionDeviceOptions,
@@ -1076,6 +1078,42 @@ describe('new session model', () => {
     expect(normalizeRemoteDirectoryDrives([{ name: 'C:', path: 'C:\\', current: true }])).toEqual([]);
     expect(normalizeRemoteDirectoryDrives(undefined)).toEqual([]);
     expect(normalizeRemoteDirectoryDrives('C:')).toEqual([]);
+  });
+
+  it('drops in-flight remote browse results after switching computers, even if the sequence still matches', () => {
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 3, deviceId: 'pc-b' },
+    )).toBe(false);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 4, deviceId: 'pc-a' },
+    )).toBe(false);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 3, deviceId: 'pc-a' },
+    )).toBe(true);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: '' },
+      { seq: 3, deviceId: '' },
+    )).toBe(false);
+
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('browseSeqRef.current += 1');
+    expect(newSource).toContain('selectedDeviceIdRef.current = option.deviceId');
+    expect(newSource).toContain('isCurrentRemoteBrowseRequest');
+  });
+
+  it('retries the current directory when Windows drive enumeration is still pending', () => {
+    expect(shouldRetryRemoteBrowseDrives(true, 0)).toBe(true);
+    expect(shouldRetryRemoteBrowseDrives(true, 2)).toBe(true);
+    expect(shouldRetryRemoteBrowseDrives(true, 3)).toBe(false);
+    expect(shouldRetryRemoteBrowseDrives(false, 0)).toBe(false);
+    expect(shouldRetryRemoteBrowseDrives(undefined, 0)).toBe(false);
+
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('shouldRetryRemoteBrowseDrives');
+    expect(newSource).toContain('result.drivesPending');
   });
 
   it('builds device-link create-session args with desktop remote-project semantics', () => {

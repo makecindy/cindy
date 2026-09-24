@@ -304,6 +304,23 @@ export function normalizeRemoteDirectoryDrives(value: unknown): RemoteDirectoryD
   return drives.length > 1 ? drives : [];
 }
 
+/** 目录请求是否仍属于当前被控电脑;切电脑后旧请求即使序号未变也不能写回。 */
+export function isCurrentRemoteBrowseRequest(
+  request: { seq: number; deviceId: string },
+  current: { seq: number; deviceId: string },
+): boolean {
+  return Boolean(request.deviceId)
+    && request.deviceId === current.deviceId
+    && request.seq === current.seq;
+}
+
+/** 首次盘符枚举超时后,最多再拉几次当前目录;超过即停,避免空转。 */
+const REMOTE_BROWSE_DRIVE_RETRY_LIMIT = 3;
+
+export function shouldRetryRemoteBrowseDrives(drivesPending: unknown, attempt: number): boolean {
+  return drivesPending === true && attempt >= 0 && attempt < REMOTE_BROWSE_DRIVE_RETRY_LIMIT;
+}
+
 export function buildRecentWorkspaceOptions(
   sessions: readonly RemoteSession[],
   deviceId?: string,
