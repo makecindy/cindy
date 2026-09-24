@@ -1638,12 +1638,13 @@ function forward(
       }
       if (!streamGateCommitted) {
         // 门控中(未提交):积累待发字节并判定是否可提交。
-        if (pendingBytes < STREAM_GATE_PENDING_CAP_BYTES) {
-          pendingChunks.push(chunk);
-          pendingBytes += chunk.length;
-        } else {
-          pendingBytes += chunk.length;
-        }
+        // 无条件入缓冲:曾用 `pendingBytes < CAP` 做入队条件, 累计恰好落在 CAP
+        // (64KiB, 回环读的常见块大小)时, 后续 chunk 只计数不入队 —— 一旦事件
+        // 标记在这些 chunk 里到达并提交, 这些字节被永久跳过, 客户端收到中间
+        // 有缺口的 200 SSE。任何把 pendingBytes 推过上限的 chunk 都会在该
+        // chunk 内提交或按 502 拒收, 缓冲仍有界(至多 CAP + 单 chunk 溢出)。
+        pendingChunks.push(chunk);
+        pendingBytes += chunk.length;
         if (!isSse) {
           if (canInferSse) {
             pendingText += chunk.toString('utf8');
