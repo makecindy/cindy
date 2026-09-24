@@ -573,6 +573,33 @@ export function resolveCodexForkEventTimestamp(rows: CodexNativeBoundaryRow[]): 
   return undefined;
 }
 
+/**
+ * rows 之内是否没有属于 sourceSdkSessionId 原生线程的 user 行,即目标是该线程的第一轮。
+ * 归属判定与 resolveCodexTurnAnchor 一致:agent_switch 之前的片段属于其 fromSdkSessionId
+ * (切回停泊线程时仍是同一条线程),context_rebuild 之前的片段属于已被替换的线程。
+ * rows 必须完整覆盖当前时间线(/clear 之后的可见行 + context_rebuild 标记);窗口被截断时
+ * 调用方不得据此判定。
+ */
+export function isCodexNativeThreadStart(
+  rows: CodexNativeBoundaryRow[],
+  sourceSdkSessionId: string,
+): boolean {
+  let timelineSdkSessionId: string | null = sourceSdkSessionId;
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i]!;
+    if (row.role === 'context_rebuild') {
+      timelineSdkSessionId = null;
+      continue;
+    }
+    if (row.role === 'agent_switch') {
+      timelineSdkSessionId = parseAgentSwitchBoundary(row.content)?.fromSdkSessionId ?? null;
+      continue;
+    }
+    if (row.role === 'user' && timelineSdkSessionId === sourceSdkSessionId) return false;
+  }
+  return true;
+}
+
 async function countCodexTailTurns(
   sourceSessionId: string,
   sourceCurrentSdkSessionId: string | null,

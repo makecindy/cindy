@@ -910,12 +910,13 @@ describe('commitRewindAtMessage', () => {
       makeUserMessageRow({ clientId: 'later-user', createdAt: 5000 }),
     ]); // Codex tail turns
     selectQueue.push([], // Codex 原生边界行(#4421):无锚点
+      [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })]); // post-update select
 
     const result = await commitRewindAtMessage('sess-1', 'client-id');
 
     expect(commitRewindFilesMock).toHaveBeenCalledTimes(1);
-    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 2 });
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 2, rewindsToNativeThreadStart: true });
     const txCall = txCalls.find((c) => c.name === 'rewind.commit');
     if (!txCall) throw new Error('缺少 rewind.commit tx 调用');
     expect(txCall.args).toMatchObject({
@@ -963,6 +964,7 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([]);
     selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
     selectQueue.push([]);
+    selectQueue.push([]); // 线程第一轮判定
     selectQueue.push([makeSessionRow({ agentKind: 'codex' })]);
 
     await commitRewindAtMessage('sess-1', 'client-id');
@@ -1003,13 +1005,94 @@ describe('commitRewindAtMessage', () => {
     expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1, forkAtTimestampMs: 2500 });
   });
 
-  it('Codex: omits boundary fields when target is the first turn of the native thread (#4421)', async () => {
+  it('Codex: marks the native thread start when target is the first turn of the native thread (#4994)', async () => {
     useFakeSession('codex');
     commitRewindFilesMock.mockResolvedValueOnce({ sdkSessionId: 'rollback-thread-id' });
     selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
     selectQueue.push([]);
     selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
     selectQueue.push([]); // target 之前没有任何行
+    selectQueue.push([]); // 时间线上也没有属于当前线程的 user 行
+    selectQueue.push([makeSessionRow({ agentKind: 'codex' })]);
+
+    await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true });
+  });
+
+  const agentSwitchRow = (createdAt: number, fromAgentKind: 'cc' | 'codex', fromSdkSessionId: string) => ({
+    role: 'agent_switch',
+    content: JSON.stringify({ fromAgentKind, toAgentKind: fromAgentKind === 'cc' ? 'codex' : 'cc', fromSdkSessionId }),
+    agentMeta: null,
+    createdAt,
+  });
+
+  it('Codex: does not mark the thread start when an earlier turn has no recoverable boundary (#4994)', async () => {
+    useFakeSession('codex');
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
+    selectQueue.push([]);
+    selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    selectQueue.push([
+      // 上一轮失败:只有 error 行,没有锚点也没有真实输出时间。
+      { role: 'error', content: '"boom"', agentMeta: null, createdAt: 2600 },
+      makeUserMessageRow({ rowid: 8, clientId: 'earlier-user', createdAt: 2000 }),
+    ]);
+    selectQueue.push([{ role: 'user', content: '', createdAt: 2000 }]); // 时间线:当前线程已有更早的 user
+    selectQueue.push([makeSessionRow({ agentKind: 'codex' })]);
+
+    await commitRewindAtMessage('sess-1', 'client-id');
+
+    // 不能把前面的轮次当成不存在:交给 maker-core 按「无可用边界」明确失败,而不是换空线程。
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+  });
+
+  it('Codex: marks the thread start for the first turn after switching from another engine (#4994)', async () => {
+    useFakeSession('codex');
+    commitRewindFilesMock.mockResolvedValueOnce({ sdkSessionId: 'fresh-thread-id' });
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
+    selectQueue.push([]);
+    selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    selectQueue.push([
+      agentSwitchRow(2800, 'cc', 'claude-sdk'),
+      makeAssistantMessageRow({ createdAt: 2500 }),
+      makeUserMessageRow({ rowid: 8, clientId: 'claude-user', createdAt: 2000 }),
+    ]);
+    selectQueue.push([
+      { role: 'user', content: '', createdAt: 2000 },
+      agentSwitchRow(2800, 'cc', 'claude-sdk'),
+    ]);
+    selectQueue.push([makeSessionRow({ agentKind: 'codex' })]);
+
+    await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', {
+      tailTurnsToDrop: 1,
+      rewindsToNativeThreadStart: true,
+    });
+    expect(txCalls.find((c) => c.name === 'rewind.commit')?.args).toMatchObject({
+      sdkSessionId: 'fresh-thread-id',
+    });
+  });
+
+  it('Codex: keeps earlier turns of a resumed parked thread out of the thread-start marker (#4994)', async () => {
+    useFakeSession('codex');
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
+    selectQueue.push([]);
+    selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    selectQueue.push([
+      // 切回停泊的同一条 Codex 线程;旧数据没有锚点。
+      agentSwitchRow(2800, 'cc', 'claude-sdk'),
+      makeUserMessageRow({ rowid: 7, clientId: 'claude-user', createdAt: 2400 }),
+      agentSwitchRow(2200, 'codex', 'codex-thread-old'),
+      makeAssistantMessageRow({ createdAt: 2100, agentMeta: null }),
+      makeUserMessageRow({ rowid: 5, clientId: 'codex-user', createdAt: 2000 }),
+    ]);
+    selectQueue.push([
+      { role: 'user', content: '', createdAt: 2000 },
+      agentSwitchRow(2200, 'codex', 'codex-thread-old'),
+      { role: 'user', content: '', createdAt: 2400 },
+      agentSwitchRow(2800, 'cc', 'claude-sdk'),
+    ]);
     selectQueue.push([makeSessionRow({ agentKind: 'codex' })]);
 
     await commitRewindAtMessage('sess-1', 'client-id');
@@ -1144,6 +1227,7 @@ describe('commitRewindAtMessage', () => {
     listSnapshotsMock.mockResolvedValueOnce([]);
     getHeadMock.mockRejectedValueOnce(new Error('unborn HEAD'));
     selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })], [], // Codex 原生边界行(#4421):无锚点
+      [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })]);
 
     await commitRewindAtMessage('sess-1', 'client-id');
@@ -1157,7 +1241,7 @@ describe('commitRewindAtMessage', () => {
     // conversation-only 不进 restore 执行器, 也不动任何文件相关 git 操作。
     expect(executeCodexFileRestorePlanWithThreadRollbackMock).not.toHaveBeenCalled();
     expect(writeWorktreeTreeForPathsMock).not.toHaveBeenCalled();
-    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true });
   });
 
   it('Codex commit: shadow 链被截断 → 降级 conversation-only(不做部分文件回退)', async () => {
@@ -1181,6 +1265,7 @@ describe('commitRewindAtMessage', () => {
       truncated: true,
     });
     selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })], [], // Codex 原生边界行(#4421):无锚点
+      [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })]);
 
     await commitRewindAtMessage('sess-1', 'client-id');
@@ -1256,7 +1341,7 @@ describe('commitRewindAtMessage', () => {
       'sess-1',
       expect.objectContaining({ commitThreadRollback: expect.any(Function), onCompensationError: expect.any(Function) }),
     );
-    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true });
   });
 
   it('Codex commit: shadow file-restore 计划分发给 restore 执行器', async () => {
@@ -1281,6 +1366,7 @@ describe('commitRewindAtMessage', () => {
       [], // agent_switch 边界守卫:无边界
       [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })],
       [], // Codex 原生边界行(#4421):无锚点
+      [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })],
     );
 
@@ -1300,7 +1386,7 @@ describe('commitRewindAtMessage', () => {
       expect.objectContaining({ commitThreadRollback: expect.any(Function), onCompensationError: expect.any(Function) }),
     );
     expect(executeCodexFileRewindPlanWithThreadRollbackMock).not.toHaveBeenCalled();
-    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true });
     const txCall = txCalls.find((c) => c.name === 'rewind.commit');
     if (!txCall) throw new Error('缺少 rewind.commit tx 调用');
     expect(txCall.args).toMatchObject({ sdkSessionId: 'restore-thread-id' });
@@ -1329,6 +1415,7 @@ describe('commitRewindAtMessage', () => {
       [],
       [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })],
       [],
+      [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })],
     );
 
@@ -1337,7 +1424,7 @@ describe('commitRewindAtMessage', () => {
     expect(executeCodexFileRestorePlanWithThreadRollbackMock).not.toHaveBeenCalled();
     expect(executeCodexFileRewindPlanWithThreadRollbackMock).not.toHaveBeenCalled();
     expect(listShadowSavepointsMock).not.toHaveBeenCalled();
-    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true });
   });
 
   it('Codex commit: legacy file-rewind 计划仍分发给 revert 执行器', async () => {
@@ -1351,6 +1438,7 @@ describe('commitRewindAtMessage', () => {
       [], // agent_switch 边界守卫:无边界
       [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })],
       [], // Codex 原生边界行(#4421):无锚点
+      [], // 线程第一轮判定:时间线上 target 之前没有 user 行
       [makeSessionRow({ agentKind: 'codex' })],
     );
 
@@ -1362,7 +1450,7 @@ describe('commitRewindAtMessage', () => {
       expect.objectContaining({ commitThreadRollback: expect.any(Function), onCompensationError: expect.any(Function) }),
     );
     expect(executeCodexFileRestorePlanWithThreadRollbackMock).not.toHaveBeenCalled();
-    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true });
   });
 
   it('Codex commit: restore 执行器内 thread rollback 失败 → 错误传播, DB 事务不执行', async () => {
@@ -1391,7 +1479,7 @@ describe('commitRewindAtMessage', () => {
     await expect(commitRewindAtMessage('sess-1', 'client-id')).rejects.toThrow('thread rollback failed');
 
     expect(executeCodexFileRestorePlanWithThreadRollbackMock).toHaveBeenCalledTimes(1);
-    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true });
     expect(txCalls).toHaveLength(0);
   });
 

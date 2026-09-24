@@ -2124,3 +2124,44 @@ describe('forkSessionAtMessage', () => {
     expect(txCalls).toHaveLength(0);
   });
 });
+
+describe('isCodexNativeThreadStart (#4994)', () => {
+  const user = (createdAt: number) => ({ role: 'user', content: '', agentMeta: null, createdAt });
+  const agentSwitch = (createdAt: number, fromAgentKind: 'cc' | 'codex', fromSdkSessionId: string | null) => ({
+    role: 'agent_switch',
+    content: JSON.stringify({ fromAgentKind, toAgentKind: fromAgentKind === 'cc' ? 'codex' : 'cc', fromSdkSessionId }),
+    agentMeta: null,
+    createdAt,
+  });
+  const contextRebuild = (createdAt: number) => ({ role: 'context_rebuild', content: '{}', agentMeta: null, createdAt });
+
+  it('treats an empty timeline as the thread start', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([], 'thread-x')).toBe(true);
+  });
+
+  it('rejects when the current thread already has an earlier user turn', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([user(1000)], 'thread-x')).toBe(false);
+  });
+
+  it('ignores turns of the engine the session switched away from', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([user(1000), agentSwitch(2000, 'cc', 'claude-sdk')], 'thread-x')).toBe(true);
+  });
+
+  it('counts earlier turns of a resumed parked thread across switch boundaries', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([
+      user(1000),
+      agentSwitch(2000, 'codex', 'thread-x'),
+      user(3000),
+      agentSwitch(4000, 'cc', 'claude-sdk'),
+    ], 'thread-x')).toBe(false);
+  });
+
+  it('ignores turns before a context rebuild', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([user(1000), contextRebuild(2000)], 'thread-x')).toBe(true);
+  });
+});

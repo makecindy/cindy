@@ -14156,6 +14156,29 @@ export class CodexAgent extends BaseAgent {
           const unavailableReason = rollbackUnavailableReason ?? 'thread/rollback unavailable';
           const rollbackMethodRemoved = unavailableReason.includes('unknown method')
             || unavailableReason.includes('removed in Codex');
+          if (
+            rewindOpts?.rewindsToNativeThreadStart === true
+            && !normalizeNativeForkTurnId(rewindOpts.lastTurnId)
+            && rewindOpts.forkAtTimestampMs === undefined
+          ) {
+            // 目标是当前原生线程的第一轮(宿主按消息时间线确认):前面没有 turn 可作
+            // fork 边界,裁掉全部 turn 等价于一条空线程。按当前配置新开线程并切过去,
+            // 旧线程与 fork 路径一样保留不动(#4994)。
+            log.info('commitRewindFiles ▶ rewinding to native thread start; replacing with a fresh thread', {
+              threadId,
+              tailTurnsToDrop,
+              reason: unavailableReason,
+            });
+            await replaceThreadWithCurrentProfile();
+            currentTurnId = null;
+            isTurnInFlight = false;
+            log.info('commitRewindFiles ◀ fresh thread replaced rewound thread', {
+              previousThreadId,
+              threadId,
+              tailTurnsToDrop,
+            });
+            return sdkSessionId ? { sdkSessionId } : {};
+          }
           if (!rollbackMethodRemoved && !supportsCodexNativeTurnFork(initResp.userAgent)) {
             throw new Error(
               `Codex app-server ${initResp.userAgent ?? 'unknown'}: ${unavailableReason} and predates native turn fork (0.145.0); rewind is unavailable for this thread`,

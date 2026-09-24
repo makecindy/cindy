@@ -4,11 +4,12 @@
  * Stage 2 C2 重构后:SDK 调用全部走 maker-core 的 Session.previewRewindFiles /
  * commitRewindFiles。本文件只剩业务编排:
  *   - Claude: 反向找 prior assistant uuid (跳 subagent / 跳 rewinded)
- *   - Codex: 计算 target 之后要裁掉的完整 user turn 数，交给 thread/rollback
+ *   - Codex: 计算 target 之后要裁掉的完整 user turn 数与原生 turn 边界，交给
+ *     maker-core(thread/rollback;不可用时按边界 fork,第一轮换空线程)
  *   - SQLite 事务 (messages.rewind_at + sessions reset tokens + bump userSendAt)
  *
  * Claude 三件套 (resume + resumeSessionAt + forkSession) 重启逻辑封装在
- * ClaudeCodeAgent 内部。Codex 的 thread/rollback 会立即更新 app-server 上下文。
+ * ClaudeCodeAgent 内部。Codex 的回退会立即更新 app-server 上下文。
  *
  * 关键 uuid 拆解 (与重构前一致):
  *   - resumeSessionAt 锚点 = **prior assistant uuid** (SDK 类型注释:
@@ -18,7 +19,7 @@
  *     user uuid 缺失 (老消息) → preview 走 Empty, commit 跳过文件回滚交
  *     forkSession=true 兜底 (功能不残)。
  *   - Codex 没有 message uuid / file checkpoint，preview 永远是 Empty，commit 用
- *     tailTurnsToDrop 调 thread/rollback。
+ *     tailTurnsToDrop + 原生边界交给 maker-core。
  */
 
 import { and, asc, desc, eq, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
@@ -34,7 +35,7 @@ import type { RewindFilesResult } from '@cindy/maker-core';
 import { createLogger } from '../logger';
 import { setLastAssistantTranscriptUuid } from '../messagePersistBroadcaster.js';
 import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
-import { resolveCodexForkEventTimestamp, resolveCodexTurnAnchor } from './fork';
+import { isCodexNativeThreadStart, resolveCodexForkEventTimestamp, resolveCodexTurnAnchor } from './fork';
 import {
   buildCodexFileRewindPlan,
   CodexFileRewindPlanError,
@@ -586,17 +587,24 @@ async function loadCodexFileRewindRepoContext(makerSession: { workDir: string; r
  * commit 后立即发一条消息把 rewind 应用掉。后续可持久化到 sessions 表新列。
  */
 /**
- * Codex 原地回退的原生边界(#4421):target 之前的时间线里,最近一个已完成 turn 的
- * 持久化 nativeForkAnchor(lastTurnId);没有锚点(旧数据/上一轮失败)时退到最近一条
- * 真实模型/工具输出的时间戳,由 maker-core 经 thread/turns/list 解析。两者都没有
- * 就什么都不传——只有分页线程才会用到,普通线程仍走 thread/rollback。判定逻辑与
- * fork 共用,原生 turn 计数含失败/重试轮次,不能拿可见 user 消息数去数。
+ * Codex 回退的原生边界(#4421 / #4994):thread/rollback 不可用(分页线程,或 0.156.0 起
+ * 运行时已移除该方法)时 maker-core 按它 fork。target 之前的时间线里,最近一个已完成
+ * turn 的持久化 nativeForkAnchor(lastTurnId);没有锚点(旧数据/上一轮失败)时退到最近
+ * 一条真实模型/工具输出的时间戳,由 maker-core 经 thread/turns/list 解析。两者都没有且
+ * target 是当前原生线程的第一轮时标记 rewindsToNativeThreadStart,由 maker-core 换成空
+ * 线程;否则什么都不传。判定逻辑与 fork 共用,原生 turn 计数含失败/重试轮次,不能拿
+ * 可见 user 消息数去数。
  */
 async function loadCodexRewindNativeBoundary(
   sessionId: string,
   ctx: Pick<RewindContext, 'targetCreatedAt' | 'targetRowid'>,
   liveSdkSessionId: string | undefined,
-): Promise<{ sdkSessionId?: string; lastTurnId?: string; forkAtTimestampMs?: number }> {
+): Promise<{
+  sdkSessionId?: string;
+  lastTurnId?: string;
+  forkAtTimestampMs?: number;
+  rewindsToNativeThreadStart?: true;
+}> {
   const currentSessionMeta = await getMaker().getSessionMeta(sessionId);
   const sdkSessionId =
     activeSdkSessionId(liveSdkSessionId) ??
@@ -610,6 +618,13 @@ async function loadCodexRewindNativeBoundary(
           lt(messages.createdAt, ctx.targetCreatedAt),
           and(eq(messages.createdAt, ctx.targetCreatedAt), lt(messageRowid, ctx.targetRowid)),
         );
+  // /clear 与 context_rebuild 之后是新的原生线程,之前的行不能拿来当锚点或时间戳。
+  // context_rebuild 的写入契约是 rewind_at 固定非 NULL,需豁免可见性过滤才能看到边界。
+  const inTimeline = and(
+    eq(messages.sessionId, sessionId),
+    sql`${messages.createdAt} > COALESCE((SELECT ${sessions.clearedAt} FROM ${sessions} WHERE ${sessions.id} = ${sessionId}), -1)`,
+    beforeTarget,
+  );
   // 只需回看到上一条 user / 引擎切换边界;取最近 200 行足够覆盖一轮的工具输出。
   const recent = await db
     .select({
@@ -619,14 +634,40 @@ async function loadCodexRewindNativeBoundary(
       createdAt: messages.createdAt,
     })
     .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), beforeTarget))
+    .where(and(inTimeline, or(isNull(messages.rewindAt), eq(messages.role, 'context_rebuild'))))
     .orderBy(desc(messages.createdAt), desc(messageRowid))
     .limit(200);
   const rows = [...recent].reverse();
   const lastTurnId = resolveCodexTurnAnchor(rows, sdkSessionId);
   if (lastTurnId) return { sdkSessionId, lastTurnId };
   const forkAtTimestampMs = resolveCodexForkEventTimestamp(rows);
-  return forkAtTimestampMs !== undefined ? { sdkSessionId, forkAtTimestampMs } : { sdkSessionId };
+  if (forkAtTimestampMs !== undefined) return { sdkSessionId, forkAtTimestampMs };
+  // 第一轮判定要看完整时间线:切回停泊线程时,更早的片段仍属于当前线程。只取 user 与
+  // 边界行,user 正文不参与判定,不读出来。
+  const timeline = await db
+    .select({
+      role: messages.role,
+      content: sql<string>`CASE WHEN ${messages.role} = 'agent_switch' THEN ${messages.content} ELSE '' END`,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .where(
+      and(
+        inTimeline,
+        or(
+          and(eq(messages.role, 'user'), isNull(messages.rewindAt)),
+          and(eq(messages.role, 'agent_switch'), isNull(messages.rewindAt)),
+          eq(messages.role, 'context_rebuild'),
+        ),
+      ),
+    )
+    .orderBy(asc(messages.createdAt), asc(messageRowid));
+  return isCodexNativeThreadStart(
+    timeline.map((row) => ({ ...row, agentMeta: null })),
+    sdkSessionId,
+  )
+    ? { sdkSessionId, rewindsToNativeThreadStart: true }
+    : { sdkSessionId };
 }
 
 export async function commitRewindAtMessage(
@@ -648,8 +689,9 @@ export async function commitRewindAtMessage(
   let rewindResult: Awaited<ReturnType<typeof makerSession.commitRewindFiles>> | undefined;
   let nativeForkAnchorSessionMap: Array<[string, string]> | undefined;
   if (ctx.agentKind === 'codex' || ctx.agentKind === 'pi') {
-    // Codex 分页线程拒绝 thread/rollback(#4421):把 target 之前的原生 turn 边界
-    // (持久化锚点或事件时间戳)一并交给 maker-core,遇拒绝时改走 thread/fork。
+    // thread/rollback 不可用(分页线程 #4421、0.156.0 起已移除 #4994):把 target 之前的
+    // 原生 turn 边界(持久化锚点、事件时间戳或线程第一轮标记)一并交给 maker-core,
+    // 由它改走 thread/fork 或换空线程。
     const { sdkSessionId: previousSdkSessionId, ...nativeBoundary } =
       ctx.agentKind === 'codex'
         ? await loadCodexRewindNativeBoundary(sessionId, ctx, makerSession.sdkSessionId)

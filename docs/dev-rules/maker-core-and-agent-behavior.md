@@ -133,9 +133,17 @@ vitest run src/agents/codex/app-server/external-auth.native.test.ts`，覆盖分
 关闭任务时也清理这些实例里的同 thread 保活状态；不能只查共享代理而漏掉实际承载连接。
 分支优先使用已保存的原生 turn 锚点。Codex 0.153.4 起，旧消息或失败轮没有锚点时，
 先用 `thread/turns/list(itemsView: notLoaded)` 查询终态边界，再 `thread/fork(lastTurnId)`，
-不能对分页线程执行 rollback。界面软删重试不代表原生 turn 消失，有复制事件时间时据此
+不能对分页线程执行 rollback；0.156.0 起运行时已移除 `thread/rollback`，编辑重发与回退
+一律走同一边界 fork。界面软删重试不代表原生 turn 消失，有复制事件时间时据此
 定位，不按可见 user 行数猜边界；复制事件时间缺失、原生时间缺失或秒级精度无法确定顺序时明确失败，不截错
-历史。查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
+历史。回退目标是当前原生线程的第一轮时（目标之前没有属于该线程的 user 行：首条消息，或
+`/clear`、上下文重建、切换引擎新开线程后的第一轮）没有可 fork 的边界，由宿主标记
+`rewindsToNativeThreadStart`，Codex 按当前配置换一条空线程；归属沿用锚点的 agent_switch
+链，切回停泊线程时更早的片段仍算当前线程，判定不出就明确失败，不能把「找不到边界」
+当成第一轮。实现见 Desktop `maker-orchestration/rewind.ts` 与 maker-core
+`agents/codex/index.ts` 的 `commitRewindFiles`，回归见 `rewind.test.ts`、`fork.test.ts`
+与 `index.test.ts`。
+查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
 HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 SSE 前缀（可带注释心跳）
 确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。
 正在运行的 turn、SSH 远端缺少本地交接能力、或已有恢复动作在途时必须 fail closed，不能
