@@ -394,17 +394,9 @@ pub fn reprotect() -> Result<()> {
         &approval.application.join(&approval.executable),
         &hash,
     )?;
-    let existing = read_restore_record(&target.directory)?;
-    if !(existing.is_some() && captured.snapshot.paths.is_empty()) {
-        if let Some(combined) = security::AclSnapshot::combined(existing, captured.snapshot.clone())
-        {
-            write_protected_record(
-                &target.directory,
-                installation::ACL_RESTORE,
-                &combined.encode(),
-            )?;
-        }
-    }
+    // Overlay-created objects carry administrator ACLs. Merging them into the
+    // first-install restore record would make uninstall restore those ACLs
+    // instead of re-inheriting the original parent. Harden in place only.
     captured.harden()?;
     security::confirm_application_code(
         &main,
@@ -509,6 +501,23 @@ mod tests {
         assert!(
             install.find("confirm_frozen_tree").unwrap() < install.find("from_frozen").unwrap()
         );
+    }
+    #[test]
+    fn overlay_reprotect_does_not_record_upgrade_acls() {
+        let reprotect = include_str!("approval.rs")
+            .split("pub fn reprotect(")
+            .nth(1)
+            .unwrap()
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(reprotect.contains("captured.harden()"));
+        assert!(
+            !reprotect.contains("AclSnapshot::combined"),
+            "upgrade ACLs must not enter the first-install restore record"
+        );
+        assert!(!reprotect.contains("write_protected_record"));
+        assert!(!reprotect.contains("installation::ACL_RESTORE"));
     }
     #[test]
     fn leftover_credentials_are_removed_before_service_uninstall() {
