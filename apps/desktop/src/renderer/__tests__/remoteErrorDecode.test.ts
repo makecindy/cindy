@@ -42,6 +42,11 @@ describe('decodeRemoteErrorMessage', () => {
     expect(summary).not.toContain('fallback message');
   });
 
+  it('keeps an explicit fallback for missing keys that are not error copy', () => {
+    expect(i18n.t('not.a.real.key', { defaultValue: 'keep me' })).toBe('keep me');
+    expect(i18n.t('models.options.effortLevels.not-a-real-effort', { defaultValue: '' })).toBe('');
+  });
+
   it('keeps known codes available to live and tail banners while other callers still get translated text', () => {
     const raw = '[REMOTE_LOCAL_ONLY_PROVIDER] use a different provider';
     expect(remoteErrorMessageForBanner(raw)).toBe(raw);

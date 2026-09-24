@@ -113,7 +113,7 @@ void i18n.use(initReactI18next).init({
       reservedGhostIdPrefixes: GHOST_OFFICIAL_ID_PREFIXES.join(' / '),
     },
   },
-  parseMissingKeyHandler(key: string) {
+  parseMissingKeyHandler(key: string, defaultValue?: string) {
     if (
       (key.startsWith('ipcError.') || key.startsWith('chat.remoteError.')) &&
       key !== 'ipcError.INTERNAL'
@@ -124,7 +124,7 @@ void i18n.use(initReactI18next).init({
         i18n.getResource('en', 'common', 'ipcError.INTERNAL');
       if (typeof fallback === 'string') return fallback;
     }
-    return key;
+    return defaultValue ?? key;
   },
   returnNull: false,
 });
