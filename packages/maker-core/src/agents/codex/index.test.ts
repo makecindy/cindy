@@ -25058,6 +25058,47 @@ describe('CodexAgent rewind', () => {
     await handle.close();
   });
 
+  it('does not reuse the previous thread rollout after a pathless first-turn replacement (#4994)', async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-rewind-rollout-'));
+    tempRoots.push(codexHome);
+    const sessionsDir = path.join(codexHome, 'sessions', '2026', '09', '24');
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const oldRollout = path.join(sessionsDir, 'rollout-2026-09-24T00-00-00-start-thread-id.jsonl');
+    await fs.writeFile(oldRollout, `${JSON.stringify({ payload: { type: 'event_msg', message: 'old thread' } })}\n`);
+
+    const agent = new CodexAgent(createDeps());
+    (agent as unknown as { codexHome: string }).codexHome = codexHome;
+    const startImpl = freshThreadStartImpl();
+    installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        const started = startImpl(method) as { thread: { id: string; path?: string } } | undefined;
+        if (!started) {
+          return { thread: { id: 'start-thread-id', path: oldRollout }, model: 'gpt-5.4', modelProvider: 'openai', cwd: '/repo' };
+        }
+        return started;
+      }
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+      return startImpl(method);
+    }, { userAgent: 'mock-codex/0.156.0', codexHome });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-clear-rollout',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true }))
+      .resolves.toEqual({ sdkSessionId: 'fresh-thread-id' });
+
+    await expect(
+      (agent as unknown as { findRolloutPath: (threadId: string, preferredPath?: string, homeOverride?: string) => Promise<string> })
+        .findRolloutPath('fresh-thread-id', oldRollout, codexHome),
+    ).rejects.toThrow('Codex rollout not found for thread fresh-thread-id');
+    await handle.close();
+  });
+
   it('replaces the thread when a paginated thread rejects rollback at the native thread start (#4421 / #4994)', async () => {
     const agent = new CodexAgent(createDeps());
     const startImpl = freshThreadStartImpl();
