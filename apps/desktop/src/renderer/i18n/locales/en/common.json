@@ -1,5 +1,13 @@
 {
   "sharedTask": {
+    "cancelSharing": "Stop Sharing",
+    "cancelTitle": "Stop sharing?",
+    "leaveShort": "Leave Sharing",
+    "joinTab": "Join Shared Task",
+    "joinedIntro": "View shared tasks you have joined with this account in this region.",
+    "joinedEmptyTitle": "No Shared Tasks Joined",
+    "joinedEmptyHint": "Enter the host’s invitation code in “Join Shared Task”.",
+    "joinedLoadFailed": "Could not load your joined shared tasks. Try again.",
     "joinedSection": "Shared tasks I joined",
     "ownedSection": "Shared tasks I started",
     "ownedTab": "Started",

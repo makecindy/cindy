@@ -6,17 +6,22 @@ import { sharedTaskHostPeer } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { SessionTaskMenu } from '../SessionTaskMenu';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 const state = vi.hoisted(() => ({
   host: vi.fn(),
   rowClick: vi.fn(),
   rename: vi.fn(),
+  account: vi.fn(),
+  closeLink: vi.fn(),
+  invoke: vi.fn(),
+  removeDevice: vi.fn(),
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key.split('.').at(-1) }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  remoteProjectsStore: { removeDevice: vi.fn() },
+  remoteProjectsStore: { removeDevice: state.removeDevice },
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'owner' }) }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -65,9 +70,12 @@ function labels() {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  setDataOwnerGeneration('owner');
   state.host.mockResolvedValue({ available: false, detail: null });
+  state.account.mockImplementation(async ({ action, sharedTaskId }) => action === 'close' ? { closed: [sharedTaskId], failed: [] } : []);
+  state.closeLink.mockResolvedValue(undefined);
   Object.assign(window, {
-    electronAPI: { sharedTask: { host: state.host, account: vi.fn().mockResolvedValue([]) } },
+    electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { closeLink: state.closeLink, invoke: state.invoke } },
   });
 });
 afterEach(cleanup);
@@ -89,7 +97,7 @@ it('loads only on open and groups task organization, sharing, viewing and remova
     'delete',
   ]);
   expect(screen.getAllByRole('separator')).toHaveLength(3);
-  expect(state.host).not.toHaveBeenCalled();
+  expect(state.host).toHaveBeenCalledWith({ action: 'state', sessionId: 'task' });
   fireEvent.click(screen.getByRole('menuitem', { name: 'rename' }));
   expect(state.rename).toHaveBeenCalledTimes(1);
   expect(state.rowClick).not.toHaveBeenCalled();
@@ -122,27 +130,30 @@ it('keeps restore and delete last for archived tasks and does not expose sharing
   expect(labels()).toEqual(['rename', 'tags', 'copy', 'export', 'unarchive', 'delete']);
 });
 
-it('keeps the guest menu limited to shared-task management', () => {
+it('keeps the guest menu limited to leaving the shared task', () => {
   render(
     <Harness target={{ ...session, deviceLinkDeviceId: sharedTaskHostPeer('share', 'device') }} />,
   );
   openMenu();
-  expect(labels()).toEqual(['title']);
+  expect(labels()).toEqual(['leaveShort']);
   expect(screen.queryByRole('separator')).toBeNull();
 });
 
-it('keeps the rejoin flow mounted when shared-task management closes', async () => {
+it('opens only a leave confirmation for guests and preserves the task on cancel', async () => {
   render(
     <Harness target={{ ...session, deviceLinkDeviceId: sharedTaskHostPeer('share', 'device') }} />,
   );
   const more = screen.getByRole('button', { name: 'More' });
   openMenu();
-  fireEvent.click(screen.getByRole('menuitem', { name: 'title' }));
-  fireEvent.click(await screen.findByRole('button', { name: 'rejoin' }));
-  expect(screen.getByRole('dialog', { name: 'join' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel join' }));
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  fireEvent.click(screen.getByRole('menuitem', { name: 'leaveShort' }));
+  expect(screen.getByRole('alertdialog', { name: 'leaveTitle' })).toBeTruthy();
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'leaveKeep' }));
+  fireEvent.click(screen.getByRole('button', { name: 'leaveKeep' }));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
   await waitFor(() => expect(document.activeElement).toBe(more));
+  expect(state.account).not.toHaveBeenCalled();
+  expect(state.removeDevice).not.toHaveBeenCalled();
   expect(state.rowClick).not.toHaveBeenCalled();
 });
 
@@ -161,6 +172,7 @@ it('keeps the shared dialog after closing the menu and isolates its clicks from 
   render(<Harness />);
   const more = screen.getByRole('button', { name: 'More' });
   openMenu();
+  await waitFor(() => expect(screen.getByRole('menuitem', { name: 'title' }).getAttribute('aria-disabled')).not.toBe('true'));
   fireEvent.click(screen.getByRole('menuitem', { name: 'title' }));
   await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
   const dialog = screen.getByRole('dialog');
@@ -169,4 +181,44 @@ it('keeps the shared dialog after closing the menu and isolates its clicks from 
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   await waitFor(() => expect(document.activeElement).toBe(more));
   expect(state.rowClick).not.toHaveBeenCalled();
+});
+
+it('shows stop sharing for an active host and closes only after confirmation', async () => {
+  state.host.mockResolvedValue({ available: true, detail: { sharedTaskId: 'share', status: 'active' } });
+  render(<Harness />); openMenu();
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'cancelSharing' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(state.account).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'closeAllKeep' }));
+  fireEvent.click(screen.getByRole('button', { name: 'cancelSharing' }));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  expect(state.account).toHaveBeenCalledWith({ action: 'close', sharedTaskId: 'share' });
+  expect(state.rowClick).not.toHaveBeenCalled();
+});
+
+it('routes the state lookup through the owning remote computer', async () => {
+  state.invoke.mockResolvedValue({ available: true, detail: { sharedTaskId: 'remote-share', status: 'active' } });
+  render(<Harness target={{ ...session, deviceLinkDeviceId: 'own-computer' }} />); openMenu();
+  await screen.findByRole('menuitem', { name: 'cancelSharing' });
+  expect(state.invoke).toHaveBeenCalledWith('own-computer', 'maker:shared-task', [{ action: 'state', sessionId: 'task' }]);
+  expect(state.host).not.toHaveBeenCalled();
+});
+
+it('leaves the confirmed shared peer without calling host management', async () => {
+  const peer = sharedTaskHostPeer('share', 'device');
+  render(<Harness target={{ ...session, deviceLinkDeviceId: peer }} />); openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'leaveShort' }));
+  fireEvent.click(screen.getByRole('button', { name: 'leaveShort' }));
+  await waitFor(() => expect(state.removeDevice).toHaveBeenCalledWith(peer));
+  expect(state.account).toHaveBeenCalledWith({ action: 'leave', sharedTaskId: 'share' });
+  expect(state.closeLink).toHaveBeenCalledWith(peer);
+  expect(state.host).not.toHaveBeenCalled();
+});
+
+it('does not submit a confirmation from an old account', async () => {
+  render(<Harness target={{ ...session, deviceLinkDeviceId: sharedTaskHostPeer('share', 'device') }} />); openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'leaveShort' }));
+  setDataOwnerGeneration('other-account');
+  fireEvent.click(screen.getByRole('button', { name: 'leaveShort' }));
+  expect(state.account).not.toHaveBeenCalled();
 });

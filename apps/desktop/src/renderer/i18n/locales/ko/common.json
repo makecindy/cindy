@@ -1,5 +1,13 @@
 {
   "sharedTask": {
+    "cancelSharing": "공유 중지",
+    "cancelTitle": "공유를 중지할까요?",
+    "leaveShort": "공유 나가기",
+    "joinTab": "공유 참여",
+    "joinedIntro": "이 계정과 리전에서 참여한 공유 작업을 확인하세요.",
+    "joinedEmptyTitle": "참여 중인 공유 작업이 없습니다",
+    "joinedEmptyHint": "“공유 참여”에서 호스트의 초대 코드를 입력하세요.",
+    "joinedLoadFailed": "참여 중인 공유 작업을 불러오지 못했습니다. 다시 시도하세요.",
     "joinedSection": "참여한 공유 작업",
     "ownedSection": "내가 시작한 공유 작업",
     "ownedTab": "시작",

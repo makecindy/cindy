@@ -1,5 +1,13 @@
 {
   "sharedTask": {
+    "cancelSharing": "共有を停止",
+    "cancelTitle": "共有を停止しますか？",
+    "leaveShort": "共有から退出",
+    "joinTab": "共有に参加",
+    "joinedIntro": "このアカウントとリージョンで参加した共有タスクを確認できます。",
+    "joinedEmptyTitle": "参加中の共有タスクはありません",
+    "joinedEmptyHint": "「共有に参加」でホストの招待コードを入力してください。",
+    "joinedLoadFailed": "参加中の共有タスクを取得できませんでした。再試行してください。",
     "joinedSection": "参加した共有タスク",
     "ownedSection": "開始した共有タスク",
     "ownedTab": "開始",

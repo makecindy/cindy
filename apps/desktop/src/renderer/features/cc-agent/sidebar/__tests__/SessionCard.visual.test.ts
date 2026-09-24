@@ -28,6 +28,7 @@ import { SessionCard } from '../SessionCard';
 import { SessionItem } from '../SessionItem';
 import { sessionCardVisualCases } from '../__fixtures__/sessionCardVisualCases';
 import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -44,6 +45,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
 }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'owner' }) }));
 
 vi.mock('react-i18next', () => ({
   initReactI18next: {
@@ -299,6 +301,18 @@ describe('SessionCard visual cases', () => {
     mocks.pendingPluginSetupSessionIds.add(visualCase.session.id);
     renderCase(visualCase.id, { variant: 'list', navigationOnly: true });
     expect(screen.getByText('等待插件设置')).toBeTruthy();
+  });
+
+  it.each(['list', 'text'] as const)('exposes only leave sharing on a guest %s row context menu', (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, status: 'active' as const, deviceLinkDeviceId: sharedTaskHostPeer('share', 'host') };
+    const onClick = vi.fn();
+    const onAction = vi.fn();
+    const props = { session, isActive: false, isRunning: false, hasAttentionNotification: false, navigationOnly: true, onClick, onRename: vi.fn(), onAction, onTogglePin: vi.fn() };
+    const view = render(variant === 'list' ? createElement(SessionCard, { ...props, variant: 'list' }) : createElement(SessionItem, props));
+    fireEvent.contextMenu(view.container.querySelector<HTMLElement>('[data-sidebar-navigation-row="true"]')!);
+    expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['sharedTask.leaveShort']);
+    expect(onClick).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
   });
 
   it.each(['list', 'text'] as const)('shows the shared crown only for owners in %s rows', (variant) => {

@@ -1,5 +1,13 @@
 {
   "sharedTask": {
+    "cancelSharing": "取消共享",
+    "cancelTitle": "取消共享？",
+    "leaveShort": "退出共享",
+    "joinTab": "加入共享",
+    "joinedIntro": "查看你在目前帳號、目前區域加入的共享任務。",
+    "joinedEmptyTitle": "尚未加入共享任務",
+    "joinedEmptyHint": "在「加入共享」中填入房主提供的邀請碼。",
+    "joinedLoadFailed": "暫時無法取得已加入的共享任務，請重試",
     "joinedSection": "我加入的共享",
     "ownedSection": "我開啟的共享",
     "ownedTab": "我開啟的",

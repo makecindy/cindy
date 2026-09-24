@@ -7,19 +7,21 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { JoinSharedTaskDialog } from '../JoinSharedTaskDialog';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
-const state = vi.hoisted(() => ({ account: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), setSessions: vi.fn(), bind: vi.fn() }));
+const state = vi.hoisted(() => ({ account: vi.fn(), openLink: vi.fn(), closeLink: vi.fn(), invoke: vi.fn(), setSessions: vi.fn(), removeDevice: vi.fn(), getSessions: vi.fn(), bind: vi.fn(), reset: vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, args?: { title?: string }) => key + (args?.title ? ':' + args.title : '') }) }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'guest', isAuthenticated: true }) }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
-vi.mock('../remoteProjectsStore', () => ({ remoteProjectsStore: { setDeviceSessions: state.setSessions } }));
-vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ bindSharedTaskPushOwner: state.bind }));
+vi.mock('../remoteProjectsStore', () => ({ remoteProjectsStore: { setDeviceSessions: state.setSessions, removeDevice: state.removeDevice, getMergedRemoteSessions: state.getSessions }, isRemoteDeviceMarkedDisconnected: () => false }));
+vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ bindSharedTaskPushOwner: state.bind, resetRemoteDataOwnerPushFence: state.reset }));
 beforeEach(() => {
   vi.clearAllMocks(); setDataOwnerGeneration('guest');
-  state.account.mockImplementation(async ({ action }) => action === 'owned' ? [] : action === 'join'
+  state.account.mockImplementation(async ({ action }) => action === 'owned' || action === 'list' ? [] : action === 'join'
     ? { sharedTaskId: 'share-1', memberId: 'member-1', status: 'joined' }
     : { sharedTaskId: 'share-1', sessionId: 'task-1', ownerAccountId: 'host', hostDeviceId: 'desktop', title: 'Test Task', status: 'active' });
   state.invoke.mockResolvedValue({ id: 'task-1' });
-  Object.assign(window, { electronAPI: { sharedTask: { account: state.account }, deviceLink: { openLink: state.openLink, invoke: state.invoke } } });
+  state.getSessions.mockReturnValue([]);
+  state.closeLink.mockResolvedValue(undefined);
+  Object.assign(window, { electronAPI: { sharedTask: { account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke } } });
 });
 afterEach(cleanup);
 function open(onOpenChange = vi.fn()) {
@@ -88,6 +90,7 @@ it('closes only confirmed owned tasks and retries just the failed task', async (
   let secondAttempt = false;
   state.account.mockImplementation(async ({ action, sharedTaskId }) => {
     if (action === 'owned') return owned;
+    if (action === 'list') return [];
     if (sharedTaskId === 'own-1' || secondAttempt) return { closed: [sharedTaskId], failed: [] };
     secondAttempt = true; return { closed: [], failed: [{ sharedTaskId }] };
   });
@@ -138,4 +141,117 @@ it('lets a newly joined visitor cancel leaving, then leave with confirmation', a
   fireEvent.click(within(dialog).getByRole('button', { name: 'sharedTask.leave' }));
   await waitFor(() => expect(state.account).toHaveBeenCalledWith({ action: 'leave', sharedTaskId: 'share-1' }));
   await screen.findByLabelText('sharedTask.invitation');
+});
+
+const joinedTask = { sharedTaskId: 'joined-1', sessionId: 'remote-task', hostDeviceId: 'host-pc', ownerAccountId: 'host', title: 'Joined project', revision: 1 };
+function listJoined(items = [joinedTask]) {
+  state.account.mockImplementation(async ({ action, sharedTaskId }) => {
+    if (action === 'list') return items;
+    if (action === 'get') return { ...joinedTask, sharedTaskId, status: 'active' };
+    return [];
+  });
+}
+function joinedTab() { fireEvent.click(screen.getByRole('button', { name: /^sharedTask.joinedTab/ })); }
+
+it('lists joined tasks and preserves the invitation form across tabs', async () => {
+  listJoined(); open();
+  fireEvent.change(screen.getByLabelText('sharedTask.invitation'), { target: { value: 'A'.repeat(43) } });
+  fireEvent.change(screen.getByLabelText('sharedTask.joinNickname'), { target: { value: 'Guest' } });
+  joinedTab();
+  await screen.findByText(joinedTask.title);
+  expect(screen.getByRole('dialog', { name: 'sharedTask.joinedSection' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^sharedTask.joinedTab/ }).textContent).toContain('1');
+  fireEvent.click(screen.getByRole('button', { name: 'sharedTask.joinTab' }));
+  expect((screen.getByLabelText('sharedTask.invitation') as HTMLTextAreaElement).value).toBe('A'.repeat(43));
+  expect((screen.getByLabelText('sharedTask.joinNickname') as HTMLInputElement).value).toBe('Guest');
+});
+
+it('shows a retry instead of an empty list when discovery fails', async () => {
+  state.account.mockImplementation(async ({ action }) => {
+    if (action === 'list') throw new Error('offline');
+    return [];
+  });
+  open(); joinedTab();
+  await screen.findByText('sharedTask.joinedLoadFailed');
+  expect(screen.queryByText('sharedTask.joinedEmptyTitle')).toBeNull();
+  listJoined([]);
+  fireEvent.click(screen.getByRole('button', { name: 'sharedTask.retryAction' }));
+  await screen.findByText('sharedTask.joinedEmptyTitle');
+  expect(screen.queryByText('sharedTask.joinedLoadFailed')).toBeNull();
+});
+
+it('opens a discovered task through its host and preserves existing mirrors', async () => {
+  listJoined();
+  state.invoke.mockResolvedValue({ id: joinedTask.sessionId });
+  const close = open(); joinedTab();
+  fireEvent.click(await screen.findByRole('button', { name: 'sharedTask.openTask' }));
+  await waitFor(() => expect(close).toHaveBeenCalledWith(false));
+  expect(state.openLink).toHaveBeenCalledWith(sharedTaskHostPeer(joinedTask.sharedTaskId, joinedTask.hostDeviceId));
+  expect(state.invoke).toHaveBeenCalledWith(sharedTaskHostPeer(joinedTask.sharedTaskId, joinedTask.hostDeviceId), 'local-db:sessions:get', [joinedTask.sessionId]);
+});
+
+it('opens an already mirrored task without reconnecting it', async () => {
+  listJoined();
+  state.getSessions.mockReturnValue([{ id: joinedTask.sessionId, deviceLinkDeviceId: sharedTaskHostPeer(joinedTask.sharedTaskId, joinedTask.hostDeviceId) }]);
+  const close = open(); joinedTab();
+  fireEvent.click(await screen.findByRole('button', { name: 'sharedTask.openTask' }));
+  await waitFor(() => expect(close).toHaveBeenCalledWith(false));
+  expect(state.openLink).not.toHaveBeenCalled();
+  expect(state.setSessions).not.toHaveBeenCalled();
+});
+
+it('cancels leaving without changing the list, then removes only the confirmed membership', async () => {
+  let items = [joinedTask];
+  state.account.mockImplementation(async ({ action }) => {
+    if (action === 'list') return items;
+    if (action === 'leave') items = [];
+    return [];
+  });
+  open(); joinedTab();
+  fireEvent.click(await screen.findByRole('button', { name: 'sharedTask.leaveShort' }));
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'sharedTask.leaveKeep' }));
+  expect(state.account).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'leave' }));
+  expect(screen.getByText(joinedTask.title)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'sharedTask.leaveShort' }));
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'sharedTask.leaveShort' }));
+  await screen.findByText('sharedTask.joinedEmptyTitle');
+  expect(state.account).toHaveBeenCalledWith({ action: 'leave', sharedTaskId: joinedTask.sharedTaskId });
+  expect(state.removeDevice).toHaveBeenCalledWith(sharedTaskHostPeer(joinedTask.sharedTaskId, joinedTask.hostDeviceId));
+  expect(state.account).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'close' }));
+});
+
+it('keeps the confirmation and list available after a failed leave', async () => {
+  state.account.mockImplementation(async ({ action }) => {
+    if (action === 'list') return [joinedTask];
+    if (action === 'leave') throw new Error('offline');
+    return [];
+  });
+  open(); joinedTab();
+  fireEvent.click(await screen.findByRole('button', { name: 'sharedTask.leaveShort' }));
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'sharedTask.leaveShort' }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalled());
+  expect(screen.getByRole('alertdialog')).toBeTruthy();
+  expect(state.removeDevice).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'sharedTask.leaveKeep' }));
+  expect(screen.getByText(joinedTask.title)).toBeTruthy();
+});
+
+it('ignores a discovery response from the previous account', async () => {
+  let finish!: (value: unknown) => void;
+  state.account.mockImplementation(({ action }) => action === 'list' ? new Promise(resolve => { finish = resolve; }) : Promise.resolve([]));
+  open(); joinedTab();
+  await act(async () => { setDataOwnerGeneration('other-account'); finish([joinedTask]); });
+  expect(screen.queryByText(joinedTask.title)).toBeNull();
+});
+
+it('does not clean up the new account after an old leave response', async () => {
+  let finish!: (value: unknown) => void;
+  state.account.mockImplementation(({ action }) => action === 'list' ? Promise.resolve([joinedTask]) : action === 'leave'
+    ? new Promise(resolve => { finish = resolve; }) : Promise.resolve([]));
+  open(); joinedTab();
+  fireEvent.click(await screen.findByRole('button', { name: 'sharedTask.leaveShort' }));
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'sharedTask.leaveShort' }));
+  await act(async () => { setDataOwnerGeneration('other-account'); finish({}); });
+  expect(state.removeDevice).not.toHaveBeenCalled();
+  expect(state.closeLink).not.toHaveBeenCalled();
 });
