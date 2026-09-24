@@ -64,6 +64,21 @@ async function existingSkillFile(
   return null;
 }
 
+async function isSymlinkedNamespace(
+  fileOps: RemoteAgentFileOps,
+  directory: string,
+): Promise<boolean> {
+  // Older hosts do not expose lstat. Treat an unverifiable namespace as a link
+  // and skip it rather than following it outside the discovery root.
+  if (!fileOps.lstat) return true;
+  try {
+    const stat = await fileOps.lstat(directory);
+    return stat ? stat.isSymbolicLink : true;
+  } catch {
+    return true;
+  }
+}
+
 async function scanSkillDirectories(input: {
   fileOps: RemoteAgentFileOps;
   root: string;
@@ -98,6 +113,7 @@ async function scanSkillDirectories(input: {
       continue;
     }
     if (shouldPruneSkillScanDirectory(name)) continue;
+    if (await isSymlinkedNamespace(input.fileOps, skillDir)) continue;
 
     // At most one namespace/author level: <root>/<namespace>/<skill>.
     const nestedNames = (await input.fileOps.listDir(skillDir))
@@ -105,6 +121,9 @@ async function scanSkillDirectories(input: {
         && !/\.bak\.\d+$/.test(nested))
       .sort((a, b) => a.localeCompare(b));
     for (const nestedName of nestedNames) {
+      // Direct Skills win over nested Skills with the same leaf name; keep the
+      // first namespace when names collide.
+      if (found.some((skill) => skill.name === nestedName)) continue;
       const nestedFile = await existingSkillFile(
         input.fileOps,
         path.posix.join(skillDir, nestedName),

@@ -117,14 +117,22 @@ export async function listInstalledSkills(): Promise<{ entries: InstalledSkillEn
       } catch {
         continue;
       }
-      for (const nested of nestedEntries) {
+      for (const nested of nestedEntries.sort((a, b) => a.name.localeCompare(b.name))) {
         if (nested.name.startsWith('.') || /\.bak\.\d+$/.test(nested.name)) continue;
+        // Direct Skills win over nested Skills with the same leaf name; keep the
+        // first namespace when names collide, matching the other scanners.
+        if (skillTargets.some((target) => path.basename(target.dir) === nested.name)) continue;
         const nestedPath = path.join(entry.path, nested.name);
         if (!(await isDirectoryEntry(nested, nestedPath))) continue;
         const nestedSkillFile = await findSkillMd(nestedPath);
         if (nestedSkillFile) skillTargets.push({ dir: nestedPath, skillFile: nestedSkillFile });
       }
     }
+    // Truncation must be deterministic: sort before applying SKILLS_INDEX_MAX.
+    skillTargets.sort((a, b) => {
+      const byName = path.basename(a.dir).localeCompare(path.basename(b.dir));
+      return byName !== 0 ? byName : a.dir.localeCompare(b.dir);
+    });
   } catch {
     return { entries: [], truncatedCount: 0 };
   }

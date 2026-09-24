@@ -136,6 +136,40 @@ describe('listInstalledSkills — symlink 跟随', () => {
     }
   });
 
+  it('sorts nested Skills deterministically before truncating at the cap', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'learn-skills-idx-cap-'));
+    const root = path.join(tmpHome, '.agents', 'skills');
+    // Two namespaces, created in reverse name order so readdir order cannot be
+    // relied on; 101 entries exercises SKILLS_INDEX_MAX = 100.
+    const names: string[] = [];
+    for (let index = 100; index >= 0; index -= 1) {
+      const name = `skill-${String(index).padStart(3, '0')}`;
+      names.push(name);
+      const dir = path.join(root, index % 2 === 0 ? 'zz-ns' : 'aa-ns', name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: cap\n---\nBody`,
+        'utf8',
+      );
+    }
+
+    const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(tmpHome);
+    try {
+      const { listInstalledSkills } = await import('../skillsIndex');
+      const { entries, truncatedCount } = await listInstalledSkills();
+
+      expect(entries).toHaveLength(100);
+      expect(truncatedCount).toBe(1);
+      expect(entries.map((entry) => entry.name)).toEqual(names.sort().slice(0, 100));
+    } finally {
+      homeSpy.mockRestore();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
   it('does not descend through a symlinked namespace', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');

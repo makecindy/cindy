@@ -188,6 +188,9 @@ async function listSkillEntries(
     return skills;
   }
 
+  // Direct Skills win over nested Skills with the same leaf name, matching the
+  // `/` panel's priority; collect them before walking namespaces.
+  const namespaces: string[] = [];
   for (const ent of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (ent.name.startsWith('.')) continue;
     if (/\.bak\.\d+$/.test(ent.name)) continue;
@@ -201,18 +204,22 @@ async function listSkillEntries(
     }
     // Direct symlinked Skills remain supported; a symlinked namespace is not walked.
     if (isSymlink || !ent.isDirectory() || shouldPruneSkillScanDirectory(ent.name)) continue;
+    namespaces.push(skillPath);
+  }
 
-    // At most one namespace/author level: <root>/<namespace>/<skill>.
+  // At most one namespace/author level: <root>/<namespace>/<skill>.
+  for (const namespacePath of namespaces) {
     let namespaceEntries;
     try {
-      namespaceEntries = await fsp.readdir(skillPath, { withFileTypes: true });
+      namespaceEntries = await fsp.readdir(namespacePath, { withFileTypes: true });
     } catch {
       continue;
     }
     for (const nested of namespaceEntries.sort((a, b) => a.name.localeCompare(b.name))) {
       if (nested.name.startsWith('.')) continue;
       if (/\.bak\.\d+$/.test(nested.name)) continue;
-      const nestedPath = path.join(skillPath, nested.name);
+      if (skills.some((skill) => skill.name === nested.name)) continue;
+      const nestedPath = path.join(namespacePath, nested.name);
       if (!(await hasSkillFile(nestedPath))) continue;
       const nestedIsSymlink = nested.isSymbolicLink()
         || (nested.isDirectory() && isSymlinkDirectory(nestedPath));
@@ -240,8 +247,11 @@ function matchesManagedSkillTargetShape(
   if (!leaf || !equalsName(leaf, skillName)) return false;
   for (let index = 0; index + 2 < segments.length; index += 1) {
     const isDiscoveryRoot = discoveryRoots.some((root) => equalsName(segments[index], root));
-    // Flat and nested skills both live below `<discovery-root>/skills/<...>/<leaf>`.
-    if (isDiscoveryRoot && equalsName(segments[index + 1], 'skills')) return true;
+    if (!isDiscoveryRoot || !equalsName(segments[index + 1], 'skills')) continue;
+    // Only the shapes this module projects: flat `<skills>/<leaf>` and one
+    // namespace level `<skills>/<namespace>/<leaf>`. Deeper paths are not ours.
+    const levelsBelowSkills = segments.length - (index + 2);
+    if (levelsBelowSkills === 1 || levelsBelowSkills === 2) return true;
   }
   return false;
 }

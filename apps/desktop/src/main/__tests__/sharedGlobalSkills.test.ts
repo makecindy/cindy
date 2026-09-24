@@ -154,6 +154,20 @@ describe('prepareSharedGlobalSkillLinks', () => {
     expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'nested'), nested)).toBe(true);
   });
 
+  it('prefers a direct Skill over a same-named nested namespace Skill', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const direct = await writeSkill(paths.sharedSkillsDir, 'same-name');
+    const nested = await writeSkill(paths.sharedSkillsDir, path.join('@scope', 'same-name'));
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'same-name'), direct)).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'same-name'), nested)).toBe(false);
+  });
+
   it('resolves a project root for a nested project Skill path', () => {
     const projectRoot = path.join(os.tmpdir(), 'cindy-nested-project-root', 'repo');
     const skillPath = path.join(projectRoot, '.agents', 'skills', '@scope', 'nested');
@@ -592,6 +606,35 @@ describe('prepareSharedProjectSkillLinks', () => {
 
     expect(result.changed).toBe(false);
     expect(result.warnings.some((warning) => warning.includes('user-link'))).toBe(true);
+    expect(await fs.readlink(userLink)).toBe(externalTarget);
+  });
+
+  it('does not treat a deeper broken link as a moved project Skill link', async () => {
+    const root = await makeTmpDir();
+    const workingDir = path.join(root, 'checkout');
+    const paths = sharedProjectSkillsPaths(workingDir);
+    await writeSkill(paths.claudeSkillsDir, 'deep-link');
+    const userLink = path.join(paths.sharedSkillsDir, 'deep-link');
+    const externalTarget = path.join(
+      root,
+      'archive',
+      '.claude',
+      'skills',
+      'group',
+      'sub',
+      'deep-link',
+    );
+    await fs.mkdir(paths.sharedSkillsDir, { recursive: true });
+    await fs.symlink(
+      externalTarget,
+      userLink,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    const result = await prepareSharedProjectSkillLinks({ workingDir });
+
+    expect(result.changed).toBe(false);
+    expect(result.warnings.some((warning) => warning.includes('deep-link'))).toBe(true);
     expect(await fs.readlink(userLink)).toBe(externalTarget);
   });
 });

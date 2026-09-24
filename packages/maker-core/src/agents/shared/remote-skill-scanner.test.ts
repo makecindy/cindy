@@ -20,6 +20,13 @@ function fakeRemoteFiles(files: Record<string, string>): RemoteAgentFileOps {
           .filter(Boolean),
       )];
     },
+    async lstat(candidate) {
+      if (fileNames.has(candidate)) return { isSymbolicLink: false };
+      const prefix = candidate.endsWith('/') ? candidate : `${candidate}/`;
+      return [...fileNames].some((file) => file.startsWith(prefix))
+        ? { isSymbolicLink: false }
+        : null;
+    },
     async readFile(file, maxBytes) {
       const value = files[file];
       if (value === undefined) throw new Error('missing');
@@ -66,6 +73,45 @@ describe('remote Skill scanners', () => {
 
     const claude = await scanRemoteClaudeSkills({ fileOps });
     expect(claude.skills.map((skill) => skill.name)).toEqual(['claude-nested']);
+  });
+
+  it('does not walk a symlinked namespace when the host exposes lstat', async () => {
+    const fileOps: RemoteAgentFileOps = {
+      ...fakeRemoteFiles({
+        '$HOME/.claude/skills/@scope/nested/SKILL.md': '---\ndescription: Nested\n---',
+      }),
+      async lstat(candidate) {
+        return { isSymbolicLink: candidate === '$HOME/.claude/skills/@scope' };
+      },
+    };
+
+    const result = await scanRemoteClaudeSkills({ fileOps });
+
+    expect(result.skills).toEqual([]);
+  });
+
+  it('does not walk namespaces when the host cannot report symlinks', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/skills/@scope/nested/SKILL.md': '---\ndescription: Nested\n---',
+    });
+    delete fileOps.lstat;
+
+    const result = await scanRemoteClaudeSkills({ fileOps });
+
+    expect(result.skills).toEqual([]);
+  });
+
+  it('prefers a direct remote Skill over a same-named nested Skill', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/skills/same-name/SKILL.md': '---\ndescription: Direct\n---',
+      '$HOME/.claude/skills/@scope/same-name/SKILL.md': '---\ndescription: Nested\n---',
+    });
+
+    const result = await scanRemoteClaudeSkills({ fileOps });
+
+    expect(result.skills).toEqual([
+      expect.objectContaining({ name: 'same-name', description: 'Direct' }),
+    ]);
   });
 
   it('discovers Pi global, project, and ancestor Skills only through the Git boundary', async () => {

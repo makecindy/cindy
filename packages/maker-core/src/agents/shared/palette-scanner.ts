@@ -335,6 +335,9 @@ async function scanClaudeSkillDirs(
         && !/\.bak\.\d+$/.test(entry.name))
       .sort((a, b) => a.name.localeCompare(b.name))) {
       const nestedDir = path.join(subDir, nested.name);
+      // Direct Skills win over nested Skills with the same leaf name, matching
+      // the Desktop `/` panel; keep the first namespace when names collide.
+      if (results.some((result) => result.name === nested.name)) continue;
       const nestedFile = await findSkillFile(nestedDir);
       if (nestedFile) await addSkill(nestedDir, nested.name, nestedFile);
     }

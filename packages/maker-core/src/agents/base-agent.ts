@@ -256,6 +256,12 @@ export interface PiNativeModelSpec {
  */
 export interface RemoteAgentFileOps {
   stat(file: string): Promise<{ isFile: boolean } | null>;
+  /**
+   * lstat without following symlinks, used to keep namespace traversal inside
+   * the discovery root. Absent on older hosts; callers must treat a missing
+   * implementation as "cannot verify" and stay conservative.
+   */
+  lstat?(file: string): Promise<{ isSymbolicLink: boolean } | null>;
   /** Missing/unreadable directories return an empty array. */
   listDir(dir: string): Promise<string[]>;
   /** Bounded UTF-8 read used for remote runtime metadata such as SKILL.md. */
