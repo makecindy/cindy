@@ -135,7 +135,7 @@ it('keeps generated defaults consistent with Cindy model preferences', async () 
     // Explicit official defaults: K2.8 max and Grok 4.7 high.
     const expected = model.id === 'kimi-for-coding' && model.upstream === 'https://api.kimi.com/coding'
       ? 'max' : model.id === 'grok-4.7' && model.upstream === 'https://api.x.ai/v1'
-        ? 'high' : defaultEffortForCapabilities(model.efforts);
+        ? 'high' : defaultEffortForCapabilities(model.efforts ?? []);
     expect(model.defaultEffort, model.id).toBe(expected);
   }
 });

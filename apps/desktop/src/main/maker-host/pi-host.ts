@@ -54,7 +54,7 @@ import {
   runtimeCustomProviderId,
   storedCustomProviderId,
 } from '@cindy/model-providers';
-import { providerCatalogForPi, providerModelRecord } from '@cindy/model-providers';
+import { providerCatalogForPi, providerModelRecord, providerModelGenerationRecord } from '@cindy/model-providers';
 import type {
   Catalog,
   ModelCost,
@@ -1279,13 +1279,15 @@ export function buildPiNativeProvidersFromConfigs(
       const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl,
         model.api ?? model.piApi ?? (model.route ? model.route.wireProtocol : rt.wireProtocol),
         !model.api && !model.piApi && !model.route)
-        ?? ((model.api ?? model.piApi) ? providerPresetModelRecord(rt.catalogPresetId, model.id, model.api ?? model.piApi) : undefined);
+        ?? ((model.api ?? model.piApi) ? providerPresetModelRecord(rt.catalogPresetId, model.id, model.api ?? model.piApi) : undefined)
+        ?? providerModelGenerationRecord(model.id, model.route?.baseUrl ?? rt.baseUrl,
+          model.api ?? model.piApi ?? (model.route ? model.route.wireProtocol : rt.wireProtocol), rt.catalogPresetId);
       if (!row || !PI_NATIVE_APIS.has(row.execution.pi.api as PiNativeApi)) return undefined;
       return {
         id: row.id, name: row.name, baseUrl: row.upstream,
         ...row.execution.pi, api: row.execution.pi.api as PiModelApi,
         contextWindow: row.contextWindow, maxTokens: row.maxOutput,
-        input: row.modalities.input.filter((value): value is 'text' | 'image' => value === 'text' || value === 'image'),
+        input: (row.modalities?.input ?? ['text']).filter((value): value is 'text' | 'image' => value === 'text' || value === 'image'),
         reasoning: row.reasoning,
         cost: row.cost?.input !== undefined && row.cost.output !== undefined
           ? { input: row.cost.input, output: row.cost.output,
@@ -1401,6 +1403,7 @@ export function buildPiNativeProvidersFromConfigs(
           m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : undefined;
         const spec = {
           id: m.id,
+          ...(resolved?.supportsFastMode !== undefined ? { supportsFastMode: resolved.supportsFastMode } : {}),
           ...(m.api || m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
           ...(authMethod === 'oauth'
             ? { baseUrl: oauthProxyEndpoint! }

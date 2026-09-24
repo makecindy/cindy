@@ -3637,13 +3637,31 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
+function nativeFastPayload(payload, model) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions'].includes(model.api)) return undefined;
+  try {
+    const file = process.env.CINDY_PI_MODEL_REQUEST_PREFS_FILE;
+    if (!file) return undefined;
+    const prefs = JSON.parse(readFileSync(file, 'utf8'));
+    if (!Array.isArray(prefs.models) || !prefs.models.some(item => item.provider === model.provider && item.id === model.id)) return undefined;
+    const out = { ...payload };
+    if (prefs.fast === true) out.service_tier = 'priority';
+    else delete out.service_tier;
+    return out;
+  } catch { return undefined; }
+}
+
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
 export default async function cindyBridge(pi: any) {
   installTextOnlyTurnPolicy(pi);
   await registerCindyNativeProviderAdapters(pi);
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
-  pi.on('before_provider_request', (event, ctx) => astraResponsesPayload(event.payload, ctx.model));
+  pi.on('before_provider_request', (event, ctx) => {
+    const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;
+    return nativeFastPayload(payload, ctx.model) ?? payload;
+  });
   const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,
   // 扩展重载(#3070)经双重验证取回,而不是拿到 undefined 让 bash 永久 fail-closed)。

@@ -18,6 +18,7 @@ import { setProviderPresentation, retainProviderPresentationAfterAuthChange } fr
 import type { CodexContextWindowInfo } from '@cindy/maker-core';
 import {
   PI_MODEL_APIS,
+  mergeDiscoveredRuntimeModels,
   isByokProviderId,
   isLoopbackProviderUrl,
   isProviderRequestPath,
@@ -1298,7 +1299,7 @@ export function registerProviderHandlers(
               });
               if (fetched.ok && fetched.models?.length) {
                 assertProviderImportModels(fetched.models);
-                config.runtimes[agent] = { ...runtime, models: fetched.models };
+                config.runtimes[agent] = { ...runtime, models: mergeDiscoveredRuntimeModels([], fetched.models) };
               } else modelsPending = true;
             } catch {
               modelsPending = true;

@@ -59,7 +59,9 @@ describe("Pi catalog sync upstream precedence", () => {
           compat: { supportsStore: false },
           upstreamField: "preserve-native-metadata",
         };
-        const input: Record<string, unknown[]> = { ...piCatalog.providers, openai: [native] };
+        const input: Record<string, unknown[]> = { ...piCatalog.providers, openai: [native],
+          'new-provider': [{ ...native, id: 'future-model', provider: 'new-provider' }],
+        };
         const inputPath = path.join(temporary, "input.json");
         writeFileSync(inputPath, JSON.stringify(input));
         const args: string[] = [];
@@ -72,6 +74,8 @@ describe("Pi catalog sync upstream precedence", () => {
             const providers = JSON.parse(readFileSync(new URL('./input.json', import.meta.url), 'utf8'));
             globalThis.fetch = async (url) => {
               const provider = decodeURIComponent(new URL(url).pathname.split('/').at(-1));
+              if (provider === 'providers') return new Response(JSON.stringify([...Object.keys(providers), 'offline-provider']));
+              if (provider === 'offline-provider') throw new Error('Offline source');
               if (!(provider in providers)) throw new Error('Unexpected provider: ' + provider);
               return new Response(JSON.stringify(providers[provider]));
             };
@@ -92,7 +96,8 @@ describe("Pi catalog sync upstream precedence", () => {
             "utf8",
           ),
         );
-        expect(result.providers.openai).toMatchObject([{ id: native.id, name: "Native Astra", contextWindow: 1_060_000, execution: { pi: { compat: { supportsStore: false } } } }]);
+        expect(result.providers['new-provider'][0]).toMatchObject({ id: 'future-model', contextWindow: 1_060_000 });
+        expect(result.providers.openai.find((row: { id: string }) => row.id === native.id)).toMatchObject({ id: native.id, name: "Native Astra", contextWindow: 1_060_000, execution: { pi: { compat: { supportsStore: false } } } });
         expect(result.providers["openai-codex"].map((m: { id: string }) => m.id).sort()).toEqual(piCatalog.providers["openai-codex"]!.map(m => m.id).sort());
       } finally {
         rmSync(temporary, { recursive: true, force: true });

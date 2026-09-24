@@ -25,11 +25,9 @@ export function toCindyProviderModel(row) {
   const efforts = piSupportedEfforts(row);
   const { id, provider, baseUrl, api } = row;
   if (
-    !id ||
-    !provider ||
-    !api ||
-    !Number.isSafeInteger(row.contextWindow) ||
-    row.contextWindow <= 0
+    typeof id !== 'string' || !id.trim() || id.length > 256 ||
+    typeof provider !== 'string' || !provider.trim() ||
+    typeof api !== 'string' || !api.trim()
   ) {
     throw new Error(`Invalid upstream model: ${provider}/${id}`);
   }
@@ -61,20 +59,25 @@ export function toCindyProviderModel(row) {
   if (Array.isArray(row.cost?.tiers)) cost.tiers = row.cost.tiers;
   return {
     id,
-    name: row.name ?? id,
+    name: typeof row.name === 'string' && row.name.trim() ? row.name : id,
     upstream: baseUrl ?? "",
-    contextWindow: row.contextWindow,
+    ...(Number.isSafeInteger(row.contextWindow) && row.contextWindow > 0 ? { contextWindow: row.contextWindow } : {}),
     ...(row.maxTokens > 0 ? { maxOutput: row.maxTokens } : {}),
-    modalities: { input: row.input ?? ["text"], output: ["text"] },
-    supportsImageInput: row.input?.includes("image") ?? false,
-    reasoning: row.reasoning === true,
-    efforts,
+    ...(Array.isArray(row.input) ? {
+      modalities: { input: row.input, output: row.output ?? ["text"] },
+      supportsImageInput: row.input.includes("image"),
+    } : {}),
+    ...(typeof row.reasoning === "boolean" ? { reasoning: row.reasoning, efforts } : {}),
+    ...Object.fromEntries(["supportsFastMode", "supportsToolCalls", "reasoningRequired"]
+      .filter(key => typeof row[key] === "boolean").map(key => [key, row[key]])),
+    ...(['anthropic-messages', 'openai-responses', 'openai-completions', 'google-generative-ai'].includes(row.nativeApi)
+      ? { nativeApi: row.nativeApi } : {}),
     // Preserve a supported explicit default; otherwise use Cindy's generic preference.
-    defaultEffort: efforts.includes(row.defaultEffort)
+    ...(typeof row.reasoning === "boolean" ? { defaultEffort: row.defaultEffort === null ? null : efforts.includes(row.defaultEffort)
       ? row.defaultEffort
       : (["medium", "high", "low", "xhigh", "max", "minimal", "ultra"].find(
           (effort) => efforts.includes(effort),
-        ) ?? null),
+        ) ?? null) } : {}),
     ...(Object.keys(cost).length ? { cost } : {}),
     execution: {
       pi: {
@@ -90,7 +93,7 @@ export function toCindyProviderModel(row) {
   };
 }
 
-export function toCindyCatalog(providers, generatedAt) {
+export function toCindyCatalog(providers, generatedAt, { previous, onError } = {}) {
   return {
     schemaVersion: 1,
     generatedAt,
@@ -100,9 +103,19 @@ export function toCindyCatalog(providers, generatedAt) {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([id, models]) => [
           id,
-          models
-            .map(toCindyProviderModel)
-            .sort((a, b) => a.id.localeCompare(b.id)),
+          (() => {
+            const converted = new Map((previous?.providers?.[id] ?? []).map(row => [row.id, row]));
+            for (const row of models) {
+              try {
+                const next = toCindyProviderModel(row);
+                converted.set(next.id, { ...converted.get(next.id), ...next });
+              } catch (error) {
+                if (!onError) throw error;
+                onError(error);
+              }
+            }
+            return [...converted.values()].sort((a, b) => a.id.localeCompare(b.id));
+          })(),
         ]),
     ),
   };

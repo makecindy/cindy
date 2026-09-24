@@ -1,4 +1,4 @@
-import { pickModelMetadata } from '@cindy/model-providers';
+import { pickModelMetadata, MODEL_METADATA_FIELDS } from '@cindy/model-providers';
 import {
   mergeDiscoveredRuntimeModels,
   validModelMetadata,
@@ -107,12 +107,12 @@ function parseStoredReasoningCapability(
   model: Record<string, unknown>,
 ): Partial<ProviderRuntimeModelConfig> {
   if (model.reasoning === false) return { reasoning: false };
+  if (model.reasoning === true && model.reasoningEfforts === undefined) return { reasoning: true };
   if (model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
     return {};
   }
   const efforts = model.reasoningEfforts.filter((item) => isReasoningEffortForAgent(agent, item));
   if (
-    efforts.length === 0 ||
     efforts.length !== model.reasoningEfforts.length ||
     new Set(efforts).size !== efforts.length
   ) {
@@ -241,7 +241,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (typeof mm.name !== 'string' || mm.name.trim().length === 0) {
       return invalid(`runtime '${agent}' model.name required`);
     }
-    for (const field of ['mode', 'modalities', 'officialDocs'] as const) {
+    for (const field of MODEL_METADATA_FIELDS) {
       if (mm[field] !== undefined && !validModelMetadata({ [field]: mm[field] })) return invalid(`runtime '${agent}' model.${field} invalid`);
     }
     if (mm.discoveredCost !== undefined && (
@@ -305,19 +305,19 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       return invalid(`runtime '${agent}' model.reasoning must be a boolean`);
     }
     if (mm.reasoning === true) {
-      if (!Array.isArray(mm.reasoningEfforts) || mm.reasoningEfforts.length === 0) {
-        return invalid(`runtime '${agent}' model.reasoningEfforts must be a non-empty array`);
+      if (mm.reasoningEfforts !== undefined && !Array.isArray(mm.reasoningEfforts)) {
+        return invalid(`runtime '${agent}' model.reasoningEfforts must be an array`);
       }
       if (
-        mm.reasoningEfforts.some((effort) => !isReasoningEffortForAgent(agent, effort)) ||
-        new Set(mm.reasoningEfforts).size !== mm.reasoningEfforts.length
+        (mm.reasoningEfforts as unknown[] | undefined)?.some((effort) => !isReasoningEffortForAgent(agent, effort)) ||
+        new Set(mm.reasoningEfforts as unknown[] | undefined).size !== ((mm.reasoningEfforts as unknown[] | undefined)?.length ?? 0)
       ) {
         return invalid(`runtime '${agent}' model.reasoningEfforts invalid`);
       }
       if (
         mm.reasoningDefaultEffort !== undefined &&
         (!isReasoningEffortForAgent(agent, mm.reasoningDefaultEffort) ||
-          !mm.reasoningEfforts.includes(mm.reasoningDefaultEffort))
+          !(mm.reasoningEfforts as unknown[] | undefined)?.includes(mm.reasoningDefaultEffort))
       ) {
         return invalid(`runtime '${agent}' model.reasoningDefaultEffort invalid`);
       }
@@ -587,7 +587,7 @@ function normalizeRuntime(
     .map((m) => ({
       id: m.id.trim(),
       name: m.name.trim(),
-      ...pickModelMetadata({ mode: m.mode, modalities: m.modalities, officialDocs: m.officialDocs }),
+      ...pickModelMetadata({ ...m, name: m.name.trim() }),
       ...(m.discoveredMetadata ? { discoveredMetadata: m.discoveredMetadata } : {}),
       ...(m.discoveredCost ? { discoveredCost: m.discoveredCost } : {}),
       ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
@@ -607,10 +607,10 @@ function normalizeRuntime(
       ...(typeof m.supportsImageInput === 'boolean'
         ? { supportsImageInput: m.supportsImageInput }
         : {}),
-      ...(m.reasoning === true && m.reasoningEfforts?.length
+      ...(m.reasoning === true
         ? {
             reasoning: true,
-            reasoningEfforts: [...m.reasoningEfforts],
+            ...(m.reasoningEfforts ? { reasoningEfforts: [...m.reasoningEfforts] } : {}),
             ...(m.reasoningDefaultEffort
               ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
               : {}),
@@ -808,7 +808,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
             return {
               id: String(m.id),
               name: String(m.name ?? ''),
-              ...pickModelMetadata({ mode: m.mode, modalities: m.modalities, officialDocs: m.officialDocs }),
+              ...pickModelMetadata(m),
               ...(isPiModelApi(m.api) ? { api: m.api } : {}),
               ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
               ...(route ? { route } : {}),

@@ -132,3 +132,34 @@ describe('buildByokProvider model types', () => {
     expect(configs).toEqual([]);
   });
 });
+
+
+it.each([
+  ['openai-responses', ['codex', 'pi']],
+  ['anthropic-messages', ['claude-code', 'pi']],
+  ['openai-completions', ['pi']],
+] as const)('keeps managed model enablement separate from %s compatibility', (nativeApi, enabled) => {
+  const model = { ...chatModel, nativeApi, defaultEnabled: true,
+    maxOutputTokens: 32000, supportsFastMode: false,
+    agents: ['claude-code', 'codex', 'pi'] as Array<'claude-code' | 'codex' | 'pi'>,
+    perAgent: { 'claude-code': { wireProtocol: 'anthropic-messages' as const, defaultEnabled: true },
+      codex: { wireProtocol: 'openai-responses' as const, defaultEnabled: true }, pi: { wireProtocol: nativeApi, defaultEnabled: true } },
+  };
+  const provider = buildByokProvider({ provider: { id: 'byok-a', name: 'Enterprise',
+    connectionRevision: 1, models: [model] }, credential });
+  for (const agent of model.agents)
+    expect(provider.models[agent]?.[0]?.defaultEnabled).toBe((enabled as readonly string[]).includes(agent));
+  expect(byokNativeConfigs([provider])[0]?.runtimes.pi?.models[0]).toMatchObject({
+    nativeApi, maxOutputTokens: 32000, supportsFastMode: false,
+  });
+});
+
+
+it('keeps live text-only and Pi effort restrictions above inherited capabilities', () => {
+  const provider = buildByokProvider({ provider: { id: 'byok-a', name: 'Enterprise', connectionRevision: 1,
+    models: [{ ...chatModel, id: 'gpt-7-sol', nativeApi: 'openai-responses',
+      modalities: { input: ['text'], output: ['text'] }, efforts: ['high', 'ultra'], defaultEffort: 'ultra',
+      perAgent: { pi: { wireProtocol: 'openai-responses' } } }],
+  }, credential });
+  expect(provider.models.pi?.[0]).toMatchObject({ supportsImageInput: false, efforts: ['high'], defaultEffort: null });
+});

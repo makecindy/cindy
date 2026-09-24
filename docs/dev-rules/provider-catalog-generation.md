@@ -80,7 +80,7 @@ authenticated online OpenCode and GUI acceptance remain unverified.
 - Vercel 读取 `max_tokens`、输入模态、`reasoning_options` 的明确 effort 取值及语言模型的 USD/token 价格；非语言模型保留类型，不把图片单价当 token 价格。单位依据官方 [模型发现文档](https://vercel.com/docs/ai-gateway/models-and-providers)。
 - LiteLLM 的 `model_name` 保留为调用 ID，`model_info` 可补窗口、输出上限、视觉与工具能力；LM Studio 的 `key` / capabilities 结构可被解析。普通 OpenAI 兼容端点的 ID 列表也保持可用。
 - 刷新仅返回 ID 时，保留此前发现的资料；明确 false 仍覆盖旧资料，用户字段仍最后覆盖。连接编辑与列表刷新均保留缺失字段。
-- 不按模型名模糊猜测厂商协议，也不把任意代理价格解释为美元。仅有 ID 且标准表无记录时，未知字段仍未知；这些事实不能靠静态代码补造。
+- 不按模型名模糊猜测厂商协议，也不把任意代理价格解释为美元。仅有 ID 且当前型号无记录时，按模型资料优先级使用同系列前代能力；API 实报与服务器修正优先。不得把继承值标记为实报，也不借用前代价格。
 
 验证：公共 GET 的 OpenRouter 445 条、Vercel 375 条（其中语言模型 252 条）在三引擎投影中核对输入能力、窗口、输出与可解析价格。OpenCode 的匿名接口仍返回 403；本地服务没有本次真实实例验收，测试覆盖其响应结构，不等同于已访问用户的服务。没有生成调用。
 
@@ -242,3 +242,12 @@ OAuth 复用既有 Main 凭证存储、取消与刷新机制；新渠道登录�
 验证：兼容包 204、目录 934、三个桥接/代理包合计 788 项通过；Desktop 定向 400 项通过，另有既有跳过。受影响包类型检查通过。没有真实账号付费生成请求。本机许可证全量再生成缺 Cargo，已按两侧版本合并 Pi 0.85.1 与 OpenCodex MIT 声明并核对 SPDX 引用，无 dangling references。
 
 新隔离测试版 `dev2-provider-four-api` 已取得 `DESKTOP_DEV_VERDICT=ready`，工作区为 `cindy-provider-native-defaults`。旧测试工作区保留；新档案需重新登录、导入渠道，真实账号首次导入由用户继续验收。没有推送、发布或合并原 PR。
+
+
+## 部分失败与新型号
+
+Pi 同步先读供应商索引，合并已有供应商；单个来源或型号失败保留最后有效记录，不中断其它来源。
+成功输出通过临时文件原子替换。缺失能力不合成为明确 false / 空数组，运行时继续按字段继承。
+通用 API 发现读取分页；后续页失败保留已取得的型号，不向跨域或其它路径的 next 链接发送凭证。
+链接导入、配置保存、跨引擎复制和刷新共享 ModelMetadata，保留明确否定值。
+新型号不固化为 defaultEnabled:false；原生引擎默认和用户明确开关在目录投影时统一决定。

@@ -8,7 +8,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { validateHeaderName, validateHeaderValue } from 'node:http';
-import { isLoopbackProviderUrl } from '@cindy/model-providers';
+import { isLoopbackProviderUrl, MODEL_METADATA_FIELDS, pickModelMetadata, validModelMetadata } from '@cindy/model-providers';
 
 import type {
   AgentKind,
@@ -233,17 +233,26 @@ function parseModel(value: unknown, label: string): ProviderRuntimeModelConfig {
     [
       'id',
       'name',
-      'contextWindow',
+      ...MODEL_METADATA_FIELDS,
       'defaultEnabled',
       'supportsImageInput',
       'reasoning',
       'reasoningEfforts',
+      'reasoningDefaultEffort',
+      'discoveredMetadata',
     ],
     label,
   );
   const id = boundedString(model.id, `${label}.id`, 256);
   const name = model.name === undefined ? id : boundedString(model.name, `${label}.name`, 256);
-  const result: ProviderRuntimeModelConfig = { id, name };
+  for (const field of MODEL_METADATA_FIELDS) {
+    if (model[field] !== undefined && !validModelMetadata({ [field]: model[field] }))
+      fail(`${label}.${field} is invalid`);
+  }
+  if (model.discoveredMetadata !== undefined && !validModelMetadata(model.discoveredMetadata))
+    fail(`${label}.discoveredMetadata is invalid`);
+  const result: ProviderRuntimeModelConfig = { ...pickModelMetadata(model), id, name,
+    ...(model.discoveredMetadata ? { discoveredMetadata: pickModelMetadata(model.discoveredMetadata as object) } : {}) };
   if (model.contextWindow !== undefined) {
     if (!Number.isInteger(model.contextWindow) || (model.contextWindow as number) <= 0) {
       fail(`${label}.contextWindow must be a positive integer`);
@@ -255,23 +264,29 @@ function parseModel(value: unknown, label: string): ProviderRuntimeModelConfig {
       fail(`${label}.${field} must be a boolean`);
     }
   }
-  if (typeof model.defaultEnabled === 'boolean') result.defaultEnabled = model.defaultEnabled;
-  if (model.supportsImageInput === true) result.supportsImageInput = true;
+  // A link selects a model, not compatibility engines. Explicit off remains off.
+  if (model.defaultEnabled === false) result.defaultEnabled = false;
+  if (typeof model.supportsImageInput === 'boolean') result.supportsImageInput = model.supportsImageInput;
+  if (model.reasoning === false) result.reasoning = false;
   if (model.reasoning === true) {
-    if (!Array.isArray(model.reasoningEfforts) || model.reasoningEfforts.length === 0) {
+    if (model.reasoningEfforts !== undefined && !Array.isArray(model.reasoningEfforts)) {
       fail(`${label}.reasoningEfforts is required when reasoning is enabled`);
     }
-    const efforts = model.reasoningEfforts.map((effort) => {
+    const efforts = model.reasoningEfforts?.map((effort) => {
       if (typeof effort !== 'string' || !PI_EFFORTS.includes(effort as PiReasoningEffort)) {
         fail(`${label}.reasoningEfforts contains an unsupported value`);
       }
       return effort as PiReasoningEffort;
     });
-    if (new Set(efforts).size !== efforts.length)
+    if (efforts && new Set(efforts).size !== efforts.length)
       fail(`${label}.reasoningEfforts contains duplicates`);
     result.reasoning = true;
-    result.reasoningEfforts = efforts;
-  } else if (model.reasoningEfforts !== undefined) {
+    if (efforts) result.reasoningEfforts = efforts;
+    if (model.reasoningDefaultEffort !== undefined) {
+      if (!efforts?.includes(model.reasoningDefaultEffort as PiReasoningEffort)) fail(`${label}.reasoningDefaultEffort is unsupported`);
+      result.reasoningDefaultEffort = model.reasoningDefaultEffort as PiReasoningEffort;
+    }
+  } else if (model.reasoningEfforts !== undefined || model.reasoningDefaultEffort !== undefined) {
     fail(`${label}.reasoningEfforts requires reasoning=true`);
   }
   return result;
@@ -288,9 +303,9 @@ type ParsedEndpoint = {
   apiKey?: string;
 };
 
-/** Discovery is untrusted input too: apply the same count and core model field bounds. */
+/** Discovery uses catalog-sized limits, independently of the compact deep-link payload. */
 export function assertProviderImportModels(models: readonly { id: string; name: string; contextWindow?: number }[]): void {
-  if (models.length > MAX_MODELS_PER_ENDPOINT) fail('models must be a bounded array');
+  if (models.length > 10_000) fail('discovered models exceed the catalog limit');
   for (const model of models) {
     parseModel({ id: model.id, name: model.name, ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}) }, 'models');
   }
@@ -618,11 +633,7 @@ function parsePayload(value: unknown): ProviderImportDraft {
     ) {
       fail(`multiple endpoints compete for ${agent}; set explicit targets`);
     }
-    const models = selected.models.map((model) => {
-      if (agent === 'pi') return { ...model };
-      const { reasoning: _reasoning, reasoningEfforts: _efforts, ...portable } = model;
-      return portable;
-    });
+    const models = selected.models.map(model => structuredClone(model));
     runtimes[agent] = {
       wireProtocol: selected.protocol,
       baseUrl: selected.baseUrl,

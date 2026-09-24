@@ -213,3 +213,43 @@ Desktop 本机目录只有在 providers、capabilities 和当前账号的模型�
 Server 对应入口为 `model-access-server/src/routes/modelCatalog.ts`、`services/catalogSource.ts` 与本仓独立维护的 contracts。
 先确认 Server 分支是否具备目标能力；不要把本仓解析器直接视为 Server 已部署的实现。
 两仓边界遵守 [协议兼容规则](protocol-compatibility.md)。
+
+### Sub2API 与自定义模型发现
+
+- Sub2API 在供应商预设中提供自托管入口；地址与 API Key 由用户填写，不预填公共站点、
+  账号或模型清单。三个引擎共用该站点的 Responses 入口，协议兼容开关仍遵循现有用户偏好。
+- `https://{endpoint}/v1` 是整段自托管地址模板，允许 HTTP(S)、端口和部署前缀；绑定后
+  模型发现 URL 必须落在相同站点。普通站点地址补 `/v1`，已给出的 `/v1` 与
+  `/backend-api/codex` 保留。未完成的模板与内嵌凭证不得发请求或保存。
+- 预设查询 `models?client_version=0.147.0`，取得 Sub2API 的 Codex 格式能力清单；此参数
+  仅协商清单格式，不代表使用者运行该版本 Codex。404/405 时仅去掉该参数查询普通列表，
+  不对鉴权、限流或服务异常做静默回退。新预设随客户端 bundled 合并，旧线上目录缺少该
+  条目也不会遮掉它；不改变已有自定义连接地址。
+- 通用解析器兼容 `supported_reasoning_levels/default_reasoning_level` 与 Grok 的
+  `reasoningEfforts/reasoningEffort/supportsReasoningEffort`；同时读取 `input_modalities`、
+  `service_tiers` 中的 `priority` 和 `max_context_window`。未声明或非法值保持未知，空列表
+  与显式 false 保持关闭，不根据供应商品牌猜能力。
+- `max_context_window` 仅作为连接实报的 `discoveredMetadata.contextWindowMax` 持久化并投影
+  到客户端容量；`context_window` 仍是工作窗口。只有最大容量时可用它作为窗口，二者都给出
+  时不以容量覆盖工作预算；不将 `contextWindowMax` 写入 Registry。刷新保留用户显式覆盖。
+- Fast 不仅是目录字段：Claude 自定义桥按能力将用户选择转换成 `service_tier: priority`，
+  原生适配器保留它；Pi 直连在既有 `before_provider_request` 钩子读取每运行时请求偏好，
+  只对该连接明确支持的 OpenAI 协议模型设置 Fast，关闭时删除该参数。偏好文件只含开关和
+  模型身份，沿用运行时隔离、远端文件操作和退出回收；不改权限文件或凭证。
+- Mobile 与远控消费执行端已有目录和 Fast 设置入口；Pi 也接入原有设置保存／失败恢复流程。
+  不增加 IPC、凭证传输通道或独立模型配置。
+
+
+### 自定义供应商的新代际默认继承
+
+导入、刷新与读取已保存连接均在 `buildUserProvider` 中重算缺项，不把继承值写成实报或用户覆盖。
+同系列、同变体的数字代际按数值比较（含小版本），只从较旧代际继承；Sol / Luna、不同私有命名空间不互借。
+同协议的公共型号资料、同供应商适配表和同连接旧型号提供候选；较近代际优先，同代际连接配置优先。
+连接候选必须保持相同端点、请求路径与协议。预设绑定的账号地址继续使用自己的地址。
+
+继承窗口/输出上限、模态、思考档位/默认值、Fast/工具能力，以及同协议适配器的
+`thinkingLevelMap` / `compat` / `samplingParams`；不继承模型身份、价格、地址、凭证、headers、
+开关或成员资格。型号自身配置、明确实报（包括 false / [] / null）和用户覆盖高于继承层。
+继承默认档不会压过新型号实报的推荐档；既有型号目录默认优先规则保持不变。
+未来型号沿已实现的 API 序列化发送自身 ID。新协议仍需实现，不能靠继承配置获得新传输能力。
+Desktop、Mobile 和远程选择器共同消费执行端目录，不增加 UI 提示或用户步骤。

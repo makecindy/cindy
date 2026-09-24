@@ -218,6 +218,8 @@ export interface PiNativeModelCost {
 
 /** BYOM:写进 pi models.json 的一个模型(原生 provider 块内)。 */
 export interface PiNativeModelSpec {
+  /** Current connection's explicit support for OpenAI priority service tier. */
+  supportsFastMode?: boolean;
   /** Cindy/public model id used by provider-aware routing and the UI. */
   id: string;
   /** PI provider's native model id; omitted when it is identical to id. */

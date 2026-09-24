@@ -58,6 +58,21 @@ describe('import discovery limits', () => {
 });
 
 describe('buildModelsFetchRequest', () => {
+  it('discovers Sub2API Codex capabilities at the backend path', async () => {
+    const result = await fetchProviderModels(spec({ agent: 'codex',
+      baseUrl: 'https://sub2api.example/backend-api/codex', wireProtocol: 'openai-responses',
+    }), async (url, init) => {
+      expect(url).toBe('https://sub2api.example/backend-api/codex/models');
+      expect(init?.headers).toMatchObject({ authorization: 'Bearer sk-test' });
+      return fakeResponse(200, JSON.stringify({ models: [{ slug: 'gpt-6-sol',
+        supported_reasoning_levels: [{ effort: 'high' }, { effort: 'max' }], default_reasoning_level: 'high',
+      }] }));
+    });
+    expect(result).toMatchObject({ ok: true, models: [{ id: 'gpt-6-sol',
+      discoveredMetadata: { efforts: ['high', 'max'], defaultEffort: 'high' },
+    }] });
+  });
+
   it.each(['claude-code', 'codex', 'pi'] as const)('uses the complete OpenRouter catalog for %s without Anthropic ID rewriting', async (agent) => {
     const request = buildModelsFetchRequest(spec({
       agent,
@@ -440,4 +455,24 @@ it('does not rewrite private Google-compatible discovery or an explicit catalog'
     expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
     expect(request.init.headers).toMatchObject({ 'x-goog-api-key': 'sk-test' });
   }
+});
+
+it.each([404, 405])('falls back from an unavailable manifest (%i) on the same authenticated endpoint', async status => {
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(fakeResponse(status, '{}'))
+    .mockResolvedValueOnce(fakeResponse(200, '{"data":[{"id":"grok-4.7","reasoningEfforts":["low","high"]}]}'));
+  const result = await fetchProviderModels(spec({ baseUrl: 'https://relay.example/proxy/v1',
+    modelsUrl: 'https://relay.example/proxy/v1/models?client_version=0.147.0&tenant=test',
+  }), fetcher);
+  expect(result).toMatchObject({ ok: true, models: [{ id: 'grok-4.7', discoveredMetadata: { efforts: ['low', 'high'] } }] });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(fetcher.mock.calls[1][0]).toBe('https://relay.example/proxy/v1/models?tenant=test');
+  expect(fetcher.mock.calls[1][1].headers).toEqual(fetcher.mock.calls[0][1].headers);
+});
+
+it.each([401, 403, 429, 503])('does not disguise manifest authorization or availability failures (%i)', async status => {
+  const fetcher = vi.fn(async () => fakeResponse(status, '{}'));
+  const result = await fetchProviderModels(spec({ modelsUrl: 'https://relay.example/v1/models?client_version=0.147.0' }), fetcher);
+  expect(result.ok).toBe(false);
+  expect(fetcher).toHaveBeenCalledOnce();
 });

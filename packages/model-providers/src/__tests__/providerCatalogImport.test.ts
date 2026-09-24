@@ -79,3 +79,26 @@ describe("Pi source import", () => {
     expect(row.execution.pi.headers).toEqual({ "NVCF-POLL-SECONDS": "3600" });
   });
 });
+
+
+it('retains partial upstream successes and previous rows without manufacturing negative capabilities', () => {
+  const previous = toCindyCatalog({ 'new-vendor': [model] }, 'before');
+  const errors: unknown[] = [];
+  const result = toCindyCatalog({ 'new-vendor': [
+    { ...model, id: 'next-model', reasoning: undefined, input: undefined, contextWindow: undefined,
+      supportsFastMode: false, supportsToolCalls: true },
+    { ...model, api: '' },
+  ] }, 'after', { previous, onError: (error: unknown) => errors.push(error) });
+  expect(errors).toHaveLength(1);
+  expect(result.providers['new-vendor']).toContainEqual(previous.providers['new-vendor'][0]);
+  const next = result.providers['new-vendor'].find(row => row.id === 'next-model');
+  expect(next).toMatchObject({ supportsFastMode: false, supportsToolCalls: true });
+  for (const key of ['reasoning', 'efforts', 'defaultEffort', 'contextWindow', 'supportsImageInput'])
+    expect(next).not.toHaveProperty(key);
+});
+
+
+it('preserves an explicit unspecified default effort', () => {
+  expect(toCindyCatalog({ 'new-vendor': [{ ...model, defaultEffort: null }] }, 'now')
+    .providers['new-vendor'][0]).toMatchObject({ efforts: ['high'], defaultEffort: null });
+});

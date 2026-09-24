@@ -1,5 +1,12 @@
 import {
   isByokImageMode,
+  BUNDLED_CATALOG,
+  nativeModelAgents,
+  catalogModelMetadata,
+  pickModelMetadata,
+  resolveCatalogModelNativeApi,
+  resolveModelMetadata,
+  applyModelMetadata,
   isOrganizationManagedProvider,
   type AgentKind,
   type CatalogModel,
@@ -46,11 +53,12 @@ export function buildByokProvider({ provider, credential }: ByokConnection): Pro
         defaults.defaultEffort !== undefined ? defaults.defaultEffort : model.defaultEffort;
       const price = (value: number | undefined) =>
         value === undefined ? undefined : value * 1_000_000;
-      return {
+      const projected: CatalogModel = {
         id: model.id,
         name: model.name ?? model.id,
         mode: model.mode ?? 'chat',
-        nativeApi: model.nativeApi === 'openai-images' ? undefined : model.nativeApi,
+        ...pickModelMetadata({ nativeApi: model.nativeApi !== undefined ? model.nativeApi
+          : resolveCatalogModelNativeApi(BUNDLED_CATALOG.modelRegistry, model.id) }),
         description: model.description,
         group: model.group,
         icon: model.icon,
@@ -89,6 +97,22 @@ export function buildByokProvider({ provider, credential }: ByokConnection): Pro
           cacheWrite: price(model.cacheCreationInputTokenCost),
         },
       };
+      const resolved = applyModelMetadata(projected, resolveModelMetadata(
+        BUNDLED_CATALOG.modelRegistry, provider.id, model.id,
+        { contextWindow: defaults.contextWindow ?? model.contextWindow,
+          maxOutputTokens: model.maxOutputTokens, efforts: defaults.efforts ?? model.efforts,
+          defaultEffort: defaults.defaultEffort ?? model.defaultEffort,
+          supportsFastMode: defaults.supportsFastMode ?? model.supportsFastMode,
+          modalities: model.modalities,
+          supportsImageInput: model.modalities ? model.modalities.input.includes('image') : undefined }, undefined, agent,
+      ));
+      if (agent === 'pi') {
+        resolved.efforts = resolved.efforts.filter(effort => effort !== 'ultra');
+        if (resolved.defaultEffort && !resolved.efforts.includes(resolved.defaultEffort)) resolved.defaultEffort = null;
+      }
+      resolved.defaultEnabled = (defaults.defaultEnabled ?? model.defaultEnabled ?? true) &&
+        nativeModelAgents({ id: provider.id, routing }, { [agent]: resolved }).includes(agent);
+      return resolved;
     });
   }
   const imageModels = provider.models
@@ -130,7 +154,9 @@ export function byokNativeConfigs(providers: readonly Provider[]): CustomProvide
           models: (provider.models.pi ?? []).map((model) => ({
             id: model.id,
             name: model.name,
-            contextWindow: model.contextWindow,
+            ...catalogModelMetadata(model),
+            defaultEnabled: model.defaultEnabled,
+            ...(model.cost ? { discoveredCost: model.cost } : {}),
             piApi: model.piApi,
             ...(model.route ? { route: model.route } : {}),
             supportsImageInput: model.supportsImageInput,

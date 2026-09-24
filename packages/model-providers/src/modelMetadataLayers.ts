@@ -1,3 +1,4 @@
+import { generationCapabilities, previousModelGenerations } from './modelGeneration.js';
 import type { CatalogModel } from "./types.js";
 import type {
   ModelRegistry,
@@ -5,10 +6,13 @@ import type {
   ModelRegistryRoute,
   ModelEffort,
   ModelReferencePriceGroup,
+  ModelAccessWireProtocol,
 } from "./modelAccessBean.js";
 
 /** Data only. Membership, credentials, routing and billed prices never inherit. */
 export interface ModelMetadata {
+  /** Manufacturer language, independent of the connection's execution protocol. */
+  nativeApi?: ModelAccessWireProtocol | null;
   mode?: string;
   modalities?: { input: string[]; output: string[] };
   officialDocs?: string;
@@ -16,6 +20,8 @@ export interface ModelMetadata {
   description?: string;
   group?: string;
   contextWindow?: number;
+  /** Upstream capacity, distinct from the recommended working window. */
+  contextWindowMax?: number;
   maxOutputTokens?: number;
   efforts?: ModelEffort[];
   defaultEffort?: ModelEffort | null;
@@ -32,6 +38,7 @@ export interface BaseModel {
   referencePriceGroups?: ModelReferencePriceGroup[];
 }
 export const MODEL_METADATA_FIELDS = [
+  "nativeApi",
   "mode",
   "modalities",
   "officialDocs",
@@ -39,6 +46,7 @@ export const MODEL_METADATA_FIELDS = [
   "description",
   "group",
   "contextWindow",
+  "contextWindowMax",
   "maxOutputTokens",
   "efforts",
   "defaultEffort",
@@ -61,6 +69,8 @@ export function validModelMetadata(value: unknown): value is ModelMetadata {
   return Object.entries(value).every(([key, v]) => {
     if (!(MODEL_METADATA_FIELDS as readonly string[]).includes(key))
       return false;
+    if (key === 'nativeApi') return v === null ||
+      ['anthropic-messages', 'openai-responses', 'openai-completions', 'google-generative-ai'].includes(v as string);
     if (key === "mode")
       return typeof v === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(v);
     if (key === "modalities") {
@@ -95,7 +105,7 @@ export function validModelMetadata(value: unknown): value is ModelMetadata {
         typeof v === "string" && v.trim().length > 0 && v.length <= maxLength
       );
     }
-    if (["contextWindow", "maxOutputTokens"].includes(key))
+    if (["contextWindow", "contextWindowMax", "maxOutputTokens"].includes(key))
       return typeof v === "number" && Number.isSafeInteger(v) && v > 0;
     if (key === "efforts")
       return (
@@ -161,6 +171,7 @@ export function resolveModelMetadata(
   agent?: string,
   providerDefaults?: ModelMetadata,
   declaredDefaultEffort?: ModelMetadata["defaultEffort"],
+  generationDefaults?: ModelMetadata,
 ): ModelMetadata {
   const ids = [modelId];
   if (providerId === "openai" && modelId.startsWith("chatgpt/"))
@@ -197,7 +208,20 @@ export function resolveModelMetadata(
           findBaseModel(registry, modelId)?.defaults,
           providerDefaults,
         );
+  // Public family capabilities also cover subscription discovery. Exact/live data and
+  // server corrections below still win; inheritance never adds account membership.
+  const familyDefaults = generationDefaults ?? mergeModelMetadata(
+    ...previousModelGenerations(ids.at(-1)!, registry?.baseModels?.flatMap(model =>
+      [model.id, ...model.aliases].map(id => ({ id, defaults: model.defaults }))) ?? [], model => model.id)
+      .map(model => generationCapabilities(model.defaults)),
+    ...previousModelGenerations(modelId,
+      registry?.models.flatMap(entry => entry.routes
+        .filter(route => route.providerId === providerId && (!agent || agent === 'pi' || route.agents.includes(agent as never)))
+        .map(route => ({ entry, route }))) ?? [], candidate => candidate.route.modelId)
+      .map(({ entry, route }) => generationCapabilities(registryEntryDefaults(registry!, entry, route, agent))),
+  );
   const result = mergeModelMetadata(
+    familyDefaults,
     defaults,
     live,
     // A Harness's suggested default is not a model capability. Keep the shared
@@ -429,12 +453,9 @@ export function mergeDiscoveredRuntimeModels(
 export function runtimeUserModelMetadata(
   m: import("./types.js").ProviderRuntimeModelConfig,
 ): ModelMetadata {
+  const { name: _name, ...metadata } = pickModelMetadata(m);
   return pickModelMetadata({
-    ...pickModelMetadata({
-      mode: m.mode,
-      modalities: m.modalities,
-      officialDocs: m.officialDocs,
-    }),
+    ...metadata,
     ...(!m.discoveredMetadata || m.nameExplicit ? { name: m.name } : {}),
     ...(m.contextWindow !== undefined
       ? { contextWindow: m.contextWindow }
@@ -442,9 +463,8 @@ export function runtimeUserModelMetadata(
     ...(m.supportsImageInput !== undefined
       ? { supportsImageInput: m.supportsImageInput }
       : {}),
-    ...(m.reasoning !== undefined
-      ? { efforts: m.reasoning ? (m.reasoningEfforts ?? []) : [] }
-      : {}),
+    ...(m.reasoning === false ? { efforts: [] }
+      : m.reasoningEfforts !== undefined ? { efforts: m.reasoningEfforts } : {}),
     ...(m.reasoningDefaultEffort !== undefined
       ? { defaultEffort: m.reasoningDefaultEffort }
       : {}),

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildUserProvider, type ProviderPreset, type ProviderView } from '@cindy/model-providers';
 
 import {
+  assertProviderImportModels,
   beginProviderImportConfirm,
   cancelProviderImport,
   clearProviderImportDraftsForTest,
@@ -133,7 +134,7 @@ describe('provider import URL parsing', () => {
     createDraft(customPayload({ endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', modelsUrl: 'https://api.acme.test:443/catalog/models' }] }));
   });
 
-  it('keeps an explicit defaultEnabled override on imported compatibility routes', () => {
+  it('does not treat a model enabled in a link as compatibility-engine consent', () => {
     const importId = createDraft(customPayload({
       endpoints: [{
         protocol: 'openai-chat',
@@ -146,8 +147,9 @@ describe('provider import URL parsing', () => {
     const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
     expect(draft.kind === 'custom' && draft.config.runtimes['claude-code']?.models[0]).toMatchObject({
       id: 'compat-model',
-      defaultEnabled: true,
     });
+    expect(draft.kind === 'custom' && draft.config.runtimes['claude-code']?.models[0]).not.toHaveProperty('defaultEnabled');
+
   });
 
   it('imports Google generateContent endpoints for all three engines', () => {
@@ -762,4 +764,30 @@ describe('provider import draft lifecycle', () => {
       resolution: { action: 'create', providerId: preview.providerId },
     });
   });
+});
+
+
+it('imports complete metadata and explicit off into all three engines', () => {
+  const model = { id: 'gpt-7-sol', nativeApi: 'openai-responses', maxOutputTokens: 32000,
+    contextWindowMax: 1000000, supportsFastMode: false, supportsToolCalls: false,
+    supportsImageInput: false, reasoning: false, efforts: [], defaultEffort: null };
+  const importId = createDraft(customPayload({ endpoints: [{ protocol: 'openai-responses',
+    baseUrl: 'https://relay.example/v1', targets: ['claude-code', 'codex', 'pi'], models: [model],
+  }] }));
+  previewProviderImport(importId, SCOPE, []);
+  const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+  expect(draft.kind).toBe('custom');
+  if (draft.kind !== 'custom') throw new Error('wrong import kind');
+  const provider = buildUserProvider(draft.config);
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    expect(draft.config.runtimes[agent]?.models[0]).toMatchObject(model);
+    expect(provider.models[agent]?.[0]).toMatchObject({ maxOutput: 32000,
+      supportsFastMode: false, supportsImageInput: false, supportsToolCalls: false,
+      efforts: [], defaultEnabled: agent !== 'claude-code' });
+  }
+});
+
+it('accepts a discovered catalog larger than the inline-link limit', () => {
+  expect(() => assertProviderImportModels(Array.from({ length: 1000 }, (_, index) =>
+    ({ id: `model-${index}`, name: `Model ${index}` })))).not.toThrow();
 });

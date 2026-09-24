@@ -1187,10 +1187,12 @@ function createChatBridgeDecision(
         const nativeHeaders = overrideHeadersCaseInsensitive(withChatBridgeUserAgent(Object.fromEntries(Object.entries(headers).filter(([name]) =>
           !['authorization', 'x-api-key'].includes(name.toLowerCase())))), resolveConversationSessionHeaders(ctx?.headers));
         if (standard.execution.pi.api === 'anthropic-messages' && (actualModel.endsWith('[1m]')
-          || (isOfficialAnthropicUpstream(standard.upstream) && standard.contextWindow >= 1_000_000))) {
+          || (isOfficialAnthropicUpstream(standard.upstream) && (standard.contextWindow ?? 0) >= 1_000_000))) {
           appendCommaSeparatedHeaderToken(nativeHeaders, 'anthropic-beta', 'context-1m-2025-08-07');
         }
-        const nativeFetch = createPiProviderFetch({ row: standard, providerId,
+        const nativeFetch = createPiProviderFetch({ row: { ...standard,
+          supportsFastMode: selected?.supportsFastMode ?? standard.supportsFastMode,
+        }, providerId,
           // Keep the catalog adapter while honoring the host assigned to this account.
           upstream: buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream,
           apiKey: nativeBridgeApiKey(headers),

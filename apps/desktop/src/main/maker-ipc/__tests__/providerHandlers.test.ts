@@ -1286,13 +1286,13 @@ describe('provider:custom:* CRUD handlers', () => {
     const saved = await listCustomProviders();
     expect(saved).toHaveLength(1);
     expect(saved[0]?.runtimes.codex?.models).toEqual([
-      { id: 'fetched-model', name: 'Fetched Model' },
+      { id: 'fetched-model', name: 'Fetched Model', discoveredMetadata: { name: 'Fetched Model' } },
     ]);
   });
 
   it.each([
     { ok: false, models: [] },
-    { ok: true, models: Array.from({ length: 257 }, (_, i) => ({ id: `m${i}`, name: 'Model' })) },
+    { ok: true, models: Array.from({ length: 10001 }, (_, i) => ({ id: `m${i}`, name: 'Model' })) },
     { ok: true, models: [{ id: 'x'.repeat(257), name: 'Model' }] },
     { ok: true, models: [{ id: 'model', name: 'x'.repeat(257) }] },
   ])('saves only the connection and key when discovery fails or exceeds bounds ($models.length models)', async (fetched) => {

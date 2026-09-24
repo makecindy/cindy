@@ -21,26 +21,14 @@ export function configuredPresetAgents(preset: ProviderPreset): AgentKind[] {
 
 export function savedCustomProviderModelShape(
   model: ProviderRuntimeModelConfig,
-  includePiCapabilities: boolean,
+  includePiApi: boolean,
 ): ProviderRuntimeModelConfig {
+  const { piApi, ...portable } = structuredClone(model);
   return {
+    ...portable,
     id: model.id.trim(),
     name: model.name.trim(),
-    ...(includePiCapabilities && model.piApi ? { piApi: model.piApi } : {}),
-    ...(model.route ? { route: { ...model.route } } : {}),
-    ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
-    ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
-    ...(includePiCapabilities && model.supportsImageInput === true
-      ? { supportsImageInput: true }
-      : {}),
-    ...(includePiCapabilities && model.reasoning === true && model.reasoningEfforts?.length
-      ? {
-          reasoning: true,
-          reasoningEfforts: [...model.reasoningEfforts],
-          ...(model.reasoningDefaultEffort
-            ? { reasoningDefaultEffort: model.reasoningDefaultEffort }
-            : {}),
-        }
-      : {}),
+    ...(!includePiApi && !model.api && piApi ? { api: piApi } : {}),
+    ...(includePiApi && piApi ? { piApi } : {}),
   };
 }

@@ -1,5 +1,6 @@
+import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import { providerOAuthContract } from '@cindy/model-providers';
-import { parseModelsListResponse, isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
+import { isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
 /**
  * generic-oauth —— 目录 `auth.oauth` 描述符驱动的通用 OAuth Runner。
  *
@@ -827,7 +828,9 @@ export function deriveModelsDiscoveryUrl(baseUrl: string): string {
   url.hash = '';
   let pathname = url.pathname;
   while (pathname.length > 1 && pathname.endsWith('/')) pathname = pathname.slice(0, -1);
-  url.pathname = /\/v\d+$/i.test(pathname)
+  // Codex-compatible relays (including Sub2API) expose /models directly under
+  // /backend-api/codex; inserting /v1 makes discovery fail while inference works.
+  url.pathname = /(?:\/v\d+|\/backend-api\/codex)$/i.test(pathname)
     ? `${pathname}/models`
     : `${pathname === '/' ? '' : pathname}/v1/models`;
   return url.toString();
@@ -869,7 +872,14 @@ export async function discoverGenericOAuthModels(
   } catch {
     return null;
   }
-  return parseModelsListResponse(json, url);
+  const pageDeadline = Date.now() + 30_000;
+  return collectModelDiscoveryPages(json, url, async nextUrl => {
+    if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
+    const page = await io.fetchImpl(nextUrl, { headers, redirect: 'error',
+      signal: AbortSignal.timeout(Math.max(1, Math.min(REFRESH_FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
+    if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
+    return page.json();
+  });
 }
 
 
