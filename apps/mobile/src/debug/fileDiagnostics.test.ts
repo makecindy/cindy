@@ -31,6 +31,8 @@ describe("file diagnostics", () => {
       "failed [redacted-url]",
     );
     expect(errorText("open E:\\Cindy\\secret\\file.html")).toBe("open [redacted-path]");
+    expect(errorText("open \\\\server\\share\\secret.html")).toBe("open [redacted-path]");
+    expect(errorText("open \\\\files.corp\\workdir\\doc.html")).toBe("open [redacted-path]");
     expect(errorText("ssh: /srv/secret/plot.png")).toBe("ssh: [redacted-path]");
     expect(errorText("https://oss.example.com/a.mp4?Signature=secret")).toBe("[redacted-url]");
     expect(

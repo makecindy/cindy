@@ -38,7 +38,10 @@ export function sanitizeDiagnosticText(value: string): string {
   const stripped = value
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"')]+/gi, "[redacted-url]")
     .replace(/\bdata:[^\s<>"')]+/gi, "[redacted-url]")
-    .replace(/(?:[A-Za-z]:|\\\\)[\\/][^\n<>"']+/g, "[redacted-path]")
+    .replace(
+      /(?:[A-Za-z]:[\\/]|\\\\[^\s\\/<>"']+[\\/])[^\n<>"']*/g,
+      "[redacted-path]",
+    )
     .replace(
       /(^|[\s"'=(])(\/(?:Users|home|var|private|data|tmp|srv|mnt|opt|root|storage|sdcard|Applications)\/[^\n<>"']+)/g,
       "$1[redacted-path]",
