@@ -20,7 +20,7 @@ import { createInterface } from 'node:readline';
 import { runInNewContext } from 'node:vm';
 
 import ts from 'typescript';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   CINDY_BRIDGE_EXTENSION_SOURCE,
@@ -1783,11 +1783,13 @@ describe('cindy-bridge extension source', () => {
     const isolate = loadBashIsolationHelper(pathImpl);
     const runtimeEnv = {
       CINDY_PI_MODEL_REQUEST_PREFS_FILE: pathImpl.join(home, 'request-prefs.json'),
+      CINDY_PI_FAST_MODELS: '[]',
       PATH: 'ordinary-shell-path',
       SHELL_CANARY: 'preserved',
     };
     const shellEnv = isolate(runtimeEnv, home);
     expect(shellEnv).not.toHaveProperty('CINDY_PI_MODEL_REQUEST_PREFS_FILE');
+    expect(shellEnv).not.toHaveProperty('CINDY_PI_FAST_MODELS');
     expect(shellEnv).toMatchObject({
       PATH: runtimeEnv.PATH,
       SHELL_CANARY: runtimeEnv.SHELL_CANARY,
@@ -2335,23 +2337,32 @@ describe('Pi same-turn library native mapping', () => {
 });
 
 
-it('applies native Fast only to the exact declared connection and follows preference changes', () => {
-  const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('function nativeFastPayload(');
+it('applies native Fast only to the exact declared connection and fails closed on invalid host replies', async () => {
+  const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('async function nativeFastPayload(');
   const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('export default async function cindyBridge');
   const helpers = ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end), {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  let fast = true;
-  const read = () => JSON.stringify({ fast, models: [{ provider: 'relay-a', id: 'gpt-6-sol' }] });
-  const adapt = new Function('readFileSync', 'process', `${helpers}; return nativeFastPayload;`)(
-    read, { env: { CINDY_PI_MODEL_REQUEST_PREFS_FILE: '/fixture/prefs.json' } });
+  let reply: unknown = JSON.stringify({ fast: true });
+  const adapt = new Function('process', `${helpers}; return nativeFastPayload;`)({ env: {
+    CINDY_PI_FAST_MODELS: JSON.stringify([{ provider: 'relay-a', id: 'gpt-6-sol' }]),
+  } });
+  const ctx = { ui: { input: async () => { if (reply instanceof Error) throw reply; return reply; } } };
   const original = { model: 'gpt-6-sol', reasoning: { effort: 'high' }, input: 'hello' };
   const model = { provider: 'relay-a', id: 'gpt-6-sol', api: 'openai-responses' };
-  expect(adapt(original, model)).toEqual({ ...original, service_tier: 'priority' });
-  expect(adapt(original, { ...model, provider: 'relay-b' })).toBeUndefined();
-  expect(adapt(original, { ...model, id: 'other-model' })).toBeUndefined();
-  expect(adapt(original, { ...model, api: 'anthropic-messages' })).toBeUndefined();
-  fast = false;
-  expect(adapt({ ...original, service_tier: 'priority' }, model)).toEqual(original);
+  expect(await adapt(original, model, ctx)).toEqual({ ...original, service_tier: 'priority' });
+  expect(await adapt(original, { ...model, provider: 'relay-b' }, ctx)).toBeUndefined();
+  expect(await adapt(original, { ...model, id: 'other-model' }, ctx)).toBeUndefined();
+  expect(await adapt(original, { ...model, api: 'anthropic-messages' }, ctx)).toBeUndefined();
+  for (reply of [JSON.stringify({ fast: false }), JSON.stringify({ fast: 'true' }), undefined, 'broken', new Error('closed')]) {
+    expect(await adapt({ ...original, service_tier: 'priority' }, model, ctx)).toEqual(original);
+  }
+  vi.useFakeTimers();
+  try {
+    const pending = adapt({ ...original, service_tier: 'priority' }, model,
+      { ui: { input: () => new Promise(() => {}) } });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await pending).toEqual(original);
+  } finally { vi.useRealTimers(); }
   expect(original).not.toHaveProperty('service_tier');
 });

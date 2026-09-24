@@ -1,3 +1,4 @@
+import ts from "typescript";
 import { createHash } from "node:crypto";
 import {
   mkdirSync,
@@ -21,6 +22,8 @@ const captured = vi.hoisted(() => ({
   args: [] as string[],
   env: {} as Record<string, string | undefined>,
   requests: [] as Array<Record<string, unknown>>,
+  responses: [] as Array<Record<string, unknown>>,
+  onEvent: undefined as undefined | ((event: Record<string, unknown>) => void),
   requestOptions: [] as Array<
     | {
         timeoutMs?: number;
@@ -88,12 +91,14 @@ vi.mock("../rpc-client.js", () => {
     PiRpcProcess: class {
       isClosed = false;
       constructor(opts: {
+        onEvent: (event: Record<string, unknown>) => void;
         onExit: (info: {
           code: number | null;
           signal: NodeJS.Signals | null;
         }) => void;
       }) {
         captured.onExit = opts.onExit;
+        captured.onEvent = opts.onEvent;
       }
       async request(
         command: Record<string, unknown>,
@@ -150,7 +155,7 @@ vi.mock("../rpc-client.js", () => {
         }
         return response;
       }
-      send(): void {}
+      send(command: Record<string, unknown>): void { captured.responses.push(command); }
       async close(): Promise<void> {
         this.isClosed = true;
         captured.closes += 1;
@@ -217,6 +222,8 @@ describe("Pi provider-aware model routing", () => {
   beforeEach(() => {
     captured.args = [];
     captured.requests = [];
+    captured.responses = [];
+    captured.onEvent = undefined;
     captured.requestOptions = [];
     captured.closes = 0;
     captured.onExit = undefined;
@@ -234,8 +241,8 @@ describe("Pi provider-aware model routing", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  it("persists native Fast per runtime and updates it before later sends", async () => {
-    let fast = true;
+  it("keeps native Fast in the host even when a Full Access shell can rewrite old preference files", async () => {
+    let fast = false;
     const agent = new PiAgent({
       auth: { getState: async () => ({ authenticated: true, authSource: 'api-key' as const }),
         triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
@@ -246,17 +253,43 @@ describe("Pi provider-aware model routing", () => {
         models: [{ id: 'private-sol', supportsFastMode: true }, { id: 'no-fast' }] }], env: {} }),
     });
     const handle = await agent.startSession({ sessionId: 'native-fast', workingDir: cwd,
-      model: 'private-sol', providerId: 'relay', getPriceVariant: () => fast ? 'priority' : 'standard' });
-    const file = captured.env.CINDY_PI_MODEL_REQUEST_PREFS_FILE!;
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ fast: true, models: [{ provider: 'relay', id: 'private-sol' }] });
+      permissionMode: 'bypassPermissions', model: 'private-sol', providerId: 'relay',
+      getPriceVariant: () => fast ? 'priority' : 'standard' });
+    expect(captured.env.CINDY_PI_MODEL_REQUEST_PREFS_FILE).toBeUndefined();
+    expect(readdirSync(path.join(agentHome, 'runtime')).some(name => name.startsWith('request-prefs-'))).toBe(false);
+    // Even a known/replayed legacy path and attacker-authored fast=true are inert.
+    const file = path.join(agentHome, 'runtime', 'request-prefs-attacker.json');
+    writeFileSync(file, JSON.stringify({ fast: true, models: [{ provider: 'relay', id: 'private-sol' }] }));
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE.slice(
+      CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('async function nativeFastPayload('),
+      CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('export default async function cindyBridge'),
+    );
+    const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
+    const adapt = new Function('process', `${js}; return nativeFastPayload;`)({ env: {
+      ...captured.env, CINDY_PI_MODEL_REQUEST_PREFS_FILE: file,
+    } });
+    const query = (payload: unknown) => {
+      captured.onEvent!({ type: 'extension_ui_request', method: 'input', id: 'fast-query',
+        title: 'cindy:request-preferences', placeholder: JSON.stringify(payload) });
+      return captured.responses.at(-1)!.value as string;
+    };
+    const ctx = { ui: { input: async (_title: string, payload: string) => query(JSON.parse(payload)) } };
+    const model = { provider: 'relay', id: 'private-sol', api: 'openai-responses' };
+    const payload = { model: 'private-sol', input: 'hello' };
+    expect(await adapt({ ...payload, service_tier: 'priority' }, model, ctx)).toEqual(payload);
+    expect(JSON.parse(query({ provider: 'relay', model: 'private-sol', fast: true })).fast).toBe(false);
+    await handle.setFastMode!(true);
+    expect(await adapt(payload, model, ctx)).toEqual({ ...payload, service_tier: 'priority' });
+    expect(JSON.parse(query({ provider: 'other', model: 'private-sol' })).fast).toBe(false);
+    expect(JSON.parse(query({ provider: 'relay', model: 'no-fast' })).fast).toBe(false);
     await handle.setFastMode!(false);
-    expect(JSON.parse(readFileSync(file, 'utf8')).fast).toBe(false);
-    fast = false;
+    expect(await adapt({ ...payload, service_tier: 'priority' }, model, ctx)).toEqual(payload);
+    fast = true;
     await handle.send({ type: 'user', content: 'hello' });
-    expect(JSON.parse(readFileSync(file, 'utf8')).fast).toBe(false);
+    expect(await adapt(payload, model, ctx)).toEqual({ ...payload, service_tier: 'priority' });
     expect(captured.requests.some(request => request.type === 'set_fast_mode')).toBe(false);
     await handle.close();
-    await vi.waitFor(() => expect(readdirSync(path.join(agentHome, 'runtime'))).not.toContain(path.basename(file)));
+    expect(JSON.parse(query({ provider: 'relay', model: 'private-sol' })).fast).toBe(false);
   });
 
   it("uses providerId as the primary key when duplicate model ids exist", async () => {

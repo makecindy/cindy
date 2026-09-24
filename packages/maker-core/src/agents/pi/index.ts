@@ -3230,31 +3230,16 @@ export class PiAgent extends BaseAgent {
       runtimeDir,
       `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}${remote ? `-${permissionSnapshotHash}` : ''}.json`,
     );
-    const requestPrefsFile = joinRemotePosixPath(runtimeDir, `request-prefs-${runtimeInstanceId}.json`);
     const fastModels = nativeProviders.flatMap(provider => provider.models
       .filter(model => model.supportsFastMode === true)
       .map(model => ({ provider: provider.id, id: model.wireId ?? model.id })));
-    let requestPrefsWriteChain: Promise<void> = Promise.resolve();
-    let requestPrefsSnapshot: string | undefined;
+    // Fast is host-owned state. The bridge reads it over RPC; no writable file
+    // (or replayable snapshot) can authorize a paid request tier.
     let requestPrefsClosed = false;
     let nativeFastEnabled = opts.getPriceVariant?.() === 'priority';
-    const writeRequestPrefs = (fast = opts.getPriceVariant ? opts.getPriceVariant() === 'priority' : nativeFastEnabled): Promise<void> => {
-      if (requestPrefsClosed) return Promise.reject(new Error('Pi request preferences are closed'));
-      if (fastModels.length === 0) return Promise.resolve();
-      const snapshot = JSON.stringify({ fast, models: fastModels });
-      if (requestPrefsSnapshot === snapshot) return requestPrefsWriteChain;
-      requestPrefsSnapshot = snapshot;
-      const write = requestPrefsWriteChain.catch(() => {}).then(async () => {
-        try {
-          await writeFile(requestPrefsFile, snapshot);
-          nativeFastEnabled = fast;
-        } catch (error) {
-          if (requestPrefsSnapshot === snapshot) requestPrefsSnapshot = undefined;
-          throw error;
-        }
-      });
-      requestPrefsWriteChain = write;
-      return write;
+    const updateRequestPrefs = (fast = opts.getPriceVariant ? opts.getPriceVariant() === 'priority' : nativeFastEnabled): void => {
+      if (requestPrefsClosed) throw new Error('Pi request preferences are closed');
+      nativeFastEnabled = fast;
     };
     let activeToolsDisabled = false;
     let textOnlyPolicyReady = false;
@@ -3282,7 +3267,6 @@ export class PiAgent extends BaseAgent {
       requestPrefsClosed = true;
       void rmPath(permissionFile);
       void rmPath(subagentRuntimeFile);
-      if (fastModels.length > 0) void requestPrefsWriteChain.finally(() => rmPath(requestPrefsFile)).catch(() => {});
     };
     // 权限档写入串行化 + 代际跳过。并发/连续切档(本地与远程控制端同时切,或用户快速连点)时,
     // 无串行的 fs.writeFile 可能让较早的 Full-access 写在较新的 Ask 写之后落盘 —— bridge 每次
@@ -3388,7 +3372,7 @@ export class PiAgent extends BaseAgent {
       return run;
     };
     await writePermissionFile(requestedPermissionSnapshot);
-    await writeRequestPrefs();
+    updateRequestPrefs();
 
     // 子代理运行期快照的写入:代际串行,最新意图胜出(理由同权限档 —— 并发/连续 setModel
     // 时无串行的 writeFile 可能让较早的模型写在较新的之后落盘,子代理就会读到过期模型)。
@@ -5182,7 +5166,7 @@ export class PiAgent extends BaseAgent {
         PI_CODING_AGENT_DIR: configHome,
         [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
-        ...(fastModels.length > 0 ? { CINDY_PI_MODEL_REQUEST_PREFS_FILE: requestPrefsFile } : {}),
+        ...(fastModels.length > 0 ? { CINDY_PI_FAST_MODELS: JSON.stringify(fastModels) } : {}),
         CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
         // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
@@ -5279,6 +5263,8 @@ export class PiAgent extends BaseAgent {
               resolver: interactionResolver,
               permissionMode,
               currentModelIds: [mutableModel, mutableWireModel],
+              readNativeFast: (provider, model) => !requestPrefsClosed && nativeFastEnabled &&
+                fastModels.some(candidate => candidate.provider === provider && candidate.id === model),
               workspaceRoots: [opts.workingDir],
               readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
               writableRoots: [opts.workingDir, ...mutableWritableDirs],
@@ -6666,7 +6652,7 @@ export class PiAgent extends BaseAgent {
       async send(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'send');
         await waitForSessionRpcIdle();
-        await writeRequestPrefs();
+        updateRequestPrefs();
         rejectIfCancelled(sendOpts, 'send');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         // 本轮策略覆盖:无策略显式清 null,不继承上一轮渠道策略(§7.2.5);内部续跑
@@ -7214,7 +7200,7 @@ export class PiAgent extends BaseAgent {
 
       async setFastMode(enabled: boolean): Promise<void> {
         if (reviewMode) return;
-        await writeRequestPrefs(enabled);
+        updateRequestPrefs(enabled);
       },
 
       async setEffort(effort: Effort): Promise<void> {
@@ -7843,6 +7829,7 @@ export class PiAgent extends BaseAgent {
       resolver: InteractionResolver | null;
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
       currentModelIds: readonly string[];
+      readNativeFast?: (provider: string, model: string) => boolean;
       workspaceRoots: string[];
       readRoots: string[];
       writableRoots: string[];
@@ -7909,6 +7896,22 @@ export class PiAgent extends BaseAgent {
         message.slice(0, MAX_PI_EXTENSION_NOTIFICATION_LENGTH),
         event,
       );
+      return;
+    }
+
+    // Internal, read-only query over the existing stdio/SSH RPC response channel.
+    // Caller input selects an exact model; it can never supply or update Fast intent.
+    if (method === 'input' && event.title === 'cindy:request-preferences') {
+      const context = getPermissionCtx();
+      let fast = false;
+      try {
+        const requested = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '');
+        if (!context.isPermissionContextClosed() && !context.isAccountBoundaryTornDown() &&
+            typeof requested?.provider === 'string' && typeof requested?.model === 'string') {
+          fast = context.readNativeFast?.(requested.provider, requested.model) === true;
+        }
+      } catch { /* Invalid queries never enable a paid tier. */ }
+      proc.send({ type: 'extension_ui_response', id, value: JSON.stringify({ fast }) });
       return;
     }
 

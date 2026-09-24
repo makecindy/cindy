@@ -113,6 +113,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
   'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+  'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
@@ -3638,19 +3639,26 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
-function nativeFastPayload(payload, model) {
+async function nativeFastPayload(payload, model, ctx) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions'].includes(model.api)) return undefined;
+  let models;
+  try { models = JSON.parse(process.env.CINDY_PI_FAST_MODELS || '[]'); } catch { return undefined; }
+  if (!Array.isArray(models) || !models.some(item => item.provider === model.provider && item.id === model.id)) return undefined;
+  const out = { ...payload };
+  delete out.service_tier;
+  let timer;
   try {
-    const file = process.env.CINDY_PI_MODEL_REQUEST_PREFS_FILE;
-    if (!file) return undefined;
-    const prefs = JSON.parse(readFileSync(file, 'utf8'));
-    if (!Array.isArray(prefs.models) || !prefs.models.some(item => item.provider === model.provider && item.id === model.id)) return undefined;
-    const out = { ...payload };
-    if (prefs.fast === true) out.service_tier = 'priority';
-    else delete out.service_tier;
-    return out;
-  } catch { return undefined; }
+    // No UI is shown: Cindy answers this internal query from current host memory.
+    // Missing/closed hosts and malformed replies must not retain a premium tier.
+    const response = await Promise.race([
+      ctx.ui.input('cindy:request-preferences', JSON.stringify({ provider: model.provider, model: model.id })),
+      new Promise(resolve => { timer = setTimeout(() => resolve(undefined), 5000); }),
+    ]);
+    if (typeof response === 'string' && JSON.parse(response)?.fast === true) out.service_tier = 'priority';
+  } catch { /* A failed preference read falls back to the standard tier. */ }
+  finally { if (timer) clearTimeout(timer); }
+  return out;
 }
 
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
@@ -3659,9 +3667,9 @@ export default async function cindyBridge(pi: any) {
   installTextOnlyTurnPolicy(pi);
   await registerCindyNativeProviderAdapters(pi);
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
-  pi.on('before_provider_request', (event, ctx) => {
+  pi.on('before_provider_request', async (event, ctx) => {
     const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;
-    return nativeFastPayload(payload, ctx.model) ?? payload;
+    return (await nativeFastPayload(payload, ctx.model, ctx)) ?? payload;
   });
   const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,

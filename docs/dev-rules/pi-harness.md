@@ -68,6 +68,15 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   时从本机 session JSONL 校正（只打开启动时 `--session-dir` 真身内的普通文件，
   并有字节/时间预算，超限回退 RPC）；远端仍走 `get_entries`。
 
+### 原生请求 Fast 偏好
+
+支持 Fast 的原生模型在 `before_provider_request` 中经现有 RPC 通道发出
+`cindy:request-preferences` 只读查询。宿主按当前运行实例、精确 provider/model 与
+内存中的 Fast 开关返回结果，不接受查询传入的开关值；不弹用户确认，不增加模型工具。
+开关不再写入 `runtime/request-prefs-*.json`，遗留文件不参与判定。关闭实例、查询失败、
+超时或回复无效时使用普通档；已开启的正常请求仍发送 `service_tier: priority`。
+这修复偏好文件被改写或重放的路径，不改变 Pi Full Access 的原生 shell 权限边界。
+
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
 图片能力未声明时，Pi 的模型配置与发送校验默认允许图片输入，不因新型号缺少能力资料而
