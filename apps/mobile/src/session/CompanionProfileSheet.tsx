@@ -24,6 +24,10 @@ import { loadCompanionProfile, profileFormDirty, type CompanionProfileData, type
 
 const AVATAR_SIZE = 56;
 
+export function shouldShowSelectSearch(panelId: string, options: readonly unknown[]): boolean {
+  return panelId !== 'permissions' && options.length > 10;
+}
+
 export interface CompanionProfileSheetProps {
   visible: boolean;
   onClose: () => void;
@@ -413,7 +417,7 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
   </CompanionSheet>;
 }
 
-function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: ProfilePanel; values: ProfileValues; onChange: (values: ProfileValues) => void; disabled: boolean }) {
+export function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: ProfilePanel; values: ProfileValues; onChange: (values: ProfileValues) => void; disabled: boolean }) {
   const { t, i18n } = useTranslation();
   const [openSelect, setOpenSelect] = useState<string | null>(null);
   const [selectQuery, setSelectQuery] = useState('');
@@ -425,6 +429,7 @@ function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: Pr
     const fieldDisabled = disabled || (panel.id === 'models' && field.id !== 'followsDefault' && values.followsDefault === true)
       || (tuningSlot !== undefined && !values[`route${tuningSlot}`]);
     const options = field.options ?? [];
+    const showSearch = shouldShowSelectSearch(panel.id, options);
     const optionDisabled = (option: { value: string }) => fieldDisabled
       || (panel.id === 'models' && field.id.startsWith('route') && !!option.value && Object.entries(values).some(([key, value]) => key.startsWith('route') && key !== field.id && value === option.value));
     const change = (value: string | boolean) => {
@@ -460,10 +465,10 @@ function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: Pr
           </Pressable>
         </NativePullDownMenu>
           {!fieldDisabled && openSelect === field.id ? <View style={styles.group}>
-            {field.id === 'permissions' ? null : <TextInput accessibilityLabel={`${label} ${t('devices.companionProfile.searchOptions')}`} placeholder={t('devices.companionProfile.searchOptions')}
-              value={selectQuery} onChangeText={setSelectQuery} style={styles.input} placeholderTextColor={colors.textTertiary} />}
+            {showSearch ? <TextInput accessibilityLabel={`${label} ${t('devices.companionProfile.searchOptions')}`} placeholder={t('devices.companionProfile.searchOptions')}
+              value={selectQuery} onChangeText={setSelectQuery} style={styles.input} placeholderTextColor={colors.textTertiary} /> : null}
             <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={styles.optionScroll}>
-              {options.filter(option => resolveRemoteText(option.label, i18n.language).toLocaleLowerCase().includes(selectQuery.trim().toLocaleLowerCase())).map(option =>
+              {(showSearch ? options.filter(option => resolveRemoteText(option.label, i18n.language).toLocaleLowerCase().includes(selectQuery.trim().toLocaleLowerCase())) : options).map(option =>
                 <ContextSheetRow key={option.value} icon={null} label={resolveRemoteText(option.label, i18n.language)} disabled={optionDisabled(option)}
                   trailing={values[field.id] === option.value ? <Check size={iconSize.md} color={colors.textPrimary} /> : null} onPress={() => change(option.value)} />)}
             </ScrollView>
