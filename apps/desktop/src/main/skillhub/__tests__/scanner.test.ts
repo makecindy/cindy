@@ -111,11 +111,16 @@ describe('scanAllSkills', () => {
     const result = await scanAllSkills({}, maker);
 
     expect(result.skills).toHaveLength(1);
+    // The projection reports fs.realpathSync(skillDir). On Windows runners TEMP
+    // can be an 8.3 short name (RUNNER~1); fs.realpathSync keeps that form while
+    // fs.realpathSync.native expands it, so the expected value must use the
+    // same primitive as the implementation. mdPath is echoed from the Maker
+    // payload, so it is asserted against the input path.
     expect(result.skills[0]).toMatchObject({
       name: 'nested',
       description: 'Nested skill',
-      absolutePath: fs.realpathSync.native(skillDir),
-      mdPath: path.join(fs.realpathSync.native(skillDir), 'SKILL.md'),
+      absolutePath: fs.realpathSync(skillDir),
+      mdPath: path.join(skillDir, 'SKILL.md'),
     });
   });
 
