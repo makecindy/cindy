@@ -25,6 +25,14 @@ import type {
 
 export const MARKDOWN_PREVIEW_MAX_BYTES = Math.floor(4.4 * 1024 * 1024);
 
+/**
+ * before（diff 基线）侧内容的上限。
+ * before 只服务富文本预览的块级对齐与删除块展示，不决定预览本身可用性；
+ * 上限刻意低于 after：远程（device-link）响应预算 1.8MiB，双份全文会把
+ * 整页预览推过 OVERSIZE 边界，得不偿失。超限时只丢删除标记。
+ */
+export const MARKDOWN_PREVIEW_BEFORE_MAX_BYTES = Math.floor(1.5 * 1024 * 1024);
+
 export interface MarkdownPreviewReaderDeps {
   runGit: typeof runGit;
   runGitBuffer: typeof runGitBuffer;
@@ -100,13 +108,30 @@ async function readCommitOid(repoRoot: string, ref: string, deps: MarkdownPrevie
 }
 
 async function readBranchHeadOid(repoRoot: string, baseRef: string, deps: MarkdownPreviewReaderDeps): Promise<string> {
-  const baseOid = await resolveBranchBaseCommitOid(repoRoot, baseRef, deps.runGit);
   const headOid = await readCommitOid(repoRoot, 'HEAD', deps);
   // Validate the same comparison context as branch diff. The preview uses HEAD
   // content only, but a missing merge-base means the branch source itself is not
   // a valid committed diff view.
-  await deps.runGit(['merge-base', baseOid, headOid], { cwd: repoRoot });
+  const mergeBaseOid = await resolveBranchMergeBaseOid(repoRoot, baseRef, deps);
+  if (!mergeBaseOid) throw new Error('missing merge base for branch diff');
   return headOid;
+}
+
+/**
+ * branch diff 的比较基线是 merge-base（branchReader: `git diff mergeBaseOid headOid`），
+ * 不是 base ref 的 tip。拿 tip 当 before 会把「分支切出后上游对同一文件的改动」
+ * 误当作本分支的改动，在预览里伪造出插入 / 删除线。
+ */
+async function resolveBranchMergeBaseOid(
+  repoRoot: string,
+  baseRef: string,
+  deps: MarkdownPreviewReaderDeps,
+): Promise<string | null> {
+  const baseOid = await resolveBranchBaseCommitOid(repoRoot, baseRef, deps.runGit);
+  const headOid = await readCommitOid(repoRoot, 'HEAD', deps);
+  const { stdout } = await deps.runGit(['merge-base', baseOid, headOid], { cwd: repoRoot });
+  const mergeBaseOid = stdout.trim();
+  return /^[0-9a-f]{40,64}$/i.test(mergeBaseOid) ? mergeBaseOid : null;
 }
 
 async function readTreeBlobOid(
@@ -175,6 +200,34 @@ async function readWorktreeMarkdown(
   }
 }
 
+/**
+ * 读取 git blob 文本的统一入口，带大小护栏。after（预览主体）与 before
+ * （删除基线）共用；调用方按各自上限决定 too-large / failed 的降级方式。
+ */
+async function readGuardedBlobText(
+  repoRoot: string,
+  oid: string,
+  maxBytes: number,
+  deps: MarkdownPreviewReaderDeps,
+): Promise<
+  | { status: 'ok'; content: string; size: number }
+  | { status: 'too-large'; size: number }
+  | { status: 'failed'; error: string }
+> {
+  try {
+    const size = await readBlobSize(repoRoot, oid, deps);
+    if (size > maxBytes) return { status: 'too-large', size };
+    const { stdout } = await deps.runGitBuffer(['cat-file', 'blob', '--end-of-options', oid], {
+      cwd: repoRoot,
+      maxStdoutBytes: maxBytes + 1,
+    });
+    if (stdout.length > maxBytes) return { status: 'too-large', size: stdout.length };
+    return { status: 'ok', content: stdout.toString('utf8'), size: stdout.length };
+  } catch (err) {
+    return { status: 'failed', error: errorMessage(err) };
+  }
+}
+
 async function readBlobMarkdown(
   repoRoot: string,
   diff: FileDiff,
@@ -183,20 +236,12 @@ async function readBlobMarkdown(
   deps: MarkdownPreviewReaderDeps,
 ): Promise<ReviewMarkdownPreviewData> {
   const baseDir = baseDirForGitPath(repoRoot, gitPath);
-  try {
-    if (!oid) return unavailable(diff.id, 'missing', { baseDir, error: 'markdown blob is unavailable' });
-    if (!isSafeGitDiffIndexOid(oid)) return unavailable(diff.id, 'source-missing', { baseDir, error: 'markdown blob oid is invalid' });
-    const size = await readBlobSize(repoRoot, oid, deps);
-    if (size > MARKDOWN_PREVIEW_MAX_BYTES) return unavailable(diff.id, 'too-large', { baseDir, size });
-    const { stdout } = await deps.runGitBuffer(['cat-file', 'blob', '--end-of-options', oid], {
-      cwd: repoRoot,
-      maxStdoutBytes: MARKDOWN_PREVIEW_MAX_BYTES + 1,
-    });
-    if (stdout.length > MARKDOWN_PREVIEW_MAX_BYTES) return unavailable(diff.id, 'too-large', { baseDir, size: stdout.length });
-    return loaded(diff.id, stdout.toString('utf8'), stdout.length, baseDir);
-  } catch (err) {
-    return unavailable(diff.id, 'read-error', { baseDir, error: errorMessage(err) });
-  }
+  if (!oid) return unavailable(diff.id, 'missing', { baseDir, error: 'markdown blob is unavailable' });
+  if (!isSafeGitDiffIndexOid(oid)) return unavailable(diff.id, 'source-missing', { baseDir, error: 'markdown blob oid is invalid' });
+  const result = await readGuardedBlobText(repoRoot, oid, MARKDOWN_PREVIEW_MAX_BYTES, deps);
+  if (result.status === 'too-large') return unavailable(diff.id, 'too-large', { baseDir, size: result.size });
+  if (result.status === 'failed') return unavailable(diff.id, 'read-error', { baseDir, error: result.error });
+  return loaded(diff.id, result.content, result.size, baseDir);
 }
 
 async function readTreeMarkdown(
@@ -208,6 +253,86 @@ async function readTreeMarkdown(
 ): Promise<ReviewMarkdownPreviewData> {
   const oid = await readTreeBlobOid(repoRoot, treeish, gitPath, deps);
   return readBlobMarkdown(repoRoot, diff, oid, gitPath, deps);
+}
+
+async function readParentCommitOid(
+  repoRoot: string,
+  commitOid: string,
+  deps: MarkdownPreviewReaderDeps,
+): Promise<string | null> {
+  try {
+    const { stdout } = await deps.runGit(['rev-parse', '--verify', `${commitOid}^`], { cwd: repoRoot });
+    const oid = stdout.trim();
+    return /^[0-9a-f]{40,64}$/i.test(oid) ? oid : null;
+  } catch {
+    // 根提交没有 parent：没有可比基线，返回 null 让预览退化为无删除标记。
+    return null;
+  }
+}
+
+/**
+ * 解析 before 侧对应的 blob oid。before 一律来自 git 对象（index / tree），
+ * 不读 worktree（unstaged 的基线就是 index）。rename 使用 oldPath。
+ */
+async function resolveBeforeBlobOid(
+  repoRoot: string,
+  request: ReviewMarkdownPreviewRequest,
+  gitPath: string,
+  deps: MarkdownPreviewReaderDeps,
+): Promise<string | null> {
+  const { diff } = request;
+  if (diff.source === 'unstaged') {
+    return readIndexBlobOid(repoRoot, gitPath, deps);
+  }
+  if (diff.source === 'staged') {
+    return readTreeBlobOid(repoRoot, 'HEAD', gitPath, deps);
+  }
+  if (diff.source === 'commit') {
+    if (!request.commitOid || !isSafeGitObjectOid(request.commitOid)) return null;
+    const parentOid = await readParentCommitOid(repoRoot, request.commitOid, deps);
+    return parentOid ? readTreeBlobOid(repoRoot, parentOid, gitPath, deps) : null;
+  }
+  if (diff.source === 'branch') {
+    if (!request.branchBaseRef) return null;
+    // 优先用生成 diff 时的 merge-base **快照**：现场重算会在“审查期间 agent 又提交了 /
+    // 分支被 reset / base ref 更新”时漂到另一个基线上，与界面里显示的 diff 对不上。
+    // 快照非法或缺失 → 回退到现场重算（旧端行为）。
+    if (request.branchMergeBaseOid && isSafeGitObjectOid(request.branchMergeBaseOid)) {
+      return readTreeBlobOid(repoRoot, request.branchMergeBaseOid, gitPath, deps);
+    }
+    // 基线必须是 merge-base 的 tree，与 branch diff 同一套比较基准（见 helper 注释）。
+    const mergeBaseOid = await resolveBranchMergeBaseOid(repoRoot, request.branchBaseRef, deps);
+    return mergeBaseOid ? readTreeBlobOid(repoRoot, mergeBaseOid, gitPath, deps) : null;
+  }
+  return null;
+}
+
+/**
+ * 读取 before（基线）侧 Markdown，供渲染侧做块级改动对齐。任何失败都降级为
+ * null——只丢删除标记，绝不影响 after 预览的可用性。
+ */
+async function readBeforeMarkdownContent(
+  repoRoot: string,
+  request: ReviewMarkdownPreviewRequest,
+  deps: MarkdownPreviewReaderDeps,
+): Promise<string | null> {
+  const { diff } = request;
+  if (diff.status === 'added' || diff.status === 'untracked') return null;
+  const gitPath = diff.oldPath ?? diff.path;
+  if (!isSafeGitPath(gitPath)) return null;
+  try {
+    const oid = await resolveBeforeBlobOid(repoRoot, request, gitPath, deps);
+    if (!oid) return null;
+    const result = await readGuardedBlobText(
+      repoRoot,
+      oid,
+      MARKDOWN_PREVIEW_BEFORE_MAX_BYTES,
+      deps,
+    );
+    return result.status === 'ok' ? result.content : null;
+  } catch {
+    return null;
+  }
 }
 
 async function resolveMarkdownContentSpec(
@@ -271,10 +396,19 @@ export async function readMarkdownPreview(
 
   try {
     const spec = await resolveMarkdownContentSpec(scope.repoRoot, request, deps);
-    if ('content' in spec) return spec;
-    if (spec.kind === 'worktree') return readWorktreeMarkdown(scope.repoRoot, diff, spec.path, deps);
-    if (spec.kind === 'index') return readBlobMarkdown(scope.repoRoot, diff, spec.oid, spec.path, deps);
-    return readTreeMarkdown(scope.repoRoot, diff, spec.treeish, spec.path, deps);
+    const after =
+      'content' in spec
+        ? spec
+        : spec.kind === 'worktree'
+          ? await readWorktreeMarkdown(scope.repoRoot, diff, spec.path, deps)
+          : spec.kind === 'index'
+            ? await readBlobMarkdown(scope.repoRoot, diff, spec.oid, spec.path, deps)
+            : await readTreeMarkdown(scope.repoRoot, diff, spec.treeish, spec.path, deps);
+    if (after.content === null) return after;
+    return {
+      ...after,
+      beforeContent: await readBeforeMarkdownContent(scope.repoRoot, request, deps),
+    };
   } catch (err) {
     return unavailable(diff.id, 'read-error', { baseDir, error: errorMessage(err) });
   }

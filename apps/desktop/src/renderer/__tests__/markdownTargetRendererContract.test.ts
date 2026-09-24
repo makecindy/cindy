@@ -7,6 +7,12 @@ const markdownRenderer = readFileSync(
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
+// 插件链清单的单一事实源（渲染与修订校验同源）。
+const markdownPipeline = readFileSync(
+  resolve(__dirname, '..', 'components', 'chat', 'markdownPluginPipeline.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+
 const localPathResolver = readFileSync(
   resolve(__dirname, '..', 'lib', 'localPathResolver.ts'),
   'utf8',
@@ -115,7 +121,7 @@ describe('Markdown target rendering contract', () => {
     // preserve 插件必须排在两份插件链的**链尾**(remarkLocalPathLinks 之后),
     // 正文裸路径切出的 link 节点才拿得到原始值。
     expect(
-      markdownRenderer.match(/remarkLocalPathLinks,\n  remarkPreserveRawLocalDestinations,\n\]/g),
+      markdownPipeline.match(/remarkLocalPathLinks,\n  remarkPreserveRawLocalDestinations,\n\]/g),
     ).toHaveLength(2);
   });
 

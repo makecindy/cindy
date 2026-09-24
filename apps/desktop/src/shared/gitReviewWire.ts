@@ -344,6 +344,13 @@ export type ReviewMarkdownPreviewReason =
 export interface ReviewMarkdownPreviewData {
   diffId: string;
   content: string | null;
+  /**
+   * diff 基线（before）侧的完整 Markdown 内容，供富文本预览做块级改动对齐
+   * （高亮新增/修改块、以删除样式展示旧块）。可选字段，跨设备兼用：
+   * null 或缺省 = 没有基线（新增文件）或基线不可用（过大/读不到），
+   * 此时富文本预览按无改动标记渲染。旧被控端不写该字段，新端按 null 处理。
+   */
+  beforeContent?: string | null;
   size: number | null;
   baseDir: string | null;
   maxBytes: number;
@@ -355,6 +362,15 @@ export interface ReviewMarkdownPreviewRequest {
   diff: FileDiff;
   commitOid?: string | null;
   branchBaseRef?: string | null;
+  /**
+   * branch 审查在**生成 diff 那一刻**记下的 merge-base OID（快照）。
+   *
+   * 为什么需要：预览的 before 内容如果按“当前 HEAD + 当前 base ref”重新算 merge-base，
+   * 审查期间 agent 又提交了 / 分支被 reset / base ref 更新，都会让 before 侧漂到
+   * 另一个基线上去，而界面里的 diff 仍是旧基线算的 —— 两边对不上。带上快照就固定住了。
+   * 可选字段：旧端不传 / 传 null → 回退到现场重算（与之前行为一致）。
+   */
+  branchMergeBaseOid?: string | null;
 }
 
 export type ReviewStageAction = 'stage' | 'unstage' | 'discard';

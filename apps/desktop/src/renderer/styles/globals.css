@@ -2227,3 +2227,30 @@ mark.doc-search-mark [class] {
     animation: none;
   }
 }
+
+/*
+ * 审查预览：分段渲染的块间距修补。
+ *
+ * 预览按计划片段分段渲染，每个片段都是一个独立的 `.msg-markdown` 根，于是段落上的
+ * `my-2 first:mt-0 last:mb-0` 会在**每个片段边界**重复生效 —— “未改段—改动段—未改段”
+ * 的段落外侧边距同时归零，间距直接塌成 0（整篇一次渲染时不会）。
+ * 这里把非首尾片段的首/尾块外边距恢复成标准块间距（0.5rem = my-2），
+ * 只有整个预览的首尾才真的贴边。
+ */
+.cindy-review-segments .cindy-review-segment:not(:first-child) > .msg-markdown > :first-child {
+  margin-top: 0.5rem;
+}
+.cindy-review-segments .cindy-review-segment:not(:last-child) > .msg-markdown > :last-child {
+  margin-bottom: 0.5rem;
+}
+
+/*
+ * 审查预览：公式内部的修订标记由 rehype 插件 rehypeReviewMathMarks 处理（在 rehype-katex
+ * 之后把带关键字色的修订组换成带 diff token 类的 <del> / <ins>，KaTeX 自己的 `\sout` /
+ * `\underline` 线用 currentColor，跟着继承同一个 token）。
+ *
+ * 为什么不在 CSS 里兜底：早期试过属性选择器覆盖（`.katex [style*='color:#...']`），
+ * 规则确实进了产物、token 也有值，但这条选择器在审查页始终不生效（变量、加载顺序、
+ * !important 优先级、命中范围都排查过，无法复现为 css 侧问题）；而且兜底需要把哨兵色写进
+ * CSS，那些字面色值本来就不是设计色，不该占硬编码色豁免表的名额。
+ */
