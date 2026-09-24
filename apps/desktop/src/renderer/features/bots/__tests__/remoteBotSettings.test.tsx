@@ -7,6 +7,7 @@ import {
   REMOTE_RESOURCE_INVOKE_CHANNEL,
 } from '@cindy/device-link';
 import { RemoteBotSettings } from '../RemoteBotSettings';
+import { parseRemoteMediaUrl } from '../../../../shared/remoteMediaUrl';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 const h = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -267,6 +268,14 @@ function push(id = 'bot', collectionId = 'teammates', deviceId = 'host') {
 async function openAvatar(decode: () => Promise<void> = () => Promise.resolve()) {
   const avatar = {
     ...resource(),
+    display: {
+      title: 'Avatar',
+      avatar: {
+        kind: 'media',
+        value: `cindy-media://blobs/${'a'.repeat(64)}.png`,
+        fallbackText: 'C',
+      },
+    },
     actions: [
       {
         id: 'avatar-grant',
@@ -305,6 +314,7 @@ async function openAvatar(decode: () => Promise<void> = () => Promise.resolve())
   render(<RemoteBotSettings bot={bot} beforeCloseRef={close} onDeleted={vi.fn()} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Avatar' }));
   await screen.findByText('Choose portrait');
+  return avatar;
 }
 it('submits raw JPEG base64 while preserving the portrait preview data URL', async () => {
   await openAvatar();
@@ -414,4 +424,40 @@ it('reports failed portrait conversion and releases the navigation guard without
   expect(h.invoke.mock.calls.some((call) => call[1] === REMOTE_RESOURCE_INVOKE_CHANNEL)).toBe(
     false,
   );
+});
+
+it('previews the host avatar on open and after saving an empty avatar form', async () => {
+  const avatar = await openAvatar();
+  expect(parseRemoteMediaUrl(h.portrait.value)).toEqual({
+    origin: { kind: 'device', deviceId: 'host' },
+    origUrl: avatar.display.avatar.value,
+  });
+  fireEvent.click(screen.getByText('Choose portrait'));
+  await waitFor(() => expect(h.portrait.value).toBe('data:image/jpeg;base64,/9j/2Q=='));
+  const savedUrl = `cindy-media://blobs/${'b'.repeat(64)}.jpeg`;
+  h.invoke.mockImplementation(async (_: string, channel: string) => {
+    if (channel === REMOTE_RESOURCE_INVOKE_CHANNEL) {
+      avatar.display.avatar.value = savedUrl;
+      return { effects: [] };
+    }
+    return avatar;
+  });
+  fireEvent.click(screen.getByText('bots.save'));
+  await waitFor(() =>
+    expect(parseRemoteMediaUrl(h.portrait.value)).toEqual({
+      origin: { kind: 'device', deviceId: 'host' },
+      origUrl: savedUrl,
+    }),
+  );
+  expect(avatar.blocks[0].data.values.avatarImageBase64).toBe('');
+});
+it.each([
+  'file:///private/avatar.png',
+  'https://example.com/avatar.png',
+  'cindy-media://blobs/invalid.png',
+])('does not load an untrusted host avatar URL: %s', async (value) => {
+  const avatar = await openAvatar();
+  avatar.display.avatar.value = value;
+  await act(async () => push());
+  expect(h.portrait.value).toBeUndefined();
 });

@@ -23,6 +23,8 @@ import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import { extractIpcError } from '@/utils/ipcError';
 import { BotModelChainEditor } from './BotModelChainEditor';
 import { BotPortraitPicker } from './BotPortraitPicker';
+import { isManagedBotAvatarUrl } from '../../../shared/botAvatarValue';
+import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import type { RemoteBot } from './remoteBotRoster';
 import {
   readRemoteBotSettings,
@@ -83,6 +85,11 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
   const editorScope = useRef('');
   const portraitRequest = useRef(0);
   editorScope.current = `${resourceId}:${page}`;
+  const hostAvatar = data?.resource.display.avatar;
+  const hostAvatarPreview =
+    hostAvatar?.kind === 'media' && isManagedBotAvatarUrl(hostAvatar.value)
+      ? rewriteToRemoteMediaOrigin(hostAvatar.value, { kind: 'device', deviceId: bot.deviceId })
+      : undefined;
   const panel = data?.panels.find((item) => item.id === page);
   const changes = panel ? settingsChanges(panel, draft) : {};
   const dirty = Object.keys(changes).length > 0;
@@ -404,7 +411,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           value={
             typeof draft.avatarImageBase64 === 'string' && draft.avatarImageBase64
               ? `data:image/jpeg;base64,${draft.avatarImageBase64}`
-              : undefined
+              : hostAvatarPreview
           }
           onChange={(value) => {
             if (!current() || inFlight.current || portraitPending.current) return;

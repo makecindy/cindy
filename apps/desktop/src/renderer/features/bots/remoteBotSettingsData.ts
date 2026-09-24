@@ -3,6 +3,7 @@ import {
   REMOTE_RESOURCE_PROTOCOL_VERSION,
   type RemoteResource,
   type RemoteResourceRef,
+  type RemoteResourceAvatar,
   type RemoteActionDescriptor,
 } from '@cindy/device-link';
 import { normalizeBotModelChain, type BotModelRoute } from '../../../shared/botModelChain';
@@ -42,6 +43,17 @@ const isText = (value: unknown): value is SettingsPanel['title'] => {
     Object.entries(translations).every(([locale, text]) => id(locale, 64) && string(text, 20_000))
   );
 };
+function parseAvatar(value: unknown): RemoteResourceAvatar | undefined {
+  const avatar = record(value);
+  if (!id(avatar.kind, 64) || !string(avatar.value, 4_096) || !string(avatar.fallbackText, 64))
+    return;
+  return {
+    kind: avatar.kind,
+    value: avatar.value,
+    fallbackText: avatar.fallbackText,
+    ...(string(avatar.color, 64) ? { color: avatar.color } : {}),
+  };
+}
 /** Bound traversal before inspecting nested host data; do not stringify an unbounded payload. */
 function boundedResponse(raw: unknown): boolean {
   let nodes = 20_000;
@@ -171,7 +183,7 @@ export function parseRemoteBotSettings(
     resource: {
       ref: { ...ref },
       revision: resource.revision,
-      display: { title: resource.display.title },
+      display: { title: resource.display.title, avatar: parseAvatar(resource.display.avatar) },
       links: [],
     },
     panels,

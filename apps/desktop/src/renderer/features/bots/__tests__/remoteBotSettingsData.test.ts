@@ -121,3 +121,25 @@ it('filters malformed list identities and titles', () => {
     { id: 'valid', title: 'Skill', resourceId: 'bot/skills/valid' },
   ]);
 });
+
+it('retains bounded host avatar metadata and drops malformed avatar descriptions', () => {
+  const raw = resource();
+  const avatar = {
+    kind: 'media',
+    value: `cindy-media://blobs/${'a'.repeat(64)}.png`,
+    fallbackText: 'C',
+    color: 'blue',
+  };
+  const parse = (value: unknown) =>
+    parseRemoteBotSettings({ ...raw, display: { ...raw.display, avatar: value } }, raw.ref).resource
+      .display.avatar;
+  expect(parse(avatar)).toEqual(avatar);
+  for (const value of [
+    null,
+    { ...avatar, kind: 1 },
+    { ...avatar, value: 'x'.repeat(4097) },
+    { ...avatar, fallbackText: 'x'.repeat(65) },
+  ]) {
+    expect(parse(value)).toBeUndefined();
+  }
+});
