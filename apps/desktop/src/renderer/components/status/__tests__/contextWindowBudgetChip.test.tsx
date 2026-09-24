@@ -512,34 +512,11 @@ function chipText(): string {
   it('never renders the model-default tier above 100% when the route has no declared window', async () => {
     // 用户实测报障（2026-09-22）：自定义连接未声明窗口（目录只有 200K 兜底）且用户把模型级
     // 上限设成 1M。旧口径把 200K 当物理上限下发，基准被钉在 200K，于是「模型默认 1M」被
-    // 算成 500%。这一例用**修好后 main 应下发的诚实边界**（maxWindow=null）。
+    // 算成 500%。这一例用**修好后 main 应下发的诚实边界**（maxWindow=null），
+    // 并补上远程端实测形态：已存任务档 200K 时应看到四行。
     installElectronApi(vi.fn(async () => boundsView({
       defaultWindow: 200_000,
       maxWindow: null,
-      modelLimit: 1_000_000,
-      defaultEffectiveWindow: 1_000_000,
-    })));
-
-    renderChip({ providers: null });
-    const options = await openTierCard();
-    // 基准 = 模型级上限 1M：100% 档就是默认档，25%/50% 是它的份额。
-    expect(tierTokens()).toEqual(['250000', '500000', '1000000']);
-    const textOf = (tokens: string): string =>
-      options.find((el) => el.getAttribute('data-token') === tokens)?.textContent ?? '';
-    expect(textOf('1000000')).toContain('optionPercent#{"percent":100}');
-    expect(textOf('1000000')).toContain('optionDefault');
-    expect(percentsIn(options)).toEqual([25, 50, 100]);
-  });
-
-  it('clamps the percentage base even if the bounds contradict themselves', async () => {
-    // 防御：老被控端 / 手改偏好都可能送来「默认档 > 上限」的组合。展示层宁可把上限档显示成
-    // 不到 100%，也不打出一行 >100%（用户无法解释那个数字）。
-    // 用户远程端实测（2026-09-22）：这类载荷下菜单只剩「20% · 200K」+「100% · 1M 模型默认」
-    // 两行 —— 百分比基准被抬到默认档，档位表却还按那个旧上限生成，25%/50% 被 200K 地板过滤。
-    // 档位与百分比必须同源：修完应是 20%（当前档）/ 25% / 50% / 100%（模型默认）。
-    installElectronApi(vi.fn(async () => boundsView({
-      defaultWindow: 200_000,
-      maxWindow: 200_000,
       modelLimit: 1_000_000,
       defaultEffectiveWindow: 1_000_000,
       budget: 200_000,
@@ -548,13 +525,35 @@ function chipText(): string {
 
     renderChip({ providers: null });
     const options = await openTierCard();
-    const defaultRow = options.find((el) => el.textContent?.includes('optionDefault'));
-    expect(defaultRow?.getAttribute('data-token')).toBe('1000000');
-    // 分母取「上限与默认档里更大的一个」→ 默认档落在 100%，其余档只会更小。
-    expect(percentsIn(options).every((percent) => percent <= 100)).toBe(true);
-    // 档位表跟着同一个基准走：25%/50% 不能因为旧上限而消失。
+    // 没有声明上限 → 模型级上限 1M 就是显式预算能买到的最大值：100% 档 = 模型默认。
     expect(tierTokens()).toEqual(['200000', '250000', '500000', '1000000']);
     expect(percentsIn(options)).toEqual([20, 25, 50, 100]);
+    const textOf = (tokens: string): string =>
+      options.find((el) => el.getAttribute('data-token') === tokens)?.textContent ?? '';
+    expect(textOf('1000000')).toContain('optionDefault');
+  });
+
+  it('does not offer percent tiers above the ceiling main clamps explicit budgets to', async () => {
+    // Greptile P1（2026-09-24）：目录**声明了** contextWindowMax=200K 的未核实路由，用户把
+    // 模型级上限设成 1M。默认档写 null 走模型级逃生口 → 真的生效在 1M；但 main 会把任何
+    // **显式**预算按声明上限夹到 200K，所以菜单不得出现 250K/500K 这种达不到的档
+    // （否则窗口与输入价带一起说谎）。
+    installElectronApi(vi.fn(async () => boundsView({
+      defaultWindow: 200_000,
+      maxWindow: 200_000,
+      modelLimit: 1_000_000,
+      defaultEffectiveWindow: 1_000_000,
+    })));
+
+    renderChip({ providers: null });
+    const options = await openTierCard();
+    expect(tierTokens()).toEqual(['200000', '1000000']);
+    expect(tierTokens()).not.toContain('250000');
+    expect(tierTokens()).not.toContain('500000');
+    // 默认档可以合法高于上限：它的百分比按 max(上限, 默认档) 算，不会冒出 >100%。
+    expect(percentsIn(options)).toEqual([20, 100]);
+    const defaultRow = options.find((el) => el.textContent?.includes('optionDefault'));
+    expect(defaultRow?.getAttribute('data-token')).toBe('1000000');
   });
 
   it('shows absolute values only when the route has no known ceiling at all', async () => {

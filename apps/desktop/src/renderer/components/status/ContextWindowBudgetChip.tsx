@@ -328,13 +328,16 @@ export function ContextWindowBudgetChip({
 
   const options = useMemo(() => {
     if (effectiveDefaultWindow === null) return [];
-    // 档位表与行内百分比必须用**同一个基准**：只修显示不修档位，两者会分叉—— 被控端申报的
-    // 上限低于它自己解析出的默认档时（老 main 会把未核实路由的兜底默认当上限发过来），
-    // 基准被抬到默认档，而档位仍按那个旧上限生成，25%/50% 会被 200K 地板过滤掉，
-    // 菜单只剩「当前档 + 模型默认」两行。所以新端直接拿 tierBase（已含保护）当上限。
-    // 老被控端维持原口径：只允许收紧，基准就是那个保守上限（不能拿默认档去抬）。
+    // 档位表的上限 = main 会对**显式任务预算**夹的那个数：min(申报上限, 模型级上限)。
+    // 刻意不用 tierBase（它含 max(…, 默认档) 的抬升）：未核实路由的默认档可以合法高于
+    // 声明上限（模型级上限是「路由配错了」的逃生口，写 null 就会真的生效），但 main 仍会把
+    // 任何显式预算夹到声明上限 —— 用抬升后的基准出 250K/500K 档，运行期只会得到 200K，
+    // 窗口与输入价带一起说谎（Greptile P1，2026-09-24）。
+    // 默认档高于上限时，只有它那一行的百分比按 max(上限, 默认档) 算（见 tierBase），
+    // 菜单不会出现运行期达不到的档位。
+    // 老被控端维持原口径：只允许收紧，基准就是那个保守上限，不拿默认档去抬。
     const base = buildContextWindowBudgetOptions(effectiveWindowsReported
-      ? { defaultWindow: effectiveDefaultWindow, maxWindow: tierBase, modelLimit: null }
+      ? { defaultWindow: effectiveDefaultWindow, maxWindow: reportedMaxWindow, modelLimit }
       : { defaultWindow: effectiveDefaultWindow, maxWindow: effectiveMaxWindow, modelLimit });
     // 已保存的预算可能不在当前档位集合里（目录默认值变过、或它来自模型级上限口径）。
     // 补一条当前档，避免单选组没有匹配项而显示成空；同样按上限夹紧，否则单选组会
@@ -350,7 +353,7 @@ export function ContextWindowBudgetChip({
     return [...base, { tokens: current, kind: 'current' as const }].sort(
       (a, b) => a.tokens - b.tokens,
     );
-  }, [storedBudget, effectiveDefaultWindow, effectiveMaxWindow, effectiveWindowsReported, tierBase, modelLimit, ceiling]);
+  }, [storedBudget, effectiveDefaultWindow, effectiveMaxWindow, effectiveWindowsReported, reportedMaxWindow, modelLimit, ceiling]);
 
   useEffect(() => {
     if (options.length === 0) return;
