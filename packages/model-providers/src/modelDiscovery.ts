@@ -101,7 +101,6 @@ export function parseModelsListResponse(
           rec.max_context_length,
           rec.max_input_tokens,
           google?.inputTokenLimit,
-          rec.max_context_window,
         ].find(
           // Math.floor(v) > 0 而非 v > 0:0 < v < 1(如 context_length: 0.5)会通过
           // v > 0 但取整成 contextWindow: 0——按取整后的值校验才不会漏这个区间

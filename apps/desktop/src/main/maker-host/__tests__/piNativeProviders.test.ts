@@ -2827,7 +2827,7 @@ it('carries Sub2API capacity, images, efforts and Fast from discovery into nativ
   const result = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined,
     { ...BUNDLED_CATALOG, providers: [provider] });
   expect(result.providers[0]?.models[0]).toMatchObject({ id: 'private-model',
-    contextWindow: 1050000, input: ['text', 'image'], supportsFastMode: true, reasoning: true,
+    contextWindow: 272000, input: ['text', 'image'], supportsFastMode: true, reasoning: true,
     thinkingLevelMap: { high: 'high', max: 'max' } });
 });
 

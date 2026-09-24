@@ -1410,7 +1410,7 @@ export function buildPiNativeProvidersFromConfigs(
             : modelBaseUrl && modelBaseUrl !== rt.baseUrl ? { baseUrl: modelBaseUrl } : {}),
           name: m.name ?? bundledModel?.name,
           // 下发文件明确写出的上下文优先；本地 Pi 目录只补缺失值。
-          contextWindow: resolved?.contextWindowMax ?? m.contextWindow ?? bundledModel?.contextWindow,
+          contextWindow: m.contextWindow ?? bundledModel?.contextWindow,
           ...(resolved?.maxOutput !== undefined || bundledModel?.maxTokens !== undefined
             ? { maxTokens: resolved?.maxOutput ?? bundledModel?.maxTokens } : {}),
           ...(m.supportsImageInput !== undefined

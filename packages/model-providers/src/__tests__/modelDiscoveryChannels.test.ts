@@ -5,6 +5,23 @@ import { buildUserProvider } from '../user-provider.js';
 import { BUNDLED_CATALOG } from '../catalog.js';
 
 describe('shared provider discovery', () => {
+  it('retains the working window when a refresh only reports maximum capacity', () => {
+    const original = parseModelsListResponse({ data: [{ id: 'private-model',
+      context_window: 272000, max_context_window: 1050000 }] })!;
+    const refresh = parseModelsListResponse({ data: [{ id: 'private-model',
+      max_context_window: 2000000 }] })!;
+    expect(refresh[0].contextWindow).toBeUndefined();
+    expect(refresh[0].discoveredMetadata?.contextWindow).toBeUndefined();
+    const models = mergeDiscoveredRuntimeModels(original, refresh);
+    expect(models[0].discoveredMetadata).toMatchObject({ contextWindow: 272000, contextWindowMax: 2000000 });
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models },
+      } });
+      expect(provider.models[agent]?.[0]).toMatchObject({ contextWindow: 272000, contextWindowMax: 2000000 });
+    }
+  });
+
   it('imports Vercel token prices, output capacity, image inputs and declared effort levels', () => {
     const models = parseModelsListResponse({ data: [{ id: 'vendor/new', name: 'New', type: 'language',
       context_window: 128000, max_tokens: 32000,
