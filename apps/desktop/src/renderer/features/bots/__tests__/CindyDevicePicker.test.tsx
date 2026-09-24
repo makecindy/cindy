@@ -17,6 +17,7 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
 }));
 
 import { CindyDevicePicker } from '../CindyDevicePicker';
+import { CindyDeviceRow } from '../CindyDeviceRow';
 import { cindyDeviceOptions } from '../cindyDeviceRoster';
 import type { BotProfile } from '../botStore';
 
@@ -25,6 +26,48 @@ beforeAll(() => { HTMLElement.prototype.scrollIntoView = vi.fn(); });
 afterAll(() => { HTMLElement.prototype.scrollIntoView = originalScrollIntoView; });
 
 afterEach(cleanup);
+
+it.each([true, false])(
+  'keeps the sidebar device picker on its row surface (selected=%s)',
+  async (selected) => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+    const options = cindyDeviceOptions(
+      [{ id: 'cindy-default', name: 'Cindy', status: 'active' } as BotProfile],
+      [],
+      [],
+      {},
+      'This Device',
+    );
+    render(
+      <I18nextProvider i18n={i18n}>
+        <CindyDeviceRow
+          current={options[0]}
+          options={options}
+          selected={selected}
+          subtitle="Ready"
+          timestamp="12:00"
+          onOpen={vi.fn()}
+          onSelect={vi.fn()}
+        />
+      </I18nextProvider>,
+    );
+    const trigger = screen.getByRole('combobox');
+    expect(trigger.className).toContain('text-inherit');
+    expect(trigger.className).toContain('[--button-face-bg:transparent]');
+    expect(trigger.className).toContain('[--button-face-border:transparent]');
+    expect(trigger.className).not.toContain('[--button-face-bg:var(--surface-elevated)]');
+    expect(trigger.className).not.toContain('text-[var(--text-primary)]');
+    expect(trigger.className).not.toContain(
+      'hover:[--button-face-bg:var(--button-secondary-hover)]',
+    );
+    expect(trigger.className).toContain(
+      selected
+        ? 'hover:[--button-face-bg:color-mix(in_srgb,currentColor_10%,transparent)]'
+        : 'hover:[--button-face-bg:var(--sidebar-item-hover)]',
+    );
+  },
+);
 
 describe('Cindy device menu with real translations', () => {
   it.each([
