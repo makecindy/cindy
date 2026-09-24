@@ -62,6 +62,39 @@ describe('xAI API sync through the actual picker import', () => {
       .find(m => m.id === fastId)?.defaultEnabled).toBe(true);
   });
 
+  it.each(['catalog', 'local override'] as const)('rejects stale Fast capability without an execution mapping from %s', source => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const xai = catalog.providers.find(p => p.id === 'xai')!;
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      // Older server catalogs also lack the valid 4.7 mapping; bundled fallback must still work.
+      for (const model of xai.models[agent]!) {
+        delete model.fastModelId;
+        if (source === 'catalog' && model.id.endsWith('grok-4.6')) model.supportsFastMode = true;
+      }
+    }
+    setActiveCatalog(catalog);
+    setCustomProviders([buildUserProvider({ id: 'grok-work', name: 'Work',
+      auth: { method: 'oauth', native: 'xai' }, runtimes: {} })]);
+    const members = ['xai/grok-4.6', 'xai/grok-4.7', 'xai/grok-4.7-build-fast'].map(id => ({
+      id, contextWindow: 500_000, nativeApi: 'openai-responses' as const,
+    }));
+    for (const providerId of ['xai', 'grok-work']) setXaiDiscoveredModels(members, providerId);
+    if (source === 'local override') {
+      const patches = Object.fromEntries(['xai', 'grok-work'].flatMap(providerId =>
+        ['xai/grok-4.6', 'grok-4.6'].map(id => [`${providerId}:${id}`, { base: { supportsFastMode: true } }])));
+      setLocalCatalogOverrides(sanitizeModelCatalogOverrides({ version: 1, patches }).overrides);
+    }
+    for (const providerId of ['xai', 'grok-work']) {
+      const provider = getActiveCatalog().providers.find(p => p.id === providerId)!;
+      for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+        const prefix = agent === 'pi' ? '' : 'xai/';
+        expect(provider.models[agent]!.find(m => m.id === `${prefix}grok-4.6`)!.supportsFastMode, `${providerId}/${agent}`).not.toBe(true);
+        expect(fastModelId(providerId, agent, `${prefix}grok-4.6`)).toBeUndefined();
+        expect(fastModelId(providerId, agent, `${prefix}grok-4.7`)).toBe(`${prefix}grok-4.7-build-fast`);
+      }
+    }
+  });
+
   it('never borrows Fast availability from another subscription account', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setCustomProviders([buildUserProvider({ id: 'grok-work', name: 'Work',

@@ -1826,7 +1826,9 @@ function computeMerged(): Catalog {
       agent, models?.map(model => {
         const fallback = bundledXai?.models[agent as AgentKind]?.find(m => m.id === model.id);
         const target = model.fastModelId === undefined ? fallback?.fastModelId : model.fastModelId;
-        if (target === undefined) return model;
+        if (target === undefined) {
+          return model.supportsFastMode === true ? { ...model, supportsFastMode: false } : model;
+        }
         return { ...model, fastModelId: target,
           supportsFastMode: model.supportsFastMode !== false && Boolean(target &&
             available.has(target.replace(/^xai\//, '')) &&
