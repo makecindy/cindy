@@ -126,11 +126,15 @@ function loadBashIsolationHelper(
   home: string | undefined,
 ) => Record<string, string | undefined> {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-  const start = source.indexOf('function withoutPiSecrets');
+  const constantsStart = source.indexOf('const MANAGED_RG_PATH_ENV');
+  const constantsEnd = source.indexOf('const PI_PACKAGE_MANAGEMENT_TITLE');
+  const start = source.indexOf('const SECRET_ENV_NAMES');
   const end = source.indexOf('function managedRipgrepPath');
-  if (start < 0 || end <= start) throw new Error('bash isolation helper was not found');
+  if (constantsStart < 0 || constantsEnd <= constantsStart || start < 0 || end <= start) {
+    throw new Error('bash isolation helper was not found');
+  }
   const executableSource = [
-    "const SECRET_ENV_NAMES = new Set(['PI_CODING_AGENT_DIR', 'CINDY_PI_PACKAGE_MANAGEMENT', 'CINDY_PI_BASH_PACKAGE_HOME']);",
+    source.slice(constantsStart, constantsEnd),
     source.slice(start, end),
     '(globalThis as any).isolatedBashEnvironment = isolatedBashEnvironment;',
   ].join('\n');
@@ -140,7 +144,7 @@ function loadBashIsolationHelper(
       target: ts.ScriptTarget.ES2022,
     },
   }).outputText;
-  const context: Record<string, unknown> = { path: pathImpl };
+  const context: Record<string, unknown> = { path: pathImpl, process: { env: {} } };
   runInNewContext(compiled, context);
   return context.isolatedBashEnvironment as (
     env: Record<string, string | undefined>,
@@ -1770,6 +1774,28 @@ describe('cindy-bridge extension source', () => {
       isolateWindows({ PI_CODING_AGENT_DIR: 'C:\\real' }, 'D:\\isolated').PI_CODING_AGENT_DIR,
     ).toBe('D:\\isolated');
     expect(() => isolateWindows({}, 'relative\\home')).toThrow(/unavailable/);
+  });
+
+  it.each([
+    ['POSIX', path.posix, '/isolated/pi-home'],
+    ['Windows', path.win32, 'D:\\isolated\\pi-home'],
+  ] as const)('hides Fast preferences from %s shells without mutating the runtime', (_platform, pathImpl, home) => {
+    const isolate = loadBashIsolationHelper(pathImpl);
+    const runtimeEnv = {
+      CINDY_PI_MODEL_REQUEST_PREFS_FILE: pathImpl.join(home, 'request-prefs.json'),
+      PATH: 'ordinary-shell-path',
+      SHELL_CANARY: 'preserved',
+    };
+    const shellEnv = isolate(runtimeEnv, home);
+    expect(shellEnv).not.toHaveProperty('CINDY_PI_MODEL_REQUEST_PREFS_FILE');
+    expect(shellEnv).toMatchObject({
+      PATH: runtimeEnv.PATH,
+      SHELL_CANARY: runtimeEnv.SHELL_CANARY,
+      PI_CODING_AGENT_DIR: home,
+    });
+    expect(runtimeEnv.CINDY_PI_MODEL_REQUEST_PREFS_FILE).toBe(
+      pathImpl.join(home, 'request-prefs.json'),
+    );
   });
 
   it('routes both Pi command names to the single host permission service', () => {
