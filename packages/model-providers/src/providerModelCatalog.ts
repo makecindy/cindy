@@ -130,10 +130,18 @@ export function providerPresetModelRecord(presetId: string | undefined, modelId:
 }
 
 /** Preserve the upstream adapter identity, independently of a user's connection UUID. */
-export function providerModelAdapterId(row: ProviderModelRecord): string | undefined {
-  const matches = Object.entries(PROVIDER_MODEL_CATALOG.providers).filter(([, rows]) =>
-    rows.some(candidate => candidate.id === row.id && (normalize(candidate.upstream) === normalize(row.upstream) || (candidate.upstream.includes('{') && providerEndpointBindings(candidate.upstream, row.upstream) !== null))
-      && candidate.execution.pi.api === row.execution.pi.api));
+export function providerModelAdapterId(row: ProviderModelRecord, presetId?: string): string | undefined {
+  const presetProvider = presetId ? sourceProviderForPreset(presetId) : undefined;
+  const matches = Object.entries(PROVIDER_MODEL_CATALOG.providers).filter(([provider, rows]) => {
+    const connectionRows = rows.filter(candidate => candidate.execution.pi.api === row.execution.pi.api &&
+      (normalize(candidate.upstream) === normalize(row.upstream) ||
+        (candidate.upstream.includes('{') && providerEndpointBindings(candidate.upstream, row.upstream) !== null) ||
+        (row.inheritedFrom !== undefined && provider === presetProvider)));
+    return connectionRows.some(candidate => candidate.id === row.id) ||
+      // Only the matched connection/preset lends transport identity. Manufacturer
+      // capability fallback on an unrelated relay must not lend its adapter.
+      (row.inheritedFrom !== undefined && previousModelGenerations(row.id, connectionRows, candidate => candidate.id).length > 0);
+  });
   // Duplicated subscription catalogs can share endpoints; never guess between distinct identities.
   return matches.length === 1 ? matches[0][0] : undefined;
 }

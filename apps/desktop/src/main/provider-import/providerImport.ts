@@ -635,12 +635,26 @@ function parsePayload(value: unknown): ProviderImportDraft {
     }
     const models = selected.models.map(source => {
       const model = structuredClone(source);
-      // Pi accepts minimal; fixed-protocol runtimes cannot persist that setting.
-      // Keep the shared endpoint record intact for Pi and remove an orphaned default.
-      if (agent !== 'pi' && model.reasoningEfforts) {
-        model.reasoningEfforts = model.reasoningEfforts.filter(effort => effort !== 'minimal');
-        if (model.reasoningDefaultEffort && !model.reasoningEfforts.includes(model.reasoningDefaultEffort)) {
+      // Adapt every representation before persistence; canonical metadata otherwise
+      // bypasses the legacy field validator. Keep Pi's shared endpoint record intact.
+      if (agent !== 'pi') {
+        const supported = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+        if (model.reasoningEfforts) {
+          model.reasoningEfforts = model.reasoningEfforts.filter(effort => supported.has(effort));
+        }
+        if (model.reasoningDefaultEffort != null &&
+            (!supported.has(model.reasoningDefaultEffort) ||
+              (model.reasoningEfforts && !model.reasoningEfforts.includes(model.reasoningDefaultEffort)))) {
           delete model.reasoningDefaultEffort;
+        }
+        for (const metadata of [model, model.discoveredMetadata]) {
+          if (!metadata) continue;
+          if (metadata.efforts) metadata.efforts = metadata.efforts.filter(effort => supported.has(effort));
+          if (metadata.defaultEffort != null &&
+              (!supported.has(metadata.defaultEffort) ||
+                (metadata.efforts && !metadata.efforts.includes(metadata.defaultEffort)))) {
+            delete metadata.defaultEffort;
+          }
         }
       }
       return model;

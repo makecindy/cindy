@@ -1353,10 +1353,14 @@ export function buildPiNativeProvidersFromConfigs(
       onSkip?.(cfg.id, 'native SDK requires an approved cloud endpoint');
       continue;
     }
-    const adapterIds = new Set(rt.models.flatMap(model => {
-      const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl, model.api ?? model.piApi)
-        ?? providerPresetModelRecord(rt.catalogPresetId, model.id, model.api ?? model.piApi);
-      const adapter = row ? providerModelAdapterId(row) : undefined;
+    const adapterIds = new Set(rt.models.flatMap((model, index) => {
+      const api = modelApis[index];
+      // The native ChatGPT subscription transport owns its authentication separately.
+      if (!api || api === 'openai-codex-responses') return [];
+      const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl, api)
+        ?? providerPresetModelRecord(rt.catalogPresetId, model.id, api)
+        ?? providerModelGenerationRecord(model.id, model.route?.baseUrl ?? rt.baseUrl, api, rt.catalogPresetId);
+      const adapter = row ? providerModelAdapterId(row, rt.catalogPresetId) : undefined;
       return adapter ? [adapter] : [];
     }));
     providers.push({

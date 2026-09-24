@@ -815,3 +815,32 @@ it.each([
       expect(model.reasoningDefaultEffort).toBe(agent === 'pi' ? defaultEffort : fixedDefault);
     }
   });
+
+
+it.each([
+  { efforts: ['minimal', 'low', 'ultra', 'max'], defaultEffort: 'ultra', fixed: ['low', 'max'], fixedDefault: undefined },
+  { efforts: ['minimal', 'high'], defaultEffort: 'high', fixed: ['high'], fixedDefault: 'high' },
+  { efforts: [], defaultEffort: null, fixed: [], fixedDefault: null },
+  { defaultEffort: 'minimal', fixedDefault: undefined },
+])('filters canonical imported efforts at both metadata layers: %j', ({ fixed, fixedDefault, ...metadata }) => {
+  const importId = createDraft(customPayload({ endpoints: [{ protocol: 'openai-responses',
+    baseUrl: 'https://relay.example/v1', targets: ['claude-code', 'codex', 'pi'],
+    models: [{ id: 'new-model', ...metadata, discoveredMetadata: metadata }],
+  }] }));
+  previewProviderImport(importId, SCOPE, []);
+  const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+  if (draft.kind !== 'custom') throw new Error('wrong import kind');
+  expect(validateCustomProviderConfig(draft.config)).toEqual({ ok: true });
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    const model = draft.config.runtimes[agent]!.models[0];
+    for (const layer of [model, model.discoveredMetadata!]) {
+      expect(layer.efforts).toEqual(agent === 'pi' ? metadata.efforts : fixed);
+      expect(layer.defaultEffort).toBe(agent === 'pi' ? metadata.defaultEffort : fixedDefault);
+    }
+    if (agent !== 'pi') {
+      const projected = buildUserProvider(draft.config).models[agent]![0];
+      expect(projected.efforts).not.toContain('minimal');
+      expect(projected.efforts).not.toContain('ultra');
+    }
+  }
+});

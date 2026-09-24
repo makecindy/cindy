@@ -2869,3 +2869,34 @@ it('materializes a future GPT generation with inherited parameters in native Pi'
     thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high' } });
   expect(result.providers[0]?.models[0]?.cost).toBeUndefined();
 });
+
+
+it.each([
+  ['cloudflare-ai-gateway', true],
+  ['cloudflare-ai-gateway', false],
+  ['github-copilot', true],
+  ['github-copilot', false],
+] as const)('keeps the %s adapter for future generations (preset=%s)', (adapter, withPreset) => {
+  const row = PROVIDER_MODEL_CATALOG.providers[adapter].find(model => model.id === 'claude-opus-5')!;
+  const baseUrl = row.upstream.replace('{CLOUDFLARE_ACCOUNT_ID}', 'fixture-account')
+    .replace('{CLOUDFLARE_GATEWAY_ID}', 'fixture-gateway');
+  const readKey = vi.fn(() => 'current-connection-key');
+  const result = buildPiNativeProvidersFromConfigs([{ id: 'independent-connection', name: 'Independent',
+    auth: { method: 'apiKey' }, runtimes: { pi: { baseUrl, wireProtocol: 'anthropic-messages',
+      ...(withPreset ? { catalogPresetId: adapter } : {}),
+      models: [{ id: 'claude-opus-9', api: 'anthropic-messages' }],
+    } } }], readKey);
+  expect(result.providers[0]).toMatchObject({ id: 'independent-connection', adapterProvider: adapter,
+    baseUrl, models: [{ id: 'claude-opus-9' }] });
+  expect(readKey).toHaveBeenCalledExactlyOnceWith('independent-connection', 'pi');
+  expect(Object.values(result.env)).toEqual(['current-connection-key']);
+  expect(JSON.stringify(result.providers)).not.toContain('current-connection-key');
+});
+
+it('does not borrow a provider adapter for a future generation on an unrelated relay', () => {
+  const result = buildPiNativeProvidersFromConfigs([{ id: 'unrelated-relay', name: 'Relay',
+    runtimes: { pi: { baseUrl: 'https://relay.example/v1', wireProtocol: 'anthropic-messages',
+      models: [{ id: 'claude-opus-9' }] } } }], () => 'fixture-key');
+  expect(result.providers[0]?.models[0].id).toBe('claude-opus-9');
+  expect(result.providers[0]?.adapterProvider).toBeUndefined();
+});

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { previousModelGenerations } from '../modelGeneration.js';
 import { buildUserProvider } from '../user-provider.js';
 import { BUNDLED_CATALOG } from '../builtin.js';
-import { providerModelGenerationRecord, providerModelRecord } from '../providerModelCatalog.js';
+import { providerModelGenerationRecord, providerModelRecord, providerModelAdapterId } from '../providerModelCatalog.js';
 import { parseModelsListResponse } from '../modelDiscovery.js';
 import { mergeDiscoveredRuntimeModels } from '../modelMetadataLayers.js';
 import type { ProviderRuntimeModelConfig, ProviderWireProtocol } from '../types.js';
@@ -167,4 +167,15 @@ it('preserves canonical API metadata, including explicit negative capabilities',
       supportsFastMode: false, supportsToolCalls: false, supportsImageInput: false,
       efforts: ['low', 'high'] });
   }
+});
+
+
+it('resolves inherited adapters only within a matching connection or explicit preset', () => {
+  const inherited = providerModelGenerationRecord('claude-opus-9', 'https://account.example/v1', 'anthropic-messages', 'cloudflare-ai-gateway')!;
+  expect(inherited).toBeDefined();
+  expect(providerModelAdapterId(inherited, 'cloudflare-ai-gateway')).toBe('cloudflare-ai-gateway');
+  expect(providerModelAdapterId(inherited)).toBeUndefined();
+  expect(providerModelAdapterId({ ...inherited, execution: { pi: { api: 'google-generative-ai' } } }, 'cloudflare-ai-gateway')).toBeUndefined();
+  expect(inherited.execution.pi.headers).toBeUndefined();
+  expect(inherited.cost).toBeUndefined();
 });
