@@ -6607,6 +6607,8 @@ interface ElectronAPI {
         latestVersion: string | null;
         /** 线上版本严格高于本地版本时为 true（与启动安装的保留策略同口径）。 */
         updateAvailable: boolean;
+        /** checkLatest 没读到线上清单：“无更新”无法确认，界面显示检查失败。 */
+        latestCheckFailed: boolean;
         error?: string;
       }>;
     };

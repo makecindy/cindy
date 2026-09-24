@@ -7347,6 +7347,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         version: string | null;
         latestVersion: string | null;
         updateAvailable: boolean;
+        latestCheckFailed: boolean;
         error?: string;
       }> => ipcRenderer.invoke('maker:agent:binary-version', agentKind, options),
     },
