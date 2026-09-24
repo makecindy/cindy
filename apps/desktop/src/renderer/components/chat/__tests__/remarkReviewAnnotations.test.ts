@@ -152,4 +152,20 @@ describe('hasUnconsumedReviewMarks', () => {
   it('detects residues across block-level siblings', () => {
     expect(hasUnconsumedReviewMarks(transform('{--one\n\ntwo--}'))).toBe(true);
   });
+
+  it('detects residues left inside link destinations and image alt text', () => {
+    // 折叠只处理 text 节点：标记落在 URL / alt 里既不会被消费，还会以字面量漏进
+    // href / alt（链接文字看起来没标、地址却被写坏）——与行内代码里的残留同性质。
+    expect(hasUnconsumedReviewMarks(transform('a [t](https://x/{--u--}{++v++}) b'))).toBe(true);
+    expect(hasUnconsumedReviewMarks(transform('a ![a{--l--}{++l2++}t](p.png) b'))).toBe(true);
+  });
+
+  it('is false when marks wrap a whole link instead of its destination', () => {
+    // 区域注入的外面标记形式：链接节点完整落在折叠结果里，地址字段不含标记。
+    expect(
+      hasUnconsumedReviewMarks(
+        transform('a {--[t](https://x/u)--}{++[t](https://x/v)++} b'),
+      ),
+    ).toBe(false);
+  });
 });

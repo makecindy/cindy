@@ -66,8 +66,79 @@ describe('buildMarkdownRevision', () => {
     expect(revised).toContain('{++新++}');
   });
 
-  it('falls back when the change spans an inline element', () => {
-    expect(buildMarkdownRevision('See `old` here', 'See `new` here')).toBeNull();
+  it('marks a changed inline code span as a whole (regression)', () => {
+    // 代码跨度是原子：标记包在整段外面（与 markdownMathRevision 的 markCodePiece
+    // 同纪律），不再整行回退。
+    expect(buildMarkdownRevision('See `old` here', 'See `new` here')).toBe(
+      'See {--`old`--}{++`new`++} here',
+    );
+  });
+
+  it('revises a bold-wrapped word change without falling back to the block (regression)', () => {
+    // 实机反馈：新版给关键词加粗（`（**车辆 / 人员**）`）时，词级 diff 把 `**` 的
+    // 开符 / 闭符切成独立改动片段；逐片段注入后 CommonMark 把这半对定界符配对到
+    // **标记外**的文本上，开闭标记被拆进不同容器 → 校验残留 → 整段回退成
+    // 「整段删除线 + 整段下划线」。区域注入把整段改动折成一对旧 / 新文本，
+    // 标记内容覆盖完整结构，定界符不再落进标记内部。
+    expect(
+      buildMarkdownRevision(
+        '目标（建筑 / 车辆 / 人物）面对威胁',
+        '目标（**车辆 / 人员**）面对威胁',
+      ),
+    ).toBe('目标（{--建筑 / 车辆 / 人物--}{++**车辆 / 人员**++}）面对威胁');
+  });
+
+  it('keeps a formatting-only change visible as a region revision', () => {
+    // 内容没改、只调整行内格式（加粗 / 去粗）：词级路径没有可标记的改动，但变化
+    // 不能静默（否则预览直接展示新版格式，看不出这里动过），区域注入整体标出。
+    expect(buildMarkdownRevision('见 甲乙 文档', '见 **甲乙** 文档')).toBe(
+      '见 {--甲乙--}{++**甲乙**++} 文档',
+    );
+    expect(buildMarkdownRevision('**a** b', 'a b')).toBe('{--**a**--}{++a++} b');
+  });
+
+  it('turns a plain span into a bold span as one region', () => {
+    expect(buildMarkdownRevision('a [link](u) b', 'a **link** b')).toBe(
+      'a {--[link](u)--}{++**link**++} b',
+    );
+  });
+
+  it('marks a whole link when only its destination changed', () => {
+    // 标记落进 `](...)` 的地址里既不会被折叠，又会以字面量漏进 href（链接文字
+    // 看起来没标、地址还被写坏）。区域注入对齐到完整链接跨度，整段标记。
+    expect(buildMarkdownRevision('a [t](https://x/u) b', 'a [t](https://x/v) b')).toBe(
+      'a {--[t](https://x/u)--}{++[t](https://x/v)++} b',
+    );
+    expect(buildMarkdownRevision('a ![alt](p.png) b', 'a ![alt2](p.png) b')).toBe(
+      'a {--![alt](p.png)--}{++![alt2](p.png)++} b',
+    );
+  });
+
+  it('keeps distant word-level changes precise when only one region needs merging', () => {
+    // 区域种子只看「含行内语法字符的改动片段」：同一块里与加粗无关的远端词改动
+    // 继续走词级，不会被卷进区域标记。
+    expect(
+      buildMarkdownRevision(
+        '目标（建筑 / 车辆 / 人物）说明，尾部有一个旧词。',
+        '目标（**车辆 / 人员**）说明，尾部有一个新词。',
+      ),
+    ).toBe(
+      '目标（{--建筑 / 车辆 / 人物--}{++**车辆 / 人员**++}）说明，尾部有一个{--旧--}{++新++}词。',
+    );
+  });
+
+  it('renders the region revision as ins/del around the preserved bold span', () => {
+    const revision = buildMarkdownRevision(
+      '目标（建筑 / 车辆 / 人物）面对威胁',
+      '目标（**车辆 / 人员**）面对威胁',
+    );
+    expect(revision).not.toBeNull();
+    const html = renderLikePreview(revision as string);
+    // 删除 / 新增标记被完整消费，加粗结构照旧渲染。
+    expect(html).toContain('cindy-md-diff-del');
+    expect(html).toContain('cindy-md-diff-ins');
+    expect(html).toContain('<strong>车辆 / 人员</strong>');
+    expect(html).not.toMatch(/\{\+\+|\+\+\}|\{--|--\}/);
   });
 
   it('falls back when the edit sits inside a math span', () => {
@@ -134,6 +205,10 @@ describe('buildMarkdownRevision', () => {
       ['See `old` here', 'See `new` here'],
       ['a {x} b', 'a {y} b'],
       ['- item a\n- item b', '- item a\n- item c'],
+      ['目标（建筑 / 车辆 / 人物）面对威胁', '目标（**车辆 / 人员**）面对威胁'],
+      ['见 甲乙 文档', '见 **甲乙** 文档'],
+      ['a [t](https://x/u) b', 'a [t](https://x/v) b'],
+      ['a ![alt](p.png) b', 'a ![alt2](p.png) b'],
     ];
     for (const [before, after] of cases) {
       const revision = buildMarkdownRevision(before, after);

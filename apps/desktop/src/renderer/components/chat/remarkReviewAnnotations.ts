@@ -87,6 +87,14 @@ export function collectReviewMarks(value: string): ReviewMark[] {
 }
 
 /**
+ * 折叠器「看不见」的字符串字段：链接地址 / 图片 alt / 引用标签与标题。
+ * 折叠只处理 text 节点的 value；标记落进这些属性既不会被消费，渲染时又会以
+ * 字面量漏进 href / alt（例如 `[t](https://x/{--u--}{++v++})` 的地址里带着标记），
+ * 与行内代码里的残留同性质，必须按残留处理（由校验侧回退到结构级标记 / 块级装饰）。
+ */
+const ATTRIBUTE_FIELDS = ['url', 'alt', 'label', 'identifier', 'title'] as const;
+
+/**
  * 转换后是否还有未消费的标记残留。
  * 除了 text 节点，叶节点（inlineCode / code / html / yaml 等）的 value 也要
  * 检查：标记落在行内代码里时既不会被折叠，渲染出来就是字面量，必须当作残留。
@@ -94,6 +102,10 @@ export function collectReviewMarks(value: string): ReviewMark[] {
 export function hasUnconsumedReviewMarks(node: Root | RootContent): boolean {
   const value = (node as { value?: unknown }).value;
   if (typeof value === 'string' && MARK_RESIDUE_PATTERN.test(value)) return true;
+  for (const field of ATTRIBUTE_FIELDS) {
+    const attribute = (node as unknown as Record<string, unknown>)[field];
+    if (typeof attribute === 'string' && MARK_RESIDUE_PATTERN.test(attribute)) return true;
+  }
   const children = getChildren(node);
   if (!children) return false;
   for (const child of children) {
