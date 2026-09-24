@@ -299,6 +299,8 @@ export interface AgentInputQueuedMessage {
    * 见 device-link/invoke-context 的可信度说明。
    */
   fromMobileClient?: boolean;
+  /** Main-stamped interface language for this turn. Wire text is not trusted as prompt text. */
+  uiLanguage?: string;
   /** Main-owned provenance: this queue item entered through device-link input IPC. */
   fromDeviceLinkClient?: boolean;
   /**

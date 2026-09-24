@@ -398,6 +398,32 @@ export function isCodexPaginatedRollbackUnsupportedError(error: unknown): boolea
   return /paginated threads? do(?:es)? not support thread\/rollback/i.test(message);
 }
 
+/**
+ * Codex 0.156.0 起 app-server 移除了 deprecated 的 thread/rollback(openai/codex#44915,
+ * 官方指引改用 thread/revert / thread/fork)。老客户端仍调它时 daemon 走通用未知方法
+ * 拒绝:JSON-RPC -32600 "Invalid request: unknown variant `thread/rollback`, expected
+ * one of ..."(#4994)。这类错误与分页拒绝同样意味着「原地回退不可用」,要改走
+ * thread/fork(lastTurnId) 而不是裸抛成「编辑重发失败,请重试」。
+ */
+export function isCodexRollbackMethodRemovedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return /unknown variant [`'"]?thread\/rollback[`'"]?/i.test(message);
+}
+
+/** thread/rollback 因分页线程或运行时已移除而不可用,都应改走原生 turn 边界 fork。 */
+export function isCodexRollbackUnavailableError(error: unknown): boolean {
+  return isCodexPaginatedRollbackUnsupportedError(error) || isCodexRollbackMethodRemovedError(error);
+}
+
+/**
+ * thread/rollback 在 Codex 0.156.0 被移除(openai/codex#44915)。按 initialize userAgent
+ * 门控:≥ 0.156.0 的 daemon 不再尝试该方法,直接走 fork;版本未知或更老的远端 daemon
+ * 仍先试 rollback,由 isCodexRollbackUnavailableError 兜住实际拒绝。
+ */
+function supportsCodexThreadRollback(userAgent: string | undefined): boolean {
+  return !codexUserAgentAtLeast(userAgent, [0, 156, 0]);
+}
+
 function normalizeNativeForkTurnId(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
@@ -6040,7 +6066,9 @@ export class CodexAgent extends BaseAgent {
           'memories.generate_memories': false,
           'memories.use_memories': false,
         } : {}),
-        ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig() : {}),
+        ...(permissionProfile === READONLY_REFERENCES_PERMISSION_PROFILE
+          ? readonlyReferencesConfig()
+          : {}),
         ...(reviewMode ? reviewPermissionsConfig : {}),
         // Workspace routing reloads retained config without thread/start's RPC
         // overrides (Codex 0.156+). Keep the selected permission syntax in that
@@ -14091,36 +14119,55 @@ export class CodexAgent extends BaseAgent {
           });
           return { sdkSessionId: threadId };
         }
-        log.info('commitRewindFiles ▶ thread/rollback', {
-          threadId,
-          tailTurnsToDrop,
-        });
-        assertCurrentHost('thread/rollback');
         const previousThreadId = threadId;
-        let replacementThread: ThreadRollbackResponse['thread'];
-        try {
-          const rollbackResp = await host.request<ThreadRollbackResponse>(
-            Method.ThreadRollback,
-            { threadId, numTurns: tailTurnsToDrop } as ThreadRollbackParams,
-          );
-          replacementThread = rollbackResp.thread;
-        } catch (error) {
-          if (!isCodexPaginatedRollbackUnsupportedError(error)) throw error;
-          // 分页线程(#4421):app-server 不支持按 turn 数裁剪,改用与 forkSdkSession
-          // 相同的原生边界 fork —— 目标之前最后一个已完成 turn 作 lastTurnId,
-          // thread/fork 出一条截断后的新线程并把活动线程切过去。native turn 计数
-          // 含失败/重试轮次,与可见 user 消息数不一一对应,所以边界只认宿主传来的
-          // 持久化锚点或按事件时间戳经 thread/turns/list 解析,绝不按 numTurns 数。
-          if (!supportsCodexNativeTurnFork(initResp.userAgent)) {
+        let replacementThread: ThreadRollbackResponse['thread'] | undefined;
+        // 运行时 ≥ 0.156.0 已移除 thread/rollback(#4994):不再白发一次注定 -32600 的
+        // 请求,直接走原生边界 fork。版本未知/更老的 daemon 仍先试 rollback。
+        let rollbackUnavailableReason: string | undefined = supportsCodexThreadRollback(initResp.userAgent)
+          ? undefined
+          : `thread/rollback removed in Codex app-server ${initResp.userAgent ?? 'unknown'} (0.156.0+)`;
+        if (!rollbackUnavailableReason) {
+          log.info('commitRewindFiles ▶ thread/rollback', {
+            threadId,
+            tailTurnsToDrop,
+          });
+          assertCurrentHost('thread/rollback');
+          try {
+            const rollbackResp = await host.request<ThreadRollbackResponse>(
+              Method.ThreadRollback,
+              { threadId, numTurns: tailTurnsToDrop } as ThreadRollbackParams,
+            );
+            replacementThread = rollbackResp.thread;
+          } catch (error) {
+            if (!isCodexRollbackUnavailableError(error)) throw error;
+            rollbackUnavailableReason = isCodexRollbackMethodRemovedError(error)
+              ? `thread/rollback rejected as unknown method by Codex app-server ${initResp.userAgent ?? 'unknown'}`
+              : 'paginated thread rejects thread/rollback';
+          }
+        }
+        if (!replacementThread) {
+          // 分页线程(#4421)或运行时已移除该方法(#4994):app-server 不支持按 turn 数
+          // 裁剪,改用与 forkSdkSession 相同的原生边界 fork —— 目标之前最后一个已完成
+          // turn 作 lastTurnId,thread/fork 出一条截断后的新线程并把活动线程切过去。
+          // native turn 计数含失败/重试轮次,与可见 user 消息数不一一对应,所以边界只认
+          // 宿主传来的持久化锚点或按事件时间戳经 thread/turns/list 解析,绝不按 numTurns 数。
+          //
+          // daemon 以 unknown variant 拒绝 thread/rollback 本身就证明它 ≥ 0.156.0(该方法
+          // 在此版本才被移除),原生 fork 与 thread/turns/list 必然可用;userAgent 缺失或
+          // 无法解析时不能再拿版本串否决 fork(#5002 review P1)。
+          const unavailableReason = rollbackUnavailableReason ?? 'thread/rollback unavailable';
+          const rollbackMethodRemoved = unavailableReason.includes('unknown method')
+            || unavailableReason.includes('removed in Codex');
+          if (!rollbackMethodRemoved && !supportsCodexNativeTurnFork(initResp.userAgent)) {
             throw new Error(
-              `Codex app-server ${initResp.userAgent ?? 'unknown'} rejects thread/rollback for paginated threads and predates native turn fork (0.145.0); rewind is unavailable for this thread`,
+              `Codex app-server ${initResp.userAgent ?? 'unknown'}: ${unavailableReason} and predates native turn fork (0.145.0); rewind is unavailable for this thread`,
             );
           }
           let lastTurnId = normalizeNativeForkTurnId(rewindOpts?.lastTurnId);
           if (!lastTurnId) {
-            if (!codexUserAgentAtLeast(initResp.userAgent, [0, 153, 4])) {
+            if (!rollbackMethodRemoved && !codexUserAgentAtLeast(initResp.userAgent, [0, 153, 4])) {
               throw new Error(
-                `Codex app-server ${initResp.userAgent ?? 'unknown'} rejects thread/rollback for paginated threads and cannot list native turns (0.153.4); rewind is unavailable for this thread`,
+                `Codex app-server ${initResp.userAgent ?? 'unknown'}: ${unavailableReason} and cannot list native turns (0.153.4); rewind is unavailable for this thread`,
               );
             }
             lastTurnId = await resolveForkTurnAnchor(
@@ -14129,16 +14176,17 @@ export class CodexAgent extends BaseAgent {
               rewindOpts?.forkAtTimestampMs,
             );
           }
-          log.info('commitRewindFiles ▶ thread/rollback unsupported for paginated thread; forking at native turn boundary', {
+          log.info('commitRewindFiles ▶ thread/rollback unavailable; forking at native turn boundary', {
             threadId,
             tailTurnsToDrop,
             lastTurnId,
+            reason: unavailableReason,
           });
-          assertCurrentHost('thread/fork (paginated rewind)');
+          assertCurrentHost('thread/fork (rewind)');
           const forkParams: ThreadForkParams = {
             threadId,
             lastTurnId,
-            ...(supportsCodexForkExcludeTurns(initResp.userAgent) ? { excludeTurns: true } : {}),
+            ...(rollbackMethodRemoved || supportsCodexForkExcludeTurns(initResp.userAgent) ? { excludeTurns: true } : {}),
             ...(opts.workingDir ? { cwd: opts.workingDir } : {}),
           };
           const forkResp = await host.request<ThreadForkResponse>(Method.ThreadFork, forkParams);
@@ -14464,6 +14512,14 @@ export class CodexAgent extends BaseAgent {
         // thread/rollback 没有 excludeTurns 对应物,响应仍可能携带完整历史;
         // 超限时熔断的只是这台一次性 host,活跃 session 不受影响。
         stage = 'thread-rollback';
+        if (!supportsCodexThreadRollback(initResp.userAgent)) {
+          // 0.156.0+ 已移除 thread/rollback(#4994)。走到这里只剩没有原生锚点的
+          // 尾裁(例如剥离加密 reasoning 的跨供应商 fork),daemon 会以 -32600
+          // unknown variant 拒绝;直接给出可定位的错误,子线程仍由 finally 清理。
+          throw new Error(
+            `Codex app-server ${initResp.userAgent ?? 'unknown'} removed thread/rollback (0.156.0+); cannot trim ${tailTurnsToDrop} tail turn(s) without a native turn anchor`,
+          );
+        }
         const rollbackResp = await host.request<ThreadRollbackResponse>(
           Method.ThreadRollback,
           rollbackParams,

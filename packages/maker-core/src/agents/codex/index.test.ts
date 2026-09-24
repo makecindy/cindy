@@ -4,7 +4,12 @@ import os from 'node:os';
 import { promises as fs } from 'node:fs';
 import { applyPatch, formatPatch, parsePatch, reversePatch } from 'diff';
 
-import { CodexAgent, isExactNoRolloutThreadResumeError } from './index.js';
+import {
+  CodexAgent,
+  isCodexRollbackMethodRemovedError,
+  isCodexRollbackUnavailableError,
+  isExactNoRolloutThreadResumeError,
+} from './index.js';
 import { CodexForkError } from './fork-error.js';
 import { Session } from '../../session.js';
 import { Method } from './app-server/protocol.js';
@@ -3031,6 +3036,9 @@ describe('CodexAgent reference directories', () => {
     expect(config).toMatchObject(selector);
     expect(Object.hasOwn(config, 'default_permissions')).toBe('default_permissions' in selector);
     expect(Object.hasOwn(config, 'sandbox_mode')).toBe('sandbox_mode' in selector);
+    expect(Object.hasOwn(config, `permissions.${profileName}`)).toBe(
+      extraDirs.length > 0 && permissionMode !== 'bypassPermissions',
+    );
     await handle.close();
   });
 
@@ -3105,6 +3113,7 @@ describe('CodexAgent reference directories', () => {
     expect(revokedResume.sandbox).toBe('workspace-write');
     expect(revokedResume.config).toMatchObject({ sandbox_mode: 'workspace-write' });
     expect(revokedResume.config).not.toHaveProperty('default_permissions');
+    expect(revokedResume.config).not.toHaveProperty(`permissions.${profileName}`);
     const turnCalls = host.request.mock.calls.filter(
       ([method]) => method === Method.TurnStart,
     );
@@ -24102,6 +24111,37 @@ describe('CodexAgent.forkSdkSession', () => {
     expect(host.request).toHaveBeenCalledOnce();
   });
 
+  it('rejects the rollback-only tail trim with a clear error on Codex 0.156.0 (#4994)', async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-codex-home-'));
+    try {
+      const agent = new CodexAgent(createDeps());
+      (agent as unknown as { codexHome: string }).codexHome = codexHome;
+      const sessionsDir = path.join(codexHome, 'sessions', '2026', '09', '24');
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sourceRollout = path.join(sessionsDir, 'rollout-2026-09-24-source-thread-id.jsonl');
+      await fs.writeFile(sourceRollout, `${JSON.stringify({ payload: { type: 'message', role: 'user' } })}\n`, 'utf8');
+      const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.156.0' });
+      const retire = vi.spyOn(agent as any, 'retireHostKey').mockResolvedValue(undefined);
+
+      // 剥离加密 reasoning 的跨供应商 fork 没有原生锚点,以前靠 thread/rollback 裁尾;
+      // 0.156 起该方法已移除,必须在发请求前给出可定位错误,并照常清理已创建子线程。
+      await expect(agent.forkSdkSession({
+        sourceSdkSessionId: 'source-thread-id',
+        upToMessageId: undefined,
+        stripEncryptedReasoning: true,
+        tailTurnsToDrop: 1,
+      })).rejects.toMatchObject({
+        stage: 'thread-rollback',
+        cause: expect.objectContaining({ message: expect.stringMatching(/removed thread\/rollback \(0\.156\.0\+\)/) }),
+      });
+      expect(host.request).not.toHaveBeenCalledWith(Method.ThreadRollback, expect.anything());
+      expect(host.unsubscribeThread).toHaveBeenCalledWith('fork-thread-id');
+      expect(retire).toHaveBeenCalledOnce();
+    } finally {
+      await fs.rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
   it('preserves the rollback failure when child cleanup also fails', async () => {
     const cause = new Error('rollback rejected');
     const agent = new CodexAgent(createDeps());
@@ -24790,6 +24830,143 @@ describe('CodexAgent rewind', () => {
     expect(host.request).not.toHaveBeenCalledWith(Method.ThreadFork, expect.anything());
     expect(host.request).not.toHaveBeenCalledWith(Method.ThreadTurnsList, expect.anything());
     await handle.close();
+  });
+
+  // #4994: Codex 0.156.0 移除了 thread/rollback(openai/codex#44915)。编辑重发 /
+  // 「回到此处」不能再白发一次注定 -32600 的请求,要按 userAgent 直接走原生边界 fork。
+  const ROLLBACK_REMOVED_ERROR_TEXT =
+    'codex app-server thread/rollback error -32600: Invalid request: unknown variant `thread/rollback`, expected one of `initialize`, `thread/start`, `thread/fork`, `thread/revert`, `thread/turns/list`';
+
+  it('skips thread/rollback and forks at the native turn boundary on Codex 0.156.0 (#4994)', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+      if (method === Method.ThreadTurnsList) return {
+        data: [
+          { id: 'dropped-turn', status: 'completed', startedAt: 200 },
+          { id: 'boundary-turn', status: 'completed', startedAt: 100 },
+        ], nextCursor: null,
+      };
+    }, { userAgent: 'mock-codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-rollback-removed',
+      model: 'gpt-6-luna',
+      workingDir: '/repo',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    const commitResult = await commitRewindFiles('', '', { tailTurnsToDrop: 1, forkAtTimestampMs: 150_500 });
+
+    expect(host.request).not.toHaveBeenCalledWith(Method.ThreadRollback, expect.anything());
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'start-thread-id',
+      lastTurnId: 'boundary-turn',
+      excludeTurns: true,
+      cwd: '/repo',
+    });
+    expect(commitResult).toEqual({ sdkSessionId: 'fork-thread-id' });
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fork-thread-id', expect.any(Object));
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'session_id',
+      data: 'fork-thread-id',
+      source: 'codex',
+    });
+    await handle.close();
+  });
+
+  it('forks when a daemon of unknown version rejects thread/rollback as an unknown method (#4994)', async () => {
+    const agent = new CodexAgent(createDeps());
+    // 远端 / 版本串不可解析的 daemon 仍先试 rollback;真实 0.156 拒绝文本必须被识别为
+    // 「不可用」而不是裸抛。
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+    }, { userAgent: 'mock-codex/0.153.4' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-rollback-unknown-variant',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 2, lastTurnId: 'persisted-boundary' }))
+      .resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadRollback, {
+      threadId: 'start-thread-id',
+      numTurns: 2,
+    });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
+      threadId: 'start-thread-id', lastTurnId: 'persisted-boundary',
+    }));
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fork-thread-id', expect.any(Object));
+    await handle.close();
+  });
+
+  it('forks with a persisted anchor when a daemon without a parseable version rejects thread/rollback as removed (#5002 P1)', async () => {
+    const agent = new CodexAgent(createDeps());
+    // userAgent 无版本串:版本门控无法判断 fork 能力,但 unknown variant 拒绝已证明
+    // daemon ≥ 0.156.0,有持久化锚点时必须走 fork 而不是报 rewind unavailable。
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+    }, { userAgent: 'codex-remote' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-rollback-removed-unknown-ua',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1, lastTurnId: 'persisted-boundary' }))
+      .resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'start-thread-id',
+      lastTurnId: 'persisted-boundary',
+      excludeTurns: true,
+      cwd: '/repo',
+    });
+    await handle.close();
+  });
+
+  it('resolves the boundary via thread/turns/list when an unversioned daemon has removed thread/rollback (#5002 P1)', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+      if (method === Method.ThreadTurnsList) return {
+        data: [{ id: 'boundary-turn', status: 'completed', startedAt: 100 }], nextCursor: null,
+      };
+    }, { userAgent: 'codex-remote' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-rollback-removed-unknown-ua-list',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1, forkAtTimestampMs: 150_500 }))
+      .resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadTurnsList, expect.objectContaining({ threadId: 'start-thread-id' }));
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({ lastTurnId: 'boundary-turn' }));
+    await handle.close();
+  });
+
+  it('classifies the 0.156 unknown-variant rejection as rollback unavailable (#4994)', () => {
+    expect(isCodexRollbackMethodRemovedError(new Error(ROLLBACK_REMOVED_ERROR_TEXT))).toBe(true);
+    expect(isCodexRollbackUnavailableError(new Error(ROLLBACK_REMOVED_ERROR_TEXT))).toBe(true);
+    expect(isCodexRollbackUnavailableError(new Error('paginated threads do not support thread/rollback'))).toBe(true);
+    expect(isCodexRollbackMethodRemovedError(new Error('codex app-server thread/rollback error -32000: thread not found'))).toBe(false);
+    expect(isCodexRollbackUnavailableError(new Error('unknown variant `thread/fork`'))).toBe(false);
   });
 
   it('re-registers proxy developer instructions for the replacement rollback thread', async () => {

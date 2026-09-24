@@ -71,6 +71,8 @@
     "offerExpired": "Codex 重置凭证已失效，请刷新配额后重新确认。",
     "preconditionFailed": "操作条件已变化，请刷新后重新确认。",
     "transient": "网络或远程电脑暂时不可用，可以稍后重新同步。",
-    "callFailed": "远程调用失败，可以稍后重试。（{{error}}）"
+    "callFailed": "远程调用没有完成。请稍后重试。",
+    "unclassified": "这个操作没有完成。请稍后重试。",
+    "notFound": "要操作的内容已经不存在。请回到列表刷新后再试。"
   }
 }

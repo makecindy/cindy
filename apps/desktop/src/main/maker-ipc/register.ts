@@ -1082,6 +1082,13 @@ import {
   stampMobileClientOrigin,
   type MainOwnedInputBoundaryStamp,
 } from './mobileClientPromptNote.js';
+import { getResolvedMainLocale } from '../i18n.js';
+import {
+  buildUiLanguageErrorNote,
+  readClaimedUiLanguage,
+  stampTurnUiLanguage,
+  turnUiLanguageFromSendOpts,
+} from './uiLanguageErrorNote.js';
 import {
   assertResolveInteractionOrigin,
   isPluginSetupInteractionDecision,
@@ -12957,6 +12964,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       signal?: AbortSignal;
       /** coordinator 从队列项透传的手机来源(main 构造,非 wire 输入)。 */
       fromMobileClient?: boolean;
+      uiLanguage?: string;
       expectedClearBoundaryMs?: number | null;
       expectedInputGeneration?: number;
       expectedTurnSession?: object;
@@ -13041,9 +13049,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
         ? buildMobileClientPromptNote()
         : null;
-    const steerPayload = steerNote
+    const withSteerNote = steerNote
       ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerNote)
       : normalized;
+    const steerLanguageNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+      ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()))
+      : null;
+    const steerPayload = steerLanguageNote
+      ? prependNoteToWireUserMessage(withSteerNote as HandoffWireMessage, steerLanguageNote)
+      : withSteerNote;
     try {
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);
@@ -14704,6 +14718,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (normalized.durableDelivery !== true) delete normalized.durableDelivery;
     // Only Main-created welcomes and restored host snapshots may carry this policy.
     delete normalized.toolsDisabled;
+    delete normalized.uiLanguage;
     const refs = requireSessionRefs(normalized.sessionRefs);
     if (!isDeviceLinkInvoke()) {
       // preload/renderer 不属于可信边界，不能直接注入历史正文。
@@ -15127,18 +15142,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrentInputGeneration();
         // 手机来源在**入队这一刻**盖章:drain 派发时已脱离本 invoke 的 async context。
         // 无条件覆盖 —— item 来自 wire,客户端自填的 fromMobileClient 一律不生效。
-        const queued = stampTrustedDeviceLinkQueuedOrigin(
-          stampTrustedDesktopQueuedOrigin(
-            stampMobileClientOrigin(
-              await hydrateQueuedAgentReferences(queuedWithAttachments, {
-                isSessionTurnRunning: (targetSessionId) =>
-                  getMakerIfReady()?.getSession(targetSessionId)?.isTurnRunning() ?? false,
-              }),
-              isMobileControllerInvoke(),
+        const queued = stampTurnUiLanguage(
+          stampTrustedDeviceLinkQueuedOrigin(
+            stampTrustedDesktopQueuedOrigin(
+              stampMobileClientOrigin(
+                await hydrateQueuedAgentReferences(queuedWithAttachments, {
+                  isSessionTurnRunning: (targetSessionId) =>
+                    getMakerIfReady()?.getSession(targetSessionId)?.isTurnRunning() ?? false,
+                }),
+                isMobileControllerInvoke(),
+              ),
+              deviceLinkInvoke,
             ),
             deviceLinkInvoke,
           ),
-          deviceLinkInvoke,
+          {
+            remote: deviceLinkInvoke,
+            claimed: readClaimedUiLanguage(item),
+            fallback: getResolvedMainLocale(),
+          },
         );
         assertCurrentInputGeneration();
         const commitAutoTitle = await prepareDeviceLinkAutoTitle(sid, queued);
@@ -15357,18 +15379,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const queuedWithAttachments = materialized.item as AgentInputQueuedMessage;
         assertCurrentInputGeneration();
         // 与 enqueue 同:steer 投递也在本 invoke 的 async context 之外发生。
-        const queued = stampTrustedDeviceLinkQueuedOrigin(
-          stampTrustedDesktopQueuedOrigin(
-            stampMobileClientOrigin(
-              await hydrateQueuedAgentReferences(queuedWithAttachments, {
-                isSessionTurnRunning: (targetSessionId) =>
-                  getMakerIfReady()?.getSession(targetSessionId)?.isTurnRunning() ?? false,
-              }),
-              isMobileControllerInvoke(),
+        const queued = stampTurnUiLanguage(
+          stampTrustedDeviceLinkQueuedOrigin(
+            stampTrustedDesktopQueuedOrigin(
+              stampMobileClientOrigin(
+                await hydrateQueuedAgentReferences(queuedWithAttachments, {
+                  isSessionTurnRunning: (targetSessionId) =>
+                    getMakerIfReady()?.getSession(targetSessionId)?.isTurnRunning() ?? false,
+                }),
+                isMobileControllerInvoke(),
+              ),
+              deviceLinkInvoke,
             ),
             deviceLinkInvoke,
           ),
-          deviceLinkInvoke,
+          {
+            remote: deviceLinkInvoke,
+            claimed: readClaimedUiLanguage(item),
+            fallback: getResolvedMainLocale(),
+          },
         );
         assertCurrentInputGeneration();
         // 插话也补起名:远控用户完全可能趁这一轮还在跑就写下第一句话,只认入队的话
@@ -15665,10 +15694,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       try {
         const queuedWithAttachments = materialized.item as AgentInputQueuedMessage;
         assertCurrentInputGeneration();
-        const queued = await hydrateQueuedAgentReferences(queuedWithAttachments, {
-          isSessionTurnRunning: (targetSessionId) =>
-            getMakerIfReady()?.getSession(targetSessionId)?.isTurnRunning() ?? false,
-        });
+        const queued = stampTurnUiLanguage(
+          await hydrateQueuedAgentReferences(queuedWithAttachments, {
+            isSessionTurnRunning: (targetSessionId) =>
+              getMakerIfReady()?.getSession(targetSessionId)?.isTurnRunning() ?? false,
+          }),
+          {
+            remote,
+            claimed: readClaimedUiLanguage(item),
+            fallback: getResolvedMainLocale(),
+          },
+        );
         assertCurrentInputGeneration();
         // 旧 device-link update-content 调用没有 side-channel sessionRefs；显式
         // 传空数组，避免 updateQueuedMessageContent 从完整文本重新解析控制端坐标。
