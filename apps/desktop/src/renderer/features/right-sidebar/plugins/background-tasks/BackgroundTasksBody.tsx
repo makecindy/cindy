@@ -377,7 +377,7 @@ function TaskRow({
   }, [item, sessionId, onOpenWorkflow]);
 
   return (
-    <div className="flex items-start gap-1">
+    <div className="flex items-center gap-1">
       <button
         type="button"
         onClick={clickable ? handleClick : undefined}
@@ -412,14 +412,12 @@ function TaskRow({
         </span>
       </button>
       {canStopItem(item, sessionId) && sessionId && item.update?.taskId && (
-        <div className="pt-1.5">
-          <StopButton
-            sessionId={sessionId}
-            taskId={item.update.taskId}
-            onStopFailed={handleStopFailed}
-            onStopStart={handleStopStart}
-          />
-        </div>
+        <StopButton
+          sessionId={sessionId}
+          taskId={item.update.taskId}
+          onStopFailed={handleStopFailed}
+          onStopStart={handleStopStart}
+        />
       )}
     </div>
   );
