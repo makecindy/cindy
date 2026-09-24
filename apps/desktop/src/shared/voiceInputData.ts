@@ -103,6 +103,15 @@ export interface VoiceInputSettings {
    * 在当时的默认值上,以后改默认值也带不动他们,「恢复默认」也失去意义。
    */
   dictionarySyncEnabledOverride?: boolean | null;
+  /**
+   * 是否允许在输入框里按住鼠标左键呼出语音输入(**有效值** = 默认 + 用户 override)。
+   * 输入框不显示任何提示,只在设置里打开后生效。
+   *
+   * 读这个字段即可;写请走 {@link composerLongPressEnabledOverride}。
+   */
+  composerLongPressEnabled: boolean;
+  /** 用户对上面那个开关的显式选择;`undefined` = 从未自定义,跟随当前版本默认值。 */
+  composerLongPressEnabledOverride?: boolean | null;
   dictionaryEntries: VoiceInputDictionaryEntry[];
   dictionaryCandidates: VoiceInputDictionaryCandidate[];
   suppressedAutomaticDictionaryTexts: string[];
@@ -127,6 +136,12 @@ export type VoiceInputDictionaryLearningEvidence = Pick<
 
 /** 词典跨设备同步的系统默认值。改这里即可让未自定义的用户随版本跟随。 */
 export const DEFAULT_DICTIONARY_SYNC_ENABLED = true;
+
+/**
+ * 长按输入框语音输入的系统默认值。默认关闭:按住鼠标通常是在选字,只有用户主动
+ * 打开才改变这个手势的含义。
+ */
+export const DEFAULT_COMPOSER_LONG_PRESS_ENABLED = false;
 
 export const MAX_VOICE_INPUT_REFINEMENT_INSTRUCTIONS_CHARS = 1_000;
 export const MAX_VOICE_INPUT_DICTIONARY_ENTRIES = 1_000;
@@ -473,6 +488,7 @@ export function getDefaultVoiceInputSettings(
     autoDictionaryEnabled: true,
     // 有效值 = 默认;override 缺省不写(见 dictionarySyncEnabledOverride 注释)。
     dictionarySyncEnabled: DEFAULT_DICTIONARY_SYNC_ENABLED,
+    composerLongPressEnabled: DEFAULT_COMPOSER_LONG_PRESS_ENABLED,
     dictionaryEntries: [],
     dictionaryCandidates: [],
     suppressedAutomaticDictionaryTexts: [],
@@ -529,6 +545,7 @@ export function normalizeVoiceInputSettings(
     // 区分「用户选的」和「当时的默认」——按规则 §3 只做一次性兼容:仅当它与当前
     // 默认不同时才当作用户的显式选择,相同则视为未自定义。
     ...normalizeDictionarySyncOverride(candidate),
+    ...normalizeComposerLongPressOverride(candidate),
     dictionaryEntries: normalizeVoiceInputDictionaryEntries(
       candidate.dictionaryEntries ?? (candidate as { customDictionary?: unknown }).customDictionary,
     ),
@@ -926,6 +943,21 @@ function normalizeDictionarySyncOverride(
 function legacyDictionarySyncOverride(value: unknown): boolean | undefined {
   if (typeof value !== 'boolean') return undefined;
   return value === DEFAULT_DICTIONARY_SYNC_ENABLED ? undefined : value;
+}
+
+/**
+ * 长按输入框开关的 override 归一。只认 override 字段:持久化里的有效值只是投影,
+ * 读它等于把写盘那一刻的默认值当成用户选择。该开关从一开始就带 override,没有
+ * 需要兼容的历史格式。
+ */
+function normalizeComposerLongPressOverride(
+  candidate: Partial<VoiceInputSettings>,
+): Pick<VoiceInputSettings, 'composerLongPressEnabled'> & { composerLongPressEnabledOverride?: boolean } {
+  const override = candidate.composerLongPressEnabledOverride;
+  if (typeof override !== 'boolean') {
+    return { composerLongPressEnabled: DEFAULT_COMPOSER_LONG_PRESS_ENABLED };
+  }
+  return { composerLongPressEnabled: override, composerLongPressEnabledOverride: override };
 }
 
 function isVoiceInputLanguage(value: unknown): value is VoiceInputLanguage {

@@ -7,6 +7,7 @@ import {
   useSyncExternalStore,
   useLayoutEffect,
   type DragEvent as ReactDragEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
   type ReactNode,
@@ -392,6 +393,10 @@ import {
   type VoiceInputShortcut,
 } from '@/voice-input/shortcut';
 import { VoiceInputPointerHintLayer } from '@/voice-input/VoiceInputPointerHintLayer';
+import {
+  createComposerLongPressVoiceGesture,
+  type ComposerLongPressVoiceGesture,
+} from '@/voice-input/composerLongPressGesture';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
 import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/composerMentionDrag';
 import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGesture';
@@ -3458,6 +3463,64 @@ export function ChatInput({
       window.removeEventListener('keyup', handleKeyUp, true);
       window.removeEventListener('blur', handleWindowBlur);
     };
+  }, []);
+
+  // 长按输入框语音输入(语音设置里打开,默认关闭):输入框不加任何提示,按住鼠标
+  // 左键不动片刻即开始录音,松开结束。按下由输入框的 onMouseDown 接入;移动/松开
+  // 挂在 window 上,指针拖出输入框甚至窗口也能收到松开。
+  const composerLongPressVoiceInputEnabled = voiceInputSettings.composerLongPressEnabled;
+  const composerLongPressGestureRef = useRef<ComposerLongPressVoiceGesture | null>(null);
+  useEffect(() => {
+    if (!composerLongPressVoiceInputEnabled) return;
+    const gesture = createComposerLongPressVoiceGesture({
+      getState: () => voiceInputStateRef.current,
+      start: () => handleVoiceInputStartRef.current(),
+      stop: () => voiceInputStopRef.current(),
+    });
+    composerLongPressGestureRef.current = gesture;
+    const handleMouseMove = (event: MouseEvent) => {
+      // 按住录音时鼠标还是按下的,Chromium 会拿 mousemove 继续拖选文字;取消默认
+      // 行为,说话时挪动鼠标不会拉出一片选区。
+      if (gesture.isHolding()) {
+        event.preventDefault();
+        return;
+      }
+      gesture.move({ x: event.clientX, y: event.clientY });
+    };
+    const handleRelease = () => gesture.release();
+    window.addEventListener('mousemove', handleMouseMove, true);
+    window.addEventListener('mouseup', handleRelease, true);
+    // 按在已选中的文字上会进入原生拖拽,之后不再有 mousemove / mouseup。
+    window.addEventListener('dragstart', handleRelease, true);
+    window.addEventListener('blur', handleRelease);
+    return () => {
+      if (composerLongPressGestureRef.current === gesture) {
+        composerLongPressGestureRef.current = null;
+      }
+      gesture.dispose();
+      window.removeEventListener('mousemove', handleMouseMove, true);
+      window.removeEventListener('mouseup', handleRelease, true);
+      window.removeEventListener('dragstart', handleRelease, true);
+      window.removeEventListener('blur', handleRelease);
+    };
+  }, [composerLongPressVoiceInputEnabled]);
+
+  const handleComposerLongPressMouseDown = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const gesture = composerLongPressGestureRef.current;
+    if (!gesture) return;
+    // 只认单击左键:修饰键点击是扩选/多光标,双击后按住是按词拖选。
+    if (event.button !== 0 || event.detail > 1) return;
+    if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (disabledRef.current || composerMutationLockedRef.current) return;
+    const editorInstance = editorRef.current;
+    if (!editorInstance || editorInstance.isDestroyed) return;
+    const editorElement = editorInstance.view.dom;
+    const target = event.target;
+    if (!(target instanceof Element) || !editorElement.contains(target)) return;
+    // 提及 / 粘贴文本 / 引用这类 chip 自带点击与拖拽行为,不在上面起手。
+    const atom = target.closest('[contenteditable="false"]');
+    if (atom && atom !== editorElement && editorElement.contains(atom)) return;
+    gesture.press({ x: event.clientX, y: event.clientY });
   }, []);
 
   useEffect(() => {
@@ -8584,6 +8647,7 @@ export function ChatInput({
                 className="relative w-full"
                 // 推荐词生效时由 CSS 关掉原生 placeholder,避免两行字叠在一起。
                 data-recommendation-active={showRecommendationOverlay ? 'true' : undefined}
+                onMouseDown={handleComposerLongPressMouseDown}
               >
                 <EditorContent
                   editor={editor}
