@@ -13,6 +13,7 @@ afterAll(() => { HTMLElement.prototype.scrollIntoView = originalScrollIntoView; 
 
 const navigate = vi.fn();
 const deviceData = vi.hoisted(() => ({
+  pathname: '/bots/bot-1/session/sess-1',
   local: [] as import('../botStore').BotProfile[],
   remote: [] as import('../remoteBotRoster').RemoteBot[],
 }));
@@ -25,7 +26,7 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('react-router-dom', () => ({
   useNavigate: () => navigate,
-  useLocation: () => ({ pathname: '/bots/bot-1/session/sess-1', search: '' }),
+  useLocation: () => ({ pathname: deviceData.pathname, search: '' }),
 }));
 vi.mock('../feature-context', () => ({ useRegisterContentHeader: () => undefined }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span data-testid="bot-avatar" /> }));
@@ -48,6 +49,7 @@ afterEach(() => {
   navigate.mockClear();
   deviceData.local = [];
   deviceData.remote = [];
+  deviceData.pathname = '/bots/bot-1/session/sess-1';
 });
 
 describe('BotSessionContentHeader', () => {
@@ -69,20 +71,22 @@ describe('BotSessionContentHeader', () => {
     expect(view.container.innerHTML).toBe(originalHeader);
   });
 
-  it('keeps the static device label and read-only header for a sole remote Cindy', () => {
+  it('keeps the device label and opens settings for a sole remote Cindy', () => {
     deviceData.remote = [remoteCindy];
+    deviceData.pathname = '/bots/remote/cloud/cindy-default';
     render(<BotSessionContentHeader bot={remoteCindy} />);
     expect(screen.queryByRole('combobox', { name: 'bots.devicePicker.switchDevice' })).toBeNull();
     expect(screen.getByText('Cloud')).toBeTruthy();
-    expect(screen.getAllByRole('button')).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'Cindy' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getAllByRole('button')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Cindy' }));
+    expect(navigate).toHaveBeenCalledWith('/bots/remote/cloud/cindy-default?settings=1');
   });
 
   it('offers the same device switch in a remote Cindy header and returns to the local route', async () => {
     deviceData.local = [localCindy];
     deviceData.remote = [remoteCindy];
     render(<BotSessionContentHeader bot={deviceData.remote[0]} />);
-    expect(screen.queryByRole('button', { name: 'bots.settings' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'bots.settings' })).toBeTruthy();
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'bots.devicePicker.switchDevice' }), { key: 'ArrowDown' });
     fireEvent.click(await screen.findByRole('option', { name: /bots.devicePicker.local/ }));
     expect(navigate).toHaveBeenCalledWith('/bots/local-cindy');
@@ -112,10 +116,16 @@ describe('BotSessionContentHeader', () => {
     expect(screen.getAllByRole('button')).toHaveLength(2);
   });
 
-  it('keeps remote teammate identity read-only without local settings or routine controls', () => {
+  it('opens settings on the remote route from both entry points while retaining the device label', () => {
+    deviceData.pathname = '/bots/remote/remote-1/bot-1';
     render(<BotSessionContentHeader bot={{ ...bot, deviceId: 'remote-1', deviceName: 'Office' }} />);
-    expect(screen.getByRole('button', { name: '小可' }).hasAttribute('disabled')).toBe(true);
-    expect(screen.queryByRole('button', { name: 'bots.settings' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '小可' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settings' }));
+    expect(navigate).toHaveBeenCalledTimes(2);
+    expect(navigate.mock.calls).toEqual([
+      ['/bots/remote/remote-1/bot-1?settings=1'],
+      ['/bots/remote/remote-1/bot-1?settings=1'],
+    ]);
     expect(screen.queryByRole('button', { name: 'routines.title' })).toBeNull();
     expect(screen.getByText('Office')).toBeTruthy();
   });
@@ -125,8 +135,8 @@ describe('BotSessionContentHeader', () => {
     const className = screen.getByLabelText('bots.settings').className;
     expect(className).toMatch(/text-\[var\(--text-tertiary\)\]/);
     expect(className).toMatch(/hover:bg-\[var\(--surface-hover\)\]/);
-    // 无渐变、无阴影;圆角走 8px 内控件档。
+    // Header action controls follow the current pill-first design rules.
     expect(className).not.toMatch(/shadow|gradient/);
-    expect(className).toMatch(/rounded-lg/);
+    expect(className).toMatch(/rounded-full/);
   });
 });

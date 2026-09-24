@@ -31,6 +31,8 @@ vi.mock('../botPronounContext', () => ({
   useBotTranslation: () => ({ t: (key: string) => key }),
   BotPronounProvider: ({ children }: { children: ReactNode }) => children,
 }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [{ id: 'remote-bot', deviceId: 'other-mac', name: 'Remote' }] }));
+vi.mock('../RemoteBotSettings', () => ({ RemoteBotSettings: ({ bot }: { bot: { deviceId: string } }) => <div data-testid="remote-settings">{bot.deviceId}</div> }));
 vi.mock('../botStore', () => ({
   useBotProfiles: () => [
     { id: 'bot-1', name: 'Filo', status: 'active', sessions: [], capabilities: {}, skills: [] },
@@ -194,4 +196,10 @@ describe('BotSettingsDrawer', () => {
     expect(screen.getByTestId('location').textContent).toBe('/bots/bot-1/session/chat-1');
     expect(screen.getByTestId('chat-underlay')).toBeTruthy();
   });
+});
+
+it('opens remote settings for the route device instead of searching the local bot store', () => {
+  render(<RouterProvider router={createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], { initialEntries: ['/bots/remote/other-mac/remote-bot?settings=1'] })} />);
+  expect(screen.getByTestId('remote-settings').textContent).toBe('other-mac');
+  expect(screen.queryByTestId('simple-bot-settings')).toBeNull();
 });
