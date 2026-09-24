@@ -94,6 +94,15 @@ describe('new model generation defaults', () => {
     expect(previousModelGenerations('qwen4-30b', ['qwen3-235b', 'qwen3-30b'], id => id)).toEqual(['qwen3-30b']);
   });
 
+  it('normalizes long trailing slashes without treating internal slashes as the same endpoint', () => {
+    const endpoint = 'https://api.openai.com/v1';
+    const slashes = '/'.repeat(100_000);
+    const source = providerModelRecord('gpt-5.6-sol', endpoint, 'openai-responses');
+    expect(source).toBeDefined();
+    expect(providerModelRecord('gpt-5.6-sol', ` ${endpoint}${slashes} `, 'openai-responses')).toBe(source);
+    expect(providerModelRecord('gpt-5.6-sol', `${endpoint}${slashes}other`, 'openai-responses')).toBeUndefined();
+  });
+
   it('reuses serializer mappings without copying the predecessor identity, prices, endpoint or headers', () => {
     const source = providerModelRecord('gpt-5.6-sol', 'https://api.openai.com/v1', 'openai-responses')!;
     const inherited = providerModelGenerationRecord('gpt-9-sol', 'https://relay.example/v1', 'openai-responses')!;

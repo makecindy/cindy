@@ -57,7 +57,12 @@ for (const [provider, declaration] of Object.entries(interfaceModels)) {
 
 const byEndpointAndId = new Map<string, ProviderModelRecord[]>();
 const apisByEndpoint = new Map<string, Set<string>>();
-const normalize = (url: string) => url.trim().replace(/\/+$/, "");
+const normalize = (url: string) => {
+  const trimmed = url.trim();
+  let end = trimmed.length;
+  while (end > 0 && trimmed.charCodeAt(end - 1) === 47) end--;
+  return trimmed.slice(0, end);
+};
 for (const rows of Object.values(PROVIDER_MODEL_CATALOG.providers)) {
   for (const row of rows) {
     const endpoint = normalize(row.upstream);
