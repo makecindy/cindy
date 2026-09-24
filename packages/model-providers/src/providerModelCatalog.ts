@@ -113,7 +113,11 @@ export function providerModelGenerationRecord(modelId: string, upstream: string,
     .filter(row => row.execution.pi.api === api);
   const presetRows = presetId ? (PROVIDER_MODEL_CATALOG.providers[sourceProviderForPreset(presetId)] ?? [])
     .filter(row => row.execution.pi.api === api) : [];
-  const previous = previousModelGenerations(modelId, [...manufacturerRows, ...presetRows, ...endpointRows], row => row.id).at(-1);
+  const candidates = [...manufacturerRows, ...presetRows, ...endpointRows];
+  // A relay endpoint mismatch does not make a known model a new generation.
+  // Reuse its own same-protocol adapter before considering older models.
+  const previous = candidates.filter(row => row.id === modelId).at(-1)
+    ?? previousModelGenerations(modelId, candidates, row => row.id).at(-1);
   if (!previous) return undefined;
   const { cost: _cost, execution, ...metadata } = previous;
   const { headers: _headers, ...parameters } = execution.pi;

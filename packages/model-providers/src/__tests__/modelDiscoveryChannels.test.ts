@@ -22,6 +22,25 @@ describe('shared provider discovery', () => {
     }
   });
 
+  it('uses max-only discovery as the first working window, ahead of inherited defaults', () => {
+    const discovered = parseModelsListResponse({ data: [{ id: 'gpt-9-sol', max_context_window: 32000 }] })!;
+    for (const models of [discovered, mergeDiscoveredRuntimeModels([], discovered)]) {
+      for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+        const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+          [agent]: { baseUrl: 'https://relay.example/v1', wireProtocol: 'openai-responses', models },
+        } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+        expect(provider.models[agent]?.[0]).toMatchObject({
+          contextWindow: 32000, contextWindowMax: 32000, contextWindowVerified: true,
+        });
+      }
+    }
+    const saved = mergeDiscoveredRuntimeModels([], discovered);
+    const refreshed = mergeDiscoveredRuntimeModels(saved, parseModelsListResponse({ data: [
+      { id: 'gpt-9-sol', max_context_window: 64000 },
+    ] })!);
+    expect(refreshed[0].discoveredMetadata).toMatchObject({ contextWindow: 32000, contextWindowMax: 64000 });
+  });
+
   it('imports Vercel token prices, output capacity, image inputs and declared effort levels', () => {
     const models = parseModelsListResponse({ data: [{ id: 'vendor/new', name: 'New', type: 'language',
       context_window: 128000, max_tokens: 32000,

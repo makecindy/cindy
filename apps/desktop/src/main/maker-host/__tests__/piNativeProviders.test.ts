@@ -408,9 +408,9 @@ describe('buildPiNativeProvidersFromConfigs', () => {
 
   it.each([
     { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses' as const, expected: true },
-    { baseUrl: 'https://private.example/v1', wireProtocol: 'openai-responses' as const, expected: false },
+    { baseUrl: 'https://private.example/v1', wireProtocol: 'openai-responses' as const, expected: true },
     { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-chat' as const, expected: false },
-  ])('Astra API metadata requires the matching endpoint and protocol: $baseUrl $wireProtocol', ({ baseUrl, wireProtocol, expected }) => {
+  ])('Astra adapter metadata follows exact identity and protocol, while prices stay route-scoped: $baseUrl $wireProtocol', ({ baseUrl, wireProtocol, expected }) => {
     const { providers } = buildPiNativeProvidersFromConfigs([{
       id: 'manual-openai', name: 'Manual OpenAI', auth: { method: 'apiKey' },
       runtimes: { pi: piRuntime({ baseUrl, wireProtocol, models: [{ id: 'gpt-6-astra', name: 'Astra' }] }) },
@@ -420,8 +420,12 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       expect(model).toMatchObject({
         contextWindow: 1_050_000, maxTokens: 128_000, reasoning: true,
         input: ['text', 'image'], thinkingLevelMap: { off: 'low', max: 'max' },
-        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
       });
+      if (baseUrl === 'https://api.openai.com/v1') {
+        expect(model?.cost).toEqual({ input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 });
+      } else {
+        expect(model?.cost).toBeUndefined();
+      }
       expect(model?.baseUrl).toBeUndefined();
     } else {
       expect(model?.thinkingLevelMap).toBeUndefined();
@@ -2597,7 +2601,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[0].models[0]).toEqual({
       id,
       name,
-      contextWindow: undefined,
+      contextWindow: id === 'deepseek-v4-pro' ? 1_000_000 : undefined,
+      ...(id === 'deepseek-v4-pro' ? { maxTokens: 384_000, input: ['text'] } : {}),
       ...(visual ? { input: ['text', 'image'] } : {}),
       reasoning: true,
       thinkingLevelMap: {
@@ -2608,8 +2613,13 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         xhigh: null,
         max: 'max',
       },
-      // 显式声明能力但无同源元数据,Chat Completions 默认收敛 system role(#3832)。
-      compat: { supportsDeveloperRole: false },
+      // Exact manufacturer adapters apply to compatible relays; unknown
+      // models retain the Chat Completions system-role fallback.
+      compat: id === 'deepseek-v4-pro' ? {
+        supportsDeveloperRole: false, supportsStore: false,
+        maxTokensField: 'max_tokens', requiresReasoningContentOnAssistantMessages: true,
+        thinkingFormat: 'deepseek',
+      } : { supportsDeveloperRole: false },
     });
   });
 });

@@ -147,6 +147,19 @@ describe('new model generation defaults', () => {
     expect(providerModelRecord('gpt-5.6-sol', `${endpoint}${slashes}other`, 'openai-responses')).toBeUndefined();
   });
 
+  it('uses the exact manufacturer adapter before a predecessor on compatible relays', () => {
+    const exact = providerModelRecord('gpt-5.4', 'https://api.openai.com/v1', 'openai-responses')!;
+    expect(exact).toBeDefined();
+    const relay = providerModelGenerationRecord('gpt-5.4', 'https://relay.example/v1', 'openai-responses')!;
+    const { headers: _headers, ...parameters } = exact.execution.pi;
+    expect(relay.inheritedFrom).toBe('gpt-5.4');
+    expect(relay.execution.pi).toEqual(parameters);
+    expect(relay.upstream).toBe('https://relay.example/v1');
+    expect(relay.cost).toBeUndefined();
+    expect(relay.execution.pi.headers).toBeUndefined();
+    expect(providerModelGenerationRecord('gpt-5.4', 'https://relay.example/v1', 'anthropic-messages')).toBeUndefined();
+  });
+
   it('reuses serializer mappings without copying the predecessor identity, prices, endpoint or headers', () => {
     const source = providerModelRecord('gpt-5.6-sol', 'https://api.openai.com/v1', 'openai-responses')!;
     const inherited = providerModelGenerationRecord('gpt-9-sol', 'https://relay.example/v1', 'openai-responses')!;

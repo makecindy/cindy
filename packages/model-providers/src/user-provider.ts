@@ -338,6 +338,10 @@ function toCatalogModel(
     ...(supportsFastMode ? { supportsFastMode: true } : {}),
   };
   const user = runtimeUserModelMetadata(m);
+  const live = m.discoveredMetadata?.contextWindow === undefined &&
+    m.discoveredMetadata?.contextWindowMax !== undefined
+    ? { ...m.discoveredMetadata, contextWindow: m.discoveredMetadata.contextWindowMax }
+    : m.discoveredMetadata;
   const resolved =
     (modelRegistry?.schemaVersion ?? 0) >= 4 ||
     m.discoveredMetadata ||
@@ -346,7 +350,7 @@ function toCatalogModel(
           modelRegistry ?? undefined,
           metadataProviderId,
           m.id,
-          m.discoveredMetadata,
+          live,
           pickModelMetadata(user),
           agent,
           providerDefaults,
@@ -362,7 +366,7 @@ function toCatalogModel(
       modelRegistry ?? undefined,
       metadataProviderId,
       m.id,
-      m.discoveredMetadata,
+      live,
       pickModelMetadata(user),
       agent,
       providerDefaults,
