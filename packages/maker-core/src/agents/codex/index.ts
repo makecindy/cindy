@@ -11829,11 +11829,16 @@ export class CodexAgent extends BaseAgent {
             cacheCreateTokens: cacheWrite,
             reasoningTokens: last.reasoningOutputTokens ?? 0,
             model: turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
-            priceVariant: isFastServiceTier(
+            priceVariant: opts.resolveUsagePriceVariant?.({
+              threadId: params.threadId,
+              inputTokens: totalInput,
+              outputTokens: last.outputTokens ?? 0,
+              cacheReadTokens: cached,
+            }) ?? (isFastServiceTier(
               turnServiceTier !== undefined ? turnServiceTier : mutableServiceTier,
             )
               ? 'priority'
-              : 'standard',
+              : 'standard'),
           });
           // Input/cache-only segments still belong in the ledger, but cannot
           // pair already reported output with a later generation denominator.

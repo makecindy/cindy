@@ -3778,6 +3778,7 @@ export class PiAgent extends BaseAgent {
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
     ctx.getPriceVariant = opts.getPriceVariant;
+    ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
     ctx.workingContextWindow = startupWorkingContextWindow;
     const contextModeRoot = findContextModePackageRoot([
       ...nativePackageRoots,

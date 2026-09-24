@@ -2705,7 +2705,7 @@ describe('codex proxy host', () => {
     const requestScopedTransforms = proxyOpts.transformRequest.filter(
       (transform) => transform.onRequestSettled,
     );
-    expect(requestScopedTransforms).toHaveLength(1);
+    expect(requestScopedTransforms).toHaveLength(2);
     expect(requestScopedTransforms[0]?.errorMode).toBe('reject-request');
     const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-2);
     const body = { model: 'gpt-5', input: [] };
@@ -4394,7 +4394,7 @@ describe('codex proxy host', () => {
   });
 
   describe('xAI 服务端搜索工具(x_search)注入', () => {
-    async function runXaiTransforms(sessionSuffix: string, body: Record<string, unknown>, fastMembers?: string[] | null): Promise<unknown> {
+    async function runXaiTransforms(sessionSuffix: string, body: Record<string, unknown>, fastMembers?: string[] | null, expectedPrice?: 'standard' | 'priority'): Promise<unknown> {
       const host = await freshCodexProxyHost();
       if (fastMembers !== undefined) {
         const { setXaiDiscoveredModels } = await import('../active-catalog.js');
@@ -4412,12 +4412,29 @@ describe('codex proxy host', () => {
       setSessionProvider(sessionId, 'xai');
 
       const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-      const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
+      const { registerUsagePricing, clearUsagePricing } = await import('../model-usage-pricing.js');
+      const resolvePrice = registerUsagePricing(sessionId);
+      const ctx = { reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
       let current: unknown = body;
       for (const transform of transforms) {
         const next = transform(current, ctx);
         if (next !== null && next !== undefined) current = next;
       }
+      if (expectedPrice) {
+        // Discovery changes after dispatch must not change the accepted execution price.
+        const { setXaiDiscoveredModels } = await import('../active-catalog.js');
+        setXaiDiscoveredModels(null);
+        const observer = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.responseObserver;
+        const sink = observer({ ...ctx, upstreamBase: 'https://api.x.ai/v1', status: 200,
+          requestHeaders: ctx.headers, responseHeaders: { 'content-type': 'text/event-stream' },
+          requestBody: Buffer.from(JSON.stringify(current)) });
+        sink?.onData?.(Buffer.from('data: ' + JSON.stringify({ type: 'response.completed',
+          response: { usage: { input_tokens: 30, output_tokens: 5, input_tokens_details: { cached_tokens: 10 } } },
+        }) + '\n\n'));
+        sink?.onEnd?.();
+        expect(resolvePrice({ threadId, inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 })).toBe(expectedPrice);
+      }
+      clearUsagePricing(sessionId);
       clearSessionProvider(sessionId);
       return current;
     }
@@ -4431,7 +4448,8 @@ describe('codex proxy host', () => {
       ['grok-4.7', 'default', false, 'grok-4.7', 'default'],
     ] as const)('Fast mapping %s tier=%s available=%s', async (model, tier, available, expected, expectedTier) => {
       const out = await runXaiTransforms('fast', { model: `xai/${model}`, input: [], service_tier: tier },
-        available === null ? null : ['grok-4.7', 'grok-4.6', ...(available ? ['grok-4.7-build-fast'] : [])]) as Record<string, unknown>;
+        available === null ? null : ['grok-4.7', 'grok-4.6', ...(available ? ['grok-4.7-build-fast'] : [])],
+        expected === 'grok-4.7-build-fast' ? 'priority' : 'standard') as Record<string, unknown>;
       expect(out.model).toBe(expected);
       expect(out.service_tier).toBe(expectedTier);
     });

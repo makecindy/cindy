@@ -98,6 +98,9 @@ supplement API omissions; `fieldsFromCatalog` distinguishes them from live API e
 Claude bridge, Codex proxy and Pi native forwarding consume the same account-gated mapping.
 Fast sends the target model without also sending `service_tier: priority`. Existing usage
 accounting names its Fast price variant `priority`; that internal label is not an upstream tier.
+Codex and Pi match completed native usage to the dispatch-time model choice. When account
+availability forces a standard fallback, usage keeps the standard tariff even if Fast remains
+enabled; later catalog refreshes or Fast toggles cannot reprice that completed request.
 Direct Fast model IDs remain callable for existing selections, default-off for new selection.
 
 This execution adapter requires a client release. The optional mapping alone does not enable

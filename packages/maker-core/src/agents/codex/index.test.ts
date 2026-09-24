@@ -6004,6 +6004,33 @@ describe('CodexAgent.startSession developerInstructions', () => {
 });
 
 describe('CodexAgent fast mode service tier', () => {
+  it.each(['standard', 'priority'] as const)('prices the actual proxy execution (%s) without clearing Fast', async priceVariant => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'turn-1' } } : undefined);
+    const resolveUsagePriceVariant = vi.fn(() => priceVariant);
+    const handle = await agent.startSession({ sessionId: 'session-xai-pricing', model: 'xai/grok-4.7',
+      fastMode: true, workingDir: '/repo', resolveUsagePriceVariant });
+    const handlers = host.getThreadHandlers()!;
+    const events: AgentEvent[] = [];
+    void (async () => { for await (const event of handle.events()) events.push(event); })();
+    const sending = handle.send({ type: 'user', content: 'hello' });
+    await waitForExpectation(() => expect(host.request.mock.calls.some(([m]) => m === Method.TurnStart)).toBe(true));
+    handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+    handlers.tokenUsageUpdated!({ threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
+      total: { totalTokens: 35, inputTokens: 30, outputTokens: 5, cachedInputTokens: 10 },
+      last: { totalTokens: 35, inputTokens: 30, outputTokens: 5, cachedInputTokens: 10 },
+    } });
+    handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
+    await sending;
+    await waitForExpectation(() => expect(events.some(e => e.type === 'done')).toBe(true));
+    expect(resolveUsagePriceVariant).toHaveBeenCalledWith({ threadId: 'start-thread-id', inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 });
+    expect((events.find(e => e.type === 'done')?.data as { usage: { segments: unknown[] } }).usage.segments)
+      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant })]);
+    expect(handle.getFastMode?.()).toBe(true);
+    await handle.close();
+  });
+
+
   it('normalizes app-server priority service tier from thread/start as fast mode', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {

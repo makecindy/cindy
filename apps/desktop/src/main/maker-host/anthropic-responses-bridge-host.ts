@@ -1,4 +1,6 @@
 import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
+import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
+import type { ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
 import { getSessionFastMode } from './session-effort-store.js';
 import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 /**
@@ -698,7 +700,7 @@ function withNativeXaiServerSideTools(
   return toolsChanged ? next : null;
 }
 
-async function pipeNativeResponse(response: Response, res: Parameters<LocalRequestHandler>[0]['res']): Promise<void> {
+async function pipeNativeResponse(response: Response, res: Parameters<LocalRequestHandler>[0]['res'], observer?: ResponseObserverSink): Promise<void> {
   res.writeHead(response.status, nativeResponseHeaders(response));
   if (!response.body) {
     res.end();
@@ -708,7 +710,8 @@ async function pipeNativeResponse(response: Response, res: Parameters<LocalReque
   try {
     while (!res.destroyed) {
       const chunk = await reader.read();
-      if (chunk.done) break;
+      if (chunk.done) { observer?.onEnd?.(); break; }
+      observer?.onData?.(Buffer.from(chunk.value));
       if (!res.write(Buffer.from(chunk.value))) {
         await new Promise<void>((resolve) => {
           const done = (): void => {
@@ -768,6 +771,7 @@ export function getPiNativeSubscriptionHandler(
       }
       headers['content-type'] = ctx.headers['content-type'] ?? 'application/json';
       headers.accept = ctx.headers.accept ?? 'text/event-stream';
+      let recordUsage: ReturnType<typeof captureUsagePricing> | undefined;
       let outboundBody = rawBody;
       let contentEncoding: string | undefined = ctx.headers['content-encoding'];
       if (isOpenAiSubscriptionProviderId(providerId)) {
@@ -787,6 +791,8 @@ export function getPiNativeSubscriptionHandler(
         const sanitized = parsed ? sanitizeXaiModelInputBody(parsed) : null;
         const withFast = parsed ? rewriteFastModel(providerId, 'pi', sanitized ?? parsed, fastAtStart) : null;
         const current = withFast ?? sanitized ?? parsed;
+        recordUsage = captureUsagePricing(sessionId,
+          withFast && withFast.model !== parsed?.model ? 'priority' : 'standard');
         const withServerTools = current
           ? withNativeXaiServerSideTools(current, upstream.wireProtocol)
           : null;
@@ -835,7 +841,8 @@ export function getPiNativeSubscriptionHandler(
         res.end(errorBody);
         return;
       }
-      await pipeNativeResponse(response, res);
+      await pipeNativeResponse(response, res, recordUsage
+        ? createUsagePricingObserver(response.headers.get('content-type') ?? '', recordUsage) : undefined);
     } catch (err) {
       if (controller.signal.aborted || res.destroyed) return;
       // Once a 200/SSE response has started, an upstream body failure cannot
