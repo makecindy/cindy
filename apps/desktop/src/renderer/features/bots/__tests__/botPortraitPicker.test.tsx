@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BotAvatar } from '../BotAvatar';
 import { BOT_PORTRAIT_COUNT, BotPortraitPicker, galleryPortrait } from '../BotPortraitPicker';
 
 vi.mock('react-i18next', () => ({
@@ -89,7 +90,12 @@ describe('shared teammate portrait gallery', () => {
 
   it('lets the upload action supersede an earlier pending gallery selection', async () => {
     let complete!: () => void;
-    decode.mockImplementationOnce(() => new Promise<void>(resolve => { complete = resolve; }));
+    decode.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          complete = resolve;
+        }),
+    );
     const onChange = vi.fn();
     const onUpload = vi.fn();
     render(<BotPortraitPicker onChange={onChange} onUpload={onUpload} />);
@@ -118,3 +124,27 @@ describe('shared teammate portrait gallery', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+it.each(['cindy://avatar/preset/cindy', '🤖', '👩🏽‍💻'])(
+  'renders a current avatar fallback while prioritizing a new image draft: %s',
+  (avatar) => {
+    const fallback = <BotAvatar bot={{ name: 'Cindy', avatar }} />;
+    const view = render(<BotPortraitPicker fallback={fallback} onChange={vi.fn()} />);
+    const trigger = screen.getByRole('button', { name: 'bots.profile.changeAvatar' });
+    if (avatar.startsWith('cindy://'))
+      expect(trigger.querySelector('img')?.getAttribute('src')).toContain('cindy.png');
+    else expect(trigger.textContent).toContain(avatar);
+    view.rerender(
+      <BotPortraitPicker
+        value="data:image/jpeg;base64,/9j/2Q=="
+        fallback={fallback}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(trigger.querySelectorAll('img')).toHaveLength(1);
+    expect(trigger.querySelector('img')?.getAttribute('src')).toBe(
+      'data:image/jpeg;base64,/9j/2Q==',
+    );
+    expect(trigger.textContent).not.toContain(avatar);
+  },
+);

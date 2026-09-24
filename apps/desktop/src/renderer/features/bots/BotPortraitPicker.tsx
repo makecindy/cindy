@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button';
 import * as Popover from '@radix-ui/react-popover';
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Camera, Check, ChevronDown, Plus } from 'lucide-react';
 import cindyPortrait from '@/assets/bot-presets/cindy.png';
@@ -44,6 +44,7 @@ export function BotPortraitPicker({
   onChange,
   onUpload,
   trigger,
+  fallback,
 }: {
   value?: string;
   token?: string;
@@ -52,6 +53,8 @@ export function BotPortraitPicker({
   /** Editing can retain the existing host-owned file chooser. */
   onUpload?: () => void;
   trigger?: ReactElement;
+  /** Current avatar artwork or glyph when there is no image draft. */
+  fallback?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -114,7 +117,7 @@ export function BotPortraitPicker({
                 {value ? (
                   <img src={value} alt="" className="h-full w-full rounded-full object-cover" />
                 ) : (
-                  <Camera size={24} />
+                  (fallback ?? <Camera size={24} />)
                 )}
                 <span className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--confirm-bg)]">
                   <ChevronDown size={14} />

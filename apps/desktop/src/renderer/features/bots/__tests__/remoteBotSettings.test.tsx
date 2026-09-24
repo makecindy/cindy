@@ -26,9 +26,12 @@ vi.mock('../BotPortraitPicker', () => ({
   BotPortraitPicker: (p: any) => {
     h.portrait = p;
     return (
-      <button type="button" onClick={() => p.onChange('data:image/png;base64,cG5n')}>
-        Choose portrait
-      </button>
+      <>
+        {p.value ? <img data-testid="portrait-preview" src={p.value} alt="" /> : p.fallback}
+        <button type="button" onClick={() => p.onChange('data:image/png;base64,cG5n')}>
+          Choose portrait
+        </button>
+      </>
     );
   },
 }));
@@ -265,14 +268,18 @@ function push(id = 'bot', collectionId = 'teammates', deviceId = 'host') {
     payload: { collectionId, resourceRefs: [{ collectionId, kind: 'bot', id }] },
   });
 }
-async function openAvatar(decode: () => Promise<void> = () => Promise.resolve()) {
+async function openAvatar(
+  decode: () => Promise<void> = () => Promise.resolve(),
+  avatarValue = `cindy-media://blobs/${'a'.repeat(64)}.png`,
+  avatarKind = 'media',
+) {
   const avatar = {
     ...resource(),
     display: {
       title: 'Avatar',
       avatar: {
-        kind: 'media',
-        value: `cindy-media://blobs/${'a'.repeat(64)}.png`,
+        kind: avatarKind,
+        value: avatarValue,
         fallbackText: 'C',
       },
     },
@@ -460,4 +467,30 @@ it.each([
   avatar.display.avatar.value = value;
   await act(async () => push());
   expect(h.portrait.value).toBeUndefined();
+  expect(h.portrait.fallback).toBeUndefined();
 });
+
+it.each([
+  { value: 'cindy://avatar/preset/cindy', kind: 'media', image: 'cindy.png' },
+  { value: 'cindy://avatar/preset/dash', kind: 'asset', image: 'dash.png' },
+  { value: '🤖', kind: 'media', image: null },
+  { value: '👩🏽‍💻', kind: 'emoji', image: null },
+])(
+  'renders a supported host avatar regardless of legacy media labeling: $value/$kind',
+  async ({ value, kind, image }) => {
+    await openAvatar(undefined, value, kind);
+    if (image) expect(document.querySelector('img')?.getAttribute('src')).toContain(image);
+    else expect(screen.getByText(value)).toBeTruthy();
+    expect(h.portrait.value).toBeUndefined();
+    fireEvent.click(screen.getByText('Choose portrait'));
+    await waitFor(() =>
+      expect(screen.getByTestId('portrait-preview').getAttribute('src')).toBe(
+        'data:image/jpeg;base64,/9j/2Q==',
+      ),
+    );
+    fireEvent.click(screen.getByText('bots.save'));
+    await waitFor(() => expect(screen.queryByTestId('portrait-preview')).toBeNull());
+    if (image) expect(document.querySelector('img')?.getAttribute('src')).toContain(image);
+    else expect(screen.getByText(value)).toBeTruthy();
+  },
+);

@@ -23,7 +23,8 @@ import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import { extractIpcError } from '@/utils/ipcError';
 import { BotModelChainEditor } from './BotModelChainEditor';
 import { BotPortraitPicker } from './BotPortraitPicker';
-import { isManagedBotAvatarUrl } from '../../../shared/botAvatarValue';
+import { BotAvatar } from './BotAvatar';
+import { isManagedBotAvatarUrl, isSupportedBotAvatarValue } from '../../../shared/botAvatarValue';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import type { RemoteBot } from './remoteBotRoster';
 import {
@@ -87,7 +88,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
   editorScope.current = `${resourceId}:${page}`;
   const hostAvatar = data?.resource.display.avatar;
   const hostAvatarPreview =
-    hostAvatar?.kind === 'media' && isManagedBotAvatarUrl(hostAvatar.value)
+    hostAvatar && isManagedBotAvatarUrl(hostAvatar.value)
       ? rewriteToRemoteMediaOrigin(hostAvatar.value, { kind: 'device', deviceId: bot.deviceId })
       : undefined;
   const panel = data?.panels.find((item) => item.id === page);
@@ -408,6 +409,19 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
       {item.id === 'avatar' ? (
         <BotPortraitPicker
           disabled={disabled}
+          fallback={
+            hostAvatar && isSupportedBotAvatarValue(hostAvatar.value) ? (
+              <BotAvatar
+                bot={{
+                  ...bot,
+                  avatar: hostAvatar.value,
+                  avatarColor: hostAvatar.color ?? bot.avatarColor,
+                }}
+                size="xl"
+                className="h-full w-full"
+              />
+            ) : undefined
+          }
           value={
             typeof draft.avatarImageBase64 === 'string' && draft.avatarImageBase64
               ? `data:image/jpeg;base64,${draft.avatarImageBase64}`
