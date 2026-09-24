@@ -54,6 +54,10 @@ Unchanged tariffs keep their historical start date; changed tariffs close the pr
 and start at the observation date. This is the first observed price, not an invented provider
 launch date. Ambiguous same-day changes are rejected because V5 prices have day precision.
 Other variants, markets, routes and historical prices are retained.
+Missing cache-read fields retain verified active cache prices only for the same input-token
+band, without advancing their verification date. The report still lists `apiCacheReadPrice`
+as missing and identifies inherited cache prices as catalog facts. An explicit zero replaces
+the previous rate; an absent field does not.
 
 ## Repeatable verification
 

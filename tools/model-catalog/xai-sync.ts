@@ -66,12 +66,27 @@ function tariffValue(prices: ModelReferencePrice[]) {
 function mergeTariffs(previous: ModelReferencePrice[], next: ModelReferencePrice[], day: string) {
   const active = previous.filter(p => p.variant === 'standard' && p.currency === 'USD' &&
     p.effectiveFrom <= day && (!p.effectiveUntil || day < p.effectiveUntil));
+  const sameBand = (a: ModelReferencePrice, b: ModelReferencePrice) =>
+    (a.minInputTokens ?? 0) === (b.minInputTokens ?? 0) && a.maxInputTokens === b.maxInputTokens;
+  let inheritedCache = false;
+  next = next.map(p => {
+    if (p.cacheReadPerMtok !== undefined) return p;
+    const known = active.find(old => sameBand(old, p) && old.cacheReadPerMtok !== undefined);
+    if (!known) return p;
+    inheritedCache = true;
+    return { ...p, cacheReadPerMtok: known.cacheReadPerMtok,
+      // The API did not re-verify the carried cache price. Keep the older verification date.
+      source: { ...p.source, verifiedAt: known.source.verifiedAt < p.source.verifiedAt
+        ? known.source.verifiedAt : p.source.verifiedAt } };
+  });
   if (isDeepStrictEqual(tariffValue(active), tariffValue(next))) {
-    return previous.map(p => active.includes(p) ? { ...p, source: next[0].source } : p);
+    return { inheritedCache, prices: previous.map(p => active.includes(p)
+      ? { ...p, source: next.find(n => sameBand(n, p))!.source } : p) };
   }
   // A date-only schema cannot represent two changes in one day. Refuse to destroy that history.
   if (active.some(p => p.effectiveFrom === day)) throw new Error('Conflicting xAI tariffs on the same date');
-  return [...previous.map(p => active.includes(p) ? { ...p, effectiveUntil: day } : p), ...next];
+  return { inheritedCache,
+    prices: [...previous.map(p => active.includes(p) ? { ...p, effectiveUntil: day } : p), ...next] };
 }
 
 export function buildXaiSyncCandidate(baseline: Catalog, accountPayload: unknown, detailsPayload: unknown, observedAt: string) {
@@ -166,15 +181,18 @@ export function buildXaiSyncCandidate(baseline: Catalog, accountPayload: unknown
     baseModel.defaults = { ...baseModel.defaults, ...metadata,
       ...(baseDefault !== undefined ? { defaultEffort: baseDefault } : {}) };
     if (member.nativeApi === 'openai-responses' && entry.nativeApi === undefined) entry.nativeApi = member.nativeApi;
-    const prices = detail && tariffs(detail, observedAt);
+    const prices = detail ? tariffs(detail, observedAt) : undefined;
     const knownFast = fastParents.some(m => m.fastModelId === member.id);
     const knownParent = fastParents.some(m => m.id === member.id);
     if (knownFast || knownParent) route.referencePriceGroup ??= 'global';
+    let inheritedCache = false;
     if (prices) {
       baseModel.referencePriceGroups ??= [];
       let group = baseModel.referencePriceGroups.find(g => g.id === 'global');
       if (!group) { group = { id: 'global', prices: [] }; baseModel.referencePriceGroups.push(group); }
-      group.prices = mergeTariffs(group.prices, prices, observedAt.slice(0, 10));
+      const merged = mergeTariffs(group.prices, prices, observedAt.slice(0, 10));
+      group.prices = merged.prices;
+      inheritedCache = merged.inheritedCache;
       route.referencePriceGroup ??= 'global';
     }
     const missing: string[] = [];
@@ -183,6 +201,7 @@ export function buildXaiSyncCandidate(baseline: Catalog, accountPayload: unknown
       (!p.effectiveUntil || observedAt.slice(0, 10) < p.effectiveUntil)));
     if (!detail) missing.push('officialDetails');
     if (!prices && !hasCatalogPrice) missing.push('apiReferencePrice');
+    if (prices?.some(p => p.cacheReadPerMtok === undefined)) missing.push('apiCacheReadPrice');
     if (!input && baseModel.defaults.supportsImageInput === undefined) missing.push('inputModalities');
     if (member.maxOutput === undefined) missing.push('apiMaxOutput');
     // Neither endpoint declares the Fast toggle's execution semantics. Names are not evidence.
@@ -190,6 +209,7 @@ export function buildXaiSyncCandidate(baseline: Catalog, accountPayload: unknown
     gaps.push({ modelId: member.id, fields: missing });
     evidence.push({ modelId: member.id, ...(detail ? { detailId: detail.id as string } : {}),
       fieldsFromCatalog: [...(knownParent || knownFast ? ['fastExecution'] : []),
+        ...(inheritedCache ? ['cacheReadReferencePrice'] : []),
         ...(!prices && hasCatalogPrice ? ['referencePrices'] : [])],
       fieldsFromApi: [...Object.keys(catalogModelMetadata(member)), ...Object.keys(metadata), ...(prices ? ['referencePrices'] : [])] });
     for (const agent of agents) {

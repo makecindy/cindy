@@ -161,6 +161,33 @@ describe('xAI API sync through the actual picker import', () => {
     expect(history[2].inputPerMtok).toBe(3);
   });
 
+  it('preserves verified cache prices on sparse updates and reports missing API cache fields', () => {
+    const first = build();
+    const sparse = { ...details.models[0], prompt_text_token_price: 30_000,
+      cached_prompt_text_token_price: undefined, cached_prompt_text_token_price_long_context: undefined };
+    const candidate = buildXaiSyncCandidate(first.catalog, account, { models: [sparse] }, '2026-09-25T12:00:00.000Z');
+    const prices = candidate.catalog.modelRegistry!.baseModels!.find(b => b.id === 'xai/grok-4.8')!.referencePriceGroups![0].prices;
+    expect(prices).toHaveLength(4);
+    expect(prices[0].effectiveUntil).toBe('2026-09-25');
+    expect(prices[2]).toMatchObject({ inputPerMtok: 3, cacheReadPerMtok: 0.5,
+      source: { verifiedAt: '2026-09-24' } });
+    expect(prices[3].cacheReadPerMtok).toBe(1);
+    const report = inspectXaiImport(candidate);
+    expect(report.gaps[0].fields).toContain('apiCacheReadPrice');
+    expect(report.evidence[0].fieldsFromCatalog).toContain('cacheReadReferencePrice');
+    expect(report.rows[0].harnesses.codex.apiReferencePrice?.cacheReadPerMtok).toBe(0.5);
+
+    const unknown = build(account, { models: [sparse] });
+    expect(unknown.gaps[0].fields).toContain('apiCacheReadPrice');
+    expect(unknown.evidence[0].fieldsFromCatalog).not.toContain('cacheReadReferencePrice');
+    expect(inspectXaiImport(unknown).rows[0].harnesses.codex.apiReferencePrice?.cacheReadPerMtok).toBeUndefined();
+
+    const zero = buildXaiSyncCandidate(first.catalog, account, { models: [{ ...sparse,
+      cached_prompt_text_token_price: 0, cached_prompt_text_token_price_long_context: 0 }] }, '2026-09-25T12:00:00.000Z');
+    expect(zero.gaps[0].fields).not.toContain('apiCacheReadPrice');
+    expect(inspectXaiImport(zero).rows[0].harnesses.codex.apiReferencePrice?.cacheReadPerMtok).toBe(0);
+  });
+
   it('keeps user capability overrides after import and serializes discovery backend through the old cache envelope', () => {
     const parsed = parseXaiAccountModels(account);
     expect(parseCachedXaiModels(JSON.parse(JSON.stringify({ models: parsed })))).toEqual(parsed);
