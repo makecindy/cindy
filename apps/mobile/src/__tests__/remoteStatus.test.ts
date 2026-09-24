@@ -42,6 +42,8 @@ describe('remoteStatus', () => {
     expect(describeRemoteError('[ACCESS_REVOKED] revoked')).toContain('撤销手机访问权限');
     expect(describeRemoteError('[NOT_CONNECTED] offline')).toBe(i18n.t('session.screen.networkReconnecting'));
     expect(describeRemoteError('unknown failure')).toBe(i18n.t('deviceLink.remoteError.unclassified'));
+    expect(describeRemoteError('[NOT_FOUND] Session does not exist')).toBe(i18n.t('deviceLink.remoteError.notFound'));
+    expect(describeRemoteError('REMOTE_WORKDIR_NOT_FOUND missing folder')).not.toBe(i18n.t('deviceLink.remoteError.notFound'));
   });
 
   it('preserves structured remote error codes for banner classification', () => {

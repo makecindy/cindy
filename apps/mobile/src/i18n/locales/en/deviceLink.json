@@ -72,6 +72,7 @@
     "preconditionFailed": "The operation conditions changed. Refresh and confirm again.",
     "transient": "The network or remote computer is temporarily unavailable. Sync again later.",
     "callFailed": "The remote call did not finish. Try again in a moment.",
-    "unclassified": "This action did not finish. Try again in a moment."
+    "unclassified": "This action did not finish. Try again in a moment.",
+    "notFound": "That item no longer exists. Go back to the list and refresh before trying again."
   }
 }

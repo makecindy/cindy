@@ -163,6 +163,7 @@ function localizedStableRemoteError(error: string): string | null {
     return i18n.t('deviceLink.remoteError.preconditionFailed');
   }
   if (isTransientRemoteError(error)) return i18n.t('deviceLink.remoteError.transient');
+  if (/(^|\[|\s)NOT_FOUND(\]|\s|:|$)/.test(error)) return i18n.t('deviceLink.remoteError.notFound');
   if (error.includes('BAD_REQUEST') || error.includes('INTERNAL')) {
     return i18n.t('deviceLink.remoteError.callFailed', { error });
   }
