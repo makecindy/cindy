@@ -30,7 +30,14 @@ beforeEach(() => {
     if (action === 'leave') { joinedItems = joinedItems.filter(item => item.sharedTaskId !== sharedTaskId); return {}; }
     if (action === 'close') { ownedItems = ownedItems.filter(item => item.sharedTaskId !== sharedTaskId); return { closed: [sharedTaskId], failed: [] }; }
   });
-  state.getSessions.mockReturnValue([]); state.invoke.mockResolvedValue({ id: joinedTask.sessionId });
+  state.getSessions.mockReturnValue([]);
+  state.invoke.mockImplementation(async (_device, channel, [command]) => {
+    if (channel === 'maker:shared-task' && command.action === 'close') {
+      ownedItems = ownedItems.filter(item => item.sharedTaskId !== command.sharedTaskId);
+      return { ok: true };
+    }
+    return { id: joinedTask.sessionId };
+  });
   state.closeLink.mockResolvedValue(undefined); state.openLink.mockResolvedValue(undefined);
   Object.assign(window, { electronAPI: { sharedTask: { account: state.account, host: state.host }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke } } });
 });
@@ -93,20 +100,25 @@ it.each(['closeAllKeep', 'cancelOperation'])('cancels in the same window through
   expect(state.account).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'close' }));
 });
 it.each(['response', 'rejection'])('retries only failed confirmed tasks after a partial %s', async failure => {
-  const original = state.account.getMockImplementation()!;
+  const original = state.invoke.getMockImplementation()!;
   let secondAttempt = false;
-  state.account.mockImplementation(async command => {
-    if (command.action !== 'close' || command.sharedTaskId !== 'own-2' || secondAttempt) return original(command);
+  state.invoke.mockImplementation(async (...args) => {
+    const command = args[2][0];
+    if (command.action !== 'close' || command.sharedTaskId !== 'own-2' || secondAttempt) return original(...args);
     secondAttempt = true;
     if (failure === 'rejection') throw new Error('offline');
-    return { closed: [], failed: [{ sharedTaskId: 'own-2' }] };
+    return { ok: false };
   });
   open(); await closeAll(); click('closeAllAction');
   await waitFor(() => expect(visibleText(owned[0].title)).toHaveLength(0));
   expect(visibleText(owned[1].title)).toHaveLength(1);
   click('closeAllAction'); await screen.findByText('sharedTask.ownedEmptyTitle');
   expect(state.account.mock.calls.map(([c]) => c).filter(c => c.action === 'close')).toEqual([
-    { action: 'close', sharedTaskId: 'own-1' }, { action: 'close', sharedTaskId: 'own-2' }, { action: 'close', sharedTaskId: 'own-2' },
+    { action: 'close', sharedTaskId: 'own-1' },
+  ]);
+  expect(state.invoke.mock.calls).toEqual([
+    ['other-pc', 'maker:shared-task', [{ action: 'close', sharedTaskId: 'own-2' }]],
+    ['other-pc', 'maker:shared-task', [{ action: 'close', sharedTaskId: 'own-2' }]],
   ]);
 });
 it.each(['account', 'unmount'])('stops the batch after %s invalidation', async invalidation => {
@@ -116,6 +128,7 @@ it.each(['account', 'unmount'])('stops the batch after %s invalidation', async i
   open(); await closeAll(); click('closeAllAction');
   await act(async () => { if (invalidation === 'account') setDataOwnerGeneration('other'); else cleanup(); finish({ closed: ['own-1'], failed: [] }); });
   expect(state.account).not.toHaveBeenCalledWith({ action: 'close', sharedTaskId: 'own-2' });
+  expect(state.openLink).not.toHaveBeenCalled();
   expect(toast.success).not.toHaveBeenCalled();
 });
 it('keeps the confirmed batch even when an earlier list response arrives late', async () => {

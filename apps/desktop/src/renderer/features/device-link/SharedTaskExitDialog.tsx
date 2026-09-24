@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { SharedTaskCloseResult } from '@cindy/device-link';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -8,9 +7,10 @@ import { resetRemoteDataOwnerPushFence } from '@/lib/remoteDataOwnerPushFence';
 import { toast } from '@/lib/toast';
 import { remoteProjectsStore } from './remoteProjectsStore';
 import { sharedTaskErrorKey } from './sharedTaskCompatibility';
+import { closeOwnedSharedTask } from './closeOwnedSharedTask';
 
 export type SharedTaskExitTarget =
-  | { kind: 'close'; sharedTaskId: string; title: string }
+  | { kind: 'close'; sharedTaskId: string; title: string; hostDeviceId?: string }
   | { kind: 'leave'; sharedTaskId: string; title: string; peer: string };
 
 /** A single confirmation for menu actions and joined-task management. */
@@ -42,9 +42,9 @@ export function SharedTaskExitDialog({ target, onDismiss, onComplete }: {
       if (target.kind === 'leave') {
         await window.electronAPI.sharedTask.account({ action: 'leave', sharedTaskId: target.sharedTaskId });
       } else {
-        const result = await window.electronAPI.sharedTask.account({ action: 'close', sharedTaskId: target.sharedTaskId }) as SharedTaskCloseResult;
+        const closed = await closeOwnedSharedTask(target.sharedTaskId, target.hostDeviceId, current);
         if (!current()) return;
-        if (!result.closed.includes(target.sharedTaskId)) {
+        if (!closed) {
           toast.error(t('sharedTask.closeFailedToast', { count: 1 }));
           return;
         }

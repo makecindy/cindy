@@ -76,7 +76,6 @@ function ActiveSessionTaskMenu({
   const peer = parseSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const guest = peer?.role === 'host';
   const [sharing, setSharing] = useState<SharedTaskHostState | null>(null);
-  const [loadingSharing, setLoadingSharing] = useState(!guest);
   const [copying, setCopying] = useState(false);
   const copyPending = useRef(false);
   const copyEpoch = useRef(0);
@@ -88,7 +87,7 @@ function ActiveSessionTaskMenu({
     if (!open || guest || session.status !== 'active') return;
     let disposed = false;
     const owner = getDataOwnerGeneration();
-    setSharing(null); setLoadingSharing(true);
+    setSharing(null);
     const command = { action: 'state' as const, sessionId: session.id };
     const load = async () => {
       try {
@@ -97,7 +96,6 @@ function ActiveSessionTaskMenu({
           : window.electronAPI.sharedTask.host(command)) as SharedTaskHostState;
         if (!disposed && isDataOwnerGenerationCurrent(owner)) setSharing(result);
       } catch { /* Management retains its existing retry and upgrade UI. */ }
-      finally { if (!disposed && isDataOwnerGenerationCurrent(owner)) setLoadingSharing(false); }
     };
     void load();
     return () => { disposed = true; };
@@ -126,7 +124,7 @@ function ActiveSessionTaskMenu({
   };
   const openSharing = () => {
     if (guest && peer) setDialog({ kind: 'leave', sharedTaskId: peer.sharedTaskId, title: session.title, peer: session.deviceLinkDeviceId! });
-    else if (hosted) setDialog({ kind: 'close', sharedTaskId: hosted.sharedTaskId, title: session.title });
+    else if (hosted) setDialog({ kind: 'close', sharedTaskId: hosted.sharedTaskId, title: session.title, hostDeviceId: session.deviceLinkDeviceId || undefined });
     else setDialog({ kind: 'manage' });
   };
   const dismissSharing = () => {
@@ -186,7 +184,7 @@ function ActiveSessionTaskMenu({
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         ) : (
-          <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={!guest && loadingSharing} onSelect={openSharing}>
+          <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={openSharing}>
             {t(guest ? 'sharedTask.leaveShort' : 'sharedTask.title')}
           </DropdownMenuItem>
         ))}

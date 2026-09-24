@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import {
   parseSharedTaskPeer, sharedTaskHostPeer, SHARED_TASK_HOST_CHANNEL,
-  type SharedTaskCloseResult, type SharedTaskDetail, type SharedTaskHostCommand,
+  type SharedTaskDetail, type SharedTaskHostCommand,
   type SharedTaskHostState, type SharedTaskListItem, type SharedTaskOwnedItem,
 } from '@cindy/device-link';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,7 @@ import { toast } from '@/lib/toast';
 import { bindSharedTaskPushOwner, resetRemoteDataOwnerPushFence } from '@/lib/remoteDataOwnerPushFence';
 import { remoteProjectsStore, isRemoteDeviceMarkedDisconnected } from './remoteProjectsStore';
 import { sharedTaskErrorKey } from './sharedTaskCompatibility';
+import { closeOwnedSharedTask } from './closeOwnedSharedTask';
 
 type Tab = 'join' | 'joined' | 'owned';
 type Target = { sessionId: string; title: string; deviceId?: string; sharedTaskId?: string; guestId?: string; connect?: boolean };
@@ -204,9 +205,9 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus }: {
       for (const item of snapshot.targets) {
         if (!current()) return;
         try {
-          const result = await window.electronAPI.sharedTask.account({ action: 'close', sharedTaskId: item.sharedTaskId }) as SharedTaskCloseResult;
+          const succeeded = await closeOwnedSharedTask(item.sharedTaskId, item.local ? undefined : item.hostDeviceId, current);
           if (!current()) return;
-          if (result.closed.includes(item.sharedTaskId)) closed.push(item.sharedTaskId);
+          if (succeeded) closed.push(item.sharedTaskId);
           else failed.push(item);
         } catch { if (!current()) return; failed.push(item); }
       }

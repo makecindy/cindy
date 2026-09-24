@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   rename: vi.fn(),
   account: vi.fn(),
   closeLink: vi.fn(),
+  openLink: vi.fn(),
   invoke: vi.fn(),
   removeDevice: vi.fn(),
   writeClipboard: vi.fn(),
@@ -83,10 +84,11 @@ beforeEach(() => {
   state.host.mockResolvedValue({ available: false, detail: null });
   state.account.mockImplementation(async ({ action, sharedTaskId }) => action === 'close' ? { closed: [sharedTaskId], failed: [] } : []);
   state.closeLink.mockResolvedValue(undefined);
+  state.openLink.mockResolvedValue(undefined);
   state.writeClipboard.mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: state.writeClipboard } });
   Object.assign(window, {
-    electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { closeLink: state.closeLink, invoke: state.invoke } },
+    electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke } },
   });
 });
 afterEach(cleanup);
@@ -218,6 +220,67 @@ it('routes the state lookup through the owning remote computer', async () => {
   await screen.findByRole('menuitem', { name: 'manageSharing' });
   expect(state.invoke).toHaveBeenCalledWith('own-computer', 'maker:shared-task', [{ action: 'state', sessionId: 'task' }]);
   expect(state.host).not.toHaveBeenCalled();
+});
+
+it('opens management while the remote menu lookup is pending and offers retry there', async () => {
+  state.invoke.mockReturnValueOnce(new Promise(() => {}))
+    .mockRejectedValueOnce(new Error('[DEVICE_LINK_TIMEOUT] timeout'))
+    .mockResolvedValue({ available: false, detail: null });
+  render(<Harness target={{ ...session, deviceLinkDeviceId: 'own-computer' }} />); openMenu();
+  const entry = screen.getByRole('menuitem', { name: 'title' });
+  expect(entry.getAttribute('aria-disabled')).not.toBe('true');
+  fireEvent.click(entry);
+  await screen.findByText('requestTimedOut');
+  fireEvent.click(screen.getByRole('button', { name: 'retryAction' }));
+  await screen.findByText('upgrade');
+  expect(state.openLink).toHaveBeenCalledWith('own-computer');
+  expect(state.account).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'close' }));
+});
+
+it('waits for the remote host close acknowledgment without using the local account close API', async () => {
+  let finish!: (value: unknown) => void;
+  state.invoke.mockImplementation(async (_device, _channel, [command]) => command.action === 'close'
+    ? new Promise(resolve => { finish = resolve; })
+    : { available: true, detail: { sharedTaskId: 'remote-share', status: 'active' } });
+  render(<Harness target={{ ...session, deviceLinkDeviceId: 'own-computer' }} />); openMenu();
+  await openSharingSubmenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'cancelSharing' }));
+  fireEvent.click(screen.getByRole('button', { name: 'cancelSharing' }));
+  await waitFor(() => expect(state.invoke).toHaveBeenCalledWith('own-computer', 'maker:shared-task', [{ action: 'close', sharedTaskId: 'remote-share' }]));
+  expect(screen.getByRole('alertdialog')).toBeTruthy();
+  expect(state.openLink).toHaveBeenCalledWith('own-computer');
+  expect(state.account).not.toHaveBeenCalled();
+  await act(async () => finish({ ok: true }));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+});
+
+it.each(['connect', 'close'])('keeps remote cancellation retryable after %s failure without account fallback', async failure => {
+  state.invoke.mockImplementation(async (_device, _channel, [command]) => {
+    if (command.action === 'close') throw new Error('[DEVICE_LINK_TIMEOUT] timeout');
+    return { available: true, detail: { sharedTaskId: 'remote-share', status: 'active' } };
+  });
+  if (failure === 'connect') state.openLink.mockRejectedValue(new Error('[DEVICE_LINK_TIMEOUT] timeout'));
+  render(<Harness target={{ ...session, deviceLinkDeviceId: 'own-computer' }} />); openMenu();
+  await openSharingSubmenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'cancelSharing' }));
+  fireEvent.click(screen.getByRole('button', { name: 'cancelSharing' }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('requestTimedOut'));
+  expect(screen.getByRole('alertdialog')).toBeTruthy();
+  expect(state.account).not.toHaveBeenCalled();
+  if (failure === 'connect') expect(state.invoke.mock.calls.every(([, , [command]]) => command.action === 'state')).toBe(true);
+  state.openLink.mockResolvedValue(undefined); state.invoke.mockResolvedValue({ ok: true });
+  fireEvent.click(screen.getByRole('button', { name: 'cancelSharing' }));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+});
+
+it.each(['account', 'unmount'])('does not cancel on the remote host when %s changes while connecting', async invalidation => {
+  let connected!: () => void;
+  state.openLink.mockReturnValue(new Promise<void>(resolve => { connected = resolve; }));
+  state.invoke.mockResolvedValue({ available: true, detail: { sharedTaskId: 'remote-share', status: 'active' } });
+  render(<Harness target={{ ...session, deviceLinkDeviceId: 'own-computer' }} />); openMenu();
+  await openSharingSubmenu(); fireEvent.click(screen.getByRole('menuitem', { name: 'cancelSharing' }));
+  fireEvent.click(screen.getByRole('button', { name: 'cancelSharing' }));
+  await act(async () => { if (invalidation === 'account') setDataOwnerGeneration('other'); else cleanup(); connected(); });
+  expect(state.invoke.mock.calls.every(([, , [command]]) => command.action === 'state')).toBe(true);
+  expect(state.account).not.toHaveBeenCalled();
 });
 
 it('opens the existing member management panel from the sharing submenu', async () => {

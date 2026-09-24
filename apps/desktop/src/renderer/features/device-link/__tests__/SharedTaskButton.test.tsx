@@ -119,6 +119,19 @@ it('closes only the task captured by the confirmation', async () => {
   expect(state.account).toHaveBeenCalledWith({ action: 'close', sharedTaskId: 'st1' });
   expect(state.account).not.toHaveBeenCalledWith({ action: 'close', sharedTaskId: 'replacement' });
 });
+it('cancels a remote detail through its owning host before reporting success', async () => {
+  let finish!: (value: unknown) => void;
+  state.invoke.mockImplementation(async (_device, _channel, [command]) => command.action === 'close'
+    ? new Promise(resolve => { finish = resolve; })
+    : { available: true, detail: { ...detail, hostDeviceId: 'other-pc' } });
+  await openWindow({ ...ownerSession, deviceLinkDeviceId: 'other-pc' });
+  click('cancelSharing'); click('cancelSharing');
+  await waitFor(() => expect(state.invoke).toHaveBeenCalledWith('other-pc', SHARED_TASK_HOST_CHANNEL, [{ action: 'close', sharedTaskId: detail.sharedTaskId }]));
+  expect(toast.success).not.toHaveBeenCalled();
+  expect(state.account).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'close' }));
+  await act(async () => finish({ ok: true }));
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith('sharedTask.closedToast'));
+});
 it.each(['invite', 'remove'])('ignores late %s responses after account change', async operation => {
   let finish!: (value: unknown) => void;
   const copy = vi.fn(); Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } });
