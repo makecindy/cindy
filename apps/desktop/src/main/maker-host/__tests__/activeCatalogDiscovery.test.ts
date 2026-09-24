@@ -90,6 +90,17 @@ function legacyCatalog(): Catalog {
 }
 
 describe('active-catalog discovered augment', () => {
+  it('keeps a future subscription model inherited window unverified', () => {
+    setActiveCatalog(structuredClone(BUNDLED_CATALOG));
+    setDiscoveredCodexModels([{ ...fake('gpt-7-sol'), discoveredMetadata: {}, contextWindowVerified: false }]);
+    for (const agent of ['codex', 'claude-code'] as const) {
+      const models = getActiveCatalog().providers.find(provider => provider.id === 'openai')!.models[agent]!;
+      const model = models.find(model => model.id === 'gpt-7-sol' || model.id === 'chatgpt/gpt-7-sol');
+      expect(model?.contextWindow).toBeGreaterThan(0);
+      expect(model?.contextWindowVerified).toBe(false);
+    }
+  });
+
   it('keeps Claude subscription models on Claude Code only, even when the source catalog declares Codex / Pi', () => {
     const catalog = bundledWithoutRegistry();
     const builtin = catalog.providers.find((provider) => provider.id === 'anthropic')!;

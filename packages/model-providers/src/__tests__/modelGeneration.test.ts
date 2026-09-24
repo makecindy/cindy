@@ -115,6 +115,24 @@ describe('new model generation defaults', () => {
     expect(previousModelGenerations('qwen4-30b', ['qwen3-235b', 'qwen3-30b'], id => id)).toEqual(['qwen3-30b']);
   });
 
+  it.each([
+    ['private-7b', 'private-70b'],
+    ['gpt-oss-20b', 'gpt-oss-120b'],
+    ['private-0.5b', 'private-1.5b'],
+    ['private-350m', 'private-700m'],
+    ['mixtral-8x7b', 'mixtral-8x22b'],
+  ])('does not treat parameter sizes %s and %s as generations', (small, large) => {
+    expect(previousModelGenerations(large, [small], id => id)).toEqual([]);
+    const target = build([
+      { id: small, name: small, discoveredMetadata: { contextWindow: 64000,
+        efforts: ['high'], supportsImageInput: true, supportsFastMode: true } },
+      { id: large, name: large },
+    ]).models.pi![1]!;
+    expect(target.efforts).toEqual([]);
+    expect(target.supportsFastMode).not.toBe(true);
+    expect(target.supportsImageInput).not.toBe(true);
+  });
+
   it('normalizes long trailing slashes without treating internal slashes as the same endpoint', () => {
     const endpoint = 'https://api.openai.com/v1';
     const slashes = '/'.repeat(100_000);

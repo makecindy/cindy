@@ -9,6 +9,11 @@ import type {
   ModelAccessWireProtocol,
 } from "./modelAccessBean.js";
 
+// Projection-only provenance; a symbol keeps it out of the public metadata schema
+// and JSON storage. CatalogModel carries the serializable verification flag.
+const inheritedContextWindow = Symbol('inheritedContextWindow');
+type ResolvedModelMetadata = ModelMetadata & { [inheritedContextWindow]?: true };
+
 /** Data only. Membership, credentials, routing and billed prices never inherit. */
 export interface ModelMetadata {
   /** Manufacturer language, independent of the connection's execution protocol. */
@@ -166,13 +171,13 @@ export function resolveModelMetadata(
   registry: ModelRegistry | undefined,
   providerId: string,
   modelId: string,
-  live?: ModelMetadata,
+  live?: ResolvedModelMetadata,
   user?: ModelMetadata,
   agent?: string,
   providerDefaults?: ModelMetadata,
   declaredDefaultEffort?: ModelMetadata["defaultEffort"],
   generationDefaults?: ModelMetadata,
-): ModelMetadata {
+): ResolvedModelMetadata {
   const ids = [modelId];
   if (providerId === "openai" && modelId.startsWith("chatgpt/"))
     ids.push(modelId.slice(8));
@@ -220,10 +225,13 @@ export function resolveModelMetadata(
         .map(route => ({ entry, route }))) ?? [], candidate => candidate.route.modelId)
       .map(({ entry, route }) => generationCapabilities(registryEntryDefaults(registry!, entry, route, agent))),
   );
-  const result = mergeModelMetadata(
+  const inheritedLiveWindow = live?.[inheritedContextWindow] === true;
+  const currentLive = inheritedLiveWindow ? { ...live, contextWindow: undefined } : live;
+  const result: ResolvedModelMetadata = mergeModelMetadata(
     familyDefaults,
+    inheritedLiveWindow ? { contextWindow: live?.contextWindow } : undefined,
     defaults,
-    live,
+    currentLive,
     // A Harness's suggested default is not a model capability. Keep the shared
     // model intent (including explicit route/Harness exceptions), then adapt it
     // to the live effort membership below. Explicit force/user settings still win.
@@ -236,6 +244,10 @@ export function resolveModelMetadata(
     matched?.route.forceOverrides,
     user,
   );
+  if (result.contextWindow !== undefined &&
+      ![defaults, currentLive, matched?.route.forceOverrides, user].some(source => source?.contextWindow !== undefined)) {
+    result[inheritedContextWindow] = true;
+  }
   if (result.efforts?.length === 0) result.defaultEffort = null;
   else if (
     result.defaultEffort != null &&
@@ -379,9 +391,11 @@ export function expandedRegistryEntries(
 
 export function catalogModelMetadata(
   model: Partial<CatalogModel>,
-): ModelMetadata {
+): ResolvedModelMetadata {
   return {
     ...pickModelMetadata(model),
+    ...(model.contextWindowVerified === false && model.contextWindow !== undefined
+      ? { [inheritedContextWindow]: true as const } : {}),
     ...(model.maxOutput !== undefined
       ? { maxOutputTokens: model.maxOutput }
       : {}),
@@ -389,14 +403,14 @@ export function catalogModelMetadata(
 }
 export function applyModelMetadata(
   model: CatalogModel,
-  metadata: ModelMetadata,
+  metadata: ResolvedModelMetadata,
 ): CatalogModel {
-  const { maxOutputTokens, ...fields } = metadata;
+  const { maxOutputTokens, [inheritedContextWindow]: inheritedWindow, ...fields } = metadata;
   const result = {
     ...model,
     ...fields,
     ...(metadata.contextWindow !== undefined
-      ? { contextWindowVerified: true }
+      ? { contextWindowVerified: inheritedWindow !== true }
       : {}),
     ...(maxOutputTokens !== undefined ? { maxOutput: maxOutputTokens } : {}),
   };

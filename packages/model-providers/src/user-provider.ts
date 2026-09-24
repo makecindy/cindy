@@ -354,24 +354,7 @@ function toCatalogModel(
           generationDefaults,
         )
       : pickModelMetadata(user);
-  const result = applyModelMetadata(model, resolved);
-  if (generationDefaults?.contextWindow !== undefined) {
-    // A predecessor's window remains a usable default, not verified capacity
-    // for this model/route. Only this model's own metadata can establish that.
-    const declared = resolveModelMetadata(
-      modelRegistry ?? undefined,
-      metadataProviderId,
-      m.id,
-      m.discoveredMetadata,
-      pickModelMetadata(user),
-      agent,
-      providerDefaults,
-      undefined,
-      {}, // Check this model's declarations without automatic family inheritance.
-    );
-    if (declared.contextWindow === undefined) result.contextWindowVerified = false;
-  }
-  return result;
+  return applyModelMetadata(model, resolved);
 }
 
 function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {

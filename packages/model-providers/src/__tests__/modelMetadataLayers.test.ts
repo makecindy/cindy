@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   resolveModelMetadata,
   expandedRegistryEntries,
+  applyModelMetadata,
+  catalogModelMetadata,
+  pickModelMetadata,
 } from "../modelMetadataLayers.js";
+import type { CatalogModel } from '../types.js';
 import { parseModelRegistry } from "../modelAccessValidator.js";
 import type { ModelRegistry } from "../modelAccessBean.js";
 
@@ -41,6 +45,28 @@ const registry: ModelRegistry = {
     },
   ],
 };
+
+it('keeps inherited capacity unverified through resolution and repeated catalog projection', () => {
+  const r: ModelRegistry = { schemaVersion: 4, updatedAt: registry.updatedAt, models: [],
+    baseModels: [{ id: 'private-6', aliases: [], defaults: { contextWindow: 64000 } }] };
+  const model: CatalogModel = { id: 'private-7', name: 'New', contextWindow: 200000,
+    contextWindowVerified: true, efforts: [], defaultEffort: null };
+  const metadata = resolveModelMetadata(r, 'supplier', model.id);
+  const inherited = applyModelMetadata(model, metadata);
+  expect(inherited).toMatchObject({ contextWindow: 64000, contextWindowVerified: false });
+  expect(JSON.parse(JSON.stringify(metadata))).toEqual(pickModelMetadata(metadata));
+  const live = catalogModelMetadata(inherited);
+  expect(applyModelMetadata(inherited, resolveModelMetadata(r, 'supplier', model.id, live)))
+    .toMatchObject({ contextWindow: 64000, contextWindowVerified: false });
+  for (const [reported, user] of [[{ contextWindow: 64000 }, undefined], [live, { contextWindow: 64000 }]] as const) {
+    expect(applyModelMetadata(inherited, resolveModelMetadata(r, 'supplier', model.id, reported, user)))
+      .toMatchObject({ contextWindow: 64000, contextWindowVerified: true });
+  }
+  r.models = [{ id: 'new-model', name: 'New', routes: [{ providerId: 'supplier', modelId: model.id,
+    agents: ['codex'], forceOverrides: { contextWindow: 32000 }, overrideReason: 'Verified capacity' }] }];
+  expect(applyModelMetadata(inherited, resolveModelMetadata(r, 'supplier', model.id, live)))
+    .toMatchObject({ contextWindow: 32000, contextWindowVerified: true });
+});
 
 it("honors entry names below route, live, force and user names", () => {
   const r = structuredClone(registry);

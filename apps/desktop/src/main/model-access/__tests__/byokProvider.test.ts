@@ -163,3 +163,12 @@ it('keeps live text-only and Pi effort restrictions above inherited capabilities
   }, credential });
   expect(provider.models.pi?.[0]).toMatchObject({ supportsImageInput: false, efforts: ['high'], defaultEffort: null });
 });
+
+it.each([undefined, 64000])('only verifies a future BYOK model window when explicitly declared: %s', (contextWindow) => {
+  const provider = buildByokProvider({ provider: { id: 'byok-a', name: 'Enterprise', connectionRevision: 1,
+    models: [{ ...chatModel, id: 'gpt-7-sol', contextWindow, nativeApi: 'openai-responses',
+      perAgent: { pi: { wireProtocol: 'openai-responses' } } }],
+  }, credential });
+  expect(provider.models.pi?.[0]?.contextWindow).toBeGreaterThan(0);
+  expect(provider.models.pi?.[0]?.contextWindowVerified).toBe(contextWindow !== undefined);
+});

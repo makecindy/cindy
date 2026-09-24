@@ -6,6 +6,9 @@ import { pickModelMetadata, type ModelMetadata } from './modelMetadataLayers.js'
  */
 function generation(id: string) {
   const normalized = id.toLowerCase().replace(/^(?:openai|anthropic|google|x-ai|xai|deepseek|qwen)\//, '');
+  // A first numeric token carrying a parameter-size unit is not a version.
+  // Later sizes (qwen4-30b) remain in the variant handled by the match below.
+  if (/^[a-z][a-z/-]*?\d+(?:\.\d+)?(?:x\d+(?:\.\d+)?)?[kmbt](?=[-_/.:]|$)/.test(normalized)) return undefined;
   const match = /^([a-z][a-z/-]*?)(\d{1,3}(?:[.-]\d{1,3}(?=[.-]|$))*)([^0-9].*|$)/.exec(normalized);
   if (!match) return undefined;
   return { family: match[1] + '|' + match[3], version: match[2]!.split(/[.-]/).map(Number) };
