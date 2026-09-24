@@ -34,6 +34,13 @@ describe('localModelRuntime', () => {
     expect(detectOllamaPackaging('qwen3.8:27b-mlx')).toBe('mlx');
     expect(detectOllamaPackaging('gemma4:e4b-mlx')).toBe('mlx');
     expect(detectOllamaPackaging('qwen3.8:27b')).toBe('q4');
+    expect(detectOllamaPackaging('laguna-s-2.1:nvfp4')).toBe('nvfp4');
+    expect(detectOllamaPackaging('laguna-s-2.1:q4_K_M')).toBe('q4');
+    expect(detectOllamaPackaging('qwen3.8-flash-next:125b-a6b-q4_K_M')).toBe('q4');
+    expect(detectOllamaPackaging('qwen3.8-flash-next:125b-a6b-nvfp4')).toBe('nvfp4');
+    expect(detectOllamaPackaging('laguna-s-2.1:q8_0')).toBeNull();
+    expect(detectOllamaPackaging('unknown:nvfp40')).toBeNull();
+    expect(detectOllamaPackaging('unknown:q40')).toBeNull();
     expect(detectOllamaPackaging('qwen3-coder:30b')).toBeNull();
   });
 

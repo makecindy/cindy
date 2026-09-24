@@ -2442,6 +2442,7 @@
         "alsoCoding": "Speed alternative",
         "packaging": {
           "mxfp8": "MXFP8",
+          "nvfp4": "NVFP4",
           "mlx": "MLX",
           "q4": "Q4"
         },
