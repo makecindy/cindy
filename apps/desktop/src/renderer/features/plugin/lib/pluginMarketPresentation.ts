@@ -8,7 +8,9 @@
 import { isCindyAccountGhostId, type GhostInstallApproval } from '../../../../shared/ghost';
 import {
   createPluginLogicalIdentity,
+  findInstalledGhostByIdentity,
   hasDeliveryNamespace,
+  installedGhostStoragePart,
   pluginStoragePart,
 } from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
@@ -77,6 +79,32 @@ export function ghostReapprovalRoute(
   return item?.installState === 'installed' || item?.installState === 'update-available'
     ? 'market'
     : 'local-package';
+}
+
+/**
+ * Bind a market row to the installed instance it is allowed to update.
+ *
+ * A namespaced catalog row must hit that logical identity. A public/legacy row
+ * (missing namespace, or explicit root) binds the physical root, including an
+ * in-place stamped plugin whose storage part is still the bare ghostId. It must
+ * not fall through to a `_ns/...` twin.
+ */
+export function findInstalledGhostForMarketItem<
+  T extends {
+    manifest: { id: string };
+    dir?: string;
+    namespace?: string | null;
+  },
+>(ghosts: readonly T[], item: Pick<PluginMarketItem, 'ghostId' | 'namespace'>): T | undefined {
+  const sameId = ghosts.filter((ghost) => ghost.manifest.id === item.ghostId);
+  if (sameId.length === 0) return undefined;
+  if (hasDeliveryNamespace(item) && item.namespace !== null) {
+    return findInstalledGhostByIdentity(
+      sameId,
+      createPluginLogicalIdentity(item.namespace, item.ghostId),
+    );
+  }
+  return sameId.find((ghost) => installedGhostStoragePart(ghost) === item.ghostId);
 }
 
 /** True when this market row is the update/origin route for this installed instance. */
