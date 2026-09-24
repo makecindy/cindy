@@ -57,6 +57,8 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
   const [page, setPage] = useState<string | null>(null);
   const [draft, setDraft] = useState<SettingsValues>({});
   const [busy, setBusy] = useState(false);
+  const [convertingPortrait, setConvertingPortrait] = useState(false);
+  const portraitPending = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
@@ -95,14 +97,14 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
     const token = ++sequence.current;
     return coalesce(async () => {
       if (!current() || token !== sequence.current) return;
-      if (!online.current || inFlight.current) {
+      if (!online.current || inFlight.current || portraitPending.current) {
         setLoading(false);
         return;
       }
       setLoading(true);
       try {
         const next = await read(resourceId);
-        if (!current() || token !== sequence.current) return;
+        if (!current() || token !== sequence.current || portraitPending.current) return;
         if (
           latest.current.dirty &&
           latest.current.data?.resource.revision !== next.resource.revision
@@ -142,7 +144,8 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           push.deviceId === bot.deviceId &&
           push.channel === REMOTE_RESOURCE_CHANGED_CHANNEL &&
           isDeviceLinkRemotePushCurrent(push, stamp) &&
-          !latest.current.dirty
+          !latest.current.dirty &&
+          !portraitPending.current
         )
           void load();
       }),
@@ -160,6 +163,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
       target.action.disabled ||
       !online.current ||
       inFlight.current ||
+      portraitPending.current ||
       !current()
     )
       return false;
@@ -271,8 +275,13 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
       }
     }
   };
-  const save = () =>
-    panel?.action && dirty ? submit(panel, changes, false) : Promise.resolve(!inFlight.current);
+  const save = () => {
+    // The ref closes the gap before React renders the conversion's busy state.
+    if (portraitPending.current) return Promise.resolve(false);
+    return panel?.action && dirty
+      ? submit(panel, changes, false)
+      : Promise.resolve(!inFlight.current);
+  };
   useEffect(() => {
     beforeCloseRef.current = save;
     return () => {
@@ -291,7 +300,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
     setPage(id);
   };
   const reload = async () => {
-    if (inFlight.current) return;
+    if (inFlight.current || portraitPending.current) return;
     if (
       dirty &&
       !(await confirm(
@@ -310,12 +319,17 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
     await load();
   };
   const disabled =
-    busy || loading || !bot.online || error === 'conflict' || !!panel?.action?.disabled;
+    busy ||
+    convertingPortrait ||
+    loading ||
+    !bot.online ||
+    error === 'conflict' ||
+    !!panel?.action?.disabled;
   const row = (id: string, title: string, action: () => void) => (
     <button
       key={id}
       type="button"
-      disabled={busy || loading}
+      disabled={busy || convertingPortrait || loading}
       onClick={action}
       className="flex min-h-10 w-full items-center justify-between gap-3 rounded-full px-3 py-2 text-left text-13 hover:bg-[var(--surface-hover)] disabled:opacity-50"
     >
@@ -393,16 +407,19 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
               : undefined
           }
           onChange={(value) => {
+            if (!current() || inFlight.current || portraitPending.current) return;
             const selectedScope = editorScope.current;
             const request = ++portraitRequest.current;
-            const image = new Image();
-            image.src = value;
-            void image
-              .decode()
-              .then(() => {
+            portraitPending.current = true;
+            setConvertingPortrait(true);
+            setError(null);
+            void (async () => {
+              try {
+                const image = new Image();
+                image.src = value;
+                await image.decode();
                 if (
                   !current() ||
-                  inFlight.current ||
                   request !== portraitRequest.current ||
                   selectedScope !== editorScope.current
                 )
@@ -413,15 +430,21 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
                 if (!context) throw new Error('Image unavailable');
                 context.drawImage(image, 0, 0, 128, 128);
                 setDraft({ avatarImageBase64: canvas.toDataURL('image/jpeg', 0.85).split(',')[1] });
-              })
-              .catch(() => {
+                latest.current.dirty = true;
+              } catch {
                 if (
                   current() &&
                   request === portraitRequest.current &&
                   selectedScope === editorScope.current
                 )
                   setError('saveFailed');
-              });
+              } finally {
+                if (request === portraitRequest.current) {
+                  portraitPending.current = false;
+                  if (current()) setConvertingPortrait(false);
+                }
+              }
+            })();
           }}
         />
       ) : (
@@ -441,7 +464,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           }
         />
       ) : null}
-      <Button type="submit" disabled={disabled || !dirty} loading={busy}>
+      <Button type="submit" disabled={disabled || !dirty} loading={busy || convertingPortrait}>
         {t('bots.save')}
       </Button>
     </form>
@@ -456,7 +479,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           tone="quiet"
           compact
           className="mb-4"
-          disabled={busy}
+          disabled={busy || convertingPortrait}
           onClick={() =>
             void open(
               null,
@@ -483,7 +506,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           <Button
             variant="secondary"
             compact
-            disabled={busy || !bot.online}
+            disabled={busy || convertingPortrait || !bot.online}
             onClick={() => void reload()}
           >
             {t('bots.memory.useLatest')}

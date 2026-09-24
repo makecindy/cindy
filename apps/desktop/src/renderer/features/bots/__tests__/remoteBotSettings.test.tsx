@@ -264,7 +264,7 @@ function push(id = 'bot', collectionId = 'teammates', deviceId = 'host') {
     payload: { collectionId, resourceRefs: [{ collectionId, kind: 'bot', id }] },
   });
 }
-it('submits raw JPEG base64 while preserving the portrait preview data URL', async () => {
+async function openAvatar(decode: () => Promise<void> = () => Promise.resolve()) {
   const avatar = {
     ...resource(),
     actions: [
@@ -292,7 +292,7 @@ it('submits raw JPEG base64 while preserving the portrait preview data URL', asy
     class {
       src = '';
       decode() {
-        return Promise.resolve();
+        return decode();
       }
     },
   );
@@ -304,6 +304,10 @@ it('submits raw JPEG base64 while preserving the portrait preview data URL', asy
   );
   render(<RemoteBotSettings bot={bot} beforeCloseRef={close} onDeleted={vi.fn()} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Avatar' }));
+  await screen.findByText('Choose portrait');
+}
+it('submits raw JPEG base64 while preserving the portrait preview data URL', async () => {
+  await openAvatar();
   fireEvent.click(await screen.findByText('Choose portrait'));
   await waitFor(() => expect(h.portrait.value).toBe('data:image/jpeg;base64,/9j/2Q=='));
   fireEvent.click(screen.getByText('bots.save'));
@@ -358,4 +362,56 @@ it('cancels a queued trailing read when the settings unmount', async () => {
   view.unmount();
   await act(async () => finish(resource()));
   expect(h.invoke).toHaveBeenCalledTimes(1);
+});
+
+it('blocks returning and closing immediately while a selected portrait is decoding, then saves it', async () => {
+  let finish!: () => void;
+  await openAvatar(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  let canClose: unknown;
+  await act(async () => {
+    h.portrait.onChange('data:image/png;base64,cG5n');
+    // Call before React commits state so the synchronous guard is exercised too.
+    canClose = await close.current?.();
+  });
+  expect(canClose).toBe(false);
+  expect(h.portrait.disabled).toBe(true);
+  const back = screen.getByRole('button', { name: 'bots.settingsBack' });
+  expect((back as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(back);
+  expect(screen.getByText('Choose portrait')).toBeTruthy();
+  expect(h.invoke.mock.calls.some((call) => call[1] === REMOTE_RESOURCE_INVOKE_CHANNEL)).toBe(
+    false,
+  );
+  await act(async () => finish());
+  expect(h.portrait.disabled).toBe(false);
+  await act(async () => {
+    canClose = await close.current?.();
+  });
+  expect(canClose).toBe(true);
+  expect(h.invoke).toHaveBeenCalledWith('host', REMOTE_RESOURCE_INVOKE_CHANNEL, [
+    expect.objectContaining({ input: { avatarImageBase64: '/9j/2Q==' } }),
+  ]);
+});
+it('reports failed portrait conversion and releases the navigation guard without writing an avatar', async () => {
+  let fail!: (error: Error) => void;
+  await openAvatar(
+    () =>
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      }),
+  );
+  fireEvent.click(screen.getByText('Choose portrait'));
+  expect(await close.current?.()).toBe(false);
+  await act(async () => fail(new Error('decode failed')));
+  expect(screen.getByRole('alert').textContent).toContain('saveFailed');
+  expect(h.portrait.disabled).toBe(false);
+  expect(await close.current?.()).toBe(true);
+  expect(h.invoke.mock.calls.some((call) => call[1] === REMOTE_RESOURCE_INVOKE_CHANNEL)).toBe(
+    false,
+  );
 });
