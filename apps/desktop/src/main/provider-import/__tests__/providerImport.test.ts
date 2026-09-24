@@ -13,6 +13,7 @@ import {
 } from '../providerImport.js';
 
 import { validateCustomProviderConfig } from '../../maker-host/custom-provider-store.js';
+import { applyRuntimeFillFields, type RuntimeFillDraft } from '../../../renderer/lib/customProviderRuntimeFill.js';
 
 const SCOPE = { dataOwnerId: 'owner-a', generation: 1 };
 
@@ -843,4 +844,38 @@ it.each([
       expect(projected.efforts).not.toContain('ultra');
     }
   }
+});
+
+
+it.each(['claude-code', 'codex'] as const)('saves Pi models filled into %s with target-compatible efforts', agent => {
+  const source: RuntimeFillDraft = { baseUrl: 'https://relay.example/v1', requestPath: '', apiKey: '',
+    wireProtocol: 'openai-responses', headers: [], modelsUrl: '', models: [
+      { id: 'future', name: 'Future', reasoning: true, reasoningEfforts: ['minimal', 'high'], reasoningDefaultEffort: 'minimal',
+        efforts: ['minimal', 'high', 'ultra'], defaultEffort: 'ultra',
+        discoveredMetadata: { efforts: ['minimal', 'high', 'ultra'], defaultEffort: 'ultra' } },
+      { id: 'empty', name: 'Empty', reasoning: true, reasoningEfforts: ['minimal'], reasoningDefaultEffort: 'minimal',
+        efforts: [], defaultEffort: null, discoveredMetadata: { efforts: [], defaultEffort: null } },
+      { id: 'sparse', name: 'Sparse', reasoning: true, reasoningEfforts: ['low'], efforts: ['low'] },
+    ] };
+  const target: RuntimeFillDraft = { ...source, models: [{ id: 'sparse', name: 'Old', reasoning: true,
+    reasoningEfforts: ['high'], reasoningDefaultEffort: 'high', efforts: ['high'], defaultEffort: 'high', defaultEnabled: true }] };
+  const before = structuredClone({ source, target });
+  const filled = applyRuntimeFillFields(target, source, ['models'], { sourceAgent: 'pi', targetAgent: agent });
+  const config = { id: 'filled-provider', name: 'Filled', runtimes: { [agent]: {
+    baseUrl: filled.baseUrl, wireProtocol: filled.wireProtocol, models: filled.models,
+  } } };
+  expect(validateCustomProviderConfig(config)).toEqual({ ok: true });
+  expect(filled.models.map(model => model.id)).toEqual(['future', 'empty', 'sparse']);
+  expect(filled.models[0]).toMatchObject({ reasoningEfforts: ['high'], efforts: ['high'], discoveredMetadata: { efforts: ['high'] } });
+  expect(filled.models[0].reasoningDefaultEffort).toBeUndefined();
+  expect(filled.models[0].defaultEffort).toBeUndefined();
+  expect(filled.models[0].discoveredMetadata!.defaultEffort).toBeUndefined();
+  expect(filled.models[1]).toMatchObject({ reasoningEfforts: [], efforts: [], defaultEffort: null,
+    discoveredMetadata: { efforts: [], defaultEffort: null } });
+  expect(filled.models[2]).toMatchObject({ reasoningEfforts: ['low'], efforts: ['low'], defaultEnabled: true });
+  expect(filled.models[2].reasoningDefaultEffort).toBeUndefined();
+  expect(filled.models[2].defaultEffort).toBeUndefined();
+  expect(buildUserProvider(config).models[agent]?.some(model => model.efforts.some(effort => effort === 'minimal' || effort === 'ultra'))).toBe(false);
+  expect({ source, target }).toEqual(before);
+  expect(applyRuntimeFillFields({ ...target, models: [] }, source, ['models'], { sourceAgent: 'pi', targetAgent: 'pi' }).models).toEqual(source.models);
 });

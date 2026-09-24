@@ -29,7 +29,7 @@ import {
   MANAGED_LMSTUDIO_PROVIDER_ID,
   MANAGED_OLLAMA_PROVIDER_ID,
 } from '../../shared/localModelRuntime.js';
-import { configuredPresetAgents } from '../../shared/piRuntimeInitialization.js';
+import { adaptCustomProviderModelEfforts, configuredPresetAgents } from '../../shared/piRuntimeInitialization.js';
 import { presetConnectionRuntime } from '../../shared/presetConnectionRuntime.js';
 
 const IMPORT_TTL_MS = 10 * 60_000;
@@ -633,32 +633,7 @@ function parsePayload(value: unknown): ProviderImportDraft {
     ) {
       fail(`multiple endpoints compete for ${agent}; set explicit targets`);
     }
-    const models = selected.models.map(source => {
-      const model = structuredClone(source);
-      // Adapt every representation before persistence; canonical metadata otherwise
-      // bypasses the legacy field validator. Keep Pi's shared endpoint record intact.
-      if (agent !== 'pi') {
-        const supported = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
-        if (model.reasoningEfforts) {
-          model.reasoningEfforts = model.reasoningEfforts.filter(effort => supported.has(effort));
-        }
-        if (model.reasoningDefaultEffort != null &&
-            (!supported.has(model.reasoningDefaultEffort) ||
-              (model.reasoningEfforts && !model.reasoningEfforts.includes(model.reasoningDefaultEffort)))) {
-          delete model.reasoningDefaultEffort;
-        }
-        for (const metadata of [model, model.discoveredMetadata]) {
-          if (!metadata) continue;
-          if (metadata.efforts) metadata.efforts = metadata.efforts.filter(effort => supported.has(effort));
-          if (metadata.defaultEffort != null &&
-              (!supported.has(metadata.defaultEffort) ||
-                (metadata.efforts && !metadata.efforts.includes(metadata.defaultEffort)))) {
-            delete metadata.defaultEffort;
-          }
-        }
-      }
-      return model;
-    });
+    const models = selected.models.map(source => adaptCustomProviderModelEfforts(source, agent));
     runtimes[agent] = {
       wireProtocol: selected.protocol,
       baseUrl: selected.baseUrl,
