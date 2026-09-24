@@ -47,27 +47,31 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
     >
       <button
         type="button"
-        onClick={bot.deviceId ? undefined : openSettings}
+        onClick={openSettings}
         title={bot.deviceName || t('bots.settings')}
-        disabled={Boolean(bot.deviceId)}
-        className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1 text-13 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+        className="flex min-w-0 items-center gap-2 rounded-full px-2 py-1 text-13 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
         style={WINDOW_NO_DRAG_STYLE}
       >
         <BotAvatar bot={bot} size="xs" />
         <span className="min-w-0 truncate">{bot.name}</span>
       </button>
       {isCindy ? <CindyHeaderDevicePicker bot={bot} /> : null}
-      {!bot.deviceId || !isCindy ? <div className="ml-auto flex shrink-0 items-center gap-1">
-        {!bot.deviceId ? <button
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        {bot.deviceId && !isCindy ? (
+          <span className="max-w-32 truncate text-12 text-[var(--text-tertiary)]">
+            {bot.deviceName}
+          </span>
+        ) : null}
+        <button
           type="button"
           onClick={openSettings}
           aria-label={t('bots.settings')}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
           style={WINDOW_NO_DRAG_STYLE}
         >
           <Settings2 size={15} />
-        </button> : <span className="truncate text-12 text-[var(--text-tertiary)]">{bot.deviceName}</span>}
-      </div> : null}
+        </button>
+      </div>
     </div>
   );
 }
@@ -77,13 +81,7 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
  * mounting registers, unmounting clears, and only the route-owning chat instance
  * renders it.
  */
-export function BotSessionContentHeaderRegistration({
-  bot,
-}: {
-  bot: BotChatIdentity;
-}) {
-  useRegisterContentHeader(
-    useMemo(() => <BotSessionContentHeader bot={bot} />, [bot]),
-  );
+export function BotSessionContentHeaderRegistration({ bot }: { bot: BotChatIdentity }) {
+  useRegisterContentHeader(useMemo(() => <BotSessionContentHeader bot={bot} />, [bot]));
   return null;
 }

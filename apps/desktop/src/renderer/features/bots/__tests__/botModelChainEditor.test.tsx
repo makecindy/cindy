@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [] }) }));
+
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -364,4 +366,16 @@ it('allows explicitly choosing a backup when no valid default is available', () 
   expect(change).not.toHaveBeenCalled();
   fireEvent.click(within(details).getByRole('button', { name: 'choose-official-codex-model' }));
   expect(change).toHaveBeenLastCalledWith([primary, { harness: 'codex', model: 'gpt-5.6-sol', providerId: 'openai', effort: 'medium', fastMode: true }]);
+});
+
+it('uses the selected device catalog without SSH subscription exclusions or local default fallbacks', () => {
+  const change = vi.fn();
+  const view = render(<BotModelChainEditor deviceId="remote-host" value={[]} onChange={change} />);
+  expect(modelSelectorProps.mock.lastCall?.[0]).toMatchObject({ deviceId: 'remote-host', excludeSubscriptionDirect: false, excludeChatBridgedCodex: false });
+  const details = view.container.querySelector('details')!;
+  details.open = true; fireEvent(details, new Event('toggle'));
+  fireEvent.click(screen.getByText('bots.modelChain.add'));
+  expect(change).not.toHaveBeenCalled();
+  fireEvent.click(within(details).getByRole('button', { name: 'choose-official-codex-model' }));
+  expect(change).toHaveBeenCalledWith([expect.objectContaining({ providerId: 'openai', harness: 'codex' })]);
 });

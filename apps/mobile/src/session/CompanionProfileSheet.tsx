@@ -238,7 +238,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
 
   const modelValues = editing ? values : panel?.values ?? {};
   const changeValues = (next: ProfileValues) => { if (!editing) draftBase.current = panel?.values ?? {}; setValues(next); setEditing(true); };
-  const models = <CompanionModelChain values={modelValues} disabled={busy || !online || !panel?.action} onChange={changeValues}
+  const models = <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={changeValues}
     onPick={index => { setModelIndex(index); setModelStage('closing-profile'); }} />;
   const afterClosed = () => {
     if (modelStage === 'closing-profile') { setModelStage('picker'); return; }

@@ -45,3 +45,12 @@ it('localizes all countdown units using the supplied language',()=>{
   expect(quotaCountdown(70,0,unit)).toBe('2分钟');
   expect(quotaCountdown(20,0,unit)).toBe('20秒');
 });
+
+import { mobileProviderAccountTitle } from '@/session/mobileModelRowPresentation';
+it('names independently connected accounts without duplicating generated identity labels', () => {
+  const identity = 'account@example.com';
+  expect(mobileProviderAccountTitle(provider({ name: 'OpenAI', openAiAccount: { identity } }))).toBe(`OpenAI · ${identity}`);
+  expect(mobileProviderAccountTitle(provider({ name: `OpenAI · ${identity} (2)`, openAiAccount: { identity } }))).toBe(`OpenAI · ${identity} (2)`);
+  expect(mobileProviderAccountTitle(provider({ name: 'Work', subscriptionAccount: { identity } }))).toBe(`Work · ${identity}`);
+  expect(mobileProviderAccountTitle(provider({ name: 'My API' }))).toBe('My API');
+});

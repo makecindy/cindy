@@ -7618,6 +7618,14 @@
     }
   },
   "bots": {
+    "remoteSettings": {
+      "empty": "Nothing here yet.",
+      "loadFailed": "Could not load settings. Try again.",
+      "saveFailed": "Could not confirm the save. Reload settings before retrying.",
+      "conflict": "Settings changed on the other device. Reload before saving.",
+      "unsupported": "Update Cindy on the other device to edit these settings.",
+      "discardDescription": "Reloading will discard these unsaved settings."
+    },
     "devicePicker": {
       "local": "This Device",
       "title": "Switch Device",

@@ -7616,6 +7616,14 @@
     }
   },
   "bots": {
+    "remoteSettings": {
+      "empty": "暫無內容",
+      "loadFailed": "無法讀取設定，請重試。",
+      "saveFailed": "未能確認儲存結果，請重新讀取設定後再試。",
+      "conflict": "設定已在另一台裝置上變更，請重新讀取後再儲存。",
+      "unsupported": "請更新另一台裝置上的 Cindy 以編輯這些設定。",
+      "discardDescription": "重新讀取將放棄尚未儲存的設定。"
+    },
     "devicePicker": {
       "local": "本機",
       "title": "切換裝置",
