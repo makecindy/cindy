@@ -238,6 +238,15 @@ test("planRelatedUnitTests skips when there are no changes", () => {
 	});
 });
 
+test("generated glossary and legal text retain their runner checks without business suites", () => {
+	for (const file of ["i18n/GLOSSARY.md", "docs/legal/notices/desktop-win.txt"]) {
+		const plan = planRelatedUnitTests({ changedFiles: [file], workspaces, packageJsonByCwd });
+		assert.equal(plan.mode, "related", file);
+		assert.equal(plan.runTestRunner, true, file);
+		assert.deepEqual(plan.runs, [], file);
+	}
+});
+
 test("planRelatedUnitTests runs the owner suite when a file is deleted", () => {
 	const plan = planRelatedUnitTests({
 		changedFiles: ["apps/desktop/src/main/gone.ts"],
@@ -284,7 +293,10 @@ test("a stale fork does not count upstream commits as local work, including from
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "related-git-base-"));
 	const repo = path.join(root, "repo");
 	fs.mkdirSync(repo);
-	const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull };
+	// Git for Windows cannot open Node's \\.\nul device path as a config file.
+	const globalConfig = path.join(root, "empty.gitconfig");
+	fs.writeFileSync(globalConfig, "");
+	const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: globalConfig };
 	const git = (cwd, args) => execFileSync("git", args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 	try {
 		git(repo, ["init", "-b", "main"]);

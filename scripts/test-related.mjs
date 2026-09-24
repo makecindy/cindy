@@ -81,6 +81,12 @@ export function isWideFile(file) {
 export function shouldRunTestRunner(files) {
 	return files.some((file) => {
 		const normalized = normalizeRelPath(file);
+		// These text artifacts are executable test inputs, not explanatory docs:
+		// glossary-rules and third-party-notices validate their generated content.
+		if (
+			normalized === "i18n/GLOSSARY.md" ||
+			normalized.startsWith("docs/legal/notices/")
+		) return true;
 		return (
 			!isSkippableFile(normalized) &&
 			!normalized.startsWith("apps/") && !normalized.startsWith("packages/")
