@@ -25017,6 +25017,47 @@ describe('CodexAgent rewind', () => {
     await handle.close();
   });
 
+  it('holds MCP discovery identity around the fresh rewind thread/start (#4994)', async () => {
+    const order: string[] = [];
+    const deps = createDeps();
+    deps.withCodexMcpDiscoveryContext = async (ctx, run) => {
+      expect(ctx).toMatchObject({ sessionId: 'bot-parent', sessionInstanceId: 'bot-instance' });
+      order.push('discovery');
+      try { return await run(); } finally { order.push('released'); }
+    };
+    const agent = new CodexAgent(deps);
+    const startImpl = freshThreadStartImpl();
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+      return startImpl(method);
+    }, { userAgent: 'mock-codex/0.156.0' });
+    const original = host.request.getMockImplementation()!;
+    host.request.mockImplementation(async (...args) => {
+      if (args[0] === Method.ThreadStart) {
+        expect(order.at(-1)).toBe('discovery');
+        order.push('native');
+      }
+      return original(...args);
+    });
+    const handle = await agent.startSession({
+      sessionId: 'bot-parent',
+      sessionInstanceId: 'bot-instance',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    expect(order).toEqual(['discovery', 'native', 'released']);
+    order.length = 0;
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true }))
+      .resolves.toEqual({ sdkSessionId: 'fresh-thread-id' });
+    expect(order).toEqual(['discovery', 'native', 'released']);
+    await handle.close();
+  });
+
   it('replaces the thread when a paginated thread rejects rollback at the native thread start (#4421 / #4994)', async () => {
     const agent = new CodexAgent(createDeps());
     const startImpl = freshThreadStartImpl();

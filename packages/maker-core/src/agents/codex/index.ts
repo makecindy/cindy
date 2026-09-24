@@ -6879,7 +6879,7 @@ export class CodexAgent extends BaseAgent {
         const resp = await requestProfileLifecycle<ThreadStartResponse>({
           action: 'replacement',
           signal,
-          request: () => host.request<ThreadStartResponse>(retainHistory ? Method.ThreadFork : Method.ThreadStart, {
+          request: () => withMcpDiscoveryContext(() => host.request<ThreadStartResponse>(retainHistory ? Method.ThreadFork : Method.ThreadStart, {
             ...(retainHistory ? { threadId: previousThreadId, excludeTurns: true } : {}),
             cwd: opts.workingDir,
             // Recovery belongs to the running send, whose catalog/window is already frozen.
@@ -6889,7 +6889,7 @@ export class CodexAgent extends BaseAgent {
             ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
             ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
             ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
-          }),
+          })),
           onLateResolve: async (lateResp) => {
             const lateThreadId = lateResp.thread.id;
             if (lateThreadId === previousThreadId) return;
