@@ -51,6 +51,25 @@ function buildRichConversationHtml(): string {
 }
 
 describe('buildConversationShareHtml 富内容导出', () => {
+  it.each([
+    { contentWidth: 360, minWidth: 96, dark: false },
+    { contentWidth: 360, minWidth: 96, dark: true },
+    { contentWidth: 390, minWidth: 112, dark: false },
+    { contentWidth: 390, minWidth: 112, dark: true },
+  ])('分享表格保留列宽（$contentWidth / dark=$dark），不套用文件预览等宽布局', ({ contentWidth, minWidth, dark }) => {
+    const html = buildConversationShareHtml({
+      allShareableIds: ['table'], colors: { ...colors, dark }, contentWidth,
+      selectedMessages: [{
+        clientId: 'table', kind: 'assistant',
+        body: '| A | B | C | D |\n| --- | --- | --- | --- |\n| Alpha | Beta | Gamma | Delta |',
+      }],
+    });
+    expect(html).toContain('<table>');
+    expect(html).toMatch(new RegExp(`th, td \\{[^}]*min-width:\\s*${minWidth}px`, 's'));
+    expect(html).toMatch(/table \{[^}]*display:\s*block[^}]*max-width:\s*100%[^}]*overflow-x:\s*auto/s);
+    expect(html).not.toMatch(/table \{[^}]*table-layout:\s*fixed/s);
+  });
+
   it('继续脱敏跨行内格式和段落拆开的凭证', () => {
     const html = buildConversationShareHtml({
       allShareableIds: ['secret'], colors, contentWidth: 390,

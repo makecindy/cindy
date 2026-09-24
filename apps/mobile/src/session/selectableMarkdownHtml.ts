@@ -13,10 +13,10 @@ import { lightColors, lineHeight as lineHeightScale, typeScale } from '@/theme/t
 import { i18n } from '@/i18n';
 
 /**
- * 全屏 markdown 文档 HTML 构建器 —— 当前唯一消费方是文件预览的 MarkdownFileReader
- * (WebView 自身滚动的阅读态)。聊天消息气泡已全面切换为原生 markdown 渲染,
+ * 全屏 markdown 文档 HTML 构建器 —— 文件预览的 MarkdownFileReader 使用完整文档
+ * (WebView 自身滚动的阅读态)，会话分享复用 CSS 与内容片段。聊天消息气泡已全面切换为原生 markdown 渲染,
  * 本模块随之瘦身:气泡专用的 segments 拼装 / bridge 脚本 / 测高估算已删除,
- * 只保留「markdown → 完整 HTML 文档」这一条能力。
+ * 不承担聊天气泡的布局与手势。
  */
 export interface SelectableMarkdownHtmlOptions {
   /** When supplied, export only these embedded images; never expose source URLs. */
@@ -46,6 +46,7 @@ export interface SelectableMarkdownHtmlOptions {
     property?: string;
     string?: string;
   };
+  /** 显式指定时保留列宽并在表内横向滚动（会话分享）；省略时按文件预览视口换行。 */
   tableCellMinWidth?: number;
   textColor?: string;
   /**
@@ -191,6 +192,11 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
   const bodyGap = cssNumber(options.bodyGap ?? 10);
   const horizontalPadding = cssNumber(options.horizontalPadding ?? 16);
   const markerWidth = cssNumber(options.markerWidth ?? 24);
+  const tableCellMinWidth = cssNumber(options.tableCellMinWidth ?? 0);
+  // 分享沿用原有的最小列宽；文件阅读器未指定列宽，才启用窄屏等分布局。
+  const tableLayout = options.tableCellMinWidth === undefined
+    ? 'table-layout: fixed; width: 100%;'
+    : 'display: block; max-width: 100%; overflow-x: auto;';
 
   return `
     html {
@@ -395,14 +401,13 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       border-left: 1px solid ${borderColor};
       border-spacing: 0;
       border-top: 1px solid ${borderColor};
-      table-layout: fixed;
-      width: 100%;
+      ${tableLayout}
     }
     th, td {
       border-bottom: 1px solid ${borderColor};
       border-right: 1px solid ${borderColor};
       box-sizing: border-box;
-      min-width: 0;
+      min-width: ${tableCellMinWidth}px;
       overflow-wrap: anywhere;
       padding: 4px 8px;
       word-break: break-word;
