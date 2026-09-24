@@ -980,7 +980,10 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
   });
 
-  it('hands exhausted network retries back to the user instead of host auto-resume', () => {
+  it.each([
+    'The operation timed out.',
+    "Error Code null: Service temporarily unavailable. The model's availability is currently degraded.",
+  ])('hands exhausted network retries back to the user instead of host auto-resume: %s', (finalError) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
 
@@ -989,7 +992,7 @@ describe('pi translator', () => {
       ev({
         type: 'auto_retry_end',
         success: false,
-        finalError: 'The operation timed out.',
+        finalError,
       }),
       queue,
       ctx,
@@ -1003,7 +1006,7 @@ describe('pi translator', () => {
     );
     expect(terminalErrors).toHaveLength(1);
     expect(terminalErrors[0]?.data).toMatchObject({
-      message: 'The operation timed out.',
+      message: finalError,
       reason: 'pi-gateway-drop',
     });
     expect(events.find((event) => event.type === 'done')?.data)

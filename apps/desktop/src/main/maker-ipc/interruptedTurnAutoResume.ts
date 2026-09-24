@@ -119,7 +119,8 @@ function isStreamTruncationError(signals: InterruptedTurnErrorSignals): boolean 
  * 是 #844 主动交回用户的情形（重投会重复已产生的副作用），正是本份该接的。
  *
  * 认这三类刻意**不**要求 `server_error` tag、也**允许**带状态码——502 / 529 本身就带
- * 状态码，网络 errno 也没有 SDK tag。收紧只对第 1 类成立。
+ * 状态码，网络 errno 也没有 SDK tag。已分类 reason 优先；其余候选先排除明确的
+ * 4xx／鉴权／额度等拒绝信号，再走临时网络／过载文案兼容。
  */
 /**
  * 这类 reason 表示 turn **已经被上游 / daemon accept** 之后卡死，不是 admission 失败。
@@ -199,6 +200,16 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
     return true;
   }
   if (reason.length > 0) return false;
+  // Prefer provider status/tags to text compatibility. In particular, an auth,
+  // quota or invalid-request rejection must not become retryable just because
+  // its explanation also mentions a temporarily unavailable service.
+  const status = signals.errorStatus;
+  if (status !== undefined && status >= 400 && status < 500) return false;
+  if ([502, 503, 504, 529].includes(status ?? 0)) return true;
+  if ([
+    'authentication_failed', 'authentication_error', 'billing_error', 'rate_limit',
+    'invalid_request', 'permission_error', 'insufficient_quota', 'context_length_exceeded',
+  ].includes(signals.sdkError ?? '')) return false;
   if (isStreamTruncationError(signals)) return true;
   const message = signals.message;
   if (typeof message !== 'string' || message.length === 0) return false;
