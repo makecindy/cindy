@@ -1,5 +1,7 @@
 {
   "sharedTask": {
+    "manageSharing": "Manage Sharing",
+    "manageMembers": "Manage Members…",
     "cancelSharing": "Stop Sharing",
     "cancelTitle": "Stop sharing?",
     "leaveShort": "Leave Sharing",

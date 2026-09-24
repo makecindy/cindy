@@ -1,5 +1,7 @@
 {
   "sharedTask": {
+    "manageSharing": "共有管理",
+    "manageMembers": "メンバーを管理…",
     "cancelSharing": "共有を停止",
     "cancelTitle": "共有を停止しますか？",
     "leaveShort": "共有から退出",

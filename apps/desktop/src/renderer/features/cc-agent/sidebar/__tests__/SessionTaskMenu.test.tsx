@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { useRef, useState } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { SessionTaskMenu } from '../SessionTaskMenu';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { toast } from '@/lib/toast';
 
 const state = vi.hoisted(() => ({
   host: vi.fn(),
@@ -16,6 +17,7 @@ const state = vi.hoisted(() => ({
   closeLink: vi.fn(),
   invoke: vi.fn(),
   removeDevice: vi.fn(),
+  writeClipboard: vi.fn(),
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key.split('.').at(-1) }),
@@ -68,12 +70,19 @@ function openMenu() {
 function labels() {
   return screen.getAllByRole('menuitem').map((item) => item.textContent);
 }
+async function openSharingSubmenu() {
+  const trigger = await screen.findByRole('menuitem', { name: 'manageSharing' });
+  fireEvent.keyDown(trigger, { key: 'ArrowRight' });
+  await screen.findByRole('menuitem', { name: 'manageMembers' });
+}
 beforeEach(() => {
   vi.clearAllMocks();
   setDataOwnerGeneration('owner');
   state.host.mockResolvedValue({ available: false, detail: null });
   state.account.mockImplementation(async ({ action, sharedTaskId }) => action === 'close' ? { closed: [sharedTaskId], failed: [] } : []);
   state.closeLink.mockResolvedValue(undefined);
+  state.writeClipboard.mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: state.writeClipboard } });
   Object.assign(window, {
     electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { closeLink: state.closeLink, invoke: state.invoke } },
   });
@@ -192,8 +201,10 @@ it('keeps the shared dialog after closing the menu and isolates its clicks from 
 it('shows stop sharing for an active host and closes only after confirmation', async () => {
   state.host.mockResolvedValue({ available: true, detail: { sharedTaskId: 'share', status: 'active' } });
   render(<Harness />); openMenu();
-  await screen.findByRole('menuitem', { name: 'cancelSharing' });
-  expect(labels()).toEqual(['pin', 'rename', 'move', 'tags', 'copy', 'cancelSharing', 'export', 'openInNewWindow', 'archived', 'delete']);
+  await screen.findByRole('menuitem', { name: 'manageSharing' });
+  expect(labels()).toEqual(['pin', 'rename', 'move', 'tags', 'copy', 'manageSharing', 'export', 'openInNewWindow', 'archived', 'delete']);
+  expect(screen.queryByRole('menuitem', { name: 'cancelSharing' })).toBeNull();
+  await openSharingSubmenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'cancelSharing' }));
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(state.account).not.toHaveBeenCalled();
@@ -207,9 +218,61 @@ it('shows stop sharing for an active host and closes only after confirmation', a
 it('routes the state lookup through the owning remote computer', async () => {
   state.invoke.mockResolvedValue({ available: true, detail: { sharedTaskId: 'remote-share', status: 'active' } });
   render(<Harness target={{ ...session, deviceLinkDeviceId: 'own-computer' }} />); openMenu();
-  await screen.findByRole('menuitem', { name: 'cancelSharing' });
+  await screen.findByRole('menuitem', { name: 'manageSharing' });
   expect(state.invoke).toHaveBeenCalledWith('own-computer', 'maker:shared-task', [{ action: 'state', sessionId: 'task' }]);
   expect(state.host).not.toHaveBeenCalled();
+});
+
+it('opens the existing member management panel from the sharing submenu', async () => {
+  state.host.mockResolvedValue({ available: true, detail: { sharedTaskId: 'share', status: 'active', title: 'Task', guests: [], memberLabels: [], hostDeviceId: 'device' } });
+  render(<Harness />); openMenu(); await openSharingSubmenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'manageMembers' }));
+  const dialog = await screen.findByRole('dialog');
+  await within(dialog).findByRole('button', { name: 'invite' });
+  expect(screen.queryByRole('menu')).toBeNull();
+  expect(screen.queryByRole('alertdialog')).toBeNull();
+  expect(state.account).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'close' }));
+  expect(state.rowClick).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('copies an invitation for the correct host (remote: %s)', async remote => {
+  const api = remote ? state.invoke : state.host;
+  api.mockImplementation(async (...args) => (remote ? args[2][0] : args[0]).action === 'invite'
+    ? { invitation: 'test-invitation' }
+    : { available: true, detail: { sharedTaskId: 'share', status: 'active' } });
+  render(<Harness target={{ ...session, deviceLinkDeviceId: remote ? 'own-computer' : undefined }} />);
+  openMenu(); await openSharingSubmenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'invite' }));
+  await waitFor(() => expect(state.writeClipboard).toHaveBeenCalledWith('test-invitation'));
+  expect(toast.success).toHaveBeenCalledWith('invitationCopied');
+  if (remote) expect(state.invoke).toHaveBeenCalledWith('own-computer', 'maker:shared-task', [{ action: 'invite', sharedTaskId: 'share' }]);
+  else expect(state.host).toHaveBeenCalledWith({ action: 'invite', sharedTaskId: 'share' });
+  expect(state.rowClick).not.toHaveBeenCalled();
+});
+
+it('does not copy a late invitation after the account changes', async () => {
+  let finish!: (value: { invitation: string }) => void;
+  state.host.mockImplementation(async command => command.action === 'invite'
+    ? new Promise(resolve => { finish = resolve; })
+    : { available: true, detail: { sharedTaskId: 'share', status: 'active' } });
+  render(<Harness />); openMenu(); await openSharingSubmenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'invite' }));
+  setDataOwnerGeneration('other-account');
+  await act(async () => finish({ invitation: 'old-account-invitation' }));
+  expect(state.writeClipboard).not.toHaveBeenCalled();
+});
+
+it('reports clipboard failure separately and allows retrying', async () => {
+  state.host.mockImplementation(async command => command.action === 'invite'
+    ? { invitation: 'test-invitation' }
+    : { available: true, detail: { sharedTaskId: 'share', status: 'active' } });
+  state.writeClipboard.mockRejectedValueOnce(new Error('clipboard unavailable'));
+  render(<Harness />); openMenu(); await openSharingSubmenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'invite' }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('invitationCopyFailed'));
+  await waitFor(() => expect(screen.getByRole('menuitem', { name: 'invite' }).getAttribute('aria-disabled')).not.toBe('true'));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'invite' }));
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith('invitationCopied'));
 });
 
 it('leaves the confirmed shared peer without calling host management', async () => {

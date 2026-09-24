@@ -1,5 +1,7 @@
 {
   "sharedTask": {
+    "manageSharing": "共享管理",
+    "manageMembers": "管理成员…",
     "cancelSharing": "取消共享",
     "cancelTitle": "取消共享？",
     "leaveShort": "退出共享",
