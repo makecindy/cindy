@@ -49,6 +49,10 @@ describe('LibraryBindingStore', () => {
     expect(set.ok).toBe(true);
     if (!set.ok) return;
     expect(set.record.generation).toBe(1);
+    expect(set.record.libraryReady).toBe(false);
+    await store.markLibraryReady(GHOST_ID);
+    expect((await store.getBinding(GHOST_ID))?.libraryReady).toBe(true);
+    expect((await store.getBinding(GHOST_ID))?.generation).toBe(1);
 
     const after = await store.resolveLibraryRoot(GHOST_ID);
     expect(after.kind).toBe('custom');

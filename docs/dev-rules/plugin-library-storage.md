@@ -21,6 +21,7 @@
 | per-plugin worker 入口 | `apps/desktop/src/main/cindy-brain/libraryDbWorker.ts` |
 | 主进程 RPC 服务（发送前语句门 / dispose 收口） | `apps/desktop/src/main/cindy-brain/librarySqlService.ts` |
 | 协议分派（资格审 / binding 根解析 / owner scope 复核） | `apps/desktop/src/main/cindy-brain/librarySlot.ts` |
+| owner-scoped staging（独立于可迁移 Library 根） | `apps/desktop/src/main/cindy-brain/libraryStaging.ts` |
 | 随时迁移状态机 | `apps/desktop/src/main/cindy-brain/libraryMigrate.ts` |
 | 回收站删除通道 | `apps/desktop/src/main/cindy-brain/libraryTrash.ts` |
 | 管子协议类型（`library-request`） | `apps/desktop/src/shared/ghost.ts`（`GhostPipeLibraryRequest/Result`） |
@@ -34,7 +35,8 @@
 owners/<ownerKey>/
 ├── libraries/<ghostId>/          # 系统管理默认根
 ├── libraries-binding.json        # 自定义位置持久 binding（原子写）
-└── libraries-trash/<ghostId>-<ts>/  # 删除通道的 30 天回收站
+├── libraries-trash/<ghostId>-<ts>/  # 删除通道的 30 天回收站
+└── library-staging/<ghostId>/    # H1 上传 staging（不可随 Library 根迁移）
 ```
 
 自定义根 = `<用户所选父目录>/<ghostId>`（binding 记录 realpath 快照 + 文件
@@ -113,8 +115,14 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 13. **只读操作能力合同（capabilities）**：`{op:'capabilities'}` 在资格审与 op 合法性
     校验之后、会话创建之前返回，不捕获 owner、不解析库根、不 open vault、不弹窗、
     不碰剪贴板、不泄漏 owner 或绝对库路径。成功形态固定为
-    `{ok:true, op:'capabilities', capabilities:{version:1, operations:['clipboardWrite','saveAs']}}`。
+    `{ok:true, op:'capabilities', capabilities:{version:1, operations:[...clipboardWrite/saveAs, staging.*], staging:{version:1,...limits}}}`。
     `operations` 只表达**实现支持**，不等于此刻有窗口、已授权或库可用。
+    staging 操作与 capabilities 在 Library open/root/authorizedReadonly 门之前分派，
+    仍验当前 owner 与已启用 library 能力；只有 `staging.release` 核验当前 Library ACK。
+    `disposeGhost` / `disposeAll` 先置 `relocating` 再排空该 ghost 在途 `staging.release`（tombstone/fsync 期间 Library 会话保持稳定），新的 release 在闸上拒绝；bind/unbind/relocate/delete 都先置 relocating 再 dispose，不把 owner mutation lease 当迁库锁。首次 mint staging 根时，耐久还要 fsync 新建根在其父目录中的 entry，只 fsync 根 inode 不算。Windows 仍报 `fsynced:false`。
+    staging 根按 owner×ghost 捕获后不漂移；坏/不可读 manifest 返回 `LIBRARY_UNAVAILABLE`，不得报空或释放对应空间。
+    新原件在 blob 就位前经 Vault 写下 `intent.json`（owner/ghost/id/task/revision/hash/bytes/mime/recovery）；崩溃后 new Store 只从这份可信 intent 校验 bytes/hash 再补 `manifest.json`+dirfsync，不从 blob 猜归属。不完整或冲突 fail-closed 并保留源。本 PR 新原件必有 intent；历史无 intent 的 orphan blob 只隔离计费，不 TTL 删除、不声称可恢复。原件只在 Library ACK 且调用者已保存画布后释放。
+    恢复与 release 走流式 hash，禁止 `readFile` 整文件入内存。null owner 拒。
     消费规则：仅 `version===1` 且 `operations` 为字符串数组才有效；额外字段忽略，未知
     operation 忽略，已知项保留；有效 v1 清单缺少某项才是 unsupported；缺字段、错类型、
     `version` 非 1、或旧宿主 unknown-op 一律 unknown。旧插件无需重装或重授权。

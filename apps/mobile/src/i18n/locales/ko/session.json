@@ -318,6 +318,8 @@
     "readingRemoteDir": "원격 디렉터리를 읽는 중…",
     "goParentDir": "상위 디렉터리로",
     "parentDir": "상위",
+    "drive": "드라이브",
+    "switchToDrive": "{{name}}(으)로 전환",
     "useCurrentRemoteDir": "현재 원격 디렉터리 사용",
     "useCurrent": "현재 사용",
     "firstMessagePlaceholder": "첫 메시지 입력",

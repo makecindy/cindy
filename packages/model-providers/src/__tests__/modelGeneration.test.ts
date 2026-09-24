@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { previousModelGenerations } from '../modelGeneration.js';
 import { buildUserProvider } from '../user-provider.js';
+import { isChatEligible } from '../classification.js';
 import { BUNDLED_CATALOG } from '../builtin.js';
 import { providerModelGenerationRecord, providerModelRecord, providerModelAdapterId } from '../providerModelCatalog.js';
 import { parseModelsListResponse } from '../modelDiscovery.js';
@@ -30,6 +31,20 @@ describe('new model generation defaults', () => {
         expect(model.cost).toBeUndefined();
         expect(model.userModelConfig).toEqual(saved[0]);
       }
+    }
+  });
+
+  it('uses a target maximum-only report before inherited working windows without verifying it', () => {
+    const provider = build([
+      { id: 'private-6-sol', name: 'Old', discoveredMetadata: { contextWindow: 272000 } },
+      ...discovered('private-7-sol', { max_context_window: 64000 }),
+      ...discovered('gpt-9-sol', { max_context_window: 32000 }),
+    ]);
+    for (const agent of ['codex', 'pi', 'claude-code'] as const) {
+      expect(provider.models[agent]![1]).toMatchObject({ contextWindow: 64000,
+        contextWindowMax: 64000, contextWindowVerified: false });
+      expect(provider.models[agent]![2]).toMatchObject({ contextWindow: 32000,
+        contextWindowMax: 32000, contextWindowVerified: false });
     }
   });
 
@@ -89,6 +104,28 @@ describe('new model generation defaults', () => {
     }
   });
 
+  it.each([
+    ['image_generation', 'imageModels'],
+    ['video_generation', 'videoModels'],
+    ['embedding', 'embeddingModels'],
+  ] as const)('does not inherit %s membership, but preserves the target declaration', (mode, field) => {
+    for (const declared of [false, true]) {
+      const provider = build([
+        { id: 'private-6-sol', name: 'Old', discoveredMetadata: { mode, contextWindow: 64000 } },
+        { id: 'private-7-sol', name: 'New', discoveredMetadata: declared ? { mode } : {} },
+      ]);
+      for (const agent of ['codex', 'pi', 'claude-code'] as const) {
+        const target = provider.models[agent]![1]!;
+        expect(target.contextWindow).toBe(64000);
+        expect(target.mode).toBe(declared ? mode : undefined);
+        expect(isChatEligible(target)).toBe(!declared);
+      }
+      expect(provider[field]?.map(model => model.id)).toEqual(
+        declared ? ['private-6-sol', 'private-7-sol'] : ['private-6-sol'],
+      );
+    }
+  });
+
   it('does not inherit from another variant, protocol, private namespace or endpoint', () => {
     const target = { id: 'private-9-sol', name: 'New' };
     for (const source of [
@@ -140,6 +177,64 @@ describe('new model generation defaults', () => {
     expect(source).toBeDefined();
     expect(providerModelRecord('gpt-5.6-sol', ` ${endpoint}${slashes} `, 'openai-responses')).toBe(source);
     expect(providerModelRecord('gpt-5.6-sol', `${endpoint}${slashes}other`, 'openai-responses')).toBeUndefined();
+  });
+
+  it('uses the exact manufacturer adapter before a predecessor on compatible relays', () => {
+    const exact = providerModelRecord('gpt-5.4', 'https://api.openai.com/v1', 'openai-responses')!;
+    expect(exact).toBeDefined();
+    const relay = providerModelGenerationRecord('gpt-5.4', 'https://relay.example/v1', 'openai-responses')!;
+    const { headers: _headers, ...parameters } = exact.execution.pi;
+    expect(relay.inheritedFrom).toBe('gpt-5.4');
+    expect(relay.execution.pi).toEqual(parameters);
+    expect(relay.upstream).toBe('https://relay.example/v1');
+    expect(relay.cost).toBeUndefined();
+    expect(relay.execution.pi.headers).toBeUndefined();
+    expect(providerModelGenerationRecord('gpt-5.4', 'https://relay.example/v1', 'anthropic-messages')).toBeUndefined();
+  });
+
+  it('retains exact adapter metadata across engines even without Registry entries', () => {
+    const exact = providerModelRecord('grok-4.7', 'https://api.x.ai/v1', 'openai-responses')!;
+    expect(exact).toBeDefined();
+    const runtime = { baseUrl: 'https://relay.example/v1', wireProtocol: 'openai-responses' as const,
+      models: discovered('grok-4.7') };
+    const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+      codex: runtime, pi: runtime, 'claude-code': runtime,
+    } }, { modelRegistry: { schemaVersion: 4, updatedAt: '2026-09-24T00:00:00Z', models: [] } });
+    for (const agent of ['codex', 'pi', 'claude-code'] as const) {
+      expect(provider.models[agent]![0]).toMatchObject({
+        contextWindow: exact.contextWindow, efforts: exact.efforts,
+        supportsImageInput: exact.supportsImageInput, contextWindowVerified: true,
+      });
+    }
+  });
+
+  it('clears inherited image input after text-only discovery without changing predecessor or output modalities', () => {
+    const source: ProviderRuntimeModelConfig = { id: 'private-6-sol', name: 'Old', discoveredMetadata: {
+      modalities: { input: ['text', 'image'], output: ['text', 'image'] }, supportsImageInput: true,
+    } };
+    const provider = build([source, ...discovered('private-7-sol', { input_modalities: ['text'] })]);
+    for (const agent of ['codex', 'pi', 'claude-code'] as const) {
+      expect(provider.models[agent]![1]).toMatchObject({ supportsImageInput: false,
+        modalities: { input: ['text'], output: ['text', 'image'] } });
+      expect(provider.models[agent]![0]).toMatchObject({ supportsImageInput: true,
+        modalities: { input: ['text', 'image'], output: ['text', 'image'] } });
+    }
+    expect(source.discoveredMetadata?.modalities?.input).toEqual(['text', 'image']);
+  });
+
+  it('drops only inherited capacity when the target declares a larger working window', () => {
+    for (const ownMax of [undefined, 256000]) {
+      const provider = build([
+        { id: 'private-6-sol', name: 'Old', discoveredMetadata: { contextWindow: 64000, contextWindowMax: 64000 } },
+        { id: 'private-7-sol', name: 'New', discoveredMetadata: { contextWindow: 128000,
+          ...(ownMax !== undefined ? { contextWindowMax: ownMax } : {}) } },
+      ]);
+      for (const agent of ['codex', 'pi', 'claude-code'] as const) {
+        const model = provider.models[agent]![1]!;
+        expect(model.contextWindow).toBe(128000);
+        expect(model.contextWindowMax).toBe(ownMax);
+      }
+    }
   });
 
   it('reuses serializer mappings without copying the predecessor identity, prices, endpoint or headers', () => {

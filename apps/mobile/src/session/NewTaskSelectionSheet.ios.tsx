@@ -1,5 +1,5 @@
-import { Button, Image, ProgressView, Text, Toggle } from '@expo/ui/swift-ui';
-import { disabled, font, foregroundStyle, frame } from '@expo/ui/swift-ui/modifiers';
+import { Button, Image, Picker, ProgressView, Text, Toggle } from '@expo/ui/swift-ui';
+import { disabled, font, foregroundStyle, frame, pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { iconSize, useTheme } from '@/theme';
 import { ComposerSheet } from './ComposerSheet';
@@ -65,6 +65,12 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           <ComposerNativeRow title={t('session.new.parentDir')} leading={icon('arrow.up')}
             disabled={!p.parent || unavailable} onPress={() => { if (p.parent) p.onEnter(p.parent); }}
             testID="newSession.remoteBrowseParentButton" />
+          {p.drives.length ? <Picker label={t('session.new.drive')}
+            selection={p.drives.find(drive => drive.current)?.path ?? ''}
+            onSelectionChange={(next: string) => { if (next && !unavailable) p.onEnter(next); }}
+            modifiers={[pickerStyle('menu'), disabled(unavailable)]} testID="newSession.remoteBrowseDrivePicker">
+            {p.drives.map(drive => <Text key={drive.path} modifiers={[tag(drive.path)]}>{drive.name}</Text>)}
+          </Picker> : null}
           <Toggle label={newSessionText('showHiddenDirectories')} isOn={p.showHidden}
             onIsOnChange={p.onShowHidden} modifiers={[disabled(p.busy)]} testID="newSession.remoteBrowseShowHidden" />
         </Section>

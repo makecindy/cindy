@@ -582,8 +582,18 @@ export function buildUserProvider(
         ...previousModelGenerations(m.id, generationCandidates, candidate => candidate.id)
           .map(candidate => generationCapabilities(candidate.metadata)),
       );
+      // An exact manufacturer record reused on a relay is still this model's
+      // own declaration. Only a strictly older ID is a generation fallback.
+      const exactRelayDefaults = imported?.inheritedFrom === m.id && !registrySources.some(source =>
+        findBaseModel(source, m.id) || source?.models.some(entry =>
+          entry.id === m.id || entry.routes.some(route => route.modelId === m.id),
+        ),
+      ) ? mergeModelMetadata(providerModelMetadata(imported), {
+        // Reused adapter data is a fallback, not a configured route default.
+        defaultEffort: m.discoveredMetadata?.defaultEffort,
+      }) : undefined;
       const defaults = imported || catalogDefaults || presetDefaults
-        ? mergeModelMetadata(imported && !imported.inheritedFrom ? providerModelMetadata(imported) : undefined, catalogDefaults, presetDefaults)
+        ? mergeModelMetadata(imported && !imported.inheritedFrom ? providerModelMetadata(imported) : exactRelayDefaults, catalogDefaults, presetDefaults)
         : undefined;
       // A verified catalog identity can reuse the manufacturer's declaration.
       // Execution protocols and prices still belong to this exact connection.

@@ -12,6 +12,9 @@ import {
   buildRecentWorkspaceOptions,
   buildRemoteCreateSessionOptions,
   filterRemoteDirectoryEntries,
+  isCurrentRemoteBrowseRequest,
+  normalizeRemoteDirectoryDrives,
+  shouldRetryRemoteBrowseDrives,
   defaultPermissionModeForNewSessionAgent,
   normalizeCreateSessionResult,
   parseNewSessionDeviceOptions,
@@ -1056,6 +1059,68 @@ describe('new session model', () => {
 
     expect(filterRemoteDirectoryEntries(entries, false).map((entry) => entry.name)).toEqual(['Code']);
     expect(filterRemoteDirectoryEntries(entries, true)).toEqual(entries);
+  });
+
+  it('normalizes Windows drive options from fs:list-dir and hides the switch without a second drive', () => {
+    // 盘符根是被控端 host-native 的 Windows wire 格式,固定写反斜杠。
+    expect(normalizeRemoteDirectoryDrives([
+      { name: 'C:', path: 'C:\\', current: false },
+      { name: 'D:', path: 'D:\\', current: true },
+      { path: 'E:\\' },
+      { name: 'dup', path: 'D:\\', current: false },
+      { name: 'bad' },
+      null,
+    ])).toEqual([
+      { name: 'C:', path: 'C:\\', current: false },
+      { name: 'D:', path: 'D:\\', current: true },
+      { name: 'E:\\', path: 'E:\\', current: false },
+    ]);
+    expect(normalizeRemoteDirectoryDrives([{ name: 'C:', path: 'C:\\', current: true }])).toEqual([]);
+    expect(normalizeRemoteDirectoryDrives(undefined)).toEqual([]);
+    expect(normalizeRemoteDirectoryDrives('C:')).toEqual([]);
+  });
+
+  it('drops in-flight remote browse results after switching computers, even if the sequence still matches', () => {
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 3, deviceId: 'pc-b' },
+    )).toBe(false);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 4, deviceId: 'pc-a' },
+    )).toBe(false);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 3, deviceId: 'pc-a' },
+    )).toBe(true);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: '' },
+      { seq: 3, deviceId: '' },
+    )).toBe(false);
+
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('browseSeqRef.current += 1');
+    expect(newSource).toContain('selectedDeviceIdRef.current = option.deviceId');
+    expect(newSource).toContain('isCurrentRemoteBrowseRequest');
+  });
+
+  it('retries the current directory when Windows drive enumeration is still pending', () => {
+    expect(shouldRetryRemoteBrowseDrives(true, 0)).toBe(true);
+    expect(shouldRetryRemoteBrowseDrives(true, 2)).toBe(true);
+    expect(shouldRetryRemoteBrowseDrives(true, 3)).toBe(false);
+    expect(shouldRetryRemoteBrowseDrives(false, 0)).toBe(false);
+    expect(shouldRetryRemoteBrowseDrives(undefined, 0)).toBe(false);
+
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('shouldRetryRemoteBrowseDrives');
+    expect(newSource).toContain('result.drivesPending');
+  });
+
+  it('keeps the Android drive pill at 34pt and wraps it in a 44pt hit target', () => {
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('styles.browseDriveHit');
+    expect(newSource).toMatch(/browseDriveHit:\s*\{[^}]*minHeight:\s*44/);
+    expect(newSource).toMatch(/browseDriveHit:\s*\{[^}]*minWidth:\s*44/);
   });
 
   it('builds device-link create-session args with desktop remote-project semantics', () => {

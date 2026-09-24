@@ -327,6 +327,7 @@ import { GhostFsSlot } from './fsSlot.js';
 import { GhostLibrarySlot } from './librarySlot.js';
 import { LibraryBindingStore, validateLibraryCandidateLocation } from './libraryBinding.js';
 import { LibraryVault, statfsFreeBytes, DEFAULT_LIBRARY_LIMITS } from './libraryVault.js';
+import { LibraryStagingStore } from './libraryStaging.js';
 import { LibrarySqlService, defaultLibraryDbWorkerPath } from './librarySqlService.js';
 import { trashGhostLibrary } from './libraryTrash.js';
 import { migrateGhostLibrary } from './libraryMigrate.js';
@@ -1031,8 +1032,9 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   getForgeOidcInstallConfirmBridge()?.cancelAll();
   runtimeSingleton?.destroyAll();
   resetNodeRuntimeBrokerForAccountBoundary();
-  // Library 会话一并作废:关 db worker + 作废 handle——在途写入已在串行链上
-  // 归属原 owner 完成或随 vault.invalidate 作废,新 owner 解析到全新根。
+  // Drain in-flight staging.release (tombstone/fsync) before tearing Library
+  // sessions. Owner mutation leases stay held until each call unwinds; waiting
+  // for idle first would let marker-window teardown race the lease.
   await getGhostLibrarySlot().disposeAll();
   if (libraryExtraDirSync) {
     await libraryExtraDirSync(null).catch((error) => {
@@ -5403,6 +5405,10 @@ export function getGhostLibrarySlot(): GhostLibrarySlot {
       getGhost: findAvailableGhost,
       bindingStore,
       getDefaultRoot: (ghostId) => ownerScopedUserDataPath('libraries', ghostId),
+      getStagingRoot: (ghostId) => ownerScopedUserDataPath('library-staging', ghostId),
+      createStagingStore: (deps) => new LibraryStagingStore(deps),
+      captureMutationOwner: () => captureGhostMutationOwner(),
+      beginMutation: (expected) => beginGhostMutation(expected as ActiveAppSession | undefined),
       captureOwnerScope: () => activeOwnerScopeKey(),
       createVault: (deps) => new LibraryVault(deps),
       createSqlService: (deps) => new LibrarySqlService(deps),
@@ -5620,30 +5626,36 @@ export async function getGhostLibraryOverview(ghostId: string): Promise<GhostLib
  */
 export async function deleteGhostLibraryForActiveOwner(ghostId: string): Promise<{ ok: boolean; message?: string }> {
   if (!isValidGhostId(ghostId)) return { ok: false, message: '非法插件 id' };
-  await getGhostLibrarySlot().disposeGhost(ghostId);
-  const result = await trashGhostLibrary(ghostId, {
-    // 默认根与自定义根都经 binding store 的解析口径(漂移时返回 null → 上层
-    // 引导恢复位置,不误删)。
-    resolveLibraryRoot: async (id) => {
-      const resolution = await getGhostLibraryBindingStore().resolveLibraryRoot(id);
-      return resolution.kind === 'custom' ? resolution.root : ownerScopedUserDataPath('libraries', id);
-    },
-    trashRoot: () => ownerScopedUserDataPath('libraries-trash'),
-    removeBinding: async (id) => {
-      await getGhostLibraryBindingStore().removeBinding(id);
-    },
-    log,
-  });
-  if (result.ok) {
-    await refreshMivoLibraryExtraDirGrant().catch((error) => {
-      log.warn('library extraDirs delete sync failed', {
-        ghostId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+  const slot = getGhostLibrarySlot();
+  slot.setRelocating(ghostId, true);
+  try {
+    await slot.disposeGhost(ghostId);
+    const result = await trashGhostLibrary(ghostId, {
+      // 默认根与自定义根都经 binding store 的解析口径(漂移时返回 null → 上层
+      // 引导恢复位置,不误删)。
+      resolveLibraryRoot: async (id) => {
+        const resolution = await getGhostLibraryBindingStore().resolveLibraryRoot(id);
+        return resolution.kind === 'custom' ? resolution.root : ownerScopedUserDataPath('libraries', id);
+      },
+      trashRoot: () => ownerScopedUserDataPath('libraries-trash'),
+      removeBinding: async (id) => {
+        await getGhostLibraryBindingStore().removeBinding(id);
+      },
+      log,
     });
-    return { ok: true };
+    if (result.ok) {
+      await refreshMivoLibraryExtraDirGrant().catch((error) => {
+        log.warn('library extraDirs delete sync failed', {
+          ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      return { ok: true };
+    }
+    return { ok: false, message: result.message };
+  } finally {
+    slot.setRelocating(ghostId, false);
   }
-  return { ok: false, message: result.message };
 }
 
 let libraryBindingStoreSingleton: LibraryBindingStore | null = null;
@@ -7977,15 +7989,19 @@ export function registerGhostIpc(): void {
       throwIpcError('INVALID_PARAMS', '参数非法');
     }
     const releaseMutation = beginGhostMutation();
+    const slot = getGhostLibrarySlot();
     try {
+      slot.setRelocating(id, true);
+      await slot.disposeGhost(id); // drain in-flight staging.release before binding changes
       const set = await getGhostLibraryBindingStore().setBinding(id, candidate, (root) =>
         statfsFreeBytes(root),
       );
       if (!set.ok) return { ok: false as const, message: set.message };
-      await getGhostLibrarySlot().disposeGhost(id); // 作废会话,下一请求用新根
+      await slot.disposeGhost(id); // 作废会话,下一请求用新根
       await refreshMivoLibraryExtraDirGrant();
       return { ok: true as const, warnings: set.warnings };
     } finally {
+      slot.setRelocating(id, false);
       releaseMutation();
     }
   });
@@ -8021,12 +8037,16 @@ export function registerGhostIpc(): void {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !isValidGhostId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
     const releaseMutation = beginGhostMutation();
+    const slot = getGhostLibrarySlot();
     try {
+      slot.setRelocating(id, true);
+      await slot.disposeGhost(id);
       await getGhostLibraryBindingStore().removeBinding(id);
-      await getGhostLibrarySlot().disposeGhost(id);
+      await slot.disposeGhost(id);
       await refreshMivoLibraryExtraDirGrant();
       return { ok: true as const };
     } finally {
+      slot.setRelocating(id, false);
       releaseMutation();
     }
   });

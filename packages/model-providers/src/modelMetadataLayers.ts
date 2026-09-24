@@ -134,7 +134,21 @@ export function pickModelMetadata(value: object | undefined): ModelMetadata {
 export function mergeModelMetadata(
   ...layers: (ModelMetadata | undefined)[]
 ): ModelMetadata {
-  return Object.assign({}, ...layers.map(pickModelMetadata));
+  const result: ModelMetadata = {};
+  for (const layer of layers) {
+    const fields = pickModelMetadata(layer);
+    Object.assign(result, fields);
+    // An explicit image-input denial supersedes lower-priority input modalities.
+    // Do not mutate the source catalog or discard unrelated output capabilities.
+    if (fields.supportsImageInput === false && fields.modalities === undefined &&
+        result.modalities?.input.includes('image')) {
+      result.modalities = {
+        ...result.modalities,
+        input: result.modalities.input.filter((modality) => modality !== 'image'),
+      };
+    }
+  }
+  return result;
 }
 export function findBaseModel(
   registry: ModelRegistry | undefined,
@@ -246,6 +260,14 @@ export function resolveModelMetadata(
   );
   // Resolve the pair only after all layers: a maximum-only report is a usable
   // fallback, not a verified working-window report. Never replace a known window.
+  const hasOwnWorkingWindow = [defaults, currentLive, matched?.route.forceOverrides, user]
+    .some(source => source?.contextWindow !== undefined);
+  if (!hasOwnWorkingWindow && currentLive?.contextWindowMax !== undefined) {
+    // This model's reported maximum takes precedence over a predecessor's
+    // working-window fallback, without claiming a verified working window.
+    result.contextWindow = result.contextWindowMax;
+    result[inheritedContextWindow] = true;
+  }
   if (result.contextWindow === undefined && result.contextWindowMax !== undefined) {
     result.contextWindow = result.contextWindowMax;
     result[inheritedContextWindow] = true;
@@ -255,7 +277,7 @@ export function resolveModelMetadata(
     delete result.contextWindowMax;
   }
   if (result.contextWindow !== undefined &&
-      ![defaults, currentLive, matched?.route.forceOverrides, user].some(source => source?.contextWindow !== undefined)) {
+      !hasOwnWorkingWindow) {
     result[inheritedContextWindow] = true;
   }
   if (result.efforts?.length === 0) result.defaultEffort = null;

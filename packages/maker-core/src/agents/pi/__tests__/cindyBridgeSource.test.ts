@@ -28,6 +28,26 @@ import {
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
 } from '../cindy-bridge-source.js';
 
+it('strips Fast control paths from shell environments without mutating the runner environment', () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('const SECRET_ENV_NAMES =');
+  const end = source.indexOf('function isolatedBashEnvironment', start);
+  const compiled = ts.transpileModule(source.slice(start, end) + '\nresult = withoutPiSecrets(input);', {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const input = { PATH: '/fixture/bin', CINDY_PI_MODEL_REQUEST_PREFS_FILE: '/fixture/prefs.json' };
+  const sandbox = {
+    process: { env: {} }, input, result: undefined,
+    PI_PACKAGE_MANAGEMENT_ENV: 'CINDY_PI_PACKAGE_MANAGEMENT',
+    PI_BASH_PACKAGE_HOME_ENV: 'CINDY_PI_BASH_PACKAGE_HOME',
+    MANAGED_RG_PATH_ENV: 'CINDY_PI_MANAGED_RG_PATH',
+    SUBAGENT_RUN_DIR_ENV: 'CINDY_PI_SUBAGENT_RUN_DIR',
+  };
+  runInNewContext(compiled, sandbox);
+  expect(sandbox.result).toEqual({ PATH: '/fixture/bin' });
+  expect(input.CINDY_PI_MODEL_REQUEST_PREFS_FILE).toBe('/fixture/prefs.json');
+});
+
 it('keeps text-only policy local and ordinary tools independent of host UI failures', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const helperStart = source.indexOf('let textOnlyTurnActive = false');
