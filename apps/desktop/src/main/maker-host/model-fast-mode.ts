@@ -10,14 +10,16 @@ export function fastModelId(providerId: string, agent: AgentKind, modelId: strin
   return target?.id;
 }
 
-/** Codex's Fast intent is represented by priority; a model variant must not also buy priority. */
+/** Called within xAI subscription routes. Fast intent must never become an upstream priority tier. */
 export function rewriteFastModel(
   providerId: string, agent: AgentKind, body: Record<string, unknown>, fast: boolean,
 ): Record<string, unknown> | null {
   if (!fast || typeof body.model !== 'string') return null;
   const target = fastModelId(providerId, agent, body.model);
-  if (!target) return null;
-  const next: Record<string, unknown> = { ...body, model: target };
+  // A persisted Fast setting can outlive account availability, including before discovery.
+  // Fall back to the original model while still consuming Codex's Fast intent marker.
+  if (!target && body.service_tier !== 'priority') return null;
+  const next: Record<string, unknown> = { ...body, model: target ?? body.model };
   delete next.service_tier;
   return next;
 }
