@@ -147,7 +147,7 @@ export function parseModelsListResponse(
       (Array.isArray(architecture?.input_modalities) && Array.isArray(architecture?.output_modalities)
         ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined);
     const inputModalities = (modalities as { input?: unknown } | undefined)?.input ?? record.input_modalities;
-    const contextWindowMax = pickModelMetadata({ contextWindowMax: record.max_context_window }).contextWindowMax;
+    const contextWindowMax = pickModelMetadata({ contextWindowMax: record.max_context_window ?? record.contextWindowMax }).contextWindowMax;
     const serviceTiers = record.service_tiers;
     const isVercel = sourceUrl !== undefined && (() => {
       try { const url = new URL(sourceUrl); return url.origin === 'https://ai-gateway.vercel.sh'
@@ -170,9 +170,7 @@ export function parseModelsListResponse(
       group: record.group,
       contextWindow:
         typeof rawWindow === "number" ? Math.floor(rawWindow) : info.max_input_tokens,
-      contextWindowMax: contextWindowMax !== undefined &&
-        (typeof rawWindow !== 'number' || contextWindowMax >= Math.floor(rawWindow))
-        ? contextWindowMax : undefined,
+      contextWindowMax,
       maxOutputTokens:
         record.max_output_tokens ?? info.max_output_tokens ?? google?.outputTokenLimit ??
         record.maxOutputTokens ??
@@ -211,6 +209,13 @@ export function parseModelsListResponse(
           ? inputModalities.includes("image")
           : undefined),
     }) };
+    // Check the normalized pair so every spelling (including model_info) obeys
+    // the same capacity constraint, without discarding the valid working window.
+    if (discoveredMetadata.contextWindowMax !== undefined &&
+      discoveredMetadata.contextWindow !== undefined &&
+      discoveredMetadata.contextWindowMax < discoveredMetadata.contextWindow) {
+      delete discoveredMetadata.contextWindowMax;
+    }
     // OpenRouter and Vercel document USD per token. Never apply these units to arbitrary proxies.
     const prices =
       sourceUrl && (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))

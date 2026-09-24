@@ -5,6 +5,30 @@ import { buildUserProvider } from '../user-provider.js';
 import { BUNDLED_CATALOG } from '../catalog.js';
 
 describe('shared provider discovery', () => {
+  it.each([
+    { contextWindow: 128000, contextWindowMax: 64000 },
+    { context_window: 128000, contextWindowMax: 64000 },
+    { contextWindow: 128000, max_context_window: 64000 },
+    { model_info: { max_input_tokens: 128000 }, contextWindowMax: 64000 },
+    { contextWindow: 128000, contextWindowMax: 64000, max_context_window: 32000 },
+  ])('ignores a maximum smaller than the normalized working window: %j', fields => {
+    const models = parseModelsListResponse({ data: [{ id: 'private-model', ...fields }] })!;
+    expect(models[0].discoveredMetadata?.contextWindow).toBe(128000);
+    expect(models[0].discoveredMetadata).not.toHaveProperty('contextWindowMax');
+    const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+      'claude-code': { baseUrl: 'https://relay.example/v1', models },
+    } });
+    expect(provider.models['claude-code']?.[0]).toMatchObject({ contextWindow: 128000 });
+    expect(provider.models['claude-code']?.[0].contextWindowMax).not.toBe(64000);
+  });
+
+  it.each(['contextWindowMax', 'max_context_window'])('retains a valid %s with or without a working window', key => {
+    for (const fields of [{}, { contextWindow: 128000 }]) {
+      const [model] = parseModelsListResponse({ data: [{ id: 'private-model', ...fields, [key]: 256000 }] })!;
+      expect(model.discoveredMetadata?.contextWindowMax).toBe(256000);
+    }
+  });
+
   it('retains the working window when a refresh only reports maximum capacity', () => {
     const original = parseModelsListResponse({ data: [{ id: 'private-model',
       context_window: 272000, max_context_window: 1050000 }] })!;

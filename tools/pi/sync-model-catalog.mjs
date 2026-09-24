@@ -75,7 +75,10 @@ async function main() {
     for (const providerId of Object.keys(input)) {
       if (providerId === ".manifest") continue;
       try { providers[providerId] = catalogEntries(providerId, input[providerId], incompleteProviders); }
-      catch { console.warn(`Keeping previous catalog for '${providerId}': invalid source`); }
+      catch {
+        incompleteProviders.add(providerId);
+        console.warn(`Keeping previous catalog for '${providerId}': invalid source`);
+      }
     }
   } else {
     // Refresh the complete imported catalog, including channels not curated as GUI presets.
@@ -107,8 +110,16 @@ async function main() {
         if (!Number.isNaN(modified))
           newestModified = Math.max(newestModified, modified);
         providers[providerId] = catalogEntries(providerId, await response.json(), incompleteProviders);
-      } catch { console.warn(`Keeping previous catalog for '${providerId}': source unavailable`); }
+      } catch {
+        incompleteProviders.add(providerId);
+        console.warn(`Keeping previous catalog for '${providerId}': source unavailable`);
+      }
     }
+  }
+  // An omitted/failed source is not a complete snapshot, even if corrections
+  // below create a provider containing only an additive model.
+  for (const providerId of PROVIDER_IDS) {
+    if (!Object.hasOwn(providers, providerId)) incompleteProviders.add(providerId);
   }
   if (providers.xai) providers.xai = applyKnownXaiCorrections(providers.xai);
   applyGrok47CatalogAddition(providers);
