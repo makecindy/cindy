@@ -144,6 +144,15 @@ function triggerLabel(chip: Element | null): string {
   return chip?.getAttribute('aria-label') ?? '';
 }
 
+/**
+ * 档位行里出现的百分比（按行序）。i18n 在用例里被换成 `key#{"percent":N}`，
+ * 所以直接从行文本里抓 N；抓不到的行（基准未知、只显绝对值）不计入。
+ */
+function percentsIn(rows: HTMLElement[]): number[] {
+  return rows.flatMap((row) => [...(row.textContent ?? '').matchAll(/"percent":(\d+)/g)]
+    .map((match) => Number(match[1])));
+}
+
 /** 权威边界的形状（本地 `maker:get-context-window-bounds` / 远程 device-link 同名 channel）。 */
 function boundsView(
   over: Partial<
@@ -498,6 +507,69 @@ function chipText(): string {
     expect(String(textOf('250000'))).toBe(
       'ccAgent.contextWindowBudget.optionPercent#{"percent":25} · 250K',
     );
+  });
+
+  it('never renders the model-default tier above 100% when the route has no declared window', async () => {
+    // 用户实测报障（2026-09-22）：自定义连接未声明窗口（目录只有 200K 兜底）且用户把模型级
+    // 上限设成 1M。旧口径把 200K 当物理上限下发，基准被钉在 200K，于是「模型默认 1M」被
+    // 算成 500%。这一例用**修好后 main 应下发的诚实边界**（maxWindow=null）。
+    installElectronApi(vi.fn(async () => boundsView({
+      defaultWindow: 200_000,
+      maxWindow: null,
+      modelLimit: 1_000_000,
+      defaultEffectiveWindow: 1_000_000,
+    })));
+
+    renderChip({ providers: null });
+    const options = await openTierCard();
+    // 基准 = 模型级上限 1M：100% 档就是默认档，25%/50% 是它的份额。
+    expect(tierTokens()).toEqual(['250000', '500000', '1000000']);
+    const textOf = (tokens: string): string =>
+      options.find((el) => el.getAttribute('data-token') === tokens)?.textContent ?? '';
+    expect(textOf('1000000')).toContain('optionPercent#{"percent":100}');
+    expect(textOf('1000000')).toContain('optionDefault');
+    expect(percentsIn(options)).toEqual([25, 50, 100]);
+  });
+
+  it('clamps the percentage base even if the bounds contradict themselves', async () => {
+    // 防御：旧版被控端 / 手改偏好都可能送来「默认档 > 上限」的组合。展示层宁可把上限档显示成
+    // 不到 100%，也不打出一行 >100%（用户无法解释那个数字）。
+    installElectronApi(vi.fn(async () => boundsView({
+      defaultWindow: 200_000,
+      maxWindow: 200_000,
+      modelLimit: 1_000_000,
+      defaultEffectiveWindow: 1_000_000,
+    })));
+
+    renderChip({ providers: null });
+    const options = await openTierCard();
+    const defaultRow = options.find((el) => el.textContent?.includes('optionDefault'));
+    expect(defaultRow?.getAttribute('data-token')).toBe('1000000');
+    // 分母取「上限与默认档里更大的一个」→ 默认档落在 100%，其余档只会更小。
+    expect(percentsIn(options).every((percent) => percent <= 100)).toBe(true);
+  });
+
+  it('shows absolute values only when the route has no known ceiling at all', async () => {
+    // 未核实 + 未声明上限 + 没有模型级上限 = main 没有任何上限可报，而已存预算可能大于默认
+    // （旧版本、手改偏好、或另一个控制端写的）。此时没有可信分母，就只显绝对值：
+    // 照旧拿 200K 当分母会把 1M 显示成「500%」。
+    installElectronApi(vi.fn(async () => boundsView({
+      defaultWindow: 200_000,
+      maxWindow: null,
+      modelLimit: null,
+      defaultEffectiveWindow: null,
+      budget: 1_000_000,
+      budgetCustomized: true,
+    })));
+
+    renderChip({ providers: null });
+    const options = await openTierCard();
+    expect(tierTokens()).toContain('1000000');
+    for (const el of options) {
+      expect(el.textContent).not.toContain('optionPercent');
+    }
+    expect(document.querySelector('[data-context-window-budget-chip]')?.textContent)
+      .not.toContain('optionPercent');
   });
 
   it('gives the tier that came from a saved value its own percentage too', async () => {

@@ -258,6 +258,11 @@ export function ContextWindowBudgetChip({
   const effectiveMaxWindow = effectiveWindowsReported
     ? (authoritativeBounds?.maxEffectiveWindow ?? maxWindow)
     : (maxWindow ?? defaultWindow);
+  // 百分比分母只看**申报的上限**（生效上限 / 目录申报上限）；`maxWindow ?? defaultWindow`
+  // 那个兜底只用来夹已存值 —— 默认窗口不是上限，未核实路由可以真的跑在它之上。
+  const reportedMaxWindow = effectiveWindowsReported
+    ? (authoritativeBounds?.maxEffectiveWindow ?? maxWindow)
+    : maxWindow;
   const ceiling = [effectiveMaxWindow, modelLimit]
     .filter((value): value is number => typeof value === 'number' && value > 0)
     .reduce<number | null>((min, value) => (min === null || value < min ? value : min), null);
@@ -303,14 +308,23 @@ export function ContextWindowBudgetChip({
 
   // 每行显示的百分比都按**同一个基准**算（与档位推导同源）：默认档因此显示 `100% · 1.05M`
   // 而不是「绝对值在前」，旧值补的当前档也有百分比 —— 行的形态与颜色在整列里保持一个样式。
-  const tierBase = useMemo(
-    () => resolveContextWindowBudgetBase({
+  const tierBase = useMemo(() => {
+    // 三个上限（生效上限 / 目录申报上限 / 模型级上限）都没有 = 这条路由**没有已知上限**：
+    // 典型是自定义连接未声明窗口，目录只有 200K 兜底，而未核实路由会照单接受更大的预算。
+    // 这时不能拿默认窗口当分母 —— 已存的更大预算会显示成「500%」，还暗示「默认档就是顶格」。
+    // 基准未知就走既有的「只显绝对值」形态（percent === null 分支）。
+    if (reportedMaxWindow === null && modelLimit === null) return null;
+    const base = resolveContextWindowBudgetBase({
       defaultWindow: effectiveDefaultWindow,
-      maxWindow: effectiveMaxWindow,
+      maxWindow: reportedMaxWindow,
       modelLimit,
-    }),
-    [effectiveDefaultWindow, effectiveMaxWindow, modelLimit],
-  );
+    });
+    // 默认档永远不该超过 100%：万一拿到自相矛盾的边界（默认档 > 上限），取两者更大的一个
+    // 当分母 —— 宁可让上限档显示成不到 100%，也不打出 >100% 的行。
+    return base === null || effectiveDefaultWindow === null
+      ? base
+      : Math.max(base, effectiveDefaultWindow);
+  }, [effectiveDefaultWindow, reportedMaxWindow, modelLimit]);
 
   const options = useMemo(() => {
     if (effectiveDefaultWindow === null) return [];

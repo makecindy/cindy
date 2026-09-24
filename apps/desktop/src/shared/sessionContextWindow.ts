@@ -60,7 +60,7 @@ export function resolveRouteContextWindowBounds(
   agent: AgentKind,
   providerId: string | null | undefined,
   modelId: string,
-): { providerId: string; defaultWindow: number; maxWindow: number } | null {
+): { providerId: string; defaultWindow: number; maxWindow: number | null } | null {
   const candidates: { providerId: string; model: CatalogModel }[] = [];
   for (const provider of catalog.providers) {
     if (provider.routing[agent]?.disabled === true) continue;
@@ -71,16 +71,25 @@ export function resolveRouteContextWindowBounds(
   }
   if (candidates.length !== 1) return null;
   const { providerId: sourceProviderId, model } = candidates[0];
-  const declared = model.contextWindowMax;
-  const maxWindow = typeof declared === 'number' && Number.isFinite(declared) && declared > 0
-    ? Math.round(declared)
-    : Number.isFinite(model.contextWindow) && model.contextWindow > 0
-      ? Math.round(model.contextWindow)
+  const contextWindow = Number.isFinite(model.contextWindow) && model.contextWindow > 0
+    ? Math.round(model.contextWindow)
+    : null;
+  const declaredMax = typeof model.contextWindowMax === 'number' &&
+    Number.isFinite(model.contextWindowMax) && model.contextWindowMax > 0
+      ? Math.round(model.contextWindowMax)
       : null;
-  if (maxWindow === null) return null;
-  const defaultWindow = Number.isFinite(model.contextWindow) && model.contextWindow > 0
-    ? Math.min(Math.round(model.contextWindow), maxWindow)
-    : maxWindow;
+  // 「物理上限」只收 main 真会拿来夹预算的数：
+  //  - 声明了 `contextWindowMax`：未核实路由也按它夹（见 resolveConfiguredContextWindow）；
+  //  - **已核实**路由的 `contextWindow`：resolveVerifiedContextWindow 按
+  //    `min(预算, contextWindowMax ?? contextWindow)` 夹，它就是真容量；
+  //  - **未核实且没声明上限**：目录里的 `contextWindow` 只是**兜底默认**（自定义连接未声明
+  //    窗口时是 DEFAULT_CUSTOM_CONTEXT_WINDOW=200K），不是容量 —— main 刻意不按它夹，
+  //    任务预算可以是它���倍且真的会生效。早先在这里兜底成 maxWindow，会让档位基准被 200K
+  //    钉死，把「模型默认 1M」显示成 500%（用户实测报障，2026-09-22）。
+  const maxWindow = declaredMax ?? (model.contextWindowVerified === true ? contextWindow : null);
+  const anchor = maxWindow ?? contextWindow;
+  if (anchor === null) return null;
+  const defaultWindow = contextWindow === null ? anchor : Math.min(contextWindow, anchor);
   return { providerId: sourceProviderId, defaultWindow, maxWindow };
 }
 

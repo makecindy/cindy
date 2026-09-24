@@ -41,6 +41,26 @@ const catalog: Pick<Catalog, 'providers'> = {
   ],
 } as unknown as Pick<Catalog, 'providers'>;
 
+/** 自定义连接未声明窗口的真实形态：未核实 + 只有兜底默认 contextWindow。 */
+const undeclaredCatalog: Pick<Catalog, 'providers'> = {
+  providers: [
+    {
+      id: 'xd',
+      routing: { 'claude-code': {} },
+      models: {
+        'claude-code': [
+          {
+            id: 'undeclared-model',
+            name: 'Undeclared Model',
+            contextWindow: 200_000,
+            contextWindowVerified: false,
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as Pick<Catalog, 'providers'>;
+
 function resolve(sessionBudget?: number | null): number | null {
   return resolveConfiguredContextWindow(
     catalog,
@@ -235,5 +255,29 @@ describe('resolveSessionContextWindowBounds', () => {
     expect(bounds.defaultWindow).toBeNull();
     expect(bounds.maxWindow).toBeNull();
     expect(bounds.modelLimit).toBeNull();
+  });
+
+  it('does not pass an unverified fallback context window off as a physical max', () => {
+    // 用户实测报障（2026-09-22）：自定义连接未声明窗口 → 目录 contextWindow 只是 200K 兜底，
+    // 用户把模型级上限设成 1M。此时 main 的生效默认窗口就是 1M（未核实路由刻意不按目录夹），
+    // 若把 200K 当 maxWindow 下发，chip 的档位基准会被钉在 200K，「模型默认 1M」显示成 500%。
+    mockModelLimit = 1_000_000;
+    const bounds = resolveSessionContextWindowBounds({
+      catalog: undeclaredCatalog, agent: 'claude-code', providerId: 'xd', modelId: 'undeclared-model',
+    });
+    expect(bounds).toEqual({
+      providerId: 'xd',
+      // 兜底默认仍在（它是「跟随默认」在没有模型级上限时的运行窗口）。
+      defaultWindow: 200_000,
+      // 但它不是上限：未核实 + 未声明 → null（声明了 max_contextWindow 才算数）。
+      maxWindow: null,
+      modelLimit: 1_000_000,
+      budget: null,
+      budgetCustomized: false,
+      defaultEffectiveWindow: 1_000_000,
+      // 未核实路由没有「物理上限」这道夹（预算就是工作上限）。
+      maxEffectiveWindow: null,
+      effectiveWindowsReported: true,
+    });
   });
 });
