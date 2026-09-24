@@ -3142,6 +3142,18 @@ function createCodexProxyHandle(
 ): Promise<ProxyHandle> {
   const execAdapter = createCodexResponsesCompatibilityAdapter();
   const pricing: XaiRequestPricing = new Map();
+  const route = createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes);
+  const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
+    const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
+      if (decision?.localHandler || !isXaiUpstream(decision?.upstreamOverride ?? '')
+        || ctx.method !== 'POST' || !ctx.url.split('?', 1)[0]?.endsWith('/responses')) return decision;
+      // The observer receives raw wire bytes. Negotiate plaintext so the execution-price
+      // receipt is recorded synchronously before Codex can emit the corresponding usage.
+      return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
+    };
+    const decision = route(body, ctx);
+    return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
+  };
   return createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
@@ -3184,7 +3196,7 @@ function createCodexProxyHandle(
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
     // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
     routingTransform: withCodexUpstreamRecording(
-      createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes),
+      routeWithUsageEncoding,
       () => buildCodexGatewayBaseUrl(),
     ),
     responseObserver: composeResponseObservers(
