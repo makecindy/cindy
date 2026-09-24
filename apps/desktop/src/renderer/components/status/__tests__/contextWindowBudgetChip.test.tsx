@@ -286,6 +286,25 @@ describe('ContextWindowBudgetChip', () => {
     expect(cls).not.toContain('text-[var(--text-tertiary)]');
   });
 
+  it('keeps the card open when the trigger is clicked after hover opened it', async () => {
+    // 与底栏用量 chip（TodaySpendChip）一致：展开/收起只由 hover、焦点与 outside-click
+    // 驱动，点击不当作开关。用户实测：左边卡片悬浮展开后点击不会收起，本卡却会 —— 两张
+    // 底栏卡片的交互必须一样。
+    renderChip();
+    const trigger = document.querySelector('[data-context-window-budget-chip]')!;
+    // 悬浮路径：打开延迟是 300ms，真实定时器下等它落地。
+    fireEvent.pointerEnter(trigger);
+    await waitFor(() => {
+      expect(screen.queryAllByRole('radio').length).toBeGreaterThan(0);
+    }, { timeout: 1500 });
+    // 悬浮已展开后点击触发器：卡片必须仍然在（Radix 的 toggle 被 preventDefault 拦住）。
+    fireEvent.click(trigger);
+    expect(screen.queryAllByRole('radio').length).toBeGreaterThan(0);
+    // 指针仍在卡内/触发器上时，点击也不应该排下一次关闭。
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(screen.queryAllByRole('radio').length).toBeGreaterThan(0);
+  });
+
   it('shows the saved tier percentage next to the marker', async () => {
     // 存了 25% 档 → 触发器读 `↕ 25%`（绝对值在 aria-label / 卡片里）。
     // 档位来自权威边界查询（偏好文件里的条目），所以这里要等那次查询回来。

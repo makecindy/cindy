@@ -474,6 +474,14 @@ export function ContextWindowBudgetChip({
           data-context-window-budget-chip
           onPointerDown={() => { openedByPointerRef.current = true; }}
           onKeyDown={() => { openedByPointerRef.current = false; }}
+          // 与底栏的用量 chip（TodaySpendChip）保持一致：展开/收起只由 hover、焦点与
+          // outside-click 驱动，**点击不当作开关** —— `preventDefault` 让 Radix 的 toggle
+          // 不执行；否则悬浮展开后一点就收起，两张底栏卡片交互不一致（用户报障）。
+          // 点进来的来源按指针/键盘区分：指针路径必须“不抢焦点”（否则鼠标用户会看到蓝框）。
+          onClick={(event) => {
+            event.preventDefault();
+            openCard(openedByPointerRef.current ? 'hover' : 'focus');
+          }}
           onPointerEnter={() => {
             cardPointerInsideRef.current = true;
             scheduleCardOpen();
