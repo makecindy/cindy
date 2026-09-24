@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-23T00:00:00.005Z",
+  "updatedAt": "2026-09-24T10:51:31.000Z",
   "models": [
     {
       "id": "openai/gpt-6-sol",
@@ -2402,8 +2402,13 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/qwen3-8-27b",
-            "verifiedAt": "2026-09-05",
+            "verifiedAt": "2026-09-24",
             "status": "measured"
+          },
+          {
+            "url": "https://ollama.com/library/qwen3.8/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
         "modelRef": "qwen/qwen3.8-27b"
@@ -2435,8 +2440,13 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/qwen3-5-4b",
-            "verifiedAt": "2026-09-05",
+            "verifiedAt": "2026-09-24",
             "status": "estimated"
+          },
+          {
+            "url": "https://ollama.com/library/qwen3.5/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
         "modelRef": "qwen/qwen3.5-4b"
@@ -2468,8 +2478,13 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/qwen3-5-9b",
-            "verifiedAt": "2026-09-05",
+            "verifiedAt": "2026-09-24",
             "status": "estimated"
+          },
+          {
+            "url": "https://ollama.com/library/qwen3.5/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
         "modelRef": "qwen/qwen3.5-9b"
@@ -2501,8 +2516,13 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/gemma-4-12b",
-            "verifiedAt": "2026-09-05",
+            "verifiedAt": "2026-09-24",
             "status": "estimated"
+          },
+          {
+            "url": "https://ollama.com/library/gemma4/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
         "modelRef": "google/gemma-4-12b"
@@ -2534,8 +2554,13 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/qwen3-6-35b-a3b",
-            "verifiedAt": "2026-09-05",
-            "status": "estimated"
+            "verifiedAt": "2026-09-24",
+            "status": "measured"
+          },
+          {
+            "url": "https://ollama.com/library/qwen3.6/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
         "modelRef": "qwen/qwen36-35b"
@@ -2567,8 +2592,13 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/nemotron-3-5-lightning",
-            "verifiedAt": "2026-09-05",
-            "status": "estimated"
+            "verifiedAt": "2026-09-24",
+            "status": "measured"
+          },
+          {
+            "url": "https://ollama.com/library/nemotron-3.5-lightning/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
         "modelRef": "nvidia/nemotron-3.5-lightning"
@@ -2583,23 +2613,81 @@
             "sizeBytes": 104852025885,
             "minUnifiedMemoryGb": 192,
             "appleSiliconOnly": true
+          },
+          {
+            "libraryName": "qwen3.8-flash-next:125b-a6b-q4_K_M",
+            "sizeBytes": 120058268208,
+            "minUnifiedMemoryGb": 192
           }
         ],
         "descriptions": {
-          "en": "High-memory candidate; local peak memory and performance still need validation.",
-          "zh-CN": "大内存候选，仍需验证本机峰值内存与性能。",
-          "zh-TW": "大記憶體候選，仍需驗證本機峰值記憶體與效能。",
-          "ja": "大容量メモリ向け候補。本機でのピークメモリと性能は未検証。",
-          "ko": "대용량 메모리 후보. 로컬 최대 메모리와 성능 검증이 필요합니다."
+          "en": "High-memory capability candidate for 192–256 GB machines. Ollama speed and peak memory are unverified; other MLX runtimes have published tests.",
+          "zh-CN": "192–256 GB 大内存能力候选。已有其他 MLX 运行时实测，Ollama 的速度与峰值内存仍待验证。",
+          "zh-TW": "192–256 GB 大記憶體能力候選。已有其他 MLX 執行環境實測，Ollama 的速度與峰值記憶體仍待驗證。",
+          "ja": "192〜256 GB 向けの性能重視の候補。他の MLX 実行環境では実測あり。Ollama の速度とピークメモリは未検証です。",
+          "ko": "192–256 GB 대용량 메모리용 성능 후보. 다른 MLX 런타임의 실측은 있으나 Ollama 속도와 최대 메모리는 미검증입니다."
         },
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/qwen3-8-flash-next",
-            "verifiedAt": "2026-09-05",
-            "status": "estimated"
+            "verifiedAt": "2026-09-24",
+            "status": "measured"
+          },
+          {
+            "url": "https://ollama.com/library/qwen3.8-flash-next/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
+          },
+          {
+            "url": "https://huggingface.co/rapid-mlx/Qwen3.8-Flash-Next-4bit",
+            "verifiedAt": "2026-09-24",
+            "status": "measured"
           }
         ],
         "modelRef": "qwen/qwen3.8-flash-next"
+      },
+      {
+        "id": "laguna-s21-118b",
+        "modelRef": "poolside/laguna-s-2.1",
+        "name": "Laguna S 2.1 118B A8B",
+        "aliases": ["laguna", "poolside", "laguna-s-2.1", "118b", "moe"],
+        "variants": [
+          {
+            "libraryName": "laguna-s-2.1:nvfp4",
+            "sizeBytes": 66189691080,
+            "minUnifiedMemoryGb": 128,
+            "appleSiliconOnly": true
+          },
+          {
+            "libraryName": "laguna-s-2.1:q4_K_M",
+            "sizeBytes": 96031832391,
+            "minUnifiedMemoryGb": 192
+          }
+        ],
+        "descriptions": {
+          "en": "Coding candidate with a smaller Mac download than Flash-Next. Memory thresholds are estimates; Ollama tool use, speed and peak memory are unverified.",
+          "zh-CN": "Mac 下载体积小于 Flash-Next 的编程候选。内存门槛为估计，Ollama 工具调用、速度与峰值内存仍待验证。",
+          "zh-TW": "Mac 下載體積小於 Flash-Next 的程式設計候選。記憶體門檻為估計，Ollama 工具呼叫、速度與峰值記憶體仍待驗證。",
+          "ja": "Mac 用のダウンロードが Flash-Next より小さいコーディング候補。メモリ要件は推定値。Ollama のツール呼び出し、速度、ピークメモリは未検証です。",
+          "ko": "Mac 다운로드 크기가 Flash-Next보다 작은 코딩 후보. 메모리 기준은 추정치이며 Ollama 도구 호출, 속도, 최대 메모리는 미검증입니다."
+        },
+        "evidence": [
+          {
+            "url": "https://huggingface.co/poolside/Laguna-S-2.1",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
+          },
+          {
+            "url": "https://ollama.com/library/laguna-s-2.1/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
+          },
+          {
+            "url": "https://github.com/tanishq-dubey/macos-laguna-s2.1/blob/main/BENCHMARK_RESULTS.md",
+            "verifiedAt": "2026-09-24",
+            "status": "measured"
+          }
+        ]
       }
     ]
   },
@@ -6218,6 +6306,13 @@
           ]
         }
       ]
+    },
+    {
+      "id": "poolside/laguna-s-2.1",
+      "aliases": [],
+      "defaults": {
+        "name": "Laguna S 2.1 118B A8B"
+      }
     }
   ]
 }

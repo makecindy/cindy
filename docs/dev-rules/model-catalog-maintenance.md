@@ -17,7 +17,10 @@ Mobile / device-link 使用执行端目录；本地安装状态来自执行机�
 
 ### 配置包含什么
 
-Server 正本是 `model-access-server/catalog/providers.json`。客户端离线文件分别是
+Server 正本现为 `model-access-server/catalog/source/` 分片，由
+`model-access-server/scripts/generateCatalog.mjs` 组装成 `catalog/generated/providers.json`。
+本地域编辑 `source/registry/local-models.json`，revision 编辑 `source/catalog.json`；
+不要直接编辑生成文件。客户端离线文件分别是
 [`catalog/providers.json`](../../packages/model-providers/catalog/providers.json)（providers / presets）和
 [`catalog/model-registry.json`](../../packages/model-providers/catalog/model-registry.json)（Registry）。
 逻辑结构如下；具体字段及修改位置见下表：
@@ -87,7 +90,7 @@ localModels 整域缺失才用随包本地域，显式空不兜底。
 2. **修改责任侧**：在授权范围内先维护 Server 正本，再协调客户端离线 Registry。遇到尚未上线的协议配套，分别记录工作分支、已合并和已部署状态，不混成“已支持”。
 3. **整表同步**：将审阅后的 Server `modelRegistry` 整体同步到客户端 `catalog/model-registry.json`，保持同 updatedAt、同内容。不要复制 Server 整份 providers.json，也不能只复制 localModels 造成悬空引用。新 revision 必须递增且不可变；价格 effectiveFrom / verifiedAt 保留其真实日期。
 4. **先验证兼容再发布**：完整结构过 parseModelRegistry / parseCatalog；确认旧客户端投影。尤其先读 [媒体扩展发布前置条件](../model-registry-v4-media.md#发布前置条件)：同为 V4 并不证明认识新增媒体字段。LKG/内置回退不能代替兼容方案。
-5. **核对真实下发**：检查可选 MODEL_CATALOG_URL 是否覆盖随包基线；部署后读取 `/api/model-catalog/catalog`，核对目标与旧版响应、ETag 和有效 revision。仅改文件、合并 PR、通过 CI 不算下发完成。
+5. **核对真实下发**：当前 Server 源码仅加载制品内生成目录，已不读取 MODEL_CATALOG_URL；须核对目标环境版本。部署后读取 `/api/model-catalog/catalog`，核对目标与旧版响应、ETag 和有效 revision。仅改文件、合并 PR、通过 CI 不算下发完成。
    同步回归须核对原有直连 route 与历史参考价区间未丢失；覆盖标准/Fast、缓存读写、长输入分档。
    离线默认档与已发布 Server 有差异时逐项披露。原生协议校验须遍历全部 route 和活动目录中的
    订阅 wire 别名，不能仅统计字段填写率；不能从供应商兼容 API 反推未知型号的原生协议。
