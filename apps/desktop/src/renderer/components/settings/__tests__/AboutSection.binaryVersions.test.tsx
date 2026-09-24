@@ -169,6 +169,25 @@ describe('AboutSection agent binary versions', () => {
     expect(screen.queryByText('settings.about.harnessCheckedAt')).toBeNull();
   });
 
+  it('disables update while a later check is still in flight', async () => {
+    mockOnline({ codex: CODEX_UPDATE });
+
+    renderRows();
+    await screen.findByText('settings.about.harnessUpdateAvailable');
+
+    getBinaryVersion.mockImplementation((kind: 'claude-code' | 'codex', options?: { checkLatest?: boolean }) => {
+      if (kind === 'codex' && options?.checkLatest) return new Promise(() => {});
+      return Promise.resolve(versionResult(kind, options, null));
+    });
+    await openMenu('Codex');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'settings.about.harnessCheck' }));
+
+    await screen.findByText('settings.about.harnessChecking');
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.about.harnessManage Codex' }), { key: 'ArrowDown' });
+    await screen.findByRole('menu');
+    expect(screen.getByRole('menuitem', { name: /harnessUpdateButton Codex.*1\.1\.0/ }).getAttribute('aria-disabled')).toBe('true');
+  });
+
   it('checks again from the menu, keeps the last version, and disables update when that check fails', async () => {
     mockOnline({ codex: CODEX_UPDATE });
 

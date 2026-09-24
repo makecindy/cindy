@@ -207,10 +207,25 @@ function AgentVersionRow({
 }) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const currentVersion = state.version ? extractSemver(state.version) : null;
   const latestVersion = state.latestVersion ? extractSemver(state.latestVersion) : null;
   // Main decides with the installer's semver ordering: a newer local build never offers a no-op relaunch.
   const updateAvailable = Boolean(state.updateAvailable && currentVersion && latestVersion);
+  // A later check keeps the last channel version in the menu, but Update must not
+  // confirm a stale result while that check is still in flight.
+  const canUpdate = () => {
+    const next = stateRef.current;
+    return Boolean(
+      !next.checking &&
+        next.updateAvailable &&
+        next.version &&
+        next.latestVersion &&
+        extractSemver(next.version) &&
+        extractSemver(next.latestVersion),
+    );
+  };
   const status = state.checking
     ? t('settings.about.harnessChecking')
     : state.checkFailed
@@ -220,7 +235,7 @@ function AgentVersionRow({
         : '';
 
   const handleUpdate = async () => {
-    if (!updateAvailable || !currentVersion || !latestVersion) return;
+    if (!canUpdate() || !currentVersion || !latestVersion) return;
     const confirmed = await confirm({
       title: t('settings.about.harnessUpdateTitle', { name }),
       description: t('settings.about.harnessUpdateDescription', {
@@ -233,6 +248,7 @@ function AgentVersionRow({
       autoFocusConfirm: true,
     });
     if (!confirmed) return;
+    if (!canUpdate()) return;
 
     // Same gate as the app-update banner and the beta-channel restart: a logical
     // turn, Claude background activity, or Ghost card action must not be killed
@@ -253,6 +269,7 @@ function AgentVersionRow({
       });
       if (!interrupt) return;
     }
+    if (!canUpdate()) return;
 
     try {
       await window.electronAPI.relaunchForHarnessUpdate(kind);
@@ -272,7 +289,7 @@ function AgentVersionRow({
       <HarnessVersionMenuItem
         label={t('settings.about.harnessUpdateButton', { name })}
         version={latestVersion}
-        disabled={!updateAvailable}
+        disabled={!updateAvailable || state.checking}
         onSelect={() => void handleUpdate()}
       />
       <DropdownMenuSeparator />
