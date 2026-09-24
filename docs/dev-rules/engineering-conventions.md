@@ -195,7 +195,7 @@ PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`
   权限卡片按钮是硬编码中文，与应用内 `permissions.alwaysAllowForSession` 是同一个动作。
   改产品术语时这类「同一动作、两处独立文案」要一起找出来，否则用户在 Slack 和 App 里
   看到两种说法。
-- **批量改术语时必须跑全量 `pnpm test:unit`**：仓库里有若干测试直接断言中文文案
+- **批量改术语时覆盖相关文案断言，完整单测由 CI 兜底**：仓库里有若干测试直接断言中文文案
   （`automationGeneratedSessions.test.ts`、`builtinToolsCollabDescriptionI18n.test.ts`、
   mobile 的 `sessionMenu.test.ts` 等）。它们是有意的文案锁，改词后要同步更新期望值，
   不能靠 guard 绿灯就认为改完了。反过来这也是一层兜底——Session→对话 那轮正是

@@ -5,6 +5,10 @@ const WIDE_ROOT_FILES = new Set([
 	"package.json",
 	"pnpm-lock.yaml",
 	"pnpm-workspace.yaml",
+	"scripts/test-workspaces.mjs",
+	"scripts/test-workspaces.config.mjs",
+	"scripts/test-related.mjs",
+	"scripts/test-gate-lock.mjs",
 ]);
 const SKIP_EXTENSIONS = new Set([
 	".md",
@@ -45,7 +49,12 @@ const SKIP_BASENAMES = new Set([
 	".prettierignore",
 	".eslintignore",
 ]);
-const GIT_BASE_REFS = ["origin/main", "main", "origin/master", "master"];
+// A fork's origin can lag behind the contribution target. Prefer the upstream
+// default branch before origin, and use local branches only as a fallback.
+const GIT_BASE_REFS = [
+	"refs/remotes/upstream/HEAD", "upstream/main", "upstream/master",
+	"refs/remotes/origin/HEAD", "origin/main", "origin/master", "main", "master",
+];
 
 export function normalizeRelPath(value) {
 	return String(value).replace(/\\/g, "/");
@@ -66,23 +75,14 @@ export function isSkippableFile(file) {
 export function isWideFile(file) {
 	const normalized = normalizeRelPath(file);
 	if (WIDE_ROOT_FILES.has(normalized)) return true;
-	if (normalized.endsWith("/package.json")) return true;
-	if (/(^|\/)vitest\.config\.[cm]?[jt]s$/.test(normalized)) return true;
-	if (
-		normalized === "scripts/test-workspaces.mjs" ||
-		normalized === "scripts/test-workspaces.config.mjs" ||
-		normalized === "scripts/test-related.mjs" ||
-		normalized === "scripts/test-gate-lock.mjs"
-	) {
-		return true;
-	}
-	return normalized.startsWith(".github/workflows/");
+	return /^vitest\.config\.[cm]?[jt]s$/.test(normalized);
 }
 
 export function shouldRunTestRunner(files) {
 	return files.some((file) => {
 		const normalized = normalizeRelPath(file);
 		return (
+			!isSkippableFile(normalized) &&
 			!normalized.startsWith("apps/") && !normalized.startsWith("packages/")
 		);
 	});
@@ -286,6 +286,7 @@ export function planRelatedUnitTests({
 	);
 	const ownerRelated = new Map();
 	const sourceChangedCwds = new Set();
+	const fullWorkspaces = new Set();
 
 	for (const file of testable) {
 		const cwd = workspaceForFile(file, workspaceCwds);
@@ -294,6 +295,11 @@ export function planRelatedUnitTests({
 		if (!workspace || !hasRequiredUnitTier(workspace)) continue;
 		if (!ownerRelated.has(cwd)) ownerRelated.set(cwd, new Set());
 		if (fileExists(file)) ownerRelated.get(cwd).add(file);
+		if (
+			file === `${cwd}/package.json` ||
+			/(^|\/)vitest\.config\.[cm]?[jt]s$/.test(file.slice(cwd.length + 1)) ||
+			!fileExists(file)
+		) fullWorkspaces.add(cwd);
 		if (isPackagePublicSource(file)) sourceChangedCwds.add(cwd);
 	}
 
@@ -308,7 +314,8 @@ export function planRelatedUnitTests({
 			const workspace = byCwd.get(cwd);
 			if (!workspace || !hasRequiredUnitTier(workspace)) return [];
 			const ownFiles = [...(ownerRelated.get(cwd) ?? [])].sort();
-			const relatedFiles = dependents.has(cwd) ? null : ownFiles;
+			const relatedFiles = dependents.has(cwd) || fullWorkspaces.has(cwd)
+				? null : ownFiles;
 			if (Array.isArray(relatedFiles) && relatedFiles.length === 0) return [];
 			return [
 				{

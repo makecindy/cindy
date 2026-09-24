@@ -19,11 +19,12 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
   命令超时）。
 - **你的编辑对运行中的 app 无效**：Vite HMR 只 watch 启动 dev 实例的那个 checkout，
   worktree 下的改动既不热更也不随重启生效。「改了没反应」不是 bug。开发过程中的增量验证在本
-  worktree 内跑 `pnpm --filter desktop typecheck` / 定向 `vitest run`；**提交前仍须通过
-  第 2 节的提交前测试门禁**。需要运行时验证时 commit + push 后交用户（你无法重启宿主）。
+  worktree 内跑 `pnpm --filter desktop typecheck` / 定向 `vitest run`；**提交前仍须完成
+  第 2 节的提交前验证**。需要运行时验证时 commit + push 后交用户（你无法重启宿主）。
 - **宿主 app 日志不在你的 cwd 下**：dev 日志在启动 checkout（通常是 baseRepo）的
   `apps/desktop/logs/`，读日志时拼 baseRepo 的绝对路径。
-- **结束前必须 commit**：会话被删除或归档时脏 worktree 会先存内容快照再删目录。**PR
+- **会话结束与工作区保留**：是否 commit 由用户或宿主工作流决定，不能仅因会话结束
+  强制提交。会话被删除或归档时脏 worktree 会先存内容快照再删目录。**PR
   merged／closed 不等于 Cindy 会话已结束**：只要 owning session 仍 active，任何外部 Git
   cleanup 都必须跳过该 `.cindy-worktrees` / `.xdt-worktrees` 目录与本地 `cindy/*` / `xdt/*` 分支，交给
   用户显式归档／删除会话时回收；禁止手动 `git worktree remove` 造成 active session 的 cwd
@@ -75,44 +76,40 @@ worktree 建成空目录或自动切到项目根继续修改代码。
     改这个脚本时不要放宽 name／邮箱比对，否则会出现「本地绿、PR 红」。
   - 漏签不要重新造一份提交：用 `git commit --amend -s --no-edit` 或
     `git rebase --signoff <base>` 补签后 `git push --force-with-lease`。
-- **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地跑完
-  仓库根 `pnpm test:unit:related`（只跑这次改动能影响到的单测），并对本次改动涉及的每个
-  package 跑 `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在
-  `package.json` 里的 `name`，如 `desktop`、`@cindy/maker-core`；没有 `typecheck`
-  script 的 package 该步自动跳过），全部通过后才允许提交；任何一项失败都不得提交，
-  必须先修复。worktree 会话内的 commit 同样适用。唯一例外是**防丢数据的兜底保存**：
-  宿主删除／归档会话时自动存的内容快照（见第 1 节），以及会话必须收尾、测试却来不及
-  修好时的收尾 commit——后者 commit message 必须标注 `WIP`，且在门禁通过前不得
-  push、不得提 PR。
-  - **相关单测怎么选**：`test:unit:related` 看相对 `main` 的已提交、已暂存、未暂存和未跟踪
-    文件。同一包里用 Vitest `related` 只跑会引用这些文件的测试；改了会被别的包依赖的公共
-    包源码时，依赖方跑该包自己的整包单测。只改文档等非代码文件则跳过 workspace 单测。
-    改到测试调度（`scripts/test-workspaces*`、`scripts/test-related.mjs`、
-    `scripts/test-gate-lock.mjs`）、`package.json`、`pnpm-lock.yaml`、
-    `pnpm-workspace.yaml`、各包 `vitest.config.*`、单测 CI 工作流，或算不出 git 基准时，
-    打印原因并退回全量 `pnpm test:unit`。批量改产品术语仍须全量，因为有测试直接锁中文文案。
-    GitHub CI 不受此影响，仍跑完整 `pnpm test:unit`。
-  - **完整单测的外层超时**：默认相关门禁通常比全仓短，但一旦退回全量，`pnpm test:unit`
-    正常执行仍可能超过数分钟。调用全量门禁的 agent／自动化工具不得使用 120 秒或更短的
-    绝对超时；未知当前耗时时，外层兜底超时至少设为 15 分钟。工具支持后台运行或 yielded
-    process handle 时优先使用该模式并短轮询进度，不要因为调用端停止等待就误判失败、杀掉
-    仍在正常运行的测试或重复启动一轮。Vitest 的单测试例超时仍由各 package 配置控制，不受
-    这条外层约束影响。
-  - **workspace 有界并行**：`test-workspaces.mjs` 默认最多并行
-    `min(4, os.availableParallelism())` 个普通 workspace；每个普通 Vitest workspace 只使用
-    1 个 worker。Mobile 使用完整的 4-worker 配额；Desktop 使用基准验证过的单池最多
-    8-worker 配额，低于 8 CPU 时按 `os.availableParallelism()` 自动下调。重型 workspace
-    必须独占执行，避免外层并发与内部 worker 池相乘。
-    排查并发相关问题时可用
-    `pnpm test:unit -- --workspace-concurrency=1` 临时退回 workspace 串行；该参数只改变
-    workspace 调度，不减少测试覆盖。
-  - **跨 worktree 重型门禁串行**：本地运行 `unit`、`all`、`db`、`git-integration`
-    tier 时，`test-workspaces.mjs` 会按 Git common-dir 获取同仓共享的 loopback TCP 锁；
-    同一 clone 的后到进程会打印持有者 PID、tier 与 worktree 路径并排队，不同 clone
-    互不影响。`guard` tier 和 CI／GitHub Actions 不参与。等待超过 15 分钟以退出码 `75`
-    结束，表示测试尚未运行，不得当作测试失败排查；排队是正常状态，不要 kill 后重跑。
-    只有明确确认资源足够且需要有意重叠时，才可追加 `--no-lock` 作为逃生口。
-- **在门禁之上按风险追加验证**：跨模块、高风险或基础设施改动追加更广泛验证（如仓库根
+- **提交前验证**：提交前完成与改动影响面匹配的测试，并对涉及的每个 package 运行
+  `pnpm --filter <包名> run --if-present typecheck`。默认可用仓库根
+  `pnpm test:unit:related` 选测；已经完成等效的定向测试与类型检查时，无须为每次 commit
+  再跑一遍整仓。文档改动运行 `pnpm check:dev-docs` 等适用检查即可，不要求无关业务单测。
+  - **验证目标与本机执行方式分开**：用户或宿主决定本机资源预算、并发、执行时机和是否
+    跨任务排队。仓库默认值不能覆盖这些选择，也不授权启动额外测试进程、终止其它任务或
+    把一次机器过载经验升级为所有贡献者的固定限制。
+  - **如实记录结果**：本次改动导致的失败须修复；既有或环境故障说明证据、影响和未完成项，
+    不伪造通过、不删除或放宽有效断言。需要保存未完成工作时可作 WIP commit。完整测试与
+    远端必需检查仍由 CI 和合并规则保障，本地定向验证不能冒充完整 CI 通过。
+  - **相关单测怎么选**：`test:unit:related` 优先使用 `upstream` 默认分支（含
+    `upstream/main` / `upstream/master`），其次 `origin` 默认分支，最后才回退本地
+    `main` / `master`，避免落后的个人 fork 扩大测试范围；运行前应先更新目标分支引用。
+    选测包含已提交、已暂存、未暂存和未跟踪文件。同一包源码通过 Vitest `related` 选测；
+    公共包源码变化时，依赖方跑整包单测。包内 `package.json`、Vitest 配置或删除文件时，
+    对所属包及受影响依赖方跑整包；纯文档不触发根级 runner 或业务单测。
+    测试调度脚本、根依赖清单／锁文件、workspace 配置、根 Vitest 配置或无法确定 Git 基准
+    时仍保守选择完整单测；普通 workflow 变化只触发根级 runner 校验。
+    若选测范围超出本机预算，按真实影响面执行并记录定向验证，把完整门禁交给 CI，
+    不因选测器的保守回退强制占满本机。
+  - **单次运行的并发默认值**：workspace runner 默认最多并行
+    `min(4, os.availableParallelism())` 个普通 workspace，每个普通 Vitest workspace
+    使用 1 个 worker；Mobile 使用 4 个 worker，Desktop 最多 8 个且随可用 CPU 下调。
+    重型 workspace 在本次 runner 内独占；这些边界不限制其它 session。
+    可用 `--workspace-concurrency=1` 调低同一次运行的 workspace 并发；需要不同 worker
+    配额时，可直接调用目标包 Vitest 的 `--maxWorkers` 参数。
+  - **跨 worktree 排队默认关闭**：只有主动传 `--lock` 的本地重型测试命令才参与同仓共享
+    loopback TCP 锁。`--no-lock` 保留兼容，不能与 `--lock` 同时使用。直接运行 Desktop
+    Vitest 也不再隐式加第二层锁。选择排队后，等待超过 15 分钟以退出码 `75` 结束，表示
+    测试尚未执行；`guard` 和 CI 不参与。锁只协调同样选择 `--lock` 的进程，不能管理
+    未选择排队的任务；有意统一预算时由使用者或宿主协调各入口。
+  - **长测试调用**：耗时不确定的检查优先后台运行并保留进度。工具结束等待不等于测试失败，
+    不因等待时间较长重复启动或终止仍在正常运行的测试；外层超时按选定范围和本机情况设置。
+- **按风险追加验证**：跨模块、高风险或基础设施改动追加更广泛验证（如仓库根
   `pnpm test:all`），**最终以 CI 门禁为准**。不得通过 skip、删除或弱化测试制造通过；
   PR「怎么验证的」一节必须**如实**填写，没跑不许写已跑。
 - **直推 `main` 的额外门禁**：push 前由独立 reviewer 对最终 diff 做一次对抗性 review，对照
