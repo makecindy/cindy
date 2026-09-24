@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   confirm: vi.fn(async () => true),
   model: null as any,
   portrait: null as any,
+  realPortrait: false,
   push: null as any,
 }));
 vi.mock('react-i18next', () => ({
@@ -22,19 +23,23 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: h.confirm }),
 }));
-vi.mock('../BotPortraitPicker', () => ({
-  BotPortraitPicker: (p: any) => {
-    h.portrait = p;
-    return (
-      <>
-        {p.value ? <img data-testid="portrait-preview" src={p.value} alt="" /> : p.fallback}
-        <button type="button" onClick={() => p.onChange('data:image/png;base64,cG5n')}>
-          Choose portrait
-        </button>
-      </>
-    );
-  },
-}));
+vi.mock('../BotPortraitPicker', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../BotPortraitPicker')>();
+  return {
+    BotPortraitPicker: (p: any) => {
+      h.portrait = p;
+      if (h.realPortrait) return <actual.BotPortraitPicker {...p} />;
+      return (
+        <>
+          {p.value ? <img data-testid="portrait-preview" src={p.value} alt="" /> : p.fallback}
+          <button type="button" onClick={() => p.onChange('data:image/png;base64,cG5n')}>
+            Choose portrait
+          </button>
+        </>
+      );
+    },
+  };
+});
 vi.mock('../BotModelChainEditor', () => ({
   BotModelChainEditor: (p: any) => {
     h.model = p;
@@ -103,6 +108,7 @@ const resource = (
 });
 let close: { current: (() => Promise<boolean>) | null };
 beforeEach(() => {
+  h.realPortrait = false;
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -395,7 +401,8 @@ async function openAvatar(
   );
   render(<RemoteBotSettings bot={bot} beforeCloseRef={close} onDeleted={vi.fn()} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Avatar' }));
-  await screen.findByText('Choose portrait');
+  if (h.realPortrait) await screen.findByRole('button', { name: 'bots.profile.changeAvatar' });
+  else await screen.findByText('Choose portrait');
   return avatar;
 }
 it('submits raw JPEG base64 while preserving the portrait preview data URL', async () => {
@@ -567,5 +574,57 @@ it.each([
     await waitFor(() => expect(screen.queryByTestId('portrait-preview')).toBeNull());
     if (image) expect(document.querySelector('img')?.getAttribute('src')).toContain(image);
     else expect(screen.getByText(value)).toBeTruthy();
+  },
+);
+
+it.each(['gallery', 'file'])(
+  'guards navigation through real picker %s preparation and conversion',
+  async (source) => {
+    h.realPortrait = true;
+    const decodes: Array<() => void> = [];
+    await openAvatar(() => new Promise<void>((resolve) => decodes.push(resolve)));
+    let reader: { result: string; onload: () => void };
+    vi.stubGlobal(
+      'FileReader',
+      class {
+        result = 'data:image/png;base64,cG5n';
+        onload = () => {};
+        readAsDataURL() {
+          reader = this;
+        }
+      },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
+    let canClose: unknown;
+    await act(async () => {
+      if (source === 'gallery') fireEvent.click(screen.getByRole('button', { name: 'Cindy' }));
+      else
+        fireEvent.change(document.querySelector('input[type="file"]')!, {
+          target: { files: [new File(['image'], 'avatar.png', { type: 'image/png' })] },
+        });
+      canClose = await close.current?.();
+    });
+    expect(canClose).toBe(false);
+    expect(
+      (screen.getByRole('button', { name: 'bots.settingsBack' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(h.portrait.disabled).toBe(true);
+    await act(async () => {
+      if (source === 'gallery') decodes.shift()!();
+      else reader!.onload();
+    });
+    // Picker preprocessing has finished; the subsequent JPEG conversion still owns the guard.
+    expect(decodes).toHaveLength(1);
+    expect(await close.current?.()).toBe(false);
+    expect(h.portrait.disabled).toBe(true);
+    await act(async () => decodes.shift()!());
+    expect(h.portrait.disabled).toBe(false);
+    await act(async () => {
+      canClose = await close.current?.();
+    });
+    expect(canClose).toBe(true);
+    expect(h.invoke).toHaveBeenCalledWith('host', REMOTE_RESOURCE_INVOKE_CHANNEL, [
+      expect.objectContaining({ input: { avatarImageBase64: '/9j/2Q==' } }),
+    ]);
   },
 );

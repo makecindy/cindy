@@ -62,6 +62,8 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
   const [busy, setBusy] = useState(false);
   const [convertingPortrait, setConvertingPortrait] = useState(false);
   const portraitPending = useRef(false);
+  const portraitPreparing = useRef(false);
+  const [preparingPortrait, setPreparingPortrait] = useState(false);
   const [loading, setLoading] = useState(true);
   const [revisionPending, renderRevisionPending] = useState(false);
   const revisionPendingRef = useRef(false);
@@ -111,14 +113,25 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
     const token = ++sequence.current;
     return coalesce(async () => {
       if (!current() || token !== sequence.current) return;
-      if (!online.current || inFlight.current || portraitPending.current) {
+      if (
+        !online.current ||
+        inFlight.current ||
+        portraitPending.current ||
+        portraitPreparing.current
+      ) {
         setLoading(false);
         return;
       }
       setLoading(true);
       try {
         const next = await read(resourceId);
-        if (!current() || token !== sequence.current || portraitPending.current) return;
+        if (
+          !current() ||
+          token !== sequence.current ||
+          portraitPending.current ||
+          portraitPreparing.current
+        )
+          return;
         if (
           latest.current.dirty &&
           latest.current.data?.resource.revision !== next.resource.revision
@@ -160,7 +173,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           push.channel === REMOTE_RESOURCE_CHANGED_CHANNEL &&
           isDeviceLinkRemotePushCurrent(push, stamp) &&
           !latest.current.dirty &&
-          !portraitPending.current
+          !(portraitPending.current || portraitPreparing.current)
         )
           void load();
       }),
@@ -179,6 +192,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
       !online.current ||
       inFlight.current ||
       portraitPending.current ||
+      portraitPreparing.current ||
       revisionPendingRef.current ||
       !current()
     )
@@ -297,7 +311,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
   };
   const save = () => {
     // The ref closes the gap before React renders the conversion's busy state.
-    if (portraitPending.current) return Promise.resolve(false);
+    if (portraitPending.current || portraitPreparing.current) return Promise.resolve(false);
     return panel?.action && dirty
       ? submit(panel, changes, false)
       : Promise.resolve(!inFlight.current);
@@ -321,7 +335,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
     setPage(id);
   };
   const reload = async () => {
-    if (inFlight.current || portraitPending.current) return;
+    if (inFlight.current || portraitPending.current || portraitPreparing.current) return;
     if (
       dirty &&
       !(await confirm(
@@ -339,19 +353,19 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
     setDraft(panel?.values ?? {});
     await load();
   };
-  const disabled =
+  const unavailable =
     busy ||
-    convertingPortrait ||
     loading ||
     revisionPending ||
     !bot.online ||
     error === 'conflict' ||
     !!panel?.action?.disabled;
+  const disabled = unavailable || convertingPortrait || preparingPortrait;
   const row = (id: string, title: string, action: () => void) => (
     <button
       key={id}
       type="button"
-      disabled={busy || convertingPortrait || loading || revisionPending}
+      disabled={busy || convertingPortrait || preparingPortrait || loading || revisionPending}
       onClick={action}
       className="flex min-h-10 w-full items-center justify-between gap-3 rounded-full px-3 py-2 text-left text-13 hover:bg-[var(--surface-hover)] disabled:opacity-50"
     >
@@ -425,6 +439,10 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
       {item.id === 'avatar' ? (
         <BotPortraitPicker
           disabled={disabled}
+          onPreparingChange={(pending) => {
+            portraitPreparing.current = pending;
+            if (current()) setPreparingPortrait(pending);
+          }}
           fallback={
             hostAvatar && isSupportedBotAvatarValue(hostAvatar.value) ? (
               <BotAvatar
@@ -445,7 +463,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           }
           onChange={(value) => {
             if (
-              disabled ||
+              unavailable ||
               revisionPendingRef.current ||
               !current() ||
               inFlight.current ||
@@ -509,7 +527,11 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           }}
         />
       ) : null}
-      <Button type="submit" disabled={disabled || !dirty} loading={busy || convertingPortrait}>
+      <Button
+        type="submit"
+        disabled={disabled || !dirty}
+        loading={busy || convertingPortrait || preparingPortrait}
+      >
         {t('bots.save')}
       </Button>
     </form>
@@ -524,7 +546,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           tone="quiet"
           compact
           className="mb-4"
-          disabled={busy || convertingPortrait}
+          disabled={busy || convertingPortrait || preparingPortrait}
           onClick={() =>
             void open(
               null,
@@ -551,7 +573,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           <Button
             variant="secondary"
             compact
-            disabled={busy || convertingPortrait || !bot.online}
+            disabled={busy || convertingPortrait || preparingPortrait || !bot.online}
             onClick={() => void reload()}
           >
             {t('bots.memory.useLatest')}

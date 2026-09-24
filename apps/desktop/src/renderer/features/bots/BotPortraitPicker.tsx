@@ -43,6 +43,7 @@ export function BotPortraitPicker({
   disabled,
   onChange,
   onUpload,
+  onPreparingChange,
   trigger,
   fallback,
 }: {
@@ -52,6 +53,8 @@ export function BotPortraitPicker({
   onChange: (value: string) => void;
   /** Editing can retain the existing host-owned file chooser. */
   onUpload?: () => void;
+  /** Synchronous navigation guard while decoding a selection or reading a file. */
+  onPreparingChange?: (pending: boolean) => void;
   trigger?: ReactElement;
   /** Current avatar artwork or glyph when there is no image draft. */
   fallback?: ReactNode;
@@ -64,6 +67,17 @@ export function BotPortraitPicker({
   const file = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
   const currentToken = useRef(token);
+  const preparing = useRef(false);
+  const preparingChange = useRef(onPreparingChange);
+  preparingChange.current = onPreparingChange;
+  const setPreparing = (pending: boolean) => {
+    if (preparing.current === pending) return;
+    preparing.current = pending;
+    preparingChange.current?.(pending);
+  };
+  const finishPreparing = (request: number) => {
+    if (request === generation.current) setPreparing(false);
+  };
   useEffect(() => {
     currentToken.current = token;
     setCandidate(undefined);
@@ -71,12 +85,14 @@ export function BotPortraitPicker({
   useEffect(
     () => () => {
       generation.current++;
+      setPreparing(false);
     },
     [],
   );
   const select = async (index: number) => {
     if (disabled) return;
     const current = ++generation.current;
+    setPreparing(true);
     try {
       const portrait = await galleryPortrait(index);
       if (current !== generation.current) return;
@@ -85,6 +101,8 @@ export function BotPortraitPicker({
       setError(false);
     } catch {
       if (current === generation.current) setError(true);
+    } finally {
+      finishPreparing(current);
     }
   };
   const generate = async () => {
@@ -162,6 +180,7 @@ export function BotPortraitPicker({
                   aria-label={t('bots.guided.upload')}
                   onClick={() => {
                     generation.current++;
+                    setPreparing(false);
                     if (onUpload) {
                       setOpen(false);
                       onUpload();
@@ -231,17 +250,32 @@ export function BotPortraitPicker({
               setError(true);
               return;
             }
+            if (disabled) return;
             const current = ++generation.current;
-            const reader = new FileReader();
-            reader.onload = () => {
-              if (current === generation.current) {
-                onChange(String(reader.result));
-                setError(false);
-                setOpen(false);
-              }
-            };
-            reader.onerror = () => setError(true);
-            reader.readAsDataURL(selected);
+            setPreparing(true);
+            try {
+              const reader = new FileReader();
+              reader.onload = () => {
+                try {
+                  if (current === generation.current) {
+                    onChange(String(reader.result));
+                    setError(false);
+                    setOpen(false);
+                  }
+                } finally {
+                  finishPreparing(current);
+                }
+              };
+              reader.onerror = () => {
+                if (current === generation.current) setError(true);
+                finishPreparing(current);
+              };
+              reader.onabort = () => finishPreparing(current);
+              reader.readAsDataURL(selected);
+            } catch {
+              if (current === generation.current) setError(true);
+              finishPreparing(current);
+            }
           }}
         />
       </div>
