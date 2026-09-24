@@ -210,6 +210,8 @@ let lastResumeAtMs: number | null = null;
 let startupUpdateCheckInProgress = false;
 let resolvedRelaunchTheme: 'light' | 'dark' = 'dark';
 let busyProbe: () => boolean | Promise<boolean> = () => false;
+let agentRelaunchScheduled = false;
+let agentRelaunchTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -2071,6 +2073,59 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
+export async function checkAppUpdateForAgent(): Promise<{
+  status: string;
+  currentVersion: string;
+  targetVersion?: string;
+  reason?: string;
+}> {
+  const currentVersion = app.getVersion();
+  if (!app.isPackaged || isDev() || isCindyPersonalRuntime() || isVersionlessAppVersion(currentVersion)) {
+    return { status: 'unsupported', currentVersion, reason: '此构建不支持应用内更新。' };
+  }
+  if (currentStatus === 'downloading' || currentStatus === 'superseding') {
+    return { status: 'downloading', currentVersion, targetVersion: readyVersion };
+  }
+  const result = await checkForUpdate();
+  if (currentStatus === 'ready' && readyVersion) {
+    return { status: 'ready', currentVersion, targetVersion: readyVersion };
+  }
+  if (result === 'idle') return {
+    status: 'no_installable_update', currentVersion,
+    reason: '当前渠道没有适用于这台设备的可安装更新；也可能已是最新版本。',
+  };
+  return { status: result, currentVersion, reason: `应用内更新检查结果：${result}` };
+}
+
+export function installAppUpdateForAgent(): {
+  accepted: boolean;
+  currentVersion: string;
+  targetVersion?: string;
+  reason?: string;
+} {
+  const currentVersion = app.getVersion();
+  if (!app.isPackaged || isDev() || isCindyPersonalRuntime() || isVersionlessAppVersion(currentVersion)) {
+    return { accepted: false, currentVersion, reason: '此构建不支持应用内更新。' };
+  }
+  if (agentRelaunchScheduled || isRelaunching || autoRelaunchInProgress) {
+    return { accepted: false, currentVersion, reason: '更新重启已在进行中。' };
+  }
+  if (currentStatus !== 'ready' || !readyVersion || !readyFilePath || !fs.existsSync(readyFilePath)
+    || compareAppUpdateVersions(readyVersion, currentVersion) !== 'newer') {
+    return { accepted: false, currentVersion, reason: '没有已下载且版本更新的应用内补丁；请先检查更新。' };
+  }
+  const targetVersion = readyVersion;
+  agentRelaunchScheduled = true;
+  // Let the MCP tool result reach the agent before the host exits. The existing
+  // executor revalidates the staged patch and channel at the actual apply boundary.
+  agentRelaunchTimer = setTimeout(() => {
+    agentRelaunchTimer = null;
+    agentRelaunchScheduled = false;
+    void executeRelaunch(resolvedRelaunchTheme);
+  }, 5_000);
+  return { accepted: true, currentVersion, targetVersion };
+}
+
 export function initUpdateService(): void {
   // Observe the successful old-updater receipt before existing cleanup removes
   // it. Async and metadata-only; no effect on download/apply/rollback decisions.
@@ -2508,6 +2563,11 @@ export async function enableUncustomizedBetaChannel(
 }
 
 export function stopUpdateService(): void {
+  if (agentRelaunchTimer) {
+    clearTimeout(agentRelaunchTimer);
+    agentRelaunchTimer = null;
+    agentRelaunchScheduled = false;
+  }
   if (firstCheckTimer) {
     clearTimeout(firstCheckTimer);
     firstCheckTimer = null;

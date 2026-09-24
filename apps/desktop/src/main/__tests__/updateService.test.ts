@@ -326,6 +326,50 @@ describe('installation version repair scope', () => {
   });
 });
 
+describe('agent-triggered managed app update', () => {
+  it('only schedules a single native relaunch for a downloaded newer version', async () => {
+    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+    fetchManifest.mockResolvedValue(updateManifest());
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('darwin');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    try {
+      expect(service.installAppUpdateForAgent()).toMatchObject({ accepted: false });
+      expect(await service.checkAppUpdateForAgent()).toMatchObject({
+        status: 'ready', currentVersion: '0.0.64', targetVersion: '0.0.65',
+      });
+      expect(service.installAppUpdateForAgent()).toMatchObject({
+        accepted: true, currentVersion: '0.0.64', targetVersion: '0.0.65',
+      });
+      expect(service.installAppUpdateForAgent()).toMatchObject({ accepted: false });
+      expect(spawnProcess).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledOnce());
+      expect(JSON.stringify(spawnProcess.mock.calls)).toContain('/bin/bash');
+      expect(JSON.stringify(spawnProcess.mock.calls)).not.toContain('launchctl');
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('does not schedule an update from a development build or a current version', async () => {
+    const service = await freshUpdateService('darwin');
+    isDev.mockReturnValue(true);
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    expect(service.installAppUpdateForAgent()).toMatchObject({ accepted: false });
+    isDev.mockReturnValue(false);
+    fetchManifest.mockResolvedValue(updateManifest('0.0.64'));
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'no_installable_update' });
+    expect(service.installAppUpdateForAgent()).toMatchObject({ accepted: false });
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+});
+
 describe('binary version checks after an applied update', () => {
   beforeEach(() => {
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });

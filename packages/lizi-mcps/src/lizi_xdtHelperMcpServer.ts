@@ -42,6 +42,7 @@ import { registerMoveSessionTool, type MoveSessionCallback } from './xdt-helper/
 import { registerProjectManagementTools, type ProjectManagementCallbacks } from './xdt-helper/project_management.js';
 import {
   registerGetCapabilitiesTool,
+  registerAppUpdateTools,
   registerGetCurrentSessionIdTool,
   registerSetCurrentSessionTitleTool,
   registerRenameSessionsTool,
@@ -64,6 +65,7 @@ import {
   registerSkillhubTools,
 } from './xdt-helper/index.js';
 import type { SubmitGithubIssueDeps } from './xdt-helper/submit_github_issue.js';
+import type { AppUpdateCallbacks } from './xdt-helper/app_update.js';
 import type { SkillhubAgentCallback } from './xdt-helper/skillhub.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
@@ -122,7 +124,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'bots'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots'] as const;
 
 interface SessionTaskCallbacks {
   startSessionTask(params: {
@@ -664,6 +666,7 @@ export type ControlDispatchOutcome =
 
 export interface XdtHelperMcpDeps {
   logger?: LiziMcpLogger;
+  appUpdate?: AppUpdateCallbacks;
   grokLogin?: GrokLoginCallbacks;
   /** Host-owned runtime classification used to keep Bot tasks on a narrow surface. */
   resolveSurface?: (input: {
@@ -776,6 +779,12 @@ export function createXdtHelperMcpServer(
 
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
   registerGetCapabilitiesTool(registry);
+  if (deps.appUpdate) {
+    registerAppUpdateTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.appUpdate,
+    });
+  }
   if (deps.grokLogin)
     registerGrokLoginTools(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.grokLogin);
   registerGetCurrentSessionIdTool(registry, {

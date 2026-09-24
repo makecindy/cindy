@@ -386,6 +386,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      appUpdate: {
+        isCurrentSession: (sessionId, sessionInstanceId) =>
+          deps.isCurrentLocalSessionInstance?.(sessionId, sessionInstanceId) === true,
+        check: async () => (await import('../updateService')).checkAppUpdateForAgent(),
+        install: async () => (await import('../updateService')).installAppUpdateForAgent(),
+      },
       logger: createLogger('mcp/cindy_helper'),
       grokLogin: {
         start: async (context) => {
