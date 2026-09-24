@@ -120,7 +120,10 @@ export function toCindyCatalog(providers, generatedAt, { previous, onError, inco
                     .filter(key => row[key] === undefined && adapterDefaults[key] !== undefined)
                     .map(key => [key, adapterDefaults[key]])),
                 });
-                converted.set(next.id, { ...old, ...next });
+                // Last-good channel metadata is valid only for the same route.
+                // A moved model remains imported; shared model defaults are
+                // resolved separately rather than copied from the old channel.
+                converted.set(next.id, sameConnection ? { ...old, ...next } : next);
               } catch (error) {
                 if (!onError) throw error;
                 complete = false;

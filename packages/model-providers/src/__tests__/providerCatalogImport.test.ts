@@ -127,3 +127,37 @@ it('retains missing adapter fields on the same connection and accepts explicit r
     expect(moved.execution.pi).not.toHaveProperty('compat');
   }
 });
+
+it.each([
+  { api: 'anthropic-messages', baseUrl: model.baseUrl },
+  { api: model.api, baseUrl: 'https://other.example/v1' },
+  { api: model.api, baseUrl: undefined },
+])('does not carry channel metadata across connection changes: %j', (connection) => {
+  const previous = toCindyCatalog({ 'new-vendor': [{
+    ...model,
+    nativeApi: 'openai-responses',
+    supportsFastMode: true,
+    supportsToolCalls: true,
+    reasoningRequired: true,
+    samplingParams: { temperature: 0.2 },
+    headers: { 'User-Agent': 'old-channel' },
+  }] }, 'before');
+  const sparse = { id: model.id, provider: model.provider, api: model.api, baseUrl: model.baseUrl };
+  const retained = toCindyCatalog({ 'new-vendor': [sparse] }, 'same', { previous }).providers['new-vendor'][0];
+  expect(retained).toEqual(previous.providers['new-vendor'][0]);
+
+  const moved = toCindyCatalog({ 'new-vendor': [{ ...sparse, ...connection }] }, 'moved', { previous })
+    .providers['new-vendor'];
+  // Keep the discovered model usable, without presenting another channel's
+  // price, native identity or capabilities as this connection's own metadata.
+  expect(moved).toEqual([{
+    id: model.id,
+    name: model.id,
+    upstream: connection.baseUrl ?? '',
+    execution: { pi: { api: connection.api } },
+  }]);
+  const reported = toCindyCatalog({ 'new-vendor': [{ ...sparse, ...connection,
+    cost: { input: 5 }, nativeApi: 'anthropic-messages', supportsFastMode: false,
+  }] }, 'reported', { previous }).providers['new-vendor'][0];
+  expect(reported).toMatchObject({ cost: { input: 5 }, nativeApi: 'anthropic-messages', supportsFastMode: false });
+});
