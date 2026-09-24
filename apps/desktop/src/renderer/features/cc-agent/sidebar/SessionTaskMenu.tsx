@@ -102,6 +102,7 @@ function ActiveSessionTaskMenu({
   };
   const archived = session.status === 'archived';
   const empty = isEmptyDraftSession(session);
+  const ownerActionsBlocked = writeBlocked || guest;
   const item = (key: string, action: () => void, disabled = false) => (
     <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={disabled} onSelect={action}>
       {t(`ccAgent.sidebar.sessionMenu.${key}`)}
@@ -124,39 +125,31 @@ function ActiveSessionTaskMenu({
           if (dialog) event.preventDefault();
         }}
       >
-        {!guest && (
-          <>
-            {!archived &&
-              !empty &&
-              item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, writeBlocked)}
-            {item('rename', onRename, writeBlocked)}
-            {move}
-            {tags}
-            {separator}
-            {copy}
-          </>
-        )}
+        {!archived &&
+          !empty &&
+          item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
+        {item('rename', onRename, ownerActionsBlocked)}
+        {move}
+        {tags}
+        {separator}
+        {copy}
         {session.status === 'active' && (
           <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={!guest && loadingSharing} onSelect={openSharing}>
             {t(guest ? 'sharedTask.leaveShort' : hosted ? 'sharedTask.cancelSharing' : 'sharedTask.title')}
           </DropdownMenuItem>
         )}
-        {!guest && (
+        {exportShare}
+        {!archived && !empty && (
           <>
-            {exportShare}
-            {!archived && !empty && (
-              <>
-                {separator}
-                {item('openInNewWindow', onOpenInNewWindow, writeBlocked)}
-              </>
-            )}
             {separator}
-            {archived
-              ? item('unarchive', onUnarchive, writeBlocked)
-              : !empty && item('archived', onArchive, writeBlocked)}
-            {item('delete', onDelete, writeBlocked)}
+            {item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)}
           </>
         )}
+        {separator}
+        {archived
+          ? item('unarchive', onUnarchive, ownerActionsBlocked)
+          : !empty && item('archived', onArchive, ownerActionsBlocked)}
+        {item('delete', onDelete, ownerActionsBlocked)}
       </DropdownMenuContent>
       {dialog?.kind === 'manage' && (
         <SharedTaskButton

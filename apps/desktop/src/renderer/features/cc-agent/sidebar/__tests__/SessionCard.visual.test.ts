@@ -107,8 +107,8 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => children,
   DropdownMenuContent: ({ children }: { children: ReactNode }) =>
     mocks.dropdownMenuOpen ? createElement('div', { role: 'menu' }, children) : null,
-  DropdownMenuItem: ({ children }: { children: ReactNode }) =>
-    createElement('div', { role: 'menuitem' }, children),
+  DropdownMenuItem: ({ children, disabled }: { children: ReactNode; disabled?: boolean }) =>
+    createElement('div', { role: 'menuitem', 'aria-disabled': disabled || undefined }, children),
   DropdownMenuSeparator: () => null,
   DropdownMenuSub: ({ children }: { children: ReactNode }) => children,
   DropdownMenuSubContent: () => null,
@@ -303,14 +303,19 @@ describe('SessionCard visual cases', () => {
     expect(screen.getByText('等待插件设置')).toBeTruthy();
   });
 
-  it.each(['list', 'text'] as const)('exposes only leave sharing on a guest %s row context menu', (variant) => {
+  it.each(['list', 'text'] as const)('retains other menu entries when replacing sharing with leave on a guest %s row', (variant) => {
     const session = { ...sessionCardVisualCases[0].session, status: 'active' as const, deviceLinkDeviceId: sharedTaskHostPeer('share', 'host') };
     const onClick = vi.fn();
     const onAction = vi.fn();
     const props = { session, isActive: false, isRunning: false, hasAttentionNotification: false, navigationOnly: true, onClick, onRename: vi.fn(), onAction, onTogglePin: vi.fn() };
     const view = render(variant === 'list' ? createElement(SessionCard, { ...props, variant: 'list' }) : createElement(SessionItem, props));
     fireEvent.contextMenu(view.container.querySelector<HTMLElement>('[data-sidebar-navigation-row="true"]')!);
-    expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['sharedTask.leaveShort']);
+    expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
+      '取消置顶', '重命名', '复制任务链接', 'sharedTask.leaveShort', '新窗口打开', '归档', '删除',
+    ]);
+    for (const name of ['取消置顶', '重命名', '新窗口打开', '归档', '删除']) {
+      expect(screen.getByRole('menuitem', { name }).getAttribute('aria-disabled')).toBe('true');
+    }
     expect(onClick).not.toHaveBeenCalled();
     expect(onAction).not.toHaveBeenCalled();
   });
