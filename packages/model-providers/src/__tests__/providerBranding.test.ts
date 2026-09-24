@@ -11,6 +11,39 @@ import {
 
 describe('provider branding', () => {
   it.each([
+    'https://swato.ai/v1',
+    'https://api.swato.ai/v1',
+    'https://fast.swato.ai/v1',
+    'https://swatogo.com/v1',
+    'https://www.swatogo.com/v1',
+    'https://API.SWATO.AI/v1',
+  ])('recognizes existing and renamed Swato connections by upstream: %s', upstream => {
+    expect(resolveProviderLogoKind('custom-imported-connection', {
+      codex: { upstream }, 'claude-code': { upstream }, pi: { upstream },
+    })).toBe('swato');
+    expect(hasProviderLogo('custom-imported-connection', { pi: { upstream } })).toBe(true);
+    expect(isProviderLogoKind('swato')).toBe(true);
+  });
+
+  it.each([
+    'https://swato.ai.example.org/v1',
+    'https://not-swato.ai/v1',
+    'https://swatogo.com.example.org/v1',
+    'https://swato.ai@example.org/v1',
+    'https://example.org/swato.ai/v1',
+  ])('does not apply Swato branding to lookalike endpoints: %s', upstream => {
+    expect(resolveProviderLogoKind('Swato', { pi: { upstream } })).toBeNull();
+  });
+
+  it('keeps ambiguous Swato and other-brand connections unbranded', () => {
+    const swato = { upstream: 'https://swato.ai/v1' };
+    const openai = { upstream: 'https://api.openai.com/v1' };
+    expect(resolveProviderLogoKind('custom', { codex: swato, pi: openai })).toBeNull();
+    expect(resolveProviderLogoKind('custom', { codex: openai, pi: swato })).toBeNull();
+    expect(resolveProviderLogoKind('Swato')).toBeNull();
+  });
+
+  it.each([
     ['anthropic', 'anthropic'],
     ['openai', 'openai'],
     ['xd', 'xd'],
