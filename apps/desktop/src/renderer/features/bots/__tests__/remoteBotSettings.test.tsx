@@ -261,6 +261,81 @@ it('does not treat a refresh failure after a save receipt as an unsaved draft', 
   ).toHaveLength(1);
 });
 
+it.each(['save', 'back'])(
+  'recovers the saved revision before further edits after %s and a failed refresh',
+  async (trigger) => {
+    await open();
+    fireEvent.click(screen.getByText('Choose account'));
+    const savedChain = h.model.value;
+    const nextChain = [{ ...savedChain[0], effort: 'low' }];
+    h.invoke
+      .mockResolvedValueOnce(resource())
+      .mockResolvedValueOnce({ effects: [] })
+      .mockRejectedValueOnce(new Error('post-save read failed'));
+    fireEvent.click(screen.getByText(trigger === 'save' ? 'bots.save' : 'bots.settingsBack'));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('loadFailed'));
+    await waitFor(() =>
+      expect((screen.getByText('bots.memory.useLatest') as HTMLButtonElement).disabled).toBe(false),
+    );
+    if (trigger === 'save') {
+      expect(h.model.disabled).toBe(true);
+      // Even a callback from portaled picker content cannot create an unsavable draft.
+      act(() => h.model.onChange(nextChain));
+      expect(h.model.value).toEqual(savedChain);
+      expect((screen.getByText('bots.save') as HTMLButtonElement).disabled).toBe(true);
+    } else {
+      expect((screen.getByRole('button', { name: 'Models' }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+    }
+    expect(await close.current?.()).toBe(true);
+    h.invoke.mockRejectedValueOnce(new Error('retry still unavailable'));
+    fireEvent.click(screen.getByText('bots.memory.useLatest'));
+    await waitFor(() =>
+      expect((screen.getByText('bots.memory.useLatest') as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(screen.getByRole('alert').textContent).toContain('loadFailed');
+    expect(h.confirm).not.toHaveBeenCalled();
+
+    let host = resource('2', 'revision-2-grant', {
+      modelChain: JSON.stringify(savedChain),
+      followsDefault: false,
+    });
+    h.invoke.mockImplementation(async (_: string, channel: string) => {
+      if (channel === REMOTE_RESOURCE_INVOKE_CHANNEL) {
+        host = resource('3', 'revision-3-grant', {
+          modelChain: JSON.stringify(nextChain),
+          followsDefault: false,
+        });
+        return { effects: [] };
+      }
+      return host;
+    });
+    fireEvent.click(screen.getByText('bots.memory.useLatest'));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    if (trigger === 'back') fireEvent.click(screen.getByRole('button', { name: 'Models' }));
+    await waitFor(() => expect(h.model.disabled).toBe(false));
+    act(() => h.model.onChange(nextChain));
+    fireEvent.click(screen.getByText('bots.save'));
+    await waitFor(() =>
+      expect(h.invoke).toHaveBeenCalledWith('host', REMOTE_RESOURCE_INVOKE_CHANNEL, [
+        expect.objectContaining({
+          actionId: 'revision-2-grant',
+          input: { modelChain: JSON.stringify(nextChain) },
+        }),
+      ]),
+    );
+    await waitFor(() =>
+      expect((screen.getByText('bots.save') as HTMLButtonElement).disabled).toBe(true),
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(h.confirm).not.toHaveBeenCalled();
+    expect(
+      h.invoke.mock.calls.filter((call) => call[1] === REMOTE_RESOURCE_INVOKE_CHANNEL),
+    ).toHaveLength(2);
+  },
+);
+
 function push(id = 'bot', collectionId = 'teammates', deviceId = 'host') {
   h.push({
     deviceId,

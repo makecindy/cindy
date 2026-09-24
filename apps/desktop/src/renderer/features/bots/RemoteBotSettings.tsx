@@ -63,6 +63,12 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
   const [convertingPortrait, setConvertingPortrait] = useState(false);
   const portraitPending = useRef(false);
   const [loading, setLoading] = useState(true);
+  const [revisionPending, renderRevisionPending] = useState(false);
+  const revisionPendingRef = useRef(false);
+  const setRevisionPending = useCallback((pending: boolean) => {
+    revisionPendingRef.current = pending;
+    renderRevisionPending(pending);
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
   const mounted = useRef(false);
@@ -121,6 +127,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           return;
         }
         setData(next);
+        setRevisionPending(false);
         setError(null);
         if (!latest.current.dirty)
           setDraft(next.panels.find((item) => item.id === latest.current.panel?.id)?.values ?? {});
@@ -130,7 +137,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
         if (current() && token === sequence.current) setLoading(false);
       }
     });
-  }, [coalesce, read, resourceId]);
+  }, [coalesce, read, resourceId, setRevisionPending]);
   useEffect(() => {
     void load();
     return () => {
@@ -172,6 +179,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
       !online.current ||
       inFlight.current ||
       portraitPending.current ||
+      revisionPendingRef.current ||
       !current()
     )
       return false;
@@ -260,11 +268,15 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
         setResourceId(resourceId.slice(0, resourceId.lastIndexOf('/')));
         return true;
       }
+      // The receipt acknowledges the draft, but does not provide its new revision.
+      // Keep edits locked until a successful read establishes that save baseline.
+      setRevisionPending(true);
       try {
         const next = await read(resourceId);
         if (!current()) return false;
         setData(next);
         setDraft(next.panels.find((item) => item.id === target.id)?.values ?? {});
+        setRevisionPending(false);
       } catch {
         if (current()) setError('loadFailed');
       }
@@ -299,8 +311,9 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
   const open = async (id: string | null, resource = resourceId) => {
     if (!(await save()) || !current()) return;
     setReceipt(null);
-    setError(null);
+    if (!revisionPendingRef.current || resource !== resourceId) setError(null);
     if (resource !== resourceId) {
+      setRevisionPending(false);
       setData(null);
       setResourceId(resource);
       setDraft({});
@@ -330,6 +343,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
     busy ||
     convertingPortrait ||
     loading ||
+    revisionPending ||
     !bot.online ||
     error === 'conflict' ||
     !!panel?.action?.disabled;
@@ -337,7 +351,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
     <button
       key={id}
       type="button"
-      disabled={busy || convertingPortrait || loading}
+      disabled={busy || convertingPortrait || loading || revisionPending}
       onClick={action}
       className="flex min-h-10 w-full items-center justify-between gap-3 rounded-full px-3 py-2 text-left text-13 hover:bg-[var(--surface-hover)] disabled:opacity-50"
     >
@@ -349,8 +363,10 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
     item.action?.fields?.map((field) => {
       const id = `remote-bot-${field.id}`;
       if (field.id === 'modelChain' || field.id === 'confirmName') return null;
-      const change = (value: string | boolean) =>
-        setDraft((valueBefore) => ({ ...valueBefore, [field.id]: value }));
+      const change = (value: string | boolean) => {
+        if (!disabled && !revisionPendingRef.current)
+          setDraft((valueBefore) => ({ ...valueBefore, [field.id]: value }));
+      };
       return (
         <label
           key={field.id}
@@ -428,7 +444,14 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
               : hostAvatarPreview
           }
           onChange={(value) => {
-            if (!current() || inFlight.current || portraitPending.current) return;
+            if (
+              disabled ||
+              revisionPendingRef.current ||
+              !current() ||
+              inFlight.current ||
+              portraitPending.current
+            )
+              return;
             const selectedScope = editorScope.current;
             const request = ++portraitRequest.current;
             portraitPending.current = true;
@@ -476,13 +499,14 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
           deviceId={bot.deviceId}
           value={readRemoteBotModelChain(draft.modelChain)}
           disabled={disabled || draft.followsDefault === true}
-          onChange={(chain) =>
-            setDraft((previous) => ({
-              ...previous,
-              modelChain: JSON.stringify(chain),
-              followsDefault: false,
-            }))
-          }
+          onChange={(chain) => {
+            if (!disabled && !revisionPendingRef.current)
+              setDraft((previous) => ({
+                ...previous,
+                modelChain: JSON.stringify(chain),
+                followsDefault: false,
+              }));
+          }}
         />
       ) : null}
       <Button type="submit" disabled={disabled || !dirty} loading={busy || convertingPortrait}>
