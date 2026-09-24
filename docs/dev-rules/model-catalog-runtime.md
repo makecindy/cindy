@@ -233,9 +233,12 @@ Server 对应入口为 `model-access-server/src/routes/modelCatalog.ts`、`servi
   到客户端容量；`context_window` 仍是工作窗口。只有最大容量时可用它作为窗口，二者都给出
   时不以容量覆盖工作预算；不将 `contextWindowMax` 写入 Registry。刷新保留用户显式覆盖。
 - Fast 不仅是目录字段：Claude 自定义桥按能力将用户选择转换成 `service_tier: priority`，
-  原生适配器保留它；Pi 直连在既有 `before_provider_request` 钩子读取每运行时请求偏好，
-  只对该连接明确支持的 OpenAI 协议模型设置 Fast，关闭时删除该参数。偏好文件只含开关和
-  模型身份，沿用运行时隔离、远端文件操作和退出回收；不改权限文件或凭证。
+  原生适配器保留它；Pi 直连在既有 `before_provider_request` 钩子通过现有 RPC 只读查询
+  宿主内存中的 Fast 开关。宿主按当前运行实例及精确 provider/model 校验，只对该连接明确
+  支持的 OpenAI 协议模型启用 Fast，不接受查询方传入的开关值。关闭、实例失效、查询失败、
+  超时或回复无效时删除该参数，使用普通档；不弹确认、不增加模型工具。
+  不再读写 `runtime/request-prefs-*.json`，遗留文件不参与判定；不改权限文件、凭证或
+  Full Access 的原生 shell 权限。详见 [Pi Fast 偏好](pi-harness.md#原生请求-fast-偏好)。
 - Mobile 与远控消费执行端已有目录和 Fast 设置入口；Pi 也接入原有设置保存／失败恢复流程。
   不增加 IPC、凭证传输通道或独立模型配置。
 
