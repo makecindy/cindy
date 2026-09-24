@@ -486,6 +486,21 @@ const lastPersistedMsgBySession = new Map<
   { role: string; text: string; persistId: string; agentMessageId?: string }
 >();
 
+/**
+ * Last top-level Codex commentary in the current product turn.
+ *
+ * Tool rows legitimately sit between two assistant progress announcements, so
+ * `lastPersistedMsgBySession` cannot identify adjacent *assistant* text. Codex
+ * can replay the same commentary with a fresh item id after a tool boundary;
+ * keep that provider retry/replay from becoming a second durable chat row.
+ * Final answers, unphased provider output, changed text, and cross-turn output
+ * remain distinct.
+ */
+const lastCommentaryBySession = new Map<
+  string,
+  { text: string; persistId: string; topLevel: boolean }
+>();
+
 function notePersistedMessage(
   sessionId: string,
   role: string,
@@ -777,7 +792,23 @@ function enqueuePersistAssistant(
   agentMeta: AgentMeta | null,
   createdAt: number,
   agentMessageId?: string,
-): void {
+): string {
+  const phase = agentMeta?.assistantPhase;
+  const topLevel = isTopLevelTitleAssistant(
+    agentMeta as Record<string, unknown> | null,
+    knownToolUseIdsBySession.get(sessionId) ?? EMPTY_TOOL_USE_IDS,
+  );
+  const previousCommentary = lastCommentaryBySession.get(sessionId);
+  if (
+    phase === 'commentary' &&
+    topLevel &&
+    previousCommentary?.topLevel === true &&
+    previousCommentary.text === content
+  ) {
+    lastAssistantPersistIdBySession.set(sessionId, previousCommentary.persistId);
+    lastTopLevelAssistantPersistIdBySession.set(sessionId, previousCommentary.persistId);
+    return previousCommentary.persistId;
+  }
   // 有新的 assistant 行要落库:上一条边界 flush 身份作废,防止迟到的全文快照
   // 误复用到更早的消息上。flushAssistantBlockInternal 在本函数返回后重新登记。
   lastBoundaryFlushedAssistantBySession.delete(sessionId);
@@ -791,14 +822,17 @@ function enqueuePersistAssistant(
   });
   notePersistedMessage(sessionId, 'assistant', clientId, content, agentMessageId);
   lastAssistantPersistIdBySession.set(sessionId, clientId);
-  if (
-    isTopLevelTitleAssistant(
-      agentMeta as Record<string, unknown> | null,
-      knownToolUseIdsBySession.get(sessionId) ?? EMPTY_TOOL_USE_IDS,
-    )
-  ) {
+  if (topLevel) {
     lastTopLevelAssistantPersistIdBySession.set(sessionId, clientId);
   }
+  if (phase === 'commentary') {
+    lastCommentaryBySession.set(sessionId, { text: content, persistId: clientId, topLevel });
+  } else {
+    // Only adjacent assistant commentary is eligible. A different assistant
+    // message (including final_answer) closes the replay window.
+    lastCommentaryBySession.delete(sessionId);
+  }
+  return clientId;
 }
 
 /**
@@ -2029,6 +2063,7 @@ export function resetTurnPersistState(sessionId: string): void {
   // 不经 notePersistedMessage),若跨 turn 保留,turn1 burst "X" → 用户发消息(不更新 main
   // tracker)→ turn2 又 burst "X" 会被误判重复、跳 create → turn2 回复丢失。清在这里堵死。
   lastPersistedMsgBySession.delete(sessionId);
+  lastCommentaryBySession.delete(sessionId);
   lastBoundaryFlushedAssistantBySession.delete(sessionId);
   lastTopLevelAssistantPersistIdBySession.delete(sessionId);
 }
@@ -2132,6 +2167,18 @@ export function onAssistantTextEvent(
 
     const block = assistantBlocks.get(sessionId);
     if (block) {
+      const previousCommentary = lastCommentaryBySession.get(sessionId);
+      if (
+        isFullText &&
+        agentMeta?.assistantPhase === 'commentary' &&
+        previousCommentary?.topLevel === true &&
+        previousCommentary.text === visible
+      ) {
+        assistantBlocks.delete(sessionId);
+        lastAssistantPersistIdBySession.set(sessionId, previousCommentary.persistId);
+        lastTopLevelAssistantPersistIdBySession.set(sessionId, previousCommentary.persistId);
+        return previousCommentary.persistId;
+      }
       // 流式确认:不落库,留给边界 flush。显式 isFullText 表示 SDK 权威全文；
       // Claude Code 的 local text block 没有该标记，但在 text_delta 丢失时仍可能携带
       // 已完整的、更长前缀文本。只接受以当前增量为前缀的更长文本，避免同一 assistant
@@ -2228,7 +2275,7 @@ export function onAssistantTextEvent(
         return last.persistId;
       }
       const persistId = createId();
-      enqueuePersistAssistant(
+      return enqueuePersistAssistant(
         sessionId,
         persistId,
         visible,
@@ -2236,7 +2283,6 @@ export function onAssistantTextEvent(
         Date.now(),
         agentMessageId,
       );
-      return persistId;
     }
     return undefined;
   }
@@ -2294,7 +2340,7 @@ function flushAssistantBlockInternal(
   // 三级兜底,对齐 renderer 老逻辑:本 block 自带 meta → 边界事件 meta(tool_use/done
   // 同属或携带这条 assistant 的 meta)→ 会话最近一次非空 meta(interaction 边界靠这级)。
   const meta = block.agentMeta ?? agentMetaFallback ?? lastAgentMetaBySession.get(sessionId) ?? null;
-  enqueuePersistAssistant(
+  const persistedId = enqueuePersistAssistant(
     sessionId,
     block.persistId,
     visible,
@@ -2305,12 +2351,12 @@ function flushAssistantBlockInternal(
   // 登记这次边界 flush 的身份,供随后到达的同源 isFinal 全文快照复用(见
   // onAssistantTextEvent 的 burst 分支)。
   lastBoundaryFlushedAssistantBySession.set(sessionId, {
-    persistId: block.persistId,
+    persistId: persistedId,
     text: visible,
     ...(block.agentMessageId ? { agentMessageId: block.agentMessageId } : {}),
   });
   return {
-    persistId: block.persistId,
+    persistId: persistedId,
     text: visible,
     ...(block.agentMessageId ? { agentMessageId: block.agentMessageId } : {}),
     agentMeta: meta,
@@ -2735,6 +2781,7 @@ export function clearSessionPersistState(sessionId: string): void {
   pendingFullTextByToolUseId.delete(sessionId);
   toolResultContentByClientId.delete(sessionId);
   lastPersistedMsgBySession.delete(sessionId);
+  lastCommentaryBySession.delete(sessionId);
   lastBoundaryFlushedAssistantBySession.delete(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);
   lastTopLevelAssistantPersistIdBySession.delete(sessionId);
