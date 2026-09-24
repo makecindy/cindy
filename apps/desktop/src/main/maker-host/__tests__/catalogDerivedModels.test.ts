@@ -254,10 +254,10 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       efforts: ['low'],
       defaultEffort: 'low',
     });
-    // Missing declarations now inherit the same connection's previous generation.
+    // The target's exact manufacturer declaration outranks a previous generation.
     expect(flatModels.find((m) => m.id === 'grok-4.5')).toMatchObject({
-      efforts: ['low'],
-      defaultEffort: 'low',
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
     });
   });
 

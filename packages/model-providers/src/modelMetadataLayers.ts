@@ -217,6 +217,16 @@ export function resolveModelMetadata(
     matched?.route.forceOverrides,
     user,
   );
+  // A predecessor's capacity cannot constrain the target's larger working
+  // window. Discard only inherited capacity, not target/route/user declarations.
+  if (generationDefaults?.contextWindowMax !== undefined &&
+      result.contextWindow !== undefined && result.contextWindowMax !== undefined &&
+      result.contextWindow > result.contextWindowMax &&
+      [defaults, live, matched?.route.forceOverrides, user].every(
+        (layer) => layer?.contextWindowMax === undefined,
+      )) {
+    delete result.contextWindowMax;
+  }
   if (result.efforts?.length === 0) result.defaultEffort = null;
   else if (
     result.defaultEffort != null &&

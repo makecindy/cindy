@@ -160,6 +160,37 @@ describe('new model generation defaults', () => {
     expect(providerModelGenerationRecord('gpt-5.4', 'https://relay.example/v1', 'anthropic-messages')).toBeUndefined();
   });
 
+  it('retains exact adapter metadata across engines even without Registry entries', () => {
+    const exact = providerModelRecord('grok-4.7', 'https://api.x.ai/v1', 'openai-responses')!;
+    expect(exact).toBeDefined();
+    const runtime = { baseUrl: 'https://relay.example/v1', wireProtocol: 'openai-responses' as const,
+      models: discovered('grok-4.7') };
+    const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+      codex: runtime, pi: runtime, 'claude-code': runtime,
+    } }, { modelRegistry: { schemaVersion: 4, updatedAt: '2026-09-24T00:00:00Z', models: [] } });
+    for (const agent of ['codex', 'pi', 'claude-code'] as const) {
+      expect(provider.models[agent]![0]).toMatchObject({
+        contextWindow: exact.contextWindow, efforts: exact.efforts,
+        supportsImageInput: exact.supportsImageInput, contextWindowVerified: true,
+      });
+    }
+  });
+
+  it('drops only inherited capacity when the target declares a larger working window', () => {
+    for (const ownMax of [undefined, 256000]) {
+      const provider = build([
+        { id: 'private-6-sol', name: 'Old', discoveredMetadata: { contextWindow: 64000, contextWindowMax: 64000 } },
+        { id: 'private-7-sol', name: 'New', discoveredMetadata: { contextWindow: 128000,
+          ...(ownMax !== undefined ? { contextWindowMax: ownMax } : {}) } },
+      ]);
+      for (const agent of ['codex', 'pi', 'claude-code'] as const) {
+        const model = provider.models[agent]![1]!;
+        expect(model.contextWindow).toBe(128000);
+        expect(model.contextWindowMax).toBe(ownMax);
+      }
+    }
+  });
+
   it('reuses serializer mappings without copying the predecessor identity, prices, endpoint or headers', () => {
     const source = providerModelRecord('gpt-5.6-sol', 'https://api.openai.com/v1', 'openai-responses')!;
     const inherited = providerModelGenerationRecord('gpt-9-sol', 'https://relay.example/v1', 'openai-responses')!;
