@@ -15,15 +15,20 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tip } from '@/components/ui/tooltip';
+import { JoinSharedTaskDialog } from '@/features/device-link/JoinSharedTaskDialog';
+import { useSharedTaskTasks } from '@/features/device-link/useSharedTaskTasks';
+import { SharedTaskEndedNotice } from '@/features/device-link/SharedTaskEndedNotice';
 
 export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [joinOpen, setJoinOpen] = useState(false);
+  useSharedTaskTasks();
 
   return (
-    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+    <><DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Tip text={t('titleBar.menu')} side="bottom" controlledOpen={menuOpen ? false : undefined}>
           {/* 尺寸与 ChromeActions 的折叠按钮同规格(h-7 / 图标 15 / rounded-md),
@@ -44,6 +49,9 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
         </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="bg-titlebar border-titlebar-border">
+        <DropdownMenuItem className="focus:bg-titlebar-button-hover" onSelect={() => setJoinOpen(true)}>
+          {t('sharedTask.join')}
+        </DropdownMenuItem>
         {onExitFullscreen && (
           <DropdownMenuItem className="focus:bg-titlebar-button-hover" onSelect={onExitFullscreen}>
             {t('contentHeader.exitFullscreen')}
@@ -113,5 +121,7 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    <SharedTaskEndedNotice onJoin={() => setJoinOpen(true)} />
+    {joinOpen && <JoinSharedTaskDialog open={joinOpen} onOpenChange={setJoinOpen} />}</>
   );
 }

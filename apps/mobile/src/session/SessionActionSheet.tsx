@@ -136,7 +136,13 @@ export function SessionActionSheet({
   const menu = buildSessionActionMenu(pinnedAt, status);
 
   return (
-    <Modal animationType="none" onRequestClose={onClose} transparent visible={mounted}>
+    <Modal
+      supportedOrientations={["portrait", "portrait-upside-down", "landscape-left", "landscape-right"]}
+      animationType="none"
+      onRequestClose={onClose}
+      transparent
+      visible={mounted}
+    >
       <GestureHandlerRootView style={styles.overlay}>
         <Animated.View style={[StyleSheet.absoluteFill, { opacity: progress }]}>
           <BlurBackdrop />

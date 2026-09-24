@@ -35,6 +35,7 @@ import type { AttachmentIntegrity } from '@cindy/device-link';
 import { serverApiFetch } from '../serverApiClient.js';
 import { requireAppCapability } from '../appCapabilities.js';
 import { deviceLinkApiBase } from './index.js';
+import { sharedTaskMediaId } from './sharedTaskMediaContext.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 import { createLogger } from '../logger.js';
 
@@ -119,7 +120,7 @@ async function presignPut(
   requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.');
   return serverApiFetch<PresignPutResponse>(PRESIGN_PUT_PATH, {
     method: 'POST',
-    body: { size, ext, contentType },
+    body: { size, ext, contentType, ...(sharedTaskMediaId() ? { sharedTaskId: sharedTaskMediaId() } : {}) },
     baseUrl: deviceLinkApiBase,
   });
 }

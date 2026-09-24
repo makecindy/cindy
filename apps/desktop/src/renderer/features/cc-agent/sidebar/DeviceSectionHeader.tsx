@@ -50,7 +50,7 @@ function RemoteDesktopShortcut({ deviceId, name }: { deviceId: string; name: str
           aria-busy={busy || undefined}
           className={cn(
             SIDEBAR_RAIL_ICON_BUTTON_CLASS,
-            'h-6 w-6 aria-disabled:opacity-50 aria-disabled:hover:bg-transparent',
+            'h-6 w-6 aria-disabled:opacity-50 aria-disabled:hover:[--button-face-bg:transparent] aria-disabled:active:[--button-face-bg:transparent]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
             !availability.available && 'opacity-50',
             busy && 'motion-safe:[&_svg]:animate-spin',

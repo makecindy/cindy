@@ -55,6 +55,8 @@ describe('mobile auth-server login', () => {
     );
     expect(nativeSource).toContain('GoogleSignin.configure({');
     expect(nativeSource).toContain("import('xdt-wechat-login')");
+    expect(loginSource).toContain('useMobileSocialProviderModes({');
+    expect(loginSource).toContain('socialProviderModes.has(provider)');
     expect(nativeSource).toContain('requestWechatAuthCode({');
     expect(nativeSource).toContain('createNativeWechatLoginTimeout()');
     expect(nativeSource).toContain('cancelWechatAuthRequest().catch');
@@ -509,7 +511,7 @@ describe('mobile auth-server login', () => {
     );
     const runtimeClear = switchBody.indexOf(
       'await clearAccountScopedRuntimeForSwitch();',
-      targetWrite,
+      latestRead,
     );
     const rollbackWrite = switchBody.indexOf(
       'await restorePersistedAuthSessionRaw(previousSessionRaw);',
@@ -520,7 +522,8 @@ describe('mobile auth-server login', () => {
     expect(latestRead).toBeGreaterThan(serialized);
     expect(activeVaultCommit).toBeGreaterThan(latestRead);
     expect(targetWrite).toBeGreaterThan(activeVaultCommit);
-    expect(runtimeClear).toBeGreaterThan(targetWrite);
+    expect(runtimeClear).toBeGreaterThan(latestRead);
+    expect(runtimeClear).toBeLessThan(activeVaultCommit);
     expect(rollbackWrite).toBeGreaterThan(runtimeClear);
     expect(switchBody.slice(runtimeClear, rollbackWrite)).toContain(
       'activateMobileSessionRealm(realm!);',
@@ -619,7 +622,7 @@ describe('mobile auth-server login', () => {
     ).toBeGreaterThanOrEqual(4);
   });
 
-  it('keeps the added-account vault transaction through runtime cleanup and owner commit', () => {
+  it('clears unscoped caches before persisting a new login identity', () => {
     const authSource = readFileSync(
       resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
       'utf8',
@@ -646,7 +649,7 @@ describe('mobile auth-server login', () => {
     );
     const runtimeClear = acceptBody.indexOf(
       'await clearAccountScopedRuntimeForSwitch();',
-      targetWrite,
+      previousSessionSnapshot,
     );
     const ownerCommit = acceptBody.indexOf(
       'activateMobileSessionRealm(committedRealm);',
@@ -661,7 +664,9 @@ describe('mobile auth-server login', () => {
     expect(previousSessionSnapshot).toBeGreaterThan(serialized);
     expect(vaultTransaction).toBeGreaterThan(previousSessionSnapshot);
     expect(targetWrite).toBeGreaterThan(vaultTransaction);
-    expect(runtimeClear).toBeGreaterThan(targetWrite);
+    expect(runtimeClear).toBeGreaterThan(previousSessionSnapshot);
+    expect(runtimeClear).toBeLessThan(vaultTransaction);
+    expect(acceptBody).toContain('replacesActiveSession || userRef.current === null');
     expect(ownerCommit).toBeGreaterThan(runtimeClear);
     expect(rollback).toBeGreaterThan(ownerCommit);
     expect(acceptBody.slice(rollback)).toContain(

@@ -45,6 +45,8 @@ export interface ApiFetchOptions {
   token?: string | null;
   /** 跳过 401 自动 refresh（避免无限循环；refresh 自身调用时禁用）。 */
   skipAutoRefresh?: boolean;
+  /** Fixed-identity teardown requests must not invalidate a newer active account. */
+  skipSessionInvalidation?: boolean;
   /**
    * 目标服务 base URL(必传;来自 clientEndpoints 的对应字段或注入方)。
    * 区域相关服务必须传 resolver：401 refresh 可能切换登录区域，重试前要重新
@@ -65,7 +67,7 @@ export interface ApiFetchOptions {
   /**
    * Upstream business codes that may cross a redacted boundary. Messages and
    * response bodies remain hidden; every code must be explicitly allowlisted
-   * by the caller.
+   * by the caller. These codes are also safe to include in redacted logs.
    */
   allowedRedactedErrorCodes?: readonly string[];
 }
@@ -149,8 +151,12 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
   if (!result.ok) {
     const errCode = readErrorCode(result.data) ?? statusToCode(result.status);
     const errMsg = readErrorMessage(result.data) ?? `请求失败 (${result.status})`;
+    const publicCode =
+      opts.redactErrorDetails && !opts.allowedRedactedErrorCodes?.includes(errCode)
+        ? statusToCode(result.status)
+        : errCode;
     if (
-      result.status === 401 &&
+      !opts.skipSessionInvalidation && result.status === 401 &&
       (errCode === 'ACCOUNT_UNAVAILABLE' ||
         (refreshedAndRetried && isRefreshableUnauthorizedCode(errCode)))
     ) {
@@ -168,7 +174,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
         'path=' + (opts.logLabel ?? redactedLogPath(apiPath)),
         'method=' + (opts.method ?? 'GET'),
         'status=' + result.status,
-        'code=' + statusToCode(result.status),
+        'code=' + publicCode,
       );
     } else {
       // logLabel 表示 path 里带身份;上游 `msg` 同样可能回显身份(如「skill <name> not found」),
@@ -185,9 +191,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
       log.warn(...fields);
     }
     throw new ServerApiError(
-      opts.redactErrorDetails && !opts.allowedRedactedErrorCodes?.includes(errCode)
-        ? statusToCode(result.status)
-        : errCode,
+      publicCode,
       result.status,
       opts.redactErrorDetails ? `请求失败 (${result.status})` : errMsg,
     );

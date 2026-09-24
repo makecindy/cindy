@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * TerminalTabBody —— terminal tab 的 TabBody。
  *
@@ -285,15 +286,18 @@ function ExitedOverlay({
     <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-6">
       <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-white/15 bg-black/80 px-4 py-2 text-sm text-white shadow-lg backdrop-blur">
         <span>{message}</span>
-        <button
+        <Button
+          variant="secondary"
+          size="xs"
+          compact
+          loading={restarting}
           type="button"
           onClick={onRestart}
           disabled={restarting}
-          className="inline-flex items-center gap-1 rounded border border-white/20 px-2 py-0.5 text-xs hover:bg-white/10 disabled:opacity-50"
         >
           <Spinner icon={RotateCw} size={12} spinning={restarting} />
           {t('rightSidebar.terminal.restart')}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -317,15 +321,18 @@ function ErrorOverlay({
           <AlertTriangle size={14} />
           <span>{message}</span>
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="xs"
+          compact
+          loading={restarting}
           type="button"
           onClick={onRetry}
           disabled={restarting}
-          className="inline-flex items-center gap-1 rounded border border-white/20 px-2 py-0.5 text-xs hover:bg-white/10 disabled:opacity-50"
         >
           <Spinner icon={RotateCw} size={12} spinning={restarting} />
           {t('rightSidebar.terminal.restart')}
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react';
@@ -118,24 +119,17 @@ export function DingTalkBotSection({
             label={t('settings.dingtalkBot.connected.ownerLabel')}
             value={bot.ownerUserId || t('settings.dingtalkBot.connected.notBound')}
           />
-          <button
+          <Button
+            variant="secondary"
+            size="lg"
+            loading={bot.isClearing}
             type="button"
             onClick={() => void clear()}
             disabled={bot.isClearing}
-            className={cn(
-              'flex h-9 items-center justify-center gap-1.5 rounded-full',
-              'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-              'text-12 font-medium text-[var(--settings-btn-secondary-text)]',
-              bot.isClearing && 'cursor-not-allowed opacity-40',
-            )}
           >
-            {bot.isClearing ? (
-              <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />
-            ) : (
-              <Trash2 size={13} />
-            )}
+            <Trash2 size={13} />
             {t('settings.dingtalkBot.disconnect')}
-          </button>
+          </Button>
         </div>
       ) : (
         <div className="flex flex-col gap-3">
@@ -188,32 +182,35 @@ export function DingTalkBotSection({
           </div>
           <div className="flex gap-2">
             {bot.hasSecret && !bot.appSecret.trim() ? (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                loading={bot.isSaving}
                 type="button"
                 onClick={() => void bot.reconnect()}
                 disabled={bot.isSaving}
-                className={primaryButtonClass}
+                className="flex-1"
               >
                 {bot.isSaving && (
                   <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
                 )}
                 {t('settings.dingtalkBot.reconnect')}
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                loading={bot.isSaving}
                 type="button"
                 onClick={() => void bot.connect()}
                 disabled={!bot.canConnect}
-                className={cn(
-                  primaryButtonClass,
-                  !bot.canConnect && 'cursor-not-allowed opacity-40',
-                )}
+                className="flex-1"
               >
                 {bot.isSaving && (
                   <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
                 )}
                 {t('settings.dingtalkBot.connect')}
-              </button>
+              </Button>
             )}
             {bot.hasSecret && (
               <button
@@ -267,12 +264,6 @@ export function DingTalkBotSection({
     </ImChannelSettingsCard>
   );
 }
-
-const primaryButtonClass = cn(
-  'flex h-[42px] flex-1 items-center justify-center gap-1.5 rounded-full',
-  'border border-[var(--settings-btn-primary-border)] bg-[var(--settings-btn-primary-bg)]',
-  'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-);
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (

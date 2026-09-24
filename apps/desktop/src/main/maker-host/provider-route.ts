@@ -29,8 +29,10 @@ import {
   XAI_MODEL_PREFIX,
   type AgentKind,
   type Provider,
+  type ProviderSource,
   type ProviderView,
   type RoutingDescriptor,
+  isCustomRoutedProvider,
 } from '@cindy/model-providers';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
@@ -625,7 +627,7 @@ export function getProviderRoutingDescriptor(
 
 export interface ResolvedSessionRoute {
   providerId: string;
-  providerSource: 'builtin' | 'user';
+  providerSource: ProviderSource;
   routing: RoutingDescriptor;
   apiKey: string | null;
   oauthToken: string | null;
@@ -721,14 +723,14 @@ export interface ResolvedProviderRouteDecision {
  * 自定义 key、两种 OAuth 策略的读取器与容错)是同一份逻辑,分写会漂移。
  */
 async function readProviderRouteCredentials(
-  provider: { id: string; source: 'builtin' | 'user' },
+  provider: Pick<Provider, 'id' | 'source'>,
   routing: RoutingDescriptor,
   agent: AgentKind,
 ): Promise<{ apiKey: string | null; oauthToken: string | null }> {
   const credentialProviderId =
-    provider.source === 'user' ? storedCustomProviderId(provider.id) : provider.id;
+    isCustomRoutedProvider(provider) ? storedCustomProviderId(provider.id) : provider.id;
   const apiKey =
-    provider.source === 'user' ? customProviderKeyReader(credentialProviderId, agent) : null;
+    isCustomRoutedProvider(provider) ? customProviderKeyReader(credentialProviderId, agent) : null;
   let oauthToken: string | null = null;
   if (routing.authStrategy === 'oauth-token') {
     oauthToken = oauthTokenReader(credentialProviderId);
@@ -791,10 +793,14 @@ export async function resolveFrozenProviderRouteDecision(
   if (!id || isProviderRouteMutationInProgress(id)) return null;
   if (getProviderRouteCredentialRevision(id) !== credentialRevision) return null;
   const provider = getActiveCatalog().providers.find((candidate) => candidate.id === id);
-  if (!provider || provider.source !== 'user' || !provider.agents.includes(agent)) return null;
+  if (!provider || !isCustomRoutedProvider(provider) || !provider.agents.includes(agent)) return null;
   if (!routingServesWireModel(routing, wireModel)) return null;
   const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
-  const customHeaders = customProviderHeaderReader(storedCustomProviderId(provider.id), agent);
+  // Header overrides are user-owned configuration. Organization routes use only the trusted
+  // directory descriptor and managed credential, even if stale local data shares an id.
+  const customHeaders = provider.source === 'user'
+    ? customProviderHeaderReader(storedCustomProviderId(provider.id), agent)
+    : null;
   // A provider-OAuth reader may await refresh. Recheck both guards after the credential read so a
   // concurrent endpoint/key/token mutation can only yield the old coherent decision or fail closed.
   if (
@@ -812,7 +818,7 @@ export async function resolveFrozenProviderRouteDecision(
     if (getProviderRouteCredentialRevision(id) !== credentialRevision) return false;
     return getActiveCatalog().providers.some(
       (candidate) =>
-        candidate.id === id && candidate.source === 'user' && candidate.agents.includes(agent),
+        candidate.id === id && isCustomRoutedProvider(candidate) && candidate.agents.includes(agent),
     );
   };
   return {
@@ -843,9 +849,9 @@ export function resolveSessionRouteDecision(
   if (!routingServesWireModel(routing, wireModel)) return null;
   // 自定义供应商：resolve 时按 provider_key_<id>_<agent> 读出该 runtime 的 API key 注入鉴权头（不在 catalog）。
   const credentialProviderId =
-    provider?.source === 'user' ? storedCustomProviderId(providerId) : providerId;
+    isCustomRoutedProvider(provider) ? storedCustomProviderId(providerId) : providerId;
   const apiKey =
-    provider?.source === 'user' ? customProviderKeyReader(credentialProviderId, agent) : null;
+    isCustomRoutedProvider(provider) ? customProviderKeyReader(credentialProviderId, agent) : null;
   const withRequestPath = (decision: RoutingDecision | null): RoutingDecision | null =>
     decision && wireModel && routing.requestPath
       ? { ...decision, pathOverride: routing.requestPath }
@@ -1005,7 +1011,7 @@ export function resolveImplicitProviderOAuthRouteDecision(
   const provider = uniqueProviderForModel(modelId, agent);
   const routing = provider?.routing[agent];
   if (!provider || !routing || routing.authStrategy !== 'provider-oauth-header') return null;
-  const apiKey = provider.source === 'user' ? customProviderKeyReader(provider.id, agent) : null;
+  const apiKey = isCustomRoutedProvider(provider) ? customProviderKeyReader(provider.id, agent) : null;
   const withRequestPath = (decision: RoutingDecision | null): RoutingDecision | null =>
     decision && routing.requestPath ? { ...decision, pathOverride: routing.requestPath } : decision;
   return Promise.resolve(providerOAuthTokenReader(provider.id, agent))
@@ -1040,7 +1046,7 @@ export function resolveProviderOAuthControlRouteDecision(
   const provider = providers[0];
   const routing = provider.routing[agent];
   if (!routing) return null;
-  const apiKey = provider.source === 'user' ? customProviderKeyReader(provider.id, agent) : null;
+  const apiKey = isCustomRoutedProvider(provider) ? customProviderKeyReader(provider.id, agent) : null;
   return Promise.resolve(providerOAuthTokenReader(provider.id, agent))
     .then((token) => buildRouteDecision(routing, gatewayKey, agent, apiKey, token))
     .catch(() => buildRouteDecision(routing, gatewayKey, agent, apiKey, null));
@@ -1105,23 +1111,23 @@ export function rewriteImplicitModelIdForRoute(
 }
 
 /**
- * 该会话是否显式选了**自定义(user)供应商**。
+ * 该会话是否显式选了需要 Host 自行注入凭证的供应商（个人自定义或企业下发）。
  * codex 路由用：env-key 注入态默认全量走网关、per-session 无意义（内置三家保持该旧行为），
- * 但自定义供应商必须按其 baseUrl + 用户 key 路由，故对 user 供应商放行 per-session 解析。
+ * 但这两类供应商必须按各自 baseUrl + key 路由，故放行 per-session 解析。
  */
 export function isUserProviderSession(sessionId: string): boolean {
   return getUserProviderIdForSession(sessionId) !== null;
 }
 
 /**
- * 该会话显式选定的**自定义(user)供应商 id**；非 user 供应商 / 未选 → null。
+ * 该会话显式选定的自定义路由供应商 id；其他供应商 / 未选 → null。
  * 上游错误观察器（provider-upstream-error-observer）用它把 4xx/5xx 归属到具体自定义供应商。
  */
 export function getUserProviderIdForSession(sessionId: string): string | null {
   const providerId = getSessionProvider(sessionId);
   if (!providerId) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-  return provider?.source === 'user' ? providerId : null;
+  return isCustomRoutedProvider(provider) ? providerId : null;
 }
 
 /** 该会话是否使用 host/proxy 注入供应商鉴权的路由策略(provider-oauth-header / oauth-token)。 */

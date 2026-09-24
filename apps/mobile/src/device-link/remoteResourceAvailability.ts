@@ -23,3 +23,9 @@ export function writeRemoteCollectionCache(owner: string, collectionId: string, 
   if (owner !== cacheOwner) return;
   collections.set(collectionId, items);
 }
+
+/** Connection evidence is independent of whether a resource/API request succeeded. */
+export function remoteResourceConnectionState(relayStatus: string, presence: boolean | null): boolean | null {
+  if (presence === false || relayStatus === 'stopped') return false;
+  return relayStatus === 'online' && presence === true ? true : null;
+}

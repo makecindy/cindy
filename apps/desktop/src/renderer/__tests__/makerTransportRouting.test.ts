@@ -13,6 +13,8 @@ beforeEach(() => {
 
 function stubElectron() {
   const makerSpies = {
+    submitRemotePluginSecret: vi.fn().mockResolvedValue({accepted: true}),
+    submitRemotePluginConnection: vi.fn().mockResolvedValue({accepted: true}),
     setModel: vi.fn(),
     setEffort: vi.fn(),
     fork: vi.fn(),
@@ -64,6 +66,33 @@ function stubElectron() {
 const sess = (id: string): Session => ({ id }) as unknown as Session;
 
 describe('makerApiFor 路由(完整对等会话级操作)', () => {
+  it('routes connection input only through the dedicated local Main bridge', async () => {
+    const {makerSpies, invoke} = stubElectron();
+    const {submitRemotePluginConnection} = await import('@/lib/makerTransport');
+    const {remoteProjectsStore} = await import('@/features/device-link/remoteProjectsStore');
+    remoteProjectsStore.setDeviceSessions('cloud', 'Cloud', [sess('connection-task')]);
+    const request = { ghostId: 'plugin', requestId: 'card', actionId: 'manage_connection:connection:service', expectedRevision: 0,
+      value: { host: 'git.example.test', token: 'synthetic-pat' },
+      presentation: { ghostName: 'Plugin', title: 'Connect', description: '', intro: '', connectionKey: 'service' } };
+    await expect(submitRemotePluginConnection('connection-task', request)).resolves.toEqual({accepted: true});
+    expect(makerSpies.submitRemotePluginConnection).toHaveBeenCalledWith({deviceId: 'cloud', ...request});
+    expect(invoke).not.toHaveBeenCalled();
+    await expect(submitRemotePluginConnection('unknown-local-task', request)).rejects.toThrow();
+  });
+  it('routes cloud key input only through the dedicated local Main bridge, never generic invoke', async () => {
+    const {makerSpies, invoke} = stubElectron();
+    const {submitRemotePluginSecret} = await import('@/lib/makerTransport');
+    const {remoteProjectsStore} = await import('@/features/device-link/remoteProjectsStore');
+    remoteProjectsStore.setDeviceSessions('cloud', 'Cloud', [sess('remote-task')]);
+    const request = {ghostId: 'plugin', requestId: 'card', actionId: 'action', expectedRevision: 0,
+      value: 'synthetic-pat', presentation: {ghostName: 'Plugin', title: 'Key', description: '', intro: '',
+        fieldLabel: 'API key', fieldDescription: '', maxLength: 200}};
+    await expect(submitRemotePluginSecret('remote-task', request)).resolves.toEqual({accepted: true});
+    expect(makerSpies.submitRemotePluginSecret).toHaveBeenCalledWith({deviceId: 'cloud', ...request});
+    expect(invoke).not.toHaveBeenCalled();
+    await expect(submitRemotePluginSecret('unknown-local-task', request)).rejects.toThrow();
+    expect(makerSpies.submitRemotePluginSecret).toHaveBeenCalledTimes(1);
+  });
   it('远程 device-link 会话:每个任务级操作命中对应隧道 channel + 原样转发 args', async () => {
     const { invoke } = stubElectron();
     const { makerApiFor } = await import('@/lib/makerTransport');

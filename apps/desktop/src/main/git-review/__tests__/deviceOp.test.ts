@@ -23,6 +23,12 @@ const readReviewFileDiffMock = vi.fn();
 const readReviewImagePreviewMock = vi.fn();
 const readReviewMarkdownPreviewMock = vi.fn();
 const withSessionReviewExecutionMock = vi.hoisted(() => vi.fn());
+const turnStore = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn() }));
+vi.mock('../../turn-change-set/store.js', () => ({
+  listTurnChangeSets: turnStore.list,
+  getTurnChangeSets: turnStore.get,
+  TURN_CHANGE_SET_DETAIL_ID_LIMIT: 16,
+}));
 
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
@@ -60,6 +66,22 @@ beforeEach(() => {
 });
 
 describe('git-review device-op', () => {
+  it('reads historical snapshots from the host without running current-workspace Git', async () => {
+    turnStore.list.mockResolvedValue([{ id: 'set' }]);
+    turnStore.get.mockResolvedValue([{ id: 'set', diffs: [{ rawPatch: 'exact' }] }]);
+    expect(await handleRemoteOp({ op: 'turn-list', payload: { sessionId: 's1' } }))
+      .toEqual({ ok: true, result: [{ id: 'set' }] });
+    expect(await handleRemoteOp({ op: 'turn-get', payload: { sessionId: 's1', ids: ['set'] } }))
+      .toEqual({ ok: true, result: [{ id: 'set', diffs: [{ rawPatch: 'exact' }] }] });
+    expect(turnStore.get).toHaveBeenCalledWith('s1', ['set']);
+    expect(withSessionReviewExecutionMock).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, [''], [123], Array(17).fill('set')])('rejects invalid historical detail IDs (%#)', async (ids) => {
+    await expect(handleRemoteOp({ op: 'turn-get', payload: { sessionId: 's1', ids } }))
+      .rejects.toThrow('[INVALID_PARAMS]');
+    expect(turnStore.get).not.toHaveBeenCalled();
+  });
   it('rejects invalid args deterministically', async () => {
     expect(await handleRemoteOp(undefined as never)).toEqual({ ok: false, message: 'invalid remote-op args' });
     expect(await handleRemoteOp({ payload: {} } as never)).toEqual({ ok: false, message: 'invalid remote-op args' });

@@ -29,6 +29,7 @@ import {
   Smartphone,
 } from 'lucide-react';
 
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import accessibilityPermissionIcon from '@/assets/system-settings/accessibility-icon.png';
 import screenRecordingPermissionIcon from '@/assets/system-settings/screen-recording-icon.png';
@@ -1304,7 +1305,7 @@ export function ComputerUseSection({
               <Globe size={16} className="text-[var(--settings-section-title)]" />
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
-              <p className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
+              <p id="settings-search-settings-computerUse-browser-title" className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
                 {t('settings.computerUse.browser.title')}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
@@ -1352,19 +1353,21 @@ export function ComputerUseSection({
                 : t('settings.computerUse.browser.notDetected')}
             </p>
             {availability.detected ? (
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
+                className="px-3"
                 type="button"
                 onClick={handleOpenForLogin}
-                className={ACTION_BUTTON_CLASS}
               >
                 <LogIn size={12} className="shrink-0" />
                 {t('settings.computerUse.browser.openForLogin')}
-              </button>
+              </Button>
             ) : (
-              <button type="button" onClick={handleDownload} className={ACTION_BUTTON_CLASS}>
+              <Button variant="secondary" size="sm" className="px-3" type="button" onClick={handleDownload}>
                 <Download size={12} className="shrink-0" />
                 {t('settings.computerUse.browser.download')}
-              </button>
+              </Button>
             )}
           </div>
         ) : null}
@@ -1400,7 +1403,7 @@ export function ComputerUseSection({
               <MonitorCog size={16} className="text-[var(--settings-section-title)]" />
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
-              <p className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
+              <p id="settings-search-settings-computerUse-directControl-title" className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
                 {t('settings.computerUse.directControl.title')}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
@@ -1419,7 +1422,7 @@ export function ComputerUseSection({
         {window.electronAPI.platform === 'darwin' ? (
           <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-4">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-13 font-medium text-[var(--settings-section-title)]">
+              <p id="settings-search-settings-computerUse-directControl-permissions-title" className="text-13 font-medium text-[var(--settings-section-title)]">
                 {t('settings.computerUse.directControl.permissions.title')}
               </p>
               {computerInstallPending || computerPermissionPending ? (
@@ -1430,23 +1433,22 @@ export function ComputerUseSection({
                     : t('settings.computerUse.directControl.authorizing')}
                 </span>
               ) : (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="px-2.5"
+                  loading={computerPermissionRecheckPending}
                   type="button"
                   onClick={() => void handleRecheckComputerStatus()}
                   disabled={computerPermissionRecheckPending}
-                  className={cn(ACTION_BUTTON_CLASS, 'h-6 px-2.5')}
                 >
-                  {computerPermissionRecheckPending ? (
-                    <Spinner size={12} />
-                  ) : (
-                    <RefreshCw size={12} className="shrink-0" />
-                  )}
+                  <RefreshCw size={12} className="shrink-0" />
                   {t('settings.computerUse.directControl.permissions.recheck')}
-                </button>
+                </Button>
               )}
             </div>
 
-            <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+            <div id="settings-search-settings-computerUse-directControl-permissions-accessibilityLabel" className="mt-3 grid gap-2.5 sm:grid-cols-2">
               <ComputerPermissionRow
                 label={t('settings.computerUse.directControl.permissions.accessibilityLabel')}
                 iconSrc={accessibilityPermissionIcon}
@@ -1470,6 +1472,7 @@ export function ComputerUseSection({
                   )
                 }
               />
+              <div id="settings-search-settings-computerUse-directControl-permissions-screenRecordingLabel">
               <ComputerPermissionRow
                 label={t('settings.computerUse.directControl.permissions.screenRecordingLabel')}
                 iconSrc={screenRecordingPermissionIcon}
@@ -1493,6 +1496,7 @@ export function ComputerUseSection({
                   )
                 }
               />
+              </div>
             </div>
           </div>
         ) : null}
@@ -1532,17 +1536,18 @@ export function ComputerUseSection({
                           version: driverUpdate.latestVersion,
                         })}
                   </span>
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="px-2.5"
+                    loading={driverUpdatePending}
                     type="button"
                     onClick={() => void handleUpdateDriver()}
                     disabled={driverUpdatePending || computerInstallPending}
-                    className={cn(ACTION_BUTTON_CLASS, 'h-6 px-2.5')}
                   >
                     <Download size={12} className="shrink-0" />
-                    {driverUpdatePending
-                      ? t('settings.computerUse.directControl.update.updating')
-                      : t('settings.computerUse.directControl.update.action')}
-                  </button>
+                    {t('settings.computerUse.directControl.update.action')}
+                  </Button>
                 </>
               ) : null}
             </div>
@@ -1602,14 +1607,16 @@ export function ComputerUseSection({
               ) : null}
             </div>
             <div>
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
+                className="px-3"
                 type="button"
                 onClick={handleOpenCuaProject}
-                className={ACTION_BUTTON_CLASS}
               >
                 <ExternalLink size={12} className="shrink-0" />
                 {t('settings.computerUse.directControl.openSourceProject')}
-              </button>
+              </Button>
             </div>
           </div>
         ) : null}
@@ -1636,7 +1643,7 @@ export function ComputerUseSection({
               <Smartphone size={16} className="text-[var(--settings-section-title)]" />
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
-              <p className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
+              <p id="settings-search-settings-computerUse-android-title" className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
                 {t('settings.computerUse.android.title')}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
@@ -1751,15 +1758,18 @@ export function ComputerUseSection({
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
+              className="px-3"
+              loading={androidStatusPending}
               type="button"
               onClick={() => void handleRefreshAndroidStatus()}
               disabled={androidStatusPending}
-              className={ACTION_BUTTON_CLASS}
             >
               <RefreshCw size={12} className="shrink-0" />
               {t('settings.computerUse.android.refresh')}
-            </button>
+            </Button>
           </div>
         </div>
         {androidConnectionGuideKind ? (
@@ -1799,7 +1809,7 @@ export function ComputerUseSection({
         ) : null}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
           <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">
+            <p id="settings-search-settings-computerUse-android-adb-title" className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">
               {t('settings.computerUse.android.adb.title')}
             </p>
             <p className="min-w-0 break-all text-12 leading-[1.5] text-[var(--settings-section-desc)]">
@@ -1825,22 +1835,26 @@ export function ComputerUseSection({
                 'disabled:opacity-50',
               )}
             />
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
+              className="px-3"
               type="button"
               onClick={() => void handleSaveAndroidAdbPath()}
               disabled={!androidAdbPathCanSave || androidAdbPathBusy}
-              className={ACTION_BUTTON_CLASS}
             >
               {t('settings.computerUse.android.adb.save')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="px-3"
               type="button"
               onClick={() => void handleUseDefaultAndroidAdbPath()}
               disabled={androidAdbPathBusy}
-              className={ACTION_BUTTON_CLASS}
             >
               {t('settings.computerUse.android.adb.useDefault')}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { readProviderPresentation } from './provider-presentation-store.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
-import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId, getValidClaudeAccountOAuth, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
+import { subscriptionAccountState, isXaiSubscriptionProviderId, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
 /**
  * createDesktopProviderService —— 桌面端目录加载落地 + provider-service 接线。
  *
@@ -15,7 +15,7 @@ import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionPro
  *      启动期（splash）由 bootstrap-electron 在构造 Maker 前 await 一次（见 registerMakerIpcsAfterSplash）。
  *   2. `getDesktopProviderService`：把 active-catalog + 连接状态读取器注入 provider-service。
  *      连接状态直接复用现有凭证存储——XD = 托管 gateway key 是否存在、
- *      Anthropic = 系统 Claude.ai OAuth 是否登录、OpenAI = Codex 是否 OAuth 登录。
+ *      Anthropic = 内置 Claude Code CLI 是否已登录(且 Cindy 获准使用)、OpenAI = Codex 是否 OAuth 登录。
  *      与设置页现有 auth 流程同源，不另立通道。
  */
 
@@ -68,11 +68,7 @@ import {
   readCodexDiscoveredModels,
   readCodexDiscoveredModelsForAuthRefresh,
 } from './codex-model-discovery.js';
-import {
-  getAnthropicModelDiscoveryFailure,
-  loadAnthropicModelsFromDiskCache,
-  refreshAnthropicModelsFromHttp,
-} from './model-discovery/anthropic.js';
+import { loadAnthropicModelsFromDiskCache } from './model-discovery/anthropic.js';
 import {
   clearXaiDiscoveredModels,
   loadXaiModelsFromDiskCache,
@@ -109,12 +105,9 @@ import {
   readCustomProviderHeaders,
   readCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
-import {
-  hasClaudeAiOAuth,
-  hasClaudeAiOAuthUnbound,
-  readClaudeAiOAuth,
-} from './claude-credentials-store.js';
-import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
+import { hasClaudeNativeLogin, hasClaudeNativeLoginUnbound } from './claude-native-auth.js';
+import { readClaudeNativeLogin } from './claude-native-connection.js';
+import { readClaudeCliLoginStatus } from './claude-native-cli.js';
 import {
   getGrokAccessToken,
   hasGrokOAuthLogin,
@@ -134,6 +127,8 @@ import { getAppCapabilities } from '../appCapabilities.js';
 import {
   claimDetectedNativeProviderAuth,
   getNativeProviderAuthSource,
+  isNativeProviderAuthBound,
+  isNativeProviderAuthRevoked,
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
@@ -463,15 +458,8 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   setCustomProviderHeaderReader(readCustomProviderHeaders);
   setProviderOAuthTokenReader((providerId, agent, options) => {
     if (isXaiSubscriptionProviderId(providerId)) return readXaiProviderOAuthToken(options, providerId);
-    if (subscriptionAccountKind(providerId) === 'claude') {
-      return getValidClaudeAccountOAuth(providerId, options).then(oauth => oauth?.accessToken ?? null);
-    }
-    // Codex and Pi processes do not carry Claude Code's native OAuth credential.
-    // Their Anthropic bridges read the host-owned Claude.ai token and allow the
-    // existing refresher to rotate it when needed.
-    if (providerId === 'anthropic' && (agent === 'codex' || agent === 'pi')) {
-      return getValidClaudeAiOAuth(options).then((oauth) => oauth?.accessToken ?? null);
-    }
+    // Claude 订阅凭证只在内置 Claude Code CLI 里,Cindy 从不读取;因此不为任何
+    // provider 路由(含 Codex / Pi bridge)提供 Claude 订阅 token。
     return null;
   });
   // 测试连接探测与路由同源读 key（同 setter 模式，见 provider-diagnostics.ts）。
@@ -546,10 +534,13 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
           /* 读/映射失败:保持现值,不影响启动 */
         }
         // Anthropic 动态清单:同步加载磁盘缓存(上次成功结果,登录态 gate 在内部),
-        // 让首次 maker 构建的 availableModels 派生就包含它;HTTP 刷新放后台,
-        // 不阻塞 splash(失败保留现值,语义见 model-discovery/anthropic.ts)。
-        await loadAnthropicModelsFromDiskCache();
-        void refreshAnthropicModelsFromHttp();
+        // 让首次 maker 构建的 availableModels 派生就包含它。gate 读的是 CLI 登录态:只有
+        // 已连接 Claude 订阅的用户才等一次 `claude auth status`(约 0.1–0.3s),其余用户的
+        // 启动不等 CLI 进程(未绑定时缓存加载本就早退)。此后由会话 init 的 SDK 捕获刷新。
+        if (isNativeProviderAuthBound('anthropic')) {
+          await readClaudeCliLoginStatus();
+          await loadAnthropicModelsFromDiskCache();
+        }
         // xAI 账号成员同样先恢复当前 owner 的成功 LKG，再后台读官方账号清单。
         // 无 LKG / 刷新失败时 active-catalog 才继续使用 server Catalog → bundled 救急。
         await loadXaiModelsFromDiskCache();
@@ -579,6 +570,9 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
   // 也必须先按新的 ownerScopedUserDataPath 换掉本地 override，不能让上一账号的
   // additions/patches 继续留在 active-catalog 内存层。
   syncLocalCatalogOverridesIntoActiveCatalog();
+  // Secret invalidation can run before the owner commit. Re-read the committed
+  // owner's image key synchronously, even when the endpoint fast path is reused.
+  void refreshOpenAiMediaModels();
 
   const source = buildSource();
   const sourceKey = catalogSourceKey(source);
@@ -931,10 +925,9 @@ function refreshAnthropicCatalogAfterClaim(): Promise<void> {
   if (anthropicClaimDiscoveryInflight) return anthropicClaimDiscoveryInflight;
 
   const flight = (async () => {
-    // 启动期两条加载都可能因尚未绑定而早退。先恢复最后一次成功的磁盘清单，再刷新
-    // HTTP；任一失败都保留已有目录，不把连接态读取整条打穿。
+    // 启动期的磁盘清单加载可能因尚未绑定而早退,认领后补一次;失败保留已有目录,
+    // 不把连接态读取整条打穿。之后由会话 init 的 SDK 捕获刷新(Cindy 不带订阅凭证拉清单)。
     await loadAnthropicModelsFromDiskCache().catch(() => undefined);
-    await refreshAnthropicModelsFromHttp().catch(() => false);
   })();
   anthropicClaimDiscoveryInflight = flight;
   const clear = () => {
@@ -988,7 +981,7 @@ export function getDesktopProviderService(): ProviderService {
     hasLegacyOwnerNamespaceClaim(ownerId)
   ) {
     migrateLegacyNativeProviderAuthBindings(ownerId, {
-      anthropic: hasClaudeAiOAuthUnbound(),
+      anthropic: hasClaudeNativeLoginUnbound(),
       openai: desktopCodexAuthAdapter.hasCodexOAuthLoginUnbound(),
       // 这是升级迁移，不是 CLI 自动发现：旧 xAI blob 只可能由 Cindy OAuth 写入，
       // nativeProviderAuthBinding 会把它记为 explicit-provider-oauth。
@@ -1007,19 +1000,18 @@ export function getDesktopProviderService(): ProviderService {
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
         // 同时服务 device-link 与可能不受信的渲染上下文,所以副作用只在本机主页面发起时
         // 才放行,其余降级为纯读(PR #548 review)。
-        if (!allowSideEffects) return hasClaudeAiOAuth();
+        // 明确断开过:不认领、也不必读 CLI。
+        if (!isNativeProviderAuthBound('anthropic') && isNativeProviderAuthRevoked('anthropic')) return false;
+        // 列表类读取不等 CLI 进程:用缓存(过期则后台重读,变化经登录态监听广播)。
+        // 需要结论的读取(waitForDiscovery,如刚登录后的目录补拉)才等待。
+        await readClaudeCliLoginStatus({ maxAgeMs: 30_000, staleWhileRevalidate: waitForDiscovery !== true });
+        if (!allowSideEffects) return hasClaudeNativeLogin();
         await claimNativeProviderAuthOnRead(
           'anthropic',
-          hasClaudeAiOAuthUnbound,
+          hasClaudeNativeLoginUnbound,
           () => {
-            // anthropic 的 live entitlement 证据只来自动态发现，而发现只在启动期与
-            // 显式 OAuth 登录成功时触发。绑定是在这两个时机之后才建立的，启动期那次
-            // 早被登录态 gate 掉——不在认领成功时补拉，目录虽可能有 Registry presence，
-            // 运行时仍缺少当前账号的可用性证据。
-            //
-            // 磁盘缓存要先补:启动期的 loadAnthropicModelsFromDiskCache 同样因当时未绑定而
-            // 早退了。先把上次成功的清单摆出来,再去拉最新的 —— 否则这次 HTTP 一旦超时或
-            // 失败,明明有可用的缓存清单,用户还是一个模型都选不了(PR #548 review)。
+            // 启动期的 loadAnthropicModelsFromDiskCache 因当时未绑定而早退了:认领成功时
+            // 把上次成功的清单摆出来,否则只剩 Registry presence(PR #548 review)。
             return refreshAnthropicCatalogAfterClaim();
           },
           waitForDiscovery === true,
@@ -1029,7 +1021,7 @@ export function getDesktopProviderService(): ProviderService {
         if (waitForDiscovery === true && anthropicClaimDiscoveryInflight) {
           await anthropicClaimDiscoveryInflight;
         }
-        return hasClaudeAiOAuth();
+        return hasClaudeNativeLogin();
       },
       // openai 的自愈挂在 adapter 的 reconcile 收口里(#294 既有形态),这里同样要受开关约束:
       // hasCodexOAuthLogin() 经 getAccessToken 触发 reconcileWithSystemCodex,它会把本机 CLI
@@ -1050,12 +1042,12 @@ export function getDesktopProviderService(): ProviderService {
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
     subscriptionAccountInfo: async (providerId) => {
       if (providerId === 'anthropic') {
-        const oauth = readClaudeAiOAuth();
+        const login = await readClaudeNativeLogin();
         const source = getNativeProviderAuthSource('anthropic');
         return {
           source: source === 'native-harness-inherited' ? 'local'
             : source === 'explicit-provider-oauth' ? 'oauth' : 'unknown',
-          identity: typeof oauth?.identity === 'string' ? oauth.identity : undefined,
+          identity: login?.email,
         };
       }
       if (providerId === 'xai') {
@@ -1100,14 +1092,6 @@ export function getDesktopProviderService(): ProviderService {
             .map((model) => ({ providerId: 'xd', id: model.id }))
         : []),
     ],
-    // 动态发现失败归因：目前只有 anthropic 的 live entitlement 证据依赖这条通道。
-    // 即使 Registry presence 仍能展示目录，UI 也要说明当前账号验证失败，而不是一直
-    // 说「正在发现」。
-    //
-    // 连接态直接沿用本次快照已经算好的那个：它内部要读凭证库，macOS 上每读一次就是一个
-    // 同步的 `security` 子进程，同一次 listProviders 不该为此阻塞主线程两回（PR #548 review）。
-    modelDiscoveryFailure: (providerId, connected) =>
-      providerId === 'anthropic' ? getAnthropicModelDiscoveryFailure(connected) : null,
     // 「模型 / 供应商停用」override:main 侧持久化真源,烘焙进 ProviderView 后
     // renderer / IM / Orca / device-link 全部消费同一份准入事实。
     getModelAccess: readModelDisableOverrides,

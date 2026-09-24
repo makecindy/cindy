@@ -38,7 +38,7 @@ describe('Cindy Make input replacement', () => {
     const cancel = vi.fn(async () => ({ success: true }));
     vi.stubGlobal('electronAPI', { cancelCindyMakeTask: cancel });
     const view = render(<CindyMakeComposerMask phase="dependencies" report={report} />);
-    expect(screen.getAllByRole('listitem')).toHaveLength(5);
+    expect(screen.getAllByRole('listitem')).toHaveLength(6);
     expect(screen.getByText('[make] Personal Cindy')).toBeTruthy();
     expect(screen.getByText('cindyMake.code.dependencyActivity.starting')).toBeTruthy();
     expect(screen.queryByText('cindyMake.code.inputLocked.hint')).toBeNull();
@@ -117,7 +117,7 @@ describe('Cindy Make input replacement', () => {
           readOnly
         />,
       );
-      expect(screen.getAllByRole('listitem')).toHaveLength(5);
+      expect(screen.getAllByRole('listitem')).toHaveLength(6);
       expect(screen.queryByRole('button')).toBeNull();
     },
   );

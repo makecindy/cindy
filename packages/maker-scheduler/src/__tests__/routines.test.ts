@@ -66,6 +66,33 @@ async function fixture(
 }
 
 describe("Routine event admission and execution", () => {
+  it('deduplicates concurrent creation and a retry after restart without overwriting newer edits', async () => {
+    const f = await fixture();
+    const creationId = 'mobile-request-123456';
+    const [a, b] = await Promise.all([f.engine.createOnce('bot', input, creationId), f.engine.createOnce('bot', input, creationId)]);
+    expect(a).toEqual(b);
+    expect(f.engine.list('bot')).toHaveLength(1);
+    await f.engine.stop();
+    const restarted = await fixture(undefined, f.snapshot());
+    try {
+      expect(await restarted.engine.createOnce('bot', input, creationId)).toEqual(a);
+      const updated = await restarted.engine.put('bot', { ...input, name: 'Edited on desktop' }, a.id);
+      await expect(restarted.engine.createOnce('bot', input, creationId)).rejects.toThrow('already created');
+      expect(restarted.engine.list('bot')).toEqual([updated]);
+      await expect(restarted.engine.createOnce('another-bot', input, creationId)).rejects.toThrow('already used');
+    } finally { await restarted.engine.stop(); }
+  });
+  it('rejects stale remote edits, deletes and manual runs without changing the current routine', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.engine.put('bot-1', input);
+      const updated = await f.engine.put('bot-1', { ...input, name: 'Newer desktop edit' }, first.id, first.revision);
+      await expect(f.engine.put('bot-1', { ...input, name: 'Old mobile draft' }, first.id, first.revision)).rejects.toThrow('Routine changed');
+      await expect(f.engine.remove('bot-1', first.id, undefined, first.revision)).rejects.toThrow('Routine changed');
+      await expect(f.engine.runNow('bot-1', first.id, first.revision)).rejects.toThrow('Routine changed');
+      expect(f.engine.list('bot-1')).toEqual([updated]);
+    } finally { await f.engine.stop(); }
+  });
   it.each([
     { id: 'timer', kind: 'interval' as const, intervalMs: 60_000 },
     { id: 'timer', kind: 'cron' as const, expression: '* * * * *', timezone: 'UTC' },
@@ -686,4 +713,45 @@ it('keeps committed deduplication across restart and expires it after the bounde
   expect(await restored.engine.publish('github', event('receipt'))).toMatchObject({ duplicate: false });
   expect(Object.keys(restored.snapshot()!.receipts)).toHaveLength(1);
   await restored.engine.stop();
+});
+
+describe('routine check configuration', () => {
+  it('persists an audible default for new rules without migrating legacy omissions', async () => {
+    const f = await fixture();
+    try {
+      const created = await f.engine.put('bot', input);
+      expect(created.silentWhenIdle).toBe(false);
+      const oldState = f.snapshot()!;
+      delete oldState.routines[0]!.silentWhenIdle;
+      const restarted = await fixture(undefined, oldState);
+      try {
+        const edited = await restarted.engine.put('bot', { ...input, name: 'Edited old rule' }, created.id);
+        expect(edited.silentWhenIdle).toBeUndefined();
+      } finally { await restarted.engine.stop(); }
+    } finally { await f.engine.stop(); }
+  });
+  it('round trips preferences, preserves omitted fields from old clients, and allows removal', async () => {
+    const f = await fixture();
+    try {
+      const original = await f.engine.put('bot', { ...input, silentWhenIdle: false, preRunHook: { command: 'node check.mjs', timeoutMs: 5000 } });
+      const edited = await f.engine.put('bot', { ...input, name: 'Edited' }, original.id);
+      expect(edited).toMatchObject({ silentWhenIdle: false, preRunHook: original.preRunHook });
+      const restarted = await fixture(undefined, f.snapshot());
+      expect(restarted.engine.list('bot')[0]).toEqual(edited);
+      await restarted.engine.stop();
+      const removed = await f.engine.put('bot', { ...input, preRunHook: null }, original.id);
+      expect(removed.preRunHook).toBeNull();
+      expect(removed.silentWhenIdle).toBe(false);
+      expect(() => parseRoutineInput({ ...input, preRunHook: { command: 'check', timeoutMs: 0 } })).toThrow();
+    } finally { await f.engine.stop(); }
+  });
+  it('records a completed check separately from a model run', async () => {
+    const f = await fixture(async () => ({ skipped: true, resultText: 'No changes' }));
+    try {
+      const routine = await f.engine.put('bot', input);
+      await f.engine.runNow('bot', routine.id);
+      await vi.waitFor(() => expect(f.engine.history(routine.id)[0]?.status).toBe('skipped'));
+      expect(f.engine.history(routine.id)[0]).toMatchObject({ resultText: 'No changes' });
+    } finally { await f.engine.stop(); }
+  });
 });

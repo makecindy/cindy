@@ -324,6 +324,8 @@ export const MAKER_INVOKE = {
   AGENT_STATUS: 'maker:agent:status',
   // Agent 二进制 --version 输出 (About 面板用) —— spawn binary, 进程内缓存
   AGENT_BINARY_VERSION: 'maker:agent:binary-version',
+  PI_KERNEL_STATE: 'maker:agent:pi-kernel-state',
+  PI_KERNEL_INSTALL: 'maker:agent:pi-kernel-install',
   // Agent 今日累计 (取代老 codex:usage:today) —— 走 host 的 readAgentTodayUsage
   USAGE_TODAY: 'maker:usage:today',
   USAGE_ACCOUNT: 'maker:usage:account',
@@ -419,8 +421,9 @@ export const MAKER_INVOKE = {
   CHAT_EMBEDDING_SET: 'maker:chat-embedding:set',
   CHAT_EMBEDDING_RESET: 'maker:chat-embedding:reset',
   /**
-   * Git safety workflow: automatic XDT snapshot commits and the dependent
-   * Codex file rewind entry. Default false; SET writes a user override.
+   * Git safety workflow: three-state automatic XDT savepoint policy. File
+   * rewind remains available as conversation-only rewind when no savepoint
+   * exists; SET writes a user override.
    */
   GIT_SAFETY_GET: 'maker:git-safety:get',
   GIT_SAFETY_SET: 'maker:git-safety:set',
@@ -474,13 +477,12 @@ export const MAKER_INVOKE = {
    */
   CLAUDE_SESSION_ROUTE_GET: 'maker:claude-session-route:get',
   /**
-   * Claude.ai 订阅 OAuth 登录 —— 浏览器 OAuth(移植自 cc),凭证落系统 ~/.claude 凭证库
-   * (mac Keychain `Claude Code-credentials` / 其它 .credentials.json),与本地 claude 共用、
-   * 自动兼容已登录态。与鉴权模式开关正交(像 Codex 的 OAuth 登录独立于 API 模式)。
-   *  - STATUS: 返回 { authorized }(系统凭证库是否有 Claude.ai OAuth 登录)
-   *  - LOGIN: 拉起浏览器 OAuth,成功后写凭证 + 广播;返回 { authorized }
-   *  - LOGOUT: 清凭证(⚠️ 同时登出本地 claude)+ 广播
-   *  - CANCEL: 取消进行中的浏览器登录流
+   * Claude.ai 订阅 —— 登录由内置 Claude Code CLI 自己完成(`claude auth login`),凭证落在
+   * CLI 的默认凭证库(与终端里的 claude 共用);Cindy 不读取、不保存凭证,只记使用许可。
+   *  - STATUS: 返回 { authorized }(CLI 已登录且 Cindy 获准使用)
+   *  - LOGIN: CLI 已登录则直接授权;否则拉起 CLI 登录,完成后授权 + 广播;返回 { ok, reason?, authorized }
+   *  - LOGOUT: 撤销 Cindy 的使用许可 + 广播(不登出 CLI)
+   *  - CANCEL: 取消进行中的 CLI 登录
    */
   CLAUDE_OAUTH_STATUS: 'maker:claude-oauth:status',
   CLAUDE_OAUTH_LOGIN: 'maker:claude-oauth:login',
@@ -493,7 +495,7 @@ export const MAKER_INVOKE = {
   XAI_OAUTH_CANCEL: 'maker:xai-oauth:cancel',
   /**
    * 模型供应商目录（@cindy/model-providers）—— 只读聚合：内置目录元数据 + 各供应商
-   * 实时连接状态（XD=gateway key / Anthropic=Claude.ai OAuth / OpenAI=Codex OAuth）。
+   * 实时连接状态（XD=gateway key / Anthropic=本机 Claude Code 登录 / OpenAI=Codex OAuth）。
    * 供应商的「连接 / 断开」复用各 agent 已有的鉴权通道（CLAUDE_OAUTH_* / AUTH_* / 登录托管），
    * 不另立重复通道。
    */

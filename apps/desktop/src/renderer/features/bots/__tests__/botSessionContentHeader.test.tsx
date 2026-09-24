@@ -5,9 +5,20 @@
  */
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
+
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+beforeAll(() => { HTMLElement.prototype.scrollIntoView = vi.fn(); });
+afterAll(() => { HTMLElement.prototype.scrollIntoView = originalScrollIntoView; });
 
 const navigate = vi.fn();
+const deviceData = vi.hoisted(() => ({
+  local: [] as import('../botStore').BotProfile[],
+  remote: [] as import('../remoteBotRoster').RemoteBot[],
+}));
+vi.mock('../botStore', () => ({ useBotProfiles: () => deviceData.local, useBotUnreadCounts: () => ({}) }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => deviceData.remote }));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLinkDeviceList: () => [] }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
@@ -22,6 +33,9 @@ vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span data-testid="bot-avatar"
 const { BotSessionContentHeader } = await import('../BotSessionContentHeader');
 
 const bot = { id: 'bot-1', name: '小可' };
+const localCindy = { id: 'local-cindy', name: 'Cindy', templateId: 'cindy', status: 'active' } as import('../botStore').BotProfile;
+const remoteCindy = { id: 'cindy-default', name: 'Cindy', deviceId: 'cloud', deviceName: 'Cloud',
+  avatar: '', avatarColor: '', description: '', preview: '', activityAt: 0, sessionId: 'remote-chat', online: true };
 
 function appRegionOf(element: HTMLElement): string {
   return (
@@ -32,9 +46,48 @@ function appRegionOf(element: HTMLElement): string {
 afterEach(() => {
   cleanup();
   navigate.mockClear();
+  deviceData.local = [];
+  deviceData.remote = [];
 });
 
 describe('BotSessionContentHeader', () => {
+  it('preserves the local header until a second Cindy is available and restores it when removed', () => {
+    deviceData.local = [localCindy];
+    const view = render(<BotSessionContentHeader bot={localCindy} />);
+    const originalHeader = view.container.innerHTML;
+    expect(screen.queryByRole('combobox', { name: 'bots.devicePicker.switchDevice' })).toBeNull();
+    expect(screen.queryByText('bots.devicePicker.local')).toBeNull();
+    expect(screen.getAllByRole('button')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'bots.settings' })).toBeTruthy();
+
+    deviceData.remote = [remoteCindy];
+    view.rerender(<BotSessionContentHeader bot={localCindy} />);
+    expect(screen.getByRole('combobox', { name: 'bots.devicePicker.switchDevice' })).toBeTruthy();
+
+    deviceData.remote = [];
+    view.rerender(<BotSessionContentHeader bot={localCindy} />);
+    expect(view.container.innerHTML).toBe(originalHeader);
+  });
+
+  it('keeps the static device label and read-only header for a sole remote Cindy', () => {
+    deviceData.remote = [remoteCindy];
+    render(<BotSessionContentHeader bot={remoteCindy} />);
+    expect(screen.queryByRole('combobox', { name: 'bots.devicePicker.switchDevice' })).toBeNull();
+    expect(screen.getByText('Cloud')).toBeTruthy();
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Cindy' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('offers the same device switch in a remote Cindy header and returns to the local route', async () => {
+    deviceData.local = [localCindy];
+    deviceData.remote = [remoteCindy];
+    render(<BotSessionContentHeader bot={deviceData.remote[0]} />);
+    expect(screen.queryByRole('button', { name: 'bots.settings' })).toBeNull();
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'bots.devicePicker.switchDevice' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /bots.devicePicker.local/ }));
+    expect(navigate).toHaveBeenCalledWith('/bots/local-cindy');
+  });
+
   it('leaves the header whitespace in the native window drag region', () => {
     render(<BotSessionContentHeader bot={bot} />);
 

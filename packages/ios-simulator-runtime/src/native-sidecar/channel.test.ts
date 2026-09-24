@@ -448,6 +448,33 @@ describe("IOSSimulatorNativeSidecarChannel", () => {
     await channel.stop();
   });
 
+  it("rejects pending HID input on helper timeout exit and never replays it after recovery", async () => {
+    const { channel, processes } = harness();
+    await channel.start();
+    const down = channel.request(command("beginTouch"));
+    const move = channel.request(command("moveTouch"));
+    const rejected = Promise.all([
+      expect(down).rejects.toMatchObject({ code: "PROCESS_EXITED" }),
+      expect(move).rejects.toMatchObject({ code: "PROCESS_EXITED" }),
+    ]);
+    processes[0]!.stderr.write("Native HID gesture delivery timed out.\n");
+    processes[0]!.exit(2);
+    await rejected;
+    expect(channel.state).toBe("failed");
+    await expect(channel.request(command("endTouch"))).rejects.toMatchObject({
+      code: "UNAVAILABLE",
+    });
+    expect(processes[0]!.writes).toHaveLength(2);
+    await channel.restart();
+    expect(processes[1]!.writes).toHaveLength(0);
+    const release = channel.request(command("releaseInput"));
+    const request = writtenRequest(processes[1]!.writes[0]!);
+    expect(request.op).toBe("releaseInput");
+    processes[1]!.stdout.write(reply(request.id as string, {}));
+    await release;
+    await channel.stop();
+  });
+
   it("parks after the crash budget and allows explicit re-arm", async () => {
     const { channel, launcher, processes } = harness({ maxCrashes: 2 });
     await channel.start();

@@ -120,6 +120,13 @@ Mobile 根据 manifest 发现卡片，不写死具体业务状态；`session-con
 动作的 disabled 是呈现提示，主机仍须按最新状态、账号与任务身份复核。重连只重读，
 不得重放写操作；旧客户端不识别此 placement 时继续原有消息流程。
 
+Desktop 的同账号远程 Cindy Make 任务同样消费该投影：准备与测试交接卡接管输入区，
+继续修改后的恢复动作放在输入区顶部，实时状态与动作均来自任务所属电脑。控制端沿用
+既有 sessions topic，不新增业务 IPC 或本地构建回退；离线、切账号和切任务后禁用旧卡片
+动作，重连与操作超时后只重读状态。旧主机不提供该 placement 时保留只读历史卡片。
+实现与回归见 Desktop Renderer 的 `features/device-link/useSessionResourceCards.ts`、
+`SessionResourceCards.tsx` 及同目录测试；SSH 工作区不由此获得 Make 执行能力。
+
 ## 本机与远程共用查询策略
 
 本机独立使用、远程操作、两端同时使用应共享数据语义与通用查询策略；远程连接状态

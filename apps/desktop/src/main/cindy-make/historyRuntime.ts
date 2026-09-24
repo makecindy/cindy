@@ -18,9 +18,18 @@ import { captureMakeHistoryCompletion, captureMakeHistoryReport } from './histor
 import { planFeatureChange } from './featurePlan.js';
 import { snapshotContent, taskCommitRef } from './sourceContent.js';
 import { readLegacyFeatureReceipts } from './historyLegacy.js';
-import { integrateMakeHistory, actUpstreamMerge } from './upstreamMergeRuntime.js';
+import {
+  integrateMakeHistory,
+  actUpstreamMerge,
+  waitForMakeHistoryMerge,
+  finishMakeHistoryCleanup,
+  syncSourceBeforeCindyMakeBuild,
+} from './upstreamMergeRuntime.js';
+import type { CindyMakeMergeState } from '../../shared/cindyMakeMerge.js';
+import type { MakeTestContext } from './testController.js';
 import { manageCindyMakeTask } from './taskManagement.js';
-import { historyBuildRollback } from './buildRollback.js';
+import { historyBuildRollback, rollbackUnbuiltHistory } from './buildRollback.js';
+import { makeBuildErrorDiagnostic } from './buildDiagnostic.js';
 import { actCindyMakeTest, cindyMakeTestController } from './testRuntime.js';
 import {
   makeSourceCheckoutPath,
@@ -43,6 +52,7 @@ import {
 } from './personalBuild.js';
 import { currentVersionProfile, rememberOriginalVersion } from './versionStartup.js';
 import { hasPublishedPersonalVersionCommit } from './versionStore.js';
+import { readCindyMakeSettings } from './settingsStore.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
@@ -65,6 +75,7 @@ const ID = /^[A-Za-z0-9-]{1,128}$/;
 const HASH = /^[a-f0-9]{40,64}$/i;
 const log = createLogger('cindy-make');
 let running: (id: string) => boolean = () => true;
+let notifyHistoryChanged: () => void = () => {};
 /** Owns a source build, including its ordered history merges, independently of Settings. */
 interface HistoryBuildJob {
   id: string;
@@ -117,8 +128,12 @@ function latestUserPromptBefore(
   return;
 }
 
-export function configureMakeHistory(probe: typeof running): void {
+export function configureMakeHistory(
+  probe: typeof running,
+  notify: () => void = () => {},
+): void {
   running = probe;
+  notifyHistoryChanged = notify;
 }
 export function stopMakeHistoryBuild(): void {
   buildJob?.abort.abort();
@@ -147,7 +162,7 @@ export async function cancelHistoryPersonalVersion(
     stoppingState = { ...build, stopping: true };
     h.store.saveBuild(stoppingState);
     job.cancelled = true;
-    job.abort.abort();
+    job.abort.abort(personalBuildError('cancelled'));
   }
   const next = await getCindyMakeHistory();
   return stoppingState && next.build?.error === 'cancelled'
@@ -314,6 +329,7 @@ async function readCindyMakeHistory(
       : undefined;
   const ownsBuild = !!ownBuild && buildJob === ownBuild && ownBuild.current();
   const globalBusy =
+    cindyMakeManager.isVersionSwitching() ||
     cindyMakeTestController.hasActiveJobs() ||
     (!ownsBuild && (!!buildJob || cindyMakeManager.hasActiveWork()));
   const items: CindyMakeHistoryItem[] = [];
@@ -369,7 +385,7 @@ async function readCindyMakeHistory(
       row?.status === 'active' &&
       completion &&
       (['starting', 'ready'].includes(completion.test?.status ?? '') ||
-        ['waiting', 'checking', 'merging', 'packaging', 'publishing'].includes(
+        ['waiting', 'syncing', 'checking', 'merging', 'packaging', 'publishing'].includes(
           completion.personal?.status ?? '',
         ))
     ) {
@@ -584,14 +600,13 @@ async function readCindyMakeHistory(
       conflict: !!operation?.feature?.awaitingResolution,
       operationError:
         operation?.error ?? (cleanup?.status === 'failed' ? cleanup.error : undefined),
-      operation:
-        operation && !['failed', 'conflict', 'resolving'].includes(operation.status)
+      operation: taskBuilding
+        ? 'build'
+        : operation && !['failed', 'conflict', 'resolving'].includes(operation.status)
           ? operation.feature!.action
-          : taskBuilding
-            ? 'build'
-            : cleanup?.status === 'running'
-              ? 'end'
-              : undefined,
+          : cleanup?.status === 'running'
+            ? 'end'
+            : undefined,
       needsBuild,
       actions: historyActions,
       actionReason:
@@ -628,6 +643,7 @@ async function readCindyMakeHistory(
   return {
     items,
     busy: globalBusy || !!pendingMerge,
+    activeWork: globalBusy,
     canBuild: buildSourceAvailable && !globalBusy && !pendingMerge,
     build,
     batch: buildJob?.current() ? buildJob.batch : undefined,
@@ -692,11 +708,24 @@ export async function actCindyMakeHistory(
         ? 'reapply'
         : undefined;
     if (integration) {
-      const integrated = await actCindyMakeHistory(runId, integration);
-      if (integrated.items.find((entry) => entry.runId === runId)?.integration !== 'integrated')
-        return integrated;
+      const completion = item.completions.at(-1);
+      if (!item.completionId || !completion?.commit || !completion.tree)
+        throwIpcError('PRECONDITION_FAILED', 'unavailable');
+      return generateHistoryPersonalVersion(
+        [
+          {
+            runId,
+            completionId: item.completionId,
+            commit: completion.commit,
+            tree: completion.tree,
+          },
+        ],
+        [item.sessionId],
+        runId,
+      );
     }
-    return generateHistoryPersonalVersion();
+    // Source-only retries still retain the originating task as their visible owner.
+    return generateHistoryPersonalVersion(undefined, [item.sessionId]);
   }
   if (action === 'hide') {
     // An ended record has already gone through the canonical task cleanup path.
@@ -737,9 +766,15 @@ async function integrateHistoryItem(
   item: CindyMakeHistoryItem,
   action: 'integrate' | 'revert' | 'reapply',
   ownBuild?: HistoryBuildJob,
-): Promise<void> {
+): Promise<CindyMakeMergeState | undefined> {
   const runId = item.runId;
-  await withSessionRouteLock(item.sessionId, async () => {
+  // Shutdown of an earlier resolution task may be queued behind this editing
+  // task. Finish that cleanup before taking the editing task's route lock.
+  await finishMakeHistoryCleanup(
+    ownBuild?.abort.signal ?? AbortSignal.timeout(120_000),
+    async () => {},
+  );
+  return withSessionRouteLock(item.sessionId, async () => {
     h.check();
     if (ownBuild) {
       ownBuild.abort.signal.throwIfAborted();
@@ -814,7 +849,7 @@ async function integrateHistoryItem(
     }
     const plan = planFeatureChange(record, action, completion);
     if (action === 'integrate' && !plan.mergeCommit && plan.steps.length === 0) return;
-    await integrateMakeHistory(
+    return integrateMakeHistory(
       plan,
       row
         ? {
@@ -825,13 +860,82 @@ async function integrateHistoryItem(
             permissionMode: row.permissionMode ?? undefined,
           }
         : undefined,
+      ownBuild?.abort.signal,
     );
   });
+}
+
+/** The single-card build owns its reservation before starting or waiting for any merge. */
+export async function integrateCompletionForBuild(
+  task: MakeTestContext,
+  signal: AbortSignal,
+  publish: (state: CindyMakePersonalBuildState) => Promise<void>,
+): Promise<void> {
+  const h = context();
+  if (h.store.readBuildRollback().length) await recoverHistoryBuildRollback();
+  await finishMakeHistoryCleanup(signal, publish);
+  // Card persistence takes this task's route lock too. Publish before acquiring
+  // it, or the build waits on its own progress write until the lock times out.
+  await publish({ status: 'merging' });
+  const operation = await withSessionRouteLock(task.sessionId, async () => {
+    signal.throwIfAborted();
+    h.check();
+    if (!task.isCurrent() || !cindyMakeTestController.isBuilding(task.sessionId))
+      throw personalBuildError('unavailable');
+    const record = h.store.read(task.runId);
+    const completion = record?.completions.at(-1);
+    if (
+      !record ||
+      record.sessionId !== task.sessionId ||
+      completion?.id !== task.completionId ||
+      completion.commit !== task.commit ||
+      (task.tree && completion.tree !== task.tree)
+    )
+      throw personalBuildError('changed');
+    const { env } = await toolEnvironment(h.userData, signal);
+    await verifyMakeTestWorkspace(
+      {
+        userData: h.userData,
+        workingDir: task.workingDir,
+        runId: task.runId,
+        commit: task.commit,
+        tree: completion.tree,
+      },
+      env,
+      signal,
+    );
+    const [row] = await h.client.drizzle
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, task.sessionId))
+      .limit(1);
+    h.check();
+    signal.throwIfAborted();
+    if (!task.isCurrent() || !row || running(task.sessionId))
+      throw personalBuildError('unavailable');
+    const plan = planFeatureChange(record, 'integrate', completion);
+    if (!plan.mergeCommit && !plan.steps.length) return;
+    if (!record.receipts.length && completion.baseTree === completion.tree) return;
+    return integrateMakeHistory(
+      plan,
+      {
+        agentKind: row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'cc',
+        model: row.model ?? undefined,
+        providerId: row.providerId,
+        effort: row.effort ?? undefined,
+        permissionMode: row.permissionMode ?? undefined,
+      },
+      signal,
+    );
+  });
+  if (operation) await waitForMakeHistoryMerge(operation, signal, publish);
 }
 
 /** A source build has no synthetic task. It packages the current personal branch under the existing project lock. */
 export async function generateHistoryPersonalVersion(
   rawSelection?: unknown,
+  ownerSessionIds: readonly string[] = [],
+  selectedHistoryRunId?: string,
 ): Promise<CindyMakeHistoryState> {
   let selection: MakeHistoryBuildSelection[] | undefined;
   if (rawSelection !== undefined) {
@@ -863,10 +967,14 @@ export async function generateHistoryPersonalVersion(
       throwIpcError('INVALID_PARAMS', 'Duplicate build selection');
   }
   const h = context();
-  let state = await getCindyMakeHistory();
+  let state = await getCindyMakeHistory(selectedHistoryRunId);
   h.check();
   const matches = (item: CindyMakeHistoryItem | undefined, pin: MakeHistoryBuildSelection) =>
-    item?.canSelectForBuild &&
+    !!item &&
+    (item.runId === selectedHistoryRunId
+      ? item.actions.includes('build') &&
+        (item.actions.includes('integrate') || item.actions.includes('reapply'))
+      : item.canSelectForBuild) &&
     item.completionId === pin.completionId &&
     item.completions.at(-1)?.commit === pin.commit &&
     item.completions.at(-1)?.tree === pin.tree;
@@ -892,7 +1000,7 @@ export async function generateHistoryPersonalVersion(
       await cindyMakeTestController.stopTestForBuild(item.sessionId);
       h.check();
     }
-    state = await getCindyMakeHistory();
+    state = await getCindyMakeHistory(selectedHistoryRunId);
   }
   h.check();
   if (
@@ -902,10 +1010,17 @@ export async function generateHistoryPersonalVersion(
     cindyMakeManager.hasActiveWork()
   )
     throwIpcError('PRECONDITION_FAILED', 'busy');
-  const releaseBuild = cindyMakeManager.claimPersonalBuild();
+  const selectedRuns = new Set(selection?.map((pin) => pin.runId));
+  const releaseBuild = cindyMakeManager.claimPersonalBuild(
+    ownerSessionIds.length
+      ? ownerSessionIds
+      : state.items.filter((item) => selectedRuns.has(item.runId)).map((item) => item.sessionId),
+    h.current,
+  );
   const abort = new AbortController();
   const buildId = randomUUID();
   const startedAt = Date.now();
+  const syncLatestSource = readCindyMakeSettings().syncLatestBeforeBuild;
   const publish = async (build: CindyMakePersonalBuildState) => {
     h.check();
     // A late step notification must not erase a requested stop.
@@ -923,7 +1038,7 @@ export async function generateHistoryPersonalVersion(
   };
   buildJob = job;
   try {
-    await publish({ status: 'waiting' });
+    await publish({ status: 'waiting', syncLatestSource });
   } catch (error) {
     if (buildJob === job) buildJob = undefined;
     releaseBuild();
@@ -937,6 +1052,19 @@ export async function generateHistoryPersonalVersion(
       let enteredBuilder = false;
       let canRollback = !selection;
       try {
+        await finishMakeHistoryCleanup(abort.signal, publish);
+        await publish({ status: 'waiting', preparationStep: 'environment' });
+        const { tools, env } = await toolEnvironment(h.userData, abort.signal, true);
+        const node = await tools.probe('node', ['--version'], abort.signal);
+        const git = await tools.probe('git', ['--version'], abort.signal);
+        if (!node.path || node.status !== 'ok') throw new Error('environment');
+        await publish({ status: 'waiting', preparationStep: 'original' });
+        await rememberOriginalVersion(node.path);
+        const buildEnvironment = await personalBuildEnvironment(env, git.path);
+        if (syncLatestSource) {
+          await syncSourceBeforeCindyMakeBuild(abort.signal, publish);
+          h.check();
+        }
         if (selection) {
           if (h.store.readBuildRollback().length) await recoverHistoryBuildRollback();
           const candidates: CindyMakeHistoryItem[] = [];
@@ -962,13 +1090,14 @@ export async function generateHistoryPersonalVersion(
               title: item.title,
             };
             await publish({ status: 'merging' });
-            await integrateHistoryItem(
+            const operation = await integrateHistoryItem(
               h,
               item,
               item.actions.includes('reapply') ? 'reapply' : 'integrate',
               job,
             );
             canRollback = true;
+            if (operation) await waitForMakeHistoryMerge(operation, abort.signal, publish);
             h.check();
             abort.signal.throwIfAborted();
             const next = await readCindyMakeHistory(item.runId, job);
@@ -983,14 +1112,7 @@ export async function generateHistoryPersonalVersion(
           }
           job.batch = undefined;
         }
-        await publish({ status: 'waiting', preparationStep: 'environment' });
-        const { tools, env } = await toolEnvironment(h.userData, abort.signal, true);
-        const node = await tools.probe('node', ['--version'], abort.signal);
-        const git = await tools.probe('git', ['--version'], abort.signal);
-        if (!node.path || node.status !== 'ok') throw new Error('environment');
-        await publish({ status: 'waiting', preparationStep: 'original' });
-        await rememberOriginalVersion(node.path);
-        const buildEnvironment = await personalBuildEnvironment(env, git.path);
+        if (!selection) await publish({ status: 'merging' });
         enteredBuilder = true;
         const artifact = await buildCindyPersonal(
           {
@@ -1037,9 +1159,11 @@ export async function generateHistoryPersonalVersion(
             }
           }
         }
+        const diagnostic = abort.signal.aborted ? undefined : makeBuildErrorDiagnostic(error);
         if (h.current())
           await publish({
             status: 'failed',
+            ...(diagnostic ? { diagnostic } : {}),
             error:
               (error as { code?: unknown })?.code === 'cleanupFailed'
                 ? 'cleanupFailed'
@@ -1059,6 +1183,7 @@ export async function generateHistoryPersonalVersion(
     .finally(() => {
       if (buildJob === job) buildJob = undefined;
       releaseBuild();
+      if (h.current()) notifyHistoryChanged();
     });
   return getCindyMakeHistory();
 }
@@ -1090,15 +1215,9 @@ export async function recoverHistoryBuildRollback(rollbackUnbuilt = false): Prom
           signal,
         );
       };
-      const rollback = historyBuildRollback(h.store, source, (commit) =>
-        hasPublishedPersonalVersionCommit(h.userData, commit),
-      );
-      await rollback.recoverRollback(git);
-      if (rollbackUnbuilt) {
-        const commit = (await git(['rev-parse', 'HEAD'], source)).trim();
-        const tree = await snapshotContent(git, source);
-        await rollback.prepareRollback({ commit, tree }, git)();
-      }
+      const published = (commit: string) => hasPublishedPersonalVersionCommit(h.userData, commit);
+      if (rollbackUnbuilt) await rollbackUnbuiltHistory(h.store, source, git, published);
+      else await historyBuildRollback(h.store, source, published).recoverRollback(git);
     });
   } catch {
     throw personalBuildError('cleanupFailed');

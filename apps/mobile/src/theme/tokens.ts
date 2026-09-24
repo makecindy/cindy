@@ -135,6 +135,8 @@ export interface ThemeColors {
   statusRecording: string;
   /** 运行 / thinking 强调 + 完全访问权限(Heart Orange,语义不变) */
   statusAccent: string;
+  /** 房主皇冠标识金色；与 Desktop --warning-fg 对齐，Light / Dark 均保持醒目。 */
+  warningFg: string;
   /** 会话状态点 — 等待用户回复/选择(TapTap 蓝,对齐桌面 --card-status-awaiting 与灵动岛 needs-interaction) */
   statusAwaiting: string;
   /**
@@ -158,6 +160,9 @@ export interface ThemeColors {
    * 文字;状态指示红是另一档 #D91F37(statusError / statusRecording),不要混用。
    */
   destructive: string;
+  /** Shared-task plan B destructive confirmation fill / label (approved 2026-09-20). */
+  sharedTaskConfirmBackground: string;
+  sharedTaskConfirmForeground: string;
   /** 错误边框(跟随 borderStrong) */
   errorBorder: string;
   /**
@@ -440,12 +445,15 @@ export const lightColors: ThemeColors = {
   statusReady: '#19D2C1',
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
+  warningFg: '#F3A115',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   errorText: '#3C3F43',
   destructive: '#f43d3f',
+  sharedTaskConfirmBackground: '#ac3535',
+  sharedTaskConfirmForeground: '#fffefa',
   errorBorder: '#686B72',
   // overlay:遮罩双模式恒深(light 原 0.24 太浅近白;0.50 实机过重,用户定稿 0.35,2026-07-21)。
   // 侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar,不受影响。
@@ -527,12 +535,15 @@ export const darkColors: ThemeColors = {
   statusReady: '#19D2C1',
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
+  warningFg: '#F3A115',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   errorText: '#D4D4D4',
   destructive: '#f43d3f',
+  sharedTaskConfirmBackground: '#ec9898',
+  sharedTaskConfirmForeground: '#272727',
   errorBorder: '#BFC1C4',
   overlay: 'rgba(0, 0, 0, 0.45)',
   // homeListFab:反相中性(lead 裁决,见 lightColors 注释);dark 维持 #ECEDEF 柔白(非纯白 cta)。
@@ -780,4 +791,22 @@ export const motionEasing = {
   in: [0.4, 0, 1, 1],
   /** 位置 / 尺寸插值 */
   move: [0.4, 0, 0.2, 1],
+} as const;
+
+/** Shared size for floating iOS navigation/menu controls (points). */
+export const navigationChrome = {
+  target: 44,
+  // Match navigation foreground polarity; backing stays local to the glass shape.
+  clear: {
+    light: {
+      foreground: '#000000',
+      scrim: 'rgba(255, 255, 255, 0.35)',
+      selected: 'rgba(0, 0, 0, 0.10)',
+    },
+    dark: {
+      foreground: '#FFFFFF',
+      scrim: 'rgba(0, 0, 0, 0.35)',
+      selected: 'rgba(255, 255, 255, 0.18)',
+    },
+  },
 } as const;

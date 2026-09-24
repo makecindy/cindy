@@ -128,6 +128,9 @@ vi.mock('@/state/newMakerDraft', () => ({
 }));
 
 vi.mock('../../feature-context', () => ({ useRegisterContentHeader: () => undefined }));
+vi.mock('@/components/chat/MarkdownRenderer', () => ({
+  MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div>,
+}));
 
 import { BotsHomeView, BotSettings } from '../BotsHomeView';
 
@@ -633,14 +636,23 @@ describe('Bot settings unified autosave', () => {
     );
   });
 
-  it('offers one recovery action only for a legacy profile with memory disabled', async () => {
+  it('turns memory on and off from the memory page', async () => {
     vi.useFakeTimers();
+    const listMemory = vi.fn(async () => []);
+    Object.assign(window.electronAPI, {
+      localDb: { ...window.electronAPI.localDb, bots: { memory: { list: listMemory } } },
+    });
     renderSettings({ capabilities: capabilities({ memory: false }) });
     fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
-    fireEvent.click(screen.getByRole('button', { name: 'bots.memoryRecovery.action' }));
+    expect(screen.queryByRole('switch')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.memory.title' }));
+    expect(screen.getByText('bots.memory.disabledHint')).toBeTruthy();
+    fireEvent.click(screen.getByRole('switch', { name: 'bots.memory.enabled' }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
+    expect(listMemory).toHaveBeenCalledWith('bot-1', undefined);
     expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
       capabilities: expect.objectContaining({ memory: true }),
     });

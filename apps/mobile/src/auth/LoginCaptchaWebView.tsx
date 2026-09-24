@@ -9,6 +9,7 @@ import {
 } from '@/auth/loginCaptchaUrl';
 import { loginText } from '@/auth/loginMessages';
 import { Text } from '@/components/AppText';
+import { hasNativeLoginButtons, LoginNativeButton } from '@/components/LoginNativeButton';
 import { useTheme } from '@/theme';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -119,6 +120,10 @@ export function LoginCaptchaWebView({
             <Text style={{ color: login.loginError, fontSize: typeScale.footnote, textAlign: 'center' }}>
               {loginText('captchaFailed')}
             </Text>
+            {hasNativeLoginButtons ? <LoginNativeButton
+              label={loginText('captchaRetry')} onPress={retry} variant="text"
+              height={44} fontSize={typeScale.footnote} style={{ marginTop: spacing.md }}
+              testID="login.captcha.retry" /> : (
             <Pressable
               accessibilityRole="button"
               onPress={retry}
@@ -135,6 +140,7 @@ export function LoginCaptchaWebView({
                 {loginText('captchaRetry')}
               </Text>
             </Pressable>
+            )}
           </View>
         ) : (
           <View style={{ alignSelf: 'stretch', height: 220, marginTop: 8 }}>
@@ -180,7 +186,11 @@ export function LoginCaptchaWebView({
             ) : null}
           </View>
         )}
-        <Pressable
+        {hasNativeLoginButtons ? <LoginNativeButton
+              label={loginText('captchaCancel')} onPress={() => onResult(null)} variant="text"
+              height={44} fontSize={typeScale.footnote} style={{ marginTop: spacing.sm }}
+              testID="login.captcha.cancel" /> : (
+            <Pressable
           accessibilityRole="button"
           onPress={() => onResult(null)}
           style={{
@@ -196,6 +206,7 @@ export function LoginCaptchaWebView({
             {loginText('captchaCancel')}
           </Text>
         </Pressable>
+            )}
       </View>
     </View>
   );

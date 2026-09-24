@@ -65,6 +65,28 @@ beforeEach(() => {
   });
 });
 describe('upstream merge protection', () => {
+  it('stops automatic source preparation after an account switch before changing refs', async () => {
+    let current = true;
+    const original = git.getMockImplementation()!;
+    git.mockImplementation(async (args, cwd) => {
+      if (args[0] === 'fetch') current = false;
+      return original(args, cwd);
+    });
+    await expect(
+      prepareUpstreamMerge(
+        userData,
+        { ...state, taskOwned: true },
+        git,
+        async () => {},
+        () => current,
+      ),
+    ).rejects.toMatchObject({ code: 'busy' });
+    expect(
+      git.mock.calls.some(([args]) =>
+        ['update-ref', 'worktree', 'rebase', 'reset'].includes(args[0]),
+      ),
+    ).toBe(false);
+  });
   it('rejects cancellation of an assigned task or invalid operation before touching Git', async () => {
     for (const candidate of [
       { ...state, status: 'conflict' as const, sessionId: 'existing-task' },
@@ -133,12 +155,45 @@ describe('upstream merge protection', () => {
     const original = git.getMockImplementation()!;
     git.mockImplementation(async (args, cwd) => {
       if (args.join(' ') === 'rev-parse --verify refs/heads/main^{commit}') return 'd'.repeat(40);
-      if (args[0] === 'merge-base') throw new Error('not ancestor');
+      if (args[0] === 'merge-base')
+        throw Object.assign(new Error('not ancestor'), { exitCode: 1 });
       return original(args, cwd);
     });
     await expect(prepareUpstreamMerge(userData, state, git, async () => {})).rejects.toMatchObject({
       code: 'localMain',
     });
+    expect(git.mock.calls.some(([args]) => args.includes('--force'))).toBe(false);
+  });
+  it('reports a newer main separately from a divergent main', async () => {
+    const original = git.getMockImplementation()!;
+    let ancestryChecks = 0;
+    git.mockImplementation(async (args, cwd) => {
+      if (args.join(' ') === 'rev-parse --verify refs/heads/main^{commit}') return 'd'.repeat(40);
+      if (args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+        ancestryChecks += 1;
+        if (ancestryChecks === 2) return '';
+        throw Object.assign(new Error('not ancestor'), { exitCode: 1 });
+      }
+      return original(args, cwd);
+    });
+    await expect(prepareUpstreamMerge(userData, state, git, async () => {})).rejects.toMatchObject({
+      code: 'localMainAhead',
+    });
+    expect(git.mock.calls.some(([args]) => ['update-ref', 'branch', 'worktree'].includes(args[0]) && args[1] !== '--show-current')).toBe(false);
+  });
+  it.each([1, 2])('does not report divergence when ancestry check %s fails to run', async (check) => {
+    const original = git.getMockImplementation()!;
+    const failure = Object.assign(new Error('Git object unavailable'), { exitCode: 128 });
+    let ancestryChecks = 0;
+    git.mockImplementation(async (args, cwd) => {
+      if (args.join(' ') === 'rev-parse --verify refs/heads/main^{commit}') return 'd'.repeat(40);
+      if (args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+        if (++ancestryChecks === check) throw failure;
+        throw Object.assign(new Error('not ancestor'), { exitCode: 1 });
+      }
+      return original(args, cwd);
+    });
+    await expect(prepareUpstreamMerge(userData, state, git, async () => {})).rejects.toBe(failure);
     expect(git.mock.calls.some(([args]) => args.includes('--force'))).toBe(false);
   });
   it('does not call a generic merge failure a conflict', async () => {

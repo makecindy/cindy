@@ -14,7 +14,8 @@
  *     providerId 归属取通道;**未注册的 providerId 视为不就绪**——即使目录数据
  *     先于通道代码合入(多 PR 乱序),新模型也只是不出现,不会错发到别家通道。
  *
- * 注册发生在 host 装配期(cindy-brain/index.ts);本模块零 IO、零 electron 依赖
+ * 注册发生在 host 装配期(cindy-brain/index.ts);动态账号退出目录时解除注册。
+ * 本模块零 IO、零 electron 依赖
  * (规则 14),单测直测。
  */
 
@@ -99,6 +100,10 @@ export class ImageChannelRegistry {
       throw new Error(`image channel already registered for provider ${providerId}`);
     }
     this.channels.set(providerId, channel);
+  }
+
+  unregister(providerId: string): void {
+    this.channels.delete(providerId);
   }
 
   /** 白名单派生用:未注册 = 不就绪(目录数据先行时的乱序安全兜底)。 */

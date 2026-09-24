@@ -657,6 +657,7 @@ describe('model:pick 持久化失败', () => {
         authStrategy: 'none',
       },
       responseRoutingByModel: {},
+      responseEffortsByModel: {},
       credentialRevision: 1,
     };
     const routeB: CodexCustomProviderRoute = {

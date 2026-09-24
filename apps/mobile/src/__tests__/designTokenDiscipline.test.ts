@@ -43,12 +43,12 @@ const ALLOWLIST: Array<{ file: string; snippet: string; reason: string }> = [
     reason: 'composer 多行形态组件几何(desktop-first 测试钉死)',
   },
   {
-    file: 'app/devices/index.tsx',
+    file: 'src/session/HomeListVisuals.tsx',
     snippet: 'size={9}',
     reason: 'Pencil 微徽标,徽标容器几何依赖 9px',
   },
   {
-    file: 'app/devices/index.tsx',
+    file: 'src/session/HomeListVisuals.tsx',
     snippet: '? 19 : iconSize.lg',
     reason: 'Claude logo 视觉重量偏小的 +1px 光学补偿',
   },
@@ -73,7 +73,7 @@ const ALLOWLIST: Array<{ file: string; snippet: string; reason: string }> = [
     reason: '标注角标微徽标几何(红底 12px 徽标内画笔,阶梯档过大)',
   },
   {
-    file: 'app/devices/index.tsx',
+    file: 'src/session/HomeSurface.tsx',
     snippet: 'borderRadius: 0',
     reason: '显式方角覆盖,非漂移(通栏布局回退恢复,用户改稿 2026-07-21)',
   },

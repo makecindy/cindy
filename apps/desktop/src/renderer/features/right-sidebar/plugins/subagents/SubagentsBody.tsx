@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * SubagentsBody — data orchestration for the durable Subagent workspace tab.
  *
@@ -610,14 +611,17 @@ function ScopedSubagentsBody({
         icon={AlertCircle}
         label={t('rightSidebar.subagents.loadFailed')}
         action={
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={() => void loadRuns()}
-            className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            className="mt-3"
           >
             <RefreshCw size={13} aria-hidden="true" />
             {t('rightSidebar.subagents.retry')}
-          </button>
+          </Button>
         }
       />
     );

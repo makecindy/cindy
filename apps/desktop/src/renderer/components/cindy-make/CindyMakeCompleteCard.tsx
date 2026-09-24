@@ -65,7 +65,7 @@ export function CindyMakeCompleteCard({
           {busy ? (
             <Spinner size={18} />
           ) : failed ? (
-            <CircleAlert size={18} className="text-[var(--status-danger)]" aria-hidden />
+            <CircleAlert size={18} className="text-[var(--error-fg)]" aria-hidden />
           ) : needsCheck ? (
             <CircleHelp size={18} className="text-[var(--text-secondary)]" aria-hidden />
           ) : (

@@ -26,7 +26,7 @@ const ROW_CLASS =
 const ROW_ACTIVE_CLASS =
   'bg-sidebar-item-active font-medium text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)] hover:bg-sidebar-item-active';
 const RAIL_ACTIVE_CLASS =
-  'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)] hover:bg-[var(--chat-input-chip-bg)]';
+  '[--button-face-bg:var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)] enabled:hover:[--button-face-bg:var(--chat-input-chip-bg)] enabled:active:[--button-face-bg:var(--chat-input-chip-bg)]';
 
 const MAIN_VIEW_ICONS: Record<GhostMainViewIcon, LucideIcon> = {
   puzzle: Puzzle,

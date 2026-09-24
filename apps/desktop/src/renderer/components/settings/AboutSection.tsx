@@ -3,34 +3,42 @@
  *
  * 版本号:
  *   - 应用版本号:仅国内版显示,值由 window.electronAPI.appDisplayVersion 同步注入
- *   - Claude Code / Codex / Pi 版本号: spawn 当前应用使用的 binary `--version`
+ *   - Claude Code / Codex 版本号: spawn 当前应用使用的 binary `--version`,再比较线上版本
+ *   - Pi 版本号与内核更新由 PiKernelVersionRow 管理
  *
  * 卡片样式与 NotificationSection / FeishuBotSection 同级 (rounded-xl / Board border)。
  */
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ExternalLink, FolderOpen, Loader2, Upload } from 'lucide-react';
+import { Download, ExternalLink, FolderOpen, Upload } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
+import { Button } from '@/components/ui/button';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useExperimentalFlag } from '@/hooks/useExperimentalFeatures';
 import { useAutoUpdateSettings } from '@/hooks/useAutoUpdateSettings';
 import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
 import { useLogUploadSettings } from '@/hooks/useLogUploadSettings';
 import { extractIpcError } from '@/utils/ipcError';
+import { PiKernelVersionRow } from './PiKernelVersionRow';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
 
+type UpdatableAgentKind = 'claude-code' | 'codex';
+
 interface AgentVersionState {
   loading: boolean;
   version: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
   error?: string;
 }
 
-const INITIAL: AgentVersionState = { loading: true, version: null };
+const INITIAL: AgentVersionState = { loading: true, version: null, latestVersion: null, updateAvailable: false };
 
 const DESKTOP_SOCIAL_LINKS = [
   {
@@ -53,21 +61,33 @@ const DESKTOP_SOCIAL_LINKS = [
   },
 ] as const;
 
-function useAgentBinaryVersion(kind: 'claude-code' | 'codex' | 'pi'): AgentVersionState {
+function useAgentBinaryVersion(kind: UpdatableAgentKind): AgentVersionState {
   const [state, setState] = useState<AgentVersionState>(INITIAL);
 
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.maker.agent
-      .getBinaryVersion(kind)
+    const { getBinaryVersion } = window.electronAPI.maker.agent;
+    // Local first so the version shows immediately even offline; the online
+    // comparison follows and only ever adds the update action.
+    void getBinaryVersion(kind)
       .then((res) => {
         if (cancelled) return;
-        setState({ loading: false, version: res.version, error: res.error });
+        setState({ loading: false, version: res.version, latestVersion: null, updateAvailable: false, error: res.error });
+        return getBinaryVersion(kind, { checkLatest: true }).then((latest) => {
+          if (cancelled) return;
+          setState({
+            loading: false,
+            version: latest.version,
+            latestVersion: latest.latestVersion,
+            updateAvailable: latest.updateAvailable,
+            error: latest.error,
+          });
+        }, () => undefined);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         const message = err instanceof Error ? err.message : String(err);
-        setState({ loading: false, version: null, error: message });
+        setState({ loading: false, version: null, latestVersion: null, updateAvailable: false, error: message });
       });
     return () => {
       cancelled = true;
@@ -94,29 +114,114 @@ export function AgentVersionsRows() {
   const { t } = useTranslation();
   const claudeCode = useAgentBinaryVersion('claude-code');
   const codex = useAgentBinaryVersion('codex');
-  const pi = useAgentBinaryVersion('pi');
 
   return (
     <>
-      <InfoRow
+      <AgentVersionRow
+        kind="claude-code"
         label={t('settings.about.claudeCodeVersionLabel')}
-        value={renderVersion(claudeCode, t)}
-        dim={!claudeCode.version}
+        state={claudeCode}
       />
       <Divider />
-      <InfoRow
+      <AgentVersionRow
+        kind="codex"
         label={t('settings.about.codexVersionLabel')}
-        value={renderVersion(codex, t)}
-        dim={!codex.version}
+        state={codex}
       />
       <Divider />
-      <InfoRow
-        label={t('settings.about.piVersionLabel')}
-        value={renderVersion(pi, t)}
-        dim={!pi.version}
-      />
+      <PiKernelVersionRow />
       <Divider />
     </>
+  );
+}
+
+function AgentVersionRow({
+  kind,
+  label,
+  state,
+}: {
+  kind: UpdatableAgentKind;
+  label: string;
+  state: AgentVersionState;
+}) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const currentVersion = state.version ? extractSemver(state.version) : null;
+  const latestVersion = state.latestVersion ? extractSemver(state.latestVersion) : null;
+  // Main decides with the installer's semver ordering: a newer local build never offers a no-op relaunch.
+  const updateAvailable = Boolean(state.updateAvailable && currentVersion && latestVersion);
+
+  const handleUpdate = async () => {
+    if (!currentVersion || !latestVersion) return;
+    const confirmed = await confirm({
+      title: t('settings.about.harnessUpdateTitle', { name: label }),
+      description: t('settings.about.harnessUpdateDescription', {
+        name: label,
+        currentVersion,
+        latestVersion,
+      }),
+      confirmText: t('settings.about.harnessUpdateConfirm', { name: label }),
+      cancelText: t('settings.about.harnessUpdateCancel'),
+      autoFocusConfirm: true,
+    });
+    if (!confirmed) return;
+
+    // Same gate as the app-update banner and the beta-channel restart: a logical
+    // turn, Claude background activity, or Ghost card action must not be killed
+    // by a generic confirmation. A failed probe means we cannot tell, so fail
+    // closed into the interruption warning instead of relaunching.
+    let hasInFlight = true;
+    try {
+      hasInFlight = await window.electronAPI.anyActivityBlockingRelaunch();
+    } catch {
+      hasInFlight = true;
+    }
+    if (hasInFlight) {
+      const interrupt = await confirm({
+        title: t('settings.about.harnessUpdateTitle', { name: label }),
+        description: t('settings.about.harnessUpdateBusyDescription', { name: label }),
+        confirmText: t('settings.about.harnessUpdateConfirm', { name: label }),
+        cancelText: t('settings.about.harnessUpdateCancel'),
+      });
+      if (!interrupt) return;
+    }
+
+    try {
+      await window.electronAPI.relaunchForHarnessUpdate(kind);
+    } catch {
+      toast.error(t('settings.about.harnessUpdateFailed'));
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-3 px-[18px] py-4">
+      <span className="text-13 text-[var(--settings-section-sublabel)]">{label}</span>
+      <div className="flex min-w-0 items-center justify-end gap-2">
+        <span
+          className={cn(
+            'truncate text-13 font-medium',
+            !state.version
+              ? 'text-[var(--settings-section-sublabel)] opacity-70'
+              : 'text-[var(--settings-section-title)]',
+          )}
+        >
+          {renderVersion(state, t)}
+        </span>
+        {updateAvailable && (
+          <Button
+            aria-label={t('settings.about.harnessUpdateButton', { name: label })}
+            className="gap-1 px-3 text-12"
+            onClick={() => void handleUpdate()}
+            size="md"
+            title={t('settings.about.harnessUpdateButton', { name: label })}
+            variant="secondary"
+          >
+            <Download aria-hidden size={12} strokeWidth={1.8} />
+            {t('settings.about.harnessUpdateButton', { name: label })}
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -135,7 +240,7 @@ export function AboutSection() {
       </div>
 
       {/* Info Card */}
-      <div
+      <div id="settings-search-settings-about-appVersionLabel"
         className={cn(
           'flex flex-col rounded-xl',
           'bg-[var(--settings-theme-card-bg)]',
@@ -209,22 +314,18 @@ function LegalLinkRow({ label, url }: { label: string; url: string }) {
   return (
     <div className="flex items-center justify-between gap-3 px-[18px] py-4">
       <span className="select-none text-13 text-[var(--settings-section-sublabel)]">{label}</span>
-      <button
+      <Button
+        variant="secondary"
+        size="lg"
         aria-label={t('settings.about.legal.viewDocument', { document: label })}
-        className={cn(
-          '-mr-1 flex select-none items-center gap-1.5 rounded-full px-6 py-2.5',
-          'text-12 font-medium text-[var(--settings-section-title)]',
-          'border border-[var(--settings-theme-card-border)]',
-          'transition-colors hover:bg-[var(--surface-hover)] active:scale-[0.98]',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]',
-        )}
+        className="-mr-1 select-none"
         onClick={() => void handleOpen()}
         title={url}
         type="button"
       >
         {t('settings.about.legal.viewDocument', { document: label })}
         <ExternalLink aria-hidden size={13} strokeWidth={1.7} />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -333,7 +434,7 @@ export function AutoUpdateToggleRow() {
     return (
       <div className="flex flex-col gap-1.5 px-[18px] py-4">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-autoUpdateLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.autoUpdateLabel')}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -378,7 +479,7 @@ export function AutoUpdateToggleRow() {
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-autoUpdateLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.autoUpdateLabel')}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -454,7 +555,7 @@ function AnalyticsToggleRow() {
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-analyticsLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.analyticsLabel')}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -503,7 +604,7 @@ function DebugLogToggleRow() {
   return (
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-13 text-[var(--settings-section-sublabel)]">
+        <span id="settings-search-settings-about-debugLogLabel" className="text-13 text-[var(--settings-section-sublabel)]">
           {t('settings.about.debugLogLabel')}
         </span>
         <Switch
@@ -533,24 +634,20 @@ function OpenLogsRow() {
 
   return (
     <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-      <span className="text-13 text-[var(--settings-section-sublabel)]">
+      <span id="settings-search-settings-about-logsDirLabel" className="text-13 text-[var(--settings-section-sublabel)]">
         {t('settings.about.logsDirLabel')}
       </span>
-      <button
+      <Button
+        variant="secondary"
+        size="sm"
         type="button"
         onClick={handleOpen}
-        className={cn(
-          'flex items-center gap-1.5 rounded-md px-2.5 py-1 -mr-1',
-          'text-12 font-medium text-[var(--settings-section-title)]',
-          'border border-[var(--settings-theme-card-border)]',
-          'hover:bg-[var(--settings-theme-card-border)]/40',
-          'transition-colors',
-        )}
+        className="-mr-1 px-2.5"
         title={t('settings.about.openLogsDirTooltip')}
       >
         <FolderOpen size={13} />
         {t('settings.about.openLogsDir')}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -608,7 +705,7 @@ function CrashAutoUploadToggleRow() {
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-logUpload-crashAutoLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.logUpload.crashAutoLabel')}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -690,7 +787,7 @@ function UploadLogsRow() {
           文字块中间;与标签对齐才和同页其它「标签 + 按钮」行(日志目录 / 服务条款)读起来一致。 */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-logUpload-uploadLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.logUpload.uploadLabel')}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -705,32 +802,19 @@ function UploadLogsRow() {
             </p>
           )}
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           type="button"
           onClick={() => void handleUpload()}
           disabled={!state.manualUploadAvailable || uploading || state.loading}
-          className={cn(
-            'flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 -mr-1',
-            'text-12 font-medium text-[var(--settings-section-title)]',
-            'border border-[var(--settings-theme-card-border)]',
-            'transition-colors hover:bg-[var(--settings-theme-card-border)]/40',
-            'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
-          )}
+          loading={uploading}
+          className="-mr-1 px-2.5"
           title={t('settings.about.logUpload.uploadTooltip')}
         >
-          {/* 动画必须挂在 HTML 元素上并只用 transform / opacity(工程规范 §7):
-              图标本身是 SVG,所以旋转挂外层 span 而不是 <Loader2 className="animate-spin">。 */}
-          {uploading ? (
-            <span className="inline-flex animate-spin">
-              <Loader2 size={13} />
-            </span>
-          ) : (
-            <Upload size={13} />
-          )}
-          {uploading
-            ? t('settings.about.logUpload.uploading')
-            : t('settings.about.logUpload.uploadButton')}
-        </button>
+          <Upload size={13} />
+          {t('settings.about.logUpload.uploadButton')}
+        </Button>
       </div>
     </div>
   );

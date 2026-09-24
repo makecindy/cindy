@@ -587,6 +587,35 @@ export function toLocalFileUrl(absPath: string, revision?: string): string {
 }
 
 /**
+ * Normalize the legacy path-shaped `xdt-file:///...` URL used by older
+ * messages into the query-shaped URL understood by the main-process handler.
+ *
+ * The custom protocol deliberately keeps the absolute path in `?path=` so
+ * Chromium cannot reinterpret a Windows drive letter as the URL host. Keep
+ * canonical `xdt-file://local/?path=...` URLs byte-for-byte unchanged; this
+ * helper is only a compatibility bridge for persisted/history messages.
+ */
+export function normalizeXdtFileUrlForRenderer(url: string): string {
+  if (!url.startsWith('xdt-file:///')) return url;
+
+  const queryOrHash = url.search(/[?#]/);
+  const rawPath = url.slice('xdt-file://'.length, queryOrHash >= 0 ? queryOrHash : undefined);
+  let absPath = safeDecodeURIComponent(rawPath);
+  // URL syntax adds a leading slash before a Windows drive letter.
+  if (/^\/[A-Za-z]:[\\/]/.test(absPath)) absPath = absPath.slice(1);
+  if (!(absPath.startsWith('/') || WIN_ABS_RE.test(absPath))) return url;
+
+  // Preserve the optional cache-busting revision used by renderer-created
+  // URLs, while ignoring unrelated legacy query parameters.
+  let revision: string | undefined;
+  if (queryOrHash >= 0 && url[queryOrHash] === '?') {
+    const match = /(?:^|&)v=([^&#]*)/.exec(url.slice(queryOrHash + 1));
+    if (match) revision = safeDecodeURIComponent(match[1]);
+  }
+  return toLocalFileUrl(absPath, revision);
+}
+
+/**
  * Normalize an original Markdown image destination for renderer loading.
  *
  * The caller preserves the original mdast destination before react-markdown
@@ -615,11 +644,11 @@ export function normalizeMarkdownImageSrc(
     src.startsWith('https://') ||
     src.startsWith('xdt-image://') ||
     src.startsWith('cindy-media://') ||
-    src.startsWith('xdt-file://') ||
     src.startsWith('cindy-remote-media://')
   ) {
     return src;
   }
+  if (src.startsWith('xdt-file://')) return normalizeXdtFileUrlForRenderer(src);
 
   let localPath = src;
   if (localPath.startsWith('file://')) {

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ShareSelectionBar — 分享选择模式的底部操作条。
  *
@@ -250,61 +251,33 @@ export function ShareSelectionBar({
           compactLayout ? 'col-span-2 flex-wrap justify-end' : 'shrink-0',
         )}
       >
-        <button
+        <Button
+          variant="primary"
+          size="lg"
           type="button"
           onClick={() => shareSelectionStore.exit()}
           disabled={busy !== null}
-          className={cn(
-            'rounded-full px-6 py-2.5 text-13 font-medium transition-colors',
-            'bg-[var(--surface-chip)] text-[var(--text-primary)]',
-            'hover:bg-[var(--surface-hover)]',
-            'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            busy && 'cursor-default opacity-50 hover:bg-[var(--surface-chip)]',
-          )}
         >
           {t('chat.shareImage.cancel')}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="primary"
+          size="lg"
+          loading={busy === 'download'}
           type="button"
           onClick={() => void run('download')}
-          disabled={disabled}
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-full px-6 py-2.5 text-13 font-medium transition-colors',
-            'bg-[var(--surface-chip)] text-[var(--text-primary)]',
-            'hover:bg-[var(--surface-hover)]',
-            'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            disabled && 'cursor-default opacity-50 hover:bg-[var(--surface-chip)]',
-          )}
-        >
-          {busy === 'download' ? (
-            <>
-              <Spinner size={13} strokeWidth={2} />
-              {t('chat.shareImage.generating')}
-            </>
-          ) : (
-            t('chat.shareImage.download')
-          )}
-        </button>
-        <button
+          disabled={disabled}>
+              {t('chat.shareImage.download')}
+            </Button>
+        <Button
+          variant="cta"
+          size="lg"
+          loading={busy === 'copy'}
           type="button"
           onClick={() => void run('copy')}
-          disabled={disabled}
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-full px-6 py-2.5 text-13 font-medium transition-opacity',
-            'bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]',
-            'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            disabled ? 'cursor-default opacity-50' : 'hover:opacity-90',
-          )}
-        >
-          {busy === 'copy' ? (
-            <>
-              <Spinner size={13} strokeWidth={2} />
-              {t('chat.shareImage.generating')}
-            </>
-          ) : (
-            t('chat.shareImage.copy')
-          )}
-        </button>
+          disabled={disabled}>
+              {t('chat.shareImage.copy')}
+            </Button>
       </div>
     </div>
   );

@@ -48,7 +48,7 @@ export function getCindyMakePendingTest({
 
 /**
  * Keep a way back to testing after Continue Editing, including when a later
- * reply omitted report_complete. This offers verification, not a completion:
+ * reply omitted report_complete. This offers inline actions, never an input lock:
  * an ended assistant reply alone cannot certify the current workspace.
  */
 export function getCindyMakeTestRecovery({
@@ -56,14 +56,11 @@ export function getCindyMakeTestRecovery({
   messages,
   busy,
   historyLoaded,
-  dismissedId,
 }: {
   session: Pick<Session, 'id' | 'source' | 'status' | 'clearedAt'> | null;
   messages: readonly ChatMessage[];
   busy: boolean;
   historyLoaded: boolean;
-  /** Continue Editing dismisses only this result, never a later editing turn. */
-  dismissedId?: string;
 }): string | null {
   if (
     session?.source !== CINDY_MAKE_SESSION_SOURCE ||
@@ -77,7 +74,7 @@ export function getCindyMakeTestRecovery({
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (message.parentToolUseId) continue;
-    if (message.role === 'user' || message.clientId === dismissedId) return null;
+    if (message.role === 'user') return null;
     if (isCindyMakeCompletionMessage(message)) {
       return typeof message.systemCardData?.continuedAt === 'number' ? message.clientId : null;
     }

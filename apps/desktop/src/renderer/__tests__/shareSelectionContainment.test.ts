@@ -6,6 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parse } from 'postcss';
 import { describe, expect, it } from 'vitest';
 
 const readRendererSource = (relativePath: string): string =>
@@ -13,10 +14,14 @@ const readRendererSource = (relativePath: string): string =>
 
 const messageStreamSource = readRendererSource('components/chat/MessageStream.tsx');
 const globalsSource = readRendererSource('styles/globals.css');
+const globalsCss = parse(globalsSource);
 
 function cssRuleBody(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return globalsSource.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`))?.[1] ?? '';
+  let body = '';
+  globalsCss.walkRules((rule) => {
+    if (rule.selectors.includes(selector)) body += rule.toString();
+  });
+  return body;
 }
 
 describe('分享选择模式的消息布局隔离', () => {
@@ -33,10 +38,11 @@ describe('分享选择模式的消息布局隔离', () => {
     expect(rule).toContain('contain-intrinsic-size: auto 240px;');
   });
 
-  it('分享模式下仅让可分享消息使用真实布局盒', () => {
-    const rule = cssRuleBody(
-      '.msg-stream-items[data-share-selection-active] > [data-share-message-id]',
-    );
+  it.each([
+    '.msg-stream-items[data-share-selection-active] > [data-share-message-id]',
+    '.msg-stream-items[data-share-selection-active] > :has([data-share-message-id])',
+  ])('分享模式下可分享消息使用真实布局盒：%s', (selector) => {
+    const rule = cssRuleBody(selector);
 
     expect(rule).toContain('content-visibility: visible;');
     expect(rule).toContain('contain-intrinsic-size: none;');

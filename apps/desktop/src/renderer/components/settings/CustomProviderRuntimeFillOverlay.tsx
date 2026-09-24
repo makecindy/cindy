@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useRef, type RefObject } from 'react';
 import { Check } from 'lucide-react';
@@ -422,37 +423,32 @@ export function CustomProviderRuntimeFillOverlay({
           </div>
 
           <div className="flex justify-end gap-2.5 px-5 py-3.5">
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               onClick={state.stage === 'review' ? onClose : onBack}
-              className={cn(
-                'inline-flex items-center justify-center rounded-full border bg-transparent px-5 py-2 text-13 font-medium transition-colors active:scale-[0.98]',
-                'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)] hover:bg-[var(--confirm-btn-secondary-hover)]',
-                FOCUS_RING,
-              )}
             >
               {state.stage === 'review'
                 ? t('settings.providers.custom.cancel')
                 : t('settings.providers.custom.runtimeFill.back')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="cta"
+              size="md"
+              compact
               ref={primaryButtonRef}
               type="button"
               onClick={state.stage === 'review' ? onContinue : onApply}
               disabled={!hasSelection}
-              className={cn(
-                'inline-flex items-center justify-center rounded-full px-5 py-2 text-13 font-medium transition-colors active:scale-[0.98]',
-                'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)]',
-                FOCUS_RING,
-                !hasSelection && 'cursor-not-allowed opacity-50',
-              )}
             >
               {state.stage === 'review'
                 ? hasSelectedOverwrite
                   ? t('settings.providers.custom.runtimeFill.continue')
                   : t('settings.providers.custom.runtimeFill.apply')
                 : t('settings.providers.custom.runtimeFill.applyOverwrite')}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

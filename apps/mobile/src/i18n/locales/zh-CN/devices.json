@@ -35,6 +35,7 @@
     "create": "新建"
   },
   "resources": {
+    "connectionUnknown": "连接状态未知",
     "hostOffline": "离线",
     "titleFallback": "资源",
     "loading": "正在加载…",
@@ -90,13 +91,19 @@
       }
     },
     "sessionList": {
-      "section": { "pinned": "置顶", "dialogue": "对话" },
+      "section": {
+        "pinned": "置顶",
+        "dialogue": "对话"
+      },
       "filterWithCount": "{{label}} {{count}}",
       "controlsSummary": "{{filter}} · 按{{group}}分组",
       "automation": "自动化",
       "sessionCount": "{{count}} 个任务",
       "messageCount": "{{count}} 条消息",
-      "status": { "archived": "已归档", "deleted": "已删除" },
+      "status": {
+        "archived": "已归档",
+        "deleted": "已删除"
+      },
       "preview": {
         "permission": "等待授权",
         "planReview": "等待计划审阅",
@@ -130,11 +137,26 @@
         }
       },
       "empty": {
-        "search": { "title": "没有匹配的任务", "copy": "换一个标题、项目路径、模型或消息关键词再试。" },
-        "waiting": { "title": "没有待处理请求", "copy": "权限确认、计划审阅和问题选择会在这里集中出现。" },
-        "automation": { "title": "没有自动化生成的任务", "copy": "自动化运行后，对应任务会聚合到这里。" },
-        "archived": { "title": "没有归档任务", "copy": "长按任务可以批量归档或删除。" },
-        "active": { "title": "这台电脑暂无活跃任务", "copy": "先在桌面端创建或继续一个任务，手机端会把它显示在这里。" }
+        "search": {
+          "title": "没有匹配的任务",
+          "copy": "换一个标题、项目路径、模型或消息关键词再试。"
+        },
+        "waiting": {
+          "title": "没有待处理请求",
+          "copy": "权限确认、计划审阅和问题选择会在这里集中出现。"
+        },
+        "automation": {
+          "title": "没有自动化生成的任务",
+          "copy": "自动化运行后，对应任务会聚合到这里。"
+        },
+        "archived": {
+          "title": "没有归档任务",
+          "copy": "长按任务可以批量归档或删除。"
+        },
+        "active": {
+          "title": "这台电脑暂无活跃任务",
+          "copy": "先在桌面端创建或继续一个任务，手机端会把它显示在这里。"
+        }
       },
       "time": {
         "unknown": "最近活动时间未知",
@@ -160,22 +182,56 @@
       "synced": "已同步",
       "unknownComputer": "未知电脑",
       "uncategorizedProject": "未分类项目",
+      "cindyMake": "Cindy Make",
       "empty": {
-        "search": { "title": "没有匹配结果", "copy": "换一个项目名、任务标题、电脑名或消息关键词再试。" },
-        "waiting": { "title": "没有待处理请求", "copy": "权限确认、计划审阅和问题选择会在这里集中出现。" },
-        "automation": { "title": "没有自动化生成的任务", "copy": "自动化运行后，对应任务会按项目聚合到这里。" },
-        "archived": { "title": "没有归档任务", "copy": "切到全部或活跃筛选，继续查看当前项目和任务。" },
-        "noSession": { "title": "还没有任务", "copy": "先在桌面端创建或继续一个任务，手机端会直接显示对应项目和任务。" }
+        "search": {
+          "title": "没有匹配结果",
+          "copy": "换一个项目名、任务标题、电脑名或消息关键词再试。"
+        },
+        "waiting": {
+          "title": "没有待处理请求",
+          "copy": "权限确认、计划审阅和问题选择会在这里集中出现。"
+        },
+        "automation": {
+          "title": "没有自动化生成的任务",
+          "copy": "自动化运行后，对应任务会按项目聚合到这里。"
+        },
+        "archived": {
+          "title": "没有归档任务",
+          "copy": "切到全部或活跃筛选，继续查看当前项目和任务。"
+        },
+        "noSession": {
+          "title": "还没有任务",
+          "copy": "先在桌面端创建或继续一个任务，手机端会直接显示对应项目和任务。"
+        }
       },
       "noDevice": {
-        "accessRevoked": { "title": "访问权限已被撤销", "copy": "{{names}} 撤销了这台手机的远程访问。可以重试申请，或在电脑上重新允许后自动恢复。" },
-        "remoteDisabled": { "title": "在电脑上允许远程控制", "copy": "{{names}} 已经在线，还差最后一步：在电脑上打开允许手机控制的开关。" },
-        "offline": { "title": "打开电脑上的 Cindy", "copy": "连接过的电脑现在都不在线。在电脑上打开 Cindy 并保持登录，手机会自动连上。" },
-        "firstRun": { "title": "连接你电脑上的 Cindy", "copy": "目前 Cindy 都运行在你的电脑上，手机版通过远程访问来让你使用电脑上的 Agent。" }
+        "accessRevoked": {
+          "title": "访问权限已被撤销",
+          "copy": "{{names}} 撤销了这台手机的远程访问。可以重试申请，或在电脑上重新允许后自动恢复。"
+        },
+        "remoteDisabled": {
+          "title": "在电脑上允许远程控制",
+          "copy": "{{names}} 已经在线，还差最后一步：在电脑上打开允许手机控制的开关。"
+        },
+        "offline": {
+          "title": "打开电脑上的 Cindy",
+          "copy": "连接过的电脑现在都不在线。在电脑上打开 Cindy 并保持登录，手机会自动连上。"
+        },
+        "firstRun": {
+          "title": "连接你电脑上的 Cindy",
+          "copy": "目前 Cindy 都运行在你的电脑上，手机版通过远程访问来让你使用电脑上的 Agent。"
+        }
       }
     },
     "bulk": {
-      "action": { "archive": "归档", "delete": "删除", "pin": "置顶", "restore": "恢复", "unpin": "取消置顶" },
+      "action": {
+        "archive": "归档",
+        "delete": "删除",
+        "pin": "置顶",
+        "restore": "恢复",
+        "unpin": "取消置顶"
+      },
       "title": "{{action}} {{count}} 个任务",
       "description": "将对当前选中的 {{count}} 个任务执行{{action}}。",
       "descriptionWithSkipped": "将对当前选中的 {{count}} 个任务执行{{action}}，并跳过 {{skippedCount}} 个不适用的任务。"
@@ -241,6 +297,8 @@
       "noDevice": "没有可用设备。请先打开桌面端远程控制，然后重新同步。"
     },
     "alert": {
+      "cacheSaveFailed": "离线缓存未能保存",
+      "cacheSaveFailedDetail": "请检查手机剩余存储空间。你仍可联网使用，但部分内容可能无法离线查看。",
       "actionFailed": "操作失败",
       "renameFailed": "重命名失败",
       "deleteTitle": "删除任务？",
@@ -539,6 +597,8 @@
       },
       "boundSessionA11y": "绑定任务 {{name}}",
       "intervalPlaceholder": "留空则使用 cron",
+      "intervalHint": "分钟间隔请选择 1、2、3、4、5、6、10、12、15、20 或 30 分钟；整小时间隔请输入 60 的倍数，范围为 60–1380 分钟（1–23 小时）。",
+      "intervalPreservedHint": "当前任务的精确间隔为每 {{duration}}；未编辑或清空前会保留。",
       "workspace": {
         "project": "项目",
         "dialogue": "对话"
@@ -676,7 +736,8 @@
         "workingDir": "请输入项目目录",
         "effort": "推理强度只能是 {{values}}",
         "intervalPositiveInteger": "间隔分钟必须是正整数",
-        "intervalUnsupported": "分钟间隔只支持 1–59 分钟，或 1–23 小时的整点间隔"
+        "preRunHookTimeout": "检查超时必须是正整数毫秒",
+        "intervalUnsupported": "分钟间隔必须能整除 60：请选择 1、2、3、4、5、6、10、12、15、20 或 30 分钟，或 1–23 小时的整点间隔"
       },
       "schedule": {
         "paused": "已暂停",
@@ -763,7 +824,11 @@
     "artifactCount_other": "{{count}} 个文件",
     "prCount_one": "{{count}} 个 PR",
     "prCount_other": "{{count}} 个 PR",
-    "duration": {"seconds": "{{n}} 秒", "minutes": "{{n}} 分钟", "hoursMinutes": "{{h}} 小时 {{m}} 分"},
+    "duration": {
+      "seconds": "{{n}} 秒",
+      "minutes": "{{n}} 分钟",
+      "hoursMinutes": "{{h}} 小时 {{m}} 分"
+    },
     "retrying": "还没开始，正在重试…",
     "stopTask": "停止任务",
     "actionFailed": "暂时无法读取或完成操作",
@@ -779,6 +844,191 @@
       "cancelled": "已取消",
       "timed-out": "已超时",
       "unknown": "暂时无法确认状态"
-    }
+    },
+    "title": "伙伴",
+    "tasks": "任务",
+    "search": "搜索伙伴",
+    "emptyTitle": "还没有伙伴",
+    "emptyCopy": "在电脑上的 Cindy 中创建一个伙伴。",
+    "noResults": "没有找到匹配的伙伴",
+    "preferenceSaveFailed": "未能保存视图偏好，请重新切换视图。",
+    "automation": {
+      "unsupported": "请更新电脑上的 Cindy 后重试，即可管理自动化。",
+      "changed": "此自动化已在别处更改。你的编辑已保留，返回并重新打开可读取最新版本。",
+      "unknown": "状态未知",
+      "unsavedTitle": "放弃更改？",
+      "unsavedBody": "你的更改尚未保存。",
+      "continueEditing": "继续编辑",
+      "discard": "放弃更改",
+      "invalid": "请检查名称、执行说明和触发设置后重新保存。",
+      "failed": "自动化操作没有完成。",
+      "everyMinutes": "每 {{count}} 分钟",
+      "everyMinutes_one": "每 {{count}} 分钟",
+      "everyMinutes_other": "每 {{count}} 分钟",
+      "paused": "已暂停",
+      "new": "新建自动化",
+      "save": "保存自动化",
+      "offline": "请重新连接电脑后管理自动化。",
+      "retry": "重新加载",
+      "inProgress": "正在进行",
+      "scheduled": "已安排",
+      "empty": "还没有自动化，可以新建一个。",
+      "name": "名称",
+      "enabled": "启用",
+      "instructions": "执行说明",
+      "triggers": "触发条件",
+      "triggerType": "触发类型",
+      "cron": "定时",
+      "interval": "间隔",
+      "event": "事件",
+      "minutes": "间隔（分钟）",
+      "source": "事件来源",
+      "filterField": "筛选字段",
+      "operator": "条件",
+      "equals": "等于",
+      "contains": "包含",
+      "not-equals": "不等于",
+      "filterValue": "筛选值",
+      "removeFilter": "移除筛选条件",
+      "addFilter": "添加筛选条件",
+      "removeTrigger": "移除触发条件",
+      "addTrigger": "添加触发条件",
+      "largeDefinition": "此自动化内容过多，无法在手机上编辑。请在电脑上编辑。",
+      "run": "立即运行",
+      "runTitle": "立即运行此自动化？",
+      "cancel": "取消",
+      "history": "运行记录",
+      "noRuns": "还没有运行记录，可以先运行一次。",
+      "delete": "删除自动化",
+      "deleteTitle": "删除此自动化？",
+      "deleteBody": "删除后将不再触发，此操作无法撤销。",
+      "queued": "等待开始",
+      "running": "运行中",
+      "success": "已完成",
+      "failed": "失败",
+      "interrupted": "已中断",
+      "cancelled": "已取消",
+      "repeat": "重复",
+      "hourly": "每小时",
+      "daily": "每天",
+      "weekdays": "周一至周五",
+      "weekly": "每周",
+      "custom": "自定义",
+      "weekday": "星期",
+      "day0": "星期日",
+      "day1": "星期一",
+      "day2": "星期二",
+      "day3": "星期三",
+      "day4": "星期四",
+      "day5": "星期五",
+      "day6": "星期六",
+      "time": "时间",
+      "hour": "时",
+      "minute": "分",
+      "cronExpression": "Cron 表达式",
+      "timezone": "时区",
+      "monthly": "每月",
+      "monthDay": "每月几号",
+      "saveAndRun": "保存并运行",
+      "advanced": "高级设置",
+      "quiet": "检查没事不说话",
+      "quietHint": "仅报告变化或问题。提醒和定时发送可关闭此项。",
+      "checkCommand": "前置检查命令",
+      "checkHint": "可选。在电脑上先检查：退出码 2 跳过本轮，0 继续执行，异常仍会报告。清空可移除。",
+      "timeoutMs": "检查超时（毫秒，留空不限时）",
+      "skipped": "已检查 · 未唤醒模型"
+    },
+    "openNavigation": "打开导航",
+    "openProfile": "查看 {{name}} 的资料",
+    "switchCompanion": "切换伙伴",
+    "activity": {
+      "thinking": "在想",
+      "typing": "正在输入",
+      "helping": "在帮你处理"
+    },
+    "working": {
+      "thinking": "正在思考…",
+      "replying": "正在回复…",
+      "processing": "正在处理…",
+      "compacting": "正在整理对话…",
+      "reading-memory": "正在读取记忆…",
+      "saving-memory": "正在保存记忆…",
+      "deleting-memory": "正在删除记忆…",
+      "organizing-memory": "正在整理记忆…",
+      "reading-file": "正在读取文件…",
+      "saving-file": "正在更新文件…",
+      "searching": "正在搜索网页…",
+      "reading-web": "正在读取网页…",
+      "searching-files": "正在查找文件…",
+      "testing": "正在运行测试…",
+      "checking": "正在检查代码…",
+      "reviewing-memory": "正在核对记忆…",
+      "reviewing-files": "正在核对文件…",
+      "reviewing-sources": "正在核对网页资料…",
+      "reviewing-checks": "正在核对检查结果…"
+    },
+    "invitation": {
+      "title": "准备见面",
+      "waiting": "{{name}}，一会儿见",
+      "background": "你可以先去忙，准备好后再来见面。",
+      "profile": "正在写下自己的故事",
+      "skills": "正在为 {{name}} 准备电脑",
+      "avatar": "{{name}} 正在挑选新头像",
+      "welcome": "正在准备第一声问候",
+      "failed": "准备暂时停住了。已经完成的内容会保留，可以再试一次。",
+      "retryFailed": "暂时无法重试，请稍后再试。",
+      "leave": "先去忙",
+      "avatarSkipped": "暂时用了默认头像，你随时可以换一张。"
+    },
+    "viewResult": "查看结果",
+    "noWrittenResult": "没有文字结果。"
+  },
+  "companionProfile": {
+    "avatar": "头像",
+    "emptyEditor": "暂无内容。",
+    "searchOptions": "搜索",
+    "changed": "内容已在别处更改，你未保存的编辑已保留。",
+    "discardAndReload": "放弃编辑并重新加载",
+    "notes": "记忆笔记",
+    "create": "新伙伴",
+    "createFailed": "暂未确认创建结果，请重试核对。",
+    "title": "伙伴资料",
+    "profile": "资料与性格",
+    "memory": "记忆",
+    "skills": "技能与连接",
+    "artifacts": "成果",
+    "direct": "伙伴往来",
+    "automation": "自动化",
+    "settings": "模型与权限",
+    "search": "搜索消息",
+    "models": "模型候选链",
+    "permissions": "操作权限",
+    "personalSkills": "个人学会的技能",
+    "connections": "引用的技能与连接",
+    "save": "保存更改",
+    "offline": "请重新连接 {{deviceName}} 后继续，未保存的编辑已保留。",
+    "hostUpgrade": "请更新 {{deviceName}} 上的 Cindy 后重试，或在那台电脑上编辑伙伴设置。",
+    "readFailed": "暂时无法确认最新状态。请刷新后再试，操作可能已经完成。你的编辑已保留。",
+    "deleteFailed": "删除没有完成。",
+    "artifactsEmpty": "还没有成果，可以让伙伴创作一些内容。",
+    "openSourceTask": "打开来源任务",
+    "modelFollowsDefault": "跟随当前默认模型链",
+    "modelOverride": "使用此伙伴的自定义模型链",
+    "modelsUnavailable": "暂无可用模型，请在电脑上检查此伙伴的模型设置后刷新。",
+    "artifactsRecovery": "请从消息卡中打开文件，或在 {{deviceName}} 上浏览文件。",
+    "directRecovery": "暂时无法读取伙伴往来，请更新 {{deviceName}} 上的 Cindy 后重试。",
+    "directEmpty": "还没有伙伴往来",
+    "skillsEmpty": "还没有个人技能，可以让伙伴记下做事方法。",
+    "connectionsEmpty": "尚未选择技能或连接",
+    "largeProfileRecovery": "此资料过长，无法在手机上编辑。请在 {{deviceName}} 上编辑完整资料。",
+    "addModel": "添加备用模型",
+    "removeModel": "移除模型",
+    "moveModelUp": "上移模型",
+    "settingsTitle": "伙伴设置",
+    "name": "名字",
+    "portraitNumber": "头像 {{number}}",
+    "uploadAvatar": "上传头像",
+    "avatarFailed": "无法打开此图片，请换一张。",
+    "nameTaken": "已有同名伙伴，请换一个名字。"
   }
 }

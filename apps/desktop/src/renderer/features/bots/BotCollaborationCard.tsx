@@ -185,7 +185,7 @@ function SessionTaskCardBody({
       : row.status === 'completed'
         ? 'text-[var(--status-success)]'
         : row.status === 'failed' || row.status === 'timed-out'
-          ? 'text-[var(--status-danger)]'
+          ? 'text-[var(--error-fg)]'
           : row.status === 'cancelled'
             ? 'text-[var(--text-tertiary)]'
             : 'text-[var(--status-info)]';

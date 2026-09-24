@@ -261,7 +261,6 @@ import {
 import { useDeviceLinkProjects } from '@/hooks/useDeviceLinkProjects';
 import {
   resolveFastSupported,
-  deriveModelsFromProviders,
   filterChatBridgedCodexProviders,
 } from '@/lib/providerModels';
 import {
@@ -269,7 +268,6 @@ import {
   getModel,
   isModelSelectableForNewRoute,
   providerOffersModel,
-  sessionModelSupportsFastMode,
   connectedProvidersForAgent,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -284,6 +282,7 @@ import { makeMirrorAccessors, replaceScope, clearScope } from '@/state/deviceLin
 import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
 import { resolveNewMakerDraftRightSidebar } from './newMakerDraftRightSidebar';
 import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
+import { loadSshSessionModelSelection, SshModelSelectionError } from './sshSessionModelSelection';
 import { closeAllTabs as closeRightSidebarTabs } from '@/features/right-sidebar/store';
 import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-workers/actions';
 import { normalizeProjectKey } from './lib/projectGrouping';
@@ -685,6 +684,8 @@ export function NewMakerDraftRoute() {
           ? 'ccAgent.draft.remoteProviderUnsupported'
           : code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
             ? 'ccAgent.draft.remoteNativeOauthUnavailable'
+            : code === 'CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE'
+            ? 'ccAgent.draft.claudeSubscriptionWorkspaceOverride'
             : // 轮 40-w4-t3 HIGH:远端 Pi 会话启动时 Cindy AI gateway endpoint
               // 未就绪 —— main 侧已映射同名 IPC code, 这里走已存在 5 语言的
               // logic.errors.remoteError.REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE
@@ -1232,7 +1233,11 @@ export function NewMakerDraftRoute() {
   } = useAgentCapabilities(capabilityAgentKind, effectiveDeviceLinkDeviceId);
   // device-link「以被控端为准」:远程草稿用被控端经隧道带来的 providers(per-provider,含 fast 能力);
   // 本地草稿用本机 providers。fast 判定统一交给 resolveFastSupported(不在控制端另写远程逻辑)。
-  const { providers: localProviders, loading: localProvidersLoading } = useProviders();
+  const {
+    providers: localProviders,
+    loading: localProvidersLoading,
+    loadFailed: localProvidersLoadFailed,
+  } = useProviders();
   const modelEnginePrefsVersion = useModelEnginePrefsVersion();
   const modelPresetVersion = useProviderModelMemoryVersion();
   const hasLegacyDefaultChoice = useMemo(
@@ -2376,65 +2381,28 @@ export function NewMakerDraftRoute() {
       // 立即建会话记录并 navigate 过去。建会话约定与本文件其它 createSession 路径一致
       // (createSession + makerChatStore.setSessionRuntime + navigate)。
       //
-      // SSH 始终取本地(controller)的 provider/fast/effort 上下文,不复用 device-link 派生值。
-      // providerId 只保留用户显式选中且仍有效的来源,否则 null(默认路由,不固化默认来源)。
-      // 使用 draftInitialModel(用户在 composer 里看到的模型),而不是 chatPrefs.model
-      // (当 device-link 草稿活跃时 chatPrefs.model 是旧的 controller-local 值)。
-      // bridge 模型(chatgpt/ / xai/)在远程模式不可用(不经本地 compat-proxy),需降级。
-      // 非 bridge 模型也必须在已连接的本地来源中存在,否则 SSH 会话首消息会被阻塞。
-      const sshConnected = filterChatBridgedCodexProviders(
-        connectedProvidersForAgent(localProviders, capabilityAgentKind),
-        capabilityAgentKind,
-        true,
-      );
-      // admissionFiltered:SSH 候选是「挑一个可路由模型」的清单,停用条目与能力模型
-      // 不参与(降级兜底也不能落到停用模型上,PR #744 review)。
-      const sshVisibleModels = deriveModelsFromProviders(sshConnected, capabilityAgentKind, {
-        admissionFiltered: true,
-      }).filter((m) => !isSubscriptionDirectModel(m.id));
-      let sshModel = draftInitialModel;
-      if (isSubscriptionDirectModel(sshModel) || !sshVisibleModels.some((m) => m.id === sshModel)) {
-        if (!sshVisibleModels.length) {
-          throw new Error(t('ccAgent.draft.createSessionFailed'));
-        }
-        sshModel = sshVisibleModels[0].id;
-      }
-      // 使用 chatInitialProviderId(显示给用户的来源,device-link 活跃时取镜像值)而非
-      // chatPrefs.providerId(可能是旧的 controller-local 值)。
-      const rawProviderId = chatInitialProviderId ?? null;
-      const sshLocalSourceId = effectiveSourceIdForModel(
-        sshConnected,
-        rawProviderId,
-        sshModel,
-        capabilityAgentKind,
-      );
-      // 固定已通过 SSH 筛选的实际来源，避免 null 默认路由重新选回被排除的本机账号。
-      const sshProviderId = sshLocalSourceId;
-      // fast mode:来源不支持就关闭;支持时保留用户在 composer 里看到的 effectiveFastMode
-      // (device-link 草稿活跃时来自 dlSel/deviceLinkInitial,本地草稿来自 per-model 记忆)。
-      const sshSourceSupportsFast = sessionModelSupportsFastMode(
-        sshConnected,
-        sshProviderId,
-        sshModel,
-        capabilityAgentKind,
-      );
-      const sshFastMode = sshSourceSupportsFast ? effectiveFastMode : false;
-      // effort: 用 draftInitialEffort(用户在 composer 里看到的值)作 currentEffort,
-      // 再由 resolveNewMakerDraftEffort 按本地 SSH model 支持的 levels 做 clamp。
-      const sshLocalProvider = sshLocalSourceId
-        ? sshConnected.find((p) => p.id === sshLocalSourceId)
-        : undefined;
-      const sshLocalModelDesc = sshLocalProvider
-        ? getModel(sshLocalProvider, sshModel, capabilityAgentKind)
-        : undefined;
-      const sshEffort = resolveNewMakerDraftEffort({
-        currentEffort: draftInitialEffort,
-        presetEffort: sshLocalSourceId
-          ? getProviderModelEffort(capabilityAgentKind, sshLocalSourceId, sshModel)
-          : undefined,
-        efforts: sshLocalModelDesc?.efforts ?? [],
-        defaultEffort: sshLocalModelDesc?.defaultEffort ?? null,
+      // Codex reads the selected SSH host; other harnesses retain their existing routing.
+      const sshOwner = getDataOwnerGeneration();
+      const selection = await loadSshSessionModelSelection(target.hostId, {
+        providers: localProviders,
+        loading: localProvidersLoading,
+        loadFailed: localProvidersLoadFailed,
+        agentKind: capabilityAgentKind,
+        preferred: {
+          model: draftInitialModel,
+          providerId: chatInitialProviderId,
+          effort: draftInitialEffort,
+          fastMode: effectiveFastMode,
+        },
+        getPresetEffort: getProviderModelEffort,
       });
+      if (!isDataOwnerGenerationCurrent(sshOwner)) return;
+      if (!selection.ok) {
+        throw new SshModelSelectionError(selection.reason);
+      }
+      const {
+        model: sshModel, providerId: sshProviderId, effort: sshEffort, fastMode: sshFastMode,
+      } = selection;
       try {
         const newSession = await createSession({
           agentKind: draftVendor,
@@ -2531,6 +2499,7 @@ export function NewMakerDraftRoute() {
       effectiveDeviceLinkDeviceId,
       localProviders,
       localProvidersLoading,
+      localProvidersLoadFailed,
       effectiveCollab,
       capabilityAgentKind,
       effectivePlanMode,

@@ -36,7 +36,11 @@ vi.mock('xdt-wechat-login', () => ({
   cancelWechatAuthRequest: native.cancel,
 }));
 
-import { acquireNativeSocialCredential, isNativeSocialProviderSupported } from '../nativeSocial';
+import {
+  acquireNativeSocialCredential,
+  isNativeSocialProviderAvailable,
+  isNativeSocialProviderSupported,
+} from '../nativeSocial';
 
 function changeAppState(state: string) {
   native.appState = state;
@@ -61,6 +65,28 @@ afterEach(() => {
 });
 
 describe('native WeChat credential acquisition', () => {
+  it('offers WeChat on iOS only when the companion app is installed', async () => {
+    await expect(isNativeSocialProviderAvailable('wechat')).resolves.toBe(true);
+    native.installed.mockResolvedValue(false);
+    await expect(isNativeSocialProviderAvailable('wechat')).resolves.toBe(
+      false,
+    );
+  });
+
+  it('keeps the configured WeChat entry visible on Android without probing installation', async () => {
+    native.platform = 'android';
+    native.installed.mockResolvedValue(false);
+    await expect(isNativeSocialProviderAvailable('wechat')).resolves.toBe(
+      true,
+    );
+    expect(native.installed).not.toHaveBeenCalled();
+  });
+
+  it('hides WeChat on iOS when the installation probe fails', async () => {
+    native.installed.mockRejectedValue(new Error('native bridge unavailable'));
+    await expect(isNativeSocialProviderAvailable('wechat')).resolves.toBe(false);
+  });
+
   it.each(['ios', 'android'])('acquires only an authorization code on %s', async (platform) => {
     native.platform = platform;
     expect(isNativeSocialProviderSupported('wechat')).toBe(true);
@@ -77,6 +103,7 @@ describe('native WeChat credential acquisition', () => {
   it('does not launch WeChat when public configuration is missing', async () => {
     native.appId = '';
     expect(isNativeSocialProviderSupported('wechat')).toBe(false);
+    await expect(isNativeSocialProviderAvailable('wechat')).resolves.toBe(false);
     await expect(acquireNativeSocialCredential('wechat')).rejects.toMatchObject({
       code: 'SOCIAL_PROVIDER_NOT_CONFIGURED',
     });

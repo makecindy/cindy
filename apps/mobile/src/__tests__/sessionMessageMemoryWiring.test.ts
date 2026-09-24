@@ -86,9 +86,11 @@ describe('任务消息内存治理页面接线', () => {
     expect(screen).toContain('hasOlderMessages && !isScheduleDetail');
     expect(screen).toContain('canLoadEarlier={(historyView.snapshot.ready ? historyView.snapshot.hasMore : hasOlderMessages && messages.length > 0) && !isScheduleDetail}');
     expect(screen).toContain('remoteSessionStore.acquireSessionMessageWork(sessionId, pageHasMessageWork)');
-    expect(screen).toContain('remoteSessionStore.acquireSessionMessageWork(item.sessionId, true)');
+    const bridge = source('src/session/MobileOutboxBridge.tsx');
+    expect(bridge).toMatch(/remoteSessionStore\.acquireSessionMessageWork\(\s*record\.item\.sessionId,\s*true,?\s*\)/);
+    expect(bridge).toContain('for (const lease of leases.values()) lease.release()');
     expect(screen).toContain('remoteSessionStore.acquireSessionMessageWork(sessionId, true)');
-    expect(screen.match(/messageWorkLease\.release\(\);/g)).toHaveLength(2);
+    expect(screen.match(/messageWorkLease\.release\(\);/g)).toHaveLength(1);
     for (const signal of [
       'outboxItems.length > 0',
       'pendingUploads.length > 0',

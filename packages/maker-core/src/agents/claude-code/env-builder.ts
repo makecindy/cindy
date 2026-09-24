@@ -7,6 +7,9 @@
  *   4. authEnv 最后合并（确保不被 behaviorFlags 误覆盖）
  *   5. CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1 锁定 provider 路由
  *      （阻止 workdir/.claude/settings.json env 字段覆盖 app 注入的 key/baseUrl）
+ *
+ * 例外:Claude 订阅会话(`nativeCliAuth`)不走 3 / 5 —— CLI 用自己登录的凭证直连
+ * Anthropic,host 不接管连接,见 ClaudeEnvBuildOptions.nativeCliAuth。
  */
 
 import type { AgentCredentialMode, AuthAdapter } from '../../interfaces/auth-adapter.js';
@@ -51,6 +54,23 @@ interface ClaudeEnvBuildOptions {
   mode?: 'local' | 'remote';
   /** 本次子进程明确要走的凭证形态。undefined 时保持 adapter 既有 fallback。 */
   credentialMode?: AgentCredentialMode;
+  /**
+   * Claude 订阅会话:CLI 自己读取、刷新本机登录凭证并直连 Anthropic。
+   *
+   * Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**,不允许第三方应用
+   * 收集、存储或中转订阅凭证。所以这类 spawn:
+   *   - 不写 ANTHROPIC_BASE_URL —— 请求不经本地 loopback proxy;
+   *   - 不设 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST —— 该 flag 会让 CLI 不读本机凭证;
+   *   - host 的 getAuthEnv 不递任何凭证(见 desktop auth-adapters)。
+   * 其余 env(行为开关、窗口、subagent 等)与其它形态一致。仅本机 spawn 有效,
+   * 远端 cc-mgr 会话恒为 false。
+   */
+  nativeCliAuth?: boolean;
+  /**
+   * 会话模型,仅在未指定来源(credentialMode 为 undefined)时随 getAuthEnv 递给 adapter
+   * (AuthAdapterOptions.model),让它判断能否交给本机 Claude Code 登录。
+   */
+  authModel?: string;
   /**
    * 本次 spawn 的会话来源(显式 providerId;null/undefined = 隐式默认路由)。
    * 供 runtimeConfig.subagentModelForRoute 按父会话来源判定 subagent 覆写是否可路由
@@ -141,6 +161,9 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'ANTHROPIC_FOUNDRY_RESOURCE',
   // 配置目录重定向
   'CLAUDE_CONFIG_DIR',
+  // host 接管标记:非订阅会话由 buildClaudeEnv 显式写 '1';继承来的残留(终端里的 cc
+  // 会话跑 dev)会让订阅会话的 CLI 不读自己的登录凭证,而 SDK merge 只能覆盖、删不掉。
+  'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
   // 子代理派发覆盖:这是 host 独占的键(值由「Subagent 模型」设置经
   // subagent-model-default.ts 解析决定),继承来的残留会以最高优先级盖掉用户手写 agent 的
   // `model:`,而且**盖得静默**。典型泄漏路径:终端里的 cc 会话跑 dev,Electron 从
@@ -421,6 +444,7 @@ export async function buildClaudeEnv(
   options: ClaudeEnvBuildOptions = {},
 ): Promise<Record<string, string>> {
   const mode = options.mode ?? 'local';
+  const nativeCliAuth = options.nativeCliAuth === true && mode === 'local';
   // remote mode: 从空字典起,绝不继承 desktop 进程的 OS env(详见函数 doc)。
   // local mode: 继承 cleanProcessEnv() — 本地子进程需要本地 PATH/HOME 才能跑。
   const cleanEnv = mode === 'remote' ? {} : cleanProcessEnv();
@@ -446,7 +470,10 @@ export async function buildClaudeEnv(
     mode === 'remote' && runtimeConfig.remoteEndpoint
       ? runtimeConfig.remoteEndpoint
       : runtimeConfig.endpoint;
-  if (endpoint) {
+  if (nativeCliAuth) {
+    // behaviorFlags 也不许把订阅会话改道(CLI 缺省即 api.anthropic.com)。
+    delete env.ANTHROPIC_BASE_URL;
+  } else if (endpoint) {
     env.ANTHROPIC_BASE_URL = endpoint;
   }
   const authOptions = options.credentialMode
@@ -457,7 +484,9 @@ export async function buildClaudeEnv(
           ? { providerId: options.sessionProviderId }
           : {}),
       }
-    : undefined;
+    : options.authModel
+      ? { model: options.authModel }
+      : undefined;
   const authEnv = { ...(await auth.getAuthEnv(authOptions)) };
   if (mode === 'remote') {
     // CLAUDE_CONFIG_DIR is a host-local path. Desktop dev sandboxes inject a
@@ -469,6 +498,10 @@ export async function buildClaudeEnv(
     delete authEnv.CLAUDE_CONFIG_DIR;
   }
   Object.assign(env, authEnv);
+  if (nativeCliAuth) {
+    // fail-closed:订阅会话只用 CLI 自己的登录,host 递来的任何鉴权 / 上游字段一律不带。
+    for (const key of REMOTE_ROUTE_OVERRIDE_ENV_KEYS) delete env[key];
+  }
 
   // Claude Code's documented child-agent model override.
   //
@@ -513,7 +546,14 @@ export async function buildClaudeEnv(
   // 凭证必须由 host 经上面的 authEnv 显式递入 —— 订阅模式对应 CLAUDE_CODE_OAUTH_TOKEN
   // (desktop auth-adapters getAuthEnv 注入), API 模式对应 ANTHROPIC_API_KEY。
   // 若 host 只设 flag 不递凭证, cc 毫秒级判 "Not logged in"(2026-07-03 线上事故)。
-  env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
+  // 订阅会话(nativeCliAuth)反过来必须**不设**:CLI 要读自己的登录凭证。代价是 CLI 不再
+  // 剥掉工作区设置里的上游 / 鉴权键(SDK 模式也没有终端的工作区信任确认),所以每次拉起
+  // CLI 前与会话中途热加载设置时,都由 workspace-settings-guard 拒绝会改写它们的设置。
+  if (nativeCliAuth) {
+    delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+  } else {
+    env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
+  }
 
   applyOAuthSpawnEntrypointGate(env);
 

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useState } from 'react';
 import { ArrowLeft, CircleAlert, RefreshCcw } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -26,9 +27,10 @@ type BotSessionGate =
   | { kind: 'error'; message: string };
 
 function readBotChatIdentity(bot: unknown, botId: string): BotChatIdentity {
-  const candidate = (bot ?? {}) as { name?: unknown; avatar?: unknown; avatarColor?: unknown };
+  const candidate = (bot ?? {}) as { name?: unknown; avatar?: unknown; avatarColor?: unknown; templateId?: unknown };
   return {
     id: botId,
+    templateId: typeof candidate.templateId === 'string' ? candidate.templateId : undefined,
     name: typeof candidate.name === 'string' ? candidate.name : '',
     avatar: typeof candidate.avatar === 'string' ? candidate.avatar : null,
     avatarColor: typeof candidate.avatarColor === 'string' ? candidate.avatarColor : null,
@@ -219,14 +221,16 @@ function BotSessionGateView() {
               {t('bots.backToBot')}
             </button>
             {failed ? (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                compact
                 type="button"
                 onClick={() => setReloadVersion((value) => value + 1)}
-                className="inline-flex h-9 items-center gap-2 rounded-lg bg-[var(--accent-cta-bg)] px-3 text-12 font-medium text-[var(--accent-pure-cta-fg)]"
               >
                 <RefreshCcw size={14} />
                 {t('bots.retry')}
-              </button>
+              </Button>
             ) : null}
           </div>
         </section>

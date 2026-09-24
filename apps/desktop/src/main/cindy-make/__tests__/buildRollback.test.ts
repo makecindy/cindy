@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { afterEach, expect, it, vi } from 'vitest';
-import { historyBuildRollback } from '../buildRollback';
+import { historyBuildRollback, rollbackUnbuiltHistory } from '../buildRollback';
 import { CindyMakeHistoryStore } from '../historyStore';
 import type { MakeFeatureReceipt } from '../../../shared/cindyMakeHistory';
 import type { ContentGit } from '../sourceContent';
@@ -88,7 +88,7 @@ it('withdraws consecutive unpublished integrations but keeps the last generated 
   h.store.version('first', { operationId: saved.id, commit: saved.commit });
   h.integrate('first', 'next-round', 'c', '3');
   h.integrate('second', 'new-task', 'd', '4');
-  await h.rollback()();
+  await rollbackUnbuiltHistory(h.store, h.root, h.git, () => false);
   expect(h.head()).toEqual({ commit: saved.commit, tree: saved.tree });
   expect(h.store.read('first')?.receipts).toEqual([saved]);
   expect(h.store.read('second')?.receipts).toEqual([]);
@@ -112,7 +112,7 @@ it('resumes cleanup after Git has restored the source but persisting history fai
   expect(h.head().commit).toBe('a'.repeat(40));
   expect(h.store.readBuildRollback()).toHaveLength(1);
   const reopened = new CindyMakeHistoryStore(h.root);
-  await historyBuildRollback(reopened, h.root).recoverRollback(h.git);
+  await rollbackUnbuiltHistory(reopened, h.root, h.git, () => false);
   expect(reopened.readBuildRollback()).toEqual([]);
   expect(reopened.read('task')?.receipts).toEqual([]);
   expect(h.git.mock.calls.filter(([args]) => args[0] === 'reset')).toHaveLength(1);

@@ -2260,7 +2260,9 @@ export class PiAgent extends BaseAgent {
       }
       const modelBaseUrl = endpoint ? piGatewayModelBaseUrl(endpoint, api) : undefined;
       gatewayApiByModel.set(m.id, api);
-      const supportsImageInput = m.supportsImageInput === true;
+      // Missing capability metadata must not disable newly discovered vision models.
+      // Explicit text-only declarations still take precedence over this default.
+      const supportsImageInput = m.supportsImageInput !== false;
       gatewayImageInputByModel.set(m.id, supportsImageInput);
       const thinkingLevelMap = gatewayThinkingLevelMap(m.efforts, resolvedSpec?.thinkingLevelMap);
       return [{
@@ -2339,7 +2341,7 @@ export class PiAgent extends BaseAgent {
           ...(m.api ? { api: m.api } : {}),
           reasoning: m.reasoning ?? false,
           ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
-          input: m.input ?? ['text'],
+          input: m.input ?? ['text', 'image'],
           contextWindow,
           maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : piMaxTokensFallback(contextWindow),
           ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
@@ -5985,13 +5987,13 @@ export class PiAgent extends BaseAgent {
 
     const assertImageInputSupported = (images: readonly PiPromptImage[]): void => {
       if (images.length === 0) return;
+      const nativeModel = nativeProviderById
+        .get(mutablePiProviderId)
+        ?.models.find((candidate) => candidate.id === resolveNativeModelId(mutablePiProviderId, mutableModel));
       const supportsImageInput =
         mutablePiProviderId === PI_PROVIDER_ID
           ? gatewayImageInputByModel.get(mutableModel) === true
-          : nativeProviderById
-              .get(mutablePiProviderId)
-              ?.models.find((candidate) => candidate.id === resolveNativeModelId(mutablePiProviderId, mutableModel))
-              ?.input?.includes('image') === true;
+          : nativeModel !== undefined && (nativeModel.input ?? ['text', 'image']).includes('image');
       if (supportsImageInput) return;
       throw new PiImageInputUnsupportedError();
     };

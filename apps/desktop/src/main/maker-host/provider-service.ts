@@ -24,6 +24,7 @@ import {
   type ProviderModelDiscoveryFailure,
   type ProviderView,
   type Provider,
+  isCustomRoutedProvider,
 } from '@cindy/model-providers';
 
 const log = createLogger('provider-service');
@@ -63,7 +64,7 @@ export interface ProviderListOptions extends ConnectionReadOptions {
 export interface ProviderConnectionReaders {
   /** XD 网关：托管 api_key 是否存在。 */
   xd: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
-  /** Anthropic：系统 Claude.ai OAuth 是否登录。 */
+  /** Anthropic：内置 Claude Code CLI 是否已登录且 Cindy 获准使用。 */
   anthropic: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
   /** OpenAI：Codex 是否 OAuth 登录。 */
   openai: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
@@ -167,7 +168,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         connected[p.id] = deps.codexAccountConnected?.(p.id) ?? false;
       } else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
         connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
-      } else if (p.source === 'user') {
+      } else if (isCustomRoutedProvider(p)) {
         connected[p.id] = deps.customApiKeyConnected?.(p) ?? false;
       }
       // 内置 API-key 供应商(如 Gemini 图像来源):连接 = key 已存。与自定义供应商

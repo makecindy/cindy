@@ -268,9 +268,9 @@ describe("native media overlay", () => {
     expect(viewport()).toMatchObject({ fillHeight: false });
     v.send({ type: "nativeVideo", epoch: "native", active: true });
     v.send({ type: "viewport", fillHeight: true });
-    expect(viewport()).toMatchObject({ fillHeight: true });
+    expect(viewport()).toMatchObject({ fillHeight: false });
     v.send({ type: "fit" });
-    expect(viewport()).toMatchObject({ fillHeight: true });
+    expect(viewport()).toMatchObject({ fillHeight: false });
     expect(v.elements.bg.style.display).toBe("none");
     v.send({ type: "viewport", fillHeight: false });
     expect(viewport()).toMatchObject({ fillHeight: false });
@@ -296,6 +296,46 @@ describe("native media overlay", () => {
 });
 
 describe("remote desktop viewport", () => {
+  it('maps lower-pane relative motion against the upper video viewport and rejects invalid input', () => {
+    const v = viewer();
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: 'init', epoch: 'fold', width: 1600, height: 800 });
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: true, topInset: 0, bottomInset: 0 });
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 40 });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toContainEqual({ kind: 'move', x: 0.6, y: 0.6 });
+    v.ack();
+    const count = v.messages.flatMap(m => m.events ?? []).length;
+    v.send({ type: 'nativeTouchpad', dx: Number.NaN, dy: 20 });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toHaveLength(count);
+    v.send({ type: 'control', enabled: false });
+    const afterRelease = v.messages.flatMap(m => m.events ?? []).length;
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 40 });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toHaveLength(afterRelease);
+  });
+  it('allows touchpad taps with hidden buttons and does not release an active drag', () => {
+    const v = viewer();
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: false });
+    v.send({ type: 'nativeTouchpad', tap: true });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toEqual([
+      { kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 },
+      { kind: 'button', button: 0, down: false, x: 0.5, y: 0.5 },
+    ]);
+    v.ack();
+    v.send({ type: 'mouseButtons', native: true, enabled: true });
+    v.send({ type: 'nativeMouse', control: 'left', event: 'pointerdown', id: 0, y: 100 });
+    v.ack();
+    const beforeTap = v.messages.flatMap(m => m.events ?? []).length;
+    v.send({ type: 'nativeTouchpad', tap: true });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toHaveLength(beforeTap);
+  });
   it.each([0, 59])(
     "fits between the top safe area (%s) and toolbar with correct touch coordinates",
     (topInset) => {
@@ -503,10 +543,25 @@ describe("remote desktop viewport", () => {
       { kind: "scroll", dx: 0, dy: -30 },
     ]);
   });
-  it("fills landscape height for wide desktops and restores portrait fitting", () => {
-    const v = viewer();
-    v.elements.stage.clientWidth = 678;
-    v.elements.stage.clientHeight = 402;
+  it('fits the folded desktop above the touchpad without shrinking the background stage', () => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = 900;
+    v.elements.stage.clientHeight = 1400;
+    v.send({ type: 'init', epoch: 'fold', width: 1920, height: 1080 });
+    v.send({ type: 'mouseButtons', fitToInsets: true, topInset: 80, bottomInset: 720 });
+    expect(v.messages.findLast(m => m.type === 'nativeViewport')).toMatchObject({
+      x: 0, y: 126.875, width: 900, height: 506.25,
+    });
+    expect(v.elements.stage.clientHeight).toBe(1400);
+    v.send({ type: 'mouseButtons', fitToInsets: false, topInset: 0, bottomInset: 0 });
+    expect(v.messages.findLast(m => m.type === 'nativeViewport')).toMatchObject({
+      x: 0, y: 446.875, width: 900, height: 506.25,
+    });
+  });
+  it.each([[678, 402], [1366, 1024]])("fits the complete desktop in landscape %sx%s and after rotation", (vw, vh) => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = vw;
+    v.elements.stage.clientHeight = vh;
     v.send({
       type: "init",
       epoch: "landscape",
@@ -515,12 +570,16 @@ describe("remote desktop viewport", () => {
       fillHeight: true,
     });
     for (const element of [v.elements.image, v.elements.video]) {
-      expect(element.style.height).toBe("402px");
-      expect(element.style.top).toBe("0px");
-      expect(parseFloat(element.style.width)).toBeGreaterThan(678);
+      expect(parseFloat(element.style.width)).toBe(vw);
+      expect(parseFloat(element.style.height)).toBeCloseTo(vw * 1080 / 2560);
+      expect(parseFloat(element.style.left)).toBe(0);
+      expect(parseFloat(element.style.top)).toBeCloseTo((vh - vw * 1080 / 2560) / 2);
     }
+    expect(v.messages.findLast(m => m.type === "nativeViewport")).toMatchObject({
+      fillHeight: false, width: vw, height: vw * 1080 / 2560,
+    });
     v.send({ type: "fit" });
-    expect(v.elements.image.style.top).toBe("0px");
+    expect(parseFloat(v.elements.image.style.top)).toBeGreaterThan(0);
     v.elements.stage.clientWidth = 400;
     v.elements.stage.clientHeight = 700;
     v.send({ type: "viewport", fillHeight: false });
@@ -581,7 +640,7 @@ describe("remote desktop viewport", () => {
       for (let i = 0; i < 30; i++) v.frame();
       const width = v.elements.image.style.width;
       expect(parseFloat(v.elements.image.style.height)).toBeCloseTo(
-        400 * scale,
+        (800 - 50 - 80) * 1080 / 1920 * scale,
       );
       // Removing the toolbar before the keyboard has a measured height must not shift the image.
       const originalLeft = v.elements.image.style.left;
@@ -615,7 +674,7 @@ describe("remote desktop viewport", () => {
         for (let i = 0; i < 30; i++) v.frame();
         const image = v.elements.image.style;
         expect(image.width).toBe(width);
-        expect(parseFloat(image.height)).toBeCloseTo(400 * scale);
+        expect(parseFloat(image.height)).toBeCloseTo((800 - 50 - 80) * 1080 / 1920 * scale);
         expect(
           parseFloat(image.left) + cursorX * parseFloat(image.width),
         ).toBeCloseTo(expectedCursorX);
@@ -653,6 +712,12 @@ describe("remote desktop viewport", () => {
       rightInset: 80,
     });
     const before = { ...v.elements.image.style };
+    const expectUnchanged = () => {
+      for (const key of ["left", "top", "width", "height"]) {
+        expect(parseFloat(v.elements.image.style[key])).toBeCloseTo(parseFloat(before[key]));
+      }
+      expect(v.elements.image.style.visibility).toBe(before.visibility);
+    };
     for (let i = 0; i < 2; i++) {
       v.send({
         type: "mouseButtons",
@@ -668,10 +733,10 @@ describe("remote desktop viewport", () => {
         leftInset: 50,
         rightInset: 80,
       });
-      expect(v.elements.image.style).toEqual(before);
+      expectUnchanged();
       v.blur();
       for (let j = 0; j < 30; j++) v.frame();
-      expect(v.elements.image.style).toEqual(before);
+      expectUnchanged();
     }
   });
   it("initializes when the native engine cannot serialize function source", () => {
@@ -1112,7 +1177,7 @@ describe("remote desktop three-segment backdrop", () => {
   it("hides the backdrop when the fitted picture covers the whole stage", () => {
     const v = landscapeViewer();
     v.bgDraws.length = 0;
-    v.send({ type: "init", epoch: "bg-wide", width: 2560, height: 1080 });
+    v.send({ type: "init", epoch: "bg-wide", width: 1748, height: 804 });
     v.send({ type: "viewport", fillHeight: true });
     v.frame();
     expect(v.elements.bg.style.display).toBe("none");

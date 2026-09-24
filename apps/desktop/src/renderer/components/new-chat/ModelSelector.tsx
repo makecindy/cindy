@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName, matchesModelName } from '@/lib/modelDisplayNames';
 import {
@@ -72,6 +73,7 @@ import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useProviders } from '@/hooks/useProviders';
+import { LocalModelCatalogNotice } from './LocalModelCatalogNotice';
 import { providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
 import {
   evictDeviceProviders,
@@ -107,6 +109,7 @@ import {
   findCatalogModel,
   nativeDefaultSourceId,
   getModel,
+  isCustomRoutedProvider,
   modelSupportsFastMode,
   providerOffersModel,
   resolveModelIconKind,
@@ -129,15 +132,25 @@ import { buildProviderSections } from './sourceSwitch';
 const MODEL_DISCOVERY_INDICATOR_DELAY_MS = 300;
 
 /**
+ * 工具栏紧凑统一面板宽度。规格 `docs/product-rules/model-selector-unified.md` §1.2：
+ * max-content，下限 300px，上限 min(460px, 100vw-48px)。完整 class 字面量必须留在
+ * 源码里给 Tailwind 扫描；改数字时同步规格。
+ */
+export const UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX = 460;
+export const UNIFIED_COMPACT_PANEL_WIDTH_CLASS =
+  'w-max min-w-[300px] max-w-[min(460px,calc(100vw-48px))]';
+
+/**
  * 标签降级按选择器 pane 宽度生效。这里的 width 是整个 pane 宽度，不是模型名
  * 实际可用宽度；行还要扣掉左右 padding、来源图标、effort 和选中勾选。因此不能把
  * 300px 当成“能放下全部标签”的阈值，否则英文 Subscription 会先把模型名压成省略号。
  * 模型名优先：促销标签先收起，订阅标签随后收起，只保留「已隐藏」和选中勾选。
+ * full 只在宽过紧凑面板上限时启用，避免 460px 触顶时促销标签把刚留给长模型名的空间吃回去。
  */
 export type ModelTagDensity = 'full' | 'subscription' | 'hidden';
 
 export function modelTagDensityForWidth(width: number | null): ModelTagDensity {
-  if (width === null || width >= 450) return 'full';
+  if (width === null || width > UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX) return 'full';
   if (width >= 370) return 'subscription';
   return 'hidden';
 }
@@ -556,14 +569,18 @@ function RemoteModelLoadNotice({
         <p className={cn(compact ? 'text-11 leading-[1.45]' : 'text-xs leading-[1.45]')}>
           {t('newChat.modelSelector.remoteLoadFailed')}
         </p>
-        <button
+        <Button
+          variant="secondary"
+          tone="danger"
+          size="xs"
+          compact
           type="button"
           onClick={onRetry}
-          className="mt-1 inline-flex h-6 items-center gap-1 rounded-full px-2 text-xs font-medium text-[var(--error-fg-strong)] hover:bg-[var(--surface-hover)]"
+          className="mt-1"
         >
           <RefreshCw size={12} />
           {t('newChat.modelSelector.retryRemoteModels')}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -600,6 +617,7 @@ export function resolveModelSelectorAgentIdentity(
 interface ModelSelectorProps {
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
   providersOverride?: ProviderView[];
+  providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
   currentSelection?: SessionRuntimeProfileProjection;
   /** Open recovery for the selected source; generic Add model navigation stays separate. */
   onReconnectSource?: () => void;
@@ -791,6 +809,7 @@ interface ModelSelectorProps {
 
 interface ModelSelectorContentProps {
   providersOverride?: ProviderView[];
+  providersOverrideState?: ModelSelectorProps['providersOverrideState'];
   modelId: string;
   effort: Effort;
   onModelChange: (modelId: string) => void | boolean | Promise<void | boolean>;
@@ -1038,6 +1057,7 @@ export function ModelSelectorContent(props: ModelSelectorContentProps) {
 
 function ModelSelectorContentView({
   providersOverride,
+  providersOverrideState,
   modelId,
   effort,
   onModelChange,
@@ -1566,7 +1586,7 @@ function ModelSelectorContentView({
       // 同前缀模型由该供应商自身配置路由(codex-proxy-host 按会话显式供应商解析,
       // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
       // 为 null,无供应商概念)与内置来源保持原前缀判定。
-      if (provider?.source === 'user') return false;
+      if (isCustomRoutedProvider(provider)) return false;
       return id.startsWith('codex/') && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;
@@ -2734,6 +2754,22 @@ function ModelSelectorContentView({
     [cc.capabilities, codex.capabilities, pi.capabilities, onFastModeChange, onUnifiedSelect, fastModeConfigurable],
   );
 
+  if (providersOverrideState && providersOverrideState.status !== 'ready') {
+    return <RemoteModelLoadNotice status={providersOverrideState.status} onRetry={providersOverrideState.refresh} />;
+  }
+
+  const localCatalogNotice = !deviceId && !providersOverride && localProviders.error
+    ? <LocalModelCatalogNotice failure={localProviders.error} onRetry={localProviders.refetch} /> : null;
+  // 后续刷新失败时,快照里可能仍没有当前引擎的已连接来源。emptyState 不得盖住恢复提示;
+  // 有引导卡时叠在下方,连接入口仍可用。
+  if (localCatalogNotice && (localProviders.loading || emptyState)) {
+    return (
+      <div className="flex w-[320px] max-w-full flex-col">
+        <div className={emptyState ? 'p-2 pb-0' : 'p-2'}>{localCatalogNotice}</div>
+        {emptyState}
+      </div>
+    );
+  }
   if (emptyState) return emptyState;
 
   const hasAnyModel = sections ? sections.length > 0 : (flatModels?.length ?? 0) > 0;
@@ -2813,11 +2849,8 @@ function ModelSelectorContentView({
             // popover 裁掉超出部分,用户就翻不到最后几行(2026-08-13 实测)。列表侧配
             // min-h-0 + flex-1 收缩并内部滚动,搜索框与底部 footer 始终露着。
             'max-h-[min(560px,calc(100vh-120px))]',
-            // 紧凑内容宽度：长模型名在 420px 上限内省略，不为完整名称撑大面板。
-            // field 入口仍绑定字段宽度；窄窗口继续受视口与 morph 锚点约束。
-            fluidWidth
-              ? 'w-full min-w-0'
-              : 'w-max min-w-[300px] max-w-[min(420px,calc(100vw-48px))]',
+            // 紧凑宽度契约见 UNIFIED_COMPACT_PANEL_WIDTH_CLASS；field 入口仍绑 trigger。
+            fluidWidth ? 'w-full min-w-0' : UNIFIED_COMPACT_PANEL_WIDTH_CLASS,
           )}
         >
           {/* 设计稿 .search-wrap:无框平铺行 + 底部 hairline(不是独立的胶囊输入框)。 */}
@@ -2845,6 +2878,7 @@ function ModelSelectorContentView({
               aria-label={t('newChat.modelSelector.search.placeholderAll')}
             />
           </div>
+          {localCatalogNotice && <div className="shrink-0 p-2">{localCatalogNotice}</div>}
           <UnifiedModelPanel
             deviceId={deviceId}
             localProviderUsage={!deviceId && !providersOverride}
@@ -2941,7 +2975,8 @@ function ModelSelectorContentView({
                   ...(nextEffort ? { effort: nextEffort } : {}),
                   engine: rowConfig.engine,
                   fast: rowConfig.fast,
-                  favoriteUid: null,
+                  favoriteUid: rowConfig.favoriteUid,
+                  ...(rowConfig.resetToRecommended ? { resetToRecommended: true as const } : {}),
                 });
               }
               return applyUnifiedSessionSelect({
@@ -3062,6 +3097,7 @@ function ModelSelectorContentView({
         </>
       )}
       {searchField}
+      {localCatalogNotice}
 
       {/* 模型列表 —— 单栏;分段(供应商)或 flat。 */}
       <div
@@ -3189,6 +3225,7 @@ function ModelSelectorContentView({
 
 export function ModelSelector({
   providersOverride,
+  providersOverrideState,
   modelId,
   currentSelection,
   onReconnectSource,
@@ -3288,7 +3325,9 @@ export function ModelSelector({
       const nextOpen = disabled ? false : next;
       const wasOpen = openRef.current;
       openRef.current = nextOpen;
-      if (nextOpen && !wasOpen && !deviceId) {
+      if (nextOpen && !wasOpen && providersOverrideState) {
+        providersOverrideState.refresh();
+      } else if (nextOpen && !wasOpen && !deviceId && !providersOverride) {
         discovery.begin(() =>
           window.electronAPI.maker.requestProviderModelsAutoRefresh('model-selector-open'),
         );
@@ -3299,7 +3338,7 @@ export function ModelSelector({
       }
       setOpen(nextOpen);
     },
-    [deviceId, disabled, discovery, resetDiscoveryPresentation],
+    [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState],
   );
 
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
@@ -3324,7 +3363,7 @@ export function ModelSelector({
 
   // 统一面板下没有「先切分段再选模型」那一步,跨引擎的确认落在**真正选中那一行**的这一下。
   // 确认用的 AlertDialog 同样会被 Popover 当成外部交互顺手把面板收掉,所以复用上面那把
-  // 保命锁。成功后关掉选单(确认已经变成「下一条才生效」的意图,应露出 composer 提示);
+  // 保命锁。模型行选中成功后关掉选单；配置浮层切换成功后保持展开；
   // 取消 / 失败留在原地,方便重选。
   //
   // 2026-08-17 review 第二项之后,这个 await 等的是**整条切换事务**(确认框 + 登记往返),
@@ -3342,23 +3381,29 @@ export function ModelSelector({
   const contentSessionEngineFilter = useMemo(() => {
     if (!sessionEngineFilter) return undefined;
     const { onCrossEngineSelect } = sessionEngineFilter;
+    const switchEngine = async (
+      args: Parameters<typeof onCrossEngineSelect>[0],
+      configuring: boolean,
+    ): Promise<boolean> => {
+      setKeepOpenForAgentConfirmation(true);
+      try {
+        const applied = await onCrossEngineSelect(args);
+        // 配置浮层里的切换保持展开；选中模型行成功后才收起。
+        setOpenWithoutAutoRefresh(configuring || applied === false);
+        return applied !== false;
+      } catch {
+        setOpenWithoutAutoRefresh(true);
+        return false;
+      } finally {
+        setKeepOpenForAgentConfirmation(false);
+      }
+    };
     return {
       ...sessionEngineFilter,
-      onCrossEngineSelect: async (
-        args: Parameters<typeof onCrossEngineSelect>[0],
-      ): Promise<boolean> => {
-        setKeepOpenForAgentConfirmation(true);
-        try {
-          const applied = await onCrossEngineSelect(args);
-          // 成功后收起选单:确认切换已经落成「下一条才生效」的意图,胶囊用「下条：」标明;
-          // 窗口留着会让轨跟着意图翻到目标 Harness,再点任意模型又弹一次确认。
-          // 取消 / 失败留在原地,方便重选。
-          setOpenWithoutAutoRefresh(applied === false);
-          return applied !== false;
-        } finally {
-          setKeepOpenForAgentConfirmation(false);
-        }
-      },
+      onCrossEngineSelect: (args: Parameters<typeof onCrossEngineSelect>[0]) =>
+        switchEngine(args, false),
+      onCrossEngineConfigure: (args: Parameters<typeof onCrossEngineSelect>[0]) =>
+        switchEngine(args, true),
     };
   }, [sessionEngineFilter, setOpenWithoutAutoRefresh]);
 
@@ -3384,10 +3429,10 @@ export function ModelSelector({
     pi,
     providers: remoteProviders,
   });
-  const remoteModelLoading = !!deviceId && remoteModelListStatus === 'loading';
-  const remoteModelLoadFailed = !!deviceId && remoteModelListStatus === 'error';
-  const localModelLoading = !deviceId && !(!providersOverride && localProviders.loadFailed) && (
-    (!providersOverride && localProviders.loading) ||
+  const remoteModelLoading = providersOverrideState?.status === 'loading' || (!!deviceId && remoteModelListStatus === 'loading');
+  const remoteModelLoadFailed = providersOverrideState?.status === 'error' || (!!deviceId && remoteModelListStatus === 'error');
+  const localModelLoading = !deviceId && !providersOverride && !localProviders.loadFailed && (
+    localProviders.loading ||
     (agentKind === 'codex' ? codex.loading : agentKind === 'pi' ? pi.loading : cc.loading)
   );
   const visibleModels = useMemo(
@@ -3524,6 +3569,7 @@ export function ModelSelector({
   // 草稿没有已连接来源时显示连接 CTA；已建任务保留保存的模型和恢复入口。
   // device-link 远程会话不走此 CTA(控制端无法替被控端连来源;hasConnectedSource 是本机口径)。
   const noSource =
+    !providersOverride &&
     !actualRoute &&
     !!onProviderChange &&
     !!onNavigateToProviders &&
@@ -3995,6 +4041,7 @@ export function ModelSelector({
       configurationEnabled={configurationEnabled}
       fastModeConfigurable={fastModeConfigurable}
       providersOverride={providersOverride}
+      providersOverrideState={providersOverrideState}
       unifiedPanel={unifiedPanel}
       sessionEngineFilter={contentSessionEngineFilter}
       unifiedAgents={unifiedAgents}

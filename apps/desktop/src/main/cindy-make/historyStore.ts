@@ -8,7 +8,14 @@ import type {
   MakeHistoryVersion,
 } from '../../shared/cindyMakeHistory.js';
 import type { CindyMakePersonalBuildState } from '../../shared/cindyMakeSession.js';
-import { parseCindyMakeBuildError, parseCindyMakeBuildLogs } from '../../shared/cindyMakeSession.js';
+import {
+  parseCindyMakeBuildError,
+  parseCindyMakeBuildLogs,
+} from '../../shared/cindyMakeSession.js';
+import {
+  parseCindyMakeBuildDiagnostic,
+  parseCindyMakeBuildOutput,
+} from '../../shared/cindyMakeBuildDiagnostic.js';
 
 const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const HASH = /^[a-f0-9]{40,64}$/i;
@@ -120,18 +127,40 @@ export class CindyMakeHistoryStore {
     const value = JSON.parse(raw);
     if (
       !value ||
-      !['waiting', 'checking', 'merging', 'packaging', 'publishing', 'ready', 'failed'].includes(
+      ![
+        'waiting',
+        'syncing',
+        'checking',
+        'merging',
+        'packaging',
+        'publishing',
+        'ready',
+        'failed',
+      ].includes(
         value.status,
       )
     )
       throw new Error('Invalid build state');
     const logs = parseCindyMakeBuildLogs(value.logs);
+    const outputLine = !['ready', 'failed'].includes(value.status)
+      ? parseCindyMakeBuildOutput(value.outputLine)
+      : undefined;
+    const diagnostic =
+      value.status === 'failed' ? parseCindyMakeBuildDiagnostic(value.diagnostic) : undefined;
     // The renderer needs status and version identity, never arbitrary fields read from disk.
     return {
       status: value.status,
-      ...(value.status === 'waiting' &&
-      ['environment', 'original'].includes(value.preparationStep)
+      ...(typeof value.mergeSessionId === 'string' && ID.test(value.mergeSessionId)
+        ? { mergeSessionId: value.mergeSessionId }
+        : {}),
+      ...(value.status === 'merging' && ['conflicts', 'cleanup'].includes(value.mergeStep)
+        ? { mergeStep: value.mergeStep }
+        : {}),
+      ...(value.status === 'waiting' && ['environment', 'original'].includes(value.preparationStep)
         ? { preparationStep: value.preparationStep }
+        : {}),
+      ...(typeof value.syncLatestSource === 'boolean'
+        ? { syncLatestSource: value.syncLatestSource }
         : {}),
       ...(value.stopping === true ? { stopping: true } : {}),
       ...(Number.isFinite(value.startedAt) && value.startedAt > 0
@@ -142,6 +171,8 @@ export class CindyMakeHistoryStore {
         ? { checkStep: value.checkStep }
         : {}),
       ...(logs ? { logs } : {}),
+      ...(outputLine ? { outputLine } : {}),
+      ...(diagnostic ? { diagnostic } : {}),
       ...(typeof value.buildId === 'string' && ID.test(value.buildId)
         ? { buildId: value.buildId }
         : {}),

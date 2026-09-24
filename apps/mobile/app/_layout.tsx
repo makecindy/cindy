@@ -1,6 +1,10 @@
+import { recentTaskKey } from '@/session/recentTasks';
+import { RecentMessageHistoriesProvider } from '@/session/RecentMessageHistories';
+import { ResidentHomeListProvider } from '@/session/ResidentHomeList';
 import { AndroidUpdateSheet } from '@/update/AndroidUpdateSheet';
 import { PeerFileTransport } from '@/device-link/peerFileTransport';
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
+import { MobileOutboxBridge } from '@/session/MobileOutboxBridge';
 import {
   DarkTheme as NavigationDarkTheme,
   DefaultTheme as NavigationLightTheme,
@@ -24,6 +28,9 @@ import {
   type ThemeColors,
 } from '@/theme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AdaptiveWindowProvider } from '@/platform/AdaptiveWindow';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { sessionPaneLayout } from '@/session/sessionPaneLayout';
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
 import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
 import { loginText } from '@/auth/loginMessages';
@@ -80,6 +87,10 @@ import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntr
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 
 function NavigationGate() {
+  const windowGeometry = useAdaptiveWindow();
+  // Establish chrome before push starts, rather than revealing a hidden bar after mount.
+  const sessionHeaderShown = Platform.OS === 'ios'
+    && (windowGeometry.barEdge !== 'none' || !sessionPaneLayout(windowGeometry).persistent);
   const auth = useAuth();
   const router = useRouter();
   const segments = useSegments();
@@ -150,9 +161,14 @@ function NavigationGate() {
         />
       ) : null}
       <RemoteDesktopHost>
+        <ResidentHomeListProvider key={auth.accountGeneration}>
+        <RecentMessageHistoriesProvider>
         <Stack
+          key={auth.accountGeneration}
           screenOptions={{
             headerShown: false,
+            // Custom titles register after mount and clear on unmount. Never expose route names in between.
+            title: '',
             contentStyle: { backgroundColor: colors.surface },
             ...(Platform.OS === 'ios'
               ? { statusBarStyle: statusBarTheme === 'dark' ? 'light' : 'dark' }
@@ -164,6 +180,13 @@ function NavigationGate() {
             gestureResponseDistance: { end: 44 },
           }}
         >
+          <Stack.Screen name="sessions/[sessionId]" getId={({ params }) => recentTaskKey(params ?? {})} options={{
+            headerShown: sessionHeaderShown,
+            headerTransparent: true,
+            headerShadowVisible: false,
+            headerBackVisible: false,
+            headerStyle: { backgroundColor: 'transparent' },
+          }} />
           {/* 设置从左侧抽屉进入:接着抽屉方向从左边推出,不要默认从右边盖上来。 */}
           <Stack.Screen name="settings" options={{ animation: 'slide_from_left' }} />
           <Stack.Screen
@@ -171,6 +194,8 @@ function NavigationGate() {
             options={{ animation: 'fade', gestureEnabled: false }}
           />
         </Stack>
+        </RecentMessageHistoriesProvider>
+        </ResidentHomeListProvider>
       </RemoteDesktopHost>
     </NavigationThemeProvider>
   );
@@ -339,6 +364,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
       <DeviceLinkProvider>
         <PeerFileTransport />
         <PrecreatedWorktreeRecoveryBridge />
+        <MobileOutboxBridge />
         <HomeEntryProvider>
           <NavigationGate />
         </HomeEntryProvider>
@@ -425,6 +451,7 @@ function RootLayout() {
   return (
     <GestureHandlerRootView style={styles.gestureRoot}>
       <SafeAreaProvider>
+        <AdaptiveWindowProvider>
         <ThemeProvider>
           {/* 语言 Provider 常驻 root:恢复持久化 override,覆盖含 (auth) 在内的全部屏幕 */}
           <LocaleProvider>
@@ -442,6 +469,7 @@ function RootLayout() {
             </MobileLoginHandoffProvider>
           </LocaleProvider>
         </ThemeProvider>
+        </AdaptiveWindowProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

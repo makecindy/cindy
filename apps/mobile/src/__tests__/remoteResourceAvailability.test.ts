@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isRemoteResourceHostOnline, readRemoteCollectionCache, writeRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
+import { remoteResourceConnectionState, isRemoteResourceHostOnline, readRemoteCollectionCache, writeRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 
 describe('remote resource availability', () => {
   it('one offline host does not disconnect other hosts', () => {
@@ -25,4 +25,13 @@ it('retains a roster across navigation but never across account generations', ()
   expect(readRemoteCollectionCache('account:2', 'teammates')).toEqual([]);
   writeRemoteCollectionCache('account:1', 'teammates', rows);
   expect(readRemoteCollectionCache('account:2', 'teammates')).toEqual([]);
+});
+
+it('connection color is independent of a successful list reply', () => {
+  expect(remoteResourceConnectionState('online', true)).toBe(true);
+  expect(isRemoteResourceHostOnline('online', true, undefined, 4)).toBe(false);
+  expect(remoteResourceConnectionState('online', false)).toBe(false);
+  expect(remoteResourceConnectionState('online', null)).toBeNull();
+  expect(remoteResourceConnectionState('reconnecting', true)).toBeNull();
+  expect(remoteResourceConnectionState('stopped', true)).toBe(false);
 });

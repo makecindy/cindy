@@ -322,6 +322,11 @@ export interface MobileActiveSessionSnapshot {
   isTurnRunning?: boolean;
 }
 
+export type MobileActiveSessionSnapshotResult = MobileActiveSessionSnapshot[] | {
+  format: 'active-sessions-v2';
+  sessions: MobileActiveSessionSnapshot[];
+};
+
 /** 被控端视角的模型单价(USD / 百万 token,同桌面 useModelPricing 形状)。 */
 export interface MobileModelPrice {
   inputUsdPerMtok: number;
@@ -516,7 +521,7 @@ export interface MobileMakerTransport {
     createOpts?: CreateSessionOptions,
     sendOpts?: SendOptions,
   ): Promise<{ accepted: true } | { accepted: false; reason?: string }>;
-  listActiveSessions(): Promise<MobileActiveSessionSnapshot[]>;
+  listActiveSessions(): Promise<MobileActiveSessionSnapshotResult>;
   /**
    * 切模型。可选第 3 参 providerId = 同时切来源(被控端按其路由 + 持久化 provider_id)。
    * 不传 providerId = 老 2 参语义,不动会话当前来源选择。
@@ -670,7 +675,11 @@ export interface MobileMakerTransport {
     sessionId: string,
     clientId: string,
   ): Promise<RewindPreviewPayload>;
-  rewindCommit(sessionId: string, clientId: string): Promise<RemoteSession>;
+  rewindCommit(
+    sessionId: string,
+    clientId: string,
+    opts?: { allowFileRestore?: boolean },
+  ): Promise<RemoteSession>;
   deleteMessage(
     sessionId: string,
     clientId: string,
@@ -953,7 +962,7 @@ export function createMobileMakerTransport({
       call("local-db:messages:around-client-id", [sessionId, clientId, opts]),
     send: (sessionId, message, createOpts, sendOpts) =>
       call("maker:send", [sessionId, message, createOpts, sendOpts]),
-    listActiveSessions: () => call("maker:list-active", [{ summary: true }]),
+    listActiveSessions: () => call("maker:list-active", [{ summary: true, snapshotVersion: 2 }]),
     setModel: async (sessionId, model, providerId, selection) => {
       const wireArgs = selection
         ? [sessionId, model, providerId ?? null, null, selection]
@@ -1101,8 +1110,11 @@ export function createMobileMakerTransport({
       call("maker:fork", [sourceSessionId, messageClientId]),
     rewindPreview: (sessionId, clientId) =>
       call("maker:rewind:preview", [sessionId, clientId]),
-    rewindCommit: (sessionId, clientId) =>
-      call("maker:rewind:commit", [sessionId, clientId]),
+    rewindCommit: (sessionId, clientId, opts) =>
+      call(
+        "maker:rewind:commit",
+        opts ? [sessionId, clientId, opts] : [sessionId, clientId],
+      ),
     deleteMessage: (sessionId, clientId) =>
       call("maker:message:delete", [sessionId, clientId]),
     closeSession: (sessionId) => call("maker:close-session", [sessionId]),

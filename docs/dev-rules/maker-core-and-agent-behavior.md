@@ -11,6 +11,31 @@ Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
 
+## 工具循环与无响应的分工
+
+工具持续返回但反复原地搜索时，复用
+`agents/shared/loop-guard.ts` 的 `ToolLoopGuard`，不能靠缩短无事件超时处理。
+Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在 `Session` 中配对
+当前产品轮次的 `tool_use` 与 `tool_result_full`，不重复统计结果摘要、后台事件或旧轮次。
+三个引擎均关闭“参数各不相同、同类契约错误连续被拒三次即中断”的规则：同类错误
+不能证明模型没有在修正调用，Pi / Codex 也尚无可靠模型响应批次标识。运行时沿用
+`contractConsecutiveLimit: Number.POSITIVE_INFINITY` 关闭该计数阈值，不新增提醒或自动重试。
+完全相同的工具名、参数、输出连续四次仍会中断，短窗口轮转检测也保持不变；不同参数
+持续出现同类错误可能多重试几次，这是减少纠错误停的取舍。旧 `contract` 错误的展示
+和历史兼容保持不变。
+循环错误沿用 `tool_use_loop_detected` 和既有中断复核，Orca 消费普通终态链路；
+该 reason 不进入 interrupted-turn 自动续跑白名单，避免熔断后立即重复原循环。
+
+短窗口判据保持原样；较长的只读搜索轮转只在最近 128 次读/搜结果至多包含 32 种
+完整调用指纹，且至少 90% 的结果属于重复至少 4 次的指纹时判定。参数与输出都参与
+指纹，不修改实际工具结果；写入或命令结果打断该只读窗口，原生等待工具不计数。
+成功的简单 `tail` / PowerShell `Get-Content -Tail` 日志轮询同样不计数
+（只认字面 `.log` 路径，可串联多个日志读取）；
+失败、混合执行、重定向或源文件读取不套用该例外。等待调用不清空普通调用的循环轨迹。
+这仍是有界启发式，不是任意长度循环的证明，也不以没有文件改动作为失败依据。
+回归见 `loop-guard.test.ts`、`session.tool-loop.test.ts` 和 Claude Code 的
+`upstream-idle-watchdog.test.ts`。
+
 ## 上下文已满时的引擎边界
 
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；
@@ -85,6 +110,12 @@ Codex 跨凭证时先按目标来源 resume 同一个原生线程，不因 `ordi
 配置；每次重连重新认证，刷新必须匹配冻结的 owner、host 代次及账号，且不能复用刚被
 拒绝的 token。owner 切换 pending 期间，即使 owner key 尚未提交变化，也必须在异步认证
 读取前后拒绝提供 token。刷新有超时，失败走正常错误路径，不切回历史所属账号。
+同 owner 的 Ghost 投影修复会更新账号代次但保留 Maker 与活跃任务；凭证 reader 固定
+owner 身份、认证 realm 和 CodexAgent 实例，每次读取单独捕获代次，不能将创建时的代次永久锁在
+reader 上。跨修复的在途读取仍拒绝，修复完成后的新读取可正常刷新；真正切账号或
+切到另一认证 realm（即使 membership ID 相同且 Maker 保留）时不能提供凭证；
+Maker 被替换后旧 reader 必须失效，包括切走再切回同一 owner。回归见 Desktop
+`codexAuthTokenReaderBoundary.test.ts`，可通过 `CINDY_CODEX_TEST_BINARY` 实跑原生 401 恢复。
 该 adapter 依赖 Codex 实验性的 `chatgptAuthTokens` 协议，0.145.0 已支持该协议且通过
 真实登录及 401 刷新契约验证，不能把 0.153.4 当作协议最低版本。更换原生运行时前必须
 用目标二进制运行 `CINDY_CODEX_TEST_BINARY=<绝对路径> pnpm --filter @cindy/maker-core exec

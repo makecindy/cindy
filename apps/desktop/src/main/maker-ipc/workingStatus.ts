@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { Session } from '@cindy/maker-core';
 import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
 import { isProductTurnDoneEvent, isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
-import { WORKING_PHASES, hasPublicWorkingSubject, publicToolPhase, publicToolResultPhase, type WorkingPhase } from '../../shared/workingStatus.js';
+import { WORKING_PHASES, isCompactingWorkingStatus, hasPublicWorkingSubject, publicToolPhase, publicToolResultPhase, type WorkingPhase } from '../../shared/workingStatus.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { SUPPORTED_LOCALES } from '../../shared/locale.js';
 import { getMakerIfReady } from '../maker-host/index.js';
@@ -18,11 +18,12 @@ import { MAKER_INVOKE } from './channels.js';
 import { WorkingStatusCopy, WORKING_STATUS_COPY_INSTRUCTIONS, workingStatusPrompt, validateWorkingStatusCopy } from './workingStatusCopy.js';
 
 const requestSchema = z.object({ sessionId: z.string().min(1).max(200), phase: z.enum(WORKING_PHASES), locale: z.enum(SUPPORTED_LOCALES) }).strict();
-const copies = new WeakMap<Session, { generation: number; scope: string; copy: WorkingStatusCopy; dispose: () => void }>();
+type CopyEntry = { generation: number; scope: string; copy: WorkingStatusCopy; dispose: () => void };
+// Different controller languages share their own turn cache without cancelling one another.
+const copies = new WeakMap<Session, Map<string, CopyEntry>>();
 
-export function registerWorkingStatusIpc(): void {
-  ipcMain.handle(MAKER_INVOKE.WORKING_STATUS, async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
+/** Shared read path. Remote callers must first bind the request to a visible teammate's active Session. */
+export async function getWorkingStatusCopy(raw: unknown): Promise<{ text: string | null }> {
     const { sessionId, phase, locale } = requestSchema.parse(raw);
     if (!hasPublicWorkingSubject(phase)) return { text: null };
     const maker = getMakerIfReady();
@@ -32,7 +33,9 @@ export function registerWorkingStatusIpc(): void {
     const owner = activeOwnerScopeKey();
     const chain = getEffectiveAuxiliaryModelChainSnapshot();
     const scope = JSON.stringify([owner, chain, locale]);
-    let entry = copies.get(session);
+    let localized = copies.get(session);
+    if (!localized) { localized = new Map(); copies.set(session, localized); }
+    let entry = localized.get(locale);
     if (entry && (entry.generation !== generation || entry.scope !== scope)) {
       entry.dispose();
       entry = undefined;
@@ -61,7 +64,7 @@ export function registerWorkingStatusIpc(): void {
         copy.dispose();
         offEvent();
         offStatus();
-        copies.delete(session);
+        if (localized.get(locale)?.copy === copy) localized.delete(locale);
       };
       let feedbackPhase: WorkingPhase | null = phase.startsWith('reviewing-') ? phase : null;
       const toolPhases = new Map<string, WorkingPhase>();
@@ -73,7 +76,9 @@ export function registerWorkingStatusIpc(): void {
         if (typeof data.parentToolUseId === 'string' && isSubagentParentToolUseId(data.parentToolUseId)) return;
         if (isProductTurnDoneEvent(e) || isTerminalTurnErrorEvent(e)
           || (e.type === 'status' && data.isRunning === false && !isTurnContinuationBoundaryEvent(e))) { dispose(); return; }
-        if (e.type === 'interaction_request') copy.observe(null);
+        if (e.type === 'status' && isCompactingWorkingStatus(data.status)) { feedbackPhase = null; copy.observe('compacting'); }
+        else if (e.type === 'compact_boundary') { feedbackPhase = null; copy.observe('thinking'); }
+        else if (e.type === 'interaction_request') copy.observe(null);
         else if (e.type === 'text' && typeof data.text === 'string' && data.text.length > 0) { feedbackPhase = null; copy.observe('replying'); }
         else if (e.type === 'thinking') copy.observe(feedbackPhase && feedbackPhase !== 'processing' ? feedbackPhase : 'thinking');
         else if (e.type === 'tool_use') {
@@ -84,14 +89,20 @@ export function registerWorkingStatusIpc(): void {
         } else if (e.type === 'tool_result') {
           const toolPhase = typeof data.toolUseId === 'string' ? toolPhases.get(data.toolUseId) : lastToolPhase;
           if (typeof data.toolUseId === 'string') toolPhases.delete(data.toolUseId);
-          feedbackPhase = publicToolResultPhase(toolPhase ?? lastToolPhase);
+          feedbackPhase = [...toolPhases.values()].at(-1) ?? publicToolResultPhase(toolPhase ?? lastToolPhase);
           copy.observe(feedbackPhase);
         }
       });
       const offStatus = session.onStatusChange((status) => { if (status !== 'active') dispose(); });
       entry = { generation, scope, copy, dispose };
-      copies.set(session, entry);
+      localized.set(locale, entry);
     }
     return { text: await entry.copy.request(phase) };
+}
+
+export function registerWorkingStatusIpc(): void {
+  ipcMain.handle(MAKER_INVOKE.WORKING_STATUS, async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return getWorkingStatusCopy(raw);
   });
 }

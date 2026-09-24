@@ -9,6 +9,10 @@ import { Tip } from '@/components/ui/tooltip';
 import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
+import { resolveSettingsSearchEntry } from './settingsSearchCatalog';
+import { SettingsSearchNavigationContext } from './SettingsSearchNavigation';
+import type { SettingsSearchContext } from './settingsSearchTypes';
+import { useSettingsSectionTarget } from './useSettingsSectionTarget';
 import { UserProfileCard } from './UserProfileCard';
 import { VoiceInputSection } from './VoiceInputSection';
 import { AppearanceSection } from './AppearanceSection';
@@ -58,6 +62,7 @@ import { canAccessUsageSettings } from './usageVisibility';
 import { canAccessCindyMakeSettings } from './cindyMakeVisibility';
 import { useCindyVersions } from '@/lib/useCindyVersions';
 import { UsageHistorySection } from './usage/UsageHistorySection';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
@@ -70,6 +75,7 @@ export function SettingsView() {
   const outletContext = useOutletContext<SettingsOutletContext | null>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { t } = useTranslation();
+  const [searchActivation, setSearchActivation] = useState(0);
   const { mode, dataOwnerId, user } = useAuth();
   const menuWidth = outletContext?.sidebarWidth ?? DEFAULT_SETTINGS_MENU_WIDTH;
   const isMac = window.electronAPI?.platform === 'darwin';
@@ -89,7 +95,12 @@ export function SettingsView() {
   // 与 billing 的 canAccessBillingSettings 无关 —— #2785 维护者裁决。
   const canAccessUsage = canAccessUsageSettings({ mode });
   const versions = useCindyVersions(!import.meta.env.DEV);
-  const canAccessCindyMake = canAccessCindyMakeSettings(import.meta.env.DEV, versions.state);
+  const canAccessCindyMake = canAccessCindyMakeSettings(
+    import.meta.env.DEV,
+    versions.state,
+    /-beta(?:\.|$)/i.test(window.electronAPI.appVersion ?? ''),
+    user,
+  );
 
   const activeTab = useMemo<SettingsTab>(() => {
     const raw = rawTab;
@@ -160,6 +171,21 @@ export function SettingsView() {
     [activeTab, piExtensionsPanelOpen, searchParams, setSearchParams],
   );
 
+  const handleSelectSearchResult = useCallback(
+    ({ tab, sectionId }: { tab: SettingsTab; sectionId: string }) => {
+      setSearchActivation((value) => value + 1);
+      const next = new URLSearchParams(searchParams);
+      for (const key of ['openPanel', 'ghost', 'panel', 'imGroup', 'connect', 'wizard', 'intent']) {
+        next.delete(key);
+      }
+      if (tab === 'general') next.delete('tab');
+      else next.set('tab', tab);
+      next.set('section', sectionId);
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
   const handleOpenPiExtensions = useCallback(() => {
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
@@ -197,22 +223,17 @@ export function SettingsView() {
       ),
     [canAccessBilling, canAccessCindyMake, canAccessUsage, isMac],
   );
-
-  // deep-link: ?section=... → scroll to a section inside the active tab.
-  useEffect(() => {
-    const section = searchParams.get('section');
-    const sectionId =
-      section === 'collaboration'
-        ? 'settings-collaboration'
-        : section === 'notifications'
-          ? 'settings-notifications'
-          : section === 'contacts'
-            ? 'settings-contacts'
-            : null;
-    if (!sectionId) return;
-    const el = document.getElementById(sectionId);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [searchParams]);
+  const searchContext = useMemo<SettingsSearchContext>(() => ({
+    region: CURRENT_CINDY_REGION,
+    mode,
+    membershipKind: user?.membershipKind ?? null,
+    platform: window.electronAPI?.platform ?? '',
+  }), [mode, user?.membershipKind]);
+  const requestedEntry = resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
+  const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
+    ? null : requestedEntry;
+  const searchNavigation = useMemo(() => ({ entry: searchEntry, activation: searchActivation }), [searchEntry, searchActivation]);
+  useSettingsSectionTarget(searchEntry?.targetId ?? null, contentScrollRef, searchParams.toString() + ':' + searchActivation, searchEntry?.fallbackTargetId);
 
   // 旧「工具密钥」「第三方平台」深链落到设置里的插件分区,不再离开设置。
   if (shouldRedirectLegacyPluginTabs) {
@@ -220,6 +241,7 @@ export function SettingsView() {
   }
 
   return (
+    <SettingsSearchNavigationContext.Provider value={searchNavigation}>
     <div
       className="h-full w-full overflow-hidden bg-[var(--settings-bg)]"
       role="main"
@@ -253,8 +275,10 @@ export function SettingsView() {
 
           <SettingsSidebarNav
             tabIds={visibleTabIds}
+            searchContext={searchContext}
             activeTab={activeTab}
             onSelectTab={handleSelectTab}
+            onSelectSearchResult={handleSelectSearchResult}
           />
         </aside>
 
@@ -305,29 +329,29 @@ export function SettingsView() {
                       <ArrowLeft size={16} />
                       {t('settings.piPackages.backToGeneral')}
                     </button>
-                    <section className="pb-[18px]" aria-label={t('settings.piPackages.title')}>
+                    <section id="settings-pi-extensions" className="pb-[18px]" aria-label={t('settings.piPackages.title')}>
                       <PiPackagesSection />
                     </section>
                   </>
                 ) : (
                   <>
                     {/* Section — User Info (pb 18) */}
-                    <section className="pb-[18px]" aria-label={t('settings.sections.user')}>
+                    <section id="settings-search-target-general-user" className="pb-[18px]" aria-label={t('settings.sections.user')}>
                       <UserProfileCard />
                     </section>
 
                     {/* Section — Appearance (py 18) */}
-                    <section className="py-[18px]" aria-label={t('settings.sections.appearance')}>
+                    <section id="settings-search-target-general-appearance" className="py-[18px]" aria-label={t('settings.sections.appearance')}>
                       <AppearanceSection />
                     </section>
 
                     {/* Section — Language (py 18) */}
-                    <section className="py-[18px]" aria-label={t('settings.sections.language')}>
+                    <section id="settings-search-target-general-language" className="py-[18px]" aria-label={t('settings.sections.language')}>
                       <LanguageSection />
                     </section>
 
                     {/* Pi 扩展只在通用页提供一行入口，不占用设置一级菜单。 */}
-                    <section className="py-[18px]" aria-label={t('settings.piPackages.entryTitle')}>
+                    <section id="settings-pi-extensions" className="py-[18px]" aria-label={t('settings.piPackages.entryTitle')}>
                       <button
                         type="button"
                         onClick={handleOpenPiExtensions}
@@ -407,12 +431,12 @@ export function SettingsView() {
                     </section>
 
                     {/* Section — Git safety savepoints (formal setting, not experimental). */}
-                    <section className="py-[18px]" aria-label={t('settings.sections.gitSafety')}>
+                    <section id="settings-search-target-general-git-safety" className="py-[18px]" aria-label={t('settings.sections.gitSafety')}>
                       <GitSafetySection />
                     </section>
 
                     {/* Section — Experimental (py 18). */}
-                    <section className="py-[18px]" aria-label={t('settings.sections.experimental')}>
+                    <section id="settings-search-target-general-experimental" className="py-[18px]" aria-label={t('settings.sections.experimental')}>
                       <ExperimentalSection />
                     </section>
 
@@ -454,21 +478,21 @@ export function SettingsView() {
                 id="settings-panel-personalization"
                 aria-labelledby="settings-tab-personalization"
               >
-                <section className="pb-[18px]" aria-label={t('settings.sections.personalization')}>
+                <section id="settings-search-target-personalization-user-prompt" className="pb-[18px]" aria-label={t('settings.sections.personalization')}>
                   <UserPromptSection />
                 </section>
-                <section className="pb-[18px]" aria-label={t('settings.sections.memory')}>
+                <section id="settings-search-target-personalization-memory" className="pb-[18px]" aria-label={t('settings.sections.memory')}>
                   <MemorySection />
                 </section>
-                <section className="pb-[18px]" aria-label={t('settings.sections.subagentModels')}>
+                <section id="settings-search-target-personalization-subagents" className="pb-[18px]" aria-label={t('settings.sections.subagentModels')}>
                   <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>
-                <section className="pb-[18px]" aria-label={t('settings.sections.auxiliaryModels')}>
+                <section id="settings-search-target-personalization-auxiliary-models" className="pb-[18px]" aria-label={t('settings.sections.auxiliaryModels')}>
                   <AuxiliaryModelSection
                     key={`auxiliary-models:${mode}:${dataOwnerId ?? 'none'}`}
                   />
                 </section>
-                <section className="pb-[18px]" aria-label={t('settings.sections.visionBridge')}>
+                <section id="settings-search-target-personalization-vision-bridge" className="pb-[18px]" aria-label={t('settings.sections.visionBridge')}>
                   <VisionBridgeSection key={`vision-bridge:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>
                 {/* 通讯录是本机全局库(数据与开关都不依赖云端账号),local 模式同样可用 */}
@@ -479,25 +503,25 @@ export function SettingsView() {
                 >
                   <ContactsSection key={`contacts:${dataOwnerId ?? 'none'}`} />
                 </section>
-                <section className="pb-[18px]" aria-label={t('settings.sections.compaction')}>
+                <section id="settings-search-target-personalization-compaction" className="pb-[18px]" aria-label={t('settings.sections.compaction')}>
                   <CompactionSection key={`compaction:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>
                 {/* RSB 默认终端 shell —— 改默认只影响新建 tab,已有 tab 不动 */}
-                <section className="pb-[18px]" aria-label={t('settings.sections.terminalShell')}>
+                <section id="settings-search-target-personalization-terminal-shell" className="pb-[18px]" aria-label={t('settings.sections.terminalShell')}>
                   <TerminalShellSection />
                 </section>
                 {/* 消息流链接/HTML 文件左键的默认打开位置(内置侧边栏 / 系统浏览器) */}
-                <section className="pb-[18px]" aria-label={t('settings.sections.linkOpen')}>
+                <section id="settings-search-target-personalization-link-open" className="pb-[18px]" aria-label={t('settings.sections.linkOpen')}>
                   <LinkOpenSection />
                 </section>
                 {/* 流式输出淡入动效开关(默认开;reduced-motion 时无条件关) */}
-                <section className="pb-[18px]" aria-label={t('settings.sections.streamFade')}>
+                <section id="settings-search-target-personalization-stream-fade" className="pb-[18px]" aria-label={t('settings.sections.streamFade')}>
                   <StreamFadeSection />
                 </section>
                 {/* "小技巧" section —— TipsSection 内部把多个功能性 cell
                     (SilentEncryptedRetryCell / ChatEmbeddingCell) 装在一个共享灰底 container,
                     形态跟 MemorySection 对齐 (单标题 + 多 cell + divider)。 */}
-                <section className="pb-[18px]" aria-label={t('settings.sections.compatMode')}>
+                <section id="settings-search-target-personalization-tips" className="pb-[18px]" aria-label={t('settings.sections.compatMode')}>
                   <TipsSection />
                 </section>
               </div>
@@ -672,5 +696,6 @@ export function SettingsView() {
       </div>
       <HelpAssistantPanel open={helpAssistantOpen} onClose={() => setHelpAssistantOpen(false)} />
     </div>
+    </SettingsSearchNavigationContext.Provider>
   );
 }

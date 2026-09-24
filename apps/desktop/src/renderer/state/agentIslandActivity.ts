@@ -26,6 +26,7 @@ function emit(): void {
 function sameActivity(a: AgentIslandSessionActivity, b: AgentIslandSessionActivity): boolean {
   return (
     a.phase === b.phase &&
+    a.workingPhase === b.workingPhase &&
     a.recordStatus === b.recordStatus &&
     a.compactDetail === b.compactDetail &&
     a.currentActionSummary === b.currentActionSummary &&

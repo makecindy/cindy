@@ -18,6 +18,7 @@ import interaction from './interaction.json';
 import message from './message.json';
 import models from './models.json';
 import session from './session.json';
+import sharedTask from './sharedTask.json';
 import settings from './settings.json';
 import shared from './shared.json';
 import startup from './startup.json';
@@ -37,6 +38,7 @@ export default {
   message,
   models,
   session,
+  sharedTask,
   settings,
   shared,
   startup,

@@ -80,6 +80,93 @@ function makeHarness(opts: {
 
 const CALL = { ghostId: 'art', tool: 'gen_image', args: { prompt: '一只猫' } };
 
+describe('caller cancellation', () => {
+  it('Host Stop affects only opted-in calls in that session, preserving legacy calls', async () => {
+    const h = makeHarness();
+    const stopped = h.dispatcher.callGhostTool({ ...CALL, callId: 'stopped', sessionId: 'session-a' });
+    const kept = h.dispatcher.callGhostTool({ ...CALL, callId: 'kept', sessionId: 'session-b' });
+    const legacy = h.dispatcher.callGhostTool({ ...CALL, callId: 'legacy', sessionId: 'session-a' });
+    expect(h.dispatcher.getPendingCallSessionId('art', 'legacy')).toBeNull();
+    h.dispatcher.getPendingCallSignal('art', 'stopped');
+    const keptSignal = h.dispatcher.getPendingCallSignal('art', 'kept')!;
+    h.dispatcher.cancelSessionCalls('session-a');
+    expect(await stopped).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(keptSignal.aborted).toBe(false);
+    expect(h.dispatcher.pendingCount()).toBe(2);
+    h.dispatcher.handleToolResult('art', { callId: 'legacy', ok: true, result: 'legacy-kept' });
+    expect(await legacy).toEqual({ ok: true, result: 'legacy-kept' });
+    h.dispatcher.cancelSessionCalls('session-b');
+    expect(await kept).toMatchObject({ ok: false });
+    expect(h.dispatcher.pendingCount()).toBe(0);
+  });
+
+  it('cancels one call without ending another call to the same plugin', async () => {
+    const h = makeHarness();
+    const a = new AbortController();
+    const first = h.dispatcher.callGhostTool({ ...CALL, callId: 'call-1', signal: a.signal });
+    const second = h.dispatcher.callGhostTool({ ...CALL, callId: 'call-2' });
+    const firstLifetime = h.dispatcher.getPendingCallSignal('art', 'call-1')!;
+    const secondLifetime = h.dispatcher.getPendingCallSignal('art', 'call-2')!;
+    expect(h.dispatcher.getPendingCallSignal('other-plugin', 'call-1')).toBeNull();
+    expect(h.dispatcher.getPendingCallSessionId('other-plugin', 'call-1')).toBeNull();
+    expect(h.dispatcher.getPendingCallSessionId('art', 'missing')).toBeNull();
+    a.abort();
+    expect(await first).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(firstLifetime.aborted).toBe(true);
+    expect(secondLifetime.aborted).toBe(false);
+    expect(h.dispatcher.pendingCount()).toBe(1);
+    expect(h.dispatcher.handleToolResult('art', { callId: 'call-1', ok: true, result: 'late' }).accepted).toBe(false);
+    h.dispatcher.handleToolResult('art', { callId: 'call-2', ok: true, result: 'kept' });
+    expect(await second).toEqual({ ok: true, result: 'kept' });
+    expect(secondLifetime.aborted).toBe(true);
+  });
+
+  it.each(['before', 'during'] as const)('preserves legacy dispatch when MCP aborts %s startup', async when => {
+    const h = makeHarness({ state: 'stopped' as GhostRuntimeState });
+    const abort = new AbortController(), gate = deferred();
+    if (when === 'before') abort.abort();
+    h.deps.spawn.mockImplementation(async () => { await gate.promise; return { ok: true }; });
+    const pending = h.dispatcher.callGhostTool({ ...CALL, callId: 'legacy', signal: abort.signal, sessionId: 'task' });
+    abort.abort();
+    h.dispatcher.cancelSessionCalls('task');
+    gate.resolve();
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    h.dispatcher.handleToolResult('art', { callId: 'legacy', ok: true, result: 'kept' });
+    expect(await pending).toEqual({ ok: true, result: 'kept' });
+  });
+
+  it('rejects late opt-in after Host Stop while the sandbox was starting', async () => {
+    const h = makeHarness();
+    h.deps.runtimeStateOf.mockReturnValue('off');
+    let started!: () => void;
+    h.deps.spawn.mockImplementation(() => new Promise(resolve => {
+      started = () => resolve({ ok: true });
+    }));
+    const pending = h.dispatcher.callGhostTool({ ...CALL, callId: 'stopped-before-binding', sessionId: 'stopped' });
+    h.dispatcher.cancelSessionCalls('stopped');
+    started();
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(h.dispatcher.getPendingCallSignal('art', 'stopped-before-binding')).toBeNull();
+    await expect(pending).resolves.toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+
+    // Stop belongs to that invocation, not future turns reusing the session.
+    h.deps.runtimeStateOf.mockReturnValue('running');
+    const next = h.dispatcher.callGhostTool({ ...CALL, callId: 'new-turn', sessionId: 'stopped' });
+    expect(h.dispatcher.getPendingCallSignal('art', 'new-turn')?.aborted).toBe(false);
+    h.dispatcher.handleToolResult('art', { callId: 'new-turn', ok: true, result: 'done' });
+    await expect(next).resolves.toMatchObject({ ok: true });
+  });
+
+  it('rejects a new cancellation binding if its original MCP call was already aborted', async () => {
+    const h = makeHarness(), abort = new AbortController();
+    const pending = h.dispatcher.callGhostTool({ ...CALL, callId: 'late-bind', signal: abort.signal });
+    abort.abort();
+    expect(h.dispatcher.getPendingCallSignal('art', 'late-bind')).toBeNull();
+    expect(await pending).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(h.dispatcher.pendingCount()).toBe(0);
+  });
+});
+
 describe('资格审(结构化错误分类)', () => {
   it('未装入 → GHOST_NOT_FOUND', async () => {
     const h = makeHarness({ ghost: null });

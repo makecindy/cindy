@@ -1,3 +1,5 @@
+import { FileTypeTile } from '@/components/ui/file-type-tile';
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * GeneratedFilesCard — 每个 user turn 结尾的「本轮产出文件」卡。
  * ---------------------------------------------------------------------------
@@ -24,12 +26,13 @@
  * (Write / file-change add)也不能只凭存在性:Write 可能覆盖既有文件,失败路径也可能
  * 被后续轮次创建;因此它必须有落在窗口内的 birthtime,不可用时宁可不出。
  * command 来源为兼容不提供 birthtime 的 Linux FS 允许 mtime 回退,但同样受完整
- * 时间窗约束。远程会话无法读取创建时间,维持远端 stat 的存在性复核。
+ * 时间窗约束。远程工具产物维持 stat 存在性复核；设备互联命令产物额外检查远端 mtime，
+ * 用远端消息时间窗判定，不使用控制端时钟，也不复用普通链接的存在性缓存；SSH 保持仅工具产物。
  */
 
 import { CHAT_FOCUS_CLASS, CHAT_COLOR_TRANSITION_CLASS } from './chatChrome';
 import { memo, useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, FileImage, FileText, Globe2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Globe2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
@@ -377,7 +380,7 @@ function GeneratedFileChip({
                 </span>
               </span>
               <span className="shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--text-secondary)]">
-                <FileText size={15} aria-hidden="true" />
+                <FileTypeIcon name={file.name} size={15} aria-hidden="true" />
               </span>
             </span>
           </>
@@ -392,7 +395,7 @@ function GeneratedFileChip({
               />
             ) : (
               <span className="flex h-[104px] w-full items-center justify-center border-b border-[var(--border-default)] bg-[var(--surface-hover)] text-[var(--text-tertiary)]">
-                <FileImage size={24} aria-hidden="true" />
+                <FileTypeIcon name={file.name} size={24} aria-hidden="true" />
               </span>
             )}
             <span className="flex min-w-0 items-center gap-2 px-3 py-2.5">
@@ -418,7 +421,7 @@ function GeneratedFileChip({
         ) : botFile ? (
           <span className="flex min-h-[64px] min-w-0 items-center gap-3 px-3 py-2.5">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-hover)] text-[var(--text-secondary)]">
-              <FileText size={16} aria-hidden="true" />
+              <FileTypeTile name={file.name} />
             </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-13 font-medium text-[var(--text-primary)]">
@@ -433,7 +436,7 @@ function GeneratedFileChip({
           </span>
         ) : (
           <>
-            <FileText size={14} className="shrink-0 opacity-70" />
+            <FileTypeIcon name={file.name} size={14} className="shrink-0 opacity-70" />
             <span className="truncate">{file.name}</span>
           </>
         )}
@@ -727,15 +730,26 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     const watched = new Set(
       files
         .filter(
-          (file) => file.source === 'tool' && isGeneratedFileStatable(file, turnEndMs, turnSealed),
+          (file) =>
+            isGeneratedFileStatable(file, turnEndMs, turnSealed) &&
+            (file.source === 'tool' || (remoteOrigin.kind === 'device' && turnStartMs !== null)),
         )
-        .map((file) => remotePathVerdictKey(remoteOrigin, fileCtx.workingDir, file.path)),
+        .map((file) =>
+          remotePathVerdictKey(
+            remoteOrigin,
+            fileCtx.workingDir,
+            file.path,
+            file.source === 'command' && turnStartMs !== null
+              ? { startMs: turnStartMs - TURN_START_SLACK_MS, endMs: turnEndMs }
+              : undefined,
+          ),
+        ),
     );
     if (watched.size === 0) return;
     return subscribeRemotePathVerdictChange((key) => {
       if (watched.has(key)) setRemoteVerdictGen((generation) => generation + 1);
     });
-  }, [remoteOrigin, fileCtx.workingDir, checkKey, files, turnEndMs, turnSealed]);
+  }, [remoteOrigin, fileCtx.workingDir, checkKey, files, turnStartMs, turnEndMs, turnSealed]);
 
   useEffect(() => {
     let cancelled = false;
@@ -772,7 +786,10 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     }
 
     const toStat = remoteOrigin
-      ? plan.toStat.filter((file) => file.source === 'tool')
+      ? plan.toStat.filter(
+          (file) =>
+            file.source === 'tool' || (remoteOrigin.kind === 'device' && turnStartMs !== null),
+        )
       : plan.toStat;
     if (toStat.length === 0) {
       return () => {
@@ -789,6 +806,9 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
               remoteOrigin,
               fileCtx.workingDir,
               file.path,
+              file.source === 'command' && turnStartMs !== null
+                ? { startMs: turnStartMs - TURN_START_SLACK_MS, endMs: turnEndMs }
+                : undefined,
             );
             return isConfirmedRemoteGeneratedFile(verdict);
           }),
@@ -846,7 +866,11 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     const hiddenPrimaryCount = primary.length - visiblePrimary.length;
 
     return (
-      <div data-render-item-key={renderItemKey} className="my-1 flex max-w-[680px] flex-col gap-2" data-testid="bot-generated-artifacts">
+      <div
+        data-render-item-key={renderItemKey}
+        className="my-1 flex max-w-[680px] flex-col gap-2"
+        data-testid="bot-generated-artifacts"
+      >
         {primary.length > 0 ? (
           <>
             <span className="text-12 font-medium text-[var(--text-secondary)]">

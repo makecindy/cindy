@@ -1,10 +1,11 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * QuoteChip — 输入框与已发送用户消息共用的紧凑引用胶囊。
  *
  * 默认只展示单行摘要，完整引用与文件来源放在 hover tooltip 中；输入框与
  * 消息气泡复用同一套紧凑尺寸、颜色与截断规则，均不显示关闭按钮。
  */
-import { FileText, MessageSquareQuote } from 'lucide-react';
+import { MessageSquareQuote } from 'lucide-react';
 import type { ChatQuote } from '@/lib/chatQuotes';
 import { quoteSourceDisplayLabel } from '@/lib/chatQuotes';
 import { InlineReferenceChip } from './InlineReferenceChip';
@@ -32,7 +33,7 @@ export function QuoteChip({
           className="inline-flex min-w-0 items-center gap-1 text-11"
           style={{ color: 'var(--text-tertiary)' }}
         >
-          <FileText className="h-3 w-3 shrink-0" aria-hidden />
+          <FileTypeIcon name={quote.sourcePath} className="h-3 w-3 shrink-0" aria-hidden />
           <span className="truncate">{sourceLabel}</span>
         </span>
       ) : null}

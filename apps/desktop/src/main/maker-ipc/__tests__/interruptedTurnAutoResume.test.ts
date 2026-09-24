@@ -15,6 +15,13 @@ import {
 // 判定单测的核心是**白名单收紧**:自动重试一个确定性失败(认证过期、协议错)会反复
 // 烧额度并反复报错,所以只有识别得了的"上游把 turn 打断了"才允许自愈。
 describe('isInterruptedTurnError', () => {
+  it('never automatically resumes a detected tool loop, even with network-like text', () => {
+    expect(isInterruptedTurnError({
+      reason: 'tool_use_loop_detected', message: 'Request timed out',
+      toolLoop: { kind: 'rotation', count: 128 },
+    })).toBe(false);
+    expect(isAcceptedTurnContinuationOnlyReason('tool_use_loop_detected')).toBe(false);
+  });
   it.each(['bridge_upstream_response_idle_timeout', 'bridge_turn_no_event_timeout'])(
     'does not continue a bridge timeout before the user input has executed: %s', (reason) => {
     expect(isInterruptedTurnError({ reason, message: 'request timed out' })).toBe(false);

@@ -44,7 +44,15 @@ describe('mobile session main layer desktop-first noise budget', () => {
 
     // banner 渲染条件(useShowConnectionBanner):请求级 / transport hold error、可分类连接问题、
     // 目标设备熔断 open(电脑端未响应)立即显示;普通弱网断线经防闪窗口后也显示,不再彻底静默。
-    expect(routeSource).toContain('{showConnectionBanner || showCachedHistoryNotice ? (');
+    // Confirmed shared-task revocation has its own state, not a retry banner.
+    expect(routeSource).toContain('{!isSharedTaskAccessRevoked && (showConnectionBanner || showCachedHistoryNotice) ? (');
+    const revokedStart = source.indexOf('{isSharedTaskAccessRevoked ? (');
+    expect(revokedStart).toBeGreaterThan(-1);
+    const revokedEnd = source.indexOf("sessionOperationLayout.composerSlot === 'missing-session'", revokedStart);
+    expect(revokedEnd).toBeGreaterThan(revokedStart);
+    expect(source.slice(revokedStart, revokedEnd)).toContain('paddingTop: topOverlayHeight + spacing.lg');
+    expect(source.slice(revokedStart, revokedEnd)).toContain('<SharedTaskEndedState');
+    expect(source.slice(revokedStart, revokedEnd)).toContain("router.replace('/shared-session')");
     expect(routeSource).toContain('cachedOnly={showCachedHistoryNotice}');
     expect(source.replace(/\r\n/g, '\n'))
       .toContain('useShowConnectionBanner(\n    status,\n    bannerError,');
@@ -97,8 +105,8 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(source).toContain('if (collaborationLabel) return collaborationLabel;');
     // 写编排(设置/队列/fork-rewind/interaction)仍用写 read-only reason,不被放开。
     expect(source).toContain('readOnlyReason={collaborationReadOnlyReason}');
-    expect(source).toContain('onForkMessage={collaborationReadOnlyReason ? undefined : forkAtMessage}');
-    expect(source).toContain('onPreviewRewind={collaborationReadOnlyReason ? undefined : previewRewindAtMessage}');
+    expect(source).toContain('onForkMessage={collaborationReadOnlyReason || isSharedTaskPeer(deviceId) ? undefined : forkAtMessage}');
+    expect(source).toContain('onPreviewRewind={collaborationReadOnlyReason || isSharedTaskPeer(deviceId) ? undefined : previewRewindAtMessage}');
   });
 
   it('resyncs sessions from connection recovery or target availability, not every presence tick', () => {

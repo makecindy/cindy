@@ -263,6 +263,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     currentSessionId ? originDeviceId(sessionFileOrigin) : undefined,
   );
   const isRemote = Boolean(remoteHostId);
+  const sharedGuest = isSharedTaskPeer(originDeviceId(sessionFileOrigin) ?? '');
   const forkSupported = !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
   const handleFork = useForkAtMessage({
     sessionId: currentSessionId,
@@ -409,10 +410,10 @@ export const AssistantMessage = memo(function AssistantMessage({
           align="left"
           hovered={hovered}
           simplifiedBotConversation={simplifiedBotConversation}
-          onFork={canFork ? handleFork : undefined}
+          onFork={!sharedGuest && canFork ? handleFork : undefined}
           onAddToChat={messageDeepLink ? handleAddToChat : undefined}
           onShareAsImage={handleShareAsImage}
-          onDelete={currentSessionId && messageClientId ? handleDelete : undefined}
+          onDelete={!sharedGuest && currentSessionId && messageClientId ? handleDelete : undefined}
           turnMoney={turnMoney}
           turnCostUsd={turnCostUsd}
           turnCostIsEstimate={turnCostIsEstimate}
@@ -425,3 +426,4 @@ export const AssistantMessage = memo(function AssistantMessage({
     </div>
   );
 });
+import { isSharedTaskPeer } from '@cindy/device-link';

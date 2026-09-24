@@ -161,6 +161,16 @@ describe('packaged iOS Simulator release gate', () => {
     const report = await runIOSSimulatorReleaseGate({ ...OPTIONS, mode: 'native' }, deps.value);
 
     expect(deps.runNativeProbe).toHaveBeenCalledOnce();
+    expect(deps.runNativeProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        start: expect.objectContaining({
+          runtime: expect.objectContaining({
+            xcodeBuild: ENVIRONMENT.xcodeVersion,
+            developerDirectory: ENVIRONMENT.xcodeSelectPath,
+          }),
+        }),
+      }),
+    );
     expect(report.native).toEqual({
       h264Frames: 3,
       keyFrames: 1,

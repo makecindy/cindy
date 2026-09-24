@@ -10,7 +10,7 @@ export function CindyMakeBuildLog({ build }: { build?: CindyMakePersonalBuildSta
   return (
     <details
       key={build?.buildId ?? build?.startedAt}
-      className="group rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] px-3 py-2"
+      className="group rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated-soft)] px-3 py-2"
     >
       <summary className="flex min-h-8 cursor-pointer select-none items-center gap-1.5 text-12 font-medium text-[var(--text-secondary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
         <ChevronRight size={14} aria-hidden className="shrink-0 group-open:rotate-90" />

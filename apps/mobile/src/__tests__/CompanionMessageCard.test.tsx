@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   invoke: vi.fn(),
+  openLink: vi.fn(),
   push: vi.fn(),
   openURL: vi.fn(),
   changed: null as any,
@@ -42,7 +43,8 @@ vi.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ deviceId: 'home' }),
   useRouter: () => ({ push: h.push }),
 }));
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock('@/components/AppText', () => ({
@@ -66,6 +68,7 @@ vi.mock('@/auth/AuthContext', () => ({
 vi.mock('@/device-link/DeviceLinkContext', () => ({
   useDeviceLink: () => ({
     invoke: h.invoke,
+    openLink: h.openLink,
     status: h.status,
     connectionEpoch: h.epoch,
     getPresenceAvailability: () => true,
@@ -81,6 +84,7 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({
   },
 }));
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
+import { _clearRemotePathVerdictCache } from '@/session/remotePathVerdict';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 const message = {
   source: { sessionId: 'parent' },
@@ -109,6 +113,7 @@ beforeEach(() => {
   h.epoch = 1;
   h.status = 'online';
   h.invoke.mockReset();
+  h.openLink.mockReset().mockResolvedValue({});
   h.push.mockReset();
   h.openURL.mockReset().mockResolvedValue(undefined);
   h.invoke.mockResolvedValue({
@@ -125,6 +130,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await act(async () => root.unmount());
+  _clearRemotePathVerdictCache();
   node.remove();
   vi.useRealTimers();
 });
@@ -513,4 +519,98 @@ it('shows only delivery status even when a legacy task trace contains full instr
   await act(async () => root.render(createElement(CompanionMessageCard, { message: trace })));
   expect(node.textContent).toBe('devices.companions.messageSent');
   expect(h.invoke).not.toHaveBeenCalled();
+});
+
+it('opens a stable completed result inline and routes its artifact to the child task', async () => {
+  h.invoke.mockImplementation(async (_device, channel) => channel === 'fs:stat-path'
+    ? { kind: 'file', resolvedPath: '/reports/result.pdf' } : { ok: true });
+  const resultMessage = {
+    ...message,
+    key: 'receipt-2',
+    companion: { kind: 'task', meta: { ...message.companion!.meta,
+      role: 'delegation-result', result: { runSequence: 2, status: 'completed', text: 'Second execution result', artifacts: [{ absolutePath: '/reports/result.pdf' }] },
+    } },
+  } as NormalizedRemoteMessage;
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: resultMessage })));
+  expect(node.textContent).not.toContain('Second execution result');
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).toContain('Second execution result');
+  const file = [...node.querySelectorAll('button')].find(button => button.textContent === 'result.pdf')!;
+  await act(async () => file.click());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/files/preview/[sessionId]', params: { sessionId: 'child', deviceId: 'home', absPath: '/reports/result.pdf' } });
+  expect(h.invoke).not.toHaveBeenCalledWith('home', 'maker:bot-delegations-list', expect.anything());
+});
+
+it('keeps image-only and linked results available from the mobile receipt', async () => {
+  h.invoke.mockImplementation(async (_device, channel) => channel === 'fs:stat-path'
+    ? { kind: 'file', resolvedPath: '/child-task/chart.png' } : { ok: true });
+  const { CompanionTaskResultCard } = await import('@/session/CompanionTaskResultCard');
+  const meta = { ...message.companion!.meta, role: 'delegation-result', childSessionId: 'child',
+    result: { runSequence: 1, status: 'completed', workingDir: '/child-task',
+      text: '![chart](./chart.png) [Report](https://example.com/report.pdf)', artifacts: [] } } as any;
+  await act(async () => root.render(createElement(CompanionTaskResultCard, { meta, deviceId: 'home' })));
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).toContain('![chart](./chart.png)');
+  expect(node.textContent).not.toContain('devices.companions.noWrittenResult');
+  const chart = [...node.querySelectorAll('button')].find(button => button.textContent === 'chart')!;
+  await act(async () => chart.click());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/files/preview/[sessionId]', params: {
+    sessionId: 'child', deviceId: 'home', absPath: '/child-task/./chart.png',
+  } });
+  const report = [...node.querySelectorAll('button')].find(button => button.textContent === 'Report')!;
+  await act(async () => report.click());
+  expect(h.openURL).toHaveBeenCalledWith('https://example.com/report.pdf');
+});
+
+it('does not offer a local result link until the child file is verified', async () => {
+  let completeStat!: (result: { kind: 'file'; resolvedPath: string }) => void;
+  h.invoke.mockImplementation(async (_device, channel) => channel === 'fs:stat-path'
+    ? new Promise((resolve) => { completeStat = resolve; }) : { ok: true });
+  const { CompanionTaskResultCard } = await import('@/session/CompanionTaskResultCard');
+  const meta = { ...message.companion!.meta, role: 'delegation-result', childSessionId: 'child',
+    result: { runSequence: 1, status: 'completed', workingDir: '/child-task',
+      text: '[Chart](./chart.png)', artifacts: [] } } as any;
+  await act(async () => root.render(createElement(CompanionTaskResultCard, { meta, deviceId: 'home' })));
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).toContain('Chart');
+  expect([...node.querySelectorAll('button')].some(button => button.textContent === 'Chart')).toBe(false);
+  await act(async () => completeStat({ kind: 'file', resolvedPath: '/child-task/chart.png' }));
+  const chart = [...node.querySelectorAll('button')].find(button => button.textContent === 'Chart')!;
+  await act(async () => chart.click());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/files/preview/[sessionId]', params: {
+    sessionId: 'child', deviceId: 'home', absPath: '/child-task/./chart.png',
+  } });
+});
+
+it('keeps missing and offline result files readable without dead preview actions', async () => {
+  h.invoke.mockImplementation(async (_device, channel, args) => {
+    if (channel !== 'fs:stat-path') return { ok: true };
+    if (args[0].path.endsWith('offline.png')) throw new Error('offline');
+    return { kind: 'missing', resolvedPath: args[0].path };
+  });
+  const { CompanionTaskResultCard } = await import('@/session/CompanionTaskResultCard');
+  const meta = { ...message.companion!.meta, role: 'delegation-result', childSessionId: 'child',
+    result: { runSequence: 1, status: 'completed', workingDir: '/child-task',
+      text: '[Missing](./missing.png) [Offline](./offline.png)',
+      artifacts: [{ absolutePath: '/child-task/gone.pdf' }] } } as any;
+  await act(async () => root.render(createElement(CompanionTaskResultCard, { meta, deviceId: 'home' })));
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).toContain('Missing');
+  expect(node.textContent).toContain('Offline');
+  expect(node.textContent).toContain('gone.pdf');
+  expect([...node.querySelectorAll('button')].some(button => ['Missing', 'Offline', 'gone.pdf'].includes(button.textContent ?? ''))).toBe(false);
+  expect(h.push).not.toHaveBeenCalled();
+});
+
+it('reveals frozen failure details only after opening the result and its details', async () => {
+  const { CompanionTaskResultCard } = await import('@/session/CompanionTaskResultCard');
+  const meta = { result: { status: 'timed-out', text: '', error: 'TIMEOUT: upstream did not finish', artifacts: [] }, objective: 'Report' } as any;
+  await act(async () => root.render(createElement(CompanionTaskResultCard, { meta, deviceId: 'home' })));
+  expect(node.textContent).toContain('devices.companions.status.timed-out');
+  expect(node.textContent).not.toContain('TIMEOUT:');
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).not.toContain('TIMEOUT:');
+  const details = Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'interaction.companion.details');
+  await act(async () => details!.click());
+  expect(node.textContent).toContain('TIMEOUT: upstream did not finish');
 });

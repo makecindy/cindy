@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * MyDevicesPanel —— 「远程控制」页统一的「我的设备」面板。
  * ---------------------------------------------------------------------------
@@ -196,16 +197,19 @@ export function MyDevicesPanel({
     <div className="flex flex-col gap-4">
       {variant !== 'self' && (
         <div className="flex items-center justify-end">
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
+            compact
+            loading={s.refreshing}
             type="button"
             onClick={() => void s.refresh(true)}
             disabled={s.refreshing}
-            className="flex h-7 items-center gap-1.5 rounded-full border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] disabled:opacity-50"
             aria-label={t('settings.devices.refresh')}
           >
-            <Spinner icon={RefreshCw} size={12} spinning={s.refreshing} />
+            <RefreshCw size={12} />
             {t('settings.devices.refresh')}
-          </button>
+          </Button>
         </div>
       )}
 

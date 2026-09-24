@@ -1,5 +1,3 @@
-import { getValidClaudeAccountOAuth } from '../../maker-host/subscription-account-auth.js';
-vi.mock('../../maker-host/subscription-account-auth.js', () => ({ getValidClaudeAccountOAuth: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({
@@ -51,10 +49,6 @@ vi.mock('../../maker-host/anthropic-responses-bridge-host.js', () => ({
   getChatgptBridgeAuth: vi.fn(),
 }));
 
-vi.mock('../../maker-host/claude-oauth-refresh.js', () => ({
-  getValidClaudeAiOAuth: vi.fn(),
-}));
-
 vi.mock('../../maker-host/grok-oauth-login.js', () => ({
   getGrokAccessToken: vi.fn(),
 }));
@@ -104,7 +98,6 @@ import { fetch as undiciFetch } from 'undici';
 import { getAppCapabilities } from '../../appCapabilities.js';
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth } from '../../maker-host/anthropic-responses-bridge-host.js';
-import { getValidClaudeAiOAuth } from '../../maker-host/claude-oauth-refresh.js';
 import { getGrokAccessToken } from '../../maker-host/grok-oauth-login.js';
 import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
 import {
@@ -129,7 +122,6 @@ const getProfiles = vi.mocked(getUtilityModelChainProfiles);
 const appCapabilities = vi.mocked(getAppCapabilities);
 const readKey = vi.mocked(readClaudeApiKey);
 const readCodexCreds = vi.mocked(getChatgptBridgeAuth);
-const readClaudeOAuth = vi.mocked(getValidClaudeAiOAuth);
 const readGrokToken = vi.mocked(getGrokAccessToken);
 const readGenericOAuthToken = vi.mocked(readCachedGenericOAuthAccessToken);
 const fetchMock = vi.mocked(undiciFetch);
@@ -149,7 +141,6 @@ function makerMock(authenticated: boolean): Maker {
 
 describe('utility one-shot candidates', () => {
   beforeEach(() => {
-    vi.mocked(getValidClaudeAccountOAuth).mockReset();
     vi.clearAllMocks();
     fetchMock.mockReset();
     chainState.source = 'auto';
@@ -159,7 +150,6 @@ describe('utility one-shot candidates', () => {
     appCapabilities.mockReturnValue({ canUseCindyGateway: true } as never);
     readKey.mockReturnValue(null);
     readCodexCreds.mockRejectedValue(new Error('not authenticated'));
-    readClaudeOAuth.mockResolvedValue(null);
     readGrokToken.mockRejectedValue(new Error('not authenticated'));
     readGenericOAuthToken.mockReturnValue(null);
     providerRouteMutationInProgress.mockReturnValue(false);
@@ -1581,7 +1571,7 @@ describe('utility one-shot candidates', () => {
     expect(body.max_tokens).toBe(64_000);
   });
 
-  it('缺省不传 maxTokens 时,Anthropic wire 用模型目录 maxOutput 兜底(协议必填,非宿主上限)', async () => {
+  it('内置 Claude 订阅从不作为辅助模型的直连路由(订阅只归内置 Claude Code CLI)', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
         id: 'anthropic',
@@ -1597,11 +1587,6 @@ describe('utility one-shot candidates', () => {
         },
       }],
     } as never);
-    readClaudeOAuth.mockResolvedValue({ accessToken: 'anthropic-token' });
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'script' }] }),
-    } as never);
 
     const result = await requestUtilityText(makerMock(false), 'hello', {
       providerId: 'anthropic',
@@ -1609,80 +1594,18 @@ describe('utility one-shot candidates', () => {
       model: 'claude-opus-4-5',
     });
 
-    expect(result).toMatchObject({ ok: true, providerId: 'anthropic' });
-    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-    expect(body.max_tokens).toBe(64_000);
-  });
-
-  it('内置 Anthropic 直连:1M 目录模型的 body.model 用裸目录 id,不带 SDK 专用 [1m] 后缀(#2429)', async () => {
-    activeCatalog.mockReturnValue({
-      providers: [{
-        id: 'anthropic',
-        name: 'Anthropic',
-        source: 'builtin',
-        agents: ['claude-code'],
-        auth: { method: 'oauth' },
-        routing: {
-          'claude-code': { upstream: 'https://anthropic.example/api/v1', authStrategy: 'oauth-passthrough' },
-        },
-        models: {
-          'claude-code': [{ id: 'claude-fable-5', name: 'Fable', contextWindow: 1_000_000, maxOutput: 64_000 }],
-        },
-      }],
-    } as never);
-    readClaudeOAuth.mockResolvedValue({ accessToken: 'anthropic-token' });
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'verdict' }] }),
-    } as never);
-
-    const result = await requestUtilityText(makerMock(false), 'review this', {
-      providerId: 'anthropic',
-      agentKind: 'claude-code',
-      model: 'claude-fable-5',
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'no_candidate',
+      attempts: [expect.objectContaining({ status: 'skipped', reason: 'not_authenticated' })],
     });
-
-    expect(result).toMatchObject({ ok: true, providerId: 'anthropic' });
-    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-    expect(body.model).toBe('claude-fable-5');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('toAnthropicApiModelId:剥掉尾部 [1m],其余 id 原样返回(防御显示 id 泄入)', () => {
     expect(toAnthropicApiModelId('claude-opus-5[1m]')).toBe('claude-opus-5');
     expect(toAnthropicApiModelId('claude-fable-5')).toBe('claude-fable-5');
     expect(toAnthropicApiModelId('claude-haiku-4-5-20251001')).toBe('claude-haiku-4-5-20251001');
-  });
-
-  it('内置 Anthropic 直连:非 1M 模型的 body.model 保持目录 id 不变(不回归)', async () => {
-    activeCatalog.mockReturnValue({
-      providers: [{
-        id: 'anthropic',
-        name: 'Anthropic',
-        source: 'builtin',
-        agents: ['claude-code'],
-        auth: { method: 'oauth' },
-        routing: {
-          'claude-code': { upstream: 'https://anthropic.example/api/v1', authStrategy: 'oauth-passthrough' },
-        },
-        models: {
-          'claude-code': [{ id: 'claude-haiku-4-5-20251001', name: 'Haiku', contextWindow: 200_000, maxOutput: 64_000 }],
-        },
-      }],
-    } as never);
-    readClaudeOAuth.mockResolvedValue({ accessToken: 'anthropic-token' });
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'verdict' }] }),
-    } as never);
-
-    await requestUtilityText(makerMock(false), 'review this', {
-      providerId: 'anthropic',
-      agentKind: 'claude-code',
-      model: 'claude-haiku-4-5-20251001',
-    });
-
-    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-    expect(body.model).toBe('claude-haiku-4-5-20251001');
   });
 
   it('缺省不传 maxTokens 时,xd wire 不发送输出上限(模型自然输出)', async () => {
@@ -2102,7 +2025,7 @@ describe('utility one-shot candidates', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('uses Anthropic OAuth and the selected Anthropic routing for an explicit builtin provider', async () => {
+  it('an explicit builtin Claude subscription selection is skipped without any HTTP request', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
         id: 'anthropic',
@@ -2118,11 +2041,6 @@ describe('utility one-shot candidates', () => {
         },
       }],
     } as never);
-    readClaudeOAuth.mockResolvedValue({ accessToken: 'anthropic-token' });
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'script' }] }),
-    } as never);
 
     const result = await requestUtilityText(makerMock(false), 'generate', {
       providerId: 'anthropic',
@@ -2130,13 +2048,8 @@ describe('utility one-shot candidates', () => {
       model: 'claude-sonnet-4-6',
     });
 
-    expect(result).toMatchObject({ ok: true, providerId: 'anthropic', model: 'claude-sonnet-4-6' });
-    expect(fetchMock).toHaveBeenCalledWith('https://anthropic.example/api/v1/messages', expect.anything());
-    const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string>; body: string };
-    expect(init.headers.Authorization).toBe('Bearer anthropic-token');
-    // [1m] 是 Claude Code SDK 的 beta 通道后缀,直连 /v1/messages 会 404(#2429):
-    // 直连请求体必须用目录裸 id。
-    expect(JSON.parse(init.body).model).toBe('claude-sonnet-4-6');
+    expect(result).toMatchObject({ ok: false, reason: 'no_candidate' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('uses OpenAI Codex OAuth and strips the bridge model prefix on the selected route', async () => {
@@ -2382,75 +2295,46 @@ describe('utility one-shot candidates', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('does not start Anthropic HTTP after credential refresh outlives the candidate', async () => {
-    activeCatalog.mockReturnValue({
-      providers: [{
-        id: 'anthropic',
-        name: 'Anthropic',
-        source: 'builtin',
-        agents: ['claude-code'],
-        auth: { method: 'oauth' },
-        routing: {
-          'claude-code': {
-            upstream: 'https://anthropic.example',
-            authStrategy: 'oauth-passthrough',
-          },
-        },
-        models: {
-          'claude-code': [{ id: 'claude-haiku-4-5', name: 'Haiku', contextWindow: 200_000 }],
-        },
-      }],
-    } as never);
-    let resolveOAuth: ((auth: { accessToken: string }) => void) | undefined;
-    readClaudeOAuth.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveOAuth = resolve;
-    }));
-    const controller = new AbortController();
+  it('auto-review candidates never include the Claude subscription', () => {
+    expect(DEDICATED_AUTO_REVIEW_CANDIDATES.map((candidate) => candidate.providerId)).not.toContain('anthropic');
+  });
 
-    const pending = requestDedicatedAutoReviewCandidateText(
-      'classify',
-      DEDICATED_AUTO_REVIEW_CANDIDATES[3],
-      { timeoutMs: 12_000, signal: controller.signal },
-    );
-    await Promise.resolve();
-    controller.abort();
-    resolveOAuth?.({ accessToken: 'late-token' });
-
-    await expect(pending).resolves.toMatchObject({ ok: false, reason: 'timeout' });
+  it('never dispatches through a retired independent Claude account', async () => {
+    activeCatalog.mockReturnValue({ providers: [{ id: 'claude-work', name: 'Work', source: 'user',
+      agents: ['claude-code'], auth: { method: 'oauth', native: 'claude' },
+      routing: { 'claude-code': { upstream: 'https://account.example/v1', authStrategy: 'provider-oauth-header' } },
+      models: { 'claude-code': [{ id: 'claude-haiku-4-5', name: 'Haiku', contextWindow: 200_000 }] },
+    }] } as never);
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'claude-work', agentKind: 'claude-code', model: 'claude-haiku-4-5',
+    });
+    expect(result.ok).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each(['claude', 'xai'] as const)('dispatches only the selected independent %s account and rejects changed credentials', async (native) => {
+  it.each(['xai'] as const)('dispatches only the selected independent %s account and rejects changed credentials', async (native) => {
     const providerId = `${native}-work`;
-    const agentKind = native === 'claude' ? 'claude-code' : 'codex';
-    const model = native === 'claude' ? 'claude-haiku-4-5' : 'xai/grok-4.3';
+    const agentKind = 'codex';
+    const model = 'xai/grok-4.3';
     activeCatalog.mockReturnValue({ providers: [{ id: providerId, name: 'Work', source: 'user',
       agents: [agentKind], auth: { method: 'oauth', native },
       routing: { [agentKind]: { upstream: 'https://account.example/v1', authStrategy: 'provider-oauth-header' } },
       models: { [agentKind]: [{ id: model, name: model, contextWindow: 200_000 }] },
     }] } as never);
-    vi.mocked(getValidClaudeAccountOAuth).mockResolvedValue({ accessToken: 'selected-token' } as never);
     readGrokToken.mockImplementation(async (id) => {
       if (id !== providerId) throw new Error('wrong account');
       return 'selected-token';
     });
-    readClaudeOAuth.mockResolvedValue({ accessToken: 'other-token' } as never);
-    fetchMock.mockResolvedValue({ ok: true, text: async () => native === 'claude'
-      ? JSON.stringify({ content: [{ type: 'text', text: 'answer' }] })
-      : JSON.stringify({ output_text: 'answer' }) } as never);
+    fetchMock.mockResolvedValue({ ok: true, text: async () => JSON.stringify({ output_text: 'answer' }) } as never);
     const result = await requestUtilityText(makerMock(false), 'generate', {
       providerId, agentKind, model, beforeDispatch: async () => true,
     });
     expect(result).toMatchObject({ ok: true, providerId, model });
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: 'Bearer selected-token' });
-    if (native === 'claude') {
-      expect(getValidClaudeAccountOAuth).toHaveBeenCalledWith(providerId);
-      expect(readClaudeOAuth).not.toHaveBeenCalled();
-    } else expect(readGrokToken).toHaveBeenCalledWith(providerId);
+    expect(readGrokToken).toHaveBeenCalledWith(providerId);
     fetchMock.mockClear();
     const changed = await requestUtilityText(makerMock(false), 'generate', {
       providerId, agentKind, model, beforeDispatch: async () => {
-        vi.mocked(getValidClaudeAccountOAuth).mockResolvedValue(null);
         readGrokToken.mockRejectedValue(new Error('logged out'));
         return true;
       },
@@ -2547,16 +2431,19 @@ describe('utility one-shot candidates', () => {
       return { client, advisor: new DictationDictionaryAdvisor({ client, model: 'auxiliary' }) };
     }
 
+    // Anthropic Messages 形态的自定义中继(Claude 订阅不再是辅助模型来源)。
     function selectClaude() {
       chainState.source = 'custom';
-      chainState.refs = ['cat:anthropic:claude-code:claude-haiku-4-5'];
+      chainState.refs = ['cat:claude-relay:claude-code:claude-haiku-4-5'];
       activeCatalog.mockReturnValue({ providers: [{
-        id: 'anthropic', name: 'Anthropic', source: 'builtin', agents: ['claude-code'],
-        auth: { method: 'oauth' },
-        routing: { 'claude-code': { upstream: 'https://anthropic.example/v1', authStrategy: 'oauth-passthrough' } },
+        id: 'claude-relay', name: 'Claude Relay', source: 'user', agents: ['claude-code'],
+        auth: { method: 'apiKey' },
+        routing: { 'claude-code': {
+          upstream: 'https://anthropic-relay.example/v1', wireProtocol: 'anthropic-messages', authStrategy: 'api-key-header',
+        } },
         models: { 'claude-code': [{ id: 'claude-haiku-4-5', name: 'Haiku', contextWindow: 200_000 }] },
       }] } as never);
-      readClaudeOAuth.mockResolvedValue({ accessToken: 'fake-anthropic-token' });
+      readCustomKey.mockReturnValue('fake-relay-key');
     }
 
     const evidence = { beforeText: '继续试一下 web coding。', afterText: '继续试一下 Vibe Coding。' };
@@ -2570,7 +2457,7 @@ describe('utility one-shot candidates', () => {
       const sut = advisor();
 
       expect((await sut.advisor.advise(evidence)).actions).toEqual([action]);
-      expect(sut.client.servedRoute).toEqual({ providerId: 'anthropic', model: 'claude-haiku-4-5' });
+      expect(sut.client.servedRoute).toEqual({ providerId: 'claude-relay', model: 'claude-haiku-4-5' });
       expect(readCodexCreds).not.toHaveBeenCalled();
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).max_tokens).toBe(4_096);
@@ -2666,7 +2553,7 @@ describe('utility one-shot candidates', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it.each(invalidOutputs)('rejects explicit builtin output %s without using defaults', async (invalidText) => {
+    it.each(invalidOutputs)('rejects explicit provider output %s without using defaults', async (invalidText) => {
       selectClaude();
       fetchMock.mockResolvedValueOnce({
         ok: true, text: async () => JSON.stringify({ content: [{ type: 'text', text: invalidText }] }),
@@ -2674,7 +2561,7 @@ describe('utility one-shot candidates', () => {
       const maker = makerMock(true);
       const client = new DictionaryLearningTextModelClient(
         (prompt, opts) => requestUtilityText(maker, prompt, {
-          ...opts, providerId: 'anthropic', agentKind: 'claude-code', model: 'claude-haiku-4-5',
+          ...opts, providerId: 'claude-relay', agentKind: 'claude-code', model: 'claude-haiku-4-5',
         }),
         () => {},
       );

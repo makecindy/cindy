@@ -5,9 +5,8 @@
  *   - macOS / Linux / Windows：统一走 Electron 原生 `Notification`。
  *   - 点通知后把窗口拉到前台，并通过 `notification:focus-session` 把 sessionId
  *     广播给 renderer，由 renderer 路由跳转。
- *   - 新增飞书通道:payload.channels.feishu === true 时,额外通过 feishuIm
- *     给当前 bot owner 私聊发一条 markdown 文本(复用 scheduler-host/notifier
- *     的同源 API,不新增通道机制)。
+ *   - 飞书通道：payload.channels.feishu === true 时通过 feishuIm 给当前 owner
+ *     私聊发通知。伙伴回复用纯文本，普通任务沿用 markdown；复用现有 IM API。
  *
  * Windows AUMID（AppUserModelID）契约：
  *   - 运行时由 main/bootstrap-electron.ts 通过 `app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID)`
@@ -29,12 +28,17 @@ import * as path from 'node:path';
 
 import { markSessionNeedsAttention } from './appBadgeService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-link';
+import { notificationPreview } from './notificationPreview';
+import { readSessionNotificationPreview, type SessionNotificationPreview } from './localDb/sessionNotificationPreview';
+import { drainSessionActiveTurnWrites, getSessionNotificationTurnSignal } from './localDb/sessionActiveTurn';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './device-link/broadcast-tap';
 import { latestMessageText } from './localDb/latestMessageText';
 import { drainPersistQueue } from './messagePersistBroadcaster';
 import { createLogger } from './logger';
 import {
   getSessionExternalNotificationText,
   getSessionNotificationBody,
+  getTeammateNotificationFallback,
   getSessionNotificationUntitled,
   type SessionEventKind,
 } from './sessionNotificationCopy';
@@ -93,6 +97,41 @@ interface ShowSessionEventPayload {
 // 时就回收掉，导致 click handler 丢失甚至触发异常事件。用 Set 持引用，等
 // close/click 后再 release。
 const liveNotifications = new Set<Notification>();
+type NotifiedReply = { eventId: string } | { fallbackSentAt: number };
+const notifiedReplies = new Map<string, NotifiedReply>();
+const pendingFeishuReplies = new Set<string>();
+const pendingFeishuFallbacks = new Map<string, number>();
+type ReplyNotificationChannel = 'desktop' | 'mobile' | 'feishu';
+
+function replyNotificationKey(scope: string | number, sessionId: string, channel: ReplyNotificationChannel): string {
+  return `${scope}:${sessionId}:${channel}`;
+}
+
+function wasReplyNotified(key: string, eventId: string | undefined): boolean {
+  const notified = notifiedReplies.get(key);
+  if (!notified) return false;
+  if (!eventId) return !('eventId' in notified);
+  if ('eventId' in notified) return notified.eventId === eventId;
+  // An accepted fallback had no DB identity. Once persistence recovers,
+  // reconcile it with the turn that was already running when sent.
+  // A turn started afterwards is new, even if it finishes immediately.
+  const startedAt = /^turn:(\d+):\d+$/.exec(eventId)?.[1];
+  if (startedAt && Number(startedAt) < notified.fallbackSentAt) {
+    notifiedReplies.set(key, { eventId });
+    return true;
+  }
+  return false;
+}
+
+function isFeishuReplyPending(key: string, eventId: string | undefined): boolean {
+  if (pendingFeishuReplies.has(`${key}:${eventId ?? 'pending'}`)) return true;
+  const fallbackSentAt = pendingFeishuFallbacks.get(key);
+  if (fallbackSentAt === undefined || !eventId) return false;
+  const startedAt = /^turn:(\d+):\d+$/.exec(eventId)?.[1];
+  return startedAt !== undefined && Number(startedAt) < fallbackSentAt;
+}
+// A slow transcript must not indefinitely hide a completion or an action request.
+const NOTIFICATION_PREVIEW_WAIT_MS = 1_000;
 
 /**
  * 把窗口拉到前台并广播 sessionId 给 renderer 路由跳转。
@@ -124,12 +163,12 @@ function focusWindow(getWindow: () => BrowserWindow | null, sessionId: string): 
  */
 export function showDesktopSessionEvent(
   getWindow: () => BrowserWindow | null,
-  payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'>,
-): void {
+  payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'> & { body?: string; teammate?: boolean },
+): boolean {
   const { sessionId, title, kind } = payload;
   if (sessionId) markSessionNeedsAttention(sessionId);
   const safeTitle = title?.trim() || sessionId.slice(0, 8) || getSessionNotificationUntitled();
-  showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId));
+  return showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId), payload.body, payload.teammate);
 }
 
 export interface NotificationServiceDeps {
@@ -161,53 +200,136 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // 去重与「被远程观看则不推」收口。
       assertValidSessionEventPayload(payload);
       const { sessionId, title, kind, channels } = payload;
-      // 兜底：title 为空（极早期 session 还没生成标题）也别炸，用 sessionId 前 8 位顶上。
-      const safeTitle = title?.trim() || sessionId.slice(0, 8);
-
-      // channels 缺省/未传 → 默认仅桌面 (防御漏传,见 ShowSessionEventPayload 注释)。
+      const generation = getMobileNotifyGeneration();
+      // Capture at IPC arrival, not after the asynchronous preview: a newer
+      // turn can begin while the current completion waits on persistence.
+      const signal = kind === 'done' ? getSessionNotificationTurnSignal(sessionId) : undefined;
+      // A late idle for the previous turn must not claim the identity of a
+      // newer turn that is still running, even if preview persistence stalls.
+      if (signal && !signal.ended) return;
+      const ownerScope = captureDataOwnerBroadcastScope();
+      const safeTitle = title.trim() || sessionId.slice(0, 8);
       const wantDesktop = channels?.desktop ?? true;
       const wantFeishu = channels?.feishu === true;
+      markSessionNeedsAttention(sessionId);
 
-      if (wantDesktop) {
+      // Action/error desktop notices have no transcript preview and must be immediate.
+      if (wantDesktop && kind !== 'done') {
         showDesktopSessionEvent(getWindow, { sessionId, title: safeTitle, kind });
-      } else {
-        // Dock/taskbar 角标独立于外发通道；即便只开飞书或两个通知开关都关闭，
-        // session 进入终态后仍要在 Cindy 内标记为需要关注。
-        markSessionNeedsAttention(sessionId);
       }
+      // Content is read from main's transcript. Bound only enrichment, not delivery;
+      // a timeout is not a dedupe window and never causes a second late toast.
+      void (async () => {
+        let preview: SessionNotificationPreview | undefined;
+        let postDrainPreviewReady = false;
+        let detail: string | undefined;
+        if (kind === 'done' || (kind === 'needs-reply' && channels?.mobile === true)) {
+          let finished = false;
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              (async () => {
+                if (kind === 'done') {
+                  // Read the teammate identity first so a blocked write still
+                  // has the correct fallback. This snapshot may predate the
+                  // terminal marker, so its turn ID is not authoritative.
+                  const identity = await readSessionNotificationPreview(sessionId, false);
+                  // The turn marker may still be queued separately from the
+                  // message broadcaster. Keep only the teammate name here;
+                  // an old event ID must never identify this completion.
+                  preview = { teammateName: identity.teammateName };
+                }
+                if (finished || !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+                await drainPersistQueue();
+                if (kind === 'done') await drainSessionActiveTurnWrites(sessionId);
+                if (finished || !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+                if (kind === 'done') {
+                  preview = await readSessionNotificationPreview(sessionId);
+                  postDrainPreviewReady = true;
+                  detail = preview.reply?.text;
+                } else {
+                  detail = await latestMessageText(sessionId, 'assistant');
+                }
+              })(),
+              new Promise<void>((resolve) => { timer = setTimeout(resolve, NOTIFICATION_PREVIEW_WAIT_MS); }),
+            ]);
+          } catch (err) {
+            log.warn('[notification] preview unavailable; using fallback', err);
+          } finally {
+            finished = true;
+            clearTimeout(timer);
+          }
+        }
+        if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+        // Preview enrichment can outlive an entire later turn. Never send that
+        // later reply under the terminal signal captured for this IPC event.
+        const currentSignal = kind === 'done' ? getSessionNotificationTurnSignal(sessionId) : undefined;
+        if (kind === 'done') {
+          if (currentSignal?.id !== signal?.id || (currentSignal && !currentSignal.ended)) return;
+        }
+        if (postDrainPreviewReady && preview?.suppress) {
+          // The terminal marker write may have failed after the in-memory turn
+          // already ended. Keep its generic notice, but never use old DB text.
+          if (kind !== 'done' || !signal?.ended || currentSignal?.id !== signal.id) return;
+          detail = undefined;
+        }
+        const teammate = !!preview?.teammateName;
+        const notificationTitle = preview?.teammateName ?? safeTitle;
+        const eventId = signal?.id ?? preview?.eventId;
+        const mobileEventId = preview?.eventId ?? signal?.fallbackEventId;
+        // A device-link handoff advances only the mobile send generation. It
+        // must not make an already accepted desktop/Feishu reply eligible again.
+        const ownerKey = ownerScope.ownerScopeKey ?? JSON.stringify(ownerScope.ownerStamp ?? null);
+        const desktopKey = replyNotificationKey(ownerKey, sessionId, 'desktop');
+        const mobileKey = replyNotificationKey(generation, sessionId, 'mobile');
+        const feishuKey = replyNotificationKey(ownerKey, sessionId, 'feishu');
+        const fallbackBody = teammate ? getTeammateNotificationFallback() : undefined;
+        if (wantDesktop && kind === 'done' && !wasReplyNotified(desktopKey, eventId)) {
+          try {
+            const accepted = showDesktopSessionEvent(getWindow, {
+              sessionId, title: notificationTitle, kind, teammate,
+              body: teammate ? notificationPreview(detail ?? '') || fallbackBody : undefined,
+            });
+            if (accepted) {
+              notifiedReplies.set(desktopKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
+            }
+          } catch (err) {
+            log.warn('[notification] desktop reply notification failed (non-fatal)', err);
+          }
+        }
+        if (channels?.mobile === true && (kind !== 'done' || !wasReplyNotified(mobileKey, eventId))) {
+          try {
+            const accepted = sendMobileSessionNotify({
+              sessionId, title: notificationTitle, kind, generation, ...(detail ? { detail } : {}),
+              ...(fallbackBody ? { fallbackBody } : {}), ...(mobileEventId ? { eventId: mobileEventId } : {}),
+            });
+            if (kind === 'done' && accepted) {
+              notifiedReplies.set(mobileKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
+            }
+          } catch (err) {
+            log.warn('[notification] mobile reply notification failed (non-fatal)', err);
+          }
+        }
+        if (wantFeishu && kind === 'done' && !wasReplyNotified(feishuKey, eventId)) {
+          const pendingKey = `${feishuKey}:${eventId ?? 'pending'}`;
+          if (!isFeishuReplyPending(feishuKey, eventId)) {
+            pendingFeishuReplies.add(pendingKey);
+            if (!eventId) pendingFeishuFallbacks.set(feishuKey, Date.now());
+            try {
+              const body = teammate ? notificationPreview(detail ?? '') || fallbackBody : undefined;
+              const accepted = await sendFeishuMessage(feishuIm, notificationTitle, kind, body);
+              if (accepted) {
+                notifiedReplies.set(feishuKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
+              }
+            } finally {
+              pendingFeishuReplies.delete(pendingKey);
+              if (!eventId) pendingFeishuFallbacks.delete(feishuKey);
+            }
+          }
+        }
+      })().catch((err) => log.warn('[notification] reply notification failed (non-fatal)', err));
 
-      if (channels?.mobile === true) {
-        // fire-and-forget;离线 / 老 relay / 正被远程观看 / 短窗重复时静默跳过。
-        // 整段放进独立 async 块不 await:persist 队列是全会话共享且无超时的,
-        // 在这里同步等它会让别的会话的慢写入拖延本次飞书分支;半死 socket 的
-        // ws.send 同步 throw 也一并落到 catch,不 reject 整个 invoke。
-        // 代次在 await 之前捕获:等待期间发生登出/换号,发送侧按代次不一致丢弃,
-        // 旧账号的会话标题不会经新账号的链路推出去。
-        const generation = getMobileNotifyGeneration();
-        void (async () => {
-          // 体验优先(2026-07 产品决策):正文带该会话最近一条 assistant 内容,
-          // 用户不打开 App 也能看到结果/提问。error 终态没有可靠的错误正文来源,
-          // 回退终态短文案。先 drain 持久化队列:turn-done 时本轮 assistant 块
-          // 可能仍在 writeChain 里,立刻读库会拿到上一轮文本(与摘要生成同口径)。
-          const detail =
-            kind === 'error'
-              ? undefined
-              : await drainPersistQueue()
-                  .then(() => latestMessageText(sessionId, 'assistant'))
-                  .catch(() => '');
-          sendMobileSessionNotify({
-            sessionId,
-            title: safeTitle,
-            kind,
-            generation,
-            ...(detail ? { detail } : {}),
-          });
-        })().catch((err) => {
-          log.warn('[notification] mobile push failed (non-fatal)', err);
-        });
-      }
-
-      if (wantFeishu) {
+      if (wantFeishu && kind !== 'done') {
         await sendFeishuMessage(feishuIm, safeTitle, kind);
       }
     },
@@ -240,17 +362,18 @@ function assertValidSessionEventPayload(
 }
 
 /** 桌面 toast 分支 — 原实现保持不变,只是拆出来便于 channels 选择性执行。 */
-function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: () => void): void {
-  const body = getSessionNotificationBody(kind);
+function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: () => void, previewBody?: string, teammate = false): boolean {
+  const body = previewBody ?? getSessionNotificationBody(kind);
 
   // Electron Notification 在某些 Linux 桌面环境下可能不可用——静默兜底。
   if (!Notification.isSupported()) {
     log.warn('[notification] Notification.isSupported() === false, skip');
-    return;
+    return false;
   }
 
   const notif = new Notification({
-    title: `${CLIENT_NOTIFICATION_NAME} · ${safeTitle}`,
+    title: teammate && safeTitle.trim().toLowerCase() === 'cindy'
+      ? CLIENT_NOTIFICATION_NAME : `${CLIENT_NOTIFICATION_NAME} · ${safeTitle}`,
     body,
     // silent 默认 false——发声音，与 Electron 默认一致。
     // icon 仅在 dev 下传值；packaged 时为 undefined，回到原行为(由 AUMID/.icns 兜底)。
@@ -270,6 +393,7 @@ function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: ()
     release();
   });
   notif.show();
+  return true;
 }
 
 /**
@@ -283,23 +407,30 @@ async function sendFeishuMessage(
   feishuIm: FeishuIM,
   safeTitle: string,
   kind: SessionEventKind,
-): Promise<void> {
+  teammateBody?: string,
+): Promise<boolean> {
   const ownerOpenId = feishuIm.getOwnerOpenId();
   if (!ownerOpenId) {
     log.warn('[notification] feishu skipped: no bot owner bound (user must DM the bot once)');
-    return;
+    return false;
   }
   try {
-    await feishuIm.sendMarkdownText(
-      ownerOpenId,
-      getSessionExternalNotificationText(safeTitle, kind),
-    );
+    if (teammateBody) {
+      await feishuIm.sendText(ownerOpenId, `${safeTitle}\n${teammateBody}`);
+    } else {
+      await feishuIm.sendMarkdownText(
+        ownerOpenId,
+        getSessionExternalNotificationText(safeTitle, kind),
+      );
+    }
+    return true;
   } catch (err) {
     // 飞书 SDK 包了一层 axios; 400 等业务错误的真正 message 在 response.data 里,
     // 显式拆出来 log。与 scheduler-host/notifier.ts 的 catch 写法对齐。
     const r = (err as { response?: { data?: unknown; status?: number } }).response;
     log.warn(
-      `[notification] feishu sendMarkdownText failed status=${r?.status ?? 'n/a'} body=${JSON.stringify(r?.data ?? null)} target=...${ownerOpenId.slice(-8)}`,
+      `[notification] feishu send failed status=${r?.status ?? 'n/a'} body=${JSON.stringify(r?.data ?? null)} target=...${ownerOpenId.slice(-8)}`,
     );
+    return false;
   }
 }

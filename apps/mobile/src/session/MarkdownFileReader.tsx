@@ -21,7 +21,7 @@ import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTyp
 
 import { buildSelectableMarkdownHtml } from '@/session/selectableMarkdownHtml';
 import { selectionQuoteMenuLabel } from '@/session/selectionQuote';
-import { lineHeight, useTheme } from '@/theme';
+import { lineHeight, spacing, useTheme } from '@/theme';
 import { typeScale } from '@/theme/tokens';
 
 export function MarkdownFileReader({
@@ -81,7 +81,7 @@ export function MarkdownFileReader({
   }, []);
 
   return (
-    <View style={styles.fill} testID={testID}>
+    <View style={styles.content} testID={testID}>
       <WebView
         menuItems={quoteEnabled ? quoteMenuItems : undefined}
         onCustomMenuSelection={quoteEnabled ? handleCustomMenuSelection : undefined}
@@ -107,4 +107,5 @@ function interceptNavigation(request: ShouldStartLoadRequest): boolean {
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
+  content: { flex: 1, paddingHorizontal: spacing.lg },
 });

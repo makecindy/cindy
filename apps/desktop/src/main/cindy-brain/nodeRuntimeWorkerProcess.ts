@@ -28,6 +28,9 @@ import { PassThrough } from 'node:stream';
 import type { GhostNodeChildToWorkerMessage } from '../../shared/ghost.js';
 import { GHOST_NODE_CHILD_MODE_FLAG } from '../../shared/ghost.js';
 import { installVirtualStdin } from './nodeRuntimeVirtualStdin.js';
+import { NodeRequestScopes } from './nodeRequestScope.js';
+import { NodeDeviceAuthorizationClient } from './nodeDeviceAuthorizationClient.js';
+import { NodeAuthorizationClient } from './nodeAuthorizationClient.js';
 
 interface ParentPortLike {
   postMessage(message: unknown): void;
@@ -55,6 +58,11 @@ if (
 // Windows 上 Electron 把 process.stdin 钉成不可配置 getter,不能整体替换;
 // 替换或原地复活的分支收敛在 installVirtualStdin 里。
 const virtualStdin = installVirtualStdin(process);
+const requestScopes = new NodeRequestScopes();
+const deviceAuthorization = new NodeDeviceAuthorizationClient(requestScopes, (message) =>
+  parentPort.postMessage(message),
+);
+const authorization = new NodeAuthorizationClient(requestScopes, message => parentPort.postMessage(message));
 
 /* ── spawnEntry 窄接口(仅普通 worker 模式;子进程模式不给,树深恒为 1)── */
 
@@ -136,6 +144,7 @@ function handleChildControlMessage(m: GhostNodeChildToWorkerMessage): void {
     pending.resolve(handle);
     return;
   }
+  if (m.type === 'device-authorize-result' || m.type === 'plugin-authorize-result') return;
   const internal = childHandles.get(m.childId);
   if (!internal) return;
   if (m.type === 'child-stdout') {
@@ -159,6 +168,7 @@ function handleChildControlMessage(m: GhostNodeChildToWorkerMessage): void {
  */
 function spawnEntry(entry: string, args?: string[]): Promise<unknown> {
   return new Promise((resolve, reject) => {
+    const rpcId = requestScopes.currentRpcId();
     const reqId = `r${nextSpawnReq++}`;
     const timer = setTimeout(() => {
       pendingSpawns.delete(reqId);
@@ -170,6 +180,7 @@ function spawnEntry(entry: string, args?: string[]): Promise<unknown> {
       type: 'spawn-child',
       reqId,
       entry,
+      ...(rpcId !== undefined ? { rpcId } : {}),
       ...(args !== undefined ? { args } : {}),
     });
   });
@@ -181,7 +192,23 @@ parentPort.on('message', (event) => {
   const data = event.data;
   if (!isRecord(data)) return;
   if (data.type === 'stdin' && typeof data.chunk === 'string') {
-    if (Buffer.byteLength(data.chunk, 'utf8') <= 1024 * 1024) virtualStdin.feed(data.chunk);
+    if (Buffer.byteLength(data.chunk, 'utf8') <= 1024 * 1024) {
+      requestScopes.feed(data.chunk, (chunk) => virtualStdin.feed(chunk));
+    }
+    return;
+  }
+  if (!childMode && data.type === 'request-settled' && typeof data.rpcId === 'string') {
+    requestScopes.finish(data.rpcId);
+    deviceAuthorization.finish(data.rpcId);
+    authorization.finish(data.rpcId);
+    return;
+  }
+  if (!childMode && data.type === 'device-authorize-result') {
+    deviceAuthorization.reply(data);
+    return;
+  }
+  if (!childMode && data.type === 'plugin-authorize-result') {
+    authorization.reply(data);
     return;
   }
   // 子进程原样模式的字节口(base64,防多字节字符被 chunk 边界切坏)。
@@ -225,7 +252,8 @@ if (childMode) {
     configurable: false,
     enumerable: false,
     writable: false,
-    value: Object.freeze({ spawnEntry }),
+    value: Object.freeze({ spawnEntry, bindDeviceAuthorization: () => deviceAuthorization.bind(),
+      bindAuthorization: () => authorization.bind() }),
   });
 }
 

@@ -559,6 +559,22 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return row ? scheduleRunToCamel(row) : null;
   }
 
+  /** Same failure stays quiet until the existing recovery contract observes success. */
+  async hasUnrecoveredMatchingFailure(run: ScheduleRun): Promise<boolean> {
+    if (!run.errorMsg) return false;
+    const rows = await this.getDb().select({ id: scheduleRuns.id }).from(scheduleRuns).where(sql`
+      ${scheduleRuns.scheduleId} = ${run.scheduleId}
+      AND ${scheduleRuns.id} != ${run.id}
+      AND ${scheduleRuns.status} IN ('failed', 'interrupted')
+      AND ${scheduleRuns.errorMsg} = ${run.errorMsg}
+      AND COALESCE(CASE WHEN json_valid(${scheduleRuns.preRunHookResult})
+        THEN json_extract(${scheduleRuns.preRunHookResult}, '$.stderr') END, '') = ${run.preRunHookResult?.stderr ?? ''}
+      AND ${scheduleRuns.firedAt} <= ${run.firedAt}
+      AND NOT ${failureRecoveredSql('schedule_runs')}
+    `).limit(1);
+    return rows.length > 0;
+  }
+
   async listRuns(scheduleId: string, limit?: number): Promise<ScheduleRun[]> {
     const db = this.getDb();
     const cap = typeof limit === 'number' && limit > 0 ? Math.floor(limit) : 50;

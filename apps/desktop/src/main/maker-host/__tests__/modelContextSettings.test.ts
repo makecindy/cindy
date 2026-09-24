@@ -9,7 +9,7 @@ vi.mock('../auth-adapters.js', () => ({
   readClaudeApiKey: () => state.gateway ? 'fixture-key' : null,
   desktopCodexAuthAdapter: { hasCodexOAuthLoginReadOnly: () => state.codexOAuth },
 }));
-vi.mock('../claude-credentials-store.js', () => ({ hasClaudeAiOAuth: () => state.claudeOAuth }));
+vi.mock('../claude-native-auth.js', () => ({ hasClaudeNativeLogin: () => state.claudeOAuth }));
 vi.mock('../provider-route.js', () => ({
   gatewayDefaultRouteDecision: () => state.gateway ? { upstreamOverride: 'https://example.invalid' } : null,
 }));

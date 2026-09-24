@@ -183,7 +183,7 @@ describe('伙伴成果卡', () => {
     expect(screen.getByTestId('bot-generated-artifacts')).toBeTruthy();
   });
 
-  it.each(['stop', 'error', 'history'])('keeps the preamble folded once a real generated file is visible: %s', async (ending) => {
+  it.each(['stop', 'error', 'history'])('omits the preamble and process entry once a real generated file is visible: %s', async (ending) => {
     let finish!: (value: FileStat) => void;
     const stat = vi.fn(() => new Promise<FileStat>((resolve) => { finish = resolve; }));
     window.electronAPI.fsBrowse.statPath = stat;
@@ -199,7 +199,8 @@ describe('伙伴成果卡', () => {
     await act(async () => finish({ kind: 'file', resolvedPath: '/bot/workspace/result.pdf', birthtimeMs: START + 100, mtimeMs: START + 100 }));
     expect(screen.getByText('result.pdf')).toBeTruthy();
     expect(screen.queryByTestId('main-prose')).toBeNull();
-    expect(screen.getByTestId('public-process').textContent).toContain('Generating the report');
+    expect(screen.queryByTestId('public-process')).toBeNull();
+    expect(screen.queryByText('Generating the report')).toBeNull();
     if (ending === 'error') expect(screen.getByTestId('error').textContent).toBe('Generation interrupted');
     expect(stat).toHaveBeenCalledTimes(1);
     // Virtualized cards leaving the viewport must not revive the preamble.

@@ -17,6 +17,10 @@ export function pluginMarketErrorKey(error: unknown): string {
       return 'settings.ghosts.market.errors.notConfigured';
     case 'GHOST_FILE_INVALID':
       return 'settings.ghosts.market.errors.invalidPackage';
+    case 'GHOST_DOWNLOAD_TIMEOUT':
+      return 'settings.ghosts.market.errors.downloadTimeout';
+    case 'GHOST_DOWNLOAD_FAILED':
+      return 'settings.ghosts.market.errors.downloadFailed';
     case 'GHOST_ID_RESERVED':
       return 'settings.ghosts.errors.idReserved';
     case 'GHOST_BROKER_REDIRECT_PORT_REQUIRED':
