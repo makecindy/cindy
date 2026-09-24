@@ -3174,13 +3174,13 @@ export function ChatInput({
       prepareVoiceInputCues();
     }
   }, [voiceInputSettings.playInteractionSound]);
-  const handleVoiceInputStart = useCallback(async () => {
+  const handleVoiceInputStart = useCallback(async (): Promise<boolean> => {
     const proceed = await onBeforeVoiceInputStart?.();
-    if (proceed === false) return;
+    if (proceed === false) return false;
     if (voiceInputSettings.playInteractionSound) {
       playVoiceInputStartCue();
     }
-    await voiceInput.start();
+    return voiceInput.start();
   }, [onBeforeVoiceInputStart, voiceInput.start, voiceInputSettings.playInteractionSound]);
 
   const playVoiceInputEndCueNow = useCallback(() => {
@@ -3211,6 +3211,7 @@ export function ChatInput({
 
   const voiceShortcutRef = useRef(voiceInputSettings.shortcut);
   const voiceInputStateRef = useRef(voiceInput.state);
+  const voiceInputGetStateRef = useRef(voiceInput.getState);
   const voiceInputStopRef = useRef(handleVoiceInputStopWithRefinement);
   voiceInputBusyRef.current = voiceInput.isBusy;
   voiceDraftTextRef.current = voiceInput.draftText;
@@ -3256,6 +3257,7 @@ export function ChatInput({
 
   useEffect(() => {
     voiceInputStateRef.current = voiceInput.state;
+    voiceInputGetStateRef.current = voiceInput.getState;
     voiceInputStopRef.current = handleVoiceInputStopWithRefinement;
     voiceInputCancelRef.current = voiceInput.cancel;
     handleVoiceInputStartRef.current = handleVoiceInputStart;
@@ -3269,6 +3271,7 @@ export function ChatInput({
     handleVoiceInputStart,
     handleVoiceInputStopWithRefinement,
     voiceInput.cancel,
+    voiceInput.getState,
     voiceInput.state,
   ]);
 
@@ -3466,20 +3469,61 @@ export function ChatInput({
   }, []);
 
   // 长按输入框语音输入(语音设置里打开,默认关闭):输入框不加任何提示,按住鼠标
-  // 左键不动片刻即开始录音,松开结束。按下由输入框的 onMouseDown 接入;移动/松开
-  // 挂在 window 上,指针拖出输入框甚至窗口也能收到松开。
+  // 左键不动片刻即开始录音,松开结束。按下由输入框的 onMouseDown 接入(要读
+  // detail 才能排除双击);移动/松开挂在 window 上。真正开始录音后再指针捕获,
+  // 拖出窗口松开也能停;等待期间不捕获,免得打断选字。
   const composerLongPressVoiceInputEnabled = voiceInputSettings.composerLongPressEnabled;
   const composerLongPressGestureRef = useRef<ComposerLongPressVoiceGesture | null>(null);
+  const armComposerLongPressCaptureRef = useRef<((pointerId: number, target: Element) => void) | null>(
+    null,
+  );
   useEffect(() => {
     if (!composerLongPressVoiceInputEnabled) return;
-    const gesture = createComposerLongPressVoiceGesture({
-      getState: () => voiceInputStateRef.current,
+    let capture: { pointerId: number; target: Element } | null = null;
+    let gesture: ComposerLongPressVoiceGesture;
+
+    const handleLostPointerCapture = (event: Event) => {
+      if (!(event instanceof PointerEvent)) return;
+      if (!capture || event.pointerId !== capture.pointerId) return;
+      gesture.release();
+    };
+
+    const releaseCapture = () => {
+      if (!capture) return;
+      const current = capture;
+      capture = null;
+      current.target.removeEventListener('lostpointercapture', handleLostPointerCapture);
+      if (current.target.hasPointerCapture(current.pointerId)) {
+        try {
+          current.target.releasePointerCapture(current.pointerId);
+        } catch {
+          // 指针已经抬起或捕获已被系统清掉。
+        }
+      }
+    };
+
+    gesture = createComposerLongPressVoiceGesture({
+      getState: () => voiceInputGetStateRef.current(),
       start: () => handleVoiceInputStartRef.current(),
       stop: () => voiceInputStopRef.current(),
+      onHoldStart: () => {
+        if (!capture) return;
+        try {
+          capture.target.setPointerCapture(capture.pointerId);
+          capture.target.addEventListener('lostpointercapture', handleLostPointerCapture);
+        } catch {
+          capture = null;
+        }
+      },
+      onHoldEnd: releaseCapture,
     });
     composerLongPressGestureRef.current = gesture;
-    const handleMouseMove = (event: MouseEvent) => {
-      // 按住录音时鼠标还是按下的,Chromium 会拿 mousemove 继续拖选文字;取消默认
+    armComposerLongPressCaptureRef.current = (pointerId, target) => {
+      capture = { pointerId, target };
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      // 按住录音时鼠标还是按下的,Chromium 会拿 move 继续拖选文字;取消默认
       // 行为,说话时挪动鼠标不会拉出一片选区。
       if (gesture.isHolding()) {
         event.preventDefault();
@@ -3487,23 +3531,43 @@ export function ChatInput({
       }
       gesture.move({ x: event.clientX, y: event.clientY });
     };
-    const handleRelease = () => gesture.release();
-    window.addEventListener('mousemove', handleMouseMove, true);
-    window.addEventListener('mouseup', handleRelease, true);
-    // 按在已选中的文字上会进入原生拖拽,之后不再有 mousemove / mouseup。
-    window.addEventListener('dragstart', handleRelease, true);
-    window.addEventListener('blur', handleRelease);
+    const handleLeftButtonRelease = (event: PointerEvent | MouseEvent) => {
+      if (event.button !== 0) return;
+      gesture.release();
+      // 没到时长就松开时不会走 onHoldEnd，但仍要清掉按下时记下的 pointerId。
+      releaseCapture();
+    };
+    const handleAbort = () => {
+      gesture.release();
+      releaseCapture();
+    };
+    window.addEventListener('pointermove', handlePointerMove, true);
+    window.addEventListener('pointerup', handleLeftButtonRelease, true);
+    window.addEventListener('mouseup', handleLeftButtonRelease, true);
+    window.addEventListener('pointercancel', handleAbort, true);
+    // 按在已选中的文字上会进入原生拖拽,之后不再有 move / up。
+    window.addEventListener('dragstart', handleAbort, true);
+    window.addEventListener('blur', handleAbort);
     return () => {
+      armComposerLongPressCaptureRef.current = null;
       if (composerLongPressGestureRef.current === gesture) {
         composerLongPressGestureRef.current = null;
       }
       gesture.dispose();
-      window.removeEventListener('mousemove', handleMouseMove, true);
-      window.removeEventListener('mouseup', handleRelease, true);
-      window.removeEventListener('dragstart', handleRelease, true);
-      window.removeEventListener('blur', handleRelease);
+      releaseCapture();
+      window.removeEventListener('pointermove', handlePointerMove, true);
+      window.removeEventListener('pointerup', handleLeftButtonRelease, true);
+      window.removeEventListener('mouseup', handleLeftButtonRelease, true);
+      window.removeEventListener('pointercancel', handleAbort, true);
+      window.removeEventListener('dragstart', handleAbort, true);
+      window.removeEventListener('blur', handleAbort);
     };
   }, [composerLongPressVoiceInputEnabled]);
+
+  const handleComposerLongPressPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    armComposerLongPressCaptureRef.current?.(event.pointerId, event.currentTarget);
+  }, []);
 
   const handleComposerLongPressMouseDown = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     const gesture = composerLongPressGestureRef.current;
@@ -7545,7 +7609,9 @@ export function ChatInput({
     const gesture = createWorkLouderCodexVoiceGesture({
       longPressMs: VOICE_INPUT_LONG_PRESS_MS,
       getState: () => voiceInputStateRef.current,
-      start: () => handleVoiceInputStartRef.current(),
+      start: () => {
+        void handleVoiceInputStartRef.current();
+      },
       stop: () => voiceInputStopRef.current(),
     });
     workLouderVoiceGestureRef.current = gesture;
@@ -8647,6 +8713,7 @@ export function ChatInput({
                 className="relative w-full"
                 // 推荐词生效时由 CSS 关掉原生 placeholder,避免两行字叠在一起。
                 data-recommendation-active={showRecommendationOverlay ? 'true' : undefined}
+                onPointerDown={handleComposerLongPressPointerDown}
                 onMouseDown={handleComposerLongPressMouseDown}
               >
                 <EditorContent
@@ -9289,7 +9356,7 @@ function VoiceInputButton({
   state: import('@cindy/voice-input-core').VoiceInputState;
   disabled: boolean;
   shortcutLabel: string;
-  onStart: () => Promise<void>;
+  onStart: () => boolean | Promise<boolean | void>;
   onStop: () => Promise<void>;
   onStopAndSend: () => Promise<void>;
   sendTargetRef: RefObject<HTMLElement | null>;

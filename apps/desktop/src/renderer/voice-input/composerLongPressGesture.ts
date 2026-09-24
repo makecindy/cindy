@@ -11,8 +11,16 @@ export type ComposerLongPressVoiceGestureOptions = {
   holdMs?: number;
   moveTolerancePx?: number;
   getState: () => VoiceInputState;
-  start: () => void | Promise<void>;
+  /**
+   * 开始录音。返回 `false` 表示这次没有占用录音（已在录音、被取消等），
+   * 调用方不得再对当前会话执行 `stop()`。
+   */
+  start: () => boolean | void | Promise<boolean | void>;
   stop: () => void | Promise<void>;
+  /** 已过时长、真正开始按住录音时。用来补指针捕获，好在窗口外松开。 */
+  onHoldStart?: () => void;
+  /** 松开、放弃或销毁时。用来释放指针捕获。 */
+  onHoldEnd?: () => void;
 };
 
 export type ComposerLongPressVoiceGesture = {
@@ -43,8 +51,9 @@ const isIdleLike = (state: VoiceInputState): boolean =>
  * - 按住不动达到 `holdMs` 才开始录音，之前松开或移动都不影响普通点击与选字；
  * - 开始后松开即结束录音。
  *
- * `start` 是异步的：开始流程还没走完就松开时，先记下，等开始结束后再停，避免录音
- * 在没有按住的情况下一直开着。独立于 React，按住期间的重渲染不会打断它。
+ * `start` 可能先走授权确认再占用麦克风：松开时若已经在 listening 就立刻停；
+ * 若还在确认中，等这次 start 确认占用成功后再停，避免误停别人后来开的录音。
+ * 独立于 React，按住期间的重渲染不会打断它。
  */
 export function createComposerLongPressVoiceGesture(
   options: ComposerLongPressVoiceGestureOptions,
@@ -53,10 +62,12 @@ export function createComposerLongPressVoiceGesture(
   const moveTolerancePx = options.moveTolerancePx ?? COMPOSER_LONG_PRESS_MOVE_TOLERANCE_PX;
   let pending: PendingPress | null = null;
   let holding = false;
-  let startPromise: Promise<void> | null = null;
+  let startPromise: Promise<boolean> | null = null;
   let stopAfterStart = false;
+  let ownedSession = false;
   let stopInFlight = false;
   let disposed = false;
+  let startGeneration = 0;
 
   const clearPending = (): void => {
     if (!pending) return;
@@ -64,9 +75,16 @@ export function createComposerLongPressVoiceGesture(
     pending = null;
   };
 
+  const endHold = (): void => {
+    if (!holding) return;
+    holding = false;
+    options.onHoldEnd?.();
+  };
+
   const runStop = (): void => {
     if (stopInFlight) return;
     stopInFlight = true;
+    ownedSession = false;
     void Promise.resolve()
       .then(() => options.stop())
       .catch(() => undefined)
@@ -76,13 +94,16 @@ export function createComposerLongPressVoiceGesture(
   };
 
   const requestStop = (): void => {
-    // ChatInput 的状态 ref 要等下一次渲染才变成 listening；开始流程还在跑时
-    // 直接 stop 会被当成空操作，所以挂到开始结束之后。
     if (startPromise) {
+      // 授权确认还没结束：记下，等这次 start 占用成功后再停。
+      // 占用成功后（stateRef 已是 listening、bootstrap 可能还在跑）由
+      // useVoiceInput.stop() 立刻进入停止流程，不必等麦克风 / WebSocket 就绪。
       stopAfterStart = true;
       return;
     }
-    if (options.getState() !== 'listening') return;
+    // start 已结束：只停这次长按占用、且现在仍在听的录音。Esc 取消后
+    // getState 已不是 listening，不能再 stop。
+    if (!ownedSession || options.getState() !== 'listening') return;
     runStop();
   };
 
@@ -90,23 +111,28 @@ export function createComposerLongPressVoiceGesture(
     pending = null;
     if (disposed || !isIdleLike(options.getState())) return;
     holding = true;
-    const currentStart = Promise.resolve().then(() => options.start());
+    options.onHoldStart?.();
+    const generation = ++startGeneration;
+    const currentStart = Promise.resolve()
+      .then(() => options.start())
+      .then((claimed) => claimed !== false)
+      .catch(() => false);
     startPromise = currentStart;
-    void currentStart
-      .catch(() => undefined)
-      .finally(() => {
-        if (startPromise !== currentStart) return;
-        startPromise = null;
-        if (!stopAfterStart) return;
-        stopAfterStart = false;
-        runStop();
-      });
+    void currentStart.then((claimed) => {
+      if (startPromise !== currentStart) return;
+      startPromise = null;
+      if (generation !== startGeneration) return;
+      ownedSession = claimed;
+      if (!stopAfterStart) return;
+      stopAfterStart = false;
+      if (claimed) runStop();
+    });
   };
 
   const release = (): void => {
     clearPending();
     if (!holding) return;
-    holding = false;
+    endHold();
     requestStop();
   };
 

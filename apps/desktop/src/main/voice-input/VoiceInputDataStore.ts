@@ -644,7 +644,7 @@ export class VoiceInputDataStore {
     try {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       const tmp = `${filePath}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf-8');
+      fs.writeFileSync(tmp, JSON.stringify(projectVoiceInputDataForPersist(state), null, 2), 'utf-8');
       fs.renameSync(tmp, filePath);
     } catch (error) {
       log.warn('voice input data write failed', {
@@ -947,6 +947,16 @@ function cloneSnapshot(snapshot: VoiceInputDataSnapshot): VoiceInputDataSnapshot
 
 function cloneSettings(settings: VoiceInputSettings): VoiceInputSettings {
   return JSON.parse(JSON.stringify(settings)) as VoiceInputSettings;
+}
+
+/**
+ * 落盘只记录 override。运行时快照里的 `composerLongPressEnabled` 是默认值 + override
+ * 合成的有效值；写进文件会把当时的默认钉死，未自定义的用户就跟不上后续改默认。
+ */
+function projectVoiceInputDataForPersist(state: StoredVoiceInputData): unknown {
+  const settings: Record<string, unknown> = { ...state.settings };
+  delete settings.composerLongPressEnabled;
+  return { ...state, settings };
 }
 
 function cloneHistory(history: VoiceInputHistoryEntry[]): VoiceInputHistoryEntry[] {

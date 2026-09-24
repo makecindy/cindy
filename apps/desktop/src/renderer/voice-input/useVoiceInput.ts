@@ -139,7 +139,9 @@ export type UseVoiceInputResult = {
   isBusy: boolean;
   getLastSubmittedText: () => string;
   getLastRefinement: () => VoiceInputRefinementSnapshot | null;
-  start: () => Promise<void>;
+  /** 同步读取当前状态，不经过 React 渲染。长按手势靠它判断是否占用了录音。 */
+  getState: () => VoiceInputState;
+  start: () => boolean;
   stop: (options?: VoiceInputStopOptions) => Promise<void>;
   cancel: () => Promise<void>;
 };
@@ -237,6 +239,8 @@ export function useVoiceInput(
     if (next === 'error') terminalOutcomeRef.current = 'failed';
     setState(next);
   }, []);
+
+  const getState = useCallback(() => stateRef.current, []);
 
   const isActiveStartAttempt = useCallback((attemptId: number) => (
     startAttemptIdRef.current === attemptId
@@ -1225,7 +1229,7 @@ export function useVoiceInput(
     voiceInputSettings.microphoneDeviceId,
   ]);
 
-  const start = useCallback(async () => {
+  const start = useCallback((): boolean => {
     const currentState = stateRef.current;
     if (
       disabled ||
@@ -1235,7 +1239,7 @@ export function useVoiceInput(
       currentState === 'submitting' ||
       currentState === 'refining'
     ) {
-      return;
+      return false;
     }
     dismissInlineError();
     shouldRestoreEditorFocusRef.current = true;
@@ -1263,6 +1267,7 @@ export function useVoiceInput(
     const bootstrapStartedAt = performance.now();
     const elapsedMs = () => Math.round(performance.now() - bootstrapStartedAt);
 
+    void (async () => {
     // Critical-path parallelization (mirrors VoiceInputOverlay.startRecording):
     //
     // 1. Permission + provider-readiness use main's positive cache when
@@ -1477,6 +1482,12 @@ export function useVoiceInput(
     }
     captureStart.drainPendingChunks();
     resolveStartReadyState(attemptId, result);
+    })().catch((error) => {
+      log.warn('voice input start failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return true;
   }, [
     appendAudioChunk,
     buildRefinementContext,
@@ -1711,6 +1722,7 @@ export function useVoiceInput(
     isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
     getLastSubmittedText: () => lastSubmittedTextRef.current,
     getLastRefinement: () => lastRefinementRef.current,
+    getState,
     start,
     stop: stopWithGate,
     cancel,

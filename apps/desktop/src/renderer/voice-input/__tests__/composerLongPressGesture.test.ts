@@ -120,12 +120,13 @@ describe('createComposerLongPressVoiceGesture', () => {
     expect(start).not.toHaveBeenCalled();
   });
 
-  it('开始流程还没走完就松开，等开始结束后再停', async () => {
+  it('授权确认还没占用录音就松开，等这次 start 占用成功后再停', async () => {
     let state: VoiceInputState = 'idle';
     const startGate = deferred();
     const start = vi.fn(async () => {
       await startGate.promise;
       state = 'listening';
+      return true;
     });
     const stop = vi.fn(async () => {
       state = 'done';
@@ -148,6 +149,118 @@ describe('createComposerLongPressVoiceGesture', () => {
     startGate.resolve();
     await settle();
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('这次长按没有占用录音时，延后停止不会停掉别人的录音', async () => {
+    let state: VoiceInputState = 'idle';
+    const startGate = deferred();
+    const start = vi.fn(async () => {
+      await startGate.promise;
+      return false;
+    });
+    const stop = vi.fn(async () => {
+      state = 'done';
+    });
+    const gesture = createComposerLongPressVoiceGesture({
+      getState: () => state,
+      start,
+      stop,
+    });
+
+    gesture.press(origin);
+    vi.advanceTimersByTime(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
+    await settle();
+    gesture.release();
+    state = 'listening';
+    startGate.resolve();
+    await settle();
+
+    expect(stop).not.toHaveBeenCalled();
+    expect(state).toBe('listening');
+  });
+
+  it('start 在返回前把状态写成 listening，松开时不依赖下一次渲染', async () => {
+    let state: VoiceInputState = 'idle';
+    const start = vi.fn(() => {
+      state = 'listening';
+      return true;
+    });
+    const stop = vi.fn(() => {
+      state = 'done';
+    });
+    const gesture = createComposerLongPressVoiceGesture({
+      getState: () => state,
+      start,
+      stop,
+    });
+
+    gesture.press(origin);
+    vi.advanceTimersByTime(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
+    await settle();
+    expect(start).toHaveBeenCalledOnce();
+    expect(state).toBe('listening');
+
+    gesture.release();
+    await settle();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('占用录音后松开立刻进入 stop，不必等 start promise 里剩余的启动流程', async () => {
+    let state: VoiceInputState = 'idle';
+    const bootstrapGate = deferred();
+    let bootstrapFinished = false;
+    const start = vi.fn(async () => {
+      state = 'listening';
+      void bootstrapGate.promise.then(() => {
+        bootstrapFinished = true;
+      });
+      return true;
+    });
+    const stop = vi.fn(async () => {
+      state = 'done';
+    });
+    const gesture = createComposerLongPressVoiceGesture({
+      getState: () => state,
+      start,
+      stop,
+    });
+
+    gesture.press(origin);
+    vi.advanceTimersByTime(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
+    await settle();
+    expect(start).toHaveBeenCalledOnce();
+    expect(state).toBe('listening');
+
+    gesture.release();
+    await settle();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(bootstrapFinished).toBe(false);
+
+    bootstrapGate.resolve();
+    await settle();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('到达时长时通知 onHoldStart，松开时通知 onHoldEnd', async () => {
+    const onHoldStart = vi.fn();
+    const onHoldEnd = vi.fn();
+    const { start } = setup();
+    const gestureWithHold = createComposerLongPressVoiceGesture({
+      getState: () => 'idle',
+      start,
+      stop: vi.fn(),
+      onHoldStart,
+      onHoldEnd,
+    });
+
+    gestureWithHold.press(origin);
+    expect(onHoldStart).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
+    await settle();
+    expect(onHoldStart).toHaveBeenCalledOnce();
+
+    gestureWithHold.release();
+    expect(onHoldEnd).toHaveBeenCalledOnce();
   });
 
   it('录音被 Esc 取消后再松开不会重复停止', async () => {
