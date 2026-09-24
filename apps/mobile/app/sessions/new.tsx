@@ -5835,16 +5835,17 @@ export default function NewRemoteSessionScreen() {
                           key={drive.path}
                           onPress={() => void loadBrowsePath(drive.path)}
                           style={({ pressed }) => [
-                            styles.browseActionButton,
-                            drive.current && styles.browseDriveCurrent,
+                            styles.browseDriveHit,
                             browseLoading && !drive.current && styles.disabled,
                             pressed && styles.pressed,
                           ]}
                           testID="newSession.remoteBrowseDriveOption"
                         >
-                          <Text style={[styles.browseActionText, drive.current && styles.browseDriveCurrentText]}>
-                            {drive.name}
-                          </Text>
+                          <View style={[styles.browseActionButton, drive.current && styles.browseDriveCurrent]}>
+                            <Text style={[styles.browseActionText, drive.current && styles.browseDriveCurrentText]}>
+                              {drive.name}
+                            </Text>
+                          </View>
                         </Pressable>
                       ))}
                     </ScrollView>
@@ -6903,7 +6904,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.medium,
   },
   browseDriveOptions: {
+    alignItems: 'center',
     gap: spacing.sm,
+    minHeight: 44,
+  },
+  // 可见 pill 仍是 34pt(与「上级 / 使用当前」同档);不可见外层把热区补到 44pt。
+  browseDriveHit: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    minWidth: 44,
   },
   // 当前盘用实心 cta 底色(与 browseCheckboxChecked 同色),浅色 / 深色都能一眼认出。
   browseDriveCurrent: {

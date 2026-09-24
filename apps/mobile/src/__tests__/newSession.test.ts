@@ -1116,6 +1116,13 @@ describe('new session model', () => {
     expect(newSource).toContain('result.drivesPending');
   });
 
+  it('keeps the Android drive pill at 34pt and wraps it in a 44pt hit target', () => {
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('styles.browseDriveHit');
+    expect(newSource).toMatch(/browseDriveHit:\s*\{[^}]*minHeight:\s*44/);
+    expect(newSource).toMatch(/browseDriveHit:\s*\{[^}]*minWidth:\s*44/);
+  });
+
   it('builds device-link create-session args with desktop remote-project semantics', () => {
     expect(buildRemoteCreateSessionOptions({
       ...DEFAULT_NEW_SESSION_DRAFT,
