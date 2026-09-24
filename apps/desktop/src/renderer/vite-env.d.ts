@@ -384,6 +384,8 @@ interface ComputerDriverStatus {
 }
 
 interface ComputerDriverStatusOptions {
+  /** False keeps background page reads from broadcasting into the permission guide. */
+  refreshPermissionGuide?: boolean;
   includeDoctor?: boolean;
   forcePermissionProbe?: boolean;
   skipPermissionProbe?: boolean;

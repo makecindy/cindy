@@ -456,6 +456,7 @@ export function ComputerUseSection({
     // Machine-wide status is independent of workingDir and may include slow
     // daemon recovery / TCC probes. Never make it a prerequisite for this page.
     void window.electronAPI.maker.computer.status({
+      refreshPermissionGuide: false,
       forcePermissionProbe: true,
       bypassPermissionProbeCache: true,
       passivePermissionProbeOnly: true,

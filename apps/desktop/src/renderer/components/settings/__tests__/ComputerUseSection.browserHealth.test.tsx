@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BrowserBackendHealth } from '../../../../shared/browserBackend';
+import { readComputerStatusForSettings } from '../../../../main/maker-ipc/computerStatusHandler';
 
 const api = vi.hoisted(() => ({
   getPluginState: vi.fn(),
@@ -140,8 +141,9 @@ describe('ComputerUseSection browser backend health loading', () => {
     });
     expect((computerToggle as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText('settings.computerUse.directControl.status.checking')).toBeTruthy();
-    expect(screen.queryByText('settings.computerUse.directControl.status.notInstalled')).toBeNull();
+    expect(screen.queryByText('settings.computerUse.directControl.notDetected')).toBeNull();
     expect(api.getComputerStatus).toHaveBeenCalledWith({
+      refreshPermissionGuide: false,
       forcePermissionProbe: true,
       bypassPermissionProbeCache: true,
       passivePermissionProbeOnly: true,
@@ -171,7 +173,18 @@ describe('ComputerUseSection browser backend health loading', () => {
 
   it('preserves a newer native status when the initial probe returns late', async () => {
     const initialComputer = deferred<ComputerDriverStatus>();
-    api.getComputerStatus.mockReturnValueOnce(initialComputer.promise);
+    // Use the real IPC business handler: forced reads normally broadcast before
+    // resolving, which must not overwrite a newer guide event for page entry.
+    const broadcast = vi.fn((status: ComputerDriverStatus) => {
+      vi.mocked(window.electronAPI.maker.computer.onPermissionGuideStatusChanged)
+        .mock.calls.at(-1)![0](status);
+    });
+    api.getComputerStatus.mockImplementationOnce((options) =>
+      readComputerStatusForSettings(options, {
+        getStatus: () => initialComputer.promise,
+        refreshPermissionGuide: broadcast,
+      }),
+    );
     vi.mocked(window.electronAPI.maker.computer.checkUpdate).mockResolvedValue({
       currentVersion: '0.12.2',
       latestVersion: null,
@@ -187,6 +200,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     });
     expect(screen.getByText('settings.computerUse.directControl.status.version')).toBeTruthy();
     await act(async () => { initialComputer.resolve(computerUnavailable); });
+    expect(broadcast).not.toHaveBeenCalled();
     expect(screen.getByText('settings.computerUse.directControl.status.version')).toBeTruthy();
   });
 
