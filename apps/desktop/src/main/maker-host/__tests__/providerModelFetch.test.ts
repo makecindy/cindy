@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import codexLatest from '../../../../../../tools/codex-package/latest.json';
 
 import {
   buildModelsFetchRequest,
@@ -24,6 +25,70 @@ function spec(over: Partial<ProviderModelsFetchSpec> = {}): ProviderModelsFetchS
 function fakeResponse(status: number, body: string): Response {
   return new Response(body, { status, headers: { 'content-type': 'application/json' } });
 }
+
+describe('Codex capability discovery', () => {
+  it('requests the pinned Codex view and parses upstream reasoning levels', async () => {
+    const fetcher = vi.fn(async (url, init) => {
+      expect(new URL(String(url)).searchParams.get('client_version')).toBe(codexLatest.version);
+      expect(init?.headers).toEqual({ authorization: 'Bearer sk-test' });
+      expect(init?.redirect).toBe('error');
+      return fakeResponse(200, JSON.stringify({ models: ['gpt-6-sol', 'gpt-6-luna', 'grok-4.6'].map(slug => ({
+        slug, supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }], default_reasoning_level: 'high',
+      })) }));
+    });
+    const result = await fetchProviderModels(spec({ agent: 'codex', redirect: 'error', responseByteLimit: 4096 }), fetcher);
+    expect(result.ok).toBe(true);
+    expect(result.models).toHaveLength(3);
+    for (const model of result.models!) expect(model.discoveredMetadata)
+      .toMatchObject({ efforts: ['low', 'high'], defaultEffort: 'high' });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each([400, 404, 'invalid-json', 'empty', 'network'])('falls back to ordinary discovery on %s', async failure => {
+    const fetcher = vi.fn(async (url) => {
+      if (new URL(String(url)).searchParams.has('client_version')) {
+        if (failure === 'network') throw new TypeError('network failure');
+        return fakeResponse(typeof failure === 'number' ? failure : 200,
+          failure === 'invalid-json' ? 'invalid' : '{"models":[]}');
+      }
+      return fakeResponse(200, '{"data":[{"id":"ordinary"}]}');
+    });
+    expect(await fetchProviderModels(spec({ agent: 'codex' }), fetcher))
+      .toMatchObject({ ok: true, models: [{ id: 'ordinary' }] });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([401, 403, 429])('does not retry authentication or rate-limit failures (%s)', async status => {
+    const fetcher = vi.fn(async () => fakeResponse(status, '{}'));
+    expect(await fetchProviderModels(spec({ agent: 'codex' }), fetcher)).toMatchObject({ ok: false, status });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('keeps redirect and byte limits on both the capability request and fallback', async () => {
+    const cancel = vi.fn();
+    const fetcher = vi.fn(async (_url, init) => {
+      expect(init?.redirect).toBe('error');
+      expect(init?.headers).toEqual({ authorization: 'Bearer sk-test' });
+      return new Response(new ReadableStream({ cancel }), { headers: { 'content-length': '100' } });
+    });
+    expect((await fetchProviderModels(spec({ agent: 'codex', redirect: 'error', responseByteLimit: 32 }), fetcher)).ok).toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalledTimes(2);
+  });
+
+  it.each<Partial<ProviderModelsFetchSpec>>([
+    { modelsUrl: 'https://api.acme.example/catalog?view=custom' },
+    { wireProtocol: 'anthropic-messages' }, { wireProtocol: 'openai-chat' },
+    { wireProtocol: 'google-generative-ai' }, { agent: 'pi' }, { agent: 'claude-code' },
+  ])('preserves explicit catalogs and other protocols: %j', async overrides => {
+    const fetcher = vi.fn(async url => {
+      expect(new URL(String(url)).searchParams.has('client_version')).toBe(false);
+      return fakeResponse(200, '{"data":[{"id":"ordinary"}]}');
+    });
+    expect((await fetchProviderModels(spec({ agent: 'codex', ...overrides }), fetcher)).ok).toBe(true);
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+});
 
 describe('import discovery limits', () => {
   it('passes redirect rejection with all credentials to the transport', async () => {

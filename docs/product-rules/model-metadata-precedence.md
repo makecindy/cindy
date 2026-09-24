@@ -150,6 +150,13 @@ Pi 已识别的 OpenAI 订阅连接之间可复用同一运行时：每个账号
 
 ## 模型成员、空列表与失败
 
+自定义连接发现会识别 Grok 风格的 `reasoningEfforts` / `reasoningEffort`
+与 Codex 的 `supported_reasoning_levels` / `default_reasoning_level`，写入
+`discoveredMetadata`，不覆盖用户显式档位。未知档位不作为“关闭思考”的声明。
+Desktop 的 Codex 原生 Responses 连接在未配置显式模型列表地址时，使用随包固定的
+Codex 版本请求 `client_version` 能力视图；不兼容时回退普通列表，认证失败或限流不重试。
+其他 wire protocol、显式模型列表地址及 OpenRouter / Google 专用目录保持原请求方式。
+
 这张表讨论“型号是否在名单内”，不改变前面的资料字段优先级。成功空数组、字段缺失和读取失败是三种状态。
 
 | 来源/字段 | 缺失或尚无有效发现 | 明确空数组或未返回型号 |
