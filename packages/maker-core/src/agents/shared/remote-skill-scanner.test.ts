@@ -54,6 +54,20 @@ describe('remote Skill scanners', () => {
     ]);
   });
 
+  it('discovers one namespace level and stops before the third level', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.agents/skills/@scope/nested/SKILL.md': '---\ndescription: Nested\n---',
+      '$HOME/.agents/skills/@scope/group/too-deep/SKILL.md': '---\ndescription: Too deep\n---',
+      '$HOME/.claude/skills/@scope/claude-nested/SKILL.md': '---\ndescription: Claude nested\n---',
+    });
+
+    const pi = await scanRemotePiSkills({ fileOps });
+    expect(pi.skills.map((skill) => skill.name)).toEqual(['nested']);
+
+    const claude = await scanRemoteClaudeSkills({ fileOps });
+    expect(claude.skills.map((skill) => skill.name)).toEqual(['claude-nested']);
+  });
+
   it('discovers Pi global, project, and ancestor Skills only through the Git boundary', async () => {
     const fileOps = fakeRemoteFiles({
       '$HOME/.agents/skills/global/SKILL.md': '---\ndescription: Global\n---',

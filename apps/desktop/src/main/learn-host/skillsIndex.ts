@@ -10,9 +10,11 @@
  */
 
 import { promises as fs } from 'node:fs';
+import type { Dirent } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import matter from 'gray-matter';
+import { shouldPruneSkillScanDirectory } from '@cindy/maker-core/skill-scan-limits';
 
 import { createLogger } from '../logger';
 import { redactSensitive } from './redaction';
@@ -51,52 +53,97 @@ export function formatSkillsIndexBlock(entries: InstalledSkillEntry[], truncated
   return `${lines.join('\n')}${tail}`;
 }
 
+async function isDirectoryEntry(entry: Dirent, fullPath: string): Promise<boolean> {
+  if (entry.isDirectory()) return true;
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return (await fs.stat(fullPath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function isSymlinkDirectory(target: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(target)).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+async function findSkillMd(dir: string): Promise<string | null> {
+  for (const name of ['SKILL.md', 'skill.md']) {
+    try {
+      if ((await fs.stat(path.join(dir, name))).isFile()) return name;
+    } catch {
+      // Try the other spelling.
+    }
+  }
+  return null;
+}
+
 /** 扫描全局 skill 根,读每个 SKILL.md 的 frontmatter name/description。 */
 export async function listInstalledSkills(): Promise<{ entries: InstalledSkillEntry[]; truncatedCount: number }> {
   const root = path.join(os.homedir(), '.agents', 'skills');
-  let dirs: string[];
+  let skillTargets: Array<{ dir: string; skillFile: string }>;
   try {
-    const dirents = (await fs.readdir(root, { withFileTypes: true })).filter(
-      (e) => !e.name.startsWith('.'),
-    );
-    const names: string[] = [];
-    for (const e of dirents) {
-      if (e.isDirectory()) {
-        names.push(e.name);
+    const topLevel: Array<{ name: string; path: string; isSymlink: boolean }> = [];
+    for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+      if (entry.name.startsWith('.') || /\.bak\.\d+$/.test(entry.name)) continue;
+      const fullPath = path.join(root, entry.name);
+      if (!(await isDirectoryEntry(entry, fullPath))) continue;
+      const isSymlink = entry.isSymbolicLink()
+        || (entry.isDirectory() && await isSymlinkDirectory(fullPath));
+      topLevel.push({ name: entry.name, path: fullPath, isSymlink });
+    }
+    topLevel.sort((a, b) => a.name.localeCompare(b.name));
+
+    skillTargets = [];
+    for (const entry of topLevel) {
+      const skillFile = await findSkillMd(entry.path);
+      if (skillFile) {
+        skillTargets.push({ dir: entry.path, skillFile });
         continue;
       }
       // 共享 skill 链接流程会把既有 Claude/Codex 全局 skill 以 symlink 形式挂进
-      // 本根 —— 只认真实目录会漏掉它们,模型看不到已装清单就会蒸出近重复的新
-      // skill 而不是改进原版(Codex review)。跟随链接,目标是目录即计入;
-      // 后续 SKILL.md 读取本身走 follow 语义,坏链接在下方 catch 静默跳过。
-      if (e.isSymbolicLink()) {
-        try {
-          if ((await fs.stat(path.join(root, e.name))).isDirectory()) names.push(e.name);
-        } catch {
-          // 悬空链接,跳过
-        }
+      // 本根 —— 只认真实目录会漏掉它们。直接 symlink skill 已在上方计入;
+      // symlink namespace 不下钻,避免越界或循环。
+      if (entry.isSymlink || shouldPruneSkillScanDirectory(entry.name)) continue;
+
+      // 最多一层 namespace/author: <root>/<namespace>/<skill>。
+      let nestedEntries: Dirent[];
+      try {
+        nestedEntries = await fs.readdir(entry.path, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const nested of nestedEntries) {
+        if (nested.name.startsWith('.') || /\.bak\.\d+$/.test(nested.name)) continue;
+        const nestedPath = path.join(entry.path, nested.name);
+        if (!(await isDirectoryEntry(nested, nestedPath))) continue;
+        const nestedSkillFile = await findSkillMd(nestedPath);
+        if (nestedSkillFile) skillTargets.push({ dir: nestedPath, skillFile: nestedSkillFile });
       }
     }
-    dirs = names.sort();
   } catch {
     return { entries: [], truncatedCount: 0 };
   }
 
   const entries: InstalledSkillEntry[] = [];
   let truncatedCount = 0;
-  for (const dirName of dirs) {
+  for (const target of skillTargets) {
     if (entries.length >= SKILLS_INDEX_MAX) {
-      truncatedCount = dirs.length - SKILLS_INDEX_MAX;
+      truncatedCount = skillTargets.length - SKILLS_INDEX_MAX;
       break;
     }
-    const skillDir = path.join(root, dirName);
+    const dirName = path.basename(target.dir);
     try {
-      const raw = await fs.readFile(path.join(skillDir, 'SKILL.md'), 'utf8');
+      const raw = await fs.readFile(path.join(target.dir, target.skillFile), 'utf8');
       const parsed = matter(raw);
       const data = parsed.data as Record<string, unknown>;
       const name = redactPromptMetadata(String(data.name ?? dirName)) || dirName;
       const description = redactPromptMetadata(String(data.description ?? '')).slice(0, DESC_CAP);
-      entries.push({ name, description, absolutePath: skillDir });
+      entries.push({ name, description, absolutePath: target.dir });
     } catch (err) {
       // 无 SKILL.md / 解析失败的目录跳过(不是合法 skill)
       log.debug?.('skip skill dir:', dirName, err);

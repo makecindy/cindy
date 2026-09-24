@@ -136,6 +136,75 @@ describe('shared Skill projection mutations', () => {
 });
 
 describe('prepareSharedGlobalSkillLinks', () => {
+  it('projects a nested namespace Skill into the Claude discovery root', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const nested = path.join(paths.sharedSkillsDir, '@scope', 'nested');
+    await fs.mkdir(nested, { recursive: true });
+    await fs.writeFile(
+      path.join(nested, 'SKILL.md'),
+      '---\nname: nested\ndescription: Nested skill\n---\nBody\n',
+      'utf8',
+    );
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'nested'), nested)).toBe(true);
+  });
+
+  it('resolves a project root for a nested project Skill path', () => {
+    const projectRoot = path.join(os.tmpdir(), 'cindy-nested-project-root', 'repo');
+    const skillPath = path.join(projectRoot, '.agents', 'skills', '@scope', 'nested');
+    expect(projectWorkingDirFromSkillPath(skillPath)).toBe(projectRoot);
+  });
+
+  it('does not walk generated dependency trees during projection', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const direct = await writeSkill(paths.sharedSkillsDir, 'direct');
+    const generatedDirs = [
+      'node_modules',
+      'dist',
+      'build',
+      'out',
+      'coverage',
+      'target',
+      '__macosx',
+      '__pycache__',
+      'Node_Modules',
+      'DIST',
+    ];
+    for (const generatedDir of generatedDirs) {
+      await writeSkill(paths.sharedSkillsDir, path.join(generatedDir, 'ignored'));
+    }
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'direct'), direct)).toBe(true);
+    for (const generatedDir of generatedDirs) {
+      await expect(fs.lstat(path.join(paths.claudeSkillsDir, generatedDir, 'ignored'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    }
+  });
+
+  it('keeps a direct Skill whose folder name matches a pruned directory', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const distSkill = await writeSkill(paths.sharedSkillsDir, 'dist');
+    await writeSkill(paths.sharedSkillsDir, path.join('node_modules', 'ignored'));
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'dist'), distSkill)).toBe(true);
+  });
+
   it('does not pull other-agent skills into the shared index by default (opt-in gate, #2930)', async () => {
     const root = await makeTmpDir();
     const homeDir = path.join(root, 'home');
@@ -472,6 +541,28 @@ describe('prepareSharedProjectSkillLinks', () => {
     await fs.mkdir(paths.sharedSkillsDir, { recursive: true });
     await fs.symlink(
       path.join(oldPaths.claudeSkillsDir, 'moved-skill'),
+      staleSharedLink,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    const result = await prepareSharedProjectSkillLinks({ workingDir });
+
+    expect(result.changed).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(await sameRealPath(staleSharedLink, claudeSkill)).toBe(true);
+  });
+
+  it('repairs a broken absolute nested project link after the checkout moves', async () => {
+    const root = await makeTmpDir();
+    const oldWorkingDir = path.join(root, 'old-checkout');
+    const workingDir = path.join(root, 'moved-checkout');
+    const oldPaths = sharedProjectSkillsPaths(oldWorkingDir);
+    const paths = sharedProjectSkillsPaths(workingDir);
+    const claudeSkill = await writeSkill(paths.claudeSkillsDir, path.join('@scope', 'nested'));
+    const staleSharedLink = path.join(paths.sharedSkillsDir, 'nested');
+    await fs.mkdir(paths.sharedSkillsDir, { recursive: true });
+    await fs.symlink(
+      path.join(oldPaths.claudeSkillsDir, '@scope', 'nested'),
       staleSharedLink,
       process.platform === 'win32' ? 'junction' : 'dir',
     );

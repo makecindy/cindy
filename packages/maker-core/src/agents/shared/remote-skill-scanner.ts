@@ -2,6 +2,7 @@ import path from 'node:path';
 
 import type { RemoteAgentFileOps } from '../base-agent.js';
 import type { AgentSkillCommand, ListAgentSkillsResult } from '../../types/palette.js';
+import { shouldPruneSkillScanDirectory } from './skill-scan-limits.js';
 
 const SKILL_READ_LIMIT = 1_048_576;
 
@@ -70,12 +71,11 @@ async function scanSkillDirectories(input: {
   runtimeCommandPrefix?: string;
 }): Promise<AgentSkillCommand[]> {
   const names = (await input.fileOps.listDir(input.root))
-    .filter((name) => name && !name.startsWith('.') && !name.includes('/'))
+    .filter((name) => name && !name.startsWith('.') && !name.includes('/')
+      && !/\.bak\.\d+$/.test(name))
     .sort((a, b) => a.localeCompare(b));
   const found: AgentSkillCommand[] = [];
-  for (const name of names) {
-    const skillFile = await existingSkillFile(input.fileOps, path.posix.join(input.root, name));
-    if (!skillFile) continue;
+  const addSkill = async (name: string, skillFile: string): Promise<void> => {
     found.push({
       kind: 'agent-skill',
       name,
@@ -88,6 +88,29 @@ async function scanSkillDirectories(input: {
         ? { runtimeCommandName: `${input.runtimeCommandPrefix}${name}` }
         : {}),
     });
+  };
+
+  for (const name of names) {
+    const skillDir = path.posix.join(input.root, name);
+    const skillFile = await existingSkillFile(input.fileOps, skillDir);
+    if (skillFile) {
+      await addSkill(name, skillFile);
+      continue;
+    }
+    if (shouldPruneSkillScanDirectory(name)) continue;
+
+    // At most one namespace/author level: <root>/<namespace>/<skill>.
+    const nestedNames = (await input.fileOps.listDir(skillDir))
+      .filter((nested) => nested && !nested.startsWith('.') && !nested.includes('/')
+        && !/\.bak\.\d+$/.test(nested))
+      .sort((a, b) => a.localeCompare(b));
+    for (const nestedName of nestedNames) {
+      const nestedFile = await existingSkillFile(
+        input.fileOps,
+        path.posix.join(skillDir, nestedName),
+      );
+      if (nestedFile) await addSkill(nestedName, nestedFile);
+    }
   }
   return found;
 }

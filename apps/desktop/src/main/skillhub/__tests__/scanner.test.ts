@@ -82,6 +82,194 @@ function createSymlinkedSkill() {
 }
 
 describe('scanAllSkills', () => {
+  it('keeps a nested namespace Skill in the local SkillHub projection', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-nested-skill-'));
+    tempRoots.push(root);
+    const skillDir = path.join(root, '.agents', 'skills', '@scope', 'nested');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      '---\nname: nested\ndescription: >-\n  Nested skill\n---\nBody\n',
+      'utf-8',
+    );
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: [{
+          engine: 'pi' as const,
+          kind: 'skill' as const,
+          scope: 'user' as const,
+          name: 'nested',
+          description: 'Nested skill',
+          absolutePath: skillDir,
+          mdPath: path.join(skillDir, 'SKILL.md'),
+          files: [],
+        }],
+      })),
+    } as unknown as Maker;
+
+    const result = await scanAllSkills({}, maker);
+
+    expect(result.skills).toHaveLength(1);
+    expect(result.skills[0]).toMatchObject({
+      name: 'nested',
+      description: 'Nested skill',
+      absolutePath: fs.realpathSync.native(skillDir),
+      mdPath: path.join(fs.realpathSync.native(skillDir), 'SKILL.md'),
+    });
+  });
+
+  it('uses the nested skill root when excluding package files', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-nested-exclusion-'));
+    tempRoots.push(root);
+    const skillDir = path.join(root, '.agents', 'skills', '@scope', 'nested');
+    const sensitiveFiles = [
+      path.join(skillDir, '.m2', 'settings.xml'),
+      path.join(skillDir, '.ssh', 'id_rsa'),
+      path.join(skillDir, '.config', 'gcloud', 'application_default_credentials.json'),
+    ];
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Nested\n', 'utf-8');
+    for (const filePath of sensitiveFiles) {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, 'secret\n', 'utf-8');
+    }
+
+    const skillMd = path.join(skillDir, 'SKILL.md');
+    await expect(readSkillContent({ mdPath: skillMd })).resolves.toMatchObject({ success: true });
+    await expect(readSkillRawFile({ filePath: skillMd })).resolves.toMatchObject({ success: true });
+    for (const filePath of sensitiveFiles) {
+      await expect(readSkillSiblingFile({ filePath })).resolves.toMatchObject({
+        success: false,
+        error: 'path is excluded from SkillHub packages',
+      });
+      await expect(readSkillRawFile({ filePath })).resolves.toMatchObject({
+        success: false,
+        error: 'path is excluded from SkillHub packages',
+      });
+      await expect(writeSkillFile({ filePath, content: 'changed\n' })).resolves.toMatchObject({
+        success: false,
+        error: 'path is excluded from SkillHub packages',
+      });
+    }
+
+    const listed = await listSkillFolderChildren({ dirPath: skillDir });
+    expect(listed).toMatchObject({ success: true });
+    expect(listed.entries?.map((entry) => entry.name)).not.toContain('.ssh');
+
+    // A deeper resource manifest must not raise the package root above the
+    // credential/config directories that contain it.
+    const deepManifestDirs = [
+      path.join(skillDir, '.config', 'gcloud', 'deep'),
+      path.join(skillDir, '.ssh', 'deep'),
+    ];
+    for (const dir of deepManifestDirs) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), '# Deep resource\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'payload.txt'), 'secret\n', 'utf-8');
+    }
+    for (const dir of deepManifestDirs) {
+      await expect(readSkillContent({ mdPath: path.join(dir, 'SKILL.md') })).resolves.toMatchObject({
+        success: false,
+        error: 'path is excluded from SkillHub packages',
+      });
+      await expect(readSkillRawFile({ filePath: path.join(dir, 'payload.txt') })).resolves.toMatchObject({
+        success: false,
+        error: 'path is excluded from SkillHub packages',
+      });
+      await expect(listSkillFolderChildren({ dirPath: dir })).resolves.toMatchObject({
+        success: true,
+        entries: [],
+      });
+    }
+
+    // The same must hold when the manifest sits directly in the excluded
+    // directory itself (`.m2` or `.config/gh`), not only deeper below it.
+    const exactContainerDirs = [
+      path.join(skillDir, '.m2'),
+      path.join(skillDir, '.config', 'gh'),
+    ];
+    for (const dir of exactContainerDirs) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), '# Exact container\n', 'utf-8');
+    }
+    fs.writeFileSync(path.join(skillDir, '.config', 'gh', 'hosts.yml'), 'token: secret\n', 'utf-8');
+    for (const dir of exactContainerDirs) {
+      const listed = await listSkillFolderChildren({ dirPath: dir });
+      expect(listed).toMatchObject({ success: true });
+      const names = listed.entries?.map((entry) => entry.name) ?? [];
+      if (path.basename(dir) === '.m2') {
+        expect(names).not.toContain('settings.xml');
+      } else {
+        expect(names).toEqual([]);
+      }
+    }
+    await expect(readSkillRawFile({
+      filePath: path.join(skillDir, '.config', 'gh', 'hosts.yml'),
+    })).resolves.toMatchObject({
+      success: false,
+      error: 'path is excluded from SkillHub packages',
+    });
+  });
+
+  it('excludes sensitive directories in the namespace position', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-sensitive-namespace-'));
+    tempRoots.push(root);
+    const skillsRoot = path.join(root, '.agents', 'skills');
+    const evilDirs = [
+      path.join(skillsRoot, '.ssh', 'evil'),
+      path.join(skillsRoot, '.m2', 'evil'),
+      path.join(skillsRoot, '.config', 'gh', 'evil'),
+    ];
+    for (const dir of evilDirs) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), '# Evil\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'payload.txt'), 'secret\n', 'utf-8');
+    }
+
+    for (const dir of evilDirs) {
+      await expect(readSkillRawFile({ filePath: path.join(dir, 'SKILL.md') })).resolves.toMatchObject({
+        success: false,
+        error: 'path is excluded from SkillHub packages',
+      });
+      await expect(readSkillSiblingFile({ filePath: path.join(dir, 'payload.txt') })).resolves.toMatchObject({
+        success: false,
+        error: 'path is excluded from SkillHub packages',
+      });
+      await expect(writeSkillFile({ filePath: path.join(dir, 'payload.txt'), content: 'x\n' })).resolves.toMatchObject({
+        success: false,
+        error: 'path is excluded from SkillHub packages',
+      });
+      await expect(listSkillFolderChildren({ dirPath: dir })).resolves.toMatchObject({
+        success: true,
+        entries: [],
+      });
+    }
+  });
+
+  it('keeps a nested Skill readable when its own leaf name is sensitive', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-sensitive-leaf-'));
+    tempRoots.push(root);
+    const skillDir = path.join(root, '.agents', 'skills', '@scope', 'credentials');
+    fs.mkdirSync(skillDir, { recursive: true });
+    const skillMd = path.join(skillDir, 'SKILL.md');
+    fs.writeFileSync(skillMd, '# Credentials helper\n', 'utf-8');
+    fs.writeFileSync(path.join(skillDir, 'notes.md'), 'notes\n', 'utf-8');
+
+    await expect(readSkillContent({ mdPath: skillMd })).resolves.toMatchObject({
+      success: true,
+      content: '# Credentials helper\n',
+    });
+    await expect(readSkillRawFile({ filePath: skillMd })).resolves.toMatchObject({ success: true });
+    await expect(writeSkillFile({ filePath: skillMd, content: '# Updated\n' })).resolves.toEqual({
+      success: true,
+    });
+    await expect(listSkillFolderChildren({ dirPath: skillDir })).resolves.toMatchObject({
+      success: true,
+      entries: expect.arrayContaining([{ name: 'SKILL.md', kind: 'file' }]),
+    });
+  });
+
   it('always projects the bundled Skill as non-uninstallable and keeps a user same-name copy distinct', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-built-in-'));
     tempRoots.push(root);

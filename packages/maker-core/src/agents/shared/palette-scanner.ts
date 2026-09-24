@@ -7,6 +7,7 @@ import type {
   AtResourceItem,
   ScanAtResourcesResult,
 } from '../../types/palette.js';
+import { shouldPruneSkillScanDirectory } from './skill-scan-limits.js';
 
 const MAX_SCAN_ITEMS = 2_000;
 const IGNORE_DIRS = new Set([
@@ -271,34 +272,72 @@ async function scanClaudeCommandFiles(
   return results;
 }
 
+async function isSymlinkDirectory(target: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(target)).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+async function findSkillFile(dir: string): Promise<string | null> {
+  for (const name of ['SKILL.md', 'skill.md']) {
+    if (await fs.stat(path.join(dir, name)).then((stat) => stat.isFile()).catch(() => false)) {
+      return name;
+    }
+  }
+  return null;
+}
+
 async function scanClaudeSkillDirs(
   dirPath: string,
   scope: 'global' | 'project',
 ): Promise<AgentSlashCommand[]> {
   if (!(await isDirectory(dirPath))) return [];
   const results: AgentSlashCommand[] = [];
-  const entries = (await fs.readdir(dirPath, { withFileTypes: true }))
-    .filter((ent) => (ent.isDirectory() || ent.isSymbolicLink()) && !ent.name.startsWith('.'))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  for (const ent of entries) {
-    const subDir = path.join(dirPath, ent.name);
-    const skillFile = (await Promise.all(
-      ['SKILL.md', 'skill.md'].map(async (name) => ({
-        name,
-        exists: await fs.stat(path.join(subDir, name)).then((stat) => stat.isFile()).catch(() => false),
-      })),
-    )).find((entry) => entry.exists)?.name;
-    if (!skillFile) continue;
-
+  const addSkill = async (subDir: string, name: string, skillFile: string): Promise<void> => {
     const skillPath = path.join(subDir, skillFile);
     results.push({
-      name: ent.name,
+      name,
       description: await readMarkdownDescription(skillPath),
       source: 'skill',
       path: skillPath,
       scope,
     });
+  };
+  const entries = (await fs.readdir(dirPath, { withFileTypes: true }))
+    .filter((ent) => (ent.isDirectory() || ent.isSymbolicLink())
+      && !ent.name.startsWith('.')
+      && !/\.bak\.\d+$/.test(ent.name))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  for (const ent of entries) {
+    const subDir = path.join(dirPath, ent.name);
+    const skillFile = await findSkillFile(subDir);
+    if (skillFile) {
+      await addSkill(subDir, ent.name, skillFile);
+      continue;
+    }
+    // Direct symlinked Skills remain supported; a symlinked namespace is not walked.
+    const isSymlink = ent.isSymbolicLink() || (ent.isDirectory() && await isSymlinkDirectory(subDir));
+    if (isSymlink || shouldPruneSkillScanDirectory(ent.name)) continue;
+
+    // At most one namespace/author level: <root>/<namespace>/<skill>.
+    let nestedEntries;
+    try {
+      nestedEntries = await fs.readdir(subDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const nested of nestedEntries
+      .filter((entry) => (entry.isDirectory() || entry.isSymbolicLink())
+        && !entry.name.startsWith('.')
+        && !/\.bak\.\d+$/.test(entry.name))
+      .sort((a, b) => a.name.localeCompare(b.name))) {
+      const nestedDir = path.join(subDir, nested.name);
+      const nestedFile = await findSkillFile(nestedDir);
+      if (nestedFile) await addSkill(nestedDir, nested.name, nestedFile);
+    }
   }
   return results;
 }
