@@ -9641,11 +9641,11 @@
       "daemonNotReady": "{{manager}} 升級完成，但遠端 daemon 暫未啟動 — 請手動重新傳送訊息"
     },
     "remoteError": {
-      "REMOTE_DAEMON_CLOSED": "遠端連線已中斷（daemon 可能正在升級或重啟）。本輪已結束 — 請重新傳送。",
+      "REMOTE_DAEMON_CLOSED": "遠端連線中斷了，可能正在更新。這一輪已經結束，請重新傳送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法訪問本地檔案/圖片附件。請直接貼上內容。",
       "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時無法給出判斷（網路或服務波動），需要審批的操作已轉由你來確認。想少被打斷，可以把任務切到「預設權限」自行掌控。",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自動審批沒完成，確認也沒有送到或沒有被點。這次拒絕不是你點的。",
-      "REMOTE_COMPAT_MODE_UNSUPPORTED": "遠端 Claude Code 會話無法透過本地相容 Proxy 路由(內部錯誤，請反饋)。",
+      "REMOTE_COMPAT_MODE_UNSUPPORTED": "遠端任務不能使用本機相容通道。請改用 Cindy AI，或在本機任務裡繼續。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 憑據尚未就緒(登入後由服務端自動下發)。請稍候重試；若持續出現，請到 設定 → 模型供應商 檢查 Cindy AI 連線狀態。",
       "REMOTE_LOCAL_ONLY_PROVIDER": "此模型供應商是本機專屬服務（如 Ollama），SSH 遠端任務無法存取本機位址。請改用 Cindy AI 閘道，或選擇遠端主機可達的模型供應商。",
       "LOCAL_OLLAMA_NOT_READY": "本機 Ollama 尚未就緒。請打開設定 → 模型供應商 → Ollama。",
@@ -9653,7 +9653,15 @@
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件傳輸失敗，訊息未傳送。請重試。",
       "MCP_APPROVAL_AUTO_BLOCKED": "這次工具呼叫被自動審核攔截，未收到你手動拒絕的紀錄。",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "權限確認逾時，未收到有效的確認結果。僅憑逾時無法判斷你是否點過按鈕。",
-      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "這次權限確認未完成，未收到你手動拒絕的紀錄。"
+      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "這次權限確認未完成，未收到你手動拒絕的紀錄。",
+      "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "這個模型需要電腦端轉送請求，目前遠端連線還不能轉送。請改用 Cindy AI，或在本機任務裡使用這個模型。",
+      "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "換成這個模型需要另一條連線。請新建任務後再使用。",
+      "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "遠端任務還不能使用訂閱登入。請改用 Cindy AI，或選擇已設定金鑰的模型供應商。",
+      "REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE": "遠端 Pi 任務不能使用這個上下文設定。請改用 Cindy AI，或選擇遠端可以存取的模型。",
+      "REMOTE_PROVIDER_UNSUPPORTED": "遠端任務還不能使用這個模型供應商。請換一個供應商，或在本機任務裡使用它。",
+      "REMOTE_PROVIDER_UPDATING": "這個模型供應商的憑證正在更新。請稍後再試。",
+      "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄現在無法使用。請確認那台電腦上的目錄還在，然後重試。",
+      "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "電腦端暫時無法確認這則訊息是否已經送出。請稍後再試，不要重複傳送同一則。"
     },
     "generatedFiles": {
       "title": "本條訊息生成的檔案",
@@ -12171,7 +12179,7 @@
     },
     "errors": {
       "openFileFailed": "無法在系統中開啟檔案",
-      "emptyResponse": "模型返回了空響應，請重試。(本輪未產出任何內容，常見於模型閘道器在大上下文 / 高負載下返回空流)",
+      "emptyResponse": "模型沒有返回內容。請重試。上下文很長時，也可以換一個模型。",
       "turnFailed": "任務執行失敗（模型未返回錯誤詳情），請重試。",
       "sendFailed": "傳送失敗：{{message}}",
       "steerNoActiveTurn": "當前沒有正在執行的任務，無法插話",
@@ -12186,10 +12194,10 @@
       "codexAutoReviewUnavailable": "自動審批暫時不可用，當前操作已阻止並切換為預設權限。請重試，需要時會詢問你。",
       "hostShellCommandBlocked": "Cindy 已阻止會繞過內嵌模擬器的 Shell 命令。請改用模擬器工具控制裝置、啟動 App、操作介面、截圖和診斷。",
       "upstreamResponseIdleTimeout": "模型長時間沒有任何響應，本輪已自動中斷以免無限等待。已完成的工具呼叫都保留，可以直接發下一條訊息繼續。",
-      "codexHistoryOversized": "圖片歷史未能自動恢復並繼續。請傳送「繼續」，接著完成目前任務。",
+      "codexHistoryOversized": "圖片歷史太大，沒能自動恢復。請傳送「繼續」，Cindy 會接著完成目前任務。",
       "codexHistoryOversizedRemote": "這段歷史裡有過大的圖片，遠端壓縮送不出去。請在執行 Codex 的那台電腦上打開任務後再傳送，Cindy 會自動略去這些圖片並繼續。",
-      "codexCompactionNotConverging": "Codex 反覆壓縮上下文卻壓不動，本輪已自動中斷以免無限迴圈。壓不動的部分通常不在對話裡——system prompt 與工具定義佔掉的空間壓縮清不掉。新開一個任務可以繼續。",
-      "codexCompactionNotConvergingModelSwitch": "Codex 反覆壓縮上下文卻壓不動，本輪已自動中斷以免無限迴圈。本任務中途切換過模型，而 Codex 仍按切換前那個模型的上下文上限來判斷。切回原模型可以繼續，或者新開一個任務。",
+      "codexCompactionNotConverging": "Codex 反覆壓縮上下文，但占用沒有降下來，這一輪已停止，避免一直循環。占空間的是固定說明和工具定義，壓縮去不掉。請新開一個任務繼續。",
+      "codexCompactionNotConvergingModelSwitch": "Codex 反覆壓縮上下文，但占用沒有降下來，這一輪已停止。這個任務中途切換過模型，Codex 仍按切換前的上下文上限判斷。請切回原模型，或新開一個任務後再繼續。",
       "turnNoEventTimeout": "本輪長時間沒有任何進展（模型、工具與後臺處理程序都沒有動靜），已自動中斷以免無限等待。可以直接發下一條訊息繼續。",
       "toolUseLoopDetected": "模型重複呼叫工具次數過多，Cindy 已停止這一輪以避免無限迴圈。可以傳送新訊息繼續。",
       "toolUseLoopDetectedWithCount": "模型連續觸發無效的工具呼叫，Cindy 已在 {{count}} 次失敗後停止本輪，以避免無限迴圈。可以傳送新訊息繼續。",

@@ -39,6 +39,8 @@ import {
   shouldPrependMobileClientPromptNote,
 } from './mobileClientPromptNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
+import { getResolvedMainLocale } from '../i18n.js';
+import { buildUiLanguageErrorNote, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
 import {
   excludeDirectoryGrantConflicts,
   directoryGrantsForRuntime,
@@ -264,6 +266,8 @@ type MakerSendOptions = {
    * 入队时的 async context 早已结束,只靠 isMobileClientInvoke() 实际读不到来源。
    */
   fromMobileClient?: boolean;
+  /** Coordinator-stamped interface language. Direct wire values are stripped. */
+  uiLanguage?: string;
   /** Coordinator-transmitted provenance for device-link input.enqueue. */
   fromDeviceLinkClient?: boolean;
   persistUserMessage?: {
@@ -1256,9 +1260,15 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
           ? buildCindyMakeTaskNote()
           : null;
-      const outgoing = cindyMakeNote
+      const withCindyMakeNote = cindyMakeNote
         ? prependNoteToWireUserMessage(withMobileNote as HandoffWireMessage, cindyMakeNote)
         : withMobileNote;
+      const uiLanguageNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()))
+        : null;
+      const outgoing = uiLanguageNote
+        ? prependNoteToWireUserMessage(withCindyMakeNote as HandoffWireMessage, uiLanguageNote)
+        : withCindyMakeNote;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       let persistUserMessage = readPersistUserMessageOption(so);
       const trustedDesktopQueueReceipt = readTrustedDesktopQueueReceipt(persistUserMessage);

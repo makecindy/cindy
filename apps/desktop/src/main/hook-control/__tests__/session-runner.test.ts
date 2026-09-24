@@ -327,13 +327,15 @@ import { createMakerHookSessionRunner, extractToolResultImageUrls } from '../ses
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
+import { getResolvedMainLocale } from '../../i18n.js';
+import { buildUiLanguageErrorNote } from '../../maker-ipc/uiLanguageErrorNote.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 const log = { info: vi.fn(), warn: vi.fn() };
 
 /** 喂给 agent 的文本 = 用户原话 + 渠道说明(教模型用 xdt-file 回传文件)。 */
-const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}`;
+const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
 
 function catalogModel(id: string, name = id): CatalogModel {
   return {
@@ -830,7 +832,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     );
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `hello\n\n${buildHookPromptNote('telegram')}`,
+      content: `hello\n\n${buildHookPromptNote('telegram')}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
     });
     expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
       origin: { kind: 'hook', source: 'telegram' },
@@ -864,7 +866,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       rawChannelText: rawCommand,
     });
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}`,
+      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
     });
   });
 
@@ -954,7 +956,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(outcome.status).toBe('ok');
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `再试试\n\n${SLACK_HOOK_PROMPT_NOTE}`,
+      content: `再试试\n\n${SLACK_HOOK_PROMPT_NOTE}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
     });
   });
 

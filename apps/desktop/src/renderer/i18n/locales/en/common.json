@@ -9648,11 +9648,11 @@
       "daemonNotReady": "{{manager}} upgraded, but the remote daemon hasn't started yet — please resend your message manually"
     },
     "remoteError": {
-      "REMOTE_DAEMON_CLOSED": "Remote connection interrupted (the daemon may be upgrading or restarting). The turn has ended — please resend.",
+      "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision (network or service hiccup), so actions that need review are being handed to you to confirm. Switch this task to Default permissions if you would rather not be interrupted.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Automatic review was unavailable, and the confirmation request was not completed. This is not a user rejection.",
-      "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote Claude Code sessions can't route through the local compat proxy (internal error).",
+      "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote tasks cannot use this computer’s compatibility route. Switch to Cindy AI, or continue in a local task.",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
       "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
       "LOCAL_OLLAMA_NOT_READY": "Local Ollama isn't ready. Open Settings → Model Providers → Ollama.",
@@ -9660,7 +9660,15 @@
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
       "MCP_APPROVAL_AUTO_BLOCKED": "Automatic approval review blocked this tool call. No manual rejection was received.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "The permission request timed out without a confirmed decision. A timeout does not show whether you clicked a button.",
-      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Permission confirmation could not be completed. No manual rejection was received."
+      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Permission confirmation could not be completed. No manual rejection was received.",
+      "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "This model needs this computer to forward requests, and the remote connection cannot do that yet. Switch to Cindy AI, or use this model in a local task.",
+      "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "Switching to this model needs a different connection. Start a new task to use it.",
+      "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Remote tasks cannot use a subscription sign-in yet. Switch to Cindy AI, or pick a provider with an API key.",
+      "REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE": "A remote Pi task cannot use this context profile. Switch to Cindy AI, or pick a model the remote computer can reach.",
+      "REMOTE_PROVIDER_UNSUPPORTED": "Remote tasks cannot use this model provider yet. Pick another provider, or use it in a local task.",
+      "REMOTE_PROVIDER_UPDATING": "This model provider’s credentials are updating. Try again in a moment.",
+      "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
+      "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice."
     },
     "generatedFiles": {
       "title": "Files created this message",
@@ -12187,7 +12195,7 @@
     },
     "errors": {
       "openFileFailed": "Cannot open file in system",
-      "emptyResponse": "The model returned an empty response — please retry. (Nothing was produced this turn; this often happens when the model gateway short-circuits under large context or high load.)",
+      "emptyResponse": "The model returned no content. Try again. If the context is very long, switch models.",
       "turnFailed": "The task failed (the model returned no error detail) — please retry.",
       "sendFailed": "Send failed: {{message}}",
       "steerNoActiveTurn": "No task is currently running, so this message cannot be steered",
@@ -12202,10 +12210,10 @@
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
-      "codexHistoryOversized": "Automatic image history recovery and continuation could not finish. Send “Continue” to resume this task.",
+      "codexHistoryOversized": "The image history is too large to resume automatically. Send “Continue”, and Cindy will pick up the current task.",
       "codexHistoryOversizedRemote": "This task’s history includes oversized images, so remote compaction cannot finish. Open the task on the machine running Codex and send again; Cindy will omit those images there.",
-      "codexCompactionNotConverging": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. What's taking up the space usually isn't the conversation — the system prompt and tool definitions can't be compacted away. Start a new task to continue.",
-      "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. This task switched model midway, and Codex still evaluates the context limit against the previous model. Switch back to that model to continue, or start a new task.",
+      "codexCompactionNotConverging": "Codex kept compacting the context, but the size did not come down, so this turn stopped to avoid a loop. The fixed instructions and tool definitions are using that space, and compacting cannot remove them. Start a new task to continue.",
+      "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context, but the size did not come down, so this turn stopped. This task switched models, and Codex is still using the earlier context limit. Switch back to the original model, or start a new task.",
       "turnNoEventTimeout": "This turn showed no activity for a long time (model, tools and background processes were all silent), so it was interrupted to avoid hanging forever. Send the next message to continue.",
       "toolUseLoopDetected": "The model repeated a tool call too many times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
       "toolUseLoopDetectedWithCount": "The model kept repeating invalid tool calls, so Cindy stopped this turn after {{count}} failures to prevent an infinite loop. Send a new message to continue.",

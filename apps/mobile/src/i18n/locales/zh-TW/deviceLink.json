@@ -71,6 +71,7 @@
     "offerExpired": "Codex 重設憑證已失效，請重新整理配額後再次確認。",
     "preconditionFailed": "操作條件已變更，請重新整理後再次確認。",
     "transient": "網路或遠端電腦暫時不可用，可以稍後重新同步。",
-    "callFailed": "遠端呼叫失敗，可以稍後重試。（{{error}}）"
+    "callFailed": "遠端呼叫沒有完成。請稍後重試。",
+    "unclassified": "這個操作沒有完成。請稍後重試。"
   }
 }

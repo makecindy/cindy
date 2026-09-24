@@ -216,6 +216,7 @@ export interface AgentInputSendOpts {
    * 最终 wire 消息。**由 main 构造,不是 wire 输入。**
    */
   fromMobileClient?: boolean;
+  uiLanguage?: string;
   /** Queue provenance stamped by the controlled desktop at device-link input IPC entry. */
   fromDeviceLinkClient?: boolean;
   /** Main-owned clear token captured when this input became active. */
@@ -2201,6 +2202,7 @@ export class AgentInputCoordinator {
           : {}),
         // 同 drain:steer 投递也在入队时的 async context 之外。
         ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
+        ...(item.uiLanguage ? { uiLanguage: item.uiLanguage } : {}),
       });
     } catch (err) {
       const latest = this.getState(sessionId);
@@ -4495,6 +4497,7 @@ export class AgentInputCoordinator {
         ...(head.origin?.kind === 'scheduler' ? { origin: head.origin } : {}),
         // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
         ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
+        ...(head.uiLanguage ? { uiLanguage: head.uiLanguage } : {}),
         ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         persistUserMessage: {
           ...(head.sharedTaskAuthor ? { sharedTaskAuthor: head.sharedTaskAuthor } : {}),

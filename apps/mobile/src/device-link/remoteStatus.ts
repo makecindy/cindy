@@ -1,7 +1,5 @@
 import {
-  describeRemoteError as describeRemoteErrorShared,
   formatRemoteError as formatRemoteErrorShared,
-  humanizeRemoteError as humanizeRemoteErrorShared,
   isDeviceUnresponsiveRemoteError,
   isTransientRemoteError,
 } from '@cindy/maker-shared/device-link-contract';
@@ -86,10 +84,9 @@ function localizedConnectionRecoveryCopy(error: unknown): string | null {
 }
 
 /**
- * mobile 侧的 humanizeRemoteError / describeRemoteError:熔断快速失败与 Stop
- * 会主动产生的自动恢复错误先走 Mobile i18n,其余委托 maker-shared 原实现。
- * 共享层的文案是中文硬编码(历史现状),新接入的错误出口不能直接透给其它语言
- * 用户。mobile 代码一律从本文件 import,不要直接 import 共享层的这两个函数。
+ * Mobile display copy stays in the interface language. Known markers use
+ * deviceLink.remoteError; anything else uses the localized unclassified
+ * summary. Do not fall through to maker-shared Chinese strings.
  */
 export function humanizeRemoteError(error: unknown): string {
   if (isDeviceUnresponsiveRemoteError(error)) {
@@ -100,7 +97,7 @@ export function humanizeRemoteError(error: unknown): string {
   const formatted = typeof error === 'string' ? error : formatRemoteErrorShared(error);
   const localized = localizedStableRemoteError(formatted);
   if (localized) return localized;
-  return humanizeRemoteErrorShared(error);
+  return i18n.t('deviceLink.remoteError.unclassified');
 }
 
 /**
@@ -141,7 +138,7 @@ export function describeRemoteError(error: string | null): string | null {
   if (agentAuth) return agentAuth;
   const localized = localizedStableRemoteError(error);
   if (localized) return localized;
-  return describeRemoteErrorShared(error);
+  return i18n.t('deviceLink.remoteError.unclassified');
 }
 
 function localizedStableRemoteError(error: string): string | null {

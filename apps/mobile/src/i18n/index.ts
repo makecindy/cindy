@@ -53,6 +53,20 @@ void i18n.use(initReactI18next).init({
     // 品牌名单一事实源:文案里的 {{appName}} 全部由此注入(与 desktop 同约定)。
     defaultVariables: { appName: BRAND_NAME },
   },
+  parseMissingKeyHandler(key: string) {
+    if (
+      key.startsWith('session.remoteError.') ||
+      key.startsWith('deviceLink.remoteError.') ||
+      key.startsWith('apiErrors.')
+    ) {
+      const lng = i18n.resolvedLanguage || i18n.language;
+      const fallback =
+        i18n.getResource(lng, 'common', 'session.tail.replyFailed') ??
+        i18n.getResource('en', 'common', 'session.tail.replyFailed');
+      if (typeof fallback === 'string' && key !== 'session.tail.replyFailed') return fallback;
+    }
+    return key;
+  },
   returnNull: false,
 });
 
