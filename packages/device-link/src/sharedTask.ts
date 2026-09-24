@@ -16,8 +16,6 @@ export function isSharedTaskAttachment(value: string, sharedTaskId: string): boo
 }
 
 export const SHARED_TASK_CAPABILITY = 'shared-task-v2';
-export const SHARED_TASK_MAX_ACTIVE_PER_OWNER = 2;
-export const SHARED_TASK_MAX_JOINED_PER_ACCOUNT = 2;
 export const SHARED_TASK_MAX_GUESTS = 2;
 /** Read existing development snapshots without revoking already joined guests.
  * Admission limits are enforced by the server, not by rejecting stored history. */
