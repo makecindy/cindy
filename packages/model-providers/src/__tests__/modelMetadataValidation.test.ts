@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseModelRegistry } from "../modelAccessValidator.js";
-import { expandedRegistryEntries } from "../modelMetadataLayers.js";
+import { expandedRegistryEntries, validModelMetadata } from "../modelMetadataLayers.js";
 import type { ModelRegistry } from "../modelAccessBean.js";
 
 function fixture(): ModelRegistry {
@@ -22,6 +22,23 @@ function fixture(): ModelRegistry {
 }
 
 describe("V4 metadata validation boundaries", () => {
+  it.each([4, 5] as const)("rejects connection capacity in every V%s Registry metadata layer", (schemaVersion) => {
+    for (const layer of ["public", "defaults", "forceOverrides"] as const) {
+      const r = fixture();
+      r.schemaVersion = schemaVersion;
+      const metadata = { contextWindow: 272_000, contextWindowMax: 1_050_000 };
+      expect(validModelMetadata(metadata)).toBe(true);
+      if (layer === "public") r.baseModels![0].defaults = metadata;
+      else {
+        r.models[0].routes[0][layer] = metadata;
+        r.models[0].routes[0].overrideReason = "Correct supplier metadata";
+      }
+      expect(parseModelRegistry(r).ok).toBe(false);
+      Reflect.deleteProperty(metadata, "contextWindowMax");
+      expect(parseModelRegistry(r).ok).toBe(true);
+    }
+  });
+
   it.each([1, 247, 248, 256])(
     "keeps split routes valid with a %i-character ID and reserved ID collisions",
     (length) => {
