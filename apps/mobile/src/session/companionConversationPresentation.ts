@@ -3,7 +3,8 @@ import { collectMobileMarkdownImages } from './messageMarkdown';
 import type { MobileMessageRenderItem } from './messageRenderModel';
 
 const isDelivery = (item: MobileMessageRenderItem) => item.type === 'tool_media' && item.tools.some(tool => !!tool.media?.length || !!tool.files?.length)
-  || item.type === 'message' && (!!item.message.attachments?.length || !!item.message.media?.length
+  || item.type === 'message' && (item.message.companion?.kind === 'task' && item.message.companion.meta.role === 'delegation-result'
+    || !!item.message.attachments?.length || !!item.message.media?.length
     || !!item.message.files?.length || collectMobileMarkdownImages(item.message.body).length > 0);
 
 /** Presentation only. The host's persisted messages and lazy history remain intact. */

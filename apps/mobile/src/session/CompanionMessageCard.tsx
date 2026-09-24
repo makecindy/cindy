@@ -9,7 +9,7 @@ import {
   GitPullRequestClosed,
   GitPullRequestDraft,
   Square,
-  MessageCircle,
+  ArrowLeftRight,
   ChevronRight,
 } from 'lucide-react-native';
 import {
@@ -95,31 +95,34 @@ function CompanionMessageCardContent({ message }: { message: NormalizedRemoteMes
     );
   const meta = card.meta;
   return (
-    <Pressable
-      accessibilityRole="button"
-      style={styles.privateTrace}
-      onPress={() =>
-        router.push({
-          pathname: '/companions/direct/[threadId]',
-          params: {
-            deviceId,
-            threadId: meta.threadId,
-            botId: meta.viewerBotId,
-          },
-        })
-      }
-    >
-      <MessageCircle size={iconSize.md} color={styles.note.color} />
-      <View style={{ flex: 1 }}>
-      <Text style={styles.note}>
-        {t('devices.companions.privateChat', { name: meta.peerBotName })}
-      </Text>
-      <Text numberOfLines={2} style={styles.note}>
-        {meta.preview}
-      </Text>
-      </View>
-      <ChevronRight size={iconSize.md} color={styles.note.color} />
-    </Pressable>
+    <View style={styles.privateTrace} testID="companion.privateTrace">
+      <View style={styles.traceLine} />
+      <Pressable
+        accessibilityRole="button"
+        style={styles.traceTouchTarget}
+        onPress={() =>
+          router.push({
+            pathname: '/companions/direct/[threadId]',
+            params: {
+              deviceId,
+              threadId: meta.threadId,
+              botId: meta.viewerBotId,
+            },
+          })
+        }
+      >
+        {({ pressed }) => (
+          <View style={[styles.traceAction, pressed && mobileInteractionStyles.pressed]}>
+            <ArrowLeftRight size={iconSize.sm} color={styles.note.color} />
+            <Text numberOfLines={2} style={[styles.note, styles.traceLabel]}>
+              {t(meta.direction === 'sent' ? 'devices.companions.sentTo' : 'devices.companions.receivedFrom', { name: meta.peerBotName })}
+            </Text>
+            <ChevronRight size={iconSize.sm} color={styles.note.color} />
+          </View>
+        )}
+      </Pressable>
+      <View style={styles.traceLine} />
+    </View>
   );
 }
 
@@ -426,8 +429,13 @@ function CompanionTaskCard({
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
-    privateTrace: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44, paddingVertical: spacing.sm },
-  card: {
+    privateTrace: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    traceLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
+    traceTouchTarget: { minHeight: 44, maxWidth: '90%', justifyContent: 'center', flexShrink: 1 },
+    traceAction: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border, borderRadius: radius.pill, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+    traceLabel: { flexShrink: 1 },
+    card: {
       marginVertical: spacing.sm,
       padding: spacing.md,
       gap: spacing.xs,

@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { RemoteResource } from '@cindy/device-link';
 import { AppState } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -18,10 +19,11 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
   const resourceKind = typeof params.resourceKind === 'string' ? params.resourceKind : '';
   const { invoke, connectionEpoch, status, onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
   const { user, accountGeneration } = useAuth();
+  const { i18n } = useTranslation();
   const router = useRouter();
-  const identity = JSON.stringify([accountGeneration, deviceId, collectionId, resourceKind, resourceId]);
+  const identity = JSON.stringify([accountGeneration, deviceId, sessionId, collectionId, resourceKind, resourceId]);
   const [display, setDisplay] = useState<{ identity: string; resource: RemoteResource } | null>(null);
-  const binding = JSON.stringify([accountGeneration, connectionEpoch, deviceId, sessionId, collectionId, resourceId, canMarkRead]);
+  const binding = JSON.stringify([identity, connectionEpoch, canMarkRead, i18n.language]);
   const current = useRef(binding); current.current = binding;
   useFocusEffect(useCallback(() => {
     if (!collectionId || !resourceId || !resourceKind || !deviceId || status !== 'online') return;
@@ -33,11 +35,10 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
       const expected = ++generation;
       const valid = () => !disposed && current.current === binding && generation === expected && AppState.currentState === 'active';
       try {
-        const resource = await getRemoteResource(invoke, { deviceId, deviceName }, { collectionId, id: resourceId, kind: resourceKind });
+        const resource = await getRemoteResource(invoke, { deviceId, deviceName }, { collectionId, id: resourceId, kind: resourceKind }, i18n.language);
         if (!valid()) return;
         // Reuse this existing read rather than issuing a second profile request per turn.
-        setDisplay((previous) => previous?.identity === identity && previous.resource.revision === resource.revision
-          ? previous : { identity, resource });
+        setDisplay({ identity, resource });
         const target = resource.links.find((link) => link.rel === 'conversation')?.target;
         if (target?.kind !== 'session') return;
         if (target.sessionId !== sessionId) {
@@ -73,6 +74,6 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
     const appState = AppState.addEventListener('change', (state) => { generation += 1; if (state === 'active') void load(); });
     void load();
     return () => { disposed = true; offPush(); offTopic(); appState.remove(); if (timer) clearTimeout(timer); };
-  }, [binding, canMarkRead, collectionId, deviceId, deviceName, identity, invoke, onRemoteResourceChanged, resourceId, resourceKind, router, sessionId, status, subscribe, unsubscribe, user?.id]));
+  }, [binding, canMarkRead, collectionId, deviceId, deviceName, identity, invoke, i18n.language, onRemoteResourceChanged, resourceId, resourceKind, router, sessionId, status, subscribe, unsubscribe, user?.id]));
   return display?.identity === identity ? display.resource : null;
 }
