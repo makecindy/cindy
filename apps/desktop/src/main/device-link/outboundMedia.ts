@@ -3,7 +3,7 @@
  * 把 block 的 path/url 替换成 OSS 引用串(随 invoke 走 relay,bytes 不内联)。
  * ---------------------------------------------------------------------------
  * 在 device-link handleInvoke 里、deps.invoke 之前对 maker:send / maker:steer /
- * maker:input:enqueue 调用(这些 channel 才携带用户消息附件)。失败抛错 → handleInvoke
+ * maker:input:enqueue / maker:input:update-content 调用(这些 channel 才携带用户消息附件)。失败抛错 → handleInvoke
  * 转 throwIpcError(DEVICE_LINK_MEDIA_TRANSFER_FAILED) → 整条消息不发(产品决策)。
  *
  * 被控端 normalizeUserMessage 识别 OSS 引用串 → presign-get 下载 → 物化喂 agent。
@@ -365,9 +365,10 @@ async function rewriteQueued(item: unknown, existing: ReadonlySet<string> = new 
  * 抛错由 handleInvoke 转 MEDIA_TRANSFER_FAILED。
  */
 export async function rewriteOutboundMedia(channel: string, args: unknown[], existing: ReadonlySet<string> = new Set()): Promise<unknown[]> {
-  if (channel === 'maker:input:update-content' && sharedTaskMediaId()) {
+  if (channel === 'maker:input:update-content') {
     const next = [...args];
     next[2] = await rewriteQueued(next[2], existing);
+    log.debug(`outbound media rewritten for ${channel}`);
     return next;
   }
   const isQueued = QUEUED_SHAPE_CHANNELS.has(channel);

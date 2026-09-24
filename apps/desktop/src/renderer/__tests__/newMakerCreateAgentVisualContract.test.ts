@@ -354,8 +354,8 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(modelSelectorSource).toContain("? 'truncate'");
     expect(modelSelectorSource).toContain('<ChevronDown');
     expect(modelSelectorSource).toContain("'shrink-0'");
-    expect(chatInputSource).toContain(
-      "className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}",
+    expect(chatInputSource).toMatch(
+      /className=\{\s*isCreateAgentVariant && !useNarrowToolbar\s*\? 'ml-\[7px\]' : undefined\s*\}/,
     );
     // 本机会话可选附件,但远程或身份尚未回流的已建会话不能摄入控制端绝对路径。
     expect(chatInputSource).toContain('const localAttachmentPickerEnabled =');

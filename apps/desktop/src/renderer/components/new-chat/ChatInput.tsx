@@ -581,8 +581,18 @@ interface ChatInputProps {
   onQueueExpandedChange?: (expanded: boolean) => void;
   /** F-QUEUE-DEFER: remove a single un-dispatched queued message. */
   onQueueRemove?: (clientId: string) => void;
-  /** F-QUEUE-DEFER: edit a single un-dispatched queued message's text. */
-  onQueueEdit?: (clientId: string, newText: string) => void;
+  /** Queue row currently loaded into this shared composer. */
+  queueEditingClientId?: string | null;
+  /** Load one queued row into the shared composer. */
+  onQueueEditBegin?: (entry: QueuedMessage) => void;
+  /** Save the shared composer's complete text/reference/attachment snapshot. */
+  onQueueEditSubmit?: (
+    clientId: string,
+    content: SerializedComposerContent,
+    files: AttachedFile[],
+  ) => Promise<boolean>;
+  /** Cancel queue editing and restore the normal composer draft. */
+  onQueueEditCancel?: () => void;
   /**
    * Same-turn 插话: a queued row can be delivered into the currently-running
    * turn without waiting for FIFO drain. This is a delivery choice only; the
@@ -1106,7 +1116,10 @@ export function ChatInput({
   queueExpanded = false,
   onQueueExpandedChange,
   onQueueRemove,
-  onQueueEdit,
+  queueEditingClientId = null,
+  onQueueEditBegin,
+  onQueueEditSubmit,
+  onQueueEditCancel,
   onQueueSteer,
   steeringQueueClientIds = [],
   queuePaused = false,
@@ -1391,6 +1404,11 @@ export function ChatInput({
   queueExpandedRef.current = queueExpanded;
   const onQueueExpandedChangeRef = useRef(onQueueExpandedChange);
   onQueueExpandedChangeRef.current = onQueueExpandedChange;
+  const queueEditingClientIdRef = useRef(queueEditingClientId);
+  queueEditingClientIdRef.current = queueEditingClientId;
+  const onQueueEditCancelRef = useRef(onQueueEditCancel);
+  onQueueEditCancelRef.current = onQueueEditCancel;
+  const queueEditCancelAllowedRef = useRef(true);
   // F-QUEUE-DEFER: outside-click collapses the queue tail. Boundary = the
   // palette anchor layer that holds the merged card (panel + input editor)
   // AND the palette host (slash / at-mention popovers) — clicking into the
@@ -2066,6 +2084,7 @@ export function ChatInput({
   // sendDispatchInFlight 锁到 onSend 结算，避免按钮亮着点了却被 in-flight guard 静默丢掉。
   const [sendDispatchInFlight, setSendDispatchInFlight] = useState(false);
   const [allowTypeDuringSend, setAllowTypeDuringSend] = useState(false);
+  queueEditCancelAllowedRef.current = !sendDispatchInFlight;
   const composerEditorLocked = disabled || sendDispatchInFlight;
   const composerMutationLockedRef = useRef(composerEditorLocked);
   composerMutationLockedRef.current = composerEditorLocked;
@@ -2485,6 +2504,15 @@ export function ChatInput({
 
         // ESC — back out of the topmost thing the user is interacting with.
         if (event.key === 'Escape') {
+          if (
+            queueEditingClientIdRef.current &&
+            queueEditCancelAllowedRef.current &&
+            onQueueEditCancelRef.current
+          ) {
+            event.preventDefault();
+            onQueueEditCancelRef.current();
+            return true;
+          }
           // F-QUEUE-DEFER: if the queue tail is expanded, Esc collapses that
           // visual tail before falling through to Stop.
           if (queueExpandedRef.current && onQueueExpandedChangeRef.current) {
@@ -5922,6 +5950,43 @@ export function ChatInput({
     [onQueueSteer],
   );
 
+  const queueEditActive = Boolean(queueEditingClientId && onQueueEditSubmit);
+  const submitQueueEdit = useCallback(async () => {
+    if (
+      !editor ||
+      editor.isDestroyed ||
+      !queueEditingClientId ||
+      !onQueueEditSubmit ||
+      disabled ||
+      sendDispatchInFlight ||
+      voiceBusyOnCurrentComposer
+    ) {
+      return;
+    }
+    const content = serializeEditorContent(editor);
+    if (content.text.trim().length === 0 && attachments.length === 0) return;
+
+    setSendDispatchInFlight(true);
+    try {
+      const saved = await onQueueEditSubmit(queueEditingClientId, content, [...attachments]);
+      if (!saved) toast.error(t('ipcError.INTERNAL'));
+    } catch (error) {
+      log.warn('queue edit rejected:', error instanceof Error ? error.message : String(error));
+      toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' })));
+    } finally {
+      setSendDispatchInFlight(false);
+    }
+  }, [
+    attachments,
+    disabled,
+    editor,
+    onQueueEditSubmit,
+    queueEditingClientId,
+    sendDispatchInFlight,
+    t,
+    voiceBusyOnCurrentComposer,
+  ]);
+
   const acceptPromptRecommendation = useCallback((): boolean => {
     if (
       !editor ||
@@ -5949,6 +6014,10 @@ export function ChatInput({
 
   const handleClickSend = useCallback(
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
+      if (queueEditActive) {
+        await submitQueueEdit();
+        return;
+      }
       if (voiceBusyOnCurrentComposer) {
         const currentCanSend = !isEditorEmpty(editor) || hasAttachments;
         if (!voiceInput.isListening && !currentCanSend && voiceInput.draftText.trim().length === 0)
@@ -5985,6 +6054,8 @@ export function ChatInput({
       editor,
       handleVoiceInputStop,
       hasAttachments,
+      queueEditActive,
+      submitQueueEdit,
       voiceBusyOnCurrentComposer,
       voiceInput.draftText,
       voiceInput.isBusy,
@@ -8135,7 +8206,14 @@ export function ChatInput({
       serializeEditorContent(editor).text, slashCommandsReady ? mergedCommands : null,
     ).kind === 'start';
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
-  const sendButtonDisabled = Boolean(
+  const sendButtonDisabled = queueEditActive
+    ? Boolean(
+        disabled ||
+          sendDispatchInFlight ||
+          voiceBusyOnCurrentComposer ||
+          (!hasMessage && !hasAttachments),
+      )
+    : Boolean(
     disabled || sessionModelLoading ||
     // 空態:当前 agent 无已连接来源 → Send 禁用(设计 Q7NYAD「send 置灰」),引导用户先去连接来源。
     (!makeNeedsNoModel && noConnectedSource) ||
@@ -8176,13 +8254,15 @@ export function ChatInput({
   // (listening + submitting + refining), 让槽位从开录到润色结束保持不变; 润色期间主槽是
   // 禁用态 Send (见 sendButtonDisabled), 停止任务的能力由次槽 Stop 承担.
   const mainSlotIsStop =
+    !queueEditActive &&
     showStopButton && (sendDispatchInFlight || (!canSend && !voiceBusyOnCurrentComposer));
   const showSecondaryStop =
+    !queueEditActive &&
     showStopButton && (canSend || voiceBusyOnCurrentComposer) && !sendDispatchInFlight;
   useEffect(() => {
-    voiceInputCanStopAndSendRef.current = !sendButtonDisabled;
+    voiceInputCanStopAndSendRef.current = !queueEditActive && !sendButtonDisabled;
     composerCanSubmitRef.current = !sendButtonDisabled;
-  }, [sendButtonDisabled]);
+  }, [queueEditActive, sendButtonDisabled]);
   const canReleaseVoiceToSend = Boolean(
     !disabled && (voiceInput.isListening || canSend || hasVoiceDraftText),
   );
@@ -8285,7 +8365,8 @@ export function ChatInput({
               expanded={queueExpanded}
               onToggle={() => queuePanelState.onExpandedChange(!queueExpanded)}
               onRemove={queuePanelState.onRemove}
-              onEdit={onQueueEdit}
+              editingClientId={queueEditingClientId}
+              onEditBegin={onQueueEditBegin}
               onSteer={onQueueSteer ? handleQueueSteer : undefined}
               steeringClientIds={steeringQueueClientIds}
               paused={queuePaused}
@@ -8983,26 +9064,49 @@ export function ChatInput({
                       visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                     />
                   )}
-                  <VoiceInputButton
-                    state={voiceBusyOnCurrentComposer ? voiceInput.state : 'idle'}
-                    // The surrounding controls stay locked during voice input, but
-                    // this control must remain enabled so the recording can stop.
-                    disabled={
-                      composerEditorLocked ||
-                      !editor ||
-                      (voiceInput.isBusy && !voiceBusyOnCurrentComposer)
-                    }
-                    shortcutLabel={voiceInputShortcutLabel}
-                    onStart={handleVoiceInputStart}
-                    onStop={handleVoiceInputPlainStop}
-                    onStopAndSend={handleClickSend}
-                    sendTargetRef={sendButtonRef}
-                    canReleaseToSend={canReleaseVoiceToSend}
-                    releaseToSendActive={voiceReleaseToSendActive}
-                    onReleaseToSendChange={setVoiceReleaseToSendActive}
-                    visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                    className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}
-                  />
+                  {queueEditActive && (
+                    <Tip text={t('newChat.pendingQueue.editCancelAria')} side="top">
+                      <button
+                        type="button"
+                        onClick={onQueueEditCancel}
+                        disabled={sendDispatchInFlight}
+                        className={cn(
+                          'flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full',
+                          'border border-[var(--border-default)] bg-[var(--composer-pill-bg)] text-[var(--composer-pill-icon)]',
+                          'transition-colors hover:bg-[var(--model-trigger-hover)] focus-visible:outline-none',
+                          'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                          'disabled:cursor-wait disabled:opacity-40',
+                        )}
+                        aria-label={t('newChat.pendingQueue.editCancelAria')}
+                      >
+                        <X size={15} strokeWidth={2} aria-hidden />
+                      </button>
+                    </Tip>
+                  )}
+                  {!queueEditActive && (
+                    <VoiceInputButton
+                      state={voiceBusyOnCurrentComposer ? voiceInput.state : 'idle'}
+                      // The surrounding controls stay locked during voice input, but
+                      // this control must remain enabled so the recording can stop.
+                      disabled={
+                        composerEditorLocked ||
+                        !editor ||
+                        (voiceInput.isBusy && !voiceBusyOnCurrentComposer)
+                      }
+                      shortcutLabel={voiceInputShortcutLabel}
+                      onStart={handleVoiceInputStart}
+                      onStop={handleVoiceInputPlainStop}
+                      onStopAndSend={handleClickSend}
+                      sendTargetRef={sendButtonRef}
+                      canReleaseToSend={canReleaseVoiceToSend}
+                      releaseToSendActive={voiceReleaseToSendActive}
+                      onReleaseToSendChange={setVoiceReleaseToSendActive}
+                      visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                      className={
+                        isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined
+                      }
+                    />
+                  )}
                   {/* mousedown 吃掉默认行为:否则点发送会把焦点从 contenteditable
                       挪到 button 上,发完光标就没了(接着打字要先点回输入框),
                       推荐提示词的 Tab 也会因为编辑器失焦而落到原生焦点导航上。
@@ -9027,7 +9131,9 @@ export function ChatInput({
                     ) : (
                       <Tip
                         text={
-                          voiceReleaseToSendActive
+                          queueEditActive
+                            ? t('newChat.pendingQueue.editSaveAria')
+                            : voiceReleaseToSendActive
                             ? t('newChat.chatInput.voiceInput.releaseToSend')
                             : voiceInput.isListening && !sendButtonDisabled
                               ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`
@@ -9055,11 +9161,14 @@ export function ChatInput({
                           <SendButton
                             disabled={sendButtonDisabled}
                             highlighted={voiceReleaseToSendActive}
+                            action={queueEditActive ? 'save' : 'send'}
                             visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                             ariaLabel={
-                              showStopButton
-                                ? t('newChat.sendButton.queue')
-                                : t('newChat.sendButton.send')
+                              queueEditActive
+                                ? t('newChat.pendingQueue.editSaveAria')
+                                : showStopButton
+                                  ? t('newChat.sendButton.queue')
+                                  : t('newChat.sendButton.send')
                             }
                             onClick={() => {
                               void handleClickSend();

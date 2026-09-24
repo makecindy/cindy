@@ -43,10 +43,10 @@ describe('ChatInput voice button anchor contract', () => {
     // 只在录音态挪 Stop 是不够的:录音结束且草稿非空时 Stop 会跳回右边,语音按钮同样
     // 左移一格,只是把误点风险推迟到「刚点完停止录音」那一刻。
     expect(chatInputSource).toContain(
-      'const showSecondaryStop =\n    showStopButton && (canSend || voiceBusyOnCurrentComposer) && !sendDispatchInFlight;',
+      'const showSecondaryStop =\n    !queueEditActive &&\n    showStopButton && (canSend || voiceBusyOnCurrentComposer) && !sendDispatchInFlight;',
     );
     expect(chatInputSource).toContain(
-      'const mainSlotIsStop =\n    showStopButton && (sendDispatchInFlight || (!canSend && !voiceBusyOnCurrentComposer));',
+      'const mainSlotIsStop =\n    !queueEditActive &&\n    showStopButton && (sendDispatchInFlight || (!canSend && !voiceBusyOnCurrentComposer));',
     );
   });
 
@@ -57,7 +57,7 @@ describe('ChatInput voice button anchor contract', () => {
     const slotDecisionBlock = extractBetween(
       chatInputSource,
       'const mainSlotIsStop =',
-      'useEffect(() => {\n    voiceInputCanStopAndSendRef.current = !sendButtonDisabled;',
+      'useEffect(() => {\n    voiceInputCanStopAndSendRef.current = !queueEditActive && !sendButtonDisabled;',
     );
 
     expect(slotDecisionBlock).not.toContain('voiceInput.isListening');
@@ -69,8 +69,8 @@ describe('ChatInput voice button anchor contract', () => {
     // shortcut that is needed to end the active recording.
     expect(chatInputSource).toContain('const disabledRef = useRef(composerEditorLocked);');
     expect(chatInputSource).toContain('disabledRef.current = composerEditorLocked;');
-    expect(chatInputSource).toContain(
-      'disabled={\n                      composerEditorLocked ||\n                      !editor ||\n                      (voiceInput.isBusy && !voiceBusyOnCurrentComposer)\n                    }',
+    expect(chatInputSource).toMatch(
+      /disabled=\{\s*composerEditorLocked \|\|\s*!editor \|\|\s*\(voiceInput\.isBusy && !voiceBusyOnCurrentComposer\)\s*\}/,
     );
     expect(chatInputSource).not.toContain('disabled={composerMutationLocked || !editor}');
   });

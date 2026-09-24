@@ -79,7 +79,13 @@ import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { parseToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
-import type { AttachedFile, MentionedResource, SerializedAttachedFile } from '@/lib/fileTypes';
+import {
+  extractExt,
+  getMimeType,
+  type AttachedFile,
+  type MentionedResource,
+  type SerializedAttachedFile,
+} from '@/lib/fileTypes';
 import type {
   AgentInputCreateOpts,
   AgentInputProjection,
@@ -172,6 +178,7 @@ import {
   resetRemoteDataOwnerPushFence,
 } from '@/lib/remoteDataOwnerPushFence';
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
+import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import {
   parseIssueEnvHarness,
   parseIssueEnvModelId,
@@ -13613,6 +13620,354 @@ function updateQueueItem(sessionId: string, clientId: string, newText: string): 
   ).catch((err) => log.warn('updateQueueItem failed:', err));
 }
 
+export interface QueueItemContentUpdate {
+  content: {
+    text: string;
+    mentions: MentionedResource[];
+    hasQuotes: boolean;
+    agentReferences: AgentInputReference[];
+    pastedTextRanges: PastedTextRange[];
+    slashCommandRanges: SlashCommandRange[];
+  };
+  files: AttachedFile[];
+}
+
+function queuedContentProjectionMatches(
+  accepted: QueuedMessage | undefined,
+  replacement: QueuedMessage,
+): boolean {
+  if (!accepted || accepted.text !== replacement.text) return false;
+  const stableFiles = (files: QueuedMessage['files']) =>
+    (files ?? []).map((file) => ({
+      id: file.id,
+      name: file.name,
+      ext: file.ext,
+      category: file.category,
+      mimeType: file.mimeType,
+      originalName: file.originalName ?? file.name,
+      textContent: file.textContent,
+      truncated: file.truncated,
+      annotated: file.annotated,
+    }));
+  return (
+    JSON.stringify(stableFiles(accepted.files)) ===
+      JSON.stringify(stableFiles(replacement.files)) &&
+    JSON.stringify(accepted.mentions ?? []) === JSON.stringify(replacement.mentions ?? []) &&
+    accepted.chatMessage.quotesEncoded === replacement.chatMessage.quotesEncoded &&
+    JSON.stringify(accepted.chatMessage.agentReferences ?? []) ===
+      JSON.stringify(replacement.chatMessage.agentReferences ?? []) &&
+    JSON.stringify(accepted.chatMessage.pastedTextRanges ?? []) ===
+      JSON.stringify(replacement.chatMessage.pastedTextRanges ?? []) &&
+    JSON.stringify(accepted.chatMessage.slashCommandRanges ?? []) ===
+      JSON.stringify(replacement.chatMessage.slashCommandRanges ?? [])
+  );
+}
+
+function cleanupUnacceptedQueueEditMaterialization(
+  originalFiles: readonly AttachedFile[],
+  preparedFiles: readonly AttachedFile[],
+): void {
+  const originalUrls = new Set(originalFiles.map((file) => file.url).filter(Boolean));
+  const generatedUrls = preparedFiles
+    .map((file) => file.url)
+    .filter((url): url is string => Boolean(url) && !originalUrls.has(url));
+  if (generatedUrls.length === 0) return;
+  void window.electronAPI.cleanupCachedImages(generatedUrls).catch((error: unknown) => {
+    log.warn('cleanup rejected queue edit images failed:', error);
+  });
+}
+
+function cleanupAcceptedQueueEditReplacements(
+  originalFiles: readonly AttachedFile[],
+  originalRetryFiles: readonly AttachedFile[],
+  preparedFiles: readonly AttachedFile[],
+  acceptedFiles: readonly AttachedFile[],
+): void {
+  const acceptedUrls = new Set(acceptedFiles.map((file) => file.url).filter(Boolean));
+  const retainedUrls = new Set(
+    [...preparedFiles, ...acceptedFiles].flatMap((file) =>
+      [file.url, file.annotationSourceUrl].filter((url): url is string => Boolean(url)),
+    ),
+  );
+  const originalFilesById = new Map(originalFiles.map((file) => [file.id, file]));
+  const removedUrls = [
+    ...originalFiles
+      .map((file) => file.url)
+      .filter(
+        (url): url is string => Boolean(url?.startsWith('xdt-image://')) && !acceptedUrls.has(url),
+      ),
+    ...originalRetryFiles
+      .filter((file) => {
+        const original = originalFilesById.get(file.id);
+        return (
+          original?.path === file.path &&
+          original.url === file.url &&
+          file.cacheUrlShared !== true &&
+          Boolean(file.annotationSourceUrl?.startsWith('xdt-image://')) &&
+          !retainedUrls.has(file.annotationSourceUrl!)
+        );
+      })
+      .map((file) => file.annotationSourceUrl!),
+  ];
+  if (removedUrls.length > 0) {
+    void window.electronAPI
+      .cleanupCachedImages([...new Set(removedUrls)])
+      .catch((error: unknown) => {
+        log.warn('cleanup replaced queue edit images failed:', error);
+      });
+  }
+
+  const acceptedPaths = new Set(acceptedFiles.map((file) => file.path));
+  cleanupStagedChatAttachmentFiles(
+    originalFiles.filter((file) => !acceptedPaths.has(file.path)),
+  );
+}
+
+function cleanupAcceptedQueueEditMaterializationSources(
+  queuedFiles: readonly AttachedFile[],
+  editedFiles: readonly AttachedFile[],
+  preparedFiles: readonly AttachedFile[],
+  acceptedFiles: readonly AttachedFile[],
+  remoteMediaSession: boolean,
+): void {
+  const queuedUrls = new Set(queuedFiles.map((file) => file.url).filter(Boolean));
+  const retainedUrls = new Set(
+    (remoteMediaSession ? acceptedFiles : [...preparedFiles, ...acceptedFiles]).flatMap((file) =>
+      [file.url, file.annotationSourceUrl].filter((url): url is string => Boolean(url)),
+    ),
+  );
+  const removedSourceUrls = [
+    ...new Set(
+      editedFiles.flatMap((file) => {
+        if (
+          file.cacheUrlShared === true ||
+          !file.url?.startsWith('xdt-image://') ||
+          queuedUrls.has(file.url) ||
+          retainedUrls.has(file.url)
+        ) {
+          return [];
+        }
+        return [file.url];
+      }),
+    ),
+  ];
+  if (removedSourceUrls.length === 0) return;
+  void window.electronAPI.cleanupCachedImages(removedSourceUrls).catch((error: unknown) => {
+    log.warn('cleanup accepted queue edit annotation sources failed:', error);
+  });
+}
+
+function queueEditFilesMatch(
+  left: readonly AttachedFile[] | undefined,
+  right: readonly AttachedFile[] | undefined,
+): boolean {
+  const stable = (files: readonly AttachedFile[] | undefined) =>
+    (files ?? []).map((file) => ({
+      id: file.id,
+      name: file.name,
+      path: file.path,
+      ext: file.ext,
+      size: file.size,
+      category: file.category,
+      mimeType: file.mimeType,
+      url: file.url,
+      originalName: file.originalName ?? file.name,
+      base64: file.base64,
+      textContent: file.textContent,
+      truncated: file.truncated,
+      annotated: file.annotated,
+      annotationSourceUrl: file.annotationSourceUrl,
+      annotationStrokes: file.annotationStrokes,
+    }));
+  return JSON.stringify(stable(left)) === JSON.stringify(stable(right));
+}
+
+function queueEditFilesRemainUnchanged(
+  queued: QueuedMessage,
+  editedFiles: readonly AttachedFile[],
+): boolean {
+  if (queueEditFilesMatch(queued.files, editedFiles)) return true;
+  const retryFilesById = new Map(
+    (queued.chatMessage.retryFiles ?? []).map((file) => [file.id, file]),
+  );
+  const editableQueuedFiles = (queued.files ?? []).map((file) => {
+    const retryFile = retryFilesById.get(file.id);
+    const annotationSourceUrl =
+      file.annotated === true &&
+      retryFile?.annotated === true &&
+      retryFile.path === file.path &&
+      retryFile.url === file.url &&
+      retryFile.annotationSourceUrl &&
+      retryFile.annotationStrokes?.length
+        ? retryFile.annotationSourceUrl
+        : null;
+    if (!annotationSourceUrl || !retryFile?.annotationStrokes) return file;
+    const sourceExt = extractExt(annotationSourceUrl) || file.ext;
+    const editableFile = { ...file };
+    delete editableFile.annotated;
+    return {
+      ...editableFile,
+      path: annotationSourceUrl,
+      url: annotationSourceUrl,
+      ext: sourceExt,
+      mimeType: getMimeType(sourceExt, 'image'),
+      annotationStrokes: retryFile.annotationStrokes,
+    };
+  });
+  return queueEditFilesMatch(editableQueuedFiles, editedFiles);
+}
+
+function canFallbackQueueEditToText(
+  queued: QueuedMessage,
+  replacement: QueuedMessage,
+  content: QueueItemContentUpdate['content'],
+  files: readonly AttachedFile[],
+): boolean {
+  if (!content.text.trim() || !queueEditFilesRemainUnchanged(queued, files)) return false;
+  if (JSON.stringify(queued.mentions ?? []) !== JSON.stringify(content.mentions ?? [])) return false;
+  if ((queued.chatMessage.quotesEncoded === true) !== content.hasQuotes) return false;
+  if ((queued.chatMessage.agentReferences?.length ?? 0) > 0) return false;
+  if ((queued.agentReferences?.length ?? 0) > 0) return false;
+  if ((queued.chatMessage.pastedTextRanges?.length ?? 0) > 0) return false;
+  if ((queued.chatMessage.slashCommandRanges?.length ?? 0) > 0) return false;
+  if (replacement.chatMessage.agentReferences?.length) return false;
+  if (replacement.chatMessage.pastedTextRanges?.length) return false;
+  if (replacement.chatMessage.slashCommandRanges?.length) return false;
+  return true;
+}
+
+async function updateQueueItemContent(
+  sessionId: string,
+  clientId: string,
+  update: QueueItemContentUpdate,
+): Promise<boolean> {
+  if (!sessionId || !clientId) return false;
+  const queued = getOrCreateState(sessionId).pendingQueue.find((item) => item.clientId === clientId);
+  if (!queued) return false;
+  const { content, files } = update;
+  if (!content.text.trim() && files.length === 0) return false;
+  const queuedFilesById = new Map((queued.files ?? []).map((file) => [file.id, file]));
+  const filesForMaterialization = files.map((file) => {
+    const queuedFile = queuedFilesById.get(file.id);
+    if (!queuedFile || queuedFile.url !== file.url || queuedFile.path !== file.path) return file;
+    return { ...file, cacheUrlShared: undefined, stagedPathShared: undefined };
+  });
+  const remoteMediaSession = isRemoteMediaSession(sessionId);
+  const preparedFiles =
+    (await materializeAnnotatedAttachmentsForSend(filesForMaterialization, sessionId, {
+      stripAnnotationMeta: remoteMediaSession,
+    })) ?? [];
+
+  const textUnchanged = content.text === queued.text;
+  const queuedAgentReferences =
+    queued.chatMessage.agentReferences?.length
+      ? queued.chatMessage.agentReferences
+      : (queued.agentReferences ?? []);
+  const replacement = buildQueuedMessage(
+    sessionId,
+    content.text,
+    queued.model,
+    queued.effort,
+    queued.permissionMode,
+    queued.workingDir,
+    preparedFiles,
+    content.mentions,
+    {
+      ...(queued.vendorOptions ? { vendorOptions: queued.vendorOptions } : {}),
+      ...((textUnchanged ? queued.chatMessage.quotesEncoded === true : content.hasQuotes)
+        ? { quotesEncoded: true }
+        : {}),
+      ...((textUnchanged ? queuedAgentReferences : content.agentReferences).length > 0
+        ? { agentReferences: textUnchanged ? queuedAgentReferences : content.agentReferences }
+        : {}),
+      ...((textUnchanged
+        ? (queued.chatMessage.pastedTextRanges ?? [])
+        : content.pastedTextRanges
+      ).length > 0
+        ? {
+            pastedTextRanges: textUnchanged
+              ? queued.chatMessage.pastedTextRanges
+              : content.pastedTextRanges,
+          }
+        : {}),
+      slashCommandRanges: textUnchanged
+        ? queued.chatMessage.slashCommandRanges
+        : content.slashCommandRanges,
+    },
+    {
+      clientId: queued.clientId,
+      createdAt: queued.chatMessage.createdAt ?? new Date().toISOString(),
+    },
+  );
+  const replacementSessionRefs = extractSessionRefs(content.text, queued.sessionRefs);
+  if (replacementSessionRefs.length > 0) replacement.sessionRefs = replacementSessionRefs;
+  else delete replacement.sessionRefs;
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  let projection: AgentInputProjection;
+  let usedTextFallback = false;
+  try {
+    ({ projection } = await runInputProjectionOperation(sessionId, (input) =>
+      boundaryOpts
+        ? input.updateContent(sessionId, clientId, replacement, boundaryOpts)
+        : input.updateContent(sessionId, clientId, replacement),
+    ));
+  } catch (error) {
+    if (
+      extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' &&
+      canFallbackQueueEditToText(queued, replacement, content, files)
+    ) {
+      try {
+        ({ projection } = await runInputProjectionOperation(sessionId, (input) =>
+          boundaryOpts
+            ? input.updateText(
+                sessionId,
+                clientId,
+                content.text,
+                replacement.sessionRefs,
+                undefined,
+                boundaryOpts,
+              )
+            : input.updateText(sessionId, clientId, content.text, replacement.sessionRefs),
+        ));
+        usedTextFallback = true;
+      } catch (fallbackError) {
+        cleanupUnacceptedQueueEditMaterialization(files, preparedFiles);
+        throw fallbackError;
+      }
+    } else {
+      cleanupUnacceptedQueueEditMaterialization(files, preparedFiles);
+      throw error;
+    }
+  }
+  const accepted = projection.pendingQueue.find((item) => item.clientId === clientId);
+  const acceptedReplacement = usedTextFallback
+    ? { ...replacement, files: queued.files }
+    : replacement;
+  const updated = queuedContentProjectionMatches(accepted, acceptedReplacement);
+  if (updated && accepted) {
+    if (usedTextFallback) {
+      cleanupUnacceptedQueueEditMaterialization(files, preparedFiles);
+    } else {
+      cleanupAcceptedQueueEditReplacements(
+        queued.files ?? [],
+        queued.chatMessage.retryFiles ?? [],
+        preparedFiles,
+        accepted.files ?? [],
+      );
+      cleanupAcceptedQueueEditMaterializationSources(
+        queued.files ?? [],
+        files,
+        preparedFiles,
+        accepted.files ?? [],
+        remoteMediaSession,
+      );
+    }
+  } else {
+    cleanupUnacceptedQueueEditMaterialization(files, preparedFiles);
+  }
+  return updated;
+}
+
 /**
  * 已确认「不再需要自动起名」的会话(main 返回 done=true:已起过名,或用户手动
  * 改过名)。纯粹是省 IPC 的缓存 —— 权威判定始终在 main。
@@ -16782,6 +17137,7 @@ export const makerChatStore = {
   removeFromQueue,
   /** F-QUEUE-DEFER: edit a single queued message's text (✏️ button). */
   updateQueueItem,
+  updateQueueItemContent,
   clearSession,
   /** Dismiss the error banner without retrying. */
   clearError,

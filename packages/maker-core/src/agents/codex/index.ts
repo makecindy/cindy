@@ -6066,7 +6066,9 @@ export class CodexAgent extends BaseAgent {
           'memories.generate_memories': false,
           'memories.use_memories': false,
         } : {}),
-        ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig() : {}),
+        ...(permissionProfile === READONLY_REFERENCES_PERMISSION_PROFILE
+          ? readonlyReferencesConfig()
+          : {}),
         ...(reviewMode ? reviewPermissionsConfig : {}),
         // Workspace routing reloads retained config without thread/start's RPC
         // overrides (Codex 0.156+). Keep the selected permission syntax in that

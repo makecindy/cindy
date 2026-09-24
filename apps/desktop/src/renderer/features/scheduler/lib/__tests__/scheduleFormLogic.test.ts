@@ -31,6 +31,7 @@ import {
   deriveRunMode,
   hasRealBinding,
   isExplicitScheduleModelUnavailable,
+  missingRequiredTemplateParamLabel,
   isFollowingSessionSelection,
   needsBoundSessionGenerationRouteResolution,
   resolveScheduleGenerationProviderId,
@@ -933,5 +934,37 @@ describe('script lifecycle serialization', () => {
     expect(input.workingDir).toBe('/watcher');
     expect(input.preRunHook?.command).toBe('node /watcher/gate.mjs');
     expect(buildScheduleInput(makeForm({ executionMode: 'script', targetSessionId: '__pending__' })).targetSessionId).toBeUndefined();
+  });
+});
+
+describe('missingRequiredTemplateParamLabel', () => {
+  const radar = {
+    parameters: [
+      { key: 'topic', label: '关注主题', type: 'string', required: true },
+    ],
+  } as ScheduleTemplate;
+  const competitors = {
+    parameters: [
+      { key: 'competitors', label: '竞品名单', type: 'string', required: true },
+    ],
+  } as ScheduleTemplate;
+
+  it('returns the visible label when a required parameter is empty', () => {
+    expect(missingRequiredTemplateParamLabel(radar, {})).toBe('关注主题');
+    expect(missingRequiredTemplateParamLabel(competitors, { competitors: '   ' })).toBeNull();
+  });
+
+  it('accepts a filled value or a non-empty default', () => {
+    expect(missingRequiredTemplateParamLabel(radar, { topic: 'AI Agent' })).toBeNull();
+    expect(missingRequiredTemplateParamLabel({
+      parameters: [
+        { key: 'topic', label: '关注主题', type: 'string', required: true, default: 'AI' },
+      ],
+    } as ScheduleTemplate, {})).toBeNull();
+    expect(missingRequiredTemplateParamLabel({
+      parameters: [
+        { key: 'suite', label: 'Suite', type: 'string', required: true, default: 'full' },
+      ],
+    } as ScheduleTemplate, { suite: '' })).toBeNull();
   });
 });

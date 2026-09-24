@@ -7180,6 +7180,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
           trustedContexts,
           opts,
         ),
+      updateContent: (
+        sessionId: string,
+        clientId: string,
+        item: import('../shared/agentInputQueue').AgentInputQueuedMessage,
+        opts?: { expectedClearBoundaryMs?: number | null },
+      ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
+        ipcRenderer.invoke('maker:input:update-content', sessionId, clientId, item, opts),
       move: (
         sessionId: string,
         clientId: string,

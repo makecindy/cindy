@@ -62,6 +62,17 @@ describe('rewriteOutboundMedia — channel gating', () => {
     expect(parseAttachmentOssRef(rewritten.files[1].path)?.ossKey).toBe('cindy/device-link/shared-task/sharedTask/u/new.png');
     expect(rewritten.persistedContent).not.toContain('/controller/new.png');
   });
+  it('rewrites newly added ordinary device-link queue-edit attachments', async () => {
+    uploadLocalFile.mockResolvedValue({ key: 'cindy/device-link/u/new.png', contentType: 'image/png', size: 10, sha256: SHA256 });
+    const item = { files: [{ path: '/target/cache/old.png' }, { path: '/controller/new.png' }], persistedContent: JSON.stringify({ files: [{ path: '/target/cache/old.png' }, { path: '/controller/new.png' }] }) };
+    const result = await rewriteOutboundMedia('maker:input:update-content', ['task', 'client', item], new Set(['/target/cache/old.png']));
+    expect(uploadLocalFile).toHaveBeenCalledTimes(1);
+    expect(uploadLocalFile).toHaveBeenCalledWith('/controller/new.png', {});
+    const rewritten = result[2] as typeof item;
+    expect(rewritten.files[0].path).toBe('/target/cache/old.png');
+    expect(parseAttachmentOssRef(rewritten.files[1].path)?.ossKey).toBe('cindy/device-link/u/new.png');
+    expect(rewritten.persistedContent).not.toContain('/controller/new.png');
+  });
   it('非媒体 channel → 原样,不上传', async () => {
     const args = [{ a: 1 }];
     const out = await rewriteOutboundMedia('maker:set-model', args);

@@ -9642,11 +9642,11 @@
       "daemonNotReady": "{{manager}} 升级完成，但远端 daemon 暂未启动 — 请手动重新发送消息"
     },
     "remoteError": {
-      "REMOTE_DAEMON_CLOSED": "远端连接已中断（daemon 可能正在升级或重启）。本轮已结束 — 请重新发送。",
+      "REMOTE_DAEMON_CLOSED": "远端连接中断了，可能正在更新。这一轮已经结束，请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
       "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。想少被打断，可以把任务切到「默认权限」自行掌控。",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批没完成，确认也没有送到或没有被点。这次拒绝不是你点的。",
-      "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 会话无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
+      "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端任务不能使用本机兼容通道。请改用 Cindy AI，或在本机任务里继续。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "REMOTE_LOCAL_ONLY_PROVIDER": "该模型供应商是本机专属服务（如 Ollama），SSH 远端任务无法访问本机地址。请改用 Cindy AI 网关，或选择远端主机可达的模型供应商。",
       "LOCAL_OLLAMA_NOT_READY": "本机 Ollama 还没就绪。请打开设置 → 模型供应商 → Ollama。",
@@ -9654,7 +9654,15 @@
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。",
       "MCP_APPROVAL_AUTO_BLOCKED": "这次工具调用被自动审核拦截，未收到你手动拒绝的记录。",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "权限确认超时，未收到有效的确认结果。仅凭超时无法判断你是否点过按钮。",
-      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "这次权限确认未完成，未收到你手动拒绝的记录。"
+      "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "这次权限确认未完成，未收到你手动拒绝的记录。",
+      "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "这个模型需要电脑端转发请求，当前远端连接还不能转发。请改用 Cindy AI，或在本机任务里使用这个模型。",
+      "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "换成这个模型需要另一条连接。请新建任务后再使用。",
+      "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "远端任务还不能使用订阅登录。请改用 Cindy AI，或选择已配置密钥的模型供应商。",
+      "REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE": "远端 Pi 任务不能使用这个上下文配置。请改用 Cindy AI，或选择远端可以访问的模型。",
+      "REMOTE_PROVIDER_UNSUPPORTED": "远端任务还不能使用这个模型供应商。请换一个供应商，或在本机任务里使用它。",
+      "REMOTE_PROVIDER_UPDATING": "这个模型供应商的凭据正在更新。请稍后再试。",
+      "REMOTE_WORKDIR_UNAVAILABLE": "远端工作目录现在不可用。请确认那台电脑上的目录还在，然后重试。",
+      "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "电脑端暂时无法确认这条消息是否已经发出。请稍后再试，不要重复发送同一条。"
     },
     "generatedFiles": {
       "title": "本条消息生成的文件",
@@ -10975,7 +10983,9 @@
         "selectProject": "请选择项目目录",
         "modelUnavailable": "模型 {{model}} 已不可用，请重新选择",
         "reasoningInvalid": "Reasoning 必须是 {{values}} 之一",
-        "preRunHookCommandRequired": "请填写前置检查脚本命令"
+        "preRunHookCommandRequired": "请填写前置检查脚本命令",
+        "templateParamRequired": "请填写{{label}}",
+        "templateApplyFailed": "无法应用模板，请检查参数后重试"
       }
     },
     "chips": {
@@ -12171,7 +12181,7 @@
     },
     "errors": {
       "openFileFailed": "无法在系统中打开文件",
-      "emptyResponse": "模型返回了空响应，请重试。(本轮未产出任何内容，常见于模型网关在大上下文 / 高负载下返回空流)",
+      "emptyResponse": "模型没有返回内容。请重试。上下文很长时，也可以换一个模型。",
       "turnFailed": "任务执行失败（模型未返回错误详情），请重试。",
       "sendFailed": "发送失败：{{message}}",
       "steerNoActiveTurn": "当前没有正在执行的任务，无法插话",
@@ -12186,10 +12196,10 @@
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
       "hostShellCommandBlocked": "Cindy 已阻止会绕过内嵌模拟器的 Shell 命令。请改用模拟器工具控制设备、启动应用、操作界面、截图和诊断。",
       "upstreamResponseIdleTimeout": "模型长时间没有任何响应，本轮已自动中断以免无限等待。已完成的工具调用都保留，可以直接发下一条消息继续。",
-      "codexHistoryOversized": "图片历史未能自动恢复并继续。请发送“继续”，接着完成当前任务。",
+      "codexHistoryOversized": "图片历史太大，没能自动恢复。请发送「继续」，Cindy 会接着完成当前任务。",
       "codexHistoryOversizedRemote": "这段历史里有过大的图片，远端压缩发不出去。请在运行 Codex 的那台电脑上打开任务后再发送，Cindy 会自动略去这些图片并继续。",
-      "codexCompactionNotConverging": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。压不动的部分通常不在对话里——system prompt 与工具定义占掉的空间压缩清不掉。新开一个任务可以继续。",
-      "codexCompactionNotConvergingModelSwitch": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。本任务中途切换过模型，而 Codex 仍按切换前那个模型的上下文上限来判断。切回原模型可以继续，或者新开一个任务。",
+      "codexCompactionNotConverging": "Codex 反复压缩上下文，但占用没有降下来，这一轮已停止，避免一直循环。占空间的是固定说明和工具定义，压缩去不掉。请新开一个任务继续。",
+      "codexCompactionNotConvergingModelSwitch": "Codex 反复压缩上下文，但占用没有降下来，这一轮已停止。这个任务中途切换过模型，Codex 仍按切换前的上下文上限判断。请切回原模型，或新开一个任务后再继续。",
       "turnNoEventTimeout": "本轮长时间没有任何进展（模型、工具与后台进程都没有动静），已自动中断以免无限等待。可以直接发下一条消息继续。",
       "toolUseLoopDetected": "模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
       "toolUseLoopDetectedWithCount": "模型连续触发了无效的工具调用，Cindy 已在 {{count}} 次失败后停止本轮，以避免无限循环。可以发送新消息继续。",
