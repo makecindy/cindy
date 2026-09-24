@@ -16,7 +16,7 @@ import { fontWeight, radius, spacing, typeScale, lineHeight } from '@/theme/toke
 import { CompanionSheet } from './CompanionSheet';
 import { CompanionAutomationNativeView } from './CompanionAutomationNativeView';
 import { useRoutineCronFields } from './useRoutineCronFields';
-import { emptyRoutineDefinition, getRoutineActionId, parseRoutineDetail, parseRoutineSummaries, routineDraftValid, type RoutineDefinition, type RoutineDetail, type RoutineSummary, type RoutineTrigger } from './companionRoutines';
+import { emptyRoutineDefinition, getRoutineActionId, parseRoutineDefinition, parseRoutineDetail, parseRoutineSummaries, routineDraftValid, type RoutineDefinition, type RoutineDetail, type RoutineSummary, type RoutineTrigger } from './companionRoutines';
 
 function automationFailure(error: unknown, tr: (key: string) => string): string {
   const code = typeof (error as { code?: unknown } | null)?.code === 'string'
@@ -52,6 +52,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
   const [initialDraft, setInitialDraft] = useState('');
   const initialDraftRef = useRef(initialDraft); initialDraftRef.current = initialDraft;
   const detailRef = useRef(detail); detailRef.current = detail;
+  const draftRef = useRef(draft); draftRef.current = draft;
   const [draftGeneration, setDraftGeneration] = useState(0);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -59,17 +60,26 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
   const requestId = useRef(randomUUID());
   const seq = useRef(0);
   const inFlight = useRef(false);
+  const pendingDelete = useRef(false);
   const operationGeneration = useRef(0);
   const dirty = draft !== null && JSON.stringify(draft) !== initialDraft;
   const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
   const identity = `${accountGeneration}:${deviceId}:${collectionId}:${botId}`;
-  const current = useRef({ identity, visible, selected }); current.current = { identity, visible, selected };
+  const current = useRef({ identity, visible, selected, online }); current.current = { identity, visible, selected, online };
   const valid = (scope: string, page: string | null) => current.current.visible && current.current.identity === scope && current.current.selected === page;
-  const load = useCallback(async () => {
-    if (!visible || !online || !botId) return;
+  const open = useCallback((id: string | null) => {
+    pendingDelete.current = false;
+    setDraft(null); setInitialDraft(''); dirtyRef.current = false; setDetail(null); setResource(null); setError(null); setSelected(id);
+    if (id === 'new') requestId.current = randomUUID();
+  }, []);
+  const load = useCallback(async (actionError?: string) => {
+    if (!visible || !botId || !valid(identity, selected)) return;
+    // An action may settle after connectivity changed; preserve its reason even offline.
+    if (actionError) setError(actionError);
+    if (!current.current.online) { setLoading(false); return; }
     const generation = ++seq.current;
     const scope = identity;
-    setLoading(true); setError(null);
+    setLoading(true); setError(actionError ?? null);
     try {
       await openLink(deviceId);
       const result = await getRemoteResource(invoke, { deviceId, deviceName }, { collectionId, kind: 'routine', id: `bot:${botId}${selected ? `/${selected}` : ''}` }, i18n.language, ['routine-list', 'routine-detail']);
@@ -78,13 +88,20 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       if (!block) throw new Error(t('devices.companions.automation.unsupported'));
       if (selected) {
         const next = parseRoutineDetail(block.data);
-        // Never renew a dirty draft's write authority against a newer version.
-        if (dirtyRef.current && detailRef.current && next.revision !== detailRef.current.revision) {
-          setError(t('devices.companions.automation.changed'));
-          return;
+        const versionChanged = dirtyRef.current && detailRef.current && next.revision !== detailRef.current.revision;
+        if (versionChanged) {
+          // A lost save acknowledgement is settled only by identical authoritative content.
+          // Different remote edits must never grant stale drafts overwrite authority.
+          if (!next.input || JSON.stringify(next.input) !== JSON.stringify(parseRoutineDefinition(draftRef.current))) {
+            setResource(null);
+            const changed = t('devices.companions.automation.changed');
+            setError(actionError ? `${actionError}\n${changed}` : changed);
+            return;
+          }
+          setInitialDraft(JSON.stringify(draftRef.current)); dirtyRef.current = false;
         }
         setDetail(next);
-        if (!dirtyRef.current) {
+        if (!dirtyRef.current && !versionChanged) {
           const value = next.input ?? (selected === 'new' ? emptyRoutineDefinition() : null);
           const serialized = JSON.stringify(value);
           if (serialized !== initialDraftRef.current) {
@@ -92,18 +109,29 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
           }
         }
       } else setItems(parseRoutineSummaries(block.data));
+      pendingDelete.current = false;
       setResource(result);
     } catch (e) {
       if (valid(scope, selected) && generation === seq.current) {
+        // A lost delete response may leave no detail to refresh. Only a confirmed
+        // missing resource settles that intent; transient failures remain retryable.
+        const missing = (e as { code?: unknown } | null)?.code === 'NOT_FOUND'
+          || e instanceof Error && e.message.startsWith('[NOT_FOUND]');
+        if (pendingDelete.current && !dirtyRef.current && missing) {
+          open(null);
+          return;
+        }
         const unsupported = t('devices.companions.automation.unsupported');
-        setError(e instanceof Error && e.message === unsupported ? unsupported : t('devices.resources.loadFailed'));
+        const readError = e instanceof Error && e.message === unsupported ? unsupported : t('devices.resources.loadFailed');
+        setError(actionError ? `${actionError}\n${readError}` : readError);
       }
     }
     finally { if (valid(scope, selected) && generation === seq.current) setLoading(false); }
-  }, [visible, online, botId, identity, invoke, openLink, deviceId, deviceName, collectionId, selected, i18n.language, t]);
+  }, [visible, online, botId, identity, invoke, openLink, deviceId, deviceName, collectionId, selected, i18n.language, t, open]);
   useEffect(() => {
     setSelected(null); setResource(null); setItems([]); setDetail(null); setDraft(null); setInitialDraft(''); setError(null);
     requestId.current = randomUUID();
+    pendingDelete.current = false;
     operationGeneration.current++; inFlight.current = false; setBusy(false);
     return () => { seq.current++; };
   }, [visible, identity]);
@@ -125,13 +153,9 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       { text: tr('discard'), style: 'destructive', onPress: () => { if (valid(identity, selected)) action(); } },
     ]);
   };
-  const open = (id: string | null) => {
-    setDraft(null); setInitialDraft(''); dirtyRef.current = false; setDetail(null); setResource(null); setError(null); setSelected(id);
-    if (id === 'new') requestId.current = randomUUID();
-  };
   const act = async (actionId: string) => {
     const capabilityId = getRoutineActionId(resource, actionId);
-    if (!valid(identity, selected) || inFlight.current || !online || !resource || !capabilityId) return;
+    if (!valid(identity, selected) || inFlight.current || loading || !online || !resource || !capabilityId) return;
     if (actionId === 'routine-create' || actionId === 'routine-save' || actionId === 'routine-run' && dirty) {
       if (!draft || !routineDraftValid(draft)) { setError(tr('invalid')); return; }
     }
@@ -165,7 +189,15 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       if (!valid(scope, page)) return;
       if (actionId === 'routine-run') { await load(); }
       else open(null);
-    } catch (e) { if (valid(scope, page)) setError(automationFailure(e, tr)); }
+    } catch (e) {
+      if (valid(scope, page)) {
+        // The host consumes opaque actions even when validation or the response fails.
+        // Reconcile by reading, never replay a write or renew a creation request ID.
+        setResource(null);
+        pendingDelete.current = actionId === 'routine-delete';
+        await load(automationFailure(e, tr));
+      }
+    }
     finally { if (operationGeneration.current === operation) { inFlight.current = false; if (current.current.identity === scope) setBusy(false); } }
   };
   const button = (label: string, onPress: () => void, destructive = false, disabled = false) => (
@@ -198,7 +230,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
   return <CompanionSheet visible={visible} onClose={() => leave(onClose)} preventDismiss={dirty || busy}
       title={selected ? draft?.name || tr('new') : t('devices.companionProfile.automation')}
       onBack={selected ? () => leave(() => open(null)) : undefined} testID="companion.automationSheet"
-      footer={selected && detail?.editable ? button(tr('save'), () => void act(selected === 'new' ? 'routine-create' : 'routine-save'), false, !online || !dirty) : undefined}>
+      footer={selected && detail?.editable ? button(tr('save'), () => void act(selected === 'new' ? 'routine-create' : 'routine-save'), false, !online || !dirty || loading || !getRoutineActionId(resource, selected === 'new' ? 'routine-create' : 'routine-save')) : undefined}>
       {!online ? <Text style={styles.error}>{tr('offline')}</Text> : null}
       {error ? <View style={styles.field}><Text selectable style={styles.error}>{error}</Text>{button(tr('retry'), () => void load(), false, !online)}</View> : null}
       {loading ? <ActivityIndicator color={colors.textSecondary} style={styles.field} /> : null}
@@ -239,10 +271,10 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
           {draft.triggers.length < 32 ? button(tr('addTrigger'), () => setDraft({ ...draft, triggers: [...draft.triggers, { id: randomUUID(), kind: 'interval', intervalMs: 3_600_000 }] })) : null}
         </> : <Text style={styles.empty}>{tr('largeDefinition')}</Text>}
         {selected !== 'new' ? <View style={styles.group}>
-          {getRoutineActionId(resource, 'routine-run') ? button(tr(dirty ? 'saveAndRun' : 'run'), () => void act('routine-run'), false, !online || detail.history.some((r) => r.status === 'running' || r.status === 'queued')) : null}
+          {getRoutineActionId(resource, 'routine-run') ? button(tr(dirty ? 'saveAndRun' : 'run'), () => void act('routine-run'), false, loading || !online || detail.history.some((r) => r.status === 'running' || r.status === 'queued')) : null}
           <Text style={styles.heading}>{tr('history')}</Text>
           {detail.history.length ? detail.history.map((run) => <View key={run.id} style={styles.field}><Text style={styles.label}>{tr(run.status)}</Text><Text style={styles.secondary}>{new Date(run.createdAt).toLocaleString(i18n.language)}</Text>{run.resultText ? <Text selectable style={styles.label}>{run.resultText}</Text> : null}{run.error ? <Text selectable style={styles.error}>{run.error}</Text> : null}</View>) : <Text style={styles.empty}>{tr('noRuns')}</Text>}
-          {getRoutineActionId(resource, 'routine-delete') ? button(tr('delete'), confirmDelete, true, dirty || !online) : null}
+          {getRoutineActionId(resource, 'routine-delete') ? button(tr('delete'), confirmDelete, true, loading || dirty || !online) : null}
         </View> : null}
       </> : null}
   </CompanionSheet>;

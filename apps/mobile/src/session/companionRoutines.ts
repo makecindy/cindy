@@ -95,5 +95,18 @@ export function emptyRoutineDefinition(): RoutineDefinition {
 }
 export function routineDraftValid(draft: RoutineDefinition): boolean {
   return Boolean(draft.name.trim() && draft.prompt.trim() && draft.triggers.length && parseRoutineDefinition(draft)
+    && draft.triggers.every((t) => t.kind !== 'cron' || routineCronFieldsValid(t))
     && draft.triggers.every((t) => t.kind !== 'event' || (t.sourceId && t.eventType && t.filters.every((f) => f.field && f.value))));
+}
+
+/** Catch incomplete presets and literal field bounds; full cron semantics remain host-owned. */
+function routineCronFieldsValid(trigger: Extract<RoutineTrigger, { kind: 'cron' }>): boolean {
+  const fields = trigger.expression.trim().split(/\s+/);
+  const ranges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]] as const;
+  return Boolean(trigger.timezone.trim()) && fields.length === ranges.length && fields.every((field, index) => {
+    if (!/^[+-]?\d+(?:\.\d+)?$/.test(field)) return true;
+    const value = Number(field);
+    const [min, max] = ranges[index]!;
+    return Number.isSafeInteger(value) && value >= min && value <= max;
+  });
 }

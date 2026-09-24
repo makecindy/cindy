@@ -133,14 +133,14 @@ export function CompanionAutomationNativeView(p: CompanionAutomationNativeViewPr
         </Section>)}
         {draft.triggers.length < 32 ? <Section><Action label={tr('addTrigger')} onPress={() => p.onChange(d => d && ({ ...d, triggers: [...d.triggers, { id: randomUUID(), kind: 'interval', intervalMs: 3_600_000 }] }))} blocked={p.busy} /></Section> : null}
       </Fragment> : note(tr('largeDefinition'))}
-      {detail.editable ? <Section><Action label={tr('save')} onPress={() => p.onAct(p.selected === 'new' ? 'routine-create' : 'routine-save')} blocked={p.busy || !p.online || !p.dirty} testID="companion.automation.save" /></Section> : null}
+      {detail.editable ? <Section><Action label={tr('save')} onPress={() => p.onAct(p.selected === 'new' ? 'routine-create' : 'routine-save')} blocked={p.busy || p.loading || !p.online || !p.dirty || !getRoutineActionId(p.resource, p.selected === 'new' ? 'routine-create' : 'routine-save')} testID="companion.automation.save" /></Section> : null}
       {p.selected !== 'new' ? <>
-        {getRoutineActionId(p.resource, 'routine-run') ? <Section><Action label={tr(p.dirty ? 'saveAndRun' : 'run')} onPress={() => p.onAct('routine-run')} blocked={p.busy || !p.online || detail.history.some(r => r.status === 'running' || r.status === 'queued')} /></Section> : null}
+        {getRoutineActionId(p.resource, 'routine-run') ? <Section><Action label={tr(p.dirty ? 'saveAndRun' : 'run')} onPress={() => p.onAct('routine-run')} blocked={p.busy || p.loading || !p.online || detail.history.some(r => r.status === 'running' || r.status === 'queued')} /></Section> : null}
         <Section title={tr('history')}>{detail.history.length ? detail.history.map(run => <VStack key={run.id} alignment="leading" spacing={spacing.sm}>
           <Text>{tr(run.status)}</Text><Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{new Date(run.createdAt).toLocaleString(i18n.language)}</Text>
           {run.resultText ? <Text modifiers={[textSelection(true)]}>{run.resultText}</Text> : null}{run.error ? <Text modifiers={[foregroundStyle(colors.statusError), textSelection(true)]}>{run.error}</Text> : null}
         </VStack>) : <Text modifiers={[foregroundStyle(colors.textSecondary)]}>{tr('noRuns')}</Text>}</Section>
-        {getRoutineActionId(p.resource, 'routine-delete') ? <Section><Action label={tr('delete')} onPress={p.onDelete} blocked={p.busy || p.dirty || !p.online} destructive /></Section> : null}
+        {getRoutineActionId(p.resource, 'routine-delete') ? <Section><Action label={tr('delete')} onPress={p.onDelete} blocked={p.busy || p.loading || p.dirty || !p.online} destructive /></Section> : null}
       </> : null}
     </> : null}
   </ComposerSheet>;

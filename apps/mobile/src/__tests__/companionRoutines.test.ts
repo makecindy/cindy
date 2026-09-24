@@ -8,6 +8,15 @@ describe('companion automation data boundary', () => {
     expect(routineDraftValid(draft)).toBe(false);
     expect(routineDraftValid({ ...draft, name: 'Daily brief', prompt: 'Summarize my inbox' })).toBe(true);
   });
+  it.each(['0 25 * * *', '60 9 * * *', '0  * * *', ' 9 * * *', '0 -1 * * *', '0 9.5 * * *', '0 9 32 * *', '0 9 * 13 *'])('rejects incomplete or out-of-range literal cron fields: %s', expression => {
+    const draft = { ...emptyRoutineDefinition(), name: 'Brief', prompt: 'Check', triggers: [{ id: 'daily', kind: 'cron' as const, expression, timezone: 'UTC' }] };
+    // Partial values remain editable; only submission is blocked.
+    expect(parseRoutineDefinition(draft)).toEqual(draft);
+    expect(routineDraftValid(draft)).toBe(false);
+  });
+  it.each(['00 00 * * *', '59 23 * * *', '05 08 * * 1-5', '0 9 31 * *', '0 9 * * 7', '*/15 8-18 * * 1,3,5'])('keeps valid presets and custom cron syntax available: %s', expression => {
+    expect(routineDraftValid({ ...emptyRoutineDefinition(), name: 'Brief', prompt: 'Check', triggers: [{ id: 'daily', kind: 'cron', expression, timezone: 'UTC' }] })).toBe(true);
+  });
   it('keeps mixed OR triggers and event filters intact while editing', () => {
     const draft = { name: 'Brief', prompt: 'Check', enabled: true, triggers: [
       { id: 'a', kind: 'cron', expression: '30 8 * * 1-5', timezone: 'Asia/Shanghai' },

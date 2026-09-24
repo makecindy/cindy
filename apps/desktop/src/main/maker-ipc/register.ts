@@ -179,6 +179,7 @@ import {
   type RenameSessionsConfirmInteractionSnapshot,
 } from '../session-title-rename/index.js';
 import { getBrowserAvailability, openBrowserForLogin } from '../mcp-integrations/browser.js';
+import { readComputerStatusForSettings, type ComputerStatusRequest } from './computerStatusHandler.js';
 import { isBrowserOpenForLoginError } from '../../shared/browserBackend.js';
 import {
   getActiveCodexBridgeInstanceId,
@@ -18331,21 +18332,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     MAKER_INVOKE.COMPUTER_STATUS,
     async (
       _event,
-      options?: {
-        includeDoctor?: boolean;
-        forcePermissionProbe?: boolean;
-        skipPermissionProbe?: boolean;
-        freshPermissionProbe?: boolean;
-        bypassPermissionProbeCache?: boolean;
-        passivePermissionProbeOnly?: boolean;
-      },
+      options?: ComputerStatusRequest,
     ) => {
       try {
-        const status = await getComputerDriverStatus(options);
-        if (options?.forcePermissionProbe === true || options?.freshPermissionProbe === true) {
-          refreshComputerPermissionGuideWindow(status);
-        }
-        return status;
+        return await readComputerStatusForSettings(options, {
+          getStatus: getComputerDriverStatus,
+          refreshPermissionGuide: refreshComputerPermissionGuideWindow,
+        });
       } catch (err) {
         throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
       }
