@@ -2164,4 +2164,20 @@ describe('isCodexNativeThreadStart (#4994)', () => {
     const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
     expect(isCodexNativeThreadStart([user(1000), contextRebuild(2000)], 'thread-x')).toBe(true);
   });
+
+  it('withholds thread start when a switch boundary is unparseable', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([
+      user(1000),
+      { role: 'agent_switch', content: '{not-json', agentMeta: null, createdAt: 2000 },
+    ], 'thread-x')).toBe(false);
+  });
+
+  it('withholds thread start when a switch boundary has no fromSdkSessionId', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([
+      user(1000),
+      agentSwitch(2000, 'cc', null),
+    ], 'thread-x')).toBe(false);
+  });
 });

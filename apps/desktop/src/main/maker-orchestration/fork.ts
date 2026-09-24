@@ -577,6 +577,8 @@ export function resolveCodexForkEventTimestamp(rows: CodexNativeBoundaryRow[]): 
  * rows 之内是否没有属于 sourceSdkSessionId 原生线程的 user 行,即目标是该线程的第一轮。
  * 归属判定与 resolveCodexTurnAnchor 一致:agent_switch 之前的片段属于其 fromSdkSessionId
  * (切回停泊线程时仍是同一条线程),context_rebuild 之前的片段属于已被替换的线程。
+ * 不可解析或没有 fromSdkSessionId 的 switch 视为归属不定,返回 false,调用方不得标记
+ * rewindsToNativeThreadStart(与「判定不出就明确失败」的 fail-closed 契约一致)。
  * rows 必须完整覆盖当前时间线(/clear 之后的可见行 + context_rebuild 标记);窗口被截断时
  * 调用方不得据此判定。
  */
@@ -592,7 +594,9 @@ export function isCodexNativeThreadStart(
       continue;
     }
     if (row.role === 'agent_switch') {
-      timelineSdkSessionId = parseAgentSwitchBoundary(row.content)?.fromSdkSessionId ?? null;
+      const owner = parseAgentSwitchBoundary(row.content)?.fromSdkSessionId;
+      if (!owner) return false;
+      timelineSdkSessionId = owner;
       continue;
     }
     if (row.role === 'user' && timelineSdkSessionId === sourceSdkSessionId) return false;

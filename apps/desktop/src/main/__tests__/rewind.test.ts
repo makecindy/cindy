@@ -1100,6 +1100,34 @@ describe('commitRewindAtMessage', () => {
     expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
   });
 
+  it('Codex: withholds the thread-start marker when a prior switch boundary is unparseable (#4994)', async () => {
+    useFakeSession('codex');
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
+    selectQueue.push([]);
+    selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    selectQueue.push([{ role: 'agent_switch', content: '{not-json', agentMeta: null, createdAt: 2800 }]);
+    selectQueue.push([{ role: 'agent_switch', content: '{not-json', createdAt: 2800 }]);
+    selectQueue.push([makeSessionRow({ agentKind: 'codex' })]);
+
+    await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+  });
+
+  it('Codex: withholds the thread-start marker when a prior switch has no fromSdkSessionId (#4994)', async () => {
+    useFakeSession('codex');
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })]);
+    selectQueue.push([]);
+    selectQueue.push([makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+    selectQueue.push([agentSwitchRow(2800, 'cc', '')]);
+    selectQueue.push([agentSwitchRow(2800, 'cc', '')]);
+    selectQueue.push([makeSessionRow({ agentKind: 'codex' })]);
+
+    await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+  });
+
   it('Pi: executes rewind after lazy activation establishes a live session', async () => {
     fakeSession = undefined;
     await expect(

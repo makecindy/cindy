@@ -140,9 +140,10 @@ vitest run src/agents/codex/app-server/external-auth.native.test.ts`，覆盖分
 `/clear`、上下文重建、切换引擎新开线程后的第一轮）没有可 fork 的边界，由宿主标记
 `rewindsToNativeThreadStart`，Codex 按当前配置换一条空线程；归属沿用锚点的 agent_switch
 链，切回停泊线程时更早的片段仍算当前线程，判定不出就明确失败，不能把「找不到边界」
-当成第一轮。实现见 Desktop `maker-orchestration/rewind.ts` 与 maker-core
-`agents/codex/index.ts` 的 `commitRewindFiles`，回归见 `rewind.test.ts`、`fork.test.ts`
-与 `index.test.ts`。
+当成第一轮。不可解析或没有 `fromSdkSessionId` 的 `agent_switch` 视为归属不定，同样
+不得标记 `rewindsToNativeThreadStart`。实现见 Desktop `maker-orchestration/rewind.ts` 与 maker-core
+`agents/codex/index.ts` 的 `commitRewindFiles`，回归见 `rewind.test.ts`、`fork.test.ts`、
+`rewindNativeBoundarySqlite.test.ts` 与 `index.test.ts`。
 查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
 HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 SSE 前缀（可带注释心跳）
 确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。
