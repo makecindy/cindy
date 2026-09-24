@@ -110,13 +110,6 @@ export function BrowserBackendSubsection({
           <Button
             variant="secondary"
             loading={recovering}
-            aria-label={
-              recovering
-                ? t('settings.computerUse.browserBackend.health.recovering')
-                : embeddedHealth.status === 'error'
-                  ? t('settings.computerUse.browserBackend.health.recover')
-                  : t('settings.computerUse.browserBackend.health.reconnect')
-            }
             type="button"
             onClick={onRecover}
             disabled={pending || !embeddedHealth.canRecover}

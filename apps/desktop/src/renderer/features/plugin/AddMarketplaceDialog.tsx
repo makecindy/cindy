@@ -12,7 +12,6 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { extractIpcError } from '@/utils/ipcError';

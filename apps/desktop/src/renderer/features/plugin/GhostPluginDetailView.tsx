@@ -62,7 +62,6 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
-import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import {
   isOfficialGhostId,

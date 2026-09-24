@@ -12,7 +12,6 @@ import { RefreshCw, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import type { MarketSourceSummary } from '../../../shared/pluginMarket';
