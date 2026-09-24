@@ -766,10 +766,11 @@ export function createXdtHelperMcpServer(
     if (!sessionId) return remoteBotOnly ? new Set() : defaultCategories;
     if (!deps.resolveSurface) return remoteBotOnly ? new Set(['auth']) : defaultCategories;
     const surface = await deps.resolveSurface({ sessionId }).catch(() => 'restricted' as const);
-    // Bot-specific memory, Skills, messaging, delegation and durable notes all
-    // live in this single category. Cindy-wide history/control/feedback/handoff
-    // stay out of the Bot's discovery loop.
-    if (surface === 'bot') return new Set(['bots', 'cindy', 'auth']);
+    // Bots keep their own tooling (bots), self-inspection (cindy) and auth, and
+    // additionally get project/session management (control) plus history
+    // visibility so they can organize projects and inspect existing tasks.
+    // handoff/feedback/skills stay out of the Bot's discovery loop.
+    if (surface === 'bot') return new Set(['bots', 'cindy', 'auth', 'control', 'history']);
     if (surface === 'restricted') return new Set();
     return remoteBotOnly ? new Set(['auth']) : defaultCategories;
   };

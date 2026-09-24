@@ -624,8 +624,12 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
-  it("exposes product knowledge while keeping general history and control out of the Bot surface", async () => {
+  it("grants Bots control and history categories while keeping feedback, handoff and skills out", async () => {
     let surface: "bot" | "default" = "bot";
+    const createProject = vi.fn(async () => ({
+      ok: true as const,
+      workingDir: "/repo",
+    }));
     const sendToSession = vi.fn(async () => ({
       ok: true as const,
       targetSessionId: TARGET_SESSION_ID,
@@ -645,6 +649,7 @@ describe("cindy_helper MCP server", () => {
       {
         resolveSurface: async () => surface,
         sendToSession,
+        createProject,
         botMessaging: { messageAgent },
       },
       {
@@ -661,7 +666,21 @@ describe("cindy_helper MCP server", () => {
       const overview = parsePayload(
         await client.callTool({ name: "list_tools", arguments: {} }),
       );
-      expect(overview.categories).toEqual([{ name: "cindy", tool_count: 2 }, { name: "bots", tool_count: 1 }]);
+      expect(overview.categories).toEqual([
+        { name: "cindy", tool_count: 2 },
+        { name: "control", tool_count: 1 },
+        { name: "bots", tool_count: 1 },
+      ]);
+
+      // Project/session management is now part of the Bot surface.
+      const projectRegistration = parsePayload(
+        await client.callTool({
+          name: "call_tool",
+          arguments: { name: "create_project", args: { working_dir: "/repo" } },
+        }),
+      );
+      expect(projectRegistration).toMatchObject({ ok: true, working_dir: "/repo" });
+      expect(createProject).toHaveBeenCalled();
 
       const forbiddenCategory = parsePayload(
         await client.callTool({ name: "list_tools", arguments: { category: "handoff" } }),

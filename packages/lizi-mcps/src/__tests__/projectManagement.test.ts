@@ -146,21 +146,28 @@ describe("project management MCP", () => {
           ).ok,
         ).toBe(false);
         remoteHostId = undefined;
-        for (const nextSurface of ["bot", "restricted"] as const) {
-          surface = nextSurface;
-          for (const tool of [
-            "list_projects",
-            "rename_project",
-            "remove_project",
-          ]) {
-            expect(await call(tool, {})).toMatchObject({
-              errorCode: "CAPABILITY_NOT_AVAILABLE",
-            });
-          }
+        // Bot surface now includes project management.
+        surface = "bot";
+        expect(await call("list_projects", {})).toMatchObject({ ok: true });
+        expect(
+          await call("rename_project", { working_dir: "/repo", name: "Bot" }),
+        ).toMatchObject({ ok: true, alias: null });
+        expect(
+          await call("remove_project", { working_dir: "/repo" }),
+        ).toMatchObject({ ok: true, removed: true });
+        surface = "restricted";
+        for (const tool of [
+          "list_projects",
+          "rename_project",
+          "remove_project",
+        ]) {
+          expect(await call(tool, {})).toMatchObject({
+            errorCode: "CAPABILITY_NOT_AVAILABLE",
+          });
         }
-        expect(list).toHaveBeenCalledTimes(1);
-        expect(rename).toHaveBeenCalledTimes(1);
-        expect(remove).toHaveBeenCalledTimes(1);
+        expect(list).toHaveBeenCalledTimes(2);
+        expect(rename).toHaveBeenCalledTimes(2);
+        expect(remove).toHaveBeenCalledTimes(2);
       } finally {
         await client.close();
         await server.close();
