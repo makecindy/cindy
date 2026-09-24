@@ -4299,6 +4299,19 @@ async function surfaceSilentStopExhaustedBanner(sessionId: string): Promise<void
   log.warn('silent-stop auto-resume exhausted — surfaced continue banner', { sessionId });
 }
 
+/**
+ * silent-stop 续跑 send 失败(派发确认前)时回滚协调器绑定。Session 会同步回滚
+ * turnGeneration,协调器必须跟上,否则失败收口合成 done 无法匹配绑定。
+ * reservedGeneration 为 null = 预约回调压根没发生,这里不动作。
+ */
+function rollbackHostContinuationBinding(
+  sessionId: string,
+  reservedGeneration: number | null,
+): void {
+  if (reservedGeneration === null) return;
+  agentInputCoordinatorHolder?.noteHostTurnContinuationFailed(sessionId, reservedGeneration);
+}
+
 async function handleSilentStopTurnEnd(
   session: NonNullable<ReturnType<Maker['getSession']>>,
   doneAt: number,
@@ -4322,6 +4335,8 @@ async function handleSilentStopTurnEnd(
   }
   const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
   if (decision.action === 'resume') {
+    // 续跑预约到的 vendor generation；send 失败收口(try/catch 两侧)要用它回滚绑定。
+    let reservedContinuationGeneration: number | null = null;
     try {
       // The next Claude running boundary belongs to the same user-visible turn.
       // Mark it before send(), which may synchronously emit status events.
@@ -4332,6 +4347,17 @@ async function handleSilentStopTurnEnd(
         {
           origin: turnOrigin,
           onDispatching: () => advanceRuntimeRecoveryNotice(session),
+          // 续跑在同一条产品 turn 上占用新的 vendor generation。正常发送经 send 事务把
+          // onTurnReserved 交给 coordinator 绑定;host 直发的续跑必须自己回调,否则
+          // coordinator 残留的 activeTurn 绑在旧 generation 上,续跑的 done 永远过不了
+          // ownership 守卫,输入边界会一直显示忙(僵尸 activeTurn)。
+          onTurnReserved: (reservedGeneration) => {
+            reservedContinuationGeneration = reservedGeneration;
+            agentInputCoordinatorHolder?.noteHostTurnContinuation(
+              session.id,
+              reservedGeneration,
+            );
+          },
           onAccepted: async () => {
             await createDbMessage(session.id, {
               clientId,
@@ -4367,6 +4393,10 @@ async function handleSilentStopTurnEnd(
       });
       if (!outcome.dispatched) {
         silentStopAutoResumeGuard.noteResumeSendFailed(session.id);
+        // Session 在派发确认前失败会回滚 turnGeneration;绑定必须跟着回滚,
+        // 否则失败收口合成的 done 会因 generation 不匹配被 ownership 守卫丢弃,
+        // 形成与本次修复对称的反向僵尸(输入边界永久忙)。
+        rollbackHostContinuationBinding(session.id, reservedContinuationGeneration);
         log.warn('silent-stop auto-resume send not accepted', {
           sessionId: session.id,
           reason: outcome.reason,
@@ -4378,6 +4408,7 @@ async function handleSilentStopTurnEnd(
       }
     } catch (err) {
       silentStopAutoResumeGuard.noteResumeSendFailed(session.id);
+      rollbackHostContinuationBinding(session.id, reservedContinuationGeneration);
       log.warn('silent-stop auto-resume send failed', {
         sessionId: session.id,
         error: err instanceof Error ? err.message : String(err),
