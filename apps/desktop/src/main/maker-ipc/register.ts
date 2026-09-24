@@ -640,6 +640,7 @@ import {
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import { bindSilentStopContinuationGeneration } from './silentStopContinuationBinding.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 import {
   estimateReferenceTokens,
@@ -4300,17 +4301,9 @@ async function surfaceSilentStopExhaustedBanner(sessionId: string): Promise<void
 }
 
 /**
- * silent-stop 续跑 send 失败(派发确认前)时回滚协调器绑定。Session 会同步回滚
- * turnGeneration,协调器必须跟上,否则失败收口合成 done 无法匹配绑定。
- * reservedGeneration 为 null = 预约回调压根没发生,这里不动作。
+ * silent-stop 续跑的 generation 绑定/回滚接线已抽到 silentStopContinuationBinding.ts
+ * (可单测,行为测试用真实 sendHostTurnContinuation 驱动)。
  */
-function rollbackHostContinuationBinding(
-  sessionId: string,
-  reservedGeneration: number | null,
-): void {
-  if (reservedGeneration === null) return;
-  agentInputCoordinatorHolder?.noteHostTurnContinuationFailed(sessionId, reservedGeneration);
-}
 
 async function handleSilentStopTurnEnd(
   session: NonNullable<ReturnType<Maker['getSession']>>,
@@ -4335,8 +4328,19 @@ async function handleSilentStopTurnEnd(
   }
   const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
   if (decision.action === 'resume') {
-    // 续跑预约到的 vendor generation；send 失败收口(try/catch 两侧)要用它回滚绑定。
-    let reservedContinuationGeneration: number | null = null;
+    // 续跑绕过 send 事务:generation 的绑定/失败回滚接线集中在 binding 对象
+    // (bindSilentStopContinuationGeneration,见该文件头)。漏掉任一半边会让
+    // 协调器残留的 activeTurn 与续跑的真实 done 永久失配，输入边界卡在忙
+    // (僵尸 activeTurn)。声明在 try 外，未派发/抛出两条失败收口都要用。
+    const binding = bindSilentStopContinuationGeneration(session.id, {
+      noteHostTurnContinuation: (bindingSessionId, generation) =>
+        agentInputCoordinatorHolder?.noteHostTurnContinuation(bindingSessionId, generation),
+      noteHostTurnContinuationFailed: (bindingSessionId, adoptedGeneration) =>
+        agentInputCoordinatorHolder?.noteHostTurnContinuationFailed(
+          bindingSessionId,
+          adoptedGeneration,
+        ),
+    });
     try {
       // The next Claude running boundary belongs to the same user-visible turn.
       // Mark it before send(), which may synchronously emit status events.
@@ -4347,17 +4351,9 @@ async function handleSilentStopTurnEnd(
         {
           origin: turnOrigin,
           onDispatching: () => advanceRuntimeRecoveryNotice(session),
-          // 续跑在同一条产品 turn 上占用新的 vendor generation。正常发送经 send 事务把
-          // onTurnReserved 交给 coordinator 绑定;host 直发的续跑必须自己回调,否则
-          // coordinator 残留的 activeTurn 绑在旧 generation 上,续跑的 done 永远过不了
-          // ownership 守卫,输入边界会一直显示忙(僵尸 activeTurn)。
-          onTurnReserved: (reservedGeneration) => {
-            reservedContinuationGeneration = reservedGeneration;
-            agentInputCoordinatorHolder?.noteHostTurnContinuation(
-              session.id,
-              reservedGeneration,
-            );
-          },
+          // 预约(onTurnReserved)在 binding.sendOpts；语义与不变量见
+          // silentStopContinuationBinding.ts 文件头。
+          ...binding.sendOpts,
           onAccepted: async () => {
             await createDbMessage(session.id, {
               clientId,
@@ -4396,7 +4392,7 @@ async function handleSilentStopTurnEnd(
         // Session 在派发确认前失败会回滚 turnGeneration;绑定必须跟着回滚,
         // 否则失败收口合成的 done 会因 generation 不匹配被 ownership 守卫丢弃,
         // 形成与本次修复对称的反向僵尸(输入边界永久忙)。
-        rollbackHostContinuationBinding(session.id, reservedContinuationGeneration);
+        binding.rollbackBinding();
         log.warn('silent-stop auto-resume send not accepted', {
           sessionId: session.id,
           reason: outcome.reason,
@@ -4408,7 +4404,7 @@ async function handleSilentStopTurnEnd(
       }
     } catch (err) {
       silentStopAutoResumeGuard.noteResumeSendFailed(session.id);
-      rollbackHostContinuationBinding(session.id, reservedContinuationGeneration);
+      binding.rollbackBinding();
       log.warn('silent-stop auto-resume send failed', {
         sessionId: session.id,
         error: err instanceof Error ? err.message : String(err),
