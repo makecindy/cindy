@@ -99,6 +99,9 @@ export async function listInstalledSkills(): Promise<{ entries: InstalledSkillEn
     topLevel.sort((a, b) => a.name.localeCompare(b.name));
 
     skillTargets = [];
+    // Direct Skills first, so they win over nested Skills with the same leaf
+    // name regardless of directory order.
+    const namespaces: typeof topLevel = [];
     for (const entry of topLevel) {
       const skillFile = await findSkillMd(entry.path);
       if (skillFile) {
@@ -109,8 +112,10 @@ export async function listInstalledSkills(): Promise<{ entries: InstalledSkillEn
       // 本根 —— 只认真实目录会漏掉它们。直接 symlink skill 已在上方计入;
       // symlink namespace 不下钻,避免越界或循环。
       if (entry.isSymlink || shouldPruneSkillScanDirectory(entry.name)) continue;
-
-      // 最多一层 namespace/author: <root>/<namespace>/<skill>。
+      namespaces.push(entry);
+    }
+    // 最多一层 namespace/author: <root>/<namespace>/<skill>。
+    for (const entry of namespaces) {
       let nestedEntries: Dirent[];
       try {
         nestedEntries = await fs.readdir(entry.path, { withFileTypes: true });

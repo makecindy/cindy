@@ -105,6 +105,9 @@ async function scanSkillDirectories(input: {
     });
   };
 
+  // Direct Skills win over nested Skills with the same leaf name regardless of
+  // directory order: collect them before walking namespaces.
+  const namespaces: string[] = [];
   for (const name of names) {
     const skillDir = path.posix.join(input.root, name);
     const skillFile = await existingSkillFile(input.fileOps, skillDir);
@@ -114,8 +117,12 @@ async function scanSkillDirectories(input: {
     }
     if (shouldPruneSkillScanDirectory(name)) continue;
     if (await isSymlinkedNamespace(input.fileOps, skillDir)) continue;
+    namespaces.push(name);
+  }
 
-    // At most one namespace/author level: <root>/<namespace>/<skill>.
+  // At most one namespace/author level: <root>/<namespace>/<skill>.
+  for (const name of namespaces) {
+    const skillDir = path.posix.join(input.root, name);
     const nestedNames = (await input.fileOps.listDir(skillDir))
       .filter((nested) => nested && !nested.startsWith('.') && !nested.includes('/')
         && !/\.bak\.\d+$/.test(nested))

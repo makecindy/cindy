@@ -105,12 +105,20 @@ describe('remote Skill scanners', () => {
     const fileOps = fakeRemoteFiles({
       '$HOME/.claude/skills/same-name/SKILL.md': '---\ndescription: Direct\n---',
       '$HOME/.claude/skills/@scope/same-name/SKILL.md': '---\ndescription: Nested\n---',
+      '$HOME/.agents/skills/late-name/SKILL.md': '---\ndescription: Direct\n---',
+      '$HOME/.agents/skills/@scope/late-name/SKILL.md': '---\ndescription: Nested\n---',
     });
 
-    const result = await scanRemoteClaudeSkills({ fileOps });
-
-    expect(result.skills).toEqual([
+    // Claude merges by name; Pi dedupes by path, so it must not return two
+    // same-named Skills regardless of which one the directory order finds first.
+    const claude = await scanRemoteClaudeSkills({ fileOps });
+    expect(claude.skills.filter((skill) => skill.name === 'same-name')).toEqual([
       expect.objectContaining({ name: 'same-name', description: 'Direct' }),
+    ]);
+
+    const pi = await scanRemotePiSkills({ fileOps });
+    expect(pi.skills.filter((skill) => skill.name === 'late-name')).toEqual([
+      expect.objectContaining({ name: 'late-name', description: 'Direct' }),
     ]);
   });
 

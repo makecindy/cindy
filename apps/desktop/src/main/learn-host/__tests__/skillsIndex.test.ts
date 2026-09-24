@@ -136,6 +136,36 @@ describe('listInstalledSkills — symlink 跟随', () => {
     }
   });
 
+  it('does not list a nested Skill when a direct Skill has the same leaf name', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'learn-skills-idx-dup-'));
+    const root = path.join(tmpHome, '.agents', 'skills');
+    // '@scope' sorts before 'same-name', so the nested Skill is discovered first
+    // unless direct Skills are collected before namespaces.
+    const nested = path.join(root, '@scope', 'same-name');
+    const direct = path.join(root, 'same-name');
+    for (const skillDir of [nested, direct]) {
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---\nname: ${path.basename(path.dirname(skillDir)) === '@scope' ? 'nested' : 'direct'}\ndescription: dup\n---\nBody`,
+        'utf8',
+      );
+    }
+
+    const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(tmpHome);
+    try {
+      const { listInstalledSkills } = await import('../skillsIndex');
+      const { entries } = await listInstalledSkills();
+
+      expect(entries.map((entry) => entry.absolutePath)).toEqual([direct]);
+    } finally {
+      homeSpy.mockRestore();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
   it('sorts nested Skills deterministically before truncating at the cap', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
