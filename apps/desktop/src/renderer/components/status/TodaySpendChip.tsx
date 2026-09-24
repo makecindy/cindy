@@ -995,6 +995,11 @@ export function TodaySpendChip({
   const quotaCardSessionUsage = toQuotaHoverCardSessionUsage(sessionUsage, sessionTokens);
   const quotaCardTurnUsage = toQuotaHoverCardTurnUsage(latestTurnUsage, t);
   const [quotaPopoverOpen, setQuotaPopoverOpen] = React.useState(false);
+  // 浮层宿主：紧跟触发器之后（见 popover.tsx 的 portalContainer 注释）。portal 到 body
+  // 末尾时，键盘焦点一旦进卡就再也 Tab 不回底栏（用户实测）。
+  const [quotaPopoverPortalHost, setQuotaPopoverPortalHost] = React.useState<HTMLDivElement | null>(
+    null,
+  );
   const quotaPopoverOpenTimerRef = React.useRef<number | null>(null);
   const quotaPopoverCloseTimerRef = React.useRef<number | null>(null);
   const quotaPopoverPointerInsideRef = React.useRef(false);
@@ -1030,6 +1035,18 @@ export function TodaySpendChip({
     quotaPopoverFocusTakenRef.current = false;
     quotaPopoverOpenSourceRef.current = null;
     if (!shouldRestoreFocus) return;
+    // Tab 已把焦点交给卡片外**仍然存在**的控件时不要抢回触发器：关闭路径
+    // （focus-outside → onOpenChange(false)）会比浏览器的 Tab 目标更早执行，抢回焦点
+    // 就把 Tab 正要去的控件顶掉，实测表现为焦点在 trigger 与卡片之间反复弹、永远走不到
+    // 右边下一枚 chip（用户实测）。焦点在卡片里（Escape）、或卡片正在卸载而焦点即将掉
+    // 到 body（形态切换）时，照旧归还 —— 那两种情况下不归还就是用户丢焦点。
+    const activeElement = document.activeElement;
+    const focusStillOwned =
+      quotaPopoverTriggerRef.current === activeElement ||
+      quotaPopoverContentRef.current?.contains(activeElement) === true;
+    const focusLostOrDetached =
+      activeElement === null || activeElement === document.body || !activeElement.isConnected;
+    if (!focusStillOwned && !focusLostOrDetached) return;
     quotaPopoverRestoringFocusRef.current = true;
     quotaPopoverTriggerRef.current?.focus({ preventScroll: true });
     quotaPopoverRestoringFocusRef.current = false;
@@ -1598,8 +1615,12 @@ export function TodaySpendChip({
             {labelNode}
           </button>
         </PopoverTrigger>
+        {/* 浮层挂到触发器紧跟其后的宿主：DOM 顺序 = 视觉顺序，Tab 才能从卡片继续走到
+            右边下一枚 chip（原实现 portal 到 body 末尾，焦点进卡后就出不来了）。 */}
+        <div ref={setQuotaPopoverPortalHost} className="contents" />
         <PopoverContent
           ref={quotaPopoverContentRef}
+          portalContainer={quotaPopoverPortalHost}
           side="top"
           align="end"
           sideOffset={8}

@@ -326,6 +326,24 @@ describe('ContextWindowBudgetChip', () => {
     expect(screen.getByText('ccAgent.contextWindowBudget.readOnlyHint')).toBeTruthy();
   });
 
+  it('keeps the card right after its trigger so the bottom bar stays walkable', async () => {
+    // 结构不变量（用户实测：Tab 到左边用量卡后翻多少次都到不了本卡）：浮层必须挂在
+    // 触发器紧跟其后的宿主里，让 DOM 顺序 = 视觉顺序。挂到 body 末尾时，文档内卡片
+    // 之后再没有下一个可 Tab 节点，焦点一旦进卡就回不到底栏。
+    renderChip();
+    const trigger = document.querySelector('[data-context-window-budget-chip]')!;
+    await openTierCard();
+    const wrapper = document.querySelector('[data-radix-popper-content-wrapper]');
+    expect(wrapper).not.toBeNull();
+    const host = wrapper!.parentElement!;
+    expect(host).not.toBe(document.body);
+    expect(host.className).toContain('contents');
+    // 宿主在触发器**之后**（Tab 沿视觉顺序从左到右走）。
+    expect(
+      trigger.compareDocumentPosition(host) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('shows the saved tier percentage next to the marker', async () => {
     // 存了 25% 档 → 触发器读 `↕ 25%`（绝对值在 aria-label / 卡片里）。
     // 档位来自权威边界查询（偏好文件里的条目），所以这里要等那次查询回来。

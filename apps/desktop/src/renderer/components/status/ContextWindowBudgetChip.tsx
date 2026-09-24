@@ -112,6 +112,8 @@ export function ContextWindowBudgetChip({
   // 卡片开合：**指针悬浮**展开（与货币 chip 的「用量明细」卡同一节奏：延迟 300ms 开、离开宽限
   // 200ms 关），键盘仍走 Radix 自己的 Enter/Space 开、Esc 关。
   const [cardOpen, setCardOpen] = useState(false);
+  // 浮层宿主：紧跟触发器之后（见 popover.tsx 的 portalContainer 注释）。
+  const [cardPortalHost, setCardPortalHost] = useState<HTMLDivElement | null>(null);
   const cardOpenTimerRef = useRef<number | null>(null);
   const cardCloseTimerRef = useRef<number | null>(null);
   // 指针打开时 Radix 关闭后会把焦点还给触发器，Chrome 会把这次程序化聚焦判成 `:focus-visible`
@@ -522,10 +524,14 @@ export function ContextWindowBudgetChip({
           )}
         </button>
       </PopoverTrigger>
+      {/* 浮层挂到触发器**紧跟其后**的宿主：portal 到 body 时卡片在文档最末，焦点一旦
+          进卡就再 Tab 不回底栏（用户实测）—— DOM 顺序必须与视觉顺序一致。 */}
+      <div ref={setCardPortalHost} className="contents" />
       <PopoverContent
         align="end"
         side="top"
         sideOffset={8}
+        portalContainer={cardPortalHost}
         className="min-w-[220px] p-1.5"
         // 悬浮打开不抢焦点（鼠标用户不该被移走焦点）；键盘打开保持 Radix 默认，方向键照常可用。
         onOpenAutoFocus={(event) => {
