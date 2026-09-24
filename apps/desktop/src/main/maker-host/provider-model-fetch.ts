@@ -28,6 +28,7 @@ import {
   refreshGenericOAuthIfNeeded,
 } from './generic-oauth.js';
 import { outboundFetch } from './outbound-fetch.js';
+import codexLatest from '../../../../../tools/codex-package/latest.json';
 
 /** 拉取超时（与 test-connection 探测同量级）。 */
 const FETCH_TIMEOUT_MS = 10_000;
@@ -262,6 +263,26 @@ export async function fetchProviderModels(
   } catch {
     return { ok: false, code: 'UNKNOWN', detail: INVALID_DISCOVERY_URL };
   }
+  // Codex-compatible gateways may expose capabilities only in the versioned view.
+  // Explicit catalogs and other wire protocols keep their existing request contract.
+  if (spec.agent === 'codex' && !spec.modelsUrl?.trim() &&
+    (spec.wireProtocol === undefined || spec.wireProtocol === 'openai-responses') &&
+    !isOpenRouterModelsUrl(request.url) &&
+    new URL(request.url).hostname !== 'generativelanguage.googleapis.com') {
+    const codexUrl = new URL(request.url);
+    codexUrl.searchParams.set('client_version', codexLatest.version);
+    const result = await fetchModelsRequest({ ...request, url: codexUrl.href }, spec, fetchImpl);
+    if (result.ok || result.status === 401 || result.status === 403 || result.status === 429) return result;
+    // Ordinary OpenAI-compatible endpoints may reject the query or response shape.
+  }
+  return fetchModelsRequest(request, spec, fetchImpl);
+}
+
+async function fetchModelsRequest(
+  request: ReturnType<typeof buildModelsFetchRequest>,
+  spec: ProviderModelsFetchSpec,
+  fetchImpl: typeof fetch,
+): Promise<ProviderModelsFetchResult> {
   const { url, init } = request;
   let res: Response;
   try {

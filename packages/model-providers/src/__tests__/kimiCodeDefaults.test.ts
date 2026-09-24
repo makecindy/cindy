@@ -59,7 +59,7 @@ describe("Kimi K2.8 connection defaults", () => {
           defaultEffort: "max",
         });
         expect(model.cost, agent).toBeUndefined();
-        expect(model.referencePrices, agent).toBeUndefined();
+        expect(model, agent).not.toHaveProperty('referencePrices');
       }
       const native = providerCatalogForPi().providers["kimi-coding"].find(
         (m) => m.id === "kimi-for-coding",

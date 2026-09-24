@@ -4,6 +4,59 @@ import { mergeDiscoveredRuntimeModels } from '../modelMetadataLayers.js';
 import { buildUserProvider } from '../user-provider.js';
 
 describe('shared provider discovery', () => {
+  it('imports Grok option objects and Codex Sol/Luna levels without model-name heuristics', () => {
+    const levels = ['low', 'medium', 'high', 'xhigh', 'max'];
+    const models = parseModelsListResponse({ models: [
+      { id: 'grok-4.6', supportsReasoningEffort: true, reasoningEffort: 'high',
+        reasoningEfforts: levels.slice(0, 4).map(value => ({ value, label: value })) },
+      ...['gpt-6-sol', 'gpt-6-luna', 'unknown-model'].map(slug => ({ slug,
+        supported_reasoning_levels: levels.map(effort => ({ effort, description: effort })),
+        default_reasoning_level: 'medium',
+      })),
+    ] })!;
+    expect(models[0].discoveredMetadata).toMatchObject({ efforts: levels.slice(0, 4), defaultEffort: 'high' });
+    for (const model of models.slice(1)) {
+      expect(model.discoveredMetadata).toMatchObject({ efforts: levels, defaultEffort: 'medium' });
+    }
+    const refreshed = mergeDiscoveredRuntimeModels([
+      { id: 'gpt-6-luna', name: 'Luna', reasoning: true, reasoningEfforts: ['low'], reasoningDefaultEffort: 'low' },
+    ], models);
+    expect(refreshed.find(model => model.id === 'gpt-6-luna')).toMatchObject({
+      reasoningEfforts: ['low'], reasoningDefaultEffort: 'low',
+      discoveredMetadata: { efforts: levels, defaultEffort: 'medium' },
+    });
+    const provider = buildUserProvider({ id: 'proxy', name: 'Proxy', runtimes: {
+      codex: { baseUrl: 'https://proxy.example/v1', models: refreshed },
+    } });
+    expect(provider.models.codex?.find(model => model.id === 'gpt-6-sol'))
+      .toMatchObject({ efforts: levels, defaultEffort: 'medium' });
+    expect(provider.models.codex?.find(model => model.id === 'gpt-6-luna'))
+      .toMatchObject({ efforts: ['low'], defaultEffort: 'low' });
+  });
+
+  it.each(['reasoningEfforts', 'supported_reasoning_levels'])('handles empty, unknown and off levels in %s', field => {
+    const metadata = (value: unknown) => parseModelsListResponse({ data: [{ id: 'model', [field]: value }] })![0].discoveredMetadata;
+    expect(metadata([])?.efforts).toEqual([]);
+    expect(metadata(['none'])?.efforts).toEqual([]);
+    expect(metadata(['future', {}, null])?.efforts).toBeUndefined();
+    expect(metadata('high')?.efforts).toBeUndefined();
+    expect(metadata(['none', 'low', 'future', 'low', { value: 'high' }])?.efforts).toEqual(['low', 'high']);
+    const refreshed = parseModelsListResponse({ data: [{ id: 'model', [field]: ['future'] }] })!;
+    expect(mergeDiscoveredRuntimeModels([{ id: 'model', name: 'Model', discoveredMetadata: { efforts: ['high'] } }], refreshed)[0]
+      .discoveredMetadata?.efforts).toEqual(['high']);
+  });
+
+  it('honors explicit disable, null defaults, canonical fields and option defaults', () => {
+    const metadata = (fields: object) => parseModelsListResponse({ data: [{ id: 'model', ...fields }] })![0].discoveredMetadata;
+    expect(metadata({ supportsReasoningEffort: false, reasoningEfforts: ['high'] })?.efforts).toEqual([]);
+    expect(metadata({ supported_reasoning_levels: ['none'], default_reasoning_level: 'none' }))
+      .toMatchObject({ efforts: [], defaultEffort: null });
+    expect(metadata({ reasoning: { supportedEfforts: [], defaultEffort: null }, reasoningEfforts: ['high'], reasoningEffort: 'high' }))
+      .toMatchObject({ efforts: [], defaultEffort: null });
+    expect(metadata({ reasoningEfforts: [{ value: 'high', default: true }] })?.defaultEffort).toBe('high');
+    expect(metadata({ default_reasoning_level: null, reasoningEffort: 'high' })?.defaultEffort).toBeNull();
+  });
+
   it('imports Vercel token prices, output capacity, image inputs and declared effort levels', () => {
     const models = parseModelsListResponse({ data: [{ id: 'vendor/new', name: 'New', type: 'language',
       context_window: 128000, max_tokens: 32000,

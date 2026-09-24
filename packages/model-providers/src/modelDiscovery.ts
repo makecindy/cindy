@@ -3,6 +3,17 @@ import {
   type DiscoveredModel,
 } from "./modelMetadataLayers.js";
 
+/** Unknown levels must not turn into an explicit disable of cached capabilities. */
+function parseReasoningOptions(value: unknown): unknown {
+  if (!Array.isArray(value)) return undefined;
+  if (value.length === 0) return [];
+  const levels = value.map(option => option && typeof option === 'object'
+    ? option.value ?? option.effort : option);
+  const recognized = levels.filter(level => level === 'none' ||
+    pickModelMetadata({ efforts: [level] }).efforts !== undefined);
+  return recognized.length ? [...new Set(recognized.filter(level => level !== 'none'))] : undefined;
+}
+
 /** OpenRouter exposes one unpaginated catalog; Anthropic headers select a rewritten CLI view. */
 export function isOpenRouterModelsUrl(value: string): boolean {
   try {
@@ -124,7 +135,12 @@ export function parseModelsListResponse(
         ? reasoning.defaultEffort
         : reasoning?.default_effort !== undefined
           ? reasoning.default_effort
-          : record.default_effort;
+          : [record.default_effort, record.default_reasoning_level, record.reasoningEffort,
+              ...(Array.isArray(record.reasoningEfforts)
+                ? record.reasoningEfforts.filter(option => option && typeof option === 'object' && option.default === true)
+                    .map(option => option.value)
+                : []),
+            ].find(value => value !== undefined);
     const modalities = record.modalities ??
       (Array.isArray(architecture?.input_modalities) && Array.isArray(architecture?.output_modalities)
         ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined);
@@ -161,6 +177,9 @@ export function parseModelsListResponse(
           ? reasoning.supported_efforts.filter((value) => value !== "none")
           : undefined) ??
         record.supported_efforts ??
+        (record.supportsReasoningEffort === false ? [] : undefined) ??
+        parseReasoningOptions(record.supported_reasoning_levels) ??
+        parseReasoningOptions(record.reasoningEfforts) ??
         (isVercel && Array.isArray(record.reasoning_options)
           ? record.reasoning_options.find((option: unknown) =>
               option && typeof option === 'object' && (option as { type?: unknown }).type === 'effort')?.values
