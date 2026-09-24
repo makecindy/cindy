@@ -322,6 +322,8 @@
     "readingRemoteDir": "Reading remote directory…",
     "goParentDir": "Go to parent directory",
     "parentDir": "Parent",
+    "drive": "Drive",
+    "switchToDrive": "Switch to {{name}}",
     "useCurrentRemoteDir": "Use current remote directory",
     "useCurrent": "Use Current",
     "firstMessagePlaceholder": "Enter the first message",

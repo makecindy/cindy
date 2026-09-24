@@ -3663,6 +3663,8 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
   确认后先拷到目标旁临时文件再替换,失败不破坏已有文件;
 - **clipboardWrite**:只收 \`encoding:'base64'\` 的 PNG 字节,写系统剪贴板位图,
   成功回 \`{ ok:true, bytes }\`。不是 saveAs,也不在文件夹中显示作品。
+  PNG 字节上限 20MB(20,000,000 字节,按解码后字节计),超限回 \`TOO_LARGE\`;
+  旧版宿主上限为 16MiB,同样回 \`TOO_LARGE\`,插件应提示用户更新或改用下载。
   空字节 / 非法 encoding / 非 PNG / 超限一律结构化失败,永不 \`ok:true\`。
   同插件 3 秒内连发 \`RATE_LIMITED\`;无主壳窗 / 宿主不能写剪贴板 \`UNSUPPORTED\`;
   账号切换后旧会话不得继续写(\`LIBRARY_UNAVAILABLE\`)。

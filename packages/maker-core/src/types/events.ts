@@ -468,9 +468,9 @@ export interface RewindCommitOptions {
    */
   tailTurnsToDrop?: number;
   /**
-   * Codex 分页线程拒绝 thread/rollback(-32600 "paginated threads do not support
-   * thread/rollback")时的原生边界:回退目标之前最后一个已完成 turn 的原生
-   * turn id(持久化的 nativeForkAnchor)。有它就直接 thread/fork(lastTurnId)。
+   * Codex thread/rollback 不可用(分页线程拒绝,或 0.156.0 起运行时已移除该方法)
+   * 时的原生边界:回退目标之前最后一个已完成 turn 的原生 turn id(持久化的
+   * nativeForkAnchor)。有它就直接 thread/fork(lastTurnId)。
    */
   lastTurnId?: string;
   /**
@@ -479,6 +479,13 @@ export interface RewindCommitOptions {
    * 的 forkAtTimestampMs 语义一致。
    */
   forkAtTimestampMs?: number;
+  /**
+   * 宿主确认回退目标是当前原生线程的第一轮:目标之前没有属于该线程的 user 行
+   * (首条消息,或 /clear、上下文重建、切换引擎新开线程后的第一轮)。此时没有可作
+   * fork 边界的 turn,rollback 不可用时 Codex 改为按当前配置新开一条空线程替换。
+   * 只在没有 lastTurnId / forkAtTimestampMs 时生效。
+   */
+  rewindsToNativeThreadStart?: boolean;
 }
 
 export interface RewindCommitResult {

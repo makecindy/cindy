@@ -813,7 +813,8 @@
   },
   "companions": {
     "messageSent": "已发送补充消息",
-    "privateChat": "与 {{name}} 的私聊",
+    "sentTo": "已发消息给 {{name}}",
+    "receivedFrom": "消息来自 {{name}}",
     "backgroundTask": "后台任务",
     "openTask": "打开任务",
     "viewPr": "查看 PR",

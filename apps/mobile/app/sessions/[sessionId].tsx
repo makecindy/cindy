@@ -2205,7 +2205,11 @@ export default function SessionScreen() {
       // A pre-ACK snapshot may omit replies sent before the subscription took effect.
       && contentRecoveryKey !== null && contentSyncedKey === contentRecoveryKey
       && !outboxRecoverySyncHeld && !loading);
-  const companionChat = companionResource?.ref.kind === 'bot';
+  const companionChat = useHostManagedSession(
+    JSON.stringify([auth.accountGeneration, deviceId, sessionId]),
+    companionResource?.ref.kind === 'bot' ? { source: 'bot' } : currentSession,
+    false,
+  );
   const companionNavigationScope = JSON.stringify([auth.accountGeneration, deviceId, sessionId, companionResource?.ref.id, shareSelectionActive]);
   const [companionNavigation, setCompanionNavigation] = useState({ scope: companionNavigationScope, open: false });
   // Reused routes must not carry an open drawer (or a queued action) into another companion.

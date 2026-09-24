@@ -62,3 +62,32 @@ it.each([false, true])('does not seal old commentary across an unloaded history 
   expect(texts([messages[0], at(row('u2', 'user', 'New question'), currentStart - 1), ...messages.slice(1)]))
     .toEqual(['Old commentary', 'New question', 'Current answer, first part', 'Current answer, last part']);
 });
+
+const receipt = row('r6', 'assistant', '', { botCollaboration: {
+  v: 1, role: 'delegation-result', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Aster',
+  toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Brief',
+  result: { runSequence: 1, status: 'completed', text: 'The completed brief', artifacts: [] },
+} });
+it.each([false, true])('keeps the result receipt without resurrecting its preamble (streaming=%s)', (running) => {
+  const items = bodies([...base, receipt], running);
+  expect(JSON.stringify(items)).toContain('The completed brief');
+  expect(JSON.stringify(items)).not.toContain('Public progress');
+});
+it.each([false, true])('does not suppress an older reply across a history gap before a receipt (streaming=%s)', (running) => {
+  const oldReply = row('a1', 'assistant', 'Earlier useful reply');
+  const laterReceipt = { ...receipt, createdAt: new Date(1001 + HISTORY_GAP_SPLIT_MS + 1).toISOString() };
+  const messages = [oldReply, laterReceipt];
+  for (const source of [messages, [oldReply, { ...row('u2', 'user', 'New request'), createdAt: laterReceipt.createdAt }, laterReceipt]]) {
+    const items = bodies(source, running);
+    expect(JSON.stringify(items)).toContain('Earlier useful reply');
+    expect(JSON.stringify(items)).toContain('The completed brief');
+  }
+});
+it.each([{ turnCompleted: true }, { turnUsageDetails: { totalTokens: 12 } }])('keeps persisted and live answers with completion seal %j', (seal) => {
+  const complete = [...base, row('a7', 'assistant', 'Delivered answer', seal)];
+  for (const running of [true, false]) {
+    const items = bodies(complete, running);
+    expect(items.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Delivered answer']);
+    expect(items.some(item => item.type === 'work_group' || item.type === 'tool_group')).toBe(false);
+  }
+});

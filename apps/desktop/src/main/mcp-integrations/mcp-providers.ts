@@ -684,6 +684,16 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
           return svc.stopSessionTask(callerSessionId, taskId, mode);
         },
+        inspectSessionTaskRoute: async ({ callerSessionId, taskId }) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Session task service not initialized' };
+          return svc.inspectSessionTaskRoute(callerSessionId, taskId);
+        },
+        advanceSessionTaskRoute: async ({ callerSessionId, taskId, expectedGeneration, selectionToken }) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Session task service not initialized' };
+          return svc.advanceSessionTaskRoute(callerSessionId, taskId, expectedGeneration, selectionToken);
+        },
       },
       botMessaging: {
         checkMessage: async (params) => {

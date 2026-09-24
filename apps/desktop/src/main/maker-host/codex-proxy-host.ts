@@ -1,3 +1,5 @@
+import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
+import { rewriteFastModel } from './model-fast-mode.js';
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
 import { clearCodexTextOnlyPolicies, codexTextOnlyRequestGuard, codexTextOnlyWebSocketTransforms, isCodexTextOnly } from './codex-text-only-policy.js';
 import {
@@ -1752,8 +1754,10 @@ function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
   };
 }
 
-function createXaiResponsesCompatTransform(): RequestTransform {
-  return (body, ctx) => {
+type XaiRequestPricing = Map<number, ReturnType<typeof captureUsagePricing>>;
+
+function createXaiResponsesCompatTransform(pricing: XaiRequestPricing): RequestTransform {
+  const transform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
     const requestModel = typeof body.model === 'string' ? body.model : '';
     const providerContext = providerContextForRequest(ctx.headers, requestModel);
@@ -1826,8 +1830,18 @@ function createXaiResponsesCompatTransform(): RequestTransform {
       current = withNormalizedInputItems;
       changed = true;
     }
+    const withFast = rewriteFastModel(xaiProviderId, 'codex', current, current.service_tier === 'priority');
+    const sessionId = sessionIdFromHeaders(ctx.headers);
+    if (sessionId && ctx.url.split('?', 1)[0]?.endsWith('/responses') && !isGuardian) {
+      pricing.set(ctx.reqId, captureUsagePricing(sessionId,
+        withFast && withFast.model !== current.model ? 'priority' : 'standard',
+        selectedThreadIdFromHeaders(ctx.headers)));
+    }
+    if (withFast) { current = withFast; changed = true; }
     return changed ? current : null;
   };
+  transform.onRequestSettled = reqId => { pricing.delete(reqId); };
+  return transform;
 }
 
 function responsesCompatibilityRoute(
@@ -2924,6 +2938,7 @@ export function createModelRoutingTransform(
 function createTransformRequestChain(
   frozenAuthInjection?: CodexProxyAuthInjection,
   execAdapter = createCodexResponsesCompatibilityAdapter(),
+  pricing: XaiRequestPricing = new Map(),
 ): RequestTransform[] {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
@@ -3008,7 +3023,7 @@ function createTransformRequestChain(
     // ModelInput deserialize 前洗 input[]。订阅直连那条会再洗一次（幂等）。
     createXaiModelInputSanitizeTransform(),
     sanitizeDeepSeekV4CustomTools,
-    createXaiResponsesCompatTransform(),
+    createXaiResponsesCompatTransform(pricing),
     createGatewayGrokResponsesCompatTransform(frozenAuthInjection),
     createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
@@ -3126,10 +3141,23 @@ function createCodexProxyHandle(
   frozenCustomProviderRoutes?: readonly CodexCustomProviderRoute[],
 ): Promise<ProxyHandle> {
   const execAdapter = createCodexResponsesCompatibilityAdapter();
+  const pricing: XaiRequestPricing = new Map();
+  const route = createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes);
+  const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
+    const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
+      if (decision?.localHandler || !isXaiUpstream(decision?.upstreamOverride ?? '')
+        || ctx.method !== 'POST' || !ctx.url.split('?', 1)[0]?.endsWith('/responses')) return decision;
+      // The observer receives raw wire bytes. Negotiate plaintext so the execution-price
+      // receipt is recorded synchronously before Codex can emit the corresponding usage.
+      return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
+    };
+    const decision = route(body, ctx);
+    return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
+  };
   return createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
-    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter).map(
+    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing).map(
       (transform): RequestTransform => {
         // Namespaced Responses use a frozen Provider route. Preserve its native
         // fields and model. The dedicated transform below reconciles effort
@@ -3168,10 +3196,15 @@ function createCodexProxyHandle(
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
     // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
     routingTransform: withCodexUpstreamRecording(
-      createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes),
+      routeWithUsageEncoding,
       () => buildCodexGatewayBaseUrl(),
     ),
     responseObserver: composeResponseObservers(
+      ctx => {
+        const record = pricing.get(ctx.reqId);
+        return record && ctx.status >= 200 && ctx.status < 300
+          ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
+      },
       createCodexResponseObserver(),
       createProviderUpstreamErrorObserver({
         agent: 'codex',

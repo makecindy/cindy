@@ -397,6 +397,10 @@ export interface CatalogModel {
    * 不能读跨 provider 拍平去重后的列表（那只保留首个 provider 的值，会错）。
    */
   supportsFastMode?: boolean;
+  /** Same-provider, same-harness catalog model used for Fast. null explicitly disables mapping.
+   * Unlike a service tier, this changes the upstream model; availability must be checked per account.
+   */
+  fastModelId?: string | null;
   /**
    * 该模型在 Codex 下使用的模型级兼容 bridge 协议。
    *

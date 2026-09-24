@@ -6004,6 +6004,33 @@ describe('CodexAgent.startSession developerInstructions', () => {
 });
 
 describe('CodexAgent fast mode service tier', () => {
+  it.each(['standard', 'priority'] as const)('prices the actual proxy execution (%s) without clearing Fast', async priceVariant => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'turn-1' } } : undefined);
+    const resolveUsagePriceVariant = vi.fn(() => priceVariant);
+    const handle = await agent.startSession({ sessionId: 'session-xai-pricing', model: 'xai/grok-4.7',
+      fastMode: true, workingDir: '/repo', resolveUsagePriceVariant });
+    const handlers = host.getThreadHandlers()!;
+    const events: AgentEvent[] = [];
+    void (async () => { for await (const event of handle.events()) events.push(event); })();
+    const sending = handle.send({ type: 'user', content: 'hello' });
+    await waitForExpectation(() => expect(host.request.mock.calls.some(([m]) => m === Method.TurnStart)).toBe(true));
+    handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+    handlers.tokenUsageUpdated!({ threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
+      total: { totalTokens: 35, inputTokens: 30, outputTokens: 5, cachedInputTokens: 10 },
+      last: { totalTokens: 35, inputTokens: 30, outputTokens: 5, cachedInputTokens: 10 },
+    } });
+    handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
+    await sending;
+    await waitForExpectation(() => expect(events.some(e => e.type === 'done')).toBe(true));
+    expect(resolveUsagePriceVariant).toHaveBeenCalledWith({ threadId: 'start-thread-id', inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 });
+    expect((events.find(e => e.type === 'done')?.data as { usage: { segments: unknown[] } }).usage.segments)
+      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant })]);
+    expect(handle.getFastMode?.()).toBe(true);
+    await handle.close();
+  });
+
+
   it('normalizes app-server priority service tier from thread/start as fast mode', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
@@ -24967,6 +24994,220 @@ describe('CodexAgent rewind', () => {
     expect(isCodexRollbackUnavailableError(new Error('paginated threads do not support thread/rollback'))).toBe(true);
     expect(isCodexRollbackMethodRemovedError(new Error('codex app-server thread/rollback error -32000: thread not found'))).toBe(false);
     expect(isCodexRollbackUnavailableError(new Error('unknown variant `thread/fork`'))).toBe(false);
+  });
+
+  // #4994 follow-up:首条消息(或 /clear、重建、切换后的第一轮)之前没有 turn 可作 fork 边界。
+  // 宿主确认是线程第一轮时换一条按当前配置新开的空线程,而不是报「无可用边界」。
+  const freshThreadStartImpl = () => {
+    let threadStarts = 0;
+    return (method: string) => {
+      if (method !== Method.ThreadStart) return undefined;
+      threadStarts += 1;
+      if (threadStarts === 1) return undefined;
+      return { thread: { id: 'fresh-thread-id' }, model: 'gpt-5.4', modelProvider: 'openai', cwd: '/repo' };
+    };
+  };
+
+  it('replaces the thread with a fresh one when rewinding to the native thread start on Codex 0.156.0 (#4994)', async () => {
+    const agent = new CodexAgent(createDeps());
+    const startImpl = freshThreadStartImpl();
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+      return startImpl(method);
+    }, { userAgent: 'mock-codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-thread-start',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true }))
+      .resolves.toEqual({ sdkSessionId: 'fresh-thread-id' });
+
+    const methods = host.request.mock.calls.map(([method]) => method);
+    expect(methods).not.toContain(Method.ThreadRollback);
+    expect(methods).not.toContain(Method.ThreadFork);
+    expect(methods).not.toContain(Method.ThreadTurnsList);
+    expect(methods.filter((method) => method === Method.ThreadStart)).toHaveLength(2);
+    expect(host.request).toHaveBeenLastCalledWith(Method.ThreadStart, expect.objectContaining({ cwd: '/repo' }));
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fresh-thread-id', expect.any(Object));
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'session_id',
+      data: 'fresh-thread-id',
+      source: 'codex',
+    });
+    await handle.close();
+  });
+
+  it('holds MCP discovery identity around the fresh rewind thread/start (#4994)', async () => {
+    const order: string[] = [];
+    const deps = createDeps();
+    deps.withCodexMcpDiscoveryContext = async (ctx, run) => {
+      expect(ctx).toMatchObject({ sessionId: 'bot-parent', sessionInstanceId: 'bot-instance' });
+      order.push('discovery');
+      try { return await run(); } finally { order.push('released'); }
+    };
+    const agent = new CodexAgent(deps);
+    const startImpl = freshThreadStartImpl();
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+      return startImpl(method);
+    }, { userAgent: 'mock-codex/0.156.0' });
+    const original = host.request.getMockImplementation()!;
+    host.request.mockImplementation(async (...args) => {
+      if (args[0] === Method.ThreadStart) {
+        expect(order.at(-1)).toBe('discovery');
+        order.push('native');
+      }
+      return original(...args);
+    });
+    const handle = await agent.startSession({
+      sessionId: 'bot-parent',
+      sessionInstanceId: 'bot-instance',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    expect(order).toEqual(['discovery', 'native', 'released']);
+    order.length = 0;
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true }))
+      .resolves.toEqual({ sdkSessionId: 'fresh-thread-id' });
+    expect(order).toEqual(['discovery', 'native', 'released']);
+    await handle.close();
+  });
+
+  it('does not reuse the previous thread rollout after a pathless first-turn replacement (#4994)', async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-rewind-rollout-'));
+    tempRoots.push(codexHome);
+    const sessionsDir = path.join(codexHome, 'sessions', '2026', '09', '24');
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const oldRollout = path.join(sessionsDir, 'rollout-2026-09-24T00-00-00-start-thread-id.jsonl');
+    await fs.writeFile(oldRollout, `${JSON.stringify({ payload: { type: 'event_msg', message: 'old thread' } })}\n`);
+
+    const agent = new CodexAgent(createDeps());
+    (agent as unknown as { codexHome: string }).codexHome = codexHome;
+    const startImpl = freshThreadStartImpl();
+    installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        const started = startImpl(method) as { thread: { id: string; path?: string } } | undefined;
+        if (!started) {
+          return { thread: { id: 'start-thread-id', path: oldRollout }, model: 'gpt-5.4', modelProvider: 'openai', cwd: '/repo' };
+        }
+        return started;
+      }
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error(ROLLBACK_REMOVED_ERROR_TEXT), { code: -32600 });
+      }
+      return startImpl(method);
+    }, { userAgent: 'mock-codex/0.156.0', codexHome });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-clear-rollout',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true }))
+      .resolves.toEqual({ sdkSessionId: 'fresh-thread-id' });
+
+    await expect(
+      (agent as unknown as { findRolloutPath: (threadId: string, preferredPath?: string, homeOverride?: string) => Promise<string> })
+        .findRolloutPath('fresh-thread-id', oldRollout, codexHome),
+    ).rejects.toThrow('Codex rollout not found for thread fresh-thread-id');
+    await handle.close();
+  });
+
+  it('replaces the thread when a paginated thread rejects rollback at the native thread start (#4421 / #4994)', async () => {
+    const agent = new CodexAgent(createDeps());
+    const startImpl = freshThreadStartImpl();
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(new Error('paginated threads do not support thread/rollback'), { code: -32600 });
+      }
+      return startImpl(method);
+    }, { userAgent: 'mock-codex/0.153.4' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-thread-start-paginated',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 2, rewindsToNativeThreadStart: true }))
+      .resolves.toEqual({ sdkSessionId: 'fresh-thread-id' });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadRollback, { threadId: 'start-thread-id', numTurns: 2 });
+    expect(host.request).not.toHaveBeenCalledWith(Method.ThreadFork, expect.anything());
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fresh-thread-id', expect.any(Object));
+    await handle.close();
+  });
+
+  it('keeps thread/rollback for the native thread start while the daemon still supports it (#4994)', async () => {
+    const agent = new CodexAgent(createDeps());
+    const startImpl = freshThreadStartImpl();
+    const host = installFakeHost(agent, startImpl, { userAgent: 'mock-codex/0.153.4' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-thread-start-legacy',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1, rewindsToNativeThreadStart: true }))
+      .resolves.toEqual({ sdkSessionId: 'rollback-thread-id' });
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('prefers a native boundary over the thread-start marker (#4994)', async () => {
+    const agent = new CodexAgent(createDeps());
+    const startImpl = freshThreadStartImpl();
+    const host = installFakeHost(agent, startImpl, { userAgent: 'mock-codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-thread-start-with-anchor',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', {
+      tailTurnsToDrop: 1,
+      lastTurnId: 'persisted-boundary',
+      rewindsToNativeThreadStart: true,
+    })).resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({ lastTurnId: 'persisted-boundary' }));
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('never drops history without the thread-start marker when no boundary is known (#4994)', async () => {
+    const agent = new CodexAgent(createDeps());
+    const startImpl = freshThreadStartImpl();
+    const host = installFakeHost(agent, startImpl, { userAgent: 'mock-codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-no-boundary',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1 }))
+      .rejects.toThrow('Codex fork requires an unambiguous native anchor or event timestamp');
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(1);
+    expect(host.request).not.toHaveBeenCalledWith(Method.ThreadFork, expect.anything());
+    await handle.close();
   });
 
   it('re-registers proxy developer instructions for the replacement rollback thread', async () => {

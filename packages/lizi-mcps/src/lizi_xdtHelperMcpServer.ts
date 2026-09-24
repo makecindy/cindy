@@ -156,6 +156,8 @@ interface SessionTaskCallbacks {
     taskId: string;
     mode?: 'cancel' | 'request-stop' | 'pause';
   }): Promise<ControlResult<Record<string, unknown>, string>>;
+  inspectSessionTaskRoute?(params: { callerSessionId: string; taskId: string }): Promise<ControlResult<Record<string, unknown>, string>>;
+  advanceSessionTaskRoute?(params: { callerSessionId: string; taskId: string; expectedGeneration: number; selectionToken: string }): Promise<ControlResult<Record<string, unknown>, string>>;
 }
 
 interface BotMessagingCallbacks {
@@ -479,6 +481,45 @@ function registerSessionTaskControlEntries(
         : errorPayload(result.errorCode, result.message);
     },
   });
+
+  if (deps.sessionTasks.inspectSessionTaskRoute && deps.sessionTasks.advanceSessionTaskRoute) {
+    registry.register({
+      name: 'inspect_session_task_route',
+      category: 'bots',
+      description: 'Inspect the current model and next already-configured model route for one of your own Session tasks. This does not change its model or retry work. Use before deciding whether a failed task should use another route.',
+      inputShape: { task_id: z.string().min(1).max(128) },
+      handler: async ({ task_id }) => {
+        const callerError = requireCaller();
+        if (callerError) return callerError;
+        const result = await deps.sessionTasks!.inspectSessionTaskRoute!({ callerSessionId: callerSessionId()!, taskId: task_id });
+        return result.ok
+          ? okPayload({ action: 'inspect_session_task_route', task_id,
+              generation: result.generation, current: result.current, next: result.next,
+              selection_token: result.selectionToken })
+          : errorPayload(result.errorCode, result.message);
+      },
+    });
+    registry.register({
+      name: 'advance_session_task_route',
+      category: 'bots',
+      description: 'Choose the exact next already-configured model route shown by inspect_session_task_route for your own ended Session task. This never creates a route, changes your teammate Profile, approves a permission, or replays work. Pass the preview generation and selection token; after switching, send a separate deliberate follow-up with message_session_task if needed. Deferred selections apply at the next safe send boundary.',
+      inputShape: {
+        task_id: z.string().min(1).max(128),
+        expected_generation: z.number().int().min(0),
+        selection_token: z.string().regex(/^[a-f0-9]{64}$/),
+      },
+      handler: async ({ task_id, expected_generation, selection_token }) => {
+        const callerError = requireCaller();
+        if (callerError) return callerError;
+        const result = await deps.sessionTasks!.advanceSessionTaskRoute!({
+          callerSessionId: callerSessionId()!, taskId: task_id, expectedGeneration: expected_generation, selectionToken: selection_token,
+        });
+        return result.ok
+          ? okPayload({ action: 'advance_session_task_route', task_id, ...result })
+          : errorPayload(result.errorCode, result.message);
+      },
+    });
+  }
 
   registry.register({
     name: 'message_session_task',

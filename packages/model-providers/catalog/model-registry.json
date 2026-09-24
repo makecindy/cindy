@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-24T10:51:31.000Z",
+  "updatedAt": "2026-09-24T14:16:12.766Z",
   "models": [
     {
       "id": "openai/gpt-6-sol",
@@ -847,12 +847,39 @@
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.7",
-          "agents": ["claude-code", "codex"],
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
           "referencePriceGroup": "global"
         }
       ],
       "nativeApi": "openai-responses",
-      "modelRef": "xai/grok-4.7"
+      "modelRef": "xai/grok-4.7",
+      "perAgent": {
+        "claude-code": {
+          "defaultEnabled": false
+        }
+      }
+    },
+    {
+      "id": "xai/grok-4.7-build-fast",
+      "name": "Grok 4.7 Fast",
+      "status": "active",
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-4.7-build-fast",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-4.7-build-fast"
     },
     {
       "id": "xai/grok-4.6",
@@ -4050,7 +4077,12 @@
         "name": "Grok 4.7",
         "group": "grok",
         "contextWindow": 500000,
-        "efforts": ["low", "medium", "high", "xhigh"],
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
         "defaultEffort": "high",
         "supportsImageInput": true
       },
@@ -4084,6 +4116,87 @@
                 "kind": "provider-official",
                 "url": "https://docs.x.ai/developers/pricing",
                 "verifiedAt": "2026-09-22"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 4,
+              "outputPerMtok": 12,
+              "cacheReadPerMtok": 1,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-09-24",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-09-24"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 6,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 1.5,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-09-24",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-09-24"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xai/grok-4.7-build-fast",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok 4.7 Fast",
+        "group": "grok",
+        "contextWindow": 500000,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "high",
+        "supportsImageInput": true,
+        "supportsFastMode": false
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 12,
+              "cacheReadPerMtok": 1,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-09-24",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-09-24"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 6,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 1.5,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-09-24",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-09-24"
               }
             }
           ]

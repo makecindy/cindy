@@ -3,6 +3,7 @@ import { once } from 'node:events';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, request as httpRequest } from 'node:http';
 import { Transform } from 'node:stream';
+import { gzipSync, brotliCompressSync } from 'node:zlib';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -2705,7 +2706,7 @@ describe('codex proxy host', () => {
     const requestScopedTransforms = proxyOpts.transformRequest.filter(
       (transform) => transform.onRequestSettled,
     );
-    expect(requestScopedTransforms).toHaveLength(1);
+    expect(requestScopedTransforms).toHaveLength(2);
     expect(requestScopedTransforms[0]?.errorMode).toBe('reject-request');
     const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-2);
     const body = { model: 'gpt-5', input: [] };
@@ -3728,7 +3729,7 @@ describe('codex proxy host', () => {
     // transforms; routing must therefore resolve the same parent-aware model.
     await expect(Promise.resolve(routingTransform(rawGuardianBody, ctx))).resolves.toEqual({
       upstreamOverride: 'https://api.x.ai/v1',
-      headerOverride: { authorization: 'Bearer xai-review-token' },
+      headerOverride: { authorization: 'Bearer xai-review-token', 'accept-encoding': 'identity' },
       headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
     });
 
@@ -4394,8 +4395,12 @@ describe('codex proxy host', () => {
   });
 
   describe('xAI 服务端搜索工具(x_search)注入', () => {
-    async function runXaiTransforms(sessionSuffix: string, body: Record<string, unknown>): Promise<unknown> {
+    async function runXaiTransforms(sessionSuffix: string, body: Record<string, unknown>, fastMembers?: string[] | null, expectedPrice?: 'standard' | 'priority'): Promise<unknown> {
       const host = await freshCodexProxyHost();
+      if (fastMembers !== undefined) {
+        const { setXaiDiscoveredModels } = await import('../active-catalog.js');
+        setXaiDiscoveredModels(fastMembers?.map(id => ({ id: `xai/${id}`, contextWindow: 500000, nativeApi: 'openai-responses' })) ?? null);
+      }
       const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
       mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
         url: 'http://127.0.0.1:43210',
@@ -4408,15 +4413,117 @@ describe('codex proxy host', () => {
       setSessionProvider(sessionId, 'xai');
 
       const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-      const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
+      const { registerUsagePricing, clearUsagePricing } = await import('../model-usage-pricing.js');
+      const resolvePrice = registerUsagePricing(sessionId);
+      const ctx = { reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
       let current: unknown = body;
       for (const transform of transforms) {
         const next = transform(current, ctx);
         if (next !== null && next !== undefined) current = next;
       }
+      if (expectedPrice) {
+        // Discovery changes after dispatch must not change the accepted execution price.
+        const { setXaiDiscoveredModels } = await import('../active-catalog.js');
+        setXaiDiscoveredModels(null);
+        const observer = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.responseObserver;
+        const sink = observer({ ...ctx, upstreamBase: 'https://api.x.ai/v1', status: 200,
+          requestHeaders: ctx.headers, responseHeaders: { 'content-type': 'text/event-stream' },
+          requestBody: Buffer.from(JSON.stringify(current)) });
+        sink?.onData?.(Buffer.from('data: ' + JSON.stringify({ type: 'response.completed',
+          response: { usage: { input_tokens: 30, output_tokens: 5, input_tokens_details: { cached_tokens: 10 } } },
+        }) + '\n\n'));
+        sink?.onEnd?.();
+        expect(resolvePrice({ threadId, inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 })).toBe(expectedPrice);
+      }
+      clearUsagePricing(sessionId);
       clearSessionProvider(sessionId);
       return current;
     }
+
+    it.each([
+      ['grok-4.7', 'priority', true, 'grok-4.7-build-fast', undefined],
+      ['grok-4.7', undefined, true, 'grok-4.7', undefined],
+      ['grok-4.7', 'priority', false, 'grok-4.7', undefined],
+      ['grok-4.7', 'priority', null, 'grok-4.7', undefined],
+      ['grok-4.6', 'priority', true, 'grok-4.6', undefined],
+      ['grok-4.7', 'default', false, 'grok-4.7', 'default'],
+    ] as const)('Fast mapping %s tier=%s available=%s', async (model, tier, available, expected, expectedTier) => {
+      const out = await runXaiTransforms('fast', { model: `xai/${model}`, input: [], service_tier: tier },
+        available === null ? null : ['grok-4.7', 'grok-4.6', ...(available ? ['grok-4.7-build-fast'] : [])],
+        expected === 'grok-4.7-build-fast' ? 'priority' : 'standard') as Record<string, unknown>;
+      expect(out.model).toBe(expected);
+      expect(out.service_tier).toBe(expectedTier);
+    });
+
+    it.each([
+      ['gzip', false], ['br', false], ['gzip', true], ['br', true],
+    ] as const)('negotiates uncompressed xAI usage when the client accepts %s (Fast available=%s)', async (encoding, available) => {
+      const host = await freshCodexProxyHost();
+      const { setXaiDiscoveredModels } = await import('../active-catalog.js');
+      const { registerUsagePricing, clearUsagePricing } = await import('../model-usage-pricing.js');
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      const { setProviderOAuthTokenReader } = await import('../provider-route.js');
+      const real = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+      setXaiDiscoveredModels(['grok-4.7', ...(available ? ['grok-4.7-build-fast'] : [])]
+        .map(id => ({ id: `xai/${id}`, contextWindow: 500000, nativeApi: 'openai-responses' })));
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn() });
+      await host.ensureCodexProxyReady();
+      const options = mockState.createAnthropicCompatProxy.mock.calls[0][0];
+      host.registerComposed('compression-session', 'compression-thread', 'PRODUCT_PROMPT');
+      host.setCodexProxyAuthInjection('env-key');
+      setSessionProvider('compression-session', 'xai');
+      setProviderOAuthTokenReader(() => 'fixture-xai-token');
+      const resolvePrice = registerUsagePricing('compression-session');
+      let acceptedEncoding: string | undefined;
+      let outboundModel: string | undefined;
+      const wire = 'data: ' + JSON.stringify({ type: 'response.completed', response: {
+        usage: { input_tokens: 30, output_tokens: 5, input_tokens_details: { cached_tokens: 10 } },
+      } }) + '\n\n';
+      const server = createServer(async (req, res) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        outboundModel = JSON.parse(Buffer.concat(chunks).toString()).model;
+        acceptedEncoding = req.headers['accept-encoding'];
+        const compress = acceptedEncoding !== 'identity';
+        res.writeHead(200, { 'content-type': 'text/event-stream', ...(compress ? { 'content-encoding': encoding } : {}) });
+        res.end(compress ? (encoding === 'gzip' ? gzipSync(wire) : brotliCompressSync(wire)) : wire);
+      });
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      const upstream = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const proxy = await real.createAnthropicCompatProxy({ upstream: () => upstream,
+        transformRequest: options.transformRequest, responseObserver: options.responseObserver,
+        routingTransform: async (body, ctx) => ({ ...(await options.routingTransform(body, ctx)), upstreamOverride: upstream }),
+      });
+      try {
+        const response = await fetch(`${proxy.url}/responses`, { method: 'POST',
+          headers: { 'content-type': 'application/json', 'thread-id': 'compression-thread', 'accept-encoding': encoding },
+          body: JSON.stringify({ model: 'xai/grok-4.7', service_tier: 'priority', input: [] }),
+        });
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe(wire);
+        expect(acceptedEncoding).toBe('identity');
+        expect(outboundModel).toBe(available ? 'grok-4.7-build-fast' : 'grok-4.7');
+        expect(resolvePrice({ threadId: 'compression-thread', inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 }))
+          .toBe(available ? 'priority' : 'standard');
+      } finally {
+        await proxy.dispose();
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+        clearUsagePricing('compression-session');
+        clearSessionProvider('compression-session');
+        setProviderOAuthTokenReader(() => null);
+        setXaiDiscoveredModels(null);
+      }
+    });
+
+    it('preserves priority when an xAI session sends a request through the default OpenAI route', async () => {
+      const out = await runXaiTransforms('fast-other-route', {
+        model: 'chatgpt/gpt-5.5', input: [], service_tier: 'priority',
+      }, null) as Record<string, unknown>;
+      expect(out.service_tier).toBe('priority');
+      expect(out.model).not.toContain('grok');
+    });
 
     it('独立 xAI 账号(auth.native=xai、id 非 xai)的会话同样走 xAI 兼容改写:tool-less compact 不会带着 tool_choice 裸发(#4888)', async () => {
       const host = await freshCodexProxyHost();

@@ -598,6 +598,12 @@ interface ActiveTurn {
   controlKind?: 'compact';
   /** maker-core turn generation captured at vendor dispatch; leftover reclaim must match it. */
   vendorTurnGeneration: number | null;
+  /**
+   * `vendorTurnGeneration` before a host continuation adopted a newer one
+   * (见 noteHostTurnContinuation)。续跑 send 在派发确认前失败时用它还原绑定；
+   * `undefined` 表示当前没有待回滚的采纳。
+   */
+  preContinuationVendorTurnGeneration?: number | null;
 }
 
 interface PendingCompactRequest {
@@ -3376,6 +3382,65 @@ export class AgentInputCoordinator {
       generation: meta.generation,
       reason: meta.reason,
     };
+  }
+
+  /**
+   * Host-owned continuation (silent-stop auto-resume) keeps the same product turn on a
+   * new vendor generation. `sendHostTurnContinuation` bypasses the send transaction that
+   * normally forwards `onTurnReserved` to `captureReservedVendorGeneration`, so without
+   * this callback a dispatched leftover activeTurn stays bound to the pre-continuation
+   * generation. The continuation's real terminal then fails the generation-ownership
+   * guard in `onTurnEvent`, and `isDispatchBoundaryBusy` keeps blocking every later
+   * input — the session never leaves "running" (2026-09-24 zombie activeTurn incident).
+   * With no dispatched activeTurn the continuation's terminal settles through the
+   * ordinary path, so this is deliberately a no-op there. A rejected continuation send
+   * must be paired with `noteHostTurnContinuationFailed`.
+   */
+  noteHostTurnContinuation(sessionId: string, vendorTurnGeneration: number): void {
+    const active = this.getState(sessionId).activeTurn;
+    if (!active || !isActiveTurnDispatched(active)) return;
+    if (active.vendorTurnGeneration === vendorTurnGeneration) return;
+    if (!this.isActiveTurnCurrent(sessionId, active)) return;
+    log.info('host turn continuation adopted new vendor generation', {
+      sessionId,
+      clientId: active.item?.clientId ?? null,
+      previousGeneration: active.vendorTurnGeneration,
+      vendorTurnGeneration,
+    });
+    active.preContinuationVendorTurnGeneration = active.vendorTurnGeneration;
+    active.vendorTurnGeneration = vendorTurnGeneration;
+  }
+
+  /**
+   * Undo `noteHostTurnContinuation` when the continuation send failed before the vendor
+   * confirmed the dispatch. `Session.dispatchSend` rolls `turnGeneration` back in that
+   * case, while the failure settlement (`settleSilentStopDone`) synthesizes a `done`
+   * without a generation: pointed at the rolled-back generation the ownership guard
+   * would reject that synthesized terminal (observed N vs bound N+1) and the input
+   * boundary would wedge — the mirror image of the zombie adoption removes. Restore the
+   * captured pre-continuation binding instead of re-reading the Session so an owner
+   * switch during the failed send cannot leak a foreign generation into the leftover.
+   */
+  noteHostTurnContinuationFailed(
+    sessionId: string,
+    adoptedVendorTurnGeneration: number,
+  ): void {
+    const active = this.getState(sessionId).activeTurn;
+    if (!active || !isActiveTurnDispatched(active)) return;
+    // 绑定已被别的路径改写(或本就是新 turn):失败回滚必须放手。
+    if (active.vendorTurnGeneration !== adoptedVendorTurnGeneration) return;
+    if (!this.isActiveTurnCurrent(sessionId, active)) return;
+    const previous = active.preContinuationVendorTurnGeneration;
+    if (previous === undefined) return;
+    active.preContinuationVendorTurnGeneration = undefined;
+    if (previous === active.vendorTurnGeneration) return;
+    log.info('host turn continuation send failed; restored leftover vendor generation', {
+      sessionId,
+      clientId: active.item?.clientId ?? null,
+      adoptedVendorTurnGeneration,
+      restoredGeneration: previous,
+    });
+    active.vendorTurnGeneration = previous;
   }
 
   onTurnEvent(

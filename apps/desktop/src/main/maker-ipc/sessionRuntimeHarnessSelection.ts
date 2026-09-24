@@ -52,7 +52,7 @@ export async function setSessionRuntimeHarness(
       harness: AgentKind;
       model?: string;
       providerId?: string | null;
-      effort?: Effort;
+      effort?: Effort | null;
       fastMode?: boolean;
     };
   },
@@ -92,7 +92,7 @@ export async function setSessionRuntimeHarness(
           model: patch.model!,
           // Never inherit an old harness's provider when selecting a new target.
           providerId: patch.providerId ?? null,
-          effort: patch.effort ?? effective.effort,
+          effort: patch.effort !== undefined ? patch.effort : effective.effort,
           fastMode: patch.fastMode ?? effective.fastMode,
         },
         { effort: patch.effort !== undefined, fast: patch.fastMode !== undefined },

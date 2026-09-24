@@ -156,6 +156,10 @@ function validateModel(
   if (m.api !== undefined) {
     assert(isPiModelApi(m.api), `model.api invalid for '${m.id}'`);
   }
+  if (m.fastModelId !== undefined && m.fastModelId !== null) {
+    assert(typeof m.fastModelId === 'string' && m.fastModelId.trim().length > 0 && m.fastModelId !== m.id,
+      `model.fastModelId invalid for '${m.id}'`);
+  }
   if (m.piApi !== undefined) {
     assert(isPiModelApi(m.piApi), `model.piApi invalid for '${m.id}'`);
   }

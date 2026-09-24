@@ -813,7 +813,8 @@
   },
   "companions": {
     "messageSent": "追加メッセージを送信しました",
-    "privateChat": "{{name}} との会話",
+    "sentTo": "{{name}} にメッセージを送信",
+    "receivedFrom": "{{name}} からのメッセージ",
     "backgroundTask": "バックグラウンドタスク",
     "openTask": "タスクを開く",
     "viewPr": "PR を見る",

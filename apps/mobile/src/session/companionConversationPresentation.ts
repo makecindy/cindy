@@ -3,7 +3,8 @@ import { collectMobileMarkdownImages } from './messageMarkdown';
 import type { MobileMessageRenderItem } from './messageRenderModel';
 
 const isDelivery = (item: MobileMessageRenderItem) => item.type === 'tool_media' && item.tools.some(tool => !!tool.media?.length || !!tool.files?.length)
-  || item.type === 'message' && (!!item.message.attachments?.length || !!item.message.media?.length
+  || item.type === 'message' && (item.message.companion?.kind === 'task' && item.message.companion.meta.role === 'delegation-result'
+    || !!item.message.attachments?.length || !!item.message.media?.length
     || !!item.message.files?.length || collectMobileMarkdownImages(item.message.body).length > 0);
 
 /** Presentation only. The host's persisted messages and lazy history remain intact. */
@@ -31,7 +32,16 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
   // A later delivery is already the result. Do not restore its unsealed preamble.
   const deliveredAfter = new Set<string>();
   let delivery = false;
+  let nextMessageAt: number | null = null;
   for (const item of [...flattened].reverse()) {
+    if (item.type === 'message') {
+      const createdAt = Date.parse(item.message.createdAt);
+      if (Number.isFinite(createdAt)) {
+        // A receipt in a newer loaded window cannot suppress an older reply.
+        if (nextMessageAt !== null && nextMessageAt - createdAt > HISTORY_GAP_SPLIT_MS) delivery = false;
+        nextMessageAt = createdAt;
+      }
+    }
     if (item.type === 'message' && item.message.kind === 'user') delivery = false;
     else if (isDelivery(item)) delivery = true;
     else if (delivery) deliveredAfter.add(item.key);

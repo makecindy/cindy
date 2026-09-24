@@ -442,6 +442,7 @@ import {
   discardDelegationQueuedInputs,
   type BotDelegationService,
 } from './botDelegationService.js';
+import { createBotSessionTaskRouteBridge } from './botSessionTaskRouteBridge.js';
 import {
   createBotDirectMessageService,
   type BotDirectMessageService,
@@ -640,6 +641,7 @@ import {
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import { bindSilentStopContinuationGeneration } from './silentStopContinuationBinding.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 import {
   estimateReferenceTokens,
@@ -4299,6 +4301,11 @@ async function surfaceSilentStopExhaustedBanner(sessionId: string): Promise<void
   log.warn('silent-stop auto-resume exhausted — surfaced continue banner', { sessionId });
 }
 
+/**
+ * silent-stop 续跑的 generation 绑定/回滚接线已抽到 silentStopContinuationBinding.ts
+ * (可单测,行为测试用真实 sendHostTurnContinuation 驱动)。
+ */
+
 async function handleSilentStopTurnEnd(
   session: NonNullable<ReturnType<Maker['getSession']>>,
   doneAt: number,
@@ -4322,6 +4329,19 @@ async function handleSilentStopTurnEnd(
   }
   const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
   if (decision.action === 'resume') {
+    // 续跑绕过 send 事务:generation 的绑定/失败回滚接线集中在 binding 对象
+    // (bindSilentStopContinuationGeneration,见该文件头)。漏掉任一半边会让
+    // 协调器残留的 activeTurn 与续跑的真实 done 永久失配，输入边界卡在忙
+    // (僵尸 activeTurn)。声明在 try 外，未派发/抛出两条失败收口都要用。
+    const binding = bindSilentStopContinuationGeneration(session.id, {
+      noteHostTurnContinuation: (bindingSessionId, generation) =>
+        agentInputCoordinatorHolder?.noteHostTurnContinuation(bindingSessionId, generation),
+      noteHostTurnContinuationFailed: (bindingSessionId, adoptedGeneration) =>
+        agentInputCoordinatorHolder?.noteHostTurnContinuationFailed(
+          bindingSessionId,
+          adoptedGeneration,
+        ),
+    });
     try {
       // The next Claude running boundary belongs to the same user-visible turn.
       // Mark it before send(), which may synchronously emit status events.
@@ -4332,6 +4352,9 @@ async function handleSilentStopTurnEnd(
         {
           origin: turnOrigin,
           onDispatching: () => advanceRuntimeRecoveryNotice(session),
+          // 预约(onTurnReserved)在 binding.sendOpts；语义与不变量见
+          // silentStopContinuationBinding.ts 文件头。
+          ...binding.sendOpts,
           onAccepted: async () => {
             await createDbMessage(session.id, {
               clientId,
@@ -4367,6 +4390,10 @@ async function handleSilentStopTurnEnd(
       });
       if (!outcome.dispatched) {
         silentStopAutoResumeGuard.noteResumeSendFailed(session.id);
+        // Session 在派发确认前失败会回滚 turnGeneration;绑定必须跟着回滚,
+        // 否则失败收口合成的 done 会因 generation 不匹配被 ownership 守卫丢弃,
+        // 形成与本次修复对称的反向僵尸(输入边界永久忙)。
+        binding.rollbackBinding();
         log.warn('silent-stop auto-resume send not accepted', {
           sessionId: session.id,
           reason: outcome.reason,
@@ -4378,6 +4405,7 @@ async function handleSilentStopTurnEnd(
       }
     } catch (err) {
       silentStopAutoResumeGuard.noteResumeSendFailed(session.id);
+      binding.rollbackBinding();
       log.warn('silent-stop auto-resume send failed', {
         sessionId: session.id,
         error: err instanceof Error ? err.message : String(err),
@@ -9741,6 +9769,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fastMode: getSessionFastMode(sessionId),
       } : null;
     },
+    taskRoute: createBotSessionTaskRouteBridge({
+      getSessionRuntime: params => sessionControlService.getSessionRuntime(params),
+      setSessionRuntime: params => sessionControlService.setSessionRuntime(params),
+      readConfiguredCandidate: (callerSessionId, current, childSessionId) =>
+        readBotFallbackCandidate(callerSessionId, current, childSessionId),
+    }),
     dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted, dispatcherSessionId }) =>
       dispatchBotSessionMessage({
         targetSessionId,
@@ -11513,6 +11547,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const readBotFallbackCandidate = async (
     sessionId: string,
     current: SessionRuntimeProfile,
+    controlSessionId = sessionId,
   ): Promise<{ isBot: boolean; candidate: SessionRuntimeProfile | null }> => {
     const [row] = await getDbClient()
       .drizzle.select({
@@ -11554,12 +11589,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       : current.agentKind === 'pi'
         ? 'pi'
         : 'claude';
-    const control = getSessionRuntimeControlSnapshot(sessionId);
+    const control = getSessionRuntimeControlSnapshot(controlSessionId);
+    const [controlSession] = controlSessionId === sessionId ? [{ remoteHostId: row.remoteHostId }]
+      : await getDbClient().drizzle.select({ remoteHostId: sessions.remoteHostId })
+        .from(sessions).where(eq(sessions.id, controlSessionId)).limit(1);
     const route = nextBotModelRoute(
       chain,
       { harness: currentHarness, model: current.model, providerId: current.providerId },
       control.visitedRoutes,
-      (candidate) => !row.remoteHostId || candidate.harness === currentHarness,
+      (candidate) => !controlSession?.remoteHostId || candidate.harness === currentHarness,
     );
     return {
       isBot: true,

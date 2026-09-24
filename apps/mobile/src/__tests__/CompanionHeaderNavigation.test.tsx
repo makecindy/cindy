@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { act, createContext, createElement, Fragment, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { useHostManagedSession } from '@/session/hostManagedSession';
 import type { RemoteResource } from '@cindy/device-link';
 
 const h = vi.hoisted(() => ({
@@ -166,13 +167,14 @@ function relevantJsx(node: ts.Node): string {
 }
 const compiled = ts.transpileModule(`function PageHost({ bindings }) {
   const { auth, deviceId, sessionId, companionResource, shareSelectionActive, setSearchOpen } = bindings;
+  const currentSession = null;
   const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false;
   ${statements.slice(stateStart, stateEnd).map(n => n.getText(source)).join('\n')}
   ${relevantJsx(header)}
   return <div data-testid="page-route"><div data-testid="clipped-chrome">{headerNode}</div>${relevantJsx(overlay)}</div>;
 }`, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
-const PageHost = new Function('React', 'useState', 'CompanionHeader', 'CompanionNavigationDrawer', 'MessageHistoryOverlay',
-  `${compiled}; return PageHost;`)({ createElement, Fragment }, useState, CompanionHeader, CompanionNavigationDrawer, MessageHistoryOverlay);
+const PageHost = new Function('React', 'useState', 'useHostManagedSession', 'CompanionHeader', 'CompanionNavigationDrawer', 'MessageHistoryOverlay',
+  `${compiled}; return PageHost;`)({ createElement, Fragment }, useState, useHostManagedSession, CompanionHeader, CompanionNavigationDrawer, MessageHistoryOverlay);
 const pageBindings = () => ({ auth: h.auth, deviceId: 'pc', sessionId: 'session-a', shareSelectionActive: false,
   companionResource: { ref: { kind: 'bot', collectionId: 'bots', id: 'bot-a' }, display: { title: 'Cindy' } } as RemoteResource | null,
   setSearchOpen: vi.fn() });

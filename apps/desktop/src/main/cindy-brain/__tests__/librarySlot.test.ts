@@ -19,6 +19,7 @@ import {
   type GhostLibrarySlotDeps,
 } from '../librarySlot.js';
 import { createHash } from 'node:crypto';
+import { crc32 } from 'node:zlib';
 import { LibraryBindingStore } from '../libraryBinding.js';
 import { LibraryVault } from '../libraryVault.js';
 import { initCustomLibraryTree, openExistingCustomLibrary } from '../libraryDirFd.js';
@@ -1036,6 +1037,44 @@ describe('GhostLibrarySlot', () => {
     });
     expect(r).toMatchObject({ ok: false, errorCode: 'TOO_LARGE' });
     expect(writeClipboardPng).not.toHaveBeenCalled();
+  });
+
+  /** 在 IEND 前插一个合法私有 ancillary 块(miVo),把 MIN_PNG 撑到恰好 totalBytes 字节。 */
+  function paddedPng(totalBytes: number): Buffer {
+    const iendAt = MIN_PNG.byteLength - 12;
+    const type = Buffer.from('miVo', 'ascii');
+    const data = Buffer.alloc(totalBytes - MIN_PNG.byteLength - 12);
+    const header = Buffer.alloc(4);
+    header.writeUInt32BE(data.byteLength);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([type, data])) >>> 0);
+    const png = Buffer.concat([MIN_PNG.subarray(0, iendAt), header, type, data, crc, MIN_PNG.subarray(iendAt)]);
+    expect(png.byteLength).toBe(totalBytes);
+    return png;
+  }
+
+  it('clipboardWrite: 上限是十进制 20MB,旧 16MiB 以上可写,边界 +1 与 20MiB 拒绝', async () => {
+    expect(LIBRARY_CLIPBOARD_WRITE_MAX_BYTES).toBe(20_000_000);
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    for (const size of [16 * 1024 * 1024 + 1, 19_999_999, 20_000_000]) {
+      clock += 4_000;
+      const r = await slot.handleLibraryRequest(GHOST_ID, {
+        op: 'clipboardWrite', content: paddedPng(size).toString('base64'), encoding: 'base64',
+      });
+      expect(r).toEqual({ ok: true, op: 'clipboardWrite', bytes: size });
+    }
+    expect(writeClipboardPng).toHaveBeenCalledTimes(3);
+    // 20,000,001 与 20,000,000 的 base64 同为 26,666,668 字符:前置长度闸放行,只能靠解码后字节闸拒。
+    const overByOne = paddedPng(20_000_001).toString('base64');
+    expect(overByOne.length).toBe(paddedPng(20_000_000).toString('base64').length);
+    for (const content of [overByOne, paddedPng(20 * 1024 * 1024).toString('base64')]) {
+      clock += 4_000;
+      const r = await slot.handleLibraryRequest(GHOST_ID, {
+        op: 'clipboardWrite', content, encoding: 'base64',
+      });
+      expect(r).toMatchObject({ ok: false, errorCode: 'TOO_LARGE' });
+    }
+    expect(writeClipboardPng).toHaveBeenCalledTimes(3);
   });
 
   it('clipboardWrite: 生产注入无主壳窗 → UNSUPPORTED,不伪装 INTERNAL', async () => {
