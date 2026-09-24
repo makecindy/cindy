@@ -141,7 +141,8 @@ vitest run src/agents/codex/app-server/external-auth.native.test.ts`，覆盖分
 `rewindsToNativeThreadStart`，Codex 按当前配置换一条空线程；归属沿用锚点的 agent_switch
 链，切回停泊线程时更早的片段仍算当前线程，判定不出就明确失败，不能把「找不到边界」
 当成第一轮。不可解析或没有 `fromSdkSessionId` 的 `agent_switch` 视为归属不定，同样
-不得标记 `rewindsToNativeThreadStart`。`targetCreatedAt <= sessions.clearedAt` 必须拒绝，
+不得标记 `rewindsToNativeThreadStart`。最近的 `context_rebuild` 截断更早历史，不能让
+重建前的 `agent_switch` 把归属设回当前线程。`targetCreatedAt <= sessions.clearedAt` 必须拒绝，
 不能把 `/clear` 之前的目标当成当前线程第一轮。`INPUT_CLEAR_SESSION` 不进
 `withSendToSessionLock`，因此判定时读到的 `clearedAt` 必须作为 `expectedClearedAt`
 传入 `rewind.commit`，并在 SDK 换空线程之前再核一次；代次已变则整单失败，不得软删

@@ -2165,6 +2165,17 @@ describe('isCodexNativeThreadStart (#4994)', () => {
     expect(isCodexNativeThreadStart([user(1000), contextRebuild(2000)], 'thread-x')).toBe(true);
   });
 
+  it('does not let a pre-rebuild switch restore the current thread', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([
+      user(1000),
+      agentSwitch(2000, 'codex', 'thread-x'),
+      user(3000),
+      agentSwitch(4000, 'cc', 'claude-sdk'),
+      contextRebuild(5000),
+    ], 'thread-x')).toBe(true);
+  });
+
   it('withholds thread start when a switch boundary is unparseable', async () => {
     const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
     expect(isCodexNativeThreadStart([
