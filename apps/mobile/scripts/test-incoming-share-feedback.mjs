@@ -26,7 +26,7 @@ function method(signature) {
     if (source[end] === "{") depth++;
     if (source[end] === "}") depth--;
   }
-  return source.slice(start, end).replace(/^private /, "");
+  return source.slice(start, end).replace(/^private /, "").replace(/^override /, "");
 }
 
 const harness = `
@@ -79,6 +79,7 @@ class ShareIntoViewController: UIResponder {
   ${method("private func close()")}
   ${method("func finishOpening(")}
   ${method("func showShareFeedback(")}
+  ${method("override func didSelectCancel(")}
 }
 func check(_ condition: @autoclosure () -> Bool) { precondition(condition()) }
 func make() -> (ShareIntoViewController, UIApplication) {
@@ -118,7 +119,7 @@ do {
 }
 // Cancel is terminal, including timeout and late callback after cancellation.
 do {
-  let (controller, app) = make(); controller.close()
+  let (controller, app) = make(); controller.didSelectCancel()
   app.reply!(false); DispatchQueue.main.flush(); DispatchQueue.main.expire()
   check(controller.alerts.isEmpty && controller.extensionContext!.completions == 1)
 }

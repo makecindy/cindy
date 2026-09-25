@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
@@ -14,6 +16,15 @@ const template = readFileSync(
   ),
   "utf8",
 );
+
+it("runs the generated Swift launch and feedback behavior", () => {
+  const script = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../scripts/test-incoming-share-feedback.mjs",
+  );
+  const output = execFileSync(process.execPath, [script], { encoding: "utf8" });
+  expect(output).toContain("PASS: generated Swift share feedback");
+});
 
 describe("incoming share native file ownership", () => {
   it("isolates both file-copy and raw-image paths without changing display names", () => {
