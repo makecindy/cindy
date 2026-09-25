@@ -117,6 +117,24 @@ describe('portable teammate editors', () => {
 describe('portable teammate memory pages', () => {
   type Group = { id: string; data: { count: number; entries: Array<{ id: string; title: string; subtitle: string; timestamp?: number; resourceId: string }> } };
   const groups = (resource: { blocks?: unknown[] }) => (resource.blocks as Group[]).filter(block => block.id.startsWith('memory-'));
+  it('lists far more than a fixed page of memories and stays inside one device-link frame', async () => {
+    const f = fixture(); f.memories.clear();
+    for (let i = 0; i < 1200; i++) f.memories.set(`project_m${i}.md`, { filename: `project_m${i}.md`, type: 'project', title: `Project ${i}`, body: 'x'.repeat(140), updatedAt: new Date(Date.UTC(2026, 8, 1) + i).toISOString() });
+    const [project] = groups(await f.resource('settings:bot-a/memory'));
+    expect(project.data.count).toBe(1200);
+    expect(project.data.entries).toHaveLength(1200);
+    expect(project.data.entries.every(entry => entry.subtitle === 'x'.repeat(140))).toBe(true);
+    f.memories.clear();
+    for (let i = 0; i < 3000; i++) f.memories.set(`project_m${i}.md`, { filename: `project_m${i}.md`, type: 'project', title: `Project ${i}`, body: '记'.repeat(200), updatedAt: new Date(Date.UTC(2026, 8, 1) + i).toISOString() });
+    const large = await f.resource('settings:bot-a/memory');
+    const [bounded] = groups(large);
+    // Previews stop first; the mobile per-list ceiling (2000) bounds the rest.
+    expect(bounded.data.count).toBe(3000);
+    expect(bounded.data.entries).toHaveLength(2000);
+    expect(bounded.data.entries[0].subtitle).toBeTruthy();
+    expect(bounded.data.entries.at(-1)).not.toHaveProperty('subtitle');
+    expect(Buffer.byteLength(JSON.stringify(large))).toBeLessThan(2 * 1024 * 1024);
+  });
   it('groups saved memories by kind with counts and excerpts, and offers search only to declaring controllers', async () => {
     const f = fixture();
     const plain = await f.resource('settings:bot-a/memory');

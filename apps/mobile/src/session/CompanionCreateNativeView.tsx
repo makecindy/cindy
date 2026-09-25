@@ -5,5 +5,7 @@ export interface CompanionCreateNativeViewProps {
   online: boolean; busy: boolean; loading: boolean; error: boolean; dirty: boolean;
   /** The typed name already belongs to a teammate on this computer (NFKC, case-insensitive). */
   duplicate?: boolean;
+  /** The last create is unconfirmed; the retry resends exactly what was sent. */
+  locked?: boolean;
 }
 export function CompanionCreateNativeView(_props: CompanionCreateNativeViewProps) { return null; }

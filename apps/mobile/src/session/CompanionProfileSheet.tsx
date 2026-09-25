@@ -161,6 +161,8 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     if (target.action.confirmation && !confirmed) { setConfirmation(target); return false; }
     inFlight.current = true; generation.current++; setBusy(true); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setReceipt(null);
     const started = binding;
+    // A version conflict re-reads only after the submit lock is released; the readers refuse to run under it.
+    let rereadAfterConflict = false;
     try {
       const response = await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, {
         collectionId, resourceRef: page === 'editor' ? editor!.resource.ref : resource.ref, actionId: target.action.id,
@@ -200,13 +202,16 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         if (target.id !== 'delete' && message.includes('ALREADY_EXISTS')) { setNameTakenOnSave(true); setError(true); }
         else if (target.id !== 'delete' && message.includes('PRECONDITION_FAILED')) {
           // The teammate changed meanwhile. Keep the draft; the re-read offers the latest version.
-          if (page === 'editor') void retryEditor(); else void refresh();
+          rereadAfterConflict = true;
         } else { setError(true); setDeleteFailure(target.id === 'delete'); }
       }
       return false;
     } finally {
       inFlight.current = false;
-      if (current.current === started) setBusy(false);
+      if (current.current === started) {
+        setBusy(false);
+        if (rereadAfterConflict) void (page === 'editor' ? retryEditor() : refresh());
+      }
     }
   };
   const leave = async (close: boolean) => {
@@ -376,6 +381,8 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [nameTaken, setNameTaken] = useState(false);
+  // The host may already hold the sent teammate under this request; a retry must resend exactly it.
+  const [unconfirmed, setUnconfirmed] = useState(false);
   const inFlight = useRef(false);
   const current = useRef(0);
   // Intent identity survives an ambiguous ACK, capability reload and reconnect.
@@ -403,7 +410,7 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
     finally { if (current.current === sequence) setLoading(false); }
   };
   useEffect(() => {
-    if (visible) { requestId.current = null; setPortraitChanged(false); setNameTaken(false); setValues({ name: '', avatarImageBase64: randomCompanionPortrait() }); }
+    if (visible) { requestId.current = null; setPortraitChanged(false); setNameTaken(false); setUnconfirmed(false); setValues({ name: '', avatarImageBase64: randomCompanionPortrait() }); }
   }, [visible]);
   useEffect(() => {
     setData(null); setError(false);
@@ -411,7 +418,7 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
     return () => { current.current++; };
   }, [visible, online, deviceId, collectionId]);
   const dirty = !!String(values.name ?? '').trim() || portraitChanged;
-  const change = (next: ProfileValues) => { if (next.avatarImageBase64 !== values.avatarImageBase64) setPortraitChanged(true); setValues(next); };
+  const change = (next: ProfileValues) => { if (unconfirmed) return; if (next.avatarImageBase64 !== values.avatarImageBase64) setPortraitChanged(true); setValues(next); };
   const close = () => {
     if (inFlight.current) return;
     if (!dirty) { onClose(); return; }
@@ -434,9 +441,12 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
       onCreated(navigation.target.ref); onClose();
     } catch (cause) {
       if (current.current === sequence) {
-        const collision = cause instanceof Error && cause.message.includes('ALREADY_EXISTS');
-        setNameTaken(collision); setError(true);
-        if (collision) requestId.current = null;
+        const message = cause instanceof Error ? cause.message : String(cause);
+        const collision = message.includes('ALREADY_EXISTS');
+        // Only a host rejection proves nothing was created; then edits get a fresh request.
+        const rejected = collision || message.includes('INVALID_PARAMS');
+        setNameTaken(collision); setError(true); setUnconfirmed(!rejected);
+        if (rejected) requestId.current = null;
         void reload(true);
       }
     } finally {
@@ -444,12 +454,12 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
       setBusy(false);
     }
   };
-  if (Platform.OS === 'ios') return <CompanionCreateNativeView deviceName={deviceName} nameTaken={nameTaken} duplicate={duplicate} visible={visible} onClose={close} onClosed={onClosed} panel={data?.panels[0]} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} />;
+  if (Platform.OS === 'ios') return <CompanionCreateNativeView deviceName={deviceName} nameTaken={nameTaken} duplicate={duplicate} locked={unconfirmed} visible={visible} onClose={close} onClosed={onClosed} panel={data?.panels[0]} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} />;
   return <CompanionSheet visible={visible} onClose={close} onClosed={onClosed} preventDismiss={dirty || busy} title={t('devices.companionProfile.create')}>
     <View style={styles.content}>
       {!online ? <Text style={styles.note}>{t('devices.companionProfile.offline', { deviceName })}</Text> : null}
       {error || duplicate ? <Text accessibilityRole="alert" style={styles.note}>{t(duplicate || nameTaken ? 'devices.companionProfile.nameTaken' : 'devices.companionProfile.createFailed')}</Text> : null}
-      {data?.panels[0] ? <CompanionProfileForm panel={data.panels[0]} values={values} onChange={change} disabled={busy || !online} /> : null}
+      {data?.panels[0] ? <CompanionProfileForm panel={data.panels[0]} values={values} onChange={change} disabled={busy || !online || unconfirmed} /> : null}
       {loading ? <Text style={styles.note}>{t('devices.resources.loading')}</Text> : null}
       {!data && online && !loading ? <MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: busy, onPress: () => void reload() }} /> : null}
       <MainWindowActionButton action={{ label: t('devices.companionProfile.create'), busy, disabled: !online || !data || typeof values.name !== 'string' || !values.name.trim() || duplicate, onPress: () => void submit() }} />

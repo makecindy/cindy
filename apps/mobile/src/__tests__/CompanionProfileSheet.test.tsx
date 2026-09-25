@@ -187,6 +187,40 @@ it('turns a stale save into the existing conflict choice and keeps the draft', a
   expect(h.view.values.name).toBe('Local edit');
 });
 
+it('offers the conflict choice when an editor save is stale, instead of failing silently', async () => {
+  await render();
+  const skillRef = { ...resource.ref, id: 'settings:bot/skills/learned' };
+  const skill = { id: 'skill', values: { body: 'Original' }, action: { id: 'skill-save', label: 'Save', fields: [{ id: 'body', label: 'Content', kind: 'multiline' }] } };
+  h.read.mockResolvedValue({ resource: { ...resource, ref: skillRef }, panels: [skill] });
+  await act(async () => h.view.onEditor('settings:bot/skills/learned'));
+  await act(async () => h.view.onChange({ body: 'My edit' }));
+  h.read.mockResolvedValue({ resource: { ...resource, ref: skillRef, revision: 'v2' }, panels: [{ ...skill, values: { body: 'Desktop edit' } }] });
+  h.invoke.mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] resource changed'));
+  const reads = h.read.mock.calls.length;
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.read.mock.calls.length).toBe(reads + 1);
+  expect(h.view.conflict).toBe(true); expect(h.view.error).toBe(false);
+  expect(h.view.values.body).toBe('My edit');
+});
+
+it('resends the exact unconfirmed teammate and only unlocks edits after a host rejection', async () => {
+  await renderCreate();
+  await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova' }));
+  h.invoke.mockRejectedValueOnce(new Error('TIMEOUT'));
+  await act(async () => h.create.onSubmit());
+  // The host may already hold Nova under this request: an edit now would be silently dropped.
+  expect(h.create.locked).toBe(true);
+  await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova 2' }));
+  expect(h.create.values.name).toBe('Nova');
+  h.invoke.mockRejectedValueOnce(new Error('[INVALID_PARAMS] Invalid teammate editor input'));
+  await act(async () => h.create.onSubmit());
+  expect(h.invoke.mock.calls[1][2].input).toEqual(h.invoke.mock.calls[0][2].input);
+  // A rejection proves nothing was created; the user can correct the form.
+  expect(h.create.locked).toBe(false);
+  await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova 2' }));
+  expect(h.create.values.name).toBe('Nova 2');
+});
+
 it('blocks a duplicate name before submitting and keeps the form after a failed attempt', async () => {
   const cache = await import('@/device-link/remoteResourceAvailability');
   cache.readRemoteCollectionCache(':1', 'teammates');

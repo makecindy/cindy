@@ -65,8 +65,13 @@ const removeBody = (name: string, title: string) => text(
 
 /** `parseRemoteResourceRef` rejects longer ids; long teammate ids use a digest segment (fits a 128-char id). */
 const MAX_REF_ID_CHARS = 160;
-/** Bounded list payload; search already returns only the most relevant hits. */
-const MAX_LIST_ENTRIES = 500;
+/**
+ * The list must fit one device-link frame (2 MB), so it is bounded by bytes, not a fixed count:
+ * previews stop first, then the oldest titles. Mobile keeps at most 2000 entries per list block.
+ */
+const LIST_BUDGET_BYTES = 1_000_000;
+const PREVIEW_BUDGET_BYTES = 400_000;
+const MAX_GROUP_ENTRIES = 2_000;
 const PREVIEW_CHARS = 140;
 const ENTRY_RE = /^(?:(?:user|feedback|project|reference)_[a-z0-9_-]{1,64}|h[a-f0-9]{12})$/;
 
@@ -102,22 +107,33 @@ export function createBotRemoteMemoryEditor(deps: BotRemoteMemoryDeps, bind: Ret
     if (!entry) {
       const query = request.query?.trim().slice(0, 200) ?? '';
       const summaries = await deps.memory.list(botId, query || undefined); deps.assertOwner(owner);
-      const shown = summaries.slice(0, MAX_LIST_ENTRIES);
+      const shown: Array<{ item: (typeof summaries)[number]; entry: Record<string, unknown> }> = [];
+      const perType = new Map<string, number>();
+      let used = 0;
+      for (const item of summaries) {
+        if ((perType.get(item.type) ?? 0) >= MAX_GROUP_ENTRIES) continue;
+        const entry = { id: item.filename.replace(/\.md$/, ''), title: item.title,
+          ...(used < PREVIEW_BUDGET_BYTES ? { subtitle: preview(item.preview) } : {}),
+          ...timestamp(item.updatedAt), resourceId: botMemoryEntryResourceId(botId, item.filename) };
+        // The block's fallback Markdown repeats each title once.
+        const bytes = Buffer.byteLength(JSON.stringify(entry)) + Buffer.byteLength(item.title) + 3;
+        if (used + bytes > LIST_BUDGET_BYTES) break;
+        used += bytes; perType.set(item.type, (perType.get(item.type) ?? 0) + 1); shown.push({ item, entry });
+      }
       const blocks: RemoteResourceBlock[] = request.primitives.includes('search')
         ? [{ id: 'search', primitive: 'search', fallbackMarkdown: '', data: { query, placeholder: memoryCopy.search } }]
         : [];
       for (const type of BOT_MEMORY_TYPES) {
-        const items = shown.filter(item => item.type === type);
+        const items = shown.filter(({ item }) => item.type === type);
         if (!items.length) continue;
         blocks.push({ id: `memory-${type}`, primitive: 'list', title: memoryCopy.types[type],
-          fallbackMarkdown: items.map(item => `- ${item.title}`).join('\n'),
+          fallbackMarkdown: items.map(({ item }) => `- ${item.title}`).join('\n'),
           data: {
             count: summaries.filter(item => item.type === type).length,
-            entries: items.map(item => ({ id: item.filename.replace(/\.md$/, ''), title: item.title,
-              subtitle: preview(item.preview), ...timestamp(item.updatedAt), resourceId: botMemoryEntryResourceId(botId, item.filename) })),
+            entries: items.map(({ entry }) => entry),
           } });
       }
-      const revision = createHash('sha256').update(JSON.stringify([query, shown.map(item => [item.filename, item.updatedAt, item.title])])).digest('hex');
+      const revision = createHash('sha256').update(JSON.stringify([query, shown.map(({ item }) => [item.filename, item.updatedAt, item.title])])).digest('hex');
       return { ref: ref(base), revision, display: { title: memoryCopy.memories }, links: [], blocks };
     }
     if (!ENTRY_RE.test(entry)) missing();
