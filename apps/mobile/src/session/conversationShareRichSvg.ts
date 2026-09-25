@@ -73,6 +73,10 @@ export function layoutConversationShareRichBody(
     size: number = typeScale.body,
     leading: number = lineHeight.body,
   ): number {
+    if (available <= 0) return 0;
+    // Even a single wide, bold glyph must fit in a narrow table cell.
+    // Keep the normal line spacing while shrinking only constrained text.
+    size = Math.min(size, available / (1.05 * 1.08));
     let dx = 0;
     let dy = 0;
     let hasText = false;

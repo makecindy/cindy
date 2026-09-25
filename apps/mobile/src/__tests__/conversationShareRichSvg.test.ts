@@ -1,8 +1,61 @@
 import { describe, expect, it } from "vitest";
 import { buildConversationShareSvgLayout } from "@/session/conversationShareSvgLayout";
 import { lightColors, darkColors } from "@/theme/tokens";
+import {
+  layoutConversationShareRichBody,
+  conservativeArialGlyphWidthEm,
+} from "@/session/conversationShareRichSvg";
 
 describe("structured share fallback", () => {
+  it("fits Chinese, emoji and bold text inside extremely narrow cells", () => {
+    const cells = Array.from({ length: 30 }, () => "**中😀@**");
+    const row = `|${cells.join("|")}|`;
+    const layout = layoutConversationShareRichBody(
+      {
+        clientId: "m",
+        kind: "assistant",
+        body: `${row}\n|${cells.map(() => "---").join("|")}|\n${row}`,
+      },
+      {
+        background: "white",
+        surfaceElevated: "white",
+        border: "gray",
+        codeSurface: "gray",
+        inlineCode: "black",
+        surfaceChip: "gray",
+        textPrimary: "black",
+        textSecondary: "gray",
+        textTertiary: "gray",
+        syntax: {},
+      },
+      20,
+      0,
+      240,
+    );
+    expect(layout.rectangles).toHaveLength(60);
+    expect(
+      layout.textBlocks.map((block) => block.lines.join("")).join(""),
+    ).toBe("中😀@".repeat(60));
+    for (const block of layout.textBlocks) {
+      const cell = layout.rectangles.find(
+        (r) =>
+          block.x >= r.x &&
+          block.x < r.x + r.width &&
+          block.y > r.y &&
+          block.y <= r.y + r.height,
+      )!;
+      expect(cell).toBeDefined();
+      const width = Array.from(block.lines[0]!).reduce(
+        (sum, char) =>
+          sum +
+          conservativeArialGlyphWidthEm(char) *
+            block.fontSize *
+            (block.bold ? 1.08 : 1),
+        0,
+      );
+      expect(block.x + width).toBeLessThanOrEqual(cell.x + cell.width);
+    }
+  });
   it.each([lightColors, darkColors])(
     "retains Markdown styles and table cells within the canvas",
     (c) => {

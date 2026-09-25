@@ -1,4 +1,5 @@
 import { HomeHeaderGlassButton } from "./HomeHeaderGlassButton";
+import { useState } from "react";
 import { Share as ShareIcon, X } from "lucide-react-native";
 import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
 import { useTranslation } from "react-i18next";
@@ -33,7 +34,8 @@ export function ShareSelectionBar({
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const { width, fontScale } = useWindowDimensions();
-  const stacked = width / fontScale < 360;
+  const [barWidth, setBarWidth] = useState<number | null>(null);
+  const stacked = (barWidth ?? width) / fontScale < 360;
 
   const cancelIcon = (
     <X
@@ -92,6 +94,7 @@ export function ShareSelectionBar({
 
   return (
     <View
+      onLayout={({ nativeEvent }) => setBarWidth(nativeEvent.layout.width)}
       style={[styles.container, stacked && styles.stacked]}
       testID="session.shareImage.bar"
     >
