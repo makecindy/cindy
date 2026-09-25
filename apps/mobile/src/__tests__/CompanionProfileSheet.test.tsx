@@ -132,3 +132,33 @@ it('leaves a deleted teammate only after the native sheet closes', async () => {
   await act(async () => h.view.onClosed());
   expect(h.deleted).toHaveBeenCalledOnce();
 });
+
+const memoryForm = { id: 'memory', values: { memory: true, userContext: 'Prefers tea' }, action: { id: 'memory-grant', label: 'Save', fields: [{ id: 'memory', label: 'Remember', kind: 'toggle' }, { id: 'userContext', label: 'About me', kind: 'multiline' }] } };
+const memoriesEntry = { id: 'memories', values: {}, entries: [{ id: 'memories', title: 'Saved Memories', resourceId: 'settings:bot/memory' }] };
+it('opens the host saved-memories page from Memory and steps back to the toggle', async () => {
+  h.read.mockResolvedValue({ resource, panels: [panel, memoryForm, memoriesEntry] });
+  await render(); await act(async () => h.view.onOpen('memory'));
+  expect(h.view.hasMemoryEntries).toBe(true);
+  await act(async () => h.view.onOpen('memoryEntries'));
+  expect(h.view.page).toBe('memoryEntries'); expect(h.view.memoryPage).toBeTruthy();
+  expect(h.read).toHaveBeenLastCalledWith(h.invoke, 'host', { collectionId: 'teammates', kind: 'bot', id: 'settings:bot/memory' }, 'en', { query: '' });
+  await act(async () => h.view.onBack());
+  expect(h.view.page).toBe('memory');
+});
+it('keeps the upgrade path when the host has no saved-memories page', async () => {
+  h.read.mockResolvedValue({ resource, panels: [panel, memoryForm] });
+  await render(); await act(async () => h.view.onOpen('memory'));
+  expect(h.view.hasMemoryEntries).toBe(false);
+  expect(h.read.mock.calls.every(call => !String(call[2]?.id).includes('/memory'))).toBe(true);
+});
+it('saves a changed memory toggle before leaving for the saved-memories page', async () => {
+  h.read.mockResolvedValue({ resource, panels: [panel, memoryForm, memoriesEntry] });
+  await render(); await act(async () => h.view.onOpen('memory'));
+  await act(async () => h.view.onChange({ ...memoryForm.values, memory: false }));
+  h.invoke.mockRejectedValueOnce(new Error('offline'));
+  await act(async () => h.view.onOpen('memoryEntries'));
+  expect(h.view.page).toBe('memory'); expect(h.view.dirty).toBe(true);
+  await act(async () => h.view.onOpen('memoryEntries'));
+  expect(h.invoke.mock.calls.at(-1)?.[2]).toMatchObject({ actionId: 'memory-grant', input: { memory: false } });
+  expect(h.view.page).toBe('memoryEntries');
+});

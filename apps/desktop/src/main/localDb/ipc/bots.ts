@@ -120,6 +120,35 @@ function captureBotOperationOwner() {
   return { userDataDir, assertCurrent };
 }
 
+let botMemoryService: ReturnType<typeof createBotMemoryService> | null = null;
+/**
+ * 伙伴记忆页的唯一服务实例。本机设置页 IPC 与设备互联的远程设置共用它,
+ * 同一条记忆的保存 / 删除串行与运行时刷新合并才不会分成两份。
+ */
+export function getBotMemoryService(): ReturnType<typeof createBotMemoryService> {
+  botMemoryService ??= createBotMemoryService({
+    async getStore(scopeKey) {
+      const manager = getMakerIfReady()?.makerMemory;
+      if (!manager) throwIpcError('MAKER_MEMORY_NOT_READY', 'Memory is not ready');
+      return manager.getStore(scopeKey, { skipDisabledCheck: true });
+    },
+    async readBot(botId) {
+      const owner = captureBotOperationOwner();
+      const [row] = await getDbClient()
+        .drizzle.select({ status: botProfiles.status, canonicalSessionId: botProfiles.canonicalSessionId })
+        .from(botProfiles)
+        .where(eq(botProfiles.id, botId))
+        .limit(1);
+      owner.assertCurrent();
+      return row && row.status !== 'deleting'
+        ? { canonicalSessionId: row.canonicalSessionId, assertCurrent: owner.assertCurrent }
+        : null;
+    },
+    requestRefresh: (sessionId) => requestBotRuntimeEpochRefresh(sessionId, 'resource'),
+  });
+  return botMemoryService;
+}
+
 /**
  * 把这份档案摊到伙伴自己的家(`<userData>/bots/<botId>/`)。
  *
@@ -1812,26 +1841,7 @@ export function registerBotIpc(): void {
     });
   });
 
-  const memory = createBotMemoryService({
-    async getStore(scopeKey) {
-      const manager = getMakerIfReady()?.makerMemory;
-      if (!manager) throwIpcError('MAKER_MEMORY_NOT_READY', 'Memory is not ready');
-      return manager.getStore(scopeKey, { skipDisabledCheck: true });
-    },
-    async readBot(botId) {
-      const owner = captureBotOperationOwner();
-      const [row] = await getDbClient()
-        .drizzle.select({ status: botProfiles.status, canonicalSessionId: botProfiles.canonicalSessionId })
-        .from(botProfiles)
-        .where(eq(botProfiles.id, botId))
-        .limit(1);
-      owner.assertCurrent();
-      return row && row.status !== 'deleting'
-        ? { canonicalSessionId: row.canonicalSessionId, assertCurrent: owner.assertCurrent }
-        : null;
-    },
-    requestRefresh: (sessionId) => requestBotRuntimeEpochRefresh(sessionId, 'resource'),
-  });
+  const memory = getBotMemoryService();
   /** Bind each memory operation to the account that started it. */
   const withMemoryOwner = async <T>(run: () => Promise<T>): Promise<T> => {
     const owner = captureBotOperationOwner();

@@ -74,6 +74,8 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
       : p.page === 'models' ? <>{p.panel?.action ? <Section><CompanionNativeContent>{p.models}</CompanionNativeContent></Section> : null}{p.panel?.action ? <Section>{action(tr('save'), () => p.onSubmit(p.panel!), !p.dirty || !p.online || p.conflict)}</Section> : note(p.panel?.text || tr('hostUpgrade'))}</>
       : p.page === 'settings' ? <Section>{row('permissions', 'hand.raised')}</Section>
       : p.page === 'skills' ? <>{p.data?.panels.find(item => item.id === 'skills')?.entries?.length ? <Section>{row('personalSkills', 'sparkles')}</Section> : note(p.data?.panels.find(item => item.id === 'skills')?.text || tr('skillsEmpty'))}{p.data?.panels.find(item => item.id === 'connections')?.entries?.length ? <Section>{row('connections', 'link')}</Section> : note(p.data?.panels.find(item => item.id === 'connections')?.text || tr('emptyEditor'))}</>
-      : p.page === 'artifacts' ? <Section><CompanionNativeContent>{p.artifacts}</CompanionNativeContent></Section> : <>{p.page === 'profile' && p.data?.panels.find(item => item.id === 'avatar')?.entries?.length ? <Section>{row('avatar', 'person.crop.circle')}</Section> : null}{panel(p.panel)}</>}
+      : p.page === 'artifacts' ? <Section><CompanionNativeContent>{p.artifacts}</CompanionNativeContent></Section> : p.page === 'memoryEntries' ? p.memoryPage
+      : <>{p.page === 'profile' && p.data?.panels.find(item => item.id === 'avatar')?.entries?.length ? <Section>{row('avatar', 'person.crop.circle')}</Section> : null}{panel(p.panel)}
+        {p.page === 'memory' && p.data ? p.hasMemoryEntries ? <Section>{row('memoryEntries', 'brain')}</Section> : p.panel?.action ? note(tr('hostUpgrade')) : null : null}</>}
   </ComposerSheet>;
 }

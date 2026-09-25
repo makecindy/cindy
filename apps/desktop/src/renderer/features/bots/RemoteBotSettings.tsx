@@ -552,7 +552,9 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
               null,
               resourceId === bot.id
                 ? bot.id
-                : resourceId.includes('/connections/') || resourceId.includes('/skills/')
+                : resourceId.includes('/connections/') ||
+                    resourceId.includes('/skills/') ||
+                    resourceId.includes('/memory/')
                   ? resourceId.slice(0, resourceId.lastIndexOf('/'))
                   : bot.id,
             )

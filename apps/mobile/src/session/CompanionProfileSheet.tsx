@@ -21,6 +21,8 @@ import { CompanionPortraitPicker, randomCompanionPortrait } from './CompanionPor
 import { CompanionProfileNativeView } from './CompanionProfileNativeView';
 import { CompanionProfileArtifacts } from './CompanionProfileArtifacts';
 import { loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
+import { CompanionMemoryPage } from './CompanionMemoryPage';
+import { useCompanionMemory } from './useCompanionMemory';
 
 const AVATAR_SIZE = 56;
 
@@ -85,6 +87,10 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   draftScope.current = { dirty, page, base: page === 'editor' ? editor : data };
   const label = (value: RemoteText) => resolveRemoteText(value, i18n.language);
   const name = label(data?.resource.display.title ?? resource?.display.title ?? '');
+  // Saved memories are a host page of their own; hosts without it keep the upgrade note.
+  const memoryList = data?.panels.find(item => item.id === 'memories')?.entries?.[0]?.resourceId;
+  const memory = useCompanionMemory({ invoke, openLink, deviceId, deviceName, collectionId, resourceKind: resource?.ref.kind ?? 'bot',
+    listResourceId: memoryList, online, active: page === 'memoryEntries', binding });
   const read = useCallback(async () => {
     if (!online || !resource) return null;
     await openLink(deviceId);
@@ -130,7 +136,13 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   };
   const open = (next: string) => {
     if (inFlight.current) return;
-    if (next === 'avatar' || next === 'notes' || next === 'connections' || next === 'personalSkills') {
+    if (next === 'memoryEntries') {
+      void (async () => {
+        if (dirty && panel && !(await submit(panel))) return;
+        setReceipt(null); setError(false); setDeleteFailure(false); setConfirmation(null); setEditing(false); setPage(next);
+      })(); return;
+    }
+    if (next === 'avatar' || next === 'connections' || next === 'personalSkills') {
       void (async () => {
         if (dirty && panel && !(await submit(panel))) return;
         await openEditor(`settings:${resource?.ref.id}/${next === 'personalSkills' ? 'skills' : next}`);
@@ -187,13 +199,18 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const leave = async (close: boolean) => {
     if (inFlight.current) return;
     if (confirmation) { setConfirmation(null); return; }
+    if (page === 'memoryEntries') {
+      if (close) { if (await memory.flush()) onClose(); }
+      else if (!(await memory.back())) open('memory');
+      return;
+    }
     if (dirty && panel && !(await submit(panel))) return;
     if (close) { onClose(); return; }
     if (page === 'editor' && editor) {
       if (editorPanel && editor.panels.filter(item => item.action && item.id !== 'remove').length > 1) { setEditorPanel(null); setEditing(false); return; }
       const parts = editor.resource.ref.id.split('/');
       if (parts.length > 2) { await openEditor(parts.slice(0, -1).join('/')); return; }
-      open(parts[1] === 'notes' ? 'memory' : parts[1] === 'skills' || parts[1] === 'connections' ? 'skills' : parts[1] === 'models' ? 'settings' : 'home');
+      open(parts[1] === 'skills' || parts[1] === 'connections' ? 'skills' : parts[1] === 'models' ? 'settings' : 'home');
     } else open('home');
   };
   const dismiss = () => { void leave(true); };
@@ -228,7 +245,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const conversation = data?.resource.links.find(link => link.rel === 'conversation' && link.target.kind === 'session');
   const sessionId = conversation?.target.kind === 'session' ? conversation.target.sessionId : '';
   const actionPanel = (id: string) => data?.panels.find(item => item.id === id);
-  const editorTitles: Record<string, string> = { avatar: 'avatar', models: 'models', notes: 'notes', skills: 'personalSkills', connections: 'connections' };
+  const editorTitles: Record<string, string> = { avatar: 'avatar', models: 'models', skills: 'personalSkills', connections: 'connections' };
   const titleKey = page === 'home' ? 'settingsTitle' : page === 'editor' ? editorTitles[editorResourceId.split('/')[1]] ?? 'title' : page;
   const note = (key: string) => <Text selectable style={styles.note}>{t(`devices.companionProfile.${key}`, { deviceName })}</Text>;
   const row = (id: string, Icon: typeof Brain) => <ContextSheetRow key={id} trailing="chevron" label={t(`devices.companionProfile.${id}`)} icon={<Icon size={iconSize.lg} color={colors.textSecondary} />} onPress={() => open(id)} />;
@@ -236,6 +253,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     ? <CompanionProfileForm panel={target} values={editing ? values : target.values} onChange={next => { if (!editing) draftBase.current = target.values; setValues(next); setEditing(true); }} disabled={busy || !online} />
     : target?.text ? <Text selectable style={styles.body}>{target.text}</Text> : !data && online ? <Text style={styles.note}>{t('devices.resources.loading')}</Text> : note('hostUpgrade');
 
+  const memoryPage = <CompanionMemoryPage memory={memory} online={online} botName={name} memoryEnabled={actionPanel('memory')?.values.memory !== false} />;
   const modelValues = editing ? values : panel?.values ?? {};
   const changeValues = (next: ProfileValues) => { if (!editing) draftBase.current = panel?.values ?? {}; setValues(next); setEditing(true); };
   const models = <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={changeValues}
@@ -258,9 +276,10 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   if (Platform.OS === 'ios') return <>{modelPicker}<CompanionProfileNativeView models={models}
     visible={visible && modelStage === 'profile'} title={confirmation?.action?.confirmation ? label(confirmation.action.confirmation.title) : page === 'editor' && editor ? label(editor.resource.display.title) : t(`devices.companionProfile.${titleKey}`)}
     name={name} page={page} deviceId={deviceId} deviceName={deviceName} resource={resource} data={data} editor={editor} panel={panel}
-    values={editing ? values : panel?.values ?? values} busy={busy} online={online} dirty={dirty} loading={editorLoading}
+    values={editing ? values : panel?.values ?? values} busy={busy || memory.busy} online={online} dirty={dirty || memory.dirty} loading={editorLoading}
     error={error} errorLabel={deleteFailure ? t('devices.companionProfile.deleteFailed') : undefined} conflict={conflict?.page === page} receipt={receipt && !confirmation ? label(receipt) : null} confirmation={confirmation} deleted={deleted}
     artifacts={sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery')}
+    memoryPage={memoryPage} hasMemoryEntries={!!memoryList}
     onClose={dismiss} onClosed={afterClosed} onBack={page !== 'home' || confirmation ? () => void leave(false) : undefined}
     onOpen={open}
     onChange={next => { if (!editing) draftBase.current = panel?.values ?? {}; setValues(next); setEditing(true); }}
@@ -271,7 +290,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     onSearch={onOpenSearch} onAutomation={onOpenAutomation} /></>;
 
   return <>{modelPicker}<CompanionSheet visible={visible && modelStage === 'profile'} onClosed={afterClosed} onClose={dismiss}
-      preventDismiss={dirty || busy || !!confirmation}
+      preventDismiss={dirty || busy || !!confirmation || memory.dirty || memory.busy}
       onBack={page !== 'home' || confirmation ? () => void leave(false) : undefined}
       title={confirmation?.action?.confirmation ? label(confirmation.action.confirmation.title) : page === 'editor' && editor ? label(panel?.title ?? editor.resource.display.title) : t(`devices.companionProfile.${titleKey}`)} testID="companionProfile">
     <View style={styles.content}>
@@ -317,12 +336,12 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         <View style={styles.group}>{row('models', Settings2)}{row('permissions', UserRound)}</View>
       </> : page === 'skills' ? <>
         {actionPanel('skills')?.entries?.length ? row('personalSkills', Sparkles) : renderPanel(actionPanel('skills'))}{actionPanel('connections')?.entries?.length ? row('connections', Settings2) : renderPanel(actionPanel('connections'))}
-      </> : page === 'artifacts' ? sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery') : page === 'direct' ? actionPanel('direct') ? <><Text selectable style={styles.body}>{actionPanel('direct')!.text || t('devices.companionProfile.directEmpty')}</Text></> : note('directRecovery') : <>
+      </> : page === 'memoryEntries' ? memoryPage : page === 'artifacts' ? sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery') : page === 'direct' ? actionPanel('direct') ? <><Text selectable style={styles.body}>{actionPanel('direct')!.text || t('devices.companionProfile.directEmpty')}</Text></> : note('directRecovery') : <>
         {page === 'profile' && actionPanel('avatar')?.entries?.length ? row('avatar', UserRound) : null}
         {page === 'models' && panel?.action ? models : renderPanel(panel)}
         {(page === 'profile' || page === 'memory') && panel && !panel.action ? note('largeProfileRecovery') : null}
-        {page === 'memory' && actionPanel('notes')?.action ? row('notes', Brain) : null}
         {panel?.action ? <MainWindowActionButton action={{ label: t('devices.companionProfile.save'), busy, disabled: !online || !dirty || conflict?.page === page, onPress: () => void submit(panel) }} /> : null}
+        {page === 'memory' && data ? memoryList ? row('memoryEntries', Brain) : panel?.action ? note('hostUpgrade') : null : null}
       </>}
     </View>
   </CompanionSheet></>;

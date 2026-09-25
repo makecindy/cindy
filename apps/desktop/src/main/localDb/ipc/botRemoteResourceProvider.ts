@@ -87,7 +87,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
     },
     async get(context, request) {
       if (management && (request.ref.id === 'create' || request.ref.id.startsWith('settings:'))) {
-        return management.getEditor(context, request.ref.id, request.client.locale);
+        return management.getEditor(context, request.ref.id, request.client.locale, { query: request.query, primitives: request.client.primitives });
       }
       if (request.ref.id.startsWith('working:')) {
         const [botId, phase, extra] = request.ref.id.slice('working:'.length).split('/');
@@ -119,6 +119,10 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
           if (block) block.data = data;
           else resource.blocks?.push({ id: page, primitive: 'list', fallbackMarkdown: '', data });
         }
+        // The `memory` block stays the toggle/USER.md form; saved entries are a separate list page.
+        resource.blocks?.push({ id: 'memories', primitive: 'list', fallbackMarkdown: '', data: {
+          entries: [{ id: 'memories', title: editorCopy.memories, resourceId: `settings:${source.id}/memory` }],
+        } });
       }
       return { ...resource, teammateMessaging: { version: 1, available: source.status === 'active' } };
     },

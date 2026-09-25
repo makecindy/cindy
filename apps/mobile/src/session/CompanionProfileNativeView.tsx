@@ -7,6 +7,8 @@ export interface CompanionProfileNativeViewProps {
   panel?: ProfilePanel; values: ProfileValues; busy: boolean; online: boolean; dirty: boolean;
   loading: boolean; error: boolean; errorLabel?: string; conflict: boolean; receipt: string | null;
   confirmation: ProfilePanel | null; deleted: boolean; artifacts: ReactNode; models: ReactNode;
+  /** Saved-memories page (list / detail / edit), and whether the host offers it. */
+  memoryPage: ReactNode; hasMemoryEntries: boolean;
   onClose(): void; onClosed?(): void; onBack?(): void; onOpen(page: string): void;
   onChange(values: ProfileValues): void; onSubmit(panel: ProfilePanel, confirmed?: boolean): void;
   onConfirm(panel: ProfilePanel | null): void; onRetry(): void; onDiscard(reload: boolean): void;
