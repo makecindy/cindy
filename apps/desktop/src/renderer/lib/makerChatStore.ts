@@ -12113,15 +12113,26 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
         {
           // readPage starts expanded details without awaiting them. Join those
           // same reads before certifying receipts; their display may still be old.
-          // Recovery certifies the visible view; folded bodies are read only on expansion.
-          await Promise.all(historyWorkSummaries(view.getSnapshot().items)
-            .filter((summary) => view.getSnapshot().expanded.has(summary.key))
-            .map((summary) => view.loadDetails(summary)));
+          // Historical folded bodies stay lazy. A force recovery must still seal
+          // live rows already on screen when their final push was lost; only
+          // ranges containing those rows may be read without user expansion.
+          const liveRows = opts?.force ? [...rowsAtStart.values()].filter((row) => row.isStreaming) : [];
+          const summaries = historyWorkSummaries(view.getSnapshot().items);
+          const recoveryKeys = new Set(summaries.filter((summary) => liveRows.some((row) => {
+            if (summary.parentToolUseId && !row.parentToolUseId) return false;
+            const createdAt = Date.parse(row.createdAt ?? '');
+            return row.clientId === summary.anchorClientId
+              || (createdAt >= summary.startedAtMs && createdAt <= summary.endedAtMs);
+          })).map((summary) => summary.key));
+          await Promise.all(summaries
+            .filter((summary) => recoveryKeys.has(summary.key) || view.getSnapshot().expanded.has(summary.key))
+            .map((summary) => recoveryKeys.has(summary.key)
+              ? view.loadDetails(summary, { allowCollapsed: true }) : view.loadDetails(summary)));
           if (getRemoteHistoryView(sessionId) !== view || !view.isActive()
             || (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
           const detailsSnapshot = view.getSnapshot();
           const incompleteDetails = historyWorkSummaries(detailsSnapshot.items).some((summary) => {
-            if (!detailsSnapshot.expanded.has(summary.key)) return false;
+            if (!recoveryKeys.has(summary.key) && !detailsSnapshot.expanded.has(summary.key)) return false;
             const detail = detailsSnapshot.details.get(summary.key);
             return !detail?.complete || !!detail.error || detail.revision !== summary.revision;
           });
