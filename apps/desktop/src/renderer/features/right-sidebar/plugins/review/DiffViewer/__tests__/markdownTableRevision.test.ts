@@ -182,6 +182,41 @@ describe('buildMarkdownTableRevision — 单元格级', () => {
     expect(dataRow.match(/(?<!\\)\|/g)?.length).toBe(3);
   });
 
+  it('replaces a cell as a whole when the rewrite is near-total (regression)', () => {
+    // 实机反馈：文档「状态」栏几乎整格重写，逐词切只剩碎片（中文被切在词中间、
+    // 还会出现 `{+++++}` 这类噪声）。这里与段落 / 列表路径同一条占比纪律：
+    // 保留文本 < 30% → 整格「旧删除 + 新新增」，不再逐词。
+    const before = [
+      '| 项 | 内容 |',
+      '| --- | --- |',
+      '| 状态 | ✅ **已冻结为需求基线**（首次冻结 2026-09-12（v1.8）；v1.9~v1.15 为冻结后修订，v1.15 为当前基线）；后续变更走版本修订（见修订记录） |',
+    ].join('\n');
+    const after = [
+      '| 项 | 内容 |',
+      '| --- | --- |',
+      '| 状态 | ⚠️ **待确认修订**（依据用户澄清：光纤机禁入建筑密集区 + 建筑实体化碰撞）——经用户确认后并入需求基线 |',
+    ].join('\n');
+    const injected = buildMarkdownTableRevision(before, after);
+    expect(injected).not.toBeNull();
+    expect(injected).toContain(
+      '{--✅ **已冻结为需求基线**（首次冻结 2026-09-12（v1.8）；v1.9~v1.15 为冻结后修订，v1.15 为当前基线）；后续变更走版本修订（见修订记录）--}',
+    );
+    expect(injected).toContain(
+      '{++⚠️ **待确认修订**（依据用户澄清：光纤机禁入建筑密集区 + 建筑实体化碰撞）——经用户确认后并入需求基线++}',
+    );
+  });
+
+  it('keeps formula marks even when the cell rewrite is near-total', () => {
+    // 例外：单元格含公式时不能整格替换 —— 外层 <del>/<ins> 画不到 KaTeX 原子盒上，
+    // 公式改动只有公式内标记能看见，这类格必须保留逐格结果。
+    const before = ['| 名称 | 公式 |', '| --- | --- |', '| 甲乙丙 | $a+b$ |'].join('\n');
+    const after = ['| 名称 | 公式 |', '| --- | --- |', '| 戊己庚 | $c+d$ |'].join('\n');
+    const injected = buildMarkdownTableRevision(before, after);
+    expect(injected).not.toBeNull();
+    expect(injected).toContain('\\textcolor{currentColor}{\\sout{a+b}}');
+    expect(injected).toContain('\\textcolor{inherit}{\\underline{c+d}}');
+  });
+
   it('puts strikethrough inside a formula cell of a removed row', () => {
     const before = [
       '| 名称 | 取值 |',

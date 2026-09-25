@@ -27,11 +27,13 @@ import {
   remarkReviewAnnotations,
 } from '@/components/chat/remarkReviewAnnotations';
 
-import { markInlineWhole, mathMarksAreIntact, reviseInlineMixed } from './markdownMathRevision';
+import { hasMathRevisionMarks, markInlineWhole, mathMarksAreIntact, reviseInlineMixed } from './markdownMathRevision';
 import {
   buildMarkdownRevision,
   parseRevisionTree,
   REVISION_MAX_SOURCE_CHARS,
+  REVISION_MIN_UNCHANGED_RATIO,
+  unchangedTextRatio,
 } from './markdownRevision';
 
 /** 整行标记 / 单元格标记的语义。 */
@@ -193,7 +195,15 @@ function wholeCellRevision(before: string, after: string): string | null {
 function reviseCell(before: string, after: string): string | null {
   if (before === after) return after;
   const mixed = reviseInlineMixed(before, after);
-  if (mixed !== null && cellRevisionIsConsumable(mixed)) return mixed;
+  if (mixed !== null && cellRevisionIsConsumable(mixed)) {
+    // 与段落 / 列表路径同一条占比纪律：近乎整格重写时逐词标记只剩碎片（中文尤其
+    // 容易被切在词中间，还会把小片空白 / 单字符配成对），改用整格替换更干净。
+    // 例外：逐格结果里含公式修订标记时必须保留它 —— 外层 <del>/<ins> 画不到 KaTeX
+    // 原子盒上，整格替换会让公式改动不可见。
+    const nearTotalRewrite = unchangedTextRatio(before, after) < REVISION_MIN_UNCHANGED_RATIO;
+    if (!nearTotalRewrite || hasMathRevisionMarks(mixed)) return mixed;
+    return wholeCellRevision(before, after) ?? mixed;
+  }
   const fallback = buildMarkdownRevision(before, after);
   if (fallback !== null) return fallback;
   return wholeCellRevision(before, after);

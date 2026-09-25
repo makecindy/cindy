@@ -33,8 +33,10 @@ import {
 import {
   parseRevisionTree,
   REVISION_MAX_SOURCE_CHARS,
+  REVISION_MIN_UNCHANGED_RATIO,
   taskMarkers,
   topLevelSignature,
+  unchangedTextRatio,
 } from './markdownRevision';
 
 /**
@@ -531,6 +533,15 @@ function collectionMathValues(node: unknown, out: Array<{ value: string; display
 const MATH_MARK_COMMAND_PATTERN =
   /\\textcolor\s*\{\s*(?:currentColor|inherit)\s*\}\s*\{\s*(?:\\sout|\\underline)\s*\{/gi;
 
+/**
+ * 文本里是否含我方注入的公式修订标记（`\textcolor{哨兵}{\sout|underline}`）。
+ * 表格单元格在「近乎整格重写」时改用整格替换前用它把路：外层 <del>/<ins> 画不到
+ * KaTeX 原子盒上，公式改动只有公式内标记能看见，这类格必须保留逐格结果。
+ */
+export function hasMathRevisionMarks(text: string): boolean {
+  return new RegExp(MATH_MARK_COMMAND_PATTERN.source, 'i').test(text);
+}
+
 function countMathMarkers(node: unknown, inside: { math: number; other: number }): void {
   const type = (node as { type?: string }).type;
   const value = (node as { value?: unknown }).value;
@@ -654,6 +665,19 @@ export function buildMarkdownMathRevision(before: string, after: string): string
   // 某处公式无法安全标记（结构被切断 / 相邻公式合并失败）→ 整块放弃公式路径。
   if (injected === null) return null;
   if (!hasAtomicPiece(afterPieces) && !/[$`]/.test(injected)) return null;
+
+  // 与通用路径同一条占比纪律（只看配对改写）：
+  // 近乎整块重写时逐词标记只剩碎片（中文尤其容易被切在词中间），交回通用 / 块级路径。
+  // 例外：本路径产出的**公式内标记**必须保住 —— 外层 <del>/<ins> 画不到 KaTeX 原子盒上，
+  // 整块替换会让公式改动不可见（纯新增 / 纯删除不套用：那种情况公式内标记本身就是主呈现）。
+  if (
+    hasBefore &&
+    hasAfter &&
+    unchangedTextRatio(normalizedBefore, normalizedAfter) < REVISION_MIN_UNCHANGED_RATIO &&
+    !hasMathRevisionMarks(injected)
+  ) {
+    return null;
+  }
 
   const reference = hasAfter ? normalizedAfter : normalizedBefore;
   return validateMathRevision(injected, reference) ? injected : null;

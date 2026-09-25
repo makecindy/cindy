@@ -127,6 +127,26 @@ describe('buildMarkdownMathRevision — 行内公式', () => {
     expect(buildMarkdownMathRevision('Beta old', 'Beta new')).toBeNull();
     expect(buildMarkdownMathRevision('', 'Beta new')).toBeNull();
   });
+
+  it('bails out when a paired rewrite is near-total (ratio rule, regression)', () => {
+    // 与通用路径（含表格单元格）同一条占比纪律：近乎整块重写时逐词标记只剩碎片，
+    // 交回通用 / 块级路径。实机反馈：文档「状态」栏 / 末句这类整句替换。
+    expect(
+      buildMarkdownMathRevision(
+        'old heading text with `code` here',
+        '全新的一句话，完全不同，带 `代码` 嗯',
+      ),
+    ).toBeNull();
+  });
+
+  it('keeps formula marks even when the paired rewrite is near-total (regression)', () => {
+    // 例外：公式内标记必须保住（外层 <del>/<ins> 画不到 KaTeX 原子盒上），
+    // 否则公式改动会在整块替换里变成不可见。
+    const revised = buildMarkdownMathRevision('甲乙丙 $a+b$ 丁', '戊己庚 $c+d$ 辛');
+    expect(revised).not.toBeNull();
+    expect(revised).toContain('\\textcolor{currentColor}{\\sout{a+b}}');
+    expect(revised).toContain('\\textcolor{inherit}{\\underline{c+d}}');
+  });
 });
 
 describe('buildMarkdownMathRevision — 块级公式', () => {

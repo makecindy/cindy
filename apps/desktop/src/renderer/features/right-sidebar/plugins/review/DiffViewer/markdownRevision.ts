@@ -141,6 +141,40 @@ function sliceDiff(before: string, after: string): DiffSlice[] {
   return slices;
 }
 
+/** diff 片段 / part 的最小形状：算保留占比只需要这三个字段。 */
+interface DiffLikePart {
+  value: string;
+  added?: boolean;
+  removed?: boolean;
+}
+
+/**
+ * 保留文本占比（0~1）：两版 diff 里未改字符数 ÷ 两版较长者。
+ *
+ * 「整块改写」判定的**单一事实源** —— 段落 / 列表（本文件的通用注入）与表格单元格
+ * （markdownTableRevision）共用同一条纪律：占比低于 REVISION_MIN_UNCHANGED_RATIO
+ * 时逐词标记只剩碎片（中文尤其容易被切在词中间），不如整块「旧删除 + 新新增」。
+ * 公式 / 行内代码所在的块不套用（外层 <del>/<ins> 画不到 KaTeX 原子盒上，
+ * 整块替换会让公式改动不可见，见 markdownTableRevision.reviseCell）。
+ */
+function unchangedRatioOf(
+  parts: readonly DiffLikePart[],
+  beforeLength: number,
+  afterLength: number,
+): number {
+  let unchanged = 0;
+  for (const part of parts) {
+    if (!part.added && !part.removed) unchanged += part.value.length;
+  }
+  const total = Math.max(beforeLength, afterLength);
+  return total === 0 ? 0 : unchanged / total;
+}
+
+/** 同上，按两版原文现算（表格单元格等只有字符串、没有现成 diff 片段的调用方用）。 */
+export function unchangedTextRatio(before: string, after: string): number {
+  return unchangedRatioOf(diffWordsWithSpace(before, after), before.length, after.length);
+}
+
 /** 逐片段注入（词级路径）。未改片段原样保留；纯空白改动不挂标记（只会有空噪声）。 */
 function injectSlices(
   slices: readonly DiffSlice[],
@@ -197,11 +231,7 @@ export function buildMarkdownRevision(before: string, after: string): string | n
   if (slices.some((slice) => (slice.added || slice.removed) && /[{}]/.test(slice.value))) {
     return null;
   }
-  let unchangedChars = 0;
-  for (const slice of slices) {
-    if (!slice.added && !slice.removed) unchangedChars += slice.value.length;
-  }
-  if (unchangedChars / Math.max(before.length, after.length) < REVISION_MIN_UNCHANGED_RATIO) {
+  if (unchangedRatioOf(slices, before.length, after.length) < REVISION_MIN_UNCHANGED_RATIO) {
     return null;
   }
 
