@@ -69,6 +69,8 @@ try {
   await run('webview-source', process.execPath, ['scripts/file-peer-runtime.mjs', '--check']);
   await run('shared-policy', pnpm, ['--filter', '@cindy/device-link', 'test']);
   await run('desktop-business', pnpm, ['--filter', 'desktop', 'test',
+    'src/main/__tests__/deviceLinkIpc.test.ts',
+    'src/main/device-link/__tests__/mirrorCacheIpcBoundary.test.ts',
     'src/main/device-link/__tests__/filePeer.test.ts',
     'src/main/device-link/__tests__/peerAttachmentStore.test.ts',
     'src/main/device-link/__tests__/outboundMedia.test.ts',
@@ -79,6 +81,7 @@ try {
     'src/main/device-link/__tests__/dispatchSendSafety.test.ts',
     'src/main/device-link/__tests__/dispatchWeakNetwork.test.ts']);
   await run('mobile-business', pnpm, ['--filter', 'mobile', 'exec', 'vitest', 'run',
+    'src/__tests__/fileWebViewTermination.test.tsx',
     'src/__tests__/mobileAttachmentUpload.test.ts', 'src/__tests__/mobileLocalAttachmentUpload.test.ts',
     'src/__tests__/attachments.test.ts', 'src/__tests__/durableOutboxFiles.test.ts',
     'src/__tests__/peerFileRegistry.test.ts']);

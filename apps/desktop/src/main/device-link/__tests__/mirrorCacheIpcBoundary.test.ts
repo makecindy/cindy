@@ -114,7 +114,11 @@ vi.mock('../index', () => ({
   }),
 }));
 vi.mock('../dispatch', () => ({ getActiveControllers: () => [] }));
-vi.mock('../outboundMedia', () => ({ rewriteOutboundMedia: vi.fn(async (_c, a) => a) }));
+vi.mock('../filePeer', () => ({ tryUploadPeerAttachment: vi.fn(async () => null) }));
+vi.mock('../outboundMedia', () => ({
+  rewriteOutboundMedia: vi.fn(async (_c, a) => a),
+  withPeerAttachmentUpload: (_upload: unknown, operation: () => unknown) => operation(),
+}));
 vi.mock('../outboundSessionReferences', () => ({
   outboundSessionReferencesRequested: () => false,
   rewriteOutboundSessionReferences: vi.fn(async (_c, a) => a),
