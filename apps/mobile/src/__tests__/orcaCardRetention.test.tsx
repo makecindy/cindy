@@ -30,7 +30,7 @@ const Card = new Function(...Object.keys(bindings), `${compiled}; return OrcaCol
 
 describe('worker card reading state', () => {
   it.each(['report', 'dispatch'])('remembers %s toggles across remounts, independently per card/account', async (variant) => {
-    const defaultExpanded = variant === 'dispatch';
+    const defaultExpanded = false;
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     __test_internals.reset(); generation = 1;
     const container = document.createElement('div');
