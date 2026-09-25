@@ -812,7 +812,7 @@
     }
   },
   "companions": {
-    "messageSent": "已发送补充消息",
+    "messageSent": "已向后台任务发送消息",
     "sentTo": "已发消息给 {{name}}",
     "receivedFrom": "消息来自 {{name}}",
     "backgroundTask": "后台任务",
@@ -835,16 +835,19 @@
     "actionFailed": "暂时无法读取或完成操作",
     "messages": "消息往来",
     "readOnly": "仅供查看",
+    "directEmpty": "还没有可查看的消息。",
+    "directLimitReached": "本轮伙伴对话已到上限，双方已回到各自的主任务",
+    "directUnavailable": "这条伙伴对话已不可用。",
     "unread": "有新回复",
     "status": {
-      "queued": "等待开始",
-      "running": "运行中",
-      "waiting": "等待回复",
+      "queued": "正在开始",
+      "running": "正在做",
+      "waiting": "等待处理",
       "completed": "已完成",
-      "failed": "失败",
-      "cancelled": "已取消",
+      "failed": "失败了",
+      "cancelled": "已停止",
       "timed-out": "已超时",
-      "unknown": "暂时无法确认状态"
+      "unknown": "任务状态查不到了"
     },
     "title": "伙伴",
     "tasks": "任务",
@@ -852,6 +855,7 @@
     "emptyTitle": "还没有伙伴",
     "emptyCopy": "在电脑上的 Cindy 中创建一个伙伴。",
     "noResults": "没有找到匹配的伙伴",
+    "startChat": "开始对话",
     "preferenceSaveFailed": "未能保存视图偏好，请重新切换视图。",
     "automation": {
       "unsupported": "请更新电脑上的 Cindy 后重试，即可管理自动化。",
@@ -982,7 +986,8 @@
       "avatarSkipped": "暂时用了默认头像，你随时可以换一张。"
     },
     "viewResult": "查看结果",
-    "noWrittenResult": "没有文字结果。"
+    "noWrittenResult": "没有文字结果。",
+    "errorDetails": "错误详情"
   },
   "companionProfile": {
     "avatar": "头像",

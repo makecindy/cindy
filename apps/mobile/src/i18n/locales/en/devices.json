@@ -812,7 +812,7 @@
     }
   },
   "companions": {
-    "messageSent": "Message sent",
+    "messageSent": "Message sent to background task",
     "sentTo": "Sent a message to {{name}}",
     "receivedFrom": "Message from {{name}}",
     "backgroundTask": "Background task",
@@ -835,16 +835,19 @@
     "actionFailed": "Unable to load or complete this action",
     "messages": "Messages",
     "readOnly": "Read only",
+    "directEmpty": "There are no messages to view yet.",
+    "directLimitReached": "This teammate conversation reached its limit; both teammates returned to their main tasks",
+    "directUnavailable": "This teammate conversation is no longer available.",
     "unread": "New reply",
     "status": {
-      "queued": "Queued",
-      "running": "Running",
-      "waiting": "Waiting for reply",
-      "completed": "Completed",
+      "queued": "Getting started",
+      "running": "Working on it",
+      "waiting": "Waiting for input",
+      "completed": "Done",
       "failed": "Failed",
-      "cancelled": "Cancelled",
+      "cancelled": "Stopped",
       "timed-out": "Timed out",
-      "unknown": "Status unavailable"
+      "unknown": "Task status unavailable"
     },
     "title": "Teammates",
     "tasks": "Sessions",
@@ -852,6 +855,7 @@
     "emptyTitle": "No Teammates Yet",
     "emptyCopy": "Create a teammate in Cindy on your computer.",
     "noResults": "No Matching Teammates",
+    "startChat": "Start the conversation",
     "preferenceSaveFailed": "Couldn’t save your view preference. Try switching views again.",
     "automation": {
       "unsupported": "Update Cindy on your computer, then retry to manage automations.",
@@ -982,7 +986,8 @@
       "avatarSkipped": "Using the default portrait for now. You can change it anytime."
     },
     "viewResult": "View Result",
-    "noWrittenResult": "No written result."
+    "noWrittenResult": "No written result.",
+    "errorDetails": "Error details"
   },
   "companionProfile": {
     "avatar": "Avatar",

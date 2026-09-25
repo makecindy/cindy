@@ -112,10 +112,18 @@ export type MobilePlanViewerState = 'half' | 'expanded' | 'minimized' | 'edit';
 type RestorablePlanViewerState = Exclude<MobilePlanViewerState, 'minimized'>;
 
 const CompanionInteractionContext = createContext(false);
+/** Who is asking in a teammate chat (Desktop PermissionPrompt `companion`). */
+export interface CompanionInteractionIdentity { name: string; avatar?: ReactNode }
+const CompanionIdentityContext = createContext<CompanionInteractionIdentity | null>(null);
 
-export function InteractionPanel(props: Parameters<typeof InteractionPanelContent>[0] & { companion?: boolean }) {
+export function InteractionPanel({ companionIdentity, ...props }: Parameters<typeof InteractionPanelContent>[0] & {
+  companion?: boolean;
+  companionIdentity?: CompanionInteractionIdentity | null;
+}) {
   return <CompanionInteractionContext.Provider value={props.companion === true}>
-    <InteractionPanelContent {...props} />
+    <CompanionIdentityContext.Provider value={props.companion === true && companionIdentity?.name ? companionIdentity : null}>
+      <InteractionPanelContent {...props} />
+    </CompanionIdentityContext.Provider>
   </CompanionInteractionContext.Provider>;
 }
 
@@ -628,6 +636,7 @@ function PermissionCard({
     [i18nInstance.language, item.request],
   );
   const companion = useContext(CompanionInteractionContext);
+  const companionIdentity = useContext(CompanionIdentityContext);
   const { colors } = useTheme();
   const suggestions = sessionScopedPermissionSuggestions(item.request.suggestions);
   const requestId = readRequestId(item);
@@ -646,7 +655,16 @@ function PermissionCard({
 
   return (
     <View style={cardStyle(styles, touchLayout)} testID="interaction.permission.card">
-      {companion ? <>
+      {companion && companionIdentity ? (
+        // The request stays in the conversation voice: who asks, then the exact operation.
+        <View style={styles.companionRequester} testID="interaction.permission.requester">
+          {companionIdentity.avatar ? <View style={styles.companionRequesterAvatar}>{companionIdentity.avatar}</View> : null}
+          <View style={styles.companionRequesterText}>
+            <Text style={styles.cardTitle}>{t('interaction.companion.permissionRequest', { name: companionIdentity.name })}</Text>
+            <Text style={styles.kind}>{permissionState.title}</Text>
+          </View>
+        </View>
+      ) : companion ? <>
         <View style={styles.companionCaption}>
           <ShieldCheck size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
           <Text style={styles.kind}>{t('interaction.kinds.permission.label')}</Text>
@@ -1784,6 +1802,9 @@ function InteractionTouchButton({
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   companionCaption: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  companionRequester: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  companionRequesterAvatar: { flexShrink: 0 },
+  companionRequesterText: { flex: 1, minWidth: 0, gap: 2 },
   companionEvidence: { gap: spacing.sm },
   companionFact: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
   companionFactLabel: { width: 64, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.body },

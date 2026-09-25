@@ -1,5 +1,5 @@
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
-import { Component, useEffect, useState, type ReactNode } from 'react';
+import { Component, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Linking, Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import {
@@ -11,6 +11,8 @@ import {
   Square,
   ArrowLeftRight,
   ChevronRight,
+  Megaphone,
+  TriangleAlert,
 } from 'lucide-react-native';
 import {
   MAX_STATUS_QUERIES,
@@ -27,11 +29,21 @@ import {
   type BotDelegationCancelResult,
 } from '@cindy/maker-shared/botDelegation';
 import type { BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
+import type { BotDirectMessageMeta } from '@cindy/maker-shared/botDirectMessage';
+import { resolveRemoteText } from '@cindy/device-link';
 import { Text } from '@/components/AppText';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
+import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
+import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import {
+  cachedBotItem,
+  readRemoteResourceSnapshot,
+  remoteResourceCacheRevision,
+  subscribeRemoteResourceCache,
+} from '@/device-link/remoteResourceCache';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { spacing, radius, typeScale, iconSize } from '@/theme/tokens';
+import { spacing, radius, typeScale, iconSize, fontWeight } from '@/theme/tokens';
 import type { NormalizedRemoteMessage } from './messageNormalize';
 import { useRemoteCompanionQuery } from './useRemoteCompanionQuery';
 
@@ -54,7 +66,11 @@ class CompanionRenderBoundary extends Component<
   }
 }
 
-export function CompanionMessageCard({ message }: { message: NormalizedRemoteMessage }) {
+export function CompanionMessageCard({ message, renderMarkdown }: {
+  message: NormalizedRemoteMessage;
+  /** The conversation's Markdown renderer for frozen task results. */
+  renderMarkdown?: (text: string) => ReactNode;
+}) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   return (
@@ -62,21 +78,24 @@ export function CompanionMessageCard({ message }: { message: NormalizedRemoteMes
       fallback={<Text style={styles.note}>{t('devices.companions.actionFailed')}</Text>}
       resetKey={message.key}
     >
-      <CompanionMessageCardContent message={message} />
+      <CompanionMessageCardContent message={message} renderMarkdown={renderMarkdown} />
     </CompanionRenderBoundary>
   );
 }
 
-function CompanionMessageCardContent({ message }: { message: NormalizedRemoteMessage }) {
+function CompanionMessageCardContent({ message, renderMarkdown }: {
+  message: NormalizedRemoteMessage;
+  renderMarkdown?: (text: string) => ReactNode;
+}) {
   const { t } = useTranslation();
-  const router = useRouter();
   const params = useLocalSearchParams<{ deviceId?: string }>();
   const deviceId = typeof params.deviceId === 'string' ? params.deviceId : '';
   const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   const card = message.companion;
   if (!card) return null;
   if (card.kind === 'task' && card.meta.role === 'delegation-result') {
-    return <CompanionTaskResultCard meta={card.meta} deviceId={deviceId} />;
+    return <CompanionTaskResultCard meta={card.meta} deviceId={deviceId} renderMarkdown={renderMarkdown} />;
   }
   if (card.kind === 'task' && card.meta.role === 'delegation-request') {
     return (
@@ -89,11 +108,30 @@ function CompanionMessageCardContent({ message }: { message: NormalizedRemoteMes
   }
   if (card.kind === 'task')
     return (
-      <Text style={styles.note}>
-        {t('devices.companions.messageSent')}
-      </Text>
+      <View style={styles.messageTrace} testID="companion.taskMessageTrace">
+        <Megaphone size={iconSize.xs} color={colors.textTertiary} style={styles.traceIcon} />
+        <Text style={[styles.note, styles.tertiary, styles.traceLabel]}>
+          {t('devices.companions.messageSent')}
+        </Text>
+      </View>
     );
-  const meta = card.meta;
+  return <CompanionPrivateTrace deviceId={deviceId} meta={card.meta} />;
+}
+
+/** Desktop BotDirectMessageCard: a separator pill with the peer's portrait, opening the read-only thread. */
+function CompanionPrivateTrace({ deviceId, meta }: { deviceId: string; meta: BotDirectMessageMeta }) {
+  const { t, i18n } = useTranslation();
+  const router = useRouter();
+  const { user } = useAuth();
+  const { status, getPresenceAvailability } = useDeviceLink();
+  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  const userId = user?.id ?? '';
+  useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
+  useEffect(() => { if (userId) void readRemoteResourceSnapshot(userId); }, [userId]);
+  const peer = cachedBotItem(userId, 'teammates', deviceId, meta.peerBotId);
+  const peerName = (peer ? resolveRemoteText(peer.display.title, i18n.language) : '')
+    || meta.peerBotName || meta.peerBotId;
   return (
     <View style={styles.privateTrace} testID="companion.privateTrace">
       <View style={styles.traceLine} />
@@ -113,11 +151,13 @@ function CompanionMessageCardContent({ message }: { message: NormalizedRemoteMes
       >
         {({ pressed }) => (
           <View style={[styles.traceAction, pressed && mobileInteractionStyles.pressed]}>
-            <ArrowLeftRight size={iconSize.sm} color={styles.note.color} />
+            {peer ? <RemoteCompanionAvatar avatar={peer.display.avatar} deviceId={deviceId} name={peerName}
+              online={status === 'online' && getPresenceAvailability(deviceId) !== false} size={iconSize.md} /> : null}
+            <ArrowLeftRight size={iconSize.xs} color={colors.textTertiary} />
             <Text numberOfLines={2} style={[styles.note, styles.traceLabel]}>
-              {t(meta.direction === 'sent' ? 'devices.companions.sentTo' : 'devices.companions.receivedFrom', { name: meta.peerBotName })}
+              {t(meta.direction === 'sent' ? 'devices.companions.sentTo' : 'devices.companions.receivedFrom', { name: peerName })}
             </Text>
-            <ChevronRight size={iconSize.sm} color={styles.note.color} />
+            <ChevronRight size={iconSize.xs} color={colors.textTertiary} />
           </View>
         )}
       </Pressable>
@@ -149,10 +189,20 @@ function CompanionTaskCard({
     value?.ok && Array.isArray(value.delegations)
       ? (value.delegations.find((item) => item.id === meta.delegationId) ?? null)
       : null;
+  // Desktop parity: until the first read settles the task is still starting;
+  // only a settled read without this row is unverifiable.
+  const resolved = value !== null || error;
   const status =
     row && (BOT_DELEGATION_STATUSES as readonly string[]).includes(row.status)
       ? row.status
-      : 'unknown';
+      : resolved ? 'unknown' : 'queued';
+  const statusColor =
+    status === 'completed' ? colors.statusDone
+      : status === 'failed' || status === 'timed-out' ? colors.statusError
+      : status === 'running' ? colors.statusAccent
+      : status === 'waiting' ? colors.statusAwaiting
+      : colors.textTertiary;
+  const title = row?.title || meta.objective.trim().split('\n')[0] || t('devices.companions.backgroundTask');
   const [pending, setPending] = useState(false);
   const [actionFailed, setActionFailed] = useState(false);
   const [showPrs, setShowPrs] = useState(false);
@@ -231,7 +281,9 @@ function CompanionTaskCard({
             ? colors.statusDone
             : kind === 'closed'
               ? colors.statusError
-              : colors.textSecondary
+              : kind === 'draft'
+                ? colors.textTertiary
+                : colors.textSecondary
         }
       />
     );
@@ -269,17 +321,14 @@ function CompanionTaskCard({
     <View style={styles.card} testID="companion.taskCard">
       <View style={styles.header}>
         <Text numberOfLines={2} style={[styles.title, styles.taskTitle]}>
-          {row?.title || meta.objective.trim().split('\n')[0]}
+          {title}
         </Text>
-        <Text
-          style={[
-            styles.note,
-            row?.status === 'completed' && styles.success,
-            (row?.status === 'failed' || row?.status === 'timed-out') && styles.error,
-          ]}
-        >
-          {t(`devices.companions.status.${status}`)}
-        </Text>
+        <View style={styles.status}>
+          <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+          <Text style={[styles.note, { color: statusColor }]}>
+            {t(`devices.companions.status.${status}`)}
+          </Text>
+        </View>
       </View>
       <View style={styles.metadata}>
         {duration ? <Text style={styles.note}>{duration}</Text> : null}
@@ -304,7 +353,10 @@ function CompanionTaskCard({
         prStatuses.error ||
         (Array.isArray(prStatuses.value) && prStatuses.value.some((status) => !status.ok))) &&
       row ? (
-        <Text style={styles.note}>{t('devices.companions.stale')}</Text>
+        <View style={styles.messageTrace}>
+          <TriangleAlert size={iconSize.xs} color={colors.textTertiary} style={styles.traceIcon} />
+          <Text style={[styles.note, styles.tertiary, styles.traceLabel]}>{t('devices.companions.stale')}</Text>
+        </View>
       ) : !online ? (
         <Text style={styles.note}>{t('devices.resources.hostOffline')}</Text>
       ) : null}
@@ -435,6 +487,12 @@ const makeStyles = (colors: ThemeColors) =>
     traceAction: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border, borderRadius: radius.pill, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
     traceLabel: { flexShrink: 1 },
+    // Quiet persisted traces (Desktop BotSessionTaskMessageTrace): tertiary, icon aligned to the first line.
+    messageTrace: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, marginVertical: spacing.xs },
+    traceIcon: { marginTop: 3, flexShrink: 0 },
+    tertiary: { color: colors.textTertiary },
+    status: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
+    statusDot: { width: 6, height: 6, borderRadius: radius.pill },
     card: {
       marginVertical: spacing.sm,
       padding: spacing.md,
@@ -446,11 +504,11 @@ const makeStyles = (colors: ThemeColors) =>
     },
     header: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
     taskTitle: { flex: 1, minWidth: 0 },
-    title: { color: colors.textPrimary, fontSize: typeScale.body },
+    title: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
     note: { color: colors.textSecondary, fontSize: typeScale.footnote },
     actionLabel: { color: colors.textPrimary, fontSize: typeScale.footnote },
-    error: { color: colors.statusError, fontSize: typeScale.footnote },
-    success: { color: colors.statusDone },
+    // Paragraph errors follow errorText; red is reserved for the status dot.
+    error: { color: colors.errorText, fontSize: typeScale.footnote },
     metadata: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
     actions: { flexDirection: 'row', flexWrap: 'wrap', columnGap: spacing.sm },
     touchTarget: { minHeight: 44, justifyContent: 'center' },

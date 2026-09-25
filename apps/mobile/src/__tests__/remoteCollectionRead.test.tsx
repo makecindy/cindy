@@ -28,7 +28,8 @@ vi.mock('expo-router', async () => {
 vi.mock('react-i18next', () => ({ useTranslation: () => h.translation }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: 'div' }));
-vi.mock('lucide-react-native', () => ({ ChevronRight: () => null, RefreshCw: () => null }));
+vi.mock('lucide-react-native', () => ({ ChevronRight: () => null, RefreshCw: () => null, TriangleAlert: () => null }));
+vi.mock('@/session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: any) => text }));
 vi.mock('@/components/AppText', () => ({ Text: 'span', TextInput: 'input' }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowEmptyState: () => null, StatusDot: () => null }));

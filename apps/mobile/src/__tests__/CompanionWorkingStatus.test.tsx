@@ -4,13 +4,22 @@ import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 import { expect, it, vi } from 'vitest';
 import type { RemoteMessage } from '../session/types';
-const h = vi.hoisted(() => ({ activity: { phase: 'running', workingPhase: 'reading-memory' } as Record<string, string>, invoke: vi.fn(), listener: () => {} }));
+const h = vi.hoisted(() => ({ activity: { phase: 'running', workingPhase: 'reading-memory' } as Record<string, string>, invoke: vi.fn(), listener: () => {},
+  epoch: 1, cachedBotId: '' }));
 vi.mock('react-native', () => ({ ActivityIndicator: () => null, View: 'div', StyleSheet: { create: (v: unknown) => v } }));
 vi.mock('@/components/AppText', () => ({ Text: 'span' }));
-vi.mock('@/theme', () => ({ spacing: {}, typeScale: {}, useTheme: () => ({ colors: {} }) }));
+vi.mock('@/theme', () => ({ spacing: {}, typeScale: {}, lineHeight: {}, useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
+vi.mock('../session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: { text: string }) => text }));
+vi.mock('@/device-link/remoteResourceCache', () => ({
+  cachedBotIdForSession: (_user: string, collection: string, device: string, session: string) =>
+    collection === 'teammates' && device === 'host' && session === 'chat' ? h.cachedBotId : '',
+  readRemoteResourceSnapshot: async () => undefined,
+  remoteResourceCacheRevision: () => 0,
+  subscribeRemoteResourceCache: () => () => {},
+}));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k, i18n: { language: 'en' } }) }));
-vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke }) }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1, user: { id: 'owner' } }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, connectionEpoch: h.epoch }) }));
 vi.mock('../session/remoteSessionStore', () => ({ remoteSessionStore: {
   getSessionLiveActivity: () => h.activity,
   subscribe: (listener: () => void) => { h.listener = listener; return () => {}; },
@@ -61,4 +70,54 @@ it('uses host compaction for an unopened chat, ignores old copy, and clears on r
     await act(async () => { h.activity = { phase: 'running', compactDetail: 'Compacting context…' }; h.listener(); });
     expect(node.textContent).toBe('devices.companions.working.compacting');
   } finally { await act(async () => root.unmount()); }
+});
+
+function EntryProbe({ botId }: { botId: string }) {
+  return useCompanionWorkingLabel({ sessionId: 'chat', deviceId: 'host', botId, active: true, messages, reconnectAttempt: null });
+}
+
+it('names the teammate from the cached roster link when an ordinary task route has no resource', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  h.invoke.mockReset().mockResolvedValue({ blocks: [{ id: 'working', primitive: 'status', fallbackMarkdown: 'Checking what you told me' }] });
+  h.activity = { phase: 'running', workingPhase: 'reading-memory' };
+  h.cachedBotId = 'mimi';
+  const node = document.createElement('div'); const root = createRoot(node);
+  try {
+    await act(async () => root.render(createElement(EntryProbe, { botId: '' })));
+    expect(h.invoke).toHaveBeenCalledWith('host', expect.any(String), [expect.objectContaining({
+      ref: { collectionId: 'teammates', kind: 'bot', id: 'working:mimi/reading-memory' },
+    })]);
+    expect(node.textContent).toBe('Checking what you told me');
+    // The route's resource stays authoritative whenever it is available.
+    h.invoke.mockClear();
+    await act(async () => root.render(createElement(EntryProbe, { botId: 'resource-bot' })));
+    expect(h.invoke).toHaveBeenCalledWith('host', expect.any(String), [expect.objectContaining({
+      ref: expect.objectContaining({ id: 'working:resource-bot/reading-memory' }),
+    })]);
+  } finally { h.cachedBotId = ''; await act(async () => root.unmount()); }
+});
+
+it('retries a lost caption once per reconnect and keeps a delivered caption', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  h.activity = { phase: 'running', workingPhase: 'reading-file' };
+  h.epoch = 1;
+  h.invoke.mockReset().mockRejectedValueOnce(new Error('link lost'))
+    .mockResolvedValue({ blocks: [{ id: 'working', primitive: 'status', fallbackMarkdown: 'Opening your notes' }] });
+  const node = document.createElement('div'); const root = createRoot(node);
+  try {
+    await act(async () => root.render(createElement(EntryProbe, { botId: 'mimi' })));
+    expect(node.textContent).toBe('devices.companions.working.reading-file');
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+    // Same turn and phase: nothing re-requests until the link comes back.
+    await act(async () => root.render(createElement(EntryProbe, { botId: 'mimi' })));
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+    h.epoch = 2;
+    await act(async () => root.render(createElement(EntryProbe, { botId: 'mimi' })));
+    expect(h.invoke).toHaveBeenCalledTimes(2);
+    expect(node.textContent).toBe('Opening your notes');
+    h.epoch = 3;
+    await act(async () => root.render(createElement(EntryProbe, { botId: 'mimi' })));
+    expect(h.invoke).toHaveBeenCalledTimes(2);
+    expect(node.textContent).toBe('Opening your notes');
+  } finally { h.epoch = 1; await act(async () => root.unmount()); }
 });

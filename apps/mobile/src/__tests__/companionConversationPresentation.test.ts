@@ -91,3 +91,19 @@ it.each([{ turnCompleted: true }, { turnUsageDetails: { totalTokens: 12 } }])('k
     expect(items.some(item => item.type === 'work_group' || item.type === 'tool_group')).toBe(false);
   }
 });
+
+it('drops persisted auto-resume separators like Desktop, keeping only the live reconnect card', () => {
+  const resumed = [...base, row('u4', 'user', 'continue', { autoResume: true, autoResumeInfo: { attempt: 1, maxAttempts: 3 } }),
+    row('a5', 'assistant', 'Answer', { turnCompleted: true })];
+  const isResumeCard = (item: ReturnType<typeof bodies>[number]) => item.type === 'message' && item.message.systemCardType === 'auto-resume';
+  // Ordinary tasks keep the separator; the teammate projection hides the persisted one.
+  expect(buildMobileMessageRenderItems(resumed, { isSessionStreaming: false }).some(isResumeCard)).toBe(true);
+  const items = bodies(resumed, false);
+  expect(items.some(isResumeCard)).toBe(false);
+  // The hidden separator still ends the interrupted turn, whose useful partial prose stays readable.
+  expect(items.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Public progress', 'Answer']);
+  const live = companionConversationItems(buildMobileMessageRenderItems(base, {
+    isSessionStreaming: true, autoResumePending: { attempt: 2, maxAttempts: 3 },
+  }));
+  expect(live.filter(isResumeCard)).toHaveLength(1);
+});
