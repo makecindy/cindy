@@ -821,15 +821,29 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     },
   );
 
-  it.each(['result', 'finalText'])('persists a queued terminal-only %s reply', async (field) => {
+  it.each(
+    ['result', 'finalText'].flatMap((field) =>
+      ['none', 'partial', 'matching'].map((stream) => ({ field, stream })),
+    ),
+  )('preserves queued $field after $stream text', async ({ field, stream }) => {
     const harness = createSessionHarness(async () => ({ accepted: true }));
     const queue = createQueueHarness({ busy: true });
     const { runner } = createRunnerHarness(harness.session, queue.deps);
     const fire = runner.fire(heartbeatSchedule(), createFireContext());
     await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
     await queue.accept();
+    if (stream !== 'none')
+      harness.emit({
+        type: 'text',
+        data: { text: stream === 'partial' ? 'Starting' : 'Final reply', isFinal: true },
+        source: 'claude-code',
+      });
     harness.emit({ type: 'done', data: { [field]: 'Final reply' }, source: 'claude-code' });
     await fire;
+    if (stream === 'matching') {
+      expect(mocks.createMessage).not.toHaveBeenCalled();
+      return;
+    }
     expect(mocks.createMessage).toHaveBeenCalledExactlyOnceWith(
       SESSION_ID,
       expect.objectContaining({

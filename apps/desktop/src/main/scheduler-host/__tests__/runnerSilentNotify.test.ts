@@ -282,6 +282,37 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     },
   );
 
+  it.each(
+    [true, false].flatMap((silenced) =>
+      ['result', 'finalText'].flatMap((field) =>
+        ['partial', 'deltas', 'final'].map((stream) => ({ silenced, field, stream })),
+      ),
+    ),
+  )(
+    'preserves canonical $field after $stream text (silenced=$silenced)',
+    async ({ silenced, field, stream }) => {
+      const h = createSessionHarness(acceptingSend());
+      const { runner, notifier } = createRunnerHarness(h.session, { silenced });
+      const fire = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+      await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+      if (stream === 'partial') h.emit({ type: 'text', data: { text: 'Working on it' } });
+      if (stream === 'deltas') {
+        h.emit({ type: 'text', data: { text: 'Final ' } });
+        h.emit({ type: 'text', data: { text: 'answer' } });
+      }
+      if (stream === 'final') {
+        h.emit({ type: 'text', data: { text: 'Working on it' } });
+        h.emit({ type: 'text', data: { text: 'Final answer', isFinal: true } });
+      }
+      h.emit({ type: 'done', data: { [field]: 'Final answer' } });
+      await expect(fire).resolves.toMatchObject({ resultText: 'Final answer' });
+      const saved = mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant');
+      expect(saved).toHaveLength(stream === 'partial' ? 1 : 0);
+      if (stream === 'partial') expect(saved[0][1].content).toBe('Final answer');
+      expect(notifier.notify).toHaveBeenCalledTimes(silenced ? 0 : 1);
+    },
+  );
+
   it('surfaces terminal-only persistence failures even when notifications were silent', async () => {
     const h = createSessionHarness(acceptingSend());
     const { runner, notifier } = createRunnerHarness(h.session, { silenced: true });

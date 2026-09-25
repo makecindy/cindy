@@ -365,7 +365,7 @@ interface TurnCompletionWaiter {
   turnFinished: Promise<void>;
   stopListening: () => void;
   getAssistantText: () => string;
-  hasAssistantText: () => boolean;
+  finalTextMatchesStream: () => boolean;
 }
 
 interface TurnCompletionWaiterOptions {
@@ -1917,7 +1917,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       session.id,
       runError,
       waiter.getAssistantText(),
-      waiter.hasAssistantText(),
+      waiter.finalTextMatchesStream(),
     );
   }
 
@@ -2551,7 +2551,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       sessionId,
       runError,
       assistantText,
-      activeWaiter?.hasAssistantText() ?? false,
+      activeWaiter?.finalTextMatchesStream() ?? false,
     );
   }
 
@@ -2860,7 +2860,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     sessionId: string,
     runError: string | undefined,
     assistantText: string,
-    hasAssistantText: boolean,
+    finalTextMatchesStream: boolean,
   ): Promise<FireResult> {
     const finalRun: ScheduleRun = {
       id: ctx.runId,
@@ -2892,11 +2892,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 用户主动 pause/delete 的那条路径本来也不该弹成功 —— 引擎记 aborted 且不通知,
     // 语义一致。
     const successAfterAbort = finalRun.status === 'success' && ctx.signal.aborted;
-    // Terminal-only replies have no row in the normal text-event persistence path.
-    // Save them even when notifications are silent; streamed replies already have a row.
-    const terminalOnlyReply =
+    // Save a canonical reply missing from the normal text-event persistence path,
+    // including done-only replacements of a partial stream. Matching replies need no extra row.
+    const missingFinalReply =
       !hidesScheduledTranscript(schedule) &&
-      !hasAssistantText &&
+      !finalTextMatchesStream &&
       finalRun.status === 'success' &&
       !!assistantText.trim();
     let reportPersistFailed = false;
@@ -2910,7 +2910,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         '[runner] run was aborted; suppressing the contradictory success notification',
         { scheduleId: schedule.id, runId: ctx.runId },
       );
-    } else if (silenced && !terminalOnlyReply) {
+    } else if (silenced && !missingFinalReply) {
       this.deps.logger.info?.('[runner] run silenced; skipping completion notification', {
         scheduleId: schedule.id,
         runId: ctx.runId,
@@ -2926,7 +2926,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (!silenced) ctx.onRunnerNotified?.(finalRun.status === 'success' ? 'success' : 'failure');
       const ownerScope = captureDataOwnerBroadcastScope();
       if (
-        (hidesScheduledTranscript(schedule) || terminalOnlyReply) &&
+        (hidesScheduledTranscript(schedule) || missingFinalReply) &&
         finalRun.status === 'success' &&
         assistantText.trim()
       ) {
@@ -3002,7 +3002,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
   ): TurnCompletionWaiter {
     const sessionId = initialSession.id;
     let assistantText = '';
-    let hasAssistantText = false;
+    let finalTextMatchesStream = false;
     let stopped = false;
     let stopListeningTurn: (() => void) | undefined;
     const turnFinished = new Promise<void>((resolve, reject) => {
@@ -3104,7 +3104,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         if (ev.type === 'text') {
           const data = ev.data as { text?: string; isFinal?: boolean } | null;
           if (data && typeof data.text === 'string') {
-            if (data.text.trim()) hasAssistantText = true;
+            if (data.text.trim()) finalTextMatchesStream = true;
             if (data.isFinal) assistantText = data.text;
             else assistantText += data.text;
           }
@@ -3180,8 +3180,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // Providers can publish their canonical final reply only on done (for
           // example after a truncated stream). Do not replay the earlier preamble.
           const terminal = ev.data as { result?: unknown; finalText?: unknown } | null;
-          if (typeof terminal?.result === 'string') assistantText = terminal.result;
-          else if (typeof terminal?.finalText === 'string') assistantText = terminal.finalText;
+          const canonical =
+            typeof terminal?.result === 'string'
+              ? terminal.result
+              : typeof terminal?.finalText === 'string'
+                ? terminal.finalText
+                : undefined;
+          if (canonical !== undefined) {
+            finalTextMatchesStream =
+              finalTextMatchesStream && assistantText.trim() === canonical.trim();
+            assistantText = canonical;
+          }
           finish();
         } else if (isTerminalAgentErrorEvent(ev)) {
           const error = extractErr(ev.data);
@@ -3245,7 +3254,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         stopListeningTurn = undefined;
       },
       getAssistantText: (): string => assistantText,
-      hasAssistantText: (): boolean => hasAssistantText,
+      finalTextMatchesStream: (): boolean => finalTextMatchesStream,
     };
   }
 
