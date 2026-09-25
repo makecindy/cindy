@@ -66,37 +66,41 @@ describe("remote credentials fingerprint boundary", () => {
   const core =
     "../../packages/remote-credentials-native/Sources/CindyRemoteCredentials/";
 
-  it("only excludes core files wholly guarded for macOS", () => {
-    const files: string[] = config.ignorePaths.filter((path: string) =>
-      path.endsWith(".swift"),
-    );
-    expect(files).toHaveLength(6);
-    for (const file of files) {
-      const lines = readFileSync(resolve(projectRoot, file), "utf8")
-        .trim()
-        .split("\n");
-      expect(lines[0], file).toBe("#if os(macOS)");
-      let depth = 0;
-      for (const [index, line] of lines.entries()) {
-        if (/^\s*#if\b/.test(line)) depth++;
-        if (/^\s*#(?:else|elseif)\b/.test(line))
-          expect(depth, file).toBeGreaterThan(1);
-        if (/^\s*#endif\b/.test(line)) depth--;
-        if (index < lines.length - 1) expect(depth, file).toBeGreaterThan(0);
+  it.each(["\n", "\r\n"])(
+    "only excludes core files wholly guarded for macOS (%j)",
+    (eol) => {
+      const files: string[] = config.ignorePaths.filter((path: string) =>
+        path.endsWith(".swift"),
+      );
+      expect(files).toHaveLength(6);
+      for (const file of files) {
+        const lines = readFileSync(resolve(projectRoot, file), "utf8")
+          .trim()
+          .replace(/\r?\n/g, eol)
+          .split(/\r?\n/);
+        expect(lines[0], file).toBe("#if os(macOS)");
+        let depth = 0;
+        for (const [index, line] of lines.entries()) {
+          if (/^\s*#if\b/.test(line)) depth++;
+          if (/^\s*#(?:else|elseif)\b/.test(line))
+            expect(depth, file).toBeGreaterThan(1);
+          if (/^\s*#endif\b/.test(line)) depth--;
+          if (index < lines.length - 1) expect(depth, file).toBeGreaterThan(0);
+        }
+        expect(depth, file).toBe(0);
       }
-      expect(depth, file).toBe(0);
-    }
-    const podspec = readFileSync(
-      resolve(
-        projectRoot,
-        "../../packages/remote-credentials-native/CindyRemoteCredentials.podspec",
-      ),
-      "utf8",
-    );
-    expect(podspec).toContain(
-      "s.source_files = 'Sources/CindyRemoteCredentials/**/*.swift'",
-    );
-  });
+      const podspec = readFileSync(
+        resolve(
+          projectRoot,
+          "../../packages/remote-credentials-native/CindyRemoteCredentials.podspec",
+        ),
+        "utf8",
+      );
+      expect(podspec).toContain(
+        "s.source_files = 'Sources/CindyRemoteCredentials/**/*.swift'",
+      );
+    },
+  );
 
   it.each(["ios", "android"])(
     "%s ignores desktop changes but detects mobile inputs",
