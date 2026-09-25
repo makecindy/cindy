@@ -7,6 +7,7 @@ import type { ConversationSearchResponse } from '../../../shared/conversationSea
 import type { BotProfile } from './botStore';
 import { runBotLifecycleAction } from './botStore';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { BotDeleteDialog } from './BotDeleteDialog';
 
 /**
@@ -171,12 +172,13 @@ export function BotLifecycleSettings({
                 void searchHistory();
               }}
             >
-              <input
-                aria-label={t('bots.historySearch.title')}
+              <Input
+                size="md"
+                ariaLabel={t('bots.historySearch.title')}
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={setQuery}
                 placeholder={t('bots.historySearch.search')}
-                className="h-9 min-w-0 flex-1 rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+                className="min-w-0 flex-1"
               />
               <Button
                 type="submit"

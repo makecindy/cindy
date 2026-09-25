@@ -378,6 +378,22 @@ describe('createBotSettingsAutosave flush & failure', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(h.commits).toHaveLength(0);
   });
+
+  it('holdText() pauses a pending text save but keeps a discrete selection on schedule', async () => {
+    const h = harness();
+    h.edit({ description: 'typed' });
+    h.autosave.schedule('text');
+    h.autosave.holdText();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.commits).toHaveLength(0);
+
+    h.edit({ capabilities: capabilities({ memory: false }) });
+    h.autosave.schedule('instant');
+    h.autosave.holdText();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.commits).toHaveLength(1);
+    expect(h.commits[0]?.description).toBe('typed');
+  });
 });
 
 

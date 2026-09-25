@@ -7616,7 +7616,8 @@
       "saveFailed": "保存結果を確認できませんでした。設定を再読み込みしてから再試行してください。",
       "conflict": "別のデバイスで設定が変更されました。保存する前に再読み込みしてください。",
       "unsupported": "これらの設定を編集するには、別のデバイスの Cindy を更新してください。",
-      "discardDescription": "再読み込みすると、未保存の設定が破棄されます。"
+      "discardDescription": "再読み込みすると、未保存の設定が破棄されます。",
+      "leaveDescription": "移動すると、未保存の設定が破棄されます。"
     },
     "devicePicker": {
       "local": "この端末",
@@ -7773,6 +7774,8 @@
       "titleLabel": "タイトル",
       "bodyLabel": "内容",
       "tooLong": "長すぎます。短くすると保存されます",
+      "titleRequired": "タイトルを入力すると保存されます",
+      "bodyRequired": "内容を入力すると保存されます",
       "deleteTitle": "このメモリを削除しますか？",
       "deleteDescription": "{{name}}は今後「{{title}}」を参照しません。",
       "deleted": "削除しました",

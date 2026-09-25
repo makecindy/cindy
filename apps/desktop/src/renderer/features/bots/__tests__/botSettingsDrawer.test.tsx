@@ -198,6 +198,25 @@ describe('BotSettingsDrawer', () => {
   });
 });
 
+it('keeps the drawer open while Escape only cancels an IME candidate', async () => {
+  render(
+    <RouterProvider
+      router={createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+        initialEntries: ['/bots/bot-1?settings=1'],
+      })}
+    />,
+  );
+  const dialog = screen.getByRole('dialog');
+  fireEvent.keyDown(dialog, { key: 'Escape', isComposing: true });
+  fireEvent.keyDown(dialog, { key: 'Escape', keyCode: 229 });
+  await act(async () => {});
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(guard).not.toHaveBeenCalled();
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(guard).toHaveBeenCalledOnce();
+});
+
 it('opens remote settings for the route device instead of searching the local bot store', () => {
   render(<RouterProvider router={createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], { initialEntries: ['/bots/remote/other-mac/remote-bot?settings=1'] })} />);
   expect(screen.getByTestId('remote-settings').textContent).toBe('other-mac');

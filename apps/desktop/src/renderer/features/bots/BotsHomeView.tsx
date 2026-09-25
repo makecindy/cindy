@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/input';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
@@ -137,6 +138,7 @@ export function BotSettings({
     | 'memory'
   >('home');
   const routineLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const routineBackRef = useRef<(() => Promise<boolean>) | null>(null);
   const memoryLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const memoryBackRef = useRef<(() => Promise<boolean>) | null>(null);
   const pageTitle =
@@ -206,7 +208,8 @@ export function BotSettings({
       capabilities,
       skills: selectedSkills,
     },
-    fallbackName: bot.name,
+    // The last confirmed save, which a cleared field keeps (the prop can lag behind it).
+    fallbackName: savedSettingsRef.current.name,
     // 归档 bot 的设置页是只读的(不渲染任何表单字段),自动保存不得为它引入写入。
     enabled: bot.status !== 'archived',
     baseline: savedSettingsRef,
@@ -227,13 +230,31 @@ export function BotSettings({
       beforeCloseRef.current = null;
     };
   }, [beforeCloseRef, canLeave]);
+  // Opening a page unmounts the row that had focus; move it to the page's back
+  // button, and back to the originating row on return.
+  const pageBackButtonRef = useRef<HTMLButtonElement>(null);
+  const settingsRowRefs = useRef(new Map<string, HTMLButtonElement>());
+  const returnFocusRowRef = useRef<string | null>(null);
+  const pageFocusPendingRef = useRef(false);
+  const showPage = (next: typeof page) => {
+    if (page === 'home' && next !== 'home') returnFocusRowRef.current = next;
+    pageFocusPendingRef.current = true;
+    setPage(next);
+  };
+  useEffect(() => {
+    if (!pageFocusPendingRef.current) return;
+    pageFocusPendingRef.current = false;
+    if (page !== 'home') pageBackButtonRef.current?.focus();
+    else if (returnFocusRowRef.current)
+      settingsRowRefs.current.get(returnFocusRowRef.current)?.focus();
+  }, [page]);
   const go = (next: typeof page) => {
     if (!autosave.isDirty() && !routineLeaveRef.current && !memoryLeaveRef.current) {
-      setPage(next);
+      showPage(next);
       return;
     }
     void canLeave().then((allowed) => {
-      if (allowed) setPage(next);
+      if (allowed) showPage(next);
     });
   };
   useEffect(() => {
@@ -293,6 +314,18 @@ export function BotSettings({
       if (allowed) onBack();
     });
   };
+  // A cleared name is never saved (the previous one stays), so show that one
+  // everywhere and restore it to the field once editing ends.
+  const displayName = name.trim() || savedSettingsRef.current.name;
+  const handleNameBlur = () => {
+    if (name !== displayName) setName(displayName);
+    void autosave.flush();
+  };
+  const handleDescriptionBlur = () => {
+    const trimmed = description.trim();
+    if (trimmed !== description) setDescription(trimmed);
+    void autosave.flush();
+  };
 
   if (bot.status === 'archived') {
     return (
@@ -350,7 +383,7 @@ export function BotSettings({
           aria-label={t('bots.profile.changeAvatar')}
           className="relative rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
         >
-          <BotAvatar bot={{ name, avatar, avatarColor }} size="xl" />
+          <BotAvatar bot={{ name: displayName, avatar, avatarColor }} size="xl" />
           <span className="absolute bottom-0 right-0 flex h-6 w-6 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]">
             <Camera size={12} aria-hidden="true" />
           </span>
@@ -383,15 +416,17 @@ export function BotSettings({
           {page !== 'home' ? (
             <div className="flex min-w-0 items-center gap-2">
               <button
+                ref={pageBackButtonRef}
                 type="button"
                 onClick={() =>
                   void (async () => {
                     if (page === 'memory' && (await memoryBackRef.current?.())) return;
+                    if (page === 'routines' && (await routineBackRef.current?.())) return;
                     go('home');
                   })()
                 }
                 aria-label={t('bots.settingsBack')}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] outline-none hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 <ArrowLeft size={18} />
               </button>
@@ -432,7 +467,7 @@ export function BotSettings({
             <div className="flex flex-col items-center pb-6 pt-2 text-center">
               {avatarPicker}
               <h1 className="mt-2 max-w-full break-words text-18 font-medium text-[var(--text-primary)]">
-                {name}
+                {displayName}
               </h1>
               {avatarError ? (
                 <p className="mt-2 text-12 text-[var(--text-danger)]" role="alert">
@@ -444,9 +479,13 @@ export function BotSettings({
               {settingsRows.map(([next, Icon, title]) => (
                 <button
                   key={next}
+                  ref={(node) => {
+                    if (node) settingsRowRefs.current.set(next, node);
+                    else settingsRowRefs.current.delete(next);
+                  }}
                   type="button"
                   onClick={() => void go(next)}
-                  className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-default)] px-4 py-3 text-left text-14 text-[var(--text-primary)] last:border-b-0 hover:bg-[var(--surface-hover)]"
+                  className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-default)] px-4 py-3 text-left text-14 text-[var(--text-primary)] outline-none last:border-b-0 hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
                 >
                   <Icon size={18} className="shrink-0 text-[var(--text-secondary)]" />
                   <span className="min-w-0 flex-1">{title}</span>
@@ -470,6 +509,9 @@ export function BotSettings({
             centeredAvatar
             value={{ name, description, avatar, avatarColor }}
             avatarControl={avatarPicker}
+            composition={autosave.composition}
+            onNameBlur={handleNameBlur}
+            onDescriptionBlur={handleDescriptionBlur}
             onChange={(next, kind) => {
               setName(next.name);
               setDescription(next.description);
@@ -504,15 +546,17 @@ export function BotSettings({
           ) : null}
         </div>
         <div hidden={page !== 'personality'} className="pt-3">
-          <textarea
+          <Textarea
             aria-label={t('bots.profile.personality')}
             value={identitySource}
-            onChange={(event) => {
-              setIdentitySource(event.target.value);
+            onChange={(next) => {
+              setIdentitySource(next);
               autosave.onEdit('text');
             }}
+            onBlur={() => void autosave.flush()}
+            {...autosave.composition}
             rows={6}
-            className="mt-2 w-full resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface)] p-3 text-13 leading-6 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            className="min-h-40 resize-none p-3 leading-6 [field-sizing:content]"
           />
         </div>
         <section
@@ -559,7 +603,6 @@ export function BotSettings({
         </section>
         {page === 'capabilities' && (
           <div>
-            {' '}
             <BotCapabilitySettings
               expanded={page === 'capabilities'}
               bot={bot}
@@ -633,7 +676,12 @@ export function BotSettings({
           />
         ) : null}
         {page === 'routines' ? (
-          <BotRoutines embedded botId={bot.id} beforeLeaveRef={routineLeaveRef} />
+          <BotRoutines
+            embedded
+            botId={bot.id}
+            beforeLeaveRef={routineLeaveRef}
+            backRef={routineBackRef}
+          />
         ) : null}
       </div>
       <button type="button" onClick={handleBack} className="sr-only">

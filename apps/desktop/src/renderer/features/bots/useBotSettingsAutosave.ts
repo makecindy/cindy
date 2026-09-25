@@ -11,7 +11,7 @@
  * 保存载荷与 IPC 与手动保存时**完全一致**,主进程零改动。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   createBotSettingsAutosave,
@@ -51,6 +51,11 @@ export interface BotSettingsAutosaveController {
   retry: () => Promise<void>;
   /** 是否有已改但未落库的内容。 */
   isDirty: () => boolean;
+  /** 挂到文本框上:输入法组合中的拼音不是已完成的编辑,上屏后再进入防抖。 */
+  composition: {
+    onCompositionStart: () => void;
+    onCompositionEnd: () => void;
+  };
 }
 
 export function useBotSettingsAutosave(
@@ -119,11 +124,26 @@ export function useBotSettingsAutosave(
     };
   }, [autosave]);
 
+  const composingRef = useRef(false);
   const onEdit = useCallback(
     (trigger: BotAutosaveTrigger) => {
       if (!enabledRef.current) return;
+      if (trigger === 'text' && composingRef.current) return;
       autosave.schedule(trigger);
     },
+    [autosave],
+  );
+  const composition = useMemo(
+    () => ({
+      onCompositionStart: () => {
+        composingRef.current = true;
+        autosave.holdText();
+      },
+      onCompositionEnd: () => {
+        composingRef.current = false;
+        if (enabledRef.current) autosave.schedule('text');
+      },
+    }),
     [autosave],
   );
 
@@ -139,5 +159,5 @@ export function useBotSettingsAutosave(
 
   const isDirty = useCallback(() => enabledRef.current && autosave.isDirty(), [autosave]);
 
-  return { status, onEdit, flush, retry, isDirty };
+  return { status, onEdit, flush, retry, isDirty, composition };
 }

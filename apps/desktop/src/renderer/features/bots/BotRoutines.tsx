@@ -27,16 +27,21 @@ import {
 
 const menuClass = 'rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-2';
 const rowClass = 'rounded-lg text-13 text-[var(--text-primary)] focus:bg-[var(--surface-hover)]';
+const fieldClass = 'block space-y-2';
+const fieldLabelClass = 'block text-[var(--text-secondary)]';
 
 /** A teammate's standing instructions and OR-combined triggers, shared by teammate settings and the task sidebar. */
 export function BotRoutines({
   botId,
   beforeLeaveRef,
+  backRef,
   embedded = false,
 }: {
   embedded?: boolean;
   botId: string;
   beforeLeaveRef?: { current: (() => Promise<boolean>) | null };
+  /** Host back button: steps from the editor to the list first (the inline back button is then omitted). */
+  backRef?: { current: (() => Promise<boolean>) | null };
 }) {
   const { confirm } = useConfirmDialog();
   const inFlight = useRef(false);
@@ -147,6 +152,23 @@ export function BotRoutines({
       beforeLeaveRef.current = null;
     };
   }, [beforeLeaveRef, canLeave]);
+  const closeDraft = useCallback(async () => {
+    if (!(await canLeave())) return;
+    setDraft(null);
+    setSelected(null);
+    setDeletePending(false);
+  }, [canLeave]);
+  useEffect(() => {
+    if (!backRef) return;
+    backRef.current = async () => {
+      if (!draft) return false;
+      if (!inFlight.current) await closeDraft();
+      return true;
+    };
+    return () => {
+      backRef.current = null;
+    };
+  }, [backRef, draft, closeDraft]);
   const act = async (action: () => Promise<unknown>) => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -184,40 +206,31 @@ export function BotRoutines({
           : 'h-full overflow-y-auto bg-[var(--surface)] p-4 text-13 text-[var(--text-primary)]'
       }
     >
-      <div className="mb-5 flex items-center justify-between gap-2">
-        {draft ? (
-          <Button
-            variant="secondary"
-            disabled={busy}
-            onClick={() => {
-              void canLeave().then((allowed) => {
-                if (!allowed) return;
-                setDraft(null);
-                setSelected(null);
-                setDeletePending(false);
-              });
-            }}
-          >
-            {t('routines.back')}
-          </Button>
-        ) : embedded ? (
-          <span />
-        ) : (
-          <h2 className="font-medium">{t('routines.title')}</h2>
-        )}
-        {!draft && (
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setSelected('new');
-              setDraft({ name: '', prompt: '', enabled: true, triggers: [], silentWhenIdle: false });
-            }}
-          >
-            <Plus size={14} />
-            {t('routines.add')}
-          </Button>
-        )}
-      </div>
+      {!draft || !backRef ? (
+        <div className="mb-5 flex items-center justify-between gap-2">
+          {draft ? (
+            <Button variant="secondary" disabled={busy} onClick={() => void closeDraft()}>
+              {t('routines.back')}
+            </Button>
+          ) : embedded ? (
+            <span />
+          ) : (
+            <h2 className="font-medium">{t('routines.title')}</h2>
+          )}
+          {!draft && (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setSelected('new');
+                setDraft({ name: '', prompt: '', enabled: true, triggers: [], silentWhenIdle: false });
+              }}
+            >
+              <Plus size={14} />
+              {t('routines.add')}
+            </Button>
+          )}
+        </div>
+      ) : null}
       {error && (
         <div role="alert" className="mb-4 text-[var(--text-danger)]">
           <p>{t('routines.error')}</p>
@@ -299,7 +312,11 @@ export function BotRoutines({
           </div>
           <label className="block space-y-2">
             <span className="text-[var(--text-secondary)]">{t('routines.name')}</span>
-            <Input value={draft.name} onChange={(name) => setDraft({ ...draft, name })} />
+            <Input
+              autoFocus={selected === 'new'}
+              value={draft.name}
+              onChange={(name) => setDraft({ ...draft, name })}
+            />
           </label>
           <label className="block space-y-2">
             <span className="text-[var(--text-secondary)]">{t('routines.instructions')}</span>
@@ -317,13 +334,13 @@ export function BotRoutines({
             </label>
             <p className="text-12 text-[var(--text-secondary)]">{t('routines.quietHint')}</p>
             <label className="block space-y-2">
-              <span>{t('routines.checkCommand')}</span>
+              <span className="text-[var(--text-secondary)]">{t('routines.checkCommand')}</span>
               <Textarea rows={3} value={draft.preRunHook?.command ?? ''} onChange={(command) => setDraft({ ...draft, preRunHook: command ? { ...draft.preRunHook, command } : null })} />
             </label>
             <p className="text-12 text-[var(--text-secondary)]">{t('routines.checkHint')}</p>
             {draft.preRunHook && <label className="block space-y-2">
-              <span>{t('routines.timeoutMs')}</span>
-              <Input type="number" min={1} value={draft.preRunHook.timeoutMs === undefined ? '' : String(draft.preRunHook.timeoutMs)} onChange={(value) => setDraft({ ...draft, preRunHook: { ...draft.preRunHook!, timeoutMs: value ? Number(value) : undefined } })} />
+              <span className="text-[var(--text-secondary)]">{t('routines.timeoutMs')}</span>
+              <IntegerInput optional min={1} value={draft.preRunHook.timeoutMs} onChange={(timeoutMs) => setDraft({ ...draft, preRunHook: { ...draft.preRunHook!, timeoutMs } })} />
             </label>}
           </details>
           <div className="space-y-2">
@@ -451,7 +468,7 @@ export function BotRoutines({
               </Button>
             )}
             <Button
-              variant="primary"
+              variant="cta"
               disabled={
                 busy || !draft.name.trim() || !draft.prompt.trim() || !draft.triggers.length
               }
@@ -554,13 +571,14 @@ function TriggerFields({
   const { t } = useTranslation();
   if (trigger.kind === 'interval')
     return (
-      <label className="block py-2">
-        {t('routines.minutes')}
-        <Input
-          type="number"
+      <label className={`${fieldClass} py-2`}>
+        <span className={fieldLabelClass}>{t('routines.minutes')}</span>
+        <IntegerInput
           min={1}
-          value={String(trigger.intervalMs / 60_000)}
-          onChange={(value) => onChange({ ...trigger, intervalMs: Number(value) * 60_000 })}
+          value={trigger.intervalMs / 60_000}
+          onChange={(minutes) => {
+            if (minutes !== undefined) onChange({ ...trigger, intervalMs: minutes * 60_000 });
+          }}
         />
       </label>
     );
@@ -670,9 +688,9 @@ function CronFields({
   const patch = (values: Partial<typeof config>) =>
     onChange({ ...trigger, expression: configToCron({ ...config, ...values }) });
   return (
-    <div className="space-y-2 py-2">
-      <label className="block">
-        {t('routines.schedule')}
+    <div className="space-y-3 py-2">
+      <label className={fieldClass}>
+        <span className={fieldLabelClass}>{t('routines.schedule')}</span>
         <select
           className="w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2"
           value={advanced ? 'custom' : config.mode}
@@ -690,8 +708,8 @@ function CronFields({
         </select>
       </label>
       {advanced ? (
-        <label className="block">
-          {t('routines.expression')}
+        <label className={fieldClass}>
+          <span className={fieldLabelClass}>{t('routines.expression')}</span>
           <Input
             value={trigger.expression}
             onChange={(expression) => onChange({ ...trigger, expression })}
@@ -700,21 +718,22 @@ function CronFields({
       ) : (
         <>
           {config.mode !== 'hourly' && (
-            <label className="block">
-              {t('routines.time')}
+            <label className={fieldClass}>
+              <span className={fieldLabelClass}>{t('routines.time')}</span>
               <Input
                 type="time"
                 value={`${String(config.hour).padStart(2, '0')}:${String(config.minute).padStart(2, '0')}`}
                 onChange={(value) => {
-                  const [hour, minute] = value.split(':').map(Number);
-                  patch({ hour, minute });
+                  // A cleared segment reports ''; keep the last complete time.
+                  const match = /^(\d{2}):(\d{2})/.exec(value);
+                  if (match) patch({ hour: Number(match[1]), minute: Number(match[2]) });
                 }}
               />
             </label>
           )}
           {config.mode === 'weekly' && (
-            <label className="block">
-              {t('routines.weekday')}
+            <label className={fieldClass}>
+              <span className={fieldLabelClass}>{t('routines.weekday')}</span>
               <select
                 className="w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2"
                 value={config.weekday}
@@ -732,26 +751,75 @@ function CronFields({
             </label>
           )}
           {config.mode === 'monthly' && (
-            <label className="block">
-              {t('routines.day')}
-              <Input
-                type="number"
+            <label className={fieldClass}>
+              <span className={fieldLabelClass}>{t('routines.day')}</span>
+              <IntegerInput
                 min={1}
                 max={31}
-                value={String(config.monthDay)}
-                onChange={(value) => patch({ monthDay: Number(value) })}
+                value={config.monthDay}
+                onChange={(monthDay) => {
+                  if (monthDay !== undefined) patch({ monthDay });
+                }}
               />
             </label>
           )}
         </>
       )}
-      <label className="block">
-        {t('routines.timezone')}
+      <label className={fieldClass}>
+        <span className={fieldLabelClass}>{t('routines.timezone')}</span>
         <Input
           value={trigger.timezone}
           onChange={(timezone) => onChange({ ...trigger, timezone })}
         />
       </label>
     </div>
+  );
+}
+
+/**
+ * Whole-number field that keeps what the user is typing: an emptied or
+ * out-of-range entry is not committed (optional fields commit `undefined` when
+ * emptied), and blur shows the committed value again.
+ */
+function IntegerInput({
+  value,
+  min,
+  max,
+  optional = false,
+  onChange,
+}: {
+  value: number | undefined;
+  min: number;
+  max?: number;
+  optional?: boolean;
+  onChange(value: number | undefined): void;
+}) {
+  const format = (next: number | undefined) => (next === undefined ? '' : String(next));
+  const [text, setText] = useState(() => format(value));
+  const [shown, setShown] = useState(value);
+  if (!Object.is(shown, value)) {
+    setShown(value);
+    setText(format(value));
+  }
+  return (
+    <Input
+      type="number"
+      inputMode="numeric"
+      min={min}
+      max={max}
+      value={text}
+      onChange={(raw) => {
+        setText(raw);
+        const trimmed = raw.trim();
+        if (!trimmed) {
+          if (optional) onChange(undefined);
+          return;
+        }
+        if (!/^\d+$/.test(trimmed)) return;
+        const next = Number(trimmed);
+        if (next >= min && (max === undefined || next <= max)) onChange(next);
+      }}
+      onBlur={() => setText(format(value))}
+    />
   );
 }
