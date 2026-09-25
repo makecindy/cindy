@@ -232,7 +232,7 @@ export interface SchedulerQueueDeps {
       permissionMode?: string;
       planMode?: boolean;
     }) => void | Promise<void>;
-    onAcceptedRollback?: () => void | Promise<void>;
+    onAcceptedRollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>;
     onDiscarded?: () => void;
   }): Promise<{ clientId: string } | { duplicate: true } | { retry: true }>;
   removeQueuedPrompt(sessionId: string, clientId: string): void;
@@ -1863,7 +1863,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // Stopping this undispatched turn consumes only this occurrence. Reuse
         // the engine's skipped settlement so cron/interval scheduling remains
         // owned by the engine, without a short deferred retry.
-        return { sessionId: session.id, skipped: true, resultText: err.message };
+        return this.settleStoppedDispatch(schedule, ctx, session.id, holder, err);
       }
       const normalized = normalizeSchedulerSendError(err);
       if (err instanceof RoutineDispatchDeferredError) {
@@ -2333,7 +2333,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         });
         settleDispatch();
       },
-      onAcceptedRollback: async () => {
+      onAcceptedRollback: async (reason) => {
         const current = await this.readRoutinePermissions(sessionId).catch(() => null);
         const err =
           acceptedSnapshot &&
@@ -2344,7 +2344,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
             ? new RoutineDispatchDeferredError(
                 'Queued heartbeat session or modes changed after accept',
               )
-            : new Error('queued heartbeat dispatch rolled back after accept');
+            : reason === 'cancelled-before-dispatch' && schedule.source !== 'bot'
+              ? new ScheduledDispatchStoppedError('Scheduled turn stopped before vendor dispatch')
+              : new Error('queued heartbeat dispatch rolled back after accept');
         failAfterAccept(err);
         failDispatch(err);
       },
@@ -2493,6 +2495,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 同语义:撤销预插的 running run、不通知不亮红点,下次到点重新排队(会话届时
       // 若空闲就直发,槽位届时也可能腾出来)。
       // 不能顺延的(一次性 / manual / 已 paused)退回可见失败,否则任务静默消失。
+      if (err instanceof ScheduledDispatchStoppedError) {
+        waiterSlot.current?.stopListening();
+        return this.settleStoppedDispatch(schedule, ctx, sessionId, holder, err);
+      }
       if (err instanceof RoutineDispatchDeferredError) {
         return this.deferFire(schedule, sessionId, 'routine-dispatch-invalidated');
       }
@@ -2524,6 +2530,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
       try {
         await Promise.race([activeWaiter.turnFinished, postAcceptFailed]);
       } catch (err) {
+        if (err instanceof ScheduledDispatchStoppedError) {
+          ctx.signal.removeEventListener('abort', onAbort);
+          return this.settleStoppedDispatch(schedule, ctx, sessionId, holder, err);
+        }
         if (err instanceof RoutineDispatchDeferredError) {
           ctx.signal.removeEventListener('abort', onAbort);
           return this.deferFire(schedule, sessionId, 'routine-dispatch-invalidated');
@@ -2543,6 +2553,19 @@ export class MakerScheduleRunner implements ScheduleRunner {
       assistantText,
       activeWaiter?.hasAssistantText() ?? false,
     );
+  }
+
+  private settleStoppedDispatch(
+    schedule: Schedule,
+    ctx: FireContext,
+    sessionId: string,
+    holder: EphemeralSessionHolder,
+    error: ScheduledDispatchStoppedError,
+  ): FireResult {
+    // Pause/delete wins over a session-only Stop.
+    throwIfFireAborted(ctx.signal, 'agent turn dispatch');
+    if (!schedule.targetSessionId && !schedule.persistentSession) holder.closeOnAbort = true;
+    return { sessionId, skipped: true, resultText: error.message };
   }
 
   /**

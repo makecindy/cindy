@@ -1813,8 +1813,24 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     },
   );
 
+  it.each([true, false])('skips an ordinary accepted Stop (fresh=%s)', async (fresh) => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: false });
+    const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+    const fire = runner.fire(
+      heartbeatSchedule({ targetSessionId: fresh ? undefined : SESSION_ID, workingDir: '/work' }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    await enqueueLast(queue).onAcceptedRollback?.('cancelled-before-dispatch');
+    await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID, skipped: true });
+    expect(harness.listenerCount()).toBe(0);
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
   it('fails the run (no hang) when dispatch is rolled back after accept', async () => {
-    // accepted 之后 send 结局为未派发(cancelled-before-dispatch / 持久化后取消):
+    // accepted 之后未派发，但没有明确取消原因：保留技术失败处理。
     // register 的 sendToAgent 包装层保证调用 onAcceptedRollback —— runner 经
     // postAcceptFailed 通道收口为失败,不会挂在 turnFinished 上(review P1 佐证)。
     const harness = createSessionHarness(async () => ({ accepted: true }));
