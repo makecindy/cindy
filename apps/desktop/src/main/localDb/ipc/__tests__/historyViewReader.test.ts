@@ -215,7 +215,7 @@ describe('outline history reads', () => {
       (await base.list(sid, opts)).map((item) => item.role === 'thinking' ? { ...item, content: { isRedacted: true } } : item));
     const hydrate = vi.fn(async (_sid: string, ids: string[]) => source.filter((item) => ids.includes(item.id)));
     const api = createHistoryViewReader({ list: base.list, outline, hydrate, running: () => true,
-      anchor: async (_sid, id) => source.find((item) => item.id === id)! });
+      revision: async () => 'stable', anchor: async (_sid, id) => source.find((item) => item.id === id)! });
     const page = await api.page('s', undefined, true);
     expect(page.hasMore).toBe(false);
     expect(page.items.filter((item) => item.type === 'messages').flatMap((item) => item.messages.map((message) => message.id)))
@@ -224,7 +224,7 @@ describe('outline history reads', () => {
     expect(outline).toHaveBeenCalledTimes(4);
     const card = page.items.find((item) => item.type === 'messages' && item.deferred?.parentToolUseId === 'a');
     if (card?.type !== 'messages' || !card.deferred) throw new Error('Missing lazy subagent');
-    hydrate.mockClear();
+    hydrate.mockClear(); outline.mockClear();
     const received: string[] = [];
     let after: string | undefined;
     do {
@@ -234,6 +234,8 @@ describe('outline history reads', () => {
     } while (after);
     const expected = source.filter((item) => (item.agentMeta as { parentUuid?: string })?.parentUuid === 'a').map((item) => item.id);
     expect(received).toEqual(expected);
+    // Payload pages reuse one three-batch scope scan, not a scan per page.
+    expect(outline).toHaveBeenCalledTimes(3);
     expect(hydrate.mock.calls.flatMap(([, ids]) => ids).every((id) => expected.includes(id))).toBe(true);
   });
 });
@@ -251,4 +253,28 @@ it('uses database revisions for stable snapshots and invalidates same-size hidde
   revision = 'edited';
   source[1] = { ...source[1], content: 'changed' };
   expect(await api.page('s', undefined, true)).not.toEqual(initial);
+});
+
+it('invalidates cached subagent membership on a database revision and still rejects cleared anchors', async () => {
+  const source = [1, 2, 3, 4].map((n) => ({ ...row(n), content: 'x'.repeat(200000), agentMeta: { parentUuid: 'a' } }));
+  const base = reader(source);
+  let revision = 'one';
+  const outline = vi.fn(async (sid: string, opts: { after?: string; limit: number }) =>
+    (await base.list(sid, opts)).map((item) => ({ ...item, content: { isRedacted: true } })));
+  const api = createHistoryViewReader({ list: base.list, outline,
+    hydrate: async (_sid, ids) => source.filter((message) => ids.includes(message.id)),
+    anchor: async (_sid, id) => {
+      const found = source.find((message) => message.id === id);
+      if (!found) throwIpcError('NOT_FOUND', 'History range changed');
+      return { ...found, content: { isRedacted: true } };
+    }, revision: async () => revision, running: () => false });
+  const ref = { key: 'a', firstMessageId: '1', lastMessageId: '4', parentToolUseId: 'a' };
+  expect((await api.details('s', ref)).nextCursor).toBe('1');
+  expect((await api.details('s', ref, '1')).messages.map((item) => item.id)).toEqual(['2']);
+  expect(outline).toHaveBeenCalledTimes(1);
+  source[1].agentMeta.parentUuid = 'b'; revision = 'two';
+  expect((await api.details('s', ref, '1')).messages.map((item) => item.id)).toEqual(['3']);
+  expect(outline).toHaveBeenCalledTimes(2);
+  source.length = 0;
+  await expect(api.details('s', ref, '3')).rejects.toMatchObject({ code: 'NOT_FOUND' });
 });

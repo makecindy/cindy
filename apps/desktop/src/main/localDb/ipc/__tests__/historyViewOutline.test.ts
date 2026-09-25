@@ -40,6 +40,16 @@ describe('SQLite history outline', () => {
     expect(result.historyArtifacts).toMatchObject([{ path: '/work/report.txt', source: 'command' }]);
     expect(JSON.stringify(result.historyArtifacts)).not.toContain('echo');
   });
+  it.each(['Bash', 'exec'])('bounds long %s command outlines after extracting trailing output paths', (toolName) => {
+    const command = `echo '${'x'.repeat(300000)}' > /work/trailing-report.txt`;
+    const content = outline('tool_use', { toolName, input: { command, displayCommand: command } });
+    const result = withHistoryArtifacts({ id: '1', clientId: '1', role: 'tool_use', content, createdAt: '2026-09-25T00:00:00Z' });
+    expect(JSON.stringify(result).length).toBeLessThan(1500);
+    expect(result.historyArtifacts).toMatchObject([{ path: '/work/trailing-report.txt', source: 'command' }]);
+    expect(content.input.command).toBe(command);
+    const empty = outline('tool_use', { toolName, input: null });
+    expect(() => withHistoryArtifacts({ id: '2', clientId: '2', role: 'tool_use', content: empty, createdAt: '' })).not.toThrow();
+  });
   it('retains structured failures and rejects malformed file changes', () => {
     for (const result of [{ ok: false }, { success: false }, { status: 'FAILED' }]) {
       expect(outline('tool_result', JSON.stringify(result))).toBe('<tool_use_error>');

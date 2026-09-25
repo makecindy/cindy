@@ -65,8 +65,17 @@ export function withHistoryArtifacts<T extends HistoryMessageSource>(row: T): T 
     ? [{ path: descriptor.filePath, exclude: 'command' as const }]
     : descriptor.kind === 'fileChange' ? descriptor.changes.filter((change) => change.action !== 'add')
       .map((change) => ({ path: change.path, exclude: change.action === 'delete' || change.action === 'move' ? 'all' as const : 'command' as const })) : [];
-  if (!paths.length && !exclusions.length) return row;
-  return { ...row, historyArtifacts: [...paths.map((path) => ({ path,
+  // Extract from the complete command first: output paths may occur after a
+  // long script/heredoc. Only the bounded outline enters the scan budget/cache;
+  // visible messages and expanded details are hydrated from the original row.
+  const outlined = descriptor.kind === 'command' ? { ...row, content: {
+    ...row.content as object,
+    input: Object.fromEntries(Object.entries((tool.input ?? {}) as Record<string, unknown>).map(([key, value]) =>
+      [key, (key === 'command' || key === 'displayCommand') && typeof value === 'string'
+        ? value.slice(0, 256) : value])),
+  } } : row;
+  if (!paths.length && !exclusions.length) return outlined;
+  return { ...outlined, historyArtifacts: [...paths.map((path) => ({ path,
     source: descriptor.kind === 'command' ? 'command' : 'tool',
     createdAt: row.createdAt, toolUseId: tool.toolUseId,
   } as const)), ...exclusions.map((file) => ({ ...file, source: 'tool' as const, createdAt: row.createdAt, toolUseId: tool.toolUseId }))] };

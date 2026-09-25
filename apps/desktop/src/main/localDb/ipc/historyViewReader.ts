@@ -34,6 +34,11 @@ function firstId<T extends HistoryMessageSource>(item: HistoryViewItem<T>): stri
 export function createHistoryViewReader<T extends HistoryMessageSource>(deps: HistoryViewReaderDependencies<T>) {
   let readRevision = 0;
   const readerEpoch = randomUUID();
+  // Only retain scoped headers, never hydrated bodies. Revisions invalidate the
+  // cache on DB writes/account changes; live ranges remain uncached.
+  const detailRanges = new Map<string, { rows: T[]; bytes: number }>();
+  let detailRevision: string | undefined;
+  let detailCacheBytes = 0;
   return {
     async page(sessionId: string, before?: string, lazyDetails = false): Promise<HistoryViewPage<T>> {
       const outlined = lazyDetails && !!deps.outline && !!deps.hydrate;
@@ -141,29 +146,55 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         if (cursorAnchor && (compareRows(cursorAnchor, first) < 0 || compareRows(cursorAnchor, last) > 0)) {
           throwIpcError('INVALID_PARAMS', 'Invalid detail cursor');
         }
-        const headers: T[] = [];
-        if (!first.id.startsWith('history-live:')) {
-          headers.push(first);
-          let cursor = first.id;
-          while (cursor !== (ref.lastStoredMessageId ?? last.id)) {
-            const batch = (await deps.outline(sessionId, { limit: 1000, after: cursor }, true)).slice().reverse();
-            if (!batch.length) break;
-            const bounded = batch.filter((row) => compareRows(row, last) <= 0);
-            headers.push(...bounded);
-            if (headers.length > 100000) throwIpcError('INVALID_PARAMS', 'History detail range is too large');
-            const next = batch.at(-1)!.id;
-            if (next === cursor) throwIpcError('INTERNAL', 'History detail cursor did not advance');
-            cursor = next;
-            if (bounded.length < batch.length || batch.length < 1000) break;
+        const revision = !ref.liveMessageIds?.length && deps.revision ? await deps.revision() : undefined;
+        if (revision !== detailRevision) {
+          detailRanges.clear(); detailCacheBytes = 0; detailRevision = revision;
+        }
+        const cacheKey = JSON.stringify([sessionId, ref.parentToolUseId, first.id, last.id, ref.lastStoredMessageId]);
+        const cached = revision === undefined ? undefined : detailRanges.get(cacheKey);
+        let scoped = cached?.rows;
+        if (cached) {
+          detailRanges.delete(cacheKey); detailRanges.set(cacheKey, cached);
+        }
+        if (!scoped) {
+          const headers: T[] = [];
+          if (!first.id.startsWith('history-live:')) {
+            headers.push(first);
+            let cursor = first.id;
+            while (cursor !== (ref.lastStoredMessageId ?? last.id)) {
+              const batch = (await deps.outline(sessionId, { limit: 1000, after: cursor }, true)).slice().reverse();
+              if (!batch.length) break;
+              const bounded = batch.filter((row) => compareRows(row, last) <= 0);
+              headers.push(...bounded);
+              if (headers.length > 100000) throwIpcError('INVALID_PARAMS', 'History detail range is too large');
+              const next = batch.at(-1)!.id;
+              if (next === cursor) throwIpcError('INTERNAL', 'History detail cursor did not advance');
+              cursor = next;
+              if (bounded.length < batch.length || batch.length < 1000) break;
+            }
+          }
+          for (const id of ref.liveMessageIds ?? []) {
+            const row = await deps.anchor(sessionId, id);
+            if (!headers.some((stored) => stored.clientId === row.clientId)) headers.push(row);
+          }
+          const scopes = historySubagentScopes(headers, ref.parentToolUseId);
+          scoped = headers.filter((row) => scopes.get(row.id) === ref.parentToolUseId);
+          // A write during the scan must not publish a cache for an older epoch.
+          if (revision !== undefined && revision === await deps.revision!() && revision === detailRevision) {
+            const bytes = Buffer.byteLength(JSON.stringify(scoped), 'utf8');
+            if (bytes <= MAX_HISTORY_SCAN_BYTES) {
+              while (detailRanges.size && (detailRanges.size >= 2 || detailCacheBytes + bytes > MAX_HISTORY_SCAN_BYTES)) {
+                const oldest = detailRanges.keys().next().value!;
+                detailCacheBytes -= detailRanges.get(oldest)!.bytes;
+                detailRanges.delete(oldest);
+              }
+              // Concurrent requests may have inserted the same range.
+              detailCacheBytes -= detailRanges.get(cacheKey)?.bytes ?? 0;
+              detailRanges.set(cacheKey, { rows: scoped, bytes }); detailCacheBytes += bytes;
+            }
           }
         }
-        for (const id of ref.liveMessageIds ?? []) {
-          const row = await deps.anchor(sessionId, id);
-          if (!headers.some((stored) => stored.clientId === row.clientId)) headers.push(row);
-        }
-        const scopes = historySubagentScopes(headers, ref.parentToolUseId);
-        const candidates = headers.filter((row) => scopes.get(row.id) === ref.parentToolUseId
-          && (!cursorAnchor || compareRows(row, cursorAnchor) > 0));
+        const candidates = scoped.filter((row) => !cursorAnchor || compareRows(row, cursorAnchor) > 0);
         const collected: T[] = [];
         let bytes = 1024;
         for (let offset = 0; offset < candidates.length; offset += 100) {

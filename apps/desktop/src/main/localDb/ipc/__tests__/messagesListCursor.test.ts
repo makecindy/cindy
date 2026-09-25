@@ -203,6 +203,28 @@ describe('local-db:messages:list cursor', () => {
     sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?').run(JSON.stringify({ text: 'edited '.repeat(1000), durationMs: 10 }), '2');
     expect(await invoke('local-db:messages:view', { lazyDetails: true })).not.toEqual(page);
   });
+  it('keeps a command larger than the scan budget folded without losing its trailing artifact or full details', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const command = `echo '${'x'.repeat(9 * 1024 * 1024)}' > /work/trailing-report.txt`;
+    const insert = sqlite.prepare('INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    for (const [id, role, content] of [
+      ['0', 'user', 'Question'],
+      ['1', 'tool_use', { toolName: 'Bash', input: { command } }],
+      ['2', 'tool_result', 'done'],
+      ['3', 'assistant', 'Answer'],
+    ] as const) insert.run(id, id, 's1', role, JSON.stringify(content), ['1', '2'].includes(id) ? 'bash' : null, Number(id));
+    registerMessageIpc();
+    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel }, () => h.handlers.get(channel)!({}, 's1', ...args));
+    const page = await invoke('local-db:messages:view', { lazyDetails: true }) as HistoryViewPage<HistoryMessageSource>;
+    expect(page.hasMore).toBe(false);
+    expect(JSON.stringify(page).length).toBeLessThan(5000);
+    const work = historyViewLeaves(page.items).find((item) => item.type === 'work');
+    if (work?.type !== 'work') throw new Error('Missing folded command');
+    expect(work.summary.artifacts).toMatchObject([{ path: '/work/trailing-report.txt' }]);
+    const detail = await invoke('local-db:messages:work-details', work.summary, {}) as HistoryDetailPage<HistoryMessageSource>;
+    expect((detail.messages[0].content as { input: { command: string } }).input.command).toBe(command);
+  });
   it.each([101, MAX_HISTORY_SCAN_ROWS])('reads all %i live rows from a generated work reference', async (count) => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');

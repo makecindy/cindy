@@ -404,7 +404,8 @@ export function registerMessageIpc(
           isNull(messages.rewindAt),
           session.clearedAt !== null ? gt(messages.createdAt, session.clearedAt) : undefined)).limit(1);
       if (!row) throwIpcError('NOT_FOUND', 'History range changed');
-      return messageToCamelWithRowid(row);
+      const message = messageToCamelWithRowid(row);
+      return outline ? withHistoryArtifacts(message) : message;
     },
   });
   ipcMain.handle('local-db:messages:view', async (event, sessionId: unknown, opts: unknown) => {
