@@ -168,6 +168,13 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 
 ### 判断哪些改动会动指纹
 
+- 远控凭证共享目录默认参与指纹，但 `fingerprint.config.cjs` 明确列出的六个
+  `#if os(macOS)` 文件及三个桌面入口目录不参与。共享 Swift、手机密码表单、资源、
+  podspec 和未列出的新文件仍参与；不要按 `Mac*` 文件名通配排除。
+  `fingerprintConfig.test.ts` 校验排除文件的完整 macOS 编译保护，并使用 Expo 哈希器
+  验证两端的排除项与保留项。移除平台保护或让手机依赖这些文件前，必须同步移除排除项。
+  **首次采用此边界仍改变旧指纹**，须随计划内原生发版迁移；它只避免迁移后桌面专用
+  修改反复触发手机冷更，不为旧安装包伪造兼容 runtime，也不豁免上面的冷更确认门。
 - 改 `app.json` / `app.config.js` 前先判断是否会动指纹。被哈希的是**解析后的
   ExpoConfig**(app.config.js 的输出),不是源文件本身:凡进入 resolved config 的字段,
   改了值就会变指纹;只有被 app.config.js **覆写 / 剥离、传不到 resolved config** 的值才指纹

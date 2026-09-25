@@ -156,6 +156,16 @@ On a two-display Mac, the old preparation probe failed with
 on the same locked session. This checks field preparation only, not password
 submission or successful system unlock.
 
+Mobile fingerprints exclude the explicit macOS-only source files and desktop
+entry-point directories listed in `apps/mobile/fingerprint.config.cjs`. Shared
+Swift, mobile forms, resources and the podspec remain fingerprint inputs, including
+new files unless explicitly excluded. Regression tests verify both directions.
+Adopting this narrower boundary changes existing fingerprints once and must be
+coordinated with a planned native mobile release; it does not make legacy runtime
+hashes interchangeable. Subsequent changes confined to the excluded Mac sources
+do not require another mobile runtime. Existing phones can use the updated Mac
+helper over the unchanged protocol without installing a new phone build.
+
 The `cindy-remote-unlock-inspect --prepare` diagnostic exercises wake and field
 preparation without accepting any password or submitting login. On the test Mac,
 this probe reaches `fieldReady: true`; a separately cleared, never-submitted test
