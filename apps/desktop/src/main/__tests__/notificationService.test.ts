@@ -502,6 +502,26 @@ describe('notificationService — channels 分发', () => {
     expect(sendMobileSessionNotify).toHaveBeenCalledWith({ sessionId: 's2', title: 'Hello', kind: 'needs-reply', generation: 7 });
   });
 
+  it('does not let a slow teammate lookup spend the approval push preview window', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+    vi.useFakeTimers();
+    readSessionNotificationPreview.mockReturnValueOnce(new Promise(() => {}));
+    let releaseDrain!: () => void;
+    drainPersistQueue.mockReturnValueOnce(new Promise<void>((resolve) => { releaseDrain = resolve; }));
+    latestMessageText.mockResolvedValueOnce('要删除 build 目录吗？');
+    await registeredHandlers.get('notification:show-session-event')!({}, {
+      sessionId: 's1', title: 'Hello', kind: 'needs-reply', channels: { desktop: false, feishu: false, mobile: true },
+    });
+    // The reply read starts without waiting for the routing lookup.
+    releaseDrain();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith({
+      sessionId: 's1', title: 'Hello', kind: 'needs-reply', generation: 7, detail: '要删除 build 目录吗？',
+    });
+  });
+
   it('mobile 正文带最近 assistant 内容;error 终态不取(无可靠错误正文来源)', async () => {
     const { initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('ou_owner')));

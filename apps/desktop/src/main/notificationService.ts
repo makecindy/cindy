@@ -228,9 +228,16 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         if (kind === 'done' || (kind === 'needs-reply' && channels?.mobile === true)) {
           let finished = false;
           let timer: ReturnType<typeof setTimeout> | undefined;
+          // Routing is optional: read it beside the reply so it never spends the
+          // preview's wait window, and a failed identity read costs nothing.
+          const routeRead = kind === 'needs-reply'
+            ? readSessionNotificationPreview(sessionId, false).then(
+              (identity) => { if (!finished) teammateBotId = identity.teammateBotId; },
+              () => undefined)
+            : undefined;
           try {
             await Promise.race([
-              (async () => {
+              Promise.all([(async () => {
                 if (kind === 'done') {
                   // Read the teammate identity first so a blocked write still
                   // has the correct fallback. This snapshot may predate the
@@ -241,9 +248,6 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
                   // an old event ID must never identify this completion.
                   preview = { teammateName: identity.teammateName };
                   teammateBotId = identity.teammateBotId;
-                } else {
-                  // Routing is optional: a failed identity read must not cost the reply preview.
-                  teammateBotId = (await readSessionNotificationPreview(sessionId, false).catch(() => undefined))?.teammateBotId;
                 }
                 if (finished || !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
                 await drainPersistQueue();
@@ -256,7 +260,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
                 } else {
                   detail = await latestMessageText(sessionId, 'assistant');
                 }
-              })(),
+              })(), routeRead]),
               new Promise<void>((resolve) => { timer = setTimeout(resolve, NOTIFICATION_PREVIEW_WAIT_MS); }),
             ]);
           } catch (err) {
