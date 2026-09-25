@@ -2763,6 +2763,7 @@ export function createModelRoutingTransform(
   frozenAuthInjection?: CodexProxyAuthInjection,
   frozenCustomProviderRoutes?: readonly CodexCustomProviderRoute[],
   sourceHostAlive: () => boolean = () => true,
+  onCrossProviderChildAuthorized?: (ctx: RequestTransformCtx) => void,
 ): RoutingTransform {
   return (body, ctx) => {
     const inheritedPath = parseCodexCustomProviderPath(ctx.url);
@@ -2794,20 +2795,23 @@ export function createModelRoutingTransform(
             : resolveCodexCustomProviderRoutingDecision(transformed, ctx, frozenCustomProviderRoutes);
           return Promise.resolve(decision).then((resolved) => {
             if (!resolved || !current()) return unresolvedCollabSpawnRouteDecision();
+            const useProviderTransforms = crossesProvider && Boolean(onCrossProviderChildAuthorized);
+            if (useProviderTransforms) onCrossProviderChildAuthorized!(ctx);
             return {
               ...(crossesProvider ? { pathOverride: '/responses' } : {}),
               ...resolved,
               dispatchGenerationValid: () => current() && (resolved.dispatchGenerationValid?.() ?? true),
-              // Routing runs before the transform chain. Namespaced parent requests
-              // intentionally skip that chain; apply only the chosen child's identity.
-              transformRequestBody: async (raw, transformCtx) => {
+              // Cross-provider HTTP requests use the ordinary outbound chain exactly
+              // once. Never overwrite its wire model with the catalog identity afterward.
+              // Same-provider frozen namespaces keep their dedicated identity transform.
+              ...(useProviderTransforms ? {} : { transformRequestBody: async (raw, transformCtx) => {
                 const parsed: unknown = JSON.parse(raw.toString('utf8'));
                 const routed = createForcedSubagentRequestTransform()(parsed, ctx) ?? parsed;
                 const bytes = Buffer.from(JSON.stringify(routed));
                 return resolved.transformRequestBody
                   ? resolved.transformRequestBody(bytes, transformCtx)
                   : { body: bytes };
-              },
+              } }),
             } satisfies RoutingDecision;
           });
         }
@@ -3228,7 +3232,13 @@ async function createCodexProxyHandle(
   const execAdapter = createCodexResponsesCompatibilityAdapter();
   let alive = true;
   const pricing: XaiRequestPricing = new Map();
-  const route = createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, () => alive);
+  // requestCtx and transformCtx share this request-owned headers object. A weak
+  // identity marker cannot be forged by header values or leak into the next request;
+  // it also needs no settlement bookkeeping for cancelled/local-handler requests.
+  const crossProviderRequests = new WeakSet<Readonly<Record<string, string>>>();
+  const route = createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, () => alive,
+    ctx => { crossProviderRequests.add(ctx.headers); });
+  const frozenReasoning = createCustomProviderReasoningTransform(frozenCustomProviderRoutes);
   const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
     const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
       if (decision?.localHandler || !isXaiUpstream(decision?.upstreamOverride ?? '')
@@ -3248,15 +3258,19 @@ async function createCodexProxyHandle(
         // Namespaced Responses use a frozen Provider route. Preserve its native
         // fields and model. The dedicated transform below reconciles effort
         // against that same snapshot; ordinary session/catalog transforms stay out.
-        if (transform === normalizeResponsesToolItemIds) return transform;
-        const scoped: RequestTransform = (body, ctx) =>
-          isCodexCustomProviderNamespacePath(ctx.url) ? null : transform(body, ctx);
+        const scoped: RequestTransform = (body, ctx) => {
+          if (crossProviderRequests.has(ctx.headers)) {
+            return transform(body, { ...ctx, url: '/responses' });
+          }
+          return isCodexCustomProviderNamespacePath(ctx.url) && transform !== normalizeResponsesToolItemIds
+            ? null : transform(body, ctx);
+        };
         // Keep adapter rejection and request-state cleanup on ordinary routes.
         scoped.errorMode = transform.errorMode;
         scoped.onRequestSettled = transform.onRequestSettled;
         return scoped;
       },
-    ).concat(createCustomProviderReasoningTransform(frozenCustomProviderRoutes)),
+    ).concat((body, ctx) => crossProviderRequests.has(ctx.headers) ? null : frozenReasoning(body, ctx)),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);
