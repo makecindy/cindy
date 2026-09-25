@@ -20,6 +20,10 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { messages, recentWorkdirs, sessions } from '../../schema';
 import type { SessionRouteLock } from '../../sessionRouteLock';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
+import {
+  isSessionContextWindowBudgetCustomized,
+  readSessionContextWindowBudget,
+} from '../../../maker-host/session-context-budget-store.js';
 
 type SessionRouteLockMock = SessionRouteLock &
   MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
@@ -682,6 +686,32 @@ describe('local-db:sessions:update handler wiring', () => {
       effort: 'high',
       fast_mode: 0,
     });
+  });
+
+  it('rejects an out-of-range task context window budget instead of silently clearing it', async () => {
+    // 与隧道入口同口径：<1000 会被 normalize 变成 null（等于静默清掉用户预算），
+    // 超大值会被静默夹到上限；调用方却收到成功回包。宁可显式拒绝。
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 999 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 300_000.5 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 100_000_001 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+  });
+
+  it('persists null and an in-range task context window budget', async () => {
+    // 任务窗口预算不是会话列（没有 context_window_budget 列），而是 main 侧偏好文件里的
+    // 条目：这里读写它自己的 store（路径由 electron 的 userData mock 指到临时目录）。
+    await invokeUpdate('cc-local', { contextWindowBudget: 300_000 });
+    expect(readSessionContextWindowBudget('cc-local')).toBe(300_000);
+    expect(isSessionContextWindowBudgetCustomized('cc-local')).toBe(true);
+
+    await invokeUpdate('cc-local', { contextWindowBudget: null });
+    expect(readSessionContextWindowBudget('cc-local')).toBeNull();
+    expect(isSessionContextWindowBudgetCustomized('cc-local')).toBe(false);
   });
 
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {

@@ -1017,6 +1017,21 @@ describe('session runtime control wiring', () => {
     const liveUsageRead = setModel.indexOf('getSessionLastLiveUsage(sessionId)');
     expect(liveUsageRead).toBeGreaterThan(-1);
     expect(liveUsageRead).toBeLessThan(pressurePreflight);
+    // 预算必须在预检之前读到，且预检比较的目标窗口必须带预算：否则小预算任务会拿
+    // 目录默认大窗证明「有余量」，跳过冷启动核实和切换后的最终窗口校验，既有上下文
+    // 直接落进过载窗口（Greptile P1，2026-09-22）。
+    const budgetRead = setModel.indexOf('await readStoredSessionContextWindowBudget(sessionId)');
+    const targetWindowResolve = setModel.indexOf('const coldPiTargetContextWindow');
+    expect(budgetRead).toBeGreaterThan(-1);
+    expect(budgetRead).toBeLessThan(targetWindowResolve);
+    expect(targetWindowResolve).toBeLessThan(pressurePreflight);
+    expect(
+      setModel.slice(targetWindowResolve, pressurePreflight).includes('sessionContextWindowBudget'),
+    ).toBe(true);
+    // 预算只读一次，预检与后续的缩窗闸门共用同一个值（同一锁内不可能变化）。
+    expect(
+      setModel.split('await readStoredSessionContextWindowBudget(sessionId)').length - 1,
+    ).toBe(1);
     expect(setModel).toContain('set-model: skipped cold Pi window verification');
     expect(setModel).toContain('coldPiRouteWithoutLiveWindowCheck = true;');
     // 终态活进程核验必须同步跳过，否则只是换成 'Pi target runtime could not be verified'。

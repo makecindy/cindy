@@ -3506,6 +3506,15 @@ export class CodexAgent extends BaseAgent {
     let activeTurnModel: string | undefined = opts.model;
     let activeTurnContextLimit = this.deps.resolveModelContextLimit?.(opts.providerId, opts.model) ?? null;
     /**
+     * 任务级工作上下文预算（tokens）：host 已按目录上限与模型级上限收敛。
+     * 优先于模型级上限/目录默认；host 在预算变化时直接触发重建，不走热切。
+     */
+    let mutableContextWindowBudget: number | null =
+      typeof opts.contextWindowBudget === 'number' && Number.isSafeInteger(opts.contextWindowBudget)
+      && opts.contextWindowBudget > 0
+        ? opts.contextWindowBudget
+        : null;
+    /**
      * 本 turn 实际路由的 provider,与 activeTurnModel 同时快照。
      *
      * 不能用 opts.providerId: 它是**会话创建时**冻结的值,而 idle 会话可以热切 provider ——
@@ -4791,7 +4800,7 @@ export class CodexAgent extends BaseAgent {
         });
     const resolveCodexThreadContextWindow = this.deps.resolveCodexThreadContextWindow;
     const initialCustomContextWindow = !reviewMode
-      ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
+      ? mutableContextWindowBudget ?? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
       : null;
     const customContextCatalogIdentity = (
       model: string,
@@ -4809,14 +4818,17 @@ export class CodexAgent extends BaseAgent {
     const usesCustomContextHost = !opts.remoteHostId && initialCustomContextCatalogIdentity !== null;
     const resolveModelSwitchCatalogIdentity = async (
       newModel: string,
-      setOpts?: { providerId?: string | null },
+      setOpts?: { providerId?: string | null; contextWindowBudget?: number | null },
     ): Promise<string | null> => {
       const providerId = setOpts && Object.hasOwn(setOpts, 'providerId')
         ? setOpts.providerId
         : mutableProviderId;
+      const nextBudget = setOpts?.contextWindowBudget !== undefined
+        ? setOpts.contextWindowBudget
+        : mutableContextWindowBudget;
       const contextWindow = reviewMode
         ? null
-        : await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
+        : nextBudget ?? await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
       return customContextCatalogIdentity(newModel, contextWindow);
     };
     const modelSwitchRequiresRebuild = async (
@@ -6021,6 +6033,8 @@ export class CodexAgent extends BaseAgent {
 
     let customProviderThreadConfig: Record<string, unknown> = {};
     const currentContextLimit = (): number | null => {
+      // 任务级预算优先：本任务的工作窗口由用户显式选定，host 已收敛到目录上限内。
+      if (mutableContextWindowBudget !== null) return mutableContextWindowBudget;
       const limit = this.deps.resolveModelContextLimit?.(mutableProviderId, mutableCatalogModel ?? mutableModel);
       return typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
     };
@@ -13848,8 +13862,14 @@ export class CodexAgent extends BaseAgent {
       requiresModelSwitchRebuild: modelSwitchRequiresRebuild,
 
       // ── Phase 3: 运行时切换 (下一 turn 才生效, 内部已是 mutable 闭包) ──
-      async setModel(newModel: string, setOpts?: { providerId?: string | null }) {
+      async setModel(
+        newModel: string,
+        setOpts?: { providerId?: string | null; contextWindowBudget?: number | null },
+      ) {
         if (reviewMode) return;
+        if (setOpts?.contextWindowBudget !== undefined) {
+          mutableContextWindowBudget = setOpts.contextWindowBudget;
+        }
         if (await modelSwitchRequiresRebuild(newModel, setOpts)) {
           const error = new Error(
             'Codex model switch requires rebuilding the current session handle',

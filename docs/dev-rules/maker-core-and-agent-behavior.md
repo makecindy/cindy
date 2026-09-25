@@ -44,6 +44,44 @@ Pi 读取独立的设置页百分比，在每次启动或恢复任务时冻结�
 `Agent.continue()` 语义压缩续接。Cindy 只消费 Pi 的 `compaction_start`／`compaction_end` 事件做
 UI、usage 与 digest 投影，不再向 Pi 注入 host 自动 compact RPC。
 
+### 任务级窗口预算（分母）
+
+用户可以在单个任务上选择工作上下文窗口（tokens）：有效窗口 =
+`min(任务预算 ?? 模型级上限, 模型级上限, 目录 contextWindowMax)`，由
+`maker-host/model-context-settings.ts` 的 `resolveConfiguredContextWindow` 解析，经 start options
+（`StartSessionOptions.contextWindowBudget`）下发给引擎：Claude Code 落到
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS`／`CLAUDE_CODE_AUTO_COMPACT_WINDOW`，Pi 落到工作窗口与
+`compaction.reserveTokens` 的换算预算，Codex 落到 `model_context_window` 与 90% 压缩线。
+
+它是**分母**，与设置页的自动压缩阈值百分比（**分子／触发点**）正交：改变预算只改变「这个任务
+能用多大窗口」，不改变「在窗口的哪一点压缩」。任务预算不得越过目录声明的物理上限，也不得越过
+用户在同一路由上设过的模型级上限（两者取更紧者）；未自定义的任务完全跟随原判定（老任务零行为
+变化）。
+
+渲染层档位表（`shared/sessionContextWindowBudget.ts` 的 `buildContextWindowBudgetOptions`）给的是
+**模型默认档 + 占有效上限 25%/50%/100% 的比例档**（最多三档，超出时优先保留大比例）：比例档值按
+`round(基准 × 百分比)` 精确换算、不贴 K 网格，低于 `MIN_PERCENT_TIER_TOKENS`（200K）或与默认档
+重合的不出现；100% 档只在有效上限高于默认窗口时出现，保证「开满窗口」不丢。新增引擎或改档位规则时，
+不要退回「写死 256K/512K/1M」的固定阶梯——1.048M/1.05M 这类窗口会让固定档出现「1M 与 1.0M 并列」
+且档数涨到 4~5 档。
+
+档位表的**权威边界**来自 main（本地 `maker:get-context-window-bounds`／远程 device-link 同名 channel，
+被控端自己算）：查询必须携带**界面上正在显示的路由**（`{ agent, providerId, model }`）。同一引擎内换模型是
+延迟切换（发送边界才落库），期间会话行还是旧模型 —— 不带路由会被按旧行回答，档位表与显示值一起停在旧模型上
+（实测：262K 的模型切到 1M 的模型后仍显示 262K）。缓存键也必须含 `providerId`：同一模型跨来源的上限可能不同。
+
+落库后由 main 应用：空闲任务立即关 handle、下一条消息冷重建；回合中登记 pending，回合结束后生效。
+运行期真值仍以引擎上报为准（`sessions.context_window`／`context_window_runtime` 的快照口径不变，
+任务预算不参与快照覆盖）。切模时目标窗口同样按任务预算在**目标路由**上重新收敛，避免旧模型的收敛值
+被沿用。
+
+任务预算存在 main 侧偏好文件（`session-context-budget-store.ts` → owner 隔离 userData 下的
+`session-context-budget-prefs.json`，形如 `{ budgets: { "<sessionId>": tokens } }`，null／缺条目 = 跟随
+模型默认），**不是会话列**：它不影响会话行读取、不参与任何副本同步、也不需要数据库迁移，因此同一条库
+可以在不同版本的包之间自由切换。删除任务时清理条目；fork 时把条目复制给新任务（源未自定义则不动目标，
+新任务继续跟随模型默认而不是快照一个当时的默认值）。远程任务同样由**被控端**读自己的偏好文件并在
+`maker:get-context-window-bounds` 响应里回带（`budget` / `budgetCustomized`）。
+
 本机占用 ≥ 100%，或 host／bridge 自动 compact 已确定性失败（空摘要、compact 路径上的
 invalid-request 400）时，走
 `host-controlled rollover + model-controlled bounded retrieval`：host 关闭旧原生窗口、写交接并

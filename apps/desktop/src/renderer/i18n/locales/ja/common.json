@@ -9790,6 +9790,19 @@
     }
   },
   "ccAgent": {
+    "contextWindowBudget": {
+      "menuTitle": "このタスクのコンテキストウィンドウ",
+      "triggerLabel": "タスクのコンテキストウィンドウ、現在 {{window}}",
+      "menuHint": "このタスクのみ。次のメッセージから適用。",
+      "optionDefault": "モデル既定",
+      "optionPercent": "{{percent}}%",
+      "inputPrice": "入力 {{price}}/M",
+      "remoteUnsupported": "被制御デバイスのバージョンではこのタスクのコンテキストウィンドウを変更できません",
+      "remoteTightenOnly": "接続先の上限が読めないため、縮小方向のみ提示します。",
+      "readOnlyHint": "読み取り専用のタスクです。段階と価格帯は確認できますが、変更はできません。",
+      "shrinkWarning": "現在 {{used}} 使用中。小さいウィンドウにすると先に圧縮または切り替えが発生します。",
+      "saveFailed": "コンテキストウィンドウの保存に失敗しました"
+    },
     "agentStatus": {
       "readingMemory": "記憶を読んでいます…",
       "savingMemory": "記憶を保存しています…",

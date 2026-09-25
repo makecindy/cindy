@@ -173,7 +173,7 @@ import {
   resolveModelDefaultContextWindow,
 } from './catalog-to-descriptors.js';
 import { readModelContextLimit } from './model-context-limit-store.js';
-import { resolveDesktopModelContextProviderId } from './model-context-settings.js';
+import { resolveDesktopModelContextProviderId, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow } from './model-context-settings.js';
 import {
   prepareCodexCustomContextCatalog,
 } from './codex-custom-context-catalog.js';
@@ -211,6 +211,7 @@ import {
 } from './auto-review-model-router.js';
 import { ensureCurrentAccountProviderReadiness } from './account-provider-readiness-ensure.js';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
+import { normalizeContextWindowBudget } from '../../shared/sessionContextWindowBudget.js';
 import {
   armCodexHttpRecovery,
   clearCodexProxyAuthInjection,
@@ -2585,6 +2586,25 @@ export function getMaker(): Maker {
           }
           // 所有创建路径共用的派发边界,opts.providerId 此刻已是本次启动的终值。
           freezeSessionProviderAtStart(sessionId, opts.providerId);
+          // 任务级工作上下文预算：调用方（远程/IM/定时任务）显式带值时同样要按目录物理
+          // 上限与模型级上限重新收敛；未带则读本任务已保存的档位。都按未自定义处理时
+          // 不下发，引擎回退到模型级上限/目录默认（旧行为零变化）。
+          {
+            const explicitBudget = normalizeContextWindowBudget(opts.contextWindowBudget);
+            const requestedBudget = explicitBudget
+              ?? await readStoredSessionContextWindowBudget(sessionId);
+            if (requestedBudget !== null) {
+              const resolvedBudget = resolveConfiguredContextWindow(
+                getActiveCatalog(), opts.agentKind, opts.providerId, opts.model, requestedBudget,
+              );
+              if (resolvedBudget !== null) opts.contextWindowBudget = resolvedBudget;
+              else delete opts.contextWindowBudget;
+            } else {
+              // 调用方传了非法值且 DB 也没存过：不能把未收敛的值透传给引擎
+              // （引擎侧按「已收敛」信任，部分引擎甚至不做 >0 校验）。
+              delete opts.contextWindowBudget;
+            }
+          }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
           if (opts.agentKind === 'pi' && opts.thinkingEnabled === undefined) {
             const thinkingEnabled = getThinkingEnabledFromMemory(

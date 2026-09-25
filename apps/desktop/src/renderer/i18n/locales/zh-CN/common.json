@@ -9790,6 +9790,19 @@
     }
   },
   "ccAgent": {
+    "contextWindowBudget": {
+      "menuTitle": "任务上下文窗口",
+      "triggerLabel": "任务上下文窗口，当前 {{window}}",
+      "menuHint": "只影响本任务，下一条消息生效。",
+      "optionDefault": "模型默认",
+      "optionPercent": "{{percent}}%",
+      "inputPrice": "输入 {{price}}/M",
+      "remoteUnsupported": "被控设备版本不支持调整任务上下文窗口",
+      "remoteTightenOnly": "被控端上限不可用，这里只提供调小档。",
+      "readOnlyHint": "只读任务：可以查看档位与价带，但不能修改。",
+      "shrinkWarning": "当前已用 {{used}}，换到更小档位会先触发压缩或换窗。",
+      "saveFailed": "保存上下文窗口档位失败"
+    },
     "agentStatus": {
       "readingMemory": "正在读取记忆…",
       "savingMemory": "正在保存记忆…",
