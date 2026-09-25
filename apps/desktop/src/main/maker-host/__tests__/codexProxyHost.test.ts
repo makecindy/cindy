@@ -179,12 +179,14 @@ async function freshCodexProxyHost() {
 }
 
 // CI 忙时本文件首次 import SUT 要付 Vitest transform 整个模块图的冷启动钱:Linux 分片
-// 实测超默认 5s,Windows 分片超 15s,继续抬单测超时只是把死亡线后推。这笔成本属于环境
-// 冷启动,不属于任何断言 —— 文件级 beforeAll 先把模块图焐热(hook 超时独立计),之后各
-// 用例里 resetModules + import 只剩模块求值开销,回到默认超时内。
+// 实测超默认 5s,Windows 分片超 15s。满载 Windows shard 2/2 曾在 60s 文件级 hook
+// 上超时(本文件不 import maker-host/index,与产品改动无关)。这笔成本属于环境
+// 冷启动,不属于任何断言 —— 文件级 beforeAll 先把模块图焐热(hook 超时独立计;
+// Windows 给 120s,其它平台仍 60s),之后各用例里 resetModules + import 只剩模块
+// 求值开销,回到默认超时内。
 beforeAll(async () => {
   await import('../codex-proxy-host.js');
-}, 60_000);
+}, process.platform === 'win32' ? 120_000 : 60_000);
 
 
 /** 本地 403 拒绝的 localHandler:执行它并返回写出的状态码与响应体。 */
