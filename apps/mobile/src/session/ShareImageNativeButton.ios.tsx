@@ -1,10 +1,13 @@
 import { Host } from "@expo/ui";
-import { Button } from "@expo/ui/swift-ui";
+import { Button, Label } from "@expo/ui/swift-ui";
 import {
   disabled,
+  controlSize,
+  font,
+  foregroundStyle,
   frame,
 } from "@expo/ui/swift-ui/modifiers";
-import { useTheme } from "@/theme";
+import { typeScale, useTheme } from "@/theme";
 import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import type { ShareImageNativeButtonProps } from "./ShareImageNativeButton";
 
@@ -21,18 +24,26 @@ export function ShareImageNativeButton(props: ShareImageNativeButtonProps) {
       style={{ flexShrink: 0 }}
     >
       <Button
-        label={props.label}
-        systemImage="square.and.arrow.up"
         testID="session.shareImage.share"
         onPress={() => {
           if (!props.disabled) props.onPress();
         }}
         modifiers={[
           ...glassStyle,
+          controlSize("large"),
           frame({ minWidth: 112, minHeight: 44 }),
           disabled(props.disabled),
         ]}
-      />
+      >
+        <Label
+          title={props.label}
+          systemImage="square.and.arrow.up"
+          modifiers={[
+            font({ size: typeScale.body, weight: "medium" }),
+            foregroundStyle(colors.ctaText),
+          ]}
+        />
+      </Button>
     </Host>
   );
 }

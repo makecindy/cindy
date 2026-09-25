@@ -2,6 +2,11 @@ import { redactSensitiveText } from "@cindy/maker-shared/error-redaction";
 
 import { i18n } from "@/i18n";
 import {
+  conservativeArialGlyphWidthEm,
+  layoutConversationShareRichBody,
+  type ShareSvgRect,
+} from "@/session/conversationShareRichSvg";
+import {
   parseMobileMarkdown,
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
@@ -22,6 +27,10 @@ const MAX_OUTPUT_PIXELS = 12_000_000;
 const DEFAULT_EXPORT_SCALE = 2;
 
 export interface ConversationShareSvgTextBlock {
+  bold?: boolean;
+  italic?: boolean;
+  monospace?: boolean;
+  decoration?: "underline" | "line-through";
   color: string;
   fontSize: number;
   lineHeight: number;
@@ -31,6 +40,7 @@ export interface ConversationShareSvgTextBlock {
 }
 
 export interface ConversationShareSvgBubble {
+  rectangles?: ShareSvgRect[];
   fill?: string;
   height: number;
   stroke?: string;
@@ -167,6 +177,37 @@ export function buildConversationShareSvgLayout({
         );
       }
     }
+    let needsRedaction = false;
+    const bodyParts = conversationShareBodyParts(message, () => {
+      needsRedaction = true;
+    });
+    // Preserve the existing whole-message redaction path for secrets spanning
+    // formatting, paragraphs or images. Never redact isolated styled runs.
+    if (!needsRedaction && bodyParts.length > 0) {
+      const paddingY = user ? 12 : 4;
+      const body = layoutConversationShareRichBody(
+        message,
+        colors,
+        bubbleX + horizontalPadding,
+        cursorY + paddingY,
+        textWidth,
+      );
+      const height = Math.max(user ? 44 : 30, body.height + paddingY * 2);
+      bubbles.push({
+        x: bubbleX,
+        y: cursorY,
+        width: bubbleWidth,
+        height,
+        fill: user ? colors.surfaceElevated : undefined,
+        stroke: user ? colors.textSecondary : undefined,
+        textBlocks: body.textBlocks,
+        rectangles: body.rectangles,
+      });
+      images.push(...body.images);
+      cursorY += height + MESSAGE_GAP;
+      previousIndex = currentIndex;
+      continue;
+    }
     const blocks: Array<
       | { image: ConversationShareImage }
       | {
@@ -177,7 +218,7 @@ export function buildConversationShareSvgLayout({
         }
     > = [];
 
-    for (const part of conversationShareBodyParts(message)) {
+    for (const part of bodyParts) {
       if ("image" in part) blocks.push(part);
       else
         blocks.push({
@@ -251,6 +292,7 @@ type ShareBodyPart = { text: string } | { image: ConversationShareImage };
 /** Traverse occurrences, using the source map only to look up decoded bytes. */
 function conversationShareBodyParts(
   message: ConversationShareMessage,
+  onRedaction?: () => void,
 ): ShareBodyPart[] {
   const parts: ShareBodyPart[] = [];
   const append = (part: ShareBodyPart) => {
@@ -278,6 +320,7 @@ function conversationShareBodyParts(
   const redacted = redactSensitiveText(fullText);
   let safeParts = parts;
   if (redacted !== fullText) {
+    onRedaction?.();
     safeParts = [];
     let sourceOffset = 0;
     let safeOffset = 0;
@@ -417,23 +460,4 @@ export function wrapSvgText(
     lines.push(line.trimEnd());
   }
   return lines.length > 0 ? lines : [""];
-}
-
-function conservativeArialGlyphWidthEm(character: string): number {
-  // react-native-svg does not expose synchronous glyph measurement while this
-  // pure layout is built. These Arial-like buckets intentionally round wide
-  // glyphs up so an exported line wraps early instead of being clipped.
-  if (character === " ") return 0.33;
-  if (character.codePointAt(0)! > 0x7f) return 1;
-  if (character === "@") return 1.05;
-  if ("W%".includes(character)) return 1;
-  if ("Mm".includes(character)) return 0.9;
-  if ("CGOQw".includes(character)) return 0.82;
-  if ("ABDGHKNRUVXY&".includes(character)) return 0.75;
-  if ("EFLPSTZ".includes(character)) return 0.68;
-  if ("0123456789#?$+=<>^_~abdeghnopqu".includes(character)) return 0.62;
-  if ("Jckrsvxyz".includes(character)) return 0.55;
-  if ("(){}[]ft*".includes(character)) return 0.4;
-  if (`!"',.:;\`il|/\\-`.includes(character)) return 0.36;
-  return 0.68;
 }
