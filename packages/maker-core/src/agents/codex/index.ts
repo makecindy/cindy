@@ -14741,7 +14741,7 @@ assertRouteCurrent();
       const forkSqliteHome = forkStorage?.sqliteHome;
       let forkCodexHome: string | undefined;
       let forkDispatched = false;
-      const { host, resp, usedNativeForkAnchor } = await (async () => {
+      const { host, resp, initResp, usedNativeForkAnchor } = await (async () => {
         for (let attempt = 0; ; attempt++) {
           forkRouteSignal.throwIfAborted();
           const selection = await this.resolveLocalAuthSelection(opts.providerId, opts.model ?? '');
@@ -14821,7 +14821,7 @@ assertRouteCurrent();
                 forkDispatched = true;
               },
             });
-            return { host, resp, usedNativeForkAnchor };
+            return { host, resp, initResp, usedNativeForkAnchor };
           } catch (error) {
             if (!forkDispatched && error instanceof CodexRouteSelectionChangedError && !forkRouteSignal.aborted) {
               await retireForkHost(true);

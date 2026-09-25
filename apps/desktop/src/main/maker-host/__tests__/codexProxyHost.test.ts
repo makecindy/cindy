@@ -8209,7 +8209,7 @@ describe('official Subagents on external credential Hosts', () => {
       const parentRoutes = [{
         providerId: 'external-fixture', routeId: 'aaaaaaaaaaaaaaaaaaaa', modelProviderId: 'fixture',
         capabilities: {}, responseModels: ['custom-parent-model'], credentialRevision: 0,
-        routing: { upstream: 'https://example.invalid', authStrategy: 'api-key-header' as const }, responseRoutingByModel: {},
+        routing: { upstream: 'https://example.invalid', authStrategy: 'api-key-header' as const }, responseRoutingByModel: {}, responseEffortsByModel: {},
       }];
       const transform = host.createModelRoutingTransform(mode as 'env-key' | 'provider-oauth', parentRoutes);
       await transform({ model: 'custom-parent-model' }, {

@@ -24,6 +24,7 @@ import { createMakerSendTransaction, type MakerSendTransactionDeps } from '../..
 import { acquireSendToSessionLock, withSendToSessionLock } from '../../maker-ipc/sendToSessionLock.js';
 import type { IpcHandler } from '../../maker-ipc/ipcHandlerRegistry.js';
 import { MAKER_INVOKE } from '../../maker-ipc/channels.js';
+import { createSharedTaskSettingGuard } from '../../maker-ipc/sharedTaskSetting.js';
 
 // Execute the full production closures, not copied branches or source assertions.
 // Electron ingress, owner, catalog metadata and UI broadcasts are fixture inputs;
@@ -63,6 +64,8 @@ export function createCodexPickerHarness(input: {
   const env: Record<string, unknown> = {
     ...providers, ...efforts, ...routeGuard, ...control, ...axes, ...relink, ...windowGate, ...overflow,
     maker, sessions, eq, log, agentSwitchPending: pending,
+    // Ordinary local picker has no shared-task invocation context.
+    captureSharedTaskSettingGuard: (id: string) => createSharedTaskSettingGuard(undefined, id, { admitted: false }),
     normalizeDeviceLinkSetModelWireArgs, applyRuntimeSetModelChange, CredentialModeSwitchBusyError,
     projectPendingAgentSwitchIntent, acquireSendToSessionLock, withSendToSessionLock, applyPendingAgentSwitchIfIdle,
     getDbClient: () => db, getCurrentDbClientSnapshot: () => ({ client: db, clientEpoch: 1 }),
