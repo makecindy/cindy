@@ -32,11 +32,16 @@ import {
 const log = createLogger('plugin-market-ipc');
 let registered = false;
 const REMOVAL_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:removal-notice-available';
+const UPDATE_CONSENT_HOLDS_CHANGED_CHANNEL = 'plugin-market:update-consent-holds-changed';
 const localIconRequestGate = new LocalIconRequestGate();
 
 function signalRemovalNoticeAvailable(): void {
   if (!service().hasPendingRemovalNotice()) return;
   sendToTrustedAppWindows(REMOVAL_NOTICE_AVAILABLE_CHANNEL, undefined);
+}
+
+function signalUpdateConsentHoldsChanged(): void {
+  sendToTrustedAppWindows(UPDATE_CONSENT_HOLDS_CHANGED_CHANNEL, undefined);
 }
 
 async function snapshotAndSignalRemovalNotice(options?: PluginMarketSnapshotOptions) {
@@ -130,6 +135,7 @@ export function registerPluginMarketIpc(): void {
     return invokePluginMarket(() =>
       snapshotAndSignalRemovalNotice({
         deferReconciliation: true,
+        onConsentHoldsChanged: signalUpdateConsentHoldsChanged,
       }),
     );
   });

@@ -366,6 +366,11 @@ export interface PluginMarketSnapshotOptions {
   onDeferredReconciliationSettled?: () => void;
   /** Main-only completion signal; it is not part of the Renderer snapshot. */
   onDefaultReconciliationOutcome?: (outcome: 'completed' | 'failed') => void;
+  /**
+   * 后台对账新记下「需确认新权限」hold 后通知。扩权暂停不改已装插件，
+   * 没有 ghosts:changed，Renderer 目录要靠这次信号立刻重投影。
+   */
+  onConsentHoldsChanged?: () => void;
 }
 
 /**
@@ -642,6 +647,7 @@ export class PluginMarketService {
     string,
     { releaseKey: string; contentKey: string }
   >();
+  private consentHoldsChangedListener: (() => void) | null = null;
   /**
    * Renderer 把 customIconKey 当不可变缓存 generation。每次重新投影市场都换代，
    * 使低精度文件系统上的同长度、同 stat 原地改写也会在刷新后重新按需读取。
@@ -713,7 +719,10 @@ export class PluginMarketService {
     releaseKey: string,
     contentKey: string,
   ): void {
+    const held = this.automaticUpgradeConsentHolds.get(retryKey);
+    if (held?.releaseKey === releaseKey && held.contentKey === contentKey) return;
     this.automaticUpgradeConsentHolds.set(retryKey, { releaseKey, contentKey });
+    this.consentHoldsChangedListener?.();
   }
 
   /**
@@ -786,6 +795,9 @@ export class PluginMarketService {
         };
       }
       return this.snapshotPublicCatalogWithoutOwner();
+    }
+    if (options.onConsentHoldsChanged) {
+      this.consentHoldsChangedListener = options.onConsentHoldsChanged;
     }
     const iconProjectionGeneration = this.nextCustomIconProjectionGeneration();
     const customSourceNames = this.customSourceNamesSafe(owner);

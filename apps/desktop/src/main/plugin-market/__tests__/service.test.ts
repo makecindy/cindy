@@ -4964,6 +4964,33 @@ describe('PluginMarketService install consent', () => {
     expect(h.ledger.installationForGhost('cindy-test')).toMatchObject({ releaseId: 'release-1' });
   });
 
+  it('notifies after deferred reconciliation records a new consent hold', async () => {
+    const { h } = upgradeFixture({ nextCapabilities: ['notify', 'fs'] });
+    const onConsentHoldsChanged = vi.fn();
+
+    const first = await h.service.snapshot({
+      deferReconciliation: true,
+      onConsentHoldsChanged,
+    });
+    expect(first.items[0]).toMatchObject({ installState: 'update-available' });
+    expect(first.items[0]?.updateRequiresConsent).not.toBe(true);
+
+    await vi.waitFor(() => expect(onConsentHoldsChanged).toHaveBeenCalledOnce());
+  });
+
+  it('does not notify again when deferred reconciliation finds an existing consent hold', async () => {
+    const { h } = upgradeFixture({ nextCapabilities: ['notify', 'fs'] });
+    await h.service.snapshot();
+    const onConsentHoldsChanged = vi.fn();
+
+    await h.service.snapshot({
+      deferReconciliation: true,
+      onConsentHoldsChanged,
+    });
+    await vi.waitFor(() => expect(h.api.download).toHaveBeenCalledTimes(1));
+    expect(onConsentHoldsChanged).not.toHaveBeenCalled();
+  });
+
   it('keeps silent background updates when permissions do not grow', async () => {
     const { h } = upgradeFixture({});
 

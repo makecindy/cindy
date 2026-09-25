@@ -578,6 +578,11 @@ export function GhostPluginPage({
   const refreshMarketOnForeground = useCallback(() => refreshMarket(true), [refreshMarket]);
   usePluginMarketForegroundRefresh(refreshMarketOnForeground, lastMarketRefreshAtRef);
   useEffect(() => {
+    return window.electronAPI.pluginMarket.onUpdateConsentHoldsChanged(() => {
+      void refreshMarket(true).catch(() => undefined);
+    });
+  }, [refreshMarket]);
+  useEffect(() => {
     if (installedGhostMarketKeyRef.current === installedGhostMarketKey) return;
     installedGhostMarketKeyRef.current = installedGhostMarketKey;
     // 已装集合或版本变化(装/卸/后台更新)时刷新市场;排序是反应式的。
