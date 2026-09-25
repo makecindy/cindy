@@ -152,7 +152,7 @@ function CompanionPrivateTrace({ deviceId, meta }: { deviceId: string; meta: Bot
         {({ pressed }) => (
           <View style={[styles.traceAction, pressed && mobileInteractionStyles.pressed]}>
             {peer ? <RemoteCompanionAvatar avatar={peer.display.avatar} deviceId={deviceId} name={peerName}
-              online={status === 'online' && getPresenceAvailability(deviceId) !== false} size={iconSize.md} /> : null}
+              online={status === 'online' && getPresenceAvailability(deviceId) !== false} size={iconSize.md} framed /> : null}
             <ArrowLeftRight size={iconSize.xs} color={colors.textTertiary} />
             <Text numberOfLines={2} style={[styles.note, styles.traceLabel]}>
               {t(meta.direction === 'sent' ? 'devices.companions.sentTo' : 'devices.companions.receivedFrom', { name: peerName })}

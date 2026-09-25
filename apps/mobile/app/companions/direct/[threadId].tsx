@@ -61,7 +61,7 @@ export default function CompanionDirectMessages() {
       {messages.map((message) => {
         const ownSide = message.senderBotId === botId;
         const sender = participant(message.senderBotId, message.senderBotName);
-        const avatar = <RemoteCompanionAvatar avatar={sender.avatar} deviceId={deviceId} name={sender.name} online={online} size={AVATAR_SIZE} />;
+        const avatar = <RemoteCompanionAvatar avatar={sender.avatar} deviceId={deviceId} name={sender.name} online={online} size={AVATAR_SIZE} framed />;
         return <View key={message.id} style={[styles.row, ownSide ? styles.rowOwn : styles.rowPeer]} testID={`companion.directMessage.${ownSide ? 'own' : 'peer'}`}>
           {!ownSide ? avatar : null}
           <View style={[styles.column, ownSide ? styles.columnOwn : styles.columnPeer]}>

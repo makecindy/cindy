@@ -5627,7 +5627,7 @@ export default function SessionScreen() {
   // resource object, so unrelated resource refreshes do not re-render every reply row.
   const companionPortrait = useCallback((size: number) => companionAvatarData
     ? <RemoteCompanionAvatar avatar={companionAvatarData} deviceId={deviceId} name={companionName}
-      online={companionOnline} size={size} /> : undefined,
+      online={companionOnline} size={size} framed /> : undefined,
   [companionAvatarData?.kind, companionAvatarData?.value, companionAvatarData?.color, companionAvatarData?.fallbackText,
     companionName, companionOnline, deviceId]);
   const companionReplyAvatar = useMemo(() => companionChat ? companionPortrait(COMPANION_AVATAR_SIZE) : undefined,
