@@ -2793,6 +2793,83 @@ describe('local Codex account display identity', () => {
 });
 
 describe('deferred Codex OAuth dispatch proof', () => {
+  it('matches the real HTTP reader account contract without widening workspace identity', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-http-account-proof-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'data');
+    h.dataOwnerId = 'http-reader-owner';
+    vi.spyOn(os, 'homedir').mockReturnValue(path.join(root, 'home'));
+    const home = path.join(h.userDataDir, 'codex-home');
+    fs.mkdirSync(home, { recursive: true });
+    const authPath = path.join(home, 'auth.json');
+    const accessToken = idToken({ exp: Math.floor(Date.now() / 1000) + 3600, sub: 'same-user' });
+    const workspaceToken = (workspace: string) => idToken({
+      sub: 'same-user', 'https://api.openai.com/auth': { chatgpt_account_id: workspace },
+    });
+    const write = (tokens: { account_id?: string; id_token?: string }) => {
+      const raw = JSON.stringify({ tokens: { access_token: accessToken, ...tokens } });
+      fs.writeFileSync(authPath, raw);
+      return raw;
+    };
+    const { bindNativeProviderAuth } = await import('../nativeProviderAuthBinding.js');
+    const { desktopCodexAuthAdapter: adapter } = await import('../auth-adapters.js');
+    const reader = await import('../anthropic-responses-bridge-host.js');
+    const proxy = await import('../codex-proxy-host.js');
+    proxy.setCodexSubagentOAuthReader(reader.getChatgptBridgeAuthForDispatch);
+    proxy.registerComposed('http-parent', 'http-parent-thread', 'fixture', {
+      subagentRoute: { providerId: 'openai', catalogModel: 'gpt-5.4', reasoningEffort: 'high' },
+    });
+    const transform = proxy.createModelRoutingTransform('env-key', []);
+    const context = { reqId: 1, method: 'POST', url: '/responses', headers: {
+      'thread-id': 'http-child', 'x-openai-subagent': 'collab_spawn',
+      'x-codex-parent-thread-id': 'http-parent-thread',
+    } };
+    try {
+      for (const { tokens, header, workspace } of [
+        { tokens: { account_id: 'explicit', id_token: workspaceToken('other') }, header: 'explicit', workspace: 'explicit' },
+        { tokens: { id_token: workspaceToken('workspace-a') }, header: 'workspace-a', workspace: 'workspace-a' },
+        { tokens: { id_token: idToken({ sub: 'same-user' }) }, header: 'same-user', workspace: null },
+        { tokens: { id_token: idToken({}) }, header: null, workspace: null },
+        { tokens: {}, header: null, workspace: null },
+      ]) {
+        const raw = write(tokens);
+        bindNativeProviderAuth('openai', { instanceIsolated: true });
+        reader.clearChatgptBridgeCredentialCache();
+        expect((await reader.getChatgptBridgeAuth()).accountId).toBe(header);
+        await expect(adapter.getAccountId()).resolves.toBe(workspace);
+        const auth = await reader.getChatgptBridgeAuthForDispatch();
+        expect(auth.accountId).toBe(header);
+        expect(auth.canDispatch()).toBe(true);
+        const decision = await transform({ model: 'gpt-5.4' }, context);
+        expect(decision?.headerOverride?.authorization).toBe(`Bearer ${accessToken}`);
+        expect(decision?.headerOverride?.['chatgpt-account-id'] ?? null).toBe(header);
+        if (header === null) expect(decision?.headerDelete).toContain('chatgpt-account-id');
+        expect(decision?.dispatchGenerationValid?.()).toBe(true);
+        expect(fs.readFileSync(authPath, 'utf8')).toBe(raw);
+      }
+
+      // Same subject AND access token: only the workspace changes. Do not clear
+      // the reader cache; the stale HTTP identity must fail proof and be reread.
+      write({ id_token: workspaceToken('workspace-a') });
+      const a = await reader.getChatgptBridgeAuthForDispatch();
+      const oldDecision = await transform({ model: 'gpt-5.4' }, context);
+      write({ id_token: workspaceToken('workspace-b') });
+      expect(a.canDispatch()).toBe(false);
+      expect(oldDecision?.dispatchGenerationValid?.()).toBe(false);
+      const b = await reader.getChatgptBridgeAuthForDispatch();
+      expect(b.accountId).toBe('workspace-b');
+      expect(b.canDispatch()).toBe(true);
+      const nextDecision = await transform({ model: 'gpt-5.4' }, context);
+      expect(nextDecision?.headerOverride?.['chatgpt-account-id']).toBe('workspace-b');
+      expect(nextDecision?.dispatchGenerationValid?.()).toBe(true);
+      proxy.unregister('http-parent');
+      expect(nextDecision?.dispatchGenerationValid?.()).toBe(false);
+    } finally {
+      proxy.unregister('http-parent');
+      reader.clearChatgptBridgeCredentialCache();
+    }
+  });
+
   it('binds an independent account child to its real credential and authorization record', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-multi-reader-'));
     dirs.push(root);

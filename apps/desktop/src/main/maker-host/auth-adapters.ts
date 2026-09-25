@@ -267,6 +267,14 @@ export function chatgptAccountIdFromIdToken(idToken: string): string | null {
   return typeof sub === 'string' && sub.length > 0 ? sub : null;
 }
 
+/** HTTP header identity only; workspace/recovery checks must keep the strict parser. */
+export function chatgptAccountIdFromTokens(
+  tokens: { account_id?: unknown; id_token?: unknown } | undefined,
+): string | null {
+  if (typeof tokens?.account_id === 'string' && tokens.account_id.length > 0) return tokens.account_id;
+  return typeof tokens?.id_token === 'string' ? chatgptAccountIdFromIdToken(tokens.id_token) : null;
+}
+
 /**
  * Codex 一次性轻任务（起会话标题 oneShot）直连 ChatGPT 后端所需的凭证。
  * 读 xdt-maker 自管 codex-home 的 auth.json：`tokens.access_token` 作 Bearer、`account_id`
@@ -1733,8 +1741,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (!credentialGeneration || !authorizationGeneration || authorizationGeneration === 'null') return null;
     try {
       const raw = fs.readFileSync(authPath, 'utf8');
-      const auth = JSON.parse(raw) as { tokens?: { access_token?: string } };
-      if (auth.tokens?.access_token !== accessToken || codexAccountIdFromAuthJson(raw) !== accountId) return null;
+      const auth = JSON.parse(raw) as { tokens?: { access_token?: unknown; account_id?: unknown; id_token?: unknown } };
+      if (auth.tokens?.access_token !== accessToken || chatgptAccountIdFromTokens(auth.tokens) !== accountId) return null;
     } catch {
       return null;
     }
