@@ -69,6 +69,19 @@ Mobile 未新增卡片入口。服务端无需改动。
 
 ## 手机首页会话活动快照
 
+### 可见历史优先读取
+
+`local-db:messages:view` 的可选 `{ lazyDetails: true }` 启用轻量历史投影：
+被控 Desktop 先读取分组所需字段，再只按 ID 读取本页可见正文和卡片。
+隐藏子代理记录通过 `messages.deferred` 保存范围，展开后由既有
+`local-db:messages:work-details` 分页读取；可选 `parentToolUseId` 限制到该子代理及其后代，
+不会顺带加载同一时间段的其它子代理。摘要可携带轻量文件产物候选及排除信息，
+文件卡原有的存在性、时间窗与权限校验不变。媒体和文档交付仍保留原始可见来源。
+
+旧控制端不请求该选项，收到原有投影；旧主机忽略选项，新控制端继续兼容原投影和原有
+raw history 降级。任务列表活动推送不变，当前轮的正文、工具卡和可见进度继续实时更新。
+没有新增 channel、relay 类型、数据库 schema 或 Mobile 原生依赖，云端无需改动。
+
 现有 `maker:list-active` 的可选 `{ summary: true }` 响应在运行标记之外增加
 `activityPhase` / `activityAttention` 两个可选字段。被控端从现有会话活动投影提供这两个
 状态字段；活动服务已就绪但该会话不在活动账本中时，明确返回 `idle` / `false`，不下发活动正文。

@@ -1,6 +1,7 @@
 import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 export { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 import { placeBotTaskCardsAfterIntroduction } from '@cindy/maker-shared/botCollaboration';
+import { describeToolUse, sourcePathCandidatesFromDescriptor } from '@cindy/maker-shared/tool-use-descriptor';
 /**
  * MessageStream
  * ---------------------------------------------------------------------------
@@ -36,6 +37,7 @@ import {
   renderHistoryView,
   historyPrefetchThreshold,
   historyViewLeaves,
+  historyWorkSummaries,
 } from '@cindy/maker-shared/message-window';
 import {
   getRemoteHistoryView,
@@ -1451,6 +1453,7 @@ export function buildRenderItems(
     turnChangeSets?: readonly TurnChangeSetSummary[];
     /** Session working directory for opaque generated-file fallback chips. */
     workingDir?: string;
+    historyArtifacts?: readonly import('@cindy/maker-shared/message-window').HistoryFileArtifact[];
     /** Bot-owned Session: show newly created files as deliverables, not an engineering diff card. */
     botSessionId?: string;
     /** Reuse image Markdown extraction for completed assistant messages across stream batches. */
@@ -1812,10 +1815,40 @@ export function buildRenderItems(
     }
     const workingDir = opts?.workingDir ?? '';
     if (workingDir) {
+      const start = Date.parse(messages[lo]?.createdAt ?? '');
+      const end = Date.parse(messages[hi]?.createdAt ?? '');
+      const artifacts = (opts?.historyArtifacts ?? []).filter((artifact) => {
+        const time = Date.parse(artifact.createdAt);
+        return !(Number.isFinite(start) && time < start || Number.isFinite(end) && time >= end);
+      });
+      const editedPaths = new Set(artifacts.filter((file) => file.exclude && file.ready)
+        .map((file) => pathKey(resolveToolFilePath(file.path, workingDir))));
+      for (const artifact of artifacts) {
+        const path = resolveToolFilePath(artifact.path, workingDir);
+        const normalized = pathKey(path);
+        if (artifact.exclude) {
+          if (artifact.exclude === 'all' && artifact.ready) generatedByPath.delete(normalized);
+          continue;
+        }
+        if (artifact.source === 'command' && editedPaths.has(normalized)) continue;
+        if (exactPaths.has(normalized) && changeSets.length > 0) continue;
+        const previous = generatedByPath.get(normalized);
+        if (previous?.source === 'tool' && artifact.source === 'command') continue;
+        generatedByPath.set(normalized, { path, name: basename(path), source: artifact.source, ready: artifact.ready });
+      }
       for (const file of collectCachedGeneratedFiles(slice, workingDir)) {
         const normalized = pathKey(file.path);
         if (exactPaths.has(normalized) && changeSets.length > 0) continue;
         generatedByPath.set(normalized, file);
+      }
+      // Delivery tools stay as visible source rows. Preserve their existing
+      // intermediate-file suppression for paths produced by deferred tools too.
+      for (const message of slice) {
+        if (message.role !== 'tool_use') continue;
+        const descriptor = describeToolUse(message.toolName ?? '', message.toolInput);
+        for (const path of sourcePathCandidatesFromDescriptor(descriptor)) {
+          generatedByPath.delete(pathKey(resolveToolFilePath(path, workingDir)));
+        }
       }
     }
     const generatedFiles = [...generatedByPath.values()];
@@ -2816,10 +2849,11 @@ export function MessageStream({
           (row.isPendingPersist === true ||
             !!row.blockedByGhost ||
             !!row.localSendPrecedingClientIds),
-        build: (rows) => {
+        build: (rows, _streaming, historyArtifacts) => {
           // History chunks are freshly assembled arrays, not reusable source snapshots.
           const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
             historyWindowIncomplete: true,
+            historyArtifacts,
             workingDir,
             botSessionId: simplifiedBotConversation ? sessionId : undefined,
             markdownImageTargetCache: markdownImageTargetCacheRef.current,
@@ -2900,7 +2934,15 @@ export function MessageStream({
   );
   // subagent-model-chip: parentToolUseId(Agent/Task 行 id)→ 子代理模型,
   // 供 AgentActionsBlock 给 Agent/Task 行反查并渲染模型 chip。
-  const subagentModelByToolUseId = useMemo(() => buildSubagentModelMap(messages), [messages]);
+  const subagentModelByToolUseId = useMemo(() => {
+    const models = buildSubagentModelMap(messages);
+    for (const summary of historyWorkSummaries(historySnapshot?.items ?? [])) {
+      if (summary.parentToolUseId && summary.model && !models.has(summary.parentToolUseId)) {
+        models.set(summary.parentToolUseId, summary.model);
+      }
+    }
+    return models;
+  }, [messages, historySnapshot?.items]);
 
   // work-group pass:把最终回答前的工作过程折叠成 work_group,无最终回答时
   // 继续走旧的 tool_segment + thinking 折叠兼容路径。

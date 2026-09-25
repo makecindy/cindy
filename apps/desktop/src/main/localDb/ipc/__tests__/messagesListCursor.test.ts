@@ -79,6 +79,7 @@ vi.mock('../../../cindy-media/chatAttachments', () => ({
 }));
 vi.mock('../../client/current', () => ({
   getDbClient: () => ({ drizzle: h.db, query: h.query, tx: h.tx }),
+  getCurrentDbClientSnapshot: () => ({ client: { drizzle: h.db, query: h.query, tx: h.tx }, clientEpoch: 1 }),
 }));
 
 import {
@@ -174,6 +175,34 @@ function insertCostMessage(
 }
 
 describe('local-db:messages:list cursor', () => {
+  it('serves a lightweight SQLite view, hydrates visible text, then reads only the expanded subagent', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const insert = sqlite.prepare('INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    const add = (id: string, role: string, content: unknown, parent?: string) => insert.run(id, id, 's1', role,
+      JSON.stringify(content), role === 'tool_use' ? 'agent' : null,
+      parent ? JSON.stringify({ parentUuid: parent, model: 'actual-child-model' }) : null, Number(id));
+    add('0', 'user', 'Visible question');
+    add('1', 'tool_use', { toolName: 'Agent', toolUseId: 'agent', input: { description: 'Inspect' } });
+    for (let n = 2; n < 103; n++) add(String(n), 'thinking', { text: 'hidden '.repeat(1000), durationMs: 10 }, 'agent');
+    add('103', 'assistant', 'Visible answer');
+    registerMessageIpc();
+    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel }, () => h.handlers.get(channel)!({}, 's1', ...args));
+    const page = await invoke('local-db:messages:view', { lazyDetails: true }) as HistoryViewPage<HistoryMessageSource>;
+    expect(page.hasMore).toBe(false);
+    expect(JSON.stringify(page)).not.toContain('hidden ');
+    expect(JSON.stringify(page)).toContain('Visible answer');
+    const card = page.items.find((item) => item.type === 'messages' && item.deferred);
+    if (card?.type !== 'messages' || !card.deferred) throw new Error('Missing subagent');
+    expect(card.deferred).toMatchObject({ messageCount: 101, model: 'actual-child-model' });
+    const detail = await invoke('local-db:messages:work-details', card.deferred, {}) as HistoryDetailPage<HistoryMessageSource>;
+    expect(detail.messages.length).toBeGreaterThan(0);
+    expect(detail.messages.every((row) => (row.agentMeta as { parentUuid?: string })?.parentUuid === 'agent')).toBe(true);
+    expect(JSON.stringify(detail)).toContain('hidden ');
+    expect(await invoke('local-db:messages:view', { lazyDetails: true })).toEqual(page);
+    sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?').run(JSON.stringify({ text: 'edited '.repeat(1000), durationMs: 10 }), '2');
+    expect(await invoke('local-db:messages:view', { lazyDetails: true })).not.toEqual(page);
+  });
   it.each([101, MAX_HISTORY_SCAN_ROWS])('reads all %i live rows from a generated work reference', async (count) => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');

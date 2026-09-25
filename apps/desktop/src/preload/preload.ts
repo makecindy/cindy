@@ -5583,6 +5583,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:collaboration-settings:reset'),
     },
     messages: {
+      historyView: (sessionId: string, opts?: { before?: string | null; lazyDetails?: boolean }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:messages:view', sessionId, opts),
+      workDetails: (sessionId: string, ref: unknown, opts?: { after?: string | null }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:messages:work-details', sessionId, ref, opts),
       list: (
         sessionId: string,
         opts?: { limit?: number; before?: string; beforeTs?: number },

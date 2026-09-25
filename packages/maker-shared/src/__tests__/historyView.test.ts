@@ -85,6 +85,26 @@ describe('automatic process detail reading', () => {
 
 import { HistoryViewController } from '../historyViewController.js';
 import { renderHistoryView } from '../historyViewRender.js';
+
+it('does not bind subagent detail fetching to a desktop summary-only enclosing group', async () => {
+  const source = [row(0, 'user', 'Question'), row(1, 'tool_use', { toolName: 'Agent', toolUseId: 'toolu_a', input: {} }),
+    { ...row(2, 'thinking', 'Internal'), agentMeta: { parentUuid: 'toolu_a' } }, row(3, 'assistant', 'Answer')];
+  const details = vi.fn();
+  const view = new HistoryViewController<HistoryMessageSource>({
+    page: async () => ({ version: 1, items: projectHistoryView(source, false, true), hasMore: false, nextCursor: null }),
+    details, expanded: async () => undefined,
+  });
+  await view.refresh();
+  type Item = { ids: string[]; children?: Item[]; deferred?: unknown };
+  const rendered = renderHistoryView<HistoryMessageSource, Item>({ view, snapshot: view.getSnapshot(), liveMessages: [], streaming: false,
+    build: () => [{ ids: [], children: [{ ids: ['c1'] }] }],
+    structure: { placeholder: () => source[0], children: (item) => item.children, sourceIds: (item) => item.ids,
+      rebuild: (item, children, deferred) => ({ ...item, children, deferred }) },
+  });
+  expect(rendered[0].deferred).toBeUndefined();
+  expect(details).not.toHaveBeenCalled();
+  view.setActive(false);
+});
 import type { HistoryViewPage } from '../historyView.js';
 const ungroupedStructure = {
   placeholder: (summary: import('../historyView.js').HistoryWorkSummary) => ({ ...row(1, 'thinking', ''),

@@ -1,3 +1,4 @@
+import type { DeferredHistoryWork } from '@cindy/maker-shared/message-window';
 import {
   buildMessageRenderItems,
   extractTodosFromSourceMessage,
@@ -42,6 +43,8 @@ export type MobileWorkGroupItem = MessageRenderWorkGroupItem<NormalizedRemoteMes
  */
 export interface MobileSubagentGroupItem {
   type: 'subagent_group';
+  sourceClientId?: string;
+  deferred?: DeferredHistoryWork;
   key: string;
   header: { description: string | null; subagentType: string | null };
   /** 子 agent 内层 render items(递归,可含更深 subagent_group)。 */

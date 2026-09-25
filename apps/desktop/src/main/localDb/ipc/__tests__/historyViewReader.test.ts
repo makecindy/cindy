@@ -201,3 +201,54 @@ describe('history scan budget', () => {
     expect(base.list).toHaveBeenCalledTimes(1);
   });
 });
+
+
+describe('outline history reads', () => {
+  it('reads visible bodies first across thousands of interleaved subagent rows, then pages only the expanded agent', async () => {
+    const source = [row(0, 'user'),
+      { ...row(1, 'tool_use'), toolUseId: 'a', content: { toolName: 'Agent', input: { description: 'A' } } },
+      { ...row(2, 'tool_use'), toolUseId: 'b', content: { toolName: 'Agent', input: { description: 'B' } } },
+      ...Array.from({ length: 3000 }, (_, i) => ({ ...row(i + 3), agentMeta: { parentUuid: i % 2 ? 'b' : 'a' } })),
+      row(3003, 'assistant')];
+    const base = reader(source);
+    const outline = vi.fn(async (sid: string, opts: { before?: string; after?: string; limit: number }) =>
+      (await base.list(sid, opts)).map((item) => item.role === 'thinking' ? { ...item, content: { isRedacted: true } } : item));
+    const hydrate = vi.fn(async (_sid: string, ids: string[]) => source.filter((item) => ids.includes(item.id)));
+    const api = createHistoryViewReader({ list: base.list, outline, hydrate, running: () => true,
+      anchor: async (_sid, id) => source.find((item) => item.id === id)! });
+    const page = await api.page('s', undefined, true);
+    expect(page.hasMore).toBe(false);
+    expect(page.items.filter((item) => item.type === 'messages').flatMap((item) => item.messages.map((message) => message.id)))
+      .toEqual(['0', '1', '2', '3003']);
+    expect(hydrate.mock.calls.flatMap(([, ids]) => ids)).toEqual(['0', '1', '2', '3003']);
+    expect(outline).toHaveBeenCalledTimes(4);
+    const card = page.items.find((item) => item.type === 'messages' && item.deferred?.parentToolUseId === 'a');
+    if (card?.type !== 'messages' || !card.deferred) throw new Error('Missing lazy subagent');
+    hydrate.mockClear();
+    const received: string[] = [];
+    let after: string | undefined;
+    do {
+      const detail = await api.details('s', card.deferred, after);
+      received.push(...detail.messages.map((item) => item.id));
+      after = detail.nextCursor ?? undefined;
+    } while (after);
+    const expected = source.filter((item) => (item.agentMeta as { parentUuid?: string })?.parentUuid === 'a').map((item) => item.id);
+    expect(received).toEqual(expected);
+    expect(hydrate.mock.calls.flatMap(([, ids]) => ids).every((id) => expected.includes(id))).toBe(true);
+  });
+});
+
+it('uses database revisions for stable snapshots and invalidates same-size hidden edits', async () => {
+  const source = [row(0, 'user'), row(1), row(2, 'assistant')];
+  const base = reader(source);
+  let revision = 'first';
+  const api = createHistoryViewReader({ list: base.list, outline: base.list,
+    hydrate: async (_sid, ids) => source.filter((message) => ids.includes(message.id)),
+    anchor: async (_sid, id) => source.find((message) => message.id === id)!,
+    revision: async () => revision, running: () => false });
+  const initial = await api.page('s', undefined, true);
+  expect(await api.page('s', undefined, true)).toEqual(initial);
+  revision = 'edited';
+  source[1] = { ...source[1], content: 'changed' };
+  expect(await api.page('s', undefined, true)).not.toEqual(initial);
+});
