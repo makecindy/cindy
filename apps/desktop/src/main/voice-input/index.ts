@@ -1775,7 +1775,6 @@ async function createVoiceInputProvider(
       if (voiceContext) {
         return new VolcengineSaucAsrProvider({
           connectionProvider: () => voiceContext.createAsrConnection(provider),
-          sendAudioBeforeAck: !app.isPackaged && process.env.XDT_VOICE_EARLY_AUDIO === '1',
           resourceId: nativeConfig.resourceId,
           pcmSampleRate: nativeConfig.pcmSampleRate,
           sourceLanguage,
@@ -1876,7 +1875,6 @@ export async function transcribeVoiceInputAudioFile(
  */
 export function registerVoiceInputIpc(): void {
   registerVoiceInputDataStoreIpc();
-  void systemAudioMuteGuard.prewarm();
   if (!appRestoreRegistered) {
     appRestoreRegistered = true;
     app.once('before-quit', () => {

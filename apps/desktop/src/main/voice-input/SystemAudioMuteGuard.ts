@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 
 import { createLogger } from '../logger.js';
-import { macAudioMuteBackend, type NativeAudioSnapshot } from './MacAudioMuteBackend.js';
 
 const log = createLogger('voice-input:system-audio');
 
@@ -10,7 +9,6 @@ type AudioMuteOwner = number | 'remote-desktop';
 
 type AudioSnapshot = {
   outputMuted: boolean;
-  native?: NativeAudioSnapshot;
 };
 
 type LoudnessModule = {
@@ -19,8 +17,8 @@ type LoudnessModule = {
 };
 
 // loudness 在 Windows 上通过包内自带的 adjust_get_current_system_volume_vista_plus.exe
-// 调 Core Audio API 读/写系统输出 mute 状态。Mac 优先使用预热完成的原生 helper，
-// 未就绪或设备不支持时使用 osascript。Linux/其他平台静默 no-op。
+// 调 Core Audio API 读/写系统输出 mute 状态。Mac 仍走原有的 osascript（无新依赖、
+// 已验证稳定）。Linux/其他平台静默 no-op。
 //
 // 使用 lazy 动态 import 而非 top-level import 的原因:
 //   - packaged Mac 版本里我们刻意不打包 loudness（见 forge.config.ts 的
@@ -53,7 +51,7 @@ const SUPPORTS_MUTE = process.platform === 'darwin' || process.platform === 'win
  * voice-input sessions cannot restore audio until the last owner finishes.
  *
  * Platform support:
- *   - macOS:   native CoreAudio helper, with `osascript` fallback.
+ *   - macOS:   `osascript` set/get volume (no extra deps).
  *   - Windows: `loudness` npm package (ships a tiny native helper exe).
  *   - other:   no-op (graceful degradation).
  */
@@ -62,23 +60,17 @@ export class SystemAudioMuteGuard {
   private snapshot: AudioSnapshot | null = null;
   private tail: Promise<void> = Promise.resolve();
 
-  prewarm(): Promise<void> {
-    return macAudioMuteBackend.prewarm();
-  }
-
   async mute(ownerId: AudioMuteOwner): Promise<void> {
     if (!SUPPORTS_MUTE) return;
     await this.enqueue(async () => {
       if (this.owners.has(ownerId)) return;
       if (this.snapshot === null) {
-        this.snapshot = await muteOutputAndReadSnapshot((snapshot) => {
-          this.snapshot = snapshot;
-        });
+        this.snapshot = await muteOutputAndReadSnapshot();
         log.info('muted for voice input', { ownerId, wasMuted: this.snapshot.outputMuted });
       } else if (this.owners.size === 0) {
         // A rejected restore may still have reached the OS. Reassert mute for
         // the new owner without replacing the outstanding original snapshot.
-        await setOutputMuted(true, this.snapshot);
+        await setOutputMuted(true);
       }
       this.owners.add(ownerId);
     });
@@ -94,7 +86,7 @@ export class SystemAudioMuteGuard {
       // has ended. A later restore or mute cycle must retain that original state.
       const snapshot = this.snapshot;
       if (!snapshot) return;
-      await setOutputMuted(snapshot.outputMuted, snapshot);
+      await setOutputMuted(snapshot.outputMuted);
       this.snapshot = null;
       log.info('restored after voice input', { ownerId, muted: snapshot.outputMuted });
     });
@@ -106,7 +98,7 @@ export class SystemAudioMuteGuard {
       this.owners.clear();
       const snapshot = this.snapshot;
       if (!snapshot) return;
-      await setOutputMuted(snapshot.outputMuted, snapshot);
+      await setOutputMuted(snapshot.outputMuted);
       this.snapshot = null;
       log.info('restored all voice input owners', { muted: snapshot.outputMuted });
     });
@@ -125,16 +117,8 @@ export class SystemAudioMuteGuard {
 
 export const systemAudioMuteGuard = new SystemAudioMuteGuard();
 
-async function muteOutputAndReadSnapshot(
-  onSnapshot: (snapshot: AudioSnapshot) => void,
-): Promise<AudioSnapshot> {
+async function muteOutputAndReadSnapshot(): Promise<AudioSnapshot> {
   if (process.platform === 'darwin') {
-    let nativeSnapshot: AudioSnapshot | undefined;
-    const usedNative = await macAudioMuteBackend.mute((native) => {
-      nativeSnapshot = { outputMuted: native.outputMuted, native };
-      onSnapshot(nativeSnapshot);
-    });
-    if (usedNative && nativeSnapshot) return nativeSnapshot;
     const out = await runOsascript([
       'set wasMuted to output muted of (get volume settings)',
       'if wasMuted is false then set volume with output muted',
@@ -163,12 +147,8 @@ async function readOutputMuted(): Promise<boolean> {
   return false;
 }
 
-async function setOutputMuted(muted: boolean, snapshot?: AudioSnapshot): Promise<void> {
+async function setOutputMuted(muted: boolean): Promise<void> {
   if (process.platform === 'darwin') {
-    if (snapshot?.native) {
-      await macAudioMuteBackend.setMuted(snapshot.native, muted);
-      return;
-    }
     await runOsascript([
       muted ? 'set volume with output muted' : 'set volume without output muted',
     ]);

@@ -1499,23 +1499,6 @@ function buildMacXboxGamepadHelper(platform: ForgePlatform, arch: ForgeArch): vo
   fs.chmodSync(dest, 0o755);
 }
 
-function buildMacAudioMuteHelper(platform: ForgePlatform, arch: ForgeArch): void {
-  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
-  const src = path.join(__dirname, 'native', 'voice-input', 'macos-audio-mute-helper.swift');
-  const destDir = path.join(__dirname, 'resources', 'tools', 'voice-input');
-  const dest = path.join(destDir, 'cindy-macos-audio-mute-helper');
-  fs.mkdirSync(destDir, { recursive: true });
-  buildSwiftHelperForForgeArch(
-    src,
-    dest,
-    arch,
-    MACOS_VOICE_HELPER_DEPLOYMENT_TARGET,
-    [],
-    'audio mute helper',
-  );
-  fs.chmodSync(dest, 0o755);
-}
-
 function buildMacVoiceInputTextInsertionHelper(platform: ForgePlatform, arch: ForgeArch): void {
   if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
   const src = path.join(__dirname, 'native', 'voice-input', 'macos-text-insertion-helper.swift');
@@ -2028,7 +2011,6 @@ const config: ForgeConfig = {
       buildWindowsVoiceInputFunctionKeyListener(targetPlatform);
       buildMacIOSSimulatorHelper(platform, arch);
       buildMacVoiceInputTextInsertionHelper(platform, arch);
-      buildMacAudioMuteHelper(platform, arch);
       buildMacXboxGamepadHelper(platform, arch);
       buildWindowsGamepadHelper(platform, arch);
       buildWindowsAtomicRenameHelper(platform, arch);

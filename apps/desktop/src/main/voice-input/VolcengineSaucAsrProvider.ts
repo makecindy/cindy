@@ -20,8 +20,6 @@ type VolcengineSaucAsrProviderOptions = {
   sourceLanguage?: string;
   pcmSampleRate?: number;
   connectTimeoutMs?: number;
-  /** Experiment: send audio after the initial request, before the first ACK. */
-  sendAudioBeforeAck?: boolean;
   missingCredentialMessage?: string;
   errorFallbackMessage?: string;
 };
@@ -87,7 +85,6 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
   private readonly sourceLanguage: string;
   private readonly pcmSampleRate: number;
   private readonly connectTimeoutMs: number;
-  private readonly sendAudioBeforeAck: boolean;
   private readonly missingCredentialMessage: string;
   private readonly errorFallbackMessage: string;
   private socket?: WebSocket;
@@ -124,7 +121,6 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     this.pcmSampleRate = options.pcmSampleRate ?? DEFAULT_PCM_SAMPLE_RATE;
     this.soundActivity = new StopSoundActivity(this.pcmSampleRate);
     this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
-    this.sendAudioBeforeAck = options.sendAudioBeforeAck === true;
     this.missingCredentialMessage = options.missingCredentialMessage ?? 'API key is required for Volcengine SAUC ASR.';
     this.errorFallbackMessage = options.errorFallbackMessage ?? 'Volcengine SAUC transcription failed.';
   }
@@ -170,7 +166,6 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     this.attachSocketHandlers(socket);
     await new Promise<void>((resolve, reject) => {
       let settled = false;
-      let audioReleased = false;
       const cleanup = (): void => {
         clearTimeout(connectTimer);
         socket.off('open', onOpen);
@@ -204,10 +199,6 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
         });
         const error = new Error(`Volcengine SAUC ASR connection timed out after ${this.connectTimeoutMs}ms`);
         fail(error, true);
-        // Early audio does not waive protocol readiness or its timeout.
-        if (audioReleased && !this.stopRequested) {
-          this.callback({ type: 'error', message: error.message, at: Date.now() });
-        }
       }, this.connectTimeoutMs);
       const onOpen = (): void => {
         if (settled) return;
@@ -219,18 +210,6 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
         log.debug('websocket transport opened', { viaProxy: Boolean(agent), ...handshakeTiming.snapshot() });
         this.startKeepAlive();
         this.sendInitialRequest();
-        if (this.sendAudioBeforeAck) {
-          audioReleased = true;
-          this.connected = true;
-          this.started = true;
-          log.info('experimental early audio enabled', {
-            elapsedMs: Math.round(performance.now() - openStartedAt),
-            protocolReady: false,
-          });
-          // Release the controller/renderer buffer, retaining the ACK watchdog.
-          this.callback({ type: 'connected', at: Date.now() });
-          resolve();
-        }
       };
       const onError = (error: Error): void => {
         fail(error, false);
@@ -264,10 +243,9 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
           socketOpenMs: socketOpenedAt ? Math.round(socketOpenedAt - dialStartedAt) : undefined,
           firstResponseMs: socketOpenedAt ? Math.round(readyAt - socketOpenedAt) : undefined,
           totalMs: Math.round(readyAt - openStartedAt),
-          earlyAudio: audioReleased,
           transport: { viaProxy: Boolean(agent), ...handshakeTiming.snapshot() },
         });
-        if (!audioReleased) this.callback({ type: 'connected', at: Date.now() });
+        this.callback({ type: 'connected', at: Date.now() });
         resolve();
       };
       this.startReject = (error) => {
