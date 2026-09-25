@@ -22,8 +22,12 @@ import { cindyDeviceOptions } from '../cindyDeviceRoster';
 import type { BotProfile } from '../botStore';
 
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
-beforeAll(() => { HTMLElement.prototype.scrollIntoView = vi.fn(); });
-afterAll(() => { HTMLElement.prototype.scrollIntoView = originalScrollIntoView; });
+beforeAll(() => {
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+});
+afterAll(() => {
+  HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+});
 
 afterEach(cleanup);
 
@@ -34,11 +38,29 @@ it.each([true, false])(
     await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
     const options = cindyDeviceOptions(
       [{ id: 'cindy-default', name: 'Cindy', status: 'active' } as BotProfile],
-      [],
+      [
+        {
+          id: 'cindy-default',
+          deviceId: 'remote',
+          deviceName: 'Mac mini',
+          name: 'Cindy',
+          avatar: '',
+          avatarColor: '',
+          description: '',
+          preview: '',
+          activityAt: 0,
+          sessionId: 'remote-chat',
+          online: false,
+          lastReplyAt: 20,
+          readAt: 10,
+        },
+      ],
       [],
       {},
       'This Device',
     );
+    expect(options).toHaveLength(2);
+    const onSelect = vi.fn();
     render(
       <I18nextProvider i18n={i18n}>
         <CindyDeviceRow
@@ -48,9 +70,12 @@ it.each([true, false])(
           subtitle="Ready"
           timestamp="12:00"
           onOpen={vi.fn()}
-          onSelect={vi.fn()}
+          onSelect={onSelect}
         />
       </I18nextProvider>,
+    );
+    expect(screen.getByTestId('cindy-device-row').className).toContain(
+      selected ? 'bg-sidebar-item-active' : 'text-[var(--sidebar-nav-text)]',
     );
     const trigger = screen.getByRole('combobox');
     expect(trigger.className).toContain('text-inherit');
@@ -66,6 +91,9 @@ it.each([true, false])(
         ? 'hover:[--button-face-bg:color-mix(in_srgb,currentColor_10%,transparent)]'
         : 'hover:[--button-face-bg:var(--sidebar-item-hover)]',
     );
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Mac mini/ }));
+    expect(onSelect).toHaveBeenCalledWith(options[1]);
   },
 );
 
