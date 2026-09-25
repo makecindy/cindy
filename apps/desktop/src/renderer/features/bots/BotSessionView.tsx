@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, CircleAlert, RefreshCcw } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -8,6 +8,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import { getBotLastReadAt, markBotRead } from './botReadState';
+import { useBotProfiles } from './botStore';
 import type { BotChatIdentity } from './BotSessionContentHeader';
 import type { BotChatBinding } from './botChatPresentation';
 import { useBotIslandVisibleSession } from './useBotIslandVisibleSession';
@@ -80,6 +81,25 @@ function BotSessionGateView() {
   const [reloadVersion, setReloadVersion] = useState(0);
   const [gate, setGate] = useState<BotSessionGate>({ kind: 'loading' });
   useBotIslandVisibleSession(gate.kind === 'ready' ? sessionId ?? null : null);
+  // The gate proves ownership once; name and avatar edited in settings must
+  // still reach the open chat's header and composer.
+  const liveProfile = useBotProfiles().find((profile) => profile.id === botId);
+  const liveName = liveProfile?.name;
+  const liveAvatar = liveProfile?.avatar;
+  const liveAvatarColor = liveProfile?.avatarColor;
+  const gateIdentity = gate.kind === 'ready' ? gate.identity : null;
+  const identity = useMemo(
+    () =>
+      gateIdentity && liveName !== undefined
+        ? {
+            ...gateIdentity,
+            name: liveName,
+            avatar: liveAvatar ?? gateIdentity.avatar,
+            avatarColor: liveAvatarColor ?? gateIdentity.avatarColor,
+          }
+        : gateIdentity,
+    [gateIdentity, liveName, liveAvatar, liveAvatarColor],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -242,7 +262,7 @@ function BotSessionGateView() {
       <div className="min-w-0 flex-1">
         <CCAgentSessionView
           botMentions={gate.mentions}
-          botIdentity={gate.identity}
+          botIdentity={identity ?? gate.identity}
           botUnreadBoundaryAt={gate.unreadBoundaryAt}
         />
       </div>

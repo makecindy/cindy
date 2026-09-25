@@ -221,14 +221,23 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // a timeout is not a dedupe window and never causes a second late toast.
       void (async () => {
         let preview: SessionNotificationPreview | undefined;
+        // Only routes the phone to the teammate chat; titles and fallbacks stay per kind.
+        let teammateBotId: string | undefined;
         let postDrainPreviewReady = false;
         let detail: string | undefined;
         if (kind === 'done' || (kind === 'needs-reply' && channels?.mobile === true)) {
           let finished = false;
           let timer: ReturnType<typeof setTimeout> | undefined;
+          // Routing is optional: read it beside the reply so it never spends the
+          // preview's wait window, and a failed identity read costs nothing.
+          const routeRead = kind === 'needs-reply'
+            ? readSessionNotificationPreview(sessionId, false).then(
+              (identity) => { if (!finished) teammateBotId = identity.teammateBotId; },
+              () => undefined)
+            : undefined;
           try {
             await Promise.race([
-              (async () => {
+              Promise.all([(async () => {
                 if (kind === 'done') {
                   // Read the teammate identity first so a blocked write still
                   // has the correct fallback. This snapshot may predate the
@@ -238,6 +247,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
                   // message broadcaster. Keep only the teammate name here;
                   // an old event ID must never identify this completion.
                   preview = { teammateName: identity.teammateName };
+                  teammateBotId = identity.teammateBotId;
                 }
                 if (finished || !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
                 await drainPersistQueue();
@@ -250,7 +260,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
                 } else {
                   detail = await latestMessageText(sessionId, 'assistant');
                 }
-              })(),
+              })(), routeRead]),
               new Promise<void>((resolve) => { timer = setTimeout(resolve, NOTIFICATION_PREVIEW_WAIT_MS); }),
             ]);
           } catch (err) {
@@ -284,6 +294,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const mobileKey = replyNotificationKey(generation, sessionId, 'mobile');
         const feishuKey = replyNotificationKey(ownerKey, sessionId, 'feishu');
         const fallbackBody = teammate ? getTeammateNotificationFallback() : undefined;
+        const mobileTeammateBotId = preview?.teammateBotId ?? teammateBotId;
         if (wantDesktop && kind === 'done' && !wasReplyNotified(desktopKey, eventId)) {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
@@ -302,6 +313,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             const accepted = sendMobileSessionNotify({
               sessionId, title: notificationTitle, kind, generation, ...(detail ? { detail } : {}),
               ...(fallbackBody ? { fallbackBody } : {}), ...(mobileEventId ? { eventId: mobileEventId } : {}),
+              ...(mobileTeammateBotId ? { teammateBotId: mobileTeammateBotId } : {}),
             });
             if (kind === 'done' && accepted) {
               notifiedReplies.set(mobileKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });

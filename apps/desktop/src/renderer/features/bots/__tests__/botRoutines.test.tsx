@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { Routine } from '@cindy/maker-scheduler';
 vi.mock('react-i18next', () => ({
@@ -186,4 +186,68 @@ it('starts a new unclassified routine with delivery enabled', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'routines.add' }));
   fireEvent.click(screen.getByText('routines.advancedSettings'));
   expect(screen.getByRole('switch', { name: 'routines.quiet' }).getAttribute('aria-checked')).toBe('false');
+});
+
+it('lets number and time fields be cleared and retyped without saving invalid schedules', async () => {
+  const api = setup();
+  const scheduled: Routine = {
+    ...existing,
+    triggers: [
+      { id: 'timer', kind: 'interval', intervalMs: 3_600_000 },
+      { id: 'monthly', kind: 'cron', expression: '0 9 15 * *', timezone: 'UTC' },
+    ],
+  };
+  api.list.mockResolvedValue([scheduled]);
+  render(<BotRoutines botId="bot" />);
+  fireEvent.click(await screen.findByText('Daily report'));
+  for (const details of document.querySelectorAll('details')) details.open = true;
+  const minutes = screen.getByLabelText('routines.minutes') as HTMLInputElement;
+  expect(minutes.getAttribute('aria-invalid')).toBeNull();
+  fireEvent.change(minutes, { target: { value: '' } });
+  fireEvent.blur(minutes);
+  expect(minutes.value).toBe('');
+  expect(minutes.getAttribute('aria-invalid')).toBe('true');
+  const day = screen.getByLabelText('routines.day') as HTMLInputElement;
+  fireEvent.change(day, { target: { value: '40' } });
+  expect(day.getAttribute('aria-invalid')).toBe('true');
+  // Saving would silently keep the old numbers; point at the first invalid field instead.
+  (minutes.closest('details') as HTMLDetailsElement).open = false;
+  fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
+  expect(api.save).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(minutes);
+  expect((minutes.closest('details') as HTMLDetailsElement).open).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'routines.runNow' }));
+  expect(api.save).not.toHaveBeenCalled();
+  fireEvent.change(minutes, { target: { value: '5' } });
+  fireEvent.change(day, { target: { value: '20' } });
+  expect(day.getAttribute('aria-invalid')).toBeNull();
+  const time = screen.getByLabelText('routines.time') as HTMLInputElement;
+  fireEvent.change(time, { target: { value: '' } });
+  expect(screen.getByLabelText('routines.day')).toBeTruthy();
+  fireEvent.change(time, { target: { value: '10:30' } });
+  fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
+  await waitFor(() => expect(api.save).toHaveBeenCalled());
+  expect(api.save.mock.calls[0]?.[1]).toMatchObject({
+    triggers: [
+      { id: 'timer', kind: 'interval', intervalMs: 300_000 },
+      { id: 'monthly', kind: 'cron', expression: '30 10 20 * *', timezone: 'UTC' },
+    ],
+  });
+});
+
+it('hands the editor back step to the host back button and focuses a new routine name', async () => {
+  setup();
+  const back = { current: null as (() => Promise<boolean>) | null };
+  render(<BotRoutines embedded botId="bot" backRef={back} />);
+  fireEvent.click(await screen.findByText('Daily report'));
+  expect(screen.queryByRole('button', { name: 'routines.back' })).toBeNull();
+  let handled = false;
+  await act(async () => {
+    handled = await back.current!();
+  });
+  expect(handled).toBe(true);
+  await screen.findByText('Daily report');
+  expect(await back.current!()).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'routines.add' }));
+  expect(document.activeElement).toBe(screen.getByLabelText('routines.name'));
 });

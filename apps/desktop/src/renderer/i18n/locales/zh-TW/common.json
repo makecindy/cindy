@@ -7616,7 +7616,8 @@
       "saveFailed": "未能確認儲存結果，請重新讀取設定後再試。",
       "conflict": "設定已在另一台裝置上變更，請重新讀取後再儲存。",
       "unsupported": "請更新另一台裝置上的 Cindy 以編輯這些設定。",
-      "discardDescription": "重新讀取將放棄尚未儲存的設定。"
+      "discardDescription": "重新讀取將放棄尚未儲存的設定。",
+      "leaveDescription": "離開後會放棄尚未儲存的設定。"
     },
     "devicePicker": {
       "local": "本機",
@@ -7773,6 +7774,8 @@
       "titleLabel": "標題",
       "bodyLabel": "內容",
       "tooLong": "內容太長，縮短後才會儲存",
+      "titleRequired": "填寫標題後才會儲存",
+      "bodyRequired": "填寫內容後才會儲存",
       "deleteTitle": "刪除這條記憶？",
       "deleteDescription": "{{name}}之後不會再參考「{{title}}」。",
       "deleted": "已刪除",

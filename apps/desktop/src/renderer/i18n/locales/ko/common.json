@@ -7616,7 +7616,8 @@
       "saveFailed": "저장 결과를 확인하지 못했습니다. 설정을 다시 불러온 후 재시도하세요.",
       "conflict": "다른 기기에서 설정이 변경되었습니다. 저장하기 전에 다시 불러오세요.",
       "unsupported": "이 설정을 편집하려면 다른 기기의 Cindy를 업데이트하세요.",
-      "discardDescription": "다시 불러오면 저장하지 않은 설정이 삭제됩니다."
+      "discardDescription": "다시 불러오면 저장하지 않은 설정이 삭제됩니다.",
+      "leaveDescription": "나가면 저장하지 않은 설정이 삭제됩니다."
     },
     "devicePicker": {
       "local": "이 기기",
@@ -7773,6 +7774,8 @@
       "titleLabel": "제목",
       "bodyLabel": "내용",
       "tooLong": "너무 깁니다. 줄이면 저장됩니다",
+      "titleRequired": "제목을 입력하면 저장됩니다",
+      "bodyRequired": "내용을 입력하면 저장됩니다",
       "deleteTitle": "이 메모리를 삭제할까요?",
       "deleteDescription": "{{name}}은(는) 앞으로 “{{title}}”을(를) 참고하지 않습니다.",
       "deleted": "삭제됨",

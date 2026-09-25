@@ -7618,7 +7618,8 @@
       "saveFailed": "Could not confirm the save. Reload settings before retrying.",
       "conflict": "Settings changed on the other device. Reload before saving.",
       "unsupported": "Update Cindy on the other device to edit these settings.",
-      "discardDescription": "Reloading will discard these unsaved settings."
+      "discardDescription": "Reloading will discard these unsaved settings.",
+      "leaveDescription": "Leaving will discard these unsaved settings."
     },
     "devicePicker": {
       "local": "This Device",
@@ -7775,6 +7776,8 @@
       "titleLabel": "Title",
       "bodyLabel": "Content",
       "tooLong": "Too long. Shorten it to save.",
+      "titleRequired": "Add a title to save.",
+      "bodyRequired": "Add some content to save.",
       "deleteTitle": "Delete this memory?",
       "deleteDescription": "{{name}} will no longer refer to “{{title}}”.",
       "deleted": "Deleted",

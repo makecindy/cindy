@@ -316,14 +316,33 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
       ? submit(panel, changes, false)
       : Promise.resolve(!inFlight.current);
   };
+  // Only Save applies a draft. Leaving with unsaved edits asks first instead of
+  // submitting them behind the user's back.
+  const leave = async () => {
+    if (inFlight.current || portraitPending.current || portraitPreparing.current) return false;
+    if (!latest.current.dirty) return true;
+    const discard = await confirm(
+      {
+        title: t('bots.memory.unsavedTitle'),
+        description: t('bots.remoteSettings.leaveDescription'),
+        confirmText: t('bots.memory.discard'),
+        cancelText: t('bots.memory.continueEditing'),
+      },
+      abort.current?.signal,
+    );
+    if (!discard || !current()) return false;
+    latest.current.dirty = false;
+    setDraft(latest.current.panel?.values ?? {});
+    return true;
+  };
   useEffect(() => {
-    beforeCloseRef.current = save;
+    beforeCloseRef.current = leave;
     return () => {
       beforeCloseRef.current = null;
     };
   });
   const open = async (id: string | null, resource = resourceId) => {
-    if (!(await save()) || !current()) return;
+    if (!(await leave()) || !current()) return;
     setReceipt(null);
     if (!revisionPendingRef.current || resource !== resourceId) setError(null);
     if (resource !== resourceId) {
@@ -415,6 +434,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
               disabled={disabled}
               required={field.required}
               onChange={change}
+              className="min-h-24 resize-none [field-sizing:content]"
             />
           ) : (
             <Input
@@ -529,6 +549,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
       ) : null}
       <Button
         type="submit"
+        variant="cta"
         disabled={disabled || !dirty}
         loading={busy || convertingPortrait || preparingPortrait}
       >
