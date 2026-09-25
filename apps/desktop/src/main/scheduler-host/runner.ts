@@ -357,7 +357,7 @@ class QueuedSlotUnavailableError extends Error {}
 
 class RoutineDispatchDeferredError extends Error {}
 
-/** A fresh ordinary session was stopped before vendor dispatch; never retry it. */
+/** An ordinary session was stopped before vendor dispatch; never retry it. */
 class ScheduledDispatchStoppedError extends Error {}
 
 /** createTurnCompletionWaiter 的返回:turn 终态等待 + 文本缓冲 + 幂等摘除。 */
@@ -1812,7 +1812,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         !outcome.dispatched &&
         outcome.reason === 'cancelled-before-dispatch'
       ) {
-        if (!isHeartbeat && schedule.source !== 'bot') {
+        if (schedule.source !== 'bot') {
           throw new ScheduledDispatchStoppedError('Scheduled turn stopped before vendor dispatch');
         }
         throw new RoutineDispatchDeferredError('Heartbeat cancelled before vendor dispatch');
