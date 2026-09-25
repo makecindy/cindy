@@ -448,7 +448,10 @@ function MemoryEditor({
   const [state, setState] = useState<SaveState>('idle');
   const [latest, setLatest] = useState<BotMemoryDetail | null>(null);
   const saved = useRef(initial);
+  // `draft` is what saving may send; `shown` also holds uncommitted IME text,
+  // which joins the draft only once composition ends.
   const draft = useRef({ title: initial.title, body: initial.body });
+  const shown = useRef(draft.current);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef<Promise<boolean> | null>(null);
   const blocked = useRef(false);
@@ -540,22 +543,19 @@ function MemoryEditor({
   }, [editorRef, settle]);
 
   const edit = (patch: Partial<{ title: string; body: string }>) => {
-    draft.current = { ...draft.current, ...patch };
+    shown.current = { ...shown.current, ...patch };
     if (patch.title !== undefined) setTitle(patch.title);
     if (patch.body !== undefined) setBody(patch.body);
+    if (composing.current) return;
+    draft.current = shown.current;
     if (blocked.current) return;
     setState('idle');
     if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    // Unconfirmed IME text is not an edit yet; compositionend schedules the save.
-    if (composing.current) return;
     timer.current = setTimeout(() => void save(), SAVE_DEBOUNCE_MS);
   };
   const composition = {
     onCompositionStart: () => {
       composing.current = true;
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = null;
     },
     onCompositionEnd: () => {
       composing.current = false;
@@ -579,6 +579,7 @@ function MemoryEditor({
     blocked.current = false;
     saved.current = next;
     draft.current = { title: next.title, body: next.body };
+    shown.current = draft.current;
     setTitle(next.title);
     setBody(next.body);
     onSaved(next);

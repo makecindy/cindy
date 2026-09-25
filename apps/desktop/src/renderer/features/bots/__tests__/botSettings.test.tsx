@@ -661,30 +661,33 @@ describe('Bot settings unified autosave', () => {
 
 
 describe('settings text fields', () => {
-  it('does not autosave unconfirmed IME text and saves once it is committed', async () => {
+  it('never saves unconfirmed IME text on any save path and saves it once committed', async () => {
     vi.useFakeTimers();
     renderSettings();
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
     const name = screen.getByRole('textbox', { name: 'bots.nameLabel' });
     const summary = screen.getByLabelText('bots.profile.summary');
-    // A text save already waiting must not fire in the middle of a composition either.
+    // A save already scheduled before the composition still fires, without the pinyin.
     fireEvent.change(summary, { target: { value: 'Own releases' } });
     fireEvent.compositionStart(name);
     fireEvent.change(name, { target: { value: 'PR stewardni' } });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3000);
     });
-    expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+    // An explicit flush in the middle of the composition is held to the same snapshot.
+    fireEvent.blur(summary);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toEqual({ description: 'Own releases' });
     fireEvent.change(name, { target: { value: 'PR steward你' } });
     fireEvent.compositionEnd(name);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1600);
     });
-    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
-    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toEqual({
-      name: 'PR steward你',
-      description: 'Own releases',
-    });
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+    expect(mocks.updateBotProfile.mock.calls[1]?.[1]).toEqual({ name: 'PR steward你' });
   });
 
   it('keeps showing the saved name for a cleared field and tidies the field on blur', async () => {

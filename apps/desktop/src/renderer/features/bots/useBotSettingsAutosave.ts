@@ -68,6 +68,11 @@ export function useBotSettingsAutosave(
   const payload = normalizeBotSettingsPayload(draft, fallbackName);
   const payloadRef = useRef(payload);
   payloadRef.current = payload;
+  // 输入法组合中的拼音不是已完成的编辑:组合期间所有提交路径(防抖、离散选择、
+  // blur/离开冲刷、在途续存)都只看组合开始前的快照,上屏后再追上最新值。
+  const composingRef = useRef(false);
+  const committablePayloadRef = useRef(payload);
+  if (!composingRef.current) committablePayloadRef.current = payload;
 
   // 基线 = 上次成功落库的快照。用与当前值同一个归一化函数产生,否则挂载瞬间就会
   // 因为 trim 差异被判成脏。
@@ -100,7 +105,7 @@ export function useBotSettingsAutosave(
     autosaveRef.current = createBotSettingsAutosave({
       textDelayMs,
       instantDelayMs,
-      readPayload: () => payloadRef.current,
+      readPayload: () => committablePayloadRef.current,
       readBaseline: () => baselineRef.current,
       commit: async (next) => {
         if (!enabledRef.current) return;
@@ -124,7 +129,6 @@ export function useBotSettingsAutosave(
     };
   }, [autosave]);
 
-  const composingRef = useRef(false);
   const onEdit = useCallback(
     (trigger: BotAutosaveTrigger) => {
       if (!enabledRef.current) return;
@@ -137,10 +141,10 @@ export function useBotSettingsAutosave(
     () => ({
       onCompositionStart: () => {
         composingRef.current = true;
-        autosave.holdText();
       },
       onCompositionEnd: () => {
         composingRef.current = false;
+        committablePayloadRef.current = payloadRef.current;
         if (enabledRef.current) autosave.schedule('text');
       },
     }),

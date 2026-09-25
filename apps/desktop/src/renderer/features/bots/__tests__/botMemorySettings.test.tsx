@@ -267,6 +267,42 @@ describe('BotMemorySettings', () => {
     expect(api.update).toHaveBeenCalledWith(expect.objectContaining({ body: '先核实核心' }));
   });
 
+  it('does not let a save finishing mid-composition or leaving send the IME text', async () => {
+    vi.useFakeTimers();
+    let finish!: () => void;
+    api.update.mockImplementationOnce(
+      (input: { title: string; body: string }) =>
+        new Promise((resolve) => {
+          finish = () => resolve({ ...detail, ...input, updatedAt: '2026-09-23T10:00:00.000Z' });
+        }),
+    );
+    const { leaveRef } = renderMemory();
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /说结论前核实/ }));
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.memory.edit' }));
+    const body = screen.getByRole('textbox', { name: 'bots.memory.bodyLabel' });
+    fireEvent.change(body, { target: { value: '先核实' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(api.update).toHaveBeenCalledTimes(1);
+    fireEvent.compositionStart(body);
+    fireEvent.change(body, { target: { value: '先核实hexin' } });
+    await act(async () => finish());
+    let left: unknown;
+    await act(async () => {
+      left = await leaveRef.current?.();
+    });
+    expect(left).toBe(true);
+    expect(api.update).toHaveBeenCalledTimes(1);
+    expect(api.update).toHaveBeenLastCalledWith(expect.objectContaining({ body: '先核实' }));
+  });
+
   it('deletes after confirmation with the opened version', async () => {
     renderMemory();
     await openDetail();

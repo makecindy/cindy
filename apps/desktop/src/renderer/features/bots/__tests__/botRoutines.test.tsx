@@ -202,16 +202,25 @@ it('lets number and time fields be cleared and retyped without saving invalid sc
   fireEvent.click(await screen.findByText('Daily report'));
   for (const details of document.querySelectorAll('details')) details.open = true;
   const minutes = screen.getByLabelText('routines.minutes') as HTMLInputElement;
+  expect(minutes.getAttribute('aria-invalid')).toBeNull();
   fireEvent.change(minutes, { target: { value: '' } });
-  expect(minutes.value).toBe('');
   fireEvent.blur(minutes);
-  expect(minutes.value).toBe('60');
-  fireEvent.change(minutes, { target: { value: '5' } });
+  expect(minutes.value).toBe('');
+  expect(minutes.getAttribute('aria-invalid')).toBe('true');
   const day = screen.getByLabelText('routines.day') as HTMLInputElement;
-  fireEvent.change(day, { target: { value: '' } });
   fireEvent.change(day, { target: { value: '40' } });
-  fireEvent.blur(day);
-  expect(day.value).toBe('15');
+  expect(day.getAttribute('aria-invalid')).toBe('true');
+  // Saving would silently keep the old numbers; point at the first invalid field instead.
+  (minutes.closest('details') as HTMLDetailsElement).open = false;
+  fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
+  expect(api.save).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(minutes);
+  expect((minutes.closest('details') as HTMLDetailsElement).open).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'routines.runNow' }));
+  expect(api.save).not.toHaveBeenCalled();
+  fireEvent.change(minutes, { target: { value: '5' } });
+  fireEvent.change(day, { target: { value: '20' } });
+  expect(day.getAttribute('aria-invalid')).toBeNull();
   const time = screen.getByLabelText('routines.time') as HTMLInputElement;
   fireEvent.change(time, { target: { value: '' } });
   expect(screen.getByLabelText('routines.day')).toBeTruthy();
@@ -221,7 +230,7 @@ it('lets number and time fields be cleared and retyped without saving invalid sc
   expect(api.save.mock.calls[0]?.[1]).toMatchObject({
     triggers: [
       { id: 'timer', kind: 'interval', intervalMs: 300_000 },
-      { id: 'monthly', kind: 'cron', expression: '30 10 15 * *', timezone: 'UTC' },
+      { id: 'monthly', kind: 'cron', expression: '30 10 20 * *', timezone: 'UTC' },
     ],
   });
 });

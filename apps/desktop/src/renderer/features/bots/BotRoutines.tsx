@@ -169,6 +169,16 @@ export function BotRoutines({
       backRef.current = null;
     };
   }, [backRef, draft, closeDraft]);
+  const editorRef = useRef<HTMLFieldSetElement>(null);
+  // A number field the user left invalid is not silently replaced by the old
+  // value on save: point at it instead.
+  const revealInvalidField = () => {
+    const field = editorRef.current?.querySelector<HTMLInputElement>('input[aria-invalid="true"]');
+    if (!field) return false;
+    field.closest('details')?.setAttribute('open', '');
+    field.focus();
+    return true;
+  };
   const act = async (action: () => Promise<unknown>) => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -279,7 +289,7 @@ export function BotRoutines({
           ))}
         </div>
       ) : (
-        <fieldset disabled={busy} className="min-w-0 space-y-5">
+        <fieldset ref={editorRef} disabled={busy} className="min-w-0 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <label className="flex items-center gap-2">
               <Switch
@@ -298,13 +308,14 @@ export function BotRoutines({
                   !draft.prompt.trim() ||
                   !draft.triggers.length
                 }
-                onClick={() =>
+                onClick={() => {
+                  if (revealInvalidField()) return;
                   void act(async () => {
                     const saved = await window.electronAPI.routines.save(botId, draft, selected!);
                     setDraft(structuredClone(saved));
                     await window.electronAPI.routines.runNow(botId, saved.id);
-                  })
-                }
+                  });
+                }}
               >
                 {t(running ? 'routines.running' : 'routines.runNow')}
               </Button>
@@ -472,7 +483,8 @@ export function BotRoutines({
               disabled={
                 busy || !draft.name.trim() || !draft.prompt.trim() || !draft.triggers.length
               }
-              onClick={() =>
+              onClick={() => {
+                if (revealInvalidField()) return;
                 void act(async () => {
                   const saved = await window.electronAPI.routines.save(
                     botId,
@@ -481,8 +493,8 @@ export function BotRoutines({
                   );
                   setSelected(saved.id);
                   setDraft(saved);
-                })
-              }
+                });
+              }}
             >
               {t('routines.save')}
             </Button>
@@ -779,7 +791,7 @@ function CronFields({
 /**
  * Whole-number field that keeps what the user is typing: an emptied or
  * out-of-range entry is not committed (optional fields commit `undefined` when
- * emptied), and blur shows the committed value again.
+ * emptied) and stays marked invalid until corrected.
  */
 function IntegerInput({
   value,
@@ -801,6 +813,13 @@ function IntegerInput({
     setShown(value);
     setText(format(value));
   }
+  const parse = (raw: string): number | undefined | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return optional ? undefined : null;
+    if (!/^\d+$/.test(trimmed)) return null;
+    const next = Number(trimmed);
+    return next >= min && (max === undefined || next <= max) ? next : null;
+  };
   return (
     <Input
       type="number"
@@ -808,18 +827,13 @@ function IntegerInput({
       min={min}
       max={max}
       value={text}
+      // The saved value itself is never flagged (routines written elsewhere may hold other values).
+      error={text !== format(value) && parse(text) === null}
       onChange={(raw) => {
         setText(raw);
-        const trimmed = raw.trim();
-        if (!trimmed) {
-          if (optional) onChange(undefined);
-          return;
-        }
-        if (!/^\d+$/.test(trimmed)) return;
-        const next = Number(trimmed);
-        if (next >= min && (max === undefined || next <= max)) onChange(next);
+        const next = parse(raw);
+        if (next !== null) onChange(next);
       }}
-      onBlur={() => setText(format(value))}
     />
   );
 }

@@ -205,8 +205,6 @@ export interface BotSettingsAutosaveHandle {
   flushDetached(): void;
   /** 取消未触发的计时,不提交。 */
   cancel(): void;
-  /** 暂停待发的文本防抖(输入法组合中);已排队的离散选择照常提交。 */
-  holdText(): void;
   /** 是否有已改但未落库的内容。 */
   isDirty(): boolean;
 }
@@ -320,11 +318,6 @@ export function createBotSettingsAutosave(
     },
     cancel() {
       clearTimer();
-    },
-    holdText() {
-      if (instantPending || timer === null) return;
-      clearTimeout(timer);
-      timer = null;
     },
     isDirty,
   };
