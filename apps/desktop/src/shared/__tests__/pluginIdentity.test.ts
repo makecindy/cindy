@@ -24,6 +24,7 @@ import {
   installedGhostPhysicalRelId,
   installedGhostRuntimeId,
   installedGhostStoragePart,
+  resolvePluginLibraryStorageKey,
   resolvePluginNamespaceState,
   sameDeliveryNamespaceState,
 } from '../pluginIdentity.js';
@@ -263,6 +264,20 @@ describe('plugin logical identity', () => {
     expect(findConflictingGhostCommand([legacy], 'draw', { incomingNamespace: null })).toBe(
       legacy,
     );
+  });
+
+  it('canonicalizes library keys to the physical storage part', () => {
+    expect(resolvePluginLibraryStorageKey('helper')).toBe('helper');
+    expect(resolvePluginLibraryStorageKey('_ns/acme/helper')).toBe('_ns__acme__helper');
+    expect(resolvePluginLibraryStorageKey('_ns__acme__helper')).toBe('_ns__acme__helper');
+    expect(
+      resolvePluginLibraryStorageKey('_ns/xd/xd-feishu', {
+        manifest: { id: 'xd-feishu' },
+        dir: '/brain/xd-feishu',
+        namespace: 'xd',
+      }),
+    ).toBe('xd-feishu');
+    expect(resolvePluginLibraryStorageKey('not a plugin')).toBeNull();
   });
 
 });

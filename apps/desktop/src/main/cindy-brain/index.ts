@@ -113,6 +113,7 @@ import {
   installedGhostRuntimeId,
   installedGhostStoragePart,
   isGhostInstanceId,
+  resolvePluginLibraryStorageKey,
   parsePluginInstallRelId,
   parsePluginInstanceId,
   parsePluginStoragePart,
@@ -1026,6 +1027,10 @@ export function findGhostForInstanceId(id: string, namespace?: string | null): I
     findGhostByStoragePart(id) ??
     findAvailableGhost(id)
   );
+}
+
+function libraryStorageKeyFor(id: string): string | null {
+  return resolvePluginLibraryStorageKey(id, findGhostForInstanceId(id));
 }
 
 /** Runtime-authorized lookup for integrations outside this module. */
@@ -5659,6 +5664,9 @@ async function relocateGhostLibraryTo(
   candidate: string,
   opts?: { allowInsideManagedRoot?: boolean },
 ): Promise<{ ok: boolean; message?: string }> {
+  const storagePart = libraryStorageKeyFor(id);
+  if (!storagePart) return { ok: false, message: '非法插件 id' };
+  id = storagePart;
   const releaseMutation = beginGhostMutation();
   const slot = getGhostLibrarySlot();
   slot.setRelocating(id, true);
@@ -5735,13 +5743,29 @@ async function relocateGhostLibraryTo(
  */
 export async function getGhostLibraryOverview(ghostId: string): Promise<GhostLibraryOverview> {
   const ghost = findGhostForInstanceId(ghostId);
+  const storagePart = libraryStorageKeyFor(ghostId);
   const supported = ghost?.manifest.library === true;
+  if (!storagePart) {
+    return {
+      supported,
+      state: 'unavailable',
+      reason: '非法插件 id',
+      location: 'default',
+      customCandidate: null,
+      usedBytes: 0,
+      fileCount: 0,
+      diskFreeBytes: null,
+      softLimitBytes: DEFAULT_LIBRARY_LIMITS.softLimitBytes,
+      softLimitExceeded: false,
+      orphaned: false,
+    };
+  }
   const store = getGhostLibraryBindingStore();
-  const binding = await store.getBinding(ghostId);
-  const resolution = await store.resolveLibraryRoot(ghostId);
+  const binding = await store.getBinding(storagePart);
+  const resolution = await store.resolveLibraryRoot(storagePart);
   const root = resolution.kind === 'custom' && resolution.root !== null
     ? resolution.root
-    : ownerScopedUserDataPath('libraries', ghostId);
+    : ownerScopedUserDataPath('libraries', storagePart);
   let usedBytes = 0;
   let fileCount = 0;
   let orphaned = false;
@@ -5797,12 +5821,13 @@ export async function getGhostLibraryOverview(ghostId: string): Promise<GhostLib
  * IPC,后续 commit 接线)必须先取得用户对「删除作品数据」的独立破坏性确认。
  */
 export async function deleteGhostLibraryForActiveOwner(ghostId: string): Promise<{ ok: boolean; message?: string }> {
-  if (!isValidGhostId(ghostId)) return { ok: false, message: '非法插件 id' };
+  const storagePart = libraryStorageKeyFor(ghostId);
+  if (!storagePart) return { ok: false, message: '非法插件 id' };
   const slot = getGhostLibrarySlot();
-  slot.setRelocating(ghostId, true);
+  slot.setRelocating(storagePart, true);
   try {
-    await slot.disposeGhost(ghostId);
-    const result = await trashGhostLibrary(ghostId, {
+    await slot.disposeGhost(storagePart);
+    const result = await trashGhostLibrary(storagePart, {
       // 默认根与自定义根都经 binding store 的解析口径(漂移时返回 null → 上层
       // 引导恢复位置,不误删)。
       resolveLibraryRoot: async (id) => {
@@ -5818,7 +5843,7 @@ export async function deleteGhostLibraryForActiveOwner(ghostId: string): Promise
     if (result.ok) {
       await refreshMivoLibraryExtraDirGrant().catch((error) => {
         log.warn('library extraDirs delete sync failed', {
-          ghostId,
+          ghostId: storagePart,
           error: error instanceof Error ? error.message : String(error),
         });
       });
@@ -5826,7 +5851,7 @@ export async function deleteGhostLibraryForActiveOwner(ghostId: string): Promise
     }
     return { ok: false, message: result.message };
   } finally {
-    slot.setRelocating(ghostId, false);
+    slot.setRelocating(storagePart, false);
   }
 }
 
