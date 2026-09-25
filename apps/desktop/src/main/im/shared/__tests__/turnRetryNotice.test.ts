@@ -251,6 +251,17 @@ describe('terminalErrorText', () => {
     expect(notice).not.toContain('Auto-review could not');
   });
 
+  it('个人微信不建议切到完全访问', () => {
+    const notice = turnRetryNotice({
+      message: '[AUTO_REVIEW_UNAVAILABLE] Auto-review could not reach a decision',
+      isTerminal: false,
+    }, { channel: 'wechat' });
+    expect(notice).toContain('个人微信不能使用「完全访问」');
+    expect(notice).toContain('直接确认');
+    expect(notice).not.toContain('想少被打断');
+    expect(notice).not.toContain('默认权限');
+  });
+
   it('确认卡没送到 → 渠道侧说明这次不是用户拒绝', () => {
     const notice = turnRetryNotice({
       message: '[AUTO_REVIEW_CONFIRM_UNDELIVERED] Automatic review was unavailable, and the '

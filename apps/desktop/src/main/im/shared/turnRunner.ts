@@ -851,7 +851,7 @@ export function createTurnRunner(
       streamingHandle: null,
       streamingHandlePromise: null,
       streamingStartFailed: false,
-      presenter: createTurnPresenter({ mode: 'buffer-replace' }),
+      presenter: createTurnPresenter({ mode: 'buffer-replace', channel }),
       mediaAbsPaths: [],
       allowedFileRoots,
       done: false,
@@ -2513,7 +2513,7 @@ export function createTurnRunner(
         // 取舍不同 —— 转播是自动任务的旁路展示, 没有人在等它; 为一条重试提示开卡,
         // 万一那轮重试成功后 agent 零输出收口, thread 里就多出一张只有标题的卡。
         {
-          const notice = turnRetryNotice(event.data);
+          const notice = turnRetryNotice(event.data, { channel });
           if (notice !== null && setActivityNotice(t.activity, notice)) {
             t.streamingHandle?.replace(composeTranspondView(t, false));
           }
