@@ -48,7 +48,7 @@ import {
 /**
  * 把插件目录装成运行中的 Ghost。
  *
- * 这里先安全打包，再让 Main 从实际 `.cindy` 解析 canonical manifest；
+ * 打包必须在来源 cache-path 租约内完成；确认等待不能占用该租约。
  * 校验和落位始终绑定同一个临时包。
  */
 const log = createLogger('plugin-market-install');
@@ -63,54 +63,38 @@ function sanitizeInstallDetail(message: string): string {
   );
 }
 
-export async function installCustomMarketPlugin(input: {
-  pluginDir: string;
-  expected?: GhostManifest;
-  /** 更新时把发起操作时读取的 Host receipt token 贯穿到最终安装出口。 */
+type CustomMarketInspectedPackage = Awaited<ReturnType<ReturnType<typeof getGhostManager>['inspect']>>;
+
+/** 来源租约内打出的独立临时包；租约释放后仍可确认并落位。调用方负责删除 `tempPath`。 */
+export interface PackedCustomMarketPlugin {
+  tempPath: string;
+  packedManifest: GhostManifest;
+  validatedManifest: GhostManifest;
+  inspected: CustomMarketInspectedPackage;
+}
+
+type CustomMarketCommitHooks = {
   expectedInstalledApproval?: string;
-  expectedGhostId: string;
-  expectedVersion: string;
-  /**
-   * 真实包检查通过后、提交锁之外求得用户确认(ghostInstallConsent.ts)。收到的是
-   * 即将落位那份包的 manifest;结论随安装请求交给装入出口在锁内复核。必填。
-   */
-  resolveConsent: (
-    manifest: GhostManifest,
-    packageSha256: string,
-  ) => Promise<GhostInstallConsentDecision>;
-  /**
-   * 打包完成后、实际改动 Ghost 运行时之前调用的校验钩(可异步)。
-   * 调用方按当前账户捕获市场 manifest;打包是异步的,装出前必须重新确认
-   * 会话未漂移,避免把账户 A 选择的插件装进当前账户 B 的运行时。
-   * 这里同时复核当前账号、所选来源和运行时已安装插件事实。
-   */
   beforeCommit?: () => void | Promise<void>;
-  /** 真实包完成检查后、即将改动运行时前的同步事务钩。 */
   beforePackagePlacement?: () => void;
-  /** 新包完成原子换位后的同步事务钩。 */
   onPackagePlaced?: () => void;
-  /**
-   * 提交段(复核 + 落位)的互斥包装,与来源增删共享同一把锁。
-   *
-   * 只在 `beforeCommit` 里复核不够:它返回后 `installOrUpdateMarketGhostPackage`
-   * 还要先 await 包检查才开始真正改动运行时,那段时间另一窗口仍能移除或替换
-   * 所选来源,复核结论在落位前就过期了。把“复核 + 落位”整段放进锁里，来源
-   * 变更插不进来。
-   */
   withCommitLock?: <T>(fn: () => Promise<T>) => Promise<T>;
-  /**
-   * 落位成功后、仍在 `withCommitLock` 与 owner mutation lease 内执行的溯源写入钩。
-   *
-   * 账本写入必须与落位同锁:放在锁外时,另一条路径(本地 .cindy 装入/更新)可以
-   * 插在"包已落位"与"写下溯源"之间换掉同 id 的包,账本随后认领一个其实已被替换
-   * 的包。抛错则整个安装按失败上报(包已落位,由调用方决定补偿)。
-   */
   afterCommit?: (
     installed: InstalledGhost,
     packagedManifest: GhostManifest,
     evidence: MarketGhostPackageCommitEvidence,
   ) => Promise<void>;
-}): Promise<PluginMarketInstallResult> {
+};
+
+/**
+ * 在来源 cache-path 租约内打包并检查真实包。成功时调用方负责删除 `tempPath`。
+ */
+export async function packCustomMarketPlugin(input: {
+  pluginDir: string;
+  expected?: GhostManifest;
+  expectedGhostId: string;
+  expectedVersion: string;
+}): Promise<PackedCustomMarketPlugin> {
   // input.pluginDir 是发现层已 realpath、且已校验落在市场根内的规范路径。
   // 发现之后、打包之前,若插件目录或其某个父目录被换成指向市场外的符号链接,
   // 重新 realpath 会解析到别处——只要外部目录留着同样的 ghost.json,清单摘要
@@ -227,48 +211,134 @@ export async function installCustomMarketPlugin(input: {
         );
       }
     }
+    return {
+      tempPath,
+      packedManifest: packed.manifest,
+      validatedManifest: validated.manifest,
+      inspected,
+    };
+  } catch (error) {
+    await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** 把已打包的独立临时包交给装入出口。调用方仍负责删除 `packed.tempPath`。 */
+export async function commitCustomMarketPlugin(
+  packed: PackedCustomMarketPlugin,
+  input: {
+    expectedGhostId: string;
+    expectedVersion: string;
+    consent: GhostInstallConsentDecision;
+  } & CustomMarketCommitHooks,
+): Promise<PluginMarketInstallResult> {
+  const run = async (): Promise<PluginMarketInstallResult> => {
+    await input.beforeCommit?.();
+    // 自定义来源已经把 Renderer 审阅的本地清单与实际打包清单逐字节绑定，
+    // 不再进入官方市场“下载真实包后复核”的分支。
+    const installed = await installOrUpdateMarketGhostPackage(packed.tempPath, {
+      // Main 会从真实临时包再次解析并与所选市场条目的身份核对；不能使用
+      // 打包前活目录里的值，否则目录在打包窗口变化时会把另一个插件装入。
+      ghostId: input.expectedGhostId,
+      version: input.expectedVersion,
+      consent: input.consent,
+      // 发现时读到的规范化 Manifest 是这次安装允许的能力上限。打包窗口
+      // 中目录若发生能力扩张，Host 会按真实包不一致直接拒绝。
+      manifestCap: packed.validatedManifest,
+      ...(input.expectedInstalledApproval
+        ? { expectedInstalledApproval: input.expectedInstalledApproval }
+        : {}),
+      ...(input.beforePackagePlacement
+        ? { beforeCommitInLock: input.beforePackagePlacement }
+        : {}),
+      ...(input.onPackagePlaced
+        ? { onPackagePlacedInLock: input.onPackagePlaced }
+        : {}),
+      ...(input.afterCommit
+        ? {
+            afterCommitInLock: (committed, evidence) =>
+              input.afterCommit!(committed, packed.packedManifest, evidence),
+          }
+        : {}),
+    });
+    return { ghost: installed };
+  };
+  return input.withCommitLock ? input.withCommitLock(run) : run();
+}
+
+export async function installCustomMarketPlugin(input: {
+  pluginDir: string;
+  expected?: GhostManifest;
+  /** 更新时把发起操作时读取的 Host receipt token 贯穿到最终安装出口。 */
+  expectedInstalledApproval?: string;
+  expectedGhostId: string;
+  expectedVersion: string;
+  /**
+   * 真实包检查通过后、提交锁之外求得用户确认(ghostInstallConsent.ts)。收到的是
+   * 即将落位那份包的 manifest;结论随安装请求交给装入出口在锁内复核。必填。
+   */
+  resolveConsent: (
+    manifest: GhostManifest,
+    packageSha256: string,
+  ) => Promise<GhostInstallConsentDecision>;
+  /**
+   * 打包完成后、实际改动 Ghost 运行时之前调用的校验钩(可异步)。
+   * 调用方按当前账户捕获市场 manifest;打包是异步的,装出前必须重新确认
+   * 会话未漂移,避免把账户 A 选择的插件装进当前账户 B 的运行时。
+   * 这里同时复核当前账号、所选来源和运行时已安装插件事实。
+   */
+  beforeCommit?: () => void | Promise<void>;
+  /** 真实包完成检查后、即将改动运行时前的同步事务钩。 */
+  beforePackagePlacement?: () => void;
+  /** 新包完成原子换位后的同步事务钩。 */
+  onPackagePlaced?: () => void;
+  /**
+   * 提交段(复核 + 落位)的互斥包装,与来源增删共享同一把锁。
+   *
+   * 只在 `beforeCommit` 里复核不够:它返回后 `installOrUpdateMarketGhostPackage`
+   * 还要先 await 包检查才开始真正改动运行时,那段时间另一窗口仍能移除或替换
+   * 所选来源,复核结论在落位前就过期了。把“复核 + 落位”整段放进锁里，来源
+   * 变更插不进来。
+   */
+  withCommitLock?: <T>(fn: () => Promise<T>) => Promise<T>;
+  /**
+   * 落位成功后、仍在 `withCommitLock` 与 owner mutation lease 内执行的溯源写入钩。
+   *
+   * 账本写入必须与落位同锁:放在锁外时,另一条路径(本地 .cindy 装入/更新)可以
+   * 插在"包已落位"与"写下溯源"之间换掉同 id 的包,账本随后认领一个其实已被替换
+   * 的包。抛错则整个安装按失败上报(包已落位,由调用方决定补偿)。
+   */
+  afterCommit?: (
+    installed: InstalledGhost,
+    packagedManifest: GhostManifest,
+    evidence: MarketGhostPackageCommitEvidence,
+  ) => Promise<void>;
+}): Promise<PluginMarketInstallResult> {
+  const packed = await packCustomMarketPlugin({
+    pluginDir: input.pluginDir,
+    expected: input.expected,
+    expectedGhostId: input.expectedGhostId,
+    expectedVersion: input.expectedVersion,
+  });
+  try {
     // 检查失败的包会在装入出口重新解析时被拒；这里只为能解析的真实包求确认。
     // 等待确认期间不持提交锁，不阻塞其它来源的增删与安装。
     const consent: GhostInstallConsentDecision =
-      'rejection' in inspected
+      'rejection' in packed.inspected
         ? { mode: 'unprompted' }
-        : await input.resolveConsent(inspected.manifest, inspected.packageSha256);
-    const commit = async (): Promise<PluginMarketInstallResult> => {
-      const run = async (): Promise<PluginMarketInstallResult> => {
-        await input.beforeCommit?.();
-        // 自定义来源已经把 Renderer 审阅的本地清单与实际打包清单逐字节绑定，
-        // 不再进入官方市场“下载真实包后复核”的分支。
-        const installed = await installOrUpdateMarketGhostPackage(tempPath, {
-          // Main 会从真实临时包再次解析并与所选市场条目的身份核对；不能使用
-          // 打包前活目录里的值，否则目录在打包窗口变化时会把另一个插件装入。
-          ghostId: input.expectedGhostId,
-          version: input.expectedVersion,
-          consent,
-          // 发现时读到的规范化 Manifest 是这次安装允许的能力上限。打包窗口
-          // 中目录若发生能力扩张，Host 会按真实包不一致直接拒绝。
-          manifestCap: validated.manifest,
-          ...(input.expectedInstalledApproval
-            ? { expectedInstalledApproval: input.expectedInstalledApproval }
-            : {}),
-          ...(input.beforePackagePlacement
-            ? { beforeCommitInLock: input.beforePackagePlacement }
-            : {}),
-          ...(input.onPackagePlaced
-            ? { onPackagePlacedInLock: input.onPackagePlaced }
-            : {}),
-          ...(input.afterCommit
-            ? {
-                afterCommitInLock: (committed, evidence) =>
-                  input.afterCommit!(committed, packed.manifest, evidence),
-              }
-            : {}),
-        });
-        return { ghost: installed };
-      };
-      return input.withCommitLock ? input.withCommitLock(run) : run();
-    };
-    return await commit();
+        : await input.resolveConsent(packed.inspected.manifest, packed.inspected.packageSha256);
+    return await commitCustomMarketPlugin(packed, {
+      expectedGhostId: input.expectedGhostId,
+      expectedVersion: input.expectedVersion,
+      consent,
+      expectedInstalledApproval: input.expectedInstalledApproval,
+      beforeCommit: input.beforeCommit,
+      beforePackagePlacement: input.beforePackagePlacement,
+      onPackagePlaced: input.onPackagePlaced,
+      withCommitLock: input.withCommitLock,
+      afterCommit: input.afterCommit,
+    });
   } finally {
-    await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+    await fs.promises.rm(packed.tempPath, { force: true }).catch(() => undefined);
   }
 }

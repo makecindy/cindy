@@ -88,7 +88,10 @@ import type { GhostInstallConsentInitiator } from '../../shared/ghostInstallCons
 import { PluginMarketApi } from './api.js';
 import { createOrganizationPrefixStore } from './organizationPrefixStore.js';
 import { downloadVerifiedPlugin } from './download.js';
-import { installCustomMarketPlugin } from './install.js';
+import {
+  commitCustomMarketPlugin,
+  packCustomMarketPlugin,
+} from './install.js';
 import {
   PluginMarketLedger,
   ghostManifestDigest,
@@ -1455,7 +1458,7 @@ export class PluginMarketService {
    *
    * 打包在 `withDiscoveredSource` 租约内执行:`plugin.dir` 指向 Git 源的缓存版本
    * 目录,打包要逐文件读它。租约必须一直持到打包结束,否则并发刷新的清理能在
-   * 打包途中删掉该目录。确认等待不占用 per-plugin mutation；落位再取锁。
+   * 打包途中删掉该目录。确认等待在租约外进行；落位再取 mutation，并保留提交时的来源复核。
    */
   private async customInstall(
     ref: { marketName: string; ghostId: string },
@@ -1475,9 +1478,9 @@ export class PluginMarketService {
     const ledger = this.ledgerForOwner(owner);
     const manager = this.sourceManagerForOwner(owner);
     requireSameMarketOwner(owner);
-    // 打包必须持有来源租约（目录字节），但确认等待不能占用 per-plugin mutation。
-    // 用户未回答时，同插件卸载/更新不能排队到九分钟。落位再取 mutation。
-    return manager.withDiscoveredSource(ref.marketName, async (discovered) => {
+    // 打包必须持有来源租约（目录字节）；确认等待不能占用 cache-path 租约或
+    // per-plugin mutation。用户未回答时，来源移除/刷新清理与同插件卸载都不能排队。
+    const packedAttempt = await manager.withDiscoveredSource(ref.marketName, async (discovered) => {
         if (!discovered.result.ok) {
           throwIpcError(discovered.result.code, discovered.result.detail ?? discovered.result.code);
         }
@@ -1528,26 +1531,58 @@ export class PluginMarketService {
           }
         };
         assertCustomApprovalStateUnchanged(existing ?? null);
+        requireSameMarketOwner(owner);
+        const packed = await packCustomMarketPlugin({
+          pluginDir: plugin.dir,
+          expected: options.expectedManifest,
+          expectedGhostId: plugin.ghostId,
+          expectedVersion: plugin.version,
+        });
+        return {
+          packed,
+          plugin,
+          pluginId,
+          releaseId,
+          existing,
+          sourceKey,
+          reviewInstalledIdentity,
+          sourceType: discovered.config.source.type,
+          assertCustomApprovalStateUnchanged,
+        };
+      });
+    try {
+        const {
+          packed,
+          plugin,
+          pluginId,
+          releaseId,
+          existing,
+          sourceKey,
+          reviewInstalledIdentity,
+          sourceType,
+          assertCustomApprovalStateUnchanged,
+        } = packedAttempt;
         // 来源只决定后台更新路由，不是 ghostId 的永久所有权。只有详情页明确
         // 选择“替换”才允许原地切换来源；自动更新和手动重试必须保持当前路由。
         let replacedRoute: PluginMarketInstallationRecord | null = null;
         let replacedRouteWasSuppressed = false;
         let packageLanded = false;
         requireSameMarketOwner(owner);
-        const installResult = await installCustomMarketPlugin({
-          pluginDir: plugin.dir,
-          expected: options.expectedManifest,
+        const consentDecision: GhostInstallConsentDecision =
+          'rejection' in packed.inspected
+            ? { mode: 'unprompted' }
+            : await obtainGhostInstallConsent(
+                consent,
+                getGhostManager()
+                  .list()
+                  .find((ghost) => ghost.manifest.id === plugin.ghostId),
+                packed.inspected.manifest,
+                packed.inspected.packageSha256,
+              );
+        const installResult = await commitCustomMarketPlugin(packed, {
           expectedGhostId: plugin.ghostId,
           expectedVersion: plugin.version,
-          resolveConsent: (manifest, packageSha256) =>
-            obtainGhostInstallConsent(
-              consent,
-              getGhostManager()
-                .list()
-                .find((ghost) => ghost.manifest.id === plugin.ghostId),
-              manifest,
-              packageSha256,
-            ),
+          consent: consentDecision,
           beforeCommit: async () => {
             requireSameMarketOwner(owner);
             assertCurrent?.();
@@ -1660,7 +1695,7 @@ export class PluginMarketService {
                 sha256: 'custom-unverified',
                 scope: 'public',
                 organizationId: null,
-                source: discovered.config.source.type === 'git' ? 'git-market' : 'local-market',
+                source: sourceType === 'git' ? 'git-market' : 'local-market',
                 installed: true,
                 updatedAt: new Date().toISOString(),
                 // 来源指纹与 pluginId 一起标识后续自动更新路由。
@@ -1685,7 +1720,9 @@ export class PluginMarketService {
           throw error;
         });
         return installResult;
-      });
+    } finally {
+      await fs.promises.rm(packedAttempt.packed.tempPath, { force: true }).catch(() => undefined);
+    }
   }
 
   /** 已配置来源名（按添加顺序）；存储读取失败时降级为空数组。 */

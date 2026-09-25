@@ -14,6 +14,7 @@ import type { GhostManifest, InstalledGhost } from '../../shared/ghost.js';
 import {
   evaluateGhostInstallConsent,
   ghostInstallConsentKey,
+  ghostInstallConsentReceiverIdentity,
   type GhostInstallConsentFacts,
   type GhostInstallConsentInitiator,
   type GhostInstallConsentOrigin,
@@ -117,7 +118,14 @@ export async function obtainGhostInstallConsent(
       facts.kind === 'install' ? '用户取消了插件安装' : '用户取消了插件更新',
     );
   }
-  return { mode: 'confirmed', key: ghostInstallConsentKey(facts, packageSha256) };
+  return {
+    mode: 'confirmed',
+    key: ghostInstallConsentKey(
+      facts,
+      packageSha256,
+      ghostInstallConsentReceiverIdentity(installed),
+    ),
+  };
 }
 
 /**
@@ -140,7 +148,12 @@ export function assertGhostInstallConsent(
   }
   if (
     decision.mode === 'confirmed' &&
-    decision.key === ghostInstallConsentKey(facts, packageSha256)
+    decision.key ===
+      ghostInstallConsentKey(
+        facts,
+        packageSha256,
+        ghostInstallConsentReceiverIdentity(installedNow),
+      )
   ) {
     return;
   }

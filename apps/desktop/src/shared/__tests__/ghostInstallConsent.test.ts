@@ -97,23 +97,41 @@ describe('plugin install consent', () => {
     const next = manifest({ version: '2.0.0', network: { hosts: ['api.weather.test', 'upload.weather.test'] } });
     const shown = evaluateGhostInstallConsent(current, next)!;
     const digest = 'a'.repeat(64);
-    expect(ghostInstallConsentKey(evaluateGhostInstallConsent(current, next)!, digest)).toBe(
-      ghostInstallConsentKey(shown, digest),
+    const receiver = 'approved:00000000-0000-4000-8000-000000000001';
+    expect(ghostInstallConsentKey(evaluateGhostInstallConsent(current, next)!, digest, receiver)).toBe(
+      ghostInstallConsentKey(shown, digest, receiver),
     );
     const widened = manifest({
       version: '2.0.0',
       network: { hosts: ['api.weather.test', 'upload.weather.test', 'extra.weather.test'] },
     });
-    expect(ghostInstallConsentKey(evaluateGhostInstallConsent(current, widened)!, digest)).not.toBe(
-      ghostInstallConsentKey(shown, digest),
-    );
+    expect(
+      ghostInstallConsentKey(evaluateGhostInstallConsent(current, widened)!, digest, receiver),
+    ).not.toBe(ghostInstallConsentKey(shown, digest, receiver));
   });
 
   it('binds the consent key to the reviewed package digest, not just identity and permissions', () => {
     const facts = evaluateGhostInstallConsent(null, manifest())!;
     const reviewed = 'a'.repeat(64);
     const replaced = 'b'.repeat(64);
-    expect(ghostInstallConsentKey(facts, reviewed)).toBe(ghostInstallConsentKey(facts, reviewed));
-    expect(ghostInstallConsentKey(facts, reviewed)).not.toBe(ghostInstallConsentKey(facts, replaced));
+    expect(ghostInstallConsentKey(facts, reviewed, null)).toBe(
+      ghostInstallConsentKey(facts, reviewed, null),
+    );
+    expect(ghostInstallConsentKey(facts, reviewed, null)).not.toBe(
+      ghostInstallConsentKey(facts, replaced, null),
+    );
+  });
+
+  it('binds update consent to the reviewed receiver receipt, not just version and permissions', () => {
+    const facts = evaluateGhostInstallConsent(
+      installed(manifest()),
+      manifest({ version: '2.0.0', network: { hosts: ['api.weather.test', 'upload.weather.test'] } }),
+    )!;
+    const digest = 'a'.repeat(64);
+    const reviewed = 'approved:00000000-0000-4000-8000-000000000001';
+    const replaced = 'approved:00000000-0000-4000-8000-000000000002';
+    expect(ghostInstallConsentKey(facts, digest, reviewed)).not.toBe(
+      ghostInstallConsentKey(facts, digest, replaced),
+    );
   });
 });

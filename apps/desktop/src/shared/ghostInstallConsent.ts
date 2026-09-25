@@ -11,6 +11,7 @@
  */
 import {
   diffInstalledGhostPermissionItems,
+  ghostInstallApprovalToken,
   ghostPermissionItems,
   ghostPermissionProjectionKey,
   type GhostManifest,
@@ -115,14 +116,22 @@ export function ghostUpdateNeedsConsent(installed: InstalledGhost, next: GhostMa
   return evaluateGhostInstallConsent(installed, next) !== null;
 }
 
+/** 确认时所对照的已装受体 receipt；首装没有受体，记 null。 */
+export function ghostInstallConsentReceiverIdentity(
+  installed: InstalledGhost | null | undefined,
+): string | null {
+  return installed ? ghostInstallApprovalToken(installed.approval) : null;
+}
+
 /**
- * 一次确认的规范化指纹。Main 在确认前按它记下用户看到的内容与当时的包摘要，
- * 落位前在安装锁内用真实包、当前受体与现读摘要重算；身份／权限没变但字节被换、
- * 或受体变了，都不能沿用这次确认。
+ * 一次确认的规范化指纹。Main 在确认前按它记下用户看到的内容、当时的包摘要，
+ * 以及所对照的已装受体 receipt。落位前在安装锁内用真实包、当前受体与现读摘要重算；
+ * 候选包字节被换、或受体被另一份同 version／同权限投影的安装换掉，都不能沿用这次确认。
  */
 export function ghostInstallConsentKey(
   facts: GhostInstallConsentFacts,
   packageSha256: string,
+  receiverApprovalToken: string | null,
 ): string {
   const items = facts.kind === 'install' ? facts.permissions : facts.added;
   return JSON.stringify([
@@ -133,5 +142,6 @@ export function ghostInstallConsentKey(
     items.map(ghostPermissionProjectionKey).sort(),
     facts.kind === 'update' ? facts.builtinOauthClientChanged : false,
     packageSha256,
+    receiverApprovalToken,
   ]);
 }

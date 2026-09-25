@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   validateGhostManifest,
+  type GhostInstallApproval,
   type GhostManifest,
   type InstalledGhost,
 } from '../../../shared/ghost.js';
@@ -28,12 +29,18 @@ function manifest(hosts: string[], version = '1.0.0'): GhostManifest {
   return result.manifest;
 }
 
-function installed(base: GhostManifest): InstalledGhost {
+function installed(
+  base: GhostManifest,
+  approval: GhostInstallApproval = {
+    state: 'approved',
+    revision: '00000000-0000-4000-8000-000000000001',
+  },
+): InstalledGhost {
   return {
     manifest: base,
     dir: '/userData/cindy-brain/weather-chip',
     enabled: true,
-    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    approval,
   };
 }
 
@@ -161,6 +168,24 @@ describe('assertGhostInstallConsent', () => {
     );
     expect(() => assertGhostInstallConsent(decision, null, next, reviewedDigest)).not.toThrow();
     expect(() => assertGhostInstallConsent(decision, null, next, replacedDigest)).toThrow(
+      /PRECONDITION_FAILED/,
+    );
+  });
+
+  it('rejects a confirmed update when the receiver receipt changed but version and permissions did not', async () => {
+    const current = installed(manifest(['api.weather.test']));
+    const next = manifest(['api.weather.test', 'upload.weather.test'], '2.0.0');
+    const decision = await obtainGhostInstallConsent(
+      { mode: 'prompt', prompt: userPrompt(true), initiator: 'user', origin: 'forge' },
+      current,
+      next,
+      reviewedDigest,
+    );
+    const replacedReceiver = installed(manifest(['api.weather.test']), {
+      state: 'approved',
+      revision: '00000000-0000-4000-8000-000000000002',
+    });
+    expect(() => assertGhostInstallConsent(decision, replacedReceiver, next, reviewedDigest)).toThrow(
       /PRECONDITION_FAILED/,
     );
   });
