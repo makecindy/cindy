@@ -146,6 +146,10 @@ it.each(["light", "dark"])(
     expect(host.querySelectorAll("button")).toHaveLength(1);
     const label = host.querySelector("[data-label-style]")!;
     expect(label.textContent).toBe("Share image");
+    // Inherit the native button's Dynamic Type font instead of fixing its size.
+    expect(
+      JSON.parse(label.getAttribute("data-label-style")!),
+    ).not.toContainEqual(expect.objectContaining({ name: "font" }));
     expect(JSON.parse(label.getAttribute("data-label-style")!)).toContainEqual({
       name: "foregroundStyle",
       value: mode === "dark" ? "black" : "white",

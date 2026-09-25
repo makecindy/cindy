@@ -99,6 +99,10 @@ describe("structured share fallback", () => {
       ).toBe(true);
       const cells = body.rectangles!.filter((r) => r.rx === undefined);
       expect(cells).toHaveLength(8);
+      expect(
+        cells.slice(0, 4).every((cell) => cell.fill === colors.surfaceChip),
+      ).toBe(true);
+      expect(cells.slice(4).every((cell) => cell.fill === "none")).toBe(true);
       expect(cells[4]!.height).toBeGreaterThan(cells[0]!.height);
       for (const r of body.rectangles!) {
         expect(r.x).toBeGreaterThanOrEqual(body.x);
@@ -144,6 +148,7 @@ describe("structured share fallback", () => {
     expect(left!.y).toBe(right!.y);
     expect(left!.x + left!.width).toBeLessThan(right!.x);
     const row = layout.bubbles[0]!.rectangles![2]!;
+    expect(row.fill).toBe("none");
     expect(left!.y + left!.height).toBeLessThan(row.y + row.height);
   });
 });

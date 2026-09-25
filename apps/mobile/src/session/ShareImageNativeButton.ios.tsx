@@ -3,11 +3,10 @@ import { Button, Label } from "@expo/ui/swift-ui";
 import {
   disabled,
   controlSize,
-  font,
   foregroundStyle,
   frame,
 } from "@expo/ui/swift-ui/modifiers";
-import { typeScale, useTheme } from "@/theme";
+import { useTheme } from "@/theme";
 import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import type { ShareImageNativeButtonProps } from "./ShareImageNativeButton";
 
@@ -38,10 +37,7 @@ export function ShareImageNativeButton(props: ShareImageNativeButtonProps) {
         <Label
           title={props.label}
           systemImage="square.and.arrow.up"
-          modifiers={[
-            font({ size: typeScale.body, weight: "medium" }),
-            foregroundStyle(colors.ctaText),
-          ]}
+          modifiers={[foregroundStyle(colors.ctaText)]}
         />
       </Button>
     </Host>

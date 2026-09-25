@@ -209,7 +209,7 @@ export function layoutConversationShareRichBody(
             y: top,
             width: cellWidth,
             height,
-            fill: rowIndex === 0 ? colors.surfaceChip : colors.background,
+            fill: rowIndex === 0 ? colors.surfaceChip : "none",
             stroke: colors.border,
           });
         }
