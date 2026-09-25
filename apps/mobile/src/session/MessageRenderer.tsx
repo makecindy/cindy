@@ -12,6 +12,7 @@ import { usePluginResultCard } from './usePluginResultCard';
 import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { sharedTaskAuthorName } from '@cindy/maker-shared';
+import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from '@cindy/maker-shared/botTimeline';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
 import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
@@ -617,9 +618,17 @@ export interface ShareableMessageViewport {
   visibleTop: number;
 }
 
+/** Desktop BotAvatar `sm` beside teammate replies; exported so the host renders a matching portrait. */
+export const COMPANION_AVATAR_SIZE = 28;
+const COMPANION_AVATAR_GAP = 10;
+
 interface MessageActions {
   companion?: boolean;
   companionWorkingLabel?: string | null;
+  /** Teammate portrait beside its replies (Desktop withAssistantAvatar). */
+  companionAvatar?: ReactNode;
+  /** First visible message of each five-minute teammate time group → its timestamp. */
+  companionTimeGroups?: ReadonlyMap<string, number>;
   companionPluginWork?: ReturnType<typeof companionPluginWorkEntries>;
   /** Partner chats keep the user's bubble plain; result and authorization cards remain independent. */
   showPluginInvocations?: boolean;
@@ -676,6 +685,7 @@ interface MessageActions {
 export function MessageRenderer({
   companion = false,
   companionWorkingLabel,
+  companionAvatar,
   companionPluginInvocations,
   showPluginInvocations = true,
   remoteDeviceId,
@@ -729,6 +739,7 @@ export function MessageRenderer({
 }: {
   companion?: boolean;
   companionWorkingLabel?: string | null;
+  companionAvatar?: ReactNode;
   companionPluginInvocations?: ReadonlyMap<string, PluginInvocation[]>;
   /** Offscreen preload and disappearing native screens must not replace the user's bookmark. */
   isReadingPositionActive?: () => boolean;
@@ -1636,9 +1647,15 @@ export function MessageRenderer({
     if (shareSelectionActiveRef.current) scheduleStickyShareCheckRef.current?.(true);
   }, []);
   const companionPluginWork = useMemo(() => companion ? companionPluginWorkEntries(items, companionPluginInvocations) : undefined, [companion, items, companionPluginInvocations]);
+  // Desktop MessageStream groups the visible teammate conversation (not hidden work) into five-minute stamps.
+  const companionTimeGroups = useMemo(() => companion ? collectBotMessageTimeGroups(items.flatMap((item) =>
+    item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
+      ? [{ clientId: item.key, createdAt: item.message.createdAt }] : [])) : undefined, [companion, items]);
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
     companion,
     companionWorkingLabel,
+    companionAvatar,
+    companionTimeGroups,
     companionPluginWork,
     showPluginInvocations,
     remoteDeviceId,
@@ -1673,6 +1690,8 @@ export function MessageRenderer({
   }), [
     companion,
     companionWorkingLabel,
+    companionAvatar,
+    companionTimeGroups,
     companionPluginWork,
     showPluginInvocations,
     remoteDeviceId,
@@ -2859,7 +2878,8 @@ const RenderItemView = memo(function RenderItemView({
       node = item.message.authorization
         ? <AuthorizationMessageCard message={item.message} />
         : item.message.companion
-        ? <CompanionMessageCard message={item.message} />
+        ? <CompanionMessageCard message={item.message}
+            renderMarkdown={(text) => <CompanionCardMarkdown text={text} actions={actions} />} />
         : item.message.orcaCard
         ? <OrcaCollabCard card={item.message.orcaCard} screenWidth={actions.screenWidth}
             blockKey={JSON.stringify([actions.remoteDeviceId, item.key])} />
@@ -2944,9 +2964,15 @@ const RenderItemView = memo(function RenderItemView({
       logUnhandledRenderItem(item);
       break;
   }
+  const groupTimestamp = actions.companion && item.type === 'message'
+    ? actions.companionTimeGroups?.get(item.key) : undefined;
+  // Desktop keeps the persistent task card on the replies' column with an invisible avatar.
+  const alignWithReplies = !!actions.companionAvatar && actions.companion && item.type === 'message'
+    && item.message.companion?.kind === 'task' && item.message.companion.meta.role === 'delegation-request';
   return (
     <View style={focused ? styles.focusedItem : undefined} testID={focused ? 'message.focusedItem' : undefined}>
-      {node}
+      {groupTimestamp !== undefined ? <CompanionTimeGroupStamp timestamp={groupTimestamp} /> : null}
+      {alignWithReplies ? <View style={styles.companionAvatarInset}>{node}</View> : node}
     </View>
   );
 });
@@ -3681,13 +3707,12 @@ function MessageBubble({
         actions={[
           ...(canCopy ? [{ id: 'copy', title: copyActionLabel(copyState), image: 'doc.on.doc', disabled: copyState === 'copying' }] : []),
           ...(canShare ? [{ id: 'share', title: t('session.shareImage.shareMessage'), image: 'square.and.arrow.up' }] : []),
-          ...(canFork ? [{ id: 'fork', title: messageControlActionLabel('fork', copyState), image: 'arrow.triangle.branch', disabled: actionBusy }] : []),
+          // Desktop's teammate action bar omits fork and per-turn cost/tokens: the Bot owns its one timeline.
           ...messageMenu.map(item => ({ id: item.id, title: item.label, image: item.image, destructive: item.destructive, disabled: actionBusy })),
           ...(absoluteTime ? [{ id: 'time', title: t('message.renderer.sentTime', { time: absoluteTime }), disabled: true }] : []),
-          ...(turnCost || turnTokens ? [{ id: 'usage', title: turnCost ? t('message.renderer.turnCost', { cost: turnCost }) : t('message.renderer.turnTokens', { tokens: turnTokens }), disabled: true }] : []),
         ]}
         onAction={id => {
-          if (id === 'copy' || id === 'fork') selectControlAction(id);
+          if (id === 'copy') selectControlAction(id);
           else if (id === 'share') actions.onEnterShareSelection?.(clientId);
           else if (messageMenu.some(item => item.id === id)) selectMenuAction(id as MobileMessageMenuActionId);
         }} /> : hasActions ? (
@@ -3770,7 +3795,16 @@ function MessageBubble({
     </View>
   );
 
-  if (!shareSelectionActive) return messageNode;
+  // Desktop withAssistantAvatar: a teammate's reply hangs from its portrait (IM shape).
+  const companionAvatar = actions.companion && !isUser && item.message.kind === 'assistant'
+    && !item.message.systemCardType ? actions.companionAvatar : undefined;
+  const rowNode = companionAvatar ? (
+    <View style={styles.companionAvatarRow} testID="companion.replyRow">
+      <View style={styles.companionAvatarSlot}>{companionAvatar}</View>
+      <View style={styles.companionAvatarContent}>{messageNode}</View>
+    </View>
+  ) : messageNode;
+  if (!shareSelectionActive) return rowNode;
   return (
     <ShareMessageCheckbox
       clientId={clientId}
@@ -3778,9 +3812,20 @@ function MessageBubble({
       fill
     >
       <View style={styles.shareSelectionContent}>
-        {messageNode}
+        {rowNode}
       </View>
     </ShareMessageCheckbox>
+  );
+}
+
+/** Centered five-minute stamp above the first visible message of a teammate time group. */
+function CompanionTimeGroupStamp({ timestamp }: { timestamp: number }) {
+  const { i18n } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <Text style={styles.companionTimeGroup} testID="companion.timeGroup">
+      {formatBotMessageGroupTime(timestamp, i18n.language)}
+    </Text>
   );
 }
 
@@ -5175,6 +5220,13 @@ const ViewabilityGatedMathFormula = memo(function ViewabilityGatedMathFormula({
     />
   );
 });
+
+/** A frozen task result reads like a reply: same Markdown, links and file chips (Desktop MarkdownRenderer). */
+function CompanionCardMarkdown({ text, actions }: { text: string; actions: MessageActions }) {
+  const layout = useMemo(() => buildMessageContentLayout({ screenWidth: actions.screenWidth }), [actions.screenWidth]);
+  return <MarkdownBody layout={layout} text={text} selectable
+    onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />;
+}
 
 // 消息正文统一走原生 markdown 渲染(流式与完成态同一条路径,完成时无"原生→WebView"的切换跳变)。
 // 文本选择 = 完成态消息的各块 Text 原生 selectable:长按文字就地弹系统选择手柄/Copy 菜单,
@@ -8214,6 +8266,19 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.sm,
   },
   companionAnswer: { backgroundColor: colors.surface, borderWidth: 0, paddingHorizontal: 0 },
+  // Desktop BotAvatar sm (28) + gap-2.5; the task card reuses the same inset.
+  companionAvatarRow: { flexDirection: 'row', alignItems: 'flex-start', gap: COMPANION_AVATAR_GAP },
+  companionAvatarSlot: { flexShrink: 0, marginTop: 2 },
+  companionAvatarContent: { flex: 1, minWidth: 0 },
+  companionAvatarInset: { paddingLeft: COMPANION_AVATAR_SIZE + COMPANION_AVATAR_GAP },
+  companionTimeGroup: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+    marginBottom: spacing.md,
+    marginTop: spacing.sm,
+    textAlign: 'center',
+  },
   companionUserBubble: { borderColor: colors.border },
   userBubble: {
     alignSelf: 'flex-end',

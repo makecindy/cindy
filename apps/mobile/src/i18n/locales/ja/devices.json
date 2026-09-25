@@ -812,7 +812,7 @@
     }
   },
   "companions": {
-    "messageSent": "追加メッセージを送信しました",
+    "messageSent": "バックグラウンドタスクにメッセージを送信しました",
     "sentTo": "{{name}} にメッセージを送信",
     "receivedFrom": "{{name}} からのメッセージ",
     "backgroundTask": "バックグラウンドタスク",
@@ -835,16 +835,19 @@
     "actionFailed": "読み込みまたは操作を完了できません",
     "messages": "メッセージ",
     "readOnly": "閲覧のみ",
+    "directEmpty": "表示できるメッセージはまだありません。",
+    "directLimitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました",
+    "directUnavailable": "この仲間同士の会話は利用できません。",
     "unread": "新しい返信",
     "status": {
-      "queued": "開始待ち",
-      "running": "実行中",
-      "waiting": "返信待ち",
+      "queued": "開始しています",
+      "running": "作業中",
+      "waiting": "対応待ち",
       "completed": "完了",
       "failed": "失敗",
-      "cancelled": "キャンセル済み",
+      "cancelled": "停止済み",
       "timed-out": "タイムアウト",
-      "unknown": "状態を確認できません"
+      "unknown": "タスクの状況を確認できません"
     },
     "title": "チームメイト",
     "tasks": "セッション",
@@ -852,6 +855,7 @@
     "emptyTitle": "チームメイトはまだいません",
     "emptyCopy": "パソコンの Cindy でチームメイトを作成してください。",
     "noResults": "一致するチームメイトがいません",
+    "startChat": "会話を始める",
     "preferenceSaveFailed": "表示設定を保存できませんでした。もう一度表示を切り替えてください。",
     "automation": {
       "unsupported": "自動化を管理するには、パソコンの Cindy を更新して再試行してください。",
@@ -982,7 +986,8 @@
       "avatarSkipped": "今は初期アバターを使っています。いつでも変更できます。"
     },
     "viewResult": "結果を見る",
-    "noWrittenResult": "テキストの結果はありません。"
+    "noWrittenResult": "テキストの結果はありません。",
+    "errorDetails": "エラー詳細"
   },
   "companionProfile": {
     "avatar": "アバター",

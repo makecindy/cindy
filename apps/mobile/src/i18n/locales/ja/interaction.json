@@ -279,6 +279,7 @@
     }
   },
   "companion": {
+    "permissionRequest": "{{name}} が確認をお願いしています",
     "operation": "操作",
     "details": "詳細を表示",
     "fields": {

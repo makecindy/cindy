@@ -51,6 +51,11 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
       || item.type === 'subagent_group' || item.type === 'todo') return false;
     if (item.type !== 'message') return true;
     const message = item.message;
+    // Desktop drops persisted synthetic resume separators from teammate chats; only the live
+    // reconnect card (still in progress) remains. The composer status carries recovery copy.
+    if (message.isSyntheticTrigger && message.systemCardType === 'auto-resume') {
+      return message.systemCardData?.live === true;
+    }
     if (message.systemCardType) return true;
     if (message.kind === 'thinking' || message.kind === 'tool') return false;
     return message.kind !== 'assistant' || message.turnCompleted || sealed.has(item.key) || isDelivery(item)

@@ -78,6 +78,7 @@
     "./botCollaboration": "./src/botCollaboration.ts",
     "./botDirectMessage": "./src/botDirectMessage.ts",
     "./botDelegation": "./src/botDelegation.ts",
+    "./botTimeline": "./src/botTimeline.ts",
     "./remote-desktop-viewer": "./src/remote-desktop/viewerRuntime.js",
     "./remote-desktop-mobile": "./src/remote-desktop/mobileHtml.ts",
     "./remote-desktop-scripts": "./src/remote-desktop/viewerScripts.ts"
