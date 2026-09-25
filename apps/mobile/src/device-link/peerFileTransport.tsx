@@ -1,5 +1,11 @@
-import { canStagePeerMedia } from './peerFileRegistry';
-import { createFileReadQueue } from '@cindy/device-link';
+import { canStagePeerMedia } from "./peerFileRegistry";
+import {
+  createFileReadQueue,
+  createPeerTransferCooldown,
+  canUsePeerInvoke,
+  uploadPeerAttachment,
+  type InvokeResultPayload,
+} from "@cindy/device-link";
 import { useEffect, useRef, useState } from "react";
 import { AppState, View } from "react-native";
 import { WebView } from "react-native-webview";
@@ -24,6 +30,9 @@ import {
 
 import {
   installPeerFileDownload,
+  installPeerInvoke,
+  installPeerUpload,
+  installPeerReset,
   recordPeerMedia,
   clearPeerMedia,
   type LocalPeerMedia as LocalMedia,
@@ -72,6 +81,7 @@ export function PeerFileTransport() {
     >(),
   );
   const epoch = useRef(0);
+  const cooldown = useRef(createPeerTransferCooldown());
   const account = `${auth.user?.id ?? ""}:${getActiveMobileSessionRealm()}:${auth.isAuthenticated}:${auth.accountGeneration}`;
   const owner = `${account}:${link.connectionEpoch}`;
   const viewKey = `${owner}:${crashes}`;
@@ -92,11 +102,22 @@ export function PeerFileTransport() {
         },
         action === "receive" ? 60_000 : 15000,
       );
-      const entry = { resolve, reject, timer, refresh: action === "receive" ? () => {
-        clearTimeout(timer);
-        timer = setTimeout(() => { pending.current.delete(id); reject(new Error("FILE_PEER_TIMEOUT")); }, 60_000);
-        entry.timer = timer;
-      } : undefined };
+      const entry = {
+        resolve,
+        reject,
+        timer,
+        refresh:
+          action === "receive"
+            ? () => {
+                clearTimeout(timer);
+                timer = setTimeout(() => {
+                  pending.current.delete(id);
+                  reject(new Error("FILE_PEER_TIMEOUT"));
+                }, 60_000);
+                entry.timer = timer;
+              }
+            : undefined,
+      };
       pending.current.set(id, entry);
       send({ id, action, args });
     });
@@ -109,7 +130,13 @@ export function PeerFileTransport() {
     return () => subscription.remove();
   }, []);
   // Completed files outlive transport reconnects/backgrounding, but never an account switch.
-  useEffect(() => () => clearPeerMedia(), [account]);
+  useEffect(
+    () => () => {
+      clearPeerMedia();
+      cooldown.current.clear();
+    },
+    [account],
+  );
   useEffect(() => {
     if (!foreground || ready !== viewKey || !auth.isAuthenticated) return;
     if (!swept) {
@@ -133,32 +160,62 @@ export function PeerFileTransport() {
       liveView.current === viewKey &&
       AppState.currentState === "active";
     let busy = false;
-    let connection: { id: string; remote: string; device: string } | null =
-      null;
+    const deviceGenerations = new Map<string, object>();
+    const captureDevice = (device: string) => {
+      const generation = deviceGenerations.get(device);
+      return () => current() && deviceGenerations.get(device) === generation;
+    };
+    let connection: {
+      id: string;
+      remote: string;
+      device: string;
+      rpc: boolean;
+      attachments: boolean;
+    } | null = null;
     let idle: ReturnType<typeof setTimeout> | undefined;
-    const close = () => {
+    const close = (notify = true) => {
       clearTimeout(idle);
       const old = connection;
       connection = null;
       if (old && current()) {
         void command("close", [old.id]).catch(() => {});
-        void link
-          .invoke(old.device, FILE_PEER_CHANNEL, [
-            { action: "close", connection: old.remote },
-          ])
-          .catch(() => {});
+        if (notify)
+          void link
+            .invoke(old.device, FILE_PEER_CHANNEL, [
+              { action: "close", connection: old.remote },
+            ])
+            .catch(() => {});
       }
     };
+    const transportCurrent = current;
+    const unregisterReset = installPeerReset((device) => {
+      deviceGenerations.set(device, {});
+      if (connection?.device === device) close(false);
+    });
     const transfer = async (
       device: string,
-      url: string,
+      url: string | null,
       signal?: AbortSignal,
       readTrace?: number,
     ): Promise<LocalMedia | null> => {
+      const current = captureDevice(device);
+      // Keep a device close from turning into an upload fallback or reopening its link.
       if (!current() || signal?.aborted) throw new Error("FILE_PEER_CANCELLED");
       const trace = readTrace || nextFileTrace();
+      const remaining = cooldown.current.remaining(device);
+      if (remaining) {
+        mobileDebugLog("debug", "files", "direct transfer skipped", {
+          trace,
+          reason: "cooldown",
+          remainingMs: remaining,
+        });
+        return null;
+      }
       if (busy) {
-        mobileDebugLog("debug", "files", "direct transfer skipped", { trace, reason: "busy" });
+        mobileDebugLog("debug", "files", "direct transfer skipped", {
+          trace,
+          reason: "busy",
+        });
         return null;
       }
       busy = true;
@@ -190,18 +247,24 @@ export function PeerFileTransport() {
         if (current()) void command("close", [id]).catch(() => {});
       };
       signal?.addEventListener("abort", cancel, { once: true });
-      const invoke = (request: unknown) =>
-        link.invoke<unknown>(device, FILE_PEER_CHANNEL, [request]);
+      const invoke = (request: unknown) => {
+        if (!current() || signal?.aborted)
+          throw new Error("FILE_PEER_CANCELLED");
+        return link.invoke<unknown>(device, FILE_PEER_CHANNEL, [request]);
+      };
       try {
         await link.openLink(device);
         if (!remote) {
           step = "caps";
           const caps = (await invoke({ action: "caps" })) as {
             version?: number;
+            streaming?: boolean;
+            attachments?: boolean;
           };
           if (!current() || signal?.aborted)
             throw new Error("FILE_PEER_CANCELLED");
           if (caps?.version !== 1) {
+            cooldown.current.fail(device);
             mobileDebugLog("debug", "files", "direct transfer skipped", {
               trace,
               reason: "host-version",
@@ -226,7 +289,11 @@ export function PeerFileTransport() {
           if (!current() || signal?.aborted)
             throw new Error("FILE_PEER_CANCELLED");
           step = "offer";
-          const sdp = await command("offer", [id, servers]);
+          const sdp = await command("offer", [
+            id,
+            servers,
+            caps.streaming === true,
+          ]);
           step = "host-answer";
           const answer = (await invoke({ action: "offer", sdp })) as {
             connection?: string;
@@ -245,11 +312,23 @@ export function PeerFileTransport() {
             throw new Error("FILE_PEER_CLOSED");
           step = "answer";
           await command("answer", [id, answer.sdp]);
-          connection = { id, remote, device };
+          connection = {
+            id,
+            remote,
+            device,
+            rpc: caps.streaming === true,
+            attachments: caps.attachments === true,
+          };
           mobileDebugLog("debug", "files", "direct transfer connected", {
             trace,
             ms: Date.now() - startedAt,
+            transport: await command("stats", [id]),
           });
+        }
+        if (url === null) {
+          complete = true;
+          cooldown.current.success(device);
+          return null;
         }
         step = "open";
         const file = parseFilePeerFile(
@@ -265,6 +344,7 @@ export function PeerFileTransport() {
           return null;
         }
         step = "receive";
+        const transferStartedAt = Date.now();
         const directory = new Directory(
           Paths.cache,
           "remote-media-share",
@@ -306,11 +386,16 @@ export function PeerFileTransport() {
         }
         target = undefined;
         complete = true;
+        cooldown.current.success(device);
         mobileDebugLog("debug", "files", "direct transfer done", {
           trace,
           ms: Date.now() - startedAt,
           size: file.size,
           mime: file.mimeType,
+          transferMs: Date.now() - transferStartedAt,
+          bytesPerSecond: Math.round(
+            (file.size * 1000) / Math.max(1, Date.now() - transferStartedAt),
+          ),
         });
         return result;
       } catch (error) {
@@ -326,6 +411,7 @@ export function PeerFileTransport() {
         });
         if (!current() || signal?.aborted)
           throw new Error("FILE_PEER_CANCELLED");
+        if (step !== "open") cooldown.current.fail(device);
         return null;
       } finally {
         busy = false;
@@ -338,7 +424,7 @@ export function PeerFileTransport() {
         if (complete && current()) idle = setTimeout(close, 30_000);
         else {
           close();
-          if (current()) void command("close", [id]).catch(() => {});
+          if (transportCurrent()) void command("close", [id]).catch(() => {});
           if (remote && current())
             void invoke({ action: "close", connection: remote }).catch(
               () => {},
@@ -347,8 +433,141 @@ export function PeerFileTransport() {
       }
     };
     const queueRead = createFileReadQueue();
-    const unregister = installPeerFileDownload((device, url, signal, readTrace) =>
-      queueRead('connection', () => transfer(device, url, signal, readTrace), signal));
+    const unregister = installPeerFileDownload(
+      (device, url, signal, readTrace) => {
+        const active = captureDevice(device);
+        return queueRead(
+          "connection",
+          () => {
+            if (!active()) throw new Error("FILE_PEER_CANCELLED");
+            return transfer(device, url, signal, readTrace);
+          },
+          signal,
+        );
+      },
+    );
+    const warming = new Set<string>();
+    const unregisterUpload = installPeerUpload(
+      (device, uri, metadata, signal) => {
+        const current = captureDevice(device);
+        return queueRead(
+          "connection",
+          async () => {
+            const check = () => {
+              if (!current() || signal?.aborted)
+                throw new Error("FILE_PEER_CANCELLED");
+            };
+            check();
+            if (cooldown.current.remaining(device)) return null;
+            let handle: ReturnType<File["open"]> | undefined;
+            try {
+              await transfer(device, null, signal);
+              check();
+              const active = connection;
+              if (!active || active.device !== device || !active.attachments)
+                return null;
+              clearTimeout(idle);
+              busy = true;
+              handle = new File(uri).open();
+              const transferStartedAt = Date.now();
+              const result = await uploadPeerAttachment(
+                metadata,
+                async (offset, length) => {
+                  handle!.offset = offset;
+                  const bytes = handle!.readBytes(length);
+                  if (bytes.length !== length)
+                    throw new Error("FILE_PEER_CHANGED");
+                  let binary = "";
+                  for (const byte of bytes) binary += String.fromCharCode(byte);
+                  return btoa(binary);
+                },
+                async (request) => {
+                  check();
+                  const raw = await command("invoke", [
+                    active.id,
+                    JSON.stringify({
+                      channel: FILE_PEER_CHANNEL,
+                      args: [
+                        {
+                          action: "attachment",
+                          connection: active.remote,
+                          request,
+                        },
+                      ],
+                    }),
+                  ]);
+                  check();
+                  const response = JSON.parse(String(raw));
+                  if (!response.ok) throw new Error("FILE_PEER_UPLOAD");
+                  return response.result;
+                },
+                check,
+              );
+              const ms = Date.now() - transferStartedAt;
+              mobileDebugLog("debug", "files", "peer attachment uploaded", {
+                bytes: metadata.size, transferMs: ms,
+                bytesPerSecond: Math.round(metadata.size * 1000 / Math.max(1, ms)),
+              });
+              return result;
+            } catch {
+              check();
+              cooldown.current.fail(device);
+              return null;
+            } finally {
+              try {
+                handle?.close();
+              } catch {}
+              busy = false;
+              if (current()) idle = setTimeout(close, 30_000);
+            }
+          },
+          signal,
+        );
+      },
+    );
+    const unregisterInvoke = installPeerInvoke(
+      async (device, channel, args) => {
+        const current = captureDevice(device);
+        if (!canUsePeerInvoke(channel, args)) return null;
+        if (!current()) throw new Error("FILE_PEER_CANCELLED");
+        if (cooldown.current.remaining(device)) return null;
+        if (connection?.device !== device || !connection.rpc) {
+          if (
+            (!connection || connection.device !== device) &&
+            !warming.has(device)
+          ) {
+            warming.add(device);
+            void queueRead("connection", () => {
+              if (!current()) throw new Error("FILE_PEER_CANCELLED");
+              return transfer(device, null);
+            })
+              .catch(() => {})
+              .finally(() => warming.delete(device));
+          }
+          return null;
+        }
+        const id = connection.id;
+        clearTimeout(idle);
+        try {
+          const raw = await command("invoke", [
+            id,
+            JSON.stringify({ channel, args }),
+          ]);
+          if (!current()) throw new Error("FILE_PEER_CANCELLED");
+          const result = JSON.parse(String(raw)) as InvokeResultPayload;
+          if (!result || typeof result.ok !== "boolean")
+            throw new Error("FILE_PEER_REPLY");
+          return result;
+        } catch {
+          if (!current()) throw new Error("FILE_PEER_CANCELLED");
+          cooldown.current.fail(device);
+          close();
+          return null;
+        } finally {
+          if (current() && !busy) idle = setTimeout(close, 30_000);
+        }
+      },
+    );
     mobileDebugLog("debug", "files", "direct transfer ready");
     return () => {
       mobileDebugLog("debug", "files", "direct transfer reset", {
@@ -358,6 +577,9 @@ export function PeerFileTransport() {
       close();
       ++epoch.current;
       unregister();
+      unregisterInvoke();
+      unregisterUpload();
+      unregisterReset();
       for (const p of pending.current.values()) {
         clearTimeout(p.timer);
         p.reject(new Error("FILE_PEER_CLOSED"));
@@ -369,12 +591,16 @@ export function PeerFileTransport() {
         } catch {}
       }
       sinks.current.clear();
-      view.current?.injectJavaScript("if (typeof runtime !== 'undefined') runtime.dispose();true;");
+      view.current?.injectJavaScript(
+        "if (typeof runtime !== 'undefined') runtime.dispose();true;",
+      );
     };
   }, [foreground, ready, auth.isAuthenticated, viewKey]);
   const handleProcessTerminated = () => {
     if (liveView.current !== viewKey) return;
-    mobileDebugLog("warn", "files", "direct transfer runtime terminated", { crashes });
+    mobileDebugLog("warn", "files", "direct transfer runtime terminated", {
+      crashes,
+    });
     setReady(null);
     setCrashes((n) => Math.min(2, n + 1));
   };
@@ -406,7 +632,7 @@ export function PeerFileTransport() {
         onMessage={(event) => {
           try {
             if (liveView.current !== viewKey) return;
-            if (event.nativeEvent.data.length > 140000) return;
+            if (event.nativeEvent.data.length > 8 * 1024 * 1024) return;
             const m = JSON.parse(event.nativeEvent.data);
             if (m.type === "ready") {
               setReady(viewKey);
@@ -440,7 +666,8 @@ export function PeerFileTransport() {
                   throw new Error();
                 sink.handle.writeBytes(bytes);
                 sink.offset += bytes.length;
-                for (const operation of pending.current.values()) operation.refresh?.();
+                for (const operation of pending.current.values())
+                  operation.refresh?.();
                 ok = true;
               } catch {}
               send({ type: "writeReply", id: m.id, ok });

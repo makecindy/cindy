@@ -61,7 +61,8 @@ import {
   waitForNewerControllerDisplayNameDirectoryRefresh,
 } from './index';
 import { getActiveControllers } from './dispatch';
-import { rewriteOutboundMedia } from './outboundMedia';
+import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
+import { tryUploadPeerAttachment } from './filePeer';
 import { parseSharedTaskPeer } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import {
@@ -682,8 +683,9 @@ export async function handleInvoke(
       if (projectionUnavailable) {
         throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Queued content editing is not supported by the target device');
       }
-      callArgs = await withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
-        () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs));
+      callArgs = await withPeerAttachmentUpload((source, mime) => peer ? Promise.resolve(null) : tryUploadPeerAttachment(normalizedDeviceId, source, mime, deps.invoke), () =>
+        withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
+          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs)));
      } catch (err) {
        if (isIpcError(err) && err.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
          throw err;

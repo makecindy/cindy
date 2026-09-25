@@ -4,10 +4,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DURABLE_OUTBOX_PREFIX, type DurableOutboxRecord, type DurableUpload } from "./durableOutbox";
 import type { MobileLocalAttachmentUploadCandidate } from "./mobileLocalAttachmentUpload";
 import { isAttachmentOssRef } from './attachmentOssRef';
+import { isPeerAttachmentRef } from '@cindy/device-link';
 
 /** Desktop path references already have their source on the controlled device. */
 export function outboxAttachmentNeedsLocalBytes(attachment: { path: string }): boolean {
-  return isAttachmentOssRef(attachment.path);
+  return isAttachmentOssRef(attachment.path) || isPeerAttachmentRef(attachment.path);
 }
 
 function segment(value: string): string {

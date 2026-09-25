@@ -276,7 +276,7 @@ export function useMobileLocalAttachments(
       if (candidate.kind === 'image') assertMobileImageSize(size);
       else assertMobileDocumentSize(size);
     },
-    upload: (candidate, fileUri, opts) => uploadMobileAttachmentFromFile(candidate, fileUri, { ...opts, sharedTaskId: candidate.sharedTaskId }),
+    upload: (candidate, fileUri, opts) => uploadMobileAttachmentFromFile(candidate, fileUri, { ...opts, sharedTaskId: candidate.sharedTaskId, deviceId: candidate.deviceId }),
     discard: (attachment, token) => discardMobileUploadedAttachment(attachment, {
       getToken: () => token === undefined ? optionsRef.current.getAccessToken() : Promise.resolve(token),
     }),
@@ -382,13 +382,11 @@ export function useMobileLocalAttachments(
   ) => {
     if (!isAttachmentScopeActive()) return;
     controller.enqueue(
-      attachmentScopeKey == null
-        ? candidates
-        : candidates.map((candidate) => ({
+      candidates.map((candidate) => ({
             ...candidate,
-            attachmentScopeGeneration,
-            attachmentScopeKey,
+            ...(attachmentScopeKey == null ? {} : { attachmentScopeGeneration, attachmentScopeKey }),
             sharedTaskId: parseSharedTaskPeer(optionsRef.current.deviceId ?? '')?.sharedTaskId,
+            deviceId: optionsRef.current.deviceId,
           })),
       opts,
     );

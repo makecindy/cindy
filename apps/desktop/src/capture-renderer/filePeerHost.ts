@@ -9,7 +9,13 @@ export function startFilePeerHost(api: FilePeerHostApi) {
         let result: string | undefined;
         switch (c.action) {
           case 'offer':
-            result = await runtime.offer(c.connection, c.servers);
+            result = await runtime.offer(c.connection, c.servers, c.streaming);
+            break;
+          case 'stats':
+            result = await runtime.stats(c.connection);
+            break;
+          case 'invoke':
+            result = await runtime.invoke(c.connection, c.payload);
             break;
           case 'accept':
             result = await runtime.accept(c.connection, c.servers, c.sdp);

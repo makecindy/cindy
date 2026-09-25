@@ -139,6 +139,7 @@
     "test:db": "pnpm test:runner && node scripts/test-workspaces.mjs --tier db",
     "test:guard": "node scripts/test-workspaces.mjs --tier guard",
     "test:device-link": "node apps/mobile/scripts/device-link-reconnect-smoke.mjs",
+    "test:peer-transfer": "node scripts/peer-transfer-acceptance.mjs",
     "ci:scheduler-guard": "node scripts/scheduler-ci-guard.mjs",
     "pctx": "node packages/project-context/dist/cli.js",
     "pctx:build": "pnpm --filter project-context build"

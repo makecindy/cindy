@@ -3726,7 +3726,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
   }
 
   if (payload.channel === FILE_PEER_CHANNEL) {
-    try { return { ok: true, result: await requestFilePeer(src, payload.args?.[0]) }; }
+    try { return { ok: true, result: await requestFilePeer(src, payload.args?.[0], (channel, args) => runInvoke(src, { channel, args })) }; }
     catch { return { ok: false, error: { code: 'IPC_ERROR', message: 'FILE_PEER_UNAVAILABLE' } }; }
   }
   if (payload.channel === PLUGIN_OAUTH_CHANNEL) {
