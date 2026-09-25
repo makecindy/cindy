@@ -1882,7 +1882,7 @@ function ghostPermissionProjectionTuple(item: GhostPermissionItem): unknown[] {
   ];
 }
 
-function ghostPermissionProjectionKey(item: GhostPermissionItem): string {
+export function ghostPermissionProjectionKey(item: GhostPermissionItem): string {
   return JSON.stringify(ghostPermissionProjectionTuple(item));
 }
 

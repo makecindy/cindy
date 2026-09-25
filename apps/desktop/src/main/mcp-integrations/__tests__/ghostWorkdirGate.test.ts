@@ -24,6 +24,7 @@ import type {
 } from '../../cindy-brain/ghostSetupCoordinator';
 import { t } from '../../i18n';
 import type { CindyGhostsHostDeps } from '../ghost';
+import type { GhostInstallConsentPrompt } from '../../cindy-brain/ghostInstallConsent';
 import type { InstalledGhost, GhostSetupAssessment } from '../../../shared/ghost';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
@@ -307,6 +308,7 @@ function makeDeps(
   sessionInstanceId: string | null = sessionId ? `${sessionId}-instance` : null,
   vendorOptions: Record<string, unknown> = {},
   pluginMarket?: CindyGhostsHostDeps['pluginMarket'],
+  requestHostPermission?: CindyGhostsHostDeps['requestHostPermission'],
 ) {
   const ctx = {
     agentKind,
@@ -322,6 +324,7 @@ function makeDeps(
     pluginMarket,
     getAppVersion: appVersionMock,
     getLiveSessionGrantState: liveGrantStateMock,
+    ...(requestHostPermission ? { requestHostPermission } : {}),
   });
 }
 
@@ -547,6 +550,8 @@ describe('Forge session workdir gate', () => {
     expect(forgeInstallPackageMock).toHaveBeenCalledWith(cindyPath, {
       ghostId: 'demo',
       packageSha256: createHash('sha256').update(bytes).digest('hex'),
+      // Agent 安装的插件确认投给调用所在的任务。
+      consentPrompt: expect.any(Function),
     });
     expect(result).toMatchObject({
       ok: true,
@@ -2967,14 +2972,18 @@ it.each([false, true])('only marks a teammate setup plan as reauthorization with
 });
 
 describe('market install live authority', () => {
-  function marketHarness(agentKind: TestAgentKind = 'claude-code') {
+  type InstallContext = { consent: { prompt: GhostInstallConsentPrompt; initiator: string }; assertCurrent?: () => void };
+  function marketHarness(
+    agentKind: TestAgentKind = 'claude-code',
+    requestHostPermission?: CindyGhostsHostDeps['requestHostPermission'],
+  ) {
     const ghost = { manifest: { id: 'mail-suite', name: 'Mail', version: '1' }, enabled: true };
     const market = {
       snapshot: vi.fn(async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
       detail: vi.fn(async () => ({ ghostId: 'mail-suite', releaseId: 'r1', manifest: ghost.manifest })),
-      install: vi.fn(async (_id: string, _options: unknown, guard?: () => void) => { guard?.(); return { ghost }; }),
+      install: vi.fn(async (_id: string, _options: unknown, context: InstallContext) => { context.assertCurrent?.(); return { ghost }; }),
     };
-    const deps = makeDeps(agentKind, 's1', 's1-instance', {}, market as unknown as CindyGhostsHostDeps['pluginMarket']);
+    const deps = makeDeps(agentKind, 's1', 's1-instance', {}, market as unknown as CindyGhostsHostDeps['pluginMarket'], requestHostPermission);
     return { deps, market };
   }
 
@@ -3004,14 +3013,41 @@ describe('market install live authority', () => {
     liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', isCurrent: () => current });
     const { deps, market } = marketHarness();
     const place = vi.fn();
-    market.install.mockImplementation(async (_id, _options, guard) => {
+    market.install.mockImplementation(async (_id, _options, context) => {
       if (change === 'cancel') controller.abort(); else current = false;
-      guard?.(); place();
+      context.assertCurrent?.(); place();
       throw new Error('unreachable');
     });
     expect(await deps.installMarket!({ pluginId: 'p1', releaseId: 'r1' }, controller.signal)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
     expect(place).not.toHaveBeenCalled();
     expect(releaseMutationMock).toHaveBeenCalledOnce();
+  });
+
+  it('asks the calling task to confirm the install as a host-owned permission card', async () => {
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', isCurrent: () => true });
+    const requestHostPermission = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'allow' as const }));
+    const { deps, market } = marketHarness('codex', requestHostPermission);
+    market.install.mockImplementation(async (_id, _options, context) => {
+      expect(context.consent.initiator).toBe('agent');
+      const confirmed = await context.consent.prompt({
+        initiator: 'agent',
+        origin: 'market',
+        facts: { kind: 'install', ghostId: 'mail-suite', name: 'Mail', version: '1', permissions: [] },
+      });
+      expect(confirmed).toBe(true);
+      return { ghost: { manifest: { id: 'mail-suite', name: 'Mail', version: '1' }, enabled: true } };
+    });
+    expect(await deps.installMarket!({ pluginId: 'p1', releaseId: 'r1' })).toMatchObject({ status: 'installed' });
+    expect(requestHostPermission).toHaveBeenCalledWith(
+      's1',
+      's1-instance',
+      expect.objectContaining({
+        kind: 'permission',
+        toolName: 'cindy.plugin.install',
+        metadata: { hostOwnedConfirmation: 'plugin_install' },
+      }),
+      expect.any(AbortSignal),
+    );
   });
 
   it('rejects an already cancelled request before catalog access', async () => {

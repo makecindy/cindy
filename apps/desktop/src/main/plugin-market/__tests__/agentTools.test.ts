@@ -3,6 +3,7 @@ import { createPluginMarketAgentTools } from '../agentTools.js';
 import type { PluginMarketDetail, PluginMarketSnapshot } from '../../../shared/pluginMarket.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
+import type { PluginMarketInstallContext } from '../service.js';
 
 function harness(ghostId = 'mail-suite', name = 'Google Gmail') {
   const detail: PluginMarketDetail = {
@@ -20,10 +21,11 @@ function harness(ghostId = 'mail-suite', name = 'Google Gmail') {
     if (!state.current) throwIpcError('PERMISSION_DENIED', 'scope changed');
   });
   const release = vi.fn();
+  const consentPrompt = vi.fn(async () => true);
   const market = {
     snapshot: vi.fn(async () => snapshot), detail: vi.fn(async () => detail),
-    install: vi.fn(async (_id: string, _options: unknown, guard?: () => void) => {
-      guard?.();
+    install: vi.fn(async (_id: string, _options: unknown, context: PluginMarketInstallContext) => {
+      context.assertCurrent?.();
       state.installed = true;
       return { ghost: { manifest: detail.manifest, enabled: true } as InstalledGhost };
     }),
@@ -31,9 +33,9 @@ function harness(ghostId = 'mail-suite', name = 'Google Gmail') {
   const tools = createPluginMarketAgentTools({
     market, installedState: () => ({ exists: state.installed, errorCode: state.errorCode }),
     captureRead: () => assertCurrent,
-    captureInstall: () => { assertCurrent(); return { assertCurrent, release }; },
+    captureInstall: () => { assertCurrent(); return { assertCurrent, release, consentPrompt }; },
   });
-  return { tools, market, detail, snapshot, state, release };
+  return { tools, market, detail, snapshot, state, release, consentPrompt };
 }
 
 describe('Agent plugin discovery and installation', () => {
@@ -44,7 +46,10 @@ describe('Agent plugin discovery and installation', () => {
       expect(h.market.snapshot).toHaveBeenCalledWith({ discoveryOnly: true });
       expect(h.market.install).not.toHaveBeenCalled();
       expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' })).toMatchObject({ ok: true, status: 'installed', ghost_id: id });
-      expect(h.market.install).toHaveBeenCalledWith('catalog-id', { expectedReleaseId: 'release-1', expectedManifest: h.detail.manifest, allowSourceReplacement: false }, expect.any(Function));
+      expect(h.market.install).toHaveBeenCalledWith('catalog-id', { expectedReleaseId: 'release-1', expectedManifest: h.detail.manifest, allowSourceReplacement: false }, {
+        consent: { prompt: h.consentPrompt, initiator: 'agent' },
+        assertCurrent: expect.any(Function),
+      });
       expect(h.release).toHaveBeenCalledOnce();
     },
   );
@@ -77,11 +82,21 @@ describe('Agent plugin discovery and installation', () => {
 
   it.each(['scope', 'concurrent-install'])('checks %s again at package placement', async (change) => {
     const h = harness();
-    h.market.install.mockImplementation(async (_id, _options, guard) => {
+    h.market.install.mockImplementation(async (_id, _options, context) => {
       if (change === 'scope') h.state.current = false; else h.state.installed = true;
-      guard?.(); throw new Error('should never reach placement');
+      context.assertCurrent?.(); throw new Error('should never reach placement');
     });
     expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' })).toMatchObject({ ok: false, errorCode: change === 'scope' ? 'PERMISSION_DENIED' : 'PRECONDITION_FAILED' });
+    expect(h.release).toHaveBeenCalledOnce();
+  });
+
+  it('tells the Agent not to retry when the user declines the install confirmation', async () => {
+    const h = harness();
+    h.market.install.mockImplementation(async () => throwIpcError('MUTATION_CANCELLED', '用户取消了插件安装'));
+    const result = await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'MUTATION_CANCELLED' });
+    expect(String(result.message)).toMatch(/Do not retry/);
+    expect(h.state.installed).toBe(false);
     expect(h.release).toHaveBeenCalledOnce();
   });
 

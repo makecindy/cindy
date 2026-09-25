@@ -5142,8 +5142,8 @@
           "brokerRedirectPortRequired": "このプラグインは認可 broker を宣言していますが、同じ OAuth 設定に redirectPort がないため、プラグインマーケットからインストールできません。発行元にこのフィールドを追加して新しいバージョンを公開するよう連絡してください。"
         },
         "securityTitle": "インストールと権限",
-        "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。初回インストール後は自動的に有効になり、プラグインページからいつでも無効化できます。更新では現在の有効/無効の状態が維持されます。",
-        "customSecurityDescription": "このプラグインは追加したカスタムマーケット由来で、Cindy サーバーによる整合性検証は行われていません。インストール前にメインプロセスでマニフェストを検証します。初回インストール後は自動で有効になり、プラグインページでいつでも無効化できます。",
+        "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。インストール前にプラグインの権限を確認していただき、インストール後は自動的に有効になり、プラグインページからいつでも無効化できます。更新では現在の有効/無効の状態が維持され、新しいバージョンで権限が増える場合は先に確認します。",
+        "customSecurityDescription": "このプラグインは追加したカスタムマーケット由来で、Cindy サーバーによる整合性検証は行われていません。インストール前にメインプロセスでマニフェストを検証し、プラグインの権限を確認していただきます。インストール後は自動で有効になり、プラグインページでいつでも無効化できます。",
         "noPermissions": "このプラグインは追加機能を宣言していません。",
         "sources": {
           "addMarketplace": "プラグインマーケットを追加…",
@@ -5303,6 +5303,31 @@
         "typedIdLabel": "確認するにはプラグイン id <strong>{{id}}</strong> を入力",
         "confirm": "インストールしてテストを許可",
         "cancel": "キャンセル"
+      },
+      "installConsent": {
+        "installTitle": "プラグイン「{{name}}」をインストールしますか？",
+        "updateTitle": "プラグイン「{{name}}」を更新しますか？",
+        "installMeta": "バージョン {{version}} · {{source}}",
+        "updateMeta": "バージョン {{from}} → {{to}} · {{source}}",
+        "installDescription": "確認するまでインストールされません。インストール後はすぐに有効になり、プラグインページからいつでも無効化・アンインストールできます。",
+        "updateDescription": "新しいバージョンはより多くの権限を必要とするため、確認するまで更新されません。それまでは現在のバージョンをそのまま使えます。",
+        "grantsTitle": "インストール後に持つ権限:",
+        "noPermissions": "このプラグインは追加の権限を宣言していません。",
+        "addedTitle": "追加・変更される権限:",
+        "removedTitle": "不要になる権限:",
+        "addedBadge": "追加",
+        "unchangedCount": "変更のない権限: {{count}} 件",
+        "oauthClientChanged": "この更新で OAuth クライアントが変更されます。プラグイン内蔵の認証を使用している接続済みアカウントは更新後に無効となり、再接続が必要です。",
+        "originMarket": "{{appName}} プラグインマーケットから",
+        "originCustomMarket": "カスタムマーケット「{{name}}」から",
+        "originCustomMarketUnnamed": "カスタムマーケットから",
+        "originLocalFile": "ローカルの .cindy ファイルから",
+        "originForge": "ローカルで開発したプラグイン",
+        "initiatedByAgent": "Agent からのリクエスト · {{origin}}",
+        "confirmInstall": "インストール",
+        "confirmUpdate": "更新",
+        "cancel": "キャンセル",
+        "updateNeedsConsent": "新しい権限の確認が必要"
       },
       "trust": {
         "official": "Cindy 公式プラグイン",
@@ -5620,7 +5645,7 @@
       "updateAll": {
         "title": "すべて更新 · {{count}} 件",
         "collapseDiff": "折りたたむ",
-        "description": "更新は通常サイレントに実行されます。この画面では、スキップまたは失敗した更新を再試行できます。",
+        "description": "権限が増えない更新は通常サイレントに実行されます。権限が増える更新は 1 件ずつ確認します。この画面では、スキップまたは失敗した更新も再試行できます。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "待機中",
         "statusInstalling": "更新中…",

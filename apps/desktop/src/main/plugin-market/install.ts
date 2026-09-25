@@ -34,6 +34,7 @@ import {
   type MarketGhostPackageCommitEvidence,
 } from '../cindy-brain/index.js';
 import type { PluginMarketInstallResult } from '../../shared/pluginMarket.js';
+import type { GhostInstallConsentDecision } from '../cindy-brain/ghostInstallConsent.js';
 import { packGhostDirToFile } from '../cindy-brain/forge.js';
 import { createLogger } from '../logger.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
@@ -69,6 +70,11 @@ export async function installCustomMarketPlugin(input: {
   expectedInstalledApproval?: string;
   expectedGhostId: string;
   expectedVersion: string;
+  /**
+   * 真实包检查通过后、提交锁之外求得用户确认(ghostInstallConsent.ts)。收到的是
+   * 即将落位那份包的 manifest;结论随安装请求交给装入出口在锁内复核。必填。
+   */
+  resolveConsent: (manifest: GhostManifest) => Promise<GhostInstallConsentDecision>;
   /**
    * 打包完成后、实际改动 Ghost 运行时之前调用的校验钩(可异步)。
    * 调用方按当前账户捕获市场 manifest;打包是异步的,装出前必须重新确认
@@ -218,6 +224,10 @@ export async function installCustomMarketPlugin(input: {
         );
       }
     }
+    // 检查失败的包会在装入出口重新解析时被拒；这里只为能解析的真实包求确认。
+    // 等待确认期间不持提交锁，不阻塞其它来源的增删与安装。
+    const consent: GhostInstallConsentDecision =
+      'rejection' in inspected ? { mode: 'unprompted' } : await input.resolveConsent(inspected.manifest);
     const commit = async (): Promise<PluginMarketInstallResult> => {
       const run = async (): Promise<PluginMarketInstallResult> => {
         await input.beforeCommit?.();
@@ -228,6 +238,7 @@ export async function installCustomMarketPlugin(input: {
           // 打包前活目录里的值，否则目录在打包窗口变化时会把另一个插件装入。
           ghostId: input.expectedGhostId,
           version: input.expectedVersion,
+          consent,
           // 发现时读到的规范化 Manifest 是这次安装允许的能力上限。打包窗口
           // 中目录若发生能力扩张，Host 会按真实包不一致直接拒绝。
           manifestCap: validated.manifest,

@@ -12,6 +12,7 @@ import {
   type PluginMarketSnapshot,
 } from '../../shared/pluginMarket.js';
 import {
+  createWindowGhostInstallConsentPrompt,
   sendToTrustedAppWindows,
   getGhostManager,
   setGhostUninstallLedgerPreparer,
@@ -203,12 +204,22 @@ export function registerPluginMarketIpc(): void {
           .map((g) => g.manifest.id),
       );
       return invokePluginMarket(async () => {
-        const result = await service().install(requireString(pluginId, 'pluginId'), {
-          expectedReleaseId,
-          ...(expectedInstalledApproval !== undefined ? { expectedInstalledApproval } : {}),
-          ...(expectedManifest !== undefined ? { expectedManifest } : {}),
-          allowSourceReplacement,
-        });
+        const result = await service().install(
+          requireString(pluginId, 'pluginId'),
+          {
+            expectedReleaseId,
+            ...(expectedInstalledApproval !== undefined ? { expectedInstalledApproval } : {}),
+            ...(expectedManifest !== undefined ? { expectedManifest } : {}),
+            allowSourceReplacement,
+          },
+          // 首装与扩权更新的确认框投给发起安装的这个窗口。
+          {
+            consent: {
+              prompt: createWindowGhostInstallConsentPrompt(event.sender),
+              initiator: 'user',
+            },
+          },
+        );
         if (
           getActiveAppSession().generation === owner.generation &&
           !previouslyInstalled.has(result.ghost.manifest.id)

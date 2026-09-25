@@ -32,6 +32,7 @@ import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
 import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfirmHost';
+import { GhostInstallConsentHost } from '@/cindy-brain/GhostInstallConsentHost';
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
@@ -421,6 +422,7 @@ export function App() {
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                           <GhostConfirmDialogHost />
                           <ForgeOidcInstallConfirmHost />
+                          <GhostInstallConsentHost />
                           <PluginPublisherConfirmHost />
                           <OwnerScopedRouter />
                         </EnvCheckGuard>

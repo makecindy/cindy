@@ -5141,8 +5141,8 @@
           "brokerRedirectPortRequired": "此插件宣告了授權 broker，但同一項 OAuth 設定缺少 redirectPort，無法從插件市場安裝。請聯絡釋出者補上該欄位並重新釋出。"
         },
         "securityTitle": "安裝與權限",
-        "securityDescription": "安裝包會在主處理程序中校驗大小與 SHA-256，再經 Cindy 插件清單校驗後原子安裝。首次安裝完成後即自動開啟，可隨時在插件頁停用；更新會保留當前生效狀態。",
-        "customSecurityDescription": "該插件來自你新增的自定義市場，未經 Cindy 服務端完整性校驗。安裝前會在主處理程序校驗插件清單；首次安裝完成後即自動開啟，可隨時在插件頁停用。",
+        "securityDescription": "安裝包會在主處理程序中校驗大小與 SHA-256，再經 Cindy 插件清單校驗後原子安裝。安裝前會請你確認插件的權限，安裝好後即自動開啟，可隨時在插件頁停用；更新會保留當前生效狀態，新版本權限變多時會先請你確認。",
+        "customSecurityDescription": "該插件來自你新增的自定義市場，未經 Cindy 服務端完整性校驗。安裝前會在主處理程序校驗插件清單並請你確認插件的權限；安裝好後即自動開啟，可隨時在插件頁停用。",
         "noPermissions": "此插件未宣告額外能力。",
         "sources": {
           "addMarketplace": "新增插件市場…",
@@ -5303,6 +5303,31 @@
         "typedIdLabel": "輸入插件 id <strong>{{id}}</strong> 以確認",
         "confirm": "安裝並允許自測",
         "cancel": "取消"
+      },
+      "installConsent": {
+        "installTitle": "安裝插件「{{name}}」？",
+        "updateTitle": "更新插件「{{name}}」？",
+        "installMeta": "版本 {{version}} · {{source}}",
+        "updateMeta": "版本 {{from}} → {{to}} · {{source}}",
+        "installDescription": "確認後才會安裝，安裝好後立即啟用，可隨時在插件頁停用或解除安裝。",
+        "updateDescription": "新版本需要更多權限，確認後才會更新；在此之前舊版本照常可用。",
+        "grantsTitle": "安裝後它將擁有：",
+        "noPermissions": "這個插件沒有宣告額外權限。",
+        "addedTitle": "新增或變更的權限：",
+        "removedTitle": "不再需要的權限：",
+        "addedBadge": "新增",
+        "unchangedCount": "其餘 {{count}} 項權限不變",
+        "oauthClientChanged": "本次更新更換了 OAuth 用戶端。使用插件內建授權的已連線帳號將在更新後失效，需要重新連線。",
+        "originMarket": "來自 {{appName}} 插件市場",
+        "originCustomMarket": "來自自定義市場「{{name}}」",
+        "originCustomMarketUnnamed": "來自自定義市場",
+        "originLocalFile": "來自本機 .cindy 檔案",
+        "originForge": "本機開發的插件",
+        "initiatedByAgent": "由 Agent 發起 · {{origin}}",
+        "confirmInstall": "安裝",
+        "confirmUpdate": "更新",
+        "cancel": "取消",
+        "updateNeedsConsent": "需確認新權限"
       },
       "trust": {
         "official": "Cindy 官方插件",
@@ -5620,7 +5645,7 @@
       "updateAll": {
         "title": "全部更新 · {{count}} 個插件",
         "collapseDiff": "收起",
-        "description": "更新通常會靜默完成；這裡用於重試因忙碌跳過或執行失敗的更新。",
+        "description": "權限沒變多的更新通常會靜默完成；新版本權限變多時會逐一請你確認。這裡也可重試因忙碌跳過或執行失敗的更新。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "排隊中",
         "statusInstalling": "更新中…",

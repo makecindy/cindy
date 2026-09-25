@@ -5143,8 +5143,8 @@
           "brokerRedirectPortRequired": "This plugin declares an authorization broker but is missing redirectPort in the same OAuth configuration, so it cannot be installed from the plugin marketplace. Contact the publisher to add the field and publish a new release."
         },
         "securityTitle": "Install and permissions",
-        "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. First-time installs are enabled automatically and can be disabled anytime on the Plugins page; updates keep the current enabled state.",
-        "customSecurityDescription": "This plugin comes from a custom marketplace you added and has not been verified by the Cindy server. Its manifest is validated in the main process before install. First-time installs are enabled automatically and can be disabled anytime on the Plugins page.",
+        "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. You confirm the plugin’s permissions before it is installed; first-time installs are then enabled automatically and can be disabled anytime on the Plugins page. Updates keep the current enabled state, and you are asked first when a new version needs more permissions.",
+        "customSecurityDescription": "This plugin comes from a custom marketplace you added and has not been verified by the Cindy server. Its manifest is validated in the main process and you confirm its permissions before install. First-time installs are enabled automatically and can be disabled anytime on the Plugins page.",
         "noPermissions": "This plugin declares no additional capabilities.",
         "sources": {
           "addMarketplace": "Add Plugin Marketplace…",
@@ -5304,6 +5304,31 @@
         "typedIdLabel": "Enter the plugin id <strong>{{id}}</strong> to confirm",
         "confirm": "Install and allow testing",
         "cancel": "Cancel"
+      },
+      "installConsent": {
+        "installTitle": "Install plugin “{{name}}”?",
+        "updateTitle": "Update plugin “{{name}}”?",
+        "installMeta": "Version {{version}} · {{source}}",
+        "updateMeta": "Version {{from}} → {{to}} · {{source}}",
+        "installDescription": "Nothing is installed until you confirm. The plugin is enabled right after installing, and you can disable or uninstall it anytime on the Plugins page.",
+        "updateDescription": "The new version needs more permissions, so it won’t be installed until you confirm. The current version keeps working in the meantime.",
+        "grantsTitle": "After installing it will have:",
+        "noPermissions": "This plugin declares no additional permissions.",
+        "addedTitle": "New or changed permissions:",
+        "removedTitle": "No longer needed:",
+        "addedBadge": "New",
+        "unchangedCount": "Unchanged permissions: {{count}}",
+        "oauthClientChanged": "This update changes the OAuth client. Connected accounts using the plugin's built-in authorization will expire after the update and must be reconnected.",
+        "originMarket": "From the {{appName}} plugin market",
+        "originCustomMarket": "From custom marketplace “{{name}}”",
+        "originCustomMarketUnnamed": "From a custom marketplace",
+        "originLocalFile": "From a local .cindy file",
+        "originForge": "Locally developed plugin",
+        "initiatedByAgent": "Requested by Agent · {{origin}}",
+        "confirmInstall": "Install",
+        "confirmUpdate": "Update",
+        "cancel": "Cancel",
+        "updateNeedsConsent": "New permissions need confirmation"
       },
       "trust": {
         "official": "Official Cindy plugin",
@@ -5621,7 +5646,7 @@
       "updateAll": {
         "title": "Update all · {{count}} plugins",
         "collapseDiff": "Collapse",
-        "description": "Updates normally run silently. Use this dialog to retry updates that were skipped or failed.",
+        "description": "Updates that don’t add permissions normally run silently; updates that need more permissions ask you one by one. Use this dialog to retry updates that were skipped or failed.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "Queued",
         "statusInstalling": "Updating…",

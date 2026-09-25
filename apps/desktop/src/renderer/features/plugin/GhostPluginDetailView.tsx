@@ -15,35 +15,15 @@ import {
   AppWindow,
   AlertTriangle,
   ArrowUp,
-  Bot,
   ChevronDown,
   Copy,
-  Cpu,
   Download,
   MessageCircle,
-  FileCode2,
-  FilePen,
   FolderOpen,
-  FolderPlus,
-  Globe,
-  GraduationCap,
-  KeyRound,
   LayoutTemplate,
-  Library,
-  MapPin,
-  Megaphone,
-  MessageCircleQuestion,
   MoreVertical,
-  PanelLeft,
-  PanelRight,
-  Radio,
-  Smartphone,
-  Sparkles,
-  Terminal,
   Trash2,
-  Wrench,
   X,
-  type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -74,6 +54,7 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { IOSSimulatorPreferences } from './IOSSimulatorPreferences';
 import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
 import { ghostPrimaryAction } from './lib/ghostPluginViewModel';
+import { permissionItemIcon } from './lib/permissionItemIcon';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 import './plugin-motion.css';
 
@@ -106,44 +87,6 @@ interface GhostPluginDetailViewProps {
   onExport?: () => void;
   toggleDisabled: boolean;
   onIconLoadError?: () => void;
-}
-
-const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
-  cindy: Sparkles,
-  agent: Bot,
-  node: Cpu,
-  tool: Wrench,
-  command: Terminal,
-  panel: PanelRight,
-  'main-view': AppWindow,
-  code: FileCode2,
-  subscribe: Radio,
-  card: LayoutTemplate,
-  network: Globe,
-  notify: Megaphone,
-  confirm: MessageCircleQuestion,
-  fs: FilePen,
-  library: Library,
-  'session-context': MapPin,
-  pick: FolderOpen,
-  preview: AppWindow,
-  skill: GraduationCap,
-  'ios-simulator': Smartphone,
-  workspace: FolderPlus,
-};
-
-/** Chooses a visual affordance without changing the host-owned permission title or meaning. */
-function permissionItemIcon(item: GhostPermissionItem): LucideIcon {
-  if (item.labelKey === 'panelLeft') return PanelLeft;
-  if (
-    item.labelKey === 'networkSecret' ||
-    item.labelKey === 'networkSecretOauth' ||
-    item.labelKey === 'networkSecretGhCli' ||
-    item.labelKey === 'networkSecretIdentity'
-  ) {
-    return KeyRound;
-  }
-  return PERMISSION_ICON[item.kind];
 }
 
 const DETAIL_SECTION_CLASS = 'mt-10';

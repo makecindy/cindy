@@ -5142,8 +5142,8 @@
           "brokerRedirectPortRequired": "이 플러그인은 인증 broker를 선언했지만 같은 OAuth 설정에 redirectPort가 없어 플러그인 마켓에서 설치할 수 없습니다. 게시자에게 이 필드를 추가해 새 버전을 게시해 달라고 알려 주세요."
         },
         "securityTitle": "설치 및 권한",
-        "securityDescription": "메인 프로세스에서 크기와 SHA-256 및 플러그인 매니페스트를 검증한 뒤 원자적으로 설치합니다. 최초 설치 후 자동으로 활성화되며 플러그인 페이지에서 언제든지 비활성화할 수 있습니다. 업데이트 시 현재 활성화 상태가 유지됩니다.",
-        "customSecurityDescription": "이 플러그인은 추가한 사용자 지정 마켓에서 제공되며 Cindy 서버의 무결성 검증을 거치지 않았습니다. 설치 전에 메인 프로세스에서 매니페스트를 검증합니다. 처음 설치하면 자동으로 활성화되며 플러그인 페이지에서 언제든 비활성화할 수 있습니다.",
+        "securityDescription": "메인 프로세스에서 크기와 SHA-256 및 플러그인 매니페스트를 검증한 뒤 원자적으로 설치합니다. 설치 전에 플러그인 권한을 확인받으며, 설치 후 자동으로 활성화되고 플러그인 페이지에서 언제든지 비활성화할 수 있습니다. 업데이트 시 현재 활성화 상태가 유지되며, 새 버전의 권한이 늘어나면 먼저 확인받습니다.",
+        "customSecurityDescription": "이 플러그인은 추가한 사용자 지정 마켓에서 제공되며 Cindy 서버의 무결성 검증을 거치지 않았습니다. 설치 전에 메인 프로세스에서 매니페스트를 검증하고 플러그인 권한을 확인받습니다. 처음 설치하면 자동으로 활성화되며 플러그인 페이지에서 언제든 비활성화할 수 있습니다.",
         "noPermissions": "이 플러그인은 추가 기능을 선언하지 않았습니다.",
         "sources": {
           "addMarketplace": "플러그인 마켓 추가…",
@@ -5303,6 +5303,31 @@
         "typedIdLabel": "확인하려면 플러그인 id <strong>{{id}}</strong> 입력",
         "confirm": "설치 및 테스트 허용",
         "cancel": "취소"
+      },
+      "installConsent": {
+        "installTitle": "플러그인 \"{{name}}\"을(를) 설치할까요?",
+        "updateTitle": "플러그인 \"{{name}}\"을(를) 업데이트할까요?",
+        "installMeta": "버전 {{version}} · {{source}}",
+        "updateMeta": "버전 {{from}} → {{to}} · {{source}}",
+        "installDescription": "확인하기 전에는 설치되지 않습니다. 설치 후 바로 활성화되며 플러그인 페이지에서 언제든 비활성화하거나 제거할 수 있습니다.",
+        "updateDescription": "새 버전에 더 많은 권한이 필요해 확인한 뒤에만 업데이트합니다. 그 전까지는 현재 버전을 그대로 사용할 수 있습니다.",
+        "grantsTitle": "설치 후 갖게 되는 권한:",
+        "noPermissions": "이 플러그인은 추가 권한을 선언하지 않았습니다.",
+        "addedTitle": "추가되거나 변경되는 권한:",
+        "removedTitle": "더 이상 필요 없는 권한:",
+        "addedBadge": "추가",
+        "unchangedCount": "변경 없는 권한: {{count}}개",
+        "oauthClientChanged": "이번 업데이트에서 OAuth 클라이언트가 변경됩니다. 플러그인의 기본 인증을 사용하는 연결된 계정은 업데이트 후 만료되며 다시 연결해야 합니다.",
+        "originMarket": "{{appName}} 플러그인 마켓에서",
+        "originCustomMarket": "사용자 지정 마켓 \"{{name}}\"에서",
+        "originCustomMarketUnnamed": "사용자 지정 마켓에서",
+        "originLocalFile": "로컬 .cindy 파일에서",
+        "originForge": "로컬에서 개발한 플러그인",
+        "initiatedByAgent": "Agent 요청 · {{origin}}",
+        "confirmInstall": "설치",
+        "confirmUpdate": "업데이트",
+        "cancel": "취소",
+        "updateNeedsConsent": "새 권한 확인 필요"
       },
       "trust": {
         "official": "Cindy 공식 플러그인",
@@ -5620,7 +5645,7 @@
       "updateAll": {
         "title": "모두 업데이트 · {{count}}개",
         "collapseDiff": "접기",
-        "description": "업데이트는 보통 알림 없이 실행됩니다. 이 화면에서 건너뛰거나 실패한 업데이트를 다시 시도할 수 있습니다.",
+        "description": "권한이 늘지 않는 업데이트는 보통 알림 없이 실행됩니다. 권한이 늘어나는 업데이트는 하나씩 확인받습니다. 이 화면에서 건너뛰거나 실패한 업데이트도 다시 시도할 수 있습니다.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "대기 중",
         "statusInstalling": "업데이트 중…",

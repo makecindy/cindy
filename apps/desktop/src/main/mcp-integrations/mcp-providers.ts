@@ -113,6 +113,8 @@ export interface DesktopMcpProvidersDeps {
     sessionId: string,
     sessionInstanceId: string,
   ) => GhostGrantLiveSessionState | null;
+  /** Agent 发起插件安装时向该任务投宿主权限确认卡；缺失时安装 fail closed。 */
+  requestHostPermission?: CindyGhostsHostDeps['requestHostPermission'];
   /** Reject stale, remote, or already-closed Session tool contexts. */
   isCurrentLocalSessionInstance?: (
     sessionId: string,
@@ -943,6 +945,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           pluginMarket: getPluginMarketService(),
           getAppVersion: deps.getAppVersion,
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
+          requestHostPermission: deps.requestHostPermission,
           createMediaDownloadContext: deps.createMediaDownloadContext,
           describeToolResultImage: deps.describeToolResultImage,
           onToolResultImagesFailed: deps.onToolResultImagesFailed,

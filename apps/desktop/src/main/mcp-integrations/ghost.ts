@@ -1,4 +1,9 @@
 import { createPluginMarketAgentTools } from '../plugin-market/agentTools.js';
+import type { GhostInstallConsentPrompt } from '../cindy-brain/ghostInstallConsent.js';
+import {
+  createTaskInstallConsentPrompt,
+  type HostPermissionRequester,
+} from '../cindy-brain/ghostInstallConsentInteraction.js';
 import type { PluginMarketService } from '../plugin-market/service.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService.js';
@@ -457,6 +462,12 @@ export interface CindyGhostsHostDeps {
     sessionId: string,
     sessionInstanceId: string,
   ) => GhostGrantLiveSessionState | null;
+  /**
+   * 向当前任务投一张宿主权限确认卡(桌面对话、手机远控与 IM 渠道卡通用)，等用户
+   * 允许或拒绝。由 Host 主动发起，不经 Agent 自身审批回调，Full Access 也会弹。
+   * 会话不存在或实例不匹配返回 null。
+   */
+  requestHostPermission?: HostPermissionRequester;
   /**
    * 把工具结果里的图片（cindy-media:// 地址）转成文字描述（视觉桥，最佳努力）。
    * host 侧注入；内部判定视觉桥是否启用、当前 session 模型是否命中、blob 是否可读。
@@ -1650,6 +1661,15 @@ export function getCindyGhostsMcpDeps(
 ): CindyGhostsMcpDeps {
   const resolveSessionContext = (): LiziMcpSessionContext | undefined =>
     getLiziMcpSessionContext() ?? sessionCtx;
+  const installConsentPrompt = (): GhostInstallConsentPrompt => {
+    const context = resolveSessionContext();
+    return createTaskInstallConsentPrompt(
+      context?.sessionId && context.sessionInstanceId
+        ? { sessionId: context.sessionId, sessionInstanceId: context.sessionInstanceId }
+        : null,
+      hostDeps.requestHostPermission,
+    );
+  };
   const marketTools = hostDeps.pluginMarket && createPluginMarketAgentTools({
     market: hostDeps.pluginMarket,
     installedState: (ghostId) => {
@@ -1685,7 +1705,7 @@ export function getCindyGhostsMcpDeps(
       assertCurrent();
       const owner = captureGhostMutationOwnerForMcp();
       const release = acquireGhostMutationLeaseForMcp(owner);
-      return { assertCurrent, release };
+      return { assertCurrent, release, consentPrompt: installConsentPrompt() };
     },
   });
   return {
@@ -2457,6 +2477,7 @@ export function getCindyGhostsMcpDeps(
             {
               ghostId: packed.manifest.id,
               packageSha256: createHash('sha256').update(packed.buf).digest('hex'),
+              consentPrompt: installConsentPrompt(),
               ...(stillGranted.allowOutsideWorkdir && stillGranted.isCurrent
                 ? { isCurrent: stillGranted.isCurrent }
                 : {}),
@@ -2481,6 +2502,13 @@ export function getCindyGhostsMcpDeps(
                 : `${iconNote}插件已完成校验、打包和原位更新；原有启用状态、配置与数据保持不变。`,
           };
         } catch (err) {
+          if (isIpcError(err) && err.code === 'MUTATION_CANCELLED') {
+            return {
+              ok: false,
+              errorCode: 'MUTATION_CANCELLED',
+              message: '用户拒绝了这次插件安装或更新。除非用户再次要求，不要重试。',
+            };
+          }
           return {
             ok: false,
             errorCode: isIpcError(err) ? err.code : 'INTERNAL',

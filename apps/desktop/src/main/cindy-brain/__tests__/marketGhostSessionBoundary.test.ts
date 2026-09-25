@@ -50,7 +50,7 @@ describe('market Ghost session boundary', () => {
     const afterCommitBody = installBody.slice(afterCommitStart, afterCommitEnd);
     expect(afterCommitBody).toContain('this.withCapturedLedgerMutation(ledger, () => {');
     expect(afterCommitBody).not.toContain('requireSameMarketOwner(');
-    expect(automaticBody).toContain('          true,\n          owner,\n        );');
+    expect(automaticBody).toContain("          { mode: 'automatic' },\n          owner,\n        );");
   });
 
   it('keeps package placement and market ledger commit in the same owner lease', () => {

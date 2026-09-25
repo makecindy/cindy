@@ -1312,6 +1312,19 @@ interface ElectronAPI {
       requestId: string,
       confirmed: boolean,
     ) => Promise<{ handled: boolean }>;
+    /** 插件安装／更新确认(只投给发起安装的窗口)。第二个参数是 owner 推送戳。 */
+    onInstallConsentRequest: (
+      callback: (
+        payload: import('../shared/ghostInstallConsent').GhostInstallConsentRequest,
+        ownerStamp?: unknown,
+      ) => void,
+    ) => () => void;
+    /** Main 已结算(超时、取消或账号切换)某次确认，窗口应收起对应确认框。 */
+    onInstallConsentDismissed: (callback: (payload: { requestId: string }) => void) => () => void;
+    resolveInstallConsent: (
+      requestId: string,
+      confirmed: boolean,
+    ) => Promise<{ handled: boolean }>;
     /** Plugin 快捷行最近使用顺序(最新在前,首帧同步读取避免排序跳变)。 */
     recentUsageSync: () => { ids: string[] };
     /** 成功发送一次 Plugin 指令后记录最近使用。 */

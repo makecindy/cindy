@@ -35,9 +35,19 @@ describe('Forge OIDC install entry wiring', () => {
     expect(body).toContain('const installOrigin = forgeInstallOriginForMembership(membershipKind);');
     expect(body).toContain('...(installOrigin ? { installOrigin } : {})');
     expect(body).toContain(
-      'ghostInstallApprovalToken(installed.approval),\n        installOrigin,',
+      'ghostInstallApprovalToken(installed.approval),\n        consent,\n        installOrigin,',
     );
     expect(body).not.toContain("installOrigin: 'agent-forge'");
+  });
+
+  it('Agent 安装先在锁外求得插件确认，再在锁内交给装入事务复核', () => {
+    const body = forgeInstallBody();
+    const consent = body.indexOf('await obtainGhostInstallConsent(');
+    const mutation = body.indexOf('return withGhostInstallLock');
+    expect(consent).toBeGreaterThanOrEqual(0);
+    expect(mutation).toBeGreaterThan(consent);
+    expect(body).toContain("initiator: 'agent', origin: 'forge'");
+    expect(body).toContain('consent: { decision: consent, manifest: inspected.manifest }');
   });
 
   it('tokenBroker 只在企业身份下拿 Forge facts，且不触发 OIDC 确认窗', () => {
