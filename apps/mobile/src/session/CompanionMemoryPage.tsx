@@ -19,7 +19,8 @@ export function CompanionMemoryPage({ memory: m, online, botName, memoryEnabled 
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const tr = (key: string, values?: Record<string, string>) => t(`devices.companionProfile.${key}`, values);
-  const note = (text: string, alert = false) => <Text selectable accessibilityRole={alert ? 'alert' : undefined} style={styles.note}>{text}</Text>;
+  // Same as iOS: failures and conflicts read in the error colour; neutral states stay secondary.
+  const note = (text: string, alert = false, error = alert) => <Text selectable accessibilityRole={alert ? 'alert' : undefined} style={[styles.note, error && styles.error]}>{text}</Text>;
   const date = (timestamp: number | undefined, withTime = false) => companionMemoryDate(timestamp, i18n.language, tr('memoryToday'), withTime);
   const receipt = m.receipt ? <Text accessibilityLiveRegion="polite" style={styles.note}>{m.receipt}</Text> : null;
 
@@ -31,7 +32,7 @@ export function CompanionMemoryPage({ memory: m, online, botName, memoryEnabled 
       {showSearch ? <TextInput accessibilityLabel={tr('memorySearch')} value={m.query} onChangeText={m.setQuery} autoCorrect={false}
         placeholder={m.searchPanel?.placeholder ? resolveRemoteText(m.searchPanel.placeholder, i18n.language) : tr('memorySearch')}
         placeholderTextColor={colors.textTertiary} maxLength={200} returnKeyType="search" style={styles.input} /> : null}
-      {m.listFailed ? <View accessibilityRole="alert" style={styles.stack}>{note(tr('memoryLoadFailed'))}
+      {m.listFailed ? <View accessibilityRole="alert" style={styles.stack}>{note(tr('memoryLoadFailed'), false, true)}
         <MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: !online, onPress: m.retry }} /></View>
         : !m.listLoaded ? (online ? note(t('devices.resources.loading')) : null)
         : m.groups.length ? m.groups.map(group => <View key={group.id} style={styles.stack} accessibilityLabel={group.title}>
@@ -57,7 +58,7 @@ export function CompanionMemoryPage({ memory: m, online, botName, memoryEnabled 
       {receipt}
       {m.changed ? note(tr('memoryChanged', { name: botName }), true) : null}
       {m.missing ? note(tr('memoryMissing'), true)
-        : m.detailFailed ? <View accessibilityRole="alert" style={styles.stack}>{note(tr('memoryLoadFailed'))}
+        : m.detailFailed ? <View accessibilityRole="alert" style={styles.stack}>{note(tr('memoryLoadFailed'), false, true)}
           <MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: !online, onPress: m.retry }} /></View>
         : !detail ? note(t('devices.resources.loading'))
         : <>
@@ -109,6 +110,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   stack: { gap: spacing.sm },
   field: { gap: spacing.sm },
   note: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textSecondary },
+  error: { color: colors.errorText },
   heading: { fontSize: typeScale.body, color: colors.textPrimary, fontWeight: fontWeight.medium },
   title: { fontSize: typeScale.subtitle, lineHeight: lineHeight.subtitle, color: colors.textPrimary, fontWeight: fontWeight.medium },
   body: { fontSize: typeScale.body, lineHeight: lineHeight.bodyRelaxed, color: colors.textPrimary },
