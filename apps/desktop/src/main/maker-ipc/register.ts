@@ -505,6 +505,7 @@ import {
   type ProviderModelMemorySnapshot,
   syncNewMakerDraftCache,
   setProviderModelMemoryCache,
+  setThinkingEnabledInMemory,
   setWorkerCreationPrefsCache,
 } from '../maker-host/newMakerDefaultsCache.js';
 import {
@@ -8452,7 +8453,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
-    bootstrapSwitchedSession: async (sessionId) => {
+    rememberThinkingIntent: ({ agentKind, providerId, model, thinking }) => {
+      setThinkingEnabledInMemory(agentKind, providerId, model, thinking);
+    },
+    bootstrapSwitchedSession: async (sessionId, opts) => {
       // 切换已提交,从 DB 行(新引擎值)重建 live session。resumeSessionId 直接取
       // 行上的 sdk_session_id:切换事务在有停泊绑定时已把它落成停泊 id(Phase 2
       // 切回续接),否则为 null = 全新原生会话,上下文由交接注入承接——与
@@ -8475,6 +8479,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fastMode: !!row.fastMode,
         permissionMode: (row.permissionMode ?? 'ask') as CreateOpts['permissionMode'],
         planMode: false,
+        // 跨引擎意图期内改的思考开关必须显式带入：否则 createSession 只能读被控端
+        // 镜像/默认值，与用户刚选的不一致（device-link 远程场景）。
+        ...(opts?.thinkingEnabled !== undefined
+          ? { thinkingEnabled: opts.thinkingEnabled }
+          : {}),
         title: row.title ?? undefined,
         resumeSessionId: row.sdkSessionId ?? undefined,
         // 远端会话切换引擎后仍是远端:带回 remoteHostId 并走 ensure (SSH
@@ -8507,6 +8516,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const result = await applySessionRuntimeSelection(sessionId, intent.model, intent.providerId, {
         effort: (intent.effort ?? null) as SessionRuntimeProfile['effort'],
         fastMode: intent.fastMode ?? false,
+        ...(intent.thinking !== undefined ? { thinking: intent.thinking } : {}),
       }, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow,
         runtimeSource: intent.runtimeSource, assertSelectionCurrent });
       return result;
@@ -11257,6 +11267,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       effort: SessionRuntimeProfile['effort'];
       fastMode: boolean;
       confirmedContextWindow?: number;
+      /** Pi-only：目标模型的思考开关意图；随暂存选择/换窗重试一并回放。 */
+      thinking?: boolean;
     },
     options: InternalRuntimeSelectionOptions,
   ) => Promise<{
@@ -11286,6 +11298,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const settleSelection = {
           effort: pending.profile.effort,
           fastMode: pending.profile.fastMode,
+          ...(pending.thinking !== undefined ? { thinking: pending.thinking } : {}),
         };
         const settleOptions = {
           source: pending.source,
@@ -16111,6 +16124,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const confirmedContextWindow = (selection as { confirmedContextWindow?: unknown } | undefined)
       ?.confirmedContextWindow;
     const selectionEffort = (selection as { effort?: unknown } | undefined)?.effort;
+    const selectionThinking = (selection as { thinking?: unknown } | undefined)?.thinking;
+    if (selectionThinking !== undefined && typeof selectionThinking !== 'boolean') {
+      // 与 SWITCH_SESSION_AGENT 同口径：非 boolean 的 thinking 当作「未提供」，不让
+      // 历史/异常客户端的多余字段把整次模型切换打成 INVALID_PARAMS。
+      delete (selection as { thinking?: unknown }).thinking;
+    }
     if (
       selection !== undefined &&
       (selection === null ||
@@ -16137,7 +16156,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
     }
     let atomicSelection = selection as
-      { effort: SessionRuntimeProfile['effort']; fastMode: boolean } | undefined;
+      { effort: SessionRuntimeProfile['effort']; fastMode: boolean; thinking?: boolean } | undefined;
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     const assertSharedTaskCurrent = captureSharedTaskSettingGuard(sessionId);
     const assertRuntimeOwnerCurrent = (): void => {
@@ -16353,9 +16372,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!axes.ok) {
           throwIpcError('INVALID_PARAMS', `Fast is unavailable for model "${model}"`);
         }
+        const retainedThinking = atomicSelection.thinking;
         atomicSelection = {
           effort: axes.effort,
           fastMode: axes.fastMode,
+          ...(retainedThinking !== undefined ? { thinking: retainedThinking } : {}),
         };
       }
       // A picker click records intent only. Keep the persisted route and native binding
@@ -16373,6 +16394,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           providerId: effectiveProviderId === undefined ? currentProviderId : effectiveProviderId,
           effort: atomicSelection ? atomicSelection.effort ?? undefined : runtimeStatus.effort ?? undefined,
           fastMode: atomicSelection?.fastMode ?? runtimeStatus.fastMode,
+          ...(atomicSelection?.thinking !== undefined ? { thinking: atomicSelection.thinking } : {}),
         };
         agentSwitchPending.set(sessionId, intent);
         agentSwitchDeps.onPendingSwitchChanged?.(sessionId, projectPendingAgentSwitchIntent(intent));
@@ -16406,6 +16428,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               source: internalOptions.source === 'fallback' ? 'fallback' : 'agent',
               previousProfile: internalOptions.previousProfile,
               deferred: true,
+              // 回合中延期同样要记住思考意图：结算时 settleSelection 会把它回放给
+              // runtime，否则 Pi 收不到 thinkingEnabled，上一个模型的 off 会原样漂给新
+              // 模型（原症状）。
+              ...(atomicSelection?.thinking !== undefined
+                ? { thinking: atomicSelection.thinking }
+                : {}),
               profile: buildDeferredRuntimeSelectionProfile({
                 agentKind: maker.getSession(sessionId)?.agentKind ?? meta.agentKind,
                 model,
@@ -16428,6 +16456,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 fastMode: getSessionFastMode(sessionId),
               },
               pendingPatch: pendingAxisPatch,
+              ...(atomicSelection?.thinking !== undefined
+                ? { thinking: atomicSelection.thinking }
+                : {}),
             });
         // A later accepted route supersedes an earlier context-only rebuild.
         if (routeExplicit && getPendingCredentialSwitchTarget(sessionId)?.forceSessionRebuild) {
@@ -16940,6 +16971,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                       'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra',
                   }
                 : {}),
+              // Pi 切模后不重置 thinking level：把 renderer 记录的目标模型思考开关
+              // 意图交给 runtime，由 Pi 按目标模型能力快照收敛（否则上一个模型的
+              // off/旧档位会漂移给新模型）。非 Pi 引擎忽略该参数。
+              ...(runtimeAgentKind === 'pi' && atomicSelection?.thinking !== undefined
+                ? { thinkingEnabled: atomicSelection.thinking }
+                : {}),
               forceSessionRebuild:
                 rebuildLiveOrcaWorker ||
                 (atomicSelection?.effort === null && runtimeAgentKind !== 'pi'),
@@ -17249,6 +17286,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             source: internalOptions.source,
             previousProfile: internalOptions.previousProfile,
             deferred: response.deferred,
+            ...(atomicSelection?.thinking !== undefined
+              ? { thinking: atomicSelection.thinking }
+              : {}),
             profile: {
               agentKind: maker.getSession(sessionId)?.agentKind ?? meta?.agentKind ?? 'claude-code',
               model,

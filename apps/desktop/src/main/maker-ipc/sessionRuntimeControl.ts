@@ -21,6 +21,11 @@ export interface PendingSessionRuntimeMutation {
   generation: number;
   source: SessionRuntimeMutationSource;
   profile: SessionRuntimeProfile;
+  /**
+   * Pi-only：该选择的思考开关意图（renderer 记忆，缺省开）。settle 重放时随
+   * selection 一并应用；不落 DB（会随 runtimePending 投影带出，renderer 不消费）。
+   */
+  thinking?: boolean;
 }
 
 export interface SessionRuntimeControlSnapshot {
@@ -222,6 +227,8 @@ export function deferSessionRuntimeAxisMutation(params: {
   source: SessionRuntimeMutationSource;
   effectiveProfile: SessionRuntimeProfile;
   pendingPatch: SessionRuntimeAxisPatch;
+  /** Pi-only：延期期间也要记住目标模型的思考开关意图（结算重放时用）。 */
+  thinking?: boolean;
 }): number {
   const state = stateFor(params.sessionId);
   const hadPendingMutation = state.pending !== null;
@@ -231,11 +238,13 @@ export function deferSessionRuntimeAxisMutation(params: {
         ...state.pending,
         generation: state.generation,
         profile: { ...state.pending.profile, ...params.pendingPatch },
+        ...(params.thinking !== undefined ? { thinking: params.thinking } : {}),
       }
     : {
         generation: state.generation,
         source: params.source,
         profile: { ...params.effectiveProfile, ...params.pendingPatch },
+        ...(params.thinking !== undefined ? { thinking: params.thinking } : {}),
       };
   if (!hadPendingMutation) state.pendingRouteExplicit = false;
   if (params.source === 'agent') {
@@ -273,13 +282,27 @@ export function acceptSessionRuntimeMutation(params: {
   profile: SessionRuntimeProfile;
   previousProfile?: SessionRuntimeProfile;
   deferred: boolean;
+  thinking?: boolean;
 }): number {
   const state = stateFor(params.sessionId);
+  const previousPending = state.pending;
   state.generation += 1;
+  // 延期替换时若本次没算出意图（undefined），且仍指向**同一个目标**（model 与
+  // provider 都相同），继承上一份 pending：一次「无法判定」的点击不该把用户刚
+  // 表达过的思考开关悄悄清掉。换到别的模型时不继承——旧模型的开关不适用，
+  // 否则 A 的 off 会串给 B；false / true 是明确意图，永远以本次为准。
+  const samePendingTarget =
+    previousPending != null &&
+    previousPending.profile.model === params.profile.model &&
+    (previousPending.profile.providerId ?? null) === (params.profile.providerId ?? null);
+  const acceptedThinking =
+    params.thinking ??
+    (params.deferred && samePendingTarget ? previousPending?.thinking : undefined);
   const accepted: PendingSessionRuntimeMutation = {
     generation: state.generation,
     source: params.source,
     profile: params.profile,
+    ...(acceptedThinking !== undefined ? { thinking: acceptedThinking } : {}),
   };
   state.pending = params.deferred ? accepted : null;
   state.pendingRouteExplicit = true;

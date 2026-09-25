@@ -116,6 +116,41 @@ describe('same-engine selection at send', () => {
     expect(h.calls).toEqual([]);
   });
 
+  it('keeps the staged thinking intent when a later edit only changes effort or fast', async () => {
+    const h = selectionHarness();
+    await performSessionAgentSwitch(h.deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
+      effort: 'high', fastMode: false, thinking: true,
+    });
+    expect(h.pending.get('s1')?.thinking).toBe(true);
+    // 意图期内改档位（只带 effort）必须继承已暂存的 thinking；否则结算回放会把它丢成 undefined，
+    // Pi 就会保留上一个模型的 off。
+    await performSessionAgentSwitch(h.deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
+      effort: 'max', fastMode: false,
+    });
+    expect(h.pending.get('s1')).toMatchObject({ effort: 'max', thinking: true });
+    // 显式改开关时以新值为准，并原样回放到发送结算。
+    await performSessionAgentSwitch(h.deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
+      effort: 'max', fastMode: false, thinking: false,
+    });
+    expect(h.pending.get('s1')?.thinking).toBe(false);
+    await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+    expect(h.apply).toHaveBeenCalledWith(expect.objectContaining({ thinking: false }));
+  });
+
+  it('does not inherit a staged thinking intent when the target model changes', async () => {
+    const h = selectionHarness();
+    await performSessionAgentSwitch(h.deps, { ...validParams, thinking: false });
+    expect(h.pending.get('s1')?.thinking).toBe(false);
+
+    // 改选到另一个模型：旧模型的开关不适用，不能继承（否则新模型被串成 off）。
+    await performSessionAgentSwitch(h.deps, { ...validParams, model: 'gpt-7-nova' });
+    expect(h.pending.get('s1')?.model).toBe('gpt-7-nova');
+    expect(h.pending.get('s1')?.thinking).toBeUndefined();
+  });
+
   it('keeps an internal cross-engine apply that already reached its target as a no-op', async () => {
     const h = selectionHarness();
     const select = vi.spyOn(h.deps, 'selectSameAgentModel');
@@ -167,6 +202,57 @@ describe('same-engine selection at send', () => {
 });
 
 describe('performSessionAgentSwitch', () => {
+  it('stages and forwards the Pi thinking intent across an engine switch', async () => {
+    let row = makeRow();
+    const bootstraps: Array<{ thinkingEnabled?: boolean } | undefined> = [];
+    const remembered: Array<{
+      agentKind: string;
+      providerId: string | null;
+      model: string;
+      thinking: boolean;
+    }> = [];
+    const pendingSwitches = createPendingAgentSwitchRegistry();
+    const { deps } = makeDeps({
+      pendingSwitches,
+      rememberThinkingIntent: (input) => {
+        remembered.push(input);
+      },
+      getSessionRow: async () => ({ ...row }),
+      applyAgentSwitchToDb: async (_id, patch) => {
+        row = {
+          ...row,
+          agentKind: patch.agentKind,
+          model: patch.model,
+          providerId: patch.providerId ?? null,
+        };
+      },
+      bootstrapSwitchedSession: async (_id, opts) => {
+        bootstraps.push(opts);
+      },
+    });
+
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'pi',
+      model: 'deepseek-v4.1-flash',
+      providerId: 'opencode-go',
+      thinking: true,
+    });
+    // 跨引擎 intent 也必须记住思考意图，否则发送重建时只能靠被控端镜像/默认值。
+    expect(deps.pendingSwitches?.get('s1')?.thinking).toBe(true);
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1', { bootstrapAfterSwitch: true });
+    expect(bootstraps.at(-1)).toEqual({ thinkingEnabled: true });
+    // 跨引擎提交后把选择落到本机偏好镜像：普通 send 的 lazy-create 只读镜像，
+    // 不经过 bootstrap，远端推送未回流时会用到旧值。
+    expect(remembered.at(-1)).toEqual({
+      agentKind: 'pi',
+      providerId: 'opencode-go',
+      model: 'deepseek-v4.1-flash',
+      thinking: true,
+    });
+  });
+
   it('cycles Claude → Codex → Pi → Claude → Codex and recovers a broken parked thread once', async () => {
     let row = makeRow();
     const parked = new Map<string, string>();

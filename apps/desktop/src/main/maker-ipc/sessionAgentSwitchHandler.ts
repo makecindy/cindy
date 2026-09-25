@@ -195,7 +195,14 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   /** 读交接注册表的当前代次(在读历史之前取一次)。 */
   readPendingHandoffGeneration?(sessionId: string): number;
   /** 从 DB 行(切换已提交后的新值)重建 live session;抛错 = 引擎未就绪。 */
-  bootstrapSwitchedSession(sessionId: string): Promise<void>;
+  /** 记录用户对目标模型的思考开关选择（跨引擎切换提交后落本机偏好镜像）。 */
+  rememberThinkingIntent?(input: {
+    agentKind: AgentKind;
+    providerId: string | null;
+    model: string;
+    thinking: boolean;
+  }): void;
+  bootstrapSwitchedSession(sessionId: string, opts?: { thinkingEnabled?: boolean }): Promise<void>;
   /**
    * close→bootstrap 窗口的 onClose 重副作用抑制(desktop 注入
    * withRehydrateCloseSuppressed)——切换的瞬态 close 绝不能触发 worktree
@@ -252,6 +259,12 @@ export interface PendingAgentSwitchIntent {
   providerId: string | null | undefined;
   effort?: string;
   fastMode?: boolean;
+  /**
+   * Pi-only：目标模型的思考开关意图（renderer 记忆，缺省开）。发送时刻回放暂存
+   * 选择时必须一并应用，否则上一模型的 off 会残留——Pi 的 set_model 不重置
+   * thinking level。
+   */
+  thinking?: boolean;
   /** resume 回落事务失败后的内部恢复载荷；下一次 send 先重试这笔原子事务。 */
   resumeFallbackRecovery?: {
     boundaryClientId: string | null;
@@ -344,6 +357,17 @@ export async function applySetModelThenCancelAgentSwitchIntent<T>(
   return result;
 }
 
+/** 带思考意图重建？不传时保持单参调用形状（既有调用方/断言都不受影响）。 */
+function bootstrapSwitchedSessionWithThinking(
+  deps: MakerSessionAgentSwitchHandlerDeps,
+  sessionId: string,
+  thinkingEnabled: boolean | undefined,
+): Promise<void> {
+  return thinkingEnabled === undefined
+    ? deps.bootstrapSwitchedSession(sessionId)
+    : deps.bootstrapSwitchedSession(sessionId, { thinkingEnabled });
+}
+
 /** 业务体(纯依赖注入,单测直接调):校验 → 交接 → 提交 → 重建。 */
 export async function performSessionAgentSwitch(
   deps: MakerSessionAgentSwitchHandlerDeps,
@@ -355,6 +379,11 @@ export async function performSessionAgentSwitch(
     /** 目标引擎下应生效的 effort / fastMode(renderer 按目标目录与预设解析好带入)。 */
     effort?: unknown;
     fastMode?: unknown;
+    /**
+     * Pi-only：目标模型的思考开关意图。重登记(意图期内改档位 / 改选 / 切思考
+     * 开关)时必须带上；缺省时由同引擎分支继承既有 intent，不能静默丢字段。
+     */
+    thinking?: unknown;
     /**
      * pending-apply 路径(send 事务派发前执行):跳过新引擎立即重建——send 随后
      * 的 lazy-create 会按 DB 新值 spawn(reconcileCreateOptsWithDb 校正兜底),
@@ -376,6 +405,9 @@ export async function performSessionAgentSwitch(
   },
 ): Promise<SessionAgentSwitchResult> {
   const { sessionId, targetAgentKind, model, providerId, signal } = params;
+  // Pi 跨引擎重建时同样要带上思考开关意图：不传就容易落到被控端镜像/默认值，
+  // 与用户在意图期内刚改的开关不一致（device-link 远程场景最明显）。
+  const thinkingEnabled = typeof params.thinking === 'boolean' ? params.thinking : undefined;
   throwIfAgentSwitchAborted(signal);
   if (typeof sessionId !== 'string' || sessionId.length === 0) {
     throwIpcError('INVALID_PARAMS', 'sessionId required');
@@ -436,12 +468,28 @@ export async function performSessionAgentSwitch(
     // Only picker calls stage a model choice here. Internal cross-engine apply/recovery
     // callers retain the existing same-engine no-op; send consumes staged choices below.
     if (deps.selectSameAgentModel && !params.applyNow) {
+      // 重登记可能不带思考意图(旧调用方 / 只改 effort·Fast)：仍指向同一个目标时
+      // 继承既有 intent，否则登记时的快照被覆盖成 undefined，结算回放会丢掉思考
+      // 档位收敛；目标已换（改选到别的模型）时不继承——旧模型的开关不适用，
+      // 宁可当未提供，让运行时按目标模型自己的能力处理。
+      const existingIntent = deps.pendingSwitches?.get?.(sessionId);
+      const sameTarget =
+        existingIntent !== undefined &&
+        existingIntent.model === model &&
+        (existingIntent.providerId ?? null) === (normalizedProviderId ?? null);
+      const thinking =
+        typeof params.thinking === 'boolean'
+          ? params.thinking
+          : sameTarget
+            ? existingIntent?.thinking
+            : undefined;
       const result = await deps.selectSameAgentModel(sessionId, {
         targetAgentKind,
         model,
         providerId: normalizedProviderId,
         ...(typeof params.effort === 'string' ? { effort: params.effort } : {}),
         ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
+        ...(typeof thinking === 'boolean' ? { thinking } : {}),
         sameAgentSelection: true,
         ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
       }, false, params.assertSelectionCurrent);
@@ -501,6 +549,7 @@ export async function performSessionAgentSwitch(
       providerId: normalizedProviderId,
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
       ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
+      ...(typeof params.thinking === 'boolean' ? { thinking: params.thinking } : {}),
     };
     deps.pendingSwitches.set(sessionId, intent);
     deps.onPendingSwitchChanged?.(sessionId, projectPendingAgentSwitchIntent(intent));
@@ -583,6 +632,16 @@ export async function performSessionAgentSwitch(
     if (normalizedProviderId !== undefined) {
       deps.setSessionProvider(sessionId, normalizedProviderId);
     }
+    if (typeof thinkingEnabled === 'boolean') {
+      // 跨引擎切换提交后把用户的思考选择落到本机偏好镜像：普通 send 的 lazy-create
+      // 只读镜像（不经过 bootstrap），否则远端推送未回流时会用旧值建会话。
+      deps.rememberThinkingIntent?.({
+        agentKind: targetAgentKind,
+        providerId: normalizedProviderId ?? row.providerId ?? null,
+        model,
+        thinking: thinkingEnabled,
+      });
+    }
 
     const boundaryContent: AgentSwitchBoundaryContent = {
       fromAgentKind: fromDbKind,
@@ -617,7 +676,7 @@ export async function performSessionAgentSwitch(
     // 每次发送反复失败且无人回落。
     if (parked || !params.skipBootstrap) {
       try {
-        await deps.bootstrapSwitchedSession(sessionId);
+        await bootstrapSwitchedSessionWithThinking(deps, sessionId, thinkingEnabled);
       } catch (err) {
         if (parked) {
           // ---- resume 回落:清停泊 id → 换全量交接 → 全新原生会话重试 ----
@@ -699,7 +758,7 @@ export async function performSessionAgentSwitch(
           deps.setPendingHandoff(sessionId, fullHandoff, handoffGeneration);
           if (fallbackCommitted) {
             try {
-              await deps.bootstrapSwitchedSession(sessionId);
+              await bootstrapSwitchedSessionWithThinking(deps, sessionId, thinkingEnabled);
             } catch (err2) {
               engineReady = false;
               deps.log.warn('agent-switch: fresh bootstrap after resume fallback failed', {
@@ -783,7 +842,7 @@ export function applyPendingAgentSwitchIfIdle(
         }
         throwIfAgentSwitchAborted(opts?.signal);
         if (opts?.bootstrapAfterSwitch && !deps.getLiveSession(sessionId)) {
-          await deps.bootstrapSwitchedSession(sessionId);
+          await bootstrapSwitchedSessionWithThinking(deps, sessionId, intent.thinking);
         }
         return;
       }
@@ -818,6 +877,7 @@ export function applyPendingAgentSwitchIfIdle(
         providerId: intent.providerId,
         effort: intent.effort,
         fastMode: intent.fastMode,
+        thinking: intent.thinking,
         // 普通 maker send 随后会按 DB 真源 lazy-create,无需在 apply 内多 spawn 一次;
         // Goal / IM / scheduler 三条直发路径没有该 lazy-create 事务,必须先把新引擎
         // bootstrap 好再拿 live session 发送,否则会继续持有已关闭的旧 session。
@@ -870,6 +930,7 @@ export function registerMakerSessionAgentSwitchHandler(
       providerId: unknown,
       effort: unknown,
       fastMode: unknown,
+      thinking: unknown,
     ) => {
       const context = getDeviceLinkInvokeContext();
       const guard = createSharedTaskSettingGuard(context?.sharedTask, String(sessionId), context?.sharedTaskSetting ?? { admitted: false });
@@ -880,6 +941,7 @@ export function registerMakerSessionAgentSwitchHandler(
         providerId,
         effort,
         fastMode,
+        thinking,
         assertSelectionCurrent: guard.admit,
       });
       return typeof sessionId === 'string' && sessionId && deps.withSessionLock

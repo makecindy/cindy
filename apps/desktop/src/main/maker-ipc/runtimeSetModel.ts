@@ -26,7 +26,7 @@ interface RuntimeSetModelSession {
   model: string;
   setModel: (
     model: string,
-    opts?: { providerId?: string | null; effort?: Effort },
+    opts?: { providerId?: string | null; effort?: Effort; thinkingEnabled?: boolean },
   ) => Promise<void>;
   requiresModelSwitchRebuild?: (
     model: string,
@@ -58,6 +58,12 @@ export interface ApplyRuntimeSetModelChangeInput {
   model: string;
   providerId?: string | null;
   effort?: Effort;
+  /**
+   * Pi-only:目标模型的思考开关意图(renderer 的 providerModelMemory 记忆，缺省开)。
+   * Pi 的 set_model 不会重置 thinking level，不收敛就会让上一个模型的 off/旧档位
+   * 漂移给新模型(实报：切模后模型把推理写进正文)。非 Pi 引擎忽略。
+   */
+  thinkingEnabled?: boolean;
   /**
    * Orca Worker 的 live model/provider 属于执行单元身份，不能热切。即使凭证
    * 形态相同，也必须沿用 credential-switch 的 idle close / busy defer 边界。
@@ -404,6 +410,7 @@ export async function applyRuntimeSetModelChange(
         ? { providerId: nextProviderId }
         : {}),
       ...(effort !== undefined ? { effort } : {}),
+      ...(input.thinkingEnabled !== undefined ? { thinkingEnabled: input.thinkingEnabled } : {}),
     });
   } catch (err) {
     if (providerId !== undefined) {
