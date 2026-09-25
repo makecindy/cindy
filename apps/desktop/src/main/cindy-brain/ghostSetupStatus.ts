@@ -37,7 +37,8 @@ import type {
   GhostSetupStatus,
   GhostSetupStatusItem,
 } from '../../shared/ghost.js';
-import { GHOST_SECRET_VALUE_MAX_CHARS, isValidGhostId } from '../../shared/ghost.js';
+import { GHOST_SECRET_VALUE_MAX_CHARS } from '../../shared/ghost.js';
+import { isGhostInstanceId } from '../../shared/pluginIdentity.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 /** OAuth 凭证的分项状态(index.ts 由 GhostOauthAccountManager 现查)。 */
@@ -393,7 +394,7 @@ export function handleGhostSetupStatusRequest(args: {
   probesFor: (manifest: GhostManifest) => GhostSetupProbes;
 }): GhostSetupStatus {
   const { id } = args;
-  if (typeof id !== 'string' || !isValidGhostId(id)) {
+  if (typeof id !== 'string' || !isGhostInstanceId(id)) {
     throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
   }
   const manifest = args.getRuntimeManifest(id);

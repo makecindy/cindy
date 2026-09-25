@@ -10,12 +10,24 @@ import {
   PLUGIN_MEMBER_UPLOAD_MAX_ZIP_ENTRIES,
 } from '@cindy/plugin-protocol';
 
+import { authorDeclaredNamespaceReason, isValidPluginNamespace } from '@cindy/plugin-protocol';
+import {
+  createPluginLogicalIdentity,
+  findConflictingGhostCommand,
+  findInstalledGhostByIdentity,
+  hasDeliveryNamespace,
+  installedGhostLogicalIdentity,
+  parsePluginInstallRelId,
+  parsePluginStoragePart,
+  PLUGIN_NS_INSTALL_ROOT,
+  pluginInstallRelId,
+} from '../../shared/pluginIdentity.js';
+
 import {
   GHOST_MANIFEST_FILE,
   GHOST_MANIFEST_MAX_BYTES,
   GHOST_LOCALE_MAX_BYTES,
   GHOST_ICON_MAX_BYTES,
-  GHOST_INSTALL_MANIFEST_MAX_BYTES,
   GHOST_MANUAL_ENTRY_FILE,
   GHOST_MANUAL_MD_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
@@ -47,6 +59,21 @@ import {
 } from './ghostContentTree.js';
 import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
+import {
+  commitNamespaceMigration,
+  createNamespaceMigrationStore,
+  censusNamespaceMigration,
+  type NamespaceCensusCandidate,
+  isPendingNamespaceGhost,
+  pendingNamespaceGhostIds,
+  planNamespaceCommit,
+  namespaceMigrationFilePath,
+  resolveInstallAgainstPending,
+  type NamespaceClassification,
+  type NamespaceMigrationBasis,
+  type NamespaceMigrationLedger,
+  type NamespaceMigrationStore,
+} from './ghostNamespaceMigration.js';
 import {
   createGhostInstallReceipt,
   effectiveInstallOrigin,
@@ -201,10 +228,19 @@ export interface GhostManagerOptions {
    */
   isTrustedBundledId?: (id: string) => boolean;
   /**
-   * tokenBroker 装入闸。缺省只认静态官方前缀（测试夹具）。生产接线问
-   * first-party 判据，官方前缀命中仍走静态表。
+   * tokenBroker 装入闸。缺省拒绝（测试夹具须显式注入）。生产接线问
+   * first-party 判据：名称前缀不构成资格。
    */
   isTokenBrokerAuthorized?: (manifest: GhostManifest) => boolean;
+  /** Classify a pending pre-namespace install using market/org facts. */
+  classifyPendingNamespace?: (
+    ghostId: string,
+    marketSyncCompleted?: boolean,
+  ) => NamespaceClassification;
+  /** True when runtime/OAuth/install work should delay a first-time namespace stamp. */
+  isNamespaceMigrationBusy?: (ghostId: string) => boolean;
+  /** Best-effort side effect after receipt + census ledger commit. */
+  onNamespaceCommitted?: (ghostId: string, namespace: string | null) => void;
   /** sourceDir 是否就是该 id 的随包只读种子目录，而非任意本机可变目录。 */
   isTrustedBundledSource?: (id: string, sourceDir: string) => boolean;
   /** Persist the user's builtin-uninstall intent before approval/content removal. */
@@ -227,6 +263,7 @@ export type InstallRejection =
   | { code: 'not-installed'; reason: string }
   | { code: 'command-conflict'; reason: string }
   | { code: 'state-changed'; reason: string }
+  | { code: 'namespace-migration-pending'; reason: string }
   | {
       code: 'io';
       reason: string;
@@ -573,6 +610,233 @@ export class GhostManager {
     return this.activeMutationContext?.contentRoot ?? this.resolveContentRoot();
   }
 
+  private contentPath(relId: string): string {
+    return path.join(this.contentRootDir(), ...relId.split('/'));
+  }
+
+  private namespaceMigrationStore(): NamespaceMigrationStore {
+    return createNamespaceMigrationStore(namespaceMigrationFilePath(this.stateRootDir()));
+  }
+
+  private persistedNamespaceFields(
+    opts: { namespace?: string | null },
+    existing: { namespace?: string | null } | null,
+  ): { namespace: string | null } | Record<string, never> {
+    if (Object.prototype.hasOwnProperty.call(opts, 'namespace')) {
+      return { namespace: opts.namespace ?? null };
+    }
+    if (existing && hasDeliveryNamespace(existing)) {
+      return { namespace: existing.namespace };
+    }
+    return {};
+  }
+
+  private rootInstallCensusCandidates(): NamespaceCensusCandidate[] {
+    const root = this.contentRootDir();
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const candidates: NamespaceCensusCandidate[] = [];
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || entry.name === PLUGIN_NS_INSTALL_ROOT) continue;
+      if (!isValidGhostId(entry.name)) continue;
+      const dir = path.join(root, entry.name);
+      try {
+        if (classifyGhostDirEntrySync(dir) !== 'directory') continue;
+      } catch {
+        continue;
+      }
+      const approval = this.readApproval(entry.name);
+      candidates.push({
+        ghostId: entry.name,
+        relId: entry.name,
+        ...(approval.state === 'approved' ? { identitySource: approval.receipt } : {}),
+      });
+    }
+    return candidates;
+  }
+
+  private loadNamespaceMigrationLedger(): NamespaceMigrationLedger | null {
+    const outcome = censusNamespaceMigration(
+      this.namespaceMigrationStore().read(),
+      this.rootInstallCensusCandidates(),
+      new Date().toISOString(),
+    );
+    if (outcome.kind === 'blocked') {
+      this.options.log?.warn('namespace migration census blocked', { reason: outcome.reason });
+      return null;
+    }
+    if (outcome.kind === 'created') {
+      try {
+        this.namespaceMigrationStore().write(outcome.ledger);
+      } catch (error) {
+        this.options.log?.warn('namespace migration census write failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+    }
+    return outcome.ledger;
+  }
+
+  ensureNamespaceMigrationCensus(): NamespaceMigrationLedger | null {
+    this.ensureCurrentOwnerContextSync();
+    return this.loadNamespaceMigrationLedger();
+  }
+
+  private resolvePendingNamespaceInstall(
+    ghostId: string,
+    requestedNamespace: string | null,
+  ): ReturnType<typeof resolveInstallAgainstPending> {
+    const ledger = this.loadNamespaceMigrationLedger();
+    const pending = ledger ? isPendingNamespaceGhost(ledger, ghostId) : false;
+    if (!pending && ledger) return { kind: 'proceed' };
+    if (!ledger) {
+      const approval = this.readApproval(ghostId);
+      const legacy =
+        this.rootInstallCensusCandidates().some((candidate) => candidate.ghostId === ghostId) &&
+        (approval.state !== 'approved' || !hasDeliveryNamespace(approval.receipt));
+      if (!legacy) return { kind: 'proceed' };
+      return resolveInstallAgainstPending({
+        ghostId,
+        requestedNamespace,
+        pending: true,
+        classification: this.options.classifyPendingNamespace?.(ghostId) ?? null,
+      });
+    }
+    return resolveInstallAgainstPending({
+      ghostId,
+      requestedNamespace,
+      pending,
+      classification: this.options.classifyPendingNamespace?.(ghostId) ?? null,
+    });
+  }
+
+  async reconcilePendingRootNamespaces(marketSyncCompleted: boolean): Promise<void> {
+    const ledger = this.ensureNamespaceMigrationCensus();
+    if (!ledger) return;
+    for (const ghostId of pendingNamespaceGhostIds(ledger)) {
+      const classification = this.options.classifyPendingNamespace?.(ghostId, marketSyncCompleted) ?? {
+        kind: 'pending' as const,
+        reason: 'awaiting-market-facts',
+      };
+      if (classification.kind === 'commit') {
+        await this.commitPendingNamespace(ghostId, classification.namespace, classification.basis);
+      }
+    }
+  }
+
+  async commitPendingRootNamespace(
+    ghostId: string,
+    basis: NamespaceMigrationBasis,
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    return this.commitPendingNamespace(ghostId, null, basis);
+  }
+
+  async commitPendingNamespace(
+    ghostId: string,
+    namespace: string | null,
+    basis: NamespaceMigrationBasis,
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    return this.runExclusiveMutation(() =>
+      this.commitPendingNamespaceUnlocked(ghostId, namespace, basis),
+    );
+  }
+
+  private async commitPendingNamespaceUnlocked(
+    ghostId: string,
+    namespace: string | null,
+    basis: NamespaceMigrationBasis,
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!isValidGhostId(ghostId)) return { ok: false, reason: 'invalid ghost id' };
+    if (namespace !== null && !isValidPluginNamespace(namespace)) {
+      return { ok: false, reason: 'invalid namespace' };
+    }
+    const ledger = this.loadNamespaceMigrationLedger();
+    if (!ledger || !isPendingNamespaceGhost(ledger, ghostId)) {
+      return { ok: false, reason: 'not pending' };
+    }
+    const approval = this.readApproval(ghostId);
+    const receiptNamespace =
+      approval.state === 'approved' && hasDeliveryNamespace(approval.receipt)
+        ? approval.receipt.namespace ?? null
+        : undefined;
+    const plan = planNamespaceCommit({
+      pending: true,
+      busy:
+        this.hasPendingMutationJournal(ghostId) ||
+        this.options.isNamespaceMigrationBusy?.(ghostId) === true,
+      ...(receiptNamespace !== undefined ? { receiptNamespace } : {}),
+      requested: { namespace, basis },
+    });
+    if (plan.kind === 'skip') return { ok: false, reason: plan.reason };
+    if (plan.kind === 'write-receipt-and-ledger') {
+      if (approval.state !== 'approved') return { ok: false, reason: 'busy' };
+      await this.receiptStore.write(
+        { ...approval.receipt, namespace: plan.namespace },
+        { skillSourceDir: this.contentPath(ghostId), requireSkillSnapshot: false, relId: ghostId },
+      );
+    }
+    this.namespaceMigrationStore().write(
+      commitNamespaceMigration(ledger, ghostId, plan.namespace, plan.basis, new Date().toISOString()),
+    );
+    try {
+      this.options.onNamespaceCommitted?.(ghostId, plan.namespace);
+    } catch (error) {
+      this.options.log?.warn('namespace committed side effect failed', {
+        ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    this.options.onChanged?.(this.list());
+    return { ok: true };
+  }
+
+  private listNamespacedInstallDirs(root: string): Array<{ relId: string; dir: string }> {
+    const listed: Array<{ relId: string; dir: string }> = [];
+    const nsRoot = path.join(root, PLUGIN_NS_INSTALL_ROOT);
+    let nsEntries: fs.Dirent[];
+    try {
+      nsEntries = fs.readdirSync(nsRoot, { withFileTypes: true });
+    } catch {
+      return listed;
+    }
+    for (const nsEntry of nsEntries) {
+      if (nsEntry.name.startsWith('.')) continue;
+      const nsDir = path.join(nsRoot, nsEntry.name);
+      try {
+        if (classifyGhostDirEntrySync(nsDir) !== 'directory') continue;
+      } catch {
+        continue;
+      }
+      let ghostEntries: fs.Dirent[];
+      try {
+        ghostEntries = fs.readdirSync(nsDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const ghostEntry of ghostEntries) {
+        if (ghostEntry.name.startsWith('.')) continue;
+        const relId = PLUGIN_NS_INSTALL_ROOT + '/' + nsEntry.name + '/' + ghostEntry.name;
+        if (!parsePluginInstallRelId(relId)) {
+          this.options.log?.warn('ghost dir skipped: invalid namespaced directory id', { relId });
+          continue;
+        }
+        const dir = path.join(nsDir, ghostEntry.name);
+        try {
+          if (classifyGhostDirEntrySync(dir) !== 'directory') continue;
+        } catch {
+          continue;
+        }
+        listed.push({ relId, dir });
+      }
+    }
+    return listed;
+  }
+
   private stateRootDir(): string {
     return this.activeMutationContext?.stateRoot ?? this.resolveStateRoot();
   }
@@ -719,7 +983,7 @@ export class GhostManager {
     }
     for (const id of pendingScan.ids) {
       const markerResult = this.receiptStore.readPendingMutationSync(id);
-      const finalDir = path.join(root, id);
+      const finalDir = path.join(root, ...id.split('/'));
       if (markerResult.state === 'missing') continue;
       // A pending transaction means the receipt cannot authorize finalDir until
       // recovery proves commit/rollback and clears the marker.
@@ -888,7 +1152,7 @@ export class GhostManager {
       } catch {
         continue;
       }
-      const finalDir = path.join(root, id);
+      const finalDir = path.join(root, ...id.split('/'));
       // 按解析后的 id 精确比对,不能用前缀 startsWith:合法 id 允许带 `-`,
       // `.cindy-updating-foo-<hex>` 是 `.cindy-updating-foo-bar-<hex>` 的前缀,
       // 若用前缀匹配,foo 与 foo-bar 同时留有 backup 时,foo 的唯一 backup 会被
@@ -969,9 +1233,38 @@ export class GhostManager {
   }
 
   /** `<root>/<id>` 是否真目录(非链接/junction;判据同 ghostContentTree,避免穿透删除)。 */
+  private resolvePhysicalRelId(id: string): string | null {
+    const identity = parsePluginInstallRelId(id) ?? parsePluginStoragePart(id);
+    if (!identity) return null;
+    const logicalRel = pluginInstallRelId(identity);
+    if (this.isRealDirChildRel(logicalRel)) return logicalRel;
+    if (identity.namespace !== null && this.isRealDirChildRel(identity.ghostId)) {
+      const approval = this.receiptStore.read(identity.ghostId);
+      if (
+        approval.state === 'approved' &&
+        hasDeliveryNamespace(approval.receipt) &&
+        approval.receipt.namespace === identity.namespace
+      ) {
+        return identity.ghostId;
+      }
+    }
+    return logicalRel;
+  }
+
+  /** Receipts live under install rel id (helper or _ns/acme/helper), including in-place org dirs. */
+  private approvalRelIdFor(id: string): string | null {
+    const identity = parsePluginStoragePart(id) ?? parsePluginInstallRelId(id);
+    if (!identity) return null;
+    return this.resolvePhysicalRelId(id) ?? pluginInstallRelId(identity);
+  }
+
+  private isRealDirChildRel(relId: string): boolean {
+    return this.isRealDirChild(this.contentRootDir(), relId);
+  }
+
   private isRealDirChild(root: string, id: string): boolean {
     try {
-      return classifyGhostDirEntrySync(path.join(root, id)) === 'directory';
+      return classifyGhostDirEntrySync(path.join(root, ...id.split('/'))) === 'directory';
     } catch {
       return false;
     }
@@ -1032,8 +1325,10 @@ export class GhostManager {
   /** 只认显式 Forge 安装写入的来源；未知/手动来源一律按 manual。 */
   readEffectiveInstallOrigin(id: string): 'manual' | 'agent-forge' {
     this.ensureCurrentOwnerContextSync();
+    const relId = this.approvalRelIdFor(id);
+    if (!relId) return 'manual';
     try {
-      const approval = this.readApproval(id);
+      const approval = this.readApproval(relId);
       if (approval.state !== 'approved') return 'manual';
       return effectiveInstallOrigin(approval.receipt);
     } catch {
@@ -1047,7 +1342,11 @@ export class GhostManager {
    */
   readApprovedInstallOriginStrict(id: string): 'manual' | 'agent-forge' {
     this.ensureCurrentOwnerContextSync();
-    const approval = this.readApproval(id);
+    const relId = this.approvalRelIdFor(id);
+    if (!relId) {
+      throw new Error('approved Plugin receipt is unavailable: invalid-id');
+    }
+    const approval = this.readApproval(relId);
     if (approval.state !== 'approved') {
       throw new Error(`approved Plugin receipt is unavailable: ${approval.state}`);
     }
@@ -1061,8 +1360,11 @@ export class GhostManager {
    */
   approvedInstallEvidence(id: string): ApprovedGhostInstallEvidence | null {
     this.ensureCurrentOwnerContextSync();
-    if (!isValidGhostId(id) || this.hasPendingMutationJournal(id)) return null;
-    const approval = this.readApproval(id);
+    const identity = parsePluginStoragePart(id) ?? parsePluginInstallRelId(id);
+    if (!identity) return null;
+    const relId = this.approvalRelIdFor(id) ?? pluginInstallRelId(identity);
+    if (this.hasPendingMutationJournal(relId)) return null;
+    const approval = this.readApproval(relId);
     if (approval.state !== 'approved') return null;
     const packageSha256 = approval.receipt.packageSha256;
     const migration = this.receiptStore.readMigrationLedger();
@@ -1073,7 +1375,7 @@ export class GhostManager {
       legacyMigrated: Boolean(
         migration
         && migration.state !== 'in-progress'
-        && migration.migratedIds.includes(id)
+        && migration.migratedIds.includes(identity.ghostId)
       ),
     };
   }
@@ -1347,7 +1649,7 @@ export class GhostManager {
       if (id.startsWith('.') || !isValidGhostId(id)) continue;
       // 判据走 ghostContentTree(lstat 分类),不信 Dirent 类型位:根子项是 junction/
       // 链接时一律不进迁移,也与 §3「只有真目录才算安装」同向。
-      if (classifyGhostDirEntrySync(path.join(root, id)) !== 'directory') continue;
+      if (classifyGhostDirEntrySync(path.join(root, ...id.split('/'))) !== 'directory') continue;
       // 随包种子交给 provisioning,不在迁移范围。
       if (this.options.isTrustedBundledId?.(id)) {
         result.skipped.push(id);
@@ -1449,7 +1751,7 @@ export class GhostManager {
 
     for (const id of candidates) {
       try {
-        const migrated = await this.backfillLegacyApproval(path.join(root, id), id, {
+        const migrated = await this.backfillLegacyApproval(path.join(root, ...id.split('/')), id, {
           expectedApprovalProjectionSha256:
             resumeApprovalProjectionDigest?.[id],
         });
@@ -1634,7 +1936,7 @@ export class GhostManager {
           continue;
         }
         try {
-          const targetDir = path.join(root, id);
+          const targetDir = path.join(root, ...id.split('/'));
           const expectedApprovalProjectionSha256 =
             options.expectedApprovalProjectionSha256ById[id];
           if (expectedApprovalProjectionSha256 === undefined) {
@@ -1759,7 +2061,7 @@ export class GhostManager {
         skillContentSha256: projection.skillContentSha256,
         ...(projection.iconDataUrl !== undefined ? { iconDataUrl: projection.iconDataUrl } : {}),
       }),
-      { skillSourceDir: dir },
+      { skillSourceDir: dir, relId: id },
     );
     this.options.log?.info('legacy ghost approval migrated', {
       id,
@@ -1781,9 +2083,14 @@ export class GhostManager {
       return []; // 根目录还不存在 = 没装过任何意识
     }
 
-    const result: InstalledGhost[] = [];
+    const namespaceLedger = this.loadNamespaceMigrationLedger();
+    const listedDirs: Array<{ relId: string; dir: string }> = [];
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue; // staging / 系统目录
+      if (entry.name === PLUGIN_NS_INSTALL_ROOT) {
+        listedDirs.push(...this.listNamespacedInstallDirs(root));
+        continue;
+      }
       const dir = path.join(root, entry.name);
       // 判据走 ghostContentTree(lstat 分类),不信 Dirent 类型位:根子项是 junction/
       // 链接时不算已装插件 —— 与迁移扫描、内容树遍历同一份判据(§3)。
@@ -1796,32 +2103,43 @@ export class GhostManager {
         this.options.log?.warn('ghost dir skipped: invalid directory id', { dir });
         continue;
       }
-      const approvalResult = this.readApproval(entry.name);
+      listedDirs.push({ relId: entry.name, dir });
+    }
+    const result: InstalledGhost[] = [];
+    for (const listed of listedDirs) {
+      const { relId, dir } = listed;
+      const identity = parsePluginInstallRelId(relId);
+      if (!identity) continue;
+      const approvalResult = this.readApproval(relId);
       if (approvalResult.state === 'approved') {
         const receipt = approvalResult.receipt;
         const localizedManifest = this.localizeApprovedManifest(receipt);
         result.push({
           manifest: localizedManifest,
           dir,
+          ...(identity.namespace !== null || (approvalResult.state === 'approved' && hasDeliveryNamespace(approvalResult.receipt))
+            ? { namespace: identity.namespace !== null ? identity.namespace : approvalResult.receipt.namespace }
+            : {}),
+          ...(identity.namespace === null && namespaceLedger && isPendingNamespaceGhost(namespaceLedger, identity.ghostId) ? { namespaceMigration: 'pending' as const } : {}),
           enabled: this.effectiveEnabled(dir, receipt.enabled),
           approval: { state: 'approved', revision: receipt.revision },
           trust: receipt.trust,
           ...(receipt.manifest.skill?.items.length
             ? {
                 approvedSkillRoot: this.receiptStore.skillSnapshotRoot(
-                  receipt.id,
+                  relId,
                   receipt.revision,
                 ),
               }
             : {}),
           ...(receipt.iconDataUrl !== undefined ? { iconDataUrl: receipt.iconDataUrl } : {}),
-          ...(this.options.isTrustedBundledId?.(entry.name) ? { builtin: true } : {}),
+          ...(identity.namespace === null && this.options.isTrustedBundledId?.(identity.ghostId) ? { builtin: true } : {}),
         });
         continue;
       }
       if (approvalResult.state === 'invalid') {
         this.options.log?.warn('ghost approval receipt invalid; plugin kept disabled', {
-          id: entry.name,
+          id: relId,
           reason: approvalResult.reason,
         });
       }
@@ -1858,7 +2176,7 @@ export class GhostManager {
         this.options.log?.warn('ghost dir skipped: invalid manifest', { dir, reason: v.reason });
         continue;
       }
-      if (v.manifest.id !== entry.name) {
+      if (v.manifest.id !== identity.ghostId) {
         this.options.log?.warn('ghost dir skipped: dir name != manifest id', {
           dir,
           manifestId: v.manifest.id,
@@ -1867,7 +2185,6 @@ export class GhostManager {
       }
       // 历史 manifest / receipt 中可能保留已移除的资源搜索元数据；它不参与当前
       // 运行时入口，插件本体与已批准的其它能力仍按现有授权照常可用。
-      const manifest = v.manifest;
       // icon 读失败只降级为无图标(warn),不影响意识本体可用。
       // receipt 模型:无有效批准的安装一律 enabled:false + approval:{state},不按
       // .disabled 镜像判运行(那是被 revert 的旧模型、#636 漏洞路径)。trust 只在
@@ -1877,6 +2194,10 @@ export class GhostManager {
       result.push({
         manifest: localizedManifest,
         dir,
+        ...(identity.namespace !== null
+          ? { namespace: identity.namespace }
+          : {}),
+        ...(identity.namespace === null && namespaceLedger && isPendingNamespaceGhost(namespaceLedger, identity.ghostId) ? { namespaceMigration: 'pending' as const } : {}),
         enabled: false,
         approval: { state: approvalResult.state },
         // 未批准安装目录里的 trust 镜像是可变字节，不能作为可信展示事实。
@@ -1887,7 +2208,7 @@ export class GhostManager {
           reviewed: false,
         },
         ...(iconDataUrl !== null ? { iconDataUrl } : {}),
-        ...(this.options.isTrustedBundledId?.(entry.name) ? { builtin: true } : {}),
+        ...(identity.namespace === null && this.options.isTrustedBundledId?.(identity.ghostId) ? { builtin: true } : {}),
       });
     }
     result.sort((a, b) => a.manifest.id.localeCompare(b.manifest.id));
@@ -1906,7 +2227,7 @@ export class GhostManager {
   } {
     const list = this.list();
     const ghost =
-      list.find((item) => item.manifest.id === fallback.manifest.id) ??
+      findInstalledGhostByIdentity(list, installedGhostLogicalIdentity(fallback)) ??
       ({
         ...fallback,
         enabled: false,
@@ -1998,10 +2319,12 @@ export class GhostManager {
     id: string,
     enabled: boolean,
   ): Promise<{ ok: true } | { rejection: UninstallRejection }> {
-    if (!isValidGhostId(id)) {
+    const identity = parsePluginInstallRelId(id);
+    if (!identity) {
       return { rejection: { code: 'invalid-id', reason: '非法意识 id' } };
     }
-    const dir = path.join(this.contentRootDir(), id);
+    const relId = this.resolvePhysicalRelId(id) ?? pluginInstallRelId(identity);
+    const dir = this.contentPath(relId);
     // pathExists(fs.access)跟随链接:`<root>/<id>` 被换成 junction 时,下面对
     // `<dir>/.disabled` 的写/删会穿透到安装根之外的目标。判据改用 ghostContentTree 的
     // lstat 分类(与 list()「只有真目录才算安装」同源):不存在(ENOENT→抛错)或非真目录
@@ -2013,22 +2336,22 @@ export class GhostManager {
       dirKind = null;
     }
     if (dirKind !== 'directory') {
-      return { rejection: { code: 'not-installed', reason: `意识 ${id} 未装入` } };
+      return { rejection: { code: 'not-installed', reason: `意识 ${identity.ghostId} 未装入` } };
     }
-    const receiptResult = this.readApproval(id);
+    const receiptResult = this.readApproval(relId);
     if (receiptResult.state !== 'approved' && enabled) {
       return {
         rejection: {
           code: 'approval-required',
-          reason: `插件 ${id} 缺少有效的安装验证记录，请重新安装`,
+          reason: `插件 ${identity.ghostId} 缺少有效的安装验证记录，请重新安装`,
         },
       };
     }
     // Re-check immediately before touching the compatibility mirror. This does not
     // replace OS-level handle protection, but prevents a stale initial classification
     // from authorizing a link/file target in the common race window.
-    if (!this.isRealDirChild(this.contentRootDir(), id)) {
-      return { rejection: { code: 'not-installed', reason: `意识 ${id} 未装入` } };
+    if (!this.isRealDirChildRel(relId)) {
+      return { rejection: { code: 'not-installed', reason: `意识 ${identity.ghostId} 未装入` } };
     }
     const marker = path.join(dir, DISABLED_MARKER_FILE);
     // 回滚基准取"镜像先前是否在盘上",不是 receipt.enabled:两者可以背离(旧客户端
@@ -2075,7 +2398,7 @@ export class GhostManager {
         // 也照样落盘,由技能对账把落链撤掉。
         await this.receiptStore.write(
           { ...receiptResult.receipt, enabled },
-          { skillSourceDir: dir, requireSkillSnapshot: enabled },
+          { skillSourceDir: dir, requireSkillSnapshot: enabled, relId },
         );
       } catch (err) {
         if (!enabled) {
@@ -2313,6 +2636,10 @@ export class GhostManager {
       return {
         rejection: { code: 'file-invalid', reason: `${GHOST_MANIFEST_FILE} 不是合法 JSON` },
       };
+    }
+    const reservedNamespace = authorDeclaredNamespaceReason(manifestRaw);
+    if (reservedNamespace) {
+      return { rejection: { code: 'file-invalid', reason: reservedNamespace } };
     }
     const hostUnsupportedReason = ghostManifestHostUnsupportedReason(manifestRaw);
     if (hostUnsupportedReason) {
@@ -2598,6 +2925,7 @@ export class GhostManager {
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'agent-forge';
+      namespace?: string | null;
       /** Synchronous live-authority check immediately before publishing the staged package. */
       beforePackagePlacement?: () => void;
     },
@@ -2612,6 +2940,7 @@ export class GhostManager {
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'agent-forge';
+      namespace?: string | null;
       beforePackagePlacement?: () => void;
     },
   ): Promise<{ ghost: InstalledGhost } | { rejection: InstallRejection }> {
@@ -2649,19 +2978,32 @@ export class GhostManager {
 
     // 4) 目标目录冲突检查
     const root = this.contentRootDir();
-    const finalDir = path.join(root, manifest.id);
+    const identity = createPluginLogicalIdentity(opts?.namespace ?? null, manifest.id);
+    const relId = pluginInstallRelId(identity);
+    const physicalRel = this.resolvePhysicalRelId(relId) ?? relId;
+    if (physicalRel !== relId && this.isRealDirChildRel(physicalRel)) {
+      return { rejection: { code: 'already-installed', reason: `意识 ${manifest.id} 已装入` } };
+    }
+    const finalDir = this.contentPath(relId);
     if (await pathExists(finalDir)) {
       return { rejection: { code: 'already-installed', reason: `意识 ${manifest.id} 已装入` } };
     }
+    const pendingInstall = this.resolvePendingNamespaceInstall(manifest.id, identity.namespace);
+    if (pendingInstall.kind === 'already-installed') {
+      return { rejection: { code: 'already-installed', reason: `意识 ${manifest.id} 已装入` } };
+    }
+    if (pendingInstall.kind === 'wait') {
+      return { rejection: { code: 'namespace-migration-pending', reason: pendingInstall.reason } };
+    }
+    await fs.promises.mkdir(path.dirname(finalDir), { recursive: true });
 
     // 4.5) 显式指令查重(2026-07-09 Lizi 定案):command 由意识作者自定,
     // 与本机已装意识撞名即拒——不静默改名(确定性),由用户抽离旧的或
     // 作者换名解决。大小写折叠比较,防 /Draw 与 /draw 并存互踩。
     if (manifest.command !== undefined) {
-      const commandFold = manifest.command.toLowerCase();
-      const holder = this.list().find(
-        (g) => g.manifest.command !== undefined && g.manifest.command.toLowerCase() === commandFold,
-      );
+      const holder = findConflictingGhostCommand(this.list(), manifest.command, {
+        incomingNamespace: identity.namespace,
+      });
       if (holder) {
         return {
           rejection: {
@@ -2695,20 +3037,20 @@ export class GhostManager {
       // "有 finalDir、无 receipt、无 ledger"的目录,与 legacy 安装无法区分,被迁移当
       // 存量批准掉(而崩溃窗口内同权限进程可改写 finalDir 的 manifest)。带 packageSha256
       // 让启动恢复能判定 receipt 是否已提交。
-      await this.receiptStore.writePendingMutation(manifest.id, {
+      await this.receiptStore.writePendingMutation(relId, {
         kind: 'install',
         packageSha256,
         receiptRevision,
         ...(clearBuiltinTombstoneOnCommit ? { clearBuiltinTombstone: true } : {}),
       });
-      this.untrustedApprovals.add(this.isolationKey(manifest.id));
+      this.untrustedApprovals.add(this.isolationKey(relId));
       try {
         opts?.beforePackagePlacement?.();
       } catch (error) {
         // No package bytes were published. Clear the prepared journal so a
         // cancelled request cannot leave an installation waiting for recovery.
-        await this.receiptStore.clearPendingMutation(manifest.id);
-        this.untrustedApprovals.delete(this.isolationKey(manifest.id));
+        await this.receiptStore.clearPendingMutation(relId);
+        this.untrustedApprovals.delete(this.isolationKey(relId));
         throw error;
       }
       await fs.promises.rename(stagingDir, finalDir);
@@ -2729,8 +3071,9 @@ export class GhostManager {
           revision: receiptRevision,
           ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
           ...(opts?.installOrigin ? { installOrigin: opts.installOrigin } : {}),
+          ...this.persistedNamespaceFields(opts ?? {}, null),
         });
-        await this.receiptStore.write(receipt, { skillSourceDir: finalDir });
+        await this.receiptStore.write(receipt, { skillSourceDir: finalDir, relId });
         let tombstoneClearPending = false;
         if (clearBuiltinTombstoneOnCommit) {
           try {
@@ -2751,8 +3094,8 @@ export class GhostManager {
         // receipt.packageSha256 与标记相符即判已提交、幂等清理。
         if (!tombstoneClearPending) {
           try {
-            await this.receiptStore.clearPendingMutation(manifest.id);
-            this.untrustedApprovals.delete(this.isolationKey(manifest.id));
+            await this.receiptStore.clearPendingMutation(relId);
+            this.untrustedApprovals.delete(this.isolationKey(relId));
           } catch {
             // Keep quarantine while the durable journal remains.
           }
@@ -2760,13 +3103,13 @@ export class GhostManager {
           // The receipt and installed bytes are committed.  The remaining
           // journal only records a deferred builtin tombstone side effect and
           // must not keep an otherwise valid builtin disabled in-process.
-          this.untrustedApprovals.delete(this.isolationKey(manifest.id));
+          this.untrustedApprovals.delete(this.isolationKey(relId));
         }
       } catch (error) {
         try {
           await fs.promises.rm(finalDir, { recursive: true, force: true });
-          await this.receiptStore.clearPendingMutation(manifest.id);
-          this.untrustedApprovals.delete(this.isolationKey(manifest.id));
+          await this.receiptStore.clearPendingMutation(relId);
+          this.untrustedApprovals.delete(this.isolationKey(relId));
         } catch (rollbackError) {
           // Keep the install journal whenever rollback cannot prove the published
           // directory is gone. Migration treats that journal as a hard block, and
@@ -2804,6 +3147,7 @@ export class GhostManager {
       approval: { state: 'approved', revision: receipt.revision },
       trust,
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
+      ...this.persistedNamespaceFields(opts ?? {}, null),
     };
     this.options.log?.info('ghost installed', { id: manifest.id, version: manifest.version });
     const projected = this.projectCommittedMutationResult(ghost);
@@ -2827,6 +3171,7 @@ export class GhostManager {
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'agent-forge';
+      namespace?: string | null;
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
       onPackagePlaced?: () => void;
@@ -2842,6 +3187,7 @@ export class GhostManager {
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'agent-forge';
+      namespace?: string | null;
       /** 新目录已换位、旧目录仍可回滚时执行；抛错会恢复旧版本。 */
       beforePackageCommit?: () => GhostPackageCommitPreparation | void;
       /** 目录换位完成后、任何通知或运行时收尾前触发。 */
@@ -2875,13 +3221,16 @@ export class GhostManager {
       : parsed.trust;
 
     const root = this.contentRootDir();
-    const finalDir = path.join(root, manifest.id);
-    if (!this.isRealDirChild(root, manifest.id)) {
+    const identity = createPluginLogicalIdentity(opts.namespace ?? null, manifest.id);
+    const relId =
+      this.resolvePhysicalRelId(pluginInstallRelId(identity)) ?? pluginInstallRelId(identity);
+    const finalDir = this.contentPath(relId);
+    if (!this.isRealDirChildRel(relId)) {
       return {
         rejection: { code: 'not-installed', reason: `意识 ${manifest.id} 未装入,无从更新` },
       };
     }
-    const approvalResult = this.readApproval(manifest.id);
+    const approvalResult = this.readApproval(relId);
     const actualApproval = approvalTokenFor(approvalResult);
     if (actualApproval !== opts.expectedInstalledApproval) {
       return {
@@ -2907,13 +3256,10 @@ export class GhostManager {
 
     // 指令查重同 install,但豁免自己(新版本沿用/改名自己的指令都合法)。
     if (manifest.command !== undefined) {
-      const commandFold = manifest.command.toLowerCase();
-      const holder = this.list().find(
-        (g) =>
-          g.manifest.id !== manifest.id &&
-          g.manifest.command !== undefined &&
-          g.manifest.command.toLowerCase() === commandFold,
-      );
+      const holder = findConflictingGhostCommand(this.list(), manifest.command, {
+        incomingNamespace: identity.namespace,
+        exemptPhysicalRelId: relId,
+      });
       if (holder) {
         return {
           rejection: {
@@ -2951,7 +3297,7 @@ export class GhostManager {
     // 已提交:未提交则回滚到 backup。
     const receiptRevision = crypto.randomUUID();
     try {
-      await this.receiptStore.writePendingMutation(manifest.id, {
+      await this.receiptStore.writePendingMutation(relId, {
         kind: 'update',
         packageSha256,
         backupDirName: path.basename(backupDir),
@@ -2972,11 +3318,11 @@ export class GhostManager {
     // exchange so concurrent list/spawn/host calls cannot project the old
     // receipt onto the new finalDir while the new receipt and skill snapshot
     // are still being committed.
-    this.untrustedApprovals.add(this.isolationKey(manifest.id));
+    this.untrustedApprovals.add(this.isolationKey(relId));
     const clearUpdateQuarantineAfterRollback = async (): Promise<void> => {
       try {
-        await this.receiptStore.clearPendingMutation(manifest.id);
-        this.untrustedApprovals.delete(this.isolationKey(manifest.id));
+        await this.receiptStore.clearPendingMutation(relId);
+        this.untrustedApprovals.delete(this.isolationKey(relId));
       } catch {
         // Keep the in-process quarantine if the journal cannot be cleared;
         // restart recovery must see the marker before authorization resumes.
@@ -2996,7 +3342,7 @@ export class GhostManager {
     // this write is interrupted, recovery can infer the same state from the
     // presence of the backup and will never treat a pre-rename final as new code.
     await this.receiptStore
-      .writePendingMutation(manifest.id, {
+      .writePendingMutation(relId, {
         kind: 'update',
         packageSha256,
         backupDirName: path.basename(backupDir),
@@ -3069,8 +3415,9 @@ export class GhostManager {
         revision: receiptRevision,
         ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
         ...(installOrigin ? { installOrigin } : {}),
+        ...this.persistedNamespaceFields(opts, approvalResult.state === 'approved' ? approvalResult.receipt : null),
       });
-      await this.receiptStore.write(receipt, { skillSourceDir: finalDir });
+      await this.receiptStore.write(receipt, { skillSourceDir: finalDir, relId });
     } catch (err) {
       let sideEffectRolledBack = !(
         err instanceof Error &&
@@ -3133,8 +3480,8 @@ export class GhostManager {
     }
     // receipt 已就位 = 事务提交,清标记后再回收 backup;顺序保证"标记在 ⟺ 可能未提交"。
     try {
-      await this.receiptStore.clearPendingMutation(manifest.id);
-      this.untrustedApprovals.delete(this.isolationKey(manifest.id));
+      await this.receiptStore.clearPendingMutation(relId);
+      this.untrustedApprovals.delete(this.isolationKey(relId));
     } catch {
       // Keep quarantine while the durable journal remains; recovery retries it.
     }
@@ -3157,6 +3504,7 @@ export class GhostManager {
       approval: { state: 'approved', revision: receipt.revision },
       trust,
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
+      ...this.persistedNamespaceFields(opts, approvalResult.state === 'approved' ? approvalResult.receipt : null),
     };
     opts?.onPackagePlaced?.();
     this.options.log?.info('ghost updated', { id: manifest.id, version: manifest.version });
@@ -3198,7 +3546,7 @@ export class GhostManager {
     }
     const packageSha256 = await hashApprovedDirectory(sourceDir);
     const root = this.contentRootDir();
-    const finalDir = path.join(root, id);
+    const finalDir = path.join(root, ...id.split('/'));
     const rand = crypto.randomBytes(4).toString('hex');
     const stagingDir = path.join(root, `.cindy-installing-${id}-${rand}`);
     const backupDir = path.join(root, `.cindy-updating-${id}-${rand}`);
@@ -3401,7 +3749,7 @@ export class GhostManager {
             ...current.receipt,
             enabled,
           },
-          { skillSourceDir: sourceDir },
+          { skillSourceDir: sourceDir, relId: approvedManifest.id },
         );
         await this.finishTrustedBundledPublish(approvedManifest.id, pendingPublish);
         this.untrustedApprovals.delete(this.isolationKey(approvedManifest.id));
@@ -3413,7 +3761,7 @@ export class GhostManager {
             ...current.receipt,
             enabled,
           },
-          { skillSourceDir: sourceDir },
+          { skillSourceDir: sourceDir, relId: approvedManifest.id },
         );
         await this.finishTrustedBundledPublish(approvedManifest.id, pendingPublish);
         this.untrustedApprovals.delete(this.isolationKey(approvedManifest.id));
@@ -3438,8 +3786,9 @@ export class GhostManager {
         skillContentSha256,
         packageSha256,
         ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
+        namespace: null,
       }),
-      { skillSourceDir: sourceDir },
+      { skillSourceDir: sourceDir, relId: approvedManifest.id },
     );
     await this.finishTrustedBundledPublish(approvedManifest.id, pendingPublish);
     this.untrustedApprovals.delete(this.isolationKey(approvedManifest.id));
@@ -3589,17 +3938,14 @@ export class GhostManager {
     id: string,
     options: GhostUninstallOptions = {},
   ): Promise<UninstallResult> {
-    if (!isValidGhostId(id)) {
+    const identity = parsePluginInstallRelId(id);
+    if (!identity) {
       return { rejection: { code: 'invalid-id', reason: '非法意识 id' } };
     }
-    const root = this.contentRootDir();
-    const dir = path.join(root, id);
-    // 双保险:id 格式校验已排除路径穿越,这里再确认是 root 的直接子目录。
-    if (path.dirname(dir) !== path.resolve(root) && path.dirname(dir) !== root) {
-      return { rejection: { code: 'invalid-id', reason: '非法意识 id' } };
-    }
-    if (!this.isRealDirChild(root, id)) {
-      return { rejection: { code: 'not-installed', reason: `意识 ${id} 未装入` } };
+    const relId = this.resolvePhysicalRelId(id) ?? pluginInstallRelId(identity);
+    const dir = this.contentPath(relId);
+    if (!this.isRealDirChildRel(relId)) {
+      return { rejection: { code: 'not-installed', reason: `意识 ${identity.ghostId} 未装入` } };
     }
     // 顺序是安全要点:先撤批准(receipt + 快照 + 隔离),再删内容目录。反过来(旧写法)
     // 若崩在两步之间,会留下"孤立 approved receipt + 目录暂缺";之后同 id 路径被恢复/
@@ -3607,27 +3953,29 @@ export class GhostManager {
     // trust 全来自 receipt),等于卸载过的插件被"借尸还魂"。事务标记让崩溃后的启动恢复
     // 把这次卸载收尾干净。
     const builtinTombstone =
-      options.recordBuiltinTombstone !== false && this.options.isTrustedBundledId?.(id) === true;
-    await this.receiptStore.writePendingMutation(id, {
+      options.recordBuiltinTombstone !== false &&
+      identity.namespace === null &&
+      this.options.isTrustedBundledId?.(identity.ghostId) === true;
+    await this.receiptStore.writePendingMutation(relId, {
       kind: 'uninstall',
       ...(builtinTombstone ? { builtinTombstone: true } : {}),
     });
-    this.untrustedApprovals.add(this.isolationKey(id));
+    this.untrustedApprovals.add(this.isolationKey(relId));
     if (builtinTombstone) {
       try {
         if (!this.options.recordBuiltinTombstone) {
           throw new Error('builtin uninstall has no tombstone writer');
         }
-        this.options.recordBuiltinTombstone(id);
+        this.options.recordBuiltinTombstone(identity.ghostId);
       } catch (err) {
         // Tombstone persistence is part of the uninstall transaction.  If it
         // fails, roll back the pending journal and in-process quarantine so a
         // reported failure cannot be completed by startup recovery later.
         const journalCleared = await this.receiptStore
-          .clearPendingMutation(id)
+          .clearPendingMutation(relId)
           .then(() => true)
           .catch(() => false);
-        if (journalCleared) this.untrustedApprovals.delete(this.isolationKey(id));
+        if (journalCleared) this.untrustedApprovals.delete(this.isolationKey(relId));
         return {
           rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) },
         };
@@ -3635,7 +3983,7 @@ export class GhostManager {
     }
     // 走同一个撤销入口:成功即清掉隔离记录,失败由该入口转进程内隔离并记日志。撤批准
     // 在删目录之前 —— 即便随后删目录失败/崩溃,也不会留下"目录在 + 旧 receipt 授权"。
-    const approvalRemoved = await this.removeInstallApprovalUnlocked(id);
+    const approvalRemoved = await this.removeInstallApprovalUnlocked(relId);
     try {
       await fs.promises.rm(dir, { recursive: true, force: true });
     } catch (err) {
@@ -3648,12 +3996,12 @@ export class GhostManager {
     // Receipt 删除失败时保留 uninstall journal，即使内容目录已经删掉；下次启动
     // 仍需据 journal 清理孤立 receipt，不能让进程内隔离随重启丢失。
     if (approvalRemoved) {
-      await this.receiptStore.clearPendingMutation(id).catch(() => undefined);
-      this.untrustedApprovals.delete(this.isolationKey(id));
+      await this.receiptStore.clearPendingMutation(relId).catch(() => undefined);
+      this.untrustedApprovals.delete(this.isolationKey(relId));
     } else {
-      this.options.log?.warn('ghost uninstall left journal for approval cleanup', { id });
+      this.options.log?.warn('ghost uninstall left journal for approval cleanup', { id: relId });
     }
-    this.options.log?.info('ghost uninstalled', { id });
+    this.options.log?.info('ghost uninstalled', { id: relId });
     if (options.notify !== false) this.options.onChanged?.(this.list());
     return { ok: true };
   }

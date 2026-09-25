@@ -11,7 +11,7 @@ interface InstalledState {
 
 export interface PluginMarketAgentDeps {
   market: Pick<PluginMarketService, 'snapshot' | 'detail' | 'install'>;
-  installedState(ghostId: string): InstalledState;
+  installedState(ghostId: string, namespace?: string | null): InstalledState;
   /** Owner generation and caller identity are captured before discovery's first await. */
   captureRead(): () => void;
   /** Holds the existing owner lease and live task authority through package placement. */
@@ -20,7 +20,7 @@ export interface PluginMarketAgentDeps {
 
 function catalogItem(item: PluginMarketItem, installed: InstalledState) {
   return {
-    plugin_id: item.pluginId, ghost_id: item.ghostId, release_id: item.releaseId,
+    plugin_id: item.pluginId, ghost_id: item.ghostId, namespace: item.namespace ?? null, release_id: item.releaseId,
     name: item.name, description: item.description, author: item.author,
     version: item.version, scope: item.scope,
     source: item.sourceType, marketplace: item.sourceMarketName,
@@ -43,7 +43,7 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
           .toLocaleLowerCase().includes(needle));
       return {
         ok: true,
-        items: matches.slice(0, 20).map(item => catalogItem(item, deps.installedState(item.ghostId))),
+        items: matches.slice(0, 20).map(item => catalogItem(item, deps.installedState(item.ghostId, item.namespace))),
         has_more: matches.length > 20,
         complete: !snapshot.unavailableReason && snapshot.unavailableCustomSourceNames.length === 0,
         // Source errors can contain local paths or server responses; expose status only.
@@ -64,7 +64,7 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
         if (detail.releaseId !== request.releaseId) {
           throwIpcError('PRECONDITION_FAILED', 'Plugin release changed after selection');
         }
-        const installed = deps.installedState(detail.ghostId);
+        const installed = deps.installedState(detail.ghostId, detail.namespace);
         if (installed.exists) return {
           ok: true, status: 'already-installed',
           plugin: catalogItem(detail, installed),
@@ -73,7 +73,7 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
         // Recheck at the service's final commit boundary, including concurrent local imports.
         const assertCurrent = () => {
           authority.assertCurrent();
-          if (deps.installedState(detail.ghostId).exists) {
+          if (deps.installedState(detail.ghostId, detail.namespace).exists) {
             throwIpcError('PRECONDITION_FAILED', 'Plugin appeared during installation; inspect it before continuing');
           }
         };

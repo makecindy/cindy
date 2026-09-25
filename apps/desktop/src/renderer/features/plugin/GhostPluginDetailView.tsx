@@ -199,7 +199,7 @@ export function GhostPluginDetailView({
     detail.hostCapability === 'ios-simulator' ||
     cindyCapabilities.length > 0 ||
     detail.hasErrand;
-  const summary = ghostPluginSummary(detail.description, detail.id);
+  const summary = ghostPluginSummary(detail.description, detail.ghostId);
   /**
    * 「从 .cindy 文件更新」是否可用。官方保留前缀(cindy- / filo- / xd-)在**非 dev
    * 构建**上会被 Main 的用户装入通道以 GHOST_ID_RESERVED 直接拒绝(见
@@ -211,7 +211,7 @@ export function GhostPluginDetailView({
    * 会多隐藏一次入口——方向保守(少一个入口 vs 给用户一个必失败按钮),可接受。
    * 普通第三方插件不受影响。
    */
-  const localUpdateAvailable = import.meta.env.DEV || !isOfficialGhostId(detail.id);
+  const localUpdateAvailable = import.meta.env.DEV || !isOfficialGhostId(detail.ghostId);
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
 
   useLayoutEffect(() => {
@@ -858,7 +858,7 @@ export function DetailsSection({
     {
       key: 'identifier',
       label: t('settings.ghosts.detail.infoId'),
-      value: detail.id,
+      value: detail.ghostId,
       monospace: true,
     },
     ...(detail.contents.length > 0

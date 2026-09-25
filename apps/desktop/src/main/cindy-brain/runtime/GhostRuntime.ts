@@ -1,4 +1,5 @@
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 
 /**
  * GhostRuntime — 意识运行时状态机(docs/dev-rules/plugin-security-and-authoring.md)。
@@ -83,7 +84,7 @@ export class GhostRuntime {
    * 即用户重新唤醒);stopping 拒绝(等熄灯完成)。
    */
   async spawn(ghost: InstalledGhost): Promise<{ ok: true; state: GhostRuntimeState } | { ok: false; reason: string }> {
-    const id = ghost.manifest.id;
+    const id = installedGhostStoragePart(ghost);
     const entry = this.getEntry(id);
     if (entry.state === 'starting' || entry.state === 'running') return { ok: true, state: entry.state };
     if (entry.state === 'fused') return { ok: false, reason: '已熔断(反复崩溃),重新唤醒后可再试' };

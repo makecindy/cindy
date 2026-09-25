@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   FIRST_PARTY_ALIAS_GHOST_IDS,
+  authorizeGhostHostPrimitive,
   authorizeGhostTokenBroker,
   resolveGhostFirstPartyPrivilege,
   type GhostFirstPartyFacts,
@@ -51,8 +52,6 @@ function market(
 describe('resolveGhostFirstPartyPrivilege', () => {
   // 纯函数分支测试:用 xd-feishu / xd-atlassian 作为代表性官方前缀 id，验证
   // builtin + 官方前缀会同时得到 Broker 与宿主原语；这不表示它们随发行包分发。
-  // 静态官方前缀的存量兼容由后面的 authorizeGhostTokenBroker(...,
-  // { kind: 'unavailable' }) 对照用例锁定。
   // `currentOrganization: null` 与 `marketRecord: null` 在这里**显式写出**,不吃
   // `facts()` 的默认值:否则将来有人为省事把默认改成"有组织",这条依然会通过
   // (优先级 1 本就不看 org),但"个人身份"这个场景就悄悄没人守了。
@@ -402,10 +401,13 @@ describe('resolveGhostFirstPartyPrivilege', () => {
     // 手动本地包不能借一个 installed=false 的市场行取得资格。
   });
 
-  it('keeps official-prefix broker even when facts are unavailable, and asks the resolver otherwise', () => {
+  it('fails closed when facts are unavailable, even for official-looking ids', () => {
     expect(
       authorizeGhostTokenBroker('xd-feishu', { kind: 'unavailable' }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      authorizeGhostHostPrimitive('xd-feishu', { kind: 'unavailable' }),
+    ).toBe(false);
     expect(
       authorizeGhostTokenBroker('acme-feishu', { kind: 'unavailable' }),
     ).toBe(false);
@@ -423,7 +425,7 @@ describe('resolveGhostFirstPartyPrivilege', () => {
     ).toBe(false);
   });
 
-  it('uses pending org-market facts only for non-official ids; official prefix never consults them', () => {
+  it('grants organization-market broker from trusted facts, not from an official-looking name', () => {
     const pendingOrgMarket = facts({
       ghostId: 'acme-feishu',
       marketRecord: market({ scope: 'organization', organizationId: 'org-acme' }),
@@ -442,17 +444,11 @@ describe('resolveGhostFirstPartyPrivilege', () => {
           currentOrganization: null,
         }),
       }),
-    ).toBe(true);
-    expect(authorizeGhostTokenBroker('cindy-art', { kind: 'unavailable' })).toBe(true);
+    ).toBe(false);
+    expect(authorizeGhostTokenBroker('cindy-art', { kind: 'unavailable' })).toBe(false);
+    expect(authorizeGhostHostPrimitive('cindy-art', { kind: 'unavailable' })).toBe(false);
   });
 
-  // `legacy-adopted` 是市场列表成功后为「早于市场就已装在本机的官方前缀插件」合成的
-  // 来源(`plugin-market/service.ts::adoptLegacyInstallations`)。判据对它一律 deny:
-  // 它既不是 `source: 'market'`(所以进不了 public 那支),也不是 git/local market。
-  //
-  // `legacy-adopted` 不是静态官方资格或组织资格的替代来源:即使 id 命中静态官方前缀,
-  // 或命中当前组织前缀,也必须 fail-closed。若要改变这条来源边界必须显式决策,
-  // 不能把它当漏网 bug 顺手放宽。
   it('denies legacy-adopted rows for static official and matching organization ids', () => {
     for (const scope of ['public', 'organization'] as const) {
       expect(

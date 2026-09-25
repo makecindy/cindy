@@ -5,9 +5,9 @@
  * conclusion. Callers decide whether to refuse install or only withhold
  * privileges; this module does not refuse loading.
  *
- * Call sites that previously used only `isBrokerEligibleGhostId` now ask this
- * resolver **after** the static official-prefix hit (`cindy-` / `filo-` / `xd-`).
- * Official-prefix plugins keep today's grant. Everything else is decided here.
+ * Call sites must not treat `cindy-` / `filo-` / `xd-` names as privileges.
+ * Official plugins still qualify through builtin seed or trusted public market
+ * facts; enterprise broker qualifies through current-organization market facts.
  *
  * Input priority: first evaluable of
  *   1. builtin seed → static official table
@@ -33,7 +33,7 @@
  */
 import { PLUGIN_PREFIX_PATTERN, type PluginScope } from '@cindy/plugin-protocol';
 
-import { isBrokerEligibleGhostId, isOfficialGhostId } from '../../shared/ghost.js';
+import { isOfficialGhostId } from '../../shared/ghost.js';
 
 const PACKAGE_SHA256_RE = /^[a-f0-9]{64}$/;
 
@@ -197,15 +197,22 @@ export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): Gh
 }
 
 /**
- * Incremental broker gate: official prefix (`cindy-` / `filo-` / `xd-`) keeps
- * today's grant without consulting facts. Everything else asks the resolver.
- * Unavailable facts are fail-closed (no broker).
+ * Broker gate from collected facts. Prefixes are not a grant.
+ * Unavailable facts are fail-closed.
  */
 export function authorizeGhostTokenBroker(
-  ghostId: string,
+  _ghostId: string,
   load: { kind: 'ready'; facts: GhostFirstPartyFacts } | { kind: string },
 ): boolean {
-  if (isBrokerEligibleGhostId(ghostId)) return true;
   if (load.kind !== 'ready' || !('facts' in load)) return false;
   return resolveGhostFirstPartyPrivilege(load.facts).brokerEligible;
+}
+
+/** Port reclaim / identity avatar download. Prefixes are not a grant. */
+export function authorizeGhostHostPrimitive(
+  _ghostId: string,
+  load: { kind: 'ready'; facts: GhostFirstPartyFacts } | { kind: string },
+): boolean {
+  if (load.kind !== 'ready' || !('facts' in load)) return false;
+  return resolveGhostFirstPartyPrivilege(load.facts).hostPrimitiveEligible;
 }

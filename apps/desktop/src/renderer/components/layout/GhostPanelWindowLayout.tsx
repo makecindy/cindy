@@ -35,18 +35,21 @@ import { getGhostPanelWindowGhostId } from '@/lib/ghostPanelWindow';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
-import type { GhostManifest } from '../../../shared/ghost';
+import type { InstalledGhost } from '../../../shared/ghost';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 
 const log = createLogger('GhostPanelWindowLayout');
 
 /** 面板�?+ 崩溃接管(与停靠形�?GhostPanel 同一分支逻辑,不含标准�?�?*/
-function PanelBody({ manifest }: { manifest: GhostManifest }) {
-  const runtimeState = useGhostRuntimeState(manifest.id);
+function PanelBody({ ghost }: { ghost: InstalledGhost }) {
+  const { manifest } = ghost;
+  const instanceId = installedGhostStoragePart(ghost);
+  const runtimeState = useGhostRuntimeState(instanceId);
   const broken = runtimeState === 'crashed' || runtimeState === 'fused';
   return broken ? (
-    <GhostPanelError manifest={manifest} state={runtimeState} />
+    <GhostPanelError ghost={ghost} state={runtimeState} />
   ) : (
-    <GhostChipPanelBody manifest={manifest} />
+    <GhostChipPanelBody ghost={ghost} />
   );
 }
 
@@ -57,7 +60,7 @@ export function GhostPanelWindowLayout() {
   const isMac = window.electronAPI?.platform === 'darwin';
   const ghostId = getGhostPanelWindowGhostId();
   const ghosts = useInstalledGhosts();
-  const ghost = ghostId ? ghosts.find((g) => g.manifest.id === ghostId) : undefined;
+  const ghost = ghostId ? ghosts.find((g) => installedGhostStoragePart(g) === ghostId) : undefined;
   // 停用/卸载的瞬�?main �?reconcile 会收�?这里只兜住收窗前的一两帧�?
   const manifest = ghost && ghost.enabled !== false ? ghost.manifest : undefined;
   const title = manifest?.panel?.title ?? manifest?.name ?? '';
@@ -198,8 +201,8 @@ export function GhostPanelWindowLayout() {
 
       {/* 面板�?manifest 在场即挂 webview;不在�?收窗前瞬�?�?URL)给占位�?*/}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--panel-bg)]">
-        {manifest ? (
-          <PanelBody manifest={manifest} />
+        {ghost && manifest ? (
+          <PanelBody ghost={ghost} />
         ) : (
           <div className="flex flex-1 items-center justify-center">
             <span className="text-13 text-[var(--text-tertiary)]">

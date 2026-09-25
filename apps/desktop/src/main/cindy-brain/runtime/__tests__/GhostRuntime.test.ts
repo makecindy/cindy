@@ -165,4 +165,22 @@ describe('GhostRuntime · 状态机', () => {
     expect(runtime.stateOf('a')).toBe('off');
     expect(runtime.stateOf('b')).toBe('off');
   });
+
+  it('同 ghostId 的 root 与企业实例可同时 running', async () => {
+    const { runtime, handles } = setup();
+    const root = chipGhost('helper');
+    const enterprise: InstalledGhost = {
+      ...chipGhost('helper'),
+      namespace: 'acme',
+      dir: '/fake/brain/_ns/acme/helper',
+    };
+    expect((await runtime.spawn(root)).ok).toBe(true);
+    expect((await runtime.spawn(enterprise)).ok).toBe(true);
+    expect(handles.length).toBe(2);
+    expect(runtime.stateOf('helper')).toBe('running');
+    expect(runtime.stateOf('_ns__acme__helper')).toBe('running');
+    runtime.stop('helper');
+    expect(runtime.stateOf('helper')).toBe('off');
+    expect(runtime.stateOf('_ns__acme__helper')).toBe('running');
+  });
 });

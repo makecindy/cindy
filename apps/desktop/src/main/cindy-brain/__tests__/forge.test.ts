@@ -166,6 +166,18 @@ async function makeSrcDir(files: Record<string, string | Buffer>): Promise<strin
 }
 
 describe('packGhostDir', () => {
+  it.each([null, 'xd'])('rejects author-declared namespace %s before v2 normalization', async (namespace) => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify({ ...GOOD_MANIFEST, namespace }),
+      'main.js': 'export default {};',
+    });
+    await expect(packGhostDir(dir)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('ghost.json 不允许作者声明 namespace'),
+    });
+  });
+
   it('rejects a new tokenBroker package without redirectPort but accepts the declared-port shape', async () => {
     const brokerManifest = {
       ...GOOD_MANIFEST,

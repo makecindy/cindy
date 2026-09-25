@@ -122,6 +122,7 @@ describe('ghost · id 规则', () => {
 
   it('panelKind 前缀拼接', () => {
     expect(ghostPanelKind('hello')).toBe('ghost:hello');
+    expect(ghostPanelKind('_ns__acme__hello')).toBe('ghost:_ns__acme__hello');
   });
 
   it('内容清单:面板/代码/能力槽按序列出,panel 槽不重复', () => {
@@ -142,9 +143,11 @@ describe('ghost · id 规则', () => {
   it('沙箱分区名:拼接与解析互逆,非意识分区/非法 id 解析为 null', () => {
     expect(ghostPartition('art')).toBe('cindy-ghost-art');
     expect(parseGhostPartition('cindy-ghost-art')).toBe('art');
+    expect(parseGhostPartition('cindy-ghost-_ns__acme__helper')).toBe('_ns__acme__helper');
     expect(parseGhostPartition('persist:xdmaker-browser-app')).toBeNull();
     expect(parseGhostPartition('cindy-ghost-')).toBeNull();
     expect(parseGhostPartition('cindy-ghost-BAD_ID')).toBeNull();
+    expect(parseGhostPartition('cindy-ghost-_ns/acme/helper')).toBeNull();
     expect(parseGhostPartition(undefined)).toBeNull();
   });
 });
@@ -1890,6 +1893,17 @@ describe('ghost · layoutWithGhostPanel(装入即停靠)', () => {
     m.panel = { html: 'panel.html', position: 'tab' };
     expect(layoutWithGhostPanel(createDefaultLayout(), m)).toBeNull();
   });
+  it('企业实例用 storage part 作为 panelKind,不与 root 同名面板撞车', () => {
+    const m = manifest();
+    const rootLayout = layoutWithGhostPanel(createDefaultLayout(), m);
+    expect(rootLayout).not.toBeNull();
+    const next = layoutWithGhostPanel(rootLayout!, m, '_ns__acme__hello');
+    expect(next).not.toBeNull();
+    const split = next!.content as SplitNode;
+    const kinds = split.children.map((c) => (c.node.type === 'pane' ? c.node.panelKind : '?'));
+    expect(kinds).toEqual(expect.arrayContaining(['ghost:hello', 'ghost:_ns__acme__hello', 'chat-main']));
+  });
+
 });
 
 describe('ghost · keywords(语义触发扩展词表)', () => {

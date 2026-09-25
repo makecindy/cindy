@@ -131,10 +131,37 @@ describe('market Ghost session boundary', () => {
     const body = source.slice(start, end);
     expect(body).toContain('if (isAppSessionBoundaryPending()) return [];');
     expect(source).toContain(
-      'return availableGhosts().find((ghost) => ghost.manifest.id === id) ?? null;',
+      'const resolved = resolveInstalledGhost(availableGhosts(), id, namespace);',
     );
-    expect(source.match(/getGhost: findAvailableGhost/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
-    expect(source).toContain('return findAvailableGhost(id)?.manifest.name ?? null;');
+    expect(source).toContain(
+      "function findGhostByStoragePart(storagePart: string): InstalledGhost | null {",
+    );
+    expect(source.match(/getGhost: findAvailableGhost/g)?.length ?? 0).toBe(0);
+    expect(source.match(/getGhost: findGhostForInstanceId/g)?.length ?? 0).toBeGreaterThanOrEqual(12);
+    expect(source).toContain(
+      'if (namespace !== undefined) return findAvailableGhost(id, namespace);',
+    );
+    expect(source).toContain('availableByInstanceId.get(entry.ghostId)');
+    expect(source).toContain('hasCardSlot: (ghostId) => {');
+    expect(source).toContain('const g = findGhostForInstanceId(ghostId);');
+    expect(source).toContain(
+      'export async function getGhostLibraryOverview(ghostId: string): Promise<GhostLibraryOverview> {',
+    );
+    const overviewStart = source.indexOf(
+      'export async function getGhostLibraryOverview(ghostId: string)',
+    );
+    expect(source.slice(overviewStart, overviewStart + 280)).toContain(
+      'const ghost = findGhostForInstanceId(ghostId);',
+    );
+    const assessStart = source.indexOf(
+      'export function getGhostSetupAssessment(ghostId: string)',
+    );
+    const assessBody = source.slice(assessStart, assessStart + 1600);
+    expect(assessBody).toContain('const ghost = findGhostForInstanceId(ghostId);');
+    expect(assessBody).toContain('const storeId = installedGhostStoragePart(ghost);');
+    expect(assessBody).toContain('oauthManager.listAccounts(storeId, key)');
+    expect(assessBody).not.toContain('oauthManager.listAccounts(ghostId, key)');
+    expect(source).toContain('return findGhostForInstanceId(id)?.manifest.name ?? null;');
   });
 
   it('allows explicit local replacement and detaches market routing before landing', () => {
@@ -164,16 +191,18 @@ describe('market Ghost session boundary', () => {
     const detachDecisionIndex = helperBody.indexOf(
       'const detachMarketRecord = Boolean(marketRecord?.installed)',
     );
-    const runtimeStopIndex = helperBody.indexOf('runtime.stop(inspected.manifest.id)');
+    const runtimeStopIndex = helperBody.indexOf(
+      'runtime.stop(previousGhost ? installedGhostStoragePart(previousGhost) : inspected.manifest.id)',
+    );
     const stopAndWaitIndex = helperBody.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);',
+      'await getGhostNodeRuntimeBroker().stopAndWait(previousGhost ? installedGhostStoragePart(previousGhost) : inspected.manifest.id);',
     );
     const oauthLockIndex = helperBody.indexOf(
-      'result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id',
+      'result = await withActiveOwnerGhostOauthMutationLock(',
     );
     const managerUpdateIndex = helperBody.indexOf('manager.update(cindyFilePath,');
     const detachIndex = helperBody.indexOf(
-      'marketLedger.markRemoved(inspected.manifest.id, null)',
+      'marketLedger.markRemovedRecord(marketRecord, null)',
     );
 
     expect(captureIndex).toBeGreaterThan(-1);
@@ -193,6 +222,7 @@ describe('market Ghost session boundary', () => {
     expect(oauthLockIndex).toBeGreaterThan(detachIndex);
     expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
     expect(helperBody).toContain('marketLedger.restoreInstallation(');
+    expect(helperBody).toContain('...(previousGhost ? deliveryNamespaceFields(previousGhost) : {})');
     expect(helperBody).not.toContain('marketLedger.isDefaultInstallSuppressed(');
     expect(helperBody).not.toContain('marketInstallSubject');
     expect(helperBody).toContain('用户显式卸载，不得产生 default-install opt-out');
@@ -221,16 +251,24 @@ describe('market Ghost session boundary', () => {
     expect(body.match(/expected\.beforeCommitInLock\?\.\(\);/g)).toHaveLength(1);
 
     const waitIndex = body.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(expected.ghostId);',
+      'await getGhostNodeRuntimeBroker().stopAndWait(',
     );
     const oauthLockIndex = body.indexOf(
-      'await withActiveOwnerGhostOauthMutationLock(expected.ghostId',
+      'await withActiveOwnerGhostOauthMutationLock(installedGhostStoragePart(installed)',
     );
     const updateIndex = body.indexOf('manager.update(cindyFilePath,');
 
     expect(waitIndex).toBeGreaterThan(-1);
     expect(waitIndex).toBeLessThan(oauthLockIndex);
     expect(oauthLockIndex).toBeLessThan(updateIndex);
+    expect(body).toContain('runtime.stop(installedGhostStoragePart(installed));');
+    expect(body).toContain(
+      'await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));',
+    );
+    expect(body).toContain('runtime.resetFuse(installedGhostStoragePart(result.ghost));');
+    expect(body).not.toContain(
+      'pluginStoragePart(createPluginLogicalIdentity(expected.namespace ?? null, expected.ghostId))',
+    );
     const restoreIndex = body.indexOf('spawnIfResident(installed);');
     expect(restoreIndex).toBeGreaterThan(updateIndex);
   });
@@ -247,10 +285,10 @@ describe('market Ghost session boundary', () => {
     const helperBody = source.slice(helperStart, helperEnd);
 
     const waitIndex = helperBody.indexOf(
-      'await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);',
+      'await getGhostNodeRuntimeBroker().stopAndWait(previousGhost ? installedGhostStoragePart(previousGhost) : inspected.manifest.id);',
     );
     const oauthLockIndex = helperBody.indexOf(
-      'result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id',
+      'result = await withActiveOwnerGhostOauthMutationLock(',
     );
     const updateIndex = helperBody.indexOf('manager.update(cindyFilePath');
     const restoreIndex = helperBody.indexOf(

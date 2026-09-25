@@ -10,14 +10,22 @@
  */
 
 import type { InstalledGhost } from '../../shared/ghost.js';
+import { isValidGhostId } from '../../shared/ghost.js';
+import {
+  findInstalledGhostByInstanceId,
+  formatInstalledGhostAmbiguity,
+  installedGhostStoragePart,
+  resolveInstalledGhost,
+} from '../../shared/pluginIdentity.js';
 import { t } from '../i18n.js';
 
 export type GhostVisibilityResult =
   | { ok: true; ghost: InstalledGhost }
   | {
       ok: false;
-      errorCode: 'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR';
+      errorCode: 'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_AMBIGUOUS';
       message: string;
+      candidates?: Array<{ ghostId: string; namespace: string | null }>;
     };
 
 export interface GhostVisibilityDeps {
@@ -30,16 +38,41 @@ export function classifyGhostVisibility(
   ghostId: string,
   workdir: string | null,
   deps: GhostVisibilityDeps,
+  namespace?: string | null,
 ): GhostVisibilityResult {
-  const ghost = deps.listGhosts().find((candidate) => candidate.manifest.id === ghostId);
-  if (!ghost) {
+  const listed = deps.listGhosts();
+  // Plain ghostIds can be ambiguous across namespaces. Only encoded instance
+  // ids (`_ns__acme__helper`) skip the unique-ghostId compatibility path.
+  const byInstance =
+    namespace === undefined && !isValidGhostId(ghostId)
+      ? findInstalledGhostByInstanceId(listed, ghostId)
+      : undefined;
+  const resolved = byInstance
+    ? { status: 'unique' as const, ghost: byInstance }
+    : resolveInstalledGhost(listed, ghostId, namespace);
+  if (resolved.status === 'missing') {
     return {
       ok: false,
       errorCode: 'GHOST_NOT_FOUND',
       message: t('newChat.pluginSetup.targetNotFound'),
     };
   }
-  if (!deps.isAvailableForActiveSession(ghostId)) {
+  if (resolved.status === 'ambiguous') {
+    return {
+      ok: false,
+      errorCode: 'GHOST_AMBIGUOUS',
+      message: formatInstalledGhostAmbiguity(ghostId, resolved.candidates),
+      candidates: resolved.candidates.map((candidate) => ({
+        ghostId: candidate.manifest.id,
+        namespace: Object.prototype.hasOwnProperty.call(candidate, 'namespace')
+          ? candidate.namespace ?? null
+          : null,
+      })),
+    };
+  }
+  const ghost = resolved.ghost;
+  const instanceId = installedGhostStoragePart(ghost);
+  if (!deps.isAvailableForActiveSession(instanceId)) {
     return {
       ok: false,
       errorCode: 'GHOST_NOT_FOUND',
@@ -48,7 +81,7 @@ export function classifyGhostVisibility(
       message: '该插件需要 Cindy 账号，未登录状态不可用；不要重试，改用本地可用方式。',
     };
   }
-  if (deps.isDisabledForWorkdir(ghostId, workdir)) {
+  if (deps.isDisabledForWorkdir(instanceId, workdir)) {
     return {
       ok: false,
       errorCode: 'GHOST_DISABLED_IN_WORKDIR',

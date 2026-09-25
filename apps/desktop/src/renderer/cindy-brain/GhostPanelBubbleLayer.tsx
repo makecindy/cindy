@@ -37,6 +37,7 @@ import { Ghost } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { GhostManifest } from '../../shared/ghost';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import { WINDOW_NO_DRAG_STYLE } from '../components/layout/windowDrag';
 import { restoreGhostPanel } from '../lib/ghostPanelBubbleState';
 import { useGhostPanelRestoreMode } from '../hooks/useGhostPanelRestoreMode';
@@ -233,6 +234,7 @@ function useBubbleDrag({
 
 interface BubbleProps {
   manifest: GhostManifest;
+  instanceId: string;
   iconDataUrl: string | undefined;
   /** 渲染基准位(已按锚点排布 + clamp)。 */
   pos: { x: number; y: number };
@@ -241,7 +243,7 @@ interface BubbleProps {
 }
 
 /** 展开出的子气泡:不可拖(位置由幽灵球锚定),点击恢复对应面板。 */
-function Bubble({ manifest, iconDataUrl, pos, registerEl }: BubbleProps): ReactNode {
+function Bubble({ manifest, instanceId, iconDataUrl, pos, registerEl }: BubbleProps): ReactNode {
   const { t } = useTranslation();
   const [imgBroken, setImgBroken] = useState(false);
   /** 点击后进入"缩没退场"态:播 .ghost-bubble-exit,计时器到点才 restore。 */
@@ -256,7 +258,7 @@ function Bubble({ manifest, iconDataUrl, pos, registerEl }: BubbleProps): ReactN
     // 展开的"过程感":幽灵先跳走、圆圈再渐隐(共 EXIT_MS),到点才真正恢复
     // 面板(面板侧再接宽度展开,见 ghostPanels.tsx 的 ghost-panel-enter)。
     setExiting(true);
-    exitTimerRef.current = window.setTimeout(() => restoreGhostPanel(manifest.id), EXIT_MS);
+    exitTimerRef.current = window.setTimeout(() => restoreGhostPanel(instanceId), EXIT_MS);
   };
 
   const name = manifest.panel?.title ?? manifest.name;
@@ -264,7 +266,7 @@ function Bubble({ manifest, iconDataUrl, pos, registerEl }: BubbleProps): ReactN
     <button
       ref={(el) => registerEl?.(el)}
       type="button"
-      data-testid={`ghost-panel-bubble-${manifest.id}`}
+      data-testid={`ghost-panel-bubble-${instanceId}`}
       data-ghost-bubble-layer
       aria-label={t('ghostPanelBubble.restoreAria', { name })}
       title={t('ghostPanelBubble.restoreAria', { name })}
@@ -415,7 +417,7 @@ export function GhostPanelBubbleLayer(): ReactNode {
   // 拖幽灵球的每一步把展开中的子气泡一起带走(同一条零 React 热路径)。
   const onStackDragMove = (x: number, y: number) => {
     minimized.forEach((g, index) => {
-      const el = childElsRef.current.get(g.manifest.id);
+      const el = childElsRef.current.get(installedGhostStoragePart(g));
       if (!el) return;
       const p = stackChildPos({ x, y }, index, minimized.length);
       placeBubbleEl(el, p.x, p.y);
@@ -437,13 +439,15 @@ export function GhostPanelBubbleLayer(): ReactNode {
       {expanded
         ? minimized.map((g, index) => (
             <Bubble
-              key={g.manifest.id}
+              key={installedGhostStoragePart(g)}
               manifest={g.manifest}
+              instanceId={installedGhostStoragePart(g)}
               iconDataUrl={g.iconDataUrl}
               pos={stackChildPos(anchor, index, minimized.length)}
               registerEl={(el) => {
-                if (el) childElsRef.current.set(g.manifest.id, el);
-                else childElsRef.current.delete(g.manifest.id);
+                const id = installedGhostStoragePart(g);
+                if (el) childElsRef.current.set(id, el);
+                else childElsRef.current.delete(id);
               }}
             />
           ))

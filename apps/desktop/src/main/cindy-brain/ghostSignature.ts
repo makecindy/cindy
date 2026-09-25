@@ -14,6 +14,7 @@ import crypto from 'node:crypto';
 
 import JSZip from 'jszip';
 
+import { authorDeclaredNamespaceReason } from '@cindy/plugin-protocol';
 import {
   GHOST_MANIFEST_FILE,
   type GhostManifest,
@@ -418,7 +419,10 @@ export async function signGhostPackage(
   zip.remove(`${prefix}${GHOST_SIGNATURE_FILE}`);
   const manifestEntry = zip.file(`${prefix}${GHOST_MANIFEST_FILE}`);
   if (!manifestEntry) throw new Error(`缺少 ${GHOST_MANIFEST_FILE}`);
-  const validation = validateGhostManifest(JSON.parse(await manifestEntry.async('text')));
+  const rawManifest = JSON.parse(await manifestEntry.async('text'));
+  const reservedNamespace = authorDeclaredNamespaceReason(rawManifest);
+  if (reservedNamespace) throw new Error(reservedNamespace);
+  const validation = validateGhostManifest(rawManifest);
   if (!validation.ok) throw new Error(validation.reason);
   if (!options.publisherName.trim() || options.publisherName.length > 64) {
     throw new Error('publisherName 必须是 1–64 字符');
@@ -461,7 +465,10 @@ export async function reviewGhostPackage(
   const manifestEntry = zip.file(`${prefix}${GHOST_MANIFEST_FILE}`);
   const signatureEntry = zip.file(`${prefix}${GHOST_SIGNATURE_FILE}`);
   if (!manifestEntry || !signatureEntry) throw new Error('审核前必须已有发布者签名');
-  const validation = validateGhostManifest(JSON.parse(await manifestEntry.async('text')));
+  const rawManifest = JSON.parse(await manifestEntry.async('text'));
+  const reservedNamespace = authorDeclaredNamespaceReason(rawManifest);
+  if (reservedNamespace) throw new Error(reservedNamespace);
+  const validation = validateGhostManifest(rawManifest);
   if (!validation.ok) throw new Error(validation.reason);
   const verified = await verifyGhostZipSignatures(zip, prefix, validation.manifest);
   if (!verified.ok || !verified.document) {

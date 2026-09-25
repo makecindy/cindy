@@ -11,6 +11,7 @@ import {
 import { useGhostPanelRestoreMode } from '@/hooks/useGhostPanelRestoreMode';
 import { cn } from '@/lib/utils';
 import type { InstalledGhost } from '../../shared/ghost';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import { restoreGhostPanel } from '../lib/ghostPanelBubbleState';
 import { useMinimizedGhostPanels } from './useMinimizedGhostPanels';
 
@@ -91,7 +92,7 @@ export function GhostPanelRestoreEntry({
         data-testid="ghost-panel-restore-entry"
         aria-label={ariaLabel}
         title={label}
-        onClick={() => restoreGhostPanel(single.manifest.id)}
+        onClick={() => restoreGhostPanel(installedGhostStoragePart(single))}
         className={className}
       >
         {content}
@@ -126,8 +127,8 @@ export function GhostPanelRestoreEntry({
           const name = panelName(ghost);
           return (
             <DropdownMenuItem
-              key={ghost.manifest.id}
-              onSelect={() => restoreGhostPanel(ghost.manifest.id)}
+              key={installedGhostStoragePart(ghost)}
+              onSelect={() => restoreGhostPanel(installedGhostStoragePart(ghost))}
               className="gap-2.5 text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
             >
               <GhostEntryIcon ghost={ghost} size={18} />

@@ -51,4 +51,15 @@ describe('ghost WebView Main partition', () => {
     ).toBeNull();
     expect(resolveGhostWebviewPartitionClaim(undefined, ownerA)).toBeNull();
   });
+
+  it('企业实例使用 storage part 作为 session 分区后缀', () => {
+    expect(ownerScopedGhostPartition('_ns__acme__helper', ownerA)).toBe(
+      'cindy-ghost-owner:cloud:opaque-owner-a:_ns__acme__helper',
+    );
+    expect(resolveGhostWebviewPartitionClaim(ghostPartition('_ns__acme__helper'), ownerA)).toEqual({
+      ghostId: '_ns__acme__helper',
+      partition: 'cindy-ghost-owner:cloud:opaque-owner-a:_ns__acme__helper',
+    });
+    expect(ownerScopedGhostPartition('_ns/acme/helper', ownerA)).toBeNull();
+  });
 });

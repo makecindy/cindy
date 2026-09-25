@@ -4,6 +4,8 @@ import {
   canOfferMarketInstall,
   ghostReapprovalRoute,
   marketReviewTargetsInstalledGhost,
+  findInstalledGhostForMarketItem,
+  marketItemMatchesInstalledGhost,
   orderPluginCatalogItems,
   pluginPresentationOrigin,
   pluginUpdateForInstalledVersion,
@@ -202,6 +204,89 @@ describe('orderPluginCatalogItems', () => {
     expect(
       ordered.map(({ kind, item }) => `${kind}:${kind === 'installed' ? item.id : item.ghostId}`),
     ).toEqual(['market:first', 'installed:third']);
+  });
+
+  it('does not attach a root market row to a same-name enterprise install', () => {
+    const publicHelper = marketItem('plugin-helper', 'helper', 'installed');
+    publicHelper.namespace = null;
+    const ordered = orderPluginCatalogItems(
+      [publicHelper],
+      [
+        { id: '_ns__xd__helper', ghostId: 'helper' },
+        { id: 'helper', ghostId: 'helper' },
+      ],
+      [],
+    );
+    expect(
+      ordered.map(({ kind, item }) => `${kind}:${kind === 'installed' ? item.id : item.ghostId}`),
+    ).toEqual(['installed:helper', 'installed:_ns__xd__helper']);
+  });
+});
+
+
+describe('findInstalledGhostForMarketItem', () => {
+  const root = {
+    manifest: { id: 'helper', version: '1.0.0' },
+    dir: '/ghosts/helper',
+  };
+  const namespaced = {
+    manifest: { id: 'helper', version: '9.0.0' },
+    namespace: 'xd',
+    dir: '/ghosts/_ns/xd/helper',
+  };
+  const inPlace = {
+    manifest: { id: 'helper', version: '1.2.0' },
+    namespace: 'xd',
+    dir: '/ghosts/helper',
+  };
+
+  it('binds a namespaced market row to that logical instance', () => {
+    expect(
+      findInstalledGhostForMarketItem([namespaced, root], {
+        ghostId: 'helper',
+        namespace: 'xd',
+      }),
+    ).toBe(namespaced);
+  });
+
+  it('binds a public market row to the physical root, not a namespaced twin', () => {
+    expect(
+      findInstalledGhostForMarketItem([namespaced, root], { ghostId: 'helper' }),
+    ).toBe(root);
+  });
+
+  it('keeps an in-place stamped plugin on a public market row', () => {
+    expect(
+      findInstalledGhostForMarketItem([inPlace], { ghostId: 'helper' }),
+    ).toBe(inPlace);
+  });
+
+  it('does not fall through to a namespaced-only twin for a public row', () => {
+    expect(
+      findInstalledGhostForMarketItem([namespaced], { ghostId: 'helper' }),
+    ).toBeUndefined();
+  });
+});
+describe('marketItemMatchesInstalledGhost', () => {
+  it('requires namespace agreement once both sides are known', () => {
+    expect(
+      marketItemMatchesInstalledGhost(
+        { ghostId: 'helper', namespace: null },
+        { manifest: { id: 'helper' }, namespace: null },
+      ),
+    ).toBe(true);
+    expect(
+      marketItemMatchesInstalledGhost(
+        { ghostId: 'helper', namespace: null },
+        { manifest: { id: 'helper' }, namespace: 'xd' },
+      ),
+    ).toBe(false);
+    expect(
+      marketItemMatchesInstalledGhost(
+        { ghostId: 'helper' },
+        { manifest: { id: 'helper' }, namespace: 'xd' },
+      ),
+    ).toBe(true);
   });
 });
 

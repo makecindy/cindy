@@ -67,6 +67,23 @@ describe('LibraryBindingStore', () => {
     expect(reread.kind).toBe('custom');
   });
 
+  it('企业实例 storage part 可绑定且与 root 分键;斜杠 id 非法', async () => {
+    const store = new LibraryBindingStore(deps);
+    const orgId = '_ns__acme__mivo-canvas';
+    const set = await store.setBinding(orgId, candidate);
+    expect(set.ok).toBe(true);
+    const resolved = await store.resolveLibraryRoot(orgId);
+    expect(resolved.kind).toBe('custom');
+    if (resolved.kind === 'custom' && resolved.root !== null) {
+      expect(resolved.root).toBe(path.join(await fs.promises.realpath(candidate), orgId));
+    }
+    const rootResolved = await store.resolveLibraryRoot(GHOST_ID);
+    expect(rootResolved.kind).toBe('default');
+    const bad = await store.setBinding('_ns/acme/mivo-canvas', candidate);
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.errorCode).toBe('PATH_INVALID');
+  });
+
   it('重新绑定 generation 递增;撤销后回落默认', async () => {
     const store = new LibraryBindingStore(deps);
     await store.setBinding(GHOST_ID, candidate);

@@ -514,6 +514,7 @@ describe('tokenBroker 门控', () => {
     pathname: string,
     manager = fakeManager(),
     body: Record<string, unknown> = {},
+    authorized = false,
   ) {
     return handleGhostOauthRequest({
       method,
@@ -522,6 +523,7 @@ describe('tokenBroker 门控', () => {
       oauthSecrets: BROKERED_SECRETS,
       manager,
       ghostId,
+      isTokenBrokerAuthorized: () => authorized,
     });
   }
 
@@ -537,9 +539,18 @@ describe('tokenBroker 门控', () => {
     expect(manager.clearClientConfig).not.toHaveBeenCalled();
   });
 
-  it('connect:官方前缀 id 放行;第三方 id 结构化拒(不触发授权流程)', async () => {
+  it('connect: missing grant denies even official-looking ids; authorized grant proceeds', async () => {
+    const deniedOfficial = fakeManager();
+    const denied = await callAs('xd-atlassian', 'POST', '/oauth/acct/connect', deniedOfficial);
+    expect(denied.status).toBe(200);
+    expect(JSON.parse(denied.body ?? '{}')).toMatchObject({
+      ok: false,
+      error: 'BROKER_FORBIDDEN',
+    });
+    expect(deniedOfficial.connectAccount).not.toHaveBeenCalled();
+
     const okManager = fakeManager();
-    const allowed = await callAs('xd-atlassian', 'POST', '/oauth/acct/connect', okManager);
+    const allowed = await callAs('xd-atlassian', 'POST', '/oauth/acct/connect', okManager, {}, true);
     expect(allowed.status).toBe(200);
     expect(okManager.connectAccount).toHaveBeenCalledTimes(1);
 
@@ -557,7 +568,7 @@ describe('tokenBroker 门控', () => {
     const manager = fakeManager();
     const selected = await callAs('xd-atlassian', 'POST', '/oauth/acct/connect', manager, {
       clientId: 'global-cid',
-    });
+    }, true);
     expect(selected.status).toBe(200);
     expect(manager.connectAccount).toHaveBeenCalledWith('xd-atlassian', 'acct', BROKERED, {
       clientId: 'global-cid',
@@ -566,7 +577,7 @@ describe('tokenBroker 门控', () => {
     const rejectedManager = fakeManager();
     const rejected = await callAs('xd-atlassian', 'POST', '/oauth/acct/connect', rejectedManager, {
       clientId: 'foreign-cid',
-    });
+    }, true);
     expect(rejected.status).toBe(400);
     expect(rejectedManager.connectAccount).not.toHaveBeenCalled();
   });

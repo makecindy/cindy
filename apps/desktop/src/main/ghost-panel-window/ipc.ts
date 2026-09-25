@@ -15,7 +15,7 @@ import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent, isTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { isValidGhostId } from '../../shared/ghost.js';
+import { isValidPluginStoragePart } from '../../shared/pluginIdentity.js';
 import {
   GHOST_PANEL_WINDOW_PRESENTATION_READY_CHANNEL,
   GHOST_PANEL_WINDOW_RENDERER_READY_CHANNEL,
@@ -36,7 +36,7 @@ export function registerGhostPanelWindowIpc(controller: GhostPanelWindowsControl
 
   ipcMain.handle(MAKER_INVOKE.GHOST_PANEL_WINDOW_OPEN, (event, ghostId: unknown) => {
     assertTrustedAppRendererEvent(event);
-    if (!isValidGhostId(ghostId)) {
+    if (!isValidPluginStoragePart(ghostId)) {
       throwIpcError('INVALID_PARAMS', 'ghostId must be a valid ghost id');
     }
     controller.open(ghostId);
@@ -46,7 +46,7 @@ export function registerGhostPanelWindowIpc(controller: GhostPanelWindowsControl
     MAKER_INVOKE.GHOST_PANEL_WINDOW_SET_DETACHED,
     (event, ghostId: unknown, detached: unknown) => {
       assertTrustedAppRendererEvent(event);
-      if (!isValidGhostId(ghostId)) {
+      if (!isValidPluginStoragePart(ghostId)) {
         throwIpcError('INVALID_PARAMS', 'ghostId must be a valid ghost id');
       }
       if (typeof detached !== 'boolean') {

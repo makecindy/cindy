@@ -165,12 +165,17 @@ import {
   executeGhostSetupAction,
   executeGhostSetupInlineAction,
   bindGhostSetupConnectionAction,
+  findGhostForInstanceId,
   getGhostManager,
   getGhostPipeDispatcher,
   getGhostSetupAssessment,
   getIOSSimulatorPluginAccessDecision,
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
+import {
+  hasDeliveryNamespace,
+  installedGhostStoragePart,
+} from '../../shared/pluginIdentity.js';
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
@@ -2456,15 +2461,25 @@ initGhostSetupCoordinator({
   remoteConnection: true,
   changeBus: getGhostSetupChangeBus(),
   bridge: ghostSetupInteractionBridge,
+  resolveStoreId: (ghostId) => {
+    const ghost = findGhostForInstanceId(ghostId);
+    return ghost ? installedGhostStoragePart(ghost) : ghostId;
+  },
   assess: (ghostId) => getGhostSetupAssessment(ghostId),
   validateTarget: (ghostId, tool, workingDir) => {
     // Coordinator 的 UI 只消费 TARGET_UNAVAILABLE 状态；这里的 message 会随
     // ensureReady 结果回到模型，因此与 ghost_info / ghost_call 共用同一口径。
-    const visibility = classifyGhostVisibility(ghostId, workingDir ?? null, {
-      listGhosts: () => getGhostManager().list(),
-      isAvailableForActiveSession: isGhostAvailableForActiveSession,
-      isDisabledForWorkdir: isGhostDisabledForWorkdir,
-    });
+    const instance = findGhostForInstanceId(ghostId);
+    const visibility = classifyGhostVisibility(
+      instance?.manifest.id ?? ghostId,
+      workingDir ?? null,
+      {
+        listGhosts: () => getGhostManager().list(),
+        isAvailableForActiveSession: isGhostAvailableForActiveSession,
+        isDisabledForWorkdir: isGhostDisabledForWorkdir,
+      },
+      instance && hasDeliveryNamespace(instance) ? instance.namespace : undefined,
+    );
     if (!visibility.ok) return visibility;
     const ghost = visibility.ghost;
     if (tool && !(ghost.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
@@ -2477,16 +2492,13 @@ initGhostSetupCoordinator({
     return { ok: true };
   },
   getGhostIdentity: (ghostId) => {
-    const ghost = getGhostManager()
-      .list()
-      .find((candidate) => candidate.manifest.id === ghostId);
-    return ghost
-      ? {
-          id: ghostId,
-          name: ghost.manifest.name,
-          ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
-        }
-      : null;
+    const ghost = findGhostForInstanceId(ghostId);
+    if (!ghost) return null;
+    return {
+      id: installedGhostStoragePart(ghost),
+      name: ghost.manifest.name,
+      ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+    };
   },
   executeAction: ({ sessionId, ghostId, action, responseTarget }) =>
     executeGhostSetupAction({

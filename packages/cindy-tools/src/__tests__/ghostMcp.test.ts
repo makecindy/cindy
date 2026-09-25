@@ -373,6 +373,33 @@ describe("cindy_ghosts · ghost_info(单插件精准查询)", () => {
     });
   });
 
+  it("GHOST_AMBIGUOUS 带回 candidates 且把 namespace 传给 host", async () => {
+    const getAwakeGhost = vi.fn(async () => ({
+      ok: false as const,
+      errorCode: "GHOST_AMBIGUOUS" as const,
+      message: "插件 helper 存在多个实例",
+      candidates: [
+        { ghostId: "helper", namespace: null },
+        { ghostId: "helper", namespace: "acme" },
+      ],
+    }));
+    const result = await handleGhostInfo(
+      fakeDeps({ getAwakeGhost }),
+      { ghost_id: "helper", namespace: "acme" },
+    );
+    expect(getAwakeGhost).toHaveBeenCalledWith("helper", "acme");
+    expect(result.isError).toBe(true);
+    expect(parsePayload(result)).toEqual({
+      ok: false,
+      errorCode: "GHOST_AMBIGUOUS",
+      message: "插件 helper 存在多个实例",
+      candidates: [
+        { ghostId: "helper", namespace: null },
+        { ghostId: "helper", namespace: "acme" },
+      ],
+    });
+  });
+
   it.each([
     ["GHOST_ASLEEP", "目标插件未启用"],
     ["GHOST_DISABLED_IN_WORKDIR", "当前工作目录已停用"],
@@ -1229,14 +1256,14 @@ describe("cindy_ghosts · server 构建", () => {
     expect(infoDescription).toContain("完全没有目标线索时才用 ghost_list");
     expect(infoDescription).toContain("不要缓存");
     expect(infoDescription).toContain(
-      "GHOST_NOT_FOUND(不存在、已卸载、当前账号不可用或未提供工具和手册)",
+      "GHOST_AMBIGUOUS",
     );
     expect(infoDescription).toContain("GHOST_DISABLED_IN_WORKDIR");
-    expect(infoDescription).toContain("INTERNAL(内部查询失败)");
+    expect(infoDescription).toContain("INTERNAL");
     const manualDescription =
       server._registeredTools.ghost_manual?.description ?? "";
     expect(server._registeredTools.ghost_list?.description).toContain(
-      "manual 轻量索引",
+      "namespace",
     );
     expect(server._registeredTools.ghost_info?.description).toContain(
       "需要长文时用 ghost_manual",

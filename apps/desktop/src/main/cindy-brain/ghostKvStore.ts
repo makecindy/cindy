@@ -1,7 +1,8 @@
 /**
  * ghostKvStore —— 意识自定义参数的持久化真身(/kv 协议端点的存储层)。
  *
- * File: <rootDir>/<ghostId>.json(生产 rootDir = <userData>/ghost-kv/)
+ * File: <rootDir>/<storagePart>.json(生产 rootDir = <userData>/ghost-kv/;
+ *   root = helper.json, org = _ns__acme__helper.json)
  *
  * 语义(docs/dev-rules/plugin-security-and-authoring.md / FORGE_GUIDE §4.8):
  * - 单意识单文件:损坏只伤一个意识,卸下清理 = unlink 一个文件;
@@ -13,7 +14,7 @@
  *   炸掉设置页;
  * - 写:tmp + rename 原子落盘(override-settings-file 同款),同步 IO
  *   天然串行,≤64KB 量级无阻塞之虞;
- * - ghostId 过 isValidGhostId 双保险(调用方来自分区绑定,理论上已合法;
+ * - storage part 过 isValidPluginStoragePart 双保险(调用方来自分区绑定,理论上已合法;
  *   文件名安全不省这道)。
  *
  * 与 Electron 解耦:rootDir 经工厂注入,单测直接用 os.tmpdir()(规范 14/23)。
@@ -22,7 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { isValidGhostId } from '../../shared/ghost.js';
+import { isValidPluginStoragePart } from '../../shared/pluginIdentity.js';
 
 /** 单意识 KV 序列化后的字节上限(64KB;超限写入拒 413)。 */
 export const GHOST_KV_MAX_BYTES = 64 * 1024;
@@ -127,7 +128,7 @@ export function createGhostKvStore(options: {
   const { getRootDir, log } = options;
 
   const fileFor = (ghostId: string): string => {
-    if (!isValidGhostId(ghostId)) {
+    if (!isValidPluginStoragePart(ghostId)) {
       throw new GhostKvError('INVALID_GHOST_ID', `非法 ghostId: ${String(ghostId)}`);
     }
     return path.join(getRootDir(), `${ghostId}.json`);

@@ -1,7 +1,7 @@
 import Store from 'electron-store';
 import { validateGhostRecommendations, type GhostRecommendation } from '@cindy/plugin-protocol';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { isValidGhostId } from '../../shared/ghost.js';
+import { isGhostInstanceId } from '../../shared/pluginIdentity.js';
 
 interface Entry {
   id: string;
@@ -31,7 +31,7 @@ export function readGhostRecommendationEntries(): Entry[] {
   const raw: unknown = store().get('entries');
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((entry): Entry[] => {
-    if (!entry || !isValidGhostId(entry.id)) return [];
+    if (!entry || !isGhostInstanceId(entry.id)) return [];
     const parsed =
       entry.items === undefined ? undefined : validateGhostRecommendations(entry.items);
     return [
@@ -47,7 +47,7 @@ export function readGhostRecommendationEntries(): Entry[] {
 }
 
 function update(id: string, patch: Partial<Entry>): void {
-  if (!isValidGhostId(id)) throw new Error('Invalid plugin identity');
+  if (!isGhostInstanceId(id)) throw new Error('Invalid plugin identity');
   const entries = readGhostRecommendationEntries();
   const previous = entries.find((e) => e.id === id);
   store().set('entries', [...entries.filter((e) => e.id !== id), { ...previous, ...patch, id }]);

@@ -20,9 +20,14 @@ import i18n from '@/i18n';
 import { GhostFulfillmentContext, GhostSummonCard } from '@/components/chat/GhostSummonCard';
 import type { GhostDirectiveDisplay } from '@/cindy-brain/ghostCommand';
 import type { HostCapabilityDirectiveDisplay } from '@/cindy-brain/hostCapabilityInvocation';
+import type { InstalledGhost } from '../../shared/ghost';
+
+const { installedGhostsMock } = vi.hoisted(() => ({
+  installedGhostsMock: vi.fn(() => [] as InstalledGhost[]),
+}));
 
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
-  useInstalledGhosts: () => [],
+  useInstalledGhosts: () => installedGhostsMock(),
 }));
 
 const commandDirective: GhostDirectiveDisplay = {
@@ -72,12 +77,47 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup();
+  installedGhostsMock.mockReturnValue([]);
   vi.useRealTimers();
   // biome-ignore lint/performance/noDelete: 还原 jsdom 默认(无 matchMedia)。
   delete (window as { matchMedia?: unknown }).matchMedia;
 });
 
 describe('GhostSummonCard(chip 形态)', () => {
+  it('resolves a namespaced $command instance id to the live install version', () => {
+    installedGhostsMock.mockReturnValue([
+      {
+        manifest: {
+          schemaVersion: 2,
+          id: 'art',
+          name: 'Art',
+          version: '2.0.0',
+          kind: 'chip',
+          entry: 'main.js',
+          command: 'draw',
+          tools: [{ name: 'run', description: 'Run.' }],
+        },
+        dir: '/tmp/_ns/acme/art',
+        namespace: 'acme',
+        enabled: true,
+        approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+      } as InstalledGhost,
+    ]);
+    render(
+      <GhostSummonCard
+        directive={{
+          kind: 'command',
+          command: 'draw',
+          name: 'Art',
+          ghostId: '_ns__acme__art',
+          raw: '[插件指令] 用户显式点名插件 Art(id: _ns__acme__art)',
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText('v2.0.0')).toBeTruthy();
+  });
+
   it('renders the seal chip with plugin name and no overline/prompt slot', () => {
     render(<GhostSummonCard directive={commandDirective} running />);
     expect(screen.getByText('XD Feishu')).toBeTruthy();

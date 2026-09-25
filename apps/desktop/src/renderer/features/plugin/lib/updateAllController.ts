@@ -16,7 +16,9 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 import { ghostInstallApprovalToken } from '../../../../shared/ghost';
+import { deliveryNamespaceFields } from '../../../../shared/pluginIdentity';
 import { pluginMarketErrorKey } from './pluginMarketErrorKey';
+import { findInstalledGhostForMarketItem } from './pluginMarketPresentation';
 import {
   batchSummary,
   buildUpdateAllRows,
@@ -113,13 +115,17 @@ function maybeFinishToast(): void {
 
 export function startUpdateAllBatch(marketUpdates: readonly PluginMarketItem[]): void {
   if (state.running) return;
-  const installedVersionById = new Map(
-    readInstalledGhostsSnapshot().map((ghost) => [ghost.manifest.id, ghost.manifest.version]),
+  const installed = readInstalledGhostsSnapshot();
+  const installedVersionByPluginId = new Map(
+    marketUpdates.map((item) => [
+      item.pluginId,
+      findInstalledGhostForMarketItem(installed, item)?.manifest.version ?? '',
+    ]),
   );
   finishToastShown = false;
   batchOwner = getDataOwnerGeneration();
   const generation = beginGeneration();
-  emit({ rows: buildUpdateAllRows(marketUpdates, installedVersionById), running: false });
+  emit({ rows: buildUpdateAllRows(marketUpdates, installedVersionByPluginId), running: false });
   void runQueue(generation);
 }
 
@@ -152,8 +158,9 @@ async function runQueue(generation: number): Promise<void> {
           patchRow(generation, next.pluginId, { status: 'skipped' });
           continue;
         }
-        const installed = readInstalledGhostsSnapshot().find(
-          (ghost) => ghost.manifest.id === next.ghostId,
+        const installed = findInstalledGhostForMarketItem(
+          readInstalledGhostsSnapshot(),
+          detail,
         );
         if (!installed) {
           patchRow(generation, next.pluginId, { status: 'skipped' });
@@ -214,14 +221,19 @@ export function reconcileUpdateAllBatch(marketItems: readonly PluginMarketItem[]
   const installStateByPluginId = new Map(
     marketItems.map((item) => [item.pluginId, item.installState]),
   );
-  const installedById = new Map(
-    readInstalledGhostsSnapshot().map((ghost) => [ghost.manifest.id, ghost.manifest]),
-  );
+  const marketByPluginId = new Map(marketItems.map((item) => [item.pluginId, item]));
+  const installedGhosts = readInstalledGhostsSnapshot();
   let rows = state.rows;
   let changed = false;
   for (const row of state.rows) {
     if (row.status !== 'pending') continue;
-    const installed = installedById.get(row.ghostId);
+    const installed = findInstalledGhostForMarketItem(
+      installedGhosts,
+      marketByPluginId.get(row.pluginId) ?? {
+        ghostId: row.ghostId,
+        ...deliveryNamespaceFields(row),
+      },
+    );
     if (!installed) {
       rows = updateRow(rows, row.pluginId, { status: 'skipped' });
       changed = true;
@@ -234,8 +246,8 @@ export function reconcileUpdateAllBatch(marketItems: readonly PluginMarketItem[]
     ) {
       rows = updateRow(rows, row.pluginId, { status: 'skipped' });
       changed = true;
-    } else if (installed.version !== row.fromVersion) {
-      rows = updateRow(rows, row.pluginId, { fromVersion: installed.version });
+    } else if (installed.manifest.version !== row.fromVersion) {
+      rows = updateRow(rows, row.pluginId, { fromVersion: installed.manifest.version });
       changed = true;
     }
   }
