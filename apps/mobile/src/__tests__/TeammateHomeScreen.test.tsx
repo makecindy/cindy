@@ -18,7 +18,7 @@ vi.mock('react-native', async () => {
   return { View: ({ children }: any) => el('div', {}, children), ActivityIndicator: () => null,
     Keyboard: { dismiss() {} }, Alert: { alert: vi.fn() }, StyleSheet: { create: (value: unknown) => value } };
 });
-vi.mock('expo-router', () => ({ Stack: { Screen: () => null }, useIsFocused: () => h.focused, useRouter: () => ({ dismissTo: h.dismissTo }) }));
+vi.mock('expo-router', () => ({ Stack: { Screen: () => null }, useIsFocused: () => h.focused, useNavigation: () => ({ getState: () => ({ routes: [] }) }), useRouter: () => ({ dismissTo: h.dismissTo }) }));
 vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: 'div' }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 vi.mock('lucide-react-native', () => ({ Menu: () => null }));

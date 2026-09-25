@@ -1124,10 +1124,10 @@ export function MessageRenderer({
     void listRef.current?.scrollToOffset({ animated, offset });
   }, [markProgrammaticScroll]);
 
-  const scrollToIndexProgrammatically = useCallback((index: number, viewPosition: number) => {
+  const scrollToIndexProgrammatically = useCallback((index: number, viewPosition: number, animated = true) => {
     dragStartOffsetYRef.current = null;
-    markProgrammaticScroll(true);
-    void listRef.current?.scrollToIndex({ animated: true, index, viewPosition });
+    markProgrammaticScroll(animated);
+    return listRef.current?.scrollToIndex({ animated, index, viewPosition });
   }, [markProgrammaticScroll]);
 
   const getCurrentHistoryTopOffsetAdjustment = useCallback(() => {
@@ -2514,7 +2514,12 @@ export function MessageRenderer({
       ? mobileMessageHistoryRowKeyByIdentity(listData, saved.anchor.identityKey) ?? saved.anchor.key
       : saved?.anchor?.key;
     const savedIndex = savedKey ? listData.findIndex(item => item.key === savedKey) : -1;
-    if (saved && !saved.atEnd && savedIndex >= 0) {
+    if (focusedItemKeyRef.current) {
+      // Explicit message navigation owns the first position, even if its row is
+      // still being fetched. Do not seek the tail and then jump back to history.
+      nearBottomRef.current = false;
+      setIsAwayFromBottom(true);
+    } else if (saved && !saved.atEnd && savedIndex >= 0) {
       reopeningAnchorRef.current = { anchor: saved.anchor!, expires: Date.now() + 1500, corrections: 0 };
       nearBottomRef.current = false;
       setIsAwayFromBottom(true);
@@ -2593,7 +2598,6 @@ export function MessageRenderer({
       lastAppliedFocusKeyRef.current = null;
       return;
     }
-    if (!listRevealed) return;
     if (lastAppliedFocusKeyRef.current === focusRunKey) return;
     const index = listData.findIndex((item) => item.key === focusedItemKey);
     if (index < 0) return;
@@ -2605,12 +2609,20 @@ export function MessageRenderer({
     lastAutoLoadEarlierKeyRef.current = null;
     nearBottomRef.current = false;
     setIsAwayFromBottom(true);
-    scrollToIndexProgrammatically(index, 0.45);
+    const generation = initialRevealGenerationRef.current;
+    // Initial navigation lands without an animated trip across unrelated rows.
+    // Reveal on the list's positioning completion, not a fixed waiting period.
+    void Promise.resolve(scrollToIndexProgrammatically(index, 0.45, listRevealed && !initialRevealAnimationRef.current)).then(() => {
+      if (initialRevealGenerationRef.current === generation && lastAppliedFocusKeyRef.current === focusRunKey) {
+        revealPositionedHistory();
+      }
+    }, () => { /* The existing bounded reveal fallback handles a failed native seek. */ });
   }, [
     focusRunKey,
     focusedItemKey,
     listData,
     listRevealed,
+    revealPositionedHistory,
     scrollToIndexProgrammatically,
   ]);
 

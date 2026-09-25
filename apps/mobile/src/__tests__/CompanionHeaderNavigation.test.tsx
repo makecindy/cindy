@@ -36,8 +36,8 @@ vi.mock('@/theme', async () => {
   return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }), useThemedStyles: (fn: any) => fn(tokens.lightColors) };
 });
 vi.mock('lucide-react-native', () => ({ ChevronDown: () => null, PanelLeft: () => null, Settings2: () => null }));
-vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: ({ onPress, testID, children }: any) =>
-  createElement('button', { onClick: onPress, 'data-testid': testID }, children) }));
+vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: ({ onPress, testID, children, disabled }: any) =>
+  createElement('button', { onClick: onPress, disabled, 'data-testid': testID }, children) }));
 vi.mock('@/session/TeammatePicker', () => ({ TeammatePicker: () => null }));
 vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionCreateSheet: () => null,
   CompanionProfileSheet: (props: unknown) => { h.profile = props; return null; } }));
@@ -166,7 +166,7 @@ function relevantJsx(node: ts.Node): string {
   result.dispose(); return text;
 }
 const compiled = ts.transpileModule(`function PageHost({ bindings }) {
-  const { auth, deviceId, sessionId, companionResource, shareSelectionActive, setSearchOpen } = bindings;
+  const { auth, deviceId, sessionId, companionResource, companionEntry, shareSelectionActive, setSearchOpen } = bindings;
   const currentSession = null;
   const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false;
   ${statements.slice(stateStart, stateEnd).map(n => n.getText(source)).join('\n')}
@@ -176,12 +176,24 @@ const compiled = ts.transpileModule(`function PageHost({ bindings }) {
 const PageHost = new Function('React', 'useState', 'useHostManagedSession', 'CompanionHeader', 'CompanionNavigationDrawer', 'MessageHistoryOverlay',
   `${compiled}; return PageHost;`)({ createElement, Fragment }, useState, useHostManagedSession, CompanionHeader, CompanionNavigationDrawer, MessageHistoryOverlay);
 const pageBindings = () => ({ auth: h.auth, deviceId: 'pc', sessionId: 'session-a', shareSelectionActive: false,
+  companionEntry: { ready: true },
   companionResource: { ref: { kind: 'bot', collectionId: 'bots', id: 'bot-a' }, display: { title: 'Cindy' } } as RemoteResource | null,
   setSearchOpen: vi.fn() });
 const showPage = (bindings: ReturnType<typeof pageBindings>) => act(async () => {
   root.render(<RecentMessageHistoriesProvider><PageHost bindings={bindings} /></RecentMessageHistoriesProvider>);
 });
 const openPageDrawer = () => act(async () => host.querySelector<HTMLButtonElement>('[data-testid="companion.navigation"]')!.click());
+
+it('shows the companion title while profile controls wait for entry validation', async () => {
+  const bindings = pageBindings(); bindings.companionEntry.ready = false;
+  await showPage(bindings);
+  expect(host.textContent).toContain('Cindy');
+  expect(host.querySelector<HTMLButtonElement>('[data-testid="companion.settings"]')!.disabled).toBe(true);
+  expect(h.profile.online).toBe(true); // Synchronizing is not an offline connection.
+  bindings.companionEntry.ready = true;
+  await showPage(bindings);
+  expect(host.querySelector<HTMLButtonElement>('[data-testid="companion.settings"]')!.disabled).toBe(false);
+});
 
 it('opens the page-owned drawer in the real Android history overlay and closes before searching', async () => {
   const bindings = pageBindings();
