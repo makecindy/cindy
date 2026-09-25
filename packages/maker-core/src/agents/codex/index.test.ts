@@ -421,6 +421,30 @@ describe('Codex official OAuth host isolation', () => {
     } finally { await agent.dispose(); }
   });
 
+  it.each(['xd', 'cprov-test'])('does not wait for a cold official host while checking %s writers', async (providerId) => {
+    const agent = new CodexAgent(isolatedDeps());
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let official: Promise<AgentSessionHandle> | undefined;
+    try {
+      const source = await agent.startSession({ sessionId: 'source', providerId, model: 'gpt-5.4', workingDir: '/repo' });
+      createdTransports[0].setMockResponse('thread/loaded/list', { result: { data: [source.id], nextCursor: null } });
+      MockCodexTransport.beforeInitializeResponse = () => gate;
+      official = agent.startSession({ sessionId: 'official', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo' });
+      await vi.waitFor(() => expect(createdTransports).toHaveLength(2));
+      const query = { sessionId: 'source', threadId: source.id, model: 'gpt-5.4' };
+      await expect(agent.requiresCodexThreadHostTransfer({ ...query, providerId })).resolves.toBe(false);
+      await source.close();
+      await expect(agent.requiresCodexThreadHostTransfer({ ...query, providerId: 'openai' })).resolves.toBe(true);
+      expect(createdTransports[1].closed).toBe(false);
+      expect(createdTransports[1].lines.map(line => JSON.parse(line).method)).toEqual(['initialize']);
+    } finally {
+      release();
+      await official;
+      await agent.dispose();
+    }
+  });
+
   it.each(['resolve-success', 'resolve-failure', 'list-success', 'list-failure'])('waits for exact writer retirement during %s', async (window) => {
     const deps: AgentDeps = isolatedDeps();
     const agent = new CodexAgent(deps);

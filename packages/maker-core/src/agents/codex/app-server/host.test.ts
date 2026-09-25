@@ -153,6 +153,40 @@ class NotificationTransport implements Transport {
   }
 }
 
+describe('concrete writer candidate proof', () => {
+  it.each(['request', 'notification', 'subscription'])('retains %s evidence until confirmed process exit', async (source) => {
+    const transports: NotificationTransport[] = [];
+    const host = new AppServerHost({ createTransport: () => {
+      const transport = new NotificationTransport(); transports.push(transport); return transport;
+    }, logger, clientInfo: { name: 'test', version: '0' } });
+    try {
+      await host.ensureStarted();
+      expect(host.writerCandidate).toBeNull();
+      await host.request('thread/loaded/list');
+      expect(host.writerCandidate).toBeNull();
+      if (source === 'request') await host.request('thread/resume', { threadId: 'source' });
+      if (source === 'notification') transports[0].emit({ method: 'thread/started', params: { thread: { id: 'source' } } });
+      if (source === 'subscription') host.subscribeThread('source', {});
+      const proof = host.writerCandidate;
+      expect(proof).not.toBeNull();
+      const close = vi.spyOn(transports[0], 'close').mockRejectedValueOnce(new Error('exit not proven'));
+      await expect(host.shutdown('test', { throwOnTransportError: true })).rejects.toThrow('exit not proven');
+      expect(host.writerCandidate).toBe(proof);
+      close.mockRestore();
+      await host.shutdown('confirmed', { throwOnTransportError: true });
+      expect(host.writerCandidate).toBeNull();
+      await host.ensureStarted();
+      expect(host.writerCandidate).toBeNull();
+      // A late old notification cannot turn the replacement into an old writer.
+      transports[0].emit({ method: 'thread/started', params: { thread: { id: 'source' } } });
+      expect(host.writerCandidate).toBeNull();
+      await host.request('thread/start');
+      expect(host.writerCandidate).not.toBe(proof);
+      expect(host.writerCandidate).not.toBeNull();
+    } finally { await host.retire(); }
+  });
+});
+
 describe('AppServerHost isolated account lifecycle', () => {
   it.each([false, true])('rejects persistent native policy before task dispatch (OAuth: %s)', async oauth => {
     const transport = new NotificationTransport(() => ({ config: { cli_auth_credentials_store: 'file' } }));

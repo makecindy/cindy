@@ -31,13 +31,23 @@ const logger: Logger = {
 };
 
 describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-server', () => {
-  it.each([...['A', 'B', 'C', 'initialize', 'capability', 'resume', 'transfer'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))), ...['skills', 'config'].map((window) => ({ window, reviewMode: true })), ...['restricted', 'bot', 'local-skill', 'transfer-fork-failure', 'transfer-cas-failure', 'transfer-resume-failure', 'transfer-busy', 'transfer-retire-resolve-success', 'transfer-retire-resolve-failure', 'transfer-retire-list-success', 'transfer-retire-list-failure', 'transfer-picker', 'transfer-picker-shared', 'transfer-picker-resume-failure', 'transfer-picker-shared-resume-failure'].map((window) => ({ window, reviewMode: false }))])('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
+  it.each([...['A', 'B', 'C', 'initialize', 'capability', 'resume', 'transfer'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))), ...['skills', 'config'].map((window) => ({ window, reviewMode: true })), ...['restricted', 'bot', 'local-skill', 'transfer-fork-failure', 'transfer-cas-failure', 'transfer-resume-failure', 'transfer-busy', 'transfer-retire-resolve-success', 'transfer-retire-resolve-failure', 'transfer-retire-list-success', 'transfer-retire-list-failure', 'transfer-picker', 'transfer-picker-shared', 'transfer-picker-resume-failure', 'transfer-picker-shared-resume-failure', 'transfer-picker-cold-task', 'transfer-picker-cold-control', 'transfer-picker-shared-cold-task', 'transfer-picker-shared-cold-control'].map((window) => ({ window, reviewMode: false }))])('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
     const releases: Array<() => void> = [];
     const beginMutation = () => { const finish = beginProviderRouteMutation('cprov-fixture'); releases.push(finish); return finish; };
     const lateWindow = ['initialize', 'capability', 'resume', 'skills', 'config', 'restricted', 'bot', 'local-skill'].includes(window);
     const revoked = !lateWindow && !window.startsWith('transfer');
     const root = await mkdtemp(path.join(tmpdir(), 'cindy-codex-host-auth-'));
     const home = path.join(root, 'codex');
+    const coldHome = path.join(root, 'cold-official');
+    const coldWindow = window.includes('cold-');
+    let releaseOAuth = () => {};
+    const oauthGate = new Promise<void>(resolve => { releaseOAuth = resolve; });
+    let refreshEntered = () => {};
+    const refreshRequested = new Promise<void>(resolve => { refreshEntered = resolve; });
+    let coldStart: Promise<unknown> | undefined;
+    let coldHost: AppServerHost | undefined;
+    let coldSettled = false;
+    let coldShutdown: { mockRestore: () => void } | undefined;
     const workingDir = path.join(root, 'work');
     await mkdir(home);
     await mkdir(workingDir);
@@ -47,6 +57,7 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
     const server = createServer(async (req, res) => {
       for await (const chunk of req) void chunk;
       calls.push(`${req.method} ${req.url}`);
+      if (coldWindow && req.url === '/oauth/token') { refreshEntered(); await oauthGate; }
       if (req.url === '/provider/responses') {
         expect(req.headers.authorization).toBe('Bearer synthetic-invalid-api-key');
         await responseGate;
@@ -85,6 +96,15 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
       '[model_providers.fixture]', 'name="Fixture"', `base_url="${endpoint}/provider"`,
       'wire_api="responses"', 'env_key="FIXTURE_API_KEY"', 'requires_openai_auth=false', 'supports_websockets=false', 'request_max_retries=0',
     ].join('\n'));
+    if (coldWindow) {
+      await mkdir(coldHome);
+      await writeFile(path.join(coldHome, 'config.toml'), `sqlite_home=${JSON.stringify(home)}\n` + (await readFile(path.join(home, 'config.toml'), 'utf8')));
+      const claims = { exp: 1, 'https://api.openai.com/auth': { chatgpt_plan_type: 'business', chatgpt_account_id: 'cold-official' } };
+      const token = `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.synthetic`;
+      await writeFile(path.join(coldHome, 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt', tokens: {
+        id_token: token, access_token: token, refresh_token: 'synthetic-cold-refresh', account_id: 'cold-official',
+      }, last_refresh: '2000-01-01T00:00:00Z' }), { mode: 0o600 });
+    }
     setCustomProviders([buildUserProvider({ id: 'cprov-fixture', name: 'Fixture', runtimes: { codex: { baseUrl: `${endpoint}/provider`, wireProtocol: 'openai-responses', models: [{ id: 'fixture-model', name: 'Fixture' }] } } })]);
     const spawnConfigs: string[] = [];
     let preparationGate: Promise<void> | undefined;
@@ -95,6 +115,7 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
       binaryPath: binaryPath!, logger, runtimeConfig: {},
       ...(window.includes('picker') && !window.includes('shared') ? { isolateCodexAccountSessions: true } : {}),
       resolveCodexLocalAuthPolicy: captureCodexLocalAuthPolicy,
+      isCodexAccountProvider: providerId => providerId === 'account-cold',
       ...(window === 'restricted' ? { capabilityRouting: { overrides: [{ capabilityId: 'computer-use', source: { kind: 'harness-plugin' as const, harness: 'codex' as const, surface: 'skill' as const, id: 'computer-use:computer-use', artifactId: 'computer-use', containerId: 'computer-use@openai-bundled' }, invocation: 'disabled' as const }] } } : {}),
       ...(window === 'local-skill' ? { getDisabledSkillPaths: () => [path.join(root, 'disabled-skill')] } : {}),
       resolveCapabilityRouting: async () => { if (window === 'capability') await latePreparation?.(); return undefined; },
@@ -103,8 +124,8 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
       auth: {
         getState: async () => ({ authenticated: true }),
         triggerLogin: async () => ({ authenticated: true }), logout: async () => {},
-        getAuthEnv: async () => ({
-          HOME: root, CODEX_HOME: home, TMPDIR: root, FIXTURE_API_KEY: 'synthetic-invalid-api-key',
+        getAuthEnv: async (opts) => ({
+          HOME: root, CODEX_HOME: opts?.providerId === 'account-cold' ? coldHome : home, TMPDIR: root, FIXTURE_API_KEY: 'synthetic-invalid-api-key',
           OPENAI_API_KEY: '', CODEX_API_KEY: '',
           CODEX_REFRESH_TOKEN_URL_OVERRIDE: `${endpoint}/oauth/token`,
           HTTP_PROXY: endpoint, HTTPS_PROXY: endpoint, ALL_PROXY: endpoint, NO_PROXY: '127.0.0.1,localhost',
@@ -160,7 +181,7 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
         };
         const acceptedForks: AppServerHost[] = [];
         const request = AppServerHost.prototype.request;
-        spies.push(vi.spyOn(AppServerHost.prototype, 'request').mockImplementation(function (this: AppServerHost, method, params, opts) {
+        const requestSpy = vi.spyOn(AppServerHost.prototype, 'request').mockImplementation(function (this: AppServerHost, method, params, opts) {
           if (method === 'thread/resume' && rejectResumeRequest) {
             rejectResumeRequest = false;
             params = { ...params as object, modelProvider: 'missing-fixture-provider' };
@@ -168,7 +189,8 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
           return request.call(this, method, params, { ...opts, beforeDispatch: () => {
             opts?.beforeDispatch?.(); if (method === 'thread/fork') acceptedForks.push(this);
           } });
-        }));
+        });
+        spies.push(requestSpy);
         try {
           setSessionProvider('source', 'openai');
           const retirementWindow = window.startsWith('transfer-retire');
@@ -182,13 +204,26 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
             const picker = createCodexPickerHarness({ maker, db, workingDir, createMessage: async (id, message) => {
               sqlite.prepare('INSERT INTO picker_messages VALUES (?, ?, ?)').run(message.clientId, id, JSON.stringify(message.content));
             } });
-            for (const [index, providerId] of ['xd', 'openai', 'cprov-fixture', 'openai'].entries()) {
+            const routes = coldWindow ? ['xd', 'xd', 'openai', 'cprov-fixture', 'cprov-fixture', 'openai'] : ['xd', 'openai', 'cprov-fixture', 'openai'];
+            for (const [index, providerId] of routes.entries()) {
+              if (coldWindow && index === 1) {
+                const start = window.endsWith('control')
+                  ? agent.readAccountRateLimits('account-cold')
+                  : agent.startSession({ sessionId: 'cold-official', providerId: 'account-cold', model: 'fixture-model', workingDir });
+                coldStart = start.then(() => { coldSettled = true; }, () => { coldSettled = true; });
+                await refreshRequested;
+                coldHost = [...hostMap].find(([key]) => key.includes('account-cold'))![1];
+                coldShutdown = vi.spyOn(coldHost, 'shutdown');
+                spies.push(coldShutdown);
+              }
+              const sameHostModelChange = coldWindow && routes[index - 1] === providerId;
+              const previousSession = source;
               const original = (await storage.get('source'))!.sdkSessionId;
               const originalPath = await (agent as unknown as { findRolloutPath(id: string): Promise<string> }).findRolloutPath(original!);
               const originalHistory = await readFile(originalPath, 'utf8');
               const forksBefore = acceptedForks.length;
               const requestsBefore = calls.filter(call => call === 'POST /provider/responses').length;
-              expect(await picker.pick('source', providerId)).toMatchObject({ deferred: true, pendingUntilSend: true });
+              expect(await picker.pick('source', providerId, coldWindow && (index === 1 || index === 4) ? 'fixture-model-two' : 'fixture-model')).toMatchObject({ deferred: true, pendingUntilSend: true });
               expect((await storage.get('source'))!.sdkSessionId).toBe(original);
               expect(maker.getSession('source')).toBe(source);
               expect(acceptedForks).toHaveLength(forksBefore);
@@ -201,18 +236,30 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
               }
               expect(await picker.send('source', `picker-${index}`)).toMatchObject({ accepted: true });
               source = maker.getSession('source')!;
+              if (sameHostModelChange) {
+                expect(source.codexHostKey).toBe(previousSession.codexHostKey);
+                expect((await storage.get('source'))!.sdkSessionId).toBe(original);
+                expect((await storage.get('source'))!.model).toBe('fixture-model-two');
+              }
               await expect.poll(() => source.isTurnRunning()).toBe(false);
               expect(calls.filter(call => call === 'POST /provider/responses')).toHaveLength(requestsBefore + 1);
               expect(sqlite.prepare('SELECT count(*) AS n FROM picker_messages').get()).toEqual({ n: index + 1 });
               expect(picker.pending.get('source')).toBeUndefined();
               expect(sqlite.prepare('SELECT provider_id FROM sessions WHERE id = ?').get('source')).toEqual({ provider_id: providerId });
-              expect(acceptedForks.length - forksBefore).toBe(window.includes('shared') ? 1 : 0);
+              expect(acceptedForks.length - forksBefore).toBe(window.includes('shared') && routes[index - 1] !== providerId ? 1 : 0);
               const currentHistory = await readFile(originalPath, 'utf8');
-              if (window.includes('shared')) expect(currentHistory).toBe(originalHistory);
+              if (acceptedForks.length > forksBefore) expect(currentHistory).toBe(originalHistory);
               else expect(currentHistory.startsWith(originalHistory)).toBe(true);
               expect([...hostMap.keys()].some(key => key.startsWith('local-fork:'))).toBe(false);
               expect(siblingHost.getConnectionId()).toBe(connection);
               await send(sibling);
+              if (coldHost) {
+                expect(coldSettled).toBe(false);
+                expect(coldShutdown).not.toHaveBeenCalled();
+                expect(coldHost.hasStarted).toBe(true);
+                expect(coldHost.writerCandidate).toBeNull();
+                expect(requestSpy.mock.contexts.some((host, i) => host === coldHost && requestSpy.mock.calls[i][0] === 'thread/loaded/list')).toBe(false);
+              }
             }
             return;
           }
@@ -538,6 +585,8 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
         finishCancel();
       }
     } finally {
+      releaseOAuth();
+      await coldStart;
       releaseResponse();
       for (const spy of spies) spy.mockRestore();
       for (const release of releases) release();

@@ -5,7 +5,7 @@
  *   - 构造时同步 spawn 子进程 (跟原版 spawnProcess 一致)
  *   - readline on('line') → fan-out 给 onLine handlers
  *   - stderr → 整行 normalize 后 fan-out 给 onStderr handlers
- *   - child.on('exit') 或我们调 close() → 触发 onClose, 之后 writeLine 都 reject
+ *   - child.on('close')（输出已排空）或我们调 close() → 触发 onClose, 之后 writeLine 都 reject
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -34,12 +34,15 @@ export interface StdioTransportOptions {
   forceKillGraceMs?: number;
   /** SIGKILL 后确认退出的时间；仅测试注入。 */
   killConfirmationMs?: number;
+  /** 自然退出后等待 stdio 排空的上限；仅测试注入。 */
+  outputDrainMs?: number;
 }
 
 // 合计 3s，给 Desktop 6s 退出预算中的其它收尾留出时间。
 const GRACEFUL_CLOSE_MS = 1_500;
 const FORCE_KILL_GRACE_MS = 1_000;
 const KILL_CONFIRMATION_MS = 500;
+const OUTPUT_DRAIN_MS = 1_000;
 
 export function createStdioTransport(opts: StdioTransportOptions): Transport {
   if (!opts.binaryPath) {
@@ -61,6 +64,10 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
   let closePromise: Promise<void> | null = null;
   let exited = false;
   let sawStdout = false;
+  let exitCode: number | null = null;
+  let exitSignal: NodeJS.Signals | null = null;
+  let outputFinalized = false;
+  let drainTimer: ReturnType<typeof setTimeout> | undefined;
   let sqliteInitializationError = false;
   let nativeSqliteInitializationFailed = false;
   let resolveExit!: () => void;
@@ -111,21 +118,22 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
   // 其它内容仍按诊断行 fan-out，client 层做 ANSI 剥除/分级。
   child.stderr.setEncoding('utf8');
   let stderrBuffer = '';
+  const emitStderrLine = (line: string): void => {
+    const trimmed = line.replace(/\r$/, '');
+    if (!trimmed) return;
+    // Exact pre-protocol fatal in the pinned native runtime, not a generic SQL log.
+    const match = /^Error: failed to initialize sqlite state runtime under (.+): failed to initialize state runtime at (.+)$/.exec(trimmed);
+    if (match && match[1] === match[2]) sqliteInitializationError = true;
+    for (const cb of stderrHandlers) cb(trimmed);
+  };
   child.stderr.on('data', (chunk: string) => {
+    if (outputFinalized) return;
     stderrBuffer += chunk;
     const idx = stderrBuffer.lastIndexOf('\n');
     if (idx === -1) return;
     const lines = stderrBuffer.slice(0, idx).split('\n');
     stderrBuffer = stderrBuffer.slice(idx + 1);
-    for (const line of lines) {
-      const trimmed = line.replace(/\r$/, '');
-      if (!trimmed) continue;
-      // This is the 0.153.4 fatal error emitted before the app-server starts its
-      // protocol loop. It is NOT an auth error, a model error or a generic SQL log.
-      const match = /^Error: failed to initialize sqlite state runtime under (.+): failed to initialize state runtime at (.+)$/.exec(trimmed);
-      if (match && match[1] === match[2]) sqliteInitializationError = true;
-      for (const cb of stderrHandlers) cb(trimmed);
-    }
+    for (const line of lines) emitStderrLine(line);
   });
 
   const fireClose = (reason: string): void => {
@@ -137,29 +145,54 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
     }
   };
 
-  const finishProcess = (reason: string): void => {
-    if (exited) return;
-    exited = true;
+  const finishOutput = (reason: string, drained: boolean): void => {
+    if (outputFinalized) return;
+    outputFinalized = true;
+    if (drainTimer) clearTimeout(drainTimer);
+    if (drained) emitStderrLine(stderrBuffer);
+    stderrBuffer = '';
+    nativeSqliteInitializationFailed = drained && exited && exitCode === 1 && exitSignal === null
+      && !closed && !sawStdout && sqliteInitializationError;
     try { rl.close(); } catch { /* already closed */ }
-    try { disposeProcessRegistration?.(); } catch { /* best-effort diagnostic cleanup */ }
-    disposeProcessRegistration = undefined;
-    resolveExit();
     fireClose(reason);
   };
 
+  // Physical exit is independent of pipe drainage (including inherited pipes).
+  // Strict close uses only this proof; retry classification needs both proofs.
+  const confirmExit = (): void => {
+    if (exited) return;
+    exited = true;
+    try { disposeProcessRegistration?.(); } catch { /* best-effort diagnostic cleanup */ }
+    disposeProcessRegistration = undefined;
+    resolveExit();
+  };
+  const exitReason = () => `child exited (${exitSignal ? `signal=${exitSignal}` : `exit code=${exitCode ?? 'null'}`})`;
+
   child.on('error', (err) => {
     const reason = `child error: ${err.message}`;
-    // spawn 失败没有进程；运行中的 error（例如 kill 失败）不是退出证据。
-    if (child.pid == null) finishProcess(reason);
-    else fireClose(reason);
+    // spawn failure has no process; a running process error is not exit proof.
+    if (child.pid == null) {
+      confirmExit();
+      finishOutput(reason, false);
+    } else fireClose(reason);
   });
-  child.stdin.on('error', (err) => fireClose(`child stdin error: ${err.message}`));
+  child.stdin.on('error', (err) => {
+    if (!exited) fireClose(`child stdin error: ${err.message}`);
+  });
   child.on('exit', (code, signal) => {
-    nativeSqliteInitializationFailed = code === 1 && signal === null
-      && !closed && !sawStdout && sqliteInitializationError;
-    const reason = signal ? `signal=${signal}` : `exit code=${code ?? 'null'}`;
-    finishProcess(`child exited (${reason})`);
+    if (exited) return;
+    exitCode = code;
+    exitSignal = signal;
+    confirmExit();
+    if (closed) finishOutput(exitReason(), false);
+    else {
+      // An inherited pipe must not leave initialize pending forever. A drain
+      // deadline cannot prove complete output, so it never qualifies for retry.
+      drainTimer = setTimeout(() => finishOutput(`${exitReason()}; output drain timed out`, false), opts.outputDrainMs ?? OUTPUT_DRAIN_MS);
+      drainTimer.unref?.();
+    }
   });
+  child.on('close', () => finishOutput(exitReason(), true));
 
   const waitForExit = async (timeoutMs: number): Promise<boolean> => {
     if (exited) return true;
@@ -178,7 +211,7 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
   return {
     nativeSqliteInitializationFailed: () => nativeSqliteInitializationFailed,
     writeLine(line: string): Promise<void> {
-      if (closed || !child.stdin.writable) {
+      if (closed || exited || !child.stdin.writable) {
         return Promise.reject(new Error('StdioTransport.writeLine after close'));
       }
       return new Promise<void>((resolve, reject) => {
@@ -221,7 +254,16 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
 
     close(reason = 'StdioTransport.close()'): Promise<void> {
       // 首次严格关闭可以超时；迟到的真实 exit 使后续幂等检查成功。
-      if (exited) return exitPromise;
+      if (exited) {
+        // Cancellation during exit → drain must win over late fatal output.
+        // Already finalized natural failure retains its proof for strict cleanup.
+        if (!closed) {
+          nativeSqliteInitializationFailed = false;
+          if (!outputFinalized) finishOutput(reason, false);
+          else fireClose(reason); // Synchronous cancellation from a final stderr/line callback.
+        }
+        return exitPromise;
+      }
       if (!closePromise) {
         // 先发布 Promise，再调用可能同步重入 close() 的监听器。
         closePromise = Promise.resolve().then(async () => {

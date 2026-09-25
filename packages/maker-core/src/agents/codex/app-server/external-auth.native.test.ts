@@ -30,7 +30,7 @@ function fakeTokens(account: string, revision = 'initial') {
   return { accessToken: `test.${payload}.not-a-signature`, chatgptAccountId: account, chatgptPlanType: 'pro' };
 }
 
-async function fixture(archivedParent = false, testRefresh = false) {
+async function fixture(archivedParent = false, testRefresh = false, revokedRefresh = false, generic401 = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-codex-history-contract-'));
   roots.push(root);
   const historyHome = path.join(root, 'history-a');
@@ -38,11 +38,17 @@ async function fixture(archivedParent = false, testRefresh = false) {
   await fs.mkdir(credentialHome);
   const wireRequests: Array<{ authorization: string | undefined; account: string | string[] | undefined }> = [];
   const refreshRequests: unknown[] = [];
+  const discoveryRequests: Array<string | string[] | undefined> = [];
   const server = createServer(async (request, response) => {
     if (request.method === 'POST' && request.url === '/oauth/token') {
       let body = '';
       for await (const chunk of request) body += chunk;
       refreshRequests.push(JSON.parse(body));
+      if (revokedRefresh) {
+        response.writeHead(400, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: { code: 'refresh_token_invalidated', message: 'Synthetic refresh credential revoked' } }));
+        return;
+      }
       const token = fakeTokens('account-b', 'refreshed').accessToken;
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ id_token: token, access_token: token, refresh_token: 'fixture-refresh-b2' }));
@@ -51,9 +57,9 @@ async function fixture(archivedParent = false, testRefresh = false) {
     if (request.method === 'POST' && request.url?.endsWith('/responses')) {
       wireRequests.push({ authorization: request.headers.authorization, account: request.headers['chatgpt-account-id'] });
       request.resume();
-      if (testRefresh && wireRequests.length === 1) {
+      if (testRefresh && (request.headers.authorization !== `Bearer ${fakeTokens('account-b', 'refreshed').accessToken}` || request.headers['chatgpt-account-id'] !== 'account-b')) {
         response.writeHead(401, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ error: { message: 'expired fixture credential' } }));
+        response.end(JSON.stringify({ error: { ...(generic401 ? {} : { code: 'token_expired' }), message: 'Provided authentication token is expired.' } }));
         return;
       }
       response.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -61,6 +67,14 @@ async function fixture(archivedParent = false, testRefresh = false) {
         id: 'resp_fixture', object: 'response', created_at: 1, status: 'completed', model: 'gpt-6-astra', output: [],
         usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 },
       } })}\n\n`);
+      return;
+    }
+    if (request.method === 'GET' && request.url?.endsWith('/accounts/check')) {
+      discoveryRequests.push(request.headers['chatgpt-account-id']);
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ accounts: ['account-a', 'account-b'].map(id => ({
+        id, workspace_backend_origin: `https://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`, account_routing_override: 'NO_CONSTRAINT',
+      })), default_account_id: 'account-a' }));
       return;
     }
     response.setHeader('content-type', 'application/json');
@@ -108,6 +122,7 @@ async function fixture(archivedParent = false, testRefresh = false) {
           '-c', `sqlite_home=${JSON.stringify(historyHome)}`,
           '-c', `cli_auth_credentials_store="${managed ? 'file' : 'ephemeral'}"`, '-c', 'model_provider="probe"',
           '-c', 'model_providers.probe.name="Probe"', '-c', `model_providers.probe.base_url=${JSON.stringify(baseUrl)}`,
+          '-c', 'model_providers.probe.stream_max_retries=0', '-c', 'model_providers.probe.request_max_retries=0',
           '-c', 'model_providers.probe.wire_api="responses"', '-c', `model_providers.probe.requires_openai_auth=${Boolean(account)}`,
           '-c', `chatgpt_base_url=${JSON.stringify(baseUrl)}`],
       }),
@@ -121,13 +136,13 @@ async function fixture(archivedParent = false, testRefresh = false) {
       approvalPolicy: 'never', sandbox: 'read-only',
     }, { timeoutMs: 15_000 });
   }
-  async function assertOriginals(managed = false) {
-    expect(await fs.readFile(parent.file, 'utf8')).toBe(parent.text);
+  async function assertOriginals(managed = false, expectedParent = parent.text) {
+    expect(await fs.readFile(parent.file, 'utf8')).toBe(expectedParent);
     expect(await fs.readFile(path.join(historyHome, 'auth.json'), 'utf8')).toBe(oldAuth);
     expect((await fs.stat(path.join(historyHome, 'auth.json'))).mtimeMs).toBe(authStat.mtimeMs);
     if (!managed) await expect(fs.stat(path.join(credentialHome, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   }
-  return { root, historyHome, credentialHome, parent, child, rollout, host, resume, assertOriginals, wireRequests, refreshRequests };
+  return { root, historyHome, credentialHome, parent, child, rollout, host, resume, assertOriginals, wireRequests, refreshRequests, discoveryRequests };
 }
 
 describe.skipIf(!binaryPath)('real Codex history/account isolation contract', () => {
@@ -147,6 +162,8 @@ describe.skipIf(!binaryPath)('real Codex history/account isolation contract', ()
       const host = f.host(f.historyHome, account);
       await expect(f.resume(host, grandchild)).resolves.toMatchObject({ thread: { id: grandchild.id } });
       const status = await host.request('account/read', { refreshToken: false });
+      expect(f.discoveryRequests.at(-1)).toBe(account);
+      expect(status).toMatchObject({ workspaceRouting: { chatgptAccountId: account } });
       expect(status).toMatchObject({ account: { type: 'chatgpt', email: `${account}@example.invalid`, planType: 'pro' } });
       await host.shutdown('simulate transport replacement');
       await expect(f.resume(host, grandchild)).resolves.toMatchObject({ thread: { id: grandchild.id } });
@@ -223,15 +240,35 @@ describe.skipIf(!binaryPath)('real Codex history/account isolation contract', ()
     const original = f.host(f.historyHome, 'account-a');
     await f.resume(original, f.parent);
     await original.retire();
+    // 0.156 persists a thread-owned settings snapshot on resume. Original
+    // indexed bytes and ordinals stay unchanged; only this exact native record
+    // is permitted. The rejected cross-home fork must not append anything else.
+    const resumedHistory = await fs.readFile(f.parent.file, 'utf8');
+    expect(resumedHistory.startsWith(f.parent.text)).toBe(true);
+    const appended = resumedHistory.slice(f.parent.text.length).trim().split('\n').map(line => JSON.parse(line));
+    expect(appended).toEqual([{
+      timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/), ordinal: 2, type: 'event_msg',
+      payload: { type: 'thread_settings_applied', thread_id: f.parent.id, thread_settings: {
+        model: 'gpt-6-astra', model_provider_id: 'probe', approval_policy: 'never', approvals_reviewer: 'user',
+        permission_profile: { type: 'managed', file_system: { type: 'restricted', entries: [
+          { path: { type: 'special', value: { kind: 'root' } }, access: 'read' },
+        ] }, network: 'restricted' },
+        cwd: f.root, runtime_workspace_roots: [f.root],
+        collaboration_mode: { mode: 'default', settings: { model: 'gpt-6-astra', reasoning_effort: null, developer_instructions: null } },
+        disabled_plugin_ids: [],
+      } },
+    }]);
     const oldForkHost = f.host(f.credentialHome, 'account-b');
     await expect(oldForkHost.request('thread/fork', {
       threadId: f.parent.id, path: f.parent.file, cwd: f.root, model: 'gpt-6-astra',
     }, { timeoutMs: 15_000 })).rejects.toThrow('must be in Codex home directory');
-    await f.assertOriginals();
+    await f.assertOriginals(false, resumedHistory);
   }, 30_000);
 
-  it('refreshes managed credentials on disk after a native 401 even before natural expiry', async () => {
-    const f = await fixture(false, true);
+  it.each(['expired', 'generic', 'revoked'])('handles managed credentials after a native 401 before expiry (%s)', async (mode) => {
+    const revoked = mode === 'revoked';
+    const f = await fixture(false, true, revoked, mode === 'generic');
+    const readerCalls: boolean[] = [];
     const authPath = path.join(f.credentialHome, 'auth.json');
     const initial = fakeTokens('account-b').accessToken;
     // A freshly written managed login must still force-refresh after a rejected request.
@@ -240,6 +277,7 @@ describe.skipIf(!binaryPath)('real Codex history/account isolation contract', ()
       last_refresh: new Date().toISOString() }));
     const accountHost = f.host(f.credentialHome, 'account-b', true);
     const host = f.host(f.historyHome, 'account-b', false, { readTokens: async refresh => {
+      readerCalls.push(refresh);
       if (refresh) await accountHost.request('account/read', { refreshToken: true }, { timeoutMs: 8_000 });
       const credentials = JSON.parse(await fs.readFile(authPath, 'utf8'));
       return { accessToken: credentials.tokens.access_token, chatgptAccountId: credentials.tokens.account_id };
@@ -250,7 +288,14 @@ describe.skipIf(!binaryPath)('real Codex history/account isolation contract', ()
     const subscription = host.subscribeThread(f.child.id, { turnCompleted: completed });
     try {
       await host.request('turn/start', { threadId: f.child.id, input: [{ type: 'text', text: 'fixture request' }] }, { timeoutMs: 15_000 });
-      await expect(completion).resolves.toMatchObject({ turn: { status: 'completed' } });
+      await expect(completion).resolves.toMatchObject({ turn: { status: revoked ? 'failed' : 'completed' } });
+      expect(readerCalls).toEqual([false, true]);
+      if (revoked) {
+        expect(f.wireRequests).toEqual([{ authorization: `Bearer ${initial}`, account: 'account-b' }]);
+        expect(f.refreshRequests).toHaveLength(1);
+        await f.assertOriginals(true);
+        return;
+      }
       expect(f.wireRequests).toEqual([
         { authorization: `Bearer ${fakeTokens('account-b').accessToken}`, account: 'account-b' },
         { authorization: `Bearer ${fakeTokens('account-b', 'refreshed').accessToken}`, account: 'account-b' },

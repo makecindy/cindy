@@ -129,7 +129,7 @@ export function createCodexPickerHarness(input: {
   } });
   return {
     pending,
-    pick: (id: string, providerId: string) => handlers.get(MAKER_INVOKE.SET_MODEL)!(null, id, 'fixture-model', providerId),
+    pick: (id: string, providerId: string, model = 'fixture-model') => handlers.get(MAKER_INVOKE.SET_MODEL)!(null, id, model, providerId),
     send: (id: string, clientId: string) => handlers.get(MAKER_INVOKE.SEND)!(null, id, 'picker fixture',
       { id, agentKind: 'codex', model: 'fixture-model', workingDir },
       { messageUuid: clientId, persistUserMessage: { clientId, content: 'picker fixture' } }),

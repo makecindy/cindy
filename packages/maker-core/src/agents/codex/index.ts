@@ -14595,13 +14595,13 @@ assertRouteCurrent();
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const hosts = new Map([...this.hosts].filter(([key]) => key.startsWith('local')));
       const generations = new Map([...this.hostGenerations].filter(([key]) => key.startsWith('local')));
-      const startedHosts = new Set([...hosts.values()].filter((host) => host.hasStarted));
+      const writerCandidates = new Map([...hosts.values()].map((host) => [host, host.writerCandidate]));
       for (const host of hosts.values()) observedHosts.add(host);
       const registryCurrent = () => {
         const currentHosts = [...this.hosts].filter(([key]) => key.startsWith('local'));
         const currentGenerations = [...this.hostGenerations].filter(([key]) => key.startsWith('local'));
         return currentHosts.length === hosts.size && currentGenerations.length === generations.size
-          && currentHosts.every(([key, host]) => hosts.get(key) === host && startedHosts.has(host) === host.hasStarted)
+          && currentHosts.every(([key, host]) => hosts.get(key) === host && writerCandidates.get(host) === host.writerCandidate)
           && currentGenerations.every(([key, generation]) => generations.get(key) === generation);
       };
       const settleRetirements = async () => {
@@ -14630,7 +14630,7 @@ assertRouteCurrent();
       if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
       for (const [key, host] of hosts) {
         if (!registryCurrent()) break;
-        if (key === targetKey || !host.hasStarted) continue;
+        if (key === targetKey || !host.writerCandidate) continue;
         let cursor: string | null = null;
         do {
           const result: { data: string[]; nextCursor?: string | null } | null = await awaitCodexRouteSelection(

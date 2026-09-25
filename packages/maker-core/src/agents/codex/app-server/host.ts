@@ -340,6 +340,10 @@ export class AppServerHost {
   private readonly threadUnsubscribeTimeoutMs: number;
 
   private client: AppServerClient | null = null;
+  // Negative proof belongs to the exact transport, not readiness or provider.
+  // Any application RPC may load a thread (including future protocol methods).
+  // Bootstrap initialize/config/auth and the read-only writer probe do not.
+  private readonly writerCandidates = new WeakSet<AppServerClient>();
   /** 同次 ensureStarted 并发调用共享一个 init Promise (避免重复 spawn)。 */
   private startPromise: Promise<InitializeResponse> | null = null;
   private nativeInitializationEpoch = 0;
@@ -678,7 +682,10 @@ export class AppServerHost {
     // 注册 notification handlers BEFORE initialize: server 在握手响应前可能就推了
     // banner / 启动 notification, 漏接就丢。
     for (const method of SUBSCRIBED_METHODS) {
-      client.onNotification(method, (params) => this.routeNotification(method, params));
+      client.onNotification(method, (params) => {
+        if (extractThreadId(method, params)) this.writerCandidates.add(client);
+        this.routeNotification(method, params);
+      });
     }
 
     // ServerRequest handlers (Phase 2 approval) — 同样在 initialize 前注册,
@@ -929,11 +936,13 @@ export class AppServerHost {
       }
       if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
       opts?.beforeDispatch?.();
+      if (method !== 'thread/loaded/list') this.writerCandidates.add(this.client);
       return this.client.request<R>(method, params, { ...opts, timeoutMs: remaining });
     }
     await started;
     if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
     opts?.beforeDispatch?.();
+    if (method !== 'thread/loaded/list') this.writerCandidates.add(this.client);
     return this.client.request<R>(method, params, opts);
   }
 
@@ -1115,6 +1124,7 @@ export class AppServerHost {
     if (this.subscribers.has(threadId)) {
       this.logger.warn('overwriting thread subscription', { threadId });
     }
+    if (this.client) this.writerCandidates.add(this.client);
     this.subscribers.set(threadId, handlers);
     this.lineageRoots.set(threadId, threadId);
     this.notifyThreadHandlerWaiters(threadId);
@@ -1689,6 +1699,15 @@ export class AppServerHost {
   /** Whether this process already owns the live state for a root thread. */
   hasThreadSubscription(threadId: string): boolean {
     return this.subscribers.has(threadId);
+  }
+
+  /**
+   * Opaque concrete process identity which may own a writer. Null proves no
+   * application request/thread evidence in this process. A failed shutdown keeps
+   * the client (and evidence); a confirmed exit/restart gets a fresh identity.
+   */
+  get writerCandidate(): object | null {
+    return this.client && this.writerCandidates.has(this.client) ? this.client : null;
   }
 
   /** 是否已经 spawn 过子进程 (但可能已 close)。 */
