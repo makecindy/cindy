@@ -332,9 +332,11 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       return { accepted: false, reason: 'cancelled-before-dispatch' };
     });
     const { runner, notifier } = createRunnerHarness(h.session, { silenced: true });
-    await expect(runner.fire(baseSchedule(timing), ctx)).rejects.toThrow(
-      'Scheduled turn aborted before vendor dispatch',
-    );
+    await expect(runner.fire(baseSchedule(timing), ctx)).resolves.toEqual({
+      sessionId: h.session.id,
+      skipped: true,
+      resultText: 'Scheduled turn stopped before vendor dispatch',
+    });
     expect(ctx.signal.aborted).toBe(false);
     expect(mocks.rewind).toHaveBeenCalledExactlyOnceWith(
       h.session.id,

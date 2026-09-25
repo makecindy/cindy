@@ -2384,6 +2384,40 @@ describe('Scheduler preRunHook results', () => {
     expect(after?.nextFireAt).toBeUndefined();
   });
 
+  it.each([
+    { recurring: true, manual: false, intervalMs: undefined },
+    { recurring: true, manual: false, intervalMs: 600_000 },
+    { recurring: false, manual: false, intervalMs: undefined },
+    { recurring: false, manual: true, intervalMs: undefined },
+  ])('settles an undispatched Stop without losing normal scheduling: %j', async (timing) => {
+    const h = makeHarness({
+      runnerImpl: async () => ({
+        sessionId: 'stopped-session',
+        skipped: true,
+        resultText: 'Scheduled turn stopped before vendor dispatch',
+      }),
+    });
+    const sch = await h.scheduler.create({ ...baseInput, ...timing });
+    const firedAt = sch.nextFireAt ?? h.clock.now();
+    h.clock.setTo(firedAt);
+    if (timing.manual) await h.scheduler.runNow(sch.id);
+    else await h.scheduler.tick();
+    const runs = await h.scheduler.listRuns(sch.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ status: 'skipped', sessionId: 'stopped-session', readAt: firedAt });
+    const after = await h.storage.get(sch.id);
+    if (timing.recurring) {
+      expect(after?.status).toBe('active');
+      expect(after?.nextFireAt).toBe(firedAt + (timing.intervalMs ?? 60_000));
+      h.clock.setTo(after!.nextFireAt!);
+      await h.scheduler.tick();
+      expect(await h.scheduler.listRuns(sch.id)).toHaveLength(2);
+    } else {
+      expect(after?.nextFireAt).toBeUndefined();
+      if (!timing.manual) expect(after?.status).toBe('expired');
+    }
+  });
+
   it('create() 透传 preRunHook 配置', async () => {
     const h = makeHarness();
     const sch = await h.scheduler.create({

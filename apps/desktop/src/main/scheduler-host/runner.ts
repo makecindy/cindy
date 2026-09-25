@@ -358,7 +358,7 @@ class QueuedSlotUnavailableError extends Error {}
 class RoutineDispatchDeferredError extends Error {}
 
 /** A fresh ordinary session was stopped before vendor dispatch; never retry it. */
-class ScheduledDispatchAbortedError extends Error {}
+class ScheduledDispatchStoppedError extends Error {}
 
 /** createTurnCompletionWaiter 的返回:turn 终态等待 + 文本缓冲 + 幂等摘除。 */
 interface TurnCompletionWaiter {
@@ -1813,7 +1813,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         outcome.reason === 'cancelled-before-dispatch'
       ) {
         if (!isHeartbeat && schedule.source !== 'bot') {
-          throw new ScheduledDispatchAbortedError('Scheduled turn aborted before vendor dispatch');
+          throw new ScheduledDispatchStoppedError('Scheduled turn stopped before vendor dispatch');
         }
         throw new RoutineDispatchDeferredError('Heartbeat cancelled before vendor dispatch');
       }
@@ -1837,7 +1837,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // the exact-message soft rewind; do not roll back ambiguous send errors.
       if (
         (err instanceof RoutineDispatchDeferredError ||
-          err instanceof ScheduledDispatchAbortedError) &&
+          err instanceof ScheduledDispatchStoppedError) &&
         acceptedMessageClientId
       ) {
         try {
@@ -1853,13 +1853,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
         this.deps.onUndispatchedUserTurn?.(session.id);
         baselineStarted = false;
       }
-      if (ctx.signal.aborted || err instanceof ScheduledDispatchAbortedError) {
+      if (ctx.signal.aborted || err instanceof ScheduledDispatchStoppedError) {
         waiter.stopListening();
         ctx.signal.removeEventListener('abort', onAbort);
         if (turnAccepted && !isHeartbeat && !schedule.persistentSession) {
           holder.closeOnAbort = true;
         }
-        throw err;
+        if (ctx.signal.aborted || !(err instanceof ScheduledDispatchStoppedError)) throw err;
+        // Stopping this undispatched turn consumes only this occurrence. Reuse
+        // the engine's skipped settlement so cron/interval scheduling remains
+        // owned by the engine, without a short deferred retry.
+        return { sessionId: session.id, skipped: true, resultText: err.message };
       }
       const normalized = normalizeSchedulerSendError(err);
       if (err instanceof RoutineDispatchDeferredError) {
