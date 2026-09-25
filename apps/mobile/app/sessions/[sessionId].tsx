@@ -18,7 +18,7 @@ import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '
 import { CompanionHeader } from '@/session/CompanionHeader';
 import { CompanionNavigationDrawer } from '@/session/CompanionNavigationDrawer';
 import { collectCompanionPluginInvocations } from '@/session/pluginInvocations';
-import { COMPANION_STATUS_AVATAR_SIZE, CompanionWorkingStatus, useCompanionWorkingLabel } from '@/session/CompanionWorkingStatus';
+import { COMPANION_STATUS_AVATAR_SIZE, CompanionWorkingStatus, useCompanionDisplayResource, useCompanionWorkingLabel } from '@/session/CompanionWorkingStatus';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
 import { SharedTaskEndedState } from '@/session/SharedTaskEndedState';
@@ -5618,10 +5618,12 @@ export default function SessionScreen() {
     () => mergePendingSendItems(companionChat ? companionConversationItems(renderWindow.items) : renderWindow.items, pendingSendItems, optimisticClientIds),
     [companionChat, pendingSendItems, renderWindow.items, optimisticClientIds],
   );
-  const companionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionResource?.ref.id ?? '',
+  // Task links and notifications carry no teammate resource; the cached roster row supplies name and avatar.
+  const companionDisplay = useCompanionDisplayResource(deviceId, sessionId, companionResource, companionChat);
+  const companionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionDisplay?.ref.id ?? '',
     active: companionChat && showComposerActivity, messages, reconnectAttempt: remoteSessionRunStatus.reconnectAttempt });
-  const companionAvatarData = companionResource?.display.avatar;
-  const companionName = companionResource ? resolveRemoteText(companionResource.display.title, i18nInstance.language) : '';
+  const companionAvatarData = companionDisplay?.display.avatar;
+  const companionName = companionDisplay ? resolveRemoteText(companionDisplay.display.title, i18nInstance.language) : '';
   const companionOnline = !remoteUnavailableReason;
   // One portrait for replies and the composer status. Keyed by the avatar's fields, not the
   // resource object, so unrelated resource refreshes do not re-render every reply row.
@@ -8155,18 +8157,20 @@ export default function SessionScreen() {
   // absPath 取件通道,无同目录翻页);workdir 外目录在 chip 层就不点亮,
   // 不会走到这里(canOpenChatPathChip)。
   const openChatPathTarget = useCallback((target: ChatFilePathTarget) => {
+    // 伙伴结果卡里的文件属于子任务:按 target.scope 打开,缺省为本会话。
+    const ownerSessionId = target.scope?.sessionId ?? sessionId;
     if (target.kind === 'directory') {
       if (target.relPath === null) return;
       router.push({
         pathname: '/files/[sessionId]',
-        params: { sessionId, deviceId, deviceName, relPath: target.relPath },
+        params: { sessionId: ownerSessionId, deviceId, deviceName, relPath: target.relPath },
       });
       return;
     }
     router.push({
       pathname: '/files/preview/[sessionId]',
       params: {
-        sessionId,
+        sessionId: ownerSessionId,
         deviceId,
         deviceName,
         ...(target.relPath !== null
@@ -8265,7 +8269,7 @@ export default function SessionScreen() {
    *  workdir 外文件(relPath 为 null)改走被控端 media:fetch 绝对路径取件
    *  (xdt-file://open?path=…,与文件浏览器 gallery / 预览页 absPath 模式同一通道)。 */
   const shareChipFile = useCallback(async (target: ChatFilePathTarget) => {
-    const workdir = currentSession?.workingDir?.trim();
+    const workdir = target.scope?.workdir.trim() || currentSession?.workingDir?.trim();
     if (!deviceId || !workdir || chipShareBusy) return;
     setChipShareBusy(true);
     try {
@@ -8326,7 +8330,7 @@ export default function SessionScreen() {
         setChipMenuTarget(null);
         router.push({
           pathname: '/files/[sessionId]',
-          params: { sessionId, deviceId, deviceName, relPath: parentRelPath(target.relPath) ?? '' },
+          params: { sessionId: target.scope?.sessionId ?? sessionId, deviceId, deviceName, relPath: parentRelPath(target.relPath) ?? '' },
         });
         return;
       case 'sendToSession': {
@@ -8334,9 +8338,10 @@ export default function SessionScreen() {
         // 持久化),再走统一 draft setter 同步回本屏 state + draftRef——裸 setState
         // 会漏更 draftRef,语音输入 readCurrentDraft 读到旧值时会覆盖掉 @ 引用。
         // workdir 外文件没有 relPath,@ 引用直接给被控端绝对路径(agent 可消费)。
+        // 子任务的相对路径对本会话无意义,改给被控端绝对路径。
         const merged = mergePathIntoComposerDraft(
           sessionId,
-          target.relPath ?? target.absPath,
+          (target.scope ? null : target.relPath) ?? target.absPath,
           target.kind === 'directory' ? 'dir' : 'file',
         );
         const mergedDocument = readComposerDocumentDraftSync(sessionId);

@@ -4,8 +4,10 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { isCompactingWorkingStatus, readWorkingPhase } from '@cindy/maker-shared';
 import { useAuth } from '@/auth/AuthContext';
+import type { RemoteCollectionItem } from '@cindy/device-link';
 import {
   cachedBotIdForSession,
+  cachedBotItem,
   readRemoteResourceSnapshot,
   remoteResourceCacheRevision,
   subscribeRemoteResourceCache,
@@ -18,19 +20,35 @@ import type { RemoteMessage } from './types';
 
 const TEAMMATE_COLLECTION_ID = 'teammates';
 
-/** The route's resource names the Bot; a cached roster link covers ordinary task entries. */
-function useCompanionBotId(deviceId: string, sessionId: string, resourceBotId: string): string {
+/** Loads the account's cached roster when the route does not already name the Bot. */
+function useCompanionRosterCache(needed: boolean): string {
   const { user } = useAuth();
   const userId = user?.id ?? '';
   useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
   const [, setLoaded] = useState(0);
   useEffect(() => {
-    if (resourceBotId || !userId) return;
+    if (!needed || !userId) return;
     let current = true;
     void readRemoteResourceSnapshot(userId).then(() => { if (current) setLoaded(value => value + 1); });
     return () => { current = false; };
-  }, [resourceBotId, userId]);
+  }, [needed, userId]);
+  return userId;
+}
+
+/** The route's resource names the Bot; a cached roster link covers ordinary task entries. */
+function useCompanionBotId(deviceId: string, sessionId: string, resourceBotId: string): string {
+  const userId = useCompanionRosterCache(!resourceBotId);
   return resourceBotId || cachedBotIdForSession(userId, TEAMMATE_COLLECTION_ID, deviceId, sessionId);
+}
+
+/** Name and avatar for a chat opened from a task link or notification: the cached roster row, display only. */
+export function useCompanionDisplayResource(deviceId: string, sessionId: string, resource: RemoteCollectionItem | null,
+  enabled: boolean): RemoteCollectionItem | null {
+  const userId = useCompanionRosterCache(enabled && !resource);
+  if (!enabled) return null;
+  if (resource) return resource;
+  const botId = cachedBotIdForSession(userId, TEAMMATE_COLLECTION_ID, deviceId, sessionId);
+  return botId ? cachedBotItem(userId, TEAMMATE_COLLECTION_ID, deviceId, botId) : null;
 }
 
 /** One live reply position; optional host copy enriches the same factual phase. */

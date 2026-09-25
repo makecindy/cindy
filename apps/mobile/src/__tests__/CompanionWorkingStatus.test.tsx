@@ -13,6 +13,9 @@ vi.mock('../session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: {
 vi.mock('@/device-link/remoteResourceCache', () => ({
   cachedBotIdForSession: (_user: string, collection: string, device: string, session: string) =>
     collection === 'teammates' && device === 'host' && session === 'chat' ? h.cachedBotId : '',
+  cachedBotItem: (_user: string, collection: string, device: string, botId: string) =>
+    collection === 'teammates' && device === 'host' && botId === h.cachedBotId
+      ? { ref: { collectionId: 'teammates', kind: 'bot', id: botId }, display: { title: { fallback: 'Mimi' } }, links: [], revision: 'r' } : null,
   readRemoteResourceSnapshot: async () => undefined,
   remoteResourceCacheRevision: () => 0,
   subscribeRemoteResourceCache: () => () => {},
@@ -24,7 +27,7 @@ vi.mock('../session/remoteSessionStore', () => ({ remoteSessionStore: {
   getSessionLiveActivity: () => h.activity,
   subscribe: (listener: () => void) => { h.listener = listener; return () => {}; },
 } }));
-import { useCompanionWorkingLabel } from '../session/CompanionWorkingStatus';
+import { useCompanionDisplayResource, useCompanionWorkingLabel } from '../session/CompanionWorkingStatus';
 const messages: RemoteMessage[] = [];
 function Probe() {
   return useCompanionWorkingLabel({ sessionId: 'chat', deviceId: 'host', botId: 'bot', active: true, messages, reconnectAttempt: null });
@@ -94,6 +97,27 @@ it('names the teammate from the cached roster link when an ordinary task route h
     expect(h.invoke).toHaveBeenCalledWith('host', expect.any(String), [expect.objectContaining({
       ref: expect.objectContaining({ id: 'working:resource-bot/reading-memory' }),
     })]);
+  } finally { h.cachedBotId = ''; await act(async () => root.unmount()); }
+});
+
+it('names and pictures a chat opened from a task link from its cached roster row, only for teammate chats', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  h.cachedBotId = 'mimi';
+  const seen: unknown[] = [];
+  function DisplayProbe({ resource, enabled }: { resource: any; enabled: boolean }) {
+    seen.push(useCompanionDisplayResource('host', 'chat', resource, enabled));
+    return null;
+  }
+  const node = document.createElement('div'); const root = createRoot(node);
+  try {
+    await act(async () => root.render(createElement(DisplayProbe, { resource: null, enabled: true })));
+    expect(seen.at(-1)).toMatchObject({ ref: { id: 'mimi' }, display: { title: { fallback: 'Mimi' } } });
+    // The route's resource stays authoritative; an ordinary task never borrows a teammate identity.
+    const routed = { ref: { collectionId: 'teammates', kind: 'bot', id: 'resource-bot' }, display: { title: { fallback: 'Sora' } }, links: [], revision: 'r' };
+    await act(async () => root.render(createElement(DisplayProbe, { resource: routed, enabled: true })));
+    expect(seen.at(-1)).toBe(routed);
+    await act(async () => root.render(createElement(DisplayProbe, { resource: null, enabled: false })));
+    expect(seen.at(-1)).toBeNull();
   } finally { h.cachedBotId = ''; await act(async () => root.unmount()); }
 });
 

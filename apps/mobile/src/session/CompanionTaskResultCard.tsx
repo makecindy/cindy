@@ -8,7 +8,7 @@ import { Text } from '@/components/AppText';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { iconSize, radius, spacing, typeScale } from '@/theme/tokens';
-import { ChatFilePathContext, type ChatFilePathContextValue } from '@/session/chatFilePathContext';
+import { ChatFilePathContext, type ChatFilePathContextValue, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import type { RemotePathStatResult } from '@/device-link/mobileMakerTransport';
 import {
@@ -90,9 +90,12 @@ function useResultFileContext(deviceId: string, childSessionId: string | null | 
           ...(target.line !== undefined ? { line: String(target.line) } : {}),
         } });
       },
-      ...(parent?.onLongPressPath ? { onLongPressPath: parent.onLongPressPath } : {}),
+      // The chat's action menu runs against the child task, not the conversation holding the card.
+      ...(parent?.onLongPressPath ? {
+        onLongPressPath: (target: ChatFilePathTarget) => parent.onLongPressPath?.({ ...target, scope: { sessionId: childSessionId, workdir } }),
+      } : {}),
     };
-  }, [childSessionId, deviceId, invoke, openLink, parent?.onLongPressPath, router, workdir]);
+  }, [childSessionId, deviceId, invoke, openLink, parent, router, workdir]);
 }
 
 /** A frozen execution receipt (Desktop BotSessionTaskResultCard); expanding never restarts or fetches the task. */

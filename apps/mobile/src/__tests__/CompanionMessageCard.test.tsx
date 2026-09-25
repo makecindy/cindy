@@ -563,9 +563,13 @@ it('renders the frozen result with the conversation Markdown, resolving links in
   const meta = { ...message.companion!.meta, role: 'delegation-result', childSessionId: 'child',
     result: { runSequence: 1, status: 'completed', workingDir: '/child-task',
       text: '![chart](./chart.png) [Report](https://example.com/report.pdf)', artifacts: [] } } as any;
-  await act(async () => root.render(createElement(CompanionTaskResultCard, {
-    meta, deviceId: 'home', renderMarkdown: (text: string) => createElement(MarkdownProbe, { text }),
-  })));
+  // The chat's long-press menu is reused, but every action must target the child task.
+  const onLongPressPath = vi.fn();
+  const parent = { deviceId: 'home', sessionId: 'chat', workdir: '/chat', statPath: vi.fn(), onOpenPath: vi.fn(), onLongPressPath };
+  await act(async () => root.render(createElement(ChatFilePathContext.Provider, { value: parent },
+    createElement(CompanionTaskResultCard, {
+      meta, deviceId: 'home', renderMarkdown: (text: string) => createElement(MarkdownProbe, { text }),
+    }))));
   // Collapsed: status + view result only; the body is not rendered until opened.
   expect(node.querySelector('[data-testid="result-markdown"]')).toBeNull();
   await act(async () => node.querySelector('button')!.click());
@@ -585,6 +589,10 @@ it('renders the frozen result with the conversation Markdown, resolving links in
   expect(h.push).toHaveBeenCalledWith({ pathname: '/files/[sessionId]', params: {
     sessionId: 'child', deviceId: 'home', relPath: 'out',
   } });
+  ctx.onLongPressPath({ kind: 'file', relPath: 'chart.png', absPath: '/child-task/chart.png' });
+  expect(onLongPressPath).toHaveBeenCalledWith({ kind: 'file', relPath: 'chart.png', absPath: '/child-task/chart.png',
+    scope: { sessionId: 'child', workdir: '/child-task' } });
+  expect(parent.onOpenPath).not.toHaveBeenCalled();
 });
 
 it('does not offer an artifact file until the child file is verified', async () => {
@@ -666,6 +674,14 @@ it('shows the starting state until the first read settles, then the background-t
   // A settled read without this task is unverifiable, not still starting.
   await act(async () => finish({ ok: true, delegations: [] }));
   expect(node.textContent).toContain('devices.companions.status.unknown');
+});
+
+it('does not claim an unread task is starting while its computer is offline', async () => {
+  h.status = 'offline';
+  await render();
+  expect(h.invoke).not.toHaveBeenCalledWith('home', 'maker:bot-delegations:list', expect.anything());
+  expect(node.textContent).toContain('devices.companions.status.unknown');
+  expect(node.textContent).not.toContain('devices.companions.status.queued');
 });
 
 it('shows the peer portrait and current name from the cached roster in the private-message entry', async () => {

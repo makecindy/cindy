@@ -190,8 +190,8 @@ function CompanionTaskCard({
       ? (value.delegations.find((item) => item.id === meta.delegationId) ?? null)
       : null;
   // Desktop parity: until the first read settles the task is still starting;
-  // only a settled read without this row is unverifiable.
-  const resolved = value !== null || error;
+  // a settled read without this row, or a host that cannot be read, is unverifiable.
+  const resolved = value !== null || error || !online;
   const status =
     row && (BOT_DELEGATION_STATUSES as readonly string[]).includes(row.status)
       ? row.status
