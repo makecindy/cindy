@@ -5165,14 +5165,14 @@ function MobileAutoResumeActionRow({
 
 // Orca 协同卡片:Lead 派活(dispatch)/ worker 回报(report)。与 SubagentCard 共用 CollabCardShell
 // chrome(同款 leadingIcon+title+可折叠 body),视觉一致;数据路径仍是 message.orcaCard,不碰 parentUuid。
-// worker 回报默认收起,Lead 派活保持默认展开;正文可选中(长按复制)。识别/文案抽取在 @/session/orcaCollab。
+// Lead 派活和 worker 回报均默认收起;正文可选中(长按复制)。识别/文案抽取在 @/session/orcaCollab。
 function OrcaCollabCard({ card, screenWidth, blockKey }: {
   card: OrcaCollabCardModel; screenWidth?: number; blockKey: string;
 }) {
   const { accountGeneration } = useAuth();
-  // Remember deviations from each variant's default using the
+  // Remember manual expansions using the
   // existing bounded block store, including across native route reconstruction.
-  const [toggled, toggleExpanded] = useFoldableExpandedState(
+  const [expanded, toggleExpanded] = useFoldableExpandedState(
     `orca-toggled-${JSON.stringify([accountGeneration, blockKey, card.variant])}`, false,
   );
   const { colors } = useTheme();
@@ -5193,7 +5193,7 @@ function OrcaCollabCard({ card, screenWidth, blockKey }: {
     <CollabCardShell
       leadingIcon={<Bot color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />}
       title={card.title}
-      controlledExpanded={(card.variant === 'dispatch') !== toggled}
+      controlledExpanded={expanded}
       onControlledToggle={toggleExpanded}
       screenWidth={screenWidth}
       testID={`message.orcaCard.${card.variant}`}
