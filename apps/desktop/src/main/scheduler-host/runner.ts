@@ -357,6 +357,9 @@ class QueuedSlotUnavailableError extends Error {}
 
 class RoutineDispatchDeferredError extends Error {}
 
+/** A fresh ordinary session was stopped before vendor dispatch; never retry it. */
+class ScheduledDispatchAbortedError extends Error {}
+
 /** createTurnCompletionWaiter 的返回:turn 终态等待 + 文本缓冲 + 幂等摘除。 */
 interface TurnCompletionWaiter {
   turnFinished: Promise<void>;
@@ -1809,6 +1812,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
         !outcome.dispatched &&
         outcome.reason === 'cancelled-before-dispatch'
       ) {
+        if (!isHeartbeat && schedule.source !== 'bot') {
+          throw new ScheduledDispatchAbortedError('Scheduled turn aborted before vendor dispatch');
+        }
         throw new RoutineDispatchDeferredError('Heartbeat cancelled before vendor dispatch');
       }
       throwIfFireAborted(ctx.signal, 'agent turn dispatch');
@@ -1829,7 +1835,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
     } catch (err) {
       // A preparation guard proves this turn never reached the vendor. Reuse
       // the exact-message soft rewind; do not roll back ambiguous send errors.
-      if (err instanceof RoutineDispatchDeferredError && acceptedMessageClientId) {
+      if (
+        (err instanceof RoutineDispatchDeferredError ||
+          err instanceof ScheduledDispatchAbortedError) &&
+        acceptedMessageClientId
+      ) {
         try {
           await rewindPersistedUserMessageAfterClear(session.id, acceptedMessageClientId);
         } catch (rollbackError) {
@@ -1843,7 +1853,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         this.deps.onUndispatchedUserTurn?.(session.id);
         baselineStarted = false;
       }
-      if (ctx.signal.aborted) {
+      if (ctx.signal.aborted || err instanceof ScheduledDispatchAbortedError) {
         waiter.stopListening();
         ctx.signal.removeEventListener('abort', onAbort);
         if (turnAccepted && !isHeartbeat && !schedule.persistentSession) {

@@ -320,6 +320,30 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
   );
 
   it.each([
+    { recurring: true, manual: false },
+    { recurring: false, manual: false },
+    { recurring: false, manual: true },
+  ])('settles explicit session Stop without retrying ($recurring/$manual)', async (timing) => {
+    const ctx = createFireContext();
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      // ABORT_SESSION stops Session.send without aborting the scheduler signal.
+      await h.session.abort();
+      return { accepted: false, reason: 'cancelled-before-dispatch' };
+    });
+    const { runner, notifier } = createRunnerHarness(h.session, { silenced: true });
+    await expect(runner.fire(baseSchedule(timing), ctx)).rejects.toThrow(
+      'Scheduled turn aborted before vendor dispatch',
+    );
+    expect(ctx.signal.aborted).toBe(false);
+    expect(mocks.rewind).toHaveBeenCalledExactlyOnceWith(
+      h.session.id,
+      mocks.createMessage.mock.calls[0][1].clientId,
+    );
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it.each([
     [true, false],
     [false, false],
     [false, true],
