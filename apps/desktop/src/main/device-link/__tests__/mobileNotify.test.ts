@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { NOTIFY_TITLE_MAX_LENGTH, NOTIFY_BODY_MAX_LENGTH } from '@cindy/device-link';
+import { NOTIFY_TITLE_MAX_LENGTH, NOTIFY_BODY_MAX_LENGTH, NOTIFY_DEEP_LINK_MAX_LENGTH } from '@cindy/device-link';
 import { MobileNotifyDeduper, buildSessionNotifyPayload } from '../mobileNotify';
 
 describe('buildSessionNotifyPayload', () => {
@@ -65,6 +65,24 @@ describe('buildSessionNotifyPayload', () => {
     expect(buildSessionNotifyPayload({ ...base, title: '   ' }).title).toBe('session-');
     const long = buildSessionNotifyPayload({ ...base, title: 'x'.repeat(500) });
     expect(long.title).toHaveLength(NOTIFY_TITLE_MAX_LENGTH);
+  });
+
+  it('opens a teammate main chat as that teammate, with the same params the roster uses', () => {
+    const payload = buildSessionNotifyPayload({ ...base, teammateBotId: 'bot/1' });
+    expect(payload.deepLink).toBe(
+      '/sessions/session-1234?deviceId=desktop-abcd&resourceCollectionId=teammates&resourceId=bot%2F1&resourceKind=bot',
+    );
+    const query = new URLSearchParams(payload.deepLink.split('?')[1]);
+    expect(Object.fromEntries(query)).toEqual({
+      deviceId: 'desktop-abcd', resourceCollectionId: 'teammates', resourceId: 'bot/1', resourceKind: 'bot',
+    });
+    // Ordinary tasks keep the original link.
+    expect(buildSessionNotifyPayload(base).deepLink).toBe('/sessions/session-1234?deviceId=desktop-abcd');
+  });
+
+  it('keeps the ordinary task link when the teammate link would exceed the protocol limit', () => {
+    const payload = buildSessionNotifyPayload({ ...base, teammateBotId: 'b'.repeat(NOTIFY_DEEP_LINK_MAX_LENGTH) });
+    expect(payload.deepLink).toBe('/sessions/session-1234?deviceId=desktop-abcd');
   });
 
   it('deepLink 对特殊字符做 URL 编码', () => {
