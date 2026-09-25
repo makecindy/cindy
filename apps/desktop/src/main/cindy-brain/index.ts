@@ -6062,8 +6062,8 @@ async function updateLocalGhostPackageLocked(
 }
 
 /**
- * Forge 的显式安装入口。调用方在打包前已经取得 owner lease，并把它持有到本函数
- * 返回；这里复核精确包哈希，再与 Renderer 本地导入共用相同安装/更新事务。
+ * Forge 的显式安装入口。确认在 owner 租约外求得；落位前再取安装锁，并与
+ * Renderer 本地导入共用相同安装/更新事务。调用方必须先复核精确包哈希。
  */
 export async function installOrUpdateLocalGhostPackageFromForge(
   cindyFilePath: string,
@@ -6121,39 +6121,46 @@ export async function installOrUpdateLocalGhostPackageFromForge(
     if (expected.isCurrent?.() === false) {
       throwIpcError('PRECONDITION_FAILED', '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。');
     }
-    const installed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
-    if (!installed) {
+    // 确认已在 owner 租约外完成；落位再取租约，账号 teardown 会等文件系统写完。
+    const mutationOwner = captureGhostMutationOwner();
+    const releaseMutation = beginGhostMutation(mutationOwner);
+    try {
+      const installed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
+      if (!installed) {
+        return {
+          ghost: await installAndDockLocked(manager, cindyFilePath, {
+            ghostId: inspected.manifest.id,
+            enable: true,
+            expectedPackageSha256: expected.packageSha256,
+            consent: { decision: consent, manifest: inspected.manifest },
+            ...(installOrigin ? { installOrigin } : {}),
+          }).then((ghost) => {
+            try {
+              markGhostRecommendationInstalled(ghost.manifest.id);
+            } catch {
+              log.warn('ghost recommendation install history unavailable');
+            }
+            return ghost;
+          }),
+          action: 'installed',
+        };
+      }
       return {
-        ghost: await installAndDockLocked(manager, cindyFilePath, {
-          ghostId: inspected.manifest.id,
-          enable: true,
-          expectedPackageSha256: expected.packageSha256,
-          consent: { decision: consent, manifest: inspected.manifest },
-          ...(installOrigin ? { installOrigin } : {}),
-        }).then((ghost) => {
-          try {
-            markGhostRecommendationInstalled(ghost.manifest.id);
-          } catch {
-            log.warn('ghost recommendation install history unavailable');
-          }
-          return ghost;
-        }),
-        action: 'installed',
+        ghost: await updateLocalGhostPackageLocked(
+          manager,
+          cindyFilePath,
+          inspected,
+          expected.packageSha256,
+          ghostInstallApprovalToken(installed.approval),
+          consent,
+          installOrigin,
+          expected.isCurrent,
+        ),
+        action: 'updated',
       };
+    } finally {
+      releaseMutation();
     }
-    return {
-      ghost: await updateLocalGhostPackageLocked(
-        manager,
-        cindyFilePath,
-        inspected,
-        expected.packageSha256,
-        ghostInstallApprovalToken(installed.approval),
-        consent,
-        installOrigin,
-        expected.isCurrent,
-      ),
-      action: 'updated',
-    };
   });
 }
 

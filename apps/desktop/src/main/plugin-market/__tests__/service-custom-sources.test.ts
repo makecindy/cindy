@@ -2378,6 +2378,56 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(h.ledger.installationForGhost('alpha')?.installed).toBe(false);
   });
 
+  it('retries a same-version custom package after the extra permissions are removed', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/alpha', id: 'alpha', version: '2.0.0' },
+    ]);
+    fs.writeFileSync(
+      path.join(dir, 'plugins', 'alpha', 'ghost.json'),
+      JSON.stringify({ ...ghostManifest('alpha', '2.0.0'), fs: true }),
+    );
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    runtime.ghosts = [installedGhost(root, 'alpha', '1.0.0')];
+    h.ledger.upsertInstallation({
+      pluginId: customMarketPluginId('team-lib', 'alpha'),
+      ghostId: 'alpha',
+      releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      version: '1.0.0',
+      sha256: 'custom-unverified',
+      scope: 'public',
+      organizationId: null,
+      source: 'local-market',
+      installed: true,
+      updatedAt: '2026-09-11T00:00:00.000Z',
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('alpha', '1.0.0')),
+    });
+
+    const paused = await h.service.snapshot();
+    expect(paused.items[0]).toMatchObject({
+      installState: 'update-available',
+      updateRequiresConsent: true,
+    });
+    expect(runtime.install).not.toHaveBeenCalled();
+
+    fs.writeFileSync(
+      path.join(dir, 'plugins', 'alpha', 'ghost.json'),
+      JSON.stringify(ghostManifest('alpha', '2.0.0')),
+    );
+    runtime.install.mockImplementationOnce(async () => {
+      const upgraded = installedGhost(root, 'alpha', '2.0.0');
+      runtime.ghosts = [upgraded];
+      return upgraded;
+    });
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [{ ghostId: 'alpha', installState: 'installed', version: '2.0.0' }],
+    });
+    expect(runtime.install).toHaveBeenCalledOnce();
+  });
+
   it('结构守卫:service.ts 不允许出现按路径的 readFile/readFileSync', async () => {
     // 已安装目录同样可能被外部进程/同步盘改动,且摘要读取在每次市场快照都会
     // 执行;所有此类读取必须走 readBoundedFileNoFollow 系列(单句柄限量闸)。

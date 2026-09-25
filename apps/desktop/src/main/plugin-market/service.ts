@@ -630,11 +630,15 @@ export class PluginMarketService {
     { releaseKey: string; failures: number; retryAfter: number }
   >();
   /**
-   * 后台更新因新版本权限变多而暂停、等待用户在插件页确认的 release（键同上）。
-   * 同一 release 不再反复下载；来源发布新 release 或用户手动更新后自然失效。
+   * 后台更新因新版本权限变多而暂停、等待用户在插件页确认。
+   * 值同时钉住 release 与包内容：服务端 release 不可变，用 releaseId 即可；
+   * 自定义市场同版本包可能被原地改掉，内容指纹变了就必须重新判定，不能继续跳过。
    * 只在当前进程内保存，重启后按真实包重新判定一次。
    */
-  private readonly automaticUpgradeConsentHolds = new Map<string, string>();
+  private readonly automaticUpgradeConsentHolds = new Map<
+    string,
+    { releaseKey: string; contentKey: string }
+  >();
   /**
    * Renderer 把 customIconKey 当不可变缓存 generation。每次重新投影市场都换代，
    * 使低精度文件系统上的同长度、同 stat 原地改写也会在刷新后重新按需读取。
@@ -689,12 +693,44 @@ export class PluginMarketService {
     }
   }
 
-  private isAutomaticUpgradeHeldForConsent(retryKey: string, releaseKey: string): boolean {
+  private isAutomaticUpgradeHeldForConsent(
+    retryKey: string,
+    releaseKey: string,
+    contentKey: string,
+  ): boolean {
     const held = this.automaticUpgradeConsentHolds.get(retryKey);
     if (held === undefined) return false;
-    if (held === releaseKey) return true;
+    if (held.releaseKey === releaseKey && held.contentKey === contentKey) return true;
     this.automaticUpgradeConsentHolds.delete(retryKey);
     return false;
+  }
+
+  private holdAutomaticUpgradeForConsent(
+    retryKey: string,
+    releaseKey: string,
+    contentKey: string,
+  ): void {
+    this.automaticUpgradeConsentHolds.set(retryKey, { releaseKey, contentKey });
+  }
+
+  /**
+   * 后台更新免确认只绑当前用户的默认下发资格，不绑目录上的 defaultInstall 标记。
+   * 用户退订后再自行安装时，账本仍是 market，扩权必须停下来请用户确认。
+   */
+  private serverDefaultInstallUpdateConsent(
+    owner: ActiveAppSession,
+    ledger: PluginMarketLedger,
+    plugin: VisiblePluginSummary | VisiblePluginDetail,
+  ): GhostInstallConsentPolicy {
+    if (plugin.defaultInstall !== true) return { mode: 'automatic' };
+    try {
+      if (ledger.isDefaultInstallSuppressed(defaultInstallSubject(owner), plugin.id)) {
+        return { mode: 'automatic' };
+      }
+    } catch {
+      return { mode: 'automatic' };
+    }
+    return { mode: 'exempt', reason: 'server-default-install' };
   }
 
   /** 给仍待用户确认新权限的更新打标记，插件页据此提示「需确认新权限」。 */
@@ -710,7 +746,8 @@ export class PluginMarketService {
         item.sourceType === 'server' ? 'server' : 'custom',
         item.pluginId,
       );
-      return this.automaticUpgradeConsentHolds.get(retryKey) === item.releaseId
+      const held = this.automaticUpgradeConsentHolds.get(retryKey);
+      return held?.releaseKey === item.releaseId
         ? { ...item, updateRequiresConsent: true }
         : item;
     });
@@ -1190,57 +1227,58 @@ export class PluginMarketService {
     this.requireConfigured();
     const owner = captureMarketOwner();
     const ledger = this.ledgerForOwner(owner);
-    return this.withMutation(pluginId, async () => {
-      requireSameMarketOwner(owner);
-      // 安装必须先经目录可见性闸:本地(免账号)模式只允许 public 插件,未通过
-      // 可见性的条目在调用 detail 之前就要拒掉,不能把组织私有插件的详情拉下来。
-      // 目录 summary 也是 detail 身份绑定的依据:detail 自报的 id/ghostId/scope/
-      // 发布必须与用户确认时看到的那份 summary 一致,否则 A 的确认会被导向 B 的内容。
-      const listed = await this.api.listAll();
-      requireSameMarketOwner(owner);
-      this.rememberCurrentOrganization(listed.currentOrganization);
-      const catalog = visiblePluginsForOwner(owner, listed.plugins);
-      const selected = catalog.find((candidate) => candidate.id === pluginId);
-      if (!selected) {
-        throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
-      }
-      if (!isGhostAvailableForActiveSession(selected.ghostId)) {
-        throwIpcError('PERMISSION_DENIED', 'This Plugin requires a Cindy account');
-      }
-      const plugin = await this.api.detail(pluginId);
-      requireSameMarketOwner(owner);
-      // 详情响应必须与请求的 pluginId 绑定:server 换身份会让用户审阅到别的插件。
-      assertDetailMatchesSummary(selected, plugin);
-      requirePluginVisibleForOwner(owner, plugin);
-      if (plugin.currentRelease.id !== options.expectedReleaseId) {
-        throwIpcError('PRECONDITION_FAILED', 'Plugin release changed after selection');
-      }
-      const existing = getGhostManager()
-        .list()
-        .find((ghost) => ghost.manifest.id === plugin.ghostId);
-      return this.installDetail(
-        plugin,
-        {
-          consent: {
-            mode: 'prompt',
-            prompt: context.consent.prompt,
-            initiator: context.consent.initiator,
-            origin: 'market',
-          },
-          beforeCommitInLock: assertCurrent,
-          expectedInstalled: Boolean(existing),
-          ...(options.expectedInstalledApproval !== undefined
-            ? { expectedInstalledApproval: options.expectedInstalledApproval }
-            : {}),
-          sourceReplacementMode:
-            options.allowSourceReplacement === true
-              ? 'user-requested-source-change'
-              : 'preserve-existing-source',
+    requireSameMarketOwner(owner);
+    // 确认必须在 per-plugin mutation 之外求得：用户可能几分钟不点，不能卡住同插件的
+    // 更新或卸载。落位前再取锁，并用即将落位的真实包复核。
+    // 安装必须先经目录可见性闸:本地(免账号)模式只允许 public 插件,未通过
+    // 可见性的条目在调用 detail 之前就要拒掉,不能把组织私有插件的详情拉下来。
+    // 目录 summary 也是 detail 身份绑定的依据:detail 自报的 id/ghostId/scope/
+    // 发布必须与用户确认时看到的那份 summary 一致,否则 A 的确认会被导向 B 的内容。
+    const listed = await this.api.listAll();
+    requireSameMarketOwner(owner);
+    this.rememberCurrentOrganization(listed.currentOrganization);
+    const catalog = visiblePluginsForOwner(owner, listed.plugins);
+    const selected = catalog.find((candidate) => candidate.id === pluginId);
+    if (!selected) {
+      throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
+    }
+    if (!isGhostAvailableForActiveSession(selected.ghostId)) {
+      throwIpcError('PERMISSION_DENIED', 'This Plugin requires a Cindy account');
+    }
+    const plugin = await this.api.detail(pluginId);
+    requireSameMarketOwner(owner);
+    // 详情响应必须与请求的 pluginId 绑定:server 换身份会让用户审阅到别的插件。
+    assertDetailMatchesSummary(selected, plugin);
+    requirePluginVisibleForOwner(owner, plugin);
+    if (plugin.currentRelease.id !== options.expectedReleaseId) {
+      throwIpcError('PRECONDITION_FAILED', 'Plugin release changed after selection');
+    }
+    const existing = getGhostManager()
+      .list()
+      .find((ghost) => ghost.manifest.id === plugin.ghostId);
+    return this.installDetail(
+      plugin,
+      {
+        consent: {
+          mode: 'prompt',
+          prompt: context.consent.prompt,
+          initiator: context.consent.initiator,
+          origin: 'market',
         },
-        owner,
-        ledger,
-      );
-    });
+        beforeCommitInLock: assertCurrent,
+        expectedInstalled: Boolean(existing),
+        acquireMutation: true,
+        ...(options.expectedInstalledApproval !== undefined
+          ? { expectedInstalledApproval: options.expectedInstalledApproval }
+          : {}),
+        sourceReplacementMode:
+          options.allowSourceReplacement === true
+            ? 'user-requested-source-change'
+            : 'preserve-existing-source',
+      },
+      owner,
+      ledger,
+    );
   }
 
   async uninstall(pluginId: string): Promise<{ ok: true }> {
@@ -1415,9 +1453,9 @@ export class PluginMarketService {
    * release 一致性（重发现后比对 expectedReleaseId）、冲突先装先得、
    * 市场 Manifest 能力上限；打包与装入复用 installOrUpdateMarketGhostPackage。
    *
-   * 全程在 `withDiscoveredSource` 租约内执行:`plugin.dir` 指向 Git 源的缓存版本
+   * 打包在 `withDiscoveredSource` 租约内执行:`plugin.dir` 指向 Git 源的缓存版本
    * 目录,打包要逐文件读它。租约必须一直持到打包结束,否则并发刷新的清理能在
-   * 打包途中删掉该目录(安装随机失败或产物残缺)。
+   * 打包途中删掉该目录。确认等待不占用 per-plugin mutation；落位再取锁。
    */
   private async customInstall(
     ref: { marketName: string; ghostId: string },
@@ -1436,10 +1474,10 @@ export class PluginMarketService {
     }
     const ledger = this.ledgerForOwner(owner);
     const manager = this.sourceManagerForOwner(owner);
-    // 互斥键与 uninstall 一致使用规范化 pluginId，保证同插件的安装/更新/卸载串行。
-    return this.withMutation(customMarketPluginId(ref.marketName, ref.ghostId), async () => {
-      requireSameMarketOwner(owner);
-      return manager.withDiscoveredSource(ref.marketName, async (discovered) => {
+    requireSameMarketOwner(owner);
+    // 打包必须持有来源租约（目录字节），但确认等待不能占用 per-plugin mutation。
+    // 用户未回答时，同插件卸载/更新不能排队到九分钟。落位再取 mutation。
+    return manager.withDiscoveredSource(ref.marketName, async (discovered) => {
         if (!discovered.result.ok) {
           throwIpcError(discovered.result.code, discovered.result.detail ?? discovered.result.code);
         }
@@ -1597,7 +1635,9 @@ export class PluginMarketService {
           //   按 id 互斥,beforeCommit 的 runtime 复核到 installOrUpdate 落位之间,
           //   同 id 的本地装入/卸载插不进来(否则复核仍会在落位前过期)。
           withCommitLock: (fn) =>
-            this.withMutation(SOURCE_MUTATION_KEY, () => withGhostInstallLock(plugin.ghostId, fn)),
+            this.withMutation(customMarketPluginId(ref.marketName, ref.ghostId), () =>
+              this.withMutation(SOURCE_MUTATION_KEY, () => withGhostInstallLock(plugin.ghostId, fn)),
+            ),
           // 溯源写入仍在上面那把 ghost 锁内(afterCommit 由 commit 段调用):
           // 放到锁外时,本地装入能插在"包已落位"与"写下溯源"之间换掉同 id 的包。
           // 锁序:pluginId → SOURCE_MUTATION_KEY → ghostId → ledgerMutation。
@@ -1645,7 +1685,6 @@ export class PluginMarketService {
         });
         return installResult;
       });
-    });
   }
 
   /** 已配置来源名（按添加顺序）；存储读取失败时降级为空数组。 */
@@ -1875,6 +1914,11 @@ export class PluginMarketService {
       beforeCommitInLock?: () => void;
       /** 发起操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
       expectedInstalled: boolean;
+      /**
+       * 手动安装已在锁外求确认。确认后、落位前才取 per-plugin mutation，
+       * 避免用户未回答时卡住同插件卸载/更新。后台路径仍由调用方持锁。
+       */
+      acquireMutation?: boolean;
     },
     owner = captureMarketOwner(),
     ledger = this.ledgerForOwner(owner),
@@ -1971,21 +2015,28 @@ export class PluginMarketService {
               inspected.manifest,
             );
       requireSameMarketOwner(owner);
-      const ghost = await this.commitDownloadedPackage(
-        tempPath,
-        plugin,
-        {
-          consent,
-          expectedInstalled: options.expectedInstalled,
-          ...(options.expectedInstalledApproval !== undefined
-            ? { expectedInstalledApproval: options.expectedInstalledApproval }
-            : {}),
-          sourceReplacementMode,
-          beforeCommitInLock: options.beforeCommitInLock,
-        },
-        owner,
-        ledger,
-      );
+      const commit = () =>
+        this.commitDownloadedPackage(
+          tempPath,
+          plugin,
+          {
+            consent,
+            expectedInstalled: options.expectedInstalled,
+            ...(options.expectedInstalledApproval !== undefined
+              ? { expectedInstalledApproval: options.expectedInstalledApproval }
+              : {}),
+            sourceReplacementMode,
+            beforeCommitInLock: options.beforeCommitInLock,
+          },
+          owner,
+          ledger,
+        );
+      const ghost = options.acquireMutation
+        ? await this.withMutation(plugin.id, async () => {
+            requireSameMarketOwner(owner);
+            return commit();
+          })
+        : await commit();
       return { ghost };
     } finally {
       await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
@@ -2871,7 +2922,7 @@ export class PluginMarketService {
         this.toItem(summary, local).installState !== 'update-available' ||
         isGhostBusy(summary.ghostId) ||
         this.shouldDeferAutomaticUpgrade(retryKey, releaseKey) ||
-        this.isAutomaticUpgradeHeldForConsent(retryKey, releaseKey)
+        this.isAutomaticUpgradeHeldForConsent(retryKey, releaseKey, releaseKey)
       ) {
         continue;
       }
@@ -2913,12 +2964,10 @@ export class PluginMarketService {
           await this.installDetail(
             detail,
             {
-              // 服务端默认安装的插件随下发方静默更新；其余插件只在权限没变多时
-              // 静默更新，扩权时放弃本轮、等用户在插件页确认。
-              consent:
-                detail.defaultInstall === true
-                  ? { mode: 'exempt', reason: 'server-default-install' }
-                  : { mode: 'automatic' },
+              // 只有当前用户仍具备该插件的默认下发资格时才免确认。用户退订后再
+              // 自行从市场安装时，账本仍是 market、目录仍可能标 defaultInstall，
+              // 但 opt-out 还在，扩权必须停下来请用户确认。
+              consent: this.serverDefaultInstallUpdateConsent(owner, ledger, detail),
               expectedInstalled: true,
               expectedInstalledApproval: ghostInstallApprovalToken(freshInstalled.approval),
               beforeCommitInLock: () => {
@@ -2936,7 +2985,7 @@ export class PluginMarketService {
       } catch (error) {
         if (isGhostInstallConsentRequiredError(error)) {
           // 等用户确认不是失败：不退避、不告警，同一 release 不再重复下载。
-          this.automaticUpgradeConsentHolds.set(retryKey, releaseKey);
+          this.holdAutomaticUpgradeForConsent(retryKey, releaseKey, releaseKey);
           log.info('automatic Plugin update awaits user confirmation of new permissions', {
             pluginId: summary.id,
             releaseId: releaseKey,
@@ -2963,13 +3012,14 @@ export class PluginMarketService {
       const projected = this.customToItem(entry, local);
       const retryKey = this.automaticUpgradeRetryKey(owner, 'custom', projected.pluginId);
       const releaseKey = projected.releaseId;
+      const contentKey = ghostManifestDigest(entry.plugin.manifest);
       const installed = local.ghostsById.get(projected.ghostId);
       if (
         projected.installState !== 'update-available' ||
         isGhostBusy(projected.ghostId) ||
         installed?.approval.state !== 'approved' ||
         this.shouldDeferAutomaticUpgrade(retryKey, releaseKey) ||
-        this.isAutomaticUpgradeHeldForConsent(retryKey, releaseKey)
+        this.isAutomaticUpgradeHeldForConsent(retryKey, releaseKey, contentKey)
       ) {
         continue;
       }
@@ -2990,7 +3040,7 @@ export class PluginMarketService {
         this.clearAutomaticUpgradeFailure(retryKey, releaseKey);
       } catch (error) {
         if (isGhostInstallConsentRequiredError(error)) {
-          this.automaticUpgradeConsentHolds.set(retryKey, releaseKey);
+          this.holdAutomaticUpgradeForConsent(retryKey, releaseKey, contentKey);
           log.info('automatic custom Plugin update awaits user confirmation of new permissions', {
             pluginId: projected.pluginId,
             market: entry.config.name,

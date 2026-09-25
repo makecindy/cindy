@@ -35,7 +35,7 @@ describe('Forge OIDC install entry wiring', () => {
     expect(body).toContain('const installOrigin = forgeInstallOriginForMembership(membershipKind);');
     expect(body).toContain('...(installOrigin ? { installOrigin } : {})');
     expect(body).toContain(
-      'ghostInstallApprovalToken(installed.approval),\n        consent,\n        installOrigin,',
+      'ghostInstallApprovalToken(installed.approval),\n          consent,\n          installOrigin,',
     );
     expect(body).not.toContain("installOrigin: 'agent-forge'");
   });

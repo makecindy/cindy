@@ -562,6 +562,23 @@ describe('Forge session workdir gate', () => {
     expect(completeForgePackStagingMock).not.toHaveBeenCalled();
   });
 
+  it('releases the owner lease before waiting for install confirmation', async () => {
+    const waiting = new Promise<never>(() => undefined);
+    packGhostDirMock.mockResolvedValueOnce({
+      ok: true,
+      buf: Buffer.from('packed'),
+      cindyPath: path.join(WORKDIR, 'plugin-src', 'demo-1.0.0.cindy'),
+      manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
+    });
+    forgeInstallPackageMock.mockImplementationOnce(() => waiting);
+
+    void makeDeps().forgeInstall({ dir: path.join(WORKDIR, 'plugin-src') });
+    await vi.waitFor(() => {
+      expect(forgeInstallPackageMock).toHaveBeenCalledOnce();
+    });
+    expect(releaseMutationMock).toHaveBeenCalledOnce();
+  });
+
   it('does not suggest organization publishing to a personal account after default pack', async () => {
     currentPublisherIdentityMock.mockReturnValueOnce(null);
     packGhostDirMock.mockResolvedValueOnce({
@@ -2994,7 +3011,8 @@ describe('market install live authority', () => {
     expect(market.install).not.toHaveBeenCalled();
     expect(await deps.installMarket!({ pluginId: 'p1', releaseId: 'r1' })).toMatchObject({ status: 'installed', ghost_id: 'mail-suite' });
     expect(liveGrantStateMock).toHaveBeenCalledWith('s1', 's1-instance');
-    expect(releaseMutationMock).toHaveBeenCalledOnce();
+    expect(acquireMutationLeaseMock).not.toHaveBeenCalled();
+    expect(releaseMutationMock).not.toHaveBeenCalled();
     expect(authorizationRequestMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
@@ -3007,7 +3025,7 @@ describe('market install live authority', () => {
     expect(acquireMutationLeaseMock).not.toHaveBeenCalled();
   });
 
-  it.each(['cancel', 'permission-change'])('rechecks %s at placement and releases the owner lease', async (change) => {
+  it.each(['cancel', 'permission-change'])('rechecks %s at placement without holding an owner lease', async (change) => {
     let current = true;
     const controller = new AbortController();
     liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', isCurrent: () => current });
@@ -3020,7 +3038,8 @@ describe('market install live authority', () => {
     });
     expect(await deps.installMarket!({ pluginId: 'p1', releaseId: 'r1' }, controller.signal)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
     expect(place).not.toHaveBeenCalled();
-    expect(releaseMutationMock).toHaveBeenCalledOnce();
+    expect(acquireMutationLeaseMock).not.toHaveBeenCalled();
+    expect(releaseMutationMock).not.toHaveBeenCalled();
   });
 
   it('asks the calling task to confirm the install as a host-owned permission card', async () => {

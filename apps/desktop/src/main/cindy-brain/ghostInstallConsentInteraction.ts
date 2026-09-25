@@ -59,7 +59,20 @@ export function ghostInstallConsentSourceText(
 }
 
 function permissionLine(translate: Translate, item: GhostPermissionItem): string {
-  return `• ${interpolate(translate(`settings.ghosts.perm.${item.labelKey}`), item.labelArgs)}`;
+  const lines = [
+    `• ${interpolate(translate(`settings.ghosts.perm.${item.labelKey}`), item.labelArgs)}`,
+  ];
+  if (item.detailKey) {
+    lines.push(
+      `  ${interpolate(translate(`settings.ghosts.perm.${item.detailKey}`), item.detailArgs)}`,
+    );
+  }
+  if (item.detail) {
+    for (const detailLine of item.detail.split('\n')) {
+      lines.push(`  ${detailLine}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 /** 把一次确认渲染成标题、首行说明与权限清单（纯文本）。 */

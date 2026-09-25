@@ -18,6 +18,15 @@ const HOST: GhostPermissionItem = {
   labelArgs: { host: 'api.weather.test' },
 };
 
+const OAUTH: GhostPermissionItem = {
+  key: 'network:secret:github',
+  kind: 'network',
+  labelKey: 'networkSecretOauth',
+  labelArgs: { name: 'GitHub', host: 'github.com' },
+  detailKey: 'networkSecretOauthDetail',
+  detail: 'repo\nread:user',
+};
+
 const STRINGS: Record<string, string> = {
   'settings.ghosts.installConsent.installTitle': 'Install {{name}}?',
   'settings.ghosts.installConsent.updateTitle': 'Update {{name}}?',
@@ -32,6 +41,8 @@ const STRINGS: Record<string, string> = {
   'settings.ghosts.installConsent.originForge': 'Local plugin',
   'settings.ghosts.installConsent.initiatedByAgent': 'Agent · {{origin}}',
   'settings.ghosts.perm.networkHost': 'Reach {{host}}',
+  'settings.ghosts.perm.networkSecretOauth': 'Connect {{name}} ({{host}})',
+  'settings.ghosts.perm.networkSecretOauthDetail': 'Requested scopes:',
 };
 const translate = (key: string) => STRINGS[key] ?? key;
 
@@ -69,6 +80,36 @@ describe('plugin install confirmation card', () => {
       'Added:',
       '• Reach api.weather.test',
       'Unchanged: 2',
+    ]);
+  });
+
+  it('includes host detail keys and author detail such as OAuth scopes', () => {
+    const text = renderGhostInstallConsentText(
+      {
+        initiator: 'agent',
+        origin: 'market',
+        facts: {
+          kind: 'update',
+          ghostId: 'weather-chip',
+          name: 'Weather',
+          version: '2.0.0',
+          previousVersion: '1.0.0',
+          added: [OAUTH],
+          removed: [],
+          unchangedCount: 0,
+          builtinOauthClientChanged: false,
+        },
+      },
+      translate,
+    );
+    expect(text.description.split('\n')).toEqual([
+      'v1.0.0 → v2.0.0 · Agent · From market',
+      'Needs more permissions.',
+      'Added:',
+      '• Connect GitHub (github.com)',
+      '  Requested scopes:',
+      '  repo',
+      '  read:user',
     ]);
   });
 

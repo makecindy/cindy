@@ -16,7 +16,8 @@ export interface PluginMarketAgentDeps {
   /** Owner generation and caller identity are captured before discovery's first await. */
   captureRead(): () => void;
   /**
-   * Holds the existing owner lease and live task authority through package placement.
+   * Captures live task authority before install. Confirmation must not hold an
+   * owner lease; package placement rechecks `assertCurrent` and takes its own lease.
    * `consentPrompt` shows the Host-owned install confirmation in the calling task.
    */
   captureInstall(signal?: AbortSignal): {

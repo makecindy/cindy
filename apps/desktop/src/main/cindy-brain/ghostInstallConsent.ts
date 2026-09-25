@@ -49,8 +49,9 @@ export type GhostInstallConsentDecision =
 const pendingPromptAborts = new Set<AbortController>();
 
 /**
- * 登记一次等待中的确认，账号边界时由 `abortAllGhostInstallConsentPrompts` 一并取消，
- * 让持有 owner 租约的安装调用尽快收口。返回的函数在确认结束后注销。
+ * 登记一次等待中的确认，账号边界时由 `abortAllGhostInstallConsentPrompts` 一并取消。
+ * 确认不得占用 owner 租约；取消是为了让等待中的安装调用尽快按用户取消收口。
+ * 返回的函数在确认结束后注销。
  */
 export function trackGhostInstallConsentPrompt(controller: AbortController): () => void {
   pendingPromptAborts.add(controller);

@@ -72,12 +72,12 @@ function ConsentPermissionRow({
           {t(`settings.ghosts.perm.${item.labelKey}`, item.labelArgs)}
         </p>
         {hostDetail ? (
-          <p className="mt-0.5 whitespace-pre-line break-words text-12 leading-[18px] text-[var(--text-tertiary)]">
+          <p className="mt-0.5 whitespace-pre-line break-words text-12 leading-[1.5] text-[var(--text-tertiary)]">
             {hostDetail}
           </p>
         ) : null}
         {item.detail ? (
-          <p className="mt-0.5 whitespace-pre-line break-words text-12 leading-[18px] text-[var(--text-tertiary)]">
+          <p className="mt-0.5 whitespace-pre-line break-words text-12 leading-[1.5] text-[var(--text-tertiary)]">
             {item.detail}
           </p>
         ) : null}
@@ -95,7 +95,7 @@ function ConsentPermissionRow({
 function ConsentSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="mt-3 first:mt-0">
-      <h3 className="text-12 font-medium leading-[18px] text-[var(--text-secondary)]">{title}</h3>
+      <h3 className="text-12 font-medium leading-[1.5] text-[var(--text-secondary)]">{title}</h3>
       <ul className="mt-1">{children}</ul>
     </section>
   );
@@ -151,7 +151,7 @@ export function GhostInstallConsentContent({ facts }: { facts: GhostInstallConse
           </ConsentSection>
         ) : null}
         {facts.unchangedCount > 0 ? (
-          <p className="mt-3 text-12 leading-[18px] text-[var(--text-tertiary)]">
+          <p className="mt-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">
             {t('settings.ghosts.installConsent.unchangedCount', { count: facts.unchangedCount })}
           </p>
         ) : null}

@@ -4987,6 +4987,57 @@ describe('PluginMarketService install consent', () => {
     );
   });
 
+  it('does not silently grow permissions after the user opted out of default install', async () => {
+    const { item, h } = upgradeFixture({ defaultInstall: true, nextCapabilities: ['notify', 'fs'] });
+    h.ledger.markRemoved(item.ghostId, 'user-1');
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      installed: true,
+      manifestDigest: ghostManifestDigest(manifest(item.ghostId, '1.0.0')),
+    });
+
+    const first = await h.service.snapshot();
+
+    expect(first.items[0]).toMatchObject({
+      installState: 'update-available',
+      updateRequiresConsent: true,
+    });
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('does not hold the plugin mutation while waiting for install confirmation', async () => {
+    const item = summary();
+    const h = harness([item]);
+    const waiting = deferred();
+    let promptStarted = false;
+    const prompt = vi.fn(async () => {
+      promptStarted = true;
+      await waiting.promise;
+      return true;
+    });
+    runtime.install.mockImplementation(async () => {
+      const ghost = {
+        manifest: manifest(item.ghostId),
+        dir: '/userData/cindy-brain/cindy-test',
+        enabled: true,
+      };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+
+    const installPromise = h.service.install(item.id, reviewedInstallOptions(item), {
+      consent: { prompt, initiator: 'user' },
+    });
+    await vi.waitFor(() => expect(promptStarted).toBe(true));
+    await expect(h.service.uninstall(item.id)).rejects.toThrow('[NOT_FOUND]');
+    waiting.resolve();
+    await expect(installPromise).resolves.toMatchObject({
+      ghost: { manifest: { id: item.ghostId } },
+    });
+  });
+
   it('asks before a manual update that adds permissions and cancels when declined', async () => {
     const { item, h } = upgradeFixture({ nextCapabilities: ['notify', 'fs'] });
     await h.service.snapshot();

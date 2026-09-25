@@ -567,8 +567,8 @@ async function buildGhostSessionContext(
 /* ────────────────────────────────────────────────────────────────────────
  * Forge C-4 门:Forge 做的是**本机文件写**,裸 MCP workingDir 只是标签,不能
  * 直接交给 fs。权威 session 行决定它是否本机、是否当前可写(远程/只读/plan 一律
- * fail closed)。owner lease 在首个 await 前捕获、持到 scaffold/pack + 装入确认
- * 转交结束,账号 teardown 会等它释放。
+ * fail closed)。owner lease 在 scaffold/pack 的首个 await 前捕获并持到打包结束；
+ * 装入确认在租约外求得，落位再取租约，账号 teardown 不会被确认卡拖住。
  * ──────────────────────────────────────────────────────────────────────── */
 
 type ForgeSessionFsGate =
@@ -1703,9 +1703,10 @@ export function getCindyGhostsMcpDeps(
         }
       };
       assertCurrent();
-      const owner = captureGhostMutationOwnerForMcp();
-      const release = acquireGhostMutationLeaseForMcp(owner);
-      return { assertCurrent, release, consentPrompt: installConsentPrompt() };
+      // 确认卡可能等几分钟，不能占用 owner mutation lease；切号只要等十秒。
+      // 捕获当前 owner 只为边界期 fail closed。落位由市场装入出口自行取租约。
+      captureGhostMutationOwnerForMcp();
+      return { assertCurrent, release: () => undefined, consentPrompt: installConsentPrompt() };
     },
   });
   return {
@@ -2451,8 +2452,8 @@ export function getCindyGhostsMcpDeps(
       });
     },
     async forgeInstall({ dir, iconSource }): Promise<CindyForgeInstallResult> {
-      return withForgeOwnerLease(async () => {
-        const sessionContext = resolveSessionContext();
+      const sessionContext = resolveSessionContext();
+      const packedAttempt = await withForgeOwnerLease(async () => {
         const gate = await getForgeSessionFsGate(sessionContext);
         if (!gate.ok) return gate;
         const access = await authorizeForgeOutsideWorkdir({
@@ -2470,52 +2471,58 @@ export function getCindyGhostsMcpDeps(
         if (!attempt.ok) return attempt.result;
         const stillGranted = assertForgeGrantCurrent(currentAccess);
         if (!stillGranted.ok) return stillGranted;
-        const { packed, iconNote } = attempt;
-        try {
-          const installed = await installOrUpdateLocalGhostPackageFromForge(
-            packed.cindyPath,
-            {
-              ghostId: packed.manifest.id,
-              packageSha256: createHash('sha256').update(packed.buf).digest('hex'),
-              consentPrompt: installConsentPrompt(),
-              ...(stillGranted.allowOutsideWorkdir && stillGranted.isCurrent
-                ? { isCurrent: stillGranted.isCurrent }
-                : {}),
-            },
-          );
-          log.info('ghost forge install completed', {
-            dir,
-            id: installed.ghost.manifest.id,
-            version: installed.ghost.manifest.version,
-            action: installed.action,
-          });
-          return {
-            ok: true,
-            action: installed.action,
-            id: installed.ghost.manifest.id,
-            name: installed.ghost.manifest.name,
-            version: installed.ghost.manifest.version,
-            enabled: installed.ghost.enabled,
-            note:
-              installed.action === 'installed'
-                ? `${iconNote}插件已完成校验、打包和安装，并已启用。`
-                : `${iconNote}插件已完成校验、打包和原位更新；原有启用状态、配置与数据保持不变。`,
-          };
-        } catch (err) {
-          if (isIpcError(err) && err.code === 'MUTATION_CANCELLED') {
-            return {
-              ok: false,
-              errorCode: 'MUTATION_CANCELLED',
-              message: '用户拒绝了这次插件安装或更新。除非用户再次要求，不要重试。',
-            };
-          }
+        return {
+          ok: true as const,
+          packed: attempt.packed,
+          iconNote: attempt.iconNote,
+          ...(stillGranted.allowOutsideWorkdir && stillGranted.isCurrent
+            ? { isCurrent: stillGranted.isCurrent }
+            : {}),
+        };
+      });
+      if (!packedAttempt.ok) return packedAttempt;
+      try {
+        const installed = await installOrUpdateLocalGhostPackageFromForge(
+          packedAttempt.packed.cindyPath,
+          {
+            ghostId: packedAttempt.packed.manifest.id,
+            packageSha256: createHash('sha256').update(packedAttempt.packed.buf).digest('hex'),
+            consentPrompt: installConsentPrompt(),
+            ...(packedAttempt.isCurrent ? { isCurrent: packedAttempt.isCurrent } : {}),
+          },
+        );
+        log.info('ghost forge install completed', {
+          dir,
+          id: installed.ghost.manifest.id,
+          version: installed.ghost.manifest.version,
+          action: installed.action,
+        });
+        return {
+          ok: true,
+          action: installed.action,
+          id: installed.ghost.manifest.id,
+          name: installed.ghost.manifest.name,
+          version: installed.ghost.manifest.version,
+          enabled: installed.ghost.enabled,
+          note:
+            installed.action === 'installed'
+              ? `${packedAttempt.iconNote}插件已完成校验、打包和安装，并已启用。`
+              : `${packedAttempt.iconNote}插件已完成校验、打包和原位更新；原有启用状态、配置与数据保持不变。`,
+        };
+      } catch (err) {
+        if (isIpcError(err) && err.code === 'MUTATION_CANCELLED') {
           return {
             ok: false,
-            errorCode: isIpcError(err) ? err.code : 'INTERNAL',
-            message: err instanceof Error ? err.message : String(err),
+            errorCode: 'MUTATION_CANCELLED',
+            message: '用户拒绝了这次插件安装或更新。除非用户再次要求，不要重试。',
           };
         }
-      });
+        return {
+          ok: false,
+          errorCode: isIpcError(err) ? err.code : 'INTERNAL',
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
     },
     async forgePublish({ token }): Promise<CindyForgePublishResult> {
       const boundaryPending = isAppSessionBoundaryPending();
