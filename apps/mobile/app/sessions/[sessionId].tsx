@@ -9187,7 +9187,7 @@ export default function SessionScreen() {
                     contentBottomInset={companionInlineInteraction && !shareSelectionActive
                       ? spacing.md
                       : nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
-                      ? MOBILE_MESSAGE_LIST_BOTTOM_PADDING
+                      ? (bottomOverlayHeight > 0 ? bottomOverlayHeight : MOBILE_MESSAGE_LIST_BOTTOM_PADDING)
                       : undefined}
                     topOverlayHeight={topOverlayHeight}
                     busyAction={messageActionBusy?.kind ?? null}

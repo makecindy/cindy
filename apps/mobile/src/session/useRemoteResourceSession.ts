@@ -100,6 +100,7 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
       if (source !== deviceId || payload.collectionId !== collectionId || timer) return;
       if (payload.resourceRefs?.length && !payload.resourceRefs.some((ref) => ref.id === resourceId && ref.kind === resourceKind)) return;
       generation += 1;
+      setVerified(null);
       timer = setTimeout(() => { timer = undefined; void load(); }, 300);
     });
     const offTopic = startFocusedTopicSubscription({ deviceId, owner: `resource-session:${sessionId}`, topic: 'sessions', subscribe, unsubscribe });

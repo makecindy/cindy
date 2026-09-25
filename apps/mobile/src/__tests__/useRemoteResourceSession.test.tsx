@@ -250,3 +250,27 @@ it.each([false, true])('wires entry readiness=%s to production composer, realtim
   expect(gates.remoteRealtimeControlsUnavailable).toBe(!ready);
   expect(gates.outboxConnectionState.autoRecoveringError).toBe(!ready);
 });
+
+it('closes controls immediately on a resource push, keeps the title, and coalesces revalidation', async () => {
+  vi.useFakeTimers();
+  try {
+    h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { title: 'Teammate' } });
+    await render();
+    expect(result.ready).toBe(true);
+    const changed = (h.link.onRemoteResourceChanged.mock.calls as unknown as Array<[(device: string, payload: object) => void]>)[0][0];
+    let finish!: (resource: unknown) => void;
+    h.get.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    act(() => {
+      changed('mac', { collectionId: 'teammates' });
+      changed('mac', { collectionId: 'teammates' });
+    });
+    expect(result.ready).toBe(false);
+    expect(container.textContent).toBe('Teammate');
+    expect(h.get).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTime(300));
+    expect(h.get).toHaveBeenCalledTimes(2);
+    expect(result.ready).toBe(false);
+    await act(async () => finish({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { title: 'Teammate' } }));
+    expect(result.ready).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
