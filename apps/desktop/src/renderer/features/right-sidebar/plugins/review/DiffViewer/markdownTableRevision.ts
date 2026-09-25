@@ -28,7 +28,11 @@ import {
 } from '@/components/chat/remarkReviewAnnotations';
 
 import { markInlineWhole, mathMarksAreIntact, reviseInlineMixed } from './markdownMathRevision';
-import { parseRevisionTree, REVISION_MAX_SOURCE_CHARS } from './markdownRevision';
+import {
+  buildMarkdownRevision,
+  parseRevisionTree,
+  REVISION_MAX_SOURCE_CHARS,
+} from './markdownRevision';
 
 /** 整行标记 / 单元格标记的语义。 */
 type MarkKind = 'insert' | 'delete';
@@ -149,12 +153,50 @@ function markRevision(text: string, kind: MarkKind): string {
 }
 
 /**
+ * 单元格级注入的局部校验：折叠后不允许残留未消费的标记。
+ *
+ * 为什么要在格级先筛：整表的 validateTableRevision 会把任何一格的问题升级成
+ * 「整张表回退块级装饰」。改动只拿到行内定界符的一半时（`**` / `~~` 的开符与闭符
+ * 被 diff 切成两个片段），逐片段注入的标记会被 CommonMark 拆进不同容器 ——
+ * 一格踩中，整张表就失去逐行 / 逐格修订（实机案例：`（建筑/车辆/人物，**无 HP**）`
+ * →`（**车辆/人员**，**无 HP**）` 的任务表、`~~Q1~~` → `Q1` 的待确认表）。
+ */
+function cellRevisionIsConsumable(injected: string): boolean {
+  const tree = parseRevisionTree(injected);
+  if (!tree) return false;
+  remarkReviewAnnotations()(tree);
+  return !hasUnconsumedReviewMarks(tree);
+}
+
+/**
+ * 整格替换（保底）：旧格整段删除线 + 新格整段下划线。标记内容吃不下花括号等
+ * 字符时返回 null，调用方保留新版本原文（与旧行为一致）。
+ */
+function wholeCellRevision(before: string, after: string): string | null {
+  const removed = before.trim().length > 0 ? `{--${before}--}` : '';
+  const added = after.trim().length > 0 ? `{++${after}++}` : '';
+  if (removed === '' && added === '') return null;
+  const injected = `${removed}${added}`;
+  return cellRevisionIsConsumable(injected) ? injected : null;
+}
+
+/**
  * 单元格内的词级修订。返回 null 表示这一格放弃词级（调用方改用新版本原文）。
  * 公式段的差异由 markdownMathRevision 在公式内部表达。
+ *
+ * 三级尝试（2026-09-22 补，与 markdownRevision 的两次注入同源）：
+ *  1. reviseInlineMixed：公式 / 行内代码按原子跨度标记，文本段词级 diff；
+ *  2. buildMarkdownRevision：文本段的词级失败（跨行内定界符）时改走通用
+ *     两段式，含区域注入，把跨界改动折成一对旧 / 新文本；
+ *  3. 整格替换：兜底，保证这一格结构安全，不再拖着整张表回退。
  */
 function reviseCell(before: string, after: string): string | null {
   if (before === after) return after;
-  return reviseInlineMixed(before, after);
+  const mixed = reviseInlineMixed(before, after);
+  if (mixed !== null && cellRevisionIsConsumable(mixed)) return mixed;
+  const fallback = buildMarkdownRevision(before, after);
+  if (fallback !== null) return fallback;
+  return wholeCellRevision(before, after);
 }
 
 /** 配对的两行逐格词级；列数以新版本为准（列数变化已在解析阶段挡掉）。 */

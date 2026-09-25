@@ -68,6 +68,51 @@ describe('buildMarkdownTableRevision — 单元格级', () => {
     expect(html).toContain('underline');
   });
 
+  it('revises a cell whose change adds bold around changed words (regression)', () => {
+    // 实机案例（FR 任务表）：`（建筑/车辆/人物，**无 HP**）` → `（**车辆/人员**，**无 HP**）`。
+    // 改动只拿到 `**` 的一半，逐片段注入会被 CommonMark 拆坏；单元格级先过局部校验，
+    // 失败后走通用两段式（区域注入），不再把整张表拖回块级装饰。
+    const before = ['| 编号 | 需求 |', '| --- | --- |', '| FR-002 | （建筑/车辆/人物，**无 HP**）保留 |'].join(
+      '\n',
+    );
+    const after = ['| 编号 | 需求 |', '| --- | --- |', '| FR-002 | （**车辆/人员**，**无 HP**）保留 |'].join(
+      '\n',
+    );
+    const injected = buildMarkdownTableRevision(before, after);
+    expect(injected).not.toBeNull();
+    expect(injected).toContain('{--建筑/车辆/人物--}{++**车辆/人员**++}');
+    // 未改动的行保持原样，且渲染后无字面标记残留。
+    const html = render(injected as string);
+    expect(html).toContain('cindy-md-diff-del');
+    expect(html).toContain('cindy-md-diff-ins');
+    expect(html).not.toMatch(/\{\+\+|\+\+\}|\{--|--\}/);
+  });
+
+  it('revises a cell that drops GFM strikethrough from every row (regression)', () => {
+    // 实机案例（待确认表）：整表把 `~~Q1~~` 的删除线去掉。`~~` 半对定界符跨标记配对同样
+    // 会留下残留；区域注入把整段折成一对旧 / 新文本。
+    const before = ['| 编号 | 问题 |', '| --- | --- |', '| ~~Q1~~ | ~~v1 联机范围~~ |'].join('\n');
+    const after = ['| 编号 | 问题 |', '| --- | --- |', '| Q1 | v1 联机范围 |'].join('\n');
+    const injected = buildMarkdownTableRevision(before, after);
+    expect(injected).not.toBeNull();
+    expect(injected).toContain('{--~~Q1~~--}{++Q1++}');
+    expect(injected).toContain('{--~~v1 联机范围~~--}{++v1 联机范围++}');
+    const html = render(injected as string);
+    expect(html).not.toMatch(/\{\+\+|\+\+\}|\{--|--\}/);
+  });
+
+  it('falls back to a whole-cell replace when the cell cannot be word-revised', () => {
+    // 两段式也失败时整格替换：旧格删除线 + 新格下划线（不再把新版原文当未改动）。
+    const before = ['| 名称 | 说明 |', '| --- | --- |', '| a | 旧文案 |'].join('\n');
+    const after = ['| 名称 | 说明 |', '| --- | --- |', '| a | {新文案} |'].join('\n');
+    const injected = buildMarkdownTableRevision(before, after);
+    expect(injected).not.toBeNull();
+    const dataRow = injected?.split('\n')[2] ?? '';
+    // 花括号吃不下标记：这一格保持新版本原文（旧行为），但表格本身仍走逐格修订。
+    expect(dataRow).toContain('{新文案}');
+    expect(dataRow).not.toContain('{--旧文案--}');
+  });
+
   it('keeps an unchanged formula cell as-is while marking its siblings', () => {
     const before = ['| 名称 | 公式 |', '| --- | --- |', '| a | $\\frac{1}{2}$ |'].join('\n');
     const after = ['| 名称 | 公式 |', '| --- | --- |', '| b | $\\frac{1}{2}$ |'].join('\n');
