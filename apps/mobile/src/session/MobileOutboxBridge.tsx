@@ -7,7 +7,7 @@ import {
   subscribeMobileAuthOwner,
 } from "@/auth/authOwnerGeneration";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
-import { parseSharedTaskPeer } from '@cindy/device-link';
+import { parseSharedTaskPeer } from "@cindy/device-link";
 import {
   createMobileMakerTransport,
   type RemoteInvoke,
@@ -45,7 +45,10 @@ import {
   prepareMobileQueuedSessionReferences,
 } from "./sessionReferences";
 import { remoteSessionStore } from "./remoteSessionStore";
-import { isDurableOutboxSettled, type DurableOutboxRecord } from "./durableOutbox";
+import {
+  isDurableOutboxSettled,
+  type DurableOutboxRecord,
+} from "./durableOutbox";
 import type { InputProjection } from "./types";
 
 /** Runs only while the OS gives the app execution time; foreground/reconnect resume the same ledger. */
@@ -54,8 +57,15 @@ export function MobileOutboxBridge() {
   const link = useDeviceLink();
   const latest = useRef({ auth, link });
   latest.current = { auth, link };
-  const owner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);
-  const accountId = auth.isAuthenticated && auth.user?.id?.trim() === owner.accountId ? owner.accountKey : "";
+  const owner = useSyncExternalStore(
+    subscribeMobileAuthOwner,
+    getMobileAuthOwner,
+    getMobileAuthOwner,
+  );
+  const accountId =
+    auth.isAuthenticated && auth.user?.id?.trim() === owner.accountId
+      ? owner.accountKey
+      : "";
   const runnerRef = useRef<ReturnType<
     typeof createDurableOutboxDelivery
   > | null>(null);
@@ -244,7 +254,11 @@ export function MobileOutboxBridge() {
         const attachment = await uploadMobileAttachmentFromFile(
           upload,
           durableOutboxUploadUri(r, upload),
-          { token, sharedTaskId: parseSharedTaskPeer(r.deviceId)?.sharedTaskId },
+          {
+            token,
+            deviceId: r.deviceId,
+            sharedTaskId: parseSharedTaskPeer(r.deviceId)?.sharedTaskId,
+          },
         );
         if (!isCurrent() || !mobileDurableOutbox.getSnapshot().includes(r)) {
           // Use the captured credential for this old owner's object, never a new account's token.
@@ -297,8 +311,20 @@ export function MobileOutboxBridge() {
           });
         return found;
       },
-      cleanup: (record, cancelled) => cleanupOutboxResources(record, owner, () => latest.current.auth.getAccessToken(), cancelled),
-      discardUploads: (record, attachments) => discardOutboxUploads(record, owner, () => latest.current.auth.getAccessToken(), attachments),
+      cleanup: (record, cancelled) =>
+        cleanupOutboxResources(
+          record,
+          owner,
+          () => latest.current.auth.getAccessToken(),
+          cancelled,
+        ),
+      discardUploads: (record, attachments) =>
+        discardOutboxUploads(
+          record,
+          owner,
+          () => latest.current.auth.getAccessToken(),
+          attachments,
+        ),
       mediaFailed: (error) =>
         formatRemoteError(error).includes("DEVICE_LINK_MEDIA_TRANSFER_FAILED"),
       retryable: (error) =>
@@ -313,7 +339,10 @@ export function MobileOutboxBridge() {
     const run = () => {
       refreshLeases();
       // Scavenging failure blocks new copies, not already-owned messages' delivery.
-      void initializeOutboxFiles().catch(() => undefined).then(() => delivery.run()).catch(() => undefined);
+      void initializeOutboxFiles()
+        .catch(() => undefined)
+        .then(() => delivery.run())
+        .catch(() => undefined);
     };
     void mobileDurableOutbox
       .activate(accountId)

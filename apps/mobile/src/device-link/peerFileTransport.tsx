@@ -505,8 +505,11 @@ export function PeerFileTransport() {
               );
               const ms = Date.now() - transferStartedAt;
               mobileDebugLog("debug", "files", "peer attachment uploaded", {
-                bytes: metadata.size, transferMs: ms,
-                bytesPerSecond: Math.round(metadata.size * 1000 / Math.max(1, ms)),
+                bytes: metadata.size,
+                transferMs: ms,
+                bytesPerSecond: Math.round(
+                  (metadata.size * 1000) / Math.max(1, ms),
+                ),
               });
               return result;
             } catch {
@@ -561,7 +564,8 @@ export function PeerFileTransport() {
         } catch {
           if (!current()) throw new Error("FILE_PEER_CANCELLED");
           cooldown.current.fail(device);
-          close();
+          // A read can finish after a transfer started, or after another peer replaced it.
+          if (!busy && connection?.id === id) close();
           return null;
         } finally {
           if (current() && !busy) idle = setTimeout(close, 30_000);

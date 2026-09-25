@@ -17,6 +17,8 @@ import { getDeviceLinkInvokeContext } from './invoke-context';
 const lifetime = 7 * 24 * 60 * 60_000;
 const queue = createFileReadQueue();
 type Entry = PeerAttachment & { peer: string; createdAt: number; complete: boolean };
+const expired = (entry: Entry, cancelling = false) =>
+  Date.now() - entry.createdAt > (entry.complete || cancelling ? lifetime : 60 * 60_000);
 const validTicket = (value: unknown): value is string =>
   typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value);
 async function digest(file: string) {
@@ -36,7 +38,7 @@ export async function handlePeerAttachment(peer: string, r: Record<string, unkno
   const check = () => {
     if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
   };
-  // Only admission shares a queue. A slow disk/hash on one ticket must not stall other peers.
+  // Admission is serialized; ticket operations share only their own ticket's queue.
   return queue(`${root}:${r.op === 'begin' ? 'admission' : r.ticket}`, async () => {
     check();
     await fs.mkdir(root, { recursive: true, mode: 0o700 });
@@ -50,14 +52,24 @@ export async function handlePeerAttachment(peer: string, r: Record<string, unkno
         count = 0;
       for (const name of await fs.readdir(root)) {
         if (!name.endsWith('.json') || !validTicket(name.slice(0, -5))) continue;
-        const entry = JSON.parse(await fs.readFile(path.join(root, name), 'utf8')) as Entry;
-        if (Date.now() - entry.createdAt > (entry.complete ? lifetime : 60 * 60_000)) {
-          await fs.rm(path.join(root, name.slice(0, -5)), { force: true });
-          await fs.rm(path.join(root, name), { force: true });
-        } else {
-          reserved += entry.size;
-          count++;
-        }
+        // Reuse the ticket's operation queue; re-read after any in-flight write/finish.
+        await queue(`${root}:${name.slice(0, -5)}`, async () => {
+          check();
+          let entry: Entry;
+          try {
+            entry = JSON.parse(await fs.readFile(path.join(root, name), 'utf8')) as Entry;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+            throw error;
+          }
+          if (expired(entry)) {
+            await fs.rm(path.join(root, name.slice(0, -5)), { force: true });
+            await fs.rm(path.join(root, name), { force: true });
+          } else {
+            reserved += entry.size;
+            count++;
+          }
+        });
       }
       const space = await fs.statfs(root);
       if (
@@ -80,7 +92,7 @@ export async function handlePeerAttachment(peer: string, r: Record<string, unkno
     const file = path.join(root, r.ticket),
       manifest = file + '.json';
     const entry = JSON.parse(await fs.readFile(manifest, 'utf8')) as Entry;
-    if (entry.peer !== peer || Date.now() - entry.createdAt > lifetime)
+    if (entry.peer !== peer || expired(entry, r.op === 'cancel'))
       throw new Error('FILE_PEER_DENIED');
     check();
     if (r.op === 'cancel') {
@@ -150,12 +162,13 @@ async function copyPeerAttachmentBytes(ref: PeerAttachment, destination: string)
     entry.peer !== peer ||
     entry.sha256 !== ref.sha256 ||
     entry.size !== ref.size ||
-    Date.now() - entry.createdAt > lifetime
+    expired(entry)
   )
     throw new Error('FILE_PEER_DENIED');
   if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
   await fs.copyFile(file, destination);
-  const valid = (await fs.stat(destination)).size === ref.size && (await digest(destination)) === ref.sha256;
+  const valid =
+    (await fs.stat(destination)).size === ref.size && (await digest(destination)) === ref.sha256;
   if (!isDataOwnerBroadcastScopeCurrent(owner) || !valid) {
     await fs.rm(destination, { force: true });
     throw new Error('FILE_PEER_INTEGRITY');
@@ -168,7 +181,8 @@ export async function copyPeerAttachment(ref: PeerAttachment, destination: strin
   } catch (error) {
     await fs.rm(destination, { force: true }).catch(() => {});
     // Filesystem errors include owner-private paths; never propagate them to remote UI.
-    if (error instanceof Error && /^FILE_PEER_(DENIED|INTEGRITY|CANCELLED)$/.test(error.message)) throw error;
+    if (error instanceof Error && /^FILE_PEER_(DENIED|INTEGRITY|CANCELLED)$/.test(error.message))
+      throw error;
     throw new Error('FILE_PEER_ATTACHMENT_UNAVAILABLE');
   }
 }

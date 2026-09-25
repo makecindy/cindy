@@ -12,10 +12,15 @@ const mock = vi.hoisted(() => ({
   replyDelay: 0,
   commandReply: vi.fn((_action: string) => 'v=0'),
   now: undefined as number | undefined,
+  receiving: undefined as undefined | { sink: string; reply: () => void },
 }));
 vi.mock('@cindy/device-link', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cindy/device-link')>();
-  return { ...actual, createPeerTransferCooldown: () => actual.createPeerTransferCooldown(() => mock.now ?? Date.now()) };
+  return {
+    ...actual,
+    createPeerTransferCooldown: () =>
+      actual.createPeerTransferCooldown(() => mock.now ?? Date.now()),
+  };
 });
 vi.mock('electron', () => ({
   ipcMain: { handle: (key: string, fn: (...args: any[]) => any) => mock.handlers.set(key, fn) },
@@ -35,9 +40,14 @@ vi.mock('../../remote-desktop/captureWindow', () => ({
       await mock.ready();
       this.contents = {
         isDestroyed: () => false,
-        send: (_channel: string, id: string, c: { action: string }) => {
+        send: (_channel: string, id: string, c: { action: string; sink?: string }) => {
           if (c.action !== 'close') {
-            const reply = () => mock.handlers.get('file-peer:host:reply')!({}, id, true, mock.commandReply(c.action));
+            const reply = () =>
+              mock.handlers.get('file-peer:host:reply')!({}, id, true, mock.commandReply(c.action));
+            if (c.action === 'receive') {
+              mock.receiving = { sink: c.sink!, reply };
+              return;
+            }
             if (mock.replyDelay) setTimeout(reply, mock.replyDelay);
             else reply();
           }
@@ -51,55 +61,137 @@ vi.mock('../../remote-desktop/captureWindow', () => ({
     registered() {}
   },
 }));
-import { registerFilePeerIpc, requestFilePeer, stopFilePeers, tryPeerInvoke } from '../filePeer';
+import {
+  registerFilePeerIpc,
+  requestFilePeer,
+  stopFilePeers,
+  tryPeerInvoke,
+  tryPeerFile,
+} from '../filePeer';
 
 describe('authorized file peer source', () => {
+  it.each([0, 15_001])(
+    'preserves a file receive after concurrent RPC failure (reply delay %i)',
+    async (delay) => {
+      const peer = 'concurrent-read-peer';
+      const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => {
+        const action = (args[0] as { action: string }).action;
+        return {
+          ok: true,
+          result:
+            action === 'caps'
+              ? { version: 1, streaming: true }
+              : action === 'open'
+                ? {
+                    ticket: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+                    size: 5,
+                    mimeType: 'text/plain',
+                  }
+                : { connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', sdp: 'v=0' },
+        };
+      });
+      const transfer = tryPeerFile(peer, 'xdt-file://test', invoke);
+      await vi.waitFor(() => expect(mock.receiving).toBeDefined());
+      mock.replyDelay = delay;
+      expect(
+        await tryPeerInvoke(peer, 'file-browser:remote-op', [{ op: 'readFile' }], invoke),
+      ).toBeNull();
+      await mock.handlers.get('file-peer:host:write')!({}, mock.receiving!.sink, 0, 'aGVsbG8=');
+      mock.receiving!.reply();
+      const result = await transfer;
+      expect(result?.size).toBe(5);
+      await result?.dispose();
+    },
+    20_000,
+  );
   it('warms reads, preserves application errors, and retries transport failure only after cooldown', async () => {
     const peer = 'warm-recovery-peer';
     const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => {
       const action = (args[0] as { action: string }).action;
-      return { ok: true, result: action === 'caps' ? { version: 1, streaming: true } : {
-        connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', sdp: 'v=0',
-      } };
+      return {
+        ok: true,
+        result:
+          action === 'caps'
+            ? { version: 1, streaming: true }
+            : {
+                connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+                sdp: 'v=0',
+              },
+      };
     });
     const read = () => tryPeerInvoke(peer, 'file-browser:remote-op', [{ op: 'readFile' }], invoke);
-    mock.commandReply.mockImplementation(action => action === 'invoke'
-      ? JSON.stringify({ ok: false, error: 'FILE_NOT_FOUND' }) : 'v=0');
+    mock.commandReply.mockImplementation((action) =>
+      action === 'invoke' ? JSON.stringify({ ok: false, error: 'FILE_NOT_FOUND' }) : 'v=0',
+    );
     expect(await read()).toBeNull();
     await vi.waitFor(() => expect(mock.commandReply).toHaveBeenCalledWith('stats'));
     expect(await read()).toEqual({ ok: false, error: 'FILE_NOT_FOUND' });
-    expect(invoke.mock.calls.filter(call => (call[2][0] as any).action === 'caps')).toHaveLength(1);
+    expect(invoke.mock.calls.filter((call) => (call[2][0] as any).action === 'caps')).toHaveLength(
+      1,
+    );
     // Broken renderer reply models transport failure, not a remote application error.
     mock.commandReply.mockReturnValue('broken-json');
     expect(await read()).toBeNull();
     for (let i = 0; i < 3; i++) expect(await read()).toBeNull();
-    expect(invoke.mock.calls.filter(call => (call[2][0] as any).action === 'caps')).toHaveLength(1);
+    expect(invoke.mock.calls.filter((call) => (call[2][0] as any).action === 'caps')).toHaveLength(
+      1,
+    );
     mock.now = Date.now() + 30_001;
     try {
-      mock.commandReply.mockClear().mockImplementation(action => action === 'invoke'
-        ? JSON.stringify({ ok: true, result: 'recovered' }) : 'v=0');
+      mock.commandReply
+        .mockClear()
+        .mockImplementation((action) =>
+          action === 'invoke' ? JSON.stringify({ ok: true, result: 'recovered' }) : 'v=0',
+        );
       expect(await read()).toBeNull();
       await vi.waitFor(() => expect(mock.commandReply).toHaveBeenCalledWith('stats'));
       expect(await read()).toEqual({ ok: true, result: 'recovered' });
-      expect(invoke.mock.calls.filter(call => (call[2][0] as any).action === 'caps')).toHaveLength(2);
-    } finally { mock.now = undefined; }
+      expect(
+        invoke.mock.calls.filter((call) => (call[2][0] as any).action === 'caps'),
+      ).toHaveLength(2);
+    } finally {
+      mock.now = undefined;
+    }
   });
   it('returns cold reads immediately while a single capability request remains pending', async () => {
     let resolve!: (value: { ok: boolean }) => void;
-    const invoke = vi.fn(() => new Promise<{ ok: boolean }>(done => { resolve = done; }));
-    expect(await tryPeerInvoke('cold-peer', 'file-browser:remote-op', [{ op: 'listDir' }], invoke)).toBeNull();
-    expect(await tryPeerInvoke('cold-peer', 'file-browser:remote-op', [{ op: 'readFile' }], invoke)).toBeNull();
+    const invoke = vi.fn(
+      () =>
+        new Promise<{ ok: boolean }>((done) => {
+          resolve = done;
+        }),
+    );
+    expect(
+      await tryPeerInvoke('cold-peer', 'file-browser:remote-op', [{ op: 'listDir' }], invoke),
+    ).toBeNull();
+    expect(
+      await tryPeerInvoke('cold-peer', 'file-browser:remote-op', [{ op: 'readFile' }], invoke),
+    ).toBeNull();
     expect(invoke).toHaveBeenCalledTimes(1);
     resolve({ ok: false });
-    await new Promise(done => setImmediate(done));
-    expect(await tryPeerInvoke('cold-peer', 'file-browser:remote-op', [{ op: 'listDir' }], invoke)).toBeNull();
+    await new Promise((done) => setImmediate(done));
+    expect(
+      await tryPeerInvoke('cold-peer', 'file-browser:remote-op', [{ op: 'listDir' }], invoke),
+    ).toBeNull();
     expect(invoke).toHaveBeenCalledTimes(1);
   });
   it('reuses host dispatch for peer reads and rechecks revocation without closing another peer', async () => {
     const invoke = vi.fn(async () => ({ ok: true, result: 'preview' }));
-    const { connection } = await requestFilePeer('a', { action: 'offer', sdp: 'v=0' }, invoke) as { connection: string };
-    const read = (channel: string, args: unknown[]) => mock.handlers.get('file-peer:host:invoke')!({}, connection, JSON.stringify({ channel, args }));
-    expect(JSON.parse(await read('file-browser:remote-op', [{ op: 'readFile' }]))).toEqual({ ok: true, result: 'preview' });
+    const { connection } = (await requestFilePeer(
+      'a',
+      { action: 'offer', sdp: 'v=0' },
+      invoke,
+    )) as { connection: string };
+    const read = (channel: string, args: unknown[]) =>
+      mock.handlers.get('file-peer:host:invoke')!(
+        {},
+        connection,
+        JSON.stringify({ channel, args }),
+      );
+    expect(JSON.parse(await read('file-browser:remote-op', [{ op: 'readFile' }]))).toEqual({
+      ok: true,
+      result: 'preview',
+    });
     await expect(read('maker:send', [{}])).rejects.toThrow('DENIED');
     mock.settings.revokedControllers.push('a');
     await expect(read('file-browser:remote-op', [{ op: 'readFile' }])).rejects.toThrow('REVOKED');
@@ -108,6 +200,7 @@ describe('authorized file peer source', () => {
   let directory: string, file: string;
   beforeEach(async () => {
     mock.current = true;
+    mock.receiving = undefined;
     mock.now = undefined;
     mock.iceConfig.mockReset().mockResolvedValue([]);
     mock.ready.mockReset().mockResolvedValue();

@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { terminateTestProcess } from './shared/terminate-test-process.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(new URL('../apps/desktop/package.json', import.meta.url));
 const reportDir = await mkdtemp(path.join(os.tmpdir(), 'cindy-peer-acceptance-'));
@@ -20,7 +21,7 @@ const report = {
 let turn;
 let interrupted = false;
 const children = new Set();
-const abort = () => { for (const child of children) child.kill('SIGKILL'); };
+const abort = () => { for (const child of children) terminateTestProcess(child); };
 process.once('SIGINT', () => { interrupted = true; abort(); process.exitCode = 130; });
 process.once('SIGTERM', () => { interrupted = true; abort(); process.exitCode = 143; });
 async function run(name, command, args, { cwd = root, env = {}, timeout = 300_000 } = {}) {
@@ -34,7 +35,7 @@ async function run(name, command, args, { cwd = root, env = {}, timeout = 300_00
   child.stdout.pipe(stream, { end: false });
   child.stderr.pipe(stream, { end: false });
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeout);
+  const timer = setTimeout(() => { timedOut = true; terminateTestProcess(child); }, timeout);
   const result = await new Promise(resolve => {
     child.once('error', error => resolve({ error: error.message }));
     child.once('close', (code, signal) => resolve({ code, signal }));
@@ -66,6 +67,7 @@ try {
     chrome = require('playwright-core').chromium.executablePath();
   }
   const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  await run('process-cleanup', process.execPath, ['--test', 'scripts/__tests__/terminate-test-process.test.mjs']);
   await run('webview-source', process.execPath, ['scripts/file-peer-runtime.mjs', '--check']);
   await run('shared-policy', pnpm, ['--filter', '@cindy/device-link', 'test']);
   await run('desktop-business', pnpm, ['--filter', 'desktop', 'test',

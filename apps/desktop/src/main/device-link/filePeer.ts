@@ -182,7 +182,8 @@ async function command(c: FilePeerCommand): Promise<string | undefined> {
       () => {
         replies.delete(id);
         log.warn(`host ${c.action} timed out conn=${short(c.connection)}`);
-        stopConnection(c.connection, `${c.action}-timeout`);
+        // An RPC timeout must not cancel a concurrent file transfer on this peer.
+        if (c.action !== 'invoke') stopConnection(c.connection, `${c.action}-timeout`);
         reject(new Error('FILE_PEER_TIMEOUT'));
       },
       c.action === 'receive' ? 60_000 : 15_000,
@@ -630,11 +631,14 @@ export async function tryUploadPeerAttachment(
     check();
     if (cooldown.remaining(peer)) return null;
     let handle: FileHandle | undefined;
+    let active: Outgoing | undefined;
     try {
       await receivePeerFile(peer, null, invoke);
       check();
       const out = outgoing.get(peer);
       if (!out?.remote || !out.attachments) return null;
+      active = out;
+      out.busy = true;
       if (typeof source === 'string')
         handle = await fs.open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       const size = handle ? (await handle.stat()).size : (source as Buffer).length;
@@ -673,7 +677,9 @@ export async function tryUploadPeerAttachment(
         check,
       );
       const ms = Date.now() - transferStartedAt;
-      log.debug(`uploaded peer=${short(peer)} bytes=${size} transferMs=${ms} bytesPerSecond=${Math.round(size * 1000 / Math.max(1, ms))}`);
+      log.debug(
+        `uploaded peer=${short(peer)} bytes=${size} transferMs=${ms} bytesPerSecond=${Math.round((size * 1000) / Math.max(1, ms))}`,
+      );
       return result;
     } catch {
       check();
@@ -682,6 +688,7 @@ export async function tryUploadPeerAttachment(
       if (failed) stopConnection(failed.id, 'upload-failed');
       return null;
     } finally {
+      if (active) active.busy = false;
       await handle?.close();
     }
   });
@@ -722,7 +729,7 @@ export async function tryPeerInvoke(
   } catch {
     if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
     cooldown.fail(peer);
-    stopConnection(out.id, 'rpc-failed');
+    if (!out.busy) stopConnection(out.id, 'rpc-failed');
     return null;
   }
 }
