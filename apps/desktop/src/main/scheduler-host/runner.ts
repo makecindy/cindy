@@ -362,6 +362,7 @@ interface TurnCompletionWaiter {
   turnFinished: Promise<void>;
   stopListening: () => void;
   getAssistantText: () => string;
+  hasAssistantText: () => boolean;
 }
 
 interface TurnCompletionWaiterOptions {
@@ -1804,7 +1805,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // an accepted heartbeat row behind. Unknown delivery still throws through
       // its original failure path and is never rewound here.
       if (
-        (isHeartbeat || schedule.source === 'bot') &&
         acceptedMessageClientId &&
         !outcome.dispatched &&
         outcome.reason === 'cancelled-before-dispatch'
@@ -1897,7 +1897,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 正常结束(没 abort),listener 仍持有 session 引用,会阻止 GC。手动摘干净。
     ctx.signal.removeEventListener('abort', onAbort);
 
-    return this.finalizeRun(schedule, ctx, session.id, runError, waiter.getAssistantText());
+    return this.finalizeRun(
+      schedule,
+      ctx,
+      session.id,
+      runError,
+      waiter.getAssistantText(),
+      waiter.hasAssistantText(),
+    );
   }
 
   /**
@@ -2514,7 +2521,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
       assistantText = activeWaiter.getAssistantText();
     }
     ctx.signal.removeEventListener('abort', onAbort);
-    return this.finalizeRun(schedule, ctx, sessionId, runError, assistantText);
+    return this.finalizeRun(
+      schedule,
+      ctx,
+      sessionId,
+      runError,
+      assistantText,
+      activeWaiter?.hasAssistantText() ?? false,
+    );
   }
 
   /**
@@ -2809,6 +2823,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     sessionId: string,
     runError: string | undefined,
     assistantText: string,
+    hasAssistantText: boolean,
   ): Promise<FireResult> {
     const finalRun: ScheduleRun = {
       id: ctx.runId,
@@ -2840,6 +2855,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 用户主动 pause/delete 的那条路径本来也不该弹成功 —— 引擎记 aborted 且不通知,
     // 语义一致。
     const successAfterAbort = finalRun.status === 'success' && ctx.signal.aborted;
+    // Terminal-only replies have no row in the normal text-event persistence path.
+    // Save them even when notifications are silent; streamed replies already have a row.
+    const terminalOnlyReply =
+      !hidesScheduledTranscript(schedule) &&
+      !hasAssistantText &&
+      finalRun.status === 'success' &&
+      !!assistantText.trim();
     let reportPersistFailed = false;
     if (abandoned) {
       this.deps.logger.info?.(
@@ -2851,7 +2873,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         '[runner] run was aborted; suppressing the contradictory success notification',
         { scheduleId: schedule.id, runId: ctx.runId },
       );
-    } else if (silenced) {
+    } else if (silenced && !terminalOnlyReply) {
       this.deps.logger.info?.('[runner] run silenced; skipping completion notification', {
         scheduleId: schedule.id,
         runId: ctx.runId,
@@ -2864,10 +2886,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
       //
       // 认领不看投递结果:notifier 自己已做兜底,throw 也当投过处理 —— 引擎补发解决不了
       // notifier 坏掉的问题,重复打扰用户更没意义。
-      ctx.onRunnerNotified?.(finalRun.status === 'success' ? 'success' : 'failure');
+      if (!silenced) ctx.onRunnerNotified?.(finalRun.status === 'success' ? 'success' : 'failure');
       const ownerScope = captureDataOwnerBroadcastScope();
       if (
-        hidesScheduledTranscript(schedule) &&
+        (hidesScheduledTranscript(schedule) || terminalOnlyReply) &&
         finalRun.status === 'success' &&
         assistantText.trim()
       ) {
@@ -2906,6 +2928,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
       try {
         if (
+          (!silenced || reportPersistFailed) &&
           isDataOwnerBroadcastScopeCurrent(ownerScope) &&
           !(finalRun.status === 'success' && ctx.signal.aborted)
         ) {
@@ -2942,6 +2965,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
   ): TurnCompletionWaiter {
     const sessionId = initialSession.id;
     let assistantText = '';
+    let hasAssistantText = false;
     let stopped = false;
     let stopListeningTurn: (() => void) | undefined;
     const turnFinished = new Promise<void>((resolve, reject) => {
@@ -3043,6 +3067,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         if (ev.type === 'text') {
           const data = ev.data as { text?: string; isFinal?: boolean } | null;
           if (data && typeof data.text === 'string') {
+            if (data.text.trim()) hasAssistantText = true;
             if (data.isFinal) assistantText = data.text;
             else assistantText += data.text;
           }
@@ -3183,6 +3208,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         stopListeningTurn = undefined;
       },
       getAssistantText: (): string => assistantText,
+      hasAssistantText: (): boolean => hasAssistantText,
     };
   }
 

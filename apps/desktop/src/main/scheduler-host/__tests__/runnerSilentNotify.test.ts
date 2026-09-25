@@ -8,6 +8,7 @@ import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-sched
 const mocks = vi.hoisted(() => ({
   executePreRunHook: vi.fn(),
   createMessage: vi.fn(),
+  rewind: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock('../pre-run-hook', () => ({ executePreRunHook: mocks.executePreRunHook }
 
 vi.mock('../../localDb/ipc/messages.js', () => ({
   createMessage: mocks.createMessage,
+  rewindPersistedUserMessageAfterClear: mocks.rewind,
 }));
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
@@ -241,6 +243,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
         data: { result: 'Review fixed' },
       };
       expect(projectQuietScheduledOutput(done)).toBe(done);
+      h.emit({ type: 'text', turnOrigin: origin, data: { text: 'Review fixed', isFinal: true } });
       h.emit(done);
       await promise;
       expect(mocks.createMessage.mock.calls[0][1].content).toBe('check the PR status');
@@ -248,6 +251,71 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
         mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant'),
       ).toHaveLength(0);
       expect(notifier.notify).toHaveBeenCalledTimes(silenced ? 0 : 1);
+    },
+  );
+
+  it.each(
+    [true, false].flatMap((silenced) =>
+      ['result', 'finalText'].map((field) => ({ silenced, field })),
+    ),
+  )(
+    'saves terminal-only $field while preserving notification silence=$silenced',
+    async ({ silenced, field }) => {
+      const h = createSessionHarness(acceptingSend());
+      const { runner, notifier } = createRunnerHarness(h.session, { silenced });
+      const promise = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+      await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+      h.emit({ type: 'done', data: { [field]: 'Final answer' } });
+      await promise;
+      expect(
+        mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant'),
+      ).toHaveLength(1);
+      expect(mocks.createMessage).toHaveBeenCalledWith(
+        h.session.id,
+        expect.objectContaining({
+          clientId: 'schedule-result:run-1',
+          content: 'Final answer',
+        }),
+        expect.anything(),
+      );
+      expect(notifier.notify).toHaveBeenCalledTimes(silenced ? 0 : 1);
+    },
+  );
+
+  it('surfaces terminal-only persistence failures even when notifications were silent', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, { silenced: true });
+    mocks.createMessage.mockImplementation(async (_id, body) => {
+      if (body.role === 'assistant') throw new Error('database unavailable');
+    });
+    const promise = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'done', data: { result: 'Final answer' } });
+    await expect(promise).rejects.toThrow('Scheduled result could not be saved');
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ status: 'failed' }),
+    );
+  });
+
+  it.each([true, false])(
+    'rewinds a fresh ordinary instruction cancelled before dispatch (silent=%s)',
+    async (silentWhenIdle) => {
+      const ctx = createFireContext();
+      const controller = new AbortController();
+      ctx.signal = controller.signal;
+      const h = createSessionHarness(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        controller.abort();
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
+      });
+      const { runner, notifier } = createRunnerHarness(h.session, { silenced: true });
+      await expect(runner.fire(baseSchedule({ silentWhenIdle }), ctx)).rejects.toThrow();
+      expect(mocks.rewind).toHaveBeenCalledExactlyOnceWith(
+        h.session.id,
+        mocks.createMessage.mock.calls[0][1].clientId,
+      );
+      expect(notifier.notify).not.toHaveBeenCalled();
     },
   );
 
