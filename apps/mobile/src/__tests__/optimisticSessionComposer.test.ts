@@ -79,7 +79,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('error: string | null;');
     expect(source).toContain('const latchOutboxTransportHold = useCallback(');
     expect(source).toContain('const outboxRecoverySyncHeld = hasLatchedOutboxTransportHold');
-    expect(source).toContain('autoRecoveringError: outboxRecoverySyncHeld,');
+    expect(source).toContain('autoRecoveringError: outboxRecoverySyncHeld || !companionEntry.ready,');
     expect(source).toContain('setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);');
     expect(source).not.toContain('autoRecoveringError: isAutoRecoveringRemoteError(connectionError),');
     // Desktop 断线时仍允许尝试队列编辑类动作,不把整行切成只读。

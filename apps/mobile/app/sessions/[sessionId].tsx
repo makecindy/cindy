@@ -937,6 +937,7 @@ export default function SessionScreen() {
   const params = useLocalSearchParams<{
     sessionId: string;
     notificationResponse?: string;
+    resourceKind?: string;
     deviceId?: string;
     deviceName?: string;
     draft?: string;
@@ -2121,18 +2122,29 @@ export default function SessionScreen() {
   const outboxRecoverySyncHeld = hasLatchedOutboxTransportHold
     || connectionEpochRecoverySyncPending
     || presenceRecoverySyncPending;
+  const hasRenderedMessages = historyView.snapshot.ready ? historyView.snapshot.items.length > 0 : messages.length > 0;
+  const companionEntry = useRemoteResourceSession(deviceId, deviceName, sessionId,
+    currentSession?.id === sessionId && hasRenderedMessages
+      && readAckSyncedKey === `${sessionId}:${connectionEpoch}`
+      // A pre-ACK snapshot may omit replies sent before the subscription took effect.
+      && contentRecoveryKey !== null && contentSyncedKey === contentRecoveryKey
+      && !outboxRecoverySyncHeld && !loading,
+    sessionMetadataSyncedKey === `${sessionId}:${connectionEpoch}`
+      && (readRouteParam(params.resourceKind) !== 'bot' || currentSession?.source === 'bot'));
+  const companionResource = companionEntry.resource;
+
   // 对齐 Desktop：输入与发送仍可排队，但模型、权限、Plan、停止等需要即时访问
   // 被控端的操作在明确断线时禁用。presence unknown 仍允许，避免旧缓存永久锁死入口。
   const remoteRealtimeControlsUnavailable = status !== 'online'
     || targetAvailableForDispatch === false
     || isDeviceUnresponsive
-    || outboxRecoverySyncHeld;
+    || outboxRecoverySyncHeld || !companionEntry.ready;
   const remoteStopUnavailable = remoteRealtimeControlsUnavailable;
   const outboxConnectionState: MobileOutboxConnectionState = {
     relayOnline: status === 'online',
     targetAvailable: targetAvailableForDispatch,
     deviceUnresponsive: isDeviceUnresponsive,
-    autoRecoveringError: outboxRecoverySyncHeld,
+    autoRecoveringError: outboxRecoverySyncHeld || !companionEntry.ready,
     syncInProgress: loading,
   };
   // pumpOutbox 是跨 render 的 async 循环，每轮必须读最新连接态；只捕获某一帧会在
@@ -2143,7 +2155,7 @@ export default function SessionScreen() {
     outboxConnectionState,
   );
   // 弱网普通断线也要有可见信号(消息流静默停更没有任何提示),经防闪延迟后显示
-  const connectionRecoveryError = activeOutboxTransportError ?? connectionError;
+  const connectionRecoveryError = companionEntry.error ?? activeOutboxTransportError ?? connectionError;
   const bannerError = connectionRecoveryError ?? historyError;
   const bannerRetriesHistory = connectionRecoveryError === null && historyError !== null;
   const contentRecoveryState = contentRecoveryKey !== null
@@ -2198,13 +2210,6 @@ export default function SessionScreen() {
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getSessionLiveActivity(sessionId)?.attention === true,
   );
-  const hasRenderedMessages = historyView.snapshot.ready ? historyView.snapshot.items.length > 0 : messages.length > 0;
-  const companionResource = useRemoteResourceSession(deviceId, deviceName, sessionId,
-    currentSession?.id === sessionId && hasRenderedMessages
-      && readAckSyncedKey === `${sessionId}:${connectionEpoch}`
-      // A pre-ACK snapshot may omit replies sent before the subscription took effect.
-      && contentRecoveryKey !== null && contentSyncedKey === contentRecoveryKey
-      && !outboxRecoverySyncHeld && !loading);
   const companionChat = useHostManagedSession(
     JSON.stringify([auth.accountGeneration, deviceId, sessionId]),
     companionResource?.ref.kind === 'bot' ? { source: 'bot' } : currentSession,
@@ -2401,7 +2406,7 @@ export default function SessionScreen() {
       setPendingPlanViewerState('half');
     }
   }, [activePendingKind, activePendingRequestId, sessionOperationLayout.composerSlot]);
-  const canUseComposer = sessionOperationLayout.canUseComposer && !sessionResourceCards.blocked;
+  const canUseComposer = sessionOperationLayout.canUseComposer && !sessionResourceCards.blocked && companionEntry.ready;
   const canUseRemoteSessionControls = canUseComposer
     && !sessionSettingsLocked
     && !remoteRealtimeControlsUnavailable;
@@ -2412,7 +2417,7 @@ export default function SessionScreen() {
   const composerDisabledReasonKey = composerDisabledReasonI18nKey(
     sessionOperationLayout.composerDisabledReasonSource,
   );
-  const composerDisabledReason = composerDisabledReasonKey
+  const composerDisabledReason = !companionEntry.ready ? t('shared.syncing') : composerDisabledReasonKey
     ? t(composerDisabledReasonKey)
     : sessionOperationLayout.composerDisabledReason
       ?? (sessionResourceCards.blocked
@@ -3371,6 +3376,14 @@ export default function SessionScreen() {
         && readAckGateGenRef.current === readAckGateGenAtStart
       ),
       (sessionMeta) => {
+        // A roster link only selects the initial page. Preserve the resolver's
+        // task/host checks before publishing authoritative entry metadata.
+        if (readRouteParam(params.resourceKind)) {
+          const origin = remoteSessionStore.getSessionDeviceId(sessionId);
+          if (!sessionMeta || sessionMeta.id !== sessionId
+            || (readRouteParam(params.resourceKind) === 'bot' && sessionMeta.source !== 'bot')
+            || (origin && origin !== deviceId)) throw new Error(t('devices.resources.noConversation'));
+        }
         remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         setSessionMetadataSyncedKey(`${sessionId}:${readAckEpochAtStart}`);
       },
@@ -3593,7 +3606,7 @@ export default function SessionScreen() {
     } finally {
       if (!syncRun.isStale() && messageAuthorityCurrent()) setLoading(false);
     }
-  }, [deviceId, deviceName, getSubscriptionIdentity, latchOutboxTransportHold, maker, notificationResponse, openLink, reopenLink, remoteHistoryAvailable, sessionId, setError, subscribe]);
+  }, [deviceId, deviceName, getSubscriptionIdentity, latchOutboxTransportHold, maker, notificationResponse, openLink, params.resourceKind, reopenLink, remoteHistoryAvailable, sessionId, setError, subscribe, t]);
   // 任一连接恢复身份变化都会让旧读取失去提交资格。否则断线前启动的同步可能在
   // 新 hold 锁存后迟到，并从成功尾误清恢复屏障。
   const remoteSyncContextKey = JSON.stringify([
@@ -8735,7 +8748,7 @@ export default function SessionScreen() {
     {companionChat && companionResource && !shareSelectionActive ? <>
       <SystemNavigationBack label={t('shared.back')} onPress={goBackToHome} />
       <CompanionHeader key={`${auth.accountGeneration}:${deviceId}:${companionResource.ref.id}`}
-        resource={companionResource} deviceId={deviceId} deviceName={deviceName} online={!remoteUnavailableReason}
+        resource={companionResource} deviceId={deviceId} deviceName={deviceName} online={!remoteUnavailableReason} controlsReady={companionEntry.ready}
         onSearch={() => setSearchOpen(true)}
         onOpenNavigation={() => setCompanionNavigation({ scope: companionNavigationScope, open: true })} />
     </> : <SessionHeaderBar
@@ -8824,9 +8837,11 @@ export default function SessionScreen() {
                 issue={connectionIssue}
                 lastSyncedAt={lastSyncedAt}
                 loading={loading || loadingEarlier}
-                onSync={() => bannerRetriesHistory
-                  ? void loadEarlierMessages()
-                  : void requestSync({ reason: 'manual', replaceMessages: false })}
+                onSync={() => {
+                  if (companionEntry.error) companionEntry.retry();
+                  if (bannerRetriesHistory) void loadEarlierMessages();
+                  else void requestSync({ reason: 'manual', replaceMessages: false });
+                }}
                 status={status}
                 recovery={contentRecoveryState}
                 variant="inline"
@@ -9172,7 +9187,7 @@ export default function SessionScreen() {
                     contentBottomInset={companionInlineInteraction && !shareSelectionActive
                       ? spacing.md
                       : nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
-                      ? MOBILE_MESSAGE_LIST_BOTTOM_PADDING
+                      ? (bottomOverlayHeight > 0 ? bottomOverlayHeight : MOBILE_MESSAGE_LIST_BOTTOM_PADDING)
                       : undefined}
                     topOverlayHeight={topOverlayHeight}
                     busyAction={messageActionBusy?.kind ?? null}

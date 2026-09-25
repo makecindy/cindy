@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ActivityIndicator, Alert, Keyboard, StyleSheet, View } from 'react-native';
+import { Alert, Keyboard, StyleSheet, View } from 'react-native';
 import { Stack, useIsFocused } from 'expo-router';
 import { Menu } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -82,7 +82,6 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
           onInteract={() => { resumed.current = true; }} onCreated={(host, ref) => { void navigation.openCreatedTeammate(host, ref); }} /> : null}
       </View>
     </View>
-    {roster.loading ? <ActivityIndicator color={colors.textSecondary} /> : null}
     {navigation.saveFailed ? <Text accessibilityRole="alert" style={styles.notice}>{t('devices.companions.preferenceSaveFailed')}</Text> : null}
     <TeammateList key={searchEpoch} {...roster} current={navigation.lastTeammate} autoFocusSearch={searchEpoch > 0}
       onInteract={() => { resumed.current = true; }}
