@@ -42,15 +42,16 @@ import {
  *
  * 这不是自动重试,但同样是**非终止** error 携带的会话级状态,渠道侧此前对非终止 error
  * 一律静默 —— 于是 Slack / Telegram 上的用户只会看到工具一个接一个被拒、没有任何原因
- * (codex P1 of #1574)。它有明确的用户动作可给(切到默认权限自己确认),所以必须透出。
+ * (codex P1 of #1574)。少打断只能建议切到完全访问,不能建议默认权限:
+ * 那一档在 Pi 上问得更多,在 Claude / Codex 上也不会少问联网和提权。完全访问风险更高,必须点明。
  *
  * 判据走 maker-core 的单点函数,不在这里匹配英文原文或自己拼 `[CODE]` 前缀;文案硬编码
  * 中文、不进 renderer locale(与本文件其它渠道文案同规)。
  */
 function autoReviewUnavailableNotice(message: string): string | null {
   if (isAutoReviewUnavailableNotice(message)) {
-    return '自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。'
-      + '想少被打断，可以把这个任务切到「默认权限」自行掌控。';
+    return '自动审批暂时无法给出判断，需要审批的操作已改为由你确认。'
+      + '想少被打断，可以把任务切到「完全访问」，但风险更高。';
   }
   if (isAutoReviewConfirmUndeliveredNotice(message)) {
     return '自动审批没完成，确认也没有送到或没有被点。这次拒绝不是你点的。';
