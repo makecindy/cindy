@@ -30,7 +30,7 @@ vi.mock("react-i18next", () => ({
 }));
 vi.mock("lucide-react-native", () =>
   Object.fromEntries(
-    ["ChevronRight", "MinusCircle", "Plus", "ArrowUp"].map((key) => [
+    ["ChevronRight", "ChevronDown", "ChevronUp", "MinusCircle", "Plus", "ArrowUp"].map((key) => [
       key,
       () => null,
     ]),
@@ -125,17 +125,29 @@ it("shows the selected remote account and catalog model name without changing it
   expect(node.textContent).not.toContain("openai:second");
   expect(h.change).not.toHaveBeenCalled();
 });
-it("keeps separate same-model accounts while reordering candidates", async () => {
-  await render("remote-mac", [{ ...route, providerId: "openai" }, route]);
-  const move = node.querySelector(
-    '[aria-label="devices.companionProfile.moveModelUp"]',
-  ) as HTMLButtonElement;
-  await act(async () => move.click());
+it("keeps the primary first and reorders separate same-model backup accounts inside the folded chain", async () => {
+  const third = { ...route, providerId: "openai:third" };
+  h.catalog.providers.push(provider("openai:third", "third@example.com"));
+  await render("remote-mac", [{ ...route, providerId: "openai" }, route, third]);
+  const moves = () => node.querySelectorAll('[aria-label="devices.companionProfile.moveModelUp"]');
+  const removes = () => node.querySelectorAll('[aria-label="devices.companionProfile.removeModel"]');
+  // Folded: only the primary shows, and it can be neither moved nor removed.
+  expect(node.textContent).toContain("devices.companionProfile.backupModels");
+  expect(node.textContent).not.toContain("second@example.com");
+  expect(moves()).toHaveLength(0);
+  expect(removes()).toHaveLength(0);
+  const toggle = [...node.querySelectorAll('button')].find(button => button.textContent === 'devices.companionProfile.backupModels')!;
+  await act(async () => toggle.click());
+  expect(node.textContent).toContain("second@example.com");
+  // Backup 1 cannot move above the primary; backup 2 moves above backup 1.
+  expect(moves()).toHaveLength(1);
+  expect(removes()).toHaveLength(2);
+  await act(async () => (moves()[0] as HTMLButtonElement).click());
   expect(
     JSON.parse(h.change.mock.lastCall![0].modelChain).map(
       (r: any) => r.providerId,
     ),
-  ).toEqual(["openai:second", "openai"]);
+  ).toEqual(["openai", "openai:third", "openai:second"]);
 });
 it("does not expose the previous device account while the new catalog is loading", async () => {
   await render();

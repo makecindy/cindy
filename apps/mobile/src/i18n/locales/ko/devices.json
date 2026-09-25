@@ -1043,6 +1043,7 @@
     "addModel": "대체 모델 추가",
     "removeModel": "모델 제거",
     "moveModelUp": "모델 위로 이동",
+    "backupModels": "예비 모델 ({{count}})",
     "settingsTitle": "팀원 설정",
     "name": "이름",
     "portraitNumber": "아바타 {{number}}",

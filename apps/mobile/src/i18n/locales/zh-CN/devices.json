@@ -1043,6 +1043,7 @@
     "addModel": "添加备用模型",
     "removeModel": "移除模型",
     "moveModelUp": "上移模型",
+    "backupModels": "备用模型（{{count}}）",
     "settingsTitle": "伙伴设置",
     "name": "名字",
     "portraitNumber": "头像 {{number}}",

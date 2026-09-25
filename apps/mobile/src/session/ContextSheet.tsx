@@ -154,6 +154,8 @@ export interface ContextSheetRowProps {
   busy?: boolean;
   accessibilityHint?: string;
   testID?: string;
+  /** Destructive actions (delete) read in the destructive text color. */
+  destructive?: boolean;
 }
 
 export function ContextSheetRow({
@@ -165,6 +167,7 @@ export function ContextSheetRow({
   busy,
   accessibilityHint,
   testID,
+  destructive = false,
 }: ContextSheetRowProps) {
   const styles = useThemedStyles(makeContextSheetStyles);
   const { colors } = useTheme();
@@ -181,7 +184,7 @@ export function ContextSheetRow({
     >
       <View style={styles.rowLeft}>
         {icon}
-        <Text style={styles.rowLabel}>{label}</Text>
+        <Text style={[styles.rowLabel, destructive && { color: colors.destructive }]}>{label}</Text>
       </View>
       <View style={styles.rowTrailing}>
         {busy ? (

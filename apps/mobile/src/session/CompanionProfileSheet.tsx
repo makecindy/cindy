@@ -12,6 +12,7 @@ import { NativePullDownMenu, usesNativePullDownMenu } from '@/platform/chrome';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { invokeRemoteResourceAction } from '@/device-link/remoteResources';
+import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { CompanionSettingsRow as ContextSheetRow } from './CompanionSettingsRow';
 import { CompanionSheet } from './CompanionSheet';
 import { fontWeight, iconSize, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -25,6 +26,8 @@ import { CompanionMemoryPage } from './CompanionMemoryPage';
 import { useCompanionMemory } from './useCompanionMemory';
 
 const AVATAR_SIZE = 56;
+/** Same identity rule as the host and Desktop `normalizeBotName`. */
+const normalizeTeammateName = (name: string) => name.normalize('NFKC').trim().toLowerCase();
 
 export interface CompanionProfileSheetProps {
   visible: boolean;
@@ -71,6 +74,8 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const [error, setError] = useState(false);
   const [deleteFailure, setDeleteFailure] = useState(false);
   const [conflict, setConflict] = useState<{ page: string; next: CompanionProfileData } | null>(null);
+  // A rename rejected because another teammate on this computer has the name (host NFKC check).
+  const [nameTakenOnSave, setNameTakenOnSave] = useState(false);
   const [receipt, setReceipt] = useState<RemoteText | null>(null);
   const [confirmation, setConfirmation] = useState<ProfilePanel | null>(null);
   const [deleted, setDeleted] = useState(false);
@@ -100,7 +105,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     const started = binding;
     const sequence = ++generation.current;
     setError(false);
-    setDeleteFailure(false);
+    setDeleteFailure(false); setNameTakenOnSave(false);
     try {
       const next = await read();
       if (current.current === started && generation.current === sequence) {
@@ -114,7 +119,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     }
   }, [binding, read]);
   useEffect(() => {
-    setModelStage('profile'); setConflict(null); setEditor(null); setEditorPanel(null); setEditorLoading(false); setData(null); setPage('home'); setValues({}); setReceipt(null); setConfirmation(null); setDeleted(false); setError(false); setDeleteFailure(false); setEditing(false); setBusy(false);
+    setModelStage('profile'); setConflict(null); setEditor(null); setEditorPanel(null); setEditorLoading(false); setData(null); setPage('home'); setValues({}); setReceipt(null); setConfirmation(null); setDeleted(false); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setEditing(false); setBusy(false);
     return () => { generation.current++; };
   }, [binding]);
   useEffect(() => { if (visible && online) void refresh(); }, [visible, online, refresh]);
@@ -122,7 +127,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const openEditor = async (resourceId: string) => {
     if (inFlight.current || !online || !resource) return;
     const started = binding; const sequence = ++generation.current;
-    setConflict(null); setEditorResourceId(resourceId); setPage('editor'); setEditor(null); setEditorPanel(null); setEditorLoading(true); setEditing(false); setError(false); setDeleteFailure(false);
+    setConflict(null); setEditorResourceId(resourceId); setPage('editor'); setEditor(null); setEditorPanel(null); setEditorLoading(true); setEditing(false); setError(false); setDeleteFailure(false); setNameTakenOnSave(false);
     try {
       await openLink(deviceId);
       const next = await loadCompanionProfile(invoke, deviceId, { ...resource.ref, collectionId, id: resourceId }, i18n.language);
@@ -139,7 +144,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     if (next === 'memoryEntries') {
       void (async () => {
         if (dirty && panel && !(await submit(panel))) return;
-        setReceipt(null); setError(false); setDeleteFailure(false); setConfirmation(null); setEditing(false); setPage(next);
+        setReceipt(null); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setConfirmation(null); setEditing(false); setPage(next);
       })(); return;
     }
     if (next === 'avatar' || next === 'connections' || next === 'personalSkills') {
@@ -148,13 +153,13 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         await openEditor(`settings:${resource?.ref.id}/${next === 'personalSkills' ? 'skills' : next}`);
       })(); return;
     }
-    setConflict(null); setEditor(null); setEditorPanel(null); setPage(next); setReceipt(null); setError(false); setDeleteFailure(false); setConfirmation(null); setEditing(false);
+    setConflict(null); setEditor(null); setEditorPanel(null); setPage(next); setReceipt(null); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setConfirmation(null); setEditing(false);
     setValues(data?.panels.find(item => item.id === next)?.values ?? {});
   };
   const submit = async (target: ProfilePanel, confirmed = false): Promise<boolean> => {
     if (!target.action || target.action.disabled || inFlight.current || !online || !resource || conflict?.page === page) return false;
     if (target.action.confirmation && !confirmed) { setConfirmation(target); return false; }
-    inFlight.current = true; generation.current++; setBusy(true); setError(false); setDeleteFailure(false); setReceipt(null);
+    inFlight.current = true; generation.current++; setBusy(true); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setReceipt(null);
     const started = binding;
     try {
       const response = await invokeRemoteResourceAction(invoke, { deviceId, deviceName }, {
@@ -188,8 +193,16 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         setData(next); setValues(next?.panels.find(item => item.id === target.id)?.values ?? {});
       } catch { setError(true); }
       return true;
-    } catch {
-      if (current.current === started) { setError(true); setDeleteFailure(target.id === 'delete'); setConfirmation(null); }
+    } catch (cause) {
+      if (current.current === started) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        setConfirmation(null);
+        if (target.id !== 'delete' && message.includes('ALREADY_EXISTS')) { setNameTakenOnSave(true); setError(true); }
+        else if (target.id !== 'delete' && message.includes('PRECONDITION_FAILED')) {
+          // The teammate changed meanwhile. Keep the draft; the re-read offers the latest version.
+          if (page === 'editor') void retryEditor(); else void refresh();
+        } else { setError(true); setDeleteFailure(target.id === 'delete'); }
+      }
       return false;
     } finally {
       inFlight.current = false;
@@ -277,7 +290,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     visible={visible && modelStage === 'profile'} title={confirmation?.action?.confirmation ? label(confirmation.action.confirmation.title) : page === 'editor' && editor ? label(editor.resource.display.title) : t(`devices.companionProfile.${titleKey}`)}
     name={name} page={page} deviceId={deviceId} deviceName={deviceName} resource={resource} data={data} editor={editor} panel={panel}
     values={editing ? values : panel?.values ?? values} busy={busy || memory.busy} online={online} dirty={dirty || memory.dirty} loading={editorLoading}
-    error={error} errorLabel={deleteFailure ? t('devices.companionProfile.deleteFailed') : undefined} conflict={conflict?.page === page} receipt={receipt && !confirmation ? label(receipt) : null} confirmation={confirmation} deleted={deleted}
+    error={error} errorLabel={deleteFailure ? t('devices.companionProfile.deleteFailed') : nameTakenOnSave ? t('devices.companionProfile.nameTaken') : undefined} conflict={conflict?.page === page} receipt={receipt && !confirmation ? label(receipt) : null} confirmation={confirmation} deleted={deleted}
     artifacts={sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery')}
     memoryPage={memoryPage} hasMemoryEntries={!!memoryList}
     onClose={dismiss} onClosed={afterClosed} onBack={page !== 'home' || confirmation ? () => void leave(false) : undefined}
@@ -295,7 +308,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       title={confirmation?.action?.confirmation ? label(confirmation.action.confirmation.title) : page === 'editor' && editor ? label(panel?.title ?? editor.resource.display.title) : t(`devices.companionProfile.${titleKey}`)} testID="companionProfile">
     <View style={styles.content}>
       {!online ? note('offline') : null}
-      {error ? <View accessibilityRole="alert">{note(deleteFailure ? 'deleteFailed' : 'readFailed')}<MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: busy || !online, onPress: () => { if (page === 'editor') void retryEditor(); else void refresh(); } }} />
+      {error ? <View accessibilityRole="alert">{note(deleteFailure ? 'deleteFailed' : nameTakenOnSave ? 'nameTaken' : 'readFailed')}<MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: busy || !online, onPress: () => { if (page === 'editor') void retryEditor(); else void refresh(); } }} />
         {dirty ? <MainWindowActionButton action={{ label: t('devices.companions.automation.discard'), tone: 'danger', disabled: busy, onPress: () => discardDraft(false) }} /> : null}
       </View> : null}
       {conflict?.page === page ? <View accessibilityRole="alert">{note('changed')}<MainWindowActionButton action={{ label: t('devices.companionProfile.discardAndReload'), tone: 'danger', disabled: busy, onPress: () => discardDraft(true) }} /></View> : null}
@@ -329,7 +342,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         </View>
         <View style={styles.group}>{(['resume', 'restart', 'delete'] as const).map(id => {
           const item = actionPanel(id);
-          return item?.action ? <ContextSheetRow key={id} icon={null} disabled={busy || !online} label={label(item.action.label)} onPress={() => { setValues({}); setEditing(false); setConfirmation(item); }} /> : null;
+          return item?.action ? <ContextSheetRow key={id} icon={null} disabled={busy || !online} destructive={id === 'delete'} label={label(item.action.label)} onPress={() => { setValues({}); setEditing(false); setConfirmation(item); }} /> : null;
         })}</View>
         {online && data && !actionPanel('profile') ? note('hostUpgrade') : null}
       </> : page === 'settings' ? <>
@@ -369,8 +382,19 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
   // The account-keyed component and an explicit new opening are reset boundaries.
   const requestId = useRef<string | null>(null);
   const ref = { collectionId, kind: 'bot', id: 'create' };
-  const reload = async () => {
-    const sequence = ++current.current; setError(false); setLoading(true);
+  // Desktop BotRosterView: names must be distinguishable before submitting (NFKC, trimmed, case-insensitive).
+  // The host still rejects collisions with teammates this list does not show.
+  const { user, accountGeneration } = useAuth();
+  const takenNames = useMemo(() => new Set(readRemoteCollectionCache(`${user?.id ?? ''}:${accountGeneration}`, collectionId)
+    .filter(row => row.host.deviceId === deviceId && row.item.ref.kind === 'bot')
+    .map(row => normalizeTeammateName(resolveRemoteText(row.item.display.title, i18n.language)))),
+  // Re-read whenever the sheet opens; the roster cache is not reactive.
+  [accountGeneration, collectionId, deviceId, i18n.language, user?.id, visible]);
+  const typedName = typeof values.name === 'string' ? values.name : '';
+  const duplicate = !!typedName.trim() && takenNames.has(normalizeTeammateName(typedName));
+  // A one-use create action is consumed by a failed attempt; re-read it without clearing the form or the notice.
+  const reload = async (keepError = false) => {
+    const sequence = ++current.current; if (!keepError) setError(false); setLoading(true);
     try {
       await openLink(deviceId);
       const next = await loadCompanionProfile(invoke, deviceId, ref, i18n.language);
@@ -398,7 +422,7 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
   };
   const submit = async () => {
     const panel = data?.panels[0];
-    if (!panel?.action || panel.action.disabled || inFlight.current || !online) return;
+    if (!panel?.action || panel.action.disabled || inFlight.current || !online || duplicate) return;
     inFlight.current = true; setBusy(true); setError(false); setNameTaken(false);
     const sequence = current.current;
     try {
@@ -411,23 +435,24 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
     } catch (cause) {
       if (current.current === sequence) {
         const collision = cause instanceof Error && cause.message.includes('ALREADY_EXISTS');
-        setNameTaken(collision); setError(true); setData(null);
+        setNameTaken(collision); setError(true);
         if (collision) requestId.current = null;
+        void reload(true);
       }
     } finally {
       inFlight.current = false;
       setBusy(false);
     }
   };
-  if (Platform.OS === 'ios') return <CompanionCreateNativeView deviceName={deviceName} nameTaken={nameTaken} visible={visible} onClose={close} onClosed={onClosed} panel={data?.panels[0]} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} />;
+  if (Platform.OS === 'ios') return <CompanionCreateNativeView deviceName={deviceName} nameTaken={nameTaken} duplicate={duplicate} visible={visible} onClose={close} onClosed={onClosed} panel={data?.panels[0]} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} />;
   return <CompanionSheet visible={visible} onClose={close} onClosed={onClosed} preventDismiss={dirty || busy} title={t('devices.companionProfile.create')}>
     <View style={styles.content}>
       {!online ? <Text style={styles.note}>{t('devices.companionProfile.offline', { deviceName })}</Text> : null}
-      {error ? <Text accessibilityRole="alert" style={styles.note}>{t(nameTaken ? 'devices.companionProfile.nameTaken' : 'devices.companionProfile.createFailed')}</Text> : null}
+      {error || duplicate ? <Text accessibilityRole="alert" style={styles.note}>{t(duplicate || nameTaken ? 'devices.companionProfile.nameTaken' : 'devices.companionProfile.createFailed')}</Text> : null}
       {data?.panels[0] ? <CompanionProfileForm panel={data.panels[0]} values={values} onChange={change} disabled={busy || !online} /> : null}
       {loading ? <Text style={styles.note}>{t('devices.resources.loading')}</Text> : null}
       {!data && online && !loading ? <MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: busy, onPress: () => void reload() }} /> : null}
-      <MainWindowActionButton action={{ label: t('devices.companionProfile.create'), busy, disabled: !online || !data || typeof values.name !== 'string' || !values.name.trim(), onPress: () => void submit() }} />
+      <MainWindowActionButton action={{ label: t('devices.companionProfile.create'), busy, disabled: !online || !data || typeof values.name !== 'string' || !values.name.trim() || duplicate, onPress: () => void submit() }} />
     </View>
   </CompanionSheet>;
 }

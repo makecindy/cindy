@@ -1043,6 +1043,7 @@
     "addModel": "予備モデルを追加",
     "removeModel": "モデルを削除",
     "moveModelUp": "モデルを上へ",
+    "backupModels": "予備のモデル（{{count}}）",
     "settingsTitle": "チームメイトの設定",
     "name": "名前",
     "portraitNumber": "アバター {{number}}",

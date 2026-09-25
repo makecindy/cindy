@@ -1043,6 +1043,7 @@
     "addModel": "Add fallback model",
     "removeModel": "Remove model",
     "moveModelUp": "Move model up",
+    "backupModels": "Backup models ({{count}})",
     "settingsTitle": "Teammate settings",
     "name": "Name",
     "portraitNumber": "Portrait {{number}}",
