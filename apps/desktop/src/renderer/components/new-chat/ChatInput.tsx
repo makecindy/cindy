@@ -47,6 +47,7 @@ import {
   promoteTrailingPlainListParagraph,
 } from './ComposerListNodes';
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
+import { useVoiceProcessingIndicator } from '../../voice-input/useVoiceProcessingIndicator';
 import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
 import { restoreComposerDocument } from './restoreComposerDocument';
 import {
@@ -3198,12 +3199,13 @@ export function ChatInput({
     }
   }, [voiceInputSettings.playInteractionSound]);
   const handleVoiceInputStart = useCallback(async () => {
-    const proceed = await onBeforeVoiceInputStart?.();
-    if (proceed === false) return;
-    if (voiceInputSettings.playInteractionSound) {
-      playVoiceInputStartCue();
-    }
-    await voiceInput.start();
+    await voiceInput.start({
+      startedAt: performance.now(),
+      beforeStart: onBeforeVoiceInputStart,
+      onStartFeedback: () => {
+        if (voiceInputSettings.playInteractionSound) return playVoiceInputStartCue();
+      },
+    });
   }, [onBeforeVoiceInputStart, voiceInput.start, voiceInputSettings.playInteractionSound]);
 
   const playVoiceInputEndCueNow = useCallback(() => {
@@ -3606,12 +3608,13 @@ export function ChatInput({
   // While dictation holds the editor read-only the native caret disappears;
   // the decoration renders a mic-shaped caret at the insertion point instead
   // (listening = animated level bars, submitting/refining = spinner).
+  const showVoiceProcessing = useVoiceProcessingIndicator(voiceInput.state);
   const voiceCaretState: VoiceInputCaretState | null = !voiceBusyOnCurrentComposer
     ? null
     : voiceInput.isListening
       ? 'listening'
       : voiceInput.isBusy
-        ? 'processing'
+        ? showVoiceProcessing ? 'processing' : 'stopping'
         : null;
 
   useEffect(() => {
@@ -9357,8 +9360,10 @@ function VoiceInputButton({
   const listening = state === 'listening';
   const refining = state === 'refining';
   const busy = state === 'submitting' || state === 'refining';
+  const showProcessing = useVoiceProcessingIndicator(state);
+  const stopping = busy && !showProcessing;
   const activeRecording = listening || longPressActive;
-  const disabledOrBusy = disabled || (busy && !longPressActive);
+  const disabledOrBusy = disabled || busy;
 
   // ── 录音态宽度形变 + 计时(DESIGN.md §14.4 窄变体,≤240ms)──
   // 仅录音中展开(2026-07-22 用户定稿:展开必须承载信息,hover 展出「语音」
@@ -9369,7 +9374,7 @@ function VoiceInputButton({
   const pillLabelRef = useRef<HTMLSpanElement>(null);
   const [pillWidth, setPillWidth] = useState<number | null>(null);
   const expandable = true;
-  const expanded = expandable && activeRecording;
+  const expanded = expandable && (activeRecording || stopping);
   const minuteDigits = String(Math.floor(recSeconds / 60)).length;
 
   useEffect(() => {
@@ -9403,13 +9408,15 @@ function VoiceInputButton({
     label = t('newChat.chatInput.voiceInput.releaseToStop');
   } else if (refining) {
     label = t('newChat.chatInput.voiceInput.refining');
+  } else if (state === 'submitting') {
+    label = t('voiceInputOverlay.status.submitting');
   } else if (activeRecording) {
     label = t('newChat.chatInput.voiceInput.stop');
   }
   const tooltipText =
-    shortcutLabel && !longPressActive && !refining ? `${label} · ${shortcutLabel}` : label;
-  const controlledTooltipOpen = refining
-    ? true
+    shortcutLabel && !longPressActive && !busy ? `${label} · ${shortcutLabel}` : label;
+  const controlledTooltipOpen = busy
+    ? showProcessing
     : longPressActive
       ? !releaseToSendActive
       : undefined;
@@ -9509,7 +9516,8 @@ function VoiceInputButton({
   }, [clearLongPressTimer, clearSuppressNextClick, setReleaseToSendActive]);
 
   return (
-    <Tip text={tooltipText} side="top" controlledOpen={controlledTooltipOpen}>
+    <Tip text={tooltipText} side="top" controlledOpen={controlledTooltipOpen}
+      resetHoverOnControlChange contentClassName="data-[state=closed]:hidden">
       <button
         type="button"
         className={cn(
@@ -9521,10 +9529,11 @@ function VoiceInputButton({
           'bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)] border border-[var(--border-default)] text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]' /* spec 2026-07-17, token by 一哥 */,
           'hover:bg-[var(--model-trigger-hover)]',
           // 录音态:与主题同极性的 chip 填充(light 亮灰 / dark 深灰),红点 + 计时承担状态信号
-          activeRecording &&
+          (activeRecording || stopping) &&
             'bg-[var(--surface-chip)] text-[var(--text-primary)] hover:bg-[var(--surface-chip)]',
           'focus-visible:outline-none',
-          disabledOrBusy && 'cursor-not-allowed opacity-40',
+          disabledOrBusy && 'cursor-not-allowed',
+          disabledOrBusy && !stopping && 'opacity-40',
           className,
         )}
         style={expandable ? { width: pillWidth ?? 30, transition: pillTransition } : undefined}
@@ -9571,11 +9580,13 @@ function VoiceInputButton({
           void (listening ? onStop() : onStart());
         }}
       >
-        {/* 28px 图标位: idle 麦克风 / 录音红点(呼吸动画挂 wrapper,仅 opacity) / refining spinner。
+        {/* 28px 图标位: idle 麦克风 / 录音红点(呼吸动画挂 wrapper,仅 opacity) / 停止后处理 spinner。
             会话内与新建对话框共用(不再按 create-agent 分叉)。 */}
         <span className="flex h-[28px] w-[28px] shrink-0 items-center justify-center">
-          {refining ? (
+          {showProcessing ? (
             <Spinner size={15} />
+          ) : stopping ? (
+            <span className="h-2 w-2 rounded-full bg-[var(--settings-badge-error)]" />
           ) : activeRecording ? (
             <span className="inline-flex animate-pulse motion-reduce:animate-none">
               <span className="h-2 w-2 rounded-full bg-[var(--settings-badge-error)]" />
@@ -9594,7 +9605,7 @@ function VoiceInputButton({
             'motion-reduce:transition-none',
           )}
         >
-          {activeRecording ? recTimeText : ''}
+          {activeRecording || stopping ? recTimeText : ''}
         </span>
       </button>
     </Tip>

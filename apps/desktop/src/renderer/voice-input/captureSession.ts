@@ -9,6 +9,8 @@ import {
   type PcmChunk,
 } from './WebMicAudioEngine';
 import { createVoiceInputAudioProfile } from './audioProfile';
+import { hasPcmSound } from './pcmActivity';
+import type { VoiceInputStartupTimeline } from './startupTimeline';
 
 const log = createLogger('voice-input-capture');
 
@@ -27,7 +29,7 @@ export type VoiceInputCaptureSessionStartResult =
       ok: false;
       error: string;
       /**
-       * Startup was cancelled rather than broken — currently only by a power
+       * Startup was cancelled rather than broken — by its owner or a power
        * release (suspend / lock) landing mid-start. Callers should clean up
        * silently instead of surfacing `error`, which is an internal message.
        */
@@ -49,7 +51,11 @@ type VoiceInputCaptureSessionOptions = {
   getRunId: () => string | null;
   setEngine: (engine: WebMicAudioEngine | null) => void;
   isCurrentEngine?: (engine: WebMicAudioEngine) => boolean;
-  canAcceptAudioChunk?: () => boolean;
+  /** Fires once after the first PCM frame has been retained locally. */
+  onCaptureReady?: () => void;
+  /** Fires once when captured PCM contains sound, even before cloud startup. */
+  onSoundDetected?: () => void;
+  timeline?: VoiceInputStartupTimeline;
   appendAudioChunk: (chunk: PcmChunk) => void;
   onInterrupted: (message: string) => void;
   onStateChange: (event: string, details?: Record<string, unknown>) => void;
@@ -69,6 +75,8 @@ export async function startVoiceInputCaptureSession(
   const pendingChunks: PcmChunk[] = [];
   let pendingOverflowWarnedAt = 0;
   let firstChunkLogged = false;
+  let captureReady = false;
+  let soundDetected = false;
   let engine: WebMicAudioEngine;
 
   const createEngine = (deviceId?: string): WebMicAudioEngine => {
@@ -81,11 +89,15 @@ export async function startVoiceInputCaptureSession(
     });
     next.onPcm16k((chunk) => {
       if (options.isCurrentEngine && !options.isCurrentEngine(next)) return;
+      if (chunk.pcm16k.byteLength === 0) return;
+      if (!soundDetected && hasPcmSound(chunk.pcm16k)) {
+        soundDetected = true;
+        options.onSoundDetected?.();
+      }
       if (!firstChunkLogged) {
         firstChunkLogged = true;
-        log.debug(message(options.label, 'first pcm16k chunk'), chunk.trace);
+        options.timeline?.mark('first_pcm');
       }
-      if (options.canAcceptAudioChunk && !options.canAcceptAudioChunk()) return;
       if (!options.getRunId()) {
         if (pendingChunks.length >= MAX_PENDING_AUDIO_CHUNKS) {
           const now = Date.now();
@@ -103,9 +115,16 @@ export async function startVoiceInputCaptureSession(
           pendingChunks.shift();
         }
         pendingChunks.push(chunk);
-        return;
+        options.timeline?.mark('first_buffered_audio');
+      } else {
+        options.appendAudioChunk(chunk);
       }
-      options.appendAudioChunk(chunk);
+      // System mute and cloud setup must never discard the user's opening
+      // words. Readiness means PCM is retained, not merely engine.start() done.
+      if (!captureReady) {
+        captureReady = true;
+        options.onCaptureReady?.();
+      }
     });
     return next;
   };
@@ -119,6 +138,7 @@ export async function startVoiceInputCaptureSession(
       await engine.start();
       return;
     } catch (error) {
+      if (options.isCurrentEngine && !options.isCurrentEngine(engine)) throw error;
       if (!options.deviceId || !isSelectedMicrophoneUnavailableError(error)) {
         throw error;
       }
@@ -138,6 +158,7 @@ export async function startVoiceInputCaptureSession(
       if (currentPowerReleaseGeneration() !== powerGenerationAtStart) {
         throw powerReleaseCancellation();
       }
+      if (options.isCurrentEngine && !options.isCurrentEngine(engine)) throw error;
       engine = createEngine(undefined);
       options.setEngine(engine);
       await engine.start();
@@ -145,11 +166,24 @@ export async function startVoiceInputCaptureSession(
   };
 
   try {
+    options.timeline?.mark('microphone_requested');
     log.debug(message(options.label, 'microphone start requested'), { elapsedMs: options.elapsedMs?.() });
     await startEngineWithAutomaticFallback();
+    // A cancellation can finish while getUserMedia is still pending. Never
+    // leave the late device open or clear a newer attempt's engine reference.
+    if (options.isCurrentEngine && !options.isCurrentEngine(engine)) {
+      await engine.stop();
+      return { ok: false, cancelled: true, error: 'Voice input start was cancelled.' };
+    }
+    options.timeline?.mark('engine_ready');
+    void window.electronAPI.voiceInput.setRendererMicrophonePermissionVerified(true).catch(() => undefined);
     log.info(message(options.label, 'microphone started'), { elapsedMs: options.elapsedMs?.() });
   } catch (error) {
-    options.setEngine(null);
+    if (options.isCurrentEngine && !options.isCurrentEngine(engine)) {
+      await engine.stop().catch(() => undefined);
+      return { ok: false, cancelled: true, error: options.formatStartError(error) };
+    }
+    if (!options.isCurrentEngine || options.isCurrentEngine(engine)) options.setEngine(null);
     // Suspend/lock cancelling startup is the user walking away on purpose, not
     // a failure worth an error surface. Report it as cancellation so callers
     // clean up quietly instead of showing an internal message.
@@ -161,11 +195,8 @@ export async function startVoiceInputCaptureSession(
         error: options.formatStartError(error),
       };
     }
-    // The start guard trusts a positive permission cache so it does not open a
-    // throwaway microphone stream before every recording. If the real capture
-    // discovers that permission was revoked, invalidate that cache so the next
-    // start returns to the permission gate, and tell the caller so the current
-    // attempt surfaces the permission recovery UI rather than a raw error.
+    // The real capture requests permission once and detects revocation. Keep
+    // the cached UI snapshot in sync and show the existing recovery surface.
     if (isMicrophonePermissionDeniedError(error)) {
       log.warn(message(options.label, 'microphone permission denied during capture start'));
       void window.electronAPI.voiceInput

@@ -10,6 +10,7 @@ class PCM16kWorklet extends AudioWorkletProcessor {
     this.carry = 0;
     this.previousSample = 0;
     this.chunkIndex = 0;
+    this.firstFramePending = true;
     this.active = true;
     this.disposed = false;
 
@@ -45,6 +46,7 @@ class PCM16kWorklet extends AudioWorkletProcessor {
         this.pending = [];
         this.carry = 0;
         this.previousSample = 0;
+        this.firstFramePending = true;
       }
       this.active = event.data.active;
     };
@@ -65,8 +67,14 @@ class PCM16kWorklet extends AudioWorkletProcessor {
       this.pending.push(sample);
     }
 
-    while (this.pending.length >= this.chunkSamples) {
-      const frame = this.pending.splice(0, this.chunkSamples);
+    // Deliver the first 10 ms promptly, then return to normal-sized packets.
+    // This changes packet boundaries only, never the retained samples.
+    while (true) {
+      const count = this.firstFramePending
+        ? Math.min(this.chunkSamples, Math.max(1, Math.round(this.targetSampleRate * 0.01)))
+        : this.chunkSamples;
+      if (this.pending.length < count) break;
+      const frame = this.pending.splice(0, count);
       this.postFrameFromSamples(frame, capturedAt);
     }
 
@@ -90,6 +98,7 @@ class PCM16kWorklet extends AudioWorkletProcessor {
       },
     });
     this.chunkIndex += 1;
+    this.firstFramePending = false;
   }
 
   postFrame(frame) {
@@ -105,7 +114,9 @@ class PCM16kWorklet extends AudioWorkletProcessor {
 
   resample(input, fromRate, toRate) {
     if (input.length === 0) return [];
-    if (fromRate === toRate) return Array.from(input);
+    // The caller immediately copies sample values into pending; it does not
+    // retain or mutate the browser's input buffer. No intermediate array needed.
+    if (fromRate === toRate) return input;
 
     const ratio = fromRate / toRate;
     const output = [];
