@@ -19,6 +19,10 @@ export function readRemoteCollectionCache(owner: string, collectionId: string): 
   return collections.get(collectionId) ?? [];
 }
 
+export function hasRemoteCollectionCache(owner: string, collectionId: string): boolean {
+  return owner === cacheOwner && collections.has(collectionId);
+}
+
 export function writeRemoteCollectionCache(owner: string, collectionId: string, items: HostedRemoteCollectionItem[]): void {
   if (owner !== cacheOwner) return;
   collections.set(collectionId, items);

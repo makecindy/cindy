@@ -16,12 +16,12 @@ import { useTeammateNavigation } from './useTeammateNavigation';
 const AVATAR_SIZE = 32;
 
 export function CompanionHeader(props: {
-  resource: RemoteResource; deviceId: string; deviceName: string; online: boolean; onSearch(): void; onOpenNavigation(): void;
+  resource: RemoteResource; deviceId: string; deviceName: string; online: boolean; controlsReady?: boolean; onSearch(): void; onOpenNavigation(): void;
 }) {
   const { accountGeneration } = useAuth();
   return <CompanionHeaderContent key={accountGeneration} {...props} />;
 }
-function CompanionHeaderContent({ resource, deviceId, deviceName, online, onSearch, onOpenNavigation }: Parameters<typeof CompanionHeader>[0]) {
+function CompanionHeaderContent({ resource, deviceId, deviceName, online, controlsReady = true, onSearch, onOpenNavigation }: Parameters<typeof CompanionHeader>[0]) {
   const { t, i18n } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -44,7 +44,7 @@ function CompanionHeaderContent({ resource, deviceId, deviceName, online, onSear
         <Text numberOfLines={1} style={styles.name}>{name}</Text>
         <ChevronDown size={iconSize.sm} color={colors.textSecondary} />
       </Pressable>
-      <HomeHeaderGlassButton testID="companion.settings" accessibilityLabel={t('devices.companionProfile.settingsTitle')} onPress={() => setProfile(true)}>
+      <HomeHeaderGlassButton testID="companion.settings" disabled={!controlsReady} accessibilityLabel={t('devices.companionProfile.settingsTitle')} onPress={() => setProfile(true)}>
         <Settings2 size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textPrimary} />
       </HomeHeaderGlassButton>
     </View>
