@@ -24,7 +24,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "ipaddr.js": "^2.4.0",
     "playwright-core": "1.60.0",
-    "sharp": "^0.35.0",
+    "sharp": "^0.35.4",
     "typebox": "1.1.39",
     "undici": "^8.3.0",
     "ws": "^8.18.3",
