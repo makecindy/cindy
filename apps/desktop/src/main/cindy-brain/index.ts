@@ -6073,11 +6073,11 @@ export async function installOrUpdateLocalGhostPackageFromForge(
     packageSha256: string;
     /** 向发起安装的任务投确认卡；Agent 安装无论任务权限档都要用户确认。 */
     consentPrompt: GhostInstallConsentPrompt;
+    /** packing 租约内捕获的 owner；确认与等锁都不持租约，落位前用这份身份取新租约。 */
+    mutationOwner: ActiveAppSession;
     isCurrent?: () => boolean;
   },
 ): Promise<{ ghost: InstalledGhost; action: 'installed' | 'updated' }> {
-  // packing 完成时钉住 owner；确认与等锁都不持租约，落位前用这份身份取新租约。
-  const mutationOwner = captureGhostMutationOwner();
   const manager = getGhostManager();
   const inspected = await manager.inspect(cindyFilePath);
   if ('rejection' in inspected) throwInstallError(inspected.rejection);
@@ -6126,7 +6126,7 @@ export async function installOrUpdateLocalGhostPackageFromForge(
       throwIpcError('PRECONDITION_FAILED', '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。');
     }
     // 确认已在 owner 租约外完成；落位再用 packing 时钉住的 owner 取租约。
-    const releaseMutation = beginGhostMutation(mutationOwner);
+    const releaseMutation = beginGhostMutation(expected.mutationOwner);
     try {
       const installed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
       if (!installed) {

@@ -552,6 +552,7 @@ describe('Forge session workdir gate', () => {
       packageSha256: createHash('sha256').update(bytes).digest('hex'),
       // Agent 安装的插件确认投给调用所在的任务。
       consentPrompt: expect.any(Function),
+      mutationOwner: { mode: 'local', dataOwnerId: 'test', generation: 0 },
     });
     expect(result).toMatchObject({
       ok: true,

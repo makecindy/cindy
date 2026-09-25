@@ -165,6 +165,32 @@ describe('assertGhostInstallConsent', () => {
     );
   });
 
+  it('rejects a confirmed update once the receiver already covers the candidate permissions', async () => {
+    const v1 = installed(manifest(['api.weather.test']));
+    const v2 = manifest(['api.weather.test', 'upload.weather.test'], '2.0.0');
+    const decision = await obtainGhostInstallConsent(
+      { mode: 'prompt', prompt: userPrompt(true), initiator: 'user', origin: 'market' },
+      v1,
+      v2,
+      reviewedDigest,
+    );
+    const v3 = installed(manifest(['api.weather.test', 'upload.weather.test'], '3.0.0'));
+    expect(() => assertGhostInstallConsent(decision, v3, v2, reviewedDigest)).toThrow(
+      /PRECONDITION_FAILED/,
+    );
+  });
+
+  it('still accepts an originally unprompted decision when consent is no longer needed', () => {
+    expect(() =>
+      assertGhostInstallConsent(
+        { mode: 'unprompted' },
+        installed(manifest(['api.weather.test'], '3.0.0')),
+        manifest(['api.weather.test'], '2.0.0'),
+        reviewedDigest,
+      ),
+    ).not.toThrow();
+  });
+
   it('rejects an unprompted decision once the install turns out to need consent', () => {
     const error = (() => {
       try {

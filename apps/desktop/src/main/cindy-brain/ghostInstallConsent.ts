@@ -132,7 +132,12 @@ export function assertGhostInstallConsent(
 ): void {
   if (decision.mode === 'exempt') return;
   const facts = evaluateGhostInstallConsent(installedNow, manifest);
-  if (!facts) return;
+  if (!facts) {
+    // 只有原本判定无需确认的决策，才能在落位时仍然无需确认。用户确认过的更新
+    // 若受体已被换成权限已覆盖候选包的版本，必须按过期拒绝，不能沿用这次确认。
+    if (decision.mode === 'unprompted') return;
+    throwIpcError('PRECONDITION_FAILED', '插件内容在确认后发生了变化，请重新安装');
+  }
   if (
     decision.mode === 'confirmed' &&
     decision.key === ghostInstallConsentKey(facts, packageSha256)

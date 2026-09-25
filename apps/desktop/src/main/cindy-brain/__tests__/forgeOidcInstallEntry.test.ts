@@ -51,13 +51,13 @@ describe('Forge OIDC install entry wiring', () => {
     expect(body).toContain('inspected.packageSha256');
   });
 
-  it('packing 时捕获的 owner 在等待安装锁之前钉住，取新租约前若已切换则拒绝', () => {
+  it('packing 时捕获的 owner 由调用方传入，取新租约前若已切换则拒绝', () => {
     const body = forgeInstallBody();
-    const capture = body.indexOf('const mutationOwner = captureGhostMutationOwner();');
+    expect(body).toContain('mutationOwner: ActiveAppSession');
+    expect(body).not.toContain('const mutationOwner = captureGhostMutationOwner();');
     const lock = body.indexOf('return withGhostInstallLock');
-    const lease = body.indexOf('beginGhostMutation(mutationOwner)');
-    expect(capture).toBeGreaterThanOrEqual(0);
-    expect(lock).toBeGreaterThan(capture);
+    const lease = body.indexOf('beginGhostMutation(expected.mutationOwner)');
+    expect(lock).toBeGreaterThanOrEqual(0);
     expect(lease).toBeGreaterThan(lock);
   });
 

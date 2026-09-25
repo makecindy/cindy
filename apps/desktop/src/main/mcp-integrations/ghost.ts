@@ -72,7 +72,11 @@ import {
 import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
-import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import {
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+  type ActiveAppSession,
+} from '../appSessionState.js';
 import {
   deriveGhostSessionContext,
   type GhostSessionContextInjected,
@@ -579,11 +583,13 @@ type ForgeSessionFsGate =
       message: string;
     };
 
-async function withForgeOwnerLease<T>(operation: () => Promise<T>): Promise<T> {
+async function withForgeOwnerLease<T>(
+  operation: (owner: ActiveAppSession) => Promise<T>,
+): Promise<T> {
   const owner = captureGhostMutationOwnerForMcp();
   const release = acquireGhostMutationLeaseForMcp(owner);
   try {
-    return await operation();
+    return await operation(owner);
   } finally {
     release();
   }
@@ -2453,7 +2459,7 @@ export function getCindyGhostsMcpDeps(
     },
     async forgeInstall({ dir, iconSource }): Promise<CindyForgeInstallResult> {
       const sessionContext = resolveSessionContext();
-      const packedAttempt = await withForgeOwnerLease(async () => {
+      const packedAttempt = await withForgeOwnerLease(async (mutationOwner) => {
         const gate = await getForgeSessionFsGate(sessionContext);
         if (!gate.ok) return gate;
         const access = await authorizeForgeOutsideWorkdir({
@@ -2475,6 +2481,7 @@ export function getCindyGhostsMcpDeps(
           ok: true as const,
           packed: attempt.packed,
           iconNote: attempt.iconNote,
+          mutationOwner,
           ...(stillGranted.allowOutsideWorkdir && stillGranted.isCurrent
             ? { isCurrent: stillGranted.isCurrent }
             : {}),
@@ -2488,6 +2495,7 @@ export function getCindyGhostsMcpDeps(
             ghostId: packedAttempt.packed.manifest.id,
             packageSha256: createHash('sha256').update(packedAttempt.packed.buf).digest('hex'),
             consentPrompt: installConsentPrompt(),
+            mutationOwner: packedAttempt.mutationOwner,
             ...(packedAttempt.isCurrent ? { isCurrent: packedAttempt.isCurrent } : {}),
           },
         );
