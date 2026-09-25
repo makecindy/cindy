@@ -4,8 +4,8 @@
  * 两段式，缺一不可：
  * 1. `obtainGhostInstallConsent` 在任何安装锁之外按策略求得确认——弹窗可能等几分钟，
  *    不能卡住其它插件的安装、卸载或自动更新；
- * 2. `assertGhostInstallConsent` 在安装锁内、落位前，用真实包与当前受体重算一次。
- *    确认后包内容或已装版本变了，就不能沿用这次确认。
+ * 2. `assertGhostInstallConsent` 在安装锁内、落位前，用真实包、当前受体与确认前
+ *    钉住的包摘要重算一次。确认后权限面、已装版本或包字节变了，就不能沿用这次确认。
  *
  * 每条安装路径都必须显式交出一个策略：用户或 Agent 发起的安装走 `prompt`，后台自动
  * 更新走 `automatic`（需要确认就跳过，不替用户点头），只有服务端默认安装走 `exempt`。
@@ -86,13 +86,15 @@ export function isGhostInstallConsentRequiredError(
 }
 
 /**
- * 按策略求得确认。用户拒绝抛 `MUTATION_CANCELLED`；确认界面不可用时 fail closed
- * 抛 `PRECONDITION_FAILED`；后台路径需要确认时抛 `GhostInstallConsentRequiredError`。
+ * 按策略求得确认。`packageSha256` 必须是确认前已核验的那份包摘要；用户拒绝抛
+ * `MUTATION_CANCELLED`；确认界面不可用时 fail closed 抛 `PRECONDITION_FAILED`；
+ * 后台路径需要确认时抛 `GhostInstallConsentRequiredError`。
  */
 export async function obtainGhostInstallConsent(
   policy: GhostInstallConsentPolicy,
   installed: InstalledGhost | null | undefined,
   manifest: GhostManifest,
+  packageSha256: string,
 ): Promise<GhostInstallConsentDecision> {
   if (policy.mode === 'exempt') return { mode: 'exempt', reason: policy.reason };
   const facts = evaluateGhostInstallConsent(installed, manifest);
@@ -115,22 +117,28 @@ export async function obtainGhostInstallConsent(
       facts.kind === 'install' ? '用户取消了插件安装' : '用户取消了插件更新',
     );
   }
-  return { mode: 'confirmed', key: ghostInstallConsentKey(facts) };
+  return { mode: 'confirmed', key: ghostInstallConsentKey(facts, packageSha256) };
 }
 
 /**
  * 安装锁内、落位前的同步复核。`installedNow` 必须是锁内现读的已装插件，
- * `manifest` 必须来自即将落位的那份真实包。
+ * `manifest` 与 `packageSha256` 必须来自即将落位的那份真实包。
  */
 export function assertGhostInstallConsent(
   decision: GhostInstallConsentDecision,
   installedNow: InstalledGhost | null | undefined,
   manifest: GhostManifest,
+  packageSha256: string,
 ): void {
   if (decision.mode === 'exempt') return;
   const facts = evaluateGhostInstallConsent(installedNow, manifest);
   if (!facts) return;
-  if (decision.mode === 'confirmed' && decision.key === ghostInstallConsentKey(facts)) return;
+  if (
+    decision.mode === 'confirmed' &&
+    decision.key === ghostInstallConsentKey(facts, packageSha256)
+  ) {
+    return;
+  }
   if (decision.mode === 'unprompted') throw new GhostInstallConsentRequiredError(facts);
   throwIpcError('PRECONDITION_FAILED', '插件内容在确认后发生了变化，请重新安装');
 }

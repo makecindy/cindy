@@ -43,6 +43,9 @@ const userPrompt = (answer: boolean | Error) =>
     return answer;
   });
 
+const reviewedDigest = 'a'.repeat(64);
+const replacedDigest = 'b'.repeat(64);
+
 describe('obtainGhostInstallConsent', () => {
   it('prompts on first install and returns a confirmed decision', async () => {
     const prompt = userPrompt(true);
@@ -50,6 +53,7 @@ describe('obtainGhostInstallConsent', () => {
       { mode: 'prompt', prompt, initiator: 'user', origin: 'market' },
       null,
       manifest(['api.weather.test']),
+      reviewedDigest,
     );
     expect(decision.mode).toBe('confirmed');
     expect(prompt).toHaveBeenCalledWith(
@@ -64,6 +68,7 @@ describe('obtainGhostInstallConsent', () => {
         { mode: 'prompt', prompt, initiator: 'agent', origin: 'forge' },
         installed(manifest(['api.weather.test'])),
         manifest(['api.weather.test'], '1.1.0'),
+        reviewedDigest,
       ),
     ).resolves.toEqual({ mode: 'unprompted' });
     expect(prompt).not.toHaveBeenCalled();
@@ -73,10 +78,15 @@ describe('obtainGhostInstallConsent', () => {
     const policy = (answer: boolean | Error) =>
       ({ mode: 'prompt', prompt: userPrompt(answer), initiator: 'user', origin: 'local-file' }) as const;
     await expect(
-      obtainGhostInstallConsent(policy(false), null, manifest(['api.weather.test'])),
+      obtainGhostInstallConsent(policy(false), null, manifest(['api.weather.test']), reviewedDigest),
     ).rejects.toMatchObject({ code: 'MUTATION_CANCELLED' });
     await expect(
-      obtainGhostInstallConsent(policy(new Error('no window')), null, manifest(['api.weather.test'])),
+      obtainGhostInstallConsent(
+        policy(new Error('no window')),
+        null,
+        manifest(['api.weather.test']),
+        reviewedDigest,
+      ),
     ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
   });
 
@@ -85,6 +95,7 @@ describe('obtainGhostInstallConsent', () => {
       { mode: 'automatic' },
       installed(manifest(['api.weather.test'])),
       manifest(['api.weather.test', 'upload.weather.test'], '2.0.0'),
+      reviewedDigest,
     ).catch((caught: unknown) => caught);
     expect(isGhostInstallConsentRequiredError(error)).toBe(true);
     await expect(
@@ -92,6 +103,7 @@ describe('obtainGhostInstallConsent', () => {
         { mode: 'automatic' },
         installed(manifest(['api.weather.test'])),
         manifest(['api.weather.test'], '1.1.0'),
+        reviewedDigest,
       ),
     ).resolves.toEqual({ mode: 'unprompted' });
   });
@@ -102,6 +114,7 @@ describe('obtainGhostInstallConsent', () => {
         { mode: 'exempt', reason: 'server-default-install' },
         null,
         manifest(['api.weather.test']),
+        reviewedDigest,
       ),
     ).resolves.toEqual({ mode: 'exempt', reason: 'server-default-install' });
   });
@@ -115,8 +128,9 @@ describe('assertGhostInstallConsent', () => {
       { mode: 'prompt', prompt: userPrompt(true), initiator: 'user', origin: 'market' },
       current,
       next,
+      reviewedDigest,
     );
-    expect(() => assertGhostInstallConsent(decision, current, next)).not.toThrow();
+    expect(() => assertGhostInstallConsent(decision, current, next, reviewedDigest)).not.toThrow();
   });
 
   it('rejects when the package gained permissions after confirmation', async () => {
@@ -125,20 +139,41 @@ describe('assertGhostInstallConsent', () => {
       { mode: 'prompt', prompt: userPrompt(true), initiator: 'user', origin: 'market' },
       current,
       manifest(['api.weather.test', 'upload.weather.test'], '2.0.0'),
+      reviewedDigest,
     );
     expect(() =>
       assertGhostInstallConsent(
         decision,
         current,
         manifest(['api.weather.test', 'upload.weather.test', 'extra.weather.test'], '2.0.0'),
+        reviewedDigest,
       ),
     ).toThrow(/PRECONDITION_FAILED/);
+  });
+
+  it('rejects when the reviewed package bytes are replaced after confirmation', async () => {
+    const next = manifest(['api.weather.test']);
+    const decision = await obtainGhostInstallConsent(
+      { mode: 'prompt', prompt: userPrompt(true), initiator: 'user', origin: 'market' },
+      null,
+      next,
+      reviewedDigest,
+    );
+    expect(() => assertGhostInstallConsent(decision, null, next, reviewedDigest)).not.toThrow();
+    expect(() => assertGhostInstallConsent(decision, null, next, replacedDigest)).toThrow(
+      /PRECONDITION_FAILED/,
+    );
   });
 
   it('rejects an unprompted decision once the install turns out to need consent', () => {
     const error = (() => {
       try {
-        assertGhostInstallConsent({ mode: 'unprompted' }, null, manifest(['api.weather.test']));
+        assertGhostInstallConsent(
+          { mode: 'unprompted' },
+          null,
+          manifest(['api.weather.test']),
+          reviewedDigest,
+        );
       } catch (caught) {
         return caught;
       }
@@ -153,6 +188,7 @@ describe('assertGhostInstallConsent', () => {
         { mode: 'exempt', reason: 'server-default-install' },
         installed(manifest(['api.weather.test'])),
         manifest(['api.weather.test', 'upload.weather.test'], '2.0.0'),
+        reviewedDigest,
       ),
     ).not.toThrow();
   });

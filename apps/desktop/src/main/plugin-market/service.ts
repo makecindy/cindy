@@ -1539,13 +1539,14 @@ export class PluginMarketService {
           expected: options.expectedManifest,
           expectedGhostId: plugin.ghostId,
           expectedVersion: plugin.version,
-          resolveConsent: (manifest) =>
+          resolveConsent: (manifest, packageSha256) =>
             obtainGhostInstallConsent(
               consent,
               getGhostManager()
                 .list()
                 .find((ghost) => ghost.manifest.id === plugin.ghostId),
               manifest,
+              packageSha256,
             ),
           beforeCommit: async () => {
             requireSameMarketOwner(owner);
@@ -2013,6 +2014,7 @@ export class PluginMarketService {
                 .list()
                 .find((ghost) => ghost.manifest.id === plugin.ghostId),
               inspected.manifest,
+              inspected.packageSha256,
             );
       requireSameMarketOwner(owner);
       const commit = () =>

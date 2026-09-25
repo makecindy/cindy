@@ -116,10 +116,14 @@ export function ghostUpdateNeedsConsent(installed: InstalledGhost, next: GhostMa
 }
 
 /**
- * 一次确认的规范化指纹。Main 在确认前按它记下用户看到的内容，落位前在安装锁内
- * 用真实包与当前受体重算；两者不同就说明确认后内容或受体变了，不能沿用这次确认。
+ * 一次确认的规范化指纹。Main 在确认前按它记下用户看到的内容与当时的包摘要，
+ * 落位前在安装锁内用真实包、当前受体与现读摘要重算；身份／权限没变但字节被换、
+ * 或受体变了，都不能沿用这次确认。
  */
-export function ghostInstallConsentKey(facts: GhostInstallConsentFacts): string {
+export function ghostInstallConsentKey(
+  facts: GhostInstallConsentFacts,
+  packageSha256: string,
+): string {
   const items = facts.kind === 'install' ? facts.permissions : facts.added;
   return JSON.stringify([
     facts.kind,
@@ -128,5 +132,6 @@ export function ghostInstallConsentKey(facts: GhostInstallConsentFacts): string 
     facts.kind === 'update' ? facts.previousVersion : null,
     items.map(ghostPermissionProjectionKey).sort(),
     facts.kind === 'update' ? facts.builtinOauthClientChanged : false,
+    packageSha256,
   ]);
 }

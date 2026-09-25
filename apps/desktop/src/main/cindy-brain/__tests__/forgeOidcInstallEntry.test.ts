@@ -48,6 +48,17 @@ describe('Forge OIDC install entry wiring', () => {
     expect(mutation).toBeGreaterThan(consent);
     expect(body).toContain("initiator: 'agent', origin: 'forge'");
     expect(body).toContain('consent: { decision: consent, manifest: inspected.manifest }');
+    expect(body).toContain('inspected.packageSha256');
+  });
+
+  it('packing 时捕获的 owner 在等待安装锁之前钉住，取新租约前若已切换则拒绝', () => {
+    const body = forgeInstallBody();
+    const capture = body.indexOf('const mutationOwner = captureGhostMutationOwner();');
+    const lock = body.indexOf('return withGhostInstallLock');
+    const lease = body.indexOf('beginGhostMutation(mutationOwner)');
+    expect(capture).toBeGreaterThanOrEqual(0);
+    expect(lock).toBeGreaterThan(capture);
+    expect(lease).toBeGreaterThan(lock);
   });
 
   it('tokenBroker 只在企业身份下拿 Forge facts，且不触发 OIDC 确认窗', () => {

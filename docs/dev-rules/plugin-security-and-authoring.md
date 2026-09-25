@@ -135,9 +135,10 @@
     手机远控与 IM 渠道卡都能处理，旧版手机无需升级。用户拒绝返回 `MUTATION_CANCELLED`，
     Agent 不得自行重试；确认界面不可用时 fail closed。
   - 两段式：确认在任何安装锁、来源锁与 owner 租约之外求得（等待期间不阻塞其它插件）；
-    落位前在按 ghostId 的安装锁内用即将落位的真实包与现读受体重算（`assertGhostInstallConsent`），
-    确认后包内容或已装版本变化就拒绝。每条装入路径都必须显式交出确认策略（`prompt`／
-    `automatic`／`exempt`）或锁外求得的结论，签名上必填，新增路径无法漏掉。
+    落位前在按 ghostId 的安装锁内用即将落位的真实包、现读受体与确认前钉住的包摘要重算
+    （`assertGhostInstallConsent`），确认后权限面、已装版本或包字节变化就拒绝。Forge 在
+    packing 时捕获 owner，等锁结束后若账号已切换则拒绝取租约。每条装入路径都必须显式交出
+    确认策略（`prompt`／`automatic`／`exempt`）或锁外求得的结论，签名上必填，新增路径无法漏掉。
   - 服务端 `defaultInstall` 插件（首装、组织默认接管与之后的自动更新）按下发方决定，
     策略为 `exempt`，不向用户确认。豁免只绑当前用户对该条目的默认下发资格：目录仍标
     `defaultInstall`、但用户已退订后再自行从市场安装的，扩权更新必须确认。

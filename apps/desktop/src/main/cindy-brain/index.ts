@@ -5881,6 +5881,7 @@ async function installAndDockLocked(
     opts.consent.decision,
     manager.list().find((ghost) => ghost.manifest.id === opts.ghostId),
     opts.consent.manifest,
+    opts.expectedPackageSha256,
   );
   // 初始启用态由入口显式传入；当前用户导入与市场首装都传 true，覆盖更新
   // 则走 manager.update 延续既有状态。保留 false 缺省以兼容内部受控调用方。
@@ -5951,7 +5952,7 @@ async function updateLocalGhostPackageLocked(
   );
   const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
   // 锁内按真实包与现读受体复核锁外求得的确认；熄灯之前拒绝，不打断正在用的旧版本。
-  assertGhostInstallConsent(consent, previousGhost, inspected.manifest);
+  assertGhostInstallConsent(consent, previousGhost, inspected.manifest, expectedPackageSha256);
   runtime.stop(inspected.manifest.id);
   // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
   // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
@@ -6075,6 +6076,8 @@ export async function installOrUpdateLocalGhostPackageFromForge(
     isCurrent?: () => boolean;
   },
 ): Promise<{ ghost: InstalledGhost; action: 'installed' | 'updated' }> {
+  // packing 完成时钉住 owner；确认与等锁都不持租约，落位前用这份身份取新租约。
+  const mutationOwner = captureGhostMutationOwner();
   const manager = getGhostManager();
   const inspected = await manager.inspect(cindyFilePath);
   if ('rejection' in inspected) throwInstallError(inspected.rejection);
@@ -6100,6 +6103,7 @@ export async function installOrUpdateLocalGhostPackageFromForge(
     { mode: 'prompt', prompt: expected.consentPrompt, initiator: 'agent', origin: 'forge' },
     manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id),
     inspected.manifest,
+    inspected.packageSha256,
   );
   const confirmFacts = forgeOidcInstallConfirmFacts(inspected.manifest, membershipKind);
   if (confirmFacts) {
@@ -6121,8 +6125,7 @@ export async function installOrUpdateLocalGhostPackageFromForge(
     if (expected.isCurrent?.() === false) {
       throwIpcError('PRECONDITION_FAILED', '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。');
     }
-    // 确认已在 owner 租约外完成；落位再取租约，账号 teardown 会等文件系统写完。
-    const mutationOwner = captureGhostMutationOwner();
+    // 确认已在 owner 租约外完成；落位再用 packing 时钉住的 owner 取租约。
     const releaseMutation = beginGhostMutation(mutationOwner);
     try {
       const installed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
@@ -6313,7 +6316,12 @@ async function installOrUpdateMarketGhostPackageLocked(
 
     // 用户确认在锁外求得；这里用即将落位的真实包与锁内现读的受体复核，确认后
     // 包内容或已装版本变了就拒绝，后台更新遇到需要确认的扩权直接放弃本轮。
-    assertGhostInstallConsent(expected.consent, installed, inspected.manifest);
+    assertGhostInstallConsent(
+      expected.consent,
+      installed,
+      inspected.manifest,
+      inspected.packageSha256,
+    );
     // Hold the owner-stability lease only for the actual Ghost filesystem
     // mutation.
     releaseMutation = beginGhostMutation(mutationOwner);
@@ -7755,6 +7763,7 @@ export function registerGhostIpc(): void {
       },
       manager.list().find((ghost) => ghost.manifest.id === probe.manifest.id),
       probe.manifest,
+      probe.packageSha256,
     );
     const enable = installOpts?.enable === true;
     // owner 租约在锁外整段持有(防中途 owner 切换把落位写进新 owner);按 ghostId 的
@@ -7826,6 +7835,7 @@ export function registerGhostIpc(): void {
       },
       manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id),
       inspected.manifest,
+      inspected.packageSha256,
     );
     // 从熄灯到换版收尾整段持 owner 租约:熄灯之后每一步都在改"当前 owner"的插件世界,
     // 中途 owner 切换落定会把后半段(update 落盘/停靠/点火)写进新 owner。租约在锁外,

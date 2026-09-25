@@ -74,7 +74,10 @@ export async function installCustomMarketPlugin(input: {
    * 真实包检查通过后、提交锁之外求得用户确认(ghostInstallConsent.ts)。收到的是
    * 即将落位那份包的 manifest;结论随安装请求交给装入出口在锁内复核。必填。
    */
-  resolveConsent: (manifest: GhostManifest) => Promise<GhostInstallConsentDecision>;
+  resolveConsent: (
+    manifest: GhostManifest,
+    packageSha256: string,
+  ) => Promise<GhostInstallConsentDecision>;
   /**
    * 打包完成后、实际改动 Ghost 运行时之前调用的校验钩(可异步)。
    * 调用方按当前账户捕获市场 manifest;打包是异步的,装出前必须重新确认
@@ -227,7 +230,9 @@ export async function installCustomMarketPlugin(input: {
     // 检查失败的包会在装入出口重新解析时被拒；这里只为能解析的真实包求确认。
     // 等待确认期间不持提交锁，不阻塞其它来源的增删与安装。
     const consent: GhostInstallConsentDecision =
-      'rejection' in inspected ? { mode: 'unprompted' } : await input.resolveConsent(inspected.manifest);
+      'rejection' in inspected
+        ? { mode: 'unprompted' }
+        : await input.resolveConsent(inspected.manifest, inspected.packageSha256);
     const commit = async (): Promise<PluginMarketInstallResult> => {
       const run = async (): Promise<PluginMarketInstallResult> => {
         await input.beforeCommit?.();

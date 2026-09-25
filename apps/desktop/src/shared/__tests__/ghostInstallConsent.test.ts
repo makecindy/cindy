@@ -96,15 +96,24 @@ describe('plugin install consent', () => {
     const current = installed(manifest());
     const next = manifest({ version: '2.0.0', network: { hosts: ['api.weather.test', 'upload.weather.test'] } });
     const shown = evaluateGhostInstallConsent(current, next)!;
-    expect(ghostInstallConsentKey(evaluateGhostInstallConsent(current, next)!)).toBe(
-      ghostInstallConsentKey(shown),
+    const digest = 'a'.repeat(64);
+    expect(ghostInstallConsentKey(evaluateGhostInstallConsent(current, next)!, digest)).toBe(
+      ghostInstallConsentKey(shown, digest),
     );
     const widened = manifest({
       version: '2.0.0',
       network: { hosts: ['api.weather.test', 'upload.weather.test', 'extra.weather.test'] },
     });
-    expect(ghostInstallConsentKey(evaluateGhostInstallConsent(current, widened)!)).not.toBe(
-      ghostInstallConsentKey(shown),
+    expect(ghostInstallConsentKey(evaluateGhostInstallConsent(current, widened)!, digest)).not.toBe(
+      ghostInstallConsentKey(shown, digest),
     );
+  });
+
+  it('binds the consent key to the reviewed package digest, not just identity and permissions', () => {
+    const facts = evaluateGhostInstallConsent(null, manifest())!;
+    const reviewed = 'a'.repeat(64);
+    const replaced = 'b'.repeat(64);
+    expect(ghostInstallConsentKey(facts, reviewed)).toBe(ghostInstallConsentKey(facts, reviewed));
+    expect(ghostInstallConsentKey(facts, reviewed)).not.toBe(ghostInstallConsentKey(facts, replaced));
   });
 });
