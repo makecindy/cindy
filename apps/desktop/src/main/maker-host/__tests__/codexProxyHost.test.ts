@@ -8135,6 +8135,119 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
     }
   });
 
+  it('selects namespaced smart children before routing, preserving lineage and frozen authorization', async () => {
+    const received: Array<{ path: string; body: Record<string, unknown>; key: string; account: unknown }> = [];
+    const upstream = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      received.push({ path: req.url ?? '', body: JSON.parse(Buffer.concat(chunks).toString()),
+        key: String(req.headers.authorization), account: req.headers['chatgpt-account-id'] });
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const host = await freshCodexProxyHost();
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    mockState.createAnthropicCompatProxy.mockImplementationOnce(actual.createAnthropicCompatProxy);
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const routing = await import('../provider-route.js');
+    const sessions = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const endpoint = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    const providers = ['parent', 'child', 'nested'].map(id => buildUserProvider({
+      id: `cprov-${id}`, name: id, runtimes: { codex: {
+        baseUrl: `${endpoint}/${id}`, wireProtocol: 'openai-responses', supportsImageGeneration: true,
+        models: [{ id: `${id}-model`, name: id, reasoning: true, reasoningEfforts: ['high'] }],
+      } },
+    }));
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, ...providers] };
+    setActiveCatalog(catalog);
+    const readKey = vi.fn((id: string) => `synthetic-${id}`);
+    routing.setCustomProviderKeyReader(readKey);
+    const routes = deriveCodexCustomProviderRoutes(catalog);
+    const parent = routes.find(route => route.providerId === 'cprov-parent')!;
+    const candidates = providers.map(provider => ({ providerId: provider.id,
+      catalogModel: provider.models.codex![0]!.id, reasoningEffort: 'high' as const }));
+    sessions.setSessionProvider('smart-source', 'cprov-parent');
+    const register = (fixed = false) => host.registerComposed('smart-source', 'root', 'fixture', {
+      smartSubagentRoutes: candidates,
+      ...(fixed ? { subagentRoute: candidates[1] } : {}),
+    });
+    register();
+    try {
+      await host.ensureCodexCustomContextProxyReady('smart-namespace', 'provider-oauth', routes);
+      const proxy = host.getCodexCustomContextProxyEndpoint('smart-namespace');
+      const post = async (model: string, thread: string, parentThread?: string, kind = 'collab_spawn', routeId = parent.routeId) => {
+        const response = await fetch(`${proxy}/_cindy/custom-provider/${routeId}/responses`, {
+          method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': thread,
+            'chatgpt-account-id': 'must-not-leak',
+            ...(parentThread ? { 'x-codex-parent-thread-id': parentThread, 'x-openai-subagent': kind } : {}) },
+          body: JSON.stringify({ model, input: [], vendor_field: 'retain', reasoning: { effort: 'low', summary: 'auto' } }),
+        });
+        await response.text();
+        return response.status;
+      };
+      // Before any thread notification: the genuine first collab request selects its candidate.
+      expect(await post('child-model', 'child', 'root')).toBe(200);
+      expect(received.at(-1)).toMatchObject({ path: '/child/responses', key: 'Bearer synthetic-cprov-child',
+        account: undefined, body: { model: 'child-model', vendor_field: 'retain', reasoning: { effort: 'high', summary: 'auto' } } });
+      expect(host.registerChildThread('root', 'child')).toBe(true);
+      expect(await post('nested-model', 'grandchild', 'child')).toBe(200);
+      expect(host.registerChildThread('child', 'grandchild')).toBe(true);
+      expect(await post('nested-model', 'grandchild', 'child')).toBe(200);
+      expect(received.at(-1)).toMatchObject({ path: '/nested/responses', key: 'Bearer synthetic-cprov-nested', body: { model: 'nested-model' } });
+      expect(await post('parent-model', 'same-provider', 'root')).toBe(200);
+      expect(received.at(-1)?.path).toBe('/parent/responses');
+      expect(await post('parent-model', 'root')).toBe(200);
+      expect(received.at(-1)?.body).toMatchObject({ model: 'parent-model', vendor_field: 'retain' });
+      const before = received.length;
+      readKey.mockClear();
+      expect(await post('child-model', 'unknown-child', 'unknown-parent')).toBe(403);
+      expect(await post('child-model', 'guardian', 'root', 'guardian')).toBe(403);
+      expect(await post('child-model', 'unmarked')).toBe(403);
+      expect(await post('foreign-model', 'unselected', 'root')).toBe(403);
+      expect(await post('child-model', 'forged', 'root', 'collab_spawn', 'bbbbbbbbbbbbbbbbbbbb')).toBe(403);
+      expect(readKey).not.toHaveBeenCalled();
+      const finish = routing.beginProviderRouteMutation('cprov-child');
+      try { expect(await post('child-model', 'child', 'root')).toBe(503); }
+      finally { finish.commit(); finish(); }
+      expect(await post('child-model', 'child', 'root')).toBe(503);
+      expect(received).toHaveLength(before);
+      expect(readKey).not.toHaveBeenCalled();
+      host.unregister('smart-source');
+      expect(await post('child-model', 'child', 'root')).toBe(403);
+      // A legacy locked route still overrides native inheritance, even with smart candidates present.
+      register(true);
+      expect(await post('parent-model', 'locked', 'root')).toBe(200);
+      expect(received.at(-1)).toMatchObject({ path: '/child/responses', body: { model: 'child-model', reasoning: { effort: 'high' } } });
+      expect(await post('nested-model', 'locked-nested', 'locked')).toBe(200);
+      expect(received.at(-1)?.body.model).toBe('child-model');
+      // A credential read is an await boundary in route resolution: neither a
+      // committed mutation nor unregister may dispatch the captured old decision.
+      for (const change of ['mutation', 'unregister'] as const) {
+        host.unregister('smart-source');
+        register();
+        const count = received.length;
+        readKey.mockImplementationOnce((id) => {
+          if (change === 'mutation') {
+            const done = routing.beginProviderRouteMutation(id); done.commit(); done();
+          } else host.unregister('smart-source');
+          return `synthetic-${id}`;
+        });
+        expect(await post('child-model', `read-race-${change}`, 'root')).toBe(503);
+        expect(received).toHaveLength(count);
+      }
+    } finally {
+      host.unregister('smart-source');
+      sessions.clearSessionProvider('smart-source');
+      await host.releaseCodexCustomContextProxy('smart-namespace');
+      routing.setCustomProviderKeyReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
+
   it('owns every private custom Provider prefix before opaque body transforms', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -8202,6 +8315,8 @@ describe('official Subagents on external credential Hosts', () => {
       return { accessToken: 'synthetic-child-token', accountId: 'fixture-account', canDispatch };
     });
     host.setCodexSubagentOAuthReader(reader);
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setSessionProvider('external-parent-session', 'external-fixture');
     host.registerComposed('external-parent-session', 'external-parent-thread', 'fixture', {
       subagentRoute: { providerId: 'openai', catalogModel: 'gpt-5.4', reasoningEffort: 'high' },
     });
@@ -8237,6 +8352,7 @@ describe('official Subagents on external credential Hosts', () => {
         expect(decision?.dispatchGenerationValid?.()).toBe(false);
       }
     } finally {
+      clearSessionProvider('external-parent-session');
       await host.disposeCodexProxy();
     }
   });

@@ -165,6 +165,7 @@ const sessionToThreads = new Map<string, Set<string>>();
 const threadToSession = new Map<string, string>();
 const subagentRouteByParentThread = new Map<string, CodexSubagentRouteSnapshot>();
 const subagentRouteByThread = new Map<string, CodexSubagentRouteSnapshot>();
+const subagentCredentialRevisions = new WeakMap<CodexSubagentRouteSnapshot, number>();
 const smartSubagentRoutesByParentThread = new Map<
   string,
   ReadonlyMap<string, CodexSubagentRouteSnapshot>
@@ -2766,19 +2767,50 @@ export function createModelRoutingTransform(
   return (body, ctx) => {
     const inheritedPath = parseCodexCustomProviderPath(ctx.url);
     if (inheritedPath.kind === 'route' && inheritedPath.pathKind === 'responses' && ctx.method === 'POST') {
-      // Children inherit the parent's provider URL. An explicitly selected child
-      // route must leave that URL namespace before selecting its own credentials.
-      sessionIdFromHeaders(ctx.headers);
-      const childRoute = subagentRouteFromHeaders(ctx.headers);
-      const parentRoute = frozenCustomProviderRoutes === undefined
-        ? findCodexAppliedCustomProviderRoute(inheritedPath.routeId)
-        : frozenCustomProviderRoutes.find((route) => route.routeId === inheritedPath.routeId);
-      if (childRoute && parentRoute && childRoute.providerId !== parentRoute.providerId) {
-        return Promise.resolve(createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, sourceHostAlive)(
-          body, { ...ctx, url: '/responses' },
-        )).then((decision) => decision
-          ? { pathOverride: '/responses', ...decision }
-          : unresolvedCollabSpawnRouteDecision());
+      // Select the first smart child before validating the inherited parent URL.
+      // Only registered collab lineage and this parent's frozen namespace can escape.
+      const sessionId = sessionIdFromHeaders(ctx.headers);
+      const parentRoute = customProviderRouteSnapshot(inheritedPath.routeId, frozenCustomProviderRoutes);
+      if (isCollabSpawnRequest(ctx.headers) && sessionId && parentRoute
+        && getSessionProvider(sessionId) === parentRoute.providerId) {
+        const transformed = createForcedSubagentRequestTransform()(body, ctx) ?? body;
+        const childRoute = subagentRouteFromHeaders(ctx.headers);
+        if (childRoute) {
+          const threadId = selectedThreadIdFromHeaders(ctx.headers);
+          const current = () => sourceHostAlive()
+            && threadToSession.get(threadId) === sessionId
+            && getSessionProvider(sessionId) === parentRoute.providerId
+            && subagentRouteByThread.get(threadId) === childRoute
+            && !isProviderRouteMutationInProgress(parentRoute.providerId)
+            && getProviderRouteCredentialRevision(parentRoute.providerId) === parentRoute.credentialRevision
+            && !isProviderRouteMutationInProgress(childRoute.providerId)
+            && getProviderRouteCredentialRevision(childRoute.providerId) === subagentCredentialRevisions.get(childRoute);
+          if (!current()) return unresolvedCollabSpawnRouteDecision();
+          const crossesProvider = childRoute.providerId !== parentRoute.providerId;
+          const decision = crossesProvider
+            ? createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, sourceHostAlive)(
+                body, { ...ctx, url: '/responses' },
+              )
+            : resolveCodexCustomProviderRoutingDecision(transformed, ctx, frozenCustomProviderRoutes);
+          return Promise.resolve(decision).then((resolved) => {
+            if (!resolved || !current()) return unresolvedCollabSpawnRouteDecision();
+            return {
+              ...(crossesProvider ? { pathOverride: '/responses' } : {}),
+              ...resolved,
+              dispatchGenerationValid: () => current() && (resolved.dispatchGenerationValid?.() ?? true),
+              // Routing runs before the transform chain. Namespaced parent requests
+              // intentionally skip that chain; apply only the chosen child's identity.
+              transformRequestBody: async (raw, transformCtx) => {
+                const parsed: unknown = JSON.parse(raw.toString('utf8'));
+                const routed = createForcedSubagentRequestTransform()(parsed, ctx) ?? parsed;
+                const bytes = Buffer.from(JSON.stringify(routed));
+                return resolved.transformRequestBody
+                  ? resolved.transformRequestBody(bytes, transformCtx)
+                  : { body: bytes };
+              },
+            } satisfies RoutingDecision;
+          });
+        }
       }
     }
     const customProviderRoute = resolveCodexCustomProviderRoutingDecision(
@@ -3593,11 +3625,9 @@ export function registerComposed(
   const providerId = opts.subagentRoute?.providerId.trim();
   const catalogModel = opts.subagentRoute?.catalogModel.trim();
   if (providerId && catalogModel) {
-    subagentRouteByParentThread.set(threadId, {
-      providerId,
-      catalogModel,
-      reasoningEffort: opts.subagentRoute?.reasoningEffort ?? null,
-    });
+    const route = { providerId, catalogModel, reasoningEffort: opts.subagentRoute?.reasoningEffort ?? null };
+    subagentCredentialRevisions.set(route, getProviderRouteCredentialRevision(providerId));
+    subagentRouteByParentThread.set(threadId, route);
   } else {
     subagentRouteByParentThread.delete(threadId);
   }
@@ -3614,7 +3644,11 @@ export function registerComposed(
         : {}),
     });
   }
-  if (smartRoutes.size > 0) smartSubagentRoutesByParentThread.set(threadId, smartRoutes);
+  for (const route of smartRoutes.values()) {
+    subagentCredentialRevisions.set(route, getProviderRouteCredentialRevision(route.providerId));
+  }
+  // Legacy locked selection wins over optional smart candidates.
+  if (!providerId && smartRoutes.size > 0) smartSubagentRoutesByParentThread.set(threadId, smartRoutes);
   else smartSubagentRoutesByParentThread.delete(threadId);
   log.debug('registered codex prompt for thread', {
     sessionId,
@@ -3687,6 +3721,10 @@ export function registerChildThread(parentThreadId: string, childThreadId: strin
     return false;
   }
 
+  // Notification and the first request can register the same child in either order.
+  // Never replace its resolved selection with a parent's route on the second call.
+  if (previousSessionId === sessionId && registry.get(childThreadId) !== undefined) return true;
+
   const threads = sessionToThreads.get(sessionId) ?? new Set<string>();
   threads.add(childThreadId);
   sessionToThreads.set(sessionId, threads);
@@ -3695,14 +3733,14 @@ export function registerChildThread(parentThreadId: string, childThreadId: strin
   const inheritedSubagentRoute =
     subagentRouteByThread.get(parentThreadId)
     ?? subagentRouteByParentThread.get(parentThreadId);
-  if (inheritedSubagentRoute) {
+  const inheritedSmartRoutes =
+    smartSubagentRoutesByThread.get(parentThreadId)
+    ?? smartSubagentRoutesByParentThread.get(parentThreadId);
+  if (inheritedSubagentRoute && !inheritedSmartRoutes) {
     subagentRouteByThread.set(childThreadId, inheritedSubagentRoute);
   } else {
     subagentRouteByThread.delete(childThreadId);
   }
-  const inheritedSmartRoutes =
-    smartSubagentRoutesByThread.get(parentThreadId)
-    ?? smartSubagentRoutesByParentThread.get(parentThreadId);
   if (inheritedSmartRoutes) smartSubagentRoutesByThread.set(childThreadId, inheritedSmartRoutes);
   else smartSubagentRoutesByThread.delete(childThreadId);
   log.debug('registered codex child thread route', {
