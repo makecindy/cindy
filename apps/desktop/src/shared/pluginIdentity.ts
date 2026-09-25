@@ -245,6 +245,25 @@ export function installedGhostStoragePart(ghost: {
 }
 
 /**
+ * Library / vault keys are storage parts. Prefer the installed ghost so an
+ * in-place stamp keeps the original directory; otherwise canonicalize an IPC
+ * instance id (`helper`, `_ns/acme/helper`, `_ns__acme__helper`).
+ */
+export function resolvePluginLibraryStorageKey(
+  instanceId: string,
+  ghost?: {
+    manifest: { id: string };
+    dir?: string;
+    namespace?: string | null;
+  } | null,
+): string | null {
+  if (ghost) return installedGhostStoragePart(ghost);
+  if (isValidPluginStoragePart(instanceId)) return instanceId;
+  const identity = parsePluginInstanceId(instanceId);
+  return identity ? pluginStoragePart(identity) : null;
+}
+
+/**
  * Directory and vault/runtime keys for an already-installed ghost.
  *
  * After an in-place namespace stamp the logical identity is namespaced, but the
