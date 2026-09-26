@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   owner: { dataOwnerId: 'owner-a', ownerGeneration: 1 },
   query: vi.fn(),
   botLinks: [] as Array<{ botId: string }>,
+  botLinkSequence: null as null | Array<Array<{ botId: string }>>,
   workers: [] as Array<{ sessionId: string }>,
   running: new Set<string>(),
   attached: false,
@@ -31,7 +32,12 @@ vi.mock('../../localDb/client/current.js', async () => {
     drizzle: {
       select: () => ({
         from: (table: unknown) => ({
-          where: () => ({ limit: table === botSessionLinks ? async () => h.botLinks : h.query }),
+          where: () => ({
+            limit:
+              table === botSessionLinks
+                ? async () => h.botLinkSequence?.shift() ?? h.botLinks
+                : h.query,
+          }),
           innerJoin: () => ({ where: async () => h.workers }),
         }),
       }),
@@ -65,6 +71,7 @@ describe('moveSession host', () => {
     h.running = new Set();
     h.workers = [];
     h.botLinks = [];
+    h.botLinkSequence = null;
     h.attached = false;
     h.enterLock.mockImplementation(() => undefined);
     h.beforeCommit.mockImplementation(() => undefined);
@@ -155,13 +162,16 @@ describe('moveSession host', () => {
   );
 
   it.each(['source', 'link'])(
-    'rejects Bot %s callers before entering the target update',
+    'lets Bot %s callers move ordinary tasks',
     async (signal) => {
-      h.query.mockResolvedValueOnce([{ id: 'caller', source: signal === 'source' ? 'bot' : null }]);
-      h.botLinks = signal === 'link' ? [{ botId: 'bot' }] : [];
-      expect(await run(directory)).toMatchObject({ errorCode: 'UNSUPPORTED_CAPABILITY' });
-      expect(h.update).not.toHaveBeenCalled();
-      expect(h.saved).not.toHaveBeenCalled();
+      h.query
+        .mockResolvedValueOnce([
+          { id: 'caller', remoteHostId: null, source: signal === 'source' ? 'bot' : null },
+        ])
+        .mockResolvedValue([{ id: 'target', status: 'active', remoteHostId: null, source: null }]);
+      if (signal === 'link') h.botLinkSequence = [[{ botId: 'bot' }], []];
+      expect(await run(directory)).toMatchObject({ ok: true });
+      expect(h.update).toHaveBeenCalled();
     },
   );
 

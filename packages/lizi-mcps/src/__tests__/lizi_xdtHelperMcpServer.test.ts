@@ -624,12 +624,14 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
-  it("grants Bots control and history categories while keeping feedback, handoff and skills out", async () => {
+  it("grants Bots only the named project tools, not the rest of control or history", async () => {
     let surface: "bot" | "default" = "bot";
     const createProject = vi.fn(async () => ({
       ok: true as const,
       workingDir: "/repo",
     }));
+    const stopSessionTurn = vi.fn(async () => ({ ok: true as const, status: "requested" as const }));
+    const listSessionQueue = vi.fn(async () => ({ ok: true as const, messages: [] }));
     const sendToSession = vi.fn(async () => ({
       ok: true as const,
       targetSessionId: TARGET_SESSION_ID,
@@ -650,6 +652,18 @@ describe("cindy_helper MCP server", () => {
         resolveSurface: async () => surface,
         sendToSession,
         createProject,
+        sessionControl: {
+          updateQueuedMessage: vi.fn(),
+          cancelQueuedMessage: vi.fn(),
+          steerSession: vi.fn(),
+          stopSessionTurn,
+          getSessionRuntime: vi.fn(),
+          setSessionRuntime: vi.fn(),
+        },
+        sessionQueue: {
+          listSessionQueue,
+          listSessionQueuedCounts: vi.fn(),
+        },
         botMessaging: { messageAgent },
       },
       {
@@ -681,6 +695,20 @@ describe("cindy_helper MCP server", () => {
       );
       expect(projectRegistration).toMatchObject({ ok: true, working_dir: "/repo" });
       expect(createProject).toHaveBeenCalled();
+
+      const controlTools = parsePayload(
+        await client.callTool({ name: "list_tools", arguments: { category: "control" } }),
+      );
+      expect((controlTools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
+        "create_project",
+      ]);
+      for (const name of ["stop_session_turn", "list_session_queue"]) {
+        expect(
+          parsePayload(await client.callTool({ name: "call_tool", arguments: { name, args: {} } })),
+        ).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+      }
+      expect(stopSessionTurn).not.toHaveBeenCalled();
+      expect(listSessionQueue).not.toHaveBeenCalled();
 
       const forbiddenCategory = parsePayload(
         await client.callTool({ name: "list_tools", arguments: { category: "handoff" } }),
