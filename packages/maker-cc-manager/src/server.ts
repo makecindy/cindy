@@ -248,7 +248,7 @@ export class ManagerServer {
 
   private async dispatch(ctx: ClientCtx, msg: RpcMessage): Promise<void> {
     if (isRpcResponse(msg)) {
-      this.handleServerRequestResponse(msg);
+      this.handleServerRequestResponse(ctx, msg);
       return;
     }
     if (!isRpcRequest(msg)) {
@@ -296,9 +296,13 @@ export class ManagerServer {
     }
   }
 
-  private handleServerRequestResponse(msg: RpcResponse): void {
+  private handleServerRequestResponse(ctx: ClientCtx, msg: RpcResponse): void {
     const entry = this.pendingServerRequests.get(msg.id);
     if (!entry) return;
+    // 来源校验(对齐 pi-manager 轮 2 H-1):response 必须来自当初发送
+    // server→client 请求的同一条连接, 防止同 daemon 的其它连接按小负数 id
+    // 猜中并伪造 approval / oauth 等反向请求的结果。
+    if (entry.ctx !== ctx) return;
     this.pendingServerRequests.delete(msg.id);
     if (entry.timer) clearTimeout(entry.timer);
     if (msg.error) {
