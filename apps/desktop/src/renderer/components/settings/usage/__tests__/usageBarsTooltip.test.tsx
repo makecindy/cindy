@@ -66,6 +66,10 @@ beforeEach(() => {
     configurable: true,
     value: 1000,
   });
+  Object.defineProperty(document.documentElement, 'clientHeight', {
+    configurable: true,
+    value: 800,
+  });
 });
 afterEach(() => {
   cleanup();
@@ -155,6 +159,26 @@ describe('usage bars tooltip', () => {
     fireEvent.scroll(window);
     // 100 - 8 - 150 < 8 → below the plot: 196 + 8
     expect(tooltipTransform()).toBe('translate3d(752px, 204px, 0)');
+  });
+
+  it('stays inside a short viewport when neither side of the plot has room (3× zoom)', () => {
+    Object.defineProperty(document.documentElement, 'clientHeight', {
+      configurable: true,
+      value: 200,
+    });
+    rects.set('plot', { left: 100, top: 60, width: 800, height: 96 });
+    const view = renderBars();
+    rects.set('2026-09-26', { left: 500, top: 130, width: 10, height: 26 });
+
+    fireEvent.pointerOver(bar(view));
+    // above: 60 - 8 - 150 < 8; below: 164 + 150 > 192 → clamp to 192 - 150
+    expect(tooltipTransform()).toBe('translate3d(385px, 42px, 0)');
+
+    rects.set('tooltip', { width: 240, height: 300 });
+    fireEvent.scroll(window);
+    // taller than the viewport: pinned to the top margin, max-height clips the rest
+    expect(tooltipTransform()).toBe('translate3d(385px, 8px, 0)');
+    expect(screen.getByTestId('usage-bars-tooltip').className).toContain('max-h-');
   });
 
   it('caps the share bar at six model segments plus one merged remainder', () => {

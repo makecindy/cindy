@@ -101,8 +101,17 @@ export function UsageBarsTooltip({
       Math.max(centerX - width / 2, VIEWPORT_MARGIN_PX),
       viewportWidth - width - VIEWPORT_MARGIN_PX,
     );
+    // 优先放在绘图区上方,放不下翻到下方;两边都放不下(如 3× 缩放的矮窗口)就夹在视口内,
+    // 超出视口高度的部分由 max-height 截掉,头部的日期与总量始终可见。
+    const bottomLimit = document.documentElement.clientHeight - VIEWPORT_MARGIN_PX;
     const above = plot.top - GAP_PX - height;
-    const top = above >= VIEWPORT_MARGIN_PX ? above : plot.bottom + GAP_PX;
+    const below = plot.bottom + GAP_PX;
+    const top =
+      above >= VIEWPORT_MARGIN_PX
+        ? above
+        : below + height <= bottomLimit
+          ? below
+          : Math.max(VIEWPORT_MARGIN_PX, bottomLimit - height);
     setPosition((prev) =>
       prev && prev.left === left && prev.top === top ? prev : { left, top, glide: prev !== null },
     );
@@ -125,7 +134,7 @@ export function UsageBarsTooltip({
       aria-hidden="true"
       data-testid="usage-bars-tooltip"
       data-glide={position?.glide ? 'true' : undefined}
-      className="usage-bars-tooltip animate-fade-in pointer-events-none fixed left-0 top-0 z-[10011] w-max min-w-[220px] max-w-[320px] select-none rounded-xl bg-[var(--tooltip-bg)] px-3 py-2.5 text-[var(--tooltip-text)]"
+      className="usage-bars-tooltip animate-fade-in pointer-events-none fixed left-0 top-0 z-[10011] w-max min-w-[220px] max-w-[320px] max-h-[calc(100vh-16px)] overflow-hidden select-none rounded-xl bg-[var(--tooltip-bg)] px-3 py-2.5 text-[var(--tooltip-text)]"
       style={{
         transform: position ? `translate3d(${position.left}px, ${position.top}px, 0)` : undefined,
         visibility: position ? 'visible' : 'hidden',
