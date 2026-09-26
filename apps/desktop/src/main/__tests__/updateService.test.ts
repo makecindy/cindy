@@ -357,6 +357,43 @@ describe('agent-triggered managed app update', () => {
     }
   });
 
+  it('rejects a staged patch after the macOS app moves into a translocated location', async () => {
+    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+    fetchManifest.mockResolvedValue(updateManifest());
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('darwin');
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'ready' });
+    appIsInApplicationsFolder.mockReturnValue(false);
+    expect(service.installAppUpdateForAgent()).toMatchObject({ accepted: false });
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(spawnProcess).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+
+  it('reports an unsupported Linux installation before fetching an update', async () => {
+    const service = await freshUpdateService('linux');
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    expect(service.installAppUpdateForAgent()).toMatchObject({ accepted: false });
+    expect(fetchManifest).not.toHaveBeenCalled();
+    checkDebianManagedInstallation.mockReturnValue({ status: 'managed' });
+    expect(await service.checkAppUpdateForAgent()).not.toMatchObject({ status: 'unsupported' });
+    service.stopUpdateService();
+  });
+
+  it('reports missing Windows updater prerequisites before fetching an update', async () => {
+    const service = await freshUpdateService('win32');
+    checkWindowsUpdaterPrerequisites.mockReturnValue({ satisfied: false, missingFiles: ['vcruntime140.dll'] });
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    expect(service.installAppUpdateForAgent()).toMatchObject({ accepted: false });
+    expect(fetchManifest).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+
   it('does not schedule an update from a development build or a current version', async () => {
     const service = await freshUpdateService('darwin');
     isDev.mockReturnValue(true);
