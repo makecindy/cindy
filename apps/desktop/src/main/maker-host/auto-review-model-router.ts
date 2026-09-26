@@ -183,7 +183,17 @@ export function createAutoReviewModelRouter(
         if (remainingMs <= 0) break;
         // A retry always gets a full candidate timeout; a truncated one mostly just delays
         // the confirmation card.
-        if (attempt > 1 && remainingMs < AUTO_REVIEW_CANDIDATE_TIMEOUT_MS) continue;
+        if (attempt > 1 && remainingMs < AUTO_REVIEW_CANDIDATE_TIMEOUT_MS) {
+          deps.logger.warn('auto-review model candidate retry skipped', {
+            candidateId: candidate.id,
+            providerId: candidate.providerId,
+            model: candidate.model,
+            attempt,
+            reason: 'insufficient_budget',
+            remainingMs,
+          });
+          continue;
+        }
         const attemptStartedAt = now();
         let result: UtilityTextResult;
         try {

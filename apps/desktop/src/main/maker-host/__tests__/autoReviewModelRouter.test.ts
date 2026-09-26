@@ -178,13 +178,19 @@ describe('dedicated Auto-review candidate policy', () => {
       calls.push(candidate.id);
       return new Promise<UtilityTextResult>(() => undefined);
     });
-    const route = createAutoReviewModelRouter({ logger: logger(), requestCandidate });
+    const log = logger();
+    const route = createAutoReviewModelRouter({ logger: log, requestCandidate });
 
     const pending = route('classify');
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CHAIN_TIMEOUT_MS);
 
     await expect(pending).resolves.toBeNull();
     expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna']);
+    // 已排队的延后重试因预算不足被跳过时要留下记录,不能只剩一条 after_fallbacks。
+    const skipped = log.warn.mock.calls
+      .filter(([message]) => message === 'auto-review model candidate retry skipped')
+      .map(([, fields]) => fields.candidateId);
+    expect(skipped).toEqual(['cindy-gateway', 'chatgpt-nano']);
   });
 
   it('aborts the in-flight request at the total deadline without starting another chain', async () => {
