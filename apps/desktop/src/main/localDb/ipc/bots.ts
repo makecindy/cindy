@@ -169,15 +169,11 @@ function botUserContextSource(config: Record<string, unknown>): string {
 
 async function syncBotProfileFolder(
   botId: string,
-  identitySource: string,
-  config: Record<string, unknown>,
+  patch: { identitySource?: string; userContextSource?: string },
   userDataDir = ownerScopedUserDataPath(),
 ): Promise<void> {
   try {
-    await writeBotProfileFolder(userDataDir, botId, {
-      identitySource,
-      userContextSource: botUserContextSource(config),
-    });
+    await writeBotProfileFolder(userDataDir, botId, patch);
   } catch (cause) {
     log.warn('write bot profile folder failed', { botId, error: String(cause) });
   }
@@ -1175,8 +1171,7 @@ export async function createBotProfile(raw: unknown) {
   }
   await syncBotProfileFolder(
     id,
-    identitySource,
-    persistedCapabilities,
+    { identitySource, userContextSource: botUserContextSource(persistedCapabilities) },
     creationOwnerBoundary.userDataDir,
   );
   assertCreationOwnerStillCurrent();
@@ -1358,13 +1353,16 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       broadcastSessionPatched(canonical.sessionId, { permissionMode: canonical.mode });
     }
   }
-  // The files are the user's editing surface: only rewrite them when this save changed
-  // their content, so pinning, hiding or a model change cannot clobber hand edits.
-  if (
-    nextIdentitySource !== (version?.identitySource ?? '')
-    || botUserContextSource(normalizedNextConfig) !== botUserContextSource(previous)
-  ) {
-    await syncBotProfileFolder(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
+  // The files are the user's editing surface: rewrite only the file whose content this
+  // save changed, so pinning, a model change or editing the other file cannot clobber
+  // hand edits that have not been reconciled yet.
+  const nextUserContextSource = botUserContextSource(normalizedNextConfig);
+  const folderPatch = {
+    ...(nextIdentitySource !== (version?.identitySource ?? '') ? { identitySource: nextIdentitySource } : {}),
+    ...(nextUserContextSource !== botUserContextSource(previous) ? { userContextSource: nextUserContextSource } : {}),
+  };
+  if (Object.keys(folderPatch).length > 0) {
+    await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
     owner.assertCurrent();
   }
   if (profileContentChanged) {

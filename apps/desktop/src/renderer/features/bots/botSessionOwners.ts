@@ -70,6 +70,33 @@ export async function resolveBotRouteForSessionEntry(
   return botRouteForOwnedSession(profiles, sessionId);
 }
 
+export interface SessionEntryNavigatorDeps {
+  resolveBotRoute: (sessionId: string) => Promise<string | null>;
+  openBotRoute: (route: string) => void;
+  /** `isLatest` lets the ordinary path drop its own late async route result too. */
+  openOrdinary: (sessionId: string, messageClientId: string | undefined, isLatest: () => boolean) => void;
+}
+
+/**
+ * Session entries (notification clicks, task deep links) resolve asynchronously.
+ * Only the latest entry may navigate, so a slow lookup for an earlier click can
+ * never override a newer one.
+ */
+export function createSessionEntryNavigator(
+  deps: SessionEntryNavigatorDeps,
+): (sessionId: string, messageClientId?: string) => void {
+  let sequence = 0;
+  return (sessionId, messageClientId) => {
+    const entry = ++sequence;
+    const isLatest = () => sequence === entry;
+    void deps.resolveBotRoute(sessionId).then((route) => {
+      if (!isLatest()) return;
+      if (route) deps.openBotRoute(route);
+      else deps.openOrdinary(sessionId, messageClientId, isLatest);
+    });
+  };
+}
+
 export function buildBotSessionOwners(
   profiles: readonly BotProfile[],
 ): Map<string, BotSessionOwner> {

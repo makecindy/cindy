@@ -915,11 +915,14 @@ describe('Bot canonical Session lifecycle', () => {
     expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe('Identity written in an editor\n');
     expect(readFileSync(join(home, 'memories', 'USER.md'), 'utf8')).toBe('User context written in an editor\n');
 
-    // An explicit identity or user-context edit in settings still writes the file.
+    // An explicit identity or user-context edit in settings writes only its own file.
     await invoke('local-db:bots:update', { id: created.id, identitySource: 'Identity from settings' });
     expect(readFileSync(join(home, 'SOUL.md'), 'utf8').trim()).toBe('Identity from settings');
+    expect(readFileSync(join(home, 'memories', 'USER.md'), 'utf8')).toBe('User context written in an editor\n');
+    writeFileSync(join(home, 'SOUL.md'), 'Identity edited again\n');
     await invoke('local-db:bots:update', { id: created.id, userContextSource: 'Context from settings' });
     expect(readFileSync(join(home, 'memories', 'USER.md'), 'utf8').trim()).toBe('Context from settings');
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe('Identity edited again\n');
   });
 
   it('still recognizes an unchanged legacy Cindy without rewriting its identity', async () => {
@@ -6137,7 +6140,12 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(completionCalls()).toHaveLength(0);
 
       h.sqlite!.prepare("UPDATE bot_profiles SET status = 'active' WHERE id = 'bot-a'").run();
+      // A transient read failure on resume retries with backoff instead of waiting for a relaunch.
+      const select = vi.spyOn(h.db!, 'select').mockImplementationOnce(() => { throw new Error('database busy'); });
       await runtime.delegation.resumeCompletionDelivery('bot-a');
+      expect(completionCalls()).toHaveLength(0);
+      select.mockRestore();
+      await vi.waitFor(() => expect(completionCalls()).toHaveLength(1), { timeout: 3_000 });
       await runtime.delegation.resumeCompletionDelivery('bot-a');
       expect(completionCalls()).toHaveLength(1);
       expect(h.sqlite!.prepare('SELECT completion_delivered_at FROM bot_delegations WHERE id = ?')

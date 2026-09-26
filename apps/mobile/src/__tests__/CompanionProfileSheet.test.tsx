@@ -58,6 +58,9 @@ it('asks to discard a conflicted draft on back instead of ignoring the gesture',
   const discard = vi.mocked(Alert.alert).mock.calls[0][2]!.find(button => button.style === 'destructive')!;
   await act(async () => discard.onPress!());
   expect(h.view.page).toBe('home'); expect(h.close).not.toHaveBeenCalled();
+  // The discarded draft gives way to the newer copy already read, not the stale one.
+  await act(async () => h.view.onOpen('profile'));
+  expect(h.view.values.name).toBe('Desktop edit'); expect(h.view.conflict).toBe(false);
 });
 it('waits for native dismissal before presenting the model picker and preserves the draft on return', async () => {
   await render(); await act(async () => h.view.onOpen('models'));

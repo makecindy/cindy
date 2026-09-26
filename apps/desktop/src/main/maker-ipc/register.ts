@@ -9923,10 +9923,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onPaused: (botId) => updateBotRoutineLifecycle(botId, 'pause'),
     onResumed: async (botId) => {
       await updateBotRoutineLifecycle(botId, 'resume');
-      // Task results that finished while the teammate was paused were held, not retried.
-      void botDelegationServiceHolder?.resumeCompletionDelivery(botId).catch((error) => {
-        log.warn('resume Bot task completion delivery failed', { botId, error: String(error) });
-      });
+      // Task results that finished while the teammate was paused were held, not retried;
+      // the service retries its own transient failures.
+      void botDelegationServiceHolder?.resumeCompletionDelivery(botId);
     },
     onBeforeDelete: (botId) => updateBotRoutineLifecycle(botId, 'delete'),
   });

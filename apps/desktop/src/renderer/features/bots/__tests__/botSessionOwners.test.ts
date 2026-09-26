@@ -15,6 +15,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import {
   botRouteForOwnedSession,
   buildBotSessionOwners,
+  createSessionEntryNavigator,
   findBotProfileForSession,
   resolveBotRouteForSessionEntry,
 } from '../botSessionOwners';
@@ -121,6 +122,30 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
     const { deps: d, loadProfiles } = deps({ source: 'desktop' });
     await expect(resolveBotRouteForSessionEntry('plain', d)).resolves.toBeNull();
     expect(loadProfiles).toHaveBeenCalledWith(false);
+  });
+
+  it('连续点击时，先点的慢查询不会覆盖后点的导航', async () => {
+    const pending = new Map<string, (route: string | null) => void>();
+    const openBotRoute = vi.fn();
+    const openOrdinary = vi.fn();
+    const open = createSessionEntryNavigator({
+      resolveBotRoute: (sessionId) => new Promise((resolve) => pending.set(sessionId, resolve)),
+      openBotRoute,
+      openOrdinary,
+    });
+    open('first');
+    open('second', 'message-1');
+    pending.get('second')!(null);
+    await Promise.resolve();
+    expect(openOrdinary).toHaveBeenCalledWith('second', 'message-1', expect.any(Function));
+    pending.get('first')!('/bots/bot-a');
+    await Promise.resolve();
+    expect(openBotRoute).not.toHaveBeenCalled();
+    // The ordinary path's own late async route checks the same latest gate.
+    const isLatest = openOrdinary.mock.calls[0]![2] as () => boolean;
+    expect(isLatest()).toBe(true);
+    open('third');
+    expect(isLatest()).toBe(false);
   });
 
   it('读任务或加载投影失败时退回普通任务路由，不吞掉这次点击', async () => {

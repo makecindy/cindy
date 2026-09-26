@@ -259,6 +259,10 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       { text: t('devices.common.cancel'), style: 'cancel' },
       { text: t('devices.companions.automation.discard'), style: 'destructive', onPress: () => {
         if (current.current !== started || inFlight.current) return;
+        // Discarding a conflicted draft adopts the newer copy already read, as 「放弃编辑并重新加载」 does.
+        if (conflict?.page === page) {
+          if (page === 'editor') setEditor(conflict.next); else setData(conflict.next);
+        }
         setEditing(false); setConflict(null); void proceed();
       } },
     ]);
