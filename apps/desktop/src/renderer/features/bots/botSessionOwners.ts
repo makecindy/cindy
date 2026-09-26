@@ -46,6 +46,30 @@ export function botRouteForOwnedSession(
     : `/bots/${encodeURIComponent(bot.id)}/session/${encodeURIComponent(sessionId)}`;
 }
 
+export interface BotSessionEntryRouteDeps {
+  readProfiles: () => readonly BotProfile[];
+  readSessionSource: (sessionId: string) => Promise<string | null | undefined>;
+  /** Loads the current owner's profiles; `refresh` re-reads an already loaded projection. */
+  loadProfiles: (refresh: boolean) => Promise<readonly BotProfile[]>;
+}
+
+/**
+ * Resolve a session-only entry such as a notification click. The in-memory
+ * projection is only kept fresh while a Bots view is mounted, so a click can
+ * arrive before it was ever loaded for this account, or after a new Bot session
+ * was linked. Load it once, and re-read it when the row itself is a Bot session.
+ */
+export async function resolveBotRouteForSessionEntry(
+  sessionId: string,
+  deps: BotSessionEntryRouteDeps,
+): Promise<string | null> {
+  const known = botRouteForOwnedSession(deps.readProfiles(), sessionId);
+  if (known) return known;
+  const source = await deps.readSessionSource(sessionId).catch(() => null);
+  const profiles = await deps.loadProfiles(source === 'bot').catch(() => []);
+  return botRouteForOwnedSession(profiles, sessionId);
+}
+
 export function buildBotSessionOwners(
   profiles: readonly BotProfile[],
 ): Map<string, BotSessionOwner> {

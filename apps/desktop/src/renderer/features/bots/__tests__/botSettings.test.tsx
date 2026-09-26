@@ -998,6 +998,30 @@ describe('same-Bot capability updates while editing settings', () => {
     expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', { name: 'Local name', capabilities: { toolsets: ['docs', 'scheduler'] }, capabilityBaseline: { toolsets: ['docs'] } });
   });
 
+  it('explains a rename that collides with another teammate instead of a generic save failure', async () => {
+    mocks.profiles = [bot(), bot({ id: 'bot-2', name: 'Ｒｅｌｅａｓｅ Buddy' })];
+    renderSettings();
+    fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: ' release buddy ' } });
+    expect(screen.getByRole('alert').textContent).toBe('bots.guided.duplicateName');
+    expect(screen.queryByText('bots.autosave.retry')).toBeNull();
+    fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: 'Release buddy 2' } });
+    expect(screen.queryByText('bots.guided.duplicateName')).toBeNull();
+  });
+
+  it('keeps a trailing line break typed before the debounced save lands', async () => {
+    vi.useFakeTimers();
+    const view = renderSettings();
+    fireEvent.change(screen.getByLabelText('bots.profile.summary'), { target: { value: 'Own releases\n' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+    expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', { description: 'Own releases' });
+    // The host stores the trimmed text; the field must not snap the caret back a line.
+    view.rerender(<BotSettings bot={bot({ description: 'Own releases' })} onBack={view.onBack} onOpenSession={view.onOpenSession} />);
+    await act(async () => {});
+    expect((screen.getByLabelText('bots.profile.summary') as HTMLTextAreaElement).value).toBe('Own releases\n');
+    await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+    expect(mocks.updateBotProfile).toHaveBeenCalledOnce();
+  });
+
   it('keeps edits made during a successful save and adopts concurrent capability updates', async () => {
     vi.useFakeTimers();
     let finishSave!: (value: { id: string; currentVersion: number; name: string }) => void;

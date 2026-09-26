@@ -787,6 +787,19 @@ export function refreshBotProfiles(): void {
   trackHydration();
 }
 
+/**
+ * Wait for the current owner's profiles outside the Bots views. The module-level
+ * hydration can run before sign-in, and an owner change clears the projection
+ * without reloading it; `refresh` also re-reads a projection that is already loaded.
+ */
+export async function ensureBotProfilesLoaded(refresh = false): Promise<BotProfile[]> {
+  ensureProfileOwner();
+  if (refresh) refreshBotProfiles();
+  else if (!profileListLoaded && !hydrated) trackHydration();
+  await waitForHydration();
+  return getBotProfiles();
+}
+
 /** Replaces an avatar using gallery bytes, or the host file chooser when omitted. */
 export async function chooseBotAvatar(botId: string, avatarImageBase64?: string): Promise<BotProfile | null> {
   const api = botsApi();

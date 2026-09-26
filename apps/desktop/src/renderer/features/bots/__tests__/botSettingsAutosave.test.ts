@@ -6,6 +6,7 @@ import {
   botSettingsPayloadEqual,
   createBotSettingsAutosave,
   normalizeBotSettingsPayload,
+  reconcileBotSettingsDraft,
   type BotAutosaveStatus,
   type BotSettingsPayload,
 } from '../botSettingsAutosave';
@@ -131,9 +132,29 @@ describe('normalizeBotSettingsPayload', () => {
 
     expect(result.name).toBe('PR steward');
     expect(result.description).toBe('spaced');
-    // Long-form prompt text is stored verbatim: trimming it would silently edit
-    // the user's system prompt.
-    expect(result.identitySource).toBe('  kept as typed  ');
+    // The host trims every profile text (`readText`); comparing the same way keeps
+    // surrounding whitespace from reading as an unsaved change.
+    expect(result.identitySource).toBe('kept as typed');
+  });
+
+  it('keeps whitespace still being typed when a save settles', () => {
+    const saved = payload({ name: 'Filo', description: 'Own releases', identitySource: 'You ship.' });
+    const draft = {
+      ...saved,
+      name: 'Filo ',
+      description: 'Own releases\n',
+      identitySource: 'You ship.\n\n',
+    };
+    const next = reconcileBotSettingsDraft(saved, draft, saved);
+    expect(next.name).toBe('Filo ');
+    expect(next.description).toBe('Own releases\n');
+    expect(next.identitySource).toBe('You ship.\n\n');
+    // Nothing unsaved: the whitespace alone does not trigger another save.
+    expect(botSettingsPayloadEqual(normalizeBotSettingsPayload(next, 'Filo'), saved)).toBe(true);
+    // A cleared name still snaps back to the saved one rather than staying blank.
+    expect(reconcileBotSettingsDraft(saved, { ...draft, name: '' }, saved).name).toBe(saved.name);
+    // A newer value from elsewhere still replaces an untouched field.
+    expect(reconcileBotSettingsDraft(saved, saved, { ...saved, description: 'From phone' }).description).toBe('From phone');
   });
 
   it('produces an equal snapshot for the baseline and the untouched draft', () => {

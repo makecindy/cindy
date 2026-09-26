@@ -100,8 +100,9 @@ import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchComma
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import { getBotProfiles } from '@/features/bots/botStore';
-import { botRouteForOwnedSession } from '@/features/bots/botSessionOwners';
+import { ensureBotProfilesLoaded, getBotProfiles } from '@/features/bots/botStore';
+import { resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
+import * as sessionService from '@/lib/sessionService';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
@@ -491,14 +492,8 @@ export function MainLayout() {
   // 防止 HMR listener 累积或 Electron click 异常多次触发时反复 navigate。
   const currentPathRef = useRef(`${location.pathname}${location.search}`);
   currentPathRef.current = `${location.pathname}${location.search}`;
-  const navigateToSession = useCallback(
+  const navigateToOrdinarySession = useCallback(
     (sessionId: string, messageClientId?: string) => {
-      const botRoute = botRouteForOwnedSession(getBotProfiles(), sessionId);
-      if (botRoute) {
-        const target = botRoute;
-        if (currentPathRef.current !== target) navigate(target);
-        return;
-      }
       // device-link 远程会话本地无 row:resolveSessionRoute 内部的 sessionService.get
       // 会 miss → 远程 Orca lead/worker 被当普通会话路由,CCAgentSessionView 再
       // redirect 到 orca 路由时会丢 searchJump 锚点。传入远程镜像的 session 对象,
@@ -538,6 +533,22 @@ export function MainLayout() {
       });
     },
     [navigate],
+  );
+  const navigateToSession = useCallback(
+    (sessionId: string, messageClientId?: string) => {
+      void resolveBotRouteForSessionEntry(sessionId, {
+        readProfiles: getBotProfiles,
+        readSessionSource: async (id) => (await sessionService.get(id)).source,
+        loadProfiles: ensureBotProfilesLoaded,
+      }).then((botRoute) => {
+        if (!botRoute) {
+          navigateToOrdinarySession(sessionId, messageClientId);
+          return;
+        }
+        if (currentPathRef.current !== botRoute) navigate(botRoute);
+      });
+    },
+    [navigate, navigateToOrdinarySession],
   );
   navigateToSessionRef.current = navigateToSession;
   useEffect(() => {
