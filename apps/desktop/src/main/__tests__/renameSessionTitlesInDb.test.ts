@@ -63,6 +63,8 @@ const h = vi.hoisted(() => {
   };
 });
 
+vi.mock('../task-migration/writeBoundary', () => ({ withTaskMigrationBoundary: async (_ids: string[], task: () => Promise<unknown>) => task() }));
+vi.mock('../task-migration/journal', () => ({ assertTaskMigrationWritable: () => undefined }));
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
   BrowserWindow: {

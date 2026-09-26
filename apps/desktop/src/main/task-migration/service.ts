@@ -18,6 +18,7 @@ import {
   type TaskMigrationView,
 } from '@cindy/device-link';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current';
+import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast';
 import { createSharedTaskJournal } from '../localDb/sharedTasks';
 import { withSessionRouteLocks } from '../localDb/sessionRouteLock';
 import { withTaskMigrationBoundary } from './writeBoundary';
@@ -908,6 +909,9 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     )
       throw new Error('MIGRATION_TARGET_NOT_READY');
     scope.save({ ...record, stage: 'active' });
+    // Replayed activation also refreshes subscribers after a lost notification.
+    for (const id of [record.sessionId, ...(record.workers ?? []).map(worker => worker.sessionId)])
+      emitSessionCreated(id);
     return view(scope, { ...record, stage: 'active' });
   }
   if (request.action === 'status') return view(scope, scope.read(request.sessionId));

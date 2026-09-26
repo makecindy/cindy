@@ -64,7 +64,10 @@ vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary:
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
 vi.mock('../../../worktree/resourceLock', () => ({
   physicalWorktreeKey: async (value: string) => value,
-  withWorktreeResourceLocks: h.resourceLock,
+  // This fixture serializes the recycler's resource only; migration admission is a distinct key.
+  withWorktreeResourceLocks: (resources: string[], task: () => Promise<unknown>) =>
+    resources.every(resource => resource.startsWith(path.join(h.migrationRoot, 'task-migrations', 'admission') + path.sep))
+      ? task() : h.resourceLock(resources, task),
 }));
 vi.mock('../../../worktree/recycleEvents', () => ({ notifyWorktreeRecycleOpportunity: vi.fn() }));
 

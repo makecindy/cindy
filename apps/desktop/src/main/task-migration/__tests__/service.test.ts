@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   rows: new Map<string, Map<string, Record<string, unknown>>>(),
   files: new Map<string, string>(),
   imports: vi.fn(),
+  created: vi.fn(),
   snapshot: vi.fn(),
   close: vi.fn(),
   remove: vi.fn(),
@@ -33,6 +34,7 @@ const state = vi.hoisted(() => ({
   }>,
   workers: [] as string[],
 }));
+vi.mock('../../localDb/ipc/sessionCreatedBroadcast', () => ({ emitSessionCreated: (id: string) => state.created(id) }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root }, ipcMain: { handle: vi.fn() } }));
 vi.mock('../resources', async (original) => {
   const actual = await original<typeof import('../resources')>();
@@ -228,6 +230,7 @@ describe('durable cross-machine handoff', () => {
     state.dbs.clear();
     state.files.clear();
     state.imports.mockClear();
+    state.created.mockReset();
     state.snapshot.mockClear();
     state.close.mockClear();
     state.remove.mockReset();
@@ -329,6 +332,26 @@ describe('durable cross-machine handoff', () => {
       expect((await settled()).stage).toBe('transferring');
       expect(allocations).toBe(2);
     } finally { spy.mockRestore(); }
+  });
+  it('notifies all members only after durable activation and repeats notifications on replay', async () => {
+    await team();
+    state.loseReply = 'receive';
+    const started = await start();
+    await settled();
+    expect(state.created).not.toHaveBeenCalled();
+    state.created.mockImplementation((id: string) => {
+      expect(device()).toBe('B');
+      expect(migrationScope().readIncoming(started.targetSessionId!)?.stage).toBe('active');
+      expect(state.rows.get('B')!.has(id)).toBe(true);
+    });
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    expect((await settled()).stage).toBe('complete');
+    expect(state.created).toHaveBeenCalledTimes(3);
+    const ids = state.created.mock.calls.map(([id]) => id);
+    await state.context.run({ device: 'B', peer: 'A' }, () => requestTaskMigration({
+      action: 'activate', id: started.targetSessionId!, sourceSessionId: 'fork',
+    }));
+    expect(state.created.mock.calls.slice(3).map(([id]) => id)).toEqual(ids);
   });
   it('moves the entire team, copies shared directories once and keeps every source file', async () => {
     const separate = await team();
