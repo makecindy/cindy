@@ -333,6 +333,9 @@ describe('managed llama.cpp model lifecycle', () => {
     await Promise.all([owner.start(), borrower.start()]);
     expect(mocks.spawn).toHaveBeenCalledOnce();
     expect((await borrower.snapshot()).running).toBe(true);
+    expect((await owner.snapshot()).canManageRuntime).toBe(true);
+    expect((await borrower.snapshot()).canManageRuntime).toBe(false);
+    await expect(borrower.start(true)).rejects.toThrow('BUSY');
     const remove = vi.fn();
     await expect(borrower.remove(remove)).rejects.toThrow('BUSY');
     expect(remove).not.toHaveBeenCalled();

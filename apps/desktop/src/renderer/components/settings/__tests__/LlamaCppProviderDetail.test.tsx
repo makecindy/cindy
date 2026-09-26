@@ -40,6 +40,38 @@ function api(installed = false) {
   return maker;
 }
 describe('llama.cpp uses the Ollama detail flow', () => {
+  it.each([true, false, undefined])(
+    'only exposes owner controls with explicit capability %s',
+    async (canManageRuntime) => {
+      const maker = api(true);
+      maker.llamaCppStatus.mockResolvedValue({
+        installed: true,
+        supported: true,
+        running: true,
+        canManageRuntime,
+        models: [],
+        catalog,
+      });
+      render(<LlamaCppProviderDetail onChanged={() => {}} />);
+      await screen.findByText('Test model');
+      const manage = screen.queryByText('settings.providers.llamacpp.manageRuntime');
+      if (canManageRuntime === true) {
+        expect(manage).toBeTruthy();
+        fireEvent.click(manage!);
+        fireEvent.click(
+          screen.getByRole('button', { name: 'settings.providers.llamacpp.restart' }),
+        );
+        await waitFor(() => expect(maker.llamaCppStart).toHaveBeenCalledOnce());
+        expect(
+          screen.getByRole('button', { name: 'settings.providers.llamacpp.stop' }),
+        ).toBeTruthy();
+      } else {
+        expect(manage).toBeNull();
+        expect(maker.llamaCppStart).not.toHaveBeenCalled();
+        expect(maker.llamaCppStop).not.toHaveBeenCalled();
+      }
+    },
+  );
   it('only exposes pause when supported and resumes the same download after reopening', async () => {
     const maker = api(true);
     const snapshot = {
@@ -91,9 +123,17 @@ describe('llama.cpp uses the Ollama detail flow', () => {
   });
   it('allows downloads while stopped without a manual startup step', async () => {
     const maker = api(true);
-    maker.llamaCppStatus.mockResolvedValue({ installed: true, supported: true, running: false, models: [], catalog });
+    maker.llamaCppStatus.mockResolvedValue({
+      installed: true,
+      supported: true,
+      running: false,
+      models: [],
+      catalog,
+    });
     render(<LlamaCppProviderDetail onChanged={() => {}} />);
-    const button = await screen.findByRole('button', { name: 'settings.providers.local.downloadAdd' });
+    const button = await screen.findByRole('button', {
+      name: 'settings.providers.local.downloadAdd',
+    });
     expect(button.hasAttribute('disabled')).toBe(false);
     expect(screen.queryByRole('button', { name: 'settings.providers.local.start' })).toBeNull();
     fireEvent.click(button);

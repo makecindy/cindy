@@ -52,6 +52,8 @@ export interface LlamaCppSnapshot {
   installed: boolean;
   supported: boolean;
   running: boolean;
+  /** Only the instance owning the child can expose stop/restart controls. */
+  canManageRuntime?: boolean;
   canPauseDownload?: boolean;
   version?: string;
   models: LlamaCppModel[];

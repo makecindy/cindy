@@ -262,7 +262,7 @@ export function LlamaCppProviderDetail({ onChanged }: { onChanged: () => void })
           progress={<DownloadMeter progress={customDownload.progress} />}
         />
       )}
-      {state?.running && (
+      {state?.running && state.canManageRuntime === true && (
         <details className="text-12" style={{ color: 'var(--text-secondary)' }}>
           <summary className="cursor-pointer">
             {t('settings.providers.llamacpp.manageRuntime')}

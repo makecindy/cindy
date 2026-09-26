@@ -132,6 +132,7 @@ export function createLlamaCppService(
       installed: !!runtime,
       supported: !!llamaCppPlatform(process.platform, process.arch),
       running: ready && (!!child || borrowed),
+      canManageRuntime: ready && !!child,
       canPauseDownload: true,
       version: runtime?.version,
       models: await models(),
