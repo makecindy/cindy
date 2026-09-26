@@ -14,11 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type {
-  MyIssuesErrorCode,
-  MyIssuesResult,
-  MyIssuesSnapshot,
-} from '@/../shared/myIssues';
+import type { MyIssuesErrorCode, MyIssuesResult, MyIssuesSnapshot } from '@/../shared/myIssues';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('useMyIssues');
@@ -64,9 +60,13 @@ export function useMyIssues(): UseMyIssuesState {
   const [error, setError] = useState<MyIssuesErrorCode | null>(null);
   const disposed = useRef(false);
   const inFlight = useRef(false);
+  const refreshPending = useRef(false);
 
   const load = useCallback(async (force: boolean) => {
-    if (inFlight.current) return;
+    if (inFlight.current) {
+      if (force) refreshPending.current = true;
+      return;
+    }
     inFlight.current = true;
     if (force) setRefreshing(true);
     try {
@@ -102,6 +102,10 @@ export function useMyIssues(): UseMyIssuesState {
       if (!disposed.current) {
         setLoading(false);
         setRefreshing(false);
+        if (refreshPending.current) {
+          refreshPending.current = false;
+          void load(true);
+        }
       }
     }
   }, []);

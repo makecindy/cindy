@@ -10404,14 +10404,89 @@
         "clickToOpen": "클릭하여 브라우저에서 PR 열기",
         "guidance": {
           "login": {
-            "hint": "클릭하면 Agent가 로그인을 도와줍니다",
-            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub 로그인 맡기기",
-            "prompt": "GitHub CLI에 로그인해 주세요: `gh auth login -h github.com -w`를 실행하고 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+            "hint": "클릭하여 GitHub 연결",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: GitHub 연결"
           },
           "install": {
-            "hint": "클릭하면 Agent가 설치와 로그인을 도와줍니다",
-            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub CLI 설치와 로그인 맡기기",
-            "prompt": "GitHub CLI(gh)를 설치해 주세요(macOS는 `brew install gh`, Windows는 `winget install GitHub.cli`). 그다음 `gh auth login -h github.com -w`를 실행해 로그인하고, 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+            "hint": "클릭하여 GitHub 연결",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: GitHub 연결"
+          }
+        },
+        "setup": {
+          "install": "설치하고 계속",
+          "connect": "GitHub 로그인",
+          "cancel": "취소",
+          "retry": "다시 시도",
+          "done": "완료",
+          "openBrowser": "GitHub에서 승인",
+          "deviceCode": "일회용 기기 코드",
+          "copyCode": "코드 복사",
+          "copied": "복사됨",
+          "copyFailed": "복사하지 못했습니다. 코드를 선택하여 직접 복사해 주세요.",
+          "openFailed": "브라우저를 열지 못했습니다. github.com/login/device를 직접 열어 주세요.",
+          "stages": {
+            "install": {
+              "title": "GitHub CLI 설치",
+              "description": "GitHub CLI를 설치하여 GitHub 계정에 연결하세요."
+            },
+            "login": {
+              "title": "GitHub 연결",
+              "description": "GitHub 계정에 연결하세요. GitHub CLI가 없으면 자동으로 설치합니다."
+            },
+            "checking": {
+              "title": "연결 확인 중…",
+              "description": "GitHub 로그인 상태를 확인하고 있습니다."
+            },
+            "downloading": {
+              "title": "GitHub CLI 다운로드 중…",
+              "description": "다운로드가 끝나면 자동으로 설치합니다."
+            },
+            "installing": {
+              "title": "GitHub CLI 설치 중…",
+              "description": "다운로드가 완료되었습니다."
+            },
+            "preparing": {
+              "title": "로그인 준비 중…",
+              "description": "일회용 기기 코드를 가져오고 있습니다."
+            },
+            "authorizing": {
+              "title": "GitHub 로그인",
+              "description": "아래 코드를 복사한 뒤 GitHub 페이지에 입력하여 승인하세요."
+            },
+            "connected": {
+              "title": "GitHub에 연결되었습니다",
+              "description": "이 창을 닫고 계속 사용할 수 있습니다."
+            },
+            "cancelled": {
+              "title": "연결이 취소되었습니다",
+              "description": "준비되면 다시 연결할 수 있습니다."
+            },
+            "unavailable": {
+              "title": "진행 상황을 읽을 수 없음",
+              "description": "현재 진행 상황을 가져올 수 없습니다. 다시 시도해 주세요."
+            },
+            "error": {
+              "title": "연결이 완료되지 않음"
+            }
+          },
+          "errors": {
+            "unsupported": "아직 지원하지 않는 운영 체제 또는 프로세서입니다.",
+            "install": "설치에 실패했습니다. 네트워크와 디스크 공간을 확인하고 다시 시도하세요.",
+            "login": "로그인에 실패했거나 승인이 거부되었습니다. 다시 시도하여 새 코드를 받으세요.",
+            "timeout": "코드가 만료되었습니다. 다시 시도하여 새 코드를 받으세요."
+          },
+          "account": {
+            "checking": "GitHub 연결 확인 중…",
+            "connected": "연결됨 · @{{login}}",
+            "missing": "GitHub에 연결하여 시작하세요.",
+            "auth": "인증이 만료되었습니다. 다시 로그인하거나 아래 예비 토큰을 변경하세요.",
+            "network": "GitHub에 연결할 수 없습니다. 네트워크를 확인하고 다시 시도하세요.",
+            "forbidden": "연결을 확인할 수 없습니다. 권한이나 요청 한도를 확인하고 다시 시도하세요.",
+            "gh-cli": "이 컴퓨터의 GitHub 로그인 사용 중",
+            "token": "예비 토큰 사용 중",
+            "recheck": "연결 확인",
+            "summary": "GitHub 저장소, 이슈, PR 및 Actions를 관리합니다.",
+            "otherMethods": "다른 연결 방법"
           }
         },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건"

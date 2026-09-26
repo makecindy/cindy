@@ -5,8 +5,7 @@
  *
  * Backoff: 1s, 2s, 4s, 8s, 16s, 30s (capped at maxDelayMs, ±25% jitter).
  *
- * Retryable codes:    NETWORK, HTTP_5XX
- * Non-retryable:      HTTP_4XX, CHECKSUM, DISK, ABORTED, INVALID_ARG
+ * Retryable codes: NETWORK, HTTP_5XX, per-attempt TIMEOUT. Other failures are permanent.
  *
  * The sleep between attempts is interruptible — if the AbortSignal fires while
  * we're backing off, we throw `ABORTED` immediately without waiting out the
@@ -29,15 +28,13 @@ export interface RetryOptions {
   onRetry?: (e: { attempt: number; delayMs: number; cause: Error }) => void;
 }
 
-export async function withRetry<T>(
-  task: () => Promise<T>,
-  opts: RetryOptions,
-): Promise<T> {
+export async function withRetry<T>(task: () => Promise<T>, opts: RetryOptions): Promise<T> {
   const cfg: RetryConfig = { ...DEFAULT_RETRY, ...(opts.config ?? {}) };
   let attempt = 0;
   let lastError: Error | null = null;
 
   while (attempt < cfg.maxAttempts) {
+    if (opts.signal?.aborted) throw new DownloadError('ABORTED', 'Download aborted');
     attempt++;
     try {
       return await task();
@@ -69,7 +66,7 @@ export async function withRetry<T>(
 
 function isRetryable(err: unknown): boolean {
   if (!(err instanceof DownloadError)) return false;
-  return err.code === 'NETWORK' || err.code === 'HTTP_5XX';
+  return err.code === 'NETWORK' || err.code === 'HTTP_5XX' || err.code === 'TIMEOUT';
 }
 
 /** Backoff: min(base * 2^(attempt-1), max) * (1 ± jitterRatio) */

@@ -25,14 +25,14 @@ export type PrGuidanceSessionOpts = {
   remoteHostId?: string | null;
   /** device-link:本 session 归属被控设备。与 remoteHostId 互不相干,必须同时钳。 */
   deviceLinkDeviceId?: string | null;
-  /** review 等只读任务:ChatInput 永久 disabled,插入会被静默丢掉。 */
+  /** review 等只读任务保留浏览 PR 的动作。 */
   readOnly?: boolean;
 };
 
 /**
  * 点击会独占 chip(不再打开 PR),所以只有动作能兑现才引导:
  *   1. 当前任务的 Agent 就在本机(非 SSH / 非 device-link)
- *   2. 输入框能收下提示词(非 review 只读)
+ *   2. 非 review 只读任务
  * 任一不成立 → 不引导,点击仍打开 PR。
  */
 export function prGuidanceFor(

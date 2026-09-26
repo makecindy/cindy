@@ -9,19 +9,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
-vi.mock('@/hooks/useModelPricing', () => ({ useGatewayModelPricing: () => null, useReferenceModelPricing: () => null }));
-vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: [], providerOrder: [], loading: false }) }));
-vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }) }));
+vi.mock('@/hooks/useModelPricing', () => ({
+  useGatewayModelPricing: () => null,
+  useReferenceModelPricing: () => null,
+}));
+vi.mock('@/hooks/useProviders', () => ({
+  useProviders: () => ({ providers: [], providerOrder: [], loading: false }),
+}));
+vi.mock('@/hooks/useDeviceProviders', () => ({
+  useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }),
+}));
 vi.mock('@/hooks/useAgentCapabilities', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useAgentCapabilities')>()),
   useAgentCapabilities: () => ({ capabilities: null, loading: false }),
 }));
 vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({ hasSavedKey: true }) }));
-vi.mock('@/hooks/useConnectedSource', () => ({ useConnectedSource: () => ({ hasConnectedSource: true, loading: false }) }));
+vi.mock('@/hooks/useConnectedSource', () => ({
+  useConnectedSource: () => ({ hasConnectedSource: true, loading: false }),
+}));
 
 vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
 vi.mock('@/cindy-brain/GhostSettingsWebview', () => ({
-  GhostSettingsWebview: () => <div data-testid="ghost-settings-webview" />,
+  GhostSettingsWebview: ({ account, reloadKey }: any) => (
+    <>
+      {account}
+      <div key={reloadKey} data-testid="ghost-settings-webview" />
+    </>
+  ),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -179,6 +193,81 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
+  it('does not advertise host login for a locally imported unverified GitHub plugin', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const verify = vi.fn();
+    Object.assign(window.electronAPI, { gitContext: { githubConnection: verify } });
+    render(
+      <GhostPluginDetailView
+        ghost={
+          { manifest: { id: 'cindy-github' }, enabled: true, trust: { level: 'unverified' } } as any
+        }
+        detail={{ ...detail, id: 'cindy-github', hasSettingsUi: true }}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+    expect(verify).not.toHaveBeenCalled();
+  });
+  it('connects GitHub and reloads the installed plugin settings after authorization', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    Object.assign(window.electronAPI, {
+      gitContext: {
+        githubConnection: async () => ({ status: 'missing' }),
+        onGithubConnected: () => () => {},
+        githubSetupStatus: async () => ({ phase: 'connected' }),
+        startGithubSetup: async () => ({ phase: 'connected' }),
+      },
+    });
+    const { unmount } = render(
+      <GhostPluginDetailView
+        ghost={
+          {
+            manifest: { id: 'cindy-github' },
+            enabled: true,
+            trust: { ...detail.trust, publisherName: 'Cindy Plugin Market' },
+          } as any
+        }
+        detail={{ ...detail, id: 'cindy-github', hasSettingsUi: true }}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+    const previousSettings = screen.getByTestId('ghost-settings-webview');
+    fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.stages.login.title'));
+    fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.connect'));
+    await waitFor(() =>
+      expect(screen.getByTestId('ghost-settings-webview')).not.toBe(previousSettings),
+    );
+    expect(screen.getByText('ccAgent.gitContext.pr.setup.done')).toBeTruthy();
+    unmount();
+  });
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -996,24 +1085,38 @@ describe('Ghost plugin detail sections', () => {
     expect(within(listbox).getByRole('group', { name: 'OpenAI' })).toBeTruthy();
     expect(listbox.querySelector('[data-row-customize]')).not.toBeNull();
     expect(listbox.querySelector('[data-agent-kind]')).toBeNull();
-    const plainRow = within(listbox).getByText('GPT 5.5', { exact: true }).closest<HTMLElement>('[role="option"]')!;
+    const plainRow = within(listbox)
+      .getByText('GPT 5.5', { exact: true })
+      .closest<HTMLElement>('[role="option"]')!;
     expect(within(plainRow).queryByText('settings.providers.models.subscription')).toBeNull();
     fireEvent.click(plainRow);
-    await waitFor(() => expect(setCindyPref).toHaveBeenCalledWith(
-      'xdt-knowledge', 'text.oneshot', 'cat:openai:codex:gpt-5.5',
-    ));
+    await waitFor(() =>
+      expect(setCindyPref).toHaveBeenCalledWith(
+        'xdt-knowledge',
+        'text.oneshot',
+        'cat:openai:codex:gpt-5.5',
+      ),
+    );
     // A different supported Harness must remain reachable after replacing the old Agent step.
-    fireEvent.click(screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ }),
+    );
     const reopened = await screen.findByRole('listbox');
-    const routeRow = within(reopened).getByText('GPT 5.5', { exact: true }).closest<HTMLElement>('[role="option"]')!;
+    const routeRow = within(reopened)
+      .getByText('GPT 5.5', { exact: true })
+      .closest<HTMLElement>('[role="option"]')!;
     fireEvent.click(routeRow.querySelector('[data-row-customize]')!);
     const flyout = await screen.findByTestId('unified-model-config-flyout');
     expect(flyout.querySelector('[role="slider"], [data-fast-toggle]')).toBeNull();
     fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]')!);
     fireEvent.click(routeRow);
-    await waitFor(() => expect(setCindyPref).toHaveBeenLastCalledWith(
-      'xdt-knowledge', 'text.oneshot', 'cat:openai:claude-code:chatgpt/gpt-5.5',
-    ));
+    await waitFor(() =>
+      expect(setCindyPref).toHaveBeenLastCalledWith(
+        'xdt-knowledge',
+        'text.oneshot',
+        'cat:openai:claude-code:chatgpt/gpt-5.5',
+      ),
+    );
 
     vi.unstubAllEnvs();
   });
@@ -1134,11 +1237,16 @@ describe('Ghost plugin detail sections', () => {
     );
     const listbox = await screen.findByRole('listbox');
     // Retired pins remain visible on the trigger, but never become selectable routes.
-    expect(screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ }).textContent).toContain('retired-model');
+    expect(
+      screen.getByRole('button', { name: /settings.ghosts.detail.cindyPrefs.cap.text.oneshot/ })
+        .textContent,
+    ).toContain('retired-model');
     expect(within(listbox).queryByText('cat:gone:codex:retired-model')).toBeNull();
     expect(setCindyPref).not.toHaveBeenCalled();
     fireEvent.click(within(listbox).getAllByRole('option')[0]!);
-    await waitFor(() => expect(setCindyPref).toHaveBeenCalledWith('xdt-knowledge', 'text.oneshot', null));
+    await waitFor(() =>
+      expect(setCindyPref).toHaveBeenCalledWith('xdt-knowledge', 'text.oneshot', null),
+    );
     vi.unstubAllEnvs();
   });
 

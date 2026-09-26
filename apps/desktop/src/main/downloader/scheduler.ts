@@ -4,22 +4,17 @@
  * Concurrency and queue-ordering invariants are maintained in this module.
  *
  * Responsibilities:
- *   - Single-flight: identical (url|targetPath|sha256) tuples share one Promise.
+ *   - Single-flight: identical inputs share one Promise; conflicting target owners are rejected.
  *   - Concurrency cap (default 1) + FIFO queue.
  *   - fromCache short-circuit: if targetPath already exists & sha256 matches,
- *     resolve immediately without entering the queue work.
+ *     resolve without HTTP while holding the queue slot during hashing.
  *   - Wraps executeOnce() with withRetry().
  */
 
 import fs from 'node:fs';
-import {
-  DownloadError,
-  type DownloadOptions,
-  type DownloadResult,
-  type Logger,
-} from './types';
+import { DownloadError, type DownloadOptions, type DownloadResult, type Logger } from './types';
 import { computeHash } from './integrity';
-import { executeOnce, type TransportContext } from './transport';
+import { assertDownloadUrl, executeOnce, type TransportContext } from './transport';
 import { withRetry } from './retry';
 import { deletePart, deleteMeta } from './resume';
 
@@ -49,12 +44,15 @@ const defaultLogger: Logger = {
   warn: (msg, meta) => log.warn(msg, meta ?? ''),
   info: (msg, meta) => log.info(msg, meta ?? ''),
   error: (msg, meta) => log.error(msg, meta ?? ''),
-  debug: () => { /* silent by default */ },
+  debug: () => {
+    /* silent by default */
+  },
 };
 
 export class Scheduler {
   private readonly maxConcurrent: number;
   private inflight = new Map<string, Promise<DownloadResult>>();
+  private inputs = new Map<string, DownloadOptions>();
   private active = new Map<string, ActiveTask>();
   private queue: QueuedTask[] = [];
 
@@ -64,9 +62,24 @@ export class Scheduler {
 
   enqueue(opts: DownloadOptions): Promise<DownloadResult> {
     const key = this.makeKey(opts);
-
+    if (opts.signal?.aborted)
+      return Promise.reject(new DownloadError('ABORTED', 'Download aborted'));
     const existing = this.inflight.get(key);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      const prior = this.inputs.get(key)!;
+      // Different policies/cancellation owners must never borrow an in-flight result.
+      const same = new Set([...Object.keys(prior), ...Object.keys(opts)]);
+      if (
+        [...same].every((name) => {
+          const field = name as keyof DownloadOptions;
+          return field === 'timeout' || field === 'retry'
+            ? JSON.stringify(prior[field]) === JSON.stringify(opts[field])
+            : prior[field] === opts[field];
+        })
+      )
+        return existing;
+      return Promise.reject(new DownloadError('INVALID_ARG', 'Download target is already in use'));
+    }
 
     const promise = new Promise<DownloadResult>((resolve, reject) => {
       const task: QueuedTask = { key, opts, resolve, reject };
@@ -76,11 +89,18 @@ export class Scheduler {
       this.tryStart();
     });
     this.inflight.set(key, promise);
+    this.inputs.set(key, opts);
     // 用双分支 then 做清理，避免 finally 返回的 rejected Promise 在调用方
     // 尚未来得及接住时触发 unhandledRejection。
     void promise.then(
-      () => this.inflight.delete(key),
-      () => this.inflight.delete(key),
+      () => {
+        this.inflight.delete(key);
+        this.inputs.delete(key);
+      },
+      () => {
+        this.inflight.delete(key);
+        this.inputs.delete(key);
+      },
     );
     return promise;
   }
@@ -99,7 +119,7 @@ export class Scheduler {
   }
 
   private makeKey(opts: DownloadOptions): string {
-    return `${opts.url}|${opts.targetPath}|${opts.sha256}`;
+    return opts.targetPath;
   }
 
   private tryStart(): void {
@@ -137,42 +157,56 @@ export class Scheduler {
     const startedAt = Date.now();
     const logger: Logger = task.opts.logger ?? defaultLogger;
 
-    // ── fromCache short-circuit ──
+    // Reserve the slot BEFORE asynchronous cache hashing, including cache hits.
+    this.active.set(task.key, { url: task.opts.url, targetPath: task.opts.targetPath, loaded: 0 });
     try {
-      if (fs.existsSync(task.opts.targetPath)) {
-        const hash = await computeHash(task.opts.targetPath);
-        if (hash === task.opts.sha256) {
-          task.resolve({
-            path: task.opts.targetPath,
-            size: fs.statSync(task.opts.targetPath).size,
-            sha256: hash,
-            fromCache: true,
-            durationMs: Date.now() - startedAt,
-            resumedFromBytes: 0,
-          });
-          return;
-        }
+      assertDownloadUrl(task.opts.url, task.opts);
+      // ── fromCache short-circuit ──
+      if (task.opts.existingTarget === 'error' && fs.existsSync(task.opts.targetPath)) {
+        throw new DownloadError('EXISTS', 'Download target already exists');
       }
-    } catch (err) {
-      logger.debug?.('[downloader] fromCache check failed; falling through', {
-        err: (err as Error).message,
-      });
-    }
+      try {
+        if (fs.existsSync(task.opts.targetPath)) {
+          const hash = await computeHash(task.opts.targetPath);
+          const size = fs.statSync(task.opts.targetPath).size;
+          if (task.opts.signal?.aborted) throw new DownloadError('ABORTED', 'Download aborted');
+          if (
+            hash === task.opts.sha256 &&
+            size <= (task.opts.maxBytes ?? Infinity) &&
+            (task.opts.expectedSize === undefined || size === task.opts.expectedSize)
+          ) {
+            task.resolve({
+              path: task.opts.targetPath,
+              size: fs.statSync(task.opts.targetPath).size,
+              sha256: hash,
+              fromCache: true,
+              durationMs: Date.now() - startedAt,
+              resumedFromBytes: 0,
+            });
+            return;
+          }
+        }
+      } catch (err) {
+        if (err instanceof DownloadError) throw err;
+        logger.debug?.('[downloader] fromCache check failed; falling through', {
+          err: (err as Error).message,
+        });
+      }
 
-    const ctx: TransportContext = {
-      opts: task.opts,
-      logger,
-      signal: task.opts.signal,
-      resumedFromBytes: 0,
-    };
+      const ctx: TransportContext = {
+        opts: {
+          ...task.opts,
+          onProgress: (event) => {
+            const active = this.active.get(task.key);
+            if (active) active.loaded = event.loaded;
+            task.opts.onProgress?.(event);
+          },
+        },
+        logger,
+        signal: task.opts.signal,
+        resumedFromBytes: 0,
+      };
 
-    this.active.set(task.key, {
-      url: task.opts.url,
-      targetPath: task.opts.targetPath,
-      loaded: 0,
-    });
-
-    try {
       const result = await withRetry(() => executeOnce(ctx), {
         config: task.opts.retry,
         signal: task.opts.signal,

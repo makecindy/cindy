@@ -21,4 +21,16 @@ describe('DownloadMeter formatters', () => {
     expect(downloadPercent({ completed: 25, total: 100 })).toBe(25);
     expect(downloadPercent({})).toBeNull();
   });
+
+  it('displays whole percentages without claiming completion early', () => {
+    expect(downloadPercent({ percent: 43.123456789 })).toBe(43);
+    expect(downloadPercent({ percent: 99.99 })).toBe(99);
+    expect(downloadPercent({ completed: 9999, total: 10000 })).toBe(99);
+    expect(downloadPercent({ percent: 100 })).toBe(100);
+    expect(downloadPercent({ percent: 120 })).toBe(100);
+    expect(downloadPercent({ percent: -5 })).toBe(0);
+    expect(downloadPercent({ percent: NaN })).toBeNull();
+    expect(downloadPercent({ percent: Infinity })).toBeNull();
+    expect(downloadPercent({ percent: NaN, completed: 25, total: 100 })).toBe(25);
+  });
 });

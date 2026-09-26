@@ -1,27 +1,9 @@
-/**
- * unified-downloader — M2: HTTP transport + resumable download.
- * ---------------------------------------------------------------------------
- * This module owns one resumable HTTP attempt; retry policy lives in retry.ts.
- *
- * Single-attempt execution. The retry/backoff loop lives in retry.ts. This
- * file is responsible for ONE network round-trip:
- *   - Decide resume vs fresh based on .meta.json + .part.
- *   - Send GET (with Range + If-Range when resuming).
- *   - Stream chunks → write to .part, feed SHA256 hasher, advance progress.
- *   - On EOF: verify SHA256, rename .part → targetPath, delete .meta.json.
- *
- * Cleanup invariants on reject:
- *   - CHECKSUM   → delete .part + .meta.json (corrupt, retry would loop).
- *   - HTTP_4XX   → keep .part + .meta.json (caller may want to inspect).
- *   - NETWORK / HTTP_5XX → keep .part + .meta.json (resumable next time).
- *   - ABORTED    → keep .part + .meta.json (caller asked to pause).
- *   - DISK       → keep .part + .meta.json (caller decides; cleanup() exists).
- */
-
-import { net } from 'electron';
+/** One HTTP attempt. Callers supply policy; queueing/retries live in scheduler.
+ * Await disk writes to bound memory even for multi-gigabyte runtime archives. */
+import { requestResponse } from './http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DownloadError, type DownloadOptions, type Logger, type TimeoutConfig } from './types';
+import { DownloadError, type DownloadOptions, type Logger } from './types';
 import {
   partPath,
   readMeta,
@@ -31,358 +13,281 @@ import {
   decideResumeOffset,
   type MetaJson,
 } from './resume';
-import { createStreamingHasher, computeHash } from './integrity';
+import { createStreamingHasher } from './integrity';
 import { ProgressTracker } from './progress';
-
-const DEFAULT_TIMEOUT: TimeoutConfig = { connectMs: 10_000, idleMs: 30_000 };
-const META_WRITE_INTERVAL_MS = 2000;
 
 export interface TransportContext {
   opts: DownloadOptions;
   logger: Logger;
   signal?: AbortSignal;
-  /** Bytes restored from `.part`. Set by executeOnce(); caller reads after success. */
   resumedFromBytes: number;
 }
-
 export interface TransportResult {
   size: number;
   sha256: string;
 }
 
-/**
- * Headers returned by Electron's net.request can be either a string or string[].
- * We normalize via this helper.
- */
-function pickHeader(headers: Record<string, string | string[]>, key: string): string | null {
-  const v = headers[key.toLowerCase()];
-  if (v === undefined) return null;
-  return Array.isArray(v) ? (v[0] ?? null) : v;
-}
-
-function parseContentLength(
-  headers: Record<string, string | string[]>,
-  status: number,
-  resumeOffset: number | null,
-): number | null {
-  // 206 Partial Content: prefer Content-Range total, else Content-Length + offset.
-  if (status === 206) {
-    const range = pickHeader(headers, 'content-range');
-    if (range !== null) {
-      const m = /\/(\d+)$/.exec(range);
-      if (m !== null) return Number(m[1]);
-    }
-    const cl = pickHeader(headers, 'content-length');
-    if (cl !== null && resumeOffset !== null) return Number(cl) + resumeOffset;
+export function assertDownloadUrl(url: string, opts: DownloadOptions): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new DownloadError('URL_POLICY', 'Invalid download URL');
   }
-  const cl = pickHeader(headers, 'content-length');
-  if (cl === null) return null;
-  return Number(cl);
+  if (
+    !['http:', 'https:'].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    (opts.isUrlAllowed && !opts.isUrlAllowed(url))
+  ) {
+    throw new DownloadError('URL_POLICY', 'Download URL is not allowed');
+  }
 }
 
 export async function executeOnce(ctx: TransportContext): Promise<TransportResult> {
-  const { opts, logger } = ctx;
-  const timeout: TimeoutConfig = { ...DEFAULT_TIMEOUT, ...(opts.timeout ?? {}) };
-
-  // ── Step 0: target file already exists & matches sha256 → fast path ──
-  // (Scheduler also short-circuits this; the duplicate check here protects
-  // against scheduler bypass paths and is cheap when the file is missing.)
-  if (fs.existsSync(opts.targetPath)) {
+  const { opts } = ctx;
+  const signal = ctx.signal ?? opts.signal;
+  const controller = new AbortController();
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let response: Response | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let file: fs.promises.FileHandle | undefined;
+  let meta: MetaJson | undefined;
+  let loaded = 0;
+  let complete = false;
+  let discard = opts.resume === false;
+  const abort = () => controller.abort();
+  const checkAbort = () => {
+    if (controller.signal.aborted)
+      throw new DownloadError(
+        timedOut ? 'TIMEOUT' : 'ABORTED',
+        timedOut ? 'Download timed out' : 'Download aborted',
+      );
+  };
+  const armTimer = (ms: number) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, ms);
+  };
+  const network = async <T>(operation: Promise<T>): Promise<T> => {
     try {
-      const existingHash = await computeHash(opts.targetPath);
-      if (existingHash === opts.sha256) {
-        return { size: fs.statSync(opts.targetPath).size, sha256: existingHash };
-      }
-      try { fs.unlinkSync(opts.targetPath); } catch { /* ignore */ }
+      return await operation;
     } catch {
-      try { fs.unlinkSync(opts.targetPath); } catch { /* ignore */ }
+      checkAbort();
+      // Native errors may contain signed URLs. Never expose those to callers/logs.
+      throw new DownloadError('NETWORK', 'Download network request failed');
     }
-  }
-
-  // ── Step 1: decide resume vs fresh ──
-  const resumeOffset = decideResumeOffset(
-    opts.targetPath,
-    opts.url,
-    opts.expectedSize,
-    opts.sha256,
-  );
-  if (resumeOffset === null) {
-    deletePart(opts.targetPath);
-    deleteMeta(opts.targetPath);
-  } else {
-    ctx.resumedFromBytes = resumeOffset;
-    opts.onResume?.({ fromBytes: resumeOffset, totalBytes: opts.expectedSize ?? null });
-  }
-
-  fs.mkdirSync(path.dirname(opts.targetPath), { recursive: true });
-
-  // ── Step 2: build headers ──
-  const headers: Record<string, string> = {};
-  if (resumeOffset !== null) {
-    headers['Range'] = `bytes=${resumeOffset}-`;
-    const meta = readMeta(opts.targetPath);
-    if (meta?.etag) headers['If-Range'] = meta.etag;
-    else if (meta?.lastModified) headers['If-Range'] = meta.lastModified;
-  }
-
-  // ── Step 3: HTTP request via Electron net (auto-respects system proxy) ──
-  return await new Promise<TransportResult>((resolve, reject) => {
-    const request = net.request({ url: opts.url, method: 'GET', redirect: 'follow' });
-    Object.entries(headers).forEach(([k, v]) => request.setHeader(k, v));
-
-    let connectTimer: ReturnType<typeof setTimeout> | null = null;
-    let idleTimer: ReturnType<typeof setTimeout> | null = null;
-    let settled = false;
-
-    const cleanupTimers = (): void => {
-      if (connectTimer !== null) { clearTimeout(connectTimer); connectTimer = null; }
-      if (idleTimer !== null) { clearTimeout(idleTimer); idleTimer = null; }
-    };
-
-    const safeReject = (err: DownloadError): void => {
-      if (settled) return;
-      settled = true;
-      cleanupTimers();
-      if (opts.signal !== undefined) opts.signal.removeEventListener('abort', onAbort);
-      reject(err);
-    };
-
-    const safeResolve = (r: TransportResult): void => {
-      if (settled) return;
-      settled = true;
-      cleanupTimers();
-      if (opts.signal !== undefined) opts.signal.removeEventListener('abort', onAbort);
-      resolve(r);
-    };
-
-    const onAbort = (): void => {
-      try { request.abort(); } catch { /* ignore */ }
-      // Keep .part + .meta — caller asked to pause.
-      safeReject(new DownloadError('ABORTED', 'download aborted by caller'));
-    };
-
-    if (opts.signal !== undefined) {
-      if (opts.signal.aborted) {
-        onAbort();
-        return;
-      }
-      opts.signal.addEventListener('abort', onAbort, { once: true });
+  };
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) abort();
+  try {
+    checkAbort();
+    assertDownloadUrl(opts.url, opts);
+    if (opts.existingTarget === 'error' && fs.existsSync(opts.targetPath)) {
+      throw new DownloadError('EXISTS', 'Download target already exists');
     }
-
-    connectTimer = setTimeout(() => {
-      try { request.abort(); } catch { /* ignore */ }
-      safeReject(new DownloadError('NETWORK', `connect timeout after ${timeout.connectMs}ms`));
-    }, timeout.connectMs);
-
-    const resetIdleTimer = (): void => {
-      if (idleTimer !== null) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        try { request.abort(); } catch { /* ignore */ }
-        safeReject(new DownloadError('NETWORK', `idle timeout after ${timeout.idleMs}ms`));
-      }, timeout.idleMs);
-    };
-
-    request.on('response', (response) => {
-      if (connectTimer !== null) { clearTimeout(connectTimer); connectTimer = null; }
-
-      const status = response.statusCode;
-      const responseHeaders = response.headers as Record<string, string | string[]>;
-
-      // 4xx → permanent failure for this URL (not retried).
-      if (status >= 400 && status < 500) {
-        try { request.abort(); } catch { /* ignore */ }
-        safeReject(new DownloadError('HTTP_4XX', `HTTP ${status}`, undefined, status));
-        return;
+    let offset =
+      opts.resume === false
+        ? null
+        : decideResumeOffset(opts.targetPath, opts.url, opts.expectedSize, opts.sha256);
+    if (
+      offset !== null &&
+      (offset >= (opts.expectedSize ?? Infinity) || offset > (opts.maxBytes ?? Infinity))
+    )
+      offset = null;
+    if (offset === null) {
+      deletePart(opts.targetPath);
+      deleteMeta(opts.targetPath);
+    }
+    ctx.resumedFromBytes = offset ?? 0;
+    loaded = offset ?? 0;
+    await fs.promises.mkdir(path.dirname(opts.targetPath), { recursive: true });
+    checkAbort();
+    const headers: Record<string, string> = { 'Accept-Encoding': 'identity' };
+    if (offset !== null) {
+      headers.Range = `bytes=${offset}-`;
+      const prior = readMeta(opts.targetPath);
+      if (prior?.etag) headers['If-Range'] = prior.etag;
+      else if (prior?.lastModified) headers['If-Range'] = prior.lastModified;
+    }
+    armTimer(opts.timeout?.connectMs ?? 10_000);
+    let url = opts.url;
+    for (let hops = 0; ; hops++) {
+      assertDownloadUrl(url, opts);
+      response = await network(
+        requestResponse(url, {
+          method: 'GET',
+          cache: 'no-store',
+          redirect: opts.redirect === 'error' ? 'error' : 'manual',
+          headers,
+          signal: controller.signal,
+        }),
+      );
+      checkAbort();
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+      const location = response.headers.get('location');
+      await response.body?.cancel();
+      response = undefined;
+      if (opts.redirect === 'error' || !location || hops >= 5) {
+        throw new DownloadError('URL_POLICY', 'Download redirect is not allowed');
       }
-      // 5xx → transient; retry layer decides.
-      if (status >= 500) {
-        try { request.abort(); } catch { /* ignore */ }
-        safeReject(new DownloadError('HTTP_5XX', `HTTP ${status}`, undefined, status));
-        return;
-      }
-
-      // We asked for Range but server returned full body → restart fresh next attempt.
-      if (resumeOffset !== null && status === 200) {
-        try { request.abort(); } catch { /* ignore */ }
-        deletePart(opts.targetPath);
-        deleteMeta(opts.targetPath);
-        safeReject(new DownloadError('NETWORK', 'server does not support Range, restarting'));
-        return;
-      }
-
-      const totalBytes = parseContentLength(responseHeaders, status, resumeOffset);
-      const etag = pickHeader(responseHeaders, 'etag');
-      const lastModified = pickHeader(responseHeaders, 'last-modified');
-
-      // For fresh downloads, Content-Length must match expectedSize when both known.
-      if (
-        resumeOffset === null &&
-        opts.expectedSize !== undefined &&
-        totalBytes !== null &&
-        totalBytes !== opts.expectedSize
-      ) {
-        try { request.abort(); } catch { /* ignore */ }
-        deletePart(opts.targetPath);
-        deleteMeta(opts.targetPath);
-        safeReject(
-          new DownloadError(
-            'NETWORK',
-            `Content-Length ${totalBytes} != expectedSize ${opts.expectedSize}`,
-          ),
-        );
-        return;
-      }
-
-      // ── Open .part for append (resume) or truncate (fresh) ──
-      const isResume = resumeOffset !== null && status === 206;
-      const writeStream = fs.createWriteStream(partPath(opts.targetPath), {
-        flags: isResume ? 'a' : 'w',
-      });
-
-      const tracker = new ProgressTracker({
-        initialLoaded: isResume ? resumeOffset : 0,
-        total: totalBytes,
-        onProgress: opts.onProgress,
-      });
-
-      const hasher = createStreamingHasher(isResume ? partPath(opts.targetPath) : null);
-
-      const meta: MetaJson = {
-        url: opts.url,
-        expectedSize: opts.expectedSize ?? totalBytes,
-        expectedSha256: opts.sha256,
-        downloadedBytes: tracker.getLoaded(),
-        etag,
-        lastModified,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
       try {
-        writeMeta(opts.targetPath, meta);
-      } catch (err) {
-        logger.warn?.('[downloader] writeMeta failed (non-fatal)', { err: (err as Error).message });
+        url = new URL(location, url).href;
+      } catch {
+        throw new DownloadError('URL_POLICY', 'Invalid redirect URL');
       }
-
-      let lastMetaWriteAt = Date.now();
-
-      writeStream.on('error', (err) => {
-        try { request.abort(); } catch { /* ignore */ }
-        safeReject(new DownloadError('DISK', `write stream failed: ${err.message}`, err));
-      });
-
-      response.on('data', (chunk: Buffer) => {
-        resetIdleTimer();
-        // 1. Persist to disk. Electron's IncomingMessage isn't a Node Readable
-        //    stream (no pause/resume/destroy on it directly), so we can't apply
-        //    Node-style backpressure here; we accept the buffer and let the
-        //    fs.WriteStream queue it. For the tens-of-MB payloads we ship
-        //    (app patch / claude bin), this stays well within the default
-        //    highWaterMark budget.
-        writeStream.write(chunk);
-        // 2. Feed hasher (async because of priming, but we don't await here —
-        //    the write order is preserved by hasher's internal `await primed`).
-        void hasher.update(chunk).catch((err: Error) => {
-          try { request.abort(); } catch { /* ignore */ }
-          try { writeStream.destroy(); } catch { /* ignore */ }
-          safeReject(new DownloadError('DISK', `hash update failed: ${err.message}`, err));
+    }
+    if (response.status >= 500)
+      throw new DownloadError('HTTP_5XX', `HTTP ${response.status}`, undefined, response.status);
+    if (response.status >= 400) {
+      if (response.status === 416 && offset !== null) {
+        discard = true;
+        throw new DownloadError('NETWORK', 'Invalid resume range; restarting');
+      }
+      throw new DownloadError('HTTP_4XX', `HTTP ${response.status}`, undefined, response.status);
+    }
+    if (offset !== null && response.status === 200) {
+      // Server ignored Range (or If-Range changed): use this full response fresh.
+      offset = null;
+      loaded = 0;
+      ctx.resumedFromBytes = 0;
+      deletePart(opts.targetPath);
+      deleteMeta(opts.targetPath);
+    }
+    if (response.status !== (offset === null ? 200 : 206)) {
+      discard = true;
+      throw new DownloadError('NETWORK', 'Unexpected download response');
+    }
+    const lengthHeader = response.headers.get('content-length');
+    const length = lengthHeader === null ? null : Number(lengthHeader);
+    if (length !== null && (!Number.isSafeInteger(length) || length < 0))
+      throw new DownloadError('SIZE', 'Invalid Content-Length');
+    let total = length === null ? null : length + (offset ?? 0);
+    if (offset !== null) {
+      const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
+      if (
+        !range ||
+        Number(range[1]) !== offset ||
+        Number(range[2]) < offset ||
+        Number(range[2]) + 1 !== Number(range[3]) ||
+        !Number.isSafeInteger(Number(range[3])) ||
+        (length !== null && length !== Number(range[2]) - offset + 1)
+      ) {
+        discard = true;
+        throw new DownloadError('NETWORK', 'Invalid Content-Range; restarting');
+      }
+      total = Number(range[3]);
+      opts.onResume?.({ fromBytes: offset, totalBytes: total });
+    }
+    if (
+      (opts.expectedSize !== undefined && total !== null && total !== opts.expectedSize) ||
+      (total !== null && total > (opts.maxBytes ?? Infinity))
+    ) {
+      throw new DownloadError('SIZE', 'Content-Length does not match the allowed size');
+    }
+    if (!response.body) throw new DownloadError('NETWORK', 'Download response body is empty');
+    reader = response.body.getReader();
+    const hasher = createStreamingHasher(offset === null ? null : partPath(opts.targetPath));
+    await hasher.update(Buffer.alloc(0));
+    file = await fs.promises.open(partPath(opts.targetPath), offset === null ? 'w' : 'a', 0o600);
+    const tracker = new ProgressTracker({
+      initialLoaded: loaded,
+      total: opts.expectedSize ?? total,
+      onProgress: opts.onProgress,
+    });
+    meta = {
+      url: opts.url,
+      expectedSize: opts.expectedSize ?? total,
+      expectedSha256: opts.sha256,
+      downloadedBytes: loaded,
+      etag: response.headers.get('etag'),
+      lastModified: response.headers.get('last-modified'),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    let lastMetaWriteAt = 0;
+    armTimer(opts.timeout?.idleMs ?? 30_000);
+    while (true) {
+      checkAbort();
+      const { done, value } = await network(reader.read());
+      checkAbort();
+      if (done) break;
+      if (!value.byteLength) continue;
+      if (
+        loaded + value.byteLength >
+        Math.min(opts.expectedSize ?? Infinity, opts.maxBytes ?? Infinity)
+      ) {
+        throw new DownloadError('SIZE', 'Download exceeds allowed size');
+      }
+      armTimer(opts.timeout?.idleMs ?? 30_000);
+      await file.writeFile(value);
+      await hasher.update(Buffer.from(value));
+      loaded += value.byteLength;
+      tracker.advance(value.byteLength);
+      if (Date.now() - lastMetaWriteAt >= 2000) {
+        writeMeta(opts.targetPath, {
+          ...meta,
+          downloadedBytes: loaded,
+          updatedAt: new Date().toISOString(),
         });
-        // 3. Advance progress.
-        tracker.advance(chunk.length);
-        // 4. Throttled meta update.
-        const now = Date.now();
-        if (now - lastMetaWriteAt > META_WRITE_INTERVAL_MS) {
-          lastMetaWriteAt = now;
-          try {
-            writeMeta(opts.targetPath, {
-              ...meta,
-              downloadedBytes: tracker.getLoaded(),
-              updatedAt: new Date().toISOString(),
-            });
-          } catch (err) {
-            logger.debug?.('[downloader] writeMeta tick failed', { err: (err as Error).message });
-          }
+        lastMetaWriteAt = Date.now();
+      }
+    }
+    clearTimeout(timer);
+    if (loaded !== (opts.expectedSize ?? total ?? loaded))
+      throw new DownloadError('SIZE', 'Download size mismatch');
+    const sha256 = await hasher.digest();
+    if (sha256 !== opts.sha256) throw new DownloadError('CHECKSUM', 'Download SHA-256 mismatch');
+    await file.close();
+    file = undefined;
+    checkAbort();
+    if (opts.existingTarget === 'error') {
+      // Atomic no-clobber publication, even if another process created the target meanwhile.
+      await fs.promises.link(partPath(opts.targetPath), opts.targetPath);
+      deletePart(opts.targetPath);
+    } else {
+      await fs.promises.rename(partPath(opts.targetPath), opts.targetPath);
+    }
+    complete = true;
+    deleteMeta(opts.targetPath);
+    tracker.flush();
+    return { size: loaded, sha256 };
+  } catch (error) {
+    const failure =
+      error instanceof DownloadError
+        ? error
+        : new DownloadError(
+            (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'EXISTS' : 'DISK',
+            'Download file operation failed',
+          );
+    if (['SIZE', 'CHECKSUM', 'URL_POLICY'].includes(failure.code)) discard = true;
+    throw failure;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+    if (!complete) controller.abort();
+    await reader?.cancel().catch(() => undefined);
+    reader?.releaseLock();
+    if (!reader) await response?.body?.cancel().catch(() => undefined);
+    await file?.close().catch(() => undefined);
+    if (!complete) {
+      if (discard) {
+        deletePart(opts.targetPath);
+        deleteMeta(opts.targetPath);
+      } else if (meta) {
+        try {
+          writeMeta(opts.targetPath, {
+            ...meta,
+            downloadedBytes: loaded,
+            updatedAt: new Date().toISOString(),
+          });
+        } catch {
+          /* A failed checkpoint only disables resume. */
         }
-      });
-
-      response.on('end', () => {
-        // close the stream and finalize
-        writeStream.end(() => {
-          (async () => {
-            try {
-              const finalHash = await hasher.digest();
-              const finalSize = tracker.getLoaded();
-
-              if (finalHash !== opts.sha256) {
-                // Corrupt body — wipe both .part and .meta so a future attempt
-                // starts truly fresh (CHECKSUM is not retried inside withRetry).
-                deletePart(opts.targetPath);
-                deleteMeta(opts.targetPath);
-                safeReject(
-                  new DownloadError(
-                    'CHECKSUM',
-                    `sha256 mismatch: got ${finalHash}, expected ${opts.sha256}`,
-                  ),
-                );
-                return;
-              }
-
-              // Good. Move .part into place and drop the sidecar.
-              try {
-                if (fs.existsSync(opts.targetPath)) fs.unlinkSync(opts.targetPath);
-                fs.renameSync(partPath(opts.targetPath), opts.targetPath);
-              } catch (err) {
-                safeReject(
-                  new DownloadError(
-                    'DISK',
-                    `rename .part failed: ${(err as Error).message}`,
-                    err as Error,
-                  ),
-                );
-                return;
-              }
-              deleteMeta(opts.targetPath);
-              tracker.flush();
-              safeResolve({ size: finalSize, sha256: finalHash });
-            } catch (err) {
-              safeReject(
-                new DownloadError(
-                  'DISK',
-                  `finalize failed: ${(err as Error).message}`,
-                  err as Error,
-                ),
-              );
-            }
-          })();
-        });
-      });
-
-      response.on('error', (err: Error) => {
-        try { writeStream.destroy(); } catch { /* ignore */ }
-        safeReject(new DownloadError('NETWORK', `stream error: ${err.message}`, err));
-      });
-
-      // Net response sometimes emits 'aborted' on socket reset rather than 'error'.
-      // Cast: Electron typings don't list 'aborted' but it's a real event.
-      (response as unknown as { on(ev: string, cb: () => void): void }).on('aborted', () => {
-        try { writeStream.destroy(); } catch { /* ignore */ }
-        if (settled) return;
-        safeReject(new DownloadError('NETWORK', 'response aborted mid-stream'));
-      });
-
-      // Kick off the idle timer once the response stream begins.
-      resetIdleTimer();
-    });
-
-    request.on('error', (err: Error) => {
-      safeReject(new DownloadError('NETWORK', `request error: ${err.message}`, err));
-    });
-
-    // Guard: an abort that sneaks in before request.end() finished.
-    request.on('abort' as 'error', () => {
-      if (settled) return;
-      safeReject(new DownloadError('ABORTED', 'request aborted'));
-    });
-
-    request.end();
-  });
+      }
+    }
+  }
 }

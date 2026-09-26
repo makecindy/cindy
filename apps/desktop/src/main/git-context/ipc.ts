@@ -15,7 +15,7 @@
  *
  * GitHub token 只用本地 gh CLI 登录态(`gh auth token`,零配置)——agent 干活
  * 本来就靠 gh,凭证天然就有;拿不到时按原因降级 gh-missing / gh-not-logged-in,
- * 徽标点击引导 agent 安装或登录。不做 app 级 PAT 绑定(设计收敛,见 PR #94 讨论)。
+ * 徽标点击打开内置 gh 安装和设备码登录。不做 app 级 PAT 绑定。
  */
 
 import { BrowserWindow, ipcMain } from 'electron';
@@ -28,6 +28,7 @@ import { sessions } from '../localDb/schema.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { optionalNullableString, requireString, throwIpcError } from '../utils/ipcValidate';
 import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
+import { registerGithubSetupIpc } from './githubSetupIpc.js';
 import { GitContextService } from './GitContextService.js';
 import {
   findLiveLinkedWorktreeLive,
@@ -153,6 +154,7 @@ export function registerGitContextIpc(): void {
     readToken: readGithubToken,
     fetchPr: fetchPrRemote,
   });
+  registerGithubSetupIpc(() => prStatusService?.invalidate());
   setPrRefsChangedListener((sessionId) =>
     broadcastToAllWindows(GIT_CONTEXT_PUSH.PR_REFS_CHANGED, { sessionId }),
   );

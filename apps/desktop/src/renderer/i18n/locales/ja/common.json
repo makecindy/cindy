@@ -10404,14 +10404,89 @@
         "clickToOpen": "クリックしてブラウザで PR を開く",
         "guidance": {
           "login": {
-            "hint": "クリックすると Agent がログインを手伝います",
-            "aria": "PR #{{number}} の状態を取得できません：Agent に GitHub へのログインを任せる",
-            "prompt": "GitHub CLI にログインしてください：`gh auth login -h github.com -w` を実行し、表示されたワンタイムのデバイスコードと URL を教えてください。ブラウザで認可したら、`gh auth status` でログイン成功を確認してください。"
+            "hint": "クリックして GitHub に接続",
+            "aria": "PR #{{number}} の状態を取得できません：GitHub に接続"
           },
           "install": {
-            "hint": "クリックすると Agent がインストールとログインを手伝います",
-            "aria": "PR #{{number}} の状態を取得できません：Agent に GitHub CLI のインストールとログインを任せる",
-            "prompt": "GitHub CLI（gh）をインストールしてください（macOS は `brew install gh`、Windows は `winget install GitHub.cli`）。その後 `gh auth login -h github.com -w` を実行してログインし、表示されたワンタイムのデバイスコードと URL を教えてください。ブラウザで認可したら、`gh auth status` でログイン成功を確認してください。"
+            "hint": "クリックして GitHub に接続",
+            "aria": "PR #{{number}} の状態を取得できません：GitHub に接続"
+          }
+        },
+        "setup": {
+          "install": "インストールして続行",
+          "connect": "GitHub にログイン",
+          "cancel": "キャンセル",
+          "retry": "再試行",
+          "done": "完了",
+          "openBrowser": "GitHub を開いて認可",
+          "deviceCode": "ワンタイムデバイスコード",
+          "copyCode": "コードをコピー",
+          "copied": "コピーしました",
+          "copyFailed": "コピーできませんでした。コードを選択して手動でコピーしてください。",
+          "openFailed": "ブラウザを開けませんでした。github.com/login/device を手動で開いてください。",
+          "stages": {
+            "install": {
+              "title": "GitHub CLI をインストール",
+              "description": "GitHub CLI をインストールして GitHub アカウントに接続します。"
+            },
+            "login": {
+              "title": "GitHub に接続",
+              "description": "GitHub アカウントに接続します。GitHub CLI が未インストールの場合は自動でインストールします。"
+            },
+            "checking": {
+              "title": "接続を確認中…",
+              "description": "GitHub のログイン状態を確認しています。"
+            },
+            "downloading": {
+              "title": "GitHub CLI をダウンロード中…",
+              "description": "ダウンロードが終わると自動でインストールします。"
+            },
+            "installing": {
+              "title": "GitHub CLI をインストール中…",
+              "description": "ダウンロードが完了しました。"
+            },
+            "preparing": {
+              "title": "ログインを準備中…",
+              "description": "ワンタイムデバイスコードを取得しています。"
+            },
+            "authorizing": {
+              "title": "GitHub にログイン",
+              "description": "このコードをコピーし、GitHub のページに入力して認可してください。"
+            },
+            "connected": {
+              "title": "GitHub に接続しました",
+              "description": "この画面を閉じて操作を続けられます。"
+            },
+            "cancelled": {
+              "title": "接続をキャンセルしました",
+              "description": "準備ができたら再試行できます。"
+            },
+            "unavailable": {
+              "title": "進捗を取得できません",
+              "description": "現在の進捗を取得できません。再試行してください。"
+            },
+            "error": {
+              "title": "接続が完了していません"
+            }
+          },
+          "errors": {
+            "unsupported": "この OS またはプロセッサにはまだ対応していません。",
+            "install": "インストールに失敗しました。ネットワークと空き容量を確認して再試行してください。",
+            "login": "ログインに失敗したか、認可が拒否されました。再試行して新しいコードを取得してください。",
+            "timeout": "コードの有効期限が切れました。再試行してください。"
+          },
+          "account": {
+            "checking": "GitHub への接続を確認中…",
+            "connected": "接続済み · @{{login}}",
+            "missing": "GitHub に接続すると利用できます。",
+            "auth": "認証が失効しました。再ログインするか、下の予備トークンを変更してください。",
+            "network": "GitHub に接続できません。ネットワークを確認して再試行してください。",
+            "forbidden": "接続を確認できません。権限や API の利用制限を確認して再試行してください。",
+            "gh-cli": "この端末の GitHub ログインを使用中",
+            "token": "予備トークンを使用中",
+            "recheck": "接続を確認",
+            "summary": "GitHub のリポジトリ、Issue、PR、Actions を管理。",
+            "otherMethods": "その他の接続方法"
           }
         },
         "unresolved": "未解決のレビューコメント: {{count}} 件"
