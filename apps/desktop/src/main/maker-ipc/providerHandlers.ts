@@ -32,7 +32,7 @@ import {
 } from '@cindy/model-providers';
 
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
-import { MANAGED_OLLAMA_PROVIDER_ID } from '../../shared/localModelRuntime.js';
+import { MANAGED_OLLAMA_PROVIDER_ID, isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
 import type {
   CodexImageGenerationRestartPolicy,
   CustomProviderUpdateOptions,
@@ -1897,7 +1897,7 @@ export function registerProviderHandlers(
     if (isByokProviderId(config.id) || deps.isOrganizationManagedProviderId(config.id)) {
       throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
-    if (config.id === MANAGED_OLLAMA_PROVIDER_ID) {
+    if (isManagedSidecarProviderId(config.id)) {
       throwIpcError(
         'PERMISSION_DENIED',
         'managed local providers cannot be created from the custom form',
@@ -1973,7 +1973,7 @@ export function registerProviderHandlers(
     if (deps.isOrganizationManagedProviderId(config.id)) {
       throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
-    if (config.id === MANAGED_OLLAMA_PROVIDER_ID) {
+    if (isManagedSidecarProviderId(config.id)) {
       throwIpcError(
         'PERMISSION_DENIED',
         'managed local providers cannot be edited from the custom form',

@@ -33,6 +33,7 @@ import {
 } from './llamaCppDownloads.js';
 import { windowsTarBin } from './ollamaInstall.js';
 import { readModelContextLimits } from '../maker-host/model-context-limit-store.js';
+import { killProcessTree } from '../scheduler-host/proc-util.js';
 
 const exec = promisify(execFile);
 export function managedModelId(repo: string, file: string): string {
@@ -129,6 +130,23 @@ export function createLlamaCppService(
     controller = current;
     operation = { kind, completed: 0, total: 0 };
     try {
+      if (kind === 'install' || kind === 'download') {
+        // This service owns its userData root. No other operation can hold a
+        // staging directory here; keep installed versions and models untouched.
+        const entries = await readdir(root, { withFileTypes: true }).catch((error) => {
+          if (error.code === 'ENOENT') return [];
+          throw error;
+        });
+        for (const entry of entries) {
+          if (
+            entry.isDirectory() &&
+            /^(install-|model-download-)[A-Za-z0-9]{6}$/.test(entry.name)
+          ) {
+            current.signal.throwIfAborted();
+            await rm(path.join(root, entry.name), { recursive: true, force: true });
+          }
+        }
+      }
       return await fn(current.signal);
     } finally {
       controller = undefined;
@@ -161,13 +179,17 @@ export function createLlamaCppService(
       const timeout = setTimeout(() => {
         cleanup();
         reject(new Error('STOP_TIMEOUT'));
-      }, 15_000);
+      }, 4_000);
+      const force = setTimeout(() => {
+        if (child === previous) killProcessTree(previous.pid, previous);
+      }, 1_500);
       const done = () => {
         cleanup();
         resolve();
       };
       const cleanup = () => {
         clearTimeout(timeout);
+        clearTimeout(force);
         previous.off('exit', done);
       };
       previous.once('exit', done);
@@ -364,6 +386,7 @@ export function createLlamaCppService(
           env: { ...env, LLAMA_CACHE: path.join(root, 'cache') },
           stdio: 'ignore',
           windowsHide: true,
+          detached: process.platform !== 'win32',
         },
       );
       child = running;
@@ -405,7 +428,7 @@ export function createLlamaCppService(
         }
         throw new Error('START_TIMEOUT');
       } catch (error) {
-        stop();
+        await stopAndWait();
         throw error;
       }
     });
@@ -431,9 +454,9 @@ export function createLlamaCppService(
     cancel,
     pause,
     resume,
-    dispose: () => {
+    dispose: async () => {
       cancel();
-      stop();
+      await stopRequested();
     },
   };
 }

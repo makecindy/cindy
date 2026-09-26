@@ -20,6 +20,11 @@ import { MANAGED_LLAMACPP_PROVIDER_ID } from './llamaCpp.js';
 export const MANAGED_OLLAMA_PROVIDER_ID = 'cindy-local-ollama';
 export const MANAGED_LMSTUDIO_PROVIDER_ID = 'cindy-local-lmstudio';
 
+/** These connections are owned by runtime onboarding, never generic forms/imports. */
+export function isManagedSidecarProviderId(id: string): boolean {
+  return id === MANAGED_OLLAMA_PROVIDER_ID || id === MANAGED_LLAMACPP_PROVIDER_ID;
+}
+
 export const OLLAMA_LOOPBACK_ORIGIN = 'http://127.0.0.1:11434';
 export const OLLAMA_OPENAI_BASE_URL = `${OLLAMA_LOOPBACK_ORIGIN}/v1`;
 export const OLLAMA_ANTHROPIC_BASE_URL = OLLAMA_LOOPBACK_ORIGIN;
@@ -382,7 +387,11 @@ export function resolveManagedOllamaAgents(input: {
 }
 
 export function isManagedLocalProviderId(id: string): boolean {
-  return id === MANAGED_OLLAMA_PROVIDER_ID || id === MANAGED_LMSTUDIO_PROVIDER_ID || id === MANAGED_LLAMACPP_PROVIDER_ID;
+  return (
+    id === MANAGED_OLLAMA_PROVIDER_ID ||
+    id === MANAGED_LMSTUDIO_PROVIDER_ID ||
+    id === MANAGED_LLAMACPP_PROVIDER_ID
+  );
 }
 
 export function isAppleSilicon(

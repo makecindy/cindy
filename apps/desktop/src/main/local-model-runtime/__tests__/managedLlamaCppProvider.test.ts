@@ -13,6 +13,37 @@ import {
 } from '../managedLlamaCppProvider.js';
 
 describe('managed llama.cpp provider', () => {
+  it('never recreates a removed provider during reconciliation or late completion', async () => {
+    vi.clearAllMocks();
+    store.getCustomProvider.mockResolvedValue(null);
+    expect(await ensureManagedLlamaCppProvider([], () => true)).toBe(false);
+    expect(store.createCustomProvider).not.toHaveBeenCalled();
+    store.getCustomProvider.mockResolvedValue(buildManagedLlamaCppProvider([]));
+    store.updateCustomProviderIfUnchanged.mockResolvedValue(false);
+    await expect(
+      ensureManagedLlamaCppProvider(
+        [{ id: 'model', repo: 'owner/repo', file: 'a.gguf', size: 1 }],
+        () => true,
+      ),
+    ).rejects.toThrow('PROVIDER_CONFLICT');
+    expect(store.createCustomProvider).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
+  it('reconciles installed files once and preserves owner settings', async () => {
+    vi.clearAllMocks();
+    const existing = buildManagedLlamaCppProvider([]);
+    store.getCustomProvider.mockResolvedValue(existing);
+    store.updateCustomProviderIfUnchanged.mockResolvedValue(true);
+    const models = [{ id: 'model', repo: 'owner/repo', file: 'a.gguf', size: 1 }];
+    expect(await ensureManagedLlamaCppProvider(models, () => true)).toBe(true);
+    store.getCustomProvider.mockResolvedValue(buildManagedLlamaCppProvider(models, existing));
+    expect(await ensureManagedLlamaCppProvider(models, () => true)).toBe(false);
+    expect(store.updateCustomProviderIfUnchanged).toHaveBeenCalledOnce();
+    await expect(ensureManagedLlamaCppProvider(models, () => false)).rejects.toThrow(
+      'OWNER_CHANGED',
+    );
+    vi.clearAllMocks();
+  });
   it('upgrades the Flash-Next trial budget across engines, preserving other models and custom settings', () => {
     const models = [
       { id: 'flash', repo: 'bartowski/Qwen3.8-Flash-Next-GGUF', file: 'a.gguf', size: 1 },
@@ -29,7 +60,9 @@ describe('managed llama.cpp provider', () => {
     expect(updated.runtimes.pi!.models[0]!.name).toBe('My Flash');
     const projected = buildUserProvider(updated);
     expect(projected.models.pi?.find((model) => model.id === 'flash')).toMatchObject({
-      contextWindow: 262144, contextWindowMax: 1_000_000, contextWindowVerified: true,
+      contextWindow: 262144,
+      contextWindowMax: 1_000_000,
+      contextWindowVerified: true,
     });
     previous.runtimes.pi!.models[0]!.contextWindow = 65536;
     expect(

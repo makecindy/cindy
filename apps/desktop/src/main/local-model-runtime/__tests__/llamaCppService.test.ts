@@ -45,6 +45,52 @@ afterEach(async () => {
 });
 
 describe('managed llama.cpp model lifecycle', () => {
+  it.each(['stop', 'dispose'] as const)(
+    'forces and awaits a stuck owned process during %s',
+    async (action) => {
+      const runtime = path.join(root, 'llamacpp-runtime');
+      await mkdir(runtime);
+      await writeFile(path.join(runtime, 'server'), 'stub');
+      await writeFile(
+        path.join(runtime, 'current.json'),
+        JSON.stringify({ binary: 'server', version: 'test' }),
+      );
+      const child = Object.assign(new EventEmitter(), {
+        kill: vi.fn((signal: string) => {
+          if (signal === 'SIGKILL') child.emit('exit');
+          return true;
+        }),
+      });
+      mocks.spawn.mockReturnValue(child);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => Response.json({ status: 'ok' })),
+      );
+      const service = createLlamaCppService(root);
+      await service.start();
+      vi.useFakeTimers();
+      try {
+        const stopping = service[action]();
+        expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+        await vi.advanceTimersByTimeAsync(1500);
+        await stopping;
+        expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+        expect((await service.snapshot()).running).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+  it('reclaims abandoned staging before the next download and preserves unrelated files', async () => {
+    const runtime = path.join(root, 'llamacpp-runtime');
+    for (const name of ['install-abc123', 'model-download-def456', 'keep-user-files']) {
+      await mkdir(path.join(runtime, name), { recursive: true });
+      await writeFile(path.join(runtime, name, 'partial'), 'unverified');
+    }
+    await createLlamaCppService(root).download({ repo: 'owner/repo', file: 'model.gguf' });
+    expect((await readdir(runtime)).sort()).toEqual(['keep-user-files', 'models']);
+  });
   it.each(['resume', 'cancel'] as const)(
     'settles a paused download through %s without publishing partial files',
     async (action) => {

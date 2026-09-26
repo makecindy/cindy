@@ -55,6 +55,22 @@ function harness() {
 }
 beforeEach(() => vi.clearAllMocks());
 describe('managed llama.cpp IPC boundary', () => {
+  it('reconciles installed files for the current owner without repeated catalog broadcasts', async () => {
+    const h = harness();
+    const models = [{ id: 'model', repo: 'owner/repo', file: 'a.gguf', size: 10 }];
+    h.service.snapshot.mockResolvedValue({ models });
+    mocks.ensure
+      .mockImplementationOnce(async (_models, active) => {
+        expect(active()).toBe(true);
+        return true;
+      })
+      .mockResolvedValue(false);
+    await h.invoke(MAKER_INVOKE.LLAMACPP_STATUS);
+    await h.invoke(MAKER_INVOKE.LLAMACPP_STATUS);
+    expect(mocks.ensure).toHaveBeenCalledWith(models, expect.any(Function), expect.any(Array));
+    expect(h.deps.broadcastChanged).toHaveBeenCalledOnce();
+    expect(h.service.start).not.toHaveBeenCalled();
+  });
   it('validates pause/resume controls and totals every shard for the manual picker', async () => {
     const h = harness();
     await h.invoke(MAKER_INVOKE.LLAMACPP_CANCEL, 'pause');

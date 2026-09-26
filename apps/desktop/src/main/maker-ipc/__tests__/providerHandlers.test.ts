@@ -2410,7 +2410,7 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(deps.refreshCatalog).not.toHaveBeenCalled();
   });
 
-  it('rejects managed local provider ids on the generic create/update path', async () => {
+  it.each(['cindy-local-ollama', 'cindy-local-llamacpp'])('rejects %s on the generic create/update path', async (id) => {
     mountDb();
     const harness = new IpcHarness();
     const deps = makeDeps();
@@ -2419,13 +2419,13 @@ describe('provider:custom:* CRUD handlers', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, {
         ...validConfig,
-        id: 'cindy-local-ollama',
+        id,
       }),
     ).rejects.toThrow(/PERMISSION_DENIED/);
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
         ...validConfig,
-        id: 'cindy-local-ollama',
+        id,
       }),
     ).rejects.toThrow(/PERMISSION_DENIED/);
     expect(await listCustomProviders()).toEqual([]);

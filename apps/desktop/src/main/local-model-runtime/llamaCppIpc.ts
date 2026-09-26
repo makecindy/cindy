@@ -19,7 +19,7 @@ export function registerLlamaCppHandlers(
   > & { userDataDir: string; service?: LlamaCppService; getLocalCatalog?: () => unknown },
 ) {
   const service = deps.service ?? getManagedLlamaCppService(deps.userDataDir);
-  onQuit('llamacpp-sidecar', () => service.dispose(), 'sync');
+  onQuit('llamacpp-sidecar', () => service.dispose(), 'async');
   const handle = (channel: string, fn: (...args: unknown[]) => unknown | Promise<unknown>) =>
     registry.handle(channel, async (event, ...args) => {
       deps.assertTrustedSender(event);
@@ -75,12 +75,28 @@ export function registerLlamaCppHandlers(
     deps.broadcastChanged();
   });
   handle(MAKER_INVOKE.LLAMACPP_STATUS, async () => {
+    const active = captureOwner();
+    const snapshot = await service.snapshot();
+    // Installed files are device-wide; repair only an existing current-owner
+    // connection after account switches or a missed completion notification.
+    if (
+      await ensureManagedLlamaCppProvider(
+        snapshot.models,
+        active,
+        resolveLlamaCppCatalog((deps.getLocalCatalog ?? getActiveLocalModelCatalog)()),
+      )
+    ) {
+      if (!active()) throw new Error('OWNER_CHANGED');
+      await deps.refreshCatalog();
+      if (!active()) throw new Error('OWNER_CHANGED');
+      deps.broadcastChanged();
+    }
     const lists = resolveLlamaCppModelLists(
       { platform: process.platform, arch: process.arch, totalmemBytes: os.totalmem() },
       (deps.getLocalCatalog ?? getActiveLocalModelCatalog)(),
     );
     return {
-      ...(await service.snapshot()),
+      ...snapshot,
       ...lists,
       recommendation: { ...lists.recommendation, chip: os.cpus()[0]?.model },
     };

@@ -69,18 +69,23 @@ export async function ensureManagedLlamaCppProvider(
   models: LlamaCppModel[] | undefined,
   stillActive: () => boolean,
   catalog: LlamaCppCatalogEntry[] = [],
-): Promise<void> {
+): Promise<boolean> {
   if (!stillActive()) throw new Error('OWNER_CHANGED');
   const existing = await getCustomProvider(MANAGED_LLAMACPP_PROVIDER_ID);
   if (!stillActive()) throw new Error('OWNER_CHANGED');
   if (existing && !isManagedLlamaCppProvider(existing)) throw new Error('PROVIDER_CONFLICT');
   // Adding a provider must not probe the runtime or replace existing model settings.
-  if (existing && models === undefined) return;
+  if (existing && models === undefined) return false;
+  // Only the explicit Add action may create a connection. Late downloads and
+  // reconciliation must never undo deletion, including deletion during CAS.
+  if (!existing && models !== undefined) return false;
   const next = buildManagedLlamaCppProvider(models ?? [], existing ?? undefined, catalog);
+  if (JSON.stringify(next) === JSON.stringify(existing)) return false;
   if (existing) {
     if (!(await updateCustomProviderIfUnchanged(existing.id, existing, next)))
       throw new Error('PROVIDER_CONFLICT');
   } else {
     await createCustomProvider(next);
   }
+  return true;
 }
