@@ -26,8 +26,7 @@ export function logMobileVoice(
   log('[mobile-voice]', message, fields);
 }
 
-// Refiner rejection reasons are codes; anything else is a transport/server
-// message, kept short (the Debug log recorder still redacts credentials).
+// Refiner rejection reasons are codes. Anything else is an error message.
 const REFINE_REJECTION_CODES = new Set([
   'empty_input',
   'empty_output',
@@ -37,7 +36,40 @@ const REFINE_REJECTION_CODES = new Set([
 ]);
 
 function rejectionReason(reason: string): string {
-  return REFINE_REJECTION_CODES.has(reason) ? reason : `error: ${reason.slice(0, 160)}`;
+  return REFINE_REJECTION_CODES.has(reason) ? reason : classifyMobileVoiceFailure(reason);
+}
+
+const FAILURE_PATTERNS: Array<[RegExp, string]> = [
+  [/不可优化|次数已用完/, 'refine_quota_exhausted'],
+  [/rate.?limit|too many|频繁|\b429\b/i, 'rate_limited'],
+  [/timed? ?out|timeout|超时/i, 'timeout'],
+  [/json|parse|unexpected token|malformed/i, 'parse_error'],
+  [/permission|denied|权限/i, 'permission'],
+  [/stopped|cancel/i, 'cancelled'],
+  [/network|socket|connect|closed|连接|中断/i, 'connection'],
+];
+
+/**
+ * A fixed failure code for logs. Never returns the message itself: error text
+ * can quote a provider response (a malformed refinement embeds the model's
+ * output), which may contain dictated words. Structured API errors keep their
+ * server code and HTTP status, which are enums, not content.
+ */
+export function classifyMobileVoiceFailure(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const { code, status } = error as { code?: unknown; status?: unknown };
+    if (
+      typeof code === 'string' &&
+      /^[A-Z][A-Z0-9_]{1,40}$/.test(code) &&
+      typeof status === 'number'
+    ) {
+      return `api_${code.toLowerCase()}_${status}`;
+    }
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  const status = /\bstatus (\d{3})\b/i.exec(message)?.[1];
+  if (status) return `http_${status}`;
+  return FAILURE_PATTERNS.find(([pattern]) => pattern.test(message))?.[1] ?? 'other';
 }
 
 export function shortRunId(runId: string): string {
@@ -210,13 +242,13 @@ export function createMobileVoiceTimelineRecorder(context: {
         logMobileVoice('warn', 'asr recovery failed', {
           runId,
           elapsedMs: Math.round(event.elapsedMs),
-          reason: event.reason.slice(0, 160),
+          reason: classifyMobileVoiceFailure(event.reason),
         });
         return;
       case 'asr_stop_error_ignored':
         logMobileVoice('warn', 'asr error after stop ignored', {
           runId,
-          reason: event.message.slice(0, 160),
+          reason: classifyMobileVoiceFailure(event.message),
           textChars: event.textChars,
         });
         return;
@@ -229,7 +261,10 @@ export function createMobileVoiceTimelineRecorder(context: {
         });
         return;
       case 'error':
-        logMobileVoice('error', 'run failed', { runId, reason: event.message.slice(0, 160) });
+        logMobileVoice('error', 'run failed', {
+          runId,
+          reason: classifyMobileVoiceFailure(event.message),
+        });
         return;
     }
   };

@@ -12,6 +12,8 @@ import { setMobileDebugSink } from '@/debug/mobileDebugLog';
 import { serializeMobileDebugRecord } from '@/debug/mobileDebugRecord';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { createMobileVoiceControllerSession } from '@/session/mobileVoiceController';
+import { ApiError } from '@/api/client';
+import { classifyMobileVoiceFailure } from '@/session/mobileVoiceDiagnostics';
 
 const SPOKEN = '周五下午三点和财务对预算';
 const REFINED = '周五下午 3 点和财务核对预算。';
@@ -192,6 +194,46 @@ describe('mobile voice diagnostics', () => {
     } finally {
       Object.defineProperty(globalThis, 'crypto', { value: originalCrypto, configurable: true });
     }
+  });
+
+  it('never logs error text that quotes a refinement response', async () => {
+    const session = createMobileVoiceControllerSession({
+      credential: credential(),
+      initialDraft: '',
+      asr: new SpeakingAsr(),
+      refiner: {
+        async refine(): Promise<RefinementResult> {
+          // A malformed model response surfaces as an error quoting its output.
+          throw new Error(`Refiner returned invalid JSON: ${REFINED}`);
+        },
+      },
+      startAudio: startAudibleAudio,
+      onDraftChanged: () => {},
+    });
+    await session.start();
+    await session.stop();
+    const refinement = messages().find((record) => record.args[0] === 'refinement latency summary')!
+      .args[1]!;
+    expect(refinement).toMatchObject({ outcome: 'rejected', reason: 'parse_error' });
+    expect(records.join('')).not.toContain('财务');
+  });
+
+  it('classifies failures into fixed codes without echoing the message', () => {
+    expect(classifyMobileVoiceFailure(new ApiError('RATE_LIMITED', 429, `限流 ${SPOKEN}`))).toBe(
+      'api_rate_limited_429',
+    );
+    expect(
+      classifyMobileVoiceFailure(new Error('Voice refine warmup failed with status 409')),
+    ).toBe('http_409');
+    expect(classifyMobileVoiceFailure('语音会话不可优化、优化次数已用完，或不属于当前用户')).toBe(
+      'refine_quota_exhausted',
+    );
+    expect(
+      classifyMobileVoiceFailure(
+        new Error('Volcengine SAUC ASR connection timed out after 5000ms'),
+      ),
+    ).toBe('timeout');
+    expect(classifyMobileVoiceFailure(new Error(SPOKEN))).toBe('other');
   });
 
   it('logs a silent recording ending without ASR finalization', async () => {

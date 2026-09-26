@@ -34,7 +34,12 @@ import {
 } from '@/session/mobileVoiceInput';
 import { startMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
 import { readCachedMobileVoiceDictionary } from '@/session/mobileVoiceDictionaryCache';
-import { createMobileVoiceTimelineRecorder, logMobileVoice, shortRunId } from '@/session/mobileVoiceDiagnostics';
+import {
+  classifyMobileVoiceFailure,
+  createMobileVoiceTimelineRecorder,
+  logMobileVoice,
+  shortRunId,
+} from '@/session/mobileVoiceDiagnostics';
 
 type StartRealtimeAudio = (options: {
   sampleRate: number;
@@ -157,10 +162,10 @@ export function createMobileVoiceControllerSession(
       }).then(() => {
         logMobileVoice('debug', 'refiner prompt cache warmed');
       }, (error) => {
-        logMobileVoice('warn', 'refiner warmup failed (non-fatal)', { reason: errorReason(error) });
+        logMobileVoice('warn', 'refiner warmup failed (non-fatal)', { reason: classifyMobileVoiceFailure(error) });
       });
     } catch (error) {
-      logMobileVoice('warn', 'refiner warmup skipped', { reason: errorReason(error) });
+      logMobileVoice('warn', 'refiner warmup skipped', { reason: classifyMobileVoiceFailure(error) });
     }
   };
   const baseDraft = options.initialDraft;
@@ -757,15 +762,12 @@ function replaceInsertionText(
   return `${draft.slice(0, insertion.start)}${text}${draft.slice(insertion.end)}`;
 }
 
-function errorReason(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).slice(0, 160);
-}
 
 function logMobileVoiceFailure(message: string, stage: 'microphone' | 'asr', error: unknown): void {
   logMobileVoice('warn', message, {
     stage,
     rateLimited: isMobileVoiceRateLimited(error),
-    reason: errorReason(error),
+    reason: classifyMobileVoiceFailure(error),
   });
 }
 

@@ -2,7 +2,7 @@ import { StopSoundActivity, type AsrEvent, type AsrProvider, type AudioTrace } f
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { redactMobileVoiceCredentialText } from '@/session/mobileVoiceCredentialRedaction';
 import { isMobileVoiceRateLimited } from '@/session/mobileVoiceInput';
-import { logMobileVoice } from '@/session/mobileVoiceDiagnostics';
+import { classifyMobileVoiceFailure, logMobileVoice } from '@/session/mobileVoiceDiagnostics';
 import { gzip, ungzip } from 'pako';
 import { i18n } from '@/i18n';
 
@@ -170,7 +170,7 @@ class MobileFallbackAsrProvider implements AsrProvider {
           attempt: this.candidates.indexOf(candidate) + 1,
           totalCandidates: this.candidates.length,
           rateLimited,
-          reason: (err instanceof Error ? err.message : String(err)).slice(0, 160),
+          reason: classifyMobileVoiceFailure(err),
         });
         // Managed candidates share one account quota: the next candidate would
         // hit the same limit, so surface it instead of switching.
