@@ -6708,8 +6708,9 @@ export default function SessionScreen() {
       active={composerLayout.voice.active}
       busy={voiceIsProcessing}
       disabled={composerLayout.voice.disabled || (!canUseComposer && !voiceIsBusy)}
-      // 停止后的短暂收尾期仍禁止操作,但保持录音胶囊原样、不置灰。
-      disabledStyle={voiceProcessingIndicator.stopping && !composerLayout.voice.disabled ? null : undefined}
+      // 停止后的短暂收尾期仍禁止操作,但保持录音胶囊原样、不置灰。voice.disabled 在
+      // 语音处理中恒为 true,不能拿它判断;只有与语音无关的禁用原因(发送中)才置灰。
+      disabledStyle={voiceProcessingIndicator.stopping && !sending ? null : undefined}
       delayLongPress={320}
       hitSlop={COMPOSER_CONTROL_HIT_SLOP}
       onPressIn={handleVoiceButtonPressIn}

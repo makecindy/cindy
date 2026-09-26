@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';
 
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
@@ -772,6 +773,20 @@ describe('mobile session composer desktop-first surface', () => {
     // 停止后 150ms 内仍保持胶囊(stopping),超过才换处理转圈(对齐桌面)。
     expect(source).toContain('expanded: voiceIsListening || voiceStartPending || voiceProcessingIndicator.stopping,');
     expect(source).toContain('{voiceProcessingIndicator.showProcessing ? (');
+    // 停止期不置灰:共享布局在语音处理中恒把 voice.disabled 设为 true,不能拿它判断,
+    // 只有与语音无关的禁用原因(发送中)才置灰(新建任务页对应 creating)。
+    expect(buildSessionComposerLayout({
+      attachmentBusy: false,
+      attachmentCount: 0,
+      attachmentPickerOpen: false,
+      canStop: false,
+      draftText: '',
+      queueBusy: false,
+      sending: false,
+      voiceState: 'submitting',
+    }).voice.disabled).toBe(true);
+    expect(source).toContain('disabledStyle={voiceProcessingIndicator.stopping && !sending ? null : undefined}');
+    expect(source).not.toContain('voiceProcessingIndicator.stopping && !composerLayout.voice.disabled');
     expect(source).toContain('counting: voiceIsListening,');
     expect(source).toContain('const voiceStartedOnPressInRef = useRef(false);');
     // pending 世代守卫:切会话后旧启动收尾不得塌掉新录音的乐观胶囊(review P1)。

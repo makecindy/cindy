@@ -2045,6 +2045,8 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('localVoiceInputHistory: () => localVoiceInputHistory,');
     // 停止后 150ms 内保持录音胶囊,超过才显示处理转圈。
     expect(newSource).toContain('expanded: voiceIsListening || voiceStartPending || voiceProcessingIndicator.stopping,');
+    // 停止期保持胶囊外观,只有与语音无关的禁用原因(创建中)才置灰。
+    expect(newSource).toContain('(creating || (voiceIsProcessing && !voiceProcessingIndicator.stopping)) && styles.disabled,');
     expect(newSource).not.toContain('MobileVoiceServiceMode');
     expect(newSource).not.toContain('LiteLlm');
     expect(newSource).toContain('?? createMobileCindyVoiceCredential(selectedDeviceId);');
