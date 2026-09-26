@@ -4,7 +4,7 @@
  * 契约:只补缺不覆盖、不删旧目录、保留 mtime、不跟随符号链接、不留临时文件;
  * 全部成功才写标记(之后不再扫描),有失败下次重试;正式版与非 dev 多实例不执行。
  */
-import { promises as fs } from 'node:fs';
+import { mkdtempSync, promises as fs, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,6 +40,23 @@ import {
   migrateLegacyClaudeConfigDir,
   resetLegacyClaudeConfigMigrationForTest,
 } from '../claude-legacy-config-migration.js';
+
+// Windows 默认无文件 symlink 权限时跳过真实文件系统用例;有权限的 Windows 与 POSIX 上照常实跑。
+function canCreateFileSymlink(): boolean {
+  const probe = mkdtempSync(path.join(os.tmpdir(), 'claude-legacy-link-probe-'));
+  try {
+    const target = path.join(probe, 'target');
+    writeFileSync(target, 'probe');
+    symlinkSync(target, path.join(probe, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+const canLinkFile = canCreateFileSymlink();
 
 const MARKER = '.cindy-migrated-to-default-config';
 const tempRoots: string[] = [];
@@ -214,7 +231,7 @@ describe('migrateLegacyClaudeConfigDir', () => {
     await expect(fs.stat(path.join(legacyDir, MARKER))).resolves.toBeTruthy();
   });
 
-  it.skipIf(process.platform === 'win32')('does not follow symlinks out of the legacy dir', async () => {
+  it.skipIf(!canLinkFile)('does not follow symlinks out of the legacy dir', async () => {
     const root = await makeRoot();
     const legacyDir = path.join(root, 'claude-home');
     const targetDir = path.join(root, '.claude');
