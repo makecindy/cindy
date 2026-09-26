@@ -115,8 +115,8 @@ describe('createRemoteDeviceUsageMirror', () => {
     }));
     const chip = renderHook(() => useRemoteCodexAccountUsage('device-1', 'account-2'));
     await flushMicrotasks();
-    // A second consumer (model picker) mounting later reuses the live entry and its pushes.
-    vi.advanceTimersByTime(10 * 60_000);
+    // A second consumer (model picker) mounting beside a live consumer reuses its fresh snapshot.
+    vi.advanceTimersByTime(59_000);
     const picker = renderHook(() => useRemoteCodexAccountUsage('device-1', 'account-2'));
     await flushMicrotasks();
     expect(mocks.invoke).toHaveBeenCalledTimes(1);
@@ -137,20 +137,29 @@ describe('createRemoteDeviceUsageMirror', () => {
     expect(mocks.invoke).toHaveBeenCalledTimes(2);
   });
 
-  it('re-reads on mount only when no consumer is live and the snapshot is stale', async () => {
+  it('re-reads beside a live consumer once its snapshot is older than the reuse window', async () => {
+    // Pushes are lost while the link is down; a long-lived chip must not pin a stale snapshot.
     mocks.invoke.mockResolvedValue({ primary: { usedPercent: 3 } });
-    const first = renderHook(() => useRemoteCodexAccountUsage('device-1'));
+    renderHook(() => useRemoteCodexAccountUsage('device-1'));
     await flushMicrotasks();
-    first.unmount();
-    vi.advanceTimersByTime(59_000);
-    renderHook(() => useRemoteCodexAccountUsage('device-1')).unmount();
-    await flushMicrotasks();
-    expect(mocks.invoke).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(2_000);
-    renderHook(() => useRemoteCodexAccountUsage('device-1')).unmount();
+    vi.advanceTimersByTime(61_000);
+    mocks.invoke.mockResolvedValue({ primary: { usedPercent: 9 } });
+    const picker = renderHook(() => useRemoteCodexAccountUsage('device-1'));
     await flushMicrotasks();
     expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(picker.result.current).toMatchObject({ primary: { usedPercent: 9 } });
+  });
+
+  it('always re-reads on mount when no consumer was listening for pushes', async () => {
+    // A logout/account-switch clear pushed while nobody listened must not leave the old quota.
+    mocks.invoke.mockResolvedValue({ primary: { usedPercent: 3 } });
+    renderHook(() => useRemoteCodexAccountUsage('device-1')).unmount();
+    await flushMicrotasks();
+    mocks.invoke.mockResolvedValue(null);
+    const reopened = renderHook(() => useRemoteCodexAccountUsage('device-1'));
+    await flushMicrotasks();
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(reopened.result.current).toBeNull();
   });
 
   it('keeps retrying mounts after a failed read', async () => {

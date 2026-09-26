@@ -172,8 +172,6 @@ describe('CHANNEL_NOT_ALLOWED negative cache', () => {
     expect(result.current).toMatchObject({ fiveHour: { utilization: 8 } });
     unmount();
 
-    // Past the mount reuse window, still inside the 15-minute negative-cache TTL.
-    vi.advanceTimersByTime(61_000);
     mocks.invoke.mockResolvedValue({ fiveHour: { utilization: 9 } });
     const { result: remounted } = renderHook(() => useRemoteClaudeSubscriptionUsage('device-old'));
     await flushMicrotasks();

@@ -8,7 +8,7 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { extractIpcError } from '@/utils/ipcError';
 
 const UNSUPPORTED_RETRY_AFTER_MS = 15 * 60_000;
-/** A mount reuses a snapshot this recent instead of re-reading; pushes cover later changes. */
+/** A mount may reuse a live consumer's snapshot no older than this instead of re-reading. */
 const MOUNT_REUSE_MS = 60_000;
 function isSnapshotShape(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -110,11 +110,13 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
       if (!deviceId || !entry) return;
       const notify = () => rerender((value) => value + 1);
       // Consumers of one device/account (session chip, model picker rail and rows) share this
-      // entry. While another consumer is mounted its push listener keeps the entry current, so
-      // only a missing or stale snapshot needs a device read. Explicit request() still reads.
+      // entry, so a mount beside a live consumer reuses its fresh snapshot. With no listener a
+      // clear push (logout, account switch) may have been missed, and pushes are also lost while
+      // the link is down; both cases read the device again. Explicit request() always reads.
       const settled =
+        entry.listeners.size > 0 &&
         entry.settledAt > 0 &&
-        (entry.listeners.size > 0 || Date.now() - entry.settledAt < MOUNT_REUSE_MS);
+        Date.now() - entry.settledAt < MOUNT_REUSE_MS;
       entry.listeners.add(notify);
       if (!settled) request(deviceId, providerId);
       const off = window.electronAPI.deviceLink.onRemotePush((push, ownerStamp) => {
