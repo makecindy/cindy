@@ -2690,6 +2690,91 @@ describe('stale-idle assistant late final identity', () => {
 });
 
 describe('streamed assistant final calibration', () => {
+  it('deduplicates identical adjacent Codex commentary across a tool boundary', async () => {
+    const firstId = onAssistantTextEvent(
+      SESSION,
+      {
+        text: 'I found the relevant files and will inspect the fallback path next.',
+        isFinal: false,
+        phase: 'commentary',
+        agentMessageId: 'msg-commentary-1',
+      },
+      null,
+    );
+    flushAssistantBlock(SESSION, null);
+    onToolUseEvent(SESSION, { toolUseId: 'tool-between', toolName: 'Read', input: {} }, null);
+
+    const secondStreamingId = onAssistantTextEvent(
+      SESSION,
+      {
+        text: 'I found the relevant files and will inspect the fallback path next.',
+        isFinal: false,
+        phase: 'commentary',
+        agentMessageId: 'msg-commentary-2',
+      },
+      null,
+    );
+    expect(secondStreamingId).not.toBe(firstId);
+    const finalId = onAssistantTextEvent(
+      SESSION,
+      {
+        text: 'I found the relevant files and will inspect the fallback path next.',
+        isFinal: true,
+        isFullText: true,
+        phase: 'commentary',
+        agentMessageId: 'msg-commentary-2',
+      },
+      null,
+    );
+
+    expect(finalId).toBe(firstId);
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(1);
+  });
+
+  it('keeps an identical Codex final answer after commentary', async () => {
+    const commentaryId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Done.', isFinal: true, phase: 'commentary', agentMessageId: 'msg-commentary' },
+      null,
+    );
+    onToolUseEvent(SESSION, { toolUseId: 'tool-before-final', toolName: 'Read', input: {} }, null);
+    const finalId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Done.', isFinal: true, phase: 'final_answer', agentMessageId: 'msg-final' },
+      null,
+    );
+
+    expect(finalId).not.toBe(commentaryId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+  });
+
+  it('keeps identical Codex commentary across product turns', async () => {
+    const firstId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Checking.', isFinal: true, phase: 'commentary', agentMessageId: 'msg-turn-1' },
+      null,
+    );
+    resetTurnPersistState(SESSION);
+    const secondId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Checking.', isFinal: true, phase: 'commentary', agentMessageId: 'msg-turn-2' },
+      null,
+    );
+
+    expect(secondId).not.toBe(firstId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+  });
+
   it('persists commentary and final_answer as separate rows when Codex item ids change', async () => {
     const commentaryId = onAssistantTextEvent(
       SESSION,

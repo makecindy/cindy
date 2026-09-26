@@ -2087,6 +2087,64 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
+  it('removes a streamed commentary replay when main reuses the previous persist id', () => {
+    emitTextDelta('Same progress update', SESSION_ID, 'assistant-1');
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text',
+        source: 'codex',
+        data: {
+          text: 'Same progress update',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-commentary-1',
+          phase: 'commentary',
+        },
+      },
+      persistId: 'assistant-1',
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: { toolUseId: 'tool-between', toolName: 'read', input: {} },
+      },
+      persistId: 'tool-between',
+    });
+    emitTextDelta('Same progress update', SESSION_ID, 'assistant-2');
+    vi.advanceTimersByTime(32);
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text',
+        source: 'codex',
+        data: {
+          text: 'Same progress update',
+          isFinal: true,
+          isFullText: true,
+          agentMessageId: 'msg-commentary-2',
+          phase: 'commentary',
+        },
+      },
+      // Main recognized the repeated commentary and points back to its durable row.
+      persistId: 'assistant-1',
+    });
+
+    const assistantMessages = makerChatStore.getSnapshot(SESSION_ID).messages
+      .filter((message) => message.role === 'assistant');
+    expect(assistantMessages).toEqual([
+      expect.objectContaining({
+        clientId: 'assistant-1',
+        content: 'Same progress update',
+        isStreaming: false,
+      }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).streamingClientId).toBeNull();
+  });
+
   it('flushes batched deltas when the assistant persist id changes', () => {
     emitTextDelta('Execution preview', SESSION_ID, 'assistant-1');
     emitTextDelta('Please confirm.', SESSION_ID, 'assistant-2');

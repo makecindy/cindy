@@ -5424,10 +5424,11 @@ export function handleStreamEvent(
   switch (event.type) {
     case 'text': {
       dismissVisionBridgeToast(event.sessionId);
-      const { text, isFinal, isFullText } = event.data as {
+      const { text, isFinal, isFullText, phase } = event.data as {
         text: string;
         isFinal: boolean;
         isFullText?: boolean;
+        phase?: string;
       };
       const snapshot = readRemoteTextSnapshot(event);
       if (snapshot?.truncated) return state;
@@ -5468,6 +5469,29 @@ export function handleStreamEvent(
           (message) => message.clientId === event.persistId && message.role === 'assistant',
         );
         if (existing) {
+          const streamingDuplicate =
+            isFinal &&
+            phase === 'commentary' &&
+            existing.content === text &&
+            state.streamingClientId !== null &&
+            state.streamingClientId !== event.persistId &&
+            state.messages.some(
+              (message) =>
+                message.clientId === state.streamingClientId &&
+                message.role === 'assistant' &&
+                message.content === text,
+            );
+          if (streamingDuplicate) {
+            return {
+              ...state,
+              messages: state.messages.filter(
+                (message) => message.clientId !== state.streamingClientId,
+              ),
+              streamingClientId: null,
+              streamingText: '',
+              lastAgentMeta: incomingMeta ?? state.lastAgentMeta,
+            };
+          }
           // Persisted/finalized text already includes these late deltas. Only an
           // explicitly authoritative full-text event may calibrate it again.
           if (!isFinal) {
