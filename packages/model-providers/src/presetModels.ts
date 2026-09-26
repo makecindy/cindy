@@ -22,15 +22,21 @@ function isAgentKind(value: unknown): value is AgentKind {
   );
 }
 
-function hasMalformedEngineFields(model: unknown): boolean {
+/**
+ * 引擎限定字段是否畸形。不变量：清单里的每个模型展开后至少落进一个已声明的 runtime，
+ * 引擎名与覆盖键都是已知引擎——否则模型会被静默抹掉，或专属覆盖被静默忽略。
+ */
+function hasMalformedEngineFields(
+  model: unknown,
+  declaredRuntimes: readonly string[],
+): boolean {
   if (!isPlainObject(model)) return false;
   const { engines, engineOverrides } = model;
-  // 引擎名拼错（如 "codxe"）同样算畸形：否则模型会从全部引擎消失，或专属覆盖被静默忽略。
   if (
     engines !== undefined &&
     (!Array.isArray(engines) ||
-      engines.length === 0 ||
-      !engines.every(isAgentKind))
+      !engines.every(isAgentKind) ||
+      !engines.some((agent) => declaredRuntimes.includes(agent)))
   ) {
     return true;
   }
@@ -49,15 +55,16 @@ export function expandPresetModels<T>(preset: T): T {
   const source = preset as Record<string, unknown>;
   if (!Array.isArray(source.models)) return preset;
   const models = source.models as unknown[];
-  // 引擎限定字段畸形时不展开：原样返回的预设各 runtime 没有 models，会被校验层整条拒绝，
-  // 不能静默丢掉限定、把只适用于部分引擎的模型暴露给全部引擎。
-  if (models.some(hasMalformedEngineFields)) return preset;
   const runtimes =
     source.runtimes &&
     typeof source.runtimes === "object" &&
     !Array.isArray(source.runtimes)
       ? (source.runtimes as Record<string, unknown>)
       : {};
+  // 引擎限定字段畸形时不展开，保留顶层 `models`，由 `sanitizePresets` 整条拒绝。
+  const declaredRuntimes = Object.keys(runtimes);
+  if (models.some((model) => hasMalformedEngineFields(model, declaredRuntimes)))
+    return preset;
   const expanded = Object.fromEntries(
     Object.entries(runtimes).map(([agent, runtime]) => {
       if (!runtime || typeof runtime !== "object" || Array.isArray(runtime))

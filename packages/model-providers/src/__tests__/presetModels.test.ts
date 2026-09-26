@@ -92,6 +92,7 @@ describe("预设推荐模型单一清单", () => {
       { engines: [1] },
       { engines: [] },
       { engines: ["codxe"] },
+      { engines: ["pi"] },
       { engineOverrides: [] },
       { engineOverrides: { pi: "x" } },
       { engineOverrides: { codxe: { supportsImageInput: false } } },
