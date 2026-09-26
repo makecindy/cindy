@@ -149,10 +149,14 @@ export class MobileCindyVoiceRunContext {
     if (this.refinerUnavailableOnServer) {
       throw new Error(i18n.t('composer.voice.managedRefineUnsupported'));
     }
-    if (!this.latestSessionId) throw new Error(i18n.t('composer.voice.sessionNotConnected'));
+    // Capture the session before awaiting the token: the controller counts this
+    // request against refineRequestBudget() in the same tick, so a reconnect
+    // during the token fetch must not move the request to the new session.
+    const sessionId = this.latestSessionId;
+    if (!sessionId) throw new Error(i18n.t('composer.voice.sessionNotConnected'));
     const token = await this.requireAccessToken(options?.refreshAccessToken);
     return {
-      url: `${requireVoiceBaseUrl()}/api/voice/sessions/${encodeURIComponent(this.latestSessionId)}/refine?provider=${encodeURIComponent(refinerProvider)}`,
+      url: `${requireVoiceBaseUrl()}/api/voice/sessions/${encodeURIComponent(sessionId)}/refine?provider=${encodeURIComponent(refinerProvider)}`,
       authorization: `Bearer ${token}`,
     };
   }

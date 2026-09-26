@@ -104,6 +104,31 @@ describe('MobileCindyVoiceRunContext', () => {
     expect(context.refineRequestBudget()).toEqual({ sessionKey: 'session-2', limit: 8 });
   });
 
+  it('targets the session that was current when the refine request started', async () => {
+    const apiFetch = vi.fn()
+      .mockResolvedValueOnce(sessionResponse())
+      .mockResolvedValueOnce(sessionResponse({ sessionId: 'session-2' }));
+    let releaseToken!: (token: string) => void;
+    const context = new MobileCindyVoiceRunContext(
+      () => new Promise<string | null>((resolve) => { releaseToken = resolve; }),
+      vi.fn(async () => 'fresh-access-token'),
+      apiFetch as ConstructorParameters<typeof MobileCindyVoiceRunContext>[2],
+      'zh-CN',
+      CINDY_MANAGED_REFINER_PROVIDER,
+    );
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.refineRequestBudget().sessionKey).toBe('session-1');
+
+    const target = context.createRefinerTarget(CINDY_MANAGED_REFINER_PROVIDER);
+    // A reconnect lands while the access token is still being read.
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    releaseToken('access-token');
+
+    await expect(target).resolves.toMatchObject({
+      url: expect.stringContaining('/api/voice/sessions/session-1/refine'),
+    });
+  });
+
   it('keeps ASR auto-detection separate from the concrete refinement language', async () => {
     const apiFetch = vi.fn(async (
       _path: string,

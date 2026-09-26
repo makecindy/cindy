@@ -135,6 +135,9 @@ export class CindyVoiceRunContext {
     if (this.refinerUnavailableOnServer) {
       throw new Error('Cindy voice service on this server does not support managed refinement yet.');
     }
+    // Captured before any await: the controller counts this request against
+    // refineRequestBudget() in the same tick, so a reconnect during the token
+    // refresh must not move the request to the new session.
     const sessionId = this.latestSessionId;
     if (!sessionId) throw new Error('Voice ASR session is not connected yet.');
     let token = authManager.getAccessToken();
