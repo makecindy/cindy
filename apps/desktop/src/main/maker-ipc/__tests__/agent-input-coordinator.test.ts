@@ -4137,6 +4137,29 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-image' });
   });
 
+  it('returns the queue head when a retired Pi route fails its send-time window verification', async () => {
+    const h = createHarness();
+    const sid = 'pi-retired-route-guard';
+    h.sendToAgent.mockRejectedValueOnce(
+      Object.assign(
+        new Error('新来源的 Pi 进程没有回报实际上下文窗口，这条消息没有发送；请重试或改回原来源'),
+        { code: 'MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN' },
+      ),
+    );
+
+    h.coordinator.enqueue(sid, makeItem('q-pi-guard', 'next message'));
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    // 消息没有落库、留在队首；给用户可恢复的失败状态而不是静默丢弃。
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-pi-guard']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-pi-guard' });
+    expect(projection.error).toContain('这条消息没有发送');
+    expect(mocks.createMessage).not.toHaveBeenCalled();
+    // 同一个失败意图不会自动重试：没有新的用户触发就不再有派发。
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
   it('retries a queue-head recovery when an external live reservation clears without a terminal event', async () => {
     vi.useFakeTimers();
     try {

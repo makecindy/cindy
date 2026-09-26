@@ -446,6 +446,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       contextWindow: number;
       recheckTargetPressure?: boolean;
       confirmedTargetPressure?: boolean;
+      /**
+       * 占用下限（例如会话关闭时固化的 live 读数）。持久化列可能低报中断回合的真实占用，
+       * 这个值只用于抬高估算，绝不低报，也不会让保护变得更容易跳过。
+       */
+      contextTokensFloor?: number;
       onConfirmationRequired?: (contextTokens: number) => void;
       assertCanCommit?: () => void;
       beforeClose?: () => void;
@@ -588,6 +593,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       contextWindow: number;
       recheckTargetPressure?: boolean;
       confirmedTargetPressure?: boolean;
+      contextTokensFloor?: number;
       onConfirmationRequired?: (contextTokens: number) => void;
       assertCanCommit?: () => void;
       beforeClose?: () => void;
@@ -646,10 +652,17 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         : null;
     // A freshly/lazily attached runtime reports the placeholder 0 before any usage.
     // Only persisted 0 confirms that zero is authoritative; a positive live value is authoritative itself.
-    const contextTokens =
+    const measuredContextTokens =
       liveContextTokens !== null && (liveContextTokens > 0 || persistedContextTokens === 0)
         ? liveContextTokens
         : persistedContextTokens;
+    // 调用方可以给出只抬高不低报的下限（退役 runtime 关闭时固化的 live 占用）。
+    const contextTokens =
+      typeof target.contextTokensFloor === 'number' &&
+      Number.isFinite(target.contextTokensFloor) &&
+      target.contextTokensFloor > measuredContextTokens
+        ? target.contextTokensFloor
+        : measuredContextTokens;
     const reportedCurrentWindow =
       liveUsage && Number.isFinite(liveUsage.contextWindow) && liveUsage.contextWindow > 0
         ? liveUsage.contextWindow

@@ -115,10 +115,14 @@ export interface ApplyRuntimeSetModelChangeInput {
 }
 
 export type ApplyRuntimeSetModelChangeResult =
-  /** 直接生效(热切 route / 或已关会话待下次发送重建)。 */
-  | { status: 'applied'; persistedRoute?: true }
+  /**
+   * 直接生效(热切 route / 或已关会话待下次发送重建)。`runtimeRetired` 表示旧 live
+   * runtime 已被本次切换关闭、目标 route 交给下一次发送懒创建;它只描述进程退役,
+   * 不表示 bounded handoff / context rebuild(`modelWindowRebuilt` 是另一件事)。
+   */
+  | { status: 'applied'; persistedRoute?: true; runtimeRetired?: true }
   /** 凭证形态要换但会话自己在跑:已登记 pending,turn 结束后自动生效。 */
-  | { status: 'deferred'; persistedRoute?: never };
+  | { status: 'deferred'; persistedRoute?: never; runtimeRetired?: never };
 
 export async function closeRejectedRuntimeAndRestoreControlStores(input: {
   closeRuntime: () => Promise<void>;
@@ -377,9 +381,10 @@ export async function applyRuntimeSetModelChange(
       fromModel: sess.model,
       toModel: model,
     });
+    // 成功走到这里就是已退役旧 live runtime(或本就不在活动列表):目标 route 交给下一次发送懒创建。
     return relinkAfterClose && input.relinkCodexThread
-      ? { status: 'applied', persistedRoute: true }
-      : { status: 'applied' };
+      ? { status: 'applied', persistedRoute: true, runtimeRetired: true }
+      : { status: 'applied', runtimeRetired: true };
   }
 
   input.admit?.();

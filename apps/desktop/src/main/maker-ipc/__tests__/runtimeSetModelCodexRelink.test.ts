@@ -76,7 +76,11 @@ describe('Codex writer decision freshness', () => {
       expect(restore).toHaveBeenCalledWith(sessionId, pending);
       expect(getSessionProvider(sessionId)).toBe('cprov-source');
     } else {
-      await expect(result).resolves.toEqual(state === 'moved' ? { status: 'applied', persistedRoute: true } : { status: 'applied' });
+      await expect(result).resolves.toEqual(
+        state === 'moved'
+          ? { status: 'applied', persistedRoute: true, runtimeRetired: true }
+          : { status: 'applied', runtimeRetired: true },
+      );
     }
     expect(relink).toHaveBeenCalledTimes(state === 'moved' ? 1 : 0);
   });
@@ -102,7 +106,11 @@ describe('Codex writer decision freshness', () => {
       expect(relink).not.toHaveBeenCalled();
       expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
     } else {
-      await expect(switching).resolves.toEqual({ status: 'applied', persistedRoute: true });
+      await expect(switching).resolves.toEqual({
+        status: 'applied',
+        persistedRoute: true,
+        runtimeRetired: true,
+      });
       expect(closeSession).toHaveBeenCalledOnce();
       expect(relink).toHaveBeenCalledOnce();
     }
@@ -151,7 +159,7 @@ describe.each(routeCases)('Codex route: $sourceModel → $targetModel', (route) 
         clearPendingCredentialSwitch: vi.fn(),
         wakeSessionInputQueue,
       }),
-    ).resolves.toEqual({ status: 'applied', persistedRoute: true });
+    ).resolves.toEqual({ status: 'applied', persistedRoute: true, runtimeRetired: true });
 
     expect(order).toEqual(['close', 'relink', 'route', 'wake']);
     expect(getSessionProvider(sessionId)).toBe(targetProvider);
