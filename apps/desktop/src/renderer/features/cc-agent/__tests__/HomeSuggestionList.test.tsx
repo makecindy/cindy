@@ -100,4 +100,36 @@ describe('HomeSuggestionList', () => {
     unmount();
     expect(onPreviewChange).toHaveBeenCalledWith(null);
   });
+
+  it('falls back to the focused suggestion when hover ends elsewhere', () => {
+    const onPreviewChange = vi.fn();
+    render(
+      <HomeSuggestionList narrow={false} onSelect={vi.fn()} onPreviewChange={onPreviewChange} />,
+    );
+    const [focusedRow, otherRow] = screen.getAllByTestId(/^home-suggestion-/);
+    const idOf = (row: HTMLElement) =>
+      row.getAttribute('data-testid')!.replace('home-suggestion-', '');
+
+    fireEvent.focus(focusedRow);
+    fireEvent.mouseEnter(otherRow);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: idOf(otherRow) }),
+    );
+    fireEvent.mouseLeave(otherRow);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: idOf(focusedRow) }),
+    );
+    fireEvent.blur(focusedRow);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('exposes each full prompt to assistive technology as the row description', () => {
+    render(<HomeSuggestionList narrow={false} onSelect={vi.fn()} />);
+    const row = screen.getAllByTestId(/^home-suggestion-/)[0];
+    const id = row.getAttribute('data-testid')!.replace('home-suggestion-', '');
+    const description = document.getElementById(row.getAttribute('aria-describedby')!);
+    expect(description?.textContent).toBe(`newChat.homeSuggestions.${id}.prompt`);
+    // The description lives outside the button so it never joins the accessible name.
+    expect(row.contains(description)).toBe(false);
+  });
 });

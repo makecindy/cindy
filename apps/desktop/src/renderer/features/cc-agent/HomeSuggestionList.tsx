@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AppWindow,
@@ -108,6 +108,17 @@ export function HomeSuggestionList({
   const onPreviewChangeRef = useRef(onPreviewChange);
   onPreviewChangeRef.current = onPreviewChange;
   useEffect(() => () => onPreviewChangeRef.current?.(null), []);
+  // 悬停与键盘焦点各自记录:预览取悬停项,没有悬停时回落到焦点项,两者都没有才清空。
+  // 点击(填入)视为本次交互结束,两者一起清掉,直到再次移入/聚焦。
+  const hoveredRef = useRef<HomeTaskSuggestion | null>(null);
+  const focusedRef = useRef<HomeTaskSuggestion | null>(null);
+  const emitPreview = () => onPreviewChange?.(hoveredRef.current ?? focusedRef.current);
+  const resetPreview = () => {
+    hoveredRef.current = null;
+    focusedRef.current = null;
+    emitPreview();
+  };
+  const descriptionIdPrefix = useId();
 
   if (batchSize > batch.displayedCount) {
     setBatch({ ...batch, displayedCount: batchSize });
@@ -123,28 +134,47 @@ export function HomeSuggestionList({
           const { id } = item;
           const Icon = item.builtinId ? ICONS[item.builtinId] : Puzzle;
           return (
-            <button
-              key={id}
-              type="button"
-              data-testid={`home-suggestion-${id}`}
-              onClick={() => {
-                onPreviewChange?.(null);
-                if (item.builtinId) onSelect(item.builtinId);
-                else onPluginSelect?.(item);
-              }}
-              onMouseEnter={() => onPreviewChange?.(item)}
-              onMouseLeave={() => onPreviewChange?.(null)}
-              onFocus={() => onPreviewChange?.(item)}
-              onBlur={() => onPreviewChange?.(null)}
-              className={cn(
-                'inline-flex h-[38px] max-w-full items-center gap-2.5 rounded-full px-3',
-                'text-14 text-[var(--text-secondary)] transition-colors',
-                'hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-              )}
-            >
-              <Icon size={16} strokeWidth={2} className="shrink-0 text-current" />
-              <span className="min-w-0 truncate">{item.label}</span>
-            </button>
+            <Fragment key={id}>
+              <button
+                type="button"
+                data-testid={`home-suggestion-${id}`}
+                // 输入框里的视觉预览对读屏隐藏;完整 prompt 通过描述关联到按钮本身。
+                aria-describedby={`${descriptionIdPrefix}-${id}`}
+                onClick={() => {
+                  resetPreview();
+                  if (item.builtinId) onSelect(item.builtinId);
+                  else onPluginSelect?.(item);
+                }}
+                onMouseEnter={() => {
+                  hoveredRef.current = item;
+                  emitPreview();
+                }}
+                onMouseLeave={() => {
+                  hoveredRef.current = null;
+                  emitPreview();
+                }}
+                onFocus={() => {
+                  focusedRef.current = item;
+                  emitPreview();
+                }}
+                onBlur={() => {
+                  focusedRef.current = null;
+                  emitPreview();
+                }}
+                className={cn(
+                  'inline-flex h-[38px] max-w-full items-center gap-2.5 rounded-full px-3',
+                  'text-14 text-[var(--text-secondary)] transition-colors',
+                  'hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+                )}
+              >
+                <Icon size={16} strokeWidth={2} className="shrink-0 text-current" />
+                <span className="min-w-0 truncate">{item.label}</span>
+              </button>
+              {/* 放在按钮外,只作描述,不并入按钮名称。 */}
+              <span id={`${descriptionIdPrefix}-${id}`} className="sr-only">
+                {item.prompt}
+              </span>
+            </Fragment>
           );
         })}
       </div>
@@ -157,7 +187,7 @@ export function HomeSuggestionList({
           type="button"
           data-testid="home-suggestions-shuffle"
           onClick={() => {
-            onPreviewChange?.(null);
+            resetPreview();
             setBatch((previous) => draw(previous));
           }}
           className="opacity-0 group-hover/sug:opacity-100 focus-visible:opacity-100"
@@ -173,7 +203,7 @@ export function HomeSuggestionList({
           type="button"
           data-testid="home-suggestions-dismiss"
           onClick={() => {
-            onPreviewChange?.(null);
+            resetPreview();
             setHomeSuggestionsHidden(true);
             setHidden(true);
           }}
