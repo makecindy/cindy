@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 import { GithubSetup, deviceCodeFromOutput } from '../git-context/githubSetup';
 import { systemGhBinary } from '../git-context/ghBinary';
 import { ghArtifact } from '../git-context/ghArtifact';
@@ -89,11 +90,14 @@ describe('GitHub setup', () => {
     );
     expect(deviceCodeFromOutput('secret gho_test')).toBeUndefined();
   });
-  it('finds home-local gh even when the GUI PATH is stale', () => {
-    expect(systemGhBinary('darwin', (p) => p === '/home/test/.local/bin/gh', '/home/test')).toBe(
-      '/home/test/.local/bin/gh',
-    );
-  });
+  it.each(['darwin', 'linux', 'win32'])(
+    'finds home-local gh on %s even when the GUI PATH is stale',
+    (platform) => {
+      const home = path.resolve('test-home');
+      const expected = path.join(home, '.local', 'bin', platform === 'win32' ? 'gh.exe' : 'gh');
+      expect(systemGhBinary(platform, (p) => p === expected, home)).toBe(expected);
+    },
+  );
   it('supports pinned macOS, Windows and Linux archives, rejects unknown hosts', () => {
     for (const os of ['darwin', 'win32', 'linux'])
       for (const arch of ['arm64', 'x64']) {
