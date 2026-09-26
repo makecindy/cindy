@@ -3,6 +3,15 @@
 > 参考记录，不是当前配置或部署状态。当前维护规则见 [模型配置与下发](dev-rules/model-catalog-maintenance.md)。
 > 下列文字记录各批次当时的事实，不能相互当作后续状态的证明。引用时须带日期、来源和验证范围。
 
+## 订阅默认只显示最新一代（2026-09-26）
+
+客户端离线 Registry revision 更新为 `2026-09-26T12:00:00.000Z`。GPT 订阅默认只显示
+GPT-6 Sol / Luna / Astra，GPT-5.6 Sol / Terra / Luna 标记 `defaultEnabled: false`；
+Claude 订阅默认显示各系列最新版 Opus 5.5、Fable 5.1、Sonnet 5、Haiku 4.5、Mythos 5，
+Opus 5、Fable 5、Opus 4.8 标记不默认显示。Opus 5 与 Fable 5 的 XD 路由拆为
+`xd/claude-opus-5`、`xd/claude-fable-5` 独立条目且不标记，XD 默认显示保持不变。
+用户已有显示开关不变。Server 正本需同步同一改动后才会下发。
+
 ## GPT-6 Sol / Luna 与 Claude Opus 5.5（2026-09-23）
 
 客户端离线 Registry revision 更新为 `2026-09-23T00:00:00.003Z`，新增

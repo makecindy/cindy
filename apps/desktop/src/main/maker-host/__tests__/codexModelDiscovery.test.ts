@@ -285,7 +285,7 @@ describe('mapCodexModelsToCatalog', () => {
     expect(out[0].efforts).toEqual(['high', 'max', 'ultra']);
   });
 
-  it('legacy 默认隐藏策略:gpt-5.4-mini defaultEnabled:false(旧目录可见性不因清单动态化漂移)', () => {
+  it('不再写死隐藏例外:gpt-5.4-mini 发现时同样默认可见(是否收起只看模型目录)', () => {
     const out = mapCodexModelsToCatalog({
       models: [
         {
@@ -299,7 +299,7 @@ describe('mapCodexModelsToCatalog', () => {
         },
       ],
     });
-    expect(out[0].defaultEnabled).toBe(false);
+    expect(out[0].defaultEnabled).toBe(true);
   });
 
   it('坏输入(非对象 / 无 models / 空)→ 空数组,不抛', () => {
@@ -397,7 +397,7 @@ describe('mapCodexAppServerModelsToCatalog', () => {
       supportsFastMode: true,
       sortOrder: 0,
     });
-    expect(out[1].defaultEnabled).toBe(false);
+    expect(out[1].defaultEnabled).toBe(true);
     expect(out[1].sortOrder).toBe(3);
     // live 协议不给 context_window,这 272k 是统一兜底 → 一律不得标记为已核实。
     // 标了它就会被拿去收敛运行期上报的窗口,把真实更大的窗口压成 272k。

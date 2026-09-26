@@ -878,7 +878,7 @@ describe('anthropic 发现条目的 modelRegistry 元数据基线', () => {
         .filter((model) => model.defaultEnabled !== false)
         .map((model) => model.id)
         .sort(),
-    ).toEqual(['claude-fable-5', 'claude-fable-5-1', 'claude-haiku-4-5', 'claude-mythos-5', 'claude-opus-4-8', 'claude-opus-5', 'claude-opus-5-5', 'claude-sonnet-5']);
+    ).toEqual(['claude-fable-5-1', 'claude-haiku-4-5', 'claude-mythos-5', 'claude-opus-5-5', 'claude-sonnet-5']);
     // Claude 订阅只供 Claude Code:不投影 Codex bridge,也不给 Pi。
     expect(anthropicList('codex')).toEqual([]);
     expect(anthropicList('pi')).toEqual([]);

@@ -112,7 +112,7 @@ describe('mapAnthropicSdkModels', () => {
       defaultEffort: 'high',
       supportsFastMode: true,
     });
-    // supportsEffort=false → 不可调;fast 缺省 false;haiku → 200k + 默认收起。
+    // supportsEffort=false → 不可调;fast 缺省 false;haiku → 200k,不再写死默认收起。
     expect(out[1]).toMatchObject({ hasEffortInfo: true, hasFastModeInfo: false });
     expect(out[1].model).toMatchObject({
       id: 'claude-haiku-4-5',
@@ -120,8 +120,8 @@ describe('mapAnthropicSdkModels', () => {
       efforts: [],
       defaultEffort: null,
       supportsFastMode: false,
-      defaultEnabled: false,
     });
+    expect(out[1].model.defaultEnabled).toBeUndefined();
   });
 
   it('能力字段全缺席 = 未知:目录基线优先,两项来源都为 false', () => {
@@ -135,7 +135,8 @@ describe('mapAnthropicSdkModels', () => {
       defaultEffort: 'high',
       supportsFastMode: false,
     });
-    expect(out[1].model).toMatchObject({ efforts: [], defaultEnabled: false });
+    expect(out[1].model).toMatchObject({ efforts: [] });
+    expect(out[1].model.defaultEnabled).toBeUndefined();
   });
 
   it('SDK 未下发窗口时使用目录中的官方窗口', () => {

@@ -53,13 +53,6 @@ function hasPriorityTier(tiers: unknown): boolean {
  */
 const CODEX_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
-/**
- * 默认收起的 slug(旧产品目录 defaultEnabled:false 的延续):清单动态化后注册表不带
- * 可见性梯度(list/hide 之外),legacy 模型的「默认隐藏」是客户端展示策略,不能因
- * 静态段退役而静默漂移成全部可见。用户仍可在设置里手动开启(override 语义不变)。
- */
-const DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4-mini']);
-
 /** Cindy 内部路由专用的 Codex 模型 ID，不应出现在任何用户可见模型目录。 */
 const INTERNAL_CODEX_MODEL_IDS: ReadonlySet<string> = new Set(['codex-auto-review']);
 
@@ -151,8 +144,8 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
       efforts: efforts as CatalogModel['efforts'],
       defaultEffort,
       status: 'active',
-      // 新发现的模型默认可见(用户抱怨过看不到模型);legacy 模型沿用旧目录的默认隐藏策略。
-      defaultEnabled: !DEFAULT_HIDDEN_SLUGS.has(slug),
+      // 新发现的模型默认可见；哪些不默认显示只由模型目录的 defaultEnabled 决定。
+      defaultEnabled: true,
     };
     if (efforts.includes('xhigh')) model.effortDisplayNames = { xhigh: 'Extra High' };
     if (Array.isArray(m.service_tiers)) model.supportsFastMode = hasPriorityTier(m.service_tiers);
@@ -226,7 +219,7 @@ export function mapCodexAppServerModelsToCatalog(
       efforts: efforts as CatalogModel['efforts'],
       defaultEffort,
       status: 'active',
-      defaultEnabled: !DEFAULT_HIDDEN_SLUGS.has(slug),
+      defaultEnabled: true,
       ...(Array.isArray(raw.serviceTiers) || Array.isArray(raw.additionalSpeedTiers)
         ? { supportsFastMode }
         : {}),

@@ -92,8 +92,18 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 ## 默认可见性：产品合同与实现差异
 
 [产品合同](configuration-and-overrides.md#模型可见性)：用户开关优先，否则跟随目录 defaultEnabled。
-xAI 已直接保留目录默认开关；其他订阅/Gateway 的 `selectDefaultModels` 仍可能将 true 筛成 false，不删除成员或写用户偏好。
-这是待收敛的行为差异，不是合同豁免。排查须同时检查上游值、活动目录值和用户 override；本文不改变行为。
+
+- **不默认显示的型号只写在目录里**：条目标 `defaultEnabled: false`，未标的一律默认显示，
+  所以新出的型号一定可见。客户端发现代码不按型号写死隐藏例外（2026-09-26 起移除了
+  `gpt-5.4-mini`、Haiku、bridge `gpt-5.4` 等硬编码）。
+- 保留的是按状态或引擎的规则，不针对具体型号：`deprecated`、`requires_payment` 默认关闭；
+  跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与自定义连接的兼容引擎默认关闭，
+  Registry `perAgent` 可显式打开。
+- **条目级 `defaultEnabled` 同时作用于同条目的 XD 路由**：服务端生成 Gateway `/models` 时
+  读取条目元数据。订阅与 XD 需要不同默认时，把 XD 路由拆成独立的 `xd/*` 条目
+  （如 `xd/claude-opus-5`、`xd/gpt-5.6-terra`），再只给订阅条目标记。
+
+排查须同时检查上游值、活动目录值和用户 override。
 
 <a id="release"></a>
 ## 更新、下发与验收

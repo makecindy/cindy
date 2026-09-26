@@ -116,16 +116,12 @@ const VALID_EFFORTS: ReadonlySet<string> = new Set([
 ]);
 type Effort = CatalogModel['efforts'][number];
 
-/** Claude 的 OpenAI bridge 默认收起的旧型号;与既有目录行为保持一致。 */
-const BRIDGE_DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4', 'gpt-5.4-mini']);
-
-/** OpenAI Codex root → Claude bridge。 */
+/**
+ * OpenAI Codex root → Claude bridge。bridge 的默认可见性由 consumer overlay 统一处理
+ * (默认关闭，Registry perAgent 可显式打开),这里不再按型号写死例外。
+ */
 export function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
-  return {
-    ...model,
-    id: `${CHATGPT_MODEL_PREFIX}${model.id}`,
-    ...(BRIDGE_DEFAULT_HIDDEN_SLUGS.has(model.id) ? { defaultEnabled: false } : {}),
-  };
+  return { ...model, id: `${CHATGPT_MODEL_PREFIX}${model.id}` };
 }
 
 /** 单 root 的 registry 消费计划:先算好,合并期零决策。 */
