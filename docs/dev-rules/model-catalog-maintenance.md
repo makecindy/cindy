@@ -79,7 +79,8 @@ OpenAI（Codex 订阅）与 Anthropic（Claude 订阅）的 root 有账号模型
 返回顺序为准：Codex 取 `models_cache.json` 的 `priority` 或 app-server `model/list` 的返回位置，
 Claude 取 SDK `supportedModels()` 的返回位置。只在 Registry 里有、账号没返回的模型按 Registry
 `sortOrder` 接在其后。装配时重写为连续 `sortOrder`，选择器、设置页、新对话默认与 Claude Code
-bridge 共用这一顺序；用户本地 `sortOrder` patch 仍最高。拿不到账号清单时才用 Registry `sortOrder`。
+bridge 共用这一顺序；OpenAI 订阅的 Pi 清单成员与能力仍来自 Pi 目录，但同样按账号顺序排列，
+并沿用 Registry 条目的 `defaultEnabled: false`；用户本地 `sortOrder` patch 仍最高。拿不到账号清单时才用 Registry `sortOrder`。
 xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受此规则影响。
 第三方 API key 连接（MiMo、Kimi Code 等预设及自定义端点）没有 sortOrder，按连接配置里的
 顺序排：首次添加用接口返回的顺序；之后刷新发现的新型号排在已有型号之前（保持接口返回的

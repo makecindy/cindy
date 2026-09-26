@@ -825,6 +825,33 @@ function applyAccountOrder(
 }
 
 /**
+ * OpenAI 订阅的 Pi 清单与 Codex root 共用账号顺序和目录的「不默认显示」标记；成员与
+ * Pi 专属能力仍来自 Pi 目录。账号清单为空时保留 Pi 目录原顺序。
+ */
+function alignOpenAiPiWithAccount(
+  pi: readonly CatalogModel[],
+  accountCodex: readonly CatalogModel[],
+  registry: Catalog['modelRegistry'],
+): CatalogModel[] {
+  const account = accountCodex.map((model) => ({
+    ...model,
+    id: normalizePiModelId('openai', model.id),
+  }));
+  const ordered = account.length > 0 ? sortModelsByOrder(applyAccountOrder(pi, account)) : [...pi];
+  return ordered.map((model) => {
+    const bare = model.id.startsWith(CHATGPT_MODEL_PREFIX)
+      ? model.id.slice(CHATGPT_MODEL_PREFIX.length)
+      : model.id;
+    const entry =
+      registry?.models.find((candidate) => candidate.id === `openai/${bare}`) ??
+      findModelRegistryRoute(registry, 'openai', bare)?.entry;
+    return entry?.defaultEnabled === false && model.defaultEnabled !== false
+      ? { ...model, defaultEnabled: false }
+      : model;
+  });
+}
+
+/**
  * root 装配:registry plan(overlay / 实体化 / retired 标记)→ 账号顺序 → 本地 override
  * (addition 整条胜 + patch 逐字段)→ retired 复标——patch 改 status 也压不掉
  * 远端 tombstone,唯一复活通道是完整 local addition(hasLocalAddition 豁免)。
@@ -1339,8 +1366,12 @@ function computeMerged(): Catalog {
             'claude-code',
             projected.models['claude-code'] ?? [],
           ),
-          pi: declaredPiModels('openai', p.id === 'openai'
-            ? discoveredCodex : discoveredByProvider.get(p.id)?.codex ?? []),
+          pi: alignOpenAiPiWithAccount(
+            declaredPiModels('openai', p.id === 'openai'
+              ? discoveredCodex : discoveredByProvider.get(p.id)?.codex ?? []),
+            accountCodex,
+            (base ?? BUNDLED_CATALOG).modelRegistry,
+          ),
         },
       };
     }

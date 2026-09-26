@@ -751,7 +751,12 @@ describe('active-catalog discovered augment', () => {
     setDiscoveredCodexModels([fake('gpt-5.7', 17), fake('gpt-5.5', 20)]);
     expect(openaiIds('codex')).toEqual(['gpt-5.7', 'gpt-5.5']);
     expect(openaiIds('claude-code')).toEqual(['chatgpt/gpt-5.7', 'chatgpt/gpt-5.5']);
-    expect(openaiIds('pi')).toEqual([...piBeforeDiscovery, 'chatgpt/gpt-5.7']);
+    // Pi 成员来自 Pi 目录并补上账号新型号；顺序与 Codex 共用账号顺序，目录独有的接在后面。
+    expect(openaiIds('pi')).toEqual([
+      'chatgpt/gpt-5.7',
+      'chatgpt/gpt-5.5',
+      ...piBeforeDiscovery.filter((id) => id !== 'chatgpt/gpt-5.5'),
+    ]);
     // 动态快照决定存在性，且明确返回的运行时能力高于 registry 基线。
     const openai = getActiveCatalog().providers.find((p) => p.id === 'openai');
     expect((openai?.models.codex ?? []).find((m) => m.id === 'gpt-5.5')?.contextWindow).toBe(

@@ -1261,3 +1261,25 @@ describe('订阅模型顺序以账号为准', () => {
     ]);
   });
 });
+
+describe('OpenAI 订阅 Pi 与 Codex 同序同显示', () => {
+  const discovered = (id: string, sortOrder: number): CatalogModel => ({
+    id,
+    name: id,
+    contextWindow: 272_000,
+    efforts: [],
+    defaultEffort: null,
+    sortOrder,
+  });
+
+  it('Pi 按账号顺序排列，并沿用目录的不默认显示标记', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setDiscoveredCodexModels([discovered('gpt-5.6-luna', 1), discovered('gpt-6-sol', 0)]);
+    const pi = models('openai', 'pi');
+    const ids = pi.map((model) => model.id);
+    expect(ids.indexOf('chatgpt/gpt-6-sol')).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf('chatgpt/gpt-6-sol')).toBeLessThan(ids.indexOf('chatgpt/gpt-5.6-luna'));
+    expect(pi.find((model) => model.id === 'chatgpt/gpt-5.6-luna')?.defaultEnabled).toBe(false);
+    expect(pi.find((model) => model.id === 'chatgpt/gpt-6-sol')?.defaultEnabled).not.toBe(false);
+  });
+});
