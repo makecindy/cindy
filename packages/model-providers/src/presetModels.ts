@@ -7,12 +7,36 @@
  * 形状一致。顶层没有 `models` 的旧格式原样返回。纯函数，只处理形状，校验仍由
  * `sanitizePresets` 负责。
  */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasMalformedEngineFields(model: unknown): boolean {
+  if (!isPlainObject(model)) return false;
+  const { engines, engineOverrides } = model;
+  if (
+    engines !== undefined &&
+    (!Array.isArray(engines) ||
+      !engines.every((agent) => typeof agent === "string"))
+  ) {
+    return true;
+  }
+  return (
+    engineOverrides !== undefined &&
+    (!isPlainObject(engineOverrides) ||
+      !Object.values(engineOverrides).every(isPlainObject))
+  );
+}
+
 export function expandPresetModels<T>(preset: T): T {
   if (!preset || typeof preset !== "object" || Array.isArray(preset))
     return preset;
   const source = preset as Record<string, unknown>;
   if (!Array.isArray(source.models)) return preset;
   const models = source.models as unknown[];
+  // 引擎限定字段畸形时不展开：原样返回的预设各 runtime 没有 models，会被校验层整条拒绝，
+  // 不能静默丢掉限定、把只适用于部分引擎的模型暴露给全部引擎。
+  if (models.some(hasMalformedEngineFields)) return preset;
   const runtimes =
     source.runtimes &&
     typeof source.runtimes === "object" &&

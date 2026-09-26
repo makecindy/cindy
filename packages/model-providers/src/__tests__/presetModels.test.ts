@@ -76,6 +76,30 @@ describe("预设推荐模型单一清单", () => {
     expect(sanitizePresets([legacy])).toHaveLength(1);
   });
 
+  it("engines / engineOverrides 畸形时整条预设被拒绝，不展开到全部引擎", () => {
+    const base = {
+      id: "bad",
+      name: "Bad",
+      runtimes: {
+        "claude-code": { baseUrl: "https://example.com/anthropic" },
+        codex: { baseUrl: "https://example.com/v1" },
+      },
+    };
+    for (const malformed of [
+      { engines: "codex" },
+      { engines: [1] },
+      { engineOverrides: [] },
+      { engineOverrides: { pi: "x" } },
+    ]) {
+      const preset = {
+        ...base,
+        models: [{ id: "m", name: "M", ...malformed }],
+      };
+      expect(expandPresetModels(preset)).toBe(preset);
+      expect(sanitizePresets([preset])).toEqual([]);
+    }
+  });
+
   it("所有随包预设展开后都通过校验", () => {
     expect(sanitizePresets(rawPresets)).toHaveLength(rawPresets.length);
     expect(BUNDLED_CATALOG.presets?.length).toBeGreaterThanOrEqual(
