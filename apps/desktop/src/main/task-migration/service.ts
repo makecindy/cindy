@@ -462,6 +462,8 @@ async function receive(
   request: Extract<TaskMigrationRequest, { action: 'receive' }>,
   peer: string,
 ) {
+  await fs.mkdir(scope.root, { recursive: true, mode: 0o700 });
+  scope.assertCurrent();
   return withCrossProcessLock(
     path.join(scope.root, `${request.id}.lock`),
     { label: 'task-migration', waitMs: 0 },
@@ -671,6 +673,8 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     return view(scope, { ...record, stage: 'active' });
   }
   if (request.action === 'status') return view(scope, scope.read(request.sessionId));
+  await fs.mkdir(scope.root, { recursive: true, mode: 0o700 });
+  scope.assertCurrent();
   return withSessionRouteLock(request.sessionId, () =>
     withCrossProcessLock(
       path.join(scope.root, `${request.sessionId}-source.lock`),

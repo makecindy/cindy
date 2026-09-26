@@ -13,7 +13,6 @@ const state = vi.hoisted(() => ({
   dbs: new Map<string, { query: ReturnType<typeof vi.fn>; queryOne: ReturnType<typeof vi.fn> }>(),
   rows: new Map<string, Map<string, Record<string, unknown>>>(),
   files: new Map<string, string>(),
-  locks: new Set<string>(),
   imports: vi.fn(),
   snapshot: vi.fn(),
   close: vi.fn(),
@@ -62,21 +61,6 @@ vi.mock('../../device-link/invoke-context', () => ({
 }));
 vi.mock('../../device-link/settings-store', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }),
-}));
-vi.mock('../../device-link/crossProcessLock', () => ({
-  withCrossProcessLock: async (
-    key: string,
-    _opts: unknown,
-    fn: (lock: { held: boolean }) => unknown,
-  ) => {
-    if (state.locks.has(key)) return fn({ held: false });
-    state.locks.add(key);
-    try {
-      return await fn({ held: true });
-    } finally {
-      state.locks.delete(key);
-    }
-  },
 }));
 vi.mock('../../device-link', () => ({
   getSelfDeviceId: device,
@@ -213,7 +197,6 @@ describe('durable cross-machine handoff', () => {
     state.rows.clear();
     state.dbs.clear();
     state.files.clear();
-    state.locks.clear();
     state.imports.mockClear();
     state.snapshot.mockClear();
     state.close.mockClear();
@@ -373,6 +356,9 @@ describe('durable cross-machine handoff', () => {
     await expect(assertTaskMigrationInputAllowed(undefined, path.join(state.root, 'shared', 'missing'))).rejects.toThrow('MIGRATION_SHARED_DIRECTORY_BUSY');
   });
   it('moves a fork into an independent directory and leaves the sibling and source files usable', async () => {
+    // First use must work with the real file lock and no migration state directory.
+    await expect(fs.stat(path.join(state.root, 'A', 'task-migrations'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(path.join(state.root, 'B', 'task-migrations'))).rejects.toMatchObject({ code: 'ENOENT' });
     await start();
     const status = await settled();
     expect(status.stage).toBe('complete');
