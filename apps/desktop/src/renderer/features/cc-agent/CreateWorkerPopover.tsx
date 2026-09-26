@@ -644,7 +644,7 @@ export function CreateWorkerPopover({
 
   return (
     <div className={cn('fixed inset-0 z-50 flex items-center justify-center', className)}>
-      <div className="absolute inset-0 bg-[var(--overlay-modal)]" onClick={onClose} />
+      <div className="absolute inset-0 bg-[var(--overlay-modal)]" />
       <div
         className="relative z-10 w-[500px] rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-6"
         style={{ boxShadow: 'var(--shadow-menu)' }}
