@@ -204,6 +204,11 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     // 悬停预览只走 ChatInput 的只读 overlay,不写草稿。
     expect(source).toContain('previewPrompt={suggestionPreview}');
     expect(source).toContain('onPreviewChange={handleSuggestionPreview}');
+    // 视觉预览与读屏描述共用同一个「点击后会填入的文字」计算。
+    expect(source).toContain('composerTextFor={suggestionComposerText}');
+    expect(suggestionBlock).toContain(
+      'setSuggestionPreview(suggestion ? suggestionComposerText(suggestion) : null)',
+    );
     // 语音占用 / 发送中时不填入,且预览与填入共用同一份插件文字计算。
     expect(suggestionBlock).toContain(
       'if (sendInFlightRef.current || composerMutationLockedRef.current) return false;',

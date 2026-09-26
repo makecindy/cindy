@@ -77,6 +77,7 @@ export function HomeSuggestionList({
   onSelect,
   onPluginSelect,
   onPreviewChange,
+  composerTextFor,
   includePlugins = true,
 }: {
   narrow: boolean;
@@ -84,6 +85,8 @@ export function HomeSuggestionList({
   onPluginSelect?: (suggestion: HomeTaskSuggestion) => void;
   /** 悬停/聚焦某条建议时报告该条目,离开时报告 null;由调用方算出与点击填入一致的预览文字。 */
   onPreviewChange?: (suggestion: HomeTaskSuggestion | null) => void;
+  /** 点击该条建议后实际填入输入框的文字(与视觉预览同源),用作读屏描述;缺省为建议 prompt。 */
+  composerTextFor?: (suggestion: HomeTaskSuggestion) => string;
   includePlugins?: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -155,7 +158,7 @@ export function HomeSuggestionList({
               <button
                 type="button"
                 data-testid={`home-suggestion-${id}`}
-                // 输入框里的视觉预览对读屏隐藏;完整 prompt 通过描述关联到按钮本身。
+                // 输入框里的视觉预览对读屏隐藏;点击后实际填入的文字通过描述关联到按钮本身。
                 aria-describedby={`${descriptionIdPrefix}-${id}`}
                 onClick={() => {
                   resetPreview();
@@ -189,7 +192,7 @@ export function HomeSuggestionList({
               </button>
               {/* 放在按钮外,只作描述,不并入按钮名称。 */}
               <span id={`${descriptionIdPrefix}-${id}`} className="sr-only">
-                {item.prompt}
+                {composerTextFor ? composerTextFor(item) : item.prompt}
               </span>
             </Fragment>
           );

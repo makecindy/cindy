@@ -181,7 +181,7 @@ import {
   readPluginRecommendationSnapshot,
   type HomeTaskSuggestion,
 } from './pluginHomeSuggestions';
-import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
   startPendingPluginSuggestion,
   takePendingPluginSuggestion,
@@ -5015,24 +5015,25 @@ export function NewMakerDraftRoute() {
     });
     return true;
   }, []);
-  const handleSuggestionPreview = useCallback(
-    (suggestion: HomeTaskSuggestion | null) => {
-      if (!suggestion) {
-        setSuggestionPreview(null);
-        return;
-      }
-      // 插件可用时点击会填入带 $指令(或插件调用说明)的文字,预览必须一致;需要先安装的
-      // 插件点击后走安装引导,不会立即填入,预览只显示建议本身。
+  // 一条建议「点击后会填入的文字」的唯一计算:视觉预览与读屏描述都用它,点击填入走同一个
+  // pluginSuggestionComposerText。插件可用时带 $指令(或插件调用说明);需要先安装的插件
+  // 点击后走安装引导、不会立即填入,只显示建议本身。插件清单变化时随之重算。
+  const installedGhosts = useInstalledGhosts();
+  const suggestionComposerText = useCallback(
+    (suggestion: HomeTaskSuggestion) => {
       const ghost = suggestion.pluginId
-        ? readInstalledGhostsSnapshot().find((g) => g.manifest.id === suggestion.pluginId)
+        ? installedGhosts.find((g) => g.manifest.id === suggestion.pluginId)
         : undefined;
       const usable =
         ghost && ghost.enabled && filterGhostsForWorkdir([ghost], effectiveWorkingDir).length > 0;
-      setSuggestionPreview(
-        usable ? pluginSuggestionComposerText(suggestion.prompt, ghost, t) : suggestion.prompt,
-      );
+      return usable ? pluginSuggestionComposerText(suggestion.prompt, ghost, t) : suggestion.prompt;
     },
-    [effectiveWorkingDir, t],
+    [effectiveWorkingDir, installedGhosts, t],
+  );
+  const handleSuggestionPreview = useCallback(
+    (suggestion: HomeTaskSuggestion | null) =>
+      setSuggestionPreview(suggestion ? suggestionComposerText(suggestion) : null),
+    [suggestionComposerText],
   );
 
   const handleHomeSuggestion = useCallback(
@@ -5574,6 +5575,7 @@ export function NewMakerDraftRoute() {
                     includePlugins={!isRemoteProjectDraft && !isDeviceLinkDraft}
                     onPluginSelect={handlePluginSuggestion}
                     onPreviewChange={handleSuggestionPreview}
+                    composerTextFor={suggestionComposerText}
                   />
                 )}
                 {/* 首页「新建目标」弹窗:无 sessionId → onCreate 建会话并 setGoal(见 handleCreateGoal)。

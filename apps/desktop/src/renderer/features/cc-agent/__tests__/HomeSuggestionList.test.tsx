@@ -145,4 +145,18 @@ describe('HomeSuggestionList', () => {
     rerender(<HomeSuggestionList narrow onSelect={vi.fn()} onPreviewChange={onPreviewChange} />);
     expect(onPreviewChange).toHaveBeenLastCalledWith(null);
   });
+
+  it('describes each row with the exact text a click will fill, not the raw prompt', () => {
+    render(
+      <HomeSuggestionList
+        narrow={false}
+        onSelect={vi.fn()}
+        composerTextFor={(item) => `$mail ${item.prompt}`}
+      />,
+    );
+    const row = screen.getAllByTestId(/^home-suggestion-/)[0];
+    const id = row.getAttribute('data-testid')!.replace('home-suggestion-', '');
+    const description = document.getElementById(row.getAttribute('aria-describedby')!);
+    expect(description?.textContent).toBe(`$mail newChat.homeSuggestions.${id}.prompt`);
+  });
 });
