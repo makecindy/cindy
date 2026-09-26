@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-26T12:00:00.001Z",
+  "updatedAt": "2026-09-26T12:00:00.003Z",
   "models": [
     {
       "id": "openai/gpt-6-sol",
@@ -1688,6 +1688,17 @@
           "agents": ["claude-code", "codex"],
           "defaults": {
             "supportsFastMode": false
+          },
+          "referencePriceGroup": "global"
+        },
+        {
+          "providerId": "deepseek",
+          "modelId": "deepseek-flash",
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false,
+            "name": "DeepSeek-Flash",
+            "supportsImageInput": true
           },
           "referencePriceGroup": "global"
         }
