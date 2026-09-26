@@ -392,7 +392,7 @@ describe('runDbSlimmingMaintenance', () => {
     }
   });
 
-  it('cleans only tasks older than the selected cutoff and keeps every recent status intact', async () => {
+  it('removes cleaned active tasks from lists and keeps every recent status intact', async () => {
     createCleanupFixture();
     const cleanedTurnChangeSetDir = path.join(tmpDir, 'turn-change-sets', 'active-old');
     const retainedTurnChangeSetDir = path.join(
@@ -481,7 +481,7 @@ describe('runDbSlimmingMaintenance', () => {
             FROM sessions WHERE id = 'active-old'
         `).get(),
       ).toEqual({
-        status: 'active',
+        status: 'deleted',
         updated_at: 2_000,
         sdk_session_id: null,
         list_preview: null,
@@ -491,6 +491,12 @@ describe('runDbSlimmingMaintenance', () => {
         codex_plan_json: null,
         summary: null,
       });
+      expect(
+        db.prepare("SELECT id FROM sessions WHERE status = 'active' ORDER BY id").all(),
+      ).toEqual([{ id: 'active-recent' }, { id: 'active-updated-after-scan' }]);
+      expect(
+        db.prepare("SELECT id FROM sessions WHERE status != 'deleted' AND id = 'active-old'").all(),
+      ).toEqual([]);
       expect(
         db.prepare(`
           SELECT updated_at, sdk_session_id, list_preview, list_preview_role,
@@ -565,6 +571,87 @@ describe('runDbSlimmingMaintenance', () => {
     }
   });
 
+  it.each([false, true])(
+    'closes sharing and queued input atomically while preserving Bot timelines (rollback=%s)',
+    async (rollback) => {
+      createCleanupFixture();
+      const setup = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+      try {
+        setup.exec(`
+          ALTER TABLE sessions ADD COLUMN source TEXT;
+          UPDATE sessions SET source = 'bot' WHERE id = 'active-old';
+          CREATE TABLE shared_task_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shared_task_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            terminal INTEGER NOT NULL,
+            snapshot TEXT,
+            recorded_at INTEGER NOT NULL,
+            UNIQUE (shared_task_id, kind, revision)
+          );
+        `);
+        for (const id of ['active-old', 'active-recent', 'active-updated-after-scan']) {
+          setup
+            .prepare(
+              `
+            INSERT INTO shared_task_events
+              (shared_task_id, session_id, revision, kind, terminal, recorded_at)
+            VALUES (?, ?, 1, 'authority', 0, 100)
+          `,
+            )
+            .run(`shared-${id}`, id);
+          setup.prepare('INSERT INTO agent_input_queue_snapshots VALUES (?, ?)').run(id, '[]');
+        }
+      } finally {
+        setup.close();
+      }
+
+      const outcome = await runDbSlimmingMaintenance({
+        userDataDir: tmpDir,
+        dbFilePath,
+        request: request({ includeActiveTasks: true }),
+        now: () => 3_000,
+        log,
+        beforeReplacement: rollback
+          ? async () => {
+              throw new Error('replacement cancelled');
+            }
+          : undefined,
+      });
+      expect(outcome.result.status).toBe(rollback ? 'failed' : 'completed');
+      const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+      try {
+        expect(
+          db.prepare("SELECT id, status FROM sessions WHERE id LIKE 'active-%' ORDER BY id").all(),
+        ).toEqual([
+          { id: 'active-old', status: 'active' },
+          { id: 'active-recent', status: 'active' },
+          { id: 'active-updated-after-scan', status: rollback ? 'active' : 'deleted' },
+        ]);
+        expect(
+          db
+            .prepare("SELECT session_id, terminal FROM shared_task_events WHERE kind = 'local-close'")
+            .all(),
+        ).toEqual(rollback ? [] : [{ session_id: 'active-updated-after-scan', terminal: 1 }]);
+        expect(
+          db
+            .prepare(
+              "SELECT session_id FROM agent_input_queue_snapshots WHERE session_id LIKE 'active-%' ORDER BY session_id",
+            )
+            .all(),
+        ).toEqual([
+          { session_id: 'active-old' },
+          { session_id: 'active-recent' },
+          ...(rollback ? [{ session_id: 'active-updated-after-scan' }] : []),
+        ]);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it('keeps the untouched original as the latest default-directory slimming backup', async () => {
     createCleanupFixture();
     const beforeBytes = estimateDbFilesBytes(dbFilePath);
@@ -572,7 +659,7 @@ describe('runDbSlimmingMaintenance', () => {
     const outcome = await runDbSlimmingMaintenance({
       userDataDir: tmpDir,
       dbFilePath,
-      request: request({ beforeBytes, backupEnabled: true }),
+      request: request({ beforeBytes, backupEnabled: true, includeActiveTasks: true }),
       now: () => 3_000,
       log,
     });
@@ -589,6 +676,9 @@ describe('runDbSlimmingMaintenance', () => {
     });
     try {
       expect(backup.prepare('SELECT count(*) AS count FROM messages').get()).toEqual({ count: 8 });
+      expect(backup.prepare("SELECT status FROM sessions WHERE id = 'active-old'").get()).toEqual({
+        status: 'active',
+      });
     } finally {
       backup.close();
     }
