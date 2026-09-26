@@ -1,7 +1,7 @@
 /**
  * useMyIssues —— /issues 列表的数据源。
  *
- * 进页面拉一次,之后只由用户点刷新触发(**禁** setInterval 轮询;main 侧本身有
+ * 进页面拉一次,之后由用户刷新或 GitHub 凭据变更触发(**禁** setInterval 轮询;main 侧本身有
  * 60s TTL 缓存,重复进页面不会真去打 GitHub)。刷新期间保留旧数据,拿到新数据再
  * 原子替换,不出现空白帧。
  *
@@ -14,11 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type {
-  MyIssuesErrorCode,
-  MyIssuesResult,
-  MyIssuesSnapshot,
-} from '@/../shared/myIssues';
+import type { MyIssuesErrorCode, MyIssuesResult, MyIssuesSnapshot } from '@/../shared/myIssues';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('useMyIssues');
@@ -64,9 +60,13 @@ export function useMyIssues(): UseMyIssuesState {
   const [error, setError] = useState<MyIssuesErrorCode | null>(null);
   const disposed = useRef(false);
   const inFlight = useRef(false);
+  const refreshPending = useRef(false);
 
   const load = useCallback(async (force: boolean) => {
-    if (inFlight.current) return;
+    if (inFlight.current) {
+      if (force) refreshPending.current = true;
+      return;
+    }
     inFlight.current = true;
     if (force) setRefreshing(true);
     try {
@@ -102,6 +102,10 @@ export function useMyIssues(): UseMyIssuesState {
       if (!disposed.current) {
         setLoading(false);
         setRefreshing(false);
+        if (refreshPending.current) {
+          refreshPending.current = false;
+          void load(true);
+        }
       }
     }
   }, []);
@@ -133,6 +137,8 @@ export function useMyIssues(): UseMyIssuesState {
   const refresh = useCallback(() => {
     void load(true);
   }, [load]);
+
+  useEffect(() => window.electronAPI.gitContext?.onGithubConnected?.(refresh), [refresh]);
 
   const data = fresh ?? (snapshot ? snapshotAsResult(snapshot) : null);
   return { data, hasFreshData: fresh !== null, loading, refreshing, error, refresh };

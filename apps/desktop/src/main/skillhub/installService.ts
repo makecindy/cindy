@@ -26,10 +26,23 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { app, net, shell } from 'electron';
+import { app, shell } from 'electron';
+import { download, DownloadError } from '../downloader/index.js';
 import { isLocalSkillTargetCurrent, type LocalSkillTarget } from './localSkillTarget';
-import { isCindySkillEnabled, setCindySkillEnabled, snapshotSkillActivation, clearSkillActivationSnapshot } from './activationPreferences';
-import { fileIdentity, writeUninstallCleanup, readUninstallCleanup, listUninstallCleanups, deleteUninstallCleanup, type UninstallCleanup } from './uninstallJournal';
+import {
+  isCindySkillEnabled,
+  setCindySkillEnabled,
+  snapshotSkillActivation,
+  clearSkillActivationSnapshot,
+} from './activationPreferences';
+import {
+  fileIdentity,
+  writeUninstallCleanup,
+  readUninstallCleanup,
+  listUninstallCleanups,
+  deleteUninstallCleanup,
+  type UninstallCleanup,
+} from './uninstallJournal';
 import JSZip from 'jszip';
 import { skillhubApiFetch } from './hubApi';
 import { getCurrentDataOwnerId, getCurrentUserId } from '../authManager';
@@ -41,14 +54,27 @@ import {
 import { registryService } from './registry';
 import type { StoredInstall } from './registry/types';
 import { computeFolderHash } from './folderHash';
-import { getSkillInstallLockOwner, skillInstallLockKey, tryAcquireSkillInstallLock } from './installLock';
-import { acquireSharedSkillMutationLease, skillMutationNames, type SkillMutationRelease } from './sharedMutationLease';
+import {
+  getSkillInstallLockOwner,
+  skillInstallLockKey,
+  tryAcquireSkillInstallLock,
+} from './installLock';
+import {
+  acquireSharedSkillMutationLease,
+  skillMutationNames,
+  type SkillMutationRelease,
+} from './sharedMutationLease';
 import {
   prepareSharedGlobalSkillLinks,
   prepareSharedProjectSkillLinks,
   projectWorkingDirFromSkillPath,
 } from '../maker-host/shared-global-skills.js';
-import { clearIgnoredAutoSyncSkill, ignoreAutoSyncSkill, listIgnoredAutoSyncSkills, isKnownAutoSyncCandidateSkill } from './autoSyncPreferences';
+import {
+  clearIgnoredAutoSyncSkill,
+  ignoreAutoSyncSkill,
+  listIgnoredAutoSyncSkills,
+  isKnownAutoSyncCandidateSkill,
+} from './autoSyncPreferences';
 import { withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 
 import { createLogger } from '../logger';
@@ -162,12 +188,6 @@ export function cancelInstall(name: string): boolean {
 
 // ── 工具 ─────────────────────────────────────────────────────────────────────
 
-function sha256Hex(buf: ArrayBuffer | Uint8Array): string {
-  const h = crypto.createHash('sha256');
-  h.update(buf instanceof Uint8Array ? buf : new Uint8Array(buf));
-  return h.digest('hex');
-}
-
 async function pathExists(p: string): Promise<boolean> {
   try {
     await fs.promises.access(p);
@@ -191,7 +211,9 @@ function projectWorkingDirForSkillPaths(...skillPaths: string[]): string | undef
   return projectWorkingDir;
 }
 
-async function reconcileProjectSkillLinksForPaths(...skillPaths: string[]): Promise<string | undefined> {
+async function reconcileProjectSkillLinksForPaths(
+  ...skillPaths: string[]
+): Promise<string | undefined> {
   const projectWorkingDir = projectWorkingDirForSkillPaths(...skillPaths);
   if (!projectWorkingDir) return undefined;
 
@@ -228,7 +250,10 @@ async function movePersistentBackup(tempDir: string, skillName: string): Promise
   return dest;
 }
 
-async function rollbackFinalSwitch(finalDir: string, state: FinalSwitchRollbackState): Promise<void> {
+async function rollbackFinalSwitch(
+  finalDir: string,
+  state: FinalSwitchRollbackState,
+): Promise<void> {
   if (!state.finalDirCreated && !state.backupDir) return;
 
   if (state.finalDirCreated || state.backupDir) {
@@ -255,7 +280,10 @@ async function restoreRegistryAfterFinalSwitchRollback(
   } catch (err) {
     try {
       const quarantinePath = await quarantineRolledBackInstall(physicalFinalDir, skillName);
-      log.warn('[skillInstall] quarantined rolled back install after registry restore failed:', quarantinePath);
+      log.warn(
+        '[skillInstall] quarantined rolled back install after registry restore failed:',
+        quarantinePath,
+      );
     } catch (quarantineErr) {
       log.error('[skillInstall] quarantine after registry restore failed:', quarantineErr);
     }
@@ -265,7 +293,10 @@ async function restoreRegistryAfterFinalSwitchRollback(
 
 async function quarantineRolledBackInstall(finalDir: string, skillName: string): Promise<string> {
   if (!(await pathExists(finalDir))) return finalDir;
-  const dest = path.join(path.dirname(finalDir), `.xdt-rollback-registry-failed-${skillName}-${Date.now()}-${rand()}`);
+  const dest = path.join(
+    path.dirname(finalDir),
+    `.xdt-rollback-registry-failed-${skillName}-${Date.now()}-${rand()}`,
+  );
   await fs.promises.rename(finalDir, dest);
   return dest;
 }
@@ -356,7 +387,10 @@ async function hasUnlinkedDiscoveryRoot(shape: DirectSkillDiscoveryPath): Promis
  * a user symlink, the final switch replaces that symlink rather than touching
  * its external target.
  */
-async function resolvePhysicalInstallDir(logicalFinalDir: string, skillName: string): Promise<string> {
+async function resolvePhysicalInstallDir(
+  logicalFinalDir: string,
+  skillName: string,
+): Promise<string> {
   let stat: fs.Stats;
   try {
     stat = await fs.promises.lstat(logicalFinalDir);
@@ -397,14 +431,18 @@ async function readRegistryInstallSnapshots(
   const candidates = [logicalFinalDir];
   if (!pathTextEquals(path.normalize(logicalFinalDir), path.normalize(physicalFinalDir))) {
     candidates.push(physicalFinalDir);
-    const realPhysicalDir = await fs.promises.realpath(physicalFinalDir).catch(() => physicalFinalDir);
+    const realPhysicalDir = await fs.promises
+      .realpath(physicalFinalDir)
+      .catch(() => physicalFinalDir);
     candidates.push(realPhysicalDir);
     if (preSwitchPhysicalRealDir) candidates.push(preSwitchPhysicalRealDir);
   }
 
   const snapshots: RegistryInstallSnapshot[] = [];
   for (const installPath of uniqueNormalizedPaths(candidates)) {
-    const entry = await Promise.resolve(registryService.getInstall(skillName, installPath)).catch(() => null);
+    const entry = await Promise.resolve(registryService.getInstall(skillName, installPath)).catch(
+      () => null,
+    );
     if (entry) snapshots.push({ installPath, entry });
   }
   return snapshots;
@@ -477,10 +515,7 @@ function safeJoin(dest: string, relPath: string): string | null {
 
 // ── 主入口：install ─────────────────────────────────────────────────────────
 
-export async function install(
-  p: InstallParams,
-  onProgress: ProgressCb,
-): Promise<InstallResult> {
+export async function install(p: InstallParams, onProgress: ProgressCb): Promise<InstallResult> {
   const userId = getCurrentUserId();
   if (!userId) {
     onProgress({ phase: 'failed', name: p.name, errorCode: 'AUTH_REQUIRED', message: '未登录' });
@@ -488,14 +523,24 @@ export async function install(
   }
   const installOwnerId = getCurrentDataOwnerId();
   if (!installOwnerId) {
-    onProgress({ phase: 'failed', name: p.name, errorCode: 'AUTH_REQUIRED', message: '无可用数据空间' });
+    onProgress({
+      phase: 'failed',
+      name: p.name,
+      errorCode: 'AUTH_REQUIRED',
+      message: '无可用数据空间',
+    });
     return { success: false, errorCode: 'AUTH_REQUIRED', message: '无可用数据空间' };
   }
 
   // 推导目标目录
   const resolved = resolveTargetDir(p);
   if ('error' in resolved) {
-    onProgress({ phase: 'failed', name: p.name, errorCode: resolved.error, message: resolved.message });
+    onProgress({
+      phase: 'failed',
+      name: p.name,
+      errorCode: resolved.error,
+      message: resolved.message,
+    });
     return { success: false, errorCode: resolved.error, message: resolved.message };
   }
   const logicalFinalDir = resolved.finalDir;
@@ -547,90 +592,73 @@ export async function install(
       // 如果没传版本号，先查 hub 拿最新版本
       if (!downloadVersion) {
         const detail = await skillhubApiFetch<{ version: string }>(
-          withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(p.name)}`, p.catalogScope),
+          withSkillhubCatalogScope(
+            `/api/skills-hub/skills/${encodeURIComponent(p.name)}`,
+            p.catalogScope,
+          ),
         );
         downloadVersion = detail.version;
       }
       const versionQs = downloadVersion ? `?version=${encodeURIComponent(downloadVersion)}` : '';
       info = await skillhubApiFetch<DownloadInfoResponse>(
-        withSkillhubCatalogScope(`/api/skills-hub/skills/${encodeURIComponent(p.name)}/download${versionQs}`, p.catalogScope),
+        withSkillhubCatalogScope(
+          `/api/skills-hub/skills/${encodeURIComponent(p.name)}/download${versionQs}`,
+          p.catalogScope,
+        ),
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const code: InstallErrorCode = (err as { statusCode?: number }).statusCode === 404 ? 'NOT_FOUND' : 'DOWNLOAD_FAILED';
+      const code: InstallErrorCode =
+        (err as { statusCode?: number }).statusCode === 404 ? 'NOT_FOUND' : 'DOWNLOAD_FAILED';
       onProgress({ phase: 'failed', name: p.name, errorCode: code, message });
       return { success: false, errorCode: code, message };
     }
 
     if (checkAbort()) return { success: false, errorCode: 'CANCELLED', message: '已取消' };
 
-    // 2) 下载 zip（流式 + 字节上限，防 OOM）
-    if (info.fileSize > MAX_SKILL_ZIP) {
-      const msg = `文件过大：${info.fileSize} bytes（上限 ${MAX_SKILL_ZIP}）`;
-      onProgress({ phase: 'failed', name: p.name, errorCode: 'DOWNLOAD_FAILED', message: msg });
-      return { success: false, errorCode: 'DOWNLOAD_FAILED', message: msg };
-    }
-
-    onProgress({ phase: 'downloading', name: p.name });
-    let zipBuf: Uint8Array;
-    try {
-      const resp = await net.fetch(info.url, { method: 'GET', signal });
-      if (!resp.ok) {
-        throw new Error(`下载失败：HTTP ${resp.status}`);
-      }
-
-      const cl = resp.headers.get('Content-Length');
-      if (cl !== null && Number(cl) > MAX_SKILL_ZIP) {
-        throw new Error(`Content-Length 过大：${cl} bytes`);
-      }
-
-      const reader = resp.body!.getReader();
-      const chunks: Uint8Array[] = [];
-      let received = 0;
-      const hardLimit = Math.max(info.fileSize * 1.1, info.fileSize + 4096);
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        received += value.byteLength;
-        if (received > hardLimit || received > MAX_SKILL_ZIP) {
-          await reader.cancel();
-          throw new Error(`下载超出大小限制：已接收 ${received} bytes`);
-        }
-        chunks.push(value);
-      }
-
-      zipBuf = new Uint8Array(received);
-      let offset = 0;
-      for (const chunk of chunks) {
-        zipBuf.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const safeUrl = (() => { try { const u = new URL(info.url); return `${u.origin}${u.pathname}`; } catch { return '(invalid url)'; } })();
-      log.error('[skillInstall] download failed url=%s err=%s', safeUrl, message);
+    // 2) Shared verified download; unpacking and install ownership stay here.
+    if (
+      !Number.isSafeInteger(info.fileSize) ||
+      info.fileSize <= 0 ||
+      info.fileSize > MAX_SKILL_ZIP
+    ) {
+      const message = 'Skill archive size is invalid';
       onProgress({ phase: 'failed', name: p.name, errorCode: 'DOWNLOAD_FAILED', message });
       return { success: false, errorCode: 'DOWNLOAD_FAILED', message };
     }
-
+    onProgress({ phase: 'downloading', name: p.name });
+    let zipBuf: Uint8Array;
+    let downloadDir: string | undefined;
+    try {
+      downloadDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-skill-download-'));
+      const archive = path.join(downloadDir, 'skill.zip');
+      await download({
+        url: info.url,
+        targetPath: archive,
+        sha256: info.zipSha256,
+        expectedSize: info.fileSize,
+        maxBytes: MAX_SKILL_ZIP,
+        signal,
+        resume: false,
+        retry: { maxAttempts: 1 },
+      });
+      zipBuf = await fs.promises.readFile(archive);
+    } catch (error) {
+      if (checkAbort()) return { success: false, errorCode: 'CANCELLED', message: '已取消' };
+      const checksum = error instanceof DownloadError && ['CHECKSUM', 'SIZE'].includes(error.code);
+      const errorCode = checksum ? 'CHECKSUM_MISMATCH' : 'DOWNLOAD_FAILED';
+      const message = checksum ? '下载校验失败：大小或 sha256 不匹配' : 'Skill download failed';
+      if (checksum) onProgress({ phase: 'verifying', name: p.name });
+      log.warn('[skillInstall] download failed', { errorCode });
+      onProgress({ phase: 'failed', name: p.name, errorCode, message });
+      return { success: false, errorCode, message };
+    } finally {
+      if (downloadDir)
+        await fs.promises.rm(downloadDir, { recursive: true, force: true }).catch(() => undefined);
+    }
     if (checkAbort()) return { success: false, errorCode: 'CANCELLED', message: '已取消' };
-
-    // 3) 校验阶段保留给 UI 进度；下载后在本函数内校验 size/sha。
+    // A resolved download has already passed size and SHA-256 verification.
     onProgress({ phase: 'verifying', name: p.name });
-    if (zipBuf.byteLength !== info.fileSize) {
-      const msg = `下载大小不符：期望 ${info.fileSize}，实际 ${zipBuf.byteLength}`;
-      onProgress({ phase: 'failed', name: p.name, errorCode: 'CHECKSUM_MISMATCH', message: msg });
-      return { success: false, errorCode: 'CHECKSUM_MISMATCH', message: msg };
-    }
-    const actualSha = sha256Hex(zipBuf);
-    if (actualSha !== info.zipSha256) {
-      const msg = `下载校验失败：sha256 不匹配`;
-      onProgress({ phase: 'failed', name: p.name, errorCode: 'CHECKSUM_MISMATCH', message: msg });
-      return { success: false, errorCode: 'CHECKSUM_MISMATCH', message: msg };
-    }
-
-    if (checkAbort()) return { success: false, errorCode: 'CANCELLED', message: '已取消' };
 
     // 4) 同名冲突判定（F-DATA-4）:
     //    - finalDir 不存在                       → 直接装
@@ -638,7 +666,12 @@ export async function install(
     if (await pathExists(finalDir)) {
       if (!p.force) {
         const msg = `目标位置已存在 ${p.name}/`;
-        onProgress({ phase: 'failed', name: p.name, errorCode: 'CONFLICT_USER_OWNED', message: msg });
+        onProgress({
+          phase: 'failed',
+          name: p.name,
+          errorCode: 'CONFLICT_USER_OWNED',
+          message: msg,
+        });
         return { success: false, errorCode: 'CONFLICT_USER_OWNED', message: msg };
       }
     }
@@ -772,25 +805,25 @@ export async function install(
     const logicalRegistrySnapshot = registrySnapshots.find(({ installPath }) =>
       pathTextEquals(path.normalize(installPath), path.normalize(logicalFinalDir)),
     );
-    const physicalRegistrySnapshots = registrySnapshots.filter(({ installPath }) =>
-      !pathTextEquals(path.normalize(installPath), path.normalize(logicalFinalDir)),
+    const physicalRegistrySnapshots = registrySnapshots.filter(
+      ({ installPath }) =>
+        !pathTextEquals(path.normalize(installPath), path.normalize(logicalFinalDir)),
     );
-    const existingRegistryEntry = logicalRegistrySnapshot?.entry ?? physicalRegistrySnapshots[0]?.entry ?? null;
+    const existingRegistryEntry =
+      logicalRegistrySnapshot?.entry ?? physicalRegistrySnapshots[0]?.entry ?? null;
     // Replacing the same catalog record updates its content baseline, not its publication provenance.
     // This local metadata never grants publish rights; those still require fresh server authority.
-    const preservePublication = existingRegistryEntry?.origin === 'published'
-      && existingRegistryEntry.catalogScope === p.catalogScope;
+    const preservePublication =
+      existingRegistryEntry?.origin === 'published' &&
+      existingRegistryEntry.catalogScope === p.catalogScope;
     if (preservePublication && !authorId) authorId = existingRegistryEntry.authorId;
     const previousRegistrySnapshots = registrySnapshots;
     const mutatedRegistryPaths = uniqueNormalizedPaths([
       logicalFinalDir,
       ...physicalRegistrySnapshots.map(({ installPath }) => installPath),
     ]);
-    const nextAutoSynced = p.autoSync === true
-      ? true
-      : existingRegistryEntry
-        ? existingRegistryEntry.autoSynced
-        : false;
+    const nextAutoSynced =
+      p.autoSync === true ? true : existingRegistryEntry ? existingRegistryEntry.autoSynced : false;
 
     if (checkAbort()) {
       await rollbackFinalSwitch(finalDir, rollbackState).catch((rollbackErr) => {
@@ -845,7 +878,10 @@ export async function install(
           message = fileRollbackFailed
             ? `注册失败，且安装文件 / registry 回滚失败：${registryMessage}；registry 错误：${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}`
             : `注册失败，已回滚安装文件，但 registry 回滚失败：${registryMessage}；registry 错误：${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}`;
-          log.error('[skillInstall] registry rollback after registry migration failed:', restoreErr);
+          log.error(
+            '[skillInstall] registry rollback after registry migration failed:',
+            restoreErr,
+          );
         }
       }
       onProgress({ phase: 'failed', name: p.name, errorCode: 'WRITE_FAILED', message });
@@ -855,9 +891,11 @@ export async function install(
     let replacedBackupPath: string | undefined;
     if (rollbackState.backupDir) {
       if (p.skipBackup) {
-        await fs.promises.rm(rollbackState.backupDir, { recursive: true, force: true }).catch((cleanupErr) => {
-          log.warn('[skillInstall] cleanup replaced dir failed:', cleanupErr);
-        });
+        await fs.promises
+          .rm(rollbackState.backupDir, { recursive: true, force: true })
+          .catch((cleanupErr) => {
+            log.warn('[skillInstall] cleanup replaced dir failed:', cleanupErr);
+          });
       } else {
         try {
           replacedBackupPath = await movePersistentBackup(rollbackState.backupDir, p.name);
@@ -908,14 +946,17 @@ export async function install(
         log.warn('[skillInstall] claude symlink failed (non-fatal):', claudeLink, err);
       }
     }
-    const projectWorkingDir = await releaseShared.run(() => reconcileProjectSkillLinksForPaths(logicalFinalDir, finalDir));
+    const projectWorkingDir = await releaseShared.run(() =>
+      reconcileProjectSkillLinksForPaths(logicalFinalDir, finalDir),
+    );
     try {
       const ownerId = getCurrentDataOwnerId();
       const linkResult = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
-        releaseShared!.run(() => prepareSharedGlobalSkillLinks({
-          assertOwnerStable: () =>
-            assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
-        })),
+        releaseShared!.run(() =>
+          prepareSharedGlobalSkillLinks({
+            assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
+          }),
+        ),
       );
       for (const warning of linkResult.warnings) {
         log.warn('[skillInstall] shared global skill link warning:', warning);
@@ -960,7 +1001,10 @@ export async function uninstall(
   }
   const normResolved = resolved.replace(/\\/g, '/');
   // 必须匹配 <prefix>/.{claude,agents,codex}/skills/<slug> 形式，slug 不含 /
-  if (!target && !/\/(\.(claude|agents|codex)\/skills|codex-home\/skills)\/[^/.][^/]*$/.test(normResolved)) {
+  if (
+    !target &&
+    !/\/(\.(claude|agents|codex)\/skills|codex-home\/skills)\/[^/.][^/]*$/.test(normResolved)
+  ) {
     return { success: false, errorCode: 'INTERNAL', message: 'absolutePath 不在合法 skill 目录下' };
   }
 
@@ -970,8 +1014,12 @@ export async function uninstall(
   // 共享安装锁:同名 install / learn apply 的 final-switch 进行中时拒绝删除,
   // 避免 rm 掉对方刚切入的目录、registry 写入交错。
   const releaseLocks: Array<() => void> = [];
-  const lockNames = skillMutationNames([skillName, path.basename(absolutePath),
-    path.basename(target?.operationPath ?? absolutePath), ...(target?.aliases ?? []).map((alias) => path.basename(alias))]);
+  const lockNames = skillMutationNames([
+    skillName,
+    path.basename(absolutePath),
+    path.basename(target?.operationPath ?? absolutePath),
+    ...(target?.aliases ?? []).map((alias) => path.basename(alias)),
+  ]);
   // An imported discovery link can have a different name from its source. Install
   // replaces that entry under its discovery name, so hold both locks through trash.
   for (const lockName of lockNames) {
@@ -985,18 +1033,33 @@ export async function uninstall(
   let releaseShared: SkillMutationRelease | null = null;
   try {
     releaseShared = await acquireSharedSkillMutationLease(lockNames);
-    if (!releaseShared) return { success: false, errorCode: 'INTERNAL', message: skillLockBusyMessage(skillName) };
+    if (!releaseShared)
+      return { success: false, errorCode: 'INTERNAL', message: skillLockBusyMessage(skillName) };
     // Keep the exact registry identity for metadata cleanup after trash succeeds.
     const registryMatch = target?.linkOnly
-      ? (await registryService.listAllInstalls()).find((record) =>
-        [skillName, path.basename(target.operationPath)].some((name) => skillInstallLockKey(name) === skillInstallLockKey(record.skillName))
-        && target.aliases.some((alias) => pathTextEquals(path.resolve(alias), path.resolve(record.installPath)))) ?? null
+      ? ((await registryService.listAllInstalls()).find(
+          (record) =>
+            [skillName, path.basename(target.operationPath)].some(
+              (name) => skillInstallLockKey(name) === skillInstallLockKey(record.skillName),
+            ) &&
+            target.aliases.some((alias) =>
+              pathTextEquals(path.resolve(alias), path.resolve(record.installPath)),
+            ),
+        ) ?? null)
       : await findRegistryInstallForPath(skillName, absolutePath, resolved);
     if (!registryMatch && !target) {
-      return { success: false, errorCode: 'INTERNAL', message: 'No installation record or current local Skill grant' };
+      return {
+        success: false,
+        errorCode: 'INTERNAL',
+        message: 'No installation record or current local Skill grant',
+      };
     }
     if (target && (target.sourcePath !== resolved || !isLocalSkillTargetCurrent(target))) {
-      return { success: false, errorCode: 'INTERNAL', message: 'Skill source changed; refresh and retry' };
+      return {
+        success: false,
+        errorCode: 'INTERNAL',
+        message: 'Skill source changed; refresh and retry',
+      };
     }
 
     const cloudUserId = getCurrentUserId();
@@ -1057,7 +1120,9 @@ async function findRegistryInstallForPath(
       realInstallPath = fs.realpathSync(installPath);
     } catch {
       // 目录已删时仍允许用规范化路径与候选路径直接比对
-      if (candidatePaths.some((candidate) => pathTextEquals(path.normalize(installPath), candidate))) {
+      if (
+        candidatePaths.some((candidate) => pathTextEquals(path.normalize(installPath), candidate))
+      ) {
         return { skillName, installPath, entry };
       }
       continue;
@@ -1073,7 +1138,9 @@ async function findRegistryInstallForPath(
     if (skillInstallLockKey(record.skillName) !== skillInstallLockKey(skillName)) continue;
     try {
       if (fs.realpathSync.native(record.installPath) === resolved) return record;
-    } catch { /* Missing records do not prove ownership of a live source. */ }
+    } catch {
+      /* Missing records do not prove ownership of a live source. */
+    }
   }
   return null;
 }
@@ -1091,84 +1158,145 @@ async function uninstallLocked(
   canMutate: () => boolean = () => true,
 ): Promise<UninstallResult> {
   const ownerId = getCurrentDataOwnerId();
-  if (!ownerId || !canMutate()) return { success: false, errorCode: 'CANCELLED', message: 'Skill mutation context changed' };
+  if (!ownerId || !canMutate())
+    return { success: false, errorCode: 'CANCELLED', message: 'Skill mutation context changed' };
   const allowed = () => ownerId === getCurrentDataOwnerId() && canMutate();
-  const recordIgnore = !!(registryMatch && await shouldRecordAutoSyncIgnore(skillName, registryMatch.entry, cloudUserId ?? undefined));
-  const wasIgnored = recordIgnore && (await listIgnoredAutoSyncSkills(cloudUserId ?? undefined)).has(skillName);
-  const knownEntries = [...(target?.aliases ?? []), absolutePath, resolved,
-    ...(registryMatch ? [registryMatch.installPath] : [])];
+  const recordIgnore = !!(
+    registryMatch &&
+    (await shouldRecordAutoSyncIgnore(skillName, registryMatch.entry, cloudUserId ?? undefined))
+  );
+  const wasIgnored =
+    recordIgnore && (await listIgnoredAutoSyncSkills(cloudUserId ?? undefined)).has(skillName);
+  const knownEntries = [
+    ...(target?.aliases ?? []),
+    absolutePath,
+    resolved,
+    ...(registryMatch ? [registryMatch.installPath] : []),
+  ];
   // A repair can finish after the UI scan but before this lease. Include the
   // sibling discovery entries for each known scope in the locked snapshot.
   const compatibilityEntries = knownEntries.flatMap((entry) => {
     if (!/\/\.(?:agents|claude|codex)\/skills\/[^/]+$/.test(entry.replace(/\\/g, '/'))) return [];
     const base = path.dirname(path.dirname(path.dirname(entry)));
-    return ['.agents', '.claude', '.codex'].map((root) => path.join(base, root, 'skills', path.basename(entry)));
+    return ['.agents', '.claude', '.codex'].map((root) =>
+      path.join(base, root, 'skills', path.basename(entry)),
+    );
   });
-  const candidates = target?.linkOnly ? [...new Set([...target.aliases, target.operationPath])] : [...new Set([
-    ...knownEntries, ...compatibilityEntries,
-    path.join(os.homedir(), '.claude', 'skills', skillName),
-    path.join(os.homedir(), '.codex', 'skills', skillName),
-    path.join(os.homedir(), '.agents', 'skills', skillName),
-  ])];
+  const candidates = target?.linkOnly
+    ? [...new Set([...target.aliases, target.operationPath])]
+    : [
+        ...new Set([
+          ...knownEntries,
+          ...compatibilityEntries,
+          path.join(os.homedir(), '.claude', 'skills', skillName),
+          path.join(os.homedir(), '.codex', 'skills', skillName),
+          path.join(os.homedir(), '.agents', 'skills', skillName),
+        ]),
+      ];
   const operationPath = target?.operationPath ?? resolved;
   let cleanup: UninstallCleanup;
   try {
     const sourceIdentity = fileIdentity(resolved, true);
     const operationIdentity = fileIdentity(operationPath);
-    if (!allowed() || !sourceIdentity || !operationIdentity || (target && !isLocalSkillTargetCurrent(target))
-      || candidates.some((candidate) => !lockNames.includes(skillInstallLockKey(path.basename(candidate))))) {
+    if (
+      !allowed() ||
+      !sourceIdentity ||
+      !operationIdentity ||
+      (target && !isLocalSkillTargetCurrent(target)) ||
+      candidates.some(
+        (candidate) => !lockNames.includes(skillInstallLockKey(path.basename(candidate))),
+      )
+    ) {
       throw new Error('Skill source changed; refresh and retry');
     }
     const links = candidates.flatMap((candidate) => {
       try {
-        return fs.lstatSync(candidate).isSymbolicLink() && fs.realpathSync.native(candidate) === resolved
-          ? [{ path: candidate, value: fs.readlinkSync(candidate), identity: fileIdentity(candidate)! }] : [];
+        return fs.lstatSync(candidate).isSymbolicLink() &&
+          fs.realpathSync.native(candidate) === resolved
+          ? [
+              {
+                path: candidate,
+                value: fs.readlinkSync(candidate),
+                identity: fileIdentity(candidate)!,
+              },
+            ]
+          : [];
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
         throw error;
       }
     });
     cleanup = {
-      version: 1, token: crypto.randomUUID(), ownerId, phase: 'prepared', lockNames,
-      skillName, resolved, sourceIdentity, operationPath, operationIdentity,
-      registryMatch, links, linkOnly: target?.linkOnly ?? false,
+      version: 1,
+      token: crypto.randomUUID(),
+      ownerId,
+      phase: 'prepared',
+      lockNames,
+      skillName,
+      resolved,
+      sourceIdentity,
+      operationPath,
+      operationIdentity,
+      registryMatch,
+      links,
+      linkOnly: target?.linkOnly ?? false,
       activation: target?.linkOnly ? null : snapshotSkillActivation(resolved),
-      undoIgnore: recordIgnore && !wasIgnored, cloudUserId,
+      undoIgnore: recordIgnore && !wasIgnored,
+      cloudUserId,
     };
     // Journal first, then the shared barrier, then side effects. A crash in any
     // gap leaves either no effects or enough information to finish without trashing twice.
     writeUninstallCleanup(cleanup);
     lease.retainUntilComplete(cleanup.token);
   } catch (error) {
-    return { success: false, errorCode: 'WRITE_FAILED', message: error instanceof Error ? error.message : String(error) };
+    return {
+      success: false,
+      errorCode: 'WRITE_FAILED',
+      message: error instanceof Error ? error.message : String(error),
+    };
   }
 
   let trashError: unknown;
   try {
     if (cleanup.undoIgnore) await ignoreAutoSyncSkill(skillName, cloudUserId ?? undefined);
-    if (!allowed() || (target && !isLocalSkillTargetCurrent(target))) throw new Error('Skill source changed; refresh and retry');
+    if (!allowed() || (target && !isLocalSkillTargetCurrent(target)))
+      throw new Error('Skill source changed; refresh and retry');
     await shell.trashItem(operationPath);
     cleanup.phase = 'removed';
     writeUninstallCleanup(cleanup);
-  } catch (error) { trashError = error; }
+  } catch (error) {
+    trashError = error;
+  }
 
   // Even a rejected trash call can have removed its entry. Recovery inspects
   // the original identity; it never repeats the destructive operation.
   const complete = await finishUninstallCleanup(cleanup, lease, allowed);
-  if (trashError && cleanup.phase === 'completed' && fileIdentity(operationPath) === cleanup.operationIdentity) {
-    return { success: false, errorCode: 'WRITE_FAILED', message: trashError instanceof Error ? trashError.message : String(trashError) };
+  if (
+    trashError &&
+    cleanup.phase === 'completed' &&
+    fileIdentity(operationPath) === cleanup.operationIdentity
+  ) {
+    return {
+      success: false,
+      errorCode: 'WRITE_FAILED',
+      message: trashError instanceof Error ? trashError.message : String(trashError),
+    };
   }
   // Cache invalidation needs the cwd, not a broad link reconciliation: that
   // would project a remaining import back into an entry we just removed.
   const projectWorkingDir = projectWorkingDirForSkillPaths(operationPath, resolved, absolutePath);
-  return { success: true, ...(!complete ? { cleanupToken: cleanup.token } : {}),
-    ...(projectWorkingDir ? { projectWorkingDir } : {}) };
+  return {
+    success: true,
+    ...(!complete ? { cleanupToken: cleanup.token } : {}),
+    ...(projectWorkingDir ? { projectWorkingDir } : {}),
+  };
 }
 
 /** Only the current profile/data owner can receive a new window grant. */
 export function listPendingUninstallCleanups(): Array<{ token: string; name: string }> {
   const ownerId = getCurrentDataOwnerId();
-  return listUninstallCleanups().filter((record) => record.ownerId === ownerId)
+  return listUninstallCleanups()
+    .filter((record) => record.ownerId === ownerId)
     .map((record) => ({ token: record.token, name: record.skillName }));
 }
 
@@ -1180,30 +1308,45 @@ async function finishUninstallCleanup(
   if (!canMutate()) return false;
   try {
     if (cleanup.phase !== 'completed') {
-      if (cleanup.phase === 'prepared' && fileIdentity(cleanup.operationPath) === cleanup.operationIdentity) {
+      if (
+        cleanup.phase === 'prepared' &&
+        fileIdentity(cleanup.operationPath) === cleanup.operationIdentity
+      ) {
         // The trash operation never committed (or the original was restored).
-        if (cleanup.undoIgnore) await clearIgnoredAutoSyncSkill(cleanup.skillName, cleanup.cloudUserId ?? undefined);
+        if (cleanup.undoIgnore)
+          await clearIgnoredAutoSyncSkill(cleanup.skillName, cleanup.cloudUserId ?? undefined);
       } else {
         for (const link of cleanup.links) {
           if (!canMutate()) return false;
-          if (fileIdentity(link.path) !== link.identity || fs.readlinkSync(link.path) !== link.value) continue;
+          if (
+            fileIdentity(link.path) !== link.identity ||
+            fs.readlinkSync(link.path) !== link.value
+          )
+            continue;
           const currentTarget = fileIdentity(link.path, true);
           // Remove only links still serving the old source (external imports),
           // or broken links whose source is still absent. A replaced source wins.
-          if ((cleanup.linkOnly && currentTarget === cleanup.sourceIdentity
-              && fileIdentity(cleanup.operationPath) !== cleanup.operationIdentity)
-            || (currentTarget === null && fileIdentity(cleanup.resolved, true) === null)) fs.unlinkSync(link.path);
+          if (
+            (cleanup.linkOnly &&
+              currentTarget === cleanup.sourceIdentity &&
+              fileIdentity(cleanup.operationPath) !== cleanup.operationIdentity) ||
+            (currentTarget === null && fileIdentity(cleanup.resolved, true) === null)
+          )
+            fs.unlinkSync(link.path);
         }
         const { registryMatch } = cleanup;
         if (registryMatch && fileIdentity(registryMatch.installPath) === null) {
           await registryService.removeInstall(registryMatch.skillName, registryMatch.installPath, {
-            expected: registryMatch.entry, canMutate,
+            expected: registryMatch.entry,
+            canMutate,
             shouldRemove: () => fileIdentity(registryMatch.installPath) === null,
           });
         }
         if (cleanup.activation && fileIdentity(cleanup.resolved, true) === null) {
-          await clearSkillActivationSnapshot(cleanup.activation,
-            () => canMutate() && fileIdentity(cleanup.resolved, true) === null);
+          await clearSkillActivationSnapshot(
+            cleanup.activation,
+            () => canMutate() && fileIdentity(cleanup.resolved, true) === null,
+          );
         }
       }
       if (!canMutate()) return false;
@@ -1221,7 +1364,10 @@ async function finishUninstallCleanup(
   }
 }
 
-export async function retryUninstallCleanup(token: string, canMutate: () => boolean): Promise<boolean> {
+export async function retryUninstallCleanup(
+  token: string,
+  canMutate: () => boolean,
+): Promise<boolean> {
   const cleanup = readUninstallCleanup(token);
   if (!cleanup) return true;
   const allowed = () => cleanup.ownerId === getCurrentDataOwnerId() && canMutate();
@@ -1247,7 +1393,11 @@ export async function retryUninstallCleanup(token: string, canMutate: () => bool
   }
 }
 
-async function shouldRecordAutoSyncIgnore(skillName: string, registryEntry: StoredInstall, userId?: string): Promise<boolean> {
+async function shouldRecordAutoSyncIgnore(
+  skillName: string,
+  registryEntry: StoredInstall,
+  userId?: string,
+): Promise<boolean> {
   if (registryEntry.autoSynced === true) return true;
   if (registryEntry.origin !== 'installed' || registryEntry.autoSynced !== undefined) return false;
   // 兼容 auto-sync 首版：当时 registry 没有 autoSynced 字段，候选集合来自最近一次 auto-sync 配置。

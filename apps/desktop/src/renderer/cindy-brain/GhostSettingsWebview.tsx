@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CircleAlert, LayoutGrid, MoonStar } from 'lucide-react';
 import type { WebviewTag } from 'electron';
@@ -132,10 +132,12 @@ function SettingsWebviewBody({
   ghost,
   appearance,
   dataOwnerId,
+  hostAccount = false,
 }: {
   ghost: InstalledGhost;
   appearance: 'settings' | 'plugin';
   dataOwnerId: string | null;
+  hostAccount?: boolean;
 }): ReactNode {
   const [crashed, setCrashed] = useState(false);
   const [generation, setGeneration] = useState(0);
@@ -226,6 +228,18 @@ function SettingsWebviewBody({
       }
       const prepareResponsiveLayout = webview
         .executeJavaScript(RESPONSIVE_STYLE_SCRIPT)
+        .then(() => {
+          if (!hostAccount || manifest.id !== 'cindy-github') return;
+          // Compatibility with the official 1.2.7 settings page: the host owns
+          // account status and disclosure; keep the plugin's write-only PAT form.
+          return webview.executeJavaScript(`(() => {
+            const style = document.createElement('style');
+            style.textContent = '#legacy-account,#host-account,body>.label-row,body>.hint,#test{display:none!important} #other-methods>summary{display:none!important}';
+            document.head.appendChild(style);
+            const methods = document.getElementById('other-methods');
+            if (methods) methods.open = true;
+          })()`);
+        })
         .catch(() => {});
       // 结构 CSS 先落地再量(html/body 钉 auto 会改变 body 高,顺序反了首量
       // 就是错值);脚本自带 id 守卫,dom-ready 因 guest 内跳转重入时幂等。
@@ -272,6 +286,7 @@ function SettingsWebviewBody({
     fixedHeight,
     dataOwnerId,
     partitionClaim,
+    hostAccount,
   ]);
 
   if (crashed) {
@@ -303,12 +318,16 @@ export function GhostSettingsWebview({
   ghost,
   title,
   appearance = 'settings',
+  account,
+  reloadKey = 0,
 }: {
   ghost: InstalledGhost;
   /** Product-facing section title; settings keeps the legacy fallback. */
   title?: string;
   /** Plugin detail uses the same shared surface as Tool and Permission cards. */
   appearance?: 'settings' | 'plugin';
+  account?: ReactNode;
+  reloadKey?: number;
 }): ReactNode {
   const { t } = useTranslation();
   const { mode, dataOwnerId } = useAuth();
@@ -324,20 +343,36 @@ export function GhostSettingsWebview({
           : 'border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
       )}
     >
-      <div className="flex items-center gap-2">
-        <LayoutGrid size={14} className="text-[var(--text-tertiary)]" />
-        <p
-          className={cn(
-            'font-medium text-[var(--text-primary)]',
-            appearance === 'plugin' ? 'text-14 leading-[1.571]' : 'text-13',
-          )}
-        >
-          {title ?? t('settings.ghosts.detail.customSlotTitle')}
-        </p>
-      </div>
-      {ghost.enabled ? (
+      {!account && (
+        <div className="flex items-center gap-2">
+          <LayoutGrid size={14} className="text-[var(--text-tertiary)]" />
+          <p
+            className={cn(
+              'font-medium text-[var(--text-primary)]',
+              appearance === 'plugin' ? 'text-14 leading-[1.571]' : 'text-13',
+            )}
+          >
+            {title ?? t('settings.ghosts.detail.customSlotTitle')}
+          </p>
+        </div>
+      )}
+      {ghost.enabled && <Fragment key={`account:${ownerKey}`}>{account}</Fragment>}
+      {ghost.enabled && account ? (
+        <details key={`methods:${ownerKey}`} className="group">
+          <summary className="w-fit cursor-pointer rounded-full py-2 text-12 text-[var(--text-secondary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
+            {t('ccAgent.gitContext.pr.setup.account.otherMethods')}
+          </summary>
+          <SettingsWebviewBody
+            key={JSON.stringify([ownerKey, manifest.id, manifest.version, reloadKey])}
+            ghost={ghost}
+            appearance={appearance}
+            dataOwnerId={dataOwnerId}
+            hostAccount
+          />
+        </details>
+      ) : ghost.enabled ? (
         <SettingsWebviewBody
-          key={JSON.stringify([ownerKey, manifest.id, manifest.version])}
+          key={JSON.stringify([ownerKey, manifest.id, manifest.version, reloadKey])}
           ghost={ghost}
           appearance={appearance}
           dataOwnerId={dataOwnerId}

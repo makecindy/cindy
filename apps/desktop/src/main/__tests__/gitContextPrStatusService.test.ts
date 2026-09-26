@@ -29,7 +29,9 @@ function remote(partial: Partial<PrRemoteState>): PrRemoteState {
 describe('mapRemoteToStatus', () => {
   it('四态映射:merged 优先于 closed,draft 仅在 open', () => {
     expect(mapRemoteToStatus(remote({ state: 'closed', merged: true }))).toBe('merged');
-    expect(mapRemoteToStatus(remote({ state: 'closed', merged_at: '2026-06-12T00:00:00Z' }))).toBe('merged');
+    expect(mapRemoteToStatus(remote({ state: 'closed', merged_at: '2026-06-12T00:00:00Z' }))).toBe(
+      'merged',
+    );
     expect(mapRemoteToStatus(remote({ state: 'closed' }))).toBe('closed');
     expect(mapRemoteToStatus(remote({ draft: true }))).toBe('draft');
     expect(mapRemoteToStatus(remote({}))).toBe('open');
@@ -51,6 +53,16 @@ describe('filterPrStatusQueriesForRefs', () => {
 });
 
 describe('PrStatusService', () => {
+  it('expired credentials offer local sign-in while remote callers retain no-token', async () => {
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: async () => {
+        throw Object.assign(new Error('Unauthorized'), { status: 401 });
+      },
+    });
+    expect(await svc.getStatuses([Q])).toMatchObject([{ reason: 'gh-not-logged-in' }]);
+    expect(await svc.getStatuses([Q], { remote: true })).toMatchObject([{ reason: 'no-token' }]);
+  });
   it('正常查询返回状态与标题', async () => {
     const svc = new PrStatusService({
       readToken: TOKEN_OK,
@@ -82,7 +94,10 @@ describe('PrStatusService', () => {
       readToken: TOKEN_OK,
       fetchPr: async () => remote({}),
     });
-    expect((await withoutCount.getStatuses([Q]))[0]).toMatchObject({ ok: true, unresolvedCount: null });
+    expect((await withoutCount.getStatuses([Q]))[0]).toMatchObject({
+      ok: true,
+      unresolvedCount: null,
+    });
   });
 
   it('TTL 内命中缓存,过期后重新拉取', async () => {
@@ -104,9 +119,7 @@ describe('PrStatusService', () => {
 
   it('并发同一 PR 只发一次请求(in-flight 去重)', async () => {
     let resolveFetch!: (v: PrRemoteState) => void;
-    const fetchPr = vi.fn(
-      () => new Promise<PrRemoteState>((res) => (resolveFetch = res)),
-    );
+    const fetchPr = vi.fn(() => new Promise<PrRemoteState>((res) => (resolveFetch = res)));
     const svc = new PrStatusService({ readToken: TOKEN_OK, fetchPr });
     const p1 = svc.getStatuses([Q]);
     const p2 = svc.getStatuses([Q]);

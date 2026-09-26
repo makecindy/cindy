@@ -113,7 +113,7 @@ describe('createGhCliTokenSource', () => {
     expect(execFileFn).toHaveBeenCalledTimes(1);
   });
 
-  it('可用性探测只执行 gh auth status，不读取或污染 token cache', async () => {
+  it('可用性探测只执行静默账号 API，不读取或污染 token cache', async () => {
     const execFileFn = vi.fn(
       (
         _file: string,
@@ -121,9 +121,9 @@ describe('createGhCliTokenSource', () => {
         opts: { timeout: number },
         cb: ExecCb,
       ) => {
-        if (args[1] === 'status') {
+        if (args[0] === 'api') {
           expect(opts.timeout).toBeLessThanOrEqual(1_000);
-          cb(null, 'logged in as octocat', '');
+          cb(null, '', '');
         } else {
           expect(opts.timeout).toBe(3_000);
           cb(null, 'gho_after_probe', '');
@@ -136,7 +136,7 @@ describe('createGhCliTokenSource', () => {
     expect(await src.probeAvailability()).toBe(true);
     expect(execFileFn).toHaveBeenCalledWith(
       expectedGhExecutable,
-      ['auth', 'status', '--hostname', 'github.com'],
+      ['api', '--hostname', 'github.com', 'user', '--silent'],
       { timeout: expect.any(Number) },
       expect.any(Function),
     );

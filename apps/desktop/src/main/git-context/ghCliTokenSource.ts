@@ -8,10 +8,9 @@
  * 实现要点:
  *   - `gh auth token` 输出当前登录 token(通常 gho_ 前缀 OAuth token),
  *     对 REST 只读查询(PR 状态)权限足够。
- *   - GUI app(packaged Electron)的 PATH 不含 homebrew 等目录,先探测各平台
- *     常见绝对路径,找不到再退回裸 'gh' 走 PATH。
- *   - 正缓存默认 5 min;**负缓存默认 30s**——UI 提示用户跑 gh auth login,
- *     登录完成后最迟 30s 内生效,不能让"未登录"被钉死 5 分钟(Codex review P2)。
+ *   - 共享来源优先使用 Cindy 受管安装，其次系统目录及 ~/.local/bin，最后走 PATH。
+ *   - 正缓存默认 5 min，负缓存默认 30s；内置登录完成时主动 invalidate，
+ *     并隔离登录前的在途读取，不需要重启或等待 TTL。
  *     没有缓存的话每次徽标刷新都会 spawn 一次 gh。
  *   - 依赖注入(execFile / exists / platform / now),单测零子进程。
  */
@@ -20,15 +19,12 @@ import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 
 import { createLogger } from '../logger.js';
+import { resolveGhBinary as resolveSharedGhBinary, systemGhBinary } from './ghBinary.js';
 
 const log = createLogger('git-context/gh-cli');
-
-/** 各平台 gh 常见安装位置(按命中概率排序);都不存在则退回裸 'gh' 走 PATH。 */
-const GH_CANDIDATES: Record<string, string[]> = {
-  darwin: ['/opt/homebrew/bin/gh', '/usr/local/bin/gh'],
-  linux: ['/usr/bin/gh', '/usr/local/bin/gh', '/home/linuxbrew/.linuxbrew/bin/gh'],
-  win32: ['C:\\Program Files\\GitHub CLI\\gh.exe', 'C:\\Program Files (x86)\\GitHub CLI\\gh.exe'],
-};
+// Check the active credential without the newer auth status --active flag.
+// --silent discards the account response; callers only consume the exit code.
+export const GH_AUTH_CHECK_ARGS = ['api', '--hostname', 'github.com', 'user', '--silent'];
 
 const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_NEGATIVE_CACHE_TTL_MS = 30_000;
@@ -36,6 +32,7 @@ const GH_TIMEOUT_MS = 3_000;
 const GH_PROBE_TIMEOUT_MS = 800;
 
 export interface GhCliTokenSourceDeps {
+  resolveBinary?: () => Promise<string>;
   execFileFn?: (
     file: string,
     args: string[],
@@ -64,6 +61,7 @@ export type GhCliTokenReadResult =
   { ok: true; token: string } | { ok: false; reason: GhCliTokenUnavailableReason };
 
 export interface GhCliTokenSource {
+  invalidate(): void;
   /** 返回本地 gh 登录 token;未安装 / 未登录 / 超时返回 null,永不抛错。 */
   readToken(): Promise<string | null>;
   /** 同 readToken,但保留拿不到 token 的原因(共享同一份缓存)。永不抛错。 */
@@ -95,31 +93,34 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
 
   let cached: { result: GhCliTokenReadResult; expiresAt: number } | null = null;
   let inFlight: Promise<GhCliTokenReadResult> | null = null;
+  let generation = 0;
 
   function resolveGhBinary(): string {
-    for (const candidate of GH_CANDIDATES[platform] ?? []) {
-      if (existsFn(candidate)) return candidate;
-    }
-    return platform === 'win32' ? 'gh.exe' : 'gh';
+    return systemGhBinary(platform, existsFn);
   }
 
   async function fetchToken(): Promise<GhCliTokenReadResult> {
-    const bin = resolveGhBinary();
+    const bin = deps.resolveBinary ? await deps.resolveBinary() : resolveGhBinary();
     return new Promise<GhCliTokenReadResult>((resolve) => {
       try {
-        execFileFn(bin, ['auth', 'token'], { timeout: GH_TIMEOUT_MS }, (err, stdout) => {
-          if (err) {
-            // 失败只 debug 级记录;原因分类留给 UI 决定引导动作。
-            const reason = classifyExecError(err);
-            log.debug('gh auth token unavailable', { bin, reason, err: String(err) });
-            resolve({ ok: false, reason });
-            return;
-          }
-          const token = stdout.trim();
-          resolve(
-            token.length > 0 ? { ok: true, token } : { ok: false, reason: 'gh-not-logged-in' },
-          );
-        });
+        execFileFn(
+          bin,
+          ['auth', 'token', '--hostname', 'github.com'],
+          { timeout: GH_TIMEOUT_MS },
+          (err, stdout) => {
+            if (err) {
+              // 失败只 debug 级记录;原因分类留给 UI 决定引导动作。
+              const reason = classifyExecError(err);
+              log.debug('gh auth token unavailable', { reason });
+              resolve({ ok: false, reason });
+              return;
+            }
+            const token = stdout.trim();
+            resolve(
+              token.length > 0 ? { ok: true, token } : { ok: false, reason: 'gh-not-logged-in' },
+            );
+          },
+        );
       } catch (err) {
         log.debug('gh spawn threw', { err: String(err) });
         resolve({ ok: false, reason: 'gh-missing' });
@@ -130,25 +131,28 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
   async function readTokenDetailed(): Promise<GhCliTokenReadResult> {
     if (cached && cached.expiresAt > now()) return cached.result;
     if (inFlight) return inFlight;
+    const gen = generation;
     inFlight = fetchToken()
       .then((result) => {
-        cached = { result, expiresAt: now() + (result.ok ? ttl : negativeTtl) };
+        if (gen === generation) {
+          cached = { result, expiresAt: now() + (result.ok ? ttl : negativeTtl) };
+        }
         return result;
       })
       .finally(() => {
-        inFlight = null;
+        if (gen === generation) inFlight = null;
       });
     return inFlight;
   }
 
   async function probeAvailability(): Promise<boolean> {
-    const bin = resolveGhBinary();
+    const bin = deps.resolveBinary ? await deps.resolveBinary() : resolveGhBinary();
     return new Promise<boolean>((resolve) => {
       try {
         // stdout/stderr 都不进入日志；该调用只消费退出码，绝不取得 token。
         execFileFn(
           bin,
-          ['auth', 'status', '--hostname', 'github.com'],
+          GH_AUTH_CHECK_ARGS,
           { timeout: GH_PROBE_TIMEOUT_MS },
           (err) => resolve(err === null),
         );
@@ -159,6 +163,11 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
   }
 
   return {
+    invalidate() {
+      generation += 1;
+      cached = null;
+      inFlight = null;
+    },
     probeAvailability,
     readTokenDetailed,
     async readToken(): Promise<string | null> {
@@ -175,6 +184,7 @@ let sharedSource: GhCliTokenSource | null = null;
  * 缓存互不可见 —— 同一段时间会重复 spawn `gh`,负缓存也各算一套。
  */
 export function getSharedGhCliTokenSource(): GhCliTokenSource {
-  if (!sharedSource) sharedSource = createGhCliTokenSource();
+  if (!sharedSource)
+    sharedSource = createGhCliTokenSource({ resolveBinary: resolveSharedGhBinary });
   return sharedSource;
 }

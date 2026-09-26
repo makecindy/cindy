@@ -7,7 +7,7 @@
  * 但 error 分支一旦优先于 hasItems,用户点一次刷新就会丢失整页内容。
  */
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MyIssueItem, MyIssuesResult } from '@/../shared/myIssues';
@@ -35,6 +35,8 @@ vi.mock('react-i18next', () => ({
 }));
 
 const { IssueTrackerFeatureLayout } = await import('../IssueTrackerFeatureLayout');
+const { useMyIssues: realUseMyIssues } =
+  await vi.importActual<typeof import('../hooks/useMyIssues')>('../hooks/useMyIssues');
 
 function item(over: Partial<MyIssueItem> = {}): MyIssueItem {
   return {
@@ -91,10 +93,56 @@ afterEach(() => {
 });
 
 describe('IssueTrackerFeatureLayout 内容区分支', () => {
-  it('刷新失败但已有数据:保留列表,错误降级成提示条', () => {
+  it('hides connect for a working GitHub account and restores it when the connection fails', () => {
+    const connected = result([], { githubEnhancement: { login: 'test', source: 'gh-cli' } });
+    useMyIssuesMock.mockReturnValue(state({ data: connected }));
+    const { rerender } = render(<IssueTrackerFeatureLayout />);
+    expect(screen.queryByText('ccAgent.gitContext.pr.setup.stages.login.title')).toBeNull();
     useMyIssuesMock.mockReturnValue(
-      state({ data: result([item()]), error: 'ECONNRESET' }),
+      state({ data: { ...connected, githubEnhancementFailed: true } }),
     );
+    rerender(<IssueTrackerFeatureLayout />);
+    expect(screen.getByText('ccAgent.gitContext.pr.setup.stages.login.title')).toBeTruthy();
+  });
+  it('connects GitHub without hiding existing issues and refreshes after success', async () => {
+    useMyIssuesMock.mockImplementation(realUseMyIssues);
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, ...result([item()]) })
+      .mockResolvedValue({
+        success: true,
+        ...result([item()], { githubEnhancement: { source: 'gh-cli', login: 'test' } }),
+      });
+    let connected!: () => void;
+    Object.assign(window.electronAPI, {
+      maker: { listMyIssues: list, getMyIssuesSnapshot: async () => null },
+      gitContext: {
+        onGithubConnected: (listener: () => void) => {
+          connected = listener;
+          return () => {};
+        },
+        githubSetupStatus: async () => ({ phase: 'connected' }),
+        startGithubSetup: async () => {
+          connected();
+          return { phase: 'connected' };
+        },
+      },
+    });
+    render(<IssueTrackerFeatureLayout />);
+    await screen.findByText('已经加载出来的那条 issue');
+    fireEvent.click(screen.getByText('ccAgent.gitContext.pr.setup.stages.login.title'));
+    fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.connect'));
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(list).toHaveBeenLastCalledWith({ force: true });
+    expect(screen.getByText('已经加载出来的那条 issue')).toBeTruthy();
+    expect(screen.queryByText('ccAgent.gitContext.pr.setup.stages.login.title')).toBeNull();
+    // Hiding the entry must not tear down the success dialog before Done is clicked.
+    fireEvent.click(screen.getByText('ccAgent.gitContext.pr.setup.done'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+  it('刷新失败但已有数据:保留列表,错误降级成提示条', () => {
+    useMyIssuesMock.mockReturnValue(state({ data: result([item()]), error: 'ECONNRESET' }));
     render(<IssueTrackerFeatureLayout />);
 
     // 列表还在,用户不丢内容。
@@ -127,9 +175,7 @@ describe('IssueTrackerFeatureLayout 内容区分支', () => {
   it('首屏取数期间保留引导内容,不换成 loading 文案(engineering-conventions §7)', () => {
     // 平台通道总 deadline 可达 12s。换成一行「加载中」会造成 引导 → loading → 列表
     // 两次跳变;而一条都没有的用户(最常见)看到的引导页本该从头到尾没动过。
-    useMyIssuesMock.mockReturnValue(
-      state({ loading: true, data: null, hasFreshData: false }),
-    );
+    useMyIssuesMock.mockReturnValue(state({ loading: true, data: null, hasFreshData: false }));
     render(<IssueTrackerFeatureLayout />);
 
     // 引导正文与 CTA 在场,但**一个标题都不渲染** —— 标题是结论,这时还没查完。
@@ -151,9 +197,7 @@ describe('IssueTrackerFeatureLayout 内容区分支', () => {
   });
 
   it('首屏取数完成后引导原子切成列表 —— 中间不经过第三种形态', () => {
-    useMyIssuesMock.mockReturnValue(
-      state({ loading: true, data: null, hasFreshData: false }),
-    );
+    useMyIssuesMock.mockReturnValue(state({ loading: true, data: null, hasFreshData: false }));
     const view = render(<IssueTrackerFeatureLayout />);
     expect(screen.getByRole('button', { name: 'issueTracker.mine.startIssueChat' })).toBeTruthy();
 

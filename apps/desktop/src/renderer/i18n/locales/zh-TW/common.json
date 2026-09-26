@@ -10404,14 +10404,89 @@
         "clickToOpen": "點擊在瀏覽器開啟 PR",
         "guidance": {
           "login": {
-            "hint": "點擊讓 Agent 幫你登入",
-            "aria": "PR #{{number}} 狀態不可用：讓 Agent 登入 GitHub",
-            "prompt": "請幫我登入 GitHub CLI：執行 `gh auth login -h github.com -w`，把出現的一次性裝置碼和網址告訴我；我在瀏覽器完成授權後，你再用 `gh auth status` 確認登入成功。"
+            "hint": "點擊連接 GitHub",
+            "aria": "PR #{{number}} 狀態不可用：連接 GitHub"
           },
           "install": {
-            "hint": "點擊讓 Agent 幫你安裝並登入",
-            "aria": "PR #{{number}} 狀態不可用：讓 Agent 安裝並登入 GitHub CLI",
-            "prompt": "請幫我安裝 GitHub CLI（gh，macOS 用 `brew install gh`，Windows 用 `winget install GitHub.cli`），然後執行 `gh auth login -h github.com -w` 登入，把出現的一次性裝置碼和網址告訴我；我在瀏覽器完成授權後，你再用 `gh auth status` 確認登入成功。"
+            "hint": "點擊連接 GitHub",
+            "aria": "PR #{{number}} 狀態不可用：連接 GitHub"
+          }
+        },
+        "setup": {
+          "install": "安裝並繼續",
+          "connect": "登入 GitHub",
+          "cancel": "取消",
+          "retry": "重試",
+          "done": "完成",
+          "openBrowser": "開啟 GitHub 授權",
+          "deviceCode": "一次性裝置碼",
+          "copyCode": "複製裝置碼",
+          "copied": "已複製",
+          "copyFailed": "無法複製，請手動選取並複製裝置碼。",
+          "openFailed": "無法開啟瀏覽器，請手動前往 github.com/login/device。",
+          "stages": {
+            "install": {
+              "title": "安裝 GitHub CLI",
+              "description": "安裝 GitHub CLI，以連接你的 GitHub 帳號。"
+            },
+            "login": {
+              "title": "連接 GitHub",
+              "description": "連接你的 GitHub 帳號；尚未安裝 GitHub CLI 時會自動安裝。"
+            },
+            "checking": {
+              "title": "正在檢查連接…",
+              "description": "正在確認 GitHub 登入狀態。"
+            },
+            "downloading": {
+              "title": "正在下載 GitHub CLI…",
+              "description": "下載完成後會自動安裝。"
+            },
+            "installing": {
+              "title": "正在安裝 GitHub CLI…",
+              "description": "下載已完成。"
+            },
+            "preparing": {
+              "title": "正在準備登入…",
+              "description": "正在取得一次性裝置碼。"
+            },
+            "authorizing": {
+              "title": "登入 GitHub",
+              "description": "複製下方裝置碼，在 GitHub 頁面輸入並授權。"
+            },
+            "connected": {
+              "title": "GitHub 已連接",
+              "description": "可以關閉此視窗，繼續使用。"
+            },
+            "cancelled": {
+              "title": "已取消連接",
+              "description": "準備好後可以重新連接。"
+            },
+            "unavailable": {
+              "title": "無法讀取進度",
+              "description": "暫時無法取得目前進度，請重試。"
+            },
+            "error": {
+              "title": "連接未完成"
+            }
+          },
+          "errors": {
+            "unsupported": "暫不支援此作業系統或處理器。",
+            "install": "安裝失敗，請檢查網路和磁碟空間後重試。",
+            "login": "登入失敗或授權遭拒，請重試取得新裝置碼。",
+            "timeout": "裝置碼已過期，請重試取得新裝置碼。"
+          },
+          "account": {
+            "checking": "正在檢查 GitHub 連接…",
+            "connected": "已連接 · @{{login}}",
+            "missing": "連接 GitHub 後即可使用。",
+            "auth": "授權已失效，請重新登入或更換下方備用 Token。",
+            "network": "暫時無法連接 GitHub，請檢查網路後重試。",
+            "forbidden": "GitHub 暫時無法驗證此連接，請檢查權限或請求額度後重試。",
+            "gh-cli": "目前使用本機 GitHub 登入",
+            "token": "目前使用備用 Token",
+            "recheck": "檢查連接",
+            "summary": "管理 GitHub 儲存庫、Issues、PR 和 Actions。",
+            "otherMethods": "其他連線方式"
           }
         },
         "unresolved": "{{count}} 條未解決的 review 評論"
