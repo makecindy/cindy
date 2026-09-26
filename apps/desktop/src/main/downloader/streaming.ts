@@ -145,23 +145,29 @@ export async function executeStreaming(ctx: TransportContext): Promise<Transport
     };
     writeMeta(opts.targetPath, meta);
     let lastMeta = Date.now();
-    for (;;) {
-      arm(opts.timeout?.idleMs ?? 30_000);
-      const { done, value } = await reader.read();
-      clearTimeout(timer);
-      if (controller.signal.aborted) throw new DownloadError('ABORTED', 'Download cancelled');
-      if (done) break;
-      if (opts.maxBytes !== undefined && tracker.getLoaded() + value.length > opts.maxBytes) {
-        throw new DownloadError('CHECKSUM', 'Download exceeds declared size');
+    try {
+      for (;;) {
+        arm(opts.timeout?.idleMs ?? 30_000);
+        const { done, value } = await reader.read();
+        clearTimeout(timer);
+        if (controller.signal.aborted) throw new DownloadError('ABORTED', 'Download cancelled');
+        if (done) break;
+        if (opts.maxBytes !== undefined && tracker.getLoaded() + value.length > opts.maxBytes) {
+          throw new DownloadError('CHECKSUM', 'Download exceeds declared size');
+        }
+        await file.writeFile(value);
+        await hasher.update(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+        tracker.advance(value.length);
+        meta.downloadedBytes = tracker.getLoaded();
+        if (Date.now() - lastMeta > 2000) {
+          writeMeta(opts.targetPath, meta);
+          lastMeta = Date.now();
+        }
       }
-      await file.writeFile(value);
-      await hasher.update(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
-      tracker.advance(value.length);
-      meta.downloadedBytes = tracker.getLoaded();
-      if (Date.now() - lastMeta > 2000) {
-        writeMeta(opts.targetPath, meta);
-        lastMeta = Date.now();
-      }
+    } finally {
+      // Persist the completed prefix before retry/cancel can observe the partial file.
+      // A failed partial write still mismatches disk size and is conservatively discarded.
+      writeMeta(opts.targetPath, meta);
     }
     opts.onVerifying?.();
     const sha256 = await hasher.digest();

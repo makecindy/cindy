@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock('electron', () => ({ net: { fetch: mocks.fetch } }));
 import { executeStreaming } from '../streaming';
-import { writeMeta } from '../resume';
+import { readMeta, writeMeta } from '../resume';
 import { withRetry } from '../retry';
 
 afterEach(() => vi.restoreAllMocks());
@@ -49,6 +49,54 @@ async function fixture(run: (root: string, opts: any) => Promise<void>) {
   }
 }
 const execute = (opts: any) => executeStreaming({ opts, logger: {}, resumedFromBytes: 0 });
+
+it.each(['network', 'cancel', 'timeout'])(
+  'retains the completed prefix after %s between checkpoints',
+  async (failure) =>
+    fixture(async (_, opts) => {
+      const abort = new AbortController();
+      let pulls = 0;
+      mocks.fetch.mockReset().mockImplementationOnce(
+        async (_url, init) =>
+          new Response(
+            new ReadableStream(
+              {
+                pull(c) {
+                  if (++pulls === 1) {
+                    c.enqueue(Buffer.from('abc'));
+                    return;
+                  }
+                  if (failure === 'network') c.error(new Error('connection reset'));
+                  else {
+                    init.signal.addEventListener('abort', () => c.error(new Error('aborted')), {
+                      once: true,
+                    });
+                    if (failure === 'cancel') abort.abort();
+                  }
+                },
+              },
+              { highWaterMark: 0 },
+            ),
+            { headers: { etag: 'v1' } },
+          ),
+      );
+      await expect(
+        execute({ ...opts, signal: abort.signal, timeout: { idleMs: 20 } }),
+      ).rejects.toMatchObject({ code: failure === 'cancel' ? 'ABORTED' : 'NETWORK' });
+      expect(await fs.readFile(opts.targetPath + '.part', 'utf8')).toBe('abc');
+      expect(readMeta(opts.targetPath)?.downloadedBytes).toBe(3);
+      mocks.fetch.mockResolvedValueOnce(
+        new Response('def', {
+          status: 206,
+          headers: { 'content-range': 'bytes 3-5/6', 'content-length': '3' },
+        }),
+      );
+      await expect(execute(opts)).resolves.toMatchObject({ size: 6 });
+      expect(mocks.fetch.mock.calls[1][1].headers).toEqual({ Range: 'bytes=3-', 'If-Range': 'v1' });
+      expect(await fs.readFile(opts.targetPath, 'utf8')).toBe('abcdef');
+      expect(readMeta(opts.targetPath)).toBeNull();
+    }),
+);
 
 it('validates each redirect and never sends credentials', async () =>
   fixture(async (_, opts) => {
