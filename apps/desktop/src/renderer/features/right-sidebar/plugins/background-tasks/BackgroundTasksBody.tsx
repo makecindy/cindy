@@ -61,6 +61,8 @@ import {
   listSessionBackgroundTasksFor,
 } from '@/lib/makerTransport';
 import { formatCompactTokens } from '@/lib/usageFormat';
+import { clearSystemSessionAttention, getSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import { getRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import type { Message } from '@/lib/ccAgent.types';
 import type { WorkflowProgress } from '../../../../../shared/workflow-progress';
 import type { TabKindHostContext } from '../../types';
@@ -331,6 +333,23 @@ function TaskRow({
     item.kind === 'workflow' ||
     (Boolean(sessionId) && Boolean(item.toolCallClientId) && !isSidebarWindow());
   const handleClick = useCallback(() => {
+    if (sessionId && item.status === 'completed') {
+      const kind = getSessionAttentionKind(sessionId);
+      const activity = getRemoteSessionActivity(sessionId, getSessionDeviceId(sessionId));
+      // A task row has no identity for the session's current alert. Opening it
+      // is navigation, never explicit disposal of an error or input request.
+      if (
+        kind !== 'error' && kind !== 'awaiting' &&
+        activity?.phase !== 'error' && activity?.phase !== 'needs-interaction'
+      ) {
+        clearSystemSessionAttention(sessionId, 'passive');
+        // Pair the receipt with a post-click sync. The store still requires the
+        // actual session content to be displayed before a remote receipt leaves.
+        if (isRemoteSessionSticky(sessionId)) {
+          void makerChatStore.reconcileRemoteMessages(sessionId, { force: true });
+        }
+      }
+    }
     if (item.kind === 'workflow') {
       onOpenWorkflow(item.key);
       return;
