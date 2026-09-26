@@ -9922,10 +9922,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getDelegationService: () => botDelegationServiceHolder,
     onPaused: (botId) => updateBotRoutineLifecycle(botId, 'pause'),
     onResumed: async (botId) => {
-      await updateBotRoutineLifecycle(botId, 'resume');
-      // Task results that finished while the teammate was paused were held, not retried;
-      // the service retries its own transient failures.
+      // Task results that finished while the teammate was paused were held, not retried.
+      // Start their delivery first and independently: a routine-engine failure below must
+      // not strand them until the next launch. The service retries its own failures.
       void botDelegationServiceHolder?.resumeCompletionDelivery(botId);
+      await updateBotRoutineLifecycle(botId, 'resume');
     },
     onBeforeDelete: (botId) => updateBotRoutineLifecycle(botId, 'delete'),
   });
