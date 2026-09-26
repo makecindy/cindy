@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { createServer } from 'node:net';
+import { llamaCppProcessCommand } from './llamaCppProcess.js';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import {
   chmod,
@@ -402,7 +404,6 @@ export function createLlamaCppService(
           const presets = path.join(root, 'models.ini');
           await writeFile(presets, preset);
           // Never claim or stop another application's server on the managed port.
-          const { createServer } = await import('node:net');
           await new Promise<void>((resolve, reject) => {
             const probe = createServer();
             probe.once('error', () => reject(new Error('PORT_CONFLICT')));
@@ -411,34 +412,32 @@ export function createLlamaCppService(
           signal.throwIfAborted();
           const env = Object.fromEntries(
             Object.entries(process.env).filter(
-              ([key]) => !key.startsWith('LLAMA_') && key !== 'HF_TOKEN',
+              ([key]) =>
+                !key.startsWith('LLAMA_') && !['HF_TOKEN', 'ENV', 'BASH_ENV'].includes(key),
             ),
           );
-          const running = spawn(
-            runtime.binary,
-            [
-              '--host',
-              '127.0.0.1',
-              '--port',
-              String(LLAMACPP_MANAGED_PORT),
-              '--models-dir',
-              modelsRoot,
-              '--models-max',
-              '1',
-              '--models-preset',
-              presets,
-              '--parallel',
-              '1',
-              '--jinja',
-            ],
-            {
-              cwd: path.dirname(runtime.binary),
-              env: { ...env, LLAMA_CACHE: path.join(root, 'cache') },
-              stdio: 'ignore',
-              windowsHide: true,
-              detached: process.platform !== 'win32',
-            },
-          );
+          const command = llamaCppProcessCommand(runtime.binary, [
+            '--host',
+            '127.0.0.1',
+            '--port',
+            String(LLAMACPP_MANAGED_PORT),
+            '--models-dir',
+            modelsRoot,
+            '--models-max',
+            '1',
+            '--models-preset',
+            presets,
+            '--parallel',
+            '1',
+            '--jinja',
+          ]);
+          const running = spawn(command.binary, command.args, {
+            cwd: path.dirname(runtime.binary),
+            env: { ...env, LLAMA_CACHE: path.join(root, 'cache') },
+            stdio: ['pipe', 'ignore', 'ignore'],
+            windowsHide: true,
+            detached: process.platform !== 'win32',
+          });
           child = running;
           let failed = false;
           running.once('error', () => {
