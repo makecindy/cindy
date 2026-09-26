@@ -1,9 +1,53 @@
-import { it, expect } from 'vitest';
+import { it, expect, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PluginDownloadSlot } from '../downloadSlot';
+import { PluginDownloadCache } from '../downloadCache';
 import type { InstalledGhost } from '../../../shared/ghost';
+it('a destroyed caller cannot enter Node after a delayed lease, even if the plugin remains enabled', async () => {
+  let finish!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const release = vi.fn();
+  const acquire = vi
+    .spyOn(PluginDownloadCache.prototype, 'acquire')
+    .mockImplementation(async () => {
+      await barrier;
+      return { path: '/fixture/artifact', release };
+    });
+  let active = true;
+  const slot = new PluginDownloadSlot({
+    root: () => '/fixture',
+    scope: () => 'owner',
+    send() {},
+    getGhost: () => ({ enabled: true, approval: {}, manifest: { node: {} } }) as InstalledGhost,
+    download: async () => {
+      throw Error('unused');
+    },
+  });
+  const run = vi.fn(async () => ({ ok: true }));
+  try {
+    const request = slot.withNodeDownloads(
+      'p',
+      { downloadTokens: { archive: 'receipt' } },
+      run,
+      () => active,
+    );
+    expect(acquire).toHaveBeenCalledOnce();
+    active = false; // runtime.stop destroys the caller before broker.stopAndWait.
+    finish();
+    expect(await request).toMatchObject({ ok: false });
+    expect(run).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+    expect(await slot.withNodeDownloads('p', {}, run, () => active)).toMatchObject({ ok: false });
+    expect(run).not.toHaveBeenCalled();
+  } finally {
+    finish();
+    acquire.mockRestore();
+  }
+});
 it('shutdown drains cancelled downloads and rejects new downloads and Node handoffs', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-shutdown-')));
   let started!: () => void, finish!: () => void;

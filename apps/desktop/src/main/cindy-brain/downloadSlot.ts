@@ -48,8 +48,10 @@ export class PluginDownloadSlot {
     id: string,
     payload: Record<string, unknown>,
     run: (payload: unknown) => Promise<unknown>,
+    callerActive: () => boolean = () => true,
   ) {
-    if (this.stopped) return { ok: false, errorCode: 'INVALID_REQUEST', message: '下载服务已停止' };
+    if (this.stopped || !callerActive())
+      return { ok: false, errorCode: 'INVALID_REQUEST', message: '下载服务已停止' };
     if (payload.downloadTokens === undefined) return run(payload);
     const releases: Array<() => void> = [];
     try {
@@ -87,6 +89,7 @@ export class PluginDownloadSlot {
       }
       if (
         this.stopped ||
+        !callerActive() ||
         this.deps.scope() !== scope ||
         !this.deps.getGhost(id)?.enabled ||
         JSON.stringify(this.deps.getGhost(id)?.approval) !== approval

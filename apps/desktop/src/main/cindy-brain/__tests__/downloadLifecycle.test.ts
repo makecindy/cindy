@@ -10,8 +10,19 @@ it('uninstall waits for actual Node exit before removing plugin files and cache'
   const body = source.slice(start, source.indexOf('\n}', start));
   const wait = body.indexOf('await getGhostNodeRuntimeBroker().stopAndWait(id)');
   expect(wait).toBeGreaterThan(0);
+  expect(body.indexOf('runtime.stop(id)')).toBeGreaterThan(0);
+  expect(body.indexOf('runtime.stop(id)')).toBeLessThan(wait);
   expect(body.indexOf('await manager.uninstall(')).toBeGreaterThan(wait);
   expect(body.indexOf('await pluginDownloads.removePlugin(')).toBeGreaterThan(wait);
+});
+
+it('Node receipt handoff rechecks the original logic page identity after acquiring files', () => {
+  const start = source.indexOf("if (type === 'node-request')");
+  const body = source.slice(start, source.indexOf('\n    }', start));
+  expect(body).toContain('pluginDownloads.withNodeDownloads(');
+  expect(body).toContain(
+    '!event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id',
+  );
 });
 
 it('quit awaits download drain and Node exit before removing captured anonymous roots', async () => {
