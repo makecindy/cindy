@@ -78,7 +78,11 @@ import {
 } from './markdownImageTargets';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
-import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
+import {
+  isAgentTaskToolName,
+  lookupSubagentRunStatus,
+  type SubagentRunStatusIndex,
+} from '@cindy/maker-shared/agent-task';
 
 import type {
   AgentTaskUpdate,
@@ -439,6 +443,8 @@ interface MessageStreamProps {
   /** The task shell remains, but all prior message content was intentionally cleared. */
   historyCleared?: boolean;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
+  /** Host `subagent_runs` status of this task's Subagents (local tasks only). */
+  subagentRunStatuses?: SubagentRunStatusIndex;
   /** Kept for API compatibility. v2 — no longer threaded into render items
    *  (AgentActionsBlock + ThinkingCard manage their own per-block expand
    *  state via useExpandedBlockMemory). The session-level "is streaming"
@@ -1463,6 +1469,8 @@ export function buildRenderItems(
     /** Keep the stored preparation report out of its own task's visible timeline. */
     cindyMakeSessionId?: string;
     cindyMakeCompletionInComposer?: boolean;
+    /** Durable Subagent status; a terminal record outranks the paired result text. */
+    subagentRunStatuses?: SubagentRunStatusIndex;
   },
 ): {
   items: RenderItem[];
@@ -1957,6 +1965,11 @@ export function buildRenderItems(
           j++;
         }
         const update = findTaskUpdate(taskUpdates, msg);
+        const durableStatus = lookupSubagentRunStatus(
+          opts?.subagentRunStatuses,
+          msg.toolUseId,
+          update,
+        );
         if (msg.toolUseId) renderedTaskKeys.add(msg.toolUseId);
         if (update?.taskId) renderedTaskKeys.add(update.taskId);
         if (update?.parentToolUseId) renderedTaskKeys.add(update.parentToolUseId);
@@ -1966,6 +1979,7 @@ export function buildRenderItems(
           toolCall: msg,
           update,
           ...(msg.agentTaskStatus ? { persistedStatus: msg.agentTaskStatus } : {}),
+          ...(durableStatus ? { durableStatus } : {}),
           ...(result !== undefined && !shouldHideToolResult(toolName, result) ? { result } : {}),
           ...(resultTsMs !== undefined ? { resultTsMs } : {}),
         });
@@ -2246,10 +2260,12 @@ export function buildRenderItems(
         continue;
       }
       seenTaskIds.add(update.taskId);
+      const durableStatus = lookupSubagentRunStatus(opts?.subagentRunStatuses, undefined, update);
       const item: AgentTaskRenderItem = {
         type: 'agent_task',
         key: `task-update-${primaryKey}`,
         update,
+        ...(durableStatus ? { durableStatus } : {}),
       };
       const itemMs = renderItemStartMs(item);
       if (itemMs === null) {
@@ -2300,6 +2316,7 @@ export function buildCachedRenderItems(
     opts?.turnChangeSets,
     opts?.workingDir,
     opts?.botSessionId,
+    opts?.subagentRunStatuses,
   ];
   const index = recentRenderProjections.findIndex((entry) =>
     entry.dependencies.every((value, i) => Object.is(value, dependencies[i])),
@@ -2518,6 +2535,7 @@ function renderWorkGroupChild(
         update={item.update}
         result={item.result}
         persistedStatus={item.persistedStatus}
+        durableStatus={item.durableStatus}
         sessionAgentKind={props.agentKind}
         {...(props.sessionId ? { sessionId: props.sessionId } : {})}
         subagentModel={
@@ -2584,6 +2602,7 @@ export function MessageStream({
   historyLoaded,
   historyCleared = false,
   taskUpdates,
+  subagentRunStatuses,
   isSessionStreaming = false,
   continuationTurnClientId = null,
   continuationInFlightProjectionCapability = 'unknown',
@@ -2839,6 +2858,7 @@ export function MessageStream({
       markdownImageTargetCache: markdownImageTargetCacheRef.current,
       cindyMakeSessionId,
       cindyMakeCompletionInComposer,
+      subagentRunStatuses,
     });
     if (historyView && historySnapshot?.ready) {
       const results = new Map(built.singleResultMap);
@@ -2864,6 +2884,7 @@ export function MessageStream({
             markdownImageTargetCache: markdownImageTargetCacheRef.current,
             cindyMakeSessionId,
             cindyMakeCompletionInComposer,
+            subagentRunStatuses,
           });
           for (const [key, value] of chunk.singleResultMap) results.set(key, value);
           return groupWorkRuns(chunk.items, isSessionStreaming);
@@ -2919,6 +2940,7 @@ export function MessageStream({
     handoff,
     isSessionStreaming,
     taskUpdates,
+    subagentRunStatuses,
     ghostCardSnapshot,
     historyLoaded,
     hasMoreMessages,
@@ -5963,6 +5985,7 @@ export function MessageStream({
                           update={item.update}
                           result={item.result}
                           persistedStatus={item.persistedStatus}
+                          durableStatus={item.durableStatus}
                           sessionAgentKind={agentKind}
                           {...(sessionId ? { sessionId } : {})}
                           subagentModel={

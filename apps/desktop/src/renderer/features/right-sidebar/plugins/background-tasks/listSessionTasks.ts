@@ -19,8 +19,11 @@
 import {
   deriveAgentTaskStatus,
   isAgentTaskToolName,
+  lookupSubagentRunStatus,
+  normalizeAgentTaskTerminalStatus,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
+  type SubagentRunStatusIndex,
 } from '@cindy/maker-shared/agent-task';
 
 import type { Message } from '@/lib/ccAgent.types';
@@ -263,8 +266,10 @@ export function listSessionTasks(input: {
   messages: readonly Message[];
   taskUpdates: ReadonlyMap<string, AgentTaskUpdate> | undefined;
   isSessionStreaming: boolean;
+  /** Host `subagent_runs` status; same source and precedence as the chat cards. */
+  subagentRunStatuses?: SubagentRunStatusIndex;
 }): SessionTaskLists {
-  const { messages, taskUpdates, isSessionStreaming } = input;
+  const { messages, taskUpdates, isSessionStreaming, subagentRunStatuses } = input;
 
   // Pass 0:tool_result 的 toolUseId 查表(与 buildRenderItems Pass 0 同口径)。
   // 同时留住结果内容引用:历史 workflow(update 已随重载清空)从结果文本里
@@ -334,15 +339,20 @@ export function listSessionTasks(input: {
     // 的死任务(同步 Task 没有启动回执,永远不会有结果),断言 running 会让它
     // 永久转圈且无任何收口路径,按 stopped(被中断)呈现。
     const resultText = typeof resultContent === 'string' ? resultContent : undefined;
+    const durableStatus = isWorkflowTool
+      ? undefined
+      : lookupSubagentRunStatus(subagentRunStatuses, toolUseId, update);
     const status: AgentTaskStatus = isWorkflowTool
       ? update?.status ?? (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped')
       : update
         ? deriveAgentTaskStatus(update.status, resultText, {
+            durableStatus,
             resultIsLaunchReceipt:
               subagentSpawnReceiptName(toolName, toolInput, resultText) !== undefined
               || subagentSpawnResultIndicatesRunning(toolName, resultText),
           })
-        : (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped');
+        : normalizeAgentTaskTerminalStatus(durableStatus)
+          ?? (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped');
     const provider: SessionTaskItem['provider'] =
       update?.provider ?? (toolName.startsWith('collab:') ? 'codex' : 'claude-code');
 

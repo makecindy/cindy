@@ -3,6 +3,7 @@ import {
   deriveAgentTaskStatus,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
+  type AgentTaskStatus,
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 import {
@@ -51,6 +52,8 @@ export type AgentTaskRenderItem = {
   update?: AgentTaskUpdate;
   result?: string;
   persistedStatus?: AgentTaskTerminalStatus;
+  /** Host `subagent_runs` status for this call (local tasks); see deriveAgentTaskStatus. */
+  durableStatus?: AgentTaskStatus;
   /** 对应 tool_result 的 createdAt(ms)。历史会话没有 live taskUpdates 时,item 的结束
    *  时间只能靠它 —— 否则跑了半小时以上的 Agent/Task 会让紧随其后的最终答复被空洞守卫
    *  误判(#676 review)。与 tool_segment 的 resultTsMap 同源。 */
@@ -188,6 +191,7 @@ function isRunningAgentTask(it: RenderItem): boolean {
   if (it.type !== 'agent_task') return false;
   const status = deriveAgentTaskStatus(it.update?.status, it.result, {
     persistedStatus: it.persistedStatus,
+    durableStatus: it.durableStatus,
     resultIsLaunchReceipt:
       subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !==
         undefined || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),

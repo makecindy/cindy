@@ -40,6 +40,7 @@ import {
 } from '@cindy/model-providers';
 import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
+import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import {
   Activity,
   AlertCircle,
@@ -1056,6 +1057,13 @@ export function CCAgentSessionView({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
+  // Durable Subagent status for the chat cards. Wait until ownership resolves:
+  // an unresolved task must not read this machine's store for a remote task.
+  const subagentRunStatuses = useSubagentRunStatusIndex({
+    sessionId,
+    deviceId: rightSidebarDeviceLinkDeviceId,
+    enabled: rightSidebarDeviceLinkDeviceId !== undefined,
+  });
 
   /**
    * Does this task own durable Pi Subagent runs?
@@ -4740,6 +4748,7 @@ export function CCAgentSessionView({
       historyLoaded={historyLoaded}
       historyCleared={Boolean(session?.clearedAt)}
       taskUpdates={taskUpdates}
+      subagentRunStatuses={subagentRunStatuses}
       isSessionStreaming={isStreaming}
       continuationTurnClientId={continuationTurnClientId}
       continuationInFlightProjectionCapability={continuationInFlightProjectionCapability}

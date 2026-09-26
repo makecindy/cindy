@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 import {
   deriveAgentTaskStatus,
   formatAgentTaskTitle,
+  type AgentTaskStatus,
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 
@@ -51,6 +52,8 @@ interface AgentTaskCardProps {
   update?: AgentTaskUpdate;
   result?: string;
   persistedStatus?: AgentTaskTerminalStatus;
+  /** Host `subagent_runs` status for this call; see deriveAgentTaskStatus. */
+  durableStatus?: AgentTaskStatus;
   /**
    * subagent-model-chip: 子代理实际跑的模型 raw id,由 MessageStream 用
    * parentToolUseId→model 映射(从子消息 agentMeta 反查)解析后传入,作为
@@ -157,6 +160,7 @@ export function AgentTaskCard({
   update,
   result,
   persistedStatus,
+  durableStatus,
   subagentModel,
   sessionId,
   sessionAgentKind,
@@ -236,6 +240,7 @@ export function AgentTaskCard({
     ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
     : deriveAgentTaskStatus(update?.status, result, {
         persistedStatus,
+        durableStatus,
         resultIsLaunchReceipt:
           subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
           || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
@@ -272,6 +277,11 @@ export function AgentTaskCard({
   const spawnReceiptName = subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result);
   const resultIsPiLaunchReceipt = isPiDurableSubagent
     && subagentSpawnResultIndicatesRunning(toolCall?.toolName, result);
+  // Claude's async receipt is internal metadata addressed to the model (agentId,
+  // output file); it is never the task's summary.
+  const resultIsClaudeLaunchReceipt = !isPiDurableSubagent
+    && provider === 'claude-code'
+    && subagentSpawnResultIndicatesRunning(toolCall?.toolName, result);
   // 判据与抑制规则同 maker-shared 的 buildAgentTaskCardModel:有 live update 时不显示
   // 「已启动」句子(title + 状态已表达),否则 codex 卡会比 Claude 卡多一行冗余文案。
   // PI/Claude detached tool_result 也是启动回执；终态卡必须优先显示后续 durable
@@ -282,7 +292,9 @@ export function AgentTaskCard({
         : t('chat.agentTask.subagentStarted', { name: formatAgentTaskTitle(provider, spawnReceiptName) }))
     : resultIsPiLaunchReceipt
       ? detailText(update?.summary, result)
-      : detailText(result, update?.summary);
+      : resultIsClaudeLaunchReceipt
+        ? detailText(update?.summary)
+        : detailText(result, update?.summary);
   const piResultNeedsCollapse = Boolean(
     isPiDurableSubagent
       && summary
