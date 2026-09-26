@@ -10,7 +10,6 @@ import { useTranslation } from 'react-i18next';
 
 import { computeQuotaPace, type QuotaPace } from '@/lib/quotaPace';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
 import {
   formatQuotaResetCountdown,
   formatQuotaResetAt,
@@ -122,7 +121,6 @@ function WindowBlock({
   breakdown,
   showAbsoluteReset = false,
   compact = false,
-  expanded = false,
   nowMs,
   paceNowMs,
   locale,
@@ -136,7 +134,6 @@ function WindowBlock({
   breakdown?: UsageCardWindow['breakdown'];
   showAbsoluteReset?: boolean;
   compact?: boolean;
-  expanded?: boolean;
   nowMs: number;
   paceNowMs: number | null;
   locale: string | undefined;
@@ -171,83 +168,94 @@ function WindowBlock({
           nowMs: paceNowMs,
         });
   const paceLine = pace === null ? null : formatPaceLine(pace, t);
+  const titleNode = (
+    <div
+      id={titleId}
+      data-severity={severity}
+      title={compact ? title : undefined}
+      className={cn(
+        'font-medium tracking-[-0.005em]',
+        compact ? 'min-w-0 truncate text-13' : 'mb-2 text-14',
+        severity === 'crit' ? 'text-[var(--quota-bar-crit)]' : 'text-[var(--text-primary)]',
+      )}
+    >
+      {title}
+      {severityAnnouncement !== null ? (
+        // 告警不能只依赖颜色；标题与进度条共用对应级别的屏幕阅读器文案。
+        <span className="sr-only">，{severityAnnouncement}</span>
+      ) : null}
+    </div>
+  );
+  const bar = (
+    <QuotaBar
+      usedPercent={window.utilization}
+      showRemaining={showRemaining}
+      severity={severity}
+      aria-labelledby={titleId}
+      aria-valuetext={percentText}
+    />
+  );
+
+  if (compact) {
+    // 嵌入态(设置页)一行一个窗口:标题 | 进度条 | 百分比 | 重置倒计时,列宽由外层 grid 统一,
+    // 各行进度条左右对齐。明细(绝对重置时间 / 节奏 / breakdown)只在悬浮卡里展示。
+    return (
+      <section
+        data-testid="quota-window"
+        className="col-span-full grid grid-cols-subgrid items-center py-[7px] tabular-nums"
+      >
+        {titleNode}
+        {bar}
+        <span className="text-right font-medium text-[var(--text-primary)]">{percentText}</span>
+        <span
+          className="min-w-0 truncate text-right text-12 text-[var(--text-secondary)]"
+          title={resetCountdown ?? undefined}
+        >
+          {resetCountdown}
+        </span>
+      </section>
+    );
+  }
 
   return (
     <section data-testid="quota-window" className="px-4 pb-1 pt-2">
-      <div className={compact ? 'flex flex-wrap items-center gap-x-3 gap-y-1' : undefined}>
-        <div
-          id={titleId}
-          data-severity={severity}
-          className={cn(
-            'font-medium tracking-[-0.005em]',
-            compact ? 'text-13' : 'mb-2 text-14',
-            severity === 'crit' ? 'text-[var(--quota-bar-crit)]' : 'text-[var(--text-primary)]',
-          )}
-        >
-          {title}
-          {severityAnnouncement !== null ? (
-            // 告警不能只依赖颜色；标题与进度条共用对应级别的屏幕阅读器文案。
-            <span className="sr-only">，{severityAnnouncement}</span>
-          ) : null}
-        </div>
-        <QuotaBar
-          className={compact ? 'w-28 shrink-0' : undefined}
-          usedPercent={window.utilization}
-          showRemaining={showRemaining}
-          severity={severity}
-          aria-labelledby={titleId}
-          aria-valuetext={percentText}
-        />
-        <div
-          className={cn(
-            'flex items-baseline justify-between gap-3 tabular-nums',
-            !compact && 'mt-[7px]',
-          )}
-        >
+      <div>
+        {titleNode}
+        {bar}
+        <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
           <span className="font-medium text-[var(--text-primary)]">{percentText}</span>
           {resetCountdown !== null ? (
             <span className="flex min-w-0 flex-col items-end text-right text-12 text-[var(--text-secondary)]">
               <span>{resetCountdown}</span>
-              {!compact && showAbsoluteReset && resetAt !== null && (
+              {showAbsoluteReset && resetAt !== null && (
                 <span>{t('quotaCard.resetAt', { at: resetAt })}</span>
               )}
             </span>
           ) : null}
         </div>
       </div>
-      {(!compact || expanded) && (
-        <>
-          {compact && resetAt !== null && (
-            <div className="mt-1 text-12 text-[var(--text-secondary)]">
-              {t('quotaCard.resetAt', { at: resetAt })}
+      {detail ? <div className="mt-1 text-12 text-[var(--text-secondary)]">{detail}</div> : null}
+      {breakdown?.length ? (
+        <dl
+          data-testid="quota-window-breakdown"
+          className="mt-2 space-y-1 text-12 text-[var(--text-secondary)]"
+        >
+          {breakdown.map(({ label, value }, index) => (
+            <div key={index} className="flex items-baseline justify-between gap-3">
+              <dt className="min-w-0 break-words">{label}</dt>
+              <dd className="shrink-0 tabular-nums">{value}</dd>
             </div>
-          )}
-          {detail ? (
-            <div className="mt-1 text-12 text-[var(--text-secondary)]">{detail}</div>
-          ) : null}
-          {breakdown?.length ? (
-            <dl
-              data-testid="quota-window-breakdown"
-              className="mt-2 space-y-1 text-12 text-[var(--text-secondary)]"
-            >
-              {breakdown.map(({ label, value }, index) => (
-                <div key={index} className="flex items-baseline justify-between gap-3">
-                  <dt className="min-w-0 break-words">{label}</dt>
-                  <dd className="shrink-0 tabular-nums">{value}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
-          {paceLine !== null ? (
-            <div
-              data-testid="quota-pace"
-              className="mt-[3px] text-12 tabular-nums text-[var(--text-secondary)]"
-            >
-              {paceLine}
-            </div>
-          ) : null}
-        </>
-      )}
+          ))}
+        </dl>
+      ) : null}
+      {paceLine !== null ? (
+        <div
+          data-testid="quota-pace"
+          className="mt-[3px] text-12 tabular-nums text-[var(--text-secondary)]"
+        >
+          {paceLine}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -438,25 +446,27 @@ export function QuotaHoverCard({
   nowMs = Date.now(),
 }: QuotaHoverCardProps) {
   const { t, i18n } = useTranslation();
-  const [expanded, setExpanded] = React.useState(false);
   const embedded = variant === 'embedded';
-  const detailsId = React.useId();
   // 测试可只注入 t；运行时再优先跟随应用当前语言格式化日期。
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
   const { title, planLabel, windows, details = [], notices = [], emptyText, updatedAt } = account;
-  // Pace also requires a valid reset time; balances and notices are always visible.
-  const hasWindowDetails = windows.some(
-    ({ window, detail, breakdown }) =>
-      formatQuotaResetAt(window.resetsAt, nowMs, locale) !== null ||
-      Boolean(detail) ||
-      Boolean(breakdown?.length),
-  );
   // Use observation time for pace so a stale snapshot cannot drift as the card renders.
   const paceNowMs = typeof updatedAt === 'number' && Number.isFinite(updatedAt) ? updatedAt : null;
   const staleMinutes =
     paceNowMs !== null && nowMs - paceNowMs > STALE_AFTER_MS
       ? Math.floor((nowMs - paceNowMs) / 60_000)
       : null;
+  const windowBlocks = windows.map(({ key, ...displayWindow }) => (
+    <WindowBlock
+      key={key}
+      {...displayWindow}
+      compact={embedded}
+      nowMs={nowMs}
+      paceNowMs={paceNowMs}
+      locale={locale}
+      t={t}
+    />
+  ));
 
   return (
     <div
@@ -478,7 +488,6 @@ export function QuotaHoverCard({
           'min-h-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
           !embedded && 'overflow-y-auto pt-[6px]',
         )}
-        id={detailsId}
       >
         {title && (!embedded || !hideIdentity) ? (
           <>
@@ -496,18 +505,19 @@ export function QuotaHoverCard({
           </>
         ) : null}
         {!embedded && title && (windows.length > 0 || emptyText) ? <CardDivider /> : null}
-        {windows.map(({ key, ...displayWindow }) => (
-          <WindowBlock
-            key={key}
-            {...displayWindow}
-            compact={embedded}
-            expanded={expanded}
-            nowMs={nowMs}
-            paceNowMs={paceNowMs}
-            locale={locale}
-            t={t}
-          />
-        ))}
+        {embedded && windowBlocks.length ? (
+          // 嵌入态各行是 subgrid,共用这里的四列:标题 | 进度条 | 百分比 | 重置倒计时。
+          // 窄宽度时标题与倒计时列可收缩截断(全文见 title),进度条最小 48px,只有百分比
+          // 保持完整宽度,整体不横向溢出。
+          <div
+            data-testid="quota-window-grid"
+            className="grid grid-cols-[minmax(0,max-content)_minmax(48px,1fr)_max-content_minmax(0,max-content)] gap-x-4 px-4 py-1"
+          >
+            {windowBlocks}
+          </div>
+        ) : (
+          windowBlocks
+        )}
         {emptyText ? (
           <div className="px-4 py-2 text-[var(--text-secondary)]">{emptyText}</div>
         ) : null}
@@ -558,19 +568,6 @@ export function QuotaHoverCard({
         ) : null}
       </div>
 
-      {embedded && hasWindowDetails && (
-        <Button
-          variant="secondary"
-          type="button"
-          aria-expanded={expanded}
-          aria-controls={detailsId}
-          onClick={() => setExpanded((value) => !value)}
-          className="mx-4 w-fit gap-1"
-        >
-          <span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
-          {t('quotaCard.usageTitle')}
-        </Button>
-      )}
       {dashboardLabel ? (
         <>
           <CardDivider />
