@@ -5,6 +5,7 @@ import type { AsrEvent } from '@cindy/voice-input-core';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import {
   MobileVolcengineSaucAsrProvider,
+  definiteVolcengineTranscriptPrefix,
   getVolcengineTranscriptConfirmation,
 } from '@/session/mobileRealtimeAsrProvider';
 
@@ -304,5 +305,61 @@ describe('mobile Volcengine SAUC stop finalization', () => {
       responsePacket('你好。', [{ text: '你好。', definite: true, end_time: 520 }], true),
     );
     await flush;
+  });
+});
+
+describe('mobile Volcengine SAUC recovery prefix', () => {
+  it('finalizes only the leading definite utterances of an aggregate', () => {
+    const payload = (text: string, utterances: Utterance[]) => ({ result: { text, utterances } });
+    expect(
+      definiteVolcengineTranscriptPrefix(
+        payload('你好。今天开会', [
+          { text: '你好。', definite: true, end_time: 800 },
+          { text: '今天开会', definite: false },
+        ]),
+        '你好。今天开会',
+      ),
+    ).toBe('你好。');
+    // Whitespace the aggregate inserts between utterances is tolerated.
+    expect(
+      definiteVolcengineTranscriptPrefix(
+        payload('Hello. Meet today', [
+          { text: 'Hello.', definite: true },
+          { text: 'Meet today', definite: false },
+        ]),
+        'Hello. Meet today',
+      ),
+    ).toBe('Hello.');
+    expect(
+      definiteVolcengineTranscriptPrefix(
+        payload('你好', [{ text: '你好', definite: false }]),
+        '你好',
+      ),
+    ).toBe('');
+    // Legacy responses without utterances keep the whole-aggregate marker.
+    expect(
+      definiteVolcengineTranscriptPrefix({ result: { text: '你好', definite: true } }, '你好'),
+    ).toBe('你好');
+  });
+
+  it('lets a recovery replay correct an indefinite tail after an earlier definite sentence', async () => {
+    const { provider, socket, events } = await startedProvider();
+    provider.appendAudio(pcm(500, 3000));
+    socket.receive(
+      responsePacket('你好。今天看', [
+        { text: '你好。', definite: true, end_time: 400 },
+        { text: '今天看', definite: false },
+      ]),
+    );
+    const recovered = provider.recover();
+    for (let i = 0; i < 10 && FakeSocket.instances.length < 2; i++) await Promise.resolve();
+    const nextSocket = FakeSocket.instances[1];
+    nextSocket.open();
+    await recovered;
+    // The replay corrects the misheard tail instead of appending after it.
+    nextSocket.receive(
+      responsePacket('今天开会。', [{ text: '今天开会。', definite: true, end_time: 900 }]),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'stable', text: '你好。今天开会。' });
   });
 });

@@ -1071,16 +1071,19 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
 
     const rawTranscript = extractTranscript(message.payload);
     const transcript = mergeRecoveredTranscript(this.sessionTranscriptPrefix, rawTranscript);
-    // Replay bookkeeping keeps its per-utterance marker: any definite utterance
-    // lets the audio of the confirmed local turn go.
-    const hasDefinite = hasDefiniteUtterance(message.payload);
     // The stable lane requires every utterance of the aggregate to be definite;
     // a confirmed first sentence must not mark an unconfirmed tail as stable.
     const confirmation = getVolcengineTranscriptConfirmation(message.payload, rawTranscript);
     const isDefinite = confirmation.confirmed;
     const isLastResponse = isVolcengineProtocolLastResponse(message);
-    if (transcript && (hasDefinite || isLastResponse)) {
-      this.finalizedTranscript = transcript;
+    // Recovery keeps finalizedTranscript as a fixed prefix and replays only the
+    // audio after it, so it may contain definite text only: an indefinite tail
+    // must stay correctable by the replay.
+    const definiteText = isLastResponse || isDefinite
+      ? rawTranscript
+      : definiteVolcengineTranscriptPrefix(message.payload, rawTranscript);
+    if (definiteText || (isLastResponse && transcript)) {
+      this.finalizedTranscript = mergeRecoveredTranscript(this.sessionTranscriptPrefix, definiteText);
       this.clearConfirmedVolcengineAudio();
     }
     if (rawTranscript) this.confirmedEndMs = confirmation.endMs;
@@ -1636,6 +1639,38 @@ export function getVolcengineTranscriptConfirmation(
   const endMs = typeof last.end_time === 'number' && Number.isFinite(last.end_time) && last.end_time > 0
     ? last.end_time : 0;
   return { confirmed: true, endMs };
+}
+
+/**
+ * The part of the aggregate transcript covered by its leading definite
+ * utterances, or '' when none is definite. A response without an utterance
+ * list keeps the legacy whole-aggregate `definite` marker.
+ */
+export function definiteVolcengineTranscriptPrefix(payload: unknown, transcript: string): string {
+  if (!transcript || !hasDefiniteUtterance(payload)) return '';
+  const results = isRecord(payload) ? (Array.isArray(payload.result) ? payload.result : [payload.result]) : [];
+  const result = results.find((item) => isRecord(item) && item.text === transcript);
+  if (!isRecord(result) || !Array.isArray(result.utterances) || !result.utterances.length) {
+    return transcript;
+  }
+  let definite = '';
+  for (const item of result.utterances) {
+    if (!isRecord(item) || item.definite !== true || typeof item.text !== 'string') break;
+    definite += item.text;
+  }
+  // Map the joined utterances onto the aggregate, ignoring whitespace that
+  // the aggregate may insert between them; unmatched text finalizes nothing.
+  const expected = definite.replace(/\s/gu, '');
+  if (!expected) return '';
+  let matched = 0;
+  for (let index = 0; index < transcript.length; index += 1) {
+    const character = transcript[index];
+    if (/\s/u.test(character)) continue;
+    if (character !== expected[matched]) return '';
+    matched += 1;
+    if (matched === expected.length) return transcript.slice(0, index + 1);
+  }
+  return '';
 }
 
 function isVolcengineProtocolLastResponse(message: ParsedVolcengineMessage): boolean {
