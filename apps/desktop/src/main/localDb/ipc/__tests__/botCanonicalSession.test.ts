@@ -869,6 +869,59 @@ describe('Bot canonical Session lifecycle', () => {
     expect(readConfig().templateId).toBe(templateId);
   });
 
+  it('keeps a description created at full length editable', async () => {
+    const description = '长'.repeat(12000);
+    const created = await invoke('local-db:bots:create', { id: 'long-description', name: 'Long', description });
+    const edited = await invoke('local-db:bots:update', { id: created.id, description: `${description.slice(1)}改` });
+    expect(edited.description).toHaveLength(12000);
+    await expect(invoke('local-db:bots:update', { id: created.id, description: `${description}!` }))
+      .rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  });
+
+  it('adopts a hand-edited SOUL.md when creating the canonical task from the version the caller saw', async () => {
+    const created = await invoke('local-db:bots:create', { id: 'file-first', name: 'File First', identitySource: 'Original identity' });
+    const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', created.id);
+    writeFileSync(join(home, 'SOUL.md'), 'Identity written in an editor\n');
+    // A stale caller from before an unrelated concurrent save still loses the CAS.
+    await invoke('local-db:bots:update', { id: created.id, name: 'File First 2', expectedVersion: 1 });
+    await expect(invoke('local-db:bots:create-canonical-session', {
+      botId: created.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+
+    const current = (await invoke('local-db:bots:get', created.id)).currentVersion as number;
+    writeFileSync(join(home, 'SOUL.md'), 'Identity written again\n');
+    const canonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: created.id, expectedCanonicalSessionId: null, expectedProfileVersion: current,
+    });
+    expect(canonical.canonicalSessionId).toBeTruthy();
+    const loaded = await invoke('local-db:bots:get', created.id);
+    expect(loaded.currentVersion).toBe(current + 1);
+    expect(loaded.identitySource).toContain('Identity written again');
+  });
+
+  it('keeps hand-edited SOUL.md and USER.md through unrelated profile saves', async () => {
+    const created = await invoke('local-db:bots:create', {
+      id: 'hand-edited', name: 'Hand Edited', identitySource: 'Original identity',
+      capabilities: { userContextSource: 'Original user context' },
+    });
+    const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', created.id);
+    writeFileSync(join(home, 'SOUL.md'), 'Identity written in an editor\n');
+    writeFileSync(join(home, 'memories', 'USER.md'), 'User context written in an editor\n');
+
+    await invoke('local-db:bots:update', { id: created.id, pinned: true });
+    await invoke('local-db:bots:update', { id: created.id, hidden: true });
+    await invoke('local-db:bots:update', { id: created.id, hidden: false, name: 'Renamed' });
+    await invoke('local-db:bots:update', { id: created.id, capabilities: { permissions: 'auto' } });
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe('Identity written in an editor\n');
+    expect(readFileSync(join(home, 'memories', 'USER.md'), 'utf8')).toBe('User context written in an editor\n');
+
+    // An explicit identity or user-context edit in settings still writes the file.
+    await invoke('local-db:bots:update', { id: created.id, identitySource: 'Identity from settings' });
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8').trim()).toBe('Identity from settings');
+    await invoke('local-db:bots:update', { id: created.id, userContextSource: 'Context from settings' });
+    expect(readFileSync(join(home, 'memories', 'USER.md'), 'utf8').trim()).toBe('Context from settings');
+  });
+
   it('still recognizes an unchanged legacy Cindy without rewriting its identity', async () => {
     await invoke('local-db:bots:create', { id: 'legacy-cindy', name: 'Cindy',
       identitySource: BOT_TEMPLATE_PRESET_IDENTITIES.cindy });
@@ -6062,6 +6115,35 @@ describe('Bot Session task end-to-end runtime', () => {
       } finally { runtime.dispose(); }
     },
   );
+
+  it('holds a paused requester\'s completion and delivers it once when the teammate resumes', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime();
+    try {
+      const started = await runtime.delegation.startSessionTask({
+        callerSessionId: 'session-1', objective: 'Finish while I am paused',
+      });
+      if (!started.ok) throw new Error('Task did not start');
+      h.sqlite!.prepare("UPDATE bot_profiles SET status = 'paused' WHERE id = 'bot-a'").run();
+      await runtime.settleChild(started.childSessionId, 'Done while paused.');
+      const completionCalls = () => runtime.dispatch.mock.calls.filter(([input]) => input.clientId ===
+        `bot-delegation-completion:${started.delegationId}`);
+      expect(completionCalls()).toHaveLength(0);
+      // Still pending: nothing is lost while the teammate is away.
+      expect(h.sqlite!.prepare('SELECT completion_delivered_at FROM bot_delegations WHERE id = ?')
+        .pluck().get(started.delegationId)).toBeNull();
+      // Resuming while still paused is a no-op, not a delivery.
+      await runtime.delegation.resumeCompletionDelivery('bot-a');
+      expect(completionCalls()).toHaveLength(0);
+
+      h.sqlite!.prepare("UPDATE bot_profiles SET status = 'active' WHERE id = 'bot-a'").run();
+      await runtime.delegation.resumeCompletionDelivery('bot-a');
+      await runtime.delegation.resumeCompletionDelivery('bot-a');
+      expect(completionCalls()).toHaveLength(1);
+      expect(h.sqlite!.prepare('SELECT completion_delivered_at FROM bot_delegations WHERE id = ?')
+        .pluck().get(started.delegationId)).not.toBeNull();
+    } finally { runtime.dispose(); }
+  });
 
   it('delivers every continued run once without reusing the previous completion receipt', async () => {
     await seedPair();

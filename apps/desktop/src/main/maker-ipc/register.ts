@@ -9921,7 +9921,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getDelegationService: () => botDelegationServiceHolder,
     onPaused: (botId) => updateBotRoutineLifecycle(botId, 'pause'),
-    onResumed: (botId) => updateBotRoutineLifecycle(botId, 'resume'),
+    onResumed: async (botId) => {
+      await updateBotRoutineLifecycle(botId, 'resume');
+      // Task results that finished while the teammate was paused were held, not retried.
+      void botDelegationServiceHolder?.resumeCompletionDelivery(botId).catch((error) => {
+        log.warn('resume Bot task completion delivery failed', { botId, error: String(error) });
+      });
+    },
     onBeforeDelete: (botId) => updateBotRoutineLifecycle(botId, 'delete'),
   });
   const delegationForRestore = botDelegationServiceHolder;
