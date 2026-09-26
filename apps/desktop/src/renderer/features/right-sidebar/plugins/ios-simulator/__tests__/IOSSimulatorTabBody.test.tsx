@@ -19,9 +19,10 @@ import type {
 } from '../../../../../../shared/iosSimulatorIpc';
 import type { TabKindHostContext } from '../../../types';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string) => key;
+  return { useTranslation: () => ({ t }) };
+});
 
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
@@ -90,7 +91,7 @@ function readyInstance(generation = 2): IOSSimulatorPublicInstance {
   };
 }
 
-function readyStatus(instance = readyInstance()): IOSSimulatorSessionStatus {
+function readyStatus(instance = readyInstance()): Extract<IOSSimulatorSessionStatus, { ok: true }> {
   return {
     ok: true,
     sessionId: 'session-a',
@@ -107,6 +108,28 @@ function readyStatus(instance = readyInstance()): IOSSimulatorSessionStatus {
       issue: null,
       error: null,
       setupSteps: [],
+    },
+  };
+}
+
+function nativeH264RouteStatus(instance = readyInstance()): IOSSimulatorRouteStatusPush {
+  return {
+    sessionId: instance.sessionId,
+    instanceId: instance.instanceId,
+    generation: instance.generation,
+    updatedAt: '2026-08-06T00:00:00.000Z',
+    stream: {
+      adapter: 'native-sidecar',
+      encoding: 'h264',
+      state: 'active',
+      reasonCode: 'native-active',
+    },
+    input: {
+      adapter: 'wda',
+      state: 'fallback',
+      continuous: false,
+      multiTouch: false,
+      reasonCode: 'native-capability-unavailable',
     },
   };
 }
@@ -238,7 +261,10 @@ function installStatus(statusValue: IOSSimulatorSessionStatus) {
       return { ok: true, data: { nativeRecovered: true } };
     },
   );
-  const setStreamProfile = vi.fn(async () => ({ ok: true as const, data: {} }));
+  const setStreamProfile = vi.fn(async (): Promise<IOSSimulatorToolResponse> => ({
+    ok: true,
+    data: {},
+  }));
   let h264FrameListener: ((payload: IOSSimulatorH264FramePush) => void) | null = null;
   let routeStatusListener: ((payload: IOSSimulatorRouteStatusPush) => void) | null = null;
   let focusRequestListener: ((payload: IOSSimulatorFocusRequest) => void) | null = null;
@@ -362,6 +388,22 @@ async function openStreamProfileControls(): Promise<void> {
     name: 'rightSidebar.iosSimulator.streamProfiles.low',
   });
 }
+
+function deferredProfileResponse() {
+  let resolve!: (result: IOSSimulatorToolResponse) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<IOSSimulatorToolResponse>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+const profileFailure: IOSSimulatorToolResponse = {
+  ok: false,
+  errorCode: 'IOS_SIMULATOR_HOST_ERROR',
+  message: 'The stream profile could not be applied.',
+};
 
 beforeEach(() => {
   toastMocks.success.mockReset();
@@ -989,6 +1031,518 @@ describe('IOSSimulatorTabBody', () => {
       expect(screen.queryByText('rightSidebar.iosSimulator.route.state.active')).toBeNull();
       expect(screen.queryByText('rightSidebar.iosSimulator.route.state.fallback')).toBeNull();
     });
+  });
+
+  it.each([false, true])(
+    'defaults Native H.264 to 30 FPS at full scale and restores the WDA default (initially native: %s)',
+    async (initiallyNative) => {
+      const nativeRoute = nativeH264RouteStatus();
+      const api = installStatus({
+        ...readyStatus(),
+        routeStatuses: initiallyNative ? [nativeRoute] : [],
+      });
+      render(<IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active />);
+
+      if (!initiallyNative) {
+        await waitFor(() => {
+          expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+              profile: { framesPerSecond: 10, jpegQuality: 45, scalingPercent: 70 },
+            }),
+          );
+        });
+        act(() => api.emitRouteStatus(nativeRoute));
+      }
+      await waitFor(() => {
+        expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            nativeProfile: { framesPerSecond: 30, scalingPercent: 100 },
+          }),
+        );
+      });
+      await openStreamProfileControls();
+      expect(
+        screen
+          .getByRole('menuitemradio', {
+            name: 'rightSidebar.iosSimulator.streamProfiles.highNative',
+          })
+          .getAttribute('aria-checked'),
+      ).toBe('true');
+
+      act(() =>
+        api.emitRouteStatus({
+          ...nativeRoute,
+          updatedAt: '2026-08-06T00:00:01.000Z',
+          stream: {
+            adapter: 'wda',
+            encoding: 'jpeg',
+            state: 'fallback',
+            reasonCode: 'native-stream-disconnected',
+          },
+        }),
+      );
+      await waitFor(() => {
+        expect(api.setStreamProfile).toHaveBeenLastCalledWith({
+          sessionId: 'session-a',
+          instanceId: 'instance-a',
+          generation: 2,
+          leaseId: 'lease-2',
+          viewerToken: expect.any(String),
+          profile: { framesPerSecond: 10, jpegQuality: 45, scalingPercent: 70 },
+        });
+      });
+      expect(
+        screen
+          .getByRole('menuitemradio', {
+            name: 'rightSidebar.iosSimulator.streamProfiles.balanced',
+          })
+          .getAttribute('aria-checked'),
+      ).toBe('true');
+
+      act(() =>
+        api.emitRouteStatus({
+          ...nativeRoute,
+          updatedAt: '2026-08-06T00:00:02.000Z',
+        }),
+      );
+      await waitFor(() => {
+        expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            nativeProfile: { framesPerSecond: 30, scalingPercent: 100 },
+          }),
+        );
+      });
+      expect(
+        screen
+          .getByRole('menuitemradio', {
+            name: 'rightSidebar.iosSimulator.streamProfiles.highNative',
+          })
+          .getAttribute('aria-checked'),
+      ).toBe('true');
+    },
+  );
+
+  it.each([
+    { profile: 'low', beforeNative: true, fps: 5, scale: 50, wdaFps: 5, quality: 25 },
+    { profile: 'balanced', beforeNative: true, fps: 20, scale: 70, wdaFps: 10, quality: 45 },
+    { profile: 'low', beforeNative: false, fps: 5, scale: 50, wdaFps: 5, quality: 25 },
+    { profile: 'balanced', beforeNative: false, fps: 20, scale: 70, wdaFps: 10, quality: 45 },
+  ])(
+    'preserves explicit $profile through Native recovery (selected before Native: $beforeNative)',
+    async ({ profile, beforeNative, fps, scale, wdaFps, quality }) => {
+      const nativeRoute = nativeH264RouteStatus();
+      const api = installStatus({
+        ...readyStatus(),
+        routeStatuses: beforeNative ? [] : [nativeRoute],
+      });
+      render(<IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active />);
+      await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalled());
+      await openStreamProfileControls();
+      fireEvent.click(
+        screen.getByRole('menuitemradio', {
+          name: `rightSidebar.iosSimulator.streamProfiles.${
+            profile === 'balanced' && !beforeNative ? 'balancedNative' : profile
+          }`,
+        }),
+      );
+      await waitFor(() => {
+        expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            profile: { framesPerSecond: wdaFps, jpegQuality: quality, scalingPercent: scale },
+          }),
+        );
+      });
+      if (beforeNative) act(() => api.emitRouteStatus(nativeRoute));
+      await waitFor(() => {
+        expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            nativeProfile: { framesPerSecond: fps, scalingPercent: scale },
+          }),
+        );
+      });
+      act(() =>
+        api.emitRouteStatus({
+          ...nativeRoute,
+          updatedAt: '2026-08-06T00:00:01.000Z',
+          stream: {
+            adapter: 'wda',
+            encoding: 'jpeg',
+            state: 'fallback',
+            reasonCode: 'native-stream-disconnected',
+          },
+        }),
+      );
+      await waitFor(() => {
+        expect(api.setStreamProfile).toHaveBeenLastCalledWith({
+          sessionId: 'session-a',
+          instanceId: 'instance-a',
+          generation: 2,
+          leaseId: 'lease-2',
+          viewerToken: expect.any(String),
+          profile: { framesPerSecond: wdaFps, jpegQuality: quality, scalingPercent: scale },
+        });
+      });
+      act(() =>
+        api.emitRouteStatus({
+          ...nativeRoute,
+          updatedAt: '2026-08-06T00:00:02.000Z',
+        }),
+      );
+      await waitFor(() => {
+        expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            nativeProfile: { framesPerSecond: fps, scalingPercent: scale },
+          }),
+        );
+      });
+      await openStreamProfileControls();
+      expect(
+        screen
+          .getByRole('menuitemradio', {
+            name: `rightSidebar.iosSimulator.streamProfiles.${
+              profile === 'balanced' ? 'balancedNative' : profile
+            }`,
+          })
+          .getAttribute('aria-checked'),
+      ).toBe('true');
+    },
+  );
+
+  it('resets the Native default for a new instance generation after a manual selection', async () => {
+    const api = installStatus({ ...readyStatus(), routeStatuses: [nativeH264RouteStatus()] });
+    render(<IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active />);
+    await waitFor(() => {
+      expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          nativeProfile: { framesPerSecond: 30, scalingPercent: 100 },
+        }),
+      );
+    });
+    await openStreamProfileControls();
+    fireEvent.click(
+      screen.getByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.balancedNative',
+      }),
+    );
+    await waitFor(() => {
+      expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          nativeProfile: { framesPerSecond: 20, scalingPercent: 70 },
+        }),
+      );
+    });
+    const nextInstance = readyInstance(3);
+    api.setStatusValue({
+      ...readyStatus(nextInstance),
+      routeStatuses: [nativeH264RouteStatus(nextInstance)],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.iosSimulator.refresh' }));
+    await waitFor(() => {
+      expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          generation: 3,
+          leaseId: 'lease-3',
+          nativeProfile: { framesPerSecond: 30, scalingPercent: 100 },
+        }),
+      );
+    });
+  });
+
+  it('keeps following transport defaults when a manual profile request fails', async () => {
+    const nativeRoute = nativeH264RouteStatus();
+    const api = installStatus({ ...readyStatus(), routeStatuses: [nativeRoute] });
+    render(<IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active />);
+    await waitFor(() => {
+      expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          nativeProfile: { framesPerSecond: 30, scalingPercent: 100 },
+        }),
+      );
+    });
+    await openStreamProfileControls();
+    api.setStreamProfile.mockRejectedValueOnce(new Error('profile unavailable'));
+    fireEvent.click(
+      screen.getByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.low',
+      }),
+    );
+    await screen.findByText('rightSidebar.iosSimulator.operationErrorWithRecovery');
+    act(() =>
+      api.emitRouteStatus({
+        ...nativeRoute,
+        updatedAt: '2026-08-06T00:00:01.000Z',
+        stream: {
+          adapter: 'wda',
+          encoding: 'jpeg',
+          state: 'fallback',
+          reasonCode: 'native-stream-disconnected',
+        },
+      }),
+    );
+    await waitFor(() => {
+      expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          profile: { framesPerSecond: 10, jpegQuality: 45, scalingPercent: 70 },
+        }),
+      );
+    });
+  });
+
+  it.each(['response', 'rejection'] as const)(
+    'ignores an older manual profile failure after a newer selection succeeds (%s)',
+    async (failure) => {
+      const nativeRoute = nativeH264RouteStatus();
+      const api = installStatus({ ...readyStatus(), routeStatuses: [nativeRoute] });
+      render(<IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active />);
+      await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(1));
+      await openStreamProfileControls();
+      const olderRequest = deferredProfileResponse();
+      api.setStreamProfile.mockImplementationOnce(() => olderRequest.promise);
+      fireEvent.click(
+        screen.getByRole('menuitemradio', {
+          name: 'rightSidebar.iosSimulator.streamProfiles.low',
+        }),
+      );
+      await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(2));
+      await openStreamProfileControls();
+      fireEvent.click(
+        screen.getByRole('menuitemradio', {
+          name: 'rightSidebar.iosSimulator.streamProfiles.balancedNative',
+        }),
+      );
+      await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(3));
+
+      await act(async () => {
+        if (failure === 'response') olderRequest.resolve(profileFailure);
+        else olderRequest.reject(new Error('Older profile request failed'));
+      });
+      await openStreamProfileControls();
+      expect(
+        screen
+          .getByRole('menuitemradio', {
+            name: 'rightSidebar.iosSimulator.streamProfiles.balancedNative',
+          })
+          .getAttribute('aria-checked'),
+      ).toBe('true');
+      expect(screen.queryByText('rightSidebar.iosSimulator.operationErrorWithRecovery')).toBeNull();
+
+      act(() =>
+        api.emitRouteStatus({
+          ...nativeRoute,
+          updatedAt: '2026-08-06T00:00:01.000Z',
+          stream: {
+            adapter: 'wda',
+            encoding: 'jpeg',
+            state: 'fallback',
+            reasonCode: 'native-stream-disconnected',
+          },
+        }),
+      );
+      await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(4));
+      act(() => api.emitRouteStatus({ ...nativeRoute, updatedAt: '2026-08-06T00:00:02.000Z' }));
+      await waitFor(() => {
+        expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            nativeProfile: { framesPerSecond: 20, scalingPercent: 70 },
+          }),
+        );
+      });
+    },
+  );
+
+  it.each(['response', 'rejection'] as const)(
+    'keeps the prior profile when the Native default fails on a stable route (%s)',
+    async (failure) => {
+      const api = installStatus(readyStatus());
+      render(<IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active />);
+      await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(1));
+      const pendingDefault = deferredProfileResponse();
+      api.setStreamProfile.mockImplementationOnce(() => pendingDefault.promise);
+      act(() => api.emitRouteStatus(nativeH264RouteStatus()));
+      await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(2));
+      await openStreamProfileControls();
+      const balancedOption = screen.getByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.balancedNative',
+      });
+      expect(balancedOption.getAttribute('aria-checked')).toBe('true');
+
+      await act(async () => {
+        if (failure === 'response') pendingDefault.resolve(profileFailure);
+        else pendingDefault.reject(new Error('Default profile request failed'));
+      });
+      expect(balancedOption.getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByText('rightSidebar.iosSimulator.operationErrorWithRecovery')).toBeTruthy();
+      expect(api.setStreamProfile).toHaveBeenCalledTimes(2);
+
+      fireEvent.click(
+        screen.getByRole('menuitemradio', {
+          name: 'rightSidebar.iosSimulator.streamProfiles.highNative',
+        }),
+      );
+      await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(3));
+      await openStreamProfileControls();
+      expect(
+        screen
+          .getByRole('menuitemradio', {
+            name: 'rightSidebar.iosSimulator.streamProfiles.highNative',
+          })
+          .getAttribute('aria-checked'),
+      ).toBe('true');
+    },
+  );
+
+  it.each(['success', 'response', 'rejection'] as const)(
+    'ignores a stale Native default result after a manual selection (%s)',
+    async (completion) => {
+      const nativeRoute = nativeH264RouteStatus();
+      const api = installStatus(readyStatus());
+      render(<IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active />);
+      await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(1));
+      const pendingDefault = deferredProfileResponse();
+      api.setStreamProfile.mockImplementationOnce(() => pendingDefault.promise);
+      act(() => api.emitRouteStatus(nativeRoute));
+      await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(2));
+      await openStreamProfileControls();
+      fireEvent.click(
+        screen.getByRole('menuitemradio', {
+          name: 'rightSidebar.iosSimulator.streamProfiles.low',
+        }),
+      );
+      await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(3));
+      await act(async () => {
+        if (completion === 'rejection') pendingDefault.reject(new Error('Default failed late'));
+        else
+          pendingDefault.resolve(
+            completion === 'success' ? { ok: true, data: {} } : profileFailure,
+          );
+      });
+      await openStreamProfileControls();
+      expect(
+        screen
+          .getByRole('menuitemradio', { name: 'rightSidebar.iosSimulator.streamProfiles.low' })
+          .getAttribute('aria-checked'),
+      ).toBe('true');
+      expect(screen.queryByText('rightSidebar.iosSimulator.operationErrorWithRecovery')).toBeNull();
+
+      // A stale success must not overwrite the record of the newer applied profile either.
+      await act(async () =>
+        api.emitRouteStatus({
+          ...nativeRoute,
+          updatedAt: '2026-08-06T00:00:01.000Z',
+          stream: { ...nativeRoute.stream, state: 'reconnecting' },
+        }),
+      );
+      await act(async () =>
+        api.emitRouteStatus({ ...nativeRoute, updatedAt: '2026-08-06T00:00:02.000Z' }),
+      );
+      expect(api.setStreamProfile).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it('ignores a Native default confirmation after falling back to WDA', async () => {
+    const nativeRoute = nativeH264RouteStatus();
+    const api = installStatus(readyStatus());
+    render(<IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active />);
+    await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(1));
+    const pendingDefault = deferredProfileResponse();
+    api.setStreamProfile.mockImplementationOnce(() => pendingDefault.promise);
+    act(() => api.emitRouteStatus(nativeRoute));
+    await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(2));
+    act(() =>
+      api.emitRouteStatus({
+        ...nativeRoute,
+        updatedAt: '2026-08-06T00:00:01.000Z',
+        stream: {
+          adapter: 'wda',
+          encoding: 'jpeg',
+          state: 'fallback',
+          reasonCode: 'native-stream-disconnected',
+        },
+      }),
+    );
+    await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(3));
+    await act(async () => pendingDefault.resolve({ ok: true, data: {} }));
+    await openStreamProfileControls();
+    expect(
+      screen
+        .getByRole('menuitemradio', { name: 'rightSidebar.iosSimulator.streamProfiles.balanced' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+  });
+
+  it('restores the confirmed Native default when the WDA profile request failed', async () => {
+    const nativeRoute = nativeH264RouteStatus();
+    const api = installStatus({ ...readyStatus(), routeStatuses: [nativeRoute] });
+    render(<IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active />);
+    await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(1));
+    api.setStreamProfile.mockRejectedValueOnce(new Error('WDA profile unavailable'));
+    await act(async () =>
+      api.emitRouteStatus({
+        ...nativeRoute,
+        updatedAt: '2026-08-06T00:00:01.000Z',
+        stream: {
+          adapter: 'wda',
+          encoding: 'jpeg',
+          state: 'fallback',
+          reasonCode: 'native-stream-disconnected',
+        },
+      }),
+    );
+    expect(api.setStreamProfile).toHaveBeenCalledTimes(2);
+    await act(async () =>
+      api.emitRouteStatus({ ...nativeRoute, updatedAt: '2026-08-06T00:00:02.000Z' }),
+    );
+    await openStreamProfileControls();
+    expect(
+      screen
+        .getByRole('menuitemradio', { name: 'rightSidebar.iosSimulator.streamProfiles.highNative' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(api.setStreamProfile).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not roll an old manual request back into a new instance generation', async () => {
+    const api = installStatus({ ...readyStatus(), routeStatuses: [nativeH264RouteStatus()] });
+    render(<IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active />);
+    await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(1));
+    await openStreamProfileControls();
+    fireEvent.click(
+      screen.getByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.balancedNative',
+      }),
+    );
+    await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(2));
+    const olderRequest = deferredProfileResponse();
+    api.setStreamProfile.mockImplementationOnce(() => olderRequest.promise);
+    await openStreamProfileControls();
+    fireEvent.click(
+      screen.getByRole('menuitemradio', {
+        name: 'rightSidebar.iosSimulator.streamProfiles.low',
+      }),
+    );
+    await waitFor(() => expect(api.setStreamProfile).toHaveBeenCalledTimes(3));
+    const nextInstance = readyInstance(3);
+    api.setStatusValue({
+      ...readyStatus(nextInstance),
+      routeStatuses: [nativeH264RouteStatus(nextInstance)],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.iosSimulator.refresh' }));
+    await waitFor(() => {
+      expect(api.setStreamProfile).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          generation: 3,
+          nativeProfile: { framesPerSecond: 30, scalingPercent: 100 },
+        }),
+      );
+    });
+    await act(async () => olderRequest.reject(new Error('Old generation request failed')));
+    await openStreamProfileControls();
+    expect(
+      screen
+        .getByRole('menuitemradio', { name: 'rightSidebar.iosSimulator.streamProfiles.highNative' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(screen.queryByText('rightSidebar.iosSimulator.operationErrorWithRecovery')).toBeNull();
   });
 
   it('offers 60 FPS only for active Native H.264 and keeps a 20 FPS WDA fallback', async () => {
