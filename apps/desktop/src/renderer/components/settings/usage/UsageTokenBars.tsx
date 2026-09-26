@@ -15,7 +15,7 @@
  * 不再用原生 title —— 原生提示无法排版配色, 也不给每根柱子各挂一个 Radix 实例。
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { formatCompactTokens } from '@/lib/usageFormat';
@@ -133,40 +133,42 @@ export function UsageTokenBars({
   }, [modelDaily, colorOrder, todayKey, t]);
 
   const plotRef = useRef<HTMLDivElement>(null);
-  // 只记住悬停的是哪一天和位置; 浮层内容每次渲染从当前 bars 取, 数据刷新时同步更新。
-  const [hover, setHover] = useState<{ day: string; anchor: DOMRect; plot: DOMRect } | null>(null);
-  const showTooltip = useCallback((day: string, target: HTMLElement) => {
-    const plot = plotRef.current;
-    if (!plot) return;
-    setHover({ day, anchor: target.getBoundingClientRect(), plot: plot.getBoundingClientRect() });
-  }, []);
-  const hideTooltip = useCallback(() => setHover(null), []);
-  // fixed 定位的浮层不随页面滚动: 滚动或窗口尺寸变化时直接收起, 不留在错位置。
+  const descriptionIdBase = useId();
+  // 悬停与键盘聚焦是两个独立的触发源:任一仍有效就显示,悬停优先。只记「哪一天」,
+  // 坐标由浮层在布局阶段按当前 DOM 测量 —— 数据刷新或重排后不会停在旧位置。
+  const [hoverDay, setHoverDay] = useState<string | null>(null);
+  const [focusDay, setFocusDay] = useState<string | null>(null);
+  const activeDay = hoverDay ?? focusDay;
+  // fixed 定位的浮层不随页面滚动:滚动或窗口尺寸变化时重新测量,跟随柱子。
+  const [layoutTick, remeasure] = useReducer((tick: number) => tick + 1, 0);
   useEffect(() => {
-    if (!hover) return;
-    window.addEventListener('scroll', hideTooltip, true);
-    window.addEventListener('resize', hideTooltip);
+    if (!activeDay) return;
+    window.addEventListener('scroll', remeasure, true);
+    window.addEventListener('resize', remeasure);
     return () => {
-      window.removeEventListener('scroll', hideTooltip, true);
-      window.removeEventListener('resize', hideTooltip);
+      window.removeEventListener('scroll', remeasure, true);
+      window.removeEventListener('resize', remeasure);
     };
-  }, [hover, hideTooltip]);
-  const hoveredBar = hover ? bars.list.find((b) => b.day === hover.day) : undefined;
-  const tooltip: UsageBarsTooltipData | null =
-    hover && hoveredBar
-      ? {
-          day: hoveredBar.day,
-          tokens: hoveredBar.tokens,
-          segments: hoveredBar.segments.map((s) => ({
-            key: s.rank,
-            label: s.label,
-            tokens: s.tokens,
-            color: usageHistoryModelColor(s.rank, colorOrder.length),
-          })),
-          anchor: hover.anchor,
-          plot: hover.plot,
-        }
-      : null;
+  }, [activeDay]);
+  const activeBar = activeDay ? bars.list.find((b) => b.day === activeDay) : undefined;
+  const tooltip: UsageBarsTooltipData | null = activeBar
+    ? {
+        day: activeBar.day,
+        tokens: activeBar.tokens,
+        segments: activeBar.segments.map((s) => ({
+          key: s.rank,
+          label: s.label,
+          tokens: s.tokens,
+          color: usageHistoryModelColor(s.rank, colorOrder.length),
+        })),
+        layoutTick,
+        measureAnchor: () =>
+          plotRef.current
+            ?.querySelector<HTMLElement>(`[data-day="${activeBar.day}"]`)
+            ?.getBoundingClientRect() ?? null,
+        measurePlot: () => plotRef.current?.getBoundingClientRect() ?? null,
+      }
+    : null;
 
   const ticks = niceTicks(bars.max);
   const recentWeekStart = shiftDayKeyLocal(todayKey, -6);
@@ -200,7 +202,7 @@ export function UsageTokenBars({
           <div
             ref={plotRef}
             className="usage-token-plot flex h-full items-end gap-[3px]"
-            onPointerLeave={hideTooltip}
+            onPointerLeave={() => setHoverDay(null)}
           >
             {bars.list.map((b) => {
               const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
@@ -216,10 +218,13 @@ export function UsageTokenBars({
                   key={b.day}
                   type="button"
                   data-day={b.day}
-                  onPointerEnter={(event) => showTooltip(b.day, event.currentTarget)}
-                  onFocus={(event) => showTooltip(b.day, event.currentTarget)}
-                  onBlur={hideTooltip}
+                  onPointerEnter={() => setHoverDay(b.day)}
+                  onFocus={() => setFocusDay(b.day)}
+                  onBlur={() => setFocusDay((day) => (day === b.day ? null : day))}
                   aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))} · ${usageSummary}`}
+                  aria-describedby={
+                    b.segments.length > 0 ? `${descriptionIdBase}-${b.day}` : undefined
+                  }
                   aria-pressed={selectedDay === b.day}
                   data-highlighted={
                     selectedDay
@@ -262,6 +267,24 @@ export function UsageTokenBars({
             })}
           </div>
         </div>
+      </div>
+      {/* 逐日模型明细的读屏文本:浮层 aria-hidden,原生 title 的这部分信息由它承接。 */}
+      <div className="sr-only">
+        {bars.list
+          .filter((b) => b.segments.length > 0)
+          .map((b) => (
+            <span key={b.day} id={`${descriptionIdBase}-${b.day}`}>
+              {[...b.segments]
+                .sort((x, y) => y.tokens - x.tokens)
+                .map(
+                  (s) =>
+                    `${s.label}: ${t('usageDashboard.tokensOnly', {
+                      tokens: formatCompactTokens(s.tokens),
+                    })}`,
+                )
+                .join('; ')}
+            </span>
+          ))}
       </div>
       <UsageBarsTooltip data={tooltip} />
     </div>

@@ -37,10 +37,12 @@ export interface UsageBarsTooltipData {
   day: string;
   tokens: number;
   segments: UsageBarsTooltipSegment[];
-  /** 当前柱子的点击区域 (视口坐标), 决定水平位置。 */
-  anchor: DOMRect;
-  /** 整个绘图区 (视口坐标), 决定上下位置 —— 浮层不遮挡其它柱子。 */
-  plot: DOMRect;
+  /** 当前柱子点击区域的实时测量(视口坐标),决定水平位置。 */
+  measureAnchor: () => DOMRect | null;
+  /** 整个绘图区的实时测量(视口坐标),决定上下位置 —— 浮层不遮挡其它柱子。 */
+  measurePlot: () => DOMRect | null;
+  /** 滚动 / 尺寸变化计数:变化时重新测量。 */
+  layoutTick: number;
 }
 
 /** 行按 token 降序; 超出 MAX_ROWS 的尾部合并计数。 */
@@ -86,16 +88,24 @@ export function UsageBarsTooltip({
       setPosition(null);
       return;
     }
+    const anchor = data.measureAnchor();
+    const plot = data.measurePlot();
+    if (!anchor || !plot) {
+      setPosition(null);
+      return;
+    }
     const { width, height } = el.getBoundingClientRect();
     const viewportWidth = document.documentElement.clientWidth;
-    const centerX = data.anchor.left + data.anchor.width / 2;
+    const centerX = anchor.left + anchor.width / 2;
     const left = Math.min(
       Math.max(centerX - width / 2, VIEWPORT_MARGIN_PX),
       viewportWidth - width - VIEWPORT_MARGIN_PX,
     );
-    const above = data.plot.top - GAP_PX - height;
-    const top = above >= VIEWPORT_MARGIN_PX ? above : data.plot.bottom + GAP_PX;
-    setPosition((prev) => ({ left, top, glide: prev !== null }));
+    const above = plot.top - GAP_PX - height;
+    const top = above >= VIEWPORT_MARGIN_PX ? above : plot.bottom + GAP_PX;
+    setPosition((prev) =>
+      prev && prev.left === left && prev.top === top ? prev : { left, top, glide: prev !== null },
+    );
   }, [data]);
 
   if (!data) return null;
@@ -108,7 +118,6 @@ export function UsageBarsTooltip({
     weekday: 'short',
   }).format(new Date(year, (month ?? 1) - 1, day ?? 1));
   const { rows, hiddenCount, hiddenTokens } = tooltipRows(data.segments);
-  const barSegments = [...data.segments].sort((a, b) => b.tokens - a.tokens);
 
   return createPortal(
     <div
@@ -132,14 +141,21 @@ export function UsageBarsTooltip({
 
       {data.tokens > 0 ? (
         <>
+          {/* 与明细同口径:前 MAX_ROWS 个模型各占一段,其余合成一段中性色,段数有上限不会被裁掉。 */}
           <div className="mt-2.5 flex h-1 gap-px overflow-hidden rounded-[2px]">
-            {barSegments.map((s) => (
+            {rows.map((s) => (
               <span
                 key={s.key}
-                className="h-full min-w-[2px]"
+                className="h-full"
                 style={{ flexGrow: s.tokens, flexBasis: 0, backgroundColor: s.color }}
               />
             ))}
+            {hiddenTokens > 0 ? (
+              <span
+                className="h-full bg-current opacity-40"
+                style={{ flexGrow: hiddenTokens, flexBasis: 0 }}
+              />
+            ) : null}
           </div>
           <div className="mt-2.5 grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1.5 text-12 leading-none">
             {rows.map((s) => (
