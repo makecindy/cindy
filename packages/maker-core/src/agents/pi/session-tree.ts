@@ -140,6 +140,33 @@ export function normalizePiSessionTree(data: unknown): SessionTreeSnapshot {
   return { roots, leafId, activePathIds: reversed.reverse() };
 }
 
+/** Only a known accepted input followed exclusively by empty failed responses is replayable. */
+export function piRetryBranch(data: unknown, entryId: string): {
+  parentId: string | null; requestTooLarge: boolean;
+} | null {
+  const tree = normalizePiSessionTree(data);
+  const index = tree.activePathIds.indexOf(entryId);
+  // A rollover/fork can replace the native window before the host dispatches.
+  if (index < 0) return null;
+  const entries = rawNodeMap(data);
+  const entry = entries.get(entryId);
+  if (entry?.type !== 'message' || recordOf(entry.message)?.role !== 'user') return null;
+  const tail = tree.activePathIds.slice(index + 1).map(id => entries.get(id));
+  if (!tail.length) return null;
+  let requestTooLarge = false;
+  for (const item of tail) {
+    const message = recordOf(item?.message);
+    if (item?.type !== 'message' || message?.role !== 'assistant' ||
+        message.stopReason !== 'error' || !Array.isArray(message.content) || message.content.length !== 0) {
+      throw new Error('Pi retry would discard output or session state');
+    }
+    requestTooLarge ||= /(?:\b413\b|Failed to buffer the request body:\s*length limit exceeded)/i.test(
+      typeof message.errorMessage === 'string' ? message.errorMessage : '',
+    );
+  }
+  return { parentId: typeof entry.parentId === 'string' ? entry.parentId : null, requestTooLarge };
+}
+
 function rawNodeMap(data: unknown): Map<string, UnknownRecord> {
   const payload = recordOf(data);
   const map = new Map<string, UnknownRecord>();

@@ -102,6 +102,13 @@ provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
 
+用户重试已被 Pi 接受但零产出的失败输入时，用持久化的原生 user entry id 精确定位当前
+分支；确认后续只有空的错误响应，再通过原生树导航回到输入之前重发。旧失败分支完整保留，
+不按文本去重，也不重放已有工具结果。若该轮明确遇到 HTTP 413，用户这次重试在重发前
+调用一次原生 compact；压缩也返回 413 或无法压缩时，本机锁存下一次发送前换窗，并在
+持久错误中记录专用恢复失败标记，关闭运行时后仍能恢复；SSH 保留错误。
+这一恢复由用户重试触发，不改变正常轮次由 Pi 自己管理自动压缩的约定。
+
 Pi 同样消费 `AgentRuntimeConfig.behaviorFlags`（静态对象或按来源、凭证形态、执行位置求值）。
 Desktop 复用既有工具链并行度设置，向本机 Pi 注入 `VITEST_MAX_FORKS`、`VITEST_MAX_THREADS`、
 `CARGO_BUILD_JOBS` 与非 Windows 的 `MAKEFLAGS`；用户已有 env 优先，关闭设置后新进程不注入，

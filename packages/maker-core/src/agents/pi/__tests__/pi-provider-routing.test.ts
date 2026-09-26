@@ -4835,6 +4835,54 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it.each(['413', 'other-error', 'compaction-413', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output'])(
+    'prepares an identity-bound Pi retry without duplicating accepted input: %s', async mode => {
+      let navigated = false;
+      captured.requestHandler = async command => {
+        if (command.type === 'get_state') return { success: true, data: {
+          sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
+        } };
+        if (command.type === 'get_tree') return { success: true, data: {
+          leafId: navigated || mode === 'new-window' ? 'parent' : 'failure',
+          tree: [{ entry: { id: 'parent', type: 'message', message: { role: 'assistant' } }, children: [
+            { entry: { id: 'accepted', parentId: 'parent', type: 'message', message: { role: 'user' } }, children: [
+              { entry: { id: 'failure', parentId: 'accepted', type: 'message', message: {
+                role: 'assistant', stopReason: 'error',
+                content: mode === 'output' ? [{ type: 'toolCall', name: 'bash' }] : [],
+                errorMessage: mode === 'other-error' ? 'network error' : '413 length limit exceeded',
+              } }, children: [] },
+            ] },
+          ] }],
+        } };
+        if (command.type === 'prompt' && String(command.message).startsWith('/cindy-branch-switch ')) {
+          navigated = mode !== 'cancelled-navigation';
+          return { success: true };
+        }
+        if (command.type === 'compact' && mode === 'compaction-413') {
+          return { success: false, error: '413 length limit exceeded' };
+        }
+        if (command.type === 'compact' && mode === 'nothing-to-compact') {
+          return { success: false, error: 'Nothing to compact' };
+        }
+        return { success: true, data: {} };
+      };
+      const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+      const handle = await agent.startSession({ sessionId: 'retry', workingDir: cwd, model: 'local-model' });
+      const promise = handle.send({ type: 'user', content: 'same input' }, { retryTranscriptUserEntryId: 'accepted' });
+      const blocked = ['compaction-413', 'nothing-to-compact', 'cancelled-navigation', 'output'].includes(mode);
+      if (blocked) await expect(promise).rejects.toThrow();
+      else await promise;
+      expect(captured.requests.filter(r => r.type === 'prompt' && r.message === 'same input')).toHaveLength(blocked ? 0 : 1);
+      expect(captured.requests.filter(r => r.type === 'compact')).toHaveLength(
+        ['413', 'compaction-413', 'nothing-to-compact'].includes(mode) ? 1 : 0,
+      );
+      expect(handle.getUsageSnapshot?.().needsRollover === true).toBe(
+        mode === 'compaction-413' || mode === 'nothing-to-compact',
+      );
+      await handle.close();
+    },
+  );
+
   it("reports the stable Pi user entry id after prompt acceptance", async () => {
     let promptAccepted = false;
     captured.requestHandler = async (command) => {

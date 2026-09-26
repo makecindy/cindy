@@ -1865,6 +1865,22 @@ export interface MessageAgentMetaPatchResult {
   next: Record<string, unknown>;
 }
 
+/** Stable native identity of a visible user input; do not match retries by text. */
+export async function readPiUserEntry(sessionId: string, clientId: string): Promise<string | undefined> {
+  const [row] = await getDbClient().drizzle
+    .select({ agentMeta: messages.agentMeta })
+    .from(messages)
+    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+    .where(and(
+      eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
+      eq(messages.role, 'user'), isNull(messages.rewindAt),
+      or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+    ))
+    .limit(1);
+  const id = row && parseAgentMetaRecord(row.agentMeta)?.piEntryId;
+  return typeof id === 'string' && id.length > 0 && id.length <= 128 ? id : undefined;
+}
+
 /** 与 patchMessageAgentMeta 相同，但返回补丁前后的元数据供幂等账本计算。 */
 export async function patchMessageAgentMetaWithResult(
   sessionId: string,
