@@ -471,6 +471,8 @@ export function mergeDiscoveredRuntimeModels(
   hideNew = false,
 ) {
   const models = existing.map((model) => ({ ...model }));
+  // 新发现的型号排在已有型号之前(保持接口返回的相对顺序)，已有型号位置不动。
+  const added: import("./types.js").ProviderRuntimeModelConfig[] = [];
   const seen = new Set<string>();
   for (const model of discovered) {
     if (!model.id || !model.name || seen.has(model.id)) continue;
@@ -488,7 +490,7 @@ export function mergeDiscoveredRuntimeModels(
       delete discoveredMetadata.contextWindowMax;
     }
     if (index < 0)
-      models.push({
+      added.push({
         id: model.id,
         name: model.name,
         discoveredMetadata,
@@ -503,7 +505,7 @@ export function mergeDiscoveredRuntimeModels(
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
       };
   }
-  return models;
+  return [...added, ...models];
 }
 
 /** Explicit runtime user fields, shared by initial construction and local public overlays. */

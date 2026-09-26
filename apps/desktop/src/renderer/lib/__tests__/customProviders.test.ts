@@ -644,7 +644,7 @@ describe('appendDiscoveredCustomProviderModels', () => {
       .toContainEqual(expect.objectContaining({ id: 'anthropic/openai/new[1m]' }));
     expect(existing[0].id).toBe('anthropic/openai/new[1m]');
   });
-  it('appends new models without overriding native-engine defaults', () => {
+  it('puts new models first without overriding native-engine defaults', () => {
     const result = appendDiscoveredCustomProviderModels(
       [{ id: 'kept', name: 'Kept' }],
       [
@@ -656,8 +656,8 @@ describe('appendDiscoveredCustomProviderModels', () => {
     );
     expect(result).toEqual({
       models: [
-        { id: 'kept', name: 'Kept', nameExplicit: true, discoveredMetadata: { name: 'New name' } },
         { id: 'new', name: 'New', discoveredMetadata: { name: 'New' } },
+        { id: 'kept', name: 'Kept', nameExplicit: true, discoveredMetadata: { name: 'New name' } },
       ],
       addedIds: ['new'],
     });

@@ -299,3 +299,19 @@ describe('Sub2API manifest capabilities', () => {
     expect(models.every(m => m.discoveredMetadata?.contextWindowMax === undefined)).toBe(true);
   });
 });
+
+describe('mergeDiscoveredRuntimeModels 排序', () => {
+  it('新发现的型号排在已有型号之前，已有型号位置不动', () => {
+    const existing = [
+      { id: 'old-b', name: 'Old B' },
+      { id: 'old-a', name: 'Old A' },
+    ];
+    const merged = mergeDiscoveredRuntimeModels(existing, [
+      { id: 'old-a', name: 'Old A' },
+      { id: 'new-1', name: 'New 1' },
+      { id: 'old-b', name: 'Old B' },
+      { id: 'new-2', name: 'New 2' },
+    ]);
+    expect(merged.map((model) => model.id)).toEqual(['new-1', 'new-2', 'old-b', 'old-a']);
+  });
+});
