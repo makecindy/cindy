@@ -22,6 +22,9 @@ import { createLogger } from '../logger.js';
 import { resolveGhBinary as resolveSharedGhBinary, systemGhBinary } from './ghBinary.js';
 
 const log = createLogger('git-context/gh-cli');
+// Check the active credential without the newer auth status --active flag.
+// --silent discards the account response; callers only consume the exit code.
+export const GH_AUTH_CHECK_ARGS = ['api', '--hostname', 'github.com', 'user', '--silent'];
 
 const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_NEGATIVE_CACHE_TTL_MS = 30_000;
@@ -149,7 +152,7 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
         // stdout/stderr 都不进入日志；该调用只消费退出码，绝不取得 token。
         execFileFn(
           bin,
-          ['auth', 'status', '--active', '--hostname', 'github.com'],
+          GH_AUTH_CHECK_ARGS,
           { timeout: GH_PROBE_TIMEOUT_MS },
           (err) => resolve(err === null),
         );

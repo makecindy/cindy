@@ -3,6 +3,7 @@ import type { GithubSetupState } from '../../shared/githubSetup.js';
 import { installTool } from '../managed-tools/installer.js';
 import { ghArtifact, GH_VERSION } from './ghArtifact.js';
 import { resolveGhBinary } from './ghBinary.js';
+import { GH_AUTH_CHECK_ARGS } from './ghCliTokenSource.js';
 
 interface SetupDeps {
   resolveBinary(): Promise<string>;
@@ -173,8 +174,7 @@ export function createGithubSetup(root: string, connected: () => void): GithubSe
     resolveBinary: resolveGhBinary,
     available: (binary) => check(binary, ['--version']),
     // Token reads use the active account; stale secondary accounts must not block setup.
-    authenticated: (binary) =>
-      check(binary, ['auth', 'status', '--active', '--hostname', 'github.com']),
+    authenticated: (binary) => check(binary, GH_AUTH_CHECK_ARGS),
     login: loginWithGh,
     connected,
     async install(signal, update) {

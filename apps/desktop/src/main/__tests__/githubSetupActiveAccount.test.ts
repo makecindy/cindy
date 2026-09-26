@@ -9,8 +9,12 @@ import { createGhCliTokenSource } from '../git-context/ghCliTokenSource';
 
 it('connects with a valid active account even when a secondary account has expired', async () => {
   mocks.execFile.mockImplementation((_binary, args, _options, callback) => {
-    const secondaryFailed = args[0] === 'auth' && !args.includes('--active');
-    callback(secondaryFailed ? new Error('secondary account expired') : null, '', '');
+    const failure = args.includes('--active')
+      ? 'unknown flag: --active'
+      : args[0] === 'auth'
+        ? 'secondary account expired'
+        : null;
+    callback(failure ? new Error(failure) : null, '', '');
   });
   mocks.spawn.mockImplementation(() => {
     throw new Error('unexpected login');
@@ -28,7 +32,7 @@ it('connects with a valid active account even when a secondary account has expir
   expect(await source.probeAvailability()).toBe(true);
   expect(mocks.execFile).toHaveBeenCalledWith(
     'gh',
-    ['auth', 'status', '--active', '--hostname', 'github.com'],
+    ['api', '--hostname', 'github.com', 'user', '--silent'],
     expect.any(Object),
     expect.any(Function),
   );
