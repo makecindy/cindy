@@ -200,7 +200,8 @@ SSH 执行路径跳过本机启动，不会把本机模型安装到远端。
 安装与手动下载独立于服务端；共用目录的后续更新需要配套发布 Server。
 客户端请求增加 `registryLocalRuntimes=1`，服务端仅向同时声明 media 和本能力的 V4/V5
 客户端下发 `llamacpp`，旧端剥离该字段并重新计算 ETag。未知能力值等同未声明。
-本轮完整 Registry 从 Server 正本同步为 `2026-09-25T00:00:00.000Z`。同步前将客户端
+本轮完整 Registry 与 Server `dash/llamacpp-catalog` 工作树的生成快照一致，revision 为
+`2026-09-26T00:00:00.000Z`（包含 26 日更新的主推顺序）；此为工作副本核验，不代表已合并或部署。同步前将客户端
 已有但 Server 主干尚缺的 Grok 4.7 / Build Fast 配置原样补入 Server，避免回退已有型号。
 没有仅拼入本地域、改变用户 override 或发布到线上。
 

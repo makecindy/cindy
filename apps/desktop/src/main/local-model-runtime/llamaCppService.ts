@@ -87,6 +87,7 @@ export function createLlamaCppService(
   let ownerProof: ReviewOwnerLivenessHandle | undefined;
   let borrowed = false;
   let disposing = false;
+  let stopping: Promise<void> | undefined;
 
   async function installed(): Promise<{ binary: string; version: string } | undefined> {
     try {
@@ -137,7 +138,7 @@ export function createLlamaCppService(
     kind: NonNullable<LlamaCppSnapshot['operation']>['kind'],
     fn: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
-    if (operation || disposing) throw new Error('BUSY');
+    if (operation || disposing || stopping) throw new Error('BUSY');
     const current = new AbortController();
     controller = current;
     operation = { kind, completed: 0, total: 0 };
@@ -333,7 +334,7 @@ export function createLlamaCppService(
     });
   }
   async function start(reload = false): Promise<void> {
-    if (disposing) throw new Error('BUSY');
+    if (disposing || stopping) throw new Error('BUSY');
     if (starting) {
       await starting;
       return start(reload);
@@ -519,13 +520,18 @@ export function createLlamaCppService(
     }
   }
   async function stopRequested(): Promise<void> {
-    if (starting) {
+    if (stopping) return stopping;
+    stopping = (async () => {
       cancel();
-      await starting.catch(() => {});
+      await settled;
+      await starting?.catch(() => {});
+      await stopAndWait();
+    })();
+    try {
+      await stopping;
+    } finally {
+      stopping = undefined;
     }
-    await stopAndWait();
-    ready = false;
-    borrowed = false;
   }
   return {
     snapshot,
@@ -552,4 +558,8 @@ export type LlamaCppService = ReturnType<typeof createLlamaCppService>;
 let current: LlamaCppService | undefined;
 export function getManagedLlamaCppService(userDataDir: string): LlamaCppService {
   return (current ??= createLlamaCppService(userDataDir, readModelContextLimits));
+}
+/** Deletion must not create a runtime merely to stop it. */
+export async function stopManagedLlamaCppService(): Promise<void> {
+  await current?.stop();
 }

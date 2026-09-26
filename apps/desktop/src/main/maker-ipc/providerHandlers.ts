@@ -39,6 +39,8 @@ import type {
   CustomProviderUpdateResult,
 } from '../../shared/customProviderUpdate.js';
 import { notifyManagedOllamaRemoved } from '../local-model-runtime/ipc.js';
+import { stopManagedLlamaCppService } from '../local-model-runtime/llamaCppService.js';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type {
   ModelPriceOverrideDesiredQuote,
@@ -2138,6 +2140,14 @@ export function registerProviderHandlers(
       codexHostPrepared = preparation.prepared;
       const generation = beginOAuthMutation(providerId);
       try {
+        if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
+          try {
+            await stopManagedLlamaCppService();
+          } catch {
+            throwIpcError('PRECONDITION_FAILED', 'LLAMACPP_STOP_FAILED');
+          }
+          assertProviderMutationOwner(ownerAtIngress);
+        }
         if (previous?.auth?.native === 'codex') {
           await deps.retireCodexAccount?.(providerId);
           assertProviderMutationOwner(ownerAtIngress);

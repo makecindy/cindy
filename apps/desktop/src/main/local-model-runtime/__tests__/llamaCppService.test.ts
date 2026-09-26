@@ -174,38 +174,46 @@ describe('managed llama.cpp model lifecycle', () => {
     await owner.dispose();
     expect(child.kill).toHaveBeenCalledWith(process.platform === 'win32' ? 'SIGKILL' : 'SIGTERM');
   });
-  it('waits for canceled download cleanup before disposal resolves', async () => {
-    let entered!: () => void;
-    const enteredPromise = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    let release!: () => void;
-    const cleanupGate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    mocks.download.mockImplementation(async (_asset, dest, _source, signal) => {
-      await writeFile(dest, 'partial');
-      entered();
-      await new Promise<void>((resolve) =>
-        signal.addEventListener('abort', () => resolve(), { once: true }),
-      );
-      await cleanupGate;
-      signal.throwIfAborted();
-    });
-    const service = createLlamaCppService(root);
-    const download = service.download({ repo: 'owner/repo', file: 'model.gguf' }).catch(() => {});
-    await enteredPromise;
-    let disposed = false;
-    const disposing = service.dispose().then(() => {
-      disposed = true;
-    });
-    await Promise.resolve();
-    expect(disposed).toBe(false);
-    release();
-    await Promise.all([download, disposing]);
-    await expect(service.start()).rejects.toThrow('BUSY');
-    expect(await readdir(path.join(root, 'llamacpp-runtime'))).toEqual(['models']);
-  });
+  it.each(['stop', 'dispose'] as const)(
+    'waits for canceled download cleanup before %s resolves',
+    async (action) => {
+      let entered!: () => void;
+      const enteredPromise = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let release!: () => void;
+      const cleanupGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      mocks.download.mockImplementation(async (_asset, dest, _source, signal) => {
+        await writeFile(dest, 'partial');
+        entered();
+        await new Promise<void>((resolve) =>
+          signal.addEventListener('abort', () => resolve(), { once: true }),
+        );
+        await cleanupGate;
+        signal.throwIfAborted();
+      });
+      const service = createLlamaCppService(root);
+      const download = service.download({ repo: 'owner/repo', file: 'model.gguf' }).catch(() => {});
+      await enteredPromise;
+      let disposed = false;
+      const disposing = service[action]().then(() => {
+        disposed = true;
+      });
+      await Promise.resolve();
+      expect(disposed).toBe(false);
+      await expect(service.start()).rejects.toThrow('BUSY');
+      release();
+      await Promise.all([download, disposing]);
+      if (action === 'dispose') await expect(service.start()).rejects.toThrow('BUSY');
+      else {
+        mocks.download.mockImplementation(async (_asset, dest) => writeFile(dest, 'GGUF'));
+        await service.download({ repo: 'owner/repo', file: 'model.gguf' });
+      }
+      expect(await readdir(path.join(root, 'llamacpp-runtime'))).toEqual(['models']);
+    },
+  );
   it.each(['stop', 'dispose'] as const)(
     'forces and awaits a stuck POSIX owned process during %s',
     async (action) => {
@@ -240,7 +248,7 @@ describe('managed llama.cpp model lifecycle', () => {
       vi.useFakeTimers();
       try {
         const stopping = service[action]();
-        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(0);
         expect(child.kill).toHaveBeenCalledWith('SIGTERM');
         await vi.advanceTimersByTimeAsync(1500);
         await stopping;
