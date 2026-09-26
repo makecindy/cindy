@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { act, fireEvent, render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -48,9 +48,22 @@ vi.mock('@/features/right-sidebar/lib/openSubagentsTab', () => ({
 const { getWorkflowProgressForMock } = vi.hoisted(() => ({
   getWorkflowProgressForMock: vi.fn().mockResolvedValue(null),
 }));
+const { canStopAgentTaskMock } = vi.hoisted(() => ({
+  canStopAgentTaskMock: vi.fn((_sessionId: string) => true),
+}));
+// 默认「有可信停止目标」:绝大部分用例与本机路径同形;远程/不可判定两条用例自己覆盖返回值,
+// 每个用例开头复位,避免顺序污染(禁用门禁的那个用例会把假实现改成 false)。
+beforeEach(() => {
+  canStopAgentTaskMock.mockReturnValue(true);
+});
 vi.mock('@/lib/makerTransport', () => ({
   isRemoteSessionSticky: () => false,
   getWorkflowProgressFor: getWorkflowProgressForMock,
+  canStopAgentTask: (sessionId: string | null | undefined) =>
+    Boolean(sessionId) && canStopAgentTaskMock(sessionId as string),
+  // 路由本身在 makerTransportStopRouting.test.ts 里覆盖;卡片只关心「点了会走这条通道」。
+  stopAgentTaskFor: (sessionId: string, taskId: string) =>
+    window.electronAPI.maker.stopAgentTask(sessionId, taskId),
 }));
 
 import { AgentTaskCard } from '@/components/chat/AgentTaskCard';
@@ -340,6 +353,132 @@ describe('AgentTaskCard', () => {
         await Promise.resolve();
       });
       expect(stopAgentTask).toHaveBeenCalledWith('session-1', 'bash-1');
+    } finally {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    }
+  });
+
+  it('renders the stop button for a remote session the stop route can resolve', async () => {
+    // 远程镜像会话不再一律隐藏 Stop:按钮在,点击走 stopAgentTaskFor(隧道在 makerTransport
+    // 侧完成,这里断言通道被调用、形状与本机一致)。
+    canStopAgentTaskMock.mockReturnValue(true);
+    const stopAgentTask = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { stopAgentTask } },
+    });
+    const { container } = render(
+      React.createElement(AgentTaskCard, {
+        sessionId: 'remote-session',
+        update: {
+          provider: 'claude-code',
+          taskId: 'bash-remote',
+          taskType: 'local_bash',
+          status: 'running',
+          title: 'Remote background command',
+        },
+      }),
+    );
+    expect(canStopAgentTaskMock).toHaveBeenCalledWith('remote-session');
+    const btn = stopButton(container);
+    expect(btn).not.toBeNull();
+    await act(async () => {
+      fireEvent.click(btn!);
+    });
+    expect(stopAgentTask).toHaveBeenCalledWith('remote-session', 'bash-remote');
+  });
+
+  it('hides the stop button when no stop route is resolvable', async () => {
+    canStopAgentTaskMock.mockReturnValue(false);
+    const stopAgentTask = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { stopAgentTask } },
+    });
+    const { container } = render(
+      React.createElement(AgentTaskCard, {
+        sessionId: 'unknown-origin',
+        update: {
+          provider: 'claude-code',
+          taskId: 'bash-x',
+          taskType: 'local_bash',
+          status: 'running',
+          title: 'Background command',
+        },
+      }),
+    );
+    expect(stopButton(container)).toBeNull();
+  });
+
+  it('surfaces an unconfirmed stop and keeps the button retryable when the stop request fails', async () => {
+    const stopAgentTask = vi.fn().mockRejectedValue(new Error('boom'));
+    (window as unknown as { electronAPI?: unknown }).electronAPI = {
+      maker: { stopAgentTask },
+    };
+    try {
+      const { container } = render(
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-fail',
+          update: {
+            provider: 'claude-code',
+            taskId: 'bash-fail',
+            taskType: 'local_bash',
+            status: 'running',
+          },
+        }),
+      );
+      const btn = stopButton(container);
+      expect(btn).not.toBeNull();
+      await act(async () => {
+        btn!.click();
+        await Promise.resolve();
+      });
+      expect(stopAgentTask).toHaveBeenCalledWith('session-fail', 'bash-fail');
+      // 不装作成功:行上给「停止未确认」,按钮留着可重试。「老被控端 CHANNEL_NOT_ALLOWED」
+      // 与「SIGKILL 之后仍未确认退出」都走这条路径,这是用户唯一能看到的信号。
+      expect(container.querySelector('[data-agent-task-stop-unconfirmed="true"]')).not.toBeNull();
+      expect(container.textContent).toContain('chat.agentTask.stopUnconfirmed');
+      expect(stopButton(container)).not.toBeNull();
+    } finally {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    }
+  });
+
+  it('clears the stale unconfirmed hint when a retry succeeds but no status event has arrived', async () => {
+    const stopAgentTask = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({ ok: true });
+    (window as unknown as { electronAPI?: unknown }).electronAPI = {
+      maker: { stopAgentTask },
+    };
+    try {
+      const { container } = render(
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-retry',
+          update: {
+            provider: 'claude-code',
+            taskId: 'bash-retry',
+            taskType: 'local_bash',
+            status: 'running',
+          },
+        }),
+      );
+      const first = stopButton(container);
+      await act(async () => {
+        first!.click();
+        await Promise.resolve();
+      });
+      expect(container.querySelector('[data-agent-task-stop-unconfirmed="true"]')).not.toBeNull();
+
+      // 第二次点击:本次请求成功但任务状态还没翻(事件延迟/丢包)——旧提示必须收掉。
+      // 否则重试明明发出去了,用户还以为最新一次也失败了(提示描述的是上一次点击)。
+      const second = stopButton(container);
+      await act(async () => {
+        second!.click();
+        await Promise.resolve();
+      });
+      expect(stopAgentTask).toHaveBeenCalledTimes(2);
+      expect(container.querySelector('[data-agent-task-stop-unconfirmed="true"]')).toBeNull();
+      expect(stopButton(container)).not.toBeNull();
     } finally {
       delete (window as unknown as { electronAPI?: unknown }).electronAPI;
     }

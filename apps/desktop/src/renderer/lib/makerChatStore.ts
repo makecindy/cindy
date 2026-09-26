@@ -5284,10 +5284,19 @@ function stopRunningAgentTasks(
  * 收口正确。即便极端竞态下收错,后续真实事件(task_progress → running /
  * task_notification → 终态)仍会覆盖回来,非终局性错误。
  *
- * 仅 provider==='claude-code'(快照通道只覆盖 claude-code 的任务表;codex /
- * pi 条目对空快照没有任何含义)。别名键(taskId / parentToolUseId)共享同一
- * 新对象,口径 = stopRunningAgentTasks。
+ * 可收口的任务集 = claude-code 的 SDK 后台任务 + PI 后台命令(provider==='pi' 且
+ * taskType==='local_bash'):被控端自 #4700 起会在 listBackgroundTasks 里报 PI 后台
+ * 命令,控制端拿到的**权威快照**对两者都成立(降级空表不得当权威,见
+ * readSessionBackgroundTasks 的 source)。刻意**不**收 PI 的 pi_subagent(durable
+ * run 可能活得比父进程久,快照缺席不等于已停)与 codex / workflow(快照通道不覆盖
+ * 它们的任务表)。别名键(taskId / parentToolUseId)共享同一新对象,口径 =
+ * stopRunningAgentTasks。
  */
+function isReconcilableRunningTask(task: AgentTaskUpdate): boolean {
+  return task.provider === 'claude-code'
+    || (task.provider === 'pi' && task.taskType === 'local_bash');
+}
+
 function reconcileStaleRunningTasks(
   state: SessionChatState,
   snapshot: ReadonlyArray<{ taskId: string; toolUseId?: string }>,
@@ -5306,7 +5315,7 @@ function reconcileStaleRunningTasks(
   for (const [key, task] of tasks) {
     const stale =
       task.status === 'running' &&
-      task.provider === 'claude-code' &&
+      isReconcilableRunningTask(task) &&
       candidates.has(task.taskId) &&
       !alive.has(task.taskId) &&
       !(task.parentToolUseId && alive.has(task.parentToolUseId));
@@ -17252,10 +17261,10 @@ export const makerChatStore = {
    * BackgroundTasksBody(面板挂载)、活动熄灭触发的延迟对账。
    *
    * opts.staleRunningCandidates(可选):对账收口 —— 调用方在**发起快照请求前**
-   * 从 store 捕获的 running claude-code taskId 集合;seed 完成后,候选集内仍
-   * running 且不在快照中的条目标 stopped(终态事件丢失的自愈,时序论证见
-   * reconcileStaleRunningTasks)。仅本机会话可传:device-link 镜像会话的快照
-   * 有降级空表窗口,不可当权威(与远程豁免 running 折算同口径)。
+   * 捕获的、且**该快照有权收口**的 running taskId 集合(本机会话 = claude-code;
+   * device-link 镜像会话 = 由 readSessionBackgroundTasks 的 source 判定快照权威,
+   * 降级空表不得传);seed 完成后,候选集内仍 running 且不在快照中的条目标 stopped
+   * (终态事件丢失的自愈,时序论证见 reconcileStaleRunningTasks)。
    *
    * opts.reconcileWakeBridge(可选):唤醒桥接对账收口 —— 仅活动熄灭延迟对账
    * 路径可传(同 staleRunningCandidates 的本机会话口径),值为**发起快照请求前**

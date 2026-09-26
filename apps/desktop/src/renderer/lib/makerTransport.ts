@@ -18,11 +18,13 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import {
   accountCounterAtRequestStart,
   invalidationAtRequestStart,
+  knownOwnerTokenFor,
   ownerTokenAtRequestStart,
   persistCachedMessages,
   sessionCacheInvalidationToken,
@@ -108,6 +110,10 @@ export interface RoutableMaker {
   enableOrca: FullMaker['enableOrca'];
   dispatchOrcaUiAssignment: FullMaker['dispatchOrcaUiAssignment'];
   disableOrca: FullMaker['disableOrca'];
+  // 逐任务精确停止(后台命令 / durable subagent):任务进程属于**会话所在端**,控制端
+  // 本机没有该 handle —— 本地调用会「假成功」(任务照旧在被控端跑)。与 enableOrca
+  // 同源:必须隧道到数据属主,不能跟随易失的会话来源判定回退本机。
+  stopAgentTask: FullMaker['stopAgentTask'];
   input: Pick<
     FullMaker['input'],
     | 'enqueue'
@@ -221,6 +227,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
       'maker:worker:dispatch-ui-assignment',
     ) as FullMaker['dispatchOrcaUiAssignment'],
     disableOrca: t('maker:session:disable-orca') as FullMaker['disableOrca'],
+    stopAgentTask: t('maker:agent-task:stop') as FullMaker['stopAgentTask'],
     input: {
       enqueue: t('maker:input:enqueue') as FullMaker['input']['enqueue'],
       compact: t('maker:input:compact') as FullMaker['input']['compact'],
@@ -288,10 +295,95 @@ export function makerApiFor(sessionId: string): RoutableMaker {
  *
  * 普通高频操作(send / setModel / …)仍用 makerApiFor:它们本就跟随会话来源的实时判定,
  * 且误判的代价是一次失败重试,不是在错误的机器上留下持久状态。
+ * 逐任务停止(stopAgentTask)同属这一类:误判回本机时那个 taskId 属于控制端自己的表,
+ * 停掉的是本机另一条任务(或对不存在的 id 静默成功),被控端那条照旧在跑。
  */
 export function makerApiForSticky(sessionId: string): RoutableMaker {
   const deviceId = getStickySessionDeviceId(sessionId);
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
+}
+
+/**
+ * 逐任务停止的归属路由。
+ *
+ * `remote` → 有设备可隧道;`local` → 本机会话(走本地 IPC);`unknown` → **确定是镜像来源，
+ * 但当下拿不到设备**(relay 刚清过注册表、本次 app 运行还没查过归属) —— 这条路径上不允
+ * 许回退本机:控制端 main 对不属于自己的会话会「幂等成功」,而那正是假成功(任务在被控端
+ * 照旧跑)。
+ *
+ * `shared-task` → 共享任务访客(peer key,见 isSharedTaskPeer):被控端(房主)只授权
+ * `sharedTaskDispatch` 里那批通道,逐任务停止的 `maker:agent-task:stop` **不在其中**
+ * (产品规则只承诺访客可「停止 Agent」= `maker:input:stop` 停整轮)。会话数据照样能读
+ * (镜像 + 后台任务 list 都已授权),但停止必然被拒 —— 在这里就判否,UI 不显示 Stop /
+ * 「全部停止」,也不发注定失败的请求。
+ *
+ * 第三状态靠一个**独立于易失注册表**的信号表达:`knownOwnerTokenFor` 只在会话数据经
+ * device-link 受保护镜像读(`readCachedMessages(deviceId, …)`)落地时记入 —— 本机会话
+ * 永远不走那条路。它比粘滞缓存更硬:粘滞缓存是「查询时记入」,没查过就没有。
+ */
+function stopRouteFor(
+  sessionId: string,
+):
+  | { kind: 'remote'; deviceId: string }
+  | { kind: 'local' }
+  | { kind: 'unknown' }
+  | { kind: 'shared-task' } {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (deviceId) {
+    if (isSharedTaskPeer(deviceId)) return { kind: 'shared-task' };
+    return { kind: 'remote', deviceId };
+  }
+  if (knownOwnerTokenFor(sessionId) !== undefined) return { kind: 'unknown' };
+  return { kind: 'local' };
+}
+
+/**
+ * 逐任务停止(后台命令 / durable subagent):按**粘滞归属**隧道到任务真身所在的端。
+ *
+ * 粘滞而不是实时判定是刻意的:relay 瞬断清空注册表的窗口里退回本机,会用同一个 taskId
+ * 停掉控制端自己的另一条任务(或对不存在的 id 静默成功),而被控端那条照旧在跑。归属完全
+ * 查不出但能确认是镜像来源时(**unknown**)**直接拒绝**:宁可让用户看到失败后重试,也不
+ * 发一个本机假成功。
+ *
+ * 失败(含老被控端的 CHANNEL_NOT_ALLOWED)由调用方按静默失败处理:行仍显示 running、按钮
+ * 留在原地可重试,不做乐观收口 —— 任务确实还在跑。
+ */
+export function stopAgentTaskFor(
+  sessionId: string,
+  taskId: string,
+): ReturnType<RoutableMaker['stopAgentTask']> {
+  const route = stopRouteFor(sessionId);
+  if (route.kind === 'remote') {
+    return makerApiForDevice(route.deviceId).stopAgentTask(sessionId, taskId);
+  }
+  if (route.kind === 'unknown') {
+    return Promise.reject(
+      new Error(
+        'REMOTE_ORIGIN_UNKNOWN: refusing to stop a mirrored background task on the local host',
+      ),
+    );
+  }
+  if (route.kind === 'shared-task') {
+    // 共享任务访客:被控端不授权逐任务停止(只授权 agent.stop 停整轮)。UI 已隐藏入口,
+    // 这里是防御性拒绝 —— 绝不回退本机(那会停掉控制端自己的同 id 任务)。
+    return Promise.reject(
+      new Error(
+        'SHARED_TASK_STOP_NOT_AUTHORIZED: shared-task guests may stop the agent, not individual background tasks',
+      ),
+    );
+  }
+  return window.electronAPI.maker.stopAgentTask(sessionId, taskId);
+}
+
+/**
+ * Stop 按钮的可用性(与 stopAgentTaskFor 同口径):本机 → 可停;有设备可隧道 → 可停;
+ * 确认是镜像来源却拿不到设备(**unknown**)或共享任务访客(**shared-task**)→ **不可**:
+ * 前者没有任何可信的停止目标(本地调用会假成功),后者的通道本就没被授权。
+ */
+export function canStopAgentTask(sessionId: string | null | undefined): boolean {
+  if (!sessionId) return false;
+  const kind = stopRouteFor(sessionId).kind;
+  return kind === 'local' || kind === 'remote';
 }
 
 /** Subscribe to summaries from the owning device; exact patches are fetched on demand. */
@@ -484,23 +576,64 @@ export function getWorkflowProgressFor(
 }
 
 /**
- * 会话仍在运行的后台任务快照(只读,best-effort):后台任务面板挂载时补回
- * 「订阅前已启动 / 重载清空 taskUpdates 后」的存量任务。远程会话任务真身在
- * 被控端,必须隧道读(控制端 main 无该会话 handle,本机读必空);老被控端无此
- * channel 或隧道失败一律降级空表,面板退化为事件流 + 消息扫描两源。
+ * 会话仍在运行的后台任务快照(只读,best-effort)+ **来源标记**。
+ *
+ * 调用方靠 source 区分「权威快照」与「降级空表」:老被控端无此 channel /
+ * 隧道失败 / 本机 IPC 失败都返回空表,但它与「确实没有任务」不可区分 ——
+ * 拿降级空表去收口 stale running 会把镜像里真实在跑的任务错误停掉。只有
+ * source !== null 的快照可以用于对账(见 useBackgroundBashTasks 的重拉)。
+ *
  * 归属用粘滞解析(与 estimatedSessionValueFor 同款):这是一次性水合,relay
  * 瞬时重连清空注册表的窗口内若误判为本机,会 seed 一张空表且面板不重试。
+ * 会话归属在请求在飞期间才完成水合时,响应来源与当下归属不符 —— 由调用方
+ * 对比 source 与当前 isRemoteSessionSticky 决定丢弃。
  */
-export function listSessionBackgroundTasksFor(
+export interface RoutedBackgroundTasksSnapshot {
+  tasks: Awaited<ReturnType<typeof window.electronAPI.maker.listSessionBackgroundTasks>>['tasks'];
+  pendingContinuations?: number;
+  /** 'local' = 本机 main;'remote' = 被控端隧道;null = 读取失败 / 老端降级空表。 */
+  source: 'local' | 'remote' | null;
+}
+
+export function readSessionBackgroundTasks(
   sessionId: string,
-): ReturnType<typeof window.electronAPI.maker.listSessionBackgroundTasks> {
+): Promise<RoutedBackgroundTasksSnapshot> {
   const deviceId = getStickySessionDeviceId(sessionId);
-  if (!deviceId) return window.electronAPI.maker.listSessionBackgroundTasks(sessionId);
+  if (!deviceId) {
+    // 归属不可解析、但已确认是镜像来源（受保护镜像读记下的 owner token；本机会话
+    // 永不经过那条路）→ **fail closed**，绝不回退本机读：控制端 main 对不属于自己
+    // 的会话会返回空表，而调用方会把它当权威快照去收口 stale running，把仍在被控端
+    // 运行的任务标成 stopped（任务会从运行列表与停止入口里消失）。与 stopRouteFor
+    // 的 unknown 态同口径：宁可漏收（等归属恢复后下一次水合），也不误停。
+    if (knownOwnerTokenFor(sessionId) !== undefined) {
+      return Promise.resolve({ tasks: [], source: null });
+    }
+    return window.electronAPI.maker
+      .listSessionBackgroundTasks(sessionId)
+      .then((snapshot) => ({ ...snapshot, source: 'local' as const }))
+      .catch(() => ({ tasks: [], source: null }));
+  }
   return (
     invokeRemote(deviceId, 'maker:session-background-tasks:list', [sessionId]) as ReturnType<
       typeof window.electronAPI.maker.listSessionBackgroundTasks
     >
-  ).catch(() => ({ tasks: [] }));
+  )
+    .then((snapshot) => ({ ...snapshot, source: 'remote' as const }))
+    .catch(() => ({ tasks: [], source: null }));
+}
+
+/**
+ * 后台任务面板挂载时补回「订阅前已启动 / 重载清空 taskUpdates 后」的存量任务。
+ * 远程会话任务真身在 被控端,必须隧道读(控制端 main 无该会话 handle,本机读必空);
+ * 老被控端无此 channel 或隧道失败一律降级空表,面板退化为事件流 + 消息扫描两源。
+ * 需要区分权威/降级(收口 stale running)的调用方改用 readSessionBackgroundTasks。
+ */
+export function listSessionBackgroundTasksFor(
+  sessionId: string,
+): ReturnType<typeof window.electronAPI.maker.listSessionBackgroundTasks> {
+  return readSessionBackgroundTasks(sessionId).then(({ tasks, pendingContinuations }) =>
+    pendingContinuations === undefined ? { tasks } : { tasks, pendingContinuations },
+  );
 }
 
 /**

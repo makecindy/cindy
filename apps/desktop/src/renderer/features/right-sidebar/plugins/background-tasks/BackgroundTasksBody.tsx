@@ -16,7 +16,9 @@
  *  - 快照水合:挂载时对本机会话调一次 listSessionBackgroundTasks 经
  *    seedBackgroundTaskSnapshots 补存量(与 useBackgroundBashTasks 同口径,只复用
  *    store 公开函数);本机会话同一次快照兼做 stale running 对账(终态事件丢失
- *    的自愈),device-link 远程会话只 seed 不对账(降级空表不可当权威)。
+ *    的自愈),device-link 远程会话这里只 seed 不对账 —— 远程的 stale running
+ *    收口由 useBackgroundBashTasks 用**权威快照**(readSessionBackgroundTasks
+ *    的 source !== null)完成,降级空表不可当权威。
  *  - wf 文件辅源:详情视图挂载时拉一次 getWorkflowProgressFor,任务从 running 翻
  *    终态时再拉一次;不轮询。远程/老被控端自动降级返回 null。
  *  - 停止:gating = running + claude-code + 有 taskId + 非远程会话;在飞防连点、
@@ -56,9 +58,11 @@ import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/rem
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
 import {
+  canStopAgentTask,
   getWorkflowProgressFor,
   isRemoteSessionSticky,
-  listSessionBackgroundTasksFor,
+  readSessionBackgroundTasks,
+  stopAgentTaskFor,
 } from '@/lib/makerTransport';
 import { formatCompactTokens } from '@/lib/usageFormat';
 import type { Message } from '@/lib/ccAgent.types';
@@ -198,37 +202,59 @@ function workflowAgentCounts(
 }
 
 /** 停止按钮 gating(与 AgentTaskCard 同口径):running + claude-code + 有 taskId +
- *  非远程。远程判定用粘滞版:relay 瞬断窗口误判本机会放出假 Stop(本地调用假成功,
- *  任务在被控端继续跑),与水合的粘滞归属同口径。 */
+ *  有可信的停止目标。远程镜像会话不再一律隐藏:stopAgentTaskFor 会把请求隧道到任务
+ *  真身所在的被控端(append-only 新通道,老被控端 CHANNEL_NOT_ALLOWED → 失败提示)。
+ *  仍然隐藏的只有「看起来是远程镜像、当下又拿不到设备」这一种(relay 注册表未水合):
+ *  那条路径上本地调用会假成功,不给按钮。粘滞判定保证瞬断窗口不误判为本机。 */
 function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
+  // 远程镜像会话：能不能停由**被控端的 channel** 决定（PI 后台命令自 #4700 起可停），
+  // 控制端不按 provider 预筛；停不掉时由 StopButton 把「停止未确认」就地呈现。
+  const providerCanStop =
+    item.provider === 'claude-code' ||
+    (item.provider === 'pi' &&
+      Boolean(sessionId) &&
+      isRemoteSessionSticky(sessionId as string));
   return (
     item.status === 'running' &&
-    item.provider === 'claude-code' &&
+    providerCanStop &&
     Boolean(item.update?.taskId) &&
-    Boolean(sessionId) &&
-    !(sessionId && isRemoteSessionSticky(sessionId))
+    canStopAgentTask(sessionId)
   );
 }
 
-/** 停止按钮:在飞防连点、失败静默,状态翻转由事件流收口(不改本地状态)。 */
-function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }) {
+/** 停止按钮:在飞防连点、失败静默,状态翻转由事件流收口(不改本地状态)。
+ *  onStopStart/onStopFailed 把「同一次点击」的起止告诉宿主:宿主据此先收掉上一次的
+ *  失败提示、仅在本次失败时重新写上。 */
+function StopButton({
+  sessionId,
+  taskId,
+  onStopFailed,
+  onStopStart,
+}: {
+  sessionId: string;
+  taskId: string;
+  onStopFailed: () => void;
+  onStopStart?: () => void;
+}) {
   const { t } = useTranslation();
   const [stopping, setStopping] = useState(false);
   const handleStop = useCallback(
     (e: MouseEvent) => {
       // 行点击(进详情 / 聊天定位)不该被停止按钮触发。
       e.stopPropagation();
-      const api = window.electronAPI?.maker;
-      if (!api?.stopAgentTask || stopping) return;
+      if (!sessionId || stopping) return;
       setStopping(true);
-      void api
-        .stopAgentTask(sessionId, taskId)
+      // 重试先收掉上一次的「停止未确认」,再发本次请求;本次失败会在 catch 重新写上。
+      onStopStart?.();
+      void stopAgentTaskFor(sessionId, taskId)
         .catch(() => {
-          // 静默:真失败时状态仍是 running,按钮保留可重试。
+          // 不装成功:老被控端(无此 channel)等失败会让任务真的还在跑 —— 在行上就地
+          // 呈现「停止未确认」,按钮留着可重试。
+          onStopFailed();
         })
         .finally(() => setStopping(false));
     },
-    [sessionId, taskId, stopping],
+    [sessionId, taskId, stopping, onStopFailed, onStopStart],
   );
   const actionLabel = t('rightSidebar.backgroundTasks.stop');
   const label = stopping
@@ -287,6 +313,14 @@ function TaskRow({
   const KindIcon = kindIcon(item.kind);
   const StatusIcon = statusIcon(item.status);
   const running = item.status === 'running';
+  // 「点了停止但没停掉」:描述的是上一次点击,任务状态一变(真停了 / 换了一条任务)
+  // 或用户再点一次就收掉。
+  const [stopFailed, setStopFailed] = useState(false);
+  useEffect(() => {
+    setStopFailed(false);
+  }, [item.status, item.update?.taskId]);
+  const handleStopFailed = useCallback(() => setStopFailed(true), []);
+  const handleStopStart = useCallback(() => setStopFailed(false), []);
 
   // meta:状态 · 时长 · tokens · 工具调用(缺项省略);workflow 行前置 agent 进度摘要。
   const metaParts = useMemo(() => {
@@ -321,8 +355,10 @@ function TaskRow({
     if (typeof usage?.toolUses === 'number') {
       parts.push(t('chat.agentTask.toolUses', { count: usage.toolUses }));
     }
+    // 失败说明放 meta 行尾:列表行空间有限,但这条必须看见(老被控端会走到这里)。
+    if (stopFailed) parts.push(t('rightSidebar.backgroundTasks.stopUnconfirmed'));
     return parts;
-  }, [item, t]);
+  }, [item, t, stopFailed]);
 
   // 非 workflow 行的聊天定位:意图 emitter 是 renderer 进程内的,独立侧栏窗口里
   // 没有聊天流也没有跨窗口中转 —— 点了必然无响应,不给假 affordance(跨窗口
@@ -341,7 +377,7 @@ function TaskRow({
   }, [item, sessionId, onOpenWorkflow]);
 
   return (
-    <div className="flex items-start gap-1">
+    <div className="flex items-center gap-1">
       <button
         type="button"
         onClick={clickable ? handleClick : undefined}
@@ -376,9 +412,12 @@ function TaskRow({
         </span>
       </button>
       {canStopItem(item, sessionId) && sessionId && item.update?.taskId && (
-        <div className="pt-1.5">
-          <StopButton sessionId={sessionId} taskId={item.update.taskId} />
-        </div>
+        <StopButton
+          sessionId={sessionId}
+          taskId={item.update.taskId}
+          onStopFailed={handleStopFailed}
+          onStopStart={handleStopStart}
+        />
       )}
     </div>
   );
@@ -408,6 +447,13 @@ function WorkflowDetail({
   const { t } = useTranslation();
   const taskId = item.update?.taskId ?? item.taskId ?? null;
   const [fileProgress, setFileProgress] = useState<WorkflowProgress | null>(null);
+  // 详情页与列表行同口径:停止失败就就地说明,按钮留着可重试;重试开始先收掉旧提示。
+  const [stopFailed, setStopFailed] = useState(false);
+  useEffect(() => {
+    setStopFailed(false);
+  }, [item.status, item.update?.taskId]);
+  const handleStopFailed = useCallback(() => setStopFailed(true), []);
+  const handleStopStart = useCallback(() => setStopFailed(false), []);
 
   // wf 文件辅源:挂载读一次;任务翻终态(isTerminal false→true 触发 effect 重跑)
   // 再读一次。任务已终态而文件快照还停在运行中(终态事件先于终局落盘)时做有界
@@ -481,9 +527,19 @@ function WorkflowDetail({
           {title}
         </span>
         {canStopItem(item, sessionId) && sessionId && item.update?.taskId && (
-          <StopButton sessionId={sessionId} taskId={item.update.taskId} />
+          <StopButton
+            sessionId={sessionId}
+            taskId={item.update.taskId}
+            onStopFailed={handleStopFailed}
+            onStopStart={handleStopStart}
+          />
         )}
       </div>
+      {stopFailed && (
+        <p className="shrink-0 px-2 pt-1 text-11 leading-4 text-[var(--text-secondary)]">
+          {t('rightSidebar.backgroundTasks.stopUnconfirmed')}
+        </p>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {model ? (
           <WorkflowProgressTree model={model} />
@@ -536,10 +592,11 @@ export function BackgroundTasksBody({
   }, [sessionId, visible]);
 
   // 快照水合:挂载 / 切会话时拉一次存量后台任务(订阅前已启动 / 重载清空
-  // taskUpdates 后事件流看不到的任务)。listSessionBackgroundTasksFor 按会话来源
+  // taskUpdates 后事件流看不到的任务)。readSessionBackgroundTasks 按会话来源
   // 路由 —— 本机走本地 IPC,device-link 远程隧道到被控端(任务真身在被控端,
-  // 本机快照必空);老被控端无此 channel 时内部降级空表。失败静默,实时事件流
-  // 自然补上(与 useBackgroundBashTasks 的快照失败同口径)。
+  // 本机快照必空);老被控端无此 channel / 隧道失败 / 归属不可解析但已确认镜像
+  // 来源时降级(source: null)。失败静默,实时事件流自然补上(与
+  // useBackgroundBashTasks 的快照失败同口径)。
   // taskUpdatesEmpty 参与依赖:reloadMessages(rewind / 远程 origin 对账)会在
   // 面板已挂载时清空 taskUpdates,布尔翻 true 即自动重水合;翻回 false 的那次
   // 重跑只是多一次幂等快照(seed 仅补缺),不会循环。
@@ -560,26 +617,21 @@ export function BackgroundTasksBody({
     if (!sessionId) return;
     let disposed = false;
     // 同一次快照兼做 stale running 对账(终态事件丢失的自愈)。候选集在发起
-    // 请求前捕获(时序论证见 store 的 reconcileStaleRunningTasks);仅本机会话
-    // 参与 —— device-link 远程快照有老被控端降级空表窗口,无法与「没有任务」
-    // 区分,不可当权威(粘滞判定与 Stop gating 同口径)。
-    const staleRunningCandidates = isRemoteSessionSticky(sessionId)
-      ? undefined
-      : makerChatStore.captureRunningClaudeTaskIds(sessionId);
-    void listSessionBackgroundTasksFor(sessionId)
-      .then(({ tasks }) => {
+    // 请求前捕获(时序论证见 store 的 reconcileStaleRunningTasks)。
+    const staleRunningCandidates = makerChatStore.captureRunningClaudeTaskIds(sessionId);
+    void readSessionBackgroundTasks(sessionId)
+      .then(({ tasks, source }) => {
         if (disposed || !Array.isArray(tasks)) return;
-        // 响应落地前复查粘滞判定:请求在飞期间远程注册表才完成会话水合的话,
-        // 快照实际来自本机 main(路由在发起时已定),「查无此会话」的空表不可
-        // 用于收口 → 丢弃候选集;seed 保留(远程会话的常规水合不受影响,该
-        // 空表本就 seed 不出东西)。
+        // 来源与当下归属必须一致:归属在请求在飞期间才完成水合时,本机 main 的
+        // 「查无此会话」空表(或撞 id 数据)对远程会话无意义 → 整体丢弃。
+        if ((source === 'remote') !== isRemoteSessionSticky(sessionId)) return;
+        // 只有权威快照能收口 stale running:降级空表(老被控端无 channel /
+        // 隧道失败 / 归属不可解析的镜像来源)与「确实没有任务」不可区分。
         const candidates =
-          staleRunningCandidates && !isRemoteSessionSticky(sessionId)
-            ? staleRunningCandidates
-            : undefined;
-        if (tasks.length === 0 && !(candidates && candidates.size > 0)) {
-          return;
-        }
+          source === null || staleRunningCandidates.size === 0
+            ? undefined
+            : staleRunningCandidates;
+        if (tasks.length === 0 && !candidates) return;
         makerChatStore.seedBackgroundTaskSnapshots(
           sessionId,
           tasks,

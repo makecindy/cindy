@@ -144,6 +144,17 @@ Desktop 的同账号远程 Cindy Make 任务同样消费该投影：准备与测
 
 ### 远程边界与延迟诊断
 
+**逐任务精确停止**（后台命令 / durable subagent）走 `maker:agent-task:stop` 隧道：任务进程属于
+会话所在端，控制端 main 没有那个 handle，本地调用会「假成功」（控制端表里恰好有同 id 任务时
+还会停错对象）而任务照旧在被控端跑。归属按**粘滞**判定（`stickySessionOrigin`）：relay 瞬时
+重连清空注册表的窗口里仍留在被控端，不退回本机。归属完全查不出、但能确认是镜像来源时
+（镜像缓存 owner token 在场 —— 本机会话永不经验受保护的镜像读），停止**直接拒绝**且隐藏
+Stop：宁可让用户看到失败后重试，也不发一个本机假成功。老被控端无此 channel →
+`CHANNEL_NOT_ALLOWED` → 按钮保留并**就地呈现「停止未确认」**（列表行 meta / 详情页 / 聊天卡
+各一行，`chat.agentTask.stopUnconfirmed` 与 `rightSidebar.backgroundTasks.stopUnconfirmed`）：
+两侧 UI 都不做乐观收口（行仍显示 running），按钮留在原地可重试。同理，状态栏的
+「后台任务运行中 / 全部停止」计数在控制端也走同一条隧道：运行集来自 `listSessionBackgroundTasksFor`（按粘滞归属路由到被控端）水合出的快照，**不依赖镜像事件流** —— 粘滞远程只 seed 不对账，快照失败 / 老被控端无此 channel 时降级空表（读取失败只会**漏报**，不会凭空报出任务）。代价是任务在被控端收口而镜像事件又丢包时，控制端可能短暂偏多：「全部停止」完成时会重拉一次快照把它对账掉，重新进入会话也会刷新。「全部停止」逐任务走同一条 stop 隧道，不为它新增 channel。控制端不按 provider 预筛可停性：本地只列 claude-code（codex / PI 本机没有 stopTask 通道），远程镜像会话额外列 PI（`listRunningBashTasks` 的 `includePiTasks`）—— 能不能停由**被控端的 channel** 决定，停不掉由「停止未确认」就地反馈；codex 两端口径一致地不列（被控端也没有它的停止通道，列出来是假入口）。子代理的「仍在调模型」活动信号（loopback proxy 活动）仍只服务本机：那是进程局部信号，不经隧道，控制端不显示它。**共享任务访客例外**：访客会话以 peer key 写入注册表（`isSharedTaskPeer`），房主的共享任务权限表只授权 `sharedTaskDispatch` 里那批通道（含后台任务 `list`、`agent.stop` = 停整轮），`maker:agent-task:stop` 不在其中 —— 逐任务停后台进程是比「停止 Agent」更大的授权，产品规则未承诺。所以门禁对该类会话直接判否（`stopRouteFor` 的 `shared-task` 态）：聊天卡、面板行、状态栏三处都不显示入口，也不发注定被拒的请求；防御性路径上 `stopAgentTaskFor` 以 `SHARED_TASK_STOP_NOT_AUTHORIZED` 拒绝，绝不回退本机。
+
 远程列表复用本地查询，返回前额外执行伙伴可见性过滤。过滤按本次授权阶段批量查询，
 每条 SQL 最多 200 个 ID；不跨请求缓存授权结论。缓存回复与离线重放仍重新检查，账号
 变化时丢弃旧结果。控制端补齐列表外任务时优先使用 `local-db:sessions:get-many`

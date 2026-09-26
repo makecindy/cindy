@@ -22,7 +22,12 @@ import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
-import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
+import {
+  canStopAgentTask,
+  getWorkflowProgressFor,
+  isRemoteSessionSticky,
+  stopAgentTaskFor,
+} from '@/lib/makerTransport';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { extractWorkflowTaskId } from '@/features/right-sidebar/plugins/background-tasks/listSessionTasks';
@@ -305,24 +310,34 @@ export function AgentTaskCard({
   // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification / durable status
   // 事件流收口(状态翻 stopped → 按钮自然消失),这里只管在飞态防连点。
   const [stopping, setStopping] = useState(false);
+  // 「点了停止但没停掉」:老被控端(无此 channel)等失败让任务真的还在跑 —— 卡片上
+  // 就地说明,按钮留着可重试;任务状态一变或用户再点一次就收掉(它描述的是上一次点击)。
+  const [stopFailed, setStopFailed] = useState(false);
+  useEffect(() => {
+    setStopFailed(false);
+  }, [status, update?.taskId]);
+  // 远程镜像会话：能不能停由**被控端的 channel** 决定（PI 后台命令自 #4700 起可停），
+  // 控制端不按 provider 预筛；停不掉时由 catch 里的「停止未确认」就地反馈。
+  const remoteStickyForStop = Boolean(sessionId) && isRemoteSessionSticky(sessionId as string);
   const providerCanStop = update?.provider === 'claude-code'
-    || (update?.provider === 'pi' && update.taskType === 'pi_subagent');
+    || (update?.provider === 'pi' && (update.taskType === 'pi_subagent' || remoteStickyForStop));
   const canStop =
     status === 'running' &&
-    Boolean(sessionId) &&
     Boolean(update?.taskId) &&
     providerCanStop &&
-    // device-link 镜像会话:session 活在被控端,本地 stopAgentTask 会假成功 —— 不给
-    // 按钮。粘滞判定:relay 瞬断清空注册表的窗口内不误判为本机(与面板同口径)。
-    !(sessionId && isRemoteSessionSticky(sessionId));
+    // 远程镜像会话不再一律隐藏:stopAgentTaskFor 把停止隧道到任务真身所在的被控端
+    // (与后台任务面板同口径)。只有「看起来是远程镜像、当下又拿不到设备」才隐藏 ——
+    // 那条路径上本地调用会假成功、任务在被控端继续跑。粘滞判定保证瞬断窗口不误判本机。
+    canStopAgentTask(sessionId);
   const handleStop = useCallback(() => {
-    const api = window.electronAPI?.maker;
-    if (!sessionId || !update?.taskId || !api?.stopAgentTask) return;
+    if (!sessionId || !update?.taskId) return;
     setStopping(true);
-    void api
-      .stopAgentTask(sessionId, update.taskId)
+    // 重试先收掉上一次的失败提示:它描述的是上一次点击;这次再失败会在 catch 重新写上。
+    setStopFailed(false);
+    void stopAgentTaskFor(sessionId, update.taskId)
       .catch(() => {
-        // 静默:失败时卡片仍显示 running,用户可重试;不弹打断式错误。
+        // 不装成功:卡片仍显示 running,同时给一句「停止未确认」,按钮留着可重试。
+        setStopFailed(true);
       })
       .finally(() => setStopping(false));
   }, [sessionId, update?.taskId]);
@@ -541,6 +556,14 @@ export function AgentTaskCard({
           </button>
         )}
         </div>
+        {stopFailed && (
+          <p
+            data-agent-task-stop-unconfirmed="true"
+            className="mt-1 text-13 leading-5 text-[var(--text-secondary)]"
+          >
+            {t('chat.agentTask.stopUnconfirmed')}
+          </p>
+        )}
 
         {/* live workflow 卡不渲染展开区(详情在后台任务面板);历史 workflow 卡
             (无 live taskId,面板无数据)保留展开区兜底展示 description/summary。 */}

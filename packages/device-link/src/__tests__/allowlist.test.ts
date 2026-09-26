@@ -138,7 +138,13 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
     }
-    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(false);
+  });
+
+  it('放行逐任务精确停止(任务进程属于会话所在端,控制端本地停会假成功)', () => {
+    // handler 只在自己进程的内存表里按 taskId 找本实例 spawn 的子进程并终止,无
+    // event.sender 依赖;被控端的控制链路开关是上游闸门。与 'maker:input:stop' 同类
+    // (后者停的是整轮对话,已放行)。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(true);
   });
 
   it('放行会话级完整对等补充(fork-strip / context-usage / 窄口径 patch-meta / Magic 重命名)', () => {
