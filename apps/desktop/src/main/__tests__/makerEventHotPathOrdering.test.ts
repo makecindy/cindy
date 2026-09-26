@@ -939,10 +939,10 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('void recordTurnSpend(money);');
     expect(codexDoneSource).toContain('void recordSessionTurnSpend(session.id, money);');
     expect(codexDoneSource).toMatch(
-      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money: isSubscriptionValue \? unpricedSubscriptionValueMarker\(\) : undefined,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: cacheCreationTokens,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue/,
+      /await recordModelTurnUsage\(\{\s*sessionId: session\.id,\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money: isSubscriptionValue \? unpricedSubscriptionValueMarker\(\) : undefined,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: cacheCreationTokens,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue/,
     );
     expect(codexDoneSource).toMatch(
-      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money,\s*inputTokensDelta: 0,\s*outputTokensDelta: 0,\s*cacheReadTokensDelta: 0,\s*cacheCreateTokensDelta: 0,\s*\}\);/,
+      /await recordModelTurnUsage\(\{\s*sessionId: session\.id,\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money,\s*inputTokensDelta: 0,\s*outputTokensDelta: 0,\s*cacheReadTokensDelta: 0,\s*cacheCreateTokensDelta: 0,\s*\}\);/,
     );
     const costRecordIndex = codexDoneSource.indexOf('void recordTurnSpend(money);');
     const modelCostRecordIndex = codexDoneSource.indexOf(
@@ -1058,6 +1058,12 @@ describe('maker:event hot path ordering', () => {
     expect(piDoneSource).toContain('money: modelRowMoney,');
     expect(piDoneSource).toContain('if (actualMoney)');
     expect(piDoneSource).toContain('await recordSchedulerTurnCost({');
+    // 消息 / 调度落库失败同样落进 catch:兜底只补写正常分支尚未发起的模型组,
+    // 不重放已写过的用量(否则任务与模型用量翻倍)。
+    expectOrder(piDoneSource, 'recordedModels.add(model);', 'modelWrites.push(');
+    expect(piDoneSource).toMatch(
+      /\[\.\.\.groupedSegments\]\s*\.filter\(\(\[model\]\) => !recordedModels\.has\(model\)\)\s*\.map\(/,
+    );
   });
 
   it('records Claude subscription quota events only while the native login is connected', () => {
