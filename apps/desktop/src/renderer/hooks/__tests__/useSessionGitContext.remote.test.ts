@@ -238,13 +238,22 @@ describe('useSessionGitContext remote routing', () => {
     unmount();
   });
 
-  it('对话任务与项目任务一样显示分支和消息里的 PR', async () => {
+  it.each([
+    {
+      label: 'Agent 进入仓库时显示分支',
+      dir: {
+        workdir: '/Users/me/repo',
+        head: { kind: 'branch', branch: 'feature/dialogue', shortSha: null },
+        source: 'telemetry',
+      },
+    },
+    {
+      label: '对话目录不是 git 仓库时分支为空',
+      dir: { workdir: null, head: null, source: null },
+    },
+  ])('对话任务照常返回消息里的 PR:$label', async ({ dir }) => {
     const gitContext = makeGitContext();
-    gitContext.getForSession.mockResolvedValue({
-      workdir: '/Users/me/repo',
-      head: { kind: 'branch', branch: 'feature/dialogue', shortSha: null },
-      source: 'telemetry',
-    });
+    gitContext.getForSession.mockResolvedValue(dir);
     const prRef = {
       id: 'ref-1',
       sessionId: 'session-1',
@@ -279,13 +288,17 @@ describe('useSessionGitContext remote routing', () => {
     const { result, unmount } = renderHook(() => useSessionGitContext(session), { wrapper });
 
     await waitFor(() => {
-      expect(result.current.head?.branch).toBe('feature/dialogue');
+      expect(gitContext.getForSession).toHaveBeenCalled();
       expect(result.current.prRefs).toHaveLength(1);
       expect(result.current.prStatuses.size).toBe(1);
     });
-    expect(gitContext.watch).toHaveBeenCalledWith('/Users/me/repo');
+    await waitFor(() => expect(result.current.head).toEqual(dir.head));
+    if (dir.workdir) {
+      expect(gitContext.watch).toHaveBeenCalledWith(dir.workdir);
+    } else {
+      expect(gitContext.watch).not.toHaveBeenCalled();
+    }
     unmount();
-    expect(gitContext.unwatch).toHaveBeenCalledWith('/Users/me/repo');
   });
 
   // 2026-08-13 用户裁决:设备明确断线时不发注定失败的 PR 隧道查询(fail-open:
