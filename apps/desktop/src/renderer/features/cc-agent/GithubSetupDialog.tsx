@@ -4,6 +4,7 @@ import { Check, Copy } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { DownloadMeter } from '@/components/settings/DownloadMeter';
 import type { GithubSetupState } from '../../../shared/githubSetup';
 
@@ -134,6 +135,7 @@ export function GithubSetupDialog({
   const completed = stage === 'connected';
   const retry = ['error', 'cancelled', 'unavailable'].includes(stage);
   const unsupported = stage === 'error' && state.error === 'unsupported';
+  const copyLabel = copy(copiedCode === state.userCode ? 'copied' : 'copyCode');
 
   return (
     <Dialog.Root
@@ -176,14 +178,16 @@ export function GithubSetupDialog({
                   <code className="select-all whitespace-nowrap font-mono text-18 tracking-widest text-[var(--text-primary)]">
                     {state.userCode}
                   </code>
-                  <button
-                    type="button"
-                    onClick={() => void copyCode()}
-                    aria-label={copy(copiedCode === state.userCode ? 'copied' : 'copyCode')}
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
-                  >
-                    {copiedCode === state.userCode ? <Check size={16} /> : <Copy size={16} />}
-                  </button>
+                  <Tip text={copyLabel} contentClassName="z-[10002]">
+                    <button
+                      type="button"
+                      onClick={() => void copyCode()}
+                      aria-label={copyLabel}
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+                    >
+                      {copiedCode === state.userCode ? <Check size={16} /> : <Copy size={16} />}
+                    </button>
+                  </Tip>
                 </div>
               </div>
               <span className="select-text text-12 text-[var(--text-tertiary)]">
