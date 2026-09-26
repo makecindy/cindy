@@ -2,8 +2,8 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ account: 1, view: {} as any, create: {} as any, model: {} as any, picker: {} as any, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), close: vi.fn(), closed: vi.fn(), push: vi.fn(), created: vi.fn(), deleted: vi.fn() }));
-vi.mock('react-native', () => ({ Platform: { OS: 'ios' }, StyleSheet: { create: (v: unknown) => v }, View: 'div', Alert: { alert: vi.fn() }, Image: 'img', Pressable: 'button', ScrollView: 'div', Switch: 'input' }));
+const h = vi.hoisted(() => ({ account: 1, platform: { OS: 'ios' }, container: null as HTMLElement | null, view: {} as any, create: {} as any, model: {} as any, picker: {} as any, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), close: vi.fn(), closed: vi.fn(), push: vi.fn(), created: vi.fn(), deleted: vi.fn() }));
+vi.mock('react-native', () => ({ Platform: h.platform, StyleSheet: { create: (v: unknown) => v }, View: 'div', Alert: { alert: vi.fn() }, Image: 'img', Pressable: (p: any) => createElement('button', { ...p, onClick: p.onPress, 'aria-label': p.accessibilityLabel, style: undefined }, p.children), ScrollView: 'div', Switch: 'input' }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }) }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'test-id' }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
@@ -14,23 +14,58 @@ vi.mock('@/device-link/remoteResources', () => ({ invokeRemoteResourceAction: (.
 vi.mock('@/components/AppText', () => ({ Text: 'span', TextInput: 'input' }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: () => null }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
-vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: () => null, usesNativePullDownMenu: () => true }));
-vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: () => null }));
-vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: () => null }));
+vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: (p: any) => p.children, usesNativePullDownMenu: () => false }));
+vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: (p: any) => createElement('button', { onClick: p.onPress }, p.label) }));
+vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: (p: any) => p.children }));
 vi.mock('@/session/CompanionProfileArtifacts', () => ({ CompanionProfileArtifacts: () => null }));
 vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/session/companionProfileData', async original => ({ ...await original<object>(), loadCompanionProfile: (...args: unknown[]) => h.read(...args) }));
 vi.mock('@/session/CompanionProfileNativeView', () => ({ CompanionProfileNativeView: (p: any) => { h.view = p; return p.models; } }));
 vi.mock('@/session/CompanionCreateNativeView', () => ({ CompanionCreateNativeView: (p: any) => { h.create = p; return null; } }));
 vi.mock('@/session/CompanionModelChain', () => ({ readCompanionModelChain: (v: string) => JSON.parse(v || '[]'), CompanionModelChain: (p: any) => { h.model = p; return null; }, CompanionModelPicker: (p: any) => { h.picker = p; return null; } }));
-import { CompanionProfileSheet, CompanionCreateSheet } from '@/session/CompanionProfileSheet';
+import { CompanionProfileForm, CompanionProfileSheet, CompanionCreateSheet, shouldShowSelectSearch } from '@/session/CompanionProfileSheet';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const resource = { ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' }, display: { title: 'Cindy' }, links: [], revision: 'v1' };
 const panel = { id: 'profile', values: { name: 'Cindy' }, action: { id: 'grant', label: 'Save', fields: [{ id: 'name', label: 'Name', kind: 'text' }] } };
 let root: Root | undefined;
-async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(CompanionProfileSheet, { visible: true, resource, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true, onClose: h.close, onClosed: h.closed, onDeleted: h.deleted, onOpenSearch() {}, onOpenAutomation() {} }))); }
-beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.read.mockResolvedValue({ resource, panels: [panel, { ...panel, id: 'models', values: { modelChain: '[]', followsDefault: false }, action: { id: 'model-grant', fields: [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }] } }] }); h.invoke.mockResolvedValue({ effects: [] }); });
-afterEach(() => { act(() => root?.unmount()); root = undefined; });
+async function render() { h.container = document.createElement('div'); document.body.append(h.container); root ??= createRoot(h.container); await act(async () => root!.render(createElement(CompanionProfileSheet, { visible: true, resource, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true, onClose: h.close, onClosed: h.closed, onDeleted: h.deleted, onOpenSearch() {}, onOpenAutomation() {} }))); }
+beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.platform.OS = 'ios'; h.read.mockResolvedValue({ resource, panels: [panel, { ...panel, id: 'models', values: { modelChain: '[]', followsDefault: false }, action: { id: 'model-grant', fields: [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }] } }] }); h.invoke.mockResolvedValue({ effects: [] }); });
+afterEach(() => { act(() => root?.unmount()); root = undefined; h.container?.remove(); h.container = null; h.platform.OS = 'ios'; });
+it('only enables select search for long option lists', () => {
+  expect(shouldShowSelectSearch('permissions', [{ value: 'ask' }, { value: 'auto' }, { value: 'trusted' }])).toBe(false);
+  expect(shouldShowSelectSearch('permissions', Array.from({ length: 11 }, (_, index) => ({ value: String(index) })))).toBe(false);
+  expect(shouldShowSelectSearch('models', Array.from({ length: 11 }, (_, index) => ({ value: String(index) })))).toBe(true);
+});
+it('renders the Android permissions picker without search and keeps search for long non-permission lists', async () => {
+  h.platform.OS = 'android';
+  h.read.mockResolvedValue({ resource, panels: [{ id: 'permissions', values: { permissions: '0' }, action: { id: 'permissions-grant', fields: [{ id: 'permissions', kind: 'select', label: 'Permissions', options: [{ value: '0', label: 'Ask' }, { value: '1', label: 'Auto' }, { value: '2', label: 'Trusted' }] }] } }] });
+  await render();
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => {
+    const permissions = Array.from(h.container!.querySelectorAll('button')).find(button => button.textContent === 'devices.companionProfile.permissions');
+    expect(permissions).toBeDefined();
+    permissions!.click();
+  });
+  await act(async () => {
+    const select = Array.from(h.container!.querySelectorAll('button')).find(button => button.getAttribute('aria-label') === 'Permissions');
+    expect(select).toBeDefined();
+    select!.click();
+  });
+  expect(h.container!.querySelectorAll('input')).toHaveLength(0);
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  const formRoot = createRoot(container);
+  const renderForm = (panelId: string, optionCount: number) => act(() => formRoot.render(createElement(CompanionProfileForm, { key: panelId,
+    panel: { id: panelId, action: { fields: [{ id: 'permissions', kind: 'select', label: 'Permissions', options: Array.from({ length: optionCount }, (_, index) => ({ value: String(index), label: String(index) })) }] } } as any,
+    values: { permissions: '0' }, onChange: () => undefined, disabled: false,
+  })));
+  await renderForm('models', 11);
+  act(() => (container.querySelector('button') as HTMLButtonElement).click());
+  expect(container.querySelectorAll('input')).toHaveLength(1);
+  act(() => formRoot.unmount());
+  container.remove();
+});
 it('keeps the draft and page when saving during dismissal fails', async () => {
   await render(); await act(async () => h.view.onOpen('profile'));
   await act(async () => h.view.onChange({ name: 'Unsaved' }));
