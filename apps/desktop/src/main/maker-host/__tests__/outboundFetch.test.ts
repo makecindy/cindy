@@ -84,6 +84,21 @@ afterEach(() => {
 });
 
 describe('resolveOutboundDispatcher', () => {
+  it('uses the Host proxy for scoped xAI DNS, then still enforces the dispatch gate', async () => {
+    resolverState.resolve.mockResolvedValue('http://127.0.0.1:7890');
+    undiciState.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ Status: 0,
+      Question: [{ name: 'vidgen.x.ai', type: 1 }], Answer: [{ type: 1, data: '104.18.18.80' }] })) as never);
+    const url = 'https://vidgen.x.ai/result?sig=synthetic-secret';
+    const gate = vi.fn(() => { throw new Error('owner boundary closed before CDN dispatch'); });
+    await expect(guardedOutboundFetch(url, { method: 'GET' }, gate, { targetUrl: url, providerDownload: 'xai-video' })).rejects.toThrow('owner boundary closed before CDN dispatch');
+    expect(gate.mock.calls.length).toBe(1);
+    expect(undiciState.fetch.mock.calls.length).toBe(1);
+    const [requestUrl, requestInit] = undiciState.fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new URL(requestUrl).hostname).toBe('cloudflare-dns.com');
+    expect(new Headers(requestInit.headers).has('authorization')).toBe(false);
+    expect(new Headers(requestInit.headers).has('cookie')).toBe(false);
+    expect(String(requestUrl).includes('synthetic-secret')).toBe(false);
+  });
   it('returns the caller fallback when the resolver says direct', async () => {
     const fallback = new UndiciAgent();
     await expect(resolveOutboundDispatcher('https://platform.claude.com/v1/oauth/token', { fallback }))

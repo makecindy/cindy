@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { SsrFBlockedError } from '@cindy/browser-control-runtime/ssrf-runtime';
-import { downloadMediaResult, type MediaDownloadContext } from '../mediaDownload.js';
+import { downloadMediaResult, mediaNetworkErrorCode, type MediaDownloadContext } from '../mediaDownload.js';
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), release: vi.fn(async () => {}) }));
 vi.mock('../../maker-host/outbound-fetch.js', () => ({ guardedOutboundFetch: mocks.fetch }));
@@ -25,6 +25,57 @@ async function downloadedBytes(result: Awaited<ReturnType<typeof download>>) {
 }
 
 describe('media download approval and network recovery', () => {
+  it('extracts only bounded error codes from aggregate/TLS causes', () => {
+    const error = new TypeError('never print private URL');
+    Object.assign(error, { cause: new AggregateError([Object.assign(new Error('private'), { code: 'ERR_TLS_CERT_ALTNAME_INVALID' })]) });
+    expect(mediaNetworkErrorCode(error)).toBe('ERR_TLS_CERT_ALTNAME_INVALID');
+    expect(mediaNetworkErrorCode({ code: 'https://private.invalid/?token=secret' })).toBeUndefined();
+  });
+  it('fails certificate verification without retrying or relaxing TLS', async () => {
+    mocks.fetch.mockRejectedValue(Object.assign(new TypeError('private TLS detail'), { cause: { code: 'CERT_HAS_EXPIRED' } }));
+    await expect(download(context())).rejects.toMatchObject({ code: 'MEDIA_DOWNLOAD_TLS_FAILED', retryable: false,
+      diagnostic: { hostname: 'new.example.com', networkCode: 'CERT_HAS_EXPIRED' } });
+    expect(mocks.fetch.mock.calls.length).toBe(1);
+  });
+  it('retains the xAI provider one-redirect contract', async () => {
+    mocks.fetch.mockImplementation(async () => response(null, { status: 302, headers: { location: `https://vidgen.x.ai/hop-${mocks.fetch.mock.calls.length}` } }));
+    await expect(downloadMediaResult({ raw: 'https://vidgen.x.ai/result', allowedHosts: ['x.ai'],
+      providerDownload: 'xai-video', assertActive: vi.fn(),
+    })).rejects.toMatchObject({ code: 'MEDIA_DOWNLOAD_REDIRECT_LIMIT', retryable: false });
+    expect(mocks.fetch.mock.calls.length).toBe(2);
+  });
+  it('retains safe network-stage diagnostics and classifies exhausted transport retries as recoverable', async () => {
+    const error = new TypeError('fetch failed: secret URL');
+    Object.assign(error, { cause: { code: 'ECONNRESET' } });
+    mocks.fetch.mockRejectedValue(error);
+    await expect(download(context())).rejects.toMatchObject({ code: 'MEDIA_DOWNLOAD_FAILED', retryable: true,
+      diagnostic: { hostname: 'new.example.com', stage: 'connect', networkCode: 'ECONNRESET' } });
+  });
+  it('keeps HTTP status without treating it as proof of why access was refused', async () => {
+    mocks.fetch.mockResolvedValue(response(null, { status: 403 }));
+    await expect(download(context())).rejects.toMatchObject({ code: 'MEDIA_DOWNLOAD_URL_EXPIRED', retryable: true,
+      diagnostic: { stage: 'http', hostname: 'new.example.com', httpStatus: 403 } });
+  });
+  it('preserves the xAI provider allowlist and does not approve private-network exceptions', async () => {
+    const ctx = context();
+    mocks.fetch.mockRejectedValue(new SsrFBlockedError('blocked answer'));
+    await expect(downloadMediaResult({ raw: 'https://vidgen.x.ai/result', allowedHosts: ['x.ai'],
+      providerDownload: 'xai-video', context: ctx, assertActive: vi.fn(),
+    })).rejects.toMatchObject({ code: 'MEDIA_DOWNLOAD_BLOCKED', retryable: false });
+    expect(ctx.confirm.mock.calls.length).toBe(0);
+    expect(mocks.fetch.mock.calls[0][3].providerDownload).toBe('xai-video');
+    mocks.fetch.mockResolvedValue(response(null, { status: 302, headers: { location: 'https://other.example/video' } }));
+    await expect(downloadMediaResult({ raw: 'https://vidgen.x.ai/result', allowedHosts: ['x.ai'],
+      providerDownload: 'xai-video', context: ctx, assertActive: vi.fn(),
+    })).rejects.toMatchObject({ code: 'MEDIA_DOWNLOAD_BLOCKED', retryable: false });
+    expect(ctx.confirm.mock.calls.length).toBe(0);
+  });
+  it.each([true, false])('enforces the streaming byte cap (declared length: %s)', async (declared) => {
+    mocks.fetch.mockResolvedValue(response(bytes, { headers: declared ? { 'content-length': String(bytes.length) } : {} }));
+    await expect(downloadMediaResult({ raw: 'https://known.example.com/video', allowedHosts: ['known.example.com'],
+      maxBytes: 4, assertActive: vi.fn(),
+    })).rejects.toMatchObject({ code: 'MEDIA_RESULT_TOO_LARGE', retryable: false, diagnostic: { stage: 'validation' } });
+  });
   beforeEach(() => {
     mocks.fetch.mockReset().mockImplementation(async (_url, _init, gate) => {
       await gate();

@@ -104,6 +104,16 @@ describe('listAvailableMediaModels', () => {
       { id: 'video-without-guide' },
     ]);
   });
+  it('local video discovery needs no Gateway Guide or balance and keeps provider identity', async () => {
+    const local = { id: 'xai/grok-imagine-video', name: 'Video', providerId: 'xai',
+      mode: 'video_generation', modalities: { input: ['text', 'image'], output: ['video'] } };
+    listProviderMediaModelsMock.mockReturnValue([local]);
+    expect(await listAvailableMediaModels('video.image_to_video', { skipGateway: true })).toEqual([local]);
+    expect(serverApiFetchMock).not.toHaveBeenCalled();
+    serverApiFetchMock.mockRejectedValue(new Error('gateway unavailable'));
+    const result = await listExecutableMediaModels(['video.generate']);
+    expect(result.models).toEqual([local]);
+  });
 
   it('带操作筛选时按 Gateway modalities 判断模型能力', async () => {
     await expect(listAvailableMediaModels('image.generate')).resolves.toMatchObject([

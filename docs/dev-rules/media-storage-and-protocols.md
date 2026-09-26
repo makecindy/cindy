@@ -102,6 +102,34 @@
 - 真实 MIME 识别、账号/任务归属、受管入库规则持续有效。下载授权不包含执行文件、
   安装程序或覆盖用户文件的授权。旧 Guide 快照与 base64 结果保持兼容。
 
+## Agent 的本地订阅视频
+
+- `media.list_models` 合并 Model Access 与 Host 已连接的本地媒体来源；本地视频必须同时
+  满足注册执行器、模型能力、授权、启用及显示条件。不得借同名模型切换到 Gateway，
+  也不把聊天模型目录视为视频能力。未实现完整恢复与交付接口的 Provider 不进入 Agent 清单。
+- 本地 `prepare` 根据 VideoProvider 的真实能力构造 Host-only Guide；不请求 Gateway Guide。
+  `provider-video` 只允许在本地持久快照中解析，Server 下发不能选择该执行模式。
+- 图生视频支持受管图片和规范 PNG/JPEG Base64 data URL。两者均须通过容器结构、完整
+  像素解码及 MIME 一致性检查；每张最多 20 MiB、16777216 像素、最长边 8192，限单帧。
+  不接受文件路径、HTTP 或 SVG；不记录输入 body、解码器原始错误或凭证。
+- 提交前校验输入，以数据库状态转换认领一次调用。持久 taskId 保存版本化 Provider 句柄，
+  responseJson 仅保存真正成功的响应。未知提交不自动重发；已有句柄只查原任务，下载或
+  入库失败保留原成功响应，临时地址疑似失效仅刷新原任务。没有远端取消或百分比进度接口。
+- Grok 使用现有 Host OAuth。随机登录标识随原加密凭证保存，刷新和重启保留，重新登录
+  更换；进程内仍检查 owner 与凭证代次。标识和 OAuth 不返回 Agent。旧凭证按需补齐标识，
+  不改变 SQLite schema；降级客户端无法继续新视频句柄，须重新使用支持该模式的版本恢复。
+- xAI 交付复用统一受管入库，并保留 Provider 的 HTTPS、`*.x.ai`、无 URL 登录信息、最多
+  一跳重定向与 256 MiB 上限。OAuth 不发送给 CDN。仅 Host 标记的 `vidgen.x.ai` 下载且
+  已选择代理时，使用固定 Cloudflare HTTPS DNS 查询公共 hostname；不发送视频路径或查询串，
+  不改系统 DNS/代理，答案仍经现有 SSRF 校验和 IP 固定连接，TLS 校验保持启用。
+  该窄适配不保证所有网络环境可用，也不保证上游任务 TTL 之后仍可刷新地址。
+- 交付诊断只返回阶段、hostname、HTTP 状态和受限错误码。401/403/404/410 只是刷新原单
+  地址的候选条件，不能据此断言鉴权失败或地址过期，更不能重新付费生成。
+
+实现与回归：`cindy-media/providerVideoGuide.ts`、`providerVideoInvocation.ts`、
+`providerVideoImage.ts`，`cindy-media/__tests__/invocationService.test.ts`、
+`mediaInvocationStore.test.ts`，以及 `maker-host/__tests__/xaiVideoProxyDns.test.ts`。
+
 ## 模型请求超限时的附件恢复
 
 - 只在本地代理收到的请求实际超过既有字节上限后恢复；正常请求不因图片数量、预估

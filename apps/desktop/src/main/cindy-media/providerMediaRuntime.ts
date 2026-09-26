@@ -1,6 +1,7 @@
 import type { MediaCapability } from '@cindy/model-providers';
 import type { ImageParameters, ImageProtocol } from './imageParameters.js';
 import { supportsMediaCapability } from './mediaCapabilities.js';
+import type { VideoProvider } from '../cindy-proxy-media/video/types.js';
 
 export interface ProviderMediaRuntimeModel {
   id: string;
@@ -32,6 +33,8 @@ interface ProviderMediaRuntime {
   /** Settings readiness; must include hidden models so the display switch stays togglable. */
   listExecutableModels?(): ProviderMediaRuntimeModel[];
   listExecutableVideoModels?(): ProviderMediaRuntimeModel[];
+  /** Host 内部的视频执行器；不会通过 MCP 返回给 Agent。 */
+  resolveVideo?(providerId: string, modelId: string): VideoProvider | null;
   invoke(request: ProviderMediaRuntimeRequest): Promise<ProviderMediaRuntimeResult>;
 }
 
@@ -42,13 +45,18 @@ export function configureProviderMediaRuntime(next: ProviderMediaRuntime): void 
 }
 
 export function listProviderMediaModels(): ProviderMediaRuntimeModel[] {
-  return runtime?.listModels() ?? [];
+  return [...(runtime?.listModels() ?? []), ...(runtime?.listVideoModels?.() ?? [])];
+}
+
+/** 已提交单据可继续查询；新提交的可见性由 resolveProviderMediaModel 再检查。 */
+export function resolveProviderVideo(providerId: string, modelId: string): VideoProvider | null {
+  return runtime?.resolveVideo?.(providerId, modelId) ?? null;
 }
 
 /** Readiness only; dispatch still belongs to the image/video execution registries. */
 export function listReadyProviderMediaModels(): ProviderMediaRuntimeModel[] {
   return [
-    ...(runtime?.listExecutableModels?.() ?? listProviderMediaModels()),
+    ...(runtime?.listExecutableModels?.() ?? runtime?.listModels() ?? []),
     ...(runtime?.listExecutableVideoModels?.() ?? runtime?.listVideoModels?.() ?? []),
   ];
 }

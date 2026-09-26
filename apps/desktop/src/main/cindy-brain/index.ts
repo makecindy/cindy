@@ -390,6 +390,7 @@ import { getActiveCatalog, getXdGatewayModels } from '../maker-host/active-catal
 import {
   getGrokAccessToken,
   getGrokOAuthCredentialGeneration,
+  getGrokOAuthVideoSessionId,
   hasGrokOAuthLogin,
 } from '../maker-host/grok-oauth-login.js';
 import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-host.js';
@@ -3486,6 +3487,7 @@ function getVideoProviderRegistry() {
         hasOAuthLogin: () => hasGrokOAuthLogin(),
         getAccessToken: () => getGrokAccessToken(),
         getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
+        getCredentialSessionId: () => getGrokOAuthVideoSessionId(),
         getOwnerScopeKey: () => activeOwnerScopeKey(),
         isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
         fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
@@ -4471,6 +4473,12 @@ function listLocalProviderVideoModels(respectDisplaySwitch = false) {
       ) {
         return [];
       }
+      // Core advertises only complete bridges. Settings readiness may still show
+      // other registered plugin providers without implying Agent execution support.
+      if (respectDisplaySwitch) {
+        const executor = registry.resolveByAlias(model.id).provider;
+        if (!executor.captureScope || !executor.restoreHandle || !executor.resolveDownload) return [];
+      }
       const modalities = model.modalities ?? {
         input: ['text', 'image'],
         output: ['video'],
@@ -4495,6 +4503,12 @@ configureProviderMediaRuntime({
   listVideoModels: () => listLocalProviderVideoModels(true),
   listExecutableModels: () => listLocalProviderMediaModels(false),
   listExecutableVideoModels: () => listLocalProviderVideoModels(false),
+  resolveVideo: (providerId, modelId) => {
+    const registry = getVideoProviderRegistry();
+    return registry?.hasAlias(modelId, providerId)
+      ? registry.resolveByAlias(modelId).provider
+      : null;
+  },
   invoke: async (request) => {
     if (request.capability !== 'image.generate' && request.capability !== 'image.edit') {
       throw new Error('当前第三方 Provider 执行通道不支持该媒体能力');

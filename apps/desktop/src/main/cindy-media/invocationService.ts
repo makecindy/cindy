@@ -33,12 +33,13 @@ import {
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import * as blobStore from './blobStore.js';
 import { ingestMedia } from './ingest.js';
-import { downloadMediaResult, MediaDownloadError, type MediaDownloadContext } from './mediaDownload.js';
+import { downloadMediaResult, MediaDownloadError, mediaNetworkErrorCode, type MediaDownloadContext } from './mediaDownload.js';
 import { mediaErrorForLog, mediaErrorStackForLog, mediaRequestParamsForLog, mediaRequestUrlForLog } from './mediaRequestLog.js';
 import { normalizeBase64Payload, parseDataUrl } from './dataUrl.js';
 import {
   invokeProviderMedia,
   resolveProviderMediaModel,
+  resolveProviderVideo,
   type ProviderMediaRuntimeModel,
 } from './providerMediaRuntime.js';
 import { sniffMediaMime, additionalMp3BytesNeeded } from './sniffMediaMime.js';
@@ -51,6 +52,9 @@ import {
   transitionMediaInvocation,
   type StoredMediaInvocation,
 } from './mediaInvocationStore.js';
+import { providerVideoGuide, ProviderVideoError } from './providerVideoGuide.js';
+import { validateProviderVideoImage, VideoImageInputError } from './providerVideoImage.js';
+import { submitProviderVideo, pollProviderVideo, type ProviderVideoContext } from './providerVideoInvocation.js';
 
 const log = createLogger('cindyMediaInvocation');
 const INVOCATION_TTL_MS = 6 * 60 * 60 * 1_000;
@@ -91,6 +95,8 @@ interface MediaAuthScope {
   dbOwnerId: string;
   generation: number;
   downloadContext?: MediaDownloadContext;
+  assertProvider?: () => void;
+  providerDownload?: 'xai-video';
 }
 
 function currentAuthScope(downloadContext?: MediaDownloadContext): MediaAuthScope {
@@ -112,6 +118,7 @@ function currentAuthScope(downloadContext?: MediaDownloadContext): MediaAuthScop
 
 function assertAuthScope(scope: MediaAuthScope, expectedOwner = scope.owner): void {
   scope.downloadContext?.assertActive();
+  scope.assertProvider?.();
   const current = currentAuthScope();
   if (
     current.owner !== expectedOwner ||
@@ -788,6 +795,7 @@ async function mediaBytes(
       allowedHosts: extractor.allowedUrlHosts,
       context: scope.downloadContext,
       assertActive: () => assertAuthScope(scope),
+      ...(scope.providerDownload ? { providerDownload: scope.providerDownload, maxBytes: 256 * 1024 * 1024 } : {}),
     });
     try {
       const file = await fs.open(downloaded.filePath, 'r');
@@ -1169,9 +1177,6 @@ async function prepareInvocation(
   const resolvedModelId = model.id;
   let preparedGuide: PreparedMediaInvocationGuide;
   if (model.providerId !== 'xd') {
-    if (capability !== 'image.generate' && capability !== 'image.edit') {
-      return failure('CAPABILITY_NOT_SUPPORTED', '该第三方 Provider 当前不支持请求的媒体能力');
-    }
     const providerModel = resolveProviderMediaModel(
       model.providerId,
       resolvedModelId,
@@ -1180,7 +1185,15 @@ async function prepareInvocation(
     if (!providerModel) {
       return failure('MODEL_NOT_AVAILABLE', '该第三方媒体模型或执行来源当前不可用');
     }
-    preparedGuide = providerImageGuide(providerModel, capability);
+    if (capability === 'video.generate' || capability === 'video.image_to_video') {
+      const provider = resolveProviderVideo(model.providerId, resolvedModelId);
+      if (!provider) return failure('CAPABILITY_NOT_SUPPORTED', '该视频来源没有可用执行器');
+      preparedGuide = providerVideoGuide(providerModel, capability, provider);
+    } else if (capability === 'image.generate' || capability === 'image.edit') {
+      preparedGuide = providerImageGuide(providerModel, capability);
+    } else {
+      return failure('CAPABILITY_NOT_SUPPORTED', '该第三方 Provider 当前不支持请求的媒体能力');
+    }
   } else {
     if (!getAppCapabilities().canUseCindyGateway) {
       return failure('CONNECTION_UNAVAILABLE', '当前账号不能使用 Cindy AI 网关');
@@ -1288,6 +1301,55 @@ async function requireInvocation(id: string): Promise<StoredMediaInvocation> {
   return invocation;
 }
 
+/** 原生视频复用既有受管引用解析、安全下载、原子入库及 owner 检查。 */
+function nativeVideoContext(scope: MediaAuthScope, db: DbClient): ProviderVideoContext {
+  const inputs = { localInputs: 0, localBytes: 0 };
+  return {
+    db, signal: scope.downloadContext?.signal,
+    assertActive: () => assertAuthScope(scope),
+    resolveImage: async (ref) => {
+      const data = ref.startsWith('data:') ? ref : await localMediaDataUrl(ref, inputs);
+      assertAuthScope(scope);
+      if (!data) throw new ProviderVideoError('MEDIA_INPUT_INVALID', '参考图须为 Cindy 受管图片或 PNG/JPEG Base64 data URL，不接受路径或网络 URL');
+      try {
+        const validated = await validateProviderVideoImage(data);
+        assertAuthScope(scope);
+        return validated;
+      } catch (error) {
+        if (error instanceof VideoImageInputError) throw new ProviderVideoError(error.code, error.message);
+        throw error;
+      }
+    },
+    materialize: async (url, allowedHosts, assertProvider, providerDownload) => {
+      try {
+        return await materializeResults(
+          { video: url }, [{ path: ['video'], encoding: 'url', kind: 'video', allowedUrlHosts: allowedHosts }],
+          { ...scope, assertProvider, providerDownload }, db,
+        );
+      } catch (error) {
+        assertAuthScope(scope); assertProvider();
+        if (error instanceof MediaDownloadError) throw error;
+        const validation = error instanceof MediaInvocationError && error.code.startsWith('MEDIA_RESULT');
+        const networkCode = mediaNetworkErrorCode(error);
+        throw new MediaDownloadError(validation ? error.code : 'MEDIA_INGEST_FAILED', '视频交付尚未完成，原结果仍保留',
+          { stage: validation ? 'validation' : 'ingest', hostname: new URL(url).hostname, ...(networkCode ? { networkCode } : {}) },
+          !validation && !['ENOSPC', 'EACCES', 'EPERM'].includes(networkCode ?? ''));
+      }
+    },
+    complete: async (invocation, media) => {
+      try {
+        const result = await persistCompletedInvocation(invocation, media, scope, db);
+        if (result.ok !== true) throw new Error('ledger pending');
+        return result;
+      } catch {
+        assertAuthScope(scope);
+        throw new MediaDownloadError('MEDIA_LEDGER_PENDING', '视频已入库，调用完成状态暂未保存；保留原调用', { stage: 'ledger' }, true);
+      }
+    },
+    completed: completedInvocationResult,
+  };
+}
+
 async function submitInvocation(
   invocation: StoredMediaInvocation,
   body: Record<string, unknown>,
@@ -1298,6 +1360,10 @@ async function submitInvocation(
   const db = captureMediaDb(scope);
   if (invocation.state === 'complete') {
     return completedInvocationResult(invocation);
+  }
+  if (invocation.guide.response.mode === 'provider-video' &&
+    (invocation.state === 'pending' || invocation.state === 'unknown')) {
+    return pollProviderVideo(invocation, nativeVideoContext(scope, db));
   }
   if (
     invocation.state === 'pending' &&
@@ -1335,6 +1401,9 @@ async function submitInvocation(
     );
     assertAuthScope(scope, invocation.owner);
     return failure('INVOCATION_EXPIRED', '调用准备已超过 5 分钟，请重新查询模型并 prepare');
+  }
+  if (invocation.guide.response.mode === 'provider-video') {
+    return submitProviderVideo(invocation, body, nativeVideoContext(scope, db));
   }
   if (isClientProviderInvocation(invocation)) {
     return submitProviderInvocation(invocation, body, scope, db);
@@ -1594,6 +1663,9 @@ async function pollInvocation(
   const scope = currentAuthScope(context);
   assertAuthScope(scope, invocation.owner);
   const db = captureMediaDb(scope);
+  if (invocation.guide.response.mode === 'provider-video') {
+    return pollProviderVideo(invocation, nativeVideoContext(scope, db));
+  }
   if (invocation.guide.response.mode !== 'async') {
     return failure('POLL_NOT_SUPPORTED', '同步媒体调用不需要 poll');
   }
@@ -1848,6 +1920,7 @@ export async function callCindyMedia(
       activeInvocations.delete(operationKey);
     }
   } catch (error) {
+    if (error instanceof ProviderVideoError) return failure(error.code, error.message, error.code === 'MEDIA_INPUT_BUSY');
     if (error instanceof MediaInvocationError || error instanceof MediaDownloadError) return failure(error.code, error.message);
     if (error instanceof MediaModelCatalogError) {
       log.warn('media model catalog rejected by current client', { detail: error.detail });
