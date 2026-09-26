@@ -18,6 +18,7 @@ import {
   type TaskMigrationView,
 } from '@cindy/device-link';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current';
+import { createSharedTaskJournal } from '../localDb/sharedTasks';
 import { withSessionRouteLock } from '../localDb/sessionRouteLock';
 import { getSelfDeviceId, remoteInvoke } from '../device-link';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context';
@@ -166,12 +167,15 @@ async function assertSource(scope: Scope, sessionId: string): Promise<SourceSess
     `SELECT
     (SELECT count(*) FROM schedules WHERE target_session_id = ?) +
     (SELECT count(*) FROM bot_session_links WHERE session_id = ?) +
-    (SELECT count(*) FROM shared_task_events WHERE session_id = ?) +
     (SELECT count(*) FROM session_goals WHERE session_id = ? AND status != 'complete') AS n`,
-    [sessionId, sessionId, sessionId, sessionId],
+    [sessionId, sessionId, sessionId],
   );
   scope.assertCurrent();
   if (bound?.n) throw new Error('MIGRATION_TASK_BOUND');
+  const sharing = await createSharedTaskJournal(scope.db).latest();
+  scope.assertCurrent();
+  if (sharing.some(entry => entry.sessionId === sessionId && !entry.terminal))
+    throw new Error('MIGRATION_TASK_BOUND');
   const queued = await scope.db.queryOne<{ payload: string }>(
     'SELECT payload FROM agent_input_queue_snapshots WHERE session_id = ?',
     [sessionId],
@@ -483,6 +487,9 @@ async function receive(
       scope.assertCurrent();
       // Each failed attempt owns only its new directory. It never replaces a user's existing folder.
       const workingDir = await fs.mkdtemp(path.join(parent, `cindy-${request.id.slice(0, 8)}-`));
+      const retainedWorkingDirs = record
+        ? [...(record.retainedWorkingDirs ?? []), record.workingDir]
+        : [];
       record = {
         kind: 'incoming',
         id: request.id,
@@ -491,6 +498,7 @@ async function receive(
         sourceSessionId: request.sourceSessionId,
         stage: 'receiving',
         workingDir,
+        ...(retainedWorkingDirs.length ? { retainedWorkingDirs } : {}),
       };
       scope.save(record);
       const directory = await fs.mkdtemp(path.join(scope.root, 'incoming-'));

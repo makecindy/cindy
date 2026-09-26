@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { migrationNativeContext } from '../migrationNativeContext';
 const original = '12345678-1234-4234-a234-123456789012';
 describe('independent migration context identities', () => {
+  it.each(['switched to another agent', '{broken', 'null', '[1]', '"legacy"', ''])('preserves legacy metadata verbatim: %s', raw => {
+    expect(migrationNativeContext('migration', [original]).metadata(raw)).toBe(raw);
+  });
   it('preserves native fork turn anchors while mapping them to the copied context', () => {
     const copy = migrationNativeContext('migration', [original]);
     const anchor = { agentKind: 'codex', sdkSessionId: original, kind: 'turn', id: 'turn-1' };

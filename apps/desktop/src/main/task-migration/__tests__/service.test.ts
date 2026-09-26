@@ -21,6 +21,8 @@ const state = vi.hoisted(() => ({
   importsFail: false,
   siblingRunning: false,
   noSpace: false,
+  restoresFail: false,
+  sharingLatest: [] as Array<{ shared_task_id: string; session_id: string; terminal: number; snapshot: null }>,
 }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root }, ipcMain: { handle: vi.fn() } }));
 vi.mock('../resources', async (original) => {
@@ -128,8 +130,8 @@ vi.mock('../../maker-host/createDesktopProviderService', () => ({
 vi.mock('../../maker-host/model-route-guard', () => ({
   pickEnabledFallbackModel: () => ({ model: 'target-model', providerId: 'target-provider' }),
 }));
-vi.mock('../../worktree/resourceLock', () => ({
-  physicalWorktreeKey: (cwd: string) => fs.realpath(cwd),
+vi.mock('../../worktree/resourceLock', async original => ({
+  ...await original<typeof import('../../worktree/resourceLock')>(),
   withWorktreeResourceLock: (_cwd: string, fn: () => unknown) => fn(),
 }));
 vi.mock('../../session-share/sessionShareExport', () => ({
@@ -177,6 +179,7 @@ vi.mock('../workspace', () => ({
   },
   restoreWorkspace: async (_manifest: unknown, directory: string, target: string) => {
     await fs.copyFile(path.join(directory, 'a.tar.gz.enc'), path.join(target, 'draft'));
+    if (state.restoresFail) throw new Error('restore interrupted');
   },
 }));
 import { requestTaskMigration, registerTaskMigrationIpc } from '../service';
@@ -209,6 +212,8 @@ describe('durable cross-machine handoff', () => {
     state.importsFail = false;
     state.siblingRunning = false;
     state.noSpace = false;
+    state.restoresFail = false;
+    state.sharingLatest = [];
     const cwd = path.join(state.root, 'shared');
     await fs.mkdir(cwd);
     await fs.writeFile(path.join(cwd, 'draft'), 'original');
@@ -216,7 +221,7 @@ describe('durable cross-machine handoff', () => {
       const rows = new Map<string, Record<string, unknown>>();
       state.rows.set(d, rows);
       state.dbs.set(d, {
-        query: vi.fn(async () => []),
+        query: vi.fn(async (sql: string) => sql.includes('shared_task_events') ? state.sharingLatest : []),
         queryOne: vi.fn(async (sql: string, args: string[]) =>
           sql.includes(' AS n') ? { n: 0 } : (rows.get(args[0]) ?? null),
         ),
@@ -246,6 +251,64 @@ describe('durable cross-machine handoff', () => {
   const start = () =>
     requestTaskMigration({ action: 'start', sessionId: 'fork', targetDeviceId: 'B' });
 
+  it('blocks current sharing but permits migration after all sharing identities are closed', async () => {
+    state.sharingLatest = [
+      { shared_task_id: 'closed', session_id: 'fork', terminal: 1, snapshot: null },
+      { shared_task_id: 'active', session_id: 'fork', terminal: 0, snapshot: null },
+    ];
+    await expect(start()).rejects.toThrow('MIGRATION_TASK_BOUND');
+    state.sharingLatest[1].terminal = 1;
+    state.sharingLatest.push({ shared_task_id: 'unrelated', session_id: 'sibling', terminal: 0, snapshot: null });
+    await start();
+    expect((await settled()).stage).toBe('complete');
+    expect(state.dbs.get('A')!.query).toHaveBeenCalledWith(expect.stringContaining('SELECT MAX(id)'));
+  });
+  it('keeps the source fenced and refuses activation by a different controller before retirement', async () => {
+    state.loseReply = 'receive';
+    await start();
+    const source = await settled();
+    expect(source.stage).toBe('transferring');
+    expect(() => assertTaskMigrationWritable('fork')).toThrow('MIGRATION_TASK_BUSY');
+    await state.context.run({ device: 'B', peer: 'C' }, async () => {
+      expect(migrationScope().readIncoming(source.targetSessionId!)?.stage).toBe('ready');
+      await expect(requestTaskMigration({ action: 'activate', id: source.targetSessionId!, sourceSessionId: 'fork' })).rejects.toThrow('MIGRATION_TARGET_NOT_READY');
+      expect(migrationScope().readIncoming(source.targetSessionId!)?.stage).toBe('ready');
+      expect(() => assertTaskMigrationWritable(source.targetSessionId!)).toThrow('MIGRATION_TASK_BUSY');
+    });
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    expect((await settled()).stage).toBe('complete');
+  });
+  it('retains every failed receive directory in the existing receipt after a successful retry', async () => {
+    state.restoresFail = true;
+    await start();
+    const first = await settled();
+    expect(first.stage).toBe('transferring');
+    const receipt = () => state.context.run({ device: 'B' }, () => migrationScope().readIncoming(first.targetSessionId!)!);
+    const firstDir = receipt().workingDir;
+    await fs.writeFile(path.join(firstDir, 'draft'), 'user recovery edit');
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    await settled();
+    const secondDir = receipt().workingDir;
+    expect(receipt().retainedWorkingDirs).toEqual([firstDir]);
+    state.restoresFail = false;
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    expect((await settled()).stage).toBe('complete');
+    expect(receipt().retainedWorkingDirs).toEqual([firstDir, secondDir]);
+    expect(await fs.readFile(path.join(firstDir, 'draft'), 'utf8')).toBe('user recovery edit');
+    expect(await fs.readFile(path.join(secondDir, 'draft'), 'utf8')).toBe('original');
+    expect(receipt().workingDir).not.toBe(firstDir);
+    expect(receipt().workingDir).not.toBe(secondDir);
+  });
+  it('allows missing unrelated workspaces while preserving overlap guards for missing leaves', async () => {
+    state.noSpace = true;
+    await start();
+    expect((await settled()).stage).toBe('preparing');
+    await expect(assertTaskMigrationInputAllowed(undefined, path.join(state.root, 'missing', 'project'))).resolves.toBeUndefined();
+    await expect(assertTaskMigrationInputAllowed(undefined, path.join(state.root, 'shared', 'missing'))).rejects.toThrow('MIGRATION_SHARED_DIRECTORY_BUSY');
+    await fs.rename(path.join(state.root, 'shared'), path.join(state.root, 'temporarily-detached'));
+    await expect(assertTaskMigrationInputAllowed(undefined, path.join(state.root, 'unrelated'))).resolves.toBeUndefined();
+    await expect(assertTaskMigrationInputAllowed(undefined, path.join(state.root, 'shared', 'missing'))).rejects.toThrow('MIGRATION_SHARED_DIRECTORY_BUSY');
+  });
   it('moves a fork into an independent directory and leaves the sibling and source files usable', async () => {
     await start();
     const status = await settled();

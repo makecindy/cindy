@@ -1,5 +1,5 @@
-import fs from 'node:fs';
 import path from 'node:path';
+import { physicalWorktreeKey } from '../worktree/resourceLock';
 import { getDbClient } from '../localDb/client/current';
 import { assertTaskMigrationWritable, migrationScope } from './journal';
 
@@ -29,9 +29,11 @@ export async function assertTaskMigrationInputAllowed(
     .list()
     .filter((record) => record.kind === 'outgoing' && record.stage === 'preparing');
   if (!preparing.length) return;
-  const key = fs.realpathSync(workingDir);
+  const key = await physicalWorktreeKey(workingDir);
+  scope.assertCurrent();
   for (const record of preparing) {
-    const source = fs.realpathSync(record.workingDir);
+    const source = await physicalWorktreeKey(record.workingDir);
+    scope.assertCurrent();
     if (key === source || key.startsWith(source + path.sep) || source.startsWith(key + path.sep))
       throw new Error('[PRECONDITION_FAILED] MIGRATION_SHARED_DIRECTORY_BUSY');
   }

@@ -17,6 +17,8 @@ export interface IncomingMigration {
   sourceSessionId: string;
   stage: 'receiving' | 'ready' | 'active';
   workingDir: string;
+  /** Retained failed attempts; never delete or overwrite files a user may have opened. */
+  retainedWorkingDirs?: string[];
 }
 export type MigrationRecord = (MigrationHandoff & { kind: 'outgoing' }) | IncomingMigration;
 const validId = (value: string) => /^[a-zA-Z0-9_-]{1,128}$/.test(value);
@@ -46,7 +48,10 @@ export function migrationScope() {
       !validId(record.sourceDeviceId) ||
       (record.kind === 'incoming'
         ? !['receiving', 'ready', 'active'].includes(record.stage) ||
-          !validId(record.sourceSessionId)
+          !validId(record.sourceSessionId) ||
+          (record.retainedWorkingDirs !== undefined &&
+            (!Array.isArray(record.retainedWorkingDirs) ||
+              record.retainedWorkingDirs.some(dir => typeof dir !== 'string' || !path.isAbsolute(dir))))
         : !['preparing', 'transferring', 'moved', 'complete', 'cancelled'].includes(record.stage) ||
           !validId(record.targetDeviceId) ||
           record.targetSessionId !== record.id)

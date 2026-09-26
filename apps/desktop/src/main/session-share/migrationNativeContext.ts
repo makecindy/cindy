@@ -15,7 +15,14 @@ export function migrationNativeContext(migrationId: string, nativeIds: readonly 
   const id = (value: string) => ids.get(value) ?? value;
   const metadata = (raw: string | null): string | null => {
     if (!raw) return raw;
-    const value = JSON.parse(raw) as Record<string, unknown>;
+    let value: Record<string, unknown>;
+    try {
+      value = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      // Legacy switch messages and optional metadata can be plain text.
+      // Preserve those bytes, just as the ordinary transcript reader does.
+      return raw;
+    }
     if (!value || typeof value !== 'object' || Array.isArray(value)) return raw;
     let changed = false;
     for (const key of [
