@@ -68,15 +68,15 @@ describe("live review context across decision caches", () => {
       ).verdict,
     ).toBe("block");
   });
-  it("passes the resolved context to the cache and fails closed on lookup error", async () => {
+  it("asks on infrastructure failure without evaluating or using cached authorization", async () => {
     const delegate: AutoReviewDelegate = async () => null;
     delegate.prepareRequest = async () => {
       throw Error("DB changed");
     };
     const evaluate = vi.fn();
     expect(
-      (await withAutoReviewContext(request, delegate, evaluate)).verdict,
-    ).toBe("block");
+      await withAutoReviewContext(request, delegate, evaluate),
+    ).toMatchObject({ verdict: "ask", unavailable: true });
     expect(evaluate).not.toHaveBeenCalled();
   });
 });
@@ -98,4 +98,12 @@ it('reviews task-level read restrictions even without separate user text', async
     action: { kind: 'read', path: '/answer/fixtures/private.txt' } };
   expect((await resolveAutoReviewDecision(scoped, delegate)).verdict).toBe('block');
   expect(delegate).toHaveBeenCalledOnce();
+});
+
+it('does not execute a stale allow when the final authority lookup fails', async () => {
+  let calls = 0;
+  const delegate: AutoReviewDelegate = async () => null;
+  delegate.prepareRequest = async r => { if (++calls === 2) throw Error('storage offline'); return r; };
+  expect(await withAutoReviewContext(request, delegate, async () => ({verdict: 'allow'})))
+    .toMatchObject({verdict: 'ask', unavailable: true});
 });

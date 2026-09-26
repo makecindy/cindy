@@ -26,6 +26,7 @@ function fixture(): PluginReviewSnapshot {
     pluginId: 'eval',
     authorized: true,
     revision: ['owner', 1, 'install-1'],
+    registeredRoute: route,
     plan: {
       concurrency: 4,
       task: 'Coordinate the registered tests.',
@@ -165,4 +166,24 @@ it.each(['ask_user', 'plan_review'])('marks missing %s answer receipts as incomp
   const result = await createPluginTaskReviewResolver(async () => s)(request);
   expect(result.userIntent).toMatchObject({ historyOmitted: true });
   expect(JSON.stringify(result.userIntent)).not.toContain('Read only');
+});
+
+it.each(['agentKind', 'providerId', 'model', 'effort', 'fastMode'])('rejects coordinator drift in %s', async key => {
+  const s = fixture(); delete s.worker;
+  s.session.route = { ...route, [key]: key === 'fastMode' ? true : 'other' } as typeof route;
+  const result = await createPluginTaskReviewResolver(async () => s)(request);
+  expect(result.authorizationError).toBeTruthy();
+  expect(result.delegatedTask).toBeUndefined();
+});
+it('does not infer a missing coordinator receipt route', async () => {
+  const s = fixture(); delete s.worker; delete s.registeredRoute;
+  expect((await createPluginTaskReviewResolver(async () => s)(request)).authorizationError).toBeTruthy();
+});
+it.each([false, true])('marks tied user grant/revocation as incomplete regardless of merge order (%s)', async reverse => {
+  const s = fixture();
+  s.history = ['Do not write', 'You may write'].map((text, i) => ({clientId: String(i), role: 'user', createdAt: 42, content: {}, agentMeta: {autoReviewUserText: text, delivery: 'turn'}}));
+  if (reverse) s.history.reverse();
+  const result = await createPluginTaskReviewResolver(async () => s)(request);
+  expect(result.userIntent).toMatchObject({historyOmitted: true});
+  expect(JSON.stringify(result.userIntent)).toContain('Do not write');
 });

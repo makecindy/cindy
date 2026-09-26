@@ -12781,19 +12781,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const epoch = getCurrentDbClientSnapshot();
     if (!epoch) throw new Error('Task storage unavailable');
     const db = epoch.client.drizzle;
-    const store = createPluginTaskStore(epoch.client);
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (!session) throw new Error('Task unavailable');
+    // Ordinary tasks do not depend on plugin receipt storage. Worker ownership
+    // is checked through its lead before touching the plugin task store.
+    if (session.source !== 'plugin' && session.orcaRole !== 'worker') {
+      if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
+      return null;
+    }
     const [link] = await db.select({ label: orcaWorkers.label, leadId: orcaTeams.leadSessionId,
       teamId: orcaTeams.id, teamStatus: orcaTeams.status }).from(orcaWorkers)
       .innerJoin(orcaTeams, eq(orcaWorkers.teamId, orcaTeams.id))
       .where(eq(orcaWorkers.sessionId, sessionId)).limit(1);
     const leadId = link?.leadId ?? sessionId;
+    const [lead] = await db.select().from(sessions).where(eq(sessions.id, leadId)).limit(1);
+    if (!lead) throw new Error('Lead unavailable');
+    if (lead.source !== 'plugin') {
+      if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
+      return null;
+    }
+    const store = createPluginTaskStore(epoch.client);
     const receipt = await store.get(leadId);
     if (!receipt || receipt.operation !== 'create') {
       if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
       return null;
     }
-    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
-    const [lead] = await db.select().from(sessions).where(eq(sessions.id, leadId)).limit(1);
     if (!session || !lead || !session.workingDir) throw new Error('Delegated task unavailable');
     const agentKind = session.agentKind === 'cc' ? 'cc' : session.agentKind === 'pi' ? 'pi' : session.agentKind === 'codex' ? 'codex' : null;
     if (!agentKind) throw new Error('Delegated task route unavailable');
@@ -12807,6 +12819,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       authorized: approvalRevision !== null && isPluginTaskAuthorized(receipt.pluginId) && config.permissionMode === 'auto',
       revision: [epoch.userId, epoch.clientEpoch, approvalRevision, config.permissionMode, link],
       plan: data.teamPlan, settledLabels: data.settledLabels,
+      registeredRoute: data.route,
       session: { workingDir: session.workingDir, permissionMode: session.permissionMode, status: session.status,
         route: { agentKind, providerId: session.providerId ?? '', model: session.model,
           effort: session.effort, fastMode: !!session.fastMode } },

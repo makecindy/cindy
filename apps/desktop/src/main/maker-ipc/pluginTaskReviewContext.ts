@@ -11,6 +11,7 @@ export interface PluginReviewSnapshot {
   pluginId: string;
   authorized: boolean;
   revision: unknown;
+  registeredRoute?: PluginTaskRoute;
   plan?: PluginTeamPlan;
   settledLabels?: string[];
   session: { workingDir: string; permissionMode: string; status: string; route: PluginTaskRoute };
@@ -32,8 +33,16 @@ export function pluginReviewUserIntent(snapshot: PluginReviewSnapshot): AutoRevi
     }
     return m.createdAt ?? 0;
   };
+  const times = new Set<number>();
   for (const m of [...snapshot.history].sort((a, b) => eventTime(a) - eventTime(b))) {
     const receipt = m.agentMeta?.autoReviewUserText;
+    const text = typeof receipt === 'string' ? receipt
+      : receipt && typeof receipt === 'object' && 'text' in receipt ? receipt.text : '';
+    if (text) {
+      const at = eventTime(m);
+      if (!Number.isFinite(at) || at <= 0 || times.has(at)) omitted = true;
+      times.add(at);
+    }
     if (m.role === 'ask_user' || m.role === 'plan_review') {
       // A card answer can constrain the task, but an unanswered card grants nothing.
       if (
@@ -99,6 +108,10 @@ export function createPluginTaskReviewResolver(
       ? plan?.items.find((x) => x.label === snapshot.worker!.label)
       : undefined;
     const task = snapshot.worker ? item?.task : plan?.task;
+    if (!snapshot.worker && task && (!snapshot.registeredRoute ||
+      (['agentKind', 'providerId', 'model', 'effort', 'fastMode'] as const).some(
+        k => snapshot.registeredRoute![k] !== snapshot.session.route[k],
+      ))) return denied('Coordinator does not match its registered route.');
     if (
       snapshot.worker &&
       (!snapshot.worker.activeTeam ||

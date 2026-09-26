@@ -289,7 +289,7 @@ export async function withAutoReviewContext(
     }
     return decision;
   } catch {
-    return { verdict: 'block', reason: 'Host could not verify the current delegated authorization.' };
+    return { verdict: 'ask', unavailable: true, reason: 'Host could not verify the current authorization; this action needs your confirmation.' };
   }
 }
 

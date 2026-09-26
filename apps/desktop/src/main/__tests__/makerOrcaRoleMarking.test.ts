@@ -66,12 +66,14 @@ describe('maker Orca role marking IPC boundary', () => {
     );
 
     expect(workerIpcSource).toContain('await assertLeadCollabProjectEnabled(b.leadSessionId);');
-    expect(collabHolderSource).toContain('startTeam: async');
+    expect(collabHolderSource).toContain('startTeam: ({ leadSessionId, workerPermissionMode }) => startOrcaTeamForCaller(leadSessionId, workerPermissionMode)');
+    const startHelper = registerSource.slice(registerSource.indexOf('const startOrcaTeamForCaller = async'), registerSource.indexOf('const startOrcaTeamForCaller = async') + 1500);
+    expectOrder(startHelper, 'await assertLeadCollabProjectEnabled(leadSessionId);', 'return await startOrcaTeamWithPermissionGate(');
     expect(collabHolderSource).toContain('createWorker: async');
     expect(collabHolderSource).toContain('createWorkerFromTask: async');
     expect(
       collabHolderSource.match(/await assertLeadCollabProjectEnabled\(/g)?.length ?? 0,
-    ).toBeGreaterThanOrEqual(3);
+    ).toBeGreaterThanOrEqual(2);
   });
 
   it('registers rehydrated worker sessions as known before Maker publishes them', () => {
@@ -103,3 +105,9 @@ function expectOrder(source: string, before: string, after: string): void {
   expect(beforeIndex).toBeGreaterThanOrEqual(0);
   expect(afterIndex).toBeGreaterThan(beforeIndex);
 }
+
+it('ordinary sessions bypass plugin receipt storage before its first lookup', () => {
+  const loader = registerSource.slice(registerSource.indexOf('setAutoReviewContextResolver(createPluginTaskReviewResolver('));
+  expectOrder(loader, "session.source !== 'plugin' && session.orcaRole !== 'worker'", 'const store = createPluginTaskStore(epoch.client);');
+  expectOrder(loader, "lead.source !== 'plugin'", 'const receipt = await store.get(leadId);');
+});
