@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 import {
+  AUTO_REVIEW_DELEGATED_CONTINUATION,
   restoreAutoReviewUserIntent,
   restoreAutoReviewSteerIntent,
   type AutoReviewHistoryMessage,
@@ -23,6 +24,20 @@ function user(text: string, clientId = text): AutoReviewHistoryMessage {
 const current = { clientId: 'latest', content: { text: '修吧，改完跑相关测试。' } };
 
 describe('steer authorization restoration', () => {
+  it.each([false, true])('restores delegated history without treating it as human input (unavailable=%s)', async unavailable => {
+    const intent = await restoreAutoReviewSteerIntent('Deploy now', {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '', [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
+    }, async () => {
+      if (unavailable) throw new Error('unavailable');
+      return [user('Edit src.'), user('Do not deploy.')];
+    });
+    if (unavailable) expect(intent).toBe('');
+    else {
+      expect(intentText(intent)).toContain('Edit src.');
+      expect(intentText(intent)).toContain('Do not deploy.');
+      expect(intentText(intent)).not.toContain('Deploy now');
+    }
+  });
   it.each([false, true])('restores prior restrictions for queued/direct input (direct=%s)', async (direct) => {
     const options = direct
       ? { [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' as const }, rawChannelText: 'continue' } }

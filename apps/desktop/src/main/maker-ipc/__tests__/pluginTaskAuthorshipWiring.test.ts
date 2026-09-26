@@ -8,6 +8,17 @@ const compile = (code: string) => ts.transpileModule(code, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
 
+it('restores human authorization for both live and cold internal delegated sends', () => {
+  for(const target of ['live','session']) {
+    const start=source.lastIndexOf(`sendUserMessageWithAwaitedGitBaseline(${target}, message, clientId, {`);
+    expect(start).toBeGreaterThan(0);
+    const options=source.slice(start,source.indexOf('onAccepted: persistUserMessage',start));
+    expect(options).toContain('params.autoReviewUserText');
+    expect(options).toContain('[AUTO_REVIEW_SOURCE_CONTENT]:');
+    expect(options).toContain('restoreAutoReviewUserIntent(await readAutoReviewHistory(targetSessionId).catch(() => []))');
+  }
+});
+
 it('marks plugin dispatch and every queue fallback with the host-only receipt', () => {
   const start = source.indexOf('async function sendToSessionInternal(params: {');
   const end = source.indexOf('const startOrcaTeamForCaller', start);

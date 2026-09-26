@@ -1,4 +1,5 @@
 import type { SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
+import { AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -116,6 +117,14 @@ beforeEach(() => {
 });
 
 describe('Orca lead/worker dispatcher', () => {
+  it.each([false, true])('restores human restrictions for ordinary direct continuation (unavailable=%s)', async unavailable => {
+    const h = createHarness({readAutoReviewHistory: async () => {
+      if(unavailable) throw new Error('unavailable');
+      return [{clientId:'human',role:'user',content:{text:'Do not deploy'},agentMeta:{delivery:'turn',autoReviewUserText:'Do not deploy'}}];
+    }});
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({targetSessionId:'target-session',rawContent:'Deploy now',source:'lead',senderLabel:'Lead',workerId:'worker-1',meta:{source:'orca',context:'test'}});
+    expect(h.liveSession.send.mock.calls[0]?.[1]?.[AUTO_REVIEW_USER_INTENT]).toBe(unavailable ? '' : 'Do not deploy');
+  });
   it('runs direct accepted side effects after DB persistence and before vendor turn release', async () => {
     const h = createHarness();
     const commit = vi.fn();
@@ -191,6 +200,7 @@ describe('Orca lead/worker dispatcher', () => {
     expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
     expect(prepareUnhealthySession).toHaveBeenCalledWith('target-session');
     expect(h.deps.sendToSessionInternal).toHaveBeenCalledWith(expect.objectContaining({
+      autoReviewUserText: {kind:'delegated-continuation'},
       targetSessionId: 'target-session',
       clientId: 'client-1',
     }));
