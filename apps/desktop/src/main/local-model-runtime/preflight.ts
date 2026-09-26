@@ -6,6 +6,7 @@ import {
 } from '../../shared/localModelRuntime.js';
 import { getCustomProvider } from '../maker-host/custom-provider-store.js';
 import { startOfficialOllamaApp } from './ollamaRuntime.js';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
 
 function cindyUserDataDir(explicit?: string): string | undefined {
   if (explicit) return explicit;
@@ -22,6 +23,17 @@ export async function ensureManagedOllamaReadyForSession(opts: {
   userDataDir?: string;
 }): Promise<void> {
   if (opts.remoteHostId) return;
+  if (opts.providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
+    const { isManagedLlamaCppProvider } = await import('./managedLlamaCppProvider.js');
+    const config = await getCustomProvider(MANAGED_LLAMACPP_PROVIDER_ID);
+    const root = cindyUserDataDir(opts.userDataDir);
+    if (!root || !config || !isManagedLlamaCppProvider(config)) {
+      throw new Error('[LOCAL_LLAMACPP_NOT_READY] Reconnect llama.cpp in Settings → Model Providers.');
+    }
+    const { getManagedLlamaCppService } = await import('./llamaCppService.js');
+    await getManagedLlamaCppService(root).start();
+    return;
+  }
   if (opts.providerId !== MANAGED_OLLAMA_PROVIDER_ID) return;
   const existing = await getCustomProvider(MANAGED_OLLAMA_PROVIDER_ID);
   if (

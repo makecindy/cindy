@@ -45,6 +45,7 @@ import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { acquireCodexLogin, type CodexLoginLease } from '@/hooks/codexAuthLogin';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
 
@@ -276,12 +277,14 @@ function ProviderRow({
   name,
   meta,
   beta,
+  busy,
   onClick,
 }: {
   icon: React.ReactNode;
   name: string;
   meta: string;
   beta?: boolean;
+  busy?: boolean;
   onClick: () => void;
 }) {
   const { t } = useTranslation();
@@ -290,6 +293,8 @@ function ProviderRow({
       type="button"
       onClick={onClick}
       title={name}
+      disabled={busy}
+      aria-busy={busy}
       className="flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
     >
       <span
@@ -300,7 +305,7 @@ function ProviderRow({
           color: 'var(--settings-integration-avatar-icon)',
         }}
       >
-        {icon}
+        {busy ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" /> : icon}
       </span>
       <span
         className="min-w-0 flex-1 truncate text-13 font-medium"
@@ -558,7 +563,7 @@ export function AddProviderWizard({
   const filteredLocalAdvanced = q
     ? localAdvancedPresets.filter((p) => p.name.toLowerCase().includes(q))
     : localAdvancedPresets;
-  const filteredLocalPresets = [...filteredLocalConnect, ...filteredLocalAdvanced];
+  const filteredLocalPresets = [...filteredLocalConnect, ...filteredLocalAdvanced].filter(p => p.id !== 'llamacpp');
 
   const ollamaAlreadyAdded = providers.some((p) => p.id === MANAGED_OLLAMA_PROVIDER_ID);
   const oauthChoiceIds = new Set(oauthChoices.map((p) => p.id));
@@ -593,6 +598,7 @@ export function AddProviderWizard({
     !ollamaAlreadyAdded &&
     ollamaMatchesQuery &&
     (Boolean(q) || (localProbe.ready && !recommendsOllama));
+  const showLlamaCppInList = (!q || 'llama.cpp'.includes(q)) && !providers.some(p => p.id === MANAGED_LLAMACPP_PROVIDER_ID);
   const listedOauth = q
     ? filteredOauth
     : filteredOauth.filter((p) => !recommendedOauthIds.has(p.id));
@@ -642,8 +648,31 @@ export function AddProviderWizard({
     setApiKey('');
     setStep(2);
   }, []);
+  const connectLlamaCpp = useCallback(async () => {
+    if (savingRef.current) return;
+    if (providers.some(p => p.id === MANAGED_LLAMACPP_PROVIDER_ID)) {
+      onDone(MANAGED_LLAMACPP_PROVIDER_ID);
+      return;
+    }
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await window.electronAPI.maker.llamaCppEnsure();
+      await onDone(MANAGED_LLAMACPP_PROVIDER_ID);
+    } catch {
+      toast.error(t('settings.providers.llamacpp.failed'));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }, [onDone, providers, t]);
+
   const pickPreset = useCallback(
     (preset: ProviderPreset, useApiKey = false) => {
+      if (preset.id === 'llamacpp') {
+        void connectLlamaCpp();
+        return;
+      }
       const oauth = providerPresetOAuth(preset.id);
       if (oauth && !useApiKey) {
         pickOauth({ ...buildUserProvider({
@@ -671,7 +700,7 @@ export function AddProviderWizard({
       setPresetBaseUrls({});
       setStep(2);
     },
-    [i18n.language, onDone, providers, pickOauth],
+    [i18n.language, onDone, providers, pickOauth, connectLlamaCpp],
   );
 
   const connectOllama = useCallback(async () => {
@@ -1617,7 +1646,7 @@ export function AddProviderWizard({
 
                 {(filteredPresets.length > 0 ||
                   builtinApiKeyChoices.length > 0 ||
-                  showOllamaInList) && (
+                  showOllamaInList || showLlamaCppInList) && (
                   <>
                     <GroupLabel>{t('settings.providers.wizard.groupApiKey')}</GroupLabel>
                     {showOllamaInList && (
@@ -1629,6 +1658,16 @@ export function AddProviderWizard({
                         onClick={() => void connectOllama()}
                       />
                     )}
+                {showLlamaCppInList && (
+                  <ProviderRow
+                    icon={cardIcon({ providerId: 'llamacpp', name: 'llama.cpp' })}
+                    name={t('settings.providers.llamacpp.title')}
+                    meta={t('settings.providers.llamacpp.subtitle')}
+                    beta
+                    busy={saving}
+                    onClick={() => void connectLlamaCpp()}
+                  />
+                )}
                     {builtinApiKeyChoices
                       .filter((p) => !q || p.name.toLowerCase().includes(q))
                       .map((p) => (

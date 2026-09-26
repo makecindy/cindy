@@ -5816,6 +5816,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ),
     }),
     validateModelContextLimit: async (targets, limit) => {
+      const { MANAGED_LLAMACPP_PROVIDER_ID, llamaCppModelPreset } = await import('../../shared/llamaCpp.js');
+      const localTargets = targets.filter((target) => target.providerId === MANAGED_LLAMACPP_PROVIDER_ID);
+      if (localTargets.length) {
+        const { getManagedLlamaCppService } = await import('../local-model-runtime/llamaCppService.js');
+        const { models } = await getManagedLlamaCppService(app.getPath('userData')).snapshot();
+        for (const target of localTargets) {
+          const model = models.find((entry) => entry.id === target.modelId);
+          if (!model) throwIpcError('INVALID_PARAMS', 'Local model is not installed');
+          try {
+            llamaCppModelPreset(model, { [`${target.agent}:${target.providerId}:${target.modelId}`]: limit });
+          } catch {
+            throwIpcError('INVALID_PARAMS', 'This local model supports context up to 1,000,000 tokens');
+          }
+        }
+      }
       for (const target of targets.filter((t) => t.agent === 'codex')) {
         const binaryPath = getCachedBinaryStatus('codex').binaryPath;
         if (!binaryPath) throw new Error('Codex runtime is unavailable');
@@ -5825,6 +5840,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
     writeModelContextLimit: async (targets, limit) => {
+      const { MANAGED_LLAMACPP_PROVIDER_ID } = await import('../../shared/llamaCpp.js');
+      if (targets.some((target) => target.providerId === MANAGED_LLAMACPP_PROVIDER_ID)) {
+        const owner = getActiveAppSession();
+        const active = () => {
+          const now = getActiveAppSession();
+          return now?.dataOwnerId === owner?.dataOwnerId && now?.generation === owner?.generation;
+        };
+        const { getManagedLlamaCppService } = await import('../local-model-runtime/llamaCppService.js');
+        const { ensureManagedLlamaCppProvider } = await import('../local-model-runtime/managedLlamaCppProvider.js');
+        await ensureManagedLlamaCppProvider(
+          (await getManagedLlamaCppService(app.getPath('userData')).snapshot()).models, active,
+        );
+        await refreshCustomProvidersIntoCatalog();
+        if (!active()) throw new Error('OWNER_CHANGED');
+      }
       await writeModelContextLimitsWithRefresh(targets, limit,
         () => refreshContextSettings(targets),
         () => refreshContextSettings());

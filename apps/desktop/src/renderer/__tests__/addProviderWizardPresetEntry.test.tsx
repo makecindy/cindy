@@ -297,6 +297,10 @@ beforeEach(() => {
   testI18n.language = 'zh-CN';
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
+      llamaCppEnsure: vi.fn(async () => undefined),
+      llamaCppStatus: vi.fn(async () => ({ installed: false, supported: true, running: false, models: [] })),
+      llamaCppInstall: vi.fn(async () => undefined),
+      llamaCppStart: vi.fn(async () => undefined),
       onProviderOAuthProgress: vi.fn(() => () => undefined),
       localModelList: vi.fn(async () => ({
         status: { runtime: 'ollama', kind: 'absent', appInstalled: false },
@@ -331,6 +335,30 @@ afterEach(() => {
 });
 
 describe('AddProviderWizard — preset 直达', () => {
+  it('adds llama.cpp immediately without checking, installing or starting the runtime', async () => {
+    let finish!: () => void;
+    vi.mocked(window.electronAPI.maker.llamaCppEnsure).mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[]} onClose={vi.fn()} onDone={onDone} onOpenCustomForm={vi.fn()} />);
+    const row = await screen.findByRole('button', { name: /settings.providers.llamacpp.title/ });
+    fireEvent.click(row);
+    expect(row.getAttribute('aria-busy')).toBe('true');
+    fireEvent.click(row);
+    expect(window.electronAPI.maker.llamaCppEnsure).toHaveBeenCalledOnce();
+    finish();
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith('cindy-local-llamacpp'));
+    expect(window.electronAPI.maker.llamaCppStatus).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.llamaCppInstall).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.llamaCppStart).not.toHaveBeenCalled();
+  });
+  it('uses the same immediate add flow for llama.cpp deep links', async () => {
+    const preset = { id: 'llamacpp', name: 'llama.cpp', authMethod: 'none' as const, runtimes: { pi: { baseUrl: 'http://127.0.0.1:8080/v1', baseUrlEditable: true, wireProtocol: 'openai-chat' as const, models: [] } } };
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    renderWizard('llamacpp');
+    await waitFor(() => expect(window.electronAPI.maker.llamaCppEnsure).toHaveBeenCalledOnce());
+    expect(screen.queryByDisplayValue('http://127.0.0.1:8080/v1')).toBeNull();
+    expect(window.electronAPI.maker.llamaCppStart).not.toHaveBeenCalled();
+  });
   it('官方 API 入口逐一显式声明 Pi 协议，不依赖 Claude runtime 派生', () => {
     expect(OFFICIAL_API_PRESETS.anthropic?.runtimes.pi?.wireProtocol).toBe('anthropic-messages');
     expect(OFFICIAL_API_PRESETS.openai?.runtimes.pi?.wireProtocol).toBe('openai-responses');

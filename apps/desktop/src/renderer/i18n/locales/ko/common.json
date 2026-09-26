@@ -1756,6 +1756,43 @@
       }
     },
     "providers": {
+      "llamacpp": {
+        "primaryPick": "우선 선택 · 먼저 사용",
+        "recommendReason": "공통 카탈로그가 이 컴퓨터에 맞춰 선택한 성능 중심 모델 {{name}}부터 시작하세요.",
+        "recommendCaveat": "이 GGUF 버전의 로컬 속도와 최대 메모리는 실측이 필요합니다. 다운로드 크기는 실행 중 메모리 사용량이 아닙니다.",
+        "candidates": "시험할 모델",
+        "trialNote": "시험할 수 있는 모델입니다. 성능과 메모리 사용량은 아직 미검증입니다.",
+        "downloadModel": "{{name}} 다운로드",
+        "title": "llama.cpp",
+        "subtitle": "실행 환경과 모델을 다운로드하여 로컬에서 실행",
+        "description": "아래에서 모델을 선택하여 다운로드하고 로컬에서 실행하세요.",
+        "install": "llama.cpp 설치",
+        "start": "시작 및 연결",
+        "restart": "다시 시작 및 모델 새로 고침",
+        "stop": "서비스 중지",
+        "cancel": "작업 취소",
+        "repository": "Hugging Face 저장소",
+        "findFiles": "모델 파일 찾기",
+        "file": "GGUF 파일",
+        "shards": "분할 모델은 모든 파일을 다운로드합니다. 표시된 크기는 선택한 파일의 크기입니다. 텍스트 모델을 지원하며 비전 프로젝터는 다운로드하지 않습니다.",
+        "download": "모델 다운로드",
+        "models": "다운로드한 모델",
+        "empty": "위 목록에서 모델을 선택하거나 Hugging Face 저장소를 입력하여 첫 모델을 다운로드하세요.",
+        "unsupported": "이 플랫폼은 자동 설치를 지원하지 않습니다. llama.cpp 연결을 수동으로 설정하세요.",
+        "failed": "작업을 완료하지 못했습니다. 네트워크와 디스크 여유 공간을 확인한 후 다시 시도하세요.",
+        "invalid": "owner/model-GGUF 형식의 저장소를 입력하고 GGUF 파일을 선택하세요.",
+        "progress": {
+          "install": "llama.cpp 설치 중…",
+          "download": "모델 다운로드 중…",
+          "start": "llama.cpp 시작 중…"
+        },
+        "installAndConnect": "설치 및 연결",
+        "installDescription": "Cindy가 llama.cpp를 설치합니다. 모델을 다운로드하면 사용 시 서비스가 자동으로 시작됩니다.",
+        "manualConnect": "기존 서비스 연결",
+        "manageRuntime": "서비스 관리",
+        "applyModels": "다운로드한 모델 사용",
+        "startOnUse": "사용 시 시작"
+      },
       "catalogRecovery": {
         "pending": "모델 설정이 아직 준비되지 않았습니다. 잠시 후 모델을 다시 불러오세요.",
         "legacy": "이전 모델 설정을 일시적으로 읽을 수 없습니다. 실행 중인 다른 Cindy를 종료한 후 모델을 다시 불러오세요.",
@@ -2213,6 +2250,7 @@
           "defaultEffortHint": "새 작업의 초기 추론 강도입니다. 작업 안에서도 변경할 수 있습니다.",
           "contextLimit": "컨텍스트 상한",
           "contextLimitHint": "이 모델의 모든 사용 가능한 엔진에 적용됩니다. 정수 K 단위로 편집합니다(1 K = 1,000 tokens). 수정하지 않은 값은 정밀도를 유지합니다. 저장한 변경 사항은 이후 실행에 적용되며 생성 중인 응답을 중단하지 않습니다. 실제로 사용할 수 있는 길이는 모델 서비스의 제한을 따릅니다.",
+          "contextLimitLocalMillionHint": "기본 256K(262,144 tokens)에서 1M(1,000,000) 확장을 선택할 수 있습니다. 다음 사용 시 Cindy가 로컬 서비스를 자동으로 설정합니다. 긴 입력은 더 많은 메모리와 처리 시간이 필요합니다.",
           "contextLimitAria": "컨텍스트 상한(천 tokens)",
           "contextLimitRoute": "현재 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "공급업체가 명시한 한도를 초과하여 요청이 실패할 수 있습니다.",
@@ -2443,7 +2481,8 @@
           "apple-mlx": "이 Mac에는 공식 MLX가 맞습니다.",
           "generic-27b": "이 컴퓨터에는 공식 Q4가 맞습니다.",
           "compact": "이 컴퓨터 메모리라면 더 가벼운 모델부터 시작하세요.",
-          "unknown": "먼저 실행하기 쉬운 모델을 고릅니다."
+          "unknown": "먼저 실행하기 쉬운 모델을 고릅니다.",
+          "high-memory": "충분한 메모리를 활용해 더 강력한 모델을 우선 추천합니다. 로컬 속도와 최대 메모리는 추가 검증이 필요합니다."
         },
         "searchPlaceholder": "모델 검색",
         "noSearchResults": "일치하는 모델이 없습니다",
@@ -2534,7 +2573,9 @@
         "deleteModelConfirm": "삭제",
         "deleteModelDone": "{{name}}을(를) 삭제했습니다",
         "deleteModelFailed": "삭제하지 못했습니다. Ollama가 실행 중인지 확인한 뒤 다시 시도해 주세요.",
-        "noRecommendation": "아직 이 컴퓨터의 메모리에 맞고 근거가 충분한 추천 모델이 없습니다. 아래에서 후보를 직접 선택할 수 있습니다."
+        "noRecommendation": "아직 이 컴퓨터의 메모리에 맞고 근거가 충분한 추천 모델이 없습니다. 아래에서 후보를 직접 선택할 수 있습니다.",
+        "lighterAlternative": "가벼운 대안",
+        "recommendedInstalled": "추천 모델이 이미 설치되어 있습니다."
       },
       "xdSignin": {
         "badge": "추천",

@@ -1,16 +1,12 @@
-import { Button } from '@/components/ui/button';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
 import type { LocalRuntimeInstallProgress } from '../../../shared/localModelRuntime';
-import { DownloadMeter } from './DownloadMeter';
+import { LocalRuntimeInstallView } from './LocalModelDownloadUI';
 
 /** Mac / Windows 上，本机还没 Ollama 时默认给出 Cindy 内安装；主进程明确拒绝才藏。 */
-export function offersManagedOllamaInstall(
-  platform: string,
-  canInstallRuntime?: boolean,
-): boolean {
+export function offersManagedOllamaInstall(platform: string, canInstallRuntime?: boolean): boolean {
   if (platform !== 'darwin' && platform !== 'win32') return false;
   return canInstallRuntime !== false;
 }
@@ -28,9 +24,9 @@ export function LocalOllamaInstall({
   const [progress, setProgress] = useState<LocalRuntimeInstallProgress | null>(null);
   const installing = Boolean(
     progress &&
-      progress.phase !== 'cancelled' &&
-      progress.phase !== 'error' &&
-      (!progress.done || progress.phase === 'success'),
+    progress.phase !== 'cancelled' &&
+    progress.phase !== 'error' &&
+    (!progress.done || progress.phase === 'success'),
   );
   const onReadyRef = useRef(onReady);
   const connectingRef = useRef(false);
@@ -113,50 +109,30 @@ export function LocalOllamaInstall({
   };
 
   return (
-    <div className="flex flex-col gap-3">
-      <p className="text-13 leading-[1.5]" style={{ color: 'var(--text-secondary)' }}>
-        {canInstall
+    <LocalRuntimeInstallView
+      description={
+        canInstall
           ? t('settings.providers.local.installConsent', {
               size: window.electronAPI.platform === 'win32' ? '1.4GB' : '150MB',
             })
-          : t('settings.providers.local.onboardingBody')}
-      </p>
-      {progress && (
-        <DownloadMeter
-          progress={{
-            label: t(`settings.providers.local.installPhase.${progress.phase}`),
-            percent: progress.percent,
-            completed: progress.completed,
-            total: progress.total,
-            bytesPerSecond: progress.bytesPerSecond,
-            error: progress.phase === 'error',
-          }}
-        />
-      )}
-      <div className="flex flex-wrap gap-2">
-        {canInstall && (
-          <Button
-            variant="cta"
-            size="lg"
-            loading={installing}
-            type="button"
-            disabled={installing}
-            onClick={() => void handleInstall()}
-          >
-            {t('settings.providers.local.installInCindy')}
-          </Button>
-        )}
-        {installing && (
-          <Button
-            variant="secondary"
-            size="lg"
-            type="button"
-            onClick={() => void window.electronAPI.maker.localModelInstallAbort()}
-          >
-            {t('settings.providers.local.installCancel')}
-          </Button>
-        )}
-      </div>
-    </div>
+          : t('settings.providers.local.onboardingBody')
+      }
+      progress={
+        progress
+          ? {
+              label: t(`settings.providers.local.installPhase.${progress.phase}`),
+              percent: progress.percent,
+              completed: progress.completed,
+              total: progress.total,
+              bytesPerSecond: progress.bytesPerSecond,
+              error: progress.phase === 'error',
+            }
+          : undefined
+      }
+      canInstall={canInstall}
+      installing={installing}
+      onInstall={() => void handleInstall()}
+      onCancel={() => void window.electronAPI.maker.localModelInstallAbort()}
+    />
   );
 }
