@@ -1039,7 +1039,15 @@ export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<
   }
   if (cachedHistory && cachedHistoryOptsKey === key) {
     if (refreshInFlightByOptsKey.has(key)) return stalePayload(cachedHistory);
-    if (isMemoryFresh(cachedHistory)) return settle(cachedHistory);
+    // 多设备范围只在输入变化时重聚合:本机用量 / 价格变化走 forceRefresh 推送,设备数据
+    // 变化体现为版本前进,跨天由 todayKey 判定。其余定时重读直接复用,不重扫全量历史;
+    // 同步进行中是否标为更新中由 settle(peerFresh)决定,与是否重聚合分开。
+    const reusable =
+      isMemoryFresh(cachedHistory) ||
+      (peerSync !== null &&
+        cachedHistory.peerVersion === peerSync.version() &&
+        cachedHistory.todayKey === localDayKey());
+    if (reusable) return settle(cachedHistory);
     refreshUsageHistoryInBackground(key, opts);
     return stalePayload(cachedHistory);
   }

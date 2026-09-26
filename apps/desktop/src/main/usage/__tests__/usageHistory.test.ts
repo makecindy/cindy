@@ -1081,4 +1081,43 @@ describe('multi-device scope', () => {
       expect(next.totals.today).toEqual(actual(5));
     });
   });
+
+  it('does not re-aggregate the full history on periodic re-reads when nothing changed', async () => {
+    let now = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [actual(2)] }]);
+    configurePeerUsageSync({
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-a', name: 'Studio', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: true,
+          },
+        ],
+      }),
+      invoke: async () => ({ ok: false, error: { code: 'TIMEOUT', message: 'unused' } }),
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => now,
+    });
+    const opts = { days: 'all' as const, modelDays: 'all' as const, device: 'all' };
+    await vi.waitFor(async () => expect((await readUsageHistory(opts)).stale).toBe(false));
+    const readsAfterSettle = vi.mocked(getAllSpendDays).mock.calls.length;
+
+    // 设置页每分钟一次的定时重读:没有其它电脑、本机也没有新用量。
+    // 每次重读会触发一轮(节流的)设备同步,同步期间如实标为更新中;同步结束后结果即为最新。
+    for (let i = 0; i < 3; i += 1) {
+      now += 61_000;
+      await readUsageHistory(opts);
+      await vi.waitFor(async () => expect((await readUsageHistory(opts)).stale).toBe(false));
+    }
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBe(readsAfterSettle);
+
+    // 本机有新用量时照常经 forceRefresh 重聚合。
+    now += 1_000;
+    await readUsageHistory({ ...opts, forceRefresh: true });
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBeGreaterThan(readsAfterSettle);
+  });
 });

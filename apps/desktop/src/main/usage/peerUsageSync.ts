@@ -198,7 +198,38 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
   let inflight: Promise<void> | null = null;
   let lastSyncStartedAt = 0;
 
-  const bump = (): void => {
+  /**
+   * 版本只在快照内容(设备目录、状态、缓存行)真的变化时才前进 —— 用量历史据版本判断
+   * 是否需要重新聚合全量历史;没有其它电脑、或同步后什么都没变时,不能让它空转重算。
+   */
+  let lastSignature = '';
+  const signature = (): string =>
+    JSON.stringify([
+      (directory ?? []).map((d) => [
+        d.deviceId,
+        d.name,
+        d.platform,
+        d.isSelf,
+        d.online,
+        d.remoteControlEnabled,
+        d.controlEnabled,
+      ]),
+      [...statuses.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      Object.entries(peers)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([id, p]) => [
+          id,
+          p.name,
+          p.syncedAt,
+          p.todayKey,
+          p.rows.spendDays.length,
+          p.rows.modelRows.length,
+        ]),
+    ]);
+  const bump = (force = false): void => {
+    const next = signature();
+    if (!force && next === lastSignature) return;
+    lastSignature = next;
     version += 1;
   };
 
@@ -212,7 +243,7 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
     directory = null;
     statuses.clear();
     lastSyncStartedAt = 0;
-    bump();
+    bump(true);
   };
 
   const ensureLoaded = async (): Promise<string | null> => {

@@ -357,4 +357,18 @@ describe('createPeerUsageSync', () => {
     expect(snapshot.devices.map((d) => [d.deviceId, d.status])).toEqual([['laptop-b', 'ok']]);
     expect(h.written.has('user-a')).toBe(false);
   });
+
+  it('keeps the data version stable when a sync changes nothing (no other computers)', async () => {
+    const h = harness({
+      listDevices: async () => ({ devices: [device({ deviceId: 'self', isSelf: true })] }),
+    });
+    const sync = createPeerUsageSync(h.deps);
+    await sync.sync();
+    const settled = sync.version();
+    for (let i = 0; i < 3; i += 1) {
+      h.advance(61_000);
+      await sync.sync();
+    }
+    expect(sync.version()).toBe(settled);
+  });
 });
