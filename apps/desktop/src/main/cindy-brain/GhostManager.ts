@@ -216,7 +216,19 @@ export interface GhostManagerOptions {
   log?: GhostManagerLogger;
   /** Test-only stable snapshot mutation seam; production defaults to the worker. */
   mutateSnapshot?: ConstructorParameters<typeof GhostInstallReceiptStore>[1];
+  /**
+   * 安装/更新事务里目录整体 rename 的瞬时错误重试策略(#5026)。Windows 上刚解包的目录
+   * 在短窗口内会被杀软扫描或目录监视持有句柄,staging→final 的 rename 吃 EPERM/EBUSY/
+   * EACCES;缺省仅 win32 启用有界退避重试(其它平台的 EPERM 通常是永久性权限问题)。
+   * 只重试 rename 本身,不改事务顺序、安装布局、receipt 与 journal 格式。测试可覆盖。
+   */
+  renameRetry?: { enabled?: boolean; delaysMs?: readonly number[] };
 }
+
+/** Windows 目录句柄竞争的典型瞬时错误码;其它错误码原样上抛,不重试。 */
+const TRANSIENT_RENAME_ERROR_CODES: ReadonlySet<string> = new Set(['EPERM', 'EBUSY', 'EACCES']);
+/** 有界退避:累计约 3s,覆盖 #5026 实测的 5–10s 内非单调句柄释放窗口的大部分场景。 */
+const DEFAULT_RENAME_RETRY_DELAYS_MS: readonly number[] = [100, 200, 400, 800, 1600];
 
 /** install / update 的失败分类 —— IPC 层据此映射错误码。 */
 export type InstallRejection =
@@ -531,6 +543,35 @@ export class GhostManager {
    */
   private isolationKey(id: string): string {
     return `${this.receiptStore.rootDir()}\u0000${id}`;
+  }
+
+  /**
+   * 事务目录 rename(staging→final / final→backup / backup→final)。瞬时错误按
+   * `options.renameRetry` 有界重试;重试耗尽或非瞬时错误照常抛出,由各调用点的
+   * 既有回滚/journal 逻辑处理。不做任何 rm/复制,失败时源目录保持原样。
+   */
+  private async renameManagedDir(from: string, to: string, stage: string, id: string): Promise<void> {
+    const retry = this.options.renameRetry;
+    const enabled = retry?.enabled ?? process.platform === 'win32';
+    const delays = enabled ? (retry?.delaysMs ?? DEFAULT_RENAME_RETRY_DELAYS_MS) : [];
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await fs.promises.rename(from, to);
+        if (attempt > 0) {
+          this.options.log?.info?.('ghost transaction rename succeeded after transient retry', {
+            id, stage, attempts: attempt + 1,
+          });
+        }
+        return;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (attempt >= delays.length || !code || !TRANSIENT_RENAME_ERROR_CODES.has(code)) throw error;
+        this.options.log?.warn('ghost transaction rename hit transient error; retrying', {
+          id, stage, code, attempt: attempt + 1, delayMs: delays[attempt],
+        });
+        await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+      }
+    }
   }
 
   constructor(private readonly options: GhostManagerOptions) {
@@ -2711,7 +2752,32 @@ export class GhostManager {
         this.untrustedApprovals.delete(this.isolationKey(manifest.id));
         throw error;
       }
-      await fs.promises.rename(stagingDir, finalDir);
+      try {
+        await this.renameManagedDir(stagingDir, finalDir, 'install placement', manifest.id);
+      } catch (error) {
+        // rename 没成功就没有发布任何字节(#5026):此时若留下 install journal 与内存
+        // 隔离标记,之后每次审批检查都会判 invalid、插件停在停用态,且用户手工放入
+        // 目录也没有正常入口恢复。只有 lstat 明确 ENOENT 才能清;目录已出现(rename
+        // 半途成功)或 lstat 本身报权限/IO 错误时都保留 journal 交给启动恢复——journal
+        // 正是用来阻止无 receipt 的目录被迁移当作存量批准,不能凭"看不见"就清。
+        const finalDirAbsent = await fs.promises
+          .lstat(finalDir)
+          .then(() => false)
+          .catch((statError) => (statError as NodeJS.ErrnoException).code === 'ENOENT');
+        if (finalDirAbsent) {
+          try {
+            await this.receiptStore.clearPendingMutation(manifest.id);
+            this.untrustedApprovals.delete(this.isolationKey(manifest.id));
+          } catch (clearError) {
+            // Keep the in-process quarantine while the durable journal remains.
+            this.options.log?.warn('ghost install journal cleanup failed after placement error', {
+              id: manifest.id,
+              error: clearError instanceof Error ? clearError.message : String(clearError),
+            });
+          }
+        }
+        throw error;
+      }
       try {
         receipt = createGhostInstallReceipt({
           manifest: approvedManifest,
@@ -2984,7 +3050,7 @@ export class GhostManager {
     };
     // 换目录:旧版先挪去备份位,新版 rename 失败即滚回,保证任何时刻都有一份完整版本在位。
     try {
-      await fs.promises.rename(finalDir, backupDir);
+      await this.renameManagedDir(finalDir, backupDir, 'update backup', manifest.id);
     } catch (err) {
       await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
       await clearUpdateQuarantineAfterRollback();
@@ -3017,10 +3083,10 @@ export class GhostManager {
         );
       });
     try {
-      await fs.promises.rename(stagingDir, finalDir);
+      await this.renameManagedDir(stagingDir, finalDir, 'update placement', manifest.id);
     } catch (err) {
       let rolledBack = true;
-      await fs.promises.rename(backupDir, finalDir).catch((rollbackErr) => {
+      await this.renameManagedDir(backupDir, finalDir, 'update rollback', manifest.id).catch((rollbackErr) => {
         rolledBack = false;
         (this.options.log?.error ?? this.options.log?.warn)?.call(
           this.options.log,
@@ -3096,7 +3162,7 @@ export class GhostManager {
       if (sideEffectRolledBack) {
         directoryRolledBack = true;
         await fs.promises.rm(finalDir, { recursive: true, force: true }).catch(() => undefined);
-        await fs.promises.rename(backupDir, finalDir).catch((rollbackErr) => {
+        await this.renameManagedDir(backupDir, finalDir, 'update receipt rollback', manifest.id).catch((rollbackErr) => {
           directoryRolledBack = false;
           (this.options.log?.error ?? this.options.log?.warn)?.call(
             this.options.log,
