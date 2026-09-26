@@ -113,7 +113,7 @@ export class VoiceInputDataStore {
     // 在下一次物化时被静默丢掉。词典变更一律走下面的语义化入口。
     const nextSettings = normalizeVoiceInputSettings({
       ...current.settings,
-      ...stripDictionaryFields(patch),
+      ...translateComposerLongPressPatch(stripDictionaryFields(patch)),
     }, process.platform);
     this.replaceState({
       ...current,
@@ -644,7 +644,7 @@ export class VoiceInputDataStore {
     try {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       const tmp = `${filePath}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf-8');
+      fs.writeFileSync(tmp, JSON.stringify(projectVoiceInputDataForPersist(state), null, 2), 'utf-8');
       fs.renameSync(tmp, filePath);
     } catch (error) {
       log.warn('voice input data write failed', {
@@ -949,6 +949,16 @@ function cloneSettings(settings: VoiceInputSettings): VoiceInputSettings {
   return JSON.parse(JSON.stringify(settings)) as VoiceInputSettings;
 }
 
+/**
+ * 落盘只记录 override。运行时快照里的 `composerLongPressEnabled` 是默认值 + override
+ * 合成的有效值；写进文件会把当时的默认钉死，未自定义的用户就跟不上后续改默认。
+ */
+function projectVoiceInputDataForPersist(state: StoredVoiceInputData): unknown {
+  const settings: Record<string, unknown> = { ...state.settings };
+  delete settings.composerLongPressEnabled;
+  return { ...state, settings };
+}
+
 function cloneHistory(history: VoiceInputHistoryEntry[]): VoiceInputHistoryEntry[] {
   return JSON.parse(JSON.stringify(history)) as VoiceInputHistoryEntry[];
 }
@@ -1023,6 +1033,23 @@ function stripDictionaryFields(patch: unknown): Record<string, unknown> {
     // 展开合并的,undefined 会被现有值盖掉。
     next.dictionarySyncEnabledOverride = null;
     delete next.dictionarySyncEnabled;
+  }
+  return next;
+}
+
+/**
+ * 长按输入框开关:UI 传有效值,持久化只认 override(规则同上面的同步开关)。
+ * 每次显式拨动都记成 override;`null` = 恢复默认,删掉 override 跟随版本默认值。
+ */
+function translateComposerLongPressPatch(patch: Record<string, unknown>): Record<string, unknown> {
+  if (!('composerLongPressEnabled' in patch)) return patch;
+  const next = { ...patch };
+  const value = next.composerLongPressEnabled;
+  delete next.composerLongPressEnabled;
+  if (typeof value === 'boolean') {
+    next.composerLongPressEnabledOverride = value;
+  } else if (value === null) {
+    next.composerLongPressEnabledOverride = null;
   }
   return next;
 }

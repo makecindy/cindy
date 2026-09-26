@@ -1486,6 +1486,11 @@
         "hint": "Keeps the microphone ready briefly after use so recording starts sooner after pressing the shortcut or button; usually about 100 ms faster. The microphone is released automatically after 30 minutes of no use.",
         "ariaLabel": "Toggle fast voice activation"
       },
+      "composerLongPress": {
+        "label": "Hold composer for voice input",
+        "hint": "Press and hold the left mouse button in the composer for a moment to start voice input. Release to stop and insert the text.",
+        "ariaLabel": "Toggle hold composer for voice input"
+      },
       "refinement": {
         "enabled": {
           "label": "Voice refinement",

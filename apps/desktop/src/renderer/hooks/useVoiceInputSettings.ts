@@ -194,6 +194,7 @@ export function useVoiceInputSettings(): {
   setMuteSystemAudio: (enabled: boolean) => void;
   setPlayInteractionSound: (enabled: boolean) => void;
   setFastActivationEnabled: (enabled: boolean) => void;
+  setComposerLongPressEnabled: (enabled: boolean) => void;
   setRefinementEnabled: (enabled: boolean) => void;
   setRefinementInstructions: (instructions: string) => void;
   setAutoDictionaryEnabled: (enabled: boolean) => void;
@@ -248,6 +249,11 @@ export function useVoiceInputSettings(): {
 
   const setFastActivationEnabled = useCallback(
     (fastActivationEnabled: boolean) => updateSettings({ fastActivationEnabled }),
+    [updateSettings],
+  );
+
+  const setComposerLongPressEnabled = useCallback(
+    (composerLongPressEnabled: boolean) => updateSettings({ composerLongPressEnabled }),
     [updateSettings],
   );
 
@@ -378,6 +384,7 @@ export function useVoiceInputSettings(): {
     setMuteSystemAudio,
     setPlayInteractionSound,
     setFastActivationEnabled,
+    setComposerLongPressEnabled,
     setRefinementEnabled,
     setRefinementInstructions,
     setAutoDictionaryEnabled,
