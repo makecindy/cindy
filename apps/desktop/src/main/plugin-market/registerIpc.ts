@@ -82,11 +82,29 @@ export function defaultMarketPluginSyncOutcome(
 
 export async function syncDefaultMarketPlugins(): Promise<DefaultMarketPluginSyncOutcome> {
   try {
+    const owner = getActiveAppSession();
     let reconciliationOutcome: 'completed' | 'failed' | null = null;
     const snapshot = await snapshotAndSignalRemovalNotice({
       onDefaultReconciliationOutcome: (outcome) => {
         reconciliationOutcome = outcome;
       },
+    });
+    const currentOwner = getActiveAppSession();
+    if (currentOwner.mode !== owner.mode || currentOwner.dataOwnerId !== owner.dataOwnerId ||
+        currentOwner.generation !== owner.generation ||
+        snapshot.unavailableReason === 'session-switching' ||
+        snapshot.unavailableReason === 'authentication-required') return 'deferred';
+    // Reconcile the official market/current cache first, so an unreachable Git
+    // source cannot prevent that work. Page reads never trigger this network step.
+    // Authentication waits for the existing cache reconciliation, never Git fetch.
+    void service().refreshCustomGitSourcesForBackground({
+      onDefaultReconciliationOutcome: (outcome) => {
+        if (outcome === 'failed') log.warn('custom marketplace background reconciliation incomplete');
+      },
+    }).finally(signalRemovalNoticeAvailable).catch(error => {
+      log.warn('custom marketplace background refresh deferred', {
+        code: isIpcError(error) ? error.code : 'INTERNAL',
+      });
     });
     const outcome = defaultMarketPluginSyncOutcome(
       snapshot,
