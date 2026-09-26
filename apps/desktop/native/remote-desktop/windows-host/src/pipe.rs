@@ -31,11 +31,13 @@ impl Pipe {
                 .is_some_and(|stop| stop.load(Ordering::SeqCst))
     }
     pub fn server(name: &str, system_only: bool) -> Result<Self> {
-        // GR/GW would include FILE_CREATE_PIPE_INSTANCE. Explicit data rights only.
+        // GR/GW would include FILE_CREATE_PIPE_INSTANCE. Grant only data,
+        // synchronization and read-attributes access: CreateFileW also checks
+        // FILE_READ_ATTRIBUTES when opening the client end of a named pipe.
         let sddl = wide(if system_only {
             "D:P(A;;GA;;;SY)"
         } else {
-            "D:P(A;;GA;;;SY)(A;;0x00100003;;;IU)"
+            "D:P(A;;GA;;;SY)(A;;0x00100083;;;IU)"
         });
         let mut descriptor = ptr::null_mut();
         if unsafe {
@@ -90,7 +92,7 @@ impl Pipe {
         let handle = Handle::new(unsafe {
             CreateFileW(
                 name.as_ptr(),
-                FILE_READ_DATA | FILE_WRITE_DATA | SYNCHRONIZE,
+                FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
                 0,
                 ptr::null(),
                 OPEN_EXISTING,
@@ -250,6 +252,39 @@ mod tests {
     use super::*;
     use crate::capture_protocol::OVERLAY_RESPONSE_LIMIT;
     use serde_json::json;
+
+    #[test]
+    fn interactive_client_can_open_service_pipe_and_exchange_probe() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let name = format!(
+            r"\\.\pipe\cindy-service-acl-test-{}-{nonce}",
+            std::process::id()
+        );
+        // Exercise the real service ACL from an interactive, non-SYSTEM account.
+        // The framing test below uses a caller-owned default ACL and cannot catch
+        // missing rights in the SYSTEM service's interactive-client grant.
+        let mut server = Pipe::server(&name, false).unwrap();
+        let mut client = Pipe::client(&name).unwrap();
+        server.accept(1000).unwrap();
+        assert_eq!(server.client_pid().unwrap(), std::process::id());
+        assert_eq!(client.server_pid().unwrap(), std::process::id());
+        client.write(b"{\"mode\":\"probe\"}\n").unwrap();
+        assert_eq!(server.line(1024).unwrap(), b"{\"mode\":\"probe\"}\n");
+        server.write(b"ready\n").unwrap();
+        assert_eq!(client.line(1024).unwrap(), b"ready\n");
+        // Data access must not let interactive clients impersonate the service
+        // by creating another server instance at its existing pipe name.
+        assert_eq!(
+            Pipe::server(&name, false)
+                .err()
+                .expect("client cannot create a server instance")
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
 
     #[test]
     fn transfers_large_negotiated_frames_without_raising_other_write_limits() {

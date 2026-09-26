@@ -1,4 +1,5 @@
 import {
+  app,
   desktopCapturer,
   ipcMain,
   nativeImage,
@@ -73,7 +74,11 @@ import { PrivacyScreen } from './privacyScreen';
 import { LinuxPrivacyScreen, supportsLinuxPrivacy, prepareLinuxPrivacy } from './linuxPrivacy';
 import { LinuxWindowActions, supportsOmarchyMenu } from './linuxWindowActions';
 import { systemAudioMuteGuard } from '../voice-input/SystemAudioMuteGuard.js';
-import { readWindowsDesktopSupport, configureWindowsDesktopSupport } from './windowsHost';
+import {
+  readWindowsDesktopSupport,
+  configureWindowsDesktopSupport,
+} from './windowsHost';
+import { WindowsDesktopSetup } from './windowsSetup';
 import {
   DesktopInputHost,
   readDesktopDisplayModes,
@@ -218,7 +223,11 @@ let pending: {
 } | null = null;
 // A dead input helper or a refused injection is an input failure, not a session
 // failure: release control and keep the lease, capture and media running.
-const input = new DesktopInputHost(() => remoteDesktop.releaseControl());
+const input: DesktopInputHost = new DesktopInputHost(
+  () => remoteDesktop.releaseControl(),
+  undefined,
+  () => remoteDesktop.prepareInputDesktopChange(),
+);
 const clipboardCounter = new ClipboardCounter(resolveDesktopInputBinary);
 function stopVideo(): void {
   offerGeneration++;
@@ -320,8 +329,10 @@ async function offer(
     if (hyprland && lease.display.id !== WAYLAND_DISPLAY_ID) await linuxMonitor(lease.display.id);
     let nativeAvailable = process.platform === 'darwin' || hyprland;
     if (!hyprland) {
-      nativeAvailable ||=
-        process.platform === 'win32' && (await readWindowsDesktopSupport()) === 'ready';
+      if (process.platform === 'win32') {
+        const windowsSupport = await readWindowsDesktopSupport();
+        nativeAvailable ||= windowsSupport === 'ready' || windowsSupport === 'updateRequired';
+      }
       try {
         const available = await sources(
           false,
@@ -511,7 +522,8 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
     );
   },
   capabilities: async () => {
-    windowsAvailable = (await readWindowsDesktopSupport()) === 'ready';
+    const windowsSupport = await readWindowsDesktopSupport();
+    windowsAvailable = windowsSupport === 'ready' || windowsSupport === 'updateRequired';
     const settings = readDeviceLinkSettings();
     const enabled = settings.remoteDesktopEnabled && settings.remoteControlEnabled;
     const viewerDisplay = enabled && (await viewerDisplaySupported());
@@ -759,6 +771,10 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
 export function registerRemoteDesktopIpc(
   isVoiceInputOwner?: Parameters<typeof denyAppDesktopCapture>[1],
 ): void {
+  const windowsSetup = new WindowsDesktopSetup({
+    configure: configureWindowsDesktopSupport,
+    stopDesktop: () => remoteDesktop.stop(),
+  });
   denyAppDesktopCapture(session.defaultSession, isVoiceInputOwner);
   const timer = setInterval(() => remoteDesktop.tick(), 1000);
   timer.unref();
@@ -834,11 +850,14 @@ export function registerRemoteDesktopIpc(
     hyprlandCapture.stop();
     linuxAudio.stop(); // Clear buffered PCM as well as pixels across lock transitions.
     if (remoteDesktop.state?.controlling) {
-      try {
-        input.input([{ kind: 'release' }]);
-      } catch {
-        remoteDesktop.stop();
-      }
+      if (process.platform === 'win32') {
+        input.rebindForDesktopChange();
+      } else
+        try {
+          input.input([{ kind: 'release' }]);
+        } catch {
+          remoteDesktop.stop();
+        }
     }
     if (videoLease && nativeDisplay && host && !host.isDestroyed())
       host.send(DESKTOP_LOCAL.COMMAND, {
@@ -939,25 +958,28 @@ export function registerRemoteDesktopIpc(
       active: remoteDesktop.state,
       permissionGuide: permissions.guideOpen,
       ...(checkWindowsSupport === true
-        ? { windowsSupport: await readWindowsDesktopSupport() }
+        ? {
+            windowsSupport: windowsSetup.read().phase
+              ? 'missing'
+              : await readWindowsDesktopSupport(),
+            windowsDevelopment: process.platform === 'win32' && !app.isPackaged,
+            windowsSetup: windowsSetup.read(),
+          }
         : {}),
     };
   });
-  let windowsSetupBusy = false;
   ipcMain.handle(DESKTOP_LOCAL.WINDOWS_SUPPORT, async (event, enabled: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (process.platform !== 'win32' || typeof enabled !== 'boolean')
       throwIpcError('INVALID_PARAMS', 'Invalid Windows desktop support request');
-    if (event.sender !== getDeepLinkMainWindow()?.webContents || windowsSetupBusy)
+    if (event.sender !== getDeepLinkMainWindow()?.webContents)
       throwIpcError('PERMISSION_DENIED', 'Windows desktop setup unavailable');
-    windowsSetupBusy = true;
-    remoteDesktop.stop();
     try {
-      await configureWindowsDesktopSupport(enabled);
-    } catch {
+      await windowsSetup.run(enabled);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'DESKTOP_NATIVE_BUILD_FAILED')
+        throwIpcError('PRECONDITION_FAILED', 'Windows desktop native preparation failed');
       throwIpcError('PERMISSION_DENIED', 'Windows desktop support setup failed');
-    } finally {
-      windowsSetupBusy = false;
     }
     windowsAvailable = enabled;
   });

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import originalFs from 'original-fs';
 import { createLogger } from '../logger.js';
+import { uninstallWindowsDesktopSupportFrom } from '../remote-desktop/windowsHost.js';
 import {
   assertVersionDirectory,
   personalVersionId,
@@ -75,10 +76,16 @@ export async function cleanupPersonalVersions(profile: string): Promise<void> {
         try {
           // Never touch unpublished builds or unknown directories. The small record stays
           // usable by history rollback after its bulky runtime has been retired.
-          readPersonalVersionRecord(profile, id);
-          const runtime = path.join(versionDirectory(profile, id), 'runtime');
+          const item = readPersonalVersionRecord(profile, id);
+          const directory = versionDirectory(profile, id);
+          const runtime = path.join(directory, 'runtime');
           if (!fs.existsSync(runtime)) continue;
           assertVersionDirectory(profile, runtime);
+          // Packaged personal versions hash a UUID-specific helper into an
+          // independent AUTO_START service and harden that runtime. Retire
+          // through that helper before deleting files, or the old SYSTEM
+          // service stays running and Settings cannot discover it.
+          await uninstallWindowsDesktopSupportFrom(path.join(directory, item.resources));
           await originalFs.promises.rm(runtime, {
             recursive: true,
             force: true,

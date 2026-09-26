@@ -26,4 +26,18 @@ describe('Windows NSIS include paths', () => {
     expect(installer).not.toContain('!include "installer-directory.nsh"');
     expect(directory).not.toContain('!include "installer-directory-messages.nsh"');
   });
+
+  it('keeps the lock-screen grant across overlay upgrades', () => {
+    const uninit = installer.split('!macro customUnInit')[1].split('!macroend')[0];
+    expect(uninit.indexOf('${If} ${isUpdated}')).toBeGreaterThanOrEqual(0);
+    expect(uninit.indexOf('${If} ${isUpdated}')).toBeLessThan(uninit.indexOf('--uninstall'));
+    expect(uninit.indexOf('cindy_remote_service_done')).toBeGreaterThan(
+      uninit.indexOf('${If} ${isUpdated}'),
+    );
+    expect(uninit.indexOf('cindy_remote_service_done')).toBeLessThan(uninit.indexOf('--uninstall'));
+    const install = installer.split('!macro customInstall')[1].split('!macroend')[0];
+    expect(install.indexOf('${If} ${isUpdated}')).toBeLessThan(install.indexOf('--reprotect'));
+    expect(install).toContain('--elevate-reprotect');
+    expect(install.indexOf('--elevate-reprotect')).toBeLessThan(install.indexOf('Abort'));
+  });
 });

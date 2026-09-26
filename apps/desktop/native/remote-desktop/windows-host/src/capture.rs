@@ -14,6 +14,20 @@ const OVERLAY_MAX_EDGE: i32 = 4096;
 const LEGACY_MAX_EDGE: i32 = 1280;
 const OVERLAY_FALLBACK_EDGE: i32 = 1280;
 
+fn screen_copy_operation() -> u32 {
+    let mut composed = 0;
+    // DWM's screen surface already contains layered windows. CAPTUREBLT forces
+    // a legacy layered-window pass that can hide/redraw the physical cursor on
+    // every frame. Keep it only for a genuinely non-composited desktop.
+    if unsafe { windows_sys::Win32::Graphics::Dwm::DwmIsCompositionEnabled(&mut composed) } >= 0
+        && composed != 0
+    {
+        SRCCOPY
+    } else {
+        SRCCOPY | CAPTUREBLT
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OverlayBudget {
     quality: u8,
@@ -226,7 +240,7 @@ impl Capture {
                 y,
                 width,
                 height,
-                SRCCOPY | CAPTUREBLT,
+                screen_copy_operation(),
             );
             // The cursor is not necessarily included in the screen DC.
             let mut cursor: CURSORINFO = mem::zeroed();
@@ -351,6 +365,143 @@ fn encode_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composed_layered_window_is_captured_without_the_cursor_disturbing_flag() {
+        // Explicit Windows integration check. An owned 32px no-activate window
+        // supplies known pixels; no desktop image or user content is saved.
+        struct Fixture {
+            window: HWND,
+            brush: HBRUSH,
+            class: Vec<u16>,
+            instance: HINSTANCE,
+            dpi: DPI_AWARENESS_CONTEXT,
+        }
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                unsafe {
+                    if !self.window.is_null() {
+                        DestroyWindow(self.window);
+                    }
+                    UnregisterClassW(self.class.as_ptr(), self.instance);
+                    DeleteObject(self.brush);
+                    if !self.dpi.is_null() {
+                        SetThreadDpiAwarenessContext(self.dpi);
+                    }
+                }
+            }
+        }
+        unsafe {
+            let mut composed = 0;
+            if windows_sys::Win32::Graphics::Dwm::DwmIsCompositionEnabled(&mut composed) < 0
+                || composed == 0
+            {
+                return;
+            }
+            let desktop = windows_sys::Win32::System::StationsAndDesktops::OpenInputDesktop(
+                0,
+                0,
+                windows_sys::Win32::System::StationsAndDesktops::DESKTOP_READOBJECTS,
+            );
+            if desktop.is_null() {
+                return;
+            }
+            windows_sys::Win32::System::StationsAndDesktops::CloseDesktop(desktop);
+            assert_eq!(
+                screen_copy_operation(),
+                SRCCOPY,
+                "requires a composited Windows desktop"
+            );
+            let instance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let class = wide(&format!("CindyCaptureProbe-{}-{nonce}", std::process::id()));
+            let marker = 0x0037b51d;
+            let mut fixture = Fixture {
+                window: ptr::null_mut(),
+                brush: CreateSolidBrush(marker),
+                class,
+                instance,
+                dpi: SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2),
+            };
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(DefWindowProcW),
+                hInstance: instance,
+                hbrBackground: fixture.brush,
+                lpszClassName: fixture.class.as_ptr(),
+                ..mem::zeroed()
+            };
+            assert_ne!(RegisterClassW(&wc), 0);
+            fixture.window = CreateWindowExW(
+                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                fixture.class.as_ptr(),
+                wide("").as_ptr(),
+                WS_POPUP,
+                48,
+                48,
+                32,
+                32,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                instance,
+                ptr::null(),
+            );
+            assert!(!fixture.window.is_null());
+            assert_ne!(
+                SetLayeredWindowAttributes(fixture.window, 0, 255, LWA_ALPHA),
+                0
+            );
+            SetWindowPos(
+                fixture.window,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            );
+            let until = std::time::Instant::now() + std::time::Duration::from_millis(200);
+            while std::time::Instant::now() < until {
+                let mut message: MSG = mem::zeroed();
+                while PeekMessageW(&mut message, fixture.window, 0, 0, PM_REMOVE) != 0 {
+                    DispatchMessageW(&message);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            windows_sys::Win32::Graphics::Dwm::DwmFlush();
+            let mut rect: RECT = mem::zeroed();
+            GetWindowRect(fixture.window, &mut rect);
+            let source = GetDC(ptr::null_mut());
+            let target = CreateCompatibleDC(source);
+            let bitmap = CreateCompatibleBitmap(source, 1, 1);
+            let old = SelectObject(target, bitmap);
+            let ok = StretchBlt(
+                target,
+                0,
+                0,
+                1,
+                1,
+                source,
+                (rect.left + rect.right) / 2,
+                (rect.top + rect.bottom) / 2,
+                1,
+                1,
+                screen_copy_operation(),
+            );
+            let pixel = GetPixel(target, 0, 0);
+            SelectObject(target, old);
+            DeleteObject(bitmap);
+            DeleteDC(target);
+            ReleaseDC(ptr::null_mut(), source);
+            assert_ne!(ok, 0);
+            assert_eq!(
+                pixel, marker,
+                "the composed layered window must remain in the capture"
+            );
+        }
+    }
 
     #[test]
     fn overlay_quality_ladder_drops_full_res_retries_after_first_overflow() {

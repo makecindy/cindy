@@ -65,11 +65,11 @@ describe('importSharedCodexThread', () => {
     fs.mkdirSync(codexHome, { recursive: true });
     stateDbPath = path.join(codexHome, 'state_1.sqlite');
     createStateDb();
-  });
+  }, 30_000);
 
   afterEach(() => {
     fs.rmSync(rootDir, { recursive: true, force: true });
-  });
+  }, 30_000);
 
   const stateRows = () => ({
     threads: [

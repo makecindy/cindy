@@ -26,8 +26,17 @@ vi.mock('../versionStartup.js', () => ({
   isCindyVersionSwitching: () => h.switching,
   startVersionHandoff: h.handoff,
 }));
+const uninstall = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('../../remote-desktop/windowsHost.js', () => ({
+  uninstallWindowsDesktopSupportFrom: uninstall,
+}));
 import { actCindyVersion, configureCindyVersions, getCindyVersions } from '../versionService';
-import { versionsRoot, versionDirectory, writeVersionJson } from '../versionStore';
+import {
+  runnableBundlePaths,
+  versionsRoot,
+  versionDirectory,
+  writeVersionJson,
+} from '../versionStore';
 import { CindyMakeManager } from '../manager';
 const id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const latestId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
@@ -228,6 +237,7 @@ describe('version management main boundary', () => {
     await expect(actCindyVersion('remove', id)).rejects.toThrow('busy');
     configureCindyVersions(() => false);
     await actCindyVersion('remove', id);
+    expect(uninstall).toHaveBeenCalledExactlyOnceWith(path.join(directory, 'runtime', 'resources'));
     await expect(access(path.join(directory, 'runtime'))).rejects.toThrow();
     await expect(access(path.join(directory, 'version.json'))).resolves.toBeUndefined();
     await expect(access(path.join(h.profile, 'keep.db'))).resolves.toBeUndefined();
@@ -264,5 +274,36 @@ describe('version management main boundary', () => {
     writeVersionJson(path.join(versionsRoot(h.profile), 'personal.json'), { id: null });
     await expect(actCindyVersion('switch', id)).rejects.toThrow('unavailable');
     expect(h.handoff).not.toHaveBeenCalled();
+  });
+  it('uninstalls the version-scoped lock-screen service before deleting a personal snapshot', async () => {
+    setPersonal();
+    const directory = versionDirectory(h.profile, id);
+    const runtimeName = process.platform === 'darwin' ? 'Cindy.app' : 'Cindy';
+    const runtime = path.join(directory, 'runtime', runtimeName);
+    const { resources, executable } = runnableBundlePaths(runtime, 'Cindy');
+    await mkdir(path.dirname(executable), { recursive: true });
+    await mkdir(resources, { recursive: true });
+    await writeFile(executable, 'executable');
+    await writeFile(path.join(resources, 'app.asar'), 'application');
+    writeVersionJson(path.join(directory, 'version.json'), {
+      protocol: 1,
+      id,
+      profile: { userData: h.profile, region: 'global', appName: 'Cindy', passive: false },
+      title: 'personal',
+      commit: 'a'.repeat(40),
+      builtAt: '2026-09-17T20:00:00.000+08:00',
+      platform: process.platform,
+      arch: process.arch,
+      executable: path.relative(directory, executable),
+      resources: path.relative(directory, resources),
+      executableHash: 'a'.repeat(64),
+      applicationHash: 'b'.repeat(64),
+      migrationHash: 'c'.repeat(64),
+    });
+    writeVersionJson(path.join(versionsRoot(h.profile), 'selected.json'), { id: 'original' });
+    await actCindyVersion('remove', id);
+    expect(uninstall).toHaveBeenCalledExactlyOnceWith(resources);
+    await expect(access(path.join(directory, 'runtime'))).rejects.toThrow();
+    await expect(access(path.join(directory, 'version.json'))).resolves.toBeUndefined();
   });
 });

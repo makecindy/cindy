@@ -239,8 +239,10 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
       windowListeners.orientationchange({});
     },
     blur: () => windowListeners.blur({}),
-    key: (type: string, code: string) =>
-      documentListeners[type]({ code, preventDefault() {} }),
+    key: (type: string, code: string, event: Record<string, unknown> = {}) =>
+      documentListeners[type]({ code, preventDefault() {}, ...event }),
+    keyboard: (type: string, event: Record<string, unknown> = {}) =>
+      listeners[`keyboard-input:${type}`]({ preventDefault() {}, ...event }),
   };
 }
 
@@ -296,6 +298,64 @@ describe("native media overlay", () => {
 });
 
 describe("remote desktop viewport", () => {
+  it.each(["1", "0", "a"])(
+    "sends one committed character when the phone keyboard also emits %s key events",
+    (text) => {
+      const v = viewer();
+      v.send({
+        type: "init",
+        epoch: "phone-keyboard",
+        width: 1920,
+        height: 1080,
+      });
+      v.send({ type: "control", enabled: true });
+      v.send({ type: "keyboard", enabled: true });
+      const input = v.elements["keyboard-input"];
+      const code = text === "a" ? "KeyA" : `Digit${text}`;
+      v.key("keydown", code, { key: text, target: input });
+      input.value = "\u200b" + text;
+      v.keyboard("input", { inputType: "insertText", data: text });
+      v.key("keyup", code, { key: text, target: input });
+      v.ack();
+      v.flush();
+      expect(
+        v.messages
+          .filter((message) => message.type === "input")
+          .flatMap((message) => message.events ?? []),
+      ).toEqual([{ kind: "text", text }]);
+    },
+  );
+  it.each([
+    ["Backspace", "deleteContentBackward"],
+    ["Enter", "insertLineBreak"],
+  ])(
+    "sends one %s from the phone keyboard beforeinput path",
+    (code, inputType) => {
+      const v = viewer();
+      v.send({
+        type: "init",
+        epoch: "phone-keyboard",
+        width: 1920,
+        height: 1080,
+      });
+      v.send({ type: "control", enabled: true });
+      v.send({ type: "keyboard", enabled: true });
+      const input = v.elements["keyboard-input"];
+      v.key("keydown", code, { key: code, target: input });
+      v.keyboard("beforeinput", { inputType });
+      v.key("keyup", code, { key: code, target: input });
+      v.ack();
+      v.flush();
+      expect(
+        v.messages
+          .filter((message) => message.type === "input")
+          .flatMap((message) => message.events ?? []),
+      ).toEqual([
+        { kind: "key", code, down: true },
+        { kind: "key", code, down: false },
+      ]);
+    },
+  );
   it('maps lower-pane relative motion against the upper video viewport and rejects invalid input', () => {
     const v = viewer();
     v.elements.stage.clientWidth = 800;

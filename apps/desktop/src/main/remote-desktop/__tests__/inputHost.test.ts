@@ -1,11 +1,15 @@
 import { EventEmitter } from 'node:events';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopInputHost } from '../inputHost';
 import { HUMAN_INPUT_QUIET_MS, withAgentDesktopInput } from '../inputOwnership';
-import { openWindowsDesktopConnection } from '../windowsHost';
+import { openWindowsDesktopConnection, readWindowsDesktopSupport } from '../windowsHost';
 
 const platform = process.platform;
+beforeEach(() => {
+  vi.mocked(openWindowsDesktopConnection).mockReset();
+  vi.mocked(readWindowsDesktopSupport).mockResolvedValue('ready');
+});
 afterEach(() => {
   vi.useRealTimers();
   Object.defineProperty(process, 'platform', { value: platform });
@@ -23,7 +27,7 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../windowsHost', () => ({
   openWindowsDesktopConnection: vi.fn(),
-  readWindowsDesktopSupport: async () => 'ready',
+  readWindowsDesktopSupport: vi.fn(async () => 'ready'),
 }));
 function childProcess() {
   const child = Object.assign(new EventEmitter(), {
@@ -51,6 +55,154 @@ function childProcess() {
   };
 }
 describe('native input lifecycle', () => {
+  it('keeps an authorized service usable for manual keyboard input while an update is offered', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    vi.mocked(readWindowsDesktopSupport).mockResolvedValueOnce('updateRequired');
+    const connection = { request: vi.fn().mockResolvedValue('ok\n'), close: vi.fn() };
+    vi.mocked(openWindowsDesktopConnection).mockResolvedValueOnce(connection);
+    const failure = vi.fn();
+    const host = new DesktopInputHost(failure);
+    await host.start('1');
+    host.input([{ kind: 'text', text: 'fake-manual-input' }]);
+    await flush();
+    expect(connection.request).toHaveBeenCalledWith('[{"kind":"text","text":"fake-manual-input"}]');
+    expect(failure).not.toHaveBeenCalled();
+    host.stop();
+    await flush();
+  });
+
+  it('releases held ordinary Windows input on lock without starting the SYSTEM service', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    vi.mocked(readWindowsDesktopSupport).mockResolvedValueOnce('missing');
+    const c = childProcess();
+    const spawn = vi.fn(() => {
+      queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+      return c.typed;
+    });
+    const host = new DesktopInputHost(vi.fn(), {
+      resolveBinary: async () => '/test/helper',
+      spawn,
+    });
+    await host.start('1');
+    host.input([{ kind: 'key', code: 'ControlLeft', down: true }]);
+    await flush();
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    host.rebindForDesktopChange();
+    await flush();
+    expect(c.child.stdin.write).toHaveBeenLastCalledWith(
+      '[{"kind":"release"}]\n',
+      expect.any(Function),
+    );
+    expect(openWindowsDesktopConnection).not.toHaveBeenCalled();
+    expect(c.child.stdin.end).not.toHaveBeenCalled();
+    host.stop();
+    c.exit();
+    await flush();
+  });
+
+  it('rebinds on a native desktop transition without replaying old input or dropping control', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    let finish!: (line: string) => void;
+    const previous = {
+      request: vi.fn(() => new Promise<string>((resolve) => (finish = resolve))),
+      close: vi.fn(),
+    };
+    const next = { request: vi.fn().mockResolvedValue('ok\n'), close: vi.fn() };
+    vi.mocked(openWindowsDesktopConnection)
+      .mockResolvedValueOnce(previous)
+      .mockResolvedValueOnce(next);
+    const failure = vi.fn();
+    const host = new DesktopInputHost(failure);
+    await host.start('1');
+    host.input([{ kind: 'text', text: 'old-screen-text' }]);
+    await flush();
+    host.input([{ kind: 'text', text: 'queued-old-screen-text' }]);
+    finish('desktop_changed\n');
+    await flush();
+    await flush();
+    expect(openWindowsDesktopConnection).toHaveBeenCalledTimes(2);
+    expect(previous.close).toHaveBeenCalled();
+    expect(previous.request).toHaveBeenCalledTimes(1);
+    expect(next.request).not.toHaveBeenCalled();
+    expect(failure).not.toHaveBeenCalled();
+    host.input([{ kind: 'text', text: 'fresh-manual-input' }]);
+    await flush();
+    expect(next.request).toHaveBeenCalledWith('[{"kind":"text","text":"fresh-manual-input"}]');
+    host.stop();
+    await flush();
+  });
+
+  it('coalesces OS transition signals and discards input while rebinding', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const previous = { request: vi.fn().mockResolvedValue('desktop_changed\n'), close: vi.fn() };
+    const next = { request: vi.fn().mockResolvedValue('ok\n'), close: vi.fn() };
+    let open!: (value: typeof next) => void;
+    vi.mocked(openWindowsDesktopConnection)
+      .mockResolvedValueOnce(previous)
+      .mockImplementationOnce(() => new Promise((resolve) => (open = resolve)));
+    const failure = vi.fn();
+    const host = new DesktopInputHost(failure);
+    await host.start('1');
+    host.rebindForDesktopChange();
+    host.rebindForDesktopChange();
+    await flush();
+    host.input([{ kind: 'text', text: 'during-transition' }]);
+    open(next);
+    await flush();
+    expect(openWindowsDesktopConnection).toHaveBeenCalledTimes(2);
+    expect(next.request).not.toHaveBeenCalled();
+    expect(failure).not.toHaveBeenCalled();
+    host.stop();
+    await flush();
+  });
+
+  it('does not restore native input after the viewer stops during a desktop transition', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const previous = { request: vi.fn().mockResolvedValue('ok\n'), close: vi.fn() };
+    const next = { request: vi.fn().mockResolvedValue('ok\n'), close: vi.fn() };
+    let open!: (value: typeof next) => void;
+    vi.mocked(openWindowsDesktopConnection)
+      .mockResolvedValueOnce(previous)
+      .mockImplementationOnce(() => new Promise((resolve) => (open = resolve)));
+    const failure = vi.fn();
+    const host = new DesktopInputHost(failure);
+    await host.start('1');
+    host.rebindForDesktopChange();
+    await flush();
+    host.stop();
+    open(next);
+    await flush();
+    expect(next.close).toHaveBeenCalled();
+    expect(failure).not.toHaveBeenCalled();
+    expect(() => host.input([{ kind: 'text', text: 'after-stop' }])).toThrow(
+      'DESKTOP_INPUT_UNAVAILABLE',
+    );
+  });
+
+  it('bounds transition retries and leaves genuine native failures in view-only handling', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const previous = { request: vi.fn().mockResolvedValue('ok\n'), close: vi.fn() };
+    vi.mocked(openWindowsDesktopConnection)
+      .mockResolvedValueOnce(previous)
+      .mockRejectedValue(new Error('service unavailable'));
+    const failure = vi.fn();
+    const host = new DesktopInputHost(failure);
+    await host.start('1');
+    host.rebindForDesktopChange();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(openWindowsDesktopConnection).toHaveBeenCalledTimes(4);
+    expect(failure).toHaveBeenCalledOnce();
+    host.stop();
+    await flush();
+  });
+
   it('retains Windows ownership until queued text and native release are acknowledged', async () => {
     vi.useFakeTimers();
     Object.defineProperty(process, 'platform', { value: 'win32' });

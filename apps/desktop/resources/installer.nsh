@@ -58,6 +58,22 @@
 !macro customInstall
   ${If} ${isUpdated}
     !insertmacro cindyRestoreUpgradeShortcuts
+    ; CODE_DACL is not inherited. Files replaced into $INSTDIR would fail
+    ; protect_application() and drop Settings from updateRequired to unavailable.
+    IfFileExists "$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" 0 cindy_remote_reprotect_done
+    nsExec::ExecToStack '"$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" --reprotect'
+    Pop $R0
+    Pop $R1
+    ${If} $R0 != 0
+      nsExec::ExecToStack '"$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" --elevate-reprotect'
+      Pop $R0
+      Pop $R1
+    ${EndIf}
+    ${If} $R0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "Could not restore lock screen control after this upgrade. Run the installer as administrator and try again."
+      Abort
+    ${EndIf}
+    cindy_remote_reprotect_done:
   ${EndIf}
   ; 注册文件夹右键菜单 "通过 <区域名> 打开" (与 main/folderContextMenu.ts 写的是同一组键)。
   ; 双重保险:installer 写一次让首装即可用, app 启动时的 registerFolderContextMenu()
@@ -123,9 +139,15 @@
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 !macroend
 
-; Runs before removing files, including the old-version uninstall during upgrade.
-; Never leave a SYSTEM service referring to a removed or partially updated image.
+; Runs before removing files. Real uninstall must stop the SYSTEM service first.
+; Overlay upgrades keep the Program Files grant; the SCM image is that copy.
 !macro customUnInit
+  ${If} ${isUpdated}
+    ; Overlay upgrades keep the Program Files grant and AUTO_START service.
+    ; The SCM image is that protected copy, not $INSTDIR. After files are
+    ; replaced, Settings reports updateRequired until the user updates the helper.
+    Goto cindy_remote_service_done
+  ${EndIf}
   IfFileExists "$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" 0 cindy_remote_service_done
   nsExec::ExecToStack '"$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" --uninstall'
   Pop $R0

@@ -52,6 +52,17 @@ export interface DesktopLocalState {
   active: { peer: string; controlling: boolean } | null;
   permissionGuide?: boolean;
   windowsSupport?: WindowsDesktopSupport;
+  windowsDevelopment?: boolean;
+  windowsSetup?: WindowsDesktopSetupState;
+}
+export type WindowsDesktopSetupPhase =
+  'preparing' | 'compilingHost' | 'compilingInput' | 'authorizing' | 'verifying' | 'removing';
+export interface WindowsDesktopSetupState {
+  revision: number;
+  phase: WindowsDesktopSetupPhase | null;
+  error: 'prepare' | 'setup' | null;
+  failedEnabled: boolean | null;
+  startedAt: number | null;
 }
 export type DesktopHostReply =
   | string
@@ -64,7 +75,8 @@ export type DesktopHostReply =
         | 'DESKTOP_VIDEO_STOPPED';
     }
   | null;
-export type WindowsDesktopSupport = 'ready' | 'missing' | 'installRequired' | 'unavailable';
+export type WindowsDesktopSupport =
+  'ready' | 'missing' | 'installRequired' | 'unavailable' | 'updateRequired';
 export interface RemoteDesktopApi {
   state(checkWindowsSupport?: boolean): Promise<DesktopLocalState>;
   enable(enabled: boolean): Promise<void>;

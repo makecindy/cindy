@@ -867,33 +867,173 @@ affects only this desktop lease/video track, not other connected peers.
 
 Packaged Windows builds include a native SCM service, a Main-only Node-API pipe
 transport, a session-scoped SYSTEM GDI capture worker and the SendInput helper.
-The settings page installs/removes the service through Windows administrator
-consent. Only a protected all-users Program Files installation is eligible;
-per-user/development installations retain the ordinary desktop path.
+The existing Windows **Lock screen control** setting installs/removes the service
+through native Windows administrator consent. Setup copies only the host/input
+executables into an administrator-owned `Program Files/CindyRemoteDesktop/<installation>`
+directory. The application can remain in its chosen per-user or custom location.
+The service name retains the installation-scoped legacy identity, so setup replaces
+the old on-demand service rather than leaving two brokers behind.
 
-Authorization records a live process handle for the Cindy process explicitly
-approved through the elevated setup helper. Executable path alone is insufficient:
-plugin utility processes share Cindy.exe. The service starts on demand and exits when its approved Cindy process exits.
-Restarting Cindy or the service requires fresh administrator approval. This is a current limitation, not unattended
-post-reboot support. No authorization secrets or screenshots are persisted.
+Setup also protects the packaged application's code in place: its root and
+packaged siblings (executables, DLLs, V8 snapshots, `.pak` files, `locales`),
+ASAR, unpacked native dependencies, and every file under `resources/` except
+`userData` and `workspace` (including Main-loaded extraResource addons such as
+the Windows taskbar helper and the vendored updater VC++ runtime).
+It does not move the app or change parent-directory, userData, or workspace permissions.
+Protected code subsequently requires administrator rights to replace, including
+updates; the existing installer already handles protected-directory authorization.
+The helper PE is linked with `/DEPENDENTLOADFLAG:0x800` and, at process start,
+restricts DLL search to System32 before parsing arguments or calling `runas`,
+so adjacent user-writable files are not loaded into the elevated child. First
+elevation still starts the signed helper from the packaged extraResource path;
+the protected Program Files copy is written only after that UAC. If a live writer or other sharing conflict still holds a code file, setup refuses
+before changing ACLs. Packaged setup also Authenticode-checks the approved Main
+executable against the elevated helper, keeps that no-write handle through
+hardening, re-hashes the same bytes before recording approval, and aborts if
+the requesting Main exits. Setup pins ancestors and freezes the packaged tree, including ordinary Electron
+resources such as `chrome_*.pak`, `resources.pak`, and `locales`, before the path
+list is trusted, then confirms the listing is unchanged before capture and
+approval. Confirmation does not treat those user-owned packaged siblings as
+already-protected omissions. CODE_DACL is not inherited, so a child restored after
+an unprotected listing would otherwise stay user-writable. Capture also keeps no-write/no-delete handles to every
+unprotected code object and applies ACLs through those handles, so a junction
+cannot retarget hardening after the snapshot. Ancestor directories are pinned from the root down
+before the leaf is opened.
+Electron already seals `app.asar`; unpacked JS/`.node` has no Windows signed
+catalog. Setup therefore does not invent a Cindy-private manifest for those
+files. Authenticode applies to PE that Windows can catalog (Main, host/input,
+and signed extraResource binaries). Same-user code that can rewrite unpacked
+files before UAC, or inject a live Main after it, already has equivalent
+local privilege; the broker's checks do not claim to sandbox that class of
+attacker. Main remains the privilege boundary. A later failure rolls those ACLs back, and uninstall restores
+the captured descriptors so a per-user uninstaller can delete the application again.
+Restore pins the application path and every captured object without DELETE
+sharing before changing ACLs, then applies nested objects first so a parent
+cannot be swapped for a junction between path checks and the descriptor write. Packaged Authenticode matching
+reads the signer from the PKCS#7 message; CryptQueryObject leaves ppvContext
+null for embedded signatures.
+The first-install restore record is written before ACL hardening, so a crash
+cannot leave the application admin-only without a snapshot. Reinstall keeps that
+record: already-protected paths are not recaptured as an empty snapshot.
+The opt-in text discloses both service installation and program-file protection.
+Cancelling UAC runs neither step and does not disable ordinary remote desktop.
+
+Authorization persists the application location, executable name and approved
+Windows user SID in the protected service directory. It contains no password,
+bearer token or PID. Each new Main connection is checked against that record,
+the active console session and protected application files. Executable path alone
+is insufficient: the native transport opens and retains the pipe client process
+handle before reading the init line, then authenticates that same handle. The
+service rejects utility/renderer and debugging command lines. These checks
+do not make same-user arbitrary native process injection a sandbox boundary.
+The service is configured for automatic startup and remains running when Cindy
+exits. Restarting Cindy or the service does not require renewed administrator consent.
+The relay/authenticated remote connection still belongs to Cindy Main: this is
+not pre-login or unattended post-reboot remote access.
+
+Source development uses a separate compile-time `development` variant of the same
+fixed-purpose broker. Its checkout and Electron executable are bound during
+compilation; environment variables or command-line switches cannot enable this
+mode in a packaged broker. Its service identity is stable for that checkout and
+distinct from packaged installations. Version-2 development authorization records
+cannot be loaded by the version-1 packaged authorization path.
+
+The existing setting prepares Dev components only after the user clicks setup,
+then requests native UAC. Polling never compiles or elevates. Setup state belongs
+to Main, including the preparation/compilation/UAC/verification phase and last
+failure. Reopening settings observes the same state. Repeated enable requests
+join the in-flight operation without a second compiler or UAC prompt. Failed
+preparation and transient status-probe failures leave a retry action. A
+registered but stopped or crashed service reports `unavailable`, not
+`missing`, so Settings keeps Remove. A failed update that deleted the old
+service before the replacement started (`missing` plus `failedEnabled: true`)
+also keeps Remove, rather than only Retry. After Cindy restarts, a leftover
+protected Program Files record (authorization, ACL restore, or host/input
+payload) reports `unavailable` even when SCM is gone, so Settings still
+offers Remove. Removing a packaged personal version uninstalls that
+version's lock-screen service through its own helper before deleting the
+snapshot, so a UUID-specific AUTO_START service cannot outlive the
+runtime tree it hardened. Original-user leftover GENERIC
+vault entries from the withdrawn automatic-unlock experiment are deleted
+before UAC; a vault error blocks install and the original-user uninstall
+instead of completing with the password still stored. The elevated
+`--uninstall` child skips vault cleanup so over-the-shoulder UAC cannot
+delete the approving administrator's leftover entries or let an admin
+vault error block this installation's service removal. HKLM
+credential-provider keys are removed after a successful elevated install
+or during elevated uninstall. Compiler
+diagnostics retain only phase, exit/OS code and an optional Rust error number;
+paths, compiler output, environment variables and input are not logged. Generated binaries
+are cached under userData by native source/runtime fingerprint, so a loaded Node
+addon is not overwritten. Normal source edits and Dev restarts reuse the grant;
+each settings poll and setup re-reads native source so a fingerprint change
+invalidates the cache without restarting Desktop. Uninstall and the ready-path probe still
+use the last prepared helper for this checkout and Electron executable, so a
+compiler failure or deleted current cache does not block removing that
+checkout's auto-start SYSTEM service. Isolated Dev profiles
+(`<region>-dev2` / `<region>-dev2-<name>`) and the matching shared region
+profile (`Cindy` / `CindyGlobal` / `CindyDev`) share that checkout-global
+service name; status and uninstall therefore also look in the shared profile
+and sibling sandboxes for a matching helper, rather than reporting `missing`
+after switching `--isolated` and shared userData. Status reports `updateRequired` when that
+fallback helper is current but the Dev fingerprint has changed, so settings
+offers Update rather than Remove. Shared userData cannot pick a newer
+helper from another checkout. Changed native service
+binaries show an update action requiring administrator approval. The broker checks the approved Windows user and exact bound Electron
+image. An `electron .` entry is resolved against the process's actual working
+directory; utility/renderer processes and other app directories do not inherit it.
+
+Dev deliberately trusts code in the approved developer runtime, including mutable
+source and its debugger. It does not seal or alter checkout/node_modules
+permissions and is not isolation against code already running in that runtime.
+This scope is visible beside the setting. Only the copied SYSTEM host/input pair
+and its approval record receive administrator-only protection.
 
 The broker validates file/directory ownership, writable ACLs, reparse points,
-SCM identity, peer PIDs and active console session. It retains installation
-handles for its lifetime. Workers are fixed-purpose children in kill-on-close jobs
+SCM identity, peer PIDs and active console session. It pins the service installation
+for its lifetime and approved packaged application code while each Main process is alive.
+Workers are fixed-purpose children in kill-on-close jobs
 with local-only, bounded, timed pipes. Uninstall/upgrade waits for the service to
-stop before removing binaries. Upgrade clears the authorization.
+stop and its process to exit before removing binaries, including a process that was
+already stopping. Setup copies host/input bytes through an exclusive handle after
+Authenticode verification against the elevated helper, then re-checks the destination.
+Removal deletes only the
+fixed service payload and authorization files, never the user's application directory.
+NSIS overlay upgrades keep the AUTO_START service and Program Files grant. After
+`$INSTDIR` files are replaced, the helper re-hardens the application tree so
+`protect_application()` still accepts it. Settings then reports `updateRequired`
+until the user updates the helper, instead of dropping to `missing` or
+`unavailable`. A real uninstall still stops the service first.
 
 Desktop transitions terminate the old input helper, including pending batches
-and long text input; Main then recovers only the remote desktop lease. Ctrl+Alt+Del
+and long text input. The service reports a fixed `desktop_changed` completion
+after retiring that worker. Main rebinds only the native input connection while
+keeping the existing viewer/control grant, with bounded retries and cancellation
+on stop or revocation. Lock/unlock notifications also initiate this recovery.
+Input arriving during the transition is discarded, never replayed into the new
+password field. Genuine permission/helper failures still release control.
+
+Manual lock-screen keyboard input does not require a saved password or automatic
+unlock. An installed service offering an update remains usable after a successful
+Main authorization probe, rather than falling back to an unprivileged helper.
+This recovery neither submits saved credentials nor reopens a user-selected
+view-only session. No mobile wire message, peer reset or shared relay reconnection
+is added. Ctrl+Alt+Del
 is routed through service-side SendSAS impersonating the approved user's session.
 Windows policy decides whether software SAS is allowed; Cindy never changes it.
 Capture follows the input desktop and validates the selected monitor's geometry.
 The GDI compatibility stream is capped at a 1280-pixel long edge and 180 KB JPEG.
 
-Validation available on macOS: Windows-target Rust compilation checks and Desktop
-TypeScript checking. Still required on Windows 10/11: signed package linking and
-installation, administrator consent/cancellation, lock/unlock, UAC, policy-enabled
-SAS, mixed-DPI displays, worker cleanup, upgrade/uninstall, and plugin rejection.
+Windows native compilation and tests cover persisted installation identity, Main
+versus utility/debug launch arguments, real process/token queries, query-only
+endpoint permissions, reparse rejection, effective no-write/no-delete file pins,
+and preservation of unrelated data-directory permissions. Desktop adapter/settings
+tests cover explicit setup, cancelled authorization, restored readiness and removal.
+These do not replace installed-service testing. Still required on Windows 10/11:
+signed package installation, real administrator consent/cancellation (including
+another administrator account), ordinary Main-to-SYSTEM connection, app/service
+restart, lock/unlock, UAC, policy-enabled SAS, mixed-DPI displays, worker cleanup,
+upgrade/uninstall, and plugin rejection in the packaged runtime.
 Windows display-mode changes and pre-login/unattended post-reboot control are not
 implemented. A Linux pre-login service remains deferred. Do not present this as fully validated
 Windows support or advertise high-frame-rate secure capture.

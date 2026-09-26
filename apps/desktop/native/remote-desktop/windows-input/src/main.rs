@@ -182,8 +182,13 @@ fn main() {
         privacy::run();
         return;
     }
-    if matches!(std::env::args().nth(1).as_deref(), Some("--clipboard-selection" | "--clipboard-content-selection")) {
-        match selection::read(std::env::args().nth(1).as_deref() == Some("--clipboard-content-selection")) {
+    if matches!(
+        std::env::args().nth(1).as_deref(),
+        Some("--clipboard-selection" | "--clipboard-content-selection")
+    ) {
+        match selection::read(
+            std::env::args().nth(1).as_deref() == Some("--clipboard-content-selection"),
+        ) {
             Ok(text) => println!("{}", serde_json::json!({"text":text})),
             Err(_) => std::process::exit(2),
         }
@@ -228,6 +233,7 @@ fn main() {
     }
     println!("ready");
     io::stdout().flush().ok();
+    let mut desktop_changed = false;
     'input: loop {
         let line = match rx.recv_timeout(Duration::from_secs(5)) {
             Ok(line) => line,
@@ -236,7 +242,7 @@ fn main() {
         };
         match desktop.bind() {
             Ok(true) => {
-                release(&mut keys, &mut buttons);
+                desktop_changed = true;
                 break;
             }
             Ok(false) => (),
@@ -255,7 +261,9 @@ fn main() {
         }
         for e in events {
             // Never replay a queued batch on a newly active secure desktop.
-            if desktop.bind() != Ok(false) {
+            let binding = desktop.bind();
+            if binding != Ok(false) {
+                desktop_changed = binding == Ok(true);
                 break 'input;
             }
             if FAILED.load(std::sync::atomic::Ordering::SeqCst) {
@@ -308,7 +316,9 @@ fn main() {
                 "text" => {
                     if let Some(text) = e["text"].as_str() {
                         for c in text.encode_utf16().take(4096) {
-                            if desktop.bind() != Ok(false) {
+                            let binding = desktop.bind();
+                            if binding != Ok(false) {
+                                desktop_changed = binding == Ok(true);
                                 break 'input;
                             }
                             key(c, true, true);
@@ -336,4 +346,10 @@ fn main() {
         io::stdout().flush().ok();
     }
     release(&mut keys, &mut buttons);
+    if desktop_changed {
+        // Fixed native lifecycle signal, emitted only after held inputs release.
+        // The parent discards this generation; no pending text is replayed.
+        println!("desktop_changed");
+        io::stdout().flush().ok();
+    }
 }
