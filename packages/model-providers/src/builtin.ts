@@ -13,7 +13,7 @@
  *
  * 身份卡(id / auth / access / routing / titleModel)是随代码走的事实:
  * 改它们必然伴随发版(SDK 集成 / 翻译桥 / 网关协议都是代码),所以写死在这里,
- * 不再经 OSS 下发。OSS `cfg/providers.json`(v2)只承载 xai 清单 + presets 模板,
+ * 不再经 OSS 下发。`catalog/providers.json`(v2)只承载 xai 清单 + presets 模板,
  * 模型元数据与参考价只走同目录下严格版本化的 `model-registry.json`。
  *
  * ⚠️ 顺序契约:BUILTIN_PROVIDERS 的数组序(anthropic → openai → xai → xd)决定
@@ -30,7 +30,7 @@ import type { ModelRegistry } from './modelAccessBean.js';
 import { piNativeCatalogModels } from './piNativeCatalog.js';
 import type { Catalog, CatalogModel, Provider } from './types.js';
 
-/** 仓内 v2 目录文件(xai 清单 + presets;同一文件发布到 OSS `cfg/providers.json`)。 */
+/** 仓内 v2 目录文件(xai 清单 + presets 源格式;不直接发布到旧 OSS `cfg/providers.json`)。 */
 const catalogFile = catalogJson as unknown as Catalog;
 const bundledModelRegistry = modelRegistryJson as unknown as ModelRegistry;
 

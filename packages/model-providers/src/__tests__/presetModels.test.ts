@@ -105,6 +105,22 @@ describe("预设推荐模型单一清单", () => {
     }
   });
 
+  it("混合格式下引擎字段畸形时，即使 runtimes 自带清单也整条拒绝", () => {
+    const preset = {
+      id: "mixed",
+      name: "Mixed",
+      runtimes: {
+        codex: {
+          baseUrl: "https://example.com/v1",
+          models: [{ id: "legacy", name: "Legacy" }],
+        },
+      },
+      models: [{ id: "m", name: "M", engines: ["codxe"] }],
+    };
+    expect(sanitizePresets([preset])).toEqual([]);
+    expect(sanitizePresets([{ ...preset, models: { id: "m" } }])).toEqual([]);
+  });
+
   it("所有随包预设展开后都通过校验", () => {
     expect(sanitizePresets(rawPresets)).toHaveLength(rawPresets.length);
     expect(BUNDLED_CATALOG.presets?.length).toBeGreaterThanOrEqual(
