@@ -273,13 +273,21 @@ describe('搬家', () => {
     expect((await fs.readdir(path.join(home, 'memories'))).filter((name) => name.includes('.tmp-'))).toEqual([]);
   });
 
-  it('不支持硬链接的文件系统退回独占创建,同样只补缺失的文件', async () => {
+  it('不支持硬链接的文件系统退回确认后 rename,不留半截文件,同样只补缺失的文件', async () => {
     await writeBotProfileFolder(root, 'bot-a', { userContextSource: '用户手改的档案' });
     const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    const writeFile = vi.spyOn(fs, 'writeFile');
     try {
       expect((await migrateBotProfileFolder(root, 'bot-a', SEED)).seeded).toBe(true);
+      // Crash-atomic: content is only ever written to temp files and renamed into place.
+      const home = botProfileDir(root, 'bot-a');
+      for (const [target] of writeFile.mock.calls) {
+        expect(String(target)).toMatch(/\.tmp-/);
+      }
+      expect((await fs.readdir(home)).filter((name) => name.includes('.tmp-'))).toEqual([]);
     } finally {
       link.mockRestore();
+      writeFile.mockRestore();
     }
     const content = await readBotProfileFolder(root, 'bot-a');
     expect(content.identitySource).toBe(SEED.identitySource);

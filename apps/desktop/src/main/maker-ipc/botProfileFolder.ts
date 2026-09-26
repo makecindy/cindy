@@ -219,8 +219,9 @@ async function writeTextAtomic(absPath: string, content: string): Promise<void> 
  *
  * 先检查再 rename 覆盖,中间有一个窗口:检查时还没有,rename 前用户刚好保存了,
  * 补种就会把刚保存的内容冲掉。这里把内容写进临时文件后用 link 挂到目标路径 ——
- * 目标已存在时 link 直接报 EEXIST 而不是替换。不支持硬链接的文件系统退回
- * `wx` 独占创建,同样绝不替换已有文件。返回是否真的创建了。
+ * 目标已存在时 link 直接报 EEXIST 而不是替换,且内容已完整写好才出现在目标路径。
+ * 不支持硬链接的文件系统退回「紧挨着再确认不存在 + rename」,保证不留半截文件。
+ * 返回是否真的创建了。
  */
 async function writeTextIfAbsent(absPath: string, content: string): Promise<boolean> {
   if (Buffer.byteLength(content, 'utf8') > BOT_PROFILE_TEXT_MAX_BYTES) {
@@ -237,13 +238,20 @@ async function writeTextIfAbsent(absPath: string, content: string): Promise<bool
     return true;
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    /*
+      没有硬链接的文件系统上不存在「原子且不替换」的 rename。这里优先保证崩溃原子性
+      (绝不留下写到一半的文件 —— 半截 SOUL.md 会被对账当成正式身份收进数据库),
+      在 rename 前紧挨着再确认一次目标不存在;剩下的只是两次系统调用之间的窗口,
+      且只出现在这类少见的文件系统上。
+    */
     try {
-      await fs.writeFile(absPath, content, { encoding: 'utf8', flag: 'wx' });
-      return true;
-    } catch (fallback) {
-      if ((fallback as NodeJS.ErrnoException).code === 'EEXIST') return false;
-      throw fallback;
+      await fs.access(absPath);
+      return false;
+    } catch (missing) {
+      if ((missing as NodeJS.ErrnoException).code !== 'ENOENT') throw missing;
     }
+    await fs.rename(tmp, absPath);
+    return true;
   } finally {
     await fs.rm(tmp, { force: true }).catch(() => {});
   }
