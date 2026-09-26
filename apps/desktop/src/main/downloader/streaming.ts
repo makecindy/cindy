@@ -1,4 +1,4 @@
-import { net } from 'electron';
+import { guardedOutboundFetch } from '../maker-host/outbound-fetch';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { TransportContext, TransportResult } from './transport';
@@ -32,6 +32,7 @@ export async function executeStreaming(ctx: TransportContext): Promise<Transport
   };
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let file: fs.FileHandle | undefined;
+  let release: (() => Promise<void>) | undefined;
   try {
     if (controller.signal.aborted) throw new DownloadError('ABORTED', 'Download cancelled');
     try {
@@ -58,31 +59,42 @@ export async function executeStreaming(ctx: TransportContext): Promise<Transport
     let url = opts.url;
     let response: Response;
     for (let hop = 0; ; hop++) {
-      if (controller.signal.aborted) throw new DownloadError('ABORTED', 'Download cancelled');
-      try {
-        opts.validateUrl?.(url);
-      } catch {
-        // A caller policy refusal cannot be repaired by retrying the same URL.
-        throw new DownloadError('INVALID_ARG', 'Download URL is not allowed');
-      }
+      const validate = () => {
+        controller.signal.throwIfAborted();
+        try {
+          opts.validateUrl?.(url);
+        } catch {
+          // A caller policy refusal cannot be repaired by retrying the same URL.
+          throw new DownloadError('INVALID_ARG', 'Download URL is not allowed');
+        }
+      };
+      validate();
       arm(opts.timeout?.connectMs ?? 10_000);
-      response = await net.fetch(url, {
-        redirect: 'manual',
-        credentials: 'omit',
-        cache: 'no-store',
-        signal: controller.signal,
-        headers:
-          offset === null
-            ? {}
-            : {
-                Range: `bytes=${offset}-`,
-                ...(previous?.etag || previous?.lastModified
-                  ? { 'If-Range': previous.etag || previous.lastModified! }
-                  : {}),
-              },
-      });
+      const guarded = await guardedOutboundFetch(
+        url,
+        {
+          credentials: 'omit',
+          cache: 'no-store',
+          redirect: 'manual',
+          signal: controller.signal,
+          headers:
+            offset === null
+              ? {}
+              : {
+                  Range: `bytes=${offset}-`,
+                  ...(previous?.etag || previous?.lastModified
+                    ? { 'If-Range': previous.etag || previous.lastModified! }
+                    : {}),
+                },
+        },
+        validate,
+      );
+      response = guarded.response;
+      release = guarded.release;
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       await response.body?.cancel();
+      await release();
+      release = undefined;
       const location = response.headers.get('location');
       if (!location || hop >= 9) throw new DownloadError('INVALID_ARG', 'Invalid redirect');
       try {
@@ -123,7 +135,10 @@ export async function executeStreaming(ctx: TransportContext): Promise<Transport
       deleteMeta(opts.targetPath);
       throw new DownloadError('CHECKSUM', 'Content length mismatch');
     }
-    const hasher = createStreamingHasher(resumed ? partPath(opts.targetPath) : null);
+    const hasher = createStreamingHasher(
+      resumed ? partPath(opts.targetPath) : null,
+      controller.signal,
+    );
     file = await fs.open(partPath(opts.targetPath), resumed ? 'a' : 'w', 0o600);
     const tracker = new ProgressTracker({
       initialLoaded: initial,
@@ -203,10 +218,12 @@ export async function executeStreaming(ctx: TransportContext): Promise<Transport
     );
     throw new DownloadError(diskFailure ? 'DISK' : 'NETWORK', 'Download failed', cause);
   } finally {
+    controller.abort();
     clearTimeout(timer);
     opts.signal?.removeEventListener('abort', abort);
     await reader?.cancel().catch(() => {});
     reader?.releaseLock();
+    await release?.();
     await file?.close().catch(() => {});
   }
 }

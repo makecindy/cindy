@@ -158,7 +158,7 @@ it('restricts redirects, rejects arbitrary paths and isolates owner delivery', a
     await fs.rm(root, { recursive: true, force: true });
   }
 });
-it('cancel reaches only the matching active request', async () => {
+it('cancel drains the matching request before acknowledging an immediate same-id retry', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'plugin-download-test-')));
   const ghost = {
     enabled: true,
@@ -167,29 +167,57 @@ it('cancel reaches only the matching active request', async () => {
   } as unknown as InstalledGhost;
   let started!: () => void;
   const ready = new Promise<void>((r) => (started = r));
+  let finish!: () => void;
+  const cleanup = new Promise<void>((r) => (finish = r));
+  let calls = 0;
   const slot = new PluginDownloadSlot({
     root: (id) => path.join(root, id),
     scope: () => 'a',
     getGhost: () => ghost,
     send: () => {},
-    download: async (o) =>
-      new Promise((_, reject) => {
-        started();
-        o.signal!.addEventListener('abort', () => reject(Error('aborted')));
-      }),
+    download: async (o) => {
+      if (++calls === 1) {
+        await new Promise<void>((resolve) => {
+          started();
+          o.signal!.addEventListener('abort', () => resolve());
+        });
+        await cleanup;
+        throw Error('aborted');
+      }
+      await fs.writeFile(o.targetPath, 'ok');
+      return {
+        path: o.targetPath,
+        size: 2,
+        sha256: o.sha256,
+        fromCache: false,
+        durationMs: 1,
+        resumedFromBytes: 0,
+      };
+    },
   });
   try {
-    const work = slot.handle('p', {
+    const request = {
       kind: 'start',
       id: 'x',
       url: 'https://github.com/file',
       sha256: 'a'.repeat(64),
       bytes: 2,
-    });
+    };
+    const work = slot.handle('p', request);
     await ready;
-    await slot.handle('p', { kind: 'cancel', id: 'x' });
+    let acknowledged = false;
+    const cancel = slot.handle('p', { kind: 'cancel', id: 'x' }).then(() => {
+      acknowledged = true;
+    });
+    await Promise.resolve();
+    expect(acknowledged).toBe(false);
+    finish();
+    await cancel;
     expect(await work).toMatchObject({ ok: false, message: '下载已取消' });
+    expect(await slot.handle('p', request)).toMatchObject({ ok: true });
+    expect(calls).toBe(2);
   } finally {
+    finish();
     await fs.rm(root, { recursive: true, force: true });
   }
 });

@@ -124,7 +124,9 @@ export class PluginDownloadSlot {
       const scope = this.deps.scope(),
         key = JSON.stringify([scope, id, p.id]);
       if (p.kind === 'cancel') {
-        this.active.get(key)?.controller.abort();
+        const item = this.active.get(key);
+        item?.controller.abort();
+        await item?.promise;
         return { ok: true };
       }
       if (

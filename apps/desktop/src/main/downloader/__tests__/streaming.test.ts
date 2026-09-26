@@ -3,8 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
-vi.mock('electron', () => ({ net: { fetch: mocks.fetch } }));
+const mocks = vi.hoisted(() => ({ fetch: vi.fn(), release: vi.fn(async () => {}) }));
+vi.mock('../../maker-host/outbound-fetch', () => ({
+  guardedOutboundFetch: async (url: string, init: RequestInit, beforeDispatch: () => void) => {
+    beforeDispatch();
+    return { response: await mocks.fetch(url, init), release: mocks.release };
+  },
+}));
 import { executeStreaming } from '../streaming';
 import { readMeta, writeMeta } from '../resume';
 import { withRetry } from '../retry';
@@ -31,6 +36,74 @@ it('cancellation while waiting for data cannot publish a completed artifact', as
     await vi.waitFor(() => expect(mocks.fetch).toHaveBeenCalledTimes(1));
     abort.abort();
     await rejected;
+    await expect(fs.stat(opts.targetPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  }));
+
+it('rechecks caller policy after address resolution and does not dispatch or retry a revoked caller', async () =>
+  fixture(async (_, opts) => {
+    mocks.fetch.mockReset();
+    let validations = 0;
+    const onRetry = vi.fn();
+    await expect(
+      withRetry(
+        () =>
+          execute({
+            ...opts,
+            validateUrl: () => {
+              if (++validations === 2) throw Error('caller revoked');
+            },
+          }),
+        { logger: {}, onRetry },
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_ARG' });
+    expect(validations).toBe(2);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
+  }));
+
+it('cancels a resumed prefix hash and releases the response before settling', async () =>
+  fixture(async (_, opts) => {
+    const nodeFs = await import('node:fs');
+    const { PassThrough, addAbortSignal } = await import('node:stream');
+    await fs.writeFile(opts.targetPath + '.part', 'abc');
+    writeMeta(opts.targetPath, {
+      url: opts.url,
+      expectedSize: 6,
+      expectedSha256: opts.sha256,
+      downloadedBytes: 3,
+      etag: null,
+      lastModified: null,
+      createdAt: '',
+      updatedAt: '',
+    });
+    const abort = new AbortController();
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const stream = new PassThrough();
+    vi.spyOn(nodeFs.default, 'createReadStream').mockImplementation(((
+      _path: unknown,
+      options: { signal: AbortSignal },
+    ) => {
+      addAbortSignal(options.signal, stream);
+      entered();
+      return stream;
+    }) as any);
+    mocks.release.mockClear();
+    mocks.fetch.mockReset().mockResolvedValue(
+      new Response('def', {
+        status: 206,
+        headers: { 'content-range': 'bytes 3-5/6' },
+      }),
+    );
+    const result = execute({ ...opts, signal: abort.signal });
+    const rejected = expect(result).rejects.toMatchObject({ code: 'ABORTED' });
+    await ready;
+    abort.abort();
+    await rejected;
+    expect(stream.destroyed).toBe(true);
+    expect(mocks.release).toHaveBeenCalledOnce();
     await expect(fs.stat(opts.targetPath)).rejects.toMatchObject({ code: 'ENOENT' });
   }));
 async function fixture(run: (root: string, opts: any) => Promise<void>) {
@@ -110,7 +183,12 @@ it('validates each redirect and never sends credentials', async () =>
     await expect(
       execute({ ...opts, validateUrl: (u: string) => urls.push(u) }),
     ).resolves.toMatchObject({ size: 6 });
-    expect(urls).toEqual([opts.url, 'https://cdn.invalid/file']);
+    expect(urls).toEqual([
+      opts.url,
+      opts.url,
+      'https://cdn.invalid/file',
+      'https://cdn.invalid/file',
+    ]);
     for (const [, request] of mocks.fetch.mock.calls)
       expect(request).toMatchObject({ credentials: 'omit', redirect: 'manual' });
   }));
