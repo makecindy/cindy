@@ -117,15 +117,16 @@ export function migrationScope() {
       const target = file(record.sessionId, record.kind === 'incoming');
       atomicWriteFileSync(target, JSON.stringify(record));
       // A remote activation must never outrun the persisted source fence.
-      const sync = (name: string) => {
-        const fd = fs.openSync(name, 'r');
+      const sync = (name: string, flags = 'r') => {
+        const fd = fs.openSync(name, flags);
         try {
           fs.fsyncSync(fd);
         } finally {
           fs.closeSync(fd);
         }
       };
-      sync(target);
+      // Windows FlushFileBuffers requires a writable handle; r+ preserves contents.
+      sync(target, 'r+');
       if (process.platform !== 'win32') {
         sync(path.dirname(target));
         sync(root);

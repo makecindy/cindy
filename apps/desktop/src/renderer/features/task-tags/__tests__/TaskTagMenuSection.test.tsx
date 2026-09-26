@@ -44,6 +44,25 @@ it('keeps guest labels visible but disabled without requesting the host catalog'
   expect(onMore).not.toHaveBeenCalled();
   expect(invoke).not.toHaveBeenCalled();
 });
+it.each(['preparing', 'transferring', 'moved', 'complete', 'receiving', 'ready'])('disables assignment in the menu and editor during %s', async stage => {
+  const tag = { id: 'tag', name: 'Red', color: 'red', favoriteOrder: null, revision: 1 };
+  const execute = vi.fn(async (_request: { action: string }) => ({ tags: [tag], sessions: [] }));
+  const taskMigration = vi.fn(async () => ({ stage }));
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    localDb: { taskTags: { execute } }, deviceLink: { taskMigration },
+  } });
+  const session = { id: 'task', tags: [tag] } as Session;
+  const menu = render(<TaskTagMenuSection session={session} onMore={() => {}} />);
+  await act(async () => {});
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Red' }) as HTMLButtonElement).disabled).toBe(true));
+  fireEvent.click(screen.getByRole('button', { name: 'Red' }));
+  menu.unmount();
+  render(<TaskTagEditor session={session} onClose={() => {}} />);
+  await act(async () => {});
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Red' }) as HTMLButtonElement).disabled).toBe(true));
+  fireEvent.click(screen.getByRole('button', { name: 'Red' }));
+  expect(execute.mock.calls.every(([request]) => (request as { action: string }).action === 'get')).toBe(true);
+});
 it('treats 工作 to Work as an explicit rename, but not an unchanged save', async () => {
   const tag = { id: 'preset:work', name: 'Work', color: 'blue', favoriteOrder: null, revision: 1 };
   const execute = vi.fn(async () => ({ tags: [tag], sessions: [] }));

@@ -13,6 +13,8 @@ import {
   isDataOwnerBroadcastScopeCurrent,
 } from '../../device-link/broadcast-tap.js';
 import { broadcastSessionPatched } from './sessions';
+import { withTaskMigrationBoundary } from '../../task-migration/writeBoundary';
+import { assertTaskMigrationWritable } from '../../task-migration/journal';
 
 const log = createLogger('taskTags');
 export const TASK_TAG_CHANNEL = 'local-db:task-tags:execute';
@@ -40,11 +42,26 @@ export async function executeTaskTags(
     throw new Error('[INVALID_PARAMS] Invalid task tag preset');
   }
   const client = getDbClient();
-  const result = await client.tx('taskTags.execute', {
+  const transact = () => client.tx('taskTags.execute', {
     ...request,
     newId: preset?.id ?? randomUUID(),
     callerSessionId,
   });
+  // Assignment writes share one admission boundary across local, remote and tool callers.
+  // Catalog operations remain owner-wide; migration does not freeze the label directory.
+  let result: TaskTagResult;
+  if (request.action === 'attach' || request.action === 'detach') {
+    if (!Array.isArray(request.sessionIds) || !request.sessionIds.length || request.sessionIds.length > 100)
+      throw new Error('[INVALID_PARAMS] Invalid task tag targets');
+    const ids = [...new Set(request.sessionIds.map(id => typeof id === 'string' ? id.trim() : ''))];
+    result = await withTaskMigrationBoundary(ids, async () => {
+      assertCurrent();
+      ids.forEach(assertTaskMigrationWritable);
+      return transact();
+    });
+  } else {
+    result = await transact();
+  }
   assertCurrent();
   if (['create', 'update', 'delete', 'attach', 'detach'].includes(request.action)) {
     for (const row of result.sessions)

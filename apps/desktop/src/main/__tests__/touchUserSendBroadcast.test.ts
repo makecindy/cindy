@@ -16,6 +16,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+// These fixtures test field filtering/broadcasts; migration admission has dedicated tests.
+vi.mock('../task-migration/writeBoundary', () => ({
+  withTaskMigrationWrite: (_id: string, task: () => Promise<unknown>) => task(),
+}));
 
 const h = vi.hoisted(() => {
   const updateSetCalls: Array<Record<string, unknown>> = [];

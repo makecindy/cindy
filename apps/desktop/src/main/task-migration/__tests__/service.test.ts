@@ -1,6 +1,7 @@
 vi.mock('../../mcp-integrations/moveSession', () => ({ moveSessionProjectFromHost: vi.fn() }));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
+import syncFs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
@@ -273,6 +274,28 @@ describe('durable cross-machine handoff', () => {
   });
   afterEach(async () => {
     await fs.rm(state.root, { recursive: true, force: true });
+  });
+  it('flushes journal files using writable handles without truncation', async () => {
+    const open = vi.spyOn(syncFs, 'openSync');
+    const flush = syncFs.fsyncSync.bind(syncFs);
+    const fsync = vi.spyOn(syncFs, 'fsyncSync').mockImplementation(fd => {
+      const index = open.mock.results.findLastIndex(result => result.type === 'return' && result.value === fd);
+      if (syncFs.fstatSync(fd).isFile()) {
+        // Emulate Windows: FlushFileBuffers rejects a read-only file handle.
+        expect(open.mock.calls[index]?.[1]).toBe('r+');
+      }
+      flush(fd);
+    });
+    try {
+      await start();
+      const result = await settled();
+      expect(result.stage).toBe('complete');
+      expect(migrationScope().read('fork')?.stage).toBe('complete');
+      expect(fsync).toHaveBeenCalled();
+    } finally {
+      fsync.mockRestore();
+      open.mockRestore();
+    }
   });
   it('routes a remote project move through the source host helper without starting a transfer', async () => {
     vi.mocked(moveSessionProjectFromHost).mockResolvedValueOnce({ ok: true, sessionId: 'fork', workingDir: '/another', workspaceKind: 'project' });

@@ -9,14 +9,11 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { TaskMigrationDialog } from './sidebar/TaskMigrationDialog';
 
-/** Only the visible task observes its durable handoff; sidebar rows do not poll. */
-export function TaskMigrationStatus({ session }: { session: Session }) {
-  const { t } = useTranslation();
+/** Observe only mounted task details or open menus/editors, never idle sidebar rows. */
+export function useTaskMigrationStatus(session: Session) {
   const [status, setStatus] = useState<TaskMigrationView | null>(null);
-  const [open, setOpen] = useState(false);
   useEffect(() => {
     setStatus(null);
-    setOpen(false);
     if (session.remoteHostId || isSharedTaskPeer(session.deviceLinkDeviceId ?? '')) return;
     const owner = getDataOwnerGeneration();
     let disposed = false,
@@ -40,6 +37,14 @@ export function TaskMigrationStatus({ session }: { session: Session }) {
       clearTimeout(timer);
     };
   }, [session.id, session.deviceLinkDeviceId, session.remoteHostId]);
+  return status;
+}
+
+export function TaskMigrationStatus({ session }: { session: Session }) {
+  const { t } = useTranslation();
+  const status = useTaskMigrationStatus(session);
+  const [open, setOpen] = useState(false);
+  useEffect(() => setOpen(false), [session.id, session.deviceLinkDeviceId]);
   if (!status?.stage || ['active', 'cancelled'].includes(status.stage)) return null;
   return (
     <>
