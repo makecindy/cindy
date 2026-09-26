@@ -96,6 +96,14 @@ Mobile 的模型目录变化通知由 `deviceCatalogRefresh.ts` 按设备合并�
 为 ACK／握手保留硬上限之前的余量；不等待 relay 的 1013 才降速，也不对已排空的健康
 socket 固定限速。最大逻辑消息仍可在排空后原子发送，不改变可靠序号和跨版本协议。
 
+控制端单独重连可能仍使用原可靠流，被控端因自身 relay 未重连而将建链判为重复 open。
+新版确认 ACK 若匹配本次 accept，且明确停在已发送队头的前一序号，可额外补发这一个队头；
+每个序号最多补发一次，同一 peer 的补发间隔不少于原重试基础间隔，且受原恢复帧预算、
+socket 背压和聚合公平预算约束。慢速在途消息也可能得到一次副本，因此不能对每次 open
+重放整队。普通 ACK、旧端无确认能力、已确认数据和过大的队头沿用原重试策略。
+此修复只作用于该 peer，不重启共享 relay、不缩短业务超时，也不改变 wire 格式；
+多控制端故障隔离用例见 `packages/device-link/src/__tests__/client.test.ts`。
+
 ## 模块通过 Remote Resource 接入移动端
 
 面向移动端新增独立产品入口时，默认通过 `@cindy/device-link` 的 Remote Resource
