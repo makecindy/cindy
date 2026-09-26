@@ -15,6 +15,7 @@ import {
 	defaultIsolatedUserDataDir,
 	desktopDevCacheDirs,
 	devEnvPrefix,
+	darwinStaleIsolationUnset,
 	hasIsolationIntent,
 	isTrustedIsolatedAuthUserDataDir,
 	ISOLATED_AUTH_LAUNCH_PROOF_FILE,
@@ -1383,4 +1384,23 @@ test('Linux readiness binds the reported renderer to a live descendant in the sa
   }
   assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'darwin')[0].ready, false);
   assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'win32')[0].ready, false);
+});
+
+test("darwinStaleIsolationUnset clears isolation vars a long-lived Terminal may still carry", () => {
+	assert.equal(
+		darwinStaleIsolationUnset({}),
+		"unset XDT_ISOLATED XDT_ISOLATED_NAME XDT_USER_DATA_DIR XDT_DEVICE_ID_OVERRIDE XDT_ISOLATED_AUTH XDT_ISOLATED_AUTH_PROOF; ",
+	);
+	// 本次显式设了的隔离变量由 devEnvPrefix 转发,不能被清掉。
+	assert.equal(
+		darwinStaleIsolationUnset({
+			XDT_ISOLATED: "1",
+			XDT_ISOLATED_NAME: "dev",
+			XDT_USER_DATA_DIR: "/tmp/x",
+			XDT_DEVICE_ID_OVERRIDE: "d",
+			XDT_ISOLATED_AUTH: "1",
+			XDT_ISOLATED_AUTH_PROOF: "p",
+		}),
+		"",
+	);
 });

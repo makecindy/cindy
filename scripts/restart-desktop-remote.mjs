@@ -853,6 +853,26 @@ function darwinEnvPrefix() {
   return `export PATH=${shellSingleQuote([...new Set(preferredPathParts)].join(path.delimiter))}:"$PATH":${shellSingleQuote([...new Set(fallbackPathParts)].join(path.delimiter))}; `;
 }
 
+/**
+ * 数据目录 / 隔离身份类变量:本次调用没设值时必须在 Terminal 命令里显式清掉。
+ * 长驻的 Terminal.app 会保留更早一次 isolated 启动留下的这些变量,而 devEnvPrefix 只
+ * 转发有值的项 —— 于是 `--shared` / `--preserve-running` 预览会悄悄落进别的 worktree
+ * 的沙箱(新 deviceId、别人的库),而不是共享正式 profile。
+ */
+const STALE_TERMINAL_ISOLATION_ENV_KEYS = Object.freeze([
+  'XDT_ISOLATED',
+  'XDT_ISOLATED_NAME',
+  'XDT_USER_DATA_DIR',
+  'XDT_DEVICE_ID_OVERRIDE',
+  'XDT_ISOLATED_AUTH',
+  'XDT_ISOLATED_AUTH_PROOF',
+]);
+
+export function darwinStaleIsolationUnset(env = process.env) {
+  const keys = STALE_TERMINAL_ISOLATION_ENV_KEYS.filter((key) => !env[key]);
+  return keys.length > 0 ? `unset ${keys.join(' ')}; ` : '';
+}
+
 export function devEnvPrefix(env = process.env, platform = process.platform) {
   const envEntries = [
     // --region 经 CINDY_AUTH_REGION 注入 dev-remote-env / Forge / Vite，同一个值
@@ -940,7 +960,7 @@ function launchInSystemTerminal(mode) {
   }
 
   if (process.platform === 'darwin') {
-    const command = `${darwinEnvPrefix()}cd ${shellSingleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode)}; exitCode=$?; exit $exitCode`;
+    const command = `${darwinEnvPrefix()}${darwinStaleIsolationUnset()}cd ${shellSingleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode)}; exitCode=$?; exit $exitCode`;
     const child = spawn('osascript', osascriptLaunchDarwinTerminalArgs(command), {
       detached: true,
       stdio: 'ignore',
