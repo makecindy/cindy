@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createOrcaMcpServer } from '../orca/server.js';
@@ -152,6 +154,126 @@ describe('dynamic lizi MCP session context', () => {
     expect(first).toContain('get_worker_queue_status');
     expect(first).toContain('merge_queued_messages');
     expect(first).not.toContain('list_worker_queue');
+  });
+
+  it('returns actionable worker validation without weakening public schemas', async () => {
+    const deps = createOrcaDeps();
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'orca-validation-client', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    try {
+      const listed = await client.listTools();
+      const publicSchema = listed.tools.find((tool) => tool.name === 'create_worker')?.inputSchema;
+      expect(publicSchema).toMatchObject({
+        type: 'object',
+        required: ['role', 'agent', 'label'],
+        additionalProperties: false,
+      });
+      expect(listed.tools.find((tool) => tool.name === 'create_workers')?.inputSchema).toMatchObject({
+        type: 'object',
+        required: ['workers'],
+        additionalProperties: false,
+      });
+
+      const result = await client.callTool({
+        name: 'create_worker',
+        arguments: {
+          args: {
+            role: 'architect',
+            agent: 'pi',
+            label: 'planner_1',
+            initial_task: 'plan the release',
+          },
+          debug: true,
+        },
+      });
+      const payload = parse(result as never);
+      expect(payload).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        data: {
+          tool: 'create_worker',
+          missing_fields: ['role', 'agent', 'label'],
+          unexpected_fields: ['args', 'debug'],
+          example_call:
+            'create_worker({"role":"reviewer","agent":"codex","label":"worker_1"})',
+          example_only: true,
+        },
+      });
+      expect(payload.data.hint).toContain('without changing their values');
+      expect(payload.data.example_note).toContain('Preserve the user-requested');
+      expect(JSON.stringify(payload)).not.toContain('plan the release');
+      expect(payload.data.validation_errors).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: 'role',
+          expected_type: 'string',
+          received_type: 'missing',
+          missing: true,
+        }),
+        expect.objectContaining({
+          path: 'args',
+          received_type: 'object',
+          missing: false,
+        }),
+      ]));
+
+      const privateValue = 'private-agent-value-that-must-not-leak';
+      const wrongTypes = await client.callTool({
+        name: 'create_worker',
+        arguments: { role: 42, agent: privateValue, label: { nested: true } },
+      });
+      const wrongTypePayload = parse(wrongTypes as never);
+      expect(JSON.stringify(wrongTypePayload)).not.toContain(privateValue);
+      expect(wrongTypePayload.data.validation_errors).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: 'role', received_type: 'number', missing: false }),
+        expect.objectContaining({ path: 'agent', received_type: 'string', missing: false }),
+        expect.objectContaining({ path: 'label', received_type: 'object', missing: false }),
+      ]));
+
+      const batchResult = await client.callTool({
+        name: 'create_workers',
+        arguments: { args: { workers: [] } },
+      });
+      expect(parse(batchResult as never)).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        data: {
+          tool: 'create_workers',
+          missing_fields: ['workers'],
+          unexpected_fields: ['args'],
+          example_call:
+            'create_workers({"workers":[{"role":"reviewer","agent":"codex","label":"worker_1"},{"role":"tester","agent":"codex","label":"worker_2"}]})',
+          example_only: true,
+        },
+      });
+      expect(deps.createWorker).not.toHaveBeenCalled();
+
+      const validResult = await client.callTool({
+        name: 'create_worker',
+        arguments: { role: 'reviewer', agent: 'codex', label: 'reviewer_1' },
+      });
+      expect(parse(validResult as never)).toMatchObject({
+        ok: true,
+        worker_id: 'worker-1',
+        worker_session_id: 'worker-session-1',
+      });
+      expect(deps.createWorker).toHaveBeenCalledWith(expect.objectContaining({
+        leadSessionId: 'lead-1',
+        role: 'reviewer',
+        agent: 'codex',
+        label: 'reviewer_1',
+      }));
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 
   it('keeps send_to_worker public schema free of interrupt controls', () => {
