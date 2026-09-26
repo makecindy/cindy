@@ -403,6 +403,45 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(trigger.textContent).toContain('Opus 周限 剩余 66%');
   });
 
+  it('告警时只把达到条件的剩余百分比染红，其余段与任务价值保持常色', () => {
+    const estimatedValueMoney = usdMoney(7.82, 'value-estimate');
+    mocks.sessionUsage = {
+      actualMoney: null,
+      estimatedValueMoney,
+      totalMoney: estimatedValueMoney,
+    };
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      fiveHour: { utilization: 88, severity: 'warning' },
+      sevenDay: { utilization: 20 },
+    };
+
+    renderClaudeSubscriptionChip();
+
+    const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+    expect(trigger.className).not.toContain('error-fg');
+    const red = Array.from(trigger.querySelectorAll('[class*="error-fg"]'));
+    expect(red.map((el) => el.textContent)).toEqual(['12%']);
+    expect(trigger.textContent).toContain('5h 剩余 12%');
+    expect(trigger.textContent).toContain('周限 剩余 80%');
+    expect(trigger.textContent).toContain('本任务价值 $7.82');
+  });
+
+  it('受限但 chip 上没有达到条件的数字时整条变红兜底', () => {
+    mocks.claudeSnapshot = {
+      source: 'unified-headers',
+      rateLimitStatus: 'rejected',
+      fiveHour: { utilization: 30 },
+      sevenDay: { utilization: 20 },
+    };
+
+    renderClaudeSubscriptionChip();
+
+    const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+    expect(trigger.className).toContain('error-fg');
+    expect(trigger.querySelector('[class*="error-fg"]')).toBeNull();
+  });
+
   it('完整渲染 Codex app-server 的两个权威窗口', () => {
     mocks.codexAuthInjection = 'oauth-bearer';
     mocks.codexSnapshot = {
