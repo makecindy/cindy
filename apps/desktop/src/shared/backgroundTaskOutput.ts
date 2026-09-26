@@ -19,8 +19,11 @@ export type BackgroundTaskOutputTailResult =
       text: string;
       /** 文件总字节数。 */
       size: number;
-      /** 最后修改时间(epoch ms)。 */
-      mtimeMs: number;
+      /**
+       * 读取时距文件最后写入过去了多久(ms),由读取端用同一时钟算出。远控时两台电脑
+       * 时钟可能不一致,控制端不能拿自己的当前时间去减被控端的 mtime。
+       */
+      ageMs: number;
       /** 文件大于读取上限,text 只是末尾一段。 */
       truncated: boolean;
     }

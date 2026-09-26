@@ -86,7 +86,8 @@ export async function readBackgroundTaskOutputTail(
       const rest = firstNewline >= 0 ? text.slice(firstNewline + 1) : '';
       text = rest.trim() ? rest : text.replace(/^\uFFFD+/, '');
     }
-    return { ok: true, text, size, mtimeMs: Number(stat.mtimeMs), truncated };
+    const ageMs = Math.max(0, Date.now() - Number(stat.mtimeMs));
+    return { ok: true, text, size, ageMs, truncated };
   } catch {
     return { ok: false, reason: 'read_failed' };
   } finally {

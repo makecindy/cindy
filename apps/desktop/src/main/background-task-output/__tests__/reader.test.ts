@@ -27,7 +27,7 @@ describe('readBackgroundTaskOutputTail', () => {
       size: 14,
       truncated: false,
     });
-    if (result.ok) expect(result.mtimeMs).toBeGreaterThan(0);
+    if (result.ok) expect(result.ageMs).toBeGreaterThanOrEqual(0);
   });
 
   it('reads only the tail and drops the partial first line when over the cap', async () => {

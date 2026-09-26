@@ -19,10 +19,13 @@ vi.mock('@/hooks/useExpandedBlockMemory', () => ({
   useExpandedBlockMemory: () => ({ expanded: expandedState.value, setExpanded: vi.fn() }),
 }));
 
-const { readTailMock } = vi.hoisted(() => ({ readTailMock: vi.fn() }));
+const { readTailMock, remoteState } = vi.hoisted(() => ({
+  readTailMock: vi.fn(),
+  remoteState: { value: false },
+}));
 vi.mock('@/lib/makerTransport', () => ({
   getWorkflowProgressFor: vi.fn(async () => null),
-  isRemoteSessionSticky: () => false,
+  isRemoteSessionSticky: () => remoteState.value,
   readBackgroundTaskOutputTailFor: readTailMock,
 }));
 
@@ -92,12 +95,13 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(START + 65_000);
   expandedState.value = true;
+  remoteState.value = false;
   readTailMock.mockReset();
   readTailMock.mockResolvedValue({
     ok: true,
     text: '\u001b[32m✓\u001b[39m suite a\nprogress 10%\rprogress 90%\n',
     size: 40,
-    mtimeMs: START + 62_000,
+    ageMs: 3_000,
     truncated: false,
   });
 });
@@ -142,6 +146,38 @@ describe('AgentTaskCard background command', () => {
       await Promise.resolve();
     });
     expect(readTailMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the output age on one clock: host-computed age plus local time since receipt', async () => {
+    const { container } = render(
+      <AgentTaskCard sessionId="s-1" toolCall={bashToolCall()} update={bashUpdate()} />,
+    );
+    await flush();
+    const label = () =>
+      container.querySelector('[data-background-command-output="true"] p')?.textContent;
+    expect(label()).toBe('chat.agentTask.recentOutput:{"time":"3s"}');
+    // 下一次轮询前本机过了 1 秒:只累加本机经过的时间,不去减被控端的 mtime。
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+    });
+    expect(label()).toBe('chat.agentTask.recentOutput:{"time":"4s"}');
+  });
+
+  it('anchors a remote session running duration to the local receipt time, not the host clock', async () => {
+    remoteState.value = true;
+    const { container } = render(
+      <AgentTaskCard
+        sessionId="s-1"
+        // 被控端时钟快了 10 分钟:消息时间比本机当前时间还晚。
+        toolCall={{ ...bashToolCall(), createdAt: new Date(START + 665_000).toISOString() }}
+        update={bashUpdate({ createdAt: new Date(START + 60_000).toISOString() })}
+      />,
+    );
+    await flush();
+    expect(container.querySelector('[data-agent-task-elapsed="running"]')?.textContent).toBe(
+      'chat.agentTask.runningFor:{"duration":"5s"}',
+    );
   });
 
   it('does not read the output while collapsed', async () => {

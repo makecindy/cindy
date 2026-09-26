@@ -293,9 +293,15 @@ export function AgentTaskCard({
       && summary
       && (summary.length > 320 || summary.split(/\r?\n/).length > 4),
   );
-  // 任务开始时间:优先取发起它的工具调用消息时间(重载后仍是真实启动时刻),
+  // 任务开始时间:本机会话优先取发起它的工具调用消息时间(重载后仍是真实启动时刻),
   // 孤儿 update(workflow / 子 agent 内部启动)回退到 renderer 首次收到事件的时间。
-  const startedAtMs = parseTaskTimestamp(toolCall?.createdAt) ?? parseTaskTimestamp(update?.createdAt);
+  // 远程会话的消息时间来自被控端时钟,与本机 Date.now() 相减会被两台电脑的时钟差放大,
+  // 改为优先用本机收到任务事件的时间(update.createdAt 由本机 store 盖章)。
+  const toolCallStartedAtMs = parseTaskTimestamp(toolCall?.createdAt);
+  const updateStartedAtMs = parseTaskTimestamp(update?.createdAt);
+  const startedAtMs = sessionId && isRemoteSessionSticky(sessionId)
+    ? updateStartedAtMs ?? toolCallStartedAtMs
+    : toolCallStartedAtMs ?? updateStartedAtMs;
   // 终态用时:provider 给了 durationMs 就用它;后台命令没有 usage,用首末事件时间差兜底。
   // 运行中有开始时间时改为每秒刷新的「已运行」,不再显示 provider 上一帧的静态时长。
   const showLiveElapsed = status === 'running' && startedAtMs !== undefined;

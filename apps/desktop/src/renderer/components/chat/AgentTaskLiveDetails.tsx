@@ -76,6 +76,12 @@ export function tailOutputLines(text: string, maxLines = OUTPUT_TAIL_MAX_LINES):
   return lines.slice(-maxLines);
 }
 
+export interface BackgroundTaskOutputTailSnapshot {
+  result: BackgroundTaskOutputTailResult;
+  /** 本机收到该结果的时间;与结果里读取端算出的 ageMs 相加得到当前距最后写入的时长。 */
+  receivedAtMs: number;
+}
+
 /**
  * 轮询运行中后台命令的输出尾部:enabled 时立即读一次并按固定间隔刷新,关闭(收起 /
  * 任务终态 / 卸载)即停止,不在后台空转。输出路径由主进程按 (会话, 任务) 解析。
@@ -84,8 +90,8 @@ export function useBackgroundTaskOutputTail(
   sessionId: string | undefined,
   taskId: string | undefined,
   enabled: boolean,
-): BackgroundTaskOutputTailResult | undefined {
-  const [result, setResult] = useState<BackgroundTaskOutputTailResult | undefined>(undefined);
+): BackgroundTaskOutputTailSnapshot | undefined {
+  const [snapshot, setSnapshot] = useState<BackgroundTaskOutputTailSnapshot | undefined>(undefined);
   useEffect(() => {
     if (!enabled || !sessionId || !taskId) return;
     let disposed = false;
@@ -95,7 +101,7 @@ export function useBackgroundTaskOutputTail(
       inFlight = true;
       void readBackgroundTaskOutputTailFor(sessionId, taskId)
         .then((next) => {
-          if (!disposed) setResult(next);
+          if (!disposed) setSnapshot({ result: next, receivedAtMs: Date.now() });
         })
         .finally(() => {
           inFlight = false;
@@ -108,7 +114,7 @@ export function useBackgroundTaskOutputTail(
       clearInterval(id);
     };
   }, [enabled, sessionId, taskId]);
-  return result;
+  return snapshot;
 }
 
 interface BackgroundCommandDetailsProps {
@@ -136,7 +142,8 @@ export function BackgroundCommandDetails({
 }: BackgroundCommandDetailsProps) {
   const { t } = useTranslation();
   const live = expanded && running;
-  const tail = useBackgroundTaskOutputTail(sessionId, taskId, live);
+  const snapshot = useBackgroundTaskOutputTail(sessionId, taskId, live);
+  const tail = snapshot?.result;
   const now = useNowTicker(live);
   const lines = tail?.ok ? tailOutputLines(tail.text) : [];
   const startedAtLabel =
@@ -160,13 +167,14 @@ export function BackgroundCommandDetails({
           {t('chat.agentTask.startedAt', { time: startedAtLabel })}
         </p>
       )}
-      {running && tail?.ok && (
+      {running && snapshot && tail?.ok && (
         <div data-background-command-output="true">
           <p className="mb-0.5 text-12 leading-4 text-[var(--text-tertiary)]">
             {lines.length === 0
               ? t('chat.agentTask.noOutputYet')
               : t('chat.agentTask.recentOutput', {
-                  time: formatTaskElapsed(Math.max(0, now - tail.mtimeMs)),
+                  // 读取端算的 ageMs + 本机收到之后经过的时间:两段各自同一时钟,不跨设备相减。
+                  time: formatTaskElapsed(tail.ageMs + Math.max(0, now - snapshot.receivedAtMs)),
                 })}
           </p>
           {lines.length > 0 && (
