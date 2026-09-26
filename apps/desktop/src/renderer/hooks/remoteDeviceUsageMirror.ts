@@ -8,6 +8,8 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { extractIpcError } from '@/utils/ipcError';
 
 const UNSUPPORTED_RETRY_AFTER_MS = 15 * 60_000;
+/** A mount reuses a snapshot this recent instead of re-reading; pushes cover later changes. */
+const MOUNT_REUSE_MS = 60_000;
 function isSnapshotShape(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -30,6 +32,8 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     revision: number;
     unsupportedUntil: number;
     pending: boolean;
+    /** Last time a read or push settled this entry; 0 = never. */
+    settledAt: number;
     owner: ReturnType<typeof getDataOwnerGeneration>;
     listeners: Set<() => void>;
   };
@@ -48,6 +52,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         revision: 0,
         unsupportedUntil: 0,
         pending: false,
+        settledAt: 0,
         owner: cacheOwner,
         listeners: new Set(),
       };
@@ -58,6 +63,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
   function apply(entry: Entry, snapshot: T | null): void {
     entry.snapshot = snapshot;
     entry.revision++;
+    entry.settledAt = Date.now();
     for (const notify of entry.listeners) notify();
   }
   function request(deviceId: string, providerId?: string): void {
@@ -103,8 +109,14 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     useEffect(() => {
       if (!deviceId || !entry) return;
       const notify = () => rerender((value) => value + 1);
+      // Consumers of one device/account (session chip, model picker rail and rows) share this
+      // entry. While another consumer is mounted its push listener keeps the entry current, so
+      // only a missing or stale snapshot needs a device read. Explicit request() still reads.
+      const settled =
+        entry.settledAt > 0 &&
+        (entry.listeners.size > 0 || Date.now() - entry.settledAt < MOUNT_REUSE_MS);
       entry.listeners.add(notify);
-      request(deviceId, providerId);
+      if (!settled) request(deviceId, providerId);
       const off = window.electronAPI.deviceLink.onRemotePush((push, ownerStamp) => {
         if (
           push.deviceId !== deviceId ||
