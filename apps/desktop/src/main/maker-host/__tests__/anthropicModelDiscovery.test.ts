@@ -265,6 +265,78 @@ describe('mapAnthropicSdkModels', () => {
     expect(out[0].model.name).toBe('Sonnet 5'); // dated 先出现,first-wins
   });
 
+  it('别名条目按 resolvedModel 落地(新模型恒缺席回归):真实菜单形态', () => {
+    // cc 2.1.280 control-protocol initialize 的真实应答形态:每条产品线的**最新版**
+    // 只有别名条目,真实版本 id 在 resolvedModel 里。只读 value 时整条被规则 10 过滤,
+    // Opus 5.5 / Sonnet 5 因此进不了清单(HTTP /v1/models 明明返回了它们)。
+    const out = mapAnthropicSdkModels([
+      {
+        value: 'default',
+        resolvedModel: 'claude-opus-5-5[1m]',
+        displayName: 'Default (recommended)',
+      },
+      {
+        value: 'opus[1m]',
+        resolvedModel: 'claude-opus-5-5[1m]',
+        displayName: 'Opus (1M context)',
+        supportsEffort: true,
+        supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+        supportsFastMode: true,
+      },
+      {
+        value: 'claude-fable-5-1[1m]',
+        resolvedModel: 'claude-fable-5-1[1m]',
+        displayName: 'Fable',
+      },
+      { value: 'sonnet', resolvedModel: 'claude-sonnet-5', displayName: 'Sonnet' },
+      {
+        value: 'sonnet[1m]',
+        resolvedModel: 'claude-sonnet-5[1m]',
+        displayName: 'Sonnet 5 (1M context)',
+      },
+      { value: 'haiku', resolvedModel: 'claude-haiku-4-5-20251001', displayName: 'Haiku' },
+    ]);
+    // [1m] / dated 后缀归一后去重;裸别名本身仍然不进目录(规则 10)。
+    expect(out.map((e) => e.model.id)).toEqual([
+      'claude-opus-5-5',
+      'claude-fable-5-1',
+      'claude-sonnet-5',
+      'claude-haiku-4-5',
+    ]);
+    // `default` 是指针条目,不许把「Default (recommended)」当成模型名顶掉具名条目。
+    expect(out[0].model.name).toBe('Opus (1M context)');
+    expect(out[0]).toMatchObject({ hasEffortInfo: true, hasFastModeInfo: true });
+    expect(out[0].model).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supportsFastMode: true,
+    });
+  });
+
+  it('`default` 是某模型唯一来源时兜底落地,不因命名难看而丢模型', () => {
+    const out = mapAnthropicSdkModels([
+      {
+        value: 'default',
+        resolvedModel: 'claude-opus-5-5[1m]',
+        displayName: 'Default (recommended)',
+      },
+    ]);
+    expect(out.map((e) => e.model.id)).toEqual(['claude-opus-5-5']);
+  });
+
+  it('resolvedModel 缺席 / 空串 / 非字符串时回落 value', () => {
+    const out = mapAnthropicSdkModels([
+      { value: 'claude-opus-4-8', displayName: 'Opus 4.8' },
+      { value: 'claude-opus-4-7', resolvedModel: '', displayName: 'Opus 4.7' },
+      { value: 'claude-opus-4-6', resolvedModel: 42, displayName: 'Opus 4.6' },
+      { value: 'opus', resolvedModel: null, displayName: 'Opus alias' },
+    ]);
+    expect(out.map((e) => e.model.id)).toEqual([
+      'claude-opus-4-8',
+      'claude-opus-4-7',
+      'claude-opus-4-6',
+    ]);
+  });
+
   it('[1m] 长上下文后缀归一并去重(顶栏误报「已断开」回归):目录基线按裸 id 命中', () => {
     const out = mapAnthropicSdkModels([
       { value: 'claude-fable-5[1m]', displayName: 'Fable 5' },
