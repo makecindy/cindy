@@ -6567,7 +6567,12 @@
     },
     "daily": {
       "title": "Daily tokens (30d)",
-      "subtitle": "Stacked by model"
+      "subtitle": "Stacked by model",
+      "tooltip": {
+        "unit": "tokens",
+        "more_one": "{{count}} more model",
+        "more_other": "{{count}} more models"
+      }
     },
     "byAgent": {
       "title": "By Agent / harness",

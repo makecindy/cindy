@@ -11,10 +11,11 @@
  *   - 柱高 max(3, round(ratio × H)); 零值日固定 2px, 保留"那天有格子但没用量"的视觉
  *
  * 日期推算一律以 main 返回的 todayKey 为锚, renderer 不自己取系统日期。
- * 30 根柱子用原生 title 做 tooltip (Radix per-cell 实例太重, 同热力图取舍)。
+ * 悬停 / 聚焦时整张图共用一个 UsageBarsTooltip 浮层 (日期、总量、占比条、按模型明细),
+ * 不再用原生 title —— 原生提示无法排版配色, 也不给每根柱子各挂一个 Radix 实例。
  */
 
-import React, { useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { formatCompactTokens } from '@/lib/usageFormat';
@@ -22,6 +23,7 @@ import type { UsageHistoryModelDay } from '@/hooks/useUsageHistory';
 import { usageModelKey } from '@/components/new-chat/usagePalette';
 
 import { usageHistoryModelColor } from './usageHistoryColors';
+import { UsageBarsTooltip, type UsageBarsTooltipData } from './UsageBarsTooltip';
 
 const WINDOW_DAYS = 30;
 const CHART_HEIGHT_PX = 96;
@@ -130,6 +132,42 @@ export function UsageTokenBars({
     return { list, max: Math.max(...list.map((b) => b.tokens), 0) };
   }, [modelDaily, colorOrder, todayKey, t]);
 
+  const plotRef = useRef<HTMLDivElement>(null);
+  // 只记住悬停的是哪一天和位置; 浮层内容每次渲染从当前 bars 取, 数据刷新时同步更新。
+  const [hover, setHover] = useState<{ day: string; anchor: DOMRect; plot: DOMRect } | null>(null);
+  const showTooltip = useCallback((day: string, target: HTMLElement) => {
+    const plot = plotRef.current;
+    if (!plot) return;
+    setHover({ day, anchor: target.getBoundingClientRect(), plot: plot.getBoundingClientRect() });
+  }, []);
+  const hideTooltip = useCallback(() => setHover(null), []);
+  // fixed 定位的浮层不随页面滚动: 滚动或窗口尺寸变化时直接收起, 不留在错位置。
+  useEffect(() => {
+    if (!hover) return;
+    window.addEventListener('scroll', hideTooltip, true);
+    window.addEventListener('resize', hideTooltip);
+    return () => {
+      window.removeEventListener('scroll', hideTooltip, true);
+      window.removeEventListener('resize', hideTooltip);
+    };
+  }, [hover, hideTooltip]);
+  const hoveredBar = hover ? bars.list.find((b) => b.day === hover.day) : undefined;
+  const tooltip: UsageBarsTooltipData | null =
+    hover && hoveredBar
+      ? {
+          day: hoveredBar.day,
+          tokens: hoveredBar.tokens,
+          segments: hoveredBar.segments.map((s) => ({
+            key: s.rank,
+            label: s.label,
+            tokens: s.tokens,
+            color: usageHistoryModelColor(s.rank, colorOrder.length),
+          })),
+          anchor: hover.anchor,
+          plot: hover.plot,
+        }
+      : null;
+
   const ticks = niceTicks(bars.max);
   const recentWeekStart = shiftDayKeyLocal(todayKey, -6);
 
@@ -159,7 +197,11 @@ export function UsageTokenBars({
           />
         ))}
         <div className="absolute inset-0">
-          <div className="usage-token-plot flex h-full items-end gap-[3px]">
+          <div
+            ref={plotRef}
+            className="usage-token-plot flex h-full items-end gap-[3px]"
+            onPointerLeave={hideTooltip}
+          >
             {bars.list.map((b) => {
               const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
               const visualHeight =
@@ -169,20 +211,14 @@ export function UsageTokenBars({
                 b.tokens > 0
                   ? t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(b.tokens) })
                   : t('usageHistory.heatmap.emptyCell');
-              const titleLines = [
-                `${b.day} · ${usageSummary}`,
-                ...b.segments.map(
-                  (s) =>
-                    `${s.label}: ${t('usageDashboard.tokensOnly', {
-                      tokens: formatCompactTokens(s.tokens),
-                    })}`,
-                ),
-              ];
               return (
                 <button
                   key={b.day}
                   type="button"
-                  title={titleLines.join('\n')}
+                  data-day={b.day}
+                  onPointerEnter={(event) => showTooltip(b.day, event.currentTarget)}
+                  onFocus={(event) => showTooltip(b.day, event.currentTarget)}
+                  onBlur={hideTooltip}
                   aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))} · ${usageSummary}`}
                   aria-pressed={selectedDay === b.day}
                   data-highlighted={
@@ -227,6 +263,7 @@ export function UsageTokenBars({
           </div>
         </div>
       </div>
+      <UsageBarsTooltip data={tooltip} />
     </div>
   );
 }
