@@ -130,23 +130,6 @@ export function createLlamaCppService(
     controller = current;
     operation = { kind, completed: 0, total: 0 };
     try {
-      if (kind === 'install' || kind === 'download') {
-        // This service owns its userData root. No other operation can hold a
-        // staging directory here; keep installed versions and models untouched.
-        const entries = await readdir(root, { withFileTypes: true }).catch((error) => {
-          if (error.code === 'ENOENT') return [];
-          throw error;
-        });
-        for (const entry of entries) {
-          if (
-            entry.isDirectory() &&
-            /^(install-|model-download-)[A-Za-z0-9]{6}$/.test(entry.name)
-          ) {
-            current.signal.throwIfAborted();
-            await rm(path.join(root, entry.name), { recursive: true, force: true });
-          }
-        }
-      }
       return await fn(current.signal);
     } finally {
       controller = undefined;
@@ -216,18 +199,18 @@ export function createLlamaCppService(
         if (!executable) throw new Error('INSTALL_FAILED');
         if (process.platform !== 'win32') await chmod(executable, 0o755);
         const relative = path.relative(unpacked, executable);
-        const destination = path.join(root, `${asset.version}-${Date.now()}`);
+        const destination = path.join(root, `${asset.version}-${path.basename(staging)}`);
         signal.throwIfAborted();
         await rename(unpacked, destination);
         const manifest = path.join(root, 'current.json');
         await writeFile(
-          `${manifest}.tmp`,
+          path.join(staging, 'current.json'),
           JSON.stringify({
             version: asset.version,
             binary: path.relative(root, path.join(destination, relative)),
           }),
         );
-        await rename(`${manifest}.tmp`, manifest);
+        await rename(path.join(staging, 'current.json'), manifest);
       } finally {
         await rm(staging, { recursive: true, force: true });
       }
@@ -291,7 +274,17 @@ export function createLlamaCppService(
         signal.throwIfAborted();
         const model: LlamaCppModel = { id, repo: input.repo, file: shards[0]!.name, size: total };
         await writeFile(path.join(staging, 'model.json'), JSON.stringify(model));
-        await rename(staging, path.join(modelsRoot, id));
+        try {
+          await rename(staging, path.join(modelsRoot, id));
+        } catch (error) {
+          // Another instance may have atomically published this model first.
+          // Never remove its directory; only our private staging is disposable.
+          if (
+            !['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '') ||
+            !(await models()).some((m) => m.id === id)
+          )
+            throw error;
+        }
         modelsChanged = true;
       } finally {
         await rm(staging, { recursive: true, force: true });

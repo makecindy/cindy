@@ -112,6 +112,13 @@ describe('managed llama.cpp downloads', () => {
     }
   });
   it('rejects paths, shell arguments, untrusted hosts and credential-bearing URLs', () => {
+    for (const file of [
+      'MMPROJ-F16.gguf',
+      'sub/mtp-model.gguf',
+      'DFlash_model.gguf',
+      'mmproj.gguf',
+    ])
+      expect(validLlamaCppFile(file)).toBe(false);
     for (const repo of ['../model', 'owner/../../foo', 'https://huggingface.co/a/b', '-hf a/b'])
       expect(validLlamaCppRepo(repo)).toBe(false);
     for (const file of ['../model.gguf', '/tmp/a.gguf', 'x\\a.gguf', 'a\n.gguf', 'mmproj-F16.gguf'])

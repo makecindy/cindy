@@ -92,6 +92,6 @@ export function validLlamaCppFile(value: unknown): value is string {
     value.length <= 240 &&
     value.split('/').every((part) => /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(part)) &&
     value.endsWith('.gguf') &&
-    !value.split('/').at(-1)?.startsWith('mmproj')
+    !/^(mmproj|mtp|dflash)[-_.]/i.test(value.split('/').at(-1)!)
   );
 }

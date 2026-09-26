@@ -82,14 +82,40 @@ describe('managed llama.cpp model lifecycle', () => {
       }
     },
   );
-  it('reclaims abandoned staging before the next download and preserves unrelated files', async () => {
+  it('preserves staging owned by other instances', async () => {
     const runtime = path.join(root, 'llamacpp-runtime');
     for (const name of ['install-abc123', 'model-download-def456', 'keep-user-files']) {
       await mkdir(path.join(runtime, name), { recursive: true });
       await writeFile(path.join(runtime, name, 'partial'), 'unverified');
     }
     await createLlamaCppService(root).download({ repo: 'owner/repo', file: 'model.gguf' });
-    expect((await readdir(runtime)).sort()).toEqual(['keep-user-files', 'models']);
+    expect((await readdir(runtime)).sort()).toEqual([
+      'install-abc123',
+      'keep-user-files',
+      'model-download-def456',
+      'models',
+    ]);
+  });
+  it('lets two independent services publish the same model without deleting each other', async () => {
+    let arrived = 0;
+    let release!: () => void;
+    const bothDownloading = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.download.mockImplementation(async (_asset, dest) => {
+      await writeFile(dest, 'GGUF');
+      if (++arrived === 2) release();
+      await bothDownloading;
+      expect(await readFile(dest, 'utf8')).toBe('GGUF');
+    });
+    const first = createLlamaCppService(root);
+    const second = createLlamaCppService(root);
+    await Promise.all([
+      first.download({ repo: 'owner/repo', file: 'model.gguf' }),
+      second.download({ repo: 'owner/repo', file: 'model.gguf' }),
+    ]);
+    expect((await first.snapshot()).models).toHaveLength(1);
+    expect(await readdir(path.join(root, 'llamacpp-runtime'))).toEqual(['models']);
   });
   it.each(['resume', 'cancel'] as const)(
     'settles a paused download through %s without publishing partial files',
