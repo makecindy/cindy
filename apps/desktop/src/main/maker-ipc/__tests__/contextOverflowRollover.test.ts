@@ -1097,10 +1097,11 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
-  it('recovers a persisted Pi byte-limit compaction failure after its runtime closed', async () => {
+  it.each(['pi compact failed: 413', 'pi rpc timeout after 1000ms: compact', 'pi compact failed: upstream connection closed'])(
+    'recovers a persisted Pi byte-limit compaction failure after its runtime closed: %s', async error => {
     const deps = makeDeps([
       msg('user', 'Continue', 'u1'),
-      msg('error', JSON.stringify({ message: 'PI_REQUEST_BODY_RECOVERY_EXHAUSTED: pi compact failed: 413' }), 'e1'),
+      msg('error', JSON.stringify({ message: `PI_REQUEST_BODY_RECOVERY_EXHAUSTED: ${error}` }), 'e1'),
     ]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active', agentKind: 'pi', remoteHostId: null, clearedAt: null,

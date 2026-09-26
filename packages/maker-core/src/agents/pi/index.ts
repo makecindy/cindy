@@ -6753,8 +6753,10 @@ export class PiAgent extends BaseAgent {
                   }
                 } catch (error) {
                   rejectIfCancelled(sendOpts, 'send');
-                  if (!opts.remoteHostId &&
-                      /\b413\b|length limit exceeded/i.test(String(error))) {
+                  // The original failed response already proved a byte-limit
+                  // rejection. Any non-cancelled compaction failure leaves that
+                  // recovery incomplete, even if its own error is a timeout.
+                  if (!opts.remoteHostId) {
                     nativeAutoCompactNeedsRollover = true;
                     // A rejected send can close this runtime. Preserve the specific
                     // recovery evidence in the durable error, not just this handle.

@@ -4835,9 +4835,10 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it.each(['413', 'settings-changed', 'other-error', 'compaction-413', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output'])(
+  it.each(['413', 'settings-changed', 'other-error', 'compaction-413', 'compaction-timeout', 'compaction-error', 'compaction-cancelled', 'cancelled-after-compaction', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output'])(
     'prepares an identity-bound Pi retry without duplicating accepted input: %s', async mode => {
       let navigated = false;
+      const controller = new AbortController();
       captured.requestHandler = async command => {
         if (command.type === 'get_state') return { success: true, data: {
           sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
@@ -4864,6 +4865,19 @@ describe("Pi provider-aware model routing", () => {
         if (command.type === 'compact' && mode === 'compaction-413') {
           return { success: false, error: '413 length limit exceeded' };
         }
+        if (command.type === 'compact' && mode === 'compaction-timeout') {
+          throw new PiRpcRequestTimeoutError('compact', 1_000);
+        }
+        if (command.type === 'compact' && mode === 'compaction-error') {
+          return { success: false, error: 'upstream connection closed' };
+        }
+        if (command.type === 'compact' && mode === 'compaction-cancelled') {
+          controller.abort();
+          throw new Error('Compaction aborted');
+        }
+        if (command.type === 'compact' && mode === 'cancelled-after-compaction') {
+          controller.abort();
+        }
         if (command.type === 'compact' && mode === 'nothing-to-compact') {
           return { success: false, error: 'Nothing to compact' };
         }
@@ -4872,16 +4886,22 @@ describe("Pi provider-aware model routing", () => {
       const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
       const handle = await agent.startSession({ sessionId: 'retry', workingDir: cwd, model: 'local-model' });
       const retryStart = captured.requests.length;
-      const promise = handle.send({ type: 'user', content: 'same input' }, { retryTranscriptUserEntryId: 'accepted' });
-      const blocked = ['compaction-413', 'nothing-to-compact', 'cancelled-navigation', 'output'].includes(mode);
-      if (blocked) await expect(promise).rejects.toThrow();
+      const promise = handle.send({ type: 'user', content: 'same input' }, {
+        retryTranscriptUserEntryId: 'accepted', signal: controller.signal,
+      });
+      const needsRollover = ['compaction-413', 'compaction-timeout', 'compaction-error', 'nothing-to-compact'].includes(mode);
+      const cancelled = ['compaction-cancelled', 'cancelled-after-compaction'].includes(mode);
+      const blocked = needsRollover || cancelled || ['cancelled-navigation', 'output'].includes(mode);
+      if (needsRollover) await expect(promise).rejects.toThrow('PI_REQUEST_BODY_RECOVERY_EXHAUSTED');
+      else if (cancelled) await expect(promise).rejects.toThrow('cancelled before acceptance');
+      else if (blocked) await expect(promise).rejects.toThrow();
       else await promise;
       expect(captured.requests.filter(r => r.type === 'prompt' && r.message === 'same input')).toHaveLength(blocked ? 0 : 1);
       expect(captured.requests.filter(r => r.type === 'compact')).toHaveLength(
-        ['413', 'settings-changed', 'compaction-413', 'nothing-to-compact'].includes(mode) ? 1 : 0,
+        needsRollover || cancelled || ['413', 'settings-changed'].includes(mode) ? 1 : 0,
       );
       expect(handle.getUsageSnapshot?.().needsRollover === true).toBe(
-        mode === 'compaction-413' || mode === 'nothing-to-compact',
+        needsRollover,
       );
       // Tree navigation preserves live settings; retry must not restore the
       // model/effort that was selected when the failed input was first sent.
