@@ -55,20 +55,29 @@ describe('app attention total', () => {
             session('local'),
             session('remote', { deviceLinkDeviceId: 'device-a' }),
             session('scheduler', { source: 'scheduler' }),
-            session('learn', { source: 'learn' }),
             session('legacy', { title: '[Schedule] nightly', source: 'desktop' }),
           ],
           attentionKinds: new Map([
             ['local', 'done'],
             ['remote', 'done'],
             ['scheduler', 'error'],
-            ['learn', 'awaiting'],
             ['legacy', 'done'],
           ]),
           localSchedules: new Map([
             ['remote', { hasUnreadRun: true, hasUnreadFailedRun: true }],
             ['scheduler', { hasUnreadRun: true, hasUnreadFailedRun: true }],
           ]),
+        }),
+      ),
+    ).toBe(1);
+  });
+
+  it('counts a local learn session that is awaiting review', () => {
+    expect(
+      countAppAttention(
+        input({
+          sessions: [session('learn', { source: 'learn' })],
+          attentionKinds: new Map([['learn', 'awaiting']]),
         }),
       ),
     ).toBe(1);

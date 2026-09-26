@@ -18,7 +18,15 @@ export interface AppAttentionCountInput {
   localSchedules: ReadonlyMap<string, ScheduleAttention>;
 }
 
-/** 与任务行的红/蓝/绿点同源，不随搜索、折叠或当前机器筛选改变。 */
+/**
+ * 与任务行的红/蓝/绿点同源，不随搜索、折叠或当前机器筛选改变。
+ * 例外只覆盖本机没有可处理入口、或自动化完成态：
+ * - device-link 远程会话由对端提醒，本机点不掉；
+ * - scheduler 与 legacy Schedule 标题会话的结果归自动化页；
+ * - 绑在普通会话上的 heartbeat 完成态（done + 未读 run）不计入，
+ *   之后的 awaiting / error 仍计入。
+ * 本地 learn 会话不在例外里：awaiting-review 是本机必须处理的审查。
+ */
 export function countAppAttention(input: AppAttentionCountInput): number {
   const attentionIds = new Set<string>();
   for (const session of input.sessions) {
@@ -26,8 +34,7 @@ export function countAppAttention(input: AppAttentionCountInput): number {
       session.status !== 'active' ||
       isOrcaWorkerSession(session) ||
       session.deviceLinkDeviceId !== undefined ||
-      isAutomationGeneratedSession(session) ||
-      session.source === 'learn'
+      isAutomationGeneratedSession(session)
     )
       continue;
     const activity = projectSidebarSessionActivity({

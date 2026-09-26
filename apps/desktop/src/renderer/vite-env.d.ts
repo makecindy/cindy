@@ -2846,7 +2846,12 @@ interface ElectronAPI {
     ) => Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }>;
     clear: () => Promise<{ configured: boolean; enabled: boolean }>;
   };
-  /** 主窗口投影全部任务的关注总数；独立于通知事件及逐任务已读回执。 */
+  /**
+   * 主窗口投影本机需处理任务的关注总数，不是字面「全部任务」。
+   * 不含 device-link 远程会话，不含 scheduler / legacy Schedule 标题自动化会话，
+   * 也不含绑在普通会话上的 heartbeat 完成态（done + 未读 run）。
+   * 本地 learn 会话的待审查等关注态仍计入。独立于通知事件及逐任务已读回执。
+   */
   notificationSetAppAttentionCount: (
     snapshot: import('../shared/sessionAttention').AppAttentionSnapshot,
   ) => Promise<void>;
