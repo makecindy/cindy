@@ -35,6 +35,8 @@ vi.mock('react-i18next', () => ({
 }));
 
 const { IssueTrackerFeatureLayout } = await import('../IssueTrackerFeatureLayout');
+const { useMyIssues: realUseMyIssues } =
+  await vi.importActual<typeof import('../hooks/useMyIssues')>('../hooks/useMyIssues');
 
 function item(over: Partial<MyIssueItem> = {}): MyIssueItem {
   return {
@@ -103,31 +105,41 @@ describe('IssueTrackerFeatureLayout 内容区分支', () => {
     expect(screen.getByText('ccAgent.gitContext.pr.setup.stages.login.title')).toBeTruthy();
   });
   it('connects GitHub without hiding existing issues and refreshes after success', async () => {
-    const refresh = vi.fn();
-    useMyIssuesMock.mockReturnValue(state({ data: result([item()]), refresh }));
+    useMyIssuesMock.mockImplementation(realUseMyIssues);
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, ...result([item()]) })
+      .mockResolvedValue({
+        success: true,
+        ...result([item()], { githubEnhancement: { source: 'gh-cli', login: 'test' } }),
+      });
+    let connected!: () => void;
     Object.assign(window.electronAPI, {
+      maker: { listMyIssues: list, getMyIssuesSnapshot: async () => null },
       gitContext: {
+        onGithubConnected: (listener: () => void) => {
+          connected = listener;
+          return () => {};
+        },
         githubSetupStatus: async () => ({ phase: 'connected' }),
-        startGithubSetup: async () => ({ phase: 'connected' }),
+        startGithubSetup: async () => {
+          connected();
+          return { phase: 'connected' };
+        },
       },
     });
-    const { rerender } = render(<IssueTrackerFeatureLayout />);
+    render(<IssueTrackerFeatureLayout />);
+    await screen.findByText('已经加载出来的那条 issue');
     fireEvent.click(screen.getByText('ccAgent.gitContext.pr.setup.stages.login.title'));
     fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.connect'));
-    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(list).toHaveBeenLastCalledWith({ force: true });
     expect(screen.getByText('已经加载出来的那条 issue')).toBeTruthy();
-    useMyIssuesMock.mockReturnValue(
-      state({
-        data: result([item()], { githubEnhancement: { source: 'gh-cli', login: 'test' } }),
-        refresh,
-      }),
-    );
-    rerender(<IssueTrackerFeatureLayout />);
     expect(screen.queryByText('ccAgent.gitContext.pr.setup.stages.login.title')).toBeNull();
     // Hiding the entry must not tear down the success dialog before Done is clicked.
     fireEvent.click(screen.getByText('ccAgent.gitContext.pr.setup.done'));
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(refresh).toHaveBeenCalledOnce();
+    expect(list).toHaveBeenCalledTimes(2);
   });
   it('刷新失败但已有数据:保留列表,错误降级成提示条', () => {
     useMyIssuesMock.mockReturnValue(state({ data: result([item()]), error: 'ECONNRESET' }));
