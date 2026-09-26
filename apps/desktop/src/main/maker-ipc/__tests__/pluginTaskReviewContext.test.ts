@@ -1,3 +1,6 @@
+import { mkdtemp, mkdir, realpath, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import type { AutoReviewRequest } from '@cindy/maker-core';
 import {
@@ -208,4 +211,30 @@ it.each([false, true])('marks tied user grant/revocation as incomplete regardles
   const result = await createPluginTaskReviewResolver(async () => s)(request);
   expect(result.userIntent).toMatchObject({historyOmitted: true});
   expect(JSON.stringify(result.userIntent)).toContain('Do not write');
+});
+
+it('accepts a plan alias only while it resolves to the stored Worker directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'plugin-review-path-'));
+  try {
+    const target = join(root, 'target'), other = join(root, 'other'), alias = join(root, 'alias');
+    await mkdir(target); await mkdir(other);
+    await symlink(target, alias, 'junction');
+    const s = fixture();
+    s.plan!.items[0]!.workingDir = alias;
+    s.session.workingDir = await realpath(target);
+    const r = {...request, workspaceRoots: [s.session.workingDir]};
+    const resolve = createPluginTaskReviewResolver(async () => s);
+    expect((await resolve(r)).delegatedTask?.workingDir).toBe(s.session.workingDir);
+    await rm(alias);
+    await symlink(other, alias, 'junction');
+    expect((await resolve(r)).authorizationError).toBeTruthy();
+    await rm(alias);
+    expect((await resolve(r)).authorizationError).toBeTruthy();
+    s.plan!.items[0]!.workingDir = join(target, '..', 'target');
+    expect((await resolve(r)).authorizationError).toBeUndefined();
+    s.authorized = false;
+    expect((await resolve(r)).authorizationError).toBeTruthy();
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
 });
