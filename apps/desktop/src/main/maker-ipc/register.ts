@@ -3480,12 +3480,18 @@ export async function withSessionInputStoppedForRewind<T>(
       releaseInputLockOnExit = false;
       void coordinator
         .releaseRewindLockWhenIdle(sessionId, SESSION_REWIND_INPUT_LOCK_ID)
-        .then(() => rewindInputSessions.delete(sessionId))
         .catch((err) => {
           log.error('failed to release retained rewind input lock', {
             sessionId,
             error: err instanceof Error ? err.message : String(err),
           });
+        })
+        // 释放失败也必须撤掉重复-rewind 守卫:守卫只在入口拦截, 释放 promise
+        // reject 时 .then 不跑、守卫永久滞留 → 该会话从此每次 rewind 都报
+        // "already in progress", 直到重启。下次 rewind 会重新核对真实 turn
+        // 状态, 提前放行守卫是安全的。
+        .finally(() => {
+          rewindInputSessions.delete(sessionId);
         });
       throwIpcError('SESSION_RUNNING', 'Timed out waiting for the session to stop before rewind');
     }
