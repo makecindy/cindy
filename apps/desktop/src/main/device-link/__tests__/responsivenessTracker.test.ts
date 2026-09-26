@@ -69,6 +69,44 @@ async function openBreaker(
 }
 
 describe('responsivenessTracker', () => {
+  it('late probe timeout cannot recover a newly opened lifecycle', async () => {
+    const recoverLink = vi.fn(async () => {});
+    const h = harness({ recoverLink });
+    await openBreaker(h);
+    let reject!: (err: Error) => void;
+    h.probeInvoke.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS);
+    h.tracker.probeTick();
+    h.tracker.clearDevice(DEV);
+    await openBreaker(h);
+    recoverLink.mockClear();
+    reject(timeoutError());
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(recoverLink).not.toHaveBeenCalled();
+    expect(h.tracker.isUnresponsive(DEV)).toBe(true);
+  });
+
+  it('clearing one failed peer does not signal recovery or disturb a healthy peer', async () => {
+    const h = harness();
+    await openBreaker(h);
+    h.tracker.clearDevice(DEV);
+    expect(h.onUnresponsiveChanged).toHaveBeenLastCalledWith(DEV, false, false);
+    await expect(h.tracker.guardInvoke(OTHER_DEV, 'local-db:sessions:list', async () => ['healthy']))
+      .resolves.toEqual(['healthy']);
+  });
+
+  it.each(['clearDevice', 'resetAll'] as const)('late business timeout after %s cannot restart recovery', async (action) => {
+    const recoverLink = vi.fn(async () => {});
+    const h = harness({ recoverLink });
+    let reject!: (err: Error) => void;
+    const request = h.tracker.guardInvoke(DEV, 'local-db:sessions:list', () =>
+      new Promise((_resolve, fail) => { reject = fail; }));
+    if (action === 'clearDevice') h.tracker.clearDevice(DEV);
+    else h.tracker.resetAll();
+    reject(timeoutError());
+    await expect(request).rejects.toThrow();
+    expect(recoverLink).not.toHaveBeenCalled();
+  });
   it('重连清空 presence 后 unknown 仍允许单飞探测,明确 false 与其它硬门继续阻止', () => {
     const base = {
       relayOnline: true,
@@ -123,7 +161,7 @@ describe('responsivenessTracker', () => {
   it('连续超时达到阈值 → open,通知 UI,后续请求快速失败且不再上管道', async () => {
     const h = harness();
     await openBreaker(h);
-    expect(h.onUnresponsiveChanged).toHaveBeenCalledWith(DEV, true);
+    expect(h.onUnresponsiveChanged).toHaveBeenCalledWith(DEV, true, false);
     expect(h.tracker.getUnresponsiveDeviceIds()).toEqual([DEV]);
 
     const run = vi.fn(async () => 'never');
@@ -233,7 +271,7 @@ describe('responsivenessTracker', () => {
     await vi.waitFor(() => {
       expect(h.tracker.isUnresponsive(DEV)).toBe(false);
     });
-    expect(h.onUnresponsiveChanged).toHaveBeenLastCalledWith(DEV, false);
+    expect(h.onUnresponsiveChanged).toHaveBeenLastCalledWith(DEV, false, true);
   });
 
   it('熔断已 open 时 relay 换代把 presence 从 false 清为 unknown,下一拍恢复单飞探测', async () => {
@@ -398,8 +436,8 @@ describe('responsivenessTracker', () => {
     expect(openLinkB).toHaveBeenCalledTimes(1);
 
     // 状态翻转通知只发给 A,B 从未被标记
-    expect(h.onUnresponsiveChanged).toHaveBeenCalledWith(DEV, true);
-    expect(h.onUnresponsiveChanged).not.toHaveBeenCalledWith(DEV_B, expect.anything());
+    expect(h.onUnresponsiveChanged).toHaveBeenCalledWith(DEV, true, false);
+    expect(h.onUnresponsiveChanged).not.toHaveBeenCalledWith(DEV_B, expect.anything(), expect.anything());
   });
 
   it('clearDevice 清理在途 recovery 后允许再次触发恢复', async () => {
@@ -416,17 +454,17 @@ describe('responsivenessTracker', () => {
     expect(recoverLink).toHaveBeenCalledTimes(2);
   });
 
-  it('resetAll 关闭所有 open 设备并通知恢复', async () => {
+  it('resetAll clears all failed peers without claiming recovery', async () => {
     const h = harness();
     await openBreaker(h);
     h.tracker.resetAll();
     expect(h.tracker.getUnresponsiveDeviceIds()).toEqual([]);
-    expect(h.onUnresponsiveChanged).toHaveBeenLastCalledWith(DEV, false);
+    expect(h.onUnresponsiveChanged).toHaveBeenLastCalledWith(DEV, false, false);
   });
 });
 
 describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
-  it('INVOKE_TIMEOUT 计失败;终态 relay 应答是恢复证据;其余不定论', () => {
+  it('INVOKE_TIMEOUT 计失败;终态 relay 应答是回包证据;其余不定论', () => {
     expect(classifyDeviceSendFailure(timeoutError())).toBe('timeout');
     // 终态 = relay/对端在明确应答,「无响应」不成立;presence 竞态下归不定论
     // 会让熔断 open 后的周期探测永远关不上(review P2)。
@@ -492,7 +530,7 @@ describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
 
   it('熔断 open 后探测收到终态 relay 应答 → 关熔断(终态 UI 不被「无响应」遮蔽)', async () => {
     // presence 未及时翻转的竞态下,终态应答(DEVICE_OFFLINE 等)是「链路在明确
-    // 应答」的恢复证据。open 期间业务 guard 一律快速失败,探测是唯一上管道的
+    // 应答」的回包证据,不代表设备恢复。open 期间业务 guard 一律快速失败,探测是唯一上管道的
     // 流量,终态应答经探测失败路径进入 classifyDeviceSendFailure 关熔断,让位
     // 给对应终态自己的 UI。
     const h = harness();
@@ -503,7 +541,7 @@ describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
     await vi.waitFor(() => {
       expect(h.tracker.isUnresponsive(DEV)).toBe(false);
     });
-    expect(h.onUnresponsiveChanged).toHaveBeenLastCalledWith(DEV, false);
+    expect(h.onUnresponsiveChanged).toHaveBeenLastCalledWith(DEV, false, false);
   });
 
   it('控制帧 / dispatch 特判通道的成功不定论;业务 DB 通道的成功是恢复证据', () => {

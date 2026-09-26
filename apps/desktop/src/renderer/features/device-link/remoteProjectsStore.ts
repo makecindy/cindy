@@ -99,9 +99,8 @@ const renameSubs = new Set<(deviceId: string, name: string) => void>();
  * 故 mark disconnected / remove / clear 都用自增(条目保留,仅随 distinct 设备数增长,可忽略)。
  */
 const snapshotEpoch = new Map<string, number>();
-// Detail reads do not share list epochs: sessions:list deliberately omits bots.
-// Keep monotonic lifecycle/patch revisions only for devices and sessions opened
-// through detail reads, including reads begun before the first shard exists.
+// Lifecycle revisions are shared by detail reads and queued refreshes. Snapshot
+// epochs alone cannot cancel a rerun that has not acquired its next epoch yet.
 const detailDeviceEpoch = new Map<string, number>();
 const detailPatchEpoch = new Map<string, number>();
 // Origin/connection restamps retain content identity. Authoritative snapshots
@@ -925,6 +924,13 @@ const actions = {
   getDeviceSessions(deviceId: string, status?: RemoteSessionStatus): readonly Session[] {
     const sessions = shards.get(deviceId)?.sessions ?? EMPTY;
     return status ? sessions.filter((session) => session.status === status) : sessions;
+  },
+
+  /** Cancel pending work on disconnect/removal without cancelling ordinary fresh reads. */
+  getDeviceLifecycleEpoch(deviceId: string): number {
+    const epoch = detailDeviceEpoch.get(deviceId) ?? 0;
+    detailDeviceEpoch.set(deviceId, epoch);
+    return epoch;
   },
 
   /** A detail read must not roll back a newer push, deletion, or device lifecycle. */

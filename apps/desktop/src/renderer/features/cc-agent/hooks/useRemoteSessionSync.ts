@@ -478,10 +478,10 @@ export function useRemoteSessionSync(
     const offResponsiveness = window.electronAPI.deviceLink.onResponsivenessChanged((p) => {
       if (p.deviceId === deviceId) {
         const responsive = !p.unresponsive;
-        if (peerResponsive !== responsive) recovery.invalidate(responsive && relayAvailable !== false && peerAvailable !== false);
+        if (peerResponsive !== responsive) recovery.invalidate(responsive && p.recovered !== false && relayAvailable !== false && peerAvailable !== false);
         peerResponsive = responsive;
       }
-      if (p.unresponsive) return;
+      if (p.unresponsive || p.recovered === false) return;
       engine.handleResponsivenessRecovered(p.deviceId);
     });
     const offStore = makerChatStore.subscribe(sessionId, () => {

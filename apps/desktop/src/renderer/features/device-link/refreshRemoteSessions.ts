@@ -144,6 +144,7 @@ export type RefreshResult = 'ok' | 'revoked' | 'superseded' | 'gave-up';
 
 interface RefreshTask {
   promise: Promise<RefreshResult>;
+  lifecycleEpoch: number;
   rerun: boolean;
   name?: string;
   opts: RefreshOptions;
@@ -195,8 +196,17 @@ export async function refreshRemoteDeviceSessions(
 ): Promise<RefreshResult> {
   const status = opts.status ?? 'active';
   const taskKey = refreshTaskKey(deviceId, status);
+  const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(deviceId);
   const existing = refreshTasks.get(taskKey);
   if (existing) {
+    if (existing.lifecycleEpoch !== lifecycleEpoch) {
+      // Keep the physical request single-flight across disable/re-enable. A new
+      // caller may retry after it settles; the cancelled caller cannot do so.
+      await existing.promise;
+      if (remoteProjectsStore.getDeviceLifecycleEpoch(deviceId) !== lifecycleEpoch)
+        return 'superseded';
+      return refreshRemoteDeviceSessions(deviceId, name, opts);
+    }
     const requestedSnapshotMode = opts.snapshotMode ?? 'merge';
     // periodic tick 是弱语义：已有任意 refresh 在途时直接复用，不能每个 interval tick
     // 都 bump epoch 让慢请求自取消。bootstrap/reseed 等事件型 refresh 仍走强语义补跑。
@@ -225,6 +235,7 @@ export async function refreshRemoteDeviceSessions(
 
   const task: RefreshTask = {
     promise: Promise.resolve('gave-up'),
+    lifecycleEpoch,
     rerun: false,
     name,
     opts,
@@ -239,6 +250,8 @@ export async function refreshRemoteDeviceSessions(
 async function drainRefreshTask(deviceId: string, task: RefreshTask): Promise<RefreshResult> {
   let result: RefreshResult = 'gave-up';
   do {
+    if (remoteProjectsStore.getDeviceLifecycleEpoch(deviceId) !== task.lifecycleEpoch)
+      return 'superseded';
     task.rerun = false;
     result = await runRefreshRemoteDeviceSessions(deviceId, task.name, task.opts);
     // revoked 是被控端明确拒绝,不再补跑排队请求。
@@ -375,6 +388,7 @@ async function runRefreshRemoteDeviceSessions(
           await probeMissingSessionStatuses(deviceId, epoch, missingCompanionIds, status);
         }
       }
+      if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
       if (opts.scope === 'schedule' || opts.scope === 'both') {
         try {
           const raw = await window.electronAPI.deviceLink.invoke(
