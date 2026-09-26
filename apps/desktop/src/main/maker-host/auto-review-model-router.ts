@@ -152,10 +152,11 @@ interface PendingCandidateAttempt {
  *
  * Each candidate owns its HTTP timeout and receives the chain AbortSignal, and gets at most
  * AUTO_REVIEW_TRANSIENT_RETRY_ATTEMPTS attempts. A transient failure is retried in place only
- * when the budget still covers one full timeout per untried candidate; otherwise the retry
- * waits until every other candidate has had its first attempt. A full timeout therefore
- * cannot starve fallback, and fallbacks that are unavailable locally (`no_candidate`
- * returns immediately) do not waste the budget reserved for them.
+ * when the budget still covers one full timeout per pending attempt (untried candidates and
+ * earlier deferred retries); otherwise the retry joins the end of the queue. A full timeout
+ * therefore cannot starve fallback or an earlier, higher-priority retry, and fallbacks that
+ * are unavailable locally (`no_candidate` returns immediately) do not waste the budget
+ * reserved for them.
  */
 export function createAutoReviewModelRouter(
   deps: AutoReviewModelRouterDeps,
@@ -234,29 +235,31 @@ export function createAutoReviewModelRouter(
           continue;
         }
 
-        const untriedCandidates = queue.filter((pending) => pending.attempt === 1).length;
+        // Queued work keeps its order: a retry may only jump ahead when the budget still covers
+        // one full timeout for every pending attempt, including earlier deferred retries.
+        const pendingAttempts = queue.length;
         const retriable = attempt < AUTO_REVIEW_TRANSIENT_RETRY_ATTEMPTS
           && transientCandidateFailure(result)
           && !controller.signal.aborted;
         const retryInPlace = retriable && deadlineAt - now() >= (
           AUTO_REVIEW_CANDIDATE_TIMEOUT_MS
           + AUTO_REVIEW_TRANSIENT_RETRY_BACKOFF_MS
-          + untriedCandidates * AUTO_REVIEW_CANDIDATE_TIMEOUT_MS
+          + pendingAttempts * AUTO_REVIEW_CANDIDATE_TIMEOUT_MS
         );
-        const retryAfterFallbacks = retriable && !retryInPlace && untriedCandidates > 0;
+        const retryDeferred = retriable && !retryInPlace && pendingAttempts > 0;
         deps.logger.warn('auto-review model candidate failed', {
           candidateId: candidate.id,
           providerId: candidate.providerId,
           model: candidate.model,
           attempt,
           reason: safeFailureReason(result),
-          retrying: retryInPlace ? 'in_place' : retryAfterFallbacks ? 'after_fallbacks' : false,
+          retrying: retryInPlace ? 'in_place' : retryDeferred ? 'deferred' : false,
           durationMs,
         });
         if (retryInPlace) {
           await sleep(AUTO_REVIEW_TRANSIENT_RETRY_BACKOFF_MS, controller.signal);
           queue.unshift({ candidate, attempt: attempt + 1 });
-        } else if (retryAfterFallbacks) {
+        } else if (retryDeferred) {
           queue.push({ candidate, attempt: attempt + 1 });
         }
       }

@@ -167,8 +167,32 @@ describe('dedicated Auto-review candidate policy', () => {
     expect(log.warn).toHaveBeenCalledWith('auto-review model candidate failed', expect.objectContaining({
       candidateId: 'cindy-gateway',
       reason: 'timeout',
-      retrying: 'after_fallbacks',
+      retrying: 'deferred',
     }));
+  });
+
+  it('keeps an earlier deferred gateway retry ahead of a later fallback retry', async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const requestCandidate = vi.fn((_prompt, candidate) => {
+      calls.push(candidate.id);
+      if (candidate.id === 'chatgpt-nano') {
+        return Promise.resolve<UtilityTextResult>({ ok: false, reason: 'no_candidate', attempts: [] });
+      }
+      if (candidate.id === 'cindy-gateway' && calls.length > 1) {
+        return Promise.resolve(succeeded(candidate, '{"verdict":"allow"}'));
+      }
+      // 首次网关与 luna 都耗满超时。
+      return new Promise<UtilityTextResult>(() => undefined);
+    });
+    const route = createAutoReviewModelRouter({ logger: logger(), requestCandidate });
+
+    const pending = route('classify');
+    await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS * 2);
+
+    await expect(pending).resolves.toBe('{"verdict":"allow"}');
+    // luna 不得原位重试插到已排队的网关重试前面。
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna', 'cindy-gateway']);
   });
 
   it('does not retry a timed-out candidate without a full timeout left', async () => {
@@ -186,11 +210,11 @@ describe('dedicated Auto-review candidate policy', () => {
 
     await expect(pending).resolves.toBeNull();
     expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna']);
-    // 已排队的延后重试因预算不足被跳过时要留下记录,不能只剩一条 after_fallbacks。
+    // 已排队的延后重试因预算不足被跳过时要留下记录,不能只剩一条 deferred。
     const skipped = log.warn.mock.calls
       .filter(([message]) => message === 'auto-review model candidate retry skipped')
       .map(([, fields]) => fields.candidateId);
-    expect(skipped).toEqual(['cindy-gateway', 'chatgpt-nano']);
+    expect(skipped).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna']);
   });
 
   it('aborts the in-flight request at the total deadline without starting another chain', async () => {
