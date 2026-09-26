@@ -121,7 +121,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('absolute right-0 top-[22px]');
     // 快捷入口与输入框同宽(w-full 跟随父列 inputWidth),左右两缘对齐 ChatInput;
     // 旧 800px 封顶在宽窗口下右缘短一截,2026-07-24 用户反馈后摘除。
-    expect(source).toMatch(/<HomeSuggestionList[\s\S]*?narrow=\{isDraftNarrow\}[\s\S]*?onSelect=\{handleHomeSuggestion\}[\s\S]*?onPluginSelect=\{handlePluginSuggestion\}/);
+    expect(source).toMatch(
+      /<HomeSuggestionList[\s\S]*?narrow=\{isDraftNarrow\}[\s\S]*?onSelect=\{handleHomeSuggestion\}[\s\S]*?onPluginSelect=\{handlePluginSuggestion\}/,
+    );
     expect(source).toContain('<HomeZeroModelAction');
     expect(source).not.toContain('ConnectProviderCard');
     expect(source).not.toMatch(/data-testid="create-agent-quick-starts"/);
@@ -190,17 +192,19 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).not.toContain('boxShadow');
   });
 
-  it('sends suggestions without first writing into the visible home composer', () => {
+  it('fills suggestions into the home composer instead of sending them', () => {
     const suggestionBlock = source.slice(
-      source.indexOf('const handleHomeSuggestion'),
+      source.indexOf('const [suggestionPreview, setSuggestionPreview]'),
       source.indexOf('// 注意:不要给 ChatInput 加 key 强制 remount'),
     );
 
     expect(suggestionBlock).toContain('if (sendInFlightRef.current) return;');
-    expect(suggestionBlock).toMatch(/void handleSend\(\s*prompt,/);
-    expect(suggestionBlock).toContain('recoveryDraftDoc: plainTextToTiptapDoc(prompt)');
-    expect(suggestionBlock).not.toContain('saveComposerDraft(');
-    expect(suggestionBlock).not.toContain('quickStartTextToTiptapDoc(');
+    expect(suggestionBlock).toContain('saveComposerDraft(NEW_MAKER_DRAFT_KEY, {');
+    expect(suggestionBlock).toContain('text: plainTextToTiptapDoc(prompt)');
+    expect(suggestionBlock).not.toContain('handleSend(');
+    // 悬停预览只走 ChatInput 的只读 overlay,不写草稿。
+    expect(source).toContain('previewPrompt={suggestionPreview}');
+    expect(source).toContain('onPreviewChange={setSuggestionPreview}');
     // 普通发送直接使用输入内容，不再经过可能残留推荐内容的中转 ref。
     expect(source).toContain('onSend={handleSend}');
     expect(source).not.toContain('pendingHomePromptRef');
@@ -306,8 +310,12 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(colorsSource).toContain("'create-agent-send-disabled-icon'");
     expect(colorRegistry.resolveDefault('create-agent-send-disabled-icon', 'dark')).toBe('#585555');
     expect(colorsSource).toContain("'create-agent-segment-inactive-text'");
-    expect(colorRegistry.resolveDefault('create-agent-segment-inactive-text', 'light')).toBe('#9A9DA3');
-    expect(colorRegistry.resolveDefault('create-agent-segment-inactive-text', 'dark')).toBe('#6F6F6F');
+    expect(colorRegistry.resolveDefault('create-agent-segment-inactive-text', 'light')).toBe(
+      '#9A9DA3',
+    );
+    expect(colorRegistry.resolveDefault('create-agent-segment-inactive-text', 'dark')).toBe(
+      '#6F6F6F',
+    );
     expect(colorsSource).toContain("'create-agent-control-border'");
     expect(colorRegistry.resolveDefault('create-agent-control-border', 'light')).toBe('#DCDFE3');
     expect(colorRegistry.resolveDefault('create-agent-control-border', 'dark')).toBe('#434343');

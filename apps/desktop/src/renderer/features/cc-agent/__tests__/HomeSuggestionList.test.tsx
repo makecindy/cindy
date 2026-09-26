@@ -72,4 +72,30 @@ describe('HomeSuggestionList', () => {
     rerender(<HomeSuggestionList narrow={false} onSelect={onSelect} />);
     expect(ids().some((id) => seen.includes(id))).toBe(false);
   });
+
+  it('previews the full prompt on hover/focus and clears it on leave, click and unmount', () => {
+    const onSelect = vi.fn();
+    const onPreviewChange = vi.fn();
+    const { unmount } = render(
+      <HomeSuggestionList narrow={false} onSelect={onSelect} onPreviewChange={onPreviewChange} />,
+    );
+    const row = screen.getAllByTestId(/^home-suggestion-/)[0];
+    const id = row.getAttribute('data-testid')!.replace('home-suggestion-', '');
+
+    fireEvent.mouseEnter(row);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(`newChat.homeSuggestions.${id}.prompt`);
+    fireEvent.mouseLeave(row);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(null);
+
+    fireEvent.focus(row);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(`newChat.homeSuggestions.${id}.prompt`);
+    fireEvent.click(row);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(null);
+    expect(onSelect).toHaveBeenCalledWith(id);
+
+    fireEvent.mouseEnter(row);
+    onPreviewChange.mockClear();
+    unmount();
+    expect(onPreviewChange).toHaveBeenCalledWith(null);
+  });
 });

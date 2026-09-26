@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AppWindow,
@@ -76,11 +76,14 @@ export function HomeSuggestionList({
   narrow,
   onSelect,
   onPluginSelect,
+  onPreviewChange,
   includePlugins = true,
 }: {
   narrow: boolean;
   onSelect: (id: HomeSuggestionId) => void;
   onPluginSelect?: (suggestion: HomeTaskSuggestion) => void;
+  /** 悬停/聚焦某条建议时报告它的完整 prompt,离开时报告 null,供输入框预览。 */
+  onPreviewChange?: (prompt: string | null) => void;
   includePlugins?: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -101,6 +104,10 @@ export function HomeSuggestionList({
   };
   const [batch, setBatch] = useState(() => draw(null));
   const [hidden, setHidden] = useState(isHomeSuggestionsHidden);
+  // 行在悬停中被卸载(隐藏、换批、整块被替换)时收不到 mouseleave,由这里兜底清掉预览。
+  const onPreviewChangeRef = useRef(onPreviewChange);
+  onPreviewChangeRef.current = onPreviewChange;
+  useEffect(() => () => onPreviewChangeRef.current?.(null), []);
 
   if (batchSize > batch.displayedCount) {
     setBatch({ ...batch, displayedCount: batchSize });
@@ -120,7 +127,15 @@ export function HomeSuggestionList({
               key={id}
               type="button"
               data-testid={`home-suggestion-${id}`}
-              onClick={() => (item.builtinId ? onSelect(item.builtinId) : onPluginSelect?.(item))}
+              onClick={() => {
+                onPreviewChange?.(null);
+                if (item.builtinId) onSelect(item.builtinId);
+                else onPluginSelect?.(item);
+              }}
+              onMouseEnter={() => onPreviewChange?.(item.prompt)}
+              onMouseLeave={() => onPreviewChange?.(null)}
+              onFocus={() => onPreviewChange?.(item.prompt)}
+              onBlur={() => onPreviewChange?.(null)}
               className={cn(
                 'inline-flex h-[38px] max-w-full items-center gap-2.5 rounded-full px-3',
                 'text-14 text-[var(--text-secondary)] transition-colors',
@@ -141,7 +156,10 @@ export function HomeSuggestionList({
           tone="quiet"
           type="button"
           data-testid="home-suggestions-shuffle"
-          onClick={() => setBatch((previous) => draw(previous))}
+          onClick={() => {
+            onPreviewChange?.(null);
+            setBatch((previous) => draw(previous));
+          }}
           className="opacity-0 group-hover/sug:opacity-100 focus-visible:opacity-100"
         >
           <Shuffle size={11} strokeWidth={2} />
@@ -155,6 +173,7 @@ export function HomeSuggestionList({
           type="button"
           data-testid="home-suggestions-dismiss"
           onClick={() => {
+            onPreviewChange?.(null);
             setHomeSuggestionsHidden(true);
             setHidden(true);
           }}

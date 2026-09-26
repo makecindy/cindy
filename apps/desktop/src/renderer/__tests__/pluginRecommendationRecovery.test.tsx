@@ -5,8 +5,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { expandGhostCommand } from '../cindy-brain/ghostCommand';
-import type { InstalledGhost } from '../../shared/ghost';
 
 // Execute the production callbacks without mounting the unrelated full desktop shell.
 function compile(source: string, bindings: Record<string, unknown>) {
@@ -19,7 +17,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('plugin recommendation recovery', () => {
   it.each(['mail', undefined])(
-    'keeps the actual plugin-bound message in the retry draft (command=%s)',
+    'fills the composer with the plugin-bound prompt instead of sending (command=%s)',
     async (command) => {
       const source = readFileSync(
         resolve(__dirname, '../features/cc-agent/NewMakerDraftRoute.tsx'),
@@ -29,9 +27,10 @@ describe('plugin recommendation recovery', () => {
         source.indexOf('  const runPluginSuggestion ='),
         source.indexOf('  const handlePluginSuggestion ='),
       );
+      expect(block).not.toContain('handleSend');
       const suggestion = { id: 'one', pluginId: 'mail', prompt: 'Review my mail' };
       const ghost = { manifest: { id: 'mail', name: 'Mail', command }, enabled: true };
-      const handleSend = vi.fn(async () => false);
+      const fillComposerWithSuggestion = vi.fn();
       vi.stubGlobal('electronAPI', {});
       Object.assign(window, { electronAPI: { ghosts: { listSync: () => ({ ghosts: [ghost] }) } } });
       const run = compile(`${block}\nreturn runPluginSuggestion;`, {
@@ -45,9 +44,7 @@ describe('plugin recommendation recovery', () => {
         readPluginRecommendationSnapshot: () => ({ ownerId: 'owner' }),
         buildHomeTaskCatalog: () => [suggestion],
         filterGhostsForWorkdir: (ghosts: unknown[]) => ghosts,
-        expandGhostCommand,
-        plainTextToTiptapDoc: (text: string) => ({ text }),
-        handleSend,
+        fillComposerWithSuggestion,
         i18n: { language: 'en' },
         t: () => 'Use plugin mail via ghost_info and ghost_call',
         isRemoteProjectDraft: false,
@@ -56,20 +53,11 @@ describe('plugin recommendation recovery', () => {
         toast: { error: vi.fn() },
       });
       await run({ suggestion, ownerId: 'owner', targetKey: 'local', workingDir: '/project' });
-      expect(handleSend).toHaveBeenCalledOnce();
-      const [sent, , , , , , options] = handleSend.mock.calls[0] as unknown as [
-        string,
-        unknown,
-        unknown,
-        unknown,
-        unknown,
-        unknown,
-        { recoveryDraftDoc: { text: string } },
-      ];
-      expect(sent).toContain(command ? '$mail' : 'ghost_info');
-      expect(expandGhostCommand(options.recoveryDraftDoc.text, [ghost as InstalledGhost])).toBe(
-        sent,
-      );
+      expect(fillComposerWithSuggestion).toHaveBeenCalledOnce();
+      const [filled] = fillComposerWithSuggestion.mock.calls[0] as [string];
+      expect(filled).toContain('Review my mail');
+      // $command stays as typed text; ChatInput expands it when the user sends.
+      expect(filled).toContain(command ? '$mail ' : 'ghost_info');
     },
   );
 

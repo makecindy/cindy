@@ -63,10 +63,6 @@ const suggestion: PluginSuggestionRequest = {
   ownerId: 'navigation-owner',
   targetKey: 'local',
   workingDir: null,
-  model: 'test',
-  effort: 'medium',
-  permissionMode: 'default',
-  files: [],
   suggestion: {
     id: 'plugin:navigation',
     category: 'email',

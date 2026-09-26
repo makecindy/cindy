@@ -6,9 +6,7 @@ const globalsSource = readFileSync(resolve(__dirname, '..', 'styles', 'globals.c
 
 describe('composer placeholder CSS', () => {
   it('renders the placeholder when Tiptap leaves only the empty-node class', () => {
-    expect(globalsSource).toContain(
-      '.ProseMirror > p.is-empty:first-child:only-child::before {',
-    );
+    expect(globalsSource).toContain('.ProseMirror > p.is-empty:first-child:only-child::before {');
   });
 
   it('keeps the empty-node fallback hidden while a voice draft is active', () => {
@@ -21,5 +19,12 @@ describe('composer placeholder CSS', () => {
     expect(globalsSource).toContain(
       "[data-recommendation-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {",
     );
+  });
+
+  it('hides the editor content and grows it to the measured preview height while a suggestion preview is active', () => {
+    const block = globalsSource.slice(
+      globalsSource.indexOf("[data-prompt-preview-active='true'] .ProseMirror {"),
+    );
+    expect(block).toMatch(/^[^}]*min-height: var\(--prompt-preview-min-h, 22px\);[^}]*opacity: 0;/);
   });
 });

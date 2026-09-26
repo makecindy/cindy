@@ -11,10 +11,6 @@ const request: PluginSuggestionRequest = {
   ownerId: 'a',
   targetKey: 'local',
   workingDir: null,
-  model: 'test',
-  effort: 'medium',
-  permissionMode: 'default',
-  files: [],
   suggestion: {
     id: 'plugin:test:one',
     category: 'email',

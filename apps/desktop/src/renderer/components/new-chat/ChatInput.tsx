@@ -10,6 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
   type ReactNode,
+  type CSSProperties,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -616,6 +617,11 @@ interface ChatInputProps {
   messages?: Array<{ role: string; content: string; quotesEncoded?: boolean }>;
   /** Custom placeholder text. Defaults to "今天我们做点什么呢~" */
   placeholder?: string;
+  /**
+   * 只读预览文案(首页任务建议悬停时的完整 prompt)。非空时盖在编辑器上显示,
+   * 暂时遮住当前正文,不写入草稿;置回 null 即恢复原样。
+   */
+  previewPrompt?: string | null;
   /** Controlled open state for FolderPickerPopover. When omitted, internal state is used. */
   folderPickerOpen?: boolean;
   /** Callback when FolderPickerPopover open state changes (controlled mode). */
@@ -1130,6 +1136,7 @@ export function ChatInput({
   onQueueEditLock,
   messages,
   placeholder,
+  previewPrompt,
   folderPickerOpen,
   onFolderPickerOpenChange,
   showFolderPicker = true,
@@ -8202,6 +8209,21 @@ export function ChatInput({
   });
   // handleKeyDown 的稳定闭包只按真实可见性接受 Tab，避免隐藏推荐被误填入。
   showRecommendationRef.current = showRecommendationOverlay;
+  // 首页建议悬停预览:输入框锁定(发送中 / 语音占用 / 禁用)时不预览,免得遮住进行中的状态。
+  const showPromptPreview = !!previewPrompt && !composerMutationLocked;
+  // 预览是 absolute overlay,按它的实际高度撑开编辑器最小高度,长 prompt 才能完整换行显示。
+  const promptPreviewRef = useRef<HTMLDivElement>(null);
+  const [promptPreviewHeight, setPromptPreviewHeight] = useState(0);
+  useLayoutEffect(() => {
+    const el = promptPreviewRef.current;
+    if (!showPromptPreview || !el) return;
+    const measure = () => setPromptPreviewHeight(el.offsetHeight);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [showPromptPreview]);
   // 可见推荐本身就是一次可发送输入：按钮点击时会先把它同步写入正文，再走现有发送链。
   const canSend = hasComposerPayload || showRecommendationOverlay;
   const makeNeedsNoModel = (noConnectedSource || selectedSourceDisconnected) && !!editor &&
@@ -8668,6 +8690,15 @@ export function ChatInput({
                 className="relative w-full"
                 // 推荐词生效时由 CSS 关掉原生 placeholder,避免两行字叠在一起。
                 data-recommendation-active={showRecommendationOverlay ? 'true' : undefined}
+                // 建议预览生效时由 CSS 隐去编辑器正文,并把它撑到预览高度。
+                data-prompt-preview-active={showPromptPreview ? 'true' : undefined}
+                style={
+                  showPromptPreview
+                    ? ({
+                        '--prompt-preview-min-h': `${promptPreviewHeight}px`,
+                      } as CSSProperties)
+                    : undefined
+                }
               >
                 <EditorContent
                   editor={editor}
@@ -8685,7 +8716,21 @@ export function ChatInput({
                     py-[3px] 是镜像 .ProseMirror 的 py-[3px]:它的 -my-[3px] 会穿过这里
                     向外折叠(relative 不建立 BFC),于是 .ProseMirror 的 border box 贴在本
                     容器顶边、正文被自身 padding 推低 3px。overlay 不跟着补这 3px 就会高一行边距。 */}
-                {showRecommendationOverlay && (
+                {showPromptPreview && (
+                  <div
+                    ref={promptPreviewRef}
+                    data-testid="chat-input-prompt-preview"
+                    aria-hidden="true"
+                    className={cn(
+                      'pointer-events-none absolute inset-x-0 top-0 max-h-[186px] overflow-hidden py-[3px] pr-[11px]',
+                      'whitespace-pre-wrap break-words text-15 leading-[1.467] font-normal',
+                      'text-[var(--chat-input-placeholder-subtle)]',
+                    )}
+                  >
+                    {previewPrompt}
+                  </div>
+                )}
+                {showRecommendationOverlay && !showPromptPreview && (
                   <div
                     className={cn(
                       'pointer-events-none absolute left-0 top-0 inline-flex max-w-full min-w-0 items-center py-[3px]',

@@ -185,7 +185,6 @@ import {
   takePendingPluginSuggestion,
   type PluginSuggestionRequest,
 } from './pendingPluginSuggestion';
-import { expandGhostCommand } from '@/cindy-brain/ghostCommand';
 import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import {
@@ -4995,32 +4994,23 @@ export function NewMakerDraftRoute() {
     return proceed;
   }, [vendorAuthGate]);
 
+  // 首页任务建议:悬停只在输入框里预览 prompt,点击把完整 prompt 填进输入框交给用户
+  // 改写后自己发送,不再直接替用户发出。填入走草稿存储的外部写入通道,ChatInput 订阅后
+  // 替换正文并把光标放到末尾;附件等其余草稿内容原样保留。
+  const [suggestionPreview, setSuggestionPreview] = useState<string | null>(null);
+  const fillComposerWithSuggestion = useCallback((prompt: string) => {
+    if (sendInFlightRef.current) return;
+    const existing = getComposerDraft(NEW_MAKER_DRAFT_KEY);
+    saveComposerDraft(NEW_MAKER_DRAFT_KEY, {
+      ...existing,
+      text: plainTextToTiptapDoc(prompt),
+      attachments: existing?.attachments ?? [],
+    });
+  }, []);
+
   const handleHomeSuggestion = useCallback(
-    (id: HomeSuggestionId) => {
-      if (sendInFlightRef.current) return;
-      const prompt = t(homeSuggestionPromptKey(id));
-      void handleSend(
-        prompt,
-        draftInitialModel,
-        (draftInitialEffort ?? 'medium') as Effort,
-        chatInitialPermissionMode,
-        attachmentState.attachments,
-        undefined,
-        {
-          providerId: chatInitialProviderId,
-          recoveryDraftDoc: plainTextToTiptapDoc(prompt),
-        },
-      );
-    },
-    [
-      attachmentState.attachments,
-      chatInitialPermissionMode,
-      chatInitialProviderId,
-      draftInitialEffort,
-      draftInitialModel,
-      handleSend,
-      t,
-    ],
+    (id: HomeSuggestionId) => fillComposerWithSuggestion(t(homeSuggestionPromptKey(id))),
+    [fillComposerWithSuggestion, t],
   );
 
   const pluginSuggestionFlight = useRef(false);
@@ -5109,27 +5099,11 @@ export function NewMakerDraftRoute() {
           navigate(`${route}&recommendation=${encodeURIComponent(nonce)}`);
           return;
         }
-        const recoveryPrompt = ghost.manifest.command
-          ? `$${ghost.manifest.command} ${suggestion.prompt}`
-          : `${suggestion.prompt}\n\n${t('newChat.pluginSuggestions.usePlugin', { name: ghost.manifest.name, id: ghost.manifest.id })}`;
-        // Retry goes through ChatInput, which expands $commands itself.
-        const prompt = ghost.manifest.command
-          ? expandGhostCommand(recoveryPrompt, [ghost])
-          : recoveryPrompt;
-        await handleSend(
-          prompt,
-          request.model,
-          request.effort,
-          request.permissionMode,
-          request.files,
-          undefined,
-          {
-            providerId: request.providerId,
-            recoveryDraftDoc: plainTextToTiptapDoc(recoveryPrompt),
-            onAccepted: () => {
-              void window.electronAPI.ghosts.markUsed(ghost.manifest.id).catch(() => undefined);
-            },
-          },
+        // 填进输入框而不是直接发送;ChatInput 发送时会自己展开 $command。
+        fillComposerWithSuggestion(
+          ghost.manifest.command
+            ? `$${ghost.manifest.command} ${suggestion.prompt}`
+            : `${suggestion.prompt}\n\n${t('newChat.pluginSuggestions.usePlugin', { name: ghost.manifest.name, id: ghost.manifest.id })}`,
         );
       } catch {
         if (pluginSuggestionMounted.current)
@@ -5139,7 +5113,7 @@ export function NewMakerDraftRoute() {
       }
     },
     [
-      handleSend,
+      fillComposerWithSuggestion,
       i18n.language,
       i18n.resolvedLanguage,
       isDeviceLinkDraft,
@@ -5157,20 +5131,10 @@ export function NewMakerDraftRoute() {
         ownerId: dataOwnerId,
         targetKey: pluginSuggestionTargetKey,
         workingDir: effectiveWorkingDir,
-        model: draftInitialModel,
-        effort: (draftInitialEffort ?? 'medium') as Effort,
-        permissionMode: chatInitialPermissionMode,
-        providerId: chatInitialProviderId,
-        files: attachmentState.attachments,
       });
     },
     [
-      attachmentState.attachments,
-      chatInitialPermissionMode,
-      chatInitialProviderId,
       dataOwnerId,
-      draftInitialEffort,
-      draftInitialModel,
       effectiveWorkingDir,
       pluginSuggestionTargetKey,
       runPluginSuggestion,
@@ -5407,6 +5371,7 @@ export function NewMakerDraftRoute() {
                     visualVariant="create-agent"
                     compactToolbar
                     placeholder={t('newChat.chatInput.createAgentPlaceholder')}
+                    previewPrompt={suggestionPreview}
                     sessionId={undefined}
                     initialWorkingDir={effectiveWorkingDir}
                     remoteHostId={draft.remoteHostId ?? null}
@@ -5580,6 +5545,7 @@ export function NewMakerDraftRoute() {
                     onSelect={handleHomeSuggestion}
                     includePlugins={!isRemoteProjectDraft && !isDeviceLinkDraft}
                     onPluginSelect={handlePluginSuggestion}
+                    onPreviewChange={setSuggestionPreview}
                   />
                 )}
                 {/* 首页「新建目标」弹窗:无 sessionId → onCreate 建会话并 setGoal(见 handleCreateGoal)。
