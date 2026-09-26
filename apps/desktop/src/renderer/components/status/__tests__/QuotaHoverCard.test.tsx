@@ -130,14 +130,20 @@ describe('QuotaHoverCard', () => {
       expect(row.parentElement).toBe(grid);
       expect(row.classList.contains('grid-cols-subgrid')).toBe(true);
     }
-    // 窄宽度:倒计时列可收缩截断,不把余量挤出容器。
-    expect(grid.className).toContain('minmax(0,max-content)');
+    // 窄宽度:标题与倒计时列都可收缩截断,只有百分比保持完整,不把余量挤出容器。
+    expect(grid.className).toContain(
+      'grid-cols-[minmax(0,max-content)_minmax(48px,1fr)_max-content_minmax(0,max-content)]',
+    );
   });
 
-  it('keeps the full reset countdown available when the embedded column truncates', () => {
+  it('keeps full title and reset countdown available when embedded columns truncate', () => {
+    const longTitle = 'Claude Very Long Model Display Name 周限';
     render(<UsageCard variant="embedded" nowMs={NOW_MS} account={{ windows: [
-      { key: 'a', title: '5 小时', window: { utilization: 10, resetsAt: (NOW_MS + 65 * 60_000) / 1000 } },
+      { key: 'a', title: longTitle, window: { utilization: 10, resetsAt: (NOW_MS + 65 * 60_000) / 1000 } },
     ] }} />);
+    const title = screen.getByText(longTitle);
+    expect(title.classList.contains('truncate')).toBe(true);
+    expect(title.getAttribute('title')).toBe(longTitle);
     const countdown = screen.getByText('1小时 5分钟后重置');
     expect(countdown.classList.contains('truncate')).toBe(true);
     expect(countdown.getAttribute('title')).toBe('1小时 5分钟后重置');
