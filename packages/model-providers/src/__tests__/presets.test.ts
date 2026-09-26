@@ -1150,10 +1150,13 @@ describe('官方渠道预设契约', () => {
       modelsUrl: 'https://coding.dashscope.aliyuncs.com/v1/models',
       models: codingPlanModels,
     });
+    // Codex 走 openai-chat 桥接：桥接未验证图片格式的型号在 Codex 下不声明图片输入。
+    const codexChatImages = (models: readonly { id: string; supportsImageInput?: boolean }[], unverified: string[]) =>
+      models.map((model) => (unverified.includes(model.id) ? { ...model, supportsImageInput: false } : model));
     expect(codingPlan?.runtimes.codex).toEqual({
       baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
       wireProtocol: 'openai-chat',
-      models: codingPlanModels,
+      models: codexChatImages(codingPlanModels, ['kimi-k2.5']),
     });
     for (const [tokenPlan, models] of [
       [personalTokenPlan, personalTokenPlanModels],
@@ -1168,7 +1171,7 @@ describe('官方渠道预设契约', () => {
         baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
         wireProtocol: 'openai-chat',
         modelsUrl: tokenPlanModelsUrl,
-        models,
+        models: codexChatImages(models, ['deepseek-v4.1-flash', 'kimi-k2.7-code', 'kimi-k2.6', 'kimi-k2.5']),
       });
     }
   });

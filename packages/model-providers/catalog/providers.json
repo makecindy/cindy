@@ -526,6 +526,9 @@
               "reasoning": true,
               "reasoningEfforts": ["low", "high", "max"],
               "reasoningDefaultEffort": "high"
+            },
+            "codex": {
+              "supportsImageInput": false
             }
           }
         },
@@ -573,7 +576,12 @@
           "id": "glm-5.3-flash",
           "name": "GLM-5.3-Flash",
           "contextWindow": 1000000,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "glm-5.3",
@@ -614,7 +622,12 @@
           "id": "glm-5.3-flash",
           "name": "GLM-5.3-Flash",
           "contextWindow": 1000000,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "glm-5.3",
@@ -978,7 +991,12 @@
           "id": "kimi-k2.5",
           "name": "Kimi K2.5",
           "contextWindow": 229376,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "glm-5",
@@ -1077,7 +1095,12 @@
           "id": "deepseek-v4.1-flash",
           "name": "DeepSeek-V4.1-Flash",
           "contextWindow": 1000000,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "deepseek-v4-pro",
@@ -1192,7 +1215,12 @@
           "id": "deepseek-v4.1-flash",
           "name": "DeepSeek-V4.1-Flash",
           "contextWindow": 1000000,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "deepseek-v4-pro",
@@ -1224,19 +1252,34 @@
           "id": "kimi-k2.7-code",
           "name": "Kimi K2.7 Code",
           "contextWindow": 229376,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "kimi-k2.6",
           "name": "Kimi K2.6",
           "contextWindow": 229376,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "kimi-k2.5",
           "name": "Kimi K2.5",
           "contextWindow": 229376,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "glm-5.3",
@@ -1497,6 +1540,9 @@
               "reasoning": true,
               "reasoningEfforts": ["low", "high", "max"],
               "reasoningDefaultEffort": "high"
+            },
+            "codex": {
+              "supportsImageInput": false
             }
           }
         }
@@ -1568,6 +1614,9 @@
               "reasoning": true,
               "reasoningEfforts": ["low", "high", "max"],
               "reasoningDefaultEffort": "high"
+            },
+            "codex": {
+              "supportsImageInput": false
             }
           }
         }
@@ -1598,19 +1647,34 @@
           "id": "mimo-v2.6-pro",
           "name": "MiMo-V2.6-Pro",
           "contextWindow": 1048576,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "mimo-v2.6-flash",
           "name": "MiMo-V2.6-Flash",
           "contextWindow": 1048576,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "mimo-v2.6-pro-ultraspeed",
           "name": "MiMo-V2.6-Pro-UltraSpeed",
           "contextWindow": 1048576,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         }
       ],
       "runtimes": {
@@ -1639,13 +1703,23 @@
           "id": "mimo-v2.6-pro",
           "name": "MiMo-V2.6-Pro",
           "contextWindow": 1048576,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "mimo-v2.6-flash",
           "name": "MiMo-V2.6-Flash",
           "contextWindow": 1048576,
-          "supportsImageInput": true
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         }
       ],
       "runtimes": {
@@ -1876,14 +1950,24 @@
           "name": "MiMo-V2.6-Pro",
           "contextWindow": 1048576,
           "supportsImageInput": true,
-          "engines": ["codex", "pi"]
+          "engines": ["codex", "pi"],
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "mimo-v2.6-flash",
           "name": "MiMo-V2.6-Flash",
           "contextWindow": 1048576,
           "supportsImageInput": true,
-          "engines": ["codex", "pi"]
+          "engines": ["codex", "pi"],
+          "engineOverrides": {
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
         },
         {
           "id": "deepseek-v4-pro",
