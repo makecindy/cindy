@@ -907,16 +907,17 @@ describe('MiniMax OpenAI Responses 预设契约 (issue #345)', () => {
     const preset = BUNDLED_CATALOG.presets?.find((candidate) => candidate.id === id);
     expect(preset?.docsUrl).toBe(docsUrl);
     expect(preset?.runtimes['claude-code']?.baseUrl).toMatch(/\/anthropic$/);
-    expect(preset?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false)).toEqual([
+    // 以线上服务端推荐清单为准（M2 系列仍在官方文档中）。
+    const expected = [
       { id: 'MiniMax-M3', name: 'MiniMax-M3', contextWindow: 1_000_000, supportsImageInput: true },
-      { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', contextWindow: 204_800, supportsImageInput: false },
-    ]);
+      ...['MiniMax-M2.7', 'MiniMax-M2.7-highspeed', 'MiniMax-M2.5', 'MiniMax-M2.5-highspeed',
+        'MiniMax-M2.1', 'MiniMax-M2.1-highspeed', 'MiniMax-M2'].map((id) => (
+        { id, name: id, contextWindow: 204_800, supportsImageInput: false })),
+    ];
+    expect(preset?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false)).toEqual(expected);
     expect({ ...preset?.runtimes.codex, models: preset?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toEqual({
       baseUrl: codexBaseUrl,
-      models: [
-        { id: 'MiniMax-M3', name: 'MiniMax-M3', contextWindow: 1_000_000, supportsImageInput: true },
-        { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', contextWindow: 204_800, supportsImageInput: false },
-      ],
+      models: expected,
     });
   });
 });
@@ -1004,14 +1005,14 @@ describe('官方渠道预设契约', () => {
   it('DeepSeek 的 Pi runtime 来自官方目录并保留逐模型推理档位', () => {
     const pi = preset('deepseek')?.runtimes.pi;
     expect(pi?.piCatalogProviderId).toBe('deepseek');
-    expect(pi?.models.find((model) => model.id === 'deepseek-v4-flash')).toMatchObject({
-      contextWindow: 1_000_000,
+    expect(pi?.models.find((model) => model.id === 'deepseek-flash')).toMatchObject({
+      contextWindow: 1_048_576,
       reasoning: true,
       reasoningEfforts: ['low', 'high', 'max'],
       reasoningDefaultEffort: 'high',
     });
     expect(pi?.models.find((model) => model.id === 'deepseek-v4-pro')).toMatchObject({
-      contextWindow: 1_000_000,
+      contextWindow: 1_048_576,
       reasoning: true,
       reasoningEfforts: ['high', 'max'],
       reasoningDefaultEffort: 'high',
@@ -1081,35 +1082,47 @@ describe('官方渠道预设契约', () => {
     const codingPlan = preset('aliyun-bailian-coding');
     const personalTokenPlan = preset('aliyun-bailian-token-plan-cn');
     const teamTokenPlan = preset('aliyun-bailian-token-plan-team-cn');
+    // 官方套餐清单（2026-09-26 核对）；窗口取官方最大输入，默认开思考的取思考模式最大输入。
+    const qwen = (id: string, name: string, image: boolean) =>
+      ({ id, name, contextWindow: 983_616, supportsImageInput: image });
     const codingPlanModels = [
-      { id: 'qwen3.7-plus', name: 'Qwen3.7-Plus', contextWindow: 1_000_000, supportsImageInput: true },
-      { id: 'qwen3-coder-next', name: 'Qwen3 Coder Next' },
-      { id: 'qwen3-coder-plus', name: 'Qwen3 Coder Plus' },
+      qwen('qwen3.7-plus', 'Qwen3.7-Plus', true),
+      qwen('qwen3.6-plus', 'Qwen3.6-Plus', true),
+      { id: 'kimi-k2.5', name: 'Kimi K2.5', contextWindow: 229_376, supportsImageInput: true },
+      { id: 'glm-5', name: 'GLM-5', contextWindow: 169_984, supportsImageInput: false },
+      { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', contextWindow: 196_608, supportsImageInput: false },
+      { id: 'qwen3-coder-next', name: 'Qwen3 Coder Next', contextWindow: 204_800, supportsImageInput: false },
+      { id: 'qwen3-coder-plus', name: 'Qwen3-Coder-Plus', contextWindow: 997_952, supportsImageInput: false },
     ];
     const personalTokenPlanModels = [
-      { id: 'qwen3.8-max-preview', name: 'Qwen3.8-Max-Preview', contextWindow: 983_616 },
-      { id: 'qwen3.7-max', name: 'Qwen3.7-Max', contextWindow: 1_000_000, supportsImageInput: false },
-      { id: 'qwen3.7-plus', name: 'Qwen3.7-Plus', contextWindow: 1_000_000, supportsImageInput: true },
-      { id: 'qwen3.6-flash', name: 'Qwen3.6-Flash', contextWindow: 1_000_000, supportsImageInput: true },
+      qwen('qwen3.8-max', 'Qwen3.8-Max', true),
+      qwen('qwen3.8-flash', 'Qwen3.8-Flash', true),
+      qwen('qwen3.7-max', 'Qwen3.7-Max', false),
+      qwen('qwen3.7-plus', 'Qwen3.7-Plus', true),
+      qwen('qwen3.6-flash', 'Qwen3.6-Flash', true),
+      { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 1_000_000, supportsImageInput: true },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', contextWindow: 1_000_000, supportsImageInput: false },
+      { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 1_048_576, supportsImageInput: false },
       { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_048_576, supportsImageInput: false },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_000_000, supportsImageInput: false },
     ];
     const teamTokenPlanModels = [
-      { id: 'qwen3.8-max-preview', name: 'Qwen3.8-Max-Preview', contextWindow: 983_616 },
-      { id: 'qwen3.7-max', name: 'Qwen3.7-Max', contextWindow: 1_000_000, supportsImageInput: false },
-      { id: 'qwen3.7-plus', name: 'Qwen3.7-Plus', contextWindow: 1_000_000, supportsImageInput: true },
-      { id: 'qwen3.6-plus', name: 'Qwen3.6-Plus', contextWindow: 1_000_000, supportsImageInput: true },
-      { id: 'qwen3.6-flash', name: 'Qwen3.6-Flash', contextWindow: 1_000_000, supportsImageInput: true },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_000_000, supportsImageInput: false },
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_000_000, supportsImageInput: false },
-      { id: 'deepseek-v3.2', name: 'DeepSeek V3.2', contextWindow: 131_072, supportsImageInput: false },
-      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', contextWindow: 262_144, supportsImageInput: true },
-      { id: 'kimi-k2.6', name: 'Kimi K2.6', contextWindow: 262_144, supportsImageInput: true },
-      { id: 'kimi-k2.5', name: 'Kimi K2.5', contextWindow: 262_144, supportsImageInput: true },
+      qwen('qwen3.8-max', 'Qwen3.8-Max', true),
+      qwen('qwen3.8-flash', 'Qwen3.8-Flash', true),
+      qwen('qwen3.7-max', 'Qwen3.7-Max', false),
+      qwen('qwen3.7-plus', 'Qwen3.7-Plus', true),
+      qwen('qwen3.6-plus', 'Qwen3.6-Plus', true),
+      qwen('qwen3.6-flash', 'Qwen3.6-Flash', true),
+      { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 1_000_000, supportsImageInput: true },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', contextWindow: 1_000_000, supportsImageInput: false },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', contextWindow: 1_000_000, supportsImageInput: false },
+      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', contextWindow: 229_376, supportsImageInput: true },
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', contextWindow: 229_376, supportsImageInput: true },
+      { id: 'kimi-k2.5', name: 'Kimi K2.5', contextWindow: 229_376, supportsImageInput: true },
+      { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 1_048_576, supportsImageInput: false },
       { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_048_576, supportsImageInput: false },
-      { id: 'glm-5.1', name: 'GLM-5.1', contextWindow: 202_745, supportsImageInput: false },
-      { id: 'glm-5', name: 'GLM-5', contextWindow: 202_752 },
-      { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', contextWindow: 204_800, supportsImageInput: false },
+      { id: 'glm-5.1', name: 'GLM-5.1', contextWindow: 169_984, supportsImageInput: false },
+      { id: 'glm-5', name: 'GLM-5', contextWindow: 169_984, supportsImageInput: false },
+      { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', contextWindow: 196_608, supportsImageInput: false },
     ];
     const tokenPlanModelsUrl =
       'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models';
@@ -1161,34 +1174,35 @@ describe('官方渠道预设契约', () => {
   });
 
   it.each(['zhipu-coding-plan-cn', 'zai-coding-plan-global'])(
-    '%s 的 Claude Code GLM-5.2 1M 入口保留完整窗口元数据',
+    '%s 只推荐官方支持的 GLM-5.3 / GLM-5.3-Flash（5.2、5.1 已路由到 5.3）',
     (id) => {
-      expect(
-        preset(id)?.runtimes['claude-code']?.models.find((model) => model.id === 'glm-5.2[1m]'),
-      ).toEqual({
-        id: 'glm-5.2[1m]',
-        name: 'GLM-5.2 (1M)',
-        contextWindow: 1_000_000,
-      });
+      const recommended = (agent: 'claude-code' | 'codex' | 'pi') =>
+        preset(id)?.runtimes[agent]?.models
+          .filter((model) => model.defaultEnabled !== false)
+          .map((model) => model.id);
+      expect(recommended('claude-code')).toEqual(['glm-5.3[1m]', 'glm-5.3-flash[1m]']);
+      expect(recommended('codex')).toEqual(['glm-5.3', 'glm-5.3-flash']);
+      expect(recommended('pi')).toEqual(['glm-5.3', 'glm-5.3-flash']);
     },
   );
 
   it.each(['zhipu-coding-plan-cn', 'zai-coding-plan-global'])(
-    '%s 的 Claude Code 提供 GLM-5.3 1M 独立入口,与 Pi 列表的 glm-5.3 窗口一致 (#3883)',
+    '%s 的 Claude Code 使用官方 [1m] 入口,与 Pi 的 glm-5.3 窗口一致 (#3883)',
     (id) => {
       const claudeModels = preset(id)?.runtimes['claude-code']?.models ?? [];
       expect(claudeModels.find((model) => model.id === 'glm-5.3[1m]')).toEqual({
         id: 'glm-5.3[1m]',
         name: 'GLM-5.3 (1M)',
         contextWindow: 1_000_000,
+        supportsImageInput: false,
       });
-      // glm-5.3 不在推荐清单里，但 Pi 仍能从模型资料补到它（默认隐藏）。
+      expect(claudeModels.find((model) => model.id === 'glm-5.3-flash[1m]')).toMatchObject({
+        contextWindow: 1_000_000,
+        supportsImageInput: true,
+      });
       expect(
-        preset(id)?.runtimes.pi?.models.find((model) => model.id === 'glm-5.3')?.defaultEnabled,
-      ).toBe(false);
-      // 只补独立 1M 条目:既有裸条目保持原样(留空仍按 200K 保守默认),不静默抬窗。
-      expect(claudeModels.find((model) => model.id === 'glm-5.2')).toEqual({ id: 'glm-5.2', name: 'GLM-5.2' });
-      expect(claudeModels.find((model) => model.id === 'glm-5.3')).toMatchObject({ api: 'anthropic-messages', defaultEnabled: false });
+        preset(id)?.runtimes.pi?.models.find((model) => model.id === 'glm-5.3')?.contextWindow,
+      ).toBe(1_000_000);
     },
   );
 

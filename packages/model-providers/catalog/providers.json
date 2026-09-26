@@ -461,17 +461,40 @@
       "models": [
         {
           "id": "z-ai/glm-5.2",
-          "name": "GLM-5.2 (OpenRouter)"
+          "name": "GLM-5.2",
+          "contextWindow": 1048576,
+          "supportsImageInput": false
         },
         {
           "id": "moonshotai/kimi-k2.6",
-          "name": "Kimi K2.6 (OpenRouter)"
+          "name": "Kimi K2.6",
+          "contextWindow": 262144,
+          "supportsImageInput": true
         },
         {
           "id": "deepseek/deepseek-v4-pro",
-          "name": "DeepSeek V4 Pro (OpenRouter)",
-          "contextWindow": 1000000,
+          "name": "DeepSeek V4 Pro",
+          "contextWindow": 1048576,
+          "supportsImageInput": false,
           "engines": ["claude-code", "pi"]
+        },
+        {
+          "id": "qwen/qwen3.8-27b",
+          "name": "Qwen3.8 27B",
+          "contextWindow": 1000000,
+          "supportsImageInput": true
+        },
+        {
+          "id": "qwen/qwen3.8-2.4t-a95b",
+          "name": "Qwen3.8 2.4T A95B",
+          "contextWindow": 1048576,
+          "supportsImageInput": false
+        },
+        {
+          "id": "qwen/qwen3.8-flash",
+          "name": "Qwen3.8 Flash",
+          "contextWindow": 1000000,
+          "supportsImageInput": true
         }
       ],
       "runtimes": {
@@ -494,9 +517,10 @@
       "docsUrl": "https://api-docs.deepseek.com/guides/anthropic_api",
       "models": [
         {
-          "id": "deepseek-v4-flash",
-          "name": "DeepSeek V4 Flash",
-          "contextWindow": 1000000,
+          "id": "deepseek-flash",
+          "name": "DeepSeek-Flash",
+          "contextWindow": 1048576,
+          "supportsImageInput": true,
           "engineOverrides": {
             "pi": {
               "reasoning": true,
@@ -507,8 +531,9 @@
         },
         {
           "id": "deepseek-v4-pro",
-          "name": "DeepSeek V4 Pro",
-          "contextWindow": 1000000,
+          "name": "DeepSeek-V4-Pro",
+          "contextWindow": 1048576,
+          "supportsImageInput": false,
           "engineOverrides": {
             "pi": {
               "reasoning": true,
@@ -545,6 +570,18 @@
       "regionHint": "cn",
       "models": [
         {
+          "id": "glm-5.3-flash",
+          "name": "GLM-5.3-Flash",
+          "contextWindow": 1000000,
+          "supportsImageInput": true
+        },
+        {
+          "id": "glm-5.3",
+          "name": "GLM-5.3",
+          "contextWindow": 1000000,
+          "supportsImageInput": false
+        },
+        {
           "id": "glm-5.2",
           "name": "GLM-5.2"
         },
@@ -573,6 +610,18 @@
       "docsUrl": "https://docs.z.ai/devpack/tool/claude",
       "regionHint": "global",
       "models": [
+        {
+          "id": "glm-5.3-flash",
+          "name": "GLM-5.3-Flash",
+          "contextWindow": 1000000,
+          "supportsImageInput": true
+        },
+        {
+          "id": "glm-5.3",
+          "name": "GLM-5.3",
+          "contextWindow": 1000000,
+          "supportsImageInput": false
+        },
         {
           "id": "glm-5.2",
           "name": "GLM-5.2"
@@ -624,6 +673,12 @@
           "supportsImageInput": true
         },
         {
+          "id": "kimi-k2.7-code-highspeed",
+          "name": "Kimi K2.7 Code HighSpeed",
+          "contextWindow": 262144,
+          "supportsImageInput": true
+        },
+        {
           "id": "kimi-k2.6",
           "name": "Kimi K2.6",
           "contextWindow": 262144,
@@ -670,6 +725,12 @@
         {
           "id": "kimi-k2.7-code",
           "name": "Kimi K2.7 Code",
+          "contextWindow": 262144,
+          "supportsImageInput": true
+        },
+        {
+          "id": "kimi-k2.7-code-highspeed",
+          "name": "Kimi K2.7 Code HighSpeed",
           "contextWindow": 262144,
           "supportsImageInput": true
         },
@@ -768,11 +829,46 @@
           "supportsImageInput": true
         },
         {
+          "id": "MiniMax-M2.7",
+          "name": "MiniMax-M2.7",
+          "contextWindow": 204800,
+          "supportsImageInput": false
+        },
+        {
+          "id": "MiniMax-M2.7-highspeed",
+          "name": "MiniMax-M2.7-highspeed",
+          "contextWindow": 204800,
+          "supportsImageInput": false
+        },
+        {
           "id": "MiniMax-M2.5",
           "name": "MiniMax-M2.5",
           "contextWindow": 204800,
-          "supportsImageInput": false,
-          "engines": ["claude-code", "codex"]
+          "supportsImageInput": false
+        },
+        {
+          "id": "MiniMax-M2.5-highspeed",
+          "name": "MiniMax-M2.5-highspeed",
+          "contextWindow": 204800,
+          "supportsImageInput": false
+        },
+        {
+          "id": "MiniMax-M2.1",
+          "name": "MiniMax-M2.1",
+          "contextWindow": 204800,
+          "supportsImageInput": false
+        },
+        {
+          "id": "MiniMax-M2.1-highspeed",
+          "name": "MiniMax-M2.1-highspeed",
+          "contextWindow": 204800,
+          "supportsImageInput": false
+        },
+        {
+          "id": "MiniMax-M2",
+          "name": "MiniMax-M2",
+          "contextWindow": 204800,
+          "supportsImageInput": false
         }
       ],
       "runtimes": {
@@ -802,11 +898,46 @@
           "supportsImageInput": true
         },
         {
+          "id": "MiniMax-M2.7",
+          "name": "MiniMax-M2.7",
+          "contextWindow": 204800,
+          "supportsImageInput": false
+        },
+        {
+          "id": "MiniMax-M2.7-highspeed",
+          "name": "MiniMax-M2.7-highspeed",
+          "contextWindow": 204800,
+          "supportsImageInput": false
+        },
+        {
           "id": "MiniMax-M2.5",
           "name": "MiniMax-M2.5",
           "contextWindow": 204800,
-          "supportsImageInput": false,
-          "engines": ["claude-code", "codex"]
+          "supportsImageInput": false
+        },
+        {
+          "id": "MiniMax-M2.5-highspeed",
+          "name": "MiniMax-M2.5-highspeed",
+          "contextWindow": 204800,
+          "supportsImageInput": false
+        },
+        {
+          "id": "MiniMax-M2.1",
+          "name": "MiniMax-M2.1",
+          "contextWindow": 204800,
+          "supportsImageInput": false
+        },
+        {
+          "id": "MiniMax-M2.1-highspeed",
+          "name": "MiniMax-M2.1-highspeed",
+          "contextWindow": 204800,
+          "supportsImageInput": false
+        },
+        {
+          "id": "MiniMax-M2",
+          "name": "MiniMax-M2",
+          "contextWindow": 204800,
+          "supportsImageInput": false
         }
       ],
       "runtimes": {
@@ -834,16 +965,44 @@
         {
           "id": "qwen3.7-plus",
           "name": "Qwen3.7-Plus",
-          "contextWindow": 1000000,
+          "contextWindow": 983616,
           "supportsImageInput": true
         },
         {
+          "id": "qwen3.6-plus",
+          "name": "Qwen3.6-Plus",
+          "contextWindow": 983616,
+          "supportsImageInput": true
+        },
+        {
+          "id": "kimi-k2.5",
+          "name": "Kimi K2.5",
+          "contextWindow": 229376,
+          "supportsImageInput": true
+        },
+        {
+          "id": "glm-5",
+          "name": "GLM-5",
+          "contextWindow": 169984,
+          "supportsImageInput": false
+        },
+        {
+          "id": "MiniMax-M2.5",
+          "name": "MiniMax-M2.5",
+          "contextWindow": 196608,
+          "supportsImageInput": false
+        },
+        {
           "id": "qwen3-coder-next",
-          "name": "Qwen3 Coder Next"
+          "name": "Qwen3 Coder Next",
+          "contextWindow": 204800,
+          "supportsImageInput": false
         },
         {
           "id": "qwen3-coder-plus",
-          "name": "Qwen3 Coder Plus"
+          "name": "Qwen3-Coder-Plus",
+          "contextWindow": 997952,
+          "supportsImageInput": false
         }
       ],
       "runtimes": {
@@ -871,33 +1030,59 @@
       "regionHint": "cn",
       "models": [
         {
-          "id": "qwen3.8-max-preview",
-          "name": "Qwen3.8-Max-Preview",
+          "id": "qwen3.8-max",
+          "name": "Qwen3.8-Max",
           "contextWindow": 983616,
-          "engines": ["claude-code", "codex"]
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "pi": {
+              "reasoning": true,
+              "reasoningEfforts": ["low", "medium", "xhigh"],
+              "reasoningDefaultEffort": "medium"
+            }
+          }
+        },
+        {
+          "id": "qwen3.8-flash",
+          "name": "Qwen3.8-Flash",
+          "contextWindow": 983616,
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "pi": {
+              "reasoning": true,
+              "reasoningEfforts": ["low", "medium", "xhigh"],
+              "reasoningDefaultEffort": "medium"
+            }
+          }
         },
         {
           "id": "qwen3.7-max",
           "name": "Qwen3.7-Max",
-          "contextWindow": 1000000,
+          "contextWindow": 983616,
           "supportsImageInput": false
         },
         {
           "id": "qwen3.7-plus",
           "name": "Qwen3.7-Plus",
-          "contextWindow": 1000000,
+          "contextWindow": 983616,
           "supportsImageInput": true
         },
         {
           "id": "qwen3.6-flash",
           "name": "Qwen3.6-Flash",
+          "contextWindow": 983616,
+          "supportsImageInput": true
+        },
+        {
+          "id": "deepseek-v4.1-flash",
+          "name": "DeepSeek-V4.1-Flash",
           "contextWindow": 1000000,
           "supportsImageInput": true
         },
         {
-          "id": "glm-5.2",
-          "name": "GLM-5.2",
-          "contextWindow": 1048576,
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek-V4-Pro",
+          "contextWindow": 1000000,
           "supportsImageInput": false,
           "engineOverrides": {
             "pi": {
@@ -908,9 +1093,15 @@
           }
         },
         {
-          "id": "deepseek-v4-pro",
-          "name": "DeepSeek V4 Pro",
-          "contextWindow": 1000000,
+          "id": "glm-5.3",
+          "name": "GLM-5.3",
+          "contextWindow": 1048576,
+          "supportsImageInput": false
+        },
+        {
+          "id": "glm-5.2",
+          "name": "GLM-5.2",
+          "contextWindow": 1048576,
           "supportsImageInput": false,
           "engineOverrides": {
             "pi": {
@@ -948,38 +1139,64 @@
       "regionHint": "cn",
       "models": [
         {
-          "id": "qwen3.8-max-preview",
-          "name": "Qwen3.8-Max-Preview",
+          "id": "qwen3.8-max",
+          "name": "Qwen3.8-Max",
           "contextWindow": 983616,
-          "engines": ["claude-code", "codex"]
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "pi": {
+              "reasoning": true,
+              "reasoningEfforts": ["low", "medium", "xhigh"],
+              "reasoningDefaultEffort": "medium"
+            }
+          }
+        },
+        {
+          "id": "qwen3.8-flash",
+          "name": "Qwen3.8-Flash",
+          "contextWindow": 983616,
+          "supportsImageInput": true,
+          "engineOverrides": {
+            "pi": {
+              "reasoning": true,
+              "reasoningEfforts": ["low", "medium", "xhigh"],
+              "reasoningDefaultEffort": "medium"
+            }
+          }
         },
         {
           "id": "qwen3.7-max",
           "name": "Qwen3.7-Max",
-          "contextWindow": 1000000,
+          "contextWindow": 983616,
           "supportsImageInput": false
         },
         {
           "id": "qwen3.7-plus",
           "name": "Qwen3.7-Plus",
-          "contextWindow": 1000000,
+          "contextWindow": 983616,
           "supportsImageInput": true
         },
         {
           "id": "qwen3.6-plus",
           "name": "Qwen3.6-Plus",
-          "contextWindow": 1000000,
+          "contextWindow": 983616,
           "supportsImageInput": true
         },
         {
           "id": "qwen3.6-flash",
           "name": "Qwen3.6-Flash",
+          "contextWindow": 983616,
+          "supportsImageInput": true
+        },
+        {
+          "id": "deepseek-v4.1-flash",
+          "name": "DeepSeek-V4.1-Flash",
           "contextWindow": 1000000,
           "supportsImageInput": true
         },
         {
           "id": "deepseek-v4-pro",
-          "name": "DeepSeek V4 Pro",
+          "name": "DeepSeek-V4-Pro",
           "contextWindow": 1000000,
           "supportsImageInput": false,
           "engineOverrides": {
@@ -992,7 +1209,7 @@
         },
         {
           "id": "deepseek-v4-flash",
-          "name": "DeepSeek V4 Flash",
+          "name": "DeepSeek-V4-Flash",
           "contextWindow": 1000000,
           "supportsImageInput": false,
           "engineOverrides": {
@@ -1004,28 +1221,28 @@
           }
         },
         {
-          "id": "deepseek-v3.2",
-          "name": "DeepSeek V3.2",
-          "contextWindow": 131072,
-          "supportsImageInput": false
-        },
-        {
           "id": "kimi-k2.7-code",
           "name": "Kimi K2.7 Code",
-          "contextWindow": 262144,
+          "contextWindow": 229376,
           "supportsImageInput": true
         },
         {
           "id": "kimi-k2.6",
           "name": "Kimi K2.6",
-          "contextWindow": 262144,
+          "contextWindow": 229376,
           "supportsImageInput": true
         },
         {
           "id": "kimi-k2.5",
           "name": "Kimi K2.5",
-          "contextWindow": 262144,
+          "contextWindow": 229376,
           "supportsImageInput": true
+        },
+        {
+          "id": "glm-5.3",
+          "name": "GLM-5.3",
+          "contextWindow": 1048576,
+          "supportsImageInput": false
         },
         {
           "id": "glm-5.2",
@@ -1043,7 +1260,7 @@
         {
           "id": "glm-5.1",
           "name": "GLM-5.1",
-          "contextWindow": 202745,
+          "contextWindow": 169984,
           "supportsImageInput": false,
           "engineOverrides": {
             "pi": {
@@ -1056,7 +1273,8 @@
         {
           "id": "glm-5",
           "name": "GLM-5",
-          "contextWindow": 202752,
+          "contextWindow": 169984,
+          "supportsImageInput": false,
           "engineOverrides": {
             "pi": {
               "reasoning": true,
@@ -1068,7 +1286,7 @@
         {
           "id": "MiniMax-M2.5",
           "name": "MiniMax-M2.5",
-          "contextWindow": 204800,
+          "contextWindow": 196608,
           "supportsImageInput": false
         }
       ],
@@ -1244,32 +1462,41 @@
           "id": "glm-5.3[1m]",
           "name": "GLM-5.3 (1M)",
           "contextWindow": 1000000,
+          "supportsImageInput": false,
           "engines": ["claude-code"]
         },
         {
-          "id": "glm-5.2[1m]",
-          "name": "GLM-5.2 (1M)",
+          "id": "glm-5.3-flash[1m]",
+          "name": "GLM-5.3-Flash (1M)",
           "contextWindow": 1000000,
+          "supportsImageInput": true,
           "engines": ["claude-code"]
         },
         {
-          "id": "glm-5.2",
-          "name": "GLM-5.2",
+          "id": "glm-5.3",
+          "name": "GLM-5.3",
+          "contextWindow": 1000000,
+          "supportsImageInput": false,
+          "engines": ["codex", "pi"],
           "engineOverrides": {
             "pi": {
-              "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": ["high", "max"],
+              "reasoningEfforts": ["low", "high", "max"],
               "reasoningDefaultEffort": "high"
             }
           }
         },
         {
-          "id": "glm-5.1",
-          "name": "GLM-5.1",
+          "id": "glm-5.3-flash",
+          "name": "GLM-5.3-Flash",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["codex", "pi"],
           "engineOverrides": {
             "pi": {
-              "contextWindow": 200000
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "high"
             }
           }
         }
@@ -1306,30 +1533,43 @@
           "id": "glm-5.3[1m]",
           "name": "GLM-5.3 (1M)",
           "contextWindow": 1000000,
+          "supportsImageInput": false,
           "engines": ["claude-code"]
         },
         {
-          "id": "glm-5.2[1m]",
-          "name": "GLM-5.2 (1M)",
+          "id": "glm-5.3-flash[1m]",
+          "name": "GLM-5.3-Flash (1M)",
           "contextWindow": 1000000,
+          "supportsImageInput": true,
           "engines": ["claude-code"]
         },
         {
-          "id": "glm-5.2",
-          "name": "GLM-5.2",
+          "id": "glm-5.3",
+          "name": "GLM-5.3",
+          "contextWindow": 1000000,
+          "supportsImageInput": false,
+          "engines": ["codex", "pi"],
           "engineOverrides": {
             "pi": {
-              "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": ["high", "max"],
+              "reasoningEfforts": ["low", "high", "max"],
               "reasoningDefaultEffort": "high"
             }
           }
         },
         {
-          "id": "glm-5.1",
-          "name": "GLM-5.1",
-          "engines": ["claude-code", "codex"]
+          "id": "glm-5.3-flash",
+          "name": "GLM-5.3-Flash",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["codex", "pi"],
+          "engineOverrides": {
+            "pi": {
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "high"
+            }
+          }
         }
       ],
       "runtimes": {
@@ -1363,6 +1603,12 @@
         {
           "id": "mimo-v2.6-flash",
           "name": "MiMo-V2.6-Flash",
+          "contextWindow": 1048576,
+          "supportsImageInput": true
+        },
+        {
+          "id": "mimo-v2.6-pro-ultraspeed",
+          "name": "MiMo-V2.6-Pro-UltraSpeed",
           "contextWindow": 1048576,
           "supportsImageInput": true
         }
@@ -1626,13 +1872,17 @@
           "engines": ["codex", "pi"]
         },
         {
-          "id": "mimo-v2.5",
-          "name": "MiMo V2.5",
+          "id": "mimo-v2.6-pro",
+          "name": "MiMo-V2.6-Pro",
+          "contextWindow": 1048576,
+          "supportsImageInput": true,
           "engines": ["codex", "pi"]
         },
         {
-          "id": "mimo-v2.5-pro",
-          "name": "MiMo V2.5 Pro",
+          "id": "mimo-v2.6-flash",
+          "name": "MiMo-V2.6-Flash",
+          "contextWindow": 1048576,
+          "supportsImageInput": true,
           "engines": ["codex", "pi"]
         },
         {

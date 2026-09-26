@@ -971,7 +971,19 @@ const MOONSHOT_CHAT_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai']);
 /** Kimi Code (coding plan) official endpoint DNS boundary. */
 const KIMI_CODING_CHAT_HOST = 'api.kimi.com';
 /** Model ids on the Kimi Code Codex (openai-chat) route verified for image input. */
-const KIMI_CODING_IMAGE_CHAT_MODELS = new Set(['k3', 'k3-256k']);
+const KIMI_CODING_IMAGE_CHAT_MODELS = new Set([
+  'k3',
+  'k3-256k',
+  'kimi-for-coding',
+  'kimi-for-coding-highspeed',
+]);
+/** Moonshot 开放平台上官方文档确认支持图片输入的 model id。 */
+const MOONSHOT_IMAGE_CHAT_MODELS = new Set([
+  'kimi-k3',
+  'kimi-k2.7-code',
+  'kimi-k2.7-code-highspeed',
+  'kimi-k2.6',
+]);
 /** 火山方舟(豆包)官方 DNS 边界:ark.<region>.volces.com(如 ark.cn-beijing.volces.com)。 */
 const VOLCENGINE_ARK_CHAT_HOST_RE = /^ark\.[a-z0-9-]+\.volces\.com$/;
 /** 阿里云百炼 Coding Plan / Token Plan / 按量付费官方 DNS 边界。 */
@@ -998,7 +1010,11 @@ function isDoubaoVisionModel(model: string): boolean {
 /** 已确认支持图片输入的 Qwen model id 白名单。 */
 const QWEN_IMAGE_CHAT_MODELS = new Set([
   'qwen3.6-flash',
+  'qwen3.6-plus',
   'qwen3.7-plus',
+  'qwen3.8-flash',
+  'qwen3.8-max',
+  // 已下线，旧 id 由百炼路由到 qwen3.8-max；保留给存量连接。
   'qwen3.8-max-preview',
 ]);
 
@@ -1110,7 +1126,7 @@ function isVerifiedImageChatRoute(upstream: string, realModel: string): boolean 
   }
   if (url.protocol !== 'https:') return false;
   const host = url.hostname.toLowerCase();
-  if (realModel === 'kimi-k3') return MOONSHOT_CHAT_HOSTS.has(host);
+  if (MOONSHOT_IMAGE_CHAT_MODELS.has(realModel)) return MOONSHOT_CHAT_HOSTS.has(host);
   if (KIMI_CODING_IMAGE_CHAT_MODELS.has(realModel)) return host === KIMI_CODING_CHAT_HOST;
   if (isDoubaoVisionModel(realModel)) return VOLCENGINE_ARK_CHAT_HOST_RE.test(host);
   if (isQwenImageChatModel(realModel)) return DASHSCOPE_CODING_CHAT_HOSTS.has(host);

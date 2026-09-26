@@ -345,6 +345,14 @@
         "api": "openai-completions",
         "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
       },
+      "mimo-v2.6-pro": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "mimo-v2.6-flash": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
       "minimax-m3": {
         "api": "anthropic-messages",
         "endpoint": "https://opencode.ai/zen/go/v1/messages"
