@@ -7,14 +7,13 @@ import { describe, expect, it } from 'vitest';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../../../../../../..');
 
-function readNotice(file: string): string {
+function readNotice(file: string, key: 'AUTO_REVIEW_UNAVAILABLE' | 'AUTO_REVIEW_UNAVAILABLE_WECHAT'): string {
   const data = JSON.parse(readFileSync(file, 'utf8')) as {
-    chat?: { remoteError?: { AUTO_REVIEW_UNAVAILABLE?: string } };
-    remoteError?: { AUTO_REVIEW_UNAVAILABLE?: string };
+    chat?: { remoteError?: Record<string, string> };
+    remoteError?: Record<string, string>;
   };
-  const notice = data.chat?.remoteError?.AUTO_REVIEW_UNAVAILABLE
-    ?? data.remoteError?.AUTO_REVIEW_UNAVAILABLE;
-  if (!notice) throw new Error(`missing AUTO_REVIEW_UNAVAILABLE in ${file}`);
+  const notice = data.chat?.remoteError?.[key] ?? data.remoteError?.[key];
+  if (!notice) throw new Error(`missing ${key} in ${file}`);
   return notice;
 }
 
@@ -36,7 +35,7 @@ describe('auto-review unavailable copy', () => {
         'apps/desktop/src/renderer/i18n/locales',
         locale,
         'common.json',
-      ));
+      ), 'AUTO_REVIEW_UNAVAILABLE');
       for (const phrase of expected[locale]) expect(notice).toContain(phrase);
       expect(notice).not.toContain('默认权限');
       expect(notice).not.toContain('Default permissions');
@@ -47,10 +46,35 @@ describe('auto-review unavailable copy', () => {
         'apps/mobile/src/i18n/locales',
         locale,
         'session.json',
-      ));
+      ), 'AUTO_REVIEW_UNAVAILABLE');
       for (const phrase of expected[locale]) expect(notice).toContain(phrase);
       expect(notice).not.toContain('默认权限');
       expect(notice).not.toContain('Default permissions');
+    }
+  });
+
+  it('personal WeChat task views ask for direct confirmation instead of Full access', () => {
+    const expected = {
+      'zh-CN': ['个人微信', '完全访问', '直接确认'],
+      'zh-TW': ['個人微信', '完全訪問', '直接確認'],
+      en: ['Personal WeChat', 'Full access', 'Confirm this action directly'],
+      ja: ['個人 WeChat', 'フルアクセス', '直接確認'],
+      ko: ['개인 WeChat', '전체 접근', '직접 확인'],
+    } as const;
+    const forbidden = ['想少被打断', 'Switch this task', '中断を減らしたい', '중단을 줄이려면', '想少被打斷'];
+    for (const locale of desktopLocales) {
+      const notice = readNotice(path.join(
+        repoRoot, 'apps/desktop/src/renderer/i18n/locales', locale, 'common.json',
+      ), 'AUTO_REVIEW_UNAVAILABLE_WECHAT');
+      for (const phrase of expected[locale]) expect(notice).toContain(phrase);
+      for (const phrase of forbidden) expect(notice).not.toContain(phrase);
+    }
+    for (const locale of mobileLocales) {
+      const notice = readNotice(path.join(
+        repoRoot, 'apps/mobile/src/i18n/locales', locale, 'session.json',
+      ), 'AUTO_REVIEW_UNAVAILABLE_WECHAT');
+      for (const phrase of expected[locale]) expect(notice).toContain(phrase);
+      for (const phrase of forbidden) expect(notice).not.toContain(phrase);
     }
   });
 });

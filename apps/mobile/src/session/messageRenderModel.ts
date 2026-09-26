@@ -83,6 +83,7 @@ export function buildMobileMessageRenderItems(
     autoResumePending?: Record<string, unknown> | null;
     sessionId?: string;
     preserveSourceOrder?: boolean;
+    sessionSource?: string | null;
   } = {},
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
 ): MobileMessageRenderItem[] {

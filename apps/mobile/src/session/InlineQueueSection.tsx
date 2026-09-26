@@ -40,6 +40,7 @@ import { radius, spacing, typeScale } from '@/theme/tokens';
 
 export interface InlineQueueSectionProps {
   projection: InputProjection;
+  sessionSource?: string | null;
   busy?: boolean;
   readOnlyReason?: string | null;
   errorRecoveryReadOnlyReason: string | null;
@@ -50,6 +51,7 @@ export interface InlineQueueSectionProps {
 
 export function InlineQueueSection({
   projection,
+  sessionSource,
   busy,
   readOnlyReason,
   errorRecoveryReadOnlyReason,
@@ -84,7 +86,7 @@ export function InlineQueueSection({
     ? localizedAgentError
       ?? (projectionErrorKey
         ? t(projectionErrorKey)
-        : (describeAgentAuthError(projection.error) ?? localizeUnclassifiedAgentError(projection.error)))
+        : (describeAgentAuthError(projection.error) ?? localizeUnclassifiedAgentError(projection.error, sessionSource)))
     : null;
 
   return (

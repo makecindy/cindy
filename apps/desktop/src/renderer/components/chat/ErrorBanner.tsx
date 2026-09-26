@@ -17,6 +17,7 @@ import { useProviders } from '@/hooks/useProviders';
 import { useEffect, useState } from 'react';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
 import { isCindyGatewayProxyTokenInvalidError, isResponsesLiteParallelToolCallsError, parseAgentErrorCode, redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { chatRemoteErrorGuidanceKey } from '@/lib/autoReviewUnavailableGuidance';
 import {
   AlertCircle,
   Check,
@@ -114,6 +115,8 @@ interface ErrorBannerProps {
    *  重试,如 codex 网络 retry-loop 透出)。网络类分支据此区分文案:「正在自动
    *  重试…」vs「服务暂时不可达,可点击重试」。历史尾部行恒为 false。 */
   isRecoverable?: boolean;
+  /** 当前任务来源。个人微信不能建议切到完全访问。 */
+  sessionSource?: string | null;
   style?: React.CSSProperties;
   className?: string;
 }
@@ -140,6 +143,7 @@ export function ErrorBanner({
   onForkStripEncrypted,
   forkStripEncryptedRunning = false,
   isRecoverable = false,
+  sessionSource,
   style,
   className,
 }: ErrorBannerProps) {
@@ -294,7 +298,7 @@ export function ErrorBanner({
         ? t(errorReasonI18nKey)
         : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
-  const remoteErrorKey = remoteErrorCode ? `chat.remoteError.${remoteErrorCode}` : undefined;
+  const remoteErrorKey = chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
   const remoteGuidance = remoteErrorKey && i18n.exists(remoteErrorKey) ? t(remoteErrorKey) : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
