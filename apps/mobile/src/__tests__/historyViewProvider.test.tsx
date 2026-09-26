@@ -12,6 +12,8 @@ import {
 } from '@cindy/device-link';
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
+import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';
+import { revokedDevicesStore } from '../device-link/revokedDevicesStore';
 
 const auth = vi.hoisted(() => ({
   isAuthenticated: true,
@@ -48,6 +50,11 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 vi.mock('@/device-link/rnWebSocket', () => ({ createRnWebSocket: vi.fn() }));
 vi.mock('@/debug/mobileDebugLog', () => ({ mobileDebugLog: vi.fn() }));
 vi.mock('@/debug/visualMock', () => ({ createVisualMockDeviceLinkContext: vi.fn(), seedVisualMockStore: vi.fn() }));
+vi.mock('@cindy/maker-shared/device-responsiveness', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/maker-shared/device-responsiveness')>();
+  return { ...actual, createDeviceResponsivenessBreaker: (options: Parameters<typeof actual.createDeviceResponsivenessBreaker>[0]) =>
+    actual.createDeviceResponsivenessBreaker({ ...options, now: () => Date.now() }) };
+});
 
 // Only the transport boundary is fake. Mount the real Provider, including its
 // handshake single-flight cache, invalidation callbacks and invoke send path.
@@ -67,9 +74,9 @@ const transport = vi.hoisted(() => {
     getStatus = () => this.status;
     serverCapabilities: string[] = [];
     hasServerCapability = (capability: string) => this.serverCapabilities.includes(capability);
-    isOutboundExplicitlyClosed = () => false;
+    isOutboundExplicitlyClosed = vi.fn((_deviceId: string) => false);
     // No background recovery owner; each test explicitly starts the fresh read.
-    hasPendingRequestsTo = () => false;
+    hasPendingRequestsTo = vi.fn((_deviceId: string) => false);
     onStatusChange(listener: Client['statusChanged']) { this.statusChanged = listener; return () => {}; }
     onPresenceChanged(listener: Client['presenceChanged']) { this.presenceChanged = listener; return () => {}; }
     onPeerTransportReset(listener: Client['peerReset']) { this.peerReset = listener; return () => {}; }
@@ -114,6 +121,90 @@ beforeEach(async () => {
   await act(async () => render());
 });
 afterEach(async () => { await act(async () => root.unmount()); });
+
+describe('pending probe reply recovery', () => {
+  afterEach(() => {
+    resetDeviceResponsivenessTracking();
+    revokedDevicesStore.clearAll();
+  });
+  it('reopens the reply link after reconnect while the old business probe still owns its slot', async () => {
+    vi.useFakeTimers();
+    const client = transport.clients[0];
+    client.openLink.mockResolvedValue(accepted(supported));
+    let resolveProbe!: (value: { ok: true; result: string }) => void;
+    const probe = new Promise<{ ok: true; result: string }>(resolve => { resolveProbe = resolve; });
+    client.invoke.mockImplementation(() => probe);
+    try {
+      await act(async () => { await context.openLink('host'); });
+      await act(async () => {
+        for (let i = 0; i < 3; i++) settleDeviceSend('host', acquireDeviceSendSlot('host'), 'timeout');
+        await vi.advanceTimersByTimeAsync(14_000);
+      });
+      expect(client.invoke).toHaveBeenCalledExactlyOnceWith('host', expect.objectContaining({ channel: 'local-db:sessions:list' }), expect.any(Number));
+      expect(unresponsiveDevicesStore.has('host')).toBe(true);
+      client.hasPendingRequestsTo.mockImplementation(device => device === 'host');
+      await act(async () => { client.status = 'connecting'; client.statusChanged('connecting'); });
+      await act(async () => { client.status = 'online'; client.statusChanged('online'); });
+      // The serial recovery scheduler is still awaiting probe; only its reply link may reopen.
+      expect(client.openLink).toHaveBeenCalledTimes(2);
+      expect(client.invoke).toHaveBeenCalledTimes(1);
+      expect(unresponsiveDevicesStore.has('host')).toBe(true);
+      // Another foreground hint shares the accepted transport; it cannot start a second probe.
+      await act(async () => networkEvents.app('active'));
+      expect(client.openLink).toHaveBeenCalledTimes(2);
+      expect(client.invoke).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        client.hasPendingRequestsTo.mockReturnValue(false);
+        resolveProbe({ ok: true, result: 'probe response' });
+      });
+      expect(unresponsiveDevicesStore.has('host')).toBe(false);
+    } finally {
+      await act(async () => { resolveProbe({ ok: true, result: 'cleanup' }); });
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['no pending request', 'revoked', 'explicitly closed', 'background', 'settled before send', 'offline before send'] as const)(
+    'does not bypass lifecycle guards: %s', async reason => {
+      vi.useFakeTimers();
+      const client = transport.clients[0];
+      client.openLink.mockResolvedValue(accepted(supported));
+      let resolveProbe!: (value: { ok: true; result: string }) => void;
+      client.invoke.mockImplementation(() => new Promise(resolve => { resolveProbe = resolve; }));
+      try {
+        await act(async () => { await context.openLink('host'); });
+        await act(async () => {
+          for (let i = 0; i < 3; i++) settleDeviceSend('host', acquireDeviceSendSlot('host'), 'timeout');
+          await vi.advanceTimersByTimeAsync(14_000);
+        });
+        expect(client.invoke).toHaveBeenCalledTimes(1);
+        client.hasPendingRequestsTo.mockReturnValue(reason !== 'no pending request');
+        await act(async () => {
+          client.status = 'connecting'; client.statusChanged('connecting');
+          if (reason === 'revoked') revokedDevicesStore.markRevoked('host');
+          if (reason === 'explicitly closed') client.isOutboundExplicitlyClosed.mockReturnValue(true);
+          if (reason === 'background') { networkEvents.state = 'background'; networkEvents.app('background'); }
+          client.status = 'online'; client.statusChanged('online');
+          // Mutate after the initial guard but before the async send continuation.
+          if (reason === 'settled before send') client.hasPendingRequestsTo.mockReturnValue(false);
+          if (reason === 'offline before send') { client.status = 'connecting'; client.statusChanged('connecting'); }
+        });
+        expect(client.openLink).toHaveBeenCalledTimes(1);
+        expect(client.invoke).toHaveBeenCalledTimes(1);
+        if (reason === 'background') {
+          await act(async () => { networkEvents.state = 'active'; networkEvents.app('active'); });
+          expect(client.openLink).toHaveBeenCalledTimes(2);
+          expect(client.invoke).toHaveBeenCalledTimes(1);
+          expect(unresponsiveDevicesStore.has('host')).toBe(true);
+        }
+      } finally {
+        client.hasPendingRequestsTo.mockReturnValue(false);
+        await act(async () => resolveProbe?.({ ok: true, result: 'cleanup' }));
+        vi.useRealTimers();
+      }
+    },
+  );
+});
 
 describe('Provider shared-task relay compatibility', () => {
   it('distinguishes an old online relay from disconnection and re-negotiates after upgrade', async () => {

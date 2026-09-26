@@ -486,8 +486,25 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     deviceId: string,
     allowProbe = false,
     refreshSettled = false,
+    pendingReplyRecovery = false,
   ) => {
+    const connectionEpoch = connectionEpochRef.current;
+    const releaseGeneration = backgroundReleaseGenerationRef.current;
     const checkAvailability = () => {
+      if (pendingReplyRecovery && (
+        clientRef.current !== client
+        || connectionEpochRef.current !== connectionEpoch
+        || backgroundReleaseGenerationRef.current !== releaseGeneration
+        || backgroundReleaseInFlightRef.current
+        || AppState.currentState !== 'active'
+        || client.getStatus() !== 'online'
+        || revokedDevicesStore.has(deviceId)
+        || client.isOutboundExplicitlyClosed(deviceId)
+        || rehydrateSuppressedDeviceIds.has(deviceId)
+        || !client.hasPendingRequestsTo(deviceId)
+      )) {
+        throw new DeviceLinkError('NOT_CONNECTED', 'pending reply recovery is no longer current');
+      }
       if (presenceAvailableByDeviceRef.current.get(deviceId) === false) {
         const disabled = presenceUnavailableVerdictsRef.current.get(deviceId)?.kind === 'disabled';
         throw new DeviceLinkError(disabled ? 'REMOTE_DISABLED' : 'DEVICE_OFFLINE', 'remote device is unavailable');
@@ -498,10 +515,22 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       presenceAvailabilityEpochsRef.current,
       remoteResponseEvidenceEpochs,
       deviceId,
-      () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe, checkAvailability),
+      () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe, checkAvailability, pendingReplyRecovery),
       { retainSuccessful: true, refreshSettled },
     );
   }, []);
+
+  const restorePendingReplyLinks = useCallback((client: DeviceLinkClient) => {
+    // A running business probe owns the breaker/scheduler slot until its reply
+    // arrives. Restore only its transport: queuing this handshake behind that
+    // probe would make each wait for the other until timeout + backoff.
+    // Reuse the connection's single-flight cache; send no new business request
+    // and neither consume nor settle the existing probe's slot.
+    for (const deviceId of unresponsiveDevicesStore.getSnapshot()) {
+      if (!client.hasPendingRequestsTo(deviceId)) continue;
+      void sendOpenLinkOnce(client, deviceId, false, false, true).request.catch(() => undefined);
+    }
+  }, [sendOpenLinkOnce]);
 
   const sendTrackedSubscribe = useCallback(async (
     client: DeviceLinkClient,
@@ -982,6 +1011,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       connectionEpochRef.current = ++nextDeviceLinkConnectionEpoch;
       setConnectionEpoch(connectionEpochRef.current);
       resetRemoteProjectOrderPushFence();
+      restorePendingReplyLinks(client);
       void rehydrateWithClient(client);
       // A new controller receives only presence deltas. Read the roster once so
       // an already-offline host is known even when opening directly into history.
@@ -1272,6 +1302,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // A short background stay can preserve a socket whose route changed.
         // Replace a known old path; otherwise probe without the hint cooldown.
         if (client.getStatus() === 'online') recoverNetwork(true);
+        restorePendingReplyLinks(client);
         // 快速切换(连接被宽限保住、始终 online)不会有 online 状态转换,这条显式
         // 补齐就是断档回填的唯一触发点;其余路径下它因 status 未 online 而空转。
         void rehydrateWithClient(client);
@@ -1369,6 +1400,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     clearPerAccountDeviceLinkState,
     publishPresenceAvailabilityMutation,
     rehydrateWithClient,
+    restorePendingReplyLinks,
     requestForcedPeerRecovery,
     readDeviceList,
   ]);
@@ -1809,8 +1841,9 @@ function sendOpenLinkWithAccessHandling(
   deviceId: string,
   allowProbe = false,
   preSend?: () => void,
+  pendingReplyRecovery = false,
 ): Promise<LinkAcceptPayload> {
-  return withAccessRevokedHandling(deviceId, () => sendOpenLink(client, deviceId, allowProbe, preSend));
+  return withAccessRevokedHandling(deviceId, () => sendOpenLink(client, deviceId, allowProbe, preSend, pendingReplyRecovery));
 }
 
 async function sendOpenLink(
@@ -1818,14 +1851,17 @@ async function sendOpenLink(
   deviceId: string,
   allowProbe = false,
   preSend?: () => void,
+  pendingReplyRecovery = false,
 ): Promise<LinkAcceptPayload> {
   preSend?.();
   // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
-  const slot = acquireDeviceSendSlot(deviceId, undefined, { allowProbe });
+  // Reply transport must not compete with the business request it is restoring.
+  // The provider's preSend guard limits this exemption to current pending work.
+  const slot = pendingReplyRecovery ? null : acquireDeviceSendSlot(deviceId, undefined, { allowProbe });
   try {
     await ensureOnlineForRequest(client);
   } catch (err) {
-    settleDeviceSend(deviceId, slot, 'inconclusive');
+    if (slot) settleDeviceSend(deviceId, slot, 'inconclusive');
     throw err;
   }
   try {
@@ -1842,7 +1878,7 @@ async function sendOpenLink(
     // 超时后再 open,形成周期性风暴。这里按不定论处理:不关熔断也不计失败;
     // openLink 若是探测,单飞席位随之释放、退避窗口不动,紧随其后的 subscribe
     // (真实 invoke 通道)会立即接棒成为新探测,由它的回包决定开合。
-    settleDeviceSend(deviceId, slot, 'inconclusive');
+    if (slot) settleDeviceSend(deviceId, slot, 'inconclusive');
     markRemoteResponseEvidence(deviceId);
     // 显式 openLink 成功 = 链路已重建:解除永久关闭后的重建抑制。
     liftRehydrateSuppressionOnExplicitOpen(rehydrateSuppressedDeviceIds, deviceId);
@@ -1851,7 +1887,7 @@ async function sendOpenLink(
     // 超时仍计失败:link-open 都等不到回包说明被控端连链路层都没在应答。
     // 终态 relay 应答(REMOTE_DISABLED / DEVICE_OFFLINE / VERSION_MISMATCH)
     // 关熔断,把 UI 让给对应的可操作错误态(review P1:否则设备被永远探测)。
-    settleDeviceSend(deviceId, slot, classifyLinkOpenFailure(err));
+    if (slot) settleDeviceSend(deviceId, slot, classifyLinkOpenFailure(err));
     throw err;
   }
 }
