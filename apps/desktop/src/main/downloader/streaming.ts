@@ -33,17 +33,20 @@ export async function executeStreaming(ctx: TransportContext): Promise<Transport
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let file: fs.FileHandle | undefined;
   try {
+    if (controller.signal.aborted) throw new DownloadError('ABORTED', 'Download cancelled');
     try {
       const stat = await fs.stat(opts.targetPath);
       if (
         (opts.expectedSize === undefined || stat.size === opts.expectedSize) &&
-        (await computeHash(opts.targetPath)) === opts.sha256
+        (await computeHash(opts.targetPath, controller.signal)) === opts.sha256
       ) {
+        if (controller.signal.aborted) throw new DownloadError('ABORTED', 'Download cancelled');
         return { size: stat.size, sha256: opts.sha256 };
       }
     } catch {
       /* no verified cache */
     }
+    if (controller.signal.aborted) throw new DownloadError('ABORTED', 'Download cancelled');
     await fs.rm(opts.targetPath, { force: true });
     await fs.mkdir(path.dirname(opts.targetPath), { recursive: true });
     const offset = decideResumeOffset(opts.targetPath, opts.url, opts.expectedSize, opts.sha256);

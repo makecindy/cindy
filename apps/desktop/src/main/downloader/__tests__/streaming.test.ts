@@ -278,3 +278,33 @@ it('does not pull another chunk while disk write is pending', async () =>
     }
     await expect(work).resolves.toMatchObject({ size: 6 });
   }));
+
+it('cancels during a cached file hash without deleting it or starting network', async () =>
+  fixture(async (_, opts) => {
+    const nodeFs = await import('node:fs');
+    const { PassThrough, addAbortSignal } = await import('node:stream');
+    await fs.writeFile(opts.targetPath, 'abcdef');
+    const abort = new AbortController();
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const stream = new PassThrough();
+    vi.spyOn(nodeFs.default, 'createReadStream').mockImplementation(((
+      _path: unknown,
+      options: { signal: AbortSignal },
+    ) => {
+      addAbortSignal(options.signal, stream);
+      entered();
+      return stream;
+    }) as any);
+    mocks.fetch.mockReset();
+    const result = execute({ ...opts, signal: abort.signal });
+    const rejected = expect(result).rejects.toMatchObject({ code: 'ABORTED' });
+    await ready;
+    abort.abort();
+    await rejected;
+    expect(stream.destroyed).toBe(true);
+    expect(await fs.readFile(opts.targetPath, 'utf8')).toBe('abcdef');
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  }));

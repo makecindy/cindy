@@ -15,10 +15,10 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
-export function computeHash(filePath: string): Promise<string> {
+export function computeHash(filePath: string, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
-    const stream = fs.createReadStream(filePath);
+    const stream = fs.createReadStream(filePath, { signal });
     stream.on('data', (chunk: string | Buffer) => {
       hash.update(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
     });

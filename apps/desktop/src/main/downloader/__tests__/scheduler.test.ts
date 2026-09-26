@@ -81,3 +81,31 @@ describe('downloader scheduler queued cancellation', () => {
     await expect(first).resolves.toMatchObject({ sha256: HASH_A });
   });
 });
+
+it('cancels the scheduler cache hash without entering transport or retry', async () => {
+  const abort = new AbortController();
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  mocks.computeHash.mockImplementation(
+    (_path, signal: AbortSignal) =>
+      new Promise((_resolve, reject) => {
+        expect(signal).toBe(abort.signal);
+        signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+        entered();
+      }),
+  );
+  mocks.withRetry.mockClear();
+  mocks.executeOnce.mockClear();
+  const scheduler = new Scheduler({ maxConcurrent: 1 });
+  const result = scheduler.enqueue(
+    options('https://example.invalid/cache', __filename, HASH_A, abort.signal),
+  );
+  const rejected = expect(result).rejects.toMatchObject({ code: 'ABORTED' });
+  await ready;
+  abort.abort();
+  await rejected;
+  expect(mocks.withRetry).not.toHaveBeenCalled();
+  expect(mocks.executeOnce).not.toHaveBeenCalled();
+});
