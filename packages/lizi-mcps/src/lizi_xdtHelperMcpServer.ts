@@ -39,6 +39,7 @@ import { jsonObjectArg } from './json-object-arg.js';
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
 import { registerCreateProjectTool, type CreateProjectCallback } from './xdt-helper/create_project.js';
 import { registerMoveSessionTool, type MoveSessionCallback } from './xdt-helper/move_session.js';
+import { registerPinSessionsTool, registerUnpinSessionsTool, type PinSessionsDeps } from './xdt-helper/pin_sessions.js';
 import { registerProjectManagementTools, type ProjectManagementCallbacks } from './xdt-helper/project_management.js';
 import {
   registerGetCapabilitiesTool,
@@ -733,6 +734,11 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  /**
+   * 批量置顶 / 取消置顶 session 回调。host 注入后, control 类工具 pin_sessions /
+   * unpin_sessions 会被注册。host 走 sessions:update 业务体写 pinnedAt。
+   */
+  setSessionsPinned?: PinSessionsDeps['setSessionsPinned'];
 }
 
 /**
@@ -824,6 +830,14 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.setSessionsPinned) {
+    const pinDeps = {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      setSessionsPinned: deps.setSessionsPinned,
+    };
+    registerPinSessionsTool(registry, pinDeps);
+    registerUnpinSessionsTool(registry, pinDeps);
   }
 
   // History 类工具: 仅 host 注入了 history 回调时注册。
