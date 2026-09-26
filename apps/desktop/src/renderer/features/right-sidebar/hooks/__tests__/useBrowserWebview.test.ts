@@ -20,6 +20,7 @@ interface MockWebview {
   canGoBack: ReturnType<typeof vi.fn>;
   canGoForward: ReturnType<typeof vi.fn>;
   reload: ReturnType<typeof vi.fn>;
+  reloadIgnoringCache: ReturnType<typeof vi.fn>;
   goBack: ReturnType<typeof vi.fn>;
   goForward: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
@@ -117,6 +118,7 @@ function makeMockWebview(initialUrl: string): MockWebview {
     canGoBack: vi.fn(() => false),
     canGoForward: vi.fn(() => false),
     reload: vi.fn(),
+    reloadIgnoringCache: vi.fn(),
     goBack: vi.fn(),
     goForward: vi.fn(),
     stop: vi.fn(),
@@ -321,23 +323,25 @@ describe('useBrowserWebview', () => {
     expect(mockWebview.loadURL).toHaveBeenCalledTimes(BROWSER_NAVIGATION_FUSE_LIMIT + 1);
   });
 
-  it('shows loading immediately on reload and resets after stop-loading', () => {
+  it.each([false, true])('shows loading immediately on reload (ignoreCache=%s) and resets after stop-loading', (ignoreCache) => {
     let result: UseBrowserWebviewResult | null = null;
     render(createElement(HookProbe, {
       visible: true,
       onResult: (next) => { result = next; },
     }));
 
-    act(() => result!.reload());
-    expect(mockWebview.reload).toHaveBeenCalledOnce();
+    act(() => result!.reload({ ignoreCache }));
+    expect(mockWebview.reload).toHaveBeenCalledTimes(ignoreCache ? 0 : 1);
+    expect(mockWebview.reloadIgnoringCache).toHaveBeenCalledTimes(ignoreCache ? 1 : 0);
     expect(result!.isLoading).toBe(true);
 
     act(() => mockWebview.dispatch('did-stop-loading'));
     expect(result!.isLoading).toBe(false);
   });
 
-  it('rolls back optimistic loading when reload throws', () => {
-    mockWebview.reload.mockImplementationOnce(() => {
+  it.each([false, true])('rolls back loading when reload (ignoreCache=%s) throws', (ignoreCache) => {
+    const method = ignoreCache ? mockWebview.reloadIgnoringCache : mockWebview.reload;
+    method.mockImplementationOnce(() => {
       throw new Error('detached');
     });
     let result: UseBrowserWebviewResult | null = null;
@@ -346,7 +350,7 @@ describe('useBrowserWebview', () => {
       onResult: (next) => { result = next; },
     }));
 
-    act(() => result!.reload());
+    act(() => result!.reload({ ignoreCache }));
     expect(result!.isLoading).toBe(false);
   });
 

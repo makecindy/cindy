@@ -123,7 +123,12 @@ export function useNativePopupSurface(
       if (!surfaceId) return;
       void window.electronAPI.rsbNativePopup
         .command({ ...input, surfaceId })
-        .catch((err) => log.warn('native popup command failed', { surfaceId, err }));
+        .catch((err) => {
+          if (input.command === 'reload') {
+            setSnapshot((current) => ({ ...current, isLoading: false }));
+          }
+          log.warn('native popup command failed', { surfaceId, err });
+        });
     },
     [surfaceId],
   );
@@ -135,9 +140,9 @@ export function useNativePopupSurface(
     },
     [command],
   );
-  const reload = useCallback(() => {
+  const reload = useCallback((options?: { ignoreCache?: boolean }) => {
     setSnapshot((current) => ({ ...current, isLoading: true, crash: null }));
-    command({ command: 'reload' });
+    command(options?.ignoreCache ? { command: 'reload', ignoreCache: true } : { command: 'reload' });
   }, [command]);
   const goBack = useCallback(() => command({ command: 'go-back' }), [command]);
   const goForward = useCallback(() => command({ command: 'go-forward' }), [command]);
