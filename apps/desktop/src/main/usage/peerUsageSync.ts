@@ -238,11 +238,14 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
     if (userId !== loadedUserId) resetForUser(userId);
     if (!userId) return null;
     if (!loadPromise) {
+      // I4 账号代次同样约束磁盘缓存:读缓存期间账号变了(哪怕还没有调用触发 reset),
+      // 旧账号的行不得装进内存。
+      const loadEpoch = epoch;
       loadPromise = deps
         .readCache(userId)
         .catch(() => null)
         .then((raw) => {
-          if (loadedUserId !== userId) return;
+          if (loadEpoch !== epoch || loadedUserId !== userId || deps.userId() !== userId) return;
           const cached = parseCacheFile(raw);
           peers = { ...cached, ...peers };
           if (Object.keys(cached).length > 0) bumpRows();
@@ -373,6 +376,11 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
   const snapshot = async (): Promise<PeerUsageSnapshot> => {
     await ensureLoaded();
     const selfDeviceId = deps.selfDeviceId();
+    // 加载期间账号变了:按当前账号重置并返回空快照,不带出旧账号的设备或行。
+    if (deps.userId() !== loadedUserId) {
+      resetForUser(deps.userId());
+      return { version, selfDeviceId, devices: [], peerRows: new Map() };
+    }
     const devices: UsageDeviceSummary[] = [];
     const listed = new Set<string>();
     for (const device of directory ?? []) {

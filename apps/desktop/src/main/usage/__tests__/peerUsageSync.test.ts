@@ -403,4 +403,36 @@ describe('createPeerUsageSync', () => {
     expect(snapshot.devices[0]).toMatchObject({ deviceId: 'laptop', status: 'error' });
     expect(snapshot.peerRows.has('laptop')).toBe(true);
   });
+
+  it('drops a disk cache that finishes loading after the account changed', async () => {
+    let releaseCache!: (raw: string) => void;
+    const cacheGate = new Promise<string>((resolve) => {
+      releaseCache = resolve;
+    });
+    const h = harness();
+    const oldCache = JSON.stringify({
+      version: 2,
+      peers: {
+        laptop: {
+          name: 'Old account laptop',
+          platform: 'darwin',
+          syncedAt: 1,
+          todayKey: '2026-09-26',
+          rows: rowsFor(['2026-09-26']),
+        },
+      },
+    });
+    const sync = createPeerUsageSync({
+      ...h.deps,
+      readCache: (id) => (id === 'user-a' ? cacheGate : Promise.resolve(null)),
+    });
+    const pending = sync.snapshot();
+    // 读缓存期间切换账号,且在缓存返回前没有其它调用触发 reset。
+    h.setUser('user-b');
+    releaseCache(oldCache);
+    const snapshot = await pending;
+    expect(snapshot.peerRows.size).toBe(0);
+    expect(snapshot.devices).toEqual([]);
+    expect((await sync.snapshot()).peerRows.size).toBe(0);
+  });
 });
