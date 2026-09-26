@@ -92,6 +92,9 @@ it('cancel reaches only the matching active request', async () => {
 
 it('hands opaque receipts only to the owning Node call and preserves legacy params', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'plugin-receipt-test-')));
+  const alias = root + '-alias';
+  const outside = root + '-outside';
+  await fs.symlink(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
   let scope = 'a';
   const ghost = {
     enabled: true,
@@ -99,7 +102,7 @@ it('hands opaque receipts only to the owning Node call and preserves legacy para
     manifest: { node: {}, network: { hosts: ['github.com'] } },
   } as unknown as InstalledGhost;
   const slot = new PluginDownloadSlot({
-    root: (id) => path.join(root, id),
+    root: (id) => path.join(alias, id),
     scope: () => scope,
     getGhost: () => ghost,
     send: () => {},
@@ -138,14 +141,20 @@ it('hands opaque receipts only to the owning Node call and preserves legacy para
       downloadTokens: { archive: result.token },
       params: {},
     };
-    expect(await slot.withNodeDownloads('other', payload, run)).toMatchObject({ ok: false });
+    expect(await slot.withNodeDownloads('other', payload, run)).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_REQUEST',
+    });
     expect(await slot.withNodeDownloads('p', payload, run)).toEqual({ ok: true });
     expect(called).toBe(1);
     expect(
       await slot.withNodeDownloads('p', { ...payload, params: { downloads: {} } }, run),
     ).toMatchObject({ ok: false });
     scope = 'b';
-    expect(await slot.withNodeDownloads('p', payload, run)).toMatchObject({ ok: false });
+    expect(await slot.withNodeDownloads('p', payload, run)).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_REQUEST',
+    });
     scope = 'a';
     ghost.approval = { ...ghost.approval, revision: 'b' } as InstalledGhost['approval'];
     expect(await slot.withNodeDownloads('p', payload, run)).toMatchObject({ ok: false });
@@ -153,7 +162,17 @@ it('hands opaque receipts only to the owning Node call and preserves legacy para
     expect(await slot.withNodeDownloads('p', legacy, async (p) => p)).toBe(legacy);
     await slot.removePlugin('p');
     await expect(fs.stat(path.join(root, 'p'))).rejects.toMatchObject({ code: 'ENOENT' });
+    scope = 'a';
+    await fs.mkdir(outside);
+    await fs.symlink(
+      outside,
+      path.join(root, 'p'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    expect(await slot.handle('p', req)).toMatchObject({ ok: false });
   } finally {
+    await fs.unlink(alias);
     await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
   }
 });

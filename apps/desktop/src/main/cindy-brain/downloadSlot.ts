@@ -31,7 +31,12 @@ export class PluginDownloadSlot {
     });
     for (const [, item] of work) item.controller.abort();
     await Promise.allSettled(work.map(([, item]) => item.promise));
-    await this.cache.removePlugin(root);
+    try {
+      const parent = await fs.realpath(path.dirname(root));
+      await this.cache.removePlugin(path.join(parent, path.basename(root)));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
   async withNodeDownloads(
     id: string,
@@ -85,7 +90,11 @@ export class PluginDownloadSlot {
         params: { ...((payload.params as object) ?? {}), downloads },
       });
     } catch {
-      return { ok: false, message: '下载凭据已失效，请重新获取文件后重试' };
+      return {
+        ok: false,
+        errorCode: 'INVALID_REQUEST',
+        message: '下载凭据已失效，请重新获取文件后重试',
+      };
     } finally {
       for (const release of releases) release();
     }
@@ -163,7 +172,14 @@ export class PluginDownloadSlot {
       };
       const promise = (async () => {
         // Distinct operations cannot share the first caller's signal or progress callback.
-        const root = this.deps.root(id),
+        const suppliedRoot = this.deps.root(id);
+        // Host-selected ancestors may use aliases (e.g. /var on macOS). Resolve
+        // only that trusted parent; plugin/artifact entries still reject symlinks.
+        await fs.mkdir(path.dirname(suppliedRoot), { recursive: true });
+        const root = path.join(
+            await fs.realpath(path.dirname(suppliedRoot)),
+            path.basename(suppliedRoot),
+          ),
           dir = path.join(
             root,
             createHash('sha256')
