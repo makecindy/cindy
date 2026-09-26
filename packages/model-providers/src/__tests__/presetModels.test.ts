@@ -55,7 +55,9 @@ describe("预设推荐模型单一清单", () => {
         { id: "c", name: "C" },
       ],
     });
-    expect((expanded.runtimes.pi as { models: unknown[] }).models).toEqual([
+    expect(
+      (expanded.runtimes.pi as unknown as { models: unknown[] }).models,
+    ).toEqual([
       { id: "a", name: "A", contextWindow: 1000 },
       { id: "c", name: "C", reasoning: true, reasoningEfforts: ["high"] },
     ]);
@@ -88,8 +90,11 @@ describe("预设推荐模型单一清单", () => {
     for (const malformed of [
       { engines: "codex" },
       { engines: [1] },
+      { engines: [] },
+      { engines: ["codxe"] },
       { engineOverrides: [] },
       { engineOverrides: { pi: "x" } },
+      { engineOverrides: { codxe: { supportsImageInput: false } } },
     ]) {
       const preset = {
         ...base,

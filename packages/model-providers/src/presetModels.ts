@@ -7,24 +7,39 @@
  * 形状一致。顶层没有 `models` 的旧格式原样返回。纯函数，只处理形状，校验仍由
  * `sanitizePresets` 负责。
  */
+import type { AgentKind } from "./types.js";
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+const AGENT_KINDS: readonly AgentKind[] = ["claude-code", "codex", "pi"];
+
+function isAgentKind(value: unknown): value is AgentKind {
+  return (
+    typeof value === "string" &&
+    (AGENT_KINDS as readonly string[]).includes(value)
+  );
 }
 
 function hasMalformedEngineFields(model: unknown): boolean {
   if (!isPlainObject(model)) return false;
   const { engines, engineOverrides } = model;
+  // 引擎名拼错（如 "codxe"）同样算畸形：否则模型会从全部引擎消失，或专属覆盖被静默忽略。
   if (
     engines !== undefined &&
     (!Array.isArray(engines) ||
-      !engines.every((agent) => typeof agent === "string"))
+      engines.length === 0 ||
+      !engines.every(isAgentKind))
   ) {
     return true;
   }
   return (
     engineOverrides !== undefined &&
     (!isPlainObject(engineOverrides) ||
-      !Object.values(engineOverrides).every(isPlainObject))
+      !Object.entries(engineOverrides).every(
+        ([agent, override]) => isAgentKind(agent) && isPlainObject(override),
+      ))
   );
 }
 
