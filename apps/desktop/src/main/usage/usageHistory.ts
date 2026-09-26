@@ -1009,8 +1009,21 @@ async function readScopedUsageHistory(opts?: UsageHistoryReadOptions): Promise<U
   };
 }
 
-/** 生产入口 (usage.ts adapter 注入给 IPC handler)。 */
+/**
+ * 生产入口 (usage.ts adapter 注入给 IPC handler)。
+ * 设备目录 / 状态 / 同步时间是展示元数据:在唯一出口按当前快照附上,不参与聚合与缓存
+ * 失效判断 —— 聚合只随用量行变化(见 peerUsageSync 的聚合版本)。
+ */
 export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<UsageHistoryPayload> {
+  const payload = await readAggregatedUsageHistory(opts);
+  const peerSync = normalizeDeviceScope(opts?.device) === 'local' ? null : getPeerUsageSync();
+  if (!peerSync) return payload;
+  return { ...payload, devices: devicesWithSelf(await peerSync.snapshot()) };
+}
+
+async function readAggregatedUsageHistory(
+  opts?: UsageHistoryReadOptions,
+): Promise<UsageHistoryPayload> {
   const key = optsKey(opts);
   const peerSync = normalizeDeviceScope(opts?.device) === 'local' ? null : getPeerUsageSync();
   // 节流的跨设备同步; 同步期间返回 stale, renderer 短轮询直到拿到合并后的结果。

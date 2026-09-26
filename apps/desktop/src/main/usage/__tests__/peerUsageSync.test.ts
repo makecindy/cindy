@@ -316,7 +316,8 @@ describe('createPeerUsageSync', () => {
       syncedAt: 1_000_000,
     });
     expect(snapshot.peerRows.has('laptop')).toBe(true);
-    expect(sync.version()).toBeGreaterThan(before);
+    // 用量行没变:聚合版本不动,读取失败的状态作为展示元数据在读取时附上。
+    expect(sync.version()).toBe(before);
   });
 
   it('starts a fresh sync for a new account instead of waiting on the old one, and drops late old writes', async () => {

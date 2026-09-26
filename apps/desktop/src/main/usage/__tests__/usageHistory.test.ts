@@ -1120,4 +1120,69 @@ describe('multi-device scope', () => {
     await readUsageHistory({ ...opts, forceRefresh: true });
     expect(vi.mocked(getAllSpendDays).mock.calls.length).toBeGreaterThan(readsAfterSettle);
   });
+
+  it('refreshes peer sync time without re-aggregating until peer rows actually change', async () => {
+    let now = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [actual(2)] }]);
+    let peerTokens = 10;
+    configurePeerUsageSync({
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+          },
+        ],
+      }),
+      invoke: async () => ({
+        ok: true,
+        result: await readUsageDeviceRows(
+          {
+            getAllSpendDays: async () => [],
+            getModelUsageSince: async () => [
+              modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: peerTokens }),
+            ],
+            todayKey: () => TODAY,
+          },
+          { sinceDay: null },
+        ),
+      }),
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => now,
+    });
+    const opts = { days: 'all' as const, modelDays: 'all' as const, device: 'all' };
+    const settled = async () => {
+      let last!: Awaited<ReturnType<typeof readUsageHistory>>;
+      await vi.waitFor(async () => {
+        last = await readUsageHistory(opts);
+        expect(last.stale).toBe(false);
+      });
+      return last;
+    };
+    const first = await settled();
+    expect(first.totals.todayTokens).toBe(10);
+    const aggregations = vi.mocked(getAllSpendDays).mock.calls.length;
+    const firstSyncedAt = first.devices?.find((d) => d.deviceId === 'device-b')?.syncedAt;
+
+    // 60 秒后的定时重读:对方成功同步但行没变 —— 同步时间更新,不重聚合全量历史。
+    now += 61_000;
+    await readUsageHistory(opts);
+    const second = await settled();
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBe(aggregations);
+    expect(second.devices?.find((d) => d.deviceId === 'device-b')?.syncedAt).toBeGreaterThan(
+      firstSyncedAt ?? 0,
+    );
+
+    // 对方有新用量:行变化 → 重聚合一次。
+    peerTokens = 25;
+    now += 61_000;
+    await readUsageHistory(opts);
+    const third = await settled();
+    expect(third.totals.todayTokens).toBe(25);
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBeGreaterThan(aggregations);
+  });
 });

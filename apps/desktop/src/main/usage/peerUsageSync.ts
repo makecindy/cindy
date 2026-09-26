@@ -91,7 +91,7 @@ export interface PeerUsageSyncDeps {
 }
 
 export interface PeerUsageSnapshot {
-  /** 每次缓存行或设备状态变化都 +1,用量历史据此判断聚合结果是否过期。 */
+  /** 聚合版本:参与聚合的用量行变化时 +1(设备状态 / 目录 / 同步时间不影响)。 */
   version: number;
   selfDeviceId: string | null;
   devices: UsageDeviceSummary[];
@@ -199,39 +199,15 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
   let lastSyncStartedAt = 0;
 
   /**
-   * 版本只在快照内容(设备目录、状态、缓存行)真的变化时才前进 —— 用量历史据版本判断
-   * 是否需要重新聚合全量历史;没有其它电脑、或同步后什么都没变时,不能让它空转重算。
+   * 聚合版本:只在参与聚合的用量行真的变化时前进(唯一写入点是下面几处对 peers 的修改)。
+   * 设备目录、状态、同步时间是展示元数据,由用量历史在每次读取时从快照附上,不影响版本 ——
+   * 否则每分钟一次的成功同步都会让全量历史重新聚合。
    */
-  let lastSignature = '';
-  const signature = (): string =>
-    JSON.stringify([
-      (directory ?? []).map((d) => [
-        d.deviceId,
-        d.name,
-        d.platform,
-        d.isSelf,
-        d.online,
-        d.remoteControlEnabled,
-        d.controlEnabled,
-      ]),
-      [...statuses.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
-      Object.entries(peers)
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-        .map(([id, p]) => [
-          id,
-          p.name,
-          p.syncedAt,
-          p.todayKey,
-          p.rows.spendDays.length,
-          p.rows.modelRows.length,
-        ]),
-    ]);
-  const bump = (force = false): void => {
-    const next = signature();
-    if (!force && next === lastSignature) return;
-    lastSignature = next;
+  const bumpRows = (): void => {
     version += 1;
   };
+  const sameRows = (a: UsageDeviceRows | undefined, b: UsageDeviceRows): boolean =>
+    a !== undefined && JSON.stringify(a) === JSON.stringify(b);
 
   const resetForUser = (userId: string | null): void => {
     epoch += 1;
@@ -243,7 +219,7 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
     directory = null;
     statuses.clear();
     lastSyncStartedAt = 0;
-    bump(true);
+    bumpRows();
   };
 
   const ensureLoaded = async (): Promise<string | null> => {
@@ -256,8 +232,9 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
         .catch(() => null)
         .then((raw) => {
           if (loadedUserId !== userId) return;
-          peers = { ...parseCacheFile(raw), ...peers };
-          bump();
+          const cached = parseCacheFile(raw);
+          peers = { ...cached, ...peers };
+          if (Object.keys(cached).length > 0) bumpRows();
         });
     }
     await loadPromise;
@@ -309,13 +286,16 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
       if (!isCurrent()) return;
       // 对方回的区间与请求不一致(旧实现忽略参数等)时按全量处理,不能拼出重复行。
       const effectiveSince = decoded.sinceDay === sinceDay ? sinceDay : null;
+      const rows = mergeIncrementalRows(cached?.rows ?? null, effectiveSince, decoded.rows);
+      const rowsChanged = !sameRows(cached?.rows, rows);
       peers[device.deviceId] = {
         name: device.name,
         platform: device.platform,
         syncedAt: deps.now(),
         todayKey: decoded.todayKey,
-        rows: mergeIncrementalRows(cached?.rows ?? null, effectiveSince, decoded.rows),
+        rows,
       };
+      if (rowsChanged) bumpRows();
       setStatus('ok');
     } catch (error) {
       setStatus(errorStatus(errorCodeOf(error)));
@@ -334,7 +314,6 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
     for (const deviceId of ids) {
       if (deviceId !== selfDeviceId) statuses.set(deviceId, 'error');
     }
-    bump();
   };
 
   const runSync = async (): Promise<void> => {
@@ -359,7 +338,9 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
     // 已从账号移除的设备不再出现在选择器里,缓存一并清掉。
     const known = new Set(devices.map((device) => device.deviceId));
     for (const deviceId of Object.keys(peers)) {
-      if (!known.has(deviceId)) delete peers[deviceId];
+      if (known.has(deviceId)) continue;
+      delete peers[deviceId];
+      bumpRows();
     }
     const targets = devices.filter(
       (device) => !device.isSelf && !MOBILE_PLATFORMS.has(device.platform ?? ''),
@@ -369,14 +350,12 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
         statuses.set(device.deviceId, 'syncing');
       }
     }
-    bump();
     for (let offset = 0; offset < targets.length; offset += PEER_FANOUT) {
       await Promise.all(
         targets.slice(offset, offset + PEER_FANOUT).map((device) => syncPeer(device, isCurrent)),
       );
     }
     if (!isCurrent()) return;
-    bump();
     await persist(userId, isCurrent);
   };
 
