@@ -10,12 +10,14 @@ const mocks = vi.hoisted(() => ({
   rename: vi.fn(),
   killTree: vi.fn(),
   readdir: vi.fn(),
+  readFile: vi.fn(),
 }));
 vi.mock('../../scheduler-host/proc-util.js', () => ({ killProcessTree: mocks.killTree }));
 vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof import('node:fs/promises')>()),
   rename: mocks.rename,
   readdir: mocks.readdir,
+  readFile: mocks.readFile,
 }));
 vi.mock('../../reviewer/reviewOwnerLiveness.js', () => ({
   startReviewOwnerLiveness: async () => ({
@@ -54,6 +56,7 @@ beforeEach(async () => {
   const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   mocks.rename.mockImplementation(fs.rename);
   mocks.readdir.mockImplementation(fs.readdir);
+  mocks.readFile.mockImplementation(fs.readFile);
   const proc = await vi.importActual<typeof import('../../scheduler-host/proc-util.js')>(
     '../../scheduler-host/proc-util.js',
   );
@@ -72,6 +75,85 @@ afterEach(async () => {
 });
 
 describe('managed llama.cpp model lifecycle', () => {
+  it.each(['EACCES', 'EPERM', 'EIO'])(
+    'rejects incomplete inventory on %s and recovers without losing models',
+    async (code) => {
+      const service = createLlamaCppService(root);
+      expect((await service.snapshot()).models).toEqual([]);
+      await service.download({ repo: 'owner/repo', file: 'model.gguf' });
+      const expected = (await service.snapshot()).models;
+      const error = Object.assign(new Error('scan failed'), { code });
+      mocks.readdir.mockRejectedValueOnce(error);
+      await expect(service.snapshot()).rejects.toBe(error);
+      expect((await service.snapshot()).models).toEqual(expected);
+      const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      mocks.readFile.mockImplementation(async (file, ...args) => {
+        if (String(file).endsWith('model.json')) throw error;
+        return fs.readFile(file, ...args);
+      });
+      await expect(service.snapshot()).rejects.toBe(error);
+      mocks.readFile.mockImplementation(fs.readFile);
+      expect((await service.snapshot()).models).toEqual(expected);
+    },
+  );
+  it.each(['darwin', 'win32'])(
+    'filters all casing variants from the spawned environment on %s',
+    async (platform) => {
+      const runtime = path.join(root, 'llamacpp-runtime');
+      await mkdir(runtime);
+      await writeFile(path.join(runtime, 'server'), 'stub');
+      await writeFile(
+        path.join(runtime, 'current.json'),
+        JSON.stringify({ binary: 'server', version: 'test' }),
+      );
+      const forbidden = [
+        'HF_TOKEN',
+        'hf_token',
+        'Hf_Token',
+        'LLAMA_ARG_CTX_SIZE',
+        'llama_arg_ctx_size',
+        'Llama_Cache',
+        'ENV',
+        'env',
+        'BASH_ENV',
+        'Bash_Env',
+      ];
+      vi.stubGlobal(
+        'process',
+        new Proxy(process, {
+          get(target, key) {
+            if (key === 'platform') return platform;
+            if (key === 'env')
+              return {
+                ...Object.fromEntries(forbidden.map((name) => [name, 'test-only'])),
+                KEEP_TEST: 'retained',
+              };
+            return Reflect.get(target, key);
+          },
+        }),
+      );
+      const child = Object.assign(new EventEmitter(), {
+        kill: vi.fn(() => {
+          child.emit('exit');
+          return true;
+        }),
+      });
+      mocks.spawn.mockReturnValue(child);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => Response.json({ status: 'ok' })),
+      );
+      const service = createLlamaCppService(root);
+      try {
+        await service.start();
+        const env = mocks.spawn.mock.calls[0]![2].env;
+        for (const key of forbidden) expect(env).not.toHaveProperty(key);
+        expect(env).toEqual({ KEEP_TEST: 'retained', LLAMA_CACHE: path.join(runtime, 'cache') });
+      } finally {
+        await service.dispose();
+      }
+    },
+  );
   it.each([false, true])(
     'keeps removal exclusive through callback settlement (failure=%s)',
     async (fail) => {

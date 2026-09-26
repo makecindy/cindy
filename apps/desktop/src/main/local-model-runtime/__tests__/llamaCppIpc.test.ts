@@ -56,6 +56,22 @@ function harness() {
 }
 beforeEach(() => vi.clearAllMocks());
 describe('managed llama.cpp IPC boundary', () => {
+  it.each([
+    MAKER_INVOKE.LLAMACPP_STATUS,
+    MAKER_INVOKE.LLAMACPP_DOWNLOAD,
+    MAKER_INVOKE.LLAMACPP_START,
+  ])('never publishes an inventory when scanning fails through %s', async (channel) => {
+    const h = harness();
+    h.service.snapshot.mockRejectedValueOnce(
+      Object.assign(new Error('scan failed'), { code: 'EACCES' }),
+    );
+    await expect(h.invoke(channel, { repo: 'owner/repo', file: 'a.gguf' })).rejects.toThrow(
+      'LLAMACPP_OPERATION_FAILED',
+    );
+    expect(mocks.ensure).not.toHaveBeenCalled();
+    expect(h.deps.refreshCatalog).not.toHaveBeenCalled();
+    expect(h.deps.broadcastChanged).not.toHaveBeenCalled();
+  });
   it('reconciles installed files for the current owner without repeated catalog broadcasts', async () => {
     const h = harness();
     const models = [{ id: 'model', repo: 'owner/repo', file: 'a.gguf', size: 10 }];

@@ -104,8 +104,9 @@ export function createLlamaCppService(
     let dirs;
     try {
       dirs = await readdir(modelsRoot, { withFileTypes: true });
-    } catch {
-      return [];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
     }
     const result: LlamaCppModel[] = [];
     for (const dir of dirs) {
@@ -116,8 +117,11 @@ export function createLlamaCppService(
         ) as LlamaCppModel;
         if (record.id === dir.name && managedModelId(record.repo, record.file) === dir.name)
           result.push(record);
-      } catch {
-        /* incomplete/corrupt folders are not models */
+      } catch (error) {
+        // Missing/corrupt records are not models; I/O failures are not evidence
+        // of removal and must never publish a partial authoritative inventory.
+        if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== 'ENOENT')
+          throw error;
       }
     }
     return result;
@@ -438,10 +442,13 @@ export function createLlamaCppService(
           });
           signal.throwIfAborted();
           const env = Object.fromEntries(
-            Object.entries(process.env).filter(
-              ([key]) =>
-                !key.startsWith('LLAMA_') && !['HF_TOKEN', 'ENV', 'BASH_ENV'].includes(key),
-            ),
+            Object.entries(process.env).filter(([key]) => {
+              const normalized = key.toUpperCase();
+              return (
+                !normalized.startsWith('LLAMA_') &&
+                !['HF_TOKEN', 'ENV', 'BASH_ENV'].includes(normalized)
+              );
+            }),
           );
           const command = llamaCppProcessCommand(runtime.binary, [
             '--host',
