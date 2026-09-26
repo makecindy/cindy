@@ -969,6 +969,19 @@ describe('background database admission covers the complete remote list lifecycl
     },
   );
 
+  it('runs cross-device usage row reads under background admission', async () => {
+    const admissions: string[] = [];
+    registry.register('maker:usage:device-rows', () => {
+      admissions.push(currentDbRpcAdmissionClass());
+      return { format: 'usage-device-rows-v1', oversize: true };
+    });
+    expect(
+      await runInvoke('ctrl-1', { channel: 'maker:usage:device-rows', args: [{ sinceDay: '2026-09-25' }] }),
+    ).toMatchObject({ ok: true });
+    expect(admissions).toEqual(['background']);
+    expect(currentDbRpcAdmissionClass()).toBe('interactive');
+  });
+
   it('keeps sending interactive while an unrelated background list is awaiting permission checks', async () => {
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => { finish = resolve; });

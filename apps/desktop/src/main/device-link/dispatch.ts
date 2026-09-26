@@ -696,6 +696,8 @@ const BACKGROUND_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'maker:provider:list',
   'maker:git-safety:get',
   'maker:schedule:list-sidebar-index-runs',
+  // 用量历史跨设备合并:其它电脑周期性增量拉取本机全量用量行,属后台同步。
+  'maker:usage:device-rows',
 ]);
 /** Include pre/post authorization and cached delivery, not only the IPC handler. */
 function withRemoteDbAdmission<T>(channel: string | undefined, fn: () => T): T {
