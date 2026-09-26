@@ -395,7 +395,7 @@ export function useRemoteSessionSync(
       {
         canRead,
         subscribe: (d, topics) => {
-          if (!recovery.isReady()) { recovery.request(); return; }
+          if (!recovery.isReady()) { recovery.request(canRead()); return; }
           return window.electronAPI.deviceLink
             .subscribe(d, topics)
             .catch((err) => log.warn('device-link subscribe(session) failed', err));
@@ -404,7 +404,7 @@ export function useRemoteSessionSync(
           return window.electronAPI.deviceLink.unsubscribe(d, topics).catch(() => {});
         },
         reconcile: (s) => {
-          if (!recovery.isReady()) { recovery.request(); return; }
+          if (!recovery.isReady()) { recovery.request(canRead()); return; }
           // 挂起交互(permission/ask/plan)重建已并入 reconcileRemoteMessages 的同一代
           // (远程回执的新鲜度语义需要两者同代落地),这里不再单独调用。
           void makerChatStore.reconcileRemoteMessages(s);
@@ -451,7 +451,7 @@ export function useRemoteSessionSync(
       recovery.invalidate(relayAvailable !== false && peerAvailable !== false && peerResponsive !== false);
       // subscribe already waits for the existing per-peer openLink. Only its new
       // ACK followed by an applied snapshot can restore this view's readiness.
-      recovery.request();
+      recovery.request(canRead());
     });
     const offStatus = window.electronAPI.deviceLink.onStatusChanged((p) => {
       const online = p.status === 'online';
