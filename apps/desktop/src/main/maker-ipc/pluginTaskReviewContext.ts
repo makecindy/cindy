@@ -5,7 +5,7 @@ import {
   type AutoReviewUserIntent,
 } from '@cindy/maker-core';
 import type { PluginTeamPlan, PluginTaskRoute } from '../../shared/pluginTasks.js';
-import type { AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
+import { readAutoReviewUserText, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
 
 export interface PluginReviewSnapshot {
   pluginId: string;
@@ -62,12 +62,13 @@ export function pluginReviewUserIntent(snapshot: PluginReviewSnapshot): AutoRevi
         typeof receipt === 'string' &&
         ['turn', 'steer'].includes(String(m.agentMeta?.delivery))
       ) {
-        if (receipt) intent = appendAutoReviewUserIntent(intent, receipt);
+        if (readAutoReviewUserText(m.content) === null) intent = '';
+        intent = appendAutoReviewUserIntent(intent, receipt);
       } else if (!(
         receipt &&
         typeof receipt === 'object' &&
         'kind' in receipt &&
-        receipt.kind === 'scheduled-continuation'
+        (receipt.kind === 'scheduled-continuation' || receipt.kind === 'delegated-continuation')
       )) {
         omitted = true;
       }

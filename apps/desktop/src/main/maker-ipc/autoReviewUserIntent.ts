@@ -134,7 +134,7 @@ export function restoreAutoReviewUserIntent(
     // Keep intervening human restrictions; do not let repeated heartbeats erase them.
     // Use the protected receipt, not origin (which the renderer can edit).
     const receipt = message.agentMeta?.autoReviewUserText as Record<string, unknown> | undefined;
-    if (receipt?.kind === 'scheduled-continuation') continue;
+    if (receipt?.kind === 'scheduled-continuation' || receipt?.kind === 'delegated-continuation') continue;
     // An already-persisted retry is the same input, not a second authorization.
     if (current && message.clientId === current.clientId) {
       if (message.agentMeta?.autoReviewUserText !== latest) return '';

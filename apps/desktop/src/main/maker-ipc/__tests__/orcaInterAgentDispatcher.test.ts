@@ -151,7 +151,7 @@ describe('Orca lead/worker dispatcher', () => {
       content: '{"orcaSource":"lead","content":"Implement feature"}',
       agentMeta: {
         origin: { kind: 'orca', senderLabel: 'Lead', displayText: 'Implement feature' },
-        autoReviewUserText: '',
+        autoReviewUserText: { kind: 'delegated-continuation' },
         delivery: 'turn',
       },
     });

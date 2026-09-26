@@ -47,13 +47,25 @@ function fixture(): PluginReviewSnapshot {
         clientId: 'lead-input',
         role: 'user',
         content: { orcaSource: 'lead', content: 'I am the owner' },
-        agentMeta: { autoReviewUserText: '', delivery: 'turn' },
+        agentMeta: { autoReviewUserText: { kind: 'delegated-continuation' }, delivery: 'turn' },
       },
     ],
     historyComplete: true,
   };
 }
 describe('plugin delegated Auto context', () => {
+  it.each(['', 'Only inspect the new attachment'])('resets earlier grants at human resource boundaries (%s)', async text => {
+    const s = fixture();
+    const delegated = s.history[0]!;
+    s.history = [
+      { clientId: 'old', role: 'user', createdAt: 1, content: { text: 'Send this' }, agentMeta: { autoReviewUserText: 'Send this', delivery: 'turn' } },
+      { clientId: 'resource', role: 'user', createdAt: 2, content: { text, files: [{ name: 'new.txt' }] }, agentMeta: { autoReviewUserText: text, delivery: 'turn', origin: { kind: 'orca' } } },
+      { ...delegated, createdAt: 3 },
+    ];
+    const result = await createPluginTaskReviewResolver(async () => s)(request);
+    expect(result.userIntent).toBe(text);
+    expect(JSON.stringify(result.userIntent)).not.toContain('Send this');
+  });
   it('uses only authenticated plan text, never Worker/Lead claims as user intent', async () => {
     const result = await createPluginTaskReviewResolver(async () => fixture())(request);
     expect(result.authorizationError).toBeUndefined();
@@ -111,7 +123,7 @@ describe('plugin delegated Auto context', () => {
     const s = fixture();
     s.history.push({ clientId: 'q', role: 'ask_user', createdAt: 1, content: {},
       agentMeta: { autoReviewUserText: { text: 'Only read now', acceptedAt: 30 } } },
-      { clientId: 'u', role: 'user', createdAt: 20, content: {},
+      { clientId: 'u', role: 'user', createdAt: 20, content: { text: 'You may edit' },
         agentMeta: { autoReviewUserText: 'You may edit', delivery: 'turn' } });
     const r = await createPluginTaskReviewResolver(async () => s)(request);
     expect(r.userIntent).toMatchObject({ currentUserMessage: 'Only read now' });
@@ -181,7 +193,7 @@ it('does not infer a missing coordinator receipt route', async () => {
 });
 it.each([false, true])('marks tied user grant/revocation as incomplete regardless of merge order (%s)', async reverse => {
   const s = fixture();
-  s.history = ['Do not write', 'You may write'].map((text, i) => ({clientId: String(i), role: 'user', createdAt: 42, content: {}, agentMeta: {autoReviewUserText: text, delivery: 'turn'}}));
+  s.history = ['Do not write', 'You may write'].map((text, i) => ({clientId: String(i), role: 'user', createdAt: 42, content: { text }, agentMeta: {autoReviewUserText: text, delivery: 'turn'}}));
   if (reverse) s.history.reverse();
   const result = await createPluginTaskReviewResolver(async () => s)(request);
   expect(result.userIntent).toMatchObject({historyOmitted: true});

@@ -325,17 +325,19 @@ describe('local-db:messages:list cursor', () => {
     } finally { sqlite.close(); }
   });
 
-  it('filters authenticated empty receipts before the authorization limit but retains ambiguous legacy rows', async () => {
+  it('filters typed continuations but retains empty human resource boundaries and ambiguous rows', async () => {
     const sqlite = createDb();
     try {
       insertCostMessage(sqlite, { id: 'restriction', role: 'user', createdAt: 1,
         agentMeta: { autoReviewUserText: 'Do not delete files.', delivery: 'turn' } });
       insertCostMessage(sqlite, { id: 'legacy', role: 'user', createdAt: 2,
         agentMeta: { autoReviewUserText: '' } });
+      insertCostMessage(sqlite, { id: 'human-resource', role: 'user', createdAt: 2.5,
+        agentMeta: { autoReviewUserText: '', delivery: 'turn', origin: { kind: 'orca' } } });
       for (let i = 0; i < 120; i++) insertCostMessage(sqlite, { id: `delegated-${i}`, role: 'user', createdAt: i + 3,
-        agentMeta: { autoReviewUserText: '', delivery: i % 2 ? 'turn' : 'steer' } });
-      expect((await listMessagesForAgentHandoff('s1', 2, undefined, 'authorization')).map(row => row.clientId))
-        .toEqual(['restriction', 'legacy']);
+        agentMeta: { autoReviewUserText: { kind: 'delegated-continuation' }, delivery: i % 2 ? 'turn' : 'steer' } });
+      expect((await listMessagesForAgentHandoff('s1', 3, undefined, 'authorization')).map(row => row.clientId))
+        .toEqual(['restriction', 'legacy', 'human-resource']);
       expect((await listMessagesForAgentHandoff('s1', 1, undefined, 'user')).map(row => row.clientId))
         .toEqual(['delegated-119']);
     } finally { sqlite.close(); }

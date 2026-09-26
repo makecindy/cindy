@@ -108,6 +108,11 @@ const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
 
 type QueuedAttachment = NonNullable<AgentInputQueuedMessage['files']>[number];
 
+/** Typed Host continuations carry provenance, never user-authored permission text. */
+function queuedAutoReviewText(item: AgentInputQueuedMessage): string {
+  return typeof item.autoReviewUserText === 'string' ? item.autoReviewUserText : '';
+}
+
 function isMakerImageAttachment(file: Pick<QueuedAttachment, 'category' | 'ext'>): boolean {
   return getAgentInputAttachmentBlockType(file.category, file.ext) === 'image';
 }
@@ -2194,9 +2199,9 @@ export class AgentInputCoordinator {
       );
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
         ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
-        [AUTO_REVIEW_SOURCE_CONTENT]: item.autoReviewUserText ?? '',
+        [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(item),
         ...(readAutoReviewUserText(item.persistedContent) === null
-          ? { [AUTO_REVIEW_USER_INTENT]: item.autoReviewUserText ?? '' } : {}),
+          ? { [AUTO_REVIEW_USER_INTENT]: queuedAutoReviewText(item) } : {}),
         messageUuid,
         userName: item.userName,
         signal: AbortSignal.any([inputBoundarySignal, steerAbort.signal]),
@@ -4549,7 +4554,7 @@ export class AgentInputCoordinator {
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
       const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
         ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
-        [AUTO_REVIEW_SOURCE_CONTENT]: head.autoReviewUserText ?? '',
+        [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(head),
         messageUuid: active.messageUuid,
         userName: head.userName,
         ...(head.toolsDisabled === true ? { toolsDisabled: true } : {}),
