@@ -62,6 +62,7 @@ const transport = vi.hoisted(() => {
     start = vi.fn();
     stop = vi.fn();
     connectNow = vi.fn();
+    restartConnection = vi.fn();
     notifyNetworkChanged = vi.fn();
     getStatus = () => this.status;
     serverCapabilities: string[] = [];
@@ -132,7 +133,7 @@ describe('Provider shared-task relay compatibility', () => {
 
 describe('Provider network recovery priority', () => {
   const wifi = { type: 'WIFI', isConnected: true, isInternetReachable: true };
-  it('coalesces equal hints but expedites transport changes and offline recovery', async () => {
+  it('replaces an online socket on physical route changes and retains probes for equal hints', async () => {
     const client = transport.clients[0];
     await act(async () => {
       networkEvents.network(wifi);
@@ -142,8 +143,62 @@ describe('Provider network recovery priority', () => {
       networkEvents.network(wifi);
     });
     expect(client.notifyNetworkChanged.mock.calls).toEqual([
-      [{ urgent: false }], [{ urgent: false }], [{ urgent: true }], [{ urgent: true }],
+      [{ urgent: false }], [{ urgent: false }],
     ]);
+    expect(client.restartConnection.mock.calls).toEqual([
+      ['network-path-changed'], ['network-path-changed'],
+    ]);
+  });
+
+  it('does not replace a slow socket for reachability changes or repeated network capabilities', async () => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.network({ ...wifi, isInternetReachable: false });
+      networkEvents.network(wifi);
+      networkEvents.network(wifi);
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    expect(client.notifyNetworkChanged.mock.calls).toEqual([
+      [{ urgent: false }], [{ urgent: true }], [{ urgent: true }], [{ urgent: false }],
+    ]);
+  });
+
+  it('remembers a lost route even when the replacement has the same network type', async () => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.network({ type: 'NONE', isConnected: false, isInternetReachable: false });
+      networkEvents.network(wifi);
+      networkEvents.network(wifi);
+    });
+    expect(client.restartConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['connecting', 'stopped'] as const)('does not bypass handshakes or congestion backoff while %s', async status => {
+    const client = transport.clients[0];
+    client.status = status;
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.network({ ...wifi, type: 'CELLULAR' });
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    expect(client.notifyNetworkChanged).toHaveBeenLastCalledWith({ urgent: true });
+  });
+
+  it.each([false, true])('defers a background route change unless a new connection supersedes it (connected=%s)', async connected => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.state = 'background'; networkEvents.app('background');
+      networkEvents.network({ ...wifi, type: 'CELLULAR' });
+      if (connected) client.statusChanged('online');
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    await act(async () => {
+      networkEvents.state = 'active'; networkEvents.app('active');
+    });
+    expect(client.restartConnection).toHaveBeenCalledTimes(connected ? 0 : 1);
   });
 
   it.each(['online', 'stopped', 'connecting'] as const)('recovers immediately from background with a %s connection', async (status) => {

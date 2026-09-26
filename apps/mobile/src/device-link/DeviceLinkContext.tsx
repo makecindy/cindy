@@ -924,6 +924,19 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     );
     recoveryDiagnostics.set(client, diagnostics);
     if (AppState.currentState === 'active') diagnostics.foreground();
+    let networkPathChanged = false;
+    let lastConnectedNetworkType: string | undefined;
+    const recoverNetwork = (urgent: boolean) => {
+      const replaceOldPath = networkPathChanged;
+      networkPathChanged = false;
+      // Only this phone's established connection used the lost route. Keep
+      // handshakes and congestion backoff on their existing recovery path.
+      if (replaceOldPath && client.getStatus() === 'online') {
+        client.restartConnection('network-path-changed');
+      } else {
+        client.notifyNetworkChanged({ urgent });
+      }
+    };
     const offIssue = client.onConnectionIssue(setConnectionIssue);
     const offStatus = client.onStatusChange((next) => {
       setStatus(next);
@@ -938,6 +951,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         peerRecoverySchedulerRef.current?.pause();
         return;
       }
+      // A new authenticated connection already supersedes any retained old path.
+      networkPathChanged = false;
       // presence 是当前在线控制端收到的 delta,server 不会在 hello-ack 后重放
       // 全量快照。进入新连接代际先丢弃旧 verdict:后台期间若设备从 unavailable
       // 恢复,旧 false 不能永久挡住本轮 rehydrate。上一代仍 pending 的镜像清理
@@ -1255,8 +1270,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 冷却默认只拦请求路径的 un-park(waitUntilOnline),不拦真人操作。
         backgroundConnection.active();
         // A short background stay can preserve a socket whose route changed.
-        // Probe without the ordinary hint cooldown; never delay content recovery.
-        if (client.getStatus() === 'online') client.notifyNetworkChanged({ urgent: true });
+        // Replace a known old path; otherwise probe without the hint cooldown.
+        if (client.getStatus() === 'online') recoverNetwork(true);
         // 快速切换(连接被宽限保住、始终 online)不会有 online 状态转换,这条显式
         // 补齐就是断档回填的唯一触发点;其余路径下它因 status 未 online 而空转。
         void rehydrateWithClient(client);
@@ -1291,9 +1306,19 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           || previousNetwork.isInternetReachable !== network.isInternetReachable
         );
         previousNetwork = network;
+        // Reachability/capability notifications alone are not route changes:
+        // preserve the full weak-network probe budget for those hints.
+        if (network.isConnected === false) networkPathChanged = true;
+        if (network.isConnected === true && network.type
+          && network.type !== 'NONE' && network.type !== 'UNKNOWN') {
+          if (lastConnectedNetworkType !== undefined && lastConnectedNetworkType !== network.type) {
+            networkPathChanged = true;
+          }
+          lastConnectedNetworkType = network.type;
+        }
         mobileDebugLog('debug', 'device-link', 'network path notification', { type: network.type, connected: network.isConnected, reachable: network.isInternetReachable, appState: AppState.currentState, urgent });
         if (AppState.currentState !== 'active' || network.isConnected === false) return;
-        client.notifyNetworkChanged({ urgent });
+        recoverNetwork(urgent);
       });
     }).catch(() => {
       console.warn('[device-link] network listener unavailable; using heartbeat recovery');

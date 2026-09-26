@@ -87,6 +87,14 @@ Mobile 历史读取在 relay 已在线且目标 presence 不是明确不可用�
 历史控制器与页面同步；也不能为了放行读取伪造在线快照。明确离线／停用或 relay 未在线时
 仍只展示缓存，授权、撤权和旧代结果拦截继续由原链路处理。
 
+Mobile 明确观察到断网后恢复，或已连接网络类型切换（如蜂窝 → Wi-Fi）时，
+替换本机仍显示 online 的旧连接，避免旧路径上的半开连接额外等待探测超时。
+相同类型的能力通知、仅 Internet reachability 变化和未知网络仍走原探测预算；
+不打断在途握手、不绕过拥塞退避。后台只记录路径变化，回前台再处理；
+期间若新连接已完成握手，则不重复替换。此动作只影响该手机的 relay 连接，
+不由单 peer 超时触发，也不重启被控端与其它控制端的共享连接。
+实现与回归见 Mobile `DeviceLinkContext.tsx`、`historyViewProvider.test.tsx`。
+
 `packages/device-link/src/invokePolicy.ts` 集中维护请求策略，三个边界独立判断：
 
 - 通道执行预算：保留 Desktop / Mobile 的超时差异，超时不代表主机操作未执行。
