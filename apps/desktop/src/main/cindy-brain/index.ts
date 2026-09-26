@@ -78,6 +78,7 @@ import {
   type GhostLibraryOverview,
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { onQuit } from '../lifecycle.js';
 import { getRemoteOauthContext } from '../plugin-oauth/context.js';
 import { withGhostSkillProjectionReconcile } from '../authBoundaryQuarantine.js';
 import {
@@ -2675,8 +2676,15 @@ export function getGhostIOSSimulatorSlot(): GhostIOSSimulatorSlot {
 }
 
 let cindySlotSingleton: GhostCindySlot | null = null;
+// Capture only roots actually used without an owner; login before quit must not
+// redirect cleanup into the newly active account's persistent cache.
+const anonymousDownloadRoots = new Map<string, { root: string; scope: string }>();
 const pluginDownloads = new PluginDownloadSlot({
-  getGhost: findAvailableGhost, root: id => ownerScopedUserDataPath('plugin-downloads', id),
+  getGhost: findAvailableGhost, root: id => {
+    const root = ownerScopedUserDataPath('plugin-downloads', id);
+    if (!getActiveAppSession().dataOwnerId) anonymousDownloadRoots.set(id, { root, scope: activeOwnerScopeKey() });
+    return root;
+  },
   scope: activeOwnerScopeKey, send: sendToGhostLogic, download: createDownloader(),
 });
 let networkSlotSingleton: GhostNetworkSlot | null = null;
@@ -6478,7 +6486,7 @@ async function uninstallGhostAndCleanupLocked(
     const libraryDisplayName =
       manager.list().find((g) => g.manifest.id === id)?.manifest.name ?? id;
     runtime.stop(id);
-    getGhostNodeRuntimeBroker().stop(id);
+    await getGhostNodeRuntimeBroker().stopAndWait(id);
     getGhostAgentSlot().clearGhost(id);
     getGhostErrandSlot().clearGhost(id);
     getGhostSubscriptionGateway().dropGhost(id);
@@ -6859,6 +6867,13 @@ export function registerGhostIpc(): void {
     runtime.destroyAll();
     getGhostNodeRuntimeBroker().destroyAll();
   });
+  onQuit('plugin-downloads', async () => {
+    await pluginDownloads.stopAndWait();
+    await Promise.all([...anonymousDownloadRoots].map(async ([id, { root, scope }]) => {
+      await getGhostNodeRuntimeBroker().stopAndWait(id);
+      await pluginDownloads.removePlugin(id, root, scope);
+    }));
+  }, 'async');
 
   // Stable-owner 后处理序列：先完成内置插件对账，再恢复常驻插件和旧账号凭证。
   // 旧凭证迁移保持 best-effort，不阻塞其他插件；任一迁移异常会把本 owner scope

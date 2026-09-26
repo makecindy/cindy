@@ -14,6 +14,7 @@ export interface PluginDownloadDeps {
   download(options: DownloadOptions): Promise<DownloadResult>;
 }
 export class PluginDownloadSlot {
+  private stopped = false;
   private cache = new PluginDownloadCache();
   private active = new Map<
     string,
@@ -23,6 +24,11 @@ export class PluginDownloadSlot {
   abortAll() {
     this.cache.revokeAll();
     for (const item of this.active.values()) item.controller.abort();
+  }
+  async stopAndWait() {
+    this.stopped = true;
+    this.abortAll();
+    await Promise.allSettled([...this.active.values()].map((item) => item.promise));
   }
   async removePlugin(id: string, root = this.deps.root(id), scope = this.deps.scope()) {
     const work = [...this.active].filter(([key]) => {
@@ -43,6 +49,7 @@ export class PluginDownloadSlot {
     payload: Record<string, unknown>,
     run: (payload: unknown) => Promise<unknown>,
   ) {
+    if (this.stopped) return { ok: false, errorCode: 'INVALID_REQUEST', message: '下载服务已停止' };
     if (payload.downloadTokens === undefined) return run(payload);
     const releases: Array<() => void> = [];
     try {
@@ -79,6 +86,7 @@ export class PluginDownloadSlot {
         downloads[name] = lease.path;
       }
       if (
+        this.stopped ||
         this.deps.scope() !== scope ||
         !this.deps.getGhost(id)?.enabled ||
         JSON.stringify(this.deps.getGhost(id)?.approval) !== approval
@@ -105,6 +113,7 @@ export class PluginDownloadSlot {
     callerActive: () => boolean = () => true,
   ): Promise<unknown> {
     try {
+      if (this.stopped) throw Error('Download service stopped');
       if (!value || typeof value !== 'object') throw Error('Invalid download request');
       const p = value as Record<string, unknown>;
       if (typeof p.id !== 'string' || !/^[\w-]{1,100}$/.test(p.id))
@@ -135,6 +144,7 @@ export class PluginDownloadSlot {
         throw Error('Download requires node and network.hosts declarations');
       const approval = JSON.stringify(ghost.approval);
       const current = () =>
+        !this.stopped &&
         callerActive() &&
         this.deps.scope() === scope &&
         this.deps.getGhost(id)?.enabled === true &&

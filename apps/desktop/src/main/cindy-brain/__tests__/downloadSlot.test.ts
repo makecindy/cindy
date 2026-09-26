@@ -4,6 +4,66 @@ import os from 'node:os';
 import path from 'node:path';
 import { PluginDownloadSlot } from '../downloadSlot';
 import type { InstalledGhost } from '../../../shared/ghost';
+it('shutdown drains cancelled downloads and rejects new downloads and Node handoffs', async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-shutdown-')));
+  let started!: () => void, finish!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const drained = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const slot = new PluginDownloadSlot({
+    root: (id) => path.join(root, id),
+    scope: () => 'anonymous',
+    send() {},
+    getGhost: () =>
+      ({
+        enabled: true,
+        approval: {},
+        manifest: { node: {}, network: { hosts: ['github.com'] } },
+      }) as unknown as InstalledGhost,
+    download: async (options) => {
+      started();
+      await new Promise<void>((resolve) =>
+        options.signal!.addEventListener('abort', () => resolve(), { once: true }),
+      );
+      await drained;
+      throw Error('aborted');
+    },
+  });
+  const request = {
+    kind: 'start',
+    id: 'x',
+    url: 'https://github.com/file',
+    sha256: 'a'.repeat(64),
+    bytes: 2,
+  };
+  try {
+    const work = slot.handle('p', request);
+    await ready;
+    let stopped = false;
+    const stop = slot.stopAndWait().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    expect(await slot.handle('p', { ...request, id: 'later' })).toMatchObject({ ok: false });
+    expect(
+      await slot.withNodeDownloads('p', {}, async () => {
+        throw Error('must not run');
+      }),
+    ).toMatchObject({ ok: false });
+    finish();
+    await stop;
+    await work;
+    await slot.removePlugin('p');
+    await expect(fs.stat(path.join(root, 'p'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    finish();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 it('restricts redirects, rejects arbitrary paths and isolates owner delivery', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'plugin-download-test-')));
   let scope = 'a';
