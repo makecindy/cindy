@@ -305,7 +305,7 @@ export function createLlamaCppService(
           // Another instance may have atomically published this model first.
           // Never remove its directory; only our private staging is disposable.
           if (
-            !['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '') ||
+            !['EEXIST', 'ENOTEMPTY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '') ||
             !(await models()).some((m) => m.id === id)
           )
             throw error;

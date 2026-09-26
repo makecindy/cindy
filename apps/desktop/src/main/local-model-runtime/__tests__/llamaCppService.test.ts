@@ -3,7 +3,16 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
-const mocks = vi.hoisted(() => ({ download: vi.fn(), resolve: vi.fn(), spawn: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  download: vi.fn(),
+  resolve: vi.fn(),
+  spawn: vi.fn(),
+  rename: vi.fn(),
+}));
+vi.mock('node:fs/promises', async (original) => ({
+  ...(await original<typeof import('node:fs/promises')>()),
+  rename: mocks.rename,
+}));
 vi.mock('../../reviewer/reviewOwnerLiveness.js', () => ({
   startReviewOwnerLiveness: async () => ({
     identity: { version: 1, port: 12345, token: 'test-owner' },
@@ -38,6 +47,8 @@ import { createLlamaCppService, managedModelId } from '../llamaCppService.js';
 
 let root: string;
 beforeEach(async () => {
+  const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  mocks.rename.mockImplementation(fs.rename);
   root = await mkdtemp(path.join(os.tmpdir(), 'cindy-llamacpp-service-test-'));
   mocks.resolve.mockResolvedValue({
     revision: 'a'.repeat(40),
@@ -52,6 +63,26 @@ afterEach(async () => {
 });
 
 describe('managed llama.cpp model lifecycle', () => {
+  it.each(['EEXIST', 'ENOTEMPTY', 'EPERM'])(
+    'accepts %s only when another model publication succeeded',
+    async (code) => {
+      const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      const service = createLlamaCppService(root);
+      const error = Object.assign(new Error('publish failed'), { code });
+      mocks.rename.mockRejectedValueOnce(error);
+      await expect(service.download({ repo: 'owner/repo', file: 'model.gguf' })).rejects.toBe(
+        error,
+      );
+      expect((await service.snapshot()).models).toEqual([]);
+      mocks.rename.mockImplementationOnce(async (source, destination) => {
+        await fs.rename(source, destination);
+        throw error;
+      });
+      await service.download({ repo: 'owner/repo', file: 'model.gguf' });
+      expect((await service.snapshot()).models).toHaveLength(1);
+      expect(await readdir(path.join(root, 'llamacpp-runtime'))).toEqual(['models']);
+    },
+  );
   it('reuses the same profile owner and never stops it from a borrowing instance', async () => {
     const runtime = path.join(root, 'llamacpp-runtime');
     await mkdir(runtime);
