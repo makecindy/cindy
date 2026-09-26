@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 import { useLocalSearchParams } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -9,11 +9,16 @@ import { useThemedStyles, type ThemeColors } from '@/theme';
 import { spacing, typeScale } from '@/theme/tokens';
 import { PluginSetupMessageContent } from './InteractionPanel';
 import type { NormalizedRemoteMessage } from './messageNormalize';
+import { remoteSessionStore } from './remoteSessionStore';
 
 /** Remote transcript projection; credentials and browser login remain on the trusted Host. */
 export function AuthorizationMessageCard({ message }: { message: NormalizedRemoteMessage }) {
   const { t } = useTranslation();
-  const { deviceId } = useLocalSearchParams<{ deviceId?: string }>();
+  const params = useLocalSearchParams<{ deviceId?: string | string[]; sessionId?: string | string[] }>();
+  const sessionId = (Array.isArray(params.sessionId) ? params.sessionId[0] : params.sessionId) ?? '';
+  const storedDeviceId = useSyncExternalStore(remoteSessionStore.subscribe,
+    () => remoteSessionStore.getSessionDeviceId(sessionId));
+  const deviceId = (Array.isArray(params.deviceId) ? params.deviceId[0] : params.deviceId) ?? storedDeviceId;
   const { invoke } = useDeviceLink();
   const styles = useThemedStyles(makeStyles);
   const [busy, setBusy] = useState(false);

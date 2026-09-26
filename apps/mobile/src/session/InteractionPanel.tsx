@@ -1,7 +1,7 @@
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useRouter } from 'expo-router';
+import { useGuardedPush } from '@/utils/useGuardedPush';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
@@ -1603,7 +1603,7 @@ function PluginSetupCard({
 
 /** Navigation only: authorization and credentials stay in the computer's own UI. */
 function PluginSetupRemoteDesktopButton({ deviceId, busy }: { deviceId: string; busy: boolean }) {
-  const router = useRouter();
+  const push = useGuardedPush();
   const devices = useRemoteDeviceIdentity();
   const styles = useInteractionStyles();
   const { t } = useTranslation();
@@ -1611,7 +1611,7 @@ function PluginSetupRemoteDesktopButton({ deviceId, busy }: { deviceId: string; 
   const label = t('interaction.pluginSetup.remoteDesktop');
   return <InteractionTouchButton accessibilityLabel={label} disabled={busy}
     style={styles.primaryButton} testID="interaction.pluginSetup.remoteDesktop"
-    onPress={() => router.push({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } })}>
+    onPress={() => push({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } })}>
     <Text style={styles.primaryText}>{label}</Text>
   </InteractionTouchButton>;
 }
