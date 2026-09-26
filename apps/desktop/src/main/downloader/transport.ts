@@ -191,7 +191,10 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
     }
     if (!response.body) throw new DownloadError('NETWORK', 'Download response body is empty');
     reader = response.body.getReader();
-    const hasher = createStreamingHasher(offset === null ? null : partPath(opts.targetPath));
+    const hasher = createStreamingHasher(
+      offset === null ? null : partPath(opts.targetPath),
+      controller.signal,
+    );
     await hasher.update(Buffer.alloc(0));
     file = await fs.promises.open(partPath(opts.targetPath), offset === null ? 'w' : 'a', 0o600);
     const tracker = new ProgressTracker({
@@ -261,6 +264,7 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
     tracker.flush();
     return { size: loaded, sha256 };
   } catch (error) {
+    checkAbort();
     const failure =
       error instanceof DownloadError
         ? error

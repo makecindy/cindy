@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { Readable, addAbortSignal } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const fetchMock = vi.hoisted(() => vi.fn());
 vi.mock('../http', () => ({ requestResponse: fetchMock }));
@@ -44,6 +45,54 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 describe('shared verified downloads', () => {
+  it.each([
+    ['resume', false],
+    ['cache', false],
+    ['resume', true],
+    ['cache', true],
+  ] as const)(
+    'interrupts stalled %s hashing (timeout=%s) and releases the slot',
+    async (mode, timeout) => {
+      const opts = options();
+      if (mode === 'resume') partial(opts);
+      else fs.writeFileSync(opts.targetPath, 'abcdef');
+      const controller = new AbortController();
+      let started!: () => void;
+      const reading = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const stalled = new Readable({ read() {} });
+      vi.spyOn(fs, 'createReadStream').mockImplementationOnce((_file, config) => {
+        const signal = (config as { signal?: AbortSignal })?.signal;
+        if (signal) addAbortSignal(signal, stalled);
+        started();
+        return stalled as fs.ReadStream;
+      });
+      fetchMock.mockResolvedValueOnce(
+        new Response('def', {
+          status: 206,
+          headers: { 'content-range': 'bytes 3-5/6', 'content-length': '3' },
+        }),
+      );
+      if (mode === 'cache') fetchMock.mockReset();
+      const active = download({
+        ...opts,
+        signal: controller.signal,
+        timeout: timeout ? { totalMs: 50 } : undefined,
+      });
+      const rejected = expect(active).rejects.toMatchObject({
+        code: timeout ? 'TIMEOUT' : 'ABORTED',
+      });
+      await reading;
+      const next = options('next');
+      fetchMock.mockResolvedValueOnce(new Response('next'));
+      const queued = download(next);
+      if (!timeout) controller.abort();
+      await rejected;
+      expect(stalled.destroyed).toBe(true);
+      await expect(queued).resolves.toMatchObject({ size: 4 });
+    },
+  );
   it('stops the connection deadline before slow resume hashing begins', async () => {
     vi.useFakeTimers();
     const opts = options();

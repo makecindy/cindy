@@ -4,7 +4,7 @@ import path from 'node:path';
 import { download, type DownloadOptions } from '../downloader/index.js';
 import { createLogger } from '../logger.js';
 import type { ToolArtifact, ToolInstallProgress } from './types.js';
-import { extractToolArchive, safeArchivePath } from './archive.js';
+import { extractToolArchive, safeArchivePath, MAX_ARCHIVE_BYTES } from './archive.js';
 
 const log = createLogger('managed-tools');
 const key = (artifact: ToolArtifact) => {
@@ -79,6 +79,7 @@ export async function installTool(
     await (deps.download ?? download)({
       url: artifact.url,
       sha256: artifact.sha256,
+      maxBytes: MAX_ARCHIVE_BYTES,
       targetPath: path.join(staging, 'archive'),
       signal,
       logger: log,

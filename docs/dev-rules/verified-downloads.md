@@ -11,7 +11,7 @@ Agent runtime、Cindy Make 工具、Ollama runtime、插件包、Skill 包及更
 - `sha256` 必填。`expectedSize` 同时检查响应头与实际字节；`maxBytes` 在写盘前限制流大小。
 - `isUrlAllowed` 检查初始 URL 和每次重定向。插件包继续 `redirect: 'error'`；
   Ollama 使用其官方发行资产白名单。统一下载不得放宽调用方已有来源限制。
-- `signal` 取消排队、请求和重试等待；连接／闲置超时可重试，`timeout.totalMs`
+- `signal` 取消排队、请求、缓存／续传哈希和重试等待；连接／闲置超时可重试，`timeout.totalMs`
   限制取得下载槽位后的活动时长（含校验和重试等待，不含排队）。业务取消与超时分别返回 `ABORTED` 和 `TIMEOUT`。
 - 默认保留部分文件以续传；一次性安装暂存目录可用 `resume: false`。
   调用方只有在下载 Promise 结束后才可 `cleanup()` 或删除暂存目录。
@@ -31,6 +31,7 @@ Agent runtime、Cindy Make 工具、Ollama runtime、插件包、Skill 包及更
 `main/managed-tools/installer.ts` 和 `archive.ts` 提供通用的发行包解压、版本检查、
 完整代次发布及安装路径发现。调用方传入可信的 `ToolArtifact` 与用户数据根目录，
 成功取得绝对执行路径，直接用它启动工具，不依赖系统 PATH 或 Homebrew。
+下载与解压共用 160 MiB 归档上限；下载时在写盘前截停超限内容。
 
 Cindy Make 保留旧导出和安装目录，旧 `current.json` 不需迁移。GitHub CLI 使用
 `git-context/ghArtifact.ts` 中固定版本的官方发行包和摘要，安装到

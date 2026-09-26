@@ -7,7 +7,7 @@ import JSZip from 'jszip';
 import * as tar from 'tar';
 import type { ToolArtifact } from './types.js';
 
-const MAX_ARCHIVE_BYTES = 160 * 1024 ** 2;
+export const MAX_ARCHIVE_BYTES = 160 * 1024 ** 2;
 const MAX_FILE_BYTES = 256 * 1024 ** 2;
 const MAX_EXPANDED_BYTES = 1024 ** 3;
 const MAX_ENTRIES = 30_000;

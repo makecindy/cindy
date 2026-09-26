@@ -179,7 +179,7 @@ export class Scheduler {
       }
       try {
         if (fs.existsSync(task.opts.targetPath)) {
-          const hash = await computeHash(task.opts.targetPath);
+          const hash = await computeHash(task.opts.targetPath, controller.signal);
           const size = fs.statSync(task.opts.targetPath).size;
           if (controller.signal.aborted) throw new DownloadError('ABORTED', 'Download aborted');
           if (
@@ -199,6 +199,7 @@ export class Scheduler {
           }
         }
       } catch (err) {
+        if (controller.signal.aborted) throw new DownloadError('ABORTED', 'Download aborted');
         if (err instanceof DownloadError) throw err;
         logger.debug?.('[downloader] fromCache check failed; falling through', {
           err: (err as Error).message,

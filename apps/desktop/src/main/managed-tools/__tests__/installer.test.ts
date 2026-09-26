@@ -38,6 +38,7 @@ describe('shared tool installer', () => {
       .generateAsync({ type: 'nodebuffer' });
     const executable = await installTool(input, {
       download: async (opts) => {
+        expect(opts.maxBytes).toBe(160 * 1024 ** 2);
         await writeFile(opts.targetPath, archive);
       },
     });
