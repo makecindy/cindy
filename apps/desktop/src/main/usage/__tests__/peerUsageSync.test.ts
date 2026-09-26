@@ -9,6 +9,7 @@ import type { RegionalMoney } from '../../../shared/regionalMoney';
 import {
   createPeerUsageSync,
   mergeIncrementalRows,
+  withPeerUsageAccessGate,
   type PeerUsageSyncDeps,
 } from '../peerUsageSync';
 import {
@@ -370,5 +371,31 @@ describe('createPeerUsageSync', () => {
       await sync.sync();
     }
     expect(sync.version()).toBe(settled);
+  });
+
+  it('does not list devices or invoke peers while Device Link access is denied', async () => {
+    let allowed = true;
+    const listDevices = vi.fn(async () => ({ devices: [device({ deviceId: 'laptop' })] }));
+    const invoke = vi.fn(async () => ({
+      ok: true as const,
+      result: await hostResponse(rowsFor(['2026-09-26']), '2026-09-26', null),
+    }));
+    const h = harness({ listDevices, invoke });
+    const sync = createPeerUsageSync(
+      withPeerUsageAccessGate(() => {
+        if (!allowed) throw new Error('[PERMISSION_DENIED] Device Link requires a Cindy account.');
+      }, h.deps),
+    );
+    await sync.sync();
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    allowed = false;
+    h.advance(61_000);
+    await sync.sync();
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const snapshot = await sync.snapshot();
+    expect(snapshot.devices[0]).toMatchObject({ deviceId: 'laptop', status: 'error' });
+    expect(snapshot.peerRows.has('laptop')).toBe(true);
   });
 });

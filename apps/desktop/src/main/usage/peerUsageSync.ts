@@ -444,6 +444,27 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
   };
 }
 
+/**
+ * 读设备目录与远程读取都先过访问门(生产里是设备互联能力:已登录且不在账号切换中)。
+ * 门拒绝时视同目录读取失败 —— 设备标为读取失败、保留缓存,不发请求也不开 peer 链路。
+ */
+export function withPeerUsageAccessGate(
+  assertAllowed: () => void,
+  deps: PeerUsageSyncDeps,
+): PeerUsageSyncDeps {
+  return {
+    ...deps,
+    listDevices: async () => {
+      assertAllowed();
+      return deps.listDevices();
+    },
+    invoke: async (deviceId, channel, args) => {
+      assertAllowed();
+      return deps.invoke(deviceId, channel, args);
+    },
+  };
+}
+
 let defaultSync: PeerUsageSync | null = null;
 
 export function peerUsageCacheFilePath(userDataDir: string, userId: string): string {

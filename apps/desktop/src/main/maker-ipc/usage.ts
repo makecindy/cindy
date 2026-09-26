@@ -36,11 +36,13 @@ import {
   fetchCodexWebUsageSnapshot,
 } from '../usage/codexWebUsage.js';
 import { app } from 'electron';
+import { requireAppCapability } from '../appCapabilities.js';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
 import { readUsageDeviceRows } from '../usage/usageDeviceRows.js';
 import {
   configurePeerUsageSync,
   peerUsageCacheFilePath,
+  withPeerUsageAccessGate,
   readPeerUsageCacheFile,
   writePeerUsageCacheFile,
 } from '../usage/peerUsageSync.js';
@@ -327,7 +329,9 @@ export function registerMakerUsageIpc(maker: Maker): void {
   });
 
   // 用量历史「所有设备」范围:经 device-link 拉同账号其它电脑的原始用量行并按账号缓存。
-  configurePeerUsageSync({
+  // 与设备互联 IPC 入口同一道能力门:未登录或账号切换进行中时,不读设备目录、不开 peer 链路。
+  configurePeerUsageSync(withPeerUsageAccessGate(() =>
+    requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.'), {
     userId: getCurrentDbClientUserId,
     selfDeviceId: getSelfDeviceId,
     listDevices: () => handleListDevices(deviceDirectoryDeps()),
@@ -336,7 +340,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
     writeCache: (userId, contents) =>
       writePeerUsageCacheFile(peerUsageCacheFilePath(app.getPath('userData'), userId), contents),
     now: () => Date.now(),
-  });
+  }));
 
   // 订阅会话的 CLI 在会话里上报 SDK rate_limit_event → 落库 + 广播(maker-core 只对本机
   // Claude 订阅会话转发)。事件晚于登出 / 断开到达时丢弃,不复活刚清掉的快照。
