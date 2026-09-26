@@ -997,7 +997,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
-      anthropic: async ({ allowSideEffects, waitForDiscovery }) => {
+      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly }) => {
+        if (snapshotOnly) return hasClaudeNativeLogin();
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
         // 同时服务 device-link 与可能不受信的渲染上下文,所以副作用只在本机主页面发起时
         // 才放行,其余降级为纯读(PR #548 review)。

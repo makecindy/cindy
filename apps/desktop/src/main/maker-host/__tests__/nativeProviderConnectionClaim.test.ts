@@ -28,6 +28,8 @@ const h = vi.hoisted(() => ({
   loadAnthropicDiskCache: vi.fn(async () => {}),
   codexLoginWithSideEffects: vi.fn(async () => false),
   codexLoginReadOnly: vi.fn(() => false),
+  readClaudeStatus: vi.fn(),
+  readNativeLogin: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -55,13 +57,18 @@ vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLogin: () => h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic'),
 }));
 vi.mock('../claude-native-connection.js', () => ({
-  readClaudeNativeLogin: async () =>
-    h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic')
+  readClaudeNativeLogin: async () => {
+    h.readNativeLogin();
+    return h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic')
       ? { loggedIn: true, email: 'claude@example.test' }
-      : null,
+      : null;
+  },
 }));
 vi.mock('../claude-native-cli.js', () => ({
-  readClaudeCliLoginStatus: async () => ({ loggedIn: h.claudeCredentialPresent }),
+  readClaudeCliLoginStatus: async () => {
+    h.readClaudeStatus();
+    return { loggedIn: h.claudeCredentialPresent };
+  },
 }));
 vi.mock('../grok-oauth-login.js', () => ({
   grokAccountIdentity: () => 'grok@example.test',
@@ -172,6 +179,8 @@ beforeEach(() => {
   h.loadAnthropicDiskCache.mockClear();
   h.codexLoginWithSideEffects.mockClear();
   h.codexLoginReadOnly.mockClear();
+  h.readClaudeStatus.mockClear();
+  h.readNativeLogin.mockClear();
 });
 
 afterEach(() => {
@@ -179,6 +188,22 @@ afterEach(() => {
 });
 
 describe('native provider connection claim on read', () => {
+  it('snapshot reads never probe CLI or account identity, while normal reads still refresh', async () => {
+    const service = getDesktopProviderService({ allowSideEffects: false });
+    for (const present of [false, true]) {
+      h.claudeCredentialPresent = present;
+      bindNativeProviderAuth('anthropic', { sharedSystem: true });
+      const views = await service.listProviders({ allowSideEffects: false, snapshotOnly: true });
+      expect(views.find(p => p.id === 'anthropic')?.connected).toBe(present);
+      expect(views.find(p => p.id === 'anthropic')?.subscriptionAccount).toBeUndefined();
+    }
+    expect(h.readClaudeStatus).not.toHaveBeenCalled();
+    expect(h.readNativeLogin).not.toHaveBeenCalled();
+    expect(h.codexLoginWithSideEffects).not.toHaveBeenCalled();
+    await service.listProviders({ allowSideEffects: false });
+    expect(h.readClaudeStatus).toHaveBeenCalledTimes(1);
+    expect(h.readNativeLogin).toHaveBeenCalledTimes(1);
+  });
   it('read-only service acquisition skips legacy migration even for eligible cloud owners', async () => {
     h.legacyCloudOwner = true;
     await listProviders(false);

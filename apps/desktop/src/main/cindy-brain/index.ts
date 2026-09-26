@@ -6651,7 +6651,7 @@ export function registerGhostIpc(): void {
     if (!findAvailableGhost(ghostId)?.enabled) {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
     }
-    const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false });
+    const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
     if (owner !== activeOwnerScopeKey() || !findAvailableGhost(ghostId)?.enabled) {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
     }
