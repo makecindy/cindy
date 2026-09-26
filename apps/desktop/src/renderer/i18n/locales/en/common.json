@@ -11,11 +11,11 @@
   },
   "taskMigration": {
     "title": "Move to another computer…",
-    "description": "Copy this task’s conversation and project files to another computer. Source files are kept, including files shared by forked tasks. After the handoff, continue the task on the destination.",
+    "description": "Copy the conversation and project files to the destination computer, keeping the source files.",
     "limits": "Both computers need this feature and remote control enabled. Stop tasks using this directory first. Available disk space and memory on the destination are checked before transfer. The destination uses its own model settings; Cindy sign-in credentials and machine settings are not transferred.",
     "device": "Destination computer",
     "project": "Destination location",
-    "newFolder": "A new, separate folder will be created here. Existing files will not be overwritten.",
+    "newFolder": "Creates a new folder without overwriting existing files.",
     "defaultFolder": "Cindy’s default location",
     "noDevices": "No available computers. Connect another computer and enable remote control on both computers.",
     "background": "You can close this window and reopen it from the task menu. If interrupted, retry the same migration.",
