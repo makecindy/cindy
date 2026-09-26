@@ -127,4 +127,28 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.getByText(/Unexpected provider failure/).textContent).toContain('[REDACTED]');
     expect(screen.queryByText(/private-test-value/)).toBeNull();
   });
+
+  it.each(['live', 'tail', 'history'] as const)('asks a WeChat task to confirm directly in %s', async surface => {
+    const i18n = createInstance();
+    await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
+    const rawRemoteError = '[AUTO_REVIEW_UNAVAILABLE] upstream fallback api_key=private-test-value';
+    const bannerError = remoteErrorMessageForBanner(rawRemoteError);
+    const generic = locales[locale].chat.remoteError.AUTO_REVIEW_UNAVAILABLE;
+    const wechat = locales[locale].chat.remoteError.AUTO_REVIEW_UNAVAILABLE_WECHAT;
+    const renderSurface = (sessionSource?: string) => {
+      cleanup();
+      render(<I18nextProvider i18n={i18n}>{surface === 'live'
+        ? <ErrorBanner error={bannerError} sessionSource={sessionSource} onRetry={vi.fn()} />
+        : surface === 'tail'
+          ? <ErrorTailErrorBanner errorText={bannerError} sessionSource={sessionSource} onContinue={vi.fn()} onDismiss={vi.fn()} />
+          : <ErrorMessageCard message={rawRemoteError} sessionSource={sessionSource} />}</I18nextProvider>);
+    };
+    renderSurface('desktop');
+    expect(screen.getByText(generic)).toBeTruthy();
+    expect(screen.queryByText(wechat)).toBeNull();
+    renderSurface('wechat');
+    expect(screen.getByText(wechat)).toBeTruthy();
+    expect(screen.queryByText(generic)).toBeNull();
+    expect(screen.queryByText(/Switch this task/)).toBeNull();
+  });
 });

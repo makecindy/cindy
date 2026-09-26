@@ -45,7 +45,7 @@ export type AsrEvent =
 
 export type VoiceInputDraftSource = 'partial' | 'stable' | 'refinement';
 
-export type VoiceInputDraftReason = 'asr_partial' | 'asr_stable';
+export type VoiceInputDraftReason = 'asr_partial' | 'asr_stable' | 'refinement_preview';
 
 export type AudioTrace = {
   capturedAt: number;

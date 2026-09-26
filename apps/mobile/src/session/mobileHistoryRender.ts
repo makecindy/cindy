@@ -9,6 +9,7 @@ export function buildMobileHistoryRenderItems(options: {
   messages: readonly RemoteMessage[];
   streaming: boolean;
   sessionId: string;
+  sessionSource?: string | null;
   pendingHandoff?: ReadonlySet<string>;
   localUserClientIds?: ReadonlySet<string>;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
@@ -20,7 +21,10 @@ export function buildMobileHistoryRenderItems(options: {
     isLocalUser: (row) => options.localUserClientIds?.has(row.clientId) === true,
     streaming: options.streaming,
     build: (rows, streaming) => buildMobileMessageRenderItems(rows, {
-      isSessionStreaming: streaming, sessionId: options.sessionId, preserveSourceOrder: true,
+      isSessionStreaming: streaming,
+      sessionId: options.sessionId,
+      sessionSource: options.sessionSource,
+      preserveSourceOrder: true,
     }, options.taskUpdates),
     structure: {
       placeholder: (summary) => ({ id: summary.firstMessageId,

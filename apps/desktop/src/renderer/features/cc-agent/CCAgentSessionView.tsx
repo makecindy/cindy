@@ -4724,6 +4724,7 @@ export function CCAgentSessionView({
       // 消息下方 Fork / Rewind icon 的显示 (Codex rewind=false → 隐藏)。
       agentKind={session?.agentKind}
       remoteHostId={session?.remoteHostId ?? null}
+      sessionSource={session?.source}
       // text-lightbox-trigger-extension F1/F2: cwd flows from session
       // owner down through MessageStream → AssistantMessage / UserMessage.
       // The spec guarantees `session.workingDir` is set; `?? ''` is purely
@@ -5176,6 +5177,7 @@ export function CCAgentSessionView({
                   deviceLinkDeviceId={remoteDeviceId}
                   modelId={session?.model}
                   providerId={session?.providerId}
+                  sessionSource={session?.source}
                   onViewBalance={canAccessBilling ? handleViewBalance : undefined}
                   errorSourceProviderId={errorTailMsg?.errorProviderId ?? null}
                   onSwitchToClaudeSubscription={
@@ -5252,6 +5254,7 @@ export function CCAgentSessionView({
                 deviceLinkDeviceId={remoteDeviceId}
                 modelId={session?.model}
                 providerId={session?.providerId}
+                sessionSource={session?.source}
                 onSwitchToClaudeSubscription={
                   canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
                 }

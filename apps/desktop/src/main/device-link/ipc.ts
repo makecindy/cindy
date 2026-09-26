@@ -97,6 +97,8 @@ import {
   resetAll as resetSubscriptionRefcount,
 } from './subscriptionRefcount';
 import { createLogger } from '../logger';
+import { onQuit } from '../lifecycle';
+import { createDeviceLinkIpcDiagnostics } from './ipcDiagnostics';
 import { getAppCapabilities } from '../appCapabilities.js';
 
 const log = createLogger('device-link:ipc');
@@ -1293,6 +1295,13 @@ export async function retryUnsubscribeAfterWindowGone(
 // ─── 注册(Electron adapter)──────────────────────────────────────────────────
 
 export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): void {
+  const diagnosticsLog = createLogger('device-link:ipc-diagnostics');
+  const diagnostics = createDeviceLinkIpcDiagnostics((event, fields) =>
+    diagnosticsLog.info(event, fields),
+  );
+  // Submit the final partial interval at shutdown start, giving the async log
+  // writer the subsequent cleanup phases to drain before app.exit().
+  onQuit('device-link-ipc-diagnostics', diagnostics.flush, 'sync');
   const deviceCodes = new LocalDeviceCodeSessions();
   const deviceCodeScope = (event: import('electron').IpcMainInvokeEvent): string => {
     assertTrustedAppRendererEvent(event);
@@ -1382,20 +1391,20 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleDeleteDevice(deps, p.deviceId);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.OPEN_LINK, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.OPEN_LINK, (e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
-    return handleOpenLink(deps, p.deviceId);
+    return handleOpenLink(diagnostics.forWindow(deps, e.sender.id), p.deviceId);
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.CLOSE_LINK, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleCloseLink(deps, p.deviceId);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.INVOKE, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.INVOKE, (e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; channel?: unknown; args?: unknown };
-    return handleInvoke(deps, p.deviceId, p.channel, p.args);
+    return handleInvoke(diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.channel, p.args);
   });
   // 多窗口订阅引用计数:每个发起订阅的窗口(WebContents)挂一次 'destroyed' 清理,
   // 窗口关闭时释放它持有的全部引用,聚合出降零 topics 才向 relay 发 unsubscribe
@@ -1410,8 +1419,13 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       for (const { deviceId, topics } of recordWindowGone(windowId)) {
         // 窗口已销毁、无 ref 可恢复 → 用有限退避主动重试,堵住 unsubscribe 一次失败后被控端
         // 对已无 UI 订阅的 topic 持续推送的泄漏(见 retryUnsubscribeAfterWindowGone)。
-        if (topics.length > 0)
-          void retryUnsubscribeAfterWindowGone(deps.unsubscribe, deviceId, topics);
+        if (topics.length > 0) {
+          void retryUnsubscribeAfterWindowGone(
+            diagnostics.forWindow(deps, windowId).unsubscribe,
+            deviceId,
+            topics,
+          );
+        }
       }
     });
   };
@@ -1419,12 +1433,14 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; topics?: unknown };
     attachWindowCleanup(e.sender);
-    return handleSubscribe(deps, p.deviceId, p.topics, e.sender.id);
+    return handleSubscribe(diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.topics, e.sender.id);
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.UNSUBSCRIBE, (e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; topics?: unknown };
-    return handleUnsubscribe(deps, p.deviceId, p.topics, e.sender.id);
+    return handleUnsubscribe(
+      diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.topics, e.sender.id,
+    );
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.DISCONNECT_ALL, (e) => {
     assertTrustedAppRendererEvent(e);

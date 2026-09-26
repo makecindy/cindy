@@ -129,6 +129,7 @@ export function ErrorTailErrorBanner({
   errorReason,
   toolLoop,
   onSilentStopContinue,
+  sessionSource,
   className,
   style,
 }: {
@@ -153,6 +154,7 @@ export function ErrorTailErrorBanner({
   errorReason?: string | null;
   toolLoop?: ToolLoopErrorDetails;
   onSilentStopContinue?: () => void;
+  sessionSource?: string | null;
   className?: string;
   style?: React.CSSProperties;
 }) {
@@ -182,6 +184,7 @@ export function ErrorTailErrorBanner({
       silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
       onForkStripEncrypted={onForkStripEncrypted}
       forkStripEncryptedRunning={forkStripEncryptedRunning}
+      sessionSource={sessionSource}
       className={className}
       style={style}
     />

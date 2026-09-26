@@ -203,7 +203,7 @@ const toolUsePayloadByMessage = new WeakMap<RemoteMessage, ToolUsePayload>();
 
 export function normalizeRemoteMessages(
   messages: readonly RemoteMessage[],
-  options: { preserveSourceOrder?: boolean } = {},
+  options: { preserveSourceOrder?: boolean; sessionSource?: string | null } = {},
 ): NormalizedRemoteMessage[] {
   // History views already place live tails after their persisted prefix. A live
   // row's provisional timestamp must not undo that order during normalization.
@@ -330,7 +330,7 @@ export function normalizeRemoteMessages(
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
       const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop);
-      const errText = guidance ?? localizeUnclassifiedAgentError(rawText);
+      const errText = guidance ?? localizeUnclassifiedAgentError(rawText, options.sessionSource);
       result.push({
         key: messageNormalizeKey(message),
         source: message,
@@ -339,7 +339,7 @@ export function normalizeRemoteMessages(
         label: 'error',
         body: errText,
         rawError: rawText,
-        ...(!guidance ? { errorSummaryKey: unclassifiedAgentErrorI18nKey(rawText) } : {}),
+        ...(!guidance ? { errorSummaryKey: unclassifiedAgentErrorI18nKey(rawText, options.sessionSource) } : {}),
         align: 'agent',
         createdAt: message.createdAt,
       });

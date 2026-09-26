@@ -1221,10 +1221,10 @@
         "dbSlimmingArchiveAgeOption1": "1 个月",
         "dbSlimmingArchiveAgeOption3": "3 个月",
         "dbSlimmingArchiveAgeOption6": "6 个月",
-        "dbSlimmingIncludeActiveLabel": "清理活跃任务历史",
-        "dbSlimmingIncludeActiveDescription": "同时清理超过所选时间的活跃任务历史",
+        "dbSlimmingIncludeActiveLabel": "清理活跃任务",
+        "dbSlimmingIncludeActiveDescription": "同时清理超过所选时间的活跃任务，并从任务列表移除",
         "dbSlimmingIncludeActiveConfirmTitle": "将活跃任务纳入数据库清理？",
-        "dbSlimmingIncludeActiveConfirmDescription": "活跃任务即使超过所选时间，也可能仍在运行。清理不会等待任务停止，任务在扫描后继续产生的消息也可能被清除。启用后，超过所选时间的活跃、已归档和软删除任务都会被清理。符合范围的活跃任务历史消息和 Agent 上下文将被清除；任务条目仍会保留。数据库备份可以恢复任务和消息数据；不创建备份时，这些数据也无法恢复。用于审查或撤销这些消息所产生文件改动的记录不包含在数据库备份中，无法恢复。",
+        "dbSlimmingIncludeActiveConfirmDescription": "活跃任务即使超过所选时间，也可能仍在运行。清理不会等待任务停止，任务在扫描后继续产生的消息也可能被清除。启用后，超过所选时间的活跃、已归档和软删除任务都会被清理。符合范围的活跃任务历史消息和 Agent 上下文将被清除；普通任务条目也将从列表移除，伙伴主任务仍会保留。数据库备份可以恢复任务和消息数据；不创建备份时，这些数据也无法恢复。用于审查或撤销这些消息所产生文件改动的记录不包含在数据库备份中，无法恢复。",
         "dbSlimmingIncludeActiveConfirmButton": "纳入活跃任务",
         "dbSlimmingIncludeActiveCancelButton": "保留活跃任务",
         "dbSlimmingBackupLabel": "清理前备份数据库",
@@ -8845,6 +8845,7 @@
     }
   },
   "voiceInputOverlay": {
+    "rateLimited": "语音请求过于频繁，请稍后重试。",
     "status": {
       "listening": "语音输入中",
       "submitting": "正在确认",
@@ -9674,7 +9675,8 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "远端连接中断了，可能正在更新。这一轮已经结束，请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
-      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。想少被打断，可以把任务切到「默认权限」自行掌控。",
+      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。想少被打断，可以把任务切到「完全访问」，但风险更高。",
+      "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。个人微信不能使用「完全访问」，请直接确认这次操作。",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批没完成，确认也没有送到或没有被点。这次拒绝不是你点的。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端任务不能使用本机兼容通道。请改用 Cindy AI，或在本机任务里继续。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",

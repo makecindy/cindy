@@ -10,6 +10,7 @@ vi.mock('../audioContextPool', () => ({ PCM16K_WORKLET_NAME: 'pcm16k-worklet' })
 
 type Capture = {
   output: number[];
+  frames?: number[];
   feed: (input: Float32Array) => void;
   drain: () => Promise<void>;
   reset: () => Promise<void>;
@@ -17,6 +18,7 @@ type Capture = {
 
 function createWorkletCapture(rate: number): Capture {
   const output: number[] = [];
+  const frames: number[] = [];
   type Processor = {
     port: { onmessage: (event: { data: Record<string, unknown> }) => void };
     process: (inputs: Float32Array[][]) => void;
@@ -29,7 +31,11 @@ function createWorkletCapture(rate: number): Capture {
         port = {
           onmessage: null,
           postMessage: (message: { type: string; pcm16k?: ArrayBuffer }) => {
-            if (message.type === 'pcm16k') output.push(...new Int16Array(message.pcm16k!));
+            if (message.type === 'pcm16k') {
+              const pcm = new Int16Array(message.pcm16k!);
+              output.push(...pcm);
+              frames.push(pcm.length);
+            }
           },
         };
       },
@@ -45,6 +51,7 @@ function createWorkletCapture(rate: number): Capture {
   const send = (data: Record<string, unknown>): void => processor.port.onmessage({ data });
   return {
     output,
+    frames,
     feed: (input) => processor.process([[input]]),
     drain: async () => {
       send({ type: 'flush', flushId: 1 });
@@ -112,7 +119,7 @@ describe.each([
     },
   );
 
-  it.each([48_000, 44_100, 8_000])(
+  it.each([48_000, 44_100, 16_000, 8_000])(
     'preserves the waveform across arbitrary block boundaries at %i Hz',
     async (rate) => {
       const input = Float32Array.from({ length: 4097 }, (_, i) => Math.sin(i * 0.13) * 0.7);
@@ -129,6 +136,18 @@ describe.each([
     },
   );
 
+  it('does not retain or mutate the browser input buffer when no resampling is needed', async () => {
+    const capture = createCapture(16_000);
+    const input = Float32Array.from({ length: 128 }, (_, i) => Math.sin(i * 0.13) * 0.7);
+    const original = input.slice();
+    capture.feed(input);
+    expect(input).toEqual(original);
+    // The browser may overwrite its input buffer on the next render quantum.
+    input.fill(-1);
+    await capture.drain();
+    expect(capture.output).toEqual(expectedPcm(original, 16_000));
+  });
+
   it('does not carry samples or fractional position into the next recording', async () => {
     const capture = createCapture(44_100);
     feedChunks(capture, new Float32Array(256).fill(-0.75), [128]);
@@ -139,4 +158,20 @@ describe.each([
     await capture.drain();
     expect(capture.output).toEqual(expectedPcm(next, 44_100));
   });
+});
+
+it('delivers 10 ms first, then normal 40 ms packets, including after reactivation', async () => {
+  const capture = createWorkletCapture(16000);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    capture.output.length = 0;
+    capture.frames!.length = 0;
+    capture.feed(new Float32Array(159).fill(0.5));
+    expect(capture.output).toHaveLength(0);
+    capture.feed(new Float32Array(1).fill(0.5));
+    expect(capture.frames).toEqual([160]);
+    capture.feed(new Float32Array(640).fill(0.5));
+    expect(capture.frames).toEqual([160, 640]);
+    expect(capture.output).toEqual(expectedPcm(new Float32Array(800).fill(0.5), 16000));
+    await capture.reset();
+  }
 });

@@ -63,7 +63,7 @@ export type SessionTailBannerState = SessionTailErrorBanner | SessionTailInterru
 
 export interface ResolveSessionTailBannerInput {
   messages: readonly RemoteMessage[];
-  session: Pick<RemoteSession, 'activeTurnStartedAt' | 'lastTurnEndedAt' | 'clearedAt'> | null;
+  session: Pick<RemoteSession, 'activeTurnStartedAt' | 'lastTurnEndedAt' | 'clearedAt' | 'source'> | null;
   projection: Pick<InputProjection, 'error' | 'credentialSwitchWait'>;
   isSessionStreaming: boolean;
   /**
@@ -109,9 +109,9 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
-      text: nonRetryableGuidance ?? agentErrorGuidance ?? localizeUnclassifiedAgentError(tail.text),
+      text: nonRetryableGuidance ?? agentErrorGuidance ?? localizeUnclassifiedAgentError(tail.text, input.session?.source),
       rawError: tail.text,
-      ...(!nonRetryableGuidance && !agentErrorGuidance ? { summaryKey: unclassifiedAgentErrorI18nKey(tail.text) } : {}),
+      ...(!nonRetryableGuidance && !agentErrorGuidance ? { summaryKey: unclassifiedAgentErrorI18nKey(tail.text, input.session?.source) } : {}),
       continueKind: tail.reason === APP_EXIT_INTERRUPTED_REASON ? 'interrupted' : 'error',
       retryable: nonRetryableGuidance === null && !requiresAgentErrorConfigurationChange(tail.text),
     };

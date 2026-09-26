@@ -1221,10 +1221,10 @@
         "dbSlimmingArchiveAgeOption1": "1 month",
         "dbSlimmingArchiveAgeOption3": "3 months",
         "dbSlimmingArchiveAgeOption6": "6 months",
-        "dbSlimmingIncludeActiveLabel": "Clean active task history",
-        "dbSlimmingIncludeActiveDescription": "Also clean history from active tasks older than the selected period",
+        "dbSlimmingIncludeActiveLabel": "Clean Active Tasks",
+        "dbSlimmingIncludeActiveDescription": "Also clean active tasks older than the selected period and remove them from the task list",
         "dbSlimmingIncludeActiveConfirmTitle": "Include active tasks in database cleanup?",
-        "dbSlimmingIncludeActiveConfirmDescription": "An active task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, active, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible active tasks and their Agent context will be reset; task entries remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
+        "dbSlimmingIncludeActiveConfirmDescription": "An active task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, active, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible active tasks and their Agent context will be reset; ordinary task entries will also be removed from the list, while teammates’ main tasks remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
         "dbSlimmingIncludeActiveConfirmButton": "Include active tasks",
         "dbSlimmingIncludeActiveCancelButton": "Keep active tasks",
         "dbSlimmingBackupLabel": "Back up database before cleanup",
@@ -8847,6 +8847,7 @@
     }
   },
   "voiceInputOverlay": {
+    "rateLimited": "Too many voice requests. Wait a moment, then try again.",
     "status": {
       "listening": "Voice input",
       "submitting": "Finalizing",
@@ -9680,7 +9681,8 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
-      "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision (network or service hiccup), so actions that need review are being handed to you to confirm. Switch this task to Default permissions if you would rather not be interrupted.",
+      "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
+      "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Automatic review was unavailable, and the confirmation request was not completed. This is not a user rejection.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote tasks cannot use this computer’s compatibility route. Switch to Cindy AI, or continue in a local task.",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
