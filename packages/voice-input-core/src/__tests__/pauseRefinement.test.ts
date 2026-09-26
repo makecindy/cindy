@@ -9,6 +9,7 @@ import {
 import type {
   AsrEvent,
   AsrProvider,
+  RefineRequestBudget,
   RefinementResult,
   SpeechSegment,
   VoiceTimelineEvent,
@@ -22,7 +23,7 @@ afterEach(() => {
 
 function setup(
   enabled = true,
-  options: { refineRequestLimit?: () => number | undefined } = {},
+  options: { refineRequestBudget?: () => RefineRequestBudget | undefined } = {},
 ) {
   let event: (value: AsrEvent) => void = () => {};
   const asr: AsrProvider = {
@@ -60,7 +61,7 @@ function setup(
     refiner: { refine },
     logger: new VoiceTimelineLogger((timelineEvent) => events.push(timelineEvent)),
     pauseRefinementEnabled: enabled,
-    refineRequestLimit: options.refineRequestLimit,
+    refineRequestBudget: options.refineRequestBudget,
     callbacks: {
       onDraftChanged: drafts,
       onSubmitted: submitted,
@@ -351,7 +352,8 @@ describe("pause refinement", () => {
 
 describe("refine request limit", () => {
   const pauseSkips = (events: VoiceTimelineEvent[]) =>
-    events.filter((event) => event.type === "pause_refine_skipped");
+    events.filter((event) => event.type === "speculative_refine_skipped");
+  const budget = (limit: number, sessionKey = "session-1") => () => ({ sessionKey, limit });
 
   // Speaks three sentences with a pause after each, finishing every pause
   // request so the next pause is allowed to fire.
@@ -366,12 +368,13 @@ describe("refine request limit", () => {
   }
 
   it("keeps the last server allowance for the final text (legacy limit of 2)", async () => {
-    const h = setup(true, { refineRequestLimit: () => 2 });
+    const h = setup(true, { refineRequestBudget: budget(2) });
     await h.controller.start();
     await speakThreeSentencesWithPauses(h);
     expect(h.requests.map((r) => r.text)).toEqual(["第一句。"]);
     expect(pauseSkips(h.events)).toEqual([
       expect.objectContaining({
+        stage: "pause",
         reason: "final_request_reserved",
         requestLimit: 2,
         requestsStarted: 1,
@@ -388,7 +391,7 @@ describe("refine request limit", () => {
   });
 
   it("uses every allowance but one for pauses when the server reports more", async () => {
-    const h = setup(true, { refineRequestLimit: () => 3 });
+    const h = setup(true, { refineRequestBudget: budget(3) });
     await h.controller.start();
     await speakThreeSentencesWithPauses(h);
     expect(h.requests).toHaveLength(2);
@@ -400,7 +403,7 @@ describe("refine request limit", () => {
 
   it("reads the limit when a pause request is due, after the session reported it", async () => {
     let limit = LEGACY_MANAGED_REFINE_REQUEST_LIMIT;
-    const h = setup(true, { refineRequestLimit: () => limit });
+    const h = setup(true, { refineRequestBudget: () => ({ sessionKey: "session-1", limit }) });
     await h.controller.start();
     limit = 8;
     await speakThreeSentencesWithPauses(h);
@@ -410,7 +413,7 @@ describe("refine request limit", () => {
   });
 
   it("starts every recording with a fresh allowance", async () => {
-    const h = setup(true, { refineRequestLimit: () => 2 });
+    const h = setup(true, { refineRequestBudget: budget(2) });
     await h.controller.start();
     await speakThreeSentencesWithPauses(h);
     await h.controller.cancel();
@@ -419,6 +422,64 @@ describe("refine request limit", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(h.requests.at(-1)?.text).toBe("新录音。");
     await h.controller.cancel();
+  });
+
+  it("starts a fresh count when a reconnect switches to a new session", async () => {
+    let sessionKey = "session-1";
+    const h = setup(true, { refineRequestBudget: () => ({ sessionKey, limit: 2 }) });
+    await h.controller.start();
+    h.say("第一句。");
+    await vi.advanceTimersByTimeAsync(2000);
+    await h.finish(0, "第一句话。");
+    h.say("第一句。第二句。");
+    await vi.advanceTimersByTimeAsync(2000);
+    // The first session keeps its last request for the final text.
+    expect(h.requests).toHaveLength(1);
+
+    sessionKey = "session-2";
+    h.say("第一句。第二句。第三句。");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.requests.map((r) => r.text)).toEqual([
+      "第一句。",
+      "第一句。第二句。第三句。",
+    ]);
+    await h.finish(1, "三句话。");
+    h.say("第一句。第二句。第三句。第四句。");
+    await vi.advanceTimersByTimeAsync(2000);
+    // The new session is now down to its reserved final request.
+    expect(h.requests).toHaveLength(2);
+    await h.controller.stop();
+    expect(h.requests).toHaveLength(3);
+  });
+
+  it("keeps the stop-time speculative request within the budget", async () => {
+    // Without a pause request, stop speculates on the visible text; when ASR
+    // then revises it, a second (final) request follows. A limit of 1 only
+    // allows the final one.
+    const h = setup(true, { refineRequestBudget: budget(1) });
+    await h.controller.start();
+    h.say("第一句。");
+    h.asr.flushAudio = async () => {
+      h.say("修正的第一句。");
+    };
+    await h.controller.stop();
+    expect(h.requests.map((r) => r.text)).toEqual(["修正的第一句。"]);
+    expect(pauseSkips(h.events)).toEqual([
+      expect.objectContaining({ stage: "stop", requestLimit: 1, requestsStarted: 0 }),
+    ]);
+    await h.finish(0, "修正后的第一句。");
+    expect(h.applied).toHaveBeenCalledExactlyOnceWith(expect.anything(), "修正后的第一句。");
+  });
+
+  it("still speculates at stop when the budget leaves room for the final request", async () => {
+    const h = setup(true, { refineRequestBudget: budget(2) });
+    await h.controller.start();
+    h.say("第一句。");
+    h.asr.flushAudio = async () => {
+      h.say("修正的第一句。");
+    };
+    await h.controller.stop();
+    expect(h.requests.map((r) => r.text)).toEqual(["第一句。", "修正的第一句。"]);
   });
 
   it("does not limit refiners without a reported limit", async () => {

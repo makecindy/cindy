@@ -3363,7 +3363,7 @@ export default function NewRemoteSessionScreen() {
         connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
         refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
           voiceContext.createRefinerTarget(providerId, options),
-        refineRequestLimit: () => voiceContext.refineRequestLimit(),
+        refineRequestBudget: () => voiceContext.refineRequestBudget(),
         warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string }) =>
           voiceContext.warmRefiner(input),
         initialDraft: currentDraft,

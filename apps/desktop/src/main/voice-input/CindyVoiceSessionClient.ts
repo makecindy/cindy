@@ -2,6 +2,7 @@ import { app } from 'electron';
 import {
   LEGACY_MANAGED_REFINE_REQUEST_LIMIT,
   resolveManagedRefineRequestLimit,
+  type RefineRequestBudget,
 } from '@cindy/voice-input-core';
 
 import * as authManager from '../authManager.js';
@@ -116,9 +117,12 @@ export class CindyVoiceRunContext {
     return { websocketUrl: session.asr.websocketUrl, authorizationToken: session.ticket };
   }
 
-  /** Refinement requests the current session accepts; refines target the latest session. */
-  refineRequestLimit(): number {
-    return this.latestRefineRequestLimit;
+  /**
+   * Refinement requests the current session accepts. Refines target the latest
+   * session, so a reconnect (new session id) starts a fresh count.
+   */
+  refineRequestBudget(): RefineRequestBudget {
+    return { sessionKey: this.latestSessionId ?? '', limit: this.latestRefineRequestLimit };
   }
 
   async createRefinerTarget(

@@ -1319,7 +1319,7 @@ describe('mobileVoiceController', () => {
           },
         },
         // A voice-server that does not report its limit accepts 2 per session.
-        refineRequestLimit: () => 2,
+        refineRequestBudget: () => ({ sessionKey: 'session-1', limit: 2 }),
         startAudio: startAudibleAudio,
         onDraftChanged: () => {},
       });

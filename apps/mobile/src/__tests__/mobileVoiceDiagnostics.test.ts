@@ -239,13 +239,14 @@ describe('mobile voice diagnostics', () => {
     expect(classifyMobileVoiceFailure(new Error(SPOKEN))).toBe('other');
   });
 
-  it('logs a pause refinement held back for the final text', () => {
+  it('logs a speculative refinement held back for the final text', () => {
     const record = createMobileVoiceTimelineRecorder({ provider: 'litellm-volcengine-sauc-asr' });
     record({ type: 'start_clicked', runId: 'run-12345678', at: 1 });
     record({
-      type: 'pause_refine_skipped',
+      type: 'speculative_refine_skipped',
       runId: 'run-12345678',
       at: 2,
+      stage: 'pause',
       reason: 'final_request_reserved',
       requestLimit: 2,
       requestsStarted: 1,
@@ -253,8 +254,14 @@ describe('mobile voice diagnostics', () => {
     expect(messages().at(-1)).toMatchObject({
       scope: 'voice',
       args: [
-        'pause refinement skipped',
-        { runId: '12345678', reason: 'final_request_reserved', requestLimit: 2, requestsStarted: 1 },
+        'speculative refinement skipped',
+        {
+          runId: '12345678',
+          stage: 'pause',
+          reason: 'final_request_reserved',
+          requestLimit: 2,
+          requestsStarted: 1,
+        },
       ],
     });
   });

@@ -10,6 +10,7 @@ import { i18n } from '@/i18n';
 import {
   LEGACY_MANAGED_REFINE_REQUEST_LIMIT,
   resolveManagedRefineRequestLimit,
+  type RefineRequestBudget,
 } from '@cindy/voice-input-core';
 import type {
   MobileVoiceCredentialSyncAsr,
@@ -133,9 +134,12 @@ export class MobileCindyVoiceRunContext {
     return session;
   }
 
-  /** Refinement requests the current session accepts; refines target the latest session. */
-  refineRequestLimit(): number {
-    return this.latestRefineRequestLimit;
+  /**
+   * Refinement requests the current session accepts. Refines target the latest
+   * session, so a reconnect (new session id) starts a fresh count.
+   */
+  refineRequestBudget(): RefineRequestBudget {
+    return { sessionKey: this.latestSessionId ?? '', limit: this.latestRefineRequestLimit };
   }
 
   async createRefinerTarget(refinerProvider: string, options?: { refreshAccessToken?: boolean }): Promise<{
