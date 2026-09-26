@@ -47,6 +47,21 @@ it('does not renew a dirty draft against a newer remote revision', async () => {
   expect(h.view.conflict).toBe(true); expect(h.view.values.name).toBe('Local edit');
   await act(async () => h.view.onSubmit(h.view.panel)); expect(h.invoke).not.toHaveBeenCalled();
 });
+it('asks to discard a conflicted draft on back instead of ignoring the gesture', async () => {
+  await render(); await act(async () => h.view.onOpen('profile'));
+  await act(async () => h.view.onChange({ name: 'Local edit' }));
+  h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...panel, values: { name: 'Desktop edit' } }] });
+  await act(async () => h.view.onRetry());
+  const { Alert } = await import('react-native');
+  await act(async () => h.view.onBack());
+  expect(Alert.alert).toHaveBeenCalledOnce(); expect(h.invoke).not.toHaveBeenCalled();
+  const discard = vi.mocked(Alert.alert).mock.calls[0][2]!.find(button => button.style === 'destructive')!;
+  await act(async () => discard.onPress!());
+  expect(h.view.page).toBe('home'); expect(h.close).not.toHaveBeenCalled();
+  // The discarded draft gives way to the newer copy already read, not the stale one.
+  await act(async () => h.view.onOpen('profile'));
+  expect(h.view.values.name).toBe('Desktop edit'); expect(h.view.conflict).toBe(false);
+});
 it('waits for native dismissal before presenting the model picker and preserves the draft on return', async () => {
   await render(); await act(async () => h.view.onOpen('models'));
   await act(async () => h.model.onPick(0));

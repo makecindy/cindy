@@ -214,6 +214,49 @@ async function writeTextAtomic(absPath: string, content: string): Promise<void> 
   }
 }
 
+/**
+ * 原子的「不存在才创建」:补种不能覆盖用户此刻正在编辑器里保存的文件。
+ *
+ * 先检查再 rename 覆盖,中间有一个窗口:检查时还没有,rename 前用户刚好保存了,
+ * 补种就会把刚保存的内容冲掉。这里把内容写进临时文件后用 link 挂到目标路径 ——
+ * 目标已存在时 link 直接报 EEXIST 而不是替换,且内容已完整写好才出现在目标路径。
+ * 不支持硬链接的文件系统退回「紧挨着再确认不存在 + rename」,保证不留半截文件。
+ * 返回是否真的创建了。
+ */
+async function writeTextIfAbsent(absPath: string, content: string): Promise<boolean> {
+  if (Buffer.byteLength(content, 'utf8') > BOT_PROFILE_TEXT_MAX_BYTES) {
+    throw new BotProfileFolderError(
+      'TEXT_TOO_LARGE',
+      `content exceeds ${BOT_PROFILE_TEXT_MAX_BYTES} bytes`,
+    );
+  }
+  await fs.mkdir(path.dirname(absPath), { recursive: true });
+  const tmp = `${absPath}.tmp-${process.pid}-${(writeSeq += 1)}`;
+  await fs.writeFile(tmp, content, 'utf8');
+  try {
+    await fs.link(tmp, absPath);
+    return true;
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    /*
+      没有硬链接的文件系统上不存在「原子且不替换」的 rename。这里优先保证崩溃原子性
+      (绝不留下写到一半的文件 —— 半截 SOUL.md 会被对账当成正式身份收进数据库),
+      在 rename 前紧挨着再确认一次目标不存在;剩下的只是两次系统调用之间的窗口,
+      且只出现在这类少见的文件系统上。
+    */
+    try {
+      await fs.access(absPath);
+      return false;
+    } catch (missing) {
+      if ((missing as NodeJS.ErrnoException).code !== 'ENOENT') throw missing;
+    }
+    await fs.rename(tmp, absPath);
+    return true;
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+  }
+}
+
 /** 一份摊开的伙伴档案。 */
 export interface BotProfileFolderContent {
   /** 身份(SOUL.md)。 */
@@ -328,7 +371,7 @@ export interface BotProfileFolderMigration {
  * 两件事:
  *
  *   1. 用数据库里的当前值播种 `SOUL.md` / `memories/USER.md` / `config.json`。
- *      **只在没有 SOUL.md 时做**,绝不覆盖用户已经改过的文件。
+ *      **只在没有 SOUL.md 时做**,且只补缺失的那几个文件,绝不覆盖用户已经改过的文件。
  *   2. 把 `<userData>/bot-skills/<botId>/` 整个搬成 `<家>/skills` 的邻居
  *      (`.claude-plugin/` 一并带走)。一个伙伴一个家,不该散在两处。
  *
@@ -347,12 +390,13 @@ export async function migrateBotProfileFolder(
   try {
     await fs.access(soulPath);
   } catch {
-    await writeBotProfileFolder(userDataDir, botId, {
-      identitySource: seed.identitySource,
-      userContextSource: seed.userContextSource,
-      config: seed.config,
-    });
-    seeded = true;
+    // Seed only what is missing, each slot with an atomic create-if-absent: a hand-edited
+    // USER.md or config.json next to a missing SOUL.md — or a file the user saves in an
+    // editor at this very moment — is the user's content and must not be reset.
+    const at = (relative: string) => resolveInside(userDataDir, botId, relative);
+    seeded = await writeTextIfAbsent(soulPath, seed.identitySource);
+    await writeTextIfAbsent(at(SLOT.userContext), seed.userContextSource);
+    await writeTextIfAbsent(at(SLOT.config), `${JSON.stringify(seed.config, null, 2)}\n`);
   }
 
   const skillsMoved = await migrateBotSkillsIntoProfileFolder(userDataDir, botId, legacyUserDataDir);

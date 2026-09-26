@@ -46,6 +46,57 @@ export function botRouteForOwnedSession(
     : `/bots/${encodeURIComponent(bot.id)}/session/${encodeURIComponent(sessionId)}`;
 }
 
+export interface BotSessionEntryRouteDeps {
+  readProfiles: () => readonly BotProfile[];
+  readSessionSource: (sessionId: string) => Promise<string | null | undefined>;
+  /** Loads the current owner's profiles; `refresh` re-reads an already loaded projection. */
+  loadProfiles: (refresh: boolean) => Promise<readonly BotProfile[]>;
+}
+
+/**
+ * Resolve a session-only entry such as a notification click. The in-memory
+ * projection is only kept fresh while a Bots view is mounted, so a click can
+ * arrive before it was ever loaded for this account, or after a new Bot session
+ * was linked. Load it once, and re-read it when the row itself is a Bot session.
+ */
+export async function resolveBotRouteForSessionEntry(
+  sessionId: string,
+  deps: BotSessionEntryRouteDeps,
+): Promise<string | null> {
+  const known = botRouteForOwnedSession(deps.readProfiles(), sessionId);
+  if (known) return known;
+  const source = await deps.readSessionSource(sessionId).catch(() => null);
+  const profiles = await deps.loadProfiles(source === 'bot').catch(() => []);
+  return botRouteForOwnedSession(profiles, sessionId);
+}
+
+export interface SessionEntryNavigatorDeps {
+  resolveBotRoute: (sessionId: string) => Promise<string | null>;
+  openBotRoute: (route: string) => void;
+  /** `isLatest` lets the ordinary path drop its own late async route result too. */
+  openOrdinary: (sessionId: string, messageClientId: string | undefined, isLatest: () => boolean) => void;
+}
+
+/**
+ * Session entries (notification clicks, task deep links) resolve asynchronously.
+ * Only the latest entry may navigate, so a slow lookup for an earlier click can
+ * never override a newer one.
+ */
+export function createSessionEntryNavigator(
+  deps: SessionEntryNavigatorDeps,
+): (sessionId: string, messageClientId?: string) => void {
+  let sequence = 0;
+  return (sessionId, messageClientId) => {
+    const entry = ++sequence;
+    const isLatest = () => sequence === entry;
+    void deps.resolveBotRoute(sessionId).then((route) => {
+      if (!isLatest()) return;
+      if (route) deps.openBotRoute(route);
+      else deps.openOrdinary(sessionId, messageClientId, isLatest);
+    });
+  };
+}
+
 export function buildBotSessionOwners(
   profiles: readonly BotProfile[],
 ): Map<string, BotSessionOwner> {

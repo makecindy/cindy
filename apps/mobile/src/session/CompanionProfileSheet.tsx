@@ -142,16 +142,13 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const open = (next: string) => {
     if (inFlight.current) return;
     if (next === 'memoryEntries') {
-      void (async () => {
-        if (dirty && panel && !(await submit(panel))) return;
+      void settleDraft(() => {
         setReceipt(null); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setConfirmation(null); setEditing(false); setPage(next);
-      })(); return;
+      }); return;
     }
     if (next === 'avatar' || next === 'connections' || next === 'personalSkills') {
-      void (async () => {
-        if (dirty && panel && !(await submit(panel))) return;
-        await openEditor(`settings:${resource?.ref.id}/${next === 'personalSkills' ? 'skills' : next}`);
-      })(); return;
+      void settleDraft(() => openEditor(`settings:${resource?.ref.id}/${next === 'personalSkills' ? 'skills' : next}`));
+      return;
     }
     setConflict(null); setEditor(null); setEditorPanel(null); setPage(next); setReceipt(null); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setConfirmation(null); setEditing(false);
     setValues(data?.panels.find(item => item.id === next)?.values ?? {});
@@ -222,7 +219,9 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       else if (!(await memory.back())) open('memory');
       return;
     }
-    if (dirty && panel && !(await submit(panel))) return;
+    await settleDraft(() => leavePage(close));
+  };
+  const leavePage = async (close: boolean) => {
     if (close) { onClose(); return; }
     if (page === 'editor' && editor) {
       if (editorPanel && editor.panels.filter(item => item.action && item.id !== 'remove').length > 1) { setEditorPanel(null); setEditing(false); return; }
@@ -246,6 +245,28 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       } else { setEditor(next); setError(false); }
     } catch { if (current.current === started && generation.current === sequence) setError(true); }
   };
+  // Leaving a page saves its dirty draft first. When the draft cannot be saved right now
+  // (offline, a host-disabled action or an unresolved version conflict), ask whether to
+  // discard it instead of silently keeping the user on a page they cannot leave.
+  const settleDraft = async (proceed: () => void | Promise<void>) => {
+    if (!dirty || !panel) { await proceed(); return; }
+    if (online && resource && panel.action && !panel.action.disabled && conflict?.page !== page) {
+      if (await submit(panel)) await proceed();
+      return;
+    }
+    const started = binding;
+    Alert.alert(t('devices.companions.automation.unsavedTitle'), t('devices.companions.automation.unsavedBody'), [
+      { text: t('devices.common.cancel'), style: 'cancel' },
+      { text: t('devices.companions.automation.discard'), style: 'destructive', onPress: () => {
+        if (current.current !== started || inFlight.current) return;
+        // Discarding a conflicted draft adopts the newer copy already read, as 「放弃编辑并重新加载」 does.
+        if (conflict?.page === page) {
+          if (page === 'editor') setEditor(conflict.next); else setData(conflict.next);
+        }
+        setEditing(false); setConflict(null); void proceed();
+      } },
+    ]);
+  };
   const discardDraft = (reload: boolean) => {
     Alert.alert(t('devices.companions.automation.unsavedTitle'), t('devices.companions.automation.unsavedBody'), [
       { text: t('devices.common.cancel'), style: 'cancel' },
@@ -267,8 +288,10 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const titleKey = page === 'home' ? 'settingsTitle' : page === 'editor' ? editorTitles[editorResourceId.split('/')[1]] ?? 'title' : page;
   const note = (key: string) => <Text selectable style={styles.note}>{t(`devices.companionProfile.${key}`, { deviceName })}</Text>;
   const row = (id: string, Icon: typeof Brain) => <ContextSheetRow key={id} trailing="chevron" label={t(`devices.companionProfile.${id}`)} icon={<Icon size={iconSize.lg} color={colors.textSecondary} />} onPress={() => open(id)} />;
+  // Same as iOS: a host-disabled action (an unavailable connection, a paused teammate's skill) is read-only.
   const renderPanel = (target: ProfilePanel | undefined) => target?.action
-    ? <CompanionProfileForm panel={target} values={editing ? values : target.values} onChange={next => { if (!editing) draftBase.current = target.values; setValues(next); setEditing(true); }} disabled={busy || !online} />
+    ? <>{target.id === 'capability' && target.text ? <Text selectable style={styles.note}>{target.text}</Text> : null}
+      <CompanionProfileForm panel={target} values={editing ? values : target.values} onChange={next => { if (!editing) draftBase.current = target.values; setValues(next); setEditing(true); }} disabled={busy || !online || !!target.action.disabled} /></>
     : target?.text ? <Text selectable style={styles.body}>{target.text}</Text> : !data && online ? <Text style={styles.note}>{t('devices.resources.loading')}</Text> : note('hostUpgrade');
 
   const memoryPage = <CompanionMemoryPage memory={memory} online={online} botName={name} memoryEnabled={actionPanel('memory')?.values.memory !== false} />;
@@ -327,7 +350,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         {editorLoading ? <Text style={styles.note}>{t('devices.resources.loading')}</Text> : null}
         {panel ? <>
           {renderPanel(panel)}
-          <MainWindowActionButton action={{ label: t('devices.companionProfile.save'), busy, disabled: !online || !dirty || conflict?.page === page, onPress: () => void submit(panel) }} />
+          <MainWindowActionButton action={{ label: t('devices.companionProfile.save'), busy, disabled: !online || !dirty || conflict?.page === page || !!panel.action?.disabled, onPress: () => void submit(panel) }} />
           {editor?.panels.filter(item => item.id === 'remove' && item.action).map(item => <MainWindowActionButton key={item.id} action={{ label: label(item.action!.label), tone: 'danger', disabled: busy || !online, onPress: () => setConfirmation(item) }} />)}
         </> : editor?.panels.map(item => item.entries ? item.entries.map(entry => <ContextSheetRow key={entry.id} icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} />)
           : item.action ? item.id === 'remove' ? <MainWindowActionButton key={item.id} action={{ label: label(item.action.label), tone: 'danger', disabled: busy || !online, onPress: () => setConfirmation(item) }} /> : <ContextSheetRow key={item.id} icon={null} trailing="chevron" label={label(item.title ?? item.action.label)} onPress={() => { setEditorPanel(item.id); setValues(item.values); setEditing(false); }} />
@@ -358,7 +381,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         {page === 'profile' && actionPanel('avatar')?.entries?.length ? row('avatar', UserRound) : null}
         {page === 'models' && panel?.action ? models : renderPanel(panel)}
         {(page === 'profile' || page === 'memory') && panel && !panel.action ? note('largeProfileRecovery') : null}
-        {panel?.action ? <MainWindowActionButton action={{ label: t('devices.companionProfile.save'), busy, disabled: !online || !dirty || conflict?.page === page, onPress: () => void submit(panel) }} /> : null}
+        {panel?.action ? <MainWindowActionButton action={{ label: t('devices.companionProfile.save'), busy, disabled: !online || !dirty || conflict?.page === page || !!panel.action?.disabled, onPress: () => void submit(panel) }} /> : null}
         {page === 'memory' && data ? memoryList ? row('memoryEntries', Brain) : panel?.action ? note('hostUpgrade') : null : null}
       </>}
     </View>

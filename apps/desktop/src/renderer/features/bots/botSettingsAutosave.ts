@@ -60,11 +60,13 @@ export function normalizeBotSettingsPayload(
   draft: BotSettingsDraft,
   fallbackName: string,
 ): BotSettingsPayload {
+  // The host trims every profile text; compare the same way so a space or line
+  // break still being typed is neither a change nor a reason to save again.
   return {
     name: draft.name.trim() || fallbackName,
     description: draft.description.trim(),
-    identitySource: draft.identitySource,
-    userContextSource: draft.userContextSource,
+    identitySource: draft.identitySource.trim(),
+    userContextSource: draft.userContextSource.trim(),
     avatar: draft.avatar,
     avatarColor: draft.avatarColor,
     capabilities: draft.capabilities,
@@ -150,6 +152,8 @@ export function botSettingsChanges(previous: BotSettingsPayload, next: BotSettin
   };
 }
 
+const BOT_SETTINGS_TEXT_FIELDS = ['name', 'description', 'identitySource', 'userContextSource'] as const;
+
 /** Advance untouched fields to a live profile without discarding pending local edits. */
 export function reconcileBotSettingsDraft(
   baseline: BotSettingsPayload,
@@ -158,8 +162,14 @@ export function reconcileBotSettingsDraft(
 ): BotSettingsDraft {
   const normalized = normalizeBotSettingsPayload(draft, baseline.name);
   const changes = botSettingsChanges(baseline, normalized);
+  // Text that only differs from the saved copy by surrounding whitespace is the
+  // user mid-typing (a trailing space or new line); keep it instead of the trimmed copy.
+  const typedWhitespace = Object.fromEntries(BOT_SETTINGS_TEXT_FIELDS
+    .filter((key) => draft[key] !== incoming[key] && draft[key].trim() === incoming[key])
+    .map((key) => [key, draft[key]]));
   return {
     ...incoming,
+    ...typedWhitespace,
     ...Object.fromEntries(Object.keys(changes)
       .filter((key) => key !== 'capabilities')
       .map((key) => [key, draft[key as keyof BotSettingsDraft]])),

@@ -100,8 +100,9 @@ import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchComma
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import { getBotProfiles } from '@/features/bots/botStore';
-import { botRouteForOwnedSession } from '@/features/bots/botSessionOwners';
+import { ensureBotProfilesLoaded, getBotProfiles } from '@/features/bots/botStore';
+import { createSessionEntryNavigator, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
+import * as sessionService from '@/lib/sessionService';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
@@ -491,14 +492,8 @@ export function MainLayout() {
   // 防止 HMR listener 累积或 Electron click 异常多次触发时反复 navigate。
   const currentPathRef = useRef(`${location.pathname}${location.search}`);
   currentPathRef.current = `${location.pathname}${location.search}`;
-  const navigateToSession = useCallback(
-    (sessionId: string, messageClientId?: string) => {
-      const botRoute = botRouteForOwnedSession(getBotProfiles(), sessionId);
-      if (botRoute) {
-        const target = botRoute;
-        if (currentPathRef.current !== target) navigate(target);
-        return;
-      }
+  const navigateToOrdinarySession = useCallback(
+    (sessionId: string, messageClientId?: string, isLatest: () => boolean = () => true) => {
       // device-link 远程会话本地无 row:resolveSessionRoute 内部的 sessionService.get
       // 会 miss → 远程 Orca lead/worker 被当普通会话路由,CCAgentSessionView 再
       // redirect 到 orca 路由时会丢 searchJump 锚点。传入远程镜像的 session 对象,
@@ -506,6 +501,7 @@ export function MainLayout() {
       const remoteSession =
         remoteProjectsStore.getMergedRemoteSessions().find((s) => s.id === sessionId) ?? null;
       void resolveSessionRoute(sessionId, remoteSession).then((target) => {
+        if (!isLatest()) return;
         const visibleSession = resolveAgentIslandVisibleSessionFromRouteTarget(target);
         if (messageClientId) {
           // 带消息锚点:即使已在目标路由也要 navigate——新的 location.state 才能
@@ -539,6 +535,22 @@ export function MainLayout() {
     },
     [navigate],
   );
+  const sessionEntryDepsRef = useRef({ navigate, navigateToOrdinarySession });
+  sessionEntryDepsRef.current = { navigate, navigateToOrdinarySession };
+  // One navigator for the layout's lifetime: its sequence must span re-renders so a
+  // late lookup for an earlier notification cannot override a newer click.
+  const [navigateToSession] = useState(() => createSessionEntryNavigator({
+    resolveBotRoute: (sessionId) => resolveBotRouteForSessionEntry(sessionId, {
+      readProfiles: getBotProfiles,
+      readSessionSource: async (id) => (await sessionService.get(id)).source,
+      loadProfiles: ensureBotProfilesLoaded,
+    }),
+    openBotRoute: (route) => {
+      if (currentPathRef.current !== route) sessionEntryDepsRef.current.navigate(route);
+    },
+    openOrdinary: (sessionId, messageClientId, isLatest) =>
+      sessionEntryDepsRef.current.navigateToOrdinarySession(sessionId, messageClientId, isLatest),
+  }));
   navigateToSessionRef.current = navigateToSession;
   useEffect(() => {
     const unsubscribe = window.electronAPI.onNotificationFocusSession((sessionId) => {

@@ -36,6 +36,7 @@ vi.mock('../RemoteBotSettings', () => ({ RemoteBotSettings: ({ bot }: { bot: { d
 vi.mock('../botStore', () => ({
   useBotProfiles: () => [
     { id: 'bot-1', name: 'Filo', status: 'active', sessions: [], capabilities: {}, skills: [] },
+    { id: 'bot-paused', name: 'Paused', status: 'paused', sessions: [], capabilities: {}, skills: [] },
   ],
 }));
 vi.mock('../BotsHomeView', async () => {
@@ -214,6 +215,18 @@ it('keeps the drawer open while Escape only cancels an IME candidate', async () 
   expect(guard).not.toHaveBeenCalled();
   fireEvent.keyDown(dialog, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(guard).toHaveBeenCalledOnce();
+});
+
+it.each(['close button', 'Escape'])('closes a paused teammate\'s settings to the list via %s instead of bouncing back', async (kind) => {
+  const router = createMemoryRouter([{ path: '*', element: <><LocationProbe /><BotSettingsDrawer /></> }], {
+    initialEntries: ['/bots/bot-paused?settings=1'],
+  });
+  render(<RouterProvider router={router} />);
+  if (kind === 'Escape') fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+  else fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
+  await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/bots/list'));
+  // The save / routine-draft guard still runs before leaving.
   expect(guard).toHaveBeenCalledOnce();
 });
 

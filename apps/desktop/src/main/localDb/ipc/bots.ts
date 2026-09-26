@@ -163,18 +163,39 @@ export function getBotMemoryService(): ReturnType<typeof createBotMemoryService>
  * 写文件失败**不让保存整个失败**:数据库那份才是运行时读的东西,文件只影响
  * 「能不能用编辑器改」。吞掉异常但记一笔,不静默。
  */
-async function syncBotProfileFolder(
+function botUserContextSource(config: Record<string, unknown>): string {
+  return typeof config.userContextSource === 'string' ? config.userContextSource : '';
+}
+
+/**
+ * Seed a Bot Home that was never created (profiles from before the folder existed)
+ * so any save leaves editable SOUL.md / USER.md. Idempotent: an existing SOUL.md
+ * means the Home exists and nothing is touched.
+ */
+async function ensureBotProfileFolderSeeded(
   botId: string,
   identitySource: string,
   config: Record<string, unknown>,
   userDataDir = ownerScopedUserDataPath(),
 ): Promise<void> {
-  const { userContextSource } = config;
   try {
-    await writeBotProfileFolder(userDataDir, botId, {
+    await migrateBotProfileFolder(userDataDir, botId, {
       identitySource,
-      userContextSource: typeof userContextSource === 'string' ? userContextSource : '',
-    });
+      userContextSource: botUserContextSource(config),
+      config: Object.fromEntries(Object.entries(config).filter(([key]) => key !== 'userContextSource')),
+    }, app.getPath('userData'));
+  } catch (cause) {
+    log.warn('seed bot profile folder failed', { botId, error: String(cause) });
+  }
+}
+
+async function syncBotProfileFolder(
+  botId: string,
+  patch: { identitySource?: string; userContextSource?: string },
+  userDataDir = ownerScopedUserDataPath(),
+): Promise<void> {
+  try {
+    await writeBotProfileFolder(userDataDir, botId, patch);
   } catch (cause) {
     log.warn('write bot profile folder failed', { botId, error: String(cause) });
   }
@@ -286,8 +307,11 @@ async function reconcileCanonicalLink(
  * 挂在开新任务之前 —— 那正是「下一轮」的起点。整个过程失败不阻断开任务:最坏是
  * 这一轮还用旧身份,下一轮再收。
  */
-export async function reconcileBotProfileFolder(botId: string): Promise<void> {
+export async function reconcileBotProfileFolder(
+  botId: string,
+): Promise<{ from: number; to: number } | null> {
   const userDataDir = ownerScopedUserDataPath();
+  let derived: { from: number; to: number } | null = null;
   const legacyUserDataDir = app.getPath('userData');
   const client = getDbClient();
   const db = client.drizzle;
@@ -323,7 +347,7 @@ export async function reconcileBotProfileFolder(botId: string): Promise<void> {
         await migrateBotProfileFolder(userDataDir, id, seed, legacyUserDataDir);
       },
       deriveVersion: async (input) => {
-        await client.tx('bots.updateProfile', {
+        const result = await client.tx<{ currentVersion: number }>('bots.updateProfile', {
           id: input.botId,
           identitySource: input.identitySource,
           capabilitiesJson: safeJson(input.config),
@@ -331,11 +355,13 @@ export async function reconcileBotProfileFolder(botId: string): Promise<void> {
           expectedCurrentVersion: input.expectedCurrentVersion,
           now: Date.now(),
         });
+        derived = { from: input.expectedCurrentVersion, to: result.currentVersion };
       },
     });
   } catch (cause) {
     log.warn('reconcile bot profile folder failed', { botId, error: String(cause) });
   }
+  return derived;
 }
 
 function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' {
@@ -1167,8 +1193,7 @@ export async function createBotProfile(raw: unknown) {
   }
   await syncBotProfileFolder(
     id,
-    identitySource,
-    persistedCapabilities,
+    { identitySource, userContextSource: botUserContextSource(persistedCapabilities) },
     creationOwnerBoundary.userDataDir,
   );
   assertCreationOwnerStillCurrent();
@@ -1200,8 +1225,10 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   const patch: Partial<typeof botProfiles.$inferInsert> = { updatedAt: now };
   if (body.name !== undefined || body.displayName !== undefined)
     patch.displayName = readText(body.name ?? body.displayName, 'name', 200, true);
+  // Same bound as creation and `update_teammate_profile`: a description created
+  // there must stay editable here.
   if (body.description !== undefined)
-    patch.description = readText(body.description, 'description');
+    patch.description = readText(body.description, 'description', 12000);
 
   const expectedAvatar =
     body.avatar !== undefined && body.expectedAvatar !== undefined
@@ -1348,8 +1375,20 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       broadcastSessionPatched(canonical.sessionId, { permissionMode: canonical.mode });
     }
   }
-  await syncBotProfileFolder(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
+  // The files are the user's editing surface: rewrite only the file whose content this
+  // save changed, so pinning, a model change or editing the other file cannot clobber
+  // hand edits that have not been reconciled yet.
+  const nextUserContextSource = botUserContextSource(normalizedNextConfig);
+  const folderPatch = {
+    ...(nextIdentitySource !== (version?.identitySource ?? '') ? { identitySource: nextIdentitySource } : {}),
+    ...(nextUserContextSource !== botUserContextSource(previous) ? { userContextSource: nextUserContextSource } : {}),
+  };
+  await ensureBotProfileFolderSeeded(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
   owner.assertCurrent();
+  if (Object.keys(folderPatch).length > 0) {
+    await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
+    owner.assertCurrent();
+  }
   if (profileContentChanged) {
     const [canonical] = await db
       .select({ sessionId: botSessionLinks.sessionId })
@@ -1810,9 +1849,16 @@ export function registerBotIpc(): void {
       放在锁外面:它只读文件、按需派生版本,不碰 canonical 指针,与替换协调器
       要保护的东西不重叠。失败已在内部吞掉并记一笔,最坏是这一轮还用旧身份。
     */
-    await reconcileBotProfileFolder(input.botId);
+    const derived = await reconcileBotProfileFolder(input.botId);
     owner.assertCurrent();
-    return createBotCanonicalSessionPrepared(input);
+    if (!derived) return createBotCanonicalSessionPrepared(input);
+    // The host itself just folded the user's file edit into a new version. A caller
+    // that saw the version before it is not racing a concurrent change; any other
+    // mismatch still loses the create CAS.
+    broadcastBotProfileChanged({ botId: input.botId, change: 'updated' });
+    return createBotCanonicalSessionPrepared(input.expectedProfileVersion === derived.from
+      ? { ...input, expectedProfileVersion: derived.to }
+      : input);
   };
 
   ipcMain.handle('local-db:bots:create-canonical-session', async (event, raw: unknown) => {
