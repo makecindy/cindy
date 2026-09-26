@@ -94,7 +94,8 @@ Desktop 模型选择器、旧入口的配置浮层及设置详情在展示简介
 不把旧百分比当作新周期余量。ChatGPT Web 套餐名不回退到 Codex CLI 来源。
 费用符号、折扣和免费标签统一使用中性色，保留原价档位的符号个数、折扣明暗与百分比标签。
 整行不换行，长来源名称省略；额度段最多占行宽 70%，过长时省略，
-给来源保留可见空间，悬停仍可查看完整来源与额度状态。远程目录不读取本机账号余量；Cindy AI 及单供应商分栏
+给来源保留可见空间，悬停仍可查看完整来源与额度状态。远程目录不读取本机账号余量，改读被控端用量镜像
+（与会话用量 chip 共用同一缓存与推送，口径同 `useProviderWeeklyQuota.ts`）；Cindy AI 及单供应商分栏
 继续展示本地简介。实现见 `renderer/components/new-chat/ModelSourceDetails.tsx` 和
 `UnifiedModelRow.tsx`，行为覆盖见 `renderer/__tests__/modelSourceDetails.test.tsx` 及
 `unifiedModelPanelRendering.test.tsx`。
