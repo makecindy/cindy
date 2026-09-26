@@ -210,6 +210,8 @@ let lastResumeAtMs: number | null = null;
 let startupUpdateCheckInProgress = false;
 let resolvedRelaunchTheme: 'light' | 'dark' = 'dark';
 let busyProbe: () => boolean | Promise<boolean> = () => false;
+let agentRelaunchScheduled = false;
+let agentRelaunchTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -2071,6 +2073,91 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> 
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
+/** Report known platform apply blockers before telling the agent an update can be scheduled. */
+function agentUpdateApplyBlockReason(): string | null {
+  if (process.platform !== 'win32' && process.platform !== 'darwin' && process.platform !== 'linux') {
+    return '当前平台不支持应用内更新。';
+  }
+  if (isMacAppTranslocated()) return '请先将 Cindy 移入「应用程序」文件夹，再安装更新。';
+  if (process.platform === 'win32' && !checkWindowsUpdaterPrerequisites(undefined, process.resourcesPath).satisfied) {
+    return 'Windows 更新器运行环境不可用；已下载的更新将保留。';
+  }
+  if (process.platform === 'linux') {
+    const exePath = app.getPath('exe');
+    const installation = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+    if (installation) {
+      if (installation.region !== CURRENT_CINDY_REGION || missingLinuxUserInstallTools().length > 0) {
+        return '当前 Linux 用户安装环境不支持应用内更新。';
+      }
+    } else {
+      const debianCheck = checkDebianManagedInstallation(exePath);
+      if (debianCheck.status !== 'managed') {
+        return debianCheck.status === 'error'
+          ? '暂时无法验证 Linux 安装来源，请稍后重试。'
+          : '当前 Linux 安装方式不支持应用内更新；请使用安装说明或系统包管理器。';
+      }
+    }
+  }
+  return null;
+}
+
+export async function checkAppUpdateForAgent(): Promise<{
+  status: string;
+  currentVersion: string;
+  targetVersion?: string;
+  reason?: string;
+}> {
+  const currentVersion = app.getVersion();
+  if (!app.isPackaged || isDev() || isCindyPersonalRuntime() || isVersionlessAppVersion(currentVersion)) {
+    return { status: 'unsupported', currentVersion, reason: '此构建不支持应用内更新。' };
+  }
+  const platformBlock = agentUpdateApplyBlockReason();
+  if (platformBlock) return { status: 'unsupported', currentVersion, reason: platformBlock };
+  if (currentStatus === 'downloading' || currentStatus === 'superseding') {
+    return { status: 'downloading', currentVersion, targetVersion: readyVersion };
+  }
+  const result = await checkForUpdate();
+  if (currentStatus === 'ready' && readyVersion) {
+    return { status: 'ready', currentVersion, targetVersion: readyVersion };
+  }
+  if (result === 'idle') return {
+    status: 'no_installable_update', currentVersion,
+    reason: '当前渠道没有适用于这台设备的可安装更新；也可能已是最新版本。',
+  };
+  return { status: result, currentVersion, reason: `应用内更新检查结果：${result}` };
+}
+
+export function installAppUpdateForAgent(): {
+  accepted: boolean;
+  currentVersion: string;
+  targetVersion?: string;
+  reason?: string;
+} {
+  const currentVersion = app.getVersion();
+  if (!app.isPackaged || isDev() || isCindyPersonalRuntime() || isVersionlessAppVersion(currentVersion)) {
+    return { accepted: false, currentVersion, reason: '此构建不支持应用内更新。' };
+  }
+  const platformBlock = agentUpdateApplyBlockReason();
+  if (platformBlock) return { accepted: false, currentVersion, reason: platformBlock };
+  if (agentRelaunchScheduled || isRelaunching || autoRelaunchInProgress) {
+    return { accepted: false, currentVersion, reason: '更新重启已在进行中。' };
+  }
+  if (currentStatus !== 'ready' || !readyVersion || !readyFilePath || !fs.existsSync(readyFilePath)
+    || compareAppUpdateVersions(readyVersion, currentVersion) !== 'newer') {
+    return { accepted: false, currentVersion, reason: '没有已下载且版本更新的应用内补丁；请先检查更新。' };
+  }
+  const targetVersion = readyVersion;
+  agentRelaunchScheduled = true;
+  // Let the MCP tool result reach the agent before the host exits. The existing
+  // executor revalidates the staged patch and channel at the actual apply boundary.
+  agentRelaunchTimer = setTimeout(() => {
+    agentRelaunchTimer = null;
+    agentRelaunchScheduled = false;
+    void executeRelaunch(resolvedRelaunchTheme);
+  }, 5_000);
+  return { accepted: true, currentVersion, targetVersion };
+}
+
 export function initUpdateService(): void {
   // Observe the successful old-updater receipt before existing cleanup removes
   // it. Async and metadata-only; no effect on download/apply/rollback decisions.
@@ -2508,6 +2595,11 @@ export async function enableUncustomizedBetaChannel(
 }
 
 export function stopUpdateService(): void {
+  if (agentRelaunchTimer) {
+    clearTimeout(agentRelaunchTimer);
+    agentRelaunchTimer = null;
+    agentRelaunchScheduled = false;
+  }
   if (firstCheckTimer) {
     clearTimeout(firstCheckTimer);
     firstCheckTimer = null;
