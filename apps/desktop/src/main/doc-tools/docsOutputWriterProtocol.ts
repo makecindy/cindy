@@ -38,8 +38,31 @@ export interface DocsOutputWriteRequest {
   overwrite: boolean;
 }
 
+/** Identity of the inode the writer actually published, read through its own open handle. */
+export interface DocsOutputWrittenIdentity {
+  dev: bigint;
+  ino: bigint;
+}
+
+/**
+ * Sent by the writer as soon as the private bytes exist on disk (staging inode created),
+ * before publication. Lets the parent clean up exactly that inode if the writer is killed
+ * before it can report (timeout): staging and target are both names of this inode.
+ */
+export interface DocsOutputStagedNotice {
+  type: 'staged';
+  identity: DocsOutputWrittenIdentity;
+  stagingName: string;
+  /**
+   * Where the staging name lives: the session root (same filesystem as the output
+   * directory) or the output directory itself (cross-device target; link/rename cannot
+   * cross mounts, so the root-anchored reclaim degrades to the target's directory).
+   */
+  stagingIn: 'root' | 'parent';
+}
+
 export type DocsOutputWriteResult =
-  | { ok: true }
+  | { ok: true; identity?: DocsOutputWrittenIdentity }
   | {
       ok: false;
       errorCode: 'FILE_EXISTS' | 'PATH_NOT_ALLOWED' | 'ATOMIC_PUBLISH_UNSUPPORTED' | 'INTERNAL';
