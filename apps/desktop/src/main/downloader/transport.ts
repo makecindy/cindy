@@ -127,7 +127,8 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
 
   // ── Step 3: HTTP request via Electron net (auto-respects system proxy) ──
   return await new Promise<TransportResult>((resolve, reject) => {
-    const request = net.request({ url: opts.url, method: 'GET', redirect: 'follow' });
+    opts.validateUrl?.(opts.url);
+    const request = net.request({ url: opts.url, method: 'GET', redirect: opts.validateUrl ? 'manual' : 'follow', ...(opts.validateUrl ? { useSessionCookies: false, credentials: 'omit' as const } : {}) });
     Object.entries(headers).forEach(([k, v]) => request.setHeader(k, v));
 
     let connectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -182,7 +183,20 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
       }, timeout.idleMs);
     };
 
+    let redirectCount = 0;
+    if (opts.validateUrl) request.on('redirect', (_status, _method, redirectUrl) => {
+      try {
+        if (++redirectCount > 5) throw new Error('Too many redirects');
+        opts.validateUrl!(redirectUrl);
+        request.followRedirect();
+      } catch {
+        safeReject(new DownloadError('INVALID_ARG', 'Download redirect rejected'));
+        request.abort();
+      }
+    });
     request.on('response', (response) => {
+      if (settled) return;
+
       if (connectTimer !== null) { clearTimeout(connectTimer); connectTimer = null; }
 
       const status = response.statusCode;
@@ -271,6 +285,11 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
       });
 
       response.on('data', (chunk: Buffer) => {
+        if (settled) return;
+        if (opts.maxBytes !== undefined && tracker.getLoaded() + chunk.length > opts.maxBytes) {
+          safeReject(new DownloadError('INVALID_ARG', 'Download exceeds declared size'));
+          writeStream.destroy(); request.abort(); return;
+        }
         resetIdleTimer();
         // 1. Persist to disk. Electron's IncomingMessage isn't a Node Readable
         //    stream (no pause/resume/destroy on it directly), so we can't apply
@@ -305,6 +324,8 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
       });
 
       response.on('end', () => {
+        if (settled) { writeStream.destroy(); return; }
+        try { opts.onVerifying?.(); } catch { /* observer only */ }
         // close the stream and finalize
         writeStream.end(() => {
           (async () => {
@@ -312,6 +333,8 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
               const finalHash = await hasher.digest();
               const finalSize = tracker.getLoaded();
 
+              if (settled || opts.signal?.aborted) return;
+              if (opts.expectedSize !== undefined && finalSize !== opts.expectedSize) { safeReject(new DownloadError('CHECKSUM', 'Downloaded size mismatch')); return; }
               if (finalHash !== opts.sha256) {
                 // Corrupt body — wipe both .part and .meta so a future attempt
                 // starts truly fresh (CHECKSUM is not retried inside withRetry).

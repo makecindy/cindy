@@ -13,6 +13,12 @@ export interface DownloadOptions {
   /** Absolute target file path on disk. The downloader writes `${targetPath}.part`
    * during the transfer and renames to `targetPath` after SHA256 passes. */
   targetPath: string;
+  /** Optional caller policy, checked before dispatch and every redirect. */
+  validateUrl?: (url: string) => void;
+  /** Maximum bytes allowed on disk, including resumed bytes. */
+  maxBytes?: number;
+  /** Called after all bytes arrive, before checksum verification. */
+  onVerifying?: () => void;
   /** 64-char lowercase hex SHA256 (uppercase accepted, lowercased internally). */
   sha256: string;
   /** Optional. When provided, Content-Length must match for fresh downloads. */

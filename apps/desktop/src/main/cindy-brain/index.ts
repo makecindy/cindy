@@ -1,3 +1,5 @@
+import { PluginDownloadSlot } from './downloadSlot.js';
+import { download as downloadPluginArtifact } from '../downloader/index.js';
 import { registerGhostCardRemoteProvider, persistGhostCardWithRemoteChange } from './cardRemoteResource.js';
 import { openDeviceAuthorizationCard, openPluginAuthorizationCard } from '../plugin-oauth/deviceCard.js';
 import { t as authorizationText } from '../i18n.js';
@@ -1032,6 +1034,7 @@ export function suspendCindyAccountGhosts(): void {
  * setup writes, and post-dispatch cleanup cannot cross into the next owner.
  */
 export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
+  pluginDownloads.abortAll();
   cancelActiveGhostOauthFlow();
   await getBotAuthorizationService()?.dispose();
   getGhostSetupInteractionBridge()?.cleanupAll('session_aborted');
@@ -2672,6 +2675,10 @@ export function getGhostIOSSimulatorSlot(): GhostIOSSimulatorSlot {
 }
 
 let cindySlotSingleton: GhostCindySlot | null = null;
+const pluginDownloads = new PluginDownloadSlot({
+  getGhost: findAvailableGhost, root: id => ownerScopedUserDataPath('plugin-downloads', id),
+  scope: activeOwnerScopeKey, send: sendToGhostLogic, download: downloadPluginArtifact,
+});
 let networkSlotSingleton: GhostNetworkSlot | null = null;
 let notifySlotSingleton: GhostNotifySlot | null = null;
 let connectionAudienceResolverSingleton: ConnectionAudienceResolver | null = null;
@@ -7135,6 +7142,7 @@ export function registerGhostIpc(): void {
       return getGhostCindySlot().handleModelRequest(id, payload);
     }
     // fetch-request = network 槽代理 HTTP(invoke 返回值即响应,机制同上)。
+    if (type === 'download-request') return pluginDownloads.handle(id, payload, () => !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id);
     if (type === 'fetch-request') {
       return getGhostNetworkSlot().handleFetchRequest(id, payload);
     }
