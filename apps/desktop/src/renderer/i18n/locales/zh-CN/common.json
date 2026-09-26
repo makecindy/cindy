@@ -8845,6 +8845,7 @@
     }
   },
   "voiceInputOverlay": {
+    "rateLimited": "语音请求过于频繁，请稍后重试。",
     "status": {
       "listening": "语音输入中",
       "submitting": "正在确认",

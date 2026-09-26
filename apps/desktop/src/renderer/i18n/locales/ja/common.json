@@ -8845,6 +8845,7 @@
     }
   },
   "voiceInputOverlay": {
+    "rateLimited": "音声リクエストが多すぎます。しばらく待ってから再試行してください。",
     "status": {
       "listening": "音声入力中",
       "submitting": "確定中",

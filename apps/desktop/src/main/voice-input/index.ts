@@ -22,6 +22,8 @@ import {
   type VoiceTimelineEvent,
 } from '@cindy/voice-input-core';
 import { createLogger } from '../logger.js';
+import { t } from '../i18n.js';
+import { isVoiceInputStartRateLimited } from './voiceInputStartError.js';
 import {
   isProviderModelRouteDisabled,
   isUtilityRouteDisabled,
@@ -2215,6 +2217,7 @@ export function registerVoiceInputIpc(): void {
         // losing session. BYOK providers have independent credentials and
         // may use the staggered client-side hedge.
         hedgeDelayMs: voiceContext ? null : undefined,
+        sharedAccountRateLimit: Boolean(voiceContext),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2439,7 +2442,11 @@ export function registerVoiceInputIpc(): void {
       await cleanupVoiceInputProvider(provider, 'start_failed');
       return {
         ok: false,
-        error: voiceContext ? CINDY_VOICE_SERVICE_UNAVAILABLE_MESSAGE : message,
+        error: voiceContext
+          ? (isVoiceInputStartRateLimited(error)
+            ? t('voiceInputOverlay.rateLimited')
+            : CINDY_VOICE_SERVICE_UNAVAILABLE_MESSAGE)
+          : message,
       };
     }
   });

@@ -8847,6 +8847,7 @@
     }
   },
   "voiceInputOverlay": {
+    "rateLimited": "Too many voice requests. Wait a moment, then try again.",
     "status": {
       "listening": "Voice input",
       "submitting": "Finalizing",
