@@ -622,6 +622,11 @@ interface ChatInputProps {
    * 暂时遮住当前正文,不写入草稿;置回 null 即恢复原样。
    */
   previewPrompt?: string | null;
+  /**
+   * 输入框「正文不可改」锁定状态变化时回调(禁用 / 发送中 / 语音占用)。供外部写草稿的入口
+   * (如首页建议点击填入)在锁定期间放弃写入,避免覆盖进行中的语音稿或待发正文。
+   */
+  onMutationLockChange?: (locked: boolean) => void;
   /** Controlled open state for FolderPickerPopover. When omitted, internal state is used. */
   folderPickerOpen?: boolean;
   /** Callback when FolderPickerPopover open state changes (controlled mode). */
@@ -1137,6 +1142,7 @@ export function ChatInput({
   messages,
   placeholder,
   previewPrompt,
+  onMutationLockChange,
   folderPickerOpen,
   onFolderPickerOpenChange,
   showFolderPicker = true,
@@ -1198,6 +1204,8 @@ export function ChatInput({
   const recommendationRef = useRef(recommendation);
   recommendationRef.current = recommendation;
   const showRecommendationRef = useRef(false);
+  // 首页建议预览遮住正文期间的按键闸门(见 showPromptPreview);handleKeyDown 是稳定闭包,经 ref 读当前值。
+  const promptPreviewKeyGuardRef = useRef<() => boolean>(() => false);
   const acceptPromptRecommendationRef = useRef<() => boolean>(() => false);
   // session 切换时 ChatInput/Editor 会复用；推荐资格必须等目标草稿完成水合后再判断。
   const [composerHydrationGeneration, setComposerHydrationGeneration] = useState(0);
@@ -2464,6 +2472,16 @@ export function ChatInput({
         return true;
       },
       handleKeyDown(view, event) {
+        // 首页建议预览正遮住正文时,编辑器可能仍持有焦点:先撤掉预览并吞掉这一键,
+        // 保证编辑与发送永远作用在用户看得见的正文上。纯修饰键不算。
+        if (
+          !['Shift', 'Meta', 'Control', 'Alt', 'CapsLock'].includes(event.key) &&
+          promptPreviewKeyGuardRef.current()
+        ) {
+          event.preventDefault();
+          return true;
+        }
+
         // Delegate panel navigation keys (↑ ↓ Enter Esc Tab) when a
         // palette is open. We can't read React state from here directly,
         // but we expose a ref-based escape hatch via `panelBridgeRef`.
@@ -8210,8 +8228,21 @@ export function ChatInput({
   // handleKeyDown 的稳定闭包只按真实可见性接受 Tab，避免隐藏推荐被误填入。
   showRecommendationRef.current = showRecommendationOverlay;
   // 首页建议悬停预览:输入框锁定(发送中 / 语音占用 / 禁用)时不预览,免得遮住进行中的状态。
-  const showPromptPreview = !!previewPrompt && !composerMutationLocked;
-  // 预览是 absolute overlay,按它的实际高度撑开编辑器最小高度,长 prompt 才能完整换行显示。
+  // 预览期间有按键时撤掉本次预览、露出真实正文(按键闸门见 handleKeyDown);建议移开后复位。
+  const [dismissedPreviewPrompt, setDismissedPreviewPrompt] = useState<string | null>(null);
+  if (!previewPrompt && dismissedPreviewPrompt !== null) setDismissedPreviewPrompt(null);
+  const showPromptPreview =
+    !!previewPrompt && previewPrompt !== dismissedPreviewPrompt && !composerMutationLocked;
+  promptPreviewKeyGuardRef.current = () => {
+    if (!showPromptPreview) return false;
+    setDismissedPreviewPrompt(previewPrompt ?? null);
+    return true;
+  };
+  useEffect(() => {
+    onMutationLockChange?.(composerMutationLocked);
+  }, [composerMutationLocked, onMutationLockChange]);
+  // 预览是 absolute overlay,按它的实际高度撑开编辑器最小高度,长 prompt 换行显示;
+  // 最多 8 行(与编辑器 max-h-[186px] 的可视高度一致),超出以省略号提示,点击填入后可滚动看全文。
   const promptPreviewRef = useRef<HTMLDivElement>(null);
   const [promptPreviewHeight, setPromptPreviewHeight] = useState(0);
   useLayoutEffect(() => {
@@ -8712,17 +8743,14 @@ export function ChatInput({
                     voiceBusyOnCurrentComposer && voiceInput.draftText ? 'true' : undefined
                   }
                 />
-                {/* 字号 / 行高 / 颜色与原生 placeholder 对齐,单行截断防止长句撑高输入框。
-                    py-[3px] 是镜像 .ProseMirror 的 py-[3px]:它的 -my-[3px] 会穿过这里
-                    向外折叠(relative 不建立 BFC),于是 .ProseMirror 的 border box 贴在本
-                    容器顶边、正文被自身 padding 推低 3px。overlay 不跟着补这 3px 就会高一行边距。 */}
+                {/* 建议预览:排版与原生 placeholder 对齐,py-[3px] 同下方推荐词 overlay 的说明。 */}
                 {showPromptPreview && (
                   <div
                     ref={promptPreviewRef}
                     data-testid="chat-input-prompt-preview"
                     aria-hidden="true"
                     className={cn(
-                      'pointer-events-none absolute inset-x-0 top-0 max-h-[186px] overflow-hidden py-[3px] pr-[11px]',
+                      'pointer-events-none absolute inset-x-0 top-0 line-clamp-[8] py-[3px] pr-[11px]',
                       'whitespace-pre-wrap break-words text-15 leading-[1.467] font-normal',
                       'text-[var(--chat-input-placeholder-subtle)]',
                     )}
@@ -8730,6 +8758,10 @@ export function ChatInput({
                     {previewPrompt}
                   </div>
                 )}
+                {/* 字号 / 行高 / 颜色与原生 placeholder 对齐,单行截断防止长句撑高输入框。
+                    py-[3px] 是镜像 .ProseMirror 的 py-[3px]:它的 -my-[3px] 会穿过这里
+                    向外折叠(relative 不建立 BFC),于是 .ProseMirror 的 border box 贴在本
+                    容器顶边、正文被自身 padding 推低 3px。overlay 不跟着补这 3px 就会高一行边距。 */}
                 {showRecommendationOverlay && !showPromptPreview && (
                   <div
                     className={cn(

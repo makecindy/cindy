@@ -177,9 +177,11 @@ import { HomeSuggestionList } from './HomeSuggestionList';
 import { type HomeSuggestionId, homeSuggestionPromptKey } from './homeSuggestions';
 import {
   buildHomeTaskCatalog,
+  pluginSuggestionComposerText,
   readPluginRecommendationSnapshot,
   type HomeTaskSuggestion,
 } from './pluginHomeSuggestions';
+import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
 import {
   startPendingPluginSuggestion,
   takePendingPluginSuggestion,
@@ -4996,17 +4998,42 @@ export function NewMakerDraftRoute() {
 
   // 首页任务建议:悬停只在输入框里预览 prompt,点击把完整 prompt 填进输入框交给用户
   // 改写后自己发送,不再直接替用户发出。填入走草稿存储的外部写入通道,ChatInput 订阅后
-  // 替换正文并把光标放到末尾;附件等其余草稿内容原样保留。
+  // 替换正文并把光标放到末尾;附件等其余草稿内容原样保留。输入框锁定(发送中 / 语音占用)
+  // 时不写入,免得覆盖进行中的语音稿或待发正文。预览与填入共用同一份文字计算。
   const [suggestionPreview, setSuggestionPreview] = useState<string | null>(null);
-  const fillComposerWithSuggestion = useCallback((prompt: string) => {
-    if (sendInFlightRef.current) return;
+  const composerMutationLockedRef = useRef(false);
+  const handleComposerMutationLockChange = useCallback((locked: boolean) => {
+    composerMutationLockedRef.current = locked;
+  }, []);
+  const fillComposerWithSuggestion = useCallback((prompt: string): boolean => {
+    if (sendInFlightRef.current || composerMutationLockedRef.current) return false;
     const existing = getComposerDraft(NEW_MAKER_DRAFT_KEY);
     saveComposerDraft(NEW_MAKER_DRAFT_KEY, {
       ...existing,
       text: plainTextToTiptapDoc(prompt),
       attachments: existing?.attachments ?? [],
     });
+    return true;
   }, []);
+  const handleSuggestionPreview = useCallback(
+    (suggestion: HomeTaskSuggestion | null) => {
+      if (!suggestion) {
+        setSuggestionPreview(null);
+        return;
+      }
+      // 插件可用时点击会填入带 $指令(或插件调用说明)的文字,预览必须一致;需要先安装的
+      // 插件点击后走安装引导,不会立即填入,预览只显示建议本身。
+      const ghost = suggestion.pluginId
+        ? readInstalledGhostsSnapshot().find((g) => g.manifest.id === suggestion.pluginId)
+        : undefined;
+      const usable =
+        ghost && ghost.enabled && filterGhostsForWorkdir([ghost], effectiveWorkingDir).length > 0;
+      setSuggestionPreview(
+        usable ? pluginSuggestionComposerText(suggestion.prompt, ghost, t) : suggestion.prompt,
+      );
+    },
+    [effectiveWorkingDir, t],
+  );
 
   const handleHomeSuggestion = useCallback(
     (id: HomeSuggestionId) => fillComposerWithSuggestion(t(homeSuggestionPromptKey(id))),
@@ -5099,12 +5126,12 @@ export function NewMakerDraftRoute() {
           navigate(`${route}&recommendation=${encodeURIComponent(nonce)}`);
           return;
         }
-        // 填进输入框而不是直接发送;ChatInput 发送时会自己展开 $command。
-        fillComposerWithSuggestion(
-          ghost.manifest.command
-            ? `$${ghost.manifest.command} ${suggestion.prompt}`
-            : `${suggestion.prompt}\n\n${t('newChat.pluginSuggestions.usePlugin', { name: ghost.manifest.name, id: ghost.manifest.id })}`,
-        );
+        // 填进输入框而不是直接发送;ChatInput 发送时会自己展开 $command。无指令插件发送时
+        // 识别不出所用插件,所以选中插件建议并成功填入即记一次最近使用(有指令的插件发送时
+        // 还会再记一次,只刷新时间,不影响排序语义)。
+        if (fillComposerWithSuggestion(pluginSuggestionComposerText(suggestion.prompt, ghost, t))) {
+          void window.electronAPI.ghosts.markUsed(ghost.manifest.id).catch(() => undefined);
+        }
       } catch {
         if (pluginSuggestionMounted.current)
           toast.error(t('newChat.pluginSuggestions.unavailable'));
@@ -5372,6 +5399,7 @@ export function NewMakerDraftRoute() {
                     compactToolbar
                     placeholder={t('newChat.chatInput.createAgentPlaceholder')}
                     previewPrompt={suggestionPreview}
+                    onMutationLockChange={handleComposerMutationLockChange}
                     sessionId={undefined}
                     initialWorkingDir={effectiveWorkingDir}
                     remoteHostId={draft.remoteHostId ?? null}
@@ -5545,7 +5573,7 @@ export function NewMakerDraftRoute() {
                     onSelect={handleHomeSuggestion}
                     includePlugins={!isRemoteProjectDraft && !isDeviceLinkDraft}
                     onPluginSelect={handlePluginSuggestion}
-                    onPreviewChange={setSuggestionPreview}
+                    onPreviewChange={handleSuggestionPreview}
                   />
                 )}
                 {/* 首页「新建目标」弹窗:无 sessionId → onCreate 建会话并 setGoal(见 handleCreateGoal)。

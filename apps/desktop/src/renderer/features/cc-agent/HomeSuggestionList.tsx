@@ -82,8 +82,8 @@ export function HomeSuggestionList({
   narrow: boolean;
   onSelect: (id: HomeSuggestionId) => void;
   onPluginSelect?: (suggestion: HomeTaskSuggestion) => void;
-  /** 悬停/聚焦某条建议时报告它的完整 prompt,离开时报告 null,供输入框预览。 */
-  onPreviewChange?: (prompt: string | null) => void;
+  /** 悬停/聚焦某条建议时报告该条目,离开时报告 null;由调用方算出与点击填入一致的预览文字。 */
+  onPreviewChange?: (suggestion: HomeTaskSuggestion | null) => void;
   includePlugins?: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -132,9 +132,9 @@ export function HomeSuggestionList({
                 if (item.builtinId) onSelect(item.builtinId);
                 else onPluginSelect?.(item);
               }}
-              onMouseEnter={() => onPreviewChange?.(item.prompt)}
+              onMouseEnter={() => onPreviewChange?.(item)}
               onMouseLeave={() => onPreviewChange?.(null)}
-              onFocus={() => onPreviewChange?.(item.prompt)}
+              onFocus={() => onPreviewChange?.(item)}
               onBlur={() => onPreviewChange?.(null)}
               className={cn(
                 'inline-flex h-[38px] max-w-full items-center gap-2.5 rounded-full px-3',

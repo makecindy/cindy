@@ -73,7 +73,7 @@ describe('HomeSuggestionList', () => {
     expect(ids().some((id) => seen.includes(id))).toBe(false);
   });
 
-  it('previews the full prompt on hover/focus and clears it on leave, click and unmount', () => {
+  it('reports the hovered/focused suggestion and clears it on leave, click and unmount', () => {
     const onSelect = vi.fn();
     const onPreviewChange = vi.fn();
     const { unmount } = render(
@@ -83,12 +83,14 @@ describe('HomeSuggestionList', () => {
     const id = row.getAttribute('data-testid')!.replace('home-suggestion-', '');
 
     fireEvent.mouseEnter(row);
-    expect(onPreviewChange).toHaveBeenLastCalledWith(`newChat.homeSuggestions.${id}.prompt`);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id, prompt: `newChat.homeSuggestions.${id}.prompt` }),
+    );
     fireEvent.mouseLeave(row);
     expect(onPreviewChange).toHaveBeenLastCalledWith(null);
 
     fireEvent.focus(row);
-    expect(onPreviewChange).toHaveBeenLastCalledWith(`newChat.homeSuggestions.${id}.prompt`);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(expect.objectContaining({ id }));
     fireEvent.click(row);
     expect(onPreviewChange).toHaveBeenLastCalledWith(null);
     expect(onSelect).toHaveBeenCalledWith(id);

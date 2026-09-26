@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { pluginSuggestionComposerText } from '../features/cc-agent/pluginHomeSuggestions';
 
 // Execute the production callbacks without mounting the unrelated full desktop shell.
 function compile(source: string, bindings: Record<string, unknown>) {
@@ -30,9 +31,12 @@ describe('plugin recommendation recovery', () => {
       expect(block).not.toContain('handleSend');
       const suggestion = { id: 'one', pluginId: 'mail', prompt: 'Review my mail' };
       const ghost = { manifest: { id: 'mail', name: 'Mail', command }, enabled: true };
-      const fillComposerWithSuggestion = vi.fn();
+      const fillComposerWithSuggestion = vi.fn((_text: string) => true);
+      const markUsed = vi.fn(async () => ({ ids: ['mail'] }));
       vi.stubGlobal('electronAPI', {});
-      Object.assign(window, { electronAPI: { ghosts: { listSync: () => ({ ghosts: [ghost] }) } } });
+      Object.assign(window, {
+        electronAPI: { ghosts: { listSync: () => ({ ghosts: [ghost] }), markUsed } },
+      });
       const run = compile(`${block}\nreturn runPluginSuggestion;`, {
         useCallback: (callback: unknown) => callback,
         sendInFlightRef: { current: false },
@@ -45,6 +49,7 @@ describe('plugin recommendation recovery', () => {
         buildHomeTaskCatalog: () => [suggestion],
         filterGhostsForWorkdir: (ghosts: unknown[]) => ghosts,
         fillComposerWithSuggestion,
+        pluginSuggestionComposerText,
         i18n: { language: 'en' },
         t: () => 'Use plugin mail via ghost_info and ghost_call',
         isRemoteProjectDraft: false,
@@ -58,6 +63,16 @@ describe('plugin recommendation recovery', () => {
       expect(filled).toContain('Review my mail');
       // $command stays as typed text; ChatInput expands it when the user sends.
       expect(filled).toContain(command ? '$mail ' : 'ghost_info');
+      // Hover preview uses the same helper, so it shows exactly this text.
+      expect(filled).toBe(
+        pluginSuggestionComposerText(
+          suggestion.prompt,
+          ghost,
+          () => 'Use plugin mail via ghost_info and ghost_call',
+        ),
+      );
+      // Filling counts as using the plugin (plain-text sends cannot identify it later).
+      expect(markUsed).toHaveBeenCalledWith('mail');
     },
   );
 

@@ -198,13 +198,18 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       source.indexOf('// 注意:不要给 ChatInput 加 key 强制 remount'),
     );
 
-    expect(suggestionBlock).toContain('if (sendInFlightRef.current) return;');
     expect(suggestionBlock).toContain('saveComposerDraft(NEW_MAKER_DRAFT_KEY, {');
     expect(suggestionBlock).toContain('text: plainTextToTiptapDoc(prompt)');
     expect(suggestionBlock).not.toContain('handleSend(');
     // 悬停预览只走 ChatInput 的只读 overlay,不写草稿。
     expect(source).toContain('previewPrompt={suggestionPreview}');
-    expect(source).toContain('onPreviewChange={setSuggestionPreview}');
+    expect(source).toContain('onPreviewChange={handleSuggestionPreview}');
+    // 语音占用 / 发送中时不填入,且预览与填入共用同一份插件文字计算。
+    expect(suggestionBlock).toContain(
+      'if (sendInFlightRef.current || composerMutationLockedRef.current) return false;',
+    );
+    expect(source).toContain('onMutationLockChange={handleComposerMutationLockChange}');
+    expect(suggestionBlock.match(/pluginSuggestionComposerText\(/g)).toHaveLength(2);
     // 普通发送直接使用输入内容，不再经过可能残留推荐内容的中转 ref。
     expect(source).toContain('onSend={handleSend}');
     expect(source).not.toContain('pendingHomePromptRef');
