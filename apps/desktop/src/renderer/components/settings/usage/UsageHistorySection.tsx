@@ -104,6 +104,7 @@ export function UsageHistorySection(): React.JSX.Element {
     modelDays: 'all',
     allowPendingEstimates: true,
     device,
+    includeTasks: true,
   });
   // 切换设备时新范围首帧可能还没有 payload; 沿用上次读到的设备列表, 选择器不闪没。
   const [known, setKnown] = useState<{

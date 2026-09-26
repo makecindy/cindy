@@ -852,13 +852,21 @@ describe('production cache and empty payload', () => {
       tasks: [meta('s1', 'Old title'), meta('s2', 'Doomed')],
     });
     vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'Old title'), meta('s2', 'Doomed')]);
-    const first = await readUsageHistory({ days: 30 });
+    const first = await readUsageHistory({ days: 30, includeTasks: true });
     expect(first.tasks?.map((task) => task.title)).toEqual(['Old title', 'Doomed']);
     // 重命名 s1、删除 s2:不产生用量,聚合缓存照常复用,但出口的任务元数据必须是当前值。
     vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'New title')]);
-    const second = await readUsageHistory({ days: 30 });
+    const second = await readUsageHistory({ days: 30, includeTasks: true });
     expect(second.tasks?.map((task) => [task.sessionId, task.title])).toEqual([['s1', 'New title']]);
     expect(getSessionUsageSince).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips task data unless the caller asks for it (home dashboard reads)', async () => {
+    const payload = await readUsageHistory({ days: 30 });
+    expect(payload.tasks).toBeUndefined();
+    expect(payload.taskDaily).toBeUndefined();
+    expect(getSessionUsageSince).not.toHaveBeenCalled();
+    expect(getUsageTaskMeta).not.toHaveBeenCalled();
   });
 
   it('writes a structured fresh payload and serves it from memory', async () => {

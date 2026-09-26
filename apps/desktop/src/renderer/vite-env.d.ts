@@ -6668,6 +6668,8 @@ interface ElectronAPI {
         modelDays?: number | 'all';
         /** 'local' (默认) / 'all' (所有设备合并) / 其它电脑的 deviceId。 */
         device?: string;
+        /** 附带「最耗 token 的任务」数据;只有设置 → 用量历史需要。 */
+        includeTasks?: boolean;
         forceRefresh?: boolean;
       }) => Promise<import('../main/usage/usageHistory').UsageHistoryPayload>;
       onTodaySpendChanged: (

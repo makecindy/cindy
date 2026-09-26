@@ -1570,6 +1570,11 @@ describe('maker usage IPC handlers', () => {
     await harness.invoke(MAKER_INVOKE.USAGE_HISTORY, { device: 42 });
     expect(readUsageHistory).toHaveBeenLastCalledWith(undefined);
 
+    await harness.invoke(MAKER_INVOKE.USAGE_HISTORY, { includeTasks: true });
+    expect(readUsageHistory).toHaveBeenLastCalledWith({ includeTasks: true });
+    await harness.invoke(MAKER_INVOKE.USAGE_HISTORY, { includeTasks: 'yes' });
+    expect(readUsageHistory).toHaveBeenLastCalledWith(undefined);
+
     await harness.invoke(MAKER_INVOKE.USAGE_HISTORY, { device: 'x'.repeat(200) });
     expect(readUsageHistory).toHaveBeenLastCalledWith(undefined);
   });

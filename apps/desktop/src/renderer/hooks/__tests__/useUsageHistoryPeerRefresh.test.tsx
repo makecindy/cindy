@@ -30,9 +30,9 @@ const payload = {
   anomaly: { isAnomalous: false, trailing7DayAvg: null },
 };
 
-const getHistory = vi.fn<(opts?: { device?: string }) => Promise<typeof payload>>(
-  async () => payload,
-);
+const getHistory = vi.fn<
+  (opts?: { device?: string; includeTasks?: boolean }) => Promise<typeof payload>
+>(async () => payload);
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -101,5 +101,15 @@ describe('useUsageHistory peer refresh', () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
     expect(callsFor('all')).toBe(initial + 1);
+  });
+
+  it('requests task data only for callers that opt in', async () => {
+    renderHook(() => useUsageHistory({ userId: 'tasks-default' }));
+    renderHook(() => useUsageHistory({ userId: 'tasks-opt-in', includeTasks: true }));
+    await act(async () => {});
+    expect(getHistory.mock.calls.map(([opts]) => opts?.includeTasks === true)).toEqual([
+      false,
+      true,
+    ]);
   });
 });

@@ -415,7 +415,8 @@ function optsKey(opts?: UsageHistoryReadOptions): string {
   const modelSuffix = modelDays === MODEL_WINDOW_DAYS ? '' : `|modelDays=${modelDays}`;
   // 'local' 沿用旧 key, 升级后首页与已有磁盘快照照常命中。
   const deviceSuffix = device === 'local' ? '' : `|device=${encodeURIComponent(device)}`;
-  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}${deviceSuffix}`;
+  const taskSuffix = opts?.includeTasks ? '|tasks=1' : '';
+  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}${deviceSuffix}${taskSuffix}`;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -616,6 +617,11 @@ export interface UsageHistoryReadOptions {
   /** 设备范围, 缺省 'local'。见文件头注释。 */
   device?: UsageHistoryDeviceScope;
   /**
+   * 附带「最耗 token 的任务」数据(taskDaily / tasks)。只有设置 → 用量历史需要;首页看板
+   * 每次用量变化都会刷新,不承担任务全量查询。
+   */
+  includeTasks?: boolean;
+  /**
    * true = 事件触发的刷新, 需要绕过 10s 内存快返, 立即重新聚合 DB。
    * mount / 展开仍使用 stale-while-refresh 快路径保证首帧速度。
    */
@@ -747,7 +753,7 @@ export async function readUsageHistoryWith(
   const modelRows = modelCutoff === null
     ? allModelRows
     : allModelRows.filter((r) => r.day >= modelCutoff);
-  const taskUsage = deps.getTaskUsageSince
+  const taskUsage = opts?.includeTasks && deps.getTaskUsageSince
     ? await deps.getTaskUsageSince(modelCutoff ?? '0000-01-01')
     : null;
 

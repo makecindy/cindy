@@ -177,6 +177,7 @@ export function registerMakerUsageHandlers(
       days?: unknown;
       modelDays?: unknown;
       device?: unknown;
+      includeTasks?: unknown;
       forceRefresh?: unknown;
     };
     const days =
@@ -202,6 +203,7 @@ export function registerMakerUsageHandlers(
       ...(days === undefined ? {} : { days }),
       ...(modelDays === undefined ? {} : { modelDays }),
       ...(device === undefined ? {} : { device }),
+      ...(raw.includeTasks === true ? { includeTasks: true } : {}),
       ...(forceRefresh ? { forceRefresh: true } : {}),
     };
     try {

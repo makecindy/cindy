@@ -411,6 +411,8 @@ interface UsageHistoryRequest {
   allowPendingEstimates: boolean;
   /** 'local' / 'all' / 其它电脑的 deviceId。 */
   device: string;
+  /** 附带「最耗 token 的任务」数据。 */
+  includeTasks: boolean;
 }
 
 const scopes = new Map<string, UsageHistoryScopeState>();
@@ -426,6 +428,7 @@ function getScope(
     modelDays: MODEL_WINDOW_DAYS,
     allowPendingEstimates: false,
     device: 'local',
+    includeTasks: false,
   },
 ): UsageHistoryScopeState {
   let state = scopes.get(scopeKey);
@@ -486,6 +489,7 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
       days: scope.request.days,
       modelDays: scope.request.modelDays,
       ...(scope.request.device === 'local' ? {} : { device: scope.request.device }),
+      ...(scope.request.includeTasks ? { includeTasks: true } : {}),
       ...(opts?.forceRefresh ? { forceRefresh: true } : {}),
     })
     .then((res) => {
@@ -564,13 +568,15 @@ function scopeKeyForRequest(scopeKey: string, request: UsageHistoryRequest): str
     request.days === HISTORY_WINDOW_DAYS &&
     request.modelDays === MODEL_WINDOW_DAYS &&
     !request.allowPendingEstimates &&
-    request.device === 'local'
+    request.device === 'local' &&
+    !request.includeTasks
   ) {
     return scopeKey;
   }
   // 'local' 沿用旧 key, 升级后已有的本机快照照常 hydrate。
   const deviceSuffix = request.device === 'local' ? '' : `|device=${encodeURIComponent(request.device)}`;
-  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}${deviceSuffix}`;
+  const taskSuffix = request.includeTasks ? '|tasks=1' : '';
+  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}${deviceSuffix}${taskSuffix}`;
 }
 
 export function useUsageHistory(opts?: {
@@ -582,6 +588,8 @@ export function useUsageHistory(opts?: {
   allowPendingEstimates?: boolean;
   /** 'local' (默认, 只看本机) / 'all' (所有设备合并) / 其它电脑的 deviceId。 */
   device?: string;
+  /** 附带「最耗 token 的任务」数据;只有设置 → 用量历史需要(首页看板不读)。 */
+  includeTasks?: boolean;
 }): {
   history: UsageHistoryPayload | null;
   refreshing: boolean;
@@ -593,6 +601,7 @@ export function useUsageHistory(opts?: {
     modelDays: normalizeWindow(opts?.modelDays, MODEL_WINDOW_DAYS),
     allowPendingEstimates: opts?.allowPendingEstimates ?? false,
     device: opts?.device || 'local',
+    includeTasks: opts?.includeTasks ?? false,
   };
   const scopedKey = scopeKeyForRequest(scopeKey, request);
   const scope = getScope(scopedKey, request);
