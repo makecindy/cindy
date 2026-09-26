@@ -2,6 +2,8 @@ import {
   formatAgentMessage,
   formatOrcaCommunicationMessage,
 } from '@cindy/orca-workflow';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
+import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
 import type { AgentKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 
 import type {
@@ -115,6 +117,7 @@ export type OrcaInterAgentSendToSessionInternalResult =
 
 /** 通过既有 sendToSessionInternal 重建或排队目标 session 时传入的最小参数。 */
 export interface OrcaInterAgentSendToSessionInternalParams {
+  autoReviewUserText: { kind: 'delegated-continuation' };
   targetSessionId: string;
   message: string;
   persistedContent: string;
@@ -133,6 +136,7 @@ export interface OrcaInterAgentDispatcherLogger {
 
 /** Orca dispatcher 的 I/O 边界，register.ts 只负责注入 DB、Maker、queue 和 role 解析能力。 */
 export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
+  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
   createId: () => string;
   getSessionMeta: (sessionId: string) => Promise<TSessionMeta | null>;
   getSessionRowSnapshot: (sessionId: string) => Promise<OrcaInterAgentSessionRowSnapshot | null>;
@@ -403,6 +407,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     try {
       const sendToInternal = async (): Promise<DispatchOrcaInterAgentMessageResult> => {
         const result = await deps.sendToSessionInternal({
+          autoReviewUserText: { kind: 'delegated-continuation' },
           targetSessionId: params.targetSessionId,
           message: agentMessageText,
           persistedContent,
@@ -636,17 +641,20 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
 ): Promise<CollabDirectDispatchResult> {
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, origin, onAccepted } = params;
   let turnChangeSetStarted = false;
+  const humanIntent = restoreAutoReviewUserIntent(await deps.readAutoReviewHistory?.(session.id) ?? []);
   const result = await resolveCollabDispatchResult(
     () => session.send(agentMessage, {
       planMode: false,
       throwOnStartFailure: true,
+      [AUTO_REVIEW_SOURCE_CONTENT]: '',
+      [AUTO_REVIEW_USER_INTENT]: humanIntent,
       onAccepted: async () => {
         // maker-core 会在 vendor handle.send 前 await 此 hook；必须先落库，再运行 accepted 副作用。
         await deps.createDbMessage(session.id, {
           clientId,
           role: 'user',
           content: dbContent,
-          ...(origin ? { agentMeta: { origin } } : {}),
+          agentMeta: { ...(origin ? { origin } : {}), autoReviewUserText: { kind: 'delegated-continuation' }, delivery: 'turn' },
         });
         await deps.beginDirectTurnChangeSet(session.id, clientId);
         turnChangeSetStarted = true;
@@ -710,6 +718,7 @@ function buildQueuedOrcaInterAgentMessage(params: {
   return {
     clientId: params.clientId,
     text: params.agentMessageText,
+    autoReviewUserText: { kind: 'delegated-continuation' },
     persistedContent: params.persistedContent,
     model: params.createOpts.model,
     effort: params.createOpts.effort ?? '',

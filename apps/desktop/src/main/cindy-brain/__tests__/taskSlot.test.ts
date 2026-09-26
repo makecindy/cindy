@@ -84,3 +84,10 @@ it('allows an Auto request but never Full access', () => {
  expect(validPluginTaskRequest({type:'tasks-request',kind:'requestWriteAccess',taskId:'own',mode:'bypassPermissions'})).toBe(false);
 });
 
+it('accepts bounded plugin-authored scope, never caller-supplied authority', () => {
+ const item={label:'sample',workingDir:'/answer',route:{agentKind:'pi',providerId:'p',model:'m',effort:'high',fastMode:false},task:'Run tests'};
+ const request={type:'tasks-request',kind:'setTeamPlan',taskId:'lead',plan:{concurrency:null,task:'Coordinate',items:[item]}};
+ expect(validPluginTaskRequest(request)).toBe(true);
+ expect(validPluginTaskRequest({...request,plan:{...request.plan,ownerApproved:true}})).toBe(false);
+ expect(validPluginTaskRequest({...request,plan:{...request.plan,items:[{...item,task:'x'.repeat(8001)}]}})).toBe(false);
+});

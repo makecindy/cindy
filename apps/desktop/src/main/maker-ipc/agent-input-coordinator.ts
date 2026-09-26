@@ -31,7 +31,7 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
 import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { createLogger } from '../logger.js';
-import { readAutoReviewUserText } from './autoReviewUserIntent.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText } from './autoReviewUserIntent.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import {
@@ -107,6 +107,11 @@ const TERMINAL_DONE_FALLBACK_DELAY_MS = 250;
 const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
 
 type QueuedAttachment = NonNullable<AgentInputQueuedMessage['files']>[number];
+
+/** Typed Host continuations carry provenance, never user-authored permission text. */
+function queuedAutoReviewText(item: AgentInputQueuedMessage): string {
+  return typeof item.autoReviewUserText === 'string' ? item.autoReviewUserText : '';
+}
 
 function isMakerImageAttachment(file: Pick<QueuedAttachment, 'category' | 'ext'>): boolean {
   return getAgentInputAttachmentBlockType(file.category, file.ext) === 'image';
@@ -193,6 +198,7 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
 }
 
 export interface AgentInputSendOpts {
+  readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
   /** Main-owned identity of the zero-output user turn being replaced. */
   retryUserClientId?: string;
   toolsDisabled?: boolean;
@@ -2194,9 +2200,11 @@ export class AgentInputCoordinator {
       );
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
         ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
-        [AUTO_REVIEW_SOURCE_CONTENT]: item.autoReviewUserText ?? '',
-        ...(readAutoReviewUserText(item.persistedContent) === null
-          ? { [AUTO_REVIEW_USER_INTENT]: item.autoReviewUserText ?? '' } : {}),
+        [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(item),
+        ...(item.autoReviewUserText && typeof item.autoReviewUserText === 'object' && item.autoReviewUserText.kind === 'delegated-continuation'
+          ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
+        ...(typeof item.autoReviewUserText !== 'object' && readAutoReviewUserText(item.persistedContent) === null
+          ? { [AUTO_REVIEW_USER_INTENT]: queuedAutoReviewText(item) } : {}),
         messageUuid,
         userName: item.userName,
         signal: AbortSignal.any([inputBoundarySignal, steerAbort.signal]),
@@ -4549,7 +4557,9 @@ export class AgentInputCoordinator {
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
       const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
         ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
-        [AUTO_REVIEW_SOURCE_CONTENT]: head.autoReviewUserText ?? '',
+        [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(head),
+        ...(head.autoReviewUserText && typeof head.autoReviewUserText === 'object' && head.autoReviewUserText.kind === 'delegated-continuation'
+          ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
         messageUuid: active.messageUuid,
         userName: head.userName,
         ...(head.toolsDisabled === true ? { toolsDisabled: true } : {}),

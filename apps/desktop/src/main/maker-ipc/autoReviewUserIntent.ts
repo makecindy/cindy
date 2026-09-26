@@ -3,6 +3,9 @@ import type { AutoReviewUserIntent, SendOptions, UserMessage } from '@cindy/make
 import { joinChatQuoteTextSegments, parseChatQuoteSegments } from '@cindy/maker-shared/chat-quotes';
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 
+/** Main-only projection of a protected delegated receipt; never accepted from wire input. */
+export const AUTO_REVIEW_DELEGATED_CONTINUATION = Symbol('autoReviewDelegatedContinuation');
+
 /** Existing transcript projection, already filtered by the database's clear/rewind boundary. */
 export interface AutoReviewHistoryMessage {
   clientId: string;
@@ -25,7 +28,7 @@ function interactionAnswer(message: AutoReviewHistoryMessage): { text: string; a
 /** Both queued and direct steers may reach a freshly reattached harness. */
 export async function restoreAutoReviewSteerIntent(
   content: string | ReadonlyArray<{ type: string; [key: string]: unknown }>,
-  options: SendOptions,
+  options: SendOptions & { readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true },
   readHistory: () => Promise<AutoReviewHistoryMessage[]>,
 ): Promise<AutoReviewUserIntent | undefined> {
   options.signal?.throwIfAborted();
@@ -33,6 +36,11 @@ export async function restoreAutoReviewSteerIntent(
   if (options[AUTO_REVIEW_USER_INTENT] !== undefined) return options[AUTO_REVIEW_USER_INTENT];
   const context = options[MAIN_OWNED_SEND_CONTEXT];
   if (context && context.origin.kind !== 'desktop') return undefined;
+  if (options[AUTO_REVIEW_DELEGATED_CONTINUATION]) {
+    const history = await readHistory();
+    options.signal?.throwIfAborted();
+    return restoreAutoReviewUserIntent(history);
+  }
   const text = options[AUTO_REVIEW_SOURCE_CONTENT] ?? context?.rawChannelText;
   if (typeof text !== 'string') return undefined;
   const history = await readHistory().catch(() => []);
@@ -134,7 +142,7 @@ export function restoreAutoReviewUserIntent(
     // Keep intervening human restrictions; do not let repeated heartbeats erase them.
     // Use the protected receipt, not origin (which the renderer can edit).
     const receipt = message.agentMeta?.autoReviewUserText as Record<string, unknown> | undefined;
-    if (receipt?.kind === 'scheduled-continuation') continue;
+    if (receipt?.kind === 'scheduled-continuation' || receipt?.kind === 'delegated-continuation') continue;
     // An already-persisted retry is the same input, not a second authorization.
     if (current && message.clientId === current.clientId) {
       if (message.agentMeta?.autoReviewUserText !== latest) return '';

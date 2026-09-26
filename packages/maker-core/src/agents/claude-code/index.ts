@@ -155,6 +155,7 @@ import {
   isSystemPermissionDenialReason,
   formatPermissionDenial,
   resolveAutoReviewDecision,
+  withAutoReviewContext,
   toolAutoReviewAction,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
@@ -2652,27 +2653,32 @@ export class ClaudeCodeAgent extends BaseAgent {
         writableRoots,
         platform,
       };
-      const key = JSON.stringify(request);
-      const cached = autoReviewDecisionCache.get(key);
-      const pending = cached ?? resolveAutoReviewDecision(
-          request,
-          this.deps.reviewAutoPermissionAction,
-        );
-      if (!cached) autoReviewDecisionCache.set(key, pending);
-      return pending.then<AutoReviewDecision>((decision) => (
-        autoReviewDecisionCache.get(key) !== pending
-          ? { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' }
-          : directoryGeneration === autoReviewDirectoryGeneration
-          ? decision
-          : {
-              verdict: 'block',
-              reason: 'Directory permissions changed; retry with the current scope.',
-            }
-      )).then((decision) => {
-        if (autoReviewDecisionCache.get(key) === pending && directoryGeneration === autoReviewDirectoryGeneration) {
-          autoReviewActionContext.record(action, decision);
+      return withAutoReviewContext(request, this.deps.reviewAutoPermissionAction, (prepared) => {
+        if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
+          return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
         }
-        return decision;
+        const key = JSON.stringify(prepared);
+        const cached = autoReviewDecisionCache.get(key);
+        const pending = cached ?? resolveAutoReviewDecision(
+            prepared,
+            this.deps.reviewAutoPermissionAction,
+          );
+        if (!cached) autoReviewDecisionCache.set(key, pending);
+        return pending.then<AutoReviewDecision>((decision) => (
+          autoReviewDecisionCache.get(key) !== pending
+            ? { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' }
+            : directoryGeneration === autoReviewDirectoryGeneration
+            ? decision
+            : {
+                verdict: 'block',
+                reason: 'Directory permissions changed; retry with the current scope.',
+              }
+        )).then((decision) => {
+          if (autoReviewDecisionCache.get(key) === pending && directoryGeneration === autoReviewDirectoryGeneration) {
+            autoReviewActionContext.record(action, decision);
+          }
+          return decision;
+        });
       });
     };
     // All models share the same detector, with independent per-sidechain history.

@@ -37,6 +37,7 @@ import {
   configureDefaultImageResizer,
   type AgentKind,
   type InteractionRequest,
+  type AutoReviewDelegate,
   type McpProvider,
 } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
@@ -397,12 +398,22 @@ const requestAutoReviewText = createAutoReviewModelRouter({
   logger: desktopMakerLogger,
 });
 
-const reviewAutoPermissionAction = createAutoPermissionReviewer({
+let autoReviewContextResolver: AutoReviewDelegate['prepareRequest'];
+/** Main bootstrap supplies a fresh owner-bound lookup; no plugin/renderer can set this. */
+export function setAutoReviewContextResolver(resolver: AutoReviewDelegate['prepareRequest']): void {
+  autoReviewContextResolver = resolver;
+}
+
+const reviewAutoPermissionAction: AutoReviewDelegate = createAutoPermissionReviewer({
   logger: desktopMakerLogger,
   managesRetries: true,
   resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
   requestText: (_request, prompt, { signal }) => requestAutoReviewText(prompt, signal),
 });
+reviewAutoPermissionAction.prepareRequest = async request => {
+  if (!autoReviewContextResolver) throw new Error('Authorization context is not ready');
+  return autoReviewContextResolver(request);
+};
 
 /**
  * Codex 模型补拉 coordinator —— 随 maker 一起创建(需要 maker 实例做 live 拉取)、随

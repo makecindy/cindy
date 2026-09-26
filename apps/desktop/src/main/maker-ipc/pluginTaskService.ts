@@ -69,6 +69,7 @@ export interface PluginTaskServiceDeps {
     isolatedWorkspace?: boolean,
   ): Promise<void>;
   readSession(taskId: string): Promise<PluginTaskView | null>;
+  assertTeamPlanUnstarted?(taskId: string): Promise<void>;
   dispatch(
     pluginId: string,
     taskId: string,
@@ -200,7 +201,14 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       await ownTask(pluginId,taskId);
       const row = (await deps.store.get(taskId))!;
       const data = JSON.parse(row.payload);
-      if (data.teamPlan && hash(data.teamPlan) !== hash(plan)) return fail('IDEMPOTENCY_CONFLICT', 'Team plan is immutable');
+      if (data.teamPlan && hash(data.teamPlan) !== hash(plan)) {
+        return fail('IDEMPOTENCY_CONFLICT', 'Team plan is immutable');
+      }
+      if (data.teamPlan) return {ok:true};
+      if ((await deps.store.forSession(taskId)).length) return fail('TASK_BUSY', 'Register the team plan before sending input');
+      const observed = await deps.inspect(taskId);
+      if (observed.execution || observed.pending.length) return fail('TASK_BUSY', 'Register the team plan before starting work');
+      await deps.assertTeamPlanUnstarted?.(taskId);
       deps.assertAuthorized(pluginId);
       await save(row,{...data,teamPlan:plan});
       return {ok:true};

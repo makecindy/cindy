@@ -306,3 +306,34 @@ it('rechecks permissions when queued input reaches native dispatch', async () =>
  await expect(f.service.accept(run.taskId,{clientId:run.inputMessageId},f.execution)).rejects.toMatchObject({code:'PERMISSION_DENIED'});
  expect(JSON.parse(f.rows.get(run.runId)!.payload).status).toBe('queued');
 });
+
+it('keeps taskless plans immutable instead of retroactively granting scope', async () => {
+ const f=fixture(),task=await f.create();
+ const old={concurrency:2,items:[{label:'sample',workingDir:'/answer',route:f.route}]};
+ await f.service.setTeamPlan('p',task.taskId,old);
+ const scoped={...old,task:'Coordinate',items:[{...old.items[0]!,task:'Run tests'}]};
+ await expect(f.service.setTeamPlan('p',task.taskId,scoped)).rejects.toThrow('immutable');
+ await f.send();
+ await expect(f.service.setTeamPlan('p',task.taskId,scoped)).rejects.toThrow('immutable');
+ await f.service.setTeamPlan('p',task.taskId,old);
+ expect(JSON.parse(f.rows.get(task.taskId)!.payload).teamPlan).toEqual(old);
+});
+
+it.each(['sent', 'running', 'queued', 'workers'])('rejects late initial plan registration after %s', async state => {
+ const f=fixture(),task=await f.create();
+ if(state==='sent') await f.send();
+ if(state==='running') vi.mocked(f.deps.inspect).mockResolvedValue({execution:f.execution,pending:[]});
+ if(state==='queued') vi.mocked(f.deps.inspect).mockResolvedValue({execution:null,pending:[{clientId:'queued'}]});
+ if(state==='workers') f.deps.assertTeamPlanUnstarted=async()=>{throw new Error('Workers already exist');};
+ await expect(f.service.setTeamPlan('p',task.taskId,{concurrency:1,task:'Coordinate',items:[]})).rejects.toThrow();
+ expect(JSON.parse(f.rows.get(task.taskId)!.payload).teamPlan).toBeUndefined();
+});
+
+it('registers a complete scope once and permits only identical replays', async () => {
+ const f=fixture(),task=await f.create();
+ const plan={concurrency:2,task:'Coordinate',items:[{label:'sample',workingDir:'/answer',route:f.route,task:'Run tests'}]};
+ await f.service.setTeamPlan('p',task.taskId,plan);
+ await f.service.setTeamPlan('p',task.taskId,plan);
+ await expect(f.service.setTeamPlan('p',task.taskId,{...plan,task:'Publish'})).rejects.toThrow('immutable');
+ await expect(f.service.setTeamPlan('p',task.taskId,{...plan,items:[{...plan.items[0]!,task:'Publish'}]})).rejects.toThrow('immutable');
+});

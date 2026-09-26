@@ -2532,10 +2532,11 @@ export async function listMessagesForAgentHandoff(
       ELSE ${messages.createdAt} END ELSE ${messages.createdAt} END`;
   // Scheduled executions are not owner messages. Exclude them before LIMIT so
   // a long-running heartbeat cannot push its authorizing request out of history.
+  // Empty human receipts can reset resource authorization; only protected typed continuations are skipped.
   // Keep malformed/unknown rows: restoration must still invalidate ambiguous consent.
   const notScheduledExecution = sql`CASE WHEN ${messages.role} = 'user'
     AND json_valid(${messages.agentMeta}) THEN CASE
-      WHEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.kind') = 'scheduled-continuation'
+      WHEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.kind') IN ('scheduled-continuation', 'delegated-continuation')
       THEN 0 ELSE 1 END ELSE 1 END`;
   const rows = await db
     .select({

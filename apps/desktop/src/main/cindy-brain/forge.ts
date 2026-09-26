@@ -3896,7 +3896,12 @@ const r = await cindy.agent.requestSchedule({
 先调用 \`capabilities()\` 获取实际支持操作。当前仅支持本插件创建的本机普通任务：
 \`create\`、\`get\`、\`list\`、\`send\`、\`getRun\`、\`listRuns\`、\`readMessages\`、\`cancel\`。
 可对自有任务调用 \`startTeam({taskId})\` 启用 Orca 主任务，并用 \`getTeam({taskId})\` 读取实际协同状态。协调主任务需经用户授权 Auto，Worker 自动沿用 Auto。
-在首次派发前调用 \`setTeamPlan({taskId,plan:{concurrency,items}})\`，每项包含\`label, workingDir, route\`。计划冻结后不可改写。
+在首次派发前调用 \`setTeamPlan({taskId,plan:{concurrency,task,items}})\`，每项包含
+\`label, workingDir, route, task\`。可选 \`task\` 是插件提供的工作范围（每段最多 8000 字符），
+不是用户原话。Host 核对已批准启用的插件、自有主任务、真实 Worker 归属、模型和目录后，
+将范围单独交给 Auto 审阅；仍逐动作审批，用户限制、撤权和只读设置始终优先。
+计划须在首次派发或创建 Worker 前登记，之后不可改写（包括补填 task）；需要不同范围时创建新任务。
+缺少该字段的存量计划继续可读，不会从 Agent 消息推导额外授权。
 
 暂不支持选择现有任务、远程/伙伴任务、任意更新配置、归档、队列暂停或事件订阅。
 旧 \`agent.errand\` 接口不变。
