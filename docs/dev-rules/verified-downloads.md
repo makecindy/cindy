@@ -60,7 +60,7 @@ Renderer 只接收阶段、进度、设备码和固定 GitHub 授权地址，不
 安装、下载、授权和完成各有独立文案与操作。下载复用 `DownloadMeter`，
 成功后只提供「完成」，并停止轮询；再次打开不把上一次成功当作新的登录检查结果。
 
-登录成功用 `gh auth status --hostname github.com` 复核，然后清除 token 和 PR 缓存，
+登录前后用 `gh auth status --active --hostname github.com` 检查当前活动账号，避免失效备用账号干扰；成功后清除 token 和 PR 缓存，
 通过 `git-context:github-connected` 立即刷新顶栏及侧栏。缓存代数隔离登录前的在途响应。
 安装／登录 IPC 仅限受信本机主窗口，不开放给共享任务或 device-link；SSH／手机远程查看
 继续使用被控端现有 PR 查询和刷新通道，不会误操作控制端的 GitHub 账号。

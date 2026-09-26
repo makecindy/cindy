@@ -172,7 +172,9 @@ export function createGithubSetup(root: string, connected: () => void): GithubSe
   return new GithubSetup({
     resolveBinary: resolveGhBinary,
     available: (binary) => check(binary, ['--version']),
-    authenticated: (binary) => check(binary, ['auth', 'status', '--hostname', 'github.com']),
+    // Token reads use the active account; stale secondary accounts must not block setup.
+    authenticated: (binary) =>
+      check(binary, ['auth', 'status', '--active', '--hostname', 'github.com']),
     login: loginWithGh,
     connected,
     async install(signal, update) {

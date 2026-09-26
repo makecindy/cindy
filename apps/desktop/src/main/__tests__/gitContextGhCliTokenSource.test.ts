@@ -136,7 +136,7 @@ describe('createGhCliTokenSource', () => {
     expect(await src.probeAvailability()).toBe(true);
     expect(execFileFn).toHaveBeenCalledWith(
       expectedGhExecutable,
-      ['auth', 'status', '--hostname', 'github.com'],
+      ['auth', 'status', '--active', '--hostname', 'github.com'],
       { timeout: expect.any(Number) },
       expect.any(Function),
     );

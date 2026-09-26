@@ -149,7 +149,7 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
         // stdout/stderr 都不进入日志；该调用只消费退出码，绝不取得 token。
         execFileFn(
           bin,
-          ['auth', 'status', '--hostname', 'github.com'],
+          ['auth', 'status', '--active', '--hostname', 'github.com'],
           { timeout: GH_PROBE_TIMEOUT_MS },
           (err) => resolve(err === null),
         );
