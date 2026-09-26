@@ -603,11 +603,12 @@ export async function listSkillFolderChildren(params: { dirPath: string; atteste
     const skillRoot = attestedRoot
       ? fs.realpathSync.native(attestedRoot)
       : findSkillRootForPath(dirPath);
+    const namespaceRoot = attestedRoot ? null : findNamespaceRootForPath(dirPath);
     const entries: SkillFileEntry[] = fs
       .readdirSync(resolvedDirPath, { withFileTypes: true })
       .filter((s) => {
         const childPath = path.join(listedDirPath, s.name);
-        return !isIgnoredSkillPackagePath(skillPackageRelPath(skillRoot, childPath, s.name));
+        return !isIgnoredSkillPathWithRoots(childPath, skillRoot, namespaceRoot);
       })
       .map((s) => ({
         name: s.name,
@@ -733,16 +734,76 @@ export function isExistingSkillPathGranted(
   return false;
 }
 
-function findSkillRootForPath(absolutePath: string): string | null {
-  const norm = path.resolve(absolutePath).replace(/\\/g, '/');
-  const markerMatch = /\/(?:\.claude\/(?:skills|commands|agents)|\.agents\/skills|\.codex\/skills|\.pi\/skills|codex-home\/skills)\//.exec(norm);
+function hasSkillManifest(skillDir: string): boolean {
+  return ['SKILL.md', 'skill.md'].some((name) => {
+    try {
+      return fs.statSync(path.join(skillDir, name)).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+interface SkillPathMarker {
+  markerRoot: string;
+  segments: string[];
+  flatKind: boolean;
+}
+
+function parseSkillPathMarker(absolutePath: string): SkillPathMarker | null {
+  const normalizedPath = path.resolve(absolutePath).replace(/\\/g, '/');
+  const markerMatch = /\/(?:\.claude\/(?:skills|commands|agents)|\.agents\/skills|\.codex\/skills|\.pi\/skills|codex-home\/skills)\//.exec(normalizedPath);
   if (!markerMatch) return null;
 
-  const afterMarker = norm.slice((markerMatch.index ?? 0) + markerMatch[0].length);
-  const skillName = afterMarker.split('/').filter(Boolean)[0];
-  if (!skillName) return null;
+  const segments = normalizedPath
+    .slice((markerMatch.index ?? 0) + markerMatch[0].length)
+    .split('/')
+    .filter(Boolean);
+  if (segments.length === 0) return null;
 
-  return norm.slice(0, (markerMatch.index ?? 0) + markerMatch[0].length) + skillName;
+  return {
+    markerRoot: path.normalize(
+      normalizedPath.slice(0, (markerMatch.index ?? 0) + markerMatch[0].length - 1),
+    ),
+    segments,
+    flatKind: markerMatch[0].includes('/commands/') || markerMatch[0].includes('/agents/'),
+  };
+}
+
+/** The namespace-level root used before nested Skill discovery existed. */
+function findNamespaceRootForPath(absolutePath: string): string | null {
+  const marker = parseSkillPathMarker(absolutePath);
+  return marker ? path.join(marker.markerRoot, marker.segments[0]) : null;
+}
+
+function findSkillRootForPath(absolutePath: string): string | null {
+  const marker = parseSkillPathMarker(absolutePath);
+  if (!marker) return null;
+  const { markerRoot, segments } = marker;
+  const firstSegment = segments[0];
+  const firstRoot = path.join(markerRoot, firstSegment);
+
+  // Commands and agents are flat `<name>.md` files.
+  if (marker.flatKind) return firstRoot;
+
+  // Hidden segments are never discovered by the scanner; never let a deeper
+  // manifest raise the read/write baseline into a hidden credential dir.
+  if (firstSegment.startsWith('.')) return markerRoot;
+
+  // Skills have at most one namespace/author level below the discovery root.
+  if (hasSkillManifest(firstRoot)) return firstRoot;
+  const secondSegment = segments[1];
+  if (secondSegment && !secondSegment.startsWith('.')) {
+    const secondRoot = path.join(firstRoot, secondSegment);
+    if (hasSkillManifest(secondRoot)) return secondRoot;
+  }
+
+  // Keep the historical flat-layout fallback for incomplete paths. Hidden or
+  // excluded first segments use the marker root so the final relative path
+  // still contains that excluded segment.
+  return firstSegment.startsWith('.') || isIgnoredSkillPackagePath(firstSegment)
+    ? markerRoot
+    : firstRoot;
 }
 
 function skillPackageRelPath(rootDir: string | null, childPath: string, fallbackName: string): string {
@@ -751,12 +812,45 @@ function skillPackageRelPath(rootDir: string | null, childPath: string, fallback
   return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : fallbackName;
 }
 
-function isIgnoredSkillFilePath(filePath: string, attestedRoot?: string): boolean {
-  let skillRoot = attestedRoot ?? findSkillRootForPath(filePath);
-  if (attestedRoot) {
-    try { skillRoot = fs.realpathSync.native(attestedRoot); } catch { return true; }
+function isIgnoredSkillPathWithRoots(
+  filePath: string,
+  skillRoot: string | null,
+  namespaceRoot: string | null,
+): boolean {
+  // Hidden discovery children are never scanned, so nothing below them is a
+  // package path. This also closes the namespace-position credential dirs.
+  if (namespaceRoot && path.basename(namespaceRoot).startsWith('.')) return true;
+  if (!skillRoot) {
+    return isIgnoredSkillPackagePath(
+      skillPackageRelPath(namespaceRoot, filePath, path.basename(filePath)),
+    );
   }
-  return isIgnoredSkillPackagePath(skillPackageRelPath(skillRoot, filePath, path.basename(filePath)));
+  if (isIgnoredSkillPackagePath(skillPackageRelPath(skillRoot, filePath, path.basename(filePath)))) {
+    return true;
+  }
+  // Only the namespace prefix above the Skill root is an extra exclusion
+  // surface; the Skill's own leaf name must not make its body unreadable.
+  if (namespaceRoot && skillRoot !== namespaceRoot) {
+    const namespacePrefix = skillPackageRelPath(namespaceRoot, path.dirname(skillRoot), '');
+    if (namespacePrefix && isIgnoredSkillPackagePath(namespacePrefix)) return true;
+  }
+  return false;
+}
+
+function isIgnoredSkillFilePath(filePath: string, attestedRoot?: string): boolean {
+  if (attestedRoot) {
+    try {
+      const realRoot = fs.realpathSync.native(attestedRoot);
+      return isIgnoredSkillPackagePath(skillPackageRelPath(realRoot, filePath, path.basename(filePath)));
+    } catch {
+      return true;
+    }
+  }
+  return isIgnoredSkillPathWithRoots(
+    filePath,
+    findSkillRootForPath(filePath),
+    findNamespaceRootForPath(filePath),
+  );
 }
 
 export async function readSkillRawFile(params: { filePath: string; attestedRoot?: string }): Promise<{

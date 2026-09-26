@@ -20,6 +20,13 @@ function fakeRemoteFiles(files: Record<string, string>): RemoteAgentFileOps {
           .filter(Boolean),
       )];
     },
+    async lstat(candidate) {
+      if (fileNames.has(candidate)) return { isSymbolicLink: false };
+      const prefix = candidate.endsWith('/') ? candidate : `${candidate}/`;
+      return [...fileNames].some((file) => file.startsWith(prefix))
+        ? { isSymbolicLink: false }
+        : null;
+    },
     async readFile(file, maxBytes) {
       const value = files[file];
       if (value === undefined) throw new Error('missing');
@@ -51,6 +58,67 @@ describe('remote Skill scanners', () => {
         scope: 'project',
         description: 'Project release',
       }),
+    ]);
+  });
+
+  it('discovers one namespace level and stops before the third level', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.agents/skills/@scope/nested/SKILL.md': '---\ndescription: Nested\n---',
+      '$HOME/.agents/skills/@scope/group/too-deep/SKILL.md': '---\ndescription: Too deep\n---',
+      '$HOME/.claude/skills/@scope/claude-nested/SKILL.md': '---\ndescription: Claude nested\n---',
+    });
+
+    const pi = await scanRemotePiSkills({ fileOps });
+    expect(pi.skills.map((skill) => skill.name)).toEqual(['nested']);
+
+    const claude = await scanRemoteClaudeSkills({ fileOps });
+    expect(claude.skills.map((skill) => skill.name)).toEqual(['claude-nested']);
+  });
+
+  it('does not walk a symlinked namespace when the host exposes lstat', async () => {
+    const fileOps: RemoteAgentFileOps = {
+      ...fakeRemoteFiles({
+        '$HOME/.claude/skills/@scope/nested/SKILL.md': '---\ndescription: Nested\n---',
+      }),
+      async lstat(candidate) {
+        return { isSymbolicLink: candidate === '$HOME/.claude/skills/@scope' };
+      },
+    };
+
+    const result = await scanRemoteClaudeSkills({ fileOps });
+
+    expect(result.skills).toEqual([]);
+  });
+
+  it('does not walk namespaces when the host cannot report symlinks', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/skills/@scope/nested/SKILL.md': '---\ndescription: Nested\n---',
+    });
+    delete fileOps.lstat;
+
+    const result = await scanRemoteClaudeSkills({ fileOps });
+
+    expect(result.skills).toEqual([]);
+  });
+
+  it('prefers a direct remote Skill over a same-named nested Skill', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/skills/same-name/SKILL.md': '---\ndescription: Direct\n---',
+      '$HOME/.claude/skills/@scope/same-name/SKILL.md': '---\ndescription: Nested\n---',
+      '$HOME/.agents/skills/late-name/SKILL.md': '---\ndescription: Direct\n---',
+      '$HOME/.agents/skills/@scope/late-name/SKILL.md': '---\ndescription: Nested\n---',
+    });
+
+    // Claude merges by name; Pi dedupes by path, so it must not return two
+    // same-named Skills regardless of which one the directory order finds first.
+    const claude = await scanRemoteClaudeSkills({ fileOps });
+    expect(claude.skills.filter((skill) => skill.name === 'same-name')).toEqual([
+      expect.objectContaining({ name: 'same-name', description: 'Direct' }),
+    ]);
+
+    const pi = await scanRemotePiSkills({ fileOps });
+    expect(pi.skills.filter((skill) => skill.name === 'late-name')).toEqual([
+      expect.objectContaining({ name: 'late-name', description: 'Direct' }),
     ]);
   });
 

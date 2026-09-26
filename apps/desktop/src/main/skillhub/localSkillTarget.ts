@@ -10,20 +10,33 @@ export interface LocalSkillTarget {
   aliases: string[];
 }
 
-const standaloneSkillSuffix = /\/(?:\.(?:claude|agents|codex|pi)\/skills|\.pi\/agent\/skills|(?:codex-home|pi-agent-home)\/skills)\/[^/.][^/]*$/i;
+const skillDiscoveryRoot = /(?:^|\/)(?:\.(?:claude|agents|codex|pi)\/skills|\.pi\/agent\/skills|(?:codex-home|pi-agent-home)\/skills)(?=\/|$)/i;
+
+function standalonePathParts(value: string): { root: string; relative: string[] } | null {
+  const normalized = path.resolve(value).replace(/\\/g, '/');
+  const match = skillDiscoveryRoot.exec(normalized);
+  if (!match) return null;
+  const rootEnd = (match.index ?? 0) + match[0].length;
+  const relative = normalized.slice(rootEnd).split('/').filter(Boolean);
+  if (!relative.length || relative.some((segment) => segment.startsWith('.'))) return null;
+  return { root: normalized.slice(0, rootEnd), relative };
+}
 
 function isStandaloneSkillPath(value: string): boolean {
-  const normalized = path.resolve(value).replace(/\\/g, '/');
-  return standaloneSkillSuffix.test(normalized);
+  return standalonePathParts(value) !== null;
 }
 
 function isDirectSkillEntry(value: string): boolean {
+  const parts = standalonePathParts(value);
+  if (!parts) return false;
   let current = path.resolve(value);
-  const suffix = current.replace(/\\/g, '/').match(standaloneSkillSuffix)?.[0];
-  if (!suffix) return false;
-  // Check the entry, discovery root and engine config directories. The owner
-  // prefix may itself be a tracked project alias or an OS path such as /var.
-  for (const _segment of suffix.split('/').filter(Boolean)) {
+  const discoveryRoot = path.dirname(path.resolve(parts.root));
+  const ownerRoot = path.basename(discoveryRoot).toLowerCase() === 'agent'
+    ? path.dirname(path.dirname(discoveryRoot))
+    : path.dirname(discoveryRoot);
+  // Check the entry, namespace segments and every discovery-layout segment.
+  // The owner prefix may itself be a tracked project alias.
+  while (current !== ownerRoot) {
     if (fs.lstatSync(current).isSymbolicLink()) return false;
     current = path.dirname(current);
   }
