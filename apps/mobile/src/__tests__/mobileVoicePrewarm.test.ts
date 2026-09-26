@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core';
+import { ApiError } from '@/api/client';
 
 const prewarmMobileRealtimeAudio = vi.fn();
 const createProvider = vi.fn();
@@ -178,6 +179,23 @@ describe('mobileVoicePrewarm', () => {
     expect(provider.startCalls).toBe(2);
     provider.resolveStart();
     await expect(startPromise).resolves.toBeUndefined();
+  });
+
+  it('surfaces an account rate limit from the speculative connect without retrying', async () => {
+    const provider = new FakeProvider();
+    createCindyCredential.mockReturnValue(CREDENTIAL);
+    createProvider.mockReturnValue(provider);
+
+    prewarmMobileVoiceStart('device-1', AUTH);
+    await settle();
+    const limited = new ApiError('RATE_LIMITED', 429, 'Too many requests');
+    provider.failStart(limited);
+    await settle();
+
+    const claimed = await takePrewarmedMobileVoiceAsr('device-1');
+    await expect(claimed!.asr.start()).rejects.toBe(limited);
+    // A second session request would hit the same account limit.
+    expect(provider.startCalls).toBe(1);
   });
 
   it('reconnects when the transport dropped after the speculative connect succeeded', async () => {
