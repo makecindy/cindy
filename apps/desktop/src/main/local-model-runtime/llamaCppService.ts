@@ -174,34 +174,48 @@ export function createLlamaCppService(
     ownerProof = undefined;
     void proof?.close().catch(() => {});
   }
-  function stop() {
+  async function stopAndWait(): Promise<void> {
     ready = false;
     borrowed = false;
     closeOwnerProof();
-    child?.kill('SIGTERM');
-  }
-  async function stopAndWait(): Promise<void> {
     const previous = child;
     if (!previous) return;
     await new Promise<void>((resolve, reject) => {
+      const windows = process.platform === 'win32';
+      let exited = false;
+      let treeSettled = !windows;
       const timeout = setTimeout(() => {
         cleanup();
         reject(new Error('STOP_TIMEOUT'));
       }, 4_000);
-      const force = setTimeout(() => {
-        if (child === previous) killProcessTree(previous.pid, previous);
-      }, 1_500);
+      const force = windows
+        ? undefined
+        : setTimeout(() => {
+            if (child === previous) killProcessTree(previous.pid, previous);
+          }, 1_500);
       const done = () => {
+        if (!exited || !treeSettled) return;
         cleanup();
         resolve();
+      };
+      const onExit = () => {
+        exited = true;
+        done();
       };
       const cleanup = () => {
         clearTimeout(timeout);
         clearTimeout(force);
-        previous.off('exit', done);
+        previous.off('exit', onExit);
       };
-      previous.once('exit', done);
-      stop();
+      previous.once('exit', onExit);
+      if (windows) {
+        // Do not kill the router first: taskkill needs its live parent identity
+        // to enumerate workers. Router exit alone does not settle tree cleanup.
+        killProcessTree(previous.pid, previous, () => {
+          treeSettled = true;
+          done();
+        });
+      } else previous.kill('SIGTERM');
     });
   }
   async function install(): Promise<void> {
@@ -305,7 +319,9 @@ export function createLlamaCppService(
           // Another instance may have atomically published this model first.
           // Never remove its directory; only our private staging is disposable.
           if (
-            !['EEXIST', 'ENOTEMPTY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '') ||
+            !['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(
+              (error as NodeJS.ErrnoException).code ?? '',
+            ) ||
             !(await models()).some((m) => m.id === id)
           )
             throw error;

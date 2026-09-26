@@ -8,7 +8,9 @@ const mocks = vi.hoisted(() => ({
   resolve: vi.fn(),
   spawn: vi.fn(),
   rename: vi.fn(),
+  killTree: vi.fn(),
 }));
+vi.mock('../../scheduler-host/proc-util.js', () => ({ killProcessTree: mocks.killTree }));
 vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof import('node:fs/promises')>()),
   rename: mocks.rename,
@@ -49,6 +51,10 @@ let root: string;
 beforeEach(async () => {
   const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   mocks.rename.mockImplementation(fs.rename);
+  const proc = await vi.importActual<typeof import('../../scheduler-host/proc-util.js')>(
+    '../../scheduler-host/proc-util.js',
+  );
+  mocks.killTree.mockImplementation(proc.killProcessTree);
   root = await mkdtemp(path.join(os.tmpdir(), 'cindy-llamacpp-service-test-'));
   mocks.resolve.mockResolvedValue({
     revision: 'a'.repeat(40),
@@ -63,6 +69,57 @@ afterEach(async () => {
 });
 
 describe('managed llama.cpp model lifecycle', () => {
+  it.each([
+    ['stop', 'exit-first'],
+    ['stop', 'tree-first'],
+    ['dispose', 'exit-first'],
+    ['dispose', 'tree-first'],
+  ] as const)(
+    'awaits both Windows router exit and tree termination during %s (%s)',
+    async (action, order) => {
+      const runtime = path.join(root, 'llamacpp-runtime');
+      await mkdir(runtime);
+      await writeFile(path.join(runtime, 'server'), 'stub');
+      await writeFile(
+        path.join(runtime, 'current.json'),
+        JSON.stringify({ binary: 'server', version: 'test' }),
+      );
+      const child = Object.assign(new EventEmitter(), { pid: 1234, kill: vi.fn() });
+      mocks.spawn.mockReturnValue(child);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => Response.json({ status: 'ok' })),
+      );
+      const service = createLlamaCppService(root);
+      await service.start();
+      vi.stubGlobal(
+        'process',
+        new Proxy(process, {
+          get(target, key) {
+            return key === 'platform' ? 'win32' : Reflect.get(target, key);
+          },
+        }),
+      );
+      let finishTree!: () => void;
+      mocks.killTree.mockImplementation((_pid, target, finish) => {
+        finishTree = finish;
+        if (order === 'exit-first') target.emit('exit');
+        else finish();
+      });
+      let stopped = false;
+      const stopping = service[action]().then(() => {
+        stopped = true;
+      });
+      await vi.waitFor(() => expect(mocks.killTree).toHaveBeenCalledOnce());
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(stopped).toBe(false);
+      if (order === 'exit-first') finishTree();
+      else child.emit('exit');
+      await stopping;
+      expect(stopped).toBe(true);
+      expect((await service.snapshot()).running).toBe(false);
+    },
+  );
   it.each(['EEXIST', 'ENOTEMPTY', 'EPERM'])(
     'accepts %s only when another model publication succeeded',
     async (code) => {
@@ -115,7 +172,7 @@ describe('managed llama.cpp model lifecycle', () => {
     await borrower.dispose();
     expect(child.kill).not.toHaveBeenCalled();
     await owner.dispose();
-    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(child.kill).toHaveBeenCalledWith(process.platform === 'win32' ? 'SIGKILL' : 'SIGTERM');
   });
   it('waits for canceled download cleanup before disposal resolves', async () => {
     let entered!: () => void;
@@ -150,7 +207,7 @@ describe('managed llama.cpp model lifecycle', () => {
     expect(await readdir(path.join(root, 'llamacpp-runtime'))).toEqual(['models']);
   });
   it.each(['stop', 'dispose'] as const)(
-    'forces and awaits a stuck owned process during %s',
+    'forces and awaits a stuck POSIX owned process during %s',
     async (action) => {
       const runtime = path.join(root, 'llamacpp-runtime');
       await mkdir(runtime);
@@ -172,6 +229,14 @@ describe('managed llama.cpp model lifecycle', () => {
       );
       const service = createLlamaCppService(root);
       await service.start();
+      vi.stubGlobal(
+        'process',
+        new Proxy(process, {
+          get(target, key) {
+            return key === 'platform' ? 'darwin' : Reflect.get(target, key);
+          },
+        }),
+      );
       vi.useFakeTimers();
       try {
         const stopping = service[action]();
