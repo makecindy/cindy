@@ -132,4 +132,17 @@ describe('HomeSuggestionList', () => {
     // The description lives outside the button so it never joins the accessible name.
     expect(row.contains(description)).toBe(false);
   });
+
+  it('clears the preview when the window narrows past the hovered or focused row', () => {
+    const onPreviewChange = vi.fn();
+    const { rerender } = render(
+      <HomeSuggestionList narrow={false} onSelect={vi.fn()} onPreviewChange={onPreviewChange} />,
+    );
+    const rows = screen.getAllByTestId(/^home-suggestion-/);
+    fireEvent.focus(rows[2]);
+    fireEvent.mouseEnter(rows[3]);
+    onPreviewChange.mockClear();
+    rerender(<HomeSuggestionList narrow onSelect={vi.fn()} onPreviewChange={onPreviewChange} />);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(null);
+  });
 });

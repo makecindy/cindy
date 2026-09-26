@@ -124,6 +124,23 @@ export function HomeSuggestionList({
     setBatch({ ...batch, displayedCount: batchSize });
   }
   const visible = batch.items.slice(0, batchSize);
+  // 预览只能指向当前仍显示的条目:窄屏裁掉行、换一批等让行离开 DOM 时收不到可靠的
+  // mouseleave / blur,这里按可见集合统一清掉失效的悬停 / 焦点项。
+  const visibleKey = visible.map((item) => item.id).join('\n');
+  useEffect(() => {
+    const visibleIds = new Set(visibleKey.split('\n'));
+    let changed = false;
+    if (hoveredRef.current && !visibleIds.has(hoveredRef.current.id)) {
+      hoveredRef.current = null;
+      changed = true;
+    }
+    if (focusedRef.current && !visibleIds.has(focusedRef.current.id)) {
+      focusedRef.current = null;
+      changed = true;
+    }
+    if (changed) emitPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- emitPreview 每次渲染重建,只在可见集合变化时核对
+  }, [visibleKey]);
 
   if (hidden) return null;
 
