@@ -1606,6 +1606,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       message: buildDelegationPrompt(row),
       persistedContent: row.objective,
       clientId,
+      // 子任务首条消息标出发起委派的父任务，接收方据此渲染可跳转的来源标签。
+      ...(row.parentSessionId ? { dispatcherSessionId: row.parentSessionId } : {}),
       onAccepted: async replayed => {
         if (replayed) { persistedReplay = true; return; }
         const acceptedAt = now();
@@ -2602,8 +2604,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const requesterName = await requesterDisplayName(caller.botId);
     const recovered = await dispatchTrackedInput(row, {
       dispatcherSessionId: callerSessionId,
+      // 前缀只给子任务里的 AI 看；界面上的来源由消息的来源标签（伙伴头像 + 名字）表达，
+      // 落库正文不再重复。
       message: [`[来自 ${requesterName} 的补充]`, trimmed].join('\n\n'),
-      persistedContent: [`[来自 ${requesterName} 的补充]`, trimmed].join('\n\n'),
+      persistedContent: trimmed,
       clientId: BOT_DELEGATION_CLIENT_ID.interjection(delegationId, row.runSequence > 1 ? `${row.runSequence}:${token}` : token),
     });
     const dispatched = recovered.result;

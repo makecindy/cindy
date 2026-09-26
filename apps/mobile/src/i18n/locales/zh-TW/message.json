@@ -32,6 +32,10 @@
     "expand": "展開",
     "automationOriginNamed": "由自動化「{{name}}」傳送",
     "automationOrigin": "由自動化傳送",
+    "sessionOriginNamed": "由任務「{{name}}」傳送",
+    "botOriginNamed": "由夥伴「{{name}}」傳送",
+    "sessionOrigin": "由其他任務傳送",
+    "openSessionOrigin": "開啟來源任務",
     "modelMismatch": "本輪由 {{actual}} 響應，而非所選的 {{selected}}(服務端臨時降級)",
     "copyStateCopying": "複製中",
     "copyStateCopied": "已複製",
@@ -249,6 +253,7 @@
     },
     "row": {
       "syntheticEditDisabled": "系統指令訊息不支援編輯或插話傳送。",
+      "autoSentEditDisabled": "自動傳送的訊息不支援編輯或插話傳送。",
       "first": "已經是佇列第一條。",
       "last": "已經是佇列最後一條。",
       "steering": "插話傳送中",

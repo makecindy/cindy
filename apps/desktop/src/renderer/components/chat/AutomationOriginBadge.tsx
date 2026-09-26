@@ -1,37 +1,105 @@
-import { Timer } from 'lucide-react';
+import { useSyncExternalStore } from 'react';
+import { Send, Timer } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { BotAvatar } from '@/features/bots/BotAvatar';
+import { useBotProfiles } from '@/features/bots/botStore';
 import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import type { MessageAutomationOrigin } from '@/lib/ccAgent.types';
+import { sessionsStore } from '@/lib/sessionsStore';
 import { cn } from '@/lib/utils';
 
-/** 自动化来源在 embedded 会话中只展示身份，不拥有跳转主窗口路由的能力。 */
+/** 来源任务的实时标题：本机任务列表缓存里有就跟随改名，拿不到返回 null。 */
+function useCachedSessionTitle(sessionId: string | undefined): string | null {
+  return useSyncExternalStore(
+    (onChange) => sessionsStore.subscribe(onChange),
+    () => (sessionId ? sessionsStore.findById(sessionId)?.title?.trim() || null : null),
+  );
+}
+
+/**
+ * 非用户手动输入的消息来源标签：自动化发送的跳自动化页，其他任务经工具发送的
+ * 跳来源任务。embedded 会话中只展示身份，不拥有跳转主窗口路由的能力。
+ */
 export function AutomationOriginBadge({
   automationOrigin,
+  hostSessionId,
 }: {
   automationOrigin: MessageAutomationOrigin;
+  /** 标签所在的任务；远程任务据此把来源任务钉到同一台设备再跳转。 */
+  hostSessionId?: string;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const navigationMode = useSessionNavigationMode();
+  const senderSessionId =
+    automationOrigin.kind === 'session' ? automationOrigin.senderSessionId : undefined;
+  const liveSenderTitle = useCachedSessionTitle(senderSessionId);
+  const botProfiles = useBotProfiles();
+  // 远程任务的伙伴资料在那台设备上，本机同 id 资料不可信（与 BotDirectMessageCard 同口径）。
+  const hostDeviceId = hostSessionId
+    ? remoteProjectsStore.getSessionDeviceId(hostSessionId)
+    : undefined;
+  const senderBot =
+    automationOrigin.kind === 'session' && automationOrigin.senderBotId
+      ? (() => {
+          const profile = hostDeviceId
+            ? undefined
+            : botProfiles.find((item) => item.id === automationOrigin.senderBotId);
+          return {
+            name: profile?.name || automationOrigin.senderBotName || automationOrigin.senderBotId,
+            avatar: profile?.avatar ?? null,
+            avatarColor: profile?.avatarColor ?? null,
+          };
+        })()
+      : null;
+
+  let label: string;
+  let viewTitle: string;
+  let open: () => void;
+  if (automationOrigin.kind === 'session') {
+    const senderTitle = liveSenderTitle ?? automationOrigin.senderSessionTitle;
+    label = senderBot
+      ? t('chat.userMessage.botSentNamed', { name: senderBot.name })
+      : senderTitle
+        ? t('chat.userMessage.sessionSentNamed', { name: senderTitle })
+        : t('chat.userMessage.sessionSent');
+    viewTitle = t('chat.userMessage.sessionViewSource');
+    open = () => {
+      // 工具只能在同一台设备的任务之间投递：远程任务的来源任务也在那台设备上。
+      if (hostDeviceId)
+        remoteProjectsStore.pinSessionOrigin(hostDeviceId, automationOrigin.senderSessionId);
+      navigate(`/cc-agent/${encodeURIComponent(automationOrigin.senderSessionId)}`);
+    };
+  } else {
+    label = automationOrigin.scheduleName
+      ? t('chat.userMessage.automationSentNamed', { name: automationOrigin.scheduleName })
+      : t('chat.userMessage.automationSent');
+    viewTitle = t('chat.userMessage.automationViewTask');
+    open = () => navigate(scheduleFocusPath(automationOrigin.scheduleId));
+  }
+
+  const Icon = automationOrigin.kind === 'session' ? Send : Timer;
   const content = (
     <>
-      <Timer size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />
-      <span className="min-w-0 truncate">
-        {automationOrigin.scheduleName
-          ? t('chat.userMessage.automationSentNamed', {
-              name: automationOrigin.scheduleName,
-            })
-          : t('chat.userMessage.automationSent')}
-      </span>
+      {senderBot ? (
+        <BotAvatar bot={senderBot} size="xs" className="h-3.5 w-3.5 text-10" />
+      ) : (
+        <Icon size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />
+      )}
+      <span className="min-w-0 truncate">{label}</span>
     </>
   );
 
   if (navigationMode === 'sidebar-embedded') {
     return (
-      <span className="inline-flex max-w-full items-center gap-1 text-11 text-[var(--cmd-palette-item-meta)]">
+      <span
+        data-message-origin={senderBot ? 'bot' : automationOrigin.kind}
+        className="inline-flex max-w-full items-center gap-1 text-11 text-[var(--cmd-palette-item-meta)]"
+      >
         {content}
       </span>
     );
@@ -41,8 +109,9 @@ export function AutomationOriginBadge({
     <button
       type="button"
       data-split-pane-route-action=""
-      title={t('chat.userMessage.automationViewTask')}
-      onClick={() => navigate(scheduleFocusPath(automationOrigin.scheduleId))}
+      data-message-origin={senderBot ? 'bot' : automationOrigin.kind}
+      title={viewTitle}
+      onClick={open}
       className={cn(
         'inline-flex max-w-full items-center gap-1 cursor-pointer',
         'text-11 text-[var(--cmd-palette-item-meta)]',

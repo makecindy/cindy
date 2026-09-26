@@ -32,6 +32,10 @@
     "expand": "展開",
     "automationOriginNamed": "自動化タスク「{{name}}」から送信",
     "automationOrigin": "自動化タスクから送信",
+    "sessionOriginNamed": "セッション「{{name}}」から送信",
+    "botOriginNamed": "仲間「{{name}}」から送信",
+    "sessionOrigin": "別のセッションから送信",
+    "openSessionOrigin": "送信元のセッションを開きます",
     "modelMismatch": "今回は選択した {{selected}} ではなく {{actual}} が応答しました（サーバー側の一時的なダウングレード）",
     "copyStateCopying": "コピー中",
     "copyStateCopied": "コピーしました",
@@ -249,6 +253,7 @@
     },
     "row": {
       "syntheticEditDisabled": "システム指令メッセージは編集や割り込み送信ができません。",
+      "autoSentEditDisabled": "自動送信されたメッセージは編集や割り込み送信ができません。",
       "first": "すでにキューの先頭です。",
       "last": "すでにキューの末尾です。",
       "steering": "割り込み送信中",

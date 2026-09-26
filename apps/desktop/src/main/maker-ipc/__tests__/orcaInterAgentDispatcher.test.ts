@@ -653,6 +653,62 @@ describe('Orca lead/worker dispatcher', () => {
       },
     });
   });
+  it('records the sending Lead or Worker session so the receiver can link back to it', async () => {
+    const resolveWorkerSessionLink = vi.fn(async () => ({
+      leadSessionId: 'lead-session',
+      workerSessionId: 'worker-session',
+    }));
+    const h = createHarness({ shouldQueueNewTurn: vi.fn(() => true), resolveWorkerSessionLink });
+
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Implement feature',
+      source: 'lead',
+      senderLabel: 'Lead',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'origin-test' },
+    });
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Done',
+      source: 'worker',
+      senderLabel: 'Worker',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'origin-test' },
+    });
+
+    expect(resolveWorkerSessionLink).toHaveBeenCalledWith('worker-1');
+    expect(h.queuedItems.map((queued) => queued.origin)).toEqual([
+      expect.objectContaining({ kind: 'orca', senderSessionId: 'lead-session' }),
+      expect.objectContaining({ kind: 'orca', senderSessionId: 'worker-session' }),
+    ]);
+  });
+
+  it('still delivers when the sender session cannot be resolved', async () => {
+    const h = createHarness({
+      shouldQueueNewTurn: vi.fn(() => true),
+      resolveWorkerSessionLink: vi.fn(async () => {
+        throw new Error('db unavailable');
+      }),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Implement feature',
+      source: 'lead',
+      senderLabel: 'Lead',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'origin-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'queued' });
+    expect(h.queuedItems[0]?.origin).toEqual({
+      kind: 'orca',
+      senderLabel: 'Lead',
+      displayText: 'Implement feature',
+    });
+  });
+
   it('builds the standard Orca queue item and runs the reserve hook at the head boundary', async () => {
     const order: string[] = [];
     const reserveNextQueuedMessage = vi.fn(async (_sessionId, item, onReserved) => {

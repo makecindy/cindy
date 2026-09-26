@@ -265,6 +265,8 @@ export interface AgentInputQueuedMessage {
         kind: 'orca';
         senderLabel: string;
         displayText?: string;
+        /** 发出本条的 Lead / Worker 会话；接收方据此渲染可点击的来源标签。老快照没有。 */
+        senderSessionId?: string;
       }
     | {
         /**
@@ -280,11 +282,22 @@ export interface AgentInputQueuedMessage {
         runId?: string;
       }
     | {
-        /** cindy_helper 的 send_to_session 入队来源；只用于本人排队消息控制授权。 */
+        /**
+         * 另一个会话经工具（send_to_session / steer_session / 伙伴委派等）发来的消息。
+         * 既用于本人排队消息控制授权，也落库到 agentMeta.origin 供接收方渲染来源标签。
+         */
         kind: 'session';
         senderSessionId: string;
         /** 原始可编辑正文；单独保留以兼容未来可能加入的派发包装。 */
         displayText: string;
+        /**
+         * 发送时来源会话的标题快照；接收方渲染「由任务「X」发送」标签。来源会话
+         * 之后改名 / 删除时 renderer 优先用实时标题，拿不到再回退这里。老快照没有。
+         */
+        senderSessionTitle?: string;
+        /** 来源会话属于某个伙伴时的伙伴身份快照；接收方标签改显示伙伴名与头像。 */
+        senderBotId?: string;
+        senderBotName?: string;
       };
   /**
    * 本条由**手机控制端**入队 / 插入。

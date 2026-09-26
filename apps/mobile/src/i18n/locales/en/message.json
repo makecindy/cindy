@@ -32,6 +32,10 @@
     "expand": "Expand",
     "automationOriginNamed": "Sent by automation task “{{name}}”",
     "automationOrigin": "Sent by an automation task",
+    "sessionOriginNamed": "Sent by session “{{name}}”",
+    "botOriginNamed": "Sent by teammate “{{name}}”",
+    "sessionOrigin": "Sent by another session",
+    "openSessionOrigin": "Opens the source session",
     "modelMismatch": "This turn was answered by {{actual}} instead of the selected {{selected}} (temporary server-side downgrade)",
     "copyStateCopying": "Copying",
     "copyStateCopied": "Copied",
@@ -249,6 +253,7 @@
     },
     "row": {
       "syntheticEditDisabled": "System instruction messages can't be edited or sent as interjections.",
+      "autoSentEditDisabled": "Automatically sent messages can't be edited or sent as interjections.",
       "first": "This is already the first item in the queue.",
       "last": "This is already the last item in the queue.",
       "steering": "Sending interjection",

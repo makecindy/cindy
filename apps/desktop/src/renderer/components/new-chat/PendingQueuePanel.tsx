@@ -29,6 +29,7 @@ import {
   ChevronUp,
   GripVertical,
   Pencil,
+  Send,
   Trash2,
 } from 'lucide-react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactElement } from 'react';
@@ -39,6 +40,8 @@ import { SortableList } from '@/components/sidebar/SortableList';
 import { SentInlineAtomBody } from '@/components/chat/SentInlineAtomBody';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
+import { BotAvatar } from '@/features/bots/BotAvatar';
+import { useBotProfiles } from '@/features/bots/botStore';
 import { cn } from '@/lib/utils';
 import type { QueuedMessage } from '@/lib/makerChatStore';
 import {
@@ -163,6 +166,7 @@ export function PendingQueuePanel({
   turnRunning = false,
 }: PendingQueuePanelProps): ReactElement | null {
   const { t } = useTranslation();
+  const botProfiles = useBotProfiles();
   const resolvedAriaLabel = ariaLabel ?? t('newChat.pendingQueue.regionAria');
   const [rowActivity, setRowActivity] = useState(emptyPendingQueueRowActivityState);
   const editingLockOwnerRef = useRef<QueueEditLockOwner | null>(null);
@@ -291,6 +295,13 @@ export function PendingQueuePanel({
         className="pending-queue-scroll flex max-h-[196px] flex-col gap-0 overflow-y-auto overscroll-contain px-1 pb-0.5 pt-1.5 [scrollbar-gutter:stable_both-edges]"
         renderItem={(entry, originalIdx) => {
           const rowPresentation = getPendingQueueRowPresentation(entry);
+          const senderBotProfile = rowPresentation.senderBotId
+            ? botProfiles.find((item) => item.id === rowPresentation.senderBotId)
+            : undefined;
+          const queueRowSenderLabel =
+            senderBotProfile?.name ||
+            rowPresentation.senderLabel ||
+            (rowPresentation.isSession ? t('newChat.pendingQueue.sessionSenderFallback') : null);
           const isPendingEnqueue = entry.isPendingEnqueue === true;
           const isRowActive = isPendingQueueRowActive(rowActivity, entry.clientId);
           const isRowEditing = entry.clientId === editingClientId;
@@ -453,17 +464,38 @@ export function PendingQueuePanel({
               >
                 <GripVertical size={12} strokeWidth={2} aria-hidden />
               </button>
-              {rowPresentation.isOrca || rowPresentation.isScheduler ? (
+              {rowPresentation.isOrca || rowPresentation.isScheduler || rowPresentation.isSession ? (
                 <div
                   aria-label={t(
                     rowPresentation.isScheduler
                       ? 'newChat.pendingQueue.schedulerRowAria'
-                      : 'newChat.pendingQueue.orcaRowAria',
-                    { sender: rowPresentation.senderLabel },
+                      : rowPresentation.senderBotId
+                        ? 'newChat.pendingQueue.botRowAria'
+                        : rowPresentation.isSession
+                          ? 'newChat.pendingQueue.sessionRowAria'
+                        : 'newChat.pendingQueue.orcaRowAria',
+                    { sender: queueRowSenderLabel },
                   )}
                   className="relative top-px flex min-w-0 flex-1 items-center gap-1.5"
                 >
-                  {rowPresentation.isScheduler ? (
+                  {rowPresentation.senderBotId ? (
+                    <BotAvatar
+                      bot={{
+                        name: queueRowSenderLabel ?? rowPresentation.senderBotId,
+                        avatar: senderBotProfile?.avatar ?? null,
+                        avatarColor: senderBotProfile?.avatarColor ?? null,
+                      }}
+                      size="xs"
+                      className="h-3.5 w-3.5 text-10"
+                    />
+                  ) : rowPresentation.isSession ? (
+                    <Send
+                      size={13}
+                      strokeWidth={2}
+                      aria-hidden
+                      className="shrink-0 text-[var(--msg-assistant-text)]"
+                    />
+                  ) : rowPresentation.isScheduler ? (
                     <AlarmClock
                       size={13}
                       strokeWidth={2}
@@ -479,7 +511,7 @@ export function PendingQueuePanel({
                     />
                   )}
                   <span className="min-w-0 max-w-[120px] shrink truncate text-13 font-semibold leading-[1.25] text-[var(--msg-assistant-text)]">
-                    {rowPresentation.senderLabel}
+                    {queueRowSenderLabel}
                   </span>
                   <span
                     className={cn(

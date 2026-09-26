@@ -648,6 +648,8 @@ interface MessageActions {
   onDeleteMessage?: (clientId: string) => void;
   onLoadEarlier?: () => void | Promise<void>;
   onOpenForkOrigin?: () => void;
+  /** 「由任务「X」发送」来源标签点击:跳到同一设备上的来源任务。 */
+  onOpenOriginSession?: (sessionId: string) => void;
   onOpenPayload?: (payload: MessagePayload) => void;
   onLoadToolInput?: (ref: MobileToolInputProjection) => Promise<MobileToolInputDetail>;
   onBlockingOverlayChange?: (blocked: boolean) => void;
@@ -701,6 +703,7 @@ export function MessageRenderer({
   onLoadEarlier,
   onLoadToolInput,
   onOpenForkOrigin,
+  onOpenOriginSession,
   onBlockingOverlayChange,
   onOpenSessionLink,
   onPreviewRewind,
@@ -1664,6 +1667,7 @@ export function MessageRenderer({
     onForkMessage,
     onDeleteMessage,
     onOpenForkOrigin,
+    onOpenOriginSession,
     onOpenSessionLink,
     onPreviewRewind,
     onEnterShareSelection,
@@ -1708,6 +1712,7 @@ export function MessageRenderer({
     onDeleteMessage,
     onForkMessage,
     onOpenForkOrigin,
+    onOpenOriginSession,
     onLoadToolInput,
     onOpenSessionLink,
     onPreviewRewind,
@@ -2881,8 +2886,15 @@ const RenderItemView = memo(function RenderItemView({
         ? <CompanionMessageCard message={item.message}
             renderMarkdown={(text) => <CompanionCardMarkdown text={text} actions={actions} />} />
         : item.message.orcaCard
-        ? <OrcaCollabCard card={item.message.orcaCard} screenWidth={actions.screenWidth}
-            blockKey={JSON.stringify([actions.remoteDeviceId, item.key])} />
+        ? (
+          <>
+            {item.message.sessionOrigin ? (
+              <SessionOriginLabel origin={item.message.sessionOrigin} onOpen={actions.onOpenOriginSession} />
+            ) : null}
+            <OrcaCollabCard card={item.message.orcaCard} screenWidth={actions.screenWidth}
+              blockKey={JSON.stringify([actions.remoteDeviceId, item.key])} />
+          </>
+        )
         : <MessageBubble item={hookSourceUserItem ?? systemCardUserItem ?? item} actions={actions} />;
       break;
     case 'thinking':
@@ -3004,6 +3016,39 @@ const RenderListItemView = memo(function RenderListItemView({
     </MessageHeavyContentVisibilityContext.Provider>
   );
 });
+
+/** 另一个任务经工具发来的消息:气泡上方的来源标签,点按跳来源任务(对齐桌面 AutomationOriginBadge)。 */
+function SessionOriginLabel({
+  origin,
+  onOpen,
+}: {
+  origin: NonNullable<NormalizedRemoteMessage['sessionOrigin']>;
+  onOpen?: (sessionId: string) => void;
+}) {
+  const { colors } = useTheme();
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  const label = origin.senderBotName
+    ? t('message.renderer.botOriginNamed', { name: origin.senderBotName })
+    : origin.senderSessionTitle
+      ? t('message.renderer.sessionOriginNamed', { name: origin.senderSessionTitle })
+      : t('message.renderer.sessionOrigin');
+  return (
+    <Pressable
+      accessibilityHint={onOpen ? t('message.renderer.openSessionOrigin') : undefined}
+      accessibilityLabel={label}
+      accessibilityRole={onOpen ? 'button' : 'text'}
+      disabled={!onOpen}
+      hitSlop={8}
+      onPress={onOpen ? () => onOpen(origin.senderSessionId) : undefined}
+      style={styles.automationOriginRow}
+      testID="message.sessionOrigin"
+    >
+      <Send color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
+      <Text numberOfLines={1} style={styles.automationOriginText}>{label}</Text>
+    </Pressable>
+  );
+}
 
 function ForkOriginMarker({ onOpenForkOrigin }: { onOpenForkOrigin?: () => void }) {
   const { colors } = useTheme();
@@ -3685,6 +3730,9 @@ function MessageBubble({
               : t('message.renderer.automationOrigin')}
           </Text>
         </View>
+      ) : null}
+      {item.message.kind === 'user' && item.message.sessionOrigin ? (
+        <SessionOriginLabel origin={item.message.sessionOrigin} onOpen={actions.onOpenOriginSession} />
       ) : null}
       {attachmentStripNode}
       {hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0) ? bubble : null}

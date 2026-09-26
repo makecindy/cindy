@@ -34,12 +34,38 @@ export type NativeForkAnchor = {
  * 而非用户手动输入。scheduler runner 落库时写入 agentMeta.origin，
  * renderer 据此在气泡上渲染"由自动化任务发送"标签。
  */
-export interface MessageAutomationOrigin {
+export interface MessageSchedulerOrigin {
   kind: 'scheduler';
   scheduleId: string;
   scheduleName?: string;
   runId?: string;
 }
+
+/**
+ * 另一个任务经工具（send_to_session / steer_session / 伙伴委派 / Orca 协同等）
+ * 发来的消息。renderer 渲染「由任务「X」发送」标签，点击跳到来源任务。
+ */
+export interface MessageSessionOrigin {
+  kind: 'session';
+  senderSessionId: string;
+  /** 发送时的来源任务标题快照；实时标题拿不到时回退用。 */
+  senderSessionTitle?: string;
+  /** 来源任务属于某个伙伴时：标签显示伙伴名与头像（名字优先取实时资料，其次用快照）。 */
+  senderBotId?: string;
+  senderBotName?: string;
+}
+
+/** 非用户手动输入、需要在气泡上标出来源的消息。 */
+export type MessageAutomationOrigin = MessageSchedulerOrigin | MessageSessionOrigin;
+
+/**
+ * agentMeta.origin 的持久化形态（host 写入，见 shared/agentInputQueue 的 origin）。
+ * orca 条目的卡片标题来自 content JSON；这里只关心能否定位发送方任务。
+ */
+export type StoredMessageOrigin =
+  | MessageSchedulerOrigin
+  | (MessageSessionOrigin & { displayText?: string })
+  | { kind: 'orca'; senderLabel?: string; displayText?: string; senderSessionId?: string };
 
 /**
  * Claude Code SDK 元信息——按消息类型不同填不同子集。
@@ -97,9 +123,9 @@ export interface CcMeta {
 
   /**
    * Host-side origin marker（与 delivery 同类，非 SDK 字段）。
-   * scheduler 注入的 user 消息携带；用户手动输入的消息无此字段。
+   * scheduler / 工具 / Orca 注入的 user 消息携带；用户手动输入的消息无此字段。
    */
-  origin?: MessageAutomationOrigin;
+  origin?: StoredMessageOrigin;
 
   /**
    * Host-side silent-stop 自动续跑标记(与 delivery 同类,非 SDK 字段)。

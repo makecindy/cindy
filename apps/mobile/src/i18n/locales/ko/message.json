@@ -32,6 +32,10 @@
     "expand": "펼치기",
     "automationOriginNamed": "자동화 작업 「{{name}}」에서 전송",
     "automationOrigin": "자동화 작업에서 전송",
+    "sessionOriginNamed": "세션 “{{name}}”에서 보냄",
+    "botOriginNamed": "동료 “{{name}}”에서 보냄",
+    "sessionOrigin": "다른 세션에서 보냄",
+    "openSessionOrigin": "보낸 세션을 엽니다",
     "modelMismatch": "이번 턴은 선택한 {{selected}}이(가) 아니라 {{actual}}이(가) 응답했습니다(서버 측 임시 다운그레이드)",
     "copyStateCopying": "복사 중",
     "copyStateCopied": "복사됨",
@@ -249,6 +253,7 @@
     },
     "row": {
       "syntheticEditDisabled": "시스템 지시 메시지는 편집하거나 끼어들기로 보낼 수 없습니다.",
+      "autoSentEditDisabled": "자동으로 보낸 메시지는 편집하거나 끼어들기로 보낼 수 없습니다.",
       "first": "이미 큐의 첫 항목입니다.",
       "last": "이미 큐의 마지막 항목입니다.",
       "steering": "끼어들기 전송 중",

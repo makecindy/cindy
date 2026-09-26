@@ -139,7 +139,11 @@ export function buildQueueRowPresentation(input: {
   // 照常——用户可以取消一条排队中的续跑,但不能改写或抢发它的内容。
   const syntheticEditReason = syntheticKind
     ? presentationText(localizer, 'message.queuePresentation.row.syntheticEditDisabled', '系统指令消息不支持编辑或插话发送。')
-    : null;
+    : isAutoSentQueueItem(input.item)
+      // 自动化 / 其他任务经工具排进来的消息(对齐桌面 canEdit / canSteer=false):改写后
+      // 落库气泡的来源标签就不再属实;删除与排序照常。
+      ? presentationText(localizer, 'message.queuePresentation.row.autoSentEditDisabled', '自动发送的消息不支持编辑或插话发送。')
+      : null;
 
   return {
     actions: {
@@ -186,6 +190,14 @@ export function isOrcaQueueItem(
 ): boolean {
   const origin = readRecord(item.origin);
   return origin?.kind === 'orca';
+}
+
+/** 自动化(scheduler)或其他任务经工具(session)排进来的消息。Orca 另有整行只读口径。 */
+export function isAutoSentQueueItem(
+  item: Pick<{ origin?: unknown }, 'origin'>,
+): boolean {
+  const kind = readRecord(item.origin)?.kind;
+  return kind === 'scheduler' || kind === 'session';
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {

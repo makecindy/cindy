@@ -34,7 +34,7 @@ describe('SelectionQuoteButton — user message floating action exclusion', () =
     );
     expect(collapseGuard).not.toContain('inlineQuoteCount === 0');
     expect(userMessageSource).toMatch(
-      /longMessageCollapsed\s*&&\s*\(automationOrigin \? 'line-clamp-3' : 'line-clamp-10'\)/,
+      /longMessageCollapsed\s*&&\s*\(isScheduledAutomation \? 'line-clamp-3' : 'line-clamp-10'\)/,
     );
     expect(userMessageSource).toMatch(/\{renderContent\(\n\s+segment\.text,/);
     expect(userMessageSource).toContain('!longMessageCollapsed,');

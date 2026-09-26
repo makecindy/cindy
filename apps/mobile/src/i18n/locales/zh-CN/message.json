@@ -32,6 +32,10 @@
     "expand": "展开",
     "automationOriginNamed": "由自动化「{{name}}」发送",
     "automationOrigin": "由自动化发送",
+    "sessionOriginNamed": "由任务「{{name}}」发送",
+    "botOriginNamed": "由伙伴「{{name}}」发送",
+    "sessionOrigin": "由其他任务发送",
+    "openSessionOrigin": "打开来源任务",
     "modelMismatch": "本轮由 {{actual}} 响应，而非所选的 {{selected}}(服务端临时降级)",
     "copyStateCopying": "复制中",
     "copyStateCopied": "已复制",
@@ -249,6 +253,7 @@
     },
     "row": {
       "syntheticEditDisabled": "系统指令消息不支持编辑或插话发送。",
+      "autoSentEditDisabled": "自动发送的消息不支持编辑或插话发送。",
       "first": "已经是队列第一条。",
       "last": "已经是队列最后一条。",
       "steering": "插话发送中",

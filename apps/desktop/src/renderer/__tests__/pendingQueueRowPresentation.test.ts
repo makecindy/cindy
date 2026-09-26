@@ -41,6 +41,50 @@ function queuedMessage(patch: Partial<QueuedMessage> = {}): QueuedMessage {
 }
 
 describe('getPendingQueueRowPresentation', () => {
+  it('marks messages sent by another session as read-only rows with the sender title', () => {
+    const presentation = getPendingQueueRowPresentation(
+      queuedMessage({
+        text: 'follow-up',
+        persistedContent: 'follow-up',
+        origin: {
+          kind: 'session',
+          senderSessionId: 'caller',
+          displayText: 'follow-up',
+          senderSessionTitle: 'Release checklist',
+        },
+      }),
+    );
+
+    expect(presentation).toMatchObject({
+      isSession: true,
+      isOrca: false,
+      isScheduler: false,
+      senderLabel: 'Release checklist',
+      displayText: 'follow-up',
+      canEdit: false,
+      canSteer: false,
+    });
+    expect(
+      getPendingQueueRowPresentation(
+        queuedMessage({ origin: { kind: 'session', senderSessionId: 'caller', displayText: 'x' } }),
+      ).senderLabel,
+    ).toBeNull();
+    expect(
+      getPendingQueueRowPresentation(
+        queuedMessage({
+          origin: {
+            kind: 'session',
+            senderSessionId: 'bot-task',
+            displayText: 'x',
+            senderSessionTitle: 'Weekly feedback',
+            senderBotId: 'bot-1',
+            senderBotName: 'Cindy',
+          },
+        }),
+      ),
+    ).toMatchObject({ isSession: true, senderLabel: 'Cindy', senderBotId: 'bot-1' });
+  });
+
   it('uses orca sender and display text while disabling edit and steer actions', () => {
     const presentation = getPendingQueueRowPresentation(
       queuedMessage({
@@ -56,6 +100,8 @@ describe('getPendingQueueRowPresentation', () => {
     expect(presentation).toEqual({
       isOrca: true,
       isScheduler: false,
+      isSession: false,
+      senderBotId: null,
       senderLabel: 'reviewer',
       displayText: '请看一下这个结论',
       isSyntheticTrigger: false,
@@ -83,6 +129,8 @@ describe('getPendingQueueRowPresentation', () => {
     expect(presentation).toEqual({
       isOrca: false,
       isScheduler: true,
+      isSession: false,
+      senderBotId: null,
       senderLabel: 'PR #971 心跳',
       displayText: 'PR #971 heartbeat prompt',
       isSyntheticTrigger: false,
