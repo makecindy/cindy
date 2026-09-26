@@ -143,6 +143,50 @@ describe('dedicated Auto-review candidate policy', () => {
     expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano']);
   });
 
+  it('retries a timed-out gateway after unavailable fallbacks skip instantly', async () => {
+    vi.useFakeTimers();
+    const log = logger();
+    const calls: string[] = [];
+    const requestCandidate = vi.fn((_prompt, candidate) => {
+      calls.push(candidate.id);
+      if (candidate.id === 'cindy-gateway') {
+        return calls.length === 1
+          ? new Promise<UtilityTextResult>(() => undefined)
+          : Promise.resolve(succeeded(candidate, '{"verdict":"allow"}'));
+      }
+      // 本机没有可用 OpenAI 凭证:立即返回,不占预算。
+      return Promise.resolve<UtilityTextResult>({ ok: false, reason: 'no_candidate', attempts: [] });
+    });
+    const route = createAutoReviewModelRouter({ logger: log, requestCandidate });
+
+    const pending = route('classify');
+    await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS);
+
+    await expect(pending).resolves.toBe('{"verdict":"allow"}');
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna', 'cindy-gateway']);
+    expect(log.warn).toHaveBeenCalledWith('auto-review model candidate failed', expect.objectContaining({
+      candidateId: 'cindy-gateway',
+      reason: 'timeout',
+      retrying: 'after_fallbacks',
+    }));
+  });
+
+  it('does not retry a timed-out candidate without a full timeout left', async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const requestCandidate = vi.fn((_prompt, candidate) => {
+      calls.push(candidate.id);
+      return new Promise<UtilityTextResult>(() => undefined);
+    });
+    const route = createAutoReviewModelRouter({ logger: logger(), requestCandidate });
+
+    const pending = route('classify');
+    await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CHAIN_TIMEOUT_MS);
+
+    await expect(pending).resolves.toBeNull();
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna']);
+  });
+
   it('aborts the in-flight request at the total deadline without starting another chain', async () => {
     vi.useFakeTimers();
     const observedSignals: AbortSignal[] = [];
