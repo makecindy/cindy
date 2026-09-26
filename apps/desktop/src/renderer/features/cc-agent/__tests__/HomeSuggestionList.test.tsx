@@ -159,4 +159,26 @@ describe('HomeSuggestionList', () => {
     const description = document.getElementById(row.getAttribute('aria-describedby')!);
     expect(description?.textContent).toBe(`$mail newChat.homeSuggestions.${id}.prompt`);
   });
+
+  it('previews the row keyboard activation will select once focus moves under a resting pointer', () => {
+    const onPreviewChange = vi.fn();
+    render(
+      <HomeSuggestionList narrow={false} onSelect={vi.fn()} onPreviewChange={onPreviewChange} />,
+    );
+    const [hoveredRow, focusedRow] = screen.getAllByTestId(/^home-suggestion-/);
+    const idOf = (row: HTMLElement) =>
+      row.getAttribute('data-testid')!.replace('home-suggestion-', '');
+
+    fireEvent.mouseEnter(hoveredRow);
+    fireEvent.focus(focusedRow);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: idOf(focusedRow) }),
+    );
+    // Moving the pointer onto a row again hands the preview back to the pointer.
+    fireEvent.mouseLeave(hoveredRow);
+    fireEvent.mouseEnter(hoveredRow);
+    expect(onPreviewChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: idOf(hoveredRow) }),
+    );
+  });
 });

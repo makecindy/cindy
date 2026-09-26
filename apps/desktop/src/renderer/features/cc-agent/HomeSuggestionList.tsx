@@ -111,11 +111,18 @@ export function HomeSuggestionList({
   const onPreviewChangeRef = useRef(onPreviewChange);
   onPreviewChangeRef.current = onPreviewChange;
   useEffect(() => () => onPreviewChangeRef.current?.(null), []);
-  // 悬停与键盘焦点各自记录:预览取悬停项,没有悬停时回落到焦点项,两者都没有才清空。
+  // 悬停与键盘焦点各自记录,预览以最近一次交互(移入或聚焦)为准,另一方仍在时作为回落,
+  // 两者都没有才清空。这样键盘移到另一行后预览即是回车将填入的那一行,鼠标再移入则跟鼠标。
   // 点击(填入)视为本次交互结束,两者一起清掉,直到再次移入/聚焦。
   const hoveredRef = useRef<HomeTaskSuggestion | null>(null);
   const focusedRef = useRef<HomeTaskSuggestion | null>(null);
-  const emitPreview = () => onPreviewChange?.(hoveredRef.current ?? focusedRef.current);
+  const latestSourceRef = useRef<'hover' | 'focus'>('hover');
+  const emitPreview = () =>
+    onPreviewChange?.(
+      latestSourceRef.current === 'focus'
+        ? (focusedRef.current ?? hoveredRef.current)
+        : (hoveredRef.current ?? focusedRef.current),
+    );
   const resetPreview = () => {
     hoveredRef.current = null;
     focusedRef.current = null;
@@ -167,6 +174,7 @@ export function HomeSuggestionList({
                 }}
                 onMouseEnter={() => {
                   hoveredRef.current = item;
+                  latestSourceRef.current = 'hover';
                   emitPreview();
                 }}
                 onMouseLeave={() => {
@@ -175,6 +183,7 @@ export function HomeSuggestionList({
                 }}
                 onFocus={() => {
                   focusedRef.current = item;
+                  latestSourceRef.current = 'focus';
                   emitPreview();
                 }}
                 onBlur={() => {
