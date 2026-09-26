@@ -10282,6 +10282,7 @@
         "moveToProjectRunningBlocked": "任务正在运行，结束后再移动",
         "moveToProjectAttachedBlocked": "任务正在被接管，结束接管后再移动",
         "moveToProjectRemoteUnsupported": "暂不支持移动远程任务",
+        "moveToProjectWorktreeBlocked": "该任务的工作目录是 worktree，暂不支持移动到其他项目",
         "openInNewWindow": "在新窗口打开",
         "exportShare": "导出任务…",
         "exportHtml": "导出为 HTML…",

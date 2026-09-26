@@ -75,7 +75,12 @@ import {
 import {
   normalizeWorkingDirForProjectSettings,
   normalizeWorkingDirForStorage,
+  workingDirEquals,
 } from '../../../shared/workingDir.js';
+import {
+  WORKTREE_MOVE_BLOCKED_CODE,
+  WORKTREE_MOVE_BLOCKED_MESSAGE,
+} from '../../../shared/worktreeMoveGuardError.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
@@ -164,6 +169,21 @@ export interface RegisterSessionIpcOpts {
 let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
 let sessionRemovalCleanup: SessionRemovalCleanup | null = null;
 let sessionWorktreeRecycle: SessionWorktreeRecycle | null = null;
+
+/**
+ * 会话当前 worktree 绑定的查询口。source of truth 是 worktreeStore（electron-store）：
+ * `sessions.worktree_path` 只是反范式快照，且回收后刻意保留历史值（徽标看 store
+ * 是否存在），所以不能用它当「是否仍持有 worktree」的判据。
+ */
+type SessionWorktreeBindingLookup = (sessionId: string) => string | null;
+let sessionWorktreeBindingLookup: SessionWorktreeBindingLookup | null = null;
+
+/** Composition-root injection keeps the localDb IPC layer independent of worktree implementation modules. */
+export function setSessionWorktreeBindingLookup(
+  lookup: SessionWorktreeBindingLookup | null,
+): void {
+  sessionWorktreeBindingLookup = lookup;
+}
 
 /** Composition-root injection for Host-owned operations that must stop before worktree recycle. */
 export function setSessionRemovalCancelOperations(
@@ -1787,6 +1807,10 @@ export function registerSessionIpc(
  * 会话操作工具(move / pin / delete 等)共用这一条路径:路由锁 + worktree 锁、
  * review 会话拒改、Pi/Codex 空闲 runtime 关闭、cc 转录目录搬迁、recent-workdir
  * 维护、sessions:patched 广播与 agent-island 通知都在这里,不得另起平行写入链路。
+ *
+ * 「绑定托管 worktree 的会话不得改到该 worktree 之外」是这里的不变量,所有入口
+ * (GUI 侧栏、MCP 工具、device-link)一并生效;GUI 侧的预检只为及时反馈,规则
+ * 以本函数为准,不得在入口层另立一份。
  */
 export async function updateSessionInDb(
   sid: string,
@@ -1878,6 +1902,46 @@ export async function updateSessionInDb(
               .where(eq(sessions.id, sid))
           )[0]
         : undefined;
+    // worktree-handoff:worktree 会话的工作区边界就是它绑定的 worktree。只改 workingDir
+    // 会留下「半移动」—— 侧栏按新项目归组,而聊天框底部路径、Git 上下文、worktree
+    // store 归属与回收义务仍留在旧 worktree。完整的 worktree → Local Handoff 是独立
+    // 特性(#2190/#2585,需显式处置未提交改动与 worktree 归属),落地前这里拒绝把会话
+    // 移出 worktree;worktree 创建流程(基线目录 → 自己的 worktree)与同 worktree 内的
+    // no-op 不受影响。拦截发生在关 runtime / 写库 / 转录迁移之前,拒绝不留部分写入。
+    //
+    // 归属以 worktreeStore(组合层注入)为真源:旧版允许过的「半移动」会给会话留下
+    // working_dir 在普通项目、绑定仍在旧 worktree 的状态,只看 cwd 会漏掉这类存量行;
+    // 反过来,DB 的 worktree_path 快照在回收后仍保留历史值,也不能当活绑定用。
+    const requestedWorkingDir = typeof p.workingDir === 'string' ? p.workingDir : null;
+    // 显式清空(`workingDir: null`,或空串/空白串经上面的归一化变成 null)也是改归属:
+    // 字符串判据放它过去的话,worktree 会话会被摘掉工作目录,留下同一类归属分裂。
+    // 只当键真的出现且归一化后为 null 时才算清空(未传该键的 update 不落库,不能算)。
+    const clearsWorkingDir = Object.prototype.hasOwnProperty.call(p, 'workingDir') && p.workingDir === null;
+    if (
+      beforeMove &&
+      !beforeMove.remoteHostId &&
+      (requestedWorkingDir !== null || clearsWorkingDir) &&
+      (clearsWorkingDir || !workingDirEquals(requestedWorkingDir, beforeMove.workingDir))
+    ) {
+      // 归属真源:装了绑定查询(生产路径)就以 store 的答案为唯一依据 —— 返回 null 就是
+      // **没有活绑定**(worktree 已被回收的会话仍会留着历史 worktree 路径),此时不能再
+      // 从 cwd 反推,否则这些会话会被永久拦死;未装查询的场景(单测/裁剪引导)才退回 cwd。
+      let ownedWorktreeRoot: string | null = null;
+      if (sessionWorktreeBindingLookup) {
+        const liveWorktreePath = sessionWorktreeBindingLookup(sid);
+        ownedWorktreeRoot = liveWorktreePath ? managedWorktreeRoot(liveWorktreePath) : null;
+      } else if (beforeMove.workingDir) {
+        ownedWorktreeRoot = managedWorktreeRoot(beforeMove.workingDir);
+      }
+      const targetWorktreeRoot = requestedWorkingDir
+        ? managedWorktreeRoot(requestedWorkingDir)
+        : null;
+      if (ownedWorktreeRoot && !workingDirEquals(ownedWorktreeRoot, targetWorktreeRoot)) {
+        // 错误码与文案是跨进程契约:renderer 按它把这次拒绝映射成同一条 toast
+        // (shared/worktreeMoveGuardError.ts),两侧共用常量避免文案漂移。
+        throwIpcError(WORKTREE_MOVE_BLOCKED_CODE, WORKTREE_MOVE_BLOCKED_MESSAGE);
+      }
+    }
     const movingLocalNonClaudeSession =
       beforeMove &&
       beforeMove.agentKind !== 'cc' &&
