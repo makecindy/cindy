@@ -15,7 +15,7 @@ import {
 	defaultIsolatedUserDataDir,
 	desktopDevCacheDirs,
 	devEnvPrefix,
-	darwinStaleIsolationUnset,
+	darwinStaleDevEnvUnset,
 	hasIsolationIntent,
 	isTrustedIsolatedAuthUserDataDir,
 	ISOLATED_AUTH_LAUNCH_PROOF_FILE,
@@ -1386,21 +1386,42 @@ test('Linux readiness binds the reported renderer to a live descendant in the sa
   assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'win32')[0].ready, false);
 });
 
-test("darwinStaleIsolationUnset clears isolation vars a long-lived Terminal may still carry", () => {
-	assert.equal(
-		darwinStaleIsolationUnset({}),
-		"unset XDT_ISOLATED XDT_ISOLATED_NAME XDT_USER_DATA_DIR XDT_DEVICE_ID_OVERRIDE XDT_ISOLATED_AUTH XDT_ISOLATED_AUTH_PROOF; ",
-	);
-	// 本次显式设了的隔离变量由 devEnvPrefix 转发,不能被清掉。
-	assert.equal(
-		darwinStaleIsolationUnset({
-			XDT_ISOLATED: "1",
-			XDT_ISOLATED_NAME: "dev",
-			XDT_USER_DATA_DIR: "/tmp/x",
-			XDT_DEVICE_ID_OVERRIDE: "d",
-			XDT_ISOLATED_AUTH: "1",
-			XDT_ISOLATED_AUTH_PROOF: "p",
-		}),
-		"",
-	);
+function unsetKeys(prefix) {
+	const match = /^unset ([^;]+); $/.exec(prefix);
+	return match ? match[1].split(" ") : [];
+}
+
+test("darwinStaleDevEnvUnset clears every forwarded variable this launch did not set", () => {
+	const keys = unsetKeys(darwinStaleDevEnvUnset({}));
+	// 身份与数据目录类:Terminal 残留会让预览落进别的沙箱或认领错误钥匙串身份。
+	for (const key of [
+		"XDT_ISOLATED",
+		"XDT_ISOLATED_NAME",
+		"XDT_USER_DATA_DIR",
+		"XDT_USER_DATA_DIR_EPOCH",
+		"XDT_DEVICE_ID_OVERRIDE",
+		"XDT_SCHEDULER_PASSIVE",
+		"XDT_ISOLATED_AUTH",
+		"XDT_ISOLATED_AUTH_PROOF",
+	]) {
+		assert.ok(keys.includes(key), `${key} should be unset`);
+	}
+	// CINDY_CUA_SMOKE 总由 devEnvPrefix 显式赋值,不需要也不应被清。
+	assert.ok(!keys.includes("CINDY_CUA_SMOKE"));
+});
+
+test("darwinStaleDevEnvUnset keeps variables this launch forwards (isolated without isolated-auth)", () => {
+	const env = {
+		XDT_ISOLATED: "1",
+		XDT_ISOLATED_NAME: "src-feature-1a2b3c",
+		XDT_USER_DATA_DIR: "/tmp/CindyGlobal-dev2-src-feature-1a2b3c",
+	};
+	const keys = unsetKeys(darwinStaleDevEnvUnset(env));
+	for (const key of Object.keys(env)) assert.ok(!keys.includes(key), `${key} must not be unset`);
+	for (const key of ["XDT_USER_DATA_DIR_EPOCH", "XDT_ISOLATED_AUTH", "XDT_ISOLATED_AUTH_PROOF"]) {
+		assert.ok(keys.includes(key), `${key} should be unset`);
+	}
+	// 被转发的值与被清除的键互不重叠:同一次命令里不会先赋值再 unset。
+	const forwarded = devEnvPrefix(env, "darwin");
+	for (const key of keys) assert.ok(!forwarded.includes(`${key}=`), `${key} both forwarded and unset`);
 });
