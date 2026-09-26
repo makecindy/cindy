@@ -334,7 +334,12 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
               const finalSize = tracker.getLoaded();
 
               if (settled || opts.signal?.aborted) return;
-              if (opts.expectedSize !== undefined && finalSize !== opts.expectedSize) { safeReject(new DownloadError('CHECKSUM', 'Downloaded size mismatch')); return; }
+              if (opts.expectedSize !== undefined && finalSize !== opts.expectedSize) {
+                deletePart(opts.targetPath);
+                deleteMeta(opts.targetPath);
+                safeReject(new DownloadError('CHECKSUM', 'Downloaded size mismatch'));
+                return;
+              }
               if (finalHash !== opts.sha256) {
                 // Corrupt body — wipe both .part and .meta so a future attempt
                 // starts truly fresh (CHECKSUM is not retried inside withRetry).
