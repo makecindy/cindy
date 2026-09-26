@@ -90,7 +90,14 @@ function Card({
 export function UsageHistorySection(): React.JSX.Element {
   const { t, i18n } = useTranslation();
   const { user } = useAuth();
-  const [device, setDevice] = useState<string>(USAGE_DEVICE_ALL);
+  // 设备选择与记住的设备目录都属于某个账号:切换账号后不得带着旧账号的设备名或 deviceId。
+  const accountKey = user?.id ?? null;
+  const [deviceState, setDeviceState] = useState<{ accountKey: string | null; device: string }>({
+    accountKey,
+    device: USAGE_DEVICE_ALL,
+  });
+  const device = deviceState.accountKey === accountKey ? deviceState.device : USAGE_DEVICE_ALL;
+  const setDevice = (next: string): void => setDeviceState({ accountKey, device: next });
   const { history, refreshing } = useUsageHistory({
     userId: user?.id,
     days: 'all',
@@ -99,11 +106,15 @@ export function UsageHistorySection(): React.JSX.Element {
     device,
   });
   // 切换设备时新范围首帧可能还没有 payload; 沿用上次读到的设备列表, 选择器不闪没。
-  const [knownDevices, setKnownDevices] = useState<UsageHistoryDevice[] | undefined>(undefined);
+  const [known, setKnown] = useState<{
+    accountKey: string | null;
+    devices: UsageHistoryDevice[];
+  } | null>(null);
   React.useEffect(() => {
-    if (history?.devices) setKnownDevices(history.devices);
-  }, [history?.devices]);
-  const devices = history?.devices ?? knownDevices;
+    if (history?.devices) setKnown({ accountKey, devices: history.devices });
+  }, [accountKey, history?.devices]);
+  const devices =
+    history?.devices ?? (known?.accountKey === accountKey ? known.devices : undefined);
   const showDevicePicker = hasPeerUsageDevices(devices) || device !== USAGE_DEVICE_ALL;
   // 选中的电脑从账号里移除后回到合并视图, 不让选择器停在一个不存在的选项上。
   React.useEffect(() => {

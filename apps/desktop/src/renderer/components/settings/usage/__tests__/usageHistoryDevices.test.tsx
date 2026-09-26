@@ -16,11 +16,14 @@ const state = vi.hoisted(() => ({
   history: null as UsageHistoryPayload | null,
   requests: [] as Array<{ device?: string }>,
   taskRows: [] as unknown[],
+  userId: null as string | null,
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }));
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: null }) }));
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ user: state.userId ? { id: state.userId } : null }),
+}));
 vi.mock('@/hooks/useUsageHistory', () => ({
   useUsageHistory: (opts: { device?: string }) => {
     state.requests.push(opts);
@@ -40,6 +43,7 @@ afterEach(() => {
   cleanup();
   state.requests = [];
   state.taskRows = [];
+  state.userId = null;
 });
 
 const money = {
@@ -133,5 +137,25 @@ describe('usage device select panel', () => {
     expect(source).toContain('w-[var(--radix-select-trigger-width)]');
     expect(source).not.toContain('min-w-[var(--radix-select-trigger-width)]');
     expect(source).not.toMatch(/max-w-\[\d+px\]/);
+  });
+});
+
+describe('usage device scope across accounts', () => {
+  it('drops the previous account devices and selection when the account changes', () => {
+    state.userId = 'account-a';
+    state.history = history([
+      device({ deviceId: 'self', isSelf: true }),
+      device({ deviceId: 'laptop-a', name: 'Laptop A' }),
+    ]);
+    const view = render(<UsageHistorySection />);
+    expect(view.getByLabelText('usageHistory.device.ariaLabel')).toBeTruthy();
+
+    // 新账号的首帧还没有 payload(或回退空 payload 不带 devices)。
+    state.userId = 'account-b';
+    state.history = null;
+    view.rerender(<UsageHistorySection />);
+    expect(state.requests.at(-1)?.device).toBe('all');
+    expect(view.queryByLabelText('usageHistory.device.ariaLabel')).toBeNull();
+    expect(view.queryByText('Laptop A')).toBeNull();
   });
 });

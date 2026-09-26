@@ -925,6 +925,19 @@ export async function readUsageHistoryWith(
   };
 }
 
+/**
+ * 其它电脑的行按它自己的本地日历记账,只精确到天,无法按小时换算到本机日历。
+ * 合并口径:各设备按本地日期计;对方已跨入本机的「明天」时,超出本机今天的行归到本机
+ * 今天 —— 否则那部分用量既不进今日合计,也不会出现在以本机今天为锚的图表里。
+ */
+export function clampPeerRowsToToday(rows: UsageDeviceRows, todayKey: string): UsageDeviceRows {
+  const clamp = (day: string): string => (day > todayKey ? todayKey : day);
+  return {
+    spendDays: rows.spendDays.map((row) => ({ ...row, day: clamp(row.day) })),
+    modelRows: rows.modelRows.map((row) => ({ ...row, day: clamp(row.day) })),
+  };
+}
+
 /** 按设备范围替换原始行读取; 价格、账本币种等其余依赖不变。 */
 export function usageHistoryDepsForScope(
   base: UsageHistoryDeps,
@@ -935,15 +948,20 @@ export function usageHistoryDepsForScope(
   let combined: Promise<UsageDeviceRows> | null = null;
   const rows = (): Promise<UsageDeviceRows> => {
     combined ??= (async () => {
+      const todayKey = base.todayKey();
+      const peer = (rows: UsageDeviceRows): UsageDeviceRows => clampPeerRowsToToday(rows, todayKey);
       if (scope !== 'all') {
-        const peer = snapshot.peerRows.get(scope);
-        return peer ? combineUsageDeviceRows([peer]) : { spendDays: [], modelRows: [] };
+        const one = snapshot.peerRows.get(scope);
+        return one ? combineUsageDeviceRows([peer(one)]) : { spendDays: [], modelRows: [] };
       }
       const [spendDays, modelRows] = await Promise.all([
         base.getAllSpendDays(),
         base.getModelUsageSince('0000-01-01'),
       ]);
-      return combineUsageDeviceRows([{ spendDays, modelRows }, ...snapshot.peerRows.values()]);
+      return combineUsageDeviceRows([
+        { spendDays, modelRows },
+        ...[...snapshot.peerRows.values()].map(peer),
+      ]);
     })();
     return combined;
   };

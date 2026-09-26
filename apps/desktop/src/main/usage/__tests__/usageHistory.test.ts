@@ -118,6 +118,7 @@ import {
   shiftDayKey,
   combineUsageDeviceRows,
   usageHistoryDepsForScope,
+  clampPeerRowsToToday,
   type UsageHistoryDeps,
 } from '../usageHistory';
 import {
@@ -927,6 +928,36 @@ describe('multi-device scope', () => {
     expect(unknown.days).toEqual([]);
 
     expect(usageHistoryDepsForScope(base, 'local', snapshot)).toBe(base);
+  });
+
+  it('counts a peer that is already on tomorrow into the controller today', async () => {
+    const tomorrow = shiftDayKey(TODAY, 1);
+    const ahead = {
+      spendDays: [{ day: tomorrow, monies: [actual(4)] }],
+      modelRows: [modelRow(tomorrow, 'codex', 'gpt-5.5', actual(0), { inputTokens: 70 })],
+    };
+    expect(clampPeerRowsToToday(ahead, TODAY).modelRows[0].day).toBe(TODAY);
+
+    const base = makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: [actual(2)] }],
+      getModelUsageSince: async () => [
+        modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: 30 }),
+      ],
+    });
+    const snapshot = { peerRows: new Map([['device-b', ahead]]) };
+    const all = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'all', snapshot), {
+      days: 'all',
+      modelDays: 'all',
+    });
+    expect(all.totals.today).toEqual(actual(6));
+    expect(all.totals.todayTokens).toBe(100);
+    expect(all.days.map((d) => d.day)).toEqual([TODAY]);
+
+    const peerOnly = await readUsageHistoryWith(
+      usageHistoryDepsForScope(base, 'device-b', snapshot),
+      { days: 'all', modelDays: 'all' },
+    );
+    expect(peerOnly.totals.todayTokens).toBe(70);
   });
 
   it('round-trips a peer through the device-rows wire format into the all-devices payload', async () => {
