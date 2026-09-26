@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError } from '@cindy/device-link';
 import type { DeviceLinkIpcDeps } from '../ipc';
 import { createDeviceLinkIpcDiagnostics } from '../ipcDiagnostics';
+import { createDeviceUnresponsiveError } from '../responsivenessTracker';
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -101,6 +102,40 @@ describe('device-link IPC diagnostics', () => {
     ]);
     expect(JSON.stringify(rows)).not.toMatch(/private|peer-a|peer-b/);
   });
+
+  it.each(['invoke', 'subscribe'] as const)(
+    'records %s circuit-breaker rejection under its actual local code',
+    async (operation) => {
+      const h = harness();
+      const error = createDeviceUnresponsiveError('private-peer');
+      h[operation].mockRejectedValue(error);
+      const run = () =>
+        operation === 'invoke'
+          ? h.observed.invoke('private-peer', CHANNEL, [])
+          : h.observed.subscribe('private-peer', ['private-topic']);
+      await expect(run()).rejects.toBe(error);
+      await expect(run()).rejects.toBe(error);
+      expect(h.emit).toHaveBeenCalledTimes(1);
+      expect(h.emit).toHaveBeenCalledWith(
+        'transport first failure',
+        expect.objectContaining({
+          operation,
+          code: 'DEVICE_UNRESPONSIVE',
+          completed: 1,
+        }),
+      );
+      h.diagnostics.flush();
+      expect(h.emit).toHaveBeenCalledWith(
+        'transport summary',
+        expect.objectContaining({
+          operation,
+          code: 'DEVICE_UNRESPONSIVE',
+          completed: 2,
+        }),
+      );
+      expect(JSON.stringify(h.emit.mock.calls)).not.toMatch(/private|circuit open|UNKNOWN/);
+    },
+  );
 
   it('preserves unknown failures while redacting unknown channels and codes', async () => {
     const h = harness();

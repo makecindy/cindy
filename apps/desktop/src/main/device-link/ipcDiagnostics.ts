@@ -26,7 +26,9 @@ const ERROR_CODES = {
   VOICE_DICTIONARY_LEARNING_FAILED: true,
   VOICE_DICTIONARY_GET_FAILED: true,
   IPC_ERROR: true,
-} satisfies Record<DeviceLinkErrorCode | 'IPC_ERROR', true>;
+  // responsivenessTracker emits this Desktop-local code outside the wire union.
+  DEVICE_UNRESPONSIVE: true,
+} satisfies Record<DeviceLinkErrorCode | 'IPC_ERROR' | 'DEVICE_UNRESPONSIVE', true>;
 
 function errorCode(error: unknown): string {
   const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
