@@ -282,7 +282,7 @@ describe('createPeerUsageSync', () => {
   });
 
   it('never connects released versions without background links and retries unsupported ones only after an update', async () => {
-    const invoke = vi.fn(async () => ({
+    const invoke = vi.fn<PeerUsageSyncDeps['invoke']>(async () => ({
       ok: false as const,
       error: { code: 'UNSUPPORTED_CAPABILITY', message: 'x' },
     }));

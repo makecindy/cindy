@@ -193,6 +193,8 @@ export async function recordModelTurnUsage(
       'recordModelTurnUsage failed:',
       err instanceof Error ? err.message : String(err),
     );
+    // 任务用量是模型用量的细分:模型行没记上时不单独计入任务,排行不会超出总量。
+    return;
   }
   if (!sessionId) return;
   try {
