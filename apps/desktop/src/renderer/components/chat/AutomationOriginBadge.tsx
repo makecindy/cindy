@@ -10,6 +10,7 @@ import {
   remoteProjectsStore,
   useRemoteSessionTitle,
 } from '@/features/device-link/remoteProjectsStore';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import type { MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -47,9 +48,9 @@ export function AutomationOriginBadge({
     automationOrigin.kind === 'session' ? automationOrigin.senderSessionId : undefined;
   const botProfiles = useBotProfiles();
   // 远程任务的来源任务与伙伴资料都在那台设备上，本机同 id 资料不可信（与 BotDirectMessageCard 同口径）。
-  const hostDeviceId = hostSessionId
-    ? remoteProjectsStore.getSessionDeviceId(hostSessionId)
-    : undefined;
+  // 粘滞归属：relay 瞬时重连会清空镜像索引，此窗口内仍要把远程任务当远程处理，
+  // 否则来源任务会被当成本机任务打开。
+  const hostDeviceId = getStickySessionDeviceId(hostSessionId);
   const liveSenderTitle = useLiveSessionTitle(senderSessionId, Boolean(hostDeviceId));
   const senderBot =
     automationOrigin.kind === 'session' && automationOrigin.senderBotId

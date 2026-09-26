@@ -37,6 +37,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => [],
   useRemoteSessionTitle: () => null,
+  getSessionDeviceId: () => undefined,
   remoteProjectsStore: {
     getSessionDeviceId: () => undefined,
     pinSessionOrigin: () => undefined,
