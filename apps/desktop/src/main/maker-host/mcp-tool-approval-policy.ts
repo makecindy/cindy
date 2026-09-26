@@ -259,6 +259,8 @@ export function getDesktopMcpToolApprovalPolicy(
       return 'prompt-each-time';
     }
     if (action === 'move_session' || action === 'publish_skill') return 'prompt-each-time';
+    // fork 复制源会话的 workingDir 与权限档派生新会话,与移动工作区同属委派访问,逐次确认。
+    if (action === 'fork_session') return 'prompt-each-time';
   }
   // Choosing a new Worker root delegates filesystem access. Do not let the
   // trusted-server shortcut or a cached server grant authorize another root.
