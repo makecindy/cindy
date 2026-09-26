@@ -21,6 +21,10 @@ export interface MigrationFiles {
   workspace: MigrationFile;
   manifest: MigrationFile;
   repository?: MigrationFile;
+  additionalWorkspaces?: Array<{
+    workspace: MigrationFile;
+    repository?: MigrationFile;
+  }>;
 }
 export type TaskMigrationRequest =
   | {
@@ -69,6 +73,8 @@ export interface TaskMigrationView {
   error?: string;
   projects?: string[];
   agents?: Array<"cc" | "codex" | "pi">;
+  /** Entire Orca graph, native contexts and per-member workspaces. Absence means unsupported. */
+  teamMigration?: true;
 }
 
 export function parseTaskMigrationRequest(
@@ -158,14 +164,25 @@ export function parseTaskMigrationRequest(
     typeof r.files === "object"
   ) {
     const files = r.files as MigrationFiles;
-    for (const role of [
-      "session",
-      "workspace",
-      "manifest",
-      "repository",
-    ] as const) {
-      const file = files[role];
-      if (!file && role === "repository") continue;
+    if (
+      files.additionalWorkspaces !== undefined &&
+      (!Array.isArray(files.additionalWorkspaces) ||
+        files.additionalWorkspaces.some(
+          (entry) => !entry || typeof entry !== "object",
+        ))
+    )
+      throw new Error("MIGRATION_INVALID_REQUEST");
+    const allFiles = [
+      files.session,
+      files.workspace,
+      files.manifest,
+      ...(files.repository ? [files.repository] : []),
+      ...(files.additionalWorkspaces ?? []).flatMap((entry) => [
+        entry.workspace,
+        ...(entry.repository ? [entry.repository] : []),
+      ]),
+    ];
+    for (const file of allFiles) {
       if (!file || !Number.isSafeInteger(file.size) || file.size <= 0)
         throw new Error("MIGRATION_INVALID_REQUEST");
       const parts = "parts" in file ? file.parts : [file];

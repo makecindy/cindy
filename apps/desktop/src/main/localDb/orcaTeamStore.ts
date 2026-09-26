@@ -11,6 +11,7 @@ import { notifyAgentIslandSessionPatch } from './agentIslandSessionPatch.js';
 import { withSessionRouteLock, withSessionRouteLocks } from './sessionRouteLock.js';
 import { cleanupSessionRuntimeForTerminalStatus } from './sessionRuntimeCleanup.js';
 import { compactSessionToolResultsBestEffort } from './toolResultCompaction.js';
+import { assertTaskMigrationWritable } from '../task-migration/journal.js';
 
 const log = createLogger('orca-team-store');
 
@@ -96,11 +97,16 @@ export async function reserveWorkerCreation(input: {
   leaseMs: number;
 }): Promise<OrcaWorkerCreationReservationResult> {
   const now = Date.now();
-  return getDbClient().tx('orca.reserveWorkerCreation', {
-    ...input,
-    label: input.label.toLowerCase(),
-    now,
-    expiresAt: now + input.leaseMs,
+  const team = await getTeamById(input.teamId);
+  if (!team) throwIpcError('NOT_FOUND', 'Orca team not found');
+  return withSessionRouteLock(team.leadSessionId, async () => {
+    assertTaskMigrationWritable(team.leadSessionId);
+    return getDbClient().tx('orca.reserveWorkerCreation', {
+      ...input,
+      label: input.label.toLowerCase(),
+      now,
+      expiresAt: now + input.leaseMs,
+    });
   });
 }
 
@@ -134,6 +140,7 @@ export async function createOrGetTeamForLead(input: {
   const db = getDbClient().drizzle;
   const now = Date.now();
   const id = input.id ?? createId();
+  assertTaskMigrationWritable(input.leadSessionId);
   await db.insert(orcaTeams).values({
     id,
     leadSessionId: input.leadSessionId,
@@ -255,6 +262,7 @@ export async function createActiveTeam(input: {
   const db = getDbClient().drizzle;
   const now = Date.now();
   const id = input.id ?? createId();
+  assertTaskMigrationWritable(input.leadSessionId);
   await db.insert(orcaTeams).values({
     id,
     leadSessionId: input.leadSessionId,
@@ -276,6 +284,7 @@ export async function markTeamEnded(
   teamId: string,
   status: 'completed' | 'cancelled' | 'failed',
 ): Promise<void> {
+  (await teamWriteGuard(teamId))();
   const db = getDbClient().drizzle;
   const now = Date.now();
   await db
@@ -293,6 +302,7 @@ export async function archiveWorkersByTeam(teamId: string): Promise<string[]> {
   const client = getDbClient();
   const candidateIds = await listActiveWorkerSessionIdsForTeam(teamId);
   const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
+    candidateIds.forEach(assertTaskMigrationWritable);
     const ids = await client.tx('orca.archiveWorkersByTeam', {
       teamId,
       sessionIds: candidateIds,
@@ -316,6 +326,7 @@ export async function markWorkersStatusByTeam(
   teamId: string,
   status: OrcaWorkerStatus,
 ): Promise<void> {
+  (await teamWriteGuard(teamId))();
   const db = getDbClient().drizzle;
   const now = Date.now();
   await db
@@ -340,6 +351,8 @@ export async function reconcileInactiveTeamWorkersForLead(
   const client = getDbClient();
   const candidateIds = await listActiveWorkerSessionIdsForInactiveTeams(leadSessionId);
   const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
+    assertTaskMigrationWritable(leadSessionId);
+    candidateIds.forEach(assertTaskMigrationWritable);
     const ids = await client.tx('orca.reconcileInactiveTeamWorkersForLead', {
       leadSessionId,
       sessionIds: candidateIds,
@@ -395,6 +408,8 @@ export async function addOrUpdateWorker(input: {
   // clear-focus + select + upsert 需要原子性 —— DbClient.drizzle 是 worker-thread
   // 异步代理, 不支持同步 db.transaction, 故走命名事务在 worker 内一个事务里执行。
   // 可选字段为 undefined 表示 "保留 existing 当前值", 与原 drizzle 写法语义一致。
+  assertTaskMigrationWritable(team.leadSessionId);
+  assertTaskMigrationWritable(input.sessionId);
   await getDbClient().tx('orca.upsertWorker', {
     id: input.id,
     teamId: team.id,
@@ -507,6 +522,7 @@ export async function updateWorkerStatus(
   workerId: string,
   status: OrcaWorkerStatus,
 ): Promise<void> {
+  (await workerWriteGuard(workerId))();
   const db = getDbClient().drizzle;
   await db
     .update(orcaWorkers)
@@ -523,6 +539,7 @@ export async function markWorkerIdleIfStatus(
   workerId: string,
   expectedStatus: OrcaWorkerStatus,
 ): Promise<boolean> {
+  (await workerWriteGuard(workerId))();
   const db = getDbClient().drizzle;
   const now = Date.now();
   const result = await db
@@ -535,6 +552,7 @@ export async function markWorkerIdleIfStatus(
 
 /** Restores a raced done acknowledgement only while the worker is still idle. */
 export async function restoreWorkerDoneIfIdle(workerId: string): Promise<boolean> {
+  (await workerWriteGuard(workerId))();
   const db = getDbClient().drizzle;
   const now = Date.now();
   const result = await db
@@ -550,6 +568,7 @@ export async function restoreWorkerDoneIfIdle(workerId: string): Promise<boolean
  * 这条路径只服务失败清理，不影响正常协同结束时保留历史 worker link 的语义。
  */
 export async function removeWorker(workerId: string): Promise<void> {
+  (await workerWriteGuard(workerId))();
   const client = getDbClient();
   const removedSessionId = await client.tx('orca.removeWorker', {
     workerId,
@@ -567,6 +586,7 @@ export async function removeWorker(workerId: string): Promise<void> {
  * 各 inline 一份后漂移(review F4 落地后的 follow-up; reuse review 命中)。
  */
 export async function setWorkerFocus(teamId: string, workerId: string): Promise<void> {
+  (await teamWriteGuard(teamId))();
   // 清旧 focused + set 新 focused 需要原子性。DbClient.drizzle 是 worker-thread 异步
   // 代理, 不支持同步 db.transaction, 故走命名事务在 worker 内一个事务里执行。
   await getDbClient().tx('orca.setWorkerFocus', { teamId, workerId, now: Date.now() });
@@ -578,6 +598,7 @@ export async function setWorkerFocus(teamId: string, workerId: string): Promise<
 export async function archiveSingleWorkerSession(sessionId: string): Promise<void> {
   const client = getDbClient();
   const changed = await withSessionRouteLock(sessionId, async () => {
+    assertTaskMigrationWritable(sessionId);
     const result = await client.drizzle
       .update(sessions)
       .set({ status: 'archived', updatedAt: Date.now() })
@@ -625,8 +646,26 @@ export async function setSessionOrcaRole(
   role: OrcaRole | null,
 ): Promise<void> {
   const db = getDbClient().drizzle;
+  assertTaskMigrationWritable(sessionId);
   await db.update(sessions).set({ orcaRole: role }).where(eq(sessions.id, sessionId));
   broadcastSessionPatch(sessionId, { orcaRole: role });
+}
+
+async function teamWriteGuard(teamId: string): Promise<() => void> {
+  const team = await getTeamById(teamId);
+  return () => {
+    if (team) assertTaskMigrationWritable(team.leadSessionId);
+  };
+}
+
+async function workerWriteGuard(workerId: string): Promise<() => void> {
+  const worker = await getDbClient().queryOne<{ sessionId: string }>(
+    'SELECT session_id AS sessionId FROM orca_workers WHERE id = ?',
+    [workerId],
+  );
+  return () => {
+    if (worker) assertTaskMigrationWritable(worker.sessionId);
+  };
 }
 
 async function getTeamById(id: string): Promise<OrcaTeamRecord | null> {

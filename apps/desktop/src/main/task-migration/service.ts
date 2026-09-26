@@ -19,7 +19,8 @@ import {
 } from '@cindy/device-link';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current';
 import { createSharedTaskJournal } from '../localDb/sharedTasks';
-import { withSessionRouteLock } from '../localDb/sessionRouteLock';
+import { withSessionRouteLocks } from '../localDb/sessionRouteLock';
+import { getActiveTeamByLead } from '../localDb/orcaTeamStore';
 import { getSelfDeviceId, remoteInvoke } from '../device-link';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context';
 import { readDeviceLinkSettings } from '../device-link/settings-store';
@@ -39,15 +40,21 @@ import {
   commitShareImport,
   inspectShareFile,
   cancelShareDraft,
+  type ShareImportDraftPrefs,
 } from '../session-share/sessionShareImport';
 import type { moveSessionProjectFromHost } from '../mcp-integrations/moveSession';
 import { bindingStore } from '../im/binding';
-import { physicalWorktreeKey, withWorktreeResourceLock } from '../worktree/resourceLock';
+import { physicalWorktreeKey, withWorktreeResourceLocks } from '../worktree/resourceLock';
 import { getMakerIfReady } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
 import { pickEnabledFallbackModel } from '../maker-host/model-route-guard';
 import { advanceHandoff, canCancelHandoff, type MigrationHandoff } from './handoff';
-import { migrationScope, type MigrationRecord, type IncomingMigration } from './journal';
+import {
+  assertTaskMigrationWritable,
+  migrationScope,
+  type MigrationRecord,
+  type IncomingMigration,
+} from './journal';
 import { snapshotWorkspace, restoreWorkspace, type PortableWorkspace } from './workspace';
 
 import { memoryBudget, assertMemoryCapacity, assertDiskCapacity } from './resources';
@@ -156,7 +163,11 @@ interface SourceSession {
   orcaRole: string | null;
   agentKind: 'cc' | 'codex' | 'pi';
 }
-async function assertSource(scope: Scope, sessionId: string): Promise<SourceSession> {
+async function assertSource(
+  scope: Scope,
+  sessionId: string,
+  worker = false,
+): Promise<SourceSession> {
   const row = await scope.db.queryOne<SourceSession>(
     'SELECT id, working_dir AS workingDir, remote_host_id AS remoteHostId, status, source, orca_role AS orcaRole, agent_kind AS agentKind FROM sessions WHERE id = ?',
     [sessionId],
@@ -164,10 +175,10 @@ async function assertSource(scope: Scope, sessionId: string): Promise<SourceSess
   scope.assertCurrent();
   if (
     !row ||
-    row.status !== 'active' ||
+    !(row.status === 'active' || (worker && row.status === 'archived')) ||
     !row.workingDir ||
     row.remoteHostId ||
-    row.orcaRole ||
+    (worker ? row.orcaRole !== 'worker' : row.orcaRole === 'worker') ||
     !['desktop', 'shared'].includes(row.source)
   )
     throw new Error('MIGRATION_TASK_UNSUPPORTED');
@@ -206,64 +217,155 @@ async function assertSource(scope: Scope, sessionId: string): Promise<SourceSess
   return row;
 }
 
-async function prepare(scope: Scope, record: MigrationHandoff) {
-  const source = await assertSource(scope, record.sessionId);
-  if (source.workingDir !== record.workingDir) throw new Error('MIGRATION_WORKSPACE_CHANGED');
-  const directory = path.join(scope.root, 'outgoing', record.id);
-  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  await withWorktreeResourceLock(record.workingDir, async () => {
-    scope.assertCurrent();
-    // Fork siblings can share cwd. Never snapshot while any known task is writing that tree.
-    const sourceKey = await physicalWorktreeKey(record.workingDir);
-    for (const session of getMakerIfReady()?.listActiveSessions() ?? []) {
-      if (!session.isTurnRunning() && !sourceBoundary!.isBusy(session.id)) continue;
-      const row = await scope.db.queryOne<{
-        workingDir: string | null;
-        remoteHostId: string | null;
-      }>(
-        'SELECT working_dir AS workingDir, remote_host_id AS remoteHostId FROM sessions WHERE id = ?',
-        [session.id],
-      );
-      if (row?.workingDir && !row.remoteHostId) {
-        const key = await physicalWorktreeKey(row.workingDir);
-        if (
-          key === sourceKey ||
-          key.startsWith(sourceKey + path.sep) ||
-          sourceKey.startsWith(key + path.sep)
-        )
-          throw new Error('MIGRATION_SHARED_DIRECTORY_BUSY');
-      }
-    }
-    scope.assertCurrent();
-    const maker = getMakerIfReady();
-    if (maker?.getSession(record.sessionId)) await maker.closeSession(record.sessionId);
-    await sourceBoundary!.drain();
-    scope.assertCurrent();
-    if (sourceBoundary!.isBusy(record.sessionId)) throw new Error('MIGRATION_TASK_RUNNING');
-    const result = await exportSessionShare({
-      sessionId: record.sessionId,
-      targetPath: path.join(directory, 'session.cshare'),
-      sizeLimitBytes: memoryBudget(),
-    });
-    scope.assertCurrent();
-    if (result.status === 'oversize') throw new Error('MIGRATION_NO_MEMORY');
-    if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaMissing)
-      throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
-    const workspace = await snapshotWorkspace(record.workingDir, directory, record.id);
-    scope.assertCurrent();
-    workspace.contextBytes =
-      result.unpackedBytes ?? (await fs.stat(path.join(directory, 'session.cshare'))).size;
-    atomicWriteFileSync(path.join(directory, 'workspace.json'), JSON.stringify(workspace));
-    await preflight(scope, record, workspace, directory);
-  });
+async function sourceGroup(scope: Scope, sessionId: string): Promise<SourceSession[]> {
+  const lead = await assertSource(scope, sessionId);
+  if (lead.orcaRole !== 'lead') return [lead];
+  const team = await getActiveTeamByLead(sessionId);
+  scope.assertCurrent();
+  if (!team) throw new Error('MIGRATION_TEAM_CHANGED');
+  const reservations = await scope.db.queryOne<{ n: number }>(
+    'SELECT count(*) AS n FROM orca_worker_creation_reservations WHERE team_id = ? AND expires_at > ?',
+    [team.id, Date.now()],
+  );
+  if (reservations?.n) throw new Error('MIGRATION_TASK_BUSY');
+  const rows = await scope.db.query<{ sessionId: string }>(
+    'SELECT session_id AS sessionId FROM orca_workers WHERE team_id = ? ORDER BY created_at ASC, id ASC',
+    [team.id],
+  );
+  const members = [lead];
+  for (const row of rows) members.push(await assertSource(scope, row.sessionId, true));
+  scope.assertCurrent();
+  return members;
 }
 
-async function sendFile(scope: Scope, device: string, file: string): Promise<MigrationFile> {
+interface WorkspaceBundle extends PortableWorkspace {
+  additionalWorkspaces?: PortableWorkspace[];
+  workers?: Array<{ sourceSessionId: string; sessionId: string; workspace: number }>;
+}
+const workspaces = (workspace: WorkspaceBundle) => [
+  workspace,
+  ...(workspace.additionalWorkspaces ?? []),
+];
+const workspaceDirectory = (root: string, index: number) =>
+  index ? path.join(root, String(index)) : root;
+const transferFiles = (files: MigrationFiles) => [
+  files.session,
+  files.manifest,
+  files.workspace,
+  ...(files.repository ? [files.repository] : []),
+  ...(files.additionalWorkspaces ?? []).flatMap((entry) => [
+    entry.workspace,
+    ...(entry.repository ? [entry.repository] : []),
+  ]),
+];
+
+async function prepare(scope: Scope, record: MigrationHandoff) {
+  const members = await sourceGroup(scope, record.sessionId);
+  const expected = [
+    { sessionId: record.sessionId, workingDir: record.workingDir },
+    ...(record.workers ?? []),
+  ];
+  if (
+    members.length !== expected.length ||
+    (record.workers !== undefined) !== (members[0].orcaRole === 'lead') ||
+    members.some(
+      (member, index) =>
+        member.id !== expected[index].sessionId || member.workingDir !== expected[index].workingDir,
+    )
+  )
+    throw new Error('MIGRATION_TEAM_CHANGED');
+  const directory = path.join(scope.root, 'outgoing', record.id);
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  await withWorktreeResourceLocks(
+    members.map((member) => member.workingDir),
+    async () => {
+      scope.assertCurrent();
+      // Fork siblings can share cwd. Never snapshot while any known task is writing that tree.
+      const sourceKeys = [
+        ...new Set(
+          await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
+        ),
+      ];
+      for (const session of getMakerIfReady()?.listActiveSessions() ?? []) {
+        if (!session.isTurnRunning() && !sourceBoundary!.isBusy(session.id)) continue;
+        const row = await scope.db.queryOne<{
+          workingDir: string | null;
+          remoteHostId: string | null;
+        }>(
+          'SELECT working_dir AS workingDir, remote_host_id AS remoteHostId FROM sessions WHERE id = ?',
+          [session.id],
+        );
+        if (row?.workingDir && !row.remoteHostId) {
+          const key = await physicalWorktreeKey(row.workingDir);
+          if (
+            sourceKeys.some(
+              (sourceKey) =>
+                key === sourceKey ||
+                key.startsWith(sourceKey + path.sep) ||
+                sourceKey.startsWith(key + path.sep),
+            )
+          )
+            throw new Error('MIGRATION_SHARED_DIRECTORY_BUSY');
+        }
+      }
+      scope.assertCurrent();
+      const maker = getMakerIfReady();
+      for (const member of members)
+        if (maker?.getSession(member.id)) await maker.closeSession(member.id);
+      await sourceBoundary!.drain();
+      scope.assertCurrent();
+      if (members.some((member) => sourceBoundary!.isBusy(member.id)))
+        throw new Error('MIGRATION_TASK_RUNNING');
+      const result = await exportSessionShare({
+        sessionId: record.sessionId,
+        targetPath: path.join(directory, 'session.cshare'),
+        sizeLimitBytes: memoryBudget(),
+        migration: true,
+      });
+      scope.assertCurrent();
+      if (result.status === 'oversize') throw new Error('MIGRATION_NO_MEMORY');
+      if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaMissing)
+        throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
+      const snapshots: PortableWorkspace[] = [];
+      for (const [index, dir] of sourceKeys.entries())
+        snapshots.push(
+          await snapshotWorkspace(dir, workspaceDirectory(directory, index), record.id),
+        );
+      const workspace: WorkspaceBundle = {
+        ...snapshots[0],
+        ...(record.workers
+          ? {
+              additionalWorkspaces: snapshots.slice(1),
+              workers: await Promise.all(
+                record.workers.map(async (worker) => ({
+                  sourceSessionId: worker.sessionId,
+                  sessionId: worker.targetSessionId,
+                  workspace: sourceKeys.indexOf(await physicalWorktreeKey(worker.workingDir)),
+                })),
+              ),
+            }
+          : {}),
+      };
+      scope.assertCurrent();
+      workspace.contextBytes =
+        result.unpackedBytes ?? (await fs.stat(path.join(directory, 'session.cshare'))).size;
+      atomicWriteFileSync(path.join(directory, 'workspace.json'), JSON.stringify(workspace));
+      await preflight(scope, record, workspace, directory);
+    },
+  );
+}
+
+async function sendFile(
+  scope: Scope,
+  device: string,
+  file: string,
+  artifacts = path.dirname(file),
+): Promise<MigrationFile> {
   const space = await fs.statfs(path.dirname(file));
   const partBytes = Math.floor(
     Math.min(FILE_PEER_MAX_BYTES, MAX_MEDIA_BYTES, (space.bavail * space.bsize) / 4),
   );
-  return sendParts(file, partBytes, (part) => sendPart(scope, device, part, path.dirname(file)));
+  return sendParts(file, partBytes, (part) => sendPart(scope, device, part, artifacts));
 }
 async function sendPart(
   scope: Scope,
@@ -299,24 +401,38 @@ async function sendPart(
 async function preflight(
   scope: Scope,
   record: MigrationHandoff,
-  workspace: PortableWorkspace,
+  workspace: WorkspaceBundle,
   directory: string,
 ) {
   const sizes = await Promise.all(
     [
       'session.cshare',
       'workspace.json',
-      workspace.archive.file,
-      ...(workspace.git ? ['repository.bundle'] : []),
+      ...workspaces(workspace).flatMap((entry, index) => [
+        path.join(index ? String(index) : '', entry.archive.file),
+        ...(entry.git ? [path.join(index ? String(index) : '', 'repository.bundle')] : []),
+      ]),
     ].map(async (name) => (await fs.stat(path.join(directory, name))).size),
   );
   const resources: MigrationResources = {
     transferBytes: sizes.reduce((a, b) => a + b, 0),
-    unpackedBytes: workspace.unpackedBytes,
+    unpackedBytes: workspaces(workspace).reduce((sum, entry) => sum + entry.unpackedBytes, 0),
     contextBytes: Math.max(workspace.contextBytes ?? sizes[0], sizes[0]),
     manifestBytes: sizes[1],
-    repositoryBytes: sizes[3] ?? 0,
-    entries: Object.keys(workspace.archive.files ?? {}).length,
+    repositoryBytes: (
+      await Promise.all(
+        workspaces(workspace).map(async (entry, index) =>
+          entry.git
+            ? (await fs.stat(path.join(workspaceDirectory(directory, index), 'repository.bundle')))
+                .size
+            : 0,
+        ),
+      )
+    ).reduce((a, b) => a + b, 0),
+    entries: workspaces(workspace).reduce(
+      (sum, entry) => sum + Object.keys(entry.archive.files ?? {}).length,
+      0,
+    ),
   };
   await invoke(
     record.targetDeviceId,
@@ -356,7 +472,7 @@ async function transfer(scope: Scope, record: MigrationHandoff) {
   const directory = path.join(scope.root, 'outgoing', record.id);
   const workspace = JSON.parse(
     readAtomicFileSync(path.join(directory, 'workspace.json')) ?? 'null',
-  ) as PortableWorkspace;
+  ) as WorkspaceBundle;
   if (!workspace) throw new Error('MIGRATION_SNAPSHOT_MISSING');
   await preflight(scope, record, workspace, directory);
   const files: MigrationFiles = {
@@ -377,6 +493,30 @@ async function transfer(scope: Scope, record: MigrationHandoff) {
         }
       : {}),
   };
+  if (workspace.additionalWorkspaces?.length) {
+    files.additionalWorkspaces = [];
+    for (const [index, entry] of workspace.additionalWorkspaces.entries()) {
+      const dir = workspaceDirectory(directory, index + 1);
+      files.additionalWorkspaces.push({
+        workspace: await sendFile(
+          scope,
+          record.targetDeviceId,
+          path.join(dir, entry.archive.file),
+          directory,
+        ),
+        ...(entry.git
+          ? {
+              repository: await sendFile(
+                scope,
+                record.targetDeviceId,
+                path.join(dir, 'repository.bundle'),
+                directory,
+              ),
+            }
+          : {}),
+      });
+    }
+  }
   const result = await invoke(
     record.targetDeviceId,
     {
@@ -487,6 +627,13 @@ async function receive(
       if (existing) {
         if (!record || existing.workingDir !== record.workingDir)
           throw new Error('MIGRATION_ID_CONFLICT');
+        for (const worker of record.workers ?? []) {
+          const row = await scope.db.queryOne<{ workingDir: string }>(
+            'SELECT working_dir AS workingDir FROM sessions WHERE id = ?',
+            [worker.sessionId],
+          );
+          if (row?.workingDir !== worker.workingDir) throw new Error('MIGRATION_ID_CONFLICT');
+        }
         record = { ...record, stage: 'ready' } as IncomingMigration;
         scope.save(record);
         return view(scope, record);
@@ -502,7 +649,13 @@ async function receive(
       // Each failed attempt owns only its new directory. It never replaces a user's existing folder.
       const workingDir = await fs.mkdtemp(path.join(parent, `cindy-${request.id.slice(0, 8)}-`));
       const retainedWorkingDirs = record
-        ? [...(record.retainedWorkingDirs ?? []), record.workingDir]
+        ? [
+            ...new Set([
+              ...(record.retainedWorkingDirs ?? []),
+              record.workingDir,
+              ...(record.workers ?? []).map((worker) => worker.workingDir),
+            ]),
+          ]
         : [];
       record = {
         kind: 'incoming',
@@ -521,35 +674,92 @@ async function receive(
         await receiveFile(scope, request.files.manifest, path.join(directory, 'workspace.json'));
         const workspace = JSON.parse(
           await fs.readFile(path.join(directory, 'workspace.json'), 'utf8'),
-        ) as PortableWorkspace;
-        if (!/^[a-f0-9-]+\.tar\.gz\.enc$/.test(workspace?.archive?.file ?? ''))
+        ) as WorkspaceBundle;
+        if (
+          !workspace ||
+          (workspace.additionalWorkspaces !== undefined &&
+            !Array.isArray(workspace.additionalWorkspaces)) ||
+          (workspace.workers !== undefined && !Array.isArray(workspace.workers))
+        )
+          throw new Error('MIGRATION_INVALID_MANIFEST');
+        const snapshots = workspaces(workspace);
+        if (
+          snapshots.some(
+            (entry) =>
+              !/^[a-f0-9-]+\.tar\.gz\.enc$/.test(entry?.archive?.file ?? '') ||
+              !Number.isSafeInteger(entry.unpackedBytes) ||
+              entry.unpackedBytes < 0,
+          ) ||
+          snapshots.length !== 1 + (request.files.additionalWorkspaces?.length ?? 0)
+        )
+          throw new Error('MIGRATION_INVALID_MANIFEST');
+        const memberIds = new Set([request.id]);
+        const sourceIds = new Set([request.sourceSessionId]);
+        for (const worker of workspace.workers ?? []) {
+          if (
+            !worker ||
+            !/^[a-f0-9-]{36}$/.test(worker.sessionId) ||
+            !/^[a-zA-Z0-9_-]{1,128}$/.test(worker.sourceSessionId) ||
+            memberIds.has(worker.sessionId) ||
+            sourceIds.has(worker.sourceSessionId) ||
+            !Number.isInteger(worker.workspace) ||
+            worker.workspace < 0 ||
+            worker.workspace >= snapshots.length
+          )
+            throw new Error('MIGRATION_INVALID_MANIFEST');
+          memberIds.add(worker.sessionId);
+          sourceIds.add(worker.sourceSessionId);
+          if (await scope.db.queryOne('SELECT id FROM sessions WHERE id = ?', [worker.sessionId]))
+            throw new Error('MIGRATION_ID_CONFLICT');
+        }
+        if (
+          snapshots.some(
+            (_entry, index) =>
+              index > 0 && !workspace.workers?.some((worker) => worker.workspace === index),
+          )
+        )
           throw new Error('MIGRATION_INVALID_MANIFEST');
         await checkTargetResources(scope, request.targetProject, {
-          transferBytes: Object.values(request.files).reduce((sum, file) => sum + file.size, 0),
-          unpackedBytes: workspace.unpackedBytes,
+          transferBytes: transferFiles(request.files).reduce((sum, file) => sum + file.size, 0),
+          unpackedBytes: snapshots.reduce((sum, entry) => sum + entry.unpackedBytes, 0),
           contextBytes: Math.max(
             workspace.contextBytes ?? request.files.session.size,
             request.files.session.size,
           ),
           manifestBytes: request.files.manifest.size,
-          repositoryBytes: request.files.repository?.size ?? 0,
-          entries: Object.keys(workspace.archive.files ?? {}).length,
+          repositoryBytes: [request.files, ...(request.files.additionalWorkspaces ?? [])].reduce(
+            (sum, entry) => sum + (entry.repository?.size ?? 0),
+            0,
+          ),
+          entries: snapshots.reduce(
+            (sum, entry) => sum + Object.keys(entry.archive.files ?? {}).length,
+            0,
+          ),
         });
-        await receiveFile(
-          scope,
-          request.files.workspace,
-          path.join(directory, workspace.archive.file),
-        );
-        await receiveFile(scope, request.files.session, path.join(directory, 'session.cshare'));
-        if (workspace.git) {
-          if (!request.files.repository) throw new Error('MIGRATION_INVALID_MANIFEST');
-          await receiveFile(
-            scope,
-            request.files.repository,
-            path.join(directory, 'repository.bundle'),
-          );
+        const targetDirs = [workingDir];
+        for (let index = 1; index < snapshots.length; index++)
+          targetDirs.push(await fs.mkdtemp(path.join(parent, `cindy-${request.id.slice(0, 8)}-`)));
+        record = {
+          ...record,
+          workers: workspace.workers?.map((worker) => ({
+            sourceSessionId: worker.sourceSessionId,
+            sessionId: worker.sessionId,
+            workingDir: targetDirs[worker.workspace],
+          })),
+        };
+        scope.save(record);
+        for (const [index, entry] of snapshots.entries()) {
+          const dir = workspaceDirectory(directory, index);
+          await fs.mkdir(dir, { recursive: true });
+          const files = index ? request.files.additionalWorkspaces![index - 1] : request.files;
+          await receiveFile(scope, files.workspace, path.join(dir, entry.archive.file));
+          if (entry.git) {
+            if (!files.repository) throw new Error('MIGRATION_INVALID_MANIFEST');
+            await receiveFile(scope, files.repository, path.join(dir, 'repository.bundle'));
+          }
+          await restoreWorkspace(entry, dir, targetDirs[index]);
         }
-        await restoreWorkspace(workspace, directory, workingDir);
+        await receiveFile(scope, request.files.session, path.join(directory, 'session.cshare'));
         scope.assertCurrent();
         const inspected = await inspectShareFile(path.join(directory, 'session.cshare'), {
           resourceBudgetBytes: memoryBudget(),
@@ -558,7 +768,7 @@ async function receive(
           if (
             inspected.encrypted ||
             inspected.preview.fidelity !== 'full' ||
-            inspected.preview.orcaWorkerCount
+            inspected.preview.orcaWorkerCount !== (record.workers?.length ?? 0)
           )
             throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
           const agentKind =
@@ -573,6 +783,22 @@ async function receive(
             getMakerIfReady()
               ?.getCapabilities(agentKind)
               .availableModels.find((m) => m.id === route.model)?.defaultEffort ?? 'high';
+          const agentPrefs: Partial<Record<'cc' | 'codex' | 'pi', ShareImportDraftPrefs>> = {};
+          for (const agent of ['cc', 'codex', 'pi'] as const) {
+            const kind = agent === 'cc' ? 'claude-code' : agent;
+            const selected = pickEnabledFallbackModel(providers, kind);
+            if (selected)
+              agentPrefs[agent] = {
+                ...selected,
+                effort:
+                  getMakerIfReady()
+                    ?.getCapabilities(kind)
+                    .availableModels.find((m) => m.id === selected.model)?.defaultEffort ?? 'high',
+                permissionMode: agent === 'cc' ? 'default' : 'ask',
+                planMode: false,
+                fastMode: false,
+              };
+          }
           const result = await commitShareImport(
             {
               draftId: inspected.draftId,
@@ -589,7 +815,7 @@ async function receive(
               dbClient: scope.db,
               assertStillValid: scope.assertCurrent,
               refCompensationScope: captureMediaRefCompensationScope(),
-              migration: { sessionId: request.id, workingDir },
+              migration: { sessionId: request.id, workingDir, workers: record.workers, agentPrefs },
             },
           );
           if (result.fidelity !== 'full') throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
@@ -639,6 +865,7 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     return {
       ...view(scope, null),
       projects: await projects(scope),
+      teamMigration: true,
       agents: (['cc', 'codex', 'pi'] as const).filter(
         (agent) => !!pickEnabledFallbackModel(providers, agent === 'cc' ? 'claude-code' : agent),
       ),
@@ -675,72 +902,97 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
   if (request.action === 'status') return view(scope, scope.read(request.sessionId));
   await fs.mkdir(scope.root, { recursive: true, mode: 0o700 });
   scope.assertCurrent();
-  return withSessionRouteLock(request.sessionId, () =>
-    withCrossProcessLock(
-      path.join(scope.root, `${request.sessionId}-source.lock`),
-      { label: 'task-migration', waitMs: 0 },
-      async (lock) => {
-        if (!lock.held) throw new Error('MIGRATION_TASK_BUSY');
-        scope.assertCurrent();
-        let record = scope.read(request.sessionId);
-        if (request.action === 'cancel') {
-          if (
-            !record ||
-            record.kind !== 'outgoing' ||
-            !canCancelHandoff(record) ||
-            running.has(`${scope.root}:${record.sessionId}`)
-          )
-            throw new Error('MIGRATION_CANNOT_CANCEL');
-          return withCrossProcessLock(
-            path.join(scope.root, `${record.id}.lock`),
-            { label: 'task-migration', waitMs: 0 },
-            async (lock) => {
-              const latest = scope.read(request.sessionId);
-              if (!lock.held || latest?.kind !== 'outgoing' || !canCancelHandoff(latest))
-                throw new Error('MIGRATION_CANNOT_CANCEL');
-              const cancelled = { ...latest, stage: 'cancelled' as const, error: undefined };
-              scope.save(cancelled);
-              await fs
-                .rm(path.join(scope.root, 'outgoing', latest.id), { recursive: true, force: true })
-                .catch(() => {});
-              return view(scope, cancelled);
-            },
-          );
-        }
-        if (request.action === 'start') {
-          if (
-            record &&
-            !(record.kind === 'outgoing' && record.stage === 'cancelled') &&
-            !(record.kind === 'incoming' && record.stage === 'active')
-          )
-            throw new Error('MIGRATION_ALREADY_STARTED');
-          if (request.targetDeviceId === selfId() || isSharedTaskPeer(request.targetDeviceId))
-            throw new Error('MIGRATION_TARGET_INVALID');
-          const target = await invoke(request.targetDeviceId, { action: 'caps' }, scope);
-          if (request.targetProject && !target.projects?.includes(request.targetProject))
-            throw new Error('MIGRATION_TARGET_UNKNOWN');
-          const source = await assertSource(scope, request.sessionId);
-          if (!target.agents?.includes(source.agentKind))
-            throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
-          const id = randomUUID();
-          record = {
-            kind: 'outgoing',
-            id,
-            sessionId: request.sessionId,
-            sourceDeviceId: selfId(),
-            targetDeviceId: request.targetDeviceId,
-            targetSessionId: id,
-            targetProject: request.targetProject ?? null,
-            workingDir: source.workingDir,
-            stage: 'preparing',
-          };
-          scope.save(record);
-        }
-        if (!record || record.kind !== 'outgoing') throw new Error('MIGRATION_NOT_FOUND');
-        launch(scope, record);
-        return view(scope, record);
-      },
-    ),
+  const initialMembers =
+    request.action === 'start' ? await sourceGroup(scope, request.sessionId) : [];
+  return withSessionRouteLocks(
+    [request.sessionId, ...initialMembers.map((member) => member.id)],
+    () =>
+      withCrossProcessLock(
+        path.join(scope.root, `${request.sessionId}-source.lock`),
+        { label: 'task-migration', waitMs: 0 },
+        async (lock) => {
+          if (!lock.held) throw new Error('MIGRATION_TASK_BUSY');
+          scope.assertCurrent();
+          let record = scope.read(request.sessionId);
+          if (request.action === 'cancel') {
+            if (
+              !record ||
+              record.kind !== 'outgoing' ||
+              !canCancelHandoff(record) ||
+              running.has(`${scope.root}:${record.sessionId}`)
+            )
+              throw new Error('MIGRATION_CANNOT_CANCEL');
+            return withCrossProcessLock(
+              path.join(scope.root, `${record.id}.lock`),
+              { label: 'task-migration', waitMs: 0 },
+              async (lock) => {
+                const latest = scope.read(request.sessionId);
+                if (!lock.held || latest?.kind !== 'outgoing' || !canCancelHandoff(latest))
+                  throw new Error('MIGRATION_CANNOT_CANCEL');
+                const cancelled = { ...latest, stage: 'cancelled' as const, error: undefined };
+                scope.save(cancelled);
+                await fs
+                  .rm(path.join(scope.root, 'outgoing', latest.id), {
+                    recursive: true,
+                    force: true,
+                  })
+                  .catch(() => {});
+                return view(scope, cancelled);
+              },
+            );
+          }
+          if (request.action === 'start') {
+            if (
+              record &&
+              !(record.kind === 'outgoing' && record.stage === 'cancelled') &&
+              !(record.kind === 'incoming' && record.stage === 'active')
+            )
+              throw new Error('MIGRATION_ALREADY_STARTED');
+            if (request.targetDeviceId === selfId() || isSharedTaskPeer(request.targetDeviceId))
+              throw new Error('MIGRATION_TARGET_INVALID');
+            const target = await invoke(request.targetDeviceId, { action: 'caps' }, scope);
+            if (request.targetProject && !target.projects?.includes(request.targetProject))
+              throw new Error('MIGRATION_TARGET_UNKNOWN');
+            const members = await sourceGroup(scope, request.sessionId);
+            if (
+              members.length !== initialMembers.length ||
+              members.some((member, index) => member.id !== initialMembers[index].id)
+            )
+              throw new Error('MIGRATION_TEAM_CHANGED');
+            const source = members[0];
+            if (source.orcaRole === 'lead' && target.teamMigration !== true)
+              throw new Error('MIGRATION_UNSUPPORTED');
+            if (members.some((member) => !target.agents?.includes(member.agentKind)))
+              throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+            for (const member of members) assertTaskMigrationWritable(member.id);
+            const id = randomUUID();
+            record = {
+              kind: 'outgoing',
+              id,
+              sessionId: request.sessionId,
+              sourceDeviceId: selfId(),
+              targetDeviceId: request.targetDeviceId,
+              targetSessionId: id,
+              targetProject: request.targetProject ?? null,
+              workingDir: source.workingDir,
+              ...(source.orcaRole === 'lead'
+                ? {
+                    workers: members.slice(1).map((member) => ({
+                      sessionId: member.id,
+                      targetSessionId: randomUUID(),
+                      workingDir: member.workingDir,
+                    })),
+                  }
+                : {}),
+              stage: 'preparing',
+            };
+            scope.save(record);
+          }
+          if (!record || record.kind !== 'outgoing') throw new Error('MIGRATION_NOT_FOUND');
+          launch(scope, record);
+          return view(scope, record);
+        },
+      ),
   );
 }
 

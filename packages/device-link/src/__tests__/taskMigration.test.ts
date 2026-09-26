@@ -67,6 +67,28 @@ describe("task migration protocol", () => {
         ...receive,
         files: {
           ...receive.files,
+          additionalWorkspaces: [{ workspace: file, repository: file }],
+        },
+      }),
+    ).toBeDefined();
+    for (const additionalWorkspaces of [
+      null,
+      {},
+      [null],
+      [{}],
+      [{ workspace: { ...file, size: -1 } }],
+    ])
+      expect(() =>
+        parseTaskMigrationRequest({
+          ...receive,
+          files: { ...receive.files, additionalWorkspaces },
+        }),
+      ).toThrow();
+    expect(
+      parseTaskMigrationRequest({
+        ...receive,
+        files: {
+          ...receive.files,
           session: { ...file, size: 512 * 1024 ** 2 },
           workspace: {
             size: 6 * 1024 ** 3,

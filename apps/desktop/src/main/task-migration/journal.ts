@@ -17,6 +17,7 @@ export interface IncomingMigration {
   sourceSessionId: string;
   stage: 'receiving' | 'ready' | 'active';
   workingDir: string;
+  workers?: Array<{ sessionId: string; sourceSessionId: string; workingDir: string }>;
   /** Retained failed attempts; never delete or overwrite files a user may have opened. */
   retainedWorkingDirs?: string[];
 }
@@ -46,6 +47,17 @@ export function migrationScope() {
       typeof record.workingDir !== 'string' ||
       !path.isAbsolute(record.workingDir) ||
       !validId(record.sourceDeviceId) ||
+      (record.workers !== undefined &&
+        (!Array.isArray(record.workers) ||
+          record.workers.some(
+            (worker) =>
+              !validId(worker.sessionId) ||
+              typeof worker.workingDir !== 'string' ||
+              !path.isAbsolute(worker.workingDir) ||
+              ('targetSessionId' in worker
+                ? !validId(worker.targetSessionId)
+                : !validId(worker.sourceSessionId)),
+          ))) ||
       (record.kind === 'incoming'
         ? !['receiving', 'ready', 'active'].includes(record.stage) ||
           !validId(record.sourceSessionId) ||
@@ -60,12 +72,11 @@ export function migrationScope() {
     return record;
   };
   const readIncoming = (id: string) => readRecord(id, true) as IncomingMigration | null;
-  const read = (id: string) => readRecord(id) ?? readIncoming(id);
-  const list = (): MigrationRecord[] => {
+  const list = (incoming = false): MigrationRecord[] => {
     assertCurrent();
     let names: string[];
     try {
-      names = fs.readdirSync(path.join(root, 'records'));
+      names = fs.readdirSync(path.join(root, incoming ? 'receipts' : 'records'));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;
@@ -78,8 +89,22 @@ export function migrationScope() {
           .map((name) => name.replace(/\.json(?:\.bak)?$/, '')),
       ),
     ]
-      .map(read)
+      .map((id) => readRecord(id, incoming))
       .filter((record): record is MigrationRecord => record !== null);
+  };
+  const read = (id: string): MigrationRecord | null => {
+    const own = readRecord(id);
+    if (own && own.stage !== 'cancelled') return own;
+    return (
+      list().find(
+        (record) =>
+          record.stage !== 'cancelled' && record.workers?.some((worker) => worker.sessionId === id),
+      ) ??
+      own ??
+      readIncoming(id) ??
+      list(true).find((record) => record.workers?.some((worker) => worker.sessionId === id)) ??
+      null
+    );
   };
   return {
     root,

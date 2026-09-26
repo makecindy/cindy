@@ -81,6 +81,8 @@ export interface SessionShareExportOptions {
   excludeMedia?: boolean;
   /** Host resource budget override; ordinary sharing retains its default limit. */
   sizeLimitBytes?: number;
+  /** Host-only migration includes archived members without reviving them. */
+  migration?: boolean;
 }
 
 export type SessionShareExportOutcome =
@@ -387,6 +389,7 @@ async function readSessionPhaseB(a: SessionPhaseA): Promise<SessionPhaseB> {
 /** lead 的 active team + Worker 会话收集;无 active team 返回 null(按普通会话导出)。 */
 async function collectOrcaWorkerSources(
   leadSessionId: string,
+  includeArchived = false,
 ): Promise<{ teamStatus: XdtshareOrcaManifest['teamStatus']; workers: OrcaWorkerSource[] } | null> {
   // 与运行期使用同一个 active team 选择与去重入口。历史 migration / drift
   // 可能留下多个 active team；直接 LIMIT 1 会导出用户当前看不到的旧 Worker 图。
@@ -416,7 +419,7 @@ async function collectOrcaWorkerSources(
         `orca worker session is missing or deleted: ${record.sessionId}`,
       );
     }
-    if (workerSession.status === 'archived') {
+    if (workerSession.status === 'archived' && !includeArchived) {
       log.info('archived orca worker excluded from export', {
         workerSessionId: record.sessionId,
       });
@@ -473,7 +476,7 @@ export async function exportSessionShare(
   // ── 协同收集:lead 的 active team 全部 Worker 随包(stale lead 无 active
   //    team 时按普通会话导出)。Worker 允许 0 条消息(刚创建未派活)。──
   const orcaSources =
-    session.orcaRole === 'lead' ? await collectOrcaWorkerSources(session.id) : null;
+    session.orcaRole === 'lead' ? await collectOrcaWorkerSources(session.id, opts.migration) : null;
   const workerSources = orcaSources?.workers ?? [];
 
   // ── 阶段 A(lead + 每个 Worker) ──
@@ -625,7 +628,14 @@ export async function exportSessionShare(
   const addSessionEntries = async (a: SessionPhaseA, b: SessionPhaseB): Promise<void> => {
     await addEntry(
       `${a.zipPrefix}session.json`,
-      JSON.stringify(buildSessionSnapshot(a.session, b.activeSdkSessionId), null, 2),
+      JSON.stringify(
+        {
+          ...buildSessionSnapshot(a.session, b.activeSdkSessionId),
+          ...(opts.migration ? { migrationSourceId: a.session.id, status: a.session.status } : {}),
+        },
+        null,
+        2,
+      ),
     );
     await addEntry(
       `${a.zipPrefix}messages.jsonl`,

@@ -275,7 +275,12 @@ export interface CommitShareImportOptions {
 export interface CommitShareImportRuntimeScope {
   dbClient: DbClient;
   /** Host-only handoff identity. Never accepted from the ordinary share-import IPC. */
-  migration?: { sessionId: string; workingDir: string };
+  migration?: {
+    sessionId: string;
+    workingDir: string;
+    workers?: Array<{ sourceSessionId: string; sessionId: string; workingDir: string }>;
+    agentPrefs?: Partial<Record<'cc' | 'codex' | 'pi', ShareImportDraftPrefs>>;
+  };
   assertStillValid(): void;
   refCompensationScope: MediaRefCompensationScope;
   /** Persist cleanup intent before an overwrite transaction marks old sessions deleted. */
@@ -322,6 +327,7 @@ interface WorkerImportPlan {
   bundledTranscripts?: BundledTranscript[];
   /** pi 便携 id 已映射为本机绝对路径;codex/cc 为包内 id 原样。 */
   activeSdkSessionId: string | null;
+  workingDir?: string;
 }
 
 /**
@@ -396,6 +402,27 @@ export async function commitShareImport(
     }
   }
 
+  if (runtimeScope.migration) {
+    const workers = runtimeScope.migration.workers ?? [];
+    if (workers.length !== workerPlans.length || (runtimeScope.migration.workers !== undefined) !== !!manifest.orca)
+      throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TEAM_CHANGED');
+    const matched = new Set<string>();
+    for (const plan of workerPlans) {
+      if (!runtimeScope.migration.agentPrefs?.[plan.manifest.agentKind])
+        throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TARGET_MODEL_UNAVAILABLE');
+      const member = workers.find(
+        (worker) => worker.sourceSessionId === plan.snapshot.migrationSourceId,
+      );
+      if (!member || matched.has(member.sessionId))
+        throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TEAM_CHANGED');
+      matched.add(member.sessionId);
+      plan.newId = member.sessionId;
+      plan.workingDir = member.workingDir;
+      if (!(await guarded(() => fsp.stat(member.workingDir))).isDirectory())
+        throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_WORKSPACE_CHANGED');
+    }
+  }
+
   // ── 前置校验 ──
   const now = Date.now();
   const newId = runtimeScope.migration?.sessionId ?? randomUUID();
@@ -444,10 +471,19 @@ export async function commitShareImport(
     return bundled;
   };
   const originalBundledTranscripts = filterBundled(manifest.transcripts, 'transcripts');
-  const migratedContext = runtimeScope.migration && manifest.agentKind !== 'pi'
-    ? migrationNativeContext(runtimeScope.migration.sessionId, manifest.transcripts.map(t => t.sdkSessionId)) : null;
-  const bundledTranscripts = originalBundledTranscripts.map(transcript => migratedContext
-    ? { ...transcript, sdkSessionId: migratedContext.id(transcript.sdkSessionId) } : transcript);
+  const migratedContext = runtimeScope.migration
+    ? migrationNativeContext(
+        runtimeScope.migration.sessionId,
+        [manifest, ...workerPlans.map((plan) => plan.manifest)]
+          .filter((member) => member.agentKind !== 'pi')
+          .flatMap((member) => member.transcripts.map((t) => t.sdkSessionId)),
+      )
+    : null;
+  const bundledTranscripts = originalBundledTranscripts.map((transcript) =>
+    migratedContext && manifest.agentKind !== 'pi'
+      ? { ...transcript, sdkSessionId: migratedContext.id(transcript.sdkSessionId) }
+      : transcript,
+  );
   for (const plan of workerPlans) {
     if (plan.manifest.activeSdkSessionId && !isSafePathSegment(plan.manifest.activeSdkSessionId)) {
       throw new XdtshareError(
@@ -458,6 +494,10 @@ export async function commitShareImport(
     plan.bundledTranscripts = filterBundled(
       plan.manifest.transcripts,
       `orca.workers[${plan.manifest.index}].transcripts`,
+    ).map((transcript) =>
+      migratedContext && plan.manifest.agentKind !== 'pi'
+        ? { ...transcript, sdkSessionId: migratedContext.id(transcript.sdkSessionId) }
+        : transcript,
     );
   }
   const piSessionsRoot = path.resolve(
@@ -657,22 +697,8 @@ export async function commitShareImport(
     // worktree 步之后计算。盘上已有同名转录不算冲突(典型是删除 Maker 会话后
     // 重导——软删不清理转录):写入步用 wx 独占写,已存在则复用盘上副本,绝不
     // 覆盖(sdk id 是 UUID,同名即同一会话,且盘上副本可能含删除前 resume 产生
-    // 的更新内容)。协同包的 cc Worker 与 lead 落同一转码目录(同 workingDir)。
-    const hasCcTranscripts =
-      (manifest.agentKind === 'cc' && bundledTranscripts.length > 0) ||
-      workerPlans.some(
-        (plan) => plan.manifest.agentKind === 'cc' && (plan.bundledTranscripts?.length ?? 0) > 0,
-      );
-    let claudeTargetDir: string | null = null;
+    // 的更新内容)。普通分享共用目录；迁移按成员恢复各自目录。
     let transcriptsPlaceable = true;
-    if (hasCcTranscripts) {
-      if (!isClaudeProjectKeyExact(workingDir)) {
-        // 超长路径无法精确复算转码目录:降档为仅历史,不阻断导入。
-        transcriptsPlaceable = false;
-      } else {
-        claudeTargetDir = path.join(projectsRoot, sanitizeClaudeProjectKey(workingDir));
-      }
-    }
 
     // 1. 媒体还原 + URL 重写规则收集。session 图片按「原 URL → 新 URL」逐条进
     //    urlMap(而非单一 host 替换):fork 链会话可能同时带多个旧 session host
@@ -733,6 +759,7 @@ export async function commitShareImport(
       title: string;
       bundled: BundledTranscript[];
       activeSdkSessionId: string | null;
+      workingDir: string;
     }> = [
       {
         agentKind: manifest.agentKind,
@@ -740,6 +767,7 @@ export async function commitShareImport(
         title: manifest.title,
         bundled: bundledTranscripts,
         activeSdkSessionId,
+        workingDir,
       },
       ...workerPlans.map((plan) => ({
         agentKind: plan.manifest.agentKind,
@@ -747,6 +775,7 @@ export async function commitShareImport(
         title: plan.manifest.title,
         bundled: plan.bundledTranscripts ?? [],
         activeSdkSessionId: plan.activeSdkSessionId,
+        workingDir: plan.workingDir ?? workingDir,
       })),
     ];
 
@@ -755,10 +784,18 @@ export async function commitShareImport(
     //     只删本次真实写入的文件。复用同样计入 transcriptsWritten(resume 可用,
     //     保真度不降档)。
     let transcriptsWritten = 0;
-    if (claudeTargetDir && transcriptsPlaceable) {
-      await guarded(() => fsp.mkdir(claudeTargetDir, { recursive: true }).then(() => undefined));
+    {
       for (const restore of restorePlans) {
-        if (restore.agentKind !== 'cc') continue;
+        if (restore.agentKind !== 'cc' || !restore.bundled.length) continue;
+        if (!isClaudeProjectKeyExact(restore.workingDir)) {
+          transcriptsPlaceable = false;
+          continue;
+        }
+        const claudeTargetDir = path.join(
+          projectsRoot,
+          sanitizeClaudeProjectKey(restore.workingDir),
+        );
+        await guarded(() => fsp.mkdir(claudeTargetDir, { recursive: true }).then(() => undefined));
         for (const t of restore.bundled) {
           const file = zip.file(t.path);
           if (!file) continue;
@@ -830,7 +867,7 @@ export async function commitShareImport(
               (nativeId) => migratedContext?.id(nativeId) ?? nativeId,
             )
           : null,
-        newCwd: workingDir,
+        newCwd: restore.workingDir,
         title: restore.title,
         updatedAt: now,
       });
@@ -912,15 +949,28 @@ export async function commitShareImport(
                   (typeof plan.snapshot.title === 'string' && plan.snapshot.title) ||
                   plan.manifest.title ||
                   'Worker',
-                workspaceKind: manifest.workspaceKind,
+                workspaceKind:
+                  runtimeScope.migration && typeof plan.snapshot.workspaceKind === 'string'
+                    ? plan.snapshot.workspaceKind
+                    : manifest.workspaceKind,
                 orcaRole: 'worker' as const,
                 snapshot: plan.snapshot,
-                draftPrefs,
+                draftPrefs:
+                  runtimeScope.migration?.agentPrefs?.[plan.manifest.agentKind] ?? draftPrefs,
                 // 导入端草稿偏好按 vendor 存,跨 vendor 的 Worker 用内置兜底模型。
-                applyDraftPrefs: plan.manifest.agentKind === manifest.agentKind,
-                // 与 OrcaWorkerCreationService 同口径:Worker 固定 auto,不继承。
-                permissionModeOverride: 'auto',
-                workingDir,
+                applyDraftPrefs:
+                  !!runtimeScope.migration || plan.manifest.agentKind === manifest.agentKind,
+                // 普通分享沿用 auto；迁移不继承源机器的权限授权。
+                permissionModeOverride: runtimeScope.migration
+                  ? plan.manifest.agentKind === 'cc'
+                    ? 'default'
+                    : 'ask'
+                  : 'auto',
+                status:
+                  runtimeScope.migration && plan.snapshot.status === 'archived'
+                    ? 'archived'
+                    : 'active',
+                workingDir: plan.workingDir ?? workingDir,
                 worktreePath,
                 activeSdkSessionId: plan.activeSdkSessionId,
                 now,
@@ -988,7 +1038,7 @@ export async function commitShareImport(
       bundledCount: bundledKeys.size,
       transcriptsWritten,
     });
-    if (hasCcTranscripts && !transcriptsPlaceable) notes.push('workdirKeyInexact');
+    if (!transcriptsPlaceable) notes.push('workdirKeyInexact');
     log.info('session share imported', {
       newId,
       agentKind: manifest.agentKind,
@@ -1360,6 +1410,7 @@ function buildSessionRow(params: {
   draftPrefs: ShareImportDraftPrefs | null;
   applyDraftPrefs: boolean;
   permissionModeOverride?: string;
+  status?: 'active' | 'archived';
   workingDir: string;
   worktreePath: string | null;
   activeSdkSessionId: string | null;
@@ -1396,7 +1447,7 @@ function buildSessionRow(params: {
       typeof draftPrefs?.providerId === 'string' && draftPrefs.providerId.length > 0
         ? draftPrefs.providerId
         : null,
-    status: 'active',
+    status: params.status ?? 'active',
     sdkSessionId: activeSdkSessionId,
     totalTokenUsage: num(snapshot.totalTokenUsage, 0),
     totalCostUsd: num(snapshot.totalCostUsd, 0),

@@ -42,9 +42,14 @@ export async function assertTaskMigrationInputAllowed(
   const key = await physicalWorktreeKey(workingDir);
   scope.assertCurrent();
   for (const record of preparing) {
-    const source = await physicalWorktreeKey(record.workingDir);
-    scope.assertCurrent();
-    if (key === source || key.startsWith(source + path.sep) || source.startsWith(key + path.sep))
-      throw new Error('[PRECONDITION_FAILED] MIGRATION_SHARED_DIRECTORY_BUSY');
+    for (const dir of [
+      record.workingDir,
+      ...(record.workers ?? []).map((worker) => worker.workingDir),
+    ]) {
+      const source = await physicalWorktreeKey(dir);
+      scope.assertCurrent();
+      if (key === source || key.startsWith(source + path.sep) || source.startsWith(key + path.sep))
+        throw new Error('[PRECONDITION_FAILED] MIGRATION_SHARED_DIRECTORY_BUSY');
+    }
   }
 }

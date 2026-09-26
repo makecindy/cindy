@@ -8,6 +8,8 @@ export interface MigrationHandoff {
   targetSessionId: string;
   targetProject: string | null;
   workingDir: string;
+  /** One handoff record owns the entire team; members never advance independently. */
+  workers?: Array<{ sessionId: string; targetSessionId: string; workingDir: string }>;
   stage: MigrationStage;
   error?: string;
 }

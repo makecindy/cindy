@@ -183,10 +183,17 @@ vi.mock('../../cindy-media/ledger.js', () => ({
   },
 }));
 const worktreeMock = vi.hoisted(() => ({
-  detect: null as
+  detect: null as null | {
+    isGitRepo: boolean;
+    isInsideWorktree: boolean;
+    gitInstalled: boolean;
+    repoRoot?: string;
+    currentBranch?: string;
+  },
+  createResult: null as
     | null
-    | { isGitRepo: boolean; isInsideWorktree: boolean; gitInstalled: boolean; repoRoot?: string; currentBranch?: string },
-  createResult: null as null | { ok: true; meta: { path: string } } | { ok: false; error: { kind: string; message?: string } },
+    | { ok: true; meta: { path: string } }
+    | { ok: false; error: { kind: string; message?: string } },
   suggestedName: 'imported-wt' as string | null,
   createCalls: [] as Array<{ sessionId: string; baseRepo: string; name: string; sourceBranch: string }>,
   removeCalls: [] as string[],
@@ -212,7 +219,10 @@ const {
 } = sessionShareImportModule;
 const mockedDbClientModule = await import('../../localDb/client/current.js');
 const rawCommitShareImport = sessionShareImportModule.commitShareImport;
-const commitShareImport = (opts: Parameters<typeof rawCommitShareImport>[0], migration?: { sessionId: string; workingDir: string }) =>
+const commitShareImport = (
+  opts: Parameters<typeof rawCommitShareImport>[0],
+  migration?: Parameters<typeof rawCommitShareImport>[1]['migration'],
+) =>
   rawCommitShareImport(opts, {
     migration,
     dbClient: mockedDbClientModule.getDbClient(),
@@ -256,7 +266,11 @@ interface BundleOverrides {
   /** v1 旧包没有逐消息 agentKind。 */
   omitMessageAgentKind?: boolean;
   /** 协同包:附带一个 Worker(cc 或 codex),manifest 升到 v2 + orca 段。 */
-  orcaWorker?: { agentKind: 'cc' | 'codex'; status?: 'idle' | 'running' | 'done' | 'error' };
+  orcaWorker?: {
+    agentKind: 'cc' | 'codex';
+    status?: 'idle' | 'running' | 'done' | 'error';
+    snapshot?: Record<string, unknown>;
+  };
 }
 
 const WORKER_SID = 'bbbbbbbb-1111-2222-3333-555555555555';
@@ -360,7 +374,13 @@ async function buildBundle(overrides: BundleOverrides = {}): Promise<Buffer> {
         : `orca/workers/0/transcripts/codex/rollout-w-${WORKER_SID}.jsonl`;
     zip.file(
       'orca/workers/0/session.json',
-      JSON.stringify({ title: 'Worker 快照', createdAt: 1700000001000, userSendAt: 1700000001100, totalTokenUsage: 42 }),
+      JSON.stringify({
+        title: 'Worker 快照',
+        createdAt: 1700000001000,
+        userSendAt: 1700000001100,
+        totalTokenUsage: 42,
+        ...overrides.orcaWorker.snapshot,
+      }),
     );
     zip.file(
       'orca/workers/0/messages.jsonl',
@@ -1518,6 +1538,80 @@ describe('sessionShareImport', () => {
     expect(worker.messages[0].content).toContain(blobUrlOf(IMG1_BYTES));
     expect(worker.messages[0].content).not.toContain('xdt-image://');
   });
+
+  it.each(['cc', 'codex'] as const)(
+    'migrates %s workers with independent identities, directories and target model routes',
+    async (agentKind) => {
+      const workerDir = path.join(tmpRoot, `migrated-${agentKind}-worker`);
+      await fsp.mkdir(workerDir, { recursive: true });
+      const inspected = await inspectShareFile(
+        await writeBundleFile(
+          await buildBundle({
+            agentKind: 'pi',
+            orcaWorker: {
+              agentKind,
+              snapshot: {
+                migrationSourceId: 'source-worker',
+                status: 'archived',
+                workspaceKind: 'project',
+              },
+            },
+          }),
+        ),
+      );
+      const result = await commitShareImport(
+        {
+          draftId: inspected.draftId,
+          workingDir: newWorkdir,
+          projectsRootOverride: projectsRoot,
+          sharedMediaRootOverride: sharedMediaRoot,
+          piSessionsRootOverride: piSessionsRoot,
+        },
+        {
+          sessionId: `migration-${agentKind}`,
+          workingDir: newWorkdir,
+          workers: [
+            { sourceSessionId: 'source-worker', sessionId: 'target-worker', workingDir: workerDir },
+          ],
+          agentPrefs: {
+            [agentKind]: {
+              model: 'worker-model',
+              providerId: 'worker-provider',
+              effort: 'high',
+              permissionMode: 'ask',
+            },
+          },
+        },
+      );
+      expect(result.fidelity).toBe('full');
+      const args = dbMock.txCalls[0].args as OrcaTxArgs;
+      const worker = args.orca!.workers[0].session;
+      expect(worker).toMatchObject({
+        id: 'target-worker',
+        workingDir: workerDir,
+        status: 'archived',
+        model: 'worker-model',
+        providerId: 'worker-provider',
+        permissionMode: agentKind === 'cc' ? 'default' : 'ask',
+      });
+      expect(worker.sdkSessionId).not.toBe(WORKER_SID);
+      if (agentKind === 'cc')
+        expect(
+          fs.existsSync(
+            path.join(
+              projectsRoot,
+              workerDir.replace(/[^a-zA-Z0-9]/g, '-'),
+              `${worker.sdkSessionId}.jsonl`,
+            ),
+          ),
+        ).toBe(true);
+      else
+        expect(codexMock.importCalls[0]).toMatchObject({
+          threadId: worker.sdkSessionId,
+          newCwd: workerDir,
+        });
+    },
+  );
 
   it('orca bundle: worker resume id conflict → SHARE_CONFLICT; overwrite soft-deletes it', async () => {
     dbMock.conflictForResumeId = WORKER_SID;

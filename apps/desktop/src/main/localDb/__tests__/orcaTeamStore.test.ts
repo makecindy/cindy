@@ -14,6 +14,10 @@ const h = vi.hoisted(() => ({
   notifyAgentIslandSessionPatch: vi.fn(),
   runtimeCleanup: vi.fn(),
   compactSessionToolResultsBestEffort: vi.fn(async () => undefined),
+  assertMigrationWritable: vi.fn(),
+}));
+vi.mock('../../task-migration/journal.js', () => ({
+  assertTaskMigrationWritable: h.assertMigrationWritable,
 }));
 
 vi.mock('electron', () => ({
@@ -37,6 +41,7 @@ describe('orcaTeamStore', () => {
   let rawDb: Database.Database | null = null;
 
   beforeEach(() => {
+    h.assertMigrationWritable.mockReset();
     setSessionRuntimeCleanup(h.runtimeCleanup);
     setSessionRouteLockImplementation(null);
   });
@@ -51,6 +56,39 @@ describe('orcaTeamStore', () => {
     }
     rawDb?.close();
     rawDb = null;
+  });
+
+  it('rejects team mutations while migration owns the lead and workers', async () => {
+    const store = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    h.assertMigrationWritable.mockImplementation(() => {
+      throw new Error('MIGRATION_TASK_BUSY');
+    });
+    for (const action of [
+      () => store.markTeamEnded('team-1', 'completed'),
+      () => store.setWorkerFocus('team-1', 'worker-1'),
+      () => store.updateWorkerStatus('worker-1', 'running'),
+      () => store.archiveWorkersByTeam('team-1'),
+      () => store.archiveSingleWorkerSession('worker-session-1'),
+      () => store.removeWorker('worker-1'),
+      () =>
+        store.reserveWorkerCreation({
+          reservationId: 'new',
+          teamId: 'team-1',
+          label: 'new',
+          hardLimit: 10,
+          leaseMs: 1000,
+        }),
+    ])
+      await expect(action()).rejects.toThrow('MIGRATION_TASK_BUSY');
+    expect(await client.queryOne('SELECT status FROM orca_teams WHERE id = ?', ['team-1'])).toEqual(
+      { status: 'active' },
+    );
+    expect(
+      await client.queryOne('SELECT status FROM sessions WHERE id = ?', ['worker-session-1']),
+    ).toEqual({ status: 'active' });
   });
 
   it('requires workerId and workerSessionId to match the same row when both are supplied', async () => {

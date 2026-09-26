@@ -188,7 +188,7 @@ export function TaskMoveSubmenu({
         ) : (
           localProjects
         )}
-        {!session.orcaRole && (
+        {session.orcaRole !== 'worker' && (
           <>
             <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
             <div className="px-3 py-1.5 text-xs text-[var(--cmd-palette-item-meta)]">
@@ -206,7 +206,12 @@ export function TaskMoveSubmenu({
               </DropdownMenuItem>
             ) : (
               devices.map((device) => (
-                <DeviceProjects key={device.deviceId} device={device} onSelect={onMigration} />
+                <DeviceProjects
+                  key={device.deviceId}
+                  device={device}
+                  team={session.orcaRole === 'lead'}
+                  onSelect={onMigration}
+                />
               ))
             )}
             {!loading && !deviceError && !devices.length && (
@@ -223,9 +228,11 @@ export function TaskMoveSubmenu({
 
 function DeviceProjects({
   device,
+  team,
   onSelect,
 }: {
   device: DeviceLinkDeviceView;
+  team: boolean;
   onSelect(value: TaskMoveDestination): void;
 }) {
   const { t } = useTranslation();
@@ -242,6 +249,7 @@ function DeviceProjects({
     void window.electronAPI.deviceLink
       .taskMigration(device.isSelf ? null : device.deviceId, { action: 'caps' })
       .then((caps) => {
+        if (team && caps.teamMigration !== true) throw new Error('MIGRATION_UNSUPPORTED');
         if (!disposed && isDataOwnerGenerationCurrent(owner))
           setProjects(
             recentWorkdirsToProjects(
@@ -259,7 +267,7 @@ function DeviceProjects({
     return () => {
       disposed = true;
     };
-  }, [open, device.deviceId, device.isSelf, retry]);
+  }, [open, device.deviceId, device.isSelf, retry, team]);
   const choose = (project: string | null) =>
     onSelect({
       deviceId: device.deviceId,

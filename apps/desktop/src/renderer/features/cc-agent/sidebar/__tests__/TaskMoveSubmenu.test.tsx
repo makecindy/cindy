@@ -25,11 +25,25 @@ beforeEach(() => {
   Object.assign(window, { electronAPI: { deviceLink: { taskMigration: h.request, invoke: h.invoke, listDevices: h.list } } });
 });
 afterEach(cleanup);
-async function mount() {
-  render(<DropdownMenu defaultOpen><DropdownMenuTrigger>More</DropdownMenuTrigger><DropdownMenuContent>
-    <TaskMoveSubmenu session={session} disabled={false} localProjects={null} onMigration={h.destination} onBrowseRemote={h.browse} />
-  </DropdownMenuContent></DropdownMenu>);
-  fireEvent.keyDown(screen.getByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.moveToProject' }), { key: 'ArrowRight' });
+async function mount(task = session) {
+  render(
+    <DropdownMenu defaultOpen>
+      <DropdownMenuTrigger>More</DropdownMenuTrigger>
+      <DropdownMenuContent>
+        <TaskMoveSubmenu
+          session={task}
+          disabled={false}
+          localProjects={null}
+          onMigration={h.destination}
+          onBrowseRemote={h.browse}
+        />
+      </DropdownMenuContent>
+    </DropdownMenu>,
+  );
+  fireEvent.keyDown(
+    screen.getByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.moveToProject' }),
+    { key: 'ArrowRight' },
+  );
   await screen.findByRole('menuitem', { name: /another/ });
 }
 it('moves a remote task to a project on its source computer using the host business action', async () => {
@@ -79,3 +93,22 @@ it('keeps transient connection failures retryable without claiming an old versio
   expect(await screen.findByRole('menuitem', { name: 'taskMigration.defaultFolder' })).toBeTruthy();
   expect(screen.queryByText('taskMove.upgradeComputer')).toBeNull();
 });
+
+it.each([false, true])(
+  'shows other computers for a lead and requires team migration support: %s',
+  async (supported) => {
+    h.request.mockResolvedValue({
+      supported: true,
+      deviceId: 'B',
+      projects: [],
+      ...(supported ? { teamMigration: true } : {}),
+    });
+    await mount({ ...session, orcaRole: 'lead' });
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'B' }), { key: 'ArrowRight' });
+    if (supported)
+      expect(
+        await screen.findByRole('menuitem', { name: 'taskMigration.defaultFolder' }),
+      ).toBeTruthy();
+    else expect(await screen.findByText('taskMove.upgradeComputer')).toBeTruthy();
+  },
+);
