@@ -1049,7 +1049,10 @@ export default function SessionScreen() {
   const revokedDevices = useRevokedDevices();
   const unresponsiveDevices = useUnresponsiveDevices();
   const maker = useMobileMakerTransport(deviceId);
-  const remoteHistoryAvailable = status === 'online' && getPresenceAvailability(deviceId) === true;
+  // A failed roster read leaves presence unknown after reconnect. Allow the
+  // existing link/subscription path to establish reachability instead of
+  // blocking both history and sync until a presence change happens to arrive.
+  const remoteHistoryAvailable = status === 'online' && getPresenceAvailability(deviceId) !== false;
   // Unknown presence while connecting is loading, not evidence of a lost computer.
   const showCachedHistoryNotice = status !== 'connecting'
     && (status !== 'online' || getPresenceAvailability(deviceId) === false);

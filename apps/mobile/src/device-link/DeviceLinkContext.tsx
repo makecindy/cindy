@@ -487,8 +487,25 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     deviceId: string,
     allowProbe = false,
     refreshSettled = false,
+    pendingReplyRecovery = false,
   ) => {
+    const connectionEpoch = connectionEpochRef.current;
+    const releaseGeneration = backgroundReleaseGenerationRef.current;
     const checkAvailability = () => {
+      if (pendingReplyRecovery && (
+        clientRef.current !== client
+        || connectionEpochRef.current !== connectionEpoch
+        || backgroundReleaseGenerationRef.current !== releaseGeneration
+        || backgroundReleaseInFlightRef.current
+        || AppState.currentState !== 'active'
+        || client.getStatus() !== 'online'
+        || revokedDevicesStore.has(deviceId)
+        || client.isOutboundExplicitlyClosed(deviceId)
+        || rehydrateSuppressedDeviceIds.has(deviceId)
+        || !client.hasPendingRequestsTo(deviceId)
+      )) {
+        throw new DeviceLinkError('NOT_CONNECTED', 'pending reply recovery is no longer current');
+      }
       if (presenceAvailableByDeviceRef.current.get(deviceId) === false) {
         const disabled = presenceUnavailableVerdictsRef.current.get(deviceId)?.kind === 'disabled';
         throw new DeviceLinkError(disabled ? 'REMOTE_DISABLED' : 'DEVICE_OFFLINE', 'remote device is unavailable');
@@ -499,10 +516,22 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       presenceAvailabilityEpochsRef.current,
       remoteResponseEvidenceEpochs,
       deviceId,
-      () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe, checkAvailability),
+      () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe, checkAvailability, pendingReplyRecovery),
       { retainSuccessful: true, refreshSettled },
     );
   }, []);
+
+  const restorePendingReplyLinks = useCallback((client: DeviceLinkClient, refreshSettled = false) => {
+    // A running business probe owns the breaker/scheduler slot until its reply
+    // arrives. Restore only its transport: queuing this handshake behind that
+    // probe would make each wait for the other until timeout + backoff.
+    // Reuse the connection's single-flight cache; send no new business request
+    // and neither consume nor settle the existing probe's slot.
+    for (const deviceId of unresponsiveDevicesStore.getSnapshot()) {
+      if (!client.hasPendingRequestsTo(deviceId)) continue;
+      void sendOpenLinkOnce(client, deviceId, false, refreshSettled, true).request.catch(() => undefined);
+    }
+  }, [sendOpenLinkOnce]);
 
   const sendTrackedSubscribe = useCallback(async (
     client: DeviceLinkClient,
@@ -925,6 +954,19 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     );
     recoveryDiagnostics.set(client, diagnostics);
     if (AppState.currentState === 'active') diagnostics.foreground();
+    let networkPathChanged = false;
+    let lastConnectedNetworkType: string | undefined;
+    const recoverNetwork = (urgent: boolean) => {
+      const replaceOldPath = networkPathChanged;
+      networkPathChanged = false;
+      // Only this phone's established connection used the lost route. Keep
+      // handshakes and congestion backoff on their existing recovery path.
+      if (replaceOldPath && client.getStatus() === 'online') {
+        client.restartConnection('network-path-changed');
+      } else {
+        client.notifyNetworkChanged({ urgent });
+      }
+    };
     const offIssue = client.onConnectionIssue(setConnectionIssue);
     const offStatus = client.onStatusChange((next) => {
       setStatus(next);
@@ -939,6 +981,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         peerRecoverySchedulerRef.current?.pause();
         return;
       }
+      // A new authenticated connection already supersedes any retained old path.
+      networkPathChanged = false;
       // presence 是当前在线控制端收到的 delta,server 不会在 hello-ack 后重放
       // 全量快照。进入新连接代际先丢弃旧 verdict:后台期间若设备从 unavailable
       // 恢复,旧 false 不能永久挡住本轮 rehydrate。上一代仍 pending 的镜像清理
@@ -968,6 +1012,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       connectionEpochRef.current = ++nextDeviceLinkConnectionEpoch;
       setConnectionEpoch(connectionEpochRef.current);
       resetRemoteProjectOrderPushFence();
+      restorePendingReplyLinks(client);
       void rehydrateWithClient(client);
       // A new controller receives only presence deltas. Read the roster once so
       // an already-offline host is known even when opening directly into history.
@@ -1250,6 +1295,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') {
         diagnostics.foreground();
+        const resumingFromBackground = backgroundReleaseInFlightRef.current;
         backgroundReleaseInFlightRef.current = false;
         // 回前台立刻重连:绕开断线后遗留的指数退避计时器(可能 park 到 30s),
         // 让"打开 App → 打开会话"路径快速恢复在线,而不是干等退避。
@@ -1257,8 +1303,11 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 冷却默认只拦请求路径的 un-park(waitUntilOnline),不拦真人操作。
         backgroundConnection.active();
         // A short background stay can preserve a socket whose route changed.
-        // Probe without the ordinary hint cooldown; never delay content recovery.
-        if (client.getStatus() === 'online') client.notifyNetworkChanged({ urgent: true });
+        // Replace a known old path; otherwise probe without the hint cooldown.
+        if (client.getStatus() === 'online') recoverNetwork(true);
+        // A short background stay retains successful handshakes on the same relay.
+        // Refresh those once per return, while sharing pending opens and repeated active hints.
+        restorePendingReplyLinks(client, resumingFromBackground);
         // 快速切换(连接被宽限保住、始终 online)不会有 online 状态转换,这条显式
         // 补齐就是断档回填的唯一触发点;其余路径下它因 status 未 online 而空转。
         void rehydrateWithClient(client);
@@ -1294,8 +1343,23 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         );
         previousNetwork = network;
         mobileDebugLog('debug', 'device-link', 'network path notification', { type: network.type, connected: network.isConnected, reachable: network.isInternetReachable, appState: AppState.currentState, urgent });
+        // Native lookup failures can report UNKNOWN with isConnected=false.
+        // They neither prove route loss nor consume an earlier confirmed loss.
+        if (!network.type || network.type === 'UNKNOWN') {
+          if (AppState.currentState === 'active') client.notifyNetworkChanged({ urgent });
+          return;
+        }
+        // Reachability/capability notifications alone are not route changes:
+        // preserve the full weak-network probe budget for those hints.
+        if (network.isConnected === false) networkPathChanged = true;
+        if (network.isConnected === true && network.type !== 'NONE') {
+          if (lastConnectedNetworkType !== undefined && lastConnectedNetworkType !== network.type) {
+            networkPathChanged = true;
+          }
+          lastConnectedNetworkType = network.type;
+        }
         if (AppState.currentState !== 'active' || network.isConnected === false) return;
-        client.notifyNetworkChanged({ urgent });
+        recoverNetwork(urgent);
       });
     }).catch(() => {
       console.warn('[device-link] network listener unavailable; using heartbeat recovery');
@@ -1341,6 +1405,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     clearPerAccountDeviceLinkState,
     publishPresenceAvailabilityMutation,
     rehydrateWithClient,
+    restorePendingReplyLinks,
     requestForcedPeerRecovery,
     readDeviceList,
   ]);
@@ -1792,8 +1857,9 @@ function sendOpenLinkWithAccessHandling(
   deviceId: string,
   allowProbe = false,
   preSend?: () => void,
+  pendingReplyRecovery = false,
 ): Promise<LinkAcceptPayload> {
-  return withAccessRevokedHandling(deviceId, () => sendOpenLink(client, deviceId, allowProbe, preSend));
+  return withAccessRevokedHandling(deviceId, () => sendOpenLink(client, deviceId, allowProbe, preSend, pendingReplyRecovery));
 }
 
 async function sendOpenLink(
@@ -1801,14 +1867,17 @@ async function sendOpenLink(
   deviceId: string,
   allowProbe = false,
   preSend?: () => void,
+  pendingReplyRecovery = false,
 ): Promise<LinkAcceptPayload> {
   preSend?.();
   // 熔断门禁放在连接等待之前:open 时快速失败,不消耗 1.5s 重连等待也不上管道。
-  const slot = acquireDeviceSendSlot(deviceId, undefined, { allowProbe });
+  // Reply transport must not compete with the business request it is restoring.
+  // The provider's preSend guard limits this exemption to current pending work.
+  const slot = pendingReplyRecovery ? null : acquireDeviceSendSlot(deviceId, undefined, { allowProbe });
   try {
     await ensureOnlineForRequest(client);
   } catch (err) {
-    settleDeviceSend(deviceId, slot, 'inconclusive');
+    if (slot) settleDeviceSend(deviceId, slot, 'inconclusive');
     throw err;
   }
   try {
@@ -1825,7 +1894,7 @@ async function sendOpenLink(
     // 超时后再 open,形成周期性风暴。这里按不定论处理:不关熔断也不计失败;
     // openLink 若是探测,单飞席位随之释放、退避窗口不动,紧随其后的 subscribe
     // (真实 invoke 通道)会立即接棒成为新探测,由它的回包决定开合。
-    settleDeviceSend(deviceId, slot, 'inconclusive');
+    if (slot) settleDeviceSend(deviceId, slot, 'inconclusive');
     markRemoteResponseEvidence(deviceId);
     // 显式 openLink 成功 = 链路已重建:解除永久关闭后的重建抑制。
     liftRehydrateSuppressionOnExplicitOpen(rehydrateSuppressedDeviceIds, deviceId);
@@ -1834,7 +1903,7 @@ async function sendOpenLink(
     // 超时仍计失败:link-open 都等不到回包说明被控端连链路层都没在应答。
     // 终态 relay 应答(REMOTE_DISABLED / DEVICE_OFFLINE / VERSION_MISMATCH)
     // 关熔断,把 UI 让给对应的可操作错误态(review P1:否则设备被永远探测)。
-    settleDeviceSend(deviceId, slot, classifyLinkOpenFailure(err));
+    if (slot) settleDeviceSend(deviceId, slot, classifyLinkOpenFailure(err));
     throw err;
   }
 }

@@ -143,7 +143,7 @@ export function isBreakerObservedError(err: unknown): boolean {
 /**
  * 失败 → 熔断信号:仅 INVOKE_TIMEOUT(等满超时无回包)计失败;**终态 relay 应答**
  * (DEVICE_OFFLINE / REMOTE_DISABLED / VERSION_MISMATCH)是「链路在明确应答」的
- * 恢复证据(responded)——「无响应」语义只对无回包成立,relay 已给出终态时应
+ * 回包证据(responded),但不是设备恢复证据——「无响应」语义只对无回包成立,relay 已给出终态时应
  * 让位给对应的终态 UI;presence 未及时翻转的竞态下,若归不定论,熔断 open 后的
  * 周期探测收到同类终态也永远关不上(review P2)。对**任何** channel(含嵌套
  * openLink 冒泡到外层业务 channel 的失败)统一适用,失败来源无需特判。
@@ -185,8 +185,8 @@ export interface ResponsivenessTrackerDeps {
    * 拿到探测席位后调用;实现方直接走 client.invoke,不要再套 remoteInvoke)。
    */
   probeInvoke(deviceId: string, channel: string, args: unknown[]): Promise<unknown>;
-  /** 熔断 open/close 翻转回调(广播给 renderer + 恢复时重放订阅)。同状态不重复触发。 */
-  onUnresponsiveChanged(deviceId: string, unresponsive: boolean): void;
+  /** State changes always update UI; recovered is false for cleanup or terminal relay replies. */
+  onUnresponsiveChanged(deviceId: string, unresponsive: boolean, recovered: boolean): void;
   /** 探测前置条件:本实例持有 relay、链路 online、目标设备 presence 可用。 */
   isProbeEligible(deviceId: string): boolean;
   /** 首次业务超时后的 peer 级恢复；由 Desktop 接入 openRemoteLink 去重。 */
@@ -226,6 +226,10 @@ export function createResponsivenessTracker(
   const unresponsive = new Set<string>();
   const linkRecoveryInFlight = new Map<string, Promise<unknown>>();
   const bootstrapFanOutCohorts = new Map<string, { cohort: number; expiresAt: number }>();
+  const lifecycleEpochs = new Map<string, number>();
+  // Only a successful response permits recovery work. Clearing state or a relay
+  // offline/revoked reply must close the breaker without replaying subscriptions.
+  let recoveryEvidence = false;
   const breaker = createDeviceResponsivenessBreaker({
     now,
     onOpenChanged: (deviceId, open) => {
@@ -234,12 +238,22 @@ export function createResponsivenessTracker(
       log.info(
         `device ${deviceId.slice(0, 8)} responsiveness circuit ${open ? 'opened' : 'closed'}`,
       );
-      deps.onUnresponsiveChanged(deviceId, open);
+      deps.onUnresponsiveChanged(deviceId, open, !open && recoveryEvidence);
     },
   });
 
-  const settle = (deviceId: string, slot: BreakerSendSlot, outcome: BreakerSettleOutcome): void => {
-    breaker.settle(deviceId, slot, outcome);
+  const settle = (
+    deviceId: string,
+    slot: BreakerSendSlot,
+    outcome: BreakerSettleOutcome,
+    responded = true,
+  ): void => {
+    recoveryEvidence = responded && outcome === 'responded';
+    try {
+      breaker.settle(deviceId, slot, outcome);
+    } finally {
+      recoveryEvidence = false;
+    }
   };
 
   const triggerLinkRecovery = (deviceId: string): void => {
@@ -284,6 +298,8 @@ export function createResponsivenessTracker(
     run: () => Promise<T>,
     cohortOverride?: number,
   ): Promise<T> => {
+    const lifecycleEpoch = lifecycleEpochs.get(deviceId) ?? 0;
+    lifecycleEpochs.set(deviceId, lifecycleEpoch);
     const cohort = selectCohort(deviceId, channel, cohortOverride);
     const slot = breaker.acquire(deviceId, cohort, { allowProbe: false });
     if (slot.decision === 'reject') throw createDeviceUnresponsiveError(deviceId);
@@ -305,14 +321,17 @@ export function createResponsivenessTracker(
           ? 'inconclusive'
           : classifyDeviceSendFailure(err);
       markBreakerObserved(err);
-      settle(deviceId, slot, outcome);
-      if (outcome === 'timeout') triggerLinkRecovery(deviceId);
+      settle(deviceId, slot, outcome, false);
+      if (outcome === 'timeout' && lifecycleEpochs.get(deviceId) === lifecycleEpoch)
+        triggerLinkRecovery(deviceId);
       throw err;
     }
   };
 
   const probeTick = (): void => {
     for (const deviceId of [...unresponsive]) {
+      const lifecycleEpoch = lifecycleEpochs.get(deviceId) ?? 0;
+      lifecycleEpochs.set(deviceId, lifecycleEpoch);
       if (!breaker.probeDue(deviceId)) continue;
       if (!deps.isProbeEligible(deviceId)) continue;
       log.debug(`probing unresponsive device ${deviceId.slice(0, 8)}`);
@@ -333,17 +352,21 @@ export function createResponsivenessTracker(
       void Promise.resolve(probePromise)
         .then(
           () =>
-            breaker.settle(
+            settle(
               deviceId,
               slot,
               classifyDeviceSendSuccess(DEVICE_RESPONSIVENESS_PROBE_CHANNEL, true),
             ),
           (err) => {
             const outcome = classifyDeviceSendFailure(err);
-            breaker.settle(deviceId, slot, outcome);
+            settle(deviceId, slot, outcome, false);
             // 探测是 open 后唯一会真正穿过 peer link 的流量。若它仍等满超时，
             // 继续按单-peer 半径重开 link；clear/reset 已翻代时 breaker 会先关闭。
-            if (outcome === 'timeout' && breaker.isOpen(deviceId)) {
+            if (
+              outcome === 'timeout' &&
+              lifecycleEpochs.get(deviceId) === lifecycleEpoch &&
+              breaker.isOpen(deviceId)
+            ) {
               triggerLinkRecovery(deviceId);
             }
             throw err;
@@ -361,11 +384,13 @@ export function createResponsivenessTracker(
     isUnresponsive: (deviceId) => unresponsive.has(deviceId),
     getUnresponsiveDeviceIds: () => [...unresponsive],
     clearDevice: (deviceId) => {
+      lifecycleEpochs.set(deviceId, (lifecycleEpochs.get(deviceId) ?? 0) + 1);
       linkRecoveryInFlight.delete(deviceId);
       bootstrapFanOutCohorts.delete(deviceId);
       breaker.clear(deviceId);
     },
     resetAll: () => {
+      for (const [deviceId, epoch] of lifecycleEpochs) lifecycleEpochs.set(deviceId, epoch + 1);
       linkRecoveryInFlight.clear();
       bootstrapFanOutCohorts.clear();
       breaker.resetAll();
