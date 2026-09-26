@@ -495,6 +495,25 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
   });
 
+  it('reviews each real delete while previews stay silent', () => {
+    const cases: Array<[unknown, string]> = [
+      [{ session_ids: ['a'], dry_run: false, confirmation_token: 't' }, 'prompt-each-time'],
+      [{ session_ids: ['a'], dry_run: 'false' }, 'prompt-each-time'],
+      [{ session_ids: ['a'], dry_run: true }, 'auto-approve'],
+      [{ session_ids: ['a'] }, 'auto-approve'],
+    ];
+    for (const [input, expected] of cases) {
+      for (const args of [input, JSON.stringify(input)]) {
+        expect(policy('delete_sessions', args)).toBe(expected);
+        const params = { name: 'delete_sessions', args };
+        for (const toolName of ['call_tool', undefined]) {
+          expect(policy(toolName, params)).toBe(expected);
+          expect(policy(toolName, JSON.stringify(params))).toBe(expected);
+        }
+      }
+    }
+  });
+
   it('does not infer a safe helper action from missing or malformed evidence', () => {
     for (const params of [undefined, null, [], 'invalid JSON', {}, { name: '' }, { name: 42 }]) {
       expect(policy('call_tool', params)).toBe('prompt-each-time');

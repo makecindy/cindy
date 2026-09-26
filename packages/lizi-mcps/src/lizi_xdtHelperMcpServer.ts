@@ -39,6 +39,7 @@ import { jsonObjectArg } from './json-object-arg.js';
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
 import { registerCreateProjectTool, type CreateProjectCallback } from './xdt-helper/create_project.js';
 import { registerMoveSessionTool, type MoveSessionCallback } from './xdt-helper/move_session.js';
+import { registerDeleteSessionsTool, type DeleteSessionsDeps } from './xdt-helper/delete_sessions.js';
 import { registerProjectManagementTools, type ProjectManagementCallbacks } from './xdt-helper/project_management.js';
 import {
   registerGetCapabilitiesTool,
@@ -733,6 +734,11 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  /**
+   * 批量软删除 session 回调(dry-run + 确认 token)。host 注入后, control 类工具
+   * delete_sessions 会被注册。host 走 sessions:update 业务体写 status=deleted。
+   */
+  deleteSessions?: DeleteSessionsDeps['deleteSessions'];
 }
 
 /**
@@ -824,6 +830,12 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.deleteSessions) {
+    registerDeleteSessionsTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      deleteSessions: deps.deleteSessions,
+    });
   }
 
   // History 类工具: 仅 host 注入了 history 回调时注册。

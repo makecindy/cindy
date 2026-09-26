@@ -259,6 +259,11 @@ export function getDesktopMcpToolApprovalPolicy(
       return 'prompt-each-time';
     }
     if (action === 'move_session' || action === 'publish_skill') return 'prompt-each-time';
+    // 真删(dry_run=false)软删除会话并回收其 worktree,GUI 里是用户亲手确认的动作;
+    // 只有显式预览(省略或 dry_run=true,不落库)保持静默,其余形状一律逐次确认。
+    if (action === 'delete_sessions' && (!args || (args.dry_run !== undefined && args.dry_run !== true))) {
+      return 'prompt-each-time';
+    }
   }
   // Choosing a new Worker root delegates filesystem access. Do not let the
   // trusted-server shortcut or a cached server grant authorize another root.
