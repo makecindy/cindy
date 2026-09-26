@@ -402,22 +402,21 @@ function launch(scope: Scope, record: MigrationHandoff & { kind: 'outgoing' }) {
             scope,
           );
           if (result.stage !== 'active') throw new Error('MIGRATION_TARGET_NOT_READY');
+          // Keep the replayable moved stage until local transfer cleanup succeeds.
+          // A restart retries activation idempotently before repeating this cleanup.
+          const directory = path.join(scope.root, 'outgoing', r.id);
+          const keys = JSON.parse(
+            readAtomicFileSync(path.join(directory, 'transfer-keys.json')) ?? '[]',
+          ) as string[];
+          for (const key of keys) {
+            scope.assertCurrent();
+            // Existing OSS lifecycle rules backstop best-effort remote deletion.
+            await removeRemote(key);
+          }
+          scope.assertCurrent();
+          await fs.rm(directory, { recursive: true, force: true });
         },
       });
-      if (current.stage === 'complete') {
-        scope.assertCurrent();
-        // Delete only this operation's transfer artifacts; never its workingDir or task row.
-        const directory = path.join(scope.root, 'outgoing', current.id);
-        const keys = JSON.parse(
-          readAtomicFileSync(path.join(directory, 'transfer-keys.json')) ?? '[]',
-        ) as string[];
-        for (const key of keys) {
-          scope.assertCurrent();
-          await removeRemote(key);
-        }
-        scope.assertCurrent();
-        await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
-      }
     },
   )
     .catch((error) => {

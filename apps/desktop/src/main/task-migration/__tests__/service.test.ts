@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   imports: vi.fn(),
   snapshot: vi.fn(),
   close: vi.fn(),
+  remove: vi.fn(),
   loseReply: '' as string,
   importsFail: false,
   siblingRunning: false,
@@ -97,7 +98,7 @@ vi.mock('../../device-link', () => ({
 vi.mock('../../device-link/filePeer', () => ({ tryUploadPeerAttachment: async () => null }));
 vi.mock('../../device-link/mediaTransfer', () => ({
   MAX_MEDIA_BYTES: 2 * 1024 ** 3,
-  removeRemote: async () => {},
+  removeRemote: (key: string) => state.remove(key),
   uploadLocalFile: async (file: string) => {
     const bytes = await fs.readFile(file),
       key = `migration/${state.files.size}`;
@@ -208,6 +209,7 @@ describe('durable cross-machine handoff', () => {
     state.imports.mockClear();
     state.snapshot.mockClear();
     state.close.mockClear();
+    state.remove.mockReset();
     state.loseReply = '';
     state.importsFail = false;
     state.siblingRunning = false;
@@ -250,6 +252,21 @@ describe('durable cross-machine handoff', () => {
   });
   const start = () =>
     requestTaskMigration({ action: 'start', sessionId: 'fork', targetDeviceId: 'B' });
+
+  it('keeps cleanup failures replayable without importing again or touching source files', async () => {
+    state.remove.mockRejectedValueOnce(new Error('cleanup interrupted'));
+    await start();
+    const interrupted = await settled();
+    expect(interrupted.stage).toBe('moved');
+    const directory = path.join(migrationScope().root, 'outgoing', interrupted.targetSessionId!);
+    expect(await fs.readdir(directory)).toContain('workspace.json');
+    const imports = state.imports.mock.calls.length;
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    expect((await settled()).stage).toBe('complete');
+    await expect(fs.stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(state.imports.mock.calls.length).toBe(imports);
+    expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
+  });
 
   it('blocks current sharing but permits migration after all sharing identities are closed', async () => {
     state.sharingLatest = [

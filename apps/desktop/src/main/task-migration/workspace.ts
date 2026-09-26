@@ -99,17 +99,23 @@ export async function snapshotWorkspace(
     const entries = await gitExec(['ls-files', '--stage', '-z'], root);
     if (entries.stdout.split('\0').some((entry) => entry.startsWith('160000 ')))
       throw new Error('MIGRATION_SUBMODULE_UNSUPPORTED');
-    baseline = await captureWorktreeContent(root, `refs/cindy/migration/${id}`);
-    git = {
-      head: baseline.head,
-      headRef: baseline.headRef ?? null,
-      indexTree: baseline.indexTree,
-      ref: baseline.ref,
-    };
-    await gitExec(
-      ['bundle', 'create', path.join(directory, 'repository.bundle'), baseline.ref],
-      root,
-    );
+    const ref = `refs/cindy/migration/${id}`;
+    try {
+      baseline = await captureWorktreeContent(root, ref);
+      git = {
+        head: baseline.head,
+        headRef: baseline.headRef ?? null,
+        indexTree: baseline.indexTree,
+        ref: baseline.ref,
+      };
+      await gitExec(
+        ['bundle', 'create', path.join(directory, 'repository.bundle'), baseline.ref],
+        root,
+      );
+    } finally {
+      // The bundle owns these objects now; never retain recovery commits in the source.
+      await gitExec(['update-ref', '-d', ref], root);
+    }
   } catch (error) {
     // Only a positive "not a repository" verdict means plain directory. Other Git failures are real.
     if (!(error instanceof GitExecError) || !error.stderr.includes('not a git repository'))
@@ -217,7 +223,7 @@ export async function restoreWorkspace(
     // Rebuild Git metadata locally; never copy source .git links, hooks, credentials or config.
     await gitExec(['init', '--template=', target], directory);
     await gitExec(
-      ['fetch', '--no-tags', path.join(directory, 'repository.bundle'), `${git.ref}:${git.ref}`],
+      ['fetch', '--no-tags', '--no-write-fetch-head', path.join(directory, 'repository.bundle'), git.ref],
       target,
     );
     if (git.headRef) {

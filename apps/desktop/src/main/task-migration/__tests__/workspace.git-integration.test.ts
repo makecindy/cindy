@@ -95,7 +95,9 @@ describe('cross-machine project snapshots', () => {
     const unstaged = await git(linked, 'diff');
     const head = await git(linked, 'rev-parse', 'HEAD');
     const snapshot = await snapshotWorkspace(linked, artifacts, randomUUID());
+    expect(await git(linked, 'for-each-ref', 'refs/cindy/migration')).toBe('');
     await restoreWorkspace(snapshot, artifacts, target);
+    expect(await git(target, 'for-each-ref', 'refs/cindy/migration')).toBe('');
     expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
     expect(await git(target, 'symbolic-ref', 'HEAD')).toBe('refs/heads/fork\n');
     expect(await git(target, 'diff', '--cached')).toBe(staged);
@@ -115,6 +117,19 @@ describe('cross-machine project snapshots', () => {
     );
     expect(await fs.readFile(path.join(target, 'existing'), 'utf8')).toBe('keep');
     expect(await fs.readFile(path.join(source, 'source'), 'utf8')).toBe('copy');
+  });
+  it('releases the source snapshot ref when bundle creation fails', async () => {
+    await git(source, 'init', '-b', 'main');
+    await git(source, 'config', 'user.name', 'Migration test');
+    await git(source, 'config', 'user.email', 'migration@localhost');
+    await fs.writeFile(path.join(source, 'tracked'), 'keep');
+    await git(source, 'add', '.');
+    await git(source, 'commit', '-m', 'fixture');
+    await fs.mkdir(path.join(artifacts, 'repository.bundle'));
+    await expect(snapshotWorkspace(source, artifacts, randomUUID())).rejects.toThrow();
+    expect(await git(source, 'for-each-ref', 'refs/cindy/migration')).toBe('');
+    expect(await fs.readFile(path.join(source, 'tracked'), 'utf8')).toBe('keep');
+    expect(await git(source, 'status', '--porcelain')).toBe('');
   });
   it('rejects corrupted archives before writing destination files', async () => {
     await fs.writeFile(path.join(source, 'source'), 'copy');
