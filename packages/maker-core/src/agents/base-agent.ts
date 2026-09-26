@@ -904,6 +904,16 @@ export interface AgentDeps {
   ) => PiGatewayModelSpec | null | undefined;
 
   /**
+   * Pi-only：host 已学到（自愈写入）的 per-model compat 覆盖。写 models.json 时
+   * 合并进该原生 provider 模型的 compat；undefined = 无覆盖。不改变路由与凭证，
+   * 只关掉上游已明确拒收的可选字段（如 supportsLongCacheRetention: false）。
+   */
+  resolvePiNativeCompatOverride?: (
+    providerId: string,
+    modelId: string,
+  ) => Record<string, unknown> | undefined;
+
+  /**
    * Host-provided capability descriptor additions.
    *
    * This is append-only: additions with ids already present in the agent's built-in

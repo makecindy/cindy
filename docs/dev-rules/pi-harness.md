@@ -370,8 +370,17 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
       `bypassPermissions` 的契约测试已补；Pi bridge 的 auto allow/deny 也用真二进制覆盖。
 - [x] **resume 边界**:已用 Pi v0.82.1 真二进制创建 JSONL，再由 v0.83.0 恢复；
       invalid resume 在适配层先校验文件存在并遵守 CAS，precise rewind/fork 后 resume 有真二进制测试。
-- [x] **prompt cache**:Pi 子进程默认注入 `PI_CACHE_RETENTION=long`；不支持的 provider
-      忽略该选项。已用 ChatGPT 订阅实例确认 `cacheRead` 命中会端到端落库与展示。
+- [x] **prompt cache**:Pi 子进程默认注入 `PI_CACHE_RETENTION=long`；明确拒收该可选字段的
+      provider 由 compat 自愈学习并关掉该字段(见下条)。已用 ChatGPT 订阅实例确认 `cacheRead`
+      命中会端到端落库与展示。
+- [x] **provider compat 自愈**:上游以 `invalid_request_error` 明确拒收某个可选请求字段时
+      (已知形态:Console Go / OpenCode Zen-Go 的 GLM 上游拒收 `prompt_cache_retention`,提示改用
+      `prompt_cache_options`),Pi translator 打稳定 reason `unsupported-request-option`;
+      desktop 把该 provider/model 的 compat 修正(`supportsLongCacheRetention: false`)记入
+      `<userData>/pi-native-compat-overrides.json`,关闭会话后重放同一轮用户消息(Pi 序列化
+      跳过失败轮,等价于重试),重建的 models.json 合并该覆盖(`writeModelsJson`)。
+      只对 `source=desktop` 且失败轮零产出的会话自愈,每个 provider/model 只学一次;
+      已学过的再次失败交常规错误面,绝不循环重试。
 
 ## 7. 上线后路线图(已与 Chris 对齐)
 

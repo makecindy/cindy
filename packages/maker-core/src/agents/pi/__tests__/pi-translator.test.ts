@@ -486,6 +486,39 @@ describe('pi translator', () => {
     }));
   });
 
+  it('classifies a prompt_cache_retention rejection for provider compat self-heal', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage:
+            '400: {"param":"prompt_cache_retention","type":"invalid_request_error","message":'
+            + '"prompt_cache_retention is not supported by this endpoint; use prompt_cache_options"}',
+          usage: { input: 0, output: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          isTerminal: true,
+          reason: 'unsupported-request-option',
+        }),
+      }),
+    ]);
+  });
+
   it.each(['DeepSeek-V4-Flash-0731', 'claude-sonnet-4-6'])('preserves length-limited text and usage for %s', (model) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

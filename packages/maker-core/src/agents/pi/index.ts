@@ -2219,6 +2219,27 @@ export class PiAgent extends BaseAgent {
         : publicModels;
     const gatewayImageInputByModel = new Map<string, boolean>();
     const gatewayApiByModel = new Map<string, PiGatewayApi>();
+    // 自愈学到的 per-model compat 覆盖：按「会话/目录 provider 身份 × wire/公开 model id」
+    // 逐对探测（BYOM 运行时 id 是 `cindy-byom-*`、订阅模型有 wireId 分叉，记录键不一定与
+    // 序列化键同名）。只补 compat，不动路由与凭证。
+    const resolveCompatOverride = (
+      providerIds: Array<string | null | undefined>,
+      modelIds: Array<string | null | undefined>,
+    ): Record<string, unknown> | undefined => {
+      const seen = new Set<string>();
+      for (const providerId of providerIds) {
+        if (!providerId) continue;
+        for (const modelId of modelIds) {
+          if (!modelId) continue;
+          const pair = `${providerId}\u0000${modelId}`;
+          if (seen.has(pair)) continue;
+          seen.add(pair);
+          const hit = this.deps.resolvePiNativeCompatOverride?.(providerId, modelId);
+          if (hit) return hit;
+        }
+      }
+      return undefined;
+    };
     const models = runtimeModels.flatMap((publicModel: ModelDescriptor) => {
       // availableModels 为跨 provider 拍平的公开能力；BYOM 同 id 冲突时 effort
       // 会按设计收敛成交集。cindy gateway 块则代表内置路由，必须回查其
@@ -2258,6 +2279,15 @@ export class PiAgent extends BaseAgent {
         return [];
       }
       const modelBaseUrl = endpoint ? piGatewayModelBaseUrl(endpoint, api) : undefined;
+      // gateway 路由（cindy 块）同样可能被上游拒收可选字段；自愈结果也必须能落到这里，
+      // 否则该 (provider, model) 的学习额度被消耗却不生效（重启后仍是同一个 400）。
+      // 注意：本块只按会话 provider 身份探测，不含 route/endpoint 维度 —— 同 id 模型
+      // 同时存在于 BYOM 与网关时，可能把一侧学到的 compat 一并写进未使用的块（只损失
+      // 一个可选缓存提示，无功能影响）。
+      const gatewayCompat = {
+        ...(resolvedSpec?.compat ?? {}),
+        ...(resolveCompatOverride([gatewayProviderId], [m.id, publicModel.id]) ?? {}),
+      };
       gatewayApiByModel.set(m.id, api);
       // Missing capability metadata must not disable newly discovered vision models.
       // Explicit text-only declarations still take precedence over this default.
@@ -2280,7 +2310,7 @@ export class PiAgent extends BaseAgent {
             }
           : {}),
         ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
-        ...(resolvedSpec?.compat ? { compat: structuredClone(resolvedSpec.compat) } : {}),
+        ...(Object.keys(gatewayCompat).length > 0 ? { compat: structuredClone(gatewayCompat) } : {}),
         ...(resolvedSpec?.samplingParams
           ? { samplingParams: structuredClone(resolvedSpec.samplingParams) }
           : {}),
@@ -2332,8 +2362,19 @@ export class PiAgent extends BaseAgent {
           m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000,
           this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, m.id) ?? 0,
         );
+        // 自愈写回的 per-model compat 覆盖（如上游拒收长缓存提示后关掉
+        // supportsLongCacheRetention）与目录/bundled compat 合并；覆盖字段最少，
+        // 不改路由与凭证。
+        const wireModelId = m.wireId ?? m.id;
+        const compat = {
+          ...(m.compat ?? {}),
+          ...(resolveCompatOverride(
+            [np.sourceProviderId ?? np.id, np.id],
+            [wireModelId, m.id],
+          ) ?? {}),
+        };
         return {
-          id: m.wireId ?? m.id,
+          id: wireModelId,
           name: m.name ?? m.id,
           ...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
           ...(m.headers && Object.keys(m.headers).length > 0 ? { headers: m.headers } : {}),
@@ -2344,7 +2385,7 @@ export class PiAgent extends BaseAgent {
           contextWindow,
           maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : piMaxTokensFallback(contextWindow),
           ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
-          ...(m.compat ? { compat: structuredClone(m.compat) } : {}),
+          ...(Object.keys(compat).length > 0 ? { compat: structuredClone(compat) } : {}),
           ...(m.samplingParams ? { samplingParams: structuredClone(m.samplingParams) } : {}),
         };
       });

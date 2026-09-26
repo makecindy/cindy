@@ -1052,6 +1052,129 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("merges a learned native compat override into models.json", async () => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({
+          authenticated: true,
+          identity: "custom",
+          authSource: "api-key" as const,
+        }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: "http://127.0.0.1:9988" },
+      binaryPath: path.join(agentHome, "pi"),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: "glm-5.3-flash",
+            displayName: "GLM-5.3-Flash",
+            contextWindow: 1_000_000,
+            efforts: ["low", "high", "max"],
+            defaultEffort: "high",
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeCompatOverride: (providerId, modelId) =>
+        (modelId === "glm-5.3-flash" || modelId === "glm-5.3") &&
+        (providerId === "opencode-go" || providerId === "cindy-byom-opencode-go")
+          ? { supportsLongCacheRetention: false }
+          : undefined,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: "opencode-go",
+            sourceProviderId: "opencode-go",
+            name: "OpenCode Go",
+            baseUrl: "https://opencode.ai/zen/go/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "glm-5.3-flash",
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 1_000_000,
+                maxTokens: 131_072,
+                compat: {
+                  supportsStore: false,
+                  supportsDeveloperRole: false,
+                  maxTokensField: "max_tokens",
+                },
+              },
+              {
+                // wireId 与目录 id 分叉：学习记录按目录 id 写，序列化按 wireId 写。
+                id: "glm-5.3",
+                wireId: "glm-5.3-wire",
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 1_000_000,
+                maxTokens: 131_072,
+              },
+            ],
+          },
+          {
+            // BYOM：models.json 键是命名空间化 runtime id，会话/自愈键是 sourceProviderId。
+            id: "cindy-byom-opencode-go",
+            sourceProviderId: "opencode-go",
+            name: "OpenCode Go (BYOM)",
+            baseUrl: "https://opencode.ai/zen/go/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "glm-5.3-flash",
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 1_000_000,
+                maxTokens: 131_072,
+              },
+            ],
+          },
+        ],
+        env: {},
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: "pi-native-compat-override",
+      workingDir: cwd,
+      model: "glm-5.3-flash",
+      providerId: "opencode-go",
+    });
+    const models = JSON.parse(
+      readFileSync(
+        path.join(captured.env.PI_CODING_AGENT_DIR as string, "models.json"),
+        "utf8",
+      ),
+    ) as { providers: Record<string, { models?: Array<Record<string, unknown>> }> };
+    expect(models.providers["opencode-go"]?.models).toEqual([
+      expect.objectContaining({
+        id: "glm-5.3-flash",
+        compat: expect.objectContaining({
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          maxTokensField: "max_tokens",
+          supportsLongCacheRetention: false,
+        }),
+      }),
+      // wireId 分叉时用目录 id 命中学到的覆盖。
+      expect.objectContaining({
+        id: "glm-5.3-wire",
+        compat: { supportsLongCacheRetention: false },
+      }),
+    ]);
+    // BYOM 命名空间 provider 用 sourceProviderId 命中同一条学习结果。
+    expect(models.providers["cindy-byom-opencode-go"]?.models).toEqual([
+      expect.objectContaining({
+        id: "glm-5.3-flash",
+        compat: { supportsLongCacheRetention: false },
+      }),
+    ]);
+    await handle.close();
+  });
+
   it("routes a persisted BYOM id through its namespaced PI runtime provider", async () => {
     const authProviderIds: Array<string | null | undefined> = [];
     const deps: AgentDeps = {
@@ -3210,6 +3333,61 @@ describe("Pi provider-aware model routing", () => {
       xhigh: null,
       max: null,
     });
+    await handle.close();
+  });
+
+  it('merges a learned compat override into the gateway models.json block', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'z-ai/glm-5.3-flash',
+          displayName: 'GLM 5.3 Flash',
+          contextWindow: 200_000,
+          efforts: ['low', 'high'],
+          defaultEffort: 'high',
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelSpec: () => ({
+        api: 'openai-completions',
+        compat: { supportsStore: false },
+      }),
+      resolvePiNativeCompatOverride: (providerId, modelId) =>
+        providerId === 'xd' && modelId === 'z-ai/glm-5.3-flash'
+          ? { supportsLongCacheRetention: false }
+          : undefined,
+    };
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'gateway-compat-override',
+      workingDir: cwd,
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'high',
+    });
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as {
+      providers: Record<string, { models?: Array<{ id: string; compat?: Record<string, unknown> }> }>;
+    };
+    // gateway 路由也必须吃上自愈结果，否则学习一次却不生效、还被防循环闩锁永久关闭。
+    expect(models.providers.cindy?.models).toEqual([
+      expect.objectContaining({
+        id: 'z-ai/glm-5.3-flash',
+        compat: expect.objectContaining({
+          supportsStore: false,
+          supportsLongCacheRetention: false,
+        }),
+      }),
+    ]);
     await handle.close();
   });
 
