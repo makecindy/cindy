@@ -899,6 +899,25 @@ describe('Bot canonical Session lifecycle', () => {
     expect(loaded.identitySource).toContain('Identity written again');
   });
 
+  it('adopts a kept hand-edited USER.md in the same reconcile that re-seeds a missing SOUL.md', async () => {
+    const created = await invoke('local-db:bots:create', {
+      id: 'partial-home', name: 'Partial Home', identitySource: 'Stored identity',
+      userContextSource: 'Stored user context',
+    });
+    const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', created.id);
+    rmSync(join(home, 'SOUL.md'));
+    writeFileSync(join(home, 'memories', 'USER.md'), 'User context written in an editor');
+    const canonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: created.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    expect(canonical.canonicalSessionId).toBeTruthy();
+    const loaded = await invoke('local-db:bots:get', created.id);
+    expect(loaded).toMatchObject({
+      currentVersion: 2, identitySource: 'Stored identity', userContextSource: 'User context written in an editor',
+    });
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe('Stored identity');
+  });
+
   it('seeds a never-created Bot Home on an unrelated save without touching an existing one', async () => {
     const created = await invoke('local-db:bots:create', {
       id: 'legacy-home', name: 'Legacy Home', identitySource: 'Stored identity',
