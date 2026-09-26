@@ -18,6 +18,9 @@ const state = vi.hoisted(() => ({
   snapshot: vi.fn(),
   close: vi.fn(),
   remove: vi.fn(),
+  boundaryBusy: false,
+  drain: vi.fn(),
+  exported: vi.fn(),
   loseReply: '' as string,
   importsFail: false,
   siblingRunning: false,
@@ -137,6 +140,7 @@ vi.mock('../../worktree/resourceLock', async original => ({
 }));
 vi.mock('../../session-share/sessionShareExport', () => ({
   exportSessionShare: async ({ targetPath }: { targetPath: string }) => {
+    state.exported();
     await fs.writeFile(targetPath, 'conversation');
     return { status: 'ok', fidelity: 'full', mediaMissing: false };
   },
@@ -197,7 +201,11 @@ async function settled(sessionId = 'fork') {
 }
 describe('durable cross-machine handoff', () => {
   beforeEach(async () => {
-    registerTaskMigrationIpc((id, dir, authority) => moveSessionProjectFromHost(() => false, id, dir, authority));
+    registerTaskMigrationIpc((id, dir, authority) => moveSessionProjectFromHost(() => false, id, dir, authority),
+      { isBusy: () => state.boundaryBusy, drain: state.drain });
+    state.boundaryBusy = false;
+    state.drain.mockReset();
+    state.exported.mockClear();
     state.root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-migration-service-')),
     );
@@ -252,6 +260,23 @@ describe('durable cross-machine handoff', () => {
   });
   const start = () =>
     requestTaskMigration({ action: 'start', sessionId: 'fork', targetDeviceId: 'B' });
+
+  it('rejects an idle runtime whose terminal delivery or accepted queue is still pending', async () => {
+    state.boundaryBusy = true;
+    await expect(start()).rejects.toThrow('MIGRATION_TASK_RUNNING');
+    expect(state.close).not.toHaveBeenCalled();
+    expect(state.exported).not.toHaveBeenCalled();
+  });
+  it('waits for pending message persistence before exporting the conversation', async () => {
+    let release!: () => void;
+    state.drain.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    await start();
+    await vi.waitFor(() => expect(state.drain).toHaveBeenCalledOnce());
+    expect(state.exported).not.toHaveBeenCalled();
+    release();
+    expect((await settled()).stage).toBe('complete');
+    expect(state.exported).toHaveBeenCalledOnce();
+  });
 
   it('keeps cleanup failures replayable without importing again or touching source files', async () => {
     state.remove.mockRejectedValueOnce(new Error('cleanup interrupted'));

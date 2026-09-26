@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  assertWritable: vi.fn(),
   previewRewindAtMessage: vi.fn(),
   commitRewindAtMessage: vi.fn(),
   drainPersistQueue: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock('electron', () => ({
     },
   },
 }));
+vi.mock('../../task-migration/journal', () => ({ assertTaskMigrationWritable: mocks.assertWritable }));
 
 vi.mock('../../maker-orchestration/rewind.js', () => ({
   previewRewindAtMessage: mocks.previewRewindAtMessage,
@@ -73,6 +75,7 @@ function sessionRunningError(): Error & { code: 'SESSION_RUNNING' } {
 describe('maker rewind IPC stop-then-rewind', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.assertWritable.mockReset();
     mocks.handlers.clear();
     mocks.drainPersistQueue.mockResolvedValue(undefined);
     mocks.withSessionInputStoppedForRewind.mockImplementation(
@@ -99,6 +102,25 @@ describe('maker rewind IPC stop-then-rewind', () => {
     }
     await rewinding;
     expect(mocks.commitRewindAtMessage).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a moved task before stopping input or restoring files', async () => {
+    mocks.assertWritable.mockImplementation(() => { throw new Error('MIGRATION_TASK_MOVED'); });
+    const handler = mocks.handlers.get(MAKER_INVOKE.REWIND_COMMIT)!;
+    await expect(handler({}, 'session-1', 'message-1', { stopIfRunning: true })).rejects.toThrow('MIGRATION_TASK_MOVED');
+    expect(mocks.withSessionInputStoppedForRewind).not.toHaveBeenCalled();
+    expect(mocks.commitRewindAtMessage).not.toHaveBeenCalled();
+  });
+  it('rechecks migration after waiting for the shared commit lock', async () => {
+    const release = await acquireSendToSessionLock('session-1');
+    const handler = mocks.handlers.get(MAKER_INVOKE.REWIND_COMMIT)!;
+    const rewinding = handler({}, 'session-1', 'message-1');
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    mocks.assertWritable.mockImplementation(() => { throw new Error('MIGRATION_TASK_BUSY'); });
+    const rejected = expect(rewinding).rejects.toThrow('MIGRATION_TASK_BUSY');
+    release();
+    await rejected;
+    expect(mocks.commitRewindAtMessage).not.toHaveBeenCalled();
   });
 
   it('runs normal rewind inside the stopped input boundary when requested', async () => {

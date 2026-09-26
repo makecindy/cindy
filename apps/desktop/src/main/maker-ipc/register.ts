@@ -3539,6 +3539,13 @@ export function isSessionTurnPendingCompletion(sessionId: string): boolean {
   return sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
 }
 
+/** Includes accepted input that has not reached the durable queue snapshot yet. */
+export function isSessionTaskMigrationBusy(sessionId: string): boolean {
+  return isSessionTurnPendingCompletion(sessionId)
+    || agentInputCoordinatorHolder?.hasActiveTurnForRewind(sessionId) === true
+    || agentInputCoordinatorHolder?.hasPendingQueuedWork(sessionId) === true;
+}
+
 /**
  * 数据 owner 边界(登出 / 切账号)时丢弃跨 owner 的延迟 Codex 重启登记。
  * IPC handler 与本模块 holder 随进程存活,而具体 Maker 在 owner 边界被整体替换
@@ -10283,11 +10290,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
     if (params.authorizationGuard) {
       await commitBotAuthorizationInput(params.authorizationGuard, () => {
+        assertTaskMigrationWritable(params.targetSessionId);
         inputCoordinator.enqueue(params.targetSessionId, queued);
       });
     } else {
+      assertTaskMigrationWritable(params.targetSessionId);
       inputCoordinator.enqueue(params.targetSessionId, queued);
     }
+    await awaitAgentInputQueueSnapshotPersistence(params.targetSessionId);
     log.info('send_to_session queued while target busy', {
       targetSessionId: params.targetSessionId,
       clientId: params.clientId,
@@ -12740,6 +12750,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const compactedRuntime = maker.getSession(sessionId);
     if (compactedRuntime) await refreshBotCapabilityEpochBeforeSend(compactedRuntime);
     return await withSendToSessionLock(sessionId, async () => {
+      await assertTaskMigrationInputAllowed(sessionId);
       await reconcileBotModelRoute(sessionId, true);
       const [botInput] = await getDbClient()
         .drizzle.select({

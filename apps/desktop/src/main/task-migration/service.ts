@@ -56,6 +56,7 @@ import { sendParts, receiveParts } from './transferParts';
 type MoveProject = (sessionId: string, workingDir: string | null, assertAuthority: () => void) => ReturnType<typeof moveSessionProjectFromHost>;
 // Bootstrap supplies the existing business handler; importing maker IPC here creates a cycle.
 let moveProjectOnHost: MoveProject | undefined;
+let sourceBoundary: { isBusy(sessionId: string): boolean; drain(): Promise<void> } | undefined;
 const running = new Set<string>();
 const errorCode = (error: unknown): string => {
   if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') return 'MIGRATION_NO_SPACE';
@@ -191,7 +192,9 @@ async function assertSource(scope: Scope, sessionId: string): Promise<SourceSess
     if (!Array.isArray(messages) || messages.length) throw new Error('MIGRATION_TASK_QUEUED');
   }
   const live = getMakerIfReady()?.getSession(sessionId);
-  if (live?.isTurnRunning()) throw new Error('MIGRATION_TASK_RUNNING');
+  if (!sourceBoundary) throw new Error('MIGRATION_HOST_NOT_READY');
+  if (live?.isTurnRunning() || sourceBoundary.isBusy(sessionId))
+    throw new Error('MIGRATION_TASK_RUNNING');
   return row;
 }
 
@@ -205,7 +208,7 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
     // Fork siblings can share cwd. Never snapshot while any known task is writing that tree.
     const sourceKey = await physicalWorktreeKey(record.workingDir);
     for (const session of getMakerIfReady()?.listActiveSessions() ?? []) {
-      if (!session.isTurnRunning()) continue;
+      if (!session.isTurnRunning() && !sourceBoundary!.isBusy(session.id)) continue;
       const row = await scope.db.queryOne<{
         workingDir: string | null;
         remoteHostId: string | null;
@@ -226,7 +229,9 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
     scope.assertCurrent();
     const maker = getMakerIfReady();
     if (maker?.getSession(record.sessionId)) await maker.closeSession(record.sessionId);
+    await sourceBoundary!.drain();
     scope.assertCurrent();
+    if (sourceBoundary!.isBusy(record.sessionId)) throw new Error('MIGRATION_TASK_RUNNING');
     const result = await exportSessionShare({
       sessionId: record.sessionId,
       targetPath: path.join(directory, 'session.cshare'),
@@ -727,8 +732,12 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
   );
 }
 
-export function registerTaskMigrationIpc(moveProject: MoveProject) {
+export function registerTaskMigrationIpc(
+  moveProject: MoveProject,
+  boundary: { isBusy(sessionId: string): boolean; drain(): Promise<void> },
+) {
   moveProjectOnHost = moveProject;
+  sourceBoundary = boundary;
   ipcMain.handle(TASK_MIGRATION_LOCAL_CHANNEL, async (event, device: unknown, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
     const request = parseTaskMigrationRequest(raw);

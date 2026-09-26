@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { withTaskMigrationInputAcceptance } from '../inputGuard';
 import { setSessionRouteLockImplementation, withSessionRouteLock } from '../../localDb/sessionRouteLock';
-import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { withSendToSessionLock, trackSendToSessionLockRun } from '../../maker-ipc/sendToSessionLock';
 
 const state = vi.hoisted(() => ({ migrating: false }));
 vi.mock('../journal', () => ({
@@ -25,6 +25,18 @@ afterEach(() => {
   setSessionRouteLockImplementation(null);
 });
 describe('migration and final input acceptance', () => {
+  it('shares the route lock with chain-form programmatic sends', async () => {
+    setSessionRouteLockImplementation(withSendToSessionLock);
+    const gate = barrier();
+    const sending = trackSendToSessionLockRun('task', gate.promise);
+    const start = vi.fn();
+    const migration = withSessionRouteLock('task', async () => { start(); });
+    await Promise.resolve();
+    expect(start).not.toHaveBeenCalled();
+    gate.release();
+    await Promise.all([sending, migration]);
+    expect(start).toHaveBeenCalledOnce();
+  });
   it('rejects prepared input when migration wins the route lock', async () => {
     setSessionRouteLockImplementation(withSendToSessionLock);
     const gate = barrier();
