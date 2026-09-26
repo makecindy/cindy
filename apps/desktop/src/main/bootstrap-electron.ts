@@ -425,7 +425,7 @@ import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
 import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
-import { registerLocalDbIpc } from './localDb/ipc/registerAll';
+import { ensureRegisteredLocalDbOwnerReady, registerLocalDbIpc } from './localDb/ipc/registerAll';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
 import { getSessionRowSnapshot, resumeDeletedPiSubagentCleanup } from './localDb/ipc/sessions';
@@ -1060,6 +1060,7 @@ import {
   ownerScopedUserDataPath,
   setAppSessionCommitBoundaryHook,
 } from './appSessionState.js';
+import { withGhostSkillProjectionOwnerCommit } from './authBoundaryQuarantine.js';
 import {
   resolveNewMakerMenuCommand,
   type ApplicationMenuCommand,
@@ -2127,6 +2128,7 @@ authManager.setAccountSwitchTeardown(async () => {
   await teardownAuthAccountBoundary('runtime-replacement-account-switch');
 });
 authManager.setAuthSessionTeardown(teardownAuthAccountBoundary);
+authManager.setAuthSessionRestore(restoreRetainedAuthAccountRuntime);
 authManager.setProjectionRepairTeardown(teardownGhostProjectionBoundary);
 
 // A launch fence left by the host we just replaced (or by one that crashed
@@ -2592,7 +2594,15 @@ setAppSessionCommitBoundaryHook(() => {
   clearAllSessionRuntimeAxes();
   clearAllSessionRuntimeControlStates();
 });
-authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId }) => {
+async function runBootstrapStableOwnerPostCommitTask({
+  reason,
+  scopeKey,
+  dataOwnerId,
+}: {
+  reason: string;
+  scopeKey: string;
+  dataOwnerId: string | null;
+}) {
   const builtinOutcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
   if (builtinOutcome === 'deferred') return builtinOutcome;
 
@@ -2617,7 +2627,76 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
   }
 
   return needsRetry ? 'failed' : deferred ? 'deferred' : 'completed';
-});
+}
+
+/**
+ * Rebuild every owner-scoped runtime torn down by an expiry that a shared
+ * userData writer superseded before the signed-out commit. A PI teardown abort
+ * can leave the same-owner DB alive after provider readiness and the other
+ * owner runtimes have already stopped. Complete that interrupted teardown under
+ * a fresh boundary before reusing the normal LocalDB owner-ready coordinator;
+ * this forces a new DB lifecycle and therefore re-arms Maker/provider
+ * readiness, IM, scheduler, embedding, input slots and Learn. The stable-owner
+ * task then restores the Ghost projection and its owner-scoped follow-ups even
+ * though the app session generation itself did not change.
+ */
+async function restoreRetainedAuthAccountRuntime(input: {
+  ownerId: string;
+  reason: string;
+}): Promise<void> {
+  const session = getActiveAppSession();
+  if (
+    isAppSessionBoundaryPending() ||
+    session.mode !== 'cloud' ||
+    session.dataOwnerId !== input.ownerId
+  ) {
+    throw new Error('retained auth owner changed before runtime restoration');
+  }
+
+  const retainedScopeKey = activeOwnerScopeKey();
+  await withGhostSkillProjectionOwnerCommit({
+    previousOwnerId: input.ownerId,
+    nextOwnerId: input.ownerId,
+    prepareTransition: async () => {
+      if (accountBoundaryAbortedMidTeardown === null) return;
+      const releaseBoundary = beginAppSessionBoundary();
+      try {
+        await teardownAuthAccountBoundary(`${input.reason}-complete-teardown`);
+      } finally {
+        releaseBoundary();
+      }
+    },
+    prepareCommit: async () => {
+      const retainedSession = getActiveAppSession();
+      if (
+        retainedScopeKey !== activeOwnerScopeKey() ||
+        retainedSession.mode !== 'cloud' ||
+        retainedSession.dataOwnerId !== input.ownerId
+      ) {
+        throw new Error('retained auth owner changed while restoring projection boundary');
+      }
+    },
+    commit: async () => {
+      const dbReady = await ensureRegisteredLocalDbOwnerReady(input.ownerId);
+      if (!dbReady.ready) {
+        throw new Error(`retained auth database restore failed: ${dbReady.error.message}`);
+      }
+    },
+  });
+
+  // The unified owner commit clears process/durable quarantine first. Only then
+  // may bundled projection repair, market sync and OAuth reconciliation run.
+  const outcome = await runBootstrapStableOwnerPostCommitTask({
+    reason: input.reason,
+    scopeKey: activeOwnerScopeKey(),
+    dataOwnerId: input.ownerId,
+  });
+  if (outcome === 'failed' || outcome === 'deferred') {
+    throw new Error(`retained auth post-commit restore ${outcome}`);
+  }
+}
+
+authManager.setStableOwnerPostCommitTask(runBootstrapStableOwnerPostCommitTask);
 
 // ── Custom protocol registration (image-local-cache M2) ──────────────────
 // MUST run before app.whenReady(), and MUST be a SINGLE call:

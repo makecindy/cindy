@@ -67,13 +67,12 @@ describe('desktop auth session-expiry detection', () => {
     expect(body.indexOf('removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);')).toBeGreaterThan(guardIdx);
     expect(body.indexOf('removeSafe(LEGACY_REFRESH_TOKEN_KEY);')).toBeGreaterThan(guardIdx);
 
-    // expireRuntimeAuth 必须把 preserve 选项透传给 clearAuth。
+    // expireRuntimeAuth 已先 CAS 删除本轮被拒绝的 generation；owner teardown 中的
+    // clearAuth 必须无条件保留磁盘表示，避免删掉等待期间写入的替换 token。
     const expireStart = authSource.indexOf('async function expireRuntimeAuth(');
     const expireEnd = authSource.indexOf('if (accountSwitchTeardown)', expireStart);
     const expireBody = authSource.slice(expireStart, expireEnd);
-    expect(expireBody).toContain(
-      'preservePersistedRefreshToken: opts.preservePersistedRefreshToken',
-    );
+    expect(expireBody).toContain('preservePersistedRefreshToken: true');
   });
 
   it('isPersistedSecretAbsent 只在文件确定不存在(ENOENT)时判缺席', () => {
@@ -103,8 +102,10 @@ describe('desktop auth session-expiry detection', () => {
     const body = authSource.slice(start, end);
 
     expect(body).toContain(
-      'await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));',
+      'await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code), {',
     );
+    expect(body).toContain('rejectedRealm: refreshRealm');
+    expect(body).toContain('rejectedRefreshTokens: rejectedTokens');
   });
 
   it('session-expired 广播携带客户端内部分类 reason,不透传服务端原文', () => {

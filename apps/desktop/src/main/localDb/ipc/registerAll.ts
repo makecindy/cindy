@@ -39,13 +39,25 @@ import { registerBotRemoteResourceProvider } from './botRemoteResourceProvider';
 
 import { createLogger } from '../../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../../devStartupStatus';
-import { createOwnerEnsureCoordinator } from './ownerEnsureCoordinator';
+import { createOwnerEnsureCoordinator, type OwnerEnsureResult } from './ownerEnsureCoordinator';
 import { reconcileSessionMediaRefsForDeletedSessions } from '../../cindy-media/sessionCleanup';
 import { reconcileMediaRefCompensationsForOwner } from '../../cindy-media/refCompensationJournal';
 import { setSessionRouteLockImplementation } from '../sessionRouteLock';
 
 const log = createLogger('registerAll');
 const MEDIA_REF_COMPENSATION_BUSY_RETRY_MS = 12_000;
+let registeredOwnerEnsureReady: ((ownerId: string) => Promise<OwnerEnsureResult>) | null = null;
+
+/** Re-run the same complete owner-ready path used by renderer initialization. */
+export function ensureRegisteredLocalDbOwnerReady(ownerId: string): Promise<OwnerEnsureResult> {
+  if (!registeredOwnerEnsureReady) {
+    return Promise.resolve({
+      ready: false,
+      error: { code: 'DB_INIT_FAILED', message: 'local database IPC is not registered' },
+    });
+  }
+  return registeredOwnerEnsureReady(ownerId);
+}
 
 function startMediaRefCompensationReconcile(
   userId: string,
@@ -201,6 +213,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
       await opts.discardStaleOwner?.(userId);
     },
   });
+  registeredOwnerEnsureReady = runEnsureReady;
   ipcMain.handle('local-db:ensure-ready', async (_e, userId: unknown) => {
     const startedAt = performance.now();
     log.info(
