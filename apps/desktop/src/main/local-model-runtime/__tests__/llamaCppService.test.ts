@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   killTree: vi.fn(),
   readdir: vi.fn(),
   readFile: vi.fn(),
+  stat: vi.fn(),
 }));
 vi.mock('../../scheduler-host/proc-util.js', () => ({ killProcessTree: mocks.killTree }));
 vi.mock('node:fs/promises', async (original) => ({
@@ -18,6 +19,7 @@ vi.mock('node:fs/promises', async (original) => ({
   rename: mocks.rename,
   readdir: mocks.readdir,
   readFile: mocks.readFile,
+  stat: mocks.stat,
 }));
 vi.mock('../../reviewer/reviewOwnerLiveness.js', () => ({
   startReviewOwnerLiveness: async () => ({
@@ -57,6 +59,7 @@ beforeEach(async () => {
   mocks.rename.mockImplementation(fs.rename);
   mocks.readdir.mockImplementation(fs.readdir);
   mocks.readFile.mockImplementation(fs.readFile);
+  mocks.stat.mockImplementation(fs.stat);
   const proc = await vi.importActual<typeof import('../../scheduler-host/proc-util.js')>(
     '../../scheduler-host/proc-util.js',
   );
@@ -75,6 +78,59 @@ afterEach(async () => {
 });
 
 describe('managed llama.cpp model lifecycle', () => {
+  it.each(
+    ['EACCES', 'EPERM', 'EIO'].flatMap((code) =>
+      ['manifest', 'binary'].map((target) => ({ code, target })),
+    ),
+  )(
+    'propagates $code from $target through status, startup and install, then recovers',
+    async ({ code, target }) => {
+      const runtime = path.join(root, 'llamacpp-runtime');
+      await mkdir(runtime);
+      const binary = path.join(runtime, 'server');
+      await writeFile(binary, 'stub');
+      await writeFile(
+        path.join(runtime, 'current.json'),
+        JSON.stringify({ binary: 'server', version: 'test' }),
+      );
+      const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      const error = Object.assign(new Error('runtime read failed'), { code });
+      if (target === 'manifest')
+        mocks.readFile.mockImplementation(async (file, ...args) => {
+          if (String(file).endsWith('current.json')) throw error;
+          return fs.readFile(file, ...args);
+        });
+      else
+        mocks.stat.mockImplementation(async (file, ...args) => {
+          if (String(file) === binary) throw error;
+          return fs.stat(file, ...args);
+        });
+      const service = createLlamaCppService(root);
+      await expect(service.snapshot()).rejects.toBe(error);
+      await expect(service.start()).rejects.toBe(error);
+      await expect(service.install()).rejects.toBe(error);
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(mocks.download).not.toHaveBeenCalled();
+      mocks.readFile.mockImplementation(fs.readFile);
+      mocks.stat.mockImplementation(fs.stat);
+      expect(await service.snapshot()).toMatchObject({ installed: true, version: 'test' });
+      await service.install();
+      expect(mocks.download).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    'null',
+    '{',
+    '{}',
+    '{"binary":"missing","version":"test"}',
+    '{"binary":"../outside","version":"test"}',
+  ])('treats absent or invalid runtime manifest as not installed: %s', async (content) => {
+    const service = createLlamaCppService(root);
+    expect((await service.snapshot()).installed).toBe(false);
+    await mkdir(path.join(root, 'llamacpp-runtime'));
+    await writeFile(path.join(root, 'llamacpp-runtime', 'current.json'), content);
+    expect((await service.snapshot()).installed).toBe(false);
+  });
   it.each(['EACCES', 'EPERM', 'EIO'])(
     'rejects incomplete inventory on %s and recovers without losing models',
     async (code) => {

@@ -44,6 +44,9 @@ import {
 } from '../reviewer/reviewOwnerLiveness.js';
 
 const exec = promisify(execFile);
+function isMissingOrCorruptRecord(error: unknown): boolean {
+  return error instanceof SyntaxError || (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+}
 export function managedModelId(repo: string, file: string): string {
   return `model-${createHash('sha256')
     .update(`${repo}/${file.replace(/-\d{5}-of-\d{5}\.gguf$/, '.gguf')}`)
@@ -92,12 +95,13 @@ export function createLlamaCppService(
   async function installed(): Promise<{ binary: string; version: string } | undefined> {
     try {
       const saved = JSON.parse(await readFile(path.join(root, 'current.json'), 'utf8'));
-      if (typeof saved.binary !== 'string' || typeof saved.version !== 'string') return;
+      if (typeof saved?.binary !== 'string' || typeof saved?.version !== 'string') return;
       const binary = path.resolve(root, saved.binary);
       if (!binary.startsWith(`${root}${path.sep}`) || !(await stat(binary)).isFile()) return;
       return { binary, version: saved.version };
-    } catch {
-      return;
+    } catch (error) {
+      if (isMissingOrCorruptRecord(error)) return;
+      throw error;
     }
   }
   async function models(): Promise<LlamaCppModel[]> {
@@ -120,8 +124,7 @@ export function createLlamaCppService(
       } catch (error) {
         // Missing/corrupt records are not models; I/O failures are not evidence
         // of removal and must never publish a partial authoritative inventory.
-        if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== 'ENOENT')
-          throw error;
+        if (!isMissingOrCorruptRecord(error)) throw error;
       }
     }
     return result;
