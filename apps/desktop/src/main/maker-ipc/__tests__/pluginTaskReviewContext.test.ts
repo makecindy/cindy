@@ -66,6 +66,16 @@ describe('plugin delegated Auto context', () => {
     expect(result.userIntent).toBe(text);
     expect(JSON.stringify(result.userIntent)).not.toContain('Send this');
   });
+  it.each([false, true])('marks tied resource resets and grants ambiguous regardless of flattening order (%s)', async reverse => {
+    const s = fixture();
+    s.history = [
+      {clientId: 'lead-resource', role: 'user', createdAt: 10, content: {files: [{name: 'new.txt'}]}, agentMeta: {autoReviewUserText: '', delivery: 'turn'}},
+      {clientId: 'worker-grant', role: 'user', createdAt: 10, content: {text: 'Send this'}, agentMeta: {autoReviewUserText: 'Send this', delivery: 'turn'}},
+    ];
+    if (reverse) s.history.reverse();
+    const result = await createPluginTaskReviewResolver(async () => s)(request);
+    expect(result.userIntent).toMatchObject({historyOmitted: true});
+  });
   it('uses only authenticated plan text, never Worker/Lead claims as user intent', async () => {
     const result = await createPluginTaskReviewResolver(async () => fixture())(request);
     expect(result.authorizationError).toBeUndefined();

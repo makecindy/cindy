@@ -208,6 +208,7 @@ export interface OrcaWorkerCreationDeps {
   getActiveTeamByLead(leadSessionId: string): Promise<OrcaTeamSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerListSnapshot[]>;
   isActiveWorkerStatus(status: OrcaWorkerStatus): boolean;
+  withLeadSendLock?<T>(leadSessionId: string, operation: () => Promise<T>): Promise<T>;
   validateCreationPlan?(params: OrcaWorkerCreateInTeamParams): Promise<number | null | undefined>;
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
@@ -990,13 +991,23 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       | { ok: true; occupiedSlotsBefore: number }
       | { ok: false; errorCode: 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'WORKER_LIMIT_HARD_EXCEEDED' };
     try {
-      reservation = await deps.reserveWorkerCreation({
-        reservationId: workerId,
-        teamId: params.teamId,
-        label: label.value,
-        hardLimit: settings.workerHardLimit,
-        leaseMs: ORCA_WORKER_CREATION_RESERVATION_LEASE_MS,
-      });
+      const admit = async () => {
+        // Preparation may await providers or remote state. Re-read the plan at
+        // the final admission boundary shared with plan registration and input.
+        const latestLimit = await deps.validateCreationPlan?.(params);
+        settings.workerHardLimit = deps.readCollaborationSettings().workerHardLimit;
+        if (latestLimit != null) settings.workerHardLimit = Math.min(settings.workerHardLimit, latestLimit);
+        return deps.reserveWorkerCreation({
+          reservationId: workerId,
+          teamId: params.teamId,
+          label: label.value,
+          hardLimit: settings.workerHardLimit,
+          leaseMs: ORCA_WORKER_CREATION_RESERVATION_LEASE_MS,
+        });
+      };
+      reservation = deps.withLeadSendLock
+        ? await deps.withLeadSendLock(params.leadSessionId, admit)
+        : await admit();
     } catch (err) {
       return toInternalFailure(err);
     }

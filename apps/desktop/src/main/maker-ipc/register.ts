@@ -10263,7 +10263,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await service.get(pluginId, task.taskId);
         return result;
       }
-      case 'setTeamPlan': return service.setTeamPlan(pluginId, request.taskId, request.plan);
+      case 'setTeamPlan': return withSendToSessionLock(request.taskId, () => service.setTeamPlan(pluginId, request.taskId, request.plan));
       case 'releaseWorker': {
         const epoch = getCurrentDbClientSnapshot();
         await service.get(pluginId,request.taskId);
@@ -11318,6 +11318,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
 
   const orcaWorkerCreationService = createOrcaWorkerCreationService({
+    withLeadSendLock: withSendToSessionLock,
     getActiveTeamByLead,
     listWorkersByLead,
     isActiveWorkerStatus,
@@ -11325,10 +11326,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     validateCreationPlan: async params => {
       const epoch = getCurrentDbClientSnapshot();
       if (!epoch) throw new PluginTaskError('HOST_NOT_READY','Task storage unavailable');
-      const receipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
+      let receipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
       if (!receipt || receipt.operation !== 'create') return undefined;
       await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
+      receipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
+      if (!receipt || receipt.operation !== 'create' || epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Task ownership changed');
       const data = JSON.parse(receipt.payload);
       if (!data.teamPlan) return undefined; // Existing plugins retain their original behavior.
       const item = data.teamPlan.items.find((x: {label:string})=>x.label===params.label);

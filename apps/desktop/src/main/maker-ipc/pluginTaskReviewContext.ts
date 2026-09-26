@@ -36,9 +36,10 @@ export function pluginReviewUserIntent(snapshot: PluginReviewSnapshot): AutoRevi
   const times = new Set<number>();
   for (const m of [...snapshot.history].sort((a, b) => eventTime(a) - eventTime(b))) {
     const receipt = m.agentMeta?.autoReviewUserText;
-    const text = typeof receipt === 'string' ? receipt
-      : receipt && typeof receipt === 'object' && 'text' in receipt ? receipt.text : '';
-    if (text) {
+    // Empty authored receipts reset earlier resource consent and need ordering too.
+    const authored = typeof receipt === 'string' || (receipt && typeof receipt === 'object'
+      && 'text' in receipt && typeof receipt.text === 'string');
+    if (authored) {
       const at = eventTime(m);
       if (!Number.isFinite(at) || at <= 0 || times.has(at)) omitted = true;
       times.add(at);

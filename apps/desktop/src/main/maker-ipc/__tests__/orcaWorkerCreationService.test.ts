@@ -2726,3 +2726,29 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
 
 it('applies plan limit in atomic reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>2)});await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});expect(deps.reserveWorkerCreation).toHaveBeenCalledWith(expect.objectContaining({hardLimit:2}));});
 it('rejects invalid plan before reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>{throw Error('not pending');})});await expect(service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'})).rejects.toThrow('not pending');expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();expect(deps.bootstrapSession).not.toHaveBeenCalled();});
+
+it('rechecks a newly registered plan under the Lead send lock before reserving', async () => {
+  let locked = false, limit: number | undefined;
+  const {deps,service}=createDeps({
+    validateCreationPlan: vi.fn(async () => limit),
+    withLeadSendLock: async (_id, operation) => {
+      limit = 1; locked = true;
+      try { return await operation(); } finally { locked = false; }
+    },
+  });
+  vi.mocked(deps.reserveWorkerCreation).mockImplementation(async input => {
+    expect(locked).toBe(true);expect(input.hardLimit).toBe(1);
+    return {ok:true,occupiedSlotsBefore:0};
+  });
+  const bootstrap=deps.bootstrapSession;
+  deps.bootstrapSession=vi.fn(async (opts: MakerSessionCreateOpts) => {expect(locked).toBe(false);return bootstrap(opts);});
+  await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});
+  expect(deps.validateCreationPlan).toHaveBeenCalledTimes(2);
+  expect(deps.reserveWorkerCreation).toHaveBeenCalledOnce();
+});
+it('rejects a plan changed during preparation without reserving or bootstrapping', async () => {
+  const validate=vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('not pending'));
+  const {deps,service}=createDeps({validateCreationPlan:validate,withLeadSendLock:async (_id, operation)=>operation()});
+  const result=await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});
+  expect(result.ok).toBe(false);expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();expect(deps.bootstrapSession).not.toHaveBeenCalled();
+});
