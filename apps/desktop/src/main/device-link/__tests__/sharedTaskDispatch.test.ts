@@ -45,6 +45,13 @@ describe('sharedTask dispatch scope', () => {
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['other'] })).toThrow();
     }
   });
+  it('lets a guest read running command output only for the shared task, under history.read', () => {
+    const channel = 'maker:background-task:output-tail';
+    expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['task', 'bash-1'] })).not.toThrow();
+    expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['other', 'bash-1'] })).toThrow();
+    const noHistory: SharedTaskPeerCapture = { ...capture(), authorize: (operation) => operation !== 'history.read' };
+    expect(() => assertSharedTaskInvoke(noHistory, { channel, args: ['task', 'bash-1'] })).toThrow();
+  });
   it('accepts media preparation and OSS fallback without granting the file-peer channel', () => {
     for (const prepareOnly of [true, false]) {
       expect(() => assertSharedTaskInvoke(capture(), {

@@ -55,12 +55,25 @@ describe('readBackgroundTaskOutputTail', () => {
     expect(result).toMatchObject({ ok: true, text: 'yyyyyyyyy\n', truncated: true });
   });
 
-  it('refuses to follow symlinks, even when the link itself looks like an output file', async () => {
+  it('rejects a link whose real target is not an output file', async () => {
     const target = path.join(dir, 'secret.txt');
     await fs.writeFile(target, 'secret');
     const link = path.join(dir, 'b6.output');
     await fs.symlink(target, link);
     expect(await readBackgroundTaskOutputTail(link)).toEqual({ ok: false, reason: 'forbidden' });
+  });
+
+  it('reads through a symlinked parent directory by checking the canonical path', async () => {
+    // macOS 的 /tmp → /private/tmp 就是这种形态:上级目录是链接,真实目标仍是 .output 文件。
+    const realDir = path.join(dir, 'real');
+    await fs.mkdir(realDir);
+    await fs.writeFile(path.join(realDir, 'b7.output'), 'via link\n');
+    const linkedDir = path.join(dir, 'linked');
+    await fs.symlink(realDir, linkedDir, 'dir');
+    expect(await readBackgroundTaskOutputTail(path.join(linkedDir, 'b7.output'))).toMatchObject({
+      ok: true,
+      text: 'via link\n',
+    });
   });
 
   it('returns an empty tail for an empty file', async () => {

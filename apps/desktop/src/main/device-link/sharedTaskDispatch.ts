@@ -49,7 +49,7 @@ const sessionReads = new Set([
   'local-db:messages:around', 'local-db:messages:around-client-id',
   'local-db:messages:estimatedSessionValue', 'maker:input:get-projection',
   'maker:session-in-turn', 'maker:session-background-activity',
-  'maker:session-background-tasks:list', 'maker:get-context-usage',
+  'maker:session-background-tasks:list', 'maker:background-task:output-tail', 'maker:get-context-usage',
   'maker:get-pending-interactions', 'maker:get-session-agent-switch-intent',
 ]);
 const inputEdits = new Set(['maker:input:update-text', 'maker:input:update-content', 'maker:input:set-edit-lock']);

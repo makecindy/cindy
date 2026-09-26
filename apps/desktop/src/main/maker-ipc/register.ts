@@ -5377,7 +5377,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 跑在远端,output_file 写在远端,本机读必落空 → 同样 unavailable。
   ipcMain.handle(
     MAKER_INVOKE.READ_BACKGROUND_TASK_OUTPUT_TAIL,
-    async (_e, sessionId: unknown, taskId: unknown) => {
+    async (event, sessionId: unknown, taskId: unknown) => {
+      // 本机调用只接受已登记的顶层 Cindy 窗口;device-link 隧道调用由 dispatch 层鉴权。
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
       if (typeof sessionId !== 'string' || !sessionId) {
         return { ok: false, reason: 'forbidden' } as const;
       }
