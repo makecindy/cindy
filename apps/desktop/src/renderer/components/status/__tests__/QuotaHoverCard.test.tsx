@@ -92,7 +92,7 @@ function weeklyAtProgress(utilization: number, progress: number) {
 
 describe('QuotaHoverCard', () => {
   it.each([undefined, null, 0, NaN, Infinity, 1e20])(
-    'omits the disclosure when windows have no displayable details (reset=%s)',
+    'renders embedded windows without a reset time (reset=%s)',
     (resetsAt) => {
       render(<UsageCard variant="embedded" nowMs={NOW_MS} account={{
         windows: [{ key: 'weekly', title: 'Weekly', window: { utilization: 20, resetsAt }, breakdown: [] }],
@@ -100,20 +100,36 @@ describe('QuotaHoverCard', () => {
       }} />);
       expect(screen.getByRole('progressbar')).toBeTruthy();
       expect(screen.getByText('Balance available')).toBeTruthy();
-      expect(screen.queryByRole('button', { name: 'quotaCard.usageTitle' })).toBeNull();
+      expect(screen.queryByRole('button')).toBeNull();
     },
   );
 
-  it.each(['detail', 'breakdown'] as const)('discloses %s without a reset date', (kind) => {
-    render(<UsageCard variant="embedded" account={{ windows: [
+  it.each(['detail', 'breakdown'] as const)('shows %s only in the popover, not the embedded card', (kind) => {
+    const account = { windows: [
       { key: 'plain', title: 'Plain', window: { utilization: 10 } },
       { key: 'detailed', title: 'Detailed', window: { utilization: 20 },
         ...(kind === 'detail' ? { detail: 'Extra usage' } : { breakdown: [{ label: 'Extra usage', value: '10' }] }),
       },
-    ] }} />);
+    ] };
+    const { rerender } = render(<UsageCard variant="embedded" account={account} />);
     expect(screen.queryByText('Extra usage')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'quotaCard.usageTitle' }));
+    expect(screen.queryByRole('button')).toBeNull();
+    rerender(<UsageCard account={account} />);
     expect(screen.getByText('Extra usage')).toBeTruthy();
+  });
+
+  it('lays embedded windows out as aligned grid rows', () => {
+    render(<UsageCard variant="embedded" account={{ windows: [
+      { key: 'a', title: '5 小时', window: { utilization: 10 } },
+      { key: 'b', title: 'Fable 周限', window: { utilization: 0 } },
+    ] }} />);
+    const grid = screen.getByTestId('quota-window-grid');
+    const rows = screen.getAllByTestId('quota-window');
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.parentElement).toBe(grid);
+      expect(row.classList.contains('grid-cols-subgrid')).toBe(true);
+    }
   });
 
   it('hides duplicate identity without windows and only makes the popover region focusable', () => {
@@ -189,17 +205,10 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('剩余 24%')).toBeTruthy();
     expect(screen.getByText('7小时 5分钟后重置')).toBeTruthy();
     expect(screen.queryByText('17:05 重置')).toBeNull();
-    const detailsButton = screen.getByRole('button', { name: 'quotaCard.usageTitle' });
-    expect(detailsButton.getAttribute('aria-expanded')).toBe('false');
-    fireEvent.click(detailsButton);
-    expect(detailsButton.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByText('17:05 重置')).toBeTruthy();
-    expect(screen.getByText('8月7日 00:00 重置')).toBeTruthy();
-    expect(screen.getByText('8月6日 23:59 重置')).toBeTruthy();
-    expect(screen.getByText('18:30 重置')).toBeTruthy();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('keeps balances, alerts and stale data visible while embedded details are collapsed', () => {
+  it('keeps balances, alerts and stale data visible in the embedded card without pace details', () => {
     render(
       <UsageCard
         variant="embedded"
@@ -229,11 +238,7 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('quotaCard.staleData:10')).toBeTruthy();
     expect(screen.queryByTestId('quota-pace')).toBeNull();
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('8');
-    const button = screen.getByRole('button', { name: 'quotaCard.usageTitle' });
-    fireEvent.click(button);
-    expect(screen.getByTestId('quota-pace')).toBeTruthy();
-    fireEvent.click(button);
-    expect(screen.queryByTestId('quota-pace')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('prioritizes countdown in compact cards and updates to pending after reset', () => {

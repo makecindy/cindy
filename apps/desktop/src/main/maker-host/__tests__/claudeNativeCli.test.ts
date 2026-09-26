@@ -37,7 +37,9 @@ vi.mock('node:child_process', () => ({ spawn: h.spawn }));
 import {
   claudeCliNetworkEnv,
   parseClaudeCliLoginStatus,
+  parseClaudeCliPlanUsageLine,
   peekClaudeCliLoginStatus,
+  readClaudeCliPlanUsage,
   readClaudeCliLoginStatus,
   refreshClaudeCliLoginStatus,
   resetClaudeNativeCliForTest,
@@ -261,5 +263,87 @@ describe('runClaudeCliLogin', () => {
       reason: 'local_unavailable',
     });
     expect(h.spawn).not.toHaveBeenCalled();
+  });
+});
+
+type FakeSdkChild = FakeChild & { stdin: EventEmitter & { write: ReturnType<typeof vi.fn> } };
+
+/** SDK 模式的假 CLI:收到 get_usage 请求后按 reply 回一行(reply 为 null 时不回)。 */
+function fakeSdkChild(reply: (requestId: string) => unknown): FakeSdkChild {
+  const child = fakeChild('hang') as FakeSdkChild;
+  const stdin = new EventEmitter() as FakeSdkChild['stdin'];
+  stdin.write = vi.fn((line: string) => {
+    const message = JSON.parse(line) as { request_id: string; request: { subtype: string } };
+    if (message.request.subtype !== 'get_usage') return true;
+    const response = reply(message.request_id);
+    if (response !== null) {
+      setImmediate(() => {
+        child.stdout.emit('data', Buffer.from(`{"type":"system","subtype":"init"}\n${JSON.stringify(response)}\n`));
+      });
+    }
+    return true;
+  });
+  child.stdin = stdin;
+  return child;
+}
+
+const RATE_LIMITS = { limits: [{ kind: 'session', percent: 5, resets_at: '2026-09-26T04:00:00Z' }] };
+
+describe('readClaudeCliPlanUsage', () => {
+  it('发 get_usage 控制请求,取 rate_limits 后结束 CLI;拉起时隔离项目设置 / MCP / 会话记录', async () => {
+    const child = fakeSdkChild((id) => ({
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: id,
+        response: { subscription_type: 'max', rate_limits_available: true, rate_limits: RATE_LIMITS },
+      },
+    }));
+    h.spawn.mockReturnValue(child);
+    await expect(readClaudeCliPlanUsage()).resolves.toEqual({ rateLimits: RATE_LIMITS, subscriptionType: 'max' });
+    const args = argsOf(h.spawn.mock.calls[0]!);
+    expect(args).toEqual(expect.arrayContaining([
+      '--input-format', 'stream-json', '--no-session-persistence', '--strict-mcp-config', '--setting-sources', 'user',
+    ]));
+    const request = JSON.parse(child.stdin.write.mock.calls[1]![0] as string);
+    expect(request.request).toEqual({ subtype: 'get_usage', skip_behaviors: true });
+    expect(child.kill).toHaveBeenCalled();
+  });
+
+  it('账号没有套餐余量 → null;控制请求报错 / CLI 提前退出 → 抛错', async () => {
+    h.spawn.mockReturnValueOnce(fakeSdkChild((id) => ({
+      type: 'control_response',
+      response: { subtype: 'success', request_id: id, response: { rate_limits_available: false, rate_limits: null } },
+    })));
+    await expect(readClaudeCliPlanUsage()).resolves.toBeNull();
+
+    h.spawn.mockReturnValueOnce(fakeSdkChild((id) => ({
+      type: 'control_response',
+      response: { subtype: 'error', request_id: id, error: 'get_usage is not supported in this context' },
+    })));
+    await expect(readClaudeCliPlanUsage()).rejects.toThrow('not supported');
+
+    const exiting = fakeSdkChild(() => null);
+    h.spawn.mockReturnValueOnce(exiting);
+    const pending = readClaudeCliPlanUsage();
+    setImmediate(() => exiting.emit('close', 1));
+    await expect(pending).rejects.toThrow('exited');
+  });
+
+  it('内置 CLI 不可用时不拉起进程', async () => {
+    h.binary = null;
+    await expect(readClaudeCliPlanUsage()).rejects.toThrow('unavailable');
+    expect(h.spawn).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseClaudeCliPlanUsageLine', () => {
+  it('忽略非本请求的行与无法解析的行', () => {
+    expect(parseClaudeCliPlanUsageLine('not json')).toBeNull();
+    expect(parseClaudeCliPlanUsageLine('{"type":"system"}')).toBeNull();
+    expect(parseClaudeCliPlanUsageLine(JSON.stringify({
+      type: 'control_response',
+      response: { subtype: 'success', request_id: 'cindy-init', response: {} },
+    }))).toBeNull();
   });
 });

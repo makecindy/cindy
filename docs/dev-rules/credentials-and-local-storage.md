@@ -82,7 +82,9 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   直连，只注入 Anthropic 一方的子代理模型覆写。
 - 「断开」只撤销 Cindy 的使用许可（`nativeProviderAuthBinding`），不登出 CLI。
   旧版独立 Claude 账号已停用，但不删除其已存凭证。
-- 额度从 SDK `rate_limit_event` 读取，模型列表来自 SDK `supportedModels` 与 Registry；
+- 套餐余量由内置 CLI 的 `get_usage` 控制请求查询（CLI 用自己的登录发请求，拉起时不读
+  项目级设置、不起 MCP、不落会话记录），会话内的 SDK `rate_limit_event` 做增量刷新；
+  模型列表来自 SDK `supportedModels` 与 Registry；
   不得为此恢复用订阅 token 直接调用 Anthropic API。
 - 实现见 [claude-native-cli.ts](../../apps/desktop/src/main/maker-host/claude-native-cli.ts)、
   [env-builder.ts](../../packages/maker-core/src/agents/claude-code/env-builder.ts)；回归见
