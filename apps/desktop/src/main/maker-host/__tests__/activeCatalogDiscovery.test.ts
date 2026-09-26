@@ -226,6 +226,32 @@ describe('active-catalog discovered augment', () => {
     expect(selected.id).toBe('openai-parity');
     expect(selected.auth).toEqual({ method: 'oauth', native: 'codex' });
   });
+
+  it('独立 ChatGPT 账号同样按账号返回顺序排，不被 Registry sortOrder 改写', () => {
+    // Registry 里 Luna 排在 Sol 前；账号按 Sol、Luna 返回。
+    const account = buildUserProvider(
+      {
+        id: 'openai-order',
+        name: 'Separate account',
+        auth: { method: 'oauth', native: 'codex' },
+        runtimes: {
+          codex: {
+            baseUrl: 'https://chatgpt.com/backend-api/codex',
+            models: [
+              { id: 'gpt-5.6-sol', name: 'Sol' },
+              { id: 'gpt-5.6-luna', name: 'Luna' },
+            ],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+    setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, account] });
+    const selected = getActiveCatalog().providers.find((p) => p.id === account.id)!;
+    const ids = (selected.models.codex ?? []).map((m) => m.id);
+    expect(ids.indexOf('gpt-5.6-sol')).toBe(0);
+    expect(ids.indexOf('gpt-5.6-luna')).toBe(1);
+  });
   afterEach(() => {
     // 复位全局状态,避免测试间串扰
     setActiveCatalog(BUNDLED_CATALOG);
@@ -817,7 +843,7 @@ describe('anthropic 发现条目的 modelRegistry 元数据基线', () => {
     setAnthropicDiscoveredModels([]);
   });
 
-  it('供应商显式名称优先，缺项继承公共名称与排序', () => {
+  it('供应商显式名称优先，缺项继承公共名称；顺序以账号为准，仅目录有的接在后面', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setAnthropicDiscoveredModels([
       anthro('claude-opus-5', 'Claude Opus 5', 0),
@@ -832,20 +858,21 @@ describe('anthropic 发现条目的 modelRegistry 元数据基线', () => {
       anthro('claude-sonnet-4-5', 'Claude Sonnet 4.5', 9),
     ]);
     expect(anthropicList().map((m) => [m.id, m.name])).toEqual([
-      ['claude-opus-5-5', 'Opus 5.5'],
       ['claude-opus-5', 'Claude Opus 5'],
+      ['claude-sonnet-5', 'Claude Sonnet 5'],
       ['claude-fable-5', 'Claude Fable 5'],
       ['claude-opus-4-8', 'Claude Opus 4.8'],
       ['claude-opus-4-7', 'Claude Opus 4.7'],
+      ['claude-sonnet-4-6', 'Claude Sonnet 4.6'],
       ['claude-opus-4-6', 'Claude Opus 4.6'],
       ['claude-opus-4-5', 'Claude Opus 4.5'],
-      ['claude-sonnet-5', 'Claude Sonnet 5'],
-      ['claude-sonnet-4-6', 'Claude Sonnet 4.6'],
-      ['claude-sonnet-4-5', 'Claude Sonnet 4.5'],
       ['claude-haiku-4-5', 'Claude Haiku 4.5'],
+      ['claude-sonnet-4-5', 'Claude Sonnet 4.5'],
+      ['claude-opus-5-5', 'Opus 5.5'],
       ['claude-fable-5-1', 'Fable 5.1'],
       ['claude-mythos-5', 'Mythos 5'],
     ]);
+    expect(anthropicList().map((m) => m.sortOrder)).toEqual([...Array(13).keys()]);
     expect(
       anthropicList('claude-code')
         .filter((model) => model.defaultEnabled !== false)

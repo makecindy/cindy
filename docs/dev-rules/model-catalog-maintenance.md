@@ -41,7 +41,7 @@ Catalog (version)
 | 要改什么 | 写入位置 / 责任侧 | 不能顺带改变什么 |
 | --- | --- | --- |
 | 型号公共名称、说明、窗口、输出、思考能力 | Registry `baseModels[].defaults` | 价格、账号权限、地址和凭证不在公共继承内 |
-| 接入条目状态、排序、默认开启标记 | Registry `models[]` 顶层 | 显示开关不等于成员资格；见下文默认可见性 |
+| 接入条目状态、排序、默认开启标记 | Registry `models[]` 顶层 | 显示开关不等于成员资格；订阅账号排序以账号为准，见下文模型排序与默认可见性 |
 | 某供应商的上游 ID、支持路由、普通默认 | `models[].routes[]` / `routes[].defaults` | 普通默认不能压过实报 |
 | Claude Code / Codex 的工作默认 | `models[].perAgent`，引擎必须被该条目 route 声明 | 不把工作预算当供应商承诺容量 |
 | Pi 公共成员和 Pi 默认资料 | `providers[].models.pi`；订阅账号发现另补新型号，公共资料仍按 Registry 合并 | 复用已实现的订阅传输，不复制其他引擎的专属能力 |
@@ -71,6 +71,22 @@ Pi 走 `providers[].models.pi`（用户补丁 perAgent.pi 另属合法 schema）
 用户公共型号补丁先于用户具体连接/引擎补丁。思考档位默认在公共型号维护，按需增加引擎例外；
 `defaultEffort` 的已配置默认优先于供应商实报的推荐档，再适配实际支持能力，force / 用户覆盖仍优先。
 详细字段及成员空值规则以 [模型资料优先级](../product-rules/model-metadata-precedence.md) 为唯一正本。
+
+<a id="ordering"></a>
+## 模型排序：账号优先，目录兜底
+
+OpenAI（Codex 订阅）与 Anthropic（Claude 订阅）的 root 有账号模型清单时，`sortOrder` 以账号
+返回顺序为准：Codex 取 `models_cache.json` 的 `priority` 或 app-server `model/list` 的返回位置，
+Claude 取 SDK `supportedModels()` 的返回位置。只在 Registry 里有、账号没返回的模型按 Registry
+`sortOrder` 接在其后。装配时重写为连续 `sortOrder`，选择器、设置页、新对话默认与 Claude Code
+bridge 共用这一顺序；用户本地 `sortOrder` patch 仍最高。拿不到账号清单时才用 Registry `sortOrder`。
+xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受此规则影响。
+
+新对话默认模型不跟排序绑定的例外只有服务端按区域下发的 `newSessionDefault`；公共 Registry 的
+同名字段不进入活动目录。未标记时取排序第一的默认可见模型，即账号返回的第一个可见模型。
+
+设置页管理列表组内与选择器同序：组内每项都带 `sortOrder` 时按它排；只要有一项缺失，退回
+按系列名 A–Z、同系列版本号降序，避免局部权重把新型号压到旧策展位置之后。
 
 <a id="visibility"></a>
 ## 默认可见性：产品合同与实现差异

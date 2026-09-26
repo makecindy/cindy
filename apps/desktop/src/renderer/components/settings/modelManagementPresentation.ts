@@ -29,6 +29,20 @@ export function compareModelNames(
   );
 }
 
+/**
+ * 设置页组内顺序与模型选择器一致：来源给出完整顺序(每项都有 sortOrder,如按账号顺序
+ * 装配的订阅)时按 sortOrder;只要有一项缺 sortOrder,局部权重会把新型号压到旧的
+ * 策展位置之后，这时退回 compareModelNames。
+ */
+export function sortModelsForManagement<T extends Pick<CatalogModel, 'id' | 'name' | 'sortOrder'>>(
+  models: readonly T[],
+): T[] {
+  const fullyOrdered = models.every((model) => typeof model.sortOrder === 'number');
+  return [...models].sort((a, b) =>
+    fullyOrdered ? a.sortOrder! - b.sortOrder! || compareModelNames(a, b) : compareModelNames(a, b),
+  );
+}
+
 export const MANAGEMENT_KIND_ORDER = [
   'chat',
   'image',
@@ -44,7 +58,7 @@ export const MANAGEMENT_KIND_ORDER = [
 export type ManagementKind = (typeof MANAGEMENT_KIND_ORDER)[number];
 export type ManagementView = 'brand' | 'model';
 
-export function groupModelsForManagement<T extends Pick<CatalogModel, 'id' | 'name'>>(
+export function groupModelsForManagement<T extends Pick<CatalogModel, 'id' | 'name' | 'sortOrder'>>(
   models: readonly T[],
   view: ManagementView,
   kindOf: (model: T) => ManagementKind,
@@ -76,5 +90,5 @@ export function groupModelsForManagement<T extends Pick<CatalogModel, 'id' | 'na
             ? 1
             : 0),
     )
-    .map((group) => ({ ...group, models: [...group.models].sort(compareModelNames) }));
+    .map((group) => ({ ...group, models: sortModelsForManagement(group.models) }));
 }

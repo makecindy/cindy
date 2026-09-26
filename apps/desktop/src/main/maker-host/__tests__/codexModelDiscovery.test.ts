@@ -247,7 +247,7 @@ describe('mapCodexModelsToCatalog', () => {
     expect(out.find((m) => m.id === 'gpt-5.6')?.supportsFastMode).toBeUndefined();
   });
 
-  it('display name 保持纯净,保留模型自报的全部合法 effort(含 max/ultra),priority 对齐静态排序锚点', () => {
+  it('display name 保持纯净,保留模型自报的全部合法 effort(含 max/ultra),sortOrder 直接取 priority(账号顺序)', () => {
     const out = mapCodexModelsToCatalog(SAMPLE);
     expect(out.every((m) => !m.name.includes('订阅'))).toBe(true);
     // issue #352:max/ultra 是合法 Codex 档,不再被 CODEX_EFFORTS 白名单过滤掉。
@@ -258,9 +258,9 @@ describe('mapCodexModelsToCatalog', () => {
       'max',
       'ultra',
     ]);
-    expect(out.find((m) => m.id === 'gpt-5.6')?.sortOrder).toBe(19);
-    expect(out.find((m) => m.id === 'gpt-5.5')?.sortOrder).toBe(20);
-    expect(out.find((m) => m.id === 'gpt-5.4')?.sortOrder).toBe(21);
+    expect(out.find((m) => m.id === 'gpt-5.6')?.sortOrder).toBe(3);
+    expect(out.find((m) => m.id === 'gpt-5.5')?.sortOrder).toBe(7);
+    expect(out.find((m) => m.id === 'gpt-5.4')?.sortOrder).toBe(16);
   });
 
   it('只放行 CODEX_EFFORTS 白名单内的档(含 max/ultra),未知 effort id 仍被过滤', () => {
@@ -395,10 +395,10 @@ describe('mapCodexAppServerModelsToCatalog', () => {
       efforts: ['low', 'xhigh'],
       defaultEffort: 'xhigh',
       supportsFastMode: true,
-      sortOrder: 17,
+      sortOrder: 0,
     });
     expect(out[1].defaultEnabled).toBe(false);
-    expect(out[1].sortOrder).toBe(17.003);
+    expect(out[1].sortOrder).toBe(3);
     // live 协议不给 context_window,这 272k 是统一兜底 → 一律不得标记为已核实。
     // 标了它就会被拿去收敛运行期上报的窗口,把真实更大的窗口压成 272k。
     expect(out.every((model) => model.contextWindowVerified === undefined)).toBe(true);
