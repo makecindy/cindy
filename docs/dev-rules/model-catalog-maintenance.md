@@ -103,7 +103,7 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
   GLM Coding Plan 只给 Claude Code 的 `[1m]` 变体）。
 - 引擎专属字段写 `engineOverrides[引擎]`：Pi 的推理档位、按模型路由，以及确有差异的窗口
   （如 GLM Coding Plan 裸 `glm-5.2` 在 Claude Code 不写窗口、1M 走 `[1m]` 条目，Pi 为 1M）。
-- `engines` 只能写已知引擎名，且至少命中一个本预设已声明的引擎；`engineOverrides` 的键也只能是已知引擎；拼错或写成
+- `engines` 的每一项与 `engineOverrides` 的每个键都只能是本预设已声明的引擎；拼错或写成
   其它形状时整条预设被拒绝（即使 `runtimes` 另带旧格式清单），不静默丢模型或忽略覆盖。
 - 本文件是源格式，旧客户端读不懂顶层清单，不能直接发布到旧 OSS `cfg/providers.json`
   （该文件自 2026-07 冻结，旧客户端经公共 API 与服务端投影拿到展开后的形状）。

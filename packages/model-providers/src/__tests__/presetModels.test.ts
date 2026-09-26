@@ -96,6 +96,8 @@ describe("预设推荐模型单一清单", () => {
       { engineOverrides: [] },
       { engineOverrides: { pi: "x" } },
       { engineOverrides: { codxe: { supportsImageInput: false } } },
+      { engines: ["codex", "pi"] },
+      { engineOverrides: { pi: { supportsImageInput: false } } },
     ]) {
       const preset = {
         ...base,

@@ -22,9 +22,13 @@ function isAgentKind(value: unknown): value is AgentKind {
   );
 }
 
+function isDeclared(agent: unknown, declaredRuntimes: readonly string[]) {
+  return isAgentKind(agent) && declaredRuntimes.includes(agent);
+}
+
 /**
- * 引擎限定字段是否畸形。不变量：清单里的每个模型展开后至少落进一个已声明的 runtime，
- * 引擎名与覆盖键都是已知引擎——否则模型会被静默抹掉，或专属覆盖被静默忽略。
+ * 引擎限定字段是否畸形。不变量：`engines` 的每一项与 `engineOverrides` 的每个键都必须是
+ * 本预设已声明的 runtime（`engines` 非空）——否则模型会被静默抹掉，或专属覆盖被静默忽略。
  */
 function hasMalformedEngineFields(
   model: unknown,
@@ -35,8 +39,8 @@ function hasMalformedEngineFields(
   if (
     engines !== undefined &&
     (!Array.isArray(engines) ||
-      !engines.every(isAgentKind) ||
-      !engines.some((agent) => declaredRuntimes.includes(agent)))
+      engines.length === 0 ||
+      !engines.every((agent) => isDeclared(agent, declaredRuntimes)))
   ) {
     return true;
   }
@@ -44,7 +48,8 @@ function hasMalformedEngineFields(
     engineOverrides !== undefined &&
     (!isPlainObject(engineOverrides) ||
       !Object.entries(engineOverrides).every(
-        ([agent, override]) => isAgentKind(agent) && isPlainObject(override),
+        ([agent, override]) =>
+          isDeclared(agent, declaredRuntimes) && isPlainObject(override),
       ))
   );
 }
