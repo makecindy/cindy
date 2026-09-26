@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  owner: 'owner-1',
+  clearSessionAttention: vi.fn(),
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   client: { drizzle: {} },
   commitShareImport: vi.fn(),
@@ -20,6 +22,9 @@ vi.mock('electron', () => ({
       h.handlers.set(channel, handler);
     }),
   },
+}));
+vi.mock('../../../appBadgeService.js', () => ({
+  clearSessionAttention: h.clearSessionAttention,
 }));
 vi.mock('../../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn() }),
@@ -42,7 +47,7 @@ vi.mock('../../client/current.js', () => ({
   tryGetDbClient: () => h.client,
 }));
 vi.mock('../../../appSessionState.js', () => ({
-  activeOwnerScopeKey: () => 'owner-1',
+  activeOwnerScopeKey: () => h.owner,
   isAppSessionBoundaryPending: () => false,
 }));
 vi.mock('../../../cindy-media/refCompensationJournal.js', () => ({
@@ -60,6 +65,7 @@ vi.mock('../sessions.js', () => ({
 describe('session share replacement compaction', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    h.owner = 'owner-1';
     h.handlers.clear();
     h.commitShareImport.mockResolvedValue({
       sessionId: 'replacement',
@@ -72,12 +78,28 @@ describe('session share replacement compaction', () => {
     registerSessionShareIpc();
   });
 
+  it('does not clear attention when the replacement transaction fails', async () => {
+    h.commitShareImport.mockRejectedValueOnce(new Error('transaction failed'));
+    await expect(h.handlers.get('local-db:session-share:commit')?.({}, { draftId: 'draft-1', overwrite: true })).rejects.toThrow();
+    expect(h.clearSessionAttention).not.toHaveBeenCalled();
+  });
+
+  it('does not clear the new owner attention if the owner changes after commit', async () => {
+    h.commitShareImport.mockImplementationOnce(async () => {
+      h.owner = 'owner-2';
+      return { sessionId: 'replacement', replacedSessions: [{ id: 'replaced-session' }], fidelity: 'full', notes: [], orcaWorkers: [] };
+    });
+    await expect(h.handlers.get('local-db:session-share:commit')?.({}, { draftId: 'draft-1', overwrite: true })).rejects.toThrow();
+    expect(h.clearSessionAttention).not.toHaveBeenCalled();
+  });
+
   it('starts one best-effort compaction after the replaced task is deleted', async () => {
     const handler = h.handlers.get('local-db:session-share:commit');
     expect(handler).toBeTypeOf('function');
 
     await handler?.({}, { draftId: 'draft-1', overwrite: true });
 
+    expect(h.clearSessionAttention).toHaveBeenCalledExactlyOnceWith('replaced-session', 'explicit');
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledTimes(1);
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith({
       client: h.client,
