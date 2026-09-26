@@ -168,6 +168,12 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:model-pricing')).toBe(true);
   });
 
+  it('放行用量历史跨设备合并的原始用量行只读读取', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:device-rows')).toBe(true);
+    // 本机聚合入口仍只对受信 renderer 开放, 不经隧道暴露。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:history')).toBe(false);
+  });
+
   it('放行 Codex 官方额度读取与 desktop 绑定的人工 reset offer', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:codex-rate-limits')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:codex-rate-limit-reset')).toBe(true);

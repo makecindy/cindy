@@ -15,6 +15,10 @@ import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionU
 import type { ClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import type { ModelPricingMap } from '../usage/modelPricing.js';
 import type { UsageHistoryPayload, UsageHistoryReadOptions } from '../usage/usageHistory.js';
+import {
+  parseUsageDeviceRowsRequest,
+  type UsageDeviceRowsResponse,
+} from '../usage/usageDeviceRows.js';
 import type { AgentTodayUsage, RateLimitSnapshot } from '../usageBroadcaster.js';
 import { CodexRateLimitResetRejectedError } from '../usage/codexRateLimitReset.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
@@ -84,6 +88,7 @@ export interface MakerUsageHandlerDeps {
   readReferenceModelPricing(): ModelPricingMap;
   readUsageHistory(opts?: UsageHistoryReadOptions): Promise<UsageHistoryPayload>;
   emptyUsageHistory(): UsageHistoryPayload;
+  readUsageDeviceRows(request: { sinceDay: string | null }): Promise<UsageDeviceRowsResponse>;
 }
 
 export function registerMakerUsageHandlers(
@@ -168,7 +173,12 @@ export function registerMakerUsageHandlers(
   // renderer 正常渲染空态 (与同文件其它 usage 读取的 fallback-data 口径一致)。
   registry.handle(MAKER_INVOKE.USAGE_HISTORY, async (event, opts: unknown) => {
     deps.assertTrustedSender(event);
-    const raw = (opts ?? {}) as { days?: unknown; modelDays?: unknown; forceRefresh?: unknown };
+    const raw = (opts ?? {}) as {
+      days?: unknown;
+      modelDays?: unknown;
+      device?: unknown;
+      forceRefresh?: unknown;
+    };
     const days =
       raw.days === 'all'
         ? ('all' as const)
@@ -182,9 +192,16 @@ export function registerMakerUsageHandlers(
           ? raw.modelDays
           : undefined;
     const forceRefresh = raw.forceRefresh === true;
+    const device =
+      raw.device === 'all' || raw.device === 'local'
+        ? raw.device
+        : typeof raw.device === 'string' && raw.device.length > 0 && raw.device.length <= 128
+          ? raw.device
+          : undefined;
     const readOpts = {
       ...(days === undefined ? {} : { days }),
       ...(modelDays === undefined ? {} : { modelDays }),
+      ...(device === undefined ? {} : { device }),
       ...(forceRefresh ? { forceRefresh: true } : {}),
     };
     try {
@@ -192,5 +209,13 @@ export function registerMakerUsageHandlers(
     } catch {
       return deps.emptyUsageHistory();
     }
+  });
+
+  // 跨设备用量合并的被控端读取 (只读, 无 sender 依赖、无 UI 副作用):
+  // 数据真相在本机库里, 由同账号其它电脑经 device-link allowlist 调用。
+  registry.handle(MAKER_INVOKE.USAGE_DEVICE_ROWS, async (_e, request: unknown) => {
+    const parsed = parseUsageDeviceRowsRequest(request);
+    if (!parsed) throwIpcError('INVALID_PARAMS', 'sinceDay must be YYYY-MM-DD');
+    return await deps.readUsageDeviceRows(parsed);
   });
 }

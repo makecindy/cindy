@@ -6514,7 +6514,7 @@
     }
   },
   "usageHistory": {
-    "description": "这台设备上 Cindy 内部产生的 token 用量。记录从该功能上线起积累，不回填更早的历史。",
+    "description": "你各台电脑上 Cindy 内部产生的 token 用量，默认合并显示，也可以只看某一台。其它电脑需要在线并允许远程控制才能读取，暂时读不到时沿用上次读到的数据。记录从该功能上线起积累，不回填更早的历史。",
     "empty": "还没有用量记录。跑过对话之后，这里会开始积累。",
     "loadFailed": "无法加载用量历史。请重新打开设置后重试。",
     "range": {
@@ -6525,6 +6525,23 @@
       "30d": "最近 30 天",
       "7d": "最近 7 天",
       "today": "今天"
+    },
+    "device": {
+      "label": "设备",
+      "ariaLabel": "筛选用量所属设备",
+      "all": "所有设备",
+      "self": "本机",
+      "selfNamed": "本机（{{name}}）",
+      "status": {
+        "syncing": "正在读取…",
+        "syncedAt": "数据截至 {{time}}",
+        "offline": "离线",
+        "remoteDisabled": "未允许远程控制",
+        "unsupported": "需要更新 Cindy",
+        "error": "读取失败",
+        "noData": "暂无数据"
+      },
+      "partial": "部分电脑暂时读不到最新用量，合计可能偏少。可在设备列表中查看各台状态。"
     },
     "cacheHitTooltip": "缓存读取 ÷（输入 + 缓存读取 + 缓存写入），与消息卡片同口径。",
     "summary": {
@@ -6589,7 +6606,8 @@
         "lastActive": "最后活跃"
       },
       "providerTooltip": "取该任务当前选定的供应商；未指定时留空。",
-      "tokensTooltip": "该任务的生命周期累计；{{range}}仅用于筛选活跃任务，不表示该范围内的增量。"
+      "tokensTooltip": "该任务的生命周期累计；{{range}}仅用于筛选活跃任务，不表示该范围内的增量。",
+      "subtitleLocal": "{{range}}内在本机活跃过的任务，按累计 token 排序"
     }
   },
   "usageDashboard": {

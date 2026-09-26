@@ -2,11 +2,12 @@
  * UsageHistorySection — 设置 → 用量历史 (issue #2785)。
  *
  * 职责边界 (维护者裁决): Billing 管 Cindy AI 的账单与账户信息; 本页只统计
- * **本机 Cindy App 内产生的 token 消耗**, 不出现金额、账户额度、预算或限额窗口,
+ * **Cindy App 内产生的 token 消耗**, 不出现金额、账户额度、预算或限额窗口,
  * 也不纳入外部 Claude Code / Codex CLI / 网页版的用量 (那是 #2618)。
  *
- * 因此页面上每个数字都来自 useUsageHistory → maker:usage:history → 本地库,
- * 不读任何账号快照 —— local / cloud personal / cloud org 三种身份看到的是同一个页面。
+ * 设备范围: 默认合并同账号所有电脑 (本机库 + 经 device-link 读到并缓存的其它电脑原始行),
+ * 也可切到单台设备。页面上每个数字仍来自 useUsageHistory → maker:usage:history, 不读任何
+ * 账号快照。「最耗 token 的任务」只有本机任务数据, 选中其它电脑时隐藏。
  *
  * 两个窗口不同, 标题里分别写明:
  *   - 热力图走完整 days[]，按卡片实际宽度显示至少 20 周；连续活跃天数也走同一份历史
@@ -27,13 +28,21 @@ import { Check, ChevronDown, RefreshCw } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
-import { useUsageHistory } from '@/hooks/useUsageHistory';
+import { useUsageHistory, type UsageHistoryDevice } from '@/hooks/useUsageHistory';
 import { UsageHeatmap } from '@/components/new-chat/UsageHeatmap';
 import { usageModelKey } from '@/components/new-chat/usagePalette';
 import { UsageStatRow } from './UsageStatRow';
 import { UsageTokenBars } from './UsageTokenBars';
 import { UsageAgentTable, UsageModelTable } from './UsageBreakdownTables';
 import { UsageTaskTable, useTopTokenSessions } from './UsageTaskTable';
+import {
+  USAGE_DEVICE_ALL,
+  USAGE_DEVICE_LOCAL,
+  UsageDeviceSelect,
+  buildUsageDeviceOptions,
+  hasIncompleteUsageDevices,
+  hasPeerUsageDevices,
+} from './UsageDeviceSelect';
 import {
   buildAgentRows,
   buildModelRows,
@@ -81,12 +90,29 @@ function Card({
 export function UsageHistorySection(): React.JSX.Element {
   const { t, i18n } = useTranslation();
   const { user } = useAuth();
+  const [device, setDevice] = useState<string>(USAGE_DEVICE_ALL);
   const { history, refreshing } = useUsageHistory({
     userId: user?.id,
     days: 'all',
     modelDays: 'all',
     allowPendingEstimates: true,
+    device,
   });
+  // 切换设备时新范围首帧可能还没有 payload; 沿用上次读到的设备列表, 选择器不闪没。
+  const [knownDevices, setKnownDevices] = useState<UsageHistoryDevice[] | undefined>(undefined);
+  React.useEffect(() => {
+    if (history?.devices) setKnownDevices(history.devices);
+  }, [history?.devices]);
+  const devices = history?.devices ?? knownDevices;
+  const showDevicePicker = hasPeerUsageDevices(devices) || device !== USAGE_DEVICE_ALL;
+  // 选中的电脑从账号里移除后回到合并视图, 不让选择器停在一个不存在的选项上。
+  React.useEffect(() => {
+    if (!devices || device === USAGE_DEVICE_ALL || device === USAGE_DEVICE_LOCAL) return;
+    if (!buildUsageDeviceOptions(devices).some((option) => option.value === device)) {
+      setDevice(USAGE_DEVICE_ALL);
+    }
+  }, [device, devices]);
+  const showTasks = device === USAGE_DEVICE_ALL || device === USAGE_DEVICE_LOCAL;
   const [range, setRange] = useState<UsageHistoryRange>('30d');
   const [heatmapWeeks, setHeatmapWeeks] = useState(20);
 
@@ -152,6 +178,9 @@ export function UsageHistorySection(): React.JSX.Element {
           {t('usageHistory.range.label')}
         </span>
         <div className="ml-auto flex min-w-0 flex-wrap items-center gap-2">
+        {showDevicePicker ? (
+          <UsageDeviceSelect value={device} devices={devices ?? []} onValueChange={setDevice} />
+        ) : null}
         <Select.Root value={range} onValueChange={handleRangeChange}>
           <Select.Trigger
             aria-label={t('usageHistory.range.ariaLabel')}
@@ -219,6 +248,12 @@ export function UsageHistorySection(): React.JSX.Element {
         </label>
         </div>
       </div>
+
+      {device === USAGE_DEVICE_ALL && hasIncompleteUsageDevices(devices) ? (
+        <p className="-mt-2 mb-3 text-12 text-[var(--text-tertiary)]">
+          {t('usageHistory.device.partial')}
+        </p>
+      ) : null}
 
       {loading ? (
         <div
@@ -297,10 +332,14 @@ export function UsageHistorySection(): React.JSX.Element {
             </Card>
           )}
 
-          {taskRows.length > 0 && (
+          {showTasks && taskRows.length > 0 && (
             <Card
               title={t('usageHistory.tasks.title')}
-              subtitle={t('usageHistory.tasks.subtitle', { range: rangeLabel })}
+              subtitle={
+                device === USAGE_DEVICE_ALL && hasPeerUsageDevices(devices)
+                  ? t('usageHistory.tasks.subtitleLocal', { range: rangeLabel })
+                  : t('usageHistory.tasks.subtitle', { range: rangeLabel })
+              }
             >
               <div className="overflow-x-auto">
                 <UsageTaskTable rows={taskRows} rangeLabel={rangeLabel} />

@@ -6516,7 +6516,7 @@
     }
   },
   "usageHistory": {
-    "description": "Token usage produced inside Cindy on this device. Records start accumulating when the feature ships; earlier history is not backfilled.",
+    "description": "Token usage produced inside Cindy across your computers, combined by default; you can also view one device at a time. Other computers must be online and allow remote control to be read; when one can't be reached, its last-read data is used. Records start accumulating when the feature ships; earlier history is not backfilled.",
     "empty": "No usage recorded yet. This fills in once you start a chat.",
     "loadFailed": "Unable to load usage history. Reopen Settings to try again.",
     "range": {
@@ -6527,6 +6527,23 @@
       "30d": "Last 30 days",
       "7d": "Last 7 days",
       "today": "Today"
+    },
+    "device": {
+      "label": "Device",
+      "ariaLabel": "Filter usage by device",
+      "all": "All devices",
+      "self": "This device",
+      "selfNamed": "This device ({{name}})",
+      "status": {
+        "syncing": "Reading…",
+        "syncedAt": "Data as of {{time}}",
+        "offline": "Offline",
+        "remoteDisabled": "Remote control not allowed",
+        "unsupported": "Needs a Cindy update",
+        "error": "Couldn't read",
+        "noData": "No data yet"
+      },
+      "partial": "Some computers couldn't be read just now, so totals may be low. Check each device's status in the device list."
     },
     "cacheHitTooltip": "Cache read / (input + cache read + cache write) — the same formula as the message card.",
     "summary": {
@@ -6591,7 +6608,8 @@
         "lastActive": "Last active"
       },
       "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
-      "tokensTooltip": "The session's lifetime total; {{range}} only filters active sessions and is not an incremental total."
+      "tokensTooltip": "The session's lifetime total; {{range}} only filters active sessions and is not an incremental total.",
+      "subtitleLocal": "Sessions active on this device in {{range}}, ranked by lifetime tokens"
     }
   },
   "usageDashboard": {

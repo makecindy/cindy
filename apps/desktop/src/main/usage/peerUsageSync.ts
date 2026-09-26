@@ -1,0 +1,412 @@
+/**
+ * peerUsageSync — 用量历史的跨设备拉取与本机缓存 (控制端)。
+ *
+ * 数据来源:同账号其它电脑经 device-link 的 `maker:usage:device-rows`(见
+ * usageDeviceRows.ts)。只能拉到**在线、对方开启远程控制、本机允许控制它**的电脑;
+ * 因此每台设备最近一次拿到的原始行按账号落盘缓存,设备离线时仍按上次数据合并,并在
+ * 设备列表里带上 syncedAt 让界面标注「数据截至」。
+ *
+ * 同步节奏:
+ *   - 读取多设备范围的用量历史时触发(含本机 turn 结束后的刷新),统一按
+ *     SYNC_MIN_INTERVAL_MS 节流;页面不打开就不会读其它设备。
+ *   - 增量:已有缓存时从缓存 todayKey 的前一天起拉(对方当天、跨午夜前一天的行仍在变),
+ *     返回区间内的行整体替换缓存里同区间的行。
+ *   - 并发上限 PEER_FANOUT,与伙伴跨设备目录同口径,不随设备数放大 relay 负载。
+ *   - 单台失败只更新该设备状态,不清掉它的缓存,不影响其它设备,也不重试。
+ *
+ * 缓存只存按天聚合的 token / 金额行,不含会话、消息或任何凭证。
+ */
+
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+
+import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
+import { createLogger } from '../logger.js';
+import { MAKER_INVOKE } from '../maker-ipc/channels.js';
+import {
+  decodeUsageDeviceRowsResponse,
+  isDayKey,
+  sanitizeUsageDeviceRows,
+  type UsageDeviceRows,
+} from './usageDeviceRows.js';
+
+const log = createLogger('peerUsageSync');
+
+const USAGE_DEVICE_ROWS_CHANNEL = MAKER_INVOKE.USAGE_DEVICE_ROWS;
+const SYNC_MIN_INTERVAL_MS = 60_000;
+const PEER_FANOUT = 3;
+const CACHE_VERSION = 1;
+const MOBILE_PLATFORMS = new Set(['ios', 'android']);
+
+export type UsageDeviceStatus =
+  /** 本次或最近一次已成功读取。 */
+  | 'ok'
+  /** 正在读取。 */
+  | 'syncing'
+  | 'offline'
+  /** 对方未开启远程控制,或本机关闭了对它的控制。 */
+  | 'remote-disabled'
+  /** 对方版本不支持读取用量。 */
+  | 'unsupported'
+  | 'error';
+
+export interface UsageDeviceSummary {
+  deviceId: string;
+  name: string;
+  platform: string | null;
+  isSelf: boolean;
+  /** 最近一次成功读取的时间;本机与从未读到的设备为 null。 */
+  syncedAt: number | null;
+  status: UsageDeviceStatus;
+}
+
+interface CachedPeer {
+  name: string;
+  platform: string | null;
+  syncedAt: number;
+  /** 对方读取时的本地 todayKey,作为下一次增量的锚点。 */
+  todayKey: string;
+  rows: UsageDeviceRows;
+}
+
+interface CacheFile {
+  version: number;
+  peers: Record<string, CachedPeer>;
+}
+
+export interface PeerUsageSyncDeps {
+  userId(): string | null;
+  selfDeviceId(): string | null;
+  listDevices(): Promise<{ devices: DeviceLinkDeviceView[] }>;
+  invoke(
+    deviceId: string,
+    channel: string,
+    args: unknown[],
+  ): Promise<
+    { ok: true; result: unknown } | { ok: false; error: { code: string; message: string } }
+  >;
+  readCache(userId: string): Promise<string | null>;
+  writeCache(userId: string, contents: string): Promise<void>;
+  now(): number;
+}
+
+export interface PeerUsageSnapshot {
+  /** 每次缓存行或设备状态变化都 +1,用量历史据此判断聚合结果是否过期。 */
+  version: number;
+  selfDeviceId: string | null;
+  devices: UsageDeviceSummary[];
+  peerRows: ReadonlyMap<string, UsageDeviceRows>;
+}
+
+export interface PeerUsageSync {
+  /** 读当前已知的设备与缓存行(不发网络请求;首次调用会先读磁盘缓存)。 */
+  snapshot(): Promise<PeerUsageSnapshot>;
+  /** 节流地触发一次同步;返回本次(或在途)同步的 promise。 */
+  sync(): Promise<void>;
+  isSyncing(): boolean;
+  /** 当前数据版本(同 snapshot().version),同步读取供缓存新鲜度判断。 */
+  version(): number;
+}
+
+function dayBefore(dayKey: string): string {
+  const [y, m, d] = dayKey.split('-').map(Number);
+  const date = new Date(y, (m ?? 1) - 1, (d ?? 1) - 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+/** 用增量结果替换缓存中 sinceDay(含)之后的行;sinceDay 为 null 时整体替换。 */
+export function mergeIncrementalRows(
+  cached: UsageDeviceRows | null,
+  sinceDay: string | null,
+  incoming: UsageDeviceRows,
+): UsageDeviceRows {
+  if (!cached || sinceDay === null) return incoming;
+  return {
+    spendDays: [...cached.spendDays.filter((row) => row.day < sinceDay), ...incoming.spendDays],
+    modelRows: [...cached.modelRows.filter((row) => row.day < sinceDay), ...incoming.modelRows],
+  };
+}
+
+function parseCacheFile(raw: string | null): Record<string, CachedPeer> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Partial<CacheFile>;
+    if (parsed.version !== CACHE_VERSION || !parsed.peers || typeof parsed.peers !== 'object')
+      return {};
+    const peers: Record<string, CachedPeer> = {};
+    for (const [deviceId, value] of Object.entries(parsed.peers)) {
+      const peer = value as Partial<CachedPeer> | null;
+      if (!peer || typeof peer.name !== 'string' || !isDayKey(peer.todayKey)) continue;
+      if (typeof peer.syncedAt !== 'number' || !Number.isFinite(peer.syncedAt)) continue;
+      const rows = sanitizeUsageDeviceRows(peer.rows);
+      if (!rows) continue;
+      peers[deviceId] = {
+        name: peer.name,
+        platform: typeof peer.platform === 'string' ? peer.platform : null,
+        syncedAt: peer.syncedAt,
+        todayKey: peer.todayKey,
+        rows,
+      };
+    }
+    return peers;
+  } catch {
+    return {};
+  }
+}
+
+function errorStatus(code: string): UsageDeviceStatus {
+  if (
+    code === 'CHANNEL_NOT_ALLOWED' ||
+    code === 'NO_HANDLER' ||
+    code === 'UNSUPPORTED_CAPABILITY'
+  ) {
+    return 'unsupported';
+  }
+  if (code === 'DEVICE_OFFLINE' || code === 'PEER_OFFLINE' || code === 'TIMEOUT') return 'offline';
+  if (
+    code === 'REMOTE_DISABLED' ||
+    code === 'CONTROL_TARGET_DISABLED' ||
+    code === 'PERMISSION_DENIED' ||
+    code === 'ACCESS_REVOKED'
+  ) {
+    return 'remote-disabled';
+  }
+  return 'error';
+}
+
+function errorCodeOf(error: unknown): string {
+  if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') {
+    return error.code;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /^\[([A-Z_]+)\]/.exec(message)?.[1] ?? 'REMOTE_UNAVAILABLE';
+}
+
+export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
+  let loadedUserId: string | null = null;
+  let loadPromise: Promise<void> | null = null;
+  let peers: Record<string, CachedPeer> = {};
+  /** 最近一次设备目录(含本机);目录读取失败时沿用上次结果。 */
+  let directory: DeviceLinkDeviceView[] | null = null;
+  const statuses = new Map<string, UsageDeviceStatus>();
+  let version = 0;
+  let inflight: Promise<void> | null = null;
+  let lastSyncStartedAt = 0;
+
+  const bump = (): void => {
+    version += 1;
+  };
+
+  const resetForUser = (userId: string | null): void => {
+    loadedUserId = userId;
+    loadPromise = null;
+    peers = {};
+    directory = null;
+    statuses.clear();
+    lastSyncStartedAt = 0;
+    bump();
+  };
+
+  const ensureLoaded = async (): Promise<string | null> => {
+    const userId = deps.userId();
+    if (userId !== loadedUserId) resetForUser(userId);
+    if (!userId) return null;
+    if (!loadPromise) {
+      loadPromise = deps
+        .readCache(userId)
+        .catch(() => null)
+        .then((raw) => {
+          if (loadedUserId !== userId) return;
+          peers = { ...parseCacheFile(raw), ...peers };
+          bump();
+        });
+    }
+    await loadPromise;
+    return deps.userId() === userId ? userId : null;
+  };
+
+  const persist = async (userId: string): Promise<void> => {
+    if (loadedUserId !== userId) return;
+    const file: CacheFile = { version: CACHE_VERSION, peers };
+    try {
+      await deps.writeCache(userId, JSON.stringify(file));
+    } catch (err) {
+      log.debug('write peer usage cache failed:', err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const syncPeer = async (userId: string, device: DeviceLinkDeviceView): Promise<void> => {
+    if (!device.online) {
+      statuses.set(device.deviceId, 'offline');
+      return;
+    }
+    if (!device.remoteControlEnabled || !device.controlEnabled) {
+      statuses.set(device.deviceId, 'remote-disabled');
+      return;
+    }
+    const cached = peers[device.deviceId] ?? null;
+    const sinceDay = cached ? dayBefore(cached.todayKey) : null;
+    statuses.set(device.deviceId, 'syncing');
+    try {
+      const response = await deps.invoke(device.deviceId, USAGE_DEVICE_ROWS_CHANNEL, [
+        sinceDay ? { sinceDay } : {},
+      ]);
+      if (!response.ok) {
+        statuses.set(device.deviceId, errorStatus(errorCodeOf(response.error)));
+        return;
+      }
+      const decoded = await decodeUsageDeviceRowsResponse(response.result);
+      if (!decoded || decoded.kind === 'oversize') {
+        statuses.set(device.deviceId, 'error');
+        return;
+      }
+      // 账号在请求期间切换:结果属于旧账号,丢弃。
+      if (loadedUserId !== userId || deps.userId() !== userId) return;
+      // 对方回的区间与请求不一致(旧实现忽略参数等)时按全量处理,不能拼出重复行。
+      const effectiveSince = decoded.sinceDay === sinceDay ? sinceDay : null;
+      peers[device.deviceId] = {
+        name: device.name,
+        platform: device.platform,
+        syncedAt: deps.now(),
+        todayKey: decoded.todayKey,
+        rows: mergeIncrementalRows(cached?.rows ?? null, effectiveSince, decoded.rows),
+      };
+      statuses.set(device.deviceId, 'ok');
+    } catch (error) {
+      statuses.set(device.deviceId, errorStatus(errorCodeOf(error)));
+    }
+  };
+
+  const runSync = async (): Promise<void> => {
+    const userId = await ensureLoaded();
+    if (!userId) return;
+    let devices: DeviceLinkDeviceView[];
+    try {
+      devices = (await deps.listDevices()).devices;
+    } catch (err) {
+      log.debug(
+        'list devices for usage sync failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+      return;
+    }
+    if (loadedUserId !== userId || deps.userId() !== userId) return;
+    directory = devices;
+    // 已从账号移除的设备不再出现在选择器里,缓存一并清掉。
+    const known = new Set(devices.map((device) => device.deviceId));
+    for (const deviceId of Object.keys(peers)) {
+      if (!known.has(deviceId)) delete peers[deviceId];
+    }
+    const targets = devices.filter(
+      (device) => !device.isSelf && !MOBILE_PLATFORMS.has(device.platform ?? ''),
+    );
+    for (const device of targets) {
+      if (device.online && device.remoteControlEnabled && device.controlEnabled) {
+        statuses.set(device.deviceId, 'syncing');
+      }
+    }
+    bump();
+    for (let offset = 0; offset < targets.length; offset += PEER_FANOUT) {
+      await Promise.all(
+        targets.slice(offset, offset + PEER_FANOUT).map((device) => syncPeer(userId, device)),
+      );
+    }
+    bump();
+    await persist(userId);
+  };
+
+  const snapshot = async (): Promise<PeerUsageSnapshot> => {
+    await ensureLoaded();
+    const selfDeviceId = deps.selfDeviceId();
+    const devices: UsageDeviceSummary[] = [];
+    const listed = new Set<string>();
+    for (const device of directory ?? []) {
+      if (MOBILE_PLATFORMS.has(device.platform ?? '')) continue;
+      const isSelf = device.isSelf || device.deviceId === selfDeviceId;
+      listed.add(device.deviceId);
+      devices.push({
+        deviceId: device.deviceId,
+        name: device.name,
+        platform: device.platform,
+        isSelf,
+        syncedAt: isSelf ? null : (peers[device.deviceId]?.syncedAt ?? null),
+        status: isSelf
+          ? 'ok'
+          : (statuses.get(device.deviceId) ??
+            (peers[device.deviceId] ? 'ok' : device.online ? 'syncing' : 'offline')),
+      });
+    }
+    // 目录尚未读到(冷启动 / 未连接)时,缓存里的设备照常参与合并。
+    for (const [deviceId, peer] of Object.entries(peers)) {
+      if (listed.has(deviceId) || deviceId === selfDeviceId) continue;
+      devices.push({
+        deviceId,
+        name: peer.name,
+        platform: peer.platform,
+        isSelf: false,
+        syncedAt: peer.syncedAt,
+        status: statuses.get(deviceId) ?? 'offline',
+      });
+    }
+    const peerRows = new Map<string, UsageDeviceRows>();
+    for (const [deviceId, peer] of Object.entries(peers)) {
+      if (deviceId !== selfDeviceId) peerRows.set(deviceId, peer.rows);
+    }
+    return { version, selfDeviceId, devices, peerRows };
+  };
+
+  return {
+    snapshot,
+    sync() {
+      if (inflight) return inflight;
+      const userId = deps.userId();
+      if (userId !== loadedUserId) resetForUser(userId);
+      if (deps.now() - lastSyncStartedAt < SYNC_MIN_INTERVAL_MS) return Promise.resolve();
+      lastSyncStartedAt = deps.now();
+      inflight = runSync()
+        .catch((err) => {
+          log.debug('peer usage sync failed:', err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          inflight = null;
+        });
+      return inflight;
+    },
+    isSyncing: () => inflight !== null,
+    version: () => version,
+  };
+}
+
+let defaultSync: PeerUsageSync | null = null;
+
+export function peerUsageCacheFilePath(userDataDir: string, userId: string): string {
+  return path.join(userDataDir, 'cache', `usage-peer-rows.${encodeURIComponent(userId)}.json`);
+}
+
+/** 由 maker-ipc/usage.ts 注入生产依赖(device-link、userData 路径);未注入时只看本机。 */
+export function configurePeerUsageSync(deps: PeerUsageSyncDeps): void {
+  defaultSync = createPeerUsageSync(deps);
+}
+
+export function getPeerUsageSync(): PeerUsageSync | null {
+  return defaultSync;
+}
+
+export async function readPeerUsageCacheFile(file: string): Promise<string | null> {
+  try {
+    return await fs.readFile(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+export async function writePeerUsageCacheFile(file: string, contents: string): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, contents, 'utf8');
+  await fs.rename(tmp, file);
+}
+
+export function __resetPeerUsageSyncForTesting(): void {
+  defaultSync = null;
+}

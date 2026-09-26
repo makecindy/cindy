@@ -116,8 +116,16 @@ import {
   readUsageHistory,
   readUsageHistoryWith,
   shiftDayKey,
+  combineUsageDeviceRows,
+  usageHistoryDepsForScope,
   type UsageHistoryDeps,
 } from '../usageHistory';
+import {
+  __resetPeerUsageSyncForTesting,
+  configurePeerUsageSync,
+  type PeerUsageSyncDeps,
+} from '../peerUsageSync';
+import { readUsageDeviceRows } from '../usageDeviceRows';
 import { getAllSpendDays } from '../../localDb/dailySpend';
 import { getModelUsageSince } from '../../localDb/dailyModelUsage';
 import { getGatewayModelPricing, isModelPricingRefreshInFlight } from '../modelPricing';
@@ -212,6 +220,7 @@ beforeEach(async () => {
   );
   currentDbClient.userId = 'user-a';
   __resetUsageHistoryCacheForTesting();
+  __resetPeerUsageSyncForTesting();
   // 账本币种是跨用例的模块级状态,逐例重置,不受前一例显式设定的账号币种影响。
   // 重置后必须再显式落一次账号币种:生产里由 modelPricing(报价目录同步/磁盘快照
   // 恢复)写入,而本文件把它整体 mock 掉了;不落这一笔,回退链会落到与构建区域
@@ -854,5 +863,130 @@ describe('production cache and empty payload', () => {
     expect(empty.totals.last30DaysEstimatedValue).toEqual(
       zeroUsageMoney('value-estimate'),
     );
+  });
+});
+
+describe('multi-device scope', () => {
+  const peerRows = {
+    spendDays: [
+      { day: '2026-06-10', monies: [actual(3)] },
+      { day: TODAY, monies: [actual(3)] },
+    ],
+    modelRows: [
+      modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: 100 }),
+      modelRow('2026-06-10', 'claude-code', 'claude-sonnet-5', actual(3), { outputTokens: 50 }),
+    ],
+  };
+
+  it('merges identical model keys from different devices into one row', () => {
+    const combined = combineUsageDeviceRows([
+      {
+        spendDays: [{ day: TODAY, monies: [actual(1)] }],
+        modelRows: [modelRow(TODAY, 'codex', 'gpt-5.5', actual(1), { inputTokens: 10 })],
+      },
+      {
+        spendDays: [{ day: TODAY, monies: [actual(2)] }],
+        modelRows: [modelRow(TODAY, 'codex', 'gpt-5.5', actual(2), { inputTokens: 5, outputTokens: 7 })],
+      },
+    ]);
+    expect(combined.spendDays).toEqual([{ day: TODAY, monies: [actual(1), actual(2)] }]);
+    expect(combined.modelRows).toHaveLength(1);
+    expect(combined.modelRows[0]).toMatchObject({
+      money: actual(3),
+      inputTokens: 15,
+      outputTokens: 7,
+    });
+  });
+
+  it('aggregates local plus peer rows for all devices, and only the peer for a device scope', async () => {
+    const base = makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: [actual(2)] }],
+      getModelUsageSince: async () => [
+        modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: 40 }),
+      ],
+    });
+    const snapshot = { peerRows: new Map([['device-b', peerRows]]) };
+
+    const all = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'all', snapshot), {
+      days: 'all',
+      modelDays: 'all',
+    });
+    expect(all.totals.today).toEqual(actual(5));
+    expect(all.totals.todayTokens).toBe(140);
+    expect(all.modelDaily.filter((row) => row.day === TODAY)).toHaveLength(1);
+    expect(all.streak.current).toBe(2);
+
+    const peerOnly = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'device-b', snapshot), {
+      days: 'all',
+      modelDays: 'all',
+    });
+    expect(peerOnly.totals.today).toEqual(actual(3));
+    expect(peerOnly.totals.todayTokens).toBe(100);
+
+    const unknown = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'device-x', snapshot));
+    expect(unknown.days).toEqual([]);
+
+    expect(usageHistoryDepsForScope(base, 'local', snapshot)).toBe(base);
+  });
+
+  it('round-trips a peer through the device-rows wire format into the all-devices payload', async () => {
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [actual(2)] }]);
+    const response = await readUsageDeviceRows(
+      {
+        getAllSpendDays: async () => peerRows.spendDays,
+        getModelUsageSince: async () => peerRows.modelRows,
+        todayKey: () => TODAY,
+      },
+      { sinceDay: null },
+    );
+    let resolveInvoke!: () => void;
+    const invokeGate = new Promise<void>((resolve) => {
+      resolveInvoke = resolve;
+    });
+    const deps: PeerUsageSyncDeps = {
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-a', name: 'Studio', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: true,
+          },
+          {
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+          },
+        ],
+      }),
+      invoke: async () => {
+        await invokeGate;
+        return { ok: true, result: response };
+      },
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => Date.now(),
+    };
+    configurePeerUsageSync(deps);
+
+    const first = await readUsageHistory({ days: 'all', modelDays: 'all', device: 'all' });
+    expect(first.stale).toBe(true);
+    expect(first.devicesSyncing).toBe(true);
+    expect(first.totals.today).toEqual(actual(2));
+
+    resolveInvoke();
+    await vi.waitFor(async () => {
+      const next = await readUsageHistory({ days: 'all', modelDays: 'all', device: 'all' });
+      expect(next.stale).toBe(false);
+      expect(next.totals.today).toEqual(actual(5));
+      expect(next.devices?.map((device) => [device.name, device.isSelf, device.status])).toEqual([
+        ['Studio', true, 'ok'],
+        ['Laptop', false, 'ok'],
+      ]);
+    });
+
+    // 本机范围不受跨设备数据影响, 也不带设备列表。
+    const local = await readUsageHistory({ days: 'all', modelDays: 'all' });
+    expect(local.totals.today).toEqual(actual(2));
+    expect(local.devices).toBeUndefined();
   });
 });

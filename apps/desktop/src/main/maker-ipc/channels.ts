@@ -344,6 +344,9 @@ export const MAKER_INVOKE = {
   USAGE_REFERENCE_MODEL_PRICING: 'maker:usage:reference-model-pricing',
   // 用量历史聚合 (daily_spend + daily_model_usage, main 侧算好 streak/异常/估算) — 首页仪表盘用
   USAGE_HISTORY: 'maker:usage:history',
+  // 本机原始用量行 (daily_spend + daily_model_usage) — 仅供同账号其它电脑经 device-link
+  // 拉取后合并进它们的用量历史; 本机 renderer 不调用。wire 契约见 usage/usageDeviceRows.ts
+  USAGE_DEVICE_ROWS: 'maker:usage:device-rows',
   // Memory 控制 — 走 Maker.{getAgentMemoryStatus/setAgentMemory/resetAgentMemory},
   // 各 agent 子类落地 (Claude 改 SDK Settings.autoMemoryEnabled, Codex 调 app-server
   // experimentalFeature/enablement/set + memory/reset RPC)。

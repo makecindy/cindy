@@ -6514,7 +6514,7 @@
     }
   },
   "usageHistory": {
-    "description": "這台裝置上 Cindy 內部產生的 token 用量。紀錄從該功能上線起累積，不回填更早的歷史。",
+    "description": "你各台電腦上 Cindy 內部產生的 token 用量，預設合併顯示，也可以只看某一台。其他電腦需要在線並允許遠端控制才能讀取，暫時讀不到時沿用上次讀到的資料。紀錄從該功能上線起累積，不回填更早的歷史。",
     "empty": "還沒有用量紀錄。跑過對話之後，這裡會開始累積。",
     "loadFailed": "無法載入用量歷史。請重新開啟設定後再試一次。",
     "range": {
@@ -6525,6 +6525,23 @@
       "30d": "最近 30 天",
       "7d": "最近 7 天",
       "today": "今天"
+    },
+    "device": {
+      "label": "裝置",
+      "ariaLabel": "篩選用量所屬裝置",
+      "all": "所有裝置",
+      "self": "本機",
+      "selfNamed": "本機（{{name}}）",
+      "status": {
+        "syncing": "正在讀取…",
+        "syncedAt": "資料截至 {{time}}",
+        "offline": "離線",
+        "remoteDisabled": "未允許遠端控制",
+        "unsupported": "需要更新 Cindy",
+        "error": "讀取失敗",
+        "noData": "暫無資料"
+      },
+      "partial": "部分電腦暫時讀不到最新用量，合計可能偏少。可在裝置清單中查看各台狀態。"
     },
     "cacheHitTooltip": "快取讀取 ÷（輸入 + 快取讀取 + 快取寫入），與訊息卡片同口徑。",
     "summary": {
@@ -6589,7 +6606,8 @@
         "lastActive": "最後活躍"
       },
       "providerTooltip": "取該任務目前選定的供應商；未指定時留空。",
-      "tokensTooltip": "該任務的生命週期累計；{{range}}僅用於篩選活躍任務，不代表該範圍內的增量。"
+      "tokensTooltip": "該任務的生命週期累計；{{range}}僅用於篩選活躍任務，不代表該範圍內的增量。",
+      "subtitleLocal": "{{range}}內在本機活躍過的任務，依累計 token 排序"
     }
   },
   "usageDashboard": {

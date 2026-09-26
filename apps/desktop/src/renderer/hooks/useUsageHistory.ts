@@ -56,6 +56,26 @@ export interface UsageHistoryModelDay {
   cacheCreateTokens?: number;
 }
 
+/** 参与用量合并的电脑 (main 侧 peerUsageSync 的 UsageDeviceSummary 投影)。 */
+export interface UsageHistoryDevice {
+  deviceId: string;
+  name: string;
+  platform: string | null;
+  isSelf: boolean;
+  /** 最近一次成功读取该设备的时间; 本机与从未读到的设备为 null。 */
+  syncedAt: number | null;
+  status: 'ok' | 'syncing' | 'offline' | 'remote-disabled' | 'unsupported' | 'error';
+}
+
+const DEVICE_STATUSES = new Set<UsageHistoryDevice['status']>([
+  'ok',
+  'syncing',
+  'offline',
+  'remote-disabled',
+  'unsupported',
+  'error',
+]);
+
 export interface UsageHistoryPayload {
   generatedAt: number;
   todayKey: string;
@@ -76,6 +96,10 @@ export interface UsageHistoryPayload {
     last30DaysTokens: number;
   };
   anomaly: { isAnomalous: boolean; trailing7DayAvg: RegionalMoney | null };
+  /** 多设备范围才有: 参与合并的电脑 (含本机)。 */
+  devices?: UsageHistoryDevice[];
+  /** true = main 正在从其它电脑读取。 */
+  devicesSyncing?: boolean;
 }
 
 /** 热力图窗口: 20 周 = 140 天。 */
@@ -144,6 +168,7 @@ interface StoredUsageHistoryPayload {
   streak?: unknown;
   totals?: unknown;
   anomaly?: unknown;
+  devices?: unknown;
 }
 
 function finiteNumber(value: unknown, fallback = 0): number {
@@ -152,6 +177,26 @@ function finiteNumber(value: unknown, fallback = 0): number {
 
 function isAgentKind(value: unknown): value is UsageHistoryModel['agentKind'] {
   return value === 'claude-code' || value === 'codex' || value === 'pi';
+}
+
+function parseDevices(value: unknown): UsageHistoryDevice[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const devices: UsageHistoryDevice[] = [];
+  for (const raw of value as Array<Record<string, unknown> | null>) {
+    if (!raw || typeof raw.deviceId !== 'string' || typeof raw.name !== 'string') continue;
+    const status = raw.status as UsageHistoryDevice['status'];
+    devices.push({
+      deviceId: raw.deviceId,
+      name: raw.name,
+      platform: typeof raw.platform === 'string' ? raw.platform : null,
+      isSelf: raw.isSelf === true,
+      syncedAt:
+        typeof raw.syncedAt === 'number' && Number.isFinite(raw.syncedAt) ? raw.syncedAt : null,
+      // 快照里的「读取中」没有意义: 下次打开会重新同步, 先按离线展示缓存时间。
+      status: DEVICE_STATUSES.has(status) && status !== 'syncing' ? status : 'offline',
+    });
+  }
+  return devices;
 }
 
 function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
@@ -270,7 +315,9 @@ function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
         : normalizeRegionalMoney(anomaly.trailing7DayAvg) ??
           legacyActual(anomaly.trailing7DayAvg);
 
+    const devices = parseDevices(parsed.devices);
     return {
+      ...(devices ? { devices } : {}),
       generatedAt: finiteNumber(parsed.generatedAt, Date.now()),
       todayKey: typeof parsed.todayKey === 'string' ? parsed.todayKey : '',
       stale: parsed.stale === true,
@@ -324,11 +371,15 @@ interface UsageHistoryScopeState {
   listeners: Set<(p: UsageHistoryPayload | null) => void>;
   statusListeners: Set<(refreshing: boolean) => void>;
   refreshing: boolean;
-  request: {
-    days: number | 'all';
-    modelDays: number | 'all';
-    allowPendingEstimates: boolean;
-  };
+  request: UsageHistoryRequest;
+}
+
+interface UsageHistoryRequest {
+  days: number | 'all';
+  modelDays: number | 'all';
+  allowPendingEstimates: boolean;
+  /** 'local' / 'all' / 其它电脑的 deviceId。 */
+  device: string;
 }
 
 const scopes = new Map<string, UsageHistoryScopeState>();
@@ -339,14 +390,11 @@ function normalizeScopeKey(userId?: string | null): string {
 
 function getScope(
   scopeKey: string,
-  request: {
-    days: number | 'all';
-    modelDays: number | 'all';
-    allowPendingEstimates: boolean;
-  } = {
+  request: UsageHistoryRequest = {
     days: HISTORY_WINDOW_DAYS,
     modelDays: MODEL_WINDOW_DAYS,
     allowPendingEstimates: false,
+    device: 'local',
   },
 ): UsageHistoryScopeState {
   let state = scopes.get(scopeKey);
@@ -406,6 +454,7 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
     .getHistory({
       days: scope.request.days,
       modelDays: scope.request.modelDays,
+      ...(scope.request.device === 'local' ? {} : { device: scope.request.device }),
       ...(opts?.forceRefresh ? { forceRefresh: true } : {}),
     })
     .then((res) => {
@@ -476,22 +525,18 @@ function normalizeWindow(value: UsageHistoryWindow | undefined, fallback: number
   return Math.min(366, Math.max(1, Math.floor(value ?? fallback)));
 }
 
-function scopeKeyForRequest(
-  scopeKey: string,
-  request: {
-    days: number | 'all';
-    modelDays: number | 'all';
-    allowPendingEstimates: boolean;
-  },
-): string {
+function scopeKeyForRequest(scopeKey: string, request: UsageHistoryRequest): string {
   if (
     request.days === HISTORY_WINDOW_DAYS &&
     request.modelDays === MODEL_WINDOW_DAYS &&
-    !request.allowPendingEstimates
+    !request.allowPendingEstimates &&
+    request.device === 'local'
   ) {
     return scopeKey;
   }
-  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}`;
+  // 'local' 沿用旧 key, 升级后已有的本机快照照常 hydrate。
+  const deviceSuffix = request.device === 'local' ? '' : `|device=${encodeURIComponent(request.device)}`;
+  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}${deviceSuffix}`;
 }
 
 export function useUsageHistory(opts?: {
@@ -501,16 +546,19 @@ export function useUsageHistory(opts?: {
   modelDays?: UsageHistoryWindow;
   /** Token-only consumers may render the payload while prices finish loading. */
   allowPendingEstimates?: boolean;
+  /** 'local' (默认, 只看本机) / 'all' (所有设备合并) / 其它电脑的 deviceId。 */
+  device?: string;
 }): {
   history: UsageHistoryPayload | null;
   refreshing: boolean;
 } {
   const paused = opts?.paused ?? false;
   const scopeKey = normalizeScopeKey(opts?.userId);
-  const request = {
+  const request: UsageHistoryRequest = {
     days: normalizeWindow(opts?.days, HISTORY_WINDOW_DAYS),
     modelDays: normalizeWindow(opts?.modelDays, MODEL_WINDOW_DAYS),
     allowPendingEstimates: opts?.allowPendingEstimates ?? false,
+    device: opts?.device || 'local',
   };
   const scopedKey = scopeKeyForRequest(scopeKey, request);
   const scope = getScope(scopedKey, request);

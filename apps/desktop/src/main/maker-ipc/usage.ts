@@ -35,7 +35,20 @@ import {
   CodexWebUsageUnauthorizedError,
   fetchCodexWebUsageSnapshot,
 } from '../usage/codexWebUsage.js';
+import { app } from 'electron';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
+import { readUsageDeviceRows } from '../usage/usageDeviceRows.js';
+import {
+  configurePeerUsageSync,
+  peerUsageCacheFilePath,
+  readPeerUsageCacheFile,
+  writePeerUsageCacheFile,
+} from '../usage/peerUsageSync.js';
+import { getAllSpendDays, localDayKey } from '../localDb/dailySpend.js';
+import { getModelUsageSince } from '../localDb/dailyModelUsage.js';
+import { getCurrentDbClientUserId } from '../localDb/client/current.js';
+import { getSelfDeviceId, remoteInvoke } from '../device-link/index.js';
+import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import {
   clearClaudeSubscriptionUsageSnapshot,
   clearCodexAccountUsageSnapshot,
@@ -309,6 +322,20 @@ export function registerMakerUsageIpc(maker: Maker): void {
     readReferenceModelPricing: getReferenceModelPricing,
     readUsageHistory,
     emptyUsageHistory: emptyUsageHistoryPayload,
+    readUsageDeviceRows: (request) =>
+      readUsageDeviceRows({ getAllSpendDays, getModelUsageSince, todayKey: () => localDayKey() }, request),
+  });
+
+  // 用量历史「所有设备」范围:经 device-link 拉同账号其它电脑的原始用量行并按账号缓存。
+  configurePeerUsageSync({
+    userId: getCurrentDbClientUserId,
+    selfDeviceId: getSelfDeviceId,
+    listDevices: () => handleListDevices(deviceDirectoryDeps()),
+    invoke: (deviceId, channel, args) => remoteInvoke(deviceId, channel, args),
+    readCache: (userId) => readPeerUsageCacheFile(peerUsageCacheFilePath(app.getPath('userData'), userId)),
+    writeCache: (userId, contents) =>
+      writePeerUsageCacheFile(peerUsageCacheFilePath(app.getPath('userData'), userId), contents),
+    now: () => Date.now(),
   });
 
   // 订阅会话的 CLI 在会话里上报 SDK rate_limit_event → 落库 + 广播(maker-core 只对本机

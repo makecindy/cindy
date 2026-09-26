@@ -11,6 +11,13 @@
  *   - 有缓存时立即返回 stale payload, 后台刷新并写回磁盘; renderer 保持"更新中"感知并短轮询补 fresh。
  *   - 无缓存时才走同步聚合, 成功后落盘。纯函数 readUsageHistoryWith() 不带 IO 缓存, 便于单测。
  *
+ * 设备范围 (device):
+ *   - 'local' (默认): 只读本机库, 首页仪表盘沿用。
+ *   - 'all': 本机 + 同账号其它电脑的原始行 (peerUsageSync 经 device-link 拉取并缓存),
+ *     合并后走同一条聚合链路。设置 → 用量历史默认使用。
+ *   - 其它值: 某一台其它电脑的 deviceId, 只聚合该设备的缓存行。
+ *   多设备范围在其它设备同步期间返回 stale, renderer 的短轮询据此拿到合并后的结果。
+ *
  * streak / anomaly / 估算全部是导出的纯函数, 单测不需要 DB / Electron。
  * 日期一律用本地时区 day key (localDayKey 同口径); renderer 以 payload.todayKey 为锚,
  * 不自己取系统日期。
@@ -38,6 +45,12 @@ import {
   type ModelPriceOverridesSnapshot,
 } from './referenceModelPricing';
 import { computePriceQuoteTurnMoney } from './turnCostCalculator';
+import {
+  getPeerUsageSync,
+  type PeerUsageSnapshot,
+  type UsageDeviceSummary,
+} from './peerUsageSync';
+import type { UsageDeviceRows } from './usageDeviceRows';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
 import {
   addCompatibleRegionalMoney,
@@ -144,6 +157,54 @@ export interface UsageHistoryPayload {
     last30DaysTokens: number;
   };
   anomaly: { isAnomalous: boolean; trailing7DayAvg: RegionalMoney | null };
+  /**
+   * 多设备范围才有: 参与合并的电脑 (含本机), 供设备选择器与「数据截至」标注。
+   * 'local' 范围与旧快照缺省。
+   */
+  devices?: UsageDeviceSummary[];
+  /** true = 正在从其它电脑读取, 结果可能还不含它们的最新数据。 */
+  devicesSyncing?: boolean;
+  /** 聚合时使用的跨设备数据版本 (main 内部新鲜度判断用)。 */
+  peerVersion?: number;
+}
+
+export type UsageHistoryDeviceScope = 'local' | 'all' | (string & {});
+
+/**
+ * 合并多台设备的原始行。同一 (天, agent, 模型, 币种, 金额口径) 的模型行相加,
+ * 保持与单机库一致的「每键一行」形状 —— 下游 modelDaily 与柱图按行取值, 不能出现重复键。
+ * 日账按天拼接各设备的多币种金额, 折叠仍由聚合链路按账本币种完成。
+ */
+export function combineUsageDeviceRows(sources: readonly UsageDeviceRows[]): UsageDeviceRows {
+  const spendByDay = new Map<string, RegionalMoney[]>();
+  const modelByKey = new Map<string, DailyModelUsageRow>();
+  for (const source of sources) {
+    for (const row of source.spendDays) {
+      const monies = spendByDay.get(row.day) ?? [];
+      monies.push(...row.monies);
+      spendByDay.set(row.day, monies);
+    }
+    for (const row of source.modelRows) {
+      const key = [row.day, row.agentKind, row.model, row.money.currency, row.money.kind].join('\u0000');
+      const existing = modelByKey.get(key);
+      if (!existing) {
+        modelByKey.set(key, { ...row });
+        continue;
+      }
+      existing.money =
+        addCompatibleRegionalMoney([existing.money, row.money], row.money.currency) ?? existing.money;
+      existing.inputTokens += row.inputTokens;
+      existing.outputTokens += row.outputTokens;
+      existing.cacheReadTokens += row.cacheReadTokens;
+      existing.cacheCreateTokens += row.cacheCreateTokens;
+    }
+  }
+  return {
+    spendDays: [...spendByDay.entries()]
+      .map(([day, monies]) => ({ day, monies }))
+      .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
+    modelRows: [...modelByKey.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
+  };
 }
 
 /** YYYY-MM-DD → 前一天 (本地时区语义, 纯字符串进出)。 */
@@ -274,14 +335,21 @@ function normalizeWindowDays(value: number | 'all' | undefined, fallback: number
   return Math.min(366, Math.max(1, Math.floor(value ?? fallback)));
 }
 
+function normalizeDeviceScope(value: UsageHistoryDeviceScope | undefined): UsageHistoryDeviceScope {
+  return value && value.length > 0 ? value : 'local';
+}
+
 function optsKey(opts?: UsageHistoryReadOptions): string {
+  const device = normalizeDeviceScope(opts?.device);
   const days = normalizeWindowDays(opts?.days, 140);
   const modelDays = normalizeWindowDays(opts?.modelDays, MODEL_WINDOW_DAYS);
   const userId = getCurrentDbClientUserId() ?? 'anonymous';
   // Keep the pre-window-split key for the default request so existing disk
   // snapshots remain readable. Non-default model windows get their own key.
   const modelSuffix = modelDays === MODEL_WINDOW_DAYS ? '' : `|modelDays=${modelDays}`;
-  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}`;
+  // 'local' 沿用旧 key, 升级后首页与已有磁盘快照照常命中。
+  const deviceSuffix = device === 'local' ? '' : `|device=${encodeURIComponent(device)}`;
+  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}${deviceSuffix}`;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -329,6 +397,7 @@ function validateUsageHistoryPayload(value: unknown): UsageHistoryPayload | null
     streak: payload.streak,
     totals: payload.totals,
     anomaly: payload.anomaly,
+    ...(Array.isArray(payload.devices) ? { devices: payload.devices } : {}),
   };
 }
 
@@ -475,6 +544,8 @@ export interface UsageHistoryReadOptions {
   days?: number | 'all';
   /** Model/table aggregation window. `all` is used by Settings → Usage History. */
   modelDays?: number | 'all';
+  /** 设备范围, 缺省 'local'。见文件头注释。 */
+  device?: UsageHistoryDeviceScope;
   /**
    * true = 事件触发的刷新, 需要绕过 10s 内存快返, 立即重新聚合 DB。
    * mount / 展开仍使用 stale-while-refresh 快路径保证首帧速度。
@@ -486,7 +557,7 @@ async function refreshUsageHistory(expectedOptsKey: string, opts?: UsageHistoryR
   if (opts?.forceRefresh) {
     refreshInFlightByOptsKey.delete(expectedOptsKey);
     const generation = nextRefreshGeneration(expectedOptsKey);
-    return readUsageHistoryWith(defaultDeps, opts)
+    return readScopedUsageHistory(opts)
       .then((payload) => {
         const next = freshPayload(payload);
         if (isLatestRefreshGeneration(expectedOptsKey, generation)) {
@@ -502,7 +573,7 @@ async function refreshUsageHistory(expectedOptsKey: string, opts?: UsageHistoryR
   const current = refreshInFlightByOptsKey.get(expectedOptsKey);
   if (current) return current;
   const generation = nextRefreshGeneration(expectedOptsKey);
-  const nextRefresh = readUsageHistoryWith(defaultDeps, opts)
+  const nextRefresh = readScopedUsageHistory(opts)
       .then((payload) => {
         const next = freshPayload(payload);
         if (isLatestRefreshGeneration(expectedOptsKey, generation)) {
@@ -854,12 +925,87 @@ export async function readUsageHistoryWith(
   };
 }
 
+/** 按设备范围替换原始行读取; 价格、账本币种等其余依赖不变。 */
+export function usageHistoryDepsForScope(
+  base: UsageHistoryDeps,
+  scope: UsageHistoryDeviceScope,
+  snapshot: Pick<PeerUsageSnapshot, 'peerRows'>,
+): UsageHistoryDeps {
+  if (scope === 'local') return base;
+  let combined: Promise<UsageDeviceRows> | null = null;
+  const rows = (): Promise<UsageDeviceRows> => {
+    combined ??= (async () => {
+      if (scope !== 'all') {
+        const peer = snapshot.peerRows.get(scope);
+        return peer ? combineUsageDeviceRows([peer]) : { spendDays: [], modelRows: [] };
+      }
+      const [spendDays, modelRows] = await Promise.all([
+        base.getAllSpendDays(),
+        base.getModelUsageSince('0000-01-01'),
+      ]);
+      return combineUsageDeviceRows([{ spendDays, modelRows }, ...snapshot.peerRows.values()]);
+    })();
+    return combined;
+  };
+  return {
+    ...base,
+    getAllSpendDays: async () => (await rows()).spendDays,
+    getModelUsageSince: async (sinceDayKey) =>
+      (await rows()).modelRows.filter((row) => row.day >= sinceDayKey),
+  };
+}
+
+/** 本机设备条目兜底: 设备目录尚未读到 (未登录 / 未连接) 时选择器仍有「本机」。 */
+function devicesWithSelf(snapshot: PeerUsageSnapshot): UsageDeviceSummary[] {
+  if (snapshot.devices.some((device) => device.isSelf)) return snapshot.devices;
+  return [
+    {
+      deviceId: snapshot.selfDeviceId ?? 'local',
+      name: '',
+      platform: null,
+      isSelf: true,
+      syncedAt: null,
+      status: 'ok',
+    },
+    ...snapshot.devices,
+  ];
+}
+
+async function readScopedUsageHistory(opts?: UsageHistoryReadOptions): Promise<UsageHistoryPayload> {
+  const scope = normalizeDeviceScope(opts?.device);
+  const peerSync = scope === 'local' ? null : getPeerUsageSync();
+  if (!peerSync) {
+    const payload = await readUsageHistoryWith(defaultDeps, opts);
+    // 未注入跨设备同步 (单测 / 启动窗口) 时多设备范围退化为本机, 选择器只剩本机。
+    return scope === 'local'
+      ? payload
+      : { ...payload, devices: devicesWithSelf({ version: 0, selfDeviceId: null, devices: [], peerRows: new Map() }) };
+  }
+  const snapshot = await peerSync.snapshot();
+  const payload = await readUsageHistoryWith(usageHistoryDepsForScope(defaultDeps, scope, snapshot), opts);
+  return {
+    ...payload,
+    devices: devicesWithSelf(snapshot),
+    devicesSyncing: peerSync.isSyncing(),
+    peerVersion: snapshot.version,
+  };
+}
+
 /** 生产入口 (usage.ts adapter 注入给 IPC handler)。 */
 export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<UsageHistoryPayload> {
   const key = optsKey(opts);
+  const peerSync = normalizeDeviceScope(opts?.device) === 'local' ? null : getPeerUsageSync();
+  // 节流的跨设备同步; 同步期间返回 stale, renderer 短轮询直到拿到合并后的结果。
+  if (peerSync) void peerSync.sync();
+  const peerCurrent = (payload: UsageHistoryPayload): boolean =>
+    !peerSync || payload.peerVersion === peerSync.version();
+  const settle = (payload: UsageHistoryPayload): UsageHistoryPayload =>
+    peerSync?.isSyncing()
+      ? stalePayload({ ...payload, devicesSyncing: true })
+      : freshPayload({ ...payload, ...(peerSync ? { devicesSyncing: false } : {}) });
   if (opts?.forceRefresh) {
     const fresh = await refreshUsageHistory(key, opts);
-    if (fresh) return freshPayload(fresh);
+    if (fresh) return settle(fresh);
     if (cachedHistory && cachedHistoryOptsKey === key) return stalePayload(cachedHistory);
     const diskPayload = await hydrateFromDisk(key);
     if (diskPayload) return stalePayload(diskPayload);
@@ -867,7 +1013,7 @@ export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<
   }
   if (cachedHistory && cachedHistoryOptsKey === key) {
     if (refreshInFlightByOptsKey.has(key)) return stalePayload(cachedHistory);
-    if (isMemoryFresh(cachedHistory)) return freshPayload(cachedHistory);
+    if (isMemoryFresh(cachedHistory) && peerCurrent(cachedHistory)) return settle(cachedHistory);
     refreshUsageHistoryInBackground(key, opts);
     return stalePayload(cachedHistory);
   }
@@ -877,7 +1023,7 @@ export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<
     return stalePayload(diskPayload);
   }
   const fresh = await refreshUsageHistory(key, opts);
-  return fresh ?? emptyUsageHistoryPayload();
+  return fresh ? settle(fresh) : emptyUsageHistoryPayload();
 }
 
 /** DB 出错时的兜底空 payload (查询型 handler fallback-data 模式)。 */

@@ -460,6 +460,12 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 被控端视角的单价(与被控端桌面 tooltip 同源)。无 sender 依赖、无副作用;老被控端无此 channel
   // → CHANNEL_NOT_ALLOWED → 控制端隐藏价格(与桌面「无价不显示」口径一致)。
   'maker:usage:model-pricing',
+  // 用量历史跨设备合并(只读):同账号另一台电脑读取被控端 daily_spend / daily_model_usage
+  // 原始行,合并进它自己的「所有设备」用量历史。数据真相在被控端;只含按天 × 模型聚合的
+  // token 与金额,不含会话、消息或凭证。入参仅可选 sinceDay(YYYY-MM-DD),无 sender 依赖、
+  // 无副作用;响应 gzip 编码,超帧预算回结构化 oversize。老被控端无此 channel →
+  // CHANNEL_NOT_ALLOWED → 控制端把该设备标为「版本过旧」,不影响其它设备。
+  'maker:usage:device-rows',
   // 网关 API key **presence-only** 探测:只回 { present: boolean },不回、也永不扩展为读取
   // 密钥材料 —— 这是「账号与密钥永不放行」大类下的窄口径例外(同 DL_VOICE_CREDENTIAL_SYNC
   // 的例外定位,禁止泛化)。用途:控制端模型选择器判断折扣版(codex/)是否该置灰,判定依据
