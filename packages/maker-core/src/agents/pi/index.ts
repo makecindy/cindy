@@ -219,8 +219,8 @@ import {
 import {
   createPiTranslateContext,
   disposePiTranslateContext,
-  isCurrentTurnHostAbortRequested,
   isFailedOrAbortedPiCompaction,
+  isHostAbortRequestedAtExit,
   markPiHostAbortRequested,
   markPiHostTurnStartPending,
   rollbackPiHostAbortRequest,
@@ -5408,7 +5408,9 @@ export class PiAgent extends BaseAgent {
           }
         },
         onExit: ({ code, signal }) => {
-          const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx);
+          // A Stop booked on the confirmed-but-not-started turn (prompt RPC accepted,
+          // `agent_start` pending) is the user's cancellation of exactly this exit (#4354).
+          const hostAbortRequested = isHostAbortRequestedAtExit(ctx);
           piProcessExited = true;
           clearPiSubagentRefreshTimer();
           void deferProxyDisposalForDetachedRuns();
