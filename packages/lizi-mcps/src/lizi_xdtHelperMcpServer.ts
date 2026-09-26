@@ -226,6 +226,23 @@ function toolAllowed(
   return allow.categories.has(tool.category) || allow.extraTools.has(tool.name);
 }
 
+/** Bot project tools must not point at history/handoff tools that stay closed. */
+function describeBotProjectTool(tool: { name: string; description: string }): string {
+  if (tool.name === 'create_project') {
+    return tool.description.replace(
+      'Pass the returned working_dir to send_to_session to start work there.',
+      'Pass the returned working_dir to start_session_task to start work there.',
+    );
+  }
+  if (tool.name === 'move_session') {
+    return tool.description.replace(
+      'Use list_sessions to find session_id and list_projects to find directories;',
+      'Pass a session_id this Bot already has, such as one returned by start_session_task. This cannot look up another task by title. Use list_projects to find directories;',
+    );
+  }
+  return tool.description;
+}
+
 function registerListToolsEntry(
   server: McpServer,
   registry: XdtHelperToolRegistry,
@@ -257,7 +274,7 @@ function registerListToolsEntry(
                 category,
                 tools: tools.map((t) => ({
                   name: t.name,
-                  description: t.description,
+                  description: allowed.extraTools.has(t.name) ? describeBotProjectTool(t) : t.description,
                   ...(t.category === 'bots' || t.category === 'skills' ? {
                     inputSchema: z.toJSONSchema(z.strictObject(registry.get(t.name)!.inputShape)),
                   } : {}),

@@ -630,6 +630,12 @@ describe("cindy_helper MCP server", () => {
       ok: true as const,
       workingDir: "/repo",
     }));
+    const moveSession = vi.fn(async () => ({
+      ok: true as const,
+      sessionId: "task",
+      workingDir: "/repo",
+      workspaceKind: "project",
+    }));
     const stopSessionTurn = vi.fn(async () => ({ ok: true as const, status: "requested" as const }));
     const listSessionQueue = vi.fn(async () => ({ ok: true as const, messages: [] }));
     const sendToSession = vi.fn(async () => ({
@@ -652,6 +658,7 @@ describe("cindy_helper MCP server", () => {
         resolveSurface: async () => surface,
         sendToSession,
         createProject,
+        moveSession,
         sessionControl: {
           updateQueuedMessage: vi.fn(),
           cancelQueuedMessage: vi.fn(),
@@ -682,7 +689,7 @@ describe("cindy_helper MCP server", () => {
       );
       expect(overview.categories).toEqual([
         { name: "cindy", tool_count: 2 },
-        { name: "control", tool_count: 1 },
+        { name: "control", tool_count: 2 },
         { name: "bots", tool_count: 1 },
       ]);
 
@@ -699,9 +706,20 @@ describe("cindy_helper MCP server", () => {
       const controlTools = parsePayload(
         await client.callTool({ name: "list_tools", arguments: { category: "control" } }),
       );
-      expect((controlTools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
-        "create_project",
-      ]);
+      const controlNames = (controlTools.tools as Array<{ name: string; description: string }>); 
+      expect(controlNames.map((tool) => tool.name)).toEqual(["create_project", "move_session"]);
+      expect(controlNames.find((tool) => tool.name === "create_project")?.description).toContain(
+        "start_session_task",
+      );
+      expect(controlNames.find((tool) => tool.name === "create_project")?.description).not.toContain(
+        "send_to_session",
+      );
+      expect(controlNames.find((tool) => tool.name === "move_session")?.description).not.toContain(
+        "list_sessions",
+      );
+      expect(controlNames.find((tool) => tool.name === "move_session")?.description).toContain(
+        "cannot look up another task by title",
+      );
       for (const name of ["stop_session_turn", "list_session_queue"]) {
         expect(
           parsePayload(await client.callTool({ name: "call_tool", arguments: { name, args: {} } })),
