@@ -91,6 +91,21 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 设置页管理列表组内与选择器同序：组内每项都带 `sortOrder` 时按它排；只要有一项缺失，退回
 按系列名 A–Z、同系列版本号降序，避免局部权重把新型号压到旧策展位置之后。
 
+<a id="presets"></a>
+## 第三方预设：一份推荐清单
+
+`providers.json` 的每个预设只在顶层写一份 `models` 推荐清单，数组顺序即推荐顺序；
+`runtimes[引擎]` 只放地址、协议、模型目录等连接信息，不再按引擎各写一份模型。
+加载时由 `expandPresetModels` 展开回各引擎清单，下游与服务端下发的旧格式形状一致。
+
+- 协议限制导致某模型只在部分引擎可用时写 `engines`（如 OpenCode Go 的 Anthropic 协议模型、
+  GLM Coding Plan 只给 Claude Code 的 `[1m]` 变体）。
+- 引擎专属字段写 `engineOverrides[引擎]`：Pi 的推理档位、按模型路由，以及确有差异的窗口
+  （如 GLM Coding Plan 裸 `glm-5.2` 在 Claude Code 不写窗口、1M 走 `[1m]` 条目，Pi 为 1M）。
+- 名称与参数以厂商官方文档为准；未列入推荐清单的型号由 Pi 模型资料补入并默认隐藏。
+- `presetModels.test.ts` 校验随包预设不再出现按引擎的清单。服务端正本仍是旧格式，
+  同 id 的服务端预设会覆盖随包版本，服务端需同步迁移后线上才一致。
+
 <a id="visibility"></a>
 ## 默认可见性：产品合同与实现差异
 

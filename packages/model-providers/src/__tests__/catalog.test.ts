@@ -406,17 +406,16 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
         (m) => m.id === "deepseek/deepseek-v4-pro",
       )?.contextWindow,
     ).toBe(1_000_000);
-    expect(deepseek?.runtimes.pi).toMatchObject({
-      wireProtocol: "openai-chat",
-      models: [
-        { id: "deepseek-v4-flash" },
-        { id: "deepseek-v4-flash-vision-exp" },
-        { id: "deepseek-v4-pro" },
-      ],
-    });
+    // 推荐清单三个引擎共用；vision-exp 只由 Pi 模型资料补入且默认隐藏。
+    expect(deepseek?.runtimes.pi?.wireProtocol).toBe("openai-chat");
+    expect(
+      deepseek?.runtimes.pi?.models
+        .filter((m) => m.defaultEnabled !== false)
+        .map((m) => m.id),
+    ).toEqual(["deepseek-v4-flash", "deepseek-v4-pro"]);
   });
 
-  it("Kimi Code(编程计划)按各 harness 的权威目录保留 contextWindow", () => {
+  it("Kimi Code(编程计划)各 harness 共用官方核实的 contextWindow", () => {
     const presets = BUNDLED_CATALOG.presets ?? [];
     const kimiCode = presets.find((p) => p.id === "moonshot-kimi-code");
     expect(kimiCode).toBeDefined();
@@ -431,7 +430,8 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
       expect(
         rt!.models.find((m) => m.id === "k3")?.contextWindow,
         `${agent}/k3`,
-      ).toBe(agent === "pi" ? 1_048_576 : 262_144);
+        // 官方：K3 的 1,048,576 只对高档位开放，取所有档位都成立的 262,144。
+      ).toBe(262_144);
     }
   });
 

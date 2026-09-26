@@ -621,6 +621,17 @@ export interface ProviderRuntimeModelConfig extends ModelMetadata {
 }
 
 /**
+ * 预设推荐模型：三个引擎共用一份清单，数组顺序即推荐顺序（见 `expandPresetModels`）。
+ * 引擎间确有差异时用 `engines` / `engineOverrides` 显式声明，不再为每个引擎各写一份。
+ */
+export interface ProviderPresetModel extends ProviderRuntimeModelConfig {
+  /** 只在这些引擎可用（如协议限制）；缺省 = 预设声明的全部引擎。 */
+  engines?: AgentKind[];
+  /** 引擎专属字段（如 Pi 的推理档位、按模型路由），展开时覆盖共用字段。 */
+  engineOverrides?: Partial<Record<AgentKind, Partial<ProviderRuntimeModelConfig>>>;
+}
+
+/**
  * 供应商预设的单 runtime 预填数据（「从模板创建自定义供应商」用）。
  * 形状对齐 `CustomProviderRuntimeConfig`：选中预设 = 把这段数据灌进创建表单，用户只补 API key。
  */
@@ -689,6 +700,11 @@ export interface ProviderPreset {
    * 创建后会快照进 CustomProviderConfig，不随预设后续更新。
    */
   authMethod?: "apiKey" | "none";
+  /**
+   * 目录源数据里的共用推荐模型清单。加载时由 `expandPresetModels` 展开进各
+   * `runtimes[agent].models` 并删除本字段；下游始终只读展开后的形状，旧格式照常可用。
+   */
+  models?: ProviderPresetModel[];
   /** per-runtime 预填数据（至少一个）。 */
   runtimes: Partial<Record<AgentKind, ProviderPresetRuntime>>;
 }

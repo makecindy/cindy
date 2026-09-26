@@ -21,6 +21,7 @@
  */
 
 import { appendPiProviderPresets } from './piProviderPresets.js';
+import { expandPresetModels } from './presetModels.js';
 import { projectProviderMediaModels } from './providerMediaModels.js';
 import catalogJson from '../catalog/providers.json' with { type: 'json' };
 import modelRegistryJson from '../catalog/model-registry.json' with { type: 'json' };
@@ -271,5 +272,5 @@ export const BUNDLED_CATALOG: Catalog = {
   version: catalogFile.version,
   providers: BUILTIN_PROVIDERS,
   modelRegistry: bundledModelRegistry,
-  presets: appendPiProviderPresets(catalogFile.presets ?? []),
+  presets: appendPiProviderPresets((catalogFile.presets ?? []).map(expandPresetModels)),
 };

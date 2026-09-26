@@ -10,6 +10,7 @@
  * 所有跨端模型元数据统一进入严格版本化的 `modelRegistry`;目录顶层不接受旁路元数据块。
  */
 
+import { expandPresetModels } from './presetModels.js';
 import { projectProviderMediaModels } from './providerMediaModels.js';
 import { mimoPresetName } from './mimoPresentation.js';
 import { validModelMetadata } from './modelMetadataLayers.js';
@@ -729,7 +730,8 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
   if (!Array.isArray(input)) return [];
   const out: ProviderPreset[] = [];
   const seen = new Set<string>();
-  for (const v of input) {
+  for (const raw of input) {
+    const v = expandPresetModels(raw);
     if (!isValidPreset(v) || seen.has(v.id)) continue;
     seen.add(v.id);
     // 可选呈现字段逐项归一化,**不许分支 continue**:多个字段同时非法时早退会漏清洗

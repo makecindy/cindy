@@ -908,14 +908,14 @@ describe('MiniMax OpenAI Responses 预设契约 (issue #345)', () => {
     expect(preset?.docsUrl).toBe(docsUrl);
     expect(preset?.runtimes['claude-code']?.baseUrl).toMatch(/\/anthropic$/);
     expect(preset?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false)).toEqual([
-      { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 1_000_000 },
-      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' },
+      { id: 'MiniMax-M3', name: 'MiniMax-M3', contextWindow: 1_000_000, supportsImageInput: true },
+      { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', contextWindow: 204_800, supportsImageInput: false },
     ]);
     expect({ ...preset?.runtimes.codex, models: preset?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toEqual({
       baseUrl: codexBaseUrl,
       models: [
-        { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 1_000_000 },
-        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' },
+        { id: 'MiniMax-M3', name: 'MiniMax-M3', contextWindow: 1_000_000, supportsImageInput: true },
+        { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', contextWindow: 204_800, supportsImageInput: false },
       ],
     });
   });
@@ -1082,34 +1082,34 @@ describe('官方渠道预设契约', () => {
     const personalTokenPlan = preset('aliyun-bailian-token-plan-cn');
     const teamTokenPlan = preset('aliyun-bailian-token-plan-team-cn');
     const codingPlanModels = [
-      { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus' },
+      { id: 'qwen3.7-plus', name: 'Qwen3.7-Plus', contextWindow: 1_000_000, supportsImageInput: true },
       { id: 'qwen3-coder-next', name: 'Qwen3 Coder Next' },
       { id: 'qwen3-coder-plus', name: 'Qwen3 Coder Plus' },
     ];
     const personalTokenPlanModels = [
-      { id: 'qwen3.8-max-preview', name: 'Qwen 3.8 Max Preview', contextWindow: 983_616 },
-      { id: 'qwen3.7-max', name: 'Qwen 3.7 Max', contextWindow: 992_000 },
-      { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus', contextWindow: 1_000_000 },
-      { id: 'qwen3.6-flash', name: 'Qwen 3.6 Flash', contextWindow: 1_000_000 },
-      { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_000_000 },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576 },
+      { id: 'qwen3.8-max-preview', name: 'Qwen3.8-Max-Preview', contextWindow: 983_616 },
+      { id: 'qwen3.7-max', name: 'Qwen3.7-Max', contextWindow: 1_000_000, supportsImageInput: false },
+      { id: 'qwen3.7-plus', name: 'Qwen3.7-Plus', contextWindow: 1_000_000, supportsImageInput: true },
+      { id: 'qwen3.6-flash', name: 'Qwen3.6-Flash', contextWindow: 1_000_000, supportsImageInput: true },
+      { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_048_576, supportsImageInput: false },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_000_000, supportsImageInput: false },
     ];
     const teamTokenPlanModels = [
-      { id: 'qwen3.8-max-preview', name: 'Qwen 3.8 Max Preview', contextWindow: 983_616 },
-      { id: 'qwen3.7-max', name: 'Qwen 3.7 Max', contextWindow: 992_000 },
-      { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus', contextWindow: 1_000_000 },
-      { id: 'qwen3.6-plus', name: 'Qwen 3.6 Plus', contextWindow: 1_000_000 },
-      { id: 'qwen3.6-flash', name: 'Qwen 3.6 Flash', contextWindow: 1_000_000 },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576 },
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_048_576 },
-      { id: 'deepseek-v3.2', name: 'DeepSeek V3.2', contextWindow: 131_072 },
-      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', contextWindow: 262_144 },
-      { id: 'kimi-k2.6', name: 'Kimi K2.6', contextWindow: 262_144 },
-      { id: 'kimi-k2.5', name: 'Kimi K2.5', contextWindow: 262_144 },
-      { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_000_000 },
-      { id: 'glm-5.1', name: 'GLM-5.1', contextWindow: 202_752 },
+      { id: 'qwen3.8-max-preview', name: 'Qwen3.8-Max-Preview', contextWindow: 983_616 },
+      { id: 'qwen3.7-max', name: 'Qwen3.7-Max', contextWindow: 1_000_000, supportsImageInput: false },
+      { id: 'qwen3.7-plus', name: 'Qwen3.7-Plus', contextWindow: 1_000_000, supportsImageInput: true },
+      { id: 'qwen3.6-plus', name: 'Qwen3.6-Plus', contextWindow: 1_000_000, supportsImageInput: true },
+      { id: 'qwen3.6-flash', name: 'Qwen3.6-Flash', contextWindow: 1_000_000, supportsImageInput: true },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_000_000, supportsImageInput: false },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_000_000, supportsImageInput: false },
+      { id: 'deepseek-v3.2', name: 'DeepSeek V3.2', contextWindow: 131_072, supportsImageInput: false },
+      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', contextWindow: 262_144, supportsImageInput: true },
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', contextWindow: 262_144, supportsImageInput: true },
+      { id: 'kimi-k2.5', name: 'Kimi K2.5', contextWindow: 262_144, supportsImageInput: true },
+      { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_048_576, supportsImageInput: false },
+      { id: 'glm-5.1', name: 'GLM-5.1', contextWindow: 202_745, supportsImageInput: false },
       { id: 'glm-5', name: 'GLM-5', contextWindow: 202_752 },
-      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', contextWindow: 196_608 },
+      { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', contextWindow: 204_800, supportsImageInput: false },
     ];
     const tokenPlanModelsUrl =
       'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models';
@@ -1182,10 +1182,10 @@ describe('官方渠道预设契约', () => {
         name: 'GLM-5.3 (1M)',
         contextWindow: 1_000_000,
       });
-      // 窗口来源:同一端点族的 Pi 列表已声明 glm-5.3 为 1M,Claude Code 的 [1m] 形态不得比它小。
+      // glm-5.3 不在推荐清单里，但 Pi 仍能从模型资料补到它（默认隐藏）。
       expect(
-        preset(id)?.runtimes.pi?.models.find((model) => model.id === 'glm-5.3')?.contextWindow,
-      ).toBe(1_000_000);
+        preset(id)?.runtimes.pi?.models.find((model) => model.id === 'glm-5.3')?.defaultEnabled,
+      ).toBe(false);
       // 只补独立 1M 条目:既有裸条目保持原样(留空仍按 200K 保守默认),不静默抬窗。
       expect(claudeModels.find((model) => model.id === 'glm-5.2')).toEqual({ id: 'glm-5.2', name: 'GLM-5.2' });
       expect(claudeModels.find((model) => model.id === 'glm-5.3')).toMatchObject({ api: 'anthropic-messages', defaultEnabled: false });

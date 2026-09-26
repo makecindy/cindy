@@ -77,6 +77,7 @@ export {
   sanitizePresets,
   sortPresetsForRegion,
 } from "./catalog.js";
+export { expandPresetModels } from "./presetModels.js";
 
 export {
   buildUserProvider,
