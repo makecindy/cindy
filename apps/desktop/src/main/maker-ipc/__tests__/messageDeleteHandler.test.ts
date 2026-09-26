@@ -3,6 +3,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { performMessageDeletion, type MessageDeleteHandlerDeps } from '../messageDeleteHandler';
+const migration = vi.hoisted(() => ({ assertWritable: vi.fn() }));
+vi.mock('../../task-migration/journal', () => ({
+  assertTaskMigrationWritable: migration.assertWritable,
+}));
 
 function makeDeps(overrides: Partial<MessageDeleteHandlerDeps> = {}): MessageDeleteHandlerDeps {
   return {
@@ -37,6 +41,23 @@ function makeDeps(overrides: Partial<MessageDeleteHandlerDeps> = {}): MessageDel
 }
 
 describe('performMessageDeletion', () => {
+  it('rejects a migrated task before closing its runtime or deleting messages', async () => {
+    const deps = makeDeps();
+    migration.assertWritable.mockImplementationOnce(() => { throw new Error('MIGRATION_TASK_MOVED'); });
+    await expect(performMessageDeletion(deps, { sessionId: 's1', clientId: 'target' })).rejects.toThrow('MIGRATION_TASK_MOVED');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitDeletion).not.toHaveBeenCalled();
+  });
+  it('rechecks the fence after asynchronous history preparation', async () => {
+    const deps = makeDeps({
+      listMessagesForContext: async () => {
+        migration.assertWritable.mockImplementationOnce(() => { throw new Error('MIGRATION_TASK_BUSY'); });
+        return [];
+      },
+    });
+    await expect(performMessageDeletion(deps, { sessionId: 's1', clientId: 'target' })).rejects.toThrow('MIGRATION_TASK_BUSY');
+    expect(deps.commitDeletion).not.toHaveBeenCalled();
+  });
   it('keeps the deleted-session preview on the visible message projection', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/main/localDb/ipc/messages.ts'), 'utf8');
     const deletionBlock = source.slice(

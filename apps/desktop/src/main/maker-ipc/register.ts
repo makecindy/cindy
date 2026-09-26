@@ -1,5 +1,6 @@
 import { createBotMessageTransport } from './botMessageTransport.js';
-import { assertTaskMigrationInputAllowed } from '../task-migration/inputGuard';
+import { assertTaskMigrationInputAllowed, withTaskMigrationInputAcceptance } from '../task-migration/inputGuard';
+import { assertTaskMigrationWritable } from '../task-migration/journal';
 import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { getSelfDeviceId, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
@@ -13135,6 +13136,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       assertCurrentInputGeneration(sessionId, readExpectedInputGeneration(sendOpts));
       sess = readCurrentSteerSession();
+      assertTaskMigrationWritable(sessionId);
       await sess.steer(steerPayload as never, {
         logTitle: meta?.title,
         messageUuid: so.messageUuid,
@@ -15258,34 +15260,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 「继续任务」durable ack 延后到 vendor dispatch 成功（onDispatchedUserTurn）：
         // 排队可取消时旧中断提示必须能恢复；accepted 但仍可能 cancelled-before-dispatch
         // 时也不能提前 ack。续跑项本身由 coordinator 插到队首（普通输入仍 FIFO）。
-        let duplicate = false;
-        const projection = inputCoordinator.enqueue(sid, queued, {
-          ...(opts && typeof opts === 'object' ? (opts as { sendAtMs?: number }) : undefined),
-          // INPUT_ENQUEUE 只承载显式用户输入(composer 发送 / UI trigger / device-link
-          // 被控端转投的用户消息):崩溃恢复出的暂停队列遇到显式输入即放行,解开
-          // 「继续任务/新消息全部排队直到重启」的死锁。Orca 自动投递走 main 侧直调
-          // enqueue,不带此 flag,恢复暂停语义不变。
-          resumeRestorePausedQueue: true,
-          onDuplicate: () => {
-            duplicate = true;
-          },
-        });
-        if (duplicate) {
-          if (attachmentOwnerId) {
-            await materialized.cleanupBeforeAcceptance?.();
-            await discardSpecificQueuedAttachmentOwnership(sid, parsed.clientId, attachmentOwnerId);
+        return await withTaskMigrationInputAcceptance(sid, async () => {
+          assertCurrentInputGeneration();
+          assertRemoteInputClearNotInFlight(sid, deviceLinkInvoke);
+          let duplicate = false;
+          const projection = inputCoordinator.enqueue(sid, queued, {
+            ...(opts && typeof opts === 'object' ? (opts as { sendAtMs?: number }) : undefined),
+            // INPUT_ENQUEUE 只承载显式用户输入(composer 发送 / UI trigger / device-link
+            // 被控端转投的用户消息):崩溃恢复出的暂停队列遇到显式输入即放行,解开
+            // 「继续任务/新消息全部排队直到重启」的死锁。Orca 自动投递走 main 侧直调
+            // enqueue,不带此 flag,恢复暂停语义不变。
+            resumeRestorePausedQueue: true,
+            onDuplicate: () => {
+              duplicate = true;
+            },
+          });
+          if (duplicate) {
+            if (attachmentOwnerId) {
+              await materialized.cleanupBeforeAcceptance?.();
+              await discardSpecificQueuedAttachmentOwnership(sid, parsed.clientId, attachmentOwnerId);
+            }
+            if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
+            return projection;
           }
-          if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
+          acceptedByCoordinator = true;
+          if (attachmentOwnerId) {
+            queuedAttachmentOwnership.activateCurrentOwner(sid, parsed.clientId, attachmentOwnerId);
+          }
+          markQueuedAttachmentDurableAfterSnapshot(sid, parsed.clientId, attachmentOwnerId);
+          commitAutoTitle();
+          // Migration reads the durable queue under this same lock.
+          await awaitAgentInputQueueSnapshotPersistence(sid);
           return projection;
-        }
-        acceptedByCoordinator = true;
-        if (attachmentOwnerId) {
-          queuedAttachmentOwnership.activateCurrentOwner(sid, parsed.clientId, attachmentOwnerId);
-        }
-        markQueuedAttachmentDurableAfterSnapshot(sid, parsed.clientId, attachmentOwnerId);
-        commitAutoTitle();
-        if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
-        return projection;
+        });
       } catch (err) {
         if (!acceptedByCoordinator) {
           await materialized.cleanupBeforeAcceptance?.();
@@ -15502,7 +15509,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             attachmentOwnerId,
           );
         }
-        const runSteer = () => inputCoordinator.steer(sid, queued, steerOpts);
+        const runSteer = () => {
+          assertTaskMigrationWritable(sid);
+          return inputCoordinator.steer(sid, queued, steerOpts);
+        };
         const accepted = await (deviceLinkInvoke
           ? runSteer()
           : trustedDesktopSteerText.run(queued.text, runSteer));
