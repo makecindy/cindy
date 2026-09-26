@@ -12,7 +12,7 @@ Agent runtime、Cindy Make 工具、Ollama runtime、插件包、Skill 包及更
 - `isUrlAllowed` 检查初始 URL 和每次重定向。插件包继续 `redirect: 'error'`；
   Ollama 使用其官方发行资产白名单。统一下载不得放宽调用方已有来源限制。
 - `signal` 取消排队、请求和重试等待；连接／闲置超时可重试，`timeout.totalMs`
-  限制含排队的整体时长。业务取消与超时分别返回 `ABORTED` 和 `TIMEOUT`。
+  限制取得下载槽位后的活动时长（含校验和重试等待，不含排队）。业务取消与超时分别返回 `ABORTED` 和 `TIMEOUT`。
 - 默认保留部分文件以续传；一次性安装暂存目录可用 `resume: false`。
   调用方只有在下载 Promise 结束后才可 `cleanup()` 或删除暂存目录。
 - 默认校验成功后替换目标，下载失败保留原目标；`existingTarget: 'error'`

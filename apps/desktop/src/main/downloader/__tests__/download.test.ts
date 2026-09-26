@@ -8,6 +8,8 @@ vi.mock('../http', () => ({ requestResponse: fetchMock }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn(), debug: vi.fn() }) }));
 import { download, getActive } from '../index';
 import { writeMeta } from '../resume';
+import * as resume from '../resume';
+import * as integrity from '../integrity';
 
 const roots: string[] = [];
 const hash = (body: string) => createHash('sha256').update(body).digest('hex');
@@ -36,11 +38,46 @@ function partial(opts: ReturnType<typeof options>, body = 'abc') {
   });
 }
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   fetchMock.mockReset();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 describe('shared verified downloads', () => {
+  it('stops the connection deadline before slow resume hashing begins', async () => {
+    vi.useFakeTimers();
+    const opts = options();
+    partial(opts);
+    const create = integrity.createStreamingHasher;
+    vi.spyOn(integrity, 'createStreamingHasher').mockImplementation((file) => {
+      const hasher = create(file);
+      return {
+        ...hasher,
+        update: async (data) => {
+          if (data.length === 0) await vi.advanceTimersByTimeAsync(20_000);
+          return hasher.update(data);
+        },
+      };
+    });
+    fetchMock.mockResolvedValue(
+      new Response('def', {
+        status: 206,
+        headers: { 'content-range': 'bytes 3-5/6', 'content-length': '3' },
+      }),
+    );
+    await expect(download(opts)).resolves.toMatchObject({ resumedFromBytes: 3, size: 6 });
+    expect(fs.readFileSync(opts.targetPath, 'utf8')).toBe('abcdef');
+  });
+  it('finishes a verified download when checkpoint writes fail', async () => {
+    const opts = options();
+    const checkpoint = vi.spyOn(resume, 'writeMeta').mockImplementation(() => {
+      throw new Error('sidecar locked');
+    });
+    fetchMock.mockResolvedValue(new Response('abcdef'));
+    await expect(download(opts)).resolves.toMatchObject({ size: 6, sha256: opts.sha256 });
+    expect(checkpoint).toHaveBeenCalled();
+    expect(fs.readFileSync(opts.targetPath, 'utf8')).toBe('abcdef');
+  });
   it('resumes and hashes the prior bytes exactly once', async () => {
     const opts = options();
     partial(opts);

@@ -113,10 +113,10 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
       if (prior?.etag) headers['If-Range'] = prior.etag;
       else if (prior?.lastModified) headers['If-Range'] = prior.lastModified;
     }
-    armTimer(opts.timeout?.connectMs ?? 10_000);
     let url = opts.url;
     for (let hops = 0; ; hops++) {
       assertDownloadUrl(url, opts);
+      armTimer(opts.timeout?.connectMs ?? 10_000);
       response = await network(
         requestResponse(url, {
           method: 'GET',
@@ -126,6 +126,7 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
           signal: controller.signal,
         }),
       );
+      clearTimeout(timer);
       checkAbort();
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       const location = response.headers.get('location');
@@ -228,11 +229,15 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
       loaded += value.byteLength;
       tracker.advance(value.byteLength);
       if (Date.now() - lastMetaWriteAt >= 2000) {
-        writeMeta(opts.targetPath, {
-          ...meta,
-          downloadedBytes: loaded,
-          updatedAt: new Date().toISOString(),
-        });
+        try {
+          writeMeta(opts.targetPath, {
+            ...meta,
+            downloadedBytes: loaded,
+            updatedAt: new Date().toISOString(),
+          });
+        } catch {
+          /* A failed checkpoint only disables resume, not the active transfer. */
+        }
         lastMetaWriteAt = Date.now();
       }
     }
