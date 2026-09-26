@@ -215,8 +215,14 @@ function parseDevices(value: unknown): UsageHistoryDevice[] | undefined {
       name: raw.name,
       platform: typeof raw.platform === 'string' ? raw.platform : null,
       isSelf: raw.isSelf === true,
+      // 快照可能损坏:超出 Date 范围的时间格式化时会抛错,按未同步处理。
       syncedAt:
-        typeof raw.syncedAt === 'number' && Number.isFinite(raw.syncedAt) ? raw.syncedAt : null,
+        typeof raw.syncedAt === 'number' &&
+        Number.isFinite(raw.syncedAt) &&
+        raw.syncedAt > 0 &&
+        raw.syncedAt <= 8.64e15
+          ? raw.syncedAt
+          : null,
       // 快照里的「读取中」没有意义: 下次打开会重新同步, 先按离线展示缓存时间。
       status: DEVICE_STATUSES.has(status) && status !== 'syncing' ? status : 'offline',
     });

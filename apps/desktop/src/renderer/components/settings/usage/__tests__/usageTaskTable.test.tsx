@@ -8,7 +8,11 @@ import { UsageTaskTable, buildUsageTaskRows, usageTaskCoverageStart } from '../U
 
 const state = vi.hoisted(() => ({
   navigate: vi.fn(),
-  remoteSessions: [] as Array<{ id: string }>,
+  remoteSessions: [] as Array<{
+    id: string;
+    deviceLinkDeviceId?: string;
+    deviceLinkConnectionStatus?: string;
+  }>,
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
@@ -91,11 +95,26 @@ describe('buildUsageTaskRows', () => {
 
 describe('UsageTaskTable navigation', () => {
   it('opens local tasks and reachable remote tasks, and leaves unreachable remote tasks inert', async () => {
-    state.remoteSessions = [{ id: 'remote-ok' }];
+    state.remoteSessions = [
+      { id: 'remote-ok', deviceLinkDeviceId: 'laptop', deviceLinkConnectionStatus: 'connected' },
+      // 断线后保留的快照、以及另一台电脑上的同名任务都不可点击。
+      {
+        id: 'remote-offline',
+        deviceLinkDeviceId: 'laptop',
+        deviceLinkConnectionStatus: 'disconnected',
+      },
+      {
+        id: 'other-device',
+        deviceLinkDeviceId: 'desktop',
+        deviceLinkConnectionStatus: 'connected',
+      },
+    ];
     const rows = [
       { ...task('local', 'mine', 'Mine'), tokens: 3 },
       { ...task('laptop', 'remote-ok', 'Reachable'), tokens: 2 },
       { ...task('laptop', 'remote-gone', 'Unreachable'), tokens: 1 },
+      { ...task('laptop', 'remote-offline', 'Offline'), tokens: 1 },
+      { ...task('laptop', 'other-device', 'Elsewhere'), tokens: 1 },
     ];
     const view = render(
       <MemoryRouter>
@@ -120,9 +139,11 @@ describe('UsageTaskTable navigation', () => {
 
     fireEvent.click(view.container.querySelector('tr[data-task-key="laptop:remote-ok"]')!);
     await waitFor(() => expect(state.navigate).toHaveBeenLastCalledWith('/cc-agent/remote-ok'));
-    expect(view.getAllByText('Laptop')).toHaveLength(2);
+    expect(view.getAllByText('Laptop')).toHaveLength(4);
 
     expect(view.queryByRole('link', { name: 'Unreachable' })).toBeNull();
+    expect(view.queryByRole('link', { name: 'Offline' })).toBeNull();
+    expect(view.queryByRole('link', { name: 'Elsewhere' })).toBeNull();
     fireEvent.click(view.container.querySelector('tr[data-task-key="laptop:remote-gone"]')!);
     expect(state.navigate).toHaveBeenCalledTimes(2);
   });

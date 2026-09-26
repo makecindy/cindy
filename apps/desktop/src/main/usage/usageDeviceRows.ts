@@ -109,6 +109,14 @@ export async function readUsageDeviceRows(
   return { format: USAGE_DEVICE_ROWS_FORMAT, todayKey, sinceDay, rowsGz };
 }
 
+/** JavaScript Date 能表示的最大 Unix 毫秒;超出时 toISOString / Intl 格式化会抛 RangeError。 */
+const MAX_DATE_MS = 8.64e15;
+
+/** 跨设备 / 磁盘来的时间戳:只接受 Date 能表示的正 Unix 毫秒。 */
+export function isUnixMs(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= MAX_DATE_MS;
+}
+
 function finiteNonNegative(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
@@ -170,7 +178,7 @@ export function sanitizeUsageDeviceRows(value: unknown): UsageDeviceRows | null 
       providerId: isShortString(task.providerId) ? task.providerId : null,
       contextTokens: finiteNonNegative(task.contextTokens),
       contextWindow: finiteNonNegative(task.contextWindow),
-      lastActiveAt: finiteNonNegative(task.lastActiveAt),
+      lastActiveAt: isUnixMs(task.lastActiveAt) ? task.lastActiveAt : 0,
     });
   }
   return { spendDays, modelRows, sessionRows, tasks };

@@ -15,8 +15,10 @@ import {
 } from '../peerUsageSync';
 import {
   decodeUsageDeviceRowsResponse,
+  isUnixMs,
   parseUsageDeviceRowsRequest,
   readUsageDeviceRows,
+  sanitizeUsageDeviceRows,
   type UsageDeviceRows,
 } from '../usageDeviceRows';
 
@@ -160,6 +162,43 @@ describe('usage device rows wire format', () => {
     expect(decoded.rows.spendDays).toEqual([]);
     expect(decoded.rows.modelRows).toHaveLength(1);
     expect(decoded.rows.modelRows[0].inputTokens).toBe(0);
+  });
+
+  it('rejects timestamps outside the Date range from peers and the disk cache', () => {
+    const rows = sanitizeUsageDeviceRows({
+      spendDays: [],
+      modelRows: [],
+      sessionRows: [],
+      tasks: [
+        { sessionId: 'far', title: 't', model: 'm', lastActiveAt: 1e17 },
+        { sessionId: 'ok', title: 't', model: 'm', lastActiveAt: 1_790_000_000_000 },
+      ],
+    });
+    expect(rows?.tasks.map((task) => [task.sessionId, task.lastActiveAt])).toEqual([
+      ['far', 0],
+      ['ok', 1_790_000_000_000],
+    ]);
+    expect(isUnixMs(8.64e15)).toBe(true);
+    expect(isUnixMs(8.64e15 + 1)).toBe(false);
+  });
+
+  it('drops a cached peer whose sync time is outside the Date range', async () => {
+    const h = harness({
+      readCache: async () =>
+        JSON.stringify({
+          version: 2,
+          peers: {
+            laptop: {
+              name: 'L',
+              platform: 'darwin',
+              syncedAt: 1e17,
+              todayKey: '2026-09-26',
+              rows: rowsFor(['2026-09-26']),
+            },
+          },
+        }),
+    });
+    expect((await createPeerUsageSync(h.deps).snapshot()).peerRows.size).toBe(0);
   });
 
   it('sends only remotely visible tasks and their rows', async () => {

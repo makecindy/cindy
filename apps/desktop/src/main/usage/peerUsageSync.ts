@@ -27,6 +27,7 @@ import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import {
   decodeUsageDeviceRowsResponse,
   isDayKey,
+  isUnixMs,
   sanitizeUsageDeviceRows,
   type UsageDeviceRows,
 } from './usageDeviceRows.js';
@@ -161,7 +162,7 @@ function parseCacheFile(raw: string | null): Record<string, CachedPeer> {
     for (const [deviceId, value] of Object.entries(parsed.peers)) {
       const peer = value as Partial<CachedPeer> | null;
       if (!peer || typeof peer.name !== 'string' || !isDayKey(peer.todayKey)) continue;
-      if (typeof peer.syncedAt !== 'number' || !Number.isFinite(peer.syncedAt)) continue;
+      if (!isUnixMs(peer.syncedAt)) continue;
       const rows = sanitizeUsageDeviceRows(peer.rows);
       if (!rows) continue;
       peers[deviceId] = {

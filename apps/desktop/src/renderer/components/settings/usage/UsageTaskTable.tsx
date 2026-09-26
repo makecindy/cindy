@@ -112,11 +112,18 @@ export function UsageTaskTable({
   const remoteSessions = useRemoteProjectSessions();
   const deviceNames = new Map((devices ?? []).map((device) => [device.deviceId, device.name]));
 
+  /** 其它电脑的任务:只认该设备当前已连接时的会话快照(断线后快照仍保留,但任务不可达)。 */
+  const remoteSessionFor = (row: UsageTaskRow) =>
+    remoteSessions.find(
+      (session) =>
+        session.id === row.sessionId &&
+        session.deviceLinkDeviceId === row.deviceId &&
+        session.deviceLinkConnectionStatus === 'connected',
+    ) ?? null;
+
   const openRow = (row: UsageTaskRow): void => {
-    const remote =
-      row.deviceId === LOCAL_TASK_DEVICE
-        ? null
-        : (remoteSessions.find((session) => session.id === row.sessionId) ?? null);
+    const remote = row.deviceId === LOCAL_TASK_DEVICE ? null : remoteSessionFor(row);
+    if (row.deviceId !== LOCAL_TASK_DEVICE && !remote) return;
     void resolveSessionRoute(row.sessionId, remote).then((route) => navigate(route));
   };
 
@@ -144,8 +151,7 @@ export function UsageTaskTable({
       <tbody>
         {rows.map((row, index) => {
           const isLocal = row.deviceId === LOCAL_TASK_DEVICE;
-          const openable =
-            isLocal || remoteSessions.some((session) => session.id === row.sessionId);
+          const openable = isLocal || remoteSessionFor(row) !== null;
           const deviceName = isLocal ? null : (deviceNames.get(row.deviceId) ?? null);
           const providerName = row.providerId
             ? providerDisplayNameById(row.providerId, providers, t)
