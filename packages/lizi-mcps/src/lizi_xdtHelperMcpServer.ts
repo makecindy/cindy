@@ -818,7 +818,12 @@ export function createXdtHelperMcpServer(
     // register and organize projects without stop/steer/archive/history access.
     // handoff/feedback/skills stay out of the Bot's discovery loop.
     if (surface === 'bot') {
-      return { categories: new Set(['bots', 'cindy', 'auth']), extraTools: BOT_PROJECT_TOOLS };
+      // Project tools run only on the local host. A remote Bot must keep its
+      // own tooling without being offered calls that always return unsupported.
+      return {
+        categories: new Set(['bots', 'cindy', 'auth']),
+        extraTools: context.remoteHostId ? new Set() : BOT_PROJECT_TOOLS,
+      };
     }
     if (surface === 'restricted') return none;
     return allow(remoteBotOnly ? new Set(['auth']) : defaultCategories);

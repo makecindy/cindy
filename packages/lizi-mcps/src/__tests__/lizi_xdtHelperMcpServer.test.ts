@@ -767,6 +767,36 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
+  it("does not offer local project tools to a remote Bot", async () => {
+    const createProject = vi.fn(async () => ({ ok: true as const, workingDir: "/repo" }));
+    const server = createXdtHelperMcpServer(
+      { resolveSurface: async () => "bot", createProject },
+      {
+        agentKind: "codex",
+        workingDir: "/repo",
+        sessionId: "bot-remote",
+        remoteHostId: "ssh-host",
+      },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "remote-bot-projects", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: "list_tools", arguments: {} }));
+      expect(overview.categories).toEqual([{ name: "cindy", tool_count: 2 }]);
+      expect(
+        parsePayload(await client.callTool({
+          name: "call_tool",
+          arguments: { name: "create_project", args: { working_dir: "/repo" } },
+        })),
+      ).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+      expect(createProject).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("fails closed when the host cannot classify the Session surface", async () => {
     const sendToSession = vi.fn(async () => ({
       ok: true as const,
