@@ -28,6 +28,7 @@ import { incrementDailySpend, getTodaySpend, localDayKey } from './localDb/daily
 import { getGatewayModelPricing } from './usage/modelPricing';
 import type { XaiRateLimitSnapshot } from '../shared/xaiRateLimit';
 import { incrementDailyModelUsage, type DailyModelUsageDelta } from './localDb/dailyModelUsage';
+import { incrementDailySessionUsage } from './localDb/dailySessionUsage';
 import { getCurrentDbClientUserId, getDbClient } from './localDb/client/current';
 import {
   mergeClaudeSubscriptionUsageSnapshot,
@@ -178,14 +179,36 @@ export async function rebroadcastTodaySpend(): Promise<void> {
  * (renderer 复用 USAGE_TODAY_SPEND_CHANGED / USAGE_TODAY_TOKENS_CHANGED 作刷新触发)。
  */
 export async function recordModelTurnUsage(
-  delta: DailyModelUsageDelta,
+  delta: DailyModelUsageDelta & {
+    /** 产生本轮用量的任务;给出时同时计入 daily_session_usage(「最耗 token 的任务」)。 */
+    sessionId?: string;
+  },
   ts: number = Date.now(),
 ): Promise<void> {
+  const { sessionId, ...modelDelta } = delta;
   try {
-    await incrementDailyModelUsage(delta, ts);
+    await incrementDailyModelUsage(modelDelta, ts);
   } catch (err) {
     log.warn(
       'recordModelTurnUsage failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  if (!sessionId) return;
+  try {
+    await incrementDailySessionUsage(
+      sessionId,
+      [
+        modelDelta.inputTokensDelta,
+        modelDelta.outputTokensDelta,
+        modelDelta.cacheReadTokensDelta,
+        modelDelta.cacheCreateTokensDelta,
+      ].reduce((sum, value) => sum + (Number.isFinite(value) && value > 0 ? value : 0), 0),
+      ts,
+    );
+  } catch (err) {
+    log.warn(
+      'record session turn usage failed:',
       err instanceof Error ? err.message : String(err),
     );
   }

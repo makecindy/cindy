@@ -6597,7 +6597,8 @@
     },
     "tasks": {
       "title": "最耗 token 的任務",
-      "subtitle": "{{range}}內活躍過的任務，按累計 token 排序",
+      "subtitle": "{{range}}內消耗 token 最多的任務",
+      "coverage": "按天統計從 {{date}} 起",
       "col": {
         "task": "任務",
         "model": "模型",
@@ -6607,8 +6608,7 @@
         "lastActive": "最後活躍"
       },
       "providerTooltip": "取該任務目前選定的供應商；未指定時留空。",
-      "tokensTooltip": "該任務的生命週期累計；{{range}}僅用於篩選活躍任務，不代表該範圍內的增量。",
-      "subtitleLocal": "{{range}}內在本機活躍過的任務，依累計 token 排序"
+      "tokensTooltip": "只統計該任務在{{range}}內產生的 token。"
     }
   },
   "usageDashboard": {

@@ -6599,7 +6599,8 @@
     },
     "tasks": {
       "title": "Top sessions by tokens",
-      "subtitle": "Sessions active in {{range}}, ranked by lifetime tokens",
+      "subtitle": "Sessions with the most tokens in {{range}}",
+      "coverage": "Daily tracking since {{date}}",
       "col": {
         "task": "Session",
         "model": "Model",
@@ -6609,8 +6610,7 @@
         "lastActive": "Last active"
       },
       "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
-      "tokensTooltip": "The session's lifetime total; {{range}} only filters active sessions and is not an incremental total.",
-      "subtitleLocal": "Sessions active on this device in {{range}}, ranked by lifetime tokens"
+      "tokensTooltip": "Counts only the tokens this session used in {{range}}."
     }
   },
   "usageDashboard": {

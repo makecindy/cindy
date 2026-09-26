@@ -21,6 +21,7 @@ import { promisify } from 'node:util';
 
 import { normalizeRegionalMoney, type RegionalMoney } from '../../shared/regionalMoney.js';
 import type { DailyModelUsageRow } from '../localDb/dailyModelUsage.js';
+import type { DailySessionUsageRow, UsageTaskMeta } from '../localDb/dailySessionUsage.js';
 
 const gzipAsync = promisify(gzipCb);
 const gunzipAsync = promisify(gunzipCb);
@@ -40,6 +41,10 @@ export interface UsageSpendDayRow {
 export interface UsageDeviceRows {
   spendDays: UsageSpendDayRow[];
   modelRows: DailyModelUsageRow[];
+  /** 每日 × 任务 token(「最耗 token 的任务」按范围统计用)。 */
+  sessionRows: DailySessionUsageRow[];
+  /** sessionRows 涉及任务的元数据(标题 / 模型等取任务当前值)。 */
+  tasks: UsageTaskMeta[];
 }
 
 export type UsageDeviceRowsResponse =
@@ -54,6 +59,9 @@ export type UsageDeviceRowsResponse =
 export interface UsageDeviceRowsReaderDeps {
   getAllSpendDays(): Promise<UsageSpendDayRow[]>;
   getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]>;
+  getSessionUsageSince(
+    sinceDayKey: string,
+  ): Promise<{ rows: DailySessionUsageRow[]; tasks: UsageTaskMeta[] }>;
   todayKey(): string;
 }
 
@@ -77,13 +85,16 @@ export async function readUsageDeviceRows(
 ): Promise<UsageDeviceRowsResponse> {
   const todayKey = deps.todayKey();
   const sinceDay = request.sinceDay;
-  const [spendDays, modelRows] = await Promise.all([
+  const [spendDays, modelRows, sessionUsage] = await Promise.all([
     deps.getAllSpendDays(),
     deps.getModelUsageSince(sinceDay ?? '0000-01-01'),
+    deps.getSessionUsageSince(sinceDay ?? '0000-01-01'),
   ]);
   const rows: UsageDeviceRows = {
     spendDays: sinceDay ? spendDays.filter((row) => row.day >= sinceDay) : spendDays,
     modelRows,
+    sessionRows: sessionUsage.rows,
+    tasks: sessionUsage.tasks,
   };
   const rowsGz = (await gzipAsync(Buffer.from(JSON.stringify(rows), 'utf8'))).toString('base64');
   if (Buffer.byteLength(rowsGz, 'utf8') > MAX_ROWS_GZ_BASE64_BYTES) {
@@ -103,7 +114,12 @@ function isAgentKind(value: unknown): value is DailyModelUsageRow['agentKind'] {
 /** 控制端和缓存共用的逐行校验:远端 / 磁盘数据一律当不可信输入。 */
 export function sanitizeUsageDeviceRows(value: unknown): UsageDeviceRows | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const raw = value as { spendDays?: unknown; modelRows?: unknown };
+  const raw = value as {
+    spendDays?: unknown;
+    modelRows?: unknown;
+    sessionRows?: unknown;
+    tasks?: unknown;
+  };
   if (!Array.isArray(raw.spendDays) || !Array.isArray(raw.modelRows)) return null;
   const spendDays: UsageSpendDayRow[] = [];
   for (const row of raw.spendDays as Array<{ day?: unknown; monies?: unknown }>) {
@@ -130,7 +146,32 @@ export function sanitizeUsageDeviceRows(value: unknown): UsageDeviceRows | null 
       cacheCreateTokens: finiteNonNegative(row.cacheCreateTokens),
     });
   }
-  return { spendDays, modelRows };
+  const sessionRows: DailySessionUsageRow[] = [];
+  for (const row of (Array.isArray(raw.sessionRows) ? raw.sessionRows : []) as Array<
+    Partial<DailySessionUsageRow>
+  >) {
+    if (!row || !isDayKey(row.day) || !isShortString(row.sessionId)) continue;
+    const tokens = finiteNonNegative(row.tokens);
+    if (tokens > 0) sessionRows.push({ day: row.day, sessionId: row.sessionId, tokens });
+  }
+  const tasks: UsageTaskMeta[] = [];
+  for (const task of (Array.isArray(raw.tasks) ? raw.tasks : []) as Array<Partial<UsageTaskMeta>>) {
+    if (!task || !isShortString(task.sessionId)) continue;
+    tasks.push({
+      sessionId: task.sessionId,
+      title: typeof task.title === 'string' ? task.title.slice(0, 500) : '',
+      model: typeof task.model === 'string' ? task.model.slice(0, 256) : '',
+      providerId: isShortString(task.providerId) ? task.providerId : null,
+      contextTokens: finiteNonNegative(task.contextTokens),
+      contextWindow: finiteNonNegative(task.contextWindow),
+      lastActiveAt: finiteNonNegative(task.lastActiveAt),
+    });
+  }
+  return { spendDays, modelRows, sessionRows, tasks };
+}
+
+function isShortString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256;
 }
 
 /** 控制端:解码并校验 wire 响应。oversize 返回 'oversize';格式不对返回 null。 */

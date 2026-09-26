@@ -302,6 +302,7 @@ export function recordSessionClaudeTurnUsage(
                 : null;
           modelUsageWrites.push(
             recordModelTurnUsage({
+              sessionId: session.id,
               agentKind: 'claude-code',
               model:
                 isSubscriptionValueRow

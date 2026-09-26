@@ -31,7 +31,8 @@ vi.mock('@/hooks/useUsageHistory', () => ({
   },
 }));
 vi.mock('../UsageTaskTable', () => ({
-  useTopTokenSessions: () => state.taskRows,
+  buildUsageTaskRows: () => state.taskRows,
+  usageTaskCoverageStart: () => null,
   UsageTaskTable: () => <output data-testid="tasks" />,
 }));
 vi.mock('../UsageStatRow', () => ({ UsageStatRow: () => null }));
@@ -123,7 +124,7 @@ describe('Usage history device scope', () => {
     expect(view.queryByText('usageHistory.device.partial')).toBeNull();
   });
 
-  it('shows the picker, the incomplete note and the local-only task subtitle with other computers', () => {
+  it('shows the picker, the incomplete note and the merged task card with other computers', () => {
     state.history = history([
       device({ deviceId: 'self', isSelf: true }),
       device({ deviceId: 'laptop', status: 'offline', syncedAt: 1 }),
@@ -132,7 +133,8 @@ describe('Usage history device scope', () => {
     const view = render(<UsageHistorySection />);
     expect(view.getByLabelText('usageHistory.device.ariaLabel')).toBeTruthy();
     expect(view.getByText('usageHistory.device.partial')).toBeTruthy();
-    expect(view.getByText('usageHistory.tasks.subtitleLocal')).toBeTruthy();
+    expect(view.getByText('usageHistory.tasks.subtitle')).toBeTruthy();
+    expect(view.getByTestId('tasks')).toBeTruthy();
   });
 });
 

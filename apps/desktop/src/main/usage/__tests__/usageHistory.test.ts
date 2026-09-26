@@ -17,6 +17,9 @@ vi.mock('../../localDb/dailySpend', () => ({
 vi.mock('../../localDb/dailyModelUsage', () => ({
   getModelUsageSince: vi.fn(),
 }));
+vi.mock('../../localDb/dailySessionUsage', () => ({
+  getSessionUsageSince: vi.fn(async () => ({ rows: [], tasks: [] })),
+}));
 vi.mock('../../localDb/client/current', () => ({
   getCurrentDbClientUserId: () => currentDbClient.userId,
 }));
@@ -869,6 +872,8 @@ describe('production cache and empty payload', () => {
 
 describe('multi-device scope', () => {
   const peerRows = {
+    sessionRows: [],
+    tasks: [],
     spendDays: [
       { day: '2026-06-10', monies: [actual(3)] },
       { day: TODAY, monies: [actual(3)] },
@@ -882,10 +887,14 @@ describe('multi-device scope', () => {
   it('merges identical model keys from different devices into one row', () => {
     const combined = combineUsageDeviceRows([
       {
+        sessionRows: [],
+        tasks: [],
         spendDays: [{ day: TODAY, monies: [actual(1)] }],
         modelRows: [modelRow(TODAY, 'codex', 'gpt-5.5', actual(1), { inputTokens: 10 })],
       },
       {
+        sessionRows: [],
+        tasks: [],
         spendDays: [{ day: TODAY, monies: [actual(2)] }],
         modelRows: [modelRow(TODAY, 'codex', 'gpt-5.5', actual(2), { inputTokens: 5, outputTokens: 7 })],
       },
@@ -933,6 +942,8 @@ describe('multi-device scope', () => {
   it('counts a peer that is already on tomorrow into the controller today', async () => {
     const tomorrow = shiftDayKey(TODAY, 1);
     const ahead = {
+      sessionRows: [],
+      tasks: [],
       spendDays: [{ day: tomorrow, monies: [actual(4)] }],
       modelRows: [modelRow(tomorrow, 'codex', 'gpt-5.5', actual(0), { inputTokens: 70 })],
     };
@@ -966,7 +977,8 @@ describe('multi-device scope', () => {
       {
         getAllSpendDays: async () => peerRows.spendDays,
         getModelUsageSince: async () => peerRows.modelRows,
-        todayKey: () => TODAY,
+        getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+todayKey: () => TODAY,
       },
       { sinceDay: null },
     );
@@ -1026,7 +1038,8 @@ describe('multi-device scope', () => {
       {
         getAllSpendDays: async () => peerRows.spendDays,
         getModelUsageSince: async () => peerRows.modelRows,
-        todayKey: () => TODAY,
+        getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+todayKey: () => TODAY,
       },
       { sinceDay: null },
     );
@@ -1145,7 +1158,8 @@ describe('multi-device scope', () => {
             getModelUsageSince: async () => [
               modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: peerTokens }),
             ],
-            todayKey: () => TODAY,
+            getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+todayKey: () => TODAY,
           },
           { sinceDay: null },
         ),

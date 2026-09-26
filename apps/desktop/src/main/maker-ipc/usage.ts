@@ -48,6 +48,7 @@ import {
 } from '../usage/peerUsageSync.js';
 import { getAllSpendDays, localDayKey } from '../localDb/dailySpend.js';
 import { getModelUsageSince } from '../localDb/dailyModelUsage.js';
+import { getSessionUsageSince } from '../localDb/dailySessionUsage.js';
 import { getCurrentDbClientUserId } from '../localDb/client/current.js';
 import { getSelfDeviceId, remoteInvoke } from '../device-link/index.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
@@ -325,7 +326,10 @@ export function registerMakerUsageIpc(maker: Maker): void {
     readUsageHistory,
     emptyUsageHistory: emptyUsageHistoryPayload,
     readUsageDeviceRows: (request) =>
-      readUsageDeviceRows({ getAllSpendDays, getModelUsageSince, todayKey: () => localDayKey() }, request),
+      readUsageDeviceRows(
+        { getAllSpendDays, getModelUsageSince, getSessionUsageSince, todayKey: () => localDayKey() },
+        request,
+      ),
   });
 
   // 用量历史「所有设备」范围:经 device-link 拉同账号其它电脑的原始用量行并按账号缓存。

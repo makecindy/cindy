@@ -39,6 +39,8 @@ function rowsFor(days: string[], tokens = 10): UsageDeviceRows {
       cacheReadTokens: 0,
       cacheCreateTokens: 0,
     })),
+    sessionRows: [],
+    tasks: [],
   };
 }
 
@@ -62,6 +64,7 @@ async function hostResponse(rows: UsageDeviceRows, todayKey: string, sinceDay: s
     {
       getAllSpendDays: async () => rows.spendDays,
       getModelUsageSince: async (since) => rows.modelRows.filter((row) => row.day >= since),
+      getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
       todayKey: () => todayKey,
     },
     { sinceDay },
@@ -144,6 +147,7 @@ describe('usage device rows wire format', () => {
         {
           getAllSpendDays: async () => bad.spendDays,
           getModelUsageSince: async () => bad.modelRows as never,
+          getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
           todayKey: () => '2026-09-26',
         },
         { sinceDay: null },

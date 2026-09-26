@@ -35,7 +35,8 @@ const log = createLogger('peerUsageSync');
 const USAGE_DEVICE_ROWS_CHANNEL = MAKER_INVOKE.USAGE_DEVICE_ROWS;
 const SYNC_MIN_INTERVAL_MS = 60_000;
 const PEER_FANOUT = 3;
-const CACHE_VERSION = 1;
+// v2:缓存行追加每日 × 任务用量;v1 缓存没有这部分,整份作废后全量重拉。
+const CACHE_VERSION = 2;
 const MOBILE_PLATFORMS = new Set(['ios', 'android']);
 
 export type UsageDeviceStatus =
@@ -121,9 +122,19 @@ export function mergeIncrementalRows(
   incoming: UsageDeviceRows,
 ): UsageDeviceRows {
   if (!cached || sinceDay === null) return incoming;
+  // 任务元数据按任务 id 以新值覆盖;只在区间外仍有行的旧任务保留旧元数据。
+  const incomingTaskIds = new Set(incoming.tasks.map((task) => task.sessionId));
   return {
     spendDays: [...cached.spendDays.filter((row) => row.day < sinceDay), ...incoming.spendDays],
     modelRows: [...cached.modelRows.filter((row) => row.day < sinceDay), ...incoming.modelRows],
+    sessionRows: [
+      ...cached.sessionRows.filter((row) => row.day < sinceDay),
+      ...incoming.sessionRows,
+    ],
+    tasks: [
+      ...cached.tasks.filter((task) => !incomingTaskIds.has(task.sessionId)),
+      ...incoming.tasks,
+    ],
   };
 }
 

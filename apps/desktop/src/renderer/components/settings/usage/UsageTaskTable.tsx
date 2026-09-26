@@ -1,68 +1,42 @@
 /**
- * UsageTaskTable — 「最耗 token 的任务」。
+ * UsageTaskTable — 「最耗 token 的任务」(设置 → 用量历史)。
  *
- * 数据来自本地会话表的用量历史查询 (并与 useCCSessions 的实时快照合并):
- *   - tokens:  Session.totalTokenUsage
- *   - 上下文:  contextTokens / contextWindow
- *   - 供应商:  Session.providerId, 经 providerDisplayNameById 映射成展示名
- *              (内置 id 走设置页 i18n 标题, 自定义供应商回退目录里的 name)
- *   - 最后活跃: userSendAt / updatedAt 中较新者 (与 SessionItem 同一条时间轴 ——
- *              旧版 DB 行只写 userSendAt), 走 sidebar 同一套 formatSidebarTime
+ * 数据来自用量历史 payload 的 taskDaily / tasks(main 侧 daily_session_usage,多设备范围
+ * 合并了其它电脑同步来的行):按所选时间范围对每个任务**在该范围内**产生的 token 求和,
+ * 取前 TOP_TASKS 名。每日 × 任务的记录从功能上线起积累,更早的用量不计入 —— 所选范围
+ * 早于最早记录时,卡片副标题注明「按天统计从 X 起」。
  *
- * 两处口径必须在 UI 上讲清楚, 否则会被误读:
- *   1. totalTokenUsage 是该任务的**生命周期累计**, 不是窗口内增量。本表筛的是
- *      "所选时间范围内活跃过的任务", 所以一个三个月前开始、昨天还在跑的任务会带着
- *      它的全部累计出现 —— 表头 tooltip 写明这一点。
- *   2. providerId 是会话**当前值**而非每轮事实, 且可为 null (跟随默认路由)。
- *      null 留空 (照 SessionInfoMeta 既有的"无数据不显示"), 不臆造默认供应商;
- *      任务若中途切换过供应商, 早先的 token 也会归到当前这个上 —— 表头 tooltip
- *      写明"取当前选定的供应商", 不额外标记 (没有可靠的切换记录可依据)。
+ * 任务标题是跳转到该任务的链接;整行是鼠标的放大命中区(键盘仍只落在链接上)。其它电脑
+ * 的任务只有在远程设备列表里能找到时才可点击(需要该设备已连接)。
  *
- * 远程会话 (device-link) 的 token 字段可能缺失或为 0 —— 同样按"无数据不显示"过滤掉。
- *
- * 用量历史查询跳过侧栏按 updatedAt 截断的 1000 行列表，返回完整 sessions 候选集；
- * 因此 all / 较早日期范围仍能从全量历史中筛出 Top N。查询只读取 sessions 表，
- * 不计算消息预览，避免把统计页变成整库 messages 扫描。
+ * 标题 / 模型 / 供应商 / 上下文取任务当前值,不是每轮事实;providerId 为 null 留空。
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
 import { formatCompactTokens, formatModelShort } from '@/lib/usageFormat';
-import { useCCSessions } from '@/hooks/useCCSessions';
-import * as sessionService from '@/lib/sessionService';
-import type { Session, UsageHistorySession } from '@/lib/ccAgent.types';
 import { formatSidebarTime } from '@/features/cc-agent/lib/formatSidebarTime';
 import { useProviders } from '@/hooks/useProviders';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import type { UsageHistoryDevice, UsageHistoryPayload } from '@/hooks/useUsageHistory';
 import { usageRankColor } from '@/components/new-chat/usagePalette';
 import { providerDisplayNameById } from '@/lib/providerDisplayName';
+import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { formatUsagePercent } from './formatUsagePercent';
-import {
-  isUsageDayInRange,
-  isUsageHistorySingleDay,
-  type UsageHistoryRange,
-} from './usageHistoryStats';
+import { isUsageDayInRange, type UsageHistoryRange } from './usageHistoryStats';
 
 /** 展示条数 —— 与"最耗"的语义匹配, 不做成完整列表 (那是任务侧栏的事)。 */
 const TOP_TASKS = 8;
 const UNKNOWN_VALUE = '—';
+/** payload 里本机任务的设备键(见 main usageHistory LOCAL_TASK_DEVICE)。 */
+const LOCAL_TASK_DEVICE = 'local';
 
 /**
- * 列宽口径: 右侧五列 (模型/供应商/token/上下文/最后活跃) 都是短的定长内容, 让它们
- * 按各自内容取满宽 —— 这几列是要被读数的, 不能被挤窄或截断; pl-3 是列间距, 否则
- * 相邻两列的数字会贴到一起。任务名是用户输入的自由文本, 长度没有上限, 只能反过来
- * 吃右侧列分完后剩下的空间。
- *
- * 列间距取 12px 而不是 16px: 侧栏可拉到 480 (useSidebarResize MAX_WIDTH), 主窗下限
- * 800, 此时设置页卡片内的表格只剩约 230px。列间距落在 nowrap 单元格上是**不可收缩**
- * 宽度, 五列就是 5 份 —— 12px 比 16px 省下 20px, 直接抬高开始溢出的窗口宽度。
- * 12 与 16 同在 DESIGN.md §5 间距刻度上, 这个字号下的分隔效果没有可见差别。
- *
- * 实现上靠 `w-full + max-w-0` (任务列自身 pl-0): 自动布局的表格若不加这一对,
- * 会先按 nowrap 的最长任务名算出列宽、把整张卡片横向撑开, 内层的 truncate 因为
- * 没有可收缩的宽度而失效。max-w-0 让这一列先塌到 0, w-full 再让它领走余量。
+ * 列宽口径: 右侧五列都是短的定长内容, 按各自内容取满宽; 任务名是自由文本, 只能吃剩下
+ * 的空间。`w-full + max-w-0` 让任务列先塌到 0 再领走余量, 内层 truncate 才生效。
  */
 const TH_CLASS =
   'whitespace-nowrap border-b border-[var(--border-default)] pb-2 pl-3 text-right text-12 font-medium text-[var(--text-secondary)]';
@@ -70,196 +44,81 @@ const TD_CLASS =
   'whitespace-nowrap border-b border-[var(--border-default)] py-2 pl-3 text-right text-13 tabular-nums';
 const TASK_COL_CLASS = 'w-full max-w-0 pl-0';
 
-/** 与 SessionItem 一致: 取两者中较新的值, 兼容只写 userSendAt 的存量行。 */
-function lastActiveIso(session: { updatedAt: string; userSendAt: string | null }): string {
-  return session.userSendAt && session.userSendAt > session.updatedAt
-    ? session.userSendAt
-    : session.updatedAt;
+export interface UsageTaskRow {
+  taskKey: string;
+  deviceId: string;
+  sessionId: string;
+  title: string;
+  model: string;
+  providerId: string | null;
+  contextTokens: number;
+  contextWindow: number;
+  lastActiveAt: number;
+  /** 所选范围内的 token。 */
+  tokens: number;
 }
 
-function localDayKeyFromIso(iso: string): string | null {
-  const date = new Date(iso);
-  if (!Number.isFinite(date.getTime())) return null;
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
-function activeWithinRange(
-  iso: string | null | undefined,
+/** 按所选范围汇总每个任务的 token,降序取前 TOP_TASKS。 */
+export function buildUsageTaskRows(
+  history: UsageHistoryPayload | null,
   range: UsageHistoryRange,
-  todayKey: string,
-): boolean {
-  if (!iso) return false;
-  const day = localDayKeyFromIso(iso);
-  return day !== null && isUsageDayInRange(day, todayKey, range);
+): UsageTaskRow[] {
+  if (!history?.taskDaily || !history.tasks || !history.todayKey) return [];
+  const tokensByTask = new Map<string, number>();
+  for (const row of history.taskDaily) {
+    if (!isUsageDayInRange(row.day, history.todayKey, range)) continue;
+    tokensByTask.set(row.taskKey, (tokensByTask.get(row.taskKey) ?? 0) + row.tokens);
+  }
+  const rows: UsageTaskRow[] = [];
+  for (const task of history.tasks) {
+    const tokens = tokensByTask.get(task.taskKey) ?? 0;
+    if (tokens > 0) rows.push({ ...task, tokens });
+  }
+  return rows.sort((a, b) => b.tokens - a.tokens).slice(0, TOP_TASKS);
 }
 
 /**
- * 用量范围只应按用户真正发送消息的时间筛选。updatedAt 还会被重命名、归档、
- * 置顶等元数据更新推进；只有存量行没有 userSendAt 时才回退到 updatedAt。
+ * 最早有每日 × 任务记录的日期;所选范围早于它时返回它(用于「按天统计从 X 起」),
+ * 否则返回 null。
  */
-export function usageActivityIso(session: Pick<Session, 'updatedAt' | 'userSendAt'>): string {
-  return session.userSendAt ?? session.updatedAt;
-}
-
-/**
- * 任务表只按会话的最后活跃时间筛选，无法证明某个任务在单日范围内实际活跃过。
- * 因此 today 与 day:* 都隐藏这张聚合表，避免把累计 token 误读成当天用量。
- */
-export function shouldHideUsageTaskTable(range: UsageHistoryRange): boolean {
-  return isUsageHistorySingleDay(range);
-}
-
-export type UsageSessionsState =
-  | { scopeKey: string | null; status: 'loading' }
-  | { scopeKey: string | null; status: 'ready'; sessions: UsageHistorySession[] }
-  | { scopeKey: string | null; status: 'error' };
-
-/** Only a snapshot belonging to the current data owner may feed the table. */
-export function usageSessionsForScope(
-  state: UsageSessionsState,
-  scopeKey: string | null,
-): UsageHistorySession[] {
-  return state.scopeKey === scopeKey && state.status === 'ready' ? state.sessions : [];
-}
-
-/** Consume an existing deleted-session push without weakening the full-query scope. */
-export function removeUsageSessionForScope(
-  state: UsageSessionsState,
-  scopeKey: string | null,
-  sessionId: string,
-): UsageSessionsState {
-  if (state.scopeKey !== scopeKey || state.status !== 'ready') return state;
-  return {
-    ...state,
-    sessions: state.sessions.filter((session) => session.id !== sessionId),
-  };
-}
-
-/**
- * Merge live sidebar metadata into the full usage-history row without letting
- * the sidebar's potentially stale token snapshot replace the database total.
- */
-export function mergeUsageSessionSnapshots(
-  fullSession: UsageHistorySession,
-  liveSession: Session,
-): UsageHistorySession {
-  return {
-    ...fullSession,
-    title: liveSession.title,
-    model: liveSession.model,
-    providerId: liveSession.providerId,
-    contextTokens: liveSession.contextTokens,
-    contextWindow: liveSession.contextWindow,
-    userSendAt: liveSession.userSendAt,
-    updatedAt: liveSession.updatedAt,
-    totalTokenUsage: fullSession.totalTokenUsage,
-  };
-}
-
-/**
- * 候选行 —— 单独暴露成 hook, 让调用方能在**渲染卡片之前**知道有没有行。
- * 组件内部返回 null 会留下一张只有标题、正文全空的卡片 (会话被删光 / 列表首次加载中)。
- */
-export function useTopTokenSessions(
-  range: UsageHistoryRange = '30d',
-  todayKeyOverride?: string,
-  accountScopeKey?: string,
-): UsageHistorySession[] {
-  // 归档的任务同样消耗过 token, 统计口径不该因为用户归档而变。
-  const { sessions: recentSessions } = useCCSessions({ includeArchived: 'all' });
-  const scopeKey = accountScopeKey ?? null;
-  const deletedSessionIdsRef = useRef<Set<string>>(new Set());
-  const [usageSessions, setUsageSessions] = useState<UsageSessionsState>(() => ({
-    scopeKey,
-    status: 'loading',
-  }));
-
-  useEffect(() => {
-    let cancelled = false;
-    deletedSessionIdsRef.current = new Set();
-    setUsageSessions({ scopeKey, status: 'loading' });
-    const sessionsPush = window.electronAPI?.localDb?.sessionsPush;
-    const unsubscribe = sessionsPush?.onPatched(({ sessionId, patch }, ownerStamp) => {
-      if (!isDataOwnerPushCurrent(ownerStamp) || patch.status !== 'deleted') return;
-      deletedSessionIdsRef.current.add(sessionId);
-      setUsageSessions((state) => removeUsageSessionForScope(state, scopeKey, sessionId));
-    });
-    // The task table intentionally uses the full-query snapshot as its
-    // lifecycle-total source. It does not maintain a second partial live-update
-    // path: the usage charts own dated live refresh, while this aggregate is
-    // refreshed when its account scope changes or the page remounts.
-    void sessionService
-      .list(20, 'all', { usageHistory: true })
-      .then((rows) => {
-        if (cancelled) return;
-        const deletedSessionIds = deletedSessionIdsRef.current;
-        setUsageSessions({
-          scopeKey,
-          status: 'ready',
-          sessions: rows.filter((session) => !deletedSessionIds.has(session.id)),
-        });
-      })
-      .catch(() => {
-        if (!cancelled) setUsageSessions({ scopeKey, status: 'error' });
-      });
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-    };
-  }, [scopeKey]);
-
-  const sessions = useMemo(() => {
-    // The sidebar snapshot is capped at 1000 rows and cannot stand in for the
-    // full usage-history query. Hide the aggregate until that query succeeds;
-    // showing the truncated or failed fallback would mislabel the ranking.
-    if (usageSessions.scopeKey !== scopeKey || usageSessions.status !== 'ready') return [];
-    const scopedSessions = usageSessionsForScope(usageSessions, scopeKey);
-    const byId = new Map(scopedSessions.map((session) => [session.id, session]));
-    // 侧栏快照只补充实时元数据；其 totalTokenUsage 可能滞后，保留全量查询的累计值。
-    for (const session of recentSessions) {
-      if (deletedSessionIdsRef.current.has(session.id)) continue;
-      const usageSession = byId.get(session.id);
-      byId.set(
-        session.id,
-        usageSession ? mergeUsageSessionSnapshots(usageSession, session) : session,
-      );
-    }
-    return [...byId.values()];
-  }, [recentSessions, scopeKey, usageSessions]);
-
-  return useMemo(() => {
-    // Sessions retain only their latest activity timestamp, so they cannot
-    // prove historical membership for an exact calendar day. Hide this
-    // aggregate rather than presenting a task as active on a day it may not
-    // have used. The day-level charts and agent/model tables use dated usage
-    // records and remain exact.
-    if (shouldHideUsageTaskTable(range)) return [];
-    const now = new Date();
-    const todayKey =
-      todayKeyOverride ??
-      `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    return sessions
-      .filter(
-        (session) =>
-          session.totalTokenUsage > 0 &&
-          activeWithinRange(usageActivityIso(session), range, todayKey),
-      )
-      .sort((a, b) => b.totalTokenUsage - a.totalTokenUsage)
-      .slice(0, TOP_TASKS);
-  }, [range, sessions, todayKeyOverride]);
+export function usageTaskCoverageStart(
+  history: UsageHistoryPayload | null,
+  range: UsageHistoryRange,
+): string | null {
+  if (!history?.taskDaily?.length || !history.todayKey) return null;
+  const earliest = history.taskDaily.reduce(
+    (min, row) => (row.day < min ? row.day : min),
+    history.taskDaily[0].day,
+  );
+  // 所选范围内是否有早于最早记录的日期:检查最早记录的前一天是否落在范围里。
+  const [y, m, d] = earliest.split('-').map(Number);
+  const prev = new Date(y, (m ?? 1) - 1, (d ?? 1) - 1);
+  const prevKey = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`;
+  return isUsageDayInRange(prevKey, history.todayKey, range) ? earliest : null;
 }
 
 export function UsageTaskTable({
   rows,
   rangeLabel,
+  devices,
 }: {
-  rows: UsageHistorySession[];
+  rows: UsageTaskRow[];
   rangeLabel: string;
+  devices?: readonly UsageHistoryDevice[];
 }): React.JSX.Element {
   const { t } = useTranslation();
   const { providers } = useProviders();
+  const navigate = useNavigate();
+  const remoteSessions = useRemoteProjectSessions();
+  const deviceNames = new Map((devices ?? []).map((device) => [device.deviceId, device.name]));
+
+  const openRow = (row: UsageTaskRow): void => {
+    const remote =
+      row.deviceId === LOCAL_TASK_DEVICE
+        ? null
+        : (remoteSessions.find((session) => session.id === row.sessionId) ?? null);
+    void resolveSessionRoute(row.sessionId, remote).then((route) => navigate(route));
+  };
 
   return (
     <table className="w-full border-collapse">
@@ -283,37 +142,73 @@ export function UsageTaskTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((session, index) => {
-          const providerName = session.providerId
-            ? providerDisplayNameById(session.providerId, providers, t)
+        {rows.map((row, index) => {
+          const isLocal = row.deviceId === LOCAL_TASK_DEVICE;
+          const openable =
+            isLocal || remoteSessions.some((session) => session.id === row.sessionId);
+          const deviceName = isLocal ? null : (deviceNames.get(row.deviceId) ?? null);
+          const providerName = row.providerId
+            ? providerDisplayNameById(row.providerId, providers, t)
             : null;
-          const contextRatio =
-            session.contextWindow > 0 ? session.contextTokens / session.contextWindow : null;
+          const contextRatio = row.contextWindow > 0 ? row.contextTokens / row.contextWindow : null;
+          const title = row.title || UNKNOWN_VALUE;
           return (
-            <tr key={session.id}>
+            <tr
+              key={row.taskKey}
+              data-task-key={row.taskKey}
+              className={cn(
+                openable && 'cursor-pointer transition-colors hover:bg-[var(--surface-hover)]',
+              )}
+              // 整行只是鼠标的放大命中区;键盘与读屏仍落在标题链接上。
+              onClick={openable ? () => openRow(row) : undefined}
+            >
               <td className={cn(TD_CLASS, TASK_COL_CLASS, 'text-left')}>
                 <span className="flex min-w-0 items-center gap-2">
                   <span
                     className="size-2 shrink-0 rounded-[2px]"
                     style={{ backgroundColor: usageRankColor(index) }}
                   />
-                  <span className="truncate font-medium" title={session.title}>
-                    {session.title}
+                  <span className="flex min-w-0 flex-col">
+                    {openable ? (
+                      <Link
+                        to={`/cc-agent/${row.sessionId}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          openRow(row);
+                        }}
+                        className="truncate rounded-[4px] font-medium text-[var(--text-primary)] underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                        title={title}
+                      >
+                        {title}
+                      </Link>
+                    ) : (
+                      <span className="truncate font-medium" title={title}>
+                        {title}
+                      </span>
+                    )}
+                    {deviceName ? (
+                      <span className="truncate text-12 font-normal text-[var(--text-tertiary)]">
+                        {deviceName}
+                      </span>
+                    ) : null}
                   </span>
                 </span>
               </td>
               <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
-                {formatModelShort(session.model)}
+                {row.model ? formatModelShort(row.model) : UNKNOWN_VALUE}
               </td>
               <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
                 {providerName ?? UNKNOWN_VALUE}
               </td>
-              <td className={TD_CLASS}>{formatCompactTokens(session.totalTokenUsage)}</td>
+              <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>
               <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
                 {contextRatio === null ? UNKNOWN_VALUE : formatUsagePercent(contextRatio)}
               </td>
               <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
-                {formatSidebarTime(lastActiveIso(session), t) || UNKNOWN_VALUE}
+                {row.lastActiveAt > 0
+                  ? formatSidebarTime(new Date(row.lastActiveAt).toISOString(), t) || UNKNOWN_VALUE
+                  : UNKNOWN_VALUE}
               </td>
             </tr>
           );

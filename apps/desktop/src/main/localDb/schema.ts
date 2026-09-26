@@ -1619,6 +1619,26 @@ export const dailyModelUsage = sqliteTable(
   }),
 );
 
+/**
+ * 每日按任务 token 用量 (daily_session_usage) — 支撑用量历史「最耗 token 的任务」按所选
+ * 时间范围统计。与 daily_model_usage 同一处写入 (每个 turn done 后, 三个 harness 共用),
+ * 只记 token 合计。历史数据不 backfill: 上线后从 0 开始积累。
+ */
+export const dailySessionUsage = sqliteTable(
+  'daily_session_usage',
+  {
+    /** 本地时区 YYYY-MM-DD 字符串 (localDayKey)。 */
+    day: text('day').notNull(),
+    sessionId: text('session_id').notNull(),
+    tokens: integer('tokens').notNull().default(0),
+    /** 最后一次更新的 unix ms。 */
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.day, t.sessionId] }),
+  }),
+);
+
 /** Skill 使用分析的原始 transcript 扫描缓存。 */
 export const skillUsageSources = sqliteTable(
   'skill_usage_sources',

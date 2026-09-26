@@ -28,6 +28,7 @@ import path from 'node:path';
 import { app } from 'electron';
 import { getAllSpendDays, localDayKey } from '../localDb/dailySpend';
 import { getModelUsageSince, type DailyModelUsageRow } from '../localDb/dailyModelUsage';
+import { getSessionUsageSince } from '../localDb/dailySessionUsage';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
@@ -166,9 +167,41 @@ export interface UsageHistoryPayload {
   devicesSyncing?: boolean;
   /** 聚合时使用的跨设备数据版本 (main 内部新鲜度判断用)。 */
   peerVersion?: number;
+  /** 按 modelDays 窗口返回的每日 × 任务 token (「最耗 token 的任务」按范围统计)。 */
+  taskDaily?: UsageHistoryTaskDay[];
+  /** taskDaily 涉及任务的元数据。 */
+  tasks?: UsageHistoryTask[];
 }
 
 export type UsageHistoryDeviceScope = 'local' | 'all' | (string & {});
+
+/** 本机任务的设备键;其它电脑的任务用它的 deviceId。 */
+export const LOCAL_TASK_DEVICE = 'local';
+
+/** 「最耗 token 的任务」的每日 × 任务一行。taskKey = `${deviceId}:${sessionId}`。 */
+export interface UsageHistoryTaskDay {
+  day: string;
+  taskKey: string;
+  tokens: number;
+}
+
+export interface UsageHistoryTask {
+  taskKey: string;
+  /** LOCAL_TASK_DEVICE 或其它电脑的 deviceId。 */
+  deviceId: string;
+  sessionId: string;
+  title: string;
+  model: string;
+  providerId: string | null;
+  contextTokens: number;
+  contextWindow: number;
+  /** unix ms */
+  lastActiveAt: number;
+}
+
+export function usageTaskKey(deviceId: string, sessionId: string): string {
+  return `${deviceId}:${sessionId}`;
+}
 
 /**
  * 合并多台设备的原始行。同一 (天, agent, 模型, 币种, 金额口径) 的模型行相加,
@@ -204,6 +237,9 @@ export function combineUsageDeviceRows(sources: readonly UsageDeviceRows[]): Usa
       .map(([day, monies]) => ({ day, monies }))
       .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
     modelRows: [...modelByKey.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
+    // 任务行需保留设备归属,不在这里合并 —— 由 getTaskUsageSince 按设备分别打键。
+    sessionRows: [],
+    tasks: [],
   };
 }
 
@@ -294,6 +330,10 @@ export function computeAnomaly(
 export interface UsageHistoryDeps {
   getAllSpendDays(): Promise<Array<{ day: string; monies: RegionalMoney[] }>>;
   getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]>;
+  /** 每日 × 任务用量;缺省(旧测试替身)视为没有任务数据。 */
+  getTaskUsageSince?(
+    sinceDayKey: string,
+  ): Promise<{ rows: UsageHistoryTaskDay[]; tasks: UsageHistoryTask[] }>;
   getGatewayModelPricing(): Promise<ModelPricingMap | null>;
   getReferenceModelPricing(): ModelPricingMap;
   /** 覆盖记录快照,一次聚合读一份——历史重合并逐行读文件会在慢盘上拖垮 Main 线程。 */
@@ -302,9 +342,35 @@ export interface UsageHistoryDeps {
   todayKey(): string;
 }
 
+/** 本机任务用量,按 LOCAL_TASK_DEVICE 打上设备键。 */
+function localTaskUsage(
+  rows: Awaited<ReturnType<typeof getSessionUsageSince>>,
+): { rows: UsageHistoryTaskDay[]; tasks: UsageHistoryTask[] } {
+  return tagTaskUsage(LOCAL_TASK_DEVICE, rows);
+}
+
+function tagTaskUsage(
+  deviceId: string,
+  usage: { rows: UsageDeviceRows['sessionRows']; tasks: UsageDeviceRows['tasks'] },
+): { rows: UsageHistoryTaskDay[]; tasks: UsageHistoryTask[] } {
+  return {
+    rows: usage.rows.map((row) => ({
+      day: row.day,
+      taskKey: usageTaskKey(deviceId, row.sessionId),
+      tokens: row.tokens,
+    })),
+    tasks: usage.tasks.map((task) => ({
+      ...task,
+      taskKey: usageTaskKey(deviceId, task.sessionId),
+      deviceId,
+    })),
+  };
+}
+
 const defaultDeps: UsageHistoryDeps = {
   getAllSpendDays,
   getModelUsageSince,
+  getTaskUsageSince: async (sinceDayKey) => localTaskUsage(await getSessionUsageSince(sinceDayKey)),
   getGatewayModelPricing,
   getReferenceModelPricing,
   getModelPriceOverridesSnapshot: readModelPriceOverridesSnapshot,
@@ -398,6 +464,9 @@ function validateUsageHistoryPayload(value: unknown): UsageHistoryPayload | null
     totals: payload.totals,
     anomaly: payload.anomaly,
     ...(Array.isArray(payload.devices) ? { devices: payload.devices } : {}),
+    ...(Array.isArray(payload.taskDaily) && Array.isArray(payload.tasks)
+      ? { taskDaily: payload.taskDaily, tasks: payload.tasks }
+      : {}),
   };
 }
 
@@ -678,6 +747,9 @@ export async function readUsageHistoryWith(
   const modelRows = modelCutoff === null
     ? allModelRows
     : allModelRows.filter((r) => r.day >= modelCutoff);
+  const taskUsage = deps.getTaskUsageSince
+    ? await deps.getTaskUsageSince(modelCutoff ?? '0000-01-01')
+    : null;
 
   // 每日 token 合计 → days 的 tooltip 数据。codex-only 日 daily_spend 无行 ($ 只有
   // Claude 记), 也要并进 days, 否则热力图那天 hover 不到 token。
@@ -898,6 +970,7 @@ export async function readUsageHistoryWith(
     days,
     modelDaily,
     models,
+    ...(taskUsage ? { taskDaily: taskUsage.rows, tasks: taskUsage.tasks } : {}),
     streak: computeStreaks(activeDays, todayKey),
     totals: {
       today,
@@ -935,6 +1008,8 @@ export function clampPeerRowsToToday(rows: UsageDeviceRows, todayKey: string): U
   return {
     spendDays: rows.spendDays.map((row) => ({ ...row, day: clamp(row.day) })),
     modelRows: rows.modelRows.map((row) => ({ ...row, day: clamp(row.day) })),
+    sessionRows: rows.sessionRows.map((row) => ({ ...row, day: clamp(row.day) })),
+    tasks: rows.tasks,
   };
 }
 
@@ -952,14 +1027,16 @@ export function usageHistoryDepsForScope(
       const peer = (rows: UsageDeviceRows): UsageDeviceRows => clampPeerRowsToToday(rows, todayKey);
       if (scope !== 'all') {
         const one = snapshot.peerRows.get(scope);
-        return one ? combineUsageDeviceRows([peer(one)]) : { spendDays: [], modelRows: [] };
+        return one
+          ? combineUsageDeviceRows([peer(one)])
+          : { spendDays: [], modelRows: [], sessionRows: [], tasks: [] };
       }
       const [spendDays, modelRows] = await Promise.all([
         base.getAllSpendDays(),
         base.getModelUsageSince('0000-01-01'),
       ]);
       return combineUsageDeviceRows([
-        { spendDays, modelRows },
+        { spendDays, modelRows, sessionRows: [], tasks: [] },
         ...[...snapshot.peerRows.values()].map(peer),
       ]);
     })();
@@ -970,6 +1047,28 @@ export function usageHistoryDepsForScope(
     getAllSpendDays: async () => (await rows()).spendDays,
     getModelUsageSince: async (sinceDayKey) =>
       (await rows()).modelRows.filter((row) => row.day >= sinceDayKey),
+    // 任务按设备分开保留(同一任务 id 在两台电脑上互不合并),其它电脑的行同样按本机今天夹取。
+    getTaskUsageSince: async (sinceDayKey) => {
+      const todayKey = base.todayKey();
+      const parts: Array<{ rows: UsageHistoryTaskDay[]; tasks: UsageHistoryTask[] }> = [];
+      if (scope === 'all' && base.getTaskUsageSince) {
+        parts.push(await base.getTaskUsageSince(sinceDayKey));
+      }
+      for (const [deviceId, peerRows] of snapshot.peerRows) {
+        if (scope !== 'all' && scope !== deviceId) continue;
+        const clamped = clampPeerRowsToToday(peerRows, todayKey);
+        parts.push(
+          tagTaskUsage(deviceId, {
+            rows: clamped.sessionRows.filter((row) => row.day >= sinceDayKey),
+            tasks: clamped.tasks,
+          }),
+        );
+      }
+      return {
+        rows: parts.flatMap((part) => part.rows),
+        tasks: parts.flatMap((part) => part.tasks),
+      };
+    },
   };
 }
 

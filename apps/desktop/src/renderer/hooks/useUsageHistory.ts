@@ -100,6 +100,23 @@ export interface UsageHistoryPayload {
   devices?: UsageHistoryDevice[];
   /** true = main 正在从其它电脑读取。 */
   devicesSyncing?: boolean;
+  /** 每日 × 任务 token(「最耗 token 的任务」按范围统计)。taskKey = `${deviceId}:${sessionId}`。 */
+  taskDaily?: Array<{ day: string; taskKey: string; tokens: number }>;
+  /** taskDaily 涉及任务的元数据;deviceId 为 'local' 表示本机任务。 */
+  tasks?: UsageHistoryTask[];
+}
+
+export interface UsageHistoryTask {
+  taskKey: string;
+  deviceId: string;
+  sessionId: string;
+  title: string;
+  model: string;
+  providerId: string | null;
+  contextTokens: number;
+  contextWindow: number;
+  /** unix ms */
+  lastActiveAt: number;
 }
 
 /** 热力图窗口: 20 周 = 140 天。 */

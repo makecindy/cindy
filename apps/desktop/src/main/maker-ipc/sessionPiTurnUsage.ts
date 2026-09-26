@@ -241,6 +241,7 @@ export function recordSessionPiTurnUsage(
                   : null;
             modelWrites.push(
               recordModelTurnUsage({
+                sessionId: session.id,
                 agentKind: 'pi',
                 model: modelUsageKey,
                 // daily_model_usage has no money-kind column. Subscription
@@ -293,6 +294,7 @@ export function recordSessionPiTurnUsage(
           // Price/catalog failure must not lose token/cache facts.
           const writes = [...groupedSegments].map(([model, group]) =>
             recordModelTurnUsage({
+              sessionId: session.id,
               agentKind: 'pi',
               model: isSubscriptionValue ? piSubscriptionUsageModelKey(model) : model,
               money: isSubscriptionValue ? deps.unpricedSubscriptionValueMarker() : undefined,

@@ -134,9 +134,9 @@ raw history 降级。任务列表活动推送不变，当前轮的正文、工�
 
 新增只读 invoke `maker:usage:device-rows`（Desktop ↔ Desktop，已登记 allowlist）。请求可选
 `{ sinceDay: 'YYYY-MM-DD' }`；被控端回 `{ format: 'usage-device-rows-v1', todayKey, sinceDay,
-rowsGz }`，`rowsGz` 为本机 `daily_spend` / `daily_model_usage` 原始行 JSON 的 gzip + base64；
-压缩后仍超帧预算回 `{ format, oversize: true }`。只含按天 × 模型的 token 与金额，不含会话、
-消息或凭证；handler 无 sender 依赖、无副作用。控制端按账号缓存每台电脑最近一次读到的行，
+rowsGz }`，`rowsGz` 为本机 `daily_spend` / `daily_model_usage` / `daily_session_usage` 原始行
+及所涉任务的标题、模型、供应商、上下文与最后活跃时间 JSON 的 gzip + base64；
+压缩后仍超帧预算回 `{ format, oversize: true }`。只含按天 × 模型、按天 × 任务的 token 与金额及任务展示元数据，不含消息内容或凭证；handler 无 sender 依赖、无副作用。控制端按账号缓存每台电脑最近一次读到的行，
 增量从缓存 `todayKey` 前一天起拉；被控端回的 `sinceDay` 与请求不一致时按全量替换。
 旧被控端回 `CHANNEL_NOT_ALLOWED`，控制端把该电脑标为需要更新，不影响其它电脑；旧控制端
 不调用新通道，行为不变。手机不参与读取，也未新增入口。本机 `maker:usage:history` 仍只对

@@ -34,7 +34,7 @@ import { usageModelKey } from '@/components/new-chat/usagePalette';
 import { UsageStatRow } from './UsageStatRow';
 import { UsageTokenBars } from './UsageTokenBars';
 import { UsageAgentTable, UsageModelTable } from './UsageBreakdownTables';
-import { UsageTaskTable, useTopTokenSessions } from './UsageTaskTable';
+import { UsageTaskTable, buildUsageTaskRows, usageTaskCoverageStart } from './UsageTaskTable';
 import {
   USAGE_DEVICE_ALL,
   USAGE_DEVICE_LOCAL,
@@ -130,7 +130,6 @@ export function UsageHistorySection(): React.JSX.Element {
   }, [accountKey, history]);
   const initialDeviceSync =
     firstSyncSettled !== accountKey && (history === null || history.devicesSyncing === true);
-  const showTasks = device === USAGE_DEVICE_ALL || device === USAGE_DEVICE_LOCAL;
   const [range, setRange] = useState<UsageHistoryRange>('30d');
   const [heatmapWeeks, setHeatmapWeeks] = useState(20);
 
@@ -167,9 +166,9 @@ export function UsageHistorySection(): React.JSX.Element {
     [history],
   );
 
-  // 任务行与用量聚合是两条数据源: 聚合里有 token, 本地任务却可能一条都没有
-  // (用户删光了会话, 或列表还没加载完)。空时整张卡片不渲染, 不留空壳。
-  const taskRows = useTopTokenSessions(range, history?.todayKey, user?.id);
+  // 所选范围内产生过 token 的任务(多设备范围含其它电脑的任务)。没有时整张卡片不渲染。
+  const taskRows = useMemo(() => buildUsageTaskRows(history, range), [history, range]);
+  const taskCoverageStart = useMemo(() => usageTaskCoverageStart(history, range), [history, range]);
   const loading = history === null && refreshing;
   const loadFailed = history === null && !refreshing;
   const empty = history !== null && isUsageHistoryEmpty(history);
@@ -358,17 +357,25 @@ export function UsageHistorySection(): React.JSX.Element {
             </Card>
           )}
 
-          {showTasks && taskRows.length > 0 && (
+          {taskRows.length > 0 && (
             <Card
               title={t('usageHistory.tasks.title')}
               subtitle={
-                device === USAGE_DEVICE_ALL && hasPeerUsageDevices(devices)
-                  ? t('usageHistory.tasks.subtitleLocal', { range: rangeLabel })
+                taskCoverageStart
+                  ? `${t('usageHistory.tasks.subtitle', { range: rangeLabel })} · ${t(
+                      'usageHistory.tasks.coverage',
+                      {
+                        date: new Intl.DateTimeFormat(i18n.language, {
+                          month: 'short',
+                          day: 'numeric',
+                        }).format(new Date(`${taskCoverageStart}T12:00:00`)),
+                      },
+                    )}`
                   : t('usageHistory.tasks.subtitle', { range: rangeLabel })
               }
             >
               <div className="overflow-x-auto">
-                <UsageTaskTable rows={taskRows} rangeLabel={rangeLabel} />
+                <UsageTaskTable rows={taskRows} rangeLabel={rangeLabel} devices={devices} />
               </div>
             </Card>
           )}
