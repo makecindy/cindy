@@ -1,5 +1,5 @@
 import { PluginDownloadSlot } from './downloadSlot.js';
-import { download as downloadPluginArtifact } from '../downloader/index.js';
+import { createDownloader } from '../downloader/index.js';
 import { registerGhostCardRemoteProvider, persistGhostCardWithRemoteChange } from './cardRemoteResource.js';
 import { openDeviceAuthorizationCard, openPluginAuthorizationCard } from '../plugin-oauth/deviceCard.js';
 import { t as authorizationText } from '../i18n.js';
@@ -2677,7 +2677,7 @@ export function getGhostIOSSimulatorSlot(): GhostIOSSimulatorSlot {
 let cindySlotSingleton: GhostCindySlot | null = null;
 const pluginDownloads = new PluginDownloadSlot({
   getGhost: findAvailableGhost, root: id => ownerScopedUserDataPath('plugin-downloads', id),
-  scope: activeOwnerScopeKey, send: sendToGhostLogic, download: downloadPluginArtifact,
+  scope: activeOwnerScopeKey, send: sendToGhostLogic, download: createDownloader(),
 });
 let networkSlotSingleton: GhostNetworkSlot | null = null;
 let notifySlotSingleton: GhostNotifySlot | null = null;
@@ -6482,8 +6482,11 @@ async function uninstallGhostAndCleanupLocked(
     getGhostAgentSlot().clearGhost(id);
     getGhostErrandSlot().clearGhost(id);
     getGhostSubscriptionGateway().dropGhost(id);
+    const downloadRoot = ownerScopedUserDataPath('plugin-downloads', id);
+    const downloadScope = activeOwnerScopeKey();
     const result = await manager.uninstall(id, { notify: false });
     if ('rejection' in result) throwUninstallError(result.rejection);
+    await pluginDownloads.removePlugin(id, downloadRoot, downloadScope).catch(err => log.warn('plugin download cache cleanup failed', { id, error: String(err) }));
     removeGhostSecrets(id);
     removeGhostKvBestEffort(
       createGhostKvStore({
@@ -7171,7 +7174,7 @@ export function registerGhostIpc(): void {
     // node-request 只在 main.js → contextBridge → 主机方向开放。子进程反向
     // JSON-RPC 请求恒被 broker 拒绝，因此 Node 不能绕过 main.js 控制 Cindy。
     if (type === 'node-request') {
-      return getGhostNodeRuntimeBroker().handleRequest(id, payload);
+      return pluginDownloads.withNodeDownloads(id, payload as Record<string, unknown>, request => getGhostNodeRuntimeBroker().handleRequest(id, request));
     }
     // pick-request = 系统级选文件夹(pick 槽):用户亲手选中即授权,取消即拒;
     // 限速/单发/结果分档在 pickSlot。

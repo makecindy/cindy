@@ -15,6 +15,7 @@ vi.mock('../../logger', () => ({
 }));
 
 import { Scheduler } from '../scheduler';
+import { createDownloader, download } from '../index';
 
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -30,9 +31,32 @@ describe('downloader scheduler queued cancellation', () => {
     mocks.withRetry.mockImplementation(async (run: () => Promise<unknown>) => run());
   });
 
+  it('bulk consumer queues cannot block the host download queue', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    mocks.executeOnce.mockImplementation(async (ctx: { opts: { url: string; sha256: string } }) => {
+      if (ctx.opts.url.includes('bulk')) await gate;
+      return { size: 1, sha256: ctx.opts.sha256 };
+    });
+    const bulk = createDownloader();
+    const pending = bulk(options('https://bulk.invalid', '/tmp/cindy-bulk', HASH_A));
+    try {
+      await expect(
+        download(options('https://host.invalid', '/tmp/cindy-host', HASH_B)),
+      ).resolves.toMatchObject({ sha256: HASH_B });
+    } finally {
+      release();
+    }
+    await pending;
+  });
+
   it('rejects an aborted queued task immediately instead of waiting behind an active download', async () => {
     let releaseFirst!: () => void;
-    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
     let executeCount = 0;
     mocks.executeOnce.mockImplementation(async (ctx: { opts: { sha256: string } }) => {
       executeCount += 1;

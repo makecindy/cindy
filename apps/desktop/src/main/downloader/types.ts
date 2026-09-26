@@ -8,6 +8,8 @@
  */
 
 export interface DownloadOptions {
+  /** Use the pull-based transport for large public artifacts. */
+  streaming?: boolean;
   /** Absolute HTTP(S) URL to fetch. */
   url: string;
   /** Absolute target file path on disk. The downloader writes `${targetPath}.part`

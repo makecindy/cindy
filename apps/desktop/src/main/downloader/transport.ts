@@ -33,6 +33,7 @@ import {
 } from './resume';
 import { createStreamingHasher, computeHash } from './integrity';
 import { ProgressTracker } from './progress';
+import { executeStreaming } from './streaming';
 
 const DEFAULT_TIMEOUT: TimeoutConfig = { connectMs: 10_000, idleMs: 30_000 };
 const META_WRITE_INTERVAL_MS = 2000;
@@ -81,6 +82,7 @@ function parseContentLength(
 }
 
 export async function executeOnce(ctx: TransportContext): Promise<TransportResult> {
+  if (ctx.opts.streaming) return executeStreaming(ctx);
   const { opts, logger } = ctx;
   const timeout: TimeoutConfig = { ...DEFAULT_TIMEOUT, ...(opts.timeout ?? {}) };
 
