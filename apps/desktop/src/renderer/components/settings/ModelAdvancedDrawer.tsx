@@ -72,7 +72,8 @@ import type {
   ProviderView,
 } from '@cindy/model-providers';
 
-import { isLocalRuntimeBetaProviderId, MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
+import { isLocalRuntimeBetaProviderId, isManagedSidecarProviderId, MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
+import { MANAGED_LLAMACPP_PROVIDER_ID, supportsLlamaCppMillionContext } from '../../../shared/llamaCpp';
 import { modelBrand } from './modelManagementPresentation';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
 import type { UnionModelRow } from './UnifiedModelList';
@@ -237,6 +238,22 @@ export function ModelAdvancedDrawer({
           : agent === 'pi',
     ) ?? primaryCandidates?.[0] ?? null;
   const primaryModel = row && primaryAgent ? (row.byAgent[primaryAgent] ?? null) : null;
+  const [millionContextModelId, setMillionContextModelId] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    setMillionContextModelId(null);
+    if (open && provider.id === MANAGED_LLAMACPP_PROVIDER_ID && primaryModel) {
+      const modelId = primaryModel.id;
+      void window.electronAPI.maker.llamaCppStatus().then((snapshot) => {
+        if (active && snapshot.models.some((model) => model.id === modelId && supportsLlamaCppMillionContext(model))) {
+          setMillionContextModelId(modelId);
+        }
+      }).catch(() => {});
+    }
+    return () => { active = false; };
+  }, [open, provider.id, primaryModel?.id]);
+  const supportsMillionContext = provider.id === MANAGED_LLAMACPP_PROVIDER_ID &&
+    !!primaryModel && millionContextModelId === primaryModel.id;
 
   const contextAgent = primaryAgent && chatAgents.includes(primaryAgent) ? primaryAgent : null;
   const contextModel = contextAgent ? row?.byAgent[contextAgent] : null;
@@ -259,8 +276,9 @@ export function ModelAdvancedDrawer({
     [contextAgent, contextModel, provider.id, row, chatAgents],
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
+  const canEditProtocol = provider.source === 'user' && !provider.auth?.native && !isManagedSidecarProviderId(provider.id);
   const setModelApi = async (agent: AgentKind, api: PiModelApi) => {
-    if (protocolSaving || provider.source !== 'user' || provider.auth?.native || !row?.byAgent[agent]) return;
+    if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
     const config = providerViewToCustomProviderConfig(provider);
     const runtime = config.runtimes[agent];
     const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
@@ -297,7 +315,7 @@ export function ModelAdvancedDrawer({
     .filter((window): window is number => typeof window === 'number' && Number.isFinite(window) && window > 0);
   const minimumContextK = isLocalRuntimeBetaProviderId(provider.id)
     ? 1 : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
-  const routeWindow = primaryModel?.contextWindowMax ?? primaryModel?.contextWindow ?? 0;
+  const routeWindow = supportsMillionContext ? 1_000_000 : primaryModel?.contextWindowMax ?? primaryModel?.contextWindow ?? 0;
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
     ctxDirtyRef.current = false;
@@ -312,7 +330,7 @@ export function ModelAdvancedDrawer({
   const parsedTokens = parsedK * 1000;
   const ctxInvalid =
     ctxDirtyRef.current && ctxDraft.trim() !== '' &&
-    (!Number.isSafeInteger(parsedK) || parsedK < minimumContextK || parsedTokens > 100_000_000);
+    (!Number.isSafeInteger(parsedK) || parsedK < minimumContextK || parsedTokens > (supportsMillionContext ? 1_000_000 : 100_000_000));
   const commitCtxDraft = useCallback(() => {
     if (!ctxDirtyRef.current || ctxInvalid || ctx.loading) return;
     ctxDirtyRef.current = false;
@@ -509,7 +527,7 @@ export function ModelAdvancedDrawer({
                         if (model) {
                           // 同一模型在不同引擎下的元数据差异如实标出来 —— 这些值来自目录的
                           // perAgent 覆盖，用户看到「Codex 下 272K / 6 档」才知道差异是真的。
-                          if (model.contextWindow > 0 && model.contextWindow !== routeWindow) {
+                          if (!supportsMillionContext && model.contextWindow > 0 && model.contextWindow !== routeWindow) {
                             notes.push(approxTokens(model.contextWindow));
                           }
                           if (
@@ -550,7 +568,7 @@ export function ModelAdvancedDrawer({
                                   id={protocolId}
                                   className="mt-0.5 text-11 leading-4 text-[var(--text-tertiary)]"
                                 >
-                                  {provider.source === 'user' && !provider.auth?.native && !model?.catalogPresetId && supported ? (
+                                  {canEditProtocol && !model?.catalogPresetId && supported ? (
                                     <DropdownMenu>
                                       <DropdownMenuTrigger asChild>
                                         <button type="button" disabled={protocolSaving}
@@ -696,12 +714,27 @@ export function ModelAdvancedDrawer({
                   {conversational && (
                     <Section
                       title={t('settings.providers.models.advanced.contextLimit')}
-                      hint={t(/^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(primaryModel.id) && provider.source !== 'user' && ['openai', 'xd'].includes(provider.id)
+                      hint={t(supportsMillionContext ? 'settings.providers.models.advanced.contextLimitLocalMillionHint' : /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(primaryModel.id) && provider.source !== 'user' && ['openai', 'xd'].includes(provider.id)
                         ? 'settings.providers.models.advanced.contextLimitGptHint'
                         : 'settings.providers.models.advanced.contextLimitHint')}
                     >
                       {contextTarget && (
                         <>
+                          {supportsMillionContext && (
+                            <div className="mt-2 flex gap-2">
+                              {[{ label: '256K', tokens: 262144 }, { label: '1M', tokens: 1_000_000 }].map((preset) => (
+                                <Button key={preset.tokens} variant={effectiveLimit === preset.tokens ? 'primary' : 'secondary'} compact
+                                  aria-pressed={effectiveLimit === preset.tokens}
+                                  disabled={paymentRequired || ctx.loading}
+                                  onClick={() => {
+                                    ctxDirtyRef.current = false;
+                                    setCtxDraft(editableContextK(preset.tokens));
+                                    void ctx.setLimit(preset.tokens);
+                                  }}
+                                >{preset.label}</Button>
+                              ))}
+                            </div>
+                          )}
                           <div className="mt-1 flex flex-wrap items-center gap-2.5">
                             <span
                               className={cn(

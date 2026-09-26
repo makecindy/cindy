@@ -1756,6 +1756,43 @@
       }
     },
     "providers": {
+      "llamacpp": {
+        "primaryPick": "主推 · 先試這個",
+        "recommendReason": "優先試用 {{name}}，這是為這台電腦選出的能力主推型號。",
+        "recommendCaveat": "此 GGUF 包裝的本機速度和峰值記憶體仍待實測，下載大小不等於執行時記憶體用量。",
+        "candidates": "待試驗模型",
+        "trialNote": "以下模型可供試驗，效能和記憶體用量尚待驗證。",
+        "downloadModel": "下載 {{name}}",
+        "title": "llama.cpp",
+        "subtitle": "安裝執行環境、下載模型並在本機執行",
+        "description": "選擇下方模型，下載到本機執行。",
+        "install": "安裝 llama.cpp",
+        "start": "啟動並連線",
+        "restart": "重新啟動並更新模型",
+        "stop": "停止服務",
+        "cancel": "取消操作",
+        "repository": "Hugging Face 儲存庫",
+        "findFiles": "尋找模型檔案",
+        "file": "GGUF 檔案",
+        "shards": "分片模型會自動下載全部分片，上方大小為所選分片的大小。支援文字模型，暫不下載視覺投影檔案。",
+        "download": "下載模型",
+        "models": "已下載模型",
+        "empty": "從上方清單選擇模型，或輸入 Hugging Face 儲存庫下載第一個模型。",
+        "unsupported": "此平台暫不支援自動安裝，可透過手動設定連線 llama.cpp。",
+        "failed": "操作未完成，請檢查網路和可用磁碟空間後重試。",
+        "invalid": "請輸入 owner/model-GGUF 格式的儲存庫名稱並選擇 GGUF 檔案。",
+        "progress": {
+          "install": "正在安裝 llama.cpp…",
+          "download": "正在下載模型…",
+          "start": "正在啟動 llama.cpp…"
+        },
+        "installAndConnect": "安裝並連線",
+        "installDescription": "Cindy 會安裝 llama.cpp。下載模型後，使用時自動啟動服務。",
+        "manualConnect": "連線已有服務",
+        "manageRuntime": "管理服務",
+        "applyModels": "使用已下載模型",
+        "startOnUse": "按需啟動"
+      },
       "catalogRecovery": {
         "pending": "模型設定尚未就緒，請稍後重新載入模型。",
         "legacy": "舊模型設定暫時無法讀取，請結束其他正在執行的 Cindy 後重新載入模型。",
@@ -2213,6 +2250,7 @@
           "defaultEffortHint": "新任務選中該模型時的初始檔位，任務內仍可臨時調整。",
           "contextLimit": "上下文上限",
           "contextLimitHint": "套用至此模型所有可用引擎。以整數 K 編輯（1 K = 1,000 tokens）；未編輯時保留精確值。儲存後用於後續執行，不影響正在產生的內容。實際可用長度仍受模型服務限制。",
+          "contextLimitLocalMillionHint": "原生 256K（262,144 tokens），可選擴展至 1M（1,000,000）。Cindy 會在下次使用時自動設定本機服務。長輸入會增加記憶體用量和等待時間。",
           "contextLimitAria": "上下文上限（千 tokens）",
           "contextLimitRoute": "目前 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "已超過上游宣告的長度，可能導致請求失敗。",
@@ -2443,7 +2481,8 @@
           "apple-mlx": "這台 Mac 適合官方 MLX 封裝。",
           "generic-27b": "這台電腦適合官方 Q4 封裝。",
           "compact": "依這台電腦的記憶體，先從更輕量的模型開始。",
-          "unknown": "先選一個更好跑起來的模型。"
+          "unknown": "先選一個更好跑起來的模型。",
+          "high-memory": "這台電腦記憶體充裕，優先試用能力更強的模型；本機速度與峰值記憶體仍待實測。"
         },
         "searchPlaceholder": "搜尋模型",
         "noSearchResults": "沒有符合的模型",
@@ -2534,7 +2573,9 @@
         "deleteModelConfirm": "刪除",
         "deleteModelDone": "已刪除 {{name}}",
         "deleteModelFailed": "刪除失敗，請確認 Ollama 正在執行後重試",
-        "noRecommendation": "這台電腦暫時沒有證據充分且記憶體適配的推薦，可在下方手動選擇候選模型。"
+        "noRecommendation": "這台電腦暫時沒有證據充分且記憶體適配的推薦，可在下方手動選擇候選模型。",
+        "lighterAlternative": "輕量備選",
+        "recommendedInstalled": "推薦模型已在本機，可直接使用。"
       },
       "xdSignin": {
         "badge": "推薦",

@@ -32,13 +32,15 @@ import {
 } from '@cindy/model-providers';
 
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
-import { MANAGED_OLLAMA_PROVIDER_ID } from '../../shared/localModelRuntime.js';
+import { MANAGED_OLLAMA_PROVIDER_ID, isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
 import type {
   CodexImageGenerationRestartPolicy,
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
 } from '../../shared/customProviderUpdate.js';
 import { notifyManagedOllamaRemoved } from '../local-model-runtime/ipc.js';
+import { stopManagedLlamaCppService } from '../local-model-runtime/llamaCppService.js';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type {
   ModelPriceOverrideDesiredQuote,
@@ -1897,7 +1899,7 @@ export function registerProviderHandlers(
     if (isByokProviderId(config.id) || deps.isOrganizationManagedProviderId(config.id)) {
       throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
-    if (config.id === MANAGED_OLLAMA_PROVIDER_ID) {
+    if (isManagedSidecarProviderId(config.id)) {
       throwIpcError(
         'PERMISSION_DENIED',
         'managed local providers cannot be created from the custom form',
@@ -1973,7 +1975,7 @@ export function registerProviderHandlers(
     if (deps.isOrganizationManagedProviderId(config.id)) {
       throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
-    if (config.id === MANAGED_OLLAMA_PROVIDER_ID) {
+    if (isManagedSidecarProviderId(config.id)) {
       throwIpcError(
         'PERMISSION_DENIED',
         'managed local providers cannot be edited from the custom form',
@@ -2183,7 +2185,16 @@ export function registerProviderHandlers(
             if (!restoreOAuthCredentials) {
               throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
             }
-            await deleteCustomProvider(providerId);
+            if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
+              try {
+                await stopManagedLlamaCppService(async () => {
+                  assertProviderMutationOwner(ownerAtIngress);
+                  await deleteCustomProvider(providerId);
+                });
+              } catch {
+                throwIpcError('PRECONDITION_FAILED', 'LLAMACPP_STOP_FAILED');
+              }
+            } else await deleteCustomProvider(providerId);
             if (providerId === MANAGED_OLLAMA_PROVIDER_ID) notifyManagedOllamaRemoved();
             assertProviderMutationOwner(ownerAtIngress);
           } catch (err) {

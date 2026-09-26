@@ -27,7 +27,8 @@ import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
-import { MANAGED_OLLAMA_PROVIDER_ID } from '../../shared/localModelRuntime.js';
+import { MANAGED_OLLAMA_PROVIDER_ID, isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
+import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import { parseAuxiliaryModelRef, type ParsedAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
@@ -949,41 +950,48 @@ async function requestExplicitProviderText(
     model,
     transport,
     profile,
-    execute: (text, requestOpts) => requestCustomProviderText({
-      agentKind,
-      baseUrl: routing.upstream,
-      requestPath: routing.requestPath,
-      wireProtocol,
-      isOllama,
-      headers: routing.headerOverride,
-      credential: credential ?? '',
-      authStrategy,
-      model,
-      prompt: text,
-      maxTokens: requestOpts?.maxTokens,
-      timeoutMs: requestOpts?.timeoutMs,
-      reasoningEffort: requestOpts?.reasoningEffort,
-      disableReasoning: requestOpts?.disableReasoning,
-      signal: requestOpts?.signal,
-      systemPrompt: requestOpts?.systemPrompt,
-      responseInstructions: requestOpts?.responseInstructions,
-      beforeDispatch: requestOpts?.beforeDispatch
-        ? () => requestOpts.beforeDispatch!({ providerId: provider.id, agentKind, model })
-        : undefined,
-      credentialStillCurrent: requestOpts?.beforeDispatch
-        ? () => {
-            if (noAuth) return true;
-            if (isOAuth) {
-              return readCachedGenericOAuthAccessToken(
-                storedCustomProviderId(provider.id),
-                provider.auth.oauth,
-              ) === credential;
+    execute: async (text, requestOpts) => {
+      if (isManagedSidecarProviderId(provider.id)) {
+        requestOpts?.signal?.throwIfAborted();
+        await ensureManagedOllamaReadyForSession({ providerId: provider.id });
+        requestOpts?.signal?.throwIfAborted();
+      }
+      return requestCustomProviderText({
+        agentKind,
+        baseUrl: routing.upstream,
+        requestPath: routing.requestPath,
+        wireProtocol,
+        isOllama,
+        headers: routing.headerOverride,
+        credential: credential ?? '',
+        authStrategy,
+        model,
+        prompt: text,
+        maxTokens: requestOpts?.maxTokens,
+        timeoutMs: requestOpts?.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort,
+        disableReasoning: requestOpts?.disableReasoning,
+        signal: requestOpts?.signal,
+        systemPrompt: requestOpts?.systemPrompt,
+        responseInstructions: requestOpts?.responseInstructions,
+        beforeDispatch: requestOpts?.beforeDispatch
+          ? () => requestOpts.beforeDispatch!({ providerId: provider.id, agentKind, model })
+          : undefined,
+        credentialStillCurrent: requestOpts?.beforeDispatch
+          ? () => {
+              if (noAuth) return true;
+              if (isOAuth) {
+                return readCachedGenericOAuthAccessToken(
+                  storedCustomProviderId(provider.id),
+                  provider.auth.oauth,
+                ) === credential;
+              }
+              return readCustomProviderKey(provider.id, agentKind) === credential;
             }
-            return readCustomProviderKey(provider.id, agentKind) === credential;
-          }
-        : undefined,
-      routeStillCurrent: requestOpts?.beforeDispatch ? routeStillCurrent : undefined,
-    }),
+          : undefined,
+        routeStillCurrent: requestOpts?.beforeDispatch ? routeStillCurrent : undefined,
+      });
+    },
   };
   return executeCandidates([candidate], prompt, [], opts);
 }

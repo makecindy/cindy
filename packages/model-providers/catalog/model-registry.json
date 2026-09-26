@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-26T12:00:00.005Z",
+  "updatedAt": "2026-09-26T12:00:00.006Z",
   "models": [
     {
       "id": "openai/gpt-6-sol",
@@ -959,10 +959,7 @@
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.7",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePriceGroup": "global"
         }
       ],
@@ -983,10 +980,7 @@
         {
           "providerId": "xai",
           "modelId": "xai/grok-4.7-build-fast",
-          "agents": [
-            "claude-code",
-            "codex"
-          ],
+          "agents": ["claude-code", "codex"],
           "referencePriceGroup": "global"
         }
       ],
@@ -2533,7 +2527,7 @@
   ],
   "localModels": {
     "version": 1,
-    "featuredIds": ["qwen38-27b"],
+    "featuredIds": ["qwen38-flash-next", "qwen38-27b"],
     "models": [
       {
         "id": "qwen38-27b",
@@ -2589,7 +2583,16 @@
             "status": "pending"
           }
         ],
-        "modelRef": "qwen/qwen3.8-27b"
+        "modelRef": "qwen/qwen3.8-27b",
+        "llamacpp": [
+          {
+            "repo": "ggml-org/Qwen3.8-27B-GGUF",
+            "file": "Qwen3.8-27B-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 18973870528,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "qwen35-4b",
@@ -2627,7 +2630,16 @@
             "status": "pending"
           }
         ],
-        "modelRef": "qwen/qwen3.5-4b"
+        "modelRef": "qwen/qwen3.5-4b",
+        "llamacpp": [
+          {
+            "repo": "bartowski/Qwen_Qwen3.5-4B-GGUF",
+            "file": "Qwen_Qwen3.5-4B-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 3013027808,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "qwen35-9b",
@@ -2665,7 +2677,16 @@
             "status": "pending"
           }
         ],
-        "modelRef": "qwen/qwen3.5-9b"
+        "modelRef": "qwen/qwen3.5-9b",
+        "llamacpp": [
+          {
+            "repo": "bartowski/Qwen_Qwen3.5-9B-GGUF",
+            "file": "Qwen_Qwen3.5-9B-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 6169341984,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "gemma4-12b",
@@ -2703,7 +2724,16 @@
             "status": "pending"
           }
         ],
-        "modelRef": "google/gemma-4-12b"
+        "modelRef": "google/gemma-4-12b",
+        "llamacpp": [
+          {
+            "repo": "bartowski/gemma-4-12B-it-GGUF",
+            "file": "gemma-4-12B-it-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 7662533088,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "qwen36-35b",
@@ -2741,7 +2771,16 @@
             "status": "pending"
           }
         ],
-        "modelRef": "qwen/qwen36-35b"
+        "modelRef": "qwen/qwen36-35b",
+        "llamacpp": [
+          {
+            "repo": "ggml-org/Qwen3.6-35B-A3B-GGUF",
+            "file": "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 20419565568,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "nemotron35-30b",
@@ -2779,7 +2818,16 @@
             "status": "pending"
           }
         ],
-        "modelRef": "nvidia/nemotron-3.5-lightning"
+        "modelRef": "nvidia/nemotron-3.5-lightning",
+        "llamacpp": [
+          {
+            "repo": "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+            "file": "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 25477403616,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "qwen38-flash-next",
@@ -2799,11 +2847,11 @@
           }
         ],
         "descriptions": {
-          "en": "High-memory capability candidate for 192–256 GB machines. Ollama speed and peak memory are unverified; other MLX runtimes have published tests.",
-          "zh-CN": "192–256 GB 大内存能力候选。已有其他 MLX 运行时实测，Ollama 的速度与峰值内存仍待验证。",
-          "zh-TW": "192–256 GB 大記憶體能力候選。已有其他 MLX 執行環境實測，Ollama 的速度與峰值記憶體仍待驗證。",
-          "ja": "192〜256 GB 向けの性能重視の候補。他の MLX 実行環境では実測あり。Ollama の速度とピークメモリは未検証です。",
-          "ko": "192–256 GB 대용량 메모리용 성능 후보. 다른 MLX 런타임의 실측은 있으나 Ollama 속도와 최대 메모리는 미검증입니다."
+          "en": "Capability pick for high-memory computers (192 GB or more). Local speed and peak memory still need testing.",
+          "zh-CN": "192 GB 及以上大内存电脑的能力主推，本机速度与峰值内存仍待实测。",
+          "zh-TW": "192 GB 以上大記憶體電腦的能力主推，本機速度與峰值記憶體仍待實測。",
+          "ja": "192 GB 以上の大容量メモリ向けの性能重視の推奨。ローカルの速度とピークメモリは要検証です。",
+          "ko": "192 GB 이상 대용량 메모리 컴퓨터의 성능 추천. 로컬 속도와 최대 메모리는 추가 검증이 필요합니다."
         },
         "evidence": [
           {
@@ -2822,7 +2870,16 @@
             "status": "measured"
           }
         ],
-        "modelRef": "qwen/qwen3.8-flash-next"
+        "modelRef": "qwen/qwen3.8-flash-next",
+        "llamacpp": [
+          {
+            "repo": "bartowski/Qwen3.8-Flash-Next-GGUF",
+            "file": "Qwen3.8-Flash-Next-Q4_K_M/Qwen3.8-Flash-Next-Q4_K_M-00001-of-00004.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 119599030080,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "laguna-s21-118b",
@@ -2865,6 +2922,15 @@
             "verifiedAt": "2026-09-24",
             "status": "measured"
           }
+        ],
+        "llamacpp": [
+          {
+            "repo": "poolside/Laguna-S-2.1-GGUF",
+            "file": "laguna-s-2.1-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 96031829760,
+            "verifiedAt": "2026-09-25"
+          }
         ]
       }
     ]
@@ -2905,9 +2971,9 @@
               "currency": "USD",
               "variant": "standard",
               "inputPerMtok": 4,
-              "outputPerMtok": 15.0,
+              "outputPerMtok": 15,
               "cacheReadPerMtok": 0.4,
-              "cacheWritePerMtok": 5.0,
+              "cacheWritePerMtok": 5,
               "effectiveFrom": "2026-09-22",
               "source": {
                 "kind": "provider-official",
@@ -2922,7 +2988,7 @@
               "inputPerMtok": 4,
               "outputPerMtok": 20,
               "cacheReadPerMtok": 0.4,
-              "cacheWritePerMtok": 5.0,
+              "cacheWritePerMtok": 5,
               "effectiveFrom": "2026-09-22",
               "source": {
                 "kind": "provider-official",
@@ -2935,9 +3001,9 @@
               "currency": "USD",
               "variant": "fast",
               "inputPerMtok": 8,
-              "outputPerMtok": 30.0,
+              "outputPerMtok": 30,
               "cacheReadPerMtok": 0.8,
-              "cacheWritePerMtok": 10.0,
+              "cacheWritePerMtok": 10,
               "effectiveFrom": "2026-09-22",
               "source": {
                 "kind": "provider-official",
@@ -3000,7 +3066,7 @@
               "currency": "USD",
               "variant": "fast",
               "inputPerMtok": 0.2,
-              "outputPerMtok": 1.0,
+              "outputPerMtok": 1,
               "cacheReadPerMtok": 0.02,
               "cacheWritePerMtok": 0.25,
               "effectiveFrom": "2026-09-22",
@@ -3052,7 +3118,7 @@
               "inputPerMtok": 4,
               "outputPerMtok": 20,
               "cacheReadPerMtok": 0.2,
-              "cacheWritePerMtok": 5.0,
+              "cacheWritePerMtok": 5,
               "effectiveFrom": "2026-09-22",
               "source": {
                 "kind": "provider-official",
@@ -3067,7 +3133,7 @@
               "inputPerMtok": 8,
               "outputPerMtok": 40,
               "cacheReadPerMtok": 0.4,
-              "cacheWritePerMtok": 10.0,
+              "cacheWritePerMtok": 10,
               "effectiveFrom": "2026-09-22",
               "source": {
                 "kind": "provider-official",
@@ -3173,14 +3239,14 @@
                 "verifiedAt": "2026-09-11"
               },
               "cacheReadPerMtok": 0.8,
-              "cacheWritePerMtok": 10.0,
+              "cacheWritePerMtok": 10,
               "maxInputTokens": 272001
             },
             {
               "currency": "USD",
               "variant": "fast",
               "inputPerMtok": 16,
-              "outputPerMtok": 60.0,
+              "outputPerMtok": 60,
               "effectiveFrom": "2026-09-11",
               "source": {
                 "kind": "provider-official",
@@ -3188,7 +3254,7 @@
                 "verifiedAt": "2026-09-11"
               },
               "cacheReadPerMtok": 1.6,
-              "cacheWritePerMtok": 20.0,
+              "cacheWritePerMtok": 20,
               "minInputTokens": 272001
             }
           ]
@@ -3288,14 +3354,14 @@
                 "verifiedAt": "2026-09-11"
               },
               "cacheReadPerMtok": 0.4,
-              "cacheWritePerMtok": 5.0,
+              "cacheWritePerMtok": 5,
               "maxInputTokens": 272001
             },
             {
               "currency": "USD",
               "variant": "fast",
               "inputPerMtok": 8,
-              "outputPerMtok": 36.0,
+              "outputPerMtok": 36,
               "effectiveFrom": "2026-09-11",
               "source": {
                 "kind": "provider-official",
@@ -3303,7 +3369,7 @@
                 "verifiedAt": "2026-09-11"
               },
               "cacheReadPerMtok": 0.8,
-              "cacheWritePerMtok": 10.0,
+              "cacheWritePerMtok": 10,
               "minInputTokens": 272001
             }
           ]
@@ -3416,7 +3482,7 @@
                 "verifiedAt": "2026-09-11"
               },
               "cacheReadPerMtok": 0.08,
-              "cacheWritePerMtok": 1.0,
+              "cacheWritePerMtok": 1,
               "minInputTokens": 272001
             }
           ]
@@ -3581,7 +3647,7 @@
               "currency": "USD",
               "variant": "standard",
               "inputPerMtok": 60,
-              "outputPerMtok": 270.0,
+              "outputPerMtok": 270,
               "effectiveFrom": "2026-09-11",
               "source": {
                 "kind": "provider-official",
@@ -4228,12 +4294,7 @@
         "name": "Grok 4.7",
         "group": "grok",
         "contextWindow": 500000,
-        "efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
+        "efforts": ["low", "medium", "high", "xhigh"],
         "defaultEffort": "high",
         "supportsImageInput": true
       },
@@ -4308,12 +4369,7 @@
         "name": "Grok 4.7 Fast",
         "group": "grok",
         "contextWindow": 500000,
-        "efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
+        "efforts": ["low", "medium", "high", "xhigh"],
         "defaultEffort": "high",
         "supportsImageInput": true,
         "supportsFastMode": false

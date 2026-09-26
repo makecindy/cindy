@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ loggedIn: false, proxyReady: true, sharedSkillRefreshes: 0 }));
+const ensureLocalReady = vi.hoisted(() => vi.fn());
+vi.mock('../../local-model-runtime/preflight.js', () => ({
+  ensureManagedOllamaReadyForSession: ensureLocalReady,
+}));
 
 vi.mock('electron', () => ({
   app: {
@@ -80,6 +84,15 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
     state.loggedIn = false;
     state.proxyReady = true;
     state.sharedSkillRefreshes = 0;
+    ensureLocalReady.mockReset();
+  });
+
+  it.each(['cindy-local-llamacpp', 'cindy-local-ollama'])('starts %s on demand during local Pi provider resolution only', async providerId => {
+    await resolvePiNativeProviders({ workingDir: '/tmp/project', providerId, model: 'local-model' });
+    expect(ensureLocalReady).toHaveBeenCalledWith(expect.objectContaining({ providerId, remoteHostId: null }));
+    ensureLocalReady.mockClear();
+    await resolvePiNativeProviders({ workingDir: '/remote/project', providerId, model: 'local-model', remoteHostId: 'remote-1' });
+    expect(ensureLocalReady).not.toHaveBeenCalled();
   });
 
   it('fails closed when an official SuperGrok route has no local compat proxy', async () => {

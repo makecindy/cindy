@@ -30,6 +30,7 @@ import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerH
 import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot } from '../../maker-host/model-visibility-mirror.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
 import * as providerPresentation from '../../maker-host/provider-presentation-store.js';
+import * as llamaCppService from '../../local-model-runtime/llamaCppService.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
 
 /** 最小 ProviderView 桩（只放断言要用的字段；handler 不解读结构，原样透传）。 */
@@ -2410,7 +2411,7 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(deps.refreshCatalog).not.toHaveBeenCalled();
   });
 
-  it('rejects managed local provider ids on the generic create/update path', async () => {
+  it.each(['cindy-local-ollama', 'cindy-local-llamacpp'])('rejects %s on the generic create/update path', async (id) => {
     mountDb();
     const harness = new IpcHarness();
     const deps = makeDeps();
@@ -2419,13 +2420,13 @@ describe('provider:custom:* CRUD handlers', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, {
         ...validConfig,
-        id: 'cindy-local-ollama',
+        id,
       }),
     ).rejects.toThrow(/PERMISSION_DENIED/);
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
         ...validConfig,
-        id: 'cindy-local-ollama',
+        id,
       }),
     ).rejects.toThrow(/PERMISSION_DENIED/);
     expect(await listCustomProviders()).toEqual([]);
@@ -3345,6 +3346,25 @@ describe('provider:custom:* CRUD handlers', () => {
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, '')).rejects.toThrow(
       /INVALID_PARAMS/,
     );
+  });
+
+  it('waits for llama.cpp cleanup before deletion and retains the connection on failure', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps());
+    const id = 'cindy-local-llamacpp';
+    await createCustomProvider({ ...validConfig, id });
+    const stop = vi.spyOn(llamaCppService, 'stopManagedLlamaCppService').mockRejectedValueOnce(new Error('STOP_TIMEOUT'));
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, id)).rejects.toThrow('LLAMACPP_STOP_FAILED');
+    expect(await getCustomProvider(id)).not.toBeNull();
+    let release!: () => void;
+    stop.mockImplementation(async (remove) => { await new Promise<void>((resolve) => { release = resolve; }); await remove(); });
+    const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, id);
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(2));
+    expect(await getCustomProvider(id)).not.toBeNull();
+    release();
+    await deletion;
+    expect(await getCustomProvider(id)).toBeNull();
   });
 
   it('does not delete a provider when OAuth credential removal fails', async () => {

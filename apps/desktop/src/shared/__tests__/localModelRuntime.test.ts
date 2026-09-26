@@ -148,7 +148,7 @@ describe('localModelRuntime', () => {
     );
   });
 
-  it('uses platform-specific downloads for large candidates without promoting them', () => {
+  it('uses the curated stronger primary on high-memory hosts and keeps 27B as the lighter alternative', () => {
     const host = { platform: 'darwin' as const, arch: 'arm64', totalmemBytes: 256 * 1024 ** 3 };
     const apple = resolveCuratedOllamaCatalog(host);
     const windows = resolveCuratedOllamaCatalog({ ...host, platform: 'win32', arch: 'x64' });
@@ -180,7 +180,17 @@ describe('localModelRuntime', () => {
       appleSiliconOnly: false,
       minUnifiedMemoryGb: 192,
     });
-    expect(pickFeaturedOllamaModels(host).map((model) => model.id)).toEqual(['qwen38-27b']);
+    expect(pickFeaturedOllamaModels(host).map((model) => model.id)).toEqual([
+      'qwen38-flash-next',
+      'qwen38-27b',
+    ]);
+    expect(recommendForHost(host).reason).toBe('high-memory');
+    expect(
+      pickFeaturedOllamaModels({ ...host, totalmemBytes: 191 * 1024 ** 3 }).map((m) => m.id),
+    ).toEqual(['qwen38-27b']);
+    expect(
+      pickFeaturedOllamaModels({ ...host, totalmemBytes: 192 * 1024 ** 3 }).map((m) => m.id),
+    ).toEqual(['qwen38-flash-next', 'qwen38-27b']);
   });
 
   it('rejects invalid platform metadata and preserves bundled fallback', () => {

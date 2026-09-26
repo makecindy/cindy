@@ -100,6 +100,27 @@ beforeEach(() => {
 });
 
 describe('model advanced editor', () => {
+  it('offers the verified local 256K and 1M options through the existing context preference', async () => {
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      llamaCppStatus: vi.fn(async () => ({ models: [{ id: 'flash', repo: 'bartowski/Qwen3.8-Flash-Next-GGUF' }] })),
+    } } });
+    try {
+      const source = { ...buildUserProvider({ id: 'cindy-local-llamacpp', name: 'llama.cpp', runtimes: {
+        pi: { baseUrl: 'http://127.0.0.1:11435/v1', wireProtocol: 'openai-chat', models: [{ id: 'flash', name: 'Flash', contextWindow: 262144 }] },
+      } }), connected: true } as ProviderView;
+      const primary = source.models.pi![0]!;
+      render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      fireEvent.click(await screen.findByRole('button', { name: '1M' }));
+      expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000_000);
+      fireEvent.click(screen.getByRole('button', { name: '256K' }));
+      expect(mocks.setLimit).toHaveBeenLastCalledWith(262144);
+      expect(screen.queryByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
+    } finally {
+      cleanup();
+      Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous });
+    }
+  });
   it('shows the imported API as a label rather than offering unrelated supplier transports', () => {
     const source = { ...buildUserProvider({ id: 'nous-test', name: 'Hermes', runtimes: {
       pi: { catalogPresetId: 'nous', baseUrl: 'https://inference-api.nousresearch.com/v1', wireProtocol: 'openai-chat', models: [{ id: 'gpt-6', name: 'GPT-6' }] },
