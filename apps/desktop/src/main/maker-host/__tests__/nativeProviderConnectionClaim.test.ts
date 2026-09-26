@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   userDataDir: '',
   dataOwnerId: 'owner-a' as string | null,
   generation: 1,
+  legacyCloudOwner: false,
   catalog: null as Catalog | null,
   claudeCredentialPresent: true,
   grokCredentialPresent: true,
@@ -106,12 +107,16 @@ vi.mock('../auth-adapters.js', () => ({
 }));
 
 vi.mock('../../authManager.js', () => ({
-  getAuthState: () => ({ mode: 'local' as const, user: null }),
+  getAuthState: () => h.legacyCloudOwner
+    ? { mode: 'cloud', user: { id: h.dataOwnerId } }
+    : { mode: 'local', user: null },
 }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: false }),
 }));
-vi.mock('../../ownerNamespaceMigration.js', () => ({ hasLegacyOwnerNamespaceClaim: () => false }));
+vi.mock('../../ownerNamespaceMigration.js', () => ({
+  hasLegacyOwnerNamespaceClaim: () => h.legacyCloudOwner,
+}));
 vi.mock('../../manifestService.js', () => ({
   isDev: () => true,
   getBaseUrl: () => 'https://example.invalid',
@@ -127,7 +132,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: () => null,
   // builtinApiKeyConnected(gemini)在 listProviders 里读 key 存在性;本测试不关心
   // 该供应商,恒返回 null = 未配置。
-  getProviderSecretStore: () => ({ get: () => null }),
+  getProviderSecretStore: () => ({ get: () => null, has: () => h.grokCredentialPresent }),
 }));
 
 import {
@@ -145,7 +150,7 @@ function isBoundToCurrentOwner(provider: 'anthropic' | 'xai'): boolean {
 }
 
 async function listProviders(allowSideEffects = true, waitForDiscovery = false) {
-  return getDesktopProviderService().listProviders({ allowSideEffects, waitForDiscovery });
+  return getDesktopProviderService({ allowSideEffects }).listProviders({ allowSideEffects, waitForDiscovery });
 }
 
 async function connectedMap(allowSideEffects = true): Promise<Record<string, boolean>> {
@@ -157,6 +162,7 @@ beforeEach(() => {
   h.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-native-conn-claim-'));
   h.dataOwnerId = 'owner-a';
   h.generation = 1;
+  h.legacyCloudOwner = false;
   h.catalog = BUNDLED_CATALOG;
   h.claudeCredentialPresent = true;
   h.grokCredentialPresent = true;
@@ -173,6 +179,18 @@ afterEach(() => {
 });
 
 describe('native provider connection claim on read', () => {
+  it('read-only service acquisition skips legacy migration even for eligible cloud owners', async () => {
+    h.legacyCloudOwner = true;
+    await listProviders(false);
+    expect(isNativeProviderAuthBound('anthropic')).toBe(false);
+    expect(isNativeProviderAuthBound('xai')).toBe(false);
+    expect(fs.existsSync(path.join(h.userDataDir, 'native-provider-auth.json'))).toBe(false);
+    // A later trusted acquisition of the same singleton still performs migration.
+    getDesktopProviderService();
+    expect(isNativeProviderAuthBound('anthropic')).toBe(true);
+    expect(isNativeProviderAuthBound('xai')).toBe(true);
+  });
+
   it('projects only bound native account identities without exposing credentials', async () => {
     const before = await listProviders(false);
     for (const id of ['anthropic', 'xai']) {

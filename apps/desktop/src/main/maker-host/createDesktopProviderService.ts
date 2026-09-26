@@ -971,10 +971,11 @@ export function getDesktopSelectableCatalog(): Catalog {
 }
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
-export function getDesktopProviderService(): ProviderService {
+export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {
   const authState = getAuthState();
   const ownerId = getActiveAppSession().dataOwnerId;
   if (
+    options.allowSideEffects !== false &&
     authState.mode === 'cloud' &&
     ownerId &&
     authState.user?.id === ownerId &&

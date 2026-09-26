@@ -384,6 +384,7 @@ function registerGhostProtocol(
             headers,
           });
         } catch {
+          if (!isGhostProtocolOwnerActive(owner)) return new Response(null, { status: 403, headers });
           return new Response(
             JSON.stringify({ ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model catalog unavailable' }),
             { status: 503, headers },

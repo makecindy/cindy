@@ -433,3 +433,14 @@ describe('read-only agent model directory', () => {
     expect((await handler(new Request('cindy-ghost://agent-owner/agent-models'))).status).toBe(403);
   });
 });
+
+it('rejects failed in-flight model reads after owner changes', async () => {
+  let reject!: (error: Error) => void;
+  setGhostAgentModelsProvider(() => new Promise((_resolve, fail) => { reject = fail; }));
+  ensureGhostProtocolRegistered(ghost('agent-rejected-owner'));
+  const handler = harness.sessions.get('cindy-ghost-owner:cloud:opaque-owner-a:agent-rejected-owner')!.protocolHandler!;
+  const pending = handler(new Request('cindy-ghost://agent-rejected-owner/agent-models'));
+  harness.activeOwner = { mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 };
+  reject(new Error('old visibility mirror cleared'));
+  expect((await pending).status).toBe(403);
+});
