@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   trusted: true,
   canUseDeviceLink: true,
+  diagnosticsInfo: vi.fn(),
   cache: {
     readMessages: vi.fn(async () => [] as Record<string, unknown>[]),
     readMessagesWithInvalidation: vi.fn(async () => ({
@@ -42,7 +43,7 @@ vi.mock('electron', () => ({
   },
 }));
 vi.mock('../../logger', () => ({
-  createLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() }),
+  createLogger: (scope: string) => ({ warn: vi.fn(), error: vi.fn(), info: scope === 'device-link:ipc-diagnostics' ? h.diagnosticsInfo : vi.fn(), debug: vi.fn() }),
 }));
 // 读路径要比对 owner 作用域路径(账号边界复核),这里给个稳定值即可。
 vi.mock('../../appSessionState', () => ({
@@ -88,6 +89,8 @@ vi.mock('../../clientEndpointsService.js', () => ({
 vi.mock('../index', () => ({
   getDeviceLinkStatus: () => 'online',
   getDeviceLinkConnectionIssue: () => null,
+  isDeviceLinkStandby: () => false,
+  getUnresponsiveDeviceIds: () => [],
   clearDeviceResponsiveness: vi.fn(),
   setRemoteControlEnabled: vi.fn(),
   setKeepAwakeEnabled: vi.fn(),
@@ -144,17 +147,18 @@ vi.mock('../subscriptionRefcount', () => ({
 
 import { DEVICE_LINK_INVOKE } from '../../../shared/deviceLinkIpc';
 import { registerDeviceLinkIpc } from '../ipc';
-import { REMOTE_INVOKE_ALLOWLIST } from '@cindy/device-link';
+import { DeviceLinkError, REMOTE_INVOKE_ALLOWLIST } from '@cindy/device-link';
 import { DESKTOP_LOCAL } from '../../../shared/remoteDesktop';
 import {
   setRemoteControlEnabled,
   revokeController,
   restoreController,
   disconnectAllControllers,
+  remoteInvoke,
 } from '../index';
 import { setDeviceControlEnabled } from '../settings-store';
 
-const EVENT = {} as Electron.IpcMainInvokeEvent;
+const EVENT = { sender: { id: 42 } } as Electron.IpcMainInvokeEvent;
 
 /** 五个 channel 与一份能过运行期校验的最小 payload。 */
 const MIRROR_CACHE_CALLS: Array<[string, unknown]> = [
@@ -184,6 +188,24 @@ beforeEach(() => {
   h.trusted = true;
   h.canUseDeviceLink = true;
   registerDeviceLinkIpc();
+});
+
+it('records the originating window and raw error before the IPC adapter maps it', async () => {
+  vi.useFakeTimers();
+  try {
+    vi.mocked(remoteInvoke).mockRejectedValueOnce(new DeviceLinkError('BACKPRESSURE', 'private failure'));
+    await expect(call(DEVICE_LINK_INVOKE.INVOKE, {
+      deviceId: 'private-peer', channel: 'local-db:sessions:list', args: ['private argument'],
+    })).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+    expect(h.diagnosticsInfo).toHaveBeenCalledWith('transport first failure', expect.objectContaining({
+      windowId: 42, operation: 'invoke', channel: 'local-db:sessions:list', code: 'BACKPRESSURE', completed: 1,
+    }));
+    expect(JSON.stringify(h.diagnosticsInfo.mock.calls)).not.toContain('private');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.diagnosticsInfo).toHaveBeenCalledWith('transport summary', expect.objectContaining({ code: 'BACKPRESSURE', completed: 1 }));
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 describe('mirror-cache IPC 授权边界', () => {

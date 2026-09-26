@@ -1034,6 +1034,45 @@ describe('refreshRemoteDeviceSessions retry', () => {
   });
 });
 
+describe('queued refresh cancellation', () => {
+  it.each(['disconnect', 'disconnect-all', 'remove', 'clear'] as const)(
+    'does not revive a queued refresh after %s; another peer still works',
+    async (action) => {
+      const device = did();
+      const healthy = did();
+      remoteProjectsStore.setDeviceSessions(device, 'Remote', [session('cached')]);
+      const pending = deferred<Session[]>();
+      invoke.mockReturnValueOnce(pending.promise).mockResolvedValue([]);
+      const first = refreshRemoteDeviceSessions(device, 'Remote', { sleep: noSleep });
+      const queued = refreshRemoteDeviceSessions(device, 'Remote', { sleep: noSleep });
+      if (action === 'disconnect') remoteProjectsStore.markDeviceDisconnected(device);
+      if (action === 'disconnect-all') remoteProjectsStore.markAllDisconnected();
+      if (action === 'remove') remoteProjectsStore.removeDevice(device);
+      if (action === 'clear') remoteProjectsStore.clear();
+      await expect(refreshRemoteDeviceSessions(healthy)).resolves.toBe('ok');
+      pending.resolve([session('stale')]);
+      await expect(Promise.all([first, queued])).resolves.toEqual(['superseded', 'superseded']);
+      expect(invoke.mock.calls.filter(([peer]) => peer === device)).toHaveLength(1);
+      expect(remoteProjectsStore.getDeviceIds()).not.toContain(device);
+      expect(remoteProjectsStore.getDeviceIds()).toContain(healthy);
+    },
+  );
+
+  it('accepts a new refresh after reconnect while the stale read is still in flight', async () => {
+    const device = did();
+    const pending = deferred<Session[]>();
+    invoke.mockReturnValueOnce(pending.promise).mockResolvedValue([session('fresh')]);
+    const first = refreshRemoteDeviceSessions(device, 'Remote', { sleep: noSleep });
+    const queued = refreshRemoteDeviceSessions(device, 'Remote', { sleep: noSleep });
+    remoteProjectsStore.markDeviceDisconnected(device);
+    const reconnected = refreshRemoteDeviceSessions(device, 'Remote', { sleep: noSleep });
+    pending.resolve([session('stale')]);
+    await expect(Promise.all([first, queued, reconnected])).resolves.toEqual(['ok', 'ok', 'ok']);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(remoteProjectsStore.getDeviceSessions(device).map((s) => s.id)).toEqual(['fresh']);
+  });
+});
+
 describe('remote schedule mirror', () => {
   const snapshot = (readAt?: number) => ({ runs: [{
     sessionId: 'schedule-session', runId: 'run', scheduleId: 'auto', scheduleName: 'auto',
