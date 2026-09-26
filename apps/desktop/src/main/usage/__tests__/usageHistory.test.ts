@@ -989,4 +989,65 @@ describe('multi-device scope', () => {
     expect(local.totals.today).toEqual(actual(2));
     expect(local.devices).toBeUndefined();
   });
+
+  it('does not mark an aggregate fresh when the peer sync finished while it was being computed', async () => {
+    const response = await readUsageDeviceRows(
+      {
+        getAllSpendDays: async () => peerRows.spendDays,
+        getModelUsageSince: async () => peerRows.modelRows,
+        todayKey: () => TODAY,
+      },
+      { sinceDay: null },
+    );
+    let releaseInvoke!: () => void;
+    const invokeGate = new Promise<void>((resolve) => {
+      releaseInvoke = resolve;
+    });
+    let releaseLocal!: () => void;
+    const localGate = new Promise<void>((resolve) => {
+      releaseLocal = resolve;
+    });
+    let localReads = 0;
+    vi.mocked(getAllSpendDays).mockImplementation(async () => {
+      localReads += 1;
+      if (localReads === 1) await localGate;
+      return [{ day: TODAY, monies: [actual(2)] }];
+    });
+    configurePeerUsageSync({
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+          },
+        ],
+      }),
+      invoke: async () => {
+        await invokeGate;
+        return { ok: true, result: response };
+      },
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => Date.now(),
+    });
+
+    const opts = { days: 'all' as const, modelDays: 'all' as const, device: 'all' };
+    const first = readUsageHistory(opts);
+    // 聚合已拿到旧快照并卡在读本机日账时, 让跨设备同步完成。
+    await vi.waitFor(() => expect(localReads).toBe(1));
+    releaseInvoke();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseLocal();
+    const settled = await first;
+    expect(settled.stale).toBe(true);
+    expect(settled.totals.today).toEqual(actual(2));
+
+    await vi.waitFor(async () => {
+      const next = await readUsageHistory(opts);
+      expect(next.stale).toBe(false);
+      expect(next.totals.today).toEqual(actual(5));
+    });
+  });
 });

@@ -106,6 +106,11 @@ export interface UsageHistoryPayload {
 const HISTORY_WINDOW_DAYS = 140;
 const MODEL_WINDOW_DAYS = 30;
 const REFRESH_DEBOUNCE_MS = 2000;
+/**
+ * 多设备范围的定时重读间隔。其它电脑产生的用量没有推送到本机, 页面开着时靠它定期
+ * 触发 main 侧 (同样按 60s 节流的) 跨设备同步; 只看本机时不启用。
+ */
+const PEER_REFRESH_INTERVAL_MS = 60_000;
 /** 价格表冷启动未就绪时的补拉延迟 (对齐 main 侧 5s fetch 超时 + 余量)。 */
 const PRICING_RETRY_DELAY_MS = 6000;
 /** main 返回 stale 磁盘快照时的补拉延迟: 让后台聚合先完成, 同时保持更新感知。 */
@@ -608,6 +613,10 @@ export function useUsageHistory(opts?: {
     const offSpend = window.electronAPI.maker.usage.onTodaySpendChanged(scheduleRefresh);
     const offTokens = window.electronAPI.maker.usage.onTodayTokensChanged(scheduleRefresh);
     const offPricing = window.electronAPI.maker.usage.onModelPricingChanged(scheduleRefresh);
+    const peerTimer =
+      request.device === 'local'
+        ? null
+        : setInterval(() => void load(scopedKey), PEER_REFRESH_INTERVAL_MS);
 
     return () => {
       activeScope.listeners.delete(setScopedHistory);
@@ -617,6 +626,7 @@ export function useUsageHistory(opts?: {
       offSpend();
       offTokens();
       offPricing();
+      if (peerTimer) clearInterval(peerTimer);
     };
   }, [paused, scopedKey]);
 

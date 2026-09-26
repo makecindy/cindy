@@ -997,12 +997,20 @@ export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<
   const peerSync = normalizeDeviceScope(opts?.device) === 'local' ? null : getPeerUsageSync();
   // 节流的跨设备同步; 同步期间返回 stale, renderer 短轮询直到拿到合并后的结果。
   if (peerSync) void peerSync.sync();
-  const peerCurrent = (payload: UsageHistoryPayload): boolean =>
-    !peerSync || payload.peerVersion === peerSync.version();
-  const settle = (payload: UsageHistoryPayload): UsageHistoryPayload =>
-    peerSync?.isSyncing()
-      ? stalePayload({ ...payload, devicesSyncing: true })
-      : freshPayload({ ...payload, ...(peerSync ? { devicesSyncing: false } : {}) });
+  // 唯一的跨设备新鲜度判据:同步已结束,且聚合所用的设备数据版本就是当前版本。
+  // 同步在聚合过程中结束时版本已前进,这份结果不能标成最新。
+  const peerFresh = (payload: UsageHistoryPayload): boolean =>
+    !peerSync || (!peerSync.isSyncing() && payload.peerVersion === peerSync.version());
+  const settle = (payload: UsageHistoryPayload): UsageHistoryPayload => {
+    if (peerFresh(payload)) {
+      return freshPayload({ ...payload, ...(peerSync ? { devicesSyncing: false } : {}) });
+    }
+    // 版本已前进:后台按新数据重聚合,renderer 的 stale 短轮询随后拿到它。
+    if (peerSync && payload.peerVersion !== peerSync.version()) {
+      refreshUsageHistoryInBackground(key, opts);
+    }
+    return stalePayload({ ...payload, devicesSyncing: peerSync?.isSyncing() ?? false });
+  };
   if (opts?.forceRefresh) {
     const fresh = await refreshUsageHistory(key, opts);
     if (fresh) return settle(fresh);
@@ -1013,7 +1021,7 @@ export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<
   }
   if (cachedHistory && cachedHistoryOptsKey === key) {
     if (refreshInFlightByOptsKey.has(key)) return stalePayload(cachedHistory);
-    if (isMemoryFresh(cachedHistory) && peerCurrent(cachedHistory)) return settle(cachedHistory);
+    if (isMemoryFresh(cachedHistory)) return settle(cachedHistory);
     refreshUsageHistoryInBackground(key, opts);
     return stalePayload(cachedHistory);
   }

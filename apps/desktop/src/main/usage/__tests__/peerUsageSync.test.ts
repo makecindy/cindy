@@ -288,29 +288,73 @@ describe('createPeerUsageSync', () => {
     expect(snapshot.peerRows.size).toBe(0);
   });
 
-  it('discards results that arrive after an account switch', async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+  it('marks previously read computers unreadable when the device directory fails', async () => {
+    let directoryFails = false;
     const h = harness({
-      invoke: async () => {
-        await gate;
+      invoke: async () => ({
+        ok: true as const,
+        result: await hostResponse(rowsFor(['2026-09-26']), '2026-09-26', null),
+      }),
+      listDevices: async () => {
+        if (directoryFails) throw new Error('offline');
+        return { devices: [device({ deviceId: 'laptop' })] };
+      },
+    });
+    const sync = createPeerUsageSync(h.deps);
+    await sync.sync();
+    expect((await sync.snapshot()).devices[0].status).toBe('ok');
+
+    directoryFails = true;
+    h.advance(61_000);
+    const before = sync.version();
+    await sync.sync();
+    const snapshot = await sync.snapshot();
+    expect(snapshot.devices[0]).toMatchObject({
+      deviceId: 'laptop',
+      status: 'error',
+      syncedAt: 1_000_000,
+    });
+    expect(snapshot.peerRows.has('laptop')).toBe(true);
+    expect(sync.version()).toBeGreaterThan(before);
+  });
+
+  it('starts a fresh sync for a new account instead of waiting on the old one, and drops late old writes', async () => {
+    let releaseOld!: () => void;
+    const oldGate = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    let userForListing = 'user-a';
+    const invoked: string[] = [];
+    const h = harness({
+      invoke: async (deviceId) => {
+        invoked.push(deviceId);
+        if (deviceId === 'laptop-a') {
+          await oldGate;
+          return { ok: false as const, error: { code: 'TIMEOUT', message: 'late' } };
+        }
         return {
           ok: true as const,
           result: await hostResponse(rowsFor(['2026-09-26']), '2026-09-26', null),
         };
       },
-      listDevices: async () => ({ devices: [device({ deviceId: 'laptop' })] }),
+      listDevices: async () => ({
+        devices: [device({ deviceId: userForListing === 'user-a' ? 'laptop-a' : 'laptop-b' })],
+      }),
     });
     const sync = createPeerUsageSync(h.deps);
-    const pending = sync.sync();
-    await vi.waitFor(() => expect(sync.isSyncing()).toBe(true));
-    h.setUser('user-b');
-    release();
-    await pending;
+    const oldRun = sync.sync();
+    await vi.waitFor(() => expect(invoked).toContain('laptop-a'));
 
-    expect((await sync.snapshot()).peerRows.size).toBe(0);
-    expect(h.written.has('user-b')).toBe(false);
+    h.setUser('user-b');
+    userForListing = 'user-b';
+    await sync.sync();
+    expect(invoked).toContain('laptop-b');
+    expect([...(await sync.snapshot()).peerRows.keys()]).toEqual(['laptop-b']);
+
+    releaseOld();
+    await oldRun;
+    const snapshot = await sync.snapshot();
+    expect(snapshot.devices.map((d) => [d.deviceId, d.status])).toEqual([['laptop-b', 'ok']]);
+    expect(h.written.has('user-a')).toBe(false);
   });
 });

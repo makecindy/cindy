@@ -190,6 +190,11 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
   let directory: DeviceLinkDeviceView[] | null = null;
   const statuses = new Map<string, UsageDeviceStatus>();
   let version = 0;
+  /**
+   * 账号代次:切换账号时 +1。一次同步开始时记下代次,之后对状态 / 缓存 / 目录 / 落盘的
+   * 每一次写入都先经 isCurrent 判定 —— 旧账号的在途请求迟到或失败都不能写进新账号的状态。
+   */
+  let epoch = 0;
   let inflight: Promise<void> | null = null;
   let lastSyncStartedAt = 0;
 
@@ -198,6 +203,9 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
   };
 
   const resetForUser = (userId: string | null): void => {
+    epoch += 1;
+    // 旧账号的在途同步不再代表当前账号:新账号立即发起自己的同步,不等它超时。
+    inflight = null;
     loadedUserId = userId;
     loadPromise = null;
     peers = {};
@@ -225,8 +233,8 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
     return deps.userId() === userId ? userId : null;
   };
 
-  const persist = async (userId: string): Promise<void> => {
-    if (loadedUserId !== userId) return;
+  const persist = async (userId: string, isCurrent: () => boolean): Promise<void> => {
+    if (!isCurrent()) return;
     const file: CacheFile = { version: CACHE_VERSION, peers };
     try {
       await deps.writeCache(userId, JSON.stringify(file));
@@ -235,33 +243,39 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
     }
   };
 
-  const syncPeer = async (userId: string, device: DeviceLinkDeviceView): Promise<void> => {
+  const syncPeer = async (
+    device: DeviceLinkDeviceView,
+    isCurrent: () => boolean,
+  ): Promise<void> => {
+    const setStatus = (status: UsageDeviceStatus): void => {
+      if (isCurrent()) statuses.set(device.deviceId, status);
+    };
     if (!device.online) {
-      statuses.set(device.deviceId, 'offline');
+      setStatus('offline');
       return;
     }
     if (!device.remoteControlEnabled || !device.controlEnabled) {
-      statuses.set(device.deviceId, 'remote-disabled');
+      setStatus('remote-disabled');
       return;
     }
     const cached = peers[device.deviceId] ?? null;
     const sinceDay = cached ? dayBefore(cached.todayKey) : null;
-    statuses.set(device.deviceId, 'syncing');
+    setStatus('syncing');
     try {
       const response = await deps.invoke(device.deviceId, USAGE_DEVICE_ROWS_CHANNEL, [
         sinceDay ? { sinceDay } : {},
       ]);
       if (!response.ok) {
-        statuses.set(device.deviceId, errorStatus(errorCodeOf(response.error)));
+        setStatus(errorStatus(errorCodeOf(response.error)));
         return;
       }
       const decoded = await decodeUsageDeviceRowsResponse(response.result);
       if (!decoded || decoded.kind === 'oversize') {
-        statuses.set(device.deviceId, 'error');
+        setStatus('error');
         return;
       }
       // 账号在请求期间切换:结果属于旧账号,丢弃。
-      if (loadedUserId !== userId || deps.userId() !== userId) return;
+      if (!isCurrent()) return;
       // 对方回的区间与请求不一致(旧实现忽略参数等)时按全量处理,不能拼出重复行。
       const effectiveSince = decoded.sinceDay === sinceDay ? sinceDay : null;
       peers[device.deviceId] = {
@@ -271,15 +285,33 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
         todayKey: decoded.todayKey,
         rows: mergeIncrementalRows(cached?.rows ?? null, effectiveSince, decoded.rows),
       };
-      statuses.set(device.deviceId, 'ok');
+      setStatus('ok');
     } catch (error) {
-      statuses.set(device.deviceId, errorStatus(errorCodeOf(error)));
+      setStatus(errorStatus(errorCodeOf(error)));
     }
+  };
+
+  /** 设备目录读不到:在线状态未知,上次的「ok」不能再代表最新,统一标为读取失败(保留缓存行)。 */
+  const markPeersUnreadable = (): void => {
+    const selfDeviceId = deps.selfDeviceId();
+    const ids = new Set([
+      ...(directory ?? [])
+        .filter((device) => !device.isSelf && !MOBILE_PLATFORMS.has(device.platform ?? ''))
+        .map((device) => device.deviceId),
+      ...Object.keys(peers),
+    ]);
+    for (const deviceId of ids) {
+      if (deviceId !== selfDeviceId) statuses.set(deviceId, 'error');
+    }
+    bump();
   };
 
   const runSync = async (): Promise<void> => {
     const userId = await ensureLoaded();
     if (!userId) return;
+    const runEpoch = epoch;
+    const isCurrent = (): boolean =>
+      runEpoch === epoch && loadedUserId === userId && deps.userId() === userId;
     let devices: DeviceLinkDeviceView[];
     try {
       devices = (await deps.listDevices()).devices;
@@ -288,9 +320,10 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
         'list devices for usage sync failed:',
         err instanceof Error ? err.message : String(err),
       );
+      if (isCurrent()) markPeersUnreadable();
       return;
     }
-    if (loadedUserId !== userId || deps.userId() !== userId) return;
+    if (!isCurrent()) return;
     directory = devices;
     // 已从账号移除的设备不再出现在选择器里,缓存一并清掉。
     const known = new Set(devices.map((device) => device.deviceId));
@@ -308,11 +341,12 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
     bump();
     for (let offset = 0; offset < targets.length; offset += PEER_FANOUT) {
       await Promise.all(
-        targets.slice(offset, offset + PEER_FANOUT).map((device) => syncPeer(userId, device)),
+        targets.slice(offset, offset + PEER_FANOUT).map((device) => syncPeer(device, isCurrent)),
       );
     }
+    if (!isCurrent()) return;
     bump();
-    await persist(userId);
+    await persist(userId, isCurrent);
   };
 
   const snapshot = async (): Promise<PeerUsageSnapshot> => {
@@ -358,19 +392,21 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
   return {
     snapshot,
     sync() {
-      if (inflight) return inflight;
       const userId = deps.userId();
+      // 先按当前账号重置(会丢弃旧账号的在途同步),再判断是否复用在途请求。
       if (userId !== loadedUserId) resetForUser(userId);
+      if (inflight) return inflight;
       if (deps.now() - lastSyncStartedAt < SYNC_MIN_INTERVAL_MS) return Promise.resolve();
       lastSyncStartedAt = deps.now();
-      inflight = runSync()
+      const run: Promise<void> = runSync()
         .catch((err) => {
           log.debug('peer usage sync failed:', err instanceof Error ? err.message : String(err));
         })
         .finally(() => {
-          inflight = null;
+          if (inflight === run) inflight = null;
         });
-      return inflight;
+      inflight = run;
+      return run;
     },
     isSyncing: () => inflight !== null,
     version: () => version,
