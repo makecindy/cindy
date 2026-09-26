@@ -13,7 +13,7 @@ import {
   type GhostConfirmShowParams,
 } from '../confirmSlot';
 
-function confirmGhost(options: { confirm?: boolean; enabled?: boolean; icon?: string } = {}): InstalledGhost {
+function confirmGhost(options: { confirm?: boolean; agent?: boolean; enabled?: boolean; icon?: string } = {}): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 2,
@@ -23,6 +23,7 @@ function confirmGhost(options: { confirm?: boolean; enabled?: boolean; icon?: st
       kind: 'chip',
       entry: 'main.js',
       ...(options.confirm === false ? {} : { confirm: true }),
+      ...(options.agent ? { agent: {} } : {}),
     },
     dir: '/fake/confirm-ghost',
     enabled: options.enabled ?? true,
@@ -164,6 +165,43 @@ describe('confirmSlot · 答案与失败分档', () => {
       ok: false,
       errorCode: 'UNAVAILABLE',
     });
+  });
+});
+
+describe('confirmSlot · Host 强制确认', () => {
+  it('面板 Agent 发送复用宿主确认框，不要求插件另行声明 confirm 槽', async () => {
+    const { slot, showConfirm } = makeSlot({
+      getGhost: () => confirmGhost({ agent: true }),
+    });
+
+    expect(await slot.handleHostAgentSendConfirmation('confirm-ghost', '发送这条消息', 42)).toEqual({
+      ok: true,
+      confirmed: true,
+    });
+    expect(firstShown(showConfirm)).toMatchObject({
+      ghostId: 'confirm-ghost',
+      ghostName: '确认插件',
+      body: '发送这条消息',
+      targetWebContentsId: 42,
+      confirmText: null,
+      cancelText: null,
+      danger: false,
+    });
+  });
+
+  it('完整展示 Host 将要发送的长 prompt 与 context，不截断或改写', async () => {
+    const { slot, showConfirm } = makeSlot({
+      getGhost: () => confirmGhost({ agent: true }),
+    });
+    const message = `${'x'.repeat(GHOST_CONFIRM_BODY_MAX_CHARS + 20)}\n\n<plugin_panel_context>\n{"id":1}\n</plugin_panel_context>`;
+
+    expect(await slot.handleHostAgentSendConfirmation('confirm-ghost', message, 99)).toEqual({
+      ok: true,
+      confirmed: true,
+    });
+    const shown = firstShown(showConfirm);
+    expect(shown.body).toBe(message);
+    expect(shown.targetWebContentsId).toBe(99);
   });
 });
 

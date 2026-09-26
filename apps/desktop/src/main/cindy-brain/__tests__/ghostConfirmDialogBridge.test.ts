@@ -19,15 +19,17 @@ const ASK = {
 
 function makeBridge(overrides: Partial<GhostConfirmDialogBridgeDeps> = {}) {
   const sent: GhostConfirmPush[] = [];
+  const targets: Array<number | undefined> = [];
   const deps: GhostConfirmDialogBridgeDeps = {
-    sendToWindow: (payload) => {
+    sendToWindow: (payload, targetWebContentsId) => {
       sent.push(payload);
+      targets.push(targetWebContentsId);
       return true;
     },
     timeoutMs: 50,
     ...overrides,
   };
-  return { bridge: new GhostConfirmDialogBridge(deps), sent };
+  return { bridge: new GhostConfirmDialogBridge(deps), sent, targets };
 }
 
 describe('ghostConfirmDialogBridge · 正常往返', () => {
@@ -49,6 +51,16 @@ describe('ghostConfirmDialogBridge · 正常往返', () => {
     const pending = bridge.request(ASK);
     bridge.resolve(sent[0].requestId, false);
     expect(await pending).toBe(false);
+  });
+
+  it('Host 强制确认可指定主壳 WebContents，目标 id 不泄露给 renderer', async () => {
+    const { bridge, sent, targets } = makeBridge();
+    const pending = bridge.request({ ...ASK, targetWebContentsId: 42 });
+
+    expect(targets).toEqual([42]);
+    expect(sent[0]).not.toHaveProperty('targetWebContentsId');
+    bridge.resolve(sent[0].requestId, true);
+    await expect(pending).resolves.toBe(true);
   });
 });
 

@@ -3758,6 +3758,39 @@ await cindy.agent.run({
 一条 Agent 请求，后台请求之间至少间隔 10 秒。这个能力可能自动产生模型费用，只在
 产品确实需要时申请，不要把 \`sessionId\` 当作任意跨会话控制口。
 
+面板 \`agent.send\` 的逐次确认只授权当次发送，不建立上述后台会话关联。
+
+面板也可以复用同一个 \`agent\` 槽，但只开放更窄的用户操作 API：
+
+\`\`\`js
+const target = await window.cindyPanel.agent.getTarget();
+if (target.ok && target.available) {
+  const result = await window.cindyPanel.agent.send({
+    message: '处理我刚刚选中的内容',
+    context: { selectionId: 'item-1', selectionKind: 'document' }
+  });
+}
+\`\`\`
+
+- \`send\` 必须直接发生在一次真实点击或按键处理器中，每次用户操作最多请求一次；Host
+  随后显示 Cindy 自有确认框，完整展示将要进入 Agent 的 message 和 context。
+  只有用户逐次确认后才会启动 Agent 回合；独立面板窗的确认会回到承载当前任务的主窗口；
+- 请求只允许 \`message\` 与可无损表示为 JSON 的 \`context\`（不接受 \`Map\`、\`Set\`、
+  \`NaN\`、\`Infinity\`、\`undefined\`、稀疏数组或循环引用），不能传 \`sessionId\`、\`mode\`、
+  \`trigger\`、模板或后台标记；Host 固定以 \`continue\` 继续当前任务；
+- 当前任务在发送瞬间由 Host 按承载窗口解析。没有任务、多主窗口产生歧义、面板不可见或
+  未聚焦时返回结构化失败，不会猜测或回落到历史任务；
+- 返回值不暴露 sessionId。\`getTarget()\` 只返回当前是否可发送，适合控制按钮状态；
+- 面板桥固定使用专用的 \`window.cindyPanel\` 命名空间，避免占用存量插件可能自定义的
+  \`window.cindy\`；
+- 需要该桥时，\`panel.html\` 与 \`settingsHtml\` 必须指向不同文件。同路径时 Host 无法
+  仅凭安全闸区分面板与设置页，会 fail closed 且不注入 \`window.cindyPanel\`；
+- 存量多页面面板仍可同源导航；Guest 离开唯一 \`panel.html\` 入口时 Host 会立即
+  撤销 Agent sender 登记，导航回面板入口后才恢复，其它页面调用会 fail closed；
+- 面板没有除此之外的电子脑管子。文件、网络、其它 slot 仍按 §5 经 BroadcastChannel
+  交给 main.js 代办。
+
+
 ### 4.11.1 派活取件:让 Agent 替你干活并取回结果(errand)
 
 \`agent.run\` 把回合发进**用户的会话**,结果是给用户看的;派活(errand)相反:
@@ -4483,7 +4516,7 @@ const opened = await cindy.iosSimulator.request({
   artifact 路径或 Xcode 私有诊断;
 - \`open-panel\` 只打开/聚焦 Host 既有面板。没有绑定实例时可省略 instanceId,让用户
   在 Host 面板里选择设备;连续请求会限速;
-- panel.html 保持零桥。面板要使用本能力时,按 §5 先 \`/wake\`,再用同源
+- panel.html 只有 §4.11 的最小 Agent 桥。面板要使用本能力时,仍按 §5 先 \`/wake\`,再用同源
   BroadcastChannel 把请求交给 main.js,由 main.js 调 \`cindy.iosSimulator.request\`;
 - Agent 按 Manual 指引选择内嵌路线后,构建、安装、启动与 UI 操作调用 Host 注册的
   \`cindy_ios_simulator\` MCP,不要重复打包一份 WDA/Sidecar。内嵌能力不存在或不可用时,
@@ -4616,6 +4649,10 @@ Cindy 统一归类、随机选择与排序，同批每个场景和每个插件�
   (颜色用 \`var(--msg-scrollbar)\` / \`var(--msg-scrollbar-hover)\`),2 秒无活动移除。
 
 ## 6. 沙箱红线(平台结构保证,写了也没用)
+
+- **panel.html 不是电子脑**：它只有 §4.11 的 \`agent.getTarget/send\` 两个固定方法，
+  没有 \`cindy.send/fetch/fs/request/onHostMessage\`，也不能指定任务、后台触发或 IPC；
+  其它能力仍需唤醒 main.js 并经 BroadcastChannel 转交；
 
 - **本节说的是 main.js 浏览器电子脑**:它无文件系统、无 Node API、无通用网络直连
   (所有插件页面共有的 HTTPS 图片请求是唯一例外)——

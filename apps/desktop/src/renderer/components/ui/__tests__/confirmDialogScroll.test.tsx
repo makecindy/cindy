@@ -236,4 +236,21 @@ describe('ConfirmDialog 长内容布局', () => {
     expect((screen.getByRole('button', { name: '安装' }) as HTMLButtonElement).disabled).toBe(true);
     expect(onConfirm).not.toHaveBeenCalled();
   });
+
+
+  it('调用方可让完整长正文保留换行并折断无分隔长词', () => {
+    render(
+      <ConfirmDialog
+        open
+        onOpenChange={() => {}}
+        title="面板发送确认"
+        description={'message\n' + 'x'.repeat(1024)}
+        textClassName="whitespace-pre-wrap break-words"
+      />,
+    );
+    const description = screen.getByRole('alertdialog').querySelector('p') as HTMLElement;
+    expect(description.textContent).toBe('message\n' + 'x'.repeat(1024));
+    expect(description.className).toContain('whitespace-pre-wrap');
+    expect(description.className).toContain('break-words');
+  });
 });
