@@ -84,7 +84,15 @@ export function useSubagentRunStatusIndex(input: {
       );
     };
     const refresh = (): void => {
-      void read().catch(() => undefined);
+      const seq = readSeq + 1;
+      const owner = getDataOwnerGeneration();
+      void read().catch(() => {
+        // A failed re-read must not leave an older index in force: its terminal
+        // statuses would outrank a resumed run's live `running` update. Drop to
+        // the empty index so rendering falls back to the live derivation.
+        if (disposed || seq !== readSeq || !isDataOwnerGenerationCurrent(owner)) return;
+        setState({ sessionId, index: EMPTY_INDEX });
+      });
     };
 
     refresh();

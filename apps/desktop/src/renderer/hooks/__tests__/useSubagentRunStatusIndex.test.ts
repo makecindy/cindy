@@ -91,6 +91,23 @@ describe('useSubagentRunStatusIndex', () => {
     expect(list.mock.calls.length).toBe(callsBefore + 1);
   });
 
+  it('falls back to the live status when a later refresh fails', async () => {
+    const { list, listeners } = installApi({
+      's1:': {
+        supported: true,
+        runs: [run({ id: 'r1', parentToolUseId: 'toolu_1', status: 'completed' })],
+      },
+    });
+    const { result } = renderHook(() => useSubagentRunStatusIndex({ sessionId: 's1' }));
+    await waitFor(() => expect(result.current.get('toolu_1')).toBe('completed'));
+
+    list.mockRejectedValueOnce(new Error('db busy'));
+    act(() => {
+      for (const listener of listeners) listener({ sessionId: 's1', runId: 'r1' });
+    });
+    await waitFor(() => expect(result.current.size).toBe(0));
+  });
+
   it('does not read this machine for a device-link task', () => {
     const { list } = installApi({});
     const { result } = renderHook(() =>
