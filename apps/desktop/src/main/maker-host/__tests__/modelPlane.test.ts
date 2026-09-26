@@ -732,7 +732,7 @@ describe('retired tombstone 与 discovery 回补', () => {
 });
 
 describe('本地 override(local 永远最高)', () => {
-  it('已有条目仅修改 sortOrder 也立即重排,但 xAI 双 root 保留声明顺序', () => {
+  it('账号顺序压过 Registry sortOrder,本地 sortOrder patch 仍最高;xAI 双 root 保留声明顺序', () => {
     setActiveCatalog(
       baseCatalog([
         gpt6Entry({
@@ -753,7 +753,8 @@ describe('本地 override(local 永远最高)', () => {
       { id: 'gpt-a', name: 'A', contextWindow: 1, efforts: [], defaultEffort: null },
       { id: 'gpt-b', name: 'B', contextWindow: 1, efforts: [], defaultEffort: null },
     ]);
-    expect(models('openai', 'codex').map((model) => model.id)).toEqual(['gpt-b', 'gpt-a']);
+    // Registry 说 b(10) 在 a(20) 前，但账号返回 a、b:以账号为准。
+    expect(models('openai', 'codex').map((model) => model.id)).toEqual(['gpt-a', 'gpt-b']);
 
     const xaiOrder = models('xai', 'codex').map((model) => model.id);
     const [firstXai, secondXai] = xaiOrder;
@@ -761,14 +762,14 @@ describe('本地 override(local 永远最高)', () => {
     setLocalCatalogOverrides(
       overridesOf({
         patches: {
-          'openai:gpt-a': { base: { sortOrder: 1 } },
-          'openai:gpt-b': { base: { sortOrder: 30 } },
+          'openai:gpt-a': { base: { sortOrder: 30 } },
+          'openai:gpt-b': { base: { sortOrder: 1 } },
           [`xai:${firstXai}`]: { base: { sortOrder: 999 } },
           [`xai:${secondXai}`]: { base: { sortOrder: -1 } },
         },
       }),
     );
-    expect(models('openai', 'codex').map((model) => model.id)).toEqual(['gpt-a', 'gpt-b']);
+    expect(models('openai', 'codex').map((model) => model.id)).toEqual(['gpt-b', 'gpt-a']);
     expect(models('xai', 'codex').map((model) => model.id)).toEqual(xaiOrder);
   });
 
@@ -1186,4 +1187,99 @@ it('keeps V4 media routes out of chat root warnings without hiding invalid chat 
   ] });
   expect(plan.roots.size).toBe(0);
   expect(plan.warnings).toEqual([expect.objectContaining({ modelId: 'broken-chat', reason: 'route has no canonical root agent membership' })]);
+});
+
+describe('订阅模型顺序以账号为准', () => {
+  const discovered = (id: string, sortOrder?: number): CatalogModel => ({
+    id,
+    name: id,
+    contextWindow: 1,
+    efforts: [],
+    defaultEffort: null,
+    ...(sortOrder !== undefined ? { sortOrder } : {}),
+  });
+
+  it('Registry 缺条目或缺 sortOrder 的账号模型仍按账号位置排，仅目录有的接在后面', () => {
+    setActiveCatalog(
+      baseCatalog([
+        gpt6Entry({ sortOrder: 1 }),
+        gpt6Entry({
+          id: 'openai/gpt-catalog-only',
+          name: 'Catalog Only',
+          sortOrder: -5,
+          routes: [{ providerId: 'openai', modelId: 'gpt-catalog-only', agents: ['codex'] }],
+        }),
+      ]),
+    );
+    // 账号顺序:priority 小的在前；gpt-new 在 Registry 里没有条目。
+    setDiscoveredCodexModels([discovered('gpt-6', 2), discovered('gpt-new', 1)]);
+    expect(models('openai', 'codex').map((model) => [model.id, model.sortOrder])).toEqual([
+      ['gpt-new', 0],
+      ['gpt-6', 1],
+      ['gpt-catalog-only', 2],
+    ]);
+    // Claude Code bridge 与 Codex root 同序。
+    expect(models('openai', 'claude-code').map((model) => model.id)).toEqual([
+      'chatgpt/gpt-new',
+      'chatgpt/gpt-6',
+    ]);
+  });
+
+  it('账号清单为空时用 Registry sortOrder 兜底', () => {
+    setActiveCatalog(
+      baseCatalog([
+        gpt6Entry({ sortOrder: 5 }),
+        gpt6Entry({
+          id: 'openai/gpt-first',
+          name: 'First',
+          sortOrder: 1,
+          routes: [{ providerId: 'openai', modelId: 'gpt-first', agents: ['codex'] }],
+        }),
+      ]),
+    );
+    setDiscoveredCodexModels([]);
+    expect(models('openai', 'codex').map((model) => model.id)).toEqual(['gpt-first', 'gpt-6']);
+  });
+
+  it('Anthropic 按账号返回顺序排，不被 Registry sortOrder 改写', () => {
+    setActiveCatalog(
+      baseCatalog([
+        {
+          id: 'anthropic/claude-a',
+          name: 'A',
+          status: 'active',
+          contextWindow: 200_000,
+          sortOrder: 9,
+          routes: [{ providerId: 'anthropic', modelId: 'claude-a', agents: ['claude-code'] }],
+        } as RegistryEntry,
+      ]),
+    );
+    setAnthropicDiscoveredModels([discovered('claude-a', 0), discovered('claude-b', 1)]);
+    expect(models('anthropic', 'claude-code').map((model) => model.id)).toEqual([
+      'claude-a',
+      'claude-b',
+    ]);
+  });
+});
+
+describe('OpenAI 订阅 Pi 与 Codex 同序同显示', () => {
+  const discovered = (id: string, sortOrder: number): CatalogModel => ({
+    id,
+    name: id,
+    contextWindow: 272_000,
+    efforts: [],
+    defaultEffort: null,
+    sortOrder,
+  });
+
+  it('Pi 按账号顺序排列，并沿用目录的不默认显示标记', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setDiscoveredCodexModels([discovered('gpt-5.6-luna', 1), discovered('gpt-6-sol', 0)]);
+    const pi = models('openai', 'pi');
+    const ids = pi.map((model) => model.id);
+    expect(ids.indexOf('chatgpt/gpt-6-sol')).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf('chatgpt/gpt-6-sol')).toBeLessThan(ids.indexOf('chatgpt/gpt-5.6-luna'));
+    expect(pi.find((model) => model.id === 'chatgpt/gpt-5.6-luna')?.defaultEnabled).toBe(false);
+    expect(pi.find((model) => model.id === 'chatgpt/gpt-6-sol')?.defaultEnabled).not.toBe(false);
+  });
 });

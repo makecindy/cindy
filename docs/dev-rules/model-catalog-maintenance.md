@@ -41,7 +41,7 @@ Catalog (version)
 | 要改什么 | 写入位置 / 责任侧 | 不能顺带改变什么 |
 | --- | --- | --- |
 | 型号公共名称、说明、窗口、输出、思考能力 | Registry `baseModels[].defaults` | 价格、账号权限、地址和凭证不在公共继承内 |
-| 接入条目状态、排序、默认开启标记 | Registry `models[]` 顶层 | 显示开关不等于成员资格；见下文默认可见性 |
+| 接入条目状态、排序、默认开启标记 | Registry `models[]` 顶层 | 显示开关不等于成员资格；订阅账号排序以账号为准，见下文模型排序与默认可见性 |
 | 某供应商的上游 ID、支持路由、普通默认 | `models[].routes[]` / `routes[].defaults` | 普通默认不能压过实报 |
 | Claude Code / Codex 的工作默认 | `models[].perAgent`，引擎必须被该条目 route 声明 | 不把工作预算当供应商承诺容量 |
 | Pi 公共成员和 Pi 默认资料 | `providers[].models.pi`；订阅账号发现另补新型号，公共资料仍按 Registry 合并 | 复用已实现的订阅传输，不复制其他引擎的专属能力 |
@@ -72,12 +72,64 @@ Pi 走 `providers[].models.pi`（用户补丁 perAgent.pi 另属合法 schema）
 `defaultEffort` 的已配置默认优先于供应商实报的推荐档，再适配实际支持能力，force / 用户覆盖仍优先。
 详细字段及成员空值规则以 [模型资料优先级](../product-rules/model-metadata-precedence.md) 为唯一正本。
 
+<a id="ordering"></a>
+## 模型排序：账号优先，目录兜底
+
+OpenAI（Codex 订阅）与 Anthropic（Claude 订阅）的 root 有账号模型清单时，`sortOrder` 以账号
+返回顺序为准：Codex 取 `models_cache.json` 的 `priority` 或 app-server `model/list` 的返回位置，
+Claude 取 SDK `supportedModels()` 的返回位置。只在 Registry 里有、账号没返回的模型按 Registry
+`sortOrder` 接在其后。装配时重写为连续 `sortOrder`，选择器、设置页、新对话默认与 Claude Code
+bridge 共用这一顺序；OpenAI 订阅的 Pi 清单成员与能力仍来自 Pi 目录，但同样按账号顺序排列，
+并沿用 Registry 条目的 `defaultEnabled: false`；用户本地 `sortOrder` patch 仍最高。拿不到账号清单时才用 Registry `sortOrder`。
+xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受此规则影响。
+第三方 API key 连接（MiMo、Kimi Code 等预设及自定义端点）没有 sortOrder，按连接配置里的
+顺序排：首次添加用接口返回的顺序；之后刷新发现的新型号排在已有型号之前（保持接口返回的
+相对顺序），已有型号位置不动（`mergeDiscoveredRuntimeModels`）。
+
+新对话默认模型不跟排序绑定的例外只有服务端按区域下发的 `newSessionDefault`；公共 Registry 的
+同名字段不进入活动目录。未标记时取排序第一的默认可见模型，即账号返回的第一个可见模型。
+
+设置页管理列表组内与选择器同序：组内每项都带 `sortOrder` 时按它排；只要有一项缺失，退回
+按系列名 A–Z、同系列版本号降序，避免局部权重把新型号压到旧策展位置之后。
+
+<a id="presets"></a>
+## 第三方预设：一份推荐清单
+
+`providers.json` 的每个预设只在顶层写一份 `models` 推荐清单，数组顺序即推荐顺序；
+`runtimes[引擎]` 只放地址、协议、模型目录等连接信息，不再按引擎各写一份模型。
+加载时由 `expandPresetModels` 展开回各引擎清单，下游与服务端下发的旧格式形状一致。
+
+- 协议限制导致某模型只在部分引擎可用时写 `engines`（如 OpenCode Go 的 Anthropic 协议模型、
+  GLM Coding Plan 只给 Claude Code 的 `[1m]` 变体）。
+- 引擎专属字段写 `engineOverrides[引擎]`：Pi 的推理档位、按模型路由，以及确有差异的窗口
+  （如 GLM Coding Plan 裸 `glm-5.2` 在 Claude Code 不写窗口、1M 走 `[1m]` 条目，Pi 为 1M）。
+- `engines` 的每一项与 `engineOverrides` 的每个键都只能是本预设已声明的引擎；拼错或写成
+  其它形状时整条预设被拒绝（即使 `runtimes` 另带旧格式清单），不静默丢模型或忽略覆盖。
+- 本文件是源格式，旧客户端读不懂顶层清单，不能直接发布到旧 OSS `cfg/providers.json`
+  （该文件自 2026-07 冻结，旧客户端经公共 API 与服务端投影拿到展开后的形状）。
+- 名称与参数以厂商官方文档为准；未列入推荐清单的型号由 Pi 模型资料补入并默认隐藏。
+- `presetModels.test.ts` 校验随包预设不再出现按引擎的清单。服务端分片同样只写一份推荐
+  清单，由 `generateCatalog.mjs` 展开后下发；同 id 的服务端预设整体覆盖随包版本，所以
+  推荐清单与参数两边保持一致。服务端的连接设置（含 Pi 照抄 Claude Code 的兼容映射）
+  以服务端为准，随包版本的原生 Pi 地址只在离线时使用。
+
 <a id="visibility"></a>
 ## 默认可见性：产品合同与实现差异
 
 [产品合同](configuration-and-overrides.md#模型可见性)：用户开关优先，否则跟随目录 defaultEnabled。
-xAI 已直接保留目录默认开关；其他订阅/Gateway 的 `selectDefaultModels` 仍可能将 true 筛成 false，不删除成员或写用户偏好。
-这是待收敛的行为差异，不是合同豁免。排查须同时检查上游值、活动目录值和用户 override；本文不改变行为。
+
+- **不默认显示的型号只写在目录里**：条目标 `defaultEnabled: false`，未标的一律默认显示，
+  所以新出的型号一定可见。客户端发现代码不按型号写死隐藏例外（2026-09-26 起移除了
+  `gpt-5.4-mini`、Haiku、bridge `gpt-5.4` 等硬编码）。
+- 保留的是按状态或引擎的规则，不针对具体型号：`deprecated`、`requires_payment` 默认关闭；
+  跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与自定义连接的兼容引擎默认关闭，
+  Registry `perAgent` 可显式打开。
+- **XD 路由一律使用独立的 `xd/*` 条目**，不与订阅或其他供应商共用条目：服务端生成
+  Gateway `/models` 时读取 XD 路由所在条目的名称、排序与 `defaultEnabled`，共用会让订阅侧
+  调整连带改动 XD。型号规格经 `modelRef` 继承同一公共型号，不重复维护。
+  `xdRegistryEntries.test.ts` 校验离线 Registry 不出现混用条目。
+
+排查须同时检查上游值、活动目录值和用户 override。
 
 <a id="release"></a>
 ## 更新、下发与验收

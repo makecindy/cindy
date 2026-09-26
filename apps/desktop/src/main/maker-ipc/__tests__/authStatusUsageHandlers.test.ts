@@ -1237,6 +1237,7 @@ describe('maker usage IPC handlers', () => {
       assertTrustedSender: vi.fn(),
       readUsageHistory: vi.fn().mockResolvedValue(emptyHistory),
       emptyUsageHistory: vi.fn(() => emptyHistory),
+      readUsageDeviceRows: vi.fn(),
       ...over,
     };
   }
@@ -1552,6 +1553,51 @@ describe('maker usage IPC handlers', () => {
 
     await harness.invoke(MAKER_INVOKE.USAGE_HISTORY);
     expect(readUsageHistory).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('passes the device scope through and drops malformed values', async () => {
+    const harness = new IpcHarness();
+    const readUsageHistory = vi.fn().mockResolvedValue(emptyHistory);
+
+    registerMakerUsageHandlers(harness, makeUsageDeps({ readUsageHistory }));
+
+    await harness.invoke(MAKER_INVOKE.USAGE_HISTORY, { days: 'all', device: 'all' });
+    expect(readUsageHistory).toHaveBeenLastCalledWith({ days: 'all', device: 'all' });
+
+    await harness.invoke(MAKER_INVOKE.USAGE_HISTORY, { device: 'device-b' });
+    expect(readUsageHistory).toHaveBeenLastCalledWith({ device: 'device-b' });
+
+    await harness.invoke(MAKER_INVOKE.USAGE_HISTORY, { device: 42 });
+    expect(readUsageHistory).toHaveBeenLastCalledWith(undefined);
+
+    await harness.invoke(MAKER_INVOKE.USAGE_HISTORY, { includeTasks: true });
+    expect(readUsageHistory).toHaveBeenLastCalledWith({ includeTasks: true });
+    await harness.invoke(MAKER_INVOKE.USAGE_HISTORY, { includeTasks: 'yes' });
+    expect(readUsageHistory).toHaveBeenLastCalledWith(undefined);
+
+    await harness.invoke(MAKER_INVOKE.USAGE_HISTORY, { device: 'x'.repeat(200) });
+    expect(readUsageHistory).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('serves raw device rows to device-link peers without a trusted-sender check', async () => {
+    const harness = new IpcHarness();
+    const response = { format: 'usage-device-rows-v1', todayKey: '2026-09-26', sinceDay: null, rowsGz: '' };
+    const readUsageDeviceRows = vi.fn().mockResolvedValue(response);
+    const assertTrustedSender = vi.fn(() => {
+      throw new Error('[PERMISSION_DENIED] untrusted');
+    });
+
+    registerMakerUsageHandlers(harness, makeUsageDeps({ readUsageDeviceRows, assertTrustedSender }));
+
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_DEVICE_ROWS, {})).resolves.toEqual(response);
+    expect(readUsageDeviceRows).toHaveBeenLastCalledWith({ sinceDay: null });
+    await harness.invoke(MAKER_INVOKE.USAGE_DEVICE_ROWS, { sinceDay: '2026-09-25' });
+    expect(readUsageDeviceRows).toHaveBeenLastCalledWith({ sinceDay: '2026-09-25' });
+    await expect(
+      harness.invoke(MAKER_INVOKE.USAGE_DEVICE_ROWS, { sinceDay: '../etc' }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    expect(readUsageDeviceRows).toHaveBeenCalledTimes(2);
+    expect(assertTrustedSender).not.toHaveBeenCalled();
   });
 
   it('rejects usage-history reads from an untrusted sender before parsing or querying', async () => {

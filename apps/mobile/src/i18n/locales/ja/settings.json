@@ -23,6 +23,16 @@
     "uploadSucceeded": "送信しました。番号 {{code}}。"
   },
   "title": "設定",
+  "appearance": {
+    "title": "外観",
+    "modeLabel": "表示モード",
+    "options": {
+      "system": "自動 (システムに従う)",
+      "light": "ライト",
+      "dark": "ダーク"
+    },
+    "saveFailed": "表示モードを保存できませんでした。再起動すると以前の設定に戻ります。"
+  },
   "language": {
     "title": "言語",
     "hint": "アプリの UI のみに影響します。Agent の応答言語は Agent 側の設定に従います。",

@@ -9,7 +9,9 @@
  *    `useTheme().colors` 或 `useThemedStyles(makeStyles)` 消费,**永远写 token 不写 hex**。
  *  - spacing / radius / typeScale / lineHeight / fontWeight / iconSize:主题无关的不变量阶梯。
  *
- * 色值对齐 CINDY 色板(决策表 PRE-2 / U3+U8 批准),与桌面 D2 落地同源。
+ * 底色 / 字色 / 描边为移动端独立色板(2026-09-26 用户定稿):共享 Cindy 品牌与业务语义,
+ * 色阶与对比度由移动端自定(DESIGN.md §15.13)。浅色为象牙白、正文保持中性;深色为纯中性
+ * 近黑。品牌红、状态色、任务标签、语法高亮、登录皮肤与开屏不在此列,仍按各自登记值。
  */
 
 export type ThemeMode = 'light' | 'dark';
@@ -61,14 +63,9 @@ export interface ThemeColors {
    * borderRadius,淡底在那边只能是直角方块,成段中文里一排方块比没有底色更糟。
    * 两端不同是结论,不是漏改 —— 改这里之前先看这条。
    *
-   * 取值实测(见 themeTokens.test.ts):light #686B72 对 surface 4.56:1、对正文
-   * Δ1.98;dark #A3A3A3 对 surface 5.81:1、对正文 Δ1.70 —— 都过 AA 且压暗可辨。
-   * light 值 = textTertiary(表内 AA 中性强调灰);dark 值取自桌面基表
-   * text-secondary 的 dark 原值 —— cindy 深色批准灰阶在 #6F6F6F(2.92:1,掉 AA)与
-   * #BFC1C4(对正文 Δ1.22,压暗看不出)之间没有中间档。
-   * 刻意**不**复用 textSecondary:它是 #8C8E94 / #6F6F6F,只有 2.80:1 / 2.92:1,
-   * 用在正文流里的标识符上会直接掉出 AA(那正是本轮要修的问题)。
-   * 压暗幅度受 AA 下限约束 —— 深色底 #2A2828 比 Codex 的近黑浅得多,再压就破线。
+   * 取值(见 themeTokens.test.ts):两模式都取 textTertiary —— light #686864 对 surface
+   * 5.31:1,dark #999999 对 surface 6.58:1,都过 AA 且明显比正文浅,压暗可辨。
+   * 刻意**不**复用 textSecondary:二级文字(#4D4D4A / #BDBDBD)离正文太近,标识符看不出压暗。
    */
   chatInlineCodeText: string;
   /**
@@ -171,7 +168,7 @@ export interface ThemeColors {
    * 注意:侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar(light 近白),不受本 token 影响。
    */
   overlay: string;
-  /** 素雅新建对话 FAB:dark 用柔白 #ECEDEF 而非纯白 cta,避免主入口在深底上过跳 */
+  /** 素雅新建对话 FAB:dark 用柔白 #E6E6E6 而非 cta 近白,避免主入口在深底上过跳 */
   homeListFab: string;
   /** List FAB 描边:light 无描边(transparent),dark 按 301:1073 帧白色 hairline */
   homeListFabBorder: string;
@@ -381,14 +378,17 @@ export const loginPalettes: Record<ThemeMode, LoginSkinColors> = {
 };
 
 /**
- * Default Light —— CINDY 色板(决策表 PRE-2 / U3+U8 批准)。
- * 直映:背景/卡片/边框/正文/二级信息;CTA 中性反相(常规按钮非红,红只留警告/报错)。插值档按决策表 §2(sRGB 每通道 round)。
- * 二级信息色 light 定稿 #8C8E94(用户调参 2026-07-20,自 Figma #9A9DA3 两轮加深,与桌面 text-secondary 同步);仍低于 AA,沿用 U2 显式例外。
- * borderStrong/errorBorder 取表内 AA 中性强调灰 #686B72(与 text-tertiary/ask-checkbox-border/
- * file-remove-bg 同源,非表内直落 id;lead 2026-07-17 确认采纳,errorBorder 跟随)。
+ * Default Light —— 移动端象牙白。
+ * 页面 #F9F9F6(比桌面 #F2F2ED 更亮,暖度 B = R−3)/ 卡片 #FFFFFC / 选中底 #EAEAE6 /
+ * 分隔线 #CCCCC8;正文 #1A1A1A 中性。由页面派生的半透明层(surfaceTranslucent /
+ * chatHeaderSurface / sheetSurface)是页面色加透明度,改页面时一起改。
+ * 近白页面只给卡片留 1.05 的抬升(桌面 1.12),浮起面(卡片 / 列表行 / 浮层 / 输入容器)
+ * 必须带 1px `border` 分层;需要下沉的块放到页面之下:选中底、展开块,以及代码卡 #F1F1EC。
+ * 文字由深到浅:正文 → 二级 #4D4D4A → 三级 #686864,在所在底色上均 ≥ 4.5:1。
+ * CTA 中性反相:#1A1A1A 底 + 白字。
  */
 export const lightColors: ThemeColors = {
-  surface: '#EDEDED',
+  surface: '#F9F9F6',
   taskTagRed: '#ed615f',
   taskTagOrange: '#eea34e',
   taskTagYellow: '#e5c744',
@@ -403,18 +403,18 @@ export const lightColors: ThemeColors = {
   taskTagWhite: '#ffffff',
   taskTagWhiteCheck: '#525252',
 
-  surfaceElevated: '#F8F8F8',
-  surfaceTranslucent: 'rgba(237, 237, 237, 0.78)',
-  surfaceTranslucentSidebar: 'rgba(246, 246, 246, 0.90)',
-  chatHeaderSurface: 'rgba(246, 246, 246, 0.90)',
-  chatHeaderDivider: '#DCDFE3',
-  surfaceGlassPanel: '#F8F8F8',
-  surfaceListRow: '#F6F6F6',
-  surfaceListExpanded: '#EAEAEA',
+  surfaceElevated: '#FFFFFC',
+  surfaceTranslucent: 'rgba(249, 249, 246, 0.78)',
+  surfaceTranslucentSidebar: 'rgba(255, 255, 252, 0.90)',
+  chatHeaderSurface: 'rgba(249, 249, 246, 0.90)',
+  chatHeaderDivider: '#CCCCC8',
+  surfaceGlassPanel: '#FFFFFC',
+  surfaceListRow: '#FFFFFC',
+  surfaceListExpanded: '#EAEAE6',
   activeGlyph: '#DF0C27',
-  chatCodeSurface: '#F8F8F8',
-  chatCodeBorder: '#DCDFE3',
-  chatInlineCodeText: '#686B72', // = textTertiary(表内 AA 中性强调灰),对 surface 4.56:1
+  chatCodeSurface: '#F1F1EC',
+  chatCodeBorder: '#CCCCC8',
+  chatInlineCodeText: '#686864',
   // GitHub light(highlight.js github.css)原值,与桌面端逐值一致。
   syntaxKeyword: '#D73A49',
   syntaxString: '#032F62',
@@ -423,25 +423,25 @@ export const lightColors: ThemeColors = {
   syntaxFunction: '#6F42C1',
   syntaxProperty: '#005CC5',
   inputCaret: '#417CDD',
-  sheetSurface: 'rgba(248, 248, 248, 0.95)',
-  sheetActionSurface: '#F6F6F6',
-  sheetActionBorder: '#DCDFE3',
-  sheetActionText: '#3C3F43',
-  sheetGrabber: '#DCDFE3',
+  sheetSurface: 'rgba(249, 249, 246, 0.96)',
+  sheetActionSurface: '#FFFFFC',
+  sheetActionBorder: '#CCCCC8',
+  sheetActionText: '#1A1A1A',
+  sheetGrabber: '#C2C2BE',
   brandSplashBackground: '#DF0C27',
   brandSplashForeground: '#FFFFFF',
   brandSplashMuted: 'rgba(255, 255, 255, 0.82)',
   betaChannelBadgeBackground: '#DF0C27',
   betaChannelBadgeForeground: '#FFFFFF',
-  surfaceChip: '#F1F1F1',
-  border: '#C6C9CE', // 试穿 B 档(原 #DCDFE3,light 对 #EDEDED 仅 1.14:1 太弱 → 1.42:1)
-  borderTranslucent: 'rgba(198, 201, 206, 0.62)',
-  borderStrong: '#686B72',
-  textPrimary: '#3C3F43',
-  textSecondary: '#8C8E94',
-  textTertiary: '#686B72',
-  cta: '#3C3F43',
-  ctaText: '#FCFCFC',
+  surfaceChip: '#EAEAE6',
+  border: '#CCCCC8',
+  borderTranslucent: 'rgba(204, 204, 200, 0.62)',
+  borderStrong: '#858581',
+  textPrimary: '#1A1A1A',
+  textSecondary: '#4D4D4A',
+  textTertiary: '#686864',
+  cta: '#1A1A1A',
+  ctaText: '#FFFFFF',
   statusReady: '#19D2C1',
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
@@ -450,17 +450,17 @@ export const lightColors: ThemeColors = {
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
-  errorText: '#3C3F43',
+  errorText: '#1A1A1A',
   destructive: '#f43d3f',
   sharedTaskConfirmBackground: '#ac3535',
   sharedTaskConfirmForeground: '#fffefa',
-  errorBorder: '#686B72',
+  errorBorder: '#858581',
   // overlay:遮罩双模式恒深(light 原 0.24 太浅近白;0.50 实机过重,用户定稿 0.35,2026-07-21)。
   // 侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar,不受影响。
   overlay: 'rgba(38, 38, 38, 0.35)',
   // homeListFab:反相中性,不染品牌红(lead 裁决 2026-07-17:染红=扩张红名单,超 U8
-  // 已批决策表范围;日后要红 FAB 须单独过用户关卡)。light 对齐 textPrimary 深灰 #3C3F43。
-  homeListFab: '#3C3F43',
+  // 已批决策表范围;日后要红 FAB 须单独过用户关卡)。light 对齐 textPrimary / cta 近黑 #1A1A1A。
+  homeListFab: '#1A1A1A',
   homeListFabBorder: 'transparent',
   swipeActionPin: '#EA6B17',
   swipeActionNeutral: '#8e8e93',
@@ -470,15 +470,13 @@ export const lightColors: ThemeColors = {
 };
 
 /**
- * Default Dark —— CINDY 色板(决策表 PRE-2 / U3+U8 批准)。
- * CTA 回归中性反相:light 深底 #3C3F43 + 浅字 #FCFCFC / dark 浅底 #EEEEEE + 深字 #252222
- * (对比度 10.32/13.60 过 AA)——用户红色新规 2026-07-17:常规按钮非红,红只留警告/报错,
- * 取代 U3+U8 时期的全态红契约;themeTokens.test.ts 契约第二次改写(见 E1M)。
- * borderStrong/errorBorder 取表内 AA 中性强调灰 #BFC1C4(与 text-tertiary/ask-checkbox-border
- * 同源,非表内直落 id;lead 2026-07-17 确认采纳,errorBorder 跟随)。
+ * Default Dark —— 纯中性近黑。
+ * 页面 #121212 / 卡片 #1E1E1E / 选中底 #2A2A2A / 分隔线 #383838,不加暖。
+ * 文字:正文 #EDEDED → 二级 #BDBDBD → 三级 #999999,在所在底色上均 ≥ 4.5:1。
+ * CTA 中性反相:#EDEDED 底 + #121212 字。
  */
 export const darkColors: ThemeColors = {
-  surface: '#2A2828',
+  surface: '#121212',
   taskTagRed: '#ed615f',
   taskTagOrange: '#eea34e',
   taskTagYellow: '#e5c744',
@@ -492,18 +490,18 @@ export const darkColors: ThemeColors = {
   taskTagIndigo: '#999fdf',
   taskTagWhite: '#ffffff',
   taskTagWhiteCheck: '#525252',
-  surfaceElevated: '#312F2F',
-  surfaceTranslucent: 'rgba(42, 40, 40, 0.78)',
-  surfaceTranslucentSidebar: 'rgba(18, 15, 15, 0.85)',
-  chatHeaderSurface: 'rgba(37, 35, 35, 0.80)',
-  chatHeaderDivider: 'rgba(255, 255, 255, 0.05)',
-  surfaceGlassPanel: 'rgba(59, 59, 59, 0.95)',
-  surfaceListRow: '#312F2F',
-  surfaceListExpanded: '#2A2828',
+  surfaceElevated: '#1E1E1E',
+  surfaceTranslucent: 'rgba(18, 18, 18, 0.78)',
+  surfaceTranslucentSidebar: 'rgba(10, 10, 10, 0.85)',
+  chatHeaderSurface: 'rgba(18, 18, 18, 0.80)',
+  chatHeaderDivider: 'rgba(255, 255, 255, 0.08)',
+  surfaceGlassPanel: 'rgba(36, 36, 36, 0.95)',
+  surfaceListRow: '#1E1E1E',
+  surfaceListExpanded: '#121212',
   activeGlyph: '#A61629',
-  chatCodeSurface: '#353333',
-  chatCodeBorder: '#3C3C3C',
-  chatInlineCodeText: '#A3A3A3', // = 桌面基表 text-secondary dark 原值,对 surface 5.81:1
+  chatCodeSurface: '#1A1A1A',
+  chatCodeBorder: '#383838',
+  chatInlineCodeText: '#999999',
   // GitHub Dark,取自桌面 globals.css 的 .dark .n* 覆盖(#ff7b72 / #a5d6ff /
   // #8b949e / #79c0ff / #d2a8ff)。
   syntaxKeyword: '#FF7B72',
@@ -513,25 +511,25 @@ export const darkColors: ThemeColors = {
   syntaxFunction: '#D2A8FF',
   syntaxProperty: '#79C0FF',
   inputCaret: '#417CDD',
-  sheetSurface: 'rgba(59, 59, 59, 0.95)',
-  sheetActionSurface: 'rgba(59, 59, 59, 0.5)',
-  sheetActionBorder: '#505050',
-  sheetActionText: '#C1C1C1',
-  sheetGrabber: '#6F6F6F',
+  sheetSurface: 'rgba(28, 28, 28, 0.96)',
+  sheetActionSurface: '#262626',
+  sheetActionBorder: '#383838',
+  sheetActionText: '#EDEDED',
+  sheetGrabber: '#5C5C5C',
   brandSplashBackground: '#DF0C27',
   brandSplashForeground: '#FFFFFF',
   brandSplashMuted: 'rgba(255, 255, 255, 0.82)',
   betaChannelBadgeBackground: '#DF0C27',
   betaChannelBadgeForeground: '#FFFFFF',
-  surfaceChip: '#2F2D2D',
-  border: '#434343',
-  borderTranslucent: 'rgba(67, 67, 67, 0.62)',
-  borderStrong: '#BFC1C4',
-  textPrimary: '#D4D4D4',
-  textSecondary: '#6F6F6F',
-  textTertiary: '#BFC1C4',
-  cta: '#EEEEEE',
-  ctaText: '#252222',
+  surfaceChip: '#2A2A2A',
+  border: '#383838',
+  borderTranslucent: 'rgba(56, 56, 56, 0.62)',
+  borderStrong: '#8A8A8A',
+  textPrimary: '#EDEDED',
+  textSecondary: '#BDBDBD',
+  textTertiary: '#999999',
+  cta: '#EDEDED',
+  ctaText: '#121212',
   statusReady: '#19D2C1',
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
@@ -540,14 +538,14 @@ export const darkColors: ThemeColors = {
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
-  errorText: '#D4D4D4',
+  errorText: '#EDEDED',
   destructive: '#f43d3f',
   sharedTaskConfirmBackground: '#ec9898',
   sharedTaskConfirmForeground: '#272727',
-  errorBorder: '#BFC1C4',
+  errorBorder: '#8A8A8A',
   overlay: 'rgba(0, 0, 0, 0.45)',
-  // homeListFab:反相中性(lead 裁决,见 lightColors 注释);dark 维持 #ECEDEF 柔白(非纯白 cta)。
-  homeListFab: '#ECEDEF',
+  // homeListFab:反相中性(lead 裁决,见 lightColors 注释);dark 用 #E6E6E6 柔白(比 cta 略收)。
+  homeListFab: '#E6E6E6',
   homeListFabBorder: '#FFFFFF',
   swipeActionPin: '#EA6B17',
   swipeActionNeutral: '#636366',

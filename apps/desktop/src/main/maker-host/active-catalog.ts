@@ -808,10 +808,54 @@ function sortModelsByOrder(models: CatalogModel[]): CatalogModel[] {
 }
 
 /**
- * root 装配:registry plan(overlay / 实体化 / retired 标记)→ 本地 override
+ * 账号清单是订阅模型顺序的权威:账号返回的模型按账号顺序在前，只在 Registry 里有的
+ * 模型按 Registry sortOrder 接在其后。结果重写为连续 sortOrder,让选择器、新对话默认、
+ * bridge 等所有按 sortOrder 取序的下游共用同一顺序；Registry 缺条目或缺 sortOrder
+ * 不再让新模型排错位置。账号清单为空时原样返回，Registry 顺序作兜底。
+ */
+function applyAccountOrder(
+  models: readonly CatalogModel[],
+  accountModels: readonly CatalogModel[],
+): CatalogModel[] {
+  if (accountModels.length === 0) return [...models];
+  const rank = new Map(sortModelsByOrder([...accountModels]).map((model, index) => [model.id, index]));
+  const catalogOnly = sortModelsByOrder(models.filter((model) => !rank.has(model.id)));
+  catalogOnly.forEach((model, index) => rank.set(model.id, accountModels.length + index));
+  return models.map((model) => ({ ...model, sortOrder: rank.get(model.id)! }));
+}
+
+/**
+ * OpenAI 订阅的 Pi 清单与 Codex root 共用账号顺序和目录的「不默认显示」标记；成员与
+ * Pi 专属能力仍来自 Pi 目录。账号清单为空时保留 Pi 目录原顺序。
+ */
+function alignOpenAiPiWithAccount(
+  pi: readonly CatalogModel[],
+  accountCodex: readonly CatalogModel[],
+  registry: Catalog['modelRegistry'],
+): CatalogModel[] {
+  const account = accountCodex.map((model) => ({
+    ...model,
+    id: normalizePiModelId('openai', model.id),
+  }));
+  const ordered = account.length > 0 ? sortModelsByOrder(applyAccountOrder(pi, account)) : [...pi];
+  return ordered.map((model) => {
+    const bare = model.id.startsWith(CHATGPT_MODEL_PREFIX)
+      ? model.id.slice(CHATGPT_MODEL_PREFIX.length)
+      : model.id;
+    const entry =
+      registry?.models.find((candidate) => candidate.id === `openai/${bare}`) ??
+      findModelRegistryRoute(registry, 'openai', bare)?.entry;
+    return entry?.defaultEnabled === false && model.defaultEnabled !== false
+      ? { ...model, defaultEnabled: false }
+      : model;
+  });
+}
+
+/**
+ * root 装配:registry plan(overlay / 实体化 / retired 标记)→ 账号顺序 → 本地 override
  * (addition 整条胜 + patch 逐字段)→ retired 复标——patch 改 status 也压不掉
  * 远端 tombstone,唯一复活通道是完整 local addition(hasLocalAddition 豁免)。
- * overlay / 本地 patch 合并后始终按最终 sortOrder 稳定重排；xAI legacy 根保留
+ * 合并后始终按最终 sortOrder 稳定重排；xAI legacy 根保留
  * Registry 声明顺序，与服务端投影给旧客户端的数组保持逐项兼容。
  */
 function assembleRoot(
@@ -821,6 +865,7 @@ function assembleRoot(
   plan: ModelPlaneRegistryPlan,
   preserveDeclarationOrder = false,
   connectionId = providerId,
+  accountModels: readonly CatalogModel[] = [],
 ): CatalogModel[] {
   const rootPlan = plan.roots.get(rootPlanKey(providerId, agent));
   let out = applyRootRegistryPlan(models, rootPlan);
@@ -858,6 +903,8 @@ function assembleRoot(
       };
     });
   }
+  // 用户本地 sortOrder patch 仍在其后生效(local 永远最高)。
+  out = applyAccountOrder(out, accountModels);
   out = applyLocalOverridesToRoot(connectionId, agent, out, localOverrides, plan.warnings, providerId);
   if (rootPlan && rootPlan.retired.size > 0) {
     out = out.map((m) =>
@@ -1247,7 +1294,18 @@ function computeMerged(): Catalog {
   // 实体化条目在未登录时也保持 presence——能否选中由连接态门控,presence ≠ entitlement。
   providers = providers.map((p) => {
     if (isOpenAiSubscriptionProvider(p)) {
-      const root = assembleRoot('openai', 'codex', p.models.codex ?? [], plan, false, p.id);
+      // 独立 ChatGPT 账号把 app-server 清单按返回顺序写进自己的配置(无 sortOrder),
+      // 配置顺序即账号顺序。
+      const discoveredAccountCodex = discoveredByProvider.get(p.id)?.codex ?? [];
+      const accountCodex =
+        p.id === 'openai'
+          ? discoveredCodex
+          : discoveredAccountCodex.length > 0 || p.auth.native !== 'codex'
+            ? discoveredAccountCodex
+            : (p.models.codex ?? []);
+      const root = assembleRoot(
+        'openai', 'codex', p.models.codex ?? [], plan, false, p.id, accountCodex,
+      );
       const withRoot: Provider = { ...p, models: { ...p.models, codex: root } };
       const remoteExcluded =
         plan.roots.get(rootPlanKey('openai', 'codex'))?.bridgeExcluded ?? new Set<string>();
@@ -1308,15 +1366,20 @@ function computeMerged(): Catalog {
             'claude-code',
             projected.models['claude-code'] ?? [],
           ),
-          pi: declaredPiModels('openai', p.id === 'openai'
-            ? discoveredCodex : discoveredByProvider.get(p.id)?.codex ?? []),
+          pi: alignOpenAiPiWithAccount(
+            declaredPiModels('openai', p.id === 'openai'
+              ? discoveredCodex : discoveredByProvider.get(p.id)?.codex ?? []),
+            accountCodex,
+            (base ?? BUNDLED_CATALOG).modelRegistry,
+          ),
         },
       };
     }
     if (providerCatalogId(p) === 'anthropic') {
       // Claude 订阅只供 Claude Code(内置 CLI 用它自己的登录),不向 Codex / Pi 投影。
-      const seed = p.id === 'anthropic' && anthropicModels.length > 0 ? anthropicModels : (p.models['claude-code'] ?? []);
-      const root = assembleRoot('anthropic', 'claude-code', seed, plan, false, p.id);
+      const accountModels = p.id === 'anthropic' ? anthropicModels : [];
+      const seed = accountModels.length > 0 ? accountModels : (p.models['claude-code'] ?? []);
+      const root = assembleRoot('anthropic', 'claude-code', seed, plan, false, p.id, accountModels);
       return { ...p, models: { 'claude-code': root } };
     }
     if (providerCatalogId(p) === 'xai') {

@@ -2,14 +2,16 @@
  * 目录运行时校验(parseCatalog)+ presets 清洗排序。
  *
  * 2026-07-19 起 bundled 目录由 `builtin.ts` 组装:内置供应商身份卡是 TS 常量,
- * `catalog/providers.json`(v2)承载 xAI 的离线 fallback 元数据 + presets 模板——它仍是
- * ① OSS `cfg/providers.json` 的发布物 ② dev 直读的仓库文件。anthropic/openai/xd
+ * `catalog/providers.json`(v2)承载 xAI 的离线 fallback 元数据 + presets 模板,是随包
+ * 目录与 dev 直读的仓库文件。旧 OSS `cfg/providers.json` 自 2026-07 起冻结、不再由本文件
+ * 发布;本文件的预设是源格式(顶层单一推荐清单),旧客户端读不懂,不能直接发布到 OSS。anthropic/openai/xd
  * 的模型清单运行时动态注入(见 apps/desktop maker-host active-catalog),不再进目录文件。
  * xAI 登录后同样由账号 `/v1/models` 决定成员；此处静态段只在尚无成功账号快照时救急，
  * 并为已发现成员补上下文、价格、能力与路由。
  * 所有跨端模型元数据统一进入严格版本化的 `modelRegistry`;目录顶层不接受旁路元数据块。
  */
 
+import { expandPresetModels } from './presetModels.js';
 import { projectProviderMediaModels } from './providerMediaModels.js';
 import { mimoPresetName } from './mimoPresentation.js';
 import { validModelMetadata } from './modelMetadataLayers.js';
@@ -729,7 +731,11 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
   if (!Array.isArray(input)) return [];
   const out: ProviderPreset[] = [];
   const seen = new Set<string>();
-  for (const v of input) {
+  for (const raw of input) {
+    const v = expandPresetModels(raw);
+    // 展开成功会删掉顶层 `models`；仍留着说明引擎字段畸形或清单不是数组，整条拒绝——
+    // 即使 runtimes 另带了旧格式清单，也不能让它以同 id 覆盖随包版本。
+    if (v && typeof v === 'object' && 'models' in v) continue;
     if (!isValidPreset(v) || seen.has(v.id)) continue;
     seen.add(v.id);
     // 可选呈现字段逐项归一化,**不许分支 continue**:多个字段同时非法时早退会漏清洗

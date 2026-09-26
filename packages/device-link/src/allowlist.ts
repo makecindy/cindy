@@ -407,6 +407,11 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端降级为无数据(回退 workflow 级
   // 卡片)。不进 INVOKE_TIMEOUT_OVERRIDES_MS:读小 JSON,默认 30s 足够。
   'maker:get-workflow-progress',
+  // 后台命令输出尾部(只读):入参 (sessionId, taskId),handler 按被控端活跃会话的
+  // 后台任务登记解析 SDK `.output` 路径并只读末尾一段,控制端无法指定路径;
+  // 无 event.sender 依赖、无副作用;输出文件真相在被控端(控制端本机读必落空)。
+  // 老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端不显示「最近输出」。
+  'maker:background-task:output-tail',
   // 会话仍在运行的后台任务快照(只读):handler 只查活跃会话内存句柄的任务列表,
   // 无 event.sender 依赖、无副作用;任务真身在被控端(控制端 main 无该会话 handle,
   // 本机查必空)。后台任务面板挂载水合用。老被控端无此 channel → CHANNEL_NOT_ALLOWED
@@ -460,6 +465,12 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 被控端视角的单价(与被控端桌面 tooltip 同源)。无 sender 依赖、无副作用;老被控端无此 channel
   // → CHANNEL_NOT_ALLOWED → 控制端隐藏价格(与桌面「无价不显示」口径一致)。
   'maker:usage:model-pricing',
+  // 用量历史跨设备合并(只读):同账号另一台电脑读取被控端 daily_spend / daily_model_usage
+  // 原始行,合并进它自己的「所有设备」用量历史。数据真相在被控端;只含按天 × 模型聚合的
+  // token 与金额,不含会话、消息或凭证。入参仅可选 sinceDay(YYYY-MM-DD),无 sender 依赖、
+  // 无副作用;响应 gzip 编码,超帧预算回结构化 oversize。老被控端无此 channel →
+  // CHANNEL_NOT_ALLOWED → 控制端把该设备标为「版本过旧」,不影响其它设备。
+  'maker:usage:device-rows',
   // 网关 API key **presence-only** 探测:只回 { present: boolean },不回、也永不扩展为读取
   // 密钥材料 —— 这是「账号与密钥永不放行」大类下的窄口径例外(同 DL_VOICE_CREDENTIAL_SYNC
   // 的例外定位,禁止泛化)。用途:控制端模型选择器判断折扣版(codex/)是否该置灰,判定依据

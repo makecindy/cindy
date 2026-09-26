@@ -23,6 +23,16 @@
     "uploadSucceeded": "上传成功，编号 {{code}}。"
   },
   "title": "设置",
+  "appearance": {
+    "title": "外观",
+    "modeLabel": "显示模式",
+    "options": {
+      "system": "跟随系统",
+      "light": "浅色",
+      "dark": "深色"
+    },
+    "saveFailed": "显示模式没有保存成功，重新打开后会恢复之前的设置"
+  },
   "language": {
     "title": "语言",
     "hint": "仅影响应用界面。Agent 回复语言由 Agent 自身决定。",

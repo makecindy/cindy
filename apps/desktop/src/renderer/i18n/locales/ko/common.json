@@ -6514,7 +6514,7 @@
     }
   },
   "usageHistory": {
-    "description": "이 기기의 Cindy 내부에서 발생한 토큰 사용량입니다. 기능 출시 시점부터 기록이 쌓이며 이전 기록은 채워지지 않습니다.",
+    "description": "내 여러 컴퓨터의 Cindy 내부에서 발생한 토큰 사용량입니다. 기본적으로 합산해 표시하며 한 대씩 볼 수도 있습니다. 다른 컴퓨터는 온라인 상태이고 원격 제어를 허용해야 읽을 수 있으며, 읽지 못할 때는 마지막으로 읽은 데이터를 사용합니다. 기능 출시 시점부터 기록이 쌓이며 이전 기록은 채워지지 않습니다.",
     "empty": "아직 사용 기록이 없습니다. 대화를 실행하면 쌓이기 시작합니다.",
     "loadFailed": "사용량 기록을 불러오지 못했습니다. 설정을 다시 열어 재시도해 주세요.",
     "range": {
@@ -6525,6 +6525,24 @@
       "30d": "최근 30일",
       "7d": "최근 7일",
       "today": "오늘"
+    },
+    "device": {
+      "label": "기기",
+      "ariaLabel": "사용량 기기 필터",
+      "all": "모든 기기",
+      "self": "이 기기",
+      "selfNamed": "이 기기 ({{name}})",
+      "loading": "다른 기기의 사용량을 불러오는 중…",
+      "status": {
+        "syncing": "읽는 중…",
+        "syncedAt": "{{time}} 기준 데이터",
+        "offline": "오프라인",
+        "remoteDisabled": "원격 제어가 허용되지 않음",
+        "unsupported": "Cindy 업데이트 필요",
+        "error": "읽기 실패",
+        "noData": "데이터 없음"
+      },
+      "partial": "일부 컴퓨터의 최신 사용량을 읽지 못해 합계가 적게 표시될 수 있습니다. 기기 목록에서 각 기기의 상태를 확인하세요."
     },
     "cacheHitTooltip": "캐시 읽기 ÷ (입력 + 캐시 읽기 + 캐시 쓰기) — 메시지 카드와 동일한 기준입니다.",
     "summary": {
@@ -6579,7 +6597,8 @@
     },
     "tasks": {
       "title": "토큰 사용이 많은 세션",
-      "subtitle": "{{range}} 동안 활동한 세션을 누적 토큰 순으로 정렬",
+      "subtitle": "{{range}} 동안 토큰을 가장 많이 사용한 세션",
+      "coverage": "일별 집계는 {{date}}부터",
       "col": {
         "task": "세션",
         "model": "모델",
@@ -6589,7 +6608,7 @@
         "lastActive": "마지막 활동"
       },
       "providerTooltip": "세션에 현재 선택된 제공자입니다. 지정하지 않은 경우 비워 둡니다.",
-      "tokensTooltip": "해당 세션의 누적 값입니다. {{range}}은(는) 활성 세션을 필터링하는 데만 사용되며 해당 기간의 증가분이 아닙니다."
+      "tokensTooltip": "이 세션이 {{range}} 동안 사용한 토큰만 집계합니다."
     }
   },
   "usageDashboard": {
@@ -8984,7 +9003,11 @@
       "toolUses_one": "도구 호출 {{count}}회",
       "toolUses_other": "도구 호출 {{count}}회",
       "lastTool": "최근 도구: {{tool}}",
-      "outputFile": "출력: {{path}}"
+      "outputFile": "출력: {{path}}",
+      "runningFor": "{{duration}} 실행 중",
+      "startedAt": "{{time}} 시작",
+      "recentOutput": "최근 출력 · {{time}} 전 업데이트",
+      "noOutputYet": "아직 출력이 없습니다"
     },
     "planPill": {
       "step": "{{current}} / {{total}}단계",

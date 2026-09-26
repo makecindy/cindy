@@ -1331,7 +1331,7 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 | Deep brand red (hover/pressed) | `#A61629`                                                                                                          | `#A61629`                                   |
 | Background                     | `#F2F2ED` (warm ivory — 2026-08 revision, see 15.16)                                                               | `#181818` (pure neutral — 2026-08 revision) |
 | Card / input                   | `#FDFDF8`                                                                                                          | `#1F1F1F`                                   |
-| Border                         | `#E4E4DF` (desktop, warm; mobile light keeps its own exception `#C6C9CE` pending the mobile follow-up — see 15.13) | `#313131`                                   |
+| Border                         | `#E4E4DF` (desktop, warm; mobile owns its own ramp since 2026-09-26 — see 15.13)                                  | `#313131`                                   |
 | Secondary info                 | `#888883` (2026-08 ruling: warmed + raised to ≥3.0, supersedes the 2026-07-20 `#8C8E94`; history in 15.5)          | `#6F6F6F`                                   |
 | Body text                      | `#1A1A1A` (near-black neutral; emphasis tier `#0C0C0C`)                                                            | `#D4D4D4`                                   |
 | Pure white                     | `#FFFFFF`                                                                                                          | `#FFFFFF`                                   |
@@ -1362,6 +1362,7 @@ See the skin decision table §2 (design-stage working file, not in repo). The Li
 - **Light side superseded 2026-08-13 (user ruling)**: light secondary info moved to `#888883` — warmed to the ivory hue (B=R−5) and raised to a ≥3.0 floor on every surface it sits on (page 3.17 / hover 3.06 / sidebar 3.06). The U2 "stay true to Figma" exemption now applies to **dark only** (`#6F6F6F` untouched).
 - Measured contrast (WCAG): × surface `2.32/2.92:1`, × elevated `2.56/2.65:1`, × chip `2.41/2.72:1` — all below the 4.5:1 body-text AA. Ruling **U2 (2026-07-16): stay true to the Figma values**, readability loss accepted as a recorded explicit deviation. (Light was later re-tuned in two rounds to `#8C8E94`, finalized 2026-07-20, desktop and mobile in sync — see decision log.)
 - Constraint: **never darken unilaterally** (`#686B72` was tried and rejected, kept only as an archived sample); changing the value requires a fresh user ruling (the 2026-08 light change carries one).
+- **Scope: desktop only since 2026-09-26.** Mobile no longer carries the U2 exception — by user ruling its secondary text is `#4D4D4A` / `#BDBDBD` and meets 4.5:1 (see 15.13). Desktop values above are unchanged.
 - Reverse-frozen test: `cindyThemes.test.ts` group ⑦ asserts the exact finalized values (light `#888883`, ruling 2026-08-13 / dark `#6F6F6F`); injecting `#686B72` must fail; update the baseline only after a user ruling.
 
 ### 15.6 HSL Format Contract
@@ -1464,7 +1465,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 #### Red boundary
 
 - Brand red `#DF0C27` only for brand display / splash, destructive actions, running/thinking emphasis, and the list active glyph (dark uses `#A61629` for the glyph).
-- Ordinary CTAs, FABs, send buttons, and confirm-style primaries are neutral-inverse: light bg `#3C3F43` / text `#FCFCFC`, dark bg `#EEEEEE` / text `#151515` (2026-08). Never brand-red these.
+- Ordinary CTAs, FABs, send buttons, and confirm-style primaries are neutral-inverse: desktop light bg `#3C3F43` / text `#FCFCFC`, dark bg `#EEEEEE` / text `#151515` (2026-08); mobile light `#1A1A1A` / `#FFFFFF`, dark `#EDEDED` / `#121212` (2026-09-26, see Cross-platform color semantics). Never brand-red these.
 - The red whitelist does not include carets, focus rings, ordinary buttons, or ordinary selected backgrounds. A new red consumer must document its semantics and enter the token/test whitelist first; no component-level hardcoding.
 
 #### Caret & focus
@@ -1473,26 +1474,32 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 - Focus ring, Auto Approval, and info blue share the `#417CDD` family. Figma's older blue `#426BF2` is not adopted.
 - Red-family carets are forbidden.
 
-#### Cross-platform color isomorphism
+#### Cross-platform color semantics (mobile owns its ramp — ruling 2026-09-26)
 
-- Mobile color semantics must mirror the desktop token decisions: the base layers (background, body, secondary info, borders) map directly from CINDY desktop semantics — never invent a parallel mobile palette for the same meanings.
-- **Pending follow-up (2026-08)**: the desktop color-ramp revision (15.16) moved the desktop base layers; mobile has **not** been synced yet and still carries the pre-revision values (including comments claiming "in sync with desktop"). Until the mobile follow-up lands, the isomorphism baseline for mobile remains the pre-2026-08 desktop values; do not partially sync individual tokens.
-- **`colors.border` light is a mobile-wide exception, not a homepage-scoped token** (ruling 2026-07-21, PR #266): mobile light `border` / `borderTranslucent` = `#C6C9CE` / `rgba(198,201,206,0.62)`, deviating from desktop `#DCDFE3` — desktop borders usually sit on `#F8F8F8` cards, while mobile hairlines sit directly on the `#EDEDED` background, where `#DCDFE3` reads at a nearly invisible 1.14:1; the darkened 1.42:1 is device-verified legible. The value lives in `apps/mobile/src/theme/tokens.ts` global `lightColors.border`, applying to every mobile-light hairline; dark stays `#434343`, isomorphic with desktop. `chatCodeBorder` / `sheetActionBorder` / `sheetGrabber` keep independent values and do not follow this exception.
+- Mobile shares Cindy's brand identity and semantic roles with desktop — the same meanings for background, card, body, secondary / tertiary text, borders, neutral-inverse CTA, brand red, status colors, caret and focus blue — but **owns its own ramp values, contrast and warmth** (user ruling 2026-09-25: mobile design may decouple from desktop and should be higher contrast; values finalized 2026-09-26). Do not copy desktop hex values into mobile, and do not sync them back to desktop; semantics stay mirrored, values do not. This supersedes the 2026-07-18 "isomorphism" baseline and the 2026-08 pending mobile follow-up.
+- **Mobile light = bright ivory**: page `#F9F9F6` (user-specified: brighter than desktop `#F2F2ED`, warmth B = R−3 — a lighter ivory than desktop's R−5), card / list row / popover `#FFFFFC`, chip / selected `#EAEAE6`, border `#CCCCC8`. Body text stays neutral `#1A1A1A`; secondary `#4D4D4A`, tertiary `#686864`.
+- **Consequence of the brighter page — mobile light cards separate by hairline, not by fill.** Against `#F9F9F6` the near-white ceiling leaves only a 1.05 card lift (desktop 1.12, iOS grouped background 1.12). Every new raised mobile-light surface (card, list row, popover, input container) therefore **must carry the 1px `border`**; do not rely on the `surfaceElevated` fill alone. Surfaces that must read as recessed (chip / selected, expanded block, code card) sit **below** the page instead.
+- **Mobile dark = pure neutral near-black**: page `#121212`, card `#1E1E1E`, chip `#2A2A2A`, border `#383838`; body `#EDEDED`, secondary `#BDBDBD`, tertiary `#999999`. No warmth.
+- **Text tiers are ordered and legible**: body → secondary → tertiary go from strongest to weakest, and all three are ≥ 4.5:1 on every surface they sit on (page, card, chip, code card, sheet action group). This replaces the inverted pre-2026-09 mobile order where secondary (`#8C8E94` / `#6F6F6F`, 2.8 / 2.9:1) was lighter than tertiary; the U2 exception (15.5) no longer applies to mobile. Guarded by `themeTokens.test.ts` and the frozen `theme-colors-snapshot.json`.
+- **Neutral-inverse CTA on mobile**: light `#1A1A1A` / `#FFFFFF`, dark `#EDEDED` / `#121212` (17.40 / 16.00:1).
+- The appearance mode is a user setting (Settings → Appearance: follow system / light / dark, default follow system; only an explicit light / dark choice is persisted). It forces native system surfaces to the same mode; the first-launch light login gate (§16.5) still applies inside the login stage.
+- Values live only in `apps/mobile/src/theme/tokens.ts`; the proposal record and before / after comparison are in Design Lab (`colors` study, platform iPhone / Android). Login skin tokens (§16), brand splash, status four, task tags and syntax colors are outside this ramp and keep their own registered values.
 - Mobile-only tokens carry only mobile-specific layers or geometry:
 
 | Mobile token          | Light                    | Dark                  | Use                             |
 | --------------------- | ------------------------ | --------------------- | ------------------------------- |
-| `surfaceListRow`      | `#F6F6F6`                | `#312F2F`             | List project/task rows          |
-| `surfaceListExpanded` | `#EAEAEA`                | `#2A2828`             | Expanded list block             |
+| `surfaceListRow`      | `#FFFFFC`                | `#1E1E1E`             | List project/task rows          |
+| `surfaceTranslucent`  | `rgba(249,249,246,0.78)` | `rgba(18,18,18,0.78)` | Sticky chrome (page at opacity) |
+| `surfaceListExpanded` | `#EAEAE6`                | `#121212`             | Expanded list block             |
 | `activeGlyph`         | `#DF0C27`                | `#A61629`             | Leading active glyph in lists   |
-| `chatCodeSurface`     | `#F8F8F8`                | `#353333`             | Chat / task code card           |
-| `chatCodeBorder`      | `#DCDFE3`                | `#3C3C3C`             | Chat / task code card border    |
+| `chatCodeSurface`     | `#F1F1EC` (recessed)     | `#1A1A1A`             | Chat / task code card           |
+| `chatCodeBorder`      | `#CCCCC8`                | `#383838`             | Chat / task code card border    |
 | `inputCaret`          | `#417CDD`                | `#417CDD`             | All input carets                |
-| `sheetSurface`        | `rgba(248,248,248,0.95)` | `rgba(59,59,59,0.95)` | Bottom-sheet root               |
-| `sheetActionSurface`  | `#F6F6F6`                | `rgba(59,59,59,0.5)`  | Sheet action group / row        |
-| `sheetActionBorder`   | `#DCDFE3`                | `#505050`             | Sheet action group / row border |
-| `sheetActionText`     | `#3C3F43`                | `#C1C1C1`             | Sheet action row label          |
-| `sheetGrabber`        | `#DCDFE3`                | `#6F6F6F`             | Sheet / composer grabber        |
+| `sheetSurface`        | `rgba(249,249,246,0.96)` | `rgba(28,28,28,0.96)` | Bottom-sheet root               |
+| `sheetActionSurface`  | `#FFFFFC`                | `#262626`             | Sheet action group / row        |
+| `sheetActionBorder`   | `#CCCCC8`                | `#383838`             | Sheet action group / row border |
+| `sheetActionText`     | `#1A1A1A`                | `#EDEDED`             | Sheet action row label          |
+| `sheetGrabber`        | `#C2C2BE`                | `#5C5C5C`             | Sheet / composer grabber        |
 
 #### Iconography
 

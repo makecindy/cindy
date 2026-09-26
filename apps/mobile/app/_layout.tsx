@@ -86,6 +86,8 @@ import { IncomingShareBridge } from '@/session/IncomingShareBridge';
 import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 
+const holdSplash = () => undefined;
+
 function NavigationGate() {
   const windowGeometry = useAdaptiveWindow();
   // Establish chrome before push starts, rather than revealing a hidden bar after mount.
@@ -94,7 +96,7 @@ function NavigationGate() {
   const auth = useAuth();
   const router = useRouter();
   const segments = useSegments();
-  const { mode, colors } = useTheme();
+  const { mode, colors, preferenceReady } = useTheme();
   const { releaseSplash, splashActive } = useStartupSplash();
   // iOS 状态栏样式走 react-native-screens 的 VC-based 通道(Info.plist 已翻
   // UIViewControllerBasedStatusBarAppearance=YES):iOS 27 起 UIKit 不再接受
@@ -118,7 +120,8 @@ function NavigationGate() {
 
   // 登录与本机首页偏好就绪、默认入口重定向完成后再释放常驻 splash。
   // 深链不经过 index；同样在这里释放，避免先露出任务再跳回伙伴。
-  useHomeEntrySplashRelease(releaseSplash);
+  // 显示模式偏好读回前不释放，避免已选浅色 / 深色的用户先看到系统外观再切换。
+  useHomeEntrySplashRelease(preferenceReady ? releaseSplash : holdSplash);
 
   // 启动链走完 = 本次热更 reload(如果有)确实落地:清掉 reload 闸门记录。
   // 只在目标 update 已成为当前运行版本时才清,判定在 markStartupOtaLaunchSuccess 内。

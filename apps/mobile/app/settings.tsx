@@ -113,7 +113,7 @@ import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import type { MobileChoiceOption } from '@/session/agentCapabilities';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { THEME_PREFERENCES, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'uptodate' | 'error';
@@ -131,7 +131,7 @@ const LANGUAGE_OPTIONS: readonly LocalePreference[] = [
 
 export default function SettingsScreen() {
   const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
+  const { colors, preference: themePreference, setPreference: setThemePreference } = useTheme();
   const router = useRouter();
   const auth = useAuth();
   const { t } = useTranslation();
@@ -188,6 +188,8 @@ export default function SettingsScreen() {
   const [debugExpanded, setDebugExpanded] = useState(false);
   const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
   const [languagePickerSnap, setLanguagePickerSnap] = useState<ContextSheetSnap>('half');
+  const [appearancePickerOpen, setAppearancePickerOpen] = useState(false);
+  const [appearancePickerSnap, setAppearancePickerSnap] = useState<ContextSheetSnap>('half');
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
   const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -293,7 +295,7 @@ export default function SettingsScreen() {
     })),
     [t],
   );
-  const languagePickerHeights = useMemo(
+  const choicePickerHeights = useMemo(
     () => computeContextSheetSnapHeights({
       safeAreaTopInset: safeAreaInsets.top,
       screenHeight: windowDimensions.height,
@@ -310,6 +312,26 @@ export default function SettingsScreen() {
     setLocale(nextLocale);
     setLanguagePickerOpen(false);
   }, [setLocale]);
+  const appearancePickerOptions = useMemo<readonly MobileChoiceOption[]>(
+    () => THEME_PREFERENCES.map((option) => ({
+      id: option,
+      label: t(`settings.appearance.options.${option}`),
+    })),
+    [t],
+  );
+  const openAppearancePicker = useCallback(() => {
+    setAppearancePickerSnap('half');
+    setAppearancePickerOpen(true);
+  }, []);
+  const selectAppearance = useCallback((next: string) => {
+    const nextPreference = THEME_PREFERENCES.find((option) => option === next);
+    if (!nextPreference) return;
+    setAppearancePickerOpen(false);
+    // 本次会话已切换;只有本机存储写失败时提示下次启动会回到原设置。
+    setThemePreference(nextPreference).catch(() => {
+      Alert.alert(t('settings.appearance.modeLabel'), t('settings.appearance.saveFailed'));
+    });
+  }, [setThemePreference, t]);
 
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.deviceId) {
@@ -1120,6 +1142,26 @@ export default function SettingsScreen() {
           ]}
         </SettingsGroup>
 
+        {/* 显示模式:默认跟随系统,手动选择浅色 / 深色即持久化 override(恢复跟随系统 = 清除 override) */}
+        <SettingsGroup title={t('settings.appearance.title')}>
+          <NativePullDownMenu
+            actions={THEME_PREFERENCES.map((option) => ({
+              id: option,
+              state: option === themePreference ? 'on' : 'off',
+              title: t(`settings.appearance.options.${option}`),
+            }))}
+            onAction={selectAppearance}
+          >
+            <ChoicePickerRow
+              expanded={appearancePickerOpen}
+              label={t('settings.appearance.modeLabel')}
+              onPress={usesNativePullDownMenu() ? () => undefined : openAppearancePicker}
+              testID="settings.appearance.picker"
+              value={t(`settings.appearance.options.${themePreference}`)}
+            />
+          </NativePullDownMenu>
+        </SettingsGroup>
+
         {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
         <SettingsGroup
           footer={t('settings.language.hint')}
@@ -1133,7 +1175,7 @@ export default function SettingsScreen() {
             }))}
             onAction={selectLanguage}
           >
-            <LanguagePickerRow
+            <ChoicePickerRow
               expanded={languagePickerOpen}
               label={t('settings.language.title')}
               onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}
@@ -1394,6 +1436,29 @@ export default function SettingsScreen() {
         </View>
       </ScrollView>
       <SheetModal
+        backdropTestID="settings.appearancePicker.backdrop"
+        onBackdropPress={() => setAppearancePickerOpen(false)}
+        onRequestClose={() => setAppearancePickerOpen(false)}
+        visible={appearancePickerOpen}
+      >
+        <SheetSurface
+          bottomInset={safeAreaInsets.bottom}
+          heights={choicePickerHeights}
+          onClose={() => setAppearancePickerOpen(false)}
+          onSnapChange={setAppearancePickerSnap}
+          snap={appearancePickerSnap}
+          testID="settings.appearancePicker"
+          title={t('settings.appearance.modeLabel')}
+        >
+          <MobileChoicePickerList
+            activeId={themePreference}
+            onSelect={selectAppearance}
+            options={appearancePickerOptions}
+            testID="settings.appearancePicker.option"
+          />
+        </SheetSurface>
+      </SheetModal>
+      <SheetModal
         backdropTestID="settings.languagePicker.backdrop"
         onBackdropPress={() => setLanguagePickerOpen(false)}
         onRequestClose={() => setLanguagePickerOpen(false)}
@@ -1401,7 +1466,7 @@ export default function SettingsScreen() {
       >
         <SheetSurface
           bottomInset={safeAreaInsets.bottom}
-          heights={languagePickerHeights}
+          heights={choicePickerHeights}
           onClose={() => setLanguagePickerOpen(false)}
           onSnapChange={setLanguagePickerSnap}
           snap={languagePickerSnap}
@@ -1484,7 +1549,8 @@ function SettingsGroup({
 }
 
 /** 显示语言下拉入口:标签左、当前值右;选项在底部 sheet 中单选。 */
-function LanguagePickerRow({
+/** 设置项的单选入口行:iOS 由外层原生下拉菜单接管点击,其它平台打开选择面板。 */
+function ChoicePickerRow({
   expanded,
   label,
   onPress,

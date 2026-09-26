@@ -245,9 +245,7 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
         defaultEffort,
         supportsFastMode: e.supportsFastMode === true,
         status: 'active',
-        // 旧产品目录刻意把 haiku 收起(defaultEnabled:false);默认可见性是客户端
-        // 展示策略,不随清单动态化而漂移。
-        ...(/haiku/.test(id) ? { defaultEnabled: false } : {}),
+        // 默认可见；哪些不默认显示只由模型目录的 defaultEnabled 决定。
       },
     });
   }

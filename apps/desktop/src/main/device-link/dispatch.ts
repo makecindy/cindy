@@ -56,6 +56,7 @@ import {
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   byteLength,
   DeviceLinkError,
   parseFsWatchTopic,
@@ -696,6 +697,8 @@ const BACKGROUND_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'maker:provider:list',
   'maker:git-safety:get',
   'maker:schedule:list-sidebar-index-runs',
+  // 用量历史跨设备合并:其它电脑周期性增量拉取本机全量用量行,属后台同步。
+  'maker:usage:device-rows',
 ]);
 /** Include pre/post authorization and cached delivery, not only the IPC handler. */
 function withRemoteDbAdmission<T>(channel: string | undefined, fn: () => T): T {
@@ -2469,16 +2472,18 @@ function handleLinkOpen(
   // 已在当前 link 上证明支持 topic 的客户端可能重复 open;不能重新装回兼容 wildcard。
   const capabilities = sanitizeControllerCapabilities(payload?.capabilities);
   const rememberedModernTopics = subscriptions.hasRememberedModernTopics(src);
+  // 后台链路:控制端声明本机未订阅任何 topic(如用量读取),同样不装 legacy '*'。
   const knownModernController =
     topicSubscriptionControllers.has(src)
-    || rememberedModernTopics;
+    || rememberedModernTopics
+    || capabilities.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1);
   // 先确认 link-accept 已经进入 socket/可靠层，再提交本地订阅状态。弱网背压下
   // accept 发送失败时不能留下“控制端未连上、被控端却显示已受控”的幽灵订阅。
   try {
     client.sendLinkAccept(src, requestId, {
       appVersion: app.getVersion(),
       allowlistHash: computeAllowlistHash(),
-      capabilities: [DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1],
+      capabilities: [DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
     });
   } catch (err) {
     // 背压等瞬时失败:短退避重试(见 LINK_ACCEPT_RETRY_DELAYS_MS 注释),

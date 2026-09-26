@@ -23,6 +23,16 @@
     "uploadSucceeded": "Uploaded. Code {{code}}."
   },
   "title": "Settings",
+  "appearance": {
+    "title": "Appearance",
+    "modeLabel": "Appearance Mode",
+    "options": {
+      "system": "Auto (follow system)",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "saveFailed": "Failed to save appearance mode. The previous setting will return after restart."
+  },
   "language": {
     "title": "Language",
     "hint": "Affects the app UI only. Agent replies follow the agent's own language settings.",

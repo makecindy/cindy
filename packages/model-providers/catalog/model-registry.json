@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-24T14:16:12.766Z",
+  "updatedAt": "2026-09-26T12:00:00.005Z",
   "models": [
     {
       "id": "openai/gpt-6-sol",
@@ -102,7 +102,8 @@
         }
       ],
       "nativeApi": "openai-responses",
-      "modelRef": "openai/gpt-5.6-sol"
+      "modelRef": "openai/gpt-5.6-sol",
+      "defaultEnabled": false
     },
     {
       "id": "openai/gpt-5.6-sol[1m]",
@@ -188,7 +189,8 @@
         }
       ],
       "nativeApi": "openai-responses",
-      "modelRef": "openai/gpt-5.6-terra"
+      "modelRef": "openai/gpt-5.6-terra",
+      "defaultEnabled": false
     },
     {
       "id": "xd/gpt-5.6-terra",
@@ -248,7 +250,8 @@
         "claude-code": {
           "contextWindow": 272000
         }
-      }
+      },
+      "defaultEnabled": false
     },
     {
       "id": "xd/gpt-5.6-luna",
@@ -561,7 +564,18 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-fable-5",
+      "defaultEnabled": false
+    },
+    {
+      "id": "xd/claude-fable-5",
+      "name": "Fable 5",
+      "status": "active",
+      "sortOrder": 1,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-fable-5",
@@ -603,7 +617,18 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-5",
+      "defaultEnabled": false
+    },
+    {
+      "id": "xd/claude-opus-5",
+      "name": "Opus 5",
+      "status": "active",
+      "sortOrder": 0,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-opus-5",
@@ -630,7 +655,18 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-8",
+      "defaultEnabled": false
+    },
+    {
+      "id": "xd/claude-opus-4-8",
+      "name": "Opus 4.8",
+      "status": "active",
+      "sortOrder": 2,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-8",
@@ -658,7 +694,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-7"
+    },
+    {
+      "id": "xd/claude-opus-4-7",
+      "name": "Opus 4.7",
+      "status": "active",
+      "sortOrder": 3,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-7",
@@ -669,7 +715,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-opus-4-7"
+      "modelRef": "anthropic/claude-opus-4-7",
+      "defaultEnabled": false
     },
     {
       "id": "anthropic/claude-opus-4-6",
@@ -686,7 +733,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-6"
+    },
+    {
+      "id": "xd/claude-opus-4-6",
+      "name": "Opus 4.6",
+      "status": "active",
+      "sortOrder": 4,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-6",
@@ -697,7 +754,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-opus-4-6"
+      "modelRef": "anthropic/claude-opus-4-6",
+      "defaultEnabled": false
     },
     {
       "id": "anthropic/claude-opus-4-5",
@@ -714,7 +772,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-5"
+    },
+    {
+      "id": "xd/claude-opus-4-5",
+      "name": "Opus 4.5",
+      "status": "active",
+      "sortOrder": 5,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-5",
@@ -725,7 +793,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-opus-4-5"
+      "modelRef": "anthropic/claude-opus-4-5",
+      "defaultEnabled": false
     },
     {
       "id": "anthropic/claude-sonnet-5",
@@ -741,7 +810,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-sonnet-5"
+    },
+    {
+      "id": "xd/claude-sonnet-5",
+      "name": "Sonnet 5",
+      "status": "active",
+      "sortOrder": 6,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-5",
@@ -769,7 +848,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-sonnet-4-6"
+    },
+    {
+      "id": "xd/claude-sonnet-4-6",
+      "name": "Sonnet 4.6",
+      "status": "active",
+      "sortOrder": 7,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-4-6",
@@ -780,7 +869,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-sonnet-4-6"
+      "modelRef": "anthropic/claude-sonnet-4-6",
+      "defaultEnabled": false
     },
     {
       "id": "anthropic/claude-sonnet-4-5",
@@ -797,7 +887,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-sonnet-4-5"
+    },
+    {
+      "id": "xd/claude-sonnet-4-5",
+      "name": "Sonnet 4.5",
+      "status": "active",
+      "sortOrder": 8,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-4-5",
@@ -808,7 +908,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-sonnet-4-5"
+      "modelRef": "anthropic/claude-sonnet-4-5",
+      "defaultEnabled": false
     },
     {
       "id": "anthropic/claude-haiku-4-5",
@@ -825,7 +926,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-haiku-4-5"
+    },
+    {
+      "id": "xd/claude-haiku-4-5",
+      "name": "Haiku 4.5",
+      "status": "active",
+      "sortOrder": 9,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-haiku-4-5",
@@ -836,7 +947,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-haiku-4-5"
+      "modelRef": "anthropic/claude-haiku-4-5",
+      "defaultEnabled": true
     },
     {
       "id": "xai/grok-4.7",
@@ -1535,17 +1647,26 @@
       "sortOrder": 45,
       "routes": [
         {
-          "providerId": "xd",
-          "modelId": "deepseek/deepseek-v4-pro",
+          "providerId": "deepseek",
+          "modelId": "deepseek-v4-pro",
           "agents": ["claude-code", "codex"],
           "defaults": {
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "modelRef": "deepseek/deepseek-v4-pro"
+    },
+    {
+      "id": "xd/deepseek-deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "sortOrder": 45,
+      "routes": [
         {
-          "providerId": "deepseek",
-          "modelId": "deepseek-v4-pro",
+          "providerId": "xd",
+          "modelId": "deepseek/deepseek-v4-pro",
           "agents": ["claude-code", "codex"],
           "defaults": {
             "supportsFastMode": false
@@ -1562,17 +1683,36 @@
       "sortOrder": 46,
       "routes": [
         {
-          "providerId": "xd",
-          "modelId": "deepseek/deepseek-v4-flash",
+          "providerId": "deepseek",
+          "modelId": "deepseek-flash",
           "agents": ["claude-code", "codex"],
           "defaults": {
-            "supportsFastMode": false
+            "supportsFastMode": false,
+            "name": "DeepSeek-Flash"
           },
           "referencePriceGroup": "global"
         },
         {
           "providerId": "deepseek",
           "modelId": "deepseek-v4-flash",
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          },
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "modelRef": "deepseek/deepseek-v4-flash"
+    },
+    {
+      "id": "xd/deepseek-deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "sortOrder": 46,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "deepseek/deepseek-v4-flash",
           "agents": ["claude-code", "codex"],
           "defaults": {
             "supportsFastMode": false
@@ -1595,7 +1735,17 @@
           "modelId": "gpt-5.4-nano",
           "agents": ["claude-code", "codex"],
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.4-nano"
+    },
+    {
+      "id": "xd/gpt-5.4-nano",
+      "name": "GPT-5.4-Nano",
+      "status": "active",
+      "sortOrder": 101,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.4-nano",
@@ -1603,7 +1753,8 @@
         }
       ],
       "nativeApi": "openai-responses",
-      "modelRef": "openai/gpt-5.4-nano"
+      "modelRef": "openai/gpt-5.4-nano",
+      "defaultEnabled": false
     },
     {
       "id": "xd/codex-gpt-5.4-mini",

@@ -35,7 +35,24 @@ import {
   CodexWebUsageUnauthorizedError,
   fetchCodexWebUsageSnapshot,
 } from '../usage/codexWebUsage.js';
+import { app } from 'electron';
+import { requireAppCapability } from '../appCapabilities.js';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
+import { readUsageDeviceRows } from '../usage/usageDeviceRows.js';
+import {
+  configurePeerUsageSync,
+  peerUsageCacheFilePath,
+  withPeerUsageAccessGate,
+  readPeerUsageCacheFile,
+  writePeerUsageCacheFile,
+} from '../usage/peerUsageSync.js';
+import { getAllSpendDays, localDayKey } from '../localDb/dailySpend.js';
+import { getModelUsageSince } from '../localDb/dailyModelUsage.js';
+import { getSessionUsageSince } from '../localDb/dailySessionUsage.js';
+import { readRemoteBotSessionAccessBatch } from '../localDb/ipc/botRemoteSessionAccess.js';
+import { getCurrentDbClientUserId } from '../localDb/client/current.js';
+import { getSelfDeviceId, remoteBackgroundInvoke } from '../device-link/index.js';
+import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import {
   clearClaudeSubscriptionUsageSnapshot,
   clearCodexAccountUsageSnapshot,
@@ -309,7 +326,37 @@ export function registerMakerUsageIpc(maker: Maker): void {
     readReferenceModelPricing: getReferenceModelPricing,
     readUsageHistory,
     emptyUsageHistory: emptyUsageHistoryPayload,
+    readUsageDeviceRows: (request) =>
+      readUsageDeviceRows(
+        {
+          getAllSpendDays,
+          getModelUsageSince,
+          getSessionUsageSince,
+          // 与 local-db:sessions:list 的远端投影同一判据:hidden(含账号切换中的全拒)不外发。
+          remoteVisibleTaskIds: async (ids) => {
+            const access = await readRemoteBotSessionAccessBatch(ids, 'session');
+            return new Set(ids.filter((id) => (access.get(id) ?? 'hidden') !== 'hidden'));
+          },
+          todayKey: () => localDayKey(),
+        },
+        request,
+      ),
   });
+
+  // 用量历史「所有设备」范围:经 device-link 拉同账号其它电脑的原始用量行并按账号缓存。
+  // 与设备互联 IPC 入口同一道能力门:未登录或账号切换进行中时,不读设备目录、不开 peer 链路。
+  configurePeerUsageSync(withPeerUsageAccessGate(() =>
+    requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.'), {
+    userId: getCurrentDbClientUserId,
+    selfDeviceId: getSelfDeviceId,
+    listDevices: () => handleListDevices(deviceDirectoryDeps()),
+    // 后台链路:不让被读取的电脑进入受控状态;旧版本在建链后确认不支持时即关闭链路。
+    invoke: (deviceId, channel, args) => remoteBackgroundInvoke(deviceId, channel, args),
+    readCache: (userId) => readPeerUsageCacheFile(peerUsageCacheFilePath(app.getPath('userData'), userId)),
+    writeCache: (userId, contents) =>
+      writePeerUsageCacheFile(peerUsageCacheFilePath(app.getPath('userData'), userId), contents),
+    now: () => Date.now(),
+  }));
 
   // 订阅会话的 CLI 在会话里上报 SDK rate_limit_event → 落库 + 广播(maker-core 只对本机
   // Claude 订阅会话转发)。事件晚于登出 / 断开到达时丢弃,不复活刚清掉的快照。

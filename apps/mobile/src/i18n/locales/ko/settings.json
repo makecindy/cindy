@@ -23,6 +23,16 @@
     "uploadSucceeded": "업로드했습니다. 번호 {{code}}."
   },
   "title": "설정",
+  "appearance": {
+    "title": "외관",
+    "modeLabel": "표시 모드",
+    "options": {
+      "system": "자동 (시스템 따르기)",
+      "light": "라이트",
+      "dark": "다크"
+    },
+    "saveFailed": "표시 모드를 저장하지 못했습니다. 다시 열면 이전 설정으로 돌아갑니다."
+  },
   "language": {
     "title": "언어",
     "hint": "앱 UI에만 영향을 줍니다. Agent 응답 언어는 Agent 자체 설정에 따릅니다.",

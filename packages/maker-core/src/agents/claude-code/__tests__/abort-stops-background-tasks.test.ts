@@ -2150,6 +2150,33 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.close().catch(() => undefined);
   });
 
+  it('exposes the SDK output file of running background tasks and drops it on terminal', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'run a background command' });
+    stream.emit({
+      ...taskStarted('bash-1', 'local_bash'),
+      output_file: '/tmp/claude-501/project/session/tasks/bash-1.output',
+    });
+    await waitFor(() => taskEvents(events).length >= 1, 'task_started observed');
+    // task_updated 补丁不带 output_file,不得冲掉已登记的路径。
+    stream.emit(taskUpdatedRunning('bash-1'));
+    await waitFor(() => taskEvents(events).length >= 2, 'task_updated observed');
+    expect(handle.listBackgroundTasks?.()).toEqual([
+      expect.objectContaining({
+        taskId: 'bash-1',
+        taskType: 'local_bash',
+        outputFile: '/tmp/claude-501/project/session/tasks/bash-1.output',
+      }),
+    ]);
+
+    stream.emit(taskNotification('bash-1', 'completed'));
+    await waitFor(() => (handle.listBackgroundTasks?.() ?? []).length === 0, 'terminal task removed');
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
   it('stopTask rejection does not leak an awaiting claim after interrupt succeeds', async () => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream();
 

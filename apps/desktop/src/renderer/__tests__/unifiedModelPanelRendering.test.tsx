@@ -195,6 +195,14 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
 vi.mock('@/state/deviceLinkModelMirror', () => ({
   useDeviceLinkModelMirrorVersion: () => 0,
 }));
+// Remote directories read account usage from device mirrors; this suite has no device link.
+vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
+  useRemoteCodexAccountUsage: () => null,
+  useRemoteXaiSubscriptionUsage: () => null,
+}));
+vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
+  useRemoteClaudeSubscriptionUsage: () => null,
+}));
 
 import { ModelSelector, ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 import {

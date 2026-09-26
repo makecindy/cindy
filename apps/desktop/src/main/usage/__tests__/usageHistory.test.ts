@@ -17,6 +17,10 @@ vi.mock('../../localDb/dailySpend', () => ({
 vi.mock('../../localDb/dailyModelUsage', () => ({
   getModelUsageSince: vi.fn(),
 }));
+vi.mock('../../localDb/dailySessionUsage', () => ({
+  getSessionUsageSince: vi.fn(async () => ({ rows: [], tasks: [] })),
+  getUsageTaskMeta: vi.fn(async () => []),
+}));
 vi.mock('../../localDb/client/current', () => ({
   getCurrentDbClientUserId: () => currentDbClient.userId,
 }));
@@ -102,6 +106,7 @@ vi.mock('../../logger', () => ({
   }),
 }));
 
+import { getSessionUsageSince, getUsageTaskMeta } from '../../localDb/dailySessionUsage';
 import {
   __resetUsageHistoryCacheForTesting,
   claudeSubscriptionUsageModelKey,
@@ -116,8 +121,17 @@ import {
   readUsageHistory,
   readUsageHistoryWith,
   shiftDayKey,
+  combineUsageDeviceRows,
+  usageHistoryDepsForScope,
+  clampPeerRowsToToday,
   type UsageHistoryDeps,
 } from '../usageHistory';
+import {
+  __resetPeerUsageSyncForTesting,
+  configurePeerUsageSync,
+  type PeerUsageSyncDeps,
+} from '../peerUsageSync';
+import { readUsageDeviceRows } from '../usageDeviceRows';
 import { getAllSpendDays } from '../../localDb/dailySpend';
 import { getModelUsageSince } from '../../localDb/dailyModelUsage';
 import { getGatewayModelPricing, isModelPricingRefreshInFlight } from '../modelPricing';
@@ -212,6 +226,7 @@ beforeEach(async () => {
   );
   currentDbClient.userId = 'user-a';
   __resetUsageHistoryCacheForTesting();
+  __resetPeerUsageSyncForTesting();
   // 账本币种是跨用例的模块级状态,逐例重置,不受前一例显式设定的账号币种影响。
   // 重置后必须再显式落一次账号币种:生产里由 modelPricing(报价目录同步/磁盘快照
   // 恢复)写入,而本文件把它整体 mock 掉了;不落这一笔,回退链会落到与构建区域
@@ -223,6 +238,8 @@ beforeEach(async () => {
   setActiveLedgerCurrency(DEFAULT_USAGE_CURRENCY);
   vi.mocked(getAllSpendDays).mockResolvedValue([]);
   vi.mocked(getModelUsageSince).mockResolvedValue([]);
+  vi.mocked(getSessionUsageSince).mockResolvedValue({ rows: [], tasks: [] });
+  vi.mocked(getUsageTaskMeta).mockResolvedValue([]);
   vi.mocked(getGatewayModelPricing).mockResolvedValue(null);
   vi.mocked(getReferenceModelPricing).mockReturnValue({});
   vi.mocked(isModelPricingRefreshInFlight).mockReturnValue(false);
@@ -817,6 +834,41 @@ describe('readUsageHistoryWith', () => {
 });
 
 describe('production cache and empty payload', () => {
+  it('overlays current local task metadata on a cached aggregate', async () => {
+    const meta = (sessionId: string, title: string) => ({
+      sessionId,
+      title,
+      model: 'gpt-5.5',
+      providerId: null,
+      contextTokens: 0,
+      contextWindow: 0,
+      lastActiveAt: 1,
+    });
+    vi.mocked(getSessionUsageSince).mockResolvedValue({
+      rows: [
+        { day: TODAY, sessionId: 's1', tokens: 5 },
+        { day: TODAY, sessionId: 's2', tokens: 7 },
+      ],
+      tasks: [meta('s1', 'Old title'), meta('s2', 'Doomed')],
+    });
+    vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'Old title'), meta('s2', 'Doomed')]);
+    const first = await readUsageHistory({ days: 30, includeTasks: true });
+    expect(first.tasks?.map((task) => task.title)).toEqual(['Old title', 'Doomed']);
+    // 重命名 s1、删除 s2:不产生用量,聚合缓存照常复用,但出口的任务元数据必须是当前值。
+    vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'New title')]);
+    const second = await readUsageHistory({ days: 30, includeTasks: true });
+    expect(second.tasks?.map((task) => [task.sessionId, task.title])).toEqual([['s1', 'New title']]);
+    expect(getSessionUsageSince).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips task data unless the caller asks for it (home dashboard reads)', async () => {
+    const payload = await readUsageHistory({ days: 30 });
+    expect(payload.tasks).toBeUndefined();
+    expect(payload.taskDaily).toBeUndefined();
+    expect(getSessionUsageSince).not.toHaveBeenCalled();
+    expect(getUsageTaskMeta).not.toHaveBeenCalled();
+  });
+
   it('writes a structured fresh payload and serves it from memory', async () => {
     vi.mocked(getAllSpendDays).mockResolvedValue([
       { day: TODAY, monies: [actual(2)] },
@@ -854,5 +906,339 @@ describe('production cache and empty payload', () => {
     expect(empty.totals.last30DaysEstimatedValue).toEqual(
       zeroUsageMoney('value-estimate'),
     );
+  });
+});
+
+describe('multi-device scope', () => {
+  const peerRows = {
+    sessionRows: [],
+    tasks: [],
+    spendDays: [
+      { day: '2026-06-10', monies: [actual(3)] },
+      { day: TODAY, monies: [actual(3)] },
+    ],
+    modelRows: [
+      modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: 100 }),
+      modelRow('2026-06-10', 'claude-code', 'claude-sonnet-5', actual(3), { outputTokens: 50 }),
+    ],
+  };
+
+  it('merges identical model keys from different devices into one row', () => {
+    const combined = combineUsageDeviceRows([
+      {
+        sessionRows: [],
+        tasks: [],
+        spendDays: [{ day: TODAY, monies: [actual(1)] }],
+        modelRows: [modelRow(TODAY, 'codex', 'gpt-5.5', actual(1), { inputTokens: 10 })],
+      },
+      {
+        sessionRows: [],
+        tasks: [],
+        spendDays: [{ day: TODAY, monies: [actual(2)] }],
+        modelRows: [modelRow(TODAY, 'codex', 'gpt-5.5', actual(2), { inputTokens: 5, outputTokens: 7 })],
+      },
+    ]);
+    expect(combined.spendDays).toEqual([{ day: TODAY, monies: [actual(1), actual(2)] }]);
+    expect(combined.modelRows).toHaveLength(1);
+    expect(combined.modelRows[0]).toMatchObject({
+      money: actual(3),
+      inputTokens: 15,
+      outputTokens: 7,
+    });
+  });
+
+  it('aggregates local plus peer rows for all devices, and only the peer for a device scope', async () => {
+    const base = makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: [actual(2)] }],
+      getModelUsageSince: async () => [
+        modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: 40 }),
+      ],
+    });
+    const snapshot = { peerRows: new Map([['device-b', peerRows]]) };
+
+    const all = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'all', snapshot), {
+      days: 'all',
+      modelDays: 'all',
+    });
+    expect(all.totals.today).toEqual(actual(5));
+    expect(all.totals.todayTokens).toBe(140);
+    expect(all.modelDaily.filter((row) => row.day === TODAY)).toHaveLength(1);
+    expect(all.streak.current).toBe(2);
+
+    const peerOnly = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'device-b', snapshot), {
+      days: 'all',
+      modelDays: 'all',
+    });
+    expect(peerOnly.totals.today).toEqual(actual(3));
+    expect(peerOnly.totals.todayTokens).toBe(100);
+
+    const unknown = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'device-x', snapshot));
+    expect(unknown.days).toEqual([]);
+
+    expect(usageHistoryDepsForScope(base, 'local', snapshot)).toBe(base);
+  });
+
+  it('counts a peer that is already on tomorrow into the controller today', async () => {
+    const tomorrow = shiftDayKey(TODAY, 1);
+    const ahead = {
+      sessionRows: [],
+      tasks: [],
+      spendDays: [{ day: tomorrow, monies: [actual(4)] }],
+      modelRows: [modelRow(tomorrow, 'codex', 'gpt-5.5', actual(0), { inputTokens: 70 })],
+    };
+    expect(clampPeerRowsToToday(ahead, TODAY).modelRows[0].day).toBe(TODAY);
+
+    const base = makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: [actual(2)] }],
+      getModelUsageSince: async () => [
+        modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: 30 }),
+      ],
+    });
+    const snapshot = { peerRows: new Map([['device-b', ahead]]) };
+    const all = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'all', snapshot), {
+      days: 'all',
+      modelDays: 'all',
+    });
+    expect(all.totals.today).toEqual(actual(6));
+    expect(all.totals.todayTokens).toBe(100);
+    expect(all.days.map((d) => d.day)).toEqual([TODAY]);
+
+    const peerOnly = await readUsageHistoryWith(
+      usageHistoryDepsForScope(base, 'device-b', snapshot),
+      { days: 'all', modelDays: 'all' },
+    );
+    expect(peerOnly.totals.todayTokens).toBe(70);
+  });
+
+  it('round-trips a peer through the device-rows wire format into the all-devices payload', async () => {
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [actual(2)] }]);
+    const response = await readUsageDeviceRows(
+      {
+        getAllSpendDays: async () => peerRows.spendDays,
+        getModelUsageSince: async () => peerRows.modelRows,
+        getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+        remoteVisibleTaskIds: async (ids) => new Set(ids),
+todayKey: () => TODAY,
+      },
+      { sinceDay: null },
+    );
+    let resolveInvoke!: () => void;
+    const invokeGate = new Promise<void>((resolve) => {
+      resolveInvoke = resolve;
+    });
+    const deps: PeerUsageSyncDeps = {
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-a', name: 'Studio', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: true,
+          },
+          {
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: '0.1.94', lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+          },
+        ],
+      }),
+      invoke: async () => {
+        await invokeGate;
+        return { ok: true, result: response };
+      },
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => Date.now(),
+    };
+    configurePeerUsageSync(deps);
+
+    const first = await readUsageHistory({ days: 'all', modelDays: 'all', device: 'all' });
+    expect(first.stale).toBe(true);
+    expect(first.devicesSyncing).toBe(true);
+    expect(first.totals.today).toEqual(actual(2));
+
+    resolveInvoke();
+    await vi.waitFor(async () => {
+      const next = await readUsageHistory({ days: 'all', modelDays: 'all', device: 'all' });
+      expect(next.stale).toBe(false);
+      expect(next.totals.today).toEqual(actual(5));
+      expect(next.devices?.map((device) => [device.name, device.isSelf, device.status])).toEqual([
+        ['Studio', true, 'ok'],
+        ['Laptop', false, 'ok'],
+      ]);
+    });
+
+    // 本机范围不受跨设备数据影响, 也不带设备列表。
+    const local = await readUsageHistory({ days: 'all', modelDays: 'all' });
+    expect(local.totals.today).toEqual(actual(2));
+    expect(local.devices).toBeUndefined();
+  });
+
+  it('does not mark an aggregate fresh when the peer sync finished while it was being computed', async () => {
+    const response = await readUsageDeviceRows(
+      {
+        getAllSpendDays: async () => peerRows.spendDays,
+        getModelUsageSince: async () => peerRows.modelRows,
+        getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+        remoteVisibleTaskIds: async (ids) => new Set(ids),
+todayKey: () => TODAY,
+      },
+      { sinceDay: null },
+    );
+    let releaseInvoke!: () => void;
+    const invokeGate = new Promise<void>((resolve) => {
+      releaseInvoke = resolve;
+    });
+    let releaseLocal!: () => void;
+    const localGate = new Promise<void>((resolve) => {
+      releaseLocal = resolve;
+    });
+    let localReads = 0;
+    vi.mocked(getAllSpendDays).mockImplementation(async () => {
+      localReads += 1;
+      if (localReads === 1) await localGate;
+      return [{ day: TODAY, monies: [actual(2)] }];
+    });
+    configurePeerUsageSync({
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: '0.1.94', lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+          },
+        ],
+      }),
+      invoke: async () => {
+        await invokeGate;
+        return { ok: true, result: response };
+      },
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => Date.now(),
+    });
+
+    const opts = { days: 'all' as const, modelDays: 'all' as const, device: 'all' };
+    const first = readUsageHistory(opts);
+    // 聚合已拿到旧快照并卡在读本机日账时, 让跨设备同步完成。
+    await vi.waitFor(() => expect(localReads).toBe(1));
+    releaseInvoke();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseLocal();
+    const settled = await first;
+    expect(settled.stale).toBe(true);
+    expect(settled.totals.today).toEqual(actual(2));
+
+    await vi.waitFor(async () => {
+      const next = await readUsageHistory(opts);
+      expect(next.stale).toBe(false);
+      expect(next.totals.today).toEqual(actual(5));
+    });
+  });
+
+  it('does not re-aggregate the full history on periodic re-reads when nothing changed', async () => {
+    let now = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [actual(2)] }]);
+    configurePeerUsageSync({
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-a', name: 'Studio', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: true,
+          },
+        ],
+      }),
+      invoke: async () => ({ ok: false, error: { code: 'TIMEOUT', message: 'unused' } }),
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => now,
+    });
+    const opts = { days: 'all' as const, modelDays: 'all' as const, device: 'all' };
+    await vi.waitFor(async () => expect((await readUsageHistory(opts)).stale).toBe(false));
+    const readsAfterSettle = vi.mocked(getAllSpendDays).mock.calls.length;
+
+    // 设置页每分钟一次的定时重读:没有其它电脑、本机也没有新用量。
+    // 每次重读会触发一轮(节流的)设备同步,同步期间如实标为更新中;同步结束后结果即为最新。
+    for (let i = 0; i < 3; i += 1) {
+      now += 61_000;
+      await readUsageHistory(opts);
+      await vi.waitFor(async () => expect((await readUsageHistory(opts)).stale).toBe(false));
+    }
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBe(readsAfterSettle);
+
+    // 本机有新用量时照常经 forceRefresh 重聚合。
+    now += 1_000;
+    await readUsageHistory({ ...opts, forceRefresh: true });
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBeGreaterThan(readsAfterSettle);
+  });
+
+  it('refreshes peer sync time without re-aggregating until peer rows actually change', async () => {
+    let now = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [actual(2)] }]);
+    let peerTokens = 10;
+    configurePeerUsageSync({
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: '0.1.94', lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+          },
+        ],
+      }),
+      invoke: async () => ({
+        ok: true,
+        result: await readUsageDeviceRows(
+          {
+            getAllSpendDays: async () => [],
+            getModelUsageSince: async () => [
+              modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: peerTokens }),
+            ],
+            getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+            remoteVisibleTaskIds: async (ids) => new Set(ids),
+todayKey: () => TODAY,
+          },
+          { sinceDay: null },
+        ),
+      }),
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => now,
+    });
+    const opts = { days: 'all' as const, modelDays: 'all' as const, device: 'all' };
+    const settled = async () => {
+      let last!: Awaited<ReturnType<typeof readUsageHistory>>;
+      await vi.waitFor(async () => {
+        last = await readUsageHistory(opts);
+        expect(last.stale).toBe(false);
+      });
+      return last;
+    };
+    const first = await settled();
+    expect(first.totals.todayTokens).toBe(10);
+    const aggregations = vi.mocked(getAllSpendDays).mock.calls.length;
+    const firstSyncedAt = first.devices?.find((d) => d.deviceId === 'device-b')?.syncedAt;
+
+    // 60 秒后的定时重读:对方成功同步但行没变 —— 同步时间更新,不重聚合全量历史。
+    now += 61_000;
+    await readUsageHistory(opts);
+    const second = await settled();
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBe(aggregations);
+    expect(second.devices?.find((d) => d.deviceId === 'device-b')?.syncedAt).toBeGreaterThan(
+      firstSyncedAt ?? 0,
+    );
+
+    // 对方有新用量:行变化 → 重聚合一次。
+    peerTokens = 25;
+    now += 61_000;
+    await readUsageHistory(opts);
+    const third = await settled();
+    expect(third.totals.todayTokens).toBe(25);
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBeGreaterThan(aggregations);
   });
 });

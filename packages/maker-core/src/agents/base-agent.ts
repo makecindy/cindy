@@ -2106,6 +2106,11 @@ export interface BackgroundTaskSnapshot {
    * Omitted snapshots default to claude-code.
    */
   provider?: 'pi' | 'claude-code';
+  /**
+   * SDK 为该任务写入的输出文件(task_started 的 output_file)。主进程据此按
+   * (会话, 任务) 读取后台命令的最近输出,调用方不能自带路径。
+   */
+  outputFile?: string;
 }
 
 /**

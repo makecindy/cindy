@@ -103,14 +103,14 @@ describe('theme tokens', () => {
     // 契约第二次改写依据:用户红色新规 2026-07-17——常规按钮不用红,红只留警告/报错。
     // 取代 U3+U8 时期的全态红契约(M2 的 cta=#DF0C27 L=D 红底白字作废),CTA 回归中性反相。
     // 这是显式契约改写,非绕过;PR 描述须写明依据。
-    expect(lightColors.cta).toBe('#3C3F43');
-    expect(darkColors.cta).toBe('#EEEEEE');
-    expect(lightColors.ctaText).toBe('#FCFCFC');
-    expect(darkColors.ctaText).toBe('#252222');
+    expect(lightColors.cta).toBe('#1A1A1A');
+    expect(darkColors.cta).toBe('#EDEDED');
+    expect(lightColors.ctaText).toBe('#FFFFFF');
+    expect(darkColors.ctaText).toBe('#121212');
     // 亮暗反相回归:dark cta ≠ light cta(深底 ↔ 浅底)。
     expect(darkColors.cta).not.toBe(lightColors.cta);
     expect(darkColors.ctaText).not.toBe(lightColors.ctaText);
-    // 中性反相对比度:light 10.32:1 / dark 13.60:1,过 AA 普通文本门槛 4.5:1。
+    // 中性反相对比度:light 17.40:1 / dark 16.00:1(2026-09-26 移动端象牙白色板),过 AA 4.5:1。
     expect(contrastRatio(lightColors.ctaText, lightColors.cta)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(darkColors.ctaText, darkColors.cta)).toBeGreaterThanOrEqual(4.5);
   });
@@ -120,27 +120,27 @@ describe('theme tokens', () => {
     // 底);桌面端另走 GitHub 淡底 + 圆角,两端刻意不同,不要在这里做跨端一致性断言。
     // 它承载 id / 路径 / 字段名 —— 正文流里的实义内容,所以 4.5:1 是硬线,不能为了
     // "更像 code"继续压。
-    // 实测 light 4.56:1 / dark 5.81:1;对正文 Δ1.98 / Δ1.70(压暗肉眼可辨)。
-    expect(lightColors.chatInlineCodeText).toBe('#686B72');
-    expect(darkColors.chatInlineCodeText).toBe('#A3A3A3');
+    // 实测 light 5.31:1 / dark 6.58:1(2026-09-26 取 textTertiary),明显比正文浅。
+    expect(lightColors.chatInlineCodeText).toBe('#686864');
+    expect(darkColors.chatInlineCodeText).toBe('#999999');
     for (const palette of [lightColors, darkColors]) {
       const dim = contrastRatio(palette.chatInlineCodeText, palette.surface);
       expect(dim).toBeGreaterThanOrEqual(4.5);
       // 方向:比正文更靠近底色 —— 是压暗,不是加重。
       expect(dim).toBeLessThan(contrastRatio(palette.textPrimary, palette.surface));
-      // 刻意不复用 textSecondary(2.80:1 / 2.92:1,掉 AA)—— 钉住这个区别,
+      // 刻意不复用 textSecondary(离正文太近,标识符看不出压暗)—— 钉住这个区别,
       // 防止将来有人"顺手"把两者合并。
       expect(palette.chatInlineCodeText).not.toBe(palette.textSecondary);
     }
   });
 
   it('毛玻璃 token 契约(R1 audit 模式1/3,E4M 新增 surfaceTranslucentSidebar / surfaceGlassPanel)', () => {
-    // R1 audit:@2x 稿折半;模式1 侧栏 blur≈50 dark #120F0F@0.85 / light #F6F6F6@0.90;
-    // 模式3 浮层卡 light #F8F8F8 / dark #3B3B3B@0.95。surface 不叠 blur 规避 Android 热路径。
-    expect(lightColors.surfaceTranslucentSidebar).toBe('rgba(246, 246, 246, 0.90)');
-    expect(darkColors.surfaceTranslucentSidebar).toBe('rgba(18, 15, 15, 0.85)');
-    expect(lightColors.surfaceGlassPanel).toBe('#F8F8F8');
-    expect(darkColors.surfaceGlassPanel).toBe('rgba(59, 59, 59, 0.95)');
+    // R1 audit 的透明度结构保留(侧栏 light 0.90 / dark 0.85,浮层卡 dark 0.95);底色随
+    // 2026-09-26 移动端象牙白色板更新。surface 不叠 blur 规避 Android 热路径。
+    expect(lightColors.surfaceTranslucentSidebar).toBe('rgba(255, 255, 252, 0.90)');
+    expect(darkColors.surfaceTranslucentSidebar).toBe('rgba(10, 10, 10, 0.85)');
+    expect(lightColors.surfaceGlassPanel).toBe('#FFFFFC');
+    expect(darkColors.surfaceGlassPanel).toBe('rgba(36, 36, 36, 0.95)');
     // 遮罩双模式恒深(用户定稿 2026-07-21):LIGHT 模式 scrim 也必须深色。
     // light overlay 0.24 太浅近白、0.50 实机过重,用户两轮定稿 0.35;侧栏底色另有
     // surfaceTranslucentSidebar,不受影响。
@@ -148,36 +148,63 @@ describe('theme tokens', () => {
     expect(darkColors.overlay).toBe('rgba(0, 0, 0, 0.45)');
   });
 
+  it('文字层级:正文 → 二级 → 三级由深到浅,在所在底色上都 ≥ 4.5:1(2026-09-26 移动端色板)', () => {
+    // 取代 U2 时期二级文字比三级更浅(且只有 2.8 / 2.9:1)的颠倒排序。
+    for (const palette of [lightColors, darkColors]) {
+      const planes = [palette.surface, palette.surfaceElevated, palette.surfaceChip, palette.chatCodeSurface];
+      const tiers = [palette.textPrimary, palette.textSecondary, palette.textTertiary];
+      for (const plane of planes) {
+        const ratios = tiers.map((tier) => contrastRatio(tier, plane));
+        for (const ratio of ratios) expect(ratio).toBeGreaterThanOrEqual(4.5);
+        expect(ratios[0]).toBeGreaterThan(ratios[1]);
+        expect(ratios[1]).toBeGreaterThan(ratios[2]);
+      }
+    }
+  });
+
+  it('跟随关系:文档声明「跟随」的 token 与被跟随者同值,吸顶层是页面色加透明度', () => {
+    const rgbOf = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ');
+    for (const palette of [lightColors, darkColors]) {
+      expect(palette.errorText).toBe(palette.textPrimary);
+      expect(palette.errorBorder).toBe(palette.borderStrong);
+      expect(palette.chatInlineCodeText).toBe(palette.textTertiary);
+      // 改页面色时这两层必须一起改,否则吸顶栏与页面出现色差。
+      for (const layer of [palette.surfaceTranslucent, palette.chatHeaderSurface]) {
+        expect(layer.startsWith(`rgba(${rgbOf(palette.surface)}, `)).toBe(true);
+      }
+    }
+  });
+
   it('M1 mobile 专用 token 契约: list / chat / sheet / caret 双模式精确值', () => {
-    expect(lightColors.surfaceListRow).toBe('#F6F6F6');
-    expect(darkColors.surfaceListRow).toBe('#312F2F');
-    expect(lightColors.surfaceListExpanded).toBe('#EAEAEA');
-    expect(darkColors.surfaceListExpanded).toBe('#2A2828');
+    expect(lightColors.surfaceListRow).toBe('#FFFFFC');
+    expect(darkColors.surfaceListRow).toBe('#1E1E1E');
+    expect(lightColors.surfaceListExpanded).toBe('#EAEAE6');
+    expect(darkColors.surfaceListExpanded).toBe('#121212');
     expect(lightColors.activeGlyph).toBe('#DF0C27');
     expect(darkColors.activeGlyph).toBe('#A61629');
     expect(lightColors.homeListFabBorder).toBe('transparent');
     expect(darkColors.homeListFabBorder).toBe('#FFFFFF');
-    expect(lightColors.chatHeaderSurface).toBe('rgba(246, 246, 246, 0.90)');
-    expect(darkColors.chatHeaderSurface).toBe('rgba(37, 35, 35, 0.80)');
-    expect(lightColors.chatHeaderDivider).toBe('#DCDFE3');
-    expect(darkColors.chatHeaderDivider).toBe('rgba(255, 255, 255, 0.05)');
-    expect(lightColors.chatCodeSurface).toBe('#F8F8F8');
-    expect(darkColors.chatCodeSurface).toBe('#353333');
-    expect(lightColors.chatCodeBorder).toBe('#DCDFE3');
-    expect(darkColors.chatCodeBorder).toBe('#3C3C3C');
+    expect(lightColors.chatHeaderSurface).toBe('rgba(249, 249, 246, 0.90)');
+    expect(darkColors.chatHeaderSurface).toBe('rgba(18, 18, 18, 0.80)');
+    expect(lightColors.chatHeaderDivider).toBe('#CCCCC8');
+    expect(darkColors.chatHeaderDivider).toBe('rgba(255, 255, 255, 0.08)');
+    expect(lightColors.chatCodeSurface).toBe('#F1F1EC');
+    expect(darkColors.chatCodeSurface).toBe('#1A1A1A');
+    expect(lightColors.chatCodeBorder).toBe('#CCCCC8');
+    expect(darkColors.chatCodeBorder).toBe('#383838');
     // 二次改稿 2026-07-18 晚:撤红改蓝,对齐 Mac caret-accent。
     expect(lightColors.inputCaret).toBe('#417CDD');
     expect(darkColors.inputCaret).toBe('#417CDD');
-    expect(lightColors.sheetSurface).toBe('rgba(248, 248, 248, 0.95)');
-    expect(darkColors.sheetSurface).toBe('rgba(59, 59, 59, 0.95)');
-    expect(lightColors.sheetActionSurface).toBe('#F6F6F6');
-    expect(darkColors.sheetActionSurface).toBe('rgba(59, 59, 59, 0.5)');
-    expect(lightColors.sheetActionBorder).toBe('#DCDFE3');
-    expect(darkColors.sheetActionBorder).toBe('#505050');
-    expect(lightColors.sheetActionText).toBe('#3C3F43');
-    expect(darkColors.sheetActionText).toBe('#C1C1C1');
-    expect(lightColors.sheetGrabber).toBe('#DCDFE3');
-    expect(darkColors.sheetGrabber).toBe('#6F6F6F');
+    expect(lightColors.sheetSurface).toBe('rgba(249, 249, 246, 0.96)');
+    expect(darkColors.sheetSurface).toBe('rgba(28, 28, 28, 0.96)');
+    expect(lightColors.sheetActionSurface).toBe('#FFFFFC');
+    expect(darkColors.sheetActionSurface).toBe('#262626');
+    expect(lightColors.sheetActionBorder).toBe('#CCCCC8');
+    expect(darkColors.sheetActionBorder).toBe('#383838');
+    expect(lightColors.sheetActionText).toBe('#1A1A1A');
+    expect(darkColors.sheetActionText).toBe('#EDEDED');
+    expect(lightColors.sheetGrabber).toBe('#C2C2BE');
+    expect(darkColors.sheetGrabber).toBe('#5C5C5C');
     // 破坏性红继续走 Mac red-audit-spec / token-decision-table 的 destructive 语义,不采用 Figma #DF0C27。
     expect(lightColors.destructive).toBe('#f43d3f');
     expect(darkColors.destructive).toBe('#f43d3f');

@@ -116,6 +116,13 @@ export const MAKER_INVOKE = {
    * 读不到 / 解析失败一律返回 null,renderer 据此回退到 workflow 级卡片。
    */
   GET_WORKFLOW_PROGRESS: 'maker:get-workflow-progress',
+  /**
+   * 读取后台命令(local_bash 任务)输出文件的末尾一段 + mtime,供任务卡展开区显示
+   * 「最近输出」,让用户确认任务仍在推进。只读;入参 (sessionId, taskId),输出路径由主进程
+   * 从该会话仍在运行的后台任务登记中取,调用方不能传路径。任务已终态 / SSH 远程工作区
+   * 会话返回 unavailable。
+   */
+  READ_BACKGROUND_TASK_OUTPUT_TAIL: 'maker:background-task:output-tail',
   GET_CAPABILITIES: 'maker:get-capabilities',
   /**
    * device-link 远程草稿镜像:控制端为被控设备新建项目草稿时,经隧道读被控端**当前
@@ -344,6 +351,9 @@ export const MAKER_INVOKE = {
   USAGE_REFERENCE_MODEL_PRICING: 'maker:usage:reference-model-pricing',
   // 用量历史聚合 (daily_spend + daily_model_usage, main 侧算好 streak/异常/估算) — 首页仪表盘用
   USAGE_HISTORY: 'maker:usage:history',
+  // 本机原始用量行 (daily_spend + daily_model_usage) — 仅供同账号其它电脑经 device-link
+  // 拉取后合并进它们的用量历史; 本机 renderer 不调用。wire 契约见 usage/usageDeviceRows.ts
+  USAGE_DEVICE_ROWS: 'maker:usage:device-rows',
   // Memory 控制 — 走 Maker.{getAgentMemoryStatus/setAgentMemory/resetAgentMemory},
   // 各 agent 子类落地 (Claude 改 SDK Settings.autoMemoryEnabled, Codex 调 app-server
   // experimentalFeature/enablement/set + memory/reset RPC)。

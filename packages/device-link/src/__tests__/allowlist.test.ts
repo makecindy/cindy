@@ -125,6 +125,10 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-workflow-progress')).toBe(true);
   });
 
+  it('放行后台命令输出尾部只读(.output 文件真相在被控端,控制端本机读必落空)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:background-task:output-tail')).toBe(true);
+  });
+
   it('放行会话后台任务快照只读(任务真身在被控端,后台任务面板挂载水合用)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:list')).toBe(true);
   });
@@ -166,6 +170,12 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
 
   it('放行模型单价表只读(控制端模型选择器展示被控端视角单价)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:model-pricing')).toBe(true);
+  });
+
+  it('放行用量历史跨设备合并的原始用量行只读读取', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:device-rows')).toBe(true);
+    // 本机聚合入口仍只对受信 renderer 开放, 不经隧道暴露。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:history')).toBe(false);
   });
 
   it('放行 Codex 官方额度读取与 desktop 绑定的人工 reset offer', () => {

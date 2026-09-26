@@ -1,5 +1,6 @@
 import interfaceModels from '../catalog/provider-interface-models.json';
 import raw from '../catalog/providers.json';
+import { expandPresetModels } from './presetModels.js';
 import { compatibilityProtocol } from '@cindy/model-compat/protocol';
 import type { AgentKind, ProviderPreset, ProviderRuntimeModelConfig, ProviderWireProtocol } from './types.js';
 
@@ -13,7 +14,7 @@ const maintained = new Set([
   'zhipu-coding-plan-cn', 'zai-coding-plan-global', 'xiaomi-mimo-api-cn', 'xiaomi-mimo-token-plan-cn',
   'volcengine-agent-plan', 'volcengine-coding-plan', 'tencentcloud-coding-plan',
 ]);
-const presets = raw.presets as ProviderPreset[];
+const presets = (raw.presets as ProviderPreset[]).map(expandPresetModels);
 type Route = { baseUrl: string; api: 'anthropic-messages' | 'openai-responses' | 'openai-completions'; inputs: string[] };
 const overrides: Record<string, Partial<Record<AgentKind, Route>>> = {
   baseten: { 'claude-code': { baseUrl: 'https://inference.baseten.co', api: 'anthropic-messages', inputs: ['https://inference.baseten.co/v1'] } },

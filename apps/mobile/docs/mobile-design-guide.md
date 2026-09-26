@@ -1,8 +1,8 @@
 # Cindy 手机版设计指南
 
 > 状态:权威设计规范。新增 / 修改任何 UI 前先读本文。
-> 定位:这是 `docs/design-rules/cindy-design-system.md` 的**轻量移动版**——同一套 Ollama 视觉语言,但不照搬桌面的 351-token ColorRegistry 重型架构。手机端用一套 light/dark 双色板 + 收敛阶梯 + RN 主题 hook。
-> 色值与桌面 Ollama Light / Dark **保持一致**,保证跨端观感统一。
+> 定位:这是 `docs/design-rules/cindy-design-system.md` 的**轻量移动版**——共享 Cindy 品牌与业务语义,但不照搬桌面的 ColorRegistry 重型架构。手机端用一套 light/dark 双色板 + 收敛阶梯 + RN 主题 hook。
+> 色值由移动端**独立决定**(2026-09-26 起为「象牙白」色板,见 `DESIGN.md §15.13`):语义与桌面一一对应,具体色阶、对比度与暖度不与桌面同步。
 
 ---
 
@@ -25,33 +25,39 @@
 
 源:`src/theme/tokens.ts`(`lightColors` / `darkColors` / `palettes`)。
 
+浅色为象牙白(页面、卡片、描边带一点暖,正文中性),深色为纯中性近黑(2026-09-26 用户定稿)。下表是常用的底色 / 文字 / 描边;完整清单以 `tokens.ts` 为准,移动端专用层见 `DESIGN.md §15.13`。
+
 | token | light | dark | 用途 |
 |---|---|---|---|
-| `surface` | `#f8f8f6` | `#1f1f1e` | 页面背景 |
-| `surfaceElevated` | `#ffffff` | `#2c2c2a` | 抬一层:Card / 弹窗 / 输入框 |
-| `surfaceTranslucent` | rgba(248,248,246,.78) | rgba(31,31,30,.78) | 吸顶栏半透明 |
-| `surfaceChip` | `#e5e5e5` | `#3c3c3a` | chip / pill / 选中行填充 |
-| `border` | `#d7d7d4` | `#3c3c3a` | 1px 分隔线 / 边框(桌面 Board) |
-| `borderTranslucent` | rgba(215,215,212,.62) | rgba(60,60,58,.62) | 半透明边框 |
-| `borderStrong` | `#a3a3a3` | `#525252` | 强调边框 / 次要图标点 |
-| `textPrimary` | `#262626` | `#d4d4d4` | 主标题 / 主正文 |
-| `textSecondary` | `#525252` | `#a3a3a3` | 次要文字 / 图标 |
-| `textTertiary` | `#737373` | `#737373` | 三级文字 / placeholder / metadata |
-| `cta` | `#1f1f1f` | `#ffffff` | 主操作填充(**dark 反相为白 pill**) |
-| `ctaText` | `#fbfbfa` | `#1f1f1e` | CTA 上的文字 |
-| `homeListFab` | `#262626` | `#ECEDEF` | 素雅新建对话 FAB:dark 用柔白而非纯白 cta,避免主入口在深底上过跳 |
-| `statusReady` | `#00D9C5` | `#00D9C5` | 就绪 / 在线点(品牌 teal,**语义不变**) |
-| `statusAccent` | `#ff6600` | `#ff6600` | 运行 / thinking + 完全访问权限(Heart Orange,**语义不变**) |
+| `surface` | `#F9F9F6` | `#121212` | 页面背景 |
+| `surfaceElevated` | `#FFFFFC` | `#1E1E1E` | 抬一层:Card / 弹窗 / 输入框 |
+| `surfaceListRow` | `#FFFFFC` | `#1E1E1E` | 列表行 |
+| `surfaceTranslucent` | rgba(249,249,246,.78) | rgba(18,18,18,.78) | 吸顶栏半透明 |
+| `surfaceChip` | `#EAEAE6` | `#2A2A2A` | chip / pill / 选中行填充 |
+| `border` | `#CCCCC8` | `#383838` | 1px 分隔线 / 边框 |
+| `borderTranslucent` | rgba(204,204,200,.62) | rgba(56,56,56,.62) | 半透明边框 |
+| `borderStrong` | `#858581` | `#8A8A8A` | 强调边框 / 次要图标点(≥ 3:1) |
+| `textPrimary` | `#1A1A1A` | `#EDEDED` | 主标题 / 主正文 |
+| `textSecondary` | `#4D4D4A` | `#BDBDBD` | 次要文字 / 多数图标 |
+| `textTertiary` | `#686864` | `#999999` | 三级文字 / placeholder / 时间等 metadata |
+| `cta` | `#1A1A1A` | `#EDEDED` | 主操作填充(**dark 反相为近白**) |
+| `ctaText` | `#FFFFFF` | `#121212` | CTA 上的文字 |
+| `homeListFab` | `#1A1A1A` | `#E6E6E6` | 素雅新建对话 FAB:dark 比 cta 略收,避免主入口在深底上过跳 |
+| `statusReady` | `#19D2C1` | `#19D2C1` | 就绪 / 在线点(品牌 teal,**语义不变**) |
+| `statusAccent` | `#EA6B17` | `#EA6B17` | 运行 / thinking + 完全访问权限(Heart Orange,**语义不变**) |
 | `betaChannelBadgeBackground` | `#DF0C27` | `#DF0C27` | Beta 渠道开关已打开时,当前版本旁的状态徽标底色 |
 | `betaChannelBadgeForeground` | `#FFFFFF` | `#FFFFFF` | Beta 渠道状态徽标文字,与底色对比度 4.98:1 |
-| `permAutoAccent` | `#000050` | `#00D9C5` | 自动审批权限模式强调(对齐桌面 `--perm-auto-selected-text`) |
-| `errorText` | `#262626` | `#d4d4d4` | 错误文字(跟随 textPrimary) |
-| `errorBorder` | `#a3a3a3` | `#525252` | 错误边框(跟随 borderStrong) |
-| `overlay` | rgba(38,38,38,.24) | rgba(0,0,0,.45) | modal / lightbox 背板 |
+| `permAutoAccent` | `#417CDD` | `#417CDD` | 自动审批权限模式强调 |
+| `errorText` | `#1A1A1A` | `#EDEDED` | 错误说明文字(跟随 textPrimary) |
+| `errorBorder` | `#858581` | `#8A8A8A` | 错误边框(跟随 borderStrong) |
+| `overlay` | rgba(38,38,38,.35) | rgba(0,0,0,.45) | modal / lightbox 背板 |
 
 **规则:**
 - **语义不变色**(`statusReady` / `statusAccent` / `betaChannelBadgeBackground` / `betaChannelBadgeForeground`)跨 light / dark 一致——它们是状态语义,不随主题漂移。Beta 红色只用于设置页当前版本旁的渠道徽标,不得扩展为装饰色、错误色或 CTA。
-- **CTA 在 dark 反相为白**:`cta` 白底 + `ctaText` 深字。注意别让白 pill 看起来像 disabled——新增主操作 / 选中态后在 dark 下目检。
+- **浅色卡片主要靠描边分层**:页面提亮到 `#F9F9F6` 后,近白卡片相对页面只剩 1.05 的色差(桌面 1.12)。新增浮起面(卡片 / 列表行 / 浮层 / 输入容器)**必须带 1px `border`**,不要只靠 `surfaceElevated` 的填充色差;需要“沉下去”的块(选中底、展开块、代码卡)用比页面更暗的档。
+- **文字三档由深到浅**:正文 → 二级 → 三级,在所在底色上都 ≥ 4.5:1(`themeTokens.test.ts` 守护)。新增文字不要拿 `textTertiary` 当“更弱的二级”以外的用途,也不要为了“更淡”自行调低透明度。
+- **CTA 在 dark 反相为近白**:`cta` 近白底 + `ctaText` 深字。注意别让近白 pill 看起来像 disabled——新增主操作 / 选中态后在 dark 下目检。
+- **显示模式由用户设置**:设置 → 外观 → 显示模式(跟随系统 / 浅色 / 深色,默认跟随系统)。组件只读 `useTheme()`,不要自己调 `useColorScheme()`。
 - **Home 对话列表用 base token**:列表背景 / 分隔 / 文字使用 `surface` / `border` / `text*`,菜单选中用 `surfaceChip`,不另起暗色调色板;菜单 / FAB 只用 1px `border` 分层、零阴影,保持桌面「单一 flat Surface + 1px Board」哲学。
 - 不要在组件里硬编码 hex / rgba;找不到合适 token 时跟维护者确认是否新增,而不是写死。
 
@@ -224,4 +230,4 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 
 ---
 
-**交叉引用**:桌面 `docs/design-rules/cindy-design-system.md` §2(颜色)/ §3(排版)/ §10(token 架构)。本文是其轻量移动版,色值跟随桌面 Ollama Light / Dark。
+**交叉引用**:桌面 `docs/design-rules/cindy-design-system.md` §2(颜色)/ §3(排版)/ §10(token 架构)。本文是其轻量移动版;色值由移动端独立决定,规则见 `DESIGN.md §15.13`。

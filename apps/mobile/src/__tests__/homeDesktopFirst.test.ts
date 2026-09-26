@@ -343,7 +343,7 @@ describe('mobile home desktop-first surface', () => {
 
     // E5M 状态色设计定稿(2026-07-17):teal 族 #00D9C5 → #19D2C1,statusReady 随 awaiting 同步。
     expect(tokenSource).toContain("statusReady: '#19D2C1'");
-    expect(tokenSource).toContain("homeListFab: '#ECEDEF'");
+    expect(tokenSource).toContain("homeListFab: '#E6E6E6'");
     expect(tokenSource).not.toContain(`${removedListTokenPrefix}Background`);
     expect(tokenSource).not.toContain(`${removedListTokenPrefix}Divider`);
     expect(primitivesSource).toContain('tone === \'ready\' && styles.statusDotReady');

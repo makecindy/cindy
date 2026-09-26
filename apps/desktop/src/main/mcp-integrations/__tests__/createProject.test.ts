@@ -198,20 +198,27 @@ describe('createProject', () => {
   });
 
   it.each(['source', 'link'])(
-    'rejects Bot %s callers before any project callback',
+    'lets Bot %s callers manage account projects',
     async (signal) => {
-      h.query.mockResolvedValue([{ id: 'caller', source: signal === 'source' ? 'bot' : null }]);
+      h.query.mockResolvedValue([
+        { id: 'caller', remoteHostId: null, source: signal === 'source' ? 'bot' : null },
+      ]);
       h.botLinks.mockResolvedValue(signal === 'link' ? [{ botId: 'bot' }] : []);
-      for (const operation of [
-        () => run(directory),
-        () =>
-          listProjects({ callerSessionId: 'caller', includeHidden: true, offset: 0, limit: 100 }),
-        () => renameProject({ callerSessionId: 'caller', workingDir: directory, name: 'changed' }),
-        () => removeProject({ callerSessionId: 'caller', workingDir: directory }),
-      ])
-        expect(await operation()).toMatchObject({ errorCode: 'UNSUPPORTED_CAPABILITY' });
-      for (const effect of [h.upsert, h.restore, h.list, h.aliases, h.rename, h.visibility, h.send])
-        expect(effect).not.toHaveBeenCalled();
+      expect(await run(directory)).toMatchObject({ ok: true });
+      expect(
+        await listProjects({ callerSessionId: 'caller', includeHidden: true, offset: 0, limit: 100 }),
+      ).toMatchObject({ ok: true });
+      expect(
+        await renameProject({ callerSessionId: 'caller', workingDir: directory, name: 'changed' }),
+      ).toMatchObject({ ok: true });
+      expect(await removeProject({ callerSessionId: 'caller', workingDir: directory })).toMatchObject({
+        ok: true,
+        removed: true,
+      });
+      expect(h.upsert).toHaveBeenCalled();
+      expect(h.list).toHaveBeenCalled();
+      expect(h.rename).toHaveBeenCalled();
+      expect(h.visibility).toHaveBeenCalled();
     },
   );
 
