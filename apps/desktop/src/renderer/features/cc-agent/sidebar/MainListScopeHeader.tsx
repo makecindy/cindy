@@ -51,7 +51,10 @@ export function MainListScopeHeader({
   return (
     <div className="group/sidebar-header flex h-6 items-center justify-between pr-0 pl-6">
       <div className="flex min-w-0 items-center gap-1">
-        <MachineSwitcherMenu onOpenDisplaySettings={() => setDisplaySettingsOpen(true)} />
+        <MachineSwitcherMenu
+          filter={filter}
+          onOpenDisplaySettings={() => setDisplaySettingsOpen(true)}
+        />
       </div>
       <div className="flex items-center gap-0.5 -mt-px">
         <div className={HEADER_ACTIONS_CLASS}>

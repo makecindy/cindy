@@ -49,6 +49,7 @@
 import { useRef, type ReactNode } from 'react';
 import {
   Ban,
+  Archive,
   Check,
   ChevronDown,
   Loader2,
@@ -63,6 +64,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
+import type { UseSidebarFilterReturn } from '../hooks/useSidebarFilter';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -90,10 +92,12 @@ const SCOPE_TITLE_CLASS =
 
 export function MachineSwitcherMenu({
   onOpenDisplaySettings,
+  filter,
 }: {
   /** 打开段头同一份「侧边栏显示设置」菜单;不传则不渲染该入口。 */
   onOpenDisplaySettings?: () => void;
-} = {}): ReactNode {
+  filter: Pick<UseSidebarFilterReturn, 'status' | 'setStatus'>;
+}): ReactNode {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { devices, selectedDeviceId, select, toggle } = useMachineSwitcher();
@@ -130,6 +134,27 @@ export function MachineSwitcherMenu({
     toggle(id);
     ensureConversationListVisible();
   };
+
+  const statusItems = (
+    <>
+      <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+      <DropdownMenuItem
+        className={MENU_ITEM_CLASS}
+        role="menuitem"
+        aria-current={filter.status === 'archived' ? 'page' : undefined}
+        onSelect={() => {
+          filter.setStatus('archived');
+          ensureConversationListVisible();
+        }}
+      >
+        <Archive size={14} strokeWidth={2} className="shrink-0 opacity-70" />
+        <span className="truncate">{t('ccAgent.sidebar.archivedSessions')}</span>
+        {filter.status === 'archived' && (
+          <Check size={15} className="ml-auto shrink-0 text-[var(--msg-assistant-text)]" />
+        )}
+      </DropdownMenuItem>
+    </>
+  );
 
   const triggerLabel = t('ccAgent.sidebar.machineSwitcher.menuTrigger');
   const settingsItems = (
@@ -182,6 +207,9 @@ export function MachineSwitcherMenu({
       });
     }
   }
+  const archivedLabel = filter.status === 'archived'
+    ? t('ccAgent.sidebar.archivedSessions')
+    : undefined;
 
   // 点击展开(2026-08-13 定稿,推翻 2026-07-12 的 hover 展开——作为段头标题,
   // hover 扫过就弹菜单太吵)。modal={false}:侧栏是常驻面板,不锁列表滚动。
@@ -190,7 +218,7 @@ export function MachineSwitcherMenu({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`${triggerLabel}: ${triggerText}`}
+          aria-label={`${triggerLabel}: ${triggerText}${archivedLabel ? `, ${archivedLabel}` : ''}`}
           aria-busy={remoteSessionBootstrapLoading}
           className={cn(
             'flex min-w-0 items-center gap-1 focus:outline-none',
@@ -201,6 +229,12 @@ export function MachineSwitcherMenu({
           )}
         >
           <span className="truncate leading-none">{triggerText}</span>
+          {filter.status === 'archived' ? (
+            <span className="flex min-w-0 items-center gap-0.5 text-[var(--sidebar-nav-text)]">
+              <Archive size={12} strokeWidth={2} aria-hidden="true" />
+              <span className="truncate">{archivedLabel}</span>
+            </span>
+          ) : null}
           <ChevronDown size={13} strokeWidth={2} className="shrink-0" />
           {remoteSessionBootstrapLoading && (
             <span
@@ -258,6 +292,7 @@ export function MachineSwitcherMenu({
             <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
           </>
         ) : null}
+        {statusItems}
         {settingsItems}
       </DropdownMenuContent>
     </DropdownMenu>
