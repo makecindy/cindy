@@ -245,6 +245,17 @@ export interface AutoReviewRequest {
     requesterAuthority: 'owner' | 'guest' | 'unknown';
     source: 'group' | 'direct';
   };
+  /** Host-resolved plugin delegation, distinct from user-authored intent. */
+  delegatedTask?: {
+    source: 'approved-plugin';
+    pluginId: string;
+    role: 'coordinator' | 'worker';
+    task: string;
+    workingDir: string;
+    authorizationRevision: string;
+  };
+  /** A recognized delegation whose current authority could not be established. */
+  authorizationError?: string;
   action: ReviewableAction;
   /** 全部可读根；首项必须是主工作目录，供相对路径解析。 */
   workspaceRoots: string[];
@@ -255,9 +266,32 @@ export interface AutoReviewRequest {
   platform: NodeJS.Platform;
 }
 
-export type AutoReviewDelegate = (
+export type AutoReviewDelegate = ((request: AutoReviewRequest) => Promise<AutoReviewDecision | null>) & {
+  /** Re-resolve live Host authority before cache lookup and after any awaited decision. */
+  prepareRequest?: (request: AutoReviewRequest) => Promise<AutoReviewRequest>;
+};
+
+export async function withAutoReviewContext(
   request: AutoReviewRequest,
-) => Promise<AutoReviewDecision | null>;
+  delegate: AutoReviewDelegate | undefined,
+  evaluate: (prepared: AutoReviewRequest) => Promise<AutoReviewDecision>,
+): Promise<AutoReviewDecision> {
+  try {
+    const prepared = delegate?.prepareRequest ? await delegate.prepareRequest(request) : request;
+    if (prepared.authorizationError) return { verdict: 'block', reason: prepared.authorizationError };
+    const fingerprint = JSON.stringify(prepared);
+    const decision = await evaluate(prepared);
+    if (delegate?.prepareRequest) {
+      const current = await delegate.prepareRequest(request);
+      if (current.authorizationError || JSON.stringify(current) !== fingerprint) {
+        return { verdict: 'block', reason: 'Delegated authorization changed; retry against the current scope.' };
+      }
+    }
+    return decision;
+  } catch {
+    return { verdict: 'block', reason: 'Host could not verify the current delegated authorization.' };
+  }
+}
 
 /** Preserve the actual tool identity and arguments across progressive/Host approval entrypoints. */
 export function toolAutoReviewAction(
@@ -443,7 +477,9 @@ export async function resolveAutoReviewDecision(
     return { verdict: 'block', reason: oversizedEvidenceReason };
   }
   const localTier = classifyLocalAutoReviewTier(request);
-  if (localTier === 'auto-approve') return { verdict: 'allow' };
+  // The registered task can constrain reads as well as writes. No delegated
+  // action bypasses scope review merely because the workspace tier is safe.
+  if (localTier === 'auto-approve' && !request.delegatedTask) return { verdict: 'allow' };
   // Never ask the model to approve an action whose material target/text is absent.
   // It has no evidence to distinguish routine work from an unsafe side effect.
   const missingEvidenceReason = missingReviewEvidence(request.action);

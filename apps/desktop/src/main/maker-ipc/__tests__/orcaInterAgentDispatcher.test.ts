@@ -151,6 +151,8 @@ describe('Orca lead/worker dispatcher', () => {
       content: '{"orcaSource":"lead","content":"Implement feature"}',
       agentMeta: {
         origin: { kind: 'orca', senderLabel: 'Lead', displayText: 'Implement feature' },
+        autoReviewUserText: '',
+        delivery: 'turn',
       },
     });
     expect(h.liveSession.send).toHaveBeenCalledWith(

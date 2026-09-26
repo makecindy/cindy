@@ -2532,10 +2532,15 @@ export async function listMessagesForAgentHandoff(
       ELSE ${messages.createdAt} END ELSE ${messages.createdAt} END`;
   // Scheduled executions are not owner messages. Exclude them before LIMIT so
   // a long-running heartbeat cannot push its authorizing request out of history.
+  // Host-captured empty turn/steer receipts also carry no user intent (plugin/Orca messages).
   // Keep malformed/unknown rows: restoration must still invalidate ambiguous consent.
   const notScheduledExecution = sql`CASE WHEN ${messages.role} = 'user'
     AND json_valid(${messages.agentMeta}) THEN CASE
       WHEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.kind') = 'scheduled-continuation'
+      THEN 0
+      WHEN json_type(${messages.agentMeta}, '$.autoReviewUserText') = 'text'
+        AND json_extract(${messages.agentMeta}, '$.autoReviewUserText') = ''
+        AND json_extract(${messages.agentMeta}, '$.delivery') IN ('turn', 'steer')
       THEN 0 ELSE 1 END ELSE 1 END`;
   const rows = await db
     .select({

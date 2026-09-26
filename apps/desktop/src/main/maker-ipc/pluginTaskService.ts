@@ -200,7 +200,15 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       await ownTask(pluginId,taskId);
       const row = (await deps.store.get(taskId))!;
       const data = JSON.parse(row.payload);
-      if (data.teamPlan && hash(data.teamPlan) !== hash(plan)) return fail('IDEMPOTENCY_CONFLICT', 'Team plan is immutable');
+      if (data.teamPlan && hash(data.teamPlan) !== hash(plan)) {
+        // Older plans may acquire scope once, without changing their execution identity.
+        const previous = data.teamPlan as PluginTeamPlan;
+        const compatible = hash({ ...plan, task: previous.task,
+          items: plan.items.map((item, i) => ({ ...item, task: previous.items[i]?.task })) }) === hash(previous)
+          && (!previous.task || previous.task === plan.task)
+          && previous.items.every((item, i) => !item.task || item.task === plan.items[i]?.task);
+        if (!compatible) return fail('IDEMPOTENCY_CONFLICT', 'Team plan is immutable');
+      }
       deps.assertAuthorized(pluginId);
       await save(row,{...data,teamPlan:plan});
       return {ok:true};

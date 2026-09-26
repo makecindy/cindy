@@ -1,8 +1,9 @@
+import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
 import { createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
 import { createPluginTaskStore } from './pluginTaskStore.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
-import { setPluginTaskHandler, isPluginTaskAuthorized } from '../cindy-brain/index.js';
+import { setPluginTaskHandler, isPluginTaskAuthorized, pluginTaskAuthorizationRevision } from '../cindy-brain/index.js';
 import type { PluginTaskRoute } from '../../shared/pluginTasks.js';
 import { createHash as pluginTaskConfigHash } from 'node:crypto';
 import { createBotMessageTransport } from './botMessageTransport.js';
@@ -494,6 +495,7 @@ import {
   setBeforeLocalCodexSessionStartHook,
   setBotCapabilityAgentKindResolver,
   setModelContextRuntimeRefreshListener,
+  setAutoReviewContextResolver,
 } from '../maker-host/index.js';
 import {
   readMemorySettingsState,
@@ -12775,6 +12777,46 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await drainPersistQueue();
     return listMessagesForAgentHandoff(sessionId, 100, undefined, 'authorization');
   };
+  setAutoReviewContextResolver(createPluginTaskReviewResolver(async sessionId => {
+    const epoch = getCurrentDbClientSnapshot();
+    if (!epoch) throw new Error('Task storage unavailable');
+    const db = epoch.client.drizzle;
+    const store = createPluginTaskStore(epoch.client);
+    const [link] = await db.select({ label: orcaWorkers.label, leadId: orcaTeams.leadSessionId,
+      teamId: orcaTeams.id, teamStatus: orcaTeams.status }).from(orcaWorkers)
+      .innerJoin(orcaTeams, eq(orcaWorkers.teamId, orcaTeams.id))
+      .where(eq(orcaWorkers.sessionId, sessionId)).limit(1);
+    const leadId = link?.leadId ?? sessionId;
+    const receipt = await store.get(leadId);
+    if (!receipt || receipt.operation !== 'create') {
+      if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
+      return null;
+    }
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    const [lead] = await db.select().from(sessions).where(eq(sessions.id, leadId)).limit(1);
+    if (!session || !lead || !session.workingDir) throw new Error('Delegated task unavailable');
+    const agentKind = session.agentKind === 'cc' ? 'cc' : session.agentKind === 'pi' ? 'pi' : session.agentKind === 'codex' ? 'codex' : null;
+    if (!agentKind) throw new Error('Delegated task route unavailable');
+    const histories = await Promise.all([...new Set([leadId, sessionId])].map(readAutoReviewHistory));
+    if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
+    const config = readGhostErrandConfig(receipt.pluginId);
+    const data = JSON.parse(receipt.payload);
+    const approvalRevision = pluginTaskAuthorizationRevision(receipt.pluginId);
+    return {
+      pluginId: receipt.pluginId,
+      authorized: approvalRevision !== null && isPluginTaskAuthorized(receipt.pluginId) && config.permissionMode === 'auto',
+      revision: [epoch.userId, epoch.clientEpoch, approvalRevision, config.permissionMode, link],
+      plan: data.teamPlan, settledLabels: data.settledLabels,
+      session: { workingDir: session.workingDir, permissionMode: session.permissionMode, status: session.status,
+        route: { agentKind, providerId: session.providerId ?? '', model: session.model,
+          effort: session.effort, fastMode: !!session.fastMode } },
+      lead: { permissionMode: lead.permissionMode, status: lead.status },
+      ...(link ? { worker: { label: link.label ?? '', activeTeam: link.teamStatus === 'active' } } : {}),
+      history: histories.flat().filter(m => ['user','ask_user','plan_review'].includes(m.role)),
+      historyComplete: histories.every(h => h.length < 100),
+    };
+  }));
+
   const { sendToAgentAccepted: sendToAgentAcceptedUnlocked } = createMakerSendTransaction({
     prepareProductTurn: (sessionId) => {
       const dispatch = prepareUpstreamMergeTurn(sessionId);

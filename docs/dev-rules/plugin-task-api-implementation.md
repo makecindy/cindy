@@ -58,3 +58,22 @@ getTeam 的 completedAt 可由宿主落盘的 turnCompleted 终态恢复：仅�
 
 `getTeam` 增加包含创建预留的 capacity 快照（advisory；准入仍由创建事务裁决）、逐 Worker 的等待确认状态、首条输入/首条执行消息时间、最近轮结束时间，以及 Worker/Lead 分列的 session-total 用量。`host-message-window` 是可观测作答窗口，不是精确模型计算时长。无确切 USD 金额时返回 null，不把订阅估值或其他币种直接当美元。
 
+
+### 委派范围与 Auto 审阅
+
+计划的顶层 `task` 及每项 `task` 是可选的插件原始任务说明，最多 8000 字符。
+Host 只接受经绑定插件身份写入的自有创建收据；允许旧计划一次补齐缺失范围，不允许重写
+已有范围或改变执行身份。没有新增权限档位、没有提升到 Full access。
+
+审批在查询缓存前重新核对插件批准版本、启用状态、Auto 设置、账号 epoch、任务状态、
+团队归属和计划匹配；异步结果返回前再次核对。真实用户限制来自 Host 保存的作者凭据，
+不从 Orca 消息、模型声称或工具参数恢复。缺少旧作者凭据时标注历史不完整，不猜测授权。
+插件文字放在独立 `delegatedTask` 字段，不能覆盖用户限制、跨题授权或声称自己是用户。
+直接派发和排队派发均保存空的用户原话凭据；应用重启后从同一 Host 收据重建委派范围。
+
+明确带任务范围的所有动作（包括读取）均检查范围；不会仅凭工作目录安全而忽略插件的禁读条款。已登记的空作者凭据在 SQL 限量前过滤，避免频繁协调消息挤走真实用户限制；缺凭据的旧卡片保守标记历史不完整。
+
+验证入口：`pluginTaskReviewContext.test.ts`、`pluginTaskService.test.ts`、`taskSlot.test.ts`、
+`auto-review-context.test.ts`、Pi/Claude Code 审批接线回归以及 `eval-auto-approval.mts` 的
+`delegated-*` 正反对照（后者需要真实审阅模型，当前拆分 PR 未运行付费验证）。主机身份校验是确定性边界，动作与任务是否相符仍由 Auto 审阅，
+不宣称题目目录是系统沙箱。

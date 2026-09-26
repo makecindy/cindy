@@ -68,14 +68,16 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   if (kind === 'releaseWorker' && (!requires('workerId') || !Number.isSafeInteger(value.completedAt) || (value.completedAt as number) <= 0)) return false;
   if (kind === 'setTeamPlan') {
     const p = value.plan;
-    if (!object(p) || Object.keys(p).some(k => !['concurrency','items'].includes(k)) ||
+    if (!object(p) || Object.keys(p).some(k => !['concurrency','items','task'].includes(k)) ||
         (p.concurrency !== null && (!Number.isSafeInteger(p.concurrency) || (p.concurrency as number) < 1)) ||
         !Array.isArray(p.items) || !p.items.length || p.items.length > 1000) return false;
+    if (p.task !== undefined && !text(p.task, 8000)) return false;
     const labels = new Set<string>();
     for (const item of p.items) {
-      if (!object(item) || Object.keys(item).some(k => !['label','workingDir','route'].includes(k)) ||
+      if (!object(item) || Object.keys(item).some(k => !['label','workingDir','route','task'].includes(k)) ||
           !text(item.label,32) || !/^[a-z0-9][a-z0-9_-]*$/.test(String(item.label)) || labels.has(String(item.label)) || !text(item.workingDir,4096) ||
           !validPluginTaskRequest({type:'tasks-request',kind:'create',requestKey:'validate',title:'validate',route:item.route}) || !item.route) return false;
+      if (item.task !== undefined && !text(item.task, 8000)) return false;
       labels.add(String(item.label));
     }
   }

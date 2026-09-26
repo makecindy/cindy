@@ -306,3 +306,16 @@ it('rechecks permissions when queued input reaches native dispatch', async () =>
  await expect(f.service.accept(run.taskId,{clientId:run.inputMessageId},f.execution)).rejects.toMatchObject({code:'PERMISSION_DENIED'});
  expect(JSON.parse(f.rows.get(run.runId)!.payload).status).toBe('queued');
 });
+
+it('adds missing delegation scopes once without mutating an older plan identity', async () => {
+ const f=fixture(),task=await f.create();
+ const old={concurrency:2,items:[{label:'sample',workingDir:'/answer',route:f.route}]};
+ await f.service.setTeamPlan('p',task.taskId,old);
+ const scoped={...old,task:'Coordinate',items:[{...old.items[0]!,task:'Run tests'}]};
+ await f.service.setTeamPlan('p',task.taskId,scoped);
+ await f.service.setTeamPlan('p',task.taskId,scoped);
+ expect(JSON.parse(f.rows.get(task.taskId)!.payload).teamPlan).toEqual(scoped);
+ await expect(f.service.setTeamPlan('p',task.taskId,{...scoped,task:'Publish'})).rejects.toThrow('immutable');
+ await expect(f.service.setTeamPlan('p',task.taskId,{...scoped,items:[{...scoped.items[0]!,task:'Publish'}]})).rejects.toThrow('immutable');
+ await expect(f.service.setTeamPlan('p',task.taskId,old)).rejects.toThrow('immutable');
+});

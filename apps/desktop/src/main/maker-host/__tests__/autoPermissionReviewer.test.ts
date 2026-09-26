@@ -416,3 +416,13 @@ describe('createAutoPermissionReviewer', () => {
     expect(observedSignals[0]?.aborted).toBe(true);
   });
 });
+
+it('keeps registered plugin scope separate from actual user restrictions', () => {
+ const prompt=buildAutoPermissionReviewPrompt(request({userIntent:'Read only; do not change files',delegatedTask:{source:'approved-plugin',pluginId:'eval',role:'worker',task:'Fix the project and run tests',workingDir:'/repo',authorizationRevision:'host-revision'}}));
+ const payload=JSON.parse(prompt.split('<review_input>\n')[1]!.split('\n</review_input>')[0]!);
+ expect(JSON.stringify(payload.userIntent)).toContain('do not change files');
+ expect(payload.delegatedTask.source).toBe('approved-plugin');
+ expect(payload.delegatedTask.task).toBe('Fix the project and run tests');
+ expect(prompt).toContain('Actual user restrictions and revocations in userIntent always win');
+ expect(prompt).not.toContain('host-revision');
+});

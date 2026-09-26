@@ -2,6 +2,7 @@ import {
   formatAgentMessage,
   formatOrcaCommunicationMessage,
 } from '@cindy/orca-workflow';
+import { AUTO_REVIEW_SOURCE_CONTENT } from '@cindy/maker-core';
 import type { AgentKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 
 import type {
@@ -640,13 +641,14 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     () => session.send(agentMessage, {
       planMode: false,
       throwOnStartFailure: true,
+      [AUTO_REVIEW_SOURCE_CONTENT]: '',
       onAccepted: async () => {
         // maker-core 会在 vendor handle.send 前 await 此 hook；必须先落库，再运行 accepted 副作用。
         await deps.createDbMessage(session.id, {
           clientId,
           role: 'user',
           content: dbContent,
-          ...(origin ? { agentMeta: { origin } } : {}),
+          agentMeta: { ...(origin ? { origin } : {}), autoReviewUserText: '', delivery: 'turn' },
         });
         await deps.beginDirectTurnChangeSet(session.id, clientId);
         turnChangeSetStarted = true;
@@ -710,6 +712,7 @@ function buildQueuedOrcaInterAgentMessage(params: {
   return {
     clientId: params.clientId,
     text: params.agentMessageText,
+    autoReviewUserText: '',
     persistedContent: params.persistedContent,
     model: params.createOpts.model,
     effort: params.createOpts.effort ?? '',

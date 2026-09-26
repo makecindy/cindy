@@ -41,7 +41,9 @@ export interface PluginTaskRun {
 }
 export interface PluginTeamPlan {
   concurrency: number | null;
-  items: Array<{label: string; workingDir: string; route: PluginTaskRoute}>;
+  /** Plugin-authored scope, authenticated by Host registration; never user-authored intent. */
+  task?: string;
+  items: Array<{label: string; workingDir: string; route: PluginTaskRoute; task?: string}>;
 }
 export type PluginTaskRequest =
   | { type: 'tasks-request'; kind: 'capabilities' }

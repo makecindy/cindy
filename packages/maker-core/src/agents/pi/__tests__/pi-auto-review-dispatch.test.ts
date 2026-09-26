@@ -4241,6 +4241,28 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
 
+  it('re-resolves Host plugin scope before cached approvals and blocks revocation', async () => {
+    let active = true;
+    const review = Object.assign(vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'allow' as const })), {
+      prepareRequest: async (request: AutoReviewRequest): Promise<AutoReviewRequest> => active
+        ? {...request, userIntent: '', delegatedTask: {source:'approved-plugin',pluginId:'eval',role:'worker',task:'Run project tests',workingDir:cwd,authorizationRevision:'scope-1'}}
+        : {...request, authorizationError:'Plugin Auto authorization revoked'},
+    });
+    const handle = await start('auto', review);
+    try {
+      await handle.send({type:'user',content:'[From Orca Lead] run tests'}, {[AUTO_REVIEW_SOURCE_CONTENT]:''});
+      const action = {kind:'exec' as const,command:'./runtime/node lab/preflight.cjs',cwd};
+      expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({verdict:'allow'});
+      expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({verdict:'allow'});
+      expect(review).toHaveBeenCalledOnce();
+      expect(review.mock.calls[0][0].userIntent).toBe('');
+      expect(review.mock.calls[0][0].delegatedTask?.task).toBe('Run project tests');
+      active = false;
+      expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({verdict:'block'});
+      expect(review).toHaveBeenCalledOnce();
+    } finally { await handle.close(); }
+  });
+
   it('passes flat task history and actual blocked plugin actions after a natural steer, then invalidates on revocation', async () => {
     const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
     const handle = await start('auto', review);
