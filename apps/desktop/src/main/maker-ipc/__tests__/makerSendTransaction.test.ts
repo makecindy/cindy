@@ -2585,6 +2585,18 @@ describe('session-agent-switch handoff injection', () => {
     });
   });
 
+  it('persists empty plugin authorship rather than promoting plugin instructions', async () => {
+    const { deps } = createDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Plugin instructions', undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '',
+      persistUserMessage: { clientId: 'plugin-input', content: 'Plugin instructions', delivery: 'turn' },
+    });
+    expect(deps.createDbMessage).toHaveBeenCalledWith('session-1', expect.objectContaining({
+      clientId: 'plugin-input',
+      agentMeta: expect.objectContaining({ autoReviewUserText: '', delivery: 'turn' }),
+    }), undefined);
+  });
+
   it.each(['Earlier authorization; do not deploy.', ''])('preserves restored intent for wire-only recovery: %s', async (intent) => {
     const { deps, session } = createDeps();
     await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Internal continuation', undefined, {

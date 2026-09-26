@@ -11224,6 +11224,24 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     },
   );
 
+  it('preserves empty plugin authorship receipts through queue snapshots and dispatch', async () => {
+    const h = createHarness();
+    const sid = 'plugin-empty-authorship';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, { ...makeItem('plugin-input', 'Plugin task'), autoReviewUserText: '' });
+    await flush();
+    const snapshot = JSON.parse(JSON.stringify(h.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? []));
+    expect(snapshot[0]).toMatchObject({ autoReviewUserText: '' });
+    const restarted = createHarness();
+    restarted.setLoadQueueSnapshot(async () => snapshot);
+    await restarted.coordinator.ensureQueueRestored(sid);
+    expect(restarted.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]).toMatchObject({ autoReviewUserText: '' });
+    restarted.coordinator.enqueue(sid, makeItem('resume-input', 'Continue'), { resumeRestorePausedQueue: true });
+    await flush();
+    expect(restarted.sendToAgent.mock.calls[0]?.[3][AUTO_REVIEW_SOURCE_CONTENT]).toBe('');
+  });
+
   it('编辑保留主机接收时间,清空边界后的条目崩溃恢复时不会被误删', async () => {
     const h = createHarness();
     const sid = 'replace-after-clear';
