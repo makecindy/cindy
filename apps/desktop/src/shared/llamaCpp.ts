@@ -15,6 +15,11 @@ export function supportsLlamaCppMillionContext(model: Pick<LlamaCppModel, 'repo'
   return model.repo === 'bartowski/Qwen3.8-Flash-Next-GGUF';
 }
 
+/** Only the explicitly verified packaging opts into an expanded runtime window. */
+export function llamaCppMaxContextSize(model: Pick<LlamaCppModel, 'repo'>): number {
+  return supportsLlamaCppMillionContext(model) ? 1_000_000 : LLAMACPP_DEFAULT_CONTEXT;
+}
+
 /** One server is shared by all harnesses; allocate enough for every saved working budget. */
 export function llamaCppModelPreset(
   model: LlamaCppModel,
@@ -25,7 +30,7 @@ export function llamaCppModelPreset(
     .filter((value): value is number => Number.isSafeInteger(value) && value! >= 1000);
   const context = Math.max(llamaCppContextSize(model), ...requested);
   const extended = supportsLlamaCppMillionContext(model) && context > 262144;
-  if (extended && context > 1_000_000) throw new Error('INVALID_MODEL_CONTEXT');
+  if (context > llamaCppMaxContextSize(model)) throw new Error('INVALID_MODEL_CONTEXT');
   return [
     `[${model.id}]`,
     `ctx-size = ${context}`,

@@ -28,12 +28,17 @@ describe('managed local context presets', () => {
       llamaCppModelPreset(model, { 'pi:cindy-local-llamacpp:flash': 1_048_576 }),
     ).toThrow('INVALID_MODEL_CONTEXT');
   });
-  it('does not borrow Flash-Next scaling for an unrelated GGUF', () => {
-    expect(
-      llamaCppModelPreset(
-        { ...model, repo: 'another/model' },
-        { 'pi:cindy-local-llamacpp:flash': 65536 },
-      ),
-    ).toEqual(['[flash]', 'ctx-size = 65536']);
-  });
+  it.each(['pi', 'codex', 'claude-code'])(
+    'rejects unverified expansion from %s for an unrelated GGUF',
+    (agent) => {
+      const ordinary = { ...model, repo: 'another/model' };
+      expect(llamaCppModelPreset(ordinary, {})).toEqual(['[flash]', 'ctx-size = 32768']);
+      expect(() =>
+        llamaCppModelPreset(ordinary, { [`${agent}:cindy-local-llamacpp:flash`]: 65536 }),
+      ).toThrow('INVALID_MODEL_CONTEXT');
+      expect(() =>
+        llamaCppModelPreset(ordinary, { [`${agent}:cindy-local-llamacpp:flash`]: 100_000_000 }),
+      ).toThrow('INVALID_MODEL_CONTEXT');
+    },
+  );
 });

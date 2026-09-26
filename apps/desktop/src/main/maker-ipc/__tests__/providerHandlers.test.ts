@@ -3358,7 +3358,7 @@ describe('provider:custom:* CRUD handlers', () => {
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, id)).rejects.toThrow('LLAMACPP_STOP_FAILED');
     expect(await getCustomProvider(id)).not.toBeNull();
     let release!: () => void;
-    stop.mockImplementation(() => new Promise<void>((resolve) => { release = resolve; }));
+    stop.mockImplementation(async (remove) => { await new Promise<void>((resolve) => { release = resolve; }); await remove(); });
     const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, id);
     await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(2));
     expect(await getCustomProvider(id)).not.toBeNull();

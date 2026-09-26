@@ -1,5 +1,5 @@
 import { createBotMessageTransport } from './botMessageTransport.js';
-import { MANAGED_LLAMACPP_PROVIDER_ID, llamaCppModelPreset } from '../../shared/llamaCpp.js';
+import { MANAGED_LLAMACPP_PROVIDER_ID, llamaCppModelPreset, llamaCppMaxContextSize } from '../../shared/llamaCpp.js';
 import { getManagedLlamaCppService } from '../local-model-runtime/llamaCppService.js';
 import { ensureManagedLlamaCppProvider } from '../local-model-runtime/managedLlamaCppProvider.js';
 import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
@@ -5828,7 +5828,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           try {
             llamaCppModelPreset(model, { [`${target.agent}:${target.providerId}:${target.modelId}`]: limit });
           } catch {
-            throwIpcError('INVALID_PARAMS', 'This local model supports context up to 1,000,000 tokens');
+            throwIpcError('INVALID_PARAMS', `This local model supports context up to ${llamaCppMaxContextSize(model)} tokens`);
           }
         }
       }

@@ -165,6 +165,10 @@ describe('managed llama.cpp model lifecycle', () => {
     await Promise.all([owner.start(), borrower.start()]);
     expect(mocks.spawn).toHaveBeenCalledOnce();
     expect((await borrower.snapshot()).running).toBe(true);
+    const remove = vi.fn();
+    await expect(borrower.remove(remove)).rejects.toThrow('BUSY');
+    expect(remove).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
     await owner.download({ repo: 'owner/repo', file: 'model.gguf' });
     await expect(borrower.start()).rejects.toThrow('BUSY');
     expect(mocks.spawn).toHaveBeenCalledOnce();
@@ -274,24 +278,38 @@ describe('managed llama.cpp model lifecycle', () => {
       'models',
     ]);
   });
-  it('lets two independent services publish the same model without deleting each other', async () => {
-    let arrived = 0;
+  it('blocks another instance from deleting or downloading until the active transfer settles', async () => {
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
     let release!: () => void;
     const bothDownloading = new Promise<void>((resolve) => {
       release = resolve;
     });
     mocks.download.mockImplementation(async (_asset, dest) => {
       await writeFile(dest, 'GGUF');
-      if (++arrived === 2) release();
+      entered();
       await bothDownloading;
       expect(await readFile(dest, 'utf8')).toBe('GGUF');
     });
     const first = createLlamaCppService(root);
     const second = createLlamaCppService(root);
-    await Promise.all([
-      first.download({ repo: 'owner/repo', file: 'model.gguf' }),
-      second.download({ repo: 'owner/repo', file: 'model.gguf' }),
-    ]);
+    const download = first.download({ repo: 'owner/repo', file: 'model.gguf' });
+    await started;
+    const remove = vi.fn();
+    try {
+      await expect(second.remove(remove)).rejects.toThrow('BUSY');
+      await expect(second.download({ repo: 'owner/repo', file: 'model.gguf' })).rejects.toThrow(
+        'BUSY',
+      );
+      expect(remove).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await download;
+    }
+    await second.remove(remove);
+    expect(remove).toHaveBeenCalledOnce();
     expect((await first.snapshot()).models).toHaveLength(1);
     expect(await readdir(path.join(root, 'llamacpp-runtime'))).toEqual(['models']);
   });

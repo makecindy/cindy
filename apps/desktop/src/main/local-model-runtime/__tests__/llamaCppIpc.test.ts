@@ -23,6 +23,7 @@ function harness() {
     download: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),
+    remove: vi.fn(),
     cancel: vi.fn(),
     pause: vi.fn(),
     resume: vi.fn(),

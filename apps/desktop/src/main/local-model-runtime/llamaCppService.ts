@@ -147,7 +147,17 @@ export function createLlamaCppService(
       resolveSettled = resolve;
     });
     try {
-      return await fn(current.signal);
+      if (kind === 'start') return await fn(current.signal);
+      await mkdir(root, { recursive: true });
+      return await withCrossProcessLock(
+        path.join(root, 'server-start.lock'),
+        { label: 'llamacpp operation', waitMs: 0 },
+        async (lock) => {
+          if (!lock.held) throw new Error('BUSY');
+          return fn(current.signal);
+        },
+        current.signal,
+      );
     } finally {
       controller = undefined;
       operation = undefined;
@@ -534,6 +544,26 @@ export function createLlamaCppService(
     }
   }
   return {
+    remove: async (deleteConnection: () => Promise<void>) => {
+      await stopRequested();
+      await mkdir(root, { recursive: true });
+      await withCrossProcessLock(
+        path.join(root, 'server-start.lock'),
+        { label: 'llamacpp removal', waitMs: 0 },
+        async (lock) => {
+          if (!lock.held) throw new Error('BUSY');
+          let owner;
+          try {
+            owner = JSON.parse(await readFile(path.join(root, 'server-owner.json'), 'utf8'));
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('BUSY');
+          }
+          if (owner && (await probeReviewOwnerLiveness(owner.identity)) !== 'ended')
+            throw new Error('BUSY');
+          await deleteConnection();
+        },
+      );
+    },
     snapshot,
     install,
     download,
@@ -560,6 +590,9 @@ export function getManagedLlamaCppService(userDataDir: string): LlamaCppService 
   return (current ??= createLlamaCppService(userDataDir, readModelContextLimits));
 }
 /** Deletion must not create a runtime merely to stop it. */
-export async function stopManagedLlamaCppService(): Promise<void> {
-  await current?.stop();
+export async function stopManagedLlamaCppService(
+  deleteConnection: () => Promise<void>,
+): Promise<void> {
+  if (!current) throw new Error('BUSY');
+  await current.remove(deleteConnection);
 }

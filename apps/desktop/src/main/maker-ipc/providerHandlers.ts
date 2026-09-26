@@ -2140,14 +2140,6 @@ export function registerProviderHandlers(
       codexHostPrepared = preparation.prepared;
       const generation = beginOAuthMutation(providerId);
       try {
-        if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
-          try {
-            await stopManagedLlamaCppService();
-          } catch {
-            throwIpcError('PRECONDITION_FAILED', 'LLAMACPP_STOP_FAILED');
-          }
-          assertProviderMutationOwner(ownerAtIngress);
-        }
         if (previous?.auth?.native === 'codex') {
           await deps.retireCodexAccount?.(providerId);
           assertProviderMutationOwner(ownerAtIngress);
@@ -2193,7 +2185,16 @@ export function registerProviderHandlers(
             if (!restoreOAuthCredentials) {
               throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
             }
-            await deleteCustomProvider(providerId);
+            if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
+              try {
+                await stopManagedLlamaCppService(async () => {
+                  assertProviderMutationOwner(ownerAtIngress);
+                  await deleteCustomProvider(providerId);
+                });
+              } catch {
+                throwIpcError('PRECONDITION_FAILED', 'LLAMACPP_STOP_FAILED');
+              }
+            } else await deleteCustomProvider(providerId);
             if (providerId === MANAGED_OLLAMA_PROVIDER_ID) notifyManagedOllamaRemoved();
             assertProviderMutationOwner(ownerAtIngress);
           } catch (err) {
