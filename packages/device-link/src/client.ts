@@ -1366,7 +1366,13 @@ export class DeviceLinkClient {
       } catch (err) {
         if (!(err instanceof DeviceLinkError && err.code === 'BACKPRESSURE')) throw err;
         // 保留副本不能堵住既有死锁绕行；容量耗尽时仍尝试直发，不扩容或驱逐 live 帧。
-        this.sendBestEffortRoutedEnvelope(env);
+        try {
+          this.sendBestEffortRoutedEnvelope(env);
+        } catch (directError) {
+          // 可分片的大结果只是不适合裸帧；保留队列拥塞错误，让上层 outbox 重试原结果。
+          if (directError instanceof DeviceLinkError && directError.code === 'PAYLOAD_TOO_LARGE') throw err;
+          throw directError;
+        }
         peer.unlinkedLegacyResponseIds.delete(requestId);
         return;
       }

@@ -124,6 +124,8 @@ socket 背压和聚合公平预算约束。慢速在途消息也可能得到一�
 不等于对端已收到，不能据此删除可靠副本；重连补发同 requestId 的结果，不重新执行
 原操作。副本沿用容量、过期、撤权清理与恢复预算，不缩短业务超时或重启共享 relay。
 队列被不可丢弃的在途帧占满时，保留失败仍须尝试原有裸帧直发，不扩容或驱逐在途帧。
+若结果可可靠分片、但超过裸帧上限，仍返回原 `BACKPRESSURE` 供上层 outbox 重试，
+不能误报 `PAYLOAD_TOO_LARGE` 并将原结果压缩或替换成错误。
 实现见 `packages/device-link/src/client.ts` 的 `sendInvokeResult`，多控制端回归见同包
 `src/__tests__/client.test.ts`。
 

@@ -6445,6 +6445,31 @@ describe('DeviceLinkClient', () => {
       }
     });
 
+    it.each([
+      { megabytes: 3, code: 'BACKPRESSURE' },
+      { megabytes: 5, code: 'PAYLOAD_TOO_LARGE' },
+    ])('reports $code for a $megabytes MB result when the unlinked reliable queue is full', async ({ megabytes, code }) => {
+      const h = makeHarness({ timing: {
+        reconnectBaseMs: 5, reconnectMaxMs: 10,
+        pingIntervalMs: 60_000, stalledLinkPendingMaxAgeMs: 60_000,
+      } });
+      h.client.start();
+      try {
+        await makeLinkDownPeer(h);
+        for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+          h.client.sendInvokeResult('ctrl-1', `retained-${i}`, { ok: true, result: i });
+        }
+        // 3 MB exceeds the legacy frame limit but fits reliable fragmentation.
+        // Only a result beyond the reliable message limit (5 MB) is truly oversized.
+        expect(() => h.client.sendInvokeResult('ctrl-1', 'large-result', {
+          ok: true, result: 'x'.repeat(megabytes * 1024 * 1024),
+        })).toThrow(expect.objectContaining({ code }));
+        expect(h.current().sent.some(env => env.id === 'large-result')).toBe(false);
+      } finally {
+        h.client.stop();
+      }
+    });
+
     it('A:link 断开状态下 pending 滞留超阈值 → 新帧入队前整队放弃,不再 BACKPRESSURE', async () => {
       const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
       let nowMs = 1_000_000;
