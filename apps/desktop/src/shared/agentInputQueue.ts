@@ -370,6 +370,15 @@ export type AgentInputRecovery =
   | null;
 
 /**
+ * 非真人输入的来源：自动化调度、目标守护、Orca 协同、其他任务经工具投递。
+ * 它们推进同一会话，但不代表用户本人介入——不能给中断续跑的 episode 额度充值。
+ * 队列条目（`origin.kind`）与落库行（`agentMeta.origin.kind`）共用这一个判据。
+ */
+export function isAutomaticInputOriginKind(kind: unknown): boolean {
+  return kind === 'scheduler' || kind === 'goal' || kind === 'orca' || kind === 'session';
+}
+
+/**
  * Normalize the persisted/device-link clear token used by optimistic input
  * preconditions. `null` is a known "never cleared" boundary; `undefined`
  * means the payload did not contain a usable token.

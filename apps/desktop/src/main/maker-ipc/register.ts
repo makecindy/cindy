@@ -112,6 +112,7 @@ import { getDeviceLinkStatus } from '../device-link/index.js';
 import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
+  isAutomaticInputOriginKind,
   normalizeAgentInputClearBoundaryMs,
   serializeSessionReferencePayload,
   type AgentInputClearBoundaryOpts,
@@ -12456,11 +12457,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : undefined;
       const originKind =
         origin && typeof origin === 'object' ? (origin as { kind?: unknown }).kind : undefined;
-      // Scheduler prompts are automatic inputs, not fresh human intervention. They may
-      // share the coordinator persistence path with composer messages, but must not recharge
-      // the interrupted-turn episode budget and defeat its hard upper bound.
-      const isAutomaticPrompt =
-        originKind === 'scheduler' || originKind === 'goal' || originKind === 'orca';
+      // Automatic inputs (scheduler / goal / Orca / tool-sent session messages) are not fresh
+      // human intervention. They may share the coordinator persistence path with composer
+      // messages, but must not recharge the interrupted-turn episode budget and defeat its
+      // hard upper bound.
+      const isAutomaticPrompt = isAutomaticInputOriginKind(originKind);
       silentStopAutoResumeGuard.noteUserSend(sessionId);
       if (!isAutomaticPrompt) interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
     }

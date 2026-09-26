@@ -65,6 +65,7 @@ import {
   buildMakerUserMessage,
   getAgentInputAttachmentBlockType,
   getAgentFacingText,
+  isAutomaticInputOriginKind,
   normalizeAgentInputClearBoundaryMs,
   parseAgentInputToolLoopDetails,
   projectionRetryText,
@@ -978,10 +979,9 @@ function isSchedulerOriginItem(item: AgentInputQueuedMessage | null | undefined)
   return item?.origin?.kind === 'scheduler';
 }
 
-/** Orca and scheduler inputs are automation, not a fresh human intervention. */
+/** Scheduler / Orca / tool-sent session inputs are automation, not a fresh human intervention. */
 function isAutomaticOriginItem(item: AgentInputQueuedMessage | null | undefined): boolean {
-  const kind = item?.origin?.kind;
-  return kind === 'scheduler' || kind === 'orca';
+  return isAutomaticInputOriginKind(item?.origin?.kind);
 }
 
 function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {

@@ -3630,6 +3630,19 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onUserEnqueue).not.toHaveBeenCalled();
   });
 
+  it('reports tool-sent session inputs as automatic, not as user intervention', async () => {
+    // 其他任务经工具投递的消息与 Orca 同属自动输入：撤销旧 retry owner，但不按真人介入上报。
+    const h = createHarness();
+    const sid = 'session-origin-automatic';
+    h.coordinator.enqueue(sid, {
+      ...makeItem('q-session', 'follow-up from another task'),
+      origin: { kind: 'session', senderSessionId: 'caller', displayText: 'follow-up from another task' },
+    });
+    await flush();
+    expect(h.onAutomaticEnqueue).toHaveBeenCalledWith(sid);
+    expect(h.onUserEnqueue).not.toHaveBeenCalled();
+  });
+
   it('a continuation prompt enqueue is not reported as an unrelated intervention', async () => {
     // 中断横幅「继续任务」由 renderer 直发 CONTINUE_AFTER_APP_EXIT_PROMPT, 它**先**经
     // enqueue、之后才在 drain 时被认成续跑。无条件作废会把它自己的待续跑记账删掉,
