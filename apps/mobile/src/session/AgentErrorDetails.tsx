@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { Text } from '@/components/AppText';
 import { useThemedStyles, type ThemeColors } from '@/theme';
-import { radius, spacing, typeScale } from '@/theme/tokens';
+import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 /** Local disclosure only: never retries a request or changes the persisted error. */
 export function AgentErrorDetails({ message }: { message: string }) {
@@ -29,6 +29,6 @@ export function AgentErrorDetails({ message }: { message: string }) {
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   toggle: { alignSelf: 'flex-start', justifyContent: 'center', minHeight: 44, borderRadius: radius.pill, paddingHorizontal: spacing.sm },
-  label: { color: colors.textSecondary, fontSize: typeScale.caption },
-  detail: { color: colors.textSecondary, fontSize: typeScale.caption },
+  label: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  detail: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
 });

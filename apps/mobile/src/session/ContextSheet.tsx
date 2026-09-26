@@ -23,17 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
-import {
-  fontWeight,
-  iconSize,
-  iconStroke,
-  radius,
-  spacing,
-  typeScale,
-  useTheme,
-  useThemedStyles,
-  type ThemeColors,
-} from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 export interface ContextSheetProps {
   visible: boolean;
@@ -262,7 +252,8 @@ function makeContextSheetStyles(colors: ThemeColors) {
     footerButtonLabel: {
       color: colors.ctaText,
       fontSize: typeScale.body,
-      fontWeight: fontWeight.semibold,
+      lineHeight: lineHeight.body,
+      fontWeight: fontWeight.medium,
     },
     group: {
       paddingTop: spacing.lg,
@@ -270,6 +261,7 @@ function makeContextSheetStyles(colors: ThemeColors) {
     groupLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
     },
     separator: {
       backgroundColor: colors.border,
@@ -295,6 +287,7 @@ function makeContextSheetStyles(colors: ThemeColors) {
     rowLabel: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
     rowTrailing: {

@@ -4615,9 +4615,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   headerTitle: {
     color: colors.textPrimary,
     flexShrink: 1,
-    fontSize: typeScale.listTitle,
+    fontSize: typeScale.title,
     fontWeight: fontWeight.semibold,
-    lineHeight: lineHeight.listTitleCompact,
+    lineHeight: lineHeight.title,
   },
   deviceMenuPanelCenter: {
     alignSelf: 'center',
@@ -4647,8 +4647,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   connectionText: {
     color: colors.textSecondary,
     flexShrink: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     minWidth: 0,
   },
   connectionIconButton: {
@@ -4709,15 +4710,15 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   deviceMenuSectionLabel: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.semibold,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
   },
   deviceMenuHint: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.md,
@@ -4775,8 +4776,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   revokedTipTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.title,
-    fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.subtitle,
+    fontWeight: fontWeight.semibold,
+    lineHeight: lineHeight.title,
   },
   revokedTipBody: {
     color: colors.textSecondary,
@@ -4794,7 +4795,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   revokedTipRetryText: {
     color: colors.ctaText,
     fontSize: typeScale.body,
-    fontWeight: fontWeight.semibold,
+    lineHeight: lineHeight.body,
+    fontWeight: fontWeight.medium,
   },
   homeList: {
     backgroundColor: colors.surface,
@@ -4815,9 +4817,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   initialLoadingText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.code,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.regular,
+    lineHeight: lineHeight.caption,
   },
   projectGroup: {
     backgroundColor: colors.surface,

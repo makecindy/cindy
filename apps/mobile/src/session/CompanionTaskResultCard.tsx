@@ -7,7 +7,7 @@ import type { BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration'
 import { Text } from '@/components/AppText';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { iconSize, radius, spacing, typeScale } from '@/theme/tokens';
+import { iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { ChatFilePathContext, type ChatFilePathContextValue, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import type { RemotePathStatResult } from '@/device-link/mobileMakerTransport';
@@ -145,14 +145,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   card: { marginVertical: spacing.sm, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
     backgroundColor: colors.surfaceElevated, borderRadius: radius.container, overflow: 'hidden' },
   summary: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  title: { flex: 1, minWidth: 0, fontSize: typeScale.body, color: colors.textPrimary },
-  secondary: { flexShrink: 0, fontSize: typeScale.footnote, color: colors.textSecondary },
-  view: { flexShrink: 0, fontSize: typeScale.footnote, color: colors.textPrimary },
-  body: { fontSize: typeScale.body, color: colors.textPrimary },
+  title: { flex: 1, minWidth: 0, fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },
+  secondary: { flexShrink: 0, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textSecondary },
+  view: { flexShrink: 0, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textPrimary },
+  body: { fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },
   content: { paddingHorizontal: spacing.md, paddingVertical: spacing.md, gap: spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   file: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  fileLabel: { flex: 1, minWidth: 0, fontSize: typeScale.body, color: colors.textPrimary },
+  fileLabel: { flex: 1, minWidth: 0, fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },
   pending: { color: colors.textSecondary },
   link: { textDecorationLine: 'underline' },
   errorToggle: { minHeight: 44, justifyContent: 'center' },

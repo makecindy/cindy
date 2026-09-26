@@ -531,7 +531,7 @@ export function SessionMenuSheet({
               }}
               onSubmitEditing={submitRename}
               placeholder={t('session.menu.titlePlaceholder')}
-              placeholderTextColor={colors.textTertiary}
+              placeholderTextColor={colors.textPlaceholder}
               returnKeyType="done"
               selectTextOnFocus
               style={styles.renameInput}
@@ -1025,7 +1025,7 @@ function MenuActionRow({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const color = danger ? colors.destructive : colors.sheetActionText;
+  const color = danger ? colors.destructive : colors.textPrimary;
   return (
     <Pressable
       accessibilityLabel={label}
@@ -1126,6 +1126,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
       textAlign: 'center',
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.semibold,
     },
     chipRow: {
@@ -1146,6 +1147,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     chipText: {
       color: colors.textSecondary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
     metaLine: {
@@ -1157,7 +1159,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     readOnlyText: {
       textAlign: 'center',
       color: colors.textTertiary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
     },
     actionGroup: {
@@ -1175,11 +1177,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
       paddingHorizontal: spacing.lg,
     },
     actionLabel: {
-      color: colors.sheetActionText,
+      color: colors.textPrimary,
       flexShrink: 1,
-      fontSize: typeScale.listBody,
-      fontWeight: fontWeight.semibold,
-      lineHeight: lineHeight.listBody,
+      fontSize: typeScale.bodySmall,
+      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.bodySmall,
     },
     actionLabelDanger: {
       color: colors.destructive,
@@ -1216,7 +1218,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     },
     renameErrorText: {
       color: colors.errorText,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
     },
     infoBody: {
@@ -1239,7 +1241,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     infoSectionTitle: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
-      fontWeight: fontWeight.medium,
+      fontWeight: fontWeight.semibold,
       lineHeight: lineHeight.caption,
     },
     refreshButton: {
@@ -1254,7 +1256,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     infoLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,
-      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
     },
     infoValue: {
       color: colors.textPrimary,
@@ -1267,7 +1270,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     },
     infoCaption: {
       color: colors.textSecondary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
     },
     infoActionRow: {
@@ -1294,6 +1297,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flex: 1,
     fontFamily: monoFont,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     minWidth: 0,
   },
   browsePanel: {
@@ -1329,11 +1333,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     browseEntryName: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
     browseEntryPath: {
       color: colors.textTertiary,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       marginTop: 2,
     },
     pillButton: {
@@ -1353,6 +1359,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     pillButtonText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   pillButtonTextPrimary: {

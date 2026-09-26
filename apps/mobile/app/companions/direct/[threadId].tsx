@@ -98,9 +98,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // Own side reads like the user's bubble; the peer sits on the chip surface (Desktop msg-user / surface-chip).
   bubbleOwn: { backgroundColor: colors.surfaceElevated, borderColor: colors.borderStrong },
   bubblePeer: { backgroundColor: colors.surfaceChip, borderColor: colors.border },
-  note: { color: colors.textSecondary, fontSize: typeScale.footnote },
+  note: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   empty: { color: colors.textTertiary, textAlign: 'center', paddingVertical: spacing.xl },
   limit: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   limitLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
-  limitText: { flexShrink: 1, color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, textAlign: 'center' },
+  limitText: { flexShrink: 1, color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
 });

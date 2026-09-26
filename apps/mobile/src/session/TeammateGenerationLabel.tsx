@@ -13,5 +13,5 @@ export function TeammateGenerationLabel({ deviceId, botId, generation }: {
     active: true, turnId: String(generation.startedAt) });
   // A transient process note stays tertiary and italic so it never outranks a real new reply.
   return <WorkingStatusText key={generation.startedAt} text={label ?? ''} style={{ color: colors.textTertiary,
-    fontSize: typeScale.code, fontStyle: 'italic', fontWeight: fontWeight.regular, lineHeight: lineHeight.subtitle }} />;
+    fontSize: typeScale.bodySmall, fontStyle: 'italic', fontWeight: fontWeight.regular, lineHeight: lineHeight.subtitle }} />;
 }

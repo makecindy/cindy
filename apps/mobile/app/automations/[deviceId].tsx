@@ -1170,7 +1170,7 @@ function ScheduleFormCard({
           editable={!busy}
           onChangeText={(value) => setField('name', value)}
           placeholder={t('devices.automations.form.namePlaceholder')}
-          placeholderTextColor={colors.textTertiary}
+          placeholderTextColor={colors.textPlaceholder}
           style={styles.input}
           testID="automations.form.nameInput"
           value={draft.name}
@@ -1189,7 +1189,7 @@ function ScheduleFormCard({
             multiline
             onChangeText={onPromptChange}
             placeholder={t('devices.automations.form.promptPlaceholder')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             style={[styles.input, styles.textArea]}
             testID="automations.form.promptInput"
             textAlignVertical="top"
@@ -1292,7 +1292,7 @@ function ScheduleFormCard({
             onChangeText={(value) => onChange(updateDraftBoundSessionId(draft, value,
               sessions.find((session) => session.id === value.trim())?.agentKind))}
             placeholder="session id"
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             style={styles.input}
             testID="automations.form.targetSessionInput"
             value={boundSessionInputValue}
@@ -1309,7 +1309,7 @@ function ScheduleFormCard({
               keyboardType="number-pad"
               onChangeText={(value) => onChange(updateDraftIntervalMinutes(draft, value))}
               placeholder={t('devices.automations.form.intervalPlaceholder')}
-              placeholderTextColor={colors.textTertiary}
+              placeholderTextColor={colors.textPlaceholder}
               style={styles.input}
               testID="automations.form.intervalInput"
               value={draft.intervalMinutes}
@@ -1329,7 +1329,7 @@ function ScheduleFormCard({
               editable={!busy}
               onChangeText={(value) => onChange(updateDraftCronExpr(draft, value))}
               placeholder="0 9 * * *"
-              placeholderTextColor={colors.textTertiary}
+              placeholderTextColor={colors.textPlaceholder}
               style={styles.input}
               testID="automations.form.cronInput"
               value={draft.cronExpr}
@@ -1369,7 +1369,7 @@ function ScheduleFormCard({
               editable={!busy}
               onChangeText={(value) => setField('workingDir', value)}
               placeholder="/Users/name/Code/project"
-              placeholderTextColor={colors.textTertiary}
+              placeholderTextColor={colors.textPlaceholder}
               style={styles.input}
               testID="automations.form.workingDirInput"
               value={draft.workingDir}
@@ -1423,7 +1423,7 @@ function ScheduleFormCard({
           editable={!busy}
           onChangeText={(value) => setField('model', value)}
           placeholder={hasRealBinding ? t('devices.automations.form.modelPlaceholderBound') : draft.agentKind === 'codex' ? 'gpt-5.5' : draft.agentKind === 'pi' ? t('devices.automations.form.modelPlaceholderPiDefault') : 'claude-sonnet-4-6'}
-          placeholderTextColor={colors.textTertiary}
+          placeholderTextColor={colors.textPlaceholder}
           style={styles.input}
           testID="automations.form.modelInput"
           value={draft.model}
@@ -1437,7 +1437,7 @@ function ScheduleFormCard({
           editable={!busy}
           onChangeText={(value) => setField('effort', value)}
           placeholder="minimal / low / medium / high / xhigh / max / ultra"
-          placeholderTextColor={colors.textTertiary}
+          placeholderTextColor={colors.textPlaceholder}
           style={styles.input}
           testID="automations.form.effortInput"
           value={draft.effort}
@@ -1463,7 +1463,7 @@ function ScheduleFormCard({
           editable={!busy}
           onChangeText={(value) => onChange(updateDraftTimezone(draft, value))}
           placeholder="Asia/Shanghai"
-          placeholderTextColor={colors.textTertiary}
+          placeholderTextColor={colors.textPlaceholder}
           style={styles.input}
           testID="automations.form.timezoneInput"
           value={draft.timezone}
@@ -1947,7 +1947,7 @@ function TemplateParamControl({
         keyboardType={parameter.type === 'number' ? 'number-pad' : 'default'}
         onChangeText={onChange}
         placeholder={parameter.placeholder ?? parameter.default ?? ''}
-        placeholderTextColor={colors.textTertiary}
+        placeholderTextColor={colors.textPlaceholder}
         style={styles.input}
         testID="automations.templateParamInput"
         value={value}
@@ -2339,7 +2339,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   summaryCopy: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   content: { gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
@@ -2357,19 +2357,19 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'space-between',
     minHeight: 42,
   },
-  formTitle: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.medium },
+  formTitle: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold },
   formError: {
     borderColor: colors.errorBorder,
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
     color: colors.errorText,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     padding: spacing.md,
   },
   fieldGroup: { gap: spacing.xs },
-  fieldLabel: { color: colors.textTertiary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
-  fieldHint: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  fieldLabel: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  fieldHint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   input: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
@@ -2398,7 +2398,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
   },
-  templateError: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  templateError: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   templateList: { gap: spacing.sm, paddingRight: spacing.md },
   templateCard: {
     borderColor: colors.border,
@@ -2409,9 +2409,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     padding: spacing.md,
     width: 212,
   },
-  templateName: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
-  templateDescription: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  templateMeta: { color: colors.textTertiary, fontSize: typeScale.caption, marginTop: 'auto' },
+  templateName: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+  templateDescription: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  templateMeta: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, marginTop: 'auto' },
   templateParams: { gap: spacing.md },
   segmentRow: {
     backgroundColor: colors.surface,
@@ -2438,7 +2438,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 48,
     paddingHorizontal: spacing.md,
   },
-  toggleLabel: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
+  toggleLabel: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
   togglePill: {
     alignItems: 'flex-start',
     backgroundColor: colors.surfaceChip,
@@ -2466,8 +2466,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   boundSessionOptionText: { flex: 1, gap: 2, minWidth: 0 },
-  boundSessionTitle: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
-  boundSessionMeta: { color: colors.textTertiary, fontSize: typeScale.caption },
+  boundSessionTitle: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+  boundSessionMeta: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   scheduleList: {
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -2483,10 +2483,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   scheduleText: { flex: 1, gap: spacing.xs, minWidth: 0, paddingRight: spacing.md },
   scheduleTitleRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minWidth: 0 },
-  scheduleTitle: { color: colors.textPrimary, flex: 1, fontSize: typeScale.body, fontWeight: fontWeight.medium },
-  scheduleStatus: { color: colors.textTertiary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
-  scheduleSubtitle: { color: colors.textSecondary, fontSize: typeScale.caption },
-  scheduleDetail: { color: colors.textTertiary, fontSize: typeScale.caption },
+  scheduleTitle: { color: colors.textPrimary, flex: 1, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+  scheduleStatus: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  scheduleSubtitle: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  scheduleDetail: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   detail: { gap: spacing.md, paddingTop: spacing.lg },
   detailCard: {
     borderColor: colors.border,
@@ -2495,7 +2495,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.md,
     padding: spacing.lg,
   },
-  detailTitle: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.medium },
+  detailTitle: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold },
   detailMeta: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   detailPrompt: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   deleteCard: {
@@ -2522,7 +2522,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 42,
   },
   deleteHeaderText: { flex: 1, minWidth: 0 },
-  deleteTitle: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.medium },
+  deleteTitle: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold },
   deleteCopy: { color: colors.textSecondary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   deletePreview: {
     backgroundColor: colors.surface,
@@ -2530,7 +2530,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     padding: spacing.md,
   },
@@ -2563,8 +2563,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     width: 8,
   },
   deleteOptionText: { flex: 1, gap: spacing.xs, minWidth: 0 },
-  deleteOptionTitle: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
-  deleteOptionDescription: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  deleteOptionTitle: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+  deleteOptionDescription: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   runsHeader: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -2573,8 +2573,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   sectionTitle: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   runList: { gap: spacing.sm },
@@ -2588,10 +2589,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   runText: { flex: 1, gap: spacing.xs, minWidth: 0 },
   runTitleRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, minWidth: 0 },
-  runTitle: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
-  runTime: { color: colors.textTertiary, flex: 1, fontSize: typeScale.caption, textAlign: 'right' },
+  runTitle: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+  runTime: { color: colors.textTertiary, flex: 1, fontSize: typeScale.caption, lineHeight: lineHeight.caption, textAlign: 'right' },
   runMeta: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  runDetail: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  runDetail: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   runActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',

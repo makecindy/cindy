@@ -19,14 +19,7 @@ import { useTranslation } from 'react-i18next';
 import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { ConnectionNoticeProvider } from '@/components/ConnectionNoticeOverlay';
-import {
-  fontWeight,
-  radius,
-  spacing,
-  typeScale,
-  useThemedStyles,
-  type ThemeColors,
-} from '@/theme';
+import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, type ThemeColors } from '@/theme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AdaptiveWindowProvider } from '@/platform/AdaptiveWindow';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
@@ -556,11 +549,13 @@ const makeGateStyles = (colors: ThemeColors) =>
     title: {
       color: colors.textPrimary,
       fontSize: typeScale.title,
-      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.title,
+      fontWeight: fontWeight.semibold,
     },
     subtitle: {
       color: colors.textSecondary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       textAlign: 'center',
     },
     retryButton: {
@@ -574,8 +569,9 @@ const makeGateStyles = (colors: ThemeColors) =>
       opacity: 0.7,
     },
     retryLabel: {
-      color: colors.surface,
+      color: colors.ctaText,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
   });

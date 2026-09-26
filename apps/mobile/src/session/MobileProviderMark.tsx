@@ -17,7 +17,7 @@ import {
   XD_VIEW_BOX,
 } from '@/components/vendorIconPaths';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight as fontWeightToken, radius, typeScale } from '@/theme/tokens';
+import { fontWeight as fontWeightToken, lineHeight, radius, typeScale } from '@/theme/tokens';
 import {
   PROVIDER_LOGO_PATHS,
   isProviderLogoKind,
@@ -44,6 +44,7 @@ const makeStyles = (c: ThemeColors) =>
     monogramText: {
       color: c.textSecondary,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       fontWeight: fontWeightToken.semibold,
       // CJK / 拉丁字母在小圆点里视觉重心略偏下,nudge -0.5 居中。
       includeFontPadding: false,

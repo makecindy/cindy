@@ -9,7 +9,7 @@ import { Text } from '@/components/AppText';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, iconStroke, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, iconStroke, lineHeight, spacing, typeScale } from '@/theme/tokens';
 import { AccountSwitcherSheet } from './AccountSwitcherSheet';
 import { HomeChromeDrawer } from './HomeChromeDrawer';
 import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
@@ -110,7 +110,7 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   screen: { backgroundColor: colors.surface, flex: 1 },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, minHeight: 48 },
-  title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.subtitle, fontWeight: fontWeight.medium, textAlign: 'center' },
+  title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold, textAlign: 'center' },
   trailing: { width: 44, alignItems: 'center' },
-  notice: { color: colors.textSecondary, fontSize: typeScale.footnote, padding: spacing.lg },
+  notice: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, padding: spacing.lg },
 });

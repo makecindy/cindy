@@ -36,7 +36,7 @@ import { Alert, StyleSheet, View } from "react-native";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
-import { iconSize, radius, spacing, typeScale, useTheme } from "@/theme";
+import { iconSize, lineHeight, radius, spacing, typeScale, useTheme } from "@/theme";
 import { useLiquidGlassAvailable } from "./useLiquidGlassAvailable";
 import {
   HTML_BROWSER_CONTROL_SIZE as size,
@@ -211,6 +211,7 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps) {
               padding: spacing.sm,
               borderRadius: radius.pill,
               fontSize: typeScale.caption,
+              lineHeight: lineHeight.caption,
             }}
           >
             {p.notice}

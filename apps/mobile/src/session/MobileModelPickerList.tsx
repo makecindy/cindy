@@ -126,12 +126,14 @@ const makeStyles = (c: ThemeColors) =>
       color: c.textTertiary,
       flexShrink: 1,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.regular,
       minWidth: 0,
     },
     disabledHint: {
       color: c.textTertiary,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       marginTop: 1,
     },
     subscriptionBadge: {
@@ -143,6 +145,7 @@ const makeStyles = (c: ThemeColors) =>
     subscriptionBadgeText: {
       color: c.textSecondary,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       fontWeight: fontWeight.semibold,
     },
     optionsButton: {
@@ -155,6 +158,7 @@ const makeStyles = (c: ThemeColors) =>
     empty: {
       color: c.textTertiary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.md,
       textAlign: 'center',

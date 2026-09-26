@@ -16,8 +16,8 @@ import { formatRemoteError } from '@/device-link/remoteStatus';
 import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import type { RemoteSession } from '@/session/types';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { iconSize, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { iconSize, lineHeight, spacing, typeScale } from '@/theme/tokens';
 import { goBackGuarded } from '@/utils/backGuard';
 
 function firstParam(value: string | string[] | undefined): string {
@@ -207,8 +207,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: { backgroundColor: colors.surface, flex: 1 },
   center: { alignItems: 'center', flex: 1, gap: spacing.lg, justifyContent: 'center', padding: spacing.xl },
   content: { flex: 1, gap: spacing.lg, justifyContent: 'center', padding: spacing.xl },
-  preparationTitle: { color: colors.textPrimary, fontSize: typeScale.title, textAlign: 'center' },
-  muted: { textAlign: 'center', color: colors.textSecondary, fontSize: typeScale.footnote },
+  preparationTitle: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold, textAlign: 'center' },
+  muted: { textAlign: 'center', color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   preparationStage: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
-  preparationStageText: { color: colors.textPrimary, fontSize: typeScale.footnote },
+  preparationStageText: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

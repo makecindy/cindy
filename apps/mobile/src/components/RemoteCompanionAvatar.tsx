@@ -8,7 +8,7 @@ import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { resolveMobileRemoteMedia, type MobileRemoteMediaPresignResult } from '@/session/remoteMedia';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { useTheme } from '@/theme';
-import { radius, typeScale } from '@/theme/tokens';
+import { lineHeight, radius, typeScale } from '@/theme/tokens';
 
 const presets: Record<string, number> = {
   'cindy://avatar/preset/cindy': require('../../assets/bot-presets/cindy.png'),
@@ -41,7 +41,7 @@ export function RemoteCompanionAvatar({ avatar, deviceId, name, online, size = 4
   const source = presets[value] || (image?.binding === binding ? { uri: image.uri } : null);
   if (source && !failed) return <Image source={source} onError={() => setFailed(true)} style={[styles.image, { width: size, height: size }]} />;
   const glyph = avatar?.kind === 'emoji' ? value : avatar?.fallbackText || Array.from(name)[0];
-  if (!framed) return <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>{glyph}</Text>;
+  if (!framed) return <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>{glyph}</Text>;
   return <View style={[styles.frame, { width: size, height: size, backgroundColor: colors.surfaceChip }]}>
     <Text style={{ color: colors.textPrimary, fontSize: Math.round(size / 2), lineHeight: Math.round(size * 0.7) }}>{glyph}</Text>
   </View>;

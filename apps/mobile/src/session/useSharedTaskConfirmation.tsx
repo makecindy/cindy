@@ -50,7 +50,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   card: { width: '100%', maxWidth: 400, maxHeight: '80%', backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.container, padding: spacing.lg, gap: spacing.lg },
   content: { flexGrow: 0, flexShrink: 1 },
   copy: { gap: spacing.md },
-  title: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.medium, lineHeight: lineHeight.subtitle },
+  title: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.semibold, lineHeight: lineHeight.title },
   body: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   button: { minHeight: 44, minWidth: 120, flexGrow: 1, flexShrink: 0 },

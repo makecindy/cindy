@@ -176,6 +176,7 @@ function makeQuoteCapsuleStyles(colors: ThemeColors) {
     capsuleText: {
       color: colors.textSecondary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
     clearButton: {
@@ -223,6 +224,7 @@ function makeQuoteCapsuleStyles(colors: ThemeColors) {
     previewSourceText: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
     },
     pressed: {
       opacity: 0.7,

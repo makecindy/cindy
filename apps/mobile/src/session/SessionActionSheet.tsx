@@ -174,7 +174,7 @@ export function SessionActionSheet({
                 )
                 .map((item) => {
                   const IconComponent = ACTION_ICONS[item.action];
-                  const color = item.destructive ? colors.destructive : colors.sheetActionText;
+                  const color = item.destructive ? colors.destructive : colors.textPrimary;
                   return (
                     <Pressable
                       accessibilityLabel={item.label}
@@ -214,7 +214,7 @@ export function SessionActionSheet({
                 )
                 .map((item) => {
                   const IconComponent = ACTION_ICONS[item.action];
-                  const color = item.destructive ? colors.destructive : colors.sheetActionText;
+                  const color = item.destructive ? colors.destructive : colors.textPrimary;
                   return (
                     <Pressable
                       accessibilityLabel={item.label}
@@ -291,11 +291,11 @@ const makeStyles = (colors: ThemeColors) =>
       paddingHorizontal: spacing.lg,
     },
     actionLabel: {
-      color: colors.sheetActionText,
+      color: colors.textPrimary,
       flexShrink: 1,
-      fontSize: typeScale.listBody,
-      fontWeight: fontWeight.semibold,
-      lineHeight: lineHeight.listBody,
+      fontSize: typeScale.bodySmall,
+      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.bodySmall,
     },
     actionLabelDanger: {
       color: colors.destructive,
@@ -310,10 +310,10 @@ const makeStyles = (colors: ThemeColors) =>
       minHeight: 54,
     },
     cancelText: {
-      color: colors.sheetActionText,
-      fontSize: typeScale.listBody,
-      fontWeight: fontWeight.semibold,
-      lineHeight: lineHeight.listBody,
+      color: colors.textPrimary,
+      fontSize: typeScale.bodySmall,
+      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.bodySmall,
     },
     pressed: {
       opacity: 0.72,

@@ -81,7 +81,7 @@ export function RemoteDesktopDisplaySettings({
     };
   }, [connected, video.modesSupported, video.displayGeometry, reload]);
   const disabled = !connected || !video.supported;
-  const title = { color: colors.textPrimary, fontSize: typeScale.body };
+  const title = { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body };
   const hint = {
     color: colors.textPrimary,
     fontSize: typeScale.caption,

@@ -21,6 +21,6 @@ export function SharedTaskEndedState({ onRejoin }: { onRejoin(): void }) {
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   body: { paddingVertical: spacing.xl, paddingHorizontal: spacing.xs, alignItems: 'center' },
   icon: { width: 44, height: 44, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.lg },
-  title: { color: colors.textPrimary, fontSize: typeScale.listBody, lineHeight: lineHeight.listBody, fontWeight: fontWeight.medium },
-  text: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, textAlign: 'center', maxWidth: 280, marginTop: spacing.sm, marginBottom: spacing.lg },
+  title: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
+  text: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center', maxWidth: 280, marginTop: spacing.sm, marginBottom: spacing.lg },
 });

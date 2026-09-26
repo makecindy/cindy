@@ -8,14 +8,7 @@ import {
   type ClassicSwipeableMethods,
 } from '@/platform/gestureHandler';
 import { useTheme } from '@/theme';
-import {
-  fontWeight,
-  iconSize,
-  iconStroke,
-  spacing,
-  radius,
-  typeScale,
-} from '@/theme/tokens';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import type { DeviceManagementListProps } from './DeviceManagementList.types';
 
 export function DeviceManagementList(props: DeviceManagementListProps) {
@@ -96,6 +89,7 @@ function DeviceRow({
                 ? colors.textPrimary
                 : colors.textTertiary,
               fontSize: typeScale.body,
+              lineHeight: lineHeight.body,
               fontWeight: row.device.online
                 ? fontWeight.medium
                 : fontWeight.regular,

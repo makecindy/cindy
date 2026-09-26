@@ -65,6 +65,10 @@
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md`；设计文档索引见
   `docs/design-rules/cindy-design-system.md`。
+- 新增或修改 Mobile（`apps/mobile`）界面上的文字前，必须先查
+  `apps/mobile/docs/mobile-design-guide.md` §3「文字规范速查」：先定角色，再整行照抄字号、
+  行高、字重、字色；五档中性字色、浅色字不配粗字重、11 档字号、必须配行高四条由
+  `typographyTokenDiscipline.test.ts` 守护，角色是否选对靠 review。
 - 做 UI 圆角分类或点击目标尺寸审查时，必须同时读 `docs/design-rules/DESIGN.md §5` 与
   `docs/design-rules/design-governance.md §13`；普通 UI 改动同样适用，不限于设计系统迁移 PR。
 - 新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁脚本，

@@ -90,6 +90,7 @@ import {
   fontWeight,
   iconSize,
   iconStroke,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -3394,6 +3395,7 @@ const makeStyles = (colors: ThemeColors) =>
     caption: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.xs,
     },
@@ -3420,6 +3422,7 @@ const makeStyles = (colors: ThemeColors) =>
     waitingComputerName: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.semibold,
       textAlign: "center",
     },
@@ -3430,7 +3433,8 @@ const makeStyles = (colors: ThemeColors) =>
     },
     waitingLabel: {
       color: colors.textSecondary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.regular,
       textAlign: "center",
     },
@@ -3447,7 +3451,8 @@ const makeStyles = (colors: ThemeColors) =>
     connectionLabel: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
-      fontWeight: fontWeight.semibold,
+      lineHeight: lineHeight.body,
+      fontWeight: fontWeight.medium,
     },
     actionRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
     viewOnly: {
@@ -3455,6 +3460,7 @@ const makeStyles = (colors: ThemeColors) =>
       alignSelf: "center",
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       backgroundColor: colors.surfaceElevated,
       padding: spacing.xs,
       borderRadius: radius.control,
@@ -3490,7 +3496,7 @@ const makeStyles = (colors: ThemeColors) =>
       borderColor: colors.textPrimary,
     },
     disabled: { opacity: 0.4 },
-    buttonText: { color: colors.textPrimary, fontSize: typeScale.caption },
+    buttonText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     keyboardOverlay: { position: "absolute", left: 0, right: 0 },
     keyboard: {
       backgroundColor: colors.surfaceTranslucent,
@@ -3520,13 +3526,14 @@ const makeStyles = (colors: ThemeColors) =>
     },
     modeTabSelected: { backgroundColor: colors.surfaceElevated },
     modeText: {
-      fontSize: typeScale.listBody,
+      fontSize: typeScale.bodySmall,
+      lineHeight: lineHeight.bodySmall,
       fontWeight: fontWeight.regular,
       color: colors.textTertiary,
     },
     modeTextSelected: {
       color: colors.textPrimary,
-      fontWeight: fontWeight.semibold,
+      fontWeight: fontWeight.medium,
     },
     closeKey: {
       width: 44,
@@ -3561,16 +3568,18 @@ const makeStyles = (colors: ThemeColors) =>
     modifierText: {
       color: colors.textPrimary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
-    modifierTextSelected: { color: colors.surface },
+    modifierTextSelected: { color: colors.ctaText },
     keyPressed: { opacity: 0.55 },
     keyText: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
-    specialKeyText: { color: colors.textPrimary, fontSize: typeScale.caption },
+    specialKeyText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     pageNavigation: {
       flexDirection: "row",
       justifyContent: "center",
@@ -3587,7 +3596,8 @@ const makeStyles = (colors: ThemeColors) =>
     pageLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,
-      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
     },
     pageLabelSelected: { color: colors.textPrimary },
     pageIndicator: {

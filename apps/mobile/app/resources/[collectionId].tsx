@@ -31,7 +31,7 @@ import {
 import { goBackGuarded } from '@/utils/backGuard';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, iconStroke, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 type HostedResourceItem = HostedRemoteCollectionItem;
 
@@ -170,7 +170,7 @@ export default function RemoteCollectionScreen() {
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: { backgroundColor: colors.surface, flex: 1 },
   center: { alignItems: 'center', flex: 1, gap: spacing.sm, justifyContent: 'center' },
-  muted: { color: colors.textSecondary, fontSize: typeScale.footnote },
+  muted: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   listContent: { gap: spacing.sm, padding: spacing.md },
   emptyContent: { flexGrow: 1, justifyContent: 'center', padding: spacing.xl },
   row: {
@@ -198,8 +198,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   body: { flex: 1, gap: spacing.xs, minWidth: 0 },
   titleRow: { alignItems: 'baseline', flexDirection: 'row', gap: spacing.sm },
-  title: { color: colors.textPrimary, flex: 1, fontSize: typeScale.listTitle, fontWeight: fontWeight.semibold },
-  time: { color: colors.textTertiary, fontSize: typeScale.footnote },
-  subtitle: { color: colors.textSecondary, fontSize: typeScale.body },
-  meta: { color: colors.textTertiary, fontSize: typeScale.footnote },
+  title: { color: colors.textPrimary, flex: 1, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold },
+  time: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  subtitle: { color: colors.textSecondary, fontSize: typeScale.body, lineHeight: lineHeight.body },
+  meta: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

@@ -1895,7 +1895,7 @@ describe('new session composer surface', () => {
     expect(modelPillStyle).toContain('paddingHorizontal: spacing.md');
     expect(modelPillTextStyle).toContain('color: colors.textPrimary');
     expect(modelPillTextStyle).toContain('fontSize: typeScale.caption');
-    expect(modelPillTextStyle).toContain('fontWeight: fontWeight.semibold');
+    expect(modelPillTextStyle).toContain('fontWeight: fontWeight.medium');
     // 输入框字号档由 MobileComposerInputRow 统一持有(MOBILE_COMPOSER_DRAFT_TEXT_STYLE),
     // 页面不再覆盖;语音草稿覆盖层必须引用同一档,否则换行位置与输入框错开(见
     // composerVoiceDraftMetrics.test.ts)。
@@ -2000,8 +2000,8 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('<VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />');
     // 语音态占位文案就是普通态 TextInput 的 placeholder,必须与 placeholderTextColor 同源,
     // 否则一进语音态这行字会变色(2026-07-31 用户定案:不再用 statusReady 蓝绿)。
-    expect(newSource).toContain('placeholderTextColor={colors.textTertiary}');
-    expect(newSource).toContain('voiceDraftListeningText: {\n    color: colors.textTertiary,');
+    expect(newSource).toContain('placeholderTextColor={colors.textPlaceholder}');
+    expect(newSource).toContain('voiceDraftListeningText: {\n    color: colors.textPlaceholder,');
     expect(newSource).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
     expect(newSource).toContain('const voiceDraftShowsListeningPrompt = voiceIsListening && draft.firstMessage.length === 0;');
     expect(newSource).toContain('firstMessageInputRef.current?.setNativeProps({ selection: firstMessageSelectionRef.current });');

@@ -184,6 +184,7 @@ export function TaskTagLabels({ tags = [] }: { tags?: TaskTag[] }) {
             style={{
               color: colors.textPrimary,
               fontSize: typeScale.caption,
+              lineHeight: lineHeight.caption,
               flexShrink: 1,
             }}
           >
@@ -228,6 +229,7 @@ export function TaskMenuHeading({
             textAlign: 'center',
             color: colors.textPrimary,
             fontSize: typeScale.body,
+            lineHeight: lineHeight.body,
             fontWeight: fontWeight.semibold,
           }}
         >
@@ -637,7 +639,7 @@ export function TaskTagsPanel({
     }
     void reorder(id, to, expectedOrder);
   }
-  const textStyle = { color: colors.textPrimary, fontSize: typeScale.body };
+  const textStyle = { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body };
   const action = (
     label: string,
     onPress: () => void,
@@ -717,7 +719,7 @@ export function TaskTagsPanel({
     const reason = blocked ? 'offline' : error || 'loading';
     return (
       <View style={{ width: '100%', paddingVertical: spacing.md, gap: spacing.xs }}>
-        <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+        <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
           {t('taskTags.title')}
         </Text>
         <Text
@@ -725,7 +727,7 @@ export function TaskTagsPanel({
           style={{
             color: colors.textSecondary,
             fontSize: typeScale.caption,
-            lineHeight: lineHeight.listBody,
+            lineHeight: lineHeight.bodySmall,
           }}
         >
           {t(`taskTags.${reason}`)}
@@ -743,7 +745,7 @@ export function TaskTagsPanel({
               alignSelf: 'flex-start',
             }}
           >
-            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
               {t('taskTags.retry')}
             </Text>
           </Pressable>
@@ -758,7 +760,7 @@ export function TaskTagsPanel({
               alignSelf: 'flex-end',
             }}
           >
-            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
               {t('taskTags.done')}
             </Text>
           </Pressable>
@@ -822,7 +824,7 @@ export function TaskTagsPanel({
               : t(formOpen ? (editing ? 'taskTags.editTitle' : 'taskTags.add') : 'taskTags.title')}
         </Text>
         {expanded && !formOpen && (
-          <Text style={{ color: colors.textSecondary, fontSize: typeScale.caption }}>
+          <Text style={{ color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption }}>
             {t('taskTags.selectedCount', { count: selected.length })}
           </Text>
         )}
@@ -946,6 +948,7 @@ export function TaskTagsPanel({
                   textAlign: 'center',
                   paddingVertical: spacing.xl,
                   fontSize: typeScale.body,
+                  lineHeight: lineHeight.body,
                 }}
               >
                 {t(busy ? 'taskTags.loading' : 'taskTags.empty')}
@@ -1116,6 +1119,7 @@ export function TaskTagsPanel({
                   style={{
                     color: colors.textSecondary,
                     fontSize: typeScale.caption,
+                    lineHeight: lineHeight.caption,
                   }}
                 >
                   {t(
@@ -1328,7 +1332,7 @@ export function TaskTagsPanel({
           style={{
             color: colors.textSecondary,
             fontSize: typeScale.caption,
-            lineHeight: lineHeight.listBody,
+            lineHeight: lineHeight.bodySmall,
             paddingVertical: spacing.xs,
             marginTop: spacing.sm,
           }}
@@ -1347,7 +1351,7 @@ export function TaskTagsPanel({
             alignSelf: 'flex-start',
           }}
         >
-          <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+          <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
             {t('taskTags.retry')}
           </Text>
         </Pressable>

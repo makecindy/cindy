@@ -166,6 +166,7 @@ _Positioning note: the Display / Section Heading / Sub-heading rows are conceptu
 | 700 | Bold     | **仅限下方豁免登记表中的域**,禁止出现在普通 UI chrome                       |
 
 - 与手机端 `apps/mobile/src/theme/tokens.ts` 的 `fontWeight` token(regular / medium / semibold / bold)一一对应 —— 两端一张梯子。
+- **手机端按角色选字重**(2026-09-26 用户定稿):标题 600、列表行 / 按钮 500、正文与说明 400、分组小标签 600;浅色字不配粗字重。角色表正本见 `apps/mobile/docs/mobile-design-guide.md` §3。
 - **两端 700 口径**:手机端 UI chrome 的上限仍是 600（正本为 `apps/mobile/docs/mobile-design-guide.md`,该文已同步登记本例外）。`bold` / 700 在手机端**只允许**出现在下表登记的域——原生 Markdown strong 与登录品牌画布。也就是说「四档梯子」是两端共用的**档位定义**,不等于两端 chrome 都可用 700。
 - **CJK 注记**:桌面未设 `font-synthesis: none`,中文回退字体(PingFang)公开档位到 600 —— UI 里用 700 会在中文上触发伪粗体(算法加粗、边缘发糊),且 600 与 700 在 CJK 上的渲染差异不可靠。**中文层级不得依赖 600 vs 700 区分**,强调靠字号或颜色。
 
@@ -432,7 +433,7 @@ download happens in the normal startup Splash, not in the row.
 
 ### Mobile iOS navigation chrome / iPhone Duo
 
-- Explicitly selecting Teammates in the mobile home or chat drawer opens the teammate list, even with one teammate or when Teammates is already active. The mode switch itself never enters a chat; picking a teammate opens it. Keep cold-start recovery of a verified remembered teammate separate from this explicit navigation. Teammate rows share the task list typography: 18pt semibold titles with 28pt line height, 15pt regular previews with 26pt line height, and 13pt metadata with 22pt line height.
+- Explicitly selecting Teammates in the mobile home or chat drawer opens the teammate list, even with one teammate or when Teammates is already active. The mode switch itself never enters a chat; picking a teammate opens it. Keep cold-start recovery of a verified remembered teammate separate from this explicit navigation. Teammate rows share the task list typography: 18pt medium (500) titles with 28pt line height, 15pt regular previews with 26pt line height, and 13pt metadata with 22pt line height.
 
 - Wide Home and task-sidebar presentations share one native list instance in `ResidentHomeListProvider`, outside route lifetimes. Route slots supply layout and callbacks; do not key the host by task/route or restore a cached offset over its live scroll position. Collapse/expand its bounds, keep native headers outside its touch area, and pause hidden row subscriptions. Narrow screens retain their route-local list.
 
@@ -587,7 +588,7 @@ Cindy Desktop is an Electron app: layout responds to window resizing, not page b
 
 ### Mobile
 
-Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait / pad landscape). Cross-platform skins and login follow §15.13 and §16. iOS navigation, sheets, materials and controls follow the platform supplement [iOS native design](./ios-native-design.md); implementation guidance remains in [Mobile design guide](../../apps/mobile/docs/mobile-design-guide.md). Real system-owned components retain system geometry, typography and material; this does not exempt custom content from Mobile tokens. Existing implementations are migration evidence, not the specification for new surfaces.
+Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait / pad landscape). Cross-platform skins and login follow §15.13 and §16. iOS navigation, sheets, materials and controls follow the platform supplement [iOS native design](./ios-native-design.md); implementation guidance remains in [Mobile design guide](../../apps/mobile/docs/mobile-design-guide.md). **Mobile text (color, size, weight, line height) is decided by role from the guide's §3 text quick-reference table** (ruling 2026-09-26 / 27): five neutral text colors, lighter colors never take heavier weights, an 11-step type scale, and every text style paired with a line height; guard tests enforce these, role choice is checked in review. Real system-owned components retain system geometry, typography and material; this does not exempt custom content from Mobile tokens. Existing implementations are migration evidence, not the specification for new surfaces.
 
 ## 9. Agent Prompt Guide
 
@@ -1465,7 +1466,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 #### Red boundary
 
 - Brand red `#DF0C27` only for brand display / splash, destructive actions, running/thinking emphasis, and the list active glyph (dark uses `#A61629` for the glyph).
-- Ordinary CTAs, FABs, send buttons, and confirm-style primaries are neutral-inverse: desktop light bg `#3C3F43` / text `#FCFCFC`, dark bg `#EEEEEE` / text `#151515` (2026-08); mobile light `#1A1A1A` / `#FFFFFF`, dark `#EDEDED` / `#121212` (2026-09-26, see Cross-platform color semantics). Never brand-red these.
+- Ordinary CTAs, FABs, send buttons, and confirm-style primaries are neutral-inverse: desktop light bg `#3C3F43` / text `#FCFCFC`, dark bg `#EEEEEE` / text `#151515` (2026-08); mobile light `#0F0F0F` / `#FFFFFF`, dark `#EDEDED` / `#121212` (2026-09-26, see Cross-platform color semantics). Never brand-red these.
 - The red whitelist does not include carets, focus rings, ordinary buttons, or ordinary selected backgrounds. A new red consumer must document its semantics and enter the token/test whitelist first; no component-level hardcoding.
 
 #### Caret & focus
@@ -1477,11 +1478,12 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 #### Cross-platform color semantics (mobile owns its ramp — ruling 2026-09-26)
 
 - Mobile shares Cindy's brand identity and semantic roles with desktop — the same meanings for background, card, body, secondary / tertiary text, borders, neutral-inverse CTA, brand red, status colors, caret and focus blue — but **owns its own ramp values, contrast and warmth** (user ruling 2026-09-25: mobile design may decouple from desktop and should be higher contrast; values finalized 2026-09-26). Do not copy desktop hex values into mobile, and do not sync them back to desktop; semantics stay mirrored, values do not. This supersedes the 2026-07-18 "isomorphism" baseline and the 2026-08 pending mobile follow-up.
-- **Mobile light = bright ivory**: page `#F9F9F6` (user-specified: brighter than desktop `#F2F2ED`, warmth B = R−3 — a lighter ivory than desktop's R−5), card / list row / popover `#FFFFFC`, chip / selected `#EAEAE6`, border `#CCCCC8`. Body text stays neutral `#1A1A1A`; secondary `#4D4D4A`, tertiary `#686864`.
+- **Mobile light = bright ivory**: page `#F9F9F6` (user-specified: brighter than desktop `#F2F2ED`, warmth B = R−3 — a lighter ivory than desktop's R−5), card / list row / popover `#FFFFFC`, chip / selected `#EAEAE6`, border `#CCCCC8`. Body text stays neutral `#0F0F0F`; secondary `#4D4D4A`, tertiary `#686864`.
 - **Consequence of the brighter page — mobile light cards separate by hairline, not by fill.** Against `#F9F9F6` the near-white ceiling leaves only a 1.05 card lift (desktop 1.12, iOS grouped background 1.12). Every new raised mobile-light surface (card, list row, popover, input container) therefore **must carry the 1px `border`**; do not rely on the `surfaceElevated` fill alone. Surfaces that must read as recessed (chip / selected, expanded block, code card) sit **below** the page instead.
 - **Mobile dark = pure neutral near-black**: page `#121212`, card `#1E1E1E`, chip `#2A2A2A`, border `#383838`; body `#EDEDED`, secondary `#BDBDBD`, tertiary `#999999`. No warmth.
 - **Text tiers are ordered and legible**: body → secondary → tertiary go from strongest to weakest, and all three are ≥ 4.5:1 on every surface they sit on (page, card, chip, code card, sheet action group). This replaces the inverted pre-2026-09 mobile order where secondary (`#8C8E94` / `#6F6F6F`, 2.8 / 2.9:1) was lighter than tertiary; the U2 exception (15.5) no longer applies to mobile. Guarded by `themeTokens.test.ts` and the frozen `theme-colors-snapshot.json`.
-- **Neutral-inverse CTA on mobile**: light `#1A1A1A` / `#FFFFFF`, dark `#EDEDED` / `#121212` (17.40 / 16.00:1).
+- **Mobile text colors are five neutral tiers** (ruling 2026-09-27): body, secondary, tertiary, placeholder, neutral-inverse (`ctaText`). `textPlaceholder` (light `#858581` / dark `#757575`, ≥ 3:1 on page, card and chip) is a registered exception to the 4.5:1 tier rule and may be used only for input placeholders and the voice-listening prompt that mirrors them. Sheet action labels use `textPrimary` (the former `sheetActionText` alias was removed); text on a `textPrimary` / `cta` fill uses `ctaText`, never `surface`; the shared-task danger button label uses `#FFFFFF` / `#121212`. The login skin (§16) keeps its own registered grays for now.
+- **Neutral-inverse CTA on mobile**: light `#0F0F0F` / `#FFFFFF`, dark `#EDEDED` / `#121212` (19.17 / 16.00:1).
 - The appearance mode is a user setting (Settings → Appearance: follow system / light / dark, default follow system; only an explicit light / dark choice is persisted). It forces native system surfaces to the same mode; the first-launch light login gate (§16.5) still applies inside the login stage.
 - Values live only in `apps/mobile/src/theme/tokens.ts`; the proposal record and before / after comparison are in Design Lab (`colors` study, platform iPhone / Android). Login skin tokens (§16), brand splash, status four, task tags and syntax colors are outside this ramp and keep their own registered values.
 - Mobile-only tokens carry only mobile-specific layers or geometry:
@@ -1498,8 +1500,8 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 | `sheetSurface`        | `rgba(249,249,246,0.96)` | `rgba(28,28,28,0.96)` | Bottom-sheet root               |
 | `sheetActionSurface`  | `#FFFFFC`                | `#262626`             | Sheet action group / row        |
 | `sheetActionBorder`   | `#CCCCC8`                | `#383838`             | Sheet action group / row border |
-| `sheetActionText`     | `#1A1A1A`                | `#EDEDED`             | Sheet action row label          |
 | `sheetGrabber`        | `#C2C2BE`                | `#5C5C5C`             | Sheet / composer grabber        |
+| `textPlaceholder`     | `#858581`                | `#757575`             | Input placeholder only (≈3.5:1) |
 
 #### Iconography
 

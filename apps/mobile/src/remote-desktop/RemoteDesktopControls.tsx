@@ -37,6 +37,7 @@ import {
   fontWeight,
   iconSize,
   iconStroke,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -533,14 +534,16 @@ const makeStyles = (colors: ThemeColors) =>
     quickLabel: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       textAlign: "center",
     },
     quickSelectedLabel: { color: colors.ctaText },
     section: { gap: spacing.sm },
     sectionTitle: {
       color: colors.textTertiary,
-      fontSize: typeScale.caption,
-      fontWeight: fontWeight.medium,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.semibold,
     },
     segments: {
       flexDirection: "row",
@@ -550,7 +553,7 @@ const makeStyles = (colors: ThemeColors) =>
       borderRadius: radius.control,
     },
     segment: { flex: 1, minHeight: 44, borderRadius: radius.control },
-    hint: { color: colors.textPrimary, fontSize: typeScale.caption },
+    hint: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     group: {
       backgroundColor: colors.surfaceTranslucent,
       borderRadius: radius.container,
@@ -566,7 +569,7 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       gap: spacing.sm,
     },
-    rowTitle: { color: colors.textPrimary, fontSize: typeScale.body },
+    rowTitle: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
     expand: { flex: 1 },
     divider: {
       height: StyleSheet.hairlineWidth,
@@ -591,7 +594,7 @@ const makeStyles = (colors: ThemeColors) =>
       gap: spacing.sm,
       borderRadius: radius.control,
     },
-    disconnectLabel: { color: colors.destructive, fontSize: typeScale.body },
+    disconnectLabel: { color: colors.destructive, fontSize: typeScale.body, lineHeight: lineHeight.body },
     disabled: { opacity: 0.4 },
     pressed: { opacity: 0.72 },
   });

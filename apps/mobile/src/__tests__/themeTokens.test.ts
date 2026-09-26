@@ -103,14 +103,14 @@ describe('theme tokens', () => {
     // 契约第二次改写依据:用户红色新规 2026-07-17——常规按钮不用红,红只留警告/报错。
     // 取代 U3+U8 时期的全态红契约(M2 的 cta=#DF0C27 L=D 红底白字作废),CTA 回归中性反相。
     // 这是显式契约改写,非绕过;PR 描述须写明依据。
-    expect(lightColors.cta).toBe('#1A1A1A');
+    expect(lightColors.cta).toBe('#0F0F0F');
     expect(darkColors.cta).toBe('#EDEDED');
     expect(lightColors.ctaText).toBe('#FFFFFF');
     expect(darkColors.ctaText).toBe('#121212');
     // 亮暗反相回归:dark cta ≠ light cta(深底 ↔ 浅底)。
     expect(darkColors.cta).not.toBe(lightColors.cta);
     expect(darkColors.ctaText).not.toBe(lightColors.ctaText);
-    // 中性反相对比度:light 17.40:1 / dark 16.00:1(2026-09-26 移动端象牙白色板),过 AA 4.5:1。
+    // 中性反相对比度:light 19.17:1 / dark 16.00:1(2026-09-26 移动端象牙白色板),过 AA 4.5:1。
     expect(contrastRatio(lightColors.ctaText, lightColors.cta)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(darkColors.ctaText, darkColors.cta)).toBeGreaterThanOrEqual(4.5);
   });
@@ -135,12 +135,12 @@ describe('theme tokens', () => {
   });
 
   it('毛玻璃 token 契约(R1 audit 模式1/3,E4M 新增 surfaceTranslucentSidebar / surfaceGlassPanel)', () => {
-    // R1 audit 的透明度结构保留(侧栏 light 0.90 / dark 0.85,浮层卡 dark 0.95);底色随
-    // 2026-09-26 移动端象牙白色板更新。surface 不叠 blur 规避 Android 热路径。
+    // 侧栏保留 R1 audit 的透明度(light 0.90 / dark 0.85);浮层卡两模式都不透明(2026-09-26
+    // 用户定稿,原 dark 0.95 与 light 不一致)。surface 不叠 blur 规避 Android 热路径。
     expect(lightColors.surfaceTranslucentSidebar).toBe('rgba(255, 255, 252, 0.90)');
     expect(darkColors.surfaceTranslucentSidebar).toBe('rgba(10, 10, 10, 0.85)');
     expect(lightColors.surfaceGlassPanel).toBe('#FFFFFC');
-    expect(darkColors.surfaceGlassPanel).toBe('rgba(36, 36, 36, 0.95)');
+    expect(darkColors.surfaceGlassPanel).toBe('#242424');
     // 遮罩双模式恒深(用户定稿 2026-07-21):LIGHT 模式 scrim 也必须深色。
     // light overlay 0.24 太浅近白、0.50 实机过重,用户两轮定稿 0.35;侧栏底色另有
     // surfaceTranslucentSidebar,不受影响。
@@ -159,6 +159,27 @@ describe('theme tokens', () => {
         expect(ratios[0]).toBeGreaterThan(ratios[1]);
         expect(ratios[1]).toBeGreaterThan(ratios[2]);
       }
+    }
+  });
+
+  it('占位字专用档:比三级更淡,但在可承载输入框的底色上仍 ≥ 3:1(2026-09-27 用户定稿)', () => {
+    expect(lightColors.textPlaceholder).toBe('#858581');
+    expect(darkColors.textPlaceholder).toBe('#757575');
+    for (const palette of [lightColors, darkColors]) {
+      const planes = [palette.surface, palette.surfaceElevated, palette.surfaceChip];
+      for (const plane of planes) {
+        const ratio = contrastRatio(palette.textPlaceholder, plane);
+        expect(ratio).toBeGreaterThanOrEqual(3);
+        expect(ratio).toBeLessThan(contrastRatio(palette.textTertiary, plane));
+      }
+    }
+  });
+
+  it('共享任务确认钮前景并入中性反色(纯白 / #121212),红底上 ≥ 4.5:1', () => {
+    expect(lightColors.sharedTaskConfirmForeground).toBe(lightColors.ctaText);
+    expect(darkColors.sharedTaskConfirmForeground).toBe(darkColors.ctaText);
+    for (const palette of [lightColors, darkColors]) {
+      expect(contrastRatio(palette.sharedTaskConfirmForeground, palette.sharedTaskConfirmBackground)).toBeGreaterThanOrEqual(4.5);
     }
   });
 
@@ -201,8 +222,6 @@ describe('theme tokens', () => {
     expect(darkColors.sheetActionSurface).toBe('#262626');
     expect(lightColors.sheetActionBorder).toBe('#CCCCC8');
     expect(darkColors.sheetActionBorder).toBe('#383838');
-    expect(lightColors.sheetActionText).toBe('#1A1A1A');
-    expect(darkColors.sheetActionText).toBe('#EDEDED');
     expect(lightColors.sheetGrabber).toBe('#C2C2BE');
     expect(darkColors.sheetGrabber).toBe('#5C5C5C');
     // 破坏性红继续走 Mac red-audit-spec / token-decision-table 的 destructive 语义,不采用 Figma #DF0C27。
@@ -245,13 +264,16 @@ describe('theme tokens', () => {
     }
   });
 
-  it('M1 List typography / icon 语义档补齐施工图缺口', () => {
-    expect(typeScale.listBody).toBe(14);
-    expect(lineHeight.listBody).toBe(20);
-    expect(textStyles.listBody).toEqual({ fontSize: 14, lineHeight: 20 });
-    expect(typeScale.listTitle).toBe(19);
-    expect(lineHeight.listTitleCompact).toBe(27);
-    expect(textStyles.listTitle).toEqual({ fontSize: 19, lineHeight: 27 });
+  it('字号阶梯收拢为 11 档(2026-09-27 用户定稿:14 并入 15、19 并入 20)', () => {
+    expect(Object.values(typeScale)).toEqual([11, 12, 13, 15, 16, 17, 18, 20, 24, 30, 40]);
+    expect(typeScale.bodySmall).toBe(15);
+    expect(lineHeight.bodySmall).toBe(20);
+    expect(textStyles.bodySmall).toEqual({ fontSize: 15, lineHeight: 20 });
+    // 旧 List 专用档已删除,不允许回潮。
+    expect(Object.keys(typeScale)).not.toContain('listBody');
+    expect(Object.keys(typeScale)).not.toContain('listTitle');
+    expect(Object.keys(typeScale)).not.toContain('code');
+    expect(Object.keys(lineHeight)).not.toContain('listTitleCompact');
     expect(iconSize.listGlyph).toBe(21);
   });
 

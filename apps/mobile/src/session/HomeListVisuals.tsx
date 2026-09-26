@@ -172,7 +172,7 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.subtitle,
-    fontWeight: fontWeight.semibold,
+    fontWeight: fontWeight.medium,
     lineHeight: lineHeight.listTitle,
     minWidth: 0,
   },
@@ -185,7 +185,7 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
   sessionPreview: {
     color: colors.textSecondary,
     flex: 1,
-    fontSize: typeScale.code,
+    fontSize: typeScale.bodySmall,
     fontWeight: fontWeight.regular,
     lineHeight: lineHeight.subtitle,
     minWidth: 0,

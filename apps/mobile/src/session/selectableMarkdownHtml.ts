@@ -176,7 +176,7 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
   const inlineCodeColor = cssValue(options.inlineCodeColor ?? lightColors.chatInlineCodeText);
   const fontSize = cssNumber(options.fontSize ?? 16);
   const lineHeight = cssNumber(options.lineHeight ?? 23);
-  const codeFontSize = cssNumber(typeScale.code);
+  const codeFontSize = cssNumber(typeScale.bodySmall);
   // 标题两档大号 + 共用行高(20/28、18/28 都是 lineHeight 阶梯里的既有配对)。
   const headingLargeFontSize = cssNumber(typeScale.title);
   const headingMediumFontSize = cssNumber(typeScale.subtitle);

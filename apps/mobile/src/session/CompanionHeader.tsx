@@ -6,7 +6,7 @@ import { resolveRemoteText, type RemoteResource, type RemoteResourceRef } from '
 import { useAuth } from '@/auth/AuthContext';
 import { Text } from '@/components/AppText';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
-import { fontWeight, iconSize, iconStroke, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
 import { TeammatePicker } from './TeammatePicker';
 import { CompanionCreateSheet, CompanionProfileSheet } from './CompanionProfileSheet';
@@ -65,5 +65,5 @@ function CompanionHeaderContent({ resource, deviceId, deviceName, online, contro
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', minHeight: 52, gap: spacing.md, paddingHorizontal: spacing.lg },
   identity: { flex: 1, flexDirection: 'row', alignItems: 'center', minHeight: 44, gap: spacing.sm },
-  name: { flexShrink: 1, fontSize: typeScale.subtitle, fontWeight: fontWeight.medium, color: colors.textPrimary },
+  name: { flexShrink: 1, fontSize: typeScale.subtitle, lineHeight: lineHeight.subtitle, fontWeight: fontWeight.medium, color: colors.textPrimary },
 });

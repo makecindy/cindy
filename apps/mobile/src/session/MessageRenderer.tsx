@@ -486,7 +486,7 @@ const stylesStatic = StyleSheet.create({
   },
   workActivityIconSlot: {
     alignItems: 'center',
-    height: lineHeight.listBody,
+    height: lineHeight.bodySmall,
     justifyContent: 'center',
     width: iconSize.md,
   },
@@ -8282,12 +8282,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   emptyTitle: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   syncingTitle: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     marginTop: spacing.sm,
   },
   messageItem: {
@@ -8383,12 +8385,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   hookSourceTitle: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.semibold,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.medium,
   },
   hookSourceChannel: {
     color: colors.textTertiary,
     flexShrink: 1,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
   },
   messageText: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge },
   automationOriginRow: {
@@ -8412,7 +8416,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   modelMismatchText: {
     color: colors.textTertiary,
     flexShrink: 1,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   collapseMeasureWrap: {
@@ -8445,11 +8449,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   systemCardTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   systemCardBody: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   systemCardRows: {
@@ -8464,7 +8469,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   systemCardLabel: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   systemCardValue: {
     color: colors.textPrimary,
@@ -8497,7 +8503,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flexShrink: 1,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   autoResumeRow: {
     alignSelf: 'stretch',
@@ -8520,12 +8527,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexShrink: 1,
     flexGrow: 0,
     fontSize: typeScale.footnote,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   autoResumeSummary: {
     color: colors.textSecondary,
     flex: 1,
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     minWidth: 0,
   },
   autoResumeHeaderSpacer: {
@@ -8545,12 +8554,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   autoResumeDetailLabel: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   autoResumeDetailText: {
     color: colors.textSecondary,
     fontFamily: monoFont,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     marginTop: 2,
   },
@@ -8595,11 +8605,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   agentSwitchPillText: {
     color: colors.textSecondary,
     fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
     fontWeight: fontWeight.medium,
   },
   agentSwitchDot: {
     color: colors.textTertiary,
     fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
     opacity: 0.5,
   },
   agentSwitchModel: {
@@ -8607,6 +8619,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexShrink: 1,
     fontFamily: monoFont,
     fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
   },
   agentSwitchHandoffPanel: {
     backgroundColor: colors.surface,
@@ -8620,13 +8633,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   agentSwitchHandoffTitle: {
     color: colors.textTertiary,
     fontSize: typeScale.micro,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.micro,
+    fontWeight: fontWeight.regular,
     marginBottom: spacing.xs,
   },
   agentSwitchHandoffText: {
     color: colors.textSecondary,
     fontFamily: monoFont,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   markdownBody: {},
@@ -8664,8 +8678,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   markdownInlineCode: {
     color: colors.chatInlineCodeText,
     fontFamily: monoFont,
-    fontSize: typeScale.code,
-    lineHeight: lineHeight.code,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
   },
   // 已验证存在的文件/目录路径 chip:**只加一条下划线,其它什么都不动**
   // (权威规则见 docs/design-rules/DESIGN.md §14.5,对齐 GitHub 的口径 ——
@@ -8767,8 +8781,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flexShrink: 1,
     fontFamily: monoFont,
-    fontSize: typeScale.code,
-    lineHeight: lineHeight.code,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
     maxWidth: '100%',
   },
   // 语法着色:只上 color,其余(字体/字号/行高)继承 markdownCodeText —— 嵌套 Text
@@ -8801,8 +8815,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderRightWidth: StyleSheet.hairlineWidth,
     color: colors.textPrimary,
     flexShrink: 0,
-    fontSize: typeScale.code,
-    lineHeight: lineHeight.code,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
@@ -8810,7 +8824,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: fontWeight.medium,
   },
-  detailText: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  detailText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   italicText: { fontStyle: 'italic' },
   thinkingStrong: { fontWeight: fontWeight.medium },
   thinkingCode: { fontFamily: monoFont, fontStyle: 'normal' },
@@ -8852,8 +8866,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     padding: spacing.sm,
     width: 160,
   },
-  mediaKind: { color: colors.textTertiary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
-  mediaTitle: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  mediaKind: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  mediaTitle: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   mediaHint: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.micro },
   fileChip: {
     alignItems: 'center',
@@ -8870,7 +8884,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
   },
   fileText: { flex: 1, minWidth: 0 },
-  fileName: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  fileName: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   diffCard: {
     backgroundColor: colors.chatCodeSurface,
     borderColor: colors.chatCodeBorder,
@@ -8879,13 +8893,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.xs,
     padding: spacing.sm,
   },
-  diffPath: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
-  diffStats: { color: colors.textSecondary, fontSize: typeScale.caption },
+  diffPath: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+  diffStats: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   diffRows: { gap: 2 },
   diffLine: { fontSize: typeScale.caption, lineHeight: lineHeight.micro },
   diffDelete: { color: colors.textSecondary },
   diffAdd: { color: colors.textPrimary, fontWeight: fontWeight.medium },
-  diffMore: { color: colors.textTertiary, fontSize: typeScale.caption },
+  diffMore: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   messageActionBar: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -8916,7 +8930,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     alignSelf: 'center',
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.listTitle,
   },
   foldPlain: { alignSelf: 'stretch' },
@@ -9008,7 +9022,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   forkOriginText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   loadEarlierButton: {
     alignItems: 'center',
@@ -9018,16 +9033,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
   },
-  loadEarlierText: { color: colors.textTertiary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  loadEarlierText: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   foldText: { flex: 1, minWidth: 0 },
-  foldTitle: { color: colors.textSecondary, fontSize: typeScale.footnote, fontWeight: fontWeight.medium },
+  foldTitle: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   foldTitlePlain: {
     color: colors.textSecondary,
-    fontSize: typeScale.listBody,
+    fontSize: typeScale.bodySmall,
     fontWeight: fontWeight.regular,
-    lineHeight: lineHeight.listBody,
+    lineHeight: lineHeight.bodySmall,
   },
-  foldSubtitle: { color: colors.textTertiary, fontSize: typeScale.caption, marginTop: 2 },
+  foldSubtitle: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, marginTop: 2 },
   foldBody: { paddingHorizontal: spacing.md, paddingBottom: spacing.md },
   foldBodyPlain: {
     paddingBottom: 0,
@@ -9063,8 +9078,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   workThinkingText: { flex: 1, minWidth: 0 },
   workActivityText: {
     color: colors.textSecondary,
-    fontSize: typeScale.listBody,
-    lineHeight: lineHeight.listBody,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
   },
   workThinkingMeasureWrap: {
     left: 0,
@@ -9110,14 +9125,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   toolInputActionText: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
   },
   toolName: {
     color: colors.textSecondary,
-    fontSize: typeScale.listBody,
+    fontSize: typeScale.bodySmall,
     fontWeight: fontWeight.regular,
-    lineHeight: lineHeight.listBody,
+    lineHeight: lineHeight.bodySmall,
   },
   toolNameFlex: { flex: 1, minWidth: 0 },
   toolResult: {
@@ -9140,7 +9155,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   toolResultHint: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     paddingBottom: spacing.sm,
     paddingHorizontal: spacing.sm,
   },
@@ -9159,7 +9175,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   payloadGalleryCount: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     marginTop: 2,
   },
   payloadHeaderActions: {
@@ -9183,7 +9200,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   payloadHeaderStatus: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   payloadCloseButton: {
     alignItems: 'center',
@@ -9195,7 +9213,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     width: 40,
   },
-  payloadCloseText: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  payloadCloseText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   payloadViewerBody: {
     flex: 1,
     minHeight: 0,
@@ -9223,7 +9241,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     padding: spacing.lg,
   },
   payloadText: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge },
-  payloadMonoText: { fontFamily: monoFont, fontSize: typeScale.footnote, lineHeight: lineHeight.code },
+  payloadMonoText: { fontFamily: monoFont, fontSize: typeScale.footnote, lineHeight: lineHeight.bodySmall },
   payloadDiffHeaderBlock: {
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -9240,7 +9258,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     fontFamily: monoFont,
     fontSize: typeScale.footnote,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
   },
   payloadDiffFilePreviewBlock: {
     borderBottomColor: colors.border,
@@ -9270,8 +9288,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   payloadDiffSectionTitle: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   payloadDiffCompareRow: {
@@ -9297,6 +9316,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   payloadDiffPaneTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   payloadDiffPaneBody: {
@@ -9319,7 +9339,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     fontFamily: monoFont,
     fontSize: typeScale.caption,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
     marginRight: spacing.sm,
     textAlign: 'right',
     width: 34,
@@ -9327,7 +9347,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   payloadDiffLinePrefix: {
     fontFamily: monoFont,
     fontSize: typeScale.footnote,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
     marginRight: spacing.sm,
     textAlign: 'center',
     width: 14,
@@ -9343,7 +9363,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flex: 1,
     fontFamily: monoFont,
     fontSize: typeScale.footnote,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
   },
   payloadDiffLineTextOld: {
     color: colors.textSecondary,
@@ -9356,7 +9376,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   payloadDiffEmptyLine: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
   },
@@ -9390,7 +9410,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 260,
     padding: spacing.xl,
   },
-  payloadMediaKind: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.medium },
+  payloadMediaKind: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.medium },
   payloadMediaHint: { color: colors.textSecondary, fontSize: typeScale.body, lineHeight: lineHeight.body, textAlign: 'center' },
   payloadActionBlock: {
     alignItems: 'center',
@@ -9412,7 +9432,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 38,
     paddingHorizontal: spacing.lg,
   },
-  payloadOpenButtonText: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  payloadOpenButtonText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   payloadPathCopyStatus: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
@@ -9423,7 +9443,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   todoRowPending: { opacity: 0.72 },
   todoMark: { alignItems: 'center', justifyContent: 'center', width: 22 },
   todoCopy: { flex: 1, minWidth: 0 },
-  todoText: { color: colors.textPrimary, fontSize: typeScale.code, lineHeight: lineHeight.code },
+  todoText: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   todoPending: { color: colors.textTertiary },
   todoDone: { fontWeight: fontWeight.medium },
 });

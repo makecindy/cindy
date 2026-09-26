@@ -1,7 +1,7 @@
 import { findCatalogModel } from '@cindy/model-providers';
 import { buildMobileModelSections } from './providerModelSections';
 import { mobileProviderAccountTitle } from './mobileModelRowPresentation';
-import { iconSize } from '@/theme';
+import { iconSize, lineHeight } from '@/theme';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Switch, View } from 'react-native';
 import { ChevronDown, ChevronRight, ChevronUp, MinusCircle, Plus, ArrowUp } from 'lucide-react-native';
@@ -41,7 +41,7 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
     const source = provider ? mobileProviderAccountTitle(provider) : route.providerId;
     return <View key={`${route.harness}:${route.providerId}:${route.model}`} style={styles.row}>
       <Pressable accessibilityRole="button" disabled={disabled || following} onPress={() => onPick(index)} style={[styles.row, { flex: 1 }]}>
-        <Text style={{ color: colors.textSecondary }}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>{model?.name ?? route.model}</Text><Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote }}>{[source, route.harness === 'claude' ? 'Claude Code' : route.harness === 'codex' ? 'Codex' : 'Pi', route.effort ? t(`models.options.effortLevels.${route.effort}`, { defaultValue: route.effort }) : '', route.fastMode ? 'Fast' : ''].filter(Boolean).join(' · ')}</Text></View><ChevronRight size={iconSize.md} color={colors.textSecondary} />
+        <Text style={{ color: colors.textSecondary }}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>{model?.name ?? route.model}</Text><Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{[source, route.harness === 'claude' ? 'Claude Code' : route.harness === 'codex' ? 'Codex' : 'Pi', route.effort ? t(`models.options.effortLevels.${route.effort}`, { defaultValue: route.effort }) : '', route.fastMode ? 'Fast' : ''].filter(Boolean).join(' · ')}</Text></View><ChevronRight size={iconSize.md} color={colors.textSecondary} />
       </Pressable>
       {/* Desktop BotModelChainEditor: the first model stays primary (change it with the picker);
           backups reorder among themselves and can be removed. */}
@@ -56,7 +56,7 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
     {chain.length ? <>
       {/* The backup chain stays folded inside this editor, as on Desktop. */}
       <Pressable accessibilityRole="button" accessibilityState={{ expanded: showBackups }} onPress={() => setShowBackups(value => !value)} style={styles.row} testID="companionModels.backups">
-        <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, flex: 1 }}>{t('devices.companionProfile.backupModels', { count: chain.length - 1 })}</Text>
+        <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, flex: 1 }}>{t('devices.companionProfile.backupModels', { count: chain.length - 1 })}</Text>
         {showBackups ? <ChevronUp size={iconSize.md} color={colors.textSecondary} /> : <ChevronDown size={iconSize.md} color={colors.textSecondary} />}
       </Pressable>
       {showBackups ? <>{chain.slice(1).map((route, offset) => routeRow(route, offset + 1))}{addRow}</> : null}

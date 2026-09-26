@@ -156,7 +156,7 @@ export function ContextSheetGoalCreateForm({
         multiline
         onChangeText={setObjective}
         placeholder={t('interaction.contextSheet.goalPlaceholder')}
-        placeholderTextColor={colors.textTertiary}
+        placeholderTextColor={colors.textPlaceholder}
         style={styles.objectiveInput}
         testID="contextSheet.goalObjectiveInput"
         value={objective}
@@ -411,6 +411,7 @@ function makeGoalStyles(colors: ThemeColors) {
     groupLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingTop: spacing.lg,
     },
     objectiveInput: {
@@ -435,6 +436,7 @@ function makeGoalStyles(colors: ThemeColors) {
     advancedToggleText: {
       color: colors.textSecondary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
     limitOptionsRow: {
@@ -443,6 +445,7 @@ function makeGoalStyles(colors: ThemeColors) {
     limitLabel: {
       color: colors.textPrimary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
     limitPillRow: {
@@ -465,6 +468,7 @@ function makeGoalStyles(colors: ThemeColors) {
     limitPillText: {
       color: colors.textPrimary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
     limitPillTextSelected: {
@@ -479,6 +483,7 @@ function makeGoalStyles(colors: ThemeColors) {
     errorText: {
       color: colors.errorText,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingTop: spacing.md,
     },
     ctaButton: {
@@ -495,7 +500,8 @@ function makeGoalStyles(colors: ThemeColors) {
     ctaLabel: {
       color: colors.ctaText,
       fontSize: typeScale.body,
-      fontWeight: fontWeight.semibold,
+      lineHeight: lineHeight.body,
+      fontWeight: fontWeight.medium,
     },
     pressed: {
       opacity: 0.7,
@@ -518,6 +524,7 @@ function makeGoalStyles(colors: ThemeColors) {
     statusChipText: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
     statusChipTextActive: {
@@ -526,6 +533,7 @@ function makeGoalStyles(colors: ThemeColors) {
     statusMeta: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
     },
     objectiveText: {
       color: colors.textPrimary,
@@ -549,6 +557,7 @@ function makeGoalStyles(colors: ThemeColors) {
     actionButtonText: {
       color: colors.textPrimary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
   };

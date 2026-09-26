@@ -177,9 +177,9 @@ describe('mobile message actions desktop-first surface', () => {
     const plainTitleEnd = source.indexOf('foldSubtitle:', plainTitleStart);
     const plainTitleStyle = source.slice(plainTitleStart, plainTitleEnd);
     expect(plainTitleStyle).toContain('color: colors.textSecondary');
-    expect(plainTitleStyle).toContain('fontSize: typeScale.listBody');
+    expect(plainTitleStyle).toContain('fontSize: typeScale.bodySmall');
     expect(plainTitleStyle).toContain('fontWeight: fontWeight.regular');
-    expect(plainTitleStyle).toContain('lineHeight: lineHeight.listBody');
+    expect(plainTitleStyle).toContain('lineHeight: lineHeight.bodySmall');
     expect(foldableSource).toContain("variant === 'plain'");
     expect(foldableSource).toContain('? styles.foldBodyPlain');
   });

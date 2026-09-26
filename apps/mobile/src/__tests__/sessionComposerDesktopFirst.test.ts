@@ -450,7 +450,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const handleComposerInputPressIn = useCallback(() => {');
     expect(source).toContain('onPressIn={handleComposerInputPressIn}');
     expect(source).toContain("placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}");
-    expect(source).toContain('placeholderTextColor={colors.textTertiary}');
+    expect(source).toContain('placeholderTextColor={colors.textPlaceholder}');
     expect(source).toContain('inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}');
     expect(source).toContain('styles.voiceDraftOverlay');
     expect(voiceDraftOverlayStyle).toContain('...StyleSheet.absoluteFill');
@@ -517,8 +517,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('<VoiceMicWaveCaret color={colors.statusReady} inline />');
     // 语音态占位文案就是普通态 TextInput 的 placeholder,必须与 placeholderTextColor 同源,
     // 否则一进语音态这行字会变色(2026-07-31 用户定案:不再用 statusReady 蓝绿)。
-    expect(source).toContain('placeholderTextColor={colors.textTertiary}');
-    expect(source).toContain('voiceDraftListeningText: {\n    color: colors.textTertiary,');
+    expect(source).toContain('placeholderTextColor={colors.textPlaceholder}');
+    expect(source).toContain('voiceDraftListeningText: {\n    color: colors.textPlaceholder,');
     expect(source).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
     expect(source).toContain('finishVoiceRecordingRef.current?.();');
     expect(source).toContain('const voiceStopInFlightRef = useRef(false);');

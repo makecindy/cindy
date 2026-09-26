@@ -1784,7 +1784,7 @@ function RenameSelfDeviceScreen({
             onChangeText={onChangeDraft}
             onSubmitEditing={onDone}
             placeholder={t('settings.deviceNameEditor.placeholder')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             returnKeyType="done"
             selectTextOnFocus
             style={styles.nameEditorInput}
@@ -1874,12 +1874,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     width: 56,
   },
   avatarImage: { height: 56, width: 56 },
-  avatarText: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.semibold },
+  avatarText: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold },
   headerTexts: { flex: 1, gap: 3, minWidth: 0 },
-  headerName: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.semibold },
-  headerEmail: { color: colors.textSecondary, fontSize: typeScale.footnote },
+  headerName: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold },
+  headerEmail: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   headerStatusRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, marginTop: 1 },
-  headerStatusText: { color: colors.textSecondary, flex: 1, fontSize: typeScale.footnote, minWidth: 0 },
+  headerStatusText: { color: colors.textSecondary, flex: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, minWidth: 0 },
   // —— 分组 ——
   group: { gap: spacing.sm },
   groupTitleRow: {
@@ -1889,10 +1889,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 24,
     paddingHorizontal: spacing.md,
   },
-  groupTitle: { color: colors.textTertiary, flex: 1, fontSize: typeScale.footnote, fontWeight: fontWeight.medium },
+  groupTitle: { color: colors.textTertiary, flex: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.semibold },
   groupFooter: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.md,
   },
@@ -1935,9 +1935,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // —— 行 ——
   row: { gap: 3, justifyContent: 'center', minHeight: 52, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   rowLine: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
-  rowLabel: { color: colors.textSecondary, flexShrink: 0, fontSize: typeScale.code },
-  rowValue: { color: colors.textPrimary, flex: 1, fontSize: typeScale.code, textAlign: 'right' },
-  rowDetail: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  // 设置行:标签是主信息(正文色 500),右侧取值退为二级色 400;说明文字用 13pt(2026-09-27 用户反馈偏淡)。
+  rowLabel: { color: colors.textPrimary, flexShrink: 0, fontSize: typeScale.body, fontWeight: fontWeight.medium, lineHeight: lineHeight.body },
+  rowValue: { color: colors.textSecondary, flex: 1, fontSize: typeScale.body, lineHeight: lineHeight.body, textAlign: 'right' },
+  rowDetail: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   localLogOptions: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   switchRow: {
     alignItems: 'center',
@@ -1948,7 +1949,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.md,
   },
   switchTexts: { flex: 1, gap: spacing.xs },
-  hint: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  hint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   // —— 版本行 ——
   versionRow: {
     alignItems: 'center',
@@ -1960,7 +1961,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   versionTexts: { flex: 1, gap: 2, minWidth: 0 },
   versionValueRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
-  versionValue: { color: colors.textPrimary, flexShrink: 1, fontSize: typeScale.body, fontWeight: fontWeight.semibold },
+  versionValue: { color: colors.textSecondary, flexShrink: 1, fontSize: typeScale.body, fontWeight: fontWeight.regular, lineHeight: lineHeight.body },
   betaChannelBadge: {
     backgroundColor: colors.betaChannelBadgeBackground,
     borderRadius: radius.pill,
@@ -1971,6 +1972,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   betaChannelBadgeText: {
     color: colors.betaChannelBadgeForeground,
     fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
     fontWeight: fontWeight.semibold,
   },
   versionButton: { flexShrink: 0, minWidth: 84 },
@@ -1984,12 +1986,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.md,
   },
   copyText: { flex: 1, gap: 2, minWidth: 0 },
-  copyLabel: { color: colors.textTertiary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
-  copyValue: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  copyLabel: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  copyValue: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   copyButton: { flexShrink: 0, minWidth: 60 },
   // —— 退出 ——
   dangerArea: { gap: spacing.md, paddingTop: spacing.sm },
-  dangerHint: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, paddingHorizontal: spacing.md },
+  dangerHint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, paddingHorizontal: spacing.md },
   accountDeletionLink: {
     alignItems: 'center',
     alignSelf: 'center',
@@ -1998,8 +2000,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   accountDeletionLinkText: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   nameEditorContent: {
@@ -2034,7 +2036,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   nameEditorMessage: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.md,
   },

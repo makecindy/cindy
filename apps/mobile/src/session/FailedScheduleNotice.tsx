@@ -49,7 +49,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   box: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.sm,
     paddingLeft: spacing.md, backgroundColor: colors.surfaceElevated, borderColor: colors.errorBorder,
     borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.container },
-  text: { flex: 1, color: colors.errorText, fontSize: typeScale.caption, lineHeight: lineHeight.caption, paddingVertical: spacing.sm },
+  text: { flex: 1, color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, paddingVertical: spacing.sm },
   close: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill },
   pressed: { opacity: 0.7 },
 });

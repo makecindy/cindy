@@ -422,12 +422,14 @@ const makeStyles = (colors: ThemeColors) =>
     value: {
       color: colors.textPrimary,
       fontSize: typeScale.headline,
+      lineHeight: lineHeight.headline,
       fontWeight: fontWeight.medium,
       fontVariant: ["tabular-nums"],
     },
     detail: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
       fontVariant: ["tabular-nums"],
     },

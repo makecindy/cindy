@@ -15,7 +15,7 @@ import { invokeRemoteResourceAction } from '@/device-link/remoteResources';
 import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { CompanionSettingsRow as ContextSheetRow } from './CompanionSettingsRow';
 import { CompanionSheet } from './CompanionSheet';
-import { fontWeight, iconSize, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { CompanionModelChain, CompanionModelPicker, readCompanionModelChain } from './CompanionModelChain';
 import { CompanionCreateNativeView } from './CompanionCreateNativeView';
 import { CompanionPortraitPicker, randomCompanionPortrait } from './CompanionPortraitPicker';
@@ -515,7 +515,7 @@ function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: Pr
         </NativePullDownMenu>
           {!fieldDisabled && openSelect === field.id ? <View style={styles.group}>
             {field.id === 'permissions' ? null : <TextInput accessibilityLabel={`${label} ${t('devices.companionProfile.searchOptions')}`} placeholder={t('devices.companionProfile.searchOptions')}
-              value={selectQuery} onChangeText={setSelectQuery} style={styles.input} placeholderTextColor={colors.textTertiary} />}
+              value={selectQuery} onChangeText={setSelectQuery} style={styles.input} placeholderTextColor={colors.textPlaceholder} />}
             <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={styles.optionScroll}>
               {options.filter(option => resolveRemoteText(option.label, i18n.language).toLocaleLowerCase().includes(selectQuery.trim().toLocaleLowerCase())).map(option =>
                 <ContextSheetRow key={option.value} icon={null} label={resolveRemoteText(option.label, i18n.language)} disabled={optionDisabled(option)}
@@ -523,7 +523,7 @@ function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: Pr
             </ScrollView>
           </View> : null}
         </View>
-          : <TextInput accessibilityLabel={label} editable={!disabled} multiline={field.kind === 'multiline'} maxLength={field.id === 'name' || field.id === 'confirmName' ? 200 : field.id === 'body' ? 65536 : 12000} onChangeText={change} value={typeof values[field.id] === 'string' ? values[field.id] as string : ''} placeholderTextColor={colors.textTertiary} style={[styles.input, field.kind === 'multiline' && styles.multiline]} />}
+          : <TextInput accessibilityLabel={label} editable={!disabled} multiline={field.kind === 'multiline'} maxLength={field.id === 'name' || field.id === 'confirmName' ? 200 : field.id === 'body' ? 65536 : 12000} onChangeText={change} value={typeof values[field.id] === 'string' ? values[field.id] as string : ''} placeholderTextColor={colors.textPlaceholder} style={[styles.input, field.kind === 'multiline' && styles.multiline]} />}
     </View>;
   })}</>;
 }
@@ -531,14 +531,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   content: { gap: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.xl },
   identity: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, minHeight: 80 },
   identityText: { flex: 1, gap: spacing.xs },
-  name: { fontSize: typeScale.headline, color: colors.textPrimary, fontWeight: fontWeight.medium },
-  note: { fontSize: typeScale.footnote, color: colors.textSecondary },
-  body: { fontSize: typeScale.body, color: colors.textPrimary },
-  heading: { fontSize: typeScale.body, color: colors.textPrimary, fontWeight: fontWeight.medium },
+  name: { fontSize: typeScale.headline, lineHeight: lineHeight.headline, color: colors.textPrimary, fontWeight: fontWeight.medium },
+  note: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textSecondary },
+  body: { fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },
+  heading: { fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary, fontWeight: fontWeight.medium },
   group: { backgroundColor: colors.surfaceElevated, borderRadius: radius.container, overflow: 'hidden' },
   field: { gap: spacing.sm },
   select: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  selectText: { flex: 1, fontSize: typeScale.body, color: colors.textPrimary },
+  selectText: { flex: 1, fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },
   optionScroll: { maxHeight: 280 },
   input: { minHeight: 44, borderRadius: radius.pill, borderColor: colors.border, borderWidth: 1, padding: spacing.md, color: colors.textPrimary, backgroundColor: colors.surfaceElevated, fontSize: typeScale.body },
   multiline: { minHeight: 120, borderRadius: radius.control, textAlignVertical: 'top' },

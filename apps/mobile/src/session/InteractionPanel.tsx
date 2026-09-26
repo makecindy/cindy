@@ -1046,7 +1046,7 @@ function AskUserQuestionCard({
                 autoFocus
                 onChangeText={setCustomInput}
                 placeholder={t('interaction.panel.customAnswerPlaceholder')}
-                placeholderTextColor={colors.textTertiary}
+                placeholderTextColor={colors.textPlaceholder}
                 style={styles.inlineInput}
                 testID="interaction.ask.customInput"
                 value={customInput}
@@ -1089,7 +1089,7 @@ function AskUserQuestionCard({
             autoFocus
             onChangeText={setCustomInput}
             placeholder={t('interaction.panel.answerInput')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             style={styles.inlineInput}
             testID="interaction.ask.textInput"
             value={customInput}
@@ -1344,7 +1344,7 @@ function PlanReviewCard({
                   multiline
                   onChangeText={setPlanText}
                   placeholder={t('interaction.panel.planEditorPlaceholder')}
-                  placeholderTextColor={colors.textTertiary}
+                  placeholderTextColor={colors.textPlaceholder}
                   style={[
                     styles.planEditor,
                     fillAvailableHeight
@@ -1453,7 +1453,7 @@ function PlanReviewCard({
               multiline
               onChangeText={setFeedback}
               placeholder={t('interaction.panel.planFeedbackPlaceholder')}
-              placeholderTextColor={colors.textTertiary}
+              placeholderTextColor={colors.textPlaceholder}
               style={styles.planFeedbackInput}
               testID="interaction.plan.feedbackInput"
               value={feedback}
@@ -1807,8 +1807,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   companionRequesterText: { flex: 1, minWidth: 0, gap: 2 },
   companionEvidence: { gap: spacing.sm },
   companionFact: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
-  companionFactLabel: { width: 64, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.body },
-  companionFactValue: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.body },
+  companionFactLabel: { width: 64, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  companionFactValue: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionDetailsButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, alignSelf: 'flex-start' },
   root: {
     borderBottomColor: colors.border,
@@ -1839,14 +1839,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   taskEyebrow: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   taskTitle: {
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
@@ -1862,6 +1864,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   taskCountText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   taskCollapseButton: {
@@ -1879,6 +1882,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   taskCollapseText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   card: {
@@ -1910,14 +1914,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   kind: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   pageText: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     flexShrink: 0,
   },
   cardTitle: {
@@ -1959,12 +1965,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flexShrink: 0,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   collapsedInteractionTitle: {
     color: colors.textPrimary,
     flexShrink: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
@@ -1972,11 +1980,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flexShrink: 0,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.regular,
   },
   body: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupIcon: {
@@ -1990,8 +1999,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   pluginSetupGroupHint: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
   },
   pluginSetupStep: {
@@ -2014,33 +2023,35 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     // 颜色随 phase 内联(已完成 statusReady / 进行中 statusAccent / 其余 textTertiary)。
     flexShrink: 0,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   pluginSetupStepBody: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupStepAction: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupStepError: {
     color: colors.errorText,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupFootnote: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   askHeaderKind: {
     color: colors.textTertiary,
     flex: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   askQuestion: {
@@ -2082,7 +2093,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   permissionEvidenceDetail: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   permissionToolPill: {
@@ -2091,6 +2102,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     flexShrink: 1,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
     maxWidth: 112,
     overflow: 'hidden',
@@ -2101,7 +2113,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     paddingTop: spacing.sm,
   },
@@ -2120,11 +2132,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   permissionRiskLabel: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   permissionRiskText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   permissionCodeBlock: {
@@ -2184,11 +2197,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   optionTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   optionDescription: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     marginTop: spacing.xs,
   },
@@ -2196,6 +2210,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontStyle: 'italic',
   },
   customInputRow: {
@@ -2239,6 +2254,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   inlineButtonText: {
     color: colors.ctaText,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   planReviewStack: {
@@ -2278,6 +2294,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
@@ -2302,12 +2319,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flexShrink: 0,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   planViewerHint: {
     color: colors.textTertiary,
     flex: 1,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     minWidth: 0,
   },
   planToolbar: {
@@ -2346,8 +2365,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   planOutlineLabel: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     paddingHorizontal: spacing.xs,
   },
   planOutlineChip: {
@@ -2368,6 +2388,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   planOutlineChipText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
     maxWidth: 144,
   },
@@ -2377,7 +2398,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   planOutlineMore: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     paddingHorizontal: spacing.sm,
   },
   planPreview: {
@@ -2396,8 +2418,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   planText: {
     color: colors.textPrimary,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.code,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
   },
   planEditor: {
     backgroundColor: colors.surface,
@@ -2406,7 +2428,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     color: colors.textPrimary,
     fontSize: typeScale.caption,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
     minHeight: 176,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
@@ -2447,6 +2469,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.regular,
     minWidth: 0,
   },
@@ -2461,6 +2484,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     minWidth: 0,
   },
   planFeedbackEditorRow: {
@@ -2507,6 +2531,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   primaryText: {
     color: colors.ctaText,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   primaryTextDisabled: {
@@ -2524,6 +2549,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   secondaryText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   pressed: {
@@ -2539,10 +2565,10 @@ const makeCompanionStyles = (colors: ThemeColors) => {
   return {
     ...base,
     root: { ...base.root, borderBottomWidth: 0, paddingHorizontal: 0, paddingVertical: spacing.sm },
-    taskTitle: { ...base.taskTitle, color: colors.textSecondary, fontSize: typeScale.caption },
+    taskTitle: { ...base.taskTitle, color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     taskCollapseButton: { ...base.taskCollapseButton, borderWidth: 0, paddingHorizontal: spacing.sm },
-    kind: { ...base.kind, textTransform: 'none' as const, color: colors.textSecondary },
-    askHeaderKind: { ...base.askHeaderKind, textTransform: 'none' as const, color: colors.textSecondary },
+    kind: { ...base.kind, textTransform: 'none' as const, color: colors.textSecondary, fontWeight: fontWeight.medium },
+    askHeaderKind: { ...base.askHeaderKind, textTransform: 'none' as const, color: colors.textSecondary, fontWeight: fontWeight.medium },
     compactCardHeader: { ...base.compactCardHeader, minHeight: 0, flexWrap: 'wrap' as const },
     compactCardTitleWrap: { ...base.compactCardTitleWrap, flexDirection: 'column' as const, alignItems: 'flex-start' as const },
     compactCardTitle: { ...base.compactCardTitle, flex: 0, flexShrink: 1 },

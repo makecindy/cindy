@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Text } from '@/components/AppText';
 import { getCachedReduceMotionEnabled, useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useThemedStyles, type ThemeColors } from '@/theme';
-import { radius, typeScale } from '@/theme/tokens';
+import { lineHeight, radius, typeScale } from '@/theme/tokens';
 import { MOBILE_COMPOSER_CONTROL_SIZE } from '@/session/MobileComposerInputRow';
 
 // 旧架构 Android 需要显式开启 LayoutAnimation;新架构(Fabric)下该开关是 no-op。
@@ -159,6 +159,7 @@ const makeVoiceRecordingPillStyles = (colors: ThemeColors) => ({
   timeText: {
     color: colors.textPrimary,
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     fontVariant: ['tabular-nums' as const],
   },
 });

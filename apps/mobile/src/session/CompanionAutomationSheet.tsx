@@ -309,11 +309,11 @@ function NumberField({ label, value, onChange, disabled }: { label: string; valu
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   flex: { flex: 1 }, row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 48, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   label: { fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary }, secondary: { fontSize: typeScale.caption, lineHeight: lineHeight.caption, color: colors.textSecondary },
-  heading: { fontSize: typeScale.footnote, fontWeight: fontWeight.medium, color: colors.textSecondary, margin: spacing.md },
+  heading: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.semibold, color: colors.textTertiary, margin: spacing.md },
   field: { gap: spacing.sm, marginHorizontal: spacing.md, marginVertical: spacing.sm },
   group: { marginVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   input: { minHeight: 44, padding: spacing.md, color: colors.textPrimary, backgroundColor: colors.surfaceElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: radius.pill, fontSize: typeScale.body },
   clockInput: { width: 64, textAlign: 'center' },
-  multiline: { minHeight: 112, textAlignVertical: 'top', borderRadius: radius.control }, empty: { margin: spacing.lg, fontSize: typeScale.listBody, lineHeight: lineHeight.listBody, color: colors.textSecondary },
+  multiline: { minHeight: 112, textAlignVertical: 'top', borderRadius: radius.control }, empty: { margin: spacing.lg, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, color: colors.textSecondary },
   error: { color: colors.statusError, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }, disabled: { opacity: 0.45 },
 });

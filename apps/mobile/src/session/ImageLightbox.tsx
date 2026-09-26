@@ -31,7 +31,7 @@ import {
 import { Text } from '@/components/AppText';
 import { MessageSquarePlus, Pen, Share as ShareIcon, Undo2, X } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
-import { fontWeight, iconSize, iconStroke, motionDuration, radius, typeScale } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, motionDuration, radius, typeScale } from '@/theme';
 import { Gesture, GestureDetector, GestureHandlerRootView } from '@/platform/gestureHandler';
 import Animated, {
   cancelAnimation,
@@ -1484,6 +1484,7 @@ const styles = StyleSheet.create({
   pageLabel: {
     color: 'rgba(255, 255, 255, 0.85)',
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     fontVariant: ['tabular-nums'],
   },
   fileHeader: {
@@ -1493,10 +1494,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     width: '100%',
   },
-  fileHeaderDone: { color: '#ffffff', fontSize: typeScale.bodyLarge, fontWeight: fontWeight.semibold },
+  fileHeaderDone: { color: '#ffffff', fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge, fontWeight: fontWeight.medium },
   fileHeaderTitleCol: { alignItems: 'center', flex: 1, gap: 2, minWidth: 0 },
-  fileHeaderTitle: { color: '#ffffff', fontSize: typeScale.body, fontWeight: fontWeight.semibold },
-  fileHeaderMeta: { color: 'rgba(255,255,255,0.64)', fontSize: typeScale.caption },
+  fileHeaderTitle: { color: '#ffffff', fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
+  fileHeaderMeta: { color: 'rgba(255,255,255,0.64)', fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   fileHeaderShareSpacer: { width: 20 },
   actionBar: {
     alignItems: 'center',
@@ -1532,6 +1533,7 @@ const styles = StyleSheet.create({
   actionLabel: {
     color: 'rgba(255,255,255,0.72)',
     fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
     textAlign: 'center',
   },
   actionDivider: {
@@ -1540,7 +1542,7 @@ const styles = StyleSheet.create({
     width: StyleSheet.hairlineWidth,
   },
   actionLabelDisabled: { color: 'rgba(255,255,255,0.35)' },
-  stateText: { color: 'rgba(255, 255, 255, 0.85)', fontSize: typeScale.code },
+  stateText: { color: 'rgba(255, 255, 255, 0.85)', fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   retryButton: {
     borderColor: 'rgba(255, 255, 255, 0.5)',
     borderRadius: radius.pill, // 圆形按钮语义用 pill(胶囊,RN 截半)
@@ -1549,5 +1551,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 8,
   },
-  retryText: { color: '#ffffff', fontSize: typeScale.code },
+  retryText: { color: '#ffffff', fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
 });

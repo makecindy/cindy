@@ -108,5 +108,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   pressed: { opacity: 0.72 },
-  text: { flex: 1, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.code },
+  text: { flex: 1, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

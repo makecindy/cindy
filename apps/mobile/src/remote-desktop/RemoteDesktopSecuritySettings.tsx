@@ -13,6 +13,7 @@ import { supportsAutoUnlock } from "./autoUnlockSupport";
 import {
   iconSize,
   iconStroke,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -52,7 +53,7 @@ export function RemoteDesktopSecuritySettings(
 ) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const hint = { color: colors.textPrimary, fontSize: typeScale.caption };
+  const hint = { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption };
   const switchSlot = {
     width: 56,
     minHeight: 44,
@@ -112,6 +113,7 @@ export function RemoteDesktopSecuritySettings(
                   style={{
                     color: colors.textPrimary,
                     fontSize: typeScale.body,
+                    lineHeight: lineHeight.body,
                   }}
                 >
                   {t("remoteDesktop.autoUnlock")}
@@ -152,6 +154,7 @@ export function RemoteDesktopSecuritySettings(
                       style={{
                         color: colors.textPrimary,
                         fontSize: typeScale.body,
+                        lineHeight: lineHeight.body,
                       }}
                     >
                       {biometricLabel}
@@ -197,7 +200,7 @@ export function RemoteDesktopSecuritySettings(
           />
         </View>
         <View style={{ flex: 1, gap: spacing.xs }}>
-          <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+          <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
             {t("remoteDesktop.lockOnExit")}
           </Text>
           <Text style={hint}>
@@ -261,7 +264,7 @@ export function RemoteDesktopSecuritySettings(
         >
           <View style={{ flex: 1, gap: spacing.xs }}>
             <Text
-              style={{ color: colors.textPrimary, fontSize: typeScale.body }}
+              style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}
             >
               {t(`remoteDesktop.${item.key}`)}
             </Text>

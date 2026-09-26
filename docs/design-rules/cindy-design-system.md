@@ -48,9 +48,13 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 7. 新增/改名入口后运行 `pnpm design:inventory` 和 `pnpm check:design-inventory`；只手工更新对应 surface 的 owner、状态、下一动作，不编辑生成区，不因共用组件已经迁移就把整页标 migrated。
 8. 提交前按开发工作流跑根 `pnpm test:unit:related` 及涉及包的 typecheck。遇到失败先分清源/生成物过期、真实新增违规、仅报告待核；从现有源或消费者修复，不增加整文件豁免。维护和回退入口见 [Token README](../../packages/design-tokens/README.md) 与 [治理 §8](./design-governance.md#8-治理接线纪律)。
 
+9. 改 Mobile 界面文字时，先查 [Mobile 设计指南 §3「文字规范速查」](../../apps/mobile/docs/mobile-design-guide.md#3-字体与排版)：按角色整行照抄字号、行高、字重、字色；守护测试会拦下阶梯外取值、缺行高和浅色字配粗字重，角色选错要靠 review。
+
 以上仓内入口即可开始贡献；无需访问个人桌面记录。此阅读路径检查不代替 G2 的独立贡献者试用。
 
 ## 版本记录
+
+- **2026-09-27（Mobile 文字规范：字色 / 字号 / 字重 / 行高按角色收拢）**：`apps/mobile/docs/mobile-design-guide.md §3` 新增「文字规范速查」一张表作为 Mobile 文字规则正本（角色 → 字号 / 行高 / 字重 / 字色 + 四条硬规则 + 登记例外 + 机器拦截边界）；根 `AGENTS.md`、`DESIGN.md` Mobile 节与本索引「新贡献者」第 9 步指向该表；`typographyTokenDiscipline.test.ts` 新增「必须配行高」「浅色字不配粗字重」两条守护。裁决过程见 [`design-decision-log.md`](./design-decision-log.md) 09-26 / 09-27 各条。
 
 - **2026-09-07（圆角改按可见层与登记分配）**：`DESIGN.md §5` 重写为两步判定树——Step 1 已登记形状（keycap / data mark）优先，Step 2 普通控件三档；判定对象从 DOM 标签改为「可见层」，§5 成为半径唯一权威（§§1/4/7/9 与组件条目只引用不另立）。新增 data mark 类目（0px 或 2px、按成员钉死），首批四个成员四角 2px：`usage-heatmap-day`、`usage-token-bar`、`workflow-status-cell`、`system-category-square`；07-28「status micro-cells（2px）」窄例外被后两个成员吸收——数值与组件不变，依据从「≤8px 非交互」改为图元角色，解除 non-interactive 限定、尺寸不再作归类边界。`every button` /「唯一豁免」等绝对化措辞改为「未命中 Step 1 的普通控件框」。命中尺寸采用 Equivalent 路径：用量历史同页补足产生相同单日筛选的合规日期选择控件；原定与密度恢复同 PR 交付的时序已被 #4064 先行恢复密度超越，控件单独交付，交付前密集目标为 §5 登记在案的过渡不合规。`REVIEW.md` 审查入口与 `design-governance.md §13` 同步；`UsageHeatmap` / `UsageTokenBars` 的生产差异登记为待迁移项。裁决全文与两处范围变更见 [`design-decision-log.md`](./design-decision-log.md)「09-07」条。**本条取代 08-29 条的「按钮一律胶囊／裸文字按钮唯一豁免」绝对化表述与 07-28 条的微格尺寸判据（三档数值本身不变）。**
 

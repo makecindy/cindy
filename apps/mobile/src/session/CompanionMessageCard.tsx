@@ -43,7 +43,7 @@ import {
   subscribeRemoteResourceCache,
 } from '@/device-link/remoteResourceCache';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { spacing, radius, typeScale, iconSize, fontWeight } from '@/theme/tokens';
+import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import type { NormalizedRemoteMessage } from './messageNormalize';
 import { useRemoteCompanionQuery } from './useRemoteCompanionQuery';
 
@@ -504,11 +504,11 @@ const makeStyles = (colors: ThemeColors) =>
     },
     header: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
     taskTitle: { flex: 1, minWidth: 0 },
-    title: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
-    note: { color: colors.textSecondary, fontSize: typeScale.footnote },
-    actionLabel: { color: colors.textPrimary, fontSize: typeScale.footnote },
+    title: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+    note: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+    actionLabel: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     // Paragraph errors follow errorText; red is reserved for the status dot.
-    error: { color: colors.errorText, fontSize: typeScale.footnote },
+    error: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     metadata: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
     actions: { flexDirection: 'row', flexWrap: 'wrap', columnGap: spacing.sm },
     touchTarget: { minHeight: 44, justifyContent: 'center' },

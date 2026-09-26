@@ -6,7 +6,7 @@ import { buildRemotePluginSetupPresentation, buildPluginSetupCancelDecision } fr
 import { Text } from '@/components/AppText';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useThemedStyles, type ThemeColors } from '@/theme';
-import { spacing, typeScale } from '@/theme/tokens';
+import { lineHeight, spacing, typeScale } from '@/theme/tokens';
 import { PluginSetupMessageContent } from './InteractionPanel';
 import type { NormalizedRemoteMessage } from './messageNormalize';
 
@@ -36,5 +36,5 @@ export function AuthorizationMessageCard({ message }: { message: NormalizedRemot
 }
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   wrapper: { marginVertical: spacing.sm, gap: spacing.xs },
-  error: { color: colors.statusError, fontSize: typeScale.footnote },
+  error: { color: colors.statusError, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

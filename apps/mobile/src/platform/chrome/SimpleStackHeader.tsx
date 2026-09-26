@@ -115,7 +115,7 @@ const makeNativeTitleStyles = (colors: ThemeColors) =>
       flexShrink: 1,
       color: colors.textPrimary,
       fontSize: typeScale.body,
-      fontWeight: fontWeight.medium,
+      fontWeight: fontWeight.semibold,
       lineHeight: lineHeight.body,
     },
   });

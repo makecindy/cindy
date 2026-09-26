@@ -52,7 +52,7 @@ import {
   type ProviderModelRow,
 } from '@/session/providerModelSections';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import {
   mobileAgentLabel,
   type MobileSessionAgentKind,
@@ -349,7 +349,7 @@ function LegacyModelPickerSheet({
         onFocus={Platform.OS === 'android' ? () => setPrimarySnap('full') : undefined}
         onChangeText={setQuery}
         placeholder={t('models.picker.searchPlaceholder')}
-        placeholderTextColor={colors.textTertiary}
+        placeholderTextColor={colors.textPlaceholder}
         ref={searchInputRef}
         style={styles.searchInput}
         testID={`${testID}.search`}
@@ -598,6 +598,7 @@ function makeStyles(colors: ThemeColors) {
     noResults: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.md,
       textAlign: 'center' as const,
@@ -607,7 +608,8 @@ function makeStyles(colors: ThemeColors) {
     },
     agentSwitchHint: {
       color: colors.textTertiary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingHorizontal: spacing.xs,
     },
     // 对齐桌面 PermissionSelector trigger:透明底 + gap 4 + 13px 文案,整体随权限档着色。
@@ -622,6 +624,7 @@ function makeStyles(colors: ThemeColors) {
     },
     permissionTriggerLabel: {
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.regular,
       maxWidth: 120,
     },

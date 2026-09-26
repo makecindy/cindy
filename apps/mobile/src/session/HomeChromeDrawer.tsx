@@ -472,6 +472,7 @@ const makeStyles = (colors: ThemeColors) =>
     avatarText: {
       color: colors.textPrimary,
       fontSize: typeScale.subtitle,
+      lineHeight: lineHeight.subtitle,
       fontWeight: fontWeight.medium,
     },
     accountTexts: {

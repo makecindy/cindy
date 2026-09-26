@@ -162,7 +162,7 @@ export default function AccountDeletionScreen() {
                   }
                   onSubmitEditing={() => void confirm()}
                   placeholder={loginText('codePlaceholder')}
-                  placeholderTextColor={colors.textTertiary}
+                  placeholderTextColor={colors.textPlaceholder}
                   returnKeyType="done"
                   style={styles.codeInput}
                   testID="accountDeletion.codeInput"
@@ -337,6 +337,7 @@ const makeStyles = (colors: ThemeColors) =>
     cardTitle: {
       color: colors.textPrimary,
       fontSize: typeScale.title,
+      lineHeight: lineHeight.title,
       fontWeight: fontWeight.semibold,
     },
     body: {

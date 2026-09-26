@@ -112,6 +112,7 @@ const makeStyles = (c: ThemeColors) =>
     fastRowLabel: {
       color: c.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
     divider: {
@@ -121,6 +122,7 @@ const makeStyles = (c: ThemeColors) =>
     sectionLabel: {
       color: c.textTertiary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingBottom: spacing.xs,
       paddingTop: spacing.lg,
     },
@@ -139,6 +141,7 @@ const makeStyles = (c: ThemeColors) =>
       color: c.textPrimary,
       flex: 1,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
       minWidth: 0,
     },

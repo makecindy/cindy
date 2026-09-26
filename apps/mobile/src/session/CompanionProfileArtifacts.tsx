@@ -5,7 +5,7 @@ import { Text } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { useRemoteCompanionQuery } from './useRemoteCompanionQuery';
 import { companionArtifactRows } from './companionProfileData';
-import { spacing, typeScale, useThemedStyles, type ThemeColors } from '@/theme';
+import { lineHeight, spacing, typeScale, useThemedStyles, type ThemeColors } from '@/theme';
 
 /** Existing task-output references only: no workspace scan, copied files or guessed media URLs. */
 export function CompanionProfileArtifacts({ deviceId, botId, sessionId, online, onOpenTask }: {
@@ -29,6 +29,6 @@ export function CompanionProfileArtifacts({ deviceId, botId, sessionId, online, 
 }
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   content: { gap: spacing.md },
-  body: { color: colors.textPrimary, fontSize: typeScale.body },
-  note: { color: colors.textSecondary, fontSize: typeScale.footnote },
+  body: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
+  note: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

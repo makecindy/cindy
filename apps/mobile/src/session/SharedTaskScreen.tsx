@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MainWindowActionButton, type MainWindowAction } from '@/components/MobilePrimitives';
 import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome/SimpleStackHeader';
 import { useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, spacing, typeScale } from '@/theme/tokens';
 
 /** Full-screen management; confirmations stay compact, with native material on iOS. */
 export function SharedTaskScreen({ title, onClose, children }: {
@@ -29,7 +29,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   body: { flex: 1 },
   content: { padding: spacing.lg },
   action: { minHeight: 44, paddingHorizontal: spacing.lg },
-  actionText: { fontSize: typeScale.listBody, fontWeight: fontWeight.regular },
-  compactActionText: { fontSize: typeScale.caption, fontWeight: fontWeight.regular },
+  actionText: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.regular },
+  compactActionText: { fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   dangerText: { color: colors.sharedTaskConfirmBackground },
 });

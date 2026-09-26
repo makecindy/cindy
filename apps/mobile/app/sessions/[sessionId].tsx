@@ -9037,7 +9037,7 @@ export default function SessionScreen() {
                   testID="session.contextSheetGoalRow"
                   trailing={goalStatus ? (
                     <>
-                      <Text style={{ color: colors.textTertiary, fontSize: typeScale.footnote }}>
+                      <Text style={{ color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
                         {goalStatusLabel(goalStatus.status, goalStatus.lastReason)}
                       </Text>
                       <ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
@@ -10875,7 +10875,7 @@ function SessionComposerInput({
                           border: colors.border,
                           chip: colors.surfaceChip,
                           focus: colors.inputCaret,
-                          placeholder: colors.textTertiary,
+                          placeholder: colors.textPlaceholder,
                           text: colors.textPrimary,
                           textSecondary: colors.textSecondary,
                         }}
@@ -10903,7 +10903,7 @@ function SessionComposerInput({
                     onPasteImagesLoadFailed={failPastePlaceholders}
                     onPressIn={handleComposerInputPressIn}
                     placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
-                    placeholderTextColor={colors.textTertiary}
+                    placeholderTextColor={colors.textPlaceholder}
                     resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
                     scrollEnabled={composerInputScrollEnabled}
                     selectionColor={colors.inputCaret}
@@ -11005,7 +11005,7 @@ function SessionSearchSheet({
             autoFocus={MOBILE_VISUAL_MOCK_ENABLED && visible}
             onChangeText={onChangeQuery}
             placeholder={t('session.screen.searchPlaceholder')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             style={styles.searchInput}
             testID="session.searchInput"
             value={query}
@@ -11608,6 +11608,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     flex: 1,
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     minWidth: 0,
   },
   queueEditBarClose: {
@@ -11722,6 +11723,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   adhocSheetTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.semibold,
     textAlign: 'center',
 
@@ -11751,7 +11753,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     flex: 1,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   searchButtons: {
     alignItems: 'center',
@@ -11785,16 +11788,18 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   searchLoadEarlierText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   collaborationTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   collaborationText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   sessionSyncPlaceholder: {
@@ -11813,6 +11818,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.regular,
   },
   sessionSyncButton: {
@@ -11841,6 +11847,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   historyToggleTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   pendingInteractionSurface: {
@@ -11932,7 +11939,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   composerActivityMetaText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
   },
   // 不设 maxWidth 硬上限:模型名尽量显示全,只在工具排空间不足时才收缩截断
@@ -11954,7 +11961,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flexShrink: 1,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.semibold,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.medium,
     minWidth: 0,
   },
   composerRuntimePillTextRisky: {
@@ -11962,7 +11970,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   attachmentErrorText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.xs,
   },
@@ -11976,7 +11984,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceStatusText: {
     color: colors.textSecondary,
     flex: 1,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   voiceCancelButton: {
@@ -12054,9 +12062,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: COMPOSER_INPUT_LINE_HEIGHT,
   },
   // 语音态占位文案渲染的就是普通态 TextInput 的 placeholder,颜色必须同源
-  // (placeholderTextColor 也是 textTertiary),否则一进语音态这行字会变色。
+  // (placeholderTextColor 也是 textPlaceholder),否则一进语音态这行字会变色。
   voiceDraftListeningText: {
-    color: colors.textTertiary,
+    color: colors.textPlaceholder,
     ...MOBILE_COMPOSER_DRAFT_TEXT_STYLE,
   },
   palettePanel: {
@@ -12083,12 +12091,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
   paletteSecondary: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     maxWidth: 160,
   },
   paletteStatusRow: {

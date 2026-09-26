@@ -31,6 +31,7 @@ import {
 import {
   iconSize,
   iconStroke,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -107,6 +108,7 @@ export function SessionHeaderNativeTitle({ title,
       style={{
         color: colors.textPrimary,
         fontSize: typeScale.body,
+        lineHeight: lineHeight.body,
         fontWeight: fontWeight.semibold,
         textAlign: "center",
         flexShrink: 1,
@@ -134,7 +136,7 @@ export function SessionHeaderNativeTitle({ title,
         </View>
         {notice ? (
           <Text numberOfLines={1} testID="session.headerNotice"
-            style={{ color: colors.textSecondary, fontSize: typeScale.micro, textAlign: "center" }}>
+            style={{ color: colors.textSecondary, fontSize: typeScale.micro, lineHeight: lineHeight.micro, textAlign: "center" }}>
             {notice}
           </Text>
         ) : null}

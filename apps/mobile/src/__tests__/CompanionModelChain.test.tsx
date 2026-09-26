@@ -40,6 +40,7 @@ vi.mock("@/theme", () => ({
   iconSize: {},
   spacing: {},
   typeScale: {},
+  lineHeight: {},
   useTheme: () => ({ colors: {} }),
 }));
 vi.mock("@/components/AppText", () => ({ Text: "span" }));

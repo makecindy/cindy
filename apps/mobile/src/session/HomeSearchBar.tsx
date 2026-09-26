@@ -90,7 +90,7 @@ export function HomeSearchBar({
           autoFocus={autoFocus}
           onChangeText={onChangeQuery}
           placeholder={t("devices.list.search.placeholder")}
-          placeholderTextColor={colors.textTertiary}
+          placeholderTextColor={colors.textPlaceholder}
           style={styles.input}
           testID={testIDs?.input ?? "home.searchInput"}
           value={query}

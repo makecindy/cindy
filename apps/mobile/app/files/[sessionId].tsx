@@ -1138,7 +1138,7 @@ function SearchHeader({
             autoFocus
             onChangeText={onChangeQuery}
             placeholder={t('files.browser.searchPlaceholder')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             style={styles.searchInput}
             testID="files.searchInput"
             value={query}
@@ -1478,6 +1478,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minWidth: 0,
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.semibold,
     maxWidth: '72%',
   },
@@ -1537,6 +1538,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   cellName: {
     color: colors.textPrimary,
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
     textAlign: 'center',
   },
@@ -1559,7 +1561,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingBottom: spacing.xs,
     paddingTop: spacing.sm,
   },
-  footerStrong: { color: colors.textPrimary, fontSize: typeScale.footnote, fontWeight: fontWeight.semibold },
+  footerStrong: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.semibold },
   footerText: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
@@ -1587,13 +1589,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   searchInput: {
     color: colors.textPrimary,
     flex: 1,
-    fontSize: typeScale.code,
+    fontSize: typeScale.bodySmall,
     paddingVertical: spacing.sm,
   },
-  cancelText: { color: colors.textPrimary, fontSize: typeScale.body },
+  cancelText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   scopeHint: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     paddingBottom: spacing.sm,
     paddingHorizontal: spacing.lg,
   },
@@ -1614,12 +1617,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   searchModePillActive: { backgroundColor: colors.surfaceChip, borderColor: colors.borderStrong },
-  searchModeLabel: { color: colors.textSecondary, fontSize: typeScale.caption },
+  searchModeLabel: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   searchModeLabelActive: { color: colors.textPrimary, fontWeight: fontWeight.medium },
   scopeHintInline: {
     color: colors.textTertiary,
     flex: 1,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     textAlign: 'right',
   },
   contentMatchRow: {
@@ -1630,7 +1634,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xs,
   },
-  contentMatchLineNo: { color: colors.textTertiary, fontSize: typeScale.footnote },
+  contentMatchLineNo: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   contentMatchLineText: {
     color: colors.textSecondary,
     fontFamily: monoFont,
@@ -1641,7 +1645,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   searchHint: {
     color: colors.textSecondary,
     fontSize: typeScale.footnote,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.caption,
     padding: spacing.lg,
     textAlign: 'center',
   },
@@ -1689,7 +1693,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   menuCheckSlot: { alignItems: 'center', justifyContent: 'center', width: 16 },
-  menuLabel: { color: colors.textPrimary, flex: 1, fontSize: typeScale.body, fontWeight: fontWeight.medium },
+  menuLabel: { color: colors.textPrimary, flex: 1, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
   menuLabelDim: { color: colors.textSecondary },
   menuSep: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
   menuGroupSep: { backgroundColor: colors.surfaceChip, height: 6 },

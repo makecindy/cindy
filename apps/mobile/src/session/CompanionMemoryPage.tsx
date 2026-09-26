@@ -31,7 +31,7 @@ export function CompanionMemoryPage({ memory: m, online, botName, memoryEnabled 
       {receipt}
       {showSearch ? <TextInput accessibilityLabel={tr('memorySearch')} value={m.query} onChangeText={m.setQuery} autoCorrect={false}
         placeholder={m.searchPanel?.placeholder ? resolveRemoteText(m.searchPanel.placeholder, i18n.language) : tr('memorySearch')}
-        placeholderTextColor={colors.textTertiary} maxLength={200} returnKeyType="search" style={styles.input} /> : null}
+        placeholderTextColor={colors.textPlaceholder} maxLength={200} returnKeyType="search" style={styles.input} /> : null}
       {m.listFailed ? <View accessibilityRole="alert" style={styles.stack}>{note(tr('memoryLoadFailed'), false, true)}
         <MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: !online, onPress: m.retry }} /></View>
         : !m.listLoaded ? (online ? note(t('devices.resources.loading')) : null)
@@ -88,12 +88,12 @@ export function CompanionMemoryPage({ memory: m, online, botName, memoryEnabled 
     <View style={styles.field}>
       <Text style={styles.heading}>{companionMemoryFieldLabel(m.detail, 'title', i18n.language)}</Text>
       <TextInput accessibilityLabel={companionMemoryFieldLabel(m.detail, 'title', i18n.language)} value={m.draft.title} editable={editable}
-        maxLength={COMPANION_MEMORY_TITLE_MAX} onChangeText={title => m.change({ title })} placeholderTextColor={colors.textTertiary} style={styles.input} />
+        maxLength={COMPANION_MEMORY_TITLE_MAX} onChangeText={title => m.change({ title })} placeholderTextColor={colors.textPlaceholder} style={styles.input} />
     </View>
     <View style={styles.field}>
       <Text style={styles.heading}>{companionMemoryFieldLabel(m.detail, 'body', i18n.language)}</Text>
       <TextInput accessibilityLabel={companionMemoryFieldLabel(m.detail, 'body', i18n.language)} value={m.draft.body} editable={editable} multiline
-        onChangeText={body => m.change({ body })} placeholderTextColor={colors.textTertiary} style={[styles.input, styles.multiline]} />
+        onChangeText={body => m.change({ body })} placeholderTextColor={colors.textPlaceholder} style={[styles.input, styles.multiline]} />
     </View>
     {m.tooLong ? note(tr('memoryTooLong'), true) : m.titleMissing || m.bodyMissing ? note(tr('memoryRequired')) : null}
     {m.saveState === 'saving' ? note(t('devices.resources.loading'))
@@ -111,10 +111,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   field: { gap: spacing.sm },
   note: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textSecondary },
   error: { color: colors.errorText },
-  heading: { fontSize: typeScale.body, color: colors.textPrimary, fontWeight: fontWeight.medium },
+  heading: { fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary, fontWeight: fontWeight.medium },
   title: { fontSize: typeScale.subtitle, lineHeight: lineHeight.subtitle, color: colors.textPrimary, fontWeight: fontWeight.medium },
   body: { fontSize: typeScale.body, lineHeight: lineHeight.bodyRelaxed, color: colors.textPrimary },
-  groupTitle: { fontSize: typeScale.footnote, color: colors.textSecondary, fontWeight: fontWeight.medium, paddingHorizontal: spacing.xs },
+  groupTitle: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textTertiary, fontWeight: fontWeight.semibold, paddingHorizontal: spacing.xs },
   count: { color: colors.textTertiary, fontWeight: fontWeight.regular },
   group: { backgroundColor: colors.surfaceElevated, borderRadius: radius.container, overflow: 'hidden' },
   dimmed: { opacity: 0.6 },
@@ -123,9 +123,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   separator: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   pressed: { opacity: 0.72 },
   rowHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
-  rowTitle: { flex: 1, fontSize: typeScale.listBody, lineHeight: lineHeight.listBody, color: colors.textPrimary, fontWeight: fontWeight.medium },
-  date: { fontSize: typeScale.micro, lineHeight: lineHeight.listBody, color: colors.textTertiary },
-  preview: { fontSize: typeScale.caption, lineHeight: lineHeight.caption, color: colors.textSecondary },
+  rowTitle: { flex: 1, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, color: colors.textPrimary, fontWeight: fontWeight.medium },
+  date: { fontSize: typeScale.micro, lineHeight: lineHeight.bodySmall, color: colors.textTertiary },
+  preview: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textSecondary },
   input: { minHeight: 44, borderRadius: radius.pill, borderColor: colors.border, borderWidth: 1, padding: spacing.md, color: colors.textPrimary, backgroundColor: colors.surfaceElevated, fontSize: typeScale.body },
   multiline: { minHeight: 180, borderRadius: radius.control, textAlignVertical: 'top' },
 });

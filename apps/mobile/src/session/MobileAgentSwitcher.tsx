@@ -9,7 +9,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { MobileAgentMark } from '@/components/MobileAgentMark';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 import type { MobileSessionAgentKind } from './sessionAgentSwitch';
 
@@ -53,6 +53,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   text: {
     color: colors.textTertiary,
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.regular,
   },
   textActive: {

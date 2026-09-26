@@ -55,7 +55,7 @@ export function TeammateList({ items, loading, refreshing, error, isOnline, conn
   const header = <View style={styles.controls}>
     <TextInput accessibilityLabel={t('devices.companions.search')} autoFocus={autoFocusSearch}
       autoCorrect={false} onChangeText={(value) => { onInteract?.(); setQuery(value); }} onFocus={onInteract} placeholder={t('devices.companions.search')}
-      placeholderTextColor={colors.textTertiary} selectionColor={colors.inputCaret}
+      placeholderTextColor={colors.textPlaceholder} selectionColor={colors.inputCaret}
       style={styles.search} value={query} testID="teammates.search" />
     {error ? <View style={styles.noticeRow}>
       <Text accessibilityRole="alert" style={[styles.notice, styles.noticeText]} testID="teammates.error">{t(items.length ? 'devices.companions.stale' : 'devices.resources.loadFailed')}</Text>
@@ -126,17 +126,20 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   noticeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   noticeText: { flex: 1 },
   retry: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
-  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, minHeight: 78 },
+  // 行本身不留上下内边距,分割线落在行的最底边:选中底色正好铺在上下两条分割线之间。
+  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, minHeight: 78 },
   avatar: { width: 44, height: 44, borderRadius: radius.pill, backgroundColor: colors.surfaceChip, alignItems: 'center', justifyContent: 'center' },
   connection: { position: 'absolute', right: 0, bottom: 0, width: 10, height: 10, borderRadius: radius.pill, borderWidth: 2, borderColor: colors.surface },
   selected: { backgroundColor: colors.surfaceChip, borderRadius: radius.container },
   pressed: { opacity: 0.72 },
-  body: { flex: 1, minWidth: 0, gap: spacing.xs, borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: spacing.md },
+  // 原先是行上下各 12 + 文字区底部 12,分割线在行底上方 12 处,选中底色因此整体下错 12。
+  // 现在 36 的留白上下各 18 放进文字区,行高不变,文字在两条分割线之间居中。
+  body: { flex: 1, minWidth: 0, alignSelf: 'stretch', justifyContent: 'center', gap: spacing.xs,
+    borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: 18 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   // Match task rows in HomeListVisuals: title, preview and metadata keep the same hierarchy.
-  title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.subtitle, fontWeight: fontWeight.semibold, lineHeight: lineHeight.listTitle },
-  preview: { color: colors.textSecondary, fontSize: typeScale.code, fontWeight: fontWeight.regular, lineHeight: lineHeight.subtitle },
+  title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.subtitle, fontWeight: fontWeight.medium, lineHeight: lineHeight.listTitle },
+  preview: { color: colors.textSecondary, fontSize: typeScale.bodySmall, fontWeight: fontWeight.regular, lineHeight: lineHeight.subtitle },
   time: { color: colors.textTertiary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.body },
   meta: { color: colors.textTertiary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.body },
   unread: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: colors.textPrimary },

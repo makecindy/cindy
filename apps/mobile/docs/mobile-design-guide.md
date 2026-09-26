@@ -14,7 +14,7 @@
 - **灰度环境**:除品牌 teal(就绪态)、Heart Orange(运行/thinking 态)和已登记的 Beta 渠道红色状态徽标外,界面全是黑白之间的灰阶。不引入任何品牌蓝 / 绿 / 红等装饰色。
 - **圆角走四档阶梯**(与 `src/theme/tokens.ts` 的 `radius` 一致,守护测试拦截阶梯外值):`micro`(4,缩略图内 chip、勾选指示器等微元素)/ `control`(8,卡片内层控件)/ `container`(12,卡片 / 容器)/ `pill`(9999,交互元素)。**禁止**阶梯外中间值(0 / 3 / 6 / 28 等)与字面量圆角。根规范 `docs/design-rules/DESIGN.md` §5 的三档制约束的是桌面 surface;其「Mobile」节明确把 §15.13 / §16 之外的 mobile 布局细节委托给 `apps/mobile` 的实现,mobile 圆角阶梯以 `tokens.ts` 为准。
 - **零阴影**:层次靠背景色差 + 1px 边框,不用 `shadow*` / `elevation`。
-- **字重克制**:只用 400 / 500,极少量大写微标签可用 600。**UI chrome 无 700+**。唯一例外是根规范 `docs/design-rules/DESIGN.md` §3「排版豁免登记表」已登记的域——原生 Markdown strong(`src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`)与登录品牌画布(`app/(auth)/login.tsx`、`src/components/LoginSkinControls.tsx`、`src/auth/loginSkinLayout.ts`)。这些是用户内容语义与品牌画布,不算 chrome;chrome 本身的上限仍是 600。
+- **字重克制**:按角色用 400 / 500 / 600(见 §3「字重与字色按角色搭配」)。**UI chrome 无 700+**。唯一例外是根规范 `docs/design-rules/DESIGN.md` §3「排版豁免登记表」已登记的域——原生 Markdown strong(`src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`)与登录品牌画布(`app/(auth)/login.tsx`、`src/components/LoginSkinControls.tsx`、`src/auth/loginSkinLayout.ts`)。这些是用户内容语义与品牌画布,不算 chrome;chrome 本身的上限仍是 600。
 - **手机只做减法**(详见 `mobile-current-execution-plan.md`):主层信息量不超过桌面主层;视觉轻、触控够(可见图标小,hitSlop 补足热区)。
 
 ---
@@ -37,25 +37,26 @@
 | `border` | `#CCCCC8` | `#383838` | 1px 分隔线 / 边框 |
 | `borderTranslucent` | rgba(204,204,200,.62) | rgba(56,56,56,.62) | 半透明边框 |
 | `borderStrong` | `#858581` | `#8A8A8A` | 强调边框 / 次要图标点(≥ 3:1) |
-| `textPrimary` | `#1A1A1A` | `#EDEDED` | 主标题 / 主正文 |
+| `textPrimary` | `#0F0F0F` | `#EDEDED` | 主标题 / 主正文 |
 | `textSecondary` | `#4D4D4A` | `#BDBDBD` | 次要文字 / 多数图标 |
-| `textTertiary` | `#686864` | `#999999` | 三级文字 / placeholder / 时间等 metadata |
-| `cta` | `#1A1A1A` | `#EDEDED` | 主操作填充(**dark 反相为近白**) |
+| `textTertiary` | `#686864` | `#999999` | 三级文字 / 时间、计数等 metadata |
+| `textPlaceholder` | `#858581` | `#757575` | **仅限**输入框占位字与同源的语音态提示(≈3.5:1,低于 4.5:1 的登记例外) |
+| `cta` | `#0F0F0F` | `#EDEDED` | 主操作填充(**dark 反相为近白**) |
 | `ctaText` | `#FFFFFF` | `#121212` | CTA 上的文字 |
-| `homeListFab` | `#1A1A1A` | `#E6E6E6` | 素雅新建对话 FAB:dark 比 cta 略收,避免主入口在深底上过跳 |
+| `homeListFab` | `#0F0F0F` | `#E6E6E6` | 素雅新建对话 FAB:dark 比 cta 略收,避免主入口在深底上过跳 |
 | `statusReady` | `#19D2C1` | `#19D2C1` | 就绪 / 在线点(品牌 teal,**语义不变**) |
 | `statusAccent` | `#EA6B17` | `#EA6B17` | 运行 / thinking + 完全访问权限(Heart Orange,**语义不变**) |
 | `betaChannelBadgeBackground` | `#DF0C27` | `#DF0C27` | Beta 渠道开关已打开时,当前版本旁的状态徽标底色 |
 | `betaChannelBadgeForeground` | `#FFFFFF` | `#FFFFFF` | Beta 渠道状态徽标文字,与底色对比度 4.98:1 |
 | `permAutoAccent` | `#417CDD` | `#417CDD` | 自动审批权限模式强调 |
-| `errorText` | `#1A1A1A` | `#EDEDED` | 错误说明文字(跟随 textPrimary) |
+| `errorText` | `#0F0F0F` | `#EDEDED` | 错误说明文字(跟随 textPrimary) |
 | `errorBorder` | `#858581` | `#8A8A8A` | 错误边框(跟随 borderStrong) |
 | `overlay` | rgba(38,38,38,.35) | rgba(0,0,0,.45) | modal / lightbox 背板 |
 
 **规则:**
 - **语义不变色**(`statusReady` / `statusAccent` / `betaChannelBadgeBackground` / `betaChannelBadgeForeground`)跨 light / dark 一致——它们是状态语义,不随主题漂移。Beta 红色只用于设置页当前版本旁的渠道徽标,不得扩展为装饰色、错误色或 CTA。
 - **浅色卡片主要靠描边分层**:页面提亮到 `#F9F9F6` 后,近白卡片相对页面只剩 1.05 的色差(桌面 1.12)。新增浮起面(卡片 / 列表行 / 浮层 / 输入容器)**必须带 1px `border`**,不要只靠 `surfaceElevated` 的填充色差;需要“沉下去”的块(选中底、展开块、代码卡)用比页面更暗的档。
-- **文字三档由深到浅**:正文 → 二级 → 三级,在所在底色上都 ≥ 4.5:1(`themeTokens.test.ts` 守护)。新增文字不要拿 `textTertiary` 当“更弱的二级”以外的用途,也不要为了“更淡”自行调低透明度。
+- **文字三档由深到浅**:正文 → 二级 → 三级,在所在底色上都 ≥ 4.5:1(`themeTokens.test.ts` 守护)。占位字单独用 `textPlaceholder`,比三级更淡但 ≥ 3:1,只给输入框占位字用。新增文字不要拿 `textTertiary` 当“更弱的二级”以外的用途,也不要为了“更淡”自行调低透明度。
 - **CTA 在 dark 反相为近白**:`cta` 近白底 + `ctaText` 深字。注意别让近白 pill 看起来像 disabled——新增主操作 / 选中态后在 dark 下目检。
 - **显示模式由用户设置**:设置 → 外观 → 显示模式(跟随系统 / 浅色 / 深色,默认跟随系统)。组件只读 `useTheme()`,不要自己调 `useColorScheme()`。
 - **Home 对话列表用 base token**:列表背景 / 分隔 / 文字使用 `surface` / `border` / `text*`,菜单选中用 `surfaceChip`,不另起暗色调色板;菜单 / FAB 只用 1px `border` 分层、零阴影,保持桌面「单一 flat Surface + 1px Board」哲学。
@@ -69,27 +70,94 @@
 
 源:`src/theme/tokens.ts` 的 `typeScale` / `lineHeight` / `fontWeight` + `src/theme/monoFont.ts`。
 
-### 字号 `typeScale`
+### 文字规范速查(新增或修改任何文字前先看这张表)
 
-| token | px | 典型用途 |
+2026-09-26 / 27 用户定稿。**先判断这段文字的角色,再整行照抄字号、行高、字重、字色**,不要按「看起来要大一点 / 淡一点」单独调某一项。
+
+| 角色 | 字号 / 行高(token) | 字重 | 字色 | 例子 |
+|---|---|---|---|---|
+| 页面、弹窗、面板大标题 | 20 / 25(`title`) | 600 | `textPrimary` | 弹窗标题、首页顶栏「所有任务」 |
+| 导航栏、面板顶栏标题 | 16 / 22(`body`) | 600 | `textPrimary` | 设置页顶栏「设置」 |
+| 列表 / 卡片标题 | 18 / 26(`subtitle`) | 500 | `textPrimary` | 首页任务标题、队友名 |
+| 行标题、选项、按钮、菜单项 | 16 / 22(`body`) | 500 | `textPrimary`(主按钮 `ctaText`) | 设置行标题、操作按钮 |
+| 行右侧取值 | 16 / 22(`body`) | 400 | `textSecondary` | 「跟随系统」「0 个词条」 |
+| 对话消息正文 | 17 / 26(`bodyLarge`) | 400 | `textPrimary` | 用户 / Agent 消息 |
+| 次级正文 | 15 / 20(`bodySmall`) | 400(面板操作项 500) | 预览 `textSecondary`;操作项 `textPrimary` | 列表预览、面板操作项、搜索框 |
+| 说明、提示、报错(成句的话) | 13 / 18(`footnote`) | 400 | `textSecondary` | 开关下的说明、表单报错 |
+| 分组小标签 | 13 / 18(`footnote`,紧凑处可 12) | 600 | `textTertiary` | 设置分组标题「通知」 |
+| 时间、计数、状态词(短元数据) | 12 / 18(`caption`) | 400 | `textTertiary` | 「2 小时」「3 个文件」 |
+| 徽标、字母标记 | 11 / 16(`micro`) | 600 | 专用前景色,或 chip 底上 `textSecondary` | Beta 徽标、订阅徽标 |
+| 输入框占位字 | 同所在输入框 | 400 | `textPlaceholder` | 「今天我们做点什么呢~」 |
+| 等宽代码 | 15 / 20(`bodySmall`)+ `monoFont` | 400 | `textPrimary` | 代码块、行内代码 |
+
+**四条硬规则**(违反会被守护测试拦下,拦截点见表后):
+
+1. **字色只有五档中性色**:正文 `textPrimary`、二级 `textSecondary`、三级 `textTertiary`、占位字 `textPlaceholder`、深底上的字 `ctaText`。不要新增一次性灰,不要拿 `surface` 当字色,不要调透明度「做淡」。
+2. **颜色越浅,字重不能越粗**:三级色只配 400(分组小标签除外);二级色只配 400 / 500(徽标、字母标记除外)。
+3. **字号只用 11 档阶梯**:11 / 12 / 13 / 15 / 16 / 17 / 18 / 20 / 24 / 30 / 40。成句的话至少 13。
+4. **每个文字样式都配行高**,按上表成对;单行输入框不设行高。
+
+**登记例外**(只有这些可以偏离上表,新增例外先改本节):首页列表与队友行的节奏行高(18/28、15/26、13/22);代码 / diff 的紧凑行高;对话 Markdown 标题与长文 24 行高;与相邻图标 / 按钮对齐的文字;行内强调(Markdown strong 700、搜索命中、价格折扣);登录品牌画布(见根规范 §3 豁免表)。
+
+**机器会拦什么**:阶梯外字号 / 行高 / 字重与裸数字、缺行高、浅色字配粗字重(`typographyTokenDiscipline.test.ts`);字号阶梯本身、文字三档与占位字对比度、深浅双模式同键(`themeTokens.test.ts`)。**拦不住、靠 review 的**:角色选错(比如把说明文字放 12 号、把标题写成 500)、例外被滥用。评审时对照上表逐行看。
+
+### 字号 `typeScale`(按角色选,2026-09-27 用户定稿收拢为 11 档)
+
+| token | px | 角色 |
 |---|---|---|
-| `micro` | 11 | 极小标签 / 路径碎片 |
-| `caption` | 12 | metadata / eyebrow / 标签 |
-| `footnote` | 13 | 小正文 / 等宽代码块 |
-| `code` | 15 | inline code / 命令 |
-| `body` | 16 | 主正文 / 导航 |
-| `subtitle` | 18 | 副标题 / 强调正文 |
-| `title` | 20 | 页面 / 区块标题 |
-| `headline` | 24 | 大标题 / metric 数值 |
-| `hero` | 40 | 大空状态 / splash |
+| `micro` | 11 | 徽标、极小标签 |
+| `caption` | 12 | 短元数据:时间、计数、状态词、chip 文字。**不放成句的话** |
+| `footnote` | 13 | 说明、提示、报错、备注、分组小标签。**成句的话至少 13** |
+| `bodySmall` | 15 | 次级正文:列表预览、紧凑行、面板操作项、搜索框、输入框,以及等宽代码 |
+| `body` | 16 | 界面主文字:行标题、按钮、菜单项、导航栏标题 |
+| `bodyLarge` | 17 | 对话消息正文(专用) |
+| `subtitle` | 18 | 列表 / 卡片标题(首页任务、队友) |
+| `title` | 20 | 页面、弹窗、面板大标题 |
+| `headline` | 24 | 大数字、大名称 |
+| `largeTitle` | 30 | 引导页等超大标题 |
+| `hero` | 40 | 登录页品牌标题(已登记例外) |
+
+已删除 14(`listBody`,并入 15)与 19(`listTitle`,并入 20);原 15 号 `code` 更名为 `bodySmall`。11 / 12 / 13 / 15 / 16 / 17 / 20 与 iOS 系统正文字号一致,18 / 24 / 30 / 40 为移动端自定。阶梯外字号由守护测试拦截。
 
 ### 行高 `lineHeight`(与字号配对)
 
-`caption 18` ·`code 20` ·`body 22` ·`subtitle 26` ·`headline 30`。
+**每个文字样式都必须配行高**(2026-09-27 用户定稿,`typographyTokenDiscipline.test.ts` 守护)。标准配对:
+
+| 字号 | 11 | 12 | 13 | 15 | 16 | 17 | 18 | 20 | 24 | 30 | 40 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 行高 | 16 | 18 | 18 | 20 | 22 | 26 | 26 | 25 | 30 | 36 | 44 |
+
+直接用 `textStyles.*` 预设最省事。标准之外只允许已登记的场景,不要为单个页面再造行高:
+- 首页列表与队友行的节奏值(18/28 标题、15/26 预览、13/22 元数据),对话流 Markdown 标题;
+- 代码、diff、媒体 hint 等「行高即盒高」的紧凑场景(`micro` / `bodySmall` 行高);
+- 长文阅读的 `bodyRelaxed`(24):登录副标题、伙伴记忆。
+
+另有一类**对齐例外**:文字要与相邻图标、按钮或行内正文对齐时,行高跟随被对齐对象(如行内引用 chip、任务标签、消息操作行的时间、生成中状态、伙伴记忆日期)。
+
+**单行输入框(TextInput)不设行高**:iOS 上会让占位字与光标偏位。多行编辑区可以配标准行高。登录品牌画布按其登记例外处理。
 
 ### 字重 `fontWeight`
 
-`regular '400'` · `medium '500'`(默认) · `semibold '600'`(仅限大写微标签等少量强调) · `bold '700'`(**仅限已登记豁免域**,见下)。**UI chrome 不超过 600。**
+`regular '400'` · `medium '500'` · `semibold '600'` · `bold '700'`(**仅限已登记豁免域**,见下)。**UI chrome 不超过 600。**
+
+#### 字重与字色按角色搭配(2026-09-26 用户定稿)
+
+按元素的**角色**选字重,不按字号选:
+
+| 角色 | 常用字号 | 字重 | 字色 |
+|---|---|---|---|
+| 页面 / 导航栏 / 弹窗 / 面板标题 | `body`–`largeTitle` | `semibold` 600 | `textPrimary` |
+| 列表行、选项、卡片标题、按钮文字(含首页任务标题) | `bodySmall`–`subtitle` | `medium` 500 | `textPrimary`(主按钮用 `ctaText`) |
+| 正文、描述、输入内容 | `bodySmall`–`bodyLarge` | `regular` 400 | `textPrimary`;描述性文字用 `textSecondary` |
+| 辅助说明 | `caption` / `footnote` | `regular` 400 | `textSecondary` |
+| 时间、元数据 | `micro` / `caption` | `regular` 400 | `textTertiary` |
+| 输入框占位字 | 同所在输入框 | `regular` 400 | `textPlaceholder` |
+| 分组小标签(eyebrow / 区块标题)、徽标与字母标记 | `micro`–`footnote` | `semibold` 600 | 分组小标签用 `textTertiary`;徽标 / 字母标记用专用前景色,或在 chip 底上用 `textSecondary` |
+
+搭配规则:
+- **颜色越浅,字重不能越粗**:`textTertiary` 只配 400(唯一例外是分组小标签的 600);`textSecondary` 只配 400 或 500(例外:chip 底上的徽标与字母标记可用 600,它们按图形元素处理)。
+- 标题与正文靠**字号 + 字重**拉开;同一字号内的主次靠**颜色**拉开,不再用 500 / 600 细分。选中态同理(如分段选项选中只换色,字重保持 500)。
+- 行内语义强调不受本表约束:Markdown strong(700,见下)、搜索命中高亮、价格折扣等局部加重保留现状。
 
 `bold '700'` 只允许用在根规范 `docs/design-rules/DESIGN.md` §3「排版豁免登记表」登记的两处:原生 Markdown strong(`src/session/MessageRenderer.tsx` 的 `markdownStrong`)与登录品牌画布(`app/(auth)/login.tsx`、`src/components/LoginSkinControls.tsx`、`src/auth/loginSkinLayout.ts`)。除此之外一律不得使用 700,新增用途必须先改根规范的登记表。
 
@@ -99,9 +167,9 @@
 
 ### 旧值 → 新 token 映射(迁移时套用)
 
-- 字号:`10→micro` ·`14→footnote` ·`17→body` ·`22/23/28→headline`。
-- 行高:`16→caption(18)` ·`20→body(22)或 code(20)` ·`23→body(22)` ·`24/25/26→subtitle(26)` ·`28/30/31→headline(30)`。
-- 字重:`'700'→semibold('600')`(仅大写微标签,否则 `'500'`)。**已登记豁免域除外**(原生 Markdown strong、登录品牌画布)——那两处保留 `bold '700'`,不要按此条降档。
+- 字号:`10→micro` ·`14→bodySmall(15)` ·`19→title(20)` ·`22/23/28→headline`;成句的说明文字不要落在 12,用 `footnote`。
+- 行高:`16→caption(18)` ·`20→body(22)或 bodySmall(20)` ·`23→body(22)` ·`24/25/26→subtitle(26)` ·`28/30/31→headline(30)`。
+- 字重:`'700'` → 按上面的角色表选 400 / 500 / 600。**已登记豁免域除外**(原生 Markdown strong、登录品牌画布)——那两处保留 `bold '700'`,不要按此条降档。
 - 等宽:`'Courier'` 与内联 `Platform.select` → `monoFont`。
 
 ---
@@ -213,13 +281,14 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 
 **背景层选择**:页面=`surface`;浮起的卡片/输入框/弹窗=`surfaceElevated`;chip/pill/选中行=`surfaceChip`;hover/pressed 用透明度(`pressed: { opacity: .72 }`)而非新色。
 
-**文字层级**:主=`textPrimary`;次=`textSecondary`;三级/placeholder=`textTertiary`。
+**文字层级**:主=`textPrimary`;次=`textSecondary`;三级=`textTertiary`;占位字=`textPlaceholder`;深底上的字=`ctaText`(不要用 `surface` 当字色)。主界面中性字色只有这五档,不要新增一次性灰。字重按 §3「字重与字色按角色搭配」选,浅色字不配粗字重。
 
 **CTA**:主操作填充 `cta` + 文字 `ctaText`(dark 自动反相);次要操作用边框 + `textPrimary`。
 
-**字号角色**:正文 `body`;标题 `title`/`headline`;metadata/标签 `caption`;代码 `code`/`footnote` + `monoFont`。
+**字号角色**:见 §3 字号表——短元数据 `caption`、成句说明 `footnote`、次级正文与代码 `bodySmall`(代码配 `monoFont`)、主文字 `body`、对话 `bodyLarge`、列表标题 `subtitle`、页面标题 `title`。
 
 ### 迁移 / 新建 checklist
+- [ ] 每段文字都能在 §3「文字规范速查」里找到角色,字号 / 行高 / 字重 / 字色整行一致(例外已登记)。
 - [ ] 颜色全走 `useThemedStyles(makeStyles)` + `useTheme().colors`,无裸 hex/rgba。
 - [ ] `makeStyles` 在**模块级**定义。
 - [ ] 字号 / 行高 / 字重 / 圆角 / 图标尺寸全走 token,无裸数字(必要微调写注释)。
