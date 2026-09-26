@@ -521,7 +521,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
-  const restorePendingReplyLinks = useCallback((client: DeviceLinkClient) => {
+  const restorePendingReplyLinks = useCallback((client: DeviceLinkClient, refreshSettled = false) => {
     // A running business probe owns the breaker/scheduler slot until its reply
     // arrives. Restore only its transport: queuing this handshake behind that
     // probe would make each wait for the other until timeout + backoff.
@@ -529,7 +529,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     // and neither consume nor settle the existing probe's slot.
     for (const deviceId of unresponsiveDevicesStore.getSnapshot()) {
       if (!client.hasPendingRequestsTo(deviceId)) continue;
-      void sendOpenLinkOnce(client, deviceId, false, false, true).request.catch(() => undefined);
+      void sendOpenLinkOnce(client, deviceId, false, refreshSettled, true).request.catch(() => undefined);
     }
   }, [sendOpenLinkOnce]);
 
@@ -1295,6 +1295,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') {
         diagnostics.foreground();
+        const resumingFromBackground = backgroundReleaseInFlightRef.current;
         backgroundReleaseInFlightRef.current = false;
         // 回前台立刻重连:绕开断线后遗留的指数退避计时器(可能 park 到 30s),
         // 让"打开 App → 打开会话"路径快速恢复在线,而不是干等退避。
@@ -1304,7 +1305,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // A short background stay can preserve a socket whose route changed.
         // Replace a known old path; otherwise probe without the hint cooldown.
         if (client.getStatus() === 'online') recoverNetwork(true);
-        restorePendingReplyLinks(client);
+        // A short background stay retains successful handshakes on the same relay.
+        // Refresh those once per return, while sharing pending opens and repeated active hints.
+        restorePendingReplyLinks(client, resumingFromBackground);
         // 快速切换(连接被宽限保住、始终 online)不会有 online 状态转换,这条显式
         // 补齐就是断档回填的唯一触发点;其余路径下它因 status 未 online 而空转。
         void rehydrateWithClient(client);

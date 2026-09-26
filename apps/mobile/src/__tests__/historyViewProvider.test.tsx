@@ -127,7 +127,7 @@ describe('pending probe reply recovery', () => {
     resetDeviceResponsivenessTracking();
     revokedDevicesStore.clearAll();
   });
-  it('reopens the reply link after reconnect while the old business probe still owns its slot', async () => {
+  it.each(['relay reconnect', 'short background'] as const)('reopens the reply link after %s while the old business probe still owns its slot', async recovery => {
     vi.useFakeTimers();
     const client = transport.clients[0];
     client.openLink.mockResolvedValue(accepted(supported));
@@ -143,13 +143,26 @@ describe('pending probe reply recovery', () => {
       expect(client.invoke).toHaveBeenCalledExactlyOnceWith('host', expect.objectContaining({ channel: 'local-db:sessions:list' }), expect.any(Number));
       expect(unresponsiveDevicesStore.has('host')).toBe(true);
       client.hasPendingRequestsTo.mockImplementation(device => device === 'host');
-      await act(async () => { client.status = 'connecting'; client.statusChanged('connecting'); });
-      await act(async () => { client.status = 'online'; client.statusChanged('online'); });
+      const freshAccept = deferredAccept();
+      client.openLink.mockReturnValue(freshAccept.promise);
+      if (recovery === 'relay reconnect') {
+        await act(async () => { client.status = 'connecting'; client.statusChanged('connecting'); });
+        await act(async () => { client.status = 'online'; client.statusChanged('online'); });
+      } else {
+        // The relay stays online, so the successful pre-background handshake is still cached.
+        await act(async () => { networkEvents.state = 'background'; networkEvents.app('background'); });
+        await act(async () => { networkEvents.state = 'active'; networkEvents.app('active'); });
+        expect(client.stop).not.toHaveBeenCalled();
+        expect(client.restartConnection).not.toHaveBeenCalled();
+      }
       // The serial recovery scheduler is still awaiting probe; only its reply link may reopen.
       expect(client.openLink).toHaveBeenCalledTimes(2);
       expect(client.invoke).toHaveBeenCalledTimes(1);
       expect(unresponsiveDevicesStore.has('host')).toBe(true);
-      // Another foreground hint shares the accepted transport; it cannot start a second probe.
+      // Repeated foreground hints share both pending and accepted handshakes.
+      await act(async () => networkEvents.app('active'));
+      expect(client.openLink).toHaveBeenCalledTimes(2);
+      await act(async () => freshAccept.resolve(accepted(supported)));
       await act(async () => networkEvents.app('active'));
       expect(client.openLink).toHaveBeenCalledTimes(2);
       expect(client.invoke).toHaveBeenCalledTimes(1);
