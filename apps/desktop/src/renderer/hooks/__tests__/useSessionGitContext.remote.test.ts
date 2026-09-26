@@ -238,6 +238,56 @@ describe('useSessionGitContext remote routing', () => {
     unmount();
   });
 
+  it('对话任务与项目任务一样显示分支和消息里的 PR', async () => {
+    const gitContext = makeGitContext();
+    gitContext.getForSession.mockResolvedValue({
+      workdir: '/Users/me/repo',
+      head: { kind: 'branch', branch: 'feature/dialogue', shortSha: null },
+      source: 'telemetry',
+    });
+    const prRef = {
+      id: 'ref-1',
+      sessionId: 'session-1',
+      owner: 'octo',
+      repo: 'repo',
+      prNumber: 7,
+      url: 'https://github.com/octo/repo/pull/7',
+      firstSeenAt: 1,
+      lastSeenAt: 2,
+    };
+    gitContext.listAllPrRefs.mockResolvedValue([prRef]);
+    gitContext.listPrRefs.mockResolvedValue([prRef]);
+    gitContext.getPrStatuses.mockResolvedValue([
+      {
+        ok: true,
+        owner: 'octo',
+        repo: 'repo',
+        prNumber: 7,
+        status: 'merged',
+        title: 'Dialogue PR',
+        htmlUrl: 'https://github.com/octo/repo/pull/7',
+        branch: 'feature/x',
+        unresolvedCount: 0,
+      },
+    ]);
+    window.electronAPI = {
+      gitContext,
+      deviceLink: { invoke: vi.fn() },
+    } as never;
+
+    const session = { ...sessionBase, workspaceKind: 'dialogue' as const };
+    const { result, unmount } = renderHook(() => useSessionGitContext(session), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.head?.branch).toBe('feature/dialogue');
+      expect(result.current.prRefs).toHaveLength(1);
+      expect(result.current.prStatuses.size).toBe(1);
+    });
+    expect(gitContext.watch).toHaveBeenCalledWith('/Users/me/repo');
+    unmount();
+    expect(gitContext.unwatch).toHaveBeenCalledWith('/Users/me/repo');
+  });
+
   // 2026-08-13 用户裁决:设备明确断线时不发注定失败的 PR 隧道查询(fail-open:
   // shard 缺失照常尝试,见 prRefsRefreshGating.test.ts 的判定语义)。
   it('被控端标记断线时跳过 PR 引用的隧道查询,重连后恢复', async () => {

@@ -674,7 +674,7 @@ export function SessionContentHeader({
         </DropdownMenu>
       )}
 
-      {/* session-git-pr-context:当前分支 + 关联 PR 徽标(非 git 目录 / dialogue 会话自动隐藏) */}
+      {/* session-git-pr-context:当前分支 + 关联 PR 徽标(项目任务与对话一致;非 git 目录且无 PR 时自动隐藏) */}
       <GitContextBadge session={session} />
 
       {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
