@@ -3028,6 +3028,8 @@ function SessionOriginLabel({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
+  const senderSessionId = origin.senderSessionId;
+  const openTarget = onOpen && senderSessionId ? () => onOpen(senderSessionId) : undefined;
   const label = origin.senderBotName
     ? t('message.renderer.botOriginNamed', { name: origin.senderBotName })
     : origin.senderSessionTitle
@@ -3035,12 +3037,12 @@ function SessionOriginLabel({
       : t('message.renderer.sessionOrigin');
   return (
     <Pressable
-      accessibilityHint={onOpen ? t('message.renderer.openSessionOrigin') : undefined}
+      accessibilityHint={openTarget ? t('message.renderer.openSessionOrigin') : undefined}
       accessibilityLabel={label}
-      accessibilityRole={onOpen ? 'button' : 'text'}
-      disabled={!onOpen}
+      accessibilityRole={openTarget ? 'button' : 'text'}
+      disabled={!openTarget}
       hitSlop={8}
-      onPress={onOpen ? () => onOpen(origin.senderSessionId) : undefined}
+      onPress={openTarget}
       style={styles.automationOriginRow}
       testID="message.sessionOrigin"
     >

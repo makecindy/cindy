@@ -98,6 +98,11 @@ import {
 } from './remoteBotSessionBoundary.js';
 import { getControllerPlatform } from './controllerPlatform';
 import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from './invoke-context';
+import {
+  redactInputProjectionForSharedGuest,
+  redactMessageRowForSharedGuest,
+  redactSharedGuestPush,
+} from './sharedTaskMessageOrigin';
 import { isSharedTaskPeer, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
 import { captureSharedTaskPeer, captureSharedTaskPush, assertSharedTaskInvoke, sharedTaskMetadataTopic, sharedTaskAccessFailure } from './sharedTaskDispatch.js';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
@@ -1836,13 +1841,18 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   // on the same relay must still receive its unchanged payload.
   let mobilePayload: unknown;
   let mobilePayloadReady = false;
-  const payloadFor = (dst: string): unknown => {
+  const projectedPayloadFor = (dst: string): unknown => {
     if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return remotePayload;
     if (!mobilePayloadReady) {
       mobilePayload = projectMobileToolPush(channel, remotePayload);
       mobilePayloadReady = true;
     }
     return mobilePayload;
+  };
+  // 共享任务访客只能看见本任务：新消息推送里的来源身份与 invoke 读取同口径脱敏。
+  const payloadFor = (dst: string): unknown => {
+    const projected = projectedPayloadFor(dst);
+    return isSharedTaskPeer(dst) ? redactSharedGuestPush(channel, projected) : projected;
   };
   const historySessionId = readPushSessionId(remotePayload);
   const deferred = historySessionId !== null && isDeferredHistoryPush(channel, remotePayload,
@@ -2924,14 +2934,27 @@ function normalizeInvokeResultForWire(result: InvokeResultPayload): InvokeResult
   };
 }
 
+/**
+ * @param sharedTaskGuest 结果发往共享任务访客：消息来源里指向房主其它任务 / 伙伴的身份
+ *   一并脱敏（见 sharedTaskMessageOrigin）。同账号控制端保留完整来源以便跳转。
+ */
 function sanitizeMessageInvokeResult(
   result: InvokeResultPayload,
   channel: string | undefined,
+  sharedTaskGuest = false,
 ): InvokeResultPayload {
+  const sanitizeRow = (record: Record<string, unknown>): Record<string, unknown> => {
+    const sanitized = sanitizeRemoteMessage(record);
+    return sharedTaskGuest ? redactMessageRowForSharedGuest(sanitized) : sanitized;
+  };
+  if (sharedTaskGuest && result.ok && channel === 'maker:input:get-projection') {
+    const projection = redactInputProjectionForSharedGuest(result.result);
+    return projection === result.result ? result : { ok: true, result: projection };
+  }
   if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')) {
     const page = result.result as { items?: Array<{ type: string; messages?: unknown[] }>; messages?: unknown[] };
     const sanitize = (message: unknown) => message && typeof message === 'object' && !Array.isArray(message)
-      ? sanitizeRemoteMessage(message as Record<string, unknown>) : message;
+      ? sanitizeRow(message as Record<string, unknown>) : message;
     return { ok: true, result: { ...page,
       ...(page.messages ? { messages: page.messages.map(sanitize) } : {}),
       ...(page.items ? { items: mapHistoryViewMessages(page.items as HistoryViewItem<HistoryMessageSource>[],
@@ -2943,7 +2966,7 @@ function sanitizeMessageInvokeResult(
   let changed = false;
   const sanitized = result.result.map((msg: unknown) => {
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return msg;
-    const out = sanitizeRemoteMessage(msg as Record<string, unknown>);
+    const out = sanitizeRow(msg as Record<string, unknown>);
     if (out !== msg) changed = true;
     return out;
   });
@@ -3008,7 +3031,11 @@ function sendInvokeResultSafe(
   fingerprint?: string,
 ): boolean {
   const key = `${src}\u0000${requestId}`;
-  const sanitized = sanitizeMessageInvokeResult(normalizeInvokeResultForWire(result), channel);
+  const sanitized = sanitizeMessageInvokeResult(
+    normalizeInvokeResultForWire(result),
+    channel,
+    isSharedTaskPeer(src),
+  );
   const normalized = sanitized.ok && channel === 'local-db:sessions:list'
     ? {
         ...sanitized,

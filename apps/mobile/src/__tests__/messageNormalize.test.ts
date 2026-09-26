@@ -1169,6 +1169,12 @@ describe('normalizeRemoteMessages', () => {
         },
       }),
       message({
+        id: 'shared-guest',
+        role: 'user',
+        content: 'redacted by host',
+        agentMeta: { origin: { kind: 'session' } },
+      }),
+      message({
         id: 'legacy-orca',
         role: 'user',
         content: 'legacy',
@@ -1180,6 +1186,7 @@ describe('normalizeRemoteMessages', () => {
       ['tool-sent', { senderSessionId: 'caller', senderSessionTitle: 'Release checklist' }, undefined],
       ['orca-report', { senderSessionId: 'worker-1' }, undefined],
       ['teammate-sent', { senderSessionId: 'bot-task', senderSessionTitle: 'Weekly feedback', senderBotName: 'Cindy' }, undefined],
+      ['shared-guest', {}, undefined],
       ['legacy-orca', undefined, undefined],
     ]);
   });

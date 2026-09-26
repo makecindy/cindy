@@ -51,7 +51,11 @@ describe('toMessageAutomationOrigin', () => {
   it('ignores missing, malformed, and unknown origins', () => {
     expect(toMessageAutomationOrigin(undefined)).toBeUndefined();
     expect(toMessageAutomationOrigin('scheduler')).toBeUndefined();
-    expect(toMessageAutomationOrigin({ kind: 'session', senderSessionId: '  ' })).toBeUndefined();
     expect(toMessageAutomationOrigin({ kind: 'desktop' })).toBeUndefined();
+  });
+
+  it('keeps a generic, non-navigable session origin when the host redacted the sender', () => {
+    expect(toMessageAutomationOrigin({ kind: 'session' })).toEqual({ kind: 'session' });
+    expect(toMessageAutomationOrigin({ kind: 'session', senderSessionId: '  ' })).toEqual({ kind: 'session' });
   });
 });

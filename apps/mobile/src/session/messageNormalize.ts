@@ -150,7 +150,8 @@ export interface NormalizedRemoteMessage {
 
 /** 另一个任务经工具发来的消息来源(对齐桌面 MessageSessionOrigin)。 */
 export interface NormalizedSessionOrigin {
-  senderSessionId: string;
+  /** 共享任务访客收到的来源已由主机脱敏、不带 id:只显示通用文案,不可点按。 */
+  senderSessionId?: string;
   senderSessionTitle?: string;
   /** 来源任务属于伙伴时的伙伴名快照;有则标签显示伙伴名。 */
   senderBotName?: string;
@@ -1016,7 +1017,7 @@ function readSessionOrigin(message: RemoteMessage): Pick<NormalizedRemoteMessage
   const origin = readRecord(message.agentMeta?.origin);
   if (!origin || (origin.kind !== 'session' && origin.kind !== 'orca')) return {};
   const senderSessionId = readString(origin.senderSessionId)?.trim();
-  if (!senderSessionId) return {};
+  if (!senderSessionId) return origin.kind === 'session' ? { sessionOrigin: {} } : {};
   const senderSessionTitle = origin.kind === 'session' ? readString(origin.senderSessionTitle)?.trim() : undefined;
   const senderBotName = origin.kind === 'session' && readString(origin.senderBotId)
     ? (readString(origin.senderBotName)?.trim() || readString(origin.senderBotId)?.trim())

@@ -14,8 +14,10 @@ export function toMessageAutomationOrigin(origin: unknown): MessageAutomationOri
   if (value.kind === 'scheduler') return value as MessageAutomationOrigin;
   if (value.kind !== 'session' && value.kind !== 'orca') return undefined;
   const senderSessionId = readNonEmptyString(value.senderSessionId);
-  if (!senderSessionId) return undefined;
-  if (value.kind === 'orca') return { kind: 'session', senderSessionId };
+  if (value.kind === 'orca')
+    return senderSessionId ? { kind: 'session', senderSessionId } : undefined;
+  // 共享任务访客收到的是主机脱敏后的来源：仍标出「由其他任务发送」，但不带身份、不可跳转。
+  if (!senderSessionId) return { kind: 'session' };
   const senderSessionTitle = readNonEmptyString(value.senderSessionTitle);
   const senderBotId = readNonEmptyString(value.senderBotId);
   const senderBotName = readNonEmptyString(value.senderBotName);

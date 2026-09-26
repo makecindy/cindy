@@ -67,8 +67,10 @@ export function AutomationOriginBadge({
 
   let label: string;
   let viewTitle: string;
-  let open: () => void;
+  // null：来源身份已被主机脱敏（共享任务访客），只展示不可点击的通用文案。
+  let open: (() => void) | null;
   if (automationOrigin.kind === 'session') {
+    const targetSessionId = automationOrigin.senderSessionId;
     const senderTitle = liveSenderTitle ?? automationOrigin.senderSessionTitle;
     label = senderBot
       ? t('chat.userMessage.botSentNamed', { name: senderBot.name })
@@ -76,12 +78,13 @@ export function AutomationOriginBadge({
         ? t('chat.userMessage.sessionSentNamed', { name: senderTitle })
         : t('chat.userMessage.sessionSent');
     viewTitle = t('chat.userMessage.sessionViewSource');
-    open = () => {
-      // 工具只能在同一台设备的任务之间投递：远程任务的来源任务也在那台设备上。
-      if (hostDeviceId)
-        remoteProjectsStore.pinSessionOrigin(hostDeviceId, automationOrigin.senderSessionId);
-      navigate(`/cc-agent/${encodeURIComponent(automationOrigin.senderSessionId)}`);
-    };
+    open = targetSessionId
+      ? () => {
+          // 工具只能在同一台设备的任务之间投递：远程任务的来源任务也在那台设备上。
+          if (hostDeviceId) remoteProjectsStore.pinSessionOrigin(hostDeviceId, targetSessionId);
+          navigate(`/cc-agent/${encodeURIComponent(targetSessionId)}`);
+        }
+      : null;
   } else {
     label = automationOrigin.scheduleName
       ? t('chat.userMessage.automationSentNamed', { name: automationOrigin.scheduleName })
@@ -102,7 +105,7 @@ export function AutomationOriginBadge({
     </>
   );
 
-  if (navigationMode === 'sidebar-embedded') {
+  if (navigationMode === 'sidebar-embedded' || !open) {
     return (
       <span
         data-message-origin={senderBot ? 'bot' : automationOrigin.kind}

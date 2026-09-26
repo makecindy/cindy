@@ -47,7 +47,11 @@ export interface MessageSchedulerOrigin {
  */
 export interface MessageSessionOrigin {
   kind: 'session';
-  senderSessionId: string;
+  /**
+   * 来源任务 id。共享任务访客收到的来源已由主机脱敏、不带 id（见 main
+   * device-link/sharedTaskMessageOrigin），此时标签只显示通用文案且不可点击。
+   */
+  senderSessionId?: string;
   /** 发送时的来源任务标题快照；实时标题拿不到时回退用。 */
   senderSessionTitle?: string;
   /** 来源任务属于某个伙伴时：标签显示伙伴名与头像（名字优先取实时资料，其次用快照）。 */
