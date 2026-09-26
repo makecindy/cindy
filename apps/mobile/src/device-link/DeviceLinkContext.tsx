@@ -1306,17 +1306,22 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           || previousNetwork.isInternetReachable !== network.isInternetReachable
         );
         previousNetwork = network;
+        mobileDebugLog('debug', 'device-link', 'network path notification', { type: network.type, connected: network.isConnected, reachable: network.isInternetReachable, appState: AppState.currentState, urgent });
+        // Native lookup failures can report UNKNOWN with isConnected=false.
+        // They neither prove route loss nor consume an earlier confirmed loss.
+        if (!network.type || network.type === 'UNKNOWN') {
+          if (AppState.currentState === 'active') client.notifyNetworkChanged({ urgent });
+          return;
+        }
         // Reachability/capability notifications alone are not route changes:
         // preserve the full weak-network probe budget for those hints.
         if (network.isConnected === false) networkPathChanged = true;
-        if (network.isConnected === true && network.type
-          && network.type !== 'NONE' && network.type !== 'UNKNOWN') {
+        if (network.isConnected === true && network.type !== 'NONE') {
           if (lastConnectedNetworkType !== undefined && lastConnectedNetworkType !== network.type) {
             networkPathChanged = true;
           }
           lastConnectedNetworkType = network.type;
         }
-        mobileDebugLog('debug', 'device-link', 'network path notification', { type: network.type, connected: network.isConnected, reachable: network.isInternetReachable, appState: AppState.currentState, urgent });
         if (AppState.currentState !== 'active' || network.isConnected === false) return;
         recoverNetwork(urgent);
       });

@@ -24,7 +24,7 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
 const networkEvents = vi.hoisted(() => ({
   state: 'active',
   app: (_next: string) => {},
-  network: (_next: { type: string; isConnected: boolean; isInternetReachable: boolean }) => {},
+  network: (_next: { type?: string; isConnected?: boolean; isInternetReachable?: boolean }) => {},
 }));
 vi.mock('react-native', () => ({
   Platform: { OS: 'android' },
@@ -162,6 +162,48 @@ describe('Provider network recovery priority', () => {
     expect(client.notifyNetworkChanged.mock.calls).toEqual([
       [{ urgent: false }], [{ urgent: true }], [{ urgent: true }], [{ urgent: false }],
     ]);
+  });
+
+  it.each(['UNKNOWN', undefined])('probes an unknown network (%s) without treating it as route loss', async type => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.network({ type, isConnected: false, isInternetReachable: false });
+      networkEvents.network(wifi);
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    expect(client.notifyNetworkChanged.mock.calls).toEqual([
+      [{ urgent: false }], [{ urgent: true }], [{ urgent: true }],
+    ]);
+  });
+
+  it.each([false, true])('keeps confirmed route loss pending across UNKNOWN (connected=%s)', async isConnected => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.network({ type: 'NONE', isConnected: false, isInternetReachable: false });
+      networkEvents.network({ type: 'UNKNOWN', isConnected, isInternetReachable: false });
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    await act(async () => networkEvents.network(wifi));
+    expect(client.restartConnection).toHaveBeenCalledExactlyOnceWith('network-path-changed');
+  });
+
+  it('does not retain unknown background notifications as a lost route', async () => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      client.notifyNetworkChanged.mockClear();
+      networkEvents.state = 'background'; networkEvents.app('background');
+      networkEvents.network({ type: 'UNKNOWN', isConnected: false, isInternetReachable: false });
+    });
+    expect(client.notifyNetworkChanged).not.toHaveBeenCalled();
+    await act(async () => {
+      networkEvents.state = 'active'; networkEvents.app('active');
+      networkEvents.network(wifi);
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    expect(client.notifyNetworkChanged).toHaveBeenCalledWith({ urgent: true });
   });
 
   it('remembers a lost route even when the replacement has the same network type', async () => {
