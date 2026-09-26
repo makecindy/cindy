@@ -7324,7 +7324,7 @@ assertRouteCurrent();
         appliedContextLimit = desired;
         hasActivatedRootTurn = false;
         lastNativeContextWindow = null;
-        usageTracker.setContextWindow(0);
+        usageTracker.resetContextWindow();
       })();
     };
 
@@ -8134,7 +8134,9 @@ assertRouteCurrent();
         hasActivatedRootTurn = true;
         if (lastNativeContextWindowTurnId !== turnId) {
           lastNativeContextWindow = null;
-          usageTracker.setContextWindow(0);
+          // setContextWindow(0) 是 no-op(防误清), 失效必须走显式 reset —— 否则
+          // tracker 沿用旧 runtime 写入的窗口, UI 环按陈旧容量算占用比例。
+          usageTracker.resetContextWindow();
         }
       }
 

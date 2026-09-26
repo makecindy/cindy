@@ -241,3 +241,26 @@ describe('UsageTracker.markContextOverflow', () => {
     expect(tracker.snapshot().contextTokens).toBe(272_000);
   });
 });
+
+describe('UsageTracker.resetContextWindow', () => {
+  it('resetContextWindow invalidates the stored window; setContextWindow(0) stays a no-op', () => {
+    // 回归:codex 在 resume 后的首个 root turn / context settings 刷新后调用
+    // setContextWindow(0) 想作废旧 runtime 写入的窗口 —— 但它是防误清的 no-op,
+    // tracker 静默沿用陈旧容量(如切换前模型的 272k), UI 环与快照在下一个
+    // tokenUsage 事件之前都按旧窗口算。失效必须走显式 reset。
+    const tracker = new UsageTracker();
+    tracker.setContextWindow(272_000);
+    tracker.ingestApiCallUsage({ inputTokens: 5_000, outputTokens: 10 });
+
+    // 防误清语义保持:setContextWindow(0) 不清窗口
+    tracker.setContextWindow(0);
+    expect(tracker.snapshot().contextWindow).toBe(272_000);
+
+    tracker.resetContextWindow();
+    expect(tracker.snapshot()).toMatchObject({ contextWindow: 0 });
+
+    // 失效后新窗口照常写入
+    tracker.setContextWindow(1_000_000);
+    expect(tracker.snapshot().contextWindow).toBe(1_000_000);
+  });
+});
