@@ -162,8 +162,13 @@ describe('shared task guests never see the owner private message sources', () =>
   };
   const message = {
     clientId: 'm1', sessionId: 'task-a', role: 'user', content: 'please review',
-    agentMeta: { origin: privateOrigin },
+    agentMeta: {
+      origin: privateOrigin,
+      // Host-internal agent-facing copy used for overflow replay; carries the teammate prefix.
+      agentFacingWireContent: { type: 'user', content: '[来自 Cindy 的补充]\n\nplease review' },
+    },
   };
+  const privateText = /Cindy|owner-private-task|Owner private plan|bot-1/;
 
   it('redacts new-message pushes for the guest but keeps them for same-account controllers', async () => {
     const transport = client();
@@ -174,7 +179,8 @@ describe('shared task guests never see the owner private message sources', () =>
     await vi.advanceTimersByTimeAsync(300);
     const sent = new Map(transport.sendPush.mock.calls.map((call) => [call[0], call[2]]));
     expect(sent.get(guestA).message.agentMeta.origin).toEqual({ kind: 'session' });
-    expect(sent.get('own-task').message.agentMeta.origin).toEqual(privateOrigin);
+    expect(JSON.stringify(sent.get(guestA))).not.toMatch(privateText);
+    expect(sent.get('own-task').message.agentMeta).toEqual(message.agentMeta);
   });
 
   it('redacts queued-message sources in input projection pushes for the guest', async () => {
@@ -226,6 +232,7 @@ describe('shared task guests never see the owner private message sources', () =>
     }, 'maker:input:get-projection', ['task-a']);
     const results = new Map(transport.sendInvokeResult.mock.calls.map((call) => [call[1], call[2]]));
     expect(results.get('r1').result[0].agentMeta.origin).toEqual({ kind: 'session' });
+    expect(JSON.stringify(results.get('r1'))).not.toMatch(privateText);
     expect(results.get('r2').result[0].agentMeta.origin).toEqual(privateOrigin);
     expect(results.get('r3').result.pendingQueue[0].origin).toEqual({ kind: 'session', senderSessionId: '', displayText: 'please review' });
   });

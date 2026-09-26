@@ -5,19 +5,26 @@ import { queueItemVisibleText } from '@cindy/maker-shared/queue';
  * 消息来源（agentMeta.origin）里指向房主其它任务或伙伴的身份——来源任务 id、标题、
  * 伙伴 id / 名字、Orca 发送方任务——都不属于访客可见范围，投递给访客前一律剥掉。
  * 任务来源降级为不带身份的 `{ kind: 'session' }`，访客端显示不可点击的「由其他任务发送」。
+ *
+ * `agentFacingWireContent` 是主机内部的 Agent 原文副本（只用于上下文溢出后重放），
+ * 可能带「[来自 X 的补充]」这类来源前缀；访客端从不使用，一律不下发。
  */
 export function redactMessageOriginForSharedGuest(agentMeta: unknown): unknown {
   if (!agentMeta || typeof agentMeta !== 'object' || Array.isArray(agentMeta)) return agentMeta;
   const meta = agentMeta as Record<string, unknown>;
+  const { agentFacingWireContent: _wire, ...rest } = meta;
+  const hadWire = 'agentFacingWireContent' in meta;
   const origin = meta.origin;
-  if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return agentMeta;
-  const kind = (origin as { kind?: unknown }).kind;
-  if (kind === 'session') return { ...meta, origin: { kind: 'session' } };
-  if (kind === 'orca' && 'senderSessionId' in origin) {
-    const { senderSessionId: _, ...rest } = origin as Record<string, unknown>;
-    return { ...meta, origin: rest };
+  if (!origin || typeof origin !== 'object' || Array.isArray(origin)) {
+    return hadWire ? rest : agentMeta;
   }
-  return agentMeta;
+  const kind = (origin as { kind?: unknown }).kind;
+  if (kind === 'session') return { ...rest, origin: { kind: 'session' } };
+  if (kind === 'orca' && 'senderSessionId' in origin) {
+    const { senderSessionId: _, ...orcaRest } = origin as Record<string, unknown>;
+    return { ...rest, origin: orcaRest };
+  }
+  return hadWire ? rest : agentMeta;
 }
 
 /** 对单条消息行套用 {@link redactMessageOriginForSharedGuest}；无需改动时返回原引用。 */
