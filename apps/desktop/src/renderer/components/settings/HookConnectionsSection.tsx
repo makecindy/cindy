@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * HookConnectionsSection —— 「IM 机器人」页「官方」栏(Cindy 渠道)。
  * i18n key 刻意留在 settings.remoteControl.hook.* 命名空间(50+ 条 × 4 语言的
@@ -35,7 +36,7 @@
  * 颜色全部走主题 token; 状态徽章沿用「个人」栏的 --settings-badge-* 语义色。
  */
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Plus, Trash2 } from 'lucide-react';
 
@@ -68,6 +69,7 @@ import {
 type NeutralCardProvider = 'telegram' | 'x';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import {
   TelegramBehaviorSettings,
   TelegramGroupActivationSettings,
@@ -306,15 +308,18 @@ function LegacyGlobalDefaultsNotice({
           </li>
         ))}
       </ul>
-      <button
+      <Button
+        variant="secondary"
+        size="sm"
+        compact
         type="button"
         data-testid="hook-legacy-global-defaults-restore"
         onClick={onRestore}
         disabled={pending}
-        className="mt-0.5 flex h-7 w-fit items-center rounded-full border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] disabled:opacity-50"
+        className="mt-0.5 w-fit"
       >
         {t('settings.defaults.restore')}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -397,10 +402,6 @@ function DefaultWorkspaceRadio({
   );
 }
 
-/** 小号胶囊按钮(「复制链接 / 安装 Slack App」共用)。 */
-const pillBtn =
-  'flex h-6 shrink-0 items-center rounded-full border border-[var(--border-default)] px-2.5 text-11 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50';
-
 const RESERVED_WORKSPACE_ALIASES = new Set([
   HOOK_CHAT_WORKSPACE_ALIAS,
   '__proto__',
@@ -452,6 +453,7 @@ export function workspaceRowsToMap(
 
 export function HookConnectionsSection() {
   const { t } = useTranslation();
+  const { entry, activation } = useSettingsSearchNavigation();
   const [hook, setHook] = useState<SlackHookView | null>(null);
   /** 工作目录行的本地编辑态(别名输入中不被状态推送打断, blur 时提交)。 */
   const [rows, setRows] = useState<Array<{ alias: string; dir: string }>>([]);
@@ -462,7 +464,13 @@ export function HookConnectionsSection() {
    * 全收起 —— 收起行自带状态徽章与绑定摘要。打开渠道开关时自动展开对应卡,
    * 让授权进度与兜底动作(复制链接 / 安装引导)立即可见。
    */
-  const [expandedCard, setExpandedCard] = useState<CindyImCard | null>(null);
+  const targetCard = (['slack', 'telegram', 'x'] as const).find(
+    (card) => entry?.targetId === 'cindy-im-' + card,
+  ) ?? null;
+  const [expandedCard, setExpandedCard] = useState<CindyImCard | null>(targetCard);
+  useLayoutEffect(() => {
+    if (targetCard) setExpandedCard(targetCard);
+  }, [targetCard, activation]);
   const [slackAuthActionPending, setSlackAuthActionPending] = useState(false);
   const slackAuthActionInFlightRef = useRef(false);
   const toggleCard = (card: CindyImCard) =>
@@ -1244,18 +1252,14 @@ export function HookConnectionsSection() {
           <div className="flex items-center gap-2 text-11 text-[var(--text-tertiary)]">
             <span>{prefsState.hint}</span>
             {prefsState.retry !== null && (
-              <button
-                type="button"
-                onClick={prefsState.retry}
-                className="rounded-md border border-[var(--border-default)] px-2 py-0.5 text-11 text-[var(--text-secondary)]"
-              >
+              <Button variant="secondary" size="xs" compact type="button" onClick={prefsState.retry}>
                 {t('settings.tina.prefs.retry')}
-              </button>
+              </Button>
             )}
           </div>
         )}
-        {/* row 形态: 整个目录清单是一组单选 —— 选中的那个就是默认工作目录。
-            aria 分组挂在这里, 各行头部的 role="radio" 按钮是它的选项。 */}
+        {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
+            只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
         <div
           className="flex flex-col gap-2"
           {...(defaultWorkspace?.mode === 'row'
@@ -1352,14 +1356,17 @@ export function HookConnectionsSection() {
             </div>
           ))}
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
           type="button"
           onClick={() => void handleAddWorkspace()}
-          className="flex h-7 w-fit items-center gap-1.5 rounded-full border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+          className="w-fit"
         >
           <Plus size={12} />
           {t('settings.remoteControl.hook.form.addWorkspace')}
-        </button>
+        </Button>
       </div>
     </>
   );
@@ -1434,80 +1441,90 @@ export function HookConnectionsSection() {
               {cs.inProgress && cs.binding?.connectUrl ? (
                 <>
                   {cs.actions.includes('open_connect_url') ? (
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      compact
                       type="button"
                       onClick={() => handleProviderOpen(provider, 'connect')}
-                      className={pillBtn}
                     >
                       {t(`settings.remoteControl.hook.${provider}.openApp`)}
-                    </button>
+                    </Button>
                   ) : null}
                   {cs.actions.includes('copy_connect_url') ? (
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      compact
                       type="button"
                       onClick={() => void handleCopyProviderLink(provider)}
-                      className={pillBtn}
                     >
                       {t('settings.remoteControl.hook.binding.copyLink')}
-                    </button>
+                    </Button>
                   ) : null}
                 </>
               ) : null}
               {cs.inProgress && cs.actions.includes('cancel') ? (
-                <button
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  compact
                   type="button"
-                  onClick={() =>
-                    runHookAction(() => window.electronAPI.hookControl.providerBindCancel(provider))
-                  }
-                  className={pillBtn}
+                  onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindCancel(provider))}
                 >
                   {t(`settings.remoteControl.hook.${provider}.cancel`)}
-                </button>
+                </Button>
               ) : null}
               {cs.confirmed ? (
                 <>
                   {cs.actions.includes('open_provider') ? (
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      compact
                       type="button"
                       onClick={() => handleProviderOpen(provider, 'provider')}
-                      className={pillBtn}
                     >
                       {t(`settings.remoteControl.hook.${provider}.openBot`)}
-                    </button>
+                    </Button>
                   ) : null}
                   {cs.actions.includes('add_to_group') ? (
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      compact
                       type="button"
                       onClick={() => handleProviderOpen(provider, 'add-to-group')}
-                      className={pillBtn}
                     >
                       {t(`settings.remoteControl.hook.${provider}.addToGroup`)}
-                    </button>
+                    </Button>
                   ) : null}
                   {cs.actions.includes('revoke') ? (
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      compact
                       type="button"
                       onClick={() => void handleProviderUnlink(provider)}
-                      className={pillBtn}
                     >
                       {t(`settings.remoteControl.hook.${provider}.unlink`)}
-                    </button>
+                    </Button>
                   ) : null}
                 </>
               ) : cs.canStartLink ? (
-                <button
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  compact
                   type="button"
-                  onClick={() =>
-                    runHookAction(() => window.electronAPI.hookControl.providerBindStart(provider))
-                  }
-                  className={pillBtn}
+                  onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart(provider))}
                 >
                   {t(
                     cs.state === 'none'
                       ? `settings.remoteControl.hook.${provider}.connect`
                       : `settings.remoteControl.hook.${provider}.retry`,
                   )}
-                </button>
+                </Button>
               ) : null}
             </div>
           ) : null}
@@ -1617,50 +1634,47 @@ export function HookConnectionsSection() {
             </span>
           ) : null}
 
-          {/* 单绑定授权中: 复制授权链接 —— 远程控制时 openExternal 落被控机,
-              复制到本机浏览器完成授权是兜底通路(规则 26)。浏览器已自动弹出,
-              摘要的「授权中…」即进度反馈; multi-team 列表模式的复制按钮在
-              下方 pending 行里 */}
+          {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
+              只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
           {hook.enabled && !multiUi && bindingState === 'pending' && hook.binding?.authorizeUrl ? (
             <div className="flex items-center gap-2 rounded-xl border border-dashed border-[var(--border-default)] px-2.5 py-2">
               <span className="min-w-0 flex-1 truncate text-12 text-[var(--text-tertiary)]">
                 {t('settings.remoteControl.hook.authorizing')}
               </span>
-              <button type="button" onClick={() => void handleCopyLink()} className={pillBtn}>
+              <Button variant="secondary" size="xs" compact type="button" onClick={() => void handleCopyLink()}>
                 {t('settings.remoteControl.hook.binding.copyLink')}
-              </button>
+              </Button>
             </div>
           ) : null}
 
-          {/* 授权检出 workspace 未安装 App(bind.update failed + reason=not-installed):
-              专属引导行 —— 安装是能用的前提, 给「安装 Slack App」按钮(302 直跳
-              Slack 安装授权页)+ 说明。安装成功与否无从主动探测, 装完重开开关走
-              新一轮授权即验证。远程控制时 openExternal 落被控机, 「复制链接」到
-              本机浏览器完成安装是兜底通路(规则 26)。multi-team 首绑失败时
-              manager 会 setEnabled(false) 弹回开关、列表区块随 enabled 消失, 故
-              这段独立于列表渲染(带「取消」入口的版本在下方列表区块内) */}
+          {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
+              只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
           {isNotInstalled && (!multiUi || !hook.enabled) ? (
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 text-11 leading-relaxed text-[var(--error-fg)]">
                   {t('settings.remoteControl.hook.notInstalled.title')}
                 </span>
-                <button
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  compact
                   type="button"
                   onClick={() => {
                     if (installUrl) void window.electronAPI.openExternal(installUrl);
                   }}
-                  className={pillBtn}
                 >
                   {t('settings.remoteControl.hook.installApp')}
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  compact
                   type="button"
                   onClick={() => void handleCopyInstallLink()}
-                  className={pillBtn}
                 >
                   {t('settings.remoteControl.hook.binding.copyLink')}
-                </button>
+                </Button>
               </div>
               <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
                 {hook.enabled
@@ -1681,19 +1695,21 @@ export function HookConnectionsSection() {
                     : (hook.binding?.message ??
                       t(`settings.remoteControl.hook.binding.state.${bindingState}`))}
                 </span>
-                <button
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  compact
                   type="button"
                   onClick={() => handleReauthorize('enable')}
                   disabled={slackAuthActionPending}
                   aria-busy={slackAuthActionPending}
-                  className={pillBtn}
                 >
                   {t(
                     slackAuthActionPending
                       ? 'settings.remoteControl.hook.binding.reauthorizing'
                       : 'settings.remoteControl.hook.binding.reauthorize',
                   )}
-                </button>
+                </Button>
               </div>
               <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
                 {t('settings.remoteControl.hook.binding.retryHint')}
@@ -1717,19 +1733,21 @@ export function HookConnectionsSection() {
                     : (hook.pendingBind.message ??
                       t(`settings.remoteControl.hook.binding.state.${hook.pendingBind.state}`))}
                 </span>
-                <button
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  compact
                   type="button"
                   onClick={() => handleReauthorize('enable')}
                   disabled={slackAuthActionPending}
                   aria-busy={slackAuthActionPending}
-                  className={pillBtn}
                 >
                   {t(
                     slackAuthActionPending
                       ? 'settings.remoteControl.hook.binding.reauthorizing'
                       : 'settings.remoteControl.hook.binding.reauthorize',
                   )}
-                </button>
+                </Button>
               </div>
               <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
                 {t('settings.remoteControl.hook.binding.retryHint')}
@@ -1762,7 +1780,10 @@ export function HookConnectionsSection() {
                       <span className={`shrink-0 text-11 ${b.communicationsEnabled !== undefined ? 'text-[var(--text-tertiary)]' : 'text-[var(--error-fg)]'}`}>
                         {t(b.communicationsEnabled !== undefined ? 'settings.remoteControl.hook.multi.botNotReceiving' : 'settings.remoteControl.hook.multi.displaced')}
                       </span>
-                      <button
+                      <Button
+                        variant="secondary"
+                        size="xs"
+                        compact
                         type="button"
                         onClick={() =>
                           runSlackAuthAction(
@@ -1772,10 +1793,13 @@ export function HookConnectionsSection() {
                           )
                         }
                         disabled={slackAuthActionPending}
-                        className={pillBtn}
                       >
-                        {t(b.communicationsEnabled !== undefined ? 'settings.remoteControl.hook.multi.receiveBot' : 'settings.remoteControl.hook.multi.rebind')}
-                      </button>
+                        {t(
+                          b.communicationsEnabled !== undefined
+                            ? 'settings.remoteControl.hook.multi.receiveBot'
+                            : 'settings.remoteControl.hook.multi.rebind',
+                        )}
+                      </Button>
                     </>
                   ) : null}
                   <button
@@ -1809,11 +1833,14 @@ export function HookConnectionsSection() {
                     {t('settings.remoteControl.hook.authorizing')}
                   </span>
                   {hook.pendingBind.authorizeUrl ? (
-                    <button type="button" onClick={() => void handleCopyLink()} className={pillBtn}>
+                    <Button variant="secondary" size="xs" compact type="button" onClick={() => void handleCopyLink()}>
                       {t('settings.remoteControl.hook.binding.copyLink')}
-                    </button>
+                    </Button>
                   ) : null}
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    compact
                     type="button"
                     onClick={() =>
                       runSlackAuthAction(
@@ -1822,10 +1849,9 @@ export function HookConnectionsSection() {
                       )
                     }
                     disabled={slackAuthActionPending}
-                    className={pillBtn}
                   >
                     {t('settings.remoteControl.hook.multi.cancelPending')}
-                  </button>
+                  </Button>
                 </div>
               ) : null}
               {/* 未安装引导行(添加的 workspace 没装 App; 确认框逻辑与单绑定共用) */}
@@ -1835,23 +1861,30 @@ export function HookConnectionsSection() {
                     <span className="min-w-0 flex-1 text-11 leading-relaxed text-[var(--error-fg)]">
                       {t('settings.remoteControl.hook.notInstalled.title')}
                     </span>
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      compact
                       type="button"
                       onClick={() => {
                         if (installUrl) void window.electronAPI.openExternal(installUrl);
                       }}
-                      className={pillBtn}
                     >
                       {t('settings.remoteControl.hook.installApp')}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      compact
                       type="button"
                       onClick={() => void handleCopyInstallLink()}
-                      className={pillBtn}
                     >
                       {t('settings.remoteControl.hook.binding.copyLink')}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      compact
                       type="button"
                       onClick={() =>
                         runSlackAuthAction(
@@ -1860,10 +1893,9 @@ export function HookConnectionsSection() {
                         )
                       }
                       disabled={slackAuthActionPending}
-                      className={pillBtn}
                     >
                       {t('settings.remoteControl.hook.multi.cancelPending')}
-                    </button>
+                    </Button>
                   </div>
                   <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
                     {t('settings.remoteControl.hook.notInstalled.waitingHint')}
@@ -1889,7 +1921,10 @@ export function HookConnectionsSection() {
                         : (hook.pendingBind.message ??
                           t(`settings.remoteControl.hook.binding.state.${hook.pendingBind.state}`))}
                   </span>
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    compact
                     type="button"
                     onClick={() => {
                       const pending = hook.pendingBind;
@@ -1904,20 +1939,22 @@ export function HookConnectionsSection() {
                       const rebindIntent = pending?.intent === 'rebind';
                       handleReauthorize(
                         rebindIntent ? 'rebind' : 'add',
-                        rebindIntent ? pending?.teamId ?? undefined : undefined,
+                        rebindIntent ? (pending?.teamId ?? undefined) : undefined,
                       );
                     }}
                     disabled={slackAuthActionPending}
                     aria-busy={slackAuthActionPending}
-                    className={pillBtn}
                   >
                     {t(
                       slackAuthActionPending
                         ? 'settings.remoteControl.hook.binding.reauthorizing'
                         : 'settings.remoteControl.hook.binding.reauthorize',
                     )}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    compact
                     type="button"
                     onClick={() =>
                       runSlackAuthAction(
@@ -1926,14 +1963,16 @@ export function HookConnectionsSection() {
                       )
                     }
                     disabled={slackAuthActionPending}
-                    className={pillBtn}
                   >
                     {t('settings.remoteControl.hook.multi.dismiss')}
-                  </button>
+                  </Button>
                 </div>
               ) : null}
               {hook.serverMultiTeam ? (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  compact
                   type="button"
                   onClick={() =>
                     runSlackAuthAction(
@@ -1943,17 +1982,16 @@ export function HookConnectionsSection() {
                     )
                   }
                   disabled={slackAuthActionPending}
-                  className={`${pillBtn} h-7 gap-1.5 px-3 text-12`}
                 >
                   <Plus size={12} />
                   {t('settings.remoteControl.hook.multi.addWorkspace')}
-                </button>
+                </Button>
               ) : null}
             </div>
           ) : null}
 
-          {/* 单绑定已完成: 说明开关的反向语义(关 = 解绑, 重开需再授权),
-              避免展开区空白 */}
+          {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
+              只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
           {hook.enabled && !multiUi && bindingState === 'confirmed' ? (
             <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
               {t('settings.remoteControl.hook.slackBoundHint')}

@@ -163,6 +163,8 @@ export function assertSharedTaskInvoke(
 /** Synchronous last-mile gate, including batches, delayed pushes and offline replay. */
 export function captureSharedTaskPush(source: string, channel: string, payload: unknown): (() => boolean) | null {
   if (!isSharedTaskPeer(source)) return () => true;
+  // Turn-change reads/actions are same-account only; do not expose an unusable guest card.
+  if (channel === 'maker:turn-change-set:updated') return null;
   const capture = captureSharedTaskPeer(source);
   if (!capture || !capture.authorize('events.subscribe')) return null;
   const sessionId = capture.author.sessionId;

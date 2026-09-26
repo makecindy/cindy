@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, Puzzle, RefreshCw, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -22,14 +23,6 @@ const CARD_CLASS = cn(
   'flex flex-col overflow-hidden rounded-xl',
   'bg-[var(--settings-theme-card-bg)]',
   'border border-[var(--settings-theme-card-border)]',
-);
-
-const ACTION_CLASS = cn(
-  'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-12 font-medium',
-  'border border-[var(--settings-theme-card-border)]',
-  'text-[var(--settings-section-sublabel)] transition-colors hover:bg-sidebar-item-hover',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-  'disabled:cursor-not-allowed disabled:opacity-50',
 );
 
 const ICON_ACTION_CLASS = cn(
@@ -340,7 +333,11 @@ export function PiPackagesSection() {
               mono
               className="min-w-0 flex-1"
             />
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              loading={busy?.action === 'install'}
               type="button"
               disabled={loadState === 'loading' || !available || !installSource || Boolean(busy)}
               onClick={() => {
@@ -351,11 +348,10 @@ export function PiPackagesSection() {
                 void runMutation('install', installSource);
               }}
               aria-busy={busy?.action === 'install'}
-              className={cn(ACTION_CLASS, 'shrink-0')}
             >
               {busy?.action === 'install' ? <Spinner size={14} /> : <Puzzle size={14} />}
               {t('settings.piPackages.install')}
-            </button>
+            </Button>
           </div>
           <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
           <p className="px-4 py-3 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
@@ -390,10 +386,10 @@ export function PiPackagesSection() {
             <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
               {t('settings.piPackages.loadFailed')}
             </p>
-            <button type="button" onClick={() => void load()} className={ACTION_CLASS}>
+            <Button variant="secondary" size="md" compact type="button" onClick={() => void load()}>
               <RefreshCw size={14} />
               {t('settings.piPackages.retry')}
-            </button>
+            </Button>
           </div>
         )}
 

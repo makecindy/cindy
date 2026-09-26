@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session, MANUAL_ABORT_RECOVERY_GRACE_MS } from './session.js';
 import { createAsyncQueue } from './agents/shared/async-queue.js';
 import { createPiTranslateContext, translatePiEvent } from './agents/pi/translator.js';
+import { newCodexRuntimeState, translateItemNotification } from './agents/codex/translator.js';
 import type { AgentSessionHandle } from './agents/base-agent.js';
 import type { AgentEvent, InteractionDecision } from './types/events.js';
 import type { Logger } from './interfaces/logger.js';
@@ -186,6 +187,36 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     expect(t.handle.close).toHaveBeenCalledOnce();
     expect(t.session.getStatus()).toBe('closed');
   });
+});
+
+it.each([false, true])('keeps translated Codex waits alive with agent states=%s', async (hasAgentStates) => {
+  const t = setup('codex');
+  const context = { rt: newCodexRuntimeState(), log: { info() {}, warn() {}, error() {}, debug() {} } };
+  await t.session.send('wait for the child');
+  for (let i = 0; i < 20; i++) {
+    const item = {
+      type: 'collabAgentToolCall', id: `wait-${i}`, tool: 'wait', status: 'completed',
+      senderThreadId: 'parent', receiverThreadIds: hasAgentStates ? ['child'] : [],
+      agentsStates: hasAgentStates ? { child: { status: 'running' } } : {},
+    };
+    translateItemNotification('started', {
+      threadId: 'parent', turnId: 'turn', item: { ...item, status: 'inProgress' },
+    }, t.queue, context);
+    translateItemNotification('completed', { threadId: 'parent', turnId: 'turn', item }, t.queue, context);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(t.errors()).toHaveLength(0);
+  expect(t.handle.abort).not.toHaveBeenCalled();
+  expect(t.session.getStatus()).toBe('active');
+  expect(t.seen.filter(e => e.type === 'tool_use')).toHaveLength(20);
+  expect(t.seen.filter(e => e.type === 'tool_result')).toHaveLength(20);
+  expect(t.seen.filter(e => e.type === 'tool_result_full').map(e => e.data)).toEqual(
+    Array.from({ length: 20 }, (_, i) => ({
+      toolUseId: `wait-${i}`, fullText: hasAgentStates ? 'child: running' : 'completed', isError: false,
+    })),
+  );
+  await t.end();
+  expect(t.handle.abort).not.toHaveBeenCalled();
 });
 
 it('pairs real Pi translator tool events without changing their results', async () => {

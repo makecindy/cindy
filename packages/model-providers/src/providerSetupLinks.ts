@@ -65,7 +65,7 @@ export function providerSetupLink(preset: Pick<ProviderPreset, 'id' | 'docsUrl' 
   const link = links[sourceProviderForPreset(preset.id)];
   if (link) return link;
   // Local servers have no provider account. Keep their setup help without asking for a cloud key.
-  if (['litellm', 'lmstudio', 'llamacpp', 'vllm'].includes(preset.id) && preset.docsUrl) {
+  if (['litellm', 'lmstudio', 'llamacpp', 'vllm', 'sub2api'].includes(preset.id) && preset.docsUrl) {
     return { url: preset.docsUrl, kind: 'setup' };
   }
   return undefined;

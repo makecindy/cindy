@@ -3,14 +3,31 @@ import { piSupportedEfforts } from "../../packages/model-providers/src/piThinkin
 /** Pi is an import source. Persist Cindy's public field names, with transport-specific data
  * confined to execution.pi. Never copy credentials or arbitrary headers into a public catalog. */
 export function toCindyProviderModel(row) {
+  // Exact known routes only: Gemini 3.8 Flash rejects minimal. Keep the correction
+  // in the import path so both online refreshes and bundle imports retain it.
+  // https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash
+  const gemini38Ids = {
+    google: "gemini-3.8-flash",
+    "google-vertex": "gemini-3.8-flash",
+    opencode: "gemini-3.8-flash",
+    "github-copilot": "gemini-3.8-flash",
+    "vercel-ai-gateway": "google/gemini-3.8-flash",
+  };
+  if (
+    Object.hasOwn(gemini38Ids, row.provider) &&
+    gemini38Ids[row.provider] === row.id
+  ) {
+    row = {
+      ...row,
+      thinkingLevelMap: { ...row.thinkingLevelMap, minimal: null },
+    };
+  }
   const efforts = piSupportedEfforts(row);
   const { id, provider, baseUrl, api } = row;
   if (
-    !id ||
-    !provider ||
-    !api ||
-    !Number.isSafeInteger(row.contextWindow) ||
-    row.contextWindow <= 0
+    typeof id !== 'string' || !id.trim() || id.length > 256 ||
+    typeof provider !== 'string' || !provider.trim() ||
+    typeof api !== 'string' || !api.trim()
   ) {
     throw new Error(`Invalid upstream model: ${provider}/${id}`);
   }
@@ -42,25 +59,30 @@ export function toCindyProviderModel(row) {
   if (Array.isArray(row.cost?.tiers)) cost.tiers = row.cost.tiers;
   return {
     id,
-    name: row.name ?? id,
+    name: typeof row.name === 'string' && row.name.trim() ? row.name : id,
     upstream: baseUrl ?? "",
-    contextWindow: row.contextWindow,
+    ...(Number.isSafeInteger(row.contextWindow) && row.contextWindow > 0 ? { contextWindow: row.contextWindow } : {}),
     ...(row.maxTokens > 0 ? { maxOutput: row.maxTokens } : {}),
-    modalities: { input: row.input ?? ["text"], output: ["text"] },
-    supportsImageInput: row.input?.includes("image") ?? false,
-    reasoning: row.reasoning === true,
-    efforts,
+    ...(Array.isArray(row.input) ? {
+      modalities: { input: row.input, output: row.output ?? ["text"] },
+      supportsImageInput: row.input.includes("image"),
+    } : {}),
+    ...(typeof row.reasoning === "boolean" ? { reasoning: row.reasoning, efforts } : {}),
+    ...Object.fromEntries(["supportsFastMode", "supportsToolCalls", "reasoningRequired"]
+      .filter(key => typeof row[key] === "boolean").map(key => [key, row[key]])),
+    ...(['anthropic-messages', 'openai-responses', 'openai-completions', 'google-generative-ai'].includes(row.nativeApi)
+      ? { nativeApi: row.nativeApi } : {}),
     // Preserve a supported explicit default; otherwise use Cindy's generic preference.
-    defaultEffort: efforts.includes(row.defaultEffort)
+    ...(typeof row.reasoning === "boolean" ? { defaultEffort: row.defaultEffort === null ? null : efforts.includes(row.defaultEffort)
       ? row.defaultEffort
       : (["medium", "high", "low", "xhigh", "max", "minimal", "ultra"].find(
           (effort) => efforts.includes(effort),
-        ) ?? null),
+        ) ?? null) } : {}),
     ...(Object.keys(cost).length ? { cost } : {}),
     execution: {
       pi: {
         api,
-        ...(Object.keys(headers).length ? { headers } : {}),
+        ...(row.headers !== undefined ? { headers } : {}),
         ...(row.thinkingLevelMap
           ? { thinkingLevelMap: row.thinkingLevelMap }
           : {}),
@@ -71,7 +93,8 @@ export function toCindyProviderModel(row) {
   };
 }
 
-export function toCindyCatalog(providers, generatedAt) {
+export function toCindyCatalog(providers, generatedAt, { previous, onError, incompleteProviders = [] } = {}) {
+  const incomplete = new Set(incompleteProviders);
   return {
     schemaVersion: 1,
     generatedAt,
@@ -81,9 +104,37 @@ export function toCindyCatalog(providers, generatedAt) {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([id, models]) => [
           id,
-          models
-            .map(toCindyProviderModel)
-            .sort((a, b) => a.id.localeCompare(b.id)),
+          (() => {
+            const prior = new Map((previous?.providers?.[id] ?? []).map(row => [row.id, row]));
+            const converted = new Map();
+            let complete = !incomplete.has(id);
+            for (const row of models) {
+              try {
+                const old = prior.get(row?.id);
+                const sameConnection = old?.upstream === (row.baseUrl ?? '') && old?.execution.pi.api === row.api;
+                const adapterDefaults = sameConnection ? old.execution.pi : {};
+                // Convert after filling missing adapter fields, so efforts and
+                // the request mapping stay consistent. Explicit {} replaces.
+                const next = toCindyProviderModel({ ...adapterDefaults, ...row,
+                  ...Object.fromEntries(['headers', 'thinkingLevelMap', 'compat', 'samplingParams']
+                    .filter(key => row[key] === undefined && adapterDefaults[key] !== undefined)
+                    .map(key => [key, adapterDefaults[key]])),
+                });
+                // Last-good channel metadata is valid only for the same route.
+                // A moved model remains imported; shared model defaults are
+                // resolved separately rather than copied from the old channel.
+                converted.set(next.id, sameConnection ? { ...old, ...next } : next);
+              } catch (error) {
+                if (!onError) throw error;
+                complete = false;
+                onError(error);
+              }
+            }
+            if (!complete) for (const [modelId, old] of prior) {
+              if (!converted.has(modelId)) converted.set(modelId, old);
+            }
+            return [...converted.values()].sort((a, b) => a.id.localeCompare(b.id));
+          })(),
         ]),
     ),
   };

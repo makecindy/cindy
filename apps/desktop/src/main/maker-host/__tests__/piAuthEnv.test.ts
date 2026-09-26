@@ -52,10 +52,14 @@ describe('DesktopPiAuthAdapter.getAuthEnv', () => {
   });
 
   it('writes the gateway placeholder only for shared cindy OAuth routes', async () => {
-    for (const providerId of ['anthropic', 'openai']) {
-      const env = await desktopPiAuthAdapter.getAuthEnv({ providerId });
-      expect(env[PI_API_KEY_ENV]).toBe(PLACEHOLDER);
-    }
+    const env = await desktopPiAuthAdapter.getAuthEnv({ providerId: 'openai' });
+    expect(env[PI_API_KEY_ENV]).toBe(PLACEHOLDER);
+  });
+
+  it('refuses the Claude subscription for Pi sessions (it only runs inside Claude Code)', async () => {
+    await expect(desktopPiAuthAdapter.getState({ providerId: 'anthropic' })).resolves.toEqual({
+      authenticated: false, errorReason: 'anthropic_oauth_unavailable',
+    });
   });
 
   it('preserves the gateway key for xAI sessions and falls back when no gateway exists', async () => {

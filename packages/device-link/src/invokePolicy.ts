@@ -33,7 +33,7 @@ import type { InvokePayload } from './protocol.js';
  *  - maker:send:makerSendTransaction 接收消息前会等
  *    ensureRemoteReadyForSessionStart(SSH 就绪窗口 20s)再落库/派发;误超时后
  *    桌面仍会接收并发出该消息,用户重试会把同一条消息发两遍;
- *  - maker:regenerate-title:桌面路径先 getValidClaudeAiOAuth(刷新最长 ~10s)
+ *  - maker:regenerate-title:桌面路径先读取来源凭证(可能要刷新 token,最长 ~10s)
  *    再发标题请求(自身 TITLE_TIMEOUT_MS=12s),合法总预算 ~22s;
  *  - maker:create-session:桌面 await maker.createSession → agent.startSession /
  *    Codex host.ensureStarted,冷启动 app-server 无更短 deadline;goal 路径无

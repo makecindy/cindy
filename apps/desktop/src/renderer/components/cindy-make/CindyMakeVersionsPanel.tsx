@@ -1,21 +1,25 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useCindyVersions } from '@/lib/useCindyVersions';
-import type { CindyVersionInfo } from '../../../shared/cindyVersions';
+import type { CindyVersionInfo, CindyVersionsState } from '../../../shared/cindyVersions';
 
 /** One overview: the running app first, followed by its personal source. */
 export function CindyMakeVersionsPanel({
   active = true,
   busy = false,
+  buildRunning = false,
   refreshKey,
+  onState,
   children,
 }: {
   active?: boolean;
   busy?: boolean;
+  buildRunning?: boolean;
   refreshKey?: string;
+  onState?: (state?: CindyVersionsState) => void;
   children?: ReactNode;
 }) {
   const { t, i18n } = useTranslation();
@@ -23,21 +27,55 @@ export function CindyMakeVersionsPanel({
   const { confirm } = useConfirmDialog();
   const [expanded, setExpanded] = useState(false);
   const listId = useId();
-  const disabled = busy || !!versions.pending || versions.state?.switching;
+  const switchDisabled = !!versions.pending || versions.state?.switching;
+  const removeDisabled = busy || switchDisabled;
   const supported = typeof window.electronAPI.getCindyVersions === 'function';
-  const current = versions.state?.versions.find(
-    (version) => version.id === versions.state?.currentId,
-  );
+  useEffect(() => onState?.(versions.state), [onState, versions.state]);
+  const current =
+    versions.state?.currentVersion ??
+    versions.state?.versions.find((version) => version.id === versions.state?.currentId);
   const alternatives =
     versions.state?.versions.filter((version) => version.id !== versions.state?.currentId) ?? [];
   const title = (version: CindyVersionInfo) =>
     version.kind === 'original'
       ? t('cindyMake.versions.original')
-      : version.title || t('cindyMake.versions.personal');
+      : t('cindyMake.versions.personal');
+  const personal = versions.state?.versions.find((version) => version.kind === 'personal');
+  const switchBlockedReason = (version: CindyVersionInfo) => {
+    if (switchDisabled) return 'busy' as const;
+    if (buildRunning) return 'building' as const;
+    if (!version.available) return 'unavailable' as const;
+    if (!version.compatible) return 'incompatible' as const;
+    return undefined;
+  };
+  const switchBlockedLabel = (version: CindyVersionInfo) => {
+    const reason = switchBlockedReason(version);
+    if (!reason) return undefined;
+    return t(
+      reason === 'busy' || reason === 'building'
+        ? 'cindyMake.versions.errors.' + reason
+        : 'cindyMake.versions.' + reason,
+    );
+  };
+  const renderSwitchButton = (version: CindyVersionInfo, actionLabel: string) => {
+    const blockedLabel = switchBlockedLabel(version);
+    return (
+      <Button
+        variant="secondary"
+        disabled={!!switchBlockedReason(version)}
+        loading={versions.pending === version.id}
+        onClick={() => void versions.act('switch', version.id)}
+        title={blockedLabel}
+        aria-label={blockedLabel ?? actionLabel}
+      >
+        {buildRunning ? actionLabel : (blockedLabel ?? actionLabel)}
+      </Button>
+    );
+  };
   const metadata = (version: CindyVersionInfo, includeDate = false) =>
     [
       version.development ? t('cindyMake.versions.development') : null,
-      version.version,
+      version.kind === 'original' ? version.version : null,
       version.commit?.slice(0, 12),
       version.dirty ? t('cindyMake.versions.localChanges') : null,
       includeDate && version.builtAt && Number.isFinite(Date.parse(version.builtAt))
@@ -64,11 +102,6 @@ export function CindyMakeVersionsPanel({
                     {current.kind === 'personal'
                       ? t('cindyMake.versions.personal')
                       : title(current)}
-                  </span>
-                )}
-                {current?.kind === 'personal' && current.title && (
-                  <span className="break-words text-12 text-[var(--text-secondary)]">
-                    {current.title}
                   </span>
                 )}
               </h3>
@@ -105,6 +138,23 @@ export function CindyMakeVersionsPanel({
                 </p>
               )}
           </div>
+          {versions.state?.personalUpdateAvailable && personal && (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-12 text-[var(--text-secondary)]">
+                <p>{metadata(personal, true)}</p>
+                {(!personal.available || !personal.compatible) && (
+                  <p>
+                    {t(
+                      !personal.available
+                        ? 'cindyMake.versions.unavailable'
+                        : 'cindyMake.versions.incompatible',
+                    )}
+                  </p>
+                )}
+              </div>
+              {renderSwitchButton(personal, t('cindyMake.versions.updatePersonal'))}
+            </div>
+          )}
           {versions.error && (
             <p role="alert" className="text-12 text-[var(--error-fg)]">
               {t('cindyMake.versions.errors.' + versions.error)}
@@ -137,18 +187,13 @@ export function CindyMakeVersionsPanel({
                       )}
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="secondary"
-                        disabled={disabled || !version.available || !version.compatible}
-                        loading={versions.pending === version.id}
-                        onClick={() => void versions.act('switch', version.id)}
-                      >
-                        {t('cindyMake.versions.switch')}
-                      </Button>
+                      {renderSwitchButton(version, t('cindyMake.versions.switch'))}
                       {version.kind === 'personal' && (
                         <Button
                           variant="secondary"
-                          disabled={disabled || versions.state?.selectedId === version.id}
+                          disabled={
+                            removeDisabled || versions.state?.selectedId === version.id
+                          }
                           onClick={async () => {
                             if (
                               await confirm({

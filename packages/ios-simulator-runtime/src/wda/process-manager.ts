@@ -104,6 +104,8 @@ export interface WdaStartOptions {
   /** Exact runtime build used by packaged native capability admission. */
   runtimeBuildVersion?: string | null;
   xcodeBuild: string;
+  /** Installation captured together with xcodeBuild by environment inspection. */
+  developerDirectory?: string;
   architecture: "arm64" | "x86_64";
   /** Required when the optional native sidecar is enabled. */
   generation?: number;
@@ -1473,6 +1475,7 @@ export class WdaProcessManager {
       architecture: options.architecture,
       controlPort,
       mjpegPort,
+      developerDirectory: options.developerDirectory,
     });
     const build = await this.#runner.run(plan.build.command, plan.build.args, {
       cwd: plan.build.cwd,
@@ -1579,6 +1582,7 @@ export class WdaProcessManager {
                     runtimeIdentifier: options.runtimeIdentifier,
                     runtimeBuildVersion: options.runtimeBuildVersion ?? null,
                     xcodeBuild: options.xcodeBuild,
+                    developerDirectory: options.developerDirectory,
                     architecture: options.architecture,
                   },
                 }),
@@ -1623,6 +1627,7 @@ export class WdaProcessManager {
           runtimeIdentifier: options.runtimeIdentifier,
           runtimeBuildVersion: options.runtimeBuildVersion ?? null,
           xcodeBuild: options.xcodeBuild,
+          developerDirectory: options.developerDirectory,
           architecture: options.architecture,
         },
       };

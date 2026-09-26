@@ -8,7 +8,6 @@ import { Text } from '@/components/AppText';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { fontWeight, iconSize, iconStroke, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
-import { CompanionNavigationDrawer } from './CompanionNavigationDrawer';
 import { TeammatePicker } from './TeammatePicker';
 import { CompanionCreateSheet, CompanionProfileSheet } from './CompanionProfileSheet';
 import { CompanionAutomationSheet } from './CompanionAutomationSheet';
@@ -17,17 +16,16 @@ import { useTeammateNavigation } from './useTeammateNavigation';
 const AVATAR_SIZE = 32;
 
 export function CompanionHeader(props: {
-  resource: RemoteResource; deviceId: string; deviceName: string; online: boolean; onSearch(): void;
+  resource: RemoteResource; deviceId: string; deviceName: string; online: boolean; controlsReady?: boolean; onSearch(): void; onOpenNavigation(): void;
 }) {
   const { accountGeneration } = useAuth();
   return <CompanionHeaderContent key={accountGeneration} {...props} />;
 }
-function CompanionHeaderContent({ resource, deviceId, deviceName, online, onSearch }: Parameters<typeof CompanionHeader>[0]) {
+function CompanionHeaderContent({ resource, deviceId, deviceName, online, controlsReady = true, onSearch, onOpenNavigation }: Parameters<typeof CompanionHeader>[0]) {
   const { t, i18n } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const navigation = useTeammateNavigation();
-  const [drawer, setDrawer] = useState(false);
   const [picker, setPicker] = useState(false);
   const [profile, setProfile] = useState(false);
   const [automation, setAutomation] = useState(false);
@@ -38,7 +36,7 @@ function CompanionHeaderContent({ resource, deviceId, deviceName, online, onSear
   const afterProfile = (action: () => void) => { pending.current = action; setProfile(false); };
   return <>
     <View style={styles.header} testID="companion.header">
-      <HomeHeaderGlassButton testID="companion.navigation" accessibilityLabel={t('devices.companions.openNavigation')} onPress={() => { Keyboard.dismiss(); setDrawer(true); }}>
+      <HomeHeaderGlassButton testID="companion.navigation" accessibilityLabel={t('devices.companions.openNavigation')} onPress={() => { Keyboard.dismiss(); onOpenNavigation(); }}>
         <PanelLeft size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textPrimary} />
       </HomeHeaderGlassButton>
       <Pressable style={styles.identity} accessibilityRole="button" accessibilityLabel={name} accessibilityHint={t('devices.companions.title')} onPress={() => setPicker(true)} testID="companion.picker">
@@ -46,11 +44,10 @@ function CompanionHeaderContent({ resource, deviceId, deviceName, online, onSear
         <Text numberOfLines={1} style={styles.name}>{name}</Text>
         <ChevronDown size={iconSize.sm} color={colors.textSecondary} />
       </Pressable>
-      <HomeHeaderGlassButton testID="companion.settings" accessibilityLabel={t('devices.companionProfile.settingsTitle')} onPress={() => setProfile(true)}>
+      <HomeHeaderGlassButton testID="companion.settings" disabled={!controlsReady} accessibilityLabel={t('devices.companionProfile.settingsTitle')} onPress={() => setProfile(true)}>
         <Settings2 size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textPrimary} />
       </HomeHeaderGlassButton>
     </View>
-    <CompanionNavigationDrawer open={drawer} onClose={() => setDrawer(false)} onSearch={onSearch} />
     <TeammatePicker visible={picker} onClose={() => setPicker(false)} onSelect={item => void navigation.openTeammate(item)}
       onCreate={() => { created.current = null; setCreating(true); }}
       current={{ deviceId, collectionId: resource.ref.collectionId, resourceKind: 'bot', resourceId: resource.ref.id }} />

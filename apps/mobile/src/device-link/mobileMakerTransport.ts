@@ -38,7 +38,10 @@ import {
   createDeviceFileOperations,
   exportDeviceFile,
   assertFileReadActive,
+  type DeviceFileResult,
 } from "@cindy/device-link";
+import { errorText, mediaExtOf, nextFileTrace } from "@/debug/fileDiagnostics";
+import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import type {
   HistoryViewPage,
   HistoryDetailPage,
@@ -197,10 +200,21 @@ export interface RemoteDirectoryEntry {
   path: string;
 }
 
+/** Windows 被控端的盘符(fs:list-dir 可选回传);path 为 host-native 根路径,直接用于导航。 */
+export interface RemoteDirectoryDrive {
+  name: string;
+  path: string;
+  current: boolean;
+}
+
 export interface RemoteDirectoryListResult {
   resolvedPath: string;
   entries: RemoteDirectoryEntry[];
   parent: string | null;
+  /** 仅 Windows 新版被控端回传;旧被控端缺省时不显示盘符切换。 */
+  drives?: RemoteDirectoryDrive[];
+  /** 仅 Windows:盘符枚举仍在后台进行,控制端应再拉一次当前目录。旧端忽略。 */
+  drivesPending?: boolean;
 }
 
 export interface RemotePathStatResult {
@@ -321,6 +335,11 @@ export interface MobileActiveSessionSnapshot {
   capabilities?: unknown;
   isTurnRunning?: boolean;
 }
+
+export type MobileActiveSessionSnapshotResult = MobileActiveSessionSnapshot[] | {
+  format: 'active-sessions-v2';
+  sessions: MobileActiveSessionSnapshot[];
+};
 
 /** 被控端视角的模型单价(USD / 百万 token,同桌面 useModelPricing 形状)。 */
 export interface MobileModelPrice {
@@ -516,7 +535,7 @@ export interface MobileMakerTransport {
     createOpts?: CreateSessionOptions,
     sendOpts?: SendOptions,
   ): Promise<{ accepted: true } | { accepted: false; reason?: string }>;
-  listActiveSessions(): Promise<MobileActiveSessionSnapshot[]>;
+  listActiveSessions(): Promise<MobileActiveSessionSnapshotResult>;
   /**
    * 切模型。可选第 3 参 providerId = 同时切来源(被控端按其路由 + 持久化 provider_id)。
    * 不传 providerId = 老 2 参语义,不动会话当前来源选择。
@@ -890,28 +909,86 @@ export function createMobileMakerTransport({
           ...(opts?.thumbnail ? { thumbnail: true } : {}),
         },
       ]);
-    return readDeviceFile({
-      stream,
-      peerResultIsTransient: true,
-      isCurrent,
-      discard: (result) => {
-        const uri = peerMediaUri(result);
-        if (uri) releasePeerMedia(uri);
-        else if (
-          isMobileAuthOwnerCurrent(fileOwner) &&
-          typeof result.ossKey === "string" &&
-          result.ossKey.length > 0
-        )
-          opts?.onDiscardOssKey?.(result.ossKey);
-      },
-      signal: opts?.signal,
-      prepare: () => fetch(!opts?.thumbnail),
-      peer: (metadata) =>
-        metadata.size <= FILE_PEER_MAX_BYTES
-          ? tryMobilePeerFile(deviceId, url, opts?.signal)
-          : Promise.resolve(null),
-      fallback: fallback ?? (() => fetch(false)),
+    // Chat thumbnails are high-volume and already covered by the list; trace full-file reads only.
+    const trace = opts?.thumbnail ? 0 : nextFileTrace();
+    const stage = <T>(
+      name: string,
+      run: () => Promise<T>,
+      describe: (value: T) => Record<string, unknown>,
+    ): Promise<T> => {
+      if (!trace) return run();
+      const startedAt = Date.now();
+      return run().then(
+        (value) => {
+          mobileDebugLog("debug", "files", `remote read ${name}`, {
+            trace,
+            ms: Date.now() - startedAt,
+            ...describe(value),
+          });
+          return value;
+        },
+        (error: unknown) => {
+          mobileDebugLog("warn", "files", `remote read ${name} failed`, {
+            trace,
+            ms: Date.now() - startedAt,
+            error: errorText(error),
+          });
+          throw error;
+        },
+      );
+    };
+    const describeResult = (result: DeviceFileResult) => ({
+      size: result.size,
+      mime: result.mimeType,
+      transferRequired: result.transferRequired === true,
+      inline: typeof result.inlineBase64 === "string",
     });
+    if (trace)
+      mobileDebugLog("debug", "files", "remote read start", {
+        trace,
+        ext: mediaExtOf(url),
+        stream,
+      });
+    return stage(
+      "result",
+      () =>
+        readDeviceFile({
+          stream,
+          peerResultIsTransient: true,
+          isCurrent,
+          discard: (result) => {
+            const uri = peerMediaUri(result);
+            if (uri) releasePeerMedia(uri);
+            else if (
+              isMobileAuthOwnerCurrent(fileOwner) &&
+              typeof result.ossKey === "string" &&
+              result.ossKey.length > 0
+            )
+              opts?.onDiscardOssKey?.(result.ossKey);
+          },
+          signal: opts?.signal,
+          prepare: () =>
+            stage("prepare", () => fetch(!opts?.thumbnail), describeResult),
+          peer: (metadata) =>
+            metadata.size <= FILE_PEER_MAX_BYTES
+              ? stage(
+                  "direct",
+                  () => tryMobilePeerFile(deviceId, url, opts?.signal, trace || undefined),
+                  (result) => ({ hit: result !== null }),
+                )
+              : Promise.resolve(null),
+          fallback: () =>
+            stage("upload", fallback ?? (() => fetch(false)), describeResult),
+        }),
+      (result) => ({
+        route: peerMediaUri(result)
+          ? "direct"
+          : typeof result.inlineBase64 === "string"
+            ? "inline"
+            : "upload",
+        size: result.size,
+      }),
+    );
   };
 
   return {
@@ -946,7 +1023,7 @@ export function createMobileMakerTransport({
     listMessages: (sessionId, opts) =>
       call("local-db:messages:list", [sessionId, opts]),
     readHistoryView: (sessionId, before) =>
-      call("local-db:messages:view", [sessionId, { before }]),
+      call("local-db:messages:view", [sessionId, { before, lazyDetails: true }]),
     readWorkDetails: (sessionId, ref, after) =>
       call("local-db:messages:work-details", [sessionId, ref, { after }]),
     setHistoryExpanded: (sessionId, refs) =>
@@ -957,7 +1034,7 @@ export function createMobileMakerTransport({
       call("local-db:messages:around-client-id", [sessionId, clientId, opts]),
     send: (sessionId, message, createOpts, sendOpts) =>
       call("maker:send", [sessionId, message, createOpts, sendOpts]),
-    listActiveSessions: () => call("maker:list-active", [{ summary: true }]),
+    listActiveSessions: () => call("maker:list-active", [{ summary: true, snapshotVersion: 2 }]),
     setModel: async (sessionId, model, providerId, selection) => {
       const wireArgs = selection
         ? [sessionId, model, providerId ?? null, null, selection]
@@ -1220,7 +1297,12 @@ export function createMobileMakerTransport({
         assertFileReadActive(signal);
         const fallback = () =>
           exportDeviceFile(retryOp, workdir, relPath, signal);
-        if (!caps.fileRead) return fallback();
+        if (!caps.fileRead) {
+          mobileDebugLog("debug", "files", "file export without direct read", {
+            reason: "host-lacks-file-read",
+          });
+          return fallback();
+        }
         const reference = await retryOp<{
           ok: boolean;
           url: string;

@@ -1,4 +1,5 @@
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
+import { parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult } from '@cindy/device-link';
 import {
   type GhostRecommendation,
   GHOST_LOCALES,
@@ -335,13 +336,17 @@ export const GHOST_NODE_CHILD_MODE_FLAG = '__cindy-node-child__';
 
 /** worker → 主机:代启/喂 stdin/收 stdin/杀进程。 */
 export type GhostNodeChildToHostMessage =
-  | { type: 'spawn-child'; reqId: string; entry: string; args?: string[] }
+  | { type: 'plugin-authorize'; reqId: string; rpcId: string; request: PluginAuthorizationRequest }
+  | { type: 'device-authorize'; reqId: string; rpcId: string; url: string }
+  | { type: 'spawn-child'; reqId: string; entry: string; args?: string[]; rpcId?: string }
   | { type: 'child-stdin'; childId: string; b64: string }
   | { type: 'child-stdin-end'; childId: string }
   | { type: 'child-kill'; childId: string };
 
 /** 主机 → worker:代启结果/子进程输出/退出。 */
 export type GhostNodeChildToWorkerMessage =
+  | { type: 'plugin-authorize-result'; reqId: string; ok: boolean; result?: PluginAuthorizationResult }
+  | { type: 'device-authorize-result'; reqId: string; ok: boolean }
   | { type: 'spawn-child-result'; reqId: string; ok: true; childId: string; pid?: number }
   | { type: 'spawn-child-result'; reqId: string; ok: false; message: string }
   | { type: 'child-stdout'; childId: string; b64: string }
@@ -356,8 +361,27 @@ function isChildId(v: unknown): v is string {
 export function parseGhostNodeChildToHostMessage(raw: unknown): GhostNodeChildToHostMessage | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const m = raw as Record<string, unknown>;
+  if (m.type === 'plugin-authorize') {
+    if (Object.keys(m).sort().join(',') !== 'reqId,request,rpcId,type'
+      || !isChildId(m.reqId) || typeof m.rpcId !== 'string' || !/^\d{1,16}$/.test(m.rpcId)) return null;
+    try { return { type: m.type, reqId: m.reqId, rpcId: m.rpcId, request: parsePluginAuthorizationRequest(m.request) }; }
+    catch { return null; }
+  }
+  if (m.type === 'device-authorize') {
+    if (
+      Object.keys(m).sort().join(',') !== 'reqId,rpcId,type,url' ||
+      !isChildId(m.reqId) ||
+      typeof m.rpcId !== 'string' ||
+      !/^\d{1,16}$/.test(m.rpcId) ||
+      typeof m.url !== 'string' ||
+      m.url.length > 8192
+    )
+      return null;
+    return { type: 'device-authorize', reqId: m.reqId, rpcId: m.rpcId, url: m.url };
+  }
   if (m.type === 'spawn-child') {
     if (!isChildId(m.reqId) || typeof m.entry !== 'string') return null;
+    if (m.rpcId !== undefined && (typeof m.rpcId !== 'string' || !/^\d{1,16}$/.test(m.rpcId))) return null;
     if (m.args !== undefined) {
       if (!Array.isArray(m.args) || m.args.length > GHOST_NODE_CHILD_MAX_ARGS) return null;
       for (const arg of m.args) {
@@ -368,6 +392,7 @@ export function parseGhostNodeChildToHostMessage(raw: unknown): GhostNodeChildTo
       type: 'spawn-child',
       reqId: m.reqId,
       entry: m.entry,
+      ...(typeof m.rpcId === 'string' ? { rpcId: m.rpcId } : {}),
       ...(m.args !== undefined ? { args: m.args as string[] } : {}),
     };
   }
@@ -1857,7 +1882,7 @@ function ghostPermissionProjectionTuple(item: GhostPermissionItem): unknown[] {
   ];
 }
 
-function ghostPermissionProjectionKey(item: GhostPermissionItem): string {
+export function ghostPermissionProjectionKey(item: GhostPermissionItem): string {
   return JSON.stringify(ghostPermissionProjectionTuple(item));
 }
 
@@ -6342,8 +6367,14 @@ export interface GhostPipeNodeRequest {
   type: 'node-request';
   /** OAuth 注入的本插件账号 id；缺省使用对应 OAuth 槽的默认账号。 */
   authAccount?: string;
+  /** Live tool-call identity; only cancelWithCall opts in to the new lifecycle. */
+  callId?: string;
+  /** Explicit opt-in: cancellation/completion stops this RPC and its children. */
+  cancelWithCall?: boolean;
   /** JSON-RPC 方法名；mcp-stdio 时使用 tools/list、tools/call 等 MCP 方法。 */
   method: string;
+  /** Live call only: show the existing protected card for this RPC's manual Node bindings. */
+  promptSecrets?: boolean;
   params?: unknown;
   /**
    * 单次等待上限,缺省 30 秒;允许 1–120 秒。声明了 maxTotalMs 时语义变为
@@ -6369,6 +6400,7 @@ export type GhostPipeNodeResult =
   | {
       ok: false;
       errorCode:
+        | 'CANCELLED'
         | 'INVALID_REQUEST'
         | 'PERMISSION_DENIED'
         | 'PROCESS_START_FAILED'
@@ -8196,6 +8228,13 @@ export const GHOST_LIBRARY_OPS = [
   'reveal',
   'saveAs',
   'clipboardWrite',
+  'staging.begin',
+  'staging.chunk',
+  'staging.commit',
+  'staging.list',
+  'staging.read',
+  'staging.release',
+  'staging.abort',
 ] as const;
 export type GhostLibraryOp = (typeof GHOST_LIBRARY_OPS)[number];
 
@@ -8203,9 +8242,30 @@ export type GhostLibraryOp = (typeof GHOST_LIBRARY_OPS)[number];
 export const GHOST_LIBRARY_CAPABILITY_OPERATIONS = ['clipboardWrite', 'saveAs'] as const;
 export type GhostLibraryCapabilityOperation = (typeof GHOST_LIBRARY_CAPABILITY_OPERATIONS)[number];
 
+export const GHOST_LIBRARY_STAGING_OPERATIONS = [
+  'staging.begin',
+  'staging.chunk',
+  'staging.commit',
+  'staging.list',
+  'staging.read',
+  'staging.release',
+  'staging.abort',
+] as const;
+export type GhostLibraryStagingOperation = (typeof GHOST_LIBRARY_STAGING_OPERATIONS)[number];
+
+export const GHOST_LIBRARY_STAGING_LIMITS_V1 = {
+  version: 1 as const,
+  maxTaskBytes: 8 * 1024 * 1024 * 1024,
+  maxTotalBytes: 8 * 1024 * 1024 * 1024,
+  maxConcurrentWrites: 4,
+  maxChunkBytes: 16 * 1024 * 1024,
+  reserveBytes: 1024 * 1024 * 1024,
+};
+
 export const GHOST_LIBRARY_CAPABILITIES_V1 = {
   version: 1 as const,
-  operations: GHOST_LIBRARY_CAPABILITY_OPERATIONS,
+  operations: [...GHOST_LIBRARY_CAPABILITY_OPERATIONS, ...GHOST_LIBRARY_STAGING_OPERATIONS] as const,
+  staging: GHOST_LIBRARY_STAGING_LIMITS_V1,
 };
 
 /** 宿主实际操作的稳定失败类别;TIMEOUT / TRANSPORT_ERROR 由插件查询层本地分类,不从 message 猜测。 */
@@ -8282,6 +8342,16 @@ export interface GhostPipeLibraryRequest {
   length?: number;
   /** saveAs: 另存为建议文件名(仅 basename)。 */
   name?: string;
+  /** staging: 插件任务身份 / 源版本 / MIME / 恢复元数据。 */
+  taskId?: string;
+  sourceRevision?: string;
+  mime?: string;
+  recovery?: Record<string, unknown>;
+  stagingId?: string;
+  /** staging.release: Library ACK 字节数(不是 begin 的 totalBytes)。 */
+  bytes?: number;
+  libraryIdentity?: string;
+  libraryGeneration?: number;
 }
 
 /**
@@ -8362,9 +8432,57 @@ export type GhostPipeLibraryResult =
       op: 'capabilities';
       capabilities: {
         version: 1;
-        operations: GhostLibraryCapabilityOperation[];
+        operations: ReadonlyArray<GhostLibraryCapabilityOperation | GhostLibraryStagingOperation>;
+        staging?: {
+          version: 1;
+          maxTaskBytes: number;
+          maxTotalBytes: number;
+          maxConcurrentWrites: number;
+          maxChunkBytes: number;
+          reserveBytes: number;
+        };
       };
     }
+  | { ok: true; op: 'staging.begin'; stagingId: string }
+  | { ok: true; op: 'staging.chunk'; accepted: number }
+  | {
+      ok: true;
+      op: 'staging.commit';
+      stagingId: string;
+      taskId: string;
+      sourceRevision: string;
+      sha256: string;
+      bytes: number;
+      mime: string;
+      durable: true;
+    }
+  | {
+      ok: true;
+      op: 'staging.list';
+      items: Array<{
+        stagingId: string;
+        taskId: string;
+        sourceRevision: string;
+        sha256: string;
+        bytes: number;
+        mime: string;
+        durable: true;
+        recovery: Record<string, unknown>;
+      }>;
+      hasMore: boolean;
+      nextCursor: string | null;
+    }
+  | {
+      ok: true;
+      op: 'staging.read';
+      stagingId: string;
+      content: string;
+      encoding: 'base64';
+      bytes: number;
+      sha256: string;
+    }
+  | { ok: true; op: 'staging.release'; stagingId: string; released: boolean }
+  | { ok: true; op: 'staging.abort'; aborted: boolean }
   | { ok: false; errorCode: string; message: string; reason?: GhostLibraryErrorReason };
 
 /** Library 概览(ghosts:library-overview IPC 载荷;设置页插件详情消费)。 */

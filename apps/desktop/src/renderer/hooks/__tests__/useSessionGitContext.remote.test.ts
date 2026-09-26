@@ -238,6 +238,69 @@ describe('useSessionGitContext remote routing', () => {
     unmount();
   });
 
+  it.each([
+    {
+      label: 'Agent 进入仓库时显示分支',
+      dir: {
+        workdir: '/Users/me/repo',
+        head: { kind: 'branch', branch: 'feature/dialogue', shortSha: null },
+        source: 'telemetry',
+      },
+    },
+    {
+      label: '对话目录不是 git 仓库时分支为空',
+      dir: { workdir: null, head: null, source: null },
+    },
+  ])('对话任务照常返回消息里的 PR:$label', async ({ dir }) => {
+    const gitContext = makeGitContext();
+    gitContext.getForSession.mockResolvedValue(dir);
+    const prRef = {
+      id: 'ref-1',
+      sessionId: 'session-1',
+      owner: 'octo',
+      repo: 'repo',
+      prNumber: 7,
+      url: 'https://github.com/octo/repo/pull/7',
+      firstSeenAt: 1,
+      lastSeenAt: 2,
+    };
+    gitContext.listAllPrRefs.mockResolvedValue([prRef]);
+    gitContext.listPrRefs.mockResolvedValue([prRef]);
+    gitContext.getPrStatuses.mockResolvedValue([
+      {
+        ok: true,
+        owner: 'octo',
+        repo: 'repo',
+        prNumber: 7,
+        status: 'merged',
+        title: 'Dialogue PR',
+        htmlUrl: 'https://github.com/octo/repo/pull/7',
+        branch: 'feature/x',
+        unresolvedCount: 0,
+      },
+    ]);
+    window.electronAPI = {
+      gitContext,
+      deviceLink: { invoke: vi.fn() },
+    } as never;
+
+    const session = { ...sessionBase, workspaceKind: 'dialogue' as const };
+    const { result, unmount } = renderHook(() => useSessionGitContext(session), { wrapper });
+
+    await waitFor(() => {
+      expect(gitContext.getForSession).toHaveBeenCalled();
+      expect(result.current.prRefs).toHaveLength(1);
+      expect(result.current.prStatuses.size).toBe(1);
+    });
+    await waitFor(() => expect(result.current.head).toEqual(dir.head));
+    if (dir.workdir) {
+      expect(gitContext.watch).toHaveBeenCalledWith(dir.workdir);
+    } else {
+      expect(gitContext.watch).not.toHaveBeenCalled();
+    }
+    unmount();
+  });
+
   // 2026-08-13 用户裁决:设备明确断线时不发注定失败的 PR 隧道查询(fail-open:
   // shard 缺失照常尝试,见 prRefsRefreshGating.test.ts 的判定语义)。
   it('被控端标记断线时跳过 PR 引用的隧道查询,重连后恢复', async () => {

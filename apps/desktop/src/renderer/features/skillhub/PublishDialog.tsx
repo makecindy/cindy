@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * PublishDialog — 发布到市场的统一入口,合并了 Empty/Working/Failure 三种 state。
  *
@@ -22,7 +23,6 @@ import * as Select from '@radix-ui/react-select';
 import { X, CloudUpload, Globe, Users, Lock, RefreshCw, CircleAlert, Check, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
@@ -202,19 +202,12 @@ function WhitePillButton({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button variant="secondary" size="md" compact
       type="button"
       onClick={onClick}
-      className={cn(
-        'inline-flex h-8 items-center justify-center rounded-full px-4',
-        'text-sm font-normal border bg-[var(--cmd-palette-bg)]',
-        'border-[var(--confirm-btn-secondary-border)] text-[var(--settings-btn-secondary-text)]',
-        'hover:bg-[var(--surface-hover)]',
-        'transition-colors',
-      )}
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -222,29 +215,25 @@ function BlackPillButton({
   children,
   onClick,
   disabled,
+  loading,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   disabled?: boolean;
+  loading?: boolean;
 }) {
   return (
-    <button
+    <Button
+      variant="cta"
+      size="md"
+      compact
       type="button"
       onClick={onClick}
+      loading={loading}
       disabled={disabled}
-      className={cn(
-        'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-4',
-        'text-sm font-medium leading-none',
-        // 视觉对齐:lucide icon 视觉重心偏上,把 icon 抬 0.5px 让它和文字 baseline 看齐
-        '[&>svg]:-translate-y-px',
-        'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]',
-        'hover:bg-[var(--lightbox-cta-hover)]',
-        'transition-colors',
-        'disabled:cursor-not-allowed disabled:opacity-50',
-      )}
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -999,10 +988,7 @@ export function PublishDialog({
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           />
           <Dialog.Content
-            // working 时禁止 outside-click / Escape 直接关——走 cancel confirm 流程
-            onPointerDownOutside={(e) => {
-              if (isWorking && pubState.phase !== 'scanning') e.preventDefault();
-            }}
+            onPointerDownOutside={(event) => event.preventDefault()}
             onEscapeKeyDown={(e) => {
               if (isWorking && pubState.phase !== 'scanning') e.preventDefault();
             }}
@@ -1284,10 +1270,7 @@ export function PublishDialog({
                       {t('skillhub.publishDialog.cancelReview')}
                     </WhitePillButton>
                   )}
-                  <BlackPillButton disabled>
-                    <span className="inline-flex -translate-y-px">
-                      <Spinner size={14} strokeWidth={1.75} />
-                    </span>
+                  <BlackPillButton loading={true} disabled>
                     {workingLabel}
                   </BlackPillButton>
                 </>

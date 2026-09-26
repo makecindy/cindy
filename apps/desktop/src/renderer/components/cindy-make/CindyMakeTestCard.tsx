@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { useCindyVersions } from '@/lib/useCindyVersions';
+import { useCindyMakeState } from '@/lib/cindyMakeState';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -30,89 +31,18 @@ type CompletedTestProps = {
   onContinue?: () => void;
 };
 
-type RecoveryTestProps = {
-  sessionId: string;
-  recovery: { onCheck: () => Promise<boolean | void>; onContinue: () => void };
-};
-
-/** Completion and missing-report recovery occupy the same composer card. */
-export function CindyMakeTestCard(props: CompletedTestProps | RecoveryTestProps) {
-  return 'recovery' in props ? (
-    <CindyMakeTestRecovery {...props} />
-  ) : (
-    <CindyMakeCompletedTest {...props} />
-  );
-}
-
-function CindyMakeTestRecovery({ sessionId, recovery }: RecoveryTestProps) {
+export function CindyMakeTestCard({
+  sessionId,
+  completionId,
+  meta,
+  onContinue,
+}: CompletedTestProps) {
   const { t } = useTranslation();
-  const owner = getDataOwnerGeneration();
-  const [pending, setPending] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const busy = useRef(false);
-  const active = useRef(true);
-  const current = () =>
-    active.current && isDataOwnerGenerationCurrent(owner) && !getStickySessionDeviceId(sessionId);
-  useEffect(() => {
-    active.current = true;
-    return () => {
-      active.current = false;
-    };
-  }, []);
-  const check = async () => {
-    if (busy.current || !current()) return;
-    busy.current = true;
-    setPending(true);
-    setFailed(false);
-    try {
-      const accepted = await recovery.onCheck();
-      if (current() && accepted === false) setFailed(true);
-    } catch {
-      if (current()) setFailed(true);
-    } finally {
-      busy.current = false;
-      if (current()) setPending(false);
-    }
-  };
-  return (
-    <CindyMakeCompleteCard
-      composer
-      needsCheck
-      busy={pending}
-      failed={failed}
-      heading={t('cindyMake.test.resume.title')}
-      description={t('cindyMake.test.resume.description')}
-    >
-      {failed && (
-        <p role="alert" className="text-12 text-[var(--error-fg)]">
-          {t('cindyMake.test.resume.failed')}
-        </p>
-      )}
-      <div className="flex flex-wrap justify-end gap-2">
-        <Button
-          variant="secondary"
-          disabled={pending}
-          onClick={() => {
-            if (!busy.current && current()) recovery.onContinue();
-          }}
-        >
-          {t('cindyMake.test.continue')}
-        </Button>
-        <Button
-          variant="secondary"
-          disabled={pending}
-          loading={pending}
-          onClick={() => void check()}
-        >
-          {t('cindyMake.test.resume.action')}
-        </Button>
-      </div>
-    </CindyMakeCompleteCard>
-  );
-}
-
-function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: CompletedTestProps) {
-  const { t } = useTranslation();
+  const { upstreamMerge } = useCindyMakeState();
+  const sourceMergePending =
+    !!upstreamMerge &&
+    upstreamMerge.status !== 'merged' &&
+    (upstreamMerge.hasWorkspace || upstreamMerge.cancellationRequested);
   const owner = getDataOwnerGeneration();
   const [pending, setPending] = useState<Exclude<CindyMakeTestAction, 'status'>>();
   const [buildSnapshot, setBuildSnapshot] = useState<{
@@ -211,7 +141,7 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
     };
   }, [sessionId, completionId, owner.dataOwnerId, owner.generation]);
   const act = async (action: Exclude<CindyMakeTestAction, 'status'>) => {
-    if (busy.current || !current()) return;
+    if (busy.current || !current() || (action === 'build' && sourceMergePending)) return;
     busy.current = true;
     version.current += 1;
     setPending(action);
@@ -256,7 +186,7 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
   const displayBuild: CindyMakePersonalBuildState | undefined =
     pending === 'build' ? { status: 'waiting' } : personal;
   const buildStatus = displayBuild?.status;
-  const building = ['waiting', 'checking', 'merging', 'packaging', 'publishing'].includes(
+  const building = ['waiting', 'syncing', 'checking', 'merging', 'packaging', 'publishing'].includes(
     buildStatus ?? '',
   );
   const starting = testStatus === 'starting';
@@ -279,7 +209,24 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
     );
   };
   const switching = !!versions.pending || versions.state?.switching === true;
-  const usingPersonal = !!personal?.versionId && versions.state?.currentId === personal.versionId;
+  const personalVersion = versions.state?.versions.find((version) => version.kind === 'personal');
+  const switchesPersonal =
+    personal?.status === 'ready' && !!personal.versionId && !!personalVersion;
+  const generatesPersonal =
+    personal?.status !== 'ready' || (!!personal.versionId && !!versions.state && !personalVersion);
+  const usingPersonal =
+    personal?.status === 'ready' &&
+    !!personal.versionId &&
+    !!personalVersion &&
+    versions.state?.currentId === personalVersion.id &&
+    !versions.state?.personalUpdateAvailable;
+  const personalReadyHint = usingPersonal
+    ? 'cindyMake.versions.usingHint'
+    : versions.state?.personalUpdateAvailable
+      ? 'cindyMake.versions.updateHint'
+      : versions.state && !personalVersion
+        ? 'cindyMake.versions.empty'
+        : 'cindyMake.versions.readyHint';
   const working = buildMode ? building : starting;
   const errorCode =
     error?.code ??
@@ -301,7 +248,7 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
       description={t(
         buildMode && buildStatus === 'ready'
           ? personal?.versionId
-            ? 'cindyMake.versions.readyHint'
+            ? personalReadyHint
             : 'cindyMake.personal.readyHint'
           : buildMode && building
             ? 'cindyMake.personal.description'
@@ -367,12 +314,20 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
         </Button>
         <Button
           variant="secondary"
-          disabled={!!pending || building || starting || switching || usingPersonal || !meta.commit}
-          loading={building || switching || pending === 'open-build'}
+          disabled={
+            (!switchesPersonal && (!!pending || building || starting)) ||
+            switching ||
+            usingPersonal ||
+            (generatesPersonal && sourceMergePending) ||
+            !meta.commit ||
+            (personal?.status === 'ready' && !!personal.versionId && !versions.state)
+          }
+          loading={switching || (!switchesPersonal && (building || pending === 'open-build'))}
           onClick={() => {
-            if (personal?.status === 'ready' && personal.versionId)
-              void versions.act('switch', personal.versionId);
-            else void act(personal?.status === 'ready' ? 'open-build' : 'build');
+            if (personal?.status === 'ready' && personal.versionId) {
+              if (personalVersion) void versions.act('switch', personalVersion.id);
+              else if (versions.state) void act('build');
+            } else void act(personal?.status === 'ready' ? 'open-build' : 'build');
           }}
         >
           {t(
@@ -380,11 +335,25 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
               ? usingPersonal
                 ? 'cindyMake.versions.using'
                 : personal.versionId
-                  ? 'cindyMake.versions.switchPersonal'
+                  ? personalVersion || !versions.state
+                    ? versions.state?.personalUpdateAvailable
+                      ? 'cindyMake.versions.updatePersonal'
+                      : 'cindyMake.versions.switchPersonal'
+                    : 'cindyMake.personal.generate'
                   : 'cindyMake.personal.open'
               : 'cindyMake.personal.generate',
           )}
         </Button>
+        {personal?.status === 'ready' && (
+          <Button
+            variant="secondary"
+            disabled={!!pending || building || starting || switching || sourceMergePending || !meta.commit}
+            loading={building || pending === 'build'}
+            onClick={() => void act('build')}
+          >
+            {t('cindyMake.history.regeneratePersonal')}
+          </Button>
+        )}
       </div>
     </CindyMakeCompleteCard>
   );

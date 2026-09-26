@@ -71,6 +71,8 @@ export interface RemoteResourceDisplay {
   title: RemoteText;
   subtitle?: RemoteText;
   preview?: RemoteText;
+  /** Ephemeral public generation state. Absent when idle; never a connectivity signal. */
+  generation?: { phase: string; startedAt: number | null };
   timestamp?: number;
   /** Latest visible reply in host time; controllers keep their own read position. */
   lastReplyAt?: number;
@@ -129,6 +131,8 @@ export interface RemoteResourceBlock {
   /** session-controls: { input: 'blocked' | 'available', busy: boolean }.
    * Controllers may hide their composer while blocked. Hosts must independently
    * enforce workspace use; this presentation hint never grants permission.
+   * search: { query?: string, placeholder?: RemoteText }. Sent only to controllers
+   * declaring `search`; they re-read the same resource with `RemoteResourceGetRequest.query`.
    */
   data?: unknown;
 }
@@ -186,6 +190,12 @@ export interface RemoteCollectionListResponse {
 export interface RemoteResourceGetRequest {
   client: RemoteResourceClientDescriptor;
   ref: RemoteResourceRef;
+  /**
+   * Optional filter for a resource that advertised a `search` block. Hosts that do
+   * not understand it ignore it and return the unfiltered resource; controllers
+   * only send it after the host declared searchability.
+   */
+  query?: string;
 }
 
 export interface RemoteActionInvokeRequest {
@@ -342,7 +352,11 @@ export function parseRemoteResourceGetRequest(value: unknown): RemoteResourceGet
   if (!record) return null;
   const client = parseRemoteResourceClientDescriptor(record.client);
   const ref = parseRemoteResourceRef(record.ref);
-  return client && ref ? { client, ref } : null;
+  if (!client || !ref) return null;
+  // Same bound as collection list queries; an empty query means "no filter".
+  if (record.query === undefined || record.query === '') return { client, ref };
+  const query = boundedText(record.query, MAX_QUERY_CHARS);
+  return query ? { client, ref, query } : null;
 }
 
 export function parseRemoteActionInvokeRequest(value: unknown): RemoteActionInvokeRequest | null {

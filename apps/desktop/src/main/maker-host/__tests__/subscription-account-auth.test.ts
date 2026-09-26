@@ -14,8 +14,6 @@ const state = vi.hoisted(() => ({
   secrets: new Map<string, string>(),
   login: vi.fn(),
   removeFails: false,
-  revokeDuringRefresh: false,
-  callbacks: [] as Array<() => void>,
 }));
 vi.mock('electron', () => ({ app: { getPath: () => state.directory } }));
 vi.mock('../../appSessionState.js', () => ({
@@ -38,27 +36,6 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
     },
   },
 }));
-vi.mock('../claude-credentials-store.js', () => ({
-  readClaudeAiOAuth: () => ({ accessToken: 'fake-local-token' }),
-}));
-vi.mock('../claude-oauth-refresh.js', () => ({
-  createClaudeOAuthRefresher: (deps: { readOAuth: () => unknown; onInvalidGrant: () => void }) => {
-    state.callbacks.push(deps.onInvalidGrant);
-    return ({
-    getValidOAuth: async () => {
-      const captured = deps.readOAuth();
-      if (state.revokeDuringRefresh) deps.onInvalidGrant();
-      return captured;
-    },
-    invalidate: vi.fn(),
-    backfillSubscriptionProfile: vi.fn(),
-    });
-  },
-}));
-vi.mock('../claude-oauth-login.js', () => ({
-  runClaudeOAuthLogin: (...args: unknown[]) => state.login(...args),
-  cancelClaudeOAuthLogin: vi.fn(),
-}));
 vi.mock('../grok-oauth-login.js', () => ({
   runGrokOAuthLogin: (...args: unknown[]) => state.login(...args),
   getGrokAccessToken: async (id: string) => JSON.parse(state.secrets.get(`${state.scope}:${id}`) ?? 'null')?.access_token,
@@ -72,26 +49,43 @@ vi.mock('../grok-oauth-login.js', () => ({
 vi.mock('../outbound-fetch.js', () => ({ outboundFetch: (...args: unknown[]) => state.fetch(...args) }));
 import {
   loginSubscriptionAccount,
-  readClaudeAccountOAuth,
   cancelSubscriptionAccountLogin,
   removeSubscriptionAccountCredentialsReversibly,
   resetSubscriptionAccountCaches,
-  getValidClaudeAccountOAuth,
   setSubscriptionAccountInvalidatedHandler,
   subscriptionAccountState,
 } from '../subscription-account-auth.js';
 
+const storedToken = (id: string): string | undefined =>
+  JSON.parse(state.secrets.get(`${state.scope}:${id}`) ?? 'null')?.access_token;
+
 describe('independent subscription account credentials', () => {
   it.each(['result', 'throw'])('restores the previous account if login fails after persistence (%s)', async failure => {
-    state.secrets.set(`${state.scope}:claude-a`, JSON.stringify({ accessToken: 'fake-original' }));
+    putToken('grok-a', 'fake-original');
     state.login.mockImplementation(async opts => {
-      opts.persist({ accessToken: 'fake-uncommitted' });
+      opts.persist({ access_token: 'fake-uncommitted' });
       if (failure === 'throw') throw new Error('login failed');
       return { ok: false, reason: 'login failed' };
     });
-    if (failure === 'throw') await expect(loginSubscriptionAccount('claude-a', () => true)).rejects.toThrow('login failed');
-    else expect((await loginSubscriptionAccount('claude-a', () => true)).ok).toBe(false);
-    expect(readClaudeAccountOAuth('claude-a')?.accessToken).toBe('fake-original');
+    if (failure === 'throw') await expect(loginSubscriptionAccount('grok-a', () => true)).rejects.toThrow('login failed');
+    else expect((await loginSubscriptionAccount('grok-a', () => true)).ok).toBe(false);
+    expect(storedToken('grok-a')).toBe('fake-original');
+  });
+  it('retired independent Claude accounts never log in, refresh or expose credentials', async () => {
+    putToken('claude-a', 'fake-stored');
+    await expect(loginSubscriptionAccount('claude-a', () => true)).resolves.toEqual({
+      ok: false, reason: 'claude_account_retired',
+    });
+    expect(state.login).not.toHaveBeenCalled();
+    expect(subscriptionAccountState('claude-a')).toEqual({
+      authenticated: false, errorReason: 'claude_account_retired', authSource: 'oauth',
+    });
+    expect(await refreshSubscriptionAccountModels('claude-a')).toBe(false);
+    expect(state.fetch).not.toHaveBeenCalled();
+    // 已存的凭证不被静默删除;用户删除账号时才清。
+    expect(storedToken('claude-a')).toBe('fake-stored');
+    removeSubscriptionAccountCredentialsReversibly('claude-a');
+    expect(storedToken('claude-a')).toBeUndefined();
   });
   beforeEach(async () => {
     state.directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-account-discovery-'));
@@ -107,87 +101,45 @@ describe('independent subscription account credentials', () => {
     state.pending = false;
     state.secrets.clear();
     state.login.mockReset();
-    state.callbacks = [];
     state.removeFails = false;
-    state.revokeDuringRefresh = false;
     setSubscriptionAccountInvalidatedHandler(() => {});
   });
-  it.each([false, true])('invalid grant disconnects only the failed account even when removal fails=%s', async (removeFails) => {
-    state.secrets.set(`${state.scope}:claude-a`, JSON.stringify({ accessToken: 'fake-a' }));
-    state.secrets.set(`${state.scope}:claude-b`, JSON.stringify({ accessToken: 'fake-b' }));
-    await getValidClaudeAccountOAuth('claude-a');
-    respondModels('claude-account-only-old');
-    await refreshSubscriptionAccountModels('claude-a');
-    await refreshSubscriptionAccountModels('claude-b');
-    const broadcast = vi.fn();
-    setSubscriptionAccountInvalidatedHandler(broadcast);
-    state.removeFails = removeFails;
-    state.callbacks[0]();
-    expect(broadcast).toHaveBeenCalledWith('claude-a');
-    expect(discoveredIds('claude-a').some(m => m.includes('account-only-old'))).toBe(false);
-    expect(discoveredIds('claude-b').some(m => m.includes('account-only-old'))).toBe(true);
-    expect(subscriptionAccountState('claude-a').authenticated).toBe(false);
-    expect(await getValidClaudeAccountOAuth('claude-a')).toBeNull();
-    expect(readClaudeAccountOAuth('claude-b')?.accessToken).toBe('fake-b');
-    expect(readClaudeAccountOAuth()?.accessToken).toBe('fake-local-token');
-    state.login.mockImplementation(async opts => { opts.persist({ accessToken: 'fake-new' }); return { ok: true }; });
-    await loginSubscriptionAccount('claude-a', () => true);
-    expect(readClaudeAccountOAuth('claude-a')?.accessToken).toBe('fake-new');
-  });
-  it('late invalid grant from an old owner cannot clear or broadcast the new owner', async () => {
-    await getValidClaudeAccountOAuth('claude-a');
-    const broadcast = vi.fn();
-    setSubscriptionAccountInvalidatedHandler(broadcast);
-    state.scope = 'owner-b:2';
-    state.secrets.set(`${state.scope}:claude-a`, JSON.stringify({ accessToken: 'fake-new-owner' }));
-    state.callbacks[0]();
-    expect(broadcast).not.toHaveBeenCalled();
-    expect(readClaudeAccountOAuth('claude-a')?.accessToken).toBe('fake-new-owner');
-  });
-  it('does not return the refresher fallback credential on the invalid-grant request itself', async () => {
-    state.secrets.set(`${state.scope}:claude-a`, JSON.stringify({ accessToken: 'fake-revoked' }));
-    state.revokeDuringRefresh = true;
-    state.removeFails = true;
-    expect(await getValidClaudeAccountOAuth('claude-a')).toBeNull();
-    expect(readClaudeAccountOAuth('claude-a')).toBeNull();
-  });
-  it('commits each login to its provider, preserving the local account and supporting rollback', async () => {
+  it('commits each login to its provider and supports rollback', async () => {
     state.login.mockImplementation(async (opts) => {
-      opts.persist({ accessToken: 'fake-a' });
+      opts.persist({ access_token: 'fake-a' });
       return { ok: true };
     });
-    const a = await loginSubscriptionAccount('claude-a', () => true);
+    const a = await loginSubscriptionAccount('grok-a', () => true);
     state.login.mockImplementation(async (opts) => {
-      opts.persist({ accessToken: 'fake-b' });
+      opts.persist({ access_token: 'fake-b' });
       return { ok: true };
     });
-    await loginSubscriptionAccount('claude-b', () => true);
-    expect(readClaudeAccountOAuth('claude-a')?.accessToken).toBe('fake-a');
-    expect(readClaudeAccountOAuth('claude-b')?.accessToken).toBe('fake-b');
-    expect(readClaudeAccountOAuth()?.accessToken).toBe('fake-local-token');
+    await loginSubscriptionAccount('grok-b', () => true);
+    expect(storedToken('grok-a')).toBe('fake-a');
+    expect(storedToken('grok-b')).toBe('fake-b');
     expect(a.rollbackCredentials?.()).toBe(true);
-    expect(readClaudeAccountOAuth('claude-a')).toBeNull();
-    expect(readClaudeAccountOAuth('claude-b')?.accessToken).toBe('fake-b');
+    expect(storedToken('grok-a')).toBeUndefined();
+    expect(storedToken('grok-b')).toBe('fake-b');
   });
   it('cancelled late authorization cannot persist credentials', async () => {
     state.login.mockImplementation(async (opts) => {
-      cancelSubscriptionAccountLogin('claude-a');
-      expect(() => opts.persist({ accessToken: 'fake-late' })).toThrow('login_cancelled');
+      cancelSubscriptionAccountLogin('grok-a');
+      expect(() => opts.persist({ access_token: 'fake-late' })).toThrow('login_cancelled');
       return { ok: false };
     });
-    expect((await loginSubscriptionAccount('claude-a', () => true)).ok).toBe(false);
-    expect(readClaudeAccountOAuth('claude-a')).toBeNull();
+    expect((await loginSubscriptionAccount('grok-a', () => true)).ok).toBe(false);
+    expect(storedToken('grok-a')).toBeUndefined();
   });
   it('owner switch rejects a late result without writing to the new owner', async () => {
     state.login.mockImplementation(async (opts) => {
       state.scope = 'owner-b:2';
-      expect(() => opts.persist({ accessToken: 'fake-late' })).toThrow('login_cancelled');
+      expect(() => opts.persist({ access_token: 'fake-late' })).toThrow('login_cancelled');
       return { ok: false };
     });
-    expect((await loginSubscriptionAccount('claude-a', () => true)).ok).toBe(false);
+    expect((await loginSubscriptionAccount('grok-a', () => true)).ok).toBe(false);
     expect(state.secrets.size).toBe(0);
   });
-  it.each(['claude', 'grok'])('%s reports failed credential restoration when cancelled during catalog cleanup', async kind => {
+  it.each(['grok'])('%s reports failed credential restoration when cancelled during catalog cleanup', async kind => {
     const id = `${kind}-a`;
     let checks = 0;
     state.login.mockImplementation(async opts => {
@@ -204,7 +156,7 @@ describe('independent subscription account credentials', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     await fsp.rm(state.directory, { recursive: true, force: true });
   });
-  it.each(['claude', 'grok'])('%s reconnect failure cannot reuse the previous account models', async kind => {
+  it.each(['grok'])('%s reconnect failure cannot reuse the previous account models', async kind => {
     const id = `${kind}-a`, peer = `${kind}-b`;
     putToken(id, 'fake-old'); putToken(peer, 'fake-peer');
     respondModels('claude-account-only-old');
@@ -231,7 +183,7 @@ describe('independent subscription account credentials', () => {
       await expect(fsp.stat(path.join(state.directory, state.scope.replaceAll(':', '_'), 'model-discovery', `${peer}-models.json`))).resolves.toBeDefined();
     }
   });
-  it.each(['claude', 'grok'])('%s removal and credential rollback clear only that connection discovery', async kind => {
+  it.each(['grok'])('%s removal and credential rollback clear only that connection discovery', async kind => {
     const id = `${kind}-a`, peer = `${kind}-b`;
     putToken(id, 'fake-old'); putToken(peer, 'fake-peer');
     respondModels('claude-account-only-old');
@@ -251,14 +203,15 @@ describe('independent subscription account credentials', () => {
     expect(discoveredIds(peer).some(m => m.includes('account-only-old'))).toBe(true);
   });
   it('credential removal is reversible and cannot replace a newer login', async () => {
-    state.secrets.set('owner-a:1:claude-a', JSON.stringify({ accessToken: 'fake-a' }));
-    const restore = removeSubscriptionAccountCredentialsReversibly('claude-a');
-    expect(readClaudeAccountOAuth('claude-a')).toBeNull();
+    putToken('grok-a', 'fake-a');
+    const restore = removeSubscriptionAccountCredentialsReversibly('grok-a');
+    expect(storedToken('grok-a')).toBeUndefined();
     expect(restore()).toBe(true);
-    const staleRestore = removeSubscriptionAccountCredentialsReversibly('claude-a');
-    state.secrets.set('owner-a:1:claude-a', JSON.stringify({ accessToken: 'fake-new' }));
+    expect(storedToken('grok-a')).toBe('fake-a');
+    const staleRestore = removeSubscriptionAccountCredentialsReversibly('grok-a');
+    putToken('grok-a', 'fake-new');
     expect(staleRestore()).toBe(false);
-    expect(readClaudeAccountOAuth('claude-a')?.accessToken).toBe('fake-new');
+    expect(storedToken('grok-a')).toBe('fake-new');
   });
 });
 

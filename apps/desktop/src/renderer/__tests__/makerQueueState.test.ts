@@ -99,6 +99,7 @@ const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => (
   pendingPluginSetupQueue: [],
   pluginSetupViewerState: 'expanded',
   pluginSetupCommandInFlight: null,
+  pluginSetupCommandError: null,
   pendingPlanReview: null,
   pendingIssueConfirm: null,
   pendingRenameSessionsConfirm: null,

@@ -248,7 +248,9 @@ export function sortSessionsForMainList(
       .map((session, index) => ({ session, index, createdAt: sessionCreatedMs(session) }))
       .sort(
         (a, b) =>
-          b.createdAt - a.createdAt || a.session.id.localeCompare(b.session.id) || a.index - b.index,
+          b.createdAt - a.createdAt ||
+          a.session.id.localeCompare(b.session.id) ||
+          a.index - b.index,
       )
       .map(({ session }) => session);
   }
@@ -455,6 +457,9 @@ function sortMainListEntries(
   manualProjectOrder: readonly string[],
   ctx: MainListPriorityContext,
 ): MainListEntry[] {
+  // Cindy Make stays above ordinary entries in every sort mode and device section.
+  const makeGroups = entries.filter((entry) => entry.kind === 'cindy-make-group');
+  entries = entries.filter((entry) => entry.kind !== 'cindy-make-group');
   if (projectOrder === 'custom') {
     // 自定义项目序:项目行按 manualProjectOrder;不在序的新项目由 normalize
     // 追加到已排序列之后。非项目条目排在项目之后,仍按当前任务排序。
@@ -465,7 +470,7 @@ function sortMainListEntries(
       .map((entry) => entry.project.projectKey);
     const normalized = normalizeManualProjectOrder(manualProjectOrder, projectKeys);
     const rank = new Map(normalized.map((key, index) => [key, index]));
-    return entries.slice().sort((a, b) => {
+    const sorted = entries.slice().sort((a, b) => {
       const aProject = a.kind === 'project';
       const bProject = b.kind === 'project';
       if (aProject !== bProject) return aProject ? -1 : 1;
@@ -479,9 +484,13 @@ function sortMainListEntries(
       }
       return compareEntriesBySortBy(a, b, sortBy, ctx);
     });
+    return [...makeGroups, ...sorted];
   }
 
-  return entries.slice().sort((a, b) => compareEntriesBySortBy(a, b, sortBy, ctx));
+  return [
+    ...makeGroups,
+    ...entries.slice().sort((a, b) => compareEntriesBySortBy(a, b, sortBy, ctx)),
+  ];
 }
 
 /* ============================== 设备分组(E 期) ============================== */

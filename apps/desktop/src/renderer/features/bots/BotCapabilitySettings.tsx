@@ -1,4 +1,7 @@
-import { ChevronDown } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
+import { ChevronDown, Search } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useBotTranslation } from './botPronounContext';
 import {
@@ -180,44 +183,59 @@ export function BotCapabilitySettings({
     <details
       data-testid="bot-capability-editor"
       open={open}
-      className="group border-t border-[var(--border-default)] pt-3"
+      className={cn('group', expanded === undefined && 'border-t border-[var(--border-default)] pt-3')}
       onToggle={(event) => {
         if (expanded === undefined) setOpen(event.currentTarget.open);
       }}
     >
+      {/* A page-owned editor has its own title; `hidden` alone loses to `flex`. */}
       <summary
-        hidden={expanded}
-        className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 rounded-full px-3 py-2 text-13 text-[var(--text-secondary)] outline-none hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden"
+        hidden={expanded !== undefined}
+        className={cn(
+          'flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 rounded-full px-3 py-2 text-13 text-[var(--text-secondary)] outline-none hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden',
+          expanded !== undefined && 'hidden',
+        )}
       >
         {t('bots.capabilities.title')}
         <ChevronDown size={15} aria-hidden className="shrink-0 group-open:rotate-180" />
       </summary>
-      <div className="space-y-4 px-3 pt-4">
-        <input
-          aria-label={t('bots.capabilities.search')}
-          placeholder={t('bots.capabilities.search')}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          className="h-9 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)]"
-        />
+      <div className={cn('space-y-4', expanded === undefined ? 'px-3 pt-4' : 'pt-3')}>
+        <div className="relative">
+          <Search
+            size={14}
+            aria-hidden="true"
+            className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[var(--text-tertiary)]"
+          />
+          <Input
+            size="md"
+            ariaLabel={t('bots.capabilities.search')}
+            placeholder={t('bots.capabilities.search')}
+            value={query}
+            onChange={setQuery}
+            inputClassName="pl-8"
+          />
+        </div>
         {busy ? (
           <p className="text-12 text-[var(--text-secondary)]">{t('bots.capabilities.loading')}</p>
         ) : null}
         {error ? (
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            tone="danger"
+            compact
             type="button"
             onClick={refresh}
-            className="rounded-full px-4 py-2 text-12 text-[var(--text-danger)]"
           >
             {t('bots.retry')}
-          </button>
+          </Button>
         ) : null}
         {kinds.map((kind) => {
           const rows = [...(entries[kind] ?? [])];
           for (const id of selected[kind])
             if (!rows.some((item) => item.id === id)) rows.push({ id, name: id, available: false });
           const matching = rows.filter((item) =>
-            `${item.id} ${item.name}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+            `${item.id} ${item.name}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
           );
           return (
             <fieldset key={kind} className="min-w-0">

@@ -9,7 +9,12 @@ import {
 import { parseAutoPermissionReviewDecision } from './auto-permission-reviewer.js';
 
 export const AUTO_REVIEW_CANDIDATE_TIMEOUT_MS = 12_000;
-export const AUTO_REVIEW_CHAIN_TIMEOUT_MS = 52_000;
+/**
+ * 整条链的预算 = 每个候选一次完整超时 + 4s 余量。按候选数推导:预算只够「逐个兜底」,
+ * 一个候选整段超时后直接让给下一个,而不是在原位重试吃掉后续候选的时间。
+ */
+export const AUTO_REVIEW_CHAIN_TIMEOUT_MS =
+  DEDICATED_AUTO_REVIEW_CANDIDATES.length * AUTO_REVIEW_CANDIDATE_TIMEOUT_MS + 4_000;
 export const AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS = AUTO_REVIEW_CHAIN_TIMEOUT_MS + 1_000;
 const AUTO_REVIEW_TRANSIENT_RETRY_ATTEMPTS = 2;
 const AUTO_REVIEW_TRANSIENT_RETRY_BACKOFF_MS = 100;

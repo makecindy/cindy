@@ -1,5 +1,6 @@
+import { pickFileIcon } from '@/components/ui/file-type-icon';
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from 'lucide-react';
+import { ChevronDown, ChevronRight, Folder, FolderOpen } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import type { PreviewTreeNode } from '../lib/marketDetailViewModel';
@@ -43,7 +44,7 @@ function MarketPreviewTreeRow({
   const [expanded, setExpanded] = useState(depth === 0);
   const isFolder = node.type === 'folder';
   const isSelected = node.type === 'file' && selectedPath === node.path;
-  const Icon = isFolder ? (expanded ? FolderOpen : Folder) : FileText;
+  const Icon = isFolder ? (expanded ? FolderOpen : Folder) : pickFileIcon(node.name);
 
   return (
     <>

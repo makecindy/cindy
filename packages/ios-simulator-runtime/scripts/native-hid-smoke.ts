@@ -157,16 +157,16 @@ static void WriteMarker(NSString *event, NSSet<UITouch *> *touches, UIEvent *uiE
 }
 @end
 
-@interface AppDelegate : UIResponder <UIApplicationDelegate>
+@interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property(nonatomic, strong) UIWindow *window;
 @end
 
-@implementation AppDelegate
-- (BOOL)application:(UIApplication *)application
-    didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-  (void)application;
-  (void)launchOptions;
-  self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+@implementation SceneDelegate
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session
+    options:(UISceneConnectionOptions *)connectionOptions {
+  (void)session;
+  (void)connectionOptions;
+  self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
   ScreenController *root = [[ScreenController alloc] initWithScreenName:@"root"];
   UINavigationController *navigation =
       [[UINavigationController alloc] initWithRootViewController:root];
@@ -177,7 +177,22 @@ static void WriteMarker(NSString *event, NSSet<UITouch *> *touches, UIEvent *uiE
   self.window.rootViewController = navigation;
   [self.window makeKeyAndVisible];
   WriteMarker(@"launched", [NSSet set], nil);
-  return YES;
+}
+@end
+
+@interface AppDelegate : UIResponder <UIApplicationDelegate>
+@end
+
+@implementation AppDelegate
+- (UISceneConfiguration *)application:(UIApplication *)application
+    configurationForConnectingSceneSession:(UISceneSession *)session
+    options:(UISceneConnectionOptions *)options {
+  (void)application;
+  (void)options;
+  UISceneConfiguration *configuration =
+      [[UISceneConfiguration alloc] initWithName:@"HIDSmoke" sessionRole:session.role];
+  configuration.delegateClass = [SceneDelegate class];
+  return configuration;
 }
 @end
 
@@ -201,7 +216,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: ${BUNDLE_ID}
         PRODUCT_NAME: HIDSmoke
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: NO
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGNING_REQUIRED: "NO"
@@ -416,7 +431,7 @@ async function run(): Promise<void> {
     if (
       !running.handshake.capabilities.continuousInput ||
       !running.handshake.capabilities.multiTouch ||
-      running.handshake.probe.hid !== true
+      running.handshake.probe?.hid !== true
     ) {
       throw new Error(
         `Native HID capability probe failed: ${JSON.stringify(running.handshake)}`,
@@ -621,6 +636,11 @@ async function run(): Promise<void> {
         },
       })}\n`,
     );
+  } catch (error) {
+    process.stderr.write(
+      `${JSON.stringify(manager.diagnostics("native-hid-smoke"))}\n`,
+    );
+    throw error;
   } finally {
     await manager.stop("native-hid-smoke").catch(() => undefined);
     if (simulatorUdid) {

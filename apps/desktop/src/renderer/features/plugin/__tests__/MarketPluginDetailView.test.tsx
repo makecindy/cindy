@@ -122,6 +122,10 @@ describe('MarketPluginDetailView', () => {
     });
     expect(action.getAttribute('aria-busy')).toBe('true');
     expect(action.querySelector('.animate-spinner')).toBeTruthy();
-    expect(action.textContent).toBe('');
+    // Preserve the label width and accessible name while only the spinner is visible.
+    expect(action.firstElementChild?.classList.contains('opacity-0')).toBe(true);
+    expect(action.firstElementChild?.textContent).toBe('settings.ghosts.market.install');
+    expect(action.lastElementChild?.getAttribute('aria-hidden')).toBe('true');
+    expect(action.hasAttribute('disabled')).toBe(true);
   });
 });

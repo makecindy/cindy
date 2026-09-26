@@ -13,8 +13,6 @@ import { getAppCapabilities } from '../appCapabilities.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth } from '../maker-host/anthropic-responses-bridge-host.js';
-import { getValidClaudeAiOAuth } from '../maker-host/claude-oauth-refresh.js';
-import { getValidClaudeAccountOAuth } from '../maker-host/subscription-account-auth.js';
 import { getGrokAccessToken } from '../maker-host/grok-oauth-login.js';
 import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
 // undici 的 fetch,但 per-request 现取系统代理(裸 undici 不吃代理设置)。
@@ -374,8 +372,9 @@ const DEDICATED_AUTO_REVIEW_MAX_TOKENS = 384;
 
 /**
  * Auto-review 的封闭候选表。它刻意不接受调用方传 provider/model：待审内容只能
- * 发往 Cindy 托管网关或用户已连接的 OpenAI/Anthropic 订阅，不能跟随主会话
- * 落到 xAI、DeepSeek、Kimi 或自定义 BYOM。
+ * 发往 Cindy 托管网关或用户已连接的 OpenAI 订阅，不能跟随主会话落到 xAI、DeepSeek、
+ * Kimi 或自定义 BYOM。Claude 订阅不在表内:它只供内置 Claude Code CLI 自己使用,
+ * Cindy 的直连请求不得借用。
  */
 export const DEDICATED_AUTO_REVIEW_CANDIDATES = Object.freeze([
   {
@@ -402,17 +401,9 @@ export const DEDICATED_AUTO_REVIEW_CANDIDATES = Object.freeze([
     transport: 'codex-responses',
     reasoningEffort: 'low',
   },
-  {
-    id: 'claude-haiku',
-    providerId: 'anthropic',
-    agentKind: 'claude-code',
-    model: 'claude-haiku-4-5',
-    transport: 'litellm-chat-completions',
-    reasoningEffort: undefined,
-  },
 ] as const satisfies ReadonlyArray<{
   id: string;
-  providerId: 'xd' | 'openai' | 'anthropic';
+  providerId: 'xd' | 'openai';
   agentKind: AgentKind;
   model: string;
   transport: UtilityModelTransport;
@@ -1126,52 +1117,9 @@ async function requestBuiltinProviderText(
   }
 
   if (providerCatalogId(input.provider) === 'anthropic') {
-    const readOAuth = () => input.provider.id === 'anthropic'
-      ? getValidClaudeAiOAuth() : getValidClaudeAccountOAuth(input.provider.id);
-    const oauth = await readOAuth();
-    if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
-    if (!oauth?.accessToken) {
-      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
-    }
-    return executeCandidates([{
-      providerId: input.provider.id,
-      model: input.model,
-      transport: 'litellm-chat-completions',
-      profile,
-      execute: (text, requestOpts) => requestProviderHttpText({
-        wire: 'anthropic-messages',
-        endpoint: joinAnthropicMessagesPath(routing.upstream),
-        headers: {
-          Authorization: `Bearer ${oauth.accessToken}`,
-          'anthropic-version': '2023-06-01',
-          'anthropic-beta': 'oauth-2025-04-20',
-        },
-        // 直连 Anthropic API 用目录裸 id;不要复用 toSdkModelString——它会给 1M
-        // 目录模型追加 SDK 专用的 [1m] 后缀,/v1/messages 对该串返回 404(#2429)。
-        model: toAnthropicApiModelId(input.model),
-        prompt: text,
-        // Anthropic API 协议必填 max_tokens:缺省时以模型目录声明的 maxOutput
-        // (模型自身输出能力)兜底,没有目录条目才回退 81920——宿主不设政策上限。
-        maxTokens: requestOpts?.maxTokens ?? input.maxTokens ?? catalogModel?.maxOutput ?? 81_920,
-        timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
-        disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
-        signal: requestOpts?.signal ?? input.signal,
-        systemPrompt: requestOpts?.systemPrompt,
-        responseInstructions: requestOpts?.responseInstructions,
-        beforeDispatch: requestOpts?.beforeDispatch
-          ? () => requestOpts.beforeDispatch!({
-              providerId: input.provider.id,
-              agentKind: input.agentKind,
-              model: input.model,
-            })
-          : undefined,
-        credentialStillCurrent: requestOpts?.beforeDispatch
-          ? async () => (await readOAuth())?.accessToken === oauth.accessToken
-          : undefined,
-        routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
-      }),
-    }], prompt, [], input);
+    // Claude 订阅只供内置 Claude Code CLI 用它自己的登录发起请求;Cindy 进程不持有也不借用
+    // 这份凭证,辅助模型 / 标题等直连调用不走它(调用方按候选链回落到其它来源)。
+    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
   }
 
   if (isOpenAiSubscriptionProvider(input.provider)) {

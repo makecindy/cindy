@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stat } from 'node:fs/promises';
 
-import { hasClaudeAiOAuth } from '../maker-host/claude-credentials-store.js';
+import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
 import { isCodexAuthInheritedFromSystemCli } from '../maker-host/auth-adapters.js';
 import { isNativeProviderAuthSelfAuthorized } from '../maker-host/nativeProviderAuthBinding.js';
 import {
@@ -27,8 +27,8 @@ export interface LocalCliScanDeps {
   /** 路径存在且是普通文件。 */
   isFile(path: string): Promise<boolean>;
   /**
-   * Claude Code 是否已登录 claude.ai(跨平台:macOS Keychain / 其它平台文件)。
-   * 生产 = hasClaudeAiOAuth();只返 boolean,不暴露凭证内容(规则 23)。
+   * Claude Code 是否已登录 claude.ai(内置 CLI 的 `auth status` 结果,Cindy 不读凭证)。
+   * 生产 = hasClaudeNativeLogin();只返 boolean,不暴露凭证内容(规则 23)。
    */
   hasClaudeLogin(): boolean;
   /**
@@ -58,7 +58,7 @@ export function createLocalCliScanDeps(): LocalCliScanDeps {
     },
     hasClaudeLogin: () => {
       try {
-        return hasClaudeAiOAuth();
+        return hasClaudeNativeLogin();
       } catch {
         return false;
       }
@@ -71,10 +71,9 @@ export function createLocalCliScanDeps(): LocalCliScanDeps {
         // 「已沿用本机登录、无需额外授权」，而那次授权正是他自己刚做的
         // （PR #1076 review 第三轮）。共用存储只证明账号相同，证不出凭证的来路。
         if (isNativeProviderAuthSelfAuthorized(providerId)) return false;
-        // claude:Cindy 与本机 Claude Code **共用同一处凭证存储**(macOS Keychain 的
-        // `Claude Code-credentials` / 其它平台 ~/.claude/.credentials.json,见
-        // claude-credentials-store 顶注)。物理上就是同一份,不存在「各自登录不同账号」
-        // 这种分歧,所以排除掉自己授权的那种情况后,已登录即是继承。
+        // claude:Cindy 用的就是内置 Claude Code CLI 自己的登录(CLI 默认凭证库,与终端里的
+        // claude 同一份,见 claude-native-cli 顶注)。不存在「各自登录不同账号」这种分歧,
+        // 所以排除掉自己授权的那种情况后,已登录即是继承。
         if (cli === 'claude-cli') return true;
         // codex:Cindy 有自己的 codex-home,只有账号一致时 reconcile 才建硬链 ——
         // 必须实证 inode 同一性,不能由「两边都登录了」推出来。

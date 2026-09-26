@@ -57,6 +57,7 @@ export async function getBotRoutineRemoteResource(id: string): Promise<RemoteRes
   // Never truncate an editable definition and then save the truncated value.
   const editable = input === null || JSON.stringify(input).length <= 45_000;
   const data = {
+    supportsPreRunCheck: true,
     id: routine?.id ?? null, revision: routine?.revision ?? 0, editable,
     input: editable ? input : null,
     sources: sources.slice(0, 64).map((s) => ({ id: s.id, name: s.name, status: s.status, events: s.events.slice(0, 32).map((e) => ({ type: e.type, name: e.name, fields: e.fields.slice(0, 64) })) })),

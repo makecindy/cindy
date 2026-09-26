@@ -18,6 +18,7 @@ import { z } from 'zod';
 /**
  * Category 分两类:
  *  - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
+ *  - 'auth'    : Host 托管的供应商授权流程；短码可见，长期凭证不返回。
  *  - 'history' : 只读查询本地数据库里的历史聊天数据 (list_workdirs /
  *                list_sessions / get_chat_history / search_chat_history),
  *                方便用户自己组织 memory / 知识库系统
@@ -41,6 +42,7 @@ import { z } from 'zod';
  */
 export type XdtHelperToolCategory =
   | 'cindy'
+  | 'auth'
   | 'history'
   | 'control'
   | 'feedback'

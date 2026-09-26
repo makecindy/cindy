@@ -6,6 +6,7 @@ import {
   markVoiceInputProviderSuccess,
 } from './VoiceInputProviderHealth.js';
 import type { VoiceInputProviderKind } from './voiceInputAsrConfig.js';
+import { isVoiceInputStartRateLimited } from './voiceInputStartError.js';
 
 const log = createLogger('voice-input:asr-fallback');
 
@@ -32,6 +33,8 @@ export type FallbackAsrCandidate = {
 export type FallbackAsrProviderOptions = {
   /** Delay between launching unresolved candidates. Defaults to 1.5s; null disables hedging. */
   hedgeDelayMs?: number | null;
+  /** Managed candidates share an account quota; switching cannot bypass that limit. */
+  sharedAccountRateLimit?: boolean;
 };
 
 type CandidateAttemptResult = {
@@ -73,6 +76,7 @@ type CandidateAttempt = {
 export class FallbackAsrProvider implements AsrProvider {
   private readonly candidates: FallbackAsrCandidate[];
   private readonly hedgeDelayMs: number | null;
+  private readonly sharedAccountRateLimit: boolean;
   private active: AsrProvider | null = null;
   private activeKind: VoiceInputProviderKind | null = null;
   private readonly eventCallbacks: Array<(event: AsrEvent) => void> = [];
@@ -95,6 +99,7 @@ export class FallbackAsrProvider implements AsrProvider {
       throw new Error('FallbackAsrProvider requires at least one ASR provider candidate.');
     }
     this.candidates = candidates;
+    this.sharedAccountRateLimit = options.sharedAccountRateLimit ?? false;
     this.hedgeDelayMs = options.hedgeDelayMs === null
       ? null
       : Math.max(0, options.hedgeDelayMs ?? DEFAULT_HEDGE_DELAY_MS);
@@ -163,6 +168,18 @@ export class FallbackAsrProvider implements AsrProvider {
       }
       this.attempts.delete(result.index);
       if (result.status === 'failed') {
+        if (this.isSharedAccountRateLimit(result.error)) {
+          // A concurrent winner takes precedence over a losing attempt's error.
+          if (this.active) return;
+          // Reuse disposal to cancel pending/late candidates before returning
+          // the original error, without waiting for network cleanup to finish.
+          void this.dispose();
+          log.info('shared voice account rate limit reached; skipping ASR fallback', {
+            provider: this.candidates[result.index].kind,
+            phase: result.phase ?? 'start',
+          });
+          throw result.error;
+        }
         lastError = result.error;
         const candidate = this.candidates[result.index];
         failures.push(this.handleCandidateFailure(
@@ -249,6 +266,9 @@ export class FallbackAsrProvider implements AsrProvider {
     try {
       await provider.recover!();
     } catch (error) {
+      // Reconnecting allocates another managed session and can hit the same
+      // account quota. It is not evidence that this provider is unhealthy.
+      if (this.isSharedAccountRateLimit(error)) throw error;
       // Recovery exhausted mid-session: the run ends as today, but the sticky
       // cooldown makes the NEXT dictation start from the following candidate.
       markVoiceInputProviderFailure(
@@ -258,6 +278,10 @@ export class FallbackAsrProvider implements AsrProvider {
       );
       throw error;
     }
+  }
+
+  private isSharedAccountRateLimit(error: unknown): boolean {
+    return this.sharedAccountRateLimit && isVoiceInputStartRateLimited(error);
   }
 
   async dispose(): Promise<void> {

@@ -35,6 +35,8 @@ import type {
   Query,
   CanUseTool,
   HookCallback,
+  HookCallbackMatcher,
+  HookEvent,
   McpServerConfig,
   PermissionUpdate,
   PreToolUseHookInput,
@@ -122,6 +124,11 @@ import {
   exploreInheritCapEnvNeedsSync,
   REMOTE_ROUTE_OVERRIDE_ENV_KEYS,
 } from './env-builder.js';
+import {
+  findWorkspaceSettingsOverride,
+  workspaceConfigChangeBlockReason,
+  workspaceSettingsOverrideMessage,
+} from './workspace-settings-guard.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
@@ -822,6 +829,29 @@ export function setClaudeSupportedModelsListener(
   supportedModelsListener = listener;
 }
 
+/**
+ * Claude 订阅会话的额度快照回调。订阅会话不经本地 proxy,host 看不到响应头,
+ * 5h / 7d 余量改由 CLI 自己上报的 SDK `rate_limit_event` 提供。只对本机订阅会话
+ * (nativeCliAuth)转发;listener 抛错不影响会话。
+ */
+let rateLimitInfoListener: ((info: unknown) => void) | null = null;
+
+/** host 注入订阅会话 rate_limit_event 捕获回调;传 null 解除。 */
+export function setClaudeRateLimitInfoListener(listener: ((info: unknown) => void) | null): void {
+  rateLimitInfoListener = listener;
+}
+
+function notifyRateLimitInfo(rawMsg: unknown): void {
+  if (!rateLimitInfoListener) return;
+  const info = (rawMsg as { rate_limit_info?: unknown } | null)?.rate_limit_info;
+  if (!info || typeof info !== 'object') return;
+  try {
+    rateLimitInfoListener(info);
+  } catch {
+    /* listener 异常不得打断事件循环 */
+  }
+}
+
 /** fire-and-forget 捕获(远端 RemoteQuery 无 supportedModels 方法时静默跳过)。 */
 function notifySupportedModels(q: Query): void {
   if (!supportedModelsListener) return;
@@ -1077,8 +1107,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       );
     }
     // oneShot 凭证优先走 getOneShotAuth()(host 侧直连专用,与子进程 env 正交):
-    // Claude 'oauth' 模式下 getAuthEnv() 注入的是用户订阅 token,但 oneShot 直连
-    // Anthropic Messages API 不能走订阅 token(会被 claude.ai OAuth 策略拒),host 通过
+    // 连了 Claude 订阅时订阅只归 CLI 子进程,host 直连请求不得使用,host 通过
     // getOneShotAuth 固定回 gateway key +
     // gateway endpoint。不实现该方法的 adapter(或回 null)→ 回退旧逻辑(getAuthEnv 里的 key + runtimeConfig.endpoint)。
     let apiKey: string | undefined;
@@ -1236,7 +1265,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           credentialMode,
           ...(credentialMode !== 'gateway-key' && opts.providerId ? { providerId: opts.providerId } : {}),
         }
-      : undefined;
+      : { model: opts.model };
     const authState = await this.deps.auth.getState(authOptions);
     if (!authState.authenticated) {
       throw new AgentNotAuthenticatedError(
@@ -1248,6 +1277,15 @@ export class ClaudeCodeAgent extends BaseAgent {
       credentialMode,
       authState.authSource,
     );
+    // Claude 订阅(含 adapter 把隐式来源解析成订阅的情形)由 CLI 用自己的登录直连,
+    // host 不接管连接、不经手凭证(见 env-builder nativeCliAuth)。远端会话不适用。
+    const nativeCliAuth = !opts.remoteHostId && effectiveCredentialMode === 'oauth-bearer';
+    // 订阅会话不设 host 接管标记,CLI 会直接应用工作区设置里的 env:能改写上游 / 鉴权 /
+    // TLS 信任的项目级设置会让订阅请求带着登录凭证发往别处,启动前拒绝(见 workspace-settings-guard)。
+    if (nativeCliAuth) {
+      const override = await findWorkspaceSettingsOverride(opts.workingDir);
+      if (override) throw new Error(workspaceSettingsOverrideMessage(override));
+    }
 
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
@@ -1304,6 +1342,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     const smallFastModel = opts.model.includes('/') ? sdkModel : undefined;
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
+      nativeCliAuth,
+      authModel: opts.model,
       sessionProviderId: opts.providerId ?? null,
       activeModel: sdkModel,
       modelContextWindows,
@@ -1318,10 +1358,10 @@ export class ClaudeCodeAgent extends BaseAgent {
     // agent 的 `model:`。这里先扫一遍用户手写定义再决定:没人声明 model → 照旧设 env
     // (内置 agent 也吃到默认值);有人声明 → 不设 env,让那些声明生效。
     //
-    // 必须放在 buildClaudeEnv **之后**:dev 多实例把 cc 的配置目录重定向到
-    // `<userData>/claude-home`,而那个 CLAUDE_CONFIG_DIR 只存在于**子进程 env**里
-    // (boot 期已从 process.env 剥离)。拿 process.env 去扫会扫到 `~/.claude/agents`,
-    // 和 cc 实际读的目录不是同一个 → 判定失真,声明照旧被覆盖。
+    // 必须放在 buildClaudeEnv **之后**:host 若经 auth adapter 重定向 cc 的配置目录
+    // (旧版 dev 多实例曾用 `<userData>/claude-home`),那个 CLAUDE_CONFIG_DIR 只存在于
+    // **子进程 env**里(boot 期已从 process.env 剥离)。拿 process.env 去扫会扫到
+    // `~/.claude/agents`,和 cc 实际读的目录不是同一个 → 判定失真,声明照旧被覆盖。
     //
     // 只在会话启动时解析一次 —— env 要在 spawn 前定好,会话中途变动 tools/system 会破坏
     // prompt 缓存(见 docs/dev-rules/maker-core-and-agent-behavior.md §3.1)。
@@ -1331,9 +1371,14 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 候选默认值从路由感知入口取:子代理请求跑在父会话来源上,覆写在**该来源**下不可
     // 路由(被停用)时 host 返回 undefined = 不注入(PR #744 review 第十九/二十轮)。
     // 缺席 subagentModelForRoute 时退回静态 subagentModel(旧 host / CLI 行为不变)。
+    // 订阅会话(含隐式来源交给本机登录的情形)按生效形态判定:子代理请求跟着 CLI 直连
+    // Anthropic,不经 proxy 按模型路由。
     const configuredSubagentDefault =
       (this.deps.runtimeConfig.subagentModelForRoute
-        ? this.deps.runtimeConfig.subagentModelForRoute(opts.providerId ?? null, credentialMode)
+        ? this.deps.runtimeConfig.subagentModelForRoute(
+            opts.providerId ?? null,
+            nativeCliAuth ? 'oauth-bearer' : credentialMode,
+          )
         : this.deps.runtimeConfig.subagentModel
       )?.trim() || undefined;
     let subagentDefault: ResolveSubagentModelDefaultResult = {
@@ -1812,8 +1857,60 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
       };
     };
+    // 订阅会话运行中的工作区设置守门(启动与重建时的检查见 buildQuery):
+    //   - CLI 热加载项目级设置前经 ConfigChange 问这里,命中就阻止这次变更;
+    //   - 但被拒的文件还在磁盘上,之后任何一次全量重载(别的设置文件变更、flag settings、
+    //     CLI 回写权限)都会读到它 —— 所以命中即判会话已污染:结束当前 CLI 进程并以终态
+    //     错误收尾,下一次发送重建时 buildQuery 的检查拒绝启动;
+    //   - EnterWorktree 会把 CLI 的项目根挪到守门没检查过、设置 watcher 也不监视的目录,
+    //     订阅会话不允许。
+    let workspaceSettingsTainted = false;
+    const taintWorkspaceSettings = (reason: string): void => {
+      if (workspaceSettingsTainted) return;
+      workspaceSettingsTainted = true;
+      log.warn('workspace settings would redirect a Claude subscription session; ending it', { reason });
+      setTimeout(() => {
+        if (closed) return;
+        eventQueue.push({
+          type: 'error',
+          data: { message: reason, isTerminal: true, reason: 'claude_subscription_workspace_override' },
+          source: 'claude-code',
+        });
+        if (turnInFlight) emitTurnBoundary('claude_subscription_workspace_override');
+        teardownDeadHandle('workspace settings override');
+      }, 0);
+    };
+    const workspaceSettingsConfigChangeHooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = {
+      ConfigChange: [{
+        hooks: [async (input) => {
+          const reason = await workspaceConfigChangeBlockReason(
+            input as { source?: string; file_path?: string },
+            opts.workingDir,
+          );
+          if (!reason) return { continue: true };
+          taintWorkspaceSettings(reason);
+          return { decision: 'block', reason };
+        }],
+      }],
+      PreToolUse: [{
+        matcher: 'EnterWorktree',
+        hooks: [async () => ({
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason:
+              'This task runs on the Claude subscription, which only uses the settings of its own working directory. ' +
+              'Switching worktrees mid-task is not available here; start a new task in the other worktree instead.',
+          },
+        })],
+      }],
+    };
     const localClaudeHooks = reviewMode
-      ? { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] }
+      ? mergeClaudeHookSets(
+          { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] },
+          nativeCliAuth ? workspaceSettingsConfigChangeHooks : undefined,
+        )
       : mergeClaudeHookSets(
           buildClaudeLocalToolGuardHooks(
             this.deps.capabilityRouting,
@@ -1847,6 +1944,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           ),
           buildClaudeOrcaCallerProvenanceHooks(),
           buildClaudeAskUserQuestionCallerProvenanceHooks(),
+          nativeCliAuth ? workspaceSettingsConfigChangeHooks : undefined,
           this.deps.claudeHooks,
         );
     const deniedCapabilityRoute = (toolName: string) => {
@@ -2598,7 +2696,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       const scopeKey = parentToolUseId ?? null;
       let guard = toolLoopGuards.get(scopeKey);
       if (!guard) {
-        guard = new ToolLoopGuard();
+        guard = new ToolLoopGuard({
+          // Different inputs can be legitimate corrections, even when the
+          // tool keeps reporting the same error category. Match Pi/Codex:
+          // keep exact repetition/rotation guards, not category-only retries.
+          contractConsecutiveLimit: Number.POSITIVE_INFINITY,
+        });
         toolLoopGuards.set(scopeKey, guard);
       }
       return guard;
@@ -3106,6 +3209,11 @@ export class ClaudeCodeAgent extends BaseAgent {
       permissionMode?: SdkPermissionMode;
       fresh?: boolean;
     }): Promise<Query> => {
+      // 会话中途重建(rewind / 追加目录 / resume 恢复等)同样会让新 CLI 进程重读工作区设置。
+      if (nativeCliAuth) {
+        const override = await findWorkspaceSettingsOverride(opts.workingDir);
+        if (override) throw new Error(workspaceSettingsOverrideMessage(override));
+      }
       const currentSdkModel = sdkModelFor(mutableModel);
       const workingWindow = resolveModelContextWindow(mutableModel);
       appliedContextWindow = workingWindow;
@@ -3918,6 +4026,20 @@ export class ClaudeCodeAgent extends BaseAgent {
       });
       if (sdkStartPermissionMode === 'auto') nativeAutoQueries.add(query);
       if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(query);
+      if (nativeCliAuth && typeof query.applyFlagSettings === 'function') {
+        // 切模型 / effort / fast 走 applyFlagSettings,CLI 会借机全量重读设置(不经 ConfigChange):
+        // 先复查工作区,命中就结束会话而不是把设置应用进去。
+        const applyFlagSettings = query.applyFlagSettings.bind(query);
+        query.applyFlagSettings = async (settings) => {
+          const override = await findWorkspaceSettingsOverride(opts.workingDir);
+          if (override) {
+            const message = workspaceSettingsOverrideMessage(override);
+            taintWorkspaceSettings(message);
+            throw new Error(message);
+          }
+          return applyFlagSettings(settings);
+        };
+      }
       return query;
     };
 
@@ -4832,6 +4954,8 @@ export class ClaudeCodeAgent extends BaseAgent {
             const rawType = (rawMsg as { type?: string } | null)?.type;
             const rawSubtype = (rawMsg as { subtype?: string } | null)?.subtype;
             const rawStatus = (rawMsg as { status?: string } | null)?.status;
+            // 只旁路取值,消息照常往下走(与改动前的处理顺序一致)。
+            if (rawType === 'rate_limit_event' && nativeCliAuth) notifyRateLimitInfo(rawMsg);
             const isTerminalTaskNotification =
               rawType === 'system' &&
               rawSubtype === 'task_notification' &&

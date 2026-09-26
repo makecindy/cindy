@@ -36,6 +36,21 @@ struct MacUnlockProfile {
   }
   struct Selection: Equatable { let field: Int; let submit: Int; let label: Int? }
   struct FieldSelection: Equatable { let field: Int; let label: Int? }
+  /// Secondary displays can expose empty login windows. Never pick the first
+  /// window: accept exactly one actionable surface and reject unknown siblings.
+  static func selectWindow(_ windows: [[Node]]) throws -> Int {
+    var candidates: [Int] = []
+    for (index, nodes) in windows.enumerated() {
+      _ = try accountLabel(nodes)
+      if nodes.count == 1 { continue }
+      guard (try? selectField(nodes)) != nil || (try? presentationLabel(nodes)) != nil else {
+        throw CredentialError.unlockUnavailable
+      }
+      candidates.append(index)
+    }
+    guard candidates.count == 1, let selected = candidates.first else { throw CredentialError.unlockUnavailable }
+    return selected
+  }
   private static func accountLabel(_ nodes: [Node]) throws -> Int? {
     guard nodes.first?.identifier == "login", nodes.first?.role == kAXWindowRole,
       !nodes.contains(where: { [kAXSheetRole, kAXListRole, kAXTableRole, kAXOutlineRole, kAXComboBoxRole, kAXPopUpButtonRole].contains($0.role)
@@ -77,6 +92,42 @@ struct MacUnlockProfile {
       nodes[button].role == kAXButtonRole, nodes[button].enabled, nodes[button].press,
       nodes[button].parent == nodes[field.field].parent else { throw CredentialError.unlockUnavailable }
     return Selection(field: field.field, submit: button, label: field.label)
+  }
+}
+
+/// The production traversal, with AX reads and the monotonic clock injectable
+/// so budget and object-mapping regressions can be tested without a real login.
+enum MacUnlockWindowCollector {
+  static func collect<Element>(windows: [Element], cleanupWindow: Element? = nil,
+    now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+    equal: (Element, Element) -> Bool,
+    read: (Element, Int?) throws -> MacUnlockProfile.Node,
+    children: (Element) throws -> [Element]) throws -> (elements: [Element], nodes: [MacUnlockProfile.Node]) {
+    // Cleanup may inspect only the original window. It must never fall back to
+    // another candidate, and unrelated sibling changes cannot suppress clearing.
+    let windows = cleanupWindow.map { original in windows.filter { equal($0, original) } } ?? windows
+    guard !windows.isEmpty, windows.count <= 16,
+      cleanupWindow == nil || windows.count == 1 else { throw CredentialError.unlockUnavailable }
+    let deadline = now() + 2
+    var elements: [Element] = [], nodes: [MacUnlockProfile.Node] = []
+    var visited: [Element] = []
+    func visit(_ element: Element, parent: Int?, depth: Int) throws {
+      guard now() < deadline, depth <= 12, visited.count < 256,
+        !visited.contains(where: { equal($0, element) }) else { throw CredentialError.unlockUnavailable }
+      visited.append(element)
+      let index = nodes.count
+      elements.append(element)
+      nodes.append(try read(element, parent))
+      for child in try children(element) { try visit(child, parent: index, depth: depth + 1) }
+    }
+    var surfaces: [(elements: [Element], nodes: [MacUnlockProfile.Node])] = []
+    for window in windows {
+      elements = []; nodes = []
+      try visit(window, parent: nil, depth: 0)
+      surfaces.append((elements, nodes))
+    }
+    guard now() < deadline else { throw CredentialError.unlockUnavailable }
+    return surfaces[try MacUnlockProfile.selectWindow(surfaces.map { $0.nodes })]
   }
 }
 
@@ -128,7 +179,7 @@ final class MacScreenUnlocker {
     var wrote = false
     defer {
       // Clear only the same still-verified secure object; never chase new focus.
-      if wrote, (try? validate(target, account: account)) != nil {
+      if wrote, (try? validate(target, account: account, forCleanup: true)) != nil {
         _ = AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, "" as CFString)
       }
     }
@@ -237,7 +288,7 @@ final class MacScreenUnlocker {
     }
     throw CredentialError.unlockUnavailable
   }
-  private func collect(account: MacSystemAccount) throws -> Snapshot {
+  private func collect(account: MacSystemAccount, cleanupWindow: AXUIElement? = nil) throws -> Snapshot {
     guard AXIsProcessTrusted() else { throw CredentialError.accessibilityRequired }
     guard try MacConsoleState.read(account: account).locked else { throw CredentialError.unlockUnavailable }
     let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == "com.apple.loginwindow" && $0.executableURL?.path == path }
@@ -249,13 +300,9 @@ final class MacScreenUnlocker {
       let code, SecCodeCheckValidity(code, [], requirement) == errSecSuccess else { throw CredentialError.invalidIdentity }
     let root = AXUIElementCreateApplication(app.processIdentifier)
     AXUIElementSetMessagingTimeout(root, 0.25)
-    guard let windows = try value(root, kAXWindowsAttribute) as? [AXUIElement], windows.count == 1 else { throw CredentialError.unlockUnavailable }
+    guard let windows = try value(root, kAXWindowsAttribute) as? [AXUIElement] else { throw CredentialError.unlockUnavailable }
     let names = try account.unambiguousDisplayNames()
-    let deadline = ProcessInfo.processInfo.systemUptime + 2
-    var elements: [AXUIElement] = [], nodes: [MacUnlockProfile.Node] = []
-    func visit(_ element: AXUIElement, parent: Int?, depth: Int) throws {
-      guard ProcessInfo.processInfo.systemUptime < deadline, depth <= 12, nodes.count < 256,
-        !elements.contains(where: { CFEqual($0, element) }) else { throw CredentialError.unlockUnavailable }
+    let selected = try MacUnlockWindowCollector.collect(windows: windows, cleanupWindow: cleanupWindow, equal: { CFEqual($0, $1) }, read: { element, parent in
       AXUIElementSetMessagingTimeout(element, 0.1)
       guard let role = try value(element, kAXRoleAttribute) as? String, !role.isEmpty else { throw CredentialError.unlockUnavailable }
       let subrole = try value(element, kAXSubroleAttribute) as? String ?? ""
@@ -275,24 +322,19 @@ final class MacScreenUnlocker {
       if identifier == "FocusedUser", role == kAXStaticTextRole {
         matches = names.contains(try value(element, kAXValueAttribute) as? String ?? "")
       }
-      let index = nodes.count
-      elements.append(element)
-      nodes.append(.init(parent: parent, role: role, subrole: subrole, identifier: identifier,
+      return .init(parent: parent, role: role, subrole: subrole, identifier: identifier,
         enabled: try value(element, kAXEnabledAttribute) as? Bool == true, writable: writable.boolValue,
-        press: (actions as? [String])?.contains(kAXPressAction) == true, matchesAccount: matches))
-      if let children = try value(element, kAXChildrenAttribute) as? [AXUIElement] {
-        for child in children { try visit(child, parent: index, depth: depth + 1) }
-      }
-    }
-    try visit(windows[0], parent: nil, depth: 0)
-    guard ProcessInfo.processInfo.systemUptime < deadline else { throw CredentialError.unlockUnavailable }
-    return (app, launch, code, elements, nodes)
+        press: (actions as? [String])?.contains(kAXPressAction) == true, matchesAccount: matches)
+    }, children: { element in
+      try value(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
+    })
+    return (app, launch, code, selected.elements, selected.nodes)
   }
-  private func validate(_ target: Target, account: MacSystemAccount) throws -> Snapshot {
+  private func validate(_ target: Target, account: MacSystemAccount, forCleanup: Bool = false) throws -> Snapshot {
     guard !target.application.isTerminated,
       try MacUnlockProcessIdentity.read(pid: target.application.processIdentifier, uid: account.uid) == target.launch,
       SecCodeCheckValidity(target.code, [], nil) == errSecSuccess else { throw CredentialError.invalidIdentity }
-    let next = try collect(account: account)
+    let next = try collect(account: account, cleanupWindow: forCleanup ? target.elements[0] : nil)
     let selection = try MacUnlockProfile.selectField(next.nodes)
     guard next.application.processIdentifier == target.application.processIdentifier, next.launch == target.launch,
       CFEqual(next.elements[0], target.elements[0]),

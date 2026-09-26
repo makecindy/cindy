@@ -10,6 +10,7 @@ export * from './deviceList.js';
 export * from './fileBrowser.js';
 export * from './fileBrowserGrid.js';
 export * from './filePreview.js';
+export * from './filePresentation.js';
 export * from './fixtures.js';
 export * from './deviceLinkContract.js';
 export * from './errorRedaction.js';
@@ -62,3 +63,4 @@ export * from './sessionPrRefs.js';
 export * from './taskTags';
 
 export * from './workingStatus.js';
+export * from './runningTokenRateHistory.js';

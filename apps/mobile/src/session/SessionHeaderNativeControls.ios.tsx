@@ -97,7 +97,7 @@ export function SessionHeaderNativeTitle({ title,
     borderRadius: radius.pill,
     minHeight: 44,
     justifyContent: "center" as const,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.xs / 2,
     overflow: "hidden" as const,
   };
   const label = (
@@ -121,7 +121,7 @@ export function SessionHeaderNativeTitle({ title,
     <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
       <View style={style}>
         <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} />
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
+        <View style={{ flexDirection: "row", minWidth: 0, alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
           {pinned ? <Pin color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
           {label}
           <TaskTagDots

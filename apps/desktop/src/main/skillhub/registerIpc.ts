@@ -30,6 +30,9 @@ import { ServerApiError } from '../serverApiClient';
 import { SkillhubMarketService, skillhubIpcError } from './marketService';
 import type { PublishParams, PublishProgressEvent } from './publishService';
 import { SkillPublishService } from './publishService';
+import { configureSkillhubAgentServices } from './agentTools';
+import { currentSkillhubIdentityPolicy } from './identityPolicy';
+import { getAppCapabilities } from '../appCapabilities';
 import { reconcileMineRegistry } from './reconcileMineRegistry';
 import { registryService } from './registry';
 import {
@@ -433,6 +436,17 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   };
   const publishService = options.publishService ?? new SkillPublishService({
     onProgress: broadcastPublishProgress,
+  });
+  configureSkillhubAgentServices({
+    market: marketService,
+    publisher: publishService,
+    ownerScope: () => !isAppSessionBoundaryPending() && getCurrentDataOwnerId()
+      && getAppCapabilities().canUseSkillHubCloud && currentSkillhubIdentityPolicy().canWrite
+      ? activeOwnerScopeKey() : null,
+    policy: currentSkillhubIdentityPolicy,
+    isManagedPath: (absolutePath) => isBuiltInSkillPath(absolutePath)
+      || isPluginManagedSkillPath(absolutePath, options.getManagedSkillRoots()),
+    errorCode: (error) => error instanceof ServerApiError ? error.code : 'INTERNAL',
   });
   let usageRefreshBroadcastPromise: Promise<void> | null = null;
   const captureUsageDbSnapshot = (): CurrentDbClientSnapshot => {

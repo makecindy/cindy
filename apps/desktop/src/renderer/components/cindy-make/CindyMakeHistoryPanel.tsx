@@ -33,12 +33,16 @@ type Filter = 'all' | 'pending' | 'integrated' | 'ended';
 /** Historical facts and allowed actions come from Main; an old button cannot authorize a write. */
 export function CindyMakeHistoryPanel({
   active = true,
+  hasPersonalVersion = false,
   onState,
 }: {
   active?: boolean;
+  hasPersonalVersion?: boolean;
   onState?: (state: CindyMakeHistoryState) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const translateRef = useRef(t);
+  translateRef.current = t;
   const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
   const make = useCindyMakeState();
@@ -46,6 +50,7 @@ export function CindyMakeHistoryPanel({
     owner: ReturnType<typeof getDataOwnerGeneration>;
     value: CindyMakeHistoryState;
   }>();
+  const snapshotRef = useRef(snapshot);
   const state =
     snapshot && isDataOwnerGenerationCurrent(snapshot.owner) ? snapshot.value : undefined;
   const [selectedId, select] = useState('');
@@ -55,10 +60,29 @@ export function CindyMakeHistoryPanel({
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [pending, setPending] = useState<string>();
   const [failed, setFailed] = useState(false);
+  // A failed build is persisted so it can still be retried, but an old failure
+  // should not reappear as a fresh red banner every time this panel is opened.
+  const [showBuildFailure, setShowBuildFailure] = useState(false);
   const request = useRef(0);
   const acting = useRef(false);
   const actionGeneration = useRef(0);
   const owner = getDataOwnerGeneration();
+  const notifyBuildResult = useCallback(
+    (previous: CindyMakeHistoryState['build'], next: CindyMakeHistoryState['build']) => {
+      if (
+        !previous ||
+        !next ||
+        (previous.status === next.status && previous.buildId === next.buildId)
+      )
+        return;
+      if (next.status === 'ready') {
+        toast.success(translateRef.current('cindyMake.personal.status.ready'));
+      } else if (next.status === 'failed' && next.error !== 'cancelled') {
+        toast.error(translateRef.current('cindyMake.personal.errors.' + (next.error ?? 'unavailable')));
+      }
+    },
+    [],
+  );
   const refresh = useCallback(async () => {
     if (!window.electronAPI.getCindyMakeHistory) {
       setFailed(true);
@@ -68,15 +92,29 @@ export function CindyMakeHistoryPanel({
     try {
       const next = await window.electronAPI.getCindyMakeHistory(selectedId || undefined);
       if (isDataOwnerGenerationCurrent(owner) && generation === request.current) {
+        const previousBuild = snapshotRef.current?.value.build;
+        const nextBuild = next.build;
+        notifyBuildResult(previousBuild, nextBuild);
+        if (nextBuild?.status !== 'failed') {
+          setShowBuildFailure(false);
+        } else if (
+          previousBuild &&
+          (previousBuild.status !== 'failed' || previousBuild.buildId !== nextBuild.buildId)
+        ) {
+          setShowBuildFailure(true);
+        }
         setSnapshot({ owner, value: next });
+        snapshotRef.current = { owner, value: next };
         setFailed(false);
       }
     } catch {
       if (isDataOwnerGenerationCurrent(owner) && generation === request.current) setFailed(true);
     }
-  }, [owner, selectedId]);
+  }, [notifyBuildResult, owner, selectedId]);
   useEffect(() => {
     setSnapshot(undefined);
+    snapshotRef.current = undefined;
+    setShowBuildFailure(false);
     setPending(undefined);
     setSelecting(false);
     setCheckedIds([]);
@@ -87,6 +125,9 @@ export function CindyMakeHistoryPanel({
       actionGeneration.current += 1;
     };
   }, [owner]);
+  useEffect(() => {
+    if (!active) setShowBuildFailure(false);
+  }, [active]);
   useEffect(() => {
     if (!active) return;
     const timer = window.setInterval(() => {
@@ -116,6 +157,12 @@ export function CindyMakeHistoryPanel({
         !acting.current
       )
         void refresh();
+    });
+  }, [active, owner, refresh]);
+  useEffect(() => {
+    if (!active) return;
+    return window.electronAPI.onCindyMakeHistoryChanged?.((stamp) => {
+      if (isDataOwnerGenerationCurrent(owner) && isDataOwnerPushCurrent(stamp)) void refresh();
     });
   }, [active, owner, refresh]);
   useEffect(() => {
@@ -171,15 +218,18 @@ export function CindyMakeHistoryPanel({
         : undefined;
   const selectedIsGlobalFailure =
     state?.build?.status === 'failed' &&
+    showBuildFailure &&
     !!state.build.buildId &&
     selectedBuild?.buildId === state.build.buildId;
+  const building = !!state?.build && !['ready', 'failed'].includes(state.build.status);
   const selectedActions: MakeHistoryAction[] = selected
     ? (
         [
-          'build',
           'test',
           'continue',
           'open',
+          'revert',
+          'reapply',
           'resolve',
           'retry',
           'retry-prepare',
@@ -203,7 +253,19 @@ export function CindyMakeHistoryPanel({
   const update = (next: CindyMakeHistoryState) => {
     request.current += 1;
     if (isDataOwnerGenerationCurrent(owner)) {
+      const previousBuild = snapshotRef.current?.value.build;
+      const nextBuild = next.build;
+      notifyBuildResult(previousBuild, nextBuild);
+      if (nextBuild?.status !== 'failed') {
+        setShowBuildFailure(false);
+      } else if (
+        previousBuild &&
+        (previousBuild.status !== 'failed' || previousBuild.buildId !== nextBuild.buildId)
+      ) {
+        setShowBuildFailure(true);
+      }
       setSnapshot({ owner, value: next });
+      snapshotRef.current = { owner, value: next };
       setFailed(false);
     }
   };
@@ -343,7 +405,35 @@ export function CindyMakeHistoryPanel({
       }
     }
   };
-  const building = !!state?.build && !['ready', 'failed'].includes(state.build.status);
+  const rebuildPersonal = async () => {
+    if (
+      acting.current ||
+      !hasPersonalVersion ||
+      !state?.canBuild ||
+      building ||
+      !isDataOwnerGenerationCurrent(owner)
+    )
+      return;
+    acting.current = true;
+    request.current += 1;
+    const actionId = ++actionGeneration.current;
+    setPending('rebuild-personal');
+    try {
+      const next = await window.electronAPI.generateCindyMakePersonal();
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      update(next);
+    } catch {
+      if (isDataOwnerGenerationCurrent(owner)) {
+        toast.error(t('cindyMake.history.actionFailed'));
+        await refresh();
+      }
+    } finally {
+      if (actionId === actionGeneration.current) {
+        acting.current = false;
+        if (isDataOwnerGenerationCurrent(owner)) setPending(undefined);
+      }
+    }
+  };
   const buildSelected = async () => {
     if (acting.current || !checked.length || !isDataOwnerGenerationCurrent(owner)) return;
     const pins: MakeHistoryBuildSelection[] = checked.map((item) => ({
@@ -397,8 +487,9 @@ export function CindyMakeHistoryPanel({
   const showGlobalResult =
     state?.build &&
     !building &&
-    (state.build.status === 'failed' ||
-      !items.some((item) => state.build?.buildId && item.build?.buildId === state.build.buildId));
+    ((state.build.status === 'failed' && showBuildFailure) ||
+      (state.build.status === 'ready' &&
+        !items.some((item) => state.build?.buildId && item.build?.buildId === state.build.buildId)));
   const { stop: confirmStopBuild, stopping: stoppingBuild } = useCindyMakeBuildStop(
     building ? state?.build?.buildId : undefined,
   );
@@ -442,8 +533,19 @@ export function CindyMakeHistoryPanel({
       <div className="space-y-2 border-b border-[var(--border-default)] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="font-medium">
-            {t('cindyMake.history.title')} · {items.length}
+            {t('cindyMake.history.title')} ·{' '}
+            {t('cindyMake.history.taskCount', { count: items.length })}
           </h3>
+          {hasPersonalVersion && (
+            <Button
+              variant="secondary"
+              disabled={!!pending || failed || !state?.canBuild || building}
+              loading={pending === 'rebuild-personal'}
+              onClick={() => void rebuildPersonal()}
+            >
+              {t('cindyMake.history.regeneratePersonal')}
+            </Button>
+          )}
         </div>
         {!building && (
           <>
@@ -756,7 +858,7 @@ export function CindyMakeHistoryPanel({
               {selectedActions.map((action) => (
                 <Button
                   key={action}
-                  variant={action === 'build' || action === 'retry' ? 'primary' : 'secondary'}
+                  variant={action === 'retry' ? 'primary' : 'secondary'}
                   disabled={!!pending || failed}
                   loading={pending === action}
                   onClick={() => void act(action)}
@@ -764,13 +866,11 @@ export function CindyMakeHistoryPanel({
                   {t(
                     action === 'hide'
                       ? 'cindyMake.history.cleanTask'
-                      : action === 'retry'
-                        ? 'cindyMake.history.actions.build'
-                        : action === 'test'
-                          ? selected.test?.status === 'ready'
-                            ? 'cindyMake.history.batch.restartTest'
-                            : 'cindyMake.test.start'
-                          : 'cindyMake.history.actions.' + action,
+                      : action === 'test'
+                        ? selected.test?.status === 'ready'
+                          ? 'cindyMake.history.batch.restartTest'
+                          : 'cindyMake.test.start'
+                        : 'cindyMake.history.actions.' + action,
                   )}
                 </Button>
               ))}

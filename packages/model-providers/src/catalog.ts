@@ -11,6 +11,7 @@
  */
 
 import { projectProviderMediaModels } from './providerMediaModels.js';
+import { mimoPresetName } from './mimoPresentation.js';
 import { validModelMetadata } from './modelMetadataLayers.js';
 import { parseModelRegistry } from './modelAccessValidator.js';
 
@@ -29,7 +30,7 @@ import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
 import { isProviderRequestPath } from './provider-url.js';
 
-export { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
+export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, claudeSubscriptionOnlyForClaudeCode } from './builtin.js';
 
 const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 const EFFORTS: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
@@ -154,6 +155,10 @@ function validateModel(
   }
   if (m.api !== undefined) {
     assert(isPiModelApi(m.api), `model.api invalid for '${m.id}'`);
+  }
+  if (m.fastModelId !== undefined && m.fastModelId !== null) {
+    assert(typeof m.fastModelId === 'string' && m.fastModelId.trim().length > 0 && m.fastModelId !== m.id,
+      `model.fastModelId invalid for '${m.id}'`);
   }
   if (m.piApi !== undefined) {
     assert(isPiModelApi(m.piApi), `model.piApi invalid for '${m.id}'`);
@@ -755,10 +760,12 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
  * (缺省回落 `name`)。纯呈现选择,不影响预设 id / 创建后的供应商命名语义。
  */
 export function presetDisplayName(
-  preset: Pick<ProviderPreset, 'name' | 'nameEn' | 'nameZhTW'>,
+  preset: Pick<ProviderPreset, 'name' | 'nameEn' | 'nameZhTW'> & { id?: string },
   locale: string,
 ): string {
   const normalizedLocale = locale.toLowerCase().replaceAll('_', '-');
+  const mimoName = mimoPresetName(preset.id, normalizedLocale);
+  if (mimoName) return mimoName;
   if (normalizedLocale === 'zh-tw' || normalizedLocale.startsWith('zh-hant')) {
     return preset.nameZhTW ?? preset.name;
   }

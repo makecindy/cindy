@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { FolderOpen, Download, Plus, Trash2, Wrench } from 'lucide-react';
+import { FolderOpen, Download, Trash2, Wrench } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
@@ -13,7 +13,10 @@ import { CindyMakeCreateDialog } from '@/components/cindy-make/CindyMakeCreateDi
 import { CindyMakeDependencyProgress } from '@/components/cindy-make/CindyMakeDependencyProgress';
 import { CindyMakeHistoryPanel } from '@/components/cindy-make/CindyMakeHistoryPanel';
 import { CindyMakeVersionsPanel } from '@/components/cindy-make/CindyMakeVersionsPanel';
-import { CindyMakeMergeNotice } from '@/components/cindy-make/CindyMakeMergeNotice';
+import {
+  CindyMakeMergeActions,
+  CindyMakeMergeNotice,
+} from '@/components/cindy-make/CindyMakeMergeNotice';
 import { useCindyMakeMergeResolution } from '@/components/cindy-make/useCindyMakeMergeResolution';
 import {
   getDataOwnerGeneration,
@@ -21,12 +24,14 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import type { CindyMakeMergeState } from '../../../shared/cindyMakeMerge';
 import type { CindyMakeHistoryState } from '../../../shared/cindyMakeHistory';
+import type { CindyVersionsState } from '../../../shared/cindyVersions';
 import { useCindyMakeState } from '@/lib/cindyMakeState';
 import { cancelMakeDoctor, startMakeDoctor } from '@/lib/cindyMakeDoctor';
 import { useCindyMakeSettings } from '@/lib/cindyMakeSettings';
 import { isSelectableVendor } from '@/lib/agentVendors';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import { toast } from '@/lib/toast';
+import { extractIpcError } from '@/utils/ipcError';
 import type { MakeDoctorReport, MakeSourceStatus } from '../../../shared/cindyMakeDoctor';
 
 const CINDY_MAKE_SETTINGS_TABS = ['versions', 'environment'] as const;
@@ -38,10 +43,18 @@ export function CindyMakeSection() {
   const tabId = useId();
   const tabButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const { forceManagedTools, setForceManagedTools } = useCindyMakeSettings();
+  const [syncLatestBeforeBuild, setSyncLatestBeforeBuild] = useState(false);
+  const [syncLatestSettingLoaded, setSyncLatestSettingLoaded] = useState(false);
+  const [syncLatestSettingPending, setSyncLatestSettingPending] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [report, setReport] = useState<MakeDoctorReport>();
   const makeState = useCindyMakeState();
   const [historyState, setHistoryState] = useState<CindyMakeHistoryState>();
+  const buildRunning =
+    !!historyState?.build && !['ready', 'failed'].includes(historyState.build.status);
+  const buildRunningRef = useRef(buildRunning);
+  buildRunningRef.current = buildRunning;
+  const [versionsState, setVersionsState] = useState<CindyVersionsState>();
   const [dismissedPreparationId, setDismissedPreparationId] = useState<string>();
   const [trackedPreparationId, setTrackedPreparationId] = useState<string>();
   const [checkVersion, setCheckVersion] = useState(0);
@@ -67,7 +80,7 @@ export function CindyMakeSection() {
     !!operation?.cancellationRequested ||
     (!!operation?.hasWorkspace && operation.status !== 'merged');
   const updateSource = async () => {
-    if (mergeSubmitting.current || mergeBlocked) return;
+    if (mergeSubmitting.current || mergeBlocked || buildRunningRef.current) return;
     const owner = getDataOwnerGeneration();
     mergeSubmitting.current = true;
     try {
@@ -77,7 +90,7 @@ export function CindyMakeSection() {
         confirmText: t('cindyMake.merge.confirm'),
         cancelText: t('settings.cindyMake.source.resetConfirm.cancel'),
       });
-      if (!confirmed || !isDataOwnerGenerationCurrent(owner)) return;
+      if (!confirmed || !isDataOwnerGenerationCurrent(owner) || buildRunningRef.current) return;
       previousMergeId.current = operation?.id;
       setMergePending(true);
       const draft = getDraft();
@@ -110,8 +123,15 @@ export function CindyMakeSection() {
         );
       // Refresh failure must not turn a completed update into a second, failure toast.
       await window.electronAPI.getCindyMakeSourceStatus().catch(() => undefined);
-    } catch {
-      if (isDataOwnerGenerationCurrent(owner)) toast.error(t('cindyMake.merge.errors.unavailable'));
+    } catch (error) {
+      if (isDataOwnerGenerationCurrent(owner))
+        toast.error(
+          t(
+            extractIpcError(error)?.message?.replace(/^\[PRECONDITION_FAILED\]\s*/, '') === 'busy'
+              ? 'cindyMake.merge.errors.busy'
+              : 'cindyMake.merge.errors.unavailable',
+          ),
+        );
     } finally {
       mergeSubmitting.current = false;
       setMergePending(false);
@@ -119,6 +139,25 @@ export function CindyMakeSection() {
   };
   useEffect(() => {
     void window.electronAPI.getCindyMakeSourceStatus?.().catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    const load = window.electronAPI.getCindyMakeSettings;
+    if (!load) {
+      setSyncLatestSettingLoaded(true);
+      return;
+    }
+    let current = true;
+    void load()
+      .then((settings) => {
+        if (current) setSyncLatestBeforeBuild(settings.syncLatestBeforeBuild);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (current) setSyncLatestSettingLoaded(true);
+      });
+    return () => {
+      current = false;
+    };
   }, []);
   const previousSourceStatus = useRef(sourceStatus?.status);
   useEffect(() => {
@@ -344,12 +383,44 @@ export function CindyMakeSection() {
       >
         <div className="flex flex-col gap-[18px]">
           <Button className="self-start" onClick={() => setCreateOpen(true)}>
-            <Plus size={14} aria-hidden="true" />
             {t('settings.cindyMake.create.title')}
           </Button>
+          <div className="flex items-start justify-between gap-4 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-5">
+            <div className="min-w-0">
+              <p id="settings-search-settings-cindyMake-syncBeforeBuild-title" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                {t('settings.cindyMake.syncBeforeBuild.title')}
+              </p>
+              <p className="mt-1 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
+                {t('settings.cindyMake.syncBeforeBuild.description')}
+              </p>
+            </div>
+            <Switch
+              checked={syncLatestBeforeBuild}
+              disabled={!syncLatestSettingLoaded || syncLatestSettingPending}
+              onCheckedChange={(checked) => {
+                if (syncLatestSettingPending) return;
+                const previous = syncLatestBeforeBuild;
+                setSyncLatestBeforeBuild(checked);
+                setSyncLatestSettingPending(true);
+                void window.electronAPI
+                  .setCindyMakeSyncLatestBeforeBuild(checked)
+                  .then((settings) => {
+                    setSyncLatestBeforeBuild(settings.syncLatestBeforeBuild);
+                  })
+                  .catch(() => {
+                    setSyncLatestBeforeBuild(previous);
+                    toast.error(t('settings.cindyMake.syncBeforeBuild.saveFailed'));
+                  })
+                  .finally(() => setSyncLatestSettingPending(false));
+              }}
+              aria-label={t('settings.cindyMake.syncBeforeBuild.ariaLabel')}
+            />
+          </div>
           <CindyMakeVersionsPanel
             active={activeTab === 'versions'}
-            busy={historyState?.busy}
+            busy={historyState?.activeWork ?? historyState?.busy}
+            buildRunning={buildRunning}
+            onState={setVersionsState}
             refreshKey={
               historyState?.build?.status === 'ready'
                 ? String(
@@ -365,6 +436,7 @@ export function CindyMakeSection() {
               preparing={sourceBusy}
               merge={mergePending && merge?.id === previousMergeId.current ? undefined : merge}
               mergeBlocked={mergeBlocked}
+              buildRunning={buildRunning}
               updating={mergePending || (mergeActive && !!merge)}
               onPrepare={() => {
                 if (!sourceStatus || sourceBusy) return;
@@ -397,7 +469,13 @@ export function CindyMakeSection() {
               }}
             />
           </CindyMakeVersionsPanel>
-          <CindyMakeHistoryPanel active={activeTab === 'versions'} onState={setHistoryState} />
+          <CindyMakeHistoryPanel
+            active={activeTab === 'versions'}
+            hasPersonalVersion={versionsState?.versions.some(
+              (version) => version.kind === 'personal',
+            )}
+            onState={setHistoryState}
+          />
         </div>
       </div>
     </div>
@@ -412,6 +490,7 @@ function CindyMakeSourceStatusCard({
   onClear,
   merge,
   mergeBlocked = false,
+  buildRunning = false,
   updating = false,
 }: {
   status?: MakeSourceStatus;
@@ -421,6 +500,7 @@ function CindyMakeSourceStatusCard({
   onClear?: () => void | Promise<void>;
   merge?: CindyMakeMergeState;
   mergeBlocked?: boolean;
+  buildRunning?: boolean;
   updating?: boolean;
 }) {
   const { t } = useTranslation();
@@ -456,7 +536,7 @@ function CindyMakeSourceStatusCard({
       .catch(() => toast.error(t('cindyMakeDoctor.failed')));
   };
   return (
-    <section
+    <section id="settings-search-settings-cindyMake-source-title"
       className="min-w-0 text-14 text-[var(--text-primary)]"
       aria-label={t('settings.cindyMake.source.title')}
     >
@@ -475,20 +555,26 @@ function CindyMakeSourceStatusCard({
                 />
               )}
           </div>
-          {status?.status === 'ready' && onPrepare && (
-            <Tip text={t('cindyMake.merge.updateHint')}>
-              <Button
-                variant="secondary"
-                className="ml-auto gap-2"
-                disabled={preparing || mergeBlocked}
-                loading={updating}
-                onClick={onPrepare}
-              >
-                {!updating && <Download size={14} aria-hidden />}
-                <span className="relative top-px">{t('cindyMake.merge.getLatest')}</span>
-              </Button>
-            </Tip>
-          )}
+          <div className="ml-auto flex flex-wrap justify-end gap-2">
+            <CindyMakeMergeActions state={displayMerge} busy={updating}>
+              {status?.status === 'ready' && onPrepare && (
+                <Tip
+                  text={t(buildRunning ? 'cindyMake.merge.buildingHint' : 'cindyMake.merge.updateHint')}
+                >
+                  <Button
+                    variant="secondary"
+                    className="gap-2"
+                    disabled={preparing || mergeBlocked || buildRunning}
+                    loading={updating}
+                    onClick={onPrepare}
+                  >
+                    {!updating && <Download size={14} aria-hidden />}
+                    <span className="relative top-px">{t('cindyMake.merge.getLatest')}</span>
+                  </Button>
+                </Tip>
+              )}
+            </CindyMakeMergeActions>
+          </div>
         </div>
         {status && (
           <div className="border-t border-[var(--border-default)] pt-3">
@@ -536,7 +622,7 @@ function CindyMakeSourceStatusCard({
         )}
       </div>
       {displayMerge ? (
-        <CindyMakeMergeNotice state={displayMerge} busy={updating} />
+        <CindyMakeMergeNotice state={displayMerge} showActions={false} />
       ) : status && (preparing || updating || status.status !== 'ready') ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-default)] px-4 py-3">
           <div className={`min-w-0 flex-1 space-y-1 text-13 ${statusClass}`} role="status">

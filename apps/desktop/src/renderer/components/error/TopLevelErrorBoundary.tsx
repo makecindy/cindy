@@ -35,6 +35,62 @@ interface TopLevelErrorBoundaryState {
   error: NormalizedError | null;
 }
 
+interface RenderEntryContext {
+  entry: string;
+  windowKind: string;
+  appVersion?: string;
+}
+
+/**
+ * Keep the crash record attributable when several renderer windows share the
+ * same main log. Do not include the raw query string: boot session/device IDs
+ * in it are user data and are not needed to identify the entry point.
+ */
+function getRenderEntryContext(): RenderEntryContext {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const view = params.get('view');
+    const ghostPanel = params.get('ghostPanelWindow');
+
+    if (params.get('sidebarWindow') === '1') {
+      return {
+        entry: 'sidebar-window',
+        windowKind: 'sidebar',
+        appVersion: window.electronAPI?.appVersion,
+      };
+    }
+    if (ghostPanel) {
+      return {
+        entry: 'ghost-panel',
+        windowKind: 'ghost-panel',
+        appVersion: window.electronAPI?.appVersion,
+      };
+    }
+    if (params.get('secondaryWindow') === '1') {
+      return {
+        entry: 'secondary-window',
+        windowKind: 'secondary',
+        appVersion: window.electronAPI?.appVersion,
+      };
+    }
+    if (view) {
+      return {
+        entry: `view:${view}`,
+        windowKind: 'utility',
+        appVersion: window.electronAPI?.appVersion,
+      };
+    }
+  } catch {
+    // A malformed/early window URL must not interfere with the crash fallback.
+  }
+
+  return {
+    entry: 'main',
+    windowKind: 'main',
+    appVersion: window.electronAPI?.appVersion,
+  };
+}
+
 export class TopLevelErrorBoundary extends Component<
   { children: ReactNode },
   TopLevelErrorBoundaryState
@@ -47,10 +103,12 @@ export class TopLevelErrorBoundary extends Component<
 
   componentDidCatch(error: unknown, info: ErrorInfo): void {
     const { message, stack } = normalizeError(error);
+    const renderEntry = getRenderEntryContext();
     log.error('top-level render crashed (above RouterProvider)', {
       message,
       stack,
       componentStack: info.componentStack ?? undefined,
+      ...renderEntry,
     });
   }
 

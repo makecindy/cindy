@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -643,7 +644,7 @@ export function CreateWorkerPopover({
 
   return (
     <div className={cn('fixed inset-0 z-50 flex items-center justify-center', className)}>
-      <div className="absolute inset-0 bg-[var(--overlay-modal)]" onClick={onClose} />
+      <div className="absolute inset-0 bg-[var(--overlay-modal)]" />
       <div
         className="relative z-10 w-[500px] rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-6"
         style={{ boxShadow: 'var(--shadow-menu)' }}
@@ -859,20 +860,19 @@ export function CreateWorkerPopover({
           />
         </div>
 
-        <button
+        <Button
+          variant="cta"
+          palette="confirmation"
+          size="lg"
+          loading={isSubmitting}
           type="button"
-          className={cn(
-            'w-full rounded-full py-3 text-14 font-medium leading-none transition-colors',
-            canCreate
-              ? 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)]'
-              : 'bg-[var(--surface-chip)] text-[var(--text-tertiary)] cursor-not-allowed',
-          )}
+          className="w-full"
           disabled={!canCreate}
           aria-busy={isSubmitting}
           onClick={handleCreate}
         >
           {resolvedSubmitLabel}
-        </button>
+        </Button>
       </div>
     </div>
   );

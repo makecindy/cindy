@@ -199,7 +199,7 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
     <div className="flex flex-col gap-[14px]">
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-1 min-w-0">
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+          <h2 id="settings-search-settings-builtinTools-title" className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
             {t('settings.builtinTools.title')}
           </h2>
           <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">

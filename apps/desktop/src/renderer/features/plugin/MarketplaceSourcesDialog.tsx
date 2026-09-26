@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * 已添加市场管理对话框：从「添加插件市场」里的入口按钮进入。
  *
@@ -11,7 +12,6 @@ import { RefreshCw, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import type { MarketSourceSummary } from '../../../shared/pluginMarket';
@@ -139,6 +139,7 @@ export function MarketplaceSourcesDialog({
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
             'fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
             'flex max-h-[85vh] w-full select-none flex-col rounded-xl p-4',
@@ -252,39 +253,30 @@ export function MarketplaceSourcesDialog({
                     </div>
                   ) : null}
                   <div className="mt-2.5 flex items-center justify-end gap-2">
-                    <button
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      compact
+                      loading={busySource === source.name}
                       type="button"
                       disabled={busySource !== null}
                       onClick={() => void handleRefresh(source.name)}
-                      className={cn(
-                        'inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--text-primary)]',
-                        'transition-colors hover:bg-[var(--surface-hover-soft)]',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                        'disabled:cursor-not-allowed disabled:opacity-40',
-                      )}
                     >
-                      {busySource === source.name ? (
-                        <Spinner size={12} />
-                      ) : (
                         <RefreshCw size={12} aria-hidden="true" />
-                      )}
                       {t('settings.ghosts.market.sources.refresh')}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      tone="danger"
+                      compact
                       type="button"
                       disabled={busySource !== null}
                       onClick={() => void handleRemove(source)}
-                      className={cn(
-                        'inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-12 font-medium',
-                        'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,transparent)] text-[hsl(var(--destructive))]',
-                        'transition-colors hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,transparent)]',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--destructive))]',
-                        'disabled:cursor-not-allowed disabled:opacity-40',
-                      )}
                     >
                       <Trash2 size={12} aria-hidden="true" />
                       {t('settings.ghosts.market.sources.remove')}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ))}

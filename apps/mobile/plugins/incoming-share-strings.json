@@ -1,0 +1,37 @@
+{
+  "en": {
+    "receivedTitle": "Files received",
+    "receivedMessage": "Open Cindy manually to continue.",
+    "failedTitle": "Couldn’t receive files",
+    "failedMessage": "Share the files again.",
+    "done": "Close Share"
+  },
+  "zh-Hans": {
+    "receivedTitle": "文件已接收",
+    "receivedMessage": "请手动打开 Cindy 继续。",
+    "failedTitle": "未能接收文件",
+    "failedMessage": "请重新分享文件。",
+    "done": "关闭分享"
+  },
+  "zh-Hant": {
+    "receivedTitle": "已接收檔案",
+    "receivedMessage": "請手動開啟 Cindy 繼續。",
+    "failedTitle": "無法接收檔案",
+    "failedMessage": "請重新分享檔案。",
+    "done": "關閉分享"
+  },
+  "ja": {
+    "receivedTitle": "ファイルを受け取りました",
+    "receivedMessage": "Cindy を手動で開いて続けてください。",
+    "failedTitle": "ファイルを受け取れませんでした",
+    "failedMessage": "もう一度ファイルを共有してください。",
+    "done": "共有を閉じる"
+  },
+  "ko": {
+    "receivedTitle": "파일을 받았어요",
+    "receivedMessage": "Cindy를 직접 열어 계속해 주세요.",
+    "failedTitle": "파일을 받지 못했어요",
+    "failedMessage": "파일을 다시 공유해 주세요.",
+    "done": "공유 닫기"
+  }
+}

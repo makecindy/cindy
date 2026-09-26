@@ -66,20 +66,19 @@ Desktop 测试按成本拆成默认层与显式层：
 
 - `standard`：普通单测，以及一条代表性的真实 Git smoke；默认 `test:unit` 只运行这一层。
 - `git-integration`：文件名为 `*.git-integration.test.ts` 的完整真实 Git 覆盖，由
-  `pnpm test:git-integration` 显式运行，并通过 global setup 获取以 Git common-dir
-  派生的本机回环端口锁。
+  `pnpm test:git-integration` 显式运行。Vitest 内部不再获取跨 worktree 资源锁。
 
 远端 `client-ci` 以独立并行 job 在每个 PR、`main` push 和手动触发时运行完整
-`git-integration` 层；本地提交前门禁默认是 `test:unit:related`，修改真实 Git 行为时可按需
-显式补跑完整层。CI 仍跑完整 `test:unit`。
+`git-integration` 层；本地按改动风险选测，默认入口为 `test:unit:related`。
 
-因此同一仓库的多个 worktree 可以并行完成默认单测；只有显式运行完整 Git 集成层时才排队：
+同一仓库的多个 worktree 默认独立执行测试，不共享单任务配额。需要主动排队时，在根级
+测试命令后传 `--lock`；它只协调同样选择排队的本地重型 runner，不能限制其它入口。
+锁按 Git common-dir 区分 clone，只监听 `127.0.0.1`，退出后自动释放，等待上限为
+15 分钟；CI 与 guard 不参与。`--no-lock` 仍接受为兼容参数，两个选项不能同时使用。
+单次运行的 worker 默认值与并发限制保持不变，可按本机预算选择定向 Vitest 参数。
 
-- 同一主仓的 worktree 共享 common-dir，因此只有重型层排队执行。
-- 独立仓库不共享锁，不会互相阻塞。
-- 锁只监听 `127.0.0.1`，不发起业务网络请求；测试进程退出后由操作系统自动释放，不产生
-  stale lock 文件。
-- 无 `.git` 的源码归档按 checkout 实际路径派生锁，不因缺少 Git 元数据而启动失败。
+测试分层仍需满足：
+
 - 两个 project 的 include/exclude 必须互补；默认层以低成本 smoke 守住主链路，完整层保留
   index、patch、hook、ref、worktree 等组合语义。
 - Vitest 3.2 的 inline project 不会自动继承根 CLI 的 `--exclude`；配置必须把这些排除项

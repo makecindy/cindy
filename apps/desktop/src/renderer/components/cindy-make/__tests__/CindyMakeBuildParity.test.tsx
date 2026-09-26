@@ -63,6 +63,17 @@ it('replaces the single live line on progress, falls back at stage changes, and 
   expect(screen.queryByRole('status')).toBeNull();
 });
 
+it('adds the optional latest-source step only to builds that captured the enabled setting', () => {
+  const { rerender } = render(
+    <CindyMakeBuildProgress build={{ status: 'syncing', syncLatestSource: true }} />,
+  );
+  expect(screen.getByText('cindyMake.history.progress.syncing')).toBeTruthy();
+  expect(screen.getByRole('status').textContent).toBe('cindyMake.personal.status.syncing');
+
+  rerender(<CindyMakeBuildProgress build={{ status: 'merging' }} />);
+  expect(screen.queryByText('cindyMake.history.progress.syncing')).toBeNull();
+});
+
 it.each(['merging', 'failed', 'ready'] as const)(
   'shows live status only during an active build, without a merge navigation button: %s',
   (status) => {

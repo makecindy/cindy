@@ -33,7 +33,7 @@ export function SharedTaskEndedNotice({ onJoin }: { onJoin(): void }) {
   return <Dialog.Root open={open} onOpenChange={(next) => { if (!next) setOwner(null); }}>
     <Dialog.Portal>
       <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
-      <Dialog.Content className="fixed left-1/2 top-1/2 z-[10001] max-h-[calc(100dvh-32px)] w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-[var(--text-primary)]">
+      <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="fixed left-1/2 top-1/2 z-[10001] max-h-[calc(100dvh-32px)] w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-[var(--text-primary)]">
         <div className="mb-4 flex items-center justify-between gap-2">
           <Dialog.Title className="text-18 font-medium">{t('sharedTask.ended')}</Dialog.Title>
           <Dialog.Close asChild><Button variant="secondary" size="lg" className="w-9 border-transparent bg-transparent p-0" aria-label={t('sharedTask.dismiss')}><X size={18} aria-hidden /></Button></Dialog.Close>

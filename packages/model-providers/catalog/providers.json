@@ -67,6 +67,7 @@
           {
             "id": "xai/grok-4.7",
             "name": "Grok 4.7",
+            "fastModelId": "xai/grok-4.7-build-fast",
             "group": "grok",
             "sortOrder": 47,
             "contextWindow": 500000,
@@ -190,6 +191,7 @@
           {
             "id": "xai/grok-4.7",
             "name": "Grok 4.7",
+            "fastModelId": "xai/grok-4.7-build-fast",
             "group": "grok",
             "sortOrder": 47,
             "contextWindow": 500000,
@@ -313,6 +315,7 @@
           {
             "id": "grok-4.7",
             "name": "Grok 4.7",
+            "fastModelId": "grok-4.7-build-fast",
             "piApi": "openai-responses",
             "group": "grok",
             "sortOrder": 47,
@@ -424,6 +427,34 @@
     }
   ],
   "presets": [
+    {
+      "id": "sub2api",
+      "name": "Sub2API",
+      "docsUrl": "https://github.com/Wei-Shaw/sub2api",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://{endpoint}/v1",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-responses",
+          "modelsUrl": "https://{endpoint}/v1/models?client_version=0.147.0",
+          "models": []
+        },
+        "codex": {
+          "baseUrl": "https://{endpoint}/v1",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-responses",
+          "modelsUrl": "https://{endpoint}/v1/models?client_version=0.147.0",
+          "models": []
+        },
+        "pi": {
+          "baseUrl": "https://{endpoint}/v1",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-responses",
+          "modelsUrl": "https://{endpoint}/v1/models?client_version=0.147.0",
+          "models": []
+        }
+      }
+    },
     {
       "id": "openrouter",
       "name": "OpenRouter",
@@ -2106,13 +2137,13 @@
           "baseUrl": "https://api.xiaomimimo.com/anthropic",
           "models": [
             {
-              "id": "mimo-v2.5-pro",
-              "name": "MiMo V2.5 Pro",
+              "id": "mimo-v2.6-pro",
+              "name": "MiMo V2.6 Pro",
               "contextWindow": 1000000
             },
             {
-              "id": "mimo-v2.5",
-              "name": "MiMo V2.5",
+              "id": "mimo-v2.6-flash",
+              "name": "MiMo V2.6 Flash",
               "contextWindow": 1000000
             }
           ]
@@ -2122,13 +2153,13 @@
           "wireProtocol": "openai-chat",
           "models": [
             {
-              "id": "mimo-v2.5-pro",
-              "name": "MiMo V2.5 Pro",
+              "id": "mimo-v2.6-pro",
+              "name": "MiMo V2.6 Pro",
               "contextWindow": 1000000
             },
             {
-              "id": "mimo-v2.5",
-              "name": "MiMo V2.5",
+              "id": "mimo-v2.6-flash",
+              "name": "MiMo V2.6 Flash",
               "contextWindow": 1000000
             }
           ]
@@ -2139,19 +2170,20 @@
           "piCatalogProviderId": "xiaomi",
           "models": [
             {
-              "id": "mimo-v2.5",
-              "name": "MiMo-V2.5",
+              "id": "mimo-v2.6-pro",
+              "name": "MiMo-V2.6-Pro",
               "contextWindow": 1048576,
               "supportsImageInput": true
             },
             {
-              "id": "mimo-v2.5-pro",
-              "name": "MiMo-V2.5-Pro",
-              "contextWindow": 1048576
+              "id": "mimo-v2.6-flash",
+              "name": "MiMo-V2.6-Flash",
+              "contextWindow": 1048576,
+              "supportsImageInput": true
             },
             {
-              "id": "mimo-v2.5-pro-ultraspeed",
-              "name": "MiMo-V2.5-Pro-UltraSpeed",
+              "id": "mimo-v2.6-pro-ultraspeed",
+              "name": "MiMo-V2.6-Pro-UltraSpeed",
               "contextWindow": 1048576
             }
           ]
@@ -2169,13 +2201,13 @@
           "baseUrl": "https://token-plan-cn.xiaomimimo.com/anthropic",
           "models": [
             {
-              "id": "mimo-v2.5-pro",
-              "name": "MiMo V2.5 Pro",
+              "id": "mimo-v2.6-pro",
+              "name": "MiMo V2.6 Pro",
               "contextWindow": 1000000
             },
             {
-              "id": "mimo-v2.5",
-              "name": "MiMo V2.5",
+              "id": "mimo-v2.6-flash",
+              "name": "MiMo V2.6 Flash",
               "contextWindow": 1000000
             }
           ]
@@ -2185,13 +2217,13 @@
           "wireProtocol": "openai-chat",
           "models": [
             {
-              "id": "mimo-v2.5-pro",
-              "name": "MiMo V2.5 Pro",
+              "id": "mimo-v2.6-pro",
+              "name": "MiMo V2.6 Pro",
               "contextWindow": 1000000
             },
             {
-              "id": "mimo-v2.5",
-              "name": "MiMo V2.5",
+              "id": "mimo-v2.6-flash",
+              "name": "MiMo V2.6 Flash",
               "contextWindow": 1000000
             }
           ]
@@ -2202,15 +2234,16 @@
           "piCatalogProviderId": "xiaomi-token-plan-cn",
           "models": [
             {
-              "id": "mimo-v2.5",
-              "name": "MiMo-V2.5",
+              "id": "mimo-v2.6-pro",
+              "name": "MiMo-V2.6-Pro",
               "contextWindow": 1048576,
               "supportsImageInput": true
             },
             {
-              "id": "mimo-v2.5-pro",
-              "name": "MiMo-V2.5-Pro",
-              "contextWindow": 1048576
+              "id": "mimo-v2.6-flash",
+              "name": "MiMo-V2.6-Flash",
+              "contextWindow": 1048576,
+              "supportsImageInput": true
             }
           ]
         }

@@ -146,6 +146,7 @@ interface RefreshTask {
   promise: Promise<RefreshResult>;
   lifecycleEpoch: number;
   rerun: boolean;
+  rerunEpoch?: number;
   name?: string;
   opts: RefreshOptions;
 }
@@ -229,7 +230,7 @@ export async function refreshRemoteDeviceSessions(
       coalescingMode: undefined,
     };
     // 先让当前 in-flight snapshot 失效,否则它可能在排队的补跑开始前覆盖 push 带来的新状态。
-    remoteProjectsStore.nextSnapshotEpoch(deviceId, status);
+    existing.rerunEpoch = remoteProjectsStore.nextSnapshotEpoch(deviceId, status);
     return existing.promise;
   }
 
@@ -256,6 +257,15 @@ async function drainRefreshTask(deviceId: string, task: RefreshTask): Promise<Re
     result = await runRefreshRemoteDeviceSessions(deviceId, task.name, task.opts);
     // revoked 是被控端明确拒绝,不再补跑排队请求。
     if (result === 'revoked') return result;
+    // Disconnect/remove/clear must cancel queued work as well as the in-flight
+    // snapshot. A new reconnect refresh can explicitly queue a newer epoch.
+    if (
+      task.rerun &&
+      task.rerunEpoch !== undefined &&
+      !remoteProjectsStore.isLatestSnapshotEpoch(deviceId, task.rerunEpoch, task.opts.status ?? 'active')
+    ) {
+      return 'superseded';
+    }
   } while (task.rerun);
   return result;
 }

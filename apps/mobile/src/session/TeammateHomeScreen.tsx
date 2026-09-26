@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ActivityIndicator, Alert, Keyboard, StyleSheet, View } from 'react-native';
+import { Alert, Keyboard, StyleSheet, View } from 'react-native';
 import { Stack, useIsFocused } from 'expo-router';
 import { Menu } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -20,7 +20,7 @@ import { useTeammateNavigation } from './useTeammateNavigation';
 import { findLastTeammate } from './teammateNavigation';
 import { remoteSessionStore } from './remoteSessionStore';
 
-/** Landing/recovery roster; a verified remembered identity reopens its canonical resource once per entry. */
+/** Explicit entry stays on the roster; startup can restore a verified remembered identity. */
 export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
   const { t } = useTranslation();
   const auth = useAuth();
@@ -45,6 +45,7 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
     useCallback(() => accounts && remoteSessionStore.getSessions().some((session) => remoteSessionStore.isSessionRunning(session.id)), [accounts]),
   );
   useEffect(() => {
+    if (!navigation.restoreLastTeammate) { resumed.current = true; return; }
     if (!focused || !navigation.hydrated || roster.loading || resumed.current) return;
     // A mounted old screen does not own the user's last explicit mode.
     if (navigation.mode !== 'teammates') { resumed.current = true; return; }
@@ -81,7 +82,6 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
           onInteract={() => { resumed.current = true; }} onCreated={(host, ref) => { void navigation.openCreatedTeammate(host, ref); }} /> : null}
       </View>
     </View>
-    {roster.loading ? <ActivityIndicator color={colors.textSecondary} /> : null}
     {navigation.saveFailed ? <Text accessibilityRole="alert" style={styles.notice}>{t('devices.companions.preferenceSaveFailed')}</Text> : null}
     <TeammateList key={searchEpoch} {...roster} current={navigation.lastTeammate} autoFocusSearch={searchEpoch > 0}
       onInteract={() => { resumed.current = true; }}

@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import type { ImMessageSource } from '../../../shared/imMessageSource';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { hasEmbeddedImPrompt } from './userMessageDisplayText';
@@ -23,7 +24,6 @@ import {
   ChevronRight,
   ChevronUp,
   Download,
-  File as FileIcon,
   FileText,
   Folder as FolderIcon,
   Sparkles,
@@ -254,7 +254,7 @@ function UserFileChip({
     <>
       <InlineReferenceChip
         label={fileName}
-        icon={<FileIcon aria-hidden />}
+        icon={<FileTypeIcon name={fileName} />}
         tooltip={refText}
         tooltipMono
         ariaLabel={fileName}
@@ -370,7 +370,7 @@ function UserAttachmentChip({
         {downloadOnly ? (
           <Download size={14} className="shrink-0 text-[var(--msg-user-text)]" />
         ) : (
-          <FileText size={14} className="shrink-0 text-[var(--msg-user-text)]" />
+          <FileTypeIcon name={file.name} size={14} className="shrink-0 text-[var(--msg-user-text)]" />
         )}
         <span className="truncate">{file.name}</span>
       </button>
@@ -671,7 +671,7 @@ function renderContentWithoutPastedText(
               <InlineReferenceChip
                 key={key}
                 label={fileName}
-                icon={<FileIcon aria-hidden />}
+                icon={<FileTypeIcon name={fileName} />}
                 tooltip={ref}
                 tooltipMono
                 ariaLabel={fileName}
@@ -1797,6 +1797,7 @@ export function UserMessage({
                 {blockedByGhost && (
                   <div className="mt-1.5">
                     <ErrorMessageCard
+                      kind="blocked-input"
                       message={blockedByGhost.reason || t('chat.ghostHook.blockedFallback')}
                     />
                   </div>

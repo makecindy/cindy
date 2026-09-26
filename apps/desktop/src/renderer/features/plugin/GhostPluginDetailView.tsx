@@ -1,48 +1,29 @@
+import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * Plugin detail presentation for configuration, Tools, permissions, and factual metadata.
  *
  * Inputs: the renderer-safe Plugin detail model plus the installed Ghost when available.
  * Outputs: accessible detail interactions, Host-owned configuration rows, a single-row responsive
- * action hero, and the sticky top bar carrying the back affordance and macOS window-drag region.
+ * action hero with the shared Switch, and the sticky top bar with back and macOS window dragging.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   AppWindow,
   AlertTriangle,
   ArrowUp,
-  Bot,
   ChevronDown,
   Copy,
-  Cpu,
   Download,
   MessageCircle,
-  FileCode2,
-  FilePen,
   FolderOpen,
-  FolderPlus,
-  Globe,
-  GraduationCap,
-  KeyRound,
   LayoutTemplate,
-  Library,
-  MapPin,
-  Megaphone,
-  MessageCircleQuestion,
   MoreVertical,
-  PanelLeft,
-  PanelRight,
-  Radio,
-  Smartphone,
-  Sparkles,
-  Terminal,
   Trash2,
-  Wrench,
   X,
-  type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -61,7 +42,6 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
-import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import {
   isOfficialGhostId,
@@ -74,6 +54,7 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { IOSSimulatorPreferences } from './IOSSimulatorPreferences';
 import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
 import { ghostPrimaryAction } from './lib/ghostPluginViewModel';
+import { permissionItemIcon } from './lib/permissionItemIcon';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 import './plugin-motion.css';
 
@@ -108,44 +89,6 @@ interface GhostPluginDetailViewProps {
   onIconLoadError?: () => void;
 }
 
-const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
-  cindy: Sparkles,
-  agent: Bot,
-  node: Cpu,
-  tool: Wrench,
-  command: Terminal,
-  panel: PanelRight,
-  'main-view': AppWindow,
-  code: FileCode2,
-  subscribe: Radio,
-  card: LayoutTemplate,
-  network: Globe,
-  notify: Megaphone,
-  confirm: MessageCircleQuestion,
-  fs: FilePen,
-  library: Library,
-  'session-context': MapPin,
-  pick: FolderOpen,
-  preview: AppWindow,
-  skill: GraduationCap,
-  'ios-simulator': Smartphone,
-  workspace: FolderPlus,
-};
-
-/** Chooses a visual affordance without changing the host-owned permission title or meaning. */
-function permissionItemIcon(item: GhostPermissionItem): LucideIcon {
-  if (item.labelKey === 'panelLeft') return PanelLeft;
-  if (
-    item.labelKey === 'networkSecret' ||
-    item.labelKey === 'networkSecretOauth' ||
-    item.labelKey === 'networkSecretGhCli' ||
-    item.labelKey === 'networkSecretIdentity'
-  ) {
-    return KeyRound;
-  }
-  return PERMISSION_ICON[item.kind];
-}
-
 const DETAIL_SECTION_CLASS = 'mt-10';
 const DETAIL_SECTION_HEADING_CLASS =
   'text-18 font-medium leading-[1.444] text-[var(--text-primary)]';
@@ -178,6 +121,7 @@ export function GhostPluginDetailView({
 }: GhostPluginDetailViewProps) {
   const { t } = useTranslation();
   const { scrolled, onScroll } = usePluginDetailScrolled();
+  const enableSwitchId = useId();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
@@ -287,22 +231,21 @@ export function GhostPluginDetailView({
               style={WINDOW_NO_DRAG_STYLE}
             >
               {needsReapproval && !detail.builtin && onReapprove ? (
-                <button
+                <Button
+                  variant="secondary"
+                  size="lg"
                   type="button"
                   onClick={onReapprove}
                   disabled={updateBusy}
-                  className={cn(
-                    'inline-flex h-10 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 text-13 font-medium text-[var(--text-primary)]',
-                    'transition-[background-color,border-color,transform,opacity] duration-150 hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
-                  )}
                 >
                   {t('settings.ghosts.reapproval.action')}
-                </button>
+                </Button>
               ) : updateVersion ? (
                 // 更新提级(设计定稿):有新版本时黑色主 CTA 直达市场更新确认流。
-                <button
+                <Button
+                  variant="cta"
+                  size="lg"
+                  loading={updateBusy}
                   type="button"
                   onClick={onUpdate}
                   disabled={updateBusy}
@@ -312,41 +255,24 @@ export function GhostPluginDetailView({
                       : t('settings.ghosts.market.updateTo', { version: updateVersion })
                   }
                   aria-busy={updateBusy || undefined}
-                  className={cn(
-                    'inline-flex h-10 items-center justify-center gap-1.5 rounded-full px-5 text-13 font-medium',
-                    'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                    'transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--accent-hover)] active:scale-[0.98]',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    'disabled:cursor-wait disabled:opacity-60 disabled:active:scale-100',
-                  )}
                 >
-                  {updateBusy ? (
-                    <Spinner size={14} />
-                  ) : (
                     <>
                       <ArrowUp size={14} aria-hidden="true" />
                       {updateVersion === detail.version
                         ? t('settings.ghosts.market.update')
                         : t('settings.ghosts.market.updateTo', { version: updateVersion })}
                     </>
-                  )}
-                </button>
+                </Button>
               ) : null}
               {primaryAction !== 'manage' ? (
-                <button
+                <Button
+                  variant={updateVersion ? 'secondary' : 'cta'}
+                  size="lg"
                   type="button"
                   onClick={onUse}
                   disabled={!primaryEnabled}
                   title={!enabled ? t('settings.ghosts.detail.useDisabled') : undefined}
-                  className={cn(
-                    'plugin-detail-primary-action inline-flex h-10 min-w-[88px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 text-13 font-medium',
-                    updateVersion
-                      ? 'border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] hover:bg-[var(--surface-hover-soft)]'
-                      : 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]',
-                    'transition-[background-color,transform,opacity] duration-150 active:scale-[0.98]',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
-                  )}
+                  className="plugin-detail-primary-action min-w-[88px] whitespace-nowrap"
                 >
                   {primaryAction === 'command' || primaryAction === 'capability' ? (
                     <MessageCircle size={14} aria-hidden="true" />
@@ -356,28 +282,21 @@ export function GhostPluginDetailView({
                       ? 'settings.ghosts.detail.useAction'
                       : 'settings.ghosts.detail.chatAction',
                   )}
-                </button>
+                </Button>
               ) : null}
               {/* 启用开关带明确文字(设计定稿):状态一目了然,点文字同样可切换。 */}
-              <button
-                type="button"
-                role="switch"
-                onClick={() => {
-                  // 未批准的安装不可切换启用(点了 Main 也会拒);与 updateBusy 同级门控。
-                  if (!toggleDisabled && !needsReapproval) onToggle(!enabled);
-                }}
-                disabled={toggleDisabled || needsReapproval}
-                aria-checked={enabled}
-                aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
+              <label
+                htmlFor={enableSwitchId}
                 className={cn(
                   'flex shrink-0 items-center gap-2 rounded-full py-1 pl-3 pr-1 transition-colors duration-150',
-                  'hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  'disabled:cursor-not-allowed disabled:opacity-60',
+                  'hover:bg-[var(--surface-hover-soft)]',
+                  toggleDisabled || needsReapproval ? 'cursor-not-allowed' : 'cursor-pointer',
                 )}
               >
                 <span
                   className={cn(
                     'text-12',
+                    (toggleDisabled || needsReapproval) && 'opacity-60',
                     enabled ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
                   )}
                 >
@@ -387,25 +306,14 @@ export function GhostPluginDetailView({
                       : 'settings.ghosts.detail.disabledLabel',
                   )}
                 </span>
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    'inline-flex h-5 w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors',
-                    enabled
-                      ? 'bg-[var(--switch-track-on)]'
-                      : 'bg-[var(--switch-track-off)]',
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'block h-4 w-4 rounded-full ring-0 transition-transform',
-                      enabled
-                        ? 'translate-x-4 bg-background'
-                        : 'translate-x-0 bg-[var(--switch-thumb-off)]',
-                    )}
-                  />
-                </span>
-              </button>
+                <Switch
+                  id={enableSwitchId}
+                  checked={enabled}
+                  disabled={toggleDisabled || needsReapproval}
+                  onCheckedChange={onToggle}
+                  aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
+                />
+              </label>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -1066,6 +974,7 @@ function DialogFrame({ children }: { children: ReactNode }) {
         style={WINDOW_NO_DRAG_STYLE}
       />
       <Dialog.Content
+        onPointerDownOutside={(event) => event.preventDefault()}
         className="fixed left-1/2 top-1/2 z-[10000] flex max-h-[70vh] w-[calc(100vw-48px)] max-w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)] focus:outline-none"
         style={WINDOW_NO_DRAG_STYLE}
       >

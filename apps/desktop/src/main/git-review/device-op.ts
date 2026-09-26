@@ -46,6 +46,12 @@ import {
   readReviewSummary,
 } from './ipc.js';
 import { withSessionReviewExecution } from './sshReviewBackend.js';
+import {
+  getTurnChangeSets,
+  listTurnChangeSets,
+  TURN_CHANGE_SET_DETAIL_ID_LIMIT,
+} from '../turn-change-set/store.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 
 const log = createLogger('git-review/device-op');
 
@@ -91,6 +97,20 @@ async function encodeResult(result: unknown): Promise<GitReviewRemoteOpResult> {
 
 async function dispatchRemoteOp(op: string, payload: unknown): Promise<unknown> {
   switch (op) {
+    case 'turn-list':
+      return listTurnChangeSets(parseSessionId(payload));
+    case 'turn-get': {
+      const sessionId = parseSessionId(payload);
+      const ids = (payload as { ids?: unknown }).ids;
+      if (
+        !Array.isArray(ids) ||
+        ids.length > TURN_CHANGE_SET_DETAIL_ID_LIMIT ||
+        ids.some((id) => typeof id !== 'string' || id.length === 0 || id.length > 256)
+      ) {
+        throwIpcError('INVALID_PARAMS', 'Invalid turn change-set ids');
+      }
+      return getTurnChangeSets(sessionId, ids as string[]);
+    }
     case 'get': {
       const { sessionId, options } = parseReviewDataPayload(payload);
       return withSessionReviewExecution(sessionId, () => readReviewData(sessionId, options));
@@ -129,6 +149,8 @@ async function dispatchRemoteOp(op: string, payload: unknown): Promise<unknown> 
 }
 
 const READ_OPS = new Set([
+  'turn-list',
+  'turn-get',
   'get',
   'summary',
   'commits',

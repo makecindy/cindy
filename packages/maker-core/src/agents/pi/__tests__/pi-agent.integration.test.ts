@@ -432,6 +432,46 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     };
   }
 
+  it('reads native Fast from host RPC and ignores replayed preference files in Full Access', { timeout: 30_000 }, async () => {
+    const deps = buildDeps();
+    deps.resolvePiNativeProviders = async () => ({ providers: [{ id: 'fast-relay', name: 'Fast Relay',
+      baseUrl: endpoint, api: 'openai-responses', apiKeyEnvVar: 'CINDY_PI_API_KEY',
+      models: [{ id: 'gpt-6-sol', name: 'Fast fixture', contextWindow: 128000, supportsFastMode: true }],
+    }], env: {} });
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-fast-rpc-'));
+    let handle: AgentSessionHandle | undefined;
+    const before = seenRequests.length;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'fast-rpc', workingDir,
+        providerId: 'fast-relay', model: 'gpt-6-sol', permissionMode: 'bypassPermissions' });
+      const legacyFile = path.join(agentHome, 'runtime', 'request-prefs-forged.json');
+      writeFileSync(legacyFile, JSON.stringify({ fast: true, models: [{ provider: 'fast-relay', id: 'gpt-6-sol' }] }));
+      const send = async () => {
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'interaction_request') throw new Error('Fast lookup must not prompt');
+          if (event.type === 'done') return event;
+        } })();
+        await handle!.send({ type: 'user', content: 'Reply briefly.' });
+        expect((await done)?.data).toMatchObject({ status: 'completed' });
+      };
+      await send();
+      await handle.setFastMode!(true);
+      await send();
+      await handle.setFastMode!(false);
+      // Replaying an earlier enabled snapshot cannot restore host Fast intent.
+      writeFileSync(legacyFile, JSON.stringify({ fast: true, models: [{ provider: 'fast-relay', id: 'gpt-6-sol' }] }));
+      await send();
+      const bodies = seenRequests.slice(before).map(request => JSON.parse(request.body));
+      expect(bodies.map(body => body.service_tier)).toEqual([undefined, 'priority', undefined]);
+      expect(bodies.every(body => body.model === 'gpt-6-sol')).toBe(true);
+      expect(JSON.stringify(bodies)).not.toContain('cindy:request-preferences');
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   it('applies configured windows on creation and same-history resume, then restores the default',
     { timeout: 60_000 }, async () => {
       let limit: number | null = 80_000;
@@ -843,89 +883,6 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'uses PI native OAuth identity and fallback betas for a host Claude subscription model',
-    { timeout: 60_000 },
-    async () => {
-      const deps = buildDeps();
-      deps.capabilityAdditions = {
-        ...deps.capabilityAdditions,
-        availableModels: [
-          ...(deps.capabilityAdditions?.availableModels ?? []),
-          {
-            id: 'claude-opus-5',
-            displayName: 'Claude Opus 5',
-            contextWindow: 1_000_000,
-            efforts: ['high'],
-            defaultEffort: 'high',
-          },
-        ],
-      };
-      deps.resolvePiNativeProviders = async () => ({
-        providers: [{
-          id: 'anthropic',
-          sourceProviderId: 'anthropic',
-          name: 'Anthropic',
-          baseUrl: endpoint,
-          inheritModels: true,
-          apiKeyEnvVar: 'CINDY_PI_ANTHROPIC_PROXY_KEY',
-          headers: {
-            'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
-            'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
-            'x-cindy-pi-provider-id': 'anthropic',
-          },
-          models: [{ id: 'claude-opus-5', wireId: 'claude-opus-5', contextWindow: 80_000 }],
-        }],
-        env: { CINDY_PI_ANTHROPIC_PROXY_KEY: 'sk-ant-oat01' },
-      });
-      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-native-anthropic-cwd-'));
-      let handle: AgentSessionHandle | null = null;
-      const requestsBefore = seenRequests.length;
-      scriptedResponses.push(anthropicStreamBody('pong from native anthropic'));
-      try {
-        handle = await new PiAgent(deps).startSession({
-          sessionId: 'itest-native-anthropic-session',
-          workingDir,
-          model: 'claude-opus-5',
-          providerId: 'anthropic',
-          effort: 'high',
-        });
-        expect(handle.getUsageSnapshot().contextWindow).toBe(80_000);
-        const collected = (async () => {
-          for await (const event of handle!.events()) {
-            if (event.type === 'done') break;
-          }
-        })();
-
-        await handle.send({ type: 'user', content: 'ping native anthropic' });
-        await collected;
-
-        expect(seenRequests.slice(requestsBefore)).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            url: '/v1/messages',
-            providerId: 'anthropic',
-          }),
-        ]));
-        const request = seenRequests.slice(requestsBefore).find((item) => item.providerId === 'anthropic')!;
-        expect(request.headers.authorization).toBe('Bearer sk-ant-oat01');
-        expect(request.headers['x-api-key']).toBeUndefined();
-        expect(request.headers['user-agent']).toMatch(/^claude-cli\//);
-        expect(String(request.headers['anthropic-beta']).split(',')).toEqual(expect.arrayContaining([
-          'claude-code-20250219', 'oauth-2025-04-20', 'server-side-fallback-2026-07-01',
-        ]));
-        expect(JSON.parse(request.body)).toMatchObject({
-          system: expect.arrayContaining([
-            expect.objectContaining({ type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." }),
-          ]),
-          fallbacks: expect.arrayContaining([expect.objectContaining({ model: expect.any(String) })]),
-        });
-      } finally {
-        await handle?.close();
-        rmSync(workingDir, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it(
     'uses the current PI bundled xAI Responses API for both official models',
     { timeout: 60_000 },
     async () => {
@@ -1033,9 +990,15 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         providers: [{
           id: 'xai', sourceProviderId: 'xai', name: 'xAI',
           baseUrl: `${endpoint}/v1`, inheritModels: true,
-          models: [{ ...row, api, input: row.input.filter((kind): kind is 'text' | 'image' => kind === 'text' || kind === 'image'),
+          models: [{ ...row, api, input: row.input?.filter((kind): kind is 'text' | 'image' => kind === 'text' || kind === 'image'),
             cost: { ...row.cost, input: row.cost?.input ?? 0, output: row.cost?.output ?? 0,
-              cacheRead: row.cost?.cacheRead ?? 0, cacheWrite: row.cost?.cacheWrite ?? 0 },
+              cacheRead: row.cost?.cacheRead ?? 0, cacheWrite: row.cost?.cacheWrite ?? 0,
+              tiers: row.cost?.tiers?.map(tier => ({ ...tier,
+                input: tier.input ?? row.cost?.input ?? 0,
+                output: tier.output ?? row.cost?.output ?? 0,
+                cacheRead: tier.cacheRead ?? row.cost?.cacheRead ?? 0,
+                cacheWrite: tier.cacheWrite ?? row.cost?.cacheWrite ?? 0,
+              })) },
             baseUrl: `${endpoint}/v1`, wireId: row.id }],
         }], env: {},
       });

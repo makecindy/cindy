@@ -1706,6 +1706,15 @@ private let agentIslandClaudeMarkSVG = """
   <path fill="black" fill-rule="evenodd" clip-rule="evenodd" d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0v-3.1h3V5h17.998zM6 10.949h1.488V8.102H6zm10.51 0H18V8.102h-1.49z"/>
 </svg>
 """
+private let agentIslandPiMarkSVG = """
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <g fill="none" stroke="black" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3.6 6.6h16.8"/>
+    <path d="M8.4 6.6v11.8"/>
+    <path d="M15.6 6.6v9.6c0 1.5.9 2.2 2.4 2.2"/>
+  </g>
+</svg>
+"""
 
 private enum AgentIslandTopBarHeightMode {
   case matchNotch
@@ -3976,6 +3985,7 @@ func sourceLabel(for agentKind: String) -> String {
   let lower = agentKind.lowercased()
   if lower.contains("codex") { return "Codex" }
   if lower.contains("claude") { return "Claude" }
+  if lower == "pi" { return "Pi" }
   return agentKind.isEmpty ? "Agent" : agentKind
 }
 
@@ -4059,10 +4069,14 @@ struct StatusDot: View {
 enum AgentIslandSessionVendor {
   case cc
   case codex
+  case pi
 }
 
 func agentIslandSessionVendor(for session: AgentIslandSession) -> AgentIslandSessionVendor {
-  session.agentKind.lowercased().contains("codex") ? .codex : .cc
+  let kind = session.agentKind.lowercased()
+  if kind.contains("codex") { return .codex }
+  if kind == "pi" { return .pi }
+  return .cc
 }
 
 final class AgentIslandVendorMarkImageStore {
@@ -4072,7 +4086,15 @@ final class AgentIslandVendorMarkImageStore {
 
   func image(for vendor: AgentIslandSessionVendor) -> NSImage? {
     if let cached = cache[vendor] { return cached }
-    let svg = vendor == .codex ? agentIslandCodexMarkSVG : agentIslandClaudeMarkSVG
+    let svg: String
+    switch vendor {
+    case .cc:
+      svg = agentIslandClaudeMarkSVG
+    case .codex:
+      svg = agentIslandCodexMarkSVG
+    case .pi:
+      svg = agentIslandPiMarkSVG
+    }
     guard let data = svg.data(using: .utf8), let image = NSImage(data: data) else {
       return nil
     }
@@ -4094,7 +4116,7 @@ struct AgentIslandSessionVendorIcon: View {
   }
 
   private var markSize: CGFloat {
-    vendor == .codex ? 12 : 13
+    vendor == .cc ? 13 : 12
   }
 
   var body: some View {

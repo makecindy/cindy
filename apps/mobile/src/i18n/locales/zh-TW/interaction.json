@@ -279,6 +279,7 @@
     }
   },
   "companion": {
+    "permissionRequest": "{{name}} 想請你確認一下",
     "operation": "操作",
     "details": "檢視詳情",
     "fields": {

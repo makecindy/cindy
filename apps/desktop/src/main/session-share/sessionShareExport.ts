@@ -264,7 +264,7 @@ async function collectSessionPhaseA(
       sdkSessionIds = sdkSessionIds.filter((id) => allowed.has(id));
     }
     // 与 loadClaudeTranscriptAnchorIndex 同口径:遍历全部候选目录
-    // (CLAUDE_CONFIG_DIR → XDT_USER_DATA_DIR/claude-home → ~/.claude),
+    // (CLAUDE_CONFIG_DIR → ~/.claude → 旧版 dev 的 XDT_USER_DATA_DIR/claude-home),
     // 只查第一个会把落在后续候选的 jsonl 误记缺失(review bot P1)。
     const projectsRoots = defaultClaudeConfigDirCandidates().map((dir) =>
       path.join(dir, 'projects'),

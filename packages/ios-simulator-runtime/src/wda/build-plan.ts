@@ -38,6 +38,7 @@ export interface CreateWdaBuildPlanOptions {
   architecture?: "arm64" | "x86_64";
   controlPort?: number;
   mjpegPort?: number;
+  developerDirectory?: string;
 }
 
 function requireAbsolute(candidate: string, label: string): string {
@@ -124,6 +125,9 @@ export function createWdaBuildPlan(
     // ownership without persisting or trusting a PID.
     `UPGRADE_TIMESTAMP=${ownerFingerprint}`,
   ];
+  const toolchainEnvironment = options.developerDirectory
+    ? { DEVELOPER_DIR: options.developerDirectory }
+    : {};
 
   return {
     projectPath,
@@ -134,13 +138,14 @@ export function createWdaBuildPlan(
       command: XCODEBUILD,
       args: [...sharedArgs, "build-for-testing", ...buildSettings],
       cwd: checkoutPath,
-      env: createWdaChildEnvironment(),
+      env: createWdaChildEnvironment(process.env, toolchainEnvironment),
     },
     launch: {
       command: XCODEBUILD,
       args: [...sharedArgs, "test-without-building", ...buildSettings],
       cwd: checkoutPath,
       env: createWdaChildEnvironment(process.env, {
+        ...toolchainEnvironment,
         USE_PORT: String(controlPort),
         MJPEG_SERVER_PORT: String(mjpegPort),
       }),

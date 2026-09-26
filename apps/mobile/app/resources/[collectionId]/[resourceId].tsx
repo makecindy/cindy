@@ -54,6 +54,8 @@ export default function RemoteResourceResolverScreen() {
   const [error, setError] = useState<string | null>(null);
   const [preparation, setPreparation] = useState<{ binding: string; resource: RemoteResource; stage: string } | null>(null);
   const [retrying, setRetrying] = useState(false);
+  // Scoped to the resource binding so another teammate never inherits this notice.
+  const [retryFailed, setRetryFailed] = useState<string | null>(null);
   const retryLock = useRef(false);
   const visiblePreparation = preparation?.binding === binding ? preparation : null;
   const [attempt, setAttempt] = useState(0);
@@ -141,12 +143,13 @@ export default function RemoteResourceResolverScreen() {
   const retryInvitation = async () => {
     const action = visiblePreparation?.resource.actions?.find(item => !item.disabled);
     if (!action || retryLock.current) return;
-    retryLock.current = true; setRetrying(true);
+    retryLock.current = true; setRetrying(true); setRetryFailed(null);
     try {
       await invokeRemoteResourceAction(invoke, host, { collectionId, resourceRef: visiblePreparation!.resource.ref, actionId: action.id }, i18n.language);
       if (currentBinding.current === binding) setAttempt(value => value + 1);
-    } catch (cause) {
-      if (currentBinding.current === binding) setError(formatRemoteError(cause));
+    } catch {
+      // Keep the preparation (and its completed work) visible; only this retry failed.
+      if (currentBinding.current === binding) setRetryFailed(binding);
     } finally { retryLock.current = false; setRetrying(false); }
   };
 
@@ -178,11 +181,17 @@ export default function RemoteResourceResolverScreen() {
         <View style={styles.center} testID="remoteResourceResolver.preparation">
           <RemoteCompanionAvatar avatar={visiblePreparation.resource.display.avatar} deviceId={deviceId} name={resolveRemoteText(visiblePreparation.resource.display.title, i18n.language)} online={status === 'online'} size={iconSize.glyph} />
           <Text style={styles.preparationTitle}>{t('devices.companions.invitation.waiting', { name: resolveRemoteText(visiblePreparation.resource.display.title, i18n.language) })}</Text>
-          {visiblePreparation.stage !== 'failed' && <ActivityIndicator color={colors.textSecondary} />}
-          <Text style={styles.muted}>{t(`devices.companions.invitation.${visiblePreparation.stage}`, { name: resolveRemoteText(visiblePreparation.resource.display.title, i18n.language) })}</Text>
-          {visiblePreparation.stage === 'failed' && visiblePreparation.resource.actions?.some(action => !action.disabled) && (
+          {/* Desktop BotInvitationWelcome: reassurance (or the failure) first, then the live stage. */}
+          <Text style={styles.muted}>{t(visiblePreparation.stage === 'failed' ? 'devices.companions.invitation.failed' : 'devices.companions.invitation.background')}</Text>
+          {visiblePreparation.stage !== 'failed' ? (
+            <View accessibilityLiveRegion="polite" style={styles.preparationStage} testID="remoteResourceResolver.preparationStage">
+              <ActivityIndicator color={colors.textSecondary} />
+              <Text style={styles.preparationStageText}>{t(`devices.companions.invitation.${visiblePreparation.stage === 'ready' ? 'welcome' : visiblePreparation.stage}`, { name: resolveRemoteText(visiblePreparation.resource.display.title, i18n.language) })}</Text>
+            </View>
+          ) : visiblePreparation.resource.actions?.some(action => !action.disabled) ? (
             <MainWindowActionButton action={{ label: retrying ? t('devices.resources.resolving') : t('devices.resources.retry'), onPress: () => { void retryInvitation(); }, testID: 'remoteResourceResolver.retryInvitation' }} />
-          )}
+          ) : null}
+          {retryFailed === binding ? <Text accessibilityRole="alert" style={styles.muted} testID="remoteResourceResolver.retryInvitationFailed">{t('devices.companions.invitation.retryFailed')}</Text> : null}
         </View>
       ) : (
         <View style={styles.center}>
@@ -200,4 +209,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   content: { flex: 1, gap: spacing.lg, justifyContent: 'center', padding: spacing.xl },
   preparationTitle: { color: colors.textPrimary, fontSize: typeScale.title, textAlign: 'center' },
   muted: { textAlign: 'center', color: colors.textSecondary, fontSize: typeScale.footnote },
+  preparationStage: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  preparationStageText: { color: colors.textPrimary, fontSize: typeScale.footnote },
 });

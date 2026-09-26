@@ -10,6 +10,7 @@ import {
   publishPersonalVersion,
   versionDirectory,
   assertVersionDirectory,
+  withVersionStore,
   type VersionProfile,
 } from './versionStore.js';
 import { defaultPtySpawn, type PtySpawnFn } from '../terminal/ptyFactory.js';
@@ -32,6 +33,7 @@ import {
 import type { CindyMakePersonalBuildState } from '../../shared/cindyMakeSession.js';
 import { commitLocalFiles, commitPersonalFiles, MAKE_GIT_IDENTITY } from './localHistory.js';
 import { createPersonalBuildCleanup } from './personalBuildCleanup.js';
+import { cleanupPersonalVersions } from './personalVersionCleanup.js';
 import { createMakeBuildOutput, makeBuildErrorDiagnostic } from './buildDiagnostic.js';
 import { createMakeBuildLineOutput, runMakeBuildStep } from './buildProgress.js';
 import type { CindyMakeBuildDiagnostic } from '../../shared/cindyMakeBuildDiagnostic.js';
@@ -521,8 +523,15 @@ export async function buildCindyPersonal(
       await cleanup.clean();
       await assertSource(candidateTree);
       check();
-      if (versionId) publishPersonalVersion(task.userData, versionId);
+      if (versionId) {
+        const id = versionId;
+        await withVersionStore(task.userData, async () => {
+          check();
+          publishPersonalVersion(task.userData, id);
+        });
+      }
       published = true;
+      if (versionId) await cleanupPersonalVersions(task.userData);
       return artifact;
     } finally {
       let cleanupFailed = false;

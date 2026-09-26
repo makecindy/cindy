@@ -313,6 +313,11 @@ export class AppServerClient {
     return response;
   }
 
+  /** Only local transports can prove this pre-protocol failure and process exit. */
+  nativeSqliteInitializationFailed(): boolean {
+    return !this.initialized && this.transport?.nativeSqliteInitializationFailed?.() === true;
+  }
+
   /**
    * close() 是幂等的; reason 仅用于 reject pending requests 的错误消息。
    * - reject 所有挂起 promise

@@ -281,8 +281,12 @@ describe("SVG export lifecycle", () => {
     expect(native.capture).not.toHaveBeenCalled();
     expect(svgNodes(bad)).toHaveLength(0);
     expect(svgNodes(good)).toEqual(goodNodes);
-    expect(host.textContent).toContain("broken attachment");
-    expect(host.textContent).toContain("broken inline");
+    expect(host.textContent?.replace(/\u00a0/g, " ")).toContain(
+      "broken attachment",
+    );
+    expect(host.textContent?.replace(/\u00a0/g, " ")).toContain(
+      "broken inline",
+    );
     expect(host.textContent).not.toContain("cindy-media://bad");
     await act(async () => {
       lateLoads.forEach((load) => load());
@@ -315,7 +319,9 @@ describe("SVG export lifecycle", () => {
       });
       expect(svgNodes(good)).toHaveLength(2);
       expect(svgNodes(bad)).toHaveLength(0);
-      expect(host.textContent).toContain("broken inline");
+      expect(host.textContent?.replace(/\u00a0/g, " ")).toContain(
+        "broken inline",
+      );
       // Bundled resource names are not queryable via Android's URI-only cache API.
       expect(
         native.queryCache.mock.calls.every(([uris]) =>

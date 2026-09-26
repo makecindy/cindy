@@ -279,6 +279,7 @@
     }
   },
   "companion": {
+    "permissionRequest": "{{name}} 님이 확인을 기다리고 있어요",
     "operation": "작업",
     "details": "세부 정보",
     "fields": {

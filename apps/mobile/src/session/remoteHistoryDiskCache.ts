@@ -32,6 +32,7 @@ function validSummary(value: unknown, depth = 0): boolean {
   const s = value as Record<string, unknown>;
   return ['key', 'firstMessageId', 'lastMessageId', 'revision'].every(key => typeof s[key] === 'string')
     && ['startedAtMs', 'endedAtMs', 'messageCount', 'toolCount'].every(key => typeof s[key] === 'number' && Number.isFinite(s[key]))
+    && (s.parentToolUseId === undefined || typeof s.parentToolUseId === 'string')
     && typeof s.isStreaming === 'boolean' && (!s.preview || validSummary(s.preview, depth + 1));
 }
 function validItems(value: unknown, depth = 0): boolean {
@@ -39,7 +40,7 @@ function validItems(value: unknown, depth = 0): boolean {
   return value.every(item => item && typeof item.key === 'string' && (
     item.type === 'messages' ? Array.isArray(item.messages) && item.messages.every((m: RemoteMessage) =>
       m && typeof m.id === 'string' && typeof m.clientId === 'string' && typeof m.role === 'string'
-      && typeof m.createdAt === 'string')
+      && typeof m.createdAt === 'string') && (!item.deferred || validSummary(item.deferred))
       : item.type === 'work' && validSummary(item.summary)
         && (!item.children || validItems(item.children, depth + 1))
   ));
@@ -78,7 +79,7 @@ export async function writeHistoryDisk(authority: Authority, snapshot: HistoryVi
       ...(value.preview ? { preview: summary(value.preview) } : {}),
     });
     const items = (values: readonly HistoryViewItem<RemoteMessage>[]): HistoryViewItem<RemoteMessage>[] => values.map(item =>
-      item.type === 'messages' ? { ...item, messages: messages(item.messages) }
+      item.type === 'messages' ? { ...item, messages: messages(item.messages), ...(item.deferred ? { deferred: summary(item.deferred) } : {}) }
         : { ...item, summary: summary(item.summary), ...(item.children ? { children: items(item.children) } : {}) });
     const text = JSON.stringify({ version: 1, items: items(snapshot.items),
       details: [...snapshot.details].filter(([, detail]) => detail.complete && !detail.loading && !detail.error)

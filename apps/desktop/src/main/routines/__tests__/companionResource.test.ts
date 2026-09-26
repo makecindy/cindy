@@ -42,3 +42,14 @@ it('uses a stable bot-scoped creation identity for an acknowledgement retry', as
   expect(h.createOnce.mock.calls[0][2]).toMatch(/^[a-f0-9]{64}$/);
   expect(h.save).not.toHaveBeenCalled();
 });
+
+
+it('projects and saves check preferences through the owner-scoped remote resource', async () => {
+  const definition = { ...routine, silentWhenIdle: false, preRunHook: { command: 'node check.mjs', timeoutMs: 2500 } };
+  h.list.mockResolvedValue([definition]);
+  const result = await getBotRoutineRemoteResource('bot/rule');
+  expect(result.blocks?.[0].data).toMatchObject({ supportsPreRunCheck: true, input: { silentWhenIdle: false, preRunHook: definition.preRunHook } });
+  expect(h.run).not.toHaveBeenCalled();
+  await invokeBotRoutineRemoteAction('bot/rule', { ...request('routine-save'), input: { revision: 4, definition } });
+  expect(h.save).toHaveBeenCalledWith('bot', expect.objectContaining({ silentWhenIdle: false, preRunHook: definition.preRunHook }), 'rule', 4);
+});

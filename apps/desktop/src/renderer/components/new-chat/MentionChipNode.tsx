@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * Atomic Tiptap node for file, directory, Agent, command, conversation and
  * project references in the composer. The React NodeView keeps all reference
@@ -10,7 +11,6 @@ import { useEffect, useState } from 'react';
 import {
   Bot,
   CornerDownRight,
-  File,
   Folder,
   FolderOpen,
   Globe2,
@@ -67,7 +67,7 @@ function displayLabel(attrs: MentionChipAttrs): string {
 function MentionIcon({ attrs }: { attrs: MentionChipAttrs }) {
   if (attrs.kind === 'plugin-capability') return <PluginCapabilityIcon attrs={attrs} />;
   if (attrs.kind === 'slash') return null;
-  if (attrs.kind === 'file') return <File aria-hidden />;
+  if (attrs.kind === 'file') return <FileTypeIcon name={attrs.path} />;
   if (attrs.kind === 'dir') return <Folder aria-hidden />;
   if (attrs.kind === 'agent') return <Sparkles aria-hidden />;
   if (attrs.kind === 'project') return <FolderOpen aria-hidden />;

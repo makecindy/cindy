@@ -50,7 +50,24 @@ describe('market Ghost session boundary', () => {
     const afterCommitBody = installBody.slice(afterCommitStart, afterCommitEnd);
     expect(afterCommitBody).toContain('this.withCapturedLedgerMutation(ledger, () => {');
     expect(afterCommitBody).not.toContain('requireSameMarketOwner(');
-    expect(automaticBody).toContain('          true,\n          owner,\n        );');
+    expect(automaticBody).toContain("          { mode: 'automatic' },\n          owner,\n        );");
+  });
+
+  it('releases the custom-source cache lease before waiting for install consent', () => {
+    const installStart = marketServiceSource.indexOf('  private async customInstall(');
+    const installEnd = marketServiceSource.indexOf(
+      '\n  private async installDetail(',
+      installStart,
+    );
+    const installBody = marketServiceSource.slice(installStart, installEnd);
+    const lease = installBody.indexOf('manager.withDiscoveredSource(');
+    const pack = installBody.indexOf('packCustomMarketPlugin(');
+    const consent = installBody.indexOf('obtainGhostInstallConsent(');
+    expect(lease).toBeGreaterThan(-1);
+    expect(pack).toBeGreaterThan(lease);
+    expect(consent).toBeGreaterThan(pack);
+    expect(installBody.slice(lease, consent)).toContain('packCustomMarketPlugin(');
+    expect(installBody.slice(consent)).not.toContain('withDiscoveredSource(');
   });
 
   it('keeps package placement and market ledger commit in the same owner lease', () => {

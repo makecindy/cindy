@@ -67,13 +67,15 @@ export default defineConfig({
     // Main-process tests do real IO (loopback HTTP servers, git subprocesses,
     // heavy module imports through the vite-node transform). On Windows those
     // are markedly slower and, under the full desktop suite's worker-pool
-    // contention, light tests intermittently blow past vitest's 5s default and
-    // time out non-deterministically (a different test each run). Give Windows
-    // a wider default so those pass reliably; keep the standard 5s on
-    // Linux/macOS/CI so genuine hangs still surface promptly. Tests that need
-    // even more (multi-step real-git orchestration) still set their own higher
-    // per-file timeout, which overrides this.
-    testTimeout: process.platform === 'win32' ? 20_000 : 5_000,
+    // contention, light tests and their filesystem hooks intermittently blow
+    // past vitest's defaults and time out non-deterministically (a different
+    // test each run). Give Windows a wider 60s default for both so those pass
+    // reliably; keep the standard defaults on Linux/macOS so genuine hangs
+    // still surface promptly. Tests that need even more (multi-step real-git
+    // orchestration) still set their own higher per-file timeout, which
+    // overrides this.
+    testTimeout: process.platform === 'win32' ? 60_000 : 5_000,
+    hookTimeout: process.platform === 'win32' ? 60_000 : 10_000,
     // Node 25 默认开启 webstorage,globalThis.localStorage 变成一个未配
     // --localstorage-file 时方法全缺的残缺对象:node 环境下骗过
     // `typeof localStorage !== 'undefined'` 探测,jsdom 环境下又因 key 已存在
@@ -112,7 +114,6 @@ export default defineConfig({
           name: 'git-integration',
           include: gitIntegrationTestInclude,
           exclude: cliTestExclude,
-          globalSetup: ['src/test/vitest/desktopTestResourceLock.ts'],
         },
       },
     ],

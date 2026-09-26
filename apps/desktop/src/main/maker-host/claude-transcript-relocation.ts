@@ -183,9 +183,10 @@ export async function relocateClaudeTranscriptsForSessionMove(
       log.debug('transcript relocation skipped: no sdk session ids', { sessionId });
       return { persistedSdkSessionId };
     }
-    // projectsRoot 必须与 CLI 子进程实际使用的配置目录一致:dev 多实例下
-    // auth-adapters 把 CLI 的 CLAUDE_CONFIG_DIR 重定向到 XDT_USER_DATA_DIR/claude-home,
-    // 主进程 env 里却没有该变量(boot 期被 strip),不能让 maker-core 回退 ~/.claude。
+    // projectsRoot 必须与 CLI 子进程实际使用的配置目录一致(候选首项:显式
+    // CLAUDE_CONFIG_DIR,否则默认 ~/.claude;dev 多实例也一样)。旧版 dev 隔离目录里
+    // 尚未补拷的转录不在这里搬:下次拉起 CLI 前先补拷到默认目录,再由 resume 前的
+    // 转录归位全局扫描放进新 cwd。
     const result = await relocateClaudeSessionTranscripts({
       sdkSessionIds,
       oldWorkingDir,

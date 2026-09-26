@@ -28,6 +28,9 @@ export * from "./remoteCursor.js";
 export * from "./peerRecoveryScheduler.js";
 export * from "./invokePolicy.js";
 export * from "./filePeer.js";
+export * from "./peerTransferCooldown.js";
+export * from "./peerInvoke.js";
+export * from "./peerAttachment.js";
 export * from "./fileAccess.js";
 export * from "./filePeerRuntime.js";
 
@@ -41,3 +44,11 @@ export * from "./sessionListTransport.js";
 export * from "./clipboardSync.js";
 export * from "./clipboardSyncFailure.js";
 export * from "./clipboardTransfer.js";
+
+export * from "./pluginOauth.js";
+export * from "./pluginAuthorization.js";
+export * from "./pluginSecretSubmission.js";
+export * from "./pluginConnectionSubmission.js";
+export * from "./pluginDeviceAuthorization.js";
+export * from "./pluginOauthAuthentication.js";
+export * from "./inputDelivery.js";

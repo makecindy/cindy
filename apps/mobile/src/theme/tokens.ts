@@ -135,6 +135,8 @@ export interface ThemeColors {
   statusRecording: string;
   /** 运行 / thinking 强调 + 完全访问权限(Heart Orange,语义不变) */
   statusAccent: string;
+  /** 房主皇冠标识金色；与 Desktop --warning-fg 对齐，Light / Dark 均保持醒目。 */
+  warningFg: string;
   /** 会话状态点 — 等待用户回复/选择(TapTap 蓝,对齐桌面 --card-status-awaiting 与灵动岛 needs-interaction) */
   statusAwaiting: string;
   /**
@@ -443,6 +445,7 @@ export const lightColors: ThemeColors = {
   statusReady: '#19D2C1',
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
+  warningFg: '#F3A115',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
@@ -532,6 +535,7 @@ export const darkColors: ThemeColors = {
   statusReady: '#19D2C1',
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
+  warningFg: '#F3A115',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',

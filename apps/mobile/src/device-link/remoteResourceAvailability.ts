@@ -19,7 +19,17 @@ export function readRemoteCollectionCache(owner: string, collectionId: string): 
   return collections.get(collectionId) ?? [];
 }
 
+export function hasRemoteCollectionCache(owner: string, collectionId: string): boolean {
+  return owner === cacheOwner && collections.has(collectionId);
+}
+
 export function writeRemoteCollectionCache(owner: string, collectionId: string, items: HostedRemoteCollectionItem[]): void {
   if (owner !== cacheOwner) return;
   collections.set(collectionId, items);
+}
+
+/** Connection evidence is independent of whether a resource/API request succeeded. */
+export function remoteResourceConnectionState(relayStatus: string, presence: boolean | null): boolean | null {
+  if (presence === false || relayStatus === 'stopped') return false;
+  return relayStatus === 'online' && presence === true ? true : null;
 }

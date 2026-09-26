@@ -156,6 +156,9 @@ enum 编译分支，也不接受任意 HTML、React 或无限 UI DSL。
 资源身份必须包含 `deviceId + collectionId + kind + id`。资源路由打开时应重新调用 `resource:get`
 解析 `conversation` 等 link，不能把可能 rollover 的 Session id 当成永久资源身份。已有对话继续
 复用 canonical Session 的消息、输入、确认与恢复链路，不复制一套模块专属聊天协议。
+列表已有 conversation link 时，可直接展示聊天框架和同账号缓存，在聊天页内重读资源，
+复用该页的 Session 元数据查询校验 ID、类型与设备归属；校验完成前不放开发送、控制和已读。
+列表返回与后台刷新应保留已有内容，仅首次无数据时显示整页加载，不用固定延迟掩盖切换。
 
 协议按字段追加演进。未知字段、未知 collection 和未知 action 不得导致整个首页或会话崩溃；
 结构化 Session 内容必须携带可读 `fallbackMarkdown`，旧客户端至少能阅读并继续任务。只有新增
@@ -166,6 +169,13 @@ Mobile 根据 manifest 发现卡片，不写死具体业务状态；`session-con
 输入是否可用与是否忙碌，详情保留可读 fallback，动作 id 为不透明标识。
 动作的 disabled 是呈现提示，主机仍须按最新状态、账号与任务身份复核。重连只重读，
 不得重放写操作；旧客户端不识别此 placement 时继续原有消息流程。
+
+Desktop 的同账号远程 Cindy Make 任务同样消费该投影：准备与测试交接卡接管输入区，
+继续修改后的恢复动作放在输入区顶部，实时状态与动作均来自任务所属电脑。控制端沿用
+既有 sessions topic，不新增业务 IPC 或本地构建回退；离线、切账号和切任务后禁用旧卡片
+动作，重连与操作超时后只重读状态。旧主机不提供该 placement 时保留只读历史卡片。
+实现与回归见 Desktop Renderer 的 `features/device-link/useSessionResourceCards.ts`、
+`SessionResourceCards.tsx` 及同目录测试；SSH 工作区不由此获得 Make 执行能力。
 
 ## 本机与远程共用查询策略
 

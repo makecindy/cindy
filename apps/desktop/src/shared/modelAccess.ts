@@ -233,3 +233,9 @@ export interface ModelAccessModelsResponse {
   accountTier?: ModelAccessAccountTier;
   models: ModelAccessGatewayModel[];
 }
+
+/** Secret-free enterprise connection status exposed to Settings. */
+export interface ByokStatus {
+  state: 'idle' | 'syncing' | 'ready' | 'failed';
+  providers: { providerId: string; state: 'ready' | 'pending' | 'unavailable' }[];
+}

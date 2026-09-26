@@ -142,7 +142,10 @@ describe('portable Cindy Make cards', () => {
       state.recoverable = true;
       const resumed = project(state, dictionary);
       expect(resumed.blocks?.[0].data).toMatchObject({ input: 'available' });
-      expect(resumed.actions?.map((action) => action.id)).toEqual(['resume:revision']);
+      expect(resumed.actions?.map((action) => action.id)).toEqual([
+        'resume:revision:start',
+        'resume:revision:build',
+      ]);
     },
   );
 
@@ -231,9 +234,9 @@ describe('host validates portable task actions', () => {
     const h = harness();
     h.state.completion = undefined;
     h.state.recoverable = true;
-    await expect(h.invoke('resume:old')).rejects.toThrow('Task changed');
+    await expect(h.invoke('resume:old:start')).rejects.toThrow('Task changed');
     h.changeOwner();
-    await expect(h.invoke('resume:revision')).rejects.toThrow('Task changed');
+    await expect(h.invoke('resume:revision:start')).rejects.toThrow('Task changed');
     expect(h.act).not.toHaveBeenCalled();
   });
   it('coalesces two controllers and returns only invalidation effects', async () => {

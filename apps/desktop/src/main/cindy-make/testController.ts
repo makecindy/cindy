@@ -39,6 +39,8 @@ export interface MakeTestControllerDeps {
   openBuild?(context: MakeTestContext): Promise<void>;
   /** Publish the same build receipt to Settings and the completion card. */
   onBuildState?(context: MakeTestContext, state: CindyMakePersonalBuildState): void;
+  /** Invalidate Settings after the terminal receipt is saved and the build lease is released. */
+  onBuildSettled?(context: MakeTestContext): void;
   claimBuild?(context: MakeTestContext): () => void;
   now?: () => number;
 }
@@ -200,6 +202,12 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
       clearInterval(ownerWatch);
       if (jobs.get(context.sessionId) === job) jobs.delete(context.sessionId);
       job.releaseBuild?.();
+      if (
+        job.kind === 'build' &&
+        context.isCurrent() &&
+        ['ready', 'failed'].includes(context.meta.personal?.status ?? '')
+      )
+        deps.onBuildSettled?.(context);
     }
   };
   return {
@@ -275,7 +283,7 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
         if (['starting', 'ready'].includes(context.meta.test?.status ?? ''))
           patch.test = { ...context.meta.test, status: 'stopped', error: 'interrupted' };
         if (
-          ['waiting', 'checking', 'merging', 'packaging', 'publishing'].includes(
+          ['waiting', 'syncing', 'checking', 'merging', 'packaging', 'publishing'].includes(
             context.meta.personal?.status ?? '',
           )
         )

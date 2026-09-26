@@ -538,8 +538,8 @@ export function resolveCodexTurnAnchor(
   for (let i = rows.length - 1; i >= 0; i -= 1) {
     const row = rows[i];
     if (row.role === 'context_rebuild') {
-      timelineSdkSessionId = null;
-      continue;
+      // 重建之后是新的原生线程;不能从更早片段借 turn 锚点。
+      return undefined;
     }
     if (row.role === 'agent_switch') {
       timelineSdkSessionId = parseAgentSwitchBoundary(row.content)?.fromSdkSessionId ?? null;
@@ -571,6 +571,38 @@ export function resolveCodexForkEventTimestamp(rows: CodexNativeBoundaryRow[]): 
     }
   }
   return undefined;
+}
+
+/**
+ * rows 之内是否没有属于 sourceSdkSessionId 原生线程的 user 行,即目标是该线程的第一轮。
+ * 归属判定与 resolveCodexTurnAnchor 一致:agent_switch 之前的片段属于其 fromSdkSessionId
+ * (切回停泊线程时仍是同一条线程);最近的 context_rebuild 截断更早历史,重建前的
+ * agent_switch 不能把归属设回当前线程。
+ * 不可解析或没有 fromSdkSessionId 的 switch 视为归属不定,返回 false,调用方不得标记
+ * rewindsToNativeThreadStart(与「判定不出就明确失败」的 fail-closed 契约一致)。
+ * rows 必须完整覆盖当前时间线(/clear 之后的可见行 + context_rebuild 标记);窗口被截断时
+ * 调用方不得据此判定。
+ */
+export function isCodexNativeThreadStart(
+  rows: CodexNativeBoundaryRow[],
+  sourceSdkSessionId: string,
+): boolean {
+  let timelineSdkSessionId: string | null = sourceSdkSessionId;
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i]!;
+    if (row.role === 'context_rebuild') {
+      // 重建之后是新的原生线程;更早的 agent_switch 不能把归属设回当前线程。
+      break;
+    }
+    if (row.role === 'agent_switch') {
+      const owner = parseAgentSwitchBoundary(row.content)?.fromSdkSessionId;
+      if (!owner) return false;
+      timelineSdkSessionId = owner;
+      continue;
+    }
+    if (row.role === 'user' && timelineSdkSessionId === sourceSdkSessionId) return false;
+  }
+  return true;
 }
 
 async function countCodexTailTurns(

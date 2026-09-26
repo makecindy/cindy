@@ -133,7 +133,7 @@ export function SkillCategoryFilterBar({
         className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         <SegmentedControl
-          className="cindy-segmented-nowrap shrink-0"
+          className="shrink-0 !max-w-none"
           role="radiogroup"
           aria-label={ariaLabel}
           height={32}

@@ -124,6 +124,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (vi.isMockFunction(os.homedir)) vi.mocked(os.homedir).mockRestore();
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   if (originalXdtUserDataDir === undefined) delete process.env.XDT_USER_DATA_DIR;
@@ -1908,9 +1909,12 @@ describe('forkSessionAtMessage', () => {
     });
   });
 
-  it('claude path: locates JSONL under XDT_USER_DATA_DIR claude-home when main env has no CLAUDE_CONFIG_DIR', async () => {
+  it('claude path: falls back to the legacy dev XDT_USER_DATA_DIR/claude-home when ~/.claude lacks the JSONL', async () => {
     const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-user-data-'));
     tempDirs.push(userDataDir);
+    const emptyHome = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-empty-home-'));
+    tempDirs.push(emptyHome);
+    vi.spyOn(os, 'homedir').mockReturnValue(emptyHome);
     delete process.env.CLAUDE_CONFIG_DIR;
     process.env.XDT_USER_DATA_DIR = userDataDir;
     await writeClaudeJsonlInConfigDir(
@@ -2122,5 +2126,73 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).not.toHaveBeenCalled();
     expect(txCalls).toHaveLength(0);
+  });
+});
+
+describe('isCodexNativeThreadStart (#4994)', () => {
+  const user = (createdAt: number) => ({ role: 'user', content: '', agentMeta: null, createdAt });
+  const agentSwitch = (createdAt: number, fromAgentKind: 'cc' | 'codex', fromSdkSessionId: string | null) => ({
+    role: 'agent_switch',
+    content: JSON.stringify({ fromAgentKind, toAgentKind: fromAgentKind === 'cc' ? 'codex' : 'cc', fromSdkSessionId }),
+    agentMeta: null,
+    createdAt,
+  });
+  const contextRebuild = (createdAt: number) => ({ role: 'context_rebuild', content: '{}', agentMeta: null, createdAt });
+
+  it('treats an empty timeline as the thread start', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([], 'thread-x')).toBe(true);
+  });
+
+  it('rejects when the current thread already has an earlier user turn', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([user(1000)], 'thread-x')).toBe(false);
+  });
+
+  it('ignores turns of the engine the session switched away from', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([user(1000), agentSwitch(2000, 'cc', 'claude-sdk')], 'thread-x')).toBe(true);
+  });
+
+  it('counts earlier turns of a resumed parked thread across switch boundaries', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([
+      user(1000),
+      agentSwitch(2000, 'codex', 'thread-x'),
+      user(3000),
+      agentSwitch(4000, 'cc', 'claude-sdk'),
+    ], 'thread-x')).toBe(false);
+  });
+
+  it('ignores turns before a context rebuild', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([user(1000), contextRebuild(2000)], 'thread-x')).toBe(true);
+  });
+
+  it('does not let a pre-rebuild switch restore the current thread', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([
+      user(1000),
+      agentSwitch(2000, 'codex', 'thread-x'),
+      user(3000),
+      agentSwitch(4000, 'cc', 'claude-sdk'),
+      contextRebuild(5000),
+    ], 'thread-x')).toBe(true);
+  });
+
+  it('withholds thread start when a switch boundary is unparseable', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([
+      user(1000),
+      { role: 'agent_switch', content: '{not-json', agentMeta: null, createdAt: 2000 },
+    ], 'thread-x')).toBe(false);
+  });
+
+  it('withholds thread start when a switch boundary has no fromSdkSessionId', async () => {
+    const { isCodexNativeThreadStart } = await import('../maker-orchestration/fork');
+    expect(isCodexNativeThreadStart([
+      user(1000),
+      agentSwitch(2000, 'cc', null),
+    ], 'thread-x')).toBe(false);
   });
 });

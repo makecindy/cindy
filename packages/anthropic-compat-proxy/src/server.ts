@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto';
 import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions, type Server, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { Socket, TcpSocketConnectOpts } from 'node:net';
-import { PassThrough, type Transform } from 'node:stream';
+import { PassThrough, Readable, type Transform } from 'node:stream';
 import { URL } from 'node:url';
 import { brotliDecompressSync, gunzipSync, inflateRawSync, inflateSync } from 'node:zlib';
 
@@ -950,6 +950,7 @@ function forward(
   beforeRetry?: () => Promise<boolean>,
   // Optional request-local operational observer. It never receives raw request/response data.
   forwardLifecycle?: ForwardLifecycleObserver | null,
+  recoverUpstreamOversized?: (body: Buffer, signal: AbortSignal) => Promise<Buffer>,
 ): void {
   // Diagnostics are a strict side channel: callback failures must never change forwarding.
   const notifyForwardLifecycle = (notify: () => void): void => {
@@ -1135,7 +1136,8 @@ function forward(
     const activeRules = (status === 400 || status === 422)
       ? recoveryRules.filter((r) => r.enabled() && (canRetry || r.unrecoverableCode))
       : [];
-    if (activeRules.length > 0) {
+    const recover413 = status === 413 && canRetry && recoverUpstreamOversized;
+    if (activeRules.length > 0 || recover413) {
       const chunks: Buffer[] = [];
       const failBufferedResponse = (
         reason: 'error' | 'aborted' | 'close',
@@ -1173,7 +1175,7 @@ function forward(
         if (upstreamResponseTerminal !== null) return;
         chunks.push(chunk);
       });
-      upstreamRes.on('end', () => {
+      upstreamRes.on('end', async () => {
         if (upstreamResponseTerminal !== null) return;
         upstreamResponseTerminal = 'end';
         if (clientAborted || clientRes.destroyed || upstreamFailureHandled) return;
@@ -1183,6 +1185,43 @@ function forward(
         // (回客户端仍是原始 errBody + content-encoding 头透传, 客户端自己解压, 见下方 clientRes.end)
         const decodedErrBody = decodeBodyForLog(errBody, String(upstreamRes.headers['content-encoding'] ?? ''));
         const decodedText = decodedErrBody.toString('utf8');
+        if (recover413) {
+          const recoveryAbort = new AbortController();
+          const abortRecovery = (): void => recoveryAbort.abort();
+          clientRes.once('close', abortRecovery);
+          let recovered: Buffer | undefined;
+          try {
+            recovered = await recover413(body, recoveryAbort.signal);
+          } catch {
+            // Storage failure, unsupported content and cancellation must never
+            // replace the original 413 with an unrelated recovery error.
+            logger.info?.('upstream 413 attachment recovery unavailable', { reqId });
+          } finally {
+            clientRes.off('close', abortRecovery);
+          }
+          if (clientRes.destroyed || clientRes.writableEnded) return;
+          if (recovered && recovered.length < body.length) {
+            try {
+              if (beforeRetry && !(await beforeRetry())) return;
+            } catch {
+              recovered = undefined;
+            }
+            if (clientRes.destroyed || clientRes.writableEnded) return;
+            if (recovered) {
+              logger.info?.('upstream 413 attachment recovery retry', {
+                reqId, originalBytes: body.length, recoveredBytes: recovered.length,
+              });
+              forward(
+                target, method, path, headers, recovered, clientRes, logger,
+                recoveryRules, reqId, false, overrideTarget, headerOverride,
+                headerDelete, responseObserver, transformResponse, clientModel,
+                outboundProxy, pathOverride, responseToolUseIds, threadMintedIdCache,
+                requestDeclaredStream, beforeRetry, forwardLifecycle,
+              );
+              return;
+            }
+          }
+        }
         // 取第一条 match 命中且 strip 出东西的规则;命中错误文案但没东西可删 → 试下一条。
         for (const [matchedIndex, rule] of activeRules.entries()) {
           if (!canRetry) break;
@@ -1638,12 +1677,13 @@ function forward(
       }
       if (!streamGateCommitted) {
         // 门控中(未提交):积累待发字节并判定是否可提交。
-        if (pendingBytes < STREAM_GATE_PENDING_CAP_BYTES) {
-          pendingChunks.push(chunk);
-          pendingBytes += chunk.length;
-        } else {
-          pendingBytes += chunk.length;
-        }
+        // 无条件入缓冲:曾用 `pendingBytes < CAP` 做入队条件, 累计恰好落在 CAP
+        // (64KiB, 回环读的常见块大小)时, 后续 chunk 只计数不入队 —— 一旦事件
+        // 标记在这些 chunk 里到达并提交, 这些字节被永久跳过, 客户端收到中间
+        // 有缺口的 200 SSE。任何把 pendingBytes 推过上限的 chunk 都会在该
+        // chunk 内提交或按 502 拒收, 缓冲仍有界(至多 CAP + 单 chunk 溢出)。
+        pendingChunks.push(chunk);
+        pendingBytes += chunk.length;
         if (!isSse) {
           if (canInferSse) {
             pendingText += chunk.toString('utf8');
@@ -2453,6 +2493,16 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
             logger,
             parsedForTransforms,
           );
+      if (decision?.transformRequestBody) {
+        const rewritten = await decision.transformRequestBody(
+          transformed ?? bodyForTransforms,
+          transformCtx,
+        );
+        transformed = rewritten.body;
+        if (rewritten.contentType) {
+          route.headerOverride = { ...route.headerOverride, 'content-type': rewritten.contentType };
+        }
+      }
     } catch (err) {
       transformsCompleted = true;
       notifyTransformSettlement();
@@ -2472,7 +2522,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     if (requestGuard) {
       // Compatibility transforms may reintroduce provider-hosted tools. Apply
       // the same frozen policy at the final outbound boundary as well.
-      try { outBody = requestGuard.transformBody(outBody); }
+      try { outBody = requestGuard.transformBody(outBody, transformCtx); }
       catch { res.destroy(); return; }
     }
     if (outBody.length > maxBodyBytes) {
@@ -2589,6 +2639,14 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       requestDeclaredStream,
       beforeRetry,
       forwardLifecycle,
+      recoverOversized
+        ? (body, signal) => collectRecoverableBody(
+            Readable.from([body]),
+            body.length - 1,
+            (spooled) => recoverOversized!({ ...spooled, upstreamRejected: true }, body.length - 1),
+            signal,
+          )
+        : undefined,
     );
   });
 

@@ -228,3 +228,12 @@ describe('portable task controls', () => {
     expect(JSON.stringify(card)).not.toContain('/private');
   });
 });
+
+it('preserves additive public generation state without interpreting unknown future phases', () => {
+  const input = (generation?: unknown) => ({ items: [{ ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' },
+    display: { title: 'Cindy', generation }, links: [], revision: '1' }] });
+  expect(normalizeRemoteCollectionItems(input({ phase: 'replying', startedAt: 123 }), 'teammates')[0].display.generation)
+    .toEqual({ phase: 'replying', startedAt: 123 });
+  expect(normalizeRemoteCollectionItems(input(), 'teammates')[0].display.generation).toBeUndefined();
+  expect(normalizeRemoteCollectionItems(input({ phase: {}, startedAt: Infinity }), 'teammates')[0].display.generation).toBeUndefined();
+});

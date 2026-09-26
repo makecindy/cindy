@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * MermaidSourceEditor
  *
@@ -222,29 +223,26 @@ function MermaidSourceEditor({
             'px-5 py-3 border-t border-[var(--border-default)]',
           )}
         >
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
+            tone="quiet"
             type="button"
             onClick={() => close(false)}
-            className={cn(
-              'px-3 h-8 rounded-md text-13',
-              'text-[var(--text-secondary)]',
-              'hover:bg-[var(--cmd-palette-item-hover)]',
-            )}
           >
             {t('ccAgent.workdirBrowse.mermaidEditor.cancel')}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="cta"
+            size="md"
+            compact
             type="button"
             disabled={!dirty}
             onClick={() => close(true)}
-            className={cn(
-              'px-3 h-8 rounded-md text-13 font-medium',
-              'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-              'hover:opacity-90 disabled:opacity-40 disabled:pointer-events-none',
-            )}
           >
             {t('ccAgent.workdirBrowse.mermaidEditor.save')}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

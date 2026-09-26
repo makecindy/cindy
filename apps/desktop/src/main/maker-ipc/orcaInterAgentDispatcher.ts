@@ -179,7 +179,7 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
 /** queued 消息的 accepted 副作用状态，用于派发失败时只回滚已经执行过的副作用。 */
 interface QueuedOrcaInterAgentAcceptedCallback {
   accepted: () => void | Promise<void>;
-  rollback?: () => void | Promise<void>;
+  rollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>;
   commit?: () => void | Promise<void>;
   didRun: boolean;
 }
@@ -196,7 +196,7 @@ export interface OrcaInterAgentDispatcher {
   registerQueuedOrcaInterAgentAcceptedCallback: (
     clientId: string,
     accepted: () => void | Promise<void>,
-    rollback?: () => void | Promise<void>,
+    rollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>,
     commit?: () => void | Promise<void>,
   ) => void;
   runQueuedOrcaInterAgentAcceptedCallback: (
@@ -224,7 +224,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
   const registerQueuedOrcaInterAgentAcceptedCallback = (
     clientId: string,
     accepted: () => void | Promise<void>,
-    rollback?: () => void | Promise<void>,
+    rollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>,
     commit?: () => void | Promise<void>,
   ): void => {
     queuedOrcaInterAgentAcceptedCallbacks.set(clientId, {
@@ -264,7 +264,16 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     }
     if (callback.didRun) {
       queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
-      await runAcceptedRollback(callback.rollback, sessionId, clientId, log);
+      const reason =
+        result.kind === 'session-dispatch' && result.reason === 'cancelled-before-dispatch'
+          ? result.reason
+          : undefined;
+      await runAcceptedRollback(
+        () => callback.rollback?.(reason),
+        sessionId,
+        clientId,
+        log,
+      );
     }
   };
 

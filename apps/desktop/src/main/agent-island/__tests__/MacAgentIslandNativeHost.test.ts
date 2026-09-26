@@ -151,6 +151,29 @@ describe('MacAgentIslandNativeHost', () => {
     expect(nativeSource).not.toContain('agentIslandXDIncMarkSVG');
   });
 
+  it('renders Pi sessions with the Pi mark instead of the Claude mark', () => {
+    const source = fs.readFileSync(
+      new URL('../../../../native/agent-island/macos-agent-island-helper.swift', import.meta.url),
+      'utf8',
+    );
+    const vendorResolver = source.match(
+      /func agentIslandSessionVendor\(for session: AgentIslandSession\) -> AgentIslandSessionVendor \{([\s\S]*?)\n\}/,
+    )?.[1];
+    const markImageResolver = source.match(
+      /func image\(for vendor: AgentIslandSessionVendor\) -> NSImage\? \{([\s\S]*?)\n  \}/,
+    )?.[1];
+
+    expect(source).toContain('case pi');
+    expect(vendorResolver).toContain('if kind == "pi" { return .pi }');
+    expect(markImageResolver).toContain('case .pi:');
+    expect(markImageResolver).toContain('svg = agentIslandPiMarkSVG');
+    expect(source).toContain('private let agentIslandPiMarkSVG = """');
+    expect(source).toContain('<path d="M3.6 6.6h16.8"/>');
+    expect(source).toContain('<path d="M8.4 6.6v11.8"/>');
+    expect(source).toContain('<path d="M15.6 6.6v9.6c0 1.5.9 2.2 2.4 2.2"/>');
+    expect(source).toContain('if lower == "pi" { return "Pi" }');
+  });
+
   it('uses semantic icons for expanded terminal and interaction rows', () => {
     const source = fs
       .readFileSync(

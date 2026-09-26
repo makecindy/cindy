@@ -37,17 +37,18 @@ export type AutoReviewDecision = {
 export const AUTO_REVIEW_UNAVAILABLE_CODE = 'AUTO_REVIEW_UNAVAILABLE';
 
 /**
- * 未落地 i18n 的宿主看到的兜底英文。用词与 desktop 权限选择器的档位标签对齐
- * （Auto-review / Default permissions），避免同一件事在两处叫不同名字。
+ * 未落地 i18n 的宿主看到的兜底英文。三条 Harness 共用这一句。少打断只能指向
+ * Full access：默认权限在 Pi 上问得更多，在 Claude / Codex 上也不会少问联网和提权。
+ * 完全访问风险更高，文案必须点明。
  *
  * IM 渠道（Slack / Telegram / 飞书）**不**读它 —— 渠道文案硬编码中文、不进 renderer
  * 的 locale（见 docs/dev-rules/engineering-conventions.md §5），映射在
  * apps/desktop/src/main/im/shared/turnRetryNotice.ts。
  */
 const AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT =
-  'Auto-review could not reach a decision (network or service hiccup), so actions that '
-  + 'need review are being handed to you to confirm. Switch this task to Default '
-  + 'permissions if you would rather not be interrupted.';
+  'Auto-review could not reach a decision, so actions that need review now need your '
+  + 'confirmation. Switch this task to Full access if you would rather not be interrupted. '
+  + 'That mode is higher risk.';
 
 /**
  * 判定一条 AgentEvent 的 error message 是否就是「自动审批不可用」提示。

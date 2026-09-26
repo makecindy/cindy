@@ -79,3 +79,85 @@ describe("Pi source import", () => {
     expect(row.execution.pi.headers).toEqual({ "NVCF-POLL-SECONDS": "3600" });
   });
 });
+
+
+it('retains partial upstream successes and previous rows without manufacturing negative capabilities', () => {
+  const previous = toCindyCatalog({ 'new-vendor': [model] }, 'before');
+  const errors: unknown[] = [];
+  const result = toCindyCatalog({ 'new-vendor': [
+    { ...model, id: 'next-model', reasoning: undefined, input: undefined, contextWindow: undefined,
+      supportsFastMode: false, supportsToolCalls: true },
+    { ...model, api: '' },
+  ] }, 'after', { previous, onError: (error: unknown) => errors.push(error) });
+  expect(errors).toHaveLength(1);
+  expect(result.providers['new-vendor']).toContainEqual(previous.providers['new-vendor'][0]);
+  const next = result.providers['new-vendor'].find(row => row.id === 'next-model');
+  expect(next).toMatchObject({ supportsFastMode: false, supportsToolCalls: true });
+  for (const key of ['reasoning', 'efforts', 'defaultEffort', 'contextWindow', 'supportsImageInput'])
+    expect(next).not.toHaveProperty(key);
+});
+
+
+it('preserves an explicit unspecified default effort', () => {
+  expect(toCindyCatalog({ 'new-vendor': [{ ...model, defaultEffort: null }] }, 'now')
+    .providers['new-vendor'][0]).toMatchObject({ efforts: ['high'], defaultEffort: null });
+});
+
+it('removes retired models only after a complete successful provider snapshot', () => {
+  const previous = toCindyCatalog({ 'new-vendor': [model, { ...model, id: 'retired-model' }] }, 'before');
+  const next = toCindyCatalog({ 'new-vendor': [model] }, 'after', { previous });
+  expect(next.providers['new-vendor'].map(row => row.id)).toEqual([model.id]);
+  expect(toCindyCatalog({ 'new-vendor': [] }, 'empty', { previous }).providers['new-vendor']).toEqual([]);
+  expect(toCindyCatalog({ 'new-vendor': [] }, 'incomplete', { previous, incompleteProviders: ['new-vendor'] })
+    .providers['new-vendor']).toEqual(previous.providers['new-vendor']);
+});
+
+it('retains missing adapter fields on the same connection and accepts explicit replacements', () => {
+  const previous = toCindyCatalog({ 'new-vendor': [{ ...model, samplingParams: { temperature: 0.2 } }] }, 'before');
+  const sparse = { ...model, thinkingLevelMap: undefined, compat: undefined, samplingParams: undefined };
+  const kept = toCindyCatalog({ 'new-vendor': [sparse] }, 'after', { previous }).providers['new-vendor'][0];
+  expect(kept.execution.pi).toEqual(previous.providers['new-vendor'][0].execution.pi);
+  expect(kept.efforts).toEqual(['high']);
+  const cleared = toCindyCatalog({ 'new-vendor': [{ ...sparse, thinkingLevelMap: {}, compat: {}, samplingParams: {} }] },
+    'clear', { previous }).providers['new-vendor'][0];
+  expect(cleared.execution.pi).toMatchObject({ thinkingLevelMap: {}, compat: {}, samplingParams: {} });
+  for (const change of [{ api: 'anthropic-messages' }, { baseUrl: 'https://other.example/v1' }]) {
+    const moved = toCindyCatalog({ 'new-vendor': [{ ...sparse, ...change }] }, 'moved', { previous }).providers['new-vendor'][0];
+    expect(moved.execution.pi).not.toHaveProperty('thinkingLevelMap');
+    expect(moved.execution.pi).not.toHaveProperty('compat');
+  }
+});
+
+it.each([
+  { api: 'anthropic-messages', baseUrl: model.baseUrl },
+  { api: model.api, baseUrl: 'https://other.example/v1' },
+  { api: model.api, baseUrl: undefined },
+])('does not carry channel metadata across connection changes: %j', (connection) => {
+  const previous = toCindyCatalog({ 'new-vendor': [{
+    ...model,
+    nativeApi: 'openai-responses',
+    supportsFastMode: true,
+    supportsToolCalls: true,
+    reasoningRequired: true,
+    samplingParams: { temperature: 0.2 },
+    headers: { 'User-Agent': 'old-channel' },
+  }] }, 'before');
+  const sparse = { id: model.id, provider: model.provider, api: model.api, baseUrl: model.baseUrl };
+  const retained = toCindyCatalog({ 'new-vendor': [sparse] }, 'same', { previous }).providers['new-vendor'][0];
+  expect(retained).toEqual(previous.providers['new-vendor'][0]);
+
+  const moved = toCindyCatalog({ 'new-vendor': [{ ...sparse, ...connection }] }, 'moved', { previous })
+    .providers['new-vendor'];
+  // Keep the discovered model usable, without presenting another channel's
+  // price, native identity or capabilities as this connection's own metadata.
+  expect(moved).toEqual([{
+    id: model.id,
+    name: model.id,
+    upstream: connection.baseUrl ?? '',
+    execution: { pi: { api: connection.api } },
+  }]);
+  const reported = toCindyCatalog({ 'new-vendor': [{ ...sparse, ...connection,
+    cost: { input: 5 }, nativeApi: 'anthropic-messages', supportsFastMode: false,
+  }] }, 'reported', { previous }).providers['new-vendor'][0];
+  expect(reported).toMatchObject({ cost: { input: 5 }, nativeApi: 'anthropic-messages', supportsFastMode: false });
+});

@@ -75,3 +75,20 @@ it('ignores a late ready response from the previous account', async () => {
   expect(h.router.replace).not.toHaveBeenCalled();
   expect(h.upsert).not.toHaveBeenCalled();
 });
+it('keeps a failed preparation on screen with an inline notice when its retry fails', async () => {
+  h.read.mockResolvedValue(resource('failed'));
+  h.action.mockRejectedValue(new Error('[DEVICE_UNRESPONSIVE] mac'));
+  await act(async () => root.render(createElement(Screen)));
+  expect(container.textContent).toContain('devices.companions.invitation.failed');
+  expect(container.textContent).not.toContain('devices.companions.invitation.background');
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="remoteResourceResolver.retryInvitation"]')!.click());
+  expect(container.querySelector('[data-testid="remoteResourceResolver.preparation"]')).not.toBeNull();
+  expect(container.textContent).toContain('devices.companions.invitation.retryFailed');
+  expect(container.textContent).not.toContain('DEVICE_UNRESPONSIVE');
+});
+it('reassures the user while preparing and shows the live stage beside the spinner', async () => {
+  h.read.mockResolvedValue(resource('profile'));
+  await act(async () => root.render(createElement(Screen)));
+  expect(container.textContent).toContain('devices.companions.invitation.background');
+  expect(container.querySelector('[data-testid="remoteResourceResolver.preparationStage"]')?.textContent).toBe('devices.companions.invitation.profile');
+});

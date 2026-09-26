@@ -41,6 +41,7 @@ if (location.search === '?mode=files') {
       ipcRenderer.invoke(FILE_PEER_LOCAL.READ, connection, ticket, offset),
     write: (sink, offset, base64) =>
       ipcRenderer.invoke(FILE_PEER_LOCAL.WRITE, sink, offset, base64),
+    invoke: (connection, payload) => ipcRenderer.invoke(FILE_PEER_LOCAL.INVOKE, connection, payload),
   };
   contextBridge.exposeInMainWorld('filePeerHost', files);
 } else contextBridge.exposeInMainWorld('desktopCapture', api);
