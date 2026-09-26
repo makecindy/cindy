@@ -12,12 +12,7 @@
  */
 
 import fs from 'node:fs';
-import {
-  DownloadError,
-  type DownloadOptions,
-  type DownloadResult,
-  type Logger,
-} from './types';
+import { DownloadError, type DownloadOptions, type DownloadResult, type Logger } from './types';
 import { computeHash } from './integrity';
 import { executeOnce, type TransportContext } from './transport';
 import { withRetry } from './retry';
@@ -49,7 +44,9 @@ const defaultLogger: Logger = {
   warn: (msg, meta) => log.warn(msg, meta ?? ''),
   info: (msg, meta) => log.info(msg, meta ?? ''),
   error: (msg, meta) => log.error(msg, meta ?? ''),
-  debug: () => { /* silent by default */ },
+  debug: () => {
+    /* silent by default */
+  },
 };
 
 export class Scheduler {
@@ -140,7 +137,8 @@ export class Scheduler {
     // ── fromCache short-circuit ──
     try {
       if (fs.existsSync(task.opts.targetPath)) {
-        const hash = await computeHash(task.opts.targetPath);
+        const hash = await computeHash(task.opts.targetPath, task.opts.signal);
+        if (task.opts.signal?.aborted) throw new DownloadError('ABORTED', 'Download cancelled');
         if (hash === task.opts.sha256) {
           task.resolve({
             path: task.opts.targetPath,
@@ -154,6 +152,10 @@ export class Scheduler {
         }
       }
     } catch (err) {
+      if (task.opts.signal?.aborted) {
+        task.reject(new DownloadError('ABORTED', 'Download cancelled'));
+        return;
+      }
       logger.debug?.('[downloader] fromCache check failed; falling through', {
         err: (err as Error).message,
       });

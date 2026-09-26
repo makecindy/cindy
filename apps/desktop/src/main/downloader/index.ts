@@ -40,6 +40,15 @@ function validate(opts: DownloadOptions): void {
   }
 }
 
+/** A consumer-owned queue; bulk plugin downloads never queue ahead of app updates. */
+export function createDownloader() {
+  const scheduler = new Scheduler({ maxConcurrent: 1 });
+  return (opts: DownloadOptions): Promise<DownloadResult> => {
+    validate(opts);
+    return scheduler.enqueue({ ...opts, sha256: opts.sha256.toLowerCase() });
+  };
+}
+
 /**
  * Download a file with single-flight dedupe, resume, retry, and SHA256 verify.
  *

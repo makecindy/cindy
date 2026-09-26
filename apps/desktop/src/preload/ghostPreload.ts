@@ -61,6 +61,10 @@ contextBridge.exposeInMainWorld('cindy', {
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'host-request' }),
   fetch: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'fetch-request' }),
+  downloads: {
+    start: (req: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'download-request', kind: 'start' }),
+    cancel: (req: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'download-request', kind: 'cancel' }),
+  },
   fs: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'fs-request' }),
   library: (req: Record<string, unknown>): Promise<unknown> =>
