@@ -9,11 +9,13 @@ const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
   rename: vi.fn(),
   killTree: vi.fn(),
+  readdir: vi.fn(),
 }));
 vi.mock('../../scheduler-host/proc-util.js', () => ({ killProcessTree: mocks.killTree }));
 vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof import('node:fs/promises')>()),
   rename: mocks.rename,
+  readdir: mocks.readdir,
 }));
 vi.mock('../../reviewer/reviewOwnerLiveness.js', () => ({
   startReviewOwnerLiveness: async () => ({
@@ -51,6 +53,7 @@ let root: string;
 beforeEach(async () => {
   const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   mocks.rename.mockImplementation(fs.rename);
+  mocks.readdir.mockImplementation(fs.readdir);
   const proc = await vi.importActual<typeof import('../../scheduler-host/proc-util.js')>(
     '../../scheduler-host/proc-util.js',
   );
@@ -69,6 +72,89 @@ afterEach(async () => {
 });
 
 describe('managed llama.cpp model lifecycle', () => {
+  it.each([false, true])(
+    'keeps removal exclusive through callback settlement (failure=%s)',
+    async (fail) => {
+      const service = createLlamaCppService(root);
+      const other = createLlamaCppService(root);
+      let entered!: () => void;
+      const deleting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const removal = service
+        .remove(async () => {
+          entered();
+          await gate;
+          if (fail) throw new Error('delete failed');
+        })
+        .catch((error) => error);
+      await deleting;
+      try {
+        await expect(service.start()).rejects.toThrow('BUSY');
+        await expect(service.download({ repo: 'owner/repo', file: 'model.gguf' })).rejects.toThrow(
+          'BUSY',
+        );
+        await expect(other.download({ repo: 'owner/repo', file: 'model.gguf' })).rejects.toThrow(
+          'BUSY',
+        );
+      } finally {
+        release();
+      }
+      const result = await removal;
+      if (fail) expect(result.message).toBe('delete failed');
+      else expect(result).toBeUndefined();
+      await service.download({ repo: 'owner/repo', file: 'model.gguf' });
+    },
+  );
+  it.each(['stop', 'dispose', 'remove'] as const)(
+    'cancels startup and its duplicate while model scanning is pending during %s',
+    async (action) => {
+      const runtime = path.join(root, 'llamacpp-runtime');
+      await mkdir(runtime);
+      await writeFile(path.join(runtime, 'server'), 'stub');
+      await writeFile(
+        path.join(runtime, 'current.json'),
+        JSON.stringify({ binary: 'server', version: 'test' }),
+      );
+      let entered!: () => void;
+      const scanning = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let release!: () => void;
+      const scan = new Promise<never[]>((resolve) => {
+        release = () => resolve([]);
+      });
+      mocks.readdir.mockImplementationOnce(() => {
+        entered();
+        return scan;
+      });
+      const service = createLlamaCppService(root);
+      const first = service.start().catch((error) => error);
+      const second = service.start().catch((error) => error);
+      await scanning;
+      const deleted = vi.fn();
+      let finished = false;
+      const stopping = (action === 'remove' ? service.remove(deleted) : service[action]()).then(
+        () => {
+          finished = true;
+        },
+      );
+      await Promise.resolve();
+      expect(finished).toBe(false);
+      expect(deleted).not.toHaveBeenCalled();
+      await expect(service.start()).rejects.toThrow('BUSY');
+      release();
+      await stopping;
+      expect((await first).name).toBe('AbortError');
+      expect((await second).name).toBe('AbortError');
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      if (action === 'remove') expect(deleted).toHaveBeenCalledOnce();
+    },
+  );
   it.each([
     ['stop', 'exit-first'],
     ['stop', 'tree-first'],

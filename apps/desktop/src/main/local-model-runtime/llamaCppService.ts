@@ -349,20 +349,6 @@ export function createLlamaCppService(
       await starting;
       return start(reload);
     }
-    const installedModels = await models();
-    if (starting) {
-      await starting;
-      return start(reload);
-    }
-    const limits = contextLimits();
-    const preset = [
-      'version = 1',
-      '[*]',
-      `ctx-size = ${LLAMACPP_DEFAULT_CONTEXT}`,
-      ...installedModels.flatMap((model) => llamaCppModelPreset(model, limits)),
-      '',
-    ].join('\n');
-    if (ready && child && !reload && !modelsChanged && preset === activePreset) return;
     starting = exclusive('start', async (signal) => {
       await mkdir(root, { recursive: true });
       return withCrossProcessLock(
@@ -370,6 +356,20 @@ export function createLlamaCppService(
         { label: 'llamacpp startup', waitMs: 35_000 },
         async (lock) => {
           if (!lock.held) throw new Error('BUSY');
+          // Own the entire startup, including its first filesystem read. Stop
+          // cancels this same operation; late scans cannot resurrect a runtime.
+          signal.throwIfAborted();
+          const installedModels = await models();
+          signal.throwIfAborted();
+          const limits = contextLimits();
+          const preset = [
+            'version = 1',
+            '[*]',
+            `ctx-size = ${LLAMACPP_DEFAULT_CONTEXT}`,
+            ...installedModels.flatMap((model) => llamaCppModelPreset(model, limits)),
+            '',
+          ].join('\n');
+          if (ready && child && !reload && !modelsChanged && preset === activePreset) return;
           const runtime = await installed();
           if (!runtime) throw new Error('NOT_INSTALLED');
           if (!child) {
@@ -529,13 +529,18 @@ export function createLlamaCppService(
       starting = undefined;
     }
   }
-  async function stopRequested(): Promise<void> {
-    if (stopping) return stopping;
+  async function stopRequested(afterStop?: () => Promise<void>): Promise<void> {
+    if (stopping) {
+      await stopping;
+      if (afterStop) return stopRequested(afterStop);
+      return;
+    }
     stopping = (async () => {
       cancel();
       await settled;
       await starting?.catch(() => {});
       await stopAndWait();
+      await afterStop?.();
     })();
     try {
       await stopping;
@@ -544,26 +549,26 @@ export function createLlamaCppService(
     }
   }
   return {
-    remove: async (deleteConnection: () => Promise<void>) => {
-      await stopRequested();
-      await mkdir(root, { recursive: true });
-      await withCrossProcessLock(
-        path.join(root, 'server-start.lock'),
-        { label: 'llamacpp removal', waitMs: 0 },
-        async (lock) => {
-          if (!lock.held) throw new Error('BUSY');
-          let owner;
-          try {
-            owner = JSON.parse(await readFile(path.join(root, 'server-owner.json'), 'utf8'));
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('BUSY');
-          }
-          if (owner && (await probeReviewOwnerLiveness(owner.identity)) !== 'ended')
-            throw new Error('BUSY');
-          await deleteConnection();
-        },
-      );
-    },
+    remove: (deleteConnection: () => Promise<void>) =>
+      stopRequested(async () => {
+        await mkdir(root, { recursive: true });
+        await withCrossProcessLock(
+          path.join(root, 'server-start.lock'),
+          { label: 'llamacpp removal', waitMs: 0 },
+          async (lock) => {
+            if (!lock.held) throw new Error('BUSY');
+            let owner;
+            try {
+              owner = JSON.parse(await readFile(path.join(root, 'server-owner.json'), 'utf8'));
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('BUSY');
+            }
+            if (owner && (await probeReviewOwnerLiveness(owner.identity)) !== 'ended')
+              throw new Error('BUSY');
+            await deleteConnection();
+          },
+        );
+      }),
     snapshot,
     install,
     download,
