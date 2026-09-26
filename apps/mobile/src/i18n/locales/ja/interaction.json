@@ -197,7 +197,8 @@
     "photoNotReadable": "この写真は現在読み込めません（iCloud からのダウンロードが未完了の可能性があります）。後でもう一度お試しください。"
   },
   "pluginSetup": {
-    "completeOnDesktop": "リモートのパソコンで設定を完了してください。このカードは自動的に更新されます。",
+    "remoteDesktop": "デスクトップを開く",
+    "completeOnDesktop": "リモートデスクトップでパソコンを操作して設定できます。ログイン、認証、認証情報の保存はすべてそのパソコンで行われ、このカードは自動的に更新されます。",
     "chooseOne": "設定方法を1つ選択してください",
     "progress": "{{satisfied}}/{{total}} 完了",
     "desktopActionHint": "パソコンで{{action}}",

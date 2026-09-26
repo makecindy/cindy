@@ -1,6 +1,7 @@
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useGuardedPush } from '@/utils/useGuardedPush';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
@@ -76,7 +77,7 @@ import {
   buildInteractionTouchLayout,
   type InteractionTouchLayout,
 } from '@/session/interactionTouchLayout';
-import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { remoteSessionStore, useRemoteDeviceIdentity } from '@/session/remoteSessionStore';
 import type { PendingInteraction } from '@/session/types';
 import { fontWeight, iconStroke, lineHeight, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { iconSize, radius, spacing, typeScale } from '@/theme/tokens';
@@ -592,6 +593,7 @@ function InteractionItem({
       : null;
     return (
       <PluginSetupCard
+        deviceId={deviceId}
         busy={busy}
         cancel={cancelDecision
           ? {
@@ -1498,27 +1500,29 @@ function PlanReviewCard({
  * 手机端做不了配置动作(Secret 输入与 OAuth 必须留在被控端,见
  * docs/dev-rules/plugin-security-and-authoring.md §4 与 desktop 的
  * interactionResolveOrigin),所以这张卡的价值全在「看懂」:哪个插件、卡在哪一步、
- * 为什么失败、回电脑端要做什么。动作只有取消。
+ * 为什么失败、回电脑端要做什么。可进入目标电脑的远程桌面或取消请求。
  */
-export function PluginSetupMessageContent({ request, busy, onCancel }: {
-  request: PendingInteraction['request']; busy: boolean; onCancel?: () => void;
+export function PluginSetupMessageContent({ request, busy, onCancel, deviceId }: {
+  request: PendingInteraction['request']; busy: boolean; onCancel?: () => void; deviceId?: string;
 }) {
   const { width } = useWindowDimensions();
   const { t } = useTranslation();
   return <CompanionInteractionContext.Provider value>
-    <PluginSetupCard item={{ request }} requestId={typeof request.requestId === 'string' ? request.requestId : null}
+    <PluginSetupCard deviceId={deviceId} item={{ request }} requestId={typeof request.requestId === 'string' ? request.requestId : null}
       busy={busy} touchLayout={buildInteractionTouchLayout({ screenWidth: width, actionCount: 1 })}
       cancel={onCancel ? { label: t('interaction.panel.cancelRequest'), accessibilityLabel: t('interaction.panel.cancelRequestAccessibility'), onPress: onCancel } : null} />
   </CompanionInteractionContext.Provider>;
 }
 
 function PluginSetupCard({
+  deviceId,
   busy,
   cancel,
   item,
   requestId,
   touchLayout,
 }: {
+  deviceId?: string;
   busy: boolean;
   cancel: { accessibilityLabel: string; label: string; onPress(): void } | null;
   item: PendingInteraction;
@@ -1576,6 +1580,9 @@ function PluginSetupCard({
       {presentation.terminal ? null : (
         <Text style={styles.pluginSetupFootnote}>{t('interaction.pluginSetup.completeOnDesktop')}</Text>
       )}
+      {!presentation.terminal && deviceId && !isSharedTaskPeer(deviceId) ? (
+        <PluginSetupRemoteDesktopButton deviceId={deviceId} busy={busy} />
+      ) : null}
       {cancel ? (
         <View style={actionsStyle(styles, touchLayout)}>
           <ResolveButton
@@ -1592,6 +1599,21 @@ function PluginSetupCard({
       ) : null}
     </View>
   );
+}
+
+/** Navigation only: authorization and credentials stay in the computer's own UI. */
+function PluginSetupRemoteDesktopButton({ deviceId, busy }: { deviceId: string; busy: boolean }) {
+  const push = useGuardedPush();
+  const devices = useRemoteDeviceIdentity();
+  const styles = useInteractionStyles();
+  const { t } = useTranslation();
+  const deviceName = devices.find(device => device.deviceId === deviceId)?.name || deviceId;
+  const label = t('interaction.pluginSetup.remoteDesktop');
+  return <InteractionTouchButton accessibilityLabel={label} disabled={busy}
+    style={styles.primaryButton} testID="interaction.pluginSetup.remoteDesktop"
+    onPress={() => push({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } })}>
+    <Text style={styles.primaryText}>{label}</Text>
+  </InteractionTouchButton>;
 }
 
 /** 运行中的步骤:与桌面同语义,用 Heart Orange 表示「正在进行」。 */

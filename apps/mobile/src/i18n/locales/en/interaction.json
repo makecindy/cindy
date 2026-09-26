@@ -197,7 +197,8 @@
     "photoNotReadable": "This photo can't be read right now (it may not have finished downloading from iCloud). Try again later."
   },
   "pluginSetup": {
-    "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
+    "remoteDesktop": "Open Desktop",
+    "completeOnDesktop": "Use remote desktop to complete setup on the computer. Login, authorization and credentials stay on that computer; this card updates automatically.",
     "chooseOne": "Choose one setup method",
     "progress": "{{satisfied}}/{{total}} completed",
     "desktopActionHint": "On your computer: {{action}}",
