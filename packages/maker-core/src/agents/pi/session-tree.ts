@@ -140,7 +140,7 @@ export function normalizePiSessionTree(data: unknown): SessionTreeSnapshot {
   return { roots, leafId, activePathIds: reversed.reverse() };
 }
 
-/** Only a known accepted input followed exclusively by empty failed responses is replayable. */
+/** Retry empty failures, allowing native model/effort changes that do not produce output. */
 export function piRetryBranch(data: unknown, entryId: string): {
   parentId: string | null; requestTooLarge: boolean;
 } | null {
@@ -154,16 +154,22 @@ export function piRetryBranch(data: unknown, entryId: string): {
   const tail = tree.activePathIds.slice(index + 1).map(id => entries.get(id));
   if (!tail.length) return null;
   let requestTooLarge = false;
+  let hasFailedResponse = false;
   for (const item of tail) {
+    // Native navigateTree replaces messages only; it keeps the currently selected
+    // model and thinking level. Their history entries are not generated output.
+    if (item?.type === 'model_change' || item?.type === 'thinking_level_change') continue;
     const message = recordOf(item?.message);
     if (item?.type !== 'message' || message?.role !== 'assistant' ||
         message.stopReason !== 'error' || !Array.isArray(message.content) || message.content.length !== 0) {
       throw new Error('Pi retry would discard output or session state');
     }
+    hasFailedResponse = true;
     requestTooLarge ||= /(?:\b413\b|Failed to buffer the request body:\s*length limit exceeded)/i.test(
       typeof message.errorMessage === 'string' ? message.errorMessage : '',
     );
   }
+  if (!hasFailedResponse) throw new Error('Pi retry has no failed response');
   return { parentId: typeof entry.parentId === 'string' ? entry.parentId : null, requestTooLarge };
 }
 

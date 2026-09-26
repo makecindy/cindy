@@ -4835,7 +4835,7 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it.each(['413', 'other-error', 'compaction-413', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output'])(
+  it.each(['413', 'settings-changed', 'other-error', 'compaction-413', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output'])(
     'prepares an identity-bound Pi retry without duplicating accepted input: %s', async mode => {
       let navigated = false;
       captured.requestHandler = async command => {
@@ -4843,14 +4843,17 @@ describe("Pi provider-aware model routing", () => {
           sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
         } };
         if (command.type === 'get_tree') return { success: true, data: {
-          leafId: navigated || mode === 'new-window' ? 'parent' : 'failure',
+          leafId: navigated || mode === 'new-window' ? 'parent' : mode === 'settings-changed' ? 'effort' : 'failure',
           tree: [{ entry: { id: 'parent', type: 'message', message: { role: 'assistant' } }, children: [
             { entry: { id: 'accepted', parentId: 'parent', type: 'message', message: { role: 'user' } }, children: [
               { entry: { id: 'failure', parentId: 'accepted', type: 'message', message: {
                 role: 'assistant', stopReason: 'error',
                 content: mode === 'output' ? [{ type: 'toolCall', name: 'bash' }] : [],
                 errorMessage: mode === 'other-error' ? 'network error' : '413 length limit exceeded',
-              } }, children: [] },
+              } }, children: mode === 'settings-changed' ? [{
+                entry: { id: 'model', parentId: 'failure', type: 'model_change', provider: 'native-a', modelId: 'local-model' },
+                children: [{ entry: { id: 'effort', parentId: 'model', type: 'thinking_level_change', thinkingLevel: 'high' }, children: [] }],
+              }] : [] },
             ] },
           ] }],
         } };
@@ -4868,17 +4871,22 @@ describe("Pi provider-aware model routing", () => {
       };
       const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
       const handle = await agent.startSession({ sessionId: 'retry', workingDir: cwd, model: 'local-model' });
+      const retryStart = captured.requests.length;
       const promise = handle.send({ type: 'user', content: 'same input' }, { retryTranscriptUserEntryId: 'accepted' });
       const blocked = ['compaction-413', 'nothing-to-compact', 'cancelled-navigation', 'output'].includes(mode);
       if (blocked) await expect(promise).rejects.toThrow();
       else await promise;
       expect(captured.requests.filter(r => r.type === 'prompt' && r.message === 'same input')).toHaveLength(blocked ? 0 : 1);
       expect(captured.requests.filter(r => r.type === 'compact')).toHaveLength(
-        ['413', 'compaction-413', 'nothing-to-compact'].includes(mode) ? 1 : 0,
+        ['413', 'settings-changed', 'compaction-413', 'nothing-to-compact'].includes(mode) ? 1 : 0,
       );
       expect(handle.getUsageSnapshot?.().needsRollover === true).toBe(
         mode === 'compaction-413' || mode === 'nothing-to-compact',
       );
+      // Tree navigation preserves live settings; retry must not restore the
+      // model/effort that was selected when the failed input was first sent.
+      expect(captured.requests.slice(retryStart).filter(r =>
+        r.type === 'set_model' || r.type === 'set_thinking_level')).toEqual([]);
       await handle.close();
     },
   );
