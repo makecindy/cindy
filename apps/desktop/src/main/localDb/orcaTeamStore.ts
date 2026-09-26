@@ -12,6 +12,10 @@ import { withSessionRouteLock, withSessionRouteLocks } from './sessionRouteLock.
 import { cleanupSessionRuntimeForTerminalStatus } from './sessionRuntimeCleanup.js';
 import { compactSessionToolResultsBestEffort } from './toolResultCompaction.js';
 import { assertTaskMigrationWritable } from '../task-migration/journal.js';
+import {
+  withTaskMigrationBoundary,
+  withTaskMigrationWrite,
+} from '../task-migration/writeBoundary.js';
 
 const log = createLogger('orca-team-store');
 
@@ -87,7 +91,10 @@ export interface OrcaWorkerLinkRecord {
 
 export type OrcaWorkerCreationReservationResult =
   | { ok: true; occupiedSlotsBefore: number }
-  | { ok: false; errorCode: 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'WORKER_LIMIT_HARD_EXCEEDED' };
+  | {
+      ok: false;
+      errorCode: 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'WORKER_LIMIT_HARD_EXCEEDED';
+    };
 
 export async function reserveWorkerCreation(input: {
   reservationId: string;
@@ -99,15 +106,17 @@ export async function reserveWorkerCreation(input: {
   const now = Date.now();
   const team = await getTeamById(input.teamId);
   if (!team) throwIpcError('NOT_FOUND', 'Orca team not found');
-  return withSessionRouteLock(team.leadSessionId, async () => {
-    assertTaskMigrationWritable(team.leadSessionId);
-    return getDbClient().tx('orca.reserveWorkerCreation', {
-      ...input,
-      label: input.label.toLowerCase(),
-      now,
-      expiresAt: now + input.leaseMs,
-    });
-  });
+  return withSessionRouteLock(team.leadSessionId, () =>
+    withTaskMigrationWrite(team.leadSessionId, async () => {
+      assertTaskMigrationWritable(team.leadSessionId);
+      return getDbClient().tx('orca.reserveWorkerCreation', {
+        ...input,
+        label: input.label.toLowerCase(),
+        now,
+        expiresAt: now + input.leaseMs,
+      });
+    }),
+  );
 }
 
 export async function renewWorkerCreationReservation(
@@ -131,28 +140,30 @@ export async function createOrGetTeamForLead(input: {
   leadSessionId: string;
   status?: OrcaTeamStatus;
 }): Promise<OrcaTeamRecord> {
-  const existing = await getTeamByLeadSession(input.leadSessionId);
-  if (existing) {
-    await setSessionOrcaRole(input.leadSessionId, 'lead');
-    return existing;
-  }
+  return withTaskMigrationWrite(input.leadSessionId, async () => {
+    const existing = await getTeamByLeadSession(input.leadSessionId);
+    if (existing) {
+      await setSessionOrcaRole(input.leadSessionId, 'lead');
+      return existing;
+    }
 
-  const db = getDbClient().drizzle;
-  const now = Date.now();
-  const id = input.id ?? createId();
-  assertTaskMigrationWritable(input.leadSessionId);
-  await db.insert(orcaTeams).values({
-    id,
-    leadSessionId: input.leadSessionId,
-    status: input.status ?? 'active',
-    completedAt: null,
-    createdAt: now,
-    updatedAt: now,
+    const db = getDbClient().drizzle;
+    const now = Date.now();
+    const id = input.id ?? createId();
+    assertTaskMigrationWritable(input.leadSessionId);
+    await db.insert(orcaTeams).values({
+      id,
+      leadSessionId: input.leadSessionId,
+      status: input.status ?? 'active',
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await setSessionOrcaRole(input.leadSessionId, 'lead');
+    const created = await getTeamByLeadSession(input.leadSessionId);
+    if (!created) throwIpcError('INTERNAL', `Orca team ${id} was not found after create`);
+    return created;
   });
-  await setSessionOrcaRole(input.leadSessionId, 'lead');
-  const created = await getTeamByLeadSession(input.leadSessionId);
-  if (!created) throwIpcError('INTERNAL', `Orca team ${id} was not found after create`);
-  return created;
 }
 
 export async function getTeamByLeadSession(
@@ -172,16 +183,12 @@ export async function getTeamByLeadSession(
  * DB 层 partial unique 约束可能因历史 migration / drift 暂时缺失,因此这里仍做 read-time dedup:
  * 同一 lead 如果出现多个 active team,保留最新一条,其余标记为 cancelled。
  */
-export async function getActiveTeamByLead(
-  leadSessionId: string,
-): Promise<OrcaTeamRecord | null> {
+export async function getActiveTeamByLead(leadSessionId: string): Promise<OrcaTeamRecord | null> {
   const db = getDbClient().drizzle;
   const rows = await db
     .select()
     .from(orcaTeams)
-    .where(
-      and(eq(orcaTeams.leadSessionId, leadSessionId), eq(orcaTeams.status, 'active')),
-    )
+    .where(and(eq(orcaTeams.leadSessionId, leadSessionId), eq(orcaTeams.status, 'active')))
     .orderBy(desc(orcaTeams.updatedAt), desc(orcaTeams.createdAt));
 
   const latest = rows[0];
@@ -193,11 +200,13 @@ export async function getActiveTeamByLead(
   // (DbClient.drizzle 是 worker-thread 异步代理, 不支持同步 db.transaction —
   //  需要原子性的多语句写必须走命名事务, 见 client/tx/types.ts。)
   if (rows.length > 1) {
-    await getDbClient().tx('orca.cancelStaleTeams', {
-      leadSessionId,
-      keepTeamId: latest.id,
-      now: Date.now(),
-    });
+    await withTaskMigrationWrite(leadSessionId, () =>
+      getDbClient().tx('orca.cancelStaleTeams', {
+        leadSessionId,
+        keepTeamId: latest.id,
+        now: Date.now(),
+      }),
+    );
     log.warn('cancelled stale duplicate active orca teams', {
       leadSessionId,
       keptTeamId: latest.id,
@@ -259,21 +268,23 @@ export async function createActiveTeam(input: {
   id?: string;
   leadSessionId: string;
 }): Promise<OrcaTeamRecord> {
-  const db = getDbClient().drizzle;
-  const now = Date.now();
-  const id = input.id ?? createId();
-  assertTaskMigrationWritable(input.leadSessionId);
-  await db.insert(orcaTeams).values({
-    id,
-    leadSessionId: input.leadSessionId,
-    status: 'active',
-    completedAt: null,
-    createdAt: now,
-    updatedAt: now,
+  return withTaskMigrationWrite(input.leadSessionId, async () => {
+    const db = getDbClient().drizzle;
+    const now = Date.now();
+    const id = input.id ?? createId();
+    assertTaskMigrationWritable(input.leadSessionId);
+    await db.insert(orcaTeams).values({
+      id,
+      leadSessionId: input.leadSessionId,
+      status: 'active',
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const created = await getTeamById(id);
+    if (!created) throwIpcError('INTERNAL', `Orca team ${id} not found after create`);
+    return created;
   });
-  const created = await getTeamById(id);
-  if (!created) throwIpcError('INTERNAL', `Orca team ${id} not found after create`);
-  return created;
 }
 
 /**
@@ -284,13 +295,14 @@ export async function markTeamEnded(
   teamId: string,
   status: 'completed' | 'cancelled' | 'failed',
 ): Promise<void> {
-  (await teamWriteGuard(teamId))();
-  const db = getDbClient().drizzle;
-  const now = Date.now();
-  await db
-    .update(orcaTeams)
-    .set({ status, completedAt: now, updatedAt: now })
-    .where(eq(orcaTeams.id, teamId));
+  return withTeamWrite(teamId, async () => {
+    const db = getDbClient().drizzle;
+    const now = Date.now();
+    await db
+      .update(orcaTeams)
+      .set({ status, completedAt: now, updatedAt: now })
+      .where(eq(orcaTeams.id, teamId));
+  });
 }
 
 /**
@@ -301,16 +313,18 @@ export async function markTeamEnded(
 export async function archiveWorkersByTeam(teamId: string): Promise<string[]> {
   const client = getDbClient();
   const candidateIds = await listActiveWorkerSessionIdsForTeam(teamId);
-  const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
-    candidateIds.forEach(assertTaskMigrationWritable);
-    const ids = await client.tx('orca.archiveWorkersByTeam', {
-      teamId,
-      sessionIds: candidateIds,
-      now: Date.now(),
-    });
-    for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
-    return ids;
-  });
+  const updatedIds = await withSessionRouteLocks(candidateIds, () =>
+    withTeamWrite(teamId, async () => {
+      candidateIds.forEach(assertTaskMigrationWritable);
+      const ids = await client.tx('orca.archiveWorkersByTeam', {
+        teamId,
+        sessionIds: candidateIds,
+        now: Date.now(),
+      });
+      for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
+      return ids;
+    }),
+  );
   for (const id of updatedIds) {
     broadcastSessionPatch(id, { status: 'archived' });
     void compactSessionToolResultsBestEffort({ client, sessionId: id });
@@ -326,13 +340,14 @@ export async function markWorkersStatusByTeam(
   teamId: string,
   status: OrcaWorkerStatus,
 ): Promise<void> {
-  (await teamWriteGuard(teamId))();
-  const db = getDbClient().drizzle;
-  const now = Date.now();
-  await db
-    .update(orcaWorkers)
-    .set({ status, updatedAt: now })
-    .where(eq(orcaWorkers.teamId, teamId));
+  return withTeamWrite(teamId, async () => {
+    const db = getDbClient().drizzle;
+    const now = Date.now();
+    await db
+      .update(orcaWorkers)
+      .set({ status, updatedAt: now })
+      .where(eq(orcaWorkers.teamId, teamId));
+  });
 }
 
 /**
@@ -350,17 +365,19 @@ export async function reconcileInactiveTeamWorkersForLead(
 ): Promise<string[]> {
   const client = getDbClient();
   const candidateIds = await listActiveWorkerSessionIdsForInactiveTeams(leadSessionId);
-  const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
-    assertTaskMigrationWritable(leadSessionId);
-    candidateIds.forEach(assertTaskMigrationWritable);
-    const ids = await client.tx('orca.reconcileInactiveTeamWorkersForLead', {
-      leadSessionId,
-      sessionIds: candidateIds,
-      now: Date.now(),
-    });
-    for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
-    return ids;
-  });
+  const updatedIds = await withSessionRouteLocks(candidateIds, () =>
+    withTaskMigrationWrite(leadSessionId, async () => {
+      assertTaskMigrationWritable(leadSessionId);
+      candidateIds.forEach(assertTaskMigrationWritable);
+      const ids = await client.tx('orca.reconcileInactiveTeamWorkersForLead', {
+        leadSessionId,
+        sessionIds: candidateIds,
+        now: Date.now(),
+      });
+      for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
+      return ids;
+    }),
+  );
   for (const id of updatedIds) {
     broadcastSessionPatch(id, { status: 'archived' });
     void compactSessionToolResultsBestEffort({ client, sessionId: id });
@@ -393,12 +410,11 @@ export async function addOrUpdateWorker(input: {
   focused?: boolean;
   idleSince?: number | null;
 }): Promise<OrcaWorkerRecord> {
-  const team =
-    input.teamId
-      ? await getTeamById(input.teamId)
-      : input.leadSessionId
-        ? await createOrGetTeamForLead({ leadSessionId: input.leadSessionId })
-        : null;
+  const team = input.teamId
+    ? await getTeamById(input.teamId)
+    : input.leadSessionId
+      ? await createOrGetTeamForLead({ leadSessionId: input.leadSessionId })
+      : null;
   if (!team) {
     throwIpcError('INVALID_PARAMS', 'teamId or leadSessionId is required to add an Orca worker');
   }
@@ -408,25 +424,27 @@ export async function addOrUpdateWorker(input: {
   // clear-focus + select + upsert 需要原子性 —— DbClient.drizzle 是 worker-thread
   // 异步代理, 不支持同步 db.transaction, 故走命名事务在 worker 内一个事务里执行。
   // 可选字段为 undefined 表示 "保留 existing 当前值", 与原 drizzle 写法语义一致。
-  assertTaskMigrationWritable(team.leadSessionId);
-  assertTaskMigrationWritable(input.sessionId);
-  await getDbClient().tx('orca.upsertWorker', {
-    id: input.id,
-    teamId: team.id,
-    sessionId: input.sessionId,
-    status: input.status,
-    label: input.label?.toLowerCase() ?? input.label,
-    worktreeBranch: input.worktreeBranch,
-    role: input.role,
-    focused: input.focused,
-    idleSince: input.idleSince,
-    now,
+  return withTaskMigrationBoundary([team.leadSessionId, input.sessionId], async () => {
+    assertTaskMigrationWritable(team.leadSessionId);
+    assertTaskMigrationWritable(input.sessionId);
+    await getDbClient().tx('orca.upsertWorker', {
+      id: input.id,
+      teamId: team.id,
+      sessionId: input.sessionId,
+      status: input.status,
+      label: input.label?.toLowerCase() ?? input.label,
+      worktreeBranch: input.worktreeBranch,
+      role: input.role,
+      focused: input.focused,
+      idleSince: input.idleSince,
+      now,
+    });
+    await setSessionOrcaRole(input.sessionId, 'worker');
+    const workers = await listWorkersByLead(team.leadSessionId);
+    const worker = workers.find((w) => w.id === input.id || w.sessionId === input.sessionId);
+    if (!worker) throwIpcError('INTERNAL', `Orca worker ${input.id} was not found after save`);
+    return worker;
   });
-  await setSessionOrcaRole(input.sessionId, 'worker');
-  const workers = await listWorkersByLead(team.leadSessionId);
-  const worker = workers.find((w) => w.id === input.id || w.sessionId === input.sessionId);
-  if (!worker) throwIpcError('INTERNAL', `Orca worker ${input.id} was not found after save`);
-  return worker;
 }
 
 export async function listWorkersByLead(
@@ -522,16 +540,17 @@ export async function updateWorkerStatus(
   workerId: string,
   status: OrcaWorkerStatus,
 ): Promise<void> {
-  (await workerWriteGuard(workerId))();
-  const db = getDbClient().drizzle;
-  await db
-    .update(orcaWorkers)
-    .set({
-      status,
-      updatedAt: Date.now(),
-      ...(status === 'running' ? { idleSince: null } : {}),
-    })
-    .where(eq(orcaWorkers.id, workerId));
+  return withWorkerWrite(workerId, async () => {
+    const db = getDbClient().drizzle;
+    await db
+      .update(orcaWorkers)
+      .set({
+        status,
+        updatedAt: Date.now(),
+        ...(status === 'running' ? { idleSince: null } : {}),
+      })
+      .where(eq(orcaWorkers.id, workerId));
+  });
 }
 
 /** Atomically marks a worker idle only while it still has the expected status. */
@@ -539,28 +558,30 @@ export async function markWorkerIdleIfStatus(
   workerId: string,
   expectedStatus: OrcaWorkerStatus,
 ): Promise<boolean> {
-  (await workerWriteGuard(workerId))();
-  const db = getDbClient().drizzle;
-  const now = Date.now();
-  const result = await db
-    .update(orcaWorkers)
-    .set({ status: 'idle', idleSince: now, updatedAt: now })
-    .where(and(eq(orcaWorkers.id, workerId), eq(orcaWorkers.status, expectedStatus)))
-    .run();
-  return result.changes > 0;
+  return withWorkerWrite(workerId, async () => {
+    const db = getDbClient().drizzle;
+    const now = Date.now();
+    const result = await db
+      .update(orcaWorkers)
+      .set({ status: 'idle', idleSince: now, updatedAt: now })
+      .where(and(eq(orcaWorkers.id, workerId), eq(orcaWorkers.status, expectedStatus)))
+      .run();
+    return result.changes > 0;
+  });
 }
 
 /** Restores a raced done acknowledgement only while the worker is still idle. */
 export async function restoreWorkerDoneIfIdle(workerId: string): Promise<boolean> {
-  (await workerWriteGuard(workerId))();
-  const db = getDbClient().drizzle;
-  const now = Date.now();
-  const result = await db
-    .update(orcaWorkers)
-    .set({ status: 'done', idleSince: null, updatedAt: now })
-    .where(and(eq(orcaWorkers.id, workerId), eq(orcaWorkers.status, 'idle')))
-    .run();
-  return result.changes > 0;
+  return withWorkerWrite(workerId, async () => {
+    const db = getDbClient().drizzle;
+    const now = Date.now();
+    const result = await db
+      .update(orcaWorkers)
+      .set({ status: 'done', idleSince: null, updatedAt: now })
+      .where(and(eq(orcaWorkers.id, workerId), eq(orcaWorkers.status, 'idle')))
+      .run();
+    return result.changes > 0;
+  });
 }
 
 /**
@@ -568,16 +589,17 @@ export async function restoreWorkerDoneIfIdle(workerId: string): Promise<boolean
  * 这条路径只服务失败清理，不影响正常协同结束时保留历史 worker link 的语义。
  */
 export async function removeWorker(workerId: string): Promise<void> {
-  (await workerWriteGuard(workerId))();
-  const client = getDbClient();
-  const removedSessionId = await client.tx('orca.removeWorker', {
-    workerId,
-    now: Date.now(),
+  return withWorkerWrite(workerId, async () => {
+    const client = getDbClient();
+    const removedSessionId = await client.tx('orca.removeWorker', {
+      workerId,
+      now: Date.now(),
+    });
+    if (removedSessionId) {
+      broadcastSessionPatch(removedSessionId, { status: 'archived', orcaRole: null });
+      void compactSessionToolResultsBestEffort({ client, sessionId: removedSessionId });
+    }
   });
-  if (removedSessionId) {
-    broadcastSessionPatch(removedSessionId, { status: 'archived', orcaRole: null });
-    void compactSessionToolResultsBestEffort({ client, sessionId: removedSessionId });
-  }
 }
 
 /**
@@ -586,10 +608,11 @@ export async function removeWorker(workerId: string): Promise<void> {
  * 各 inline 一份后漂移(review F4 落地后的 follow-up; reuse review 命中)。
  */
 export async function setWorkerFocus(teamId: string, workerId: string): Promise<void> {
-  (await teamWriteGuard(teamId))();
-  // 清旧 focused + set 新 focused 需要原子性。DbClient.drizzle 是 worker-thread 异步
-  // 代理, 不支持同步 db.transaction, 故走命名事务在 worker 内一个事务里执行。
-  await getDbClient().tx('orca.setWorkerFocus', { teamId, workerId, now: Date.now() });
+  return withTeamWrite(teamId, async () => {
+    // 清旧 focused + set 新 focused 需要原子性。DbClient.drizzle 是 worker-thread 异步
+    // 代理, 不支持同步 db.transaction, 故走命名事务在 worker 内一个事务里执行。
+    await getDbClient().tx('orca.setWorkerFocus', { teamId, workerId, now: Date.now() });
+  });
 }
 
 /**
@@ -597,17 +620,19 @@ export async function setWorkerFocus(teamId: string, workerId: string): Promise<
  */
 export async function archiveSingleWorkerSession(sessionId: string): Promise<void> {
   const client = getDbClient();
-  const changed = await withSessionRouteLock(sessionId, async () => {
-    assertTaskMigrationWritable(sessionId);
-    const result = await client.drizzle
-      .update(sessions)
-      .set({ status: 'archived', updatedAt: Date.now() })
-      .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted')))
-      .run();
-    if (result.changes === 0) return false;
-    cleanupSessionRuntimeForTerminalStatus(sessionId, 'archived');
-    return true;
-  });
+  const changed = await withSessionRouteLock(sessionId, () =>
+    withTaskMigrationWrite(sessionId, async () => {
+      assertTaskMigrationWritable(sessionId);
+      const result = await client.drizzle
+        .update(sessions)
+        .set({ status: 'archived', updatedAt: Date.now() })
+        .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted')))
+        .run();
+      if (result.changes === 0) return false;
+      cleanupSessionRuntimeForTerminalStatus(sessionId, 'archived');
+      return true;
+    }),
+  );
   if (changed) {
     broadcastSessionPatch(sessionId, { status: 'archived' });
     void compactSessionToolResultsBestEffort({ client, sessionId });
@@ -641,31 +666,27 @@ async function listActiveWorkerSessionIdsForInactiveTeams(
   return rows.map((row) => row.id);
 }
 
-export async function setSessionOrcaRole(
-  sessionId: string,
-  role: OrcaRole | null,
-): Promise<void> {
-  const db = getDbClient().drizzle;
-  assertTaskMigrationWritable(sessionId);
-  await db.update(sessions).set({ orcaRole: role }).where(eq(sessions.id, sessionId));
-  broadcastSessionPatch(sessionId, { orcaRole: role });
+export async function setSessionOrcaRole(sessionId: string, role: OrcaRole | null): Promise<void> {
+  return withTaskMigrationWrite(sessionId, async () => {
+    const db = getDbClient().drizzle;
+    assertTaskMigrationWritable(sessionId);
+    await db.update(sessions).set({ orcaRole: role }).where(eq(sessions.id, sessionId));
+    broadcastSessionPatch(sessionId, { orcaRole: role });
+  });
 }
 
-async function teamWriteGuard(teamId: string): Promise<() => void> {
+/** Hold admission through DB settlement, not just the pre-write check. */
+async function withTeamWrite<T>(teamId: string, write: () => Promise<T>): Promise<T> {
   const team = await getTeamById(teamId);
-  return () => {
-    if (team) assertTaskMigrationWritable(team.leadSessionId);
-  };
+  return team ? withTaskMigrationWrite(team.leadSessionId, write) : write();
 }
 
-async function workerWriteGuard(workerId: string): Promise<() => void> {
+async function withWorkerWrite<T>(workerId: string, write: () => Promise<T>): Promise<T> {
   const worker = await getDbClient().queryOne<{ sessionId: string }>(
     'SELECT session_id AS sessionId FROM orca_workers WHERE id = ?',
     [workerId],
   );
-  return () => {
-    if (worker) assertTaskMigrationWritable(worker.sessionId);
-  };
+  return worker ? withTaskMigrationWrite(worker.sessionId, write) : write();
 }
 
 async function getTeamById(id: string): Promise<OrcaTeamRecord | null> {
