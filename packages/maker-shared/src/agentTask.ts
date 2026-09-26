@@ -174,13 +174,57 @@ export function deriveAgentTaskStatus(
   options?: {
     resultIsLaunchReceipt?: boolean;
     persistedStatus?: AgentTaskTerminalStatus;
+    resultIsError?: boolean;
   },
 ): AgentTaskStatus {
   const persistedStatus = normalizeAgentTaskTerminalStatus(options?.persistedStatus);
   if (persistedStatus) return persistedStatus;
   const hasResult = typeof result === 'string' && result.trim().length > 0;
+  // resultIsError 只应收口 stale `running` / 缺失 live update 的历史回放;显式
+  // failed / stopped 是用户或系统声明的终态,不得被配对的 tool result 覆盖 ——
+  // live `stopped`(用户中断)配上 SDK 的 <tool_use_error> 回执会被误显示为失败。
+  if (
+    options?.resultIsError
+    && hasResult
+    && (updateStatus === undefined || updateStatus === 'running')
+  ) {
+    return 'failed';
+  }
   if (updateStatus === 'running' && hasResult && !options?.resultIsLaunchReceipt) return 'completed';
   return updateStatus ?? (hasResult ? 'completed' : 'running');
+}
+
+/**
+ * 判断子任务工具结果是否以协议级错误收尾(历史回放恢复 failed 的依据)。
+ *
+ * 仅识别 Claude SDK 协议标记 `<tool_use_error>` — 这是 SDK 在 tool call 失败时
+ * 发出的结构化错误格式。不解析任意 JSON 字段或自然语言错误短语,因为子任务结果
+ * 内容是用户工作产物,其中 "errors"/"status"/"stderr" 等字段是数据而非执行信号。
+ *
+ * 调用方约束:此函数仅应在已确认为子任务上下文的调用点使用
+ * (AgentTaskCard / listSessionTasks)。普通工具结果包含 `<tool_use_error>` 时
+ * 不应传入此函数,否则会将非子任务结果误判为失败。
+ *
+ * Authority: Claude protocol `<tool_use_error>` — SDK 在 tool call 失败时发出。
+ */
+export function isSubagentResultError(result: string | undefined): boolean {
+  const text = typeof result === 'string' ? result.trim() : '';
+  if (text.length === 0) return false;
+  // Only trust protocol-level error markers. Subagent result content is arbitrary
+  // user work product -- fields like "errors", "status", "stderr" in JSON output
+  // are data, not execution failure signals. Parsing arbitrary body for
+  // error-looking fields creates false positives that mark successful tasks as
+  // failed after Desktop reload / Mobile reconnect.
+  //
+  // Authority sources:
+  // 1. Claude protocol <tool_use_error> -- emitted by the SDK when a tool call fails
+  // 2. Persisted structured terminal status (agentTaskStatus) -- written by
+  //    messagePersistBroadcaster on terminal observations
+  //
+  // Note: <error> prefix removed -- too generic. A subagent returning
+  // `<error>校验报告</error>` as work output would be misclassified as failure.
+  // Only <tool_use_error> is a reliable protocol-owned error marker.
+  return text.startsWith('<tool_use_error>');
 }
 
 /**
@@ -199,6 +243,18 @@ export function isSubagentSpawnToolName(toolName: string): boolean {
 
 export function isAgentTaskToolName(toolName: string): boolean {
   return isSubagentSpawnToolName(toolName) || toolName.startsWith('collab:');
+}
+
+/**
+ * Claude 子任务工具名（`Agent` / `Task`）。
+ *
+ * `isSubagentResultError` 识别的 `<tool_use_error>` 是 Claude SDK 协议级标记，只对这两个
+ * 工具的结果有意义。后台 Bash、PI subagent 与 Codex `collab:*` 的成功产物可能合法地以该
+ * 前缀开头（例如把该标记当成搜索命中打印出来），无条件按它收口会把成功任务误标成
+ * `failed`。调用方必须先确认工具名属于 Claude 子任务，再把结果交给 `isSubagentResultError`。
+ */
+export function isClaudeSubagentToolName(toolName: string | undefined): boolean {
+  return toolName === 'Agent' || toolName === 'Task';
 }
 
 /** PI 子代理工具名 —— maker-core 的 pi 扩展注册端与本文件的卡片判据共用,不各写字面量。 */
@@ -454,10 +510,10 @@ export function buildAgentTaskCardModel(input: {
 }): AgentTaskCardModel {
   const { toolName, toolInput, update, result, persistedStatus } = input;
   const status = deriveAgentTaskStatus(update?.status, result, {
-    persistedStatus,
-    resultIsLaunchReceipt:
+    persistedStatus,      resultIsLaunchReceipt:
       subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
       || subagentSpawnResultIndicatesRunning(toolName, result),
+    resultIsError: isSubagentResultError(result),
   });
   const provider: 'claude-code' | 'codex' | 'pi' =
     update?.provider

@@ -155,6 +155,45 @@ describe('subagent grouping (buildMobileMessageRenderItems)', () => {
     expect(groups[0].status).toBe('completed');
   });
 
+  it('历史 Agent 缺 toolUseId 时,从已配对的 secondaryBody 恢复 failed 终态', () => {
+    // buildSubagentResultMeta 对无 toolUseId 的结果没有条目;归一化层经 adjacency
+    // 把 tool_result 配对进 secondaryBody。若这里不读 secondaryBody,重连后同一失败
+    // 会被显示成 completed(streaming 时为 running)而不是承诺的 failed。
+    const items = buildMobileMessageRenderItems([
+      msg({
+        id: 'legacy-agent',
+        role: 'tool_use',
+        content: { toolUseId: null, toolName: 'Agent', input: { description: 'legacy' } },
+        toolUseId: null,
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+      msg({
+        id: 'legacy-result',
+        role: 'tool_result',
+        content: '<tool_use_error>legacy boom</tool_use_error>',
+        toolUseId: null,
+        createdAt: '2026-01-01T00:00:02.000Z',
+      }),
+    ]);
+    const groups = subagentGroups(items);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].status).toBe('failed');
+  });
+
+  it('带 toolUseId 的在跑 Agent 即使有邻接 secondaryBody 也不提前收口', () => {
+    // 带 ID 的 Agent 尚无自身 result,归一化层可能把下一行其他工具的 result 经
+    // adjacency 临时借进 secondaryBody —— 该借用非权威,不得让任务提前 completed/
+    // failed(尤其邻接文本以 <tool_use_error> 开头时不能误判 failed)。
+    const items = buildMobileMessageRenderItems([
+      agentToolUse('A1', { subagentType: 'Explore', createdAt: '2026-01-01T00:00:01.000Z' }),
+      childTool('Bash', 'A1', '2026-01-01T00:00:02.000Z'),
+      toolResult('other-1', 'tu-other', '<tool_use_error>not the agent result</tool_use_error>'),
+    ], { isSessionStreaming: true });
+    const groups = subagentGroups(items);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].status).toBe('running');
+  });
+
   it('marks status running when no closing tool_result and session is streaming', () => {
     const items = buildMobileMessageRenderItems([
       agentToolUse('A1', { subagentType: 'Explore', createdAt: '2026-01-01T00:00:01.000Z' }),
@@ -201,6 +240,53 @@ describe('subagent grouping (buildMobileMessageRenderItems)', () => {
       expect(subagentGroups(items)[0].status).toBe(status);
     },
   );
+
+  it('restores failed for a replayed protocol error result (<tool_use_error>)', () => {
+    // 回归(#3024):Mobile 重连/历史回放只有配对的 `<tool_use_error>` 结果、无 agentTaskStatus 时,
+    // subagent_group 曾只凭"存在 result"判 completed,同一启动失败在 Desktop 显示 failed、Mobile 显示
+    // completed(跨端终态不一致)。现与 Desktop deriveAgentTaskStatus 同口径恢复 failed。
+    const items = buildMobileMessageRenderItems([
+      agentToolUse('A1', { subagentType: 'Explore', createdAt: '2026-01-01T00:00:01.000Z' }),
+      agentResult('A1', '<tool_use_error>Agent launch failed: model unavailable</tool_use_error>', '2026-01-01T00:00:02.000Z'),
+    ]);
+    const group = subagentGroups(items)[0];
+    expect(group.status).toBe('failed');
+  });
+
+  it('keeps completed when only a nested block array result mentions tool_use_error mid-text (prefix match only)', () => {
+    // 防误报:只有以 `<tool_use_error>` 开头才是协议错误;正文中段出现不算(block 数组形态)。
+    const items = buildMobileMessageRenderItems([
+      agentToolUse('A1', { subagentType: 'Explore', createdAt: '2026-01-01T00:00:01.000Z' }),
+      msg({
+        role: 'tool_result',
+        toolUseId: 'A1',
+        createdAt: '2026-01-01T00:00:02.000Z',
+        content: [{ type: 'text', text: '总结:<tool_use_error> 是 SDK 的错误标记格式,本次任务已完整解析并修复它。' }],
+      }),
+    ]);
+    expect(subagentGroups(items)[0].status).toBe('completed');
+  });
+
+  it('still prefers the persisted terminal status over the protocol error fallback', () => {
+    // persisted agentTaskStatus 优先级不变:即使结果以 <tool_use_error> 开头,
+    // 已持久化的终态(如 failed→重试后 succeeded 场景的 stopped)不被覆盖。
+    const items = buildMobileMessageRenderItems([
+      msg({
+        id: 'agent',
+        role: 'tool_use',
+        toolUseId: 'toolu-agent',
+        content: { toolUseId: 'toolu-agent', toolName: 'Agent', input: { description: 'Retry' } },
+        agentMeta: { agentTaskStatus: 'stopped' },
+      }),
+      msg({
+        id: 'result',
+        role: 'tool_result',
+        toolUseId: 'toolu-agent',
+        content: '<tool_use_error>stale error from earlier attempt</tool_use_error>',
+      }),
+    ]);
+    expect(subagentGroups(items)[0].status).toBe('stopped');
+  });
 
   it('leaves an ordinary session (no Agent / no parentUuid) byte-identical to the shared builder', () => {
     const messages = [

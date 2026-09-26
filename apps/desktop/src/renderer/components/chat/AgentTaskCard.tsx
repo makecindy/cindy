@@ -14,7 +14,6 @@ import {
 import { useTranslation } from 'react-i18next';
 import {
   deriveAgentTaskStatus,
-  formatAgentTaskTitle,
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 
@@ -38,6 +37,9 @@ import { formatCompactTokens } from '@/lib/usageFormat';
 import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
 import {
   PI_SUBAGENT_TOOL_NAME,
+  formatAgentTaskTitle,
+  isClaudeSubagentToolName,
+  isSubagentResultError,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
 } from '@cindy/maker-shared/agent-task';
@@ -232,19 +234,6 @@ export function AgentTaskCard({
     };
   }, [isWorkflow, update?.status, sessionId, workflowTaskId]);
 
-  const status = isWorkflow
-    ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
-    : deriveAgentTaskStatus(update?.status, result, {
-        persistedStatus,
-        resultIsLaunchReceipt:
-          subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
-          || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
-      });
-  const StatusIcon = statusIcon(status);
-  const statusIconClassName = cn(
-    'text-[var(--text-secondary)]',
-    status === 'failed' && 'text-[var(--error-fg)]',
-  );
   // bash-task-card: 后台 Bash(run_in_background)与子 Agent 共用本卡,但视觉上
   // 是「后台命令」—— 终端图标 + shell provider 标签,避免用户把跑测试的 bash
   // 误读成一个子 Agent。
@@ -254,6 +243,30 @@ export function AgentTaskCard({
     ?? (toolCall?.toolName?.startsWith('collab:')
       ? 'codex'
       : toolCall?.toolName === PI_SUBAGENT_TOOL_NAME ? 'pi' : 'claude-code');
+  // `<tool_use_error>` 是 Claude SDK 协议级标记,只对 Claude 子任务(Agent/Task)的
+  // 结果有意义。后台 Bash、PI subagent 与 Codex `collab:*` 的成功产物可能合法地以
+  // 该前缀开头,无条件判定会把成功任务误标成 failed。工具名已知时按工具名收窄,
+  // 只有历史回放(update 卡无 toolCall)才退回 provider 判定。
+  const claudeProtocolResult =
+    isSubagent
+    && (toolCall?.toolName !== undefined
+      ? isClaudeSubagentToolName(toolCall.toolName)
+      : provider === 'claude-code');
+
+  const status = isWorkflow
+    ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
+    : deriveAgentTaskStatus(update?.status, result, {
+        persistedStatus,
+        resultIsLaunchReceipt:
+          subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
+          || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
+        resultIsError: claudeProtocolResult && isSubagentResultError(result),
+      });
+  const StatusIcon = statusIcon(status);
+  const statusIconClassName = cn(
+    'text-[var(--text-secondary)]',
+    status === 'failed' && 'text-[var(--error-fg)]',
+  );
   const AvatarIcon = isWorkflow ? Workflow : isBash ? SquareTerminal : Bot;
   const title = compactText(
     formatAgentTaskTitle(provider, (isWorkflow ? update?.workflowName : undefined) ??
