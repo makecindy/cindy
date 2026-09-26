@@ -197,7 +197,7 @@
     "photoNotReadable": "이 사진은 지금 읽을 수 없습니다(iCloud에서 다운로드가 완료되지 않았을 수 있습니다). 나중에 다시 시도하세요."
   },
   "pluginSetup": {
-    "remoteDesktop": "{{device}} 원격 조작으로 설정 완료",
+    "remoteDesktop": "데스크톱 열기",
     "completeOnDesktop": "원격 데스크톱으로 컴퓨터를 조작하여 설정하세요. 로그인, 인증 및 인증 정보 저장은 모두 해당 컴퓨터에서 이루어지며 이 카드는 자동으로 업데이트됩니다.",
     "chooseOne": "설정 방법을 하나 선택하세요",
     "progress": "{{satisfied}}/{{total}} 완료",

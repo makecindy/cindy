@@ -1608,7 +1608,7 @@ function PluginSetupRemoteDesktopButton({ deviceId, busy }: { deviceId: string; 
   const styles = useInteractionStyles();
   const { t } = useTranslation();
   const deviceName = devices.find(device => device.deviceId === deviceId)?.name || deviceId;
-  const label = t('interaction.pluginSetup.remoteDesktop', { device: deviceName });
+  const label = t('interaction.pluginSetup.remoteDesktop');
   return <InteractionTouchButton accessibilityLabel={label} disabled={busy}
     style={styles.primaryButton} testID="interaction.pluginSetup.remoteDesktop"
     onPress={() => router.push({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } })}>
