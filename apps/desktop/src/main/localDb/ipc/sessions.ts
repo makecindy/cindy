@@ -2386,7 +2386,8 @@ export async function setSessionsStatusInDb(
   if (sessionIds.length === 0) return [];
   const ownerScope = captureOwnerScope();
   const dbClient = getDbClient();
-  const applied = await withSessionRouteLocks(sessionIds, async () => {
+  const applied = await withSessionRouteLocks(sessionIds, () => withTaskMigrationBoundary(sessionIds, async () => {
+    for (const id of sessionIds) assertTaskMigrationWritable(id);
     const resources: string[] = [];
     const perSession = new Map<string, string[]>();
     for (const id of sessionIds) {
@@ -2396,7 +2397,6 @@ export async function setSessionsStatusInDb(
     }
     const physicalResources = await Promise.all([...new Set(resources)].map(physicalWorktreeKey));
     return withWorktreeMutation(resources, async () => {
-      for (const id of sessionIds) assertTaskMigrationWritable(id);
       if (status === 'archived') {
         for (const id of sessionIds) await requestWorktreeRecycle(id, perSession.get(id));
       }
@@ -2420,7 +2420,7 @@ export async function setSessionsStatusInDb(
       for (const resource of physicalResources) notifyWorktreeRecycleOpportunity(resource);
       return rows;
     });
-  });
+  }));
   for (const item of applied) {
     compactTerminalSessionToolResults(dbClient, item.sessionId, item.status);
   }

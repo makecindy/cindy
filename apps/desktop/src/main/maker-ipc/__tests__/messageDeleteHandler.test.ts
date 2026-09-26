@@ -1,12 +1,20 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { withTaskMigrationBoundary } from '../../task-migration/writeBoundary';
 
 import { performMessageDeletion, type MessageDeleteHandlerDeps } from '../messageDeleteHandler';
-const migration = vi.hoisted(() => ({ assertWritable: vi.fn() }));
+const migration = vi.hoisted(() => ({ assertWritable: vi.fn(), root: '' }));
 vi.mock('../../task-migration/journal', () => ({
   assertTaskMigrationWritable: migration.assertWritable,
+  migrationScope: () => ({ root: migration.root, assertCurrent() {} }),
 }));
+beforeEach(() => {
+  migration.assertWritable.mockReset();
+  migration.root = mkdtempSync(join(tmpdir(), 'message-delete-admission-'));
+});
+afterEach(() => rmSync(migration.root, { recursive: true, force: true }));
 
 function makeDeps(overrides: Partial<MessageDeleteHandlerDeps> = {}): MessageDeleteHandlerDeps {
   return {
@@ -48,15 +56,32 @@ describe('performMessageDeletion', () => {
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.commitDeletion).not.toHaveBeenCalled();
   });
-  it('rechecks the fence after asynchronous history preparation', async () => {
-    const deps = makeDeps({
-      listMessagesForContext: async () => {
-        migration.assertWritable.mockImplementationOnce(() => { throw new Error('MIGRATION_TASK_BUSY'); });
-        return [];
-      },
-    });
-    await expect(performMessageDeletion(deps, { sessionId: 's1', clientId: 'target' })).rejects.toThrow('MIGRATION_TASK_BUSY');
-    expect(deps.commitDeletion).not.toHaveBeenCalled();
+  it.each([false, true])('serializes deletion and migration through commit (migration first: %s)', async migrationFirst => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const deps = makeDeps();
+    if (migrationFirst) {
+      const entered = vi.fn();
+      const preparing = withTaskMigrationBoundary(['s1'], async () => {
+        entered(); await gate;
+        migration.assertWritable.mockImplementation(() => { throw new Error('MIGRATION_TASK_BUSY'); });
+      });
+      await vi.waitFor(() => expect(entered).toHaveBeenCalled());
+      const rejected = expect(performMessageDeletion(deps, { sessionId: 's1', clientId: 'target' })).rejects.toThrow('MIGRATION_TASK_BUSY');
+      release(); await Promise.all([preparing, rejected]);
+      expect(deps.commitDeletion).not.toHaveBeenCalled();
+      expect(deps.closeSession).not.toHaveBeenCalled();
+    } else {
+      const commit = deps.commitDeletion;
+      deps.commitDeletion = vi.fn(async (...args: Parameters<MessageDeleteHandlerDeps['commitDeletion']>) => { await gate; return commit(...args); });
+      const deleting = performMessageDeletion(deps, { sessionId: 's1', clientId: 'target' });
+      await vi.waitFor(() => expect(deps.commitDeletion).toHaveBeenCalled());
+      const snapshot = vi.fn(async () => { expect(commit).toHaveBeenCalled(); });
+      const preparing = withTaskMigrationBoundary(['s1'], snapshot);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(snapshot).not.toHaveBeenCalled();
+      release(); await Promise.all([deleting, preparing]);
+    }
   });
   it('keeps the deleted-session preview on the visible message projection', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/main/localDb/ipc/messages.ts'), 'utf8');

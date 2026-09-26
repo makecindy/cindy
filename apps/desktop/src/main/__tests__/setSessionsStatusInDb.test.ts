@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { SessionRouteLock } from '../localDb/sessionRouteLock.js';
+import { withTaskMigrationBoundary } from '../task-migration/writeBoundary';
 
 type SessionRouteLockMock = SessionRouteLock &
   MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
@@ -39,8 +40,15 @@ const h = vi.hoisted(() => ({
   readBindings: vi.fn(),
   requestRecycle: vi.fn(),
   userDataPath: '',
+  migrating: false,
   agentIslandService: {
     handleSessionMetadataPatch: vi.fn(),
+  },
+}));
+vi.mock('../task-migration/journal', () => ({
+  migrationScope: () => ({ root: h.userDataPath, assertCurrent() {} }),
+  assertTaskMigrationWritable: () => {
+    if (h.migrating) throw new Error('MIGRATION_TASK_BUSY');
   },
 }));
 
@@ -107,6 +115,7 @@ import { queueSessionWorktreeRecycle } from '../worktree/recycleQueue';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.migrating = false;
   h.userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-set-sessions-status-'));
   h.closeSession.mockResolvedValue(undefined);
   h.isSessionAlive.mockReturnValue(false);
@@ -143,6 +152,33 @@ afterEach(async () => {
 });
 
 describe('setSessionsStatusInDb', () => {
+  it.each(['active', 'archived'] as const)('holds batch %s admission until commit and rejects late batches', async status => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    h.tx.mockImplementationOnce(async () => { await gate; return []; });
+    const writing = setSessionsStatusInDb(['lead', 'worker'], status);
+    await vi.waitFor(() => expect(h.tx).toHaveBeenCalled());
+    const snapshot = vi.fn(async () => { h.migrating = true; });
+    const preparing = withTaskMigrationBoundary(['worker'], snapshot);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(snapshot).not.toHaveBeenCalled();
+    release(); await Promise.all([writing, preparing]);
+    await expect(setSessionsStatusInDb(['lead', 'worker'], status)).rejects.toThrow('MIGRATION_TASK_BUSY');
+    expect(h.tx).toHaveBeenCalledTimes(1);
+  });
+  it.each(['active', 'archived'] as const)('rechecks batch %s after waiting for migration, before recycle intent', async status => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const entered = vi.fn();
+    const preparing = withTaskMigrationBoundary(['worker'], async () => {
+      entered(); await gate; h.migrating = true;
+    });
+    await vi.waitFor(() => expect(entered).toHaveBeenCalled());
+    const rejected = expect(setSessionsStatusInDb(['lead', 'worker'], status)).rejects.toThrow('MIGRATION_TASK_BUSY');
+    release(); await Promise.all([preparing, rejected]);
+    expect(h.tx).not.toHaveBeenCalled();
+    expect(h.requestRecycle).not.toHaveBeenCalled();
+  });
   it('returns batch status changes promptly and serializes their cleanup chains', async () => {
     const ids = ['one', 'two', 'three'];
     h.tx.mockResolvedValueOnce(

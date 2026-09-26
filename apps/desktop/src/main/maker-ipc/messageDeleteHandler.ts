@@ -17,7 +17,7 @@ import type {
 } from '../localDb/ipc/messages.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { withSessionRouteLock } from '../localDb/sessionRouteLock';
-import { assertTaskMigrationWritable } from '../task-migration/journal';
+import { withTaskMigrationWrite } from '../task-migration/writeBoundary';
 
 interface ContextSourceMessage extends HandoffSourceMessage {
   clientId: string;
@@ -89,8 +89,7 @@ export async function performMessageDeletion(
     throwIpcError('INVALID_PARAMS', 'clientId required');
   }
 
-  return withSessionRouteLock(sessionId, async () => {
-    assertTaskMigrationWritable(sessionId);
+  return withSessionRouteLock(sessionId, () => withTaskMigrationWrite(sessionId, async () => {
     const [sessionRow, initialTarget] = await Promise.all([
       deps.getSessionRow(sessionId),
       deps.getMessage(sessionId, clientId),
@@ -120,7 +119,6 @@ export async function performMessageDeletion(
       if (deps.hasBackgroundActivity(sessionId)) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} has background activity`);
       }
-      assertTaskMigrationWritable(sessionId);
       if (currentLive) await deps.closeSession(sessionId);
       await deps.drainPersistQueue();
 
@@ -145,7 +143,6 @@ export async function performMessageDeletion(
         reason: 'message-deletion',
       });
 
-      assertTaskMigrationWritable(sessionId);
       const committed = await deps.commitDeletion(
         sessionId,
         target.deletedClientIds,
@@ -167,7 +164,7 @@ export async function performMessageDeletion(
         clientIds: committed.deletedClientIds,
       };
     });
-  });
+  }));
 }
 
 export function registerMakerMessageDeleteHandler(

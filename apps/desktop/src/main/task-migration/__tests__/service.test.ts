@@ -210,10 +210,11 @@ import { assertTaskMigrationWritable, migrationScope } from '../journal';
 import { assertTaskMigrationInputAllowed } from '../inputGuard';
 
 async function settled(sessionId = 'fork') {
+  // Match vitest.config.ts's platform budget rather than waitFor's 1-second default.
   await vi.waitFor(async () => {
     const status = await requestTaskMigration({ action: 'status', sessionId });
-    expect(status.running).toBe(false);
-  });
+    expect(status.running).not.toBe(true);
+  }, { timeout: process.platform === 'win32' ? 60_000 : 5_000 });
   return requestTaskMigration({ action: 'status', sessionId });
 }
 describe('durable cross-machine handoff', () => {
@@ -273,6 +274,12 @@ describe('durable cross-machine handoff', () => {
       });
   });
   afterEach(async () => {
+    // A failed assertion must not tear down directories while a background transfer writes.
+    for (const [device, rows] of state.rows) {
+      await state.context.run({ device }, async () => {
+        for (const id of rows.keys()) await settled(id);
+      });
+    }
     await fs.rm(state.root, { recursive: true, force: true });
   });
   it('flushes journal files using writable handles without truncation', async () => {
