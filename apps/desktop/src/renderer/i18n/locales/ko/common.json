@@ -8984,7 +8984,11 @@
       "toolUses_one": "도구 호출 {{count}}회",
       "toolUses_other": "도구 호출 {{count}}회",
       "lastTool": "최근 도구: {{tool}}",
-      "outputFile": "출력: {{path}}"
+      "outputFile": "출력: {{path}}",
+      "runningFor": "{{duration}} 실행 중",
+      "startedAt": "{{time}} 시작",
+      "recentOutput": "최근 출력 · {{time}} 전 업데이트",
+      "noOutputYet": "아직 출력이 없습니다"
     },
     "planPill": {
       "step": "{{current}} / {{total}}단계",

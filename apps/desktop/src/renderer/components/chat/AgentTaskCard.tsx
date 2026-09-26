@@ -19,6 +19,11 @@ import {
 } from '@cindy/maker-shared/agent-task';
 
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
+import {
+  BackgroundCommandDetails,
+  RunningElapsed,
+  parseTaskTimestamp,
+} from './AgentTaskLiveDetails';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
@@ -288,7 +293,22 @@ export function AgentTaskCard({
       && summary
       && (summary.length > 320 || summary.split(/\r?\n/).length > 4),
   );
-  const duration = formatDuration(update?.usage?.durationMs);
+  // 任务开始时间:优先取发起它的工具调用消息时间(重载后仍是真实启动时刻),
+  // 孤儿 update(workflow / 子 agent 内部启动)回退到 renderer 首次收到事件的时间。
+  const startedAtMs = parseTaskTimestamp(toolCall?.createdAt) ?? parseTaskTimestamp(update?.createdAt);
+  // 终态用时:provider 给了 durationMs 就用它;后台命令没有 usage,用首末事件时间差兜底。
+  // 运行中有开始时间时改为每秒刷新的「已运行」,不再显示 provider 上一帧的静态时长。
+  const showLiveElapsed = status === 'running' && startedAtMs !== undefined;
+  const endedAtMs = status === 'running' ? undefined : parseTaskTimestamp(update?.updatedAt);
+  const duration = showLiveElapsed
+    ? undefined
+    : formatDuration(
+        update?.usage?.durationMs
+          ?? (startedAtMs !== undefined && endedAtMs !== undefined && endedAtMs >= startedAtMs
+            ? endedAtMs - startedAtMs
+            : undefined),
+      );
+  const bashCommand = isBash ? readInputString(toolCall?.toolInput, ['command']) : undefined;
   const providerLabel = isWorkflow
     ? t('chat.agentTask.provider.workflow')
     : isBash
@@ -463,6 +483,7 @@ export function AgentTaskCard({
                   )}
                 </Fragment>
               ))}
+              {showLiveElapsed && startedAtMs !== undefined && <RunningElapsed startedAtMs={startedAtMs} />}
             </span>
             {workflowSummary && (
               <span
@@ -547,6 +568,16 @@ export function AgentTaskCard({
         {!(isWorkflow && canOpenInPanel) && (
           <Collapse open={expanded}>
             <div className="mt-2 border-l-2 border-[var(--agent-actions-rail)] pl-3 text-13 leading-5 text-[var(--text-secondary)]">
+              {isBash && (
+                <BackgroundCommandDetails
+                  sessionId={sessionId}
+                  command={bashCommand}
+                  startedAtMs={startedAtMs}
+                  outputFile={update?.outputFile}
+                  running={status === 'running'}
+                  expanded={expanded}
+                />
+              )}
               {description && <p className="mb-1">{description}</p>}
               {summary && (
                 <>

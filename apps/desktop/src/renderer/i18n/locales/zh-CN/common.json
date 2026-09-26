@@ -8984,7 +8984,11 @@
       "toolUses_one": "{{count}} 次工具调用",
       "toolUses_other": "{{count}} 次工具调用",
       "lastTool": "最近工具：{{tool}}",
-      "outputFile": "输出：{{path}}"
+      "outputFile": "输出：{{path}}",
+      "runningFor": "已运行 {{duration}}",
+      "startedAt": "开始于 {{time}}",
+      "recentOutput": "最近输出 · {{time}} 前更新",
+      "noOutputYet": "暂无输出"
     },
     "planPill": {
       "step": "第 {{current}} / {{total}} 步",

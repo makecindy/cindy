@@ -8984,7 +8984,11 @@
       "toolUses_one": "{{count}} 回のツール使用",
       "toolUses_other": "{{count}} 回のツール使用",
       "lastTool": "直近のツール: {{tool}}",
-      "outputFile": "出力: {{path}}"
+      "outputFile": "出力: {{path}}",
+      "runningFor": "実行時間 {{duration}}",
+      "startedAt": "開始 {{time}}",
+      "recentOutput": "最近の出力 · {{time}} 前に更新",
+      "noOutputYet": "まだ出力はありません"
     },
     "planPill": {
       "step": "ステップ {{current}} / {{total}}",

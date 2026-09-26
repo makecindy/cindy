@@ -643,6 +643,7 @@ import {
 } from './piPackageMutationIpc.js';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
+import { readBackgroundTaskOutputTail } from '../background-task-output/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
 import { bindSilentStopContinuationGeneration } from './silentStopContinuationBinding.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
@@ -5368,6 +5369,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       pendingContinuations: live ? live.countPendingWakeContinuations() : 0,
     };
   });
+
+  // 后台命令输出尾部(只读)。任务卡展开区据此显示「最近输出」与最后写入时间。
+  // SSH 远程工作区会话(remoteHostId)的 CLI 跑在远端主机,output_file 写在远端 ——
+  // 本机读同名路径必落空甚至读错文件,直接返回 unavailable。device-link 远程会话不在
+  // 本机会话表,由控制端 renderer 经隧道路由到被控端执行本 handler(见 allowlist)。
+  ipcMain.handle(
+    MAKER_INVOKE.READ_BACKGROUND_TASK_OUTPUT_TAIL,
+    async (_e, sessionId: unknown, outputFile: unknown) => {
+      if (typeof sessionId !== 'string' || !sessionId) {
+        return { ok: false, reason: 'forbidden' } as const;
+      }
+      try {
+        const live = maker.listActiveSessions().find((x) => x.id === sessionId);
+        const remote = live ? Boolean(live.remoteHostId) : await sessionIsRemote(sessionId);
+        if (remote) return { ok: false, reason: 'unavailable' } as const;
+        return await readBackgroundTaskOutputTail(outputFile);
+      } catch {
+        return { ok: false, reason: 'read_failed' } as const;
+      }
+    },
+  );
 
   // workflow 逐 agent 进度树(只读)。从活跃会话拿 workDir + sdkSessionId → 推导 Claude Code
   // workflows 记录目录 → 按 taskId 匹配 wf_*.json 解析成 {phases, agents[]}。数据源是 SDK 内部

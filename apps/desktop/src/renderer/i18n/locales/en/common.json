@@ -8986,7 +8986,11 @@
       "toolUses_one": "{{count}} tool use",
       "toolUses_other": "{{count}} tool uses",
       "lastTool": "Last tool: {{tool}}",
-      "outputFile": "Output: {{path}}"
+      "outputFile": "Output: {{path}}",
+      "runningFor": "Running for {{duration}}",
+      "startedAt": "Started at {{time}}",
+      "recentOutput": "Recent output · updated {{time}} ago",
+      "noOutputYet": "No output yet"
     },
     "planPill": {
       "step": "Step {{current}} of {{total}}",
