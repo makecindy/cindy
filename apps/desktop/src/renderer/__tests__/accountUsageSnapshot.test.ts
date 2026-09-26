@@ -8,6 +8,7 @@ import {
   isCodexBucketStale,
   nextCodexBucketStaleAtMs,
   matchCodexBucketForModel,
+  reserveModelIdForModel,
   mergeCodexAccountUsageSnapshot,
   splitCodexAccountUsagePayload,
 } from '@/hooks/useAccountUsage';
@@ -447,6 +448,66 @@ describe('matchCodexBucketForModel', () => {
   it('returns null when no generic bucket exists (caller falls back)', () => {
     expect(matchCodexBucketForModel({ codex_bengalfox: SPARK }, 'gpt-5.6-sol')).toBeNull();
     expect(matchCodexBucketForModel({}, 'gpt-5.6-sol')).toBeNull();
+  });
+});
+
+describe('matchCodexBucketForModel: model-specific reserve', () => {
+  // codex >= 0.154 的预留桶: limitName 'gpt-reserve' 永远不含模型名, 只能靠
+  // normalModelSlug 绑定。用户实报: 主桶 100% 时 Luna 仍可用, 但界面显示「已用尽」。
+  const RESERVE = {
+    limitId: 'base_model_inference',
+    limitName: 'gpt-reserve',
+    normalModelSlug: 'gpt-5.6-luna',
+    primary: { usedPercent: 40 },
+  };
+  const EXHAUSTED_MAIN = {
+    limitId: 'codex',
+    primary: { usedPercent: 100 },
+    rateLimitReachedType: 'rate_limit_reached',
+  };
+  const HEALTHY_MAIN = { limitId: 'codex', primary: { usedPercent: 63 } };
+
+  it('uses the reserve for its model once the main window is spent', () => {
+    const buckets = { codex: EXHAUSTED_MAIN, base_model_inference: RESERVE };
+    expect(matchCodexBucketForModel(buckets, 'gpt-5.6-luna')).toBe(RESERVE);
+  });
+
+  it('keeps the main bucket while it still has room', () => {
+    // 主桶有余量时用的就是主桶额度, 显示预留的 40% 会谎报可用量。
+    const buckets = { codex: HEALTHY_MAIN, base_model_inference: RESERVE };
+    expect(matchCodexBucketForModel(buckets, 'gpt-5.6-luna')).toBe(HEALTHY_MAIN);
+  });
+
+  it('never lends the reserve to a different model', () => {
+    const buckets = { codex: EXHAUSTED_MAIN, base_model_inference: RESERVE };
+    expect(matchCodexBucketForModel(buckets, 'gpt-5.6-sol')).toBe(EXHAUSTED_MAIN);
+    expect(matchCodexBucketForModel(buckets, null)).toBe(EXHAUSTED_MAIN);
+  });
+
+  it('treats a 100% secondary window as exhausted too', () => {
+    const weeklySpent = { limitId: 'codex', primary: { usedPercent: 10 }, secondary: { usedPercent: 100 } };
+    const buckets = { codex: weeklySpent, base_model_inference: RESERVE };
+    expect(matchCodexBucketForModel(buckets, 'gpt-5.6-luna')).toBe(RESERVE);
+  });
+
+  it('does not switch to the reserve when the main bucket is absent', () => {
+    // 信息不足 ≠ 耗尽: 没有通用桶时不得擅自改用预留数字。
+    expect(matchCodexBucketForModel({ base_model_inference: RESERVE }, 'gpt-5.6-luna')).toBeNull();
+  });
+
+  it('routes to the reserve model id only when it can actually serve', () => {
+    // 预留通过独立 model id 生效(官方 TUI 实测), 不是 header/参数。
+    const live = { codex: EXHAUSTED_MAIN, base_model_inference: RESERVE };
+    expect(reserveModelIdForModel(live, 'gpt-5.6-luna')).toBe('gpt-reserve');
+    // 主桶还有额度 → 不切, 正常走主模型。
+    expect(reserveModelIdForModel({ codex: HEALTHY_MAIN, base_model_inference: RESERVE }, 'gpt-5.6-luna'))
+      .toBeNull();
+    // 别的模型没有预留。
+    expect(reserveModelIdForModel(live, 'gpt-5.6-sol')).toBeNull();
+    // 预留自己也满了 → 没有可切的额度。
+    const spentReserve = { ...RESERVE, primary: { usedPercent: 100 } };
+    expect(reserveModelIdForModel({ codex: EXHAUSTED_MAIN, base_model_inference: spentReserve }, 'gpt-5.6-luna'))
+      .toBeNull();
   });
 });
 

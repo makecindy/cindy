@@ -54,8 +54,10 @@ export interface BucketWindowLike {
 export interface BucketSnapshotLike {
   limitId?: string | null;
   limitName?: string | null;
+  normalModelSlug?: string | null;
   primary?: BucketWindowLike | null;
   secondary?: BucketWindowLike | null;
+  rateLimitReachedType?: string | null;
 }
 
 /** 快照 → 桶键。limitId 缺失 / 为危险保留名时归缺省桶。 */
@@ -97,6 +99,41 @@ function normalizeModelToken(value: string | null | undefined): string {
 }
 
 /**
+ * 当前模型若有可用的预留额度, 返回**发请求时该用的 model id**; 否则 null。
+ *
+ * 预留不是 header / 参数, 而是一个独立的路由 id(`gpt-reserve`, 取自桶的 limitName):
+ * 官方 TUI 在主额度耗尽后把 thread 的 model 换成它(实测 ThreadSettings
+ * model: Some("gpt-reserve")), 沿用原模型 id 只会继续吃主桶拿 429。
+ *
+ * 只在通用桶确实耗尽、且预留桶本身还有余量时返回; 该 id 不在 model/list 中,
+ * 属于路由别名, 调用方不得把它当成可展示的模型或写回用户偏好。
+ */
+export function reserveModelIdForModel(
+  buckets: Record<string, BucketSnapshotLike> | null | undefined,
+  modelId: string | null | undefined,
+  nowMs: number = Date.now(),
+): string | null {
+  const model = normalizeModelToken(modelId);
+  if (!model) return null;
+  const entries = Object.entries(buckets ?? {}).filter(
+    ([, bucket]) => !isCodexBucketStale(bucket, nowMs),
+  );
+  if (!genericBucketExhausted(findGenericBucket(entries))) return null;
+  for (const [, bucket] of entries) {
+    if (normalizeModelToken(bucket.normalModelSlug) !== model) continue;
+    // 预留自身也满了就没有可用额度可切。
+    if (genericBucketExhausted(bucket)) return null;
+    const routeId = typeof bucket.limitName === 'string' ? bucket.limitName.trim() : '';
+    // Do not interpret an arbitrary display name or missing quota as entitlement.
+    const windows = [bucket.primary, bucket.secondary].filter(Boolean);
+    const hasHeadroom = windows.length > 0 && windows.every(window =>
+      Number.isFinite(window?.usedPercent) && window!.usedPercent! >= 0 && window!.usedPercent! < 100);
+    return routeId === 'gpt-reserve' && hasHeadroom ? routeId : null;
+  }
+  return null;
+}
+
+/**
  * 按**当前会话模型**选桶(desktop chip 与 mobile 用量详情共用)。
  *
  * 不能用 account_usage 事件判会话归属: 该 notification 是账号级的, host 把同一条
@@ -104,13 +141,25 @@ function normalizeModelToken(value: string | null | undefined): string {
  * 拿它当会话事实等于把任意会话触发的桶串给所有会话。
  *
  * 规则(按序):
- *   1. 桶的 limitName 命中当前模型(如 'GPT-5.3-Codex-Spark' ↔ gpt-5.3-codex-spark);
+ *   1. 桶的 normalModelSlug 精确命中当前模型 —— 模型专属**预留**桶
+ *      (`base_model_inference` / limitName 'gpt-reserve', codex >= 0.154)只能这样绑定:
+ *      它的 limitName 永远不含模型名, 走 limitName 规则必然落空, 于是主桶 100% 会被
+ *      当成该模型的事实, 而预留其实还有额度。slug 是服务端显式声明的归属, 优先于名字猜测。
+ *   2. 桶的 limitName 命中当前模型(如 'GPT-5.3-Codex-Spark' ↔ gpt-5.3-codex-spark);
  *      精确匹配优先, 其次取最长匹配(重叠桶名下 'GPT-5.3-Codex' 不得抢走 Spark 会话);
- *   2. 通用桶 —— 由**稳定桶键**(limitId 'codex' / 缺省桶)识别, 不能靠「没有
+ *   3. 通用桶 —— 由**稳定桶键**(limitId 'codex' / 缺省桶)识别, 不能靠「没有
  *      limitName」判断: limitName 可选, 同桶 merge 遇到省略该字段的部分通知会把它
  *      抹成 undefined, 模型专属桶会伪装成通用桶;
- *   3. 都没有 → null。**绝不**退而求其次选一个已知属于别的模型的桶。
+ *   4. 都没有 → null。**绝不**退而求其次选一个已知属于别的模型的桶。
  * 陈旧桶(窗口全部过期超宽限, 如促销结束后服务端停推)不参与匹配。
+ *
+ * 预留桶只在**主桶已耗尽**时才代表该模型的实际可用额度; 主桶尚有余量时仍按主桶展示,
+ * 否则一个额度充足的账号会显示预留的数字。耗尽判定见 genericBucketExhausted。
+ *
+ * 注意: 本函数只负责**展示选桶**。真正把请求打到预留额度上, 要把 thread 的 model 换成
+ * 预留自己的 id(`gpt-reserve`, 即 limitName)——官方 TUI 实测即如此(ThreadSettings
+ * model: Some("gpt-reserve"))。沿用 `gpt-5.6-luna` 只会继续吃主桶并拿到 429。
+ * 该 id 不在 model/list 里, 是路由别名, 不能当成可选模型展示。
  */
 export function matchCodexBucketForModel<T extends BucketSnapshotLike>(
   buckets: Record<string, T> | null | undefined,
@@ -122,7 +171,15 @@ export function matchCodexBucketForModel<T extends BucketSnapshotLike>(
   );
   if (entries.length === 0) return null;
   const model = normalizeModelToken(modelId);
+  const generic = findGenericBucket(entries);
   if (model) {
+    // 模型专属预留桶: 服务端用 normalModelSlug 显式声明归属, 精确匹配, 不做 substring
+    // 猜测。仅当通用桶确实耗尽时才代表该模型 —— 主桶还有余量时用的是主桶额度。
+    for (const [, bucket] of entries) {
+      if (normalizeModelToken(bucket.normalModelSlug) !== model) continue;
+      if (genericBucketExhausted(generic)) return bucket;
+      break;
+    }
     // 精确匹配优先; 否则取**最长**的 substring 匹配 —— 桶顺序反映更新 / 持久化
     // 顺序, 按首个匹配返回会让 'GPT-5.3-Codex' 抢走本属于 'GPT-5.3-Codex-Spark'
     // 的会话, 通用名 'Codex' 更会命中所有 codex/* 模型(review 反馈)。
@@ -138,11 +195,30 @@ export function matchCodexBucketForModel<T extends BucketSnapshotLike>(
     if (longest) return longest.bucket;
   }
   // 按优先级取通用桶(不能靠 entries 的插入序, 见 GENERIC_BUCKET_KEYS_BY_PRIORITY)。
+  return generic;
+}
+
+/** 按优先级取通用桶(不能靠 entries 的插入序, 见 GENERIC_BUCKET_KEYS_BY_PRIORITY)。 */
+function findGenericBucket<T extends BucketSnapshotLike>(
+  entries: readonly (readonly [string, T])[],
+): T | null {
   for (const key of GENERIC_BUCKET_KEYS_BY_PRIORITY) {
     const hit = entries.find(([entryKey]) => entryKey === key);
     if (hit) return hit[1];
   }
   return null;
+}
+
+/**
+ * 通用桶是否已耗尽 —— 只认服务端的显式信号(rateLimitReachedType)或任一窗口 100%。
+ * 缺桶时返回 false: 信息不足不等于耗尽, 保持既有展示而不是切到预留数字。
+ */
+function genericBucketExhausted(generic: BucketSnapshotLike | null): boolean {
+  if (!generic) return false;
+  if (typeof generic.rateLimitReachedType === 'string' && generic.rateLimitReachedType) return true;
+  return [generic.primary, generic.secondary].some(
+    (window) => typeof window?.usedPercent === 'number' && window.usedPercent >= 100,
+  );
 }
 
 /**

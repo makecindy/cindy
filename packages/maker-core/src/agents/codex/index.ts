@@ -125,6 +125,7 @@ import {
 import { isRemoteCompactEncryptedContentError } from '../shared/remote-compact-encrypted-error.js';
 import { listCodexModels } from './app-server/list-models.js';
 import { buildCodexEnv } from './env-builder.js';
+import { CodexReserveRoute } from './reserve-route.js';
 import type { CodexErrorInfo } from './app-server/protocol.js';
 import {
   buildCodexBotSkillConfigOverrides,
@@ -2926,8 +2927,15 @@ assertRouteCurrent();
     // This RPC is credential-specific, unlike model/list or memory utilities. Requiring
     // oauth-bearer prevents a gateway/provider host from reading or mutating the wrong
     // account context; getHost refuses to replace a differently-authenticated active host.
+    // supportsLunaReserve declares that this client understands model-specific reserve
+    // buckets (`base_model_inference` / `gpt-reserve`). Without it the server omits them,
+    // and an account whose main window is spent looks completely blocked while a reserve
+    // still has room. Older runtimes ignore the unknown field, so this stays safe on
+    // codex < 0.154 — the response simply has no reserve bucket, exactly as before.
     return this.withStartedAccountHost(providerId,
-      host => host.request<AccountRateLimitsResponse>(Method.AccountRateLimitsRead, undefined));
+      host => host.request<AccountRateLimitsResponse>(Method.AccountRateLimitsRead, {
+        supportsLunaReserve: true,
+      }));
   }
 
   /** Consume one reset credit on the non-model app-server control plane. */
@@ -5149,6 +5157,20 @@ assertRouteCurrent();
           model: opts.model,
         }) ?? this.hostEffectiveCredentialModes.get(currentHostKey)
       : credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
+    const reserveRoute = new CodexReserveRoute((providerId) => this.readAccountRateLimits(providerId));
+    // This runtime capability is Luna-specific. Other models must not gain an
+    // extra control-plane process or network read merely by opening a session.
+    const canUseReserveRoute = (): boolean => !opts.remoteHostId &&
+      mutableCatalogModel === 'gpt-5.6-luna' && (
+      this.deps.isCodexAccountProvider?.(mutableProviderId) ||
+      (resolveAgentCredentialMode({
+        agentKind: 'codex', providerId: mutableProviderId, model: mutableCatalogModel,
+      }) ?? sessionCredentialMode) === 'oauth-bearer'
+    );
+    // Start the first account read alongside the remaining session preparation.
+    // No renderer-selected alias and no changes to catalog/account admission.
+    if (canUseReserveRoute()) void reserveRoute.resolve(mutableProviderId, mutableCatalogModel);
+    let reserveWireModel: string | null = null;
     const approvalsReviewerProtocolSupported =
       supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
     const codexBrowserUseProvisioned = host.isCodexBrowserUseAvailable();
@@ -12475,8 +12497,10 @@ assertRouteCurrent();
         noteRecoveryModelWork(params.turnId);
         translateReasoningTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
-      accountRateLimitsUpdated: (params) =>
-        translateAccountRateLimitsUpdated(params, eventQueue, { rt: translatorRt, log }),
+      accountRateLimitsUpdated: (params) => {
+        reserveRoute.invalidate(mutableProviderId);
+        translateAccountRateLimitsUpdated(params, eventQueue, { rt: translatorRt, log });
+      },
       threadStatusChanged: (params) => {
         // Idle / NotLoaded / SystemError 由 turn/completed + error 主导, 这里不重复 emit。
         // 只把 Active.activeFlags 翻成 "Waiting on approval/input..." status 文案。
@@ -12492,6 +12516,9 @@ assertRouteCurrent();
         // 时 server 会把它降级, 这里第一时间感知, getFastMode() 立刻反映正确值, 不必等
         // 某个 turn 的响应推断。通知恒带完整 ThreadSettings, 故 serviceTier 总是 present。
         const s = params.threadSettings;
+        // A reserve is an account routing alias, not a user model/effort/Fast edit.
+        // Never let native sticky settings replace the validated catalog selection.
+        if (reserveWireModel && s.model === reserveWireModel) return;
         const before = mutableServiceTier ?? null;
         const beforeModel = mutableModel;
         mutableServiceTier = normalizeServiceTier(s.serviceTier) ?? null;
@@ -12968,6 +12995,10 @@ assertRouteCurrent();
         // 到达"时会读到上一个 turn 的状态(review #844 codex P1); 按 id 记账后这类乱序
         // 不再影响判定, 也不会再被别的 turn(含被 Stop 的旧 send 的孤儿)污染。
         const mySendGen = ++sendGeneration;
+        const reserveProvider = mutableProviderId;
+        const reserveCatalogModel = mutableCatalogModel;
+        const reserveEligible = canUseReserveRoute();
+        if (reserveEligible) void reserveRoute.resolve(reserveProvider, reserveCatalogModel);
         isTurnStartPending = true;
         usageTracker.beginTurn();
         log.debug('send ▶ user message', {
@@ -13054,16 +13085,22 @@ assertRouteCurrent();
           pendingTightenInterrupt = false;
         }
         let turnInput: TurnStartParams['input'];
+        let turnReserveModel: string | null = null;
         try {
           turnInput = await toTurnInput(
             withLibraryNativeReadContext(message.content, mutableLibraryRoot, mutableExtraDirs),
             sendOpts?.[PINNED_SKILL_INVOCATION],
           );
+          turnReserveModel = reserveEligible
+            ? reserveRoute.cached(reserveProvider, reserveCatalogModel)
+            : null;
         } catch (e) {
           isTurnStartPending = false;
           flushDeferredTerminalTurnCompletionsIfIdle();
           throw e;
         }
+        // A newer send owns the lifecycle flags; do not clear its pending state.
+        if (mySendGen !== sendGeneration) return;
         if (rejectClosedOrCancelledSend(sendOpts, 'after input preparation')) {
           isTurnStartPending = false;
           abandonBufferedTurns('send cancelled after input preparation');
@@ -13100,6 +13137,17 @@ assertRouteCurrent();
         }
         // sticky 语义要求进过 plan 的线程后续持续复位, 见 collaborationModeForTurn。
         const collaborationMode = collaborationModeForTurn(requestedPlanTurn, continuePlanCycleThisTurn);
+        if (reserveProvider !== mutableProviderId || reserveCatalogModel !== mutableCatalogModel) {
+          turnReserveModel = null;
+        }
+        const wireModel = turnReserveModel ?? mutableModel;
+        if (turnReserveModel) {
+          reserveWireModel = turnReserveModel;
+          if (collaborationMode) collaborationMode.settings.model = turnReserveModel;
+          log.info('using Codex model reserve', {
+            model: mutableCatalogModel, wireModel, providerId: mutableProviderId ?? null,
+          });
+        }
         const turnStartsInPlanMode = collaborationMode?.mode === 'plan';
         const turnParams: TurnStartParams = {
           threadId,
@@ -13110,8 +13158,9 @@ assertRouteCurrent();
           // model_reasoning_summary, 让 thinking 文本在所有用户机器上一致流式出。
           // (v2.rs:5801-5803 turn/start 的 summary 会 override server config)
           summary: 'auto',
-          ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-          ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+          ...(wireModel && wireModel !== 'gpt-5' ? { model: wireModel } : {}),
+          ...(turnReserveModel ? { serviceTier: null } :
+            mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
           ...(collaborationMode ? { collaborationMode } : {}),
         };
         // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
@@ -13559,6 +13608,16 @@ assertRouteCurrent();
                 turnParams.collaborationMode.settings.model = mutableModel;
                 turnParams.collaborationMode.settings.reasoning_effort =
                   clampEffortForCodex(mutableModel, mutableEffort);
+              }
+              // A stale-daemon resume must not silently switch the retry back to
+              // the exhausted ordinary route. Keep the frozen account/model binding.
+              if (turnReserveModel && reserveProvider === mutableProviderId &&
+                  reserveCatalogModel === mutableCatalogModel) {
+                turnParams.model = turnReserveModel;
+                turnParams.serviceTier = null;
+                if (turnParams.collaborationMode) {
+                  turnParams.collaborationMode.settings.model = turnReserveModel;
+                }
               }
               workspacePermissionProfileActive = 'permissions' in turnThreadWorkspaceConfig;
               workspacePermissionProfileFingerprint = workspacePermissionProfileActive

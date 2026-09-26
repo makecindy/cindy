@@ -190,6 +190,11 @@ export interface MobileCodexRateLimitWindow {
 export interface MobileCodexRateLimitSnapshot {
   limitId?: string | null;
   limitName?: string | null;
+  /**
+   * Model this bucket serves as a fallback for (reserve buckets only). Display-safe:
+   * it is a public model slug, and without it a reserve cannot be bound to its model.
+   */
+  normalModelSlug?: string | null;
   primary?: MobileCodexRateLimitWindow | null;
   secondary?: MobileCodexRateLimitWindow | null;
   planType?: string | null;

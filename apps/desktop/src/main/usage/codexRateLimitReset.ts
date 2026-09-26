@@ -141,6 +141,9 @@ function displayRateLimitSnapshot(
   return {
     limitId: snapshot.limitId,
     limitName: snapshot.limitName,
+    // Reserve buckets are only identifiable by this; dropping it made every reserve
+    // look like an unrelated bucket and left the model stuck on a spent main quota.
+    normalModelSlug: snapshot.normalModelSlug,
     primary: displayRateLimitWindow(snapshot.primary),
     secondary: displayRateLimitWindow(snapshot.secondary),
     planType: snapshot.planType,
@@ -239,6 +242,14 @@ export function createCodexRateLimitResetService(
         source: 'codex-app-server',
         updatedAt: now(),
         accountId,
+        // Carry the authoritative per-limit table through. Without it the renderer only
+        // ever sees the generic bucket, so a model-specific reserve (`base_model_inference`
+        // / `gpt-reserve`) is invisible and an exhausted main window looks like a hard
+        // stop. The push notification channel cannot supply this: it sends one bucket at a
+        // time and never includes the reserve.
+        ...(response.rateLimitsByLimitId
+          ? { appServerBuckets: response.rateLimitsByLimitId }
+          : {}),
       });
     }
 
