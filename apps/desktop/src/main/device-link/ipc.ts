@@ -96,6 +96,7 @@ import {
   resetAll as resetSubscriptionRefcount,
 } from './subscriptionRefcount';
 import { createLogger } from '../logger';
+import { onQuit } from '../lifecycle';
 import { createDeviceLinkIpcDiagnostics } from './ipcDiagnostics';
 import { getAppCapabilities } from '../appCapabilities.js';
 
@@ -1296,6 +1297,9 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
   const diagnostics = createDeviceLinkIpcDiagnostics((event, fields) =>
     diagnosticsLog.info(event, fields),
   );
+  // Submit the final partial interval at shutdown start, giving the async log
+  // writer the subsequent cleanup phases to drain before app.exit().
+  onQuit('device-link-ipc-diagnostics', diagnostics.flush, 'sync');
   const deviceCodes = new LocalDeviceCodeSessions();
   const deviceCodeScope = (event: import('electron').IpcMainInvokeEvent): string => {
     assertTrustedAppRendererEvent(event);

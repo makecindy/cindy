@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   trusted: true,
   canUseDeviceLink: true,
   diagnosticsInfo: vi.fn(),
+  quitHandlers: new Map<string, { fn: () => void; phase: string }>(),
   cache: {
     readMessages: vi.fn(async () => [] as Record<string, unknown>[]),
     readMessagesWithInvalidation: vi.fn(async () => ({
@@ -44,6 +45,11 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../../logger', () => ({
   createLogger: (scope: string) => ({ warn: vi.fn(), error: vi.fn(), info: scope === 'device-link:ipc-diagnostics' ? h.diagnosticsInfo : vi.fn(), debug: vi.fn() }),
+}));
+vi.mock('../../lifecycle', () => ({
+  onQuit: (name: string, fn: () => void, phase: string) => {
+    h.quitHandlers.set(name, { fn, phase });
+  },
 }));
 // 读路径要比对 owner 作用域路径(账号边界复核),这里给个稳定值即可。
 vi.mock('../../appSessionState', () => ({
@@ -185,9 +191,37 @@ async function call(channel: string, payload: unknown): Promise<unknown> {
 beforeEach(() => {
   vi.clearAllMocks();
   h.handlers.clear();
+  h.quitHandlers.clear();
   h.trusted = true;
   h.canUseDeviceLink = true;
   registerDeviceLinkIpc();
+});
+
+it.each([1_000, 30_000])('flushes completed calls on quit after %i ms without duplicate summaries', async (elapsed) => {
+  vi.useFakeTimers();
+  try {
+    const payload = { deviceId: 'private-peer', channel: 'local-db:sessions:list', args: [] };
+    vi.mocked(remoteInvoke).mockResolvedValueOnce({ ok: true, result: [] });
+    await call(DEVICE_LINK_INVOKE.INVOKE, payload);
+    vi.mocked(remoteInvoke).mockRejectedValueOnce(new DeviceLinkError('NOT_CONNECTED', 'offline'));
+    await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+    await vi.advanceTimersByTimeAsync(elapsed);
+    const quit = h.quitHandlers.get('device-link-ipc-diagnostics');
+    expect(quit?.phase).toBe('sync');
+    quit!.fn();
+    const summaries = h.diagnosticsInfo.mock.calls.filter(([event]) => event === 'transport summary');
+    expect(summaries).toHaveLength(2);
+    expect(summaries.map(([, fields]) => [fields.code, fields.completed])).toEqual([
+      ['OK', 1], ['NOT_CONNECTED', 1],
+    ]);
+    const count = h.diagnosticsInfo.mock.calls.length;
+    quit!.fn();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.diagnosticsInfo).toHaveBeenCalledTimes(count);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it('records the originating window and raw error before the IPC adapter maps it', async () => {
