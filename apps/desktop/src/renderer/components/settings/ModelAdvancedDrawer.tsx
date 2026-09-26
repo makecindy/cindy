@@ -72,7 +72,7 @@ import type {
   ProviderView,
 } from '@cindy/model-providers';
 
-import { isLocalRuntimeBetaProviderId, MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
+import { isLocalRuntimeBetaProviderId, isManagedSidecarProviderId, MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
 import { MANAGED_LLAMACPP_PROVIDER_ID, supportsLlamaCppMillionContext } from '../../../shared/llamaCpp';
 import { modelBrand } from './modelManagementPresentation';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
@@ -276,8 +276,9 @@ export function ModelAdvancedDrawer({
     [contextAgent, contextModel, provider.id, row, chatAgents],
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
+  const canEditProtocol = provider.source === 'user' && !provider.auth?.native && !isManagedSidecarProviderId(provider.id);
   const setModelApi = async (agent: AgentKind, api: PiModelApi) => {
-    if (protocolSaving || provider.source !== 'user' || provider.auth?.native || !row?.byAgent[agent]) return;
+    if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
     const config = providerViewToCustomProviderConfig(provider);
     const runtime = config.runtimes[agent];
     const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
@@ -567,7 +568,7 @@ export function ModelAdvancedDrawer({
                                   id={protocolId}
                                   className="mt-0.5 text-11 leading-4 text-[var(--text-tertiary)]"
                                 >
-                                  {provider.source === 'user' && !provider.auth?.native && !model?.catalogPresetId && supported ? (
+                                  {canEditProtocol && !model?.catalogPresetId && supported ? (
                                     <DropdownMenu>
                                       <DropdownMenuTrigger asChild>
                                         <button type="button" disabled={protocolSaving}

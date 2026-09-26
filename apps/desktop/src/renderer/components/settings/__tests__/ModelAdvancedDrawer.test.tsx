@@ -115,6 +115,7 @@ describe('model advanced editor', () => {
       expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000_000);
       fireEvent.click(screen.getByRole('button', { name: '256K' }));
       expect(mocks.setLimit).toHaveBeenLastCalledWith(262144);
+      expect(screen.queryByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
     } finally {
       cleanup();
       Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous });

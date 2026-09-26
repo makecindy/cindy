@@ -13,6 +13,38 @@ import {
 } from '../managedLlamaCppProvider.js';
 
 describe('managed llama.cpp provider', () => {
+  it.each(['published', 'deleted', 'changed', 'owner-changed'] as const)(
+    'settles overlapping reconciliation after the winning write: %s',
+    async (outcome) => {
+      vi.resetAllMocks();
+      const models = [{ id: 'model', repo: 'owner/repo', file: 'a.gguf', size: 1 }];
+      const original = buildManagedLlamaCppProvider([]);
+      let current: typeof original | null = original;
+      let active = true;
+      store.getCustomProvider.mockImplementation(async () => current);
+      store.updateCustomProviderIfUnchanged.mockImplementation(async () => {
+        if (current !== original) return false;
+        current = outcome === 'deleted' ? null : buildManagedLlamaCppProvider(models);
+        if (outcome === 'changed') current!.runtimes.pi!.baseUrl = 'https://example.test/v1';
+        if (outcome === 'owner-changed') active = false;
+        return true;
+      });
+      const results = await Promise.allSettled([
+        ensureManagedLlamaCppProvider(models, () => active),
+        ensureManagedLlamaCppProvider(models, () => active),
+      ]);
+      expect(results[0]).toEqual({ status: 'fulfilled', value: true });
+      if (outcome === 'published' || outcome === 'deleted')
+        expect(results[1]).toEqual({ status: 'fulfilled', value: false });
+      else
+        expect(results[1]).toMatchObject({
+          status: 'rejected',
+          reason: new Error(outcome === 'changed' ? 'PROVIDER_CONFLICT' : 'OWNER_CHANGED'),
+        });
+      expect(store.createCustomProvider).not.toHaveBeenCalled();
+      vi.resetAllMocks();
+    },
+  );
   it('never recreates a removed provider during reconciliation or late completion', async () => {
     vi.clearAllMocks();
     store.getCustomProvider.mockResolvedValue(null);

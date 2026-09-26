@@ -82,8 +82,21 @@ export async function ensureManagedLlamaCppProvider(
   const next = buildManagedLlamaCppProvider(models ?? [], existing ?? undefined, catalog);
   if (JSON.stringify(next) === JSON.stringify(existing)) return false;
   if (existing) {
-    if (!(await updateCustomProviderIfUnchanged(existing.id, existing, next)))
+    if (!(await updateCustomProviderIfUnchanged(existing.id, existing, next))) {
+      if (!stillActive()) throw new Error('OWNER_CHANGED');
+      const current = await getCustomProvider(existing.id);
+      if (!stillActive()) throw new Error('OWNER_CHANGED');
+      // Another poll may have published the same inventory, or the user removed
+      // the connection. Neither requires a write, a retry, or an error toast.
+      if (!current) return false;
+      if (
+        isManagedLlamaCppProvider(current) &&
+        JSON.stringify(buildManagedLlamaCppProvider(models ?? [], current, catalog)) ===
+          JSON.stringify(current)
+      )
+        return false;
       throw new Error('PROVIDER_CONFLICT');
+    }
   } else {
     await createCustomProvider(next);
   }
