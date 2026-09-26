@@ -85,7 +85,7 @@ it('uses the source host for commands and the target host for destination projec
   expect(screen.queryByRole('option', { name: 'A' })).toBeNull();
   expect(screen.queryByRole('option', { name: 'offline' })).toBeNull();
   expect(screen.queryByRole('option', { name: 'phone' })).toBeNull();
-  expect(screen.getByRole('option', { name: 'local' })).toBeTruthy();
+  expect(screen.getByRole('option', { name: 'local · settings.devices.thisDevice' })).toBeTruthy();
   fireEvent.change(screen.getByRole('combobox', { name: 'taskMigration.device' }), {
     target: { value: 'B' },
   });

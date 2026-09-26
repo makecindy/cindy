@@ -48,7 +48,7 @@ it('opens the source folder picker and hides offline devices', async () => {
 });
 it('selects a computer project directly and supports moving back to the controller', async () => {
   await mount();
-  fireEvent.keyDown(screen.getByRole('menuitem', { name: 'local' }), { key: 'ArrowRight' });
+  fireEvent.keyDown(screen.getByRole('menuitem', { name: 'localsettings.devices.thisDevice' }), { key: 'ArrowRight' });
   fireEvent.click(await screen.findByRole('menuitem', { name: /project\/destination\/project/ }));
   expect(h.request).toHaveBeenCalledWith(null, { action: 'caps' });
   expect(h.destination).toHaveBeenCalledWith({ deviceId: 'local', deviceName: 'local', isSelf: true, project: '/destination/project' });

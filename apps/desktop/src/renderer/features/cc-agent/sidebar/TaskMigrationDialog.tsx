@@ -194,6 +194,9 @@ export function TaskMigrationDialog({
             <div className="mt-4 space-y-2 text-sm text-[var(--confirm-title)]">
               <p>
                 {t('taskMigration.device')}: {destination.deviceName}
+                {(destination.isSelf || destination.deviceId === self) && (
+                  <span className="ml-2 text-[var(--confirm-desc)]">{t('settings.devices.thisDevice')}</span>
+                )}
               </p>
               <p className="break-all">
                 {t('taskMigration.project')}:{' '}
@@ -212,7 +215,12 @@ export function TaskMigrationDialog({
                     label={t('taskMigration.device')}
                     value={target}
                     disabled={busy}
-                    options={devices.map((d) => ({ value: d.deviceId, label: d.name }))}
+                    options={devices.map((d) => ({
+                      value: d.deviceId,
+                      label: d.isSelf || d.deviceId === self
+                        ? `${d.name} · ${t('settings.devices.thisDevice')}`
+                        : d.name,
+                    }))}
                     onValueChange={setTarget}
                   />
                 )}

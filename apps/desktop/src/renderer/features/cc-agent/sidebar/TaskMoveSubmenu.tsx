@@ -272,6 +272,11 @@ function DeviceProjects({
       <DropdownMenuSubTrigger disabled={!device.online} className={MENU_ROW_CLASS}>
         <Monitor size={14} className="mr-2 shrink-0" />
         <span className="flex-1 truncate">{device.name}</span>
+        {device.isSelf && (
+          <span className="ml-2 shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
+            {t('settings.devices.thisDevice')}
+          </span>
+        )}
         {!device.online ? (
           <span className="ml-2 text-xs">{t('taskMove.offline')}</span>
         ) : (
