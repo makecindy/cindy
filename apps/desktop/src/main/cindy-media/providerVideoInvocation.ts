@@ -98,7 +98,7 @@ async function transition(
   ctx: ProviderVideoContext,
   from: StoredMediaInvocation['state'],
   to: StoredMediaInvocation['state'],
-  data: { taskId?: string; responseJson?: string } = {},
+  data: { taskId?: string; responseJson?: string; expectedSnapshot?: { taskId?: string; responseJson?: string } } = {},
 ) {
   ctx.assertActive();
   const changed = await transitionMediaInvocation(
@@ -196,11 +196,11 @@ export async function submitProviderVideo(
   }
 }
 
-async function deliver(
+function deliverySource(
   invocation: StoredMediaInvocation,
   response: unknown,
   ctx: ProviderVideoContext,
-): Promise<Result> {
+) {
   const { provider, assertCurrent } = binding(invocation, ctx);
   const result = response as { videoUrl?: unknown } | null;
   if (!result || typeof result.videoUrl !== 'string' || !provider.resolveDownload) {
@@ -226,6 +226,15 @@ async function deliver(
     source.assertActive();
   };
   assertProvider();
+  return { source, assertProvider };
+}
+
+async function deliver(
+  invocation: StoredMediaInvocation,
+  response: unknown,
+  ctx: ProviderVideoContext,
+): Promise<Result> {
+  const { source, assertProvider } = deliverySource(invocation, response, ctx);
   const media = await ctx.materialize(
     source.url,
     source.allowedUrlHosts,
@@ -238,6 +247,13 @@ async function deliver(
   return completed;
 }
 
+async function changedSnapshot(invocation: StoredMediaInvocation, ctx: ProviderVideoContext): Promise<Result> {
+  const latest = await getMediaInvocation(invocation.id, invocation.owner, ctx.db);
+  ctx.assertActive();
+  if (latest?.state === 'complete') return ctx.completed(latest);
+  return fail('INVOCATION_STATE_CHANGED', '原调用已更新，请重新 poll 同一调用，不重新生成', invocation, true);
+}
+
 export async function pollProviderVideo(
   invocation: StoredMediaInvocation,
   ctx: ProviderVideoContext,
@@ -248,7 +264,9 @@ export async function pollProviderVideo(
     return fail('INVOCATION_NOT_PENDING', '该视频调用不处于待查询状态', invocation);
   const { provider, assertCurrent } = binding(invocation, ctx);
   const handle = decodeVideoHandle(invocation.taskId, invocation.guide);
-  await transition(invocation, ctx, 'pending', 'pending');
+  if (!(await transition(invocation, ctx, 'pending', 'pending', { expectedSnapshot: invocation }))) {
+    return changedSnapshot(invocation, ctx);
+  }
   let refreshResult = false;
   if (invocation.responseJson) {
     try {
@@ -258,7 +276,7 @@ export async function pollProviderVideo(
       if ((error as { code?: string }).code !== 'MEDIA_DOWNLOAD_URL_EXPIRED') {
         return deliveryFailure(invocation, error);
       }
-      // 临时地址失效只能查询同一上游任务，直到新成品入库才覆盖旧成功响应。
+      // 临时地址失效只查询原单；新成功引用通过 Provider 校验后必须先持久化再交付。
       refreshResult = true;
     }
   }
@@ -309,16 +327,34 @@ export async function pollProviderVideo(
         allowedActions: ['review_existing_task_no_resubmit'],
       };
     }
-    await transition(invocation, ctx, 'pending', 'failed');
+    if (!(await transition(invocation, ctx, 'pending', 'failed', { expectedSnapshot: invocation }))) {
+      return changedSnapshot(invocation, ctx);
+    }
     return fail('UPSTREAM_TASK_FAILED', '上游视频任务已失败或过期', invocation);
   }
   if (status.state === 'pending' || status.state === 'running') return pending(invocation);
-  const responseJson = JSON.stringify({ videoUrl: status.videoUrl, meta: status.meta });
-  if (
-    !refreshResult &&
-    !(await transition(invocation, ctx, 'pending', 'pending', { responseJson }))
-  ) {
-    return fail('MEDIA_MATERIALIZATION_FAILED', '视频结果尚未保存；请保留原调用', invocation);
+  const response = { videoUrl: status.videoUrl, meta: status.meta };
+  // 验证 Provider 引用与账号边界，不把未经校验的地址覆盖到可恢复成功记录。
+  // DNS/SSRF/TLS、真实 MIME 和大小检查仍在实际下载/入库阶段执行。
+  try {
+    deliverySource(invocation, response, ctx);
+  } catch (error) {
+    assertCurrent();
+    return deliveryFailure(invocation, error);
+  }
+  const responseJson = JSON.stringify(response);
+  try {
+    assertCurrent();
+    const saved = await transition(invocation, ctx, 'pending', 'pending', {
+      responseJson, expectedSnapshot: invocation,
+    });
+    assertCurrent();
+    if (!saved) return changedSnapshot(invocation, ctx);
+  } catch {
+    assertCurrent();
+    return { ...fail('MEDIA_RESPONSE_SAVE_FAILED', '原任务的新成功响应尚未持久化，未尝试下载；请保留原调用', invocation, true),
+      result_retained: Boolean(invocation.responseJson), allowedActions: ['poll_same_invocation'],
+      delivery_error: { stage: 'ledger' } };
   }
   try {
     return await deliver({ ...invocation, responseJson }, JSON.parse(responseJson), ctx);

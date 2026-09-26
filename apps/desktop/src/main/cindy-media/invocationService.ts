@@ -958,6 +958,7 @@ async function persistCompletedInvocation(
   db: DbClient,
 ): Promise<Record<string, unknown>> {
   const responseJson = JSON.stringify(media);
+  assertAuthScope(scope, invocation.owner);
   const persisted = await transitionMediaInvocation(
     {
       id: invocation.id,
@@ -965,6 +966,7 @@ async function persistCompletedInvocation(
       from: 'pending',
       to: 'complete',
       responseJson,
+      ...(invocation.guide.response.mode === 'provider-video' ? { expectedSnapshot: invocation } : {}),
     },
     db,
   );

@@ -18,6 +18,7 @@ interface MockTransitionInput {
   to: string;
   taskId?: string;
   responseJson?: string;
+  expectedSnapshot?: { taskId?: string; responseJson?: string };
 }
 
 const mocks = vi.hoisted(() => ({
@@ -175,16 +176,17 @@ vi.mock('../mediaInvocationStore.js', () => ({
   },
   getMediaInvocation: async (id: string, owner: string) => {
     const row = mocks.rows.get(id);
-    return row?.owner === owner ? row : null;
+    return row?.owner === owner ? JSON.parse(JSON.stringify(row)) : null;
   },
   transitionMediaInvocation: async (
-    { id, owner, from, to, taskId, responseJson }: MockTransitionInput,
+    { id, owner, from, to, taskId, responseJson, expectedSnapshot }: MockTransitionInput,
     db: unknown,
   ) => {
     mocks.transitionDbs.push(db);
     if (mocks.failTransitionTo === to) throw new Error(`transition to ${to} failed`);
     const row = mocks.rows.get(id);
     if (!row || row.owner !== owner || row.state !== from) return false;
+    if (expectedSnapshot && (row.taskId !== expectedSnapshot.taskId || row.responseJson !== expectedSnapshot.responseJson)) return false;
     row.state = to;
     row.updatedAt = Date.now();
     if (taskId) row.taskId = taskId;
@@ -623,6 +625,23 @@ describe('Cindy Core media invocation state and security boundary', () => {
       mocks.failTransitionTo = null;
       expect(await poll(id)).toMatchObject({ status: 'complete' });
       expect(await poll(id)).toMatchObject({ status: 'complete' });
+      expect(providerFetch.mock.calls.filter(([, init]) => init.method === 'POST').length).toBe(1);
+    });
+    it.each(['complete', 'newer-response'])('does not replace a concurrent %s when finishing native delivery', async (race) => {
+      const id = await prepareVideo(); await request(id); succeed();
+      let newer = '';
+      mocks.ingestMedia.mockImplementationOnce(async () => {
+        const current = mocks.rows.get(id)!;
+        newer = race === 'complete' ? JSON.stringify({ xdt_video_urls: ['cindy-media://blobs/already.mp4'] })
+          : JSON.stringify({ ...JSON.parse(current.responseJson as string), meta: { revision: 'newer' } });
+        current.responseJson = newer;
+        current.state = race === 'complete' ? 'complete' : 'pending';
+        return { url: `cindy-media://blobs/${'b'.repeat(64)}.mp4` };
+      });
+      expect(await poll(id)).toMatchObject(race === 'complete'
+        ? { status: 'complete', xdt_video_urls: ['cindy-media://blobs/already.mp4'] }
+        : { errorCode: 'MEDIA_LEDGER_PENDING', retryable: true });
+      expect(mocks.rows.get(id)?.responseJson).toBe(newer);
       expect(providerFetch.mock.calls.filter(([, init]) => init.method === 'POST').length).toBe(1);
     });
     it('does not relabel a saved successful generation as failed when the original task later expires', async () => {

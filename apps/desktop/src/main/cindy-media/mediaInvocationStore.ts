@@ -174,29 +174,35 @@ export async function transitionMediaInvocation(
     to: MediaInvocationState;
     taskId?: string;
     responseJson?: string;
+    /** 原生视频恢复的 CAS：旧 poll 不得覆盖更新响应或完成结果。 */
+    expectedSnapshot?: { taskId?: string; responseJson?: string };
   },
   db: DbClient = getDbClient(),
 ): Promise<boolean> {
+  const guard = input.expectedSnapshot ? ' AND task_id IS ? AND response_json IS ?' : '';
+  const guardArgs = input.expectedSnapshot
+    ? [input.expectedSnapshot.taskId ?? null, input.expectedSnapshot.responseJson ?? null]
+    : [];
   const result =
     input.taskId !== undefined
       ? await db.exec(
           `UPDATE media_invocations
            SET state = ?, task_id = ?, updated_at = ?
-         WHERE id = ? AND owner = ? AND state = ?`,
-          [input.to, input.taskId, Date.now(), input.id, input.owner, input.from],
+         WHERE id = ? AND owner = ? AND state = ?${guard}`,
+          [input.to, input.taskId, Date.now(), input.id, input.owner, input.from, ...guardArgs],
         )
       : input.responseJson !== undefined
         ? await db.exec(
             `UPDATE media_invocations
              SET state = ?, response_json = ?, updated_at = ?
-           WHERE id = ? AND owner = ? AND state = ?`,
-            [input.to, input.responseJson, Date.now(), input.id, input.owner, input.from],
+           WHERE id = ? AND owner = ? AND state = ?${guard}`,
+            [input.to, input.responseJson, Date.now(), input.id, input.owner, input.from, ...guardArgs],
           )
         : await db.exec(
             `UPDATE media_invocations
            SET state = ?, updated_at = ?
-         WHERE id = ? AND owner = ? AND state = ?`,
-            [input.to, Date.now(), input.id, input.owner, input.from],
+         WHERE id = ? AND owner = ? AND state = ?${guard}`,
+            [input.to, Date.now(), input.id, input.owner, input.from, ...guardArgs],
           );
   return Number(result.changes) === 1;
 }
