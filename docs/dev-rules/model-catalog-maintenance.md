@@ -103,8 +103,10 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 - 引擎专属字段写 `engineOverrides[引擎]`：Pi 的推理档位、按模型路由，以及确有差异的窗口
   （如 GLM Coding Plan 裸 `glm-5.2` 在 Claude Code 不写窗口、1M 走 `[1m]` 条目，Pi 为 1M）。
 - 名称与参数以厂商官方文档为准；未列入推荐清单的型号由 Pi 模型资料补入并默认隐藏。
-- `presetModels.test.ts` 校验随包预设不再出现按引擎的清单。服务端正本仍是旧格式，
-  同 id 的服务端预设会覆盖随包版本，服务端需同步迁移后线上才一致。
+- `presetModels.test.ts` 校验随包预设不再出现按引擎的清单。服务端分片同样只写一份推荐
+  清单，由 `generateCatalog.mjs` 展开后下发；同 id 的服务端预设整体覆盖随包版本，所以
+  推荐清单与参数两边保持一致。服务端的连接设置（含 Pi 照抄 Claude Code 的兼容映射）
+  以服务端为准，随包版本的原生 Pi 地址只在离线时使用。
 
 <a id="visibility"></a>
 ## 默认可见性：产品合同与实现差异
