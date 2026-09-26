@@ -26,6 +26,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
   const listeners: Record<string, (event: unknown) => void> = {};
   const documentListeners: Record<string, (event: unknown) => void> = {};
   const windowListeners: Record<string, (event: unknown) => void> = {};
+  let activeElement: object | null = null;
   const elements = Object.fromEntries(
     [
       "stage",
@@ -57,8 +58,12 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
         },
         textContent: "",
         value: "",
-        focus() {},
-        blur() {},
+        focus() {
+          activeElement = this;
+        },
+        blur() {
+          if (activeElement === this) activeElement = null;
+        },
         setSelectionRange() {},
         setAttribute() {},
         setPointerCapture() {},
@@ -147,6 +152,9 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
     matchMedia: () => ({ matches: false }),
     document: {
       getElementById: (key: string) => elements[key],
+      get activeElement() {
+        return activeElement;
+      },
       addEventListener: (key: string, fn: (e: unknown) => void) => {
         documentListeners[key] = fn;
       },
@@ -830,6 +838,43 @@ describe("remote desktop viewport", () => {
       { kind: "text", text: "a" },
       { kind: "key", code: "Backspace", down: true },
       { kind: "key", code: "Backspace", down: false },
+    ]);
+
+    v.ack();
+    v.key("keydown", "Enter", "Enter");
+    v.keyboardInput("beforeinput", { inputType: "insertLineBreak" });
+    v.key("keyup", "Enter", "Enter");
+    expect(
+      v.messages.flatMap((m) => m.events ?? []).filter((e) => e.code === "Enter"),
+    ).toEqual([
+      { kind: "key", code: "Enter", down: true },
+      { kind: "key", code: "Enter", down: false },
+    ]);
+  });
+  it("forwards hardware keys after the mobile keyboard input loses focus", () => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "typing", width: 1920, height: 1080 });
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "keyboard", enabled: true });
+    v.elements["keyboard-input"].blur();
+
+    for (const [code, key] of [
+      ["KeyA", "a"],
+      ["Backspace", "Backspace"],
+      ["Enter", "Enter"],
+    ]) {
+      v.key("keydown", code, key);
+      v.key("keyup", code, key);
+      v.flush();
+      v.ack();
+    }
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "key", code: "KeyA", down: true },
+      { kind: "key", code: "KeyA", down: false },
+      { kind: "key", code: "Backspace", down: true },
+      { kind: "key", code: "Backspace", down: false },
+      { kind: "key", code: "Enter", down: true },
+      { kind: "key", code: "Enter", down: false },
     ]);
   });
   it.each([false, true])(

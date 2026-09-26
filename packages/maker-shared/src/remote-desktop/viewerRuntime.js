@@ -1458,6 +1458,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     // iOS, where the software keyboard reports both events.
     if (
       (config.desktop || keyboardEnabled) &&
+      document.activeElement === keyboardInput &&
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
