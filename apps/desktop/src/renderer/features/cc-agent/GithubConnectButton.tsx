@@ -8,7 +8,7 @@ export function GithubConnectButton({
   onConnected,
   visible = true,
 }: {
-  onConnected(): void;
+  onConnected?(): void;
   visible?: boolean;
 }) {
   const { t } = useTranslation();
