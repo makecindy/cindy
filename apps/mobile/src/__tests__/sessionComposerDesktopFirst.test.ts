@@ -637,9 +637,11 @@ describe('mobile session composer desktop-first surface', () => {
     // fresh (credential already resolved, WebSocket already connecting) and
     // falls back to building the managed credential itself otherwise. 手机语音
     // 只保留 Cindy 官方托管路径:BYOK/穿透已删除。
-    expect(source).toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
-    expect(source).toContain('const prewarmedVoicePromise = takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null);');
-    expect(source).toContain('prewarmedVoicePromise.then((voice) => getMobileVoiceInputHistoryForHost(deviceId, voice?.credential.settings?.voiceInputHistory))');
+    expect(source).toContain('const prewarmedVoice = await (takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null));');
+    // 语音历史与词典快照只服务润色提示:后台读取,不挡在开麦之前。
+    expect(source).not.toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
+    expect(source).toContain('void getMobileVoiceInputHistoryForHost(deviceId, prewarmedVoice?.credential.settings?.voiceInputHistory)');
+    expect(source).toContain('void hydrateMobileVoiceDictionary(deviceId).catch(() => undefined);');
     expect(source).not.toContain('MobileVoiceServiceMode');
     expect(source).not.toContain('LiteLlm');
     expect(source).toContain('?? createMobileCindyVoiceCredential(deviceId);');
@@ -652,7 +654,6 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),');
     expect(source).toContain('voiceContext.createRefinerTarget(providerId, options),');
     expect(source).toContain('voiceContext.warmRefiner(input),');
-    expect(source).toContain('getMobileVoiceInputHistoryForHost(deviceId, voice?.credential.settings?.voiceInputHistory)');
     // Device link is opened non-blocking (not awaited): dictation goes through the
     // cloud ASR proxy and does not need the link, so it must not gate mic start.
     expect(source).toContain('void openLink(deviceId).catch(() => undefined);');
@@ -673,7 +674,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('allowStoredFallback: !forceRefresh');
     expect(source).toContain('getMobileVoiceInputHistoryForHost');
     expect(source).toContain('recordMobileVoiceInputHistoryForHost');
-    expect(source).toContain('localVoiceInputHistory,');
+    expect(source).toContain('localVoiceInputHistory: () => localVoiceInputHistory,');
     expect(source).toContain('recordHistory: (text) => recordMobileVoiceInputHistoryForHost(deviceId, text)');
     expect(source).toContain('updateHistoryEntry: (entryId, text) => updateMobileVoiceInputHistoryEntryForHost(deviceId, entryId, text)');
     expect(source).not.toContain('styles.sendButtonStop');
@@ -768,7 +769,9 @@ describe('mobile session composer desktop-first surface', () => {
     // 计时输入含 pressIn 乐观 pending(按下即录的即时反馈,对齐桌面 activeRecording)。
     // expanded 含乐观 pending(按下即展开),counting 只认真实采集——启动链路
     // (权限弹窗等)不计入录音时长(review P1)。
-    expect(source).toContain('expanded: voiceIsListening || voiceStartPending,');
+    // 停止后 150ms 内仍保持胶囊(stopping),超过才换处理转圈(对齐桌面)。
+    expect(source).toContain('expanded: voiceIsListening || voiceStartPending || voiceProcessingIndicator.stopping,');
+    expect(source).toContain('{voiceProcessingIndicator.showProcessing ? (');
     expect(source).toContain('counting: voiceIsListening,');
     expect(source).toContain('const voiceStartedOnPressInRef = useRef(false);');
     // pending 世代守卫:切会话后旧启动收尾不得塌掉新录音的乐观胶囊(review P1)。

@@ -86,6 +86,7 @@
     "sessionNotConnected": "语音识别会话尚未连接。",
     "loginRequired": "请先登录 {{appName}} 后再使用语音输入。",
     "serviceUnavailable": "当前区域未配置 {{appName}} 语音服务。",
+    "rateLimited": "语音请求过于频繁，请稍后重试。",
     "realtimeUnsupported": "手机版实时语音暂不支持 {{detail}} ASR。",
     "realtimeAuthUnsupported": "手机版实时语音暂不支持 {{auth}} ASR 鉴权。",
     "realtimeProtocolUnsupported": "手机版实时语音暂不支持 {{detail}} ASR 协议。",

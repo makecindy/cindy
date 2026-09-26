@@ -86,6 +86,7 @@
     "sessionNotConnected": "음성 인식 세션이 아직 연결되지 않았습니다.",
     "loginRequired": "음성 입력을 사용하기 전에 {{appName}}에 로그인하세요.",
     "serviceUnavailable": "현재 지역에는 {{appName}} 음성 서비스가 구성되어 있지 않습니다.",
+    "rateLimited": "음성 요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
     "realtimeUnsupported": "모바일 실시간 음성은 아직 {{detail}} ASR을 지원하지 않습니다.",
     "realtimeAuthUnsupported": "모바일 실시간 음성은 아직 {{auth}} ASR 인증을 지원하지 않습니다.",
     "realtimeProtocolUnsupported": "모바일 실시간 음성은 아직 {{detail}} ASR 프로토콜을 지원하지 않습니다.",

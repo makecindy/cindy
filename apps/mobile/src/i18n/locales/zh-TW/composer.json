@@ -86,6 +86,7 @@
     "sessionNotConnected": "語音識別會話尚未連線。",
     "loginRequired": "請先登入 {{appName}} 後再使用語音輸入。",
     "serviceUnavailable": "當前區域未配置 {{appName}} 語音服務。",
+    "rateLimited": "語音請求過於頻繁，請稍後再試。",
     "realtimeUnsupported": "手機版即時語音暫不支援 {{detail}} ASR。",
     "realtimeAuthUnsupported": "手機版即時語音暫不支援 {{auth}} ASR 鑑權。",
     "realtimeProtocolUnsupported": "手機版即時語音暫不支援 {{detail}} ASR 協議。",
