@@ -241,6 +241,16 @@ describe('搬家', () => {
     expect((await readBotProfileFolder(root, 'bot-a')).identitySource).toBe('用户自己改过的');
   });
 
+  it('缺 SOUL.md 时只补缺失的文件,留着的用户档案不被重置', async () => {
+    await writeBotProfileFolder(root, 'bot-a', { userContextSource: '用户手改的档案' });
+    const result = await migrateBotProfileFolder(root, 'bot-a', SEED);
+    expect(result.seeded).toBe(true);
+    const content = await readBotProfileFolder(root, 'bot-a');
+    expect(content.identitySource).toBe(SEED.identitySource);
+    expect(content.userContextSource).toBe('用户手改的档案');
+    expect(content.config).toEqual(SEED.config);
+  });
+
   it('技能从旧目录整体搬进新家,内容与 slug 都不变', async () => {
     const legacy = path.join(root, 'bot-skills', 'bot-a');
     await fs.mkdir(path.join(legacy, 'skills', 'weekly-report'), { recursive: true });

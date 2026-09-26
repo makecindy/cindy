@@ -328,7 +328,7 @@ export interface BotProfileFolderMigration {
  * 两件事:
  *
  *   1. 用数据库里的当前值播种 `SOUL.md` / `memories/USER.md` / `config.json`。
- *      **只在没有 SOUL.md 时做**,绝不覆盖用户已经改过的文件。
+ *      **只在没有 SOUL.md 时做**,且只补缺失的那几个文件,绝不覆盖用户已经改过的文件。
  *   2. 把 `<userData>/bot-skills/<botId>/` 整个搬成 `<家>/skills` 的邻居
  *      (`.claude-plugin/` 一并带走)。一个伙伴一个家,不该散在两处。
  *
@@ -347,10 +347,14 @@ export async function migrateBotProfileFolder(
   try {
     await fs.access(soulPath);
   } catch {
+    // Seed only what is missing: a hand-edited USER.md or config.json left next to
+    // a missing SOUL.md is still the user's content and must not be reset.
+    const exists = (relative: string) =>
+      fs.access(resolveInside(userDataDir, botId, relative)).then(() => true, () => false);
     await writeBotProfileFolder(userDataDir, botId, {
       identitySource: seed.identitySource,
-      userContextSource: seed.userContextSource,
-      config: seed.config,
+      ...((await exists(SLOT.userContext)) ? {} : { userContextSource: seed.userContextSource }),
+      ...((await exists(SLOT.config)) ? {} : { config: seed.config }),
     });
     seeded = true;
   }

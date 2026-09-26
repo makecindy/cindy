@@ -911,6 +911,13 @@ describe('Bot canonical Session lifecycle', () => {
     await invoke('local-db:bots:update', { id: created.id, pinned: true });
     expect(readFileSync(join(home, 'SOUL.md'), 'utf8').trim()).toBe('Stored identity');
     expect(readFileSync(join(home, 'memories', 'USER.md'), 'utf8').trim()).toBe('Stored user context');
+
+    // Only SOUL.md missing: seeding fills it without resetting a hand-edited USER.md.
+    rmSync(join(home, 'SOUL.md'));
+    writeFileSync(join(home, 'memories', 'USER.md'), 'User context written in an editor\n');
+    await invoke('local-db:bots:update', { id: created.id, pinned: false });
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8').trim()).toBe('Stored identity');
+    expect(readFileSync(join(home, 'memories', 'USER.md'), 'utf8')).toBe('User context written in an editor\n');
   });
 
   it('keeps hand-edited SOUL.md and USER.md through unrelated profile saves', async () => {
