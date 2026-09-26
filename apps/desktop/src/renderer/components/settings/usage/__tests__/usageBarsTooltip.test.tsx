@@ -181,6 +181,24 @@ describe('usage bars tooltip', () => {
     expect(screen.getByTestId('usage-bars-tooltip').className).toContain('max-h-');
   });
 
+  it('stays inside a narrow viewport instead of spilling past the left edge (3× zoom)', () => {
+    Object.defineProperty(document.documentElement, 'clientWidth', {
+      configurable: true,
+      value: 267,
+    });
+    rects.set('plot', { left: 10, top: 400, width: 250, height: 96 });
+    rects.set('tooltip', { width: 320, height: 150 });
+    const view = renderBars();
+    rects.set('2026-09-26', { left: 200, top: 470, width: 6, height: 26 });
+
+    fireEvent.pointerOver(bar(view));
+    // 267 - 320 - 8 < 8 → left margin wins; width itself is capped by CSS to the viewport
+    expect(tooltipTransform()).toBe('translate3d(8px, 242px, 0)');
+    expect(screen.getByTestId('usage-bars-tooltip').className).toContain(
+      'max-w-[min(320px,calc(100vw-16px))]',
+    );
+  });
+
   it('caps the share bar at six model segments plus one merged remainder', () => {
     const models = Array.from({ length: 10 }, (_, i) => row(`m${i}`, (i + 1) * 10));
     const view = render(

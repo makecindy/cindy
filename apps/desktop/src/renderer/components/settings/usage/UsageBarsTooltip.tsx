@@ -97,9 +97,11 @@ export function UsageBarsTooltip({
     const { width, height } = el.getBoundingClientRect();
     const viewportWidth = document.documentElement.clientWidth;
     const centerX = anchor.left + anchor.width / 2;
-    const left = Math.min(
-      Math.max(centerX - width / 2, VIEWPORT_MARGIN_PX),
-      viewportWidth - width - VIEWPORT_MARGIN_PX,
+    // 两个方向同一不变量:浮层整体留在视口内。宽度已由 CSS 限制在视口宽度内,
+    // 左侧边距优先(视口比浮层还窄时贴左边距,不被挤出左缘)。
+    const left = Math.max(
+      VIEWPORT_MARGIN_PX,
+      Math.min(centerX - width / 2, viewportWidth - width - VIEWPORT_MARGIN_PX),
     );
     // 优先放在绘图区上方,放不下翻到下方;两边都放不下(如 3× 缩放的矮窗口)就夹在视口内,
     // 超出视口高度的部分由 max-height 截掉,头部的日期与总量始终可见。
@@ -134,7 +136,7 @@ export function UsageBarsTooltip({
       aria-hidden="true"
       data-testid="usage-bars-tooltip"
       data-glide={position?.glide ? 'true' : undefined}
-      className="usage-bars-tooltip animate-fade-in pointer-events-none fixed left-0 top-0 z-[10011] w-max min-w-[220px] max-w-[320px] max-h-[calc(100vh-16px)] overflow-hidden select-none rounded-xl bg-[var(--tooltip-bg)] px-3 py-2.5 text-[var(--tooltip-text)]"
+      className="usage-bars-tooltip animate-fade-in pointer-events-none fixed left-0 top-0 z-[10011] w-max min-w-[min(220px,calc(100vw-16px))] max-w-[min(320px,calc(100vw-16px))] max-h-[calc(100vh-16px)] overflow-hidden select-none rounded-xl bg-[var(--tooltip-bg)] px-3 py-2.5 text-[var(--tooltip-text)]"
       style={{
         transform: position ? `translate3d(${position.left}px, ${position.top}px, 0)` : undefined,
         visibility: position ? 'visible' : 'hidden',
