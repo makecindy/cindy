@@ -440,6 +440,39 @@ describe('listSessionTasks 共用 subagent_runs 状态', () => {
     });
     expect(completed[0]).toMatchObject({ status: 'failed' });
   });
+
+  it('调用滑出消息窗口的孤儿 update 同样采用 durable 终态,不再留在「运行中」', () => {
+    const update = makeUpdate({ taskId: 'agent-1', parentToolUseId: 'toolu-gone' });
+    const input = {
+      messages: [],
+      taskUpdates: aliasedMap(update),
+      subagentRunStatuses: buildSubagentRunStatusIndex([
+        { parentToolUseId: 'toolu-gone', status: 'failed' },
+      ]),
+    };
+    // 空闲态:终态孤儿是陈旧残留,不列出。
+    expect(listSessionTasks({ ...input, isSessionStreaming: false })).toEqual({
+      running: [],
+      completed: [],
+    });
+    // 运行中:作为 LIVE 占位列在终态区。
+    const live = listSessionTasks({ ...input, isSessionStreaming: true });
+    expect(live.running).toHaveLength(0);
+    expect(live.completed[0]).toMatchObject({ taskId: 'agent-1', status: 'failed' });
+  });
+
+  it('后台 Bash 孤儿不查 subagent_runs', () => {
+    const update = makeUpdate({ taskId: 'bash-1', parentToolUseId: 'toolu-b', taskType: 'local_bash' });
+    const { running } = listSessionTasks({
+      messages: [],
+      taskUpdates: aliasedMap(update),
+      isSessionStreaming: false,
+      subagentRunStatuses: buildSubagentRunStatusIndex([
+        { parentToolUseId: 'toolu-b', status: 'completed' },
+      ]),
+    });
+    expect(running[0]).toMatchObject({ taskId: 'bash-1', status: 'running' });
+  });
 });
 
 // ---------------------------------------------------------------------------

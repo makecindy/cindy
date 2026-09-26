@@ -385,7 +385,14 @@ export function listSessionTasks(input: {
     const seenTaskIds = new Set<string>();
     let orphanOrder = messages.length;
     for (const update of taskUpdates.values()) {
-      if (!isSessionStreaming && update.status !== 'running') continue;
+      // 与配对行同一状态口径:subagent_runs 的终态收口 stale running(调用滑出
+      // 消息窗口时,聊天里的孤儿卡同样采用它)。后台 Bash / workflow 不进该表。
+      const durableStatus =
+        update.taskType === 'local_bash' || update.taskType === 'local_workflow'
+          ? undefined
+          : lookupSubagentRunStatus(subagentRunStatuses, undefined, update);
+      const status = deriveAgentTaskStatus(update.status, undefined, { durableStatus });
+      if (!isSessionStreaming && status !== 'running') continue;
       const primaryKey = update.parentToolUseId ?? update.taskId;
       if (
         seenTaskIds.has(update.taskId) ||
@@ -401,7 +408,7 @@ export function listSessionTasks(input: {
         taskId: update.taskId,
         kind,
         title: deriveTitle(kind, update, undefined),
-        status: update.status,
+        status,
         provider: update.provider,
         update,
         orderIndex: orphanOrder++,
