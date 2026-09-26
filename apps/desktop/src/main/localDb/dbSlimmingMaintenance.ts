@@ -783,8 +783,15 @@ function compactWorkingCopy(
             )
             .all() as Array<{ sessionId: string }>;
           const closeSharedTask = activeDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL);
+          const commitPreparedClose = activeDb.prepare(
+            `UPDATE shared_task_events SET terminal = 1
+             WHERE session_id = ? AND kind = 'local-close' AND revision = 0 AND terminal = 0`,
+          );
           for (const { sessionId } of sharedTasks) {
             closeSharedTask.run(Math.floor(request.scannedAt), sessionId);
+            // An interrupted preparation may already occupy the unique fence.
+            // Commit it together with deletion so relay recovery can retry it.
+            commitPreparedClose.run(sessionId);
           }
         }
       }

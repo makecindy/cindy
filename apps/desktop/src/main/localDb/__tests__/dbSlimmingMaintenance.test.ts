@@ -571,9 +571,13 @@ describe('runDbSlimmingMaintenance', () => {
     }
   });
 
-  it.each([false, true])(
-    'closes sharing and queued input atomically while preserving Bot timelines (rollback=%s)',
-    async (rollback) => {
+  it.each(
+    [null, 0, 1].flatMap((existingCloseTerminal) =>
+      [false, true].map((rollback) => ({ existingCloseTerminal, rollback })),
+    ),
+  )(
+    'closes sharing and queued input atomically while preserving Bot timelines (existingCloseTerminal=$existingCloseTerminal, rollback=$rollback)',
+    async ({ existingCloseTerminal, rollback }) => {
       createCleanupFixture();
       const setup = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
       try {
@@ -602,6 +606,15 @@ describe('runDbSlimmingMaintenance', () => {
           `,
             )
             .run(`shared-${id}`, id);
+          if (existingCloseTerminal !== null) {
+            setup
+              .prepare(
+                `INSERT INTO shared_task_events
+                  (shared_task_id, session_id, revision, kind, terminal, recorded_at)
+                 VALUES (?, ?, 0, 'local-close', ?, 100)`,
+              )
+              .run(`shared-${id}`, id, existingCloseTerminal);
+          }
           setup.prepare('INSERT INTO agent_input_queue_snapshots VALUES (?, ?)').run(id, '[]');
         }
       } finally {
@@ -632,9 +645,25 @@ describe('runDbSlimmingMaintenance', () => {
         ]);
         expect(
           db
-            .prepare("SELECT session_id, terminal FROM shared_task_events WHERE kind = 'local-close'")
+            .prepare(
+              "SELECT session_id, terminal, recorded_at FROM shared_task_events WHERE kind = 'local-close' ORDER BY session_id",
+            )
             .all(),
-        ).toEqual(rollback ? [] : [{ session_id: 'active-updated-after-scan', terminal: 1 }]);
+        ).toEqual(
+          existingCloseTerminal === null
+            ? rollback
+              ? []
+              : [{ session_id: 'active-updated-after-scan', terminal: 1, recorded_at: 2_000 }]
+            : [
+                { session_id: 'active-old', terminal: existingCloseTerminal, recorded_at: 100 },
+                { session_id: 'active-recent', terminal: existingCloseTerminal, recorded_at: 100 },
+                {
+                  session_id: 'active-updated-after-scan',
+                  terminal: rollback ? existingCloseTerminal : 1,
+                  recorded_at: 100,
+                },
+              ],
+        );
         expect(
           db
             .prepare(
