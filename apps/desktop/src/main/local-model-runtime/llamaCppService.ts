@@ -34,6 +34,12 @@ import {
 import { windowsTarBin } from './ollamaInstall.js';
 import { readModelContextLimits } from '../maker-host/model-context-limit-store.js';
 import { killProcessTree } from '../scheduler-host/proc-util.js';
+import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
+import {
+  startReviewOwnerLiveness,
+  probeReviewOwnerLiveness,
+  type ReviewOwnerLivenessHandle,
+} from '../reviewer/reviewOwnerLiveness.js';
 
 const exec = promisify(execFile);
 export function managedModelId(repo: string, file: string): string {
@@ -75,6 +81,10 @@ export function createLlamaCppService(
   let starting: Promise<void> | undefined;
   let transfer: AbortController | undefined;
   let wakeDownload: (() => void) | undefined;
+  let settled: Promise<void> | undefined;
+  let ownerProof: ReviewOwnerLivenessHandle | undefined;
+  let borrowed = false;
+  let disposing = false;
 
   async function installed(): Promise<{ binary: string; version: string } | undefined> {
     try {
@@ -114,7 +124,7 @@ export function createLlamaCppService(
     return {
       installed: !!runtime,
       supported: !!llamaCppPlatform(process.platform, process.arch),
-      running: ready && !!child,
+      running: ready && (!!child || borrowed),
       canPauseDownload: true,
       version: runtime?.version,
       models: await models(),
@@ -125,15 +135,21 @@ export function createLlamaCppService(
     kind: NonNullable<LlamaCppSnapshot['operation']>['kind'],
     fn: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
-    if (operation) throw new Error('BUSY');
+    if (operation || disposing) throw new Error('BUSY');
     const current = new AbortController();
     controller = current;
     operation = { kind, completed: 0, total: 0 };
+    let resolveSettled!: () => void;
+    settled = new Promise<void>((resolve) => {
+      resolveSettled = resolve;
+    });
     try {
       return await fn(current.signal);
     } finally {
       controller = undefined;
       operation = undefined;
+      resolveSettled();
+      settled = undefined;
     }
   }
   function cancel() {
@@ -151,8 +167,15 @@ export function createLlamaCppService(
     operation.paused = false;
     wakeDownload?.();
   }
+  function closeOwnerProof() {
+    const proof = ownerProof;
+    ownerProof = undefined;
+    void proof?.close().catch(() => {});
+  }
   function stop() {
     ready = false;
+    borrowed = false;
+    closeOwnerProof();
     child?.kill('SIGTERM');
   }
   async function stopAndWait(): Promise<void> {
@@ -292,6 +315,7 @@ export function createLlamaCppService(
     });
   }
   async function start(reload = false): Promise<void> {
+    if (disposing) throw new Error('BUSY');
     if (starting) {
       await starting;
       return start(reload);
@@ -311,119 +335,167 @@ export function createLlamaCppService(
     ].join('\n');
     if (ready && child && !reload && !modelsChanged && preset === activePreset) return;
     starting = exclusive('start', async (signal) => {
-      const runtime = await installed();
-      if (!runtime) throw new Error('NOT_INSTALLED');
-      // Preference changes apply on demand. Never kill another task's active generation.
-      if (ready && child && !reload) {
-        const response = await fetch(`${LLAMACPP_MANAGED_ORIGIN}/v1/models`, {
-          signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]),
-          redirect: 'error',
-        });
-        if (!response.ok) throw new Error('BUSY');
-        const listing = (await response.json()) as {
-          data?: Array<{ id: string; status?: { value?: string } }>;
-        };
-        if (!Array.isArray(listing.data)) throw new Error('BUSY');
-        for (const model of listing.data) {
-          if (model.status?.value === 'unloaded') continue;
-          if (model.status?.value !== 'loaded') throw new Error('BUSY');
-          const slotsResponse = await fetch(
-            `${LLAMACPP_MANAGED_ORIGIN}/slots?model=${encodeURIComponent(model.id)}&autoload=false`,
-            {
-              signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]),
-              redirect: 'error',
-            },
-          );
-          if (!slotsResponse.ok) throw new Error('BUSY');
-          const slots = (await slotsResponse.json()) as Array<{ is_processing?: boolean }>;
-          if (!Array.isArray(slots) || slots.some((slot) => slot.is_processing !== false))
-            throw new Error('BUSY');
-        }
-      }
-      await stopAndWait();
-      await mkdir(modelsRoot, { recursive: true });
-      const presets = path.join(root, 'models.ini');
-      await writeFile(presets, preset);
-      // Never claim or stop another application's server on the managed port.
-      const { createServer } = await import('node:net');
-      await new Promise<void>((resolve, reject) => {
-        const probe = createServer();
-        probe.once('error', () => reject(new Error('PORT_CONFLICT')));
-        probe.listen(LLAMACPP_MANAGED_PORT, '127.0.0.1', () => probe.close(() => resolve()));
-      });
-      signal.throwIfAborted();
-      const env = Object.fromEntries(
-        Object.entries(process.env).filter(
-          ([key]) => !key.startsWith('LLAMA_') && key !== 'HF_TOKEN',
-        ),
-      );
-      const running = spawn(
-        runtime.binary,
-        [
-          '--host',
-          '127.0.0.1',
-          '--port',
-          String(LLAMACPP_MANAGED_PORT),
-          '--models-dir',
-          modelsRoot,
-          '--models-max',
-          '1',
-          '--models-preset',
-          presets,
-          '--parallel',
-          '1',
-          '--jinja',
-        ],
-        {
-          cwd: path.dirname(runtime.binary),
-          env: { ...env, LLAMA_CACHE: path.join(root, 'cache') },
-          stdio: 'ignore',
-          windowsHide: true,
-          detached: process.platform !== 'win32',
-        },
-      );
-      child = running;
-      let failed = false;
-      running.once('error', () => {
-        failed = true;
-        if (child === running) {
-          child = undefined;
-          ready = false;
-        }
-      });
-      running.once('exit', () => {
-        failed = true;
-        if (child === running) {
-          child = undefined;
-          ready = false;
-        }
-      });
-      try {
-        for (let attempt = 0; attempt < 120; attempt++) {
-          signal.throwIfAborted();
-          if (failed) throw new Error('START_FAILED');
-          try {
-            const res = await fetch(`${LLAMACPP_MANAGED_ORIGIN}/health`, {
-              signal: AbortSignal.any([signal, AbortSignal.timeout(500)]),
-              redirect: 'error',
-            });
-            await res.body?.cancel();
-            if (res.ok && child === running && !failed) {
+      await mkdir(root, { recursive: true });
+      return withCrossProcessLock(
+        path.join(root, 'server-start.lock'),
+        { label: 'llamacpp startup', waitMs: 35_000 },
+        async (lock) => {
+          if (!lock.held) throw new Error('BUSY');
+          const runtime = await installed();
+          if (!runtime) throw new Error('NOT_INSTALLED');
+          if (!child) {
+            let owner;
+            try {
+              owner = JSON.parse(await readFile(path.join(root, 'server-owner.json'), 'utf8'));
+            } catch {
+              /* no published owner */
+            }
+            if (
+              owner?.identity?.version === 1 &&
+              Number.isInteger(owner.identity.port) &&
+              owner.identity.port > 0 &&
+              owner.identity.port < 65536 &&
+              typeof owner.identity.token === 'string' &&
+              (await probeReviewOwnerLiveness(owner.identity)) === 'alive'
+            ) {
+              if (reload || owner.preset !== preset) throw new Error('BUSY');
+              const health = await fetch(`${LLAMACPP_MANAGED_ORIGIN}/health`, {
+                signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]),
+                redirect: 'error',
+              });
+              await health.body?.cancel();
+              if (!health.ok) throw new Error('BUSY');
+              borrowed = true;
               ready = true;
-              activePreset = preset;
-              modelsChanged = false;
               return;
             }
-          } catch {
-            /* wait for owned child to bind */
           }
-          await new Promise((resolve) => setTimeout(resolve, 250));
-        }
-        throw new Error('START_TIMEOUT');
-      } catch (error) {
-        await stopAndWait();
-        throw error;
-      }
+          // Preference changes apply on demand. Never kill another task's active generation.
+          if (ready && child && !reload) {
+            const response = await fetch(`${LLAMACPP_MANAGED_ORIGIN}/v1/models`, {
+              signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]),
+              redirect: 'error',
+            });
+            if (!response.ok) throw new Error('BUSY');
+            const listing = (await response.json()) as {
+              data?: Array<{ id: string; status?: { value?: string } }>;
+            };
+            if (!Array.isArray(listing.data)) throw new Error('BUSY');
+            for (const model of listing.data) {
+              if (model.status?.value === 'unloaded') continue;
+              if (model.status?.value !== 'loaded') throw new Error('BUSY');
+              const slotsResponse = await fetch(
+                `${LLAMACPP_MANAGED_ORIGIN}/slots?model=${encodeURIComponent(model.id)}&autoload=false`,
+                {
+                  signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]),
+                  redirect: 'error',
+                },
+              );
+              if (!slotsResponse.ok) throw new Error('BUSY');
+              const slots = (await slotsResponse.json()) as Array<{ is_processing?: boolean }>;
+              if (!Array.isArray(slots) || slots.some((slot) => slot.is_processing !== false))
+                throw new Error('BUSY');
+            }
+          }
+          await stopAndWait();
+          await mkdir(modelsRoot, { recursive: true });
+          const presets = path.join(root, 'models.ini');
+          await writeFile(presets, preset);
+          // Never claim or stop another application's server on the managed port.
+          const { createServer } = await import('node:net');
+          await new Promise<void>((resolve, reject) => {
+            const probe = createServer();
+            probe.once('error', () => reject(new Error('PORT_CONFLICT')));
+            probe.listen(LLAMACPP_MANAGED_PORT, '127.0.0.1', () => probe.close(() => resolve()));
+          });
+          signal.throwIfAborted();
+          const env = Object.fromEntries(
+            Object.entries(process.env).filter(
+              ([key]) => !key.startsWith('LLAMA_') && key !== 'HF_TOKEN',
+            ),
+          );
+          const running = spawn(
+            runtime.binary,
+            [
+              '--host',
+              '127.0.0.1',
+              '--port',
+              String(LLAMACPP_MANAGED_PORT),
+              '--models-dir',
+              modelsRoot,
+              '--models-max',
+              '1',
+              '--models-preset',
+              presets,
+              '--parallel',
+              '1',
+              '--jinja',
+            ],
+            {
+              cwd: path.dirname(runtime.binary),
+              env: { ...env, LLAMA_CACHE: path.join(root, 'cache') },
+              stdio: 'ignore',
+              windowsHide: true,
+              detached: process.platform !== 'win32',
+            },
+          );
+          child = running;
+          let failed = false;
+          running.once('error', () => {
+            failed = true;
+            if (child === running) {
+              child = undefined;
+              ready = false;
+              closeOwnerProof();
+            }
+          });
+          running.once('exit', () => {
+            failed = true;
+            if (child === running) {
+              child = undefined;
+              ready = false;
+              closeOwnerProof();
+            }
+          });
+          try {
+            for (let attempt = 0; attempt < 120; attempt++) {
+              signal.throwIfAborted();
+              if (failed) throw new Error('START_FAILED');
+              try {
+                const res = await fetch(`${LLAMACPP_MANAGED_ORIGIN}/health`, {
+                  signal: AbortSignal.any([signal, AbortSignal.timeout(500)]),
+                  redirect: 'error',
+                });
+                await res.body?.cancel();
+                if (res.ok && child === running && !failed) {
+                  ownerProof = await startReviewOwnerLiveness();
+                  await writeFile(
+                    path.join(root, 'server-owner.json'),
+                    JSON.stringify({ identity: ownerProof.identity, preset }),
+                    { mode: 0o600 },
+                  );
+                  if (failed || child !== running) {
+                    closeOwnerProof();
+                    throw new Error('START_FAILED');
+                  }
+                  ready = true;
+                  activePreset = preset;
+                  modelsChanged = false;
+                  return;
+                }
+              } catch {
+                /* wait for owned child to bind */
+              }
+              await new Promise((resolve) => setTimeout(resolve, 250));
+            }
+            throw new Error('START_TIMEOUT');
+          } catch (error) {
+            await stopAndWait();
+            throw error;
+          }
+        },
+        signal,
+      );
     });
     try {
       await starting;
@@ -437,6 +509,8 @@ export function createLlamaCppService(
       await starting.catch(() => {});
     }
     await stopAndWait();
+    ready = false;
+    borrowed = false;
   }
   return {
     snapshot,
@@ -448,8 +522,14 @@ export function createLlamaCppService(
     pause,
     resume,
     dispose: async () => {
+      disposing = true;
       cancel();
+      await settled;
       await stopRequested();
+      if (!child) {
+        ready = false;
+        borrowed = false;
+      }
     },
   };
 }

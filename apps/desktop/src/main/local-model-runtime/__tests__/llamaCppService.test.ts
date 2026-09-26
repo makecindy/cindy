@@ -4,6 +4,13 @@ import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 const mocks = vi.hoisted(() => ({ download: vi.fn(), resolve: vi.fn(), spawn: vi.fn() }));
+vi.mock('../../reviewer/reviewOwnerLiveness.js', () => ({
+  startReviewOwnerLiveness: async () => ({
+    identity: { version: 1, port: 12345, token: 'test-owner' },
+    close: async () => {},
+  }),
+  probeReviewOwnerLiveness: async () => 'alive',
+}));
 vi.mock('../../maker-host/model-context-limit-store.js', () => ({
   readModelContextLimits: () => ({}),
 }));
@@ -45,6 +52,72 @@ afterEach(async () => {
 });
 
 describe('managed llama.cpp model lifecycle', () => {
+  it('reuses the same profile owner and never stops it from a borrowing instance', async () => {
+    const runtime = path.join(root, 'llamacpp-runtime');
+    await mkdir(runtime);
+    await writeFile(path.join(runtime, 'server'), 'stub');
+    await writeFile(
+      path.join(runtime, 'current.json'),
+      JSON.stringify({ binary: 'server', version: 'test' }),
+    );
+    const child = Object.assign(new EventEmitter(), {
+      kill: vi.fn(() => {
+        child.emit('exit');
+        return true;
+      }),
+    });
+    mocks.spawn.mockReturnValue(child);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ status: 'ok' })),
+    );
+    const owner = createLlamaCppService(root);
+    const borrower = createLlamaCppService(root);
+    await owner.start();
+    await Promise.all([owner.start(), borrower.start()]);
+    expect(mocks.spawn).toHaveBeenCalledOnce();
+    expect((await borrower.snapshot()).running).toBe(true);
+    await owner.download({ repo: 'owner/repo', file: 'model.gguf' });
+    await expect(borrower.start()).rejects.toThrow('BUSY');
+    expect(mocks.spawn).toHaveBeenCalledOnce();
+    expect(child.kill).not.toHaveBeenCalled();
+    await borrower.dispose();
+    expect(child.kill).not.toHaveBeenCalled();
+    await owner.dispose();
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+  it('waits for canceled download cleanup before disposal resolves', async () => {
+    let entered!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.download.mockImplementation(async (_asset, dest, _source, signal) => {
+      await writeFile(dest, 'partial');
+      entered();
+      await new Promise<void>((resolve) =>
+        signal.addEventListener('abort', () => resolve(), { once: true }),
+      );
+      await cleanupGate;
+      signal.throwIfAborted();
+    });
+    const service = createLlamaCppService(root);
+    const download = service.download({ repo: 'owner/repo', file: 'model.gguf' }).catch(() => {});
+    await enteredPromise;
+    let disposed = false;
+    const disposing = service.dispose().then(() => {
+      disposed = true;
+    });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+    release();
+    await Promise.all([download, disposing]);
+    await expect(service.start()).rejects.toThrow('BUSY');
+    expect(await readdir(path.join(root, 'llamacpp-runtime'))).toEqual(['models']);
+  });
   it.each(['stop', 'dispose'] as const)(
     'forces and awaits a stuck owned process during %s',
     async (action) => {
@@ -71,6 +144,7 @@ describe('managed llama.cpp model lifecycle', () => {
       vi.useFakeTimers();
       try {
         const stopping = service[action]();
+        await Promise.resolve();
         expect(child.kill).toHaveBeenCalledWith('SIGTERM');
         await vi.advanceTimersByTimeAsync(1500);
         await stopping;
