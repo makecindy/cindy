@@ -321,19 +321,27 @@ export async function uninstallRemoteAgent(
   // 一并删除 —— python daemon 已退役, 目录惰性无进程读取, uninstall 清干净
   // (退役审轮 8 LOW-2 补充, 轮 10 H-1 注释与代码对齐)。
   if (agentKind === 'pi') {
-    const instDir = `"$HOME/.xdt-server/${REMOTE_SERVER_SCHEMA_VERSION}"`;
     // 先杀运行中的 daemon + pi 进程, 再删文件 —— 顺序不能反:
     // daemon 进程内存态仍持有 API key(删文件不会清进程内存), 且持有已删
     // inode 的 pi 二进制(可经 /proc/<pid>/exe 恢复)。
     // kill 失败不阻断 uninstall(rm 继续, 残留由 daemon 空闲超时兜底回收)。
+    //
+    // ⚠️ 引号纪律:本脚本把路径同时用作**文件操作数**和 **grep 模式串**。
+    // 不能像 rm 那样靠嵌双引号拼接(`grep -F -- "--socket "$HOME/..."`会把
+    // 引号在模式串中间截断, $HOME 裸奔 —— 家目录含空格时模式被词切分,
+    // 身份匹配静默失效, daemon 杀不掉但 rm -rf 照跑, 见 cc-manager-installer
+    // 对空格 $HOME 的同类处理)。一律先 `VAR="..."` 赋值再 `"$VAR"` 引用。
+    const instDir = `"$HOME/.xdt-server/${REMOTE_SERVER_SCHEMA_VERSION}"`;
     const killDaemons = [
+      `INST_DIR="$HOME/.xdt-server/${REMOTE_SERVER_SCHEMA_VERSION}"`,
+      `MGR_SOCK="$INST_DIR/pi-manager/pi-manager.sock"`,
       // pi-manager daemon kill:按 pidfile 精确定位, 不用 pkill -f
       // (会误杀含 pi-manager.mjs 字符串的无关进程 —— 自审轮 5 M-3)。
       // daemon 的 SIGTERM handler 会 shutdownAll + 清理 env-file/socket。
       // kill 前验证进程身份(kill -0 + ps 确认是 pi-manager.mjs)—— 防 pidfile
       // 陈旧 + PID 被系统进程重用时误杀(深挖轮 5 M-3)。
-      `if [ -f ${instDir}/pi-manager/pi-manager.pid ]; then`,
-      `  PID=$(cat ${instDir}/pi-manager/pi-manager.pid 2>/dev/null || true)`,
+      `if [ -f "$INST_DIR/pi-manager/pi-manager.pid" ]; then`,
+      `  PID=$(cat "$INST_DIR/pi-manager/pi-manager.pid" 2>/dev/null || true)`,
       `  case "$PID" in`,
       `    *[!0-9]*|'') ;;`,
       // 轮 42 P2(codex-connector):pidfile 陈旧 + PID 被复用成**别的** install
@@ -341,7 +349,7 @@ export async function uninstallRemoteAgent(
       // 活跃 Pi 会话。与 pi-manager-installer 的 kill 同口径: 同时匹配本
       // install 的 `--socket <instDir>/pi-manager/pi-manager.sock` 才确认是
       // 本 install 的 daemon 才杀。
-      `    *) if kill -0 "$PID" 2>/dev/null && (ps -p "$PID" -o command= 2>/dev/null | grep -F -- "pi-manager.mjs" | grep -F -- "--socket ${instDir}/pi-manager/pi-manager.sock" || (grep -aq pi-manager.mjs /proc/$PID/cmdline 2>/dev/null && grep -aq -- "--socket ${instDir}/pi-manager/pi-manager.sock" /proc/$PID/cmdline 2>/dev/null)); then`,
+      `    *) if kill -0 "$PID" 2>/dev/null && (ps -p "$PID" -o command= 2>/dev/null | grep -F -- "pi-manager.mjs" | grep -F -- "--socket $MGR_SOCK" || (grep -aq pi-manager.mjs /proc/$PID/cmdline 2>/dev/null && grep -aq -- "--socket $MGR_SOCK" /proc/$PID/cmdline 2>/dev/null)); then`,
       `         kill "$PID" >/dev/null 2>&1 || true`,
       `         # 等 daemon 退出(最多 3s) —— daemon 的 shutdownAll 要杀所有 pi 子进程`,
       `         # + 清理 env-file/socket 后再 exit; 不等的话 rm -rf 会和 shutdown 竞态`,
@@ -372,10 +380,10 @@ export async function uninstallRemoteAgent(
       // 创建)的存活 daemon 也要杀 —— 否则 uninstall 跳过 kill, rm 掉 pi-manager/
       // 后旧 daemon 带着 pi 子进程与凭证 env 在 unlinked socket 后继续跑。
       // 按 cmdline 扫本 install 的 daemon(socket 独有路径) + 确认退出。
-      `if [ -S ${instDir}/pi-manager/pi-manager.sock ]; then`,
+      `if [ -S "$MGR_SOCK" ]; then`,
       // 与 ensure 侧 orphan sweep 同口径:grep / 本 bash -c 命令行也含匹配串,
       // 不排除会误杀卸载脚本自己, 随后 rm -rf 仍继续, 未扫到的 daemon 带着凭证残留。
-      `  for ORPHAN in $(ps -axo pid=,command= | grep -F -- "pi-manager.mjs daemon --socket ${instDir}/pi-manager/pi-manager.sock" | grep -v -F "grep" | awk '{print $1}'); do`,
+      `  for ORPHAN in $(ps -axo pid=,command= | grep -F -- "pi-manager.mjs daemon --socket $MGR_SOCK" | grep -v -F "grep" | awk '{print $1}'); do`,
       `    [ "$ORPHAN" = "$$" ] && continue`,
       `    kill "$ORPHAN" >/dev/null 2>&1 || true`,
       `    for i in $(seq 1 15); do kill -0 "$ORPHAN" 2>/dev/null || break; sleep 0.2; done`,

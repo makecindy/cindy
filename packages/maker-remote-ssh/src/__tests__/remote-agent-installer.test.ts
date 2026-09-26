@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -298,5 +298,59 @@ describe('remote agent installer', () => {
     expect(killIdx).toBeGreaterThanOrEqual(0);
     expect(rmIdx).toBeGreaterThanOrEqual(0);
     expect(killIdx).toBeLessThan(rmIdx); // kill before rm
+  });
+
+  it('pi uninstall kill patterns survive a $HOME containing spaces', async () => {
+    // 回归:grep 模式串曾靠嵌双引号拼接(`grep -F -- "--socket "$HOME/..."`),
+    // 引号在模式中间截断 → $HOME 裸奔。家目录含空格时模式被词切分,grep 把
+    // 第二段当文件操作数,身份匹配静默失效(exit 2)→ daemon 杀不掉但 rm -rf
+    // 照跑,卸载后残留带凭证的活 daemon(对比 cc-manager-installer 对空格
+    // $HOME 的同类防御)。修复后路径一律先 VAR="..." 赋值再在双引号内 $VAR
+    // 展开,任何 $HOME 都是一个 word。
+    const calls: Array<{ command: string; label?: string }> = [];
+    const host = {
+      exec: async (command: string, opts?: { label?: string }) => {
+        calls.push({ command, label: opts?.label });
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    } as Pick<RemoteHost, 'exec'> as RemoteHost;
+
+    await uninstallRemoteAgent(host, 'pi');
+    const killCmd = calls[0].command;
+
+    // 模式串通过 shell 变量在双引号内展开,不依赖嵌引号拼接
+    expect(killCmd).toContain('MGR_SOCK="$INST_DIR/pi-manager/pi-manager.sock"');
+    expect(killCmd).toContain('grep -F -- "--socket $MGR_SOCK"');
+    expect(killCmd).toContain('grep -aq -- "--socket $MGR_SOCK"');
+    expect(killCmd).toContain('grep -F -- "pi-manager.mjs daemon --socket $MGR_SOCK"');
+    // 旧的破损形态:引号在模式中间截断(模式串里出现 `"--socket "` 后紧跟裸 $HOME)
+    expect(killCmd).not.toContain('--socket "$HOME');
+    expect(killCmd).not.toContain('socket "$INST_DIR');
+
+    // 行为验证:① 空格 $HOME 下整段 kill 脚本可执行(pidfile/socket 均不存在 →
+    // 两个分支都是 no-op);② 双引号内 $VAR 展开的 grep 模式保持单 word。
+    // bash 依赖加平台守卫(对齐本包 credentials.test.ts / hostKeys.test.ts 的
+    // 先例):Windows 分片无 bash 保证,该段仅在 POSIX 上验证;脚本文本断言
+    // (上方 toContain 系列)跨平台照跑。
+    if (process.platform !== 'win32') {
+      const payload = killCmd.replace(/^bash -c /, '');
+      execFileSync('bash', ['-c', `eval ${payload}`], {
+        env: { ...process.env, HOME: '/tmp/cindy home test' },
+        stdio: 'ignore',
+      });
+      const probe = execFileSync('bash', [
+        '-c',
+        'MGR_SOCK="$HOME/.xdt-server/v1/pi-manager/pi-manager.sock"; '
+          + 'set -- "--socket $MGR_SOCK"; printf \'%s\\n\' "$#" "$1"',
+      ], {
+        env: { ...process.env, HOME: '/tmp/cindy home test' },
+        encoding: 'utf8',
+      }).trim();
+      // set -- 之后 argv = ["--socket", "/tmp/cindy home test/.../pi-manager.sock"]
+      // → $# 必须是 1 且 $1 含完整带空格路径;词切分会让 $# > 1。
+      const [argc, ...rest] = probe.split('\n');
+      expect(argc).toBe('1');
+      expect(rest.join('\n')).toBe('--socket /tmp/cindy home test/.xdt-server/v1/pi-manager/pi-manager.sock');
+    }
   });
 });
