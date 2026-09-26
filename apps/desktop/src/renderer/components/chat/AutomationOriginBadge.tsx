@@ -6,18 +6,26 @@ import { useTranslation } from 'react-i18next';
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import { useBotProfiles } from '@/features/bots/botStore';
 import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
-import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import {
+  remoteProjectsStore,
+  useRemoteSessionTitle,
+} from '@/features/device-link/remoteProjectsStore';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import type { MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { cn } from '@/lib/utils';
 
-/** 来源任务的实时标题：本机任务列表缓存里有就跟随改名，拿不到返回 null。 */
-function useCachedSessionTitle(sessionId: string | undefined): string | null {
-  return useSyncExternalStore(
+/**
+ * 来源任务的实时标题：远程任务查所在设备的任务镜像，本机任务查本机任务列表，
+ * 都按 id 索引取值（不随无关任务变化逐条扫描）；拿不到返回 null，由调用方回退快照。
+ */
+function useLiveSessionTitle(sessionId: string | undefined, remote: boolean): string | null {
+  const localTitle = useSyncExternalStore(
     (onChange) => sessionsStore.subscribe(onChange),
-    () => (sessionId ? sessionsStore.findById(sessionId)?.title?.trim() || null : null),
+    () => (sessionId && !remote ? sessionsStore.getTitleById(sessionId) : null),
   );
+  const remoteTitle = useRemoteSessionTitle(remote ? sessionId : undefined);
+  return remote ? remoteTitle : localTitle;
 }
 
 /**
@@ -37,12 +45,12 @@ export function AutomationOriginBadge({
   const navigationMode = useSessionNavigationMode();
   const senderSessionId =
     automationOrigin.kind === 'session' ? automationOrigin.senderSessionId : undefined;
-  const liveSenderTitle = useCachedSessionTitle(senderSessionId);
   const botProfiles = useBotProfiles();
-  // 远程任务的伙伴资料在那台设备上，本机同 id 资料不可信（与 BotDirectMessageCard 同口径）。
+  // 远程任务的来源任务与伙伴资料都在那台设备上，本机同 id 资料不可信（与 BotDirectMessageCard 同口径）。
   const hostDeviceId = hostSessionId
     ? remoteProjectsStore.getSessionDeviceId(hostSessionId)
     : undefined;
+  const liveSenderTitle = useLiveSessionTitle(senderSessionId, Boolean(hostDeviceId));
   const senderBot =
     automationOrigin.kind === 'session' && automationOrigin.senderBotId
       ? (() => {

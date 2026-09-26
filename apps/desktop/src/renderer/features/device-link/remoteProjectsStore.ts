@@ -157,6 +157,8 @@ let bootstrapRetryImpl: ((deviceId: string) => void) | null = null;
 let mergedSnapshot: Session[] = [];
 /** sessionId → deviceId 注册表(随分片变化重建)。 */
 const sessionDeviceIndex = new Map<string, string>();
+/** sessionId → 投影后标题(含标题预览),随 recompute 重建;供消息来源标签 O(1) 查询。 */
+const sessionTitleIndex = new Map<string, string>();
 /**
  * 「归属已确定、但快照还没到」的 origin 钉子:sessionId → deviceId。
  *
@@ -334,6 +336,7 @@ function withPendingTitle(session: Session): Session {
 function recompute(): void {
   recomputeScheduleIndex();
   sessionDeviceIndex.clear();
+  sessionTitleIndex.clear();
   // 先铺 origin 钉子:分片还没到的新建远程会话也必须能被判定为远程(见 pinnedOrigins)。
   // 分片派生值随后覆盖同 id 的条目。
   for (const [sessionId, deviceId] of pinnedOrigins) sessionDeviceIndex.set(sessionId, deviceId);
@@ -343,8 +346,10 @@ function recompute(): void {
     const flat: Session[] = [];
     for (const shard of shards.values()) {
       for (const s of shard.sessions) {
-        flat.push(withPendingTitle(s));
+        const projected = withPendingTitle(s);
+        flat.push(projected);
         sessionDeviceIndex.set(s.id, shard.deviceId);
+        if (projected.title) sessionTitleIndex.set(s.id, projected.title);
       }
     }
     mergedSnapshot = flat;
@@ -993,6 +998,11 @@ const actions = {
     subs.forEach((fn) => fn());
   },
 
+  /** 远端任务当前标题(含标题预览),按 id 索引;未知任务返回 null。 */
+  getSessionTitle(sessionId: string): string | null {
+    return sessionTitleIndex.get(sessionId)?.trim() || null;
+  },
+
   /**
    * origin 判定:给定 sessionId 返回其所属被控设备 deviceId;本地会话返回 undefined。
    * 传输层 / SessionView / 消息分页据此决定走本机 IPC 还是 deviceLink 隧道。
@@ -1149,6 +1159,13 @@ export function retryRemoteSessionStatus(deviceId: string, status: RemoteSession
 /** 用户可见错误态的重试入口：重新订阅并拉取该设备的首次任务快照。 */
 export function retryRemoteSessionBootstrap(deviceId: string): void {
   bootstrapRetryImpl?.(deviceId);
+}
+
+/** 组件内订阅:单个远端任务的当前标题(按 id 索引,不随其它任务变化而扫描列表)。 */
+export function useRemoteSessionTitle(sessionId: string | undefined): string | null {
+  return useSyncExternalStore(subscribe, () =>
+    sessionId ? actions.getSessionTitle(sessionId) : null,
+  );
 }
 
 /** 组件内订阅:返回扁平远端会话快照(喂给 sidebar 合并点)。 */

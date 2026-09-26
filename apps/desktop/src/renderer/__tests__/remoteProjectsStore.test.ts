@@ -868,3 +868,19 @@ describe('remoteProjectsStore pending title preview', () => {
     expect(remoteProjectsStore.getMergedRemoteSessions()).toBe(first);
   });
 });
+
+describe('remote session title index', () => {
+  beforeEach(() => remoteProjectsStore.clear());
+
+  it('resolves titles by id and follows renames pushed by the device', () => {
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a', { title: 'Release checklist' })]);
+    expect(remoteProjectsStore.getSessionTitle('a')).toBe('Release checklist');
+    expect(remoteProjectsStore.getSessionTitle('missing')).toBeNull();
+
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a', { title: 'Renamed' })]);
+    expect(remoteProjectsStore.getSessionTitle('a')).toBe('Renamed');
+
+    remoteProjectsStore.removeDevice('dev-A');
+    expect(remoteProjectsStore.getSessionTitle('a')).toBeNull();
+  });
+});

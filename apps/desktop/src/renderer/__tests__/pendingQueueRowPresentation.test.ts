@@ -85,6 +85,26 @@ describe('getPendingQueueRowPresentation', () => {
     ).toMatchObject({ isSession: true, senderLabel: 'Cindy', senderBotId: 'bot-1' });
   });
 
+  it('shows the message text, not the host envelope, for session items with attachments', () => {
+    const origin = { kind: 'session' as const, senderSessionId: 'caller', displayText: 'see attached' };
+    expect(
+      getPendingQueueRowPresentation(
+        queuedMessage({
+          text: 'see attached',
+          persistedContent: JSON.stringify({ text: 'see attached', images: [], files: [{ name: 'a.txt', path: '/a.txt' }] }),
+          files: [{ name: 'a.txt', path: '/a.txt', category: 'file' } as never],
+          origin,
+        }),
+      ).displayText,
+    ).toBe('see attached');
+    // Without attachments a literal JSON message stays verbatim.
+    expect(
+      getPendingQueueRowPresentation(
+        queuedMessage({ text: '{"text":"x"}', persistedContent: '{"text":"x"}', origin }),
+      ).displayText,
+    ).toBe('{"text":"x"}');
+  });
+
   it('uses orca sender and display text while disabling edit and steer actions', () => {
     const presentation = getPendingQueueRowPresentation(
       queuedMessage({

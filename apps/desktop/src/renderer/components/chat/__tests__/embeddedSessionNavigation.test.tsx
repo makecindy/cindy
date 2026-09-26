@@ -36,6 +36,11 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => [],
+  useRemoteSessionTitle: () => null,
+  remoteProjectsStore: {
+    getSessionDeviceId: () => undefined,
+    pinSessionOrigin: () => undefined,
+  },
 }));
 vi.mock('@/lib/sessionService', () => ({ get: mocks.getSession }));
 vi.mock('@/lib/sessionMessageText', () => ({
