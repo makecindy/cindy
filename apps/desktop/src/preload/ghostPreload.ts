@@ -65,6 +65,15 @@ contextBridge.exposeInMainWorld('cindy', {
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'fs-request' }),
   library: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'library-request' }),
+  tasks: Object.fromEntries(
+    ['capabilities', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages'].map(kind => [
+      kind, async (req: Record<string, unknown> = {}): Promise<unknown> => {
+        const result = await ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'tasks-request', kind });
+        if (result?.ok === true) return result.data;
+        throw Object.assign(new Error(result?.error?.message ?? 'Task request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY', retryable: result?.error?.retryable === true });
+      },
+    ]),
+  ),
   agent: {
     run: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-request' }),

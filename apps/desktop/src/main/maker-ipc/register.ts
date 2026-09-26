@@ -1,3 +1,10 @@
+import { createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
+import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
+import { createPluginTaskStore } from './pluginTaskStore.js';
+import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
+import { setPluginTaskHandler, isPluginTaskAuthorized } from '../cindy-brain/index.js';
+import type { PluginTaskRoute } from '../../shared/pluginTasks.js';
+import { createHash as pluginTaskConfigHash } from 'node:crypto';
 import { createBotMessageTransport } from './botMessageTransport.js';
 import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
@@ -70,6 +77,7 @@ import type {
 } from '@cindy/maker-core';
 import {
   effectiveSourceIdForModel,
+  isModelSelectableForNewRoute,
   buildUserProvider,
   mergeDiscoveredRuntimeModels,
   findCatalogModel,
@@ -94,7 +102,7 @@ import {
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   readInputDeliveryClientIds,
 } from '@cindy/device-link';
-import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { applyScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import {
@@ -394,6 +402,7 @@ import {
   messages,
   orcaTeams,
   orcaWorkers,
+  orcaWorkerCreationReservations,
   sessions,
 } from '../localDb/schema.js';
 import { nextBotModelRoute, normalizeBotModelChain } from '../../shared/botModelChain.js';
@@ -1156,6 +1165,7 @@ import {
 } from '../cindy-brain/index.js';
 import {
   readGhostErrandConfig,
+  writeGhostErrandConfig,
   readGhostErrandSessionId,
   writeGhostErrandSessionId,
 } from '../cindy-brain/errandPrefsStore.js';
@@ -1164,7 +1174,7 @@ import {
   resolveGhostUserHookModel,
   withGhostUserHookModel,
 } from '../cindy-brain/subscriptionGateway.js';
-import { createGhostErrandRunner } from './ghostErrandRunner.js';
+import { createGhostErrandRunner, clampErrandPermissionMode } from './ghostErrandRunner.js';
 import {
   createGhostErrandSession,
   createPluginDraftSession,
@@ -4536,6 +4546,13 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
   },
 });
 
+let pluginTaskServiceForCurrentOwner: (() => PluginTaskService) | null = null;
+function notePluginTaskLifecycle(operation: (service: PluginTaskService) => Promise<unknown>): void {
+  if (!pluginTaskServiceForCurrentOwner) return;
+  try { void operation(pluginTaskServiceForCurrentOwner()).catch(() => log.warn('Plugin task receipt update failed')); }
+  catch { /* Database is unavailable during logout/startup; never switch to another owner. */ }
+}
+
 function isCurrentProductTurnFailureOwner(owner: ProductTurnFailureOwner): boolean {
   const bound = sessionBindings.getSession(owner.sessionId);
   // A closed owner may still receive its renderer's final deferred-persist IPC.
@@ -4569,6 +4586,7 @@ async function interruptProductTurn(
     deferredProductTurnFailureGate.clear(owner);
     if (!isCurrentProductTurnFailureOwner(owner)) return;
   }
+  if (owner) notePluginTaskLifecycle(service => service.settle(sessionId, owner, 'failed'));
   await interruptUpstreamMergeTurn(sessionId);
 }
 
@@ -4615,6 +4633,9 @@ function cleanupClosedSessionRuntime(session: WiredSession): void {
 // operation. Capturing these services when wiring a Session would freeze the
 // pre-initialization or previous runtime value for later events.
 const sessionEventDependencies: SessionEventDependencies = {
+  onPluginTaskTerminal: (sessionId, execution, outcome, outputMessageId) => {
+    notePluginTaskLifecycle(service => service.settle(sessionId, execution, outcome, outputMessageId));
+  },
   onSuccessfulProductTurn: finishProductTurn,
   onUnsuccessfulProductTurn: interruptProductTurn,
   deferUnsuccessfulProductTurn: (owner) => deferredProductTurnFailureGate.defer(owner),
@@ -8802,6 +8823,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createDefaults?: SendToSessionCreateDefaults;
     /** 安全调用方可要求新会话不比来源会话拥有更高的权限。 */
     inheritSourcePermissionMode?: boolean;
+    /** Host-owned durable inputs use the coordinator even when idle. */
+    forceQueue?: boolean;
   }): Promise<SendToSessionInternalResult> {
     const {
       targetSessionId,
@@ -9157,7 +9180,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Pending selections also need the canonical send transaction: it consumes the intent,
       // then refreshes queued createOpts from DB before starting the target harness.
       // enqueue does not await dispatch, so the drain can acquire this lock after we return.
-      if (explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
+      if (params.forceQueue || explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
         lockStage = 'enqueue-queued-message';
         const qClientId = explicitClientId ?? createId();
         await enqueueSendToSessionMessage({
@@ -10014,6 +10037,287 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 这里注入真实执行链——专属会话确保/统一投递/turn 收口。投递仍走
   // sendToSessionInternal 这一条主机通路(消息落库、进程拉起与用户亲发一致);
   // 收口复用 hook-control 的 observeHookTurn(与飞书 bot 同一套 turn 观察语义)。
+  // One receipt service per account/database epoch. No mutable current-DB lookup
+  // is retained by an asynchronous task request.
+  let pluginTaskEpoch: ReturnType<typeof getCurrentDbClientSnapshot> = null;
+  let pluginTasks: PluginTaskService | null = null;
+  pluginTaskServiceForCurrentOwner = () => {
+    const snapshot = getCurrentDbClientSnapshot();
+    if (!snapshot) throw new PluginTaskError('HOST_NOT_READY', 'Task storage is unavailable', true);
+    if (pluginTaskEpoch === snapshot && pluginTasks) return pluginTasks;
+    const assertCurrent = () => {
+      if (getCurrentDbClientSnapshot() !== snapshot) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+    };
+    const assertPlugin = (pluginId: string) => {
+      assertCurrent();
+      if (!isPluginTaskAuthorized(pluginId)) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task capability is unavailable');
+    };
+    const routeUnavailable = (): never => { throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected provider, model or effort is unavailable'); };
+    const resolveRoute = async (pluginId: string, requested?: PluginTaskRoute): Promise<PluginTaskRoute> => {
+      assertPlugin(pluginId);
+      const cfg = readGhostErrandConfig(pluginId);
+      const agentKind = requested?.agentKind ?? cfg.agentKind ?? 'cc';
+      const defaults = getWorkerDefaultsFromNewMaker(agentKind === 'cc' ? 'claude-code' : agentKind);
+      const modelId = requested?.model ?? cfg.model ?? defaults.model;
+      if (!modelId) return routeUnavailable();
+      const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false, catalog: getActiveCatalog() });
+      assertPlugin(pluginId);
+      const providerId = requested?.providerId ?? cfg.providerId ?? defaults.providerId ?? effectiveSourceIdForModel(providers, null, modelId, agentKind === 'cc' ? 'claude-code' : agentKind);
+      const provider = providers.find(p => p.id === providerId && p.connected && !p.suspended && !p.removed);
+      const model = findCatalogModel(provider, modelId, agentKind === 'cc' ? 'claude-code' : agentKind, { exact: true });
+      if (!provider || !model || !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) return routeUnavailable();
+      const effort = requested?.effort ?? cfg.effort ?? defaults.effort ?? model.defaultEffort ?? 'high';
+      const fastMode = requested?.fastMode ?? cfg.fastMode ?? defaults.fastMode ?? false;
+      if (!model.efforts.some(e => e === effort)) return routeUnavailable();
+      if (fastMode && model.supportsFastMode !== true) return routeUnavailable();
+      return { agentKind, providerId: provider.id, model: modelId, effort, fastMode };
+    };
+    const readExecution = (taskId: string) => {
+      const live = maker.getSession(taskId);
+      return live && (live.isTurnRunning() || live.getTurnControlSnapshot().pendingInteractionCount > 0) ? { instanceId: live.instanceId, generation: live.getTurnGeneration() } : null;
+    };
+    pluginTaskEpoch = snapshot;
+    pluginTasks = createPluginTaskService({
+      store: createPluginTaskStore(snapshot.client), assertCurrent, assertAuthorized: assertPlugin, resolveRoute,
+      createSession: async (pluginId, taskId, title, route, isolatedWorkspace) => {
+        assertPlugin(pluginId);
+        const cfg = readGhostErrandConfig(pluginId);
+        await createGhostErrandSession({
+          ghostId: pluginId, sessionId: taskId, title, ...route,
+          permissionMode: clampErrandPermissionMode(cfg.permissionMode),
+          ...(!isolatedWorkspace && cfg.workingDir ? { workingDir: cfg.workingDir } : {}),
+          shouldContinue: () => getCurrentDbClientSnapshot() === snapshot && isPluginTaskAuthorized(pluginId),
+          notifySessionCreated: ({ sessionId, workdir }) => {
+            notifyGhostSessionEvent('created', { sessionId, workdir });
+            broadcastSessionCreated(sessionId);
+          },
+        });
+      },
+      readSession: async taskId => {
+        assertCurrent();
+        const [row] = await snapshot.client.drizzle.select().from(sessions).where(eq(sessions.id, taskId)).limit(1);
+        assertCurrent();
+        if (!row || row.source !== 'plugin' || row.remoteHostId || (row.orcaRole && row.orcaRole !== 'lead') || !['cc', 'codex', 'pi'].includes(row.agentKind)) return null;
+        const resolvedConfig: PluginTaskRoute = { agentKind: row.agentKind as PluginTaskRoute['agentKind'], providerId: row.providerId ?? '', model: row.model, effort: row.effort, fastMode: row.fastMode };
+        const revision = Number.parseInt(pluginTaskConfigHash('sha256').update(JSON.stringify([resolvedConfig, row.permissionMode, row.planModeEnabled, row.workingDir, row.status, row.orcaRole])).digest('hex').slice(0, 12), 16);
+        return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode };
+      },
+      dispatch: async (pluginId, taskId, clientId, text) => {
+        assertPlugin(pluginId);
+        const outcome = await sendToSessionInternal({ targetSessionId: taskId, clientId, message: text, forceQueue: true, onAccepted: () => assertPlugin(pluginId) });
+        await awaitAgentInputQueueSnapshotPersistence(taskId);
+        assertCurrent();
+        return outcome;
+      },
+      inspect: async taskId => {
+        assertCurrent(); await inputCoordinator.ensureQueueRestored(taskId); assertCurrent();
+        if (!inputCoordinator.isQueueRestored(taskId)) throw new PluginTaskError('HOST_NOT_READY', 'Task queue is restoring', true);
+        return { execution: readExecution(taskId), pending: inputCoordinator.getQueueControlSnapshot(taskId).pendingQueue };
+      },
+      cancel: async (pluginId, taskId, inputClientIds, execution) => {
+        assertPlugin(pluginId);
+        await inputCoordinator.ensureQueueRestored(taskId);
+        assertCurrent();
+        if (!inputCoordinator.isQueueRestored(taskId)) throw new PluginTaskError('HOST_NOT_READY', 'Task queue is restoring', true);
+        await withdrawOwnedSessionInputs({ sessionId: taskId, queue: inputCoordinator, owns: value => { assertPlugin(pluginId); return inputClientIds.includes(value); }, flush: awaitAgentInputQueueSnapshotPersistence });
+        assertCurrent();
+        if (!execution) return 'cancelled';
+        let stopped = false;
+        const applied = await controlOwnedSessionExecution({
+          sessionId: taskId, withSessionLock: withSessionRestartLock,
+          matches: () => getCurrentDbClientSnapshot() === snapshot && isPluginTaskAuthorized(pluginId) && isSameSessionExecution(readExecution(taskId), execution),
+          operation: async () => {
+            assertPlugin(pluginId);
+            resetAutomaticRecoveryForExplicitStop(taskId);
+            contextOverflowRolloverHolder?.cancelRecovery(taskId);
+            const outcome = await sessionControlService.stopSessionTurn({ targetSessionId: taskId });
+            if (!outcome.ok) throw new PluginTaskError('UNSUPPORTED_CAPABILITY', 'Execution does not support stopping');
+            stopped = outcome.status === 'no-active-turn';
+          },
+        });
+        return applied ? (stopped ? 'stale' : 'stopping') : 'stale';
+      },
+    });
+    return pluginTasks;
+  };
+  const startOrcaTeamForCaller = async (leadSessionId: string, workerPermissionMode?: OrcaWorkerPermissionMode, assertCurrent?: () => Promise<void>) => {
+      try {
+        await assertLeadCollabProjectEnabled(leadSessionId);
+        return await startOrcaTeamWithPermissionGate(
+          { leadSessionId, workerPermissionMode },
+          {
+            getCurrentWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
+            requestFullAccessConfirmation: (sessionId) =>
+              orcaWorkerPermissionConfirmBridge.request(sessionId, {
+                title: t('newChat.chatInput.fullAccessConfirmation.title'),
+                description: `${t('newChat.chatInput.fullAccessConfirmation.description')} ${t('newChat.chatInput.fullAccessConfirmation.note')}`,
+              }),
+            startTeam: async (params) => { await assertCurrent?.(); return orcaLifecycleService.startTeam(params); },
+          },
+        );
+      } catch (err) {
+        return {
+          ok: false as const,
+          errorCode:
+            err instanceof Error && (err as unknown as { code?: string }).code
+              ? (err as unknown as { code: string }).code
+              : 'INTERNAL',
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+  };
+  const pluginPermissionRequests = new Set<string>();
+  setPluginTaskHandler(async (pluginId, request) => {
+    const service = pluginTaskServiceForCurrentOwner!();
+    switch (request.kind) {
+      case 'requestWriteAccess': {
+        const snapshot = getCurrentDbClientSnapshot();
+        const task = await service.get(pluginId, request.taskId);
+        const mode = request.mode ?? 'acceptEdits';
+        const cfg = readGhostErrandConfig(pluginId);
+        if (mode === 'acceptEdits' ? task.permissionMode !== 'plan' : task.permissionMode === 'auto' && cfg.permissionMode === 'auto') return { granted: true, task };
+        if (pluginPermissionRequests.size) throw new PluginTaskError('TASK_BUSY', 'A permission request is already open');
+        const before = JSON.stringify(cfg);
+        const assertIdle = async () => {
+          if (mode === 'acceptEdits' && (await service.listRuns(pluginId, task.taskId)).items.length) throw new PluginTaskError('TASK_BUSY', 'Only an unstarted task can request write access');
+          const live = maker.getSession(task.taskId);
+          if (live?.isTurnRunning() || live?.getTurnControlSnapshot().pendingInteractionCount || inputCoordinator.getQueueControlSnapshot(task.taskId).pendingQueue.length) throw new PluginTaskError('TASK_BUSY', 'Wait for the current turn before changing permission');
+        };
+        await assertIdle();
+        pluginPermissionRequests.add(pluginId);
+        try {
+          const result = await dialog.showMessageBox({
+            type: 'question', title: t(mode === 'auto' ? 'pluginTaskWriteAccess.autoTitle' : 'pluginTaskWriteAccess.title'),
+            message: t(mode === 'auto' ? 'pluginTaskWriteAccess.autoMessage' : 'pluginTaskWriteAccess.message').replace('{{name}}', getInstalledGhostName(pluginId) ?? pluginId),
+            detail: t(mode === 'auto' ? 'pluginTaskWriteAccess.autoDetail' : 'pluginTaskWriteAccess.detail'),
+            buttons: [t('pluginTaskWriteAccess.allow'), t('pluginTaskWriteAccess.cancel')], defaultId: 1, cancelId: 1,
+          });
+          if (result.response !== 0) return { granted: false };
+          if (snapshot !== getCurrentDbClientSnapshot() || before !== JSON.stringify(readGhostErrandConfig(pluginId))) throw new PluginTaskError('PERMISSION_DENIED', 'Account or permission settings changed');
+          const fresh = await service.get(pluginId, task.taskId);
+          if (fresh.revision !== task.revision) throw new PluginTaskError('TASK_BUSY', 'Task changed while awaiting permission');
+          await assertIdle();
+          const live = maker.getSession(task.taskId);
+          if (live) await live.setPermissionMode(mode);
+          try {
+            if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+            const saved = await snapshot!.client.tx('bots.persistSessionPermission', {sessionId: task.taskId, mode});
+            if (!saved.updated) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
+          } catch (error) {
+            if (live) await live.setPermissionMode(task.permissionMode as Parameters<typeof live.setPermissionMode>[0]).catch(() => undefined);
+            throw error;
+          }
+          if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+          await service.get(pluginId, task.taskId);
+          if (mode === 'auto' || clampErrandPermissionMode(cfg.permissionMode) === 'plan') writeGhostErrandConfig(pluginId, {...cfg, permissionMode: mode});
+          broadcastSessionPatched(task.taskId, {permissionMode: mode});
+          return { granted: true, task: await service.get(pluginId, task.taskId) };
+        } finally { pluginPermissionRequests.delete(pluginId); }
+      }
+      case 'startTeam': {
+        const epoch = getCurrentDbClientSnapshot();
+        const task = await service.get(pluginId, request.taskId);
+        if (task.permissionMode === 'plan' || task.permissionMode === 'bypassPermissions') throw new PluginTaskError('PERMISSION_DENIED', 'Coordinator requires an allowed execution permission');
+        const result = await startOrcaTeamForCaller(task.taskId, undefined, async () => {
+          if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+          const fresh = await service.get(pluginId, task.taskId);
+          if (fresh.revision !== task.revision) throw new PluginTaskError('STALE_REVISION', 'Task changed during confirmation');
+        });
+        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+        await service.get(pluginId, task.taskId);
+        return result;
+      }
+      case 'setTeamPlan': return service.setTeamPlan(pluginId, request.taskId, request.plan);
+      case 'releaseWorker': {
+        const epoch = getCurrentDbClientSnapshot();
+        await service.get(pluginId,request.taskId);
+        if (!epoch) throw new PluginTaskError('HOST_NOT_READY','Task storage unavailable',true);
+        const [record] = await epoch.client.drizzle.select({id:orcaWorkers.id,sessionId:orcaWorkers.sessionId,label:orcaWorkers.label}).from(orcaWorkers).innerJoin(orcaTeams,eq(orcaWorkers.teamId,orcaTeams.id)).where(and(eq(orcaWorkers.id,request.workerId),eq(orcaTeams.leadSessionId,request.taskId))).limit(1);
+        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
+        await service.get(pluginId,request.taskId);
+        if (!record) throw new PluginTaskError('TASK_NOT_FOUND','Worker not found');
+        const [row] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id,record.sessionId)).limit(1);
+        if (!row || row.status === 'deleted') throw new PluginTaskError('TASK_NOT_FOUND','Worker not found');
+        const validate = async () => {
+          if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
+          await service.get(pluginId,request.taskId);
+          const [fresh] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id,record.sessionId)).limit(1);
+          if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
+          if (!fresh || fresh.lastTurnEndedAt !== request.completedAt || (fresh.activeTurnStartedAt ?? 0) > request.completedAt) throw new PluginTaskError('STALE_REVISION','Worker execution changed');
+        };
+        if (row.status === 'archived') {
+          await validate();
+          await service.settleWorkerLabel(pluginId,request.taskId,record.label!);
+          return {ok:true,workerId:record.id};
+        }
+        const result = await orcaTeamService.archiveWorker({callerLeadSessionId:request.taskId,workerId:record.id,onlyIfIdle:true,beforeArchive:validate});
+        if (result.ok) await service.settleWorkerLabel(pluginId,request.taskId,record.label!);
+        return result;
+      }
+      case 'getTeam': {
+        const epoch = getCurrentDbClientSnapshot();
+        if (!epoch) throw new PluginTaskError('HOST_NOT_READY', 'Task storage unavailable', true);
+        await service.get(pluginId, request.taskId);
+        const team = await getOrcaWorkspaceInfoReadOnly(createOrcaDiagnosticsDeps(), request.taskId);
+        if (!team.ok) throw new PluginTaskError('HOST_NOT_READY', 'Collaboration state unavailable', true);
+        const records = await listWorkersByLead(request.taskId);
+        const workers = await Promise.all(team.workers.map(async worker => {
+          const [row] = await epoch!.client.drizzle.select().from(sessions).where(eq(sessions.id, worker.session_id)).limit(1);
+          const safeMeta = sql`CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END`;
+          const [anchor] = await epoch.client.drizzle.select({role:messages.role, createdAt:messages.createdAt, agentMeta:messages.agentMeta}).from(messages)
+            .where(and(eq(messages.sessionId, worker.session_id), isNull(messages.rewindAt), inArray(messages.role, ['user', 'assistant']), sql`json_extract(${safeMeta}, '$.parentUuid') IS NULL`))
+            .orderBy(desc(messages.createdAt), desc(messages.id)).limit(1);
+          const [firstInput] = await epoch.client.drizzle.select({at:messages.createdAt}).from(messages).where(and(eq(messages.sessionId,worker.session_id),eq(messages.role,'user'),isNull(messages.rewindAt))).orderBy(asc(messages.createdAt)).limit(1);
+          const [firstActivity] = await epoch.client.drizzle.select({at:messages.createdAt}).from(messages).where(and(eq(messages.sessionId,worker.session_id),inArray(messages.role,['assistant','thinking','tool_use']),gte(messages.createdAt,firstInput?.at??row?.createdAt??0),isNull(messages.rewindAt))).orderBy(asc(messages.createdAt)).limit(1);
+          const restoredCompletion = pluginWorkerCompletedAt({status:worker.status, working:worker.is_working, queued:worker.queued_count, paused:worker.queue_paused, startedAt:row?.activeTurnStartedAt ?? null, endedAt:row?.lastTurnEndedAt ?? null, clearedAt:row?.clearedAt, anchor});
+          const completedAt = restoredCompletion ?? (worker.status === 'done' && !worker.is_working && worker.queued_count === 0 && !worker.queue_paused ? records.find(r=>r.id===worker.worker_id)?.updatedAt : null);
+          return {...worker, acceptedAt:firstInput?.at, startedAt:firstActivity?.at, timingBasis:'host-message-window', createdAt:row?.createdAt, lastTurnStartedAt:row?.activeTurnStartedAt, lastTurnEndedAt:row?.lastTurnEndedAt, waitingForUser:!!maker.getSession(worker.session_id)?.getTurnControlSnapshot().pendingInteractionCount, usage: {scope:'session-total', tokens:row?.totalTokenUsage ?? null, costUSD:row?.totalCostCurrency === 'USD' && row.totalCostAmount > 0 ? row.totalCostAmount : null, approximate:row?.totalCostIsApproximate ?? false, reason:row?.totalCostCurrency === 'USD' && row.totalCostAmount > 0 ? null : 'No confirmed USD cost; subscription value and other currencies are not a bill'}, status:completedAt ? 'done' : worker.status, permissionMode:row?.permissionMode, providerId:row?.providerId, fastMode:row?.fastMode, completedAt};
+        }));
+        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+        await service.get(pluginId, request.taskId);
+        const live = maker.getSession(request.taskId);
+        const [leadRow] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id,request.taskId)).limit(1);
+        const reservations = team.workflow ? await epoch.client.drizzle.select({id:orcaWorkerCreationReservations.id}).from(orcaWorkerCreationReservations).where(and(eq(orcaWorkerCreationReservations.teamId,team.workflow.workflow_id),gte(orcaWorkerCreationReservations.expiresAt,Date.now()))) : [];
+        const occupiedSlots=workers.length+reservations.length;
+        const planRow = await createPluginTaskStore(epoch.client).get(request.taskId);
+        const plan = planRow ? JSON.parse(planRow.payload).teamPlan : undefined;
+        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
+        await service.get(pluginId,request.taskId);
+        const hardLimit = Math.min(readCollaborationSettings().workerHardLimit, plan?.concurrency ?? Infinity);
+        return {...team, capacity:{hardLimit,occupiedSlots,remainingSlots:Math.max(0,hardLimit-occupiedSlots),advisory:true}, coordinatorUsage:{scope:'session-total',tokens:leadRow?.totalTokenUsage ?? null,costUSD:leadRow?.totalCostCurrency==='USD' && leadRow.totalCostAmount>0 ? leadRow.totalCostAmount : null, approximate:leadRow?.totalCostIsApproximate ?? false}, workers, waitingForUser:!!live && live.getTurnControlSnapshot().pendingInteractionCount > 0, leadWorking:(!!live && (live.isTurnRunning() || live.getTurnControlSnapshot().pendingInteractionCount > 0)) || inputCoordinator.getQueueControlSnapshot(request.taskId).pendingQueue.length > 0};
+      }
+      case 'create': return service.create(pluginId, request);
+      case 'get': return service.get(pluginId, request.taskId);
+      case 'list': return service.list(pluginId, request.after, request.limit);
+      case 'send': return service.send(pluginId, request);
+      case 'readMessages': {
+        const snapshot = getCurrentDbClientSnapshot();
+        await service.get(pluginId, request.taskId);
+        if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+        if (!snapshot) throw new PluginTaskError('HOST_NOT_READY', 'Task storage is unavailable', true);
+        let cursor: { createdAt: number; id: string; rowid?: number } | null = null;
+        if (request.after) {
+          try {
+            cursor = JSON.parse(request.after);
+            if (!cursor || typeof cursor.id !== 'string' || !Number.isSafeInteger(cursor.createdAt)
+              || (cursor.rowid !== undefined && !Number.isSafeInteger(cursor.rowid))) throw new Error('Invalid cursor');
+          } catch { throw new PluginTaskError('INVALID_REQUEST', 'Invalid message cursor'); }
+        }
+        await drainPersistQueue();
+        if (getCurrentDbClientSnapshot() !== snapshot) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+        const page = await getMessagesForHistory({ sessionIds: [request.taskId], workdir: null, fromMs: null, toMs: null,
+          agentKind: null, roles: null, includeRewound: false, limit: request.limit ?? 50, cursor, order: 'asc' });
+        if (getCurrentDbClientSnapshot() !== snapshot) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+        return { items: page.items.map(({ id, clientId, role, content, createdAt }) => ({ id: clientId ?? id, role, content, createdAt })),
+          nextCursor: page.nextCursor ? JSON.stringify(page.nextCursor) : null };
+      }
+      case 'getRun': return service.getRun(pluginId, request.runId);
+      case 'listRuns': return service.listRuns(pluginId, request.taskId, request.after, request.limit);
+      case 'cancel': return service.cancel(pluginId, request.runId);
+      default: throw new PluginTaskError('UNSUPPORTED_CAPABILITY', 'Task operation is unavailable');
+    }
+  });
+
   setGhostErrandRunner(
     createGhostErrandRunner({
       readConfig: readGhostErrandConfig,
@@ -10761,6 +11065,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
 
   const orcaTeamService = createOrcaTeamService({
+    withSessionSendLock: withSendToSessionLock,
     getWorkerLinkBySessionId: (workerSessionId) => getWorkerLink({ workerSessionId }),
     getWorkerLinkByWorkerId: (workerId) => getWorkerLink({ workerId }),
     listWorkersByLead,
@@ -10787,8 +11092,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       await maker.closeSession(sessionId);
     },
-    closeWorkerSessionIfIdle: async (sessionId) => {
-      if (sendToSessionLocks.has(sessionId)) return false;
+    closeWorkerSessionIfIdle: async (sessionId, sendLockHeld = false) => {
+      if (!sendLockHeld && sendToSessionLocks.has(sessionId)) return false;
       const sess = maker.getSession(sessionId);
       return sess ? sess.closeIfIdle() : true;
     },
@@ -10975,6 +11280,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listWorkersByLead,
     isActiveWorkerStatus,
     readCollaborationSettings,
+    validateCreationPlan: async params => {
+      const epoch = getCurrentDbClientSnapshot();
+      if (!epoch) throw new PluginTaskError('HOST_NOT_READY','Task storage unavailable');
+      const receipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
+      if (!receipt || receipt.operation !== 'create') return undefined;
+      await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
+      if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
+      const data = JSON.parse(receipt.payload);
+      if (!data.teamPlan) return undefined; // Existing plugins retain their original behavior.
+      const item = data.teamPlan.items.find((x: {label:string})=>x.label===params.label);
+      if (!item || data.settledLabels?.includes(params.label)) throw new PluginTaskError('INVALID_REQUEST','Worker is not pending in the registered plan');
+      const route = item.route;
+      if (params.workingDir!==item.workingDir || params.model!==route.model || params.providerId!==route.providerId || params.effort!==route.effort || params.fast!==route.fastMode || params.agent!==(route.agentKind==='cc'?'claude-code':route.agentKind)) throw new PluginTaskError('INVALID_REQUEST','Worker configuration differs from registered plan');
+      return data.teamPlan.concurrency;
+    },
     getLeadSessionRow: async (leadSessionId) => {
       const db = getDbClient().drizzle;
       const [leadRow] = await db
@@ -11074,6 +11394,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isOrphanedTeamInit,
     createActiveTeam: async (leadSessionId) => createActiveTeam({ leadSessionId }),
     getWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
+    getWorkerPermissionModeOverride: async (leadSessionId) => {
+      const epoch = getCurrentDbClientSnapshot();
+      if (!epoch) throw new PluginTaskError('HOST_NOT_READY', 'Task storage unavailable', true);
+      const receipt = await createPluginTaskStore(epoch.client).get(leadSessionId);
+      if (!receipt || receipt.operation !== 'create') return undefined;
+      const task = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId, leadSessionId);
+      if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+      // Plugin tasks never inherit an unrelated global Full access preference.
+      if (task.permissionMode !== 'auto' || readGhostErrandConfig(receipt.pluginId).permissionMode !== 'auto') {
+        throw new PluginTaskError('PERMISSION_DENIED', 'Authorize Auto for the plugin coordinator before creating Workers');
+      }
+      return 'auto';
+    },
     setWorkerPermissionMode: applyWorkerPermissionModePreference,
     createWorkerInTeam: (params) => orcaWorkerCreationService.createWorkerInTeam(params),
     dispatchWorkerTask: (params) => orcaTeamService.dispatchWorkerTask(params),
@@ -12149,32 +12482,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     updateWorkerQueuedMessage: (params) => orcaTeamService.updateWorkerQueuedMessage(params),
     cancelWorkerQueuedMessage: (params) => orcaTeamService.cancelWorkerQueuedMessage(params),
     mergeWorkerQueuedMessages: (params) => orcaTeamService.mergeWorkerQueuedMessages(params),
-    startTeam: async ({ leadSessionId, workerPermissionMode }) => {
-      try {
-        await assertLeadCollabProjectEnabled(leadSessionId);
-        return await startOrcaTeamWithPermissionGate(
-          { leadSessionId, workerPermissionMode },
-          {
-            getCurrentWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
-            requestFullAccessConfirmation: (sessionId) =>
-              orcaWorkerPermissionConfirmBridge.request(sessionId, {
-                title: t('newChat.chatInput.fullAccessConfirmation.title'),
-                description: `${t('newChat.chatInput.fullAccessConfirmation.description')} ${t('newChat.chatInput.fullAccessConfirmation.note')}`,
-              }),
-            startTeam: (params) => orcaLifecycleService.startTeam(params),
-          },
-        );
-      } catch (err) {
-        return {
-          ok: false,
-          errorCode:
-            err instanceof Error && (err as unknown as { code?: string }).code
-              ? (err as unknown as { code: string }).code
-              : 'INTERNAL',
-          message: err instanceof Error ? err.message : String(err),
-        };
-      }
-    },
+    startTeam: ({ leadSessionId, workerPermissionMode }) => startOrcaTeamForCaller(leadSessionId, workerPermissionMode),
     createWorker: async (params) => {
       try {
         await assertLeadCollabProjectEnabled(params.leadSessionId);
@@ -14060,6 +14368,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // pending auto-bridge 副作用必须先于 turn 启动完成；失败仍吞错落日志，不拦派发。
       await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item);
       await botDelegationServiceHolder?.acceptQueuedSessionInput(sessionId, item.clientId, item.supersedesUserClientId, restoredFromSnapshot, item.retrySourceClientId);
+      const pluginTaskSession = maker.getSession(sessionId);
+      if (pluginTaskSession && pluginTaskServiceForCurrentOwner) {
+        await pluginTaskServiceForCurrentOwner().accept(sessionId, item, { instanceId: pluginTaskSession.instanceId, generation: pluginTaskSession.getTurnGeneration() });
+      }
     },
     onUserMessagePersisting: (sessionId, item) => {
       markQueuedAttachmentPersistenceStarted(sessionId, item.clientId);
@@ -14167,6 +14479,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       publishUiSessionIntervention(sessionId);
     },
     onRejectedUserTurn: (sessionId, item) => {
+      notePluginTaskLifecycle(service => service.discard(sessionId, item, 'failed'));
       welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected');
       // Auto-resume items have an exact-token cleanup boundary below. Keep
@@ -14207,6 +14520,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {
+      notePluginTaskLifecycle(service => service.discard(sessionId, item, 'cancelled'));
       if (item.durableDelivery === true) {
         void saveCancelledInputDelivery(sessionId, item.clientId).catch((error) => {
           log.warn('input delivery cancellation persistence failed', { sessionId, error: String(error) });

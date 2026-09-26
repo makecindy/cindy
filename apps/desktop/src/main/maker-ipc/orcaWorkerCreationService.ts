@@ -208,6 +208,7 @@ export interface OrcaWorkerCreationDeps {
   getActiveTeamByLead(leadSessionId: string): Promise<OrcaTeamSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerListSnapshot[]>;
   isActiveWorkerStatus(status: OrcaWorkerStatus): boolean;
+  validateCreationPlan?(params: OrcaWorkerCreateInTeamParams): Promise<number | null | undefined>;
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
@@ -624,7 +625,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label.value}" already used in this team` };
     }
 
-    const settings = deps.readCollaborationSettings();
+    const planLimit = await deps.validateCreationPlan?.(params);
+    const settings = {...deps.readCollaborationSettings()};
+    if (planLimit != null) settings.workerHardLimit = Math.min(settings.workerHardLimit, planLimit);
     const activeCount = existing.filter((worker) => deps.isActiveWorkerStatus(worker.status)).length;
     if (activeCount >= settings.workerHardLimit) {
       return {

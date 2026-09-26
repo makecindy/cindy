@@ -314,7 +314,7 @@ export function toGhostPluginDetail(
     cindyCapabilities: PINNABLE_CINDY_CATEGORIES.flatMap((category) =>
       (manifest.cindy?.[category] ?? []).map((action) => `${category}.${action}`),
     ),
-    hasErrand: manifest.agent?.errand === true,
+    hasErrand: manifest.agent?.errand === true || manifest.agent?.tasks === true,
     panelMinWidth: manifest.panel ? (manifest.panel.minWidth ?? 280) : null,
     installDir: ghost.dir,
   };

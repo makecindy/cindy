@@ -5365,6 +5365,8 @@
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的任务。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
         "agentBackgroundDetail": "不需要当次点击，但只能使用你曾为这个插件建立过关联的任务，可能产生模型费用。",
+        "agentTasks": "可创建和管理本插件的 Cindy 任务",
+        "agentTasksDetail": "可发送消息、读取结果和停止本插件的执行，任务对你可见。沿用插件的 AI 配置，可能产生模型费用；不授予其他任务的访问权。",
         "agentErrand": "可把任务交给 Cindy Agent 代办并取回结果",
         "agentErrandDetail": "这些代办会在这个插件的专属任务里进行，你随时可以在侧边栏看到并叫停；默认只能读不能改，要放开需你在插件配置里亲手调整，可能产生模型费用。",
         "agentSchedule": "可以请你新建自动化",
@@ -13708,5 +13710,15 @@
   "pluginDeviceAuthorization": {
     "title": "授权插件登录",
     "description": "在这台设备打开 {{host}}，为执行此任务的插件授权。凭据保存在发起授权的设备上。"
+  },
+  "pluginTaskWriteAccess": {
+    "autoTitle": "启用 Auto 自动审批",
+    "autoMessage": "允许“{{name}}”使用 Auto 自动审批？",
+    "autoDetail": "主任务和 Worker 的操作将交由 Cindy 自动审批。审批要求人工确认或拒绝时仍会暂停；这不是完全访问。此选择保存到插件 AI 设置，不改变其他任务的全局权限。",
+    "title": "允许插件的 AI 修改文件？",
+    "message": "允许“{{name}}”的 AI 修改文件并继续？",
+    "detail": "将此插件的 AI 权限设为“允许修改”，后续任务沿用此选择。独立作答目录不是系统沙箱；命令仍遵循 Cindy 的权限检查。你可以随时在插件 AI 设置中改回只读。",
+    "allow": "允许并继续",
+    "cancel": "暂不允许"
   }
 }

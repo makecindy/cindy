@@ -1,6 +1,9 @@
 import type { AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
+// The lifecycle unit owns no credential/runtime I/O.
+vi.mock('../../maker-host/codex-credential-switch.js', () => ({isCredentialModeSwitchBusyError: () => false}));
+
 import {
   createOrcaLifecycleService,
   ORCA_WORKER_READY_MESSAGE,
@@ -975,5 +978,29 @@ describe('enableTeam — 孤儿空团队自动回收 (#3555)', () => {
 
     releaseCreate();
     await expect(first).resolves.toMatchObject({ teamId: 'team-a' });
+  });
+});
+
+
+describe('host-scoped Worker permissions', () => {
+  it.each([undefined, 'bypassPermissions'] as const)('keeps plugin Workers Auto despite global or explicit Full access: %s', async (workerPermissionMode) => {
+    const { deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      getWorkerPermissionMode: vi.fn(() => 'bypassPermissions' as const),
+      getWorkerPermissionModeOverride: vi.fn(async () => 'auto' as const),
+    });
+    expect(await service.startTeam({leadSessionId: 'lead-1', workerPermissionMode})).toMatchObject({ok: true, workerPermissionMode: 'auto'});
+    await service.createWorker({leadSessionId: 'lead-1', role: 'worker', label: 'sample', agent: 'codex', workerPermissionMode});
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({workerPermissionMode: 'auto'}));
+    expect(deps.setWorkerPermissionMode).not.toHaveBeenCalled();
+  });
+  it('does not create a Worker after host authorization is revoked', async () => {
+    const { deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      getWorkerPermissionModeOverride: vi.fn(async () => { throw new Error('permission revoked'); }),
+    });
+    await expect(service.createWorker({leadSessionId: 'lead-1', role: 'worker', label: 'sample', agent: 'codex'})).rejects.toThrow('permission revoked');
+    expect(deps.createWorkerInTeam).not.toHaveBeenCalled();
+    expect(deps.setWorkerPermissionMode).not.toHaveBeenCalled();
   });
 });

@@ -5365,6 +5365,8 @@
         "agentUserActionDetail": "1 回のクリックにつき 1 回だけ開始でき、そのカードが属するセッションでのみ使用できます。",
         "agentBackground": "バックグラウンドで Agent の新しいターンを自動的に開始できます",
         "agentBackgroundDetail": "毎回のクリックは不要ですが、以前このプラグインに関連付けたセッションでのみ使用できます。モデル料金が発生する場合があります。",
+        "agentTasks": "このプラグインの Cindy セッションを作成・管理できます",
+        "agentTasksDetail": "メッセージの送信、結果の読み取り、自身の実行の停止ができます。セッションはユーザーに表示されます。プラグインの AI 設定を使用し、モデル料金が発生する場合があります。他のセッションへのアクセスは許可されません。",
         "agentErrand": "Cindy Agent にタスクを任せて結果を受け取れます",
         "agentErrandDetail": "タスクはこのプラグイン専用のセッションで実行され、サイドバーから常に確認・停止できます。既定では読み取り専用で、権限の引き上げはプラグイン設定であなた自身が行う必要があります。モデル料金が発生する場合があります。",
         "agentSchedule": "自動化の新規作成をあなたに依頼できます",
@@ -13708,5 +13710,15 @@
   "pluginDeviceAuthorization": {
     "title": "プラグインのログインを認証",
     "description": "このデバイスで {{host}} を開き、このタスクを実行するプラグインを認証します。認証情報は認証を開始したデバイスに保存されます。"
+  },
+  "pluginTaskWriteAccess": {
+    "title": "Allow this plugin’s AI to edit files?",
+    "message": "Allow the AI in “{{name}}” to edit files and continue?",
+    "detail": "This sets the plugin’s AI permission to Allow edits for future tasks too. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can switch back to read-only in the plugin’s AI settings.",
+    "allow": "Allow and continue",
+    "cancel": "Not now",
+    "autoTitle": "Auto 自動承認を有効化",
+    "autoMessage": "「{{name}}」で Auto 自動承認を使用しますか？",
+    "autoDetail": "主タスクと Worker の操作を Cindy が自動審査します。確認が必要な操作や拒否された操作は停止します。完全アクセスではありません。他のタスクの全体設定は変更しません。"
   }
 }

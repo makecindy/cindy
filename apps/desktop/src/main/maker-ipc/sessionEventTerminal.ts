@@ -50,6 +50,7 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
+  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed', outputMessageId?: string) => void;
   readonly onSuccessfulProductTurn?: (
     sessionId: string,
     owner?: ProductTurnFailureOwner,
@@ -535,6 +536,12 @@ export function finishSessionTerminalEvent(
             ...(item.supersedesUserClientId ? [item.supersedesUserClientId] : []),
             ...(item.retrySourceClientId ? [item.retrySourceClientId] : []),
           ]) ?? [];
+      if (typeof event.sessionTurnGeneration === 'number' && !recoveryOwnsUnsuccessfulBoundary && !autoResumeSuppressesPersist) {
+        deps.onPluginTaskTerminal?.(session.id, {
+          instanceId: event.sessionInstanceId ?? session.instanceId,
+          generation: event.sessionTurnGeneration,
+        }, unsuccessfulBoundary ? 'failed' : 'completed', turnAssistantPersistId ?? undefined);
+      }
       void (async () => {
         try {
           const doneData = event.data as {
