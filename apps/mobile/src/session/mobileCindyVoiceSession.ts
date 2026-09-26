@@ -7,6 +7,11 @@ import {
   type CindyAuthRegion,
 } from '@/config/env';
 import { i18n } from '@/i18n';
+import {
+  LEGACY_MANAGED_REFINE_REQUEST_LIMIT,
+  resolveManagedRefineRequestLimit,
+  type RefineRequestBudget,
+} from '@cindy/voice-input-core';
 import type {
   MobileVoiceCredentialSyncAsr,
   MobileVoiceCredentialSyncRefiner,
@@ -43,6 +48,8 @@ type VoiceSessionResponse = {
     protocolProfile: string;
     sampleRate: number;
   };
+  /** `maxRefineRequests` is absent on servers from before pause-time refinement. */
+  refiner?: { enabled: boolean; provider?: string; maxRefineRequests?: number };
 };
 
 /** Per-dictation holder for one-shot ASR tickets and the owning refine session. */
@@ -54,6 +61,7 @@ export class MobileCindyVoiceRunContext {
    * refine/warmup 直接快速失败(原始 ASR 文本保留),听写本身不受影响。
    */
   private refinerUnavailableOnServer = false;
+  private latestRefineRequestLimit = LEGACY_MANAGED_REFINE_REQUEST_LIMIT;
 
   constructor(
     private readonly getAccessToken: AccessTokenProvider,
@@ -94,6 +102,7 @@ export class MobileCindyVoiceRunContext {
       this.refinerUnavailableOnServer = true;
     }
     this.latestSessionId = session.sessionId;
+    this.latestRefineRequestLimit = resolveManagedRefineRequestLimit(session.refiner?.maxRefineRequests);
     return { websocketUrl: session.asr.websocketUrl, authorizationToken: session.ticket };
   }
 
@@ -125,6 +134,14 @@ export class MobileCindyVoiceRunContext {
     return session;
   }
 
+  /**
+   * Refinement requests the current session accepts. Refines target the latest
+   * session, so a reconnect (new session id) starts a fresh count.
+   */
+  refineRequestBudget(): RefineRequestBudget {
+    return { sessionKey: this.latestSessionId ?? '', limit: this.latestRefineRequestLimit };
+  }
+
   async createRefinerTarget(refinerProvider: string, options?: { refreshAccessToken?: boolean }): Promise<{
     url: string;
     authorization: string;
@@ -132,10 +149,14 @@ export class MobileCindyVoiceRunContext {
     if (this.refinerUnavailableOnServer) {
       throw new Error(i18n.t('composer.voice.managedRefineUnsupported'));
     }
-    if (!this.latestSessionId) throw new Error(i18n.t('composer.voice.sessionNotConnected'));
+    // Capture the session before awaiting the token: the controller counts this
+    // request against refineRequestBudget() in the same tick, so a reconnect
+    // during the token fetch must not move the request to the new session.
+    const sessionId = this.latestSessionId;
+    if (!sessionId) throw new Error(i18n.t('composer.voice.sessionNotConnected'));
     const token = await this.requireAccessToken(options?.refreshAccessToken);
     return {
-      url: `${requireVoiceBaseUrl()}/api/voice/sessions/${encodeURIComponent(this.latestSessionId)}/refine?provider=${encodeURIComponent(refinerProvider)}`,
+      url: `${requireVoiceBaseUrl()}/api/voice/sessions/${encodeURIComponent(sessionId)}/refine?provider=${encodeURIComponent(refinerProvider)}`,
       authorization: `Bearer ${token}`,
     };
   }

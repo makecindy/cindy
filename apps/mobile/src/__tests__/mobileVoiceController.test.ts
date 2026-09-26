@@ -1302,4 +1302,43 @@ describe('mobileVoiceController', () => {
       vi.useRealTimers();
     }
   });
+
+  it('stops pause refinement before it uses the managed session allowance kept for the final text', async () => {
+    vi.useFakeTimers();
+    try {
+      const asr = new FinalOnlyAsrProvider();
+      const refineInputs: string[] = [];
+      const session = createMobileVoiceControllerSession({
+        credential: credential(),
+        initialDraft: '',
+        asr,
+        refiner: {
+          async refine(input): Promise<RefinementResult> {
+            refineInputs.push(input.text);
+            return { accepted: true, sourceSegmentIds: input.segmentIds, basedOnText: input.text, refinedText: `${input.text}!`, elapsedMs: 1 };
+          },
+        },
+        // A voice-server that does not report its limit accepts 2 per session.
+        refineRequestBudget: () => ({ sessionKey: 'session-1', limit: 2 }),
+        startAudio: startAudibleAudio,
+        onDraftChanged: () => {},
+      });
+
+      await session.start();
+      asr.emit({ type: 'stable', text: 'First.', at: Date.now() });
+      await vi.advanceTimersByTimeAsync(3_000);
+      asr.emit({ type: 'stable', text: 'First. Second.', at: Date.now() });
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(refineInputs).toEqual(['First.']);
+
+      const stopped = session.stop();
+      await vi.advanceTimersByTimeAsync(1_000);
+      // The final transcript (this provider finalizes to 'raw final') still
+      // gets the allowance that the second pause left unused.
+      await expect(stopped).resolves.toBe('raw final!');
+      expect(refineInputs).toEqual(['First.', 'raw final']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

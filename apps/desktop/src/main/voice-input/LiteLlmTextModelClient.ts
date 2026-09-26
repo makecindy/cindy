@@ -162,13 +162,19 @@ export class LiteLlmTextModelClient implements TextModelClient {
           },
         ],
       });
+      // The first target's URL is kept for the auth retry: a managed voice
+      // session may be replaced by an ASR reconnect meanwhile, and the request
+      // was already counted against the session it first resolved to.
+      let targetUrl: string | undefined;
       const sendRequest = async (forceRefresh = false): Promise<UndiciResponse> => {
-        const target = this.requestTargetProvider
+        const resolved = this.requestTargetProvider
           ? await this.requestTargetProvider(forceRefresh ? { forceRefresh: true } : undefined)
           : {
               url: joinProxyPath(this.baseUrl!, '/v1/chat/completions'),
               authorization: `Bearer ${this.proxyApiKey!}`,
             };
+        targetUrl ??= resolved.url;
+        const target = { url: targetUrl, authorization: resolved.authorization };
         // 代理解析放在看门狗起表之前:它是本机一次解析(带 30s 缓存),不该占用
         // response-headers 的等待预算。
         const dispatcher = await resolveRefinerDispatcher(target.url, refinerDispatcher);
