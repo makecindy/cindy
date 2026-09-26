@@ -2,14 +2,15 @@
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import { AuthorizationMessageCard } from '@/session/AuthorizationMessageCard';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import { InteractionPanel, PluginSetupMessageContent } from '@/session/InteractionPanel';
 import { remoteSessionStore, useSessionPendingInteractions } from '@/session/remoteSessionStore';
 import { clearAllInteractionDrafts, readAskUserDraft, readPlanReviewDraft } from '@/session/interactionDraftStore';
 
-const { resolveInteraction, invoke } = vi.hoisted(() => ({ resolveInteraction: vi.fn(), invoke: vi.fn() }));
-vi.mock('expo-router', () => ({ useLocalSearchParams: () => ({ deviceId: 'd1' }) }));
+const { resolveInteraction, invoke, push } = vi.hoisted(() => ({ resolveInteraction: vi.fn(), invoke: vi.fn(), push: vi.fn() }));
+vi.mock('expo-router', () => ({ useLocalSearchParams: () => ({ deviceId: 'd1' }), useRouter: () => ({ push }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke }) }));
 vi.mock('@/device-link/useMobileMakerTransport', () => ({
   useMobileMakerTransport: () => ({ resolveInteraction }),
@@ -238,6 +239,27 @@ it('persistent setup shows actual steps and errors, retires desktop instructions
   expect(host.querySelector('[data-testid="interaction.pluginSetup.cancelButton"]')).toBeNull();
 });
 
+
+it('opens only the target computer desktop without resolving or authorizing the plugin', async () => {
+  const request = { kind: 'plugin_setup', requestId: 'setup-remote', revision: 1,
+    ghost: { id: 'google-gmail', name: 'Gmail' }, remoteOauth: true, remoteSecret: true,
+    steps: [{ id: 'account', title: 'Connect Gmail', phase: 'pending', action: { id: 'connect', kind: 'oauth_connect' } }] };
+  remoteSessionStore.setPendingInteractions('s1', [{ request }]);
+  await act(async () => root.render(<Harness />));
+  await click('interaction.pluginSetup.remoteDesktop');
+  expect(push).toHaveBeenLastCalledWith({ pathname: '/devices/desktop/[deviceId]', params: { deviceId: 'd1', deviceName: 'd1' } });
+  expect(resolveInteraction).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled();
+  expect(host.querySelector('input')).toBeNull();
+  await act(async () => root.render(<AuthorizationMessageCard message={{ authorization: request } as unknown as NormalizedRemoteMessage} />));
+  await click('interaction.pluginSetup.remoteDesktop');
+  expect(push).toHaveBeenCalledTimes(2);
+  for (const deviceId of [undefined, sharedTaskHostPeer('test', 'd1')]) {
+    await act(async () => root.render(<PluginSetupMessageContent request={request} deviceId={deviceId} busy={false} />));
+    expect(host.querySelector('[data-testid="interaction.pluginSetup.remoteDesktop"]')).toBeNull();
+  }
+  await act(async () => root.render(<PluginSetupMessageContent request={{ ...request, terminal: true }} deviceId="d1" busy={false} />));
+  expect(host.querySelector('[data-testid="interaction.pluginSetup.remoteDesktop"]')).toBeNull();
+});
 
 it('persistent setup cancellation waits for a host terminal update and allows retry after failure', async () => {
   let receipt!: (value: { accepted: boolean }) => void;

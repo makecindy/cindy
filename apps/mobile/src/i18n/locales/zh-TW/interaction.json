@@ -197,7 +197,8 @@
     "photoNotReadable": "這張照片暫時無法讀取(可能還沒從 iCloud 下載完成)，請稍後重試。"
   },
   "pluginSetup": {
-    "completeOnDesktop": "請在遠端電腦完成設定，本卡片會自動更新狀態。",
+    "remoteDesktop": "遙控 {{device}} 完成設定",
+    "completeOnDesktop": "可透過遠端桌面操作電腦完成設定。登入、授權和憑據儲存均在該電腦進行，本卡片會自動更新狀態。",
     "chooseOne": "選擇一種配置方式",
     "progress": "{{satisfied}}/{{total}} 已完成",
     "desktopActionHint": "在電腦端{{action}}",

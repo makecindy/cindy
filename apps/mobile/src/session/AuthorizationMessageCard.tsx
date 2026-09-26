@@ -30,7 +30,7 @@ export function AuthorizationMessageCard({ message }: { message: NormalizedRemot
       .catch(() => setFailed(true)).finally(() => { inFlight.current = false; setBusy(false); });
   };
   return <View style={styles.wrapper} testID="authorization.message">
-    <PluginSetupMessageContent request={request} busy={busy} onCancel={!card.terminal && cancel && deviceId ? cancelRequest : undefined} />
+    <PluginSetupMessageContent deviceId={deviceId} request={request} busy={busy} onCancel={!card.terminal && cancel && deviceId ? cancelRequest : undefined} />
     {failed ? <Text style={styles.error}>{t('devices.companions.actionFailed')}</Text> : null}
   </View>;
 }
