@@ -3,14 +3,15 @@ import { physicalWorktreeKey } from '../worktree/resourceLock';
 import { getDbClient } from '../localDb/client/current';
 import { withSessionRouteLock } from '../localDb/sessionRouteLock';
 import { assertTaskMigrationWritable, migrationScope } from './journal';
+import { withTaskMigrationWrite } from './writeBoundary';
 
 /** Share migration start's lock through acceptance and durable queue persistence. */
 export function withTaskMigrationInputAcceptance<T>(sessionId: string, accept: () => Promise<T>): Promise<T> {
-  return withSessionRouteLock(sessionId, async () => {
+  return withSessionRouteLock(sessionId, () => withTaskMigrationWrite(sessionId, async () => {
     await assertTaskMigrationInputAllowed(sessionId);
     assertTaskMigrationWritable(sessionId);
     return accept();
-  });
+  }));
 }
 
 /** Freeze new writers sharing the snapshot directory only while it is being prepared. */

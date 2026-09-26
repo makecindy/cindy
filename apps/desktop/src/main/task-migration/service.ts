@@ -20,6 +20,7 @@ import {
 import { getDbClient, tryGetDbClient } from '../localDb/client/current';
 import { createSharedTaskJournal } from '../localDb/sharedTasks';
 import { withSessionRouteLocks } from '../localDb/sessionRouteLock';
+import { withTaskMigrationBoundary } from './writeBoundary';
 import { getActiveTeamByLead } from '../localDb/orcaTeamStore';
 import { getSelfDeviceId, remoteInvoke } from '../device-link';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context';
@@ -907,11 +908,9 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
   return withSessionRouteLocks(
     [request.sessionId, ...initialMembers.map((member) => member.id)],
     () =>
-      withCrossProcessLock(
-        path.join(scope.root, `${request.sessionId}-source.lock`),
-        { label: 'task-migration', waitMs: 0 },
-        async (lock) => {
-          if (!lock.held) throw new Error('MIGRATION_TASK_BUSY');
+      withTaskMigrationBoundary(
+        [request.sessionId, ...initialMembers.map((member) => member.id)],
+        async () => {
           scope.assertCurrent();
           let record = scope.read(request.sessionId);
           if (request.action === 'cancel') {

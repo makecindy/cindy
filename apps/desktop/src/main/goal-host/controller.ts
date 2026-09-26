@@ -480,6 +480,7 @@ export class GoalController {
 
   /** `/goal X` 入口:无既有 goal 直接创建;已有 goal 直接改 objective 并续跑。 */
   async setGoal(input: SetGoalInput): Promise<GoalState | null> {
+    this.deps.assertWritable?.(input.sessionId);
     this.assertActive();
     const sessionId = input.sessionId;
     const objective = input.objective.trim();
@@ -743,6 +744,7 @@ export class GoalController {
   }
 
   async updateGoal(sessionId: string, patch: GoalUpdatePatch): Promise<GoalState | null> {
+    this.deps.assertWritable?.(sessionId);
     if (this.disposed || this.disposing) return null;
     const normalized = normalizeGoalUpdatePatch(patch);
     const existingBoundary = this.turns.get(sessionId);
@@ -1005,6 +1007,7 @@ export class GoalController {
     answers: Record<string, string>,
     questions?: readonly GoalClarifyQuestion[],
   ): Promise<void> {
+    this.deps.assertWritable?.(sessionId);
     if (this.disposed || this.disposing) return;
     if (this.clarificationApplied.has(sessionId)) return; // 每目标只澄清改写一次
     const next = deriveObjectiveFromAnswers(answers);
@@ -1071,6 +1074,7 @@ export class GoalController {
 
   /** 清除目标(用户主动)。删行 + 停止一切续跑 + 取消 usage 自动续 + 通知 renderer 隐藏指示器。 */
   async clearGoal(sessionId: string): Promise<void> {
+    this.deps.assertWritable?.(sessionId);
     if (this.disposed || this.disposing) return;
     this.clarificationApplied.delete(sessionId);
     this.consecutiveOverloadTurns.delete(sessionId);
@@ -1117,6 +1121,7 @@ export class GoalController {
    * reason 供 UI 展示(如 rewind 传 "paused: conversation rewound")。
    */
   async pauseGoal(sessionId: string, reason?: string): Promise<void> {
+    this.deps.assertWritable?.(sessionId);
     if (this.disposed || this.disposing) return;
     // Stop 的控制边界不能排在存储 IO 后面：读写一旦卡住，在途 turn 的终态事件仍会
     // 落到旧 listener，idle 兜底会把 active goal 立即续起来。先同步 detach listener、
@@ -1173,6 +1178,7 @@ export class GoalController {
    * /已 active 不处理。
    */
   async resumeGoal(sessionId: string, opts?: { auto?: boolean }): Promise<void> {
+    this.deps.assertWritable?.(sessionId);
     if (this.disposed || this.disposing) return;
     let existingBoundary = this.turns.get(sessionId);
     let state: GoalState | null | undefined;
@@ -1333,6 +1339,7 @@ export class GoalController {
    * dormant(没挂 listener)的 goal 不归这里管,由 resume-on-open 处理。
    */
   async maybeContinueActiveGoal(sessionId: string): Promise<void> {
+    this.deps.assertWritable?.(sessionId);
     if (this.disposed) return;
     if (this.deferredManualResumes.has(sessionId)) {
       this.scheduleDeferredManualResume(sessionId);
@@ -1396,6 +1403,7 @@ export class GoalController {
     sessionId: string,
     opts?: { waitForDispatch?: boolean },
   ): Promise<void> {
+    this.deps.assertWritable?.(sessionId);
     if (this.disposed || this.disposing) return;
     const pendingFailure = this.unpersistedDispatchFailures.get(sessionId);
     if (pendingFailure) {
@@ -1517,6 +1525,7 @@ export class GoalController {
     let resumed = 0;
     for (const snapshot of active) {
       if (this.disposed || this.disposing) return;
+      try { this.deps.assertWritable?.(snapshot.sessionId); } catch { continue; }
       // listActive 是启动扫描快照；并发 Stop 可能已经立 cancelled boundary 或写成 paused。
       if (this.turns.has(snapshot.sessionId)) continue;
       const state = await this.deps.storage.get(snapshot.sessionId);
@@ -1557,6 +1566,7 @@ export class GoalController {
     let rescheduled = 0;
     for (const g of limited) {
       if (this.disposed || this.disposing) return;
+      try { this.deps.assertWritable?.(g.sessionId); } catch { continue; }
       if (g.usageResetAt == null) continue;
       this.scheduleUsageResume(g.sessionId, g.usageResetAt);
       rescheduled += 1;
@@ -2220,6 +2230,7 @@ export class GoalController {
   private async autoResumeFromUsageLimit(sessionId: string): Promise<void> {
     this.usageResumeTimers.delete(sessionId);
     if (this.disposed) return;
+    this.deps.assertWritable?.(sessionId);
     // usageLimited 停驻态正常没有 turn owner。为本次 timer 建一代临时 owner，所有 await
     // 都用对象身份复核；Stop 会同步换成 fresh cancelled owner，旧自动恢复因而不能落提示、
     // 不能恢复，也不会误删 Stop 的新边界。已有 owner 表示其它生命周期操作正在接管。
@@ -2298,6 +2309,7 @@ export class GoalController {
     },
   ): Promise<void> {
     if (this.disposed) return;
+    this.deps.assertWritable?.(sessionId);
     const lifecycleBoundary = this.turns.get(sessionId);
     if (!lifecycleBoundary || lifecycleBoundary.cancelled) return;
     const lifecycleGeneration = lifecycleBoundary.generation;
@@ -2445,6 +2457,7 @@ export class GoalController {
       const outgoing = pendingHandoff
         ? prependHandoffToUserMessage({ type: 'user', content }, pendingHandoff)
         : { type: 'user' as const, content };
+      this.deps.assertWritable?.(sessionId);
       const result = await session.send(
         outgoing as { type: 'user'; content: string },
         {

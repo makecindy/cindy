@@ -387,6 +387,46 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
   };
 }
 
+describe('migration read-only boundary', () => {
+  it.each(['set', 'update', 'clear', 'pause', 'resume', 'open', 'continue', 'clarify'])(
+    'rejects %s before restoring, changing storage or sending', async (operation) => {
+      const ensureSession = vi.fn();
+      const h = makeController({
+        ensureSession,
+        assertWritable: () => { throw new Error('MIGRATION_READ_ONLY'); },
+      });
+      await h.storage.set(seededGoal({ status: 'complete' }));
+      const before = await h.storage.get('s1');
+      const calls: Record<string, () => Promise<unknown>> = {
+        set: () => h.controller.setGoal({ sessionId: 's1', objective: 'new' }),
+        update: () => h.controller.updateGoal('s1', { objective: 'new' }),
+        clear: () => h.controller.clearGoal('s1'),
+        pause: () => h.controller.pauseGoal('s1'),
+        resume: () => h.controller.resumeGoal('s1'),
+        open: () => h.controller.resumeOnOpen('s1'),
+        continue: () => h.controller.maybeContinueActiveGoal('s1'),
+        clarify: () => h.controller.applyClarificationAnswer('s1', { answer: 'new' }),
+      };
+      await expect(calls[operation]()).rejects.toThrow('MIGRATION_READ_ONLY');
+      expect(await h.storage.get('s1')).toEqual(before);
+      expect(ensureSession).not.toHaveBeenCalled();
+      expect(h.userMessages).toEqual([]);
+      expect(h.updates).toEqual([]);
+      await h.controller.dispose();
+    },
+  );
+
+  it('does not reattach a migrated active Goal during startup', async () => {
+    const getSession = vi.fn();
+    const h = makeController({ getSession, assertWritable: () => { throw new Error('MIGRATION_READ_ONLY'); } });
+    await h.storage.set(seededGoal());
+    await h.controller.resumeActiveGoals();
+    expect(getSession).not.toHaveBeenCalled();
+    expect(h.updates).toEqual([]);
+    await h.controller.dispose();
+  });
+});
+
 function seededGoal(partial: Partial<GoalState> = {}): GoalState {
   return {
     sessionId: 's1',
