@@ -107,6 +107,7 @@ import {
   electronSandboxAdapter,
   ensureGhostProtocolRegistered,
   setGhostAppContextProvider,
+  setGhostAgentModelsProvider,
   setGhostKvStore,
   setGhostMediaModelsProvider,
 } from '../electronSandboxAdapter';
@@ -394,4 +395,52 @@ describe('electronSandboxAdapter owner partition', () => {
     ).not.toMatch(/^persist:/);
     handle.destroy();
   });
+});
+
+describe('read-only agent model directory', () => {
+  it('serves no-store metadata without accepting writes or query overrides', async () => {
+    const provider = vi.fn().mockResolvedValue({ ok: true, models: [] });
+    setGhostAgentModelsProvider(provider);
+    ensureGhostProtocolRegistered(ghost('agent-directory'));
+    const handler = harness.sessions.get('cindy-ghost-owner:cloud:opaque-owner-a:agent-directory')!.protocolHandler!;
+    for (const [url, method, status] of [
+      ['agent-directory/agent-models', 'GET', 200],
+      ['agent-directory/agent-models', 'POST', 405],
+      ['agent-directory/agent-models?owner=other', 'GET', 400],
+      ['other/agent-models', 'GET', 403],
+    ] as const) {
+      const response = await handler(new Request('cindy-ghost://' + url, { method }));
+      expect(response.status).toBe(status);
+    }
+    expect(provider).toHaveBeenCalledExactlyOnceWith('agent-directory');
+    const response = await handler(new Request('cindy-ghost://agent-directory/agent-models'));
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({ ok: true, models: [] });
+    provider.mockRejectedValue(new Error('secret upstream details'));
+    const failed = await handler(new Request('cindy-ghost://agent-directory/agent-models'));
+    expect(failed.status).toBe(503);
+    expect(await failed.text()).not.toContain('secret');
+  });
+  it('does not deliver an in-flight catalog after owner changes', async () => {
+    let finish!: (value: { ok: true; models: [] }) => void;
+    setGhostAgentModelsProvider(() => new Promise(resolve => { finish = resolve; }));
+    ensureGhostProtocolRegistered(ghost('agent-owner'));
+    const handler = harness.sessions.get('cindy-ghost-owner:cloud:opaque-owner-a:agent-owner')!.protocolHandler!;
+    const pending = handler(new Request('cindy-ghost://agent-owner/agent-models'));
+    harness.activeOwner = { mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 };
+    finish({ ok: true, models: [] });
+    expect((await pending).status).toBe(403);
+    expect((await handler(new Request('cindy-ghost://agent-owner/agent-models'))).status).toBe(403);
+  });
+});
+
+it('rejects failed in-flight model reads after owner changes', async () => {
+  let reject!: (error: Error) => void;
+  setGhostAgentModelsProvider(() => new Promise((_resolve, fail) => { reject = fail; }));
+  ensureGhostProtocolRegistered(ghost('agent-rejected-owner'));
+  const handler = harness.sessions.get('cindy-ghost-owner:cloud:opaque-owner-a:agent-rejected-owner')!.protocolHandler!;
+  const pending = handler(new Request('cindy-ghost://agent-rejected-owner/agent-models'));
+  harness.activeOwner = { mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 };
+  reject(new Error('old visibility mirror cleared'));
+  expect((await pending).status).toBe(403);
 });

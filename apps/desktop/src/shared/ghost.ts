@@ -6776,6 +6776,23 @@ export interface GhostAppContextResult {
   };
 }
 
+/** Read-only local agent routes. No credentials or provider configuration. */
+export type GhostAgentModelsResult =
+  | {
+      ok: true;
+      models: Array<{
+        visible?: boolean;
+        id: string;
+        name: string;
+        agent: 'codex' | 'claude-code' | 'pi';
+        providerId: string;
+        providerName: string;
+        efforts: string[];
+        defaultEffort: string | null;
+      }>;
+    }
+  | { ok: false; errorCode: 'PERMISSION_DENIED' | 'NOT_AVAILABLE'; message: string };
+
 /** 插件设置页 / 面板可读取的 Cindy Core 媒体模型类型。 */
 export const GHOST_MEDIA_MODEL_TYPES = ['image', 'video'] as const;
 export type GhostMediaModelType = (typeof GHOST_MEDIA_MODEL_TYPES)[number];

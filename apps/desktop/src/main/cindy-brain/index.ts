@@ -1,3 +1,6 @@
+import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
+import { projectGhostAgentModels } from './ghostAgentModels.js';
+import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { registerGhostCardRemoteProvider, persistGhostCardWithRemoteChange } from './cardRemoteResource.js';
 import { openDeviceAuthorizationCard, openPluginAuthorizationCard } from '../plugin-oauth/deviceCard.js';
 import { t as authorizationText } from '../i18n.js';
@@ -141,6 +144,7 @@ import {
   setGhostConnectionsHandler,
   setGhostKvStore,
   setGhostMediaModelsProvider,
+  setGhostAgentModelsProvider,
   setGhostOauthHandler,
   setGhostSandboxDevToolsDisabled,
   setGhostSecretsHandler,
@@ -6642,6 +6646,25 @@ export function registerGhostIpc(): void {
   setGhostSandboxDevToolsDisabled(app.isPackaged);
   setGhostAppContextProvider(currentGhostAppContext);
   setGhostMediaModelsProvider(getGhostConfigurableMediaModels);
+  setGhostAgentModelsProvider(async (ghostId) => {
+    const owner = activeOwnerScopeKey();
+    if (!findAvailableGhost(ghostId)?.enabled) {
+      return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
+    }
+    const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
+    if (owner !== activeOwnerScopeKey() || !findAvailableGhost(ghostId)?.enabled) {
+      return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
+    }
+    await waitForModelVisibilityMirror();
+    if (owner !== activeOwnerScopeKey() || !findAvailableGhost(ghostId)?.enabled) return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
+    // Do not initialize runtimes as a side effect of a plugin's read-only GET.
+    const { getMakerIfReady } = await import('../maker-host/index.js');
+    const maker = getMakerIfReady();
+    if (owner !== activeOwnerScopeKey() || !findAvailableGhost(ghostId)?.enabled || !maker) {
+      return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model runtimes unavailable' };
+    }
+    return projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride);
+  });
   // 面板唤醒电子脑(cindy-ghost://<id>/wake 供片分支):面板零桥,唤醒经它
   // 自己的协议通道进来。只对"已装且唤醒"的意识放行;熔断态不清账(重载 /
   // 重新唤醒才 resetFuse),spawn 幂等所以重复唤醒零成本。

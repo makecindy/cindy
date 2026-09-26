@@ -635,3 +635,14 @@ pnpm --filter desktop typecheck
 
 其余按 [`desktop-development.md`](desktop-development.md) 的分层验证选择；命中媒体、协议或
 IPC 时追加对应专项规则要求的验证。
+
+### 只读 Agent 模型目录
+
+插件自己的同源 `GET /agent-models` 面向 settings、panel、mainView 与电子脑。
+无需新增 manifest 权限，不改变存量批准状态。仅投影已连接来源中可用于新任务的本机
+`id/name/agent/providerId/providerName/efforts/defaultEffort/visible`，来源级强度不能被跨来源合并。
+visible 复用当前账号模型选择器的用户开关与目录默认值；隐藏项保留供显式展开，偏好未就绪不伪造默认。
+使用 ProviderService 的 `allowSideEffects:false` 读取，不主动发现或认领凭证，不调用模型。
+不暴露 ProviderView、auth、账号 identity 或 endpoint；响应 no-store、仅 GET、无参数，
+检查插件在装启用与 owner 归属，异步返回前复核。旧 Host 404 时插件应明确提示升级。
+此端点不覆盖远程 SSH 模型，执行前仍需核验真实路由。

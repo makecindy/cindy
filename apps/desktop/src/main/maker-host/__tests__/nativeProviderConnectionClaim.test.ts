@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   userDataDir: '',
   dataOwnerId: 'owner-a' as string | null,
   generation: 1,
+  legacyCloudOwner: false,
   catalog: null as Catalog | null,
   claudeCredentialPresent: true,
   grokCredentialPresent: true,
@@ -27,6 +28,8 @@ const h = vi.hoisted(() => ({
   loadAnthropicDiskCache: vi.fn(async () => {}),
   codexLoginWithSideEffects: vi.fn(async () => false),
   codexLoginReadOnly: vi.fn(() => false),
+  readClaudeStatus: vi.fn(),
+  readNativeLogin: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -54,13 +57,18 @@ vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLogin: () => h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic'),
 }));
 vi.mock('../claude-native-connection.js', () => ({
-  readClaudeNativeLogin: async () =>
-    h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic')
+  readClaudeNativeLogin: async () => {
+    h.readNativeLogin();
+    return h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic')
       ? { loggedIn: true, email: 'claude@example.test' }
-      : null,
+      : null;
+  },
 }));
 vi.mock('../claude-native-cli.js', () => ({
-  readClaudeCliLoginStatus: async () => ({ loggedIn: h.claudeCredentialPresent }),
+  readClaudeCliLoginStatus: async () => {
+    h.readClaudeStatus();
+    return { loggedIn: h.claudeCredentialPresent };
+  },
 }));
 vi.mock('../grok-oauth-login.js', () => ({
   grokAccountIdentity: () => 'grok@example.test',
@@ -106,12 +114,16 @@ vi.mock('../auth-adapters.js', () => ({
 }));
 
 vi.mock('../../authManager.js', () => ({
-  getAuthState: () => ({ mode: 'local' as const, user: null }),
+  getAuthState: () => h.legacyCloudOwner
+    ? { mode: 'cloud', user: { id: h.dataOwnerId } }
+    : { mode: 'local', user: null },
 }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: false }),
 }));
-vi.mock('../../ownerNamespaceMigration.js', () => ({ hasLegacyOwnerNamespaceClaim: () => false }));
+vi.mock('../../ownerNamespaceMigration.js', () => ({
+  hasLegacyOwnerNamespaceClaim: () => h.legacyCloudOwner,
+}));
 vi.mock('../../manifestService.js', () => ({
   isDev: () => true,
   getBaseUrl: () => 'https://example.invalid',
@@ -127,7 +139,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: () => null,
   // builtinApiKeyConnected(gemini)在 listProviders 里读 key 存在性;本测试不关心
   // 该供应商,恒返回 null = 未配置。
-  getProviderSecretStore: () => ({ get: () => null }),
+  getProviderSecretStore: () => ({ get: () => null, has: () => h.grokCredentialPresent }),
 }));
 
 import {
@@ -145,7 +157,7 @@ function isBoundToCurrentOwner(provider: 'anthropic' | 'xai'): boolean {
 }
 
 async function listProviders(allowSideEffects = true, waitForDiscovery = false) {
-  return getDesktopProviderService().listProviders({ allowSideEffects, waitForDiscovery });
+  return getDesktopProviderService({ allowSideEffects }).listProviders({ allowSideEffects, waitForDiscovery });
 }
 
 async function connectedMap(allowSideEffects = true): Promise<Record<string, boolean>> {
@@ -157,6 +169,7 @@ beforeEach(() => {
   h.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-native-conn-claim-'));
   h.dataOwnerId = 'owner-a';
   h.generation = 1;
+  h.legacyCloudOwner = false;
   h.catalog = BUNDLED_CATALOG;
   h.claudeCredentialPresent = true;
   h.grokCredentialPresent = true;
@@ -166,6 +179,8 @@ beforeEach(() => {
   h.loadAnthropicDiskCache.mockClear();
   h.codexLoginWithSideEffects.mockClear();
   h.codexLoginReadOnly.mockClear();
+  h.readClaudeStatus.mockClear();
+  h.readNativeLogin.mockClear();
 });
 
 afterEach(() => {
@@ -173,6 +188,34 @@ afterEach(() => {
 });
 
 describe('native provider connection claim on read', () => {
+  it('snapshot reads never probe CLI or account identity, while normal reads still refresh', async () => {
+    const service = getDesktopProviderService({ allowSideEffects: false });
+    for (const present of [false, true]) {
+      h.claudeCredentialPresent = present;
+      bindNativeProviderAuth('anthropic', { sharedSystem: true });
+      const views = await service.listProviders({ allowSideEffects: false, snapshotOnly: true });
+      expect(views.find(p => p.id === 'anthropic')?.connected).toBe(present);
+      expect(views.find(p => p.id === 'anthropic')?.subscriptionAccount).toBeUndefined();
+    }
+    expect(h.readClaudeStatus).not.toHaveBeenCalled();
+    expect(h.readNativeLogin).not.toHaveBeenCalled();
+    expect(h.codexLoginWithSideEffects).not.toHaveBeenCalled();
+    await service.listProviders({ allowSideEffects: false });
+    expect(h.readClaudeStatus).toHaveBeenCalledTimes(1);
+    expect(h.readNativeLogin).toHaveBeenCalledTimes(1);
+  });
+  it('read-only service acquisition skips legacy migration even for eligible cloud owners', async () => {
+    h.legacyCloudOwner = true;
+    await listProviders(false);
+    expect(isNativeProviderAuthBound('anthropic')).toBe(false);
+    expect(isNativeProviderAuthBound('xai')).toBe(false);
+    expect(fs.existsSync(path.join(h.userDataDir, 'native-provider-auth.json'))).toBe(false);
+    // A later trusted acquisition of the same singleton still performs migration.
+    getDesktopProviderService();
+    expect(isNativeProviderAuthBound('anthropic')).toBe(true);
+    expect(isNativeProviderAuthBound('xai')).toBe(true);
+  });
+
   it('projects only bound native account identities without exposing credentials', async () => {
     const before = await listProviders(false);
     for (const id of ['anthropic', 'xai']) {
