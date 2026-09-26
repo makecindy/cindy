@@ -21,10 +21,10 @@ describe('composer placeholder CSS', () => {
     );
   });
 
-  it('hides the editor content and grows it to the measured preview height while a suggestion preview is active', () => {
-    const block = globalsSource.slice(
-      globalsSource.indexOf("[data-prompt-preview-active='true'] .ProseMirror {"),
-    );
-    expect(block).toMatch(/^[^}]*min-height: var\(--prompt-preview-min-h, 22px\);[^}]*opacity: 0;/);
+  it('only hides the editor content while a suggestion preview is active, never resizing it', () => {
+    const start = globalsSource.indexOf("[data-prompt-preview-active='true'] .ProseMirror {");
+    const block = globalsSource.slice(start, globalsSource.indexOf('}', start));
+    expect(block).toContain('opacity: 0;');
+    expect(block).not.toContain('height');
   });
 });

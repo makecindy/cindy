@@ -335,10 +335,9 @@ html:lang(ko) {
 [data-recommendation-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {
   content: none;
 }
-/* 首页建议悬停预览:预览由 ChatInput 的 overlay 承载,暂时隐去正文/placeholder,
-   并把编辑器撑到预览高度(变量由 ChatInput 按 overlay 实测高度写入)。 */
+/* 首页建议悬停预览:预览由 ChatInput 的 overlay 承载,暂时隐去正文/placeholder;
+   预览不改变编辑器高度,见 ChatInput 的 promptPreviewLines。 */
 [data-prompt-preview-active='true'] .ProseMirror {
-  min-height: var(--prompt-preview-min-h, 22px);
   opacity: 0;
 }
 .ProseMirror {
