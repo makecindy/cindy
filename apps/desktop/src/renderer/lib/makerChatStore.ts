@@ -4059,8 +4059,7 @@ function persistTurnErrorDeferredTracked(
 ): void {
   // 必须在 live error 已经 setState 之后调用,这样抓到的是这一代横幅的 epoch。
   const epoch = _liveErrorEpoch.get(sessionId) ?? 0;
-  let pending: Promise<string | undefined>;
-  pending = makerApiFor(sessionId)
+  const pending: Promise<string | undefined> = makerApiFor(sessionId)
     .input.persistTurnErrorDeferred(sessionId, errData, agentMeta)
     .then((persistId) => {
       const id = typeof persistId === 'string' && persistId ? persistId : undefined;
@@ -6165,7 +6164,9 @@ export function handleStreamEvent(
               ? i18n.t('logic.errors.silentStopExhausted')
               : reason === 'codex-auto-review-unavailable'
                 ? i18n.t('logic.errors.codexAutoReviewUnavailable')
-                : remoteErrorMessageForBanner(safeErrMsg);
+                : reason === 'malformed-tool-markup'
+                  ? i18n.t('logic.errors.malformedToolMarkup')
+                  : remoteErrorMessageForBanner(safeErrMsg);
       const isTerminalError = isTerminalErrorData(event.data);
       // 终态错误 = turn 收口（含失败）：清掉该 session 的「正在识别图片中」toast，
       // 避免视觉桥未输出就终结时 loading toast 残留（done/abort/terminal error 兜底）。
@@ -10834,8 +10835,9 @@ async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
   if (existing) return existing;
   // Self-reference is intentional: a detached clear/owner generation must not
   // keep draining after a newer pump replaces this Promise in the registry.
-  // eslint-disable-next-line prefer-const
   let run!: Promise<void>;
+  // Definite assignment is required for the async closure to compare its own Promise.
+  // eslint-disable-next-line prefer-const
   run = (async () => {
     while (true) {
       const record = firstUnacceptedRemoteOptimisticSend(sessionId);

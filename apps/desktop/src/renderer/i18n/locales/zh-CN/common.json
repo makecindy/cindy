@@ -12211,6 +12211,7 @@
       "dingtalkBotDisconnectFailed": "钉钉机器人解绑失败"
     },
     "errors": {
+      "malformedToolMarkup": "模型返回了格式错误的工具调用，本轮工具未执行。请重新发送消息重试",
       "openFileFailed": "无法在系统中打开文件",
       "emptyResponse": "模型没有返回内容。请重试。上下文很长时，也可以换一个模型。",
       "turnFailed": "任务执行失败（模型未返回错误详情），请重试。",
