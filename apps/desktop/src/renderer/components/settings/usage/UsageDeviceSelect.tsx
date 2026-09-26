@@ -122,17 +122,22 @@ export function UsageDeviceSelect({
           side="bottom"
           align="end"
           sideOffset={4}
-          className="z-[10010] min-w-[var(--radix-select-trigger-width)] max-w-[320px] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
+          className="z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
         >
           <Select.Viewport>
             {options.map((option) => {
               const sub = detail(option.device);
               return (
                 <Select.Item key={option.value} value={option.value} className={itemClassName}>
+                  {/* DESIGN §4:面板与触发器等宽;长设备名截断,状态说明在面板内换行。 */}
                   <span className="flex min-w-0 flex-col">
-                    <Select.ItemText>{label(option)}</Select.ItemText>
+                    <span className="truncate">
+                      <Select.ItemText>{label(option)}</Select.ItemText>
+                    </span>
                     {sub ? (
-                      <span className="text-12 font-normal text-[var(--text-tertiary)]">{sub}</span>
+                      <span className="whitespace-normal break-words text-12 font-normal text-[var(--text-tertiary)]">
+                        {sub}
+                      </span>
                     ) : null}
                   </span>
                   <Select.ItemIndicator>

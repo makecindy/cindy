@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { UsageHistoryDevice, UsageHistoryPayload } from '@/hooks/useUsageHistory';
@@ -122,5 +124,14 @@ describe('Usage history device scope', () => {
     expect(view.getByLabelText('usageHistory.device.ariaLabel')).toBeTruthy();
     expect(view.getByText('usageHistory.device.partial')).toBeTruthy();
     expect(view.getByText('usageHistory.tasks.subtitleLocal')).toBeTruthy();
+  });
+});
+
+describe('usage device select panel', () => {
+  it('binds the dropdown panel to the trigger width (DESIGN.md §4)', () => {
+    const source = readFileSync(resolve(__dirname, '../UsageDeviceSelect.tsx'), 'utf8');
+    expect(source).toContain('w-[var(--radix-select-trigger-width)]');
+    expect(source).not.toContain('min-w-[var(--radix-select-trigger-width)]');
+    expect(source).not.toMatch(/max-w-\[\d+px\]/);
   });
 });
