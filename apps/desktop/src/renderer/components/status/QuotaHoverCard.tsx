@@ -206,7 +206,12 @@ function WindowBlock({
         {titleNode}
         {bar}
         <span className="text-right font-medium text-[var(--text-primary)]">{percentText}</span>
-        <span className="text-right text-12 text-[var(--text-secondary)]">{resetCountdown}</span>
+        <span
+          className="min-w-0 truncate text-right text-12 text-[var(--text-secondary)]"
+          title={resetCountdown ?? undefined}
+        >
+          {resetCountdown}
+        </span>
       </section>
     );
   }
@@ -228,9 +233,7 @@ function WindowBlock({
           ) : null}
         </div>
       </div>
-      {detail ? (
-        <div className="mt-1 text-12 text-[var(--text-secondary)]">{detail}</div>
-      ) : null}
+      {detail ? <div className="mt-1 text-12 text-[var(--text-secondary)]">{detail}</div> : null}
       {breakdown?.length ? (
         <dl
           data-testid="quota-window-breakdown"
@@ -503,9 +506,10 @@ export function QuotaHoverCard({
         {!embedded && title && (windows.length > 0 || emptyText) ? <CardDivider /> : null}
         {embedded && windowBlocks.length ? (
           // 嵌入态各行是 subgrid,共用这里的四列:标题 | 进度条 | 百分比 | 重置倒计时。
+          // 窄宽度时倒计时列先收缩截断(全文见 title),进度条再缩到 48px,不横向溢出。
           <div
             data-testid="quota-window-grid"
-            className="grid grid-cols-[max-content_minmax(64px,1fr)_max-content_max-content] gap-x-4 px-4 py-1"
+            className="grid grid-cols-[max-content_minmax(48px,1fr)_max-content_minmax(0,max-content)] gap-x-4 px-4 py-1"
           >
             {windowBlocks}
           </div>

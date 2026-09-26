@@ -278,8 +278,9 @@ export interface ClaudeCliPlanUsage {
  * 不接触凭证;不发用户消息,不产生模型调用。
  *
  * `get_usage` 是 CLI 标注为 Experimental 的控制请求,响应形状可能变化 —— 这里只取
- * `rate_limits` 原样交给调用方解析。CLI 声明当前账号没有套餐余量(非订阅 / 教育版等)
- * 时返回 null;启动失败、超时、控制请求报错时抛错,由调用方退避。
+ * `rate_limits` 原样交给调用方解析。CLI 明确声明当前账号没有套餐余量
+ * (`rate_limits_available: false`)时返回 null;启动失败、超时、控制请求报错或响应缺
+ * `rate_limits` 时抛错,由调用方退避。
  */
 export async function readClaudeCliPlanUsage(): Promise<ClaudeCliPlanUsage | null> {
   const binary = cliBinaryPath();
@@ -365,8 +366,10 @@ export function parseClaudeCliPlanUsageLine(
   const body = response.response && typeof response.response === 'object'
     ? (response.response as Record<string, unknown>)
     : {};
-  if (body.rate_limits_available === false || !body.rate_limits || typeof body.rate_limits !== 'object') {
-    return { usage: null };
+  // 只有 CLI 明确声明没有套餐余量才返回 null;缺 rate_limits 按形状变化报错,不当成「没有」。
+  if (body.rate_limits_available === false) return { usage: null };
+  if (!body.rate_limits || typeof body.rate_limits !== 'object') {
+    return { error: 'claude get_usage response has no rate_limits', usage: null };
   }
   const subscriptionType = optionalString(body.subscription_type);
   return { usage: { rateLimits: body.rate_limits, ...(subscriptionType ? { subscriptionType } : {}) } };

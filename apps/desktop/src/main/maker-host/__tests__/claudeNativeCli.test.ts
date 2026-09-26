@@ -346,4 +346,14 @@ describe('parseClaudeCliPlanUsageLine', () => {
       response: { subtype: 'success', request_id: 'cindy-init', response: {} },
     }))).toBeNull();
   });
+
+  it('只有 rate_limits_available=false 才算没有余量;缺 rate_limits 按形状变化报错', () => {
+    const line = (response: unknown) => JSON.stringify({
+      type: 'control_response',
+      response: { subtype: 'success', request_id: 'cindy-plan-usage', response },
+    });
+    expect(parseClaudeCliPlanUsageLine(line({ rate_limits_available: false }))).toEqual({ usage: null });
+    expect(parseClaudeCliPlanUsageLine(line({ rate_limits_available: true }))?.error).toMatch('no rate_limits');
+    expect(parseClaudeCliPlanUsageLine(line({}))?.error).toMatch('no rate_limits');
+  });
 });

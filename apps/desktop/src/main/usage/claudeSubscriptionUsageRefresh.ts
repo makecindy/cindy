@@ -17,8 +17,9 @@ interface ClaudeSubscriptionUsageRefreshDeps {
   /** 当前已连接的 Claude 订阅账号指纹;未连接 → null。账号已连接但指纹未知时返回空串。 */
   readAccount(): string | null;
   /**
-   * 拉一次快照。snapshot = 正常;'empty' = CLI 声明账号没有套餐余量,或返回里解析不出
-   * 任何窗口(应清缓存降级为无数据)。失败时抛错。
+   * 拉一次快照。snapshot = 正常;'empty' = CLI **明确**声明账号没有套餐余量(清缓存降级为
+   * 无数据)。失败或返回形状无法识别时抛错:退避重试并保留缓存(含会话 rate_limit_event
+   * 写入的余量),不把「看不懂」当成「没有」。
    */
   fetchSnapshot(): Promise<ClaudeSubscriptionUsageSnapshot | 'empty'>;
   recordSnapshot(snapshot: ClaudeSubscriptionUsageSnapshot): Promise<void>;
@@ -92,8 +93,13 @@ export function createClaudeSubscriptionUsageReader(
   }
 
   /** 缓存快照属于别的账号(同机在 CLI 里换号)。指纹缺失按未知归属沿用,不误清。 */
-  function belongsToOtherAccount(snapshot: ClaudeSubscriptionUsageSnapshot | null, account: string): boolean {
-    return Boolean(snapshot?.accountFingerprint && account && snapshot.accountFingerprint !== account);
+  function belongsToOtherAccount(
+    snapshot: ClaudeSubscriptionUsageSnapshot | null,
+    account: string,
+  ): boolean {
+    return Boolean(
+      snapshot?.accountFingerprint && account && snapshot.accountFingerprint !== account,
+    );
   }
 
   function refreshFor(account: string): Promise<void> {
@@ -125,7 +131,10 @@ export function createClaudeSubscriptionUsageReader(
           await deps.clearSnapshot();
           return;
         }
-        await deps.recordSnapshot({ ...result, ...(account ? { accountFingerprint: account } : {}) });
+        await deps.recordSnapshot({
+          ...result,
+          ...(account ? { accountFingerprint: account } : {}),
+        });
       } catch (err) {
         backoffMs = backoffMs > 0 ? Math.min(backoffMs * 2, backoffMaxMs) : backoffInitialMs;
         backoffUntil = deps.now() + backoffMs;
@@ -143,6 +152,9 @@ export function createClaudeSubscriptionUsageReader(
       const account = readAccountSafe();
       if (account === null) return null;
       const cached = await deps.readCachedSnapshot();
+      // 读缓存期间换号:按旧账号做的归属判断已失效,既不返回(可能是旧账号的余量)也不清理
+      // (新账号的快照可能刚写入)。新账号的余量随登录态同步 / 刷新广播。
+      if (readAccountSafe() !== account) return null;
       if (belongsToOtherAccount(cached, account)) {
         await clearSnapshotSafe();
         void refreshFor(account);
@@ -173,6 +185,8 @@ export function createClaudeSubscriptionUsageReader(
         return;
       }
       const cached = await deps.readCachedSnapshot();
+      // 同 read():期间又换号时交给新账号那次同步处理,本次不清理、不刷新。
+      if (readAccountSafe() !== account) return;
       if (belongsToOtherAccount(cached, account)) await clearSnapshotSafe();
       void refreshFor(account);
     },

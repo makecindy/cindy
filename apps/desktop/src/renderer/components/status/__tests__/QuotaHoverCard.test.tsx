@@ -130,6 +130,17 @@ describe('QuotaHoverCard', () => {
       expect(row.parentElement).toBe(grid);
       expect(row.classList.contains('grid-cols-subgrid')).toBe(true);
     }
+    // 窄宽度:倒计时列可收缩截断,不把余量挤出容器。
+    expect(grid.className).toContain('minmax(0,max-content)');
+  });
+
+  it('keeps the full reset countdown available when the embedded column truncates', () => {
+    render(<UsageCard variant="embedded" nowMs={NOW_MS} account={{ windows: [
+      { key: 'a', title: '5 小时', window: { utilization: 10, resetsAt: (NOW_MS + 65 * 60_000) / 1000 } },
+    ] }} />);
+    const countdown = screen.getByText('1小时 5分钟后重置');
+    expect(countdown.classList.contains('truncate')).toBe(true);
+    expect(countdown.getAttribute('title')).toBe('1小时 5分钟后重置');
   });
 
   it('hides duplicate identity without windows and only makes the popover region focusable', () => {

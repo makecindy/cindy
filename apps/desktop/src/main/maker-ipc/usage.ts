@@ -103,7 +103,8 @@ const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
     const usage = await readClaudeCliPlanUsage();
     if (!usage) return 'empty';
     const snapshot = parseClaudeOAuthUsageResponse(usage.rateLimits, Date.now());
-    if (!snapshot) return 'empty';
+    // get_usage 是 Experimental:解析不出窗口按形状变化处理,抛错退避并保留已有缓存。
+    if (!snapshot) throw new Error('claude get_usage returned unrecognized rate_limits');
     const subscriptionType = usage.subscriptionType ?? peekClaudeCliLoginStatus()?.subscriptionType;
     return subscriptionType ? { ...snapshot, subscriptionType } : snapshot;
   },

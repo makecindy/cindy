@@ -122,6 +122,39 @@ describe('createClaudeSubscriptionUsageReader', () => {
     expect(state.cached).toMatchObject({ accountFingerprint: 'acct-b' });
   });
 
+  it('拉取失败(含返回形状无法识别)保留已有缓存,不当成没有余量', async () => {
+    const cached = { ...SNAPSHOT, source: 'unified-headers' as const };
+    const { deps, reader, state } = setup({ cached });
+    deps.fetchSnapshot.mockRejectedValue(new Error('claude get_usage returned unrecognized rate_limits'));
+    reader.triggerRefresh();
+    await flush();
+    expect(deps.clearSnapshot).not.toHaveBeenCalled();
+    expect(state.cached).toBe(cached);
+  });
+
+  it('读缓存期间换号:不返回也不清理,避免把旧账号余量给新账号或误删新账号快照', async () => {
+    const { deps, reader, state } = setup({ cached: { ...SNAPSHOT, accountFingerprint: 'acct-a' } });
+    deps.readCachedSnapshot.mockImplementationOnce(async () => {
+      const snapshot = state.cached;
+      state.account = 'acct-b';
+      return snapshot;
+    });
+    await expect(reader.read()).resolves.toBeNull();
+    expect(deps.clearSnapshot).not.toHaveBeenCalled();
+    expect(deps.fetchSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('syncForCredentialChange 读缓存期间又换号:交给新账号那次同步,本次不清理', async () => {
+    const { deps, reader, state } = setup({ account: 'acct-b', cached: { ...SNAPSHOT, accountFingerprint: 'acct-b' } });
+    deps.readCachedSnapshot.mockImplementationOnce(async () => {
+      state.account = 'acct-c';
+      return { ...SNAPSHOT, accountFingerprint: 'acct-a' };
+    });
+    await reader.syncForCredentialChange();
+    expect(deps.clearSnapshot).not.toHaveBeenCalled();
+    expect(deps.fetchSnapshot).not.toHaveBeenCalled();
+  });
+
   it('拉取期间换号:旧账号的结果被丢弃,收尾后为新账号补拉', async () => {
     const { deps, reader, state } = setup();
     let release: (value: ClaudeSubscriptionUsageSnapshot) => void = () => {};
