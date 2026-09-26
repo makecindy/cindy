@@ -355,9 +355,14 @@ export class MobileLiteLlmTextModelClient implements TextModelClient {
       system: input.system,
       scope: input.promptCacheScope,
     });
+    // The auth retry keeps the first target's URL: an ASR reconnect may have
+    // replaced the managed session meanwhile, and the request was already
+    // counted against the session it first resolved to.
+    let targetUrl: string | undefined;
     const request = async (refreshAccessToken = false) => {
       const target = await this.requestTargetProvider({ refreshAccessToken });
-      return fetchImpl(target.url, {
+      targetUrl ??= target.url;
+      return fetchImpl(targetUrl, {
       method: 'POST',
       headers: {
         Authorization: target.authorization,

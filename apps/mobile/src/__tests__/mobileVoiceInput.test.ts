@@ -441,6 +441,41 @@ describe('mobileVoiceInput', () => {
     expect(fetchCloud).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps the first target URL when the auth retry resolves a newer session', async () => {
+    // An ASR reconnect replaced the managed session between the two attempts;
+    // the retry must still go to the session the request was counted against.
+    const fetchCloud = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 401, statusText: 'Unauthorized', text: async () => '' } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        body: undefined,
+        json: async () => ({ choices: [{ message: { content: JSON.stringify({ text: 'refined' }) } }] }),
+      } as unknown as Response);
+    const requestTargetProvider = vi.fn()
+      .mockResolvedValueOnce({ url: 'https://voice.example.com/sessions/session-1/refine', authorization: 'Bearer stale-token' })
+      .mockResolvedValueOnce({ url: 'https://voice.example.com/sessions/session-2/refine', authorization: 'Bearer fresh-token' });
+    const client = new MobileLiteLlmTextModelClient({
+      deps: { fetch: fetchCloud as unknown as typeof fetch },
+      requestTargetProvider,
+    });
+
+    await expect(client.requestJson<{ text: string }>({
+      model: 'gpt-5.4-mini',
+      system: 'Return JSON.',
+      user: { text: 'raw' },
+      schemaName: 'VoiceRefinement',
+    })).resolves.toEqual({ text: 'refined' });
+    expect(fetchCloud.mock.calls.map((call) => call[0])).toEqual([
+      'https://voice.example.com/sessions/session-1/refine',
+      'https://voice.example.com/sessions/session-1/refine',
+    ]);
+    expect(fetchCloud.mock.calls[1][1]).toMatchObject({
+      headers: expect.objectContaining({ Authorization: 'Bearer fresh-token' }),
+    });
+  });
+
   it('parses buffered SSE text when React Native fetch has no readable body', async () => {
     const fetchCloud = vi.fn(async () => ({
       ok: true,
