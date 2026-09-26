@@ -5018,17 +5018,26 @@ export function NewMakerDraftRoute() {
   // 一条建议「点击后会填入的文字」的唯一计算:视觉预览与读屏描述都用它,点击填入走同一个
   // pluginSuggestionComposerText。插件可用时带 $指令(或插件调用说明);需要先安装的插件
   // 点击后走安装引导、不会立即填入,只显示建议本身。插件清单变化时随之重算。
+  // 可用插件表按插件清单与工作目录缓存:filterGhostsForWorkdir 会同步查询目录禁用表,
+  // 不能在每次渲染 / 每条建议上重复调用。
   const installedGhosts = useInstalledGhosts();
+  const usableSuggestionGhosts = useMemo(
+    () =>
+      new Map(
+        filterGhostsForWorkdir(installedGhosts, effectiveWorkingDir)
+          .filter((g) => g.enabled)
+          .map((g) => [g.manifest.id, g]),
+      ),
+    [effectiveWorkingDir, installedGhosts],
+  );
   const suggestionComposerText = useCallback(
     (suggestion: HomeTaskSuggestion) => {
       const ghost = suggestion.pluginId
-        ? installedGhosts.find((g) => g.manifest.id === suggestion.pluginId)
+        ? usableSuggestionGhosts.get(suggestion.pluginId)
         : undefined;
-      const usable =
-        ghost && ghost.enabled && filterGhostsForWorkdir([ghost], effectiveWorkingDir).length > 0;
-      return usable ? pluginSuggestionComposerText(suggestion.prompt, ghost, t) : suggestion.prompt;
+      return ghost ? pluginSuggestionComposerText(suggestion.prompt, ghost, t) : suggestion.prompt;
     },
-    [effectiveWorkingDir, installedGhosts, t],
+    [t, usableSuggestionGhosts],
   );
   const handleSuggestionPreview = useCallback(
     (suggestion: HomeTaskSuggestion | null) =>

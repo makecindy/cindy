@@ -73,7 +73,7 @@ describe('HomeSuggestionList', () => {
     expect(ids().some((id) => seen.includes(id))).toBe(false);
   });
 
-  it('reports the hovered/focused suggestion and clears it on leave, click and unmount', () => {
+  it('previews only the hovered suggestion and clears it on leave, click and unmount', () => {
     const onSelect = vi.fn();
     const onPreviewChange = vi.fn();
     const { unmount } = render(
@@ -89,8 +89,10 @@ describe('HomeSuggestionList', () => {
     fireEvent.mouseLeave(row);
     expect(onPreviewChange).toHaveBeenLastCalledWith(null);
 
+    // Keyboard focus alone does not drive the visual preview (the row description covers it).
     fireEvent.focus(row);
-    expect(onPreviewChange).toHaveBeenLastCalledWith(expect.objectContaining({ id }));
+    expect(onPreviewChange).toHaveBeenLastCalledWith(null);
+    fireEvent.mouseEnter(row);
     fireEvent.click(row);
     expect(onPreviewChange).toHaveBeenLastCalledWith(null);
     expect(onSelect).toHaveBeenCalledWith(id);
@@ -99,28 +101,6 @@ describe('HomeSuggestionList', () => {
     onPreviewChange.mockClear();
     unmount();
     expect(onPreviewChange).toHaveBeenCalledWith(null);
-  });
-
-  it('falls back to the focused suggestion when hover ends elsewhere', () => {
-    const onPreviewChange = vi.fn();
-    render(
-      <HomeSuggestionList narrow={false} onSelect={vi.fn()} onPreviewChange={onPreviewChange} />,
-    );
-    const [focusedRow, otherRow] = screen.getAllByTestId(/^home-suggestion-/);
-    const idOf = (row: HTMLElement) =>
-      row.getAttribute('data-testid')!.replace('home-suggestion-', '');
-
-    fireEvent.focus(focusedRow);
-    fireEvent.mouseEnter(otherRow);
-    expect(onPreviewChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ id: idOf(otherRow) }),
-    );
-    fireEvent.mouseLeave(otherRow);
-    expect(onPreviewChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ id: idOf(focusedRow) }),
-    );
-    fireEvent.blur(focusedRow);
-    expect(onPreviewChange).toHaveBeenLastCalledWith(null);
   });
 
   it('exposes each full prompt to assistive technology as the row description', () => {
@@ -133,13 +113,12 @@ describe('HomeSuggestionList', () => {
     expect(row.contains(description)).toBe(false);
   });
 
-  it('clears the preview when the window narrows past the hovered or focused row', () => {
+  it('clears the preview when the window narrows past the hovered row', () => {
     const onPreviewChange = vi.fn();
     const { rerender } = render(
       <HomeSuggestionList narrow={false} onSelect={vi.fn()} onPreviewChange={onPreviewChange} />,
     );
     const rows = screen.getAllByTestId(/^home-suggestion-/);
-    fireEvent.focus(rows[2]);
     fireEvent.mouseEnter(rows[3]);
     onPreviewChange.mockClear();
     rerender(<HomeSuggestionList narrow onSelect={vi.fn()} onPreviewChange={onPreviewChange} />);
@@ -158,27 +137,5 @@ describe('HomeSuggestionList', () => {
     const id = row.getAttribute('data-testid')!.replace('home-suggestion-', '');
     const description = document.getElementById(row.getAttribute('aria-describedby')!);
     expect(description?.textContent).toBe(`$mail newChat.homeSuggestions.${id}.prompt`);
-  });
-
-  it('previews the row keyboard activation will select once focus moves under a resting pointer', () => {
-    const onPreviewChange = vi.fn();
-    render(
-      <HomeSuggestionList narrow={false} onSelect={vi.fn()} onPreviewChange={onPreviewChange} />,
-    );
-    const [hoveredRow, focusedRow] = screen.getAllByTestId(/^home-suggestion-/);
-    const idOf = (row: HTMLElement) =>
-      row.getAttribute('data-testid')!.replace('home-suggestion-', '');
-
-    fireEvent.mouseEnter(hoveredRow);
-    fireEvent.focus(focusedRow);
-    expect(onPreviewChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ id: idOf(focusedRow) }),
-    );
-    // Moving the pointer onto a row again hands the preview back to the pointer.
-    fireEvent.mouseLeave(hoveredRow);
-    fireEvent.mouseEnter(hoveredRow);
-    expect(onPreviewChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ id: idOf(hoveredRow) }),
-    );
   });
 });

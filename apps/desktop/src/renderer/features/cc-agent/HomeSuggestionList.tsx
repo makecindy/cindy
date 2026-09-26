@@ -83,7 +83,7 @@ export function HomeSuggestionList({
   narrow: boolean;
   onSelect: (id: HomeSuggestionId) => void;
   onPluginSelect?: (suggestion: HomeTaskSuggestion) => void;
-  /** 悬停/聚焦某条建议时报告该条目,离开时报告 null;由调用方算出与点击填入一致的预览文字。 */
+  /** 鼠标悬停某条建议时报告该条目,离开时报告 null;由调用方算出与点击填入一致的预览文字。 */
   onPreviewChange?: (suggestion: HomeTaskSuggestion | null) => void;
   /** 点击该条建议后实际填入输入框的文字(与视觉预览同源),用作读屏描述;缺省为建议 prompt。 */
   composerTextFor?: (suggestion: HomeTaskSuggestion) => string;
@@ -111,22 +111,12 @@ export function HomeSuggestionList({
   const onPreviewChangeRef = useRef(onPreviewChange);
   onPreviewChangeRef.current = onPreviewChange;
   useEffect(() => () => onPreviewChangeRef.current?.(null), []);
-  // 悬停与键盘焦点各自记录,预览以最近一次交互(移入或聚焦)为准,另一方仍在时作为回落,
-  // 两者都没有才清空。这样键盘移到另一行后预览即是回车将填入的那一行,鼠标再移入则跟鼠标。
-  // 点击(填入)视为本次交互结束,两者一起清掉,直到再次移入/聚焦。
+  // 预览只跟随鼠标悬停:移入报告该条,移出清空;点击(填入)视为本次悬停结束,直到再次移入。
+  // 键盘 / 读屏用户通过按钮描述得到同样的文字,且点击只填入不发送,可在输入框里再看再改。
   const hoveredRef = useRef<HomeTaskSuggestion | null>(null);
-  const focusedRef = useRef<HomeTaskSuggestion | null>(null);
-  const latestSourceRef = useRef<'hover' | 'focus'>('hover');
-  const emitPreview = () =>
-    onPreviewChange?.(
-      latestSourceRef.current === 'focus'
-        ? (focusedRef.current ?? hoveredRef.current)
-        : (hoveredRef.current ?? focusedRef.current),
-    );
-  const resetPreview = () => {
-    hoveredRef.current = null;
-    focusedRef.current = null;
-    emitPreview();
+  const setHovered = (item: HomeTaskSuggestion | null) => {
+    hoveredRef.current = item;
+    onPreviewChange?.(item);
   };
   const descriptionIdPrefix = useId();
 
@@ -135,21 +125,12 @@ export function HomeSuggestionList({
   }
   const visible = batch.items.slice(0, batchSize);
   // 预览只能指向当前仍显示的条目:窄屏裁掉行、换一批等让行离开 DOM 时收不到可靠的
-  // mouseleave / blur,这里按可见集合统一清掉失效的悬停 / 焦点项。
+  // mouseleave,这里按可见集合统一清掉失效的悬停项。
   const visibleKey = visible.map((item) => item.id).join('\n');
   useEffect(() => {
-    const visibleIds = new Set(visibleKey.split('\n'));
-    let changed = false;
-    if (hoveredRef.current && !visibleIds.has(hoveredRef.current.id)) {
-      hoveredRef.current = null;
-      changed = true;
-    }
-    if (focusedRef.current && !visibleIds.has(focusedRef.current.id)) {
-      focusedRef.current = null;
-      changed = true;
-    }
-    if (changed) emitPreview();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- emitPreview 每次渲染重建,只在可见集合变化时核对
+    const hovered = hoveredRef.current;
+    if (hovered && !visibleKey.split('\n').includes(hovered.id)) setHovered(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setHovered 每次渲染重建,只在可见集合变化时核对
   }, [visibleKey]);
 
   if (hidden) return null;
@@ -168,28 +149,12 @@ export function HomeSuggestionList({
                 // 输入框里的视觉预览对读屏隐藏;点击后实际填入的文字通过描述关联到按钮本身。
                 aria-describedby={`${descriptionIdPrefix}-${id}`}
                 onClick={() => {
-                  resetPreview();
+                  setHovered(null);
                   if (item.builtinId) onSelect(item.builtinId);
                   else onPluginSelect?.(item);
                 }}
-                onMouseEnter={() => {
-                  hoveredRef.current = item;
-                  latestSourceRef.current = 'hover';
-                  emitPreview();
-                }}
-                onMouseLeave={() => {
-                  hoveredRef.current = null;
-                  emitPreview();
-                }}
-                onFocus={() => {
-                  focusedRef.current = item;
-                  latestSourceRef.current = 'focus';
-                  emitPreview();
-                }}
-                onBlur={() => {
-                  focusedRef.current = null;
-                  emitPreview();
-                }}
+                onMouseEnter={() => setHovered(item)}
+                onMouseLeave={() => setHovered(null)}
                 className={cn(
                   'inline-flex h-[38px] max-w-full items-center gap-2.5 rounded-full px-3',
                   'text-14 text-[var(--text-secondary)] transition-colors',
@@ -216,7 +181,7 @@ export function HomeSuggestionList({
           type="button"
           data-testid="home-suggestions-shuffle"
           onClick={() => {
-            resetPreview();
+            setHovered(null);
             setBatch((previous) => draw(previous));
           }}
           className="opacity-0 group-hover/sug:opacity-100 focus-visible:opacity-100"
@@ -232,7 +197,7 @@ export function HomeSuggestionList({
           type="button"
           data-testid="home-suggestions-dismiss"
           onClick={() => {
-            resetPreview();
+            setHovered(null);
             setHomeSuggestionsHidden(true);
             setHidden(true);
           }}
