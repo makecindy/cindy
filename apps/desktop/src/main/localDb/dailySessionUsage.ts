@@ -1,4 +1,4 @@
-import { and, gte, ne, sql } from 'drizzle-orm';
+import { and, gte, inArray, ne, sql } from 'drizzle-orm';
 
 import { dailySessionUsage, sessions } from './schema.js';
 import { localDayKey } from './dailySpend.js';
@@ -42,7 +42,46 @@ export async function incrementDailySessionUsage(
 }
 
 /**
- * 读取 sinceDay(含)之后的每日 × 任务行,并附上仍存在(未删除)任务的元数据。
+ * 所有记过用量、且仍存在(未删除)的任务的当前元数据。
+ * 这是任务元数据的完整集合:调用方据此覆盖旧元数据,不在集合里的任务视为已删除。
+ */
+export async function getUsageTaskMeta(): Promise<UsageTaskMeta[]> {
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({
+      sessionId: sessions.id,
+      title: sessions.title,
+      model: sessions.model,
+      providerId: sessions.providerId,
+      contextTokens: sessions.contextTokens,
+      contextWindow: sessions.contextWindow,
+      userSendAt: sessions.userSendAt,
+      updatedAt: sessions.updatedAt,
+    })
+    .from(sessions)
+    .where(
+      and(
+        ne(sessions.status, 'deleted'),
+        inArray(
+          sessions.id,
+          db.selectDistinct({ id: dailySessionUsage.sessionId }).from(dailySessionUsage),
+        ),
+      ),
+    )
+    .all();
+  return rows.map((row) => ({
+    sessionId: row.sessionId,
+    title: row.title,
+    model: row.model,
+    providerId: row.providerId ?? null,
+    contextTokens: row.contextTokens ?? 0,
+    contextWindow: row.contextWindow ?? 0,
+    lastActiveAt: Math.max(row.userSendAt ?? 0, row.updatedAt),
+  }));
+}
+
+/**
+ * 读取 sinceDay(含)之后的每日 × 任务行,并附上全部任务的当前元数据(getUsageTaskMeta)。
  * 已删除任务的行不返回 —— 与侧栏一致, 删掉的任务不再出现在排行里。
  */
 export async function getSessionUsageSince(
@@ -54,36 +93,13 @@ export async function getSessionUsageSince(
       day: dailySessionUsage.day,
       sessionId: dailySessionUsage.sessionId,
       tokens: dailySessionUsage.tokens,
-      title: sessions.title,
-      model: sessions.model,
-      providerId: sessions.providerId,
-      contextTokens: sessions.contextTokens,
-      contextWindow: sessions.contextWindow,
-      userSendAt: sessions.userSendAt,
-      updatedAt: sessions.updatedAt,
     })
     .from(dailySessionUsage)
     .innerJoin(sessions, sql`${sessions.id} = ${dailySessionUsage.sessionId}`)
     .where(and(gte(dailySessionUsage.day, sinceDay), ne(sessions.status, 'deleted')))
     .all();
-  const tasks = new Map<string, UsageTaskMeta>();
-  for (const row of rows) {
-    if (tasks.has(row.sessionId)) continue;
-    const lastActiveAt = Math.max(row.userSendAt ?? 0, row.updatedAt);
-    tasks.set(row.sessionId, {
-      sessionId: row.sessionId,
-      title: row.title,
-      model: row.model,
-      providerId: row.providerId ?? null,
-      contextTokens: row.contextTokens ?? 0,
-      contextWindow: row.contextWindow ?? 0,
-      lastActiveAt,
-    });
-  }
   return {
-    rows: rows
-      .filter((row) => row.tokens > 0)
-      .map((row) => ({ day: row.day, sessionId: row.sessionId, tokens: row.tokens })),
-    tasks: [...tasks.values()],
+    rows: rows.filter((row) => row.tokens > 0),
+    tasks: await getUsageTaskMeta(),
   };
 }

@@ -19,6 +19,7 @@ vi.mock('../../localDb/dailyModelUsage', () => ({
 }));
 vi.mock('../../localDb/dailySessionUsage', () => ({
   getSessionUsageSince: vi.fn(async () => ({ rows: [], tasks: [] })),
+  getUsageTaskMeta: vi.fn(async () => []),
 }));
 vi.mock('../../localDb/client/current', () => ({
   getCurrentDbClientUserId: () => currentDbClient.userId,
@@ -105,6 +106,7 @@ vi.mock('../../logger', () => ({
   }),
 }));
 
+import { getSessionUsageSince, getUsageTaskMeta } from '../../localDb/dailySessionUsage';
 import {
   __resetUsageHistoryCacheForTesting,
   claudeSubscriptionUsageModelKey,
@@ -236,6 +238,8 @@ beforeEach(async () => {
   setActiveLedgerCurrency(DEFAULT_USAGE_CURRENCY);
   vi.mocked(getAllSpendDays).mockResolvedValue([]);
   vi.mocked(getModelUsageSince).mockResolvedValue([]);
+  vi.mocked(getSessionUsageSince).mockResolvedValue({ rows: [], tasks: [] });
+  vi.mocked(getUsageTaskMeta).mockResolvedValue([]);
   vi.mocked(getGatewayModelPricing).mockResolvedValue(null);
   vi.mocked(getReferenceModelPricing).mockReturnValue({});
   vi.mocked(isModelPricingRefreshInFlight).mockReturnValue(false);
@@ -830,6 +834,33 @@ describe('readUsageHistoryWith', () => {
 });
 
 describe('production cache and empty payload', () => {
+  it('overlays current local task metadata on a cached aggregate', async () => {
+    const meta = (sessionId: string, title: string) => ({
+      sessionId,
+      title,
+      model: 'gpt-5.5',
+      providerId: null,
+      contextTokens: 0,
+      contextWindow: 0,
+      lastActiveAt: 1,
+    });
+    vi.mocked(getSessionUsageSince).mockResolvedValue({
+      rows: [
+        { day: TODAY, sessionId: 's1', tokens: 5 },
+        { day: TODAY, sessionId: 's2', tokens: 7 },
+      ],
+      tasks: [meta('s1', 'Old title'), meta('s2', 'Doomed')],
+    });
+    vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'Old title'), meta('s2', 'Doomed')]);
+    const first = await readUsageHistory({ days: 30 });
+    expect(first.tasks?.map((task) => task.title)).toEqual(['Old title', 'Doomed']);
+    // 重命名 s1、删除 s2:不产生用量,聚合缓存照常复用,但出口的任务元数据必须是当前值。
+    vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'New title')]);
+    const second = await readUsageHistory({ days: 30 });
+    expect(second.tasks?.map((task) => [task.sessionId, task.title])).toEqual([['s1', 'New title']]);
+    expect(getSessionUsageSince).toHaveBeenCalledTimes(1);
+  });
+
   it('writes a structured fresh payload and serves it from memory', async () => {
     vi.mocked(getAllSpendDays).mockResolvedValue([
       { day: TODAY, monies: [actual(2)] },
@@ -978,6 +1009,7 @@ describe('multi-device scope', () => {
         getAllSpendDays: async () => peerRows.spendDays,
         getModelUsageSince: async () => peerRows.modelRows,
         getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+        remoteVisibleTaskIds: async (ids) => new Set(ids),
 todayKey: () => TODAY,
       },
       { sinceDay: null },
@@ -1039,6 +1071,7 @@ todayKey: () => TODAY,
         getAllSpendDays: async () => peerRows.spendDays,
         getModelUsageSince: async () => peerRows.modelRows,
         getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+        remoteVisibleTaskIds: async (ids) => new Set(ids),
 todayKey: () => TODAY,
       },
       { sinceDay: null },
@@ -1159,6 +1192,7 @@ todayKey: () => TODAY,
               modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: peerTokens }),
             ],
             getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+            remoteVisibleTaskIds: async (ids) => new Set(ids),
 todayKey: () => TODAY,
           },
           { sinceDay: null },

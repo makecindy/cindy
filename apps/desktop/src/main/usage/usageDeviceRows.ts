@@ -62,6 +62,11 @@ export interface UsageDeviceRowsReaderDeps {
   getSessionUsageSince(
     sinceDayKey: string,
   ): Promise<{ rows: DailySessionUsageRow[]; tasks: UsageTaskMeta[] }>;
+  /**
+   * 远端可见的任务 id。任务标题等元数据要离开本机,必须经过与会话列表相同的
+   * 远端 Bot 可见性边界(隐藏 / 已停用伙伴的任务不外发)。
+   */
+  remoteVisibleTaskIds(sessionIds: readonly string[]): Promise<ReadonlySet<string>>;
   todayKey(): string;
 }
 
@@ -90,11 +95,12 @@ export async function readUsageDeviceRows(
     deps.getModelUsageSince(sinceDay ?? '0000-01-01'),
     deps.getSessionUsageSince(sinceDay ?? '0000-01-01'),
   ]);
+  const visible = await deps.remoteVisibleTaskIds(sessionUsage.tasks.map((task) => task.sessionId));
   const rows: UsageDeviceRows = {
     spendDays: sinceDay ? spendDays.filter((row) => row.day >= sinceDay) : spendDays,
     modelRows,
-    sessionRows: sessionUsage.rows,
-    tasks: sessionUsage.tasks,
+    sessionRows: sessionUsage.rows.filter((row) => visible.has(row.sessionId)),
+    tasks: sessionUsage.tasks.filter((task) => visible.has(task.sessionId)),
   };
   const rowsGz = (await gzipAsync(Buffer.from(JSON.stringify(rows), 'utf8'))).toString('base64');
   if (Buffer.byteLength(rowsGz, 'utf8') > MAX_ROWS_GZ_BASE64_BYTES) {

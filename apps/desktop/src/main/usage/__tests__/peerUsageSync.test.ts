@@ -65,6 +65,7 @@ async function hostResponse(rows: UsageDeviceRows, todayKey: string, sinceDay: s
       getAllSpendDays: async () => rows.spendDays,
       getModelUsageSince: async (since) => rows.modelRows.filter((row) => row.day >= since),
       getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+      remoteVisibleTaskIds: async (ids) => new Set(ids),
       todayKey: () => todayKey,
     },
     { sinceDay },
@@ -148,6 +149,7 @@ describe('usage device rows wire format', () => {
           getAllSpendDays: async () => bad.spendDays,
           getModelUsageSince: async () => bad.modelRows as never,
           getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+          remoteVisibleTaskIds: async (ids) => new Set(ids),
           todayKey: () => '2026-09-26',
         },
         { sinceDay: null },
@@ -157,6 +159,66 @@ describe('usage device rows wire format', () => {
     expect(decoded.rows.spendDays).toEqual([]);
     expect(decoded.rows.modelRows).toHaveLength(1);
     expect(decoded.rows.modelRows[0].inputTokens).toBe(0);
+  });
+
+  it('sends only remotely visible tasks and their rows', async () => {
+    const task = (sessionId: string) => ({
+      sessionId,
+      title: sessionId,
+      model: 'm',
+      providerId: null,
+      contextTokens: 0,
+      contextWindow: 0,
+      lastActiveAt: 1,
+    });
+    const decoded = await decodeUsageDeviceRowsResponse(
+      await readUsageDeviceRows(
+        {
+          getAllSpendDays: async () => [],
+          getModelUsageSince: async () => [],
+          getSessionUsageSince: async () => ({
+            rows: [
+              { day: '2026-09-26', sessionId: 'ordinary', tokens: 3 },
+              { day: '2026-09-26', sessionId: 'hidden-bot', tokens: 4 },
+            ],
+            tasks: [task('ordinary'), task('hidden-bot')],
+          }),
+          remoteVisibleTaskIds: async () => new Set(['ordinary']),
+          todayKey: () => '2026-09-26',
+        },
+        { sinceDay: null },
+      ),
+    );
+    if (decoded?.kind !== 'rows') throw new Error('expected rows');
+    expect(decoded.rows.tasks.map((row) => row.sessionId)).toEqual(['ordinary']);
+    expect(decoded.rows.sessionRows.map((row) => row.sessionId)).toEqual(['ordinary']);
+  });
+
+  it('replaces task metadata wholesale and drops rows of tasks that disappeared', () => {
+    const task = (sessionId: string, title: string) => ({
+      sessionId,
+      title,
+      model: 'm',
+      providerId: null,
+      contextTokens: 0,
+      contextWindow: 0,
+      lastActiveAt: 1,
+    });
+    const cached: UsageDeviceRows = {
+      ...rowsFor(['2026-09-20']),
+      sessionRows: [
+        { day: '2026-09-20', sessionId: 'renamed', tokens: 1 },
+        { day: '2026-09-20', sessionId: 'deleted', tokens: 2 },
+      ],
+      tasks: [task('renamed', 'Old'), task('deleted', 'Gone')],
+    };
+    // 两个任务在增量区间内都没有新用量;被控端返回的是全部任务的当前元数据。
+    const merged = mergeIncrementalRows(cached, '2026-09-25', {
+      ...rowsFor(['2026-09-25']),
+      tasks: [task('renamed', 'New')],
+    });
+    expect(merged.tasks.map((row) => [row.sessionId, row.title])).toEqual([['renamed', 'New']]);
+    expect(merged.sessionRows.map((row) => row.sessionId)).toEqual(['renamed']);
   });
 
   it('replaces only the incremental window when merging', () => {

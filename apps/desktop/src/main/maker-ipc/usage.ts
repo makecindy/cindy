@@ -49,6 +49,7 @@ import {
 import { getAllSpendDays, localDayKey } from '../localDb/dailySpend.js';
 import { getModelUsageSince } from '../localDb/dailyModelUsage.js';
 import { getSessionUsageSince } from '../localDb/dailySessionUsage.js';
+import { readRemoteBotSessionAccessBatch } from '../localDb/ipc/botRemoteSessionAccess.js';
 import { getCurrentDbClientUserId } from '../localDb/client/current.js';
 import { getSelfDeviceId, remoteInvoke } from '../device-link/index.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
@@ -327,7 +328,17 @@ export function registerMakerUsageIpc(maker: Maker): void {
     emptyUsageHistory: emptyUsageHistoryPayload,
     readUsageDeviceRows: (request) =>
       readUsageDeviceRows(
-        { getAllSpendDays, getModelUsageSince, getSessionUsageSince, todayKey: () => localDayKey() },
+        {
+          getAllSpendDays,
+          getModelUsageSince,
+          getSessionUsageSince,
+          // 与 local-db:sessions:list 的远端投影同一判据:hidden(含账号切换中的全拒)不外发。
+          remoteVisibleTaskIds: async (ids) => {
+            const access = await readRemoteBotSessionAccessBatch(ids, 'session');
+            return new Set(ids.filter((id) => (access.get(id) ?? 'hidden') !== 'hidden'));
+          },
+          todayKey: () => localDayKey(),
+        },
         request,
       ),
   });

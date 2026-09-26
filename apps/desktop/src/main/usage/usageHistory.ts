@@ -28,7 +28,7 @@ import path from 'node:path';
 import { app } from 'electron';
 import { getAllSpendDays, localDayKey } from '../localDb/dailySpend';
 import { getModelUsageSince, type DailyModelUsageRow } from '../localDb/dailyModelUsage';
-import { getSessionUsageSince } from '../localDb/dailySessionUsage';
+import { getSessionUsageSince, getUsageTaskMeta } from '../localDb/dailySessionUsage';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
@@ -1114,13 +1114,36 @@ async function readScopedUsageHistory(opts?: UsageHistoryReadOptions): Promise<U
  * 失效判断 —— 聚合只随用量行变化(见 peerUsageSync 的聚合版本)。
  */
 export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<UsageHistoryPayload> {
-  const payload = await readAggregatedUsageHistory(opts);
+  const payload = await withCurrentLocalTasks(await readAggregatedUsageHistory(opts));
   const peerSync = normalizeDeviceScope(opts?.device) === 'local' ? null : getPeerUsageSync();
   if (!peerSync) return payload;
   return {
     ...payload,
     devices: devicesWithSelf(await peerSync.snapshot()),
     devicesSyncing: peerSync.isSyncing(),
+  };
+}
+
+/**
+ * 本机任务的标题 / 模型 / 删除状态同属展示元数据:在唯一出口按当前库覆盖,聚合缓存
+ * 只提供用量行。重命名、删除不产生用量,不能等下一次重聚合才生效。
+ */
+async function withCurrentLocalTasks(payload: UsageHistoryPayload): Promise<UsageHistoryPayload> {
+  if (!payload.tasks?.some((task) => task.deviceId === LOCAL_TASK_DEVICE)) return payload;
+  let current: Map<string, Awaited<ReturnType<typeof getUsageTaskMeta>>[number]>;
+  try {
+    current = new Map((await getUsageTaskMeta()).map((task) => [task.sessionId, task]));
+  } catch (err) {
+    log.debug('read usage task meta failed:', err instanceof Error ? err.message : String(err));
+    return payload;
+  }
+  return {
+    ...payload,
+    tasks: payload.tasks.flatMap((task) => {
+      if (task.deviceId !== LOCAL_TASK_DEVICE) return [task];
+      const meta = current.get(task.sessionId);
+      return meta ? [{ ...task, ...meta }] : [];
+    }),
   };
 }
 

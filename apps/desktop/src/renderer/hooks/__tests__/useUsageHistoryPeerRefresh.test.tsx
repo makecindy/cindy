@@ -2,6 +2,8 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { emitPatch } from '@/lib/sessionsBus';
+
 import { useUsageHistory } from '../useUsageHistory';
 
 const money = {
@@ -81,5 +83,23 @@ describe('useUsageHistory peer refresh', () => {
       await vi.advanceTimersByTimeAsync(180_000);
     });
     expect(callsFor(undefined)).toBe(initial);
+  });
+
+  it('re-reads when a task is renamed or deleted, but not on unrelated session patches', async () => {
+    renderHook(() => useUsageHistory({ userId: 'task-meta-refresh', device: 'all' }));
+    await act(async () => {});
+    const initial = callsFor('all');
+
+    emitPatch('s1', { pinned: true } as never);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(callsFor('all')).toBe(initial);
+
+    emitPatch('s1', { title: 'Renamed' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(callsFor('all')).toBe(initial + 1);
   });
 });

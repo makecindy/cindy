@@ -29,6 +29,9 @@ import {
   zeroUsageMoney,
   type RegionalMoney,
 } from '../../shared/regionalMoney';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import type { Session } from '@/lib/ccAgent.types';
+import { onPatch as onSessionPatch } from '@/lib/sessionsBus';
 
 export interface UsageHistoryModel {
   agentKind: 'claude-code' | 'codex' | 'pi';
@@ -540,6 +543,9 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
   return scope.inflight;
 }
 
+/** 影响「最耗 token 的任务」展示的任务字段。 */
+const TASK_META_KEYS = ['title', 'status', 'model', 'providerId'] as const;
+
 export type UsageHistoryWindow = number | 'all';
 
 function normalizeWindow(value: UsageHistoryWindow | undefined, fallback: number): number | 'all' {
@@ -630,6 +636,23 @@ export function useUsageHistory(opts?: {
     const offSpend = window.electronAPI.maker.usage.onTodaySpendChanged(scheduleRefresh);
     const offTokens = window.electronAPI.maker.usage.onTodayTokensChanged(scheduleRefresh);
     const offPricing = window.electronAPI.maker.usage.onModelPricingChanged(scheduleRefresh);
+    // 任务的标题 / 删除等元数据变化不产生用量:只需重读,Main 在出口按当前库覆盖本机任务
+    // 元数据,不强制重聚合。
+    let metaTimer: ReturnType<typeof setTimeout> | null = null;
+    const onTaskMetaPatch = (_sessionId: string, patch: Partial<Session>) => {
+      if (!TASK_META_KEYS.some((key) => key in patch)) return;
+      if (metaTimer) clearTimeout(metaTimer);
+      metaTimer = setTimeout(() => {
+        metaTimer = null;
+        void load(scopedKey);
+      }, REFRESH_DEBOUNCE_MS);
+    };
+    const offLocalPatch = onSessionPatch(onTaskMetaPatch);
+    const offPushPatch = window.electronAPI.localDb?.sessionsPush?.onPatched(
+      ({ sessionId, patch }, stamp) => {
+        if (isDataOwnerPushCurrent(stamp)) onTaskMetaPatch(sessionId, patch);
+      },
+    );
     const peerTimer =
       request.device === 'local'
         ? null
@@ -640,6 +663,9 @@ export function useUsageHistory(opts?: {
       activeScope.statusListeners.delete(setIsRefreshing);
       deactivateScopeIfUnused(activeScope);
       if (timer) clearTimeout(timer);
+      if (metaTimer) clearTimeout(metaTimer);
+      offLocalPatch();
+      offPushPatch?.();
       offSpend();
       offTokens();
       offPricing();

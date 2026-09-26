@@ -115,26 +115,38 @@ function dayBefore(dayKey: string): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-/** 用增量结果替换缓存中 sinceDay(含)之后的行;sinceDay 为 null 时整体替换。 */
+/**
+ * 用增量结果替换缓存中 sinceDay(含)之后的行;sinceDay 为 null 时整体替换。
+ * 任务元数据不分区间:被控端每次都返回全部任务的当前元数据,整体覆盖缓存;不在其中的
+ * 任务(已删除 / 不对远端可见)连同区间外的旧行一起丢弃。
+ */
 export function mergeIncrementalRows(
   cached: UsageDeviceRows | null,
   sinceDay: string | null,
   incoming: UsageDeviceRows,
 ): UsageDeviceRows {
-  if (!cached || sinceDay === null) return incoming;
-  // 任务元数据按任务 id 以新值覆盖;只在区间外仍有行的旧任务保留旧元数据。
-  const incomingTaskIds = new Set(incoming.tasks.map((task) => task.sessionId));
+  const taskIds = new Set(incoming.tasks.map((task) => task.sessionId));
+  const merged =
+    !cached || sinceDay === null
+      ? incoming
+      : {
+          spendDays: [
+            ...cached.spendDays.filter((row) => row.day < sinceDay),
+            ...incoming.spendDays,
+          ],
+          modelRows: [
+            ...cached.modelRows.filter((row) => row.day < sinceDay),
+            ...incoming.modelRows,
+          ],
+          sessionRows: [
+            ...cached.sessionRows.filter((row) => row.day < sinceDay),
+            ...incoming.sessionRows,
+          ],
+          tasks: incoming.tasks,
+        };
   return {
-    spendDays: [...cached.spendDays.filter((row) => row.day < sinceDay), ...incoming.spendDays],
-    modelRows: [...cached.modelRows.filter((row) => row.day < sinceDay), ...incoming.modelRows],
-    sessionRows: [
-      ...cached.sessionRows.filter((row) => row.day < sinceDay),
-      ...incoming.sessionRows,
-    ],
-    tasks: [
-      ...cached.tasks.filter((task) => !incomingTaskIds.has(task.sessionId)),
-      ...incoming.tasks,
-    ],
+    ...merged,
+    sessionRows: merged.sessionRows.filter((row) => taskIds.has(row.sessionId)),
   };
 }
 
