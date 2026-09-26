@@ -9351,7 +9351,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const sendResult = await sendUserMessageWithAwaitedGitBaseline(live, message, clientId, {
             ...(params.autoReviewUserText ? {
               [AUTO_REVIEW_SOURCE_CONTENT]: '',
-              [AUTO_REVIEW_USER_INTENT]: restoreAutoReviewUserIntent(await readAutoReviewHistory(targetSessionId).catch(() => [])),
+              [AUTO_REVIEW_USER_INTENT]: restoreAutoReviewUserIntent(await readAutoReviewHistory(targetSessionId)),
             } : {}),
             planMode: false,
             onAccepted: persistUserMessage,
@@ -9465,7 +9465,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const sendResult = await sendUserMessageWithAwaitedGitBaseline(session, message, clientId, {
           ...(params.autoReviewUserText ? {
             [AUTO_REVIEW_SOURCE_CONTENT]: '',
-            [AUTO_REVIEW_USER_INTENT]: restoreAutoReviewUserIntent(await readAutoReviewHistory(targetSessionId).catch(() => [])),
+            [AUTO_REVIEW_USER_INTENT]: restoreAutoReviewUserIntent(await readAutoReviewHistory(targetSessionId)),
           } : {}),
           planMode: false,
           onAccepted: persistUserMessage,
@@ -10105,6 +10105,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       store: createPluginTaskStore(snapshot.client), assertCurrent, assertAuthorized: assertPlugin, resolveRoute,
       assertTeamPlanUnstarted: async taskId => {
         assertCurrent();
+        await drainPersistQueue();
+        assertCurrent();
+        const priorInputs = await snapshot.client.drizzle.select({id:messages.id}).from(messages).where(and(eq(messages.sessionId,taskId),eq(messages.role,'user'))).limit(1);
+        assertCurrent();
+        if (priorInputs.length) throw new PluginTaskError('TASK_BUSY', 'Register the team plan before sending input');
         const workers = await snapshot.client.drizzle.select({id:orcaWorkers.id}).from(orcaWorkers).innerJoin(orcaTeams,eq(orcaWorkers.teamId,orcaTeams.id)).where(eq(orcaTeams.leadSessionId,taskId)).limit(1);
         const reservations = await snapshot.client.drizzle.select({id:orcaWorkerCreationReservations.id}).from(orcaWorkerCreationReservations).innerJoin(orcaTeams,eq(orcaWorkerCreationReservations.teamId,orcaTeams.id)).where(and(eq(orcaTeams.leadSessionId,taskId),gte(orcaWorkerCreationReservations.expiresAt,Date.now()))).limit(1);
         assertCurrent();

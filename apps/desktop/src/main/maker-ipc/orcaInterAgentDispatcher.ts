@@ -641,7 +641,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
 ): Promise<CollabDirectDispatchResult> {
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, origin, onAccepted } = params;
   let turnChangeSetStarted = false;
-  const humanIntent = restoreAutoReviewUserIntent(await deps.readAutoReviewHistory?.(session.id).catch(() => []) ?? []);
+  const humanIntent = restoreAutoReviewUserIntent(await deps.readAutoReviewHistory?.(session.id) ?? []);
   const result = await resolveCollabDispatchResult(
     () => session.send(agentMessage, {
       planMode: false,

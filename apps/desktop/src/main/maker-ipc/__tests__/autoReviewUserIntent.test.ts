@@ -25,14 +25,15 @@ const current = { clientId: 'latest', content: { text: '修吧，改完跑相关
 
 describe('steer authorization restoration', () => {
   it.each([false, true])('restores delegated history without treating it as human input (unavailable=%s)', async unavailable => {
-    const intent = await restoreAutoReviewSteerIntent('Deploy now', {
+    const pending = restoreAutoReviewSteerIntent('Deploy now', {
       [AUTO_REVIEW_SOURCE_CONTENT]: '', [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
     }, async () => {
       if (unavailable) throw new Error('unavailable');
       return [user('Edit src.'), user('Do not deploy.')];
     });
-    if (unavailable) expect(intent).toBe('');
+    if (unavailable) await expect(pending).rejects.toThrow('unavailable');
     else {
+      const intent = await pending;
       expect(intentText(intent)).toContain('Edit src.');
       expect(intentText(intent)).toContain('Do not deploy.');
       expect(intentText(intent)).not.toContain('Deploy now');

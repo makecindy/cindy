@@ -37,7 +37,7 @@ export async function restoreAutoReviewSteerIntent(
   const context = options[MAIN_OWNED_SEND_CONTEXT];
   if (context && context.origin.kind !== 'desktop') return undefined;
   if (options[AUTO_REVIEW_DELEGATED_CONTINUATION]) {
-    const history = await readHistory().catch(() => []);
+    const history = await readHistory();
     options.signal?.throwIfAborted();
     return restoreAutoReviewUserIntent(history);
   }

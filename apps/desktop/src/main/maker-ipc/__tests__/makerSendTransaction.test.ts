@@ -2520,11 +2520,16 @@ describe('session-agent-switch handoff injection', () => {
       if(unavailable) throw new Error('unavailable');
       return [{clientId:'human',role:'user',content:{text:'Do not deploy'},agentMeta:{delivery:'turn',autoReviewUserText:'Do not deploy'}}];
     }});
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1','Deploy now',undefined,{
+    const pending = createMakerSendTransaction(deps).sendToAgentAccepted('session-1','Deploy now',undefined,{
       [AUTO_REVIEW_SOURCE_CONTENT]:'',[AUTO_REVIEW_DELEGATED_CONTINUATION]:true,
     });
-    const opts=vi.mocked(session.send).mock.calls[0]![1]!;
-    expect(opts[AUTO_REVIEW_USER_INTENT]).toBe(unavailable?'':'Do not deploy');
+    if (unavailable) {
+      await expect(pending).rejects.toThrow('unavailable');
+      expect(session.send).not.toHaveBeenCalled();
+    } else {
+      await pending;
+      expect(vi.mocked(session.send).mock.calls[0]![1]![AUTO_REVIEW_USER_INTENT]).toBe('Do not deploy');
+    }
   });
 
   it.each([false, true])('restores scheduled intent from owner history, not the prompt (unavailable=%s)', async (unavailable) => {

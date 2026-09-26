@@ -122,8 +122,11 @@ describe('Orca lead/worker dispatcher', () => {
       if(unavailable) throw new Error('unavailable');
       return [{clientId:'human',role:'user',content:{text:'Do not deploy'},agentMeta:{delivery:'turn',autoReviewUserText:'Do not deploy'}}];
     }});
-    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({targetSessionId:'target-session',rawContent:'Deploy now',source:'lead',senderLabel:'Lead',workerId:'worker-1',meta:{source:'orca',context:'test'}});
-    expect(h.liveSession.send.mock.calls[0]?.[1]?.[AUTO_REVIEW_USER_INTENT]).toBe(unavailable ? '' : 'Do not deploy');
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({targetSessionId:'target-session',rawContent:'Deploy now',source:'lead',senderLabel:'Lead',workerId:'worker-1',meta:{source:'orca',context:'test'}});
+    if (unavailable) {
+      expect(result).toMatchObject({ok:false});
+      expect(h.liveSession.send).not.toHaveBeenCalled();
+    } else expect(h.liveSession.send.mock.calls[0]?.[1]?.[AUTO_REVIEW_USER_INTENT]).toBe('Do not deploy');
   });
   it('runs direct accepted side effects after DB persistence and before vendor turn release', async () => {
     const h = createHarness();

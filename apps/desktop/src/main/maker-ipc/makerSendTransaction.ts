@@ -1328,7 +1328,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (resolveScheduledIntent) restoredAutoReviewIntent = undefined;
       if (!resolveScheduledIntent && restoredAutoReviewIntent === undefined && so[AUTO_REVIEW_DELEGATED_CONTINUATION]
         && (!mainOwnedSendContext || mainOwnedSendContext.origin.kind === 'desktop')) {
-        const history = await deps.readAutoReviewHistory?.(sessionId).catch(() => []) ?? [];
+        const history = await deps.readAutoReviewHistory?.(sessionId) ?? [];
         restoredAutoReviewIntent = restoreAutoReviewUserIntent(history);
       }
       if (!resolveScheduledIntent && restoredAutoReviewIntent === undefined && isOrdinaryUserTurn && trustedUserText !== undefined
