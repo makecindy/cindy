@@ -130,7 +130,11 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   见 [versionStartup](../../apps/desktop/src/main/cindy-make/versionStartup.ts)。
 - 同机装过 cn 与 global 双版的机器上，后启动的版本首次访问 `safeStorage` 会触发系统
   钥匙串授权弹窗，属 macOS 按预期征求同意；应引导用户点「始终允许」。点「拒绝」后
-  加解密降级失败，authManager 的 safeStorage helpers 会按原因落一次 warn 日志。
+  加解密降级失败，authManager 的 safeStorage helpers 会按原因落一次 warn 日志。用户
+  随后完成的显式登录可降级为仅当前 Main 进程有效的内存会话：refresh token 不进入
+  Renderer、日志、磁盘或 `safeStorage`，退出进程后失效并要求重新登录。该会话不得覆盖、
+  删除不可读的存量密文，也不得迁移账号派生的持久凭证或偏好；当前进程还必须用稳定
+  更新通道覆盖磁盘上可能属于旧账号的 Canary 标记，但不得改写该标记文件。
 - 不要在启动路径主动调用 `safeStorage.isEncryptionAvailable()` 做探测——macOS 上探测
   本身可能触发钥匙串授权弹窗，把弹窗时机提前到与用户动作无关的启动期。
 
