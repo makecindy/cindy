@@ -6565,7 +6565,12 @@
     },
     "daily": {
       "title": "直近 30 日の日次トークン",
-      "subtitle": "モデル別の積み上げ"
+      "subtitle": "モデル別の積み上げ",
+      "tooltip": {
+        "unit": "トークン",
+        "more_one": "ほか {{count}} モデル",
+        "more_other": "ほか {{count}} モデル"
+      }
     },
     "byAgent": {
       "title": "Agent / harness 別",

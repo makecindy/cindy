@@ -6565,7 +6565,12 @@
     },
     "daily": {
       "title": "近 30 天每日 token",
-      "subtitle": "按模型堆疊"
+      "subtitle": "按模型堆疊",
+      "tooltip": {
+        "unit": "token",
+        "more_one": "另有 {{count}} 個模型",
+        "more_other": "另有 {{count}} 個模型"
+      }
     },
     "byAgent": {
       "title": "按 Agent / harness",

@@ -6565,7 +6565,12 @@
     },
     "daily": {
       "title": "최근 30일 일별 토큰",
-      "subtitle": "모델별 누적"
+      "subtitle": "모델별 누적",
+      "tooltip": {
+        "unit": "토큰",
+        "more_one": "외 {{count}}개 모델",
+        "more_other": "외 {{count}}개 모델"
+      }
     },
     "byAgent": {
       "title": "Agent / harness별",
