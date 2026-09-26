@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import JSZip from 'jszip';
+import { migrationNativeContext } from '../migrationNativeContext';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DB_TRANSPORT_OUTCOME_UNKNOWN } from '../../localDb/client/DbTransport.js';
@@ -611,6 +612,28 @@ describe('sessionShareImport', () => {
       expect(call.stateRows.threads[0].id).toBe(call.threadId);
       expect(call.rolloutFilename).toContain(call.threadId);
     }
+  });
+
+  it.each(['cc', 'pi'] as const)('repairs a partial %s migration transcript on retry', async agentKind => {
+    const filePath = await writeBundleFile(await buildBundle({ agentKind }));
+    const migration = { sessionId: '11111111-2222-4333-a444-555555555555', workingDir: newWorkdir };
+    const attempt = async () => {
+      const inspected = await inspectShareFile(filePath);
+      if (inspected.encrypted) throw new Error('unexpected encrypted fixture');
+      return commitShareImport({ draftId: inspected.draftId, workingDir: newWorkdir,
+        projectsRootOverride: projectsRoot, piSessionsRootOverride: piSessionsRoot,
+        sharedMediaRootOverride: sharedMediaRoot }, migration);
+    };
+    const nativeId = migrationNativeContext(migration.sessionId, [SID]).id(SID);
+    const target = agentKind === 'pi' ? path.join(piSessionsRoot, migration.sessionId, PI_SID)
+      : path.join(projectsRoot, newWorkdir.replace(/[^a-zA-Z0-9]/g, '-'), `${nativeId}.jsonl`);
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    await fsp.writeFile(target, '{partial');
+    dbMock.txError = null;
+    expect((await attempt()).fidelity).toBe('full');
+    const restored = await fsp.readFile(target, 'utf8');
+    expect(restored).not.toContain('partial');
+    expect(() => restored.trim().split('\n').forEach(line => JSON.parse(line))).not.toThrow();
   });
 
   it('legacy bundle without message agentKind imports rows as NULL', async () => {

@@ -7,6 +7,7 @@
  */
 
 import { app } from 'electron';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile';
 import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
@@ -1675,6 +1676,8 @@ function serializeSqlRow(row: SqlRow): Record<string, unknown> {
 }
 
 export interface ImportSharedCodexThreadParams {
+  /** The incoming handoff owns this independent native ID until activation. */
+  migration?: boolean;
   threadId: string;
   /** dumpCodexThreadStateRows 的序列化形态(Buffer 已包 base64 标记)。 */
   stateRows: {
@@ -1742,10 +1745,11 @@ export async function importSharedCodexThread(
       // wx 独占写:同名 rollout 已在盘上(典型是删除 Maker 会话后重导同一分享包)
       // 时不覆盖、直接复用——盘上副本可能包含删除前 resume 产生的更新内容。
       try {
-        await fsp.writeFile(rolloutPath, params.rolloutBuffer, { flag: 'wx' });
+        if (params.migration) atomicWriteFileSync(rolloutPath, params.rolloutBuffer.toString('utf8'));
+        else await fsp.writeFile(rolloutPath, params.rolloutBuffer, { flag: 'wx' });
         rolloutWritten = true;
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        if (params.migration || (err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
         log.info('import shared codex thread: rollout already on disk, reusing', {
           threadId: params.threadId,
         });

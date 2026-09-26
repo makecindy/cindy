@@ -298,6 +298,38 @@ describe('durable cross-machine handoff', () => {
     return separate;
   }
 
+  it('replaces only preparation staging on retry instead of accumulating archive copies', async () => {
+    state.noSpace = true;
+    await start();
+    const first = await settled();
+    expect(first.stage).toBe('preparing');
+    const dir = path.join(migrationScope().root, 'outgoing', first.targetSessionId!);
+    await fs.writeFile(path.join(dir, 'superseded.tar.gz.enc'), 'old snapshot');
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    await settled();
+    await expect(fs.stat(path.join(dir, 'superseded.tar.gz.enc'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
+  });
+  it('journals every team directory before allocation can fail', async () => {
+    await team();
+    const mkdir = fs.mkdir.bind(fs);
+    let allocations = 0;
+    const spy = vi.spyOn(fs, 'mkdir').mockImplementation((async (target: string, options?: unknown) => {
+      if (path.basename(String(target)).startsWith('cindy-')) {
+        allocations++;
+        const receipt = state.context.run({ device: 'B' }, () => migrationScope().list(true)[0]);
+        expect(receipt).toBeDefined();
+        expect([receipt!.workingDir, ...('retainedWorkingDirs' in receipt! ? receipt!.retainedWorkingDirs ?? [] : [])]).toContain(target);
+        if (allocations === 2) throw new Error('allocation failed');
+      }
+      return mkdir(target, options as never);
+    }) as typeof fs.mkdir);
+    try {
+      await start();
+      expect((await settled()).stage).toBe('transferring');
+      expect(allocations).toBe(2);
+    } finally { spy.mockRestore(); }
+  });
   it('moves the entire team, copies shared directories once and keeps every source file', async () => {
     const separate = await team();
     const started = await start();

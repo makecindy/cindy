@@ -20,6 +20,7 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
 import JSZip from 'jszip';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile';
 import { migrationNativeContext } from './migrationNativeContext';
 import { isClaudeProjectKeyExact, sanitizeClaudeProjectKey } from '@cindy/maker-core';
 import { app } from 'electron';
@@ -803,13 +804,16 @@ export async function commitShareImport(
           try {
             const transcriptBytes = Buffer.from(await guarded(() => file.async('nodebuffer')));
             assertStillValid();
-            await fsp.writeFile(target, migratedContext ? migratedContext.transcript(transcriptBytes, 'cc') : transcriptBytes, { flag: 'wx' });
+            if (migratedContext) {
+              // This handoff owns its new native ID; retries replace incomplete copies atomically.
+              atomicWriteFileSync(target, migratedContext.transcript(transcriptBytes, 'cc').toString('utf8'));
+            } else await fsp.writeFile(target, transcriptBytes, { flag: 'wx' });
             journal.push(async () => {
               await fsp.rm(target, { force: true });
             });
             assertStillValid();
           } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+            if (migratedContext || (err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
             log.info('transcript already on disk, reusing', { sdkSessionId: t.sdkSessionId });
             assertStillValid();
           }
@@ -834,6 +838,7 @@ export async function commitShareImport(
           Buffer.from(await guarded(() => file.async('nodebuffer'))),
           journal,
           assertStillValid,
+          Boolean(migratedContext),
         );
         transcriptsWritten += 1;
       }
@@ -859,6 +864,7 @@ export async function commitShareImport(
       assertStillValid();
       const written = await importSharedCodexThread({
         threadId,
+        migration: Boolean(migratedContext),
         stateRows: migratedContext ? migratedContext.stateRows(stateRows) : stateRows,
         rolloutBuffer: migratedContext && rolloutBuffer ? migratedContext.transcript(rolloutBuffer, 'codex') : rolloutBuffer,
         rolloutFilename: rolloutRef
@@ -1354,18 +1360,20 @@ async function writeIfMissing(
   buffer: Buffer,
   journal: Array<() => Promise<void>>,
   assertStillValid: () => void,
+  migration = false,
 ): Promise<void> {
   assertStillValid();
   await fsp.mkdir(path.dirname(target), { recursive: true });
   assertStillValid();
   try {
-    await fsp.writeFile(target, buffer, { flag: 'wx' });
+    if (migration) atomicWriteFileSync(target, buffer.toString('utf8'));
+    else await fsp.writeFile(target, buffer, { flag: 'wx' });
     journal.push(async () => {
       await fsp.rm(target, { force: true });
     });
     assertStillValid();
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    if (migration || (err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     assertStillValid();
   }
 }

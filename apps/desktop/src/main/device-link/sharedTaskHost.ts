@@ -1,3 +1,4 @@
+import { withTaskMigrationWrite } from '../task-migration/writeBoundary.js';
 import {
   parseSharedTaskSnapshot, parseSharedTaskPeer, type SharedTaskApi, type SharedTaskCaller,
   type SharedTaskDetail, type SharedTaskIdentity, type SharedTaskQueueItem,
@@ -84,6 +85,9 @@ export class SharedTaskHost {
     return result;
   }
   private async accept(detail: SharedTaskDetail, generation: number): Promise<void> {
+    return withTaskMigrationWrite(detail.sessionId, () => this.acceptWritable(detail, generation));
+  }
+  private async acceptWritable(detail: SharedTaskDetail, generation: number): Promise<void> {
     this.assertCurrent();
     const snapshot = parseSharedTaskSnapshot(detail);
     this.assertSessionOpen(snapshot.sessionId, generation);
@@ -152,6 +156,10 @@ export class SharedTaskHost {
   async open(sessionId: string): Promise<string> {
     this.assertCurrent();
     const generation = this.sessionGenerations.get(sessionId) ?? 0;
+    return withTaskMigrationWrite(sessionId, () => this.openWritable(sessionId, generation));
+  }
+  private async openWritable(sessionId: string, generation: number): Promise<string> {
+    this.assertSessionGeneration(sessionId, generation);
     // An explicit open may re-share an unarchived task, only after the prior
     // boundary has drained its creates and made their closures durable.
     await this.taskClosures.get(sessionId);
@@ -186,11 +194,11 @@ export class SharedTaskHost {
       throw new Error('Shared task was closed');
     }
     this.assertSessionOpen(sessionId, generation);
-    await this.serial(created.sharedTaskId, async () => {
-      const detail = await this.options.api.get(created.sharedTaskId);
-      if (detail.sessionId !== sessionId) throw new Error('SharedTask task does not match');
-      await this.accept(detail, generation);
-    });
+    // Already inside the session boundary; do not wait for a refresh chain
+    // that may itself be waiting to acquire that boundary.
+    const verified = await this.options.api.get(created.sharedTaskId);
+    if (verified.sessionId !== sessionId) throw new Error('SharedTask task does not match');
+    await this.acceptWritable(verified, generation);
     const detail = this.entries.get(created.sharedTaskId)?.detail;
     if (!detail || detail.sessionId !== sessionId || detail.status !== 'active') throw new Error('SharedTask could not be opened');
     return created.sharedTaskId;

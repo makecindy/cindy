@@ -1,6 +1,15 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { withTaskMigrationBoundary } from '../../task-migration/writeBoundary';
+const migration = vi.hoisted(() => ({ root: '', blocked: false }));
+vi.mock('../../task-migration/journal', () => ({
+  migrationScope: () => ({ root: migration.root, assertCurrent() {} }),
+  assertTaskMigrationWritable: () => { if (migration.blocked) throw new Error('MIGRATION_TASK_BUSY'); },
+}));
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sharedTaskGuestPeer } from '@cindy/device-link';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSharedTaskApi, parseSharedTaskSnapshot, type SharedTaskDetail } from '@cindy/device-link';
 import type { SharedTaskJournalEntry } from '../../localDb/sharedTasks.js';
 import { SharedTaskHost, type SharedTaskHostOptions } from '../sharedTaskHost.js';
@@ -26,7 +35,9 @@ let host: SharedTaskHost;
 let current: boolean;
 let serverDetail: SharedTaskDetail;
 const canRead = (member = 'a') => host.authorize('sharedTask', { accountId: `guest-${member}`, deviceId: `phone-${member}` }, 'session', 'history.read').allowed;
-beforeEach(() => {
+beforeEach(async () => {
+  migration.root = await fs.mkdtemp(path.join(os.tmpdir(), 'shared-task-migration-'));
+  migration.blocked = false;
   for (const fn of Object.values(api)) fn.mockReset();
   current = true;
   serverDetail = detail();
@@ -53,7 +64,30 @@ beforeEach(() => {
   };
   host = new SharedTaskHost(options);
 });
+afterEach(async () => { await fs.rm(migration.root, { recursive: true, force: true }); });
 describe('task host sharedTask lifecycle', () => {
+  it('holds migration admission until shared creation and journal commit settle', async () => {
+    let release!: () => void;
+    api.create.mockImplementationOnce(async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return { sharedTaskId: 'sharedTask', revision: 1 };
+    });
+    const opening = host.open('session');
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    const inspect = vi.fn(async () => { expect(records.get('sharedTask')?.terminal).toBe(false); });
+    const admission = withTaskMigrationBoundary(['session'], inspect);
+    await new Promise(resolve => setTimeout(resolve, 60));
+    expect(inspect).not.toHaveBeenCalled();
+    release();
+    await Promise.all([opening, admission]);
+  });
+  it('rejects both new opens and restored authority after migration wins admission', async () => {
+    await withTaskMigrationBoundary(['session'], async () => { migration.blocked = true; });
+    await expect(host.open('session')).rejects.toThrow('MIGRATION_TASK_BUSY');
+    await expect(host.refresh('sharedTask')).rejects.toThrow('MIGRATION_TASK_BUSY');
+    expect(api.create).not.toHaveBeenCalled();
+    expect(records.size).toBe(0);
+  });
   it('consumes another instance closure offline and invalidates captured access without touching another share', async () => {
     await host.open('session');
     const old = host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'))!;
@@ -149,9 +183,10 @@ describe('task host sharedTask lifecycle', () => {
     const rejected = expect(oldOpen).rejects.toThrow('closed');
     await vi.waitFor(() => expect(release).toBeTypeOf('function'));
     await host.closeLocallyForBoundary('session');
-    await expect(host.open('session')).resolves.toBe('sharedTask');
+    const reopened = host.open('session');
     release();
     await rejected;
+    await expect(reopened).resolves.toBe('sharedTask');
     expect(api.create).toHaveBeenCalledOnce();
   });
 

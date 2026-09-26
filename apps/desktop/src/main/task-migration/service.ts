@@ -276,6 +276,8 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
   )
     throw new Error('MIGRATION_TEAM_CHANGED');
   const directory = path.join(scope.root, 'outgoing', record.id);
+  // Preparing owns no published transfer references. Replace only its staging copy.
+  await fs.rm(directory, { recursive: true, force: true });
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await withWorktreeResourceLocks(
     members.map((member) => member.workingDir),
@@ -648,7 +650,7 @@ async function receive(
       } else await fs.mkdir(parent, { recursive: true, mode: 0o700 });
       scope.assertCurrent();
       // Each failed attempt owns only its new directory. It never replaces a user's existing folder.
-      const workingDir = await fs.mkdtemp(path.join(parent, `cindy-${request.id.slice(0, 8)}-`));
+      const workingDir = path.join(parent, `cindy-${request.id.slice(0, 8)}-${randomUUID()}`);
       const retainedWorkingDirs = record
         ? [
             ...new Set([
@@ -669,6 +671,7 @@ async function receive(
         ...(retainedWorkingDirs.length ? { retainedWorkingDirs } : {}),
       };
       scope.save(record);
+      await fs.mkdir(workingDir);
       const directory = await fs.mkdtemp(path.join(scope.root, 'incoming-'));
       try {
         assertMemoryCapacity(request.files.manifest.size);
@@ -738,10 +741,17 @@ async function receive(
           ),
         });
         const targetDirs = [workingDir];
-        for (let index = 1; index < snapshots.length; index++)
-          targetDirs.push(await fs.mkdtemp(path.join(parent, `cindy-${request.id.slice(0, 8)}-`)));
+        for (let index = 1; index < snapshots.length; index++) {
+          const target = path.join(parent, `cindy-${request.id.slice(0, 8)}-${randomUUID()}`);
+          // Persist intent before allocation: even a process exit cannot orphan a directory.
+          record = { ...record, retainedWorkingDirs: [...(record.retainedWorkingDirs ?? []), target] };
+          scope.save(record);
+          await fs.mkdir(target);
+          targetDirs.push(target);
+        }
         record = {
           ...record,
+          retainedWorkingDirs: record.retainedWorkingDirs?.filter((dir) => !targetDirs.includes(dir)),
           workers: workspace.workers?.map((worker) => ({
             sourceSessionId: worker.sourceSessionId,
             sessionId: worker.sessionId,
