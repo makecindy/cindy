@@ -19,8 +19,9 @@
 - OpenRouter：删去平台上不存在的 `qwen/qwen3.8-max`。
 - Kimi Code：`api.kimi.com` 为国内地址、`api.kimi.ai` 为海外地址，均为官方地址，不改。
 - Codex 桥接图片白名单补上官方确认支持图片的 Kimi（Moonshot / Kimi Code）与 Qwen 型号。
-- DeepSeek 直连条目新增 `deepseek-flash` 路由，保留 `deepseek-v4-flash` 旧别名路由供已有连接解析参考价。
-- 客户端 Registry revision 为 `2026-09-26T12:00:00.003Z`：服务端 `2026-09-26T12:00:00.002Z` 不含
+- DeepSeek 直连条目以 `deepseek-flash` 为首条路由，`deepseek-v4-flash` 旧别名路由保留在后，只供已有
+  连接解析参考价。
+- 客户端 Registry revision 为 `2026-09-26T12:00:00.004Z`：服务端 `2026-09-26T12:00:00.003Z` 不含
   客户端独有、需先随客户端发布的 Grok 4.7 Fast（#5060），两份内容不同故使用不同 revision。
 
 ## 订阅默认只显示最新一代（2026-09-26）
