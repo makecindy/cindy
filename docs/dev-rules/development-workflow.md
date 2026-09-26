@@ -114,6 +114,17 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 - **按风险追加验证**：跨模块、高风险或基础设施改动追加更广泛验证（如仓库根
   `pnpm test:all`），**最终以 CI 门禁为准**。不得通过 skip、删除或弱化测试制造通过；
   PR「怎么验证的」一节必须**如实**填写，没跑不许写已跑。
+- **设计台账冲突的安全处理**：将最新 `main` 合入功能分支时，如果唯一未解决文件是
+  `docs/design-rules/design-inventory.md`，可运行：
+
+  ```bash
+  pnpm resolve:design-inventory-conflict -- --main-ref origin/main
+  ```
+
+  命令要求 `--main-ref` 正好是当前 merge 的 `MERGE_HEAD`，只处理该台账文件；它调用既有
+  生成与校验命令，确认已有人工内容未被改写、缺失 surface 只补标准默认行后才暂存文件。
+  存在其他未解决文件、主干 ref 不一致或生成／校验失败时，命令拒绝继续并保留现场供人工处理。
+
 - **直推 `main` 的额外门禁**：push 前由独立 reviewer 对最终 diff 做一次对抗性 review，对照
   `docs/` 下规则找实际问题；发现 P0／P1 必须先修复并重新 review，直到没有 P0／P1。commit
   可以先创建，但 push 的必须是 review 通过的最终 commit。

@@ -1266,7 +1266,7 @@ export function defaultHumanSeed(surfaces) {
     '| --- | --- | --- | --- | --- | --- |',
     ...[...surfaces]
       .sort((a, b) => byCodepoints(a.id, b.id))
-      .map((surface) => renderHumanRow(surface.id, defaultHumanAnnotation(surface.id))),
+      .map((surface) => renderDefaultHumanRow(surface.id)),
     '',
   ];
   return `${lines.join('\n')}\n`;
@@ -1331,15 +1331,17 @@ function renderHumanRow(id, annotation) {
   )} | ${cell(annotation.target)} | ${cell(annotation.next)} |`;
 }
 
+export function renderDefaultHumanRow(id) {
+  return renderHumanRow(id, defaultHumanAnnotation(id));
+}
+
 export function ensureHumanRows(existingMarkdown, surfaces) {
   const parts = splitInventoryDocument(existingMarkdown);
   if (!parts.hasMarkers) return existingMarkdown;
   const knownHuman = new Set(extractHumanSurfaceIds(parts.suffix));
   const missing = surfaces.filter((surface) => !knownHuman.has(surface.id));
   if (missing.length === 0) return existingMarkdown;
-  const extra = missing.map((surface) =>
-    renderHumanRow(surface.id, defaultHumanAnnotation(surface.id)),
-  );
+  const extra = missing.map((surface) => renderDefaultHumanRow(surface.id));
   const suffix = parts.suffix.includes('| ID | owner |')
     ? appendRowsToHumanTable(parts.suffix, extra)
     : `${parts.suffix.trimEnd()}\n${defaultHumanSeed(missing)}`;
