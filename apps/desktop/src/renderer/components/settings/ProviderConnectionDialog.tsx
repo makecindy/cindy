@@ -2925,19 +2925,6 @@ export function ModelPickerOverlay({
         (m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q),
       )
     : picker.models;
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      const target = event.target;
-      if (target instanceof Node && contentRef.current?.contains(target)) return;
-      // Close only the picker and consume the gesture before it can reach the form beneath it.
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
-    window.addEventListener('pointerdown', onPointerDown, { capture: true });
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
-  }, [onClose]);
   const toggle = (id: string) => {
     const next = new Set(picker.selected);
     if (next.has(id)) next.delete(id);

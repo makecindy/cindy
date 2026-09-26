@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -450,7 +450,7 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
     }
   });
 
-  it('dismisses only the model picker on its scrim gesture', async () => {
+  it('keeps model picker selections on its scrim gesture until explicitly cancelled', async () => {
     i18nState.language = 'zh-TW';
     const { onClose } = renderDialog();
 
@@ -463,13 +463,21 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
     const pickerHeading = await screen.findByRole('heading', {
       name: 'settings.providers.custom.fetch.pickerTitle',
     });
-    const pickerScrim = pickerHeading.closest('[role="dialog"]')?.parentElement;
+    const pickerDialog = pickerHeading.closest('[role="dialog"]') as HTMLElement;
+    const checkbox = within(pickerDialog).getByRole('checkbox', { name: /Local Model/ });
+    fireEvent.click(checkbox);
+    const selected = checkbox.getAttribute('aria-checked');
+    const pickerScrim = pickerDialog.parentElement;
     expect(pickerScrim).not.toBeNull();
     fireEvent.pointerDown(pickerScrim as Element);
 
     expect(
-      screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' }),
-    ).toBeNull();
+      screen.getByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' }),
+    ).not.toBeNull();
+    expect(checkbox.getAttribute('aria-checked')).toBe(selected);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(within(pickerDialog).getByRole('button', { name: 'settings.providers.custom.cancel' }));
+    expect(screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
   });
 });
