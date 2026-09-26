@@ -261,6 +261,27 @@ describe('durable cross-machine handoff', () => {
   const start = () =>
     requestTaskMigration({ action: 'start', sessionId: 'fork', targetDeviceId: 'B' });
 
+  it('filters stale project history and rechecks a directory removed after listing', async () => {
+    const existing = path.join(state.root, 'shared');
+    const missing = path.join(state.root, 'missing');
+    const file = path.join(existing, 'draft');
+    const removable = path.join(state.root, 'removable');
+    await fs.mkdir(removable);
+    state.dbs.get('B')!.query.mockResolvedValue(
+      [existing, missing, file, removable].map(path => ({ path })),
+    );
+    const caps = await state.context.run({ device: 'B' }, () => requestTaskMigration({ action: 'caps' }));
+    expect(caps.projects).toEqual([existing, removable]);
+    await fs.rmdir(removable);
+    await expect(state.context.run({ device: 'B' }, () => requestTaskMigration({
+      action: 'preflight', targetProject: removable,
+      resources: { transferBytes: 0, unpackedBytes: 0, contextBytes: 0, manifestBytes: 0, repositoryBytes: 0, entries: 0 },
+    }))).rejects.toThrow('MIGRATION_TARGET_UNKNOWN');
+    await expect(requestTaskMigration({ action: 'start', sessionId: 'fork', targetDeviceId: 'B', targetProject: file }))
+      .rejects.toThrow('MIGRATION_TARGET_UNKNOWN');
+    expect(state.snapshot).not.toHaveBeenCalled();
+  });
+
   it('rejects an idle runtime whose terminal delivery or accepted queue is still pending', async () => {
     state.boundaryBusy = true;
     await expect(start()).rejects.toThrow('MIGRATION_TASK_RUNNING');

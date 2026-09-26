@@ -96,7 +96,15 @@ async function projects(scope: Scope): Promise<string[]> {
     [],
   );
   scope.assertCurrent();
-  return rows.map((row) => row.path);
+  const available: string[] = [];
+  // Recent paths are history, not proof that a mount or directory still exists.
+  // Reuse this check for capabilities, preflight and receive-time validation.
+  for (const row of rows) {
+    if (await fs.stat(row.path).then((stat) => stat.isDirectory(), () => false))
+      available.push(row.path);
+  }
+  scope.assertCurrent();
+  return available;
 }
 async function invoke(
   device: string,
