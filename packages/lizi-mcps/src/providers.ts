@@ -301,7 +301,11 @@ export function createLiziMcpProviders(
               (await opts.wechatBot!.getMostRecentPeerId())
             );
           },
-          workingDir: ctx.workingDir,
+          // 与 getPeerId 同一纪律: workingDir 也必须调用期解析。Codex / Pi 的
+          // HTTP 桥在 factory 阶段只有全局空 ctx, 静态绑定 ctx.workingDir 会让
+          // send_file_to_user 在这些 harness 上必然 WORKING_DIR_UNAVAILABLE,
+          // 即使当前会话有真实工作目录。
+          getWorkingDir: () => resolveLiziMcpSessionContext(ctx).workingDir || undefined,
         }),
       }),
     });
