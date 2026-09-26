@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import { parseModelRegistry } from "../modelAccessValidator.js";
 
 const registry = JSON.parse(
-  readFileSync(new URL("../../catalog/model-registry.json", import.meta.url), "utf8"),
+  readFileSync(
+    new URL("../../catalog/model-registry.json", import.meta.url),
+    "utf8",
+  ),
 ) as { models: { id: string; routes: { providerId: string }[] }[] };
 
 describe("XD 路由独立条目", () => {
@@ -13,7 +16,9 @@ describe("XD 路由独立条目", () => {
     // 与订阅共用条目会让订阅侧的显示调整连带改动 XD。
     const mixed = registry.models
       .filter((entry) => {
-        const providers = new Set(entry.routes.map((route) => route.providerId));
+        const providers = new Set(
+          entry.routes.map((route) => route.providerId),
+        );
         return providers.has("xd") && providers.size > 1;
       })
       .map((entry) => entry.id);
