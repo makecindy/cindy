@@ -46,9 +46,7 @@ export function GithubAccountCard({ onConnected }: { onConnected(): void }) {
       )}
       <div className="flex gap-2">
         <GithubConnectButton
-          visible={
-            state?.status === 'missing' || (state?.status === 'auth' && state.source !== 'token')
-          }
+          visible={state?.status === 'missing' || state?.status === 'auth'}
           onConnected={() => {
             void refresh();
             onConnected();

@@ -58,6 +58,21 @@ it('refreshes credential changes and ignores an older in-flight response', async
   expect(screen.getByText(prefix + 'token')).toBeTruthy();
 });
 
+it.each(['gh-cli', 'token'])(
+  'keeps login available after %s authentication fails',
+  async (source) => {
+    window.electronAPI = {
+      gitContext: {
+        githubConnection: async () => ({ status: 'auth', source }),
+        onGithubConnected: () => () => {},
+      },
+    } as any;
+    render(<GithubAccountCard onConnected={() => {}} />);
+    expect(await screen.findByText('connect')).toBeTruthy();
+    expect(screen.getByText(prefix + 'auth')).toBeTruthy();
+  },
+);
+
 it('does not misrepresent a network failure as a request to log in', async () => {
   window.electronAPI = {
     gitContext: {

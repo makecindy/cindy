@@ -222,52 +222,55 @@ describe('Ghost plugin detail sections', () => {
     );
     expect(verify).not.toHaveBeenCalled();
   });
-  it('connects GitHub and reloads the installed plugin settings after authorization', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    Object.assign(window.electronAPI, {
-      gitContext: {
-        githubConnection: async () => ({ status: 'missing' }),
-        onGithubConnected: () => () => {},
-        githubSetupStatus: async () => ({ phase: 'connected' }),
-        startGithubSetup: async () => ({ phase: 'connected' }),
-      },
-    });
-    const { unmount } = render(
-      <GhostPluginDetailView
-        ghost={
-          {
-            manifest: { id: 'cindy-github' },
-            enabled: true,
-            trust: { ...detail.trust, publisherName: 'Cindy Plugin Market' },
-          } as any
-        }
-        detail={{ ...detail, id: 'cindy-github', hasSettingsUi: true }}
-        panelStatus={null}
-        onBack={vi.fn()}
-        onToggle={vi.fn()}
-        onUse={vi.fn()}
-        onUpdate={vi.fn()}
-        onUpdateFromFile={vi.fn()}
-        onUninstall={vi.fn()}
-        toggleDisabled={false}
-      />,
-    );
-    const previousSettings = screen.getByTestId('ghost-settings-webview');
-    fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.stages.login.title'));
-    fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.connect'));
-    await waitFor(() =>
-      expect(screen.getByTestId('ghost-settings-webview')).not.toBe(previousSettings),
-    );
-    expect(screen.getByText('ccAgent.gitContext.pr.setup.done')).toBeTruthy();
-    unmount();
-  });
+  it.each([{ status: 'missing' }, { status: 'auth', source: 'token' }])(
+    'connects GitHub from $status and reloads the installed plugin settings after authorization',
+    async (connection) => {
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      Object.assign(window.electronAPI, {
+        gitContext: {
+          githubConnection: async () => connection,
+          onGithubConnected: () => () => {},
+          githubSetupStatus: async () => ({ phase: 'connected' }),
+          startGithubSetup: async () => ({ phase: 'connected' }),
+        },
+      });
+      const { unmount } = render(
+        <GhostPluginDetailView
+          ghost={
+            {
+              manifest: { id: 'cindy-github' },
+              enabled: true,
+              trust: { ...detail.trust, publisherName: 'Cindy Plugin Market' },
+            } as any
+          }
+          detail={{ ...detail, id: 'cindy-github', hasSettingsUi: true }}
+          panelStatus={null}
+          onBack={vi.fn()}
+          onToggle={vi.fn()}
+          onUse={vi.fn()}
+          onUpdate={vi.fn()}
+          onUpdateFromFile={vi.fn()}
+          onUninstall={vi.fn()}
+          toggleDisabled={false}
+        />,
+      );
+      const previousSettings = screen.getByTestId('ghost-settings-webview');
+      fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.stages.login.title'));
+      fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.connect'));
+      await waitFor(() =>
+        expect(screen.getByTestId('ghost-settings-webview')).not.toBe(previousSettings),
+      );
+      expect(screen.getByText('ccAgent.gitContext.pr.setup.done')).toBeTruthy();
+      unmount();
+    },
+  );
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(
       'ResizeObserver',
