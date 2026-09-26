@@ -573,7 +573,7 @@ export function AgentTaskCard({
                   sessionId={sessionId}
                   command={bashCommand}
                   startedAtMs={startedAtMs}
-                  outputFile={update?.outputFile}
+                  taskId={update?.taskId}
                   running={status === 'running'}
                   expanded={expanded}
                 />

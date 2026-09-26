@@ -407,7 +407,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端降级为无数据(回退 workflow 级
   // 卡片)。不进 INVOKE_TIMEOUT_OVERRIDES_MS:读小 JSON,默认 30s 足够。
   'maker:get-workflow-progress',
-  // 后台命令输出尾部(只读):handler 只读被控端 SDK 的 `.output` 文件末尾一段,
+  // 后台命令输出尾部(只读):入参 (sessionId, taskId),handler 按被控端活跃会话的
+  // 后台任务登记解析 SDK `.output` 路径并只读末尾一段,控制端无法指定路径;
   // 无 event.sender 依赖、无副作用;输出文件真相在被控端(控制端本机读必落空)。
   // 老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端不显示「最近输出」。
   'maker:background-task:output-tail',

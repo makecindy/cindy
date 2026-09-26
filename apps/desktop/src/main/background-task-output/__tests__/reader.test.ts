@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { readBackgroundTaskOutputTail } from '../reader';
+import { readBackgroundTaskOutputTail, readSessionBackgroundTaskOutputTail } from '../reader';
 
 let dir: string;
 
@@ -37,6 +37,32 @@ describe('readBackgroundTaskOutputTail', () => {
     expect(result).toMatchObject({ ok: true, text: 'bbbb\ncccc\n', size: 21, truncated: true });
   });
 
+  it('keeps the tail of a single long line instead of blanking it', async () => {
+    const file = path.join(dir, 'b4.output');
+    await fs.writeFile(file, `${'x'.repeat(40)}中文进度 99%`);
+    const result = await readBackgroundTaskOutputTail(file, 16);
+    expect(result).toMatchObject({ ok: true, truncated: true });
+    if (result.ok) {
+      expect(result.text.endsWith('中文进度 99%')).toBe(true);
+      expect(result.text).not.toContain('\uFFFD');
+    }
+  });
+
+  it('keeps the partial line when the only newline is the trailing one', async () => {
+    const file = path.join(dir, 'b5.output');
+    await fs.writeFile(file, `${'y'.repeat(40)}\n`);
+    const result = await readBackgroundTaskOutputTail(file, 10);
+    expect(result).toMatchObject({ ok: true, text: 'yyyyyyyyy\n', truncated: true });
+  });
+
+  it('refuses to follow symlinks, even when the link itself looks like an output file', async () => {
+    const target = path.join(dir, 'secret.txt');
+    await fs.writeFile(target, 'secret');
+    const link = path.join(dir, 'b6.output');
+    await fs.symlink(target, link);
+    expect(await readBackgroundTaskOutputTail(link)).toEqual({ ok: false, reason: 'forbidden' });
+  });
+
   it('returns an empty tail for an empty file', async () => {
     const file = path.join(dir, 'b3.output');
     await fs.writeFile(file, '');
@@ -61,6 +87,50 @@ describe('readBackgroundTaskOutputTail', () => {
     expect(await readBackgroundTaskOutputTail(path.join(dir, 'gone.output'))).toEqual({
       ok: false,
       reason: 'not_found',
+    });
+  });
+});
+
+describe('readSessionBackgroundTaskOutputTail', () => {
+  it('reads only the output file registered for that running task', async () => {
+    const own = path.join(dir, 'own.output');
+    const other = path.join(dir, 'other.output');
+    await fs.writeFile(own, 'mine\n');
+    await fs.writeFile(other, 'someone else\n');
+    const source = {
+      listBackgroundTasks: () => [
+        { taskId: 'own', outputFile: own },
+        { taskId: 'other-task', outputFile: other },
+      ],
+    };
+    expect(await readSessionBackgroundTaskOutputTail(source, 'own')).toMatchObject({
+      ok: true,
+      text: 'mine\n',
+    });
+    // 传路径而不是任务 id 得不到任何文件。
+    expect(await readSessionBackgroundTaskOutputTail(source, other)).toEqual({
+      ok: false,
+      reason: 'unavailable',
+    });
+  });
+
+  it('is unavailable for unknown or finished tasks and sessions without a registry', async () => {
+    const source = { listBackgroundTasks: () => [{ taskId: 'no-file' }] };
+    expect(await readSessionBackgroundTaskOutputTail(source, 'gone')).toEqual({
+      ok: false,
+      reason: 'unavailable',
+    });
+    expect(await readSessionBackgroundTaskOutputTail(source, 'no-file')).toEqual({
+      ok: false,
+      reason: 'unavailable',
+    });
+    expect(await readSessionBackgroundTaskOutputTail(undefined, 'own')).toEqual({
+      ok: false,
+      reason: 'unavailable',
+    });
+    expect(await readSessionBackgroundTaskOutputTail(source, 42)).toEqual({
+      ok: false,
+      reason: 'forbidden',
     });
   });
 });

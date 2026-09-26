@@ -77,23 +77,23 @@ export function tailOutputLines(text: string, maxLines = OUTPUT_TAIL_MAX_LINES):
 }
 
 /**
- * 读取后台命令输出尾部。enabled 时立即读一次;running 期间按固定间隔轮询,
- * 终态只读一次。关闭(收起 / 卸载)即停止,不在后台空转。
+ * 轮询运行中后台命令的输出尾部:enabled 时立即读一次并按固定间隔刷新,关闭(收起 /
+ * 任务终态 / 卸载)即停止,不在后台空转。输出路径由主进程按 (会话, 任务) 解析。
  */
 export function useBackgroundTaskOutputTail(
   sessionId: string | undefined,
-  outputFile: string | undefined,
-  { enabled, running }: { enabled: boolean; running: boolean },
+  taskId: string | undefined,
+  enabled: boolean,
 ): BackgroundTaskOutputTailResult | undefined {
   const [result, setResult] = useState<BackgroundTaskOutputTailResult | undefined>(undefined);
   useEffect(() => {
-    if (!enabled || !sessionId || !outputFile) return;
+    if (!enabled || !sessionId || !taskId) return;
     let disposed = false;
     let inFlight = false;
     const read = () => {
       if (inFlight) return;
       inFlight = true;
-      void readBackgroundTaskOutputTailFor(sessionId, outputFile)
+      void readBackgroundTaskOutputTailFor(sessionId, taskId)
         .then((next) => {
           if (!disposed) setResult(next);
         })
@@ -102,17 +102,12 @@ export function useBackgroundTaskOutputTail(
         });
     };
     read();
-    if (!running) {
-      return () => {
-        disposed = true;
-      };
-    }
     const id = setInterval(read, OUTPUT_TAIL_POLL_MS);
     return () => {
       disposed = true;
       clearInterval(id);
     };
-  }, [enabled, running, sessionId, outputFile]);
+  }, [enabled, sessionId, taskId]);
   return result;
 }
 
@@ -120,7 +115,7 @@ interface BackgroundCommandDetailsProps {
   sessionId?: string;
   command?: string;
   startedAtMs?: number;
-  outputFile?: string;
+  taskId?: string;
   running: boolean;
   /** 展开区可见时才读取输出,收起即停止轮询。 */
   expanded: boolean;
@@ -128,22 +123,21 @@ interface BackgroundCommandDetailsProps {
 
 /**
  * 后台命令卡展开区:实际命令、开始时间与输出文件末尾。运行中持续刷新最近输出和
- * 「更新于 N 前」,让用户判断命令是否仍在推进,而不是只看一个转圈图标。
+ * 「更新于 N 前」,让用户判断命令是否仍在推进,而不是只看一个转圈图标。任务结束后
+ * 不再显示最近输出(结果由卡片摘要呈现)。
  */
 export function BackgroundCommandDetails({
   sessionId,
   command,
   startedAtMs,
-  outputFile,
+  taskId,
   running,
   expanded,
 }: BackgroundCommandDetailsProps) {
   const { t } = useTranslation();
-  const tail = useBackgroundTaskOutputTail(sessionId, outputFile, {
-    enabled: expanded,
-    running,
-  });
-  const now = useNowTicker(expanded && running);
+  const live = expanded && running;
+  const tail = useBackgroundTaskOutputTail(sessionId, taskId, live);
+  const now = useNowTicker(live);
   const lines = tail?.ok ? tailOutputLines(tail.text) : [];
   const startedAtLabel =
     startedAtMs !== undefined
@@ -166,13 +160,13 @@ export function BackgroundCommandDetails({
           {t('chat.agentTask.startedAt', { time: startedAtLabel })}
         </p>
       )}
-      {tail?.ok && (
+      {running && tail?.ok && (
         <div data-background-command-output="true">
           <p className="mb-0.5 text-12 leading-4 text-[var(--text-tertiary)]">
             {lines.length === 0
               ? t('chat.agentTask.noOutputYet')
               : t('chat.agentTask.recentOutput', {
-                  time: formatTaskElapsed(Math.max(0, (running ? now : Date.now()) - tail.mtimeMs)),
+                  time: formatTaskElapsed(Math.max(0, now - tail.mtimeMs)),
                 })}
           </p>
           {lines.length > 0 && (

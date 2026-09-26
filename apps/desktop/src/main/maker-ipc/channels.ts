@@ -118,8 +118,9 @@ export const MAKER_INVOKE = {
   GET_WORKFLOW_PROGRESS: 'maker:get-workflow-progress',
   /**
    * 读取后台命令(local_bash 任务)输出文件的末尾一段 + mtime,供任务卡展开区显示
-   * 「最近输出」,让用户确认任务仍在推进。只读;入参 (sessionId, outputFile)。
-   * outputFile 必须是 SDK 后台任务的 `.output` 文件;SSH 远程工作区会话返回 unavailable。
+   * 「最近输出」,让用户确认任务仍在推进。只读;入参 (sessionId, taskId),输出路径由主进程
+   * 从该会话仍在运行的后台任务登记中取,调用方不能传路径。任务已终态 / SSH 远程工作区
+   * 会话返回 unavailable。
    */
   READ_BACKGROUND_TASK_OUTPUT_TAIL: 'maker:background-task:output-tail',
   GET_CAPABILITIES: 'maker:get-capabilities',

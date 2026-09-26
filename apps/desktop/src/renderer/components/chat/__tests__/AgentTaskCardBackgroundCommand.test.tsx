@@ -133,7 +133,8 @@ describe('AgentTaskCard background command', () => {
     const output = container.querySelector('[data-background-command-output="true"]');
     expect(output?.textContent).toContain('chat.agentTask.recentOutput:{"time":"3s"}');
     expect(output?.querySelector('pre')?.textContent).toBe('✓ suite a\nprogress 90%');
-    expect(readTailMock).toHaveBeenCalledWith('s-1', '/private/tmp/claude-501/x/tasks/b-1.output');
+    // 只按 (会话, 任务) 请求,不把输出路径交给主进程。
+    expect(readTailMock).toHaveBeenCalledWith('s-1', 'b-1');
     expect(readTailMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -153,7 +154,7 @@ describe('AgentTaskCard background command', () => {
     expect(readTailMock).not.toHaveBeenCalled();
   });
 
-  it('shows the total duration once finished and reads the output only once', async () => {
+  it('shows the total duration once finished and stops reading the output', async () => {
     const { container } = render(
       <AgentTaskCard
         sessionId="s-1"
@@ -172,7 +173,9 @@ describe('AgentTaskCard background command', () => {
       vi.advanceTimersByTime(10_000);
       await Promise.resolve();
     });
-    expect(readTailMock).toHaveBeenCalledTimes(1);
+    expect(readTailMock).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-background-command-output="true"]')).toBeNull();
+    expect(container.textContent).toContain('pnpm test:unit');
   });
 
   it('hides the output block when the file is not readable on this machine', async () => {

@@ -5272,10 +5272,10 @@ interface ElectronAPI {
       sessionId: string,
       taskId: string,
     ) => Promise<import('../shared/workflow-progress').WorkflowProgress | null>;
-    /** 后台命令输出文件末尾一段(只读);任务卡展开区的「最近输出」。 */
+    /** 运行中后台命令的输出文件末尾一段(只读);路径由主进程按任务登记解析。 */
     readBackgroundTaskOutputTail: (
       sessionId: string,
-      outputFile: string,
+      taskId: string,
     ) => Promise<import('../shared/backgroundTaskOutput').BackgroundTaskOutputTailResult>;
 
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
