@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock('electron', () => ({ net: { fetch: mocks.fetch } }));
 import { executeStreaming } from '../streaming';
 import { writeMeta } from '../resume';
+import { withRetry } from '../retry';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -66,22 +67,80 @@ it('validates each redirect and never sends credentials', async () =>
       expect(request).toMatchObject({ credentials: 'omit', redirect: 'manual' });
   }));
 
-it('rejects a forbidden redirect before fetching it', async () =>
+it('rejects a forbidden redirect before fetching it without retrying the original URL', async () =>
   fixture(async (_, opts) => {
     mocks.fetch
       .mockReset()
       .mockResolvedValue(
         new Response(null, { status: 302, headers: { location: 'http://127.0.0.1/private' } }),
       );
+    const onRetry = vi.fn();
     await expect(
-      execute({
-        ...opts,
-        validateUrl: (u: string) => {
-          if (u !== opts.url) throw Error('denied');
-        },
-      }),
-    ).rejects.toThrow();
+      withRetry(
+        () =>
+          execute({
+            ...opts,
+            validateUrl: (u: string) => {
+              if (u !== opts.url) throw Error('denied');
+            },
+          }),
+        { logger: {}, onRetry, config: { baseDelayMs: 0, maxDelayMs: 0 } },
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_ARG' });
     expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
+  }));
+
+it('does not retry malformed redirect targets or a rejected initial URL', async () =>
+  fixture(async (_, opts) => {
+    const onRetry = vi.fn();
+    mocks.fetch
+      .mockReset()
+      .mockResolvedValue(
+        new Response(null, { status: 302, headers: { location: 'https://[invalid' } }),
+      );
+    await expect(
+      withRetry(() => execute(opts), {
+        logger: {},
+        onRetry,
+        config: { baseDelayMs: 0, maxDelayMs: 0 },
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_ARG' });
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
+    mocks.fetch.mockClear();
+    await expect(
+      withRetry(
+        () =>
+          execute({
+            ...opts,
+            validateUrl: () => {
+              throw Error('denied');
+            },
+          }),
+        { logger: {}, onRetry },
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_ARG' });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
+  }));
+
+it('still retries a transient network failure', async () =>
+  fixture(async (_, opts) => {
+    const onRetry = vi.fn();
+    mocks.fetch
+      .mockReset()
+      .mockRejectedValueOnce(new Error('connection reset'))
+      .mockResolvedValueOnce(new Response('abcdef'));
+    await expect(
+      withRetry(() => execute(opts), {
+        logger: {},
+        onRetry,
+        config: { baseDelayMs: 0, maxDelayMs: 0 },
+      }),
+    ).resolves.toMatchObject({ size: 6 });
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledTimes(1);
   }));
 
 it('cleans both sidecars on oversized and short bodies', async () =>

@@ -56,7 +56,12 @@ export async function executeStreaming(ctx: TransportContext): Promise<Transport
     let response: Response;
     for (let hop = 0; ; hop++) {
       if (controller.signal.aborted) throw new DownloadError('ABORTED', 'Download cancelled');
-      opts.validateUrl?.(url);
+      try {
+        opts.validateUrl?.(url);
+      } catch {
+        // A caller policy refusal cannot be repaired by retrying the same URL.
+        throw new DownloadError('INVALID_ARG', 'Download URL is not allowed');
+      }
       arm(opts.timeout?.connectMs ?? 10_000);
       response = await net.fetch(url, {
         redirect: 'manual',
@@ -77,7 +82,11 @@ export async function executeStreaming(ctx: TransportContext): Promise<Transport
       await response.body?.cancel();
       const location = response.headers.get('location');
       if (!location || hop >= 9) throw new DownloadError('INVALID_ARG', 'Invalid redirect');
-      url = new URL(location, url).href;
+      try {
+        url = new URL(location, url).href;
+      } catch {
+        throw new DownloadError('INVALID_ARG', 'Invalid redirect URL');
+      }
     }
     if (!response.ok || !response.body) {
       await response.body?.cancel();

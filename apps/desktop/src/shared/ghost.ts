@@ -7935,6 +7935,7 @@ export type GhostMessageHookData = { sessionId: string; text: string; model?: st
  * GhostPipeEventVerdict,不回视为放行。
  */
 export type GhostPipeEventPush =
+  | GhostPipeDownloadProgress
   | {
       type: 'event';
       name: GhostDidEventName;
