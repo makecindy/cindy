@@ -8,8 +8,9 @@
 客户端离线 Registry revision 更新为 `2026-09-26T12:00:00.000Z`。GPT 订阅默认只显示
 GPT-6 Sol / Luna / Astra，GPT-5.6 Sol / Terra / Luna 标记 `defaultEnabled: false`；
 Claude 订阅默认显示各系列最新版 Opus 5.5、Fable 5.1、Sonnet 5、Haiku 4.5、Mythos 5，
-Opus 5、Fable 5、Opus 4.8 标记不默认显示。Opus 5 与 Fable 5 的 XD 路由拆为
-`xd/claude-opus-5`、`xd/claude-fable-5` 独立条目且不标记，XD 默认显示保持不变。
+Opus 5、Fable 5、Opus 4.8 标记不默认显示。所有与订阅或其他供应商共用条目的 XD 路由
+（Claude 9 个、DeepSeek V4 Pro/Flash、GPT-5.4 Nano，共 13 个）拆为独立 `xd/*` 条目，
+沿用改动前的显示设置；对比 50 条 XD 路由的解析资料，拆分前后无差异。
 用户已有显示开关不变。Server 正本需同步同一改动后才会下发。
 
 ## GPT-6 Sol / Luna 与 Claude Opus 5.5（2026-09-23）

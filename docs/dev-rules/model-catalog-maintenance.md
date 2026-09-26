@@ -99,9 +99,10 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 - 保留的是按状态或引擎的规则，不针对具体型号：`deprecated`、`requires_payment` 默认关闭；
   跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与自定义连接的兼容引擎默认关闭，
   Registry `perAgent` 可显式打开。
-- **条目级 `defaultEnabled` 同时作用于同条目的 XD 路由**：服务端生成 Gateway `/models` 时
-  读取条目元数据。订阅与 XD 需要不同默认时，把 XD 路由拆成独立的 `xd/*` 条目
-  （如 `xd/claude-opus-5`、`xd/gpt-5.6-terra`），再只给订阅条目标记。
+- **XD 路由一律使用独立的 `xd/*` 条目**，不与订阅或其他供应商共用条目：服务端生成
+  Gateway `/models` 时读取 XD 路由所在条目的名称、排序与 `defaultEnabled`，共用会让订阅侧
+  调整连带改动 XD。型号规格经 `modelRef` 继承同一公共型号，不重复维护。
+  `xdRegistryEntries.test.ts` 校验离线 Registry 不出现混用条目。
 
 排查须同时检查上游值、活动目录值和用户 override。
 
