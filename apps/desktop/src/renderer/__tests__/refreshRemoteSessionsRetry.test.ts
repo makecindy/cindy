@@ -1035,11 +1035,15 @@ describe('refreshRemoteDeviceSessions retry', () => {
 });
 
 describe('queued refresh cancellation', () => {
+  // Renderer-local coverage: one controller, two target devices. This is not
+  // the shared-host topology. Transport isolation with two controllers sharing
+  // one host (including a silent/non-ACKing controller) is covered separately
+  // in packages/device-link/src/__tests__/client.test.ts.
   it.each(['disconnect', 'disconnect-all', 'remove', 'clear'] as const)(
-    'does not revive a queued refresh after %s; another peer still works',
+    'does not revive a queued refresh after %s; another target in the same controller still works',
     async (action) => {
       const device = did();
-      const healthy = did();
+      const otherTarget = did();
       remoteProjectsStore.setDeviceSessions(device, 'Remote', [session('cached')]);
       const pending = deferred<Session[]>();
       invoke.mockReturnValueOnce(pending.promise).mockResolvedValue([]);
@@ -1049,12 +1053,12 @@ describe('queued refresh cancellation', () => {
       if (action === 'disconnect-all') remoteProjectsStore.markAllDisconnected();
       if (action === 'remove') remoteProjectsStore.removeDevice(device);
       if (action === 'clear') remoteProjectsStore.clear();
-      await expect(refreshRemoteDeviceSessions(healthy)).resolves.toBe('ok');
+      await expect(refreshRemoteDeviceSessions(otherTarget)).resolves.toBe('ok');
       pending.resolve([session('stale')]);
       await expect(Promise.all([first, queued])).resolves.toEqual(['superseded', 'superseded']);
       expect(invoke.mock.calls.filter(([peer]) => peer === device)).toHaveLength(1);
       expect(remoteProjectsStore.getDeviceIds()).not.toContain(device);
-      expect(remoteProjectsStore.getDeviceIds()).toContain(healthy);
+      expect(remoteProjectsStore.getDeviceIds()).toContain(otherTarget);
     },
   );
 
