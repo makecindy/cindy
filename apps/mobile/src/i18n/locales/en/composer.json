@@ -86,6 +86,7 @@
     "sessionNotConnected": "The speech recognition session is not connected yet.",
     "loginRequired": "Sign in to {{appName}} before using voice input.",
     "serviceUnavailable": "The {{appName}} voice service is not configured for this region.",
+    "rateLimited": "Too many voice requests. Wait a moment, then try again.",
     "realtimeUnsupported": "Mobile realtime voice does not support {{detail}} ASR yet.",
     "realtimeAuthUnsupported": "Mobile realtime voice does not support {{auth}} ASR authentication yet.",
     "realtimeProtocolUnsupported": "Mobile realtime voice does not support the {{detail}} ASR protocol yet.",

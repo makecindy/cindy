@@ -86,6 +86,7 @@
     "sessionNotConnected": "音声認識セッションがまだ接続されていません。",
     "loginRequired": "音声入力を使用する前に {{appName}} にログインしてください。",
     "serviceUnavailable": "現在の地域では {{appName}} 音声サービスが設定されていません。",
+    "rateLimited": "音声リクエストが多すぎます。しばらく待ってから再試行してください。",
     "realtimeUnsupported": "モバイル版のリアルタイム音声は {{detail}} ASR にまだ対応していません。",
     "realtimeAuthUnsupported": "モバイル版のリアルタイム音声は {{auth}} ASR 認証にまだ対応していません。",
     "realtimeProtocolUnsupported": "モバイル版のリアルタイム音声は {{detail}} ASR プロトコルにまだ対応していません。",

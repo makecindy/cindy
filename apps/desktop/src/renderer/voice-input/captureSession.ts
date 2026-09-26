@@ -9,7 +9,7 @@ import {
   type PcmChunk,
 } from './WebMicAudioEngine';
 import { createVoiceInputAudioProfile } from './audioProfile';
-import { hasPcmSound } from './pcmActivity';
+import { hasPcmSound } from '@cindy/voice-input-core';
 import type { VoiceInputStartupTimeline } from './startupTimeline';
 
 const log = createLogger('voice-input-capture');

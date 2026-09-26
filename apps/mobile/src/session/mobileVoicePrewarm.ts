@@ -3,6 +3,7 @@ import type { ApiFetchOptions } from '@/api/client';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { createMobileAsrProvider } from '@/session/mobileRealtimeAsrProvider';
 import { prewarmMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
+import { isMobileVoiceRateLimited } from '@/session/mobileVoiceInput';
 import {
   CINDY_MANAGED_REFINER_PROVIDER,
   createMobileCindyVoiceCredential,
@@ -172,12 +173,17 @@ function withPrewarmedStart(provider: AsrProvider, startPromise: Promise<void>):
         // sentinel above: the connect promise resolved, but the socket died
         // before the run attached — reconnect instead of handing over a dead
         // transport.
+        // An account rate limit is not transient: a second session request hits
+        // the same limit and only delays the error, so surface it unchanged.
         return startPromise.then(
           () => {
             if (transportDroppedWhileParked) return provider.start();
             return undefined;
           },
-          () => provider.start(),
+          (error: unknown) => {
+            if (isMobileVoiceRateLimited(error)) throw error;
+            return provider.start();
+          },
         );
       }
       return provider.start();

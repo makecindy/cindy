@@ -9,3 +9,4 @@ export * from './dictionaryLearningPolicy';
 export * from './dictionary-sync';
 export * from './streamingJson';
 export * from './refinementContext';
+export * from './pcmActivity';
