@@ -167,6 +167,28 @@ function botUserContextSource(config: Record<string, unknown>): string {
   return typeof config.userContextSource === 'string' ? config.userContextSource : '';
 }
 
+/**
+ * Seed a Bot Home that was never created (profiles from before the folder existed)
+ * so any save leaves editable SOUL.md / USER.md. Idempotent: an existing SOUL.md
+ * means the Home exists and nothing is touched.
+ */
+async function ensureBotProfileFolderSeeded(
+  botId: string,
+  identitySource: string,
+  config: Record<string, unknown>,
+  userDataDir = ownerScopedUserDataPath(),
+): Promise<void> {
+  try {
+    await migrateBotProfileFolder(userDataDir, botId, {
+      identitySource,
+      userContextSource: botUserContextSource(config),
+      config: Object.fromEntries(Object.entries(config).filter(([key]) => key !== 'userContextSource')),
+    }, app.getPath('userData'));
+  } catch (cause) {
+    log.warn('seed bot profile folder failed', { botId, error: String(cause) });
+  }
+}
+
 async function syncBotProfileFolder(
   botId: string,
   patch: { identitySource?: string; userContextSource?: string },
@@ -1361,6 +1383,8 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     ...(nextIdentitySource !== (version?.identitySource ?? '') ? { identitySource: nextIdentitySource } : {}),
     ...(nextUserContextSource !== botUserContextSource(previous) ? { userContextSource: nextUserContextSource } : {}),
   };
+  await ensureBotProfileFolderSeeded(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
+  owner.assertCurrent();
   if (Object.keys(folderPatch).length > 0) {
     await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
     owner.assertCurrent();

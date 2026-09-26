@@ -899,10 +899,24 @@ describe('Bot canonical Session lifecycle', () => {
     expect(loaded.identitySource).toContain('Identity written again');
   });
 
+  it('seeds a never-created Bot Home on an unrelated save without touching an existing one', async () => {
+    const created = await invoke('local-db:bots:create', {
+      id: 'legacy-home', name: 'Legacy Home', identitySource: 'Stored identity',
+      userContextSource: 'Stored user context',
+    });
+    const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', created.id);
+    // A profile from before the Home existed: no editable files yet.
+    rmSync(join(home, 'SOUL.md'));
+    rmSync(join(home, 'memories', 'USER.md'));
+    await invoke('local-db:bots:update', { id: created.id, pinned: true });
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8').trim()).toBe('Stored identity');
+    expect(readFileSync(join(home, 'memories', 'USER.md'), 'utf8').trim()).toBe('Stored user context');
+  });
+
   it('keeps hand-edited SOUL.md and USER.md through unrelated profile saves', async () => {
     const created = await invoke('local-db:bots:create', {
       id: 'hand-edited', name: 'Hand Edited', identitySource: 'Original identity',
-      capabilities: { userContextSource: 'Original user context' },
+      userContextSource: 'Original user context',
     });
     const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', created.id);
     writeFileSync(join(home, 'SOUL.md'), 'Identity written in an editor\n');
