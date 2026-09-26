@@ -7,6 +7,7 @@ import {
 export const MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION = 1 as const;
 export const MODEL_ACCESS_INVOCATION_GUIDE_PATH = '/api/model-access/invocation-guide' as const;
 export const MODEL_ACCESS_INVOCATION_GUIDES_PATH = '/api/model-access/invocation-guides' as const;
+export const CLIENT_PROVIDER_VIDEO_GUIDE_ID = 'cindy-provider-video-v1';
 
 export type MediaResultKind = 'image' | 'video' | 'audio';
 export type MediaRequestBodyEncoding = 'json' | 'multipart';
@@ -64,10 +65,18 @@ export interface MediaAsyncResponseGuide {
   poll: MediaAsyncPollGuide;
 }
 
+/** 仅由 Host 构造和持久化的本地视频说明，不是 Server HTTP Guide。 */
+export interface MediaProviderVideoResponseGuide {
+  mode: 'provider-video';
+  executorId: string;
+  scope: { ownerScopeKey: string; credentialGeneration: number; credentialSessionId: string };
+  recommendedIntervalMs: number;
+}
+
 export interface MediaInvocationOperationGuide {
   capability: MediaCapability;
   request: MediaHttpRequestGuide;
-  response: MediaSyncResponseGuide | MediaAsyncResponseGuide;
+  response: MediaSyncResponseGuide | MediaAsyncResponseGuide | MediaProviderVideoResponseGuide;
   instructions: string;
   exampleBody: Record<string, unknown>;
   inputSchema: Record<string, unknown>;
@@ -430,8 +439,22 @@ function pollError(value: unknown, path: string): string | null {
   return mediaListError(value.media, `${path}.media`);
 }
 
-function responseError(value: unknown, path: string): string | null {
+function responseError(value: unknown, path: string, allowClientVideo = false): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
+  if (value.mode === 'provider-video' && allowClientVideo) {
+    const error = unknownField(value, ['mode', 'executorId', 'scope', 'recommendedIntervalMs'], path);
+    if (error) return error;
+    if (!boundedString(value.executorId, 128)) return `${path}.executorId is invalid`;
+    if (!isPlainObject(value.scope)) return `${path}.scope is invalid`;
+    const scopeError = unknownField(value.scope, ['ownerScopeKey', 'credentialGeneration', 'credentialSessionId'], `${path}.scope`);
+    if (scopeError) return scopeError;
+    if (!boundedString(value.scope.ownerScopeKey, 512)) return `${path}.scope.ownerScopeKey is invalid`;
+    if (!boundedString(value.scope.credentialSessionId, 128)) return `${path}.scope.credentialSessionId is invalid`;
+    if (!Number.isSafeInteger(value.scope.credentialGeneration) || Number(value.scope.credentialGeneration) < 0) {
+      return `${path}.scope.credentialGeneration is invalid`;
+    }
+    return positiveIntegerError(value.recommendedIntervalMs, `${path}.recommendedIntervalMs`, 1, 300_000);
+  }
   if (value.mode === 'sync') {
     const unknown = unknownField(value, ['mode', 'media'], path);
     return unknown ?? mediaListError(value.media, `${path}.media`);
@@ -445,7 +468,7 @@ function responseError(value: unknown, path: string): string | null {
   return `${path}.mode must be sync or async`;
 }
 
-function operationError(value: unknown, path: string, checkFields = true): string | null {
+function operationError(value: unknown, path: string, checkFields = true, allowClientVideo = false): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   let error = checkFields ? unknownField(value, OPERATION_FIELDS, path) : null;
   if (error) return error;
@@ -460,7 +483,7 @@ function operationError(value: unknown, path: string, checkFields = true): strin
   }
   error = requestError(value.request, `${path}.request`);
   if (error) return error;
-  error = responseError(value.response, `${path}.response`);
+  error = responseError(value.response, `${path}.response`, allowClientVideo);
   if (error) return error;
   if (!isPlainObject(value.exampleBody)) return `${path}.exampleBody must be an object`;
   if (!isPlainObject(value.inputSchema)) return `${path}.inputSchema must be an object`;
@@ -548,9 +571,15 @@ export function parsePreparedMediaInvocationGuide(
   value: unknown,
 ): ModelAccessParseResult<PreparedMediaInvocationGuide> {
   if (!isPlainObject(value)) return fail('guide must be an object');
+  const nativeVideo = isPlainObject(value.response) && value.response.mode === 'provider-video';
+  if (nativeVideo && (value.guideId !== CLIENT_PROVIDER_VIDEO_GUIDE_ID ||
+    !isPlainObject(value.connection) || value.connection.providerId === 'xd' ||
+    (value.capability !== 'video.generate' && value.capability !== 'video.image_to_video'))) {
+    return fail('client video Guide binding is invalid');
+  }
   const error =
     guideBaseError(value, PREPARED_GUIDE_FIELDS) ??
     resolvedBindingError(value, PREPARED_GUIDE_FIELDS, 'guide') ??
-    operationError(value, 'guide', false);
+    operationError(value, 'guide', false, nativeVideo);
   return error ? fail(error) : ok(value as unknown as PreparedMediaInvocationGuide);
 }

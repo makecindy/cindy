@@ -66,6 +66,7 @@ import {
   CallbackListener,
   runGrokOAuthLogin,
   getGrokOAuthCredentialGeneration,
+  getGrokOAuthVideoSessionId,
   logoutGrok,
   recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
@@ -117,6 +118,38 @@ afterEach(() => {
 });
 
 describe('recoverGrokAuthAfterRejection', () => {
+  it('keeps a legacy video nonce created while token refresh is already in flight', async () => {
+    seedCredentials();
+    let release!: () => void;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return tokenResponse(200, { access_token: 'fresh-token', refresh_token: 'fresh-refresh', expires_in: 3600 });
+    }));
+    const refresh = recoverGrokAuthAfterRejection(REJECTED_TOKEN);
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    const session = getGrokOAuthVideoSessionId();
+    release();
+    expect(await refresh).toBe('refreshed');
+    expect(getGrokOAuthVideoSessionId()).toBe(session);
+  });
+  it('durable video login nonce survives cache reset and token refresh, but not a new credential', async () => {
+    seedCredentials();
+    const session = getGrokOAuthVideoSessionId();
+    expect(session).toMatch(/^[0-9a-f]{48}$/);
+    const saved = JSON.parse(store.get(SECRET_ID)!);
+    expect(saved.access_token).toBe(REJECTED_TOKEN);
+    resetGrokOAuthMemoryCache();
+    expect(getGrokOAuthVideoSessionId()).toBe(session);
+    vi.stubGlobal('fetch', vi.fn(async () => tokenResponse(200, {
+      access_token: 'refreshed-access', refresh_token: 'refreshed-refresh', expires_in: 3600,
+    })));
+    expect(await recoverGrokAuthAfterRejection(REJECTED_TOKEN)).toBe('refreshed');
+    expect(getGrokOAuthVideoSessionId()).toBe(session);
+    logoutGrok();
+    expect(() => getGrokOAuthVideoSessionId()).toThrow();
+    bound = true; seedCredentials({ access_token: 'new-account' }); resetGrokOAuthMemoryCache();
+    expect(getGrokOAuthVideoSessionId()).not.toBe(session);
+  });
   it('does not report stale logout after credentials change during presentation persistence', async () => {
     seedCredentials({ refresh_token: undefined });
     retainPresentation.mockImplementationOnce(async () => {

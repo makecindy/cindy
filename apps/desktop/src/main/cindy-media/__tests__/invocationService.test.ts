@@ -1,5 +1,7 @@
 import fs from 'node:fs/promises';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { crc32 } from 'node:zlib';
+import sharp from 'sharp';
 import { SsrFBlockedError } from '@cindy/browser-control-runtime/ssrf-runtime';
 import type { MediaCapability } from '@cindy/model-providers';
 
@@ -16,6 +18,7 @@ interface MockTransitionInput {
   to: string;
   taskId?: string;
   responseJson?: string;
+  expectedSnapshot?: { taskId?: string; responseJson?: string };
 }
 
 const mocks = vi.hoisted(() => ({
@@ -26,6 +29,8 @@ const mocks = vi.hoisted(() => ({
   executableModels: vi.fn(),
   providerModel: vi.fn(),
   providerInvoke: vi.fn(),
+  providerVideo: vi.fn(),
+  log: vi.fn(),
   guide: vi.fn(),
   outboundFetch: vi.fn(),
   guardedOutboundFetch: vi.fn(),
@@ -114,6 +119,7 @@ vi.mock('../../model-access/mediaModels.js', () => ({
 vi.mock('../providerMediaRuntime.js', () => ({
   resolveProviderMediaModel: mocks.providerModel,
   invokeProviderMedia: mocks.providerInvoke,
+  resolveProviderVideo: mocks.providerVideo,
 }));
 vi.mock('../ingest.js', () => ({ ingestMedia: mocks.ingestMedia }));
 vi.mock('../blobStore.js', () => ({
@@ -129,7 +135,7 @@ vi.mock('../blobStore.js', () => ({
 vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: mocks.resolveLegacyImage }));
 vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: mocks.resolveLegacyVideo }));
 vi.mock('../../logger.js', () => ({
-  createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ warn: mocks.log, info: mocks.log, debug: mocks.log, error: mocks.log }),
 }));
 vi.mock('../../serverApiClient.js', () => ({
   ServerApiError: class ServerApiError extends Error {
@@ -170,16 +176,17 @@ vi.mock('../mediaInvocationStore.js', () => ({
   },
   getMediaInvocation: async (id: string, owner: string) => {
     const row = mocks.rows.get(id);
-    return row?.owner === owner ? row : null;
+    return row?.owner === owner ? JSON.parse(JSON.stringify(row)) : null;
   },
   transitionMediaInvocation: async (
-    { id, owner, from, to, taskId, responseJson }: MockTransitionInput,
+    { id, owner, from, to, taskId, responseJson, expectedSnapshot }: MockTransitionInput,
     db: unknown,
   ) => {
     mocks.transitionDbs.push(db);
     if (mocks.failTransitionTo === to) throw new Error(`transition to ${to} failed`);
     const row = mocks.rows.get(id);
     if (!row || row.owner !== owner || row.state !== from) return false;
+    if (expectedSnapshot && (row.taskId !== expectedSnapshot.taskId || row.responseJson !== expectedSnapshot.responseJson)) return false;
     row.state = to;
     row.updatedAt = Date.now();
     if (taskId) row.taskId = taskId;
@@ -189,6 +196,9 @@ vi.mock('../mediaInvocationStore.js', () => ({
 }));
 
 import { callCindyMedia as invokeMedia } from '../invocationService.js';
+import { createXaiVideoProvider } from '../../cindy-proxy-media/video/providers/xai.js';
+import { parsePreparedMediaInvocationGuide } from '../../../shared/mediaInvocation.js';
+import { VIDEO_IMAGE_MAX_BYTES } from '../providerVideoImage.js';
 
 // This harness supplies a real Host approval boundary. Individual cases replace
 // its decision; production never receives approval flags through tool arguments.
@@ -276,6 +286,8 @@ describe('Cindy Core media invocation state and security boundary', () => {
     });
     mocks.providerModel.mockReset();
     mocks.providerInvoke.mockReset();
+    mocks.providerVideo.mockReset();
+    mocks.log.mockClear();
     mocks.guide.mockReset();
     mocks.outboundFetch.mockReset();
     mocks.release.mockClear();
@@ -309,6 +321,387 @@ describe('Cindy Core media invocation state and security boundary', () => {
     });
     mocks.recover.mockClear();
     mocks.prune.mockClear();
+  });
+
+  describe('local subscription video bridge (offline)', () => {
+    const model = { id: 'xai/grok-imagine-video', name: 'Grok video', providerId: 'xai',
+      mode: 'video_generation' as const, modalities: { input: ['text', 'image'], output: ['video'] } };
+    let epoch: number;
+    let loginId: string;
+    let ownerEpoch: string;
+    let providerFetch: ReturnType<typeof vi.fn>;
+    let provider: ReturnType<typeof createXaiVideoProvider>;
+    let videoPng: Buffer;
+    let videoJpeg: Buffer;
+    beforeAll(async () => {
+      const pixels = { create: { width: 1280, height: 720, channels: 3 as const, background: '#b04469' } };
+      videoPng = await sharp(pixels).png().toBuffer();
+      videoJpeg = await sharp(pixels).jpeg().toBuffer();
+    });
+
+    beforeEach(() => {
+      epoch = 1; loginId = 'test-login-nonce'; ownerEpoch = 'owner:1';
+      providerFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ request_id: 'video-task-1' })));
+      provider = createXaiVideoProvider({
+        modelAliases: [model.id, 'xai/grok-imagine-video-1.5'],
+        hasOAuthLogin: () => true, getAccessToken: async () => 'mock-oauth-only',
+        getCredentialGeneration: () => epoch, getCredentialSessionId: () => loginId,
+        getOwnerScopeKey: () => ownerEpoch, isOwnerBoundaryPending: () => false,
+        fetchImplementation: providerFetch as typeof fetch,
+      });
+      mocks.models.mockResolvedValue([model]);
+      mocks.providerModel.mockReturnValue(model);
+      mocks.providerVideo.mockReturnValue(provider);
+      mocks.ingestMedia.mockResolvedValue({ url: `cindy-media://blobs/${'b'.repeat(64)}.mp4` });
+    });
+    const prepareVideo = async (capability: 'video.generate' | 'video.image_to_video' = 'video.generate', modelId = model.id) => {
+      const result = await callCindyMedia({ action: 'prepare', providerId: 'xai', modelId, capability });
+      expect(result).toMatchObject({ ok: true, provider_id: 'xai', capability });
+      const row = mocks.rows.get(result.invocation_id as string)!;
+      expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(row.guide))).ok).toBe(true);
+      expect(JSON.stringify(result)).not.toContain('mock-oauth');
+      expect(JSON.stringify(result)).not.toContain('test-login-nonce');
+      expect(mocks.guide).not.toHaveBeenCalled();
+      return result.invocation_id as string;
+    };
+    const request = (id: string, body: Record<string, unknown> = { prompt: 'dash' }) =>
+      callCindyMedia({ action: 'request', invocationId: id, body });
+    const poll = (id: string) => callCindyMedia({ action: 'poll', invocationId: id });
+    const succeed = () => {
+      providerFetch.mockImplementation(async () => new Response(JSON.stringify({ status: 'done', video: { url: 'https://cdn.x.ai/result.mp4' } })));
+      mocks.outboundFetch.mockImplementation(async () => new Response(MP4, { headers: { 'content-type': 'video/mp4' } }));
+    };
+
+    it('prepares native schema, submits once, polls and delivers managed video', async () => {
+      const id = await prepareVideo();
+      expect(await request(id)).toMatchObject({ ok: true, status: 'pending', task_id: 'video-task-1' });
+      expect(mocks.rows.get(id)?.responseJson).toBeUndefined();
+      expect(JSON.stringify(mocks.rows.get(id))).not.toContain('mock-oauth-only');
+      succeed();
+      expect(await poll(id)).toMatchObject({ ok: true, status: 'complete' });
+      expect(await request(id)).toMatchObject({ ok: true, status: 'complete' });
+      expect(providerFetch).toHaveBeenCalledTimes(2);
+      expect(mocks.providerInvoke).not.toHaveBeenCalled();
+      expect(mocks.ingestMedia).toHaveBeenCalledTimes(1);
+    });
+    it.each([{ duration: 99 }, { duration: null }, { audio: true }, { resolution: '4k' }, { fps: 60 }, { endpoint: 'https://evil.invalid' }])('rejects unsupported parameters before dispatch: %j', async (extra) => {
+      const id = await prepareVideo();
+      expect(await request(id, { prompt: 'dash', ...extra })).toMatchObject({ ok: false, errorCode: 'REQUEST_INVALID' });
+      expect(providerFetch).not.toHaveBeenCalled();
+    });
+    it('requires a supported reference count and resolves a managed image', async () => {
+      const id = await prepareVideo('video.image_to_video');
+      expect(await request(id)).toMatchObject({ ok: false });
+      expect(await request(id, { prompt: 'dash', image: ['a', 'b'] })).toMatchObject({ ok: false });
+      mocks.readBlob.mockResolvedValue({ buffer: videoPng, mimeType: 'image/png' });
+      expect(await request(id, { prompt: 'dash', image: `cindy-media://blobs/${'a'.repeat(64)}.png` })).toMatchObject({ status: 'pending' });
+      const body = JSON.parse(providerFetch.mock.calls[0][1].body);
+      expect(body.image.url).toMatch(/^data:image\/png/);
+      expect(body).not.toHaveProperty('aspect_ratio');
+    });
+
+    const dataUrl = (bytes: Buffer, mime = 'image/png') => `data:${mime};base64,${bytes.toString('base64')}`;
+    const imageBody = (image: string) => ({ prompt: 'dash', duration: 5, resolution: '720p', ratio: '16:9', fps: 24, image });
+    const assertInputNotRecorded = (image: string) => {
+      expect(JSON.stringify([...mocks.rows.values()]).includes(image)).toBe(false);
+      expect(JSON.stringify(mocks.log.mock.calls).includes(image)).toBe(false);
+    };
+    const submitRealImage = async (bytes: Buffer, mime: string) => {
+      const selected = { ...model, id: 'xai/grok-imagine-video-1.5' };
+      mocks.models.mockResolvedValue([selected]); mocks.providerModel.mockReturnValue(selected);
+      const id = await prepareVideo('video.image_to_video', selected.id);
+      const image = dataUrl(bytes, mime), submit = vi.spyOn(provider, 'submit');
+      expect(await request(id, imageBody(image))).toMatchObject({ status: 'pending' });
+      expect(submit.mock.calls.length).toBe(1);
+      const sent = JSON.parse(providerFetch.mock.calls[0][1].body);
+      // Compare booleans so a failing assertion never dumps image bytes/base64.
+      expect(sent.image.url === image).toBe(true);
+      expect(sent.model).toBe('grok-imagine-video-1.5');
+      assertInputNotRecorded(image);
+    };
+    it.each(['png', 'jpeg'])('accepts a fully decoded %s data URL through prepare → actual resolver → Provider', async (format) => {
+      await submitRealImage(format === 'png' ? videoPng : videoJpeg, `image/${format}`);
+    });
+    it('accepts a generated reference above 3 MiB without base64 parser stack growth', async () => {
+      const pixels = Buffer.alloc(1280 * 720 * 4);
+      let seed = 123456789;
+      for (let i = 0; i < pixels.length; i++) {
+        seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+        pixels[i] = seed & 255;
+      }
+      const bytes = await sharp(pixels, { raw: { width: 1280, height: 720, channels: 4 } }).png().toBuffer();
+      expect(bytes.length > 3 * 1024 * 1024).toBe(true);
+      await submitRealImage(bytes, 'image/png');
+    });
+
+    function mutatedPng(kind: string): Buffer {
+      const bytes = Buffer.from(videoPng);
+      if (kind === 'dimension' || kind === 'pixels') {
+        bytes.writeUInt32BE(kind === 'dimension' ? 8193 : 5000, 16);
+        bytes.writeUInt32BE(kind === 'dimension' ? 1 : 5000, 20);
+        bytes.writeUInt32BE(crc32(bytes.subarray(12, 29)), 29);
+      } else {
+        let offset = 8;
+        while (bytes.toString('ascii', offset + 4, offset + 8) !== 'IDAT') offset += bytes.readUInt32BE(offset) + 12;
+        bytes[offset + 8] ^= 0xff;
+        if (kind === 'compressedPixels') {
+          const end = offset + bytes.readUInt32BE(offset) + 12;
+          bytes.writeUInt32BE(crc32(bytes.subarray(offset + 4, end - 4)), end - 4);
+        }
+      }
+      return bytes;
+    }
+    function brokenJpegPixels(): Buffer {
+      let offset = 2;
+      while (videoJpeg[offset + 1] !== 0xda) offset += videoJpeg.readUInt16BE(offset + 2) + 2;
+      const scan = offset + videoJpeg.readUInt16BE(offset + 2) + 2;
+      return Buffer.concat([videoJpeg.subarray(0, scan + 1), Buffer.from([0xff, 0xd9])]);
+    }
+    it.each(['alphabet', 'padding', 'oversize', 'fakeMime', 'svg', 'headerOnly', 'pngTruncated', 'crc', 'compressedPixels', 'dimension', 'pixels', 'jpegTruncated', 'jpegPixels', 'http', 'file'])('rejects %s before submitting and retains prepared state', async (kind) => {
+      const values: Record<string, () => string> = {
+        alphabet: () => 'data:image/png;base64,AA$=', padding: () => dataUrl(videoPng) + '=',
+        oversize: () => 'data:image/png;base64,' + 'A'.repeat(Math.ceil(VIDEO_IMAGE_MAX_BYTES / 3) * 4 + 4),
+        fakeMime: () => dataUrl(videoPng, 'image/jpeg'), svg: () => dataUrl(Buffer.from('<svg/>'), 'image/svg+xml'),
+        headerOnly: () => dataUrl(PNG), pngTruncated: () => dataUrl(videoPng.subarray(0, -12)),
+        crc: () => dataUrl(mutatedPng('crc')), compressedPixels: () => dataUrl(mutatedPng('compressedPixels')),
+        dimension: () => dataUrl(mutatedPng('dimension')), pixels: () => dataUrl(mutatedPng('pixels')),
+        jpegTruncated: () => dataUrl(videoJpeg.subarray(0, -2), 'image/jpeg'), jpegPixels: () => dataUrl(brokenJpegPixels(), 'image/jpeg'),
+        http: () => 'https://example.invalid/private.png', file: () => 'C:\\private\\image.png',
+      };
+      const id = await prepareVideo('video.image_to_video'), image = values[kind](), submit = vi.spyOn(provider, 'submit');
+      const result = await request(id, imageBody(image));
+      expect(result).toMatchObject({ ok: false, errorCode: 'MEDIA_INPUT_INVALID' });
+      expect(submit.mock.calls.length).toBe(0); expect(providerFetch.mock.calls.length).toBe(0);
+      expect(mocks.outboundFetch.mock.calls.length).toBe(0); expect(mocks.rows.get(id)?.state).toBe('prepared');
+      expect(JSON.stringify(result).includes(image)).toBe(false); assertInputNotRecorded(image);
+    });
+    it('rejects damaged managed image bytes through the same full decoder', async () => {
+      const id = await prepareVideo('video.image_to_video'), submit = vi.spyOn(provider, 'submit');
+      mocks.readBlob.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+      expect(await request(id, imageBody(`cindy-media://blobs/${'a'.repeat(64)}.png`))).toMatchObject({ errorCode: 'MEDIA_INPUT_INVALID' });
+      expect(submit.mock.calls.length).toBe(0);
+    });
+    it('reports decoder saturation as retryable without consuming the third prepared invocation', async () => {
+      const ids = await Promise.all([prepareVideo('video.image_to_video'), prepareVideo('video.image_to_video'), prepareVideo('video.image_to_video')]);
+      providerFetch.mockImplementation(async () => new Response(JSON.stringify({ request_id: 'video-task-1' })));
+      const image = dataUrl(videoPng), submit = vi.spyOn(provider, 'submit');
+      const results = await Promise.all(ids.map((id) => request(id, imageBody(image))));
+      expect(results[2]).toMatchObject({ errorCode: 'MEDIA_INPUT_BUSY', retryable: true });
+      expect(mocks.rows.get(ids[2])?.state).toBe('prepared');
+      expect(submit.mock.calls.length).toBe(2);
+      assertInputNotRecorded(image);
+    });
+    it('keeps inline requests one-shot on reentry and unknown submission outcomes', async () => {
+      const id = await prepareVideo('video.image_to_video'), image = dataUrl(videoPng);
+      const submit = vi.spyOn(provider, 'submit');
+      expect(await request(id, imageBody(image))).toMatchObject({ status: 'pending' });
+      providerFetch.mockImplementation(async () => new Response(JSON.stringify({ status: 'pending' })));
+      expect(await request(id, imageBody(image))).toMatchObject({ status: 'pending' });
+      expect(submit.mock.calls.length).toBe(1); assertInputNotRecorded(image);
+      const second = await prepareVideo('video.image_to_video');
+      providerFetch.mockRejectedValue(new Error('unknown network outcome'));
+      expect(await request(second, imageBody(image))).toMatchObject({ errorCode: 'SUBMISSION_OUTCOME_UNKNOWN' });
+      expect(await request(second, imageBody(image))).toMatchObject({ errorCode: 'SUBMISSION_OUTCOME_UNKNOWN' });
+      expect(submit.mock.calls.length).toBe(2); assertInputNotRecorded(image);
+    });
+    it('concurrent request and repeated pending request never resubmit', async () => {
+      const id = await prepareVideo();
+      let release!: () => void;
+      providerFetch.mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => { release = resolve; });
+        return new Response(JSON.stringify({ request_id: 'video-task-1' }));
+      });
+      const first = request(id);
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      expect(await request(id)).toMatchObject({ ok: false });
+      release();
+      expect(await first).toMatchObject({ status: 'pending' });
+      providerFetch.mockResolvedValue(new Response(JSON.stringify({ status: 'pending' })));
+      expect(await request(id)).toMatchObject({ status: 'pending' });
+      expect(providerFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+    });
+    it('unknown submission and failed handle persistence never resubmit', async () => {
+      const id = await prepareVideo();
+      providerFetch.mockRejectedValue(new Error('socket lost after send'));
+      expect(await request(id)).toMatchObject({ errorCode: 'SUBMISSION_OUTCOME_UNKNOWN', outcomeKnown: false });
+      expect(await request(id)).toMatchObject({ errorCode: 'SUBMISSION_OUTCOME_UNKNOWN' });
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+      const second = await prepareVideo();
+      providerFetch.mockResolvedValue(new Response(JSON.stringify({ request_id: 'task-2' })));
+      mocks.failTransitionTo = 'pending';
+      expect(await request(second)).toMatchObject({ errorCode: 'SUBMISSION_OUTCOME_UNKNOWN' });
+      expect(await request(second)).toMatchObject({ errorCode: 'SUBMISSION_OUTCOME_UNKNOWN' });
+      expect(providerFetch).toHaveBeenCalledTimes(2);
+    });
+    it('restores serialized pending tasks with new process epochs but rejects a new login', async () => {
+      const id = await prepareVideo();
+      await request(id);
+      mocks.rows.set(id, JSON.parse(JSON.stringify(mocks.rows.get(id))));
+      epoch = 71; ownerEpoch = 'owner:44';
+      succeed();
+      expect(await poll(id)).toMatchObject({ status: 'complete' });
+      const second = await prepareVideo();
+      loginId = 'another-login';
+      expect(await request(second)).toMatchObject({ errorCode: 'ACCOUNT_CHANGED' });
+      expect(providerFetch).toHaveBeenCalledTimes(2);
+    });
+    it('blocks disabled new submission, but permits readonly polling of an existing task', async () => {
+      const id = await prepareVideo();
+      mocks.providerModel.mockReturnValue(null);
+      expect(await request(id)).toMatchObject({ errorCode: 'MODEL_NOT_AVAILABLE' });
+      expect(providerFetch).not.toHaveBeenCalled();
+      mocks.providerModel.mockReturnValue(model);
+      await request(id);
+      mocks.providerModel.mockReturnValue(null);
+      succeed();
+      expect(await poll(id)).toMatchObject({ status: 'complete' });
+    });
+    it('keeps successful response on ingest failure and retries delivery after restart', async () => {
+      const id = await prepareVideo(); await request(id); succeed();
+      mocks.ingestMedia.mockRejectedValue(new Error('disk unavailable'));
+      expect(await poll(id)).toMatchObject({ ok: false });
+      expect(mocks.rows.get(id)?.responseJson).toContain('videoUrl');
+      epoch = 51; ownerEpoch = 'owner:2';
+      mocks.ingestMedia.mockResolvedValue({ url: `cindy-media://blobs/${'b'.repeat(64)}.mp4` });
+      expect(await poll(id)).toMatchObject({ status: 'complete' });
+      expect(providerFetch).toHaveBeenCalledTimes(2);
+    });
+    it('transient poll failure leaves the handle available without new submission', async () => {
+      const id = await prepareVideo(); await request(id);
+      providerFetch.mockRejectedValue(new Error('network down'));
+      expect(await poll(id)).toMatchObject({ errorCode: 'POLL_UNAVAILABLE', retryable: true });
+      expect(mocks.rows.get(id)?.state).toBe('pending');
+      succeed(); expect(await poll(id)).toMatchObject({ status: 'complete' });
+      expect(providerFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+    });
+    it('recovers the saved successful video after transport failure, exposing only safe diagnostics', async () => {
+      const id = await prepareVideo(); await request(id); succeed();
+      const savedHandle = mocks.rows.get(id)?.taskId;
+      const error = new TypeError('private signed URL must not escape');
+      Object.assign(error, { cause: { code: 'ECONNRESET' } });
+      mocks.outboundFetch.mockRejectedValue(error);
+      const failed = await poll(id);
+      expect(failed).toMatchObject({ errorCode: 'MEDIA_DOWNLOAD_FAILED', retryable: true, result_retained: true,
+        delivery_error: { stage: 'connect', hostname: 'cdn.x.ai', networkCode: 'ECONNRESET' } });
+      expect(JSON.stringify(failed).includes('private signed URL')).toBe(false);
+      expect(mocks.rows.get(id)?.state).toBe('pending');
+      expect(mocks.rows.get(id)?.responseJson).toContain('videoUrl');
+      expect(mocks.rows.get(id)?.taskId).toBe(savedHandle);
+      expect(mocks.guardedOutboundFetch.mock.calls.every(([, init, , policy]) =>
+        !new Headers(init.headers).has('authorization') && policy.providerDownload === 'xai-video' && policy.allowPrivateNetwork === false)).toBe(true);
+      mocks.outboundFetch.mockImplementation(async () => new Response(MP4, { headers: { 'content-type': 'video/mp4' } }));
+      expect(await poll(id)).toMatchObject({ status: 'complete' });
+      expect(await poll(id)).toMatchObject({ status: 'complete' });
+      expect(mocks.ingestMedia.mock.calls.length).toBe(1);
+      expect(providerFetch.mock.calls.length).toBe(2); // submit + original status GET, delivery retries do neither.
+      expect(providerFetch.mock.calls.filter(([, init]) => init.method === 'POST').length).toBe(1);
+    });
+    it.each(['mime', 'size'])('retains the original result and refuses invalid video %s before ingest', async (kind) => {
+      const id = await prepareVideo(); await request(id); succeed();
+      mocks.outboundFetch.mockImplementation(async () => kind === 'mime'
+        ? new Response('<html>not a video</html>', { headers: { 'content-type': 'video/mp4' } })
+        : new Response(MP4, { headers: { 'content-type': 'video/mp4', 'content-length': String(256 * 1024 * 1024 + 1) } }));
+      expect(await poll(id)).toMatchObject({ retryable: false, result_retained: true, delivery_error: { stage: 'validation' } });
+      expect(mocks.ingestMedia.mock.calls.length).toBe(0);
+      expect(mocks.rows.get(id)?.responseJson).toContain('videoUrl');
+      expect(providerFetch.mock.calls.filter(([, init]) => init.method === 'POST').length).toBe(1);
+    });
+    it('distinguishes ingest failure from download failure and retries only the original delivery', async () => {
+      const id = await prepareVideo(); await request(id); succeed();
+      mocks.ingestMedia.mockRejectedValue(Object.assign(new Error('private storage path'), { code: 'EACCES' }));
+      expect(await poll(id)).toMatchObject({ errorCode: 'MEDIA_INGEST_FAILED', retryable: false,
+        delivery_error: { stage: 'ingest', networkCode: 'EACCES' }, result_retained: true });
+      mocks.ingestMedia.mockResolvedValue({ url: `cindy-media://blobs/${'b'.repeat(64)}.mp4` });
+      expect(await poll(id)).toMatchObject({ status: 'complete' });
+      const writes = mocks.ingestMedia.mock.calls.length;
+      await poll(id);
+      expect(mocks.ingestMedia.mock.calls.length).toBe(writes);
+      expect(providerFetch.mock.calls.length).toBe(2);
+    });
+    it('keeps a completed upstream response when the final invocation ledger update fails', async () => {
+      const id = await prepareVideo(); await request(id); succeed(); mocks.failTransitionTo = 'complete';
+      expect(await poll(id)).toMatchObject({ errorCode: 'MEDIA_LEDGER_PENDING', retryable: true, delivery_error: { stage: 'ledger' } });
+      expect(mocks.rows.get(id)?.responseJson).toContain('videoUrl');
+      mocks.failTransitionTo = null;
+      expect(await poll(id)).toMatchObject({ status: 'complete' });
+      expect(await poll(id)).toMatchObject({ status: 'complete' });
+      expect(providerFetch.mock.calls.filter(([, init]) => init.method === 'POST').length).toBe(1);
+    });
+    it.each(['complete', 'newer-response'])('does not replace a concurrent %s when finishing native delivery', async (race) => {
+      const id = await prepareVideo(); await request(id); succeed();
+      let newer = '';
+      mocks.ingestMedia.mockImplementationOnce(async () => {
+        const current = mocks.rows.get(id)!;
+        newer = race === 'complete' ? JSON.stringify({ xdt_video_urls: ['cindy-media://blobs/already.mp4'] })
+          : JSON.stringify({ ...JSON.parse(current.responseJson as string), meta: { revision: 'newer' } });
+        current.responseJson = newer;
+        current.state = race === 'complete' ? 'complete' : 'pending';
+        return { url: `cindy-media://blobs/${'b'.repeat(64)}.mp4` };
+      });
+      expect(await poll(id)).toMatchObject(race === 'complete'
+        ? { status: 'complete', xdt_video_urls: ['cindy-media://blobs/already.mp4'] }
+        : { errorCode: 'MEDIA_LEDGER_PENDING', retryable: true });
+      expect(mocks.rows.get(id)?.responseJson).toBe(newer);
+      expect(providerFetch.mock.calls.filter(([, init]) => init.method === 'POST').length).toBe(1);
+    });
+    it('does not relabel a saved successful generation as failed when the original task later expires', async () => {
+      const id = await prepareVideo(); await request(id); succeed();
+      mocks.outboundFetch.mockResolvedValue(new Response('', { status: 403 }));
+      await poll(id);
+      const saved = mocks.rows.get(id)?.responseJson;
+      providerFetch.mockResolvedValue(new Response(JSON.stringify({ status: 'expired' })));
+      expect(await poll(id)).toMatchObject({ errorCode: 'UPSTREAM_RESULT_UNAVAILABLE', retryable: false, result_retained: true });
+      expect(mocks.rows.get(id)?.responseJson).toBe(saved);
+      expect(mocks.rows.get(id)?.state).toBe('pending');
+      expect(providerFetch.mock.calls.filter(([, init]) => init.method === 'POST').length).toBe(1);
+    });
+    it('stops automatic retries after one original-task refresh still returns an HTTP rejection', async () => {
+      const id = await prepareVideo(); await request(id); succeed();
+      mocks.outboundFetch.mockImplementation(async () => new Response('', { status: 403 }));
+      expect(await poll(id)).toMatchObject({ retryable: true, delivery_error: { httpStatus: 403 } });
+      const saved = mocks.rows.get(id)?.responseJson;
+      expect(await poll(id)).toMatchObject({ retryable: false, url_refresh_attempted: true,
+        result_retained: true, delivery_error: { stage: 'http', httpStatus: 403 } });
+      expect(mocks.rows.get(id)?.responseJson).toBe(saved);
+      expect(providerFetch.mock.calls.filter(([, init]) => init.method === 'POST').length).toBe(1);
+    });
+    it('distinguishes definite rejection and true task failure from unknown outcomes', async () => {
+      const id = await prepareVideo();
+      providerFetch.mockResolvedValue(new Response('{}', { status: 422 }));
+      expect(await request(id)).toMatchObject({ errorCode: 'UPSTREAM_REJECTED', outcomeKnown: true });
+      expect(mocks.rows.get(id)?.state).toBe('failed');
+      const second = await prepareVideo();
+      providerFetch.mockResolvedValue(new Response(JSON.stringify({ request_id: 'task-2' })));
+      await request(second);
+      providerFetch.mockResolvedValue(new Response(JSON.stringify({ status: 'failed' })));
+      expect(await poll(second)).toMatchObject({ errorCode: 'UPSTREAM_TASK_FAILED' });
+      expect(mocks.rows.get(second)?.state).toBe('failed');
+    });
+    it('rejects credential epoch changes during readonly polling without losing the handle', async () => {
+      const id = await prepareVideo(); await request(id);
+      providerFetch.mockImplementation(async () => { epoch += 1; return new Response(JSON.stringify({ status: 'pending' })); });
+      expect(await poll(id)).toMatchObject({ errorCode: 'ACCOUNT_CHANGED' });
+      expect(mocks.rows.get(id)?.state).toBe('pending');
+      expect(mocks.ingestMedia).not.toHaveBeenCalled();
+    });
+    it('preserves a task rejected by the poll endpoint without claiming terminal failure or automatic retry', async () => {
+      const id = await prepareVideo(); await request(id);
+      providerFetch.mockResolvedValue(new Response('{}', { status: 404 }));
+      expect(await poll(id)).toMatchObject({ errorCode: 'UPSTREAM_POLL_REJECTED', retryable: false });
+      expect(mocks.rows.get(id)?.state).toBe('pending');
+    });
+    it('refreshes an expired result URL by polling the same handle, never POSTing again', async () => {
+      const id = await prepareVideo(); await request(id); succeed();
+      mocks.outboundFetch.mockResolvedValue(new Response('', { status: 403 }));
+      expect(await poll(id)).toMatchObject({ ok: false });
+      const original = mocks.rows.get(id)?.responseJson;
+      expect(original).toBeTruthy();
+      mocks.outboundFetch.mockResolvedValueOnce(new Response('', { status: 403 }))
+        .mockImplementation(async () => new Response(MP4, { headers: { 'content-type': 'video/mp4' } }));
+      expect(await poll(id)).toMatchObject({ status: 'complete' });
+      expect(providerFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+      expect(providerFetch).toHaveBeenCalledTimes(3);
+    });
   });
 
   it('把当前及历史受管媒体地址解析为本机文件路径', async () => {

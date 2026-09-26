@@ -54,6 +54,7 @@ import { fetchSingleHopWithSsrFGuard } from '@cindy/browser-control-runtime/ssrf
 
 import { createMakerLogger } from './logger-adapter.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
+import { createXaiVideoProxyLookup, XAI_VIDEO_CDN_HOST } from './xaiVideoProxyDns.js';
 
 const log = createMakerLogger('outbound-fetch');
 
@@ -603,7 +604,7 @@ export async function guardedOutboundFetch(
   url: string,
   init: RequestInit,
   beforeDispatch: () => void | Promise<void>,
-  approval?: { targetUrl: string; allowHttp?: boolean; allowPrivateNetwork?: boolean },
+  approval?: { targetUrl: string; allowHttp?: boolean; allowPrivateNetwork?: boolean; providerDownload?: 'xai-video' },
 ): Promise<{ response: Response; release: () => Promise<void> }> {
   const upstream = new URL(url);
   // Host-owned, single-target exception. Never inherit it across a redirect.
@@ -612,10 +613,15 @@ export async function guardedOutboundFetch(
   }
   const signal = init.signal ?? undefined;
   const proxy = await resolveProxyTarget(upstream, signal);
+  // 已确认系统 DNS 在此 CDN 的代理路径上可能与远端解析不同。仅此 Host-owned
+  // Provider + hostname 组合改用 HTTPS DNS；所有答案仍经原 SSRF 守门并固定到连接。
+  const lookupFn = proxy && approval?.providerDownload === 'xai-video' && upstream.hostname === XAI_VIDEO_CDN_HOST
+    ? createXaiVideoProxyLookup(outboundFetch, signal) : undefined;
   return fetchSingleHopWithSsrFGuard({
     url,
     init,
     signal,
+    ...(lookupFn ? { lookupFn } : {}),
     requireHttps: !approval?.allowHttp,
     ...(approval?.allowPrivateNetwork
       ? { policy: { dangerouslyAllowPrivateNetwork: true, hostnameAllowlist: [upstream.hostname] } }

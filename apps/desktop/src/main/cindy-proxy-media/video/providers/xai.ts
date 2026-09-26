@@ -16,6 +16,7 @@ import type {
   VideoTaskHandle,
   VideoTaskStatus,
 } from '../types.js';
+import { VideoProviderHttpError } from '../types.js';
 import { sniffMediaMime } from '../../../cindy-media/sniffMediaMime.js';
 
 const XAI_API_BASE = 'https://api.x.ai/v1';
@@ -79,6 +80,7 @@ export interface CreateXaiVideoProviderOptions {
   hasOAuthLogin(): boolean;
   getAccessToken(): Promise<string>;
   getCredentialGeneration(): number;
+  getCredentialSessionId?(): string;
   getOwnerScopeKey(): string;
   isOwnerBoundaryPending(): boolean;
   fetchImplementation?: typeof fetch;
@@ -373,7 +375,8 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
       ) {
         continue;
       }
-      throw new Error(`xAI 视频${phase}失败(HTTP ${response.status}):${errorDetail(text)}`);
+      throw new VideoProviderHttpError(response.status,
+        `xAI 视频${phase}失败(HTTP ${response.status}):${errorDetail(text)}`);
     }
     throw new Error(`xAI 视频${phase}失败:认证恢复重试耗尽`);
   }
@@ -492,14 +495,30 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     };
   }
 
+  function assertDurableSession(expected: string) {
+    if (!opts.hasOAuthLogin() || !expected || opts.getCredentialSessionId?.() !== expected) {
+      throw new Error('xAI 视频所属授权已变化');
+    }
+  }
+
+  function resolveDownload(videoUrl: string, credentialSessionId?: string) {
+    const { sourceUrl, ...scope } = parseInternalContentRef(videoUrl);
+    let { ownerScopeKey, credentialGeneration } = scope;
+    if (credentialSessionId !== undefined) {
+      assertDurableSession(credentialSessionId);
+      ownerScopeKey = captureOwnerScope(opts);
+      credentialGeneration = opts.getCredentialGeneration();
+    }
+    const assertActive = () => assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
+    assertActive();
+    return { url: sourceUrl, allowedUrlHosts: ['x.ai'], assertActive, networkPolicy: 'xai-video' as const };
+  }
+
   async function download(
     videoUrl: string,
     signal?: AbortSignal,
   ): Promise<{ buffer: Buffer; mimeType: string }> {
-    const { ownerScopeKey, credentialGeneration, sourceUrl } = parseInternalContentRef(videoUrl);
-    const assertStillCurrent = () =>
-      assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
-    assertStillCurrent();
+    const { url: sourceUrl, assertActive: assertStillCurrent } = resolveDownload(videoUrl);
     // 完成态给的是 xAI 临时托管 URL。下载及至多一跳重定向都必须重新验证
     // 为可信 *.x.ai 目标；手动跟随确保任何不可信 Location 都会 fail closed。
     const response = await fetchXaiVideoDownload(doFetch, sourceUrl, signal, assertStillCurrent);
@@ -530,6 +549,20 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
   return {
     id: 'xai-video',
     capabilities,
+    captureScope: () => {
+      if (!opts.hasOAuthLogin()) throw new Error('SuperGrok 连接已不可用');
+      const ownerScopeKey = captureOwnerScope(opts);
+      const credentialGeneration = opts.getCredentialGeneration();
+      assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
+      const credentialSessionId = opts.getCredentialSessionId?.();
+      if (!credentialSessionId) throw new Error('xAI 视频缺少持久授权标识');
+      return { ownerScopeKey, credentialGeneration, credentialSessionId };
+    },
+    restoreHandle(handle, credentialSessionId) {
+      assertDurableSession(credentialSessionId);
+      return { ...handle, ownerScopeKey: captureOwnerScope(opts), credentialGeneration: opts.getCredentialGeneration() };
+    },
+    resolveDownload,
     submit,
     poll,
     download,
