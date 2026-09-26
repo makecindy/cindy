@@ -1,4 +1,5 @@
 import { INVOKE_TIMEOUT_OVERRIDES_MS } from './allowlist.js';
+import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
 import type { InvokePayload } from './protocol.js';
 
 /**
@@ -75,6 +76,11 @@ export function resolveRemoteInvokeTimeoutMs(
   args?: unknown[],
   platform: 'desktop' | 'mobile' = 'desktop',
 ): number | undefined {
+  if (channel === TASK_MIGRATION_CHANNEL) {
+    const request = args?.[0];
+    return request && typeof request === 'object' && 'action' in request && request.action === 'receive'
+      ? 30 * 60_000 : 30_000;
+  }
   if (platform === 'desktop') return INVOKE_TIMEOUT_OVERRIDES_MS[channel];
   // Renewals must settle before the 12s lease, independently of slow media offers.
   const request = args?.[0];

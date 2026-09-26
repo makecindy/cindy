@@ -16,6 +16,8 @@ import type {
   SubagentTurnDeletionWindow,
 } from '../localDb/ipc/messages.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { withSessionRouteLock } from '../localDb/sessionRouteLock';
+import { withTaskMigrationWrite } from '../task-migration/writeBoundary';
 
 interface ContextSourceMessage extends HandoffSourceMessage {
   clientId: string;
@@ -87,80 +89,82 @@ export async function performMessageDeletion(
     throwIpcError('INVALID_PARAMS', 'clientId required');
   }
 
-  const [sessionRow, initialTarget] = await Promise.all([
-    deps.getSessionRow(sessionId),
-    deps.getMessage(sessionId, clientId),
-  ]);
-  if (!sessionRow || sessionRow.status === 'deleted') {
-    throwIpcError('NOT_FOUND', `Session ${sessionId} not found`);
-  }
-  if (!initialTarget) {
-    throwIpcError('NOT_FOUND', 'Message 不存在或不可删除');
-  }
+  return withSessionRouteLock(sessionId, () => withTaskMigrationWrite(sessionId, async () => {
+    const [sessionRow, initialTarget] = await Promise.all([
+      deps.getSessionRow(sessionId),
+      deps.getMessage(sessionId, clientId),
+    ]);
+    if (!sessionRow || sessionRow.status === 'deleted') {
+      throwIpcError('NOT_FOUND', `Session ${sessionId} not found`);
+    }
+    if (!initialTarget) {
+      throwIpcError('NOT_FOUND', 'Message 不存在或不可删除');
+    }
 
-  const live = deps.getLiveSession(sessionId);
-  if (live?.isTurnRunning()) {
-    throwIpcError('SESSION_RUNNING', `Session ${sessionId} is running a turn`);
-  }
-  if (deps.hasBackgroundActivity(sessionId)) {
-    throwIpcError('SESSION_RUNNING', `Session ${sessionId} has background activity`);
-  }
-
-  return deps.withCloseSuppressed(sessionId, async () => {
-    // 上面的读取和真正 close 之间仍可能有 dispatch 抢先；提交前再查一次，
-    // 绝不在运行中的 turn 继续落输出时挖消息/切上下文。
-    const currentLive = deps.getLiveSession(sessionId);
-    if (currentLive?.isTurnRunning()) {
+    const live = deps.getLiveSession(sessionId);
+    if (live?.isTurnRunning()) {
       throwIpcError('SESSION_RUNNING', `Session ${sessionId} is running a turn`);
     }
     if (deps.hasBackgroundActivity(sessionId)) {
       throwIpcError('SESSION_RUNNING', `Session ${sessionId} has background activity`);
     }
-    if (currentLive) await deps.closeSession(sessionId);
-    await deps.drainPersistQueue();
 
-    // durable FIFO 里可能仍有在删除请求前产生、但尚未落库的 tool_result / Subagent
-    // 观察。屏障后必须重读目标与历史，确保它们进入同一轮的删除范围且不会混入 handoff。
-    // 代次也在这份最终历史之前读取；期间若发生 /clear，registry 会拒绝旧代 handoff。
-    const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
-    const [target, source] = await Promise.all([
-      deps.getMessage(sessionId, clientId),
-      deps.listMessagesForContext(sessionId),
-    ]);
-    if (!target) {
-      throwIpcError('NOT_FOUND', 'Message 不存在或不可删除');
-    }
-    const deletedClientIds = new Set(target.deletedClientIds);
-    const remaining = source.filter((message) => !deletedClientIds.has(message.clientId));
-    const label = engineLabel(sessionRow.agentKind);
-    const handoff = buildHandoffText(remaining, {
-      fromLabel: label,
-      toLabel: label,
-      sessionId,
-      reason: 'message-deletion',
-    });
+    return deps.withCloseSuppressed(sessionId, async () => {
+      // 上面的读取和真正 close 之间仍可能有 dispatch 抢先；提交前再查一次，
+      // 绝不在运行中的 turn 继续落输出时挖消息/切上下文。
+      const currentLive = deps.getLiveSession(sessionId);
+      if (currentLive?.isTurnRunning()) {
+        throwIpcError('SESSION_RUNNING', `Session ${sessionId} is running a turn`);
+      }
+      if (deps.hasBackgroundActivity(sessionId)) {
+        throwIpcError('SESSION_RUNNING', `Session ${sessionId} has background activity`);
+      }
+      if (currentLive) await deps.closeSession(sessionId);
+      await deps.drainPersistQueue();
 
-    const committed = await deps.commitDeletion(
-      sessionId,
-      target.deletedClientIds,
-      handoff,
-      target.subagentTurnWindow,
-    );
-    deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
-    await deps.onCommitted(committed, clientId);
-    deps.log.info('message delete committed; native context will rebuild on next send', {
-      sessionId,
-      clientId,
-      deletedRole: target.role,
-      deletedMessages: committed.deletedClientIds.length,
-      remainingMessages: remaining.length,
+      // durable FIFO 里可能仍有在删除请求前产生、但尚未落库的 tool_result / Subagent
+      // 观察。屏障后必须重读目标与历史，确保它们进入同一轮的删除范围且不会混入 handoff。
+      // 代次也在这份最终历史之前读取；期间若发生 /clear，registry 会拒绝旧代 handoff。
+      const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
+      const [target, source] = await Promise.all([
+        deps.getMessage(sessionId, clientId),
+        deps.listMessagesForContext(sessionId),
+      ]);
+      if (!target) {
+        throwIpcError('NOT_FOUND', 'Message 不存在或不可删除');
+      }
+      const deletedClientIds = new Set(target.deletedClientIds);
+      const remaining = source.filter((message) => !deletedClientIds.has(message.clientId));
+      const label = engineLabel(sessionRow.agentKind);
+      const handoff = buildHandoffText(remaining, {
+        fromLabel: label,
+        toLabel: label,
+        sessionId,
+        reason: 'message-deletion',
+      });
+
+      const committed = await deps.commitDeletion(
+        sessionId,
+        target.deletedClientIds,
+        handoff,
+        target.subagentTurnWindow,
+      );
+      deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+      await deps.onCommitted(committed, clientId);
+      deps.log.info('message delete committed; native context will rebuild on next send', {
+        sessionId,
+        clientId,
+        deletedRole: target.role,
+        deletedMessages: committed.deletedClientIds.length,
+        remainingMessages: remaining.length,
+      });
+      return {
+        sessionId,
+        clientId,
+        clientIds: committed.deletedClientIds,
+      };
     });
-    return {
-      sessionId,
-      clientId,
-      clientIds: committed.deletedClientIds,
-    };
-  });
+  }));
 }
 
 export function registerMakerMessageDeleteHandler(

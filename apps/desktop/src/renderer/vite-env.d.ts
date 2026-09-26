@@ -3922,6 +3922,7 @@ interface ElectronAPI {
     account(command: import('@cindy/device-link').SharedTaskAccountCommand): Promise<unknown>;
   };
   deviceLink: {
+    taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest) => Promise<import('@cindy/device-link').TaskMigrationView>;
     getState: () => Promise<{
       remoteControlEnabled: boolean;
       keepAwake: boolean;

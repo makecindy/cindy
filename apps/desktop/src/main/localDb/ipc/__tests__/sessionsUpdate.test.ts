@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 
 import { messages, recentWorkdirs, sessions } from '../../schema';
 import type { SessionRouteLock } from '../../sessionRouteLock';
+import { withTaskMigrationBoundary } from '../../../task-migration/writeBoundary';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
 
 type SessionRouteLockMock = SessionRouteLock &
@@ -80,8 +81,13 @@ const h = vi.hoisted(() => ({
   runtimeCleanup: vi.fn(),
   compactSessionToolResultsBestEffort: vi.fn(async () => undefined),
   userDataDir: null as string | null,
+  migrating: false,
 }));
 
+vi.mock('../../../task-migration/journal', () => ({
+  migrationScope: () => ({ root: h.userDataDir!, assertCurrent() {} }),
+  assertTaskMigrationWritable: () => { if (h.migrating) throw new Error('MIGRATION_TASK_BUSY'); },
+}));
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -169,6 +175,7 @@ import {
   broadcastSessionPatched,
   deleteBotProfileAndDetachSessionsInDb,
   patchSessionMetaInDb,
+  renameSessionTitlesInDb,
   persistSessionFields,
   registerSessionIpc,
   resumeDeletedPiSubagentCleanup,
@@ -316,6 +323,7 @@ async function invokeCreate(body: Record<string, unknown>): Promise<unknown> {
 }
 
 beforeEach(() => {
+  h.migrating = false;
   vi.clearAllMocks();
   h.relocate.mockImplementation(async () => ({ persistedSdkSessionId: null }));
   h.commitBotProfileDeletion.mockResolvedValue({ status: 'archived', sessionIds: [] });
@@ -895,6 +903,54 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.closeSharedTask).toHaveBeenCalledWith('codex-local', h.client);
   });
 
+  it.each(['local', 'remote', 'batch', 'settings'])('rejects %s metadata writes after migration', async entry => {
+    h.migrating = true;
+    const before = h.sqlite!.prepare('SELECT * FROM sessions WHERE id = ?').get('codex-local');
+    const action = entry === 'local' ? invokeUpdate('codex-local', { title: 'late', pinnedAt: 1 })
+      : entry === 'remote' ? patchSessionMetaInDb('codex-local', { title: 'late', pinnedAt: '2026-01-01' })
+      : entry === 'batch' ? renameSessionTitlesInDb([{ sessionId: 'codex-local', title: 'late' }], false)
+      : persistSessionFields('codex-local', { effort: 'high' });
+    await expect(action).rejects.toThrow('MIGRATION_TASK_BUSY');
+    expect(h.sqlite!.prepare('SELECT * FROM sessions WHERE id = ?').get('codex-local')).toEqual(before);
+  });
+  it.each(['local', 'remote'])('waits for the %s metadata commit before migration', async entry => {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const update = h.db!.update.bind(h.db!);
+    const spy = vi.spyOn(h.db!, 'update').mockImplementationOnce((table) => {
+      const builder = update(table);
+      const set = builder.set.bind(builder);
+      builder.set = ((values: Parameters<typeof set>[0]) => {
+        const query = set(values);
+        const where = query.where.bind(query);
+        query.where = ((condition: Parameters<typeof where>[0]) => {
+          entered();
+          return { run: () => gate.then(() => where(condition).run()) } as never;
+        }) as typeof query.where;
+        return query;
+      }) as typeof builder.set;
+      return builder;
+    });
+    const writing = entry === 'local' ? invokeUpdate('codex-local', { title: 'before migration' })
+      : patchSessionMetaInDb('codex-local', { title: 'before migration' });
+    await waiting;
+    const admit = vi.fn(async () => {
+      expect(h.sqlite!.prepare('SELECT title FROM sessions WHERE id = ?').get('codex-local')).toEqual({ title: 'before migration' });
+      h.migrating = true;
+    });
+    const migration = withTaskMigrationBoundary(['codex-local'], admit);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 60));
+      expect(admit).not.toHaveBeenCalled();
+    } finally { release(); }
+    try { await Promise.all([writing, migration]); } finally { spy.mockRestore(); }
+  });
+  it('rechecks remote metadata after waiting for the route boundary', async () => {
+    h.routeLock.mockImplementationOnce(async (_id, task) => { h.migrating = true; return task(); });
+    await expect(patchSessionMetaInDb('codex-local', { title: 'late' })).rejects.toThrow('MIGRATION_TASK_BUSY');
+  });
   it('cleans runtime state before releasing the remote terminal status lock', async () => {
     const order: string[] = [];
     h.prepareSharedTaskClosure.mockImplementationOnce(async () => {

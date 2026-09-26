@@ -1,3 +1,4 @@
+import { TASK_MIGRATION_LOCAL_CHANNEL } from '@cindy/device-link';
 import type { WorktreeRecycleAction, WorktreeRecycleStatus } from '../shared/worktreeRecycle';
 import { FAVORITE_HOST_READY, FAVORITE_HOST_REQUEST, FAVORITE_HOST_REPLY, FAVORITE_HOST_CHANGED, type ModelFavoritesHostApi } from '../shared/modelFavoritesSync';
 import { invokeOpenPath } from './openPath';
@@ -4428,6 +4429,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('shared-task:account', command),
   },
   deviceLink: {
+    taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest): Promise<import('@cindy/device-link').TaskMigrationView> =>
+      ipcRenderer.invoke(TASK_MIGRATION_LOCAL_CHANNEL, deviceId, request),
     getState: (): Promise<{
       remoteControlEnabled: boolean;
       keepAwake: boolean;

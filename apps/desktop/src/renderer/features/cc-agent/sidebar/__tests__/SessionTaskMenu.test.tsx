@@ -22,7 +22,7 @@ const state = vi.hoisted(() => ({
   writeClipboard: vi.fn(),
 }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key.split('.').at(-1) }),
+  useTranslation: () => ({ t: (key: string) => key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: { removeDevice: state.removeDevice, getDeviceName: () => undefined },
@@ -100,10 +100,10 @@ it('loads only on open and groups task organization, sharing, viewing and remova
   expect(labels()).toEqual([
     'pin',
     'rename',
-    'move',
     'tags',
     'copy',
     'title',
+    'moveToProject',
     'export',
     'openInNewWindow',
     'archived',
@@ -126,10 +126,10 @@ it('shows unpin without a branch entry even for a forked Pi task', () => {
   expect(labels()).toEqual([
     'unpin',
     'rename',
-    'move',
     'tags',
     'copy',
     'title',
+    'moveToProject',
     'export',
     'openInNewWindow',
     'archived',
@@ -201,7 +201,7 @@ it('shows stop sharing for an active host and closes only after confirmation', a
   state.host.mockResolvedValue({ available: true, detail: { sharedTaskId: 'share', status: 'active' } });
   render(<Harness />); openMenu();
   await screen.findByRole('menuitem', { name: 'manageSharing' });
-  expect(labels()).toEqual(['pin', 'rename', 'move', 'tags', 'copy', 'manageSharing', 'export', 'openInNewWindow', 'archived', 'delete']);
+  expect(labels()).toEqual(['pin', 'rename', 'tags', 'copy', 'manageSharing', 'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
   expect(screen.queryByRole('menuitem', { name: 'cancelSharing' })).toBeNull();
   await openSharingSubmenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'cancelSharing' }));

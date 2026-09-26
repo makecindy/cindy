@@ -48,7 +48,7 @@ const STREAM_THRESHOLD = 64 * 1024 * 1024;
  * content-length,故在客户端(本机 main = 实际上传方)按真实字节数自校并拒绝超限,
  * 让大小上限对正常上传路径真实生效(server 端再校验声称的 size 作第二道)。
  */
-const MAX_MEDIA_BYTES = 2 * 1024 * 1024 * 1024;
+export const MAX_MEDIA_BYTES = 2 * 1024 * 1024 * 1024;
 
 const PRESIGN_PUT_PATH = '/api/device-link/media/presign-put';
 const PRESIGN_GET_PATH = '/api/device-link/media/presign-get';
@@ -623,6 +623,10 @@ export async function downloadToFile(
   const counter = new Transform({
     transform(chunk: Buffer, _enc, cb) {
       size += chunk.length;
+      if (expected && size > expected.size) {
+        cb(new AttachmentIntegrityError('size', '附件下载超出声明大小。'));
+        return;
+      }
       hasher.update(chunk);
       onProgress?.(size);
       cb(null, chunk);

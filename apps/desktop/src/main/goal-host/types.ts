@@ -170,6 +170,8 @@ export interface GoalStorageLike {
 /** GoalController 注入依赖。 */
 export interface GoalControllerDeps {
   storage: GoalStorageLike;
+  /** Reject migrated/read-only tasks before in-memory lifecycle side effects. */
+  assertWritable?: (sessionId: string) => void;
   /** ← Maker.getSession(同步只读);未活化返回 undefined。isBusy / attachListener 用。 */
   getSession(sessionId: string): SessionLike | undefined;
   /**

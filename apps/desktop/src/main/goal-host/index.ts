@@ -24,6 +24,8 @@ import { GoalController } from './controller';
 import { restoreSessionForGoal } from './sessionRestore.js';
 import { GoalStorage, type GoalDrizzleDb } from './storage';
 import type { GoalStatusUpdate, SessionLike } from './types';
+import { withTaskMigrationWrite } from '../task-migration/writeBoundary';
+import { assertTaskMigrationWritable } from '../task-migration/journal';
 
 export interface StartGoalControllerDeps {
   maker: Maker;
@@ -45,15 +47,25 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
   const logger = createLogger('goal-host');
   const storage = new GoalStorage(deps.getDb);
   const controller = new GoalController({
-    storage,
+    // Keep reads available for the source history; serialize every persisted
+    // Goal mutation with migration admission, including detached continuations.
+    storage: {
+      get: (id) => storage.get(id),
+      listActive: () => storage.listActive(),
+      listUsageLimited: () => storage.listUsageLimited(),
+      upsert: (state) => withTaskMigrationWrite(state.sessionId, () => storage.upsert(state)),
+      update: (id, patch) => withTaskMigrationWrite(id, () => storage.update(id, patch)),
+      clear: (id) => withTaskMigrationWrite(id, () => storage.clear(id)),
+    },
+    assertWritable: assertTaskMigrationWritable,
     getSession: (id): SessionLike | undefined => deps.maker.getSession(id),
     // 确保会话活着:已活直接返回;未活按存档 SessionMeta resume(spawn agent),
     // 仿 scheduler 心跳。修"开了对话没发消息 → goal 发不出第一轮"的根因。
     ensureSession: (id): Promise<SessionLike | undefined> =>
-      restoreSessionForGoal(id, {
+      withTaskMigrationWrite(id, () => restoreSessionForGoal(id, {
         maker: deps.maker,
         warn: (message, meta) => logger.warn(message, meta),
-      }),
+      })),
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
     isSessionInTurn,
     stopActiveGoalTurn: stopActiveGoalTurnForClear,
@@ -70,24 +82,24 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     // controller.fireTurn 里)。不打 agentMeta.origin —— guard f 区分 goal/user turn
     // 靠事件的 turnOrigin,持久化消息无需重复标记(且 AgentMeta.origin 当前不含 'goal')。
     persistUserMessage: async (sessionId, content, opts) => {
-      await createMessage(sessionId, {
+      await withTaskMigrationWrite(sessionId, () => createMessage(sessionId, {
         clientId: randomUUID(),
         role: 'user',
         content,
         // /goal 目标设定/更新 → 标记该消息,renderer 在气泡上方渲「目标 / 目标已更新」徽标。
         ...(opts?.goalObjective ? { agentMeta: { goalObjective: opts.goalObjective } } : {}),
-      });
+      }));
     },
     // 达成时落一条持久记录(空 content + agentMeta.goalCompletion),renderer 渲成
     // "目标已达成 · N 轮 · 耗时 X"分隔条。与 persistUserMessage 对称:起点落目标、
     // 终点落达成。agentMeta 是持久 JSON,不进 prompt(规则 10 安全)。
     persistGoalCompletion: async (sessionId, summary) => {
-      await createMessage(sessionId, {
+      await withTaskMigrationWrite(sessionId, () => createMessage(sessionId, {
         clientId: randomUUID(),
         role: 'assistant',
         content: '',
         agentMeta: { goalCompletion: summary },
-      });
+      }));
     },
     // 主动配额检测:读对应 agent 的账号用量快照(codex 走 account_usage 事件落库的
     // snapshot、claude 走 LiteLLM 轮询),判 limited + 取 resetAt(unix ms)。
@@ -122,12 +134,12 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     },
     // usageLimited 到点自动续跑时,落一条"用量已恢复,继续目标"提示(渲染成 system card)。
     persistGoalNotice: async (sessionId, kind) => {
-      await createMessage(sessionId, {
+      await withTaskMigrationWrite(sessionId, () => createMessage(sessionId, {
         clientId: randomUUID(),
         role: 'assistant',
         content: '',
         agentMeta: { goalNotice: kind },
-      });
+      }));
     },
   });
   _controller = controller;

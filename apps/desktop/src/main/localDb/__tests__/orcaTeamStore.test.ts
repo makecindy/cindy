@@ -1,4 +1,7 @@
 import Database from 'better-sqlite3';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,12 +11,19 @@ import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
 import { setSessionRouteLockImplementation } from '../sessionRouteLock.js';
 import { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 import * as schema from '../schema.js';
+import { withTaskMigrationBoundary } from '../../task-migration/writeBoundary.js';
 
 const h = vi.hoisted(() => ({
+  root: '',
   tapWindowBroadcast: vi.fn(),
   notifyAgentIslandSessionPatch: vi.fn(),
   runtimeCleanup: vi.fn(),
   compactSessionToolResultsBestEffort: vi.fn(async () => undefined),
+  assertMigrationWritable: vi.fn(),
+}));
+vi.mock('../../task-migration/journal.js', () => ({
+  assertTaskMigrationWritable: h.assertMigrationWritable,
+  migrationScope: () => ({ root: h.root, assertCurrent() {} }),
 }));
 
 vi.mock('electron', () => ({
@@ -36,7 +46,9 @@ describe('orcaTeamStore', () => {
   let currentClient: DbClient | null = null;
   let rawDb: Database.Database | null = null;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'orca-migration-'));
+    h.assertMigrationWritable.mockReset();
     setSessionRuntimeCleanup(h.runtimeCleanup);
     setSessionRouteLockImplementation(null);
   });
@@ -51,6 +63,135 @@ describe('orcaTeamStore', () => {
     }
     rawDb?.close();
     rawDb = null;
+    await fs.rm(h.root, { recursive: true, force: true });
+  });
+
+  it.each(['team', 'workers', 'worker'])(
+    'holds migration admission until the %s database update settles',
+    async (kind) => {
+      const store = await import('../orcaTeamStore.js');
+      const client = createTestDbClient();
+      setCurrentDbClient(client, 'test-user');
+      await seedOrcaWorkers(client);
+      let enter!: () => void;
+      let release!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      const delayed = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const update = client.drizzle.update.bind(client.drizzle);
+      vi.spyOn(client.drizzle, 'update').mockImplementation(
+        (table) =>
+          ({
+            set: (values: never) => ({
+              where: async (condition: never) => {
+                enter();
+                await delayed;
+                return update(table).set(values).where(condition);
+              },
+            }),
+          }) as never,
+      );
+      const write =
+        kind === 'team'
+          ? store.markTeamEnded('team-1', 'completed')
+          : kind === 'workers'
+            ? store.markWorkersStatusByTeam('team-1', 'done')
+            : store.updateWorkerStatus('worker-1', 'done');
+      await entered;
+      const snapshot = vi.fn(async () => {
+        const row =
+          kind === 'team'
+            ? await client.queryOne<{ status: string }>(
+                'SELECT status FROM orca_teams WHERE id = ?',
+                ['team-1'],
+              )
+            : await client.queryOne<{ status: string }>(
+                'SELECT status FROM orca_workers WHERE id = ?',
+                ['worker-1'],
+              );
+        expect(row?.status).toBe(kind === 'team' ? 'completed' : 'done');
+      });
+      const migration = withTaskMigrationBoundary(['lead-session-1', 'worker-session-1'], snapshot);
+      // Let the independent filesystem contender attempt acquisition while the
+      // DB write is deliberately suspended. The old check-only guard enters it.
+      const settled = Promise.all([write, migration]);
+      void settled.catch(() => undefined);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        expect(snapshot).not.toHaveBeenCalled();
+      } finally {
+        release();
+        await settled;
+      }
+      expect(snapshot).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('rejects a team change waiting behind migration before touching the database', async () => {
+    const store = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const delayed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const migration = withTaskMigrationBoundary(['lead-session-1'], async () => {
+      enter();
+      await delayed;
+      h.assertMigrationWritable.mockImplementation(() => {
+        throw new Error('MIGRATION_TASK_BUSY');
+      });
+    });
+    await entered;
+    const rejected = expect(store.markTeamEnded('team-1', 'completed')).rejects.toThrow(
+      'MIGRATION_TASK_BUSY',
+    );
+    release();
+    await Promise.all([migration, rejected]);
+    expect(await client.queryOne('SELECT status FROM orca_teams WHERE id = ?', ['team-1'])).toEqual(
+      { status: 'active' },
+    );
+  });
+
+  it('rejects team mutations while migration owns the lead and workers', async () => {
+    const store = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    h.assertMigrationWritable.mockImplementation(() => {
+      throw new Error('MIGRATION_TASK_BUSY');
+    });
+    for (const action of [
+      () => store.markTeamEnded('team-1', 'completed'),
+      () => store.setWorkerFocus('team-1', 'worker-1'),
+      () => store.updateWorkerStatus('worker-1', 'running'),
+      () => store.archiveWorkersByTeam('team-1'),
+      () => store.archiveSingleWorkerSession('worker-session-1'),
+      () => store.removeWorker('worker-1'),
+      () =>
+        store.reserveWorkerCreation({
+          reservationId: 'new',
+          teamId: 'team-1',
+          label: 'new',
+          hardLimit: 10,
+          leaseMs: 1000,
+        }),
+    ])
+      await expect(action()).rejects.toThrow('MIGRATION_TASK_BUSY');
+    expect(await client.queryOne('SELECT status FROM orca_teams WHERE id = ?', ['team-1'])).toEqual(
+      { status: 'active' },
+    );
+    expect(
+      await client.queryOne('SELECT status FROM sessions WHERE id = ?', ['worker-session-1']),
+    ).toEqual({ status: 'active' });
   });
 
   it('requires workerId and workerSessionId to match the same row when both are supplied', async () => {
@@ -354,10 +495,10 @@ describe('orcaTeamStore', () => {
       ['resv-1', 'team-orphan', 'dev', now, now + 60_000],
     );
     await expect(isOrphanedTeamInit('team-orphan')).resolves.toBe(false);
-    await client.exec(
-      'UPDATE orca_worker_creation_reservations SET expires_at = ? WHERE id = ?',
-      [now - 1, 'resv-1'],
-    );
+    await client.exec('UPDATE orca_worker_creation_reservations SET expires_at = ? WHERE id = ?', [
+      now - 1,
+      'resv-1',
+    ]);
     await expect(isOrphanedTeamInit('team-orphan')).resolves.toBe(true);
 
     await client.exec(

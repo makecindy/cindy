@@ -19,6 +19,12 @@ import {
 import type { Session } from '@/lib/ccAgent.types';
 import { isRemoteSessionWriteBlocked } from '@/features/cc-agent/lib/remoteSessionWriteGuard';
 import { isSharedTaskPeer } from '@cindy/device-link';
+import { useTaskMigrationStatus } from '@/features/cc-agent/TaskMigrationStatus';
+
+function useTagMigrationBlock(session: Session) {
+  const status = useTaskMigrationStatus(session);
+  return status?.stage && !['active', 'cancelled'].includes(status.stage) ? status.stage : null;
+}
 
 const buttonBase = 'rounded-full px-3 py-1.5 text-sm disabled:opacity-40';
 const button = `${buttonBase} enabled:hover:bg-[var(--surface-hover)]`;
@@ -109,7 +115,8 @@ export function TaskTagMenuSection({ session, onMore }: { session: Session; onMo
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const blocked = isSharedTaskPeer(session.deviceLinkDeviceId ?? '') || isRemoteSessionWriteBlocked(session);
+  const migrationStage = useTagMigrationBlock(session);
+  const blocked = Boolean(migrationStage) || isSharedTaskPeer(session.deviceLinkDeviceId ?? '') || isRemoteSessionWriteBlocked(session);
   useEffect(() => {
     selectionGeneration.current++;
     setSelected(session.tags ?? []);
@@ -424,7 +431,8 @@ export function TaskTagEditor({ session, onClose }: { session: Session; onClose:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [deletion, setDeletion] = useState<TaskTagResult['deletion']>();
-  const blocked = isRemoteSessionWriteBlocked(session);
+  const migrationStage = useTagMigrationBlock(session);
+  const blocked = Boolean(migrationStage) || isSharedTaskPeer(session.deviceLinkDeviceId ?? '') || isRemoteSessionWriteBlocked(session);
   useEffect(() => {
     if (blocked) cancelTagDrag();
   }, [blocked]);
@@ -901,7 +909,7 @@ export function TaskTagEditor({ session, onClose }: { session: Session; onClose:
               className="mt-3 shrink-0 text-xs leading-5 text-[var(--text-secondary)]"
               role="alert"
             >
-              {t(`taskTags.${blocked ? 'offline' : error}`)}
+              {t(migrationStage ? `taskMigration.stages.${migrationStage}` : `taskTags.${blocked ? 'offline' : error}`)}
               {!blocked && error === 'loadFailed' && (
                 <button
                   type="button"
