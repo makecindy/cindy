@@ -69,7 +69,6 @@ export function IssueTrackerFeatureLayout() {
         <div className="flex-1" />
         <GithubConnectButton
           visible={!loading && (!data?.githubEnhancement || data.githubEnhancementFailed)}
-          onConnected={refresh}
         />
         <button
           type="button"

@@ -24,14 +24,24 @@ it('rechecks after connection when an older issues request is still running', as
         }),
     )
     .mockResolvedValue({ ...response, githubEnhancement: { source: 'gh-cli', login: 'test' } });
+  let connected!: () => void;
+  const unsubscribe = vi.fn();
   window.electronAPI = {
+    gitContext: {
+      onGithubConnected: (listener: () => void) => {
+        connected = listener;
+        return unsubscribe;
+      },
+    },
     maker: { listMyIssues: list, getMyIssuesSnapshot: async () => null },
   } as any;
-  const { result } = renderHook(() => useMyIssues());
+  const { result, unmount } = renderHook(() => useMyIssues());
   await waitFor(() => expect(list).toHaveBeenCalledOnce());
-  act(() => result.current.refresh());
+  act(() => connected());
   await act(async () => finish(response));
   await waitFor(() => expect(result.current.data?.githubEnhancement?.login).toBe('test'));
   expect(list).toHaveBeenCalledTimes(2);
   expect(list).toHaveBeenLastCalledWith({ force: true });
+  unmount();
+  expect(unsubscribe).toHaveBeenCalledOnce();
 });

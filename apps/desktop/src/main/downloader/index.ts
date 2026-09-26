@@ -61,26 +61,7 @@ export function download(opts: DownloadOptions): Promise<DownloadResult> {
     targetPath: path.resolve(opts.targetPath),
     sha256: opts.sha256.toLowerCase(),
   };
-  if (!opts.timeout?.totalMs) return getScheduler().enqueue(normalized);
-  const controller = new AbortController();
-  let timedOut = false;
-  const abort = () => controller.abort();
-  opts.signal?.addEventListener('abort', abort, { once: true });
-  if (opts.signal?.aborted) abort();
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, opts.timeout.totalMs);
-  return getScheduler()
-    .enqueue({ ...normalized, signal: controller.signal })
-    .catch((error) => {
-      if (timedOut) throw new DownloadError('TIMEOUT', 'Download total time limit exceeded');
-      throw error;
-    })
-    .finally(() => {
-      clearTimeout(timer);
-      opts.signal?.removeEventListener('abort', abort);
-    });
+  return getScheduler().enqueue(normalized);
 }
 
 /**

@@ -49,18 +49,21 @@ export function GithubSetupDialog({
         if (isRunning(next.phase)) tracking.current = true;
         // A previous run's terminal state does not validate a new attempt.
         if (tracking.current) setState(next);
-        setFailed(false);
+        if (tracking.current && next.phase !== 'idle') setFailed(false);
         if (isRunning(next.phase)) timer = setTimeout(() => void poll(), 750);
       } catch {
-        if (!stopped) setFailed(true);
+        if (!stopped) {
+          setFailed(true);
+          timer = setTimeout(() => void poll(), 750);
+        }
       }
     };
-    if (!pending && !failed) void poll();
+    if (!pending) void poll();
     return () => {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [pending, failed]);
+  }, [pending]);
 
   const start = async () => {
     tracking.current = true;
@@ -170,7 +173,7 @@ export function GithubSetupDialog({
                   {copy('deviceCode')}
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <code className="select-all whitespace-nowrap font-mono text-xl tracking-widest text-[var(--text-primary)]">
+                  <code className="select-all whitespace-nowrap font-mono text-18 tracking-widest text-[var(--text-primary)]">
                     {state.userCode}
                   </code>
                   <button

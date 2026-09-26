@@ -30,6 +30,45 @@ function options(url: string, targetPath: string, sha256: string, signal?: Abort
 }
 
 describe('downloader scheduler queued cancellation', () => {
+  it('starts the total timeout only when a queued transfer obtains its slot', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: () => void;
+      mocks.executeOnce
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finish = () => resolve({ size: 1, sha256: HASH_A });
+            }),
+        )
+        .mockImplementationOnce(
+          ({ signal }) =>
+            new Promise((_resolve, reject) => {
+              signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+            }),
+        );
+      mocks.withRetry.mockImplementation(async (run: () => Promise<unknown>) => run());
+      const scheduler = new Scheduler({ maxConcurrent: 1 });
+      const first = scheduler.enqueue(
+        options('https://first.invalid', path.join(root, 'first'), HASH_A),
+      );
+      const second = scheduler.enqueue({
+        ...options('https://second.invalid', path.join(root, 'second'), HASH_B),
+        timeout: { totalMs: 120_000 },
+      });
+      const rejected = expect(second).rejects.toMatchObject({ code: 'TIMEOUT' });
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(mocks.executeOnce).toHaveBeenCalledTimes(1);
+      finish();
+      await first;
+      expect(mocks.executeOnce).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await rejected;
+      expect(scheduler.listActive()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-scheduler-'));
     vi.resetAllMocks();

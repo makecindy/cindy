@@ -197,7 +197,7 @@ describe('shared verified downloads', () => {
     ).rejects.toMatchObject({ code: 'ABORTED' });
     expect(fs.existsSync(opts.targetPath)).toBe(false);
   });
-  it('applies a total deadline while queued without cancelling the active download', async () => {
+  it('allows a queued download its full active budget without cancelling the current download', async () => {
     vi.useFakeTimers();
     let release!: (response: Response) => void;
     fetchMock.mockImplementationOnce(
@@ -208,14 +208,13 @@ describe('shared verified downloads', () => {
     );
     const first = download(options());
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    const second = expect(
-      download({ ...options(), timeout: { totalMs: 100 } }),
-    ).rejects.toMatchObject({ code: 'TIMEOUT' });
+    fetchMock.mockResolvedValueOnce(new Response('abcdef'));
+    const second = download({ ...options(), timeout: { totalMs: 100 } });
     await vi.advanceTimersByTimeAsync(100);
-    await second;
     expect(fetchMock).toHaveBeenCalledOnce();
     release(new Response('abcdef'));
     await first;
+    await expect(second).resolves.toMatchObject({ size: 6 });
     expect(getActive()).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
   });

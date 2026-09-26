@@ -156,6 +156,18 @@ export class Scheduler {
   private async run(task: QueuedTask): Promise<void> {
     const startedAt = Date.now();
     const logger: Logger = task.opts.logger ?? defaultLogger;
+    // Queue time does not consume the active transfer/retry budget.
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    task.opts.signal?.addEventListener('abort', abort, { once: true });
+    if (task.opts.signal?.aborted) abort();
+    let timedOut = false;
+    const timer = task.opts.timeout?.totalMs
+      ? setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, task.opts.timeout.totalMs)
+      : undefined;
 
     // Reserve the slot BEFORE asynchronous cache hashing, including cache hits.
     this.active.set(task.key, { url: task.opts.url, targetPath: task.opts.targetPath, loaded: 0 });
@@ -169,7 +181,7 @@ export class Scheduler {
         if (fs.existsSync(task.opts.targetPath)) {
           const hash = await computeHash(task.opts.targetPath);
           const size = fs.statSync(task.opts.targetPath).size;
-          if (task.opts.signal?.aborted) throw new DownloadError('ABORTED', 'Download aborted');
+          if (controller.signal.aborted) throw new DownloadError('ABORTED', 'Download aborted');
           if (
             hash === task.opts.sha256 &&
             size <= (task.opts.maxBytes ?? Infinity) &&
@@ -196,6 +208,7 @@ export class Scheduler {
       const ctx: TransportContext = {
         opts: {
           ...task.opts,
+          signal: controller.signal,
           onProgress: (event) => {
             const active = this.active.get(task.key);
             if (active) active.loaded = event.loaded;
@@ -203,13 +216,13 @@ export class Scheduler {
           },
         },
         logger,
-        signal: task.opts.signal,
+        signal: controller.signal,
         resumedFromBytes: 0,
       };
 
       const result = await withRetry(() => executeOnce(ctx), {
         config: task.opts.retry,
-        signal: task.opts.signal,
+        signal: controller.signal,
         logger,
         onRetry: task.opts.onRetry,
       });
@@ -222,8 +235,14 @@ export class Scheduler {
         resumedFromBytes: ctx.resumedFromBytes,
       });
     } catch (err) {
-      task.reject(err as Error);
+      task.reject(
+        timedOut
+          ? new DownloadError('TIMEOUT', 'Download total time limit exceeded')
+          : (err as Error),
+      );
     } finally {
+      clearTimeout(timer);
+      task.opts.signal?.removeEventListener('abort', abort);
       this.active.delete(task.key);
       this.tryStart();
     }

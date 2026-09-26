@@ -1,7 +1,7 @@
 /**
  * useMyIssues —— /issues 列表的数据源。
  *
- * 进页面拉一次,之后只由用户点刷新触发(**禁** setInterval 轮询;main 侧本身有
+ * 进页面拉一次,之后由用户刷新或 GitHub 凭据变更触发(**禁** setInterval 轮询;main 侧本身有
  * 60s TTL 缓存,重复进页面不会真去打 GitHub)。刷新期间保留旧数据,拿到新数据再
  * 原子替换,不出现空白帧。
  *
@@ -137,6 +137,8 @@ export function useMyIssues(): UseMyIssuesState {
   const refresh = useCallback(() => {
     void load(true);
   }, [load]);
+
+  useEffect(() => window.electronAPI.gitContext?.onGithubConnected?.(refresh), [refresh]);
 
   const data = fresh ?? (snapshot ? snapshotAsResult(snapshot) : null);
   return { data, hasFreshData: fresh !== null, loading, refreshing, error, refresh };

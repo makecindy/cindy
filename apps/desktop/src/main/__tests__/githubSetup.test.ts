@@ -64,12 +64,22 @@ describe('GitHub setup', () => {
     );
     setup.start();
     await vi.waitFor(() => expect(deps.install).toHaveBeenCalledOnce());
-    setup.cancel();
+    const cancelled = setup.cancel();
+    let settled = false;
+    void cancelled.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
     setup.start();
     finish('/managed/gh');
     await vi.waitFor(() => expect(setup.snapshot().phase).toBe('cancelled'));
     expect(deps.login).not.toHaveBeenCalled();
     expect(deps.connected).not.toHaveBeenCalled();
+    await cancelled;
+    deps.available.mockResolvedValue(true);
+    setup.start();
+    await vi.waitFor(() => expect(setup.snapshot().phase).toBe('connected'));
   });
   it('reads only a complete device code, including the clipboard configuration variant', () => {
     expect(deviceCodeFromOutput('! First copy your one-time code: ABCD-123')).toBeUndefined();

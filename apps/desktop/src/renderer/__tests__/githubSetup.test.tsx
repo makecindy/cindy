@@ -23,6 +23,20 @@ afterEach(cleanup);
 const key = 'ccAgent.gitContext.pr.setup';
 
 describe('GitHub setup UI', () => {
+  it('recovers polling after a transient status failure without restarting authorization', async () => {
+    const status = vi
+      .fn()
+      .mockResolvedValueOnce({ phase: 'authorizing' })
+      .mockRejectedValueOnce(new Error('IPC unavailable'))
+      .mockResolvedValue({ phase: 'connected' });
+    const connected = vi.fn();
+    window.electronAPI = { gitContext: { githubSetupStatus: status } } as any;
+    render(<GithubSetupDialog onClose={() => {}} onConnected={connected} />);
+    await screen.findByText(`${key}.stages.preparing.title`);
+    await screen.findByText(`${key}.stages.unavailable.title`);
+    await screen.findByText(`${key}.done`, {}, { timeout: 2000 });
+    expect(connected).toHaveBeenCalledOnce();
+  });
   it('ignores outside clicks during authorization but still allows explicit cancellation', async () => {
     const close = vi.fn();
     const cancel = vi.fn(async () => ({ phase: 'cancelled' }));

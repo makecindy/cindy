@@ -23,6 +23,7 @@ interface SetupDeps {
 export class GithubSetup {
   private state: GithubSetupState = { phase: 'idle' };
   private controller?: AbortController;
+  private operation?: Promise<void>;
   constructor(private readonly deps: SetupDeps) {}
   snapshot(): GithubSetupState {
     return { ...this.state };
@@ -32,13 +33,14 @@ export class GithubSetup {
     const controller = new AbortController();
     this.controller = controller;
     this.state = { phase: 'checking' };
-    void this.run(controller).finally(() => {
+    this.operation = this.run(controller).finally(() => {
       this.controller = undefined;
     });
     return this.snapshot();
   }
-  cancel(): GithubSetupState {
+  async cancel(): Promise<GithubSetupState> {
     this.controller?.abort();
+    await this.operation;
     return this.snapshot();
   }
   private async run(controller: AbortController): Promise<void> {

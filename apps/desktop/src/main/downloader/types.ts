@@ -127,7 +127,7 @@ export interface TimeoutConfig {
   connectMs: number;
   /** Default 30000 — max gap between data chunks before treating as dead. */
   idleMs: number;
-  /** Optional total budget, including queue and retry waits. */
+  /** Optional active budget, including retry waits but excluding queue time. */
   totalMs?: number;
 }
 
