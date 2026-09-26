@@ -6657,7 +6657,13 @@ export function registerGhostIpc(): void {
     }
     await waitForModelVisibilityMirror();
     if (owner !== activeOwnerScopeKey() || !findAvailableGhost(ghostId)?.enabled) return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
-    return projectGhostAgentModels(views, getModelVisibilityOverride);
+    // Do not initialize runtimes as a side effect of a plugin's read-only GET.
+    const { getMakerIfReady } = await import('../maker-host/index.js');
+    const maker = getMakerIfReady();
+    if (owner !== activeOwnerScopeKey() || !findAvailableGhost(ghostId)?.enabled || !maker) {
+      return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model runtimes unavailable' };
+    }
+    return projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride);
   });
   // 面板唤醒电子脑(cindy-ghost://<id>/wake 供片分支):面板零桥,唤醒经它
   // 自己的协议通道进来。只对"已装且唤醒"的意识放行;熔断态不清账(重载 /

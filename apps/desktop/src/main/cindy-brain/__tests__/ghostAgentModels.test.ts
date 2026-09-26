@@ -25,16 +25,16 @@ describe('plugin model projection', () => {
     const a = provider('a', ['high']);
     a.models.codex![0]!.defaultEnabled = false;
     const b = provider('b', ['high']);
-    const result = projectGhostAgentModels([a,b], (_, id) => id === 'a' ? true : false);
+    const result = projectGhostAgentModels([a,b], ['codex'], (_, id) => id === 'a' ? true : false);
     expect(result.ok && result.models.map(m => m.visible)).toEqual([true,false]);
-    const defaults = projectGhostAgentModels([a,b]);
+    const defaults = projectGhostAgentModels([a,b], ['codex']);
     expect(defaults.ok && defaults.models.map(m => m.visible)).toEqual([false,true]);
   });
   it('preserves per-provider efforts and exposes only explicit metadata fields', () => {
     const result = projectGhostAgentModels([
       provider('a', ['low', 'high']),
       provider('b', ['medium']),
-    ]);
+    ], ['codex']);
     expect(result).toEqual({
       ok: true,
       models: [
@@ -77,7 +77,7 @@ describe('plugin model projection', () => {
       a,
       { ...provider('offline', []), connected: false },
       { ...provider('paused', []), suspended: true },
-    ]);
+    ], ['codex']);
     expect(result).toEqual({
       ok: true,
       models: [
@@ -93,5 +93,16 @@ describe('plugin model projection', () => {
         },
       ],
     });
+  });
+  it('only exposes registered runtimes, including registration after initial startup', () => {
+    const p = provider('p', ['high']);
+    p.agents = ['codex', 'pi'];
+    p.routing.pi = p.routing.codex;
+    p.models.pi = [...p.models.codex!];
+    expect(projectGhostAgentModels([p], [])).toEqual({ ok: true, models: [] });
+    const before = projectGhostAgentModels([p], ['codex']);
+    expect(before.ok && before.models.map(m => m.agent)).toEqual(['codex']);
+    const after = projectGhostAgentModels([p], ['codex', 'pi']);
+    expect(after.ok && after.models.map(m => m.agent)).toEqual(['codex', 'pi']);
   });
 });
