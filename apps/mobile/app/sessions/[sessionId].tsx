@@ -681,7 +681,7 @@ import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-lin
 import { useTranslation } from 'react-i18next';
 import { i18n } from '@/i18n';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, iconStroke, lineHeight, navigationChrome, radius, spacing, typeScale } from '@/theme/tokens';
 
 const SESSION_ACTION_TEST_IDS = {
   files: 'session.filesButton',
@@ -9792,6 +9792,15 @@ function SessionHeaderBar({
   });
   const nativeHeader = Platform.OS === 'ios';
   const systemBack = useSystemNavigationBack();
+  const headerWindow = useWindowDimensions();
+  const headerInsets = useSafeAreaInsets();
+  // Budget the title together with both toolbars; UIKit cannot shrink a
+  // fixed-size React title's contents when the trailing glass capsule grows.
+  const nativeTitleMaxWidth = Math.max(0, Math.min(240,
+    headerWindow.width - headerInsets.left - headerInsets.right
+      - (spacing.lg + spacing.xs) * 2 - navigationChrome.target * (onOpenSessionList ? 5 : 4)
+      - (onOpenSessionList ? spacing.sm : 0) - spacing.sm * 2,
+  ));
   const sessionListButton = onOpenSessionList ? (
     <HomeHeaderGlassButton accessibilityLabel={t('home.drawer.openA11y')}
       onPress={onOpenSessionList} testID="session.sessionListButton">
@@ -9808,7 +9817,9 @@ function SessionHeaderBar({
         headerStyle: { backgroundColor: 'transparent' }, headerTintColor: colors.textPrimary,
         // Route-owned options survive the title component's unmount during a pop transition.
         headerTitle: () => (
-          <View style={{ maxWidth: 240, height: 44, flexShrink: 1, justifyContent: 'center' }}>
+          <View style={{ width: nativeTitleMaxWidth, height: navigationChrome.target,
+            // Reserve the toolbar gaps in the width budget, outside the title.
+            minWidth: 0, flexShrink: 1, overflow: 'hidden', justifyContent: 'center' }}>
             <SessionHeaderNativeTitle title={title} pinned={!messageOnly && !!currentSession?.pinnedAt}
               syncing={syncing} syncingImmediately={syncingImmediately} notice={notice} />
           </View>
