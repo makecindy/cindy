@@ -1353,19 +1353,32 @@ export class DeviceLinkClient {
   sendInvokeResult(dst: string, requestId: string, payload: InvokeResultPayload): void {
     const peer = this.peerTransport.get(dst);
     const env: Envelope = { v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload };
-    // 死锁绕行:relay 在线但控制链路未就绪时,result 不进可靠队列等一个可能永远
+    // 死锁绕行:relay 在线但控制链路未就绪时,result 不能只进可靠队列等一个可能永远
     // 不来的 link-accept(2026-08-03 线上实锤:队列冻结 30+ 分钟,每个执行成功的
     // 结果都等 120s 过期丢弃),改为 legacy 裸帧即时直发 —— 控制端按 id 配对
-    // 不依赖可靠层。送达失败(对端恰好离线)时对端本来就会超时,不比旧行为差。
-    // 超过单帧上限的大 result 只能靠可靠层分片,回落入队等 link 重建。
+    // 不依赖可靠层。同时先保留有界可靠副本：原 invoke 可能已 ACK，若直发时
+    // 对端刚好离线，请求不会重发，必须能在 link 重建后补回结果。
+    // 超过单帧上限的大 result 只靠可靠层分片。重复结果按 requestId 配对，
+    // 不会重新执行原操作；副本仍受原队列容量、过期和重放预算约束。
     if (peer?.reliable && !this.isPeerSendReady(peer) && this.status === 'online') {
       try {
+        this.sendPeerEnvelope(env);
+      } catch (err) {
+        if (!(err instanceof DeviceLinkError && err.code === 'BACKPRESSURE')) throw err;
+        // 保留副本不能堵住既有死锁绕行；容量耗尽时仍尝试直发，不扩容或驱逐 live 帧。
         this.sendBestEffortRoutedEnvelope(env);
         peer.unlinkedLegacyResponseIds.delete(requestId);
         return;
-      } catch (err) {
-        if (!(err instanceof DeviceLinkError && err.code === 'PAYLOAD_TOO_LARGE')) throw err;
       }
+      try {
+        this.sendBestEffortRoutedEnvelope(env);
+        peer.unlinkedLegacyResponseIds.delete(requestId);
+      } catch (err) {
+        if (!(err instanceof DeviceLinkError && err.code === 'PAYLOAD_TOO_LARGE')) {
+          this.log.debug('unlinked result direct send failed; reliable copy retained', err);
+        }
+      }
+      return;
     }
     const allowClosedLegacyResponse = peer?.unlinkedLegacyResponseIds.has(requestId) === true;
     this.sendPeerEnvelope(env, allowClosedLegacyResponse);

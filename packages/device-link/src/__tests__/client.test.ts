@@ -565,6 +565,62 @@ function makeRelayClient(
 }
 
 describe('DeviceLinkClient', () => {
+  it('retains a result completed after the controller disconnects while another controller stays usable', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const host = makeRelayClient(relay, 'desktop');
+    const a = makeRelayClient(relay, 'viewer-a');
+    const b = makeRelayClient(relay, 'viewer-b');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const received: Envelope[] = [];
+    host.onFrame(env => {
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') received.push(env);
+    });
+    try {
+      for (const client of [host, a, b]) client.start();
+      await pump();
+      for (const client of [a, b]) {
+        const opening = client.openLink('desktop', { controllerName: 'Viewer', protocolVersion: 1, appVersion: '1' });
+        await pump(); await opening;
+      }
+      let result: unknown;
+      const history = a.invoke('desktop', { channel: 'local-db:messages:view', args: ['session'] });
+      void history.then(value => { result = value; }, () => {});
+      const healthy = b.invoke('desktop', { channel: 'local-db:sessions:get', args: ['session'] });
+      void healthy.catch(() => {});
+      await pump();
+      const request = received.find(env => env.src === 'viewer-a')!;
+      const other = received.find(env => env.src === 'viewer-b')!;
+      relay.disconnect('viewer-a');
+      const hostSocket = sockets.mock.results.find(entry => entry.value.ownerId === 'desktop')!.value;
+      hostSocket.push({ v: PROTOCOL_VERSION, kind: 'relay-error', payload: {
+        code: 'DEVICE_OFFLINE', message: 'target device offline', dst: 'viewer-a',
+      } });
+      // The request was ACKed before disconnection; its asynchronous result completes after it.
+      host.sendInvokeResult('viewer-a', request.id!, { ok: true, result: 'history page' });
+      host.sendInvokeResult('viewer-b', other.id!, { ok: true, result: 'healthy' });
+      await pump();
+      await expect(healthy).resolves.toEqual({ ok: true, result: 'healthy' });
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(25);
+      await pump();
+      expect(a.getStatus()).toBe('online');
+      const reopening = a.openLink('desktop', { controllerName: 'Viewer', protocolVersion: 1, appVersion: '1' });
+      await pump(); await reopening;
+      expect(result).toEqual({ ok: true, result: 'history page' });
+      expect(received.filter(env => env.src === 'viewer-a')).toHaveLength(1);
+      expect(host.getStatus()).toBe('online');
+      expect(hostSocket.closed).toBeNull();
+      expect(b.isLinkReady('desktop')).toBe(true);
+      expect(sockets.mock.results.filter(entry => entry.value.ownerId === 'viewer-b')).toHaveLength(1);
+    } finally {
+      for (const client of [host, a, b]) client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps a second controller link and in-flight invoke alive while shared host ICE config times out', async () => {
     vi.useFakeTimers();
     const relay = new MemoryRelay();
@@ -6366,6 +6422,27 @@ describe('DeviceLinkClient', () => {
       // 裸帧:payload 就是业务 payload,没有 transport wrapper
       expect(sent[0]!.payload).toMatchObject({ ok: true, result: 42 });
       h.client.stop();
+    });
+
+    it('keeps the direct result escape path usable when retained live replies fill the bounded queue', async () => {
+      const h = makeHarness({ timing: {
+        reconnectBaseMs: 5, reconnectMaxMs: 10,
+        pingIntervalMs: 60_000, stalledLinkPendingMaxAgeMs: 60_000,
+      } });
+      h.client.start();
+      try {
+        await makeLinkDownPeer(h);
+        for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+          h.client.sendInvokeResult('ctrl-1', `retained-${i}`, { ok: true, result: i });
+        }
+        expect(() => h.client.sendInvokeResult('ctrl-1', 'overflow-result', { ok: true, result: 42 })).not.toThrow();
+        const direct = h.current().sent.find(env => env.id === 'overflow-result');
+        expect(direct?.payload).toEqual({ ok: true, result: 42 });
+        // Live retained replies were neither evicted nor allowed to exceed the existing cap.
+        expect(() => h.client.sendPush('ctrl-1', 'non-discardable-event', {})).toThrow(/buffer is full/);
+      } finally {
+        h.client.stop();
+      }
     });
 
     it('A:link 断开状态下 pending 滞留超阈值 → 新帧入队前整队放弃,不再 BACKPRESSURE', async () => {

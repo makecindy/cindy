@@ -119,6 +119,14 @@ socket 背压和聚合公平预算约束。慢速在途消息也可能得到一�
 此修复只作用于该 peer，不重启共享 relay、不缩短业务超时，也不改变 wire 格式；
 多控制端故障隔离用例见 `packages/device-link/src/__tests__/client.test.ts`。
 
+可靠请求已确认接收后，若异步结果在控制端断线期间才完成，回包必须保留在该 peer
+原有的有界可靠队列中。链路未就绪时的裸帧直发仍用于避免等待建链的死锁，但直发成功
+不等于对端已收到，不能据此删除可靠副本；重连补发同 requestId 的结果，不重新执行
+原操作。副本沿用容量、过期、撤权清理与恢复预算，不缩短业务超时或重启共享 relay。
+队列被不可丢弃的在途帧占满时，保留失败仍须尝试原有裸帧直发，不扩容或驱逐在途帧。
+实现见 `packages/device-link/src/client.ts` 的 `sendInvokeResult`，多控制端回归见同包
+`src/__tests__/client.test.ts`。
+
 ## 模块通过 Remote Resource 接入移动端
 
 面向移动端新增独立产品入口时，默认通过 `@cindy/device-link` 的 Remote Resource
