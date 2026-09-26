@@ -27,36 +27,74 @@ export function redactMessageRowForSharedGuest<T>(message: T): T {
 }
 
 /**
- * 排队快照（maker:input:projection 推送 / maker:input:get-projection 读取）里的来源同样
- * 脱敏：任务来源只留正文（displayText 与条目正文相同），去掉来源任务 id、标题与伙伴身份；
- * Orca 来源去掉发送方任务 id。无需改动时返回原引用。
+ * 排队条目的访客视图。任务来源条目里，发给 Agent 的 `text` 与 `origin.displayText`
+ * 可能带来源身份（如伙伴补充的「[来自 X 的补充]」前缀），访客只能拿到落库可见正文
+ * （`persistedContent`，带附件时是 `{text, images, files}` 信封里的 text）；来源降级为
+ * 不带 id / 标题 / 伙伴的任务来源。Orca 来源去掉发送方任务 id。无需改动时返回原引用。
+ */
+export function redactQueueItemForSharedGuest<T>(item: T): T {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+  const entry = item as Record<string, unknown>;
+  const origin = entry.origin;
+  if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return item;
+  const typed = origin as Record<string, unknown>;
+  if (typed.kind === 'session') {
+    const visible = visibleQueueText(entry);
+    return {
+      ...entry,
+      text: visible,
+      origin: { kind: 'session', senderSessionId: '', displayText: visible },
+    } as T;
+  }
+  if (typed.kind === 'orca' && 'senderSessionId' in typed) {
+    const { senderSessionId: _, ...rest } = typed;
+    return { ...entry, origin: rest } as T;
+  }
+  return item;
+}
+
+function visibleQueueText(entry: Record<string, unknown>): string {
+  const persisted = typeof entry.persistedContent === 'string' ? entry.persistedContent : '';
+  if (Array.isArray(entry.files) && entry.files.length > 0) {
+    try {
+      const envelope = JSON.parse(persisted) as { text?: unknown } | null;
+      if (envelope && typeof envelope.text === 'string') return envelope.text;
+    } catch {
+      // Not an envelope: the persisted row is already the visible text.
+    }
+  }
+  return persisted;
+}
+
+/**
+ * 排队快照（maker:input:projection 推送 / maker:input:get-projection 读取）的访客视图：
+ * 待发送队列与失败恢复项（`recovery.item`）里的每个条目都经
+ * {@link redactQueueItemForSharedGuest}。无需改动时返回原引用。
  */
 export function redactInputProjectionForSharedGuest<T>(projection: T): T {
   if (!projection || typeof projection !== 'object' || Array.isArray(projection)) return projection;
   const record = projection as Record<string, unknown>;
-  if (!Array.isArray(record.pendingQueue)) return projection;
   let changed = false;
-  const pendingQueue = record.pendingQueue.map((item: unknown) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
-    const entry = item as Record<string, unknown>;
-    const origin = entry.origin;
-    if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return item;
-    const typed = origin as Record<string, unknown>;
-    if (typed.kind === 'session') {
+  const next: Record<string, unknown> = { ...record };
+  if (Array.isArray(record.pendingQueue)) {
+    const pendingQueue = record.pendingQueue.map((item: unknown) =>
+      redactQueueItemForSharedGuest(item),
+    );
+    if (pendingQueue.some((item, index) => item !== (record.pendingQueue as unknown[])[index])) {
+      next.pendingQueue = pendingQueue;
       changed = true;
-      return {
-        ...entry,
-        origin: { kind: 'session', senderSessionId: '', displayText: typed.displayText ?? '' },
-      };
     }
-    if (typed.kind === 'orca' && 'senderSessionId' in typed) {
+  }
+  const recovery = record.recovery;
+  if (recovery && typeof recovery === 'object' && !Array.isArray(recovery) && 'item' in recovery) {
+    const item = (recovery as { item: unknown }).item;
+    const redacted = redactQueueItemForSharedGuest(item);
+    if (redacted !== item) {
+      next.recovery = { ...(recovery as Record<string, unknown>), item: redacted };
       changed = true;
-      const { senderSessionId: _, ...rest } = typed;
-      return { ...entry, origin: rest };
     }
-    return item;
-  });
-  return changed ? ({ ...record, pendingQueue } as T) : projection;
+  }
+  return changed ? (next as T) : projection;
 }
 
 /** 推往共享任务访客的单帧 payload：按 channel 套用对应的来源脱敏。 */

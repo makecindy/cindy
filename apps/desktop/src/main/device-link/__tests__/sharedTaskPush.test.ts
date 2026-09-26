@@ -182,20 +182,33 @@ describe('shared task guests never see the owner private message sources', () =>
     __testing.setActiveClient(transport as never);
     subscriptions.subscribe(guestA, ['session:task-a']);
     subscriptions.subscribe('own-task', ['session:task-a']);
+    // Teammate interjections carry the sender name in the agent-facing text and
+    // origin.displayText; only the prefix-free persisted body may reach a guest.
+    const interjection = {
+      clientId: 'q1',
+      text: '[来自 Cindy 的补充]\n\nplease review',
+      persistedContent: 'please review',
+      origin: { ...privateOrigin, displayText: '[来自 Cindy 的补充]\n\nplease review' },
+    };
     const projection = {
       sessionId: 'task-a',
       pendingQueue: [
-        { clientId: 'q1', text: 'please review', origin: privateOrigin },
+        interjection,
         { clientId: 'q2', text: 'from lead', origin: { kind: 'orca', senderLabel: 'Lead', senderSessionId: 'lead-task' } },
       ],
+      recovery: { kind: 'active-turn', item: { ...interjection, clientId: 'q0' } },
     };
     __testing.forwardPush('maker:input:projection', projection);
     await vi.advanceTimersByTimeAsync(300);
     const sent = new Map(transport.sendPush.mock.calls.map((call) => [call[0], call[2]]));
-    expect(sent.get(guestA).pendingQueue.map((item: { origin: unknown }) => item.origin)).toEqual([
-      { kind: 'session', senderSessionId: '', displayText: 'please review' },
-      { kind: 'orca', senderLabel: 'Lead' },
+    const guestView = sent.get(guestA);
+    expect(guestView.pendingQueue.map((item: { text: string; origin: unknown }) => [item.text, item.origin])).toEqual([
+      ['please review', { kind: 'session', senderSessionId: '', displayText: 'please review' }],
+      ['from lead', { kind: 'orca', senderLabel: 'Lead' }],
     ]);
+    expect(guestView.recovery.item.text).toBe('please review');
+    expect(guestView.recovery.item.origin).toEqual({ kind: 'session', senderSessionId: '', displayText: 'please review' });
+    expect(JSON.stringify(guestView)).not.toMatch(/Cindy|owner-private-task|Owner private plan|bot-1|lead-task/);
     expect(sent.get('own-task')).toEqual(projection);
   });
 
@@ -205,7 +218,11 @@ describe('shared task guests never see the owner private message sources', () =>
     __testing.sendInvokeResultSafe(transport as never, guestA, 'r1', { ok: true, result: [message] }, 'local-db:messages:list', ['task-a']);
     __testing.sendInvokeResultSafe(transport as never, 'own-task', 'r2', { ok: true, result: [message] }, 'local-db:messages:list', ['task-a']);
     __testing.sendInvokeResultSafe(transport as never, guestA, 'r3', {
-      ok: true, result: { sessionId: 'task-a', pendingQueue: [{ clientId: 'q1', text: 'x', origin: privateOrigin }] },
+      ok: true,
+      result: {
+        sessionId: 'task-a',
+        pendingQueue: [{ clientId: 'q1', text: 'x', persistedContent: 'please review', origin: privateOrigin }],
+      },
     }, 'maker:input:get-projection', ['task-a']);
     const results = new Map(transport.sendInvokeResult.mock.calls.map((call) => [call[1], call[2]]));
     expect(results.get('r1').result[0].agentMeta.origin).toEqual({ kind: 'session' });
