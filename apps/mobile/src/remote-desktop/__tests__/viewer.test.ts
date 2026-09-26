@@ -21,7 +21,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
     type: string;
     epoch: string;
     sequence: number;
-    events?: Array<{ kind: string; code?: string }>;
+    events?: Array<{ kind: string; code?: string; text?: string; down?: boolean }>;
   }> = [];
   const listeners: Record<string, (event: unknown) => void> = {};
   const documentListeners: Record<string, (event: unknown) => void> = {};
@@ -239,8 +239,10 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
       windowListeners.orientationchange({});
     },
     blur: () => windowListeners.blur({}),
-    key: (type: string, code: string) =>
-      documentListeners[type]({ code, preventDefault() {} }),
+    key: (type: string, code: string, key?: string) =>
+      documentListeners[type]({ code, key, preventDefault() {} }),
+    keyboardInput: (type: string, event: object = {}) =>
+      listeners[`keyboard-input:${type}`]({ preventDefault() {}, ...event }),
   };
 }
 
@@ -805,6 +807,30 @@ describe("remote desktop viewport", () => {
     v.flush();
     expect(v.messages.at(-1)?.epoch).toBe("second");
     expect(v.messages.at(-1)?.events?.[0].code).toBe("KeyA");
+  });
+  it("sends iOS keyboard characters and deletion only once", () => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "typing", width: 1920, height: 1080 });
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "keyboard", enabled: true });
+
+    v.key("keydown", "KeyA", "a");
+    v.elements["keyboard-input"].value = "\u200ba";
+    v.keyboardInput("input");
+    v.key("keyup", "KeyA", "a");
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "text", text: "a" },
+    ]);
+
+    v.ack();
+    v.key("keydown", "Backspace", "Backspace");
+    v.keyboardInput("beforeinput", { inputType: "deleteContentBackward" });
+    v.key("keyup", "Backspace", "Backspace");
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "text", text: "a" },
+      { kind: "key", code: "Backspace", down: true },
+      { kind: "key", code: "Backspace", down: false },
+    ]);
   });
   it.each([false, true])(
     "recognizes a small pinch with control=%s",
