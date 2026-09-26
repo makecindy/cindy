@@ -6534,6 +6534,7 @@
       "all": "All devices",
       "self": "This device",
       "selfNamed": "This device ({{name}})",
+      "loading": "Loading usage from your other devices…",
       "status": {
         "syncing": "Reading…",
         "syncedAt": "Data as of {{time}}",

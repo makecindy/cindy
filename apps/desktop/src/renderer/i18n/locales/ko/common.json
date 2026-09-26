@@ -6532,6 +6532,7 @@
       "all": "모든 기기",
       "self": "이 기기",
       "selfNamed": "이 기기 ({{name}})",
+      "loading": "다른 기기의 사용량을 불러오는 중…",
       "status": {
         "syncing": "읽는 중…",
         "syncedAt": "{{time}} 기준 데이터",

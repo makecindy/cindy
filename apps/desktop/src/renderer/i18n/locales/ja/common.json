@@ -6532,6 +6532,7 @@
       "all": "すべてのデバイス",
       "self": "このデバイス",
       "selfNamed": "このデバイス（{{name}}）",
+      "loading": "ほかのデバイスの使用量を読み込み中…",
       "status": {
         "syncing": "読み取り中…",
         "syncedAt": "{{time}} 時点のデータ",

@@ -123,6 +123,13 @@ export function UsageHistorySection(): React.JSX.Element {
       setDevice(USAGE_DEVICE_ALL);
     }
   }, [device, devices]);
+  // 进入页面后第一次读取其它电脑期间给一个轻量提示;之后每分钟的后台同步不再提示,避免闪烁。
+  const [firstSyncSettled, setFirstSyncSettled] = useState<string | null | undefined>(undefined);
+  React.useEffect(() => {
+    if (history && !history.devicesSyncing) setFirstSyncSettled(accountKey);
+  }, [accountKey, history]);
+  const initialDeviceSync =
+    firstSyncSettled !== accountKey && (history === null || history.devicesSyncing === true);
   const showTasks = device === USAGE_DEVICE_ALL || device === USAGE_DEVICE_LOCAL;
   const [range, setRange] = useState<UsageHistoryRange>('30d');
   const [heatmapWeeks, setHeatmapWeeks] = useState(20);
@@ -260,7 +267,15 @@ export function UsageHistorySection(): React.JSX.Element {
         </div>
       </div>
 
-      {device === USAGE_DEVICE_ALL && hasIncompleteUsageDevices(devices) ? (
+      {initialDeviceSync ? (
+        <p
+          className="-mt-2 mb-3 inline-flex items-center gap-1.5 text-12 text-[var(--text-tertiary)]"
+          role="status"
+        >
+          <Spinner icon={RefreshCw} size={11} className="opacity-70" />
+          {t('usageHistory.device.loading')}
+        </p>
+      ) : device === USAGE_DEVICE_ALL && hasIncompleteUsageDevices(devices) ? (
         <p className="-mt-2 mb-3 text-12 text-[var(--text-tertiary)]">
           {t('usageHistory.device.partial')}
         </p>

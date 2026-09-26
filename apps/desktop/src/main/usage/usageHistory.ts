@@ -1018,7 +1018,11 @@ export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<
   const payload = await readAggregatedUsageHistory(opts);
   const peerSync = normalizeDeviceScope(opts?.device) === 'local' ? null : getPeerUsageSync();
   if (!peerSync) return payload;
-  return { ...payload, devices: devicesWithSelf(await peerSync.snapshot()) };
+  return {
+    ...payload,
+    devices: devicesWithSelf(await peerSync.snapshot()),
+    devicesSyncing: peerSync.isSyncing(),
+  };
 }
 
 async function readAggregatedUsageHistory(

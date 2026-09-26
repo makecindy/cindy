@@ -6532,6 +6532,7 @@
       "all": "所有裝置",
       "self": "本機",
       "selfNamed": "本機（{{name}}）",
+      "loading": "正在讀取其他裝置的用量…",
       "status": {
         "syncing": "正在讀取…",
         "syncedAt": "資料截至 {{time}}",

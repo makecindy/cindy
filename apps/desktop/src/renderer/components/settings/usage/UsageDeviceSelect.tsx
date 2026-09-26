@@ -22,14 +22,20 @@ export interface UsageDeviceOption {
   device: UsageHistoryDevice | null;
 }
 
+/**
+ * 其它电脑只列出读到过用量的那些 (有「数据截至」): 从未读到的电脑对合计没有贡献,
+ * 列出来只是一排「暂无数据」噪音 (所有者 2026-09-26 裁决)。
+ */
+function hasPeerData(device: UsageHistoryDevice): boolean {
+  return !device.isSelf && device.syncedAt !== null;
+}
+
 /** 本机排第一, 其它电脑按名称排序; 手机不参与 (main 侧已过滤)。 */
 export function buildUsageDeviceOptions(
   devices: readonly UsageHistoryDevice[],
 ): UsageDeviceOption[] {
   const self = devices.find((device) => device.isSelf) ?? null;
-  const peers = devices
-    .filter((device) => !device.isSelf)
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const peers = devices.filter(hasPeerData).sort((a, b) => a.name.localeCompare(b.name));
   return [
     { value: USAGE_DEVICE_ALL, device: null },
     { value: USAGE_DEVICE_LOCAL, device: self },
@@ -39,7 +45,7 @@ export function buildUsageDeviceOptions(
 
 /** 至少有一台其它电脑时才值得显示选择器。 */
 export function hasPeerUsageDevices(devices: readonly UsageHistoryDevice[] | undefined): boolean {
-  return Boolean(devices?.some((device) => !device.isSelf));
+  return Boolean(devices?.some(hasPeerData));
 }
 
 /** 合并范围里有设备读不到最新数据 (离线、未授权、需要更新、失败)。 */
@@ -48,7 +54,7 @@ export function hasIncompleteUsageDevices(
 ): boolean {
   return Boolean(
     devices?.some(
-      (device) => !device.isSelf && device.status !== 'ok' && device.status !== 'syncing',
+      (device) => hasPeerData(device) && device.status !== 'ok' && device.status !== 'syncing',
     ),
   );
 }

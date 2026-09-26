@@ -88,9 +88,10 @@ function history(devices?: UsageHistoryDevice[]): UsageHistoryPayload {
 describe('usage device options', () => {
   it('orders all devices, this device, then other computers by name', () => {
     const options = buildUsageDeviceOptions([
-      device({ deviceId: 'z', name: 'Zed' }),
+      device({ deviceId: 'z', name: 'Zed', syncedAt: 2 }),
       device({ deviceId: 'self', name: 'Studio', isSelf: true }),
-      device({ deviceId: 'a', name: 'Air' }),
+      device({ deviceId: 'a', name: 'Air', syncedAt: 1 }),
+      device({ deviceId: 'never', name: 'Never read', status: 'offline' }),
     ]);
     expect(options.map((option) => option.value)).toEqual(['all', 'local', 'a', 'z']);
     expect(options[1].device?.name).toBe('Studio');
@@ -103,9 +104,13 @@ describe('usage device options', () => {
     expect(hasIncompleteUsageDevices([self, device({ deviceId: 'b', status: 'syncing' })])).toBe(
       false,
     );
-    expect(hasIncompleteUsageDevices([self, device({ deviceId: 'b', status: 'offline' })])).toBe(
-      true,
-    );
+    expect(
+      hasIncompleteUsageDevices([self, device({ deviceId: 'b', status: 'offline', syncedAt: 1 })]),
+    ).toBe(true);
+    // 从未读到的电脑不列出,也不触发「合计可能偏少」。
+    const never = device({ deviceId: 'c', status: 'unsupported' });
+    expect(hasPeerUsageDevices([self, never])).toBe(false);
+    expect(hasIncompleteUsageDevices([self, never])).toBe(false);
   });
 });
 
@@ -145,7 +150,7 @@ describe('usage device scope across accounts', () => {
     state.userId = 'account-a';
     state.history = history([
       device({ deviceId: 'self', isSelf: true }),
-      device({ deviceId: 'laptop-a', name: 'Laptop A' }),
+      device({ deviceId: 'laptop-a', name: 'Laptop A', syncedAt: 1 }),
     ]);
     const view = render(<UsageHistorySection />);
     expect(view.getByLabelText('usageHistory.device.ariaLabel')).toBeTruthy();
@@ -157,5 +162,31 @@ describe('usage device scope across accounts', () => {
     expect(state.requests.at(-1)?.device).toBe('all');
     expect(view.queryByLabelText('usageHistory.device.ariaLabel')).toBeNull();
     expect(view.queryByText('Laptop A')).toBeNull();
+  });
+});
+
+describe('usage device first-load hint', () => {
+  it('shows a quiet loading line during the first device sync only', () => {
+    state.history = {
+      ...history([device({ deviceId: 'self', isSelf: true })]),
+      devicesSyncing: true,
+    };
+    const view = render(<UsageHistorySection />);
+    expect(view.getByText('usageHistory.device.loading')).toBeTruthy();
+
+    state.history = {
+      ...history([
+        device({ deviceId: 'self', isSelf: true }),
+        device({ deviceId: 'b', syncedAt: 1 }),
+      ]),
+      devicesSyncing: false,
+    };
+    view.rerender(<UsageHistorySection />);
+    expect(view.queryByText('usageHistory.device.loading')).toBeNull();
+
+    // 之后每分钟的后台同步不再提示。
+    state.history = { ...state.history, devicesSyncing: true };
+    view.rerender(<UsageHistorySection />);
+    expect(view.queryByText('usageHistory.device.loading')).toBeNull();
   });
 });
