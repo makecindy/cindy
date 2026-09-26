@@ -39,6 +39,7 @@ import { jsonObjectArg } from './json-object-arg.js';
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
 import { registerCreateProjectTool, type CreateProjectCallback } from './xdt-helper/create_project.js';
 import { registerMoveSessionTool, type MoveSessionCallback } from './xdt-helper/move_session.js';
+import { registerExportSessionTool, type ExportSessionDeps } from './xdt-helper/export_session.js';
 import { registerProjectManagementTools, type ProjectManagementCallbacks } from './xdt-helper/project_management.js';
 import {
   registerGetCapabilitiesTool,
@@ -733,6 +734,11 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  /**
+   * 导出 .cshare 分享包回调。host 注入后, control 类工具 export_session 会被注册。
+   * host 走 session-share 导出编排(与 GUI「导出分享包」同一条路径)。
+   */
+  exportSession?: ExportSessionDeps['exportSession'];
 }
 
 /**
@@ -824,6 +830,12 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.exportSession) {
+    registerExportSessionTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      exportSession: deps.exportSession,
+    });
   }
 
   // History 类工具: 仅 host 注入了 history 回调时注册。

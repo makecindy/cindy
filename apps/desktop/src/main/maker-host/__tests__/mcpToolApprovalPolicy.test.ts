@@ -495,6 +495,18 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
   });
 
+  it('reviews each session export across payload representations', () => {
+    const input = { session_id: 'a', target_path: '/tmp/a.cshare' };
+    for (const args of [input, JSON.stringify(input)]) {
+      expect(policy('export_session', args)).toBe('prompt-each-time');
+      const params = { name: 'export_session', args };
+      for (const toolName of ['call_tool', undefined]) {
+        expect(policy(toolName, params)).toBe('prompt-each-time');
+        expect(policy(toolName, JSON.stringify(params))).toBe('prompt-each-time');
+      }
+    }
+  });
+
   it('does not infer a safe helper action from missing or malformed evidence', () => {
     for (const params of [undefined, null, [], 'invalid JSON', {}, { name: '' }, { name: 42 }]) {
       expect(policy('call_tool', params)).toBe('prompt-each-time');
