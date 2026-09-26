@@ -609,7 +609,9 @@ interface PeerTransportState {
   /** 上次真正 replay 时对端的 stream。对端重启换 stream 时不能当重复 open。 */
   lastReplayRemoteStreamId: string | null;
   /** Latest duplicate accept whose confirmation may prove a receive gap. */
-  duplicateOpenRepair: { requestId: string; headSeq: number } | null;
+  duplicateOpenRepair: { requestId: string; headSeq: number; throughSeq: number } | null;
+  /** ACK-paced repair, bounded to the backlog captured by the accepted open. */
+  confirmedGapRepair: { awaitingSeq: number; throughSeq: number } | null;
   /** One extra repair per sequence, retained across link resets of this stream. */
   lastDuplicateOpenRepairSeq: number;
   lastDuplicateOpenRepairAt: number;
@@ -3433,6 +3435,7 @@ export class DeviceLinkClient {
 
   private markPeerLinkDown(peer: PeerTransportState): void {
     peer.duplicateOpenRepair = null;
+    peer.confirmedGapRepair = null;
     if (peer.pendingLinkConfirmation?.timer) {
       clearTimeout(peer.pendingLinkConfirmation.timer);
     }
@@ -3471,6 +3474,7 @@ export class DeviceLinkClient {
         lastReplayEpoch: this.connEpoch,
         lastReplayRemoteStreamId: null,
         duplicateOpenRepair: null,
+        confirmedGapRepair: null,
         lastDuplicateOpenRepairSeq: 0,
         lastDuplicateOpenRepairAt: Number.NEGATIVE_INFINITY,
         recoveryNeedsAck: false,
@@ -3591,6 +3595,7 @@ export class DeviceLinkClient {
     if (peer.remoteStreamId !== nextRemoteStreamId) {
       peer.receive.clear();
       peer.duplicateOpenRepair = null;
+      peer.confirmedGapRepair = null;
     }
     if (peer.reliable && !reliable) {
       this.abandonReliablePending(dst, 'peer no longer supports reliable transport');
@@ -3774,11 +3779,16 @@ export class DeviceLinkClient {
       peer.pendingBytes -= pending.bytes;
     }
     if (peer.recoveryNeedsAck) {
+      peer.confirmedGapRepair = null;
       peer.recoveryNeedsAck = false;
       peer.recoveryFramesSent = 0;
       this.logRecoveryStage(src, 'recovery-probe-acked', ` ack=${ackSeq}`);
       this.retryPending(src, { ignoreInterval: true });
     } else {
+      const repair = peer.confirmedGapRepair;
+      if (repair && ackSeq >= repair.awaitingSeq) {
+        this.sendConfirmedGapHead(src, peer, repair.throughSeq);
+      }
       // Release locally queued first sends promptly, without replaying already
       // in-flight large responses every time a partial ACK arrives.
       this.retryPending(src, { ignoreInterval: false, onlyUnsent: true });
@@ -3796,9 +3806,9 @@ export class DeviceLinkClient {
 
   /** A controller can reconnect without changing its reliable stream or our
    * relay epoch. Its current accept confirmation can still report a missing
-   * head. Repair only that head, once per sequence, instead of replaying the
-   * whole queue on every duplicate open. Normal ACKs and legacy peers do not
-   * activate this path. Slow in-flight heads may get one extra copy. */
+   * head. Repair one head at a time, advancing only after its cumulative ACK,
+   * bounded to the captured backlog and one extra copy per sequence. Normal
+   * ACKs and legacy peers cannot start this path. Slow heads may get a copy. */
   private repairConfirmedReceiveGap(
     dst: string,
     peer: PeerTransportState,
@@ -3808,13 +3818,23 @@ export class DeviceLinkClient {
     const repair = peer.duplicateOpenRepair;
     if (!repair || repair.requestId !== linkRequestId) return;
     peer.duplicateOpenRepair = null;
+    if (peer.confirmedGapRepair) return; // Repeated opens cannot extend the snapshot.
     const head = peer.pending.values().next().value;
     const now = this.monotonicNow();
-    const frameCount = head ? this.estimateReliableFrameCount(head) : 0;
     if (!head?.sent || head.seq !== repair.headSeq
       || ackSeq !== head.seq - 1 || ackSeq < peer.highestAckSeq
+      || now - peer.lastDuplicateOpenRepairAt < normalizeTransportRetryInterval(this.timing.transportRetryIntervalMs)) return;
+    this.sendConfirmedGapHead(dst, peer, repair.throughSeq);
+  }
+
+  private sendConfirmedGapHead(dst: string, peer: PeerTransportState, throughSeq: number): void {
+    // A blocked/oversize head falls back to the existing retry/drain policy.
+    // It must not allow a later ACK or duplicate open to spend a fresh budget.
+    peer.confirmedGapRepair = null;
+    const head = peer.pending.values().next().value;
+    const frameCount = head ? this.estimateReliableFrameCount(head) : 0;
+    if (!head?.sent || head.seq > throughSeq
       || peer.lastDuplicateOpenRepairSeq >= head.seq
-      || now - peer.lastDuplicateOpenRepairAt < normalizeTransportRetryInterval(this.timing.transportRetryIntervalMs)
       || head.attempts >= this.timing.transportMaxRetryAttempts
       || frameCount > this.recoveryPassBudget()
       || this.shouldHoldRecoverySend(peer, frameCount)) return;
@@ -3822,7 +3842,8 @@ export class DeviceLinkClient {
       const frames = this.sendReliableFrames(peer, head);
       if (frames === 0) return; // Existing retry/drain owns local backpressure.
       peer.lastDuplicateOpenRepairSeq = head.seq;
-      peer.lastDuplicateOpenRepairAt = now;
+      peer.lastDuplicateOpenRepairAt = this.monotonicNow();
+      if (head.seq < throughSeq) peer.confirmedGapRepair = { awaitingSeq: head.seq, throughSeq };
       this.noteRecoveryFrames(peer, frames);
       this.log.debug(`device-link confirmed gap repair dst=${dst.slice(0, 8)} seq=${head.seq} frames=${frames}`);
     } catch (err) {
@@ -4223,7 +4244,12 @@ export class DeviceLinkClient {
     // 否则 ACK/重试被暂停，pending 只涨不消，对端超时后再 open，形成死循环。
     if (resume.duplicateOpen && this.isPeerSendReady(peer)) {
       const head = peer.pending.values().next().value;
-      peer.duplicateOpenRepair = head?.sent ? { requestId, headSeq: head.seq } : null;
+      let throughSeq = 0;
+      for (const pending of peer.pending.values()) {
+        if (!pending.sent) break;
+        throughSeq = pending.seq;
+      }
+      peer.duplicateOpenRepair = head?.sent ? { requestId, headSeq: head.seq, throughSeq } : null;
       // sendLinkAccept 已把这次 accept 记进 active 路由账本；确认分支才会
       // discard。这里保持 ready、不进 awaiting-confirm，但仍要结算该记录，
       // 否则每次重复 open 泄漏一条，满 1024 后后续 accept 全 BACKPRESSURE。
@@ -4304,6 +4330,7 @@ export class DeviceLinkClient {
     }
     peer.lastReplayEpoch = this.connEpoch;
     peer.lastReplayRemoteStreamId = peer.remoteStreamId;
+    peer.confirmedGapRepair = null;
     // 真正恢复不依赖当时队列是否有积压:abandon / transport-timeout 可能已清空
     // pending。首次建链(还没 resume 过)保持原语义,空队列不进探测。
     if (resume.enterRecovery) {
