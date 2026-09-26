@@ -189,6 +189,14 @@ export function createMobileVoiceTimelineRecorder(context: {
           duringRecording: !trace.events.has('stop_clicked'),
         });
         return;
+      case 'pause_refine_skipped':
+        logMobileVoice('info', 'pause refinement skipped', {
+          runId,
+          reason: event.reason,
+          requestLimit: event.requestLimit,
+          requestsStarted: event.requestsStarted,
+        });
+        return;
       case 'refine_discarded':
         logMobileVoice('debug', 'refine discarded', {
           runId,

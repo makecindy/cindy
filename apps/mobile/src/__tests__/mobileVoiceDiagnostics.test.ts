@@ -13,7 +13,10 @@ import { serializeMobileDebugRecord } from '@/debug/mobileDebugRecord';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { createMobileVoiceControllerSession } from '@/session/mobileVoiceController';
 import { ApiError } from '@/api/client';
-import { classifyMobileVoiceFailure } from '@/session/mobileVoiceDiagnostics';
+import {
+  classifyMobileVoiceFailure,
+  createMobileVoiceTimelineRecorder,
+} from '@/session/mobileVoiceDiagnostics';
 
 const SPOKEN = '周五下午三点和财务对预算';
 const REFINED = '周五下午 3 点和财务核对预算。';
@@ -234,6 +237,26 @@ describe('mobile voice diagnostics', () => {
       ),
     ).toBe('timeout');
     expect(classifyMobileVoiceFailure(new Error(SPOKEN))).toBe('other');
+  });
+
+  it('logs a pause refinement held back for the final text', () => {
+    const record = createMobileVoiceTimelineRecorder({ provider: 'litellm-volcengine-sauc-asr' });
+    record({ type: 'start_clicked', runId: 'run-12345678', at: 1 });
+    record({
+      type: 'pause_refine_skipped',
+      runId: 'run-12345678',
+      at: 2,
+      reason: 'final_request_reserved',
+      requestLimit: 2,
+      requestsStarted: 1,
+    });
+    expect(messages().at(-1)).toMatchObject({
+      scope: 'voice',
+      args: [
+        'pause refinement skipped',
+        { runId: '12345678', reason: 'final_request_reserved', requestLimit: 2, requestsStarted: 1 },
+      ],
+    });
   });
 
   it('logs a silent recording ending without ASR finalization', async () => {

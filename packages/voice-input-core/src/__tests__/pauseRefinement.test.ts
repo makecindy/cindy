@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceInputController } from "../VoiceInputController";
 import { VoiceTimelineLogger } from "../VoiceTimelineLogger";
-import { hasAdditionalSentence } from "../pauseRefinement";
+import {
+  hasAdditionalSentence,
+  LEGACY_MANAGED_REFINE_REQUEST_LIMIT,
+  resolveManagedRefineRequestLimit,
+} from "../pauseRefinement";
 import type {
   AsrEvent,
   AsrProvider,
   RefinementResult,
   SpeechSegment,
+  VoiceTimelineEvent,
 } from "../types";
 
 beforeEach(() => vi.useFakeTimers());
@@ -15,7 +20,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function setup(enabled = true) {
+function setup(
+  enabled = true,
+  options: { refineRequestLimit?: () => number | undefined } = {},
+) {
   let event: (value: AsrEvent) => void = () => {};
   const asr: AsrProvider = {
     start: vi.fn(async () => {}),
@@ -46,11 +54,13 @@ function setup(enabled = true) {
     userTouched: false,
   }));
   const applied = vi.fn(() => true);
+  const events: VoiceTimelineEvent[] = [];
   const controller = new VoiceInputController({
     asr,
     refiner: { refine },
-    logger: new VoiceTimelineLogger(),
+    logger: new VoiceTimelineLogger((timelineEvent) => events.push(timelineEvent)),
     pauseRefinementEnabled: enabled,
+    refineRequestLimit: options.refineRequestLimit,
     callbacks: {
       onDraftChanged: drafts,
       onSubmitted: submitted,
@@ -77,6 +87,7 @@ function setup(enabled = true) {
     drafts,
     submitted,
     applied,
+    events,
     say,
     finish,
   };
@@ -335,5 +346,94 @@ describe("pause refinement", () => {
     await vi.advanceTimersByTimeAsync(10000);
     expect(h.refine).not.toHaveBeenCalled();
     await h.controller.cancel();
+  });
+});
+
+describe("refine request limit", () => {
+  const pauseSkips = (events: VoiceTimelineEvent[]) =>
+    events.filter((event) => event.type === "pause_refine_skipped");
+
+  // Speaks three sentences with a pause after each, finishing every pause
+  // request so the next pause is allowed to fire.
+  async function speakThreeSentencesWithPauses(h: ReturnType<typeof setup>) {
+    const sentences = ["第一句。", "第一句。第二句。", "第一句。第二句。第三句。"];
+    for (const text of sentences) {
+      h.say(text);
+      await vi.advanceTimersByTimeAsync(2000);
+      const last = h.requests.length - 1;
+      if (last >= 0 && h.requests[last].text === text) await h.finish(last, `${text}✓`);
+    }
+  }
+
+  it("keeps the last server allowance for the final text (legacy limit of 2)", async () => {
+    const h = setup(true, { refineRequestLimit: () => 2 });
+    await h.controller.start();
+    await speakThreeSentencesWithPauses(h);
+    expect(h.requests.map((r) => r.text)).toEqual(["第一句。"]);
+    expect(pauseSkips(h.events)).toEqual([
+      expect.objectContaining({
+        reason: "final_request_reserved",
+        requestLimit: 2,
+        requestsStarted: 1,
+      }),
+    ]);
+
+    await h.controller.stop();
+    expect(h.requests.map((r) => r.text)).toEqual([
+      "第一句。",
+      "第一句。第二句。第三句。",
+    ]);
+    await h.finish(1, "完整结果。");
+    expect(h.applied).toHaveBeenCalledExactlyOnceWith(expect.anything(), "完整结果。");
+  });
+
+  it("uses every allowance but one for pauses when the server reports more", async () => {
+    const h = setup(true, { refineRequestLimit: () => 3 });
+    await h.controller.start();
+    await speakThreeSentencesWithPauses(h);
+    expect(h.requests).toHaveLength(2);
+    expect(pauseSkips(h.events)).toHaveLength(1);
+    await h.controller.stop();
+    expect(h.requests).toHaveLength(3);
+    expect(h.requests[2].text).toBe("第一句。第二句。第三句。");
+  });
+
+  it("reads the limit when a pause request is due, after the session reported it", async () => {
+    let limit = LEGACY_MANAGED_REFINE_REQUEST_LIMIT;
+    const h = setup(true, { refineRequestLimit: () => limit });
+    await h.controller.start();
+    limit = 8;
+    await speakThreeSentencesWithPauses(h);
+    expect(h.requests).toHaveLength(3);
+    expect(pauseSkips(h.events)).toHaveLength(0);
+    await h.controller.cancel();
+  });
+
+  it("starts every recording with a fresh allowance", async () => {
+    const h = setup(true, { refineRequestLimit: () => 2 });
+    await h.controller.start();
+    await speakThreeSentencesWithPauses(h);
+    await h.controller.cancel();
+    await h.controller.start();
+    h.say("新录音。");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.requests.at(-1)?.text).toBe("新录音。");
+    await h.controller.cancel();
+  });
+
+  it("does not limit refiners without a reported limit", async () => {
+    const h = setup();
+    await h.controller.start();
+    await speakThreeSentencesWithPauses(h);
+    expect(h.requests).toHaveLength(3);
+    await h.controller.cancel();
+  });
+
+  it("falls back to the legacy limit when the server does not report a usable one", () => {
+    expect(resolveManagedRefineRequestLimit(8)).toBe(8);
+    expect(resolveManagedRefineRequestLimit(undefined)).toBe(2);
+    expect(resolveManagedRefineRequestLimit(0)).toBe(2);
+    expect(resolveManagedRefineRequestLimit(2.5)).toBe(2);
+    expect(resolveManagedRefineRequestLimit("8")).toBe(2);
   });
 });

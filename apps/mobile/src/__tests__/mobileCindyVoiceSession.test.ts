@@ -87,6 +87,23 @@ describe('MobileCindyVoiceRunContext', () => {
     });
   });
 
+  it('reports the session refine limit, falling back to 2 for servers that omit it', async () => {
+    const apiFetch = vi.fn()
+      .mockResolvedValueOnce(sessionResponse())
+      .mockResolvedValueOnce({
+        ...sessionResponse({ sessionId: 'session-2' }),
+        refiner: { enabled: true, provider: 'auto', maxRefineRequests: 8 },
+      });
+    const context = makeContext(apiFetch);
+
+    expect(context.refineRequestLimit()).toBe(2);
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.refineRequestLimit()).toBe(2);
+    // A reconnect allocates a new session; refines go to it, so its limit applies.
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.refineRequestLimit()).toBe(8);
+  });
+
   it('keeps ASR auto-detection separate from the concrete refinement language', async () => {
     const apiFetch = vi.fn(async (
       _path: string,

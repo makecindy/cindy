@@ -43,6 +43,12 @@ type VoiceInputControllerOptions = {
   stableWaitMs?: number;
   /** Host opt-in: refine during a speech pause and publish a live draft. */
   pauseRefinementEnabled?: boolean;
+  /**
+   * Refinement requests the refiner accepts per run (the managed voice-server
+   * caps them per session). Pause-time refinement stops early enough to leave
+   * one request for the final text. Undefined means no limit.
+   */
+  refineRequestLimit?: () => number | undefined;
   /** Host opt-in for known recovery failures; undefined keeps the generic error. */
   recoveryErrorMessage?: (error: unknown) => string | undefined;
 };
@@ -93,6 +99,9 @@ export class VoiceInputController {
   private readonly callbacks: VoiceInputCallbacks;
   private readonly stableWaitMs: number;
   private readonly pauseRefinementEnabled: boolean;
+  private readonly refineRequestLimit?: () => number | undefined;
+  private refineRequestsStarted = 0;
+  private pauseRefineBudgetLogged = false;
   private readonly recoveryErrorMessage?: (error: unknown) => string | undefined;
   private lastSoundAt = 0;
   private lastTranscriptChangeAt = 0;
@@ -159,6 +168,7 @@ export class VoiceInputController {
     this.callbacks = options.callbacks;
     this.stableWaitMs = options.stableWaitMs ?? 500;
     this.pauseRefinementEnabled = options.pauseRefinementEnabled ?? false;
+    this.refineRequestLimit = options.refineRequestLimit;
     this.recoveryErrorMessage = options.recoveryErrorMessage;
 
     this.asr.onEvent((event) => this.handleAsrEvent(event));
@@ -198,6 +208,8 @@ export class VoiceInputController {
     this.lastTranscriptChangeAt = performance.now();
     this.pauseRefinement = undefined;
     this.liveRefinementPreview = undefined;
+    this.refineRequestsStarted = 0;
+    this.pauseRefineBudgetLogged = false;
     this.startStallWatchdog();
     this.setState('listening');
     this.logger.record({ type: 'start_clicked', runId: this.runId, at: Date.now() });
@@ -537,6 +549,7 @@ export class VoiceInputController {
     if (this.pauseRefinement && !this.pauseRefinement.settled) return;
     const text = normalizeSubmittedText(this.latestTranscript);
     if (!hasAdditionalSentence(this.pauseRefinement?.text ?? '', text)) return;
+    if (!this.pauseRefineLeavesFinalRequest()) return;
     const runId = this.runId;
     const request = this.startRefinementRequest(runId, text, [createVoiceInputId()]);
     this.pauseRefinement = request;
@@ -552,8 +565,32 @@ export class VoiceInputController {
     });
   }
 
+  /**
+   * A pause request only speculates; the text after stop is what gets kept. So
+   * a pause request may only use an allowance when another one is left for
+   * the final refinement. With the legacy server limit of 2 this allows one
+   * pause request per run.
+   */
+  private pauseRefineLeavesFinalRequest(): boolean {
+    const limit = this.refineRequestLimit?.();
+    if (limit === undefined || this.refineRequestsStarted + 2 <= limit) return true;
+    if (!this.pauseRefineBudgetLogged) {
+      this.pauseRefineBudgetLogged = true;
+      this.logger.record({
+        type: 'pause_refine_skipped',
+        runId: this.runId,
+        at: Date.now(),
+        reason: 'final_request_reserved',
+        requestLimit: limit,
+        requestsStarted: this.refineRequestsStarted,
+      });
+    }
+    return false;
+  }
+
   private startRefinementRequest(runId: string, text: string, segmentIds: string[]): PendingRefinement {
     if (!this.refiner) throw new Error('Dictation refiner is not configured.');
+    this.refineRequestsStarted += 1;
     const refineStartedAt = performance.now();
     this.logger.record({ type: 'refine_requested', runId, at: Date.now(), text });
 

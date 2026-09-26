@@ -69,6 +69,25 @@ describe('CindyVoiceRunContext', () => {
     expect(serverApiFetch.mock.calls[0]).toEqual(serverApiFetch.mock.calls[1]);
   });
 
+  it('reports the session refine limit, falling back to 2 for servers that omit it', async () => {
+    serverApiFetch.mockReset();
+    serverApiFetch
+      .mockResolvedValueOnce(SESSION)
+      .mockResolvedValueOnce({
+        ...SESSION,
+        sessionId: 'session-2',
+        refiner: { enabled: true, provider: 'auto', maxRefineRequests: 8 },
+      });
+    const context = new CindyVoiceRunContext('zh-CN', 'auto');
+
+    expect(context.refineRequestLimit()).toBe(2);
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.refineRequestLimit()).toBe(2);
+    // A reconnect allocates a new session; refines go to it, so its limit applies.
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.refineRequestLimit()).toBe(8);
+  });
+
   it('keeps dictation working on a legacy server that rejects the auto refiner marker', async () => {
     serverApiFetch.mockReset();
     serverApiFetch

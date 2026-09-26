@@ -7,6 +7,10 @@ import {
   type CindyAuthRegion,
 } from '@/config/env';
 import { i18n } from '@/i18n';
+import {
+  LEGACY_MANAGED_REFINE_REQUEST_LIMIT,
+  resolveManagedRefineRequestLimit,
+} from '@cindy/voice-input-core';
 import type {
   MobileVoiceCredentialSyncAsr,
   MobileVoiceCredentialSyncRefiner,
@@ -43,6 +47,8 @@ type VoiceSessionResponse = {
     protocolProfile: string;
     sampleRate: number;
   };
+  /** `maxRefineRequests` is absent on servers from before pause-time refinement. */
+  refiner?: { enabled: boolean; provider?: string; maxRefineRequests?: number };
 };
 
 /** Per-dictation holder for one-shot ASR tickets and the owning refine session. */
@@ -54,6 +60,7 @@ export class MobileCindyVoiceRunContext {
    * refine/warmup 直接快速失败(原始 ASR 文本保留),听写本身不受影响。
    */
   private refinerUnavailableOnServer = false;
+  private latestRefineRequestLimit = LEGACY_MANAGED_REFINE_REQUEST_LIMIT;
 
   constructor(
     private readonly getAccessToken: AccessTokenProvider,
@@ -94,6 +101,7 @@ export class MobileCindyVoiceRunContext {
       this.refinerUnavailableOnServer = true;
     }
     this.latestSessionId = session.sessionId;
+    this.latestRefineRequestLimit = resolveManagedRefineRequestLimit(session.refiner?.maxRefineRequests);
     return { websocketUrl: session.asr.websocketUrl, authorizationToken: session.ticket };
   }
 
@@ -123,6 +131,11 @@ export class MobileCindyVoiceRunContext {
       throw new Error(i18n.t('composer.voice.invalidSession'));
     }
     return session;
+  }
+
+  /** Refinement requests the current session accepts; refines target the latest session. */
+  refineRequestLimit(): number {
+    return this.latestRefineRequestLimit;
   }
 
   async createRefinerTarget(refinerProvider: string, options?: { refreshAccessToken?: boolean }): Promise<{
