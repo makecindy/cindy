@@ -1,5 +1,6 @@
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
+import { registerTaskMigrationIpc } from './task-migration/service';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import {
   createLatestSourceVersionReader,
@@ -761,6 +762,7 @@ import {
   registerMakerIpc as registerMakerCoreIpc,
   restoreBotRuntimeForCurrentOwner,
   isSessionTurnPendingCompletion,
+  isSessionInTurn,
   stopOrcaIdleWatcher,
   setGoalClearObserver,
   setGoalDeferredResumeCancelObserver,
@@ -769,6 +771,7 @@ import {
   setGoalAskAnswerObserver,
   withSendToSessionLock,
 } from './maker-ipc/register.js';
+import { moveSessionProjectFromHost } from './mcp-integrations/moveSession.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -9611,6 +9614,9 @@ app.on('ready', async () => {
   // owning modules above; future collections/actions do not add tunnel channels.
   registerRemoteResourcesIpc();
   registerDeviceLinkIpc();
+  registerTaskMigrationIpc((sessionId, workingDir, assertAuthority) =>
+    moveSessionProjectFromHost(isSessionInTurn, sessionId, workingDir, assertAuthority),
+  );
   registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
   registerFilePeerIpc();
   registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);

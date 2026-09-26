@@ -1,4 +1,5 @@
 import { createBotMessageTransport } from './botMessageTransport.js';
+import { assertTaskMigrationInputAllowed } from '../task-migration/inputGuard';
 import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { getSelfDeviceId, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
@@ -6585,6 +6586,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   async function assertReviewExternalInputAllowed(sessionId: string): Promise<void> {
+    await assertTaskMigrationInputAllowed(sessionId);
     await assertReviewSessionExternalInputAllowed(sessionId, readSessionSource);
   }
 
@@ -6784,6 +6786,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     didInjectProjectContext: boolean;
   }> {
     assertAccess?.();
+    if (!o.remoteHostId) await assertTaskMigrationInputAllowed(o.id, o.workingDir);
     if (o.id && o.workingDir && !o.remoteHostId) {
       o.workingDir = workingDirectoryRecovery.resolve(o.id, o.workingDir);
       await workingDirectoryRecovery.observe(o.id, o.workingDir).catch((error) => {
@@ -6879,6 +6882,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     assertAccess?.();
     const session = await maker.createSession(o);
+    if (!o.remoteHostId) {
+      try { await assertTaskMigrationInputAllowed(session.id, o.workingDir); }
+      catch (error) { await maker.closeSession(session.id); throw error; }
+    }
     await markProjectContextIfNeeded(session.id, didInjectProjectContext);
     wireSessionToIpc(session);
     markOrcaMcpHydratedIfNeeded(session.id, o);
@@ -9144,6 +9151,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // await 上,日志即可直接定位挂点(PR #2829 QA:回执 deliver 挂死 64 分钟零线索)。
     let lockStage = 'resolve-session-meta+row';
     const run = waitPrev.then(async () => {
+      await assertTaskMigrationInputAllowed(targetSessionId);
       await reconcileBotModelRoute(targetSessionId, true);
       const [meta, dbRow] = await Promise.all([
         maker.getSessionMeta(targetSessionId).catch(() => null),

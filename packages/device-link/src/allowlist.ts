@@ -13,7 +13,8 @@
  * updater / release-notes、被控端全局设置写(maker:compat-mode:set 等 *_SET 设置类——
  * 远程改被控端全局设置越权)、local-db 裸写(sessions:create/update、messages:create——
  * 写库必须经业务 handler,不开裸写)、maker:execute-desktop-command(UI 副作用)、
- * migration / session-import、skillhub 写操作。
+ * 通用 migration / session-import、skillhub 写操作。任务迁移仅放行下述受限业务通道，
+ * 不开放通用导入、任意路径写入或裸数据库迁移。
  *
  * 双层校验:控制端发送前(快速失败)+ 被控端执行前(权威)。
  * 新增 channel 不进表即天然不可远程调用(代码保证确定性)。
@@ -24,6 +25,7 @@
  * Renderer 可调用。它由业务 dispatch 拦截,绝不放行通用 UI / shell IPC。
  */
 import { FILE_PEER_CHANNEL } from './filePeer.js';
+import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
 import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
 import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
 import {
@@ -320,6 +322,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 入方向媒体取件(被控端 dispatch 拦截执行,不落 ipcMain handler;契约登记 + 能力探测)。
   DL_MEDIA_FETCH_CHANNEL,
   FILE_PEER_CHANNEL,
+  TASK_MIGRATION_CHANNEL,
   // 出方向语音转写(被控端 dispatch 拦截执行,不落 ipcMain handler;复用被控端 ASR 配置)。
   DL_VOICE_TRANSCRIBE_CHANNEL,
   // 临时 voice credential 同步(被控端 dispatch 拦截执行,不落 ipcMain handler;禁止泛化)。

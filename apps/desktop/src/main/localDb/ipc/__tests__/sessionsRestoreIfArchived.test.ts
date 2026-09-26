@@ -6,6 +6,7 @@
  */
 import Database from 'better-sqlite3';
 import os from 'node:os';
+import fs from 'node:fs';
 import path from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
@@ -17,6 +18,7 @@ type SessionRouteLockMock = SessionRouteLock &
   MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
 
 const h = vi.hoisted(() => ({
+  migrationRoot: '',
   db: null as ReturnType<typeof drizzle> | null,
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -37,6 +39,11 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+vi.mock('../../../appSessionState', () => ({
+  ownerScopedUserDataPath: (...parts: string[]) => path.join(h.migrationRoot, ...parts),
+  activeOwnerScopeKey: () => 'test-user:1',
+  isAppSessionBoundaryPending: () => false,
 }));
 vi.mock('../../client/current', () => ({
   getDbClient: () => ({ drizzle: h.db }),
@@ -62,6 +69,7 @@ vi.mock('../../../worktree/resourceLock', () => ({
 vi.mock('../../../worktree/recycleEvents', () => ({ notifyWorktreeRecycleOpportunity: vi.fn() }));
 
 import { registerSessionIpc } from '../sessions';
+import { migrationScope } from '../../../task-migration/journal';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 import { getDbClient } from '../../client/current';
 import { selectSessionsByIds, selectSessionWithCount, selectSessionListRows, flattenSessionReadRow } from '../../sessionQueries';
@@ -174,6 +182,7 @@ function readStatus(): string {
 }
 
 beforeEach(() => {
+  h.migrationRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-restore-migration-'));
   vi.clearAllMocks();
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
   h.resourceLock.mockImplementation(async (_resources, task) => task());
@@ -184,10 +193,21 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  fs.rmSync(h.migrationRoot, { recursive: true, force: true });
   setSessionRouteLockImplementation(null);
 });
 
 describe('local-db:sessions:restore-if-archived', () => {
+  it('keeps a migrated source fenced before any lifecycle update', async () => {
+    migrationScope().save({ kind: 'outgoing', id: '11111111-2222-4333-a444-555555555555',
+      sessionId: 'target', sourceDeviceId: 'source', targetDeviceId: 'destination',
+      targetSessionId: '11111111-2222-4333-a444-555555555555', targetProject: null,
+      workingDir: path.join(h.migrationRoot, 'project'), stage: 'complete' });
+    await expect(restore()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED',
+      message: '[PRECONDITION_FAILED] MIGRATION_TASK_MOVED' });
+    expect(readStatus()).toBe('archived');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
   function managedIdentity(): ExpectedIdentity {
     const root = path.join(os.tmpdir(), 'cindy-restore-lock-fixture', '.cindy-worktrees', 'work');
     const workingDir = path.join(root, 'src');

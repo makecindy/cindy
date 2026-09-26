@@ -79,13 +79,14 @@ export interface SessionShareExportOptions {
   password?: string | null;
   /** 超限重试时由 renderer 显式传入:跳过全部媒体,只保消息文本与转录。 */
   excludeMedia?: boolean;
-  /** 仅测试用:覆盖体积上限(默认 SHARE_EXPORT_SIZE_LIMIT_BYTES)。 */
+  /** Host resource budget override; ordinary sharing retains its default limit. */
   sizeLimitBytes?: number;
 }
 
 export type SessionShareExportOutcome =
   | {
       status: 'ok';
+      unpackedBytes: number;
       filePath: string;
       fidelity: XdtshareFidelity;
       /** 导出端没找到转录的 sdkSessionId 列表(cc fork 链部分缺失时非空)。 */
@@ -693,6 +694,11 @@ export async function exportSessionShare(
   };
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
 
+  const unpackedBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0) +
+    Buffer.byteLength(JSON.stringify(manifest, null, 2));
+  if (opts.sizeLimitBytes !== undefined && unpackedBytes > limitBytes)
+    return { status: 'oversize', totalBytes: unpackedBytes, mediaBytes, limitBytes };
+
   const zipBytes = await zip.generateAsync({
     type: 'nodebuffer',
     compression: 'DEFLATE',
@@ -732,6 +738,7 @@ export async function exportSessionShare(
   });
   return {
     status: 'ok',
+    unpackedBytes,
     filePath: opts.targetPath,
     fidelity,
     missingTranscripts,

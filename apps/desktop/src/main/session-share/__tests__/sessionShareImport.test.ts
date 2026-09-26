@@ -212,8 +212,9 @@ const {
 } = sessionShareImportModule;
 const mockedDbClientModule = await import('../../localDb/client/current.js');
 const rawCommitShareImport = sessionShareImportModule.commitShareImport;
-const commitShareImport = (opts: Parameters<typeof rawCommitShareImport>[0]) =>
+const commitShareImport = (opts: Parameters<typeof rawCommitShareImport>[0], migration?: { sessionId: string; workingDir: string }) =>
   rawCommitShareImport(opts, {
+    migration,
     dbClient: mockedDbClientModule.getDbClient(),
     assertStillValid: () => undefined,
     refCompensationScope: {
@@ -552,6 +553,44 @@ describe('sessionShareImport', () => {
     expect(imgIngest?.refs).toEqual([{ refKind: 'import', refId: result.sessionId, originKind: 'user' }]);
     expect(fs.existsSync(path.join(tmpRoot, 'cc-agent', 'images', result.sessionId, 'img-1.png'))).toBe(false);
     expect(fs.existsSync(path.join(sharedMediaRoot, result.sessionId, '2-doc.pdf'))).toBe(true);
+  });
+
+  it('checks inflated context against the host memory budget before import', async () => {
+    const zip = await JSZip.loadAsync(await buildBundle());
+    zip.file('large-extra.txt', 'a'.repeat(100_000));
+    const compressed = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    const filePath = await writeBundleFile(compressed);
+    const fileSize = (await fsp.stat(filePath)).size;
+    expect(fileSize).toBeLessThan(100_000);
+    await expect(inspectShareFile(filePath, { resourceBudgetBytes: fileSize + 1000 })).rejects.toThrow('MIGRATION_NO_MEMORY');
+    await expect(inspectShareFile(filePath, { resourceBudgetBytes: 200_000 })).resolves.toMatchObject({ encrypted: false });
+  });
+
+  it.each(['cc', 'codex', 'pi'] as const)('migration assigns an independent %s context without replacing the retained source', async agentKind => {
+    const filePath = await writeBundleFile(await buildBundle({ agentKind }));
+    const inspect = await inspectShareFile(filePath);
+    if (inspect.encrypted) throw new Error('unexpected encrypted fixture');
+    const migrationId = '11111111-2222-4333-a444-555555555555';
+    dbMock.conflictRow = { id: 'retained-source', status: 'active' };
+    dbMock.conflictForResumeId = agentKind === 'pi' ? path.join(piSessionsRoot, PI_SID) : SID;
+    codexMock.importResult.rolloutPath = path.join(tmpRoot, 'migrated.jsonl');
+    const result = await commitShareImport({ draftId: inspect.draftId, workingDir: newWorkdir,
+      projectsRootOverride: projectsRoot, piSessionsRootOverride: piSessionsRoot,
+      sharedMediaRootOverride: sharedMediaRoot }, { sessionId: migrationId, workingDir: newWorkdir });
+    expect(result.sessionId).toBe(migrationId);
+    expect(result.fidelity).toBe('full');
+    const args = dbMock.txCalls.find(call => call.name === 'session.importShare')!.args as {
+      session: { id: string; sdkSessionId: string }; messages: Array<{ agentMeta: string | null }>;
+    };
+    expect(args.session.sdkSessionId).not.toBe(dbMock.conflictForResumeId);
+    expect(args.messages[1].agentMeta).toContain(args.session.sdkSessionId.replace(/\\/g, '\\\\'));
+    expect(closeSharedTaskForTask).not.toHaveBeenCalled();
+    if (agentKind === 'codex') {
+      const call = codexMock.importCalls[0] as { threadId: string; stateRows: { threads: Array<{ id: string }> }; rolloutFilename: string };
+      expect(call.threadId).toBe(args.session.sdkSessionId);
+      expect(call.stateRows.threads[0].id).toBe(call.threadId);
+      expect(call.rolloutFilename).toContain(call.threadId);
+    }
   });
 
   it('legacy bundle without message agentKind imports rows as NULL', async () => {

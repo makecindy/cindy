@@ -2,10 +2,12 @@ import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import {
   FILE_PEER_CHANNEL,
+  TASK_MIGRATION_CHANNEL,
   encodeSessionTagCatalog,
   decodeSessionTagCatalog,
 } from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
+import { requestTaskMigration } from '../task-migration/service';
 import { normalizeProviderOrder } from "../../shared/providerOrder.js";
 /**
  * dispatch —— device-link 被控端隧道层。
@@ -3728,6 +3730,19 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
   if (payload.channel === FILE_PEER_CHANNEL) {
     try { return { ok: true, result: await requestFilePeer(src, payload.args?.[0], (channel, args) => runInvoke(src, { channel, args })) }; }
     catch { return { ok: false, error: { code: 'IPC_ERROR', message: 'FILE_PEER_UNAVAILABLE' } }; }
+  }
+  if (payload.channel === TASK_MIGRATION_CHANNEL) {
+    try {
+      if (isSharedTaskPeer(src)) throw new Error('MIGRATION_ACCESS_REVOKED');
+      const result = await runDeviceLinkInvokeContext(
+        { controllerDeviceId: src, channel: payload.channel },
+        () => requestTaskMigration(payload.args?.[0]),
+      );
+      return { ok: true, result };
+    } catch (error) {
+      const code = /\bMIGRATION_[A-Z_]+\b/.exec(error instanceof Error ? error.message : '')?.[0] ?? 'MIGRATION_FAILED';
+      return { ok: false, error: { code: 'IPC_ERROR', message: code } };
+    }
   }
   if (payload.channel === PLUGIN_OAUTH_CHANNEL) {
     if (payload.args?.length !== 1) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] Invalid OAuth transaction' } };

@@ -1,12 +1,22 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { parseSharedTaskPeer, SHARED_TASK_HOST_CHANNEL, type SharedTaskHostState } from '@cindy/device-link';
+import {
+  parseSharedTaskPeer,
+  SHARED_TASK_HOST_CHANNEL,
+  type SharedTaskHostState,
+} from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
 import { SharedTaskButton } from '@/features/device-link/SharedTaskButton';
-import { SharedTaskExitDialog, type SharedTaskExitTarget } from '@/features/device-link/SharedTaskExitDialog';
+import {
+  SharedTaskExitDialog,
+  type SharedTaskExitTarget,
+} from '@/features/device-link/SharedTaskExitDialog';
 import { useAuth } from '@/contexts/AuthContext';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
 import { sharedTaskErrorKey } from '@/features/device-link/sharedTaskCompatibility';
 import {
@@ -18,7 +28,20 @@ import {
   DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
 import { isEmptyDraftSession } from '../lib/sessionDisplayTitle';
-import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_ROW_CLASS, MENU_SEPARATOR_CLASS, MENU_SUB_CONTENT_CLASS } from './menuStyles';
+import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
+import {
+  TaskMoveSubmenu,
+  moveRemoteTaskProject,
+  type TaskMoveDestination,
+} from './TaskMoveSubmenu';
+import { TaskMigrationDialog } from './TaskMigrationDialog';
+import {
+  MENU_CONTENT_CLASS,
+  MENU_ITEM_CLASS,
+  MENU_ROW_CLASS,
+  MENU_SEPARATOR_CLASS,
+  MENU_SUB_CONTENT_CLASS,
+} from './menuStyles';
 
 interface Props {
   session: Session;
@@ -38,7 +61,11 @@ interface Props {
   exportShare: ReactNode;
 }
 
-type SharingDialog = { kind: 'manage' } | SharedTaskExitTarget;
+type SharingDialog =
+  | { kind: 'manage' }
+  | { kind: 'migration'; destination?: TaskMoveDestination }
+  | { kind: 'browse-project' }
+  | SharedTaskExitTarget;
 
 /** One menu order for the header, text rows and cards. Keep row-specific action handlers. */
 export function SessionTaskMenu(props: Props) {
@@ -80,8 +107,11 @@ function ActiveSessionTaskMenu({
   const copyPending = useRef(false);
   const copyEpoch = useRef(0);
   useEffect(() => {
-    copyPending.current = false; setCopying(false);
-    return () => { copyEpoch.current++; };
+    copyPending.current = false;
+    setCopying(false);
+    return () => {
+      copyEpoch.current++;
+    };
   }, [dataOwnerId, ownerGeneration]);
   useEffect(() => {
     if (!open || guest || session.status !== 'active') return;
@@ -91,40 +121,80 @@ function ActiveSessionTaskMenu({
     const command = { action: 'state' as const, sessionId: session.id };
     const load = async () => {
       try {
-        const result = await (session.deviceLinkDeviceId
-          ? window.electronAPI.deviceLink.invoke(session.deviceLinkDeviceId, SHARED_TASK_HOST_CHANNEL, [command])
-          : window.electronAPI.sharedTask.host(command)) as SharedTaskHostState;
+        const result = (await (session.deviceLinkDeviceId
+          ? window.electronAPI.deviceLink.invoke(
+              session.deviceLinkDeviceId,
+              SHARED_TASK_HOST_CHANNEL,
+              [command],
+            )
+          : window.electronAPI.sharedTask.host(command))) as SharedTaskHostState;
         if (!disposed && isDataOwnerGenerationCurrent(owner)) setSharing(result);
-      } catch { /* Management retains its existing retry and upgrade UI. */ }
+      } catch {
+        /* Management retains its existing retry and upgrade UI. */
+      }
     };
     void load();
-    return () => { disposed = true; };
-  }, [open, guest, session.id, session.status, session.deviceLinkDeviceId, dataOwnerId, ownerGeneration]);
+    return () => {
+      disposed = true;
+    };
+  }, [
+    open,
+    guest,
+    session.id,
+    session.status,
+    session.deviceLinkDeviceId,
+    dataOwnerId,
+    ownerGeneration,
+  ]);
   const hosted = sharing?.detail?.status === 'active' ? sharing.detail : null;
   const copyInvitation = async () => {
     if (!hosted || copyPending.current) return;
-    copyPending.current = true; setCopying(true);
+    copyPending.current = true;
+    setCopying(true);
     const owner = getDataOwnerGeneration();
     const captured = copyEpoch.current;
     const current = () => captured === copyEpoch.current && isDataOwnerGenerationCurrent(owner);
     try {
       const command = { action: 'invite' as const, sharedTaskId: hosted.sharedTaskId };
-      const result = await (session.deviceLinkDeviceId
-        ? window.electronAPI.deviceLink.invoke(session.deviceLinkDeviceId, SHARED_TASK_HOST_CHANNEL, [command])
-        : window.electronAPI.sharedTask.host(command)) as { invitation: string };
+      const result = (await (session.deviceLinkDeviceId
+        ? window.electronAPI.deviceLink.invoke(
+            session.deviceLinkDeviceId,
+            SHARED_TASK_HOST_CHANNEL,
+            [command],
+          )
+        : window.electronAPI.sharedTask.host(command))) as { invitation: string };
       if (!current()) return;
-      try { await navigator.clipboard.writeText(result.invitation); }
-      catch { if (current()) toast.error(t('sharedTask.invitationCopyFailed')); return; }
+      try {
+        await navigator.clipboard.writeText(result.invitation);
+      } catch {
+        if (current()) toast.error(t('sharedTask.invitationCopyFailed'));
+        return;
+      }
       if (current()) toast.success(t('sharedTask.invitationCopied'));
     } catch (error) {
       if (current()) toast.error(t(sharedTaskErrorKey(error)));
     } finally {
-      if (current()) { copyPending.current = false; setCopying(false); }
+      if (current()) {
+        copyPending.current = false;
+        setCopying(false);
+      }
     }
   };
   const openSharing = () => {
-    if (guest && peer) setDialog({ kind: 'leave', sharedTaskId: peer.sharedTaskId, title: session.title, peer: session.deviceLinkDeviceId! });
-    else if (hosted) setDialog({ kind: 'close', sharedTaskId: hosted.sharedTaskId, title: session.title, hostDeviceId: session.deviceLinkDeviceId || undefined });
+    if (guest && peer)
+      setDialog({
+        kind: 'leave',
+        sharedTaskId: peer.sharedTaskId,
+        title: session.title,
+        peer: session.deviceLinkDeviceId!,
+      });
+    else if (hosted)
+      setDialog({
+        kind: 'close',
+        sharedTaskId: hosted.sharedTaskId,
+        title: session.title,
+        hostDeviceId: session.deviceLinkDeviceId || undefined,
+      });
     else setDialog({ kind: 'manage' });
   };
   const dismissSharing = () => {
@@ -157,51 +227,89 @@ function ActiveSessionTaskMenu({
           if (dialog) event.preventDefault();
         }}
       >
-        {!guest && <>
-          {!archived &&
-            !empty &&
-            item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
-          {item('rename', onRename, ownerActionsBlocked)}
-          {move}
-          {tags}
-          {separator}
-          {copy}
-        </>}
-        {session.status === 'active' && (hosted && !guest ? (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
-              <span className="flex-1">{t('sharedTask.manageSharing')}</span>
-              <ChevronRight size={14} className="ml-2 shrink-0 text-[var(--cmd-palette-item-meta)]" aria-hidden />
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent sideOffset={4} className={`${MENU_SUB_CONTENT_CLASS} min-w-40`}>
-              <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={copying || writeBlocked}
-                onSelect={event => { event.preventDefault(); void copyInvitation(); }}>{t('sharedTask.invite')}</DropdownMenuItem>
-              <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={copying}
-                onSelect={() => setDialog({ kind: 'manage' })}>{t('sharedTask.manageMembers')}</DropdownMenuItem>
-              {separator}
-              <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={copying}
-                onSelect={openSharing}>{t('sharedTask.cancelSharing')}</DropdownMenuItem>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-        ) : (
-          <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={openSharing}>
-            {t(guest ? 'sharedTask.leaveShort' : 'sharedTask.title')}
-          </DropdownMenuItem>
-        ))}
-        {!guest && <>
-          {exportShare}
-          {!archived && !empty && (
-            <>
-              {separator}
-              {item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)}
-            </>
-          )}
-          {separator}
-          {archived
-            ? item('unarchive', onUnarchive, ownerActionsBlocked)
-            : !empty && item('archived', onArchive, ownerActionsBlocked)}
-          {item('delete', onDelete, ownerActionsBlocked)}
-        </>}
+        {!guest && (
+          <>
+            {!archived &&
+              !empty &&
+              item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
+            {item('rename', onRename, ownerActionsBlocked)}
+            {tags}
+            {separator}
+            {copy}
+          </>
+        )}
+        {session.status === 'active' &&
+          (hosted && !guest ? (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
+                <span className="flex-1">{t('sharedTask.manageSharing')}</span>
+                <ChevronRight
+                  size={14}
+                  className="ml-2 shrink-0 text-[var(--cmd-palette-item-meta)]"
+                  aria-hidden
+                />
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent
+                sideOffset={4}
+                className={`${MENU_SUB_CONTENT_CLASS} min-w-40`}
+              >
+                <DropdownMenuItem
+                  className={MENU_ITEM_CLASS}
+                  disabled={copying || writeBlocked}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    void copyInvitation();
+                  }}
+                >
+                  {t('sharedTask.invite')}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className={MENU_ITEM_CLASS}
+                  disabled={copying}
+                  onSelect={() => setDialog({ kind: 'manage' })}
+                >
+                  {t('sharedTask.manageMembers')}
+                </DropdownMenuItem>
+                {separator}
+                <DropdownMenuItem
+                  className={MENU_ITEM_CLASS}
+                  disabled={copying}
+                  onSelect={openSharing}
+                >
+                  {t('sharedTask.cancelSharing')}
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ) : (
+            <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={openSharing}>
+              {t(guest ? 'sharedTask.leaveShort' : 'sharedTask.title')}
+            </DropdownMenuItem>
+          ))}
+        {!guest && (
+          <>
+            {!archived && !empty && !session.remoteHostId && (
+              <TaskMoveSubmenu
+                session={session}
+                disabled={ownerActionsBlocked}
+                localProjects={move}
+                onMigration={(destination) => setDialog({ kind: 'migration', destination })}
+                onBrowseRemote={() => setDialog({ kind: 'browse-project' })}
+              />
+            )}
+            {exportShare}
+            {!archived && !empty && (
+              <>
+                {separator}
+                {item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)}
+              </>
+            )}
+            {separator}
+            {archived
+              ? item('unarchive', onUnarchive, ownerActionsBlocked)
+              : !empty && item('archived', onArchive, ownerActionsBlocked)}
+            {item('delete', onDelete, ownerActionsBlocked)}
+          </>
+        )}
       </DropdownMenuContent>
       {dialog?.kind === 'manage' && (
         <SharedTaskButton
@@ -212,8 +320,41 @@ function ActiveSessionTaskMenu({
           }}
         />
       )}
-      {dialog && dialog.kind !== 'manage' && <SharedTaskExitDialog target={dialog}
-        onDismiss={dismissSharing} onComplete={dismissSharing} />}
+      {dialog?.kind === 'migration' && (
+        <TaskMigrationDialog
+          session={session}
+          destination={dialog.destination}
+          onDismiss={dismissSharing}
+        />
+      )}
+      {dialog?.kind === 'browse-project' && session.deviceLinkDeviceId && (
+        <AddRemoteProjectDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) dismissSharing();
+          }}
+          initialDeviceId={session.deviceLinkDeviceId}
+          fixedDeviceId={session.deviceLinkDeviceId}
+          title={t('ccAgent.sidebar.sessionMenu.moveToProject')}
+          confirmText={t('ccAgent.sidebar.sessionMenu.moveToProject')}
+          errorText={t('taskMove.failed')}
+          onProjectAdded={async (target) => {
+            if (target.kind !== 'device-link' || target.deviceId !== session.deviceLinkDeviceId)
+              throw new Error('MIGRATION_ACCESS_REVOKED');
+            await moveRemoteTaskProject(session, target.path);
+          }}
+        />
+      )}
+      {dialog &&
+        dialog.kind !== 'browse-project' &&
+        dialog.kind !== 'manage' &&
+        dialog.kind !== 'migration' && (
+          <SharedTaskExitDialog
+            target={dialog}
+            onDismiss={dismissSharing}
+            onComplete={dismissSharing}
+          />
+        )}
     </div>
   );
 }

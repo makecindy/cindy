@@ -1,0 +1,38 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { getDbClient } from '../localDb/client/current';
+import { assertTaskMigrationWritable, migrationScope } from './journal';
+
+/** Freeze new writers sharing the snapshot directory only while it is being prepared. */
+export async function assertTaskMigrationInputAllowed(
+  sessionId?: string,
+  workingDir?: string | null,
+): Promise<void> {
+  const scope = migrationScope();
+  if (sessionId) {
+    assertTaskMigrationWritable(sessionId);
+    if (!workingDir) {
+      const row = await getDbClient().queryOne<{
+        workingDir: string | null;
+        remoteHostId: string | null;
+      }>(
+        'SELECT working_dir AS workingDir, remote_host_id AS remoteHostId FROM sessions WHERE id = ?',
+        [sessionId],
+      );
+      scope.assertCurrent();
+      assertTaskMigrationWritable(sessionId);
+      if (!row?.remoteHostId) workingDir = row?.workingDir;
+    }
+  }
+  if (!workingDir) return;
+  const preparing = scope
+    .list()
+    .filter((record) => record.kind === 'outgoing' && record.stage === 'preparing');
+  if (!preparing.length) return;
+  const key = fs.realpathSync(workingDir);
+  for (const record of preparing) {
+    const source = fs.realpathSync(record.workingDir);
+    if (key === source || key.startsWith(source + path.sep) || source.startsWith(key + path.sep))
+      throw new Error('[PRECONDITION_FAILED] MIGRATION_SHARED_DIRECTORY_BUSY');
+  }
+}

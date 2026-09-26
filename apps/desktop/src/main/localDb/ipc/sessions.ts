@@ -7,6 +7,7 @@
 
 import { physicalWorktreeKey, withWorktreeResourceLocks } from '../../worktree/resourceLock';
 import { managedWorktreeRoot } from '../../worktree/runtimeLeases';
+import { assertTaskMigrationWritable } from '../../task-migration/journal';
 import { queueSessionWorktreeRecycle } from '../../worktree/recycleQueue';
 import { notifyWorktreeRecycleOpportunity } from '../../worktree/recycleEvents';
 import fs from 'node:fs/promises';
@@ -1814,6 +1815,7 @@ export async function updateSessionInDb(
   // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
   // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
   const update = async () => {
+    assertTaskMigrationWritable(sid);
     if (moveGuard) {
       moveGuard.assertCurrent();
       await moveGuard.beforeUpdate();
@@ -2235,6 +2237,7 @@ async function assertGenericSessionLifecycleAllowed(
   db: DbClient['drizzle'],
   sessionId: string,
 ): Promise<void> {
+  assertTaskMigrationWritable(sessionId);
   const [target] = await db
     .select({ source: sessions.source })
     .from(sessions)
@@ -2368,6 +2371,7 @@ export async function setSessionsStatusInDb(
     }
     const physicalResources = await Promise.all([...new Set(resources)].map(physicalWorktreeKey));
     return withWorktreeMutation(resources, async () => {
+      for (const id of sessionIds) assertTaskMigrationWritable(id);
       if (status === 'archived') {
         for (const id of sessionIds) await requestWorktreeRecycle(id, perSession.get(id));
       }

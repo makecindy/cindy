@@ -20,6 +20,7 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
 import JSZip from 'jszip';
+import { migrationNativeContext } from './migrationNativeContext';
 import { isClaudeProjectKeyExact, sanitizeClaudeProjectKey } from '@cindy/maker-core';
 import { app } from 'electron';
 
@@ -139,10 +140,23 @@ function toPreview(manifest: XdtshareManifest): SharePreview {
 
 async function loadZipAndManifest(
   zipBytes: Buffer,
+  resourceBudgetBytes?: number,
 ): Promise<{ zip: JSZip; manifest: XdtshareManifest }> {
   const zip = await JSZip.loadAsync(zipBytes).catch(() => {
     throw new XdtshareError('SHARE_FILE_INVALID', 'payload is not a readable zip');
   });
+  if (resourceBudgetBytes !== undefined) {
+    let inflated = 0;
+    for (const entry of Object.values(zip.files)) {
+      if (entry.dir) continue;
+      // JSZip's loaded central-directory sizes are available before inflating any entry.
+      const size = (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
+      if (!Number.isSafeInteger(size) || size! < 0) throw codedError('SHARE_FILE_INVALID', 'invalid zip size');
+      inflated += size!;
+      if (!Number.isSafeInteger(inflated) || inflated > resourceBudgetBytes)
+        throw codedError('SHARE_FILE_INVALID', 'MIGRATION_NO_MEMORY');
+    }
+  }
   const manifestFile = zip.file('manifest.json');
   if (!manifestFile) throw new XdtshareError('SHARE_FILE_INVALID', 'manifest.json missing');
   let parsed: unknown;
@@ -155,12 +169,13 @@ async function loadZipAndManifest(
 }
 
 /** 第一段:读文件、解头。明文直接出预览;加密只报 encrypted,等 unlock。 */
-export async function inspectShareFile(filePath: string): Promise<InspectResult> {
+export async function inspectShareFile(filePath: string, hostResources?: { resourceBudgetBytes: number }): Promise<InspectResult> {
   sweepExpiredDrafts();
   const stat = await fsp.stat(filePath).catch(() => null);
   if (!stat?.isFile()) throw codedError('SHARE_FILE_INVALID', 'file not found');
-  if (stat.size > SHARE_FILE_READ_LIMIT_BYTES) {
-    throw codedError('SHARE_FILE_INVALID', 'file too large');
+  const readLimit = hostResources?.resourceBudgetBytes ?? SHARE_FILE_READ_LIMIT_BYTES;
+  if (!Number.isSafeInteger(readLimit) || readLimit < 0 || stat.size > readLimit) {
+    throw codedError('SHARE_FILE_INVALID', hostResources ? 'MIGRATION_NO_MEMORY' : 'file too large');
   }
   const fileBytes = await fsp.readFile(filePath);
   const draftId = randomUUID();
@@ -184,7 +199,7 @@ export async function inspectShareFile(filePath: string): Promise<InspectResult>
     throw err;
   }
 
-  const { zip, manifest } = await loadZipAndManifest(opened.zipBytes);
+  const { zip, manifest } = await loadZipAndManifest(opened.zipBytes, hostResources?.resourceBudgetBytes);
   drafts.set(draftId, {
     filePath,
     lockedBytes: null,
@@ -259,6 +274,8 @@ export interface CommitShareImportOptions {
 /** Stable owner-bound resources captured synchronously by the production IPC entry. */
 export interface CommitShareImportRuntimeScope {
   dbClient: DbClient;
+  /** Host-only handoff identity. Never accepted from the ordinary share-import IPC. */
+  migration?: { sessionId: string; workingDir: string };
   assertStillValid(): void;
   refCompensationScope: MediaRefCompensationScope;
   /** Persist cleanup intent before an overwrite transaction marks old sessions deleted. */
@@ -381,10 +398,10 @@ export async function commitShareImport(
 
   // ── 前置校验 ──
   const now = Date.now();
-  const newId = randomUUID();
+  const newId = runtimeScope.migration?.sessionId ?? randomUUID();
   let workingDir: string;
-  if (manifest.workspaceKind === 'project') {
-    const dir = typeof opts.workingDir === 'string' ? opts.workingDir.trim() : '';
+  if (manifest.workspaceKind === 'project' || runtimeScope.migration) {
+    const dir = runtimeScope.migration?.workingDir ?? (typeof opts.workingDir === 'string' ? opts.workingDir.trim() : '');
     if (!dir) throw codedError('INVALID_PARAMS', 'workingDir is required for project sessions');
     const stat = await guarded(() => fsp.stat(dir).catch(() => null));
     if (!stat?.isDirectory()) {
@@ -426,7 +443,11 @@ export async function commitShareImport(
     }
     return bundled;
   };
-  const bundledTranscripts = filterBundled(manifest.transcripts, 'transcripts');
+  const originalBundledTranscripts = filterBundled(manifest.transcripts, 'transcripts');
+  const migratedContext = runtimeScope.migration && manifest.agentKind !== 'pi'
+    ? migrationNativeContext(runtimeScope.migration.sessionId, manifest.transcripts.map(t => t.sdkSessionId)) : null;
+  const bundledTranscripts = originalBundledTranscripts.map(transcript => migratedContext
+    ? { ...transcript, sdkSessionId: migratedContext.id(transcript.sdkSessionId) } : transcript);
   for (const plan of workerPlans) {
     if (plan.manifest.activeSdkSessionId && !isSafePathSegment(plan.manifest.activeSdkSessionId)) {
       throw new XdtshareError(
@@ -452,7 +473,7 @@ export async function commitShareImport(
       if (zip.file(transcript.path)) {
         piTranscriptTargets.set(
           transcript.sdkSessionId,
-          path.join(piSessionsRoot, transcript.sdkSessionId),
+          path.join(piSessionsRoot, ...(runtimeScope.migration ? [runtimeScope.migration.sessionId] : []), transcript.sdkSessionId),
         );
       }
     }
@@ -469,7 +490,7 @@ export async function commitShareImport(
       ? portableId
         ? (piTranscriptTargets.get(portableId) ?? null)
         : null
-      : portableId;
+      : portableId ? migratedContext?.id(portableId) ?? portableId : null;
   const activeSdkSessionId = resolveActiveSdkSessionId(
     manifest.agentKind,
     portableActiveSdkSessionId,
@@ -745,7 +766,7 @@ export async function commitShareImport(
           try {
             const transcriptBytes = Buffer.from(await guarded(() => file.async('nodebuffer')));
             assertStillValid();
-            await fsp.writeFile(target, transcriptBytes, { flag: 'wx' });
+            await fsp.writeFile(target, migratedContext ? migratedContext.transcript(transcriptBytes, 'cc') : transcriptBytes, { flag: 'wx' });
             journal.push(async () => {
               await fsp.rm(target, { force: true });
             });
@@ -801,9 +822,14 @@ export async function commitShareImport(
       assertStillValid();
       const written = await importSharedCodexThread({
         threadId,
-        stateRows,
-        rolloutBuffer,
-        rolloutFilename: rolloutRef ? path.posix.basename(rolloutRef.path) : null,
+        stateRows: migratedContext ? migratedContext.stateRows(stateRows) : stateRows,
+        rolloutBuffer: migratedContext && rolloutBuffer ? migratedContext.transcript(rolloutBuffer, 'codex') : rolloutBuffer,
+        rolloutFilename: rolloutRef
+          ? path.posix.basename(rolloutRef.path).replace(
+              /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?=\.jsonl$)/i,
+              (nativeId) => migratedContext?.id(nativeId) ?? nativeId,
+            )
+          : null,
         newCwd: workingDir,
         title: restore.title,
         updatedAt: now,
@@ -835,12 +861,13 @@ export async function commitShareImport(
         id: randomUUID(),
         clientId: m.clientId,
         role: m.role,
-        content: rewriteMediaUrls(m.content, rewriteRules),
+        content: rewriteMediaUrls(migratedContext && m.role === 'agent_switch'
+          ? migratedContext.metadata(m.content) ?? m.content : m.content, rewriteRules),
         toolUseId: m.toolUseId,
         agentMeta:
           agentKind === 'pi'
             ? rewritePiAgentMetaForImport(m.agentMeta, piTranscriptTargets)
-            : m.agentMeta,
+            : migratedContext ? migratedContext.metadata(m.agentMeta) : m.agentMeta,
         agentKind: m.agentKind,
         createdAt: m.createdAt,
         rewindAt: m.rewindAt,
@@ -907,6 +934,11 @@ export async function commitShareImport(
       conflictExisting.map((session) => session.id),
       async () => {
         assertStillValid();
+        if (runtimeScope.migration && (manifest.exportFidelity !== 'full' || !transcriptsPlaceable || notes.includes('codexStateSkipped') ||
+          transcriptsWritten < new Set(restorePlans.flatMap((restore) =>
+            restore.bundled.map((transcript) => `${restore.agentKind}:${transcript.sdkSessionId}`))).size)) {
+          throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_INCOMPLETE_CONTEXT');
+        }
         finalTxState.outcome = 'in-flight';
         await dbClient.tx('session.importShare', {
           session: buildSessionRow({

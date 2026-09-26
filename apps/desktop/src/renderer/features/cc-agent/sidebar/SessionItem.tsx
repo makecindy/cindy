@@ -828,25 +828,14 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   ) : null;
 
   const moveToProjectSubmenu = canMoveToProject ? (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
-        <span className="flex-1">{t('ccAgent.sidebar.sessionMenu.moveToProject')}</span>
-        <ChevronRight size={14} className="ml-2 shrink-0 text-[var(--cmd-palette-item-meta)]" />
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent
-        sideOffset={4}
-        className={cn(MENU_SUB_CONTENT_CLASS, 'w-[320px] overflow-hidden')}
-      >
-        <SessionProjectMoveSubmenu
-          projectOptions={projectOptions}
-          currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
-          isDialogue={session.workspaceKind === 'dialogue'}
-          onSelectProject={handleMoveToProjectSelect}
-          onBrowseProject={handleMoveToProjectBrowse}
-          onMoveToDialogue={handleMoveToDialogue}
-        />
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
+    <SessionProjectMoveSubmenu
+      projectOptions={projectOptions}
+      currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
+      isDialogue={session.workspaceKind === 'dialogue'}
+      onSelectProject={handleMoveToProjectSelect}
+      onBrowseProject={handleMoveToProjectBrowse}
+      onMoveToDialogue={handleMoveToDialogue}
+    />
   ) : null;
 
   const showAutomationRunAction =

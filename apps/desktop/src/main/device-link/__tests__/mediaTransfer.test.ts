@@ -546,6 +546,13 @@ describe('uploadBuffer — 内存字节(base64 附件)', () => {
 });
 
 describe('downloadToFile — 原子完整性校验', () => {
+  it('拒绝超出声明大小的流，不发布目标文件', async () => {
+    netFetchMock.mockResolvedValue({ ok: true, status: 200, body: webBody(Uint8Array.from([1, 2, 3])) });
+    await expect(downloadToFile(KEY, '/tmp/final.bin', { size: 1, sha256: 'a'.repeat(64) }))
+      .rejects.toThrow('附件下载超出声明大小');
+    expect(renameMock).not.toHaveBeenCalled();
+    expect(rmMock).toHaveBeenCalledWith(expect.stringMatching(/\.part$/), { force: true });
+  });
   it('大小和 SHA-256 都匹配后才发布目标文件', async () => {
     const bytes = Uint8Array.from([1, 2, 3]);
     netFetchMock.mockResolvedValue({ ok: true, status: 200, body: webBody(bytes) });
