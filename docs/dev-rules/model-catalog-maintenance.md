@@ -200,10 +200,13 @@ SSH 执行路径跳过本机启动，不会把本机模型安装到远端。
 安装与手动下载独立于服务端；共用目录的后续更新需要配套发布 Server。
 客户端请求增加 `registryLocalRuntimes=1`，服务端仅向同时声明 media 和本能力的 V4/V5
 客户端下发 `llamacpp`，旧端剥离该字段并重新计算 ETag。未知能力值等同未声明。
-本轮完整 Registry 与 Server `dash/llamacpp-catalog` 工作树的生成快照一致，revision 为
+初次同步的完整 Registry 与 Server `dash/llamacpp-catalog` 工作树的生成快照一致，revision 为
 `2026-09-26T00:00:00.000Z`（包含 26 日更新的主推顺序）；此为工作副本核验，不代表已合并或部署。同步前将客户端
 已有但 Server 主干尚缺的 Grok 4.7 / Build Fast 配置原样补入 Server，避免回退已有型号。
 没有仅拼入本地域、改变用户 override 或发布到线上。
+随后同步客户端主干 #5119 的目录变更，保留其订阅排序与默认显示资料，以及本 PR 的本地包装和主推顺序；
+合并快照使用独立递增 revision `2026-09-26T12:00:00.006Z`，避免与主干 `.005Z` 同版本不同内容。
+此合并快照尚未同步 Server 工作树或部署，不能继续声称当前两边整表一致。
 
 回归测试为 `llamaCppDownloads.test.ts`、`llamaCppService.test.ts`、`llamaCppIpc.test.ts`、
 `managedLlamaCppProvider.test.ts` 与 `LlamaCppProviderDetail.test.tsx`。
