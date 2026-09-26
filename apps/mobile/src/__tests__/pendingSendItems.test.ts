@@ -476,3 +476,23 @@ describe('pendingSendSpins', () => {
     expect(pendingSendSpins('failed')).toBe(false);
   });
 });
+
+describe('pending bubbles for inputs sent by another task', () => {
+  it('show the persisted visible body, not the agent-facing teammate prefix', () => {
+    const interjection = {
+      ...queued('interject', '[来自 Cindy 的补充]\n\nplease review'),
+      persistedContent: 'please review',
+      origin: { kind: 'session', senderSessionId: 'bot-task', displayText: '[来自 Cindy 的补充]\n\nplease review' },
+    } as QueuedRemoteMessage;
+    const [queuedBubble] = build({ queue: [interjection] });
+    const [settlingBubble] = build({ settling: [interjection] });
+    expect(queuedBubble.text).toBe('please review');
+    expect(settlingBubble.text).toBe('please review');
+    expect(JSON.stringify(queuedBubble.sentInlineTokens)).not.toContain('来自 Cindy');
+  });
+
+  it('keeps ordinary composer items on their own text', () => {
+    const [bubble] = build({ queue: [queued('plain', 'hello')] });
+    expect(bubble.text).toBe('hello');
+  });
+});

@@ -1,3 +1,5 @@
+import { queueItemVisibleText } from '@cindy/maker-shared/queue';
+
 /**
  * 共享任务访客只能直接访问被共享的这一个任务（docs/product-rules/shared-task-mode.md）。
  * 消息来源（agentMeta.origin）里指向房主其它任务或伙伴的身份——来源任务 id、标题、
@@ -39,7 +41,7 @@ export function redactQueueItemForSharedGuest<T>(item: T): T {
   if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return item;
   const typed = origin as Record<string, unknown>;
   if (typed.kind === 'session') {
-    const visible = visibleQueueText(entry);
+    const visible = queueItemVisibleText(entry);
     return {
       ...entry,
       text: visible,
@@ -51,19 +53,6 @@ export function redactQueueItemForSharedGuest<T>(item: T): T {
     return { ...entry, origin: rest } as T;
   }
   return item;
-}
-
-function visibleQueueText(entry: Record<string, unknown>): string {
-  const persisted = typeof entry.persistedContent === 'string' ? entry.persistedContent : '';
-  if (Array.isArray(entry.files) && entry.files.length > 0) {
-    try {
-      const envelope = JSON.parse(persisted) as { text?: unknown } | null;
-      if (envelope && typeof envelope.text === 'string') return envelope.text;
-    } catch {
-      // Not an envelope: the persisted row is already the visible text.
-    }
-  }
-  return persisted;
 }
 
 /**

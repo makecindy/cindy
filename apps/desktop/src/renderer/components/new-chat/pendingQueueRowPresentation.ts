@@ -1,3 +1,4 @@
+import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
 import {
@@ -77,42 +78,16 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
     senderBotId: isSession ? (origin.senderBotId ?? null) : null,
     displayText: isOrca
       ? (origin.displayText ?? entry.text)
-      : isScheduler
-        ? entry.persistedContent || entry.text
-        : isSession
-          ? sessionQueueDisplayText(entry)
-          : entry.chatMessage.quotesEncoded === true
-            ? stripChatQuoteMarkerLines(entry.text)
-            : entry.text,
+      : isScheduler || isSession
+        ? queueItemVisibleText(entry)
+        : entry.chatMessage.quotesEncoded === true
+          ? stripChatQuoteMarkerLines(entry.text)
+          : entry.text,
     canEdit: !isPendingEnqueue && !isMachineGenerated && !isSyntheticTrigger,
     canSteer: !isPendingEnqueue && !isMachineGenerated && !isSyntheticTrigger,
     isSyntheticTrigger,
     syntheticKind: isSyntheticTrigger ? (isContinueTrigger ? 'continue' : 'generic') : null,
   };
-}
-
-/**
- * Messages sent by another session persist their raw text, except attachment
- * items: the host stores those as a `{text, images, files}` envelope. Only
- * unwrap when the item really carries files, so a message whose own text is
- * literal JSON is shown verbatim.
- */
-function sessionQueueDisplayText(entry: QueuedMessage): string {
-  const persisted = entry.persistedContent || entry.text;
-  if (!entry.files?.length) return persisted;
-  try {
-    const parsed = JSON.parse(persisted) as unknown;
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      typeof (parsed as { text?: unknown }).text === 'string'
-    ) {
-      return (parsed as { text: string }).text;
-    }
-  } catch {
-    // Not an envelope; fall through to the stored text.
-  }
-  return persisted;
 }
 
 /**

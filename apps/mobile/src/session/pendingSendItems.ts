@@ -15,6 +15,7 @@
  * 未派发条目保持队列 / outbox 顺序。已派发气泡在分组前占据本地用户消息的位置，
  * 正式回流以同一个 clientId 原位替换，不比较控制端与主机的时钟。
  */
+import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { syntheticTriggerKind } from '@cindy/maker-shared/synthetic-trigger';
 import {
   parseChatQuoteSegments,
@@ -136,13 +137,17 @@ export function mergePendingSendItems(
 /**
  * 气泡显示文本:合成 UI 指令行(桌面「失败后继续」等隐藏 prompt)用遮蔽标签替代原文
  * —— 裸英文指令不能给用户看(对齐桌面 PendingQueuePanel 的 i18n 遮蔽标签)。
+ * 自动化 / 其他任务发来的条目显示落库可见正文(不带发给 Agent 的前缀或协议),
+ * 与回流后的正式消息一致(queueItemVisibleText,与桌面排队面板同判据)。
  */
 export function pendingSendBubbleText(
-  item: Pick<QueuedRemoteMessage, 'text' | 'chatMessage'>,
+  item: Pick<QueuedRemoteMessage, 'text' | 'chatMessage'>
+    & Partial<Pick<QueuedRemoteMessage, 'persistedContent' | 'files' | 'origin'>>,
 ): string {
+  const agentText = queueItemVisibleText(item);
   const visibleText = item.chatMessage.quotesEncoded === true
-    ? stripChatQuoteMarkerLines(item.text)
-    : item.text;
+    ? stripChatQuoteMarkerLines(agentText)
+    : agentText;
   const kind = syntheticTriggerKind(visibleText);
   if (kind === 'continue') return i18n.t('message.queue.continueSystemInstruction');
   if (kind === 'generic') return i18n.t('message.queue.systemInstruction');
@@ -257,7 +262,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       clientId: item.clientId,
       text: pendingSendBubbleText(item),
       sentInlineTokens: buildPendingSentInlineTokens({
-        text: item.text,
+        text: queueItemVisibleText(item),
         quotesEncoded: item.chatMessage.quotesEncoded,
         pastedTextRanges: item.chatMessage.pastedTextRanges,
         slashCommandRanges: item.chatMessage.slashCommandRanges,

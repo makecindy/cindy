@@ -4,6 +4,7 @@ import {
   buildQueueRowPresentation,
   isAutoSentQueueItem,
   isOrcaQueueItem,
+  queueItemVisibleText,
   queueMoveTargetIndex,
   stopOptionsForProjection,
 } from '../queue.js';
@@ -305,5 +306,36 @@ describe('shared queue presentation model', () => {
     }
     expect(isAutoSentQueueItem({ origin: { kind: 'orca', senderLabel: 'Lead' } })).toBe(false);
     expect(isAutoSentQueueItem({})).toBe(false);
+  });
+});
+
+describe('queueItemVisibleText', () => {
+  it('shows the persisted body for session and scheduler items', () => {
+    expect(queueItemVisibleText({
+      text: '[来自 Cindy 的补充]\n\nplease review',
+      persistedContent: 'please review',
+      origin: { kind: 'session', senderSessionId: 'bot-task' },
+    })).toBe('please review');
+    expect(queueItemVisibleText({
+      text: 'heartbeat prompt\n[silent-run protocol]',
+      persistedContent: 'heartbeat prompt',
+      origin: { kind: 'scheduler', scheduleId: 's' },
+    })).toBe('heartbeat prompt');
+  });
+
+  it('unwraps the host attachment envelope only when files are attached', () => {
+    const origin = { kind: 'session', senderSessionId: 'caller' };
+    expect(queueItemVisibleText({
+      text: 'see attached',
+      persistedContent: JSON.stringify({ text: 'see attached', images: [], files: [{ name: 'a.txt' }] }),
+      files: [{ name: 'a.txt' }],
+      origin,
+    })).toBe('see attached');
+    expect(queueItemVisibleText({ text: '{"text":"x"}', persistedContent: '{"text":"x"}', origin })).toBe('{"text":"x"}');
+  });
+
+  it('keeps the agent text for composer and Orca items', () => {
+    expect(queueItemVisibleText({ text: 'hello', persistedContent: 'other' })).toBe('hello');
+    expect(queueItemVisibleText({ text: 'wire', persistedContent: '{}', origin: { kind: 'orca', senderLabel: 'Lead' } })).toBe('wire');
   });
 });
