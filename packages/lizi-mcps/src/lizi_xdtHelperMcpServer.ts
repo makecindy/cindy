@@ -39,6 +39,8 @@ import { jsonObjectArg } from './json-object-arg.js';
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
 import { registerCreateProjectTool, type CreateProjectCallback } from './xdt-helper/create_project.js';
 import { registerMoveSessionTool, type MoveSessionCallback } from './xdt-helper/move_session.js';
+import { registerOpenSessionInNewWindowTool, type OpenSessionInNewWindowDeps } from './xdt-helper/open_session_in_new_window.js';
+import { registerGetSessionBranchesTool, type GetSessionBranchesDeps } from './xdt-helper/get_session_branches.js';
 import { registerProjectManagementTools, type ProjectManagementCallbacks } from './xdt-helper/project_management.js';
 import {
   registerGetCapabilitiesTool,
@@ -733,6 +735,10 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  /** 在新窗口打开 session 回调。host 注入后, control 类工具 open_session_in_new_window 会被注册。 */
+  openSessionInNewWindow?: OpenSessionInNewWindowDeps['openSessionInNewWindow'];
+  /** 会话分叉家族查询回调。host 注入后, control 类工具 get_session_branches 会被注册。 */
+  getSessionBranches?: GetSessionBranchesDeps['getSessionBranches'];
 }
 
 /**
@@ -824,6 +830,18 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.openSessionInNewWindow) {
+    registerOpenSessionInNewWindowTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      openSessionInNewWindow: deps.openSessionInNewWindow,
+    });
+  }
+  if (deps.getSessionBranches) {
+    registerGetSessionBranchesTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      getSessionBranches: deps.getSessionBranches,
+    });
   }
 
   // History 类工具: 仅 host 注入了 history 回调时注册。
