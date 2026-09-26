@@ -1452,14 +1452,22 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         }
         return;
       }
-      if (
-        !e.ctrlKey &&
-        !e.metaKey &&
-        !e.altKey &&
-        (e.key?.length === 1 || e.key === "Process" || e.key === "Dead")
-      )
-        return;
     }
+    // The focused textarea delivers characters through input (and editing
+    // keys through beforeinput). Forwarding their keydown too types twice on
+    // iOS, where the software keyboard reports both events.
+    if (
+      (config.desktop || keyboardEnabled) &&
+      document.activeElement === keyboardInput &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      (e.key?.length === 1 ||
+        e.key === "Process" ||
+        e.key === "Dead" ||
+        (keyboardEnabled && ["Backspace", "Enter"].includes(e.code)))
+    )
+      return;
     if (control && validKeys.has(normalizedKey(e.code))) {
       e.preventDefault();
       flushClipboardModifier();
@@ -1472,7 +1480,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (config.desktop && control && deferredClipboardModifier === code) {
       flushClipboardModifier();
     }
-    if (config.desktop && !hardwareKeys.delete(code)) return;
+    if (!hardwareKeys.delete(code)) return;
     if (control && validKeys.has(code)) {
       e.preventDefault();
       queue({ kind: "key", code, down: false });

@@ -1742,6 +1742,9 @@ export class TurnDispatchUnconfirmedError extends Error {
   }
 }
 
+/** Persistable evidence that native Pi compaction could not recover an upstream byte limit. */
+export const PI_REQUEST_BODY_RECOVERY_EXHAUSTED = 'PI_REQUEST_BODY_RECOVERY_EXHAUSTED';
+
 /** The provider explicitly rejected the turn before accepting any work. */
 export class TurnDispatchRejectedError extends Error {
   readonly code = 'TURN_DISPATCH_REJECTED';
@@ -1995,6 +1998,8 @@ export interface SendOptions {
    * 回调失败不得改变已经接受的 provider dispatch 结果。
    */
   onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
+  /** Exact accepted Pi input replaced by a zero-output retry; never match by text. */
+  retryTranscriptUserEntryId?: string;
   /**
    * 当前用户的展示名 (host / renderer 在调 send 时提供)。仅用于 turn-start 时
    * push status event 的文案 — agent 拼成 "<userName> Just Wait ..." 让 UI 个人化;

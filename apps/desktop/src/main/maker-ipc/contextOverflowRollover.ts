@@ -8,6 +8,7 @@
 import {
   CODEX_HISTORY_OVERSIZED_REASON,
   CONTEXT_OVERFLOW_REASON,
+  PI_REQUEST_BODY_RECOVERY_EXHAUSTED,
   isContextOverflowErrorMessage,
   isRemoteCompactEncryptedContentError,
 } from '@cindy/maker-core';
@@ -84,9 +85,16 @@ export function isPiPromptRpcTimeoutError(data: unknown): boolean {
   );
 }
 
+function isPiRequestBodyRecoveryExhausted(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const rec = data as { message?: unknown; sdkError?: unknown };
+  return [rec.message, rec.sdkError].some(value =>
+    typeof value === 'string' && value.includes(PI_REQUEST_BODY_RECOVERY_EXHAUSTED));
+}
+
 /** PI 原生会话已经无法继续：超限，或 prompt RPC 超时（巨大 jsonl resume 卡死）。 */
 export function shouldRebuildPiNativeSession(data: unknown): boolean {
-  return isContextOverflowErrorData(data) || isPiPromptRpcTimeoutError(data);
+  return isContextOverflowErrorData(data) || isPiPromptRpcTimeoutError(data) || isPiRequestBodyRecoveryExhausted(data);
 }
 
 const GROK_4_CONTEXT_CAP = 500_000;
@@ -302,6 +310,7 @@ export function findLatestRebuildableError(
       const data = errorContentToData(message.content);
       if (isContextOverflowErrorData(data)) return data;
       if (allowPiPromptTimeout && isPiPromptRpcTimeoutError(data)) return data;
+      if (allowPiPromptTimeout && isPiRequestBodyRecoveryExhausted(data)) return data;
       if (isOversizedHistoryErrorData(data)) return data;
       return null;
     }
@@ -776,6 +785,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const window = effectiveContextWindow(sessionRow.model, reportedWindow, verified);
     const pressure = shouldRebuildForContextPressure(usedTokens, window);
     const compactFailed = liveUsage?.needsRollover === true;
+    const piByteRecoveryFailed = sessionRow.agentKind === 'pi' && isPiRequestBodyRecoveryExhausted(lastError);
     const tokenViolated =
       isContextOverflowErrorData(lastError) ||
       isPiPromptRpcTimeoutError(lastError) ||
@@ -787,7 +797,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       : undefined;
     const action = decideCindyCompression({
       local: true,
-      bytes: oversized && historyHealth !== 'healthy' ? 'violated' : 'unknown',
+      bytes: piByteRecoveryFailed || (oversized && historyHealth !== 'healthy') ? 'violated' : 'unknown',
       tokens: tokenViolated ? 'violated' : 'unknown',
     });
     if (action !== 'rebuild') return false;
