@@ -21,4 +21,20 @@ describe('预设 Codex 图片能力与 Chat 桥接一致', () => {
     }
     expect(mismatched).toEqual([]);
   });
+
+  it('第三方直连 Registry 路由不在路由级声明图片输入（路由默认值会作用到 Codex）', () => {
+    const firstParty = new Set(['xd', 'openai', 'anthropic']);
+    const offenders = (BUNDLED_CATALOG.modelRegistry?.models ?? []).flatMap((entry) =>
+      entry.routes
+        .filter(
+          (route) =>
+            !firstParty.has(route.providerId) &&
+            route.agents.includes('codex') &&
+            (route.defaults?.supportsImageInput === true ||
+              route.forceOverrides?.supportsImageInput === true),
+        )
+        .map((route) => `${entry.id} ${route.providerId}:${route.modelId}`),
+    );
+    expect(offenders).toEqual([]);
+  });
 });
