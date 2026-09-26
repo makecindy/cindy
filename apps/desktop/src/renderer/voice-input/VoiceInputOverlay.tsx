@@ -71,7 +71,7 @@ import { formatVoiceInputShortcut } from './shortcut';
 import { VoiceInputMicWaveIcon } from './VoiceInputMicWaveIcon';
 import { getVoiceInputWorkletUrl } from './workletUrl';
 import { VoiceInputPointerHintLayer } from './VoiceInputPointerHintLayer';
-import { isVoiceInputServiceConnectionError, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
+import { getVoiceInputErrorMessageKey, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
 import {
   resolveVoiceInputReadinessRecovery,
   type VoiceInputRecoverySettingsTab,
@@ -462,10 +462,8 @@ export function VoiceInputOverlay() {
   }, []);
 
   const formatVoiceInputStartError = useCallback((message: string): string => {
-    if (isVoiceInputServiceConnectionError(message)) {
-      return t('voiceInputOverlay.asrServiceUnavailable');
-    }
-    return message;
+    const key = getVoiceInputErrorMessageKey(message);
+    return key ? t(key) : message;
   }, [t]);
 
   const formatVoiceInputError = useCallback((

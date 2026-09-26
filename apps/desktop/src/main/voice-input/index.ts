@@ -22,8 +22,7 @@ import {
   type VoiceTimelineEvent,
 } from '@cindy/voice-input-core';
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
-import { isVoiceInputStartRateLimited } from './voiceInputStartError.js';
+import { getVoiceInputRateLimitMessage } from './voiceInputStartError.js';
 import {
   isProviderModelRouteDisabled,
   isUtilityRouteDisabled,
@@ -2347,6 +2346,7 @@ export function registerVoiceInputIpc(): void {
       asr: provider,
       refiner,
       pauseRefinementEnabled: true,
+      recoveryErrorMessage: voiceContext ? getVoiceInputRateLimitMessage : undefined,
       logger,
       callbacks: {
         onStateChanged: (state, outcome) => {
@@ -2443,9 +2443,7 @@ export function registerVoiceInputIpc(): void {
       return {
         ok: false,
         error: voiceContext
-          ? (isVoiceInputStartRateLimited(error)
-            ? t('voiceInputOverlay.rateLimited')
-            : CINDY_VOICE_SERVICE_UNAVAILABLE_MESSAGE)
+          ? (getVoiceInputRateLimitMessage(error) ?? CINDY_VOICE_SERVICE_UNAVAILABLE_MESSAGE)
           : message,
       };
     }

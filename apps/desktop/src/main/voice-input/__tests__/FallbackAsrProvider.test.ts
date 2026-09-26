@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AsrEvent, AsrProvider } from '@cindy/voice-input-core';
+import { VoiceInputController, VoiceTimelineLogger } from '@cindy/voice-input-core';
+import { getVoiceInputRateLimitMessage } from '../voiceInputStartError.js';
+import { VOICE_INPUT_RATE_LIMITED_MESSAGE } from '../../../shared/voiceInputErrors.js';
 
 import { FallbackAsrProvider, type FallbackAsrCandidate } from '../FallbackAsrProvider.js';
 import {
@@ -64,6 +67,51 @@ const accountRateLimit = (): Error => Object.assign(new Error('语音请求过�
 describe('FallbackAsrProvider', () => {
   beforeEach(() => {
     resetVoiceInputProviderHealthForTests();
+  });
+
+  it.each([
+    { managed: true, error: accountRateLimit(), limited: true },
+    { managed: true, error: new Error('network down'), limited: false },
+    { managed: false, error: accountRateLimit(), limited: false },
+  ])('preserves the recovery cause and recognized text through the controller (%#)', async ({ managed, error, limited }) => {
+    const primary = makeMockProvider({ recover: async () => { throw error; } });
+    const backup = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', primary),
+      candidate('litellm-qwen3-asr-flash-realtime', backup),
+    ], { sharedAccountRateLimit: managed });
+    const onError = vi.fn();
+    const submitted: string[] = [];
+    const controller = new VoiceInputController({
+      asr: fallback,
+      logger: new VoiceTimelineLogger(),
+      recoveryErrorMessage: managed ? getVoiceInputRateLimitMessage : undefined,
+      callbacks: {
+        onDraftChanged: () => {},
+        onSubmitted: (text, segment) => {
+          submitted.push(text);
+          return { id: 'range', segmentIds: [segment.id], startOffset: 0, endOffset: text.length, userTouched: false };
+        },
+        onError,
+      },
+    });
+    try {
+      await controller.start();
+      primary.emit({ type: 'partial', text: 'keep these words', at: Date.now() });
+      primary.emit({ type: 'disconnected', at: Date.now() });
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+      expect(onError).toHaveBeenCalledWith(
+        limited ? VOICE_INPUT_RATE_LIMITED_MESSAGE : 'Voice input stopped receiving recognition. Please try again.',
+        limited ? undefined : 'recognition_stalled',
+        { transcriptKept: true },
+      );
+      expect(submitted).toEqual(['keep these words']);
+      expect(backup.start).not.toHaveBeenCalled();
+      expect(isVoiceInputProviderCoolingDown('asr', 'litellm-volcengine-sauc-asr')).toBe(!limited);
+    } finally {
+      await controller.cancel();
+      await fallback.dispose();
+    }
   });
 
   it.each(['create', 'start'] as const)('stops on shared account rate limits during %s without penalizing providers', async (phase) => {

@@ -1,3 +1,5 @@
+import { VOICE_INPUT_RATE_LIMITED_MESSAGE } from '../../shared/voiceInputErrors.js';
+
 /** Classify structured session-allocation errors without exposing upstream text. */
 export function isVoiceInputStartRateLimited(error: unknown): boolean {
   // FallbackAsrProvider retains each original ServerApiError in .errors.
@@ -8,4 +10,9 @@ export function isVoiceInputStartRateLimited(error: unknown): boolean {
     && 'code' in failure && failure.code === 'RATE_LIMITED'
     && 'statusCode' in failure && failure.statusCode === 429
   ));
+}
+
+/** Only recognized account limits may replace the controller's recovery fallback. */
+export function getVoiceInputRateLimitMessage(error: unknown): string | undefined {
+  return isVoiceInputStartRateLimited(error) ? VOICE_INPUT_RATE_LIMITED_MESSAGE : undefined;
 }

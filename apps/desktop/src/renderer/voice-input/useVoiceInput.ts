@@ -65,7 +65,7 @@ import {
   resolveInsertedTextRange,
   type EditorTextRange,
 } from './editorRangeMapping';
-import { isVoiceInputServiceConnectionError, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
+import { getVoiceInputErrorMessageKey, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
 import {
   hasArmedDetachedVoiceDraft,
   settleArmedDetachedVoiceDraft,
@@ -411,9 +411,8 @@ export function useVoiceInput(
   }, [clearInlineErrorDismissTimer]);
 
   const formatVoiceInputStartError = useCallback((message: string): string => {
-    return isVoiceInputServiceConnectionError(message)
-      ? t('voiceInputOverlay.asrServiceUnavailable')
-      : message;
+    const key = getVoiceInputErrorMessageKey(message);
+    return key ? t(key) : message;
   }, [t]);
 
   const formatVoiceInputError = useCallback((

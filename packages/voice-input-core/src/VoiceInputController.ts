@@ -43,6 +43,8 @@ type VoiceInputControllerOptions = {
   stableWaitMs?: number;
   /** Host opt-in: refine during a speech pause and publish a live draft. */
   pauseRefinementEnabled?: boolean;
+  /** Host opt-in for known recovery failures; undefined keeps the generic error. */
+  recoveryErrorMessage?: (error: unknown) => string | undefined;
 };
 
 type CryptoWithUuid = {
@@ -91,6 +93,7 @@ export class VoiceInputController {
   private readonly callbacks: VoiceInputCallbacks;
   private readonly stableWaitMs: number;
   private readonly pauseRefinementEnabled: boolean;
+  private readonly recoveryErrorMessage?: (error: unknown) => string | undefined;
   private lastSoundAt = 0;
   private lastTranscriptChangeAt = 0;
   private pauseRefinement?: PendingRefinement;
@@ -156,6 +159,7 @@ export class VoiceInputController {
     this.callbacks = options.callbacks;
     this.stableWaitMs = options.stableWaitMs ?? 500;
     this.pauseRefinementEnabled = options.pauseRefinementEnabled ?? false;
+    this.recoveryErrorMessage = options.recoveryErrorMessage;
 
     this.asr.onEvent((event) => this.handleAsrEvent(event));
   }
@@ -870,7 +874,11 @@ export class VoiceInputController {
           reason,
         });
         this.stopStallWatchdog();
-        this.fail('Voice input stopped receiving recognition. Please try again.', 'recognition_stalled');
+        const message = this.recoveryErrorMessage?.(error);
+        this.fail(
+          message ?? 'Voice input stopped receiving recognition. Please try again.',
+          message === undefined ? 'recognition_stalled' : undefined,
+        );
       })
       .finally(() => {
         if (runId !== this.runId) return;
