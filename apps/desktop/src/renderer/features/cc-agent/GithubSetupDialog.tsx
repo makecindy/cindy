@@ -111,8 +111,8 @@ export function GithubSetupDialog({
   const openBrowser = async () => {
     setOpening(true);
     try {
-      await window.electronAPI.openExternal('https://github.com/login/device');
-      setFeedback(undefined);
+      const result = await window.electronAPI.openExternal('https://github.com/login/device');
+      setFeedback(result.success ? undefined : 'openFailed');
     } catch {
       setFeedback('openFailed');
     } finally {

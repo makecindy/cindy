@@ -76,7 +76,7 @@ describe('GitHub setup UI', () => {
   it('requires the connect action, shows the code and opens only GitHub device authorization', async () => {
     const start = vi.fn(async () => ({ phase: 'authorizing', userCode: 'ABCD-1234' }));
     const status = vi.fn(async () => ({ phase: 'idle' }));
-    const openExternal = vi.fn();
+    const openExternal = vi.fn(async () => ({ success: true }));
     window.electronAPI = {
       gitContext: { githubSetupStatus: status, startGithubSetup: start },
       openExternal,
@@ -127,6 +127,29 @@ describe('GitHub setup UI', () => {
     expect(screen.queryByText(`${key}.cancel`)).toBeNull();
     expect(screen.queryByText(`${key}.connect`)).toBeNull();
   });
+
+  it.each(['result', 'rejection'])(
+    'shows manual-open guidance after browser %s failure and clears it on retry',
+    async (failure) => {
+      const openExternal = vi.fn().mockResolvedValue({ success: true });
+      if (failure === 'result') openExternal.mockResolvedValueOnce({ success: false });
+      else openExternal.mockRejectedValueOnce(new Error('browser unavailable'));
+      window.electronAPI = {
+        gitContext: {
+          githubSetupStatus: async () => ({ phase: 'authorizing', userCode: 'ABCD-1234' }),
+        },
+        openExternal,
+      } as any;
+      render(<GithubSetupDialog onClose={() => {}} />);
+      fireEvent.click(await screen.findByText(`${key}.openBrowser`));
+      expect(await screen.findByRole('alert')).toHaveProperty('textContent', `${key}.openFailed`);
+      expect(screen.getByText('ABCD-1234')).toBeTruthy();
+      expect(screen.getByText('github.com/login/device')).toBeTruthy();
+      fireEvent.click(screen.getByText(`${key}.openBrowser`));
+      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+      expect(openExternal).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it('keeps action failures visible and offers a retry', async () => {
     window.electronAPI = {
