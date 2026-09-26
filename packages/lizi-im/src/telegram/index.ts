@@ -19,6 +19,7 @@
  * (im/telegram/groupWindow.ts), 包内不落盘。
  */
 
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -353,6 +354,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 所以领取要看归属: 回合活着就由它持有, 收口(finalize/close)后才允许替换。
    */
   private readonly activeStreamRounds = new Map<string, number>();
+  /**
+   * issue #1558: 逻辑 turn 级归属。回挂目标的所有权单位是一轮逻辑对话, 不是某段
+   * 流式 handle: Host 在 turn 派发时 beginOutboundTurn(此时从队头领取本轮目标),
+   * 终态时 endOutboundTurn。活动 turn 期间, 排队提示等独立出站不得接管槽位,
+   * 同 turn 的续流复用已领取的目标, 无归属的独立流式不触碰它。
+   * token → lane; lane → 活动 turn 数。
+   */
+  private readonly outboundTurns = new Map<string, { userId: string; replyTargetId: string | null }>();
+  private readonly activeOutboundTurns = new Map<string, number>();
   /** 非 owner 礼貌回应的 per-user 冷却(userId → 上次回应 ts)。 */
   private readonly strangerNoticeAt = new Map<string, number>();
   /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
@@ -445,6 +455,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.clearAllTypingLoops();
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
+    this.clearOutboundTurns();
     await this.stopPolling();
     if (!this.botId) this.botId = botIdFromToken(token);
     this.setStatus({ kind: 'offline', appId: this.botContextId });
@@ -502,6 +513,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 回挂配对是连接期内存态 — 换代/断开后旧目标一律作废, 不跨代错配。
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
+    this.clearOutboundTurns();
     await this.stopPolling();
     // bot 身份是上一个账号的连接期产物: 登出/换账号后必须清干净, 否则下一个
     // 账号在 offline 等拿不到 getMe 的状态下会继承旧账号的 bot 名字。
@@ -702,22 +714,41 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   // ── outbound ───────────────────────────────────────────────────────────────
 
-  async sendText(userId: string, text: string): Promise<{ messageId: string }> {
+  async sendText(
+    userId: string,
+    text: string,
+    opts?: { threadTs?: string; fallbackOpenerId?: string; replyToMessageId?: string },
+  ): Promise<{ messageId: string }> {
+    // 调用方点名了所属入站消息(如给排队中的 B 发提示): 直接挂回它, 不领取、不消耗
+    // 当前 lane 的 turn 目标(issue #1558)。
+    const explicit = this.explicitReplyTargetIn(userId, opts?.replyToMessageId);
+    if (explicit !== undefined) return this.sendPlainChunked(userId, text, explicit);
     // 独立输出(命令回复/notice/turn 未及流式即失败的报错): 本轮没有已领取
     // 的回挂目标时从队列领取 — 这类输出就是对触发消息的直接响应。
     this.claimTurnReplyTargetIfIdle(userId);
     return this.sendPlainChunked(userId, text);
   }
 
-  async sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }> {
+  async sendMarkdownText(
+    userId: string,
+    markdown: string,
+    opts?: { threadTs?: string; fallbackOpenerId?: string; replyToMessageId?: string },
+  ): Promise<{ messageId: string }> {
+    const explicit = this.explicitReplyTargetIn(userId, opts?.replyToMessageId);
     // 与 sendText/卡片同口径: 独立 markdown 输出(slash 命令回复等)也要
     // 认领回挂目标, 否则命令回复不挂回、队列残留错配到下一轮。
-    this.claimTurnReplyTargetIfIdle(userId);
+    // 点名了所属入站消息时例外: 只挂回该消息, 不碰 turn 目标(issue #1558)。
+    if (explicit === undefined) this.claimTurnReplyTargetIfIdle(userId);
     const chunks = chunkTelegramSource(markdown);
     let firstMessageId = '';
     const allImageUrls: string[] = [];
     for (const chunk of chunks) {
-      const { messageId, imageUrls } = await this.sendRenderedChunk(userId, chunk);
+      // 点名目标只首条挂回; 后续分段不租借(传 null = 不 lease 也不 commit)。
+      const { messageId, imageUrls } = await this.sendRenderedChunk(
+        userId,
+        chunk,
+        explicit === undefined ? undefined : firstMessageId === '' ? explicit : null,
+      );
       if (!firstMessageId) firstMessageId = messageId;
       allImageUrls.push(...imageUrls);
     }
@@ -806,7 +837,25 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     await this.editHtml(chatId, nativeId, html, undefined);
   }
 
-  async startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
+  async startStreamingText(
+    userId: string,
+    initial?: string,
+    opts?: { threadTs?: string; turn?: string },
+  ): Promise<StreamingTextHandle> {
+    // issue #1558: 带 turn token = 本段流式属于 Host 已 beginOutboundTurn 的逻辑 turn,
+    // 目标在 begin 时已领取(交互卡后的续流不得再从队列领 —— 那会拿到别人的目标或空)。
+    const turn = opts?.turn !== undefined ? this.outboundTurns.get(opts.turn) : undefined;
+    if (turn && turn.userId === userId) {
+      this.beginStreamRound(userId);
+      // 回合身份用 turn 自己领取的目标, 不读 lane 槽位: 'first' 档首段流式的首条出站
+      // 已消耗槽位, 交互后的续流若从槽位读会拿到空, 终稿就挂不回原提问(Greptile P1)。
+      return this.startTrackedStreaming(userId, initial, turn.replyTargetId);
+    }
+    // 无归属、但 lane 正有活动 turn(如调度转播卡在用户 turn 期间开卡): 视为与该 turn
+    // 无关的独立输出 —— 不领取队列、不占用也不改向活动 turn 的目标, 直接无引用发送。
+    if (this.hasActiveOutboundTurn(userId)) {
+      return this.createStreamingHandle(userId, initial, { detached: true });
+    }
     // DM 与群/topic 共用同一条流式呈现: send + editMessageText 覆盖同一条
     // 消息, 过程区(工具时间线)与正文一起原地刷新；定稿始终新发，避免最终答案
     // 被过程载体的迟到更新或群 relay 替换。
@@ -823,9 +872,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private async startTrackedStreaming(
     userId: string,
     initial?: string,
+    turnReplyTargetId?: string | null,
   ): Promise<StreamingTextHandle> {
     try {
-      const handle = await this.createStreamingHandle(userId, initial);
+      const handle = await this.createStreamingHandle(
+        userId,
+        initial,
+        turnReplyTargetId === undefined ? undefined : { detached: false, turnReplyTargetId },
+      );
       return this.trackStreamRound(userId, handle);
     } catch (err) {
       // 建 handle 就失败 → 本回合没有 finalize/close 可依靠, 当场退归属, 否则槽位
@@ -838,7 +892,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private createStreamingHandle(
     userId: string,
     initial?: string,
+    mode?: { detached: boolean; turnReplyTargetId?: string | null },
   ): Promise<StreamingTextHandle> {
+    const detached = mode?.detached === true;
+    // 带 turn 令牌的回合: 终稿一律挂回 turn 领取的目标, 不依赖槽位是否还在 ——
+    // 'first' 档下槽位在首段流式的首条出站后即被消耗, 交互后的续流没有过程载体时
+    // (直接 finalize)走 lease 会拿到空, 终稿就脱离提问脉络(Greptile P1)。
+    const turnScoped = mode?.turnReplyTargetId !== undefined;
     // 建 handle 时拍下本轮身份。回挂目标此刻还没被任何出站消耗
     // (claimTurnReplyTarget 刚领完) —— 'first' 档下过程消息一发就把槽位耗掉了,
     // 补送若重新 lease 会拿到空目标, 那条答案在群里就脱离了提问脉络。
@@ -846,7 +906,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       generation: this.configVersion,
       api: this.api,
       ownerUserId: this.ownerUserId,
-      replyTargetId: this.turnReplyTargets.get(userId) ?? null,
+      replyTargetId: detached
+        ? null
+        : mode?.turnReplyTargetId !== undefined
+          ? mode.turnReplyTargetId
+          : (this.turnReplyTargets.get(userId) ?? null),
     };
     return startTelegramStreaming(
       {
@@ -859,7 +923,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         // 正常轮次里这些核验恒为空操作。
         send: async (markdown) => {
           this.assertRoundStillLive(round);
-          const { messageId } = await this.sendRenderedChunk(userId, markdown);
+          // 无归属的独立流(见 startStreamingText): 传 null = 不租借活动 turn 的目标。
+          const { messageId } = await this.sendRenderedChunk(
+            userId,
+            markdown,
+            detached ? null : undefined,
+          );
           return messageId;
         },
         repost: async (markdown) => {
@@ -899,7 +968,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           return this.sendRichFinal(
             userId,
             markdown,
-            reuseReplyTarget ? round.replyTargetId : undefined,
+            // 无归属的独立流(issue #1558)一律不租借活动 turn 的目标。
+            detached ? null : turnScoped || reuseReplyTarget ? round.replyTargetId : undefined,
           );
         },
         deleteMessage: async (messageId) => {
@@ -1597,6 +1667,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private claimTurnReplyTargetIfIdle(userId: string): void {
     const queue = this.pendingReplyTargets.get(userId);
     if (!queue || queue.length === 0) return;
+    // issue #1558: 逻辑 turn 活动期间(含交互卡前已收口流式、尚未续流的窗口)一律不接管:
+    // 'first' 档目标已耗时接管会把排队中 B 的目标提前消耗掉, 'all' 档则改向 A 的答案。
+    if (this.hasActiveOutboundTurn(userId)) return;
     const current = this.turnReplyTargets.get(userId);
     if (current !== undefined) {
       // 流式回合持有期间一律不接管: 排队提示这类独立出站不得把正在输出的
@@ -1611,6 +1684,57 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   private hasActiveStreamRound(userId: string): boolean {
     return (this.activeStreamRounds.get(userId) ?? 0) > 0;
+  }
+
+  // ── issue #1558: 逻辑 turn 级回挂归属 ────────────────────────────────────────
+
+  beginOutboundTurn(userId: string): string {
+    // turn 开始即领取本轮目标(与旧"流式段开始时领取"同一 FIFO 语义, 只是提前到
+    // turn 边界), 之后整个 turn 内的流式分段/续流/交互卡都复用它。
+    // FIFO 有货才领取。空队列时保留已有槽位(而不是像流式段那样清空): Host 在
+    // SESSION_RUNNING 竞态里会 end 后回队再 begin, 第一次 begin 已把 FIFO 抽空、槽位里
+    // 仍是本轮目标, 若第二次 begin 再 claim 就会把它清掉, 重试后的答案不再挂回原提问
+    // (MagicLizi P1)。
+    const queue = this.pendingReplyTargets.get(userId);
+    if (queue && queue.length > 0) this.claimTurnReplyTarget(userId);
+    const token = randomUUID();
+    // 令牌记住本 turn 领取的目标: 'first' 档槽位在首条出站后即被消耗, 但同 turn 交互后
+    // 的续流终稿仍要挂回同一条提问。
+    this.outboundTurns.set(token, { userId, replyTargetId: this.turnReplyTargets.get(userId) ?? null });
+    this.activeOutboundTurns.set(userId, (this.activeOutboundTurns.get(userId) ?? 0) + 1);
+    return token;
+  }
+
+  endOutboundTurn(token: string): void {
+    const userId = this.outboundTurns.get(token)?.userId;
+    if (userId === undefined) return;
+    this.outboundTurns.delete(token);
+    const next = (this.activeOutboundTurns.get(userId) ?? 0) - 1;
+    if (next > 0) this.activeOutboundTurns.set(userId, next);
+    else this.activeOutboundTurns.delete(userId);
+    // 收口后不主动清槽位: 'all' 档目标保留到下一轮 claim 被替换(与流式段收口同口径),
+    // 残留目标由 claimTurnReplyTargetIfIdle 的"更新触发消息"判据自愈。
+  }
+
+  private hasActiveOutboundTurn(userId: string): boolean {
+    return (this.activeOutboundTurns.get(userId) ?? 0) > 0;
+  }
+
+  private clearOutboundTurns(): void {
+    this.outboundTurns.clear();
+    this.activeOutboundTurns.clear();
+  }
+
+  /**
+   * 调用方点名的「所属入站消息」→ 本 lane 可用的原生 message_id。入站事件给的是原生
+   * id(纯数字); 也接受编码 id, 但必须属于同一 chat。解不出 / 不同 chat 时返回 null
+   * (发送时不挂回, 也不回退去领 turn 目标 —— 点名的语义就是"不是当前 turn 的输出")。
+   * 未点名返回 undefined。
+   */
+  private explicitReplyTargetIn(userId: string, encodedOrNative: string | undefined): string | null | undefined {
+    if (encodedOrNative === undefined) return undefined;
+    if (/^\d+$/.test(encodedOrNative)) return encodedOrNative;
+    return sourceMessageIdIn(String(this.targetOf(userId).chat_id), encodedOrNative);
   }
 
   private beginStreamRound(userId: string): void {
@@ -1895,13 +2019,22 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     };
   }
 
-  private async sendPlainChunked(userId: string, text: string): Promise<{ messageId: string }> {
+  private async sendPlainChunked(
+    userId: string,
+    text: string,
+    explicitReplyTargetId?: string | null,
+  ): Promise<{ messageId: string }> {
     const target = this.targetOf(userId);
     let firstMessageId = '';
     for (const chunk of chunkTelegramSource(text)) {
       // 只首条挂回: 后续分段不租借、也不提交(lease 为 null 时 commit 是 noop)。
+      // 点名目标(issue #1558)时首条直接挂回它, 不 lease turn 目标。
       const { params: replyParams, lease } =
-        firstMessageId === '' ? this.leaseReplyTarget(userId) : { params: {}, lease: null };
+        firstMessageId !== ''
+          ? { params: {}, lease: null }
+          : explicitReplyTargetId !== undefined
+            ? { params: replyParamsFor(explicitReplyTargetId), lease: null }
+            : this.leaseReplyTarget(userId);
       const sent = await this.callSend<TgMessage>('sendMessage', {
         ...target,
         ...replyParams,
@@ -2242,6 +2375,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.clearAllTypingLoops();
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
+    this.clearOutboundTurns();
     await this.stopPolling();
     const latchWritten = this.host.secrets.write(OFFLINE_SECRET_KEY, '1');
     const latchConfirmed = latchWritten && this.offlineFlagState() === 'set';

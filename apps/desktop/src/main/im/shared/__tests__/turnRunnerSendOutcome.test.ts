@@ -3721,6 +3721,148 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
+describe('issue #1558: 回挂目标按逻辑 turn 归属(beginOutboundTurn / endOutboundTurn)', () => {
+  const beginOutboundTurn = vi.fn();
+  const endOutboundTurn = vi.fn();
+  const turnIm = mocks.feishuIm as unknown as Record<string, unknown>;
+
+  beforeEach(() => {
+    beginOutboundTurn.mockReset().mockReturnValue('turn-token-1');
+    endOutboundTurn.mockReset();
+    turnIm.beginOutboundTurn = beginOutboundTurn;
+    turnIm.endOutboundTurn = endOutboundTurn;
+    mocks.createSession.mockRejectedValue(new Error('unexpected create'));
+    mocks.touchUserSent.mockResolvedValue(undefined);
+    mocks.persistUserMessage.mockResolvedValue(undefined);
+    mocks.persistAssistantMessage.mockResolvedValue(undefined);
+    mocks.feishuIm.reactToMessage.mockResolvedValue('reaction-1');
+    mocks.feishuIm.removeMessageReaction.mockResolvedValue(undefined);
+    mocks.feishuIm.sendText.mockResolvedValue(undefined);
+    mocks.feishuIm.sendMarkdownText.mockResolvedValue(undefined);
+    mocks.feishuIm.consumePendingOpenerCard.mockResolvedValue(false);
+    mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue(undefined);
+    mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue(undefined);
+    mocks.feishuIm.startStreamingText.mockResolvedValue({
+      messageId: 'stream-1',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    });
+    mocks.takePendingInteractionsForSession.mockReturnValue([]);
+    mocks.cancelPending.mockReturnValue(null);
+    mocks.checkDestructiveToolCall.mockReturnValue({ destructive: false });
+    mocks.materializeLocalMarkdownImages.mockResolvedValue({ absPaths: [], text: '' });
+  });
+
+  afterEach(async () => {
+    await runner?.disposeAllSessions();
+    runner = null;
+    delete turnIm.beginOutboundTurn;
+    delete turnIm.endOutboundTurn;
+  });
+
+  it('派发时领取 turn 令牌, 首段流式带同一令牌, done 收口后恰好释放一次', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete);
+    expect(beginOutboundTurn).toHaveBeenCalledTimes(1);
+    expect(beginOutboundTurn).toHaveBeenCalledWith('ou_user');
+    expect(endOutboundTurn).not.toHaveBeenCalled();
+
+    h.emit({ type: 'text', data: { text: 'answer', isFinal: true } });
+    await flushMicrotasks();
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledWith(
+      'ou_user',
+      undefined,
+      expect.objectContaining({ turn: 'turn-token-1' }),
+    );
+    // 流式段开始不释放 turn(交互卡收口后的续流仍属于本 turn)
+    expect(endOutboundTurn).not.toHaveBeenCalled();
+
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(endOutboundTurn).toHaveBeenCalledTimes(1);
+    });
+    expect(endOutboundTurn).toHaveBeenCalledWith('turn-token-1');
+  });
+
+  it('终态 error 同样释放 turn 令牌', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete);
+    expect(beginOutboundTurn).toHaveBeenCalledTimes(1);
+
+    h.emit({ type: 'error', data: { message: 'terminal failure' } });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(endOutboundTurn).toHaveBeenCalledTimes(1);
+    });
+    expect(endOutboundTurn).toHaveBeenCalledWith('turn-token-1');
+  });
+
+  it('session 清理时释放仍在途 turn 的令牌, 且不重复释放', async () => {
+    setupSession(async () => ({ accepted: true }));
+    await runDefaultTurn();
+    expect(beginOutboundTurn).toHaveBeenCalledTimes(1);
+
+    await getRunner().disposeAllSessions();
+    expect(endOutboundTurn).toHaveBeenCalledTimes(1);
+    expect(endOutboundTurn).toHaveBeenCalledWith('turn-token-1');
+  });
+
+  it('SESSION_RUNNING 竞态回队重试沿用同一 turn 令牌: 不重复 begin, 终态前不 end', async () => {
+    vi.useFakeTimers();
+    try {
+      const err = new Error('SESSION_RUNNING: race') as Error & { code?: string };
+      err.code = 'SESSION_RUNNING';
+      const h = setupSession(async () => ({ accepted: true }));
+      h.send.mockRejectedValueOnce(err);
+      const onTurnComplete = vi.fn();
+      await runDefaultTurn(onTurnComplete);
+      await flushMicrotasks();
+      expect(h.send).toHaveBeenCalledTimes(1);
+      expect(beginOutboundTurn).toHaveBeenCalledTimes(1);
+      expect(endOutboundTurn).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.send).toHaveBeenCalledTimes(2);
+      // 重试派发没有再向渠道领取第二个令牌
+      expect(beginOutboundTurn).toHaveBeenCalledTimes(1);
+      expect(endOutboundTurn).not.toHaveBeenCalled();
+
+      h.emit({ type: 'text', data: { text: 'answer', isFinal: true } });
+      await flushMicrotasks();
+      expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledWith(
+        'ou_user',
+        undefined,
+        expect.objectContaining({ turn: 'turn-token-1' }),
+      );
+      h.emit({ type: 'done', data: {} });
+      await vi.runOnlyPendingTimersAsync();
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(endOutboundTurn).toHaveBeenCalledTimes(1);
+      expect(endOutboundTurn).toHaveBeenCalledWith('turn-token-1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('渠道不支持 turn 归属时不传令牌, 保持旧行为', async () => {
+    delete turnIm.beginOutboundTurn;
+    delete turnIm.endOutboundTurn;
+    const h = setupSession(async () => ({ accepted: true }));
+    await runDefaultTurn();
+    h.emit({ type: 'text', data: { text: 'answer', isFinal: true } });
+    await flushMicrotasks();
+    const opts = mocks.feishuIm.startStreamingText.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(opts).toBeDefined();
+    expect('turn' in opts).toBe(false);
+    h.emit({ type: 'done', data: {} });
+  });
+});
+
 describe('初始流式输出面创建失败的收口降级(#2164)', () => {
   it('startStreamingText 拒绝 + 短文本:正文经 sendText 一次性送达,turn 正常完成', async () => {
     mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));

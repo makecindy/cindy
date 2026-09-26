@@ -2235,6 +2235,168 @@ describe('TelegramIM', () => {
     }
   });
 
+  // issue #1558: 回挂目标的归属单位是逻辑 turn, 不是流式段。
+  function groupQuotedSince(from: number): Array<number | undefined> {
+    return api.calls
+      .slice(from)
+      .filter(
+        (c) =>
+          (c.method === 'sendMessage' || c.method === 'sendRichMessage') &&
+          String(c.params.chat_id) === '-100200',
+      )
+      .map((c) => (c.params.reply_parameters as { message_id?: number } | undefined)?.message_id);
+  }
+
+  async function connectAllQuoteGroup(): Promise<{ events: IMMessageEvent[] }> {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'all', replyQuoteDm: 'off' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    return { events };
+  }
+
+  it("issue #1558 群 'all' 档: 交互卡前收口后 B 的排队提示挂回 B 自己, A 续流仍挂回 A, B 的 turn 领到 B", async () => {
+    const { events } = await connectAllQuoteGroup();
+    api.pushUpdates([groupMessage({ text: 'A 问', fromId: 222, messageId: 70, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+
+    const turnA = im.beginOutboundTurn(lane);
+    const first = await im.startStreamingText(lane, undefined, { turn: turnA });
+    // 交互卡前 Host 会 finalize 当前流式段 —— turn 并未结束
+    await first.finalize('A 等待确认');
+
+    api.pushUpdates([groupMessage({ text: 'B 问', fromId: 333, messageId: 71, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    let mark = api.calls.length;
+    await im.sendMarkdownText(lane, '你排在第 1 位', { replyToMessageId: events[1].messageId });
+    expect(groupQuotedSince(mark)).toEqual([71]);
+
+    // A 交互后续流: 必须仍挂回 70(修复前从空队列领取 → undefined)
+    mark = api.calls.length;
+    const resumed = await im.startStreamingText(lane, undefined, { turn: turnA });
+    await resumed.finalize('A 的续答');
+    const quotedA = groupQuotedSince(mark);
+    expect(quotedA.length).toBeGreaterThan(0);
+    expect(quotedA.every((id) => id === 70)).toBe(true);
+    im.endOutboundTurn(turnA);
+    im.endOutboundTurn(turnA); // 幂等
+
+    // B 的目标没有被提示消耗: B 自己的 turn 领到 71
+    mark = api.calls.length;
+    const turnB = im.beginOutboundTurn(lane);
+    const b = await im.startStreamingText(lane, undefined, { turn: turnB });
+    await b.finalize('B 的答案');
+    const quotedB = groupQuotedSince(mark);
+    expect(quotedB.length).toBeGreaterThan(0);
+    expect(quotedB.every((id) => id === 71)).toBe(true);
+    im.endOutboundTurn(turnB);
+  });
+
+  it("issue #1558 私聊 'first' 档: 首段流式消耗槽位后, 同 turn 交互续流的终稿仍挂回原提问", async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'first', replyQuoteDm: 'first' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([privateMessage('提问', 111, 500)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const dmQuotedSince = (from: number) =>
+      api.calls
+        .slice(from)
+        .filter((c) => (c.method === 'sendMessage' || c.method === 'sendRichMessage') && c.params.chat_id === OWNER_ID)
+        .map((c) => (c.params.reply_parameters as { message_id?: number } | undefined)?.message_id);
+
+    const turn = im.beginOutboundTurn(OWNER_ID);
+    const first = await im.startStreamingText(OWNER_ID, undefined, { turn });
+    await first.finalize('第一段(交互前)');
+    let mark = api.calls.length;
+    // 'first' 档: 槽位已被首段消耗; 交互后的续流终稿必须仍挂回 500(修复前为 undefined)
+    const resumed = await im.startStreamingText(OWNER_ID, undefined, { turn });
+    await resumed.finalize('交互后的续答');
+    const quoted = dmQuotedSince(mark);
+    expect(quoted.length).toBeGreaterThan(0);
+    expect(quoted[quoted.length - 1]).toBe(500);
+    im.endOutboundTurn(turn);
+
+    // 下一轮提问照常领到自己的目标
+    api.pushUpdates([privateMessage('再问', 111, 501)]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    mark = api.calls.length;
+    const turn2 = im.beginOutboundTurn(OWNER_ID);
+    const h2 = await im.startStreamingText(OWNER_ID, undefined, { turn: turn2 });
+    await h2.finalize('第二轮答案');
+    const quoted2 = dmQuotedSince(mark);
+    expect(quoted2[quoted2.length - 1]).toBe(501);
+    im.endOutboundTurn(turn2);
+  });
+
+  it("issue #1558: begin → end → 无新入站再 begin(SESSION_RUNNING 回队重试), 流式仍挂回原提问", async () => {
+    const { events } = await connectAllQuoteGroup();
+    api.pushUpdates([groupMessage({ text: 'A 问', fromId: 222, messageId: 80, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+
+    const first = im.beginOutboundTurn(lane); // 首次派发领取 80, FIFO 抽空
+    im.endOutboundTurn(first); // 竞态回队
+    const retry = im.beginOutboundTurn(lane); // 无新入站再 begin: 不得清掉槽位里的 80
+    const mark = api.calls.length;
+    const h = await im.startStreamingText(lane, undefined, { turn: retry });
+    await h.finalize('重试后的答案');
+    const quoted = groupQuotedSince(mark);
+    expect(quoted.length).toBeGreaterThan(0);
+    expect(quoted.every((id) => id === 80)).toBe(true);
+    im.endOutboundTurn(retry);
+  });
+
+  it('issue #1558: 活动 turn 期间无归属的独立流式(调度转播)不领取队列、不改向 turn 目标', async () => {
+    const { events } = await connectAllQuoteGroup();
+    api.pushUpdates([groupMessage({ text: 'A 问', fromId: 222, messageId: 70, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+
+    const turnA = im.beginOutboundTurn(lane);
+    const a = await im.startStreamingText(lane, undefined, { turn: turnA });
+    a.replace('A 的第一段');
+    await vi.waitFor(() => expect(groupQuotedSince(0)).toEqual([70]), { timeout: 3_000, interval: 50 });
+
+    // 另一条触发消息入队(其目标 71 留在队列里等它自己的 turn)
+    api.pushUpdates([groupMessage({ text: 'C 问', fromId: 444, messageId: 72, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+
+    // 无 token 的独立流式: 既不能拿 72, 也不能拿 A 的 70
+    let mark = api.calls.length;
+    const stray = await im.startStreamingText(lane);
+    await stray.finalize('调度转播内容');
+    const quotedStray = groupQuotedSince(mark);
+    expect(quotedStray.length).toBeGreaterThan(0);
+    expect(quotedStray.every((id) => id === undefined)).toBe(true);
+
+    mark = api.calls.length;
+    await a.finalize('A 的最终答案');
+    const quotedA = groupQuotedSince(mark);
+    expect(quotedA.length).toBeGreaterThan(0);
+    expect(quotedA.every((id) => id === 70)).toBe(true);
+    im.endOutboundTurn(turnA);
+
+    // 72 仍在队列: 下一轮 turn 正常领到
+    mark = api.calls.length;
+    const turnC = im.beginOutboundTurn(lane);
+    const c = await im.startStreamingText(lane, undefined, { turn: turnC });
+    await c.finalize('C 的答案');
+    expect(groupQuotedSince(mark).every((id) => id === 72)).toBe(true);
+    im.endOutboundTurn(turnC);
+  });
+
   it("群 'all' 档: A 流式期间 B 排队发提示, A 剩下的答案不能改挂到 B", async () => {
     await im.dispose();
     im = new TelegramIM(ctx.host, {
