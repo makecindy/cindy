@@ -8,6 +8,12 @@
  * 协同 team 工具由 cindy_orca server(src/orca/)托管,通过本目录的 register*Tool 注册。
  */
 
+export type {
+  SessionOpErrorCode,
+  SessionOpItem,
+  SessionOpResult,
+} from './_session_ops.js';
+export { hostErrorPayload, sessionOpItemToPayload } from './_session_ops.js';
 export { registerGetCapabilitiesTool } from './get_capabilities.js';
 export { registerGrokLoginTools, type GrokLoginCallbacks, type GrokLoginState } from './grok_login.js';
 export { registerSkillhubTools, type SkillhubAgentCallback, type SkillhubAgentRequest } from './skillhub.js';
