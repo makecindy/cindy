@@ -12,6 +12,7 @@
 
 import os from 'node:os';
 import { tryPeerInvoke } from './filePeer';
+import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';
 import { deviceName, initializeDeviceName } from './deviceName';
 import { watchNetworkChanges } from './networkChanges';
 import path from 'node:path';
@@ -1670,7 +1671,11 @@ export async function openRemoteLink(
       controllerName: deviceName(),
       protocolVersion: 1,
       appVersion: app.getVersion(),
-      capabilities: [...CONTROLLER_CAPABILITIES],
+      // 本机不在控制对端(无订阅)时声明后台链路,对端不进入受控状态(见 backgroundLink)。
+      capabilities: linkOpenCapabilities(
+        CONTROLLER_CAPABILITIES,
+        snapshotSubscriptions(deviceId).length > 0,
+      ),
     });
     revokedByRemote.delete(deviceId);
     return accepted;
@@ -1794,6 +1799,26 @@ export async function remoteInvoke(
   // (不占管道、不等 12~30s 超时),恢复由周期单飞探测驱动。tracker 未初始化时直通。
   if (!responsivenessTracker) return run();
   return responsivenessTracker.guardInvoke(deviceId, channel, run);
+}
+
+/**
+ * 控制端:后台只读请求(如用量历史读取其它电脑)。本机不在控制对端时,建的链路声明后台能力,
+ * 对端不进入受控状态。旧被控端不认该能力、仍会装 legacy '*':需要新建链路且对端未声明支持时,
+ * 若本机仍无控制意图(无订阅)就立即关闭本次建的链路,以 UNSUPPORTED_CAPABILITY 失败,不发请求。
+ * 链路已就绪(用户正在控制对端)时直接复用,不产生新的 link-open。
+ */
+export async function remoteBackgroundInvoke(
+  deviceId: string,
+  channel: string,
+  args: unknown[],
+): Promise<InvokeResultPayload> {
+  if (!client?.isLinkReady(deviceId)) {
+    assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {
+      hasOutboundSubscriptions: () => snapshotSubscriptions(deviceId).length > 0,
+      closeLink: () => closeRemoteLink(deviceId),
+    });
+  }
+  return remoteInvoke(deviceId, channel, args);
 }
 
 /**

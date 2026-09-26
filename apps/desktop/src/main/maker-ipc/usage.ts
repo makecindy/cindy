@@ -51,7 +51,7 @@ import { getModelUsageSince } from '../localDb/dailyModelUsage.js';
 import { getSessionUsageSince } from '../localDb/dailySessionUsage.js';
 import { readRemoteBotSessionAccessBatch } from '../localDb/ipc/botRemoteSessionAccess.js';
 import { getCurrentDbClientUserId } from '../localDb/client/current.js';
-import { getSelfDeviceId, remoteInvoke } from '../device-link/index.js';
+import { getSelfDeviceId, remoteBackgroundInvoke } from '../device-link/index.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import {
   clearClaudeSubscriptionUsageSnapshot,
@@ -350,7 +350,8 @@ export function registerMakerUsageIpc(maker: Maker): void {
     userId: getCurrentDbClientUserId,
     selfDeviceId: getSelfDeviceId,
     listDevices: () => handleListDevices(deviceDirectoryDeps()),
-    invoke: (deviceId, channel, args) => remoteInvoke(deviceId, channel, args),
+    // 后台链路:不让被读取的电脑进入受控状态;旧版本在建链后确认不支持时即关闭链路。
+    invoke: (deviceId, channel, args) => remoteBackgroundInvoke(deviceId, channel, args),
     readCache: (userId) => readPeerUsageCacheFile(peerUsageCacheFilePath(app.getPath('userData'), userId)),
     writeCache: (userId, contents) =>
       writePeerUsageCacheFile(peerUsageCacheFilePath(app.getPath('userData'), userId), contents),

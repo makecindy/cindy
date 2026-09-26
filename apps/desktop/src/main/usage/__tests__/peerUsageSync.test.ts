@@ -8,6 +8,7 @@ import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 import type { RegionalMoney } from '../../../shared/regionalMoney';
 import {
   createPeerUsageSync,
+  mayServeBackgroundRead,
   mergeIncrementalRows,
   withPeerUsageAccessGate,
   type PeerUsageSyncDeps,
@@ -48,7 +49,7 @@ function device(over: Partial<DeviceLinkDeviceView> & { deviceId: string }): Dev
   return {
     name: over.deviceId,
     platform: 'darwin',
-    appVersion: null,
+    appVersion: '0.1.94',
     lastSeenAt: null,
     online: true,
     busy: false,
@@ -278,6 +279,54 @@ describe('createPeerUsageSync', () => {
     ]);
     expect([...snapshot.peerRows.keys()]).toEqual(['laptop']);
     expect(JSON.parse(h.written.get('user-a') ?? '{}').peers.laptop.name).toBe('Laptop');
+  });
+
+  it('never connects released versions without background links and retries unsupported ones only after an update', async () => {
+    const invoke = vi.fn(async () => ({
+      ok: false as const,
+      error: { code: 'UNSUPPORTED_CAPABILITY', message: 'x' },
+    }));
+    let candidateVersion = '0.1.94';
+    const h = harness({
+      invoke,
+      listDevices: async () => ({
+        devices: [
+          device({ deviceId: 'self', isSelf: true }),
+          device({ deviceId: 'released', appVersion: '0.1.93' }),
+          device({ deviceId: 'beta', appVersion: '0.1.93-beta' }),
+          device({ deviceId: 'unknown', appVersion: null }),
+          device({ deviceId: 'candidate', appVersion: candidateVersion }),
+        ],
+      }),
+    });
+    const sync = createPeerUsageSync(h.deps);
+
+    await sync.sync();
+    // 旧正式版 / 版本未知:连都不连(建链就会让对方显示受控);只尝试更新的版本。
+    expect(invoke.mock.calls.map((call) => call[0])).toEqual(['candidate']);
+    expect((await sync.snapshot()).devices.map((d) => [d.deviceId, d.status])).toEqual([
+      ['self', 'ok'],
+      ['released', 'unsupported'],
+      ['beta', 'unsupported'],
+      ['unknown', 'unsupported'],
+      ['candidate', 'unsupported'],
+    ]);
+
+    // 同一版本不再重试;对方更新后再试一次。
+    h.advance(61_000);
+    await sync.sync();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    candidateVersion = '0.1.95';
+    h.advance(61_000);
+    await sync.sync();
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows local development builds through to the link capability check', () => {
+    expect(mayServeBackgroundRead('0.0.0')).toBe(true);
+    expect(mayServeBackgroundRead('0.1.94')).toBe(true);
+    expect(mayServeBackgroundRead('0.1.93')).toBe(false);
+    expect(mayServeBackgroundRead(null)).toBe(false);
   });
 
   it('throttles, then syncs incrementally from the day before the cached day', async () => {

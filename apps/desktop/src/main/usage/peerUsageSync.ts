@@ -17,6 +17,7 @@
  * 缓存只存按天聚合的 token / 金额行,不含会话、消息或任何凭证。
  */
 
+import { compareAppUpdateVersions } from '../updateVersionPolicy.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -205,6 +206,18 @@ function errorCodeOf(error: unknown): string {
   return /^\[([A-Z_]+)\]/.exec(message)?.[1] ?? 'REMOTE_UNAVAILABLE';
 }
 
+/** 0.1.93 及更早的正式版既没有用量读取通道,也不认后台链路:连它们只会让对方进入受控状态。 */
+const LAST_VERSION_WITHOUT_BACKGROUND_READ = '0.1.93';
+
+/**
+ * 按设备目录里的版本判断能否后台读取。本地开发构建(0.0.0)无法按版本判断,放行给
+ * 建链后的能力确认(remoteBackgroundInvoke)。
+ */
+export function mayServeBackgroundRead(appVersion: string | null): boolean {
+  if (appVersion === '0.0.0') return true;
+  return compareAppUpdateVersions(appVersion, LAST_VERSION_WITHOUT_BACKGROUND_READ) === 'newer';
+}
+
 export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
   let loadedUserId: string | null = null;
   let loadPromise: Promise<void> | null = null;
@@ -212,6 +225,8 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
   /** 最近一次设备目录(含本机);目录读取失败时沿用上次结果。 */
   let directory: DeviceLinkDeviceView[] | null = null;
   const statuses = new Map<string, UsageDeviceStatus>();
+  /** 判定为不支持时对方的版本:版本不变就不再建链重试(旧被控端每次建链都会闪一下受控横幅)。 */
+  const unsupportedVersions = new Map<string, string | null>();
   let version = 0;
   /**
    * 账号代次:切换账号时 +1。一次同步开始时记下代次,之后对状态 / 缓存 / 目录 / 落盘的
@@ -241,6 +256,7 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
     peers = {};
     directory = null;
     statuses.clear();
+    unsupportedVersions.clear();
     lastSyncStartedAt = 0;
     bumpRows();
   };
@@ -292,6 +308,21 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
       setStatus('remote-disabled');
       return;
     }
+    if (
+      !mayServeBackgroundRead(device.appVersion) ||
+      (unsupportedVersions.has(device.deviceId) &&
+        unsupportedVersions.get(device.deviceId) === device.appVersion)
+    ) {
+      setStatus('unsupported');
+      return;
+    }
+    const markFailed = (code: string): void => {
+      const status = errorStatus(code);
+      if (status === 'unsupported' && isCurrent()) {
+        unsupportedVersions.set(device.deviceId, device.appVersion);
+      }
+      setStatus(status);
+    };
     const cached = peers[device.deviceId] ?? null;
     const sinceDay = cached ? dayBefore(cached.todayKey) : null;
     setStatus('syncing');
@@ -300,7 +331,7 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
         sinceDay ? { sinceDay } : {},
       ]);
       if (!response.ok) {
-        setStatus(errorStatus(errorCodeOf(response.error)));
+        markFailed(errorCodeOf(response.error));
         return;
       }
       const decoded = await decodeUsageDeviceRowsResponse(response.result);
@@ -324,7 +355,7 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
       if (rowsChanged) bumpRows();
       setStatus('ok');
     } catch (error) {
-      setStatus(errorStatus(errorCodeOf(error)));
+      markFailed(errorCodeOf(error));
     }
   };
 
@@ -372,7 +403,12 @@ export function createPeerUsageSync(deps: PeerUsageSyncDeps): PeerUsageSync {
       (device) => !device.isSelf && !MOBILE_PLATFORMS.has(device.platform ?? ''),
     );
     for (const device of targets) {
-      if (device.online && device.remoteControlEnabled && device.controlEnabled) {
+      if (
+        device.online &&
+        device.remoteControlEnabled &&
+        device.controlEnabled &&
+        mayServeBackgroundRead(device.appVersion)
+      ) {
         statuses.set(device.deviceId, 'syncing');
       }
     }

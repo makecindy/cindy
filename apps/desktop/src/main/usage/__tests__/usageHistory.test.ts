@@ -1028,7 +1028,7 @@ todayKey: () => TODAY,
             online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: true,
           },
           {
-            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: '0.1.94', lastSeenAt: null,
             online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
           },
         ],
@@ -1096,7 +1096,7 @@ todayKey: () => TODAY,
       listDevices: async () => ({
         devices: [
           {
-            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: '0.1.94', lastSeenAt: null,
             online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
           },
         ],
@@ -1178,7 +1178,7 @@ todayKey: () => TODAY,
       listDevices: async () => ({
         devices: [
           {
-            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: '0.1.94', lastSeenAt: null,
             online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
           },
         ],
