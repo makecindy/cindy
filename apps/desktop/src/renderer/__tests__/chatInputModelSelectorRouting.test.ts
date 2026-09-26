@@ -187,9 +187,7 @@ describe('ChatInput model source switching wiring', () => {
     const catalogTargetResolution = guard.indexOf('const targetRouteProviderId =');
     const remoteGuard = guard.indexOf('const hasVerifiedWindows =');
     const legacyPiGuard = guard.indexOf('shouldBlockLegacyRemotePiModelWindowSwitch({');
-    const remoteUnknownBlock = guard.indexOf(
-      'if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;',
-    );
+    const sshHostGuard = guard.indexOf("if (remoteHostId && runtimeAgentKind === 'codex' && !requireDestructiveConfirmation) return true;");
     const zeroUsagePass = guard.indexOf(
       'if (!requireDestructiveConfirmation && (!trustedContextTokens || trustedContextTokens <= 0))',
     );
@@ -209,10 +207,13 @@ describe('ChatInput model source switching wiring', () => {
     expect(remoteGuard).toBeGreaterThan(catalogTargetResolution);
     expect(legacyPiGuard).toBeGreaterThan(remoteGuard);
     expect(legacyPiGuard).toBeLessThan(zeroUsagePass);
-    expect(guard.slice(legacyPiGuard, remoteUnknownBlock)).toContain('return false;');
+    expect(guard.slice(legacyPiGuard, zeroUsagePass)).toContain('return false;');
+    expect(sshHostGuard).toBeGreaterThan(-1);
+    expect(sshHostGuard).toBeLessThan(catalogTargetResolution);
+    // The Codex delegation runs first; other SSH harnesses keep their old guard.
+    expect(guard).toContain('if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;');
     expect(remoteGuard).toBeLessThan(remoteBlock);
     const shrinkGate = guard.slice(remoteGuard, remoteBlock);
-    expect(shrinkGate).toContain('agentStatus.isRunning');
     expect(shrinkGate).toContain('targetContextWindow >= currentContextWindow');
     expect(shrinkGate).toMatch(/!requireDestructiveConfirmation\s*&&\s*hasVerifiedWindows/);
     expect(shrinkGate).toContain(
@@ -220,9 +221,7 @@ describe('ChatInput model source switching wiring', () => {
     );
     expect(shrinkGate).toContain("typeof contextTokens === 'number'");
     expect(shrinkGate).toContain('const hasVerifiedUsage = trustedContextTokens !== undefined;');
-    expect(shrinkGate).toContain('!hasVerifiedWindows || !hasVerifiedUsage');
-    expect(remoteUnknownBlock).toBeGreaterThan(legacyPiGuard);
-    expect(zeroUsagePass).toBeGreaterThan(remoteUnknownBlock);
+    expect(zeroUsagePass).toBeGreaterThan(legacyPiGuard);
     expect(shrinkGate).toContain('return true;');
     expect(guard).toContain(
       "if (!requireDestructiveConfirmation && verdict.level === 'ok') return true;",

@@ -35,6 +35,7 @@
     "create": "新規"
   },
   "resources": {
+    "connectionUnknown": "接続状態不明",
     "hostOffline": "オフライン",
     "titleFallback": "リソース",
     "loading": "読み込み中…",
@@ -296,6 +297,8 @@
       "noDevice": "利用できるデバイスがありません。デスクトップでリモート操作をオンにしてから、再同期してください。"
     },
     "alert": {
+      "cacheSaveFailed": "オフラインキャッシュを保存できませんでした",
+      "cacheSaveFailedDetail": "端末の空き容量を確認してください。オンラインでは引き続き利用できますが、一部の内容はオフラインで表示できない場合があります。",
       "actionFailed": "操作に失敗しました",
       "renameFailed": "名前の変更に失敗しました",
       "deleteTitle": "セッションを削除しますか？",
@@ -594,6 +597,8 @@
       },
       "boundSessionA11y": "セッション {{name}} をひも付け",
       "intervalPlaceholder": "空欄の場合は cron を使用",
+      "intervalHint": "分間隔は 1、2、3、4、5、6、10、12、15、20、30 分から選択してください。整数時間の間隔は、60～1380 分（1～23 時間）の範囲で 60 の倍数を入力してください。",
+      "intervalPreservedHint": "このタスクの正確な間隔は {{duration}} です。編集または消去するまで保持されます。",
       "workspace": {
         "project": "プロジェクト",
         "dialogue": "会話"
@@ -731,7 +736,8 @@
         "workingDir": "プロジェクトディレクトリを入力してください",
         "effort": "推論強度は次のいずれかを指定してください：{{values}}",
         "intervalPositiveInteger": "間隔（分）は正の整数で入力してください",
-        "intervalUnsupported": "分間隔は 1～59 分、または 1～23 時間の正時の間隔に対応しています"
+        "preRunHookTimeout": "確認のタイムアウトは正の整数のミリ秒で入力してください",
+        "intervalUnsupported": "分間隔は 1 時間を割り切れる値（1、2、3、4、5、6、10、12、15、20、30 分）、または 1～23 時間の正時で指定してください"
       },
       "schedule": {
         "paused": "一時停止中",
@@ -806,8 +812,9 @@
     }
   },
   "companions": {
-    "messageSent": "追加メッセージを送信しました",
-    "privateChat": "{{name}} との会話",
+    "messageSent": "バックグラウンドタスクにメッセージを送信しました",
+    "sentTo": "{{name}} にメッセージを送信",
+    "receivedFrom": "{{name}} からのメッセージ",
     "backgroundTask": "バックグラウンドタスク",
     "openTask": "タスクを開く",
     "viewPr": "PR を見る",
@@ -828,16 +835,19 @@
     "actionFailed": "読み込みまたは操作を完了できません",
     "messages": "メッセージ",
     "readOnly": "閲覧のみ",
+    "directEmpty": "表示できるメッセージはまだありません。",
+    "directLimitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました",
+    "directUnavailable": "この仲間同士の会話は利用できません。",
     "unread": "新しい返信",
     "status": {
-      "queued": "開始待ち",
-      "running": "実行中",
-      "waiting": "返信待ち",
+      "queued": "開始しています",
+      "running": "作業中",
+      "waiting": "対応待ち",
       "completed": "完了",
       "failed": "失敗",
-      "cancelled": "キャンセル済み",
+      "cancelled": "停止済み",
       "timed-out": "タイムアウト",
-      "unknown": "状態を確認できません"
+      "unknown": "タスクの状況を確認できません"
     },
     "title": "チームメイト",
     "tasks": "セッション",
@@ -845,6 +855,7 @@
     "emptyTitle": "チームメイトはまだいません",
     "emptyCopy": "パソコンの Cindy でチームメイトを作成してください。",
     "noResults": "一致するチームメイトがいません",
+    "startChat": "会話を始める",
     "preferenceSaveFailed": "表示設定を保存できませんでした。もう一度表示を切り替えてください。",
     "automation": {
       "unsupported": "自動化を管理するには、パソコンの Cindy を更新して再試行してください。",
@@ -855,6 +866,7 @@
       "continueEditing": "編集を続ける",
       "discard": "変更を破棄",
       "invalid": "名前、実行内容、トリガー設定を確認して、もう一度保存してください。",
+      "failed": "自動化の操作は完了しませんでした。",
       "everyMinutes": "{{count}} 分ごと",
       "everyMinutes_one": "{{count}} 分ごと",
       "everyMinutes_other": "{{count}} 分ごと",
@@ -922,7 +934,14 @@
       "timezone": "タイムゾーン",
       "monthly": "毎月",
       "monthDay": "毎月の日付",
-      "saveAndRun": "保存して実行"
+      "saveAndRun": "保存して実行",
+      "advanced": "詳細設定",
+      "quiet": "確認で変化がなければ通知しない",
+      "quietHint": "変化や問題のみ報告します。リマインダーや定時送信ではオフにできます。",
+      "checkCommand": "事前確認コマンド",
+      "checkHint": "任意。コンピューターで先に確認します。終了コード 2 は今回の実行をスキップし、0 は続行します。エラーは報告されます。空欄で解除します。",
+      "timeoutMs": "確認のタイムアウト（ミリ秒、空欄は無制限）",
+      "skipped": "確認済み · モデル起動なし"
     },
     "openNavigation": "ナビゲーションを開く",
     "openProfile": "{{name}}のプロフィールを表示",
@@ -936,6 +955,7 @@
       "thinking": "考え中…",
       "replying": "返信中…",
       "processing": "処理中…",
+      "compacting": "会話を整理しています…",
       "reading-memory": "記憶を読んでいます…",
       "saving-memory": "記憶を保存しています…",
       "deleting-memory": "記憶を削除しています…",
@@ -964,7 +984,10 @@
       "retryFailed": "再試行できませんでした。少し待ってお試しください。",
       "leave": "いったん離れる",
       "avatarSkipped": "今は初期アバターを使っています。いつでも変更できます。"
-    }
+    },
+    "viewResult": "結果を見る",
+    "noWrittenResult": "テキストの結果はありません。",
+    "errorDetails": "エラー詳細"
   },
   "companionProfile": {
     "avatar": "アバター",
@@ -972,7 +995,25 @@
     "searchOptions": "検索",
     "changed": "別の場所で変更されました。未保存の編集は保持されています。",
     "discardAndReload": "編集を破棄して再読み込み",
-    "notes": "記憶ノート",
+    "memoryEntries": "保存した記憶",
+    "memorySearch": "記憶を検索",
+    "memoryEmpty": "まだ記憶はありません",
+    "memoryNoResults": "一致する記憶はありません",
+    "memoryDisabled": "記憶はオフです。チームメイトは記憶を読み取ったり保存したりしません。保存済みの記憶は引き続き表示・削除できます。",
+    "memoryLoadFailed": "記憶を読み込めませんでした",
+    "memoryToday": "今日",
+    "memoryUpdated": "{{time}} に更新",
+    "memoryEdit": "編集",
+    "memoryDone": "完了",
+    "memoryTooLong": "長すぎます。短くすると保存されます",
+    "memoryRequired": "タイトルと内容は必須です。",
+    "memoryChanged": "{{name}}がこの記憶を更新しました",
+    "memoryUseLatest": "最新の内容を使う",
+    "memoryKeepMine": "自分の変更を残す",
+    "memorySaved": "保存しました",
+    "memorySaveFailed": "保存できませんでした。編集内容は保持されています。",
+    "memoryMissing": "この記憶はもう存在しません。",
+    "memoryDeleteFailed": "削除できませんでした",
     "create": "新しいチームメイト",
     "createFailed": "作成結果を確認できていません。再試行して確認してください。",
     "title": "チームメイト",
@@ -992,6 +1033,7 @@
     "offline": "続けるには {{deviceName}} に再接続してください。編集内容は保持されています。",
     "hostUpgrade": "{{deviceName}} の Cindy を更新して再試行するか、そのパソコンでチームメイトの設定を編集してください。",
     "readFailed": "最新の状態を確認できませんでした。更新してから再試行してください。操作は完了している可能性があります。編集内容は保持されています。",
+    "deleteFailed": "削除は完了しませんでした。",
     "artifactsEmpty": "成果物はまだありません。チームメイトに作成を頼んでみましょう。",
     "openSourceTask": "元のセッションを開く",
     "modelFollowsDefault": "現在のデフォルトモデル候補を使用",
@@ -1006,6 +1048,7 @@
     "addModel": "予備モデルを追加",
     "removeModel": "モデルを削除",
     "moveModelUp": "モデルを上へ",
+    "backupModels": "予備のモデル（{{count}}）",
     "settingsTitle": "チームメイトの設定",
     "name": "名前",
     "portraitNumber": "アバター {{number}}",

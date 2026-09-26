@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import type { MobileModelOption } from '@/session/agentCapabilities';
@@ -11,6 +12,9 @@ import {
   buildRecentWorkspaceOptions,
   buildRemoteCreateSessionOptions,
   filterRemoteDirectoryEntries,
+  isCurrentRemoteBrowseRequest,
+  normalizeRemoteDirectoryDrives,
+  shouldRetryRemoteBrowseDrives,
   defaultPermissionModeForNewSessionAgent,
   normalizeCreateSessionResult,
   parseNewSessionDeviceOptions,
@@ -1057,6 +1061,68 @@ describe('new session model', () => {
     expect(filterRemoteDirectoryEntries(entries, true)).toEqual(entries);
   });
 
+  it('normalizes Windows drive options from fs:list-dir and hides the switch without a second drive', () => {
+    // 盘符根是被控端 host-native 的 Windows wire 格式,固定写反斜杠。
+    expect(normalizeRemoteDirectoryDrives([
+      { name: 'C:', path: 'C:\\', current: false },
+      { name: 'D:', path: 'D:\\', current: true },
+      { path: 'E:\\' },
+      { name: 'dup', path: 'D:\\', current: false },
+      { name: 'bad' },
+      null,
+    ])).toEqual([
+      { name: 'C:', path: 'C:\\', current: false },
+      { name: 'D:', path: 'D:\\', current: true },
+      { name: 'E:\\', path: 'E:\\', current: false },
+    ]);
+    expect(normalizeRemoteDirectoryDrives([{ name: 'C:', path: 'C:\\', current: true }])).toEqual([]);
+    expect(normalizeRemoteDirectoryDrives(undefined)).toEqual([]);
+    expect(normalizeRemoteDirectoryDrives('C:')).toEqual([]);
+  });
+
+  it('drops in-flight remote browse results after switching computers, even if the sequence still matches', () => {
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 3, deviceId: 'pc-b' },
+    )).toBe(false);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 4, deviceId: 'pc-a' },
+    )).toBe(false);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 3, deviceId: 'pc-a' },
+    )).toBe(true);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: '' },
+      { seq: 3, deviceId: '' },
+    )).toBe(false);
+
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('browseSeqRef.current += 1');
+    expect(newSource).toContain('selectedDeviceIdRef.current = option.deviceId');
+    expect(newSource).toContain('isCurrentRemoteBrowseRequest');
+  });
+
+  it('retries the current directory when Windows drive enumeration is still pending', () => {
+    expect(shouldRetryRemoteBrowseDrives(true, 0)).toBe(true);
+    expect(shouldRetryRemoteBrowseDrives(true, 2)).toBe(true);
+    expect(shouldRetryRemoteBrowseDrives(true, 3)).toBe(false);
+    expect(shouldRetryRemoteBrowseDrives(false, 0)).toBe(false);
+    expect(shouldRetryRemoteBrowseDrives(undefined, 0)).toBe(false);
+
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('shouldRetryRemoteBrowseDrives');
+    expect(newSource).toContain('result.drivesPending');
+  });
+
+  it('keeps the Android drive pill at 34pt and wraps it in a 44pt hit target', () => {
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('styles.browseDriveHit');
+    expect(newSource).toMatch(/browseDriveHit:\s*\{[^}]*minHeight:\s*44/);
+    expect(newSource).toMatch(/browseDriveHit:\s*\{[^}]*minWidth:\s*44/);
+  });
+
   it('builds device-link create-session args with desktop remote-project semantics', () => {
     expect(buildRemoteCreateSessionOptions({
       ...DEFAULT_NEW_SESSION_DRAFT,
@@ -1348,6 +1414,74 @@ describe('new session model', () => {
     expect(parseNewSessionDeviceOptions('')).toEqual([]);
   });
 
+  it('keeps the recent-project list nested-scrollable with a visible scroll indicator (#5013)', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    // Scope the guard to this list: the remote directory FlatList already has
+    // these props, so checking the whole page would miss the Android regression.
+    // Native gesture dispatch still needs Android emulator/device verification.
+    const lists = source.match(/<ScrollView\b[^>]*style=\{styles\.workspaceProjectList\}[^>]*>/g);
+    expect(lists).toHaveLength(1);
+    expect(lists![0]).toMatch(/\bnestedScrollEnabled(?:\s|=\{true\})/);
+    expect(lists![0]).toMatch(/\bshowsVerticalScrollIndicator(?:\s|=\{true\})/);
+    expect(lists![0]).toContain('keyboardShouldPersistTaps="handled"');
+  });
+
+  it('hosts the workspace popup outside scrolling and selector touch bounds (#5013)', () => {
+    const source = ts.createSourceFile('new.tsx', readTextLf(
+      resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8',
+    ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const panels: ts.JsxElement[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(
+        (prop) => ts.isJsxAttribute(prop) && prop.name.getText(source) === 'testID'
+          && prop.initializer && ts.isStringLiteral(prop.initializer)
+          && prop.initializer.text === 'newSession.workspacePickerPanel',
+      )) panels.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(panels).toHaveLength(1);
+    const ancestors: ts.JsxElement[] = [];
+    for (let parent: ts.Node | undefined = panels[0].parent; parent; parent = parent.parent) {
+      if (ts.isJsxElement(parent)) ancestors.push(parent);
+    }
+    expect(ancestors.map(node => node.openingElement.tagName.getText(source)))
+      .not.toContain('ScrollView');
+    expect(ancestors[0].openingElement.getText(source)).toContain('ref={workspacePickerHostRef}');
+    expect(ancestors[0].getText(source)).not.toContain('testID="newSession.backButton"');
+  });
+
+  it('scrolls every workspace action together so fixed rows cannot consume a short viewport', () => {
+    const source = ts.createSourceFile('new.tsx', readTextLf(
+      resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8',
+    ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const actionIds = new Set([
+      'newSession.workspaceDialogueOption',
+      'newSession.workspaceProjectOption',
+      'newSession.workspaceBrowseOption',
+    ]);
+    const scrollParents: ts.JsxElement[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(
+        prop => ts.isJsxAttribute(prop) && prop.name.getText(source) === 'testID'
+          && prop.initializer && ts.isStringLiteral(prop.initializer)
+          && actionIds.has(prop.initializer.text),
+      )) {
+        for (let parent = node.parent; parent; parent = parent.parent) {
+          if (ts.isJsxElement(parent) && parent.openingElement.tagName.getText(source) === 'ScrollView') {
+            scrollParents.push(parent);
+            break;
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(scrollParents).toHaveLength(3);
+    expect(new Set(scrollParents).size).toBe(1);
+    expect(scrollParents[0].openingElement.getText(source)).toContain('styles.workspaceProjectList');
+  });
+
   it('builds recent workspace quick picks from mirrored remote sessions', () => {
     const options = buildRecentWorkspaceOptions([
       remoteSession('old', {
@@ -1591,8 +1725,8 @@ describe('new session composer surface', () => {
     const atStart = slashEnd;
     const atEnd = newSource.indexOf('const removeAttachment = useCallback', atStart);
     const atSource = newSource.slice(atStart, atEnd);
-    const restoreStart = newSource.indexOf('firstMessageRef.current = stashed.draft.firstMessage;');
-    const restoreEnd = newSource.indexOf('setDraft(stashed.draft);', restoreStart);
+    const restoreStart = newSource.indexOf('const restoreCreationDraft = useCallback');
+    const restoreEnd = newSource.indexOf('setDraft(recovered);', restoreStart);
     const restoreSource = newSource.slice(restoreStart, restoreEnd);
 
     for (const source of [slashSource, atSource]) {
@@ -1602,9 +1736,11 @@ describe('new session composer surface', () => {
         source.indexOf('setFirstMessageSelection(selection)'),
       );
     }
-    expect(restoreSource).toContain('firstMessageRef.current = stashed.draft.firstMessage;');
-    expect(restoreSource).toContain('firstMessageSelectionRef.current = restoredSelection;');
-    expect(restoreSource).toContain('setFirstMessageSelection(restoredSelection);');
+    expect(restoreSource).toContain('firstMessageRef.current = recovered.firstMessage;');
+    expect(restoreSource).toContain('firstMessageSelectionRef.current = selection;');
+    expect(restoreSource).toContain('setFirstMessageSelection(selection);');
+    expect(newSource).toContain('restoreCreationDraft(stashed.draft, [...stashed.attachments]);');
+    expect(newSource).toContain('restoreCreationDraft(record.creation.draft,');
   });
 
   it('does not double-apply the Android safe-area inset to the top navigation', () => {
@@ -1982,7 +2118,7 @@ describe('new session worktree wiring (source locks)', () => {
       recovery,
     );
     const sessionId = newSource.indexOf(
-      'const sessionId = createNewSessionId();',
+      'const sessionId = recovering?.item.sessionId ?? createNewSessionId();',
       pendingGuard,
     );
     const worktreeCreate = newSource.indexOf(

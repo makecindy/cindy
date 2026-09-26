@@ -1882,7 +1882,7 @@ function ghostPermissionProjectionTuple(item: GhostPermissionItem): unknown[] {
   ];
 }
 
-function ghostPermissionProjectionKey(item: GhostPermissionItem): string {
+export function ghostPermissionProjectionKey(item: GhostPermissionItem): string {
   return JSON.stringify(ghostPermissionProjectionTuple(item));
 }
 
@@ -8228,6 +8228,13 @@ export const GHOST_LIBRARY_OPS = [
   'reveal',
   'saveAs',
   'clipboardWrite',
+  'staging.begin',
+  'staging.chunk',
+  'staging.commit',
+  'staging.list',
+  'staging.read',
+  'staging.release',
+  'staging.abort',
 ] as const;
 export type GhostLibraryOp = (typeof GHOST_LIBRARY_OPS)[number];
 
@@ -8235,9 +8242,30 @@ export type GhostLibraryOp = (typeof GHOST_LIBRARY_OPS)[number];
 export const GHOST_LIBRARY_CAPABILITY_OPERATIONS = ['clipboardWrite', 'saveAs'] as const;
 export type GhostLibraryCapabilityOperation = (typeof GHOST_LIBRARY_CAPABILITY_OPERATIONS)[number];
 
+export const GHOST_LIBRARY_STAGING_OPERATIONS = [
+  'staging.begin',
+  'staging.chunk',
+  'staging.commit',
+  'staging.list',
+  'staging.read',
+  'staging.release',
+  'staging.abort',
+] as const;
+export type GhostLibraryStagingOperation = (typeof GHOST_LIBRARY_STAGING_OPERATIONS)[number];
+
+export const GHOST_LIBRARY_STAGING_LIMITS_V1 = {
+  version: 1 as const,
+  maxTaskBytes: 8 * 1024 * 1024 * 1024,
+  maxTotalBytes: 8 * 1024 * 1024 * 1024,
+  maxConcurrentWrites: 4,
+  maxChunkBytes: 16 * 1024 * 1024,
+  reserveBytes: 1024 * 1024 * 1024,
+};
+
 export const GHOST_LIBRARY_CAPABILITIES_V1 = {
   version: 1 as const,
-  operations: GHOST_LIBRARY_CAPABILITY_OPERATIONS,
+  operations: [...GHOST_LIBRARY_CAPABILITY_OPERATIONS, ...GHOST_LIBRARY_STAGING_OPERATIONS] as const,
+  staging: GHOST_LIBRARY_STAGING_LIMITS_V1,
 };
 
 /** 宿主实际操作的稳定失败类别;TIMEOUT / TRANSPORT_ERROR 由插件查询层本地分类,不从 message 猜测。 */
@@ -8314,6 +8342,16 @@ export interface GhostPipeLibraryRequest {
   length?: number;
   /** saveAs: 另存为建议文件名(仅 basename)。 */
   name?: string;
+  /** staging: 插件任务身份 / 源版本 / MIME / 恢复元数据。 */
+  taskId?: string;
+  sourceRevision?: string;
+  mime?: string;
+  recovery?: Record<string, unknown>;
+  stagingId?: string;
+  /** staging.release: Library ACK 字节数(不是 begin 的 totalBytes)。 */
+  bytes?: number;
+  libraryIdentity?: string;
+  libraryGeneration?: number;
 }
 
 /**
@@ -8394,9 +8432,57 @@ export type GhostPipeLibraryResult =
       op: 'capabilities';
       capabilities: {
         version: 1;
-        operations: GhostLibraryCapabilityOperation[];
+        operations: ReadonlyArray<GhostLibraryCapabilityOperation | GhostLibraryStagingOperation>;
+        staging?: {
+          version: 1;
+          maxTaskBytes: number;
+          maxTotalBytes: number;
+          maxConcurrentWrites: number;
+          maxChunkBytes: number;
+          reserveBytes: number;
+        };
       };
     }
+  | { ok: true; op: 'staging.begin'; stagingId: string }
+  | { ok: true; op: 'staging.chunk'; accepted: number }
+  | {
+      ok: true;
+      op: 'staging.commit';
+      stagingId: string;
+      taskId: string;
+      sourceRevision: string;
+      sha256: string;
+      bytes: number;
+      mime: string;
+      durable: true;
+    }
+  | {
+      ok: true;
+      op: 'staging.list';
+      items: Array<{
+        stagingId: string;
+        taskId: string;
+        sourceRevision: string;
+        sha256: string;
+        bytes: number;
+        mime: string;
+        durable: true;
+        recovery: Record<string, unknown>;
+      }>;
+      hasMore: boolean;
+      nextCursor: string | null;
+    }
+  | {
+      ok: true;
+      op: 'staging.read';
+      stagingId: string;
+      content: string;
+      encoding: 'base64';
+      bytes: number;
+      sha256: string;
+    }
+  | { ok: true; op: 'staging.release'; stagingId: string; released: boolean }
+  | { ok: true; op: 'staging.abort'; aborted: boolean }
   | { ok: false; errorCode: string; message: string; reason?: GhostLibraryErrorReason };
 
 /** Library 概览(ghosts:library-overview IPC 载荷;设置页插件详情消费)。 */

@@ -128,6 +128,9 @@ vi.mock('@/state/newMakerDraft', () => ({
 }));
 
 vi.mock('../../feature-context', () => ({ useRegisterContentHeader: () => undefined }));
+vi.mock('@/components/chat/MarkdownRenderer', () => ({
+  MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div>,
+}));
 
 import { BotsHomeView, BotSettings } from '../BotsHomeView';
 
@@ -633,20 +636,94 @@ describe('Bot settings unified autosave', () => {
     );
   });
 
-  it('offers one recovery action only for a legacy profile with memory disabled', async () => {
+  it('turns memory on and off from the memory page', async () => {
     vi.useFakeTimers();
+    const listMemory = vi.fn(async () => []);
+    Object.assign(window.electronAPI, {
+      localDb: { ...window.electronAPI.localDb, bots: { memory: { list: listMemory } } },
+    });
     renderSettings({ capabilities: capabilities({ memory: false }) });
     fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
-    fireEvent.click(screen.getByRole('button', { name: 'bots.memoryRecovery.action' }));
+    expect(screen.queryByRole('switch')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.memory.title' }));
+    expect(screen.getByText('bots.memory.disabledHint')).toBeTruthy();
+    fireEvent.click(screen.getByRole('switch', { name: 'bots.memory.enabled' }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
+    expect(listMemory).toHaveBeenCalledWith('bot-1', undefined);
     expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
       capabilities: expect.objectContaining({ memory: true }),
     });
   });
 });
 
+
+describe('settings text fields', () => {
+  it('never saves unconfirmed IME text on any save path and saves it once committed', async () => {
+    vi.useFakeTimers();
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+    const name = screen.getByRole('textbox', { name: 'bots.nameLabel' });
+    const summary = screen.getByLabelText('bots.profile.summary');
+    // A save already scheduled before the composition still fires, without the pinyin.
+    fireEvent.change(summary, { target: { value: 'Own releases' } });
+    fireEvent.compositionStart(name);
+    fireEvent.change(name, { target: { value: 'PR stewardni' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    // An explicit flush in the middle of the composition is held to the same snapshot.
+    fireEvent.blur(summary);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toEqual({ description: 'Own releases' });
+    fireEvent.change(name, { target: { value: 'PR steward你' } });
+    fireEvent.compositionEnd(name);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600);
+    });
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+    expect(mocks.updateBotProfile.mock.calls[1]?.[1]).toEqual({ name: 'PR steward你' });
+  });
+
+  it('keeps showing the saved name for a cleared field and tidies the field on blur', async () => {
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+    const name = screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement;
+    fireEvent.change(name, { target: { value: '   ' } });
+    fireEvent.blur(name);
+    expect(name.value).toBe('PR steward');
+    fireEvent.change(name, { target: { value: '  Release buddy ' } });
+    fireEvent.blur(name);
+    expect(name.value).toBe('Release buddy');
+    await waitFor(() =>
+      expect(mocks.updateBotProfile).toHaveBeenCalledWith('bot-1', { name: 'Release buddy' }),
+    );
+    const summary = screen.getByLabelText('bots.profile.summary') as HTMLTextAreaElement;
+    fireEvent.change(summary, { target: { value: 'Own releases \n' } });
+    fireEvent.blur(summary);
+    expect(summary.value).toBe('Own releases');
+    fireEvent.change(name, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Release buddy' })).toBeTruthy();
+  });
+
+  it('moves focus to the opened page and back to the row that opened it', async () => {
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.personality' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: 'bots.profile.personality' }),
+      ),
+    );
+  });
+});
 
 describe('same-Bot capability updates while editing settings', () => {
   beforeEach(() => {

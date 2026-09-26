@@ -42,6 +42,7 @@ const copy = {
   delete: text('Delete Teammate', '删除伙伴', '刪除夥伴', 'チームメイトを削除', '팀원 삭제'),
   deleteBody: text('Permanently delete this teammate’s profile, memory, skills and workspace. Task history and independent worktrees are retained. Type the full name to delete.', '永久删除伙伴的资料、记忆、技能和工作区。任务记录和独立 worktree 保留。输入完整名字后删除。', '永久刪除夥伴的資料、記憶、技能和工作區。任務記錄和獨立 worktree 保留。輸入完整名字後刪除。', 'プロフィール、記憶、スキル、ワークスペースを完全に削除します。セッション履歴と独立した worktree は保持されます。削除するには名前全体を入力してください。', '프로필, 기억, 스킬, 작업 공간을 영구 삭제합니다. 세션 기록과 독립 worktree는 유지됩니다. 삭제하려면 전체 이름을 입력하세요.'),
   resume: text('Resume Teammate', '恢复伙伴', '恢復夥伴', 'チームメイトを再開', '팀원 재개'),
+  resumeBody: text('Your teammate starts taking messages and background work again. History, memory and files are unchanged; automations you paused yourself stay paused.', '恢复后伙伴重新接收消息和后台工作。记录、记忆和文件不变，你手动暂停的自动化仍保持暂停。', '恢復後夥伴重新接收訊息和背景工作。記錄、記憶和檔案不變，你手動暫停的自動化仍保持暫停。', '再開すると、チームメイトはメッセージとバックグラウンド作業を再び受け付けます。履歴、記憶、ファイルは変わらず、手動で一時停止した自動化は一時停止のままです。', '재개하면 팀원이 메시지와 백그라운드 작업을 다시 받습니다. 기록, 기억, 파일은 그대로이며 직접 일시 중지한 자동화는 계속 일시 중지됩니다.'),
   save: text('Save Changes', '保存更改', '儲存變更', '変更を保存', '변경 사항 저장'),
   saved: text('Teammate settings saved', '伙伴设置已保存', '夥伴設定已儲存', 'チームメイトの設定を保存しました', '팀원 설정을 저장했습니다'),
   restarted: text('Teammate restarted; send a message to continue', '伙伴已重启，发送消息即可继续', '夥伴已重新啟動，傳送訊息即可繼續', 'チームメイトを再起動しました。メッセージを送って続行できます', '팀원을 다시 시작했습니다. 메시지를 보내 계속하세요'),
@@ -142,7 +143,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
     }
     for (const operation of (source.status === 'paused' ? ['resume', 'delete'] : ['restart', 'delete']) as Array<'restart' | 'delete' | 'resume'>) {
       actions.push({ id: issue(context, owner, settings, operation), label: copy[operation], tone: operation === 'delete' ? 'destructive' : 'neutral',
-        confirmation: { title: copy[operation], body: operation === 'delete' ? copy.deleteBody : copy.restartBody, confirmLabel: copy[operation] },
+        confirmation: { title: copy[operation], body: { restart: copy.restartBody, delete: copy.deleteBody, resume: copy.resumeBody }[operation], confirmLabel: copy[operation] },
         ...(operation === 'delete' ? { fields: [{ id: 'confirmName', label: copy.name, kind: 'text', required: true }] } : {}) });
       resource.blocks.push({ id: operation, primitive: 'action', fallbackMarkdown: copy[operation].fallback, data: { actionId: actions.at(-1)!.id } });
     }

@@ -86,6 +86,18 @@ export function isRemoteResourceUnread(userId: string, deviceId: string, resourc
   const read = snapshots.get(userId)?.read[remoteResourceReadKey(deviceId, resourceId)];
   return at !== undefined && read !== undefined && at > read;
 }
+/** Name the cached Bot whose conversation link is this task. Presentation only; access stays live. */
+export function cachedBotIdForSession(userId: string, collectionId: string, deviceId: string, sessionId: string): string {
+  const row = snapshots.get(userId)?.items[collectionId]?.find(({ host, item }) => host.deviceId === deviceId
+    && item.ref.kind === 'bot' && item.links.some(({ rel, target }) => rel === 'conversation'
+      && target.kind === 'session' && target.sessionId === sessionId));
+  return row?.item.ref.id ?? '';
+}
+/** A cached roster row for display (name/avatar) only; never an authorization or availability signal. */
+export function cachedBotItem(userId: string, collectionId: string, deviceId: string, botId: string) {
+  return snapshots.get(userId)?.items[collectionId]?.find(({ host, item }) => host.deviceId === deviceId
+    && item.ref.kind === 'bot' && item.ref.id === botId)?.item ?? null;
+}
 export async function clearRemoteResourceCache(): Promise<void> {
   epoch += 1; snapshots.clear(); emit();
   await Promise.allSettled([...writes.values()]);

@@ -4,12 +4,38 @@ import type { Effort, ProviderModelRecord } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, nativeBridgeApiKey } from './pi-provider-transport.js';
 import { createResponsesHandler, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
-import { ChatSseTranslator, translateResponsesRequestWithContext, type ChatBridgeCapabilities, type ResponsesRequest } from '@cindy/responses-chat-bridge';
+import { ChatSseTranslator, classifySystemOrderError, coalesceLeadingSystemMessages, shouldRetrySystemNormalization, translateResponsesRequestWithContext, type ChatBridgeCapabilities, type ResponsesRequest } from '@cindy/responses-chat-bridge';
 
 /** Reasoning blobs are private to a connection, not to a shared upstream URL. */
 export function claudeProviderReasoningNamespace(url: string, providerId?: string): string {
   const material = providerId ? `${providerId}\0${url}` : url;
   return `cindy-provider-${createHash('sha256').update(material).digest('hex')}/`;
+}
+
+/**
+ * 读错误正文用于判定,带上限:上游可能回超长正文,而这里只为识别一句措辞。
+ * 判定句在正文前部(外层 error.message 里),截断不影响命中。
+ */
+const SYSTEM_ORDER_PROBE_LIMIT = 8 * 1024;
+
+async function readBoundedErrorText(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    while (text.length < SYSTEM_ORDER_PROBE_LIMIT) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    return text.slice(0, SYSTEM_ORDER_PROBE_LIMIT);
+  } catch {
+    return text.slice(0, SYSTEM_ORDER_PROBE_LIMIT);
+  } finally {
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 /** Reuse the two existing translators without opening another server or forwarding client credentials. */
@@ -18,13 +44,16 @@ export function createClaudeProviderBridge(options: {
   protocol: 'openai-chat' | 'openai-responses';
   headers: Readonly<Record<string, string>>;
   efforts: readonly Effort[];
+  supportsFastMode?: boolean;
   capabilities?: ChatBridgeCapabilities;
   model?: ProviderModelRecord;
   providerId?: string;
   nativeUpstream?: string;
   fetchImpl: typeof fetch;
 }): ResponsesBridgeHandler {
-  const nativeFetch = options.model ? createPiProviderFetch({ row: options.model,
+  const nativeFetch = options.model ? createPiProviderFetch({ row: {
+    ...options.model, supportsFastMode: options.supportsFastMode ?? options.model.supportsFastMode,
+  },
     providerId: options.providerId ?? 'custom',
     upstream: options.nativeUpstream,
     apiKey: nativeBridgeApiKey(options.headers),
@@ -42,8 +71,33 @@ export function createClaudeProviderBridge(options: {
     }
     if (nativeFetch) return nativeFetch(_url, init);
     if (options.protocol === 'openai-responses') return options.fetchImpl(options.url, init);
-    const translated = translateResponsesRequestWithContext(responses, { capabilities: options.capabilities });
-    const upstream = await options.fetchImpl(options.url, { ...init, body: JSON.stringify(normalizeProviderRequest(translated.request, { harness: 'claude-code', protocol: 'openai-chat', upstreamBase: options.url, model: responses.model }, { reasoningEffortAlreadyMapped: true })) });
+    const translated = translateResponsesRequestWithContext(responses, { capabilities: {
+      ...options.capabilities,
+      ...(options.supportsFastMode ? { passthroughFields: [...(options.capabilities?.passthroughFields ?? []), 'service_tier'] } : {}),
+    } });
+    const send = (request: typeof translated.request): Promise<Response> => options.fetchImpl(options.url, {
+      ...init,
+      body: JSON.stringify(normalizeProviderRequest(request, { harness: 'claude-code', protocol: 'openai-chat', upstreamBase: options.url, model: responses.model }, { reasoningEffortAlreadyMapped: true })),
+    });
+    let upstream = await send(translated.request);
+    // Claude Code 的 mid-conversation-system 会把 system 消息投到 user 轮次之后;
+    // 只接受开头 system 的上游(Google 的 OpenAI 兼容层、Qwen 模板运行器)会整轮 400,
+    // 且下一轮原样复现 → 会话卡死。这里与 responses-chat-bridge 的 handler 同口径重试一次:
+    // 只并到开头、只限本次请求内,显式策略与原生 developer 语义仍然优先。
+    if (!upstream.ok && options.capabilities?.systemMessagePolicy === undefined
+      && options.capabilities?.developerRole !== 'developer') {
+      // clone:不重试时错误正文要原样留给调用方(handler 读它做上游错误上报与呈现)。
+      const rejection = classifySystemOrderError(upstream.status, await readBoundedErrorText(upstream.clone()));
+      if (rejection && shouldRetrySystemNormalization(rejection, translated.request.messages)) {
+        const coalesced = coalesceLeadingSystemMessages(translated.request.messages);
+        if (coalesced !== translated.request.messages) {
+          translated.request.messages = coalesced;
+          // 首个响应被丢弃 → 立刻释放它的 body,别让废弃的连接/缓冲挂到本轮结束。
+          void upstream.body?.cancel().catch(() => undefined);
+          upstream = await send(translated.request);
+        }
+      }
+    }
     if (!upstream.ok || !upstream.body) return upstream;
     const translator = new ChatSseTranslator(responses.model, { toolContext: translated.toolContext });
     const reader = upstream.body.getReader();
@@ -107,6 +161,7 @@ export function createClaudeProviderBridge(options: {
       maxOutputTokensSupported: true,
       supportsReasoning: () => options.efforts.length > 0,
       supportedReasoningEfforts: () => options.efforts,
+      ...(options.supportsFastMode ? { fastServiceTier: 'priority' } : {}),
     }],
     fetchImpl: upstreamFetch,
   });

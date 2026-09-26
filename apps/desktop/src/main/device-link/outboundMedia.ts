@@ -3,7 +3,7 @@
  * 把 block 的 path/url 替换成 OSS 引用串(随 invoke 走 relay,bytes 不内联)。
  * ---------------------------------------------------------------------------
  * 在 device-link handleInvoke 里、deps.invoke 之前对 maker:send / maker:steer /
- * maker:input:enqueue 调用(这些 channel 才携带用户消息附件)。失败抛错 → handleInvoke
+ * maker:input:enqueue / maker:input:update-content 调用(这些 channel 才携带用户消息附件)。失败抛错 → handleInvoke
  * 转 throwIpcError(DEVICE_LINK_MEDIA_TRANSFER_FAILED) → 整条消息不发(产品决策)。
  *
  * 被控端 normalizeUserMessage 识别 OSS 引用串 → presign-get 下载 → 物化喂 agent。
@@ -11,11 +11,19 @@
  * 附件来源(控制端本机):xdt-image:// 缓存 URL / 绝对 fs 路径 / 内存 base64。
  */
 import { promises as fsp } from 'node:fs';
+import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
+type PeerUpload = (source: string | Buffer, mimeType?: string) => Promise<string | null>;
+const peerUploadContext = new AsyncLocalStorage<PeerUpload>();
+export function withPeerAttachmentUpload<T>(upload: PeerUpload, operation: () => Promise<T>) {
+  return peerUploadContext.run(upload, operation);
+}
 
 import { createLogger } from '../logger';
 import * as imageCacheStore from '../imageCacheStore';
 import * as cindyMediaBlobStore from '../cindy-media/blobStore';
-import { uploadLocalFile, uploadBuffer, type UploadResult } from './mediaTransfer';
+import { uploadLocalFile, uploadBuffer, mimeOf, type UploadResult } from './mediaTransfer';
 import { sharedTaskMediaId } from './sharedTaskMediaContext.js';
 import {
   OUTBOUND_IMAGE_INPUT_MAX_BYTES,
@@ -72,7 +80,7 @@ function buildUploadedAttachmentRef(
 function persistedIntegrityFields(
   ref: string,
 ): { size: number; sha256: string } | Record<string, never> {
-  const parsed = parseAttachmentOssRef(ref);
+  const parsed = parseAttachmentOssRef(ref) ?? parsePeerAttachmentRef(ref);
   return parsed?.size === undefined ? {} : { size: parsed.size, sha256: parsed.sha256! };
 }
 
@@ -86,6 +94,19 @@ async function uploadAttachment(src: AttachmentSource): Promise<string> {
         ? src.name
         : undefined;
 
+  const direct = async (source: string | Buffer, contentType?: string) => {
+    const context = peerUploadContext.getStore();
+    if (!context || sharedTaskMediaId()) return null;
+    const effectiveMime = contentType ?? mimeOf(typeof source === 'string' ? path.extname(source).slice(1).toLowerCase() : 'bin');
+    const result = await context(source, effectiveMime);
+    const parsed = result && parsePeerAttachmentRef(result);
+    return parsed ? buildPeerAttachmentRef({ ...parsed, originalName }) : null;
+  };
+  const bufferRef = async (bytes: Buffer, options: Parameters<typeof uploadBuffer>[1]) =>
+    await direct(bytes, options?.contentType) ?? buildUploadedAttachmentRef(await uploadBuffer(bytes, options), originalName);
+  const fileRef = async (file: string, options: Parameters<typeof uploadLocalFile>[1]) =>
+    await direct(file, options?.contentType) ?? buildUploadedAttachmentRef(await uploadLocalFile(file, options), originalName);
+
   // 1) 内存 base64(剪贴板/截图,视觉上下文语义)→ 压缩 → uploadBuffer(不把字节内联进 relay)
   if (typeof src.base64 === 'string' && src.base64) {
     const raw = Buffer.from(src.base64, 'base64');
@@ -96,11 +117,10 @@ async function uploadAttachment(src: AttachmentSource): Promise<string> {
         ? await compressOutboundImage(raw, mimeType)
         : null;
     const ext = compressed?.ext ?? (mimeType && EXT_BY_MIME[mimeType]) ?? 'bin';
-    const r = await uploadBuffer(compressed?.bytes ?? raw, {
+    return bufferRef(compressed?.bytes ?? raw, {
       ext,
       contentType: compressed?.contentType ?? mimeType,
     });
-    return buildUploadedAttachmentRef(r, originalName);
   }
 
   // 2) url / path → 解析成本地绝对路径后流式上传
@@ -108,7 +128,7 @@ async function uploadAttachment(src: AttachmentSource): Promise<string> {
   const rawPath = typeof src.path === 'string' && src.path ? src.path : '';
   const ref = url || rawPath;
   if (!ref) throw new Error('附件无可用来源(url/path/base64 皆空)');
-  if (parseAttachmentOssRef(ref)) return ref;
+  if (parseAttachmentOssRef(ref) || parsePeerAttachmentRef(ref)) return ref;
   if (ref.startsWith('clipboard://')) throw new Error('附件为 clipboard 占位,无字节');
 
   // 2a) xdt-image:// 缓存 → 视觉上下文语义(截图/剪贴板/生成图)压缩后 uploadBuffer;
@@ -148,18 +168,16 @@ async function uploadAttachment(src: AttachmentSource): Promise<string> {
       }
     }
     if (compressed) {
-      const r = await uploadBuffer(compressed.bytes, {
+      return bufferRef(compressed.bytes, {
         ext: compressed.ext,
         contentType: compressed.contentType,
       });
-      return buildUploadedAttachmentRef(r, originalName);
     }
     // 显式文件也从缓存副本上传(字节与原文件一致,且不依赖原路径此刻仍存在)。
-    const r = await uploadLocalFile(
+    return fileRef(
       resolved.absPath,
       effectiveMime ? { contentType: effectiveMime } : {},
     );
-    return buildUploadedAttachmentRef(r, originalName);
   }
 
   // 2a') cindy-media:// 媒体总仓 blob(统一地址,规则 25):图片沿用
@@ -183,19 +201,16 @@ async function uploadAttachment(src: AttachmentSource): Promise<string> {
       }
     }
     if (compressed) {
-      const r = await uploadBuffer(compressed.bytes, {
+      return bufferRef(compressed.bytes, {
         ext: compressed.ext,
         contentType: compressed.contentType,
       });
-      return buildUploadedAttachmentRef(r, originalName);
     }
-    const r = await uploadLocalFile(resolved.absPath, { contentType: effectiveMime });
-    return buildUploadedAttachmentRef(r, originalName);
+    return fileRef(resolved.absPath, { contentType: effectiveMime });
   }
 
   // 2b) 用户显式给出的磁盘路径附件是「字节精确」语义(素材/设计稿/文档),不压,原样上传。
-  const r = await uploadLocalFile(ref, mimeType ? { contentType: mimeType } : {});
-  return buildUploadedAttachmentRef(r, originalName);
+  return fileRef(ref, mimeType ? { contentType: mimeType } : {});
 }
 
 function isAttachmentBlock(b: unknown): b is AttachmentSource & { type: string } {
@@ -365,9 +380,10 @@ async function rewriteQueued(item: unknown, existing: ReadonlySet<string> = new 
  * 抛错由 handleInvoke 转 MEDIA_TRANSFER_FAILED。
  */
 export async function rewriteOutboundMedia(channel: string, args: unknown[], existing: ReadonlySet<string> = new Set()): Promise<unknown[]> {
-  if (channel === 'maker:input:update-content' && sharedTaskMediaId()) {
+  if (channel === 'maker:input:update-content') {
     const next = [...args];
     next[2] = await rewriteQueued(next[2], existing);
+    log.debug(`outbound media rewritten for ${channel}`);
     return next;
   }
   const isQueued = QUEUED_SHAPE_CHANNELS.has(channel);

@@ -1704,7 +1704,7 @@ describe('FORGE_GUIDE', () => {
 
   it('documents library capabilities as a sessionless support list with stable failure reasons', () => {
     expect(FORGE_GUIDE).toContain("op: 'capabilities'");
-    expect(FORGE_GUIDE).toContain("operations:['clipboardWrite','saveAs']");
+    expect(FORGE_GUIDE).toContain("operations:['clipboardWrite','saveAs','staging.begin'");
     expect(FORGE_GUIDE).toContain('不等于此刻有窗口 / 已授权 / 库可用');
     expect(FORGE_GUIDE).toContain('全部字符串');
     expect(FORGE_GUIDE).toContain('数组内混入');

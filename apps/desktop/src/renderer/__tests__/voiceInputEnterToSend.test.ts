@@ -24,7 +24,9 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     );
     expect(chatInputSource).toContain('const voiceInputCanStopAndSendRef = useRef(false);');
     expect(chatInputSource).toContain('voiceInputStopAndSendRef.current = handleClickSend;');
-    expect(chatInputSource).toContain('voiceInputCanStopAndSendRef.current = !sendButtonDisabled;');
+    expect(chatInputSource).toContain(
+      'voiceInputCanStopAndSendRef.current = !queueEditActive && !sendButtonDisabled;',
+    );
     expect(keydownBlock).toContain("currentState === 'listening'");
     expect(keydownBlock).toContain('voiceInputCanStopAndSendRef.current');
     expect(keydownBlock).toContain('isVoiceInputEnterTarget(event.target)');

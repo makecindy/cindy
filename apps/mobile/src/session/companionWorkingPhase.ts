@@ -19,7 +19,7 @@ export function companionWorkingPhase(messages: readonly RemoteMessage[]): { pha
     } else if (message.role === 'tool_result') {
       const id = message.toolUseId ?? (message.content && typeof message.content === 'object' ? (message.content as Record<string, unknown>).toolUseId : null);
       if (typeof id === 'string' && tools.has(id)) { phase = publicToolResultPhase(tools.get(id)!); tools.delete(id); }
-    } else if (message.role === 'assistant' && messageContentToPreview(message.content).trim()) phase = null;
+    } else if (message.role === 'assistant' && messageContentToPreview(message.content).trim()) phase = 'replying';
     else if (message.role === 'ask_user' || message.role === 'plan_review' || message.role === 'error') phase = null;
   }
   return { phase, turnId };

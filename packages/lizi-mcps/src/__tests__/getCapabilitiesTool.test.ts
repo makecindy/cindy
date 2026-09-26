@@ -93,6 +93,17 @@ describe('capabilities data source', () => {
     expect(entry!.detail).toContain('实际故障环境按需写进正文');
   });
 
+  it('session-handoff 写明 send_to_session 发给已有任务时 target_session_id 必传, 省略即静默新建 (#4884)', () => {
+    const entry = findCapability('session-handoff');
+    expect(entry).toBeDefined();
+    expect(entry!.detail).toContain('target_session_id 必传');
+    expect(entry!.detail).toContain('list_sessions');
+    expect(entry!.detail).toContain('wake_kind=created');
+    // jump 撞忙已改为入队,旧的「本工具不排队」说法会误导 skill 自己 retry/backoff。
+    expect(entry!.detail).not.toContain('本工具不排队');
+    expect(entry!.detail).toContain('wake_kind=queued');
+  });
+
   it('collab-mode 明确 Pi 可作本地 Lead 和 Worker，且不扩大到 SSH 远程 Pi', () => {
     const entry = findCapability('collab-mode');
 

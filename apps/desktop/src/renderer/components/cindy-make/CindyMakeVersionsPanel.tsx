@@ -10,12 +10,14 @@ import type { CindyVersionInfo, CindyVersionsState } from '../../../shared/cindy
 export function CindyMakeVersionsPanel({
   active = true,
   busy = false,
+  buildRunning = false,
   refreshKey,
   onState,
   children,
 }: {
   active?: boolean;
   busy?: boolean;
+  buildRunning?: boolean;
   refreshKey?: string;
   onState?: (state?: CindyVersionsState) => void;
   children?: ReactNode;
@@ -41,6 +43,7 @@ export function CindyMakeVersionsPanel({
   const personal = versions.state?.versions.find((version) => version.kind === 'personal');
   const switchBlockedReason = (version: CindyVersionInfo) => {
     if (switchDisabled) return 'busy' as const;
+    if (buildRunning) return 'building' as const;
     if (!version.available) return 'unavailable' as const;
     if (!version.compatible) return 'incompatible' as const;
     return undefined;
@@ -48,7 +51,11 @@ export function CindyMakeVersionsPanel({
   const switchBlockedLabel = (version: CindyVersionInfo) => {
     const reason = switchBlockedReason(version);
     if (!reason) return undefined;
-    return t(reason === 'busy' ? 'cindyMake.versions.errors.busy' : 'cindyMake.versions.' + reason);
+    return t(
+      reason === 'busy' || reason === 'building'
+        ? 'cindyMake.versions.errors.' + reason
+        : 'cindyMake.versions.' + reason,
+    );
   };
   const renderSwitchButton = (version: CindyVersionInfo, actionLabel: string) => {
     const blockedLabel = switchBlockedLabel(version);
@@ -61,7 +68,7 @@ export function CindyMakeVersionsPanel({
         title={blockedLabel}
         aria-label={blockedLabel ?? actionLabel}
       >
-        {blockedLabel ?? actionLabel}
+        {buildRunning ? actionLabel : (blockedLabel ?? actionLabel)}
       </Button>
     );
   };

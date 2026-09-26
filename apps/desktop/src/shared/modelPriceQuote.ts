@@ -122,6 +122,7 @@ export function gatewayModelPriceQuote(
   model: ModelAccessGatewayModel,
   fallbackCurrency: MoneyCurrency,
   fallbackIsInferred = false,
+  options: { allowFreeModel?: boolean } = {},
 ): ModelPriceQuote | undefined {
   const modelId = model.id.trim();
   const inputPerMtok = perMtok(model.inputCostPerToken);
@@ -136,6 +137,7 @@ export function gatewayModelPriceQuote(
   const priorityCacheReadPerMtok = perMtok(model.cacheReadInputTokenCostPriority);
   const priorityInputTokenPriceBands = gatewayPriorityInputTokenPriceBands(model);
   if (
+    !options.allowFreeModel &&
     inputPerMtok === 0 &&
     outputPerMtok === 0 &&
     (cacheReadPerMtok === undefined || cacheReadPerMtok === 0) &&

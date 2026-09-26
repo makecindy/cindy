@@ -27,7 +27,8 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(wiring).toContain('providerService: getDesktopProviderService()');
     expect(wiring).toContain('getCatalog: getActiveCatalog');
     expect(routingSource).toContain('waitForDiscovery: true');
-    expect(registerSource).toContain('getProviderRoutingContext,');
+    expect(registerSource).toContain('getProviderRoutingContext: async (agent, remoteHostId)');
+    expect(registerSource).toContain('sshCodexWorkerRoutingContext(await readSshCodexModelList({ id: remoteHostId }, listSshCodexProviders))');
   });
 
   it('resumes an idle parent with the stored provider so Bot completions can wake it', () => {
@@ -60,7 +61,7 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(worktreeAllocation).toBeGreaterThan(validation);
   });
 
-  it.each([['openai', 'codex'], ['anthropic', 'claude']] as const)('marks %s accounts local-only for Pi before SSH worker creation', async (brand, native) => {
+  it.each([['openai', 'codex']] as const)('marks %s accounts local-only for Pi before SSH worker creation', async (brand, native) => {
     const builtin = BUNDLED_CATALOG.providers.find((provider) => provider.id === brand)!;
     const account = { ...builtin, id: 'user-account', auth: { method: 'oauth' as const, native } };
     const catalog = { ...BUNDLED_CATALOG, providers: [account, builtin] };
@@ -73,6 +74,23 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(routing.availability.pi.find((provider) => provider.id === account.id)?.localOnlyForSsh).toBe(true);
     const nativeAgent = brand === 'openai' ? 'codex' : 'claude-code';
     expect(routing.availability[nativeAgent].find((provider) => provider.id === brand)?.localOnlyForSsh).toBe(false);
+  });
+
+  it('never offers the Claude subscription (builtin or retired account) to Pi Orca workers', async () => {
+    const builtin = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')!;
+    const account = { ...builtin, id: 'user-account', agents: [], auth: { method: 'oauth' as const, native: 'claude' as const } };
+    const catalog = { ...BUNDLED_CATALOG, providers: [account, builtin] };
+    const routing = await readOrcaWorkerProviderRoutingContext({
+      providerService: {
+        listProviders: vi.fn(async () => buildRegistry(catalog, { [account.id]: true, anthropic: true })),
+      },
+      getCatalog: () => catalog,
+    });
+    for (const agent of ['pi', 'codex'] as const) {
+      expect(routing.availability[agent].some((provider) => provider.id === 'anthropic' || provider.id === account.id)).toBe(false);
+    }
+    // 远端任务不能用 Claude 订阅(它只在本机 Claude Code 的登录里),SSH worker 不选它。
+    expect(routing.availability['claude-code'].find((provider) => provider.id === 'anthropic')?.localOnlyForSsh).toBe(true);
   });
 
   it('rejects SSH account switching before deferring or replacing the running route', () => {

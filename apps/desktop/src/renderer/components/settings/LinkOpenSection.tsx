@@ -39,7 +39,7 @@ const CARD_CLASS = cn(
   'bg-[var(--settings-theme-card-bg)]',
   'border border-[var(--settings-theme-card-border)]',
 );
-const ROW_CLASS = 'flex items-center justify-between gap-3 px-4 py-4';
+const ROW_CLASS = 'cindy-segmented-row px-4 py-4';
 const ROW_LABEL_CLASS = 'text-13 font-medium text-[var(--settings-section-sublabel)]';
 const ROW_HINT_CLASS = 'text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70';
 const DIVIDER_CLASS = 'mx-4 h-px bg-[var(--settings-theme-card-border)]';
@@ -62,7 +62,7 @@ function LinkOpenPreferenceRow({ kind }: { kind: LinkOpenKind }) {
         <p className={ROW_HINT_CLASS}>{t(`settings.linkOpen.${kind}.description`)}</p>
       </div>
 
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="cindy-segmented-row-actions">
         <DefaultOverrideControls isCustomized={isCustomized} onReset={onReset} />
         <SegmentedControl
           aria-label={t(`settings.linkOpen.${kind}.ariaLabel`)}

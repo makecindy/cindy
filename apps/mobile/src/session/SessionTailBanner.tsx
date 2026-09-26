@@ -9,6 +9,7 @@
  *    消息流不渲染,用户只看到任务继续跑);
  *  - 「忽略」→ error-tail 持久化 dismiss / interrupted 写 ack,不再提示。
  */
+import { AgentErrorDetails } from './AgentErrorDetails';
 import { Pressable, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
@@ -35,7 +36,7 @@ export function SessionTailBanner({ state, busy, readOnly, onContinue, onDismiss
   const { t } = useTranslation();
   const isInterrupted = state.kind === 'interrupted' || state.continueKind === 'interrupted';
   const text = state.kind === 'error-tail' && state.continueKind === 'error'
-    ? state.text
+    ? state.summaryKey ? t(state.summaryKey) : state.text
     : t('session.tail.interrupted');
   const showContinue = state.kind === 'interrupted' || state.retryable;
   return (
@@ -46,6 +47,7 @@ export function SessionTailBanner({ state, busy, readOnly, onContinue, onDismiss
       >
         {text}
       </Text>
+      {state.kind === 'error-tail' && state.rawError && !isInterrupted ? <AgentErrorDetails message={state.rawError} /> : null}
       {readOnly ? null : (
         <View style={styles.actions}>
           {showContinue ? (

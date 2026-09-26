@@ -174,7 +174,7 @@ describe('version management main boundary', () => {
     await expect(actCindyVersion(action, target)).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     expect(h.handoff).not.toHaveBeenCalled();
   });
-  it('allows switching during build or other running work and never quits on a failed handoff', async () => {
+  it('allows switching during other running work and never quits on a failed handoff', async () => {
     setPersonal();
     configureCindyVersions(() => true);
     await actCindyVersion('switch', id);
@@ -187,6 +187,16 @@ describe('version management main boundary', () => {
     );
     await expect(actCindyVersion('switch', id)).rejects.toThrow('incompatible');
     expect(h.quit).not.toHaveBeenCalled();
+  });
+  it('blocks switching while a personal version is being built', async () => {
+    setPersonal();
+    configureCindyVersions(() => true, () => true);
+    await expect(actCindyVersion('switch', id)).rejects.toThrow('building');
+    expect(h.handoff).not.toHaveBeenCalled();
+    expect(h.quit).not.toHaveBeenCalled();
+    configureCindyVersions(() => true, () => false);
+    await actCindyVersion('switch', id);
+    expect(h.handoff).toHaveBeenCalledOnce();
   });
   it('uses normal quit only after the host-owned handoff accepts the current owner', async () => {
     setPersonal();

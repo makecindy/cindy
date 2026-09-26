@@ -122,6 +122,7 @@ export interface RoutableMaker {
     | 'move'
     | 'remove'
     | 'updateText'
+    | 'updateContent'
     | 'clearError'
     | 'retryLastError'
     | 'clearSession'
@@ -235,6 +236,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
       move: t('maker:input:move') as FullMaker['input']['move'],
       remove: t('maker:input:remove') as FullMaker['input']['remove'],
       updateText: t('maker:input:update-text') as FullMaker['input']['updateText'],
+      updateContent: t('maker:input:update-content') as FullMaker['input']['updateContent'],
       clearError: t('maker:input:clear-error') as FullMaker['input']['clearError'],
       retryLastError: t('maker:input:retry-last-error') as FullMaker['input']['retryLastError'],
       clearSession: t('maker:input:clear-session') as FullMaker['input']['clearSession'],

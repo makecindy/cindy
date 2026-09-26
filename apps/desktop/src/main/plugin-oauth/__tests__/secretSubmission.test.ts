@@ -172,14 +172,19 @@ async function harness(options: { failStore?: boolean; holdStore?: boolean; save
     localDeviceId: () => 'desktop',
     openExternal,
     trustIdentity: async () => {},
-    identity: async () => ({
-      ...(await publishedPluginOauthIdentity())!,
-      deviceId: 'cloud-device',
-      realm: 'global' as const,
-      membershipId: 'membership',
-      observedAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
-    }),
+    identity: async () => {
+      const identity = (await publishedPluginOauthIdentity())!;
+      // Both timestamps must share an instant or the fixture can exceed the 60s TTL.
+      const observedAtMs = Date.now();
+      return {
+        ...identity,
+        deviceId: 'cloud-device',
+        realm: 'global' as const,
+        membershipId: 'membership',
+        observedAtMs,
+        expiresAtMs: observedAtMs + 60_000,
+      };
+    },
     invoke: async (_device, _channel, args) => {
       const response = await requestPluginOauth('desktop', args[0]);
       wire.push({ request: args[0], response });

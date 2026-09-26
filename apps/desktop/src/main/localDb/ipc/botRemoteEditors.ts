@@ -4,6 +4,7 @@ import type { BotRemoteSettingsDeps, createBotRemoteSettingsResource } from './b
 import type { RemoteResourceHostContext } from '../../device-link/remoteResourceRegistry.js';
 import type { BotSkillDetail } from '../../../shared/botSkill.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
+import { createBotRemoteMemoryEditor, memoryCopy, type BotRemoteMemoryService } from './botRemoteMemory.js';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
 type Capability = { id: string; name: string; description: string; available: boolean; joined: boolean };
@@ -14,6 +15,12 @@ export interface BotRemoteEditorDeps extends Pick<BotRemoteSettingsDeps, 'owner'
   saveSkill(botId: string, skill: BotSkillDetail): Promise<void>;
   removeSkill(botId: string, slug: string): Promise<void>;
   capabilities(sessionId: string, kind: Kind): Promise<Capability[]>;
+  memory: BotRemoteMemoryService;
+}
+export interface BotRemoteEditorOptions {
+  /** `RemoteResourceGetRequest.query`, honored only by pages that advertise `search`. */
+  query?: string;
+  primitives?: readonly string[];
 }
 const text = (fallback: string, cn: string, tw: string, ja: string, ko: string): RemoteLocalizedText => ({ fallback, translations: { 'zh-CN': cn, 'zh-TW': tw, ja, ko } });
 export const editorCopy = {
@@ -22,6 +29,7 @@ export const editorCopy = {
   avatar: text('Avatar', '头像', '頭像', 'アバター', '아바타'),
   skills: text('Personal Skills', '学会的技能', '學會的技能', '学習したスキル', '학습한 스킬'),
   connections: text('Skills & Connections', '技能与连接', '技能與連接', 'スキルと接続', '스킬 및 연결'),
+  memories: memoryCopy.memories,
   skill: text('Skill References', '引用的技能', '引用的技能', '参照スキル', '참조 스킬'),
   mcp: text('Connections', '连接', '連接', '接続', '연결'),
   toolset: text('Toolsets', '工具集', '工具集', 'ツールセット', '도구 모음'),
@@ -49,7 +57,8 @@ const receipt = (id: string): RemoteActionInvokeResponse => ({ effects: [
 
 /** Finite settings resources over existing owner-bound services; no global installation or credentials. */
 export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnType<typeof createBotRemoteSettingsResource>['bindResource']) {
-  return async (context: RemoteResourceHostContext, id: string, locale?: string): Promise<RemoteResource> => {
+  const memoryEditor = createBotRemoteMemoryEditor(deps, bind);
+  return async (context: RemoteResourceHostContext, id: string, locale?: string, options: BotRemoteEditorOptions = {}): Promise<RemoteResource> => {
     const owner = deps.owner(); deps.assertOwner(owner);
     if (id === 'create') {
       const panel = form('create', editorCopy.create, [
@@ -69,6 +78,11 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
         deps.assertOwner(owner);
         return { effects: [{ kind: 'refresh-collection', collectionId: 'teammates' }, { kind: 'navigate', target: { kind: 'resource', ref: ref(botId) } }] };
       });
+    }
+    const memory = /^settings:([A-Za-z0-9_-]{1,128})\/memory(?:\/([a-z0-9_-]{1,80}))?$/.exec(id);
+    if (memory) {
+      const settings = await deps.read(memory[1]); deps.assertOwner(owner);
+      return memoryEditor(context, { botId: memory[1], botName: settings.source.name, entry: memory[2], locale, query: options.query, primitives: options.primitives ?? [] });
     }
     const match = /^settings:([A-Za-z0-9_-]{1,128})\/(skills|connections|avatar)(?:\/([a-z0-9-]+))?(?:\/([a-f0-9]{64}))?$/.exec(id);
     if (!match) throwIpcError('NOT_FOUND', 'Unknown teammate editor');

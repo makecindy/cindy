@@ -52,6 +52,63 @@ const routeCases = ['codex/gpt-5.6-sol', 'codex/gpt-5.6-luna'].flatMap((discount
   },
 ]);
 
+describe('Codex writer decision freshness', () => {
+  it.each(['released', 'moved', 'failed'])('rechecks the writer after close: %s', async (state) => {
+    const sessionId = rememberSession(`post-close-${state}`);
+    setSessionProvider(sessionId, 'cprov-source');
+    let closed = false;
+    const relink = vi.fn(async () => {});
+    const restore = vi.fn();
+    const pending = { model: 'earlier', providerId: 'cprov-earlier' };
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({ agentKind: 'codex', model: 'source', setModel: vi.fn(), requiresModelSwitchRebuild: async () => true }),
+      listActiveSessions: () => [{ id: sessionId, agentKind: 'codex', isTurnRunning: () => false }],
+      closeSession: async () => { closed = true; },
+    };
+    const result = applyRuntimeSetModelChange({ maker, sessionId, model: 'target', providerId: 'cprov-target',
+      requiresCodexThreadRelink: async () => {
+        if (closed && state === 'failed') throw new Error('writer lookup failed');
+        return closed && state === 'moved';
+      }, relinkCodexThread: relink, getPendingCredentialSwitch: () => pending,
+      clearPendingCredentialSwitch: vi.fn(), registerPendingCredentialSwitch: restore });
+    if (state === 'failed') {
+      await expect(result).rejects.toThrow('writer lookup failed');
+      expect(restore).toHaveBeenCalledWith(sessionId, pending);
+      expect(getSessionProvider(sessionId)).toBe('cprov-source');
+    } else {
+      await expect(result).resolves.toEqual(state === 'moved' ? { status: 'applied', persistedRoute: true } : { status: 'applied' });
+    }
+    expect(relink).toHaveBeenCalledTimes(state === 'moved' ? 1 : 0);
+  });
+
+  it.each([false, true])('rechecks after asynchronous model inspection with busy=%s', async (busy) => {
+    const sessionId = rememberSession('route-changes-during-inspection');
+    setSessionProvider(sessionId, 'cprov-source');
+    let requiresTransfer = false;
+    const relink = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const registerPendingCredentialSwitch = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({ agentKind: 'codex', model: 'source', remoteHostId: null,
+        setModel: vi.fn(), requiresModelSwitchRebuild: async () => { requiresTransfer = true; return true; } }),
+      listActiveSessions: () => [{ id: sessionId, agentKind: 'codex', isTurnRunning: () => busy }],
+      closeSession,
+    };
+    const switching = applyRuntimeSetModelChange({ maker, sessionId, model: 'target', providerId: 'cprov-target',
+      requiresCodexThreadRelink: async () => requiresTransfer, relinkCodexThread: relink, registerPendingCredentialSwitch });
+    if (busy) {
+      await expect(switching).rejects.toThrow(/busy/);
+      expect(closeSession).not.toHaveBeenCalled();
+      expect(relink).not.toHaveBeenCalled();
+      expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
+    } else {
+      await expect(switching).resolves.toEqual({ status: 'applied', persistedRoute: true });
+      expect(closeSession).toHaveBeenCalledOnce();
+      expect(relink).toHaveBeenCalledOnce();
+    }
+  });
+});
+
 describe.each(routeCases)('Codex route: $sourceModel → $targetModel', (route) => {
   const { sourceProvider, sourceModel, targetProvider, targetModel } = route;
   it('closes, relinks, then publishes the idle target route', async () => {

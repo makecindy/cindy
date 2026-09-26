@@ -329,6 +329,7 @@ async function readCindyMakeHistory(
       : undefined;
   const ownsBuild = !!ownBuild && buildJob === ownBuild && ownBuild.current();
   const globalBusy =
+    cindyMakeManager.isVersionSwitching() ||
     cindyMakeTestController.hasActiveJobs() ||
     (!ownsBuild && (!!buildJob || cindyMakeManager.hasActiveWork()));
   const items: CindyMakeHistoryItem[] = [];

@@ -14,7 +14,6 @@ import { useTranslation } from 'react-i18next';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Spinner } from '@/components/ui/spinner';
-import { cn } from '@/lib/utils';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { isBatchFinished, type UpdateAllRow } from './lib/updateAllModel';
 

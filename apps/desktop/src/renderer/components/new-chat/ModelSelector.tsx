@@ -73,6 +73,7 @@ import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useProviders } from '@/hooks/useProviders';
+import { LocalModelCatalogNotice } from './LocalModelCatalogNotice';
 import { providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
 import {
   evictDeviceProviders,
@@ -108,6 +109,7 @@ import {
   findCatalogModel,
   nativeDefaultSourceId,
   getModel,
+  isCustomRoutedProvider,
   modelSupportsFastMode,
   providerOffersModel,
   resolveModelIconKind,
@@ -615,6 +617,7 @@ export function resolveModelSelectorAgentIdentity(
 interface ModelSelectorProps {
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
   providersOverride?: ProviderView[];
+  providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
   currentSelection?: SessionRuntimeProfileProjection;
   /** Open recovery for the selected source; generic Add model navigation stays separate. */
   onReconnectSource?: () => void;
@@ -806,6 +809,7 @@ interface ModelSelectorProps {
 
 interface ModelSelectorContentProps {
   providersOverride?: ProviderView[];
+  providersOverrideState?: ModelSelectorProps['providersOverrideState'];
   modelId: string;
   effort: Effort;
   onModelChange: (modelId: string) => void | boolean | Promise<void | boolean>;
@@ -1053,6 +1057,7 @@ export function ModelSelectorContent(props: ModelSelectorContentProps) {
 
 function ModelSelectorContentView({
   providersOverride,
+  providersOverrideState,
   modelId,
   effort,
   onModelChange,
@@ -1581,7 +1586,7 @@ function ModelSelectorContentView({
       // 同前缀模型由该供应商自身配置路由(codex-proxy-host 按会话显式供应商解析,
       // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
       // 为 null,无供应商概念)与内置来源保持原前缀判定。
-      if (provider?.source === 'user') return false;
+      if (isCustomRoutedProvider(provider)) return false;
       return id.startsWith('codex/') && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;
@@ -2749,6 +2754,22 @@ function ModelSelectorContentView({
     [cc.capabilities, codex.capabilities, pi.capabilities, onFastModeChange, onUnifiedSelect, fastModeConfigurable],
   );
 
+  if (providersOverrideState && providersOverrideState.status !== 'ready') {
+    return <RemoteModelLoadNotice status={providersOverrideState.status} onRetry={providersOverrideState.refresh} />;
+  }
+
+  const localCatalogNotice = !deviceId && !providersOverride && localProviders.error
+    ? <LocalModelCatalogNotice failure={localProviders.error} onRetry={localProviders.refetch} /> : null;
+  // 后续刷新失败时,快照里可能仍没有当前引擎的已连接来源。emptyState 不得盖住恢复提示;
+  // 有引导卡时叠在下方,连接入口仍可用。
+  if (localCatalogNotice && (localProviders.loading || emptyState)) {
+    return (
+      <div className="flex w-[320px] max-w-full flex-col">
+        <div className={emptyState ? 'p-2 pb-0' : 'p-2'}>{localCatalogNotice}</div>
+        {emptyState}
+      </div>
+    );
+  }
   if (emptyState) return emptyState;
 
   const hasAnyModel = sections ? sections.length > 0 : (flatModels?.length ?? 0) > 0;
@@ -2857,6 +2878,7 @@ function ModelSelectorContentView({
               aria-label={t('newChat.modelSelector.search.placeholderAll')}
             />
           </div>
+          {localCatalogNotice && <div className="shrink-0 p-2">{localCatalogNotice}</div>}
           <UnifiedModelPanel
             deviceId={deviceId}
             localProviderUsage={!deviceId && !providersOverride}
@@ -3075,6 +3097,7 @@ function ModelSelectorContentView({
         </>
       )}
       {searchField}
+      {localCatalogNotice}
 
       {/* 模型列表 —— 单栏;分段(供应商)或 flat。 */}
       <div
@@ -3202,6 +3225,7 @@ function ModelSelectorContentView({
 
 export function ModelSelector({
   providersOverride,
+  providersOverrideState,
   modelId,
   currentSelection,
   onReconnectSource,
@@ -3301,7 +3325,9 @@ export function ModelSelector({
       const nextOpen = disabled ? false : next;
       const wasOpen = openRef.current;
       openRef.current = nextOpen;
-      if (nextOpen && !wasOpen && !deviceId) {
+      if (nextOpen && !wasOpen && providersOverrideState) {
+        providersOverrideState.refresh();
+      } else if (nextOpen && !wasOpen && !deviceId && !providersOverride) {
         discovery.begin(() =>
           window.electronAPI.maker.requestProviderModelsAutoRefresh('model-selector-open'),
         );
@@ -3312,7 +3338,7 @@ export function ModelSelector({
       }
       setOpen(nextOpen);
     },
-    [deviceId, disabled, discovery, resetDiscoveryPresentation],
+    [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState],
   );
 
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
@@ -3403,10 +3429,10 @@ export function ModelSelector({
     pi,
     providers: remoteProviders,
   });
-  const remoteModelLoading = !!deviceId && remoteModelListStatus === 'loading';
-  const remoteModelLoadFailed = !!deviceId && remoteModelListStatus === 'error';
-  const localModelLoading = !deviceId && !(!providersOverride && localProviders.loadFailed) && (
-    (!providersOverride && localProviders.loading) ||
+  const remoteModelLoading = providersOverrideState?.status === 'loading' || (!!deviceId && remoteModelListStatus === 'loading');
+  const remoteModelLoadFailed = providersOverrideState?.status === 'error' || (!!deviceId && remoteModelListStatus === 'error');
+  const localModelLoading = !deviceId && !providersOverride && !localProviders.loadFailed && (
+    localProviders.loading ||
     (agentKind === 'codex' ? codex.loading : agentKind === 'pi' ? pi.loading : cc.loading)
   );
   const visibleModels = useMemo(
@@ -3543,6 +3569,7 @@ export function ModelSelector({
   // 草稿没有已连接来源时显示连接 CTA；已建任务保留保存的模型和恢复入口。
   // device-link 远程会话不走此 CTA(控制端无法替被控端连来源;hasConnectedSource 是本机口径)。
   const noSource =
+    !providersOverride &&
     !actualRoute &&
     !!onProviderChange &&
     !!onNavigateToProviders &&
@@ -4014,6 +4041,7 @@ export function ModelSelector({
       configurationEnabled={configurationEnabled}
       fastModeConfigurable={fastModeConfigurable}
       providersOverride={providersOverride}
+      providersOverrideState={providersOverrideState}
       unifiedPanel={unifiedPanel}
       sessionEngineFilter={contentSessionEngineFilter}
       unifiedAgents={unifiedAgents}

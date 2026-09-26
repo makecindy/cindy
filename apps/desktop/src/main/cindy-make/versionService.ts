@@ -36,8 +36,10 @@ import {
 import { cleanupPersonalVersions } from './personalVersionCleanup.js';
 
 let makeBusy: () => boolean = () => true;
-export function configureCindyVersions(probe: () => boolean): void {
+let buildBusy: () => boolean = () => false;
+export function configureCindyVersions(probe: () => boolean, buildProbe: () => boolean = () => false): void {
   makeBusy = probe;
+  buildBusy = buildProbe;
 }
 export async function getCindyVersions(): Promise<CindyVersionsState> {
   const profile = app.getPath('userData');
@@ -92,9 +94,11 @@ export async function actCindyVersion(action: unknown, id: unknown): Promise<Cin
   const current = () =>
     isDataOwnerBroadcastScopeCurrent(scope) && app.getPath('userData') === profile;
   try {
-    // An explicit switch may interrupt active work. Normal quit preserves Agent turn
-    // markers for continuing after startup; background jobs are not replayed.
-    // Removing the personal version still requires the busy guard below.
+    // An explicit switch may interrupt tasks and tests, but a personal build must
+    // finish or stop first. Normal quit does not replay background build jobs.
+    // Removing the personal version still requires the broad busy guard below.
+    if (action === 'switch' && buildBusy())
+      throwIpcError('PRECONDITION_FAILED', 'building');
     if ((action === 'remove' && makeBusy()) || isCindyVersionSwitching())
       throwIpcError('PRECONDITION_FAILED', 'busy');
     if (action === 'switch') {
@@ -107,6 +111,7 @@ export async function actCindyVersion(action: unknown, id: unknown): Promise<Cin
         targetId,
         async () =>
           current() &&
+          !buildBusy() &&
           (targetId === 'original' || personalVersionId(profile) === targetId),
       );
       if (!current()) throwIpcError('PRECONDITION_FAILED', 'busy');
@@ -155,7 +160,7 @@ export async function actCindyVersion(action: unknown, id: unknown): Promise<Cin
     return getCindyVersions();
   } catch (error) {
     const code = (error as { code?: string }).code;
-    if (code === 'busy' || code === 'incompatible' || code === 'launchFailed')
+    if (code === 'busy' || code === 'building' || code === 'incompatible' || code === 'launchFailed')
       throwIpcError('PRECONDITION_FAILED', code);
     if (isIpcError(error)) throw error;
     throwIpcError('PRECONDITION_FAILED', 'unavailable');

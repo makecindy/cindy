@@ -1,0 +1,22 @@
+import type { SettingsSearchModule } from './settingsSearchTypes';
+
+/** Static search metadata owned by this settings module; no component mounting or IPC. */
+export default {
+  id: 'voice-input',
+  order: 6,
+  entries: [
+    { id: 'voiceInput', tab: 'voice-input', targetId: 'settings-panel-voice-input', titleKey: 'settings.tabs.voiceInput', sectionKey: 'settings.sections.voiceInput' },
+    { id: 'settings.voiceInput.language.label', fallbackTargetId: 'settings-panel-voice-input', tab: 'voice-input', targetId: 'settings-search-settings-voiceInput-language-label', titleKey: 'settings.voiceInput.language.label', sectionKey: 'settings.tabs.voiceInput', descriptionKey: 'settings.voiceInput.language.hint' },
+    { id: 'settings.voiceInput.microphone.label', fallbackTargetId: 'settings-panel-voice-input', tab: 'voice-input', targetId: 'settings-search-settings-voiceInput-microphone-label', titleKey: 'settings.voiceInput.microphone.label', sectionKey: 'settings.tabs.voiceInput', descriptionKey: 'settings.voiceInput.microphone.hint' },
+    { id: 'settings.voiceInput.refinement.enabled.label', fallbackTargetId: 'settings-panel-voice-input', tab: 'voice-input', targetId: 'settings-search-settings-voiceInput-refinement-enabled-label', titleKey: 'settings.voiceInput.refinement.enabled.label', sectionKey: 'settings.tabs.voiceInput', descriptionKey: 'settings.voiceInput.refinement.enabled.hint' },
+    { id: 'settings.voiceInput.refinement.instructions.label', fallbackTargetId: 'settings-search-settings-voiceInput-refinement-enabled-label', tab: 'voice-input', targetId: 'settings-search-settings-voiceInput-refinement-instructions-label', titleKey: 'settings.voiceInput.refinement.instructions.label', sectionKey: 'settings.tabs.voiceInput', descriptionKey: 'settings.voiceInput.refinement.instructions.hint' },
+    { id: 'settings.voiceInput.refinement.dictionary.label', fallbackTargetId: 'settings-search-settings-voiceInput-refinement-enabled-label', tab: 'voice-input', targetId: 'settings-search-settings-voiceInput-refinement-dictionary-label', titleKey: 'settings.voiceInput.refinement.dictionary.label', sectionKey: 'settings.tabs.voiceInput', descriptionKey: 'settings.voiceInput.refinement.dictionary.hint' },
+    { id: 'settings.voiceInput.muteSystemAudio.label', fallbackTargetId: 'settings-panel-voice-input', tab: 'voice-input', targetId: 'settings-search-settings-voiceInput-muteSystemAudio-label', titleKey: 'settings.voiceInput.muteSystemAudio.label', sectionKey: 'settings.tabs.voiceInput', descriptionKey: 'settings.voiceInput.muteSystemAudio.hint', isVisible: ({ platform }) => platform === 'darwin' || platform === 'win32' },
+    { id: 'settings.voiceInput.interactionSound.label', fallbackTargetId: 'settings-panel-voice-input', tab: 'voice-input', targetId: 'settings-search-settings-voiceInput-interactionSound-label', titleKey: 'settings.voiceInput.interactionSound.label', sectionKey: 'settings.tabs.voiceInput', descriptionKey: 'settings.voiceInput.interactionSound.hint' },
+    { id: 'settings.voiceInput.history.label', fallbackTargetId: 'settings-panel-voice-input', tab: 'voice-input', targetId: 'settings-search-settings-voiceInput-history-label', titleKey: 'settings.voiceInput.history.label', sectionKey: 'settings.tabs.voiceInput' },
+    { id: 'settings.voiceInput.sections.usageData', fallbackTargetId: 'settings-panel-voice-input', tab: 'voice-input', targetId: 'settings-search-voice-usage-data', titleKey: 'settings.voiceInput.sections.usageData', sectionKey: 'settings.tabs.voiceInput' },
+    { id: 'settings.voiceInput.fastActivation.label', fallbackTargetId: 'settings-panel-voice-input', tab: 'voice-input', targetId: 'settings-search-settings-voiceInput-fastActivation-label', titleKey: 'settings.voiceInput.fastActivation.label', sectionKey: 'settings.tabs.voiceInput', descriptionKey: 'settings.voiceInput.fastActivation.hint' },
+    { id: 'settings.voiceInput.shortcut.label', fallbackTargetId: 'settings-panel-voice-input', tab: 'voice-input', targetId: 'settings-search-settings-voiceInput-shortcut-label', titleKey: 'settings.voiceInput.shortcut.label', sectionKey: 'settings.tabs.voiceInput', descriptionKey: 'settings.voiceInput.shortcut.hint' },
+
+  ],
+} satisfies SettingsSearchModule;

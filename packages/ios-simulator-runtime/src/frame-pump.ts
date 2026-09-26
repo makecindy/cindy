@@ -321,8 +321,15 @@ export class IOSSimulatorH264FramePump {
     if (!entry.task) {
       entry.controller = new AbortController();
       entry.state = "connecting";
-      const run = () =>
-        this.#run(input.instanceId, entry!, entry!.controller!.signal);
+      // The run is deferred behind the predecessor task, so the controller may
+      // have been aborted and nulled by a setVisible({ visible: false }) that
+      // arrives before the predecessor settles — dereferencing it there threw
+      // an unhandled TypeError rejection. Skip instead of running in that case.
+      const run = () => {
+        const signal = entry!.controller?.signal;
+        if (!signal || signal.aborted) return Promise.resolve();
+        return this.#run(input.instanceId, entry!, signal);
+      };
       entry.task = (
         predecessor ? predecessor.catch(() => undefined).then(run) : run()
       ).finally(() => {

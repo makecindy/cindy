@@ -2,6 +2,7 @@ import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { i18n } from '@/i18n';
 import type { RemoteFileRef, RemoteImageRef, RemoteSerializedAttachment } from '@/session/types';
 import { buildLegacyAttachmentOssRef } from '@/session/attachmentOssRef';
+import { parsePeerAttachmentRef } from '@cindy/device-link';
 
 export type MobileAttachmentCategory = RemoteSerializedAttachment['category'];
 
@@ -171,14 +172,15 @@ export function buildMobileRemoteFileAttachment(
 }
 
 export function buildMobileUploadedAttachment(input: {
-  ossKey: string;
+  ossKey?: string;
+  peerRef?: string;
   name: string;
   size: number;
   sha256: string;
   mimeType?: string;
   id?: string;
 }): RemoteSerializedAttachment | null {
-  if (!input.ossKey.trim()) return null;
+  if (input.peerRef ? !parsePeerAttachmentRef(input.peerRef) : !input.ossKey?.trim()) return null;
   if (!Number.isFinite(input.size) || input.size <= 0 || input.size > MOBILE_MAX_ATTACHMENT_BYTES) return null;
   const name = basenameRemotePath(input.name).trim();
   if (!name) return null;
@@ -186,15 +188,15 @@ export function buildMobileUploadedAttachment(input: {
   if (!category) return null;
   const ext = extractRemoteFileExt(name);
   const mimeType = input.mimeType?.trim() || mimeTypeForMobileAttachment(ext, category);
-  const ref = buildLegacyAttachmentOssRef({
-    ossKey: input.ossKey,
+  const ref = input.peerRef ?? buildLegacyAttachmentOssRef({
+    ossKey: input.ossKey!,
     mimeType,
     originalName: name,
     size: input.size,
     sha256: input.sha256,
   });
   return {
-    id: input.id ?? `mobile-upload:${input.ossKey}`,
+    id: input.id ?? `mobile-upload:${input.ossKey ?? parsePeerAttachmentRef(input.peerRef!)!.ticket}`,
     name,
     path: ref,
     ext,

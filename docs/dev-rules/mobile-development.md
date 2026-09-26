@@ -81,8 +81,34 @@ pnpm --filter mobile test:smoke
 
 ## 专项入口
 
+### 消息缓存与首页偏好
+
+- iOS、Android 的最近消息窗口统一写入私有 `cache/session-messages-v1/` 文件，
+  不设总容量或按时间淘汰；分页、内存窗口、消息净化与显式删除语义不变。
+  该目录属于可再生缓存，系统低空间回收后会从主机重新获取，不作为消息权威副本。
+- 旧 AsyncStorage 消息按需迁移：仅在文件缺失时读取旧条目，成功原子写入后再删除旧值；
+  失败保留旧条目。回退到旧版不会读取新文件，会重新从主机获取消息。
+  迁移与同一任务的写入／删除共用队列，退出账号等待在途迁移后清理两种存储。
+- 删除逐项尝试旧条目和文件，不依赖新增文件写入；任一后端失败不阻止另一后端清理，
+  单个文件失败也不阻止后续文件删除，全部尝试结束后统一报告失败。清理报错时可能仍有
+  无法删除的残留，不能视为清理成功。新登录或切换账号必须在持久化
+  新身份前完成缓存清理；清理失败沿用登录错误与回滚路径，不能激活下一账号。
+  退出账号仍完成凭证清除；若缓存清理失败，下次登录会先重试。无有效账号期间禁止
+  读取或写入消息缓存，避免退出后的卸载回调重新落盘。
+- 首页分组等偏好继续使用 AsyncStorage。合并保存时读失败不得当成空配置；写失败
+  必须向用户提示，不能把未落盘的选择当成已保存。旧消息只按需迁移，升级首次启动
+  不会立即释放所有旧数据库占用。
+- 文件写入失败（含磁盘空间不足）会提示检查剩余空间，并说明离线内容可能不完整。
+  同一次启动最多提示一次，后台失败延后到前台提示；不把所有 I/O 错误都断言为磁盘已满。
+
+实现见 `src/session/messageCacheStorage.ts`、`mobileSessionMessageCache.ts`、
+`homeViewPreferenceStore.ts`，回归见 `src/__tests__/` 下对应测试。
+
 ### 中国大陆版微信个人登录
 
+- 微信开放平台的移动应用配置修正并完成双平台真机验收前，iOS / Android 登录页暂时隐藏
+  微信入口；开关位于 `src/auth/mobileSocialLoginMode.ts`，不移除原生 SDK 或构建配置，
+  以便配置修正后恢复。此处仅改 JS 行为，不额外触发原生冷更。
 - 复用 `xdt-wechat-login`：iOS/Android 拉起微信取临时 code，再由 auth-server 交换。
   PC 使用同一服务端的网站应用扫码入口。登录结果统一进入手机号补绑或身份选择流程。
 - 在 Mobile `.env`（本地）或打包机环境中成对填写
@@ -93,11 +119,22 @@ pnpm --filter mobile test:smoke
 - 仅 cn 和显式配置的 dev 构建消费微信配置；Global 忽略残留值。全空关闭入口，
   半配置或非法 Universal Link 在原生配置生成前报错。首次启用需重新出原生包，
   仅 OTA 无法添加回调配置；按下方冷更规则比对 fingerprint。
-- 真机验证 iOS Universal Link/AASA、Android 包名/签名与 WXEntryActivity，覆盖
+- iOS config plugin 按[微信官方接入说明](https://developers.weixin.qq.com/doc/oplatform/Mobile_App/Access_Guide/iOS.html)
+  生成 `weixin`、`weixinULAPI`、`weixinURLParamsAPI` 三项查询白名单，并保留 AppID URL Scheme
+  与 Universal Link 的 Associated Domains。遗漏白名单需重建原生包，不能通过 JS 热更补齐。
+- 恢复入口前真机验证 iOS Universal Link/AASA、Android 包名/签名与 WXEntryActivity，覆盖
   同意授权、取消、未安装微信、回到前台超时后重试。iOS Simulator 不支持微信授权。
-  iOS 登录页仅在 OpenSDK 确认已安装微信后显示微信入口；Android 保持入口可见，点击时
-  再由原生桥确认微信是否可用。凭据获取前仍须二次检查安装状态，不能只依赖页面显隐。
+  入口恢复后，iOS 登录页仅在 OpenSDK 确认已安装微信后显示微信入口；Android 保持入口
+  可见，点击时再由原生桥确认微信是否可用。凭据获取前仍须二次检查安装状态，不能只依赖页面显隐。
   未绑手机号须短信验证，已绑用户免短信；用同一微信在 PC 和两种手机上确认账号一致。
+
+- 微信 OpenSDK 的 `oauth` / `refreshToken` 回调会同时到达原生 delegate 与 Expo Router；
+  Universal Link 校验还会回跳配置路径下的 `<AppID>/?_wechat_sdk_biz_data=…`，Router 可能
+  将 HTTPS 链接转成 Cindy scheme 或路径形式，这些形式也必须识别；仅按路径与参数名分类，
+  不解析 SDK 的不透明 payload。
+  `app/+native-intent.ts` 只负责将这些非页面链接送回首页，避免 404 展示授权参数。
+  微信 code/state 仍只由原生 SDK 校验，不得复用 auth-server `/auth` 的 PKCE 交换。
+  真机回归需分别覆盖微信已在后台与微信冷启动，确认回跳后继续完成登录而非进入错误页。
 
 - 模拟器与真机排错：
   [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md)。
@@ -131,6 +168,13 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 
 ### 判断哪些改动会动指纹
 
+- 远控凭证共享目录默认参与指纹，但 `fingerprint.config.cjs` 明确列出的六个
+  `#if os(macOS)` 文件及三个桌面入口目录不参与。共享 Swift、手机密码表单、资源、
+  podspec 和未列出的新文件仍参与；不要按 `Mac*` 文件名通配排除。
+  `fingerprintConfig.test.ts` 校验排除文件的完整 macOS 编译保护，并使用 Expo 哈希器
+  验证两端的排除项与保留项。移除平台保护或让手机依赖这些文件前，必须同步移除排除项。
+  **首次采用此边界仍改变旧指纹**，须随计划内原生发版迁移；它只避免迁移后桌面专用
+  修改反复触发手机冷更，不为旧安装包伪造兼容 runtime，也不豁免上面的冷更确认门。
 - 改 `app.json` / `app.config.js` 前先判断是否会动指纹。被哈希的是**解析后的
   ExpoConfig**(app.config.js 的输出),不是源文件本身:凡进入 resolved config 的字段,
   改了值就会变指纹;只有被 app.config.js **覆写 / 剥离、传不到 resolved config** 的值才指纹

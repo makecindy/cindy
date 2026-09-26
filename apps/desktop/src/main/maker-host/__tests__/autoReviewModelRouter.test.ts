@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { UtilityTextResult } from '../../../shared/utilityTextResult.js';
 import { DEDICATED_AUTO_REVIEW_CANDIDATES } from '../../utility-model/oneShotCandidates.js';
 import {
+  AUTO_REVIEW_CANDIDATE_TIMEOUT_MS,
   AUTO_REVIEW_CHAIN_TIMEOUT_MS,
   createAutoReviewModelRouter,
 } from '../auto-review-model-router.js';
@@ -54,6 +55,12 @@ afterEach(() => {
 });
 
 describe('dedicated Auto-review candidate policy', () => {
+  it('budgets exactly one full timeout per candidate plus a small margin', () => {
+    expect(AUTO_REVIEW_CHAIN_TIMEOUT_MS).toBe(
+      DEDICATED_AUTO_REVIEW_CANDIDATES.length * AUTO_REVIEW_CANDIDATE_TIMEOUT_MS + 4_000,
+    );
+  });
+
   it('contains only the managed Gateway and supported subscription models in fixed order', () => {
     expect(DEDICATED_AUTO_REVIEW_CANDIDATES.map((candidate) => [
       candidate.providerId,
@@ -62,10 +69,10 @@ describe('dedicated Auto-review candidate policy', () => {
       ['xd', 'cindy/auto-review'],
       ['openai', 'gpt-5.4-nano'],
       ['openai', 'gpt-5.6-luna'],
-      ['anthropic', 'claude-haiku-4-5'],
     ]);
+    // Claude 订阅只供内置 Claude Code CLI 使用,不作为 Cindy 直连审阅的候选。
     expect(JSON.stringify(DEDICATED_AUTO_REVIEW_CANDIDATES)).not.toMatch(
-      /xai|deepseek|kimi|custom/i,
+      /xai|deepseek|kimi|custom|anthropic|claude/i,
     );
   });
 
@@ -80,9 +87,10 @@ describe('dedicated Auto-review candidate policy', () => {
         case 'chatgpt-nano':
           return failed(candidate, 'http_error', 400);
         case 'chatgpt-luna':
-          return failed(candidate, 'empty_response');
-        case 'claude-haiku':
-          return succeeded(candidate, '{"verdict":"allow","reason":"Routine"}');
+          // 首次空响应在原位重试一次,重试成功即收口。
+          return calls.filter((id) => id === 'chatgpt-luna').length === 1
+            ? failed(candidate, 'empty_response')
+            : succeeded(candidate, '{"verdict":"allow","reason":"Routine"}');
         default:
           throw new Error('Unexpected Auto-review candidate');
       }
@@ -97,7 +105,6 @@ describe('dedicated Auto-review candidate policy', () => {
       'chatgpt-nano',
       'chatgpt-luna',
       'chatgpt-luna',
-      'claude-haiku',
     ]);
   });
 
@@ -157,8 +164,9 @@ describe('dedicated Auto-review candidate policy', () => {
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CHAIN_TIMEOUT_MS);
 
     await expect(pending).resolves.toBeNull();
-    expect(requestCandidate).toHaveBeenCalledTimes(5);
-    expect(observedSignals).toHaveLength(5);
+    const attempts = Math.ceil(AUTO_REVIEW_CHAIN_TIMEOUT_MS / AUTO_REVIEW_CANDIDATE_TIMEOUT_MS);
+    expect(requestCandidate).toHaveBeenCalledTimes(attempts);
+    expect(observedSignals).toHaveLength(attempts);
     expect(observedSignals.every((signal) => signal.aborted)).toBe(true);
   });
 

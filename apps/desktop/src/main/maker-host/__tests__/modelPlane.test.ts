@@ -82,20 +82,10 @@ function models(providerId: string, agent: 'claude-code' | 'codex' | 'pi'): Cata
   return p?.models[agent] ?? [];
 }
 
-function withNativeMetadataAndDefaults(
+function withNativeMetadata(
   providerId: string,
   models: readonly CatalogModel[] = [],
 ): CatalogModel[] {
-  const defaults: Record<string, readonly string[]> = {
-    xai: ['grok-4.6'],
-    anthropic: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
-    openai: [
-      'chatgpt/gpt-6-astra',
-      'chatgpt/gpt-5.6-sol',
-      'chatgpt/gpt-5.6-terra',
-      'chatgpt/gpt-5.6-luna',
-    ],
-  };
   return models.map((model) => {
     const nativeApi = resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, model.id);
     return {
@@ -107,7 +97,6 @@ function withNativeMetadataAndDefaults(
       nativeApi === 'google-generative-ai'
         ? { nativeApi }
         : {}),
-      ...(defaults[providerId]?.includes(model.id) ? {} : { defaultEnabled: false }),
     };
   });
 }
@@ -548,14 +537,14 @@ describe('registry presence 实体化', () => {
     expect(models('anthropic', 'claude-code').map((m) => m.id)).toEqual(['claude-next']);
     expect(models('anthropic', 'codex')).toEqual([]);
     expect(models('anthropic', 'pi')).toEqual(
-      withNativeMetadataAndDefaults(
+      withNativeMetadata(
         'anthropic',
         BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')?.models.pi,
       ),
     );
   });
 
-  it('anthropic codex bridge 应用 perAgent.codex 后仍强制 fast=false', () => {
+  it('registry 给 anthropic 声明 codex route 也不生成 Codex bridge(Claude 订阅只供 Claude Code)', () => {
     setActiveCatalog(
       baseCatalog([
         {
@@ -583,11 +572,8 @@ describe('registry presence 实体化', () => {
         } as RegistryEntry,
       ]),
     );
-    expect(models('anthropic', 'codex').find((m) => m.id === 'claude-next')).toMatchObject({
-      efforts: ['low', 'medium'],
-      defaultEffort: 'medium',
-      supportsFastMode: false,
-    });
+    expect(models('anthropic', 'claude-code').map((m) => m.id)).toContain('claude-next');
+    expect(models('anthropic', 'codex')).toEqual([]);
   });
 
   it('Gateway 无模型时 registry 也不能造 XD 实体(xd roots=∅)', () => {
@@ -924,9 +910,20 @@ describe('本地 override(local 永远最高)', () => {
     expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')?.status).toBe('alpha');
   });
 
+  it('never exposes a Pi-only user addition for the Claude subscription', () => {
+    setActiveCatalog(baseCatalog());
+    const parsed = sanitizeModelCatalogOverrides({ additions: {
+      'anthropic:claude-manual': {
+        agents: ['pi'], base: { name: 'User model', contextWindow: 600_000, efforts: ['high'], defaultEffort: 'high' },
+      },
+    } });
+    setLocalCatalogOverrides(parsed.overrides);
+    expect(models('anthropic', 'pi')).toEqual([]);
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+  });
+
   it.each([
     ['openai', 'gpt-manual', 'chatgpt/gpt-manual', 'openai-responses'],
-    ['anthropic', 'claude-manual', 'claude-manual', 'anthropic-messages'],
     ['xai', 'xai/grok-manual', 'grok-manual', 'openai-responses'],
   ] as const)('accepts a Pi-only user addition for %s and retains it across refreshes', (providerId, inputId, piId, api) => {
     setActiveCatalog(baseCatalog());
@@ -1049,7 +1046,7 @@ describe('本地 override(local 永远最高)', () => {
 });
 
 describe('cross-harness defaults', () => {
-  it('keeps curated native/Pi defaults and makes the Claude Code bridge opt-in', () => {
+  it('keeps discovered native/Pi models enabled and makes the Claude Code bridge opt-in', () => {
     setActiveCatalog(baseCatalog([gpt6Entry({ defaultEnabled: true })]));
     expect(models('openai', 'codex').find((m) => m.id === 'gpt-6')?.defaultEnabled).toBe(true);
     expect(
@@ -1057,7 +1054,7 @@ describe('cross-harness defaults', () => {
     ).toBe(false);
     expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-6')).toBeUndefined();
     expect(models('openai', 'pi')).toEqual(
-      withNativeMetadataAndDefaults(
+      withNativeMetadata(
         'openai',
         BUNDLED_CATALOG.providers.find((p) => p.id === 'openai')?.models.pi,
       ),

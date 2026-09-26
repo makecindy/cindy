@@ -1,6 +1,7 @@
 import {
   validModelMetadata,
   expandedRegistryEntries,
+  type ModelMetadata,
 } from "./modelMetadataLayers.js";
 import { parseLocalModelCatalog } from "./localModelCatalog.js";
 import {
@@ -999,6 +1000,11 @@ function referencePriceGroupsError(value: unknown): string | null {
   return null;
 }
 
+// Capacity is connection-local metadata, never a public Registry default.
+function validRegistryMetadata(value: unknown): value is ModelMetadata {
+  return validModelMetadata(value) && !("contextWindowMax" in value);
+}
+
 function registryRouteError(
   value: unknown,
   path: string,
@@ -1022,7 +1028,7 @@ function registryRouteError(
   );
   if (error) return error;
   for (const field of ["defaults", "forceOverrides"] as const) {
-    if (value[field] !== undefined && !validModelMetadata(value[field]))
+    if (value[field] !== undefined && !validRegistryMetadata(value[field]))
       return `${path}.${field} is invalid`;
   }
   if (
@@ -1361,7 +1367,7 @@ export function parseModelRegistry(
         !base.aliases.every(
           (a) => typeof a === "string" && a.length > 0 && a.length <= 256,
         ) ||
-        !validModelMetadata(base.defaults)
+        !validRegistryMetadata(base.defaults)
       )
         return fail("modelRegistry.baseModels contains invalid data");
       if (base.referencePriceGroups !== undefined) {

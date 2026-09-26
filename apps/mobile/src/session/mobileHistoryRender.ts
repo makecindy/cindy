@@ -30,12 +30,13 @@ export function buildMobileHistoryRenderItems(options: {
       }),
       children: (item) => item.type === 'work_group' ? item.children
         : item.type === 'subagent_group' ? item.childItems : undefined,
-      sourceIds: (item) => item.type === 'message' || item.type === 'thinking' ? [item.message.source.clientId]
+      sourceIds: (item) => item.type === 'subagent_group' && item.sourceClientId ? [item.sourceClientId]
+        : item.type === 'message' || item.type === 'thinking' ? [item.message.source.clientId]
         : item.type === 'tool_group' || item.type === 'tool_media' ? item.tools.map((tool) => tool.source.clientId)
         : item.type === 'agent_task' && item.toolCall ? [item.toolCall.source.clientId] : [],
       rebuild: (item, children, deferred) => item.type === 'work_group'
         ? { ...item, children: children as MobileWorkChildItem[], deferred }
-        : item.type === 'subagent_group' ? { ...item, childItems: children } : item,
+        : item.type === 'subagent_group' ? { ...item, childItems: children, deferred } : item,
     },
   });
 }

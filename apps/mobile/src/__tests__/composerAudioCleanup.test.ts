@@ -60,6 +60,7 @@ function pageCleanup(page: string, recording: boolean, starting: boolean) {
     voiceStopAfterStartRef: { current: false },
     voiceDictionaryLearningTrackerRef: { current: null },
     voiceStateTransitionRef: { current: "idle" },
+    setVoiceState: vi.fn(),
     setComposerVoiceHoldArmed: vi.fn(),
     discardPendingPrewarm,
     setAudioModeAsync,
@@ -100,6 +101,9 @@ describe.each(["new.tsx", "[sessionId].tsx"])("%s audio cleanup", (page) => {
       expect(run.discardPendingPrewarm).toHaveBeenCalledOnce();
       expect(run.bindings.voiceControllerSessionRef).toEqual({ current: null });
       expect(run.bindings.voiceStartupSeqRef).toEqual({ current: 2 });
+      if (page === "[sessionId].tsx") {
+        expect(run.bindings.setVoiceState).toHaveBeenCalledWith("idle");
+      }
     },
   );
 });

@@ -82,6 +82,7 @@ it('dispatches into the current canonical task through the existing silent runne
     name: 'Review',
     prompt: 'Check the PR',
     enabled: true,
+    silentWhenIdle: true,
     triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
   });
   await routineTools.runNow('bot', routine.id);
@@ -98,6 +99,34 @@ it('dispatches into the current canonical task through the existing silent runne
     }),
   );
   expect((await routineTools.history('bot', routine.id))[0].resultText).toBe('Reviewed PR');
+});
+it('keeps an unclassified teammate reminder audible when quiet is omitted', async () => {
+  const reminder = await routineTools.save('bot', {
+    name: 'Reminder', prompt: 'Remind me to rest', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  });
+  await routineTools.runNow('bot', reminder.id);
+  expect(reminder.silentWhenIdle).toBe(false);
+  await vi.waitFor(() => expect(mock.storage.insert).toHaveBeenCalledWith(
+    expect.objectContaining({ silentWhenIdle: false }),
+  ));
+});
+it('keeps a persisted legacy routine quiet when its preference is absent', async () => {
+  const routine = await routineTools.save('bot', {
+    name: 'Old check', prompt: 'Check the PR', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  });
+  const saved = structuredClone(mock.save.mock.calls.at(-1)![0]) as RoutineState;
+  delete saved.routines[0]!.silentWhenIdle;
+  await stopRoutines();
+  mock.load.mockResolvedValue(saved);
+  mock.profiles = [{ id: 'bot', status: 'active' }];
+  const restored = await routineTools.list('bot');
+  expect(restored[0]?.silentWhenIdle).toBeUndefined();
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(() => expect(mock.storage.insert).toHaveBeenCalledWith(
+    expect.objectContaining({ silentWhenIdle: true }),
+  ));
 });
 it('invalidates an in-progress startup before reset completes', async () => {
   let release!: () => void;
@@ -451,4 +480,18 @@ it('reports real database failures instead of waiting indefinitely and allows a 
   await expect(f.request({ action: 'status', status: 'listening' }))
     .resolves.toMatchObject({ ok: false, message: 'Routine request failed; please retry later' });
   await expect(f.request({ action: 'status', status: 'listening' })).resolves.toEqual({ ok: true });
+});
+
+it('passes the saved reminder choice and check into the shared runner and returns skipped history', async () => {
+  mock.storage.listRuns.mockResolvedValueOnce([
+    { id: 'execution', scheduleId: 'backing', firedAt: 1, status: 'skipped', resultText: 'No changes' },
+  ]);
+  const preRunHook = { command: 'node check.mjs', timeoutMs: 3000 };
+  const routine = await routineTools.save('bot', {
+    name: 'Reminder', prompt: 'Send the reminder', enabled: true, silentWhenIdle: false, preRunHook,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0].status).toBe('skipped'));
+  expect(mock.storage.insert).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'canonical-task', silentWhenIdle: false, preRunHook }));
 });

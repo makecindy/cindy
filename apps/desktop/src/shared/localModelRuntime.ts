@@ -137,14 +137,16 @@ export interface CuratedOllamaModel extends RecommendedLocalModel {
   runtimeProfile?: LocalCatalogModel['runtimeProfile'];
 }
 
-export type OllamaPackaging = 'mxfp8' | 'mlx' | 'q4';
+export type OllamaPackaging = 'mxfp8' | 'nvfp4' | 'mlx' | 'q4';
 
-/** 从库名读出用户能看见的封装，MXFP8 / MLX / 官方 Q4。 */
+/** 从库名读出用户能看见的封装，MXFP8 / NVFP4 / MLX / 官方 Q4。 */
 export function detectOllamaPackaging(libraryName: string): OllamaPackaging | null {
   const lowered = libraryName.trim().toLowerCase();
   const tag = lowered.includes(':') ? lowered.slice(lowered.lastIndexOf(':') + 1) : lowered;
   if (tag.includes('mxfp8')) return 'mxfp8';
+  if (/(?:^|[-_.])nvfp4(?:$|[-_.])/.test(tag)) return 'nvfp4';
   if (/(?:^|[-_.])mlx(?:$|[-_.])/.test(tag)) return 'mlx';
+  if (/(?:^|[-_.])q4(?:$|[-_.])/.test(tag)) return 'q4';
   if (lowered === 'qwen3.8:27b') return 'q4';
   return null;
 }

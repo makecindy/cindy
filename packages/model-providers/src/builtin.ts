@@ -2,8 +2,8 @@
  * builtin.ts —— 内置供应商身份卡(TS 常量)+ bundled 目录组装。
  *
  * 2026-07-19 模型列表统一重构定案:**清单来源唯一化**——
- *   - anthropic:Claude/Codex 清单来自 Agent SDK(会话 init 捕获)+ 登录时 HTTP `/v1/models`,
- *     由 host 注入；Pi 清单来自随客户端发布的 Pi 原生目录快照。
+ *   - anthropic:只供 Claude Code;清单来自 Agent SDK(会话 init 捕获)+ Registry presence,
+ *     由 host 注入。
  *   - openai:Codex 清单来自 models_cache.json，经 active-catalog 注入并投影 Claude bridge；
  *     Pi 清单来自随客户端发布的 Pi 原生目录快照，不经过 Codex 投影。
  *   - xd(Cindy AI 网关):清单来自 model-access-server GET /models(网关权威,
@@ -83,9 +83,6 @@ const xaiPiModels = piNativeCatalogModels('xai', { group: 'grok' }).map((model) 
   ...xaiPiOverrides.get(model.id),
   id: model.id,
 }));
-const anthropicPiModels = piNativeCatalogModels('anthropic', {
-  group: 'anthropic',
-});
 const openAiPiModels = piNativeCatalogModels('openai-codex', {
   idPrefix: 'chatgpt/',
   group: 'gpt',
@@ -109,14 +106,19 @@ const XAI_PROVIDER: Provider = {
   },
 };
 
-/** Anthropic(Claude.ai 订阅 OAuth)。Claude/Codex 动态发现，Pi 使用独立原生快照。 */
+/**
+ * Anthropic(Claude.ai 订阅)。清单来自 Claude Code 会话 init 的 SDK 捕获 + Registry presence。
+ *
+ * 只给 Claude Code:订阅由 Cindy 内置的官方 CLI 用它自己的登录凭证直连 Anthropic,
+ * Cindy 进程不读取、不转发这份凭证。Anthropic 不允许把订阅凭证用在第三方 harness
+ * (Codex / Pi)或第三方应用自己的请求里,所以这里不声明 codex / pi 路由。
+ * 远端目录若仍声明了 codex / pi,active-catalog 会按 claudeSubscriptionOnlyForClaudeCode 收窄。
+ */
 const ANTHROPIC_PROVIDER: Provider = {
   id: 'anthropic',
   name: 'Anthropic',
   source: 'builtin',
-  // Claude.ai OAuth can be used by native Claude Code and by the Codex/Pi
-  // Anthropic Messages bridges. The bridged runtimes receive a host-owned token.
-  agents: ['claude-code', 'codex', 'pi'],
+  agents: ['claude-code'],
   auth: { method: 'oauth' },
   access: { kind: 'subscription', product: 'Claude.ai' },
   titleModel: 'claude-haiku-4-5',
@@ -125,30 +127,29 @@ const ANTHROPIC_PROVIDER: Provider = {
       upstream: 'https://api.anthropic.com',
       authStrategy: 'oauth-passthrough',
     },
-    codex: {
-      upstream: 'https://api.anthropic.com',
-      wireProtocol: 'anthropic-messages',
-      authStrategy: 'provider-oauth-header',
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
-      },
-      headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
-    },
-    pi: {
-      upstream: 'https://api.anthropic.com',
-      wireProtocol: 'anthropic-messages',
-      authStrategy: 'provider-oauth-header',
-      // Pi 拿的是 `sk-ant-oat` 形态占位 token(pi-host),自己就按原生订阅方式发请求:
-      // `anthropic-beta` 由 Pi 按模型拼好(oauth / claude-code / server-side-fallback 等),
-      // 这里只换 authorization,不得覆盖 beta 头——覆盖会让 body 里 Pi 注入的 `fallbacks`
-      // 失去 beta 声明,官方端点 400 `fallbacks: Extra inputs are not permitted`。
-      headerOverride: { 'anthropic-version': '2023-06-01' },
-      headerDelete: ['x-api-key'],
-    },
   },
-  models: { 'claude-code': [], codex: [], pi: anthropicPiModels },
+  models: { 'claude-code': [] },
 };
+
+/**
+ * 把 Claude 订阅来源收窄为只供 Claude Code(内置 anthropic 与同形态的远端条目)。
+ * 不 mutate 入参;无需收窄时原样返回。
+ */
+export function claudeSubscriptionOnlyForClaudeCode(provider: Provider): Provider {
+  if (provider.id !== 'anthropic') return provider;
+  const hasOtherAgents = provider.agents.some((agent) => agent !== 'claude-code');
+  const hasOtherRoutes = Object.keys(provider.routing).some((agent) => agent !== 'claude-code');
+  const hasOtherModels = Object.entries(provider.models).some(
+    ([agent, list]) => agent !== 'claude-code' && (list?.length ?? 0) > 0,
+  );
+  if (!hasOtherAgents && !hasOtherRoutes && !hasOtherModels) return provider;
+  return {
+    ...provider,
+    agents: provider.agents.filter((agent) => agent === 'claude-code'),
+    routing: provider.routing['claude-code'] ? { 'claude-code': provider.routing['claude-code'] } : {},
+    models: { 'claude-code': provider.models['claude-code'] ?? [] },
+  };
+}
 
 /** OpenAI(ChatGPT 订阅 OAuth)。Codex/Claude 动态发现，Pi 使用独立原生快照。 */
 const OPENAI_PROVIDER: Provider = {

@@ -34,7 +34,8 @@ import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import * as blobStore from './blobStore.js';
 import { ingestMedia } from './ingest.js';
 import { downloadMediaResult, MediaDownloadError, type MediaDownloadContext } from './mediaDownload.js';
-import { mediaRequestParamsForLog, mediaRequestUrlForLog } from './mediaRequestLog.js';
+import { mediaErrorForLog, mediaErrorStackForLog, mediaRequestParamsForLog, mediaRequestUrlForLog } from './mediaRequestLog.js';
+import { normalizeBase64Payload, parseDataUrl } from './dataUrl.js';
 import {
   invokeProviderMedia,
   resolveProviderMediaModel,
@@ -375,15 +376,18 @@ function multipartRequestBody(
       if (typeof item !== 'string') {
         throw new MediaInvocationError('MEDIA_INPUT_INVALID', `媒体字段 ${field} 必须是媒体地址`);
       }
-      const match = /^data:([^;,]+);base64,([A-Za-z0-9+/=\r\n]+)$/i.exec(item);
-      if (!match) {
+      // 结构性解析（#5081）：单张 ≥ ~3MiB 的参考图在组装阶段抛 RangeError，
+      // 这里不再对数百万字符的 base64 载荷跑带捕获组的正则，只切分前缀并逐字符校验。
+      const parsed = parseDataUrl(item);
+      const encoded = parsed?.base64 ? normalizeBase64Payload(parsed.payload) : null;
+      if (!parsed || !encoded) {
         throw new MediaInvocationError(
           'MEDIA_INPUT_INVALID',
           `multipart 媒体字段 ${field} 必须使用 Cindy 受管媒体`,
         );
       }
-      const mimeType = match[1].toLowerCase();
-      const buffer = Buffer.from(match[2].replace(/[\r\n]/g, ''), 'base64');
+      const mimeType = parsed.mimeType;
+      const buffer = Buffer.from(encoded, 'base64');
       if (
         buffer.byteLength === 0 ||
         !mimeType.startsWith(`${fileGuide.kind}/`) ||
@@ -443,6 +447,9 @@ async function dispatchRequest(input: {
     url: mediaRequestUrlForLog(url),
   };
   let responseStatus: number | undefined;
+  // 组装/日志阶段任何异常都发生在出站之前：请求从未发起、不产生费用，必须与
+  // 「结果未知」的上游失败区分开（#5081：RangeError 曾被包成 SUBMISSION_OUTCOME_UNKNOWN）。
+  let dispatched = false;
   try {
     const requestBody = input.body
       ? input.bodyEncoding === 'multipart'
@@ -453,6 +460,7 @@ async function dispatchRequest(input: {
       ...requestLog,
       params: mediaRequestParamsForLog(input.body ?? {}),
     });
+    dispatched = true;
     const response = await outboundFetch(url, {
       method: input.method,
       headers: {
@@ -507,13 +515,23 @@ async function dispatchRequest(input: {
       throw new MediaInvocationError('UPSTREAM_RESPONSE_INVALID', '上游成功响应不是合法 JSON');
     }
   } catch (error) {
+    const stack = mediaErrorStackForLog(error);
     log.warn('media request failed', {
       ...requestLog,
       ...(responseStatus !== undefined ? { status: responseStatus } : {}),
       durationMs: Date.now() - startedAt,
+      dispatched,
       error: mediaRequestParamsForLog(error instanceof Error ? error.message : String(error)),
+      ...(error instanceof Error ? { errorName: error.name } : {}),
+      ...(stack ? { stack } : {}),
     });
     if (error instanceof MediaInvocationError) throw error;
+    if (!dispatched) {
+      throw new MediaInvocationError(
+        'REQUEST_BUILD_FAILED',
+        `请求在本地组装失败，未向上游发起、不产生费用，可安全重试：${mediaErrorForLog(error)}`,
+      );
+    }
     const aborted = error instanceof Error && error.name === 'AbortError';
     if (input.operation === 'poll') {
       throw new MediaInvocationError(
@@ -1495,19 +1513,26 @@ async function submitInvocation(
     };
   } catch (error) {
     const expected = error instanceof MediaInvocationError ? error : null;
-    await transitionMediaInvocation(
+    // 本地组装失败（#5081）：请求从未出站、无费用，把 invocation 放回 prepared，
+    // 让同一 invocation_id 可以直接再次 request；其余失败仍进入 failed / unknown。
+    const buildFailed = expected?.code === 'REQUEST_BUILD_FAILED';
+    const restored = await transitionMediaInvocation(
       {
         id: invocation.id,
         owner: invocation.owner,
         from: 'submitting',
-        to: expected?.outcomeUnknown ? 'unknown' : 'failed',
+        to: buildFailed ? 'prepared' : expected?.outcomeUnknown ? 'unknown' : 'failed',
       },
       db,
     ).catch(() => false);
     if (expected) {
-      return expected.outcomeUnknown
-        ? submissionOutcomeUnknown(expected.message)
-        : failure(expected.code, expected.message, false, { outcomeKnown: true });
+      if (expected.outcomeUnknown) return submissionOutcomeUnknown(expected.message);
+      if (buildFailed && restored) {
+        return failure(expected.code, `${expected.message}；同一 invocation_id 可直接再次 request`, true, {
+          outcomeKnown: true,
+        });
+      }
+      return failure(expected.code, expected.message, false, { outcomeKnown: true });
     }
     log.warn('media submission failed', {
       error: error instanceof Error ? error.message : String(error),

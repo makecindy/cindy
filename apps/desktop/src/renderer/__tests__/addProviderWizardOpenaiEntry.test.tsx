@@ -7,7 +7,8 @@
  *      向导**不得**挂载即自关:codexAuth 是整机凭证态,不含按账号的 native binding,
  *      自关会既不弹 UI 也不补绑定,「去授权」从此点不出任何效果(回归:换账号死循环)。
  *   2. 本向导内点「授权」发起登录并成功 → 正常收口 onDone('openai')。
- *   3. anthropic entry 直达 → 授权步正常渲染(对照组,证明弹窗结构本身可用)。
+ *   3. anthropic entry 直达 → 授权步正常渲染(对照组,证明弹窗结构本身可用);
+ *      只提供内置 Claude Code 登录,不提供独立账号。
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -171,7 +172,8 @@ describe('AddProviderWizard — OpenAI 检测建议直达', () => {
     renderWizard('anthropic', onDone);
 
     expect(screen.getByText('settings.providers.wizard.titleWith')).not.toBeNull();
-    expect(screen.getByText('settings.providers.openai.addIndependentAccount')).not.toBeNull();
+    // Claude 订阅只经内置 Claude Code 自己的登录使用:不再提供独立 Claude 账号入口。
+    expect(screen.queryByText('settings.providers.openai.addIndependentAccount')).toBeNull();
     expect(screen.getByText('settings.providers.localAccount.useClaude')).not.toBeNull();
     expect(onDone).not.toHaveBeenCalled();
   });

@@ -18,10 +18,16 @@ function harness() {
   let generation = 0;
   const current = { agentKind: 'codex', model: 'current', providerId: 'openai', effort: 'high', fastMode: false };
   const candidate = { ...current, agentKind: 'claude-code', model: 'fallback' };
-  const readCandidate = vi.fn(async () => ({ isBot: true, candidate }));
-  const switchAgent = vi.fn(async () => ({ switched: true }));
+  const readCandidate = vi.fn(async (): Promise<{ isBot: boolean; candidate: typeof candidate | null }> => ({ isBot: true, candidate }));
+  const switchAgent = vi.fn(async () => ({ switched: true, engineReady: true }));
   const accept = vi.fn();
   const withLock = vi.fn(async (_id: string, task: () => Promise<unknown>) => task());
+  const apply = vi.fn(async (): Promise<{ deferred: boolean; superseded: boolean; generation?: number; contextWindowConfirmationRequired?: number }> => ({ deferred: false, superseded: false }));
+  const cancel = vi.fn(() => true);
+  const clearCredential = vi.fn();
+  const pendingCredential = vi.fn(() => ({ model: 'next', providerId: 'openai' }));
+  const failed = vi.fn(() => true);
+  const query = { from: () => query, where: () => query, limit: async () => [{ status: 'active' }] };
   const deps = {
     agentSwitchPending: pending,
     sessionRuntimeGenerationMatches: (_id: string, expected?: number) => expected === undefined || expected === generation,
@@ -35,6 +41,16 @@ function harness() {
     performSessionAgentSwitch: switchAgent,
     agentSwitchDeps: {},
     acceptSessionRuntimeMutation: accept,
+    applySessionRuntimeSelection: apply,
+    cancelPendingSessionRuntimeMutation: cancel,
+    getPendingCredentialSwitchTarget: pendingCredential,
+    clearPendingCredentialSwitchForSession: clearCredential,
+    broadcastSessionRuntimeProjection: vi.fn(async () => {}),
+    recordFailedSessionRuntimeFallbackCandidate: failed,
+    getDbClient: () => ({ drizzle: { select: () => query } }),
+    sessions: { status: 'status', id: 'id' }, eq: vi.fn(),
+    runtimeSelectionRequiresModelWindowConfirmation: (result: { contextWindowConfirmationRequired?: number }) => result.contextWindowConfirmationRequired !== undefined,
+    isRemoteModelSwitchRouteChangeError: () => false,
     log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   };
   const js = transpileModule(`${guard}\n${fallback}\nreturn { run: maybeApplySessionRuntimeFallback, allowed: canApplyAutomaticRuntimeSelection };`, {
@@ -45,10 +61,87 @@ function harness() {
     pending.set('session', { sameAgentSelection: true, targetAgentKind: 'codex', model: 'chosen', providerId: 'xd' });
     generation += 1;
   };
-  return { ...runtime, pending, pick, readCandidate, switchAgent, accept, withLock, generation: () => generation };
+  return { ...runtime, pending, pick, readCandidate, switchAgent, accept, withLock, apply, cancel, clearCredential, pendingCredential, failed, current, candidate, generation: () => generation };
 }
 
 describe('automatic runtime selection respects the user send boundary', () => {
+  it('stops after a committed harness switch whose engine failed to start', async () => {
+    const h = harness();
+    h.switchAgent.mockResolvedValue({ switched: true, engineReady: false });
+    expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'failed' });
+    expect(h.accept).toHaveBeenCalledWith(expect.objectContaining({ profile: h.candidate }));
+    expect(h.readCandidate).toHaveBeenCalledOnce();
+    expect(h.failed).not.toHaveBeenCalled();
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+
+  it('reports chain exhaustion distinctly from a switched runtime', async () => {
+    const h = harness();
+    h.readCandidate.mockResolvedValue({ isBot: true, candidate: null });
+    expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'exhausted' });
+    expect(h.switchAgent).not.toHaveBeenCalled();
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+
+  it('skips a failed candidate once and reaches the next configured route', async () => {
+    const h = harness();
+    const next = { ...h.candidate, model: 'next', providerId: 'other' };
+    h.readCandidate.mockResolvedValueOnce({ isBot: true, candidate: h.candidate })
+      .mockResolvedValue({ isBot: true, candidate: next });
+    h.switchAgent.mockRejectedValueOnce(new Error('Failed to start agent'));
+    expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'switched' });
+    expect(h.failed).toHaveBeenCalledWith('session', 0, h.candidate);
+    expect(h.switchAgent).toHaveBeenCalledTimes(2);
+    expect(h.accept).toHaveBeenCalledWith(expect.objectContaining({ profile: next }));
+    expect(h.pending.get('session')).toBeUndefined();
+  });
+
+  it('returns a failed result when the last candidate cannot start', async () => {
+    const h = harness();
+    h.readCandidate.mockResolvedValueOnce({ isBot: true, candidate: h.candidate })
+      .mockResolvedValue({ isBot: true, candidate: null });
+    h.switchAgent.mockRejectedValue(new Error('Failed to start agent'));
+    expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'failed' });
+    expect(h.switchAgent).toHaveBeenCalledOnce();
+    expect(h.pending.get('session')).toBeUndefined();
+  });
+
+  it('does not claim a superseded same-harness selection succeeded', async () => {
+    const h = harness();
+    h.readCandidate.mockResolvedValue({ isBot: true, candidate: { ...h.current, model: 'next' } });
+    h.apply.mockResolvedValue({ deferred: false, superseded: true });
+    expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'superseded' });
+    expect(h.apply).toHaveBeenCalledWith('session', 'next', 'openai', expect.anything(),
+      expect.objectContaining({ source: 'fallback', sessionLockHeld: true }));
+  });
+
+  it('withdraws its own deferred fallback instead of sending through a pending route', async () => {
+    const h = harness();
+    h.readCandidate.mockResolvedValue({ isBot: true, candidate: { ...h.current, model: 'next' } });
+    h.apply.mockResolvedValue({ deferred: true, superseded: false, generation: 1 });
+    expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'failed' });
+    expect(h.cancel).toHaveBeenCalledWith('session', 1);
+    expect(h.clearCredential).toHaveBeenCalledWith('session', { wake: false });
+  });
+
+  it('does not clear a newer credential intent when deferred fallback was superseded', async () => {
+    const h = harness();
+    h.readCandidate.mockResolvedValue({ isBot: true, candidate: { ...h.current, model: 'next' } });
+    h.apply.mockResolvedValue({ deferred: true, superseded: false, generation: 1 });
+    h.cancel.mockReturnValue(false);
+    expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'failed' });
+    expect(h.clearCredential).not.toHaveBeenCalled();
+  });
+
+  it('rechecks cancellation after the same-harness route lock is acquired', async () => {
+    const h = harness();
+    let current = true;
+    h.readCandidate.mockResolvedValue({ isBot: true, candidate: { ...h.current, model: 'next' } });
+    h.withLock.mockImplementationOnce(async (_id: string, run: () => Promise<unknown>) => { current = false; return run(); });
+    expect(await h.run('session', 1, 1, true, () => current)).toMatchObject({ outcome: 'superseded' });
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+
   it('rejects a new automatic request even when it read the generation after the user selected', async () => {
     const h = harness();
     h.pick();

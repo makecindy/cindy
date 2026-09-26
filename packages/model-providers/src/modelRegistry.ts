@@ -63,10 +63,10 @@ export function resolveModelNativeApi(
     ?.nativeApi;
 }
 
-/** Model identity only, for a model verified in an imported catalog or the Registry.
+/** Model identity only, using exact declarations or server-declared family prefixes.
  * Reuse the declarations already used by Gateway; do not turn an execution API
  * into a manufacturer declaration or copy a Gateway endpoint/capability override.
- * Callers must not pass arbitrary names from a hand-written connection here.
+ * Unknown/private namespaces stay unknown; connection transport is never evidence.
  */
 export function resolveCatalogModelNativeApi(
   registry: ModelRegistry | undefined,

@@ -183,6 +183,7 @@ export interface RemoteSerializedAttachment {
 }
 
 export interface QueuedRemoteMessage {
+  durableDelivery?: true;
   clientId: string;
   text: string;
   persistedContent: string;
@@ -200,6 +201,8 @@ export interface QueuedRemoteMessage {
   /** 与桌面队列契约镜像；目标桌面据此禁止缺失快照时按自己的设备坐标重解引用。 */
   sessionReferencesRequireTrustedSnapshot?: boolean;
   userName?: string;
+  /** Interface language of this phone. The desktop stamps it only for a remote turn. */
+  uiLanguage?: string;
   createOpts: {
     agentKind: 'claude-code' | 'codex' | 'pi';
     workingDir: string;

@@ -282,7 +282,7 @@ import { makeMirrorAccessors, replaceScope, clearScope } from '@/state/deviceLin
 import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
 import { resolveNewMakerDraftRightSidebar } from './newMakerDraftRightSidebar';
 import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
-import { resolveSshSessionModelSelection, SshModelSelectionError } from './sshSessionModelSelection';
+import { loadSshSessionModelSelection, SshModelSelectionError } from './sshSessionModelSelection';
 import { closeAllTabs as closeRightSidebarTabs } from '@/features/right-sidebar/store';
 import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-workers/actions';
 import { normalizeProjectKey } from './lib/projectGrouping';
@@ -684,6 +684,8 @@ export function NewMakerDraftRoute() {
           ? 'ccAgent.draft.remoteProviderUnsupported'
           : code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
             ? 'ccAgent.draft.remoteNativeOauthUnavailable'
+            : code === 'CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE'
+            ? 'ccAgent.draft.claudeSubscriptionWorkspaceOverride'
             : // 轮 40-w4-t3 HIGH:远端 Pi 会话启动时 Cindy AI gateway endpoint
               // 未就绪 —— main 侧已映射同名 IPC code, 这里走已存在 5 语言的
               // logic.errors.remoteError.REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE
@@ -2379,8 +2381,9 @@ export function NewMakerDraftRoute() {
       // 立即建会话记录并 navigate 过去。建会话约定与本文件其它 createSession 路径一致
       // (createSession + makerChatStore.setSessionRuntime + navigate)。
       //
-      // SSH uses the controller catalog; device-link keeps its own discovery path.
-      const selection = resolveSshSessionModelSelection({
+      // Codex reads the selected SSH host; other harnesses retain their existing routing.
+      const sshOwner = getDataOwnerGeneration();
+      const selection = await loadSshSessionModelSelection(target.hostId, {
         providers: localProviders,
         loading: localProvidersLoading,
         loadFailed: localProvidersLoadFailed,
@@ -2393,6 +2396,7 @@ export function NewMakerDraftRoute() {
         },
         getPresetEffort: getProviderModelEffort,
       });
+      if (!isDataOwnerGenerationCurrent(sshOwner)) return;
       if (!selection.ok) {
         throw new SshModelSelectionError(selection.reason);
       }

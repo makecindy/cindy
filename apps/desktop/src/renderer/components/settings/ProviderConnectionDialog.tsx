@@ -2,7 +2,8 @@ import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, c
 /**
  * Connection credentials and advanced routing only. Model capabilities are imported into the
  * shared catalog and edited through standard model settings. Stored per-runtime credentials,
- * OAuth definitions, explicit routes and user overrides remain unchanged when saving.
+ * OAuth definitions and user overrides are preserved. Model routes follow endpoint
+ * edits while retaining their independent protocol and path overrides.
  */
 
 import * as Dialog from '@radix-ui/react-dialog';
@@ -31,7 +32,6 @@ import {
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Tip } from '@/components/ui/tooltip';
@@ -55,6 +55,7 @@ import {
 } from '@/lib/customProviders';
 import type { CodexImageGenerationRestartPolicy } from '@/../shared/customProviderUpdate';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
+import { modelsAfterProviderEndpointEdit } from '@/lib/customProviderEndpointEdit';
 import {
   areProviderRequestUrlsAllowed,
   canSendHydratedApiKey,
@@ -191,6 +192,8 @@ interface HeaderRow {
 }
 interface RuntimeFields extends RuntimeFillDraft {
   models: ModelRow[];
+  /** Draft-only provenance: model routes may come from a preset or another runtime. */
+  modelRouteBaseUrl?: string;
   headers: HeaderRow[];
   /** 隐藏字段：列模型端点（预设 / 已存配置快照进来），「获取模型列表」用；不在表单展示。 */
   modelsUrl: string;
@@ -199,6 +202,14 @@ interface RuntimeFields extends RuntimeFillDraft {
   catalogPresetId?: string;
   /** Codex Responses runtime 级原生图片生成能力。 */
   supportsImageGeneration: boolean;
+}
+
+function runtimeProbeFields(agent: DialogAgentKind, runtime: RuntimeFields): RuntimeFields {
+  return {
+    ...runtime,
+    requestPath: agent === 'pi' ? '' : runtime.requestPath,
+    models: modelsAfterProviderEndpointEdit(runtime.models, runtime.modelRouteBaseUrl, runtime.baseUrl),
+  };
 }
 
 function canRuntimeUseNativeImageGeneration(runtime: RuntimeFields): boolean {
@@ -261,6 +272,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
       if (!rc) continue;
       out[a] = normalizeRuntimeImageGenerationCapability(a, {
         baseUrl: rc.baseUrl,
+        modelRouteBaseUrl: rc.baseUrl,
         requestPath: a === 'pi' ? '' : (rc.requestPath ?? ''),
         apiKey: '',
         wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
@@ -848,6 +860,7 @@ export function ProviderConnectionDialog({
           }
           next[a] = {
             baseUrl: rc.baseUrl,
+            modelRouteBaseUrl: rc.baseUrl,
             requestPath: a === 'pi' ? '' : (rc.requestPath ?? ''),
             apiKey: prev[a].apiKey, // 已填的 key 保留
             wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
@@ -998,7 +1011,13 @@ export function ProviderConnectionDialog({
     const includeApiKey = usesApiKey;
 
     const oauthPiUnavailable = authModeRef.current === 'oauth' && source !== 'pi';
-    const sourceDraft = cloneRuntimeFillDraft(rtRef.current[source]);
+    const sourceFields = rtRef.current[source];
+    const sourceDraft = cloneRuntimeFillDraft({
+      ...sourceFields,
+      models: modelsAfterProviderEndpointEdit(
+        sourceFields.models, sourceFields.modelRouteBaseUrl, sourceFields.baseUrl,
+      ),
+    });
     const allTargets = runtimeFillTargetAgents(source, {
       includePi: authModeRef.current !== 'oauth',
     }).map((agent) => ({
@@ -1121,6 +1140,9 @@ export function ProviderConnectionDialog({
         const restored = restoreHydratedKey(target.agent, {
           ...prev[target.agent],
           ...endpointSafeFilled,
+          ...(selectedFields.includes('models')
+            ? { modelRouteBaseUrl: runtimeFill.sourceDraft.baseUrl }
+            : {}),
         });
         next[target.agent] = restored;
       }
@@ -1211,7 +1233,7 @@ export function ProviderConnectionDialog({
   const handleTest = useCallback(async () => {
     const agent = activeTab;
     const rf = rt[agent];
-    const probeFields = agent === 'pi' ? { ...rf, requestPath: '' } : rf;
+    const probeFields = runtimeProbeFields(agent, rf);
     const defaultBaseUrl = rf.baseUrl.trim();
     const firstModelConfig = firstProviderChatModel(rf.models);
     const firstModel = firstModelConfig?.id.trim();
@@ -1281,7 +1303,7 @@ export function ProviderConnectionDialog({
       );
       if (
         providerConnectionTestRequestSignature(
-          agent === 'pi' ? { ...rtRef.current[agent], requestPath: '' } : rtRef.current[agent],
+          runtimeProbeFields(agent, rtRef.current[agent]),
           authModeRef.current,
         ) !== requestSig
       )
@@ -1295,7 +1317,7 @@ export function ProviderConnectionDialog({
     } catch (e) {
       if (
         providerConnectionTestRequestSignature(
-          agent === 'pi' ? { ...rtRef.current[agent], requestPath: '' } : rtRef.current[agent],
+          runtimeProbeFields(agent, rtRef.current[agent]),
           authModeRef.current,
         ) !== requestSig
       )
@@ -1632,7 +1654,7 @@ export function ProviderConnectionDialog({
         reportFieldError(`${a}:baseUrl`, t('settings.providers.custom.errors.baseUrlInvalid'));
         return;
       }
-      const models = rf.models
+      const models = modelsAfterProviderEndpointEdit(rf.models, rf.modelRouteBaseUrl, rf.baseUrl)
         .map((m) => ({
           id: m.id.trim(),
           name: m.name.trim(),

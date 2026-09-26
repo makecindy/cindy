@@ -117,6 +117,8 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
       { userName: 'Carol' },
     );
     api.input.clearSession('rs');
+    const replacement = { clientId: 'q1' } as never;
+    api.input.updateContent('rs', 'q1', replacement);
 
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:fork', ['rs', 'msg']);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:fork-strip-encrypted', ['rs']);
@@ -147,6 +149,11 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
       { userName: 'Carol' },
     ]);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:input:clear-session', ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:input:update-content', [
+      'rs',
+      'q1',
+      replacement,
+    ]);
   });
 
   it('已捕获的 deviceId 在 session origin 暂时消失后仍固定走远程隧道', async () => {

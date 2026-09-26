@@ -132,3 +132,111 @@ it('leaves a deleted teammate only after the native sheet closes', async () => {
   await act(async () => h.view.onClosed());
   expect(h.deleted).toHaveBeenCalledOnce();
 });
+
+const memoryForm = { id: 'memory', values: { memory: true, userContext: 'Prefers tea' }, action: { id: 'memory-grant', label: 'Save', fields: [{ id: 'memory', label: 'Remember', kind: 'toggle' }, { id: 'userContext', label: 'About me', kind: 'multiline' }] } };
+const memoriesEntry = { id: 'memories', values: {}, entries: [{ id: 'memories', title: 'Saved Memories', resourceId: 'settings:bot/memory' }] };
+it('opens the host saved-memories page from Memory and steps back to the toggle', async () => {
+  h.read.mockResolvedValue({ resource, panels: [panel, memoryForm, memoriesEntry] });
+  await render(); await act(async () => h.view.onOpen('memory'));
+  expect(h.view.hasMemoryEntries).toBe(true);
+  await act(async () => h.view.onOpen('memoryEntries'));
+  expect(h.view.page).toBe('memoryEntries'); expect(h.view.memoryPage).toBeTruthy();
+  expect(h.read).toHaveBeenLastCalledWith(h.invoke, 'host', { collectionId: 'teammates', kind: 'bot', id: 'settings:bot/memory' }, 'en', { query: '' });
+  await act(async () => h.view.onBack());
+  expect(h.view.page).toBe('memory');
+});
+it('keeps the upgrade path when the host has no saved-memories page', async () => {
+  h.read.mockResolvedValue({ resource, panels: [panel, memoryForm] });
+  await render(); await act(async () => h.view.onOpen('memory'));
+  expect(h.view.hasMemoryEntries).toBe(false);
+  expect(h.read.mock.calls.every(call => !String(call[2]?.id).includes('/memory'))).toBe(true);
+});
+it('saves a changed memory toggle before leaving for the saved-memories page', async () => {
+  h.read.mockResolvedValue({ resource, panels: [panel, memoryForm, memoriesEntry] });
+  await render(); await act(async () => h.view.onOpen('memory'));
+  await act(async () => h.view.onChange({ ...memoryForm.values, memory: false }));
+  h.invoke.mockRejectedValueOnce(new Error('offline'));
+  await act(async () => h.view.onOpen('memoryEntries'));
+  expect(h.view.page).toBe('memory'); expect(h.view.dirty).toBe(true);
+  await act(async () => h.view.onOpen('memoryEntries'));
+  expect(h.invoke.mock.calls.at(-1)?.[2]).toMatchObject({ actionId: 'memory-grant', input: { memory: false } });
+  expect(h.view.page).toBe('memoryEntries');
+});
+
+it('explains a rename collision instead of an ambiguous save failure', async () => {
+  await render(); await act(async () => h.view.onOpen('profile'));
+  await act(async () => h.view.onChange({ name: 'Aster' }));
+  h.invoke.mockRejectedValueOnce(new Error('[ALREADY_EXISTS] teammate name'));
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.view.error).toBe(true);
+  expect(h.view.errorLabel).toBe('devices.companionProfile.nameTaken');
+  expect(h.view.values.name).toBe('Aster');
+  // The next attempt starts without the stale collision notice.
+  await act(async () => h.view.onChange({ name: 'Aster 2' }));
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.view.errorLabel).toBeUndefined();
+});
+
+it('turns a stale save into the existing conflict choice and keeps the draft', async () => {
+  await render(); await act(async () => h.view.onOpen('profile'));
+  await act(async () => h.view.onChange({ name: 'Local edit' }));
+  h.read.mockResolvedValue({ resource: { ...resource, revision: 'v2' }, panels: [{ ...panel, values: { name: 'Desktop edit' } }] });
+  h.invoke.mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] resource changed'));
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.view.conflict).toBe(true); expect(h.view.error).toBe(false);
+  expect(h.view.values.name).toBe('Local edit');
+});
+
+it('offers the conflict choice when an editor save is stale, instead of failing silently', async () => {
+  await render();
+  const skillRef = { ...resource.ref, id: 'settings:bot/skills/learned' };
+  const skill = { id: 'skill', values: { body: 'Original' }, action: { id: 'skill-save', label: 'Save', fields: [{ id: 'body', label: 'Content', kind: 'multiline' }] } };
+  h.read.mockResolvedValue({ resource: { ...resource, ref: skillRef }, panels: [skill] });
+  await act(async () => h.view.onEditor('settings:bot/skills/learned'));
+  await act(async () => h.view.onChange({ body: 'My edit' }));
+  h.read.mockResolvedValue({ resource: { ...resource, ref: skillRef, revision: 'v2' }, panels: [{ ...skill, values: { body: 'Desktop edit' } }] });
+  h.invoke.mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] resource changed'));
+  const reads = h.read.mock.calls.length;
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.read.mock.calls.length).toBe(reads + 1);
+  expect(h.view.conflict).toBe(true); expect(h.view.error).toBe(false);
+  expect(h.view.values.body).toBe('My edit');
+});
+
+it('resends the exact unconfirmed teammate and only unlocks edits after a host rejection', async () => {
+  await renderCreate();
+  await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova' }));
+  h.invoke.mockRejectedValueOnce(new Error('TIMEOUT'));
+  await act(async () => h.create.onSubmit());
+  // The host may already hold Nova under this request: an edit now would be silently dropped.
+  expect(h.create.locked).toBe(true);
+  await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova 2' }));
+  expect(h.create.values.name).toBe('Nova');
+  h.invoke.mockRejectedValueOnce(new Error('[INVALID_PARAMS] Invalid teammate editor input'));
+  await act(async () => h.create.onSubmit());
+  expect(h.invoke.mock.calls[1][2].input).toEqual(h.invoke.mock.calls[0][2].input);
+  // A rejection proves nothing was created; the user can correct the form.
+  expect(h.create.locked).toBe(false);
+  await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova 2' }));
+  expect(h.create.values.name).toBe('Nova 2');
+});
+
+it('blocks a duplicate name before submitting and keeps the form after a failed attempt', async () => {
+  const cache = await import('@/device-link/remoteResourceAvailability');
+  cache.readRemoteCollectionCache(':1', 'teammates');
+  cache.writeRemoteCollectionCache(':1', 'teammates', [{ key: 'k', host: { deviceId: 'host', deviceName: 'Mac' },
+    item: { ref: { collectionId: 'teammates', kind: 'bot', id: 'aster' }, revision: '1', links: [], display: { title: 'Ａster' } } } as any]);
+  await renderCreate();
+  await act(async () => h.create.onChange({ ...h.create.values, name: ' aster ' }));
+  expect(h.create.duplicate).toBe(true);
+  await act(async () => h.create.onSubmit());
+  expect(h.invoke).not.toHaveBeenCalled();
+  await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova' }));
+  expect(h.create.duplicate).toBe(false);
+  h.invoke.mockRejectedValueOnce(new Error('[ALREADY_EXISTS] hidden teammate'));
+  await act(async () => h.create.onSubmit());
+  // The host can still reject names this list does not show; the form stays for a new name.
+  expect(h.create.nameTaken).toBe(true); expect(h.create.error).toBe(true);
+  expect(h.create.panel).toBeDefined(); expect(h.create.values.name).toBe('Nova');
+  cache.writeRemoteCollectionCache(':1', 'teammates', []);
+});

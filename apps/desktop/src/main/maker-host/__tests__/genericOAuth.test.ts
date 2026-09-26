@@ -661,6 +661,18 @@ describe('discoverGenericOAuthModels', () => {
 });
 
 describe('deriveModelsDiscoveryUrl', () => {
+  it('keeps the Codex backend path without inserting an extra API version', () => {
+    expect(deriveModelsDiscoveryUrl('https://relay.example/backend-api/codex')).toBe(
+      'https://relay.example/backend-api/codex/models',
+    );
+    expect(deriveModelsDiscoveryUrl('https://relay.example/team/backend-api/codex/?tenant=a#ignored')).toBe(
+      'https://relay.example/team/backend-api/codex/models?tenant=a',
+    );
+    expect(deriveModelsDiscoveryUrl('https://relay.example/codex')).toBe(
+      'https://relay.example/codex/v1/models',
+    );
+  });
+
   it('/vN 结尾只追加 /models，其余追加 /v1/models（尾斜杠归一）', () => {
     expect(deriveModelsDiscoveryUrl('https://openrouter.ai/api/v1')).toBe(
       'https://openrouter.ai/api/v1/models',

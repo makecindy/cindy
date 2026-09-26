@@ -3,6 +3,45 @@
 > 参考记录，不是当前配置或部署状态。当前维护规则见 [模型配置与下发](dev-rules/model-catalog-maintenance.md)。
 > 下列文字记录各批次当时的事实，不能相互当作后续状态的证明。引用时须带日期、来源和验证范围。
 
+## GPT-6 Sol / Luna 与 Claude Opus 5.5（2026-09-23）
+
+客户端离线 Registry revision 更新为 `2026-09-23T00:00:00.003Z`，新增
+`openai/gpt-6-sol`、`openai/gpt-6-luna`、`anthropic/claude-opus-5-5` 公共资料和官方接入路由。
+保留既有型号、参考价历史及用户已选型号；不新增未经实报的 XD 路由。
+沿用最新家族成员推荐规则，Claude Code 的 Opus 推荐项会从 5 自动更新为 5.5。
+
+依据 [OpenAI 发布记录](https://developers.openai.com/api/docs/changelog)、
+[Sol 规格](https://developers.openai.com/api/docs/models/gpt-6-sol)、
+[Luna 规格](https://developers.openai.com/api/docs/models/gpt-6-luna)、
+[Opus 5.5 规格](https://platform.claude.com/docs/en/models/opus-5-5/overview)，
+三个型号均于 2026-09-22 发布，支持文本/图片输入、文本输出和 128K 最大输出。
+GPT 容量为 1,050,000，Claude 为 1,000,000；GPT 的 Claude Code / Codex 工作默认仍为 272,000。
+三者均登记 low / medium / high / xhigh / max，默认 medium；GPT 官方另支持 none，
+但现有 Registry effort 枚举不能表达，本批不扩展协议，也不把 none 错映为 minimal。
+GPT 原生接口采用 Responses，避免 Chat Completions 在非 none 档位下不支持工具调用的限制。
+Opus 5.5 的 adaptive thinking 始终开启，不能发送 disabled；Responses→Anthropic 桥沿用
+已有 always-on 处理，显式关闭降到 low，并保留 xhigh 参数；真实引擎调用仍需验证。
+
+参考价依据 [OpenAI 定价](https://developers.openai.com/api/docs/pricing)与
+[Claude 定价](https://platform.claude.com/docs/en/about-claude/pricing)，核验日 2026-09-23，
+生效日 2026-09-22。每百万 tokens 标准输入/输出：Sol $2/$10，Luna $0.10/$0.50，
+Opus 5.5 $4/$20；包含缓存读写、Claude 1h 写入、标准/Fast 价格及 GPT 的 272K 分档。
+Claude Fast 参考价不等于订阅账号具备 Fast 权限，本批不强制开启该能力。
+
+配套 Server PR 同步三个型号的完整公共资料/路由/参考价，并补 Pi 显式成员。
+后续收口将此前仅在客户端的 13 个公共型号、8 个媒体接入条目及 Cyber 能力补项并入
+Server 正本，两端完整 Registry 内容与 revision `2026-09-23T00:00:00.003Z` 一致。
+客户端目录请求新增 `registryMedia=1`（见 [媒体发布前置条件](model-registry-v4-media.md#发布前置条件)）。
+服务端仅向明确支持媒体扩展的 V4/V5 请求返回完整正本；无标识或未知标识保持更新前的
+固定兼容快照及其 revision，避免不完整的新版本整表覆盖旧客户端内置媒体资料。
+旧兼容快照不继续加型号、抬 revision；后续维护只更新完整正本，再同步客户端离线副本。
+旧模型与价格均保留；两端修改与生产部署须分别核验。
+尚未发布或验证账号调用。
+核对 Global 公共接口 `/api/model-catalog/catalog?registrySchemaVersion=5` 时，线上 revision 为
+`2026-09-22T00:00:00.000Z`，三个新公共型号均缺失。合并部署后还需验证实际下发；
+Pi 成员沿服务端显式列表/账号发现，不复制订阅名单到公共 API。客户端离线 Pi 快照仍由
+固定版本上游生成，本次没有伪造上游生成数据；新型号可由服务端目录或账号发现补入。
+
 ## 小米 MiMo V2.6 系列（2026-09-22，同日第一批）
 
 客户端 `catalog/providers.json` 两个 MiMo 预设（`xiaomi-mimo-api-cn` / `xiaomi-mimo-token-plan-cn`）
@@ -179,6 +218,13 @@ low / medium / high / max，实际能力仍以实报为准，不把兼容 medium
 - GPT-5.5 Auto、GPT-5.6 Cyber、Muse Spark 1.2、DeepSeek V4 Flash Vision Exp 和 Hy4 preview
   尚无本轮可确认、适用于现有 schema 的完整公共档位。网关实报不替代公共型号证据；
   DeepSeek 搜索摘要与实际打开的当前 API 型号列表不一致，因此未据摘要补实验型号。
+
+## 本地模型复核（2026-09-24）
+
+本轮从 7 个逻辑模型扩展到 8 个，新增 Laguna S 2.1 编程候选和 Flash-Next 的跨平台
+Q4 包装，复核 AA v4.3.2 与全部 17 个下载标签。正式推荐仍保留 Qwen3.8 27B，
+未将其他运行时实测冒充 Ollama 本机证据。完整来源、取舍、门槛和发布边界见
+[2026-09-24 调研记录](local-model-audit-2026-09-24.md)。
 
 ## 本地模型配置与证据快照（2026-09-05）
 

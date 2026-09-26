@@ -111,6 +111,18 @@ describe('opaque teammate settings actions', () => {
     expect(JSON.stringify(result)).not.toContain('PRIVATE');
     expect(result.effects.some(effect => effect.kind === 'refresh-resource')).toBe(false);
   });
+  it('confirms resuming a paused teammate with resume copy, not the restart warning', async () => {
+    const f = fixture(); const active = await f.get();
+    const restart = active.actions!.find(action => action.id === actionId(active, 'restart'))!;
+    f.source.status = 'paused';
+    const paused = await f.get();
+    expect(paused.blocks!.some(block => block.id === 'restart')).toBe(false);
+    const resume = paused.actions!.find(action => action.id === actionId(paused, 'resume'))!;
+    expect(resume.confirmation?.title).toMatchObject({ fallback: 'Resume Teammate' });
+    expect(resume.confirmation?.body).not.toEqual(restart.confirmation?.body);
+    expect(resume.confirmation?.body).toMatchObject({ translations: { 'zh-CN': expect.stringContaining('恢复后伙伴重新接收消息') } });
+    for (const locale of ['zh-CN', 'zh-TW', 'ja', 'ko']) expect((resume.confirmation?.body as { translations: Record<string, string> }).translations[locale]).toBeTruthy();
+  });
   it('does not misreport shelf failure as an empty shelf', async () => {
     const f = fixture(); vi.mocked(f.deps.skills).mockRejectedValue(new Error('unavailable'));
     const result = await f.get();

@@ -7,6 +7,8 @@ const AZURE_RESOURCE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])$/;
 const VERTEX_REGIONAL_TEMPLATE = 'https://{location}-aiplatform.googleapis.com';
 const VERTEX_MULTIREGION_TEMPLATE = 'https://aiplatform.{location}.rep.googleapis.com';
 const VERTEX_GLOBAL_HOST = 'https://aiplatform.googleapis.com';
+// Self-hosted gateways have no fixed host, scheme, port or deployment prefix.
+const SELF_HOSTED_TEMPLATE = 'https://{endpoint}/v1';
 
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
@@ -88,6 +90,13 @@ function genericBindings(template: string, endpoint: string): Record<string, str
 
 /** Only declared account/location placeholders bind. Official host aliases stay explicit; no cross-origin guessing. */
 export function providerEndpointBindings(template: string, endpoint: string): Record<string, string> | null {
+  if (template === SELF_HOSTED_TEMPLATE) {
+    const url = parseHttpUrl(endpoint);
+    if (!url || /[{}]/.test(endpoint) || url.search || url.hash) return null;
+    const pathname = stripTrailingSlash(url.pathname);
+    url.pathname = /(?:\/v\d+|\/backend-api\/codex)$/i.test(pathname) ? pathname : `${pathname}/v1`;
+    return { endpoint: stripTrailingSlash(url.toString()) };
+  }
   if (isVertexFamilyTemplate(template)) {
     const location = recognizeVertexLocation(endpoint);
     return location ? { location } : null;
@@ -104,6 +113,9 @@ export function bindProviderEndpoint(
   bindings: Record<string, string>,
   sourceEndpoint?: string,
 ): string {
+  if (bindings.endpoint && (template === SELF_HOSTED_TEMPLATE || template.startsWith(`${SELF_HOSTED_TEMPLATE}/`))) {
+    return bindings.endpoint + template.slice(SELF_HOSTED_TEMPLATE.length);
+  }
   if (isVertexFamilyTemplate(template) && bindings.location) return officialVertexEndpoint(bindings.location);
   if (isAzureOpenAIFamilyTemplate(template) && bindings.resource) {
     const fromSource = sourceEndpoint ? recognizeAzureBinding(sourceEndpoint) : null;

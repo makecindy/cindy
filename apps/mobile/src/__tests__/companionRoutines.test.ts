@@ -4,8 +4,18 @@ import { emptyRoutineDefinition, getRoutineActionId, parseRoutineDefinition, par
 describe('companion automation data boundary', () => {
   it('does not treat an empty new draft as a saved rule', () => {
     const draft = emptyRoutineDefinition();
+    expect(draft.silentWhenIdle).toBe(false);
     expect(routineDraftValid(draft)).toBe(false);
     expect(routineDraftValid({ ...draft, name: 'Daily brief', prompt: 'Summarize my inbox' })).toBe(true);
+  });
+  it.each(['0 25 * * *', '60 9 * * *', '0  * * *', ' 9 * * *', '0 -1 * * *', '0 9.5 * * *', '0 9 32 * *', '0 9 * 13 *'])('rejects incomplete or out-of-range literal cron fields: %s', expression => {
+    const draft = { ...emptyRoutineDefinition(), name: 'Brief', prompt: 'Check', triggers: [{ id: 'daily', kind: 'cron' as const, expression, timezone: 'UTC' }] };
+    // Partial values remain editable; only submission is blocked.
+    expect(parseRoutineDefinition(draft)).toEqual(draft);
+    expect(routineDraftValid(draft)).toBe(false);
+  });
+  it.each(['00 00 * * *', '59 23 * * *', '05 08 * * 1-5', '0 9 31 * *', '0 9 * * 7', '*/15 8-18 * * 1,3,5'])('keeps valid presets and custom cron syntax available: %s', expression => {
+    expect(routineDraftValid({ ...emptyRoutineDefinition(), name: 'Brief', prompt: 'Check', triggers: [{ id: 'daily', kind: 'cron', expression, timezone: 'UTC' }] })).toBe(true);
   });
   it('keeps mixed OR triggers and event filters intact while editing', () => {
     const draft = { name: 'Brief', prompt: 'Check', enabled: true, triggers: [
@@ -35,4 +45,18 @@ describe('companion automation data boundary', () => {
     expect(detail).toMatchObject({ editable: false, input: null, sources: [], history: [] });
     expect(() => parseRoutineDetail({ id: 'a', revision: 1, editable: true, input: { bad: true }, sources: [], history: [] })).toThrow();
   });
+});
+
+
+it('round trips quiet settings and distinguishes model skips without guessing host support', () => {
+  const input = { ...emptyRoutineDefinition(), name: 'Check', prompt: 'Check', silentWhenIdle: false, preRunHook: { command: 'node check.mjs', timeoutMs: 2000 } };
+  expect(parseRoutineDefinition(input)).toEqual(input);
+  expect(parseRoutineDefinition({ ...input, preRunHook: null })?.preRunHook).toBeNull();
+  expect(parseRoutineDefinition({ ...input, preRunHook: { command: 'check', timeoutMs: -1 } })).toBeNull();
+  const detail = { id: 'check', revision: 1, editable: true, input, sources: [], history: [{ id: 'run', status: 'skipped', createdAt: 1 }] };
+  expect(parseRoutineDetail(detail).supportsPreRunCheck).toBe(false);
+  expect(parseRoutineDetail({ ...detail, supportsPreRunCheck: true })).toMatchObject({ supportsPreRunCheck: true, input, history: [{ status: 'skipped' }] });
+  const legacy = { ...detail, input: { name: input.name, prompt: input.prompt, enabled: input.enabled, triggers: input.triggers } };
+  expect(parseRoutineDetail({ ...legacy, supportsPreRunCheck: true }).input?.silentWhenIdle).toBe(true);
+  expect(parseRoutineDetail(legacy).input?.silentWhenIdle).toBeUndefined();
 });

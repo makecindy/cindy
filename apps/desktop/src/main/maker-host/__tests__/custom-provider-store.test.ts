@@ -400,7 +400,7 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
     ).toBe(false);
   });
 
-  it('accepts only explicit, non-empty, valid Pi reasoning effort capabilities', () => {
+  it('accepts inherited reasoning capabilities while validating explicit effort lists', () => {
     const config = (model: Record<string, unknown>, agent: 'pi' | 'codex' = 'pi') => ({
       id: 'reasoning-provider',
       name: 'Reasoning provider',
@@ -422,7 +422,8 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
         }),
       ),
     ).toEqual({ ok: true });
-    expect(validateCustomProviderConfig(config({ reasoning: true })).ok).toBe(false);
+    expect(validateCustomProviderConfig(config({ reasoning: true })).ok).toBe(true);
+    expect(validateCustomProviderConfig(config({ reasoning: true, reasoningEfforts: [] })).ok).toBe(true);
     expect(
       validateCustomProviderConfig(
         config({
@@ -1645,4 +1646,25 @@ it('persists and reloads Google runtime/model routes without converting them to 
   } };
   await createCustomProvider(config);
   expect((await getCustomProvider(config.id))?.runtimes).toEqual(config.runtimes);
+});
+
+
+describe('imported capability persistence', () => {
+  it('round-trips every shared field and explicit false through storage for all engines', async () => {
+    mountDb();
+    const model = { id: 'gpt-7-sol', name: 'Seven', nativeApi: 'openai-responses' as const,
+      contextWindow: 128000, contextWindowMax: 1000000, maxOutputTokens: 32000,
+      supportsFastMode: false, supportsImageInput: false, supportsToolCalls: false,
+      reasoning: false, efforts: [], defaultEffort: null, reasoningRequired: false,
+      defaultEnabled: false, modalities: { input: ['text'], output: ['text'] },
+      discoveredMetadata: { supportsFastMode: true, efforts: ['high'] as ['high'] },
+    };
+    const runtime = { baseUrl: 'https://relay.example/v1', wireProtocol: 'openai-responses' as const, models: [model] };
+    await createCustomProvider({ id: 'all-fields', name: 'All fields', runtimes: {
+      'claude-code': runtime, codex: runtime, pi: runtime,
+    } });
+    const stored = await getCustomProvider('all-fields');
+    for (const agent of ['claude-code', 'codex', 'pi'] as const)
+      expect(stored?.runtimes[agent]?.models[0]).toEqual(model);
+  });
 });

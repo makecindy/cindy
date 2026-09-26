@@ -10,6 +10,8 @@ import {
 } from "@/session/fileBrowserCache";
 import type { MobileRemoteMediaPresignResult } from "@/session/remoteMedia";
 import { peerMediaUri, peerMediaExpiry } from "@/device-link/peerFileRegistry";
+import { errorText } from "@/debug/fileDiagnostics";
+import { mobileDebugLog } from "@/debug/mobileDebugLog";
 
 export interface ExportRemoteFileDeps {
   /** Retained preview URLs must not reuse short-lived full-file peer results. */
@@ -31,7 +33,10 @@ export async function exportRemoteFileToUrl(
   const ownerScope = deps.maker.fileBrowser.cacheScope ?? deps.deviceId;
   const scope = JSON.stringify([ownerScope, deps.stream === true ? "stream" : "file"]);
   const cached = getCachedExportUrl(scope, workdir, relPath, mtimeMs);
-  if (cached) return cached;
+  if (cached) {
+    mobileDebugLog("debug", "files", "file export cache hit", { stream: deps.stream === true });
+    return cached;
+  }
   const abort = new AbortController();
   const check = () => {
     if (deps.isCancelled?.()) abort.abort();
@@ -63,7 +68,18 @@ export async function exportRemoteFileToUrl(
     }
     if (result.inlineBase64 !== undefined)
       return `data:${result.mimeType};base64,${result.inlineBase64}`;
-    const signed = await deps.presignGet(result.ossKey);
+    const presignStartedAt = Date.now();
+    const signed = await deps.presignGet(result.ossKey).catch((error: unknown) => {
+      mobileDebugLog("warn", "files", "file export presign failed", {
+        ms: Date.now() - presignStartedAt,
+        error: errorText(error),
+      });
+      throw error;
+    });
+    mobileDebugLog("debug", "files", "file export presigned", {
+      ms: Date.now() - presignStartedAt,
+      size: result.size,
+    });
     check();
     if (abort.signal.aborted) throw new Error(i18n.t("files.export.leftPage"));
     storeCachedExportUrl(

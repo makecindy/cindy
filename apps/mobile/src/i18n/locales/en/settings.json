@@ -10,7 +10,7 @@
     },
     "title": "Debug logs",
     "record": "Record debug logs",
-    "hint": "Record phone connection, recovery, scrolling, keyboard and performance details. Off by default; keeps up to 7 days and 8 MB. Never uploaded automatically.",
+    "hint": "Record phone connection, recovery, file preview and playback, scrolling, keyboard and performance details. Off by default; keeps up to 7 days and 8 MB. Never uploaded automatically.",
     "export": "Export debug logs",
     "clear": "Clear logs",
     "busy": "Working…",

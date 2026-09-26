@@ -59,17 +59,9 @@ export function BotsGlobalSettingsSection() {
       <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
         {t('bots.globalSettings.title')}
       </h2>
-      <p className="-mt-2 text-12 leading-[1.5] text-[var(--settings-section-sublabel)] opacity-70">
-        {t('bots.globalSettings.description')}
-      </p>
 
       <div className={cn(CARD_CLASS, 'flex flex-col gap-4')}>
-        <div>
-          <p className={ROW_LABEL_CLASS}>{t('bots.modelLabel')}</p>
-          <p className={cn('mt-1', ROW_HINT_CLASS)}>
-            {t('bots.globalSettings.description')}
-          </p>
-        </div>
+        <p className={ROW_LABEL_CLASS}>{t('bots.modelLabel')}</p>
         <fieldset disabled={pending} aria-busy={pending} className="min-w-0">
           <BotModelChainEditor
             disabled={pending}
@@ -80,15 +72,12 @@ export function BotsGlobalSettingsSection() {
               : undefined}
           />
         </fieldset>
-        <p className={ROW_HINT_CLASS}>{t('bots.globalSettings.restoreHint')}</p>
         {notice ? (
           <p className={ROW_HINT_CLASS} role="status">
             {notice}
           </p>
         ) : null}
       </div>
-
-      <p className={ROW_HINT_CLASS}>{t('bots.globalSettings.rosterNote')}</p>
     </div>
   );
 }

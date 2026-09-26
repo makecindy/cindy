@@ -4,6 +4,8 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { createDownloadResumable } from 'expo-file-system/legacy';
 import { getRandomBytes } from 'expo-crypto';
 import native from '../../modules/cindy-html-preview/src/CindyHtmlPreviewModule';
+import { errorText } from '@/debug/fileDiagnostics';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { assertHtmlSnapshotActive, collectHtmlSnapshot, htmlSnapshotLocation, HTML_SNAPSHOT_MAX_ENTRIES, snapshotDocumentPaths } from './htmlDirectorySnapshot';
@@ -48,6 +50,10 @@ export async function prepareMobileHtmlPreview(absPath: string, deps: RemoteAbsF
   deleteOssObject(key: string): void;
 }, signal: AbortSignal): Promise<MobileHtmlPreview> {
   if (!native) throw new Error('HTML_PREVIEW_NATIVE_UNAVAILABLE');
+  mobileDebugLog('debug', 'files', 'html preview mode', {
+    onDemand: !!(native.startOnDemand && native.resolveRequest),
+    ssh: !!deps.ssh,
+  });
   if (native.startOnDemand && native.resolveRequest) return prepareOnDemand(absPath, deps, signal);
   const server = native;
   assertHtmlSnapshotActive(signal);
@@ -151,6 +157,7 @@ async function prepareOnDemand(absPath: string, deps: RemoteAbsFileFetchDeps & {
   dir.create({ intermediates: true });
   let closed = false;
   let sequence = 0;
+  let requestCount = 0;
   const requests = new Map<string, AbortController>();
   const pending = new Set<Promise<void>>();
   const materialized = new Map<string, { filename: string; mime: string }>();
@@ -159,9 +166,15 @@ async function prepareOnDemand(absPath: string, deps: RemoteAbsFileFetchDeps & {
     if (event.token !== token || closed || requests.has(event.id)) return;
     const controller = new AbortController();
     requests.set(event.id, controller);
+    const request = ++requestCount;
+    const queuedAt = Date.now();
+    const ext = /\.([a-z0-9]{1,8})$/i.exec(event.path ?? '')?.[1]?.toLowerCase() ?? '';
     const work = queue('preview', async () => {
       let destination: File | undefined;
       let accepted = false;
+      let route = 'unknown';
+      let bytes = 0;
+      const startedAt = Date.now();
       const uploaded = new Set<string>();
       try {
         assertHtmlSnapshotActive(controller.signal);
@@ -171,6 +184,7 @@ async function prepareOnDemand(absPath: string, deps: RemoteAbsFileFetchDeps & {
         const reused = materialized.get(relative);
         if (reused) {
           accepted = await server.resolveRequest!(token, event.id, reused.filename, reused.mime, 200);
+          mobileDebugLog('debug', 'files', 'html resource reused', { request, ext, accepted });
           return;
         }
         const filename = String(sequence++);
@@ -178,6 +192,8 @@ async function prepareOnDemand(absPath: string, deps: RemoteAbsFileFetchDeps & {
         const media = await fetchRemoteAbsFileOnce(deps, root.replace(/\/$/, '') + '/' + relative, deps.ssh,
           (key) => uploaded.add(key), { baseDir: root, maxBytes: FILE_PEER_MAX_BYTES }, controller.signal);
         assertHtmlSnapshotActive(controller.signal);
+        bytes = media.size;
+        route = media.inlineBase64 !== undefined ? 'inline' : media.url.startsWith('file://') ? 'direct' : 'upload';
         if (!(Paths.availableDiskSpace >= media.size + 256 * 1024 * 1024)) {
           if (media.url.startsWith('file://')) releasePeerMedia(media.url);
           throw new Error('PREVIEW_DISK_FULL');
@@ -210,10 +226,22 @@ async function prepareOnDemand(absPath: string, deps: RemoteAbsFileFetchDeps & {
         assertHtmlSnapshotActive(controller.signal);
         accepted = await server.resolveRequest!(token, event.id, filename, mime, 200);
         if (accepted) materialized.set(relative, { filename, mime });
+        mobileDebugLog('debug', 'files', 'html resource served', {
+          request, ext, route, bytes, accepted,
+          waitMs: startedAt - queuedAt, ms: Date.now() - startedAt,
+        });
       } catch (error) {
-        if (!closed && !controller.signal.aborted) {
-          const message = error instanceof Error ? error.message : '';
-          await server.resolveRequest!(token, event.id, '', '', /NOT_FOUND|ENOENT/.test(message) ? 404 : 502);
+        const aborted = closed || controller.signal.aborted;
+        const message = error instanceof Error ? error.message : '';
+        const status = /NOT_FOUND|ENOENT/.test(message) ? 404 : 502;
+        mobileDebugLog(aborted ? 'debug' : 'warn', 'files', 'html resource failed', {
+          request, ext, route, bytes,
+          status: aborted ? 'aborted' : status,
+          waitMs: startedAt - queuedAt, ms: Date.now() - startedAt,
+          error: errorText(error),
+        });
+        if (!aborted) {
+          await server.resolveRequest!(token, event.id, '', '', status);
         }
       } finally {
         for (const key of uploaded) deps.deleteOssObject(key);

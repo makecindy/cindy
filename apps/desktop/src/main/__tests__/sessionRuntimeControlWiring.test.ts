@@ -758,14 +758,15 @@ describe('session runtime control wiring', () => {
     );
   });
 
-  it('resumes native Codex history across credentials and reserves window rebuilding for send', () => {
-    const body = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
-    expect(body).not.toContain('forkSdkSession(');
-    expect(body).not.toContain('relinkCodexProviderThread(');
+  it('only relinks retained cross-host writers without rewriting native history', () => {
+    const body = handlerBody(registerSource, 'const handleSetModel = async (', 'const recoverRemoteRuntimeAxisPersistence');
+    expect(body).toContain('requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer(');
+    expect(body).toContain('...(canTransferThread ? {');
+    expect(body).toContain('relinkCodexProviderThread(');
+    expect(body).toContain('stripEncryptedReasoning: false');
+    expect(body).toContain('commitCodexThreadTransfer(transferDb!.client, sourceSnapshot');
+    expect(body).toMatch(/if \(result\.persistedRoute === true && isDeviceLinkInvoke\(\)\) \{\s*markRemoteSettingPersistedInsideHandler\(response\);/);
+    expect(body).toContain('getCurrentDbClientSnapshot()?.clientEpoch !== transferDb.clientEpoch');
     expect(body).not.toContain('prepareNativeSessionRecovery(');
     expect(body).toContain('codexAuthInjection: getCodexProxyAuthInjectionState()');
     expect(body).toContain('confirmedTargetPressure:');
@@ -899,7 +900,7 @@ describe('session runtime control wiring', () => {
     const retainedRecovery = handlerBody(
       setModel,
       'const reconcileRetainedLiveProfile = async (): Promise<void> => {',
-      'try {\n        const result: ApplyRuntimeSetModelChangeResult = routeExplicit',
+      'const transferDb = getCurrentDbClientSnapshot();',
     );
     const capabilityLookup = retainedRecovery.indexOf(
       'const retainedProviders = await getDesktopProviderService().listProviders({',

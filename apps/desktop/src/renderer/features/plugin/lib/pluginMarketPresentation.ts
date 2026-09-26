@@ -45,8 +45,9 @@ export function pluginUpdateForInstalledVersion(
  *
  * A pending release is the usual case. The same release is also allowed when the
  * installation record is incomplete: reinstalling that exact release restores
- * the Host receipt without adding a capability-confirmation step. A verified
- * install at the current release has nothing to recover.
+ * the Host receipt. Without an approved baseline Main cannot prove the previous
+ * permissions, so it asks the user as for a first install. A verified install at
+ * the current release has nothing to recover.
  */
 export function marketReviewTargetsInstalledGhost(
   item: Pick<PluginMarketItem, 'installState'> | null | undefined,

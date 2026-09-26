@@ -147,4 +147,30 @@ describe('Cindy Make composer presentation', () => {
       }
     }
   });
+
+  it('keeps recovery actions inside the editable composer instead of replacing it', () => {
+    const ast = ts.createSourceFile('session.tsx', sessionView, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let topSlot: ts.JsxAttribute | undefined;
+    let inputLock: ts.Expression | undefined;
+    const visit = (node: ts.Node) => {
+      if ((ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node))
+          && node.tagName.getText(ast) === 'ChatInput') {
+        topSlot = node.attributes.properties.find((prop): prop is ts.JsxAttribute =>
+          ts.isJsxAttribute(prop) && prop.name.getText(ast) === 'topSlot');
+      }
+      if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'cindyMakeInputLocked') {
+        inputLock = node.initializer;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+    expect(topSlot).toBeDefined();
+    expect(topSlot!.getText(ast)).toMatch(/cindyMakeRecoveryId\s*&&\s*session\s*\?/);
+    expect(topSlot!.getText(ast)).toContain('<CindyMakeEditingActions');
+    expect(topSlot!.getText(ast)).toContain('sessionId={session.id}');
+    expect(topSlot!.getText(ast)).toContain('messageId={cindyMakeRecoveryId}');
+    expect(inputLock).toBeDefined();
+    expect(inputLock!.getText(ast)).toContain('cindyMakeComposerPhase || cindyMakePendingTest');
+    expect(inputLock!.getText(ast)).not.toContain('cindyMakeRecoveryId');
+  });
 });

@@ -164,9 +164,9 @@ localStorage 按 **origin + userData 目录** 分家——dev 的 renderer 从
 工作目录误报缺失或切到备用目录时，参见[工作目录异常日志判读](../working-directory-diagnostics.md)，
 按探测阶段、恢复结果与匿名关联标识区分原因，不要仅凭超时推断掉盘。
 
-本节指导**开发过程中的增量验证**；提交（commit／PR）前的强制门禁以
-`development-workflow.md` 的「提交前测试门禁」为准（仓库根 `pnpm test:unit:related` 与相关
-package 的 typecheck 全部通过；CI 仍跑完整 `pnpm test:unit`）。开发过程中根据实际改动选择最小但充分的检查：
+本节指导本地验证；提交前按 `development-workflow.md` 的「提交前验证」覆盖改动影响面，
+默认使用 `pnpm test:unit:related`，也可采用等效定向测试与相关 package 的类型检查。
+本机并发预算由使用者或宿主决定，CI 保留完整单测。根据实际改动选择最小但充分的检查：
 
 ```bash
 pnpm --filter desktop typecheck

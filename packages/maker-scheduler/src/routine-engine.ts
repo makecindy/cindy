@@ -20,7 +20,7 @@ export interface RoutineRun {
   triggerIds: string[];
   events: Array<{ sourceId: string; event: RoutineEvent }>;
   status:
-    "queued" | "running" | "success" | "failed" | "interrupted" | "cancelled";
+    "queued" | "running" | "success" | "failed" | "interrupted" | "cancelled" | "skipped";
   createdAt: number;
   finishedAt?: number;
   error?: string;
@@ -53,6 +53,7 @@ export interface RoutineEngineDeps {
     error?: string;
     resultText?: string;
     deferred?: boolean;
+    skipped?: boolean;
   }>;
   id(): string;
   now(): number;
@@ -206,7 +207,7 @@ export class RoutineEngine {
   private async writeRoutine(botId: string, raw: RoutineInput, options: { id?: string; expectedRevision?: number; creationId?: string }): Promise<Routine> {
     const { expectedRevision, creationId } = options;
     const id = options.id ?? creationId;
-    const input = parseRoutineInput(raw);
+    const parsed = parseRoutineInput(raw);
     return this.change((state) => {
       if (this.blockedBots.has(botId)) throw new Error("The teammate is paused");
       if (id && this.removing.has(id)) throw new Error("Routine is being removed");
@@ -215,6 +216,14 @@ export class RoutineEngine {
             (routine) => routine.id === id && routine.botId === botId,
           )
         : undefined;
+      // Omitted optional fields from older clients preserve saved choices.
+      const input = parseRoutineInput({
+        ...existing,
+        ...parsed,
+        // Legacy saved definitions may omit this field and must stay quiet.
+        // A newly created, unclassified reminder must retain delivery.
+        ...(!existing && parsed.silentWhenIdle === undefined ? { silentWhenIdle: false } : {}),
+      });
       if (id && !existing && !creationId) throw new Error("Routine not found");
       if (creationId && state.routines.some(row => row.id === creationId && row.botId !== botId)) throw new Error("Routine creation ID already used");
       if (creationId && existing && JSON.stringify(parseRoutineInput(existing)) !== JSON.stringify(input)) throw new Error("Routine already created; refresh before editing");
@@ -559,6 +568,7 @@ export class RoutineEngine {
       error?: string;
       resultText?: string;
       deferred?: boolean;
+      skipped?: boolean;
     } = {};
     try {
       result = await this.deps.execute(
@@ -598,12 +608,13 @@ export class RoutineEngine {
       }
       const completed = { ...result };
       delete completed.deferred;
+      delete completed.skipped;
       Object.assign(run, completed, {
         status: aborted
           ? "cancelled"
           : result.error
             ? "failed"
-            : "success",
+            : result.skipped ? "skipped" : "success",
         finishedAt,
       });
     };

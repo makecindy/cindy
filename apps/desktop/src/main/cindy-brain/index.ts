@@ -302,6 +302,14 @@ import {
   getForgeOidcInstallConfirmBridge,
   initForgeOidcInstallConfirmBridge,
 } from './forgeOidcInstallConfirmBridge.js';
+import {
+  abortAllGhostInstallConsentPrompts,
+  assertGhostInstallConsent,
+  obtainGhostInstallConsent,
+  type GhostInstallConsentDecision,
+  type GhostInstallConsentPrompt,
+} from './ghostInstallConsent.js';
+import { GhostInstallConsentWindowBridge } from './ghostInstallConsentWindowBridge.js';
 import { GhostNetworkSlot } from './networkSlot.js';
 import {
   type ConnectionAudienceResolution,
@@ -327,6 +335,7 @@ import { GhostFsSlot } from './fsSlot.js';
 import { GhostLibrarySlot } from './librarySlot.js';
 import { LibraryBindingStore, validateLibraryCandidateLocation } from './libraryBinding.js';
 import { LibraryVault, statfsFreeBytes, DEFAULT_LIBRARY_LIMITS } from './libraryVault.js';
+import { LibraryStagingStore } from './libraryStaging.js';
 import { LibrarySqlService, defaultLibraryDbWorkerPath } from './librarySqlService.js';
 import { trashGhostLibrary } from './libraryTrash.js';
 import { migrateGhostLibrary } from './libraryMigrate.js';
@@ -387,6 +396,7 @@ import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-hos
 import {
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
+  isOrganizationManagedProvider,
   isProviderDisabled,
   type MediaCapability,
   xaiApiOfficialRuntimeAgents,
@@ -438,6 +448,8 @@ import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
 import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
+import { createByokImageChannel, pruneDynamicImageChannels, registerByokImageChannels } from './byokImageChannel.js';
+import { readByokCredential, readByokInferenceBase } from '../model-access/byokCredentials.js';
 import { createXaiVideoProvider } from '../cindy-proxy-media/video/providers/xai.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import {
@@ -1026,10 +1038,13 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   getGhostGrantConfirmBridge()?.cleanupAll('session_aborted');
   getGhostConfirmDialogBridge()?.cancelAll();
   getForgeOidcInstallConfirmBridge()?.cancelAll();
+  installConsentWindowBridge.cancelAll();
+  abortAllGhostInstallConsentPrompts();
   runtimeSingleton?.destroyAll();
   resetNodeRuntimeBrokerForAccountBoundary();
-  // Library 会话一并作废:关 db worker + 作废 handle——在途写入已在串行链上
-  // 归属原 owner 完成或随 vault.invalidate 作废,新 owner 解析到全新根。
+  // Drain in-flight staging.release (tombstone/fsync) before tearing Library
+  // sessions. Owner mutation leases stay held until each call unwinds; waiting
+  // for idle first would let marker-window teardown race the lease.
   await getGhostLibrarySlot().disposeAll();
   if (libraryExtraDirSync) {
     await libraryExtraDirSync(null).catch((error) => {
@@ -3061,6 +3076,53 @@ let confirmSlotSingleton: GhostConfirmSlot | null = null;
 /** 意识确认弹窗通道(main → **单个**窗口;renderer 用主机同款 ConfirmDialog 渲染)。 */
 export const GHOST_CONFIRM_CHANNEL = 'ghosts:confirm-request';
 export const FORGE_OIDC_INSTALL_CONFIRM_CHANNEL = 'forge-oidc-install:confirm-request';
+/** 用户在窗口里发起安装时的确认请求与收起通知(main → 发起安装的那个窗口)。 */
+export const GHOST_INSTALL_CONSENT_REQUEST_CHANNEL = 'ghosts:install-consent:request';
+export const GHOST_INSTALL_CONSENT_DISMISSED_CHANNEL = 'ghosts:install-consent:dismissed';
+
+const installConsentWindowBridge = new GhostInstallConsentWindowBridge();
+const trackedInstallConsentRequesters = new WeakSet<WebContents>();
+
+function trackInstallConsentRequester(contents: WebContents): void {
+  if (trackedInstallConsentRequesters.has(contents)) return;
+  trackedInstallConsentRequesters.add(contents);
+  const requesterId = contents.id;
+  const cancelPending = (): void => installConsentWindowBridge.cancelRequester(requesterId);
+  contents.once('destroyed', cancelPending);
+  contents.on('render-process-gone', cancelPending);
+  contents.on('did-start-navigation', (_event, _url, isSameDocument, isMainFrame) => {
+    if (isMainFrame && !isSameDocument) cancelPending();
+  });
+}
+
+/**
+ * 发起安装的受信窗口上的确认提示。确认框只投给这个窗口，也只接受它的回答；
+ * 调用方必须已经用 assertTrustedAppRendererEvent 核验过该 webContents。
+ */
+export function createWindowGhostInstallConsentPrompt(
+  contents: WebContents,
+): GhostInstallConsentPrompt {
+  return (request) => {
+    if (contents.isDestroyed()) return Promise.reject(new Error('窗口已关闭'));
+    trackInstallConsentRequester(contents);
+    const ownerStamp = getGhostOwnerPushStamp();
+    return installConsentWindowBridge.request(
+      {
+        id: contents.id,
+        send: (payload) => {
+          if (contents.isDestroyed()) return false;
+          sendGhostContentsPush(contents, GHOST_INSTALL_CONSENT_REQUEST_CHANNEL, payload, ownerStamp);
+          return true;
+        },
+        dismiss: (requestId) => {
+          if (contents.isDestroyed()) return;
+          sendGhostContentsPush(contents, GHOST_INSTALL_CONSENT_DISMISSED_CHANNEL, { requestId });
+        },
+      },
+      request,
+    );
+  };
+}
 
 function ensureForgeOidcInstallConfirmBridge() {
   return (
@@ -4120,6 +4182,7 @@ function getGhostImageCapabilities(
  * 后续来源(gemini / openai / xai)在各自 PR 里追加注册。
  */
 const registeredCodexImageAccounts = new Set<string>();
+const registeredByokImageAccounts = new Set<string>();
 let imageChannelRegistrySingleton: ImageChannelRegistry | null = null;
 function getImageChannelRegistry(): ImageChannelRegistry {
   if (!imageChannelRegistrySingleton) {
@@ -4260,8 +4323,10 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     });
     imageChannelRegistrySingleton = registry;
   }
-  for (const provider of getActiveCatalog().providers) {
-    if (provider.auth.native !== 'codex' || registeredCodexImageAccounts.has(provider.id)) continue;
+  const imageProviders = getActiveCatalog().providers;
+  pruneDynamicImageChannels(imageChannelRegistrySingleton, imageProviders, registeredCodexImageAccounts, registeredByokImageAccounts);
+  for (const provider of imageProviders) {
+    if (isOrganizationManagedProvider(provider) || provider.auth.native !== 'codex' || registeredCodexImageAccounts.has(provider.id)) continue;
     const providerId = provider.id;
     imageChannelRegistrySingleton.register(providerId, createCodexImageChannel({
       providerId,
@@ -4273,6 +4338,30 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     }));
     registeredCodexImageAccounts.add(providerId);
   }
+  // Organization BYOK image models get their own channel. Do not reuse xd /
+  // openai / gemini / xai: those stay personal or gateway routes. Chat-only
+  // BYOK is skipped until the catalog grows imageModels. Closures read the
+  // live member key and inference origin so rotate/logout flip ready().
+  registerByokImageChannels(
+    imageChannelRegistrySingleton,
+    imageProviders,
+    registeredByokImageAccounts,
+    (provider) => {
+      const providerId = provider.id;
+      return createByokImageChannel({
+        brandLabel: provider.name,
+        getApiKey: () => readByokCredential(providerId, 'image'),
+        getBaseUrl: () => readByokInferenceBase(providerId),
+        getSupportsEdit: () => {
+          const current = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+          return (current?.imageModels ?? []).some((model) => model.modalities?.input.includes('image') === true);
+        },
+        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+        beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, providerId),
+        logger: log,
+      });
+    },
+  );
   return imageChannelRegistrySingleton;
 }
 
@@ -5373,6 +5462,10 @@ export function getGhostLibrarySlot(): GhostLibrarySlot {
       getGhost: findAvailableGhost,
       bindingStore,
       getDefaultRoot: (ghostId) => ownerScopedUserDataPath('libraries', ghostId),
+      getStagingRoot: (ghostId) => ownerScopedUserDataPath('library-staging', ghostId),
+      createStagingStore: (deps) => new LibraryStagingStore(deps),
+      captureMutationOwner: () => captureGhostMutationOwner(),
+      beginMutation: (expected) => beginGhostMutation(expected as ActiveAppSession | undefined),
       captureOwnerScope: () => activeOwnerScopeKey(),
       createVault: (deps) => new LibraryVault(deps),
       createSqlService: (deps) => new LibrarySqlService(deps),
@@ -5590,30 +5683,36 @@ export async function getGhostLibraryOverview(ghostId: string): Promise<GhostLib
  */
 export async function deleteGhostLibraryForActiveOwner(ghostId: string): Promise<{ ok: boolean; message?: string }> {
   if (!isValidGhostId(ghostId)) return { ok: false, message: '非法插件 id' };
-  await getGhostLibrarySlot().disposeGhost(ghostId);
-  const result = await trashGhostLibrary(ghostId, {
-    // 默认根与自定义根都经 binding store 的解析口径(漂移时返回 null → 上层
-    // 引导恢复位置,不误删)。
-    resolveLibraryRoot: async (id) => {
-      const resolution = await getGhostLibraryBindingStore().resolveLibraryRoot(id);
-      return resolution.kind === 'custom' ? resolution.root : ownerScopedUserDataPath('libraries', id);
-    },
-    trashRoot: () => ownerScopedUserDataPath('libraries-trash'),
-    removeBinding: async (id) => {
-      await getGhostLibraryBindingStore().removeBinding(id);
-    },
-    log,
-  });
-  if (result.ok) {
-    await refreshMivoLibraryExtraDirGrant().catch((error) => {
-      log.warn('library extraDirs delete sync failed', {
-        ghostId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+  const slot = getGhostLibrarySlot();
+  slot.setRelocating(ghostId, true);
+  try {
+    await slot.disposeGhost(ghostId);
+    const result = await trashGhostLibrary(ghostId, {
+      // 默认根与自定义根都经 binding store 的解析口径(漂移时返回 null → 上层
+      // 引导恢复位置,不误删)。
+      resolveLibraryRoot: async (id) => {
+        const resolution = await getGhostLibraryBindingStore().resolveLibraryRoot(id);
+        return resolution.kind === 'custom' ? resolution.root : ownerScopedUserDataPath('libraries', id);
+      },
+      trashRoot: () => ownerScopedUserDataPath('libraries-trash'),
+      removeBinding: async (id) => {
+        await getGhostLibraryBindingStore().removeBinding(id);
+      },
+      log,
     });
-    return { ok: true };
+    if (result.ok) {
+      await refreshMivoLibraryExtraDirGrant().catch((error) => {
+        log.warn('library extraDirs delete sync failed', {
+          ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      return { ok: true };
+    }
+    return { ok: false, message: result.message };
+  } finally {
+    slot.setRelocating(ghostId, false);
   }
-  return { ok: false, message: result.message };
 }
 
 let libraryBindingStoreSingleton: LibraryBindingStore | null = null;
@@ -5750,7 +5849,12 @@ export async function installAndDock(
   opts: {
     ghostId: string;
     enable?: boolean;
-    expectedPackageSha256?: string;
+    expectedPackageSha256: string;
+    /**
+     * 锁外求得的用户确认与它所依据的 manifest(来自 expectedPackageSha256 钉住的
+     * 同一份包)。必填,与 ghostId 同理:新增装入路径无法忘记交出确认结论。
+     */
+    consent: { decision: GhostInstallConsentDecision; manifest: GhostManifest };
     trustOverride?: GhostHostTrustOverride;
     beforePackagePlacement?: () => void;
   },
@@ -5764,19 +5868,26 @@ async function installAndDockLocked(
   opts: {
     ghostId: string;
     enable?: boolean;
-    expectedPackageSha256?: string;
+    expectedPackageSha256: string;
+    consent: { decision: GhostInstallConsentDecision; manifest: GhostManifest };
     trustOverride?: GhostHostTrustOverride;
     installOrigin?: 'agent-forge';
     beforePackagePlacement?: () => void;
   },
 ): Promise<InstalledGhost> {
+  // 确认依据的 manifest 必须就是 expectedPackageSha256 钉住的那份包；锁内现读受体
+  // 复核，确认后同 id 被别处装上或包内容变化都不能沿用这次确认。
+  assertGhostInstallConsent(
+    opts.consent.decision,
+    manager.list().find((ghost) => ghost.manifest.id === opts.ghostId),
+    opts.consent.manifest,
+    opts.expectedPackageSha256,
+  );
   // 初始启用态由入口显式传入；当前用户导入与市场首装都传 true，覆盖更新
   // 则走 manager.update 延续既有状态。保留 false 缺省以兼容内部受控调用方。
   const result = await manager.install(lizFilePath, {
     initiallyEnabled: opts.enable ?? false,
-    ...(opts.expectedPackageSha256
-      ? { expectedPackageSha256: opts.expectedPackageSha256 }
-      : {}),
+    expectedPackageSha256: opts.expectedPackageSha256,
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
     ...(opts.installOrigin ? { installOrigin: opts.installOrigin } : {}),
     ...(opts.beforePackagePlacement ? { beforePackagePlacement: opts.beforePackagePlacement } : {}),
@@ -5828,6 +5939,7 @@ async function updateLocalGhostPackageLocked(
   inspected: InspectedGhostPackage,
   expectedPackageSha256: string,
   expectedInstalledApproval: string,
+  consent: GhostInstallConsentDecision,
   installOrigin?: 'agent-forge',
   isCurrent?: () => boolean,
 ): Promise<InstalledGhost> {
@@ -5839,6 +5951,8 @@ async function updateLocalGhostPackageLocked(
     ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
   );
   const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
+  // 锁内按真实包与现读受体复核锁外求得的确认；熄灯之前拒绝，不打断正在用的旧版本。
+  assertGhostInstallConsent(consent, previousGhost, inspected.manifest, expectedPackageSha256);
   runtime.stop(inspected.manifest.id);
   // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
   // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
@@ -5949,12 +6063,20 @@ async function updateLocalGhostPackageLocked(
 }
 
 /**
- * Forge 的显式安装入口。调用方在打包前已经取得 owner lease，并把它持有到本函数
- * 返回；这里复核精确包哈希，再与 Renderer 本地导入共用相同安装/更新事务。
+ * Forge 的显式安装入口。确认在 owner 租约外求得；落位前再取安装锁，并与
+ * Renderer 本地导入共用相同安装/更新事务。调用方必须先复核精确包哈希。
  */
 export async function installOrUpdateLocalGhostPackageFromForge(
   cindyFilePath: string,
-  expected: { ghostId: string; packageSha256: string; isCurrent?: () => boolean },
+  expected: {
+    ghostId: string;
+    packageSha256: string;
+    /** 向发起安装的任务投确认卡；Agent 安装无论任务权限档都要用户确认。 */
+    consentPrompt: GhostInstallConsentPrompt;
+    /** packing 租约内捕获的 owner；确认与等锁都不持租约，落位前用这份身份取新租约。 */
+    mutationOwner: ActiveAppSession;
+    isCurrent?: () => boolean;
+  },
 ): Promise<{ ghost: InstalledGhost; action: 'installed' | 'updated' }> {
   const manager = getGhostManager();
   const inspected = await manager.inspect(cindyFilePath);
@@ -5976,6 +6098,13 @@ export async function installOrUpdateLocalGhostPackageFromForge(
     inspected.manifest,
     installOrigin ? { installOrigin } : undefined,
   );
+  // 首装与扩权更新先在任务里请用户确认；权限没变多的更新不打扰。
+  const consent = await obtainGhostInstallConsent(
+    { mode: 'prompt', prompt: expected.consentPrompt, initiator: 'agent', origin: 'forge' },
+    manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id),
+    inspected.manifest,
+    inspected.packageSha256,
+  );
   const confirmFacts = forgeOidcInstallConfirmFacts(inspected.manifest, membershipKind);
   if (confirmFacts) {
     let confirmed = false;
@@ -5996,37 +6125,45 @@ export async function installOrUpdateLocalGhostPackageFromForge(
     if (expected.isCurrent?.() === false) {
       throwIpcError('PRECONDITION_FAILED', '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。');
     }
-    const installed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
-    if (!installed) {
+    // 确认已在 owner 租约外完成；落位再用 packing 时钉住的 owner 取租约。
+    const releaseMutation = beginGhostMutation(expected.mutationOwner);
+    try {
+      const installed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
+      if (!installed) {
+        return {
+          ghost: await installAndDockLocked(manager, cindyFilePath, {
+            ghostId: inspected.manifest.id,
+            enable: true,
+            expectedPackageSha256: expected.packageSha256,
+            consent: { decision: consent, manifest: inspected.manifest },
+            ...(installOrigin ? { installOrigin } : {}),
+          }).then((ghost) => {
+            try {
+              markGhostRecommendationInstalled(ghost.manifest.id);
+            } catch {
+              log.warn('ghost recommendation install history unavailable');
+            }
+            return ghost;
+          }),
+          action: 'installed',
+        };
+      }
       return {
-        ghost: await installAndDockLocked(manager, cindyFilePath, {
-          ghostId: inspected.manifest.id,
-          enable: true,
-          expectedPackageSha256: expected.packageSha256,
-          ...(installOrigin ? { installOrigin } : {}),
-        }).then((ghost) => {
-          try {
-            markGhostRecommendationInstalled(ghost.manifest.id);
-          } catch {
-            log.warn('ghost recommendation install history unavailable');
-          }
-          return ghost;
-        }),
-        action: 'installed',
+        ghost: await updateLocalGhostPackageLocked(
+          manager,
+          cindyFilePath,
+          inspected,
+          expected.packageSha256,
+          ghostInstallApprovalToken(installed.approval),
+          consent,
+          installOrigin,
+          expected.isCurrent,
+        ),
+        action: 'updated',
       };
+    } finally {
+      releaseMutation();
     }
-    return {
-      ghost: await updateLocalGhostPackageLocked(
-        manager,
-        cindyFilePath,
-        inspected,
-        expected.packageSha256,
-        ghostInstallApprovalToken(installed.approval),
-        installOrigin,
-        expected.isCurrent,
-      ),
-      action: 'updated',
-    };
   });
 }
 
@@ -6071,6 +6208,11 @@ export async function installOrUpdateMarketGhostPackage(
     ) => void | Promise<void>;
     /** 仅 server-market 主机路径可传；custom/local 不传。 */
     officialCindyGithub?: boolean;
+    /**
+     * 调用方在锁外求得的用户确认结论(ghostInstallConsent.ts)。必填:市场首装、
+     * 手动更新、后台更新与服务端默认安装都必须显式交出,本函数在锁内按真实包复核。
+     */
+    consent: GhostInstallConsentDecision;
   },
 ): Promise<InstalledGhost> {
   // 卡点:按 ghostId 上锁,覆盖 inspect → 落位整段。服务端与自定义两条市场路径
@@ -6099,6 +6241,7 @@ async function installOrUpdateMarketGhostPackageLocked(
       evidence: MarketGhostPackageCommitEvidence,
     ) => void | Promise<void>;
     officialCindyGithub?: boolean;
+    consent: GhostInstallConsentDecision;
   },
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
@@ -6171,8 +6314,14 @@ async function installOrUpdateMarketGhostPackageLocked(
         : undefined,
     );
 
-    // Manifest 能力只用于 Host 注册、校验和运行时守门。用户点击安装后不再
-    // 经过插件级权限确认；自定义活目录还必须通过上面的打包窗口一致性校验。
+    // 用户确认在锁外求得；这里用即将落位的真实包与锁内现读的受体复核，确认后
+    // 包内容或已装版本变了就拒绝，后台更新遇到需要确认的扩权直接放弃本轮。
+    assertGhostInstallConsent(
+      expected.consent,
+      installed,
+      inspected.manifest,
+      inspected.packageSha256,
+    );
     // Hold the owner-stability lease only for the actual Ghost filesystem
     // mutation.
     releaseMutation = beginGhostMutation(mutationOwner);
@@ -6189,6 +6338,7 @@ async function installOrUpdateMarketGhostPackageLocked(
         ghostId: expected.ghostId,
         enable: true,
         expectedPackageSha256: inspected.packageSha256,
+        consent: { decision: expected.consent, manifest: inspected.manifest },
         beforePackagePlacement: expected.beforeCommitInLock,
         ...(trustOverride ? { trustOverride } : {}),
       });
@@ -7115,6 +7265,24 @@ export function registerGhostIpc(): void {
     return { handled: bridge.resolve(p.requestId, p.confirmed) };
   });
 
+  // 安装／更新确认框的回答只认发起安装的那个窗口(按 webContents id 绑定)。
+  ipcMain.handle('ghosts:install-consent:resolve', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const p = raw as { requestId?: unknown; confirmed?: unknown } | null;
+    if (
+      !p ||
+      typeof p.requestId !== 'string' ||
+      p.requestId.length === 0 ||
+      p.requestId.length > 128 ||
+      typeof p.confirmed !== 'boolean'
+    ) {
+      throwIpcError('INVALID_PARAMS', 'invalid plugin install confirmation');
+    }
+    return {
+      handled: installConsentWindowBridge.resolve(event.sender.id, p.requestId, p.confirmed),
+    };
+  });
+
   // ── 意识聊天卡片取件(卡槽③;宿主 renderer 历史回放用)──────────────
   // 查询型 handler:无卡返回 { card: null },renderer 据此降级为通用媒体
   // 渲染(远程会话/被 GC 的历史卡都走这条),不抛 NOT_FOUND——规则 13 的
@@ -7584,7 +7752,19 @@ export function registerGhostIpc(): void {
     rejectReservedGhostId(probe.manifest.id);
     rejectBrokerWithoutDeclaredRedirectPort(probe.manifest);
     rejectUnauthorizedTokenBroker(probe.manifest);
-    // Node 等高风险能力在插件详情中如实展示；安装事务不追加能力确认弹窗。
+    // 首装一律先在发起安装的窗口里请用户确认插件权限；确认在任何锁与 owner 租约
+    // 之外等待，落位前由 installAndDock 在锁内按同一份包复核。
+    const consent = await obtainGhostInstallConsent(
+      {
+        mode: 'prompt',
+        prompt: createWindowGhostInstallConsentPrompt(event.sender),
+        initiator: 'user',
+        origin: 'local-file',
+      },
+      manager.list().find((ghost) => ghost.manifest.id === probe.manifest.id),
+      probe.manifest,
+      probe.packageSha256,
+    );
     const enable = installOpts?.enable === true;
     // owner 租约在锁外整段持有(防中途 owner 切换把落位写进新 owner);按 ghostId 的
     // 互斥锁由 installAndDock 自动获取(卡点),这里传 id 即可。二者语义不同,叠加保留。
@@ -7595,6 +7775,7 @@ export function registerGhostIpc(): void {
           ghostId: probe.manifest.id,
           enable,
           expectedPackageSha256,
+          consent: { decision: consent, manifest: probe.manifest },
         }).then((ghost) => {
           try {
             markGhostRecommendationInstalled(ghost.manifest.id);
@@ -7644,6 +7825,18 @@ export function registerGhostIpc(): void {
     rejectReservedGhostId(inspected.manifest.id);
     rejectBrokerWithoutDeclaredRedirectPort(inspected.manifest);
     rejectUnauthorizedTokenBroker(inspected.manifest);
+    // 新版本权限变多时先请用户确认；权限没变多的更新不打扰。
+    const consent = await obtainGhostInstallConsent(
+      {
+        mode: 'prompt',
+        prompt: createWindowGhostInstallConsentPrompt(event.sender),
+        initiator: 'user',
+        origin: 'local-file',
+      },
+      manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id),
+      inspected.manifest,
+      inspected.packageSha256,
+    );
     // 从熄灯到换版收尾整段持 owner 租约:熄灯之后每一步都在改"当前 owner"的插件世界,
     // 中途 owner 切换落定会把后半段(update 落盘/停靠/点火)写进新 owner。租约在锁外,
     // 与市场/本地装入/卸载共用的按 ghostId 互斥叠加(二者语义不同,决策 A 都保留)。
@@ -7658,6 +7851,7 @@ export function registerGhostIpc(): void {
             inspected,
             expectedPackageSha256,
             expectedInstalledApproval,
+            consent,
           ),
         ),
       };
@@ -7947,15 +8141,19 @@ export function registerGhostIpc(): void {
       throwIpcError('INVALID_PARAMS', '参数非法');
     }
     const releaseMutation = beginGhostMutation();
+    const slot = getGhostLibrarySlot();
     try {
+      slot.setRelocating(id, true);
+      await slot.disposeGhost(id); // drain in-flight staging.release before binding changes
       const set = await getGhostLibraryBindingStore().setBinding(id, candidate, (root) =>
         statfsFreeBytes(root),
       );
       if (!set.ok) return { ok: false as const, message: set.message };
-      await getGhostLibrarySlot().disposeGhost(id); // 作废会话,下一请求用新根
+      await slot.disposeGhost(id); // 作废会话,下一请求用新根
       await refreshMivoLibraryExtraDirGrant();
       return { ok: true as const, warnings: set.warnings };
     } finally {
+      slot.setRelocating(id, false);
       releaseMutation();
     }
   });
@@ -7991,12 +8189,16 @@ export function registerGhostIpc(): void {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !isValidGhostId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
     const releaseMutation = beginGhostMutation();
+    const slot = getGhostLibrarySlot();
     try {
+      slot.setRelocating(id, true);
+      await slot.disposeGhost(id);
       await getGhostLibraryBindingStore().removeBinding(id);
-      await getGhostLibrarySlot().disposeGhost(id);
+      await slot.disposeGhost(id);
       await refreshMivoLibraryExtraDirGrant();
       return { ok: true as const };
     } finally {
+      slot.setRelocating(id, false);
       releaseMutation();
     }
   });

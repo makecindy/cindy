@@ -134,6 +134,17 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
     mocks.buildSkipResultText.mockReturnValue('skipped');
   });
 
+  it('no change starts no model and emits no chat or completion notification', async () => {
+    const { runner, maker, notifier } = createRunner(vi.fn(async () => null) as never);
+    const context = createFireContext();
+    const result = await runner.fire(baseSchedule({ silentWhenIdle: true }), context);
+    expect(result.skipped).toBe(true);
+    expect(maker.createSession).not.toHaveBeenCalled();
+    expect(mocks.createMessage).not.toHaveBeenCalled();
+    expect(notifier.notify).not.toHaveBeenCalled();
+    expect(context.onPreRunHookCompleted).toHaveBeenCalledOnce();
+  });
+
   it('heartbeat 任务(workingDir 空)→ 先解析绑定会话 meta.workDir 再跑 hook', async () => {
     const getSessionMeta = vi.fn(async () => ({ workDir: '/bound/project' }) as never);
     const { runner } = createRunner(getSessionMeta as never);

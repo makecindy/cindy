@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { tryMobilePeerInvoke, resetMobilePeer } from './peerFileRegistry';
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { findRemoteHistoryView } from '@/session/remoteHistoryView';
 import { createBackgroundConnection } from './backgroundConnection';
@@ -1083,6 +1084,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         peerRecoverySchedulerRef.current?.cancel(deviceId);
       },
       onLinkClosed: (deviceId, reason) => {
+        resetMobilePeer(deviceId);
         if (isSharedTaskPeer(deviceId)) setPresenceVersion((version) => version + 1);
         catalogRefresh.cancel(deviceId);
         resetRemoteProjectOrderPushFence(deviceId);
@@ -1365,6 +1367,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   );
 
   const closeLink = useCallback((deviceId: string) => {
+    resetMobilePeer(deviceId);
     registryRef.current.untrackOpenLink(deviceId);
     forcedPeerRecoveryIntentRef.current.cancel(deviceId);
     openLinkInFlightRef.current.delete(deviceId);
@@ -1399,7 +1402,17 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         preSend();
         return accepted;
       },
-      () => sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend }),
+      async () => {
+        if (!isSharedTaskPeer(deviceId)) {
+          const result = await tryMobilePeerInvoke(deviceId, channel, args);
+          preSend();
+          if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
+          if (result) {
+            return withAccessRevokedHandling(deviceId, async () => unwrapInvoke<T>(result));
+          }
+        }
+        return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend });
+      },
     );
   }, [sendOpenLinkOnce]);
 

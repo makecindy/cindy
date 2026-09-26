@@ -60,7 +60,7 @@ export function BrowserBackendSubsection({
     active === 'rsb-webview' && health?.active === 'rsb-webview' ? health : null;
   return (
     <div className="border-t border-[var(--settings-theme-card-border)]">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-[14px]">
+      <div className="cindy-segmented-row px-4 py-[14px]">
         <div className="flex min-w-0 flex-col gap-1">
           <p className="text-12 font-medium leading-[1.4] text-[var(--settings-section-title)]">
             {t('settings.computerUse.browserBackend.title')}
@@ -110,13 +110,6 @@ export function BrowserBackendSubsection({
           <Button
             variant="secondary"
             loading={recovering}
-            aria-label={
-              recovering
-                ? t('settings.computerUse.browserBackend.health.recovering')
-                : embeddedHealth.status === 'error'
-                  ? t('settings.computerUse.browserBackend.health.recover')
-                  : t('settings.computerUse.browserBackend.health.reconnect')
-            }
             type="button"
             onClick={onRecover}
             disabled={pending || !embeddedHealth.canRecover}

@@ -24,7 +24,7 @@ describe("collectIOSSimulatorCompatibilityReport", () => {
         packagedRequiresVerifiedArtifact: true,
         packagedRequiresEligibleMatrix: true,
         packagedPromotedRoute: "native-capability-auto",
-        releaseCompatibilityVersion: 1,
+        releaseCompatibilityVersion: 2,
         productBgraStream: false,
       },
     });

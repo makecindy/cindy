@@ -28,9 +28,11 @@ Plugins (internally "意识" / Ghost) extend what the agents can do — they add
 **Installing:**
 
 - Install from the marketplace, or add a `.cindy` file manually (drag it in / pick it from disk).
-- Choosing Install, dragging a package, or picking one from disk installs and enables the selected plugin directly. Installation does not add a permission or version-confirmation step; review its declared capabilities on the plugin detail page.
+- Choosing Install, dragging a package, or picking one from disk first shows a **confirmation dialog** listing everything the plugin declares it can do (network domains, credentials, background tasks, skills, bundled code, panels…). Nothing is installed until you confirm; after that the plugin is enabled right away.
+- When you ask an agent to install a plugin (`ghost_market_install` / `ghost_forge_install`), the same confirmation appears as a card in that task — whatever the task's permission mode, including Full Access. It also works from the phone when you control this computer remotely. If you deny it, nothing is installed.
+- Plugins pushed by your organization (server default installs) are installed and updated silently without a confirmation.
 - The server selects the release appropriate for this Cindy version before marketplace delivery. Desktop does not apply a second `minCindyVersion` gate; custom marketplaces and local `.cindy` packages follow the same install policy.
-- Updates from stable marketplace sources are applied automatically when the plugin is idle. Failed attempts retry later; you can still click Update to retry immediately.
+- Updates from stable marketplace sources are applied automatically when the plugin is idle — **as long as the new version doesn't need more permissions**. If it does, the automatic update pauses, the old version keeps working, and the plugin card shows "New permissions need confirmation"; clicking Update shows the added permissions for you to confirm. Failed attempts retry later; you can still click Update to retry immediately.
 
 **Using a plugin with `$command`:**
 

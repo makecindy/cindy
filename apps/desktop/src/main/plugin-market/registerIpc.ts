@@ -12,6 +12,7 @@ import {
   type PluginMarketSnapshot,
 } from '../../shared/pluginMarket.js';
 import {
+  createWindowGhostInstallConsentPrompt,
   sendToTrustedAppWindows,
   getGhostManager,
   setGhostUninstallLedgerPreparer,
@@ -31,11 +32,16 @@ import {
 const log = createLogger('plugin-market-ipc');
 let registered = false;
 const REMOVAL_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:removal-notice-available';
+const UPDATE_CONSENT_HOLDS_CHANGED_CHANNEL = 'plugin-market:update-consent-holds-changed';
 const localIconRequestGate = new LocalIconRequestGate();
 
 function signalRemovalNoticeAvailable(): void {
   if (!service().hasPendingRemovalNotice()) return;
   sendToTrustedAppWindows(REMOVAL_NOTICE_AVAILABLE_CHANNEL, undefined);
+}
+
+function signalUpdateConsentHoldsChanged(): void {
+  sendToTrustedAppWindows(UPDATE_CONSENT_HOLDS_CHANGED_CHANNEL, undefined);
 }
 
 async function snapshotAndSignalRemovalNotice(options?: PluginMarketSnapshotOptions) {
@@ -129,6 +135,7 @@ export function registerPluginMarketIpc(): void {
     return invokePluginMarket(() =>
       snapshotAndSignalRemovalNotice({
         deferReconciliation: true,
+        onConsentHoldsChanged: signalUpdateConsentHoldsChanged,
       }),
     );
   });
@@ -203,12 +210,22 @@ export function registerPluginMarketIpc(): void {
           .map((g) => g.manifest.id),
       );
       return invokePluginMarket(async () => {
-        const result = await service().install(requireString(pluginId, 'pluginId'), {
-          expectedReleaseId,
-          ...(expectedInstalledApproval !== undefined ? { expectedInstalledApproval } : {}),
-          ...(expectedManifest !== undefined ? { expectedManifest } : {}),
-          allowSourceReplacement,
-        });
+        const result = await service().install(
+          requireString(pluginId, 'pluginId'),
+          {
+            expectedReleaseId,
+            ...(expectedInstalledApproval !== undefined ? { expectedInstalledApproval } : {}),
+            ...(expectedManifest !== undefined ? { expectedManifest } : {}),
+            allowSourceReplacement,
+          },
+          // 首装与扩权更新的确认框投给发起安装的这个窗口。
+          {
+            consent: {
+              prompt: createWindowGhostInstallConsentPrompt(event.sender),
+              initiator: 'user',
+            },
+          },
+        );
         if (
           getActiveAppSession().generation === owner.generation &&
           !previouslyInstalled.has(result.ghost.manifest.id)

@@ -862,10 +862,8 @@ describe('Anthropic 权威模型清单注入', () => {
     setAnthropicDiscoveredModels([opus]);
     expect(anthropicModels().map((m) => m.id)).toEqual(['claude-opus-4-8']);
     expect(anthropicModels()[0]).toMatchObject({ name: 'Opus 4.8', supportsFastMode: true });
-    expect(anthropicModels('codex')[0]).toMatchObject({
-      name: 'Opus 4.8',
-      supportsFastMode: false,
-    });
+    // Claude 订阅只供 Claude Code,不再投影 Codex bridge。
+    expect(anthropicModels('codex')).toEqual([]);
     setAnthropicDiscoveredModels([]);
     expect(anthropicModels()).toEqual([]);
     expect(anthropicModels('codex')).toEqual([]);
@@ -881,7 +879,7 @@ describe('Anthropic 权威模型清单注入', () => {
 });
 
 describe('gateway cross-harness defaults', () => {
-  it('projects reviewed Gateway defaults through native harness policy and live capability changes', () => {
+  it('preserves Gateway model defaults across capability changes while keeping compatibility opt-in', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const candidates = [
       ['deepseek/deepseek-v4-pro', ['text']],
@@ -904,10 +902,7 @@ describe('gateway cross-harness defaults', () => {
       xdModels('pi')
         .filter((model) => model.defaultEnabled !== false)
         .map((model) => model.id);
-    expect(enabled().sort()).toEqual([
-      'deepseek/deepseek-v4-flash-vision-exp',
-      'tencent/hy4-preview',
-    ]);
+    expect(enabled().sort()).toEqual(candidates.map(([id]) => id).sort());
     for (const agent of ['claude-code', 'codex'] as const) {
       expect(xdModels(agent).every((model) => model.defaultEnabled === false)).toBe(true);
     }
@@ -919,7 +914,11 @@ describe('gateway cross-harness defaults', () => {
         modalities: { input: ['text'], output: ['text'] },
       })),
     );
-    expect(enabled().sort()).toEqual(['deepseek/deepseek-v4-pro', 'tencent/hy4-preview']);
+    expect(enabled().sort()).toEqual(candidates.map(([id]) => id).sort());
+    setXdGatewayModels(live.map((model, index) => ({
+      ...model, agents: [...model.agents], defaultEnabled: index !== 0,
+    })));
+    expect(enabled().sort()).toEqual(candidates.slice(1).map(([id]) => id).sort());
   });
 
   it.each([1, 2, 3] as const)(
@@ -953,24 +952,21 @@ describe('gateway cross-harness defaults', () => {
         })),
       );
       for (const [id, api] of examples) {
-        const everyday = !['deepseek/deepseek-v4-flash-vision-exp', 'tencent/hy4-preview'].includes(
-          id,
-        );
         const pi = xdModels('pi').find((m) => m.id === id)!;
         expect(pi).toMatchObject({
           nativeApi: api,
           piApi: api,
-          defaultEnabled: everyday,
+          defaultEnabled: true,
           contextWindow: 123_456,
         });
         expect(resolveXdPiGatewayApi(id)).toBe(api);
         expect(xdModels('claude-code').find((m) => m.id === id)).toMatchObject({
           nativeApi: api,
-          defaultEnabled: everyday && api === 'anthropic-messages',
+          defaultEnabled: api === 'anthropic-messages',
         });
         expect(xdModels('codex').find((m) => m.id === id)).toMatchObject({
           nativeApi: api,
-          defaultEnabled: everyday && api === 'openai-responses',
+          defaultEnabled: api === 'openai-responses',
         });
       }
       setXdGatewayModels([]);
@@ -1055,7 +1051,7 @@ describe('gateway cross-harness defaults', () => {
     expect(xdModels('codex')).toHaveLength(2);
   });
 
-  it('applies per-agent policy to the selected models while keeping old generations opt-in', () => {
+  it('applies per-agent policy without hiding older discovered generations', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const entries = ['codex/gpt-6', 'claude-opus-5', 'anthropic-claude/claude-opus-4-8'].map(
       (id) => ({
@@ -1067,9 +1063,9 @@ describe('gateway cross-harness defaults', () => {
       }),
     );
     setXdGatewayModels(entries.map((e) => ({ ...e, agents: [...e.agents] })));
-    expect(xdModels('claude-code').map((m) => m.defaultEnabled)).toEqual([false, true, false]);
+    expect(xdModels('claude-code').map((m) => m.defaultEnabled)).toEqual([false, true, true]);
     expect(xdModels('codex').map((m) => m.defaultEnabled)).toEqual([true, false, false]);
-    expect(xdModels('pi').map((m) => m.defaultEnabled)).toEqual([true, true, false]);
+    expect(xdModels('pi').map((m) => m.defaultEnabled)).toEqual([true, true, true]);
     setXdGatewayModels(
       entries.map((e) => ({
         ...e,
@@ -1077,7 +1073,7 @@ describe('gateway cross-harness defaults', () => {
         perAgent: { 'claude-code': { defaultEnabled: true }, codex: { defaultEnabled: true } },
       })),
     );
-    expect(xdModels('claude-code').map((m) => m.defaultEnabled)).toEqual([true, true, false]);
-    expect(xdModels('codex').map((m) => m.defaultEnabled)).toEqual([true, true, false]);
+    expect(xdModels('claude-code').map((m) => m.defaultEnabled)).toEqual([true, true, true]);
+    expect(xdModels('codex').map((m) => m.defaultEnabled)).toEqual([true, true, true]);
   });
 });

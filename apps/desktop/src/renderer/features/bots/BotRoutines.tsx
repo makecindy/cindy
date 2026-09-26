@@ -27,16 +27,21 @@ import {
 
 const menuClass = 'rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-2';
 const rowClass = 'rounded-lg text-13 text-[var(--text-primary)] focus:bg-[var(--surface-hover)]';
+const fieldClass = 'block space-y-2';
+const fieldLabelClass = 'block text-[var(--text-secondary)]';
 
 /** A teammate's standing instructions and OR-combined triggers, shared by teammate settings and the task sidebar. */
 export function BotRoutines({
   botId,
   beforeLeaveRef,
+  backRef,
   embedded = false,
 }: {
   embedded?: boolean;
   botId: string;
   beforeLeaveRef?: { current: (() => Promise<boolean>) | null };
+  /** Host back button: steps from the editor to the list first (the inline back button is then omitted). */
+  backRef?: { current: (() => Promise<boolean>) | null };
 }) {
   const { confirm } = useConfirmDialog();
   const inFlight = useRef(false);
@@ -120,6 +125,8 @@ export function BotRoutines({
       prompt: value.prompt,
       enabled: value.enabled,
       triggers: value.triggers,
+      silentWhenIdle: value.silentWhenIdle ?? true,
+      preRunHook: value.preRunHook ?? null,
     });
   const saved = routines.find((item) => item.id === selected);
   const dirty =
@@ -145,6 +152,33 @@ export function BotRoutines({
       beforeLeaveRef.current = null;
     };
   }, [beforeLeaveRef, canLeave]);
+  const closeDraft = useCallback(async () => {
+    if (!(await canLeave())) return;
+    setDraft(null);
+    setSelected(null);
+    setDeletePending(false);
+  }, [canLeave]);
+  useEffect(() => {
+    if (!backRef) return;
+    backRef.current = async () => {
+      if (!draft) return false;
+      if (!inFlight.current) await closeDraft();
+      return true;
+    };
+    return () => {
+      backRef.current = null;
+    };
+  }, [backRef, draft, closeDraft]);
+  const editorRef = useRef<HTMLFieldSetElement>(null);
+  // A number field the user left invalid is not silently replaced by the old
+  // value on save: point at it instead.
+  const revealInvalidField = () => {
+    const field = editorRef.current?.querySelector<HTMLInputElement>('input[aria-invalid="true"]');
+    if (!field) return false;
+    field.closest('details')?.setAttribute('open', '');
+    field.focus();
+    return true;
+  };
   const act = async (action: () => Promise<unknown>) => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -182,40 +216,31 @@ export function BotRoutines({
           : 'h-full overflow-y-auto bg-[var(--surface)] p-4 text-13 text-[var(--text-primary)]'
       }
     >
-      <div className="mb-5 flex items-center justify-between gap-2">
-        {draft ? (
-          <Button
-            variant="secondary"
-            disabled={busy}
-            onClick={() => {
-              void canLeave().then((allowed) => {
-                if (!allowed) return;
-                setDraft(null);
-                setSelected(null);
-                setDeletePending(false);
-              });
-            }}
-          >
-            {t('routines.back')}
-          </Button>
-        ) : embedded ? (
-          <span />
-        ) : (
-          <h2 className="font-medium">{t('routines.title')}</h2>
-        )}
-        {!draft && (
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setSelected('new');
-              setDraft({ name: '', prompt: '', enabled: true, triggers: [] });
-            }}
-          >
-            <Plus size={14} />
-            {t('routines.add')}
-          </Button>
-        )}
-      </div>
+      {!draft || !backRef ? (
+        <div className="mb-5 flex items-center justify-between gap-2">
+          {draft ? (
+            <Button variant="secondary" disabled={busy} onClick={() => void closeDraft()}>
+              {t('routines.back')}
+            </Button>
+          ) : embedded ? (
+            <span />
+          ) : (
+            <h2 className="font-medium">{t('routines.title')}</h2>
+          )}
+          {!draft && (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setSelected('new');
+                setDraft({ name: '', prompt: '', enabled: true, triggers: [], silentWhenIdle: false });
+              }}
+            >
+              <Plus size={14} />
+              {t('routines.add')}
+            </Button>
+          )}
+        </div>
+      ) : null}
       {error && (
         <div role="alert" className="mb-4 text-[var(--text-danger)]">
           <p>{t('routines.error')}</p>
@@ -264,11 +289,11 @@ export function BotRoutines({
           ))}
         </div>
       ) : (
-        <fieldset disabled={busy} className="min-w-0 space-y-5">
+        <fieldset ref={editorRef} disabled={busy} className="min-w-0 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <label className="flex items-center gap-2">
               <Switch
-                checked={draft.enabled}
+                aria-label={t('routines.enabled')} checked={draft.enabled}
                 onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
               />
               {t(draft.enabled ? 'routines.enabled' : 'routines.paused')}
@@ -283,13 +308,14 @@ export function BotRoutines({
                   !draft.prompt.trim() ||
                   !draft.triggers.length
                 }
-                onClick={() =>
+                onClick={() => {
+                  if (revealInvalidField()) return;
                   void act(async () => {
                     const saved = await window.electronAPI.routines.save(botId, draft, selected!);
                     setDraft(structuredClone(saved));
                     await window.electronAPI.routines.runNow(botId, saved.id);
-                  })
-                }
+                  });
+                }}
               >
                 {t(running ? 'routines.running' : 'routines.runNow')}
               </Button>
@@ -297,7 +323,11 @@ export function BotRoutines({
           </div>
           <label className="block space-y-2">
             <span className="text-[var(--text-secondary)]">{t('routines.name')}</span>
-            <Input value={draft.name} onChange={(name) => setDraft({ ...draft, name })} />
+            <Input
+              autoFocus={selected === 'new'}
+              value={draft.name}
+              onChange={(name) => setDraft({ ...draft, name })}
+            />
           </label>
           <label className="block space-y-2">
             <span className="text-[var(--text-secondary)]">{t('routines.instructions')}</span>
@@ -307,6 +337,23 @@ export function BotRoutines({
               onChange={(prompt) => setDraft({ ...draft, prompt })}
             />
           </label>
+          <details className="space-y-3">
+            <summary className="min-h-8 cursor-pointer rounded-full py-2 focus-visible:outline focus-visible:outline-[var(--focus-ring)]">{t('routines.advancedSettings')}</summary>
+            <label className="flex min-h-8 items-center gap-2">
+              <Switch aria-label={t('routines.quiet')} checked={draft.silentWhenIdle ?? true} onCheckedChange={(silentWhenIdle) => setDraft({ ...draft, silentWhenIdle })} />
+              {t('routines.quiet')}
+            </label>
+            <p className="text-12 text-[var(--text-secondary)]">{t('routines.quietHint')}</p>
+            <label className="block space-y-2">
+              <span className="text-[var(--text-secondary)]">{t('routines.checkCommand')}</span>
+              <Textarea rows={3} value={draft.preRunHook?.command ?? ''} onChange={(command) => setDraft({ ...draft, preRunHook: command ? { ...draft.preRunHook, command } : null })} />
+            </label>
+            <p className="text-12 text-[var(--text-secondary)]">{t('routines.checkHint')}</p>
+            {draft.preRunHook && <label className="block space-y-2">
+              <span className="text-[var(--text-secondary)]">{t('routines.timeoutMs')}</span>
+              <IntegerInput optional min={1} value={draft.preRunHook.timeoutMs} onChange={(timeoutMs) => setDraft({ ...draft, preRunHook: { ...draft.preRunHook!, timeoutMs } })} />
+            </label>}
+          </details>
           <div className="space-y-2">
             <h3 className="text-[var(--text-secondary)]">{t('routines.when')}</h3>
             <div className="space-y-3 rounded-xl border border-[var(--border-default)] p-3">
@@ -432,11 +479,12 @@ export function BotRoutines({
               </Button>
             )}
             <Button
-              variant="primary"
+              variant="cta"
               disabled={
                 busy || !draft.name.trim() || !draft.prompt.trim() || !draft.triggers.length
               }
-              onClick={() =>
+              onClick={() => {
+                if (revealInvalidField()) return;
                 void act(async () => {
                   const saved = await window.electronAPI.routines.save(
                     botId,
@@ -445,8 +493,8 @@ export function BotRoutines({
                   );
                   setSelected(saved.id);
                   setDraft(saved);
-                })
-              }
+                });
+              }}
             >
               {t('routines.save')}
             </Button>
@@ -488,7 +536,7 @@ export function BotRoutines({
                   <span aria-label={t(`routines.status.${run.status}`)}>
                     {run.status === 'running' || run.status === 'queued' ? (
                       <Spinner size={15} />
-                    ) : run.status === 'success' ? (
+                    ) : run.status === 'success' || run.status === 'skipped' ? (
                       <Check size={15} />
                     ) : run.status === 'failed' || run.status === 'interrupted' ? (
                       <CircleAlert size={15} />
@@ -535,13 +583,14 @@ function TriggerFields({
   const { t } = useTranslation();
   if (trigger.kind === 'interval')
     return (
-      <label className="block py-2">
-        {t('routines.minutes')}
-        <Input
-          type="number"
+      <label className={`${fieldClass} py-2`}>
+        <span className={fieldLabelClass}>{t('routines.minutes')}</span>
+        <IntegerInput
           min={1}
-          value={String(trigger.intervalMs / 60_000)}
-          onChange={(value) => onChange({ ...trigger, intervalMs: Number(value) * 60_000 })}
+          value={trigger.intervalMs / 60_000}
+          onChange={(minutes) => {
+            if (minutes !== undefined) onChange({ ...trigger, intervalMs: minutes * 60_000 });
+          }}
         />
       </label>
     );
@@ -651,9 +700,9 @@ function CronFields({
   const patch = (values: Partial<typeof config>) =>
     onChange({ ...trigger, expression: configToCron({ ...config, ...values }) });
   return (
-    <div className="space-y-2 py-2">
-      <label className="block">
-        {t('routines.schedule')}
+    <div className="space-y-3 py-2">
+      <label className={fieldClass}>
+        <span className={fieldLabelClass}>{t('routines.schedule')}</span>
         <select
           className="w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2"
           value={advanced ? 'custom' : config.mode}
@@ -671,8 +720,8 @@ function CronFields({
         </select>
       </label>
       {advanced ? (
-        <label className="block">
-          {t('routines.expression')}
+        <label className={fieldClass}>
+          <span className={fieldLabelClass}>{t('routines.expression')}</span>
           <Input
             value={trigger.expression}
             onChange={(expression) => onChange({ ...trigger, expression })}
@@ -681,21 +730,22 @@ function CronFields({
       ) : (
         <>
           {config.mode !== 'hourly' && (
-            <label className="block">
-              {t('routines.time')}
+            <label className={fieldClass}>
+              <span className={fieldLabelClass}>{t('routines.time')}</span>
               <Input
                 type="time"
                 value={`${String(config.hour).padStart(2, '0')}:${String(config.minute).padStart(2, '0')}`}
                 onChange={(value) => {
-                  const [hour, minute] = value.split(':').map(Number);
-                  patch({ hour, minute });
+                  // A cleared segment reports ''; keep the last complete time.
+                  const match = /^(\d{2}):(\d{2})/.exec(value);
+                  if (match) patch({ hour: Number(match[1]), minute: Number(match[2]) });
                 }}
               />
             </label>
           )}
           {config.mode === 'weekly' && (
-            <label className="block">
-              {t('routines.weekday')}
+            <label className={fieldClass}>
+              <span className={fieldLabelClass}>{t('routines.weekday')}</span>
               <select
                 className="w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2"
                 value={config.weekday}
@@ -713,26 +763,77 @@ function CronFields({
             </label>
           )}
           {config.mode === 'monthly' && (
-            <label className="block">
-              {t('routines.day')}
-              <Input
-                type="number"
+            <label className={fieldClass}>
+              <span className={fieldLabelClass}>{t('routines.day')}</span>
+              <IntegerInput
                 min={1}
                 max={31}
-                value={String(config.monthDay)}
-                onChange={(value) => patch({ monthDay: Number(value) })}
+                value={config.monthDay}
+                onChange={(monthDay) => {
+                  if (monthDay !== undefined) patch({ monthDay });
+                }}
               />
             </label>
           )}
         </>
       )}
-      <label className="block">
-        {t('routines.timezone')}
+      <label className={fieldClass}>
+        <span className={fieldLabelClass}>{t('routines.timezone')}</span>
         <Input
           value={trigger.timezone}
           onChange={(timezone) => onChange({ ...trigger, timezone })}
         />
       </label>
     </div>
+  );
+}
+
+/**
+ * Whole-number field that keeps what the user is typing: an emptied or
+ * out-of-range entry is not committed (optional fields commit `undefined` when
+ * emptied) and stays marked invalid until corrected.
+ */
+function IntegerInput({
+  value,
+  min,
+  max,
+  optional = false,
+  onChange,
+}: {
+  value: number | undefined;
+  min: number;
+  max?: number;
+  optional?: boolean;
+  onChange(value: number | undefined): void;
+}) {
+  const format = (next: number | undefined) => (next === undefined ? '' : String(next));
+  const [text, setText] = useState(() => format(value));
+  const [shown, setShown] = useState(value);
+  if (!Object.is(shown, value)) {
+    setShown(value);
+    setText(format(value));
+  }
+  const parse = (raw: string): number | undefined | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return optional ? undefined : null;
+    if (!/^\d+$/.test(trimmed)) return null;
+    const next = Number(trimmed);
+    return next >= min && (max === undefined || next <= max) ? next : null;
+  };
+  return (
+    <Input
+      type="number"
+      inputMode="numeric"
+      min={min}
+      max={max}
+      value={text}
+      // The saved value itself is never flagged (routines written elsewhere may hold other values).
+      error={text !== format(value) && parse(text) === null}
+      onChange={(raw) => {
+        setText(raw);
+        const next = parse(raw);
+        if (next !== null) onChange(next);
+      }}
+    />
   );
 }

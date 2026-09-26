@@ -34,6 +34,7 @@ type DesktopCloseBehavior = LinuxCloseBehavior | WindowsCloseBehavior;
 
 /** 一张开关卡片:左侧标签 + 说明(+ 可选补充说明行),右侧开关。 */
 function BehaviorCard({
+  id,
   label,
   hint,
   note,
@@ -42,6 +43,7 @@ function BehaviorCard({
   ariaLabel,
   disabled,
 }: {
+  id?: string;
   label: string;
   hint: string;
   note?: ReactNode;
@@ -52,6 +54,7 @@ function BehaviorCard({
 }) {
   return (
     <div
+      id={id}
       className={cn(
         'flex items-center justify-between gap-3 rounded-xl p-5',
         'bg-[var(--settings-theme-card-bg)]',
@@ -139,6 +142,7 @@ export function WindowBehaviorSection() {
       </h2>
 
       <BehaviorCard
+        id="settings-search-settings-devices-keepAwake"
         label={t('settings.devices.keepAwake')}
         hint={t('settings.devices.keepAwakeHint')}
         checked={keepAwake}
@@ -148,6 +152,7 @@ export function WindowBehaviorSection() {
 
       {loginItem.supported && (
         <BehaviorCard
+          id="settings-search-login-item"
           label={t('settings.windowBehavior.loginItem.label')}
           hint={t('settings.windowBehavior.loginItem.hint')}
           checked={Boolean(loginItem.state?.enabled || loginItem.state?.requiresApproval)}
@@ -174,13 +179,13 @@ export function WindowBehaviorSection() {
       {(isWindows || isLinux) && (
         <div
           className={cn(
-            'flex items-center justify-between gap-3 rounded-xl p-5',
+            'cindy-segmented-row rounded-xl p-5',
             'bg-[var(--settings-theme-card-bg)]',
             'border border-[var(--settings-theme-card-border)]',
           )}
         >
           <div className="flex min-w-0 flex-col gap-1">
-            <p
+            <p id="settings-search-settings-windowBehavior-closeBehavior-label"
               className="text-13 font-medium text-[var(--settings-section-sublabel)]"
               style={{ letterSpacing: '0.12px' }}
             >
@@ -205,6 +210,7 @@ export function WindowBehaviorSection() {
 
       {showsSwallowActivationClick && (
         <BehaviorCard
+          id="settings-search-activation-click"
           label={t('settings.windowBehavior.swallowActivationClickLabel')}
           hint={t('settings.windowBehavior.swallowActivationClickHint')}
           note={

@@ -2,8 +2,95 @@ import { describe, expect, it } from 'vitest';
 import { parseModelsListResponse } from '../modelDiscovery.js';
 import { mergeDiscoveredRuntimeModels } from '../modelMetadataLayers.js';
 import { buildUserProvider } from '../user-provider.js';
+import { BUNDLED_CATALOG } from '../catalog.js';
 
 describe('shared provider discovery', () => {
+  it.each([
+    { contextWindow: 128000, contextWindowMax: 64000 },
+    { context_window: 128000, contextWindowMax: 64000 },
+    { contextWindow: 128000, max_context_window: 64000 },
+    { model_info: { max_input_tokens: 128000 }, contextWindowMax: 64000 },
+    { contextWindow: 128000, contextWindowMax: 64000, max_context_window: 32000 },
+  ])('ignores a maximum smaller than the normalized working window: %j', fields => {
+    const models = parseModelsListResponse({ data: [{ id: 'private-model', ...fields }] })!;
+    expect(models[0].discoveredMetadata?.contextWindow).toBe(128000);
+    expect(models[0].discoveredMetadata).not.toHaveProperty('contextWindowMax');
+    const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+      'claude-code': { baseUrl: 'https://relay.example/v1', models },
+    } });
+    expect(provider.models['claude-code']?.[0]).toMatchObject({ contextWindow: 128000 });
+    expect(provider.models['claude-code']?.[0].contextWindowMax).not.toBe(64000);
+  });
+
+  it.each(['contextWindowMax', 'max_context_window'])('retains a valid %s with or without a working window', key => {
+    for (const fields of [{}, { contextWindow: 128000 }]) {
+      const [model] = parseModelsListResponse({ data: [{ id: 'private-model', ...fields, [key]: 256000 }] })!;
+      expect(model.discoveredMetadata?.contextWindowMax).toBe(256000);
+    }
+  });
+
+  it('retains the working window when a refresh only reports maximum capacity', () => {
+    const original = parseModelsListResponse({ data: [{ id: 'private-model',
+      context_window: 272000, max_context_window: 1050000 }] })!;
+    const refresh = parseModelsListResponse({ data: [{ id: 'private-model',
+      max_context_window: 2000000 }] })!;
+    expect(refresh[0].contextWindow).toBeUndefined();
+    expect(refresh[0].discoveredMetadata?.contextWindow).toBeUndefined();
+    const models = mergeDiscoveredRuntimeModels(original, refresh);
+    expect(models[0].discoveredMetadata).toMatchObject({ contextWindow: 272000, contextWindowMax: 2000000 });
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models },
+      } });
+      expect(provider.models[agent]?.[0]).toMatchObject({ contextWindow: 272000, contextWindowMax: 2000000 });
+    }
+  });
+
+  it.each([
+    [{ context_window: 272000 }, { max_context_window: 64000 }],
+    [{ context_window: 272000, max_context_window: 1050000 }, { contextWindowMax: 64000 }],
+    [{ context_window: 32000, max_context_window: 64000 }, { context_window: 272000 }],
+  ])('reconciles working and maximum windows after a sparse refresh: %j + %j', (before, refresh) => {
+    const original = mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: [
+      { id: 'private-model', ...before },
+    ] })!);
+    const models = mergeDiscoveredRuntimeModels(original, parseModelsListResponse({ data: [
+      { id: 'private-model', ...refresh },
+    ] })!);
+    expect(original[0].discoveredMetadata?.contextWindow).toBe(before.context_window);
+    expect(models[0].discoveredMetadata?.contextWindow).toBe(272000);
+    expect(models[0].discoveredMetadata).not.toHaveProperty('contextWindowMax');
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models },
+      } });
+      expect(provider.models[agent]?.[0].contextWindow).toBe(272000);
+      expect(provider.models[agent]?.[0].contextWindowMax).toBeUndefined();
+    }
+  });
+
+  it('uses maximum-only discovery as an unverified working fallback without saving it as a report', () => {
+    const discovered = parseModelsListResponse({ data: [{ id: 'private-model', max_context_window: 64000 }] })!;
+    const models = mergeDiscoveredRuntimeModels([], discovered);
+    expect(models[0].discoveredMetadata?.contextWindow).toBeUndefined();
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models },
+      } });
+      expect(provider.models[agent]?.[0]).toMatchObject({
+        contextWindow: 64000, contextWindowMax: 64000, contextWindowVerified: false,
+      });
+      expect(provider.models[agent]?.[0].userModelConfig?.discoveredMetadata?.contextWindow).toBeUndefined();
+    }
+    const refreshed = mergeDiscoveredRuntimeModels(models, parseModelsListResponse({ data: [
+      { id: 'private-model', context_window: 32000 },
+    ] })!);
+    const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+      pi: { baseUrl: 'https://relay.example/v1', models: refreshed },
+    } });
+    expect(provider.models.pi?.[0]).toMatchObject({ contextWindow: 32000, contextWindowMax: 64000, contextWindowVerified: true });
+  });
+
   it('imports Vercel token prices, output capacity, image inputs and declared effort levels', () => {
     const models = parseModelsListResponse({ data: [{ id: 'vendor/new', name: 'New', type: 'language',
       context_window: 128000, max_tokens: 32000,
@@ -84,4 +171,131 @@ it('does not offer thinking when a complete parameter list explicitly excludes i
   expect(models?.[0]?.discoveredMetadata?.efforts).toEqual([]);
   expect(models?.[1]?.discoveredMetadata?.efforts).toBeUndefined();
   expect(models?.[2]?.discoveredMetadata?.efforts).toBeUndefined();
+});
+
+
+describe('Sub2API Codex manifest reasoning', () => {
+  // Sub2API configuredCodexModelDescriptor uses slug, supported_reasoning_levels
+  // ({ effort, description } objects) and default_reasoning_level.
+  it.each(['models', 'data'] as const)('imports declared efforts from the %s envelope into all engines', (envelope) => {
+    for (const id of ['gpt-6-sol', 'gpt-6-luna', 'team-coding-model']) {
+      const models = parseModelsListResponse({ [envelope]: [{
+        ...(envelope === 'models' ? { slug: id } : { id }),
+        display_name: id,
+        supported_reasoning_levels: [{ effort: 'high', description: 'High' }, { effort: 'max', description: 'Maximum' }],
+        default_reasoning_level: 'high',
+      }] })!;
+      expect(models[0].discoveredMetadata).toMatchObject({ efforts: ['high', 'max'], defaultEffort: 'high' });
+      for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+        for (const modelRegistry of [undefined, BUNDLED_CATALOG.modelRegistry]) {
+          const provider = buildUserProvider({ id: 'custom-sub2api', name: 'Sub2API', runtimes: {
+            [agent]: { baseUrl: 'https://relay.example/v1', models: mergeDiscoveredRuntimeModels([], models) },
+          } }, { modelRegistry });
+          expect(provider.models[agent]?.[0]).toMatchObject({ id, efforts: ['high', 'max'], defaultEffort: 'high' });
+        }
+      }
+    }
+  });
+
+  it('keeps absent, invalid, empty and none-only declarations distinct', () => {
+    const entries = [
+      {},
+      { supported_reasoning_levels: null },
+      { supported_reasoning_levels: [{ description: 'missing effort' }] },
+      { supported_reasoning_levels: [] },
+      { supported_reasoning_levels: [{ effort: 'none' }], default_reasoning_level: 'none' },
+      { supported_reasoning_levels: ['none', 'low', 'high'], default_reasoning_level: 'high' },
+      { supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }], default_reasoning_level: null },
+    ];
+    const models = parseModelsListResponse({ models: entries.map((entry, i) => ({ slug: `model-${i}`, ...entry })) })!;
+    expect(models.map(model => model.discoveredMetadata?.efforts))
+      .toEqual([undefined, undefined, undefined, [], [], ['low', 'high'], ['low', 'high']]);
+    expect(models[4].discoveredMetadata?.defaultEffort).toBeNull();
+    expect(models[5].discoveredMetadata?.defaultEffort).toBe('high');
+    expect(models[6].discoveredMetadata?.defaultEffort).toBeNull();
+  });
+
+  it('preserves existing reasoning fields when both formats are present', () => {
+    const [model] = parseModelsListResponse({ data: [{ id: 'gpt-6-sol',
+      reasoning: { supportedEfforts: [], defaultEffort: null },
+      supported_reasoning_levels: [{ effort: 'high' }], default_reasoning_level: 'high',
+    }] })!;
+    expect(model.discoveredMetadata).toMatchObject({ efforts: [], defaultEffort: null });
+  });
+});
+
+describe('Sub2API Grok model discovery', () => {
+  it.each(['grok-4.6', 'grok-4.7', 'team-grok'])('imports and refreshes %s without rewriting user choices', id => {
+    const payload = { data: [{ id, supportsReasoningEffort: true, reasoningEffort: 'high',
+      reasoningEfforts: [
+        { value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' },
+        { value: 'high', label: 'High', default: true }, { value: 'xhigh', label: 'xHigh' },
+      ],
+    }] };
+    const discovered = parseModelsListResponse(payload)!;
+    expect(discovered[0].discoveredMetadata).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high',
+    });
+    const models = mergeDiscoveredRuntimeModels([{ id, name: 'My model', discoveredMetadata: {} }], discovered);
+    // Refresh must repair old name-only imports and survive configuration serialization.
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const config = { id: 'sub2api', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models },
+      } };
+      const provider = buildUserProvider(JSON.parse(JSON.stringify(config)));
+      expect(provider.models[agent]?.[0]).toMatchObject({ id,
+        efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high',
+      });
+    }
+    const overridden = mergeDiscoveredRuntimeModels([{ id, name: id, reasoning: false }], discovered);
+    expect(buildUserProvider({ id: 'sub2api', name: 'Relay', runtimes: {
+      codex: { baseUrl: 'https://relay.example/v1', models: overridden },
+    } }).models.codex?.[0]).toMatchObject({ efforts: [], defaultEffort: null });
+  });
+
+  it('does not invent levels from the support flag and respects explicit disabling', () => {
+    const models = parseModelsListResponse({ data: [
+      { id: 'unknown', supportsReasoningEffort: true, reasoningEffort: 'high' },
+      { id: 'disabled', supportsReasoningEffort: false, reasoningEfforts: [{ value: 'high' }] },
+      { id: 'empty', supportsReasoningEffort: true, reasoningEfforts: [] },
+      { id: 'invalid', reasoningEfforts: [{ label: 'High' }] },
+      { id: 'strings', reasoningEfforts: ['low', 'high'], reasoningEffort: null },
+      { id: 'canonical', reasoning: { supportedEfforts: ['low'], defaultEffort: null },
+        reasoningEfforts: [{ value: 'high' }], reasoningEffort: 'high' },
+    ] })!;
+    expect(models.map(model => model.discoveredMetadata?.efforts))
+      .toEqual([undefined, [], [], undefined, ['low', 'high'], ['low']]);
+    expect(models[4].discoveredMetadata?.defaultEffort).toBeNull();
+    expect(models[5].discoveredMetadata?.defaultEffort).toBeNull();
+  });
+});
+
+describe('Sub2API manifest capabilities', () => {
+  it('preserves vision, Fast and capacity separately through save and refresh for every engine', () => {
+    const discovered = parseModelsListResponse({ models: [{ slug: 'private-model',
+      context_window: 272000, max_context_window: 1050000,
+      input_modalities: ['text', 'image'], service_tiers: [{ id: 'priority', name: 'Fast' }],
+    }] })!;
+    const saved = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels([], discovered)));
+    const refreshed = mergeDiscoveredRuntimeModels(saved, parseModelsListResponse({ data: [{ id: 'private-model' }] })!);
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models: refreshed },
+      } });
+      expect(provider.models[agent]?.[0]).toMatchObject({ contextWindow: 272000,
+        contextWindowMax: 1050000, supportsFastMode: true, supportsImageInput: true });
+    }
+  });
+  it('distinguishes omitted, malformed, disabled and explicit canonical capability fields', () => {
+    const values = [ {}, { input_modalities: [null], service_tiers: [{}], max_context_window: -1 },
+      { input_modalities: [], service_tiers: [] },
+      { supports_image_input: false, supports_fast_mode: false,
+        input_modalities: ['image'], service_tiers: [{ id: 'priority' }] },
+      { context_window: 100000, max_context_window: 32000 },
+    ];
+    const models = parseModelsListResponse({ models: values.map((value, i) => ({ slug: `model-${i}`, ...value })) })!;
+    expect(models.map(m => m.discoveredMetadata?.supportsImageInput)).toEqual([undefined, undefined, false, false, undefined]);
+    expect(models.map(m => m.discoveredMetadata?.supportsFastMode)).toEqual([undefined, undefined, false, false, undefined]);
+    expect(models.every(m => m.discoveredMetadata?.contextWindowMax === undefined)).toBe(true);
+  });
 });

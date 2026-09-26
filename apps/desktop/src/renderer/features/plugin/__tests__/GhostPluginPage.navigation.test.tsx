@@ -104,6 +104,7 @@ beforeEach(() => {
         unavailableCustomSourceNames: [],
       }),
       detail: loadDetail,
+      onUpdateConsentHoldsChanged: () => () => {},
     },
     setApplicationMenuLocale: async () => {},
   });

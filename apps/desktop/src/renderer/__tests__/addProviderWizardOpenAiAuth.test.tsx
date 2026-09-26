@@ -71,6 +71,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
 
 import { AddProviderWizard } from '@/components/settings/AddProviderWizard';
 import { invalidatePendingCodexLogin } from '@/hooks/codexAuthLogin';
+import { toast } from '@/lib/toast';
 
 const OPENAI_PROVIDER = {
   id: 'openai',
@@ -191,6 +192,23 @@ afterEach(() => {
 });
 
 describe('AddProviderWizard — OpenAI 授权边界', () => {
+  it('keeps the inline cancel action named and enabled during authorization', async () => {
+    let finish!: (value: unknown) => void;
+    triggerLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    cancelLogin.mockResolvedValue({});
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[OPENAI_PROVIDER]}
+      entry={{ kind: 'builtin', providerId: 'openai' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(await screen.findByText('settings.providers.openai.useLocalAccount'));
+    const cancel = await screen.findByRole('button', { name: 'settings.providers.button.cancel' });
+    expect((cancel as HTMLButtonElement).disabled).toBe(false);
+    expect(cancel.getAttribute('aria-busy')).toBeNull();
+    fireEvent.click(cancel);
+    expect(cancelLogin).toHaveBeenCalledOnce();
+    await act(async () => { finish({ ok: false, authenticated: false }); });
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
   it.each(['openai', 'anthropic'].flatMap(id => ['cancel', 'unmount'].map(exit => ({ id, exit }))))('discards local $id completion after $exit', async ({ id, exit }) => {
     let finish!: (value: unknown) => void;
     triggerLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));
@@ -215,7 +233,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     fireEvent.click(await screen.findByText('settings.providers.openai.useLocalAccount'));
     await waitFor(() => expect(onDone).toHaveBeenCalledExactlyOnceWith('openai'));
   });
-  it.each(['openai', 'anthropic', 'xai'].flatMap(id =>
+  it.each(['openai', 'xai'].flatMap(id =>
     ['cancel', 'unmount'].map(exit => ({ id, exit })),
   ))('removes $id when login succeeds after $exit', async ({ id, exit }) => {
     let finish!: (value: { ok: boolean }) => void;
@@ -280,7 +298,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     expect(onDone).toHaveBeenCalledWith(newId);
     expect(onDone).toHaveBeenCalledTimes(1);
   });
-  it.each(['anthropic', 'xai'])('cancels only the pending independent %s authorization', async id => {
+  it.each(['xai'])('cancels only the pending independent %s authorization', async id => {
     let finish!: (value: { ok: boolean; reason: string }) => void;
     providerOAuthLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));
     const onDone = vi.fn();
@@ -295,7 +313,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     expect(deleteAccount).toHaveBeenCalledWith(accountId);
     expect(onDone).not.toHaveBeenCalled();
   });
-  it.each([['anthropic', 'claude'], ['xai', 'xai']] as const)('adds another %s account even when its builtin provider is connected', async (id, native) => {
+  it.each([['xai', 'xai']] as const)('adds another %s account even when its builtin provider is connected', async (id, native) => {
     const onDone = vi.fn();
     render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id, name: id, connected: true }]}
       onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
@@ -306,6 +324,49 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     expect(accountId).toMatch(new RegExp(`^${id}-`));
     expect(createAccount).toHaveBeenCalledWith(expect.objectContaining({ id: accountId, auth: { method: 'oauth', native } }), {});
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(accountId));
+  });
+  // Claude 订阅只能经内置 Claude Code 自己的登录使用:即使内置 anthropic 已连接,
+  // 也只提供「使用本机 Claude」(= 重新连接 CLI 登录),不再创建独立 Claude 账号。
+  it('offers only the bundled Claude Code login for a connected anthropic provider', async () => {
+    triggerLogin.mockResolvedValue({ ok: true, authorized: true });
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id: 'anthropic', name: 'anthropic', connected: true }]}
+      onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(await screen.findByText('anthropic'));
+    const useClaude = await screen.findByText('settings.providers.localAccount.useClaude');
+    expect(screen.queryByText('settings.providers.openai.addIndependentAccount')).toBeNull();
+    fireEvent.click(useClaude);
+    await waitFor(() => expect(onDone).toHaveBeenCalledExactlyOnceWith('anthropic'));
+    expect(triggerLogin).toHaveBeenCalledExactlyOnceWith(expect.any(String));
+    expect(createAccount).not.toHaveBeenCalled();
+    expect(providerOAuthLogin).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['local_unavailable', 'settings.providers.localAccount.unavailable'],
+    ['login_failed', 'settings.connections.claude.toast.loginFailed'],
+    ['timeout', 'settings.connections.claude.toast.loginFailed'],
+    ['login_cancelled', null],
+  ] as const)('maps a failed bundled Claude Code login (%s) to its toast', async (reason, toastKey) => {
+    triggerLogin.mockResolvedValue({ ok: false, authorized: false, reason });
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id: 'anthropic', name: 'anthropic' }]}
+      entry={{ kind: 'builtin', providerId: 'anthropic' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(await screen.findByText('settings.providers.localAccount.useClaude'));
+    // 登录 settle 后按钮从「取消」回到「使用本机 Claude」,再做负向断言。
+    await waitFor(() => expect(triggerLogin).toHaveBeenCalledTimes(1));
+    await screen.findByText('settings.providers.localAccount.useClaude');
+    if (toastKey) expect(toast.error).toHaveBeenCalledExactlyOnceWith(toastKey);
+    else expect(toast.error).not.toHaveBeenCalled();
+    expect(onDone).not.toHaveBeenCalled();
+  });
+  it('reports a thrown bundled Claude Code login as a login failure', async () => {
+    triggerLogin.mockRejectedValue(new Error('spawn failed'));
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[{ ...OPENAI_PROVIDER, id: 'anthropic', name: 'anthropic' }]}
+      entry={{ kind: 'builtin', providerId: 'anthropic' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(await screen.findByText('settings.providers.localAccount.useClaude'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledExactlyOnceWith('settings.connections.claude.toast.loginFailed'));
+    expect(onDone).not.toHaveBeenCalled();
   });
   it('已有系统 Codex OAuth 快照时仍停留在授权页，不自动完成当前 Cindy 绑定', async () => {
     const onDone = vi.fn();

@@ -19,7 +19,6 @@ import { useTranslation } from 'react-i18next';
 import { RefreshCw, Pencil, Trash2, Check, X, Monitor } from 'lucide-react';
 import { toast } from '@/lib/toast';
 
-import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import type { DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';

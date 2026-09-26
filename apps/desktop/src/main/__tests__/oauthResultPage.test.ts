@@ -281,11 +281,10 @@ describe('wave4 brand login callback card (pageKind=desktop-login)', () => {
     expect(html).toContain('data-cindy-oauth-copy="callback.neutral"');
   });
 
-  it('keeps every non-login caller on the legacy shell (ghost/claude/xai/generic 视觉零变化)', () => {
+  it('keeps every non-login caller on the legacy shell (ghost/xai/generic 视觉零变化)', () => {
     for (const pageKind of [
       undefined,
       'ghost-oauth',
-      'claude-oauth',
       'xai-oauth',
       'generic-oauth',
     ] as const) {

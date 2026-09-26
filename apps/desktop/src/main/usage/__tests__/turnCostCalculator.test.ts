@@ -1092,3 +1092,21 @@ describe('subscription value and usage details', () => {
     expect(details).toMatchObject({ durationMs: 1_250, turnDurationMs: 8_500 });
   });
 });
+describe('enterprise BYOK reported SDK costs', () => {
+  it('keeps a captured managed turn out of actual spend after logout clears the catalog', () => {
+    expect(
+      resolveTurnCost({
+        rawModel: 'deepseek-flash',
+        tokens: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreateTokens: 0 },
+        sdkCostDelta: 0.23,
+        pricing: {},
+        context: {
+          providerId: 'byok-removed-provider',
+          billingRoute: 'provider-api',
+          region: 'global',
+          accessKind: 'managed',
+        },
+      }),
+    ).toEqual({ model: 'deepseek-flash', money: null, source: 'reference' });
+  });
+});

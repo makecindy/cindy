@@ -25,13 +25,11 @@ import {
   AlarmClock,
   ArrowUp,
   Bot,
-  Check,
   ChevronDown,
   ChevronUp,
   GripVertical,
   Pencil,
   Trash2,
-  X,
 } from 'lucide-react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactElement } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -39,7 +37,6 @@ import { useTranslation } from 'react-i18next';
 
 import { SortableList } from '@/components/sidebar/SortableList';
 import { SentInlineAtomBody } from '@/components/chat/SentInlineAtomBody';
-import { ListComposerTextarea } from './ListComposerTextarea';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -53,10 +50,7 @@ import {
   isPendingQueueRowActive,
   prunePendingQueueRowActivity,
 } from './pendingQueueRowActivity';
-import {
-  getPendingQueueRowPresentation,
-  resolvePendingQueueEditSubmission,
-} from './pendingQueueRowPresentation';
+import { getPendingQueueRowPresentation } from './pendingQueueRowPresentation';
 import {
   acquireQueueEditLock,
   acquireQueueInteractionLock,
@@ -72,7 +66,10 @@ interface PendingQueuePanelProps {
   expanded: boolean;
   onToggle: () => void;
   onRemove: (clientId: string) => void;
-  onEdit?: (clientId: string, newText: string) => void;
+  /** Queue row currently loaded into the shared composer. */
+  editingClientId?: string | null;
+  /** Load a queued message into the shared composer. */
+  onEditBegin?: (entry: QueuedMessage) => void;
   onSteer?: (clientId: string) => Promise<boolean>;
   steeringClientIds?: string[];
   /** True after Stop pauses queued messages. */
@@ -151,7 +148,8 @@ export function PendingQueuePanel({
   expanded,
   onToggle,
   onRemove,
-  onEdit,
+  editingClientId = null,
+  onEditBegin,
   onSteer,
   steeringClientIds = [],
   paused = false,
@@ -167,9 +165,6 @@ export function PendingQueuePanel({
   const { t } = useTranslation();
   const resolvedAriaLabel = ariaLabel ?? t('newChat.pendingQueue.regionAria');
   const [rowActivity, setRowActivity] = useState(emptyPendingQueueRowActivityState);
-  const [editingClientId, setEditingClientId] = useState<string | null>(null);
-  const [editingDraft, setEditingDraft] = useState<string>('');
-  const editingTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const editingLockOwnerRef = useRef<QueueEditLockOwner | null>(null);
   const onEditLockRef = useRef(onEditLock);
   const interactionLockedRef = useRef(false);
@@ -233,8 +228,6 @@ export function PendingQueuePanel({
   useEffect(() => {
     if (editingClientId !== null && !queue.some((q) => q.clientId === editingClientId)) {
       releaseEditLock(editingClientId);
-      setEditingClientId(null);
-      setEditingDraft('');
     }
     setRowActivity((activity) =>
       prunePendingQueueRowActivity(activity, queue.map(getQueuedMessageId)),
@@ -242,42 +235,19 @@ export function PendingQueuePanel({
   }, [editingClientId, queue, releaseEditLock]);
 
   useEffect(() => {
-    if (editingClientId === null) return;
-    const ta = editingTextareaRef.current;
-    if (!ta) return;
-    ta.focus();
-    ta.select();
-  }, [editingClientId]);
+    if (editingClientId !== null) acquireEditLock(editingClientId);
+    else releaseEditLock();
+  }, [acquireEditLock, editingClientId, releaseEditLock]);
 
   const beginEdit = useCallback(
-    (clientId: string, currentText: string) => {
-      if (!onEdit) return;
-      if (steeringClientIds.includes(clientId)) return;
-      acquireEditLock(clientId);
-      setEditingClientId(clientId);
-      setEditingDraft(currentText);
+    (entry: QueuedMessage) => {
+      if (!onEditBegin) return;
+      if (steeringClientIds.includes(entry.clientId)) return;
+      acquireEditLock(entry.clientId);
+      onEditBegin(entry);
     },
-    [acquireEditLock, onEdit, steeringClientIds],
+    [acquireEditLock, onEditBegin, steeringClientIds],
   );
-
-  const cancelEdit = useCallback(() => {
-    releaseEditLock(editingClientId);
-    setEditingClientId(null);
-    setEditingDraft('');
-  }, [editingClientId, releaseEditLock]);
-
-  const commitEdit = useCallback(() => {
-    if (editingClientId === null) return;
-    const trimmed = editingDraft.trim();
-    if (trimmed.length > 0) {
-      const entry = queue.find((item) => item.clientId === editingClientId);
-      const submission = entry ? resolvePendingQueueEditSubmission(entry, editingDraft) : null;
-      if (submission !== null) onEdit?.(editingClientId, submission);
-    }
-    releaseEditLock(editingClientId);
-    setEditingClientId(null);
-    setEditingDraft('');
-  }, [editingClientId, editingDraft, onEdit, queue, releaseEditLock]);
 
   const handleSortableReorder = useCallback(
     (nextVisibleIds: string[]) => {
@@ -327,7 +297,10 @@ export function PendingQueuePanel({
           const isSteering = steeringClientIds.includes(entry.clientId);
           const showActions = !isPendingEnqueue && (isRowActive || isSteering || isRowEditing);
           const canSteerRow = Boolean(onSteer) && rowPresentation.canSteer;
-          const canEditRow = Boolean(onEdit) && rowPresentation.canEdit;
+          const canEditRow =
+            Boolean(onEditBegin) &&
+            rowPresentation.canEdit &&
+            (editingClientId === null || isRowEditing);
           const chatMessageContent = entry.chatMessage.content ?? entry.text;
           const agentReferences =
             entry.chatMessage.agentReferences?.length
@@ -382,19 +355,6 @@ export function PendingQueuePanel({
             e.preventDefault();
             e.stopPropagation();
             void onSteer(entry.clientId);
-          };
-          const handleEditKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              e.stopPropagation();
-              commitEdit();
-              return;
-            }
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              e.stopPropagation();
-              cancelEdit();
-            }
           };
           const handleDragHandleKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
             if (isPendingQueueSteerShortcut(e)) return;
@@ -471,8 +431,8 @@ export function PendingQueuePanel({
               className={cn(
                 'group flex gap-1.5 rounded-[8px] border border-transparent px-2 py-0.5',
                 // 单行展示态整行垂直居中, 让 drag handle / 文字 / actions 光学对齐;
-                // 编辑态 textarea 可能多行, 保持顶对齐让 handle / actions 留在首行。
-                isRowEditing ? 'items-start' : 'items-center',
+                // 编辑态仅保留行高亮与取消入口，正文统一在主输入框修改。
+                'items-center',
                 (isRowActive || isRowEditing) && 'bg-[var(--chat-input-chip-bg)]',
               )}
             >
@@ -493,22 +453,7 @@ export function PendingQueuePanel({
               >
                 <GripVertical size={12} strokeWidth={2} aria-hidden />
               </button>
-              {isRowEditing ? (
-                <ListComposerTextarea
-                  ref={editingTextareaRef}
-                  value={editingDraft}
-                  onChange={(e) => setEditingDraft(e.target.value)}
-                  onKeyDown={handleEditKeyDown}
-                  onBlur={commitEdit}
-                  rows={1}
-                  aria-label={t('newChat.pendingQueue.editAria', { index: originalIdx + 1 })}
-                  className={cn(
-                    'min-h-[18px] min-w-0 flex-1 resize-none rounded-[6px] bg-transparent text-13 leading-[1.25]',
-                    'max-h-[120px] overflow-y-auto text-[var(--msg-assistant-text)] outline-none',
-                    '[field-sizing:content]',
-                  )}
-                />
-              ) : rowPresentation.isOrca || rowPresentation.isScheduler ? (
+              {rowPresentation.isOrca || rowPresentation.isScheduler ? (
                 <div
                   aria-label={t(
                     rowPresentation.isScheduler
@@ -575,27 +520,7 @@ export function PendingQueuePanel({
                   <Spinner size={12} strokeWidth={2.25} />
                 </span>
               ) : isRowEditing ? (
-                <div className="flex shrink-0 items-center gap-1">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={cancelEdit}
-                    aria-label={t('newChat.pendingQueue.editCancelAria')}
-                    className={iconButtonClassName}
-                  >
-                    <X size={12} strokeWidth={2.25} aria-hidden />
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={commitEdit}
-                    disabled={editingDraft.trim().length === 0}
-                    aria-label={t('newChat.pendingQueue.editSaveAria')}
-                    className={cn(iconButtonClassName, 'disabled:opacity-40')}
-                  >
-                    <Check size={12} strokeWidth={2.25} aria-hidden />
-                  </button>
-                </div>
+                <span aria-hidden className="h-5 w-5 shrink-0" />
               ) : showActions ? (
                 <div
                   className={cn('flex shrink-0 items-center justify-end gap-1', actionSlotWidth)}
@@ -631,7 +556,7 @@ export function PendingQueuePanel({
                     <Tip text={t('newChat.pendingQueue.editAction')} side="top">
                       <button
                         type="button"
-                        onClick={() => beginEdit(entry.clientId, rowPresentation.displayText)}
+                        onClick={() => beginEdit(entry)}
                         aria-label={t('newChat.pendingQueue.editAria', { index: originalIdx + 1 })}
                         className={iconButtonClassName}
                       >

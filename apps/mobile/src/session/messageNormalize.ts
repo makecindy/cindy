@@ -53,6 +53,8 @@ import {
 } from '@/session/remoteMoney';
 import {
   localizeAgentError,
+  localizeUnclassifiedAgentError,
+  unclassifiedAgentErrorI18nKey,
   parseMobileToolLoopErrorDetails,
 } from '@/session/agentErrorI18n';
 import type { MobileToolInputProjection } from '@/session/messageToolPayloadProjection';
@@ -73,6 +75,8 @@ export interface NormalizedRemoteMessage {
   role: RemoteMessageRole;
   label: string;
   body: string;
+  rawError?: string;
+  errorSummaryKey?: string;
   /** user 消息正文包含产品引用编码；驱动跨端 marker/legacy 解析。 */
   quotesEncoded?: boolean;
   /** user 长文本粘贴原子的精确 wire ranges；正文仍保留完整 Agent payload。 */
@@ -238,7 +242,7 @@ export function normalizeRemoteMessages(
 
       const task = readBotCollaborationMeta(message.agentMeta?.botCollaboration);
       const direct = readBotDirectMessageMeta(message.agentMeta?.botDirectMessage);
-      const isTaskTrace = task?.role === 'delegation-request' || task?.role === 'interjection';
+      const isTaskTrace = task?.role === 'delegation-request' || task?.role === 'delegation-result' || task?.role === 'interjection';
       if (isTaskTrace || direct) {
         result.push({
           key: messageNormalizeKey(message), source: message, kind: 'system', role: message.role,
@@ -320,13 +324,13 @@ export function normalizeRemoteMessages(
     // turn 失败终态的持久化行(desktop main 落库):content = { message, reason? },
     // 提取 message 文案按 system 样式展示 —— 不加分支会 fall through 到通用兜底,
     // body 变成整段生 JSON。稳定的 tool-loop reason/toolLoop 走本地化，agent 未鉴权错误
-    // 换成带引导的中文提示(describeAgentAuthError)，其余未知错误保留原始 message。
+    // 换成本地化引导(describeAgentAuthError)，其余未知错误使用本地化摘要，原文留给折叠详情。
     if (message.role === 'error') {
       const c = parseMaybeJsonObject(message.content);
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
-      const errText =
-        describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop) ?? rawText;
+      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop);
+      const errText = guidance ?? localizeUnclassifiedAgentError(rawText);
       result.push({
         key: messageNormalizeKey(message),
         source: message,
@@ -334,6 +338,8 @@ export function normalizeRemoteMessages(
         role: message.role,
         label: 'error',
         body: errText,
+        rawError: rawText,
+        ...(!guidance ? { errorSummaryKey: unclassifiedAgentErrorI18nKey(rawText) } : {}),
         align: 'agent',
         createdAt: message.createdAt,
       });

@@ -368,12 +368,12 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 - Active: Light Gray bg (`--surface-chip`); Inactive: transparent
 - All pill-shaped (9999px)
 
-### Desktop segmented controls (v8, owner-approved 2026-09-18)
+### Desktop segmented controls (v8 appearance / v9 layout, owner-approved 2026-09-25)
 
 - All Desktop segmented settings, form choices, filters, Agent selectors and pill navigation use `components/ui/segmented-control.tsx`. `VendorSegmentedSwitcher` only adapts Agent labels/icons. Mobile and native iOS controls are outside this decision.
 - The borderless pill track uses `--segmented-track`: a black alpha overlay, Light 6% / Dark 25%, applied to its background only. It adapts to the parent surface; pure black cannot be darkened further. Do not add a compensating track border.
 - The selected pill uses component-local `--segmented-selected-bg`, `--segmented-selected-border` and `--segmented-selected-shadow`. CINDY Light: #FDFDF8 / #F0F0EB; Dark: #353535 / #3B3B3B. Its narrowly scoped two-layer shadow is the owner-approved elevation exception; it does not authorize shadows on other controls. Other themes default to their elevated/border aliases and may override these roles without changing saved theme files. DTCG is the numeric source.
-- Preserve each scene's density, icons, counts, configured markers, width, wrapping and callbacks. Settings default to a 32px track / 28px option; compact Diff retains 24px / 18px visuals with a transparent minimum 24px target. Do not force all scenes to one fixed dimension.
+- Preserve each scene's density, icons, counts, configured markers, width and callbacks. Options stay on one line. Let the description wrap first; when the row cannot fit, move the whole control to the next line. At extreme widths the outer viewport scrolls horizontally while the track remains one line. Settings default to a 32px track / 28px option; compact Diff retains 24px / 18px visuals with a transparent minimum 24px target. Do not force all scenes to one fixed dimension.
 - A single measured plate moves with selection over `--motion-base`; hover/press use `--motion-fast`, and press scale is .98. Reduced motion disables movement/transitions. Resize and label changes realign the plate. Unselected text uses `--segmented-option-fg`, hover fill uses `--segmented-hover-bg`, selected/hover text uses `--text-primary`; all options keep weight 500. Disabled controls preserve selection at reduced opacity and cannot activate; focus remains independently visible.
 - Settings and filters use `radiogroup` / `radio` / `aria-checked`; panel navigation retains `tablist` / `tab` / `aria-selected`. Tab enters at the enabled selected option (or first enabled option); arrows wrap, skip disabled choices and respect RTL. Home/End select the first/last enabled option; Space/Enter retain native button activation. A missing preset remains unselected.
 - Fixed short alternatives with one shared setting can share a track (Telegram reply modes, import dimensions, authentication mode/flow). Dynamic account/object lists, wrapping API protocols, popup actions, multi-select and ordinary document/sidebar tabs remain separate controls.
@@ -397,6 +397,24 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 
 **Desktop Permission decisions, user-approved 2026-09-11 after actual-component comparison:** Allow once remains the visual main action using `perm-allow-*`; deny and session-scoped allow remain secondary. Retain neutral operation information: Desktop has no trusted risk-level field, and `autoReviewUnavailable` is not a risk conclusion. No invented danger variant or command-based risk inference. Keep the request in the composer area with title → description → scrollable operation → right-aligned wrapping actions, at the existing density. Use Button with a narrow local-alias adaptation; apply §5's existing pill-button and keycap treatments. Keep long scoped rules bounded by the column and available in the Tip. Labels, order, shortcuts, IME/editable-focus guards, submitting and failure recovery remain owned by the existing permission flow. This decision does not cover permission mode selectors, account/plugin authorization lifecycles or Mobile layout; Mobile is deferred to its own phase.
 
+### About: harness versions
+
+Each harness occupies one compact row. Pi shows the executable's actual version and a short
+check/update status in that row. Its pill trigger opens a menu containing upstream update,
+restore Cindy release, check again, and release notes; source versions never become permanently
+expanded rows. Upstream compatibility risk appears only in the install confirmation. Installation
+progress remains inside the row. Menus use the existing container and inner-row geometry, and
+all states use semantic colors in both Light and Dark.
+
+Claude Code and Codex use the same row, trigger and menu (`HarnessVersionMenuRow`), with only
+the Cindy-maintained version chain: update to the current channel's version (shown right-aligned,
+disabled unless strictly newer), check again, and the last successful check time. A later failed
+online check keeps that last version in the menu but disables Update: restart re-checks the
+manifest and cannot install from a stale result. There is no upstream source, restore or
+release-notes entry. Updating keeps the existing confirm → busy warning → restart flow; the
+download happens in the normal startup Splash, not in the row.
+
+
 ## 5. Layout Principles
 
 ### Spacing System
@@ -413,6 +431,8 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 - Reading-width content (settings forms, document previews) is centered with a comfortable max width; full-bleed content (chat stream, file tree) fills its region.
 
 ### Mobile iOS navigation chrome / iPhone Duo
+
+- Explicitly selecting Teammates in the mobile home or chat drawer opens the teammate list, even with one teammate or when Teammates is already active. The mode switch itself never enters a chat; picking a teammate opens it. Keep cold-start recovery of a verified remembered teammate separate from this explicit navigation. Teammate rows share the task list typography: 18pt semibold titles with 28pt line height, 15pt regular previews with 26pt line height, and 13pt metadata with 22pt line height.
 
 - Wide Home and task-sidebar presentations share one native list instance in `ResidentHomeListProvider`, outside route lifetimes. Route slots supply layout and callbacks; do not key the host by task/route or restore a cached offset over its live scroll position. Collapse/expand its bounds, keep native headers outside its touch area, and pause hidden row subscriptions. Narrow screens retain their route-local list.
 

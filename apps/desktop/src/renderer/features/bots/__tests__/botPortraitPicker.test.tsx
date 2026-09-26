@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BotAvatar } from '../BotAvatar';
 import { BOT_PORTRAIT_COUNT, BotPortraitPicker, galleryPortrait } from '../BotPortraitPicker';
 
 vi.mock('react-i18next', () => ({
@@ -89,7 +90,12 @@ describe('shared teammate portrait gallery', () => {
 
   it('lets the upload action supersede an earlier pending gallery selection', async () => {
     let complete!: () => void;
-    decode.mockImplementationOnce(() => new Promise<void>(resolve => { complete = resolve; }));
+    decode.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          complete = resolve;
+        }),
+    );
     const onChange = vi.fn();
     const onUpload = vi.fn();
     render(<BotPortraitPicker onChange={onChange} onUpload={onUpload} />);
@@ -117,4 +123,93 @@ describe('shared teammate portrait gallery', () => {
     await act(async () => complete());
     expect(onChange).not.toHaveBeenCalled();
   });
+});
+
+it.each(['cindy://avatar/preset/cindy', '🤖', '👩🏽‍💻'])(
+  'renders a current avatar fallback while prioritizing a new image draft: %s',
+  (avatar) => {
+    const fallback = <BotAvatar bot={{ name: 'Cindy', avatar }} />;
+    const view = render(<BotPortraitPicker fallback={fallback} onChange={vi.fn()} />);
+    const trigger = screen.getByRole('button', { name: 'bots.profile.changeAvatar' });
+    if (avatar.startsWith('cindy://'))
+      expect(trigger.querySelector('img')?.getAttribute('src')).toContain('cindy.png');
+    else expect(trigger.textContent).toContain(avatar);
+    view.rerender(
+      <BotPortraitPicker
+        value="data:image/jpeg;base64,/9j/2Q=="
+        fallback={fallback}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(trigger.querySelectorAll('img')).toHaveLength(1);
+    expect(trigger.querySelector('img')?.getAttribute('src')).toBe(
+      'data:image/jpeg;base64,/9j/2Q==',
+    );
+    expect(trigger.textContent).not.toContain(avatar);
+  },
+);
+
+it.each(['error', 'abort', 'throw', 'unmount'])(
+  'releases file preparation on %s without accepting a portrait',
+  async (outcome) => {
+    let reader: { onerror: () => void; onabort: () => void; onload: () => void; result: string };
+    vi.stubGlobal(
+      'FileReader',
+      class {
+        result = 'data:image/png;base64,cG5n';
+        onerror = () => {};
+        onabort = () => {};
+        onload = () => {};
+        readAsDataURL() {
+          reader = this;
+          if (outcome === 'throw') throw new Error('read failed');
+        }
+      },
+    );
+    const pending = vi.fn();
+    const onChange = vi.fn();
+    const view = render(<BotPortraitPicker onChange={onChange} onPreparingChange={pending} />);
+    fireEvent.change(document.querySelector('input[type="file"]')!, {
+      target: { files: [new File(['image'], 'avatar.png', { type: 'image/png' })] },
+    });
+    expect(pending).toHaveBeenNthCalledWith(1, true);
+    if (outcome === 'unmount') {
+      view.unmount();
+      await act(async () => reader!.onload());
+    } else if (outcome !== 'throw') {
+      await act(async () => (outcome === 'error' ? reader!.onerror() : reader!.onabort()));
+    }
+    expect(pending.mock.calls).toEqual([[true], [false]]);
+    expect(onChange).not.toHaveBeenCalled();
+  },
+);
+
+it('keeps the newer gallery operation pending when an older decode settles', async () => {
+  const decodes: Array<() => void> = [];
+  decode.mockImplementation(() => new Promise<void>((resolve) => decodes.push(resolve)));
+  const pending = vi.fn();
+  const onChange = vi.fn();
+  render(<BotPortraitPicker onChange={onChange} onPreparingChange={pending} />);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cindy' }));
+  fireEvent.click(screen.getByRole('button', { name: 'bots.guided.portrait-1' }));
+  await act(async () => decodes[0]());
+  expect(pending.mock.calls).toEqual([[true]]);
+  expect(onChange).not.toHaveBeenCalled();
+  await act(async () => decodes[1]());
+  expect(pending.mock.calls).toEqual([[true], [false]]);
+  expect(onChange).toHaveBeenCalledOnce();
+});
+
+it('releases preparation after a gallery decode failure', async () => {
+  decode.mockRejectedValueOnce(new Error('decode failed'));
+  const pending = vi.fn();
+  const onChange = vi.fn();
+  render(<BotPortraitPicker onChange={onChange} onPreparingChange={pending} />);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cindy' }));
+  expect(pending).toHaveBeenNthCalledWith(1, true);
+  await screen.findByRole('alert');
+  expect(pending.mock.calls).toEqual([[true], [false]]);
+  expect(onChange).not.toHaveBeenCalled();
 });

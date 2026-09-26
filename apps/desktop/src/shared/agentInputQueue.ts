@@ -227,6 +227,8 @@ export interface AgentInputQueuedMessage {
   /** Host-owned text-only input; retained by queue persistence and retry. */
   toolsDisabled?: boolean;
   clientId: string;
+  /** Opt-in: a cancelled delivery ID must never become a fresh enqueue on reconnect. */
+  durableDelivery?: true;
   text: string;
   /**
    * Host-owned receipt for the first acceptance boundary.  The controlled
@@ -297,6 +299,8 @@ export interface AgentInputQueuedMessage {
    * 见 device-link/invoke-context 的可信度说明。
    */
   fromMobileClient?: boolean;
+  /** Main-stamped interface language for this turn. Wire text is not trusted as prompt text. */
+  uiLanguage?: string;
   /** Main-owned provenance: this queue item entered through device-link input IPC. */
   fromDeviceLinkClient?: boolean;
   /**

@@ -51,7 +51,8 @@ export type DbTxName =
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
   | 'bots.deleteProfile'
-  | 'bots.assertNoSharedHistory'
+  | 'bots.prepareProfileDeletion'
+  | 'bots.persistSessionPermission'
   | 'im.rotateSession'
   | 'wechatActivateBindingEpoch'
   | 'wechatCommitPollBatch'
@@ -121,6 +122,11 @@ export interface RewindCommitArgs {
    * fork.session 的同名字段),否则后续回退/fork 会把这些锚点当异线程丢弃。
    */
   nativeForkAnchorSessionMap?: Array<[string, string]>;
+  /**
+   * 读历史时看到的 sessions.cleared_at。提交时必须仍相同，否则 /clear 竞态整单回滚。
+   * 省略或 null 表示当时会话未被清空。
+   */
+  expectedClearedAt?: number | null;
   now: number;
 }
 
@@ -1215,7 +1221,8 @@ export type DbTxArgsByName = {
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
   'bots.deleteProfile': BotsDeleteProfileArgs;
-  'bots.assertNoSharedHistory': { botId: string };
+  'bots.prepareProfileDeletion': { botId: string };
+  'bots.persistSessionPermission': { sessionId: string; mode: string };
   'im.rotateSession': ImRotateSessionArgs;
   wechatActivateBindingEpoch: WechatActivateBindingEpochArgs;
   wechatCommitPollBatch: WechatCommitPollBatchArgs;
@@ -1293,7 +1300,8 @@ export type DbTxResultByName = {
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
-  'bots.assertNoSharedHistory': undefined;
+  'bots.prepareProfileDeletion': undefined;
+  'bots.persistSessionPermission': { updated: boolean };
   'im.rotateSession': ImRotateSessionResult;
   wechatActivateBindingEpoch: WechatActivateBindingEpochResult;
   wechatCommitPollBatch: WechatCommitPollBatchResult;

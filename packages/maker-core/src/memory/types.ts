@@ -139,6 +139,7 @@ export type MemoryErrorCode =
   | 'description-too-long'
   | 'title-too-long'
   | 'description-has-newline'
+  | 'version-conflict'
   | 'already-exists'
   | 'not-found'
   | 'path-traversal'

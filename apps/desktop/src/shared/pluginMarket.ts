@@ -37,6 +37,11 @@ export interface PluginMarketItem {
   sourceType: PluginMarketItemSource;
   /** 来源市场名（自定义市场项必填；服务端项为 null）。 */
   sourceMarketName: string | null;
+  /**
+   * 新版本比已装版本权限变多，后台更新已暂停、等待用户确认。只在 Main 按真实包
+   * 判定过后出现；缺省表示未知或无需确认，不能据此推断可以静默更新。
+   */
+  updateRequiresConsent?: true;
 }
 /** 市场快照。服务不可用时 renderer 保留本地插件并只展示非阻断提示。 */
 export interface PluginMarketSnapshot {

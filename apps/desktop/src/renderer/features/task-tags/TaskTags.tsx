@@ -18,6 +18,7 @@ import {
 } from '@cindy/maker-shared';
 import type { Session } from '@/lib/ccAgent.types';
 import { isRemoteSessionWriteBlocked } from '@/features/cc-agent/lib/remoteSessionWriteGuard';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 const buttonBase = 'rounded-full px-3 py-1.5 text-sm disabled:opacity-40';
 const button = `${buttonBase} enabled:hover:bg-[var(--surface-hover)]`;
@@ -108,7 +109,7 @@ export function TaskTagMenuSection({ session, onMore }: { session: Session; onMo
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const blocked = isRemoteSessionWriteBlocked(session);
+  const blocked = isSharedTaskPeer(session.deviceLinkDeviceId ?? '') || isRemoteSessionWriteBlocked(session);
   useEffect(() => {
     selectionGeneration.current++;
     setSelected(session.tags ?? []);

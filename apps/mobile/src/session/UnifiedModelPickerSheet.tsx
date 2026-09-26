@@ -1,3 +1,4 @@
+import { mobileProviderAccountTitle } from './mobileModelRowPresentation';
 import { mobileCostMarks, quotaCountdown } from "./mobileModelRowPresentation";
 import { useMobileModelQuotas } from "./useMobileModelQuotas";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -302,15 +303,7 @@ export function UnifiedModelPickerSheet(
   const providerName = (id: string) => {
     const provider = p.providers.find((item) => item.id === id);
     if (!provider) return id;
-    const identity =
-      provider.openAiAccount?.identity?.trim() ||
-      provider.subscriptionAccount?.identity?.trim();
-    return [
-      provider.name,
-      identity && !provider.name.includes(identity) ? identity : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    return mobileProviderAccountTitle(provider);
   };
   const matches = (row: UnifiedMobileRow) =>
     !query.trim() ||

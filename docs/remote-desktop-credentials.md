@@ -138,6 +138,34 @@ Submission still requires the same signed process, console account, window and
 secure field, plus an enabled same-parent submit button; the button is revalidated
 immediately before one AXPress. Recovery dialogs, user-selection and unknown password fields fail closed.
 
+Multiple displays may expose empty `login` windows alongside the interactive
+surface. The Mac helper inspects all windows within the existing shared time/node
+budget and selects exactly one recognized password-field or own-account
+presentation surface. Empty login windows are allowed; unknown siblings and
+multiple actionable surfaces fail closed. Revalidation follows the original
+window and secure field even if the window list is reordered. See
+`MacScreenUnlock.swift` and `MacUnlockProfileTests.swift` for selection and regressions.
+Abort cleanup revalidates only the original window's subtree, retaining the
+console account, signed process and exact secure-field identity checks. A sibling
+becoming actionable or unreadable still prevents submission, but cannot by itself
+prevent clearing the password already written to the original field. Cleanup never
+falls back to a replacement window. `MacUnlockWindowCollectorTests.swift` covers
+these sibling transitions alongside traversal budgets and object mapping.
+On a two-display Mac, the old preparation probe failed with
+`CREDENTIAL_UNLOCK_UNAVAILABLE` while the updated probe returned `fieldReady: true`
+on the same locked session. This checks field preparation only, not password
+submission or successful system unlock.
+
+Mobile fingerprints exclude the explicit macOS-only source files and desktop
+entry-point directories listed in `apps/mobile/fingerprint.config.cjs`. Shared
+Swift, mobile forms, resources and the podspec remain fingerprint inputs, including
+new files unless explicitly excluded. Regression tests verify both directions.
+Adopting this narrower boundary changes existing fingerprints once and must be
+coordinated with a planned native mobile release; it does not make legacy runtime
+hashes interchangeable. Subsequent changes confined to the excluded Mac sources
+do not require another mobile runtime. Existing phones can use the updated Mac
+helper over the unchanged protocol without installing a new phone build.
+
 The `cindy-remote-unlock-inspect --prepare` diagnostic exercises wake and field
 preparation without accepting any password or submitting login. On the test Mac,
 this probe reaches `fieldReady: true`; a separately cleared, never-submitted test

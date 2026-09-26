@@ -43,7 +43,30 @@ describe('companion profile finite resource primitives', () => {
   it('reads only through the generic get channel and negotiates form support', async () => {
     const invoke = vi.fn(async () => raw());
     await loadCompanionProfile(invoke as never, 'host-a', ref, 'en');
-    expect(invoke).toHaveBeenCalledWith('host-a', 'maker:remote-resources:get', [{ client: { protocolVersion: 1, primitives: ['status', 'session-link', 'markdown', 'form', 'action', 'list'], locale: 'en' }, ref }]);
+    expect(invoke).toHaveBeenCalledWith('host-a', 'maker:remote-resources:get', [{ client: { protocolVersion: 1, primitives: ['status', 'session-link', 'markdown', 'form', 'action', 'list', 'search'], locale: 'en' }, ref }]);
+  });
+  it('sends a search query only when one is typed', async () => {
+    const invoke = vi.fn(async () => raw());
+    await loadCompanionProfile(invoke as never, 'host-a', ref, 'en', { query: '  ' });
+    expect((invoke.mock.calls[0] as unknown[])[2]).toEqual([expect.not.objectContaining({ query: expect.anything() })]);
+    await loadCompanionProfile(invoke as never, 'host-a', ref, 'en', { query: ' 咖啡 ' });
+    expect((invoke.mock.calls[1] as unknown[])[2]).toEqual([expect.objectContaining({ query: '咖啡' })]);
+  });
+  it('keeps additive list metadata and the search block while ignoring malformed extras', () => {
+    const list = { ...raw(), actions: [], blocks: [
+      { id: 'search', primitive: 'search', fallbackMarkdown: '', data: { query: '咖啡', placeholder: { fallback: 'Search memories' } } },
+      { id: 'memory-user', primitive: 'list', title: 'About you', fallbackMarkdown: '- Coffee', data: { count: 3, entries: [
+        { id: 'user_coffee', title: 'Coffee', resourceId: 'settings:bot-a/memory/user_coffee', subtitle: 'Black, no sugar', timestamp: 1_000 },
+        { id: 'user_tea', title: 'Tea', resourceId: 'settings:bot-a/memory/user_tea', subtitle: 42, timestamp: 'yesterday' },
+      ] } },
+    ] };
+    const [search, group] = parseCompanionProfileData(list, ref).panels;
+    expect(search).toMatchObject({ primitive: 'search', query: '咖啡', placeholder: { fallback: 'Search memories' } });
+    expect(group).toMatchObject({ primitive: 'list', count: 3, title: 'About you' });
+    expect(group.entries).toEqual([
+      { id: 'user_coffee', title: 'Coffee', resourceId: 'settings:bot-a/memory/user_coffee', subtitle: 'Black, no sugar', timestamp: 1_000 },
+      { id: 'user_tea', title: 'Tea', resourceId: 'settings:bot-a/memory/user_tea' },
+    ]);
   });
 });
 it('preserves a host-disabled action rather than silently enabling it', () => {

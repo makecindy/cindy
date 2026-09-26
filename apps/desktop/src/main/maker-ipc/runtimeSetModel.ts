@@ -105,10 +105,10 @@ export interface ApplyRuntimeSetModelChangeInput {
    */
   codexAuthInjection?: CodexProxyAuthInjection | null;
   /**
-   * The host has proved that this local Codex selection crosses the explicit XD/OpenAI
-   * credential boundary and has a persisted native thread to rebuild.
+   * The host found a native writer in another local process. Closing the business
+   * handle may retain that writer, so verify release or relink before publishing.
    */
-  requiresCodexThreadRelink?: boolean;
+  requiresCodexThreadRelink?: boolean | (() => Promise<boolean>);
   /** Closes over the captured Profile DB and atomically commits thread + full target route. */
   relinkCodexThread?: () => Promise<void>;
   logger?: RuntimeSetModelLogger;
@@ -197,10 +197,8 @@ export async function applyRuntimeSetModelChange(
         codexAuthInjection: input.codexAuthInjection,
       })
     : false;
-  const requiresCodexThreadRelink = input.requiresCodexThreadRelink === true;
-  if (requiresCodexThreadRelink && !input.relinkCodexThread) {
-    throw new Error(`Codex provider thread relink is required for session ${sessionId}`);
-  }
+  let requiresCodexThreadRelink = typeof input.requiresCodexThreadRelink === 'function'
+    ? await input.requiresCodexThreadRelink() : input.requiresCodexThreadRelink === true;
   const modelSwitchRequiresRebuild =
     sess &&
     input.forceSessionRebuild !== true &&
@@ -213,6 +211,12 @@ export async function applyRuntimeSetModelChange(
     modelSwitchRequiresRebuild ||
     credentialModeRequiresRebuild
   );
+  if (shouldCloseSession && typeof input.requiresCodexThreadRelink === 'function') {
+    requiresCodexThreadRelink = await input.requiresCodexThreadRelink();
+  }
+  if (requiresCodexThreadRelink && !input.relinkCodexThread) {
+    throw new Error(`Codex provider thread relink is required for session ${sessionId}`);
+  }
   let selfBusyMemo: boolean | undefined;
   const isSelfBusy = (): boolean => {
     if (selfBusyMemo !== undefined) return selfBusyMemo;
@@ -344,16 +348,20 @@ export async function applyRuntimeSetModelChange(
       }
       throw err;
     }
-    if (requiresCodexThreadRelink) {
-      try {
-        await input.relinkCodexThread?.();
-      } catch (error) {
-        // A failed history transfer must not discard an earlier accepted pending route.
-        if (clearedPending && input.registerPendingCredentialSwitch) {
-          await input.registerPendingCredentialSwitch(sessionId, clearedPending);
-        }
-        throw error;
+    let relinkAfterClose = false;
+    try {
+      relinkAfterClose = requiresCodexThreadRelink ||
+        (typeof input.requiresCodexThreadRelink === 'function' && await input.requiresCodexThreadRelink());
+      if (relinkAfterClose) {
+        if (!input.relinkCodexThread) throw new Error(`Codex provider thread relink is required for session ${sessionId}`);
+        await input.relinkCodexThread();
       }
+    } catch (error) {
+      // A failed history transfer must not discard an earlier accepted pending route.
+      if (clearedPending && input.registerPendingCredentialSwitch) {
+        await input.registerPendingCredentialSwitch(sessionId, clearedPending);
+      }
+      throw error;
     }
     if (providerId !== undefined) setSessionProvider(sessionId, nextProviderId);
     // close + route 都落定后再唤醒队列:排队消息按新凭证形态 lazy-create 派发。
@@ -374,7 +382,7 @@ export async function applyRuntimeSetModelChange(
       toModel: model,
     });
     // 成功走到这里就是已退役旧 live runtime(或本就不在活动列表):目标 route 交给下一次发送懒创建。
-    return requiresCodexThreadRelink
+    return relinkAfterClose && input.relinkCodexThread
       ? { status: 'applied', persistedRoute: true, runtimeRetired: true }
       : { status: 'applied', runtimeRetired: true };
   }

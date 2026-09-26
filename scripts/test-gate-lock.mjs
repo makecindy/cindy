@@ -45,10 +45,11 @@ export function isTestGateCiEnvironment(env = process.env) {
 export function shouldUseTestGateLock({
 	all = false,
 	tier = "unit",
+	lock = false,
 	noLock = false,
 	env = process.env,
 } = {}) {
-	if (noLock || isTestGateCiEnvironment(env)) return false;
+	if (!lock || noLock || isTestGateCiEnvironment(env)) return false;
 	return all || HEAVY_TEST_TIERS.has(tier);
 }
 
@@ -306,7 +307,7 @@ export async function acquireTestGateLock({
 		}
 		if (now() - lastReportAt >= waitReportIntervalMs) {
 			output(
-				`WAIT test gate: ${describeOwner(decision.owner)}; waited ${formatWaitDuration(waitedMs)} (timeout ${formatWaitDuration(timeoutMs)}). Do not kill and restart; use --no-lock only when intentional overlap is safe.`,
+				`WAIT test gate (--lock): ${describeOwner(decision.owner)}; waited ${formatWaitDuration(waitedMs)} (timeout ${formatWaitDuration(timeoutMs)}). Run without --lock to use independent test processes.`,
 			);
 			lastReportAt = now();
 		}

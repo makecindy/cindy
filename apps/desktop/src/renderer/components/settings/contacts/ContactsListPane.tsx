@@ -118,18 +118,16 @@ export function ContactsListPane(props: Props) {
           >
             {newKind === 'person' ? <User size={14} /> : <Building2 size={14} />}
           </button>
-          <button
+          <Button
+            variant="cta"
+            size="md"
+            compact
             type="button"
             onClick={submitCreate}
             disabled={!newName.trim()}
-            className={cn(
-              'h-8 shrink-0 rounded-lg px-2.5 text-13 font-medium transition-colors',
-              'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-              'disabled:cursor-not-allowed disabled:opacity-40',
-            )}
           >
             {t('settings.contacts.list.newConfirm')}
-          </button>
+          </Button>
         </div>
       )}
 

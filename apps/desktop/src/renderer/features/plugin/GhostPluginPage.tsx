@@ -29,6 +29,7 @@ import {
   ChevronRight,
   MessageCircle,
   Plus,
+  ShieldAlert,
   SlidersHorizontal,
   Sparkles,
   Store,
@@ -65,7 +66,6 @@ import {
 import { resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { installGhostFromFile, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
-import { Spinner } from '@/components/ui/spinner';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
@@ -400,6 +400,8 @@ export function GhostPluginPage({
   const { confirm } = useConfirmDialog();
   const showPluginMarketActionError = useCallback(
     async (error: unknown) => {
+      // 用户在安装确认框里取消不是失败，不弹错误提示。
+      if (extractIpcError(error)?.code === 'MUTATION_CANCELLED') return;
       toast.error(t(pluginMarketErrorKey(error)));
     },
     [t],
@@ -575,6 +577,11 @@ export function GhostPluginPage({
   }, [clearPluginCatalogScrollRestore, refreshMarket, mode, dataOwnerId]);
   const refreshMarketOnForeground = useCallback(() => refreshMarket(true), [refreshMarket]);
   usePluginMarketForegroundRefresh(refreshMarketOnForeground, lastMarketRefreshAtRef);
+  useEffect(() => {
+    return window.electronAPI.pluginMarket.onUpdateConsentHoldsChanged(() => {
+      void refreshMarket(true).catch(() => undefined);
+    });
+  }, [refreshMarket]);
   useEffect(() => {
     if (installedGhostMarketKeyRef.current === installedGhostMarketKey) return;
     installedGhostMarketKeyRef.current = installedGhostMarketKey;
@@ -1747,6 +1754,7 @@ export function GhostPluginPage({
                         item={item}
                         sourceLabel={t(`settings.ghosts.page.origin.${item.origin}`)}
                         updateVersion={item.marketUpdate?.version}
+                        updateNeedsConsent={item.marketUpdate?.updateRequiresConsent === true}
                         updateBusy={
                           (item.marketUpdate !== null && marketBusyId !== null) || batchRunning
                         }
@@ -1776,6 +1784,7 @@ export function GhostPluginPage({
                             item={item}
                             sourceLabel={t(`settings.ghosts.page.origin.${item.origin}`)}
                             updateVersion={item.marketUpdate?.version}
+                            updateNeedsConsent={item.marketUpdate?.updateRequiresConsent === true}
                             updateBusy={
                               (item.marketUpdate !== null && marketBusyId !== null) || batchRunning
                             }
@@ -2141,12 +2150,11 @@ export function MarketPluginCard({
             aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
             className="relative z-[1] min-w-[72px] shrink-0"
           >
-            {!pending &&
-              t(
-                item.installState === 'conflict'
-                  ? 'settings.ghosts.market.replace'
-                  : 'settings.ghosts.market.install',
-              )}
+            {t(
+              item.installState === 'conflict'
+                ? 'settings.ghosts.market.replace'
+                : 'settings.ghosts.market.install',
+            )}
           </Button>
         ) : null}
       </div>
@@ -2247,6 +2255,7 @@ export function GhostPluginCard({
   item,
   sourceLabel,
   updateVersion,
+  updateNeedsConsent = false,
   updateBusy = false,
   updatePending = false,
   onUpdate,
@@ -2259,6 +2268,8 @@ export function GhostPluginCard({
   sourceLabel?: string;
   /** 市场存在新版本时的目标版本;与 onUpdate 同时提供。 */
   updateVersion?: string;
+  /** 新版本权限变多、后台更新已暂停等用户确认(Main 按真实包判定)。 */
+  updateNeedsConsent?: boolean;
   updateBusy?: boolean;
   /** 本卡正在更新:更新胶囊换成 Spinner。 */
   updatePending?: boolean;
@@ -2355,6 +2366,12 @@ export function GhostPluginCard({
               <Check size={11} className="inline" aria-hidden="true" />
               {t('settings.ghosts.page.upToDate')}
             </span>
+          ) : updateNeedsConsent ? (
+            <span className="inline-flex items-center gap-1 text-[var(--text-secondary)]">
+              {' · '}
+              <ShieldAlert size={11} className="inline" aria-hidden="true" />
+              {t('settings.ghosts.installConsent.updateNeedsConsent')}
+            </span>
           ) : null}
           {!enabled ? ` · ${t('settings.ghosts.disabledTag')}` : ''}
         </span>
@@ -2378,6 +2395,7 @@ export function GhostPluginCard({
               variant="secondary"
               size="sm"
               compact
+              loading={updatePending}
               type="button"
               onClick={stopAnd(onUpdate)}
               disabled={updateBusy}
@@ -2386,21 +2404,10 @@ export function GhostPluginCard({
                 name: item.name,
                 version: updateVersion,
               })}
-              className={cn(
-                'inline-flex h-7 min-w-[72px] items-center justify-center gap-1 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 text-11 font-medium text-[var(--text-primary)]',
-                'transition-colors duration-150 hover:bg-[var(--surface-hover-soft)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                'disabled:cursor-wait disabled:opacity-40',
-              )}
+              className="min-w-[72px]"
             >
-              {updatePending ? (
-                <Spinner size={12} />
-              ) : (
-                <>
-                  <ArrowUp size={11} className="text-[var(--text-secondary)]" aria-hidden="true" />
-                  {t('settings.ghosts.page.updateTo', { version: updateVersion })}
-                </>
-              )}
+              <ArrowUp size={11} className="text-[var(--text-secondary)]" aria-hidden="true" />
+              {t('settings.ghosts.page.updateTo', { version: updateVersion })}
             </Button>
           ) : null}
           <button

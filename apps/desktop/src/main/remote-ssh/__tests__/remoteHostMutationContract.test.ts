@@ -14,6 +14,12 @@ function handlerBody(channel: string, nextChannel: string): string {
 }
 
 describe('remote SSH managed-host mutation contract', () => {
+  it('validates the app renderer before remote Codex discovery can start a daemon', () => {
+    const body = handlerBody('LIST_CODEX_MODELS', 'CHECK_CODEX_AUTH');
+    const guard = body.indexOf('assertTrustedAppRendererEvent(event);');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(body.indexOf('readSshCodexModelList(args, listSshCodexProviders)'));
+  });
   it.each([
     ['LIST', 'RELOAD_CONFIG'],
     ['RELOAD_CONFIG', 'ADD'],

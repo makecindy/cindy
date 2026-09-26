@@ -1067,7 +1067,11 @@ export function WorkLouderCodexSettings({
                   </span>
                 )}
               {guardState?.status === 'recovery-required' ? (
-                <SettingsSecondaryButton disabled={guardSaving} onClick={() => void recoverGuard()}>
+                <SettingsSecondaryButton
+                  loading={guardSaving}
+                  disabled={guardSaving}
+                  onClick={() => void recoverGuard()}
+                >
                   {t('settings.shortcuts.workLouderCodex.codexGuard.recover')}
                 </SettingsSecondaryButton>
               ) : (

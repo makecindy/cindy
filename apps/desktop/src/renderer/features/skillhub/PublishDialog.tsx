@@ -23,7 +23,6 @@ import * as Select from '@radix-ui/react-select';
 import { X, CloudUpload, Globe, Users, Lock, RefreshCw, CircleAlert, Check, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
@@ -1274,10 +1273,7 @@ export function PublishDialog({
                       {t('skillhub.publishDialog.cancelReview')}
                     </WhitePillButton>
                   )}
-                  <BlackPillButton disabled>
-                    <span className="inline-flex -translate-y-px">
-                      <Spinner size={14} strokeWidth={1.75} />
-                    </span>
+                  <BlackPillButton loading={true} disabled>
                     {workingLabel}
                   </BlackPillButton>
                 </>

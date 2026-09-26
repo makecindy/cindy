@@ -1,5 +1,7 @@
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 
+import { base64DecodedByteLength, parseDataUrl } from './dataUrl.js';
+
 const MAX_LOG_STRING_CHARS = 20_000;
 const MAX_LOG_DEPTH = 24;
 const SENSITIVE_PARAM_NAME =
@@ -12,18 +14,13 @@ function boundedText(value: string): string {
 }
 
 function dataUrlSummary(value: string): string | null {
-  const match = /^data:([^;,]+)(;base64)?,([\s\S]*)$/i.exec(value);
-  if (!match) return null;
-  const mimeType = match[1].toLowerCase();
-  const encoded = match[3].replace(/\s/g, '');
-  const bytes = match[2]
-    ? Math.max(
-        0,
-        Math.floor((encoded.length * 3) / 4) -
-          (encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0),
-      )
-    : Buffer.byteLength(encoded, 'utf8');
-  return `[data URL mime=${mimeType} bytes=${bytes}]`;
+  // 结构性解析，不对数百万字符的载荷跑正则（#5081）。
+  const parsed = parseDataUrl(value);
+  if (!parsed) return null;
+  const bytes = parsed.base64
+    ? base64DecodedByteLength(parsed.payload)
+    : Buffer.byteLength(parsed.payload, 'utf8');
+  return `[data URL mime=${parsed.mimeType} bytes=${bytes}]`;
 }
 
 function urlForLog(rawUrl: string, stripFragment: boolean): string {
@@ -103,4 +100,23 @@ export function mediaErrorForLog(error: unknown): string {
     ? error.message
     : typeof error === 'string' ? error : `Non-Error thrown (${typeof error})`;
   return redactSensitiveText(message.replace(/\bhttps?:\/\/[^\s"'<>]+/gi, '[REDACTED_URL]')).slice(0, 1_000);
+}
+
+const MAX_STACK_FRAMES = 6;
+const MAX_STACK_CHARS = 1_500;
+
+/**
+ * 有界的调用栈摘要：只保留错误类型与前几帧位置，脱敏 URL/凭证，不带消息载荷。
+ * 供本地组装阶段这类「message 一句话定位不了」的失败（#5081 的 RangeError）留下线索。
+ */
+export function mediaErrorStackForLog(error: unknown): string | null {
+  if (!(error instanceof Error) || typeof error.stack !== 'string') return null;
+  const frames = error.stack
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('at '))
+    .slice(0, MAX_STACK_FRAMES)
+    .map((line) => redactSensitiveText(line.replace(/\bhttps?:\/\/[^\s"'<>]+/gi, '[REDACTED_URL]')));
+  if (frames.length === 0) return null;
+  return `${error.name}: ${frames.join(' | ')}`.slice(0, MAX_STACK_CHARS);
 }

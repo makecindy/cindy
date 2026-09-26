@@ -43,6 +43,9 @@ export type IpcErrorCode =
   | 'REMOTE_PROVIDER_UPDATING'
   | 'REMOTE_PROVIDER_UNSUPPORTED'
   | 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
+  // 工作区 .claude 设置会改写 Claude 订阅会话的上游 / 鉴权 / TLS 信任(workspace-settings-guard),
+  // 拒绝启动订阅会话。
+  | 'CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE'
   // 远端 Pi 会话启动时 Cindy AI gateway endpoint 未就绪(登录后自动下发):
   // renderer 走 logic.errors.remoteError.REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE。
   | 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE'
@@ -310,6 +313,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'REMOTE_PROVIDER_UPDATING',
   'REMOTE_PROVIDER_UNSUPPORTED',
   'REMOTE_NATIVE_OAUTH_UNAVAILABLE',
+  'CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE',
   'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE',
   'REMOTE_LOCAL_ONLY_PROVIDER',
   'LOCAL_OLLAMA_NOT_READY',

@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import type { DbClient } from '../../localDb/client/DbClient.js';
 
 import {
   decideCodexProviderThreadRelink,
   isXdOpenAiCodexProviderTransition,
   relinkCodexProviderThread,
+  commitCodexThreadTransfer,
 } from '../codexProviderThreadRelink.js';
 
 const source = {
@@ -43,7 +47,47 @@ describe('isXdOpenAiCodexProviderTransition', () => {
   });
 });
 
+describe('Codex writer transfer SQLite commit', () => {
+  it.each(['unchanged', 'sdk', 'model', 'provider', 'archived', 'revision'])('preserves task identity and rejects stale %s snapshots', async (change) => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, agent_kind TEXT, remote_host_id TEXT, sdk_session_id TEXT, model TEXT, provider_id TEXT, effort TEXT, fast_mode INTEGER, updated_at INTEGER);
+      INSERT INTO sessions VALUES ('S', 'active', 'codex', NULL, 'old', 'model', 'openai', 'high', 0, 1);
+      INSERT INTO sessions VALUES ('U', 'active', 'codex', NULL, 'unrelated', 'model', 'openai', 'high', 0, 1);
+      CREATE TABLE messages (session_id TEXT, content TEXT);
+      INSERT INTO messages VALUES ('S', 'retained history');`);
+    const db = { drizzle: drizzle(sqlite) } as unknown as Pick<DbClient, 'drizzle'>;
+    const snapshot = { id: 'S', sdkSessionId: 'old', model: 'model', providerId: 'openai', effort: 'high' as const, fastMode: false, updatedAt: 1 };
+    try {
+      const updates: Record<string, string> = {
+        sdk: "sdk_session_id = 'newer'", model: "model = 'newer'", provider: "provider_id = 'newer'",
+        archived: "status = 'archived'", revision: 'updated_at = 2',
+      };
+      if (updates[change]) sqlite.exec(`UPDATE sessions SET ${updates[change]} WHERE id = 'S'`);
+      const before = sqlite.prepare('SELECT * FROM sessions ORDER BY id').all();
+      expect(await commitCodexThreadTransfer(db, snapshot, { sdkSessionId: 'child', model: 'target', providerId: 'cprov-fixture', fastMode: true })).toBe(change === 'unchanged');
+      const after = sqlite.prepare('SELECT * FROM sessions ORDER BY id').all();
+      expect(after[1]).toEqual(before[1]);
+      if (change !== 'unchanged') expect(after).toEqual(before);
+      else expect(after[0]).toMatchObject({ id: 'S', sdk_session_id: 'child', model: 'target', provider_id: 'cprov-fixture', effort: 'high', fast_mode: 1 });
+      expect(sqlite.prepare('SELECT * FROM messages').all()).toEqual([{ session_id: 'S', content: 'retained history' }]);
+    } finally { sqlite.close(); }
+  });
+});
+
 describe('relinkCodexProviderThread', () => {
+  it('keeps the native thread when closing the source has already released its writer', async () => {
+    const fork = vi.fn();
+    const commit = vi.fn(async () => true);
+    const result = await relinkCodexProviderThread({
+      readSource: async () => source,
+      needsFork: async () => false,
+      fork, commit,
+    }, { sessionId: 'released', target });
+    expect(fork).not.toHaveBeenCalled();
+    expect(result?.newSdkSessionId).toBe(source.sdkSessionId);
+    expect(commit).toHaveBeenCalledWith(expect.objectContaining({ newSdkSessionId: source.sdkSessionId, target }));
+  });
+
   it.each([
     {
       name: 'implicit XD to OpenAI',

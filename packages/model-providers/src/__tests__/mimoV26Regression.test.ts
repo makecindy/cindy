@@ -30,6 +30,7 @@ const IMAGE_MODELS = new Set(["mimo-v2.6-pro", "mimo-v2.6-flash"]);
 
 /** 裸 model id → Registry 公共条目(alias 唯一匹配)。 */
 function baseModelFor(bareId: string) {
+  if (!registry.ok) throw new Error(registry.error);
   const base = findBaseModel(registry.value, bareId);
   expect(base, `Registry 缺少 MiMo 公共条目: ${bareId}`).toBeDefined();
   return base!;
@@ -75,6 +76,7 @@ describe.each(MIMO_PRESET_IDS)("MiMo 预设连接投影: %s", (presetId) => {
         expect(model.id.startsWith("mimo-v2.6"), model.id).toBe(true);
       for (const model of models) {
         if (!model.id.startsWith("mimo-v2.6")) continue;
+        if (!registry.ok) throw new Error(registry.error);
         const resolved = resolveModelMetadata(
           registry.value,
           presetId,

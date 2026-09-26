@@ -1,3 +1,7 @@
+import {
+  isInstalledByokProvider,
+  readByokCredential,
+} from '../model-access/byokCredentials.js';
 import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -78,6 +82,7 @@ function secretDir(): string {
 }
 
 const DYNAMIC_SECRET_PREFIXES = [
+  'byok_cache_',
   CUSTOM_MCP_SECRET_PREFIX,
   CUSTOM_PROVIDER_HEADER_SECRET_PREFIX,
   'provider_key_',
@@ -392,6 +397,9 @@ export function getProviderSecretStore(): ProviderSecretStore {
  * 与 renderer 经通用 safe-storage IPC 写入的 .enc 文件字节级互通。
  */
 export function readCustomProviderKey(providerId: string, agent: string): string | null {
+  const byok = readByokCredential(providerId, agent);
+  if (byok) return byok;
+  if (isInstalledByokProvider(providerId)) return null;
   const storageProviderId = storedCustomProviderId(providerId);
   try {
     return electronSecretIo.read(customProviderSecretStorageKey(storageProviderId, agent));
@@ -901,5 +909,17 @@ export const genericOAuthSecretIo = {
       );
       return false;
     }
+  },
+};
+
+/** Main-only BYOK snapshot storage; key names are fixed SHA-256 identities. */
+export const byokSnapshotSecretIo = {
+  read(key: string): string | null {
+    if (!/^byok_cache_[a-f0-9]{64}$/.test(key)) return null;
+    return electronSecretIo.read(key);
+  },
+  write(key: string, value: string): boolean {
+    if (!/^byok_cache_[a-f0-9]{64}$/.test(key)) return false;
+    return electronSecretIo.write(key, value);
   },
 };

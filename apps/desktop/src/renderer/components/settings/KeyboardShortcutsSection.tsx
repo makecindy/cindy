@@ -93,7 +93,7 @@ function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
         <Package size={18} aria-hidden="true" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate text-13 font-medium text-[var(--text-primary)]">
+        <span id="settings-search-settings-shortcuts-accessories-title" className="truncate text-13 font-medium text-[var(--text-primary)]">
           {t('settings.shortcuts.accessories.title')}
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">

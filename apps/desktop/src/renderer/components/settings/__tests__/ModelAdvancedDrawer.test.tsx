@@ -596,3 +596,15 @@ it('limits context and effort reads, writes and resets to the chat runtime', () 
   expect(mocks.setLimit).toHaveBeenCalledWith(128_000);
   expect(mocks.target).toHaveBeenLastCalledWith(expect.objectContaining({ agent: 'codex', relatedTargets: [] }));
 });
+it('keeps enterprise reference prices read-only in the model drawer', () => {
+  render(
+    drawer(model, model.defaultEffort, model.efforts, {
+      ...provider,
+      id: 'byok-example',
+      source: 'organization',
+    }),
+  );
+  expect(
+    screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' }),
+  ).toBeNull();
+});

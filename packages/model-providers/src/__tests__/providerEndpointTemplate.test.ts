@@ -134,3 +134,23 @@ describe('Vertex official endpoint family', () => {
     }
   });
 });
+
+describe('Sub2API self-hosted setup', () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'sub2api')!;
+  it.each([
+    ['https://relay.example', 'https://relay.example/v1'],
+    ['https://relay.example/proxy/v1/', 'https://relay.example/proxy/v1'],
+    ['http://localhost:8080', 'http://localhost:8080/v1'],
+    ['https://relay.example/backend-api/codex', 'https://relay.example/backend-api/codex'],
+  ])('binds %s without sending discovery to the template host', (endpoint, expected) => {
+    for (const runtime of Object.values(preset.runtimes)) {
+      const bound = bindProviderPresetRuntime(runtime!, endpoint);
+      expect(bound.baseUrl).toBe(expected);
+      expect(bound.modelsUrl).toBe(`${expected}/models?client_version=0.147.0`);
+      expect(bound.models).toEqual([]);
+    }
+  });
+  it.each(['https://{endpoint}/v1', 'https://user:secret@relay.example/v1', 'file:///tmp/models', 'https://relay.example/v1?key=secret'])('rejects unsafe or unresolved endpoint %s', endpoint => {
+    expect(providerEndpointBindings(preset.runtimes.codex!.baseUrl, endpoint)).toBeNull();
+  });
+});

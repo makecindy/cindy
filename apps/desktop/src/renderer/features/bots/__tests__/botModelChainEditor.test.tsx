@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [] }) }));
+
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -291,6 +293,62 @@ describe('BotModelChainEditor', () => {
     expect(modelSelectorProps.mock.calls[0]?.[0].unifiedSelectionPolicy).toBeUndefined();
   });
 
+  it('keeps remote routes editable when the roster is unknown, then applies the recovered roster', () => {
+    // useAvailableAgents retains this state after a rejected tunnel request.
+    roster.availableVendors = new Set();
+    roster.loaded = false;
+    const onChange = vi.fn();
+    const props = { deviceId: 'remote-host', value: [primary], onChange };
+    const view = render(<BotModelChainEditor {...props} hiddenVendors={['pi']} />);
+    expect(modelSelectorProps.mock.lastCall?.[0]).toMatchObject({
+      deviceId: 'remote-host', disabled: false, unifiedAgents: ['codex', 'claude-code'],
+    });
+    fireEvent.click(screen.getByText('set-high-effort'));
+    expect(onChange).toHaveBeenLastCalledWith([{ ...primary, effort: 'high' }]);
+    fireEvent.click(screen.getByText('enable-fast-mode'));
+    expect(onChange).toHaveBeenLastCalledWith([{ ...primary, fastMode: true }]);
+    fireEvent.click(screen.getByText('choose-official-claude-model'));
+    expect(onChange).toHaveBeenLastCalledWith([expect.objectContaining({ harness: 'claude', providerId: 'anthropic' })]);
+
+    const fallbacks = expand(view.container);
+    fireEvent.click(fallbacks.getByText('bots.modelChain.add'));
+    onChange.mockClear();
+    fireEvent.click(fallbacks.getByText('choose-official-codex-model'));
+    expect(onChange).toHaveBeenCalledWith([primary, expect.objectContaining({ harness: 'codex', providerId: 'openai' })]);
+
+    roster.loaded = true;
+    roster.availableVendors = new Set(['codex']);
+    onChange.mockClear();
+    view.rerender(<BotModelChainEditor {...props} hiddenVendors={['pi']} />);
+    expect(modelSelectorProps.mock.lastCall?.[0].unifiedAgents).toEqual(['codex']);
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('choose-official-claude-model'));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicitly empty remote roster authoritative', () => {
+    roster.availableVendors = new Set();
+    const onChange = vi.fn();
+    const view = render(<BotModelChainEditor deviceId="remote-host" value={[]} onChange={onChange} />);
+    expect(modelSelectorProps.mock.lastCall?.[0].unifiedAgents).toEqual([]);
+    expect((expand(view.container).getByText('bots.modelChain.add') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText('choose-official-codex-model'));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('honors disabled remote settings even with an unknown roster', () => {
+    roster.availableVendors = new Set();
+    roster.loaded = false;
+    const onChange = vi.fn();
+    const view = render(<BotModelChainEditor deviceId="remote-host" value={[primary]} onChange={onChange} disabled />);
+    expect(modelSelectorProps.mock.lastCall?.[0].disabled).toBe(true);
+    fireEvent.click(screen.getByText('choose-official-codex-model'));
+    fireEvent.click(screen.getByText('set-high-effort'));
+    fireEvent.click(screen.getByText('enable-fast-mode'));
+    fireEvent.click(expand(view.container).getByText('bots.modelChain.add'));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('atomically stores the official harness, provider, model, effort, and fast mode', () => {
     const onChange = vi.fn();
     render(
@@ -364,4 +422,16 @@ it('allows explicitly choosing a backup when no valid default is available', () 
   expect(change).not.toHaveBeenCalled();
   fireEvent.click(within(details).getByRole('button', { name: 'choose-official-codex-model' }));
   expect(change).toHaveBeenLastCalledWith([primary, { harness: 'codex', model: 'gpt-5.6-sol', providerId: 'openai', effort: 'medium', fastMode: true }]);
+});
+
+it('uses the selected device catalog without SSH subscription exclusions or local default fallbacks', () => {
+  const change = vi.fn();
+  const view = render(<BotModelChainEditor deviceId="remote-host" value={[]} onChange={change} />);
+  expect(modelSelectorProps.mock.lastCall?.[0]).toMatchObject({ deviceId: 'remote-host', excludeSubscriptionDirect: false, excludeChatBridgedCodex: false });
+  const details = view.container.querySelector('details')!;
+  details.open = true; fireEvent(details, new Event('toggle'));
+  fireEvent.click(screen.getByText('bots.modelChain.add'));
+  expect(change).not.toHaveBeenCalled();
+  fireEvent.click(within(details).getByRole('button', { name: 'choose-official-codex-model' }));
+  expect(change).toHaveBeenCalledWith([expect.objectContaining({ providerId: 'openai', harness: 'codex' })]);
 });

@@ -432,7 +432,7 @@ describe('Orca lead/worker dispatcher', () => {
     expect(h.deps.abortDirectTurnChangeSet).not.toHaveBeenCalled();
   });
 
-  it('rolls back queued accepted side effects when dispatch settles as not dispatched', async () => {
+  it.each(['cancelled-before-dispatch', 'provider-rejected-before-dispatch'] as const)('passes only explicit cancellation to queued rollback: %s', async (reason) => {
     const accepted = vi.fn();
     const rollback = vi.fn();
     const commit = vi.fn();
@@ -466,14 +466,14 @@ describe('Orca lead/worker dispatcher', () => {
         kind: 'session-dispatch',
         source: 'maker-ipc',
         dispatched: false,
-        reason: 'cancelled-before-dispatch',
+        reason,
         context: 'queued-rollback-test',
         message: 'Session send was cancelled before vendor dispatch: queued-rollback-test',
       },
     );
 
     expect(accepted).toHaveBeenCalledTimes(1);
-    expect(rollback).toHaveBeenCalledTimes(1);
+    expect(rollback).toHaveBeenCalledExactlyOnceWith(reason === 'cancelled-before-dispatch' ? reason : undefined);
     expect(commit).not.toHaveBeenCalled();
   });
 

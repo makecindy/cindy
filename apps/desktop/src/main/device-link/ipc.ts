@@ -25,7 +25,7 @@ import {
 import { serverApiFetch, ServerApiError } from '../serverApiClient';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
-import type { IpcErrorCode } from '../../shared/ipc-errors';
+import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
 import { decodeRemoteHistory } from '../../shared/remoteHistoryCache';
 import {
   DEVICE_LINK_INVOKE,
@@ -61,7 +61,8 @@ import {
   waitForNewerControllerDisplayNameDirectoryRefresh,
 } from './index';
 import { getActiveControllers } from './dispatch';
-import { rewriteOutboundMedia } from './outboundMedia';
+import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
+import { tryUploadPeerAttachment } from './filePeer';
 import { parseSharedTaskPeer } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import {
@@ -663,22 +664,35 @@ export async function handleInvoke(
     try {
       const peer = parseSharedTaskPeer(normalizedDeviceId);
       let existing: ReadonlySet<string> | undefined;
-      if (peer?.role === 'host' && channel === 'maker:input:update-content') {
+      let projectionUnavailable = false;
+      if ((!peer || peer.role === 'host') && channel === 'maker:input:update-content') {
         const projection = await deps.invoke(normalizedDeviceId, 'maker:input:get-projection', [callArgs[0]]);
-        if (!projection.ok) throw new Error(projection.error.message);
-        const value = projection.result as { sessionId?: string; pendingQueue?: Array<{ clientId: string; files?: Array<{ path?: string; url?: string }> }> };
-        if (value?.sessionId !== callArgs[0] || !Array.isArray(value.pendingQueue)) throw new Error('Invalid shared input projection');
-        const item = value.pendingQueue.find((row) => row.clientId === callArgs[1]);
-        if (!item) throw new Error('Queued message is no longer pending');
-        existing = new Set((item.files ?? []).flatMap((file) => [file.path, file.url].filter((ref): ref is string => typeof ref === 'string')));
-        assertControlTargetEnabled(deps, normalizedDeviceId);
+        if (projection.ok) {
+          const value = projection.result as { sessionId?: string; pendingQueue?: Array<{ clientId: string; files?: Array<{ path?: string; url?: string }> }> };
+          if (value?.sessionId !== callArgs[0] || !Array.isArray(value.pendingQueue)) throw new Error('Invalid input projection');
+          const item = value.pendingQueue.find((row) => row.clientId === callArgs[1]);
+          if (!item) throw new Error('Queued message is no longer pending');
+          existing = new Set((item.files ?? []).flatMap((file) => [file.path, file.url].filter((ref): ref is string => typeof ref === 'string')));
+          assertControlTargetEnabled(deps, normalizedDeviceId);
+        } else if (projection.error.code !== 'CHANNEL_NOT_ALLOWED') {
+          throw new Error(projection.error.message);
+        } else {
+          projectionUnavailable = true;
+        }
       }
-      callArgs = await withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
-        () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs));
-    } catch (err) {
-      throwIpcError(
-        'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
-        err instanceof Error ? err.message : String(err),
+      if (projectionUnavailable) {
+        throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Queued content editing is not supported by the target device');
+      }
+      callArgs = await withPeerAttachmentUpload((source, mime) => peer ? Promise.resolve(null) : tryUploadPeerAttachment(normalizedDeviceId, source, mime, deps.invoke), () =>
+        withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
+          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs)));
+     } catch (err) {
+       if (isIpcError(err) && err.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+         throw err;
+       }
+       throwIpcError(
+         'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+         err instanceof Error ? err.message : String(err),
       );
     }
     assertControlTargetEnabled(deps, normalizedDeviceId);

@@ -36,7 +36,6 @@ import {
   slashCommandRangeCoversToken,
 } from '@cindy/maker-shared/composer-palette';
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { ListComposerTextarea } from '@/components/new-chat/ListComposerTextarea';
 import { toast } from '@/lib/toast';
 import { ApiError } from '@/lib/httpClient';

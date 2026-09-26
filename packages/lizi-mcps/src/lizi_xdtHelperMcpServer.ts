@@ -8,6 +8,7 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
  *  - server name = `cindy_helper`,essential(常开,不可被用户关闭)
  *  - 所有工具走 `list_tools` / `call_tool` 两个入口,渐进式发现:
  *    - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
+ *    - 'auth'    : 由 Host 保存凭证的供应商授权
  *    - 'history' : 只读查询本地数据库聊天历史与输入队列 (list_workdirs /
  *                  list_sessions / list_session_queue / get_chat_history /
  *                  search_chat_history)
@@ -32,6 +33,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/botRoutineTools.js';
+import { registerGrokLoginTools, type GrokLoginCallbacks } from './xdt-helper/grok_login.js';
 import { jsonObjectArg } from './json-object-arg.js';
 
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
@@ -120,7 +122,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'control', 'history', 'feedback', 'handoff', 'skills', 'bots'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'bots'] as const;
 
 interface SessionTaskCallbacks {
   startSessionTask(params: {
@@ -154,6 +156,8 @@ interface SessionTaskCallbacks {
     taskId: string;
     mode?: 'cancel' | 'request-stop' | 'pause';
   }): Promise<ControlResult<Record<string, unknown>, string>>;
+  inspectSessionTaskRoute?(params: { callerSessionId: string; taskId: string }): Promise<ControlResult<Record<string, unknown>, string>>;
+  advanceSessionTaskRoute?(params: { callerSessionId: string; taskId: string; expectedGeneration: number; selectionToken: string }): Promise<ControlResult<Record<string, unknown>, string>>;
 }
 
 interface BotMessagingCallbacks {
@@ -478,6 +482,45 @@ function registerSessionTaskControlEntries(
     },
   });
 
+  if (deps.sessionTasks.inspectSessionTaskRoute && deps.sessionTasks.advanceSessionTaskRoute) {
+    registry.register({
+      name: 'inspect_session_task_route',
+      category: 'bots',
+      description: 'Inspect the current model and next already-configured model route for one of your own Session tasks. This does not change its model or retry work. Use before deciding whether a failed task should use another route.',
+      inputShape: { task_id: z.string().min(1).max(128) },
+      handler: async ({ task_id }) => {
+        const callerError = requireCaller();
+        if (callerError) return callerError;
+        const result = await deps.sessionTasks!.inspectSessionTaskRoute!({ callerSessionId: callerSessionId()!, taskId: task_id });
+        return result.ok
+          ? okPayload({ action: 'inspect_session_task_route', task_id,
+              generation: result.generation, current: result.current, next: result.next,
+              selection_token: result.selectionToken })
+          : errorPayload(result.errorCode, result.message);
+      },
+    });
+    registry.register({
+      name: 'advance_session_task_route',
+      category: 'bots',
+      description: 'Choose the exact next already-configured model route shown by inspect_session_task_route for your own ended Session task. This never creates a route, changes your teammate Profile, approves a permission, or replays work. Pass the preview generation and selection token; after switching, send a separate deliberate follow-up with message_session_task if needed. Deferred selections apply at the next safe send boundary.',
+      inputShape: {
+        task_id: z.string().min(1).max(128),
+        expected_generation: z.number().int().min(0),
+        selection_token: z.string().regex(/^[a-f0-9]{64}$/),
+      },
+      handler: async ({ task_id, expected_generation, selection_token }) => {
+        const callerError = requireCaller();
+        if (callerError) return callerError;
+        const result = await deps.sessionTasks!.advanceSessionTaskRoute!({
+          callerSessionId: callerSessionId()!, taskId: task_id, expectedGeneration: expected_generation, selectionToken: selection_token,
+        });
+        return result.ok
+          ? okPayload({ action: 'advance_session_task_route', task_id, ...result })
+          : errorPayload(result.errorCode, result.message);
+      },
+    });
+  }
+
   registry.register({
     name: 'message_session_task',
     category: 'bots',
@@ -621,6 +664,7 @@ export type ControlDispatchOutcome =
 
 export interface XdtHelperMcpDeps {
   logger?: LiziMcpLogger;
+  grokLogin?: GrokLoginCallbacks;
   /** Host-owned runtime classification used to keep Bot tasks on a narrow surface. */
   resolveSurface?: (input: {
     sessionId: string;
@@ -719,17 +763,21 @@ export function createXdtHelperMcpServer(
     const sessionId = context.sessionId;
     const remoteBotOnly = !!context.remoteHostId && context.agentKind !== 'pi';
     const defaultCategories = new Set(CATEGORY_ENUM.filter((category) => category !== 'bots'));
-    if (!sessionId || !deps.resolveSurface) return remoteBotOnly ? new Set() : defaultCategories;
+    if (!sessionId) return remoteBotOnly ? new Set() : defaultCategories;
+    if (!deps.resolveSurface) return remoteBotOnly ? new Set(['auth']) : defaultCategories;
     const surface = await deps.resolveSurface({ sessionId }).catch(() => 'restricted' as const);
     // Bot-specific memory, Skills, messaging, delegation and durable notes all
     // live in this single category. Cindy-wide history/control/feedback/handoff
     // stay out of the Bot's discovery loop.
-    if (surface === 'bot') return new Set(['bots', 'cindy']);
-    return remoteBotOnly || surface === 'restricted' ? new Set() : defaultCategories;
+    if (surface === 'bot') return new Set(['bots', 'cindy', 'auth']);
+    if (surface === 'restricted') return new Set();
+    return remoteBotOnly ? new Set(['auth']) : defaultCategories;
   };
 
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
   registerGetCapabilitiesTool(registry);
+  if (deps.grokLogin)
+    registerGrokLoginTools(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.grokLogin);
   registerGetCurrentSessionIdTool(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
   });
@@ -852,7 +900,8 @@ export function createXdtHelperMcpServer(
   }
   if (deps.botRoutines) {
     registerBotRoutineTools(registry, deps.botRoutines,
-      () => resolveLiziMcpSessionContext(sessionCtx).sessionId);
+      () => resolveLiziMcpSessionContext(sessionCtx).sessionId,
+      () => resolveLiziMcpSessionContext(sessionCtx));
   }
 
   registerStartSessionTaskEntry(registry, deps, sessionCtx);

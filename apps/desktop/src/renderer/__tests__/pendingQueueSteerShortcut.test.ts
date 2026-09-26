@@ -22,7 +22,7 @@ describe('PendingQueuePanel steer shortcut contract', () => {
     const rowKeydownBlock = extractBetween(
       pendingQueueSource,
       'const handleRowKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {',
-      'const handleEditKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {',
+      'const handleDragHandleKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {',
     );
 
     expect(shortcutHelper).toContain("event.key === 'Enter'");

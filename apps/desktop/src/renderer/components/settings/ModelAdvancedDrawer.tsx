@@ -60,6 +60,7 @@ import {
   clampEffortToSupported,
   EFFORT_VALUES,
   isAgentSelectableModel,
+  isOrganizationManagedProvider,
   modelProtocolComparison,
   pickRecommendedAgent,
 } from '@cindy/model-providers';
@@ -888,7 +889,7 @@ export function ModelAdvancedDrawer({
                     )}
                     {/* 自定义报价:原「⋯」菜单的一项,搬到它真正相关的段落里。
                     XD 网关的价格由服务端定,不给覆盖入口(与 IPC 侧的拒绝一致)。 */}
-                    {provider.id !== 'xd' && !paymentRequired && (
+                    {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && (
                       <button
                         type="button"
                         onClick={() => setPriceDialogOpen(true)}
