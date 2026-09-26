@@ -205,6 +205,28 @@ interface AssistantBlock {
 }
 
 const assistantBlocks = new Map<string, AssistantBlock>();
+
+/**
+ * 本轮 prompt 之前到达的非 final text（运行时就绪 / 重连期间的提示文本）会先建一个 block，
+ * 它的 createdAt 早于本轮的 user 行。这样的 block 一旦被本轮写入（delta 或本轮全文快照），
+ * 就把起点夹到本轮起点之后；否则落库的回复会排在触发它的 user 消息之前
+ * （renderer 按 (createdAt, rowid) 排序）。本轮自己建的 block 起点就在本轮起点之后，不进这里。
+ * 后台 turn 的文本不属于当前前台 turn，不抬（turnScope === 'background'）。
+ */
+function stampBlockAfterTurnStart(
+  sessionId: string,
+  block: AssistantBlock,
+  turnScope: 'turn' | 'background' | undefined,
+): void {
+  if (turnScope === 'background') return;
+  const turnStartedAt = _turnStartedAtBySession.get(sessionId);
+  if (turnStartedAt === undefined || turnStartedAt <= block.createdAt) return;
+  // /clear 之前的 block 不抬升：抬上去会让 pre-clear 文本跟着漏进清空后的历史
+  // （messages 按 createdAt > clearedAt 过滤、广播也用同一个边界）。
+  const clearBoundary = clearBoundaryBySession.get(sessionId);
+  if (clearBoundary !== undefined && block.createdAt <= clearBoundary) return;
+  block.createdAt = turnStartedAt;
+}
 // In-flight thinking is not in SQLite until final. Keep one recoverable snapshot
 // so expanding midway does not depend on deltas a collapsed controller never received.
 const historyThinkingBlocks = new Map<string, Map<string, Message>>();
@@ -2072,6 +2094,7 @@ export function onAssistantTextEvent(
   sessionId: string,
   data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown; phase?: string; runtimeRecovery?: boolean },
   agentMeta: AgentMeta | null,
+  turnScope?: 'turn' | 'background',
 ): string | undefined {
   if (typeof data.phase === 'string' || data.runtimeRecovery === true) {
     agentMeta = { ...agentMeta, assistantPhase: data.runtimeRecovery === true ? 'commentary' : data.phase as string };
@@ -2136,11 +2159,17 @@ export function onAssistantTextEvent(
       // Claude Code 的 local text block 没有该标记，但在 text_delta 丢失时仍可能携带
       // 已完整的、更长前缀文本。只接受以当前增量为前缀的更长文本，避免同一 assistant
       // 消息中相邻 text block 互相覆盖。
-      if (
-        isFullText ||
-        (rawText.length > block.text.length && rawText.startsWith(block.text))
-      ) {
+      const acceptedLongerPrefix =
+        rawText.length > block.text.length && rawText.startsWith(block.text);
+      // 校时必须能确认这条 final 属于当前 block：权威全文、等长同文，或上面已接受的
+      // 更长前缀。内容不同的非 isFullText final 可能属于相邻 text block（写入条件会
+      // 拒绝覆盖），不能因此把 turn 前提示的 createdAt 抬到本轮起点。
+      const finalBelongsToBlock = isFullText || rawText === block.text || acceptedLongerPrefix;
+      if (isFullText || acceptedLongerPrefix) {
         block.text = rawText;
+      }
+      if (finalBelongsToBlock) {
+        stampBlockAfterTurnStart(sessionId, block, turnScope);
       }
       if (agentMeta) block.agentMeta = agentMeta;
       return block.persistId;
@@ -2257,6 +2286,7 @@ export function onAssistantTextEvent(
     assistantBlocks.set(sessionId, block);
   } else {
     block.text += rawText;
+    stampBlockAfterTurnStart(sessionId, block, turnScope);
     if (agentMeta) block.agentMeta = agentMeta;
   }
   return block.persistId;

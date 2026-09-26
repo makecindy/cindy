@@ -2145,6 +2145,232 @@ describe('event timestamp persistence', () => {
     );
   });
 
+  it('stamps a pre-turn assistant block with the turn start when the turn writes into it', async () => {
+    const attachAt = Date.parse('2026-06-20T11:00:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:00:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    // 运行时就绪 / 重连时到达的非 final text（扩展 notify、宿主机提示）不属于本轮，
+    // 却会先建一个 block；它的 createdAt 早于本轮 user 行。
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    let persistId: string | undefined;
+    try {
+      noteTurnStarted(SESSION);
+      persistId = onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: persistId,
+        role: 'assistant',
+        createdAt: turnStartAt,
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('keeps the block own start when the turn created it', async () => {
+    const turnStartAt = Date.parse('2026-06-20T11:01:30.000Z');
+    const firstDeltaAt = Date.parse('2026-06-20T11:01:31.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      nowSpy.mockReturnValue(firstDeltaAt);
+      onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: firstDeltaAt }),
+      broadcastGuard(),
+    );
+  });
+
+  it('keeps a pre-turn block the turn never wrote to before the turn start', async () => {
+    const noticeAt = Date.parse('2026-06-20T11:01:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:01:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(noticeAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: noticeAt }),
+      broadcastGuard(),
+    );
+  });
+
+  it('stamps a pre-turn block when the turn writes its authoritative full text', async () => {
+    const attachAt = Date.parse('2026-06-20T11:02:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:02:04.000Z');
+    const fullTextAt = Date.parse('2026-06-20T11:02:09.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      nowSpy.mockReturnValue(fullTextAt);
+      onAssistantTextEvent(SESSION, { text: 'reply', isFinal: true, isFullText: true }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: turnStartAt }),
+      broadcastGuard(),
+    );
+  });
+
+  it('does not stamp a pre-turn block from an unrelated non-full-text final', async () => {
+    const attachAt = Date.parse('2026-06-20T11:06:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:06:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      // 内容不同、且不是更长前缀的 final 可能属于相邻 text block，不能归到当前提示上。
+      onAssistantTextEvent(SESSION, { text: 'different reply', isFinal: true }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'assistant',
+        content: 'runtime notice',
+        createdAt: attachAt,
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('stamps a pre-turn block when an accepted longer-prefix final completes it', async () => {
+    const attachAt = Date.parse('2026-06-20T11:07:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:07:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      onAssistantTextEvent(SESSION, { text: 'reply continued', isFinal: true }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'assistant',
+        content: 'reply continued',
+        createdAt: turnStartAt,
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('stamps a pre-turn block on an equal-length final without isFullText', async () => {
+    const attachAt = Date.parse('2026-06-20T11:04:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:04:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      // Claude Code 重连 / delta 丢失后可能补发等长的 final 全文，不重写 block。
+      onAssistantTextEvent(SESSION, { text: 'reply', isFinal: true }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: turnStartAt }),
+      broadcastGuard(),
+    );
+  });
+
+  it('does not stamp a pre-turn block from a background turn text', async () => {
+    const attachAt = Date.parse('2026-06-20T11:05:00.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:05:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(attachAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteTurnStarted(SESSION);
+      onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null, 'background');
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: attachAt }),
+      broadcastGuard(),
+    );
+  });
+
+  it('does not lift a pre-/clear block above the clear boundary', async () => {
+    const preClearAt = Date.parse('2026-06-20T11:03:00.000Z');
+    const clearedAt = Date.parse('2026-06-20T11:03:02.000Z');
+    const turnStartAt = Date.parse('2026-06-20T11:03:04.000Z');
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(preClearAt);
+    onAssistantTextEvent(SESSION, { text: 'runtime notice', isFinal: false }, null);
+    nowSpy.mockReturnValue(turnStartAt);
+    try {
+      noteSessionClearBoundary(SESSION, clearedAt);
+      noteTurnStarted(SESSION);
+      onAssistantTextEvent(SESSION, { text: 'reply', isFinal: false }, null);
+      flushAssistantBlock(SESSION, null);
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', createdAt: preClearAt }),
+      broadcastGuard(),
+    );
+  });
+
   it('captures non-thinking create timestamps before queued writes drain', async () => {
     const eventAt = Date.parse('2026-06-20T10:01:00.000Z');
     const delayedWriteTime = Date.parse('2026-06-20T10:01:07.000Z');
