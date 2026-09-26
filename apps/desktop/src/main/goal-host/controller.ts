@@ -29,6 +29,7 @@ import {
   classifyTurnUsageLimit,
 } from './usageLimit';
 import { parseVerdict, type GoalVerdict } from './verdict';
+import type { GoalRunEvent, GoalRunEventType } from './runEvents';
 import {
   TERMINAL_GOAL_STATUSES,
   type GoalControllerDeps,
@@ -349,6 +350,17 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
 
 // ── 每轮事件累计状态 ─────────────────────────────────────────────────────────
 
+interface PendingTakeoverCloseout {
+  type: 'cleared' | 'state-transition' | 'budget-limited';
+  reason: string;
+  from?: GoalStatus;
+  to?: GoalStatus;
+  state: GoalRunEventStateSnapshot | GoalState | null;
+  /** persist 提交时刻。延迟兑现 closeout 必须沿用它,不能改成 acceptance 的 now()
+   * (Codex #2107 P2: snapshot 按 at 排序,t2 替换写 vs t4 兑现否则新 dispatch 会插到旧 cleared 前)。 */
+  at?: number;
+}
+
 interface TurnAccumulator {
   text: string;
   sawToolUse: boolean;
@@ -357,6 +369,47 @@ interface TurnAccumulator {
   continuationTokens: number;
   /** 本轮是否已 finalize(去重 done / 终止 error 双触发)。 */
   finalized: boolean;
+  /**
+   * 本轮收口审计事件是否已真实写入(finalizeTurn 在 storage settle 后置位)。
+   * accepted 补发 turn-dispatched 以此为准:finalized 可能在 await 期间提前置位。
+   */
+  auditFinalized?: boolean;
+  /** 快终态时 accepted 早于收口提交,挂起派发事件等 finalizeTurn 写完再补发。 */
+  pendingDispatch?: {
+    generation?: number;
+    lifecycleId?: string;
+    at?: number;
+    resumeReason?: string | undefined;
+    state: GoalRunEventStateSnapshot;
+  };
+  /** onDispatching 时的 1-based 派发序号(turnsUsed+1)。clear/pause/replace
+   * 的 closeout 用它,不依赖随后可能失败的 storage.get 快照。 */
+  dispatchTurnIndex?: number;
+  /**
+   * send 尚未返回前的派发只是 tentative。clear/pause/replace/预算接管
+   * 不得把 closeout 绑到未确认 send;accepted:false 时还要清掉已停的
+   * markers (Codex #2107 P1 / P2)。
+   */
+  dispatchAcceptance?: 'pending' | 'accepted' | 'rejected';
+  /** 接管 persist 成功但 send 仍 tentative 时,按提交顺序挂起 closeout 等 acceptance。
+   * 多个已落盘接管不得共用一个槽,否则后写会丢掉先提交的 pause/预算终态
+   * (Codex #2107 P2)。 */
+  pendingTakeoverCloseouts?: PendingTakeoverCloseout[];
+  /** 替换 persist 失败:迟到 accepted 必须显式 close,避免孤儿 turn-dispatched。 */
+  takeoverAbandoned?: boolean;
+  /** 被中断派发的 owner。cancelled 边界继承它,重叠 Stop 仍能 closeout
+   * 原 dispatch 而不是新 lifecycle (Codex #2107 P1)。 */
+  interruptedDispatch?: {
+    lifecycleId: string;
+    generation: number;
+    turnIndex: number;
+  };
+  /** 重叠 Stop 期间保留 tentative send owner,直到 acceptance 落定。
+   * 不得写入 interruptedDispatch,否则会把 closeout 提前钉到未确认 dispatch。 */
+  tentativeDispatch?: TurnAccumulator;
+  /** 生命周期唯一 id(freshTurn 生成,跨换代不变;generation 重置为 0 时仍可
+   * 区分生命周期——事件排序/配对以此为准)。 */
+  lifecycleId: string;
   /** 正常 turn 换代只递增 generation，不替换整个 Goal 生命周期 owner。 */
   generation: number;
   /** 显式 Stop 正在把 paused 落盘；迟到事件与自动恢复都必须停在这条边界外。 */
@@ -367,17 +420,28 @@ interface TurnAccumulator {
   pendingCompletion: Promise<void> | null;
 }
 
+/** recordRunEvent 所需的 GoalState 快照子集(派发时捕获,补发时不受后续变更影响)。 */
+type GoalRunEventStateSnapshot = Pick<
+  GoalState,
+  'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'
+>;
+
+/** 生命周期序号(模块级单调递增,freshTurn 生成唯一 id)。 */
+let lifecycleSeq = 0;
+
 function freshTurn(
   cancelled = false,
   pendingPersistence: Promise<void> | null = null,
   pendingCompletion: Promise<void> | null = null,
 ): TurnAccumulator {
+  lifecycleSeq += 1;
   return {
     text: '',
     sawToolUse: false,
     tokensThisTurn: 0,
     continuationTokens: 0,
     finalized: false,
+    lifecycleId: `g${lifecycleSeq}`,
     generation: 0,
     cancelled,
     pendingPersistence,
@@ -400,7 +464,7 @@ export class GoalController {
   /** blocked 落盘失败时保留同一 fail-closed owner，GET_STATUS 可重试而不是回报旧 active。 */
   private readonly unpersistedDispatchFailures = new Map<
     string,
-    { boundary: TurnAccumulator; lastReason: string }
+    { boundary: TurnAccumulator; lastReason: string; from?: GoalStatus }
   >();
   /** 正在派发的 fire 及其 owner；旧代 finally 只能清理自己，不能删掉 Resume 新代。 */
   private readonly firing = new Map<string, object>();
@@ -461,6 +525,12 @@ export class GoalController {
   private readonly consecutiveOverloadTurns = new Map<string, number>();
   private readonly now: () => number;
   private readonly debounceMs: number;
+  /**
+   * 待兑现的恢复事件(#2105 P0):resumeGoal / resumeActiveGoals 登记"本次恢复将触发
+   * 派发"的意图,fireTurn 在 onDispatching 真实派发边界消费并发 resumed —— 与
+   * turn-dispatched 同代成对。以 boundary 身份绑定生命周期。
+   */
+  private readonly pendingResumeEvents = new Map<string, { reason: string; boundary: TurnAccumulator }>();
   private disposed = false;
   /** Disposal is two-phase: detach synchronously, then drain old-owner writes. */
   private disposing = false;
@@ -474,6 +544,450 @@ export class GoalController {
   constructor(private readonly deps: GoalControllerDeps) {
     this.now = deps.now ?? (() => Date.now());
     this.debounceMs = deps.continuationDebounceMs ?? DEFAULT_DEBOUNCE_MS;
+  }
+
+  /**
+   * 仅当恢复标记属于给定 boundary 时才清除(并发下旧 fireTurn 的早退
+   * 清理不得按 sessionId 无条件删除新恢复刚登记的标记)。
+   */
+  private clearPendingResumeForBoundary(sessionId: string, boundary: TurnAccumulator | undefined | null): void {
+    const pending = this.pendingResumeEvents.get(sessionId);
+    if (pending && pending.boundary === boundary) {
+      this.pendingResumeEvents.delete(sessionId);
+    }
+  }
+
+  /**
+   * Goal run 结构化观测(#2105 P0)。deps.recordRunEvent 未注入时 no-op ——
+   * 观测是 best-effort,不背压也不改变状态机语义。
+   */
+  private recordRunEvent(
+    type: GoalRunEventType,
+    goalSessionId: string,
+    state: Pick<GoalState, 'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'> | null,
+    extra?: Pick<Partial<GoalRunEvent>, 'from' | 'to' | 'generation' | 'lifecycleId' | 'at' | 'turnIndex'> & {
+      reason?: string | null;
+    },
+  ): void {
+    if (this.disposed) return;
+    if (!this.deps.recordRunEvent) return;
+    const boundary = this.turns.get(goalSessionId);
+    const evt: GoalRunEvent = {
+      type,
+      goalSessionId,
+      turnIndex: extra?.turnIndex ?? (state?.turnsUsed ?? 0) + (type === 'turn-dispatched' ? 1 : 0),
+      ...(state
+        ? {
+            budget: {
+              tokensUsed: state.tokensUsed,
+              turnsUsed: state.turnsUsed,
+              noProgressStreak: state.noProgressStreak,
+              budgetTokens: state.budgetTokens,
+              maxTurns: state.maxTurns,
+              noProgressLimit: state.noProgressLimit,
+            },
+          }
+        : {}),
+      ...extra,
+      reason: extra?.reason ?? undefined,
+      lifecycleId: extra?.lifecycleId ?? boundary?.lifecycleId ?? 'g0',
+      generation: extra?.generation ?? boundary?.generation ?? 0,
+      at: extra?.at ?? this.now(),
+    };
+    try {
+      Promise.resolve(this.deps.recordRunEvent(evt)).catch((error) => {
+        this.deps.logger.warn('[goal] recordRunEvent failed (best-effort)', {
+          type,
+          goalSessionId,
+          error: String(error),
+        });
+      });
+    } catch (error) {
+      this.deps.logger.warn('[goal] recordRunEvent failed (best-effort)', {
+        type,
+        goalSessionId,
+        error: String(error),
+      });
+    }
+  }
+
+  /** 补发派发事件(resumed + turn-dispatched)——accepted 确认后或收口提交后。 */
+  private emitDispatchEvents(
+    sessionId: string,
+    state: GoalRunEventStateSnapshot,
+    dispatchBoundary: TurnAccumulator | undefined,
+    dispatchGeneration: number | undefined,
+    dispatchAt: number,
+    dispatchResumeReason: string | undefined,
+  ): void {
+    if (dispatchResumeReason !== undefined) {
+      this.recordRunEvent('resumed', sessionId, state, {
+        to: 'active',
+        reason: dispatchResumeReason,
+        generation: dispatchGeneration,
+        lifecycleId: dispatchBoundary?.lifecycleId,
+        at: dispatchAt,
+      });
+    }
+    this.recordRunEvent('turn-dispatched', sessionId, state, {
+      generation: dispatchGeneration,
+      lifecycleId: dispatchBoundary?.lifecycleId,
+      at: dispatchAt,
+    });
+    this.clearPendingResumeForBoundary(sessionId, dispatchBoundary);
+  }
+
+  /**
+   * 接管 persistence 成功后再发退休 boundary 上挂起的派发。
+   * 读/写失败时 closeout 不会落环,提前 flush 会留下无收口的 turn-dispatched
+   * (Codex #2107 P1: flush parked dispatches only after takeover commits)。
+   */
+  private flushRetiredPendingDispatch(
+    sessionId: string,
+    previous: TurnAccumulator | undefined,
+  ): void {
+    const target = this.takeoverDispatchTarget(previous);
+    if (!target?.pendingDispatch) return;
+    this.flushPendingDispatch(sessionId, target);
+  }
+
+  /**
+   * 未收口的派发:onDispatching 之后、finalizeTurn 审计写完之前。
+   * done 会先摘掉 goalTurnsInFlight,不能只靠 in-flight 集合判断
+   * (Codex #2107 P2: preserve dispatch owner after done)。
+   *
+   * send 未返回前 ownership 保持 tentative,不得把 clear/pause/replace
+   * 的 closeout 提前钉到未确认 dispatch 上 (Codex #2107 P1)。
+   */
+  private unfinishedDispatch(
+    sessionId: string,
+    boundary: TurnAccumulator | undefined,
+  ): { lifecycleId: string; generation: number; turnIndex: number } | null {
+    if (!boundary) return null;
+    // 重叠 Stop:前一次 pause/clear 已换成 cancelled owner,二次 Stop 必须
+    // 继承原 dispatch,不能因 cancelled 直接丢 (Codex #2107 P1)。
+    if (boundary.cancelled) return boundary.interruptedDispatch ?? null;
+    if (boundary.dispatchAcceptance === 'rejected' || boundary.dispatchAcceptance === 'pending') {
+      return null;
+    }
+    const inFlight = this.goalTurnsInFlight.has(sessionId);
+    const dispatchedUnclosed = boundary.auditFinalized === false;
+    if (inFlight || dispatchedUnclosed) {
+      // pending 是 tentative,不绑 closeout;accepted 或已派发未收口才绑。
+      return {
+        lifecycleId: boundary.lifecycleId,
+        generation: boundary.generation,
+        // snapshot 失败时仍要保留被中断的派发序号,不能回退成 1
+        // (Codex #2107 P1)。
+        turnIndex: boundary.dispatchTurnIndex ?? 1,
+      };
+    }
+    // live setGoal 替换边界不是 cancelled,但 inherit 带走的 accepted
+    // 身份要保留; 否则后来的 pause/clear 会丢已确认派发
+    // (Codex #2107 P1: preserve accepted ownership through live replacement).
+    return boundary.interruptedDispatch ?? null;
+  }
+
+  /** tentative / parked-dispatch owner：cancelled、失败接管与 live replacement
+   * 都要穿透到真正 pending 或已 park pendingDispatch 的派发对象。 */
+  private tentativeDispatchOwner(boundary: TurnAccumulator | undefined): TurnAccumulator | undefined {
+    if (!boundary) return undefined;
+    if (boundary.dispatchAcceptance === 'pending' || boundary.pendingDispatch) return boundary;
+    const inherited = boundary.tentativeDispatch;
+    if (!inherited || inherited === boundary) return undefined;
+    // live setGoal 替换边界不是 cancelled、也没有 own-pending,
+    // 仍要跟着继承来的 owner, 否则 pause/clear 再接管会把
+    // late accepted 钉在不可达的旧边界 (Codex #2107 P1)。
+    // 失败的 pause 只继承了 identity 时,重叠 clear 也必须拿到原 accumulator
+    // 才能 flush parked turn-dispatched (Codex #2107 P1)。
+    return this.tentativeDispatchOwner(inherited) ?? inherited;
+  }
+
+  /** 重叠 pause/clear/live replacement 换 owner 时带走 interrupted + tentative 前任。 */
+  private inheritTakeoverOwner(
+    sessionId: string,
+    next: TurnAccumulator,
+    previous: TurnAccumulator | undefined,
+  ): void {
+    if (!previous) return;
+    const interrupted = this.unfinishedDispatch(sessionId, previous);
+    if (interrupted) next.interruptedDispatch = interrupted;
+    const tentative = this.tentativeDispatchOwner(previous);
+    if (tentative) next.tentativeDispatch = tentative;
+  }
+
+  /** persist closeout 要钉回真实派发 owner,不能钉在中间 cancelled / live replacement 边界上。 */
+  private takeoverDispatchTarget(previous: TurnAccumulator | undefined): TurnAccumulator | undefined {
+    if (!previous) return undefined;
+    return this.tentativeDispatchOwner(previous) ?? previous;
+  }
+
+  private parkedTakeoverCloseouts(boundary: TurnAccumulator | undefined): PendingTakeoverCloseout[] {
+    return boundary?.pendingTakeoverCloseouts ?? [];
+  }
+
+  private enqueueTakeoverCloseout(
+    boundary: TurnAccumulator | undefined,
+    closeout: PendingTakeoverCloseout,
+  ): void {
+    if (!boundary) return;
+    const queued = boundary.pendingTakeoverCloseouts ?? [];
+    queued.push(closeout);
+    boundary.pendingTakeoverCloseouts = queued;
+  }
+
+  private takeParkedTakeoverCloseouts(boundary: TurnAccumulator | undefined): PendingTakeoverCloseout[] {
+    const queued = this.parkedTakeoverCloseouts(boundary);
+    if (boundary) boundary.pendingTakeoverCloseouts = undefined;
+    return queued;
+  }
+
+  private emitParkedTakeoverCloseouts(
+    sessionId: string,
+    closeouts: readonly PendingTakeoverCloseout[],
+    owner: { lifecycleId: string; generation: number; turnIndex: number },
+  ): void {
+    for (const closeout of closeouts) this.emitTakeoverCloseout(sessionId, closeout, owner);
+  }
+
+  private emitUnboundParkedTakeoverCloseouts(
+    sessionId: string,
+    closeouts: readonly PendingTakeoverCloseout[],
+    identity?: { lifecycleId: string; generation: number },
+  ): void {
+    for (const closeout of closeouts) {
+      this.emitUnboundTakeoverCloseout(sessionId, closeout, identity);
+    }
+  }
+
+  private clearTentativeDispatchMarkers(boundary: TurnAccumulator | undefined): void {
+    if (!boundary) return;
+    boundary.dispatchAcceptance = 'rejected';
+    boundary.auditFinalized = undefined;
+    boundary.dispatchTurnIndex = undefined;
+    boundary.pendingDispatch = undefined;
+    boundary.pendingTakeoverCloseouts = undefined;
+    boundary.takeoverAbandoned = false;
+  }
+
+  /** send 未接受或抛错:清 tentative,并把已 park 的接管 closeout 发成 unstamped。
+   * takeover 已换 owner 时 isCurrentDispatch 为 false,catch 也必须走这条,
+   * 不能只覆盖 accepted:false (Codex #2107 P2)。 */
+  private settleUnacceptedDispatch(
+    sessionId: string,
+    dispatchBoundary: TurnAccumulator | undefined,
+  ): void {
+    if (!dispatchBoundary) return;
+    const parkedCloseouts = this.parkedTakeoverCloseouts(dispatchBoundary);
+    const retiredLifecycle = {
+      lifecycleId: dispatchBoundary.lifecycleId,
+      generation: dispatchBoundary.generation,
+    };
+    this.clearTentativeDispatchMarkers(dispatchBoundary);
+    this.emitUnboundParkedTakeoverCloseouts(sessionId, parkedCloseouts, retiredLifecycle);
+  }
+
+  private emitTakeoverCloseout(
+    sessionId: string,
+    closeout: PendingTakeoverCloseout,
+    owner: { lifecycleId: string; generation: number; turnIndex: number },
+  ): void {
+    if (closeout.type === 'cleared') {
+      this.recordRunEvent('cleared', sessionId, closeout.state, {
+        from: closeout.from,
+        reason: closeout.reason,
+        lifecycleId: owner.lifecycleId,
+        generation: owner.generation,
+        turnIndex: owner.turnIndex,
+        at: closeout.at,
+      });
+      return;
+    }
+    if (closeout.type === 'budget-limited') {
+      this.emitBudgetLimitCloseout(sessionId, closeout, owner);
+      return;
+    }
+    this.recordRunEvent('state-transition', sessionId, closeout.state, {
+      from: closeout.from,
+      to: closeout.to,
+      reason: closeout.reason,
+      lifecycleId: owner.lifecycleId,
+      generation: owner.generation,
+      turnIndex: owner.turnIndex,
+      at: closeout.at,
+    });
+  }
+
+  /** 预算接管的三件组必须同一 owner,不能让 state-transition 跟 dispatched 而
+   * budget-consumed/terminal 掉到新 lifecycle (Codex #2107 P2)。 */
+  private emitBudgetLimitCloseout(
+    sessionId: string,
+    closeout: PendingTakeoverCloseout,
+    identity?: { lifecycleId: string; generation: number; turnIndex?: number },
+  ): void {
+    const stamped = { ...identity, at: closeout.at };
+    this.recordRunEvent('state-transition', sessionId, closeout.state, {
+      from: closeout.from,
+      to: 'budgetLimited',
+      reason: closeout.reason,
+      ...stamped,
+    });
+    this.recordRunEvent('budget-consumed', sessionId, closeout.state, {
+      from: closeout.from,
+      to: 'budgetLimited',
+      reason: closeout.reason,
+      ...stamped,
+    });
+    this.recordRunEvent('terminal', sessionId, closeout.state, {
+      to: 'budgetLimited',
+      reason: closeout.reason,
+      ...stamped,
+    });
+  }
+
+  /** 已提交的 objective 替换:把旧派发收成 replaced-by-new-goal。
+   * persistUserMessage 失败也走这里——目标已落盘,不能当 abandoned。 */
+  private settleCommittedReplacementCloseout(
+    sessionId: string,
+    previousBoundary: TurnAccumulator | undefined,
+    editBoundary: TurnAccumulator,
+    existing: GoalState,
+  ): void {
+    const takeoverTarget = this.takeoverDispatchTarget(previousBoundary);
+    if (
+      editBoundary.interruptedDispatch ||
+      takeoverTarget?.auditFinalized === false ||
+      takeoverTarget?.pendingDispatch ||
+      takeoverTarget?.dispatchAcceptance === 'pending'
+    ) {
+      this.settleTakeoverCloseout(sessionId, previousBoundary, {
+        type: 'cleared',
+        reason: 'replaced by new goal',
+        from: existing.status,
+        state: existing,
+        at: this.now(),
+      });
+    }
+  }
+
+  /** persist 成功后再绑 closeout;send 仍 tentative 则挂起等 acceptance。 */
+  private settleTakeoverCloseout(
+    sessionId: string,
+    previous: TurnAccumulator | undefined,
+    closeout: PendingTakeoverCloseout,
+  ): void {
+    const target = this.takeoverDispatchTarget(previous);
+    this.flushRetiredPendingDispatch(sessionId, target);
+    const owner = this.unfinishedDispatch(sessionId, target);
+    if (owner) {
+      this.emitParkedTakeoverCloseouts(
+        sessionId,
+        [...this.takeParkedTakeoverCloseouts(target), closeout],
+        owner,
+      );
+      return;
+    }
+    if (target?.dispatchAcceptance === 'rejected') {
+      this.emitUnboundParkedTakeoverCloseouts(
+        sessionId,
+        [...this.takeParkedTakeoverCloseouts(target), closeout],
+      );
+      return;
+    }
+    // 快终态可在 send resolve 前就把 auditFinalized 置位;acceptance 仍 pending
+    // 时不能发 unstamped closeout,一律挂起等 accepted/rejected
+    // (Codex #2107 P1: park closeouts whenever dispatch acceptance is pending)。
+    if (target?.dispatchAcceptance === 'pending' || target?.auditFinalized === false) {
+      this.enqueueTakeoverCloseout(target, closeout);
+      return;
+    }
+    this.emitUnboundTakeoverCloseout(sessionId, closeout);
+  }
+
+  private emitUnboundTakeoverCloseout(
+    sessionId: string,
+    closeout: PendingTakeoverCloseout,
+    identity?: { lifecycleId: string; generation: number },
+  ): void {
+    if (closeout.type === 'cleared') {
+      this.recordRunEvent('cleared', sessionId, closeout.state, {
+        from: closeout.from,
+        reason: closeout.reason,
+        ...identity,
+        at: closeout.at,
+      });
+      return;
+    }
+    if (closeout.type === 'budget-limited') {
+      this.emitBudgetLimitCloseout(sessionId, closeout, identity);
+      return;
+    }
+    this.recordRunEvent('state-transition', sessionId, closeout.state, {
+      from: closeout.from,
+      to: closeout.to,
+      reason: closeout.reason,
+      ...identity,
+      at: closeout.at,
+    });
+  }
+
+  /** persist 成功后再绑预算收口;send 仍 tentative 则挂起等 acceptance。 */
+  private settleBudgetLimitCloseout(
+    sessionId: string,
+    previous: TurnAccumulator | undefined,
+    limited: GoalState,
+    from: GoalStatus,
+  ): void {
+    this.settleTakeoverCloseout(sessionId, previous, {
+      type: 'budget-limited',
+      reason: limited.lastReason ?? 'budget limit lowered below current usage',
+      from,
+      to: 'budgetLimited',
+      state: limited,
+      at: this.now(),
+    });
+  }
+
+  private closeAbandonedReplacement(
+    sessionId: string,
+    previous: TurnAccumulator | undefined,
+    state: GoalRunEventStateSnapshot | GoalState | null,
+  ): void {
+    if (!previous || previous.dispatchAcceptance !== 'accepted') return;
+    if (
+      this.parkedTakeoverCloseouts(previous).length === 0
+      && !previous.pendingDispatch
+      && previous.auditFinalized === true
+    ) {
+      return;
+    }
+    this.flushPendingDispatch(sessionId, previous);
+    this.recordRunEvent('cleared', sessionId, state, {
+      from: 'active',
+      reason: 'replacement persist failed',
+      lifecycleId: previous.lifecycleId,
+      generation: previous.generation,
+      turnIndex: previous.dispatchTurnIndex ?? 1,
+      at: this.now(),
+    });
+    previous.pendingTakeoverCloseouts = undefined;
+    previous.auditFinalized = true;
+  }
+
+  /** finalizeTurn 写收口事件后补发挂起的派发(保证 dispatch 与收口配对)。 */
+  private flushPendingDispatch(sessionId: string, turn: TurnAccumulator): void {
+    const pd = turn.pendingDispatch;
+    if (!pd) return;
+    turn.pendingDispatch = undefined;
+    if (this.disposed) return;
+    this.emitDispatchEvents(
+      sessionId,
+      pd.state,
+      turn,
+      pd.generation,
+      pd.at ?? this.now(),
+      pd.resumeReason,
+    );
   }
 
   // ── 公开 API ───────────────────────────────────────────────────────────────
@@ -574,6 +1088,7 @@ export class GoalController {
           failureBoundary,
           'turn dispatch failed: unable to restore the agent session',
           () => this.turns.get(sessionId) === failureBoundary,
+          existing.status,
         );
         throw new GoalSessionRestoreError(error);
       }
@@ -585,6 +1100,7 @@ export class GoalController {
           failureBoundary,
           'turn dispatch failed: unable to restore the agent session',
           () => this.turns.get(sessionId) === failureBoundary,
+          existing.status,
         );
         throw new GoalSessionRestoreError();
       }
@@ -608,8 +1124,10 @@ export class GoalController {
         previousBoundary?.pendingPersistence ?? null,
         previousBoundary?.pendingCompletion ?? null,
       );
+      this.inheritTakeoverOwner(sessionId, editBoundary, previousBoundary);
       this.turns.set(sessionId, editBoundary);
       let editObjectivePersisted = false;
+      let replacementCloseoutSettled = false;
       let updatedState: GoalState | null = null;
       try {
         if (sessionWasBusy) {
@@ -640,12 +1158,35 @@ export class GoalController {
             });
           },
         );
+        if (updated) {
+          // persist 已提交就必须入队,覆盖 editBoundary 的 pause/clear
+          // 不能跳过 replacement closeout (Codex #2107 P1: settle replacement
+          // before honoring a newer owner).
+          this.settleCommittedReplacementCloseout(
+            sessionId,
+            previousBoundary,
+            editBoundary,
+            existing,
+          );
+          replacementCloseoutSettled = true;
+        }
+        // 审计已入队;入口仍对覆盖方返回 null(dispose/pause/clear 的调用契约)。
         if (this.turns.get(sessionId) !== editBoundary) return null;
         if (!updated) {
+          const abandoned = this.takeoverDispatchTarget(previousBoundary);
+          if (abandoned) {
+            abandoned.takeoverAbandoned = true;
+            if (abandoned.dispatchAcceptance === 'accepted') {
+              this.closeAbandonedReplacement(sessionId, abandoned, existing);
+            }
+          }
           this.turns.delete(sessionId);
           return null;
         }
         updatedState = updated;
+        // 旧派发 closeout 已入队/兑现,不能让后续 pause 再把新目标的
+        // 迁移钉到已收口的旧 accepted owner 上。
+        editBoundary.interruptedDispatch = undefined;
         this.resetTurn(sessionId);
         const activeBoundary = this.turns.get(sessionId);
         this.attachListener(sessionId);
@@ -654,7 +1195,27 @@ export class GoalController {
           await this.fireTurn(sessionId, { throwOnRestoreFailure: true });
         }
       } catch (error) {
+        // marker 失败时 editBoundary 可能已被 pause/clear 换走;只要 objective
+        // 已提交,仍要补 replaced-by-new-goal (Codex #2107 P1: settle committed
+        // replacements after supersession)。成功路径已 settle 的不重复入队。
+        if (editObjectivePersisted && !replacementCloseoutSettled) {
+          this.settleCommittedReplacementCloseout(
+            sessionId,
+            previousBoundary,
+            editBoundary,
+            existing,
+          );
+        }
         if (this.turns.get(sessionId) === editBoundary) {
+          if (!editObjectivePersisted) {
+            const abandoned = this.takeoverDispatchTarget(previousBoundary);
+            if (abandoned) {
+              abandoned.takeoverAbandoned = true;
+              if (abandoned.dispatchAcceptance === 'accepted') {
+                this.closeAbandonedReplacement(sessionId, abandoned, existing);
+              }
+            }
+          }
           if (rejectionTakeover) {
             // Keep the persisted active Goal live after either half of the edit
             // fails. Before objective commit, resume the old rejection budget;
@@ -805,6 +1366,7 @@ export class GoalController {
           previousBoundary?.pendingPersistence ?? null,
           previousBoundary?.pendingCompletion ?? null,
         );
+        this.inheritTakeoverOwner(sessionId, limitBoundary, previousBoundary);
         this.turns.set(sessionId, limitBoundary);
         await this.awaitPendingLifecycle(limitBoundary);
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
@@ -816,6 +1378,11 @@ export class GoalController {
             updatedAt: this.now(),
           }),
         );
+        if (limited) {
+          // persist 已提交就必须入队,哪怕后来的 pause/clear 已换 owner
+          // (Codex #2107 P2: settle committed budget closeout before stale-owner return)。
+          this.settleBudgetLimitCloseout(sessionId, previousBoundary, limited, current.status);
+        }
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
         if (limited) {
           this.stopSession(sessionId);
@@ -876,20 +1443,24 @@ export class GoalController {
 
       let changed: GoalState | null;
       let limitBoundary: TurnAccumulator | undefined;
+      // 必须提到 shouldLimit 块外:persistence 成功后的 flush 仍要拿到被中断
+      // dispatch 的退休 boundary (Codex #2107 P1 / CI TS2304)。
+      let previousBoundary: TurnAccumulator | undefined;
       if (shouldLimit) {
         // 降低上限是显式生命周期接管：同步摘掉旧 listener/timer，等旧 finalize 写完后，
         // 用同一条 UPDATE 同时提交新上限与 budgetLimited，避免暴露可被旧写覆盖的 active 中间态。
-        const previousBoundary = this.turns.get(sessionId);
+        previousBoundary = this.turns.get(sessionId);
         this.stopSession(sessionId);
         limitBoundary = freshTurn(
           true,
           previousBoundary?.pendingPersistence ?? null,
           previousBoundary?.pendingCompletion ?? null,
         );
+        this.inheritTakeoverOwner(sessionId, limitBoundary, previousBoundary);
         this.turns.set(sessionId, limitBoundary);
         await this.awaitPendingLifecycle(limitBoundary);
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
-        changed = await this.trackPersistence(
+        const limitedWrite = await this.trackPersistenceWithMarkerFailure(
           limitBoundary,
           this.deps.storage.update(sessionId, {
             ...normalized,
@@ -899,13 +1470,21 @@ export class GoalController {
           }),
           persistObjectiveMarker,
         );
-        if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
+        changed = limitedWrite.value;
         if (!changed) {
-          this.turns.delete(sessionId);
+          if (this.turns.get(sessionId) === limitBoundary) this.turns.delete(sessionId);
+          if (limitedWrite.markerError) throw limitedWrite.markerError;
           return null;
         }
+        // persist 已提交就必须入队,哪怕后来的 pause/clear 已换 owner
+        // (Codex #2107 P2: settle committed budget closeout before stale-owner return)。
+        // marker 失败也要 settle:trackPersistence 整体 reject 进不了这里
+        // (Codex #2107 P1: settle budget events when the objective marker fails)。
+        this.settleBudgetLimitCloseout(sessionId, previousBoundary, changed, state.status);
+        if (limitedWrite.markerError) throw limitedWrite.markerError;
+        if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
       } else {
-        changed = await this.trackPersistence(
+        const updatedWrite = await this.trackPersistenceWithMarkerFailure(
           operationBoundary,
           this.deps.storage.update(sessionId, {
             ...normalized,
@@ -913,12 +1492,13 @@ export class GoalController {
           }),
           persistObjectiveMarker,
         );
+        changed = updatedWrite.value;
+        if (updatedWrite.markerError) throw updatedWrite.markerError;
         if (entryChanged()) return reconcileLifecycleChange();
       }
       if (!changed) return null;
       rescheduleRejectedDispatchForObjective(changed.status);
       if (shouldLimit) {
-        if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
         this.stopSession(sessionId);
       }
       let next = changed;
@@ -941,9 +1521,20 @@ export class GoalController {
             updatedAt: this.now(),
           }),
         );
-        if (this.turns.get(sessionId) !== resumeBoundary) return reconcileLifecycleChange();
         if (resumed) {
           next = resumed;
+          // persist 已提交就必须记恢复迁移,哪怕后来的 pause/clear 已换 owner
+          // (Codex #2107 P2: record committed budget recovery before stale-owner return)。
+          this.recordRunEvent('state-transition', sessionId, resumed, {
+            from: 'budgetLimited',
+            to: 'active',
+            reason: 'budget limit raised',
+            lifecycleId: resumeBoundary.lifecycleId,
+            generation: resumeBoundary.generation,
+          });
+        }
+        if (this.turns.get(sessionId) !== resumeBoundary) return reconcileLifecycleChange();
+        if (resumed) {
           this.resetTurn(sessionId);
           await this.deps.ensureSession(sessionId);
           if (this.turns.get(sessionId) !== resumeBoundary) return reconcileLifecycleChange();
@@ -1081,12 +1672,17 @@ export class GoalController {
     // drain。反过来，若当前跑的是用户 turn，清目标不应误停用户正在做的工作。
     const hasActiveGoalTurn = this.goalTurnsInFlight.has(sessionId);
     const previousBoundary = this.turns.get(sessionId);
+    // 越过 onDispatching 后清目标:cleared 必须沿用被中断派发的
+    // lifecycle/generation/turnIndex,不能绑到下面 freshTurn 的 clearBoundary
+    // (Codex #2107 P2)。turn-dispatched 属于旧 boundary 且序号为 turnsUsed + 1。
+    // done 已摘 in-flight 但 finalizeTurn 仍在 await 时,改看 auditFinalized。
     this.stopSession(sessionId);
     const clearBoundary = freshTurn(
       true,
       previousBoundary?.pendingPersistence ?? null,
       previousBoundary?.pendingCompletion ?? null,
     );
+    this.inheritTakeoverOwner(sessionId, clearBoundary, previousBoundary);
     this.turns.set(sessionId, clearBoundary);
     if (hasActiveGoalTurn) {
       try {
@@ -1105,7 +1701,29 @@ export class GoalController {
     }
     await this.awaitPendingLifecycle(clearBoundary);
     if (this.turns.get(sessionId) !== clearBoundary) return;
+    // 审计快照是 best-effort: storage.get 失败不得阻断用户请求的删除
+    // (Codex #2107 P1)。cleared 事件只在 clear 真正成功后发出, 避免
+    // 删行失败却留下假 closeout。
+    let auditSnapshot: GoalState | null = null;
+    try {
+      auditSnapshot = await this.deps.storage.get(sessionId);
+    } catch (error) {
+      this.deps.logger.warn('[goal] skipped clearGoal audit snapshot (storage.get failed)', {
+        sessionId,
+        error: String(error),
+      });
+    }
+    if (this.turns.get(sessionId) !== clearBoundary) return;
     await this.trackPersistence(clearBoundary, this.deps.storage.clear(sessionId));
+    // 删除已提交就必须入队,哪怕后来的 pause 已换 owner
+    // (Codex #2107 P2: keep a committed clear closeout after a later takeover)。
+    this.settleTakeoverCloseout(sessionId, previousBoundary, {
+      type: 'cleared',
+      reason: 'cleared by user',
+      from: auditSnapshot?.status,
+      state: auditSnapshot,
+      at: this.now(),
+    });
     if (this.turns.get(sessionId) !== clearBoundary) return;
     this.deps.emitStatus({ sessionId, goal: null });
     this.turns.delete(sessionId);
@@ -1134,6 +1752,7 @@ export class GoalController {
       previousBoundary?.pendingPersistence ?? null,
       previousBoundary?.pendingCompletion ?? null,
     );
+    this.inheritTakeoverOwner(sessionId, pauseBoundary, previousBoundary);
     this.turns.set(sessionId, pauseBoundary);
     await this.awaitPendingPersistence(pauseBoundary);
     if (this.turns.get(sessionId) !== pauseBoundary) return;
@@ -1150,8 +1769,19 @@ export class GoalController {
           updatedAt: this.now(),
         }),
       );
-      if (this.turns.get(sessionId) !== pauseBoundary) return;
-      if (updated) this.emit(updated);
+      if (updated) {
+        // persist 已提交就必须入队,哪怕后来的 pause/clear 已换 owner
+        // (Codex #2107 P1: queue committed pauses before the stale-owner return)。
+        this.settleTakeoverCloseout(sessionId, previousBoundary, {
+          type: 'state-transition',
+          reason: updated.lastReason ?? 'paused by user',
+          from: state.status,
+          to: 'paused',
+          state: updated,
+          at: this.now(),
+        });
+        if (this.turns.get(sessionId) === pauseBoundary) this.emit(updated);
+      }
       return;
     }
     if (state.status !== 'active') return;
@@ -1163,8 +1793,17 @@ export class GoalController {
         updatedAt: this.now(),
       }),
     );
-    if (this.turns.get(sessionId) !== pauseBoundary) return;
-    if (updated) this.emit(updated);
+    if (updated) {
+      this.settleTakeoverCloseout(sessionId, previousBoundary, {
+        type: 'state-transition',
+        reason: updated.lastReason ?? 'paused by user',
+        from: state.status,
+        to: 'paused',
+        state: updated,
+        at: this.now(),
+      });
+      if (this.turns.get(sessionId) === pauseBoundary) this.emit(updated);
+    }
   }
 
   /**
@@ -1265,6 +1904,7 @@ export class GoalController {
           lookupBoundary,
           'turn dispatch failed: unable to restore the agent session',
           () => this.turns.get(sessionId) === lookupBoundary,
+          state.status,
         );
         throw new GoalSessionRestoreError();
       }
@@ -1294,7 +1934,6 @@ export class GoalController {
       }
       throw error;
     }
-    if (this.turns.get(sessionId) !== lookupBoundary) return;
     if (!updated) {
       if (!opts?.auto) {
         this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
@@ -1304,6 +1943,19 @@ export class GoalController {
       }
       return;
     }
+    // persist 已提交就必须记 resume 迁移,哪怕后来的 pause/clear 已换 owner
+    // (Codex #2107 P1: record committed resumes before the stale-owner return)。
+    // 显式钉 lookup 身份,不能从 this.turns 读到后来的 pause/clear 边界。
+    if ((state.status as string) !== 'active') {
+      this.recordRunEvent('state-transition', sessionId, updated, {
+        from: state.status,
+        to: 'active',
+        reason: opts?.auto ? 'auto-resume' : 'manual-resume',
+        lifecycleId: lookupBoundary.lifecycleId,
+        generation: lookupBoundary.generation,
+      });
+    }
+    if (this.turns.get(sessionId) !== lookupBoundary) return;
     if (!opts?.auto) this.completeDeferredManualResume(sessionId);
     // usageLimited 的 reset timer 必须活到 active 写真正提交；否则 deferred Resume 在
     // close/replacement 或持久化失败前被取消时，会同时失去手动意图和唯一自动恢复机会。
@@ -1319,6 +1971,10 @@ export class GoalController {
     this.attachListener(sessionId);
     this.emit(updated);
     if (!this.isBusy(sessionId)) {
+      this.pendingResumeEvents.set(sessionId, {
+        reason: opts?.auto ? 'auto-resume' : 'manual-resume',
+        boundary: resumedBoundary,
+      });
       await this.fireTurn(sessionId, { throwOnRestoreFailure: !opts?.auto });
     }
   }
@@ -1404,6 +2060,7 @@ export class GoalController {
         pendingFailure.boundary,
         pendingFailure.lastReason,
         () => this.turns.get(sessionId) === pendingFailure.boundary,
+        pendingFailure.from,
       );
       if (this.disposed) return;
       if (!persisted) throw new GoalSessionRestoreError();
@@ -1466,6 +2123,7 @@ export class GoalController {
         lifecycleBoundary,
         'turn dispatch failed: unable to restore the agent session',
         () => this.turns.get(sessionId) === lifecycleBoundary,
+        state.status,
       );
       if (this.disposed) return;
       if (!persisted) throw new GoalSessionRestoreError(restoreError);
@@ -1477,6 +2135,7 @@ export class GoalController {
         lifecycleBoundary,
         'turn dispatch failed: unable to restore the agent session',
         () => this.turns.get(sessionId) === lifecycleBoundary,
+        state.status,
       );
       if (this.disposed) return;
       if (!persisted) throw new GoalSessionRestoreError();
@@ -1532,11 +2191,16 @@ export class GoalController {
         });
         continue;
       }
-      this.turns.set(state.sessionId, freshTurn());
+      const resumeBoundary = freshTurn();
+      this.turns.set(state.sessionId, resumeBoundary);
       this.attachListener(state.sessionId);
       this.emit(state);
       resumed += 1;
       if (!this.isBusy(state.sessionId)) {
+        this.pendingResumeEvents.set(state.sessionId, {
+          reason: 'resumeActiveGoals',
+          boundary: resumeBoundary,
+        });
         void this.fireTurn(state.sessionId).catch((error) => {
           this.deps.logger.warn('[goal] detached startup fire failed', {
             sessionId: state.sessionId,
@@ -1627,6 +2291,7 @@ export class GoalController {
     this.goalTurnsInFlight.delete(sessionId);
     this.dispatchRejectionRetries.delete(sessionId);
     this.unpersistedDispatchFailures.delete(sessionId);
+    this.pendingResumeEvents.delete(sessionId);
     this.turns.delete(sessionId);
   }
 
@@ -1642,6 +2307,8 @@ export class GoalController {
     turn.tokensThisTurn = 0;
     turn.continuationTokens = 0;
     turn.finalized = false;
+    // auditFinalized 不在此清——快终态时序是 finalizeTurn 置位 → resetTurn →
+    // stopSession → accepted(晚到),在此清会把配对标志清掉。清除移到 onDispatching。
     turn.generation += 1;
   }
 
@@ -1662,6 +2329,40 @@ export class GoalController {
       if (this.disposed) return value;
       await afterPersist?.(value);
       return value;
+    });
+    const settled = committed.then(
+      () => undefined,
+      () => undefined,
+    );
+    const previous = turn.pendingPersistence;
+    const barrier = previous
+      ? Promise.all([previous, settled]).then(() => undefined)
+      : settled;
+    turn.pendingPersistence = barrier;
+    void barrier.then(() => {
+      if (turn.pendingPersistence === barrier) turn.pendingPersistence = null;
+    });
+    return committed;
+  }
+
+  /**
+   * 登记 Goal 状态写入,并把 secondary marker 失败从 storage 提交中拆开。
+   * afterPersist reject 时仍 resolve 已提交的行,让调用方 settle 审计事件
+   * (Codex #2107 P1: settle committed budget / turn closeouts after marker failure)。
+   */
+  private trackPersistenceWithMarkerFailure<T>(
+    turn: TurnAccumulator,
+    operation: Promise<T>,
+    afterPersist?: (value: T) => void | Promise<void>,
+  ): Promise<{ value: T; markerError?: unknown }> {
+    const committed = operation.then(async (value) => {
+      if (this.disposed) return { value };
+      try {
+        await afterPersist?.(value);
+        return { value };
+      } catch (markerError) {
+        return { value, markerError };
+      }
     });
     const settled = committed.then(
       () => undefined,
@@ -1920,6 +2621,18 @@ export class GoalController {
       outcome,
     );
 
+    const postDecisionCounts: Pick<
+      GoalState,
+      'turnsUsed' | 'tokensUsed' | 'noProgressStreak' | 'budgetTokens' | 'maxTurns' | 'noProgressLimit'
+    > = {
+      turnsUsed: decision.turnsUsed,
+      tokensUsed: decision.tokensUsed,
+      noProgressStreak: decision.noProgressStreak,
+      budgetTokens: state.budgetTokens,
+      maxTurns: state.maxTurns,
+      noProgressLimit: state.noProgressLimit,
+    };
+
     // complete 收尾(产品决策):不写 'complete' 行,而是在对话里留一条**持久**达成
     // 记录(role:'assistant' + agentMeta.goalCompletion,重开会话仍在),随后删 goal
     // 行让 chip 消失。视觉由 renderer 渲成"目标已达成 · N 轮 · 耗时 X"分隔条。
@@ -1928,6 +2641,8 @@ export class GoalController {
       // detach 并把 paused 落盘后立即返回；新 setGoal / update / resume 则必须等旧 clear，
       // 防止旧目标的删除迟到并抹掉新目标。
       const elapsedMs = Math.max(0, this.now() - state.startedAt);
+      const completedGeneration = this.turns.get(sessionId)?.generation ?? 0;
+      const completedLifecycleId = this.turns.get(sessionId)?.lifecycleId;
       await this.trackCompletion(
         turn,
         (async () => {
@@ -1958,6 +2673,32 @@ export class GoalController {
           this.deps.emitStatus({ sessionId, goal: null });
         })(),
       );
+      if (!this.disposed) {
+        this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
+          from: state.status,
+          to: 'complete',
+          reason: decision.lastReason,
+          generation: completedGeneration,
+          lifecycleId: completedLifecycleId,
+        });
+        if ((decision.status as string) !== (state.status as string)) {
+          this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
+            from: state.status,
+            to: 'complete',
+            reason: decision.lastReason,
+            generation: completedGeneration,
+            lifecycleId: completedLifecycleId,
+          });
+        }
+        this.recordRunEvent('terminal', sessionId, postDecisionCounts, {
+          to: 'complete',
+          reason: decision.lastReason,
+          generation: completedGeneration,
+          lifecycleId: completedLifecycleId,
+        });
+        turn.auditFinalized = true;
+        this.flushPendingDispatch(sessionId, turn);
+      }
       if (isCurrentTurn()) this.stopSession(sessionId);
       return;
     }
@@ -2004,7 +2745,7 @@ export class GoalController {
         : null;
 
     if (!isCurrentTurn()) return;
-    const updated = await this.trackPersistence(
+    const turnWrite = await this.trackPersistenceWithMarkerFailure(
       turn,
       this.deps.storage.update(sessionId, {
         // active 是保持态，不是 transition；省略它可让迟到 continuation 写在任何
@@ -2028,8 +2769,74 @@ export class GoalController {
         }
       },
     );
+    const updated = turnWrite.value;
+    if (updated && isCurrentTurn()) this.emit(updated);
+
+    const finalizeIdentity = {
+      generation,
+      lifecycleId: turn.lifecycleId,
+    };
+    // persist 已提交就必须记收口,哪怕后来的 pause/clear 已换 owner
+    // (Codex #2107 P1: record committed turn finalization before stale-owner return)。
+    if (origin === 'goal') {
+      this.recordRunEvent('turn-finalized', sessionId, postDecisionCounts, {
+        from: state.status,
+        to: status,
+        reason: lastReason,
+        ...finalizeIdentity,
+      });
+      turn.auditFinalized = true;
+      this.flushPendingDispatch(sessionId, turn);
+    }
+    if (status !== state.status) {
+      this.recordRunEvent('state-transition', sessionId, postDecisionCounts, {
+        from: state.status,
+        to: status,
+        reason: lastReason,
+        ...finalizeIdentity,
+      });
+    }
+    if (
+      origin === 'goal' &&
+      status === 'paused' &&
+      state.noProgressLimit != null &&
+      state.noProgressStreak + 1 >= state.noProgressLimit &&
+      lastReason != null && /no tool use/i.test(lastReason)
+    ) {
+      this.recordRunEvent('stall-detected', sessionId, postDecisionCounts, {
+        from: state.status,
+        to: 'paused',
+        reason: lastReason,
+        ...finalizeIdentity,
+      });
+    }
+    if (origin === 'goal' && status === 'budgetLimited') {
+      this.recordRunEvent('budget-consumed', sessionId, postDecisionCounts, {
+        from: state.status,
+        to: 'budgetLimited',
+        reason: lastReason,
+        ...finalizeIdentity,
+      });
+      this.recordRunEvent('terminal', sessionId, postDecisionCounts, {
+        to: 'budgetLimited',
+        reason: lastReason,
+        ...finalizeIdentity,
+      });
+      turn.auditFinalized = true;
+      this.flushPendingDispatch(sessionId, turn);
+    }
+
+    // 计数/目标已落盘就必须记收口,不能因 secondary marker 失败退出
+    // (Codex #2107 P1: finalize committed turns after marker-write failures)。
+    // finalizeTurn 由 onEvent `void` 调用,不能把 markerError 再抛成 unhandled rejection。
+    if (turnWrite.markerError) {
+      this.deps.logger.warn('[goal] persistUserMessage failed after committed turn finalize', {
+        sessionId,
+        error: String(turnWrite.markerError),
+      });
+    }
+
     if (!isCurrentTurn()) return;
-    if (updated) this.emit(updated);
 
     this.resetTurn(sessionId);
 
@@ -2048,8 +2855,10 @@ export class GoalController {
     boundary: TurnAccumulator,
     lastReason: string,
     isCurrent: () => boolean,
+    from?: GoalStatus,
   ): Promise<boolean> {
     if (!isCurrent()) return true;
+    const fromStatus = from ?? 'active';
     try {
       const blocked = await this.trackPersistence(
         boundary,
@@ -2059,8 +2868,24 @@ export class GoalController {
           updatedAt: this.now(),
         }),
       );
+      if (blocked) {
+        // persist 已提交就必须记迁移,哪怕 pause/clear/replace 已换 owner
+        // (Codex #2107 P2: record committed blocked after owner change)。
+        // 记录真实来源状态:resume/edit 可能从 paused/blocked/usageLimited
+        // 失败,不能一律写成 active→blocked。同源 blocked 省略迁移
+        // (Codex #2107 P1)。
+        if (fromStatus !== 'blocked') {
+          this.recordRunEvent('state-transition', sessionId, blocked, {
+            from: fromStatus,
+            to: 'blocked',
+            reason: lastReason,
+            lifecycleId: boundary.lifecycleId,
+            generation: boundary.generation,
+          });
+        }
+        if (isCurrent()) this.emit(blocked);
+      }
       if (!isCurrent()) return true;
-      if (blocked) this.emit(blocked);
     } catch (persistError) {
       this.deps.logger.error('[goal] failed to persist dispatch failure', {
         sessionId,
@@ -2077,6 +2902,7 @@ export class GoalController {
         this.unpersistedDispatchFailures.set(sessionId, {
           boundary: failClosedBoundary,
           lastReason,
+          from: fromStatus,
         });
       }
       return false;
@@ -2299,7 +3125,10 @@ export class GoalController {
   ): Promise<void> {
     if (this.disposed) return;
     const lifecycleBoundary = this.turns.get(sessionId);
-    if (!lifecycleBoundary || lifecycleBoundary.cancelled) return;
+    if (!lifecycleBoundary || lifecycleBoundary.cancelled) {
+      this.clearPendingResumeForBoundary(sessionId, lifecycleBoundary);
+      return;
+    }
     const lifecycleGeneration = lifecycleBoundary.generation;
     const isCurrentLifecycle = (): boolean =>
       this.turns.get(sessionId) === lifecycleBoundary &&
@@ -2323,11 +3152,11 @@ export class GoalController {
     }
     // owner 身份拒绝 Stop / Resume 换代，generation 拒绝另一轮正常推进后的旧 fire；
     // 两者都不能只信上面读到的 active 存档快照。
-    if (
-      !state ||
-      state.status !== 'active' ||
-      !isCurrentLifecycle()
-    ) return;
+    if (!state || state.status !== 'active') {
+      this.clearPendingResumeForBoundary(sessionId, lifecycleBoundary);
+      return;
+    }
+    if (!isCurrentLifecycle()) return;
     // preflight 预算守卫:用户可能把 maxTurns/budgetTokens 调小到已超当前用量(updateGoal 会即时
     // 转 budgetLimited,但调度链上可能仍有在途 fireTurn / continuation timer 指向旧 active 状态)。
     // 超(新)预算就转 budgetLimited 并停,绝不越过新上限再发一轮(reviewer #354)。
@@ -2340,6 +3169,11 @@ export class GoalController {
           updatedAt: this.now(),
         }),
       );
+      if (limited) {
+        // persist 已提交就必须入队,哪怕后来的 pause/clear 已换 owner
+        // (Codex #2107 P1: settle committed preflight limits before the owner check)。
+        this.settleBudgetLimitCloseout(sessionId, lifecycleBoundary, limited, state.status);
+      }
       if (!isCurrentLifecycle()) return;
       this.stopSession(sessionId);
       if (limited) this.emit(limited);
@@ -2388,6 +3222,8 @@ export class GoalController {
     });
     let dispatchBoundary: TurnAccumulator | undefined;
     let dispatchGeneration: number | undefined;
+    let dispatchAt: number | undefined;
+    let dispatchResumeReason: string | undefined;
     const isCurrentDispatch = (): boolean =>
       dispatchBoundary != null &&
       dispatchGeneration != null &&
@@ -2456,12 +3292,22 @@ export class GoalController {
           onDispatching: () => {
             if (!isCurrentDispatch()) return;
             this.goalTurnsInFlight.add(sessionId);
+            if (dispatchBoundary) {
+              dispatchBoundary.auditFinalized = false;
+              dispatchBoundary.dispatchTurnIndex = (state.turnsUsed ?? 0) + 1;
+              dispatchBoundary.dispatchAcceptance = 'pending';
+            }
             // signal 只负责取消 dispatch 前的 gate。跨过这个边界后由 coordinator Stop
             // 负责 active turn；否则快速终态的 stopSession 会把真实已派发轮次误报为
             // cancelled-before-dispatch。
             if (this.goalDispatchAbortControllers.get(sessionId)?.owner === firingOwner) {
               this.goalDispatchAbortControllers.delete(sessionId);
             }
+            const pendingResume = this.pendingResumeEvents.get(sessionId);
+            if (pendingResume && pendingResume.boundary === dispatchBoundary) {
+              dispatchResumeReason = pendingResume.reason;
+            }
+            dispatchAt = this.now();
           },
           signal: dispatchAbortController.signal,
         },
@@ -2474,6 +3320,10 @@ export class GoalController {
           this.deps.onUndispatchedUserTurn?.(sessionId);
           baselineStarted = false;
         }
+        // takeover 已换 owner 时 isCurrentDispatch 为 false,仍必须清 tentative
+        // markers / suppress closeout,否则 auditFinalized=false 会把未接受
+        // send 钉成 interrupted (Codex #2107 P1)。
+        this.settleUnacceptedDispatch(sessionId, dispatchBoundary);
         if (!isCurrentDispatch()) return;
         this.goalTurnsInFlight.delete(sessionId);
 
@@ -2528,15 +3378,95 @@ export class GoalController {
         this.deps.logger.warn('[goal] send not accepted', { sessionId, kind, reason: result.reason });
         this.scheduleContinuation(sessionId);
       } else {
-        if (!isCurrentDispatch()) {
-          baselineStarted = false;
-          return;
-        }
         // Provider acceptance ends any prior confirmed-rejection retry window.
-        this.dispatchRejectionRetries.delete(sessionId);
+        // 只清当前派发 owner:旧 send 晚到 accepted 时不能删掉新生命周期已建立的
+        // 退避记录 (Codex P2 on #2107: 将重试窗口清理限定在当前派发 owner)。
+        if (isCurrentDispatch()) {
+          this.dispatchRejectionRetries.delete(sessionId);
+        }
+        if (dispatchBoundary) dispatchBoundary.dispatchAcceptance = 'accepted';
         // onDispatching 是归属登记的唯一边界。不能在 await send 后再次 add：极快的
         // turn 可能已经发出终态并同步释放归属，重新登记会把后续用户 turn 误认成 Goal。
         baselineStarted = false;
+        // 同一生命周期的快终态(resetTurn 换代 / complete 后 stopSession 摘 owner)
+        // 仍要补记 turn-dispatched,否则审计只剩孤儿 turn-finalized/terminal
+        // (Codex #2107 P1)。
+        const currentOwner = this.turns.get(sessionId);
+        // 真替换:新 live owner(setGoal 换 objective)仍要给旧 boundary 补记
+        // 迟到 accepted,否则 replacement closeout 没有配对的 turn-dispatched
+        // (Codex #2107 P1)。pause/clear 留下 cancelled owner,同样补记。
+        const replacedByNewLiveOwner =
+          currentOwner != null &&
+          currentOwner !== dispatchBoundary &&
+          !currentOwner.cancelled;
+        if (this.disposed) return;
+        const parkOrEmitAccepted = (): void => {
+          if (
+            currentOwner === dispatchBoundary &&
+            dispatchBoundary?.finalized === true &&
+            dispatchBoundary?.auditFinalized !== true
+          ) {
+            dispatchBoundary.pendingDispatch = {
+              generation: dispatchGeneration,
+              lifecycleId: dispatchBoundary?.lifecycleId,
+              at: dispatchAt ?? this.now(),
+              resumeReason: dispatchResumeReason,
+              state: state as GoalRunEventStateSnapshot,
+            };
+            return;
+          }
+          this.emitDispatchEvents(
+            sessionId,
+            state,
+            dispatchBoundary,
+            dispatchGeneration,
+            dispatchAt ?? this.now(),
+            dispatchResumeReason,
+          );
+        };
+        const parkAcceptedForTakeover = (): void => {
+          if (!dispatchBoundary) return;
+          dispatchBoundary.pendingDispatch = {
+            generation: dispatchGeneration,
+            lifecycleId: dispatchBoundary.lifecycleId,
+            at: dispatchAt ?? this.now(),
+            resumeReason: dispatchResumeReason,
+            state: state as GoalRunEventStateSnapshot,
+          };
+        };
+        const flushAcceptedTakeover = (): boolean => {
+          if (!dispatchBoundary) return false;
+          if (dispatchBoundary.takeoverAbandoned) {
+            parkOrEmitAccepted();
+            this.closeAbandonedReplacement(sessionId, dispatchBoundary, state);
+            return true;
+          }
+          const parkedCloseouts = this.takeParkedTakeoverCloseouts(dispatchBoundary);
+          if (parkedCloseouts.length === 0) return false;
+          parkOrEmitAccepted();
+          this.flushRetiredPendingDispatch(sessionId, dispatchBoundary);
+          this.emitParkedTakeoverCloseouts(sessionId, parkedCloseouts, {
+            lifecycleId: dispatchBoundary.lifecycleId,
+            generation: dispatchBoundary.generation,
+            turnIndex: dispatchBoundary.dispatchTurnIndex ?? 1,
+          });
+          return true;
+        };
+        if (flushAcceptedTakeover()) return;
+        // persist 尚未 commit:迟到 accepted 转 takeover,等 commit 后再 flush,
+        // 避免 replacement write 失败留下孤儿 turn-dispatched (Codex #2107 P1)。
+        // pause/clear 已换成 cancelled owner 后,finalizer 会 isCurrentTurn 失败,
+        // 挂在退休 boundary 上的 pendingDispatch 永远不会 flush
+        // (Codex #2107 P1: flush late accepted after cancellation)。
+        if (
+          replacedByNewLiveOwner ||
+          (currentOwner != null && currentOwner !== dispatchBoundary)
+        ) {
+          parkAcceptedForTakeover();
+          return;
+        }
+        parkOrEmitAccepted();
+        if (!isCurrentDispatch()) return;
       }
     } catch (e) {
       if (baselineStarted) {
@@ -2550,13 +3480,20 @@ export class GoalController {
         this.goalTurnsInFlight.delete(sessionId);
       }
       this.deps.logger.warn('[goal] fireTurn send failed', { sessionId, kind, error: String(e) });
-      if (!isCurrentFailure()) return;
-
       if ((e as { code?: unknown } | null)?.code === 'SESSION_RUNNING') {
-        // dispatch 前的窄 race；现有 turn 的终态会暂停 Goal，空闲检查则负责稍后重试。
-        this.scheduleContinuation(sessionId);
+        // wrapper 可在 await handle.send 前调 onDispatching,这次派发已结束。
+        // 必须先清 tentative,否则 pause/clear 会把 closeout park 到永远等不到的 acceptance
+        // (Codex #2107 P1: settle SESSION_RUNNING attempts before scheduling retry)。
+        this.settleUnacceptedDispatch(sessionId, dispatchBoundary);
+        if (isCurrentFailure()) {
+          this.scheduleContinuation(sessionId);
+        }
         return;
       }
+      // stale send 抛错时 owner 可能已被 pause/clear 换掉;仍必须清 tentative
+      // 并兑现 parked closeout,不能只覆盖 accepted:false (Codex #2107 P2)。
+      this.settleUnacceptedDispatch(sessionId, dispatchBoundary);
+      if (!isCurrentFailure()) return;
 
       const errorMessage = e instanceof Error ? e.message : String(e);
       const persisted = await this.blockDispatchFailure(
