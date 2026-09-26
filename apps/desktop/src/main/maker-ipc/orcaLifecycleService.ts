@@ -87,6 +87,8 @@ export interface OrcaLifecycleDeps {
   /** #3555:active team 是否为初始化中断遗留的孤儿(零 worker 行且无存活创建 reservation)。 */
   isOrphanedTeamInit(teamId: string): Promise<boolean>;
   getWorkerPermissionMode(): OrcaWorkerPermissionMode;
+  /** Host-authorized per-lead policy; never changes the global creation preference. */
+  getWorkerPermissionModeOverride?(leadSessionId: string): Promise<OrcaWorkerPermissionMode | undefined>;
   setWorkerPermissionMode(workerPermissionMode: OrcaWorkerPermissionMode): void;
   createWorkerInTeam(params: OrcaWorkerCreateInTeamParams): Promise<OrcaWorkerCreationResult>;
   dispatchWorkerTask(params: {
@@ -183,9 +185,12 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   const initializingTeamIds = new Set<string>();
   const dispatchSource = 'maker-ipc/collab';
 
-  function workerPermissionModeForCreate(
+  async function workerPermissionModeForCreate(
+    leadSessionId: string,
     explicitMode: OrcaWorkerPermissionMode | undefined,
-  ): OrcaWorkerPermissionMode {
+  ): Promise<OrcaWorkerPermissionMode> {
+    const override = await deps.getWorkerPermissionModeOverride?.(leadSessionId);
+    if (override !== undefined) return override;
     if (explicitMode === undefined) return deps.getWorkerPermissionMode();
     const resolved = resolveOrcaWorkerPermissionMode(explicitMode);
     deps.setWorkerPermissionMode(resolved);
@@ -228,7 +233,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       return { ok: false, errorCode: 'NOT_FOUND', message: 'no active team for this lead' };
     }
     const initialTask = hasNonEmptyInitialTask(params.initialTask) ? params.initialTask : undefined;
-    const workerPermissionMode = workerPermissionModeForCreate(params.workerPermissionMode);
+    const workerPermissionMode = await workerPermissionModeForCreate(params.leadSessionId, params.workerPermissionMode);
     const created = await deps.createWorkerInTeam({
       ...params,
       teamId: team.id,
@@ -315,7 +320,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   }
 
   async function startTeam(params: OrcaStartTeamParams): Promise<OrcaStartTeamResult> {
-    const workerPermissionMode = workerPermissionModeForCreate(params.workerPermissionMode);
+    const workerPermissionMode = await workerPermissionModeForCreate(params.leadSessionId, params.workerPermissionMode);
     const existing = await deps.getActiveTeamByLead(params.leadSessionId);
     if (existing) {
       try {
@@ -339,7 +344,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   }
 
   async function enableTeam(params: OrcaEnableTeamParams): Promise<OrcaEnableTeamResult> {
-    const workerPermissionMode = workerPermissionModeForCreate(params.workerPermissionMode);
+    const workerPermissionMode = await workerPermissionModeForCreate(params.leadSessionId, params.workerPermissionMode);
     const normalized = normalizeEnableParams(params);
     const validationFailure = validateEnableParams(normalized);
     if (validationFailure) return validationFailure;

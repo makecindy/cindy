@@ -1,3 +1,4 @@
+import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
 import { existsSync, statSync } from 'node:fs';
 import type { AgentInputCoordinator } from './agent-input-coordinator.js';
 import path from 'node:path';
@@ -94,15 +95,10 @@ export async function discardDelegationQueuedInputs(
   delegationId: string,
   flush: (sessionId: string) => Promise<void>,
 ): Promise<void> {
-  await queue.ensureQueueRestored(sessionId);
-  for (const item of queue.getQueueControlSnapshot(sessionId).pendingQueue) {
-    if (isDelegationQueuedInput(delegationId, item.clientId)
-      || (item.supersedesUserClientId && isDelegationQueuedInput(delegationId, item.supersedesUserClientId))
-      || (item.retrySourceClientId && isDelegationQueuedInput(delegationId, item.retrySourceClientId))) {
-      queue.remove(sessionId, item.clientId);
-    }
-  }
-  await flush(sessionId);
+  await withdrawOwnedSessionInputs({
+    sessionId, queue, flush,
+    owns: clientId => isDelegationQueuedInput(delegationId, clientId),
+  });
 }
 
 export interface BotDelegationServiceDeps {
@@ -444,7 +440,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const sameExecution = (sessionId: string, expected: DelegationExecutionReceipt | null | undefined): boolean => {
     if (!deps.readSessionExecution) return true;
     const current = deps.readSessionExecution(sessionId);
-    return !!expected && current?.instanceId === expected.instanceId && current.generation === expected.generation;
+    return isSameSessionExecution(current, expected);
   };
 
   const matchesDelegatedExecution = (row: DelegationRow, allowIdle = false): boolean => {
@@ -459,16 +455,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   };
 
   const controlDelegatedExecution = async (row: DelegationRow, operation: () => Promise<void>, allowIdle = false): Promise<boolean> => {
-    if (!row.childSessionId || !matchesDelegatedExecution(row, allowIdle)) return false;
-    let applied = false;
-    const guarded = async () => {
-      if (!matchesDelegatedExecution(row, allowIdle)) return;
-      await operation();
-      applied = true;
-    };
-    if (deps.withSessionLock) await deps.withSessionLock(row.childSessionId, guarded);
-    else await guarded();
-    return applied;
+    if (!row.childSessionId) return false;
+    return controlOwnedSessionExecution({
+      sessionId: row.childSessionId,
+      matches: () => matchesDelegatedExecution(row, allowIdle),
+      withSessionLock: deps.withSessionLock,
+      operation,
+    });
   };
 
   // Store only a native turn actually accepted for this delegation run. A later

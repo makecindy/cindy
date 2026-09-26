@@ -172,6 +172,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     }),
     hasPendingWorkerInput: vi.fn(async () => false),
     hasSendToSessionLock: vi.fn(() => false),
+    withSessionSendLock: async (_id, operation) => operation(),
     archiveWorkerSession: vi.fn(async (sessionId) => {
       calls.push(`archiveWorkerSession:${sessionId}`);
     }),
@@ -2880,4 +2881,32 @@ describe('OrcaTeamService worker queued message control', () => {
       queuedMessageId: 'client-queued-9',
     });
   });
+});
+
+it('idle-only archive preserves queued input',async()=>{const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));vi.mocked(deps.hasPendingWorkerInput).mockResolvedValue(true);expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);expect(deps.cancelWorkerSessionOperations).not.toHaveBeenCalled();expect(deps.archiveWorkerSession).not.toHaveBeenCalled();});
+it('idle-only archive preserves active runtime',async()=>{const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));vi.mocked(deps.closeWorkerSessionIfIdle!).mockResolvedValue(false);expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);expect(deps.archiveWorkerSession).not.toHaveBeenCalled();});
+
+it('idle-only archive rechecks the execution stamp after waiting for the send fence',async()=>{
+ const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));
+ let current=true;
+ deps.withSessionSendLock=async (_id,operation)=>{current=false;return operation();};
+ const beforeArchive=async()=>{if(!current)throw new Error('stale completion');};
+ await expect(service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true,beforeArchive})).rejects.toThrow('stale completion');
+ expect(deps.archiveWorkerSession).not.toHaveBeenCalled();expect(deps.cancelWorkerSessionOperations).not.toHaveBeenCalled();
+});
+
+it('release refuses an occupied send fence without waiting for it',async()=>{
+ const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));
+ vi.mocked(deps.hasSendToSessionLock).mockReturnValue(true);
+ deps.withSessionSendLock=vi.fn(async (_id,operation)=>operation());
+ expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);
+ expect(deps.withSessionSendLock).not.toHaveBeenCalled();expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+});
+it('release closes under its own send fence and fails closed on close error',async()=>{
+ const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));
+ await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true});
+ expect(deps.closeWorkerSessionIfIdle).toHaveBeenCalledWith('worker-session-1',true);
+ vi.mocked(deps.archiveWorkerSession).mockClear();vi.mocked(deps.closeWorkerSessionIfIdle).mockRejectedValue(new Error('close failed'));
+ expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);
+ expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
 });

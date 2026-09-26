@@ -5365,6 +5365,8 @@
         "agentUserActionDetail": "每次點選只允許啟動一次，並且只能使用這張卡所屬的任務。",
         "agentBackground": "可在後臺自動讓 Agent 開始新一輪工作",
         "agentBackgroundDetail": "不需要當次點選，但只能使用你曾為這個插件建立過關聯的任務，可能產生模型費用。",
+        "agentTasks": "可建立和管理本插件的 Cindy 任務",
+        "agentTasksDetail": "可傳送訊息、讀取結果和停止本插件的執行，任務對你可見。沿用插件的 AI 配置，可能產生模型費用；不授予其他任務的存取權。",
         "agentErrand": "可把任務交給 Cindy Agent 代辦並取回結果",
         "agentErrandDetail": "這些代辦會在這個插件的專屬任務裡進行，你隨時可以在側邊欄看到並叫停；預設只能讀不能改，要放開需你在插件配置裡親手調整，可能產生模型費用。",
         "agentSchedule": "可以請你新建自動化",
@@ -13708,5 +13710,15 @@
   "pluginDeviceAuthorization": {
     "title": "授權插件登入",
     "description": "在這台裝置開啟 {{host}}，為執行此任務的插件授權。憑證保存在發起授權的裝置上。"
+  },
+  "pluginTaskWriteAccess": {
+    "title": "Allow this plugin’s AI to edit files?",
+    "message": "Allow the AI in “{{name}}” to edit files and continue?",
+    "detail": "This sets the plugin’s AI permission to Allow edits for future tasks too. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can switch back to read-only in the plugin’s AI settings.",
+    "allow": "Allow and continue",
+    "cancel": "Not now",
+    "autoTitle": "啟用 Auto 自動審批",
+    "autoMessage": "允許「{{name}}」使用 Auto 自動審批？",
+    "autoDetail": "主任務與 Worker 的操作將交由 Cindy 自動審批。需要人工確認或遭拒時仍會暫停；這不是完全存取。此選擇儲存到插件 AI 設定，不變更其他任務的全域權限。"
   }
 }

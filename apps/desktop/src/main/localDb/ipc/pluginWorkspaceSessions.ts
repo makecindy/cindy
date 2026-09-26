@@ -168,6 +168,9 @@ export async function createPluginDraftSession(params: {
  */
 export async function createGhostErrandSession(params: {
   ghostId: string;
+  /** Host-allocated durable task identity; never taken directly from plugin payload. */
+  sessionId?: string;
+  shouldContinue?: () => boolean;
   title: string | null;
   agentKind?: 'cc' | 'codex' | 'pi';
   model?: string;
@@ -179,9 +182,10 @@ export async function createGhostErrandSession(params: {
   workingDir?: string;
   notifySessionCreated?: (info: { sessionId: string; workdir?: string }) => void;
 }): Promise<string> {
+  if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
   const db = getDbClient().drizzle;
   const now = Date.now();
-  const id = randomUUID();
+  const id = params.sessionId ?? randomUUID();
   const projectDir = params.workingDir
     ? (normalizeWorkingDirForStorage(params.workingDir) ?? undefined)
     : undefined;
@@ -216,7 +220,9 @@ export async function createGhostErrandSession(params: {
     autoInitProjectGit: gitSafety.autoInitProjectGit,
     source: 'plugin-errand-session',
   });
+  if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
   await db.insert(sessions).values(insertRow);
+  if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
   if (projectDir && insertRow.workingDir) {
     // 项目目录是用户在插件详情页亲手选的,进"最近项目"合理;dialogue 目录
     // 是 app 管理的临时间,不进。失败仅日志,不阻断创建。

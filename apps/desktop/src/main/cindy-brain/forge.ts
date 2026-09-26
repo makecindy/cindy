@@ -3887,6 +3887,53 @@ const r = await cindy.agent.requestSchedule({
 什么时候**不该**用它:一次性的、当场就要结果的事,用快问快答(§4.0.2)或派活取件
 (§4.11.1)。这个加档是给"长期定期刷新"用的,每条任务都会反复产生模型费用。
 
+### 4.11.3 普通任务接口（实验性）
+
+声明 \`"agent": { "tasks": true }\` 后，逻辑页可使用 \`cindy.tasks\`。它是独立权限，
+旧 \`errand\` 声明不自动取得该权限；用户仍可在侧边栏查看和接手这些任务。
+面板通过既有逻辑页通道调用，不获得新的 preload 或内部 IPC 权限。
+
+先调用 \`capabilities()\` 获取实际支持操作。当前仅支持本插件创建的本机普通任务：
+\`create\`、\`get\`、\`list\`、\`send\`、\`getRun\`、\`listRuns\`、\`readMessages\`、\`cancel\`。
+可对自有任务调用 \`startTeam({taskId})\` 启用 Orca 主任务，并用 \`getTeam({taskId})\` 读取实际协同状态。协调主任务需经用户授权 Auto，Worker 自动沿用 Auto。
+在首次派发前调用 \`setTeamPlan({taskId,plan:{concurrency,items}})\`，每项包含\`label, workingDir, route\`。计划冻结后不可改写。
+
+暂不支持选择现有任务、远程/伙伴任务、任意更新配置、归档、队列暂停或事件订阅。
+旧 \`agent.errand\` 接口不变。
+
+\`\`\`js
+// requestWriteAccess({taskId, mode: 'auto'}) 请求宿主原生确认，不能替用户确认。
+// 省略 mode 保留 acceptEdits；Auto 插件主任务的 Worker 使用 Auto，不改全局权限。
+
+const task = await cindy.tasks.create({ requestKey: 'experiment-1-create', title: 'My evaluation' });
+const run = await cindy.tasks.send({ taskId: task.taskId, expectedRevision: task.revision,
+  requestKey: 'experiment-1-send', text: 'Read the project and report your findings.' });
+const status = await cindy.tasks.getRun({ runId: run.runId });
+const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
+// 保存 nextCursor；下一页传 after，不以最后一条 assistant 推断 run 已完成。
+\`\`\`
+
+SDK 成功返回 data，失败抛出带 code 的错误。原始管子响应为 \`{ok:true,data}\` 或
+\`{ok:false,error:{code,message,retryable}}\`。不要将请求键换掉来绕过不确定的派发结果。
+create/send 的 requestKey 持久去重；同键不同内容拒绝。删除后的记录不自动重建。
+请求键及 taskId/runId 需要由插件保存。取消仅作用于该输入，不能停止用户后来的执行。
+
+省略 route 时在接收时解析用户给本插件的 AI 配置；可显式传
+\`{agentKind:'codex',providerId:'...',model:'...',effort:'high',fastMode:false}\`。
+来源/模型/强度必须当前可用，派发前再次核对，不自动改用其它账号。
+工作目录由宿主分配，或沿用用户已在插件设置中选择的目录；不接受任意路径或权限覆盖。
+权限沿用 AI 代办配置，默认只读，禁止 bypassPermissions。
+create 可传 \`isolatedWorkspace:true\`，使用宿主为该任务生成的独立空目录，忽略插件的项目目录偏好。
+返回 workingDir 仅属于本插件创建的任务，可交给插件 Node 进程放入候选项目；不接受插件自报任意目录。
+任务视图同时返回 permissionMode，插件在只读时应明确提示，不能暗中升级权限。
+
+run 的 acceptedConfig 是接收配置，execution 是观测到的原生 instance/generation，
+不冒充完整实际用量/重试清单。outputMessageId 来自产品终态，不是文字猜测。
+没有足够证据的重启/恢复窗口返回 reconciling，不能当 completed、failed 或零分；
+不要自动重发可能已经产生副作用的输入。费用目前 unavailable，绝不以耗时推算。
+实验性接口尚未提供全部恢复路径的最终对账和事件补拉，因此暂不用于无人值守正式评测。
+
+
 ## 4.12 随包 Node 工作进程与 stdio MCP(node 能力)
 
 插件需要随包代码、CLI、JS 依赖、可复用 worker 状态或 stdio MCP 时，使用顶层

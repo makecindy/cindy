@@ -443,6 +443,7 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       closeWorkerSessionIfIdle: async () => true,
       hasPendingWorkerInput: async () => false,
       hasSendToSessionLock: () => false,
+      withSessionSendLock: async (_sessionId, action) => action(),
       archiveWorkerSession: async () => {},
       getManualInterrupt: () => manualInterrupt.current,
       clearManualInterrupt: () => {
