@@ -29,6 +29,23 @@ export interface BotGroupWorkDirDeps {
   git: (args: readonly string[], cwd: string) => Promise<string>;
   trashItem: (fullPath: string) => Promise<void>;
   isDirectory?: (dir: string) => Promise<boolean>;
+  /** Whether `dir` or an ancestor holds a `.git` entry (independent of the git binary). */
+  hasGitMarker?: (dir: string) => Promise<boolean>;
+}
+
+async function hasGitAncestor(dir: string): Promise<boolean> {
+  let current = path.resolve(dir);
+  for (;;) {
+    try {
+      await lstat(path.join(current, '.git'));
+      return true;
+    } catch {
+      // keep walking up
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
 }
 
 async function isExistingDirectory(dir: string): Promise<boolean> {
@@ -85,6 +102,7 @@ export function parsePorcelainPaths(output: string): string[] {
 
 export function createBotGroupWorkDir(deps: BotGroupWorkDirDeps) {
   const isDirectory = deps.isDirectory ?? isExistingDirectory;
+  const hasGitMarker = deps.hasGitMarker ?? hasGitAncestor;
 
   const prepare = async (input: { groupId: string; projectDir: string | null }): Promise<PreparedWorkDir> => {
     if (!input.projectDir) {
@@ -97,12 +115,21 @@ export function createBotGroupWorkDir(deps: BotGroupWorkDirDeps) {
       return { ok: true, workDir: folder, branch: null, ownerSessionId: null };
     }
     if (!(await isDirectory(input.projectDir))) return { ok: false, message: '项目文件夹不存在' };
-    const repo = await deps.detectRepo(input.projectDir).catch(() => null);
-    if (repo?.gitInstalled && repo.isGitRepo) {
+    // A git project must never be edited in place; when its state is unknown, fail closed.
+    let repo: { gitInstalled: boolean; isGitRepo: boolean };
+    try {
+      repo = await deps.detectRepo(input.projectDir);
+    } catch {
+      return { ok: false, message: '无法确认项目文件夹是否是 git 仓库' };
+    }
+    if (repo.gitInstalled && repo.isGitRepo) {
       const prepared = await deps.prepareWorktree(input.projectDir);
       return prepared.ok
         ? { ok: true, workDir: prepared.workingDir, branch: prepared.branch, ownerSessionId: prepared.sessionId }
         : prepared;
+    }
+    if (await hasGitMarker(input.projectDir)) {
+      return { ok: false, message: '项目文件夹在 git 仓库里，但无法创建 worktree' };
     }
     return { ok: true, workDir: input.projectDir, branch: null, ownerSessionId: null };
   };

@@ -1115,7 +1115,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       if (planning.cancelled || disposed || !scopeIsCurrent(input.scope)) return;
       if (runtime.planning === planning) runtime.planning = null;
       emit(groupId, 'round', input.scope);
-      if (!decision?.needsPlan) {
+      // No plan: an automatic check chats as usual; an explicit request always hears why.
+      const noPlan = async () => {
         if (input.mode === 'auto') {
           input.fallback?.();
           return;
@@ -1129,15 +1130,13 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           noticeCode: 'plan-failed',
         });
         emit(groupId, 'messages', input.scope);
-        return;
-      }
+      };
+      if (!decision?.needsPlan) return noPlan();
       const members = await readMembers(groupId);
       const byId = new Map(members.filter((member) => member.status === 'active').map((member) => [member.botId, member]));
       const steps = decision.steps.filter((step) => byId.has(step.botId));
-      if (steps.length === 0) {
-        if (input.mode === 'auto') input.fallback?.();
-        return;
-      }
+      // Members may have left or paused while the organizer was deciding.
+      if (steps.length === 0) return noPlan();
       const planId = createId();
       try {
         await getDbClient().tx('botGroups.createPlan', {
@@ -1161,7 +1160,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         });
       } catch (error) {
         deps.log?.warn('Bot group plan could not be saved', { groupId, error: String(error) });
-        return;
+        return noPlan();
       }
       emit(groupId, 'messages', input.scope);
       emit(groupId, 'plan', input.scope);
@@ -1204,6 +1203,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
   const runStep = async (active: ActiveStep, initialNotes: StepNotes | null, scope?: DataOwnerBroadcastScope) => {
     const { groupId, planId, position } = active;
     const runtime = runtimeFor(groupId);
+    let leftoverNotes: string[] = [];
     const live = () => !active.cancelled && !disposed && scopeIsCurrent(scope) && runtime.step === active;
 
     const settle = async (outcome: { kind: 'done'; text: string; files: string[] } | { kind: 'failed'; notice: BotGroupNoticeCode }) => {
@@ -1300,6 +1300,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       const before = deps.workDir ? await deps.workDir.snapshot(workDir).catch(() => new Map<string, string>()) : new Map<string, string>();
       let notes = initialNotes;
       let text = '';
+      let files: string[] = [];
       for (;;) {
         if (!live()) return;
         const brief = await buildBrief(plan, group, member, position, workDir, branch, notes);
@@ -1314,11 +1315,16 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         if (!live() || outcome.kind === 'cancelled') return;
         if (outcome.kind === 'failed') return await settle({ kind: 'failed', notice: outcome.notice });
         text = outcome.kind === 'reply' ? outcome.text : '';
-        if (active.notes.length === 0) break;
+        if (active.notes.length === 0) {
+          files = deps.workDir ? await deps.workDir.changedFiles(workDir, before).catch(() => []) : [];
+          // Notes sent while the files were being listed still belong to this step.
+          if (active.notes.length === 0) break;
+        }
         notes = { kind: 'more', texts: active.notes.splice(0) };
       }
-      const files = deps.workDir ? await deps.workDir.changedFiles(workDir, before).catch(() => []) : [];
       await settle({ kind: 'done', text, files });
+      // Anything sent while the hand-off was being saved becomes a redo of this step (below).
+      leftoverNotes = active.notes.splice(0);
     } catch (error) {
       deps.log?.warn('Bot group plan step failed', { groupId, error: String(error) });
       await settle({ kind: 'failed', notice: 'member-failed' }).catch(() => undefined);
@@ -1326,6 +1332,15 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       if (runtime.step === active) runtime.step = null;
       emit(groupId, 'plan', scope);
       emit(groupId, 'round', scope);
+      if (leftoverNotes.length > 0 && !active.cancelled && !disposed) {
+        const texts = leftoverNotes;
+        void serialize(groupId, async () => {
+          const plan = await readOpenPlan(groupId);
+          if (!plan || plan.id !== planId || plan.status !== 'waiting' || plan.currentStep !== position) return;
+          const step = (await readSteps(planId)).find((row) => row.position === position && row.status === 'done');
+          if (step) await beginStep(plan, step, { kind: 'redo', texts }, scope);
+        }).catch((error) => deps.log?.warn('Bot group late step notes were not delivered', { groupId, error: String(error) }));
+      }
     }
   };
 
@@ -1428,21 +1443,30 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     if (!groupId || !planId || position === null) return failure('INVALID_PARAMS', '参数无效');
     return serialize(groupId, async () => {
       const plan = await readOpenPlan(groupId);
-      if (!plan || plan.id !== planId || plan.status !== 'proposed') return failure('PLAN_CLOSED', '只能在开始前修改安排');
+      if (!plan || plan.id !== planId || (plan.status !== 'proposed' && plan.status !== 'waiting')) {
+        return failure('PLAN_CLOSED', '现在不能修改这个安排');
+      }
       const scope = captureScope();
       if (raw.action === 'remove') {
+        if (plan.status !== 'proposed') return failure('PLAN_CLOSED', '只能在开始前删掉步骤');
         const { removed } = await getDbClient().tx('botGroups.removePlanStep', { planId, position, now: now() });
         if (!removed) return failure('INVALID_PARAMS', '至少要留一步');
       } else if (raw.action === 'reassign') {
         const botId = readId(raw.botId);
         const member = botId ? (await readMembers(groupId)).find((row) => row.botId === botId && row.status === 'active') : null;
         if (!member) return failure('MEMBER_UNAVAILABLE', '这位伙伴现在不能接这一步');
+        // After 开始, only a step not yet done can change hands (e.g. its Bot left, then 重试).
+        const reassignable: Array<'pending' | 'failed'> = plan.status === 'proposed' ? ['pending'] : ['pending', 'failed'];
         const updated = await getDbClient()
           .drizzle.update(botGroupPlanSteps)
           .set({ botId: member.botId, botName: member.name })
-          .where(and(eq(botGroupPlanSteps.planId, planId), eq(botGroupPlanSteps.position, position)))
+          .where(and(
+            eq(botGroupPlanSteps.planId, planId),
+            eq(botGroupPlanSteps.position, position),
+            inArray(botGroupPlanSteps.status, reassignable),
+          ))
           .returning({ position: botGroupPlanSteps.position });
-        if (updated.length === 0) return failure('INVALID_PARAMS', '这一步不存在');
+        if (updated.length === 0) return failure('PLAN_CLOSED', '这一步已经做完或不存在');
       } else {
         return failure('INVALID_PARAMS', '参数无效');
       }
@@ -1764,8 +1788,9 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         parallelFirstCircle: isParallelBroadcast(group, mentions, responders),
         scope,
       });
-      // Naming a Bot (or everyone) is ordinary chat; otherwise 分工 routing applies (§7.2–7.4).
-      const direct = mentions.all || mentions.botIds.length > 0;
+      // Naming specific Bots is ordinary chat; everything else goes through 分工 routing (§7.2–7.4),
+      // including 「@所有人」 and groups where only mentioned Bots reply.
+      const direct = mentions.botIds.length > 0;
       if (direct && !division) {
         chatRound();
         return { ok: true, messageId: appended.id } as const;
@@ -1798,8 +1823,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       } else if (openPlan?.status === 'waiting') {
         const current = (await readSteps(openPlan.id)).find((step) => step.position === openPlan.currentStep);
         if (current) await beginStep(openPlan, current, { kind: current.status === 'failed' ? 'retry' : 'redo', texts: [text] }, scope);
-      } else if (group.replyMode === 'all' && deps.decidePlan
-        && members.filter((member) => member.status === 'active').length >= 2) {
+      } else if (deps.decidePlan && members.filter((member) => member.status === 'active').length >= 2) {
         planning('auto', null, chatRound);
       } else {
         chatRound();

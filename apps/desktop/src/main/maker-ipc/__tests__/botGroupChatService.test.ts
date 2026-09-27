@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -747,7 +749,7 @@ describe('botGroupChatService 分工', () => {
     await waitForIdle(harness, groupId);
     const lanePrompt = harness.dispatches.at(-1)!;
     expect(lanePrompt.sessionId).toBe('lane-xiaoman');
-    expect(lanePrompt.prompt).toContain('/work/site-wt/需求说明.md');
+    expect(lanePrompt.prompt).toContain(JSON.stringify(path.join('/work/site-wt', '需求说明.md')).slice(1, -1));
     expect(lanePrompt.prompt).toContain('not in your own workspace');
   });
 
@@ -791,6 +793,80 @@ describe('botGroupChatService 分工', () => {
     const second = harness.dispatches.at(-1)!;
     expect(second.prompt).toContain('While you were working');
     expect(second.prompt).toContain('记得加英文版');
+    expect(group.messages.filter((m) => m.planId === plan.id && m.kind === 'message').map((m) => m.content))
+      .toEqual(['加上英文版了']);
+  });
+
+  it('checks 「@所有人」 and mention-only groups too; only naming a Bot skips the check', async () => {
+    const decidePlan = vi.fn(async (_input: PlanDecisionInput) => ({ needsPlan: false }) as PlanDecision);
+    const harness = createHarness(() => 'NO_REPLY', { decidePlan });
+    const groupId = await createGroup(harness);
+    await harness.service.sendMessage({ groupId, text: '@所有人 帮我做个海报', mentions: { all: true, botIds: [] }, clientId: 'all' });
+    await waitForIdle(harness, groupId);
+    expect(decidePlan).toHaveBeenCalledTimes(1);
+    expect(harness.dispatches).toHaveLength(3);
+    await harness.service.updateGroup({ groupId, replyMode: 'mentioned' });
+    await harness.service.sendMessage({ groupId, text: '帮我做个海报', mentions: NONE, clientId: 'quiet' });
+    await waitForIdle(harness, groupId);
+    expect(decidePlan).toHaveBeenCalledTimes(2);
+    expect(harness.dispatches).toHaveLength(3);
+  });
+
+  it('an explicit request whose chosen members all became unavailable says so', async () => {
+    const decidePlan = vi.fn(async (_input: PlanDecisionInput): Promise<PlanDecision> =>
+      ({ needsPlan: true, steps: [{ botId: 'cindy', task: '不在群里' }] }));
+    const harness = createHarness(() => 'hi', { decidePlan });
+    const groupId = await createGroup(harness);
+    await harness.service.sendMessage({ groupId, text: '做个海报', mentions: NONE, clientId: 'c-1', division: true });
+    const group = await waitForIdle(harness, groupId);
+    expect(group.plans).toEqual([]);
+    expect(group.messages.at(-1)).toMatchObject({ kind: 'notice', noticeCode: 'plan-failed', authorName: '咪咪' });
+  });
+
+  it('a failed step can go to another member before 重试; finished steps and removal stay locked', async () => {
+    const harness = createHarness((botId) => (botId === 'abu' ? '我来做了' : '好了'), { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir() });
+    const groupId = await createGroup(harness);
+    const plan = await proposePlan(harness, groupId);
+    await harness.service.startPlan({ groupId, planId: plan.id });
+    await waitForIdle(harness, groupId);
+    // 小满 leaves the group before its step.
+    h.sqlite!.exec("UPDATE bot_profiles SET status = 'paused' WHERE id = 'xiaoman'");
+    await harness.service.continuePlan({ groupId, planId: plan.id });
+    let group = await waitForIdle(harness, groupId);
+    expect(openPlan(group).steps[1]!.status).toBe('failed');
+    expect(await harness.service.editPlanStep({ groupId, planId: plan.id, position: 0, action: 'reassign', botId: 'abu' }))
+      .toMatchObject({ ok: false, errorCode: 'PLAN_CLOSED' });
+    expect(await harness.service.editPlanStep({ groupId, planId: plan.id, position: 1, action: 'remove' }))
+      .toMatchObject({ ok: false, errorCode: 'PLAN_CLOSED' });
+    expect(await harness.service.editPlanStep({ groupId, planId: plan.id, position: 1, action: 'reassign', botId: 'abu' }))
+      .toEqual({ ok: true });
+    await harness.service.retryPlan({ groupId, planId: plan.id });
+    group = await waitForIdle(harness, groupId);
+    expect(harness.dispatches.at(-1)!.sessionId).toBe('plan-abu');
+    expect(openPlan(group).steps.map((step) => [step.botName, step.status])).toEqual([
+      ['咪咪', 'done'], ['阿布', 'done'], ['阿布', 'pending'],
+    ]);
+  });
+
+  it('a note sent while the step is wrapping up still reaches the same Bot', async () => {
+    let groupId = '';
+    let sentLate = false;
+    const replies: Record<string, string[]> = { mimi: ['初稿', '加上英文版了'] };
+    const workDir = fakeWorkDir({
+      changedFiles: vi.fn(async () => {
+        if (!sentLate) {
+          sentLate = true;
+          await harness.service.sendMessage({ groupId, text: '记得加英文版', mentions: NONE, clientId: 'late' });
+        }
+        return ['需求说明.md'];
+      }),
+    });
+    const harness = createHarness((botId) => replies[botId]?.shift() ?? 'x', { decidePlan: async () => THREE_STEPS, workDir });
+    groupId = await createGroup(harness);
+    const plan = await proposePlan(harness, groupId);
+    await harness.service.startPlan({ groupId, planId: plan.id });
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.dispatches.at(-1)!.prompt).toContain('记得加英文版');
     expect(group.messages.filter((m) => m.planId === plan.id && m.kind === 'message').map((m) => m.content))
       .toEqual(['加上英文版了']);
   });

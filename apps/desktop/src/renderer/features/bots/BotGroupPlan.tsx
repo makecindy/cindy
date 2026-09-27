@@ -3,8 +3,9 @@
  * 文件、时间线末尾的「下一步 · 继续」「没做完 · 重试」与「N 步都做完了」。
  *
  * 安排卡是时间线里的一条消息（`kind: 'plan'`），卡上每一步的状态取自 main 随群详情下发
- * 的安排快照，做到哪一步就地更新，不另起消息。只有群里未结束、仍待开始的那张卡可以操作：
- * 点某一步换人或删掉，底部「开始」「不用了」。其余状态只读，并注明已更新 / 不用了 / 已停止。
+ * 的安排快照，做到哪一步就地更新，不另起消息。只有群里未结束的那张卡可以操作：
+ * 待开始时点某一步换人或删掉，底部「开始」「不用了」；做完一步停下时，还没做或没做完的
+ * 步骤仍可换人（再点继续 / 重试）。其余状态只读，并注明已更新 / 不用了 / 已停止。
  *
  * 交接文件相对安排的工作目录；点开交给系统默认方式，路径越出工作目录的一律不打开。
  */
@@ -147,6 +148,7 @@ function EditableStepRow({
   identity,
   members,
   disabled,
+  allowRemove,
   onEdit,
 }: {
   plan: BotGroupPlanView;
@@ -155,6 +157,8 @@ function EditableStepRow({
   identity: AvatarIdentity;
   members: readonly BotGroupMemberView[];
   disabled: boolean;
+  /** Steps are removed only before 开始. */
+  allowRemove: boolean;
   onEdit: (step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
 }) {
   const { t } = useTranslation();
@@ -194,19 +198,23 @@ function EditableStepRow({
             </DropdownMenuItem>
           );
         })}
-        <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
-        <DropdownMenuItem
-          disabled={lastStep}
-          className={cn(MENU_ITEM_CLASS, 'text-[var(--text-danger)] focus:text-[var(--text-danger)]')}
-          onSelect={() => onEdit(step, 'remove')}
-        >
-          <span className="min-w-0 flex-1 truncate">{t('bots.groupChat.plan.removeStep')}</span>
-          {lastStep ? (
-            <span className="shrink-0 text-12 text-[var(--text-tertiary)]">
-              {t('bots.groupChat.plan.keepOneStep')}
-            </span>
-          ) : null}
-        </DropdownMenuItem>
+        {allowRemove ? (
+          <>
+            <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+            <DropdownMenuItem
+              disabled={lastStep}
+              className={cn(MENU_ITEM_CLASS, 'text-[var(--text-danger)] focus:text-[var(--text-danger)]')}
+              onSelect={() => onEdit(step, 'remove')}
+            >
+              <span className="min-w-0 flex-1 truncate">{t('bots.groupChat.plan.removeStep')}</span>
+              {lastStep ? (
+                <span className="shrink-0 text-12 text-[var(--text-tertiary)]">
+                  {t('bots.groupChat.plan.keepOneStep')}
+                </span>
+              ) : null}
+            </DropdownMenuItem>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -220,12 +228,14 @@ const FINAL_NOTE_KEYS: Partial<Record<BotGroupPlanView['status'], string>> = {
 
 /**
  * Body of the organizer's 安排卡 message (the header is the usual Bot header plus the
- * 负责人 tag). `actionable` = the group's open plan, still waiting for 开始.
+ * 负责人 tag). `actionable` = the group's open plan, still waiting for 开始;
+ * `reassignable` = the open plan stopped after a step (steps not done can change hands).
  */
 export function BotGroupPlanCard({
   plan,
   members,
   actionable,
+  reassignable = false,
   pending,
   onStart,
   onDismiss,
@@ -234,6 +244,7 @@ export function BotGroupPlanCard({
   plan: BotGroupPlanView | undefined;
   members: readonly BotGroupMemberView[];
   actionable: boolean;
+  reassignable?: boolean;
   pending: BotGroupPlanCardAction | null;
   onStart: () => void;
   onDismiss: () => void;
@@ -255,9 +266,11 @@ export function BotGroupPlanCard({
         <ol className="flex flex-col py-1.5">
           {plan.steps.map((step, index) => {
             const identity = stepIdentity(step, members);
+            const editable =
+              actionable || (reassignable && (step.status === 'pending' || step.status === 'failed'));
             return (
               <li key={step.position} className="min-w-0">
-                {actionable ? (
+                {editable ? (
                   <EditableStepRow
                     plan={plan}
                     step={step}
@@ -265,6 +278,7 @@ export function BotGroupPlanCard({
                     identity={identity}
                     members={members}
                     disabled={busy}
+                    allowRemove={actionable}
                     onEdit={onEditStep}
                   />
                 ) : (

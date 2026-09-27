@@ -502,6 +502,36 @@ describe('BotGroupChatView', () => {
       await waitFor(() => expect(mocks.dismissBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
     });
 
+    it('lets a step that did not finish change hands before 重试, without removing steps', async () => {
+      const failed = plan({
+        status: 'waiting',
+        currentStep: 1,
+        steps: [
+          { ...plan().steps[0]!, status: 'done' },
+          { ...plan().steps[1]!, status: 'failed' },
+        ],
+      });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(failed) });
+      renderView();
+      const steps = await screen.findAllByTestId('bot-group-plan-step');
+      expect(steps[0]!.tagName).toBe('DIV');
+      expect(steps[1]!.tagName).toBe('BUTTON');
+      fireEvent.pointerDown(steps[1]!, { button: 0, ctrlKey: false });
+      fireEvent.click(await screen.findByRole('menuitem', { name: '咪咪' }));
+      await waitFor(() =>
+        expect(mocks.editBotGroupPlanStep).toHaveBeenCalledWith({
+          groupId: 'g1',
+          planId: 'p1',
+          position: 1,
+          action: 'reassign',
+          botId: 'mimi',
+        }),
+      );
+      fireEvent.pointerDown(screen.getAllByTestId('bot-group-plan-step')[1]!, { button: 0, ctrlKey: false });
+      await screen.findByText('bots.groupChat.plan.stepMenuTitle');
+      expect(screen.queryByRole('menuitem', { name: /bots\.groupChat\.plan\.removeStep/ })).toBeNull();
+    });
+
     it('offers a retry when a step did not finish', async () => {
       const failed = plan({
         status: 'waiting',

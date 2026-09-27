@@ -478,6 +478,12 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
                     openPlan.id === message.planId &&
                     openPlan.status === 'proposed'
                   }
+                  planReassignable={
+                    message.kind === 'plan' &&
+                    openPlan !== null &&
+                    openPlan.id === message.planId &&
+                    openPlan.status === 'waiting'
+                  }
                   planPending={planCardPending(pendingFor(message.planId))}
                   onPlanAction={(action) => {
                     if (message.planId) void runPlanAction(action, message.planId);
@@ -541,6 +547,7 @@ function BotGroupTimelineItem({
   onContinue,
   plan,
   planActionable,
+  planReassignable,
   planPending,
   onPlanAction,
   onEditStep,
@@ -555,6 +562,8 @@ function BotGroupTimelineItem({
   /** Snapshot of the plan this message belongs to (安排卡, hand-off or plan end). */
   plan: BotGroupPlanView | undefined;
   planActionable: boolean;
+  /** The open plan stopped after a step: a step not yet done can change hands before 继续 / 重试. */
+  planReassignable: boolean;
   planPending: BotGroupPlanCardAction | null;
   onPlanAction: (action: 'start' | 'dismiss') => void;
   onEditStep: (step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
@@ -628,6 +637,7 @@ function BotGroupTimelineItem({
             plan={plan}
             members={members}
             actionable={planActionable}
+            reassignable={planReassignable}
             pending={planPending}
             onStart={() => onPlanAction('start')}
             onDismiss={() => onPlanAction('dismiss')}

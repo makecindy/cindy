@@ -53,6 +53,21 @@ describe('botGroupWorkDir', () => {
       .toMatchObject({ ok: false });
   });
 
+  it('never works in place when it cannot tell whether a project is a git repository', async () => {
+    const project = path.join(root, 'site');
+    await mkdir(project);
+    const broken = create({ detectRepo: async () => { throw new Error('git timed out'); } });
+    expect(await broken.prepare({ groupId: 'g1', projectDir: project })).toMatchObject({ ok: false });
+    const noGitBinary = create({
+      detectRepo: async () => ({ gitInstalled: false, isGitRepo: false }),
+      hasGitMarker: async () => true,
+    });
+    expect(await noGitBinary.prepare({ groupId: 'g1', projectDir: project })).toMatchObject({ ok: false });
+    await mkdir(path.join(project, '.git'));
+    const misdetected = create({ detectRepo: async () => ({ gitInstalled: true, isGitRepo: false }) });
+    expect(await misdetected.prepare({ groupId: 'g1', projectDir: project })).toMatchObject({ ok: false });
+  });
+
   it('lists files a step created or changed, skipping dependency folders', async () => {
     const workDir = create();
     const dir = path.join(root, 'work');
