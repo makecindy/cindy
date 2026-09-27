@@ -6324,6 +6324,8 @@ export function handleStreamEvent(
         pendingGhostGrantConfirm: null,
         pendingRemoteDesktopConfirmation: null,
         pendingRemoteDesktopConfirmationQueue: [],
+        // 失败的群专线回合同样由群聊承接,终态 error 也要保留这份归属。
+        lastStopWasGroupLane: (incomingMeta ?? state.lastAgentMeta)?.botGroupLane === true,
         // agent-meta: turn 异常结束也清空。
         lastAgentMeta: null,
         // 出错也是 turn 终结：清掉 isRunning，否则 RunningStatusBar 会一直停在
