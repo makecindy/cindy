@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import { AppState, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { ChevronDown, ChevronRight } from 'lucide-react-native';
@@ -181,7 +181,15 @@ export function OrcaWorkerStatusCard({ leadSessionId, deviceId, maker, onOpenWor
   // 的屏幕上持续发远端库读;后台时导航也可能仍是 focused,必须各自判定。
   const [focused, setFocused] = useState(false);
   const [appActive, setAppActive] = useState(AppState.currentState === 'active');
+  // 每次重新聚焦 +1。用来判断一轮轮询是否发生在「从 Worker 会话返回」之后。
+  const focusGenRef = useRef(0);
+  // 从本卡打开的、用户正在查看的 Worker。桌面端判未读是 enteredDone && !isViewed,
+  // 手机端 Lead 失焦时停轮询,Worker 在用户眼前完成,返回后第一轮才读到 running → done,
+  // 会把看过的结果标成未读。这里记下查看对象,返回后第一轮成功轮询据此清掉该条未读。
+  // 刻意只放在卡片实例里:Lead 被卸载(用户去了别处)时记录随之消失,不会压掉没看过的完成。
+  const viewingRef = useRef<{ key: string; owner: string; focusGen: number } | null>(null);
   useFocusEffect(useCallback(() => {
+    focusGenRef.current += 1;
     setFocused(true);
     return () => setFocused(false);
   }, []));
@@ -234,13 +242,26 @@ export function OrcaWorkerStatusCard({ leadSessionId, deviceId, maker, onOpenWor
     // 并重启;但 reset 发生在渲染期、早于 passive cleanup,那一窗口里落地的旧响应仍会走到
     // 下面,故把它传给 applyWorkerAttentionEdges 做围栏。
     const capturedOwner = ownerScope;
+    // effect 随聚焦重启,这里捕获的就是本轮聚焦的代次。
+    const startedFocusGen = focusGenRef.current;
     const load = async () => {
       // stop 不能用 return 代替:finally 照样会执行,只有标志能拦住下一轮排程。
       let stop = false;
+      // 查看记录只给返回后发出的**第一轮**请求用,发出时就取走:这一轮若瞬时失败,
+      // 记录不能留到下一次成功读取 —— 那时 Worker 可能是在用户返回之后才完成的,
+      // 再按旧记录清掉就吞掉了一次没看过的完成。代价是第一轮恰好失败时,看过的完成
+      // 会多提示一次,与「宁可多提示」一致。
+      const viewing = viewingRef.current && startedFocusGen > viewingRef.current.focusGen
+        ? viewingRef.current
+        : null;
+      if (viewing) viewingRef.current = null;
       try {
         const next = workersFrom(await maker.listOrcaWorkersByLead(leadSessionId));
         if (active) {
           applyWorkerAttentionEdges(capturedOwner, deviceId, leadSessionId, next);
+          // 返回 Lead 后的第一轮轮询成功:查看期间产生的边沿视为已查看。若此刻 Worker
+          // 仍在运行,这一轮没有边沿,记录已在发出时丢弃,之后真正完成时照常提示。
+          if (viewing && viewing.owner === capturedOwner) unreadWorkers.delete(viewing.key);
           setSnapshot({ owner: capturedOwner, device: deviceId, lead: leadSessionId, workers: next });
         }
       } catch (error) {
@@ -317,7 +338,9 @@ export function OrcaWorkerStatusCard({ leadSessionId, deviceId, maker, onOpenWor
               // 先看导航是否真的受理:guardedPush 在失焦 / 前进锁命中时静默丢弃。
               // 只有真打开了才算「正在查看」,否则该 Worker 会被误标已读。
               if (!onOpenWorker(workerSessionId)) return;
-              if (unreadWorkers.delete(attentionKey(deviceId, leadSessionId, key))) bumpAttention();
+              const viewedKey = attentionKey(deviceId, leadSessionId, key);
+              viewingRef.current = { key: viewedKey, owner: ownerScope, focusGen: focusGenRef.current };
+              if (unreadWorkers.delete(viewedKey)) bumpAttention();
             }}
             style={({ pressed }) => [styles.row, styles.rowPressable, pressed && { opacity: 0.6 }]}
             testID={`session.orcaWorkers.worker.${workerSessionId}`}

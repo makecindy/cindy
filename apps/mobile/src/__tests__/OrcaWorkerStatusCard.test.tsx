@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement, useEffect } from 'react';
+import { act, createElement, useEffect, useSyncExternalStore } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
@@ -8,6 +8,9 @@ const h = vi.hoisted(() => ({
   connectionEpoch: 0,
   peerAvailable: true as boolean | null,
   linkStatus: 'online' as string,
+  // 导航焦点:可控,才能模拟「进入 Worker 会话 → 返回 Lead」。
+  screenFocused: true,
+  focusListeners: new Set<() => void>(),
   colors: {
     surface: 'SURFACE',
     surfaceElevated: 'SURFACE_ELEVATED',
@@ -34,7 +37,15 @@ vi.mock('react-native', () => ({
     ),
   StyleSheet: { create: (v: any) => v, hairlineWidth: 1 },
 }));
-vi.mock('expo-router', () => ({ useFocusEffect: (cb: () => void) => useEffect(cb, [cb]) }));
+vi.mock('expo-router', () => ({
+  useFocusEffect: (cb: () => void | (() => void)) => {
+    const focused = useSyncExternalStore(
+      (l: () => void) => { h.focusListeners.add(l); return () => { h.focusListeners.delete(l); }; },
+      () => h.screenFocused,
+    );
+    useEffect(() => (focused ? cb() : undefined), [cb, focused]);
+  },
+}));
 vi.mock('lucide-react-native', () => ({
   ChevronDown: () => createElement('i', { 'data-icon': 'down' }),
   ChevronRight: () => createElement('i', { 'data-icon': 'right' }),
@@ -83,6 +94,7 @@ beforeEach(() => {
   h.connectionEpoch = 0;
   h.peerAvailable = true;
   h.linkStatus = 'online';
+  h.screenFocused = true;
   leadSeq += 1;
   lead = `lead-${leadSeq}`;
   container = document.createElement('div');
@@ -857,4 +869,104 @@ it('状态点与提示点都是圆形(pill 半径),与共享 StatusDot 几何一
   await act(async () => toggle().click());
   const row = container.querySelector('[data-testid="session.orcaWorkers.worker.s-a"]');
   expect(radiusOf(row?.querySelector('div[data-style]'))).toBe(9999);
+});
+
+/** 模拟 Lead 页失焦 / 重新聚焦(推入 Worker 会话 / 从它返回)。 */
+async function setScreenFocused(focused: boolean) {
+  await act(async () => {
+    h.screenFocused = focused;
+    for (const listener of h.focusListeners) listener();
+  });
+}
+
+async function mountLead() {
+  await act(async () => {
+    root.render(
+      createElement(OrcaWorkerStatusCard as any, {
+        leadSessionId: lead,
+        deviceId: 'dev-1',
+        maker: stableMaker,
+        onOpenWorker: () => true,
+      }),
+    );
+  });
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+}
+
+async function openWorkerRow() {
+  await act(async () => toggle().click());
+  await act(async () => {
+    (container.querySelector('[data-testid="session.orcaWorkers.worker.s-a"]') as HTMLButtonElement).click();
+  });
+}
+
+it('在 Worker 会话里看着它完成,返回 Lead 后不得重新标为未读', async () => {
+  vi.useFakeTimers();
+  h.listOrcaWorkersByLead.mockResolvedValue([{ id: 'a', label: 'w', status: 'running', sessionId: 's-a' }]);
+  await mountLead();
+
+  // 从卡片打开 Worker:Lead 失焦、停轮询。用户在 Worker 会话里看着它完成。
+  await openWorkerRow();
+  await setScreenFocused(false);
+  h.listOrcaWorkersByLead.mockResolvedValue([{ id: 'a', label: 'w', status: 'done', sessionId: 's-a' }]);
+  await act(async () => { await vi.advanceTimersByTimeAsync(20000); });
+
+  // 返回 Lead:第一轮轮询才读到 running → done,但这个结果用户已经看过。
+  await setScreenFocused(true);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  await act(async () => toggle().click()); // 收起,露出折叠态提示点位置
+  expect(attentionDot()).toBeNull();
+});
+
+it('返回时 Worker 仍在运行,之后才完成:必须照常提示', async () => {
+  vi.useFakeTimers();
+  h.listOrcaWorkersByLead.mockResolvedValue([{ id: 'a', label: 'w', status: 'running', sessionId: 's-a' }]);
+  await mountLead();
+  await openWorkerRow();
+  await setScreenFocused(false);
+  await setScreenFocused(true);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  await act(async () => toggle().click());
+
+  // 用户已回到 Lead,这之后的完成是没看过的完成。
+  h.listOrcaWorkersByLead.mockResolvedValue([{ id: 'a', label: 'w', status: 'done', sessionId: 's-a' }]);
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+  expect(attentionDot()).not.toBeNull();
+});
+
+it('Lead 卡片被卸载后重新进入:不沿用查看记录,完成照常提示', async () => {
+  vi.useFakeTimers();
+  h.listOrcaWorkersByLead.mockResolvedValue([{ id: 'a', label: 'w', status: 'running', sessionId: 's-a' }]);
+  await mountLead();
+  await openWorkerRow();
+
+  // 用户没有直接返回,而是去了别处:Lead 被卸载,查看记录随实例消失。
+  await act(async () => root.unmount());
+  container.remove();
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+
+  h.listOrcaWorkersByLead.mockResolvedValue([{ id: 'a', label: 'w', status: 'done', sessionId: 's-a' }]);
+  await mountLead();
+  expect(attentionDot()).not.toBeNull();
+});
+
+it('返回后第一轮轮询瞬时失败:查看记录不得留到之后,返回后才发生的完成必须提示', async () => {
+  vi.useFakeTimers();
+  h.listOrcaWorkersByLead.mockResolvedValue([{ id: 'a', label: 'w', status: 'running', sessionId: 's-a' }]);
+  await mountLead();
+  await openWorkerRow();
+  await setScreenFocused(false);
+
+  // 返回 Lead,第一轮请求瞬时失败(Worker 此时仍在运行)。
+  h.listOrcaWorkersByLead.mockRejectedValueOnce(new Error('tunnel dropped'));
+  await setScreenFocused(true);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  await act(async () => toggle().click());
+
+  // 用户已回到 Lead 之后 Worker 才完成:这是没看过的完成,不能被旧查看记录吞掉。
+  h.listOrcaWorkersByLead.mockResolvedValue([{ id: 'a', label: 'w', status: 'done', sessionId: 's-a' }]);
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+  expect(attentionDot()).not.toBeNull();
 });
