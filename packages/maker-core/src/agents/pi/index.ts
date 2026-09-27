@@ -5110,7 +5110,8 @@ export class PiAgent extends BaseAgent {
       // 键名可能含 API key，须纳入 piSecretEnvNames 剥离面。
       // 传当前 session model：未命中视觉桥目标模型的 Pi 模型不注入 env、不注册
       // vision 工具（零干扰，不因别的模型配置了视觉桥而改变本模型工具面）。
-      const visionBridgeEnv = this.deps.resolvePiVisionBridgeEnv?.(opts.model) ?? null;
+      // sessionId 供 OpenCode Go 后端确定性派生会话头（spawn env 必须稳定）。
+      const visionBridgeEnv = this.deps.resolvePiVisionBridgeEnv?.(opts.model, opts.sessionId) ?? null;
       // 这些值必须留在 Pi 父进程，供 models.json 的 $ENV 请求期解析及 bridge
       // client 使用；cindy-bridge 用该**仅含变量名**的清单在 bash spawn 边界剥离
       // 真值，阻止 LLM shell 绕过工具审批直连 localhost proxy/MCP 或盗用 BYOM key。

@@ -20,6 +20,9 @@ import fs from 'node:fs/promises';
 
 import { resolvePiModelWireProtocol, type AgentKind, type Provider } from '@cindy/model-providers';
 
+import { withOpenCodeGoSessionHeader } from '../maker-host/opencode-go-session.js';
+import { providerRuntimeCatalogPresetId } from '../maker-host/provider-route.js';
+
 /** 视觉后端执行失败（带原因）。调用方据此决定 fallback 或回退。 */
 export class VisionBackendError extends Error {
   readonly code:
@@ -299,11 +302,16 @@ export async function describeImageWithProvider(
   const endpoint = resolveVisionBackendEndpoint(providerId, modelId, deps);
   const url = `${endpoint.upstream}${endpoint.requestPath.startsWith('/') ? endpoint.requestPath : `/${endpoint.requestPath}`}`;
   // 合并路由额外头（anthropic-version / x-api-key / 自定义 provider 头）+ Authorization。
-  // endpoint.headers 已过滤客户端凭证头，与 authorization 无冲突。
-  const headers: Record<string, string> = {
+  // endpoint.headers 已过滤客户端凭证头，与 authorization 无冲突。OpenCode Go 直连
+  // 需补会话头（缺失上游 400 MissingSessionID）；每次识别请求即一次独立对话，随机 UUID。
+  const headers: Record<string, string> = withOpenCodeGoSessionHeader({
     ...endpoint.headers,
     ...(endpoint.authorization ? { authorization: endpoint.authorization } : {}),
-  };
+  }, {
+    providerId,
+    catalogPresetId: endpoint.catalogPresetId,
+    upstream: endpoint.upstream,
+  }) ?? {};
   const imageUrl = await resolveImageUrl(input);
   const prompt =
     input.prompt && input.prompt.trim().length > 0 ? input.prompt.trim() : DEFAULT_VISION_PROMPT;
@@ -535,6 +543,8 @@ export interface VisionBackendEndpoint {
   headers: Record<string, string>;
   /** wire 协议（决定请求体/响应解析形态）。 */
   wireProtocol: VisionWireProtocol;
+  /** 该 runtime 的目录预设身份（如 'opencode-go'）：改地址后仍保留，直连路径据此补会话头。 */
+  catalogPresetId?: string;
 }
 
 /**
@@ -567,6 +577,7 @@ export function resolveVisionBackendEndpoint(
     throw new VisionBackendError('not-found', `provider ${providerId} has no usable routing`);
   }
   const routing = provider.routing[agent]!;
+  const catalogPresetId = providerRuntimeCatalogPresetId(provider, agent);
   const wireProtocol = wireProtocolFor(provider, agent, modelId);
   if (!wireProtocol) {
     throw new VisionBackendError(
@@ -594,6 +605,7 @@ export function resolveVisionBackendEndpoint(
       authorization: headers.authorization ?? null,
       headers: visionRouteHeaders(routing),
       wireProtocol,
+      ...(catalogPresetId ? { catalogPresetId } : {}),
     };
   }
   const headers = applyAuthStrategy(provider, agent, deps);
@@ -604,5 +616,6 @@ export function resolveVisionBackendEndpoint(
     authorization: headers.authorization ?? null,
     headers: visionRouteHeaders(routing),
     wireProtocol,
+    ...(catalogPresetId ? { catalogPresetId } : {}),
   };
 }

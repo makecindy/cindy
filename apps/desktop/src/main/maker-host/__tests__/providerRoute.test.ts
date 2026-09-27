@@ -1715,6 +1715,33 @@ describe('resolveVisionBackendRoute（视觉桥复用统一路由器）', () => 
     expect(resolveVisionBackendRoute('openrouter', 'qwen/qwen-vl-max', null)).toBeNull();
   });
 
+  it('目录预设身份随路由返回：改地址后视觉直连仍能识别 OpenCode Go', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'opencode-go-mirror',
+        name: 'OpenCode Go (mirror)',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://mirror.example/v1',
+            wireProtocol: 'openai-chat',
+            catalogPresetId: 'opencode-go',
+            models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((id) => (id === 'opencode-go-mirror' ? 'sk-go' : null));
+    try {
+      const routed = resolveVisionBackendRoute('opencode-go-mirror', 'deepseek-v4.1-flash', null);
+      expect(routed).not.toBeNull();
+      expect(routed?.catalogPresetId).toBe('opencode-go');
+      expect(routed?.upstream).toBe('https://mirror.example/v1');
+    } finally {
+      setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+    }
+  });
+
   it('gateway-key 无动态端点 → null（网关不可用）', () => {
     setVisionGatewayKeyReader(() => KEY);
     expect(resolveVisionBackendRoute('xd', 'codex/gpt-5.6-luna', null)).toBeNull();

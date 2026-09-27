@@ -25,6 +25,7 @@ import {
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
+import { withOpenCodeGoSessionHeader } from '../maker-host/opencode-go-session.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { MANAGED_OLLAMA_PROVIDER_ID } from '../../shared/localModelRuntime.js';
@@ -760,6 +761,9 @@ async function requestExplicitProviderText(
   // which would silently turn a Claude request into a Codex request.
   const model = requestedModel || configuredModels.find((item) =>
     isModelSelectableForNewRoute(item, { userProvider: provider?.source === 'user' }))?.id || '';
+  // 预设身份随模型投影带出：从 OpenCode Go 预设创建后再改地址/复制连接时，运行时 id 与
+  // URL 都可能对不上，补会话头仍要认得出来（见 opencode-go-session.ts 的三路识别）。
+  const catalogPresetId = configuredModels.find((item) => item.id === model)?.catalogPresetId;
   const selectedRouting = agentKind ? provider?.routing[agentKind] : undefined;
   const transport: UtilityModelTransport =
     agentKind === 'codex' && selectedRouting?.wireProtocol !== 'openai-chat'
@@ -955,7 +959,11 @@ async function requestExplicitProviderText(
       requestPath: routing.requestPath,
       wireProtocol,
       isOllama,
-      headers: routing.headerOverride,
+      headers: withOpenCodeGoSessionHeader(routing.headerOverride, {
+        providerId: provider.id,
+        catalogPresetId,
+        upstream: routing.upstream,
+      }),
       credential: credential ?? '',
       authStrategy,
       model,
