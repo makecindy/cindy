@@ -129,16 +129,16 @@ export function resolveBotGroupMentions(
   },
 ): BotGroupMention {
   const entries = buildLabelEntries(input.members, input.allLabels, input.tracked ?? []);
-  const mentioned = new Set<string>();
+  const memberIds = new Set(input.members.map((member) => member.botId));
+  const botIds: string[] = [];
   let all = false;
   for (const token of scanMentionTokens(text, entries)) {
     if (token.entry.all) all = true;
-    for (const botId of token.entry.botIds) mentioned.add(botId);
+    for (const botId of token.entry.botIds) {
+      if (memberIds.has(botId) && !botIds.includes(botId)) botIds.push(botId);
+    }
   }
-  // 按成员顺序输出，和宿主的发言顺序同一口径。
-  const botIds = input.members
-    .map((member) => member.botId)
-    .filter((botId, index, ids) => mentioned.has(botId) && ids.indexOf(botId) === index);
+  // 按正文里点名的先后输出：宿主直接按这个顺序轮流发言（bot-group-chat.md §4.1）。
   return { all, botIds };
 }
 

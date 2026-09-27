@@ -9800,7 +9800,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         return;
       }
-      await persistPermissionModeWithoutRuntime(laneSessionId, mode);
+      if (!(await persistPermissionModeWithoutRuntime(laneSessionId, mode))) {
+        throw new Error('Group lane permission could not be persisted');
+      }
     },
     hasPendingInteraction: (sessionId) => hasPendingAgentInteractionForSession(sessionId),
     captureOwnerScope: captureDataOwnerBroadcastScope,

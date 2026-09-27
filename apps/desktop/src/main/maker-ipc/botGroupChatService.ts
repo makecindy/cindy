@@ -132,6 +132,8 @@ interface ActiveRound {
   cancelled: boolean;
   /** Bot id → its lane Session while that Bot is taking its turn (insertion order = start order). */
   speakers: Map<string, string | null>;
+  /** Members that failed or timed out sit out the rest of the round (one notice each). */
+  dropped: Set<string>;
 }
 
 interface GroupRuntime {
@@ -222,8 +224,10 @@ export function resolveGroupMentions(
   members: ReadonlyArray<{ botId: string; name: string }>,
 ): BotGroupMention {
   const memberIds = new Set(members.map((member) => member.botId));
-  const structured = new Set((input?.botIds ?? []).filter((id) => memberIds.has(id)));
-  /** Typed order is the speaking order the user asked for (docs/product-rules/bot-group-chat.md §4.1). */
+  // The composer's list is authoritative: it keeps the picked Bot when names collide
+  // and is already in mention order, the speaking order the user asked for
+  // (docs/product-rules/bot-group-chat.md §4.1). Text is parsed only without it.
+  const structured = [...new Set((input?.botIds ?? []).filter((id) => memberIds.has(id)))];
   const ordered: string[] = [];
   let all = input?.all === true;
   const labels = [
@@ -241,8 +245,7 @@ export function resolveGroupMentions(
     if (!match.botId) all = true;
     else if (!ordered.includes(match.botId)) ordered.push(match.botId);
   }
-  const untyped = members.map((member) => member.botId).filter((id) => structured.has(id) && !ordered.includes(id));
-  return { all, botIds: [...ordered, ...untyped] };
+  return { all, botIds: structured.length > 0 ? structured : ordered };
 }
 
 /** Speaking order for one circle: start one position later each circle. */
@@ -517,7 +520,13 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     const lane = await deps.ensureLane({ botId: member.botId, groupId: group.id, title: group.name });
     if (round.cancelled || !scopeIsCurrent(scope)) return { kind: 'cancelled' };
     if (!lane.ok) return { kind: 'failed', notice: 'member-unavailable' };
-    await deps.syncLanePermission?.(lane.sessionId, member.botId).catch(() => undefined);
+    // A lane must never act on a stale, looser permission profile than its Bot now has.
+    try {
+      await deps.syncLanePermission?.(lane.sessionId, member.botId);
+    } catch (error) {
+      deps.log?.warn('Bot group lane permission sync failed', { groupId: group.id, error: String(error) });
+      return round.cancelled ? { kind: 'cancelled' } : { kind: 'failed', notice: 'member-failed' };
+    }
 
     const db = getDbClient().drizzle;
     const [seen] = await db
@@ -553,6 +562,9 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     });
     const deliveredThrough = delta.at(-1)?.sequence ?? seen.lastSeenSequence;
 
+    // The awaits above leave a window in which the user may have superseded this round.
+    // From here to dispatch nothing awaits, so a live round owns the lane it registers.
+    if (round.cancelled || !scopeIsCurrent(scope)) return { kind: 'cancelled' };
     round.speakers.set(member.botId, lane.sessionId);
     emit(group.id, 'round', scope);
 
@@ -592,7 +604,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         .catch(() => undefined);
     }
     if (round.cancelled) {
-      cancelWaiter(lane.sessionId);
+      // A newer round may already own this lane; only withdraw this turn's waiter.
+      if (waiters.get(lane.sessionId) === waiter) cancelWaiter(lane.sessionId);
       return { kind: 'cancelled' };
     }
     return waitForTurn(lane.sessionId, waiter, settled);
@@ -607,7 +620,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     scope: DataOwnerBroadcastScope | undefined;
   }): Promise<void> => {
     const runtime = runtimeFor(input.groupId);
-    const round: ActiveRound = { id: createId(), cancelled: false, speakers: new Map() };
+    const round: ActiveRound = { id: createId(), cancelled: false, speakers: new Map(), dropped: new Set() };
     runtime.round = round;
     emit(input.groupId, 'round', input.scope);
     let posted = 0;
@@ -615,7 +628,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
 
     /** One member's turn; true when it posted a message. */
     const takeTurn = async (botId: string): Promise<boolean> => {
-      if (!live() || posted >= MAX_BOT_MESSAGES_PER_ROUND) return false;
+      if (!live() || posted >= MAX_BOT_MESSAGES_PER_ROUND || round.dropped.has(botId)) return false;
       const group = await readGroup(input.groupId);
       if (!group) return false;
       const members = await readMembers(input.groupId);
@@ -641,6 +654,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         spoke = true;
         emit(input.groupId, 'messages', input.scope);
       } else if (outcome.kind === 'failed') {
+        round.dropped.add(botId);
         await postNotice(input.groupId, member, outcome.notice, input.scope);
       }
       emit(input.groupId, 'round', input.scope);

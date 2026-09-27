@@ -327,6 +327,44 @@ describe('botGroupChatService', () => {
     expect(harness.dispatches[1]!.prompt).not.toContain('previous turn in this group was stopped');
   });
 
+  it('does not let a Bot speak when its lane permission could not be synced', async () => {
+    const harness = createHarness(() => 'hi', {
+      syncLanePermission: async (_laneId, botId) => {
+        if (botId === 'mimi') throw new Error('permission switch failed');
+      },
+    });
+    const groupId = await createGroup(harness);
+    await harness.service.sendMessage({ groupId, text: '@咪咪 @阿布 说说', mentions: { all: false, botIds: [] }, clientId: 'c-1' });
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.dispatches.map((call) => call.botId)).not.toContain('mimi');
+    expect(group.messages.filter((m) => m.kind === 'notice').map((m) => [m.noticeCode, m.authorName]))
+      .toEqual([['member-failed', '咪咪']]);
+  });
+
+  it('a round superseded while a member prepares never dispatches and never steals the new waiter', async () => {
+    let releaseSync!: () => void;
+    const syncGate = new Promise<void>((resolve) => { releaseSync = resolve; });
+    let firstSync = true;
+    const harness = createHarness((botId) => (botId === 'mimi' ? 'mimi 新一轮' : 'NO_REPLY'), {
+      syncLanePermission: async () => {
+        if (firstSync) {
+          firstSync = false;
+          await syncGate;
+        }
+      },
+    });
+    const groupId = await createGroup(harness);
+    await harness.service.sendMessage({ groupId, text: '@咪咪 第一句', mentions: { all: false, botIds: [] }, clientId: 'c-1' });
+    // The first round is parked between lane creation and dispatch; the user moves on.
+    await harness.service.sendMessage({ groupId, text: '@咪咪 换个问题', mentions: { all: false, botIds: [] }, clientId: 'c-2' });
+    await vi.waitFor(() => expect(harness.dispatches).toHaveLength(1));
+    releaseSync();
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.dispatches).toHaveLength(1);
+    expect(harness.dispatches[0]!.prompt).toContain('换个问题');
+    expect(group.messages.filter((m) => m.authorKind === 'bot').map((m) => m.content)).toEqual(['mimi 新一轮']);
+  });
+
   it('stop ends the round and aborts the speaking lane', async () => {
     const harness = createHarness(() => null);
     const groupId = await createGroup(harness);
@@ -430,7 +468,11 @@ describe('group mention and prompt helpers', () => {
     expect(resolveGroupMentions('@abu bot 先说，@小满 再补', null, members))
       .toEqual({ all: false, botIds: ['abu', 'xiaoman'] });
     expect(resolveGroupMentions('只按结构化点名', { all: false, botIds: ['abu', 'xiaoman'] }, members))
-      .toEqual({ all: false, botIds: ['xiaoman', 'abu'] });
+      .toEqual({ all: false, botIds: ['abu', 'xiaoman'] });
+    // The composer's pick disambiguates same-named members; text never widens it.
+    const twins = [{ botId: 'x1', name: '小满' }, { botId: 'x2', name: '小满' }];
+    expect(resolveGroupMentions('@小满 在吗', { all: false, botIds: ['x2'] }, twins))
+      .toEqual({ all: false, botIds: ['x2'] });
     expect(resolveGroupMentions('@小满帮我查一下', null, members)).toEqual({ all: false, botIds: ['xiaoman'] });
     expect(resolveGroupMentions('@所有人看这里', null, members).all).toBe(true);
     expect(resolveGroupMentions('@Everyone look', null, members).all).toBe(true);

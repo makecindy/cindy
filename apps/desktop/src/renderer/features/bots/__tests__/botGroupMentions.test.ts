@@ -22,10 +22,10 @@ const members = [
 ];
 
 describe('resolveBotGroupMentions', () => {
-  it('re-derives mentions from the text, in member order', () => {
+  it('re-derives mentions from the text, in the order they were mentioned', () => {
     expect(
       resolveBotGroupMentions('@阿布 看下天气，@小满帮我查余票', { members, allLabels: ['所有人'] }),
-    ).toEqual({ all: false, botIds: ['xiaoman', 'abu'] });
+    ).toEqual({ all: false, botIds: ['abu', 'xiaoman'] });
   });
 
   it('recognizes @everyone and plain text without mentions', () => {
