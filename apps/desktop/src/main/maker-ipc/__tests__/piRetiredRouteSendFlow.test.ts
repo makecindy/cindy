@@ -116,10 +116,18 @@ function createLiveSession(actualWindow: number | undefined): PiSendSession {
  */
 function createFlow(
   actualWindow: number | undefined,
-  options: { failProtectionClose?: boolean } = {},
+  options: { failProtectionClose?: boolean; failFirstRebuildCommit?: boolean } = {},
 ) {
   const routeUsedBySend: Array<{ model?: string; providerId?: string | null }> = [];
-  const commitRebuild = vi.fn(async () => undefined);
+  let rebuildCommits = 0;
+  const commitRebuild = vi.fn(async () => {
+    rebuildCommits += 1;
+    // 模拟「保护事务已关掉旧进程、但重建提交失败」：标记必须保留到重建也成功为止。
+    if (options.failFirstRebuildCommit && rebuildCommits === 1) {
+      throw new Error('commit rebuild failed');
+    }
+    return undefined;
+  });
   const closeSession = vi.fn(async () => {
     if (options.failProtectionClose) throw new Error('close failed');
   });
@@ -315,6 +323,25 @@ describe('Pi retired route → next send verification', () => {
     expect(flow.guard.has(SESSION_ID)).toBe(true);
     // 不静默改发旧供应商：route store 仍是用户选的新来源。
     expect(getSessionProvider(SESSION_ID)).toBe(NEW_PROVIDER);
+  });
+
+  it('缩窗重建提交失败后标记保留：重试仍会核验并完成保护，不会直接发出', async () => {
+    await retireOldPiRuntime();
+    const flow = createFlow(100_000, { failFirstRebuildCommit: true });
+    flow.recordPendingCheck();
+
+    // 第一次：保护事务已关掉旧进程，但重建提交失败。
+    await expect(flow.sendNextMessage()).rejects.toThrow(/这条消息没有发送/);
+    expect(flow.liveSession?.send).not.toHaveBeenCalled();
+    // 标记必须保留——否则用户重试会跳过实际窗口核验与缩窗保护。
+    expect(flow.guard.has(SESSION_ID)).toBe(true);
+    expect(getSessionProvider(SESSION_ID)).toBe(NEW_PROVIDER);
+
+    // 重试：重新核验 → 重新执行保护（重建这次成功）→ 消息才发往新来源。
+    await expect(flow.sendNextMessage()).resolves.toMatchObject({ accepted: true });
+    expect(flow.commitRebuild).toHaveBeenCalledTimes(2);
+    expect(flow.liveSession?.send).toHaveBeenCalledTimes(1);
+    expect(flow.guard.has(SESSION_ID)).toBe(false);
   });
 
   it('保护失败（缩窗事务关闭旧 runtime 抛错）：这条消息不发送，也不回退旧供应商', async () => {

@@ -1275,6 +1275,12 @@ describe('session runtime control wiring', () => {
     expect(guardCall).toBeLessThan(vendorSend);
     // 核验失败必须抛错（pre-accept 回滚 + 队列恢复），不能只记日志后照发。
     expect(registerSource).toContain("verification.status === 'failed'");
+    // 关闭钩子不能清标记：缩窗保护先 close 旧进程再 commitRebuild，重建失败时若已清标记，
+    // 用户重试就会跳过实际窗口核验与保护（Greptile P1，2026-09-26）。
+    const closedSessionHook = registerSource
+      .slice(registerSource.indexOf('finalizeClosedSession: (session: WiredSession'))
+      .slice(0, 600);
+    expect(closedSessionHook).not.toContain('piRetiredRouteWindowGuardHolder?.clear(');
   });
 
   it('refreshes model-only context snapshots against the retained target provider route', () => {

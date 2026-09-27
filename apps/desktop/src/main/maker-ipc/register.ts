@@ -4534,8 +4534,11 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     // 关闭前固化 live 用量（见 sessionLastLiveUsage.ts）：冷 Pi 切模的窗口核实
     // 预检用它代替可能低报的 DB 快照（Greptile P1）。
     rememberSessionLastLiveUsage(session.id, session.getUsageSnapshot?.());
-    // 会话已关闭：退役 route 的待核验标记一并作废，不让它跟到下一次重建。
-    piRetiredRouteWindowGuardHolder?.clear(session.id);
+    // 注意：**不能**在这里清 piRetiredRouteWindowGuardHolder ——
+    // 缩窗保护事务会先 close 旧进程再 commitRebuild（contextOverflowRollover
+    // 的 prepareModelWindowSwitch），如果重建提交失败，这里清标记会让用户重试时
+    // 直接跳过实际窗口核验与保护。标记只由 guard 在核验+重建都成功后清除
+    // （Greptile P1，2026-09-26）。
     finalizeSessionClose(context.closedDirectAbortBoundary !== null, {
       clearTurnState: () => {
         sessionTurnActivityTracker.deleteSession(session.id);
