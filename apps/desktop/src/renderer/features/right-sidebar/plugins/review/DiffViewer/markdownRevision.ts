@@ -413,12 +413,12 @@ function contentRanges(span: InlineSpan): SourceRange[] {
  *     `**link**`），定界符留作上下文会让新侧不再有「插入」标记、旧结构只剩零碎
  *     删除线；那种情况交给区域注入整体标「旧删除 + 新新增」。
  */
-function contextDelimiterRanges(
+function contextFormatSpans(
   source: string,
   beforeSpans: readonly InlineSpan[],
   afterSpans: readonly InlineSpan[],
-): SourceRange[] {
-  const out: SourceRange[] = [];
+): Array<{ span: InlineSpan; delimiters: SourceRange[] }> {
+  const out: Array<{ span: InlineSpan; delimiters: SourceRange[] }> = [];
   for (const span of afterSpans) {
     const delimiters = span.syntax.filter((range) =>
       /^[*_~]+$/.test(source.slice(range.start, range.end)),
@@ -429,7 +429,7 @@ function contextDelimiterRanges(
       content.some((range) => other.start < range.end && other.end > range.start),
     );
     if (structuredBefore) continue;
-    out.push(...delimiters);
+    out.push({ span, delimiters });
   }
   return out;
 }
@@ -439,11 +439,17 @@ function contextDelimiterRanges(
  * 是新版源码的一部分（新版本来就带这个格式），把它裹进 `{++…++}` 只会逼着标记去覆盖
  * 完整定界符对，从而把中间未改的正文也卷进来（用户实机反馈：`车辆 / 人` 没动却被标）。
  * 其余新增 / 删除片段照旧标记；放不下标记的内容由调用方的校验拦下。
+ *
+ * `coversFormatting` 是另一条纪律：定界符留作上下文的前提是该处**格式变化本来就能看出来**
+ * （跨度内容里至少有一个内容标记）。`见 甲乙 … 尾部旧` → `见 **甲乙** … 尾部新` 这种
+ * 「加粗新增 + 别处文字修改」的段落里，文字改动会让整个候选通过校验，但加粗这一处
+ * 会完全不可见（Greptile P2）—— 此时不采纳语法感知候选，交给区域候选把格式变化标出来。
  */
 function assembleSpanAware(
   parts: readonly DiffSlice[],
-  delimiters: readonly SourceRange[],
-): { text: string; marks: number } {
+  formats: ReadonlyArray<{ span: InlineSpan; delimiters: readonly SourceRange[] }>,
+): { text: string; marks: number; coversFormatting: boolean } {
+  const marked: SourceRange[] = [];
   let text = '';
   let marks = 0;
   for (const part of parts) {
@@ -455,8 +461,10 @@ function assembleSpanAware(
     if (
       part.added &&
       range !== null &&
-      delimiters.some(
-        (delimiter) => range.start >= delimiter.start && range.end <= delimiter.end,
+      formats.some(({ delimiters }) =>
+        delimiters.some(
+          (delimiter) => range.start >= delimiter.start && range.end <= delimiter.end,
+        ),
       )
     ) {
       text += part.value;
@@ -467,9 +475,15 @@ function assembleSpanAware(
       continue;
     }
     text += part.added ? `{++${part.value}++}` : `{--${part.value}--}`;
+    if (part.after) marked.push(part.after);
     marks += 1;
   }
-  return { text, marks };
+  const coversFormatting = formats.every(({ span }) =>
+    contentRanges(span).some((range) =>
+      marked.some((other) => other.start < range.end && other.end > range.start),
+    ),
+  );
+  return { text, marks, coversFormatting };
 }
 
 /**
@@ -509,11 +523,12 @@ function buildStructuralRevisions(
 
   const spanAware = assembleSpanAware(
     parts,
-    contextDelimiterRanges(after, beforeSpans, afterSpans),
+    contextFormatSpans(after, beforeSpans, afterSpans),
   );
   // 一个标记都没有时不采纳：纯格式新增（只有定界符变了）会让改动完全不可见，
-  // 那种情况按既定口径继续走区域注入（旧删除 + 新新增）。
-  if (spanAware.marks > 0) candidates.push(spanAware.text);
+  // 那种情况按既定口径继续走区域注入（旧删除 + 新新增）；格式变化没有被内容
+  // 标记覆盖时同理（见 assembleSpanAware 的 coversFormatting）。
+  if (spanAware.marks > 0 && spanAware.coversFormatting) candidates.push(spanAware.text);
 
   const clusters = changedClusters(parts);
   if (clusters.length > 0) {

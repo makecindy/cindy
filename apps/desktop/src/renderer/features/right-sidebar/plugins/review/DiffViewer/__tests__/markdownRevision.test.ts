@@ -74,6 +74,15 @@ describe('buildMarkdownRevision', () => {
     );
   });
 
+  it('keeps a formatting-only change visible when the same block also has text edits (regression)', () => {
+    // Greptile P2：同一段里既新增加粗又在别处改文字时，新增的 `**` 留作上下文会让
+    // 加粗这处完全不可见（文字标记让候选过了校验）。此时不采纳语法感知候选，
+    // 交给区域候选把格式变化标成「旧删除 + 新新增」。
+    expect(buildMarkdownRevision('见 甲乙 文档 尾部旧', '见 **甲乙** 文档 尾部新')).toBe(
+      '见 {--甲乙--}{++**甲乙**++} 文档 尾部{--旧--}{++新++}',
+    );
+  });
+
   it('revises a bold-wrapped word change without falling back to the block (regression)', () => {
     // 实机反馈：新版给关键词加粗（`（**车辆 / 人员**）`）时，词级 diff 把 `**` 的
     // 开符 / 闭符切成独立改动片段；逐片段注入后 CommonMark 把这半对定界符配对到
