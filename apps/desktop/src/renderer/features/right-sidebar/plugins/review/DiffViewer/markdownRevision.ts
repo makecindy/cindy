@@ -99,6 +99,12 @@ interface DiffSlice {
 interface InlineSpan extends SourceRange {
   /** 公式（inlineMath / math）：外层 <del>/<ins> 画不出线，区域注入碰到必须放弃。 */
   math: boolean;
+  /**
+   * 跨度里属于语法（定界符 / 地址 / 标记）的源码区间：节点位置去掉全部子节点位置。
+   * 例：strong `**无 HP**` 的语法是首尾两个 `**`；link 的语法是 `[` 与 `](url)`；
+   * inlineCode 这种叶节点整个跨度都是语法。标记不能落进这些区间。
+   */
+  syntax: SourceRange[];
 }
 
 /** 参与结构对齐的行内节点类型；嵌套结构随最外层跨度一起被包含。 */
@@ -241,8 +247,11 @@ export function buildMarkdownRevision(before: string, after: string): string | n
   if (validateRevision(fine.text, after)) return fine.text;
 
   // 第二尝试：结构感知的区域注入（词级只拿到行内定界符一半时的兜底）。
-  const region = buildRegionRevision(slices, before, after);
-  return region !== null && validateRevision(region, after) ? region : null;
+  // 候选按精确度排序（逐簇 → 合并整段），逐个校验，第一个通过的就是结果。
+  for (const candidate of buildStructuralRevisions(slices, before, after)) {
+    if (validateRevision(candidate, after)) return candidate;
+  }
+  return null;
 }
 
 function buildWholeBlockRevision(
@@ -255,55 +264,46 @@ function buildWholeBlockRevision(
   return validateRevision(injected, reference) ? injected : null;
 }
 
-/**
- * 区域注入：把**整段改动**折叠成一对「旧文本删除 + 新文本新增」。
- *
- * 为什么需要（2026-09-22 用户实机反馈）：新版把关键词加粗（`（**车辆 / 人员**）`）时，
- * 词级 diff 会把 `**` 的开符 / 闭符切成两个独立改动片段。逐片段注入后，CommonMark
- * 把这半对定界符配对到**标记外**的文本上，`{++**++}` 的开闭标记被拆进不同容器，
- * 折叠器消费不到 → 校验残留 → 整段回退成「整段删除线 + 整段下划线」，看不出到底
- * 改了什么。区域注入让标记内容覆盖完整结构，定界符不会再落进标记内部。
- *
- * 范围选择：以「含行内语法字符的改动片段」为种子（它们最可能只拿到定界符的一半），
- * 向外并入相邻改动片段；再把区域**对齐到完整的行内结构跨度**——跨度只覆盖一半时
- * 扩到整段，这保证标记不会塞进 `[文本](地址)` 的地址语法、`![alt](src)` 的 alt 等
- * 折叠器看不见的位置（标记落在属性里会以字面量漏进 href）。公式跨度是例外：
- * 外层 <del>/<ins> 画不出线，碰到直接放弃区域注入，交回块级装饰。
- */
-function buildRegionRevision(
-  slices: readonly DiffSlice[],
-  before: string,
-  after: string,
-): string | null {
-  const beforeSpans = collectInlineSpans(before);
-  const afterSpans = collectInlineSpans(after);
-  // 片段先按跨度边界切开：区域以整段跨度为对齐单位，片段不切开时，跨度边界落在
-  // 片段内部就会把跨度外的未改文本一起卷进标记。
-  const cuts = [
-    ...(beforeSpans ?? []).flatMap((span) => [span.start, span.end]),
-    ...(afterSpans ?? []).flatMap((span) => [span.start, span.end]),
-  ];
-  const parts = splitSlices(slices, cuts);
+/** 片段下标闭区间（区域 = 一段连续的 diff 片段）。 */
+interface PartRange {
+  start: number;
+  end: number;
+}
 
-  const changed: number[] = [];
-  const dangerous: number[] = [];
+/** 改动片段聚簇：相邻的改动片段（中间没有未改片段）属于同一簇。 */
+function changedClusters(parts: readonly DiffSlice[]): PartRange[] {
+  const clusters: PartRange[] = [];
+  let start = -1;
   parts.forEach((part, index) => {
-    if (!part.added && !part.removed) return;
-    changed.push(index);
-    if (part.dangerous) dangerous.push(index);
+    if (part.added || part.removed) {
+      if (start === -1) start = index;
+      return;
+    }
+    if (start !== -1) {
+      clusters.push({ start, end: index - 1 });
+      start = -1;
+    }
   });
-  if (changed.length === 0) return null;
-  const seed = dangerous.length > 0 ? dangerous : changed;
-  let start = seed[0];
-  let end = seed[seed.length - 1];
-  // 紧邻的改动片段一并并入：`{--a--}{--b--}` 这类相邻标记合成一个更干净。
-  while (start > 0 && (parts[start - 1].added || parts[start - 1].removed)) start -= 1;
-  while (end < parts.length - 1 && (parts[end + 1].added || parts[end + 1].removed)) end += 1;
+  if (start !== -1) clusters.push({ start, end: parts.length - 1 });
+  return clusters;
+}
 
-  // 对齐到完整跨度：区域每碰到一个只覆盖一半的跨度就扩到整段；公式跨度直接放弃。
+/**
+ * 把一个区域扩到完整行内结构跨度：区域只覆盖一半的跨度全部纳入 —— 标记不能塞进
+ * 定界符或属性语法里（`[文本](地址)` 的地址、`![alt](src)` 的 alt 折叠器看不见，
+ * 落进去会以字面量漏进 href）。公式跨度是例外：外层 <del>/<ins> 画不出线
+ * （KaTeX 原子盒），碰到返回 null，由调用方放弃区域注入。
+ */
+function snapRange(
+  parts: readonly DiffSlice[],
+  range: PartRange,
+  beforeSpans: readonly InlineSpan[],
+  afterSpans: readonly InlineSpan[],
+): PartRange | null {
+  let { start, end } = range;
   const spanSides: Array<['before' | 'after', readonly InlineSpan[]]> = [
-    ['before', beforeSpans ?? []],
-    ['after', afterSpans ?? []],
+    ['before', beforeSpans],
+    ['after', afterSpans],
   ];
   for (let guard = 0; guard <= parts.length; guard += 1) {
     let expanded = false;
@@ -332,23 +332,213 @@ function buildRegionRevision(
     }
     if (!expanded) break;
   }
+  return { start, end };
+}
 
-  const oldText = parts
-    .slice(start, end + 1)
-    .filter((part) => !part.added)
-    .map((part) => part.value)
-    .join('');
-  const newText = parts
-    .slice(start, end + 1)
-    .filter((part) => !part.removed)
-    .map((part) => part.value)
-    .join('');
-  if (oldText === '' && newText === '') return null;
-  const head = injectSlices(parts, 0, start - 1).text;
-  const tail = injectSlices(parts, end + 1, parts.length - 1).text;
-  const removedPart = oldText === '' ? '' : `{--${oldText}--}`;
-  const addedPart = newText === '' ? '' : `{++${newText}++}`;
-  return `${head}${removedPart}${addedPart}${tail}`;
+/** 合并重叠 / 相邻区域：相邻区域各自成对标记没有意义，合成一个更干净。 */
+function mergeRanges(ranges: readonly PartRange[]): PartRange[] {
+  const sorted = [...ranges].sort((left, right) => left.start - right.start);
+  const merged: PartRange[] = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end + 1) {
+      last.end = Math.max(last.end, range.end);
+      continue;
+    }
+    merged.push({ ...range });
+  }
+  return merged;
+}
+
+/** 按区域列表拼装注入源：区域之间的片段仍走词级注入（区域外不受影响）。 */
+function assembleRegions(parts: readonly DiffSlice[], ranges: readonly PartRange[]): string {
+  let text = '';
+  let cursor = 0;
+  for (const range of ranges) {
+    text += injectSlices(parts, cursor, range.start - 1).text;
+    const oldText = parts
+      .slice(range.start, range.end + 1)
+      .filter((part) => !part.added)
+      .map((part) => part.value)
+      .join('');
+    const newText = parts
+      .slice(range.start, range.end + 1)
+      .filter((part) => !part.removed)
+      .map((part) => part.value)
+      .join('');
+    if (oldText !== '') text += `{--${oldText}--}`;
+    if (newText !== '') text += `{++${newText}++}`;
+    cursor = range.end + 1;
+  }
+  text += injectSlices(parts, cursor, parts.length - 1).text;
+  return text;
+}
+
+/**
+ * 区域注入候选（按精确度排序）：把**整段改动**折叠成「旧文本删除 + 新文本新增」。
+ *
+ * 为什么需要（2026-09-22 用户实机反馈）：新版把关键词加粗（`（**车辆 / 人员**）`）时，
+ * 词级 diff 会把 `**` 的开符 / 闭符切成两个独立改动片段。逐片段注入后，CommonMark
+ * 把这半对定界符配对到**标记外**的文本上，`{++**++}` 的开闭标记被拆进不同容器，
+ * 折叠器消费不到 → 校验残留 → 整段回退成「整段删除线 + 整段下划线」，看不出到底
+ * 改了什么。区域注入让标记内容覆盖完整结构，定界符不会再落进标记内部。
+ *
+ * 范围选择：以「含行内语法字符的改动片段」所在簇为种子（它们最可能只拿到定界符的
+ * 一半）；没有这样的簇时退到全部改动簇。两个候选（调用方逐个校验，先精确后回退）：
+ *  1. **逐簇区域**：每个种子簇各自成区，簇之间的未改正文保持原样 —— 同一段落里
+ *     两处相距较远的结构改动（两个链接、两处加粗）不会把中间正文卷进标记；
+ *  2. **首..末簇合成一个大区域**：定界符配对跨簇时（两个簇各自都不平衡），只有
+ *     合并后的标记内容才包含完整结构。
+ * 两个候选都会先把区域**对齐到完整的行内结构跨度**（见 snapRange）。
+ */
+/** 跨度去掉语法区间后的内容区间（区域对齐、是否已有结构都按内容判定）。 */
+function contentRanges(span: InlineSpan): SourceRange[] {
+  const sorted = [...span.syntax].sort((left, right) => left.start - right.start);
+  const out: SourceRange[] = [];
+  let cursor = span.start;
+  for (const range of sorted) {
+    if (range.start > cursor) out.push({ start: cursor, end: range.start });
+    cursor = Math.max(cursor, range.end);
+  }
+  if (cursor < span.end) out.push({ start: cursor, end: span.end });
+  return out;
+}
+
+/**
+ * 新版侧「可以留作上下文的**新增**格式定界符」区间。
+ *
+ * 只有同时满足两条才算：
+ *  1. 区间内容是纯定界符（`**` / `~~` / `_` 连写）；
+ *  2. 旧版**同一段内容上没有别的行内结构** —— 否则这是结构变化（`[link](u)` →
+ *     `**link**`），定界符留作上下文会让新侧不再有「插入」标记、旧结构只剩零碎
+ *     删除线；那种情况交给区域注入整体标「旧删除 + 新新增」。
+ */
+function contextDelimiterRanges(
+  source: string,
+  beforeSpans: readonly InlineSpan[],
+  afterSpans: readonly InlineSpan[],
+): SourceRange[] {
+  const out: SourceRange[] = [];
+  for (const span of afterSpans) {
+    const delimiters = span.syntax.filter((range) =>
+      /^[*_~]+$/.test(source.slice(range.start, range.end)),
+    );
+    if (delimiters.length === 0) continue;
+    const content = contentRanges(span);
+    const structuredBefore = beforeSpans.some((other) =>
+      content.some((range) => other.start < range.end && other.end > range.start),
+    );
+    if (structuredBefore) continue;
+    out.push(...delimiters);
+  }
+  return out;
+}
+
+/**
+ * 跨度语法感知注入：逐片段标记，但**新增**的纯格式定界符片段原样输出 —— 它本来就
+ * 是新版源码的一部分（新版本来就带这个格式），把它裹进 `{++…++}` 只会逼着标记去覆盖
+ * 完整定界符对，从而把中间未改的正文也卷进来（用户实机反馈：`车辆 / 人` 没动却被标）。
+ * 其余新增 / 删除片段照旧标记；放不下标记的内容由调用方的校验拦下。
+ */
+function assembleSpanAware(
+  parts: readonly DiffSlice[],
+  delimiters: readonly SourceRange[],
+): { text: string; marks: number } {
+  let text = '';
+  let marks = 0;
+  for (const part of parts) {
+    if (!part.added && !part.removed) {
+      text += part.value;
+      continue;
+    }
+    const range = part.after;
+    if (
+      part.added &&
+      range !== null &&
+      delimiters.some(
+        (delimiter) => range.start >= delimiter.start && range.end <= delimiter.end,
+      )
+    ) {
+      text += part.value;
+      continue;
+    }
+    if (part.value.trim() === '') {
+      text += part.value;
+      continue;
+    }
+    text += part.added ? `{++${part.value}++}` : `{--${part.value}--}`;
+    marks += 1;
+  }
+  return { text, marks };
+}
+
+/**
+ * 结构性注入候选（按精确度排序）：词级失败后逐级尝试，由调用方逐个校验。
+ *
+ * 为什么需要（2026-09-22 用户实机反馈）：新版把关键词加粗（`（**车辆 / 人员**）`）时，
+ * 词级 diff 会把 `**` 的开符 / 闭符切成两个独立改动片段。逐片段注入后，CommonMark
+ * 把这半对定界符配对到**标记外**的文本上，`{++**++}` 的开闭标记被拆进不同容器，
+ * 折叠器消费不到 → 校验残留 → 整段回退成「整段删除线 + 整段下划线」，看不出到底
+ * 改了什么。
+ *
+ * 候选顺序：
+ *  1. **跨度语法感知**：新增的纯格式定界符保留在标记外，只标真正变动的文本；
+ *  2. **逐簇区域**：每个「含行内语法字符的改动簇」各自成区（整段旧 / 新文本），
+ *     簇之间的未改正文保持原样 —— 两处相距较远的结构改动不会互相牵连；
+ *  3. **首..末簇合并区域**：定界符配对跨簇时（两个簇各自都不平衡），只有合并后的
+ *     标记内容才包含完整结构。
+ * 区域候选都会先把区域**对齐到完整的行内结构跨度**（见 snapRange）。
+ */
+function buildStructuralRevisions(
+  slices: readonly DiffSlice[],
+  before: string,
+  after: string,
+): string[] {
+  const beforeSpans = collectInlineSpans(before) ?? [];
+  const afterSpans = collectInlineSpans(after) ?? [];
+  // 片段按「跨度边界 + 语法边界」切开：语法边界切开后纯 `**` 这类定界符片段才能
+  // 单独保留为上下文；区域以整段跨度为对齐单位，不切开就会把跨度外的文本卷进标记。
+  const spanCuts = (spans: readonly InlineSpan[]): number[] =>
+    spans.flatMap((span) => [
+      span.start,
+      span.end,
+      ...span.syntax.flatMap((range) => [range.start, range.end]),
+    ]);
+  const parts = splitSlices(slices, spanCuts(beforeSpans), spanCuts(afterSpans));
+  const candidates: string[] = [];
+
+  const spanAware = assembleSpanAware(
+    parts,
+    contextDelimiterRanges(after, beforeSpans, afterSpans),
+  );
+  // 一个标记都没有时不采纳：纯格式新增（只有定界符变了）会让改动完全不可见，
+  // 那种情况按既定口径继续走区域注入（旧删除 + 新新增）。
+  if (spanAware.marks > 0) candidates.push(spanAware.text);
+
+  const clusters = changedClusters(parts);
+  if (clusters.length > 0) {
+    const dangerousClusters = clusters.filter((cluster) =>
+      parts.slice(cluster.start, cluster.end + 1).some((part) => part.dangerous),
+    );
+    const seeds = dangerousClusters.length > 0 ? dangerousClusters : clusters;
+
+    const snapped: PartRange[] = [];
+    for (const seed of seeds) {
+      const range = snapRange(parts, seed, beforeSpans, afterSpans);
+      if (range === null) {
+        snapped.length = 0;
+        break;
+      }
+      snapped.push(range);
+    }
+    if (snapped.length > 0) candidates.push(assembleRegions(parts, mergeRanges(snapped)));
+
+    const mergedSeed: PartRange = { start: seeds[0].start, end: seeds[seeds.length - 1].end };
+    const merged = snapRange(parts, mergedSeed, beforeSpans, afterSpans);
+    if (merged !== null) candidates.push(assembleRegions(parts, [merged]));
+  }
+
+  return [...new Set(candidates)];
 }
 
 /**
@@ -367,6 +557,31 @@ function collectInlineSpans(source: string): InlineSpan[] | null {
   return spans;
 }
 
+/**
+ * 节点位置去掉全部子节点位置 = 该跨度的语法区间（定界符 / 地址 / 标记）。
+ * 子节点位置缺失时整段当语法（保守：宁可少标）。
+ */
+function syntaxRangesOf(node: unknown, start: number, end: number): SourceRange[] {
+  const children = (node as { children?: unknown[] }).children;
+  if (!Array.isArray(children) || children.length === 0) return [{ start, end }];
+  const ranges: SourceRange[] = [];
+  let cursor = start;
+  for (const child of children) {
+    const position = (child as {
+      position?: { start?: { offset?: number }; end?: { offset?: number } };
+    }).position;
+    const childStart = position?.start?.offset;
+    const childEnd = position?.end?.offset;
+    if (typeof childStart !== 'number' || typeof childEnd !== 'number' || childEnd <= childStart) {
+      continue;
+    }
+    if (childStart > cursor) ranges.push({ start: cursor, end: childStart });
+    cursor = Math.max(cursor, childEnd);
+  }
+  if (cursor < end) ranges.push({ start: cursor, end });
+  return ranges;
+}
+
 function collectInlineSpansFrom(node: unknown, out: InlineSpan[]): void {
   const type = (node as { type?: unknown }).type;
   if (typeof type === 'string' && ALIGNED_INLINE_TYPES.has(type)) {
@@ -376,7 +591,12 @@ function collectInlineSpansFrom(node: unknown, out: InlineSpan[]): void {
     const start = position?.start?.offset;
     const end = position?.end?.offset;
     if (typeof start === 'number' && typeof end === 'number' && end > start) {
-      out.push({ start, end, math: type === 'inlineMath' || type === 'math' });
+      out.push({
+        start,
+        end,
+        math: type === 'inlineMath' || type === 'math',
+        syntax: syntaxRangesOf(node, start, end),
+      });
     }
     return;
   }
@@ -390,16 +610,25 @@ function collectInlineSpansFrom(node: unknown, out: InlineSpan[]): void {
  * 按结构跨度边界切开片段（只切跨度边界的**内部**位置）。
  * 切点对两侧通用：未改片段的两侧偏移与 value 一一对应；改动片段只有一侧有偏移。
  */
-function splitSlices(slices: readonly DiffSlice[], cuts: readonly number[]): DiffSlice[] {
-  const sorted = [...new Set(cuts)].sort((left, right) => left - right);
-  if (sorted.length === 0) return slices.slice();
+function splitSlices(
+  slices: readonly DiffSlice[],
+  beforeCuts: readonly number[],
+  afterCuts: readonly number[],
+): DiffSlice[] {
+  const beforeSorted = [...new Set(beforeCuts)].sort((left, right) => left - right);
+  const afterSorted = [...new Set(afterCuts)].sort((left, right) => left - right);
+  if (beforeSorted.length === 0 && afterSorted.length === 0) return slices.slice();
   const out: DiffSlice[] = [];
   for (const slice of slices) {
     const points = new Set<number>();
-    for (const side of ['before', 'after'] as const) {
-      const range = slice[side];
+    // 切点分侧使用：before / after 是两套源码坐标，不能混用（混用会在无关位置切出碎片）。
+    const sides: Array<[SourceRange | null, readonly number[]]> = [
+      [slice.before, beforeSorted],
+      [slice.after, afterSorted],
+    ];
+    for (const [range, cuts] of sides) {
       if (!range) continue;
-      for (const cut of sorted) {
+      for (const cut of cuts) {
         if (cut > range.start && cut < range.end) points.add(cut - range.start);
       }
     }

@@ -78,14 +78,14 @@ describe('buildMarkdownRevision', () => {
     // 实机反馈：新版给关键词加粗（`（**车辆 / 人员**）`）时，词级 diff 把 `**` 的
     // 开符 / 闭符切成独立改动片段；逐片段注入后 CommonMark 把这半对定界符配对到
     // **标记外**的文本上，开闭标记被拆进不同容器 → 校验残留 → 整段回退成
-    // 「整段删除线 + 整段下划线」。区域注入把整段改动折成一对旧 / 新文本，
-    // 标记内容覆盖完整结构，定界符不再落进标记内部。
+    // 「整段删除线 + 整段下划线」。跨度语法感知候选把**新增的 `**` 留在标记外**，
+    // 只标真正变动的文本 —— 中间没动的 `车辆 / 人` 不再被卷进标记。
     expect(
       buildMarkdownRevision(
         '目标（建筑 / 车辆 / 人物）面对威胁',
         '目标（**车辆 / 人员**）面对威胁',
       ),
-    ).toBe('目标（{--建筑 / 车辆 / 人物--}{++**车辆 / 人员**++}）面对威胁');
+    ).toBe('目标（{--建筑 / --}**车辆 / 人{--物--}{++员++}**）面对威胁');
   });
 
   it('keeps a formatting-only change visible as a region revision', () => {
@@ -103,6 +103,20 @@ describe('buildMarkdownRevision', () => {
     );
   });
 
+  it('keeps distant structural changes in separate regions (regression)', () => {
+    // Greptile P2：同一段落里两处相距较远的结构类改动（各自只拿到 `**` 的一半）不该
+    // 被合成一个大区域——那会把两处之间完全没变的正文也标成修订。逐簇区域候先把它们
+    // 分开；只有定界符配对跨簇时才退回合并区域（见 buildRegionRevisions）。
+    expect(
+      buildMarkdownRevision(
+        '开头（甲 / 乙）中间一段完全不变的正文，末尾（丙 / 丁）。',
+        '开头（**甲 / 乙**）中间一段完全不变的正文，末尾（**丙 / 丁**）。',
+      ),
+    ).toBe(
+      '开头（{--甲 / 乙--}{++**甲 / 乙**++}）中间一段完全不变的正文，末尾（{--丙 / 丁--}{++**丙 / 丁**++}）。',
+    );
+  });
+
   it('marks a whole link when only its destination changed', () => {
     // 标记落进 `](...)` 的地址里既不会被折叠，又会以字面量漏进 href（链接文字
     // 看起来没标、地址还被写坏）。区域注入对齐到完整链接跨度，整段标记。
@@ -115,29 +129,30 @@ describe('buildMarkdownRevision', () => {
   });
 
   it('keeps distant word-level changes precise when only one region needs merging', () => {
-    // 区域种子只看「含行内语法字符的改动片段」：同一块里与加粗无关的远端词改动
-    // 继续走词级，不会被卷进区域标记。
+    // 结构候选只在需要的局部生效：加粗那段走跨度语法感知（只标 `建筑 / `、`物`、`员`），
+    // 远端的普通词改动继续词级，不会被卷进区域标记。
     expect(
       buildMarkdownRevision(
         '目标（建筑 / 车辆 / 人物）说明，尾部有一个旧词。',
         '目标（**车辆 / 人员**）说明，尾部有一个新词。',
       ),
     ).toBe(
-      '目标（{--建筑 / 车辆 / 人物--}{++**车辆 / 人员**++}）说明，尾部有一个{--旧--}{++新++}词。',
+      '目标（{--建筑 / --}**车辆 / 人{--物--}{++员++}**）说明，尾部有一个{--旧--}{++新++}词。',
     );
   });
 
-  it('renders the region revision as ins/del around the preserved bold span', () => {
+  it('renders the bold-wrapped revision as ins/del inside the preserved strong span', () => {
     const revision = buildMarkdownRevision(
       '目标（建筑 / 车辆 / 人物）面对威胁',
       '目标（**车辆 / 人员**）面对威胁',
     );
     expect(revision).not.toBeNull();
     const html = renderLikePreview(revision as string);
-    // 删除 / 新增标记被完整消费，加粗结构照旧渲染。
+    // 删除 / 新增标记被完整消费，加粗结构照旧渲染（标记在 strong 内部，不是整段替换）。
     expect(html).toContain('cindy-md-diff-del');
     expect(html).toContain('cindy-md-diff-ins');
-    expect(html).toContain('<strong>车辆 / 人员</strong>');
+    expect(html).toContain('<strong>车辆 / 人<del');
+    expect(html).toContain('员</ins></strong>');
     expect(html).not.toMatch(/\{\+\+|\+\+\}|\{--|--\}/);
   });
 

@@ -117,14 +117,14 @@ describe('buildMarkdownPreviewPlan', () => {
 
   it('revises a bold-wrapped change without falling back to the block (regression)', () => {
     // 实机反馈（`docs/requirements.md`）：新版把关键词加粗时，词级注入会因 `**`
-    // 半对定界符被拆进不同容器而失败；区域注入把整段改动合成一对旧 / 新文本，
-    // 预览里只标改动的区域，而不是整段删除线 + 整段下划线。
+    // 半对定界符被拆进不同容器而失败；跨度语法感知候选把新增的 `**` 留在标记外，
+    // 只标真正变动的文本（中间没动的 `车辆 / 人` 不被牵连）。
     const before = '目标（建筑 / 车辆 / 人物）面对威胁\n';
     const after = '目标（**车辆 / 人员**）面对威胁\n';
     const plan = buildMarkdownPreviewPlan(after, before);
 
     expect(kinds(plan)).toEqual(['revision']);
-    expect(plan.segments[0].content).toContain('{--建筑 / 车辆 / 人物--}{++**车辆 / 人员**++}');
+    expect(plan.segments[0].content).toContain('{--建筑 / --}**车辆 / 人{--物--}{++员++}**');
     // 渲染后删除 / 新增标记必须被完整消费（不泄漏字面标记）。
     const html = renderSegment(plan.segments[0].content);
     expect(html).toContain('cindy-md-diff-del');

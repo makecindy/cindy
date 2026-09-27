@@ -80,7 +80,8 @@ describe('buildMarkdownTableRevision — 单元格级', () => {
     );
     const injected = buildMarkdownTableRevision(before, after);
     expect(injected).not.toBeNull();
-    expect(injected).toContain('{--建筑/车辆/人物--}{++**车辆/人员**++}');
+    // 加粗新增的 `**` 留在标记外，只标真正变动的文本（中间 `车辆/人` 不动）。
+    expect(injected).toContain('（{--建筑/--}**车辆/人{--物--}{++员++}**，**无 HP**）保留');
     // 未改动的行保持原样，且渲染后无字面标记残留。
     const html = render(injected as string);
     expect(html).toContain('cindy-md-diff-del');
