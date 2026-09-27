@@ -197,7 +197,8 @@
     "photoNotReadable": "這張照片暫時無法讀取(可能還沒從 iCloud 下載完成)，請稍後重試。"
   },
   "pluginSetup": {
-    "completeOnDesktop": "請在遠端電腦完成設定，本卡片會自動更新狀態。",
+    "remoteDesktop": "開啟桌面",
+    "completeOnDesktop": "可透過遠端桌面操作電腦完成設定。登入、授權和憑據儲存均在該電腦進行，本卡片會自動更新狀態。",
     "chooseOne": "選擇一種配置方式",
     "progress": "{{satisfied}}/{{total}} 已完成",
     "desktopActionHint": "在電腦端{{action}}",
@@ -266,7 +267,6 @@
     },
     "queue": {
       "count": "{{count}} 個",
-      "readOnlyHint": "協同唯讀模式，僅顯示電腦端請求。",
       "empty": "沒有待處理請求",
       "hint": {
         "plan_review": "先看計畫，必要時回饋修改，確認後電腦端才繼續執行。",
@@ -279,6 +279,7 @@
     }
   },
   "companion": {
+    "permissionRequest": "{{name}} 想請你確認一下",
     "operation": "操作",
     "details": "檢視詳情",
     "fields": {

@@ -86,7 +86,8 @@ import {
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from './claude-gateway-config.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import { disconnectClaudeNativeLogin, readClaudeNativeLogin } from './claude-native-connection.js';
-import { claudeCliConfigDirOverride, claudeCliNetworkEnv } from './claude-native-cli.js';
+import { claudeCliNetworkEnv } from './claude-native-cli.js';
+import { ensureLegacyClaudeConfigMigrated } from './claude-legacy-config-migration.js';
 import { isAnthropicCompatProxyHandleReady } from './anthropic-compat-proxy-host.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
@@ -105,6 +106,7 @@ import {
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
   isNativeProviderAuthBound,
+  captureNativeProviderAuthorizationGeneration,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
   isNativeProviderAuthSharedSystemCredential,
@@ -264,6 +266,14 @@ export function chatgptAccountIdFromIdToken(idToken: string): string | null {
   if (workspaceId) return workspaceId;
   const sub = readChatgptIdTokenClaims(idToken)?.sub;
   return typeof sub === 'string' && sub.length > 0 ? sub : null;
+}
+
+/** HTTP header identity only; workspace/recovery checks must keep the strict parser. */
+export function chatgptAccountIdFromTokens(
+  tokens: { account_id?: unknown; id_token?: unknown } | undefined,
+): string | null {
+  if (typeof tokens?.account_id === 'string' && tokens.account_id.length > 0) return tokens.account_id;
+  return typeof tokens?.id_token === 'string' ? chatgptAccountIdFromIdToken(tokens.id_token) : null;
 }
 
 /**
@@ -739,14 +749,10 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
         else env.ANTHROPIC_API_KEY = CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
       }
     }
-    // dev 多实例隔离:设了 XDT_USER_DATA_DIR(device-link 本地联调跑多实例)时,把
-    // Claude Code 的配置目录也切到 userData 下。否则多实例共用全局 ~/.claude
-    // (~/.claude.json / projects 下的 transcripts)会互相干扰,无法当作两台独立设备。
-    // 仅 dev(非 packaged)生效,生产忽略;auth 走 ANTHROPIC_API_KEY,重定向 config
-    // dir 不影响鉴权。process.env 路线行不通(CLAUDE_CONFIG_DIR 在 boot 期被
-    // stripSensitiveAnthropicEnv 清掉),故经 getAuthEnv 注入子进程 env(覆盖优先)。
-    const configDir = claudeCliConfigDirOverride();
-    if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
+    // 所有来源都用 CLI 默认配置目录(dev 多实例与正式版一致,不设 CLAUDE_CONFIG_DIR):
+    // 订阅会话的凭证库按配置目录区分,隔离会看不到本机已有的 Claude Code 登录。
+    // 旧版 dev 隔离在 <userData>/claude-home 的转录,拉起 CLI 前补拷到默认目录供 resume。
+    await ensureLegacyClaudeConfigMigrated();
     return env;
   }
 
@@ -1708,6 +1714,39 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   captureCredentialGeneration(): string | null {
     const fingerprint = currentCodexCredentialGeneration(path.join(this.codexHome, 'auth.json'));
     return fingerprint ? JSON.stringify(fingerprint) : null;
+  }
+
+  /** Bind a host-owned request to the same credential and durable authorization as native Codex. */
+  captureOAuthDispatchProof(accessToken: string, accountId: string | null, providerId = 'openai'): (() => boolean) | null {
+    const independent = providerId !== 'openai';
+    const authenticated = () => independent
+      ? codexAccountState(providerId).authenticated : this.hasCodexOAuthLoginReadOnly();
+    if (!authenticated()) return null;
+    const home = independent ? codexAccountHome(providerId) : this.codexHome;
+    const authPath = path.join(home, 'auth.json');
+    const credential = () => {
+      const value = currentCodexCredentialGeneration(authPath);
+      return value ? JSON.stringify(value) : null;
+    };
+    // Independent accounts authorize against their existing account record;
+    // inherited OpenAI uses the native provider authorization record.
+    const authorization = () => independent
+      ? JSON.stringify(currentCodexCredentialGeneration(path.join(home, 'account.json')))
+      : captureNativeProviderAuthorizationGeneration('openai');
+    const credentialGeneration = credential();
+    const authorizationGeneration = authorization();
+    if (!credentialGeneration || !authorizationGeneration || authorizationGeneration === 'null') return null;
+    try {
+      const raw = fs.readFileSync(authPath, 'utf8');
+      const auth = JSON.parse(raw) as { tokens?: { access_token?: unknown; account_id?: unknown; id_token?: unknown } };
+      if (auth.tokens?.access_token !== accessToken || chatgptAccountIdFromTokens(auth.tokens) !== accountId) return null;
+    } catch {
+      return null;
+    }
+    const isCurrent = () => authenticated()
+      && credential() === credentialGeneration
+      && authorization() === authorizationGeneration;
+    return isCurrent() ? isCurrent : null;
   }
 
   /** Bracket one account-level RPC with compare-and-commit recovery confirmation. */

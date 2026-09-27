@@ -57,6 +57,7 @@ function invoke(kind: unknown, options?: unknown) {
     version: string | null;
     latestVersion: string | null;
     updateAvailable: boolean;
+    latestCheckFailed: boolean;
   }>;
 }
 
@@ -110,6 +111,7 @@ describe('maker:agent:binary-version', () => {
       version: '2.1.258 (Claude Code)',
       latestVersion: null,
       updateAvailable: false,
+      latestCheckFailed: false,
     });
     expect(h.fetchManifest).not.toHaveBeenCalled();
   });
@@ -120,15 +122,18 @@ describe('maker:agent:binary-version', () => {
     await expect(invoke('codex', { checkLatest: true })).resolves.toMatchObject({
       latestVersion: '0.146.0',
       updateAvailable: true,
+      latestCheckFailed: false,
     });
   });
 
   it('does not offer an update from a legacy codex manifest field the installer cannot consume', async () => {
     h.versions.set('/managed/codex', 'codex-cli 0.145.0');
     h.fetchManifest.mockResolvedValue({ codex: { version: '0.146.0' } });
+    // The manifest was read; a missing installable asset is "no update", not a failed check.
     await expect(invoke('codex', { checkLatest: true })).resolves.toMatchObject({
       latestVersion: null,
       updateAvailable: false,
+      latestCheckFailed: false,
     });
   });
 
@@ -147,13 +152,25 @@ describe('maker:agent:binary-version', () => {
     await expect(invoke('pi', { checkLatest: true })).resolves.toMatchObject({ updateAvailable: false });
   });
 
-  it('keeps the local version when the manifest is unreachable', async () => {
+  it('keeps the local version and reports a failed check when the manifest is unreachable', async () => {
     h.versions.set('/managed/claude-code', '2.1.258 (Claude Code)');
     h.fetchManifest.mockRejectedValue(new Error('offline'));
     await expect(invoke('claude-code', { checkLatest: true })).resolves.toMatchObject({
       version: '2.1.258 (Claude Code)',
       latestVersion: null,
       updateAvailable: false,
+      latestCheckFailed: true,
+    });
+  });
+
+  it('reports a failed check when fetchManifest resolves without a manifest', async () => {
+    h.versions.set('/managed/codex', 'codex-cli 0.145.0');
+    h.fetchManifest.mockResolvedValue(null);
+    await expect(invoke('codex', { checkLatest: true })).resolves.toMatchObject({
+      version: 'codex-cli 0.145.0',
+      latestVersion: null,
+      updateAvailable: false,
+      latestCheckFailed: true,
     });
   });
 

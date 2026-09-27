@@ -80,11 +80,14 @@ export function useTeammateRoster(enabled = true) {
   const list = useRemoteResourceList(TEAMMATE_COLLECTION_ID, ready ? discovery.targets : NO_TARGETS, enabled && ready);
   // Discover refreshes targets too: newly online hosts and newly created rosters are not stranded.
   const refresh = useCallback(async () => { await discover(); }, [discover]);
-  return { ...list, items: ready ? list.items.filter((row) => row.item.ref.kind === 'bot') : [],
+  const items = list.items.filter(row => row.item.ref.kind === 'bot' && !revoked.has(row.host.deviceId)
+    && (!ready || discovery.targets.some(host => host.deviceId === row.host.deviceId)));
+  return { ...list, items,
+    isOnline: (host: RemoteResourceHostTarget) => ready && !revoked.has(host.deviceId) && list.isOnline(host),
     targets: ready ? discovery.targets : NO_TARGETS,
     createTargets: ready && status === 'online' ? discovery.createTargets.filter((host) => !revoked.has(host.deviceId) && list.isOnline(host)) : NO_TARGETS,
-    authoritative: ready && !discovery.loading && !list.loading && status === 'online' && !discovery.error && (!discovery.targets.length || !list.error),
-    loading: !ready || discovery.loading || list.loading,
-    refreshing: discovery.binding === binding && (discovery.loading || list.refreshing),
+    authoritative: ready && !discovery.loading && !list.loading && !list.syncing && status === 'online' && !discovery.error && (!discovery.targets.length || !list.error),
+    loading: items.length === 0 && (!ready || list.loading),
+    refreshing: list.refreshing,
     error: ready ? discovery.error ?? list.error : null, refresh };
 }

@@ -1,3 +1,4 @@
+import { CodexAgent } from './agents/codex/index.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Maker } from './maker.js';
@@ -87,13 +88,93 @@ function createAgent(handle: AgentSessionHandle): BaseAgent {
   } as unknown as BaseAgent;
 }
 
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((res) => { resolve = res; });
+function createDeferred<T = void>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
   return { promise, resolve };
 }
 
 describe('Maker.shutdown', () => {
+  it.each(['exhaust', 'exhaust-route', 'cancel'] as const)('settles Maker startup after native initialization %s', async mode => {
+    const module = await import('./agents/codex/app-server/stdioTransport.js');
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const methods: string[] = [];
+    let routeCurrent = true;
+    const spawn = vi.spyOn(module, 'createStdioTransport').mockImplementation(() => {
+      const closeHandlers = new Set<import('./agents/codex/app-server/transport.js').CloseHandler>();
+      let failed = false;
+      return {
+        nativeSqliteInitializationFailed: () => failed,
+        onLine: () => () => {},
+        onClose: handler => { closeHandlers.add(handler); return () => closeHandlers.delete(handler); },
+        writeLine: async line => {
+          methods.push(JSON.parse(line).method);
+          if (mode === 'exhaust-route' && methods.length === 3) routeCurrent = false;
+          failed = true;
+          for (const handler of closeHandlers) handler({ reason: 'native exited before initialize' });
+        },
+        close: async () => { if (mode === 'cancel') await gate; },
+      };
+    });
+    const agent = new CodexAgent({ logger, binaryPath: 'synthetic', runtimeConfig: {},
+      resolveCodexLocalAuthPolicy: () => ({ policy: 'legacy-shared', isCurrent: () => routeCurrent }),
+      auth: { getState: async () => ({ authenticated: true }), getAuthEnv: async () => ({}), triggerLogin: async () => ({ authenticated: true }), logout: async () => {} },
+    });
+    let guarded = false;
+    const failed = vi.fn(({ runtimeMayBeAlive }: { runtimeMayBeAlive?: boolean }) => { if (!runtimeMayBeAlive) guarded = false; });
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger,
+      lifecycleHooks: { onBeforeStart: async () => { guarded = true; }, onStartFailed: failed },
+    });
+    try {
+      const startup = maker.createSession({ id: 'native-stop', agentKind: 'codex', model: 'fixture', providerId: 'openai', workingDir: '/fixture' });
+      const rejection = expect(startup).rejects.toThrow(mode === 'cancel' ? /cancelled/ : /initialization stopped/);
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      if (mode === 'cancel') { const disposing = agent.dispose(); release(); await disposing; }
+      await rejection;
+      expect(spawn).toHaveBeenCalledTimes(mode === 'cancel' ? 1 : 3);
+      expect(methods.every(method => method === 'initialize')).toBe(true);
+      expect(failed).toHaveBeenCalledWith(expect.objectContaining({ runtimeMayBeAlive: false }));
+      expect(guarded).toBe(false);
+      expect(maker.listActiveSessions()).toEqual([]);
+    } finally { release(); await maker.shutdown(); spawn.mockRestore(); }
+  });
+
+  it.each(['cancel', 'exhaust', 'spawn-exhaust'] as const)('releases the real Codex startup guard after route %s before any host exists', async (mode) => {
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    let revision = 0;
+    const prepareSpawn = vi.fn(async () => { revision++; return { extraArgs: [], extraEnv: {}, codexProxyActive: true }; });
+    const resolveRoute = vi.fn(async () => {
+      entered();
+      if (mode === 'cancel') await new Promise<void>(() => {});
+      const captured = revision;
+      return { policy: 'isolated' as const, isCurrent: () => mode === 'spawn-exhaust' && captured === revision };
+    });
+    const agent = new CodexAgent({
+      logger, binaryPath: process.execPath, runtimeConfig: {},
+      auth: { getState: async () => ({ authenticated: true }), getAuthEnv: async () => ({}), triggerLogin: async () => ({ authenticated: true }), logout: async () => {} },
+      resolveCodexLocalAuthPolicy: resolveRoute,
+      ...(mode === 'spawn-exhaust' ? { prepareCodexExtraSpawnConfig: prepareSpawn } : {}),
+    });
+    let guarded = false;
+    const failed = vi.fn(({ runtimeMayBeAlive }: { runtimeMayBeAlive?: boolean }) => { if (!runtimeMayBeAlive) guarded = false; });
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger,
+      lifecycleHooks: { onBeforeStart: async () => { guarded = true; }, onStartFailed: failed },
+    });
+    const result = maker.createSession({ id: 'route-stop', agentKind: 'codex', model: 'fixture', providerId: 'cprov-fixture', workingDir: '/fixture' });
+    const rejection = expect(result).rejects.toThrow(mode === 'cancel' ? /cancelled/ : /changed repeatedly/);
+    await waiting;
+    if (mode === 'cancel') await agent.dispose();
+    await rejection;
+    expect(failed).toHaveBeenCalledWith(expect.objectContaining({ stage: 'agent-start', runtimeMayBeAlive: false }));
+    expect(guarded).toBe(false);
+    expect(maker.listActiveSessions()).toEqual([]);
+    if (mode !== 'cancel') expect(resolveRoute).toHaveBeenCalledTimes(8);
+    if (mode === 'spawn-exhaust') expect(prepareSpawn).toHaveBeenCalledTimes(8);
+    await maker.shutdown();
+  });
+
   it('waits for deferred startup cleanup hooks before resolving', async () => {
     const stopped = createDeferred();
     const cleanupGate = createDeferred();

@@ -7,6 +7,8 @@ import { selectNotificationReply } from './sessionNotificationPreview.logic.js';
 
 export interface SessionNotificationPreview {
   teammateName?: string;
+  /** The canonical Session's Bot, so remote controllers can open it as that teammate. */
+  teammateBotId?: string;
   reply?: { clientId: string; text: string };
   eventId?: string;
   suppress?: boolean;
@@ -18,19 +20,19 @@ export async function readSessionNotificationPreview(sessionId: string, includeR
   const rows = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
   const current = rows[0];
   if (!current) return {};
-  const profile = current.source === 'bot' ? await db.select({ name: botProfiles.displayName })
+  const profile = current.source === 'bot' ? await db.select({ id: botProfiles.id, name: botProfiles.displayName })
     .from(botProfiles).innerJoin(botSessionLinks, eq(botSessionLinks.botId, botProfiles.id))
     .where(and(eq(botSessionLinks.sessionId, sessionId), eq(botSessionLinks.role, 'canonical'))).get() : undefined;
-  const teammateName = profile?.name;
+  const teammate = profile ? { teammateName: profile.name, teammateBotId: profile.id } : {};
   // A delayed idle event may arrive after the next input has already started.
   // Do not notify that unfinished turn or reuse a pre-upgrade historical final.
   const startedAt = current.activeTurnStartedAt ?? 0;
   const endedAt = current.lastTurnEndedAt ?? 0;
-  if (startedAt > endedAt) return { teammateName, suppress: true };
-  if (startedAt <= 0) return { teammateName };
+  if (startedAt > endedAt) return { ...teammate, suppress: true };
+  if (startedAt <= 0) return teammate;
   // Stable across preview readiness: a retry after a fallback must not notify twice.
   const eventId = `turn:${startedAt}:${endedAt}`;
-  if (!includeReply) return { teammateName, eventId };
+  if (!includeReply) return { ...teammate, eventId };
   const recent = await db.select().from(messages).where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt)))
     .orderBy(desc(messages.createdAt), desc(sql`rowid`)).limit(100);
   const reply = selectNotificationReply(recent.map((row) => {
@@ -42,5 +44,5 @@ export async function readSessionNotificationPreview(sessionId: string, includeR
       topLevel: isTopLevelTitleAssistant(meta),
     };
   }), Math.max(startedAt, current.clearedAt ?? 0));
-  return { teammateName, reply, eventId };
+  return { ...teammate, reply, eventId };
 }

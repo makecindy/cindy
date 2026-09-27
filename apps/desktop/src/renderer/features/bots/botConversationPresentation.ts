@@ -29,6 +29,11 @@ function publicItems(items: readonly RenderItem[]): RenderItem[] {
   });
 }
 
+function expandWorkGroups(items: readonly RenderItem[]): RenderItem[] {
+  return items.flatMap((item): RenderItem[] =>
+    item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);
+}
+
 /** A presentation-only projection. Never mutate messages or infer intent from prose.
  * isFinal from the adapters closes a text block, not a turn (Pi/Claude can call
  * another tool afterwards). Reuse the normal work-group turn seal, omitting
@@ -69,13 +74,14 @@ function projectWindow(
   isStreaming: boolean,
   visibleGeneratedFileKeys?: ReadonlySet<string>,
 ): RenderItem[] {
-  // groupWorkRuns leaves every contiguous block of a sealed answer outside its
-  // work group. Only the last block carries the seal. Capture that run before
-  // unwrapping groups/removing thinking, which must remain answer boundaries.
+  // A sealed answer may span several contiguous prose blocks; only the last carries
+  // the seal. groupWorkRuns folds earlier background-wake seals into work groups, so
+  // scan the expanded sequence while tools and thinking still act as boundaries.
+  const expanded = expandWorkGroups(items);
   const sealedAnswers = new Set<ChatMessage>();
   let sealedRun = false;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
+  for (let index = expanded.length - 1; index >= 0; index -= 1) {
+    const item = expanded[index];
     if (!isProse(item) || !item.message.content.trim()) {
       sealedRun = false;
       continue;

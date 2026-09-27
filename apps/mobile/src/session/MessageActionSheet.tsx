@@ -75,7 +75,7 @@ export function MessageActionSheet({
           <BlurBackdrop intensity={32} overlayColor={colors.sheetActionSurface} />
           {items.map((item) => {
             const Icon = ACTION_ICONS[item.id];
-            const color = item.destructive ? colors.destructive : colors.sheetActionText;
+            const color = item.destructive ? colors.destructive : colors.textPrimary;
             const disabled = disabledActions?.includes(item.id) === true;
             return (
               <View key={item.id}>
@@ -136,11 +136,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   separator: { backgroundColor: colors.sheetActionBorder, height: StyleSheet.hairlineWidth },
   disabled: { opacity: 0.42 },
   actionLabel: {
-    color: colors.sheetActionText,
+    color: colors.textPrimary,
     flexShrink: 1,
-    fontSize: typeScale.listBody,
-    fontWeight: fontWeight.semibold,
-    lineHeight: lineHeight.listBody,
+    fontSize: typeScale.bodySmall,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.bodySmall,
   },
   danger: { color: colors.destructive },
   cancelCard: {
@@ -154,10 +154,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     overflow: 'hidden',
   },
   cancelText: {
-    color: colors.sheetActionText,
-    fontSize: typeScale.listBody,
-    fontWeight: fontWeight.semibold,
-    lineHeight: lineHeight.listBody,
+    color: colors.textPrimary,
+    fontSize: typeScale.bodySmall,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.bodySmall,
   },
   pressed: { opacity: 0.72 },
 });

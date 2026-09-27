@@ -24,6 +24,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import type { PendingPermission } from '@/lib/makerChatStore';
 import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope';
+import { GHOST_INSTALL_CONSENT_TOOL_NAME } from '../../../shared/ghostInstallConsent';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -104,14 +105,24 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
     submitting, submissionFailed } = permission;
   const isMediaDownload = toolName === 'cindy.media.download';
+  // 插件安装确认由 Host 渲染成纯文本：首行是版本与来源，其余是权限清单。手机按原样
+  // 逐行显示；这里首行作说明，清单放进可滚动区域，不显示内部参数。
+  const isPluginInstallConsent = toolName === GHOST_INSTALL_CONSENT_TOOL_NAME;
+  const [consentHead, ...consentBody] = isPluginInstallConsent
+    ? (description ?? '').split('\n')
+    : [];
   const promptDescription = autoReviewUnavailable
     ? t('newChat.permissionPrompt.autoReviewUnavailable')
-    : description;
+    : isPluginInstallConsent
+      ? consentHead
+      : description;
 
   const displayTitle = displayName
     ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
     : title || t('agentIsland.native.permissionPromptTitleWithTool', { toolName });
-  const codeContent = formatToolInput(toolName, input);
+  const codeContent = isPluginInstallConsent
+    ? consentBody.join('\n')
+    : formatToolInput(toolName, input);
   const sessionSuggestions = useMemo(() => filterSessionScopedSuggestions(suggestions), [suggestions]);
   const canAlwaysAllowForSession = sessionSuggestions.length > 0;
   // 这个按钮加的是 agent 给的一条具体规则(Bash 多为 `curl:*` 这类前缀模式),
@@ -213,12 +224,18 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       {/* Code block */}
       <div
         className={cn(
-          'mt-3 max-h-[120px] overflow-auto rounded-[8px] border px-3.5 py-2.5',
+          'mt-3 overflow-auto rounded-[8px] border px-3.5 py-2.5',
           'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
-          'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-relaxed text-[var(--chat-input-text)]',
+          isPluginInstallConsent
+            ? 'max-h-[240px] text-13 leading-relaxed text-[var(--chat-input-text)]'
+            : 'max-h-[120px] font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-relaxed text-[var(--chat-input-text)]',
         )}
       >
-        <pre className="whitespace-pre-wrap break-all">{codeContent}</pre>
+        {isPluginInstallConsent ? (
+          <p className="whitespace-pre-wrap break-words">{codeContent}</p>
+        ) : (
+          <pre className="whitespace-pre-wrap break-all">{codeContent}</pre>
+        )}
       </div>
 
       {/* Action buttons — inline text + kbd badges, right-aligned.

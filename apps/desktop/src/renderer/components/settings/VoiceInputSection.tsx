@@ -2162,12 +2162,6 @@ export function VoiceInputSection() {
                     }
                     setCustomDictionaryExpanded(!customDictionaryExpanded);
                   }}
-                  className={cn(
-                    'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-12 font-medium transition-colors',
-                    'border border-[var(--settings-btn-secondary-border)]',
-                    'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
-                    'hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                  )}
                 >
                   <span>
                     {t(
@@ -2331,6 +2325,7 @@ export function VoiceInputSection() {
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                       />
                       <Dialog.Content
+                        onPointerDownOutside={(event) => event.preventDefault()}
                         className={cn(
                           'fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
                           'rounded-[18px] border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',

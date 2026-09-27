@@ -1069,6 +1069,9 @@ export class WebMicAudioEngine {
         return;
       } catch (error) {
         if (isSelectedMicrophoneUnavailableError(error)) throw error;
+        // Permission is requested by this capture, not by a disposable probe.
+        // Retrying the cold path after denial would open/request it twice.
+        if (isMicrophonePermissionDeniedError(error)) throw error;
         // Only a *power* release ends the attempt. Falling through to the cold
         // getUserMedia() below after a suspend/lock would open a brand-new
         // stream once that one-shot event has passed, with nothing left to
@@ -1631,9 +1634,10 @@ export class WebMicAudioEngine {
     this.onInterrupted?.(message);
   }
 
-  private resample(input: Float32Array, fromRate: number, toRate: number): number[] {
+  private resample(input: Float32Array, fromRate: number, toRate: number): number[] | Float32Array {
     if (input.length === 0) return [];
-    if (fromRate === toRate) return Array.from(input);
+    // handleInputFrame consumes the values synchronously without retaining input.
+    if (fromRate === toRate) return input;
 
     const ratio = fromRate / toRate;
     const output: number[] = [];

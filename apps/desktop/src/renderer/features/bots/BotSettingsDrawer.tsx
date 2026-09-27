@@ -76,6 +76,12 @@ export function BotSettingsDrawer() {
       navigate('/bots', { replace: true });
       return;
     }
+    // A paused or failed teammate has no chat behind the drawer: its page reopens
+    // settings, so dropping the query alone would bounce straight back. Close to the list.
+    if (bot && bot.status !== 'active') {
+      navigate('/bots/list', { replace: true });
+      return;
+    }
     setSearchParams(
       (current) => {
         const next = new URLSearchParams(current);
@@ -98,7 +104,12 @@ export function BotSettingsDrawer() {
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
         <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]">
           <Dialog.Content
+            onPointerDownOutside={(event) => event.preventDefault()}
             aria-describedby={undefined}
+            // CJK IME: Escape during composition only cancels the candidate.
+            onEscapeKeyDown={(event) => {
+              if (event.isComposing || event.keyCode === 229) event.preventDefault();
+            }}
             className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
           >
             <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">

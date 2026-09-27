@@ -667,9 +667,14 @@ describe('Cindy durable PI Subagent runner', () => {
           return null;
         }
       });
-      const [closing] = await listPiSubagentRuns(fixture.root);
-      expect(closing && closing.state !== 'completed' && closing.state !== 'failed').toBe(true);
-      await expect(controlPiSubagentRuns(fixture.root, closing!.runId, 'follow_up', {
+      // The child marker is independent of the runner's status publication;
+      // listPiSubagentRuns may omit a temporarily unreadable snapshot on Windows.
+      const closing = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run ?? null;
+      }, undefined, 'readable status after child RPC input closes');
+      expect(closing.state !== 'completed' && closing.state !== 'failed').toBe(true);
+      await expect(controlPiSubagentRuns(fixture.root, closing.runId, 'follow_up', {
         message: 'too late for this generation',
       })).resolves.toBe(0);
       await writeFile(fixture.exitReleaseFile, '1');

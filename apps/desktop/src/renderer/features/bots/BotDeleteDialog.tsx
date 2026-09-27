@@ -55,7 +55,7 @@ export function BotDeleteDialog({
     <Dialog.Root open onOpenChange={(open) => !busy && onOpenChange(open)}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[70] bg-[var(--overlay-modal)]" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-[71] w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
+        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="fixed left-1/2 top-1/2 z-[71] w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
           <div className="flex items-start justify-between gap-4">
             <div>
               <Dialog.Title className="text-16 font-medium text-[var(--text-danger)]">

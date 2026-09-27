@@ -114,7 +114,6 @@ export default defineConfig({
           name: 'git-integration',
           include: gitIntegrationTestInclude,
           exclude: cliTestExclude,
-          globalSetup: ['src/test/vitest/desktopTestResourceLock.ts'],
         },
       },
     ],

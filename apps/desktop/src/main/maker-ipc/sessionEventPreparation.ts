@@ -47,6 +47,12 @@ import {
   InterruptedTurnAutoResumeGuard,
   isSubstantiveProgressEvent,
 } from './interruptedTurnAutoResume.js';
+import { isBotGroupClientId } from '../../shared/botGroupChat.js';
+
+/** Bot DMs and group-lane turns answer an internal channel, not the user watching this Session. */
+function isBotPrivateInput(clientId: string): boolean {
+  return clientId.startsWith('bot-dm:') || isBotGroupClientId(clientId);
+}
 
 interface DismissedInteraction {
   kind: InteractionRequest['kind'];
@@ -169,7 +175,7 @@ export function prepareSessionEvent(
     const inputId = deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
     // Private-message visibility is still owned by the accepted input, even
     // though the notice is independent of the model's reply/usage state.
-    const privateReply = inputId ? inputId.startsWith('bot-dm:') : event.agentMeta?.botPrivateReply;
+    const privateReply = inputId ? isBotPrivateInput(inputId) : event.agentMeta?.botPrivateReply;
     if (typeof text === 'string') {
       onStandaloneTextEvent(session.id, text,
         typeof privateReply === 'boolean' ? { botPrivateReply: privateReply } : null);
@@ -187,7 +193,16 @@ export function prepareSessionEvent(
   // The host's accepted input owns provenance across all three SDKs. Explicit
   // false restores normal replies when the user steers a private message turn.
   let attributedEvent = activeInputId
-    ? { ...event, agentMeta: { ...event.agentMeta, botPrivateReply: activeInputId.startsWith('bot-dm:') } }
+    ? {
+        ...event,
+        agentMeta: {
+          ...event.agentMeta,
+          botPrivateReply: isBotPrivateInput(activeInputId),
+          // A group-lane turn is delivered into the group chat; its hidden Session never
+          // raises completion/error attention of its own (docs/product-rules/bot-group-chat.md §3).
+          ...(isBotGroupClientId(activeInputId) ? { botGroupLane: true } : {}),
+        },
+      }
     : event;
   if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
     const reason =

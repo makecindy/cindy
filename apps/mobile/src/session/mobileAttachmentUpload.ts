@@ -1,4 +1,5 @@
 import { apiFetchRaw } from '@/api/client';
+import { tryMobilePeerUpload } from '@/device-link/peerFileRegistry';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { i18n } from '@/i18n';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
@@ -329,6 +330,7 @@ export async function uploadMobileAttachmentFromFile(
   options: {
     token: string | null;
     sharedTaskId?: string;
+    deviceId?: string;
     id?: string;
     deps?: UploadDeps;
     signal?: AbortSignal;
@@ -352,6 +354,16 @@ export async function uploadMobileAttachmentFromFile(
       readChunk: options.deps?.readFileChunk,
       signal: options.signal,
     });
+    if (options.deviceId && !options.sharedTaskId) {
+      const peerRef = await tryMobilePeerUpload(options.deviceId, snapshot.uri, {
+        size: candidate.size, sha256, mimeType: candidate.mimeType, originalName: candidate.name,
+      }, options.signal);
+      if (peerRef) {
+        const attachment = buildMobileUploadedAttachment({ ...candidate, sha256, peerRef, id: options.id });
+        if (!attachment) throw new Error(i18n.t('composer.upload.fileTypeUnsupported'));
+        return attachment;
+      }
+    }
     const presigned = await presignMobileAttachmentUpload(candidate, options);
     try {
       await putMobileAttachmentUploadFromFile(

@@ -118,7 +118,7 @@ describe('tokenizeCode · 无损与基本分类', () => {
 describe('tokenizeCode · 属性名(hljs attr 对应类)', () => {
   it('对象字面量的裸 key 归为 property', () => {
     const tokens = assertLossless(
-      'markdownInlineCode: {\n  fontFamily: monoFont,\n  fontSize: typeScale.code,\n}',
+      'markdownInlineCode: {\n  fontFamily: monoFont,\n  fontSize: typeScale.bodySmall,\n}',
       'ts',
     );
     expect(kindTexts(tokens, 'property')).toEqual(

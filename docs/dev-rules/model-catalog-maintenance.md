@@ -17,7 +17,10 @@ Mobile / device-link 使用执行端目录；本地安装状态来自执行机�
 
 ### 配置包含什么
 
-Server 正本是 `model-access-server/catalog/providers.json`。客户端离线文件分别是
+Server 正本现为 `model-access-server/catalog/source/` 分片，由
+`model-access-server/scripts/generateCatalog.mjs` 组装成 `catalog/generated/providers.json`。
+本地域编辑 `source/registry/local-models.json`，revision 编辑 `source/catalog.json`；
+不要直接编辑生成文件。客户端离线文件分别是
 [`catalog/providers.json`](../../packages/model-providers/catalog/providers.json)（providers / presets）和
 [`catalog/model-registry.json`](../../packages/model-providers/catalog/model-registry.json)（Registry）。
 逻辑结构如下；具体字段及修改位置见下表：
@@ -38,7 +41,7 @@ Catalog (version)
 | 要改什么 | 写入位置 / 责任侧 | 不能顺带改变什么 |
 | --- | --- | --- |
 | 型号公共名称、说明、窗口、输出、思考能力 | Registry `baseModels[].defaults` | 价格、账号权限、地址和凭证不在公共继承内 |
-| 接入条目状态、排序、默认开启标记 | Registry `models[]` 顶层 | 显示开关不等于成员资格；见下文默认可见性 |
+| 接入条目状态、排序、默认开启标记 | Registry `models[]` 顶层 | 显示开关不等于成员资格；订阅账号排序以账号为准，见下文模型排序与默认可见性 |
 | 某供应商的上游 ID、支持路由、普通默认 | `models[].routes[]` / `routes[].defaults` | 普通默认不能压过实报 |
 | Claude Code / Codex 的工作默认 | `models[].perAgent`，引擎必须被该条目 route 声明 | 不把工作预算当供应商承诺容量 |
 | Pi 公共成员和 Pi 默认资料 | `providers[].models.pi`；订阅账号发现另补新型号，公共资料仍按 Registry 合并 | 复用已实现的订阅传输，不复制其他引擎的专属能力 |
@@ -69,12 +72,73 @@ Pi 走 `providers[].models.pi`（用户补丁 perAgent.pi 另属合法 schema）
 `defaultEffort` 的已配置默认优先于供应商实报的推荐档，再适配实际支持能力，force / 用户覆盖仍优先。
 详细字段及成员空值规则以 [模型资料优先级](../product-rules/model-metadata-precedence.md) 为唯一正本。
 
+<a id="ordering"></a>
+## 模型排序与成员：以账号为准
+
+OpenAI（Codex 订阅）与 Anthropic（Claude 订阅）的 root **成员只来自账号清单**：Registry 只给
+已返回的型号补资料、标退役，不补入账号没返回的型号；没有账号清单时名单为空。`sortOrder` 以账号
+返回顺序为准：Codex 取 `models_cache.json` 的 `priority` 或 app-server `model/list` 的返回位置，
+Claude 取 SDK `supportedModels()` 的返回位置。用户本地 addition 按 Registry / 本地 `sortOrder`
+接在其后。装配时重写为连续 `sortOrder`，选择器、设置页、新对话默认与 Claude Code
+bridge 共用这一顺序；OpenAI 订阅的 Pi 清单成员与能力仍来自 Pi 目录，但同样按账号顺序排列，
+并沿用 Registry 条目的 `defaultEnabled: false`；用户本地 `sortOrder` patch 仍最高。
+
+Claude 订阅没有 HTTP 清单接口，清单来自内置 Claude Code 的 SDK `supportedModels()`：会话启动时
+捕获；此外 maker 就绪、登录／认领 Claude 登录以及手动刷新时，用本机 CLI 起一个空闲 Query 只读
+清单（不发消息、不产生模型调用）。SDK 对每个系列的当前型号常只给简称（`opus` / `sonnet` /
+`default`）并把版本写在说明里（如 “Opus 5.5 · …”）；简称按说明拼出 `claude-<系列>-<主>-<次>`。
+Registry 尚未登记的新版本照样显示（资料用未知模型默认值，并记日志提示补登记），**绝不映射到
+相邻旧版本**；说明里读不出版本时才跳过。SDK 的 displayName 只有系列名（如 “Fable”）时不作为
+型号名称，改用 Registry 名称，Registry 未登记则按 ID 推导（`claude-fable-5-2` → “Fable 5.2”）。
+xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受此规则影响。
+第三方 API key 连接（MiMo、Kimi Code 等预设及自定义端点）没有 sortOrder，按连接配置里的
+顺序排：首次添加用接口返回的顺序；之后刷新发现的新型号排在已有型号之前（保持接口返回的
+相对顺序），已有型号位置不动（`mergeDiscoveredRuntimeModels`）。
+
+新对话默认模型不跟排序绑定的例外只有服务端按区域下发的 `newSessionDefault`；公共 Registry 的
+同名字段不进入活动目录。未标记时取排序第一的默认可见模型，即账号返回的第一个可见模型。
+
+设置页管理列表组内与选择器同序：组内每项都带 `sortOrder` 时按它排；只要有一项缺失，退回
+按系列名 A–Z、同系列版本号降序，避免局部权重把新型号压到旧策展位置之后。
+
+<a id="presets"></a>
+## 第三方预设：一份推荐清单
+
+`providers.json` 的每个预设只在顶层写一份 `models` 推荐清单，数组顺序即推荐顺序；
+`runtimes[引擎]` 只放地址、协议、模型目录等连接信息，不再按引擎各写一份模型。
+加载时由 `expandPresetModels` 展开回各引擎清单，下游与服务端下发的旧格式形状一致。
+
+- 协议限制导致某模型只在部分引擎可用时写 `engines`（如 OpenCode Go 的 Anthropic 协议模型、
+  GLM Coding Plan 只给 Claude Code 的 `[1m]` 变体）。
+- 引擎专属字段写 `engineOverrides[引擎]`：Pi 的推理档位、按模型路由，以及确有差异的窗口
+  （如 GLM Coding Plan 裸 `glm-5.2` 在 Claude Code 不写窗口、1M 走 `[1m]` 条目，Pi 为 1M）。
+- `engines` 的每一项与 `engineOverrides` 的每个键都只能是本预设已声明的引擎；拼错或写成
+  其它形状时整条预设被拒绝（即使 `runtimes` 另带旧格式清单），不静默丢模型或忽略覆盖。
+- 本文件是源格式，旧客户端读不懂顶层清单，不能直接发布到旧 OSS `cfg/providers.json`
+  （该文件自 2026-07 冻结，旧客户端经公共 API 与服务端投影拿到展开后的形状）。
+- 名称与参数以厂商官方文档为准；未列入推荐清单的型号由 Pi 模型资料补入并默认隐藏。
+- `presetModels.test.ts` 校验随包预设不再出现按引擎的清单。服务端分片同样只写一份推荐
+  清单，由 `generateCatalog.mjs` 展开后下发；同 id 的服务端预设整体覆盖随包版本，所以
+  推荐清单与参数两边保持一致。服务端的连接设置（含 Pi 照抄 Claude Code 的兼容映射）
+  以服务端为准，随包版本的原生 Pi 地址只在离线时使用。
+
 <a id="visibility"></a>
 ## 默认可见性：产品合同与实现差异
 
 [产品合同](configuration-and-overrides.md#模型可见性)：用户开关优先，否则跟随目录 defaultEnabled。
-但 `active-catalog.ts` 的 `selectDefaultModels` 仍可能将订阅/Gateway 的 true 筛成 false；不删除成员或写用户偏好。
-这是待收敛的行为差异，不是合同豁免。排查须同时检查上游值、活动目录值和用户 override；本文不改变行为。
+
+- **不默认显示的型号只写在目录里**：条目标 `defaultEnabled: false`，未标的一律默认显示，
+  所以新出的型号一定可见。客户端发现代码不按型号写死隐藏例外（2026-09-26 起移除了
+  `gpt-5.4-mini`、Haiku、bridge `gpt-5.4` 等硬编码）。
+- 保留的是按状态或引擎的规则，不针对具体型号：`deprecated`、`requires_payment` 默认关闭；
+  跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与自定义连接的兼容引擎默认关闭，
+  Registry `perAgent` 可显式打开。
+- **XD 路由一律使用独立的 `xd/*` 条目**，不与订阅或其他供应商共用条目：服务端生成
+  Gateway `/models` 时读取 XD 路由所在条目的名称、排序与 `defaultEnabled`，共用会让订阅侧
+  调整连带改动 XD。型号规格经 `modelRef` 继承同一公共型号，不重复维护。
+  `xdRegistryEntries.test.ts` 校验离线 Registry 不出现混用条目。
+
+排查须同时检查上游值、活动目录值和用户 override。
 
 <a id="release"></a>
 ## 更新、下发与验收
@@ -87,7 +151,7 @@ localModels 整域缺失才用随包本地域，显式空不兜底。
 2. **修改责任侧**：在授权范围内先维护 Server 正本，再协调客户端离线 Registry。遇到尚未上线的协议配套，分别记录工作分支、已合并和已部署状态，不混成“已支持”。
 3. **整表同步**：将审阅后的 Server `modelRegistry` 整体同步到客户端 `catalog/model-registry.json`，保持同 updatedAt、同内容。不要复制 Server 整份 providers.json，也不能只复制 localModels 造成悬空引用。新 revision 必须递增且不可变；价格 effectiveFrom / verifiedAt 保留其真实日期。
 4. **先验证兼容再发布**：完整结构过 parseModelRegistry / parseCatalog；确认旧客户端投影。尤其先读 [媒体扩展发布前置条件](../model-registry-v4-media.md#发布前置条件)：同为 V4 并不证明认识新增媒体字段。LKG/内置回退不能代替兼容方案。
-5. **核对真实下发**：检查可选 MODEL_CATALOG_URL 是否覆盖随包基线；部署后读取 `/api/model-catalog/catalog`，核对目标与旧版响应、ETag 和有效 revision。仅改文件、合并 PR、通过 CI 不算下发完成。
+5. **核对真实下发**：当前 Server 源码仅加载制品内生成目录，已不读取 MODEL_CATALOG_URL；须核对目标环境版本。部署后读取 `/api/model-catalog/catalog`，核对目标与旧版响应、ETag 和有效 revision。仅改文件、合并 PR、通过 CI 不算下发完成。
    同步回归须核对原有直连 route 与历史参考价区间未丢失；覆盖标准/Fast、缓存读写、长输入分档。
    离线默认档与已发布 Server 有差异时逐项披露。原生协议校验须遍历全部 route 和活动目录中的
    订阅 wire 别名，不能仅统计字段填写率；不能从供应商兼容 API 反推未知型号的原生协议。
@@ -160,3 +224,18 @@ app-server 的完整 `model/list`，不使用控制端 OpenAI 登录或网关目
 剥离新增组与引用字段；V4 保留公共资料、本地域及原覆盖语义。各版本响应有独立 ETag。
 旧服务端仍可返回旧目录，新客户端保留旧格式读取；应先部署服务端再发布客户端。
 本次只迁移已有、已核实的价格，不补猜测价格，不改变 XD 的缺价处理。
+
+## xAI 双接口同步与导入验收
+
+新维护入口为 [`tools/model-catalog/sync-xai.mts`](../../tools/model-catalog/sync-xai.mts)，
+用账号 `/models` 与官方 `/language-models` 合并型号和资料，再通过实际活动目录、三引擎
+选择器数据与参考价解析验收。运行方式、凭证边界、缺项报告与实测限制见
+[同步说明](../../tools/model-catalog/README.md)。输出是账号范围的本地导入候选，不可直接
+作为全局 Server 清单发布；它不改用户覆盖，也不以抓取成功代替完整适配。
+
+订阅 Fast 若通过独立上游型号执行，在 `providers.models[agent].fastModelId` 声明同来源、
+同引擎的目标 ID；不能只下发 `supportsFastMode: true`。客户端结合当前账号发现结果计算
+可用性，并在 Claude / Codex / Pi 请求边界统一切模，不再叠加 `service_tier: priority`。
+`null` 可显式撤销映射；缺省保持旧行为。旧客户端忽略新映射，因此执行适配需先随客户端
+发布；后续相同执行方式的新型号可维护目录数据。4.7 的关系与 Fast 价表已由官方文档和
+实测补证，4.6 不从版本号推导 Fast 支持。

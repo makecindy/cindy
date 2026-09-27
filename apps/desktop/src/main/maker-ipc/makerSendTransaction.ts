@@ -232,6 +232,7 @@ export function revokeTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage):
 }
 
 type MakerSendOptions = {
+  retryUserClientId?: string;
   toolsDisabled?: boolean;
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   /** Main-only continuation: a restored intent is not an authored user turn. */
@@ -437,6 +438,7 @@ export interface MakerSendTransactionDeps {
   ) => boolean;
   /** 把 Pi 原生 user entry id 补到已落库的 Cindy user 行，供会话树恢复附件。 */
   linkPiUserEntry?(sessionId: string, clientId: string, piEntryId: string): Promise<boolean | void>;
+  readPiUserEntry?(sessionId: string, clientId: string): Promise<string | undefined>;
   beforeDispatchDirectUserTurn?: (sessionId: string) => void | Promise<void>;
   /** Capture product lifecycle state before async preparation; commit only at vendor dispatch. */
   prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
@@ -1450,7 +1452,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         const interruptedAckAt = so.ackInterruptedTurnOnDispatch
           ? Math.max(0, Date.now() - 1)
           : null;
+        const retryTranscriptUserEntryId = sess.agentKind === 'pi' && so.retryUserClientId
+          ? await deps.readPiUserEntry?.(sessionId, so.retryUserClientId)
+          : undefined;
         const sendResult = await sess.send(outgoing as never, {
+          ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
           ...(resolveScheduledIntent ? { resolveAutoReviewUserIntent: resolveScheduledIntent } : {}),
           [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
           ...(so[INHERITED_CAPABILITY_SELECTION] !== undefined
@@ -1489,7 +1495,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             : {}),
           ...(sess.agentKind === 'pi' &&
           persistUserMessage &&
-          containsManagedAttachment(persistUserMessage.content) &&
           deps.linkPiUserEntry
             ? {
                 onTranscriptUserEntry: async (piEntryId: string) => {

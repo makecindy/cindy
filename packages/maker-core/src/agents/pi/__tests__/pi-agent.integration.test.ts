@@ -432,6 +432,46 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     };
   }
 
+  it('reads native Fast from host RPC and ignores replayed preference files in Full Access', { timeout: 30_000 }, async () => {
+    const deps = buildDeps();
+    deps.resolvePiNativeProviders = async () => ({ providers: [{ id: 'fast-relay', name: 'Fast Relay',
+      baseUrl: endpoint, api: 'openai-responses', apiKeyEnvVar: 'CINDY_PI_API_KEY',
+      models: [{ id: 'gpt-6-sol', name: 'Fast fixture', contextWindow: 128000, supportsFastMode: true }],
+    }], env: {} });
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-fast-rpc-'));
+    let handle: AgentSessionHandle | undefined;
+    const before = seenRequests.length;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'fast-rpc', workingDir,
+        providerId: 'fast-relay', model: 'gpt-6-sol', permissionMode: 'bypassPermissions' });
+      const legacyFile = path.join(agentHome, 'runtime', 'request-prefs-forged.json');
+      writeFileSync(legacyFile, JSON.stringify({ fast: true, models: [{ provider: 'fast-relay', id: 'gpt-6-sol' }] }));
+      const send = async () => {
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'interaction_request') throw new Error('Fast lookup must not prompt');
+          if (event.type === 'done') return event;
+        } })();
+        await handle!.send({ type: 'user', content: 'Reply briefly.' });
+        expect((await done)?.data).toMatchObject({ status: 'completed' });
+      };
+      await send();
+      await handle.setFastMode!(true);
+      await send();
+      await handle.setFastMode!(false);
+      // Replaying an earlier enabled snapshot cannot restore host Fast intent.
+      writeFileSync(legacyFile, JSON.stringify({ fast: true, models: [{ provider: 'fast-relay', id: 'gpt-6-sol' }] }));
+      await send();
+      const bodies = seenRequests.slice(before).map(request => JSON.parse(request.body));
+      expect(bodies.map(body => body.service_tier)).toEqual([undefined, 'priority', undefined]);
+      expect(bodies.every(body => body.model === 'gpt-6-sol')).toBe(true);
+      expect(JSON.stringify(bodies)).not.toContain('cindy:request-preferences');
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   it('applies configured windows on creation and same-history resume, then restores the default',
     { timeout: 60_000 }, async () => {
       let limit: number | null = 80_000;
@@ -950,7 +990,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         providers: [{
           id: 'xai', sourceProviderId: 'xai', name: 'xAI',
           baseUrl: `${endpoint}/v1`, inheritModels: true,
-          models: [{ ...row, api, input: row.input.filter((kind): kind is 'text' | 'image' => kind === 'text' || kind === 'image'),
+          models: [{ ...row, api, input: row.input?.filter((kind): kind is 'text' | 'image' => kind === 'text' || kind === 'image'),
             cost: { ...row.cost, input: row.cost?.input ?? 0, output: row.cost?.output ?? 0,
               cacheRead: row.cost?.cacheRead ?? 0, cacheWrite: row.cost?.cacheWrite ?? 0,
               tiers: row.cost?.tiers?.map(tier => ({ ...tier,

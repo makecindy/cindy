@@ -494,6 +494,9 @@ describe('createAutoReviewUnavailableNotice', () => {
     expect(emitted[0]).toContain(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`);
     // 兜底英文必须跟在 code 后面:未落地 i18n 的宿主(远端 / IM)直接显示它。
     expect(emitted[0]).toContain('Auto-review could not reach a decision');
+    expect(emitted[0]).toContain('Full access');
+    expect(emitted[0]).toContain('higher risk');
+    expect(emitted[0]).not.toContain('Default permissions');
 
     notice.reset();
     notice.notify();

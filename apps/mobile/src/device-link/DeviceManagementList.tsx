@@ -1,21 +1,15 @@
 import { useRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { Monitor } from 'lucide-react-native';
+import { Monitor, Pencil, Trash2 } from 'lucide-react-native';
 import { Text } from '@/components/AppText';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import {
   ClassicSwipeable,
   type ClassicSwipeableMethods,
 } from '@/platform/gestureHandler';
 import { useTheme } from '@/theme';
-import {
-  fontWeight,
-  iconSize,
-  iconStroke,
-  spacing,
-  radius,
-  typeScale,
-} from '@/theme/tokens';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import type { DeviceManagementListProps } from './DeviceManagementList.types';
 
 export function DeviceManagementList(props: DeviceManagementListProps) {
@@ -51,21 +45,35 @@ function DeviceRow({
   const ref = useRef<ClassicSwipeableMethods | null>(null);
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const action = (remove: boolean) => (
-    <Pressable
-      accessibilityRole="button"
-      disabled={busy}
-      onPress={() => {
-        ref.current?.close();
-        (remove ? onDelete : onRename)(row.device);
-      }}
-      style={[styles.action, { backgroundColor: colors.surfaceElevated }]}
-    >
-      <Text style={{ color: remove ? colors.destructive : colors.textPrimary }}>
-        {t(remove ? 'devices.common.delete' : 'devices.list.menu.renameDevice')}
-      </Text>
-    </Pressable>
-  );
+  // 与 iOS 滑动操作一致:只放图标(重命名=铅笔、删除=红色垃圾桶),文字留给读屏。
+  const action = (remove: boolean) => {
+    const Icon = remove ? Trash2 : Pencil;
+    return (
+      <Pressable
+        accessibilityLabel={t(remove ? 'devices.common.delete' : 'devices.list.menu.renameDevice')}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: busy }}
+        disabled={busy}
+        onPress={() => {
+          ref.current?.close();
+          (remove ? onDelete : onRename)(row.device);
+        }}
+        style={({ pressed }) => [
+          styles.action,
+          { backgroundColor: colors.surfaceElevated },
+          pressed && styles.pressed,
+          busy && styles.disabled,
+        ]}
+        testID={`deviceManagement.${remove ? 'delete' : 'rename'}.${row.device.deviceId}`}
+      >
+        <Icon
+          color={remove ? colors.destructive : colors.textPrimary}
+          size={iconSize.xl}
+          strokeWidth={iconStroke.regular}
+        />
+      </Pressable>
+    );
+  };
   return (
     <ClassicSwipeable
       ref={ref}
@@ -92,10 +100,12 @@ function DeviceRow({
         <View style={styles.labels}>
           <Text
             style={{
+              // 离线用二级字色,与 iOS 列表的 secondary 层级一致。
               color: row.device.online
                 ? colors.textPrimary
-                : colors.textTertiary,
+                : colors.textSecondary,
               fontSize: typeScale.body,
+              lineHeight: lineHeight.body,
               fontWeight: row.device.online
                 ? fontWeight.medium
                 : fontWeight.regular,
@@ -110,8 +120,10 @@ function DeviceRow({
                 { backgroundColor: row.device.online ? colors.statusReady : colors.textTertiary },
               ]}
             />
-            <Text style={{ color: colors.textSecondary, flexShrink: 1 }}>
-              {row.statusLabel} · {row.statusDetail}
+            <Text
+              style={{ color: colors.textSecondary, flexShrink: 1, fontSize: typeScale.caption, lineHeight: lineHeight.caption }}
+            >
+              {deviceManagementStatusLine(row)}
             </Text>
           </View>
         </View>
@@ -119,6 +131,13 @@ function DeviceRow({
     </ClassicSwipeable>
   );
 }
+/** 与 iOS 一致:在线只写「在线」,离线写「状态 · 详情」。 */
+function deviceManagementStatusLine(
+  row: Pick<DeviceManagementListProps['rows'][number], 'device' | 'statusLabel' | 'statusDetail'>,
+): string {
+  return row.device.online ? row.statusLabel : `${row.statusLabel} · ${row.statusDetail}`;
+}
+
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
@@ -132,10 +151,12 @@ const styles = StyleSheet.create({
   status: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   statusDot: { width: 6, height: 6, borderRadius: radius.pill, flexShrink: 0 },
   action: {
-    minWidth: 88,
+    minWidth: 72,
     minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
     padding: spacing.lg,
   },
+  pressed: mobileInteractionStyles.pressed,
+  disabled: { opacity: 0.45 },
 });

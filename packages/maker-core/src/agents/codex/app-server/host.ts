@@ -329,6 +329,9 @@ interface BufferedNotification {
   ts: number;
 }
 
+/** All native attempts have exited before this error is exposed to a task startup. */
+export class CodexNativeInitializationStoppedError extends Error {}
+
 export class AppServerHost {
   private readonly externalAuth: CodexExternalAuthSession | undefined;
   private readonly connectionId = randomUUID();
@@ -337,8 +340,13 @@ export class AppServerHost {
   private readonly threadUnsubscribeTimeoutMs: number;
 
   private client: AppServerClient | null = null;
+  // Negative proof belongs to the exact transport, not readiness or provider.
+  // Any application RPC may load a thread (including future protocol methods).
+  // Bootstrap initialize/config/auth and the read-only writer probe do not.
+  private readonly writerCandidates = new WeakSet<AppServerClient>();
   /** 同次 ensureStarted 并发调用共享一个 init Promise (避免重复 spawn)。 */
   private startPromise: Promise<InitializeResponse> | null = null;
+  private nativeInitializationEpoch = 0;
 
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
   /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
@@ -624,6 +632,7 @@ export class AppServerHost {
         started,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
+            this.nativeInitializationEpoch++;
             reject(new Error(`app-server startup (for ${label}) timed out after ${timeoutMs}ms`));
           }, timeoutMs);
           timer.unref?.();
@@ -637,11 +646,19 @@ export class AppServerHost {
     }
   }
 
-  private async bootstrap(capabilities?: InitializeCapabilities): Promise<InitializeResponse> {
+  private async bootstrap(
+    capabilities?: InitializeCapabilities,
+    nativeAttempt = 0,
+    nativeEpoch = this.nativeInitializationEpoch,
+  ): Promise<InitializeResponse> {
     const client = new AppServerClient({
       createTransport: this.opts.createTransport,
       logger: this.opts.logger,
-      onTransportError: (err) => this.handleTransportError(err),
+      onTransportError: (err) => {
+        // Keep the shared startPromise while recovering this one pre-protocol
+        // failure. Every other transport error retains the normal host lifecycle.
+        if (!client.nativeSqliteInitializationFailed()) this.handleTransportError(err);
+      },
       onAuthInvalidated: this.opts.onAuthInvalidated,
       captureCredentialGeneration: this.opts.captureCredentialGeneration,
     });
@@ -665,7 +682,10 @@ export class AppServerHost {
     // 注册 notification handlers BEFORE initialize: server 在握手响应前可能就推了
     // banner / 启动 notification, 漏接就丢。
     for (const method of SUBSCRIBED_METHODS) {
-      client.onNotification(method, (params) => this.routeNotification(method, params));
+      client.onNotification(method, (params) => {
+        if (extractThreadId(method, params)) this.writerCandidates.add(client);
+        this.routeNotification(method, params);
+      });
     }
 
     // ServerRequest handlers (Phase 2 approval) — 同样在 initialize 前注册,
@@ -834,7 +854,21 @@ export class AppServerHost {
       optOutNotificationMethods: NOTIFICATIONS_TO_OPT_OUT,
       ...capabilities,
     };
-    const resp = await client.initialize(this.opts.clientInfo, mergedCapabilities);
+    let resp: InitializeResponse;
+    try {
+      resp = await client.initialize(this.opts.clientInfo, mergedCapabilities);
+    } catch (error) {
+      if (!client.nativeSqliteInitializationFailed()) throw error;
+      // No task/config/authentication RPC has been submitted. The transport
+      // proves natural exit; still use the existing strict close barrier.
+      await client.close({ reason: 'native SQLite initialization failed', throwOnTransportError: true });
+      if (nativeAttempt >= 2 || nativeEpoch !== this.nativeInitializationEpoch
+        || this.retired || this.shuttingDown || this.client !== client) {
+        throw new CodexNativeInitializationStoppedError('Codex native SQLite initialization stopped', { cause: error });
+      }
+      this.logger.warn('retrying exited native SQLite initialization', { attempt: nativeAttempt + 2, maxAttempts: 3 });
+      return this.bootstrap(capabilities, nativeAttempt + 1, nativeEpoch);
+    }
     if (this.opts.requireEphemeralAuth || this.externalAuth) {
       // Requirements can override CLI configuration. Reject before any task RPC
       // or token installation; initialization has already loaded native config.
@@ -865,7 +899,7 @@ export class AppServerHost {
   async request<R = unknown>(
     method: string,
     params?: unknown,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; beforeDispatch?: () => void },
   ): Promise<R> {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
     // bootstrap 挂死 / SSH 通道无响应) — 调用方显式给 timeoutMs 时同样给它
@@ -882,6 +916,7 @@ export class AppServerHost {
           started,
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => {
+              this.nativeInitializationEpoch++;
               reject(new Error(`app-server startup (for ${method}) timed out after ${opts.timeoutMs}ms`));
             }, opts.timeoutMs);
             timer.unref?.();
@@ -900,10 +935,14 @@ export class AppServerHost {
         throw new Error(`app-server startup (for ${method}) consumed the entire ${opts.timeoutMs}ms timeout budget`);
       }
       if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
+      opts?.beforeDispatch?.();
+      if (method !== 'thread/loaded/list') this.writerCandidates.add(this.client);
       return this.client.request<R>(method, params, { ...opts, timeoutMs: remaining });
     }
     await started;
     if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
+    opts?.beforeDispatch?.();
+    if (method !== 'thread/loaded/list') this.writerCandidates.add(this.client);
     return this.client.request<R>(method, params, opts);
   }
 
@@ -930,6 +969,7 @@ export class AppServerHost {
     reason = 'AppServerHost.shutdown()',
     opts?: { throwOnTransportError?: boolean },
   ): Promise<void> {
+    this.nativeInitializationEpoch++;
     if (!this.shutdownPromise) {
       this.shuttingDown = true;
       const client = this.client;
@@ -1084,6 +1124,7 @@ export class AppServerHost {
     if (this.subscribers.has(threadId)) {
       this.logger.warn('overwriting thread subscription', { threadId });
     }
+    if (this.client) this.writerCandidates.add(this.client);
     this.subscribers.set(threadId, handlers);
     this.lineageRoots.set(threadId, threadId);
     this.notifyThreadHandlerWaiters(threadId);
@@ -1658,6 +1699,15 @@ export class AppServerHost {
   /** Whether this process already owns the live state for a root thread. */
   hasThreadSubscription(threadId: string): boolean {
     return this.subscribers.has(threadId);
+  }
+
+  /**
+   * Opaque concrete process identity which may own a writer. Null proves no
+   * application request/thread evidence in this process. A failed shutdown keeps
+   * the client (and evidence); a confirmed exit/restart gets a fresh identity.
+   */
+  get writerCandidate(): object | null {
+    return this.client && this.writerCandidates.has(this.client) ? this.client : null;
   }
 
   /** 是否已经 spawn 过子进程 (但可能已 close)。 */

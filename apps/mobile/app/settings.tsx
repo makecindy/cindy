@@ -113,7 +113,7 @@ import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import type { MobileChoiceOption } from '@/session/agentCapabilities';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { THEME_PREFERENCES, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'uptodate' | 'error';
@@ -131,7 +131,7 @@ const LANGUAGE_OPTIONS: readonly LocalePreference[] = [
 
 export default function SettingsScreen() {
   const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
+  const { colors, preference: themePreference, setPreference: setThemePreference } = useTheme();
   const router = useRouter();
   const auth = useAuth();
   const { t } = useTranslation();
@@ -188,6 +188,8 @@ export default function SettingsScreen() {
   const [debugExpanded, setDebugExpanded] = useState(false);
   const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
   const [languagePickerSnap, setLanguagePickerSnap] = useState<ContextSheetSnap>('half');
+  const [appearancePickerOpen, setAppearancePickerOpen] = useState(false);
+  const [appearancePickerSnap, setAppearancePickerSnap] = useState<ContextSheetSnap>('half');
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
   const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -293,7 +295,7 @@ export default function SettingsScreen() {
     })),
     [t],
   );
-  const languagePickerHeights = useMemo(
+  const choicePickerHeights = useMemo(
     () => computeContextSheetSnapHeights({
       safeAreaTopInset: safeAreaInsets.top,
       screenHeight: windowDimensions.height,
@@ -310,6 +312,26 @@ export default function SettingsScreen() {
     setLocale(nextLocale);
     setLanguagePickerOpen(false);
   }, [setLocale]);
+  const appearancePickerOptions = useMemo<readonly MobileChoiceOption[]>(
+    () => THEME_PREFERENCES.map((option) => ({
+      id: option,
+      label: t(`settings.appearance.options.${option}`),
+    })),
+    [t],
+  );
+  const openAppearancePicker = useCallback(() => {
+    setAppearancePickerSnap('half');
+    setAppearancePickerOpen(true);
+  }, []);
+  const selectAppearance = useCallback((next: string) => {
+    const nextPreference = THEME_PREFERENCES.find((option) => option === next);
+    if (!nextPreference) return;
+    setAppearancePickerOpen(false);
+    // 本次会话已切换;只有本机存储写失败时提示下次启动会回到原设置。
+    setThemePreference(nextPreference).catch(() => {
+      Alert.alert(t('settings.appearance.modeLabel'), t('settings.appearance.saveFailed'));
+    });
+  }, [setThemePreference, t]);
 
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.deviceId) {
@@ -1120,6 +1142,26 @@ export default function SettingsScreen() {
           ]}
         </SettingsGroup>
 
+        {/* 显示模式:默认跟随系统,手动选择浅色 / 深色即持久化 override(恢复跟随系统 = 清除 override) */}
+        <SettingsGroup title={t('settings.appearance.title')}>
+          <NativePullDownMenu
+            actions={THEME_PREFERENCES.map((option) => ({
+              id: option,
+              state: option === themePreference ? 'on' : 'off',
+              title: t(`settings.appearance.options.${option}`),
+            }))}
+            onAction={selectAppearance}
+          >
+            <ChoicePickerRow
+              expanded={appearancePickerOpen}
+              label={t('settings.appearance.modeLabel')}
+              onPress={usesNativePullDownMenu() ? () => undefined : openAppearancePicker}
+              testID="settings.appearance.picker"
+              value={t(`settings.appearance.options.${themePreference}`)}
+            />
+          </NativePullDownMenu>
+        </SettingsGroup>
+
         {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
         <SettingsGroup
           footer={t('settings.language.hint')}
@@ -1133,7 +1175,7 @@ export default function SettingsScreen() {
             }))}
             onAction={selectLanguage}
           >
-            <LanguagePickerRow
+            <ChoicePickerRow
               expanded={languagePickerOpen}
               label={t('settings.language.title')}
               onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}
@@ -1394,6 +1436,29 @@ export default function SettingsScreen() {
         </View>
       </ScrollView>
       <SheetModal
+        backdropTestID="settings.appearancePicker.backdrop"
+        onBackdropPress={() => setAppearancePickerOpen(false)}
+        onRequestClose={() => setAppearancePickerOpen(false)}
+        visible={appearancePickerOpen}
+      >
+        <SheetSurface
+          bottomInset={safeAreaInsets.bottom}
+          heights={choicePickerHeights}
+          onClose={() => setAppearancePickerOpen(false)}
+          onSnapChange={setAppearancePickerSnap}
+          snap={appearancePickerSnap}
+          testID="settings.appearancePicker"
+          title={t('settings.appearance.modeLabel')}
+        >
+          <MobileChoicePickerList
+            activeId={themePreference}
+            onSelect={selectAppearance}
+            options={appearancePickerOptions}
+            testID="settings.appearancePicker.option"
+          />
+        </SheetSurface>
+      </SheetModal>
+      <SheetModal
         backdropTestID="settings.languagePicker.backdrop"
         onBackdropPress={() => setLanguagePickerOpen(false)}
         onRequestClose={() => setLanguagePickerOpen(false)}
@@ -1401,7 +1466,7 @@ export default function SettingsScreen() {
       >
         <SheetSurface
           bottomInset={safeAreaInsets.bottom}
-          heights={languagePickerHeights}
+          heights={choicePickerHeights}
           onClose={() => setLanguagePickerOpen(false)}
           onSnapChange={setLanguagePickerSnap}
           snap={languagePickerSnap}
@@ -1484,7 +1549,8 @@ function SettingsGroup({
 }
 
 /** 显示语言下拉入口:标签左、当前值右;选项在底部 sheet 中单选。 */
-function LanguagePickerRow({
+/** 设置项的单选入口行:iOS 由外层原生下拉菜单接管点击,其它平台打开选择面板。 */
+function ChoicePickerRow({
   expanded,
   label,
   onPress,
@@ -1718,7 +1784,7 @@ function RenameSelfDeviceScreen({
             onChangeText={onChangeDraft}
             onSubmitEditing={onDone}
             placeholder={t('settings.deviceNameEditor.placeholder')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             returnKeyType="done"
             selectTextOnFocus
             style={styles.nameEditorInput}
@@ -1808,12 +1874,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     width: 56,
   },
   avatarImage: { height: 56, width: 56 },
-  avatarText: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.semibold },
+  avatarText: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold },
   headerTexts: { flex: 1, gap: 3, minWidth: 0 },
-  headerName: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.semibold },
-  headerEmail: { color: colors.textSecondary, fontSize: typeScale.footnote },
+  headerName: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold },
+  headerEmail: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   headerStatusRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, marginTop: 1 },
-  headerStatusText: { color: colors.textSecondary, flex: 1, fontSize: typeScale.footnote, minWidth: 0 },
+  headerStatusText: { color: colors.textSecondary, flex: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, minWidth: 0 },
   // —— 分组 ——
   group: { gap: spacing.sm },
   groupTitleRow: {
@@ -1823,10 +1889,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 24,
     paddingHorizontal: spacing.md,
   },
-  groupTitle: { color: colors.textTertiary, flex: 1, fontSize: typeScale.footnote, fontWeight: fontWeight.medium },
+  groupTitle: { color: colors.textTertiary, flex: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.semibold },
   groupFooter: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.md,
   },
@@ -1869,9 +1935,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // —— 行 ——
   row: { gap: 3, justifyContent: 'center', minHeight: 52, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   rowLine: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
-  rowLabel: { color: colors.textSecondary, flexShrink: 0, fontSize: typeScale.code },
-  rowValue: { color: colors.textPrimary, flex: 1, fontSize: typeScale.code, textAlign: 'right' },
-  rowDetail: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  // 设置行:标签是主信息(正文色 500),右侧取值退为二级色 400;说明文字用 13pt(2026-09-27 用户反馈偏淡)。
+  rowLabel: { color: colors.textPrimary, flexShrink: 0, fontSize: typeScale.body, fontWeight: fontWeight.medium, lineHeight: lineHeight.body },
+  rowValue: { color: colors.textSecondary, flex: 1, fontSize: typeScale.body, lineHeight: lineHeight.body, textAlign: 'right' },
+  rowDetail: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   localLogOptions: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   switchRow: {
     alignItems: 'center',
@@ -1882,7 +1949,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.md,
   },
   switchTexts: { flex: 1, gap: spacing.xs },
-  hint: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  hint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   // —— 版本行 ——
   versionRow: {
     alignItems: 'center',
@@ -1894,7 +1961,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   versionTexts: { flex: 1, gap: 2, minWidth: 0 },
   versionValueRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
-  versionValue: { color: colors.textPrimary, flexShrink: 1, fontSize: typeScale.body, fontWeight: fontWeight.semibold },
+  versionValue: { color: colors.textSecondary, flexShrink: 1, fontSize: typeScale.body, fontWeight: fontWeight.regular, lineHeight: lineHeight.body },
   betaChannelBadge: {
     backgroundColor: colors.betaChannelBadgeBackground,
     borderRadius: radius.pill,
@@ -1905,6 +1972,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   betaChannelBadgeText: {
     color: colors.betaChannelBadgeForeground,
     fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
     fontWeight: fontWeight.semibold,
   },
   versionButton: { flexShrink: 0, minWidth: 84 },
@@ -1918,12 +1986,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.md,
   },
   copyText: { flex: 1, gap: 2, minWidth: 0 },
-  copyLabel: { color: colors.textTertiary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
-  copyValue: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  copyLabel: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  copyValue: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   copyButton: { flexShrink: 0, minWidth: 60 },
   // —— 退出 ——
   dangerArea: { gap: spacing.md, paddingTop: spacing.sm },
-  dangerHint: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, paddingHorizontal: spacing.md },
+  dangerHint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, paddingHorizontal: spacing.md },
   accountDeletionLink: {
     alignItems: 'center',
     alignSelf: 'center',
@@ -1932,8 +2000,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   accountDeletionLinkText: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   nameEditorContent: {
@@ -1968,7 +2036,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   nameEditorMessage: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.md,
   },

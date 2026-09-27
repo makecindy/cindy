@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import {
   ANNOTATED_IMAGE_NOTE,
+  ANNOTATED_IMAGE_REGIONS_PREFIX,
   buildMakerUserMessage,
   getAgentFacingText,
   reconcileSessionRefsForText,
@@ -151,6 +152,123 @@ describe('agentInputQueue', () => {
         { type: 'image', path: 'xdt-image://session/shot.png', mimeType: 'image/png' },
         { type: 'image', path: 'xdt-image://session/other.png', mimeType: 'image/png' },
         { type: 'text', text: ANNOTATED_IMAGE_NOTE },
+      ],
+    });
+  });
+
+  it('keeps the plain note byte-identical and pins its exact wording', () => {
+    expect(ANNOTATED_IMAGE_NOTE).toBe(
+      'Note: the red freehand marks on the attached image(s) are annotations drawn by the user ' +
+        'to highlight the region(s) they are referring to; they are not part of the original image.',
+    );
+    // 编号只在本条消息内有效,说明里必须讲清楚。
+    expect(ANNOTATED_IMAGE_REGIONS_PREFIX).toBe(
+      'Marked regions (normalized image coordinates, origin top-left; ' +
+        'images numbered in their order within this message): ',
+    );
+  });
+
+  it('appends marked regions indexed by image order when annotated images carry them', () => {
+    const image = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      name: `${id}.png`,
+      path: `/repo/${id}.png`,
+      ext: '.png',
+      size: 64,
+      category: 'image' as const,
+      mimeType: 'image/png',
+      url: `xdt-image://session/${id}.png`,
+      ...extra,
+    });
+    const message = buildMakerUserMessage(
+      queuedMessage([
+        image('plain'),
+        {
+          id: 'gif',
+          name: 'clip.gif',
+          path: '/repo/clip.gif',
+          ext: '.gif',
+          size: 1,
+          category: 'image',
+          mimeType: 'image/gif',
+          url: 'xdt-image://session/clip.gif',
+        },
+        image('marked', {
+          annotated: true,
+          annotationRegions: [
+            { x0: 0.31, y0: 0.12, x1: 0.46, y1: 0.2 },
+            { x0: 0.7, y0: 0.55, x1: 0.9, y1: 0.61 },
+          ],
+        }),
+        // 标注图但区域缺失:只贡献固定说明,不出现在区域描述里。
+        image('legacy', { annotated: true }),
+      ]),
+    );
+    expect(message).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'inspect attachment' },
+        { type: 'image', path: 'xdt-image://session/plain.png', mimeType: 'image/png' },
+        { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif' },
+        { type: 'image', path: 'xdt-image://session/marked.png', mimeType: 'image/png' },
+        { type: 'image', path: 'xdt-image://session/legacy.png', mimeType: 'image/png' },
+        {
+          type: 'text',
+          text:
+            `${ANNOTATED_IMAGE_NOTE}\n${ANNOTATED_IMAGE_REGIONS_PREFIX}` +
+            'image 2: x 0.31–0.46, y 0.12–0.20; x 0.70–0.90, y 0.55–0.61.',
+        },
+      ],
+    });
+  });
+
+  it('falls back to the plain note when region data is missing or malformed', () => {
+    const annotatedImage = (annotationRegions: unknown) => ({
+      id: 'image-1',
+      name: 'shot.png',
+      path: '/repo/shot.png',
+      ext: '.png',
+      size: 128,
+      category: 'image' as const,
+      mimeType: 'image/png',
+      url: 'xdt-image://session/shot.png',
+      annotated: true,
+      annotationRegions: annotationRegions as never,
+    });
+    for (const regions of [undefined, [], 'bad', [{ x0: 'a', y0: 0, x1: 1, y1: 1 }], [{ x0: 0.9, y0: 0, x1: 0.1, y1: 1 }]]) {
+      const message = buildMakerUserMessage(queuedMessage([annotatedImage(regions)]));
+      expect(message).toEqual({
+        type: 'user',
+        content: [
+          { type: 'text', text: 'inspect attachment' },
+          { type: 'image', path: 'xdt-image://session/shot.png', mimeType: 'image/png' },
+          { type: 'text', text: ANNOTATED_IMAGE_NOTE },
+        ],
+      });
+    }
+  });
+
+  it('ignores region data on images that are not annotated', () => {
+    const message = buildMakerUserMessage(
+      queuedMessage([
+        {
+          id: 'image-1',
+          name: 'shot.png',
+          path: '/repo/shot.png',
+          ext: '.png',
+          size: 128,
+          category: 'image',
+          mimeType: 'image/png',
+          url: 'xdt-image://session/shot.png',
+          annotationRegions: [{ x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 }],
+        },
+      ]),
+    );
+    expect(message).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'inspect attachment' },
+        { type: 'image', path: 'xdt-image://session/shot.png', mimeType: 'image/png' },
       ],
     });
   });

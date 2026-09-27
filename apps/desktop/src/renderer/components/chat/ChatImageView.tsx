@@ -313,9 +313,11 @@ export function ChatImageView({
           // 续画,出口是"发送到对话"生成新消息)。displaySrc !== src 说明是
           // 远程会话改写,原图在被控端拿不到,退回普通烧录图预览。
           // 单张展示:gallery 按烧录图 src 定位,换成原图后无法匹配。
+          // 原图若已被清理,lightbox 退回烧录图(annotationFallbackSrc)供查看 / 叠加新标。
           <ImageLightbox
             src={annotationSourceUrl}
             initialStrokes={annotationStrokes}
+            annotationFallbackSrc={displaySrc}
             onClose={closePreview}
           />
         ) : (

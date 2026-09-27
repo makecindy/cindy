@@ -89,7 +89,6 @@ import {
   NativePullDownMenu,
   usesNativePullDownMenu,
   usesNativeStackHeader,
-  usesSystemActionMenu,
 } from '@/platform/chrome';
 import {
   buildHomeDisplayPullDownActions,
@@ -2488,15 +2487,11 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
     windowWidth: screenWidth,
   });
 
+  // 只服务系统下拉(iOS UIMenu / Android PopupMenu):点选即收起,没有自绘菜单的
+  // onClosed 可等,撤权提示直接挂;自绘回退菜单走 DeviceMenuModal 的 onSelect。
   const selectHomeScope = useCallback((item: MobileHomeDeviceFilterItem) => {
     if (item.deviceId && item.state === 'access_revoked') {
-      const deviceId = item.deviceId;
-      if (usesSystemActionMenu()) {
-        setRevokedTipDeviceId(deviceId);
-        return;
-      }
-      pendingMenuActionRef.current = () => setRevokedTipDeviceId(deviceId);
-      setDeviceMenuOpen(false);
+      setRevokedTipDeviceId(item.deviceId);
       return;
     }
     viewPrefsTouchedRef.current = true;
@@ -2846,6 +2841,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
           <NativePullDownMenu
             actions={homeScopePullDownActions}
             onAction={handleHomeScopeAction}
+            style={styles.headerTitleSlot}
           >
             <Pressable
               accessibilityLabel={t('devices.list.a11y.selectScope')}
@@ -2956,7 +2952,6 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
       />
       <DeviceMenuModal
         collections={remoteHomeCollections}
-        connectionStates={deviceConnectionStates}
         filters={home.deviceFilters}
         onClose={() => setDeviceMenuOpen(false)}
         onClosed={handleDeviceMenuClosed}
@@ -3123,7 +3118,6 @@ function HomeInitialLoadingState({ style }: { style?: StyleProp<ViewStyle> }) {
 
 function DeviceMenuModal({
   collections,
-  connectionStates,
   filters,
   onClose,
   onClosed,
@@ -3133,7 +3127,6 @@ function DeviceMenuModal({
   visible,
 }: {
   collections: readonly RemoteHomeCollection[];
-  connectionStates: Record<string, HomeDeviceConnectionState>;
   filters: readonly MobileHomeDeviceFilterItem[];
   onClose(): void;
   /** 淡出动画完成、Modal 真正卸载后触发;父级用它把「打开第二个 Modal」延后到菜单卸载之后。 */
@@ -3160,6 +3153,8 @@ function DeviceMenuModal({
   });
   const allFilter = filters.find((item) => item.deviceId === null) ?? null;
   // 离线电脑保留缓存入口；关远控和撤权不由缓存恢复访问权限。
+  // 自绘回退与系统下拉(buildHomeScopePullDownActions)同一组条目与勾选:全部 → 集合 → 设备;
+  // 不画在线点 / 同步脉冲 / 失败圈,连接状态交给顶栏同步指示与连接条。
   const deviceFilters = filters.filter((item) => item.deviceId !== null && canBrowseMobileHomeDevice(item));
   return (
     <HomeMenuScrim
@@ -3197,13 +3192,11 @@ function DeviceMenuModal({
             ))}
             {deviceFilters.map((item) => (
               <DeviceMenuItem
-                connectionState={item.deviceId ? connectionStates[item.deviceId] ?? 'idle' : 'idle'}
                 dimmed={!canBrowseMobileHomeDevice(item)}
                 key={item.id}
                 label={item.label}
                 onPress={() => onSelect(item)}
                 selected={item.selected}
-                status={deviceMenuStatus(item)}
                 testID={item.deviceId ? `home.deviceChip.${sanitizeDeviceChipTestId(item.deviceId)}` : undefined}
               />
             ))}
@@ -3341,23 +3334,19 @@ function HomeDisplaySettingsModal({
 
 function DeviceMenuItem({
   checked = false,
-  connectionState,
   dimmed = false,
   icon,
   label,
   onPress,
   selected,
-  status,
   testID,
 }: {
   checked?: boolean;
-  connectionState?: HomeDeviceConnectionState;
   dimmed?: boolean;
   icon?: ReactNode;
   label: string;
   onPress(): void;
   selected: boolean;
-  status?: 'online' | 'offline';
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -3387,12 +3376,6 @@ function DeviceMenuItem({
         ) : null)}
       </View>
       <Text numberOfLines={1} style={styles.deviceMenuItemText}>{label}</Text>
-      {status ? (
-        <View style={styles.deviceMenuStatusSlot}>
-          <StatusDot tone={status === 'online' ? 'ready' : 'off'} pulsing={connectionState === 'syncing'} />
-          {connectionState === 'failed' ? <View style={styles.deviceConnectionFailedRing} /> : null}
-        </View>
-      ) : null}
     </Pressable>
   );
 }
@@ -3457,10 +3440,6 @@ function RevokedAccessTip({
 
 function sanitizeDeviceChipTestId(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '_');
-}
-
-function deviceMenuStatus(item: MobileHomeDeviceFilterItem): 'online' | 'offline' {
-  return item.available && (item.state === 'ready' || item.state === 'busy') ? 'online' : 'offline';
 }
 
 function projectDragInsertY(drag: ProjectDragSession): number | null {
@@ -4596,6 +4575,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.xs,
   },
+  // 菜单外层替标题占住顶栏中间的剩余宽度,长设备名在这里截断而不是挤开右侧按钮。
+  headerTitleSlot: {
+    flex: 1,
+    minWidth: 0,
+  },
   headerTitleWrap: {
     alignItems: 'center',
     flex: 1,
@@ -4615,9 +4599,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   headerTitle: {
     color: colors.textPrimary,
     flexShrink: 1,
-    fontSize: typeScale.listTitle,
+    fontSize: typeScale.title,
     fontWeight: fontWeight.semibold,
-    lineHeight: lineHeight.listTitleCompact,
+    lineHeight: lineHeight.title,
   },
   deviceMenuPanelCenter: {
     alignSelf: 'center',
@@ -4647,8 +4631,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   connectionText: {
     color: colors.textSecondary,
     flexShrink: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     minWidth: 0,
   },
   connectionIconButton: {
@@ -4657,15 +4642,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: 28,
     justifyContent: 'center',
     width: 28,
-  },
-  deviceConnectionFailedRing: {
-    borderColor: colors.errorBorder,
-    // 16×16 圆环:语义是正圆,用 pill(RN 钳制到半高)而非碰巧同值的 control 档。
-    borderRadius: radius.pill,
-    borderWidth: 1.5,
-    height: 16,
-    position: 'absolute',
-    width: 16,
   },
   deviceMenuBackdrop: {
     backgroundColor: colors.overlay,
@@ -4709,26 +4685,19 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   deviceMenuSectionLabel: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.semibold,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
   },
   deviceMenuHint: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-  },
-  deviceMenuStatusSlot: {
-    alignItems: 'center',
-    height: 20,
-    justifyContent: 'center',
-    position: 'relative',
-    width: 20,
   },
   deviceMenuDivider: {
     backgroundColor: colors.border,
@@ -4775,8 +4744,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   revokedTipTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.title,
-    fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.subtitle,
+    fontWeight: fontWeight.semibold,
+    lineHeight: lineHeight.title,
   },
   revokedTipBody: {
     color: colors.textSecondary,
@@ -4794,7 +4763,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   revokedTipRetryText: {
     color: colors.ctaText,
     fontSize: typeScale.body,
-    fontWeight: fontWeight.semibold,
+    lineHeight: lineHeight.body,
+    fontWeight: fontWeight.medium,
   },
   homeList: {
     backgroundColor: colors.surface,
@@ -4815,9 +4785,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   initialLoadingText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.code,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.regular,
+    lineHeight: lineHeight.caption,
   },
   projectGroup: {
     backgroundColor: colors.surface,

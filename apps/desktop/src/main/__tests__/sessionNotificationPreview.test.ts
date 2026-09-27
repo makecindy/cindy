@@ -28,15 +28,15 @@ function add(id: string, role: string, content: string, createdAt: number, meta 
 }
 it('reads canonical teammate identity and this turn final from the durable transcript', async () => {
   add('final-2', 'assistant', '**完成**', 150, { turnCompleted: true, assistantPhase: 'final_answer' });
-  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', reply: { clientId: 'final-2', text: '**完成**' }, eventId: 'turn:100:200' });
+  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', teammateBotId: 'bot-1', reply: { clientId: 'final-2', text: '**完成**' }, eventId: 'turn:100:200' });
 });
 it('suppresses an old idle event after a new input started', async () => {
   drizzle(sqlite).update(sessions).set({ activeTurnStartedAt: 300 }).run();
-  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', suppress: true });
+  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', teammateBotId: 'bot-1', suppress: true });
 });
 it('does not reuse an older final in a tool-only completed turn', async () => {
   add('old', 'assistant', 'Old answer', 10, { turnCompleted: true });
-  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', eventId: 'turn:100:200' });
+  expect(await readSessionNotificationPreview('main')).toEqual({ teammateName: 'Cindy', teammateBotId: 'bot-1', eventId: 'turn:100:200' });
 });
 it('uses insertion order for a tool and final arriving in the same millisecond', async () => {
   add('z-tool', 'tool_result', 'tool output', 150);
@@ -50,7 +50,7 @@ it('keeps completion identity stable before and after the final reply is persist
   const before = await readSessionNotificationPreview('main', false);
   add('final-2', 'assistant', 'Finished', 150, { turnCompleted: true });
   const after = await readSessionNotificationPreview('main');
-  expect(before).toEqual({ teammateName: 'Cindy', eventId: 'turn:100:200' });
+  expect(before).toEqual({ teammateName: 'Cindy', teammateBotId: 'bot-1', eventId: 'turn:100:200' });
   expect(after.eventId).toBe(before.eventId);
   expect(after.reply?.text).toBe('Finished');
 });

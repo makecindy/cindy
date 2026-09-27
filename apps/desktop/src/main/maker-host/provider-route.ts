@@ -60,6 +60,7 @@ let customProviderHeaderReader: CustomProviderHeaderReader = () => null;
 const providerRouteMutationCounts = new Map<string, number>();
 const providerRouteCredentialRevisions = new Map<string, number>();
 let nextProviderRouteCredentialRevision = 1;
+const providerRouteMutationWaiters = new Map<string, Set<() => void>>();
 
 export type ProviderRouteMutationRelease = (() => void) & {
   /** Publish the new non-sensitive route/capability/credential dispatch generation. */
@@ -96,7 +97,12 @@ export function beginProviderRouteMutation(providerId: string): ProviderRouteMut
     if (finished) return;
     finished = true;
     const remaining = (providerRouteMutationCounts.get(providerId) ?? 1) - 1;
-    if (remaining <= 0) providerRouteMutationCounts.delete(providerId);
+    if (remaining <= 0) {
+      providerRouteMutationCounts.delete(providerId);
+      const waiters = providerRouteMutationWaiters.get(providerId);
+      providerRouteMutationWaiters.delete(providerId);
+      for (const resolve of waiters ?? []) resolve();
+    }
     else providerRouteMutationCounts.set(providerId, remaining);
   }) as ProviderRouteMutationRelease;
   finish.commit = () => {
@@ -623,6 +629,58 @@ export function getProviderRoutingDescriptor(
   const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!routing || !routingServesWireModel(routing, wireModel)) return null;
   return routing;
+}
+
+/** Choose process isolation from routing metadata without loading any credentials. */
+export async function captureCodexLocalAuthPolicy(
+  providerId: string | null | undefined,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<{ policy: 'isolated' | 'legacy-shared'; isCurrent: () => boolean }> {
+  // With an inferred source the transaction may temporarily remove the model
+  // from the catalog. Wait before inference, rather than freezing an unknown route.
+  while (true) {
+    signal?.throwIfAborted();
+    const pending = providerId
+      ? [runtimeCustomProviderId(providerId)].filter(isProviderRouteMutationInProgress)
+      : [...providerRouteMutationCounts.keys()];
+    if (pending.length === 0) break;
+    await Promise.all(pending.map((id) => new Promise<void>((resolve, reject) => {
+      const waiters = providerRouteMutationWaiters.get(id) ?? new Set<() => void>();
+      const done = () => {
+        signal?.removeEventListener('abort', cancel);
+        waiters.delete(done);
+        if (waiters.size === 0) providerRouteMutationWaiters.delete(id);
+        resolve();
+      };
+      const cancel = () => {
+        signal?.removeEventListener('abort', cancel);
+        waiters.delete(done);
+        if (waiters.size === 0) providerRouteMutationWaiters.delete(id);
+        reject(signal?.reason);
+      };
+      signal?.addEventListener('abort', cancel, { once: true });
+      waiters.add(done);
+      providerRouteMutationWaiters.set(id, waiters);
+    })));
+  }
+  const source = providerId ?? inferProviderIdForModel(modelId, 'codex');
+  const routing = getProviderRoutingDescriptor(source, 'codex', modelId);
+  // Keep legacy reuse for third-party OAuth and unknown routes. This
+  // is compatibility policy, not a claim that they need official Codex OAuth.
+  const revision = nextProviderRouteCredentialRevision;
+  return {
+    policy: routing?.authStrategy === 'api-key-header' || routing?.authStrategy === 'gateway-key'
+      ? 'isolated' : 'legacy-shared',
+    isCurrent: () => revision === nextProviderRouteCredentialRevision,
+  };
+}
+
+export async function resolveCodexLocalAuthPolicy(
+  providerId: string | null | undefined,
+  modelId: string,
+): Promise<'isolated' | 'legacy-shared'> {
+  return (await captureCodexLocalAuthPolicy(providerId, modelId)).policy;
 }
 
 export interface ResolvedSessionRoute {

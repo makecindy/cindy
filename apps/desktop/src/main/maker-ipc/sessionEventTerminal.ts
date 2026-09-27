@@ -1,4 +1,5 @@
 import type { BotDelegationService } from './botDelegationService.js';
+import type { BotGroupChatService } from './botGroupChatService.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
@@ -61,6 +62,8 @@ export interface FinishSessionTerminalEventDeps {
   /** Hold a recovery-owned terminal until its final failure surface settles. */
   readonly deferUnsuccessfulProductTurn?: (owner: ProductTurnFailureOwner) => void;
   readonly botDelegationServiceHolder: Pick<BotDelegationService, 'settleSession'> | null;
+  /** Resolves a Bot group member turn when its hidden group lane finishes. */
+  readonly botGroupChatServiceHolder?: Pick<BotGroupChatService, 'settleLaneTurn'> | null;
   readonly pendingFailedTurnAssistantPersistId: Map<string, string>;
   readonly autoResumeBookkeeping: Pick<
     AutoResumeBookkeeping,
@@ -82,6 +85,7 @@ export interface FinishSessionTerminalEventDeps {
     | 'getAutoResumeDeferredOwner'
     | 'isAutoResumePending'
     | 'isAutoResumeDeferred'
+    | 'getActiveInputClientId'
   > | null;
   readonly contextOverflowRolloverHolder: Pick<
     ReturnType<typeof createContextOverflowRollover>,
@@ -527,6 +531,9 @@ export function finishSessionTerminalEvent(
       ) {
         notifyUnsuccessfulProductTurn();
       }
+      // Group lane turns are attributed by the accepted input, captured before the queue drains.
+      const groupLaneInputClientId =
+        deps.agentInputCoordinatorHolder?.getActiveInputClientId?.(session.id, event.sessionTurnGeneration) ?? null;
       const botDelegationPendingInputClientIds =
         deps.agentInputCoordinatorHolder
           ?.getQueueControlSnapshot(session.id)
@@ -567,6 +574,23 @@ export function finishSessionTerminalEvent(
           });
         }
       })();
+      if (deps.botGroupChatServiceHolder) {
+        const groupDoneData = event.data as { result?: unknown } | null;
+        void deps.botGroupChatServiceHolder
+          .settleLaneTurn({
+            sessionId: session.id,
+            activeInputClientId: groupLaneInputClientId,
+            outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
+            resultText: typeof groupDoneData?.result === 'string' ? groupDoneData.result : '',
+            resultMessageClientId: turnAssistantPersistId,
+          })
+          .catch((error) => {
+            deps.log.warn('Bot group lane terminal settlement failed', {
+              sessionId: session.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+      }
       void (async () => {
         try {
           await deps.workerTurnStartSequencer.waitForStart(session.id);

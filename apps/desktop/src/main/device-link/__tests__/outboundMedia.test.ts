@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const uploadLocalFile = vi.hoisted(() => vi.fn());
 const uploadBuffer = vi.hoisted(() => vi.fn());
-vi.mock('../mediaTransfer', () => ({ uploadLocalFile, uploadBuffer }));
+vi.mock('../mediaTransfer', () => ({ uploadLocalFile, uploadBuffer, mimeOf: () => 'text/plain' }));
 
 const resolveSafe = vi.hoisted(() => vi.fn());
 vi.mock('../../imageCacheStore', () => ({ resolveSafe }));
@@ -16,7 +16,8 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { rewriteOutboundMedia, __testing } from '../outboundMedia';
+import { rewriteOutboundMedia, withPeerAttachmentUpload, __testing } from '../outboundMedia';
+import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
 import { buildUserMessageAttachmentPayload } from '../../../renderer/lib/messageAttachmentPayload';
 import { withSharedTaskMedia } from '../sharedTaskMediaContext.js';
 import { assertSharedTaskReferences } from '../sharedTaskDispatch.js';
@@ -41,6 +42,16 @@ beforeEach(() => {
 });
 
 describe('rewriteOutboundMedia — channel gating', () => {
+  it('uses peer staging for exact file bytes, preserves the name and retains OSS fallback', async () => {
+    const direct = vi.fn(async () => buildPeerAttachmentRef({ ticket: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', size: 10, sha256: SHA256, mimeType: 'text/plain' }));
+    const args = ['session', { type: 'user', content: [{ type: 'file', path: '/controller/a.txt', originalName: 'a.txt' }] }];
+    const result = await withPeerAttachmentUpload(direct, () => rewriteOutboundMedia('maker:send', args));
+    const ref = (result[1] as any).content[0].path;
+    expect(parsePeerAttachmentRef(ref)?.originalName).toBe('a.txt');
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+    await withPeerAttachmentUpload(async () => null, () => rewriteOutboundMedia('maker:send', args));
+    expect(uploadLocalFile).toHaveBeenCalledOnce();
+  });
   it('uploads a real Desktop composer image even when its payload says desktop-host', async () => {
     const attachment = buildUserMessageAttachmentPayload([{ id: 'image', name: 'a.png', path: '/controller/a.png', url: 'xdt-image://task/a.png', size: 10, ext: '.png', category: 'image', mimeType: 'image/png' }]);
     expect(attachment.serializedFiles?.[0].pathOrigin).toBe('desktop-host');

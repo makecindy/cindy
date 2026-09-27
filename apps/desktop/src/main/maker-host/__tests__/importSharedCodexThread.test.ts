@@ -88,6 +88,31 @@ describe('importSharedCodexThread', () => {
     threadSpawnEdges: [],
   });
 
+  it('atomically replaces an interrupted migration-owned rollout on retry', async () => {
+    const target = path.join(codexHome, 'sessions', 'migration.jsonl');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, '{partial');
+    const bytes = Buffer.from('{"complete":true}\n');
+    const write = fs.writeFileSync.bind(fs);
+    const partial = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce((file, _data, options) => {
+      write(file, '{partial-temp', options);
+      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    });
+    try {
+      await expect(importSharedCodexThread({
+        migration: true, threadId: THREAD_ID, stateRows: stateRows(),
+        rolloutBuffer: bytes, rolloutFilename: 'migration.jsonl', newCwd: '/target', title: 'migrated', updatedAt: 1,
+      })).rejects.toMatchObject({ code: 'ENOSPC' });
+      expect(fs.readFileSync(target, 'utf8')).toBe('{partial');
+      expect(fs.readdirSync(path.dirname(target))).toEqual(['migration.jsonl']);
+    } finally { partial.mockRestore(); }
+    const result = await importSharedCodexThread({
+      migration: true, threadId: THREAD_ID, stateRows: stateRows(),
+      rolloutBuffer: bytes, rolloutFilename: 'migration.jsonl', newCwd: '/target', title: 'migrated', updatedAt: 1,
+    });
+    expect(fs.readFileSync(target)).toEqual(bytes);
+    expect(result.rolloutWritten).toBe(true);
+  });
   it('writes rollout + state rows with cwd/rollout_path overrides and appends session index', async () => {
     const result = await importSharedCodexThread({
       threadId: THREAD_ID,

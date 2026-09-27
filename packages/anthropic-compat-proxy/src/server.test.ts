@@ -29,6 +29,7 @@ import {
   stripEncryptedContentFromBody,
 } from './transform.js';
 import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
+import { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
 import type { ProxyHandle, RequestTransform } from './types.js';
@@ -1026,6 +1027,80 @@ describe('anthropic-compat-proxy encrypted content retry', () => {
 
     expect(result.status).toBe(200);
     expect(upstream.bodies).toHaveLength(2);
+  });
+
+  it('omits output_config.effort and retries once when a custom Anthropic gateway rejects the effort (#5032)', async () => {
+    const upstream = await startFakeUpstream((idx, rawBody, res) => {
+      const body = JSON.parse(rawBody) as { output_config?: { effort?: string } };
+      if (idx === 0) {
+        expect(body.output_config?.effort).toBe('high');
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          type: 'error',
+          error: { type: 'invalid_request_error', message: 'Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.' },
+        }));
+        return;
+      }
+      expect(body).not.toHaveProperty('output_config');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createAnthropicEffortCompatibilityRule()],
+    });
+
+    const result = await post(proxy.url, {
+      model: 'Qwen3.8-Flash-Next',
+      max_tokens: 1024,
+      output_config: { effort: 'high' },
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(result.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+  });
+
+  it('surfaces the gateway effort rejection as-is when the rule is not registered (#5032 baseline)', async () => {
+    const upstream = await startFakeUpstream((_idx, _rawBody, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.' } }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [], recoveryRules: [] });
+
+    const result = await post(proxy.url, {
+      model: 'Qwen3.8-Flash-Next',
+      output_config: { effort: 'high' },
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(result.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('does not retry an unrelated 400 through the effort rule (#5032)', async () => {
+    const upstream = await startFakeUpstream((_idx, _rawBody, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'messages: at least one message is required' } }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createAnthropicEffortCompatibilityRule()],
+    });
+
+    const result = await post(proxy.url, {
+      model: 'Qwen3.8-Flash-Next',
+      output_config: { effort: 'high' },
+      messages: [],
+    });
+
+    expect(result.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(1);
   });
 
   it('preserves readable agent progress when foreign reasoning ciphertext triggers recovery', async () => {

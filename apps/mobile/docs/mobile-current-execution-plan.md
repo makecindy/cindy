@@ -1,5 +1,7 @@
 # Cindy Mobile Current Execution Plan
 
+> 自动化范围修订（2026-09-27）：手机已移除旧 Scheduler 管理页和 Routines，包括「所有任务」下拉及伙伴资料入口；不再把查看、创建、编辑或运行规则列为手机交付、后续计划或验收项。PC 管理与执行、已有任务数据和运行历史保留。本文所有旧自动化管理实现、原型验证和计划记录仅作历史背景，不代表待恢复功能；当前边界以[伙伴运行时合同](../../../docs/product-rules/cindy-bots-runtime.md)为准。
+
 > 日期: 2026-06-19
 > 状态: 当前唯一执行合同。其它 mobile 文档保留源码审计、历史背景和长期能力矩阵。
 > 北极星: iOS 优先交付一个桌面同源、信息更少、动作更轻、真实可用的 Cindy 远程会话体验。
@@ -198,7 +200,7 @@ Composer 是桌面 `ChatInput` 的触控版。
 
 - 完整 Orca 协作模式、lead / worker / focus 编排。
 - 完整文件编辑器、dirty conflict、远程 reveal/open/exec。
-- 自动化计划的完整创建/编辑闭环。
+- Scheduler / Routines 管理已移除，不属于延后待做项；PC 功能与已有任务运行历史保留。
 - Android 视觉 polish 和真机 baseline。
 - 复杂 dashboard、调试控制台、远程设备管理后台。
 

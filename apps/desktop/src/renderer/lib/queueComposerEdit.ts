@@ -5,7 +5,8 @@ import type { ComposerDraft } from '@/lib/composerDraftStore';
 import { formatQuoteForSend, parseChatQuoteSegments, type ChatQuoteSegment } from '@/lib/chatQuotes';
 import { COMPOSER_QUOTE_NODE_TYPE } from '@/lib/composerQuoteDocument';
 import { normalizeComposerDocumentJSON } from '@/lib/composerListDocument';
-import { extractExt, getMimeType, type AttachedFile } from '@/lib/fileTypes';
+import type { AttachedFile } from '@/lib/fileTypes';
+import { queuedAnnotationEditMeta, toEditableAnnotatedAttachment } from '@/lib/annotationRestore';
 import type { QueuedMessage, QueueItemContentUpdate } from '@/lib/makerChatStore';
 import { rebaseInlineRangesAfterSlashCommandRewrite } from '@/lib/slashCommands';
 import { formatMentionRef } from '@/lib/mentionRefFormat';
@@ -343,34 +344,10 @@ export function queueMessageToComposerEditDraft(
     (entry.chatMessage.retryFiles ?? []).map((file) => [file.id, file]),
   );
   const attachments: AttachedFile[] = (entry.files ?? []).map(({ pathOrigin: _, ...file }) => {
-    const retryFile = retryFilesById.get(file.id);
-    const annotationSourceUrl =
-      file.annotated === true &&
-      retryFile?.annotated === true &&
-      retryFile.path === file.path &&
-      retryFile.url === file.url &&
-      retryFile.annotationSourceUrl &&
-      retryFile.annotationStrokes?.length
-        ? retryFile.annotationSourceUrl
-        : null;
-    if (!annotationSourceUrl || !retryFile?.annotationStrokes) {
-      return { ...file, cacheUrlShared: true, stagedPathShared: true };
-    }
-    const sourceExt = extractExt(annotationSourceUrl) || file.ext;
-    const editableFile = { ...file };
-    delete editableFile.annotated;
-    return {
-      ...editableFile,
-      path: annotationSourceUrl,
-      url: annotationSourceUrl,
-      ext: sourceExt,
-      mimeType: getMimeType(sourceExt, 'image'),
-      annotationStrokes: retryFile.annotationStrokes.map((stroke) => ({
-        points: stroke.points.map((point) => ({ ...point })),
-      })),
-      cacheUrlShared: true,
-      stagedPathShared: true,
-    };
+    // 队列里的文件归队列 / 历史所有:草稿侧移除附件不得清理它们(共享引用)。
+    const meta = queuedAnnotationEditMeta(file, retryFilesById.get(file.id));
+    const restored = meta ? toEditableAnnotatedAttachment(file, meta) : file;
+    return { ...restored, cacheUrlShared: true, stagedPathShared: true };
   });
   const document = structuredQueueDocument(entry, text);
 

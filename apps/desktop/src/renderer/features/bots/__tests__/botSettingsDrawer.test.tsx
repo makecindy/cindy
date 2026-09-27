@@ -36,6 +36,7 @@ vi.mock('../RemoteBotSettings', () => ({ RemoteBotSettings: ({ bot }: { bot: { d
 vi.mock('../botStore', () => ({
   useBotProfiles: () => [
     { id: 'bot-1', name: 'Filo', status: 'active', sessions: [], capabilities: {}, skills: [] },
+    { id: 'bot-paused', name: 'Paused', status: 'paused', sessions: [], capabilities: {}, skills: [] },
   ],
 }));
 vi.mock('../BotsHomeView', async () => {
@@ -196,6 +197,37 @@ describe('BotSettingsDrawer', () => {
     expect(screen.getByTestId('location').textContent).toBe('/bots/bot-1/session/chat-1');
     expect(screen.getByTestId('chat-underlay')).toBeTruthy();
   });
+});
+
+it('keeps the drawer open while Escape only cancels an IME candidate', async () => {
+  render(
+    <RouterProvider
+      router={createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+        initialEntries: ['/bots/bot-1?settings=1'],
+      })}
+    />,
+  );
+  const dialog = screen.getByRole('dialog');
+  fireEvent.keyDown(dialog, { key: 'Escape', isComposing: true });
+  fireEvent.keyDown(dialog, { key: 'Escape', keyCode: 229 });
+  await act(async () => {});
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(guard).not.toHaveBeenCalled();
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(guard).toHaveBeenCalledOnce();
+});
+
+it.each(['close button', 'Escape'])('closes a paused teammate\'s settings to the list via %s instead of bouncing back', async (kind) => {
+  const router = createMemoryRouter([{ path: '*', element: <><LocationProbe /><BotSettingsDrawer /></> }], {
+    initialEntries: ['/bots/bot-paused?settings=1'],
+  });
+  render(<RouterProvider router={router} />);
+  if (kind === 'Escape') fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+  else fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
+  await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/bots/list'));
+  // The save / routine-draft guard still runs before leaving.
+  expect(guard).toHaveBeenCalledOnce();
 });
 
 it('opens remote settings for the route device instead of searching the local bot store', () => {

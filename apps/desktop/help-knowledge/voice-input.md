@@ -11,6 +11,7 @@ Voice input lets you dictate instead of typing. Hold a shortcut, talk, release �
 - Default shortcut: **Alt+Space** on macOS, **Ctrl+Shift+Space** on Windows. The shortcut is customizable on macOS and Windows. On Linux, global voice shortcuts are not supported yet (the setting is hidden).
 - The shortcut is **global** — it works even when Cindy isn't the focused app, so you can dictate into the composer from anywhere.
 - It's **push-and-hold**: press to start listening, release to stop and submit.
+- Pressing the microphone immediately shows the recording controls and starts the timer. The start cue acknowledges the action and plays independently while capture starts in the background. Once audio becomes available, it is retained even while the recognition service is connecting; up to about 60 seconds is buffered locally and sent in order when it connects. You can stop before connection completes without discarding that buffered audio.
 
 **Settings:**
 
@@ -18,6 +19,7 @@ Voice input lets you dictate instead of typing. Hold a shortcut, talk, release �
 - **Language** — auto / 中文 (zh-CN) / 繁體中文 (zh-TW) / English / 日本語 / 한국어. Those are the supported recognition locales — there's no free-form locale field.
 - **Refinement** — optional LLM post-process that cleans up the raw ASR text (fixes punctuation, removes ums, joins fragments). You can write a custom refinement prompt to bias it toward your preferences.
 - **Mute system audio while recording** — toggle; reduces feedback / echo from your speakers picking up onto the mic. On by default.
+- When enabled, the start cue finishes before system audio is muted. Capture continues throughout. Audio captured before the mute finishes is retained too, so the beginning of your speech is not cut off; a brief amount of sound already playing through the speakers may also be captured.
 - **Fast activation** — toggle; keeps the mic warm so press-to-talk has lower latency at the cost of slightly more background mic usage. Off by default.
 - **Interaction sound** — a short sound cue when dictation starts / stops. On by default.
 
@@ -33,6 +35,7 @@ Voice input lets you dictate instead of typing. Hold a shortcut, talk, release �
 
 **Notes:**
 
+- If Cindy reports "Too many voice requests", wait a moment before starting another recording. Cindy voice providers share this account limit, so automatic provider switching stops for that attempt. The limit does not mark the providers as faulty or impose a provider cooldown.
 - Push-and-hold is the primary activation mode; **Fast activation** changes the warm-up behavior, not the trigger itself.
 - If the global shortcut fails to register (e.g. it's already taken by another app like an IME), you'll see a warning in the page; pick a different shortcut.
 - If the connection drops mid-dictation, the text recognized up to that point is kept — it lands in the composer (or stays in the overlay with a copy button) alongside the error, instead of being discarded. That salvaged text is raw ASR output: refinement needs the connection that just failed, so it is skipped.

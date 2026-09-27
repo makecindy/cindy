@@ -3,7 +3,7 @@ import { TeammateGenerationLabel } from './TeammateGenerationLabel';
 import { useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { RefreshCw } from 'lucide-react-native';
+import { RefreshCw, TriangleAlert } from 'lucide-react-native';
 import { resolveRemoteText } from '@cindy/device-link';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowEmptyState } from '@/components/MobilePrimitives';
@@ -55,7 +55,7 @@ export function TeammateList({ items, loading, refreshing, error, isOnline, conn
   const header = <View style={styles.controls}>
     <TextInput accessibilityLabel={t('devices.companions.search')} autoFocus={autoFocusSearch}
       autoCorrect={false} onChangeText={(value) => { onInteract?.(); setQuery(value); }} onFocus={onInteract} placeholder={t('devices.companions.search')}
-      placeholderTextColor={colors.textTertiary} selectionColor={colors.inputCaret}
+      placeholderTextColor={colors.textPlaceholder} selectionColor={colors.inputCaret}
       style={styles.search} value={query} testID="teammates.search" />
     {error ? <View style={styles.noticeRow}>
       <Text accessibilityRole="alert" style={[styles.notice, styles.noticeText]} testID="teammates.error">{t(items.length ? 'devices.companions.stale' : 'devices.resources.loadFailed')}</Text>
@@ -76,8 +76,14 @@ export function TeammateList({ items, loading, refreshing, error, isOnline, conn
       .map(inline => inline.type === 'image' ? inline.alt : inline.text).join('').replace(/\s+/g, ' ').trim() : '';
     const online = isOnline(row.host);
     const connected = connectionState ? connectionState(row.host) : online;
-    const accessiblePreview = online && display.generation
-      ? t(`devices.companions.working.${readWorkingPhase(display.generation.phase) ?? 'processing'}`) : online ? preview : '';
+    // Desktop BotsSidebar: the cached reply stays readable offline; then the description, then an invitation.
+    const subtitle = display.subtitle ? resolveRemoteText(display.subtitle, i18n.language).replace(/\s+/g, ' ').trim() : '';
+    const summary = preview || subtitle || t('devices.companions.startChat');
+    const generating = online && !!display.generation;
+    const accessiblePreview = generating
+      ? t(`devices.companions.working.${readWorkingPhase(display.generation!.phase) ?? 'processing'}`) : summary;
+    const attention = display.status?.tone === 'warning' || display.status?.tone === 'critical'
+      ? resolveRemoteText(display.status.label, i18n.language) : '';
     const ambiguous = (duplicateNames.get(title.normalize('NFKC').toLocaleLowerCase(i18n.language)) ?? 0) > 1;
     const source = ambiguous ? row.host.deviceName : '';
     const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt);
@@ -87,16 +93,18 @@ export function TeammateList({ items, loading, refreshing, error, isOnline, conn
     const selected = sameTeammate(current, teammateIdentity(row));
     const meta = [connected === false ? t('devices.resources.hostOffline') : connected === null ? t('devices.resources.connectionUnknown') : '', source].filter(Boolean).join(' · ');
     return <Pressable key={row.key} accessibilityRole="button" accessibilityState={{ selected, disabled: !online }}
-      accessibilityLabel={[title, accessiblePreview, time, unread ? t('devices.companions.unread') : '', meta].filter(Boolean).join(', ')}
+      accessibilityLabel={[title, attention, accessiblePreview, time, unread ? t('devices.companions.unread') : '', meta].filter(Boolean).join(', ')}
       disabled={!online} onPress={() => onSelect(row)} style={({ pressed }) => [styles.row, selected && styles.selected, pressed && styles.pressed]}
       testID={`teammates.item.${row.host.deviceId}.${row.item.ref.id}`}>
       <View style={styles.avatar}><RemoteCompanionAvatar avatar={display.avatar} deviceId={row.host.deviceId} name={title} online={online} /><View testID="teammate.connection" style={[styles.connection, { backgroundColor: connected === null ? colors.textTertiary : connected ? colors.statusDone : colors.statusError }]} /></View>
       <View style={styles.body}>
         <View style={styles.titleRow}><Text numberOfLines={1} style={styles.title}>{title}</Text>
+          {attention ? <TriangleAlert accessibilityLabel={attention} size={iconSize.sm} color={colors.warningFg} testID="teammate.attention" /> : null}
           {time ? <Text numberOfLines={1} style={styles.time}>{time}</Text> : null}
           {unread ? <View style={styles.unread} accessibilityLabel={t('devices.companions.unread')} /> : null}
         </View>
-        {online && display.generation ? <TeammateGenerationLabel deviceId={row.host.deviceId} botId={row.item.ref.id} generation={display.generation} /> : preview && online ? <Text numberOfLines={1} style={styles.preview}>{preview}</Text> : null}
+        {generating ? <TeammateGenerationLabel deviceId={row.host.deviceId} botId={row.item.ref.id} generation={display.generation!} />
+          : <Text numberOfLines={1} style={styles.preview}>{summary}</Text>}
         {meta ? <Text numberOfLines={1} style={styles.meta}>{meta}</Text> : null}
       </View>
     </Pressable>;
@@ -118,17 +126,20 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   noticeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   noticeText: { flex: 1 },
   retry: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
-  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, minHeight: 78 },
+  // 行本身不留上下内边距,分割线落在行的最底边:选中底色正好铺在上下两条分割线之间。
+  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, minHeight: 78 },
   avatar: { width: 44, height: 44, borderRadius: radius.pill, backgroundColor: colors.surfaceChip, alignItems: 'center', justifyContent: 'center' },
   connection: { position: 'absolute', right: 0, bottom: 0, width: 10, height: 10, borderRadius: radius.pill, borderWidth: 2, borderColor: colors.surface },
   selected: { backgroundColor: colors.surfaceChip, borderRadius: radius.container },
   pressed: { opacity: 0.72 },
-  body: { flex: 1, minWidth: 0, gap: spacing.xs, borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: spacing.md },
+  // 原先是行上下各 12 + 文字区底部 12,分割线在行底上方 12 处,选中底色因此整体下错 12。
+  // 现在 36 的留白上下各 18 放进文字区,行高不变,文字在两条分割线之间居中。
+  body: { flex: 1, minWidth: 0, alignSelf: 'stretch', justifyContent: 'center', gap: spacing.xs,
+    borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: 18 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   // Match task rows in HomeListVisuals: title, preview and metadata keep the same hierarchy.
-  title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.subtitle, fontWeight: fontWeight.semibold, lineHeight: lineHeight.listTitle },
-  preview: { color: colors.textSecondary, fontSize: typeScale.code, fontWeight: fontWeight.regular, lineHeight: lineHeight.subtitle },
+  title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.subtitle, fontWeight: fontWeight.medium, lineHeight: lineHeight.listTitle },
+  preview: { color: colors.textSecondary, fontSize: typeScale.bodySmall, fontWeight: fontWeight.regular, lineHeight: lineHeight.subtitle },
   time: { color: colors.textTertiary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.body },
   meta: { color: colors.textTertiary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.body },
   unread: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: colors.textPrimary },

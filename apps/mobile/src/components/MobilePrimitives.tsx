@@ -735,21 +735,24 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   eyebrow: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   headerTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.title,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.title,
+    fontWeight: fontWeight.semibold,
   },
   headerTitleCompact: {
     fontSize: typeScale.subtitle,
+    lineHeight: lineHeight.subtitle,
   },
   headerSubtitle: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     marginTop: 2,
   },
@@ -774,6 +777,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   actionPillText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   infoPill: {
@@ -801,6 +805,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   infoPillText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   infoPillTextStrong: {
@@ -837,6 +842,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   mainOptionButtonText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   mainOptionButtonTextSelected: {
@@ -930,7 +936,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   mainMetricLabel: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   mainMetricTextInverted: {
     color: colors.ctaText,
@@ -951,6 +958,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   mainEmptyTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   mainEmptyCopy: {
@@ -969,6 +977,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   remoteSyncingText: {
     color: colors.textTertiary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
   },
   mainActionGroup: {
     gap: spacing.sm,
@@ -1017,10 +1026,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   mainActionButtonText: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   mainActionButtonTextCompact: {
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
   },
   mainActionButtonPrimaryText: {
     color: colors.ctaText,

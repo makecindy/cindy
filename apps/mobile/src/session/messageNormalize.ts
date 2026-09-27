@@ -105,7 +105,7 @@ export interface NormalizedRemoteMessage {
    */
   settledAt?: string;
   isStreaming?: boolean;
-  /** Host 在 SDK done 边界写入；后台自动续跑时每个 sealed assistant 都是正式回复。 */
+  /** Host 在 SDK done 边界写入；后台自动续跑时同一 turn 可有多次 seal，最后一次是最终答复。 */
   turnCompleted?: boolean;
   turnMoney?: RemoteMoney;
   /** 旧 Desktop 消息兼容字段。 */
@@ -130,6 +130,12 @@ export interface NormalizedRemoteMessage {
   isTurnFinalAssistant?: boolean;
   /** user 专用:scheduler 注入的消息来源(agentMeta.origin);驱动更紧的收起阈值与来源标签。 */
   automationOrigin?: NormalizedAutomationOrigin;
+  /**
+   * user 专用:另一个任务经工具(send_to_session / 伙伴委派 / Orca 协同等)发来的消息来源
+   * (agentMeta.origin kind=session,或带 senderSessionId 的 orca);渲染可点击的来源标签。
+   * 不进分享投影:来源任务标题属于用户本机上下文,不随分享图外发。
+   */
+  sessionOrigin?: NormalizedSessionOrigin;
   /** 共享 Cindy relay 派发的来源；用于移动端还原 Slack / Telegram 任务卡。 */
   hookSource?: NormalizedHookSource;
   /**
@@ -140,6 +146,15 @@ export interface NormalizedRemoteMessage {
    * messageRenderModel 会把它从 render items 里剔除,用户不可见。
    */
   isSyntheticTrigger?: boolean;
+}
+
+/** 另一个任务经工具发来的消息来源(对齐桌面 MessageSessionOrigin)。 */
+export interface NormalizedSessionOrigin {
+  /** 共享任务访客收到的来源已由主机脱敏、不带 id:只显示通用文案,不可点按。 */
+  senderSessionId?: string;
+  senderSessionTitle?: string;
+  /** 来源任务属于伙伴时的伙伴名快照;有则标签显示伙伴名。 */
+  senderBotName?: string;
 }
 
 /** scheduler 注入消息的来源标记(对齐桌面 MessageAutomationOrigin)。 */
@@ -203,7 +218,7 @@ const toolUsePayloadByMessage = new WeakMap<RemoteMessage, ToolUsePayload>();
 
 export function normalizeRemoteMessages(
   messages: readonly RemoteMessage[],
-  options: { preserveSourceOrder?: boolean } = {},
+  options: { preserveSourceOrder?: boolean; sessionSource?: string | null } = {},
 ): NormalizedRemoteMessage[] {
   // History views already place live tails after their persisted prefix. A live
   // row's provisional timestamp must not undo that order during normalization.
@@ -330,7 +345,7 @@ export function normalizeRemoteMessages(
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
       const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop);
-      const errText = guidance ?? localizeUnclassifiedAgentError(rawText);
+      const errText = guidance ?? localizeUnclassifiedAgentError(rawText, options.sessionSource);
       result.push({
         key: messageNormalizeKey(message),
         source: message,
@@ -339,7 +354,7 @@ export function normalizeRemoteMessages(
         label: 'error',
         body: errText,
         rawError: rawText,
-        ...(!guidance ? { errorSummaryKey: unclassifiedAgentErrorI18nKey(rawText) } : {}),
+        ...(!guidance ? { errorSummaryKey: unclassifiedAgentErrorI18nKey(rawText, options.sessionSource) } : {}),
         align: 'agent',
         createdAt: message.createdAt,
       });
@@ -429,6 +444,7 @@ export function normalizeRemoteMessages(
           orcaCard: reportCard,
           align: 'agent',
           createdAt: message.createdAt,
+          ...readSessionOrigin(message),
         });
         continue;
       }
@@ -509,6 +525,7 @@ export function normalizeRemoteMessages(
       ...turnCost,
       ...readModelMismatch(message),
       ...(message.role === 'user' ? readAutomationOrigin(message) : {}),
+      ...(message.role === 'user' ? readSessionOrigin(message) : {}),
       ...(hookSource ? { hookSource } : {}),
     });
   }
@@ -992,6 +1009,26 @@ function readModelMismatch(message: RemoteMessage): Pick<NormalizedRemoteMessage
   const actual = readString(mm.actual);
   if (!selected || !actual) return {};
   return { modelMismatch: { selected, actual } };
+}
+
+// 工具投递落库时在 agentMeta.origin 写 { kind:'session', senderSessionId, senderSessionTitle? };
+// Orca 互发写 { kind:'orca', senderSessionId? }(老数据没有 senderSessionId,不出标签)。
+function readSessionOrigin(message: RemoteMessage): Pick<NormalizedRemoteMessage, 'sessionOrigin'> {
+  const origin = readRecord(message.agentMeta?.origin);
+  if (!origin || (origin.kind !== 'session' && origin.kind !== 'orca')) return {};
+  const senderSessionId = readString(origin.senderSessionId)?.trim();
+  if (!senderSessionId) return origin.kind === 'session' ? { sessionOrigin: {} } : {};
+  const senderSessionTitle = origin.kind === 'session' ? readString(origin.senderSessionTitle)?.trim() : undefined;
+  const senderBotName = origin.kind === 'session' && readString(origin.senderBotId)
+    ? (readString(origin.senderBotName)?.trim() || readString(origin.senderBotId)?.trim())
+    : undefined;
+  return {
+    sessionOrigin: {
+      senderSessionId,
+      ...(senderSessionTitle ? { senderSessionTitle } : {}),
+      ...(senderBotName ? { senderBotName } : {}),
+    },
+  };
 }
 
 // scheduler runner 落库时在 agentMeta.origin 写 { kind:'scheduler', scheduleId, scheduleName? }

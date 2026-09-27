@@ -26,7 +26,7 @@ import {
   conversationShareSvgRenderSize,
   type ConversationShareSvgBubble,
 } from "@/session/conversationShareSvgLayout";
-import { typeScale } from "@/theme";
+import { monoFont, typeScale } from "@/theme";
 
 export interface ConversationShareSvgHandle {
   exportPng(): Promise<string>;
@@ -387,11 +387,21 @@ function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
           y={bubble.y}
         />
       ) : null}
+      {bubble.rectangles?.map((rect, index) => (
+        <Rect
+          key={`rect-${index}`}
+          {...rect}
+          strokeWidth={SHARE_BUBBLE_STROKE_WIDTH}
+        />
+      ))}
       {bubble.textBlocks.map((block, blockIndex) => (
         <SvgText
           fill={block.color}
-          fontFamily="Arial"
+          fontFamily={block.monospace ? monoFont : "Arial"}
           fontSize={block.fontSize}
+          fontWeight={block.bold ? "bold" : "normal"}
+          fontStyle={block.italic ? "italic" : "normal"}
+          textDecoration={block.decoration}
           key={`text-${blockIndex}`}
           x={block.x}
           y={block.y}
@@ -402,7 +412,9 @@ function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
               key={`line-${lineIndex}`}
               x={block.x}
             >
-              {line || " "}
+              {/* Lines are already laid out: preserve code indentation and the
+                  spaces at styled-run boundaries in native SVG text. */}
+              {line ? line.replace(/ /g, "\u00a0") : " "}
             </TSpan>
           ))}
         </SvgText>

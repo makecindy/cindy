@@ -168,9 +168,9 @@ const makeStyles = (colors: ThemeColors) =>
     title: {
       color: colors.textPrimary,
       flexShrink: 1,
-      fontSize: typeScale.listTitle,
+      fontSize: typeScale.title,
       fontWeight: fontWeight.semibold,
-      lineHeight: lineHeight.listTitleCompact,
+      lineHeight: lineHeight.title,
     },
     titleCluster: {
       alignItems: "center",

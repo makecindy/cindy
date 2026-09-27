@@ -14,11 +14,12 @@ vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {} }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => el('span', null, children), TextInput: () => null }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowEmptyState: ({ title, copy }: any) => el('div', null, title, copy) }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
-vi.mock('lucide-react-native', () => ({ RefreshCw: () => null }));
+vi.mock('lucide-react-native', () => ({ RefreshCw: () => null, TriangleAlert: ({ testID, accessibilityLabel }: any) => el('i', { 'data-testid': testID, 'aria-label': accessibilityLabel }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' } }) }));
-vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: { statusDone: 'green', statusError: 'red', textTertiary: 'gray' } }), typeScale: { footnote: 12 } }));
+vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: { statusDone: 'green', statusError: 'red', textTertiary: 'gray' } }), typeScale: { footnote: 12 }, lineHeight: {}, fontWeight: {} }));
+vi.mock('@/session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: any) => el('span', null, text) }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ isRemoteResourceUnread: () => false }));
 vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => '' }));
 vi.mock('@/utils/useMinuteNow', () => ({ useMinuteNow: () => Date.now() }));
@@ -43,7 +44,8 @@ it('uses a concise recovery notice, not device IDs or transport diagnostics', as
   expect(node.textContent).not.toMatch(/private-device-id|DEVICE_UNRESPONSIVE|circuit open|Computer identity/);
   expect(node.querySelector('[data-testid="teammates.refresh"]')).not.toBeNull();
   expect(node.textContent).toContain('devices.resources.hostOffline');
-  expect(node.textContent).not.toContain('Last reply');
+  // Desktop parity: the cached reply stays readable while the host is offline.
+  expect(node.textContent).toContain('Last reply');
 });
 it('shows readable message previews rather than Markdown delimiters or link targets', async () => {
   const formatted = { ...item, item: { ...item.item, display: {
@@ -83,4 +85,18 @@ it('keeps the connection green when the list cannot be used, and unknown neutral
       expect(node.textContent).toContain('devices.resources.connectionUnknown');
     }
   }
+});
+
+it('falls back to the description, then an invitation, and flags a teammate that needs attention', async () => {
+  const described = { ...item, key: 'host:described', item: { ...item.item, ref: { ...item.item.ref, id: 'described' },
+    display: { title: 'Aster', subtitle: 'Weekly reports' } } };
+  const empty = { ...item, key: 'host:empty', item: { ...item.item, ref: { ...item.item.ref, id: 'empty' },
+    display: { title: 'Nova', status: { label: 'Needs attention', tone: 'warning' } } } };
+  await act(async () => root.render(el(TeammateList, { items: [described, empty], error: null, isOnline: () => true,
+    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  expect(node.textContent).toContain('Weekly reports');
+  expect(node.textContent).toContain('devices.companions.startChat');
+  const flags = node.querySelectorAll('[data-testid="teammate.attention"]');
+  expect(flags).toHaveLength(1);
+  expect(flags[0].getAttribute('aria-label')).toBe('Needs attention');
 });

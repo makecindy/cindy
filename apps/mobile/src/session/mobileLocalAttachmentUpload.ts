@@ -33,6 +33,7 @@ export interface MobileLocalAttachmentUploadCandidate {
   attachmentScopeKey?: string;
   /** Destination captured when enqueued, never read from a later active task. */
   sharedTaskId?: string;
+  deviceId?: string;
   /** 同一作用域重复进入时也会递增的代际；避免 A → B → A 后接回最早 A 的旧结果。 */
   attachmentScopeGeneration?: number;
   mimeType?: string;
@@ -68,6 +69,8 @@ export interface MobileLocalAttachmentUploadCandidate {
     strokes: AnnotationStroke[];
     sourceUri: string;
     sourceMimeType: string;
+    /** sourceUri 本身已是带笔迹的烧录图(再编辑真相丢失后的再编辑):无新笔迹也仍是标注图。 */
+    baseAnnotated?: boolean;
   };
   /**
    * 再编辑保存的替换语义:本 candidate 上传**成功后**宿主才移除该旧附件
@@ -75,6 +78,13 @@ export interface MobileLocalAttachmentUploadCandidate {
    * 提前删会让用户新旧两头空(review P1)。
    */
   replacesAttachmentId?: string;
+  /**
+   * 任务被**确定放弃**时回调(至多一次):托盘 / outbox 移除、整体丢弃、退屏、
+   * 交接给持久发件箱后,或入队时作用域已失效。上传失败**不**回调——失败卡仍在
+   * 托盘可重试,重试会重新读取 candidate.uri。上传成功走 onUploaded,也不回调。
+   * 供自行生成了输入文件的调用方(标注烧录图等)按生命周期回收;管线不消费。
+   */
+  onAbandoned?: () => void;
 }
 
 /** 托盘 pending 卡的渲染数据(image → 缩略卡;file → 文件名 chip)。 */
@@ -103,7 +113,7 @@ export interface MobileLocalAttachmentUploadDeps {
   assertSize(size: number, candidate: MobileLocalAttachmentUploadCandidate): void;
   /** 真正的 presign + PUT(uploadMobileAttachmentFromFile);signal 中止时应尽快断掉传输。 */
   upload(
-    candidate: { name: string; size: number; mimeType?: string; sharedTaskId?: string },
+    candidate: { name: string; size: number; mimeType?: string; sharedTaskId?: string; deviceId?: string },
     fileUri: string,
     opts: { token: string; signal?: AbortSignal },
   ): Promise<RemoteSerializedAttachment>;
@@ -240,6 +250,8 @@ interface UploadTask {
   prepared?: Promise<MobileLocalAttachmentUploadCandidate>;
   handoff?: { promise: Promise<void>; resolve(): void };
   delivering?: boolean;
+  /** onAbandoned 已回调(保证至多一次)。 */
+  abandonNotified?: boolean;
   resolvedSource?: MobileLocalAttachmentUploadCandidate;
   outcome: Promise<TaskOutcome>;
   resolveOutcome: (outcome: TaskOutcome) => void;
@@ -289,11 +301,24 @@ export function createMobileLocalAttachmentUploadController(
     }
   }
 
+  function notifyAbandoned(task: UploadTask): void {
+    if (task.abandonNotified) return;
+    task.abandonNotified = true;
+    try {
+      task.candidate.onAbandoned?.();
+    } catch {
+      // 调用方的回收失败不能影响管线。
+    }
+  }
+
   function cleanupTaskLocalUris(task: UploadTask, keepOriginal: boolean): void {
     if (task.handoff) {
       void task.handoff.promise.then(() => cleanupTaskLocalUris(task, keepOriginal));
       return;
     }
+    // keepOriginal=false 只出现在任务被放弃的路径(remove / removeAll / dispose /
+    // 交接提交 / 丢弃结算);失败保留卡片走 keepOriginal=true,不算放弃。
+    if (!keepOriginal) notifyAbandoned(task);
     if (keepOriginal) task.prepared = undefined;
     const cleanup = task.candidate.cleanupLocalUris;
     if (!cleanup) return;
@@ -410,7 +435,7 @@ export function createMobileLocalAttachmentUploadController(
         return;
       }
       const attachment = uploadedAttachment = await step(deps.upload(
-        { name: prepared.name, size, mimeType: prepared.mimeType || undefined, ...(source.sharedTaskId ? { sharedTaskId: source.sharedTaskId } : {}) },
+        { name: prepared.name, size, mimeType: prepared.mimeType || undefined, ...(source.sharedTaskId ? { sharedTaskId: source.sharedTaskId } : {}), ...(source.deviceId ? { deviceId: source.deviceId } : {}) },
         prepared.uri,
         { token, signal },
       ), (late) => deps.discard(late, token));
@@ -463,8 +488,9 @@ export function createMobileLocalAttachmentUploadController(
         task.state = 'failed';
       } else {
         // uploaded 的成功路径由 onUploaded 在把预览换成持久缩略图后清理；
-        // discarded 在这里回收全部自有临时文件。
-        if (outcome === 'discarded') cleanupTaskLocalUris(task, false);
+        // discarded(以及退屏后才失败、不再保留失败卡的任务)在这里回收全部
+        // 自有临时文件并回调 onAbandoned。
+        if (outcome !== 'uploaded') cleanupTaskLocalUris(task, false);
         tasks.delete(task.localId);
       }
       runningCount -= 1;
@@ -515,7 +541,13 @@ export function createMobileLocalAttachmentUploadController(
       };
     },
     enqueue(candidates, opts) {
-      if (disposed || candidates.length === 0) return;
+      if (disposed) {
+        for (const candidate of candidates) {
+          try { candidate.onAbandoned?.(); } catch { /* 调用方回收失败不影响管线 */ }
+        }
+        return;
+      }
+      if (candidates.length === 0) return;
       for (const candidate of candidates) {
         seq += 1;
         const localId = `local-attachment-upload-${seq}`;

@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   userDataDir: '',
   dataOwnerId: 'owner-a' as string | null,
   generation: 1,
+  legacyCloudOwner: false,
   catalog: null as Catalog | null,
   claudeCredentialPresent: true,
   grokCredentialPresent: true,
@@ -25,8 +26,13 @@ const h = vi.hoisted(() => ({
   loadXaiDiskCache: vi.fn(async () => false),
   refreshXaiMediaModels: vi.fn(async () => true),
   loadAnthropicDiskCache: vi.fn(async () => {}),
+  requestAnthropicModelProbe: vi.fn(),
+  hasAnthropicModels: true,
+  refreshAnthropicModelsFromProbe: vi.fn(async () => true),
   codexLoginWithSideEffects: vi.fn(async () => false),
   codexLoginReadOnly: vi.fn(() => false),
+  readClaudeStatus: vi.fn(),
+  readNativeLogin: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -54,13 +60,18 @@ vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLogin: () => h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic'),
 }));
 vi.mock('../claude-native-connection.js', () => ({
-  readClaudeNativeLogin: async () =>
-    h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic')
+  readClaudeNativeLogin: async () => {
+    h.readNativeLogin();
+    return h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic')
       ? { loggedIn: true, email: 'claude@example.test' }
-      : null,
+      : null;
+  },
 }));
 vi.mock('../claude-native-cli.js', () => ({
-  readClaudeCliLoginStatus: async () => ({ loggedIn: h.claudeCredentialPresent }),
+  readClaudeCliLoginStatus: async () => {
+    h.readClaudeStatus();
+    return { loggedIn: h.claudeCredentialPresent };
+  },
 }));
 vi.mock('../grok-oauth-login.js', () => ({
   grokAccountIdentity: () => 'grok@example.test',
@@ -73,6 +84,9 @@ vi.mock('../grok-oauth-login.js', () => ({
 
 vi.mock('../model-discovery/anthropic.js', () => ({
   loadAnthropicModelsFromDiskCache: h.loadAnthropicDiskCache,
+  requestAnthropicModelProbe: h.requestAnthropicModelProbe,
+  hasAnthropicDiscoveredModels: () => h.hasAnthropicModels,
+  refreshAnthropicModelsFromProbe: h.refreshAnthropicModelsFromProbe,
 }));
 vi.mock('../model-discovery/xai.js', () => ({
   clearXaiDiscoveredModels: vi.fn(),
@@ -106,12 +120,16 @@ vi.mock('../auth-adapters.js', () => ({
 }));
 
 vi.mock('../../authManager.js', () => ({
-  getAuthState: () => ({ mode: 'local' as const, user: null }),
+  getAuthState: () => h.legacyCloudOwner
+    ? { mode: 'cloud', user: { id: h.dataOwnerId } }
+    : { mode: 'local', user: null },
 }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: false }),
 }));
-vi.mock('../../ownerNamespaceMigration.js', () => ({ hasLegacyOwnerNamespaceClaim: () => false }));
+vi.mock('../../ownerNamespaceMigration.js', () => ({
+  hasLegacyOwnerNamespaceClaim: () => h.legacyCloudOwner,
+}));
 vi.mock('../../manifestService.js', () => ({
   isDev: () => true,
   getBaseUrl: () => 'https://example.invalid',
@@ -127,7 +145,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: () => null,
   // builtinApiKeyConnected(gemini)在 listProviders 里读 key 存在性;本测试不关心
   // 该供应商,恒返回 null = 未配置。
-  getProviderSecretStore: () => ({ get: () => null }),
+  getProviderSecretStore: () => ({ get: () => null, has: () => h.grokCredentialPresent }),
 }));
 
 import {
@@ -145,7 +163,7 @@ function isBoundToCurrentOwner(provider: 'anthropic' | 'xai'): boolean {
 }
 
 async function listProviders(allowSideEffects = true, waitForDiscovery = false) {
-  return getDesktopProviderService().listProviders({ allowSideEffects, waitForDiscovery });
+  return getDesktopProviderService({ allowSideEffects }).listProviders({ allowSideEffects, waitForDiscovery });
 }
 
 async function connectedMap(allowSideEffects = true): Promise<Record<string, boolean>> {
@@ -157,6 +175,7 @@ beforeEach(() => {
   h.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-native-conn-claim-'));
   h.dataOwnerId = 'owner-a';
   h.generation = 1;
+  h.legacyCloudOwner = false;
   h.catalog = BUNDLED_CATALOG;
   h.claudeCredentialPresent = true;
   h.grokCredentialPresent = true;
@@ -164,8 +183,13 @@ beforeEach(() => {
   h.loadXaiDiskCache.mockClear();
   h.refreshXaiMediaModels.mockClear();
   h.loadAnthropicDiskCache.mockClear();
+  h.requestAnthropicModelProbe.mockClear();
+  h.hasAnthropicModels = true;
+  h.refreshAnthropicModelsFromProbe.mockClear();
   h.codexLoginWithSideEffects.mockClear();
   h.codexLoginReadOnly.mockClear();
+  h.readClaudeStatus.mockClear();
+  h.readNativeLogin.mockClear();
 });
 
 afterEach(() => {
@@ -173,6 +197,34 @@ afterEach(() => {
 });
 
 describe('native provider connection claim on read', () => {
+  it('snapshot reads never probe CLI or account identity, while normal reads still refresh', async () => {
+    const service = getDesktopProviderService({ allowSideEffects: false });
+    for (const present of [false, true]) {
+      h.claudeCredentialPresent = present;
+      bindNativeProviderAuth('anthropic', { sharedSystem: true });
+      const views = await service.listProviders({ allowSideEffects: false, snapshotOnly: true });
+      expect(views.find(p => p.id === 'anthropic')?.connected).toBe(present);
+      expect(views.find(p => p.id === 'anthropic')?.subscriptionAccount).toBeUndefined();
+    }
+    expect(h.readClaudeStatus).not.toHaveBeenCalled();
+    expect(h.readNativeLogin).not.toHaveBeenCalled();
+    expect(h.codexLoginWithSideEffects).not.toHaveBeenCalled();
+    await service.listProviders({ allowSideEffects: false });
+    expect(h.readClaudeStatus).toHaveBeenCalledTimes(1);
+    expect(h.readNativeLogin).toHaveBeenCalledTimes(1);
+  });
+  it('read-only service acquisition skips legacy migration even for eligible cloud owners', async () => {
+    h.legacyCloudOwner = true;
+    await listProviders(false);
+    expect(isNativeProviderAuthBound('anthropic')).toBe(false);
+    expect(isNativeProviderAuthBound('xai')).toBe(false);
+    expect(fs.existsSync(path.join(h.userDataDir, 'native-provider-auth.json'))).toBe(false);
+    // A later trusted acquisition of the same singleton still performs migration.
+    getDesktopProviderService();
+    expect(isNativeProviderAuthBound('anthropic')).toBe(true);
+    expect(isNativeProviderAuthBound('xai')).toBe(true);
+  });
+
   it('projects only bound native account identities without exposing credentials', async () => {
     const before = await listProviders(false);
     for (const id of ['anthropic', 'xai']) {
@@ -202,10 +254,13 @@ describe('native provider connection claim on read', () => {
     expect(getNativeProviderAuthSource('anthropic')).toBe('native-harness-inherited');
     // 启动期那次磁盘清单加载因未绑定而早退了,绑定刚建立时必须补一次(PR #548 review)。
     await vi.waitFor(() => expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1));
+    // 成员只来自 SDK 清单:补载缓存后还要主动读一次最新清单(新账号可能没有缓存)。
+    await vi.waitFor(() => expect(h.requestAnthropicModelProbe).toHaveBeenCalledTimes(1));
 
     // 已绑定后不再重复认领,也不再重复加载。
     await connectedMap();
     expect(h.loadAnthropicDiskCache).toHaveBeenCalledTimes(1);
+    expect(h.requestAnthropicModelProbe).toHaveBeenCalledTimes(1);
   });
 
   it('首次认领要等磁盘清单补载完成后再返回本次 provider 快照', async () => {
@@ -249,6 +304,49 @@ describe('native provider connection claim on read', () => {
     expect(
       providers.find((provider) => provider.id === 'anthropic')?.models['claude-code'],
     ).toEqual([cachedModel]);
+  });
+
+  it('首次认领且没有缓存时,waitForDiscovery 要等主动读取清单完成再返回', async () => {
+    h.hasAnthropicModels = false;
+    const anthropic = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')!;
+    const modelSeed = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd')!.models[
+      'claude-code'
+    ]![0]!;
+    const probedModel = { ...modelSeed, id: 'claude-probed', name: 'Claude Probed' };
+    let releaseProbe!: () => void;
+    h.refreshAnthropicModelsFromProbe.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseProbe = () => {
+            h.catalog = {
+              ...BUNDLED_CATALOG,
+              providers: BUNDLED_CATALOG.providers.map((provider) =>
+                provider.id === anthropic.id
+                  ? { ...provider, models: { ...provider.models, 'claude-code': [probedModel] } }
+                  : provider,
+              ),
+            };
+            resolve(true);
+          };
+        }),
+    );
+
+    let settled = false;
+    const providersPromise = listProviders(true, true).then((providers) => {
+      settled = true;
+      return providers;
+    });
+
+    await vi.waitFor(() => expect(h.refreshAnthropicModelsFromProbe).toHaveBeenCalledTimes(1));
+    const settledBeforeProbe = settled;
+    releaseProbe();
+
+    const providers = await providersPromise;
+    expect(settledBeforeProbe).toBe(false);
+    expect(h.requestAnthropicModelProbe).not.toHaveBeenCalled();
+    expect(
+      providers.find((provider) => provider.id === 'anthropic')?.models['claude-code'],
+    ).toEqual([probedModel]);
   });
 
   it('普通可信 provider read 不等待首次磁盘清单补载，先返回 connected', async () => {

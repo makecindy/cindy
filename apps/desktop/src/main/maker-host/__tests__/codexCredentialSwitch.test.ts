@@ -739,3 +739,23 @@ describe('prepareLocalCodexCredentialModeSwitch', () => {
     })).rejects.toThrow(/\(oauth-bearer\(registered: fallback\) -> gateway-key\).*busy-codex-1/);
   });
 });
+
+
+describe('Codex host-scoped credential coordination', () => {
+  it.each(['local', 'local:external-auth'])('does not block or close a busy sibling when replacing %s', async (hostKey) => {
+    const sibling = hostKey === 'local' ? 'local:external-auth' : 'local';
+    const closeSession = vi.fn(async () => undefined);
+    const result = await prepareLocalCodexCredentialModeSwitch({
+      hostKey,
+      maker: {
+        listActiveSessions: () => [
+          { id: 'target', agentKind: 'codex', codexHostKey: hostKey, isTurnRunning: () => false },
+          { id: 'sibling', agentKind: 'codex', codexHostKey: sibling, isTurnRunning: () => true },
+        ],
+        closeSession,
+      },
+    });
+    expect(result.closedSessionIds).toEqual(['target']);
+    expect(closeSession).toHaveBeenCalledExactlyOnceWith('target', 'runtime-refresh');
+  });
+});

@@ -10,8 +10,9 @@ import { parseAutoPermissionReviewDecision } from './auto-permission-reviewer.js
 
 export const AUTO_REVIEW_CANDIDATE_TIMEOUT_MS = 12_000;
 /**
- * 整条链的预算 = 每个候选一次完整超时 + 4s 余量。按候选数推导:预算只够「逐个兜底」,
- * 一个候选整段超时后直接让给下一个,而不是在原位重试吃掉后续候选的时间。
+ * 整条链的预算 = 每个候选一次完整超时 + 4s 余量。按候选数推导:一个候选整段超时后先让给
+ * 下一个,而不是在原位重试吃掉后续候选的时间;兜底候选本机不可用(立即 no_candidate)时,
+ * 省下的预算留给超时候选在所有兜底之后再试一次。
  */
 export const AUTO_REVIEW_CHAIN_TIMEOUT_MS =
   DEDICATED_AUTO_REVIEW_CANDIDATES.length * AUTO_REVIEW_CANDIDATE_TIMEOUT_MS + 4_000;
@@ -141,12 +142,21 @@ function safeFailureReason(result: UtilityTextResult): string {
   return failed?.reason ?? result.reason;
 }
 
+interface PendingCandidateAttempt {
+  candidate: DedicatedAutoReviewCandidate;
+  attempt: number;
+}
+
 /**
  * Runs the dedicated Auto-review model chain once.
  *
- * Each candidate owns its HTTP timeout and receives the chain AbortSignal. Only a quick,
- * infrastructure-shaped failure is retried in place; a full timeout immediately yields to
- * the next provider so one outage cannot consume the entire fallback budget.
+ * Each candidate owns its HTTP timeout and receives the chain AbortSignal, and gets at most
+ * AUTO_REVIEW_TRANSIENT_RETRY_ATTEMPTS attempts. A transient failure is retried in place only
+ * when the budget still covers one full timeout per pending attempt (untried candidates and
+ * earlier deferred retries); otherwise the retry joins the end of the queue. A full timeout
+ * therefore cannot starve fallback or an earlier, higher-priority retry, and fallbacks that
+ * are unavailable locally (`no_candidate` returns immediately) do not waste the budget
+ * reserved for them.
  */
 export function createAutoReviewModelRouter(
   deps: AutoReviewModelRouterDeps,
@@ -167,74 +177,90 @@ export function createAutoReviewModelRouter(
     const deadline = setTimeout(() => controller.abort(), AUTO_REVIEW_CHAIN_TIMEOUT_MS);
 
     try {
-      for (const [candidateIndex, candidate] of candidates.entries()) {
-        if (controller.signal.aborted) break;
-
-        for (let attempt = 1; attempt <= AUTO_REVIEW_TRANSIENT_RETRY_ATTEMPTS; attempt++) {
-          const remainingMs = deadlineAt - now();
-          if (remainingMs <= 0 || controller.signal.aborted) break;
-          const attemptStartedAt = now();
-          let result: UtilityTextResult;
-          try {
-            result = await requestCandidateWithinTimeout(
-              requestCandidate,
-              prompt,
-              candidate,
-              Math.min(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS, remainingMs),
-              controller.signal,
-            );
-          } catch {
-            // Credential refresh and catalog probes are runtime boundaries too. A thrown
-            // candidate must not skip the remaining controlled providers or leak details.
-            result = candidateRequestFailure(candidate);
-          }
-          const durationMs = now() - attemptStartedAt;
-
-          if (result.ok) {
-            const decision = parseDecision(result.text);
-            if (decision) {
-              deps.logger.debug('auto-review model candidate completed', {
-                candidateId: candidate.id,
-                providerId: candidate.providerId,
-                model: candidate.model,
-                attempt,
-                verdict: decision.verdict,
-                durationMs: now() - startedAt,
-              });
-              return JSON.stringify(decision);
-            }
-            deps.logger.warn('auto-review model candidate returned malformed decision', {
-              candidateId: candidate.id,
-              providerId: candidate.providerId,
-              model: candidate.model,
-              attempt,
-              durationMs,
-            });
-            break;
-          }
-
-          const remainingAfterAttemptMs = deadlineAt - now();
-          const laterCandidateReserveMs =
-            (candidates.length - candidateIndex - 1) * AUTO_REVIEW_CANDIDATE_TIMEOUT_MS;
-          const canRetry = attempt < AUTO_REVIEW_TRANSIENT_RETRY_ATTEMPTS
-            && transientCandidateFailure(result)
-            && remainingAfterAttemptMs >= (
-              AUTO_REVIEW_CANDIDATE_TIMEOUT_MS
-              + AUTO_REVIEW_TRANSIENT_RETRY_BACKOFF_MS
-              + laterCandidateReserveMs
-            )
-            && !controller.signal.aborted;
-          deps.logger.warn('auto-review model candidate failed', {
+      const queue: PendingCandidateAttempt[] = candidates.map((candidate) => ({ candidate, attempt: 1 }));
+      while (queue.length > 0 && !controller.signal.aborted) {
+        const { candidate, attempt } = queue.shift()!;
+        const remainingMs = deadlineAt - now();
+        if (remainingMs <= 0) break;
+        // A retry always gets a full candidate timeout; a truncated one mostly just delays
+        // the confirmation card.
+        if (attempt > 1 && remainingMs < AUTO_REVIEW_CANDIDATE_TIMEOUT_MS) {
+          deps.logger.warn('auto-review model candidate retry skipped', {
             candidateId: candidate.id,
             providerId: candidate.providerId,
             model: candidate.model,
             attempt,
-            reason: safeFailureReason(result),
-            retrying: canRetry,
+            reason: 'insufficient_budget',
+            remainingMs,
+          });
+          continue;
+        }
+        const attemptStartedAt = now();
+        let result: UtilityTextResult;
+        try {
+          result = await requestCandidateWithinTimeout(
+            requestCandidate,
+            prompt,
+            candidate,
+            Math.min(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS, remainingMs),
+            controller.signal,
+          );
+        } catch {
+          // Credential refresh and catalog probes are runtime boundaries too. A thrown
+          // candidate must not skip the remaining controlled providers or leak details.
+          result = candidateRequestFailure(candidate);
+        }
+        const durationMs = now() - attemptStartedAt;
+
+        if (result.ok) {
+          const decision = parseDecision(result.text);
+          if (decision) {
+            deps.logger.debug('auto-review model candidate completed', {
+              candidateId: candidate.id,
+              providerId: candidate.providerId,
+              model: candidate.model,
+              attempt,
+              verdict: decision.verdict,
+              durationMs: now() - startedAt,
+            });
+            return JSON.stringify(decision);
+          }
+          deps.logger.warn('auto-review model candidate returned malformed decision', {
+            candidateId: candidate.id,
+            providerId: candidate.providerId,
+            model: candidate.model,
+            attempt,
             durationMs,
           });
-          if (!canRetry) break;
+          continue;
+        }
+
+        // Queued work keeps its order: a retry may only jump ahead when the budget still covers
+        // one full timeout for every pending attempt, including earlier deferred retries.
+        const pendingAttempts = queue.length;
+        const retriable = attempt < AUTO_REVIEW_TRANSIENT_RETRY_ATTEMPTS
+          && transientCandidateFailure(result)
+          && !controller.signal.aborted;
+        const retryInPlace = retriable && deadlineAt - now() >= (
+          AUTO_REVIEW_CANDIDATE_TIMEOUT_MS
+          + AUTO_REVIEW_TRANSIENT_RETRY_BACKOFF_MS
+          + pendingAttempts * AUTO_REVIEW_CANDIDATE_TIMEOUT_MS
+        );
+        const retryDeferred = retriable && !retryInPlace && pendingAttempts > 0;
+        deps.logger.warn('auto-review model candidate failed', {
+          candidateId: candidate.id,
+          providerId: candidate.providerId,
+          model: candidate.model,
+          attempt,
+          reason: safeFailureReason(result),
+          retrying: retryInPlace ? 'in_place' : retryDeferred ? 'deferred' : false,
+          durationMs,
+        });
+        if (retryInPlace) {
           await sleep(AUTO_REVIEW_TRANSIENT_RETRY_BACKOFF_MS, controller.signal);
+          queue.unshift({ candidate, attempt: attempt + 1 });
+        } else if (retryDeferred) {
+          queue.push({ candidate, attempt: attempt + 1 });
         }
       }
     } finally {

@@ -59,6 +59,7 @@ import {
   type UnifiedModelPanelProps,
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
+import type { ProviderUsageScope } from './useProviderWeeklyQuota';
 import { ThinkingToggle } from './ThinkingToggle';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
 import { VendorSegmentedSwitcher } from './VendorSegmentedSwitcher';
@@ -1188,6 +1189,12 @@ function ModelSelectorContentView({
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
   const providers = deviceId ? remoteProviders.providers : providersOverride ?? localProviders.providers;
+  // 订阅用量跟随目录归属:本机目录读本机账号,远程目录读被控端镜像(与会话用量 chip 共用缓存);
+  // 外部注入的目录(providersOverride)归属不明,不显示任何账号用量。
+  const providerUsageScope = useMemo<ProviderUsageScope | null>(
+    () => (deviceId ? { deviceId } : providersOverride ? null : { deviceId: null }),
+    [deviceId, providersOverride],
+  );
   // Old device-link hosts expose capabilities only. Never substitute local routes.
   const unifiedPanel = useUnifiedPanel && !(deviceId && remoteProviders.unsupported);
   const providersLoading = deviceId ? remoteProviders.loading : !providersOverride && localProviders.loading;
@@ -2881,7 +2888,7 @@ function ModelSelectorContentView({
           {localCatalogNotice && <div className="shrink-0 p-2">{localCatalogNotice}</div>}
           <UnifiedModelPanel
             deviceId={deviceId}
-            localProviderUsage={!deviceId && !providersOverride}
+            providerUsage={providerUsageScope}
             providers={providers}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}
             {...(unifiedAgents ? { agents: unifiedAgents } : {})}

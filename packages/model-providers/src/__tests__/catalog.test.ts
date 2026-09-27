@@ -388,35 +388,35 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
   });
 
   it("DeepSeek 预设携带厂商文档确认的 1M contextWindow (#735)", () => {
-    // 官方 V4 起全线 1M(api-docs.deepseek.com news260424);预设不带时
-    // buildUserProvider 回落 200K 保守默认,长上下文模型被错误降级。
+    // 官方 Codex 目录的 context_window 为 1,048,576;预设不带时 buildUserProvider
+    // 回落 200K 保守默认,长上下文模型被错误降级。deepseek-v4-flash 已是临时别名,
+    // 推荐改用官方的 deepseek-flash(V4.1-Flash)。
     const presets = BUNDLED_CATALOG.presets ?? [];
     const deepseek = presets.find((p) => p.id === "deepseek");
     expect(deepseek).toBeDefined();
     for (const [agent, rt] of Object.entries(deepseek!.runtimes)) {
-      for (const id of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
+      for (const id of ["deepseek-flash", "deepseek-v4-pro"]) {
         const m = rt!.models.find((x) => x.id === id);
-        expect(m?.contextWindow, `${agent}/${id}`).toBe(1_000_000);
+        expect(m?.contextWindow, `${agent}/${id}`).toBe(1_048_576);
       }
     }
-    // OpenRouter 托管的同款模型页面同样标注 1,048,576,取与仓库口径一致的 1M。
+    // OpenRouter 模型接口标注 1,048,576。
     const openrouter = presets.find((p) => p.id === "openrouter");
     expect(
       openrouter?.runtimes["claude-code"]?.models.find(
         (m) => m.id === "deepseek/deepseek-v4-pro",
       )?.contextWindow,
-    ).toBe(1_000_000);
-    expect(deepseek?.runtimes.pi).toMatchObject({
-      wireProtocol: "openai-chat",
-      models: [
-        { id: "deepseek-v4-flash" },
-        { id: "deepseek-v4-flash-vision-exp" },
-        { id: "deepseek-v4-pro" },
-      ],
-    });
+    ).toBe(1_048_576);
+    // 推荐清单三个引擎共用；vision-exp 只由 Pi 模型资料补入且默认隐藏。
+    expect(deepseek?.runtimes.pi?.wireProtocol).toBe("openai-chat");
+    expect(
+      deepseek?.runtimes.pi?.models
+        .filter((m) => m.defaultEnabled !== false)
+        .map((m) => m.id),
+    ).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
   });
 
-  it("Kimi Code(编程计划)按各 harness 的权威目录保留 contextWindow", () => {
+  it("Kimi Code(编程计划)各 harness 共用官方核实的 contextWindow", () => {
     const presets = BUNDLED_CATALOG.presets ?? [];
     const kimiCode = presets.find((p) => p.id === "moonshot-kimi-code");
     expect(kimiCode).toBeDefined();
@@ -431,7 +431,8 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
       expect(
         rt!.models.find((m) => m.id === "k3")?.contextWindow,
         `${agent}/k3`,
-      ).toBe(agent === "pi" ? 1_048_576 : 262_144);
+        // 官方：K3 的 1,048,576 只对高档位开放，取所有档位都成立的 262,144。
+      ).toBe(262_144);
     }
   });
 

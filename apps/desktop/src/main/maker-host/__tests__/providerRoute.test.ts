@@ -23,6 +23,8 @@ import {
   getProviderRouteCredentialRevision,
   getSessionRoutingDescriptor,
   resolveSessionRoute,
+  resolveCodexLocalAuthPolicy,
+  captureCodexLocalAuthPolicy,
   resolveSessionRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
@@ -91,6 +93,62 @@ afterEach(() => {
   setAnthropicDiscoveredModels([]);
   setProviderViewsReader(async () => []);
   setCustomProviderHeaderReader(() => null);
+});
+
+describe('Codex local auth policy', () => {
+  it('uses the actual custom route even without image generation capabilities', async () => {
+    setCustomProviders([buildUserProvider({
+      id: 'plain-key', name: 'Plain API',
+      runtimes: { codex: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-responses', models: [{ id: 'plain-model', name: 'Plain' }] } },
+    })]);
+    try {
+      expect(await resolveCodexLocalAuthPolicy('plain-key', 'plain-model')).toBe('isolated');
+      expect(await resolveCodexLocalAuthPolicy(undefined, 'plain-model')).toBe('isolated');
+      expect(await resolveCodexLocalAuthPolicy('missing-provider', 'plain-model')).toBe('legacy-shared');
+    } finally {
+      setCustomProviders([]);
+    }
+  });
+
+  it('waits through nested route mutations before selecting an API key policy', async () => {
+    setCustomProviders([buildUserProvider({
+      id: 'pending-key', name: 'Pending API',
+      runtimes: { codex: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-responses', models: [{ id: 'pending-model', name: 'Pending' }] } },
+    })]);
+    const finish = beginProviderRouteMutation('pending-key');
+    const nested = beginProviderRouteMutation('pending-key');
+    let settled = false;
+    const policy = resolveCodexLocalAuthPolicy('pending-key', 'pending-model').then((value) => { settled = true; return value; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish.commit();
+    finish();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    nested();
+    await expect(policy).resolves.toBe('isolated');
+  });
+
+  it('invalidates a captured selection when a Desktop mutation starts, even without a core guard', async () => {
+    const before = await captureCodexLocalAuthPolicy('pending-key', 'pending-model');
+    expect(before.isCurrent()).toBe(true);
+    const finish = beginProviderRouteMutation('pending-key');
+    try {
+      expect(before.isCurrent()).toBe(false);
+      const abort = new AbortController();
+      const pending = captureCodexLocalAuthPolicy('pending-key', 'pending-model', abort.signal);
+      abort.abort(new Error('fixture cancelled'));
+      await expect(pending).rejects.toThrow('fixture cancelled');
+    } finally { finish(); }
+    expect(before.isCurrent()).toBe(false);
+    expect((await captureCodexLocalAuthPolicy('pending-key', 'pending-model')).isCurrent()).toBe(true);
+  });
+
+  it('isolates gateway routes while retaining official and third-party OAuth compatibility', async () => {
+    expect(await resolveCodexLocalAuthPolicy('openai', 'gpt-5.4')).toBe('legacy-shared');
+    expect(await resolveCodexLocalAuthPolicy('xd', 'gpt-5.4')).toBe('isolated');
+    expect(await resolveCodexLocalAuthPolicy('xai', 'xai/grok-4.3')).toBe('legacy-shared');
+  });
 });
 
 describe('Pi per-model protocol routing', () => {

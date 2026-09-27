@@ -181,7 +181,7 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
  * claude-code/index.ts startSession 远端分支)。
  *
  * 刻意不复用 SENSITIVE_ANTHROPIC_ENV_KEYS:那是「继承残留清洗」超集,含 route 覆盖时
- * 必须保留的字段(如 dev 多实例的 CLAUDE_CONFIG_DIR)。
+ * 必须保留的字段(如 CLAUDE_CONFIG_DIR:远端由 cc-manager 自己决定)。
  */
 export const REMOTE_ROUTE_OVERRIDE_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
@@ -489,8 +489,8 @@ export async function buildClaudeEnv(
       : undefined;
   const authEnv = { ...(await auth.getAuthEnv(authOptions)) };
   if (mode === 'remote') {
-    // CLAUDE_CONFIG_DIR is a host-local path. Desktop dev sandboxes inject a
-    // Windows/macOS userData path through the auth adapter; forwarding that
+    // CLAUDE_CONFIG_DIR is a host-local path. If an auth adapter injects one
+    // (older Desktop dev sandboxes used a userData path), forwarding that
     // literal path to a different POSIX host makes Claude resolve it relative
     // to the remote cwd and write configuration data into the repository.
     // The remote cc-manager owns this path and replaces it with its isolated

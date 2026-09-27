@@ -13,6 +13,17 @@
 
 ## 电脑互联的消息文件与历史变更
 
+跨电脑任务复制使用同账号业务通道 `maker:task-copy`，受信 Renderer 使用 `task-copy:request`。
+不开放裸导入、数据库或路径写入；共享访客不准入。该通道与旧 `maker:task-migration` 交接协议
+隔离，旧端拒绝时提示升级，不退回旧交接协议或控制端执行。新端也不接收旧协议的 activate。
+源任务和文件保留可用，自动任务及消息渠道不转移。数据复用 peer 附件与 OSS；复制记录及目标回执
+仅用于幂等重试，不管理源任务执行权。写请求不进入自动重试白名单，无需服务端变更。
+`preflight` 检查目标实时资源；文件描述可为单附件或有序分段附件，每段复用已有协议和校验，
+复制不设固定总量上限。整组 Orca 沿用可选 `teamMigration: true` 能力声明，缺省不支持；
+`receive.files.additionalWorkspaces` 沿用同一文件描述，manifest 记录成员到目录的映射。
+双方必须支持复制通道；收到整组能力声明才发送团队，不尝试部分导入。
+范围、恢复与源目录保护见 [同机移动与跨电脑复制任务](../product-rules/task-device-migration.md)。
+
 设备互联生成文件沿用远端文件服务的 stat 与修改时间，控制端按被控端消息时间窗校验命令产物；
 仅有文件存在、缺失时间戳或读取失败不构成命令产物证据。不增加 relay 协议字段。
 SSH 保持仅展示经过存在性复核的工具产物，不把 Desktop 消息时间与 SSH 主机文件时间比较。
@@ -69,6 +80,19 @@ Mobile 未新增卡片入口。服务端无需改动。
 
 ## 手机首页会话活动快照
 
+### 可见历史优先读取
+
+`local-db:messages:view` 的可选 `{ lazyDetails: true }` 启用轻量历史投影：
+被控 Desktop 先读取分组所需字段，再只按 ID 读取本页可见正文和卡片。
+隐藏子代理记录通过 `messages.deferred` 保存范围，展开后由既有
+`local-db:messages:work-details` 分页读取；可选 `parentToolUseId` 限制到该子代理及其后代，
+不会顺带加载同一时间段的其它子代理。摘要可携带轻量文件产物候选及排除信息，
+文件卡原有的存在性、时间窗与权限校验不变。媒体和文档交付仍保留原始可见来源。
+
+旧控制端不请求该选项，收到原有投影；旧主机忽略选项，新控制端继续兼容原投影和原有
+raw history 降级。任务列表活动推送不变，当前轮的正文、工具卡和可见进度继续实时更新。
+没有新增 channel、relay 类型、数据库 schema 或 Mobile 原生依赖，云端无需改动。
+
 现有 `maker:list-active` 的可选 `{ summary: true }` 响应在运行标记之外增加
 `activityPhase` / `activityAttention` 两个可选字段。被控端从现有会话活动投影提供这两个
 状态字段；活动服务已就绪但该会话不在活动账本中时，明确返回 `idle` / `false`，不下发活动正文。
@@ -81,6 +105,27 @@ Mobile 未新增卡片入口。服务端无需改动。
 列表、但已不在运行时列表的同设备任务活动状态清为 idle。读取期间有更新的活动推送时，
 不得用旧快照覆盖。旧被控端忽略新参数并返回原数组；手机遇到数组时不根据缺席清除。
 旧控制端仍请求、接收原数组。该扩展不修改 relay、授权或持久化格式。
+
+## Agent 运行时版本读取
+
+`maker:agent:binary-version` 已在 device-link 只读白名单内。可选第二参数
+`{ checkLatest: true }` 让被控端再比较当前更新通道的线上清单，响应追加 `latestVersion`、
+`updateAvailable` 与 `latestCheckFailed`（没读到清单时为真，此时“无更新”无法确认）。
+不传参数时只读本地版本，三个字段为 `null` / `false` / `false`。旧被控端忽略参数且不返回
+新字段，控制端按无更新、未失败处理；旧控制端忽略新增字段。关于页的重启更新入口
+`update-harness-relaunch` 不在白名单内，远程端不能重启被控 Desktop。实现见
+`apps/desktop/src/main/maker-ipc/binary-version.ts`。
+
+## 远端目录浏览盘符列表
+
+`fs:list-dir` 响应追加可选 `drives: { name, path, current }[]`，只由 Windows 被控端回传：
+经 PowerShell 读取 `GetLogicalDrives` 盘符表，不访问磁盘，断线网络盘不会卡住探测。结果缓存
+30 秒，过期先回旧值并在后台刷新；首次枚举最多等 1.5 秒，超时、失败或为空时省略 `drives`，目录列表
+照常返回。超时额外回可选 `drivesPending: true`，新版手机据此在当前目录自动再拉，旧控制端忽略。
+`path` 是 host-native 根路径，控制端直接用它再调 `fs:list-dir`，不自行拼路径；当前
+位于未枚举到的盘或 UNC 共享时补为当前项。新版手机在至少两项时于「上级」下显示盘符切换；
+旧被控端不回字段时保留原逐级浏览，旧控制端（含 Desktop 添加远程项目对话框）忽略该字段。
+未新增 channel、relay 类型、allowlist、权限或持久化状态，服务端无需改动。
 
 ## 自动化检查恢复投影
 
@@ -95,6 +140,42 @@ Mobile 未新增卡片入口。服务端无需改动。
 截断时记录可选 `checkSucceeded: true`；错误、超时、取消和退避跳过不构成恢复。
 该标记只恢复此前的检查故障，不恢复 Agent 执行失败；旧脚本不输出、旧客户端不识别均不影响
 原有退出码语义。实现见 `scheduler-host/pre-run-hook.ts` 与 `scheduler-host/storage.ts`。
+
+## 用量历史跨设备合并
+
+新增只读 invoke `maker:usage:device-rows`（Desktop ↔ Desktop，已登记 allowlist）。请求可选
+`{ sinceDay: 'YYYY-MM-DD' }`；被控端回 `{ format: 'usage-device-rows-v1', todayKey, sinceDay,
+rowsGz }`，`rowsGz` 为本机 `daily_spend` / `daily_model_usage` / `daily_session_usage` 原始行
+及全部记过用量任务的当前标题、模型、供应商、上下文与最后活跃时间 JSON 的 gzip + base64
+（任务元数据不分增量区间，每次都是完整集合，控制端整体覆盖；不在集合里的任务连同旧行丢弃）。
+任务元数据与 `local-db:sessions:list` 走同一远端 Bot 可见性判据，隐藏伙伴的任务及其行不外发；
+压缩后仍超帧预算回 `{ format, oversize: true }`。只含按天 × 模型、按天 × 任务的 token 与金额及任务展示元数据，不含消息内容或凭证；handler 无 sender 依赖、无副作用。控制端按账号缓存每台电脑最近一次读到的行，
+增量从缓存 `todayKey` 前一天起拉；被控端回的 `sinceDay` 与请求不一致时按全量替换。
+新增端到端可选能力 `background-link-v1`（`DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1`，link-open 与
+link-accept 双向声明，不改 relay）。Desktop 控制端在本机没有订阅对端任何 topic 时建链即声明
+（`apps/desktop/src/main/device-link/backgroundLink.ts`，所有建链与自动重开入口共用这一判据）；新被控端
+见到后不装 legacy `'*'`，不亮被控横幅、不转发推送、不挡无人值守更新重启，控制端之后显式 subscribe
+照常生效。旧被控端忽略该能力、照旧装 legacy `'*'`，所以用量读取走 `remoteBackgroundInvoke`：
+0.1.93 及更早的正式版或版本未知的电脑不建链；新建链路时对端未在 link-accept 声明支持，且本机仍无订阅，
+就立即关闭这条链路并按需要更新处理，同一版本不再重试。已就绪的链路直接复用。
+旧控制端与 Mobile 不声明该能力，行为不变。
+旧被控端回 `CHANNEL_NOT_ALLOWED`，控制端把该电脑标为需要更新，不影响其它电脑；旧控制端
+不调用新通道，行为不变。手机不参与读取，也未新增入口。本机 `maker:usage:history` 仍只对
+受信 renderer 开放。不改 relay、帧限制或服务器权限，服务端无需改动。实现见
+`apps/desktop/src/main/usage/usageDeviceRows.ts` 与 `peerUsageSync.ts`。
+
+## 图片标注区域说明
+
+`maker:input:enqueue` / `maker:input:steer` / `maker:input:update-content` 的队列附件
+（`AgentInputSerializedFile`）追加可选 `annotationRegions: { x0, y0, x1, y1 }[]`：标注图
+（`annotated: true`）烧录时由笔迹归纳的外接框，归一化坐标（0..1，原点左上，两位小数，
+每张图至多 6 处）。只经既有 device-link 隧道与 IPC 透传，不新增 channel、relay 类型或
+持久化 schema。消费端 `buildMakerUserMessage` 一律经 `sanitizeAnnotationRegions` 校验，
+有合法区域时在原标注说明后另起一行按本条消息内图片顺序描述区域；仍然每条消息至多一条说明。
+旧主机忽略该字段，只注入原固定说明；新主机收到旧控制端（不带该字段）的消息时，说明与
+旧版逐字节相同。remote 会话剥离 `annotationSourceUrl` / `annotationStrokes` 时保留区域字段。
+Mobile 以同一归纳算法在上传后的附件（含持久发件箱 `DurableUpload`，可选字段、旧记录缺省）
+上携带该字段；底图本身已是烧录图、旧红线位置不可知时不带区域。服务端无需改动。
 
 ## 事实来源
 
@@ -377,3 +458,32 @@ Seed 2.1 Pro 按火山方舟官方示例选择 Chat Completions 为 Cindy 的标
 `compacting` 是上述公开阶段的一员，由运行时 `Compacting...` / `Compacting context…`
 状态触发，`compact_boundary` 或恢复生成结束它；不读取压缩摘要。该阶段使用客户端固定的
 “正在整理对话…”本地化文案，不走模型润色，仍沿用原有文字切换节奏。
+
+## 伙伴通知深链
+
+手机推送 `deepLink` 仍是 `/sessions/<sessionId>?deviceId=<hostDeviceId>`。会话属于伙伴的
+canonical 主任务时，宿主额外追加 `resourceCollectionId=teammates&resourceId=<botId>&resourceKind=bot`，
+与伙伴名册打开聊天时的路由参数相同：手机据此按伙伴聊天呈现（伙伴页头、导航与已读），并继续做既有的
+会话来源与主机校验；这些参数不授予任何权限。已发布的手机版本本来就识别这组参数，不需要升级；
+不识别它们的旧控制端仍按普通任务打开。拼接后超过 `NOTIFY_DEEP_LINK_MAX_LENGTH` 时回退为原深链。
+委派的独立 Session 任务和普通任务不带这组参数。不修改 notify 帧结构、relay 或协议版本。
+
+## 伙伴记忆远程页面与资源内搜索
+
+伙伴设置主资源（声明 `form` 的控制端）追加 `memories` list 块，入口指向 `settings:<botId>/memory`；
+原 `memory` 表单（开关与 USER.md）不变。列表页按类别输出多个 `list` 块：块 `title` 为类别名，`data.count`
+为该类条数，条目追加可选 `subtitle`（正文开头）与 `timestamp`（毫秒）。详情页
+`settings:<botId>/memory/<entry>` 由 `entry` 表单（标题、正文）与 `remove` 动作组成，revision 即该条
+`updatedAt`，动作经既有 `bindResource` 绑定该值；主机服务在存储锁内再次核对。`entry` 取文件名去掉
+`.md`，拼出的 id 超过 160 字符时改为 `h<12 位摘要>`。记忆已不存在时回 registry `NOT_FOUND`，其余 provider
+失败仍按既有边界显示为 `INTERNAL`，控制端据复读判断冲突，不依赖错误码。
+
+`maker:remote-resources:get` 请求可选携带 `query`（同 list，最长 1000 字符，空串等同未传）。新增可移植
+原语 `search`：主机只对声明 `search` 的控制端输出该块（`data.query`、`data.placeholder`），控制端仅在看到
+该块后带 `query` 重读同一资源。旧控制端不声明也不传 `query`，列表页原样可用；旧主机忽略 `query`，也不
+提供记忆页面，新手机显示原有升级提示。未新增 channel、relay 类型、allowlist、权限、数据库迁移或
+Mobile 原生 fingerprint 输入，服务端无需改动。
+
+任务迁移业务通道的 `move-project` action 在任务所属宿主复用项目移动校验与更新，
+仅接受任务 ID 和明确的目录（null 表示移到对话）。不开放远程 sessions 原始 patch；
+旧宿主拒绝未知 action，不回退到控制端本机执行。

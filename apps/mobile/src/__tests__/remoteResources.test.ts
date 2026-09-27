@@ -4,6 +4,9 @@ import { DeviceLinkError } from '@cindy/device-link';
 import {
   MOBILE_REMOTE_RESOURCE_PRIMITIVES,
   getRemoteResource,
+  invokeRemoteResourceAction,
+  listRemoteCollection,
+  loadRemoteResourceManifest,
   discoverRemoteHomeCollections,
   remoteResourceDiscoveryTargets,
   isRemoteResourcesUnsupported,
@@ -20,6 +23,33 @@ const targets = [
 ];
 
 describe('remote resource discovery', () => {
+  it('omits desktop routines from live discovery and offline fallback while keeping other collections', async () => {
+    const collections = [
+      { id: 'routines', title: '例行任务', resourceKind: 'routine', placement: 'home-scope', targets },
+      { id: 'teammates', title: 'Companions', resourceKind: 'bot', placement: 'home-scope', targets },
+      { id: 'future-module', title: 'Future', resourceKind: 'future', placement: 'home-scope', targets },
+    ];
+    const invoke = vi.fn(async () => ({ protocolVersion: 1, collections })) as RemoteInvoke;
+    const manifest = await loadRemoteResourceManifest(invoke, targets[0]);
+    expect(manifest?.collections.map((item) => item.id)).toEqual(['teammates', 'future-module']);
+    const live = await discoverRemoteHomeCollections(invoke, targets);
+    expect(live.map((item) => item.id)).toEqual(['teammates', 'future-module']);
+    const offline = vi.fn(async () => { throw new Error('offline'); }) as RemoteInvoke;
+    const restored = await discoverRemoteHomeCollections(offline, targets, 'en', collections);
+    expect(restored.map((item) => item.id)).toEqual(['teammates', 'future-module']);
+  });
+
+  it('does not send routine reads or actions from stale mobile links', async () => {
+    const invoke = vi.fn() as RemoteInvoke;
+    const ref = { collectionId: 'routines', kind: 'routine', id: 'daily' };
+    await expect(listRemoteCollection(invoke, targets[0], 'routines')).rejects.toThrow('Unsupported mobile resource collection');
+    await expect(getRemoteResource(invoke, targets[0], ref)).rejects.toThrow('Unsupported mobile resource collection');
+    await expect(invokeRemoteResourceAction(invoke, targets[0], {
+      collectionId: 'routines', actionId: 'run-now', resourceRef: ref,
+    })).rejects.toThrow('Unsupported mobile resource collection');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('keeps a discovered offline host while excluding revoked and disabled hosts', async () => {
     const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets }];
     const selected = remoteResourceDiscoveryTargets([

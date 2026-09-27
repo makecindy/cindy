@@ -286,7 +286,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     const waitForBusyCompletionBlock = extractBetween(
       voiceInputSource,
       'const waitForBusyCompletion = useCallback((waitForRefinement: boolean) => {',
-      'const stop = useCallback(async (options?: VoiceInputStopOptions) => {',
+      'const cancel = useCallback(async () => {',
     );
     expect(voiceInputSource).toContain('type StopCompletionWaiter = {');
     expect(voiceInputSource).toContain(
@@ -310,7 +310,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     const stopBlock = extractBetween(
       voiceInputSource,
       'const stop = useCallback(async (options?: VoiceInputStopOptions) => {',
-      'const cancel = useCallback(async () => {',
+      'stopWithGateRef.current = stopWithGate;',
     );
     expect(stopBlock).toContain("if (stateRef.current === 'error')");
     expect(stopBlock).toContain("throw new Error(lastErrorRef.current ?? 'Voice input failed.')");

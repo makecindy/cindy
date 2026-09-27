@@ -179,7 +179,7 @@ export function WindowBehaviorSection() {
       {(isWindows || isLinux) && (
         <div
           className={cn(
-            'flex items-center justify-between gap-3 rounded-xl p-5',
+            'cindy-segmented-row rounded-xl p-5',
             'bg-[var(--settings-theme-card-bg)]',
             'border border-[var(--settings-theme-card-border)]',
           )}

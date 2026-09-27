@@ -446,6 +446,44 @@ export function listMessagesFor(
   return promise;
 }
 
+const BACKGROUND_TASK_OUTPUT_TAIL_UNSUPPORTED_TTL_MS = 10 * 60 * 1000;
+const backgroundTaskOutputTailUnsupportedUntil = new Map<string, number>();
+
+/**
+ * 运行中后台命令的输出文件末尾一段(只读,best-effort):任务登记与 `.output` 文件都在会话归属端,
+ * 远程会话隧道到被控端读。老被控端无此 channel → CHANNEL_NOT_ALLOWED → 带 TTL
+ * 短路(与 workflow 进度同款);其余错误一律按 read_failed 返回,调用方不显示最近输出。
+ */
+export function readBackgroundTaskOutputTailFor(
+  sessionId: string,
+  taskId: string,
+): Promise<import('../../shared/backgroundTaskOutput').BackgroundTaskOutputTailResult> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) {
+    return window.electronAPI.maker
+      .readBackgroundTaskOutputTail(sessionId, taskId)
+      .catch(() => ({ ok: false, reason: 'read_failed' }) as const);
+  }
+  const blockedUntil = backgroundTaskOutputTailUnsupportedUntil.get(deviceId);
+  if (blockedUntil !== undefined && blockedUntil > Date.now()) {
+    return Promise.resolve({ ok: false, reason: 'unavailable' });
+  }
+  return (
+    invokeRemote(deviceId, 'maker:background-task:output-tail', [sessionId, taskId]) as Promise<
+      import('../../shared/backgroundTaskOutput').BackgroundTaskOutputTailResult
+    >
+  ).catch((err) => {
+    if (extractIpcError(err)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+      backgroundTaskOutputTailUnsupportedUntil.set(
+        deviceId,
+        Date.now() + BACKGROUND_TASK_OUTPUT_TAIL_UNSUPPORTED_TTL_MS,
+      );
+      return { ok: false, reason: 'unavailable' } as const;
+    }
+    return { ok: false, reason: 'read_failed' } as const;
+  });
+}
+
 // 已确认不支持 maker:get-workflow-progress 的被控设备(收到过 CHANNEL_NOT_ALLOWED):
 // 短路一段时间不再空耗隧道往返。带 TTL 而非进程级永久 —— deviceId 跨升级稳定,
 // 被控端升级到支持版本后负缓存到期自动重探,无需重启控制端。
