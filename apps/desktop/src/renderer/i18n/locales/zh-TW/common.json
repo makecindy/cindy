@@ -7901,6 +7901,102 @@
       "empty": "還沒有可查看的訊息。",
       "limitReached": "本輪夥伴對話已達上限，雙方已回到各自的主任務"
     },
+    "groupChat": {
+      "memberSeparator": "、",
+      "memberCount_one": "{{count}} 位夥伴",
+      "memberCount_other": "{{count}} 位夥伴",
+      "nameLabel": "群聊名稱",
+      "waitingConfirm": "{{name}}在等你確認",
+      "loadFailedTitle": "無法載入這個群聊",
+      "loadFailedDescription": "Cindy 暫時讀不到這個群聊的訊息。你可以重試，或返回夥伴頁。",
+      "unavailableTitle": "這個群聊已無法使用",
+      "unavailableDescription": "它可能已被刪除。返回夥伴頁可以開啟其他群聊和夥伴。",
+      "sidebar": {
+        "title": "群聊",
+        "empty": "還沒有訊息",
+        "preview": "{{name}}：{{text}}",
+        "previewYou": "你：{{text}}",
+        "waiting": "在等你確認"
+      },
+      "create": {
+        "title": "新增群聊",
+        "description": "選幾位夥伴放進一個群聊。你說一句，它們會一起接話。",
+        "namePlaceholder": "例如：週末出遊",
+        "nameRequired": "為群聊取個名字",
+        "membersLabel": "選擇夥伴",
+        "selectedCount_one": "已選 {{count}} 位，最多 {{max}} 位",
+        "selectedCount_other": "已選 {{count}} 位，最多 {{max}} 位",
+        "minMembers": "至少選 {{min}} 位夥伴",
+        "notEnoughBots": "至少需要 {{min}} 位可用的夥伴才能建立群聊，先去新增夥伴吧。",
+        "submit": "建立群聊",
+        "failed": "群聊沒能建立，請稍後重試"
+      },
+      "memberStatus": {
+        "paused": "已暫停",
+        "unavailable": "無法使用"
+      },
+      "mention": {
+        "all": "所有人",
+        "allHint": "大家都回答",
+        "label": "點名夥伴"
+      },
+      "composer": {
+        "label": "群聊訊息",
+        "placeholder": "在群聊裡說點什麼，@ 某位夥伴就只讓它回答…",
+        "noMembers": "群聊裡暫時沒有能接話的夥伴，去群聊設定裡新增一位吧",
+        "tooLong": "訊息太長了，最多 {{max}} 個字",
+        "sendFailed": "訊息沒有送出，請稍後重試",
+        "stopFailed": "沒能停下這一輪，請再試一次",
+        "stop": "停止這一輪"
+      },
+      "timeline": {
+        "loadEarlier": "查看更早的訊息",
+        "loadEarlierFailed": "更早的訊息沒能載入，請再試一次",
+        "emptyTitle": "群聊裡還沒有訊息",
+        "emptyDescription": "說一句話開始，夥伴們會接著聊。@ 某位夥伴就只讓它回答。",
+        "roundEnded": "夥伴們說完了",
+        "continue": "繼續討論",
+        "continueFailed": "沒能繼續討論，請再試一次"
+      },
+      "notice": {
+        "memberFailed": "{{name}}這次沒能回覆",
+        "memberTimeout": "{{name}}太久沒有回覆，這次先跳過",
+        "memberUnavailable": "{{name}}現在無法使用，這次沒有發言"
+      },
+      "settings": {
+        "open": "群聊設定",
+        "title": "群聊設定",
+        "members": "成員",
+        "remove": "移出",
+        "removeNamed": "把 {{name}} 移出群聊",
+        "minMembers": "群聊裡至少要有 {{min}} 位夥伴",
+        "maxMembers": "最多 {{max}} 位",
+        "noMoreBots": "沒有其他可以加入的夥伴了",
+        "nameSaveFailed": "群聊名稱沒能儲存，已恢復原來的名稱",
+        "membersSaveFailed": "成員沒能更新，請再試一次",
+        "replyMode": "沒有 @ 人的時候",
+        "replyModeAll": "大家都可以接話",
+        "replyModeMentioned": "只有被 @ 的回答",
+        "replyModeNote": "沒什麼可補充的夥伴不會說話。每輪最多聊 3 圈、10 則，之後等你點「繼續討論」。",
+        "replyModeSaveFailed": "回覆方式沒能儲存，請再試一次",
+        "delete": "刪除群聊",
+        "deleteNote": "只刪除這個群聊和其中的訊息，夥伴本身、它們的記憶和私聊都不受影響。",
+        "deleteConfirmTitle": "刪除「{{name}}」？",
+        "deleteFailed": "群聊沒能刪除，請稍後重試",
+        "speakingMode": "發言方式",
+        "speakingModeAuto": "自動",
+        "speakingModeSequential": "一律輪流",
+        "speakingModeAutoNote": "沒有 @ 人或 @所有人時，第一輪大家同時想，之後輪流接話；@ 了夥伴就按 @ 的先後輪流。",
+        "speakingModeSequentialNote": "每次只有一位夥伴發言，後說的能看到前面的回答。",
+        "speakingModeSaveFailed": "發言方式沒能儲存，請再試一次"
+      },
+      "errors": {
+        "memberLimit": "一個群聊需要 2–6 位夥伴",
+        "memberUnavailable": "有夥伴現在無法使用，換一位再試",
+        "notFound": "這個群聊已不存在",
+        "hostNotReady": "Cindy 還在準備中，請稍後重試"
+      }
+    },
     "joined": {
       "today": "今天加入",
       "yesterday": "昨天加入",

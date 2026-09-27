@@ -451,6 +451,9 @@ import {
   createBotDirectMessageService,
   type BotDirectMessageService,
 } from './botDirectMessageService.js';
+import { createBotGroupChatService, type BotGroupChatService } from './botGroupChatService.js';
+import { BOT_GROUP_CLIENT_ID_PREFIX } from '../../shared/botGroupChat.js';
+import { ensureBotGroupLaneSession } from '../localDb/ipc/bots.js';
 import { restartBotRuntime } from './botRuntimeRestart.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
 import { isSessionPermissionMode, persistPermissionModeWithoutRuntime } from './sessionPermissionPersistence.js';
@@ -2159,6 +2162,7 @@ interface EnableOrcaOptions {
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
 let botDelegationServiceHolder: BotDelegationService | null = null;
 let botDirectMessageServiceHolder: BotDirectMessageService | null = null;
+let botGroupChatServiceHolder: BotGroupChatService | null = null;
 
 const botRuntimeRestoreCoordinator = createBotRuntimeRestoreCoordinator({
   readDbIdentity: () => {
@@ -4623,6 +4627,7 @@ const sessionEventDependencies: SessionEventDependencies = {
   get botCompactRuntimeRefreshCoordinator() { return botCompactRuntimeRefreshCoordinator; },
   get attemptBotCompactRuntimeRefresh() { return attemptBotCompactRuntimeRefresh; },
   get botDelegationServiceHolder() { return botDelegationServiceHolder; },
+  get botGroupChatServiceHolder() { return botGroupChatServiceHolder; },
   get isFencedStaleSessionTerminal() {
     return isFencedStaleSessionTerminal;
   },
@@ -7040,7 +7045,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         !row ||
         row.source !== 'bot' ||
         row.status !== 'active' ||
-        (row.role !== 'canonical' && row.role !== 'delegation')
+        (row.role !== 'canonical' && row.role !== 'delegation' && row.role !== 'group')
       ) {
         return 'not-bot';
       }
@@ -7221,7 +7226,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       .limit(1);
     if (
       !row
-      || row.role !== 'canonical'
+      || (row.role !== 'canonical' && row.role !== 'group')
       || row.source !== 'bot'
       || row.status !== 'active'
       || !row.workingDir
@@ -9213,7 +9218,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Pending selections also need the canonical send transaction: it consumes the intent,
       // then refreshes queued createOpts from DB before starting the target harness.
       // enqueue does not await dispatch, so the drain can acquire this lock after we return.
-      if (explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
+      if (explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX) || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
         lockStage = 'enqueue-queued-message';
         const qClientId = explicitClientId ?? createId();
         await enqueueSendToSessionMessage({
@@ -9757,6 +9762,57 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   });
   setBotRemoteMessageService(botDirectMessageServiceHolder);
+  botGroupChatServiceHolder?.dispose();
+  botGroupChatServiceHolder = createBotGroupChatService({
+    ensureLane: async (input) => {
+      try {
+        return await ensureBotGroupLaneSession(input);
+      } catch (error) {
+        return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted }) =>
+      dispatchBotSessionMessage({ targetSessionId, message, persistedContent, clientId, onAccepted }),
+    abortLane: async (sessionId) => {
+      await inputCoordinator.ensureQueueRestored(sessionId);
+      resetAutomaticRecoveryForExplicitStop(sessionId);
+      contextOverflowRolloverHolder?.cancelRecovery(sessionId);
+      await pauseGoalBeforeExplicitStop(sessionId);
+      inputCoordinator.stop(sessionId);
+      await awaitAgentInputQueueSnapshotPersistence(sessionId);
+    },
+    closeLanes: async (sessionIds) => {
+      await Promise.all(sessionIds.map((id) => maker.closeSession(id).catch(() => undefined)));
+    },
+    syncLanePermission: async (laneSessionId, botId) => {
+      const [canonical] = await getDbClient().drizzle
+        .select({ mode: sessions.permissionMode })
+        .from(botSessionLinks)
+        .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
+        .where(and(eq(botSessionLinks.botId, botId), eq(botSessionLinks.role, 'canonical'), isNull(botSessionLinks.archivedAt)))
+        .limit(1);
+      const mode = canonical?.mode;
+      if (!mode || !isSessionPermissionMode(mode)) return;
+      const live = maker.getSession(laneSessionId);
+      if (live) {
+        if (live.stablePermissionModeState?.mode !== mode) {
+          await live.setPermissionMode(mode as 'ask' | 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions');
+        }
+        return;
+      }
+      await persistPermissionModeWithoutRuntime(laneSessionId, mode);
+    },
+    hasPendingInteraction: (sessionId) => hasPendingAgentInteractionForSession(sessionId),
+    captureOwnerScope: captureDataOwnerBroadcastScope,
+    isOwnerScopeCurrent: (scope) =>
+      isDataOwnerBroadcastScopeCurrent(scope as ReturnType<typeof captureDataOwnerBroadcastScope>),
+    onChanged: (payload, scope) => {
+      const ownerScope = scope as ReturnType<typeof captureDataOwnerBroadcastScope> | undefined;
+      if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+      broadcastToAllWindows(MAKER_PUSH.BOT_GROUP_CHANGED, payload, ownerScope);
+    },
+    log,
+  });
   botDelegationServiceHolder?.dispose();
   botDelegationServiceHolder = createBotDelegationService({
     readSessionExecution: id => {
@@ -9954,6 +10010,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return botDirectMessageServiceHolder.getThread(threadId, viewerBotId);
     },
   );
+  // Bot group chat is local to this Desktop in phase 1; device-link does not route these channels.
+  const botGroupNotReady = { ok: false as const, errorCode: 'HOST_NOT_READY' as const, message: '伙伴群聊服务尚未就绪' };
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_LIST, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return botGroupChatServiceHolder ? botGroupChatServiceHolder.listGroups() : botGroupNotReady;
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_GET, async (event, groupId: unknown, options: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return botGroupChatServiceHolder ? botGroupChatServiceHolder.getGroup(groupId, options) : botGroupNotReady;
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_CREATE, async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return botGroupChatServiceHolder ? botGroupChatServiceHolder.createGroup(input) : botGroupNotReady;
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_UPDATE, async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return botGroupChatServiceHolder ? botGroupChatServiceHolder.updateGroup(input) : botGroupNotReady;
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_SET_MEMBERS, async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return botGroupChatServiceHolder ? botGroupChatServiceHolder.setMembers(input) : botGroupNotReady;
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_DELETE, async (event, groupId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return botGroupChatServiceHolder ? botGroupChatServiceHolder.deleteGroup(groupId) : botGroupNotReady;
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_SEND, async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return botGroupChatServiceHolder ? botGroupChatServiceHolder.sendMessage(input) : botGroupNotReady;
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_CONTINUE, async (event, groupId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return botGroupChatServiceHolder ? botGroupChatServiceHolder.continueRound(groupId) : botGroupNotReady;
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_STOP, async (event, groupId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return botGroupChatServiceHolder ? botGroupChatServiceHolder.stopRound(groupId) : botGroupNotReady;
+  });
   ipcMain.handle(
     MAKER_INVOKE.BOT_DELEGATION_CANCEL,
     async (event, parentSessionId: unknown, delegationId: unknown) => {
@@ -11516,7 +11610,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
         .where(and(
           eq(botSessionLinks.sessionId, sessionId),
-          eq(botSessionLinks.role, 'canonical'),
+          // Group lanes follow the Bot's current model chain exactly like its canonical Chat.
+          inArray(botSessionLinks.role, ['canonical', 'group']),
           isNull(botSessionLinks.archivedAt),
           // Paused settings may preview grants; sending still requires an active Bot.
           purpose === 'preview'
@@ -11632,7 +11727,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         and(
           eq(botSessionLinks.sessionId, sessionId),
           isNull(botSessionLinks.archivedAt),
-          inArray(botSessionLinks.role, ['canonical', 'delegation']),
+          inArray(botSessionLinks.role, ['canonical', 'delegation', 'group']),
         ),
       )
       .limit(1);
@@ -12793,7 +12888,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .limit(1);
       const blocked = botSessionInputBlockReason(botInput ?? null);
       if (args[2] && typeof args[2] === 'object') {
-        if (botInput?.source === 'bot' && ['canonical', 'delegation'].includes(botInput.role ?? '')) {
+        if (botInput?.source === 'bot' && ['canonical', 'delegation', 'group'].includes(botInput.role ?? '')) {
           botFallbackInputs.add(args[2]);
         } else {
           botFallbackInputs.delete(args[2]);

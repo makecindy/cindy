@@ -40,6 +40,8 @@ Bot Profile
 
 每条伙伴 Session 必须能反查唯一的 Bot owner 与 Profile 版本。伙伴启动的后台任务是普通
 Cindy Session，以父任务关系回到发起伙伴，但不冒充该伙伴或另一个伙伴的主任务。
+伙伴在群聊里使用独立的群专线 Session（`role = 'group'`），与主任务共享 Profile 与 Home，
+不进入主时间线；规则见 [伙伴群聊](bot-group-chat.md)。
 
 ## 3. 长期会话生命周期
 

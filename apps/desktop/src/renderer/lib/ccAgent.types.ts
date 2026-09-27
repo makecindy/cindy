@@ -242,6 +242,8 @@ export interface CcMeta {
    */
   /** Automatic reply to a private Bot message; retained without unread attention. */
   botPrivateReply?: boolean;
+  /** Turn of a Bot's hidden group-chat lane; the group chat surfaces its result and failures. */
+  botGroupLane?: boolean;
   botAuthorization?: import('../../shared/botAuthorization').BotAuthorizationCard;
   botDirectMessage?: import('../../shared/botDirectMessage').BotDirectMessageMeta;
 

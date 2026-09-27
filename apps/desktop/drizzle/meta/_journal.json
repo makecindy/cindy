@@ -813,6 +813,20 @@
       "when": 1790421361685,
       "tag": "0115_silky_power_man",
       "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "6",
+      "when": 1790489107966,
+      "tag": "0116_last_the_watchers",
+      "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "6",
+      "when": 1790489122614,
+      "tag": "0117_spicy_valkyrie",
+      "breakpoints": true
     }
   ]
 }

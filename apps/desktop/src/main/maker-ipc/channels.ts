@@ -782,6 +782,16 @@ export const MAKER_INVOKE = {
   BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
   /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
+  /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
+  BOT_GROUP_LIST: 'maker:bot-group:list',
+  BOT_GROUP_GET: 'maker:bot-group:get',
+  BOT_GROUP_CREATE: 'maker:bot-group:create',
+  BOT_GROUP_UPDATE: 'maker:bot-group:update',
+  BOT_GROUP_SET_MEMBERS: 'maker:bot-group:set-members',
+  BOT_GROUP_DELETE: 'maker:bot-group:delete',
+  BOT_GROUP_SEND: 'maker:bot-group:send',
+  BOT_GROUP_CONTINUE: 'maker:bot-group:continue',
+  BOT_GROUP_STOP: 'maker:bot-group:stop',
   BOT_LIFECYCLE_ACTION: 'maker:bot-lifecycle:action',
 } as const;
 
@@ -932,6 +942,8 @@ export const MAKER_PUSH = {
   BOT_DELEGATION_CHANGED: 'maker:bot-delegation:changed',
   /** Hidden Bot pair conversation accepted another message or reached its limit. */
   BOT_DIRECT_MESSAGE_CHANGED: 'maker:bot-direct-message:changed',
+  /** A Bot group, its members, messages or running round changed. */
+  BOT_GROUP_CHANGED: 'maker:bot-group:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
   BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
   BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',

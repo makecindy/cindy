@@ -30,6 +30,14 @@ import {
   wechatStopAll,
   wechatUnbindCleanup,
 } from './wechatTx.js';
+import {
+  botGroupsAppendMessage,
+  botGroupsArchiveLanes,
+  botGroupsCreate,
+  botGroupsDelete,
+  botGroupsSetMembers,
+} from './botGroupsTx.js';
+import type { BotGroupsCreateLaneArgs, BotGroupsCreateLaneResult } from '../../client/tx/types.js';
 
 const LOCAL_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
@@ -146,6 +154,18 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return undefined;
     case 'bots.persistSessionPermission':
       return botsPersistSessionPermission(db, txArgs);
+    case 'bots.createGroupLane':
+      return botsCreateGroupLane(db, txArgs as BotGroupsCreateLaneArgs);
+    case 'botGroups.create':
+      return botGroupsCreate(db, txArgs as Parameters<typeof botGroupsCreate>[1]);
+    case 'botGroups.setMembers':
+      return botGroupsSetMembers(db, txArgs as Parameters<typeof botGroupsSetMembers>[1]);
+    case 'botGroups.delete':
+      return botGroupsDelete(db, txArgs as Parameters<typeof botGroupsDelete>[1]);
+    case 'botGroups.archiveLanes':
+      return botGroupsArchiveLanes(db, txArgs as Parameters<typeof botGroupsArchiveLanes>[1]);
+    case 'botGroups.appendMessage':
+      return botGroupsAppendMessage(db, txArgs as Parameters<typeof botGroupsAppendMessage>[1]);
     case 'im.rotateSession':
       return imRotateSession(db, txArgs);
     case 'wechatActivateBindingEpoch':
@@ -381,18 +401,19 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
         VALUES (?, ?, ?, ?, ?, ?)`)
         .run(`${id}:v${nextVersion}`, id, nextVersion, expectString(p.identitySource, 'identitySource'),
           expectString(p.capabilitiesJson, 'capabilitiesJson'), now);
-      // Hermes capability epoch: the permanent canonical Chat follows the
-      // latest Profile on its next runtime bootstrap. Route/group/worker links
-      // remain pinned to the version they were created with.
+      // Hermes capability epoch: the permanent canonical Chat and the Bot's
+      // group-chat lanes follow the latest Profile on their next runtime
+      // bootstrap. Route/worker links remain pinned to their creation version.
       db.prepare(`UPDATE bot_session_links SET profile_version = ?
-        WHERE bot_id = ? AND role = 'canonical' AND archived_at IS NULL`)
+        WHERE bot_id = ? AND role IN ('canonical', 'group') AND archived_at IS NULL`)
         .run(nextVersion, id);
     }
     if (p.canonicalPermissionMode !== undefined) {
       const mode = expectString(p.canonicalPermissionMode, 'canonicalPermissionMode');
       if (!['ask', 'auto', 'bypassPermissions'].includes(mode)) throw new Error('Invalid canonical permission mode');
+      // Group lanes run under the same permission profile as the Bot's canonical Chat.
       db.prepare(`UPDATE sessions SET permission_mode = ? WHERE id IN
-        (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role = 'canonical' AND archived_at IS NULL)`)
+        (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('canonical', 'group') AND archived_at IS NULL)`)
         .run(mode, id);
     }
     return { currentVersion: nextVersion };
@@ -742,6 +763,40 @@ function insertBotSession(db: Database.Database, s: Record<string, unknown>): vo
       expectString(s.extraDirs, 'session.extraDirs'), nullableString(s.remoteHostId), nullableString(s.providerId),
       expectString(s.source, 'session.source'), expectNumber(s.createdAt, 'session.createdAt'),
       expectNumber(s.updatedAt, 'session.updatedAt'));
+}
+
+/** One hidden lane per (group, Bot); reuses an active lane instead of creating a second. */
+function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArgs): BotGroupsCreateLaneResult {
+  const p = asRecord(args, 'bots.createGroupLane args');
+  const botId = expectString(p.botId, 'botId');
+  const groupId = expectString(p.groupId, 'groupId');
+  const routeKey = expectString(p.routeKey, 'routeKey');
+  const s = asRecord(p.session, 'session');
+  const sessionId = expectString(s.id, 'session.id');
+  const createdAt = expectNumber(s.createdAt, 'session.createdAt');
+  if (expectString(s.source, 'session.source') !== 'bot') throw new Error('Group lane must be a Bot session');
+  return db.transaction(() => {
+    const member = db.prepare('SELECT 1 FROM bot_group_members WHERE group_id = ? AND bot_id = ?')
+      .get(groupId, botId);
+    if (!member) throw Object.assign(new Error('伙伴已不在该群聊'), { code: 'MEMBER_UNAVAILABLE' });
+    const profile = db.prepare('SELECT status, current_version AS version FROM bot_profiles WHERE id = ?')
+      .get(botId) as { status: string; version: number } | undefined;
+    if (!profile || profile.status !== 'active') {
+      throw Object.assign(new Error('伙伴当前不可用'), { code: 'MEMBER_UNAVAILABLE' });
+    }
+    const existing = db.prepare(`SELECT l.session_id AS sessionId FROM bot_session_links l
+      INNER JOIN sessions s ON s.id = l.session_id
+      WHERE l.bot_id = ? AND l.role = 'group' AND l.route_key = ? AND l.archived_at IS NULL
+        AND s.source = 'bot' AND s.status = 'active'
+      LIMIT 1`).get(botId, routeKey) as { sessionId: string } | undefined;
+    if (existing) return { sessionId: existing.sessionId, created: false };
+    insertBotSession(db, s);
+    db.prepare(`INSERT INTO bot_session_links
+      (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+      VALUES (?, ?, ?, ?, 'group', ?, ?, NULL)`)
+      .run(`${botId}:${sessionId}`, botId, sessionId, profile.version, routeKey, createdAt);
+    return { sessionId, created: true };
+  })();
 }
 
 function botsFinishDelegation(
@@ -1148,9 +1203,19 @@ function botsDeleteProfile(
         new Error('只能分离属于该 Bot 的任务'),
         { code: 'PRECONDITION_FAILED' },
       );
+      // Group-chat lanes hold only hidden group turns; they are never kept as
+      // standalone task history. The group's own timeline keeps what was said.
+      const hasLinkRoles = tableColumns(db, 'bot_session_links').has('role');
+      if (hasLinkRoles) {
+        db.prepare(`UPDATE sessions SET status = 'deleted', updated_at = ?
+          WHERE source = 'bot' AND id IN (${placeholders}) AND id IN
+            (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role = 'group')`)
+          .run(at, ...sessionIds, botId);
+      }
       db.prepare(`UPDATE sessions SET source = 'desktop', status = ?, updated_at = ?
-        WHERE source = 'bot' AND id IN (${placeholders})`)
-        .run(status, at, ...sessionIds);
+        WHERE source = 'bot' AND id IN (${placeholders})${hasLinkRoles ? ` AND id NOT IN
+          (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role = 'group')` : ''}`)
+        .run(status, at, ...sessionIds, ...(hasLinkRoles ? [botId] : []));
     }
 
     const hasMediaRefs = Boolean(db.prepare(

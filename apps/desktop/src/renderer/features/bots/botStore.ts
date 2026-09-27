@@ -135,10 +135,11 @@ function normalizeStringList(value: unknown): string[] {
 export interface BotSessionProjection {
   id: string;
   title: string;
-  kind: 'chat' | 'worker' | 'history';
+  /** `group` is a hidden group-chat lane; see botGroupLane.ts before counting sessions. */
+  kind: 'chat' | 'worker' | 'history' | 'group';
   updatedAt: number;
   status?: 'active' | 'archived' | 'deleted';
-  role?: 'canonical' | 'delegation' | 'history';
+  role?: 'canonical' | 'delegation' | 'history' | 'group';
   profileVersion?: number;
   runtimeSnapshot?: {
     profileVersion: number;

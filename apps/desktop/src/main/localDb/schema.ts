@@ -338,7 +338,10 @@ export const botProfileVersions = sqliteTable(
   }),
 );
 
-/** Canonical, delegation-linked and archived/history Session projections for a Bot. */
+/**
+ * Canonical, delegation-linked, group-lane and archived/history Session projections for a Bot.
+ * A `group` link is the Bot's hidden lane in one Bot group (`route_key = group:<groupId>`).
+ */
 export const botSessionLinks = sqliteTable(
   'bot_session_links',
   {
@@ -351,7 +354,7 @@ export const botSessionLinks = sqliteTable(
       .references(() => sessions.id, { onDelete: 'cascade' }),
     /** ProfileVersion pinned when this Session became canonical/delegation-linked. */
     profileVersion: integer('profile_version').notNull().default(1),
-    role: text('role', { enum: ['canonical', 'history', 'delegation'] }).notNull(),
+    role: text('role', { enum: ['canonical', 'history', 'delegation', 'group'] }).notNull(),
     routeKey: text('route_key'),
     createdAt: integer('created_at').notNull(),
     archivedAt: integer('archived_at'),
@@ -544,6 +547,83 @@ export const botDirectMessages = sqliteTable(
       t.sequence,
     ),
     idxThreadCreated: index('idx_bot_direct_messages_thread_created').on(t.threadId, t.createdAt),
+  }),
+);
+
+/** A user-owned group chat of local Bots (docs/product-rules/bot-group-chat.md). */
+export const botGroups = sqliteTable(
+  'bot_groups',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    /** Who answers a user message without @mentions: every member or nobody. */
+    replyMode: text('reply_mode', { enum: ['all', 'mentioned'] })
+      .notNull()
+      .default('all'),
+    /** `auto`: broadcast rounds think in parallel first; `sequential`: always one at a time. */
+    speakingMode: text('speaking_mode', { enum: ['auto', 'sequential'] })
+      .notNull()
+      .default('auto'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxUpdated: index('idx_bot_groups_updated').on(t.updatedAt),
+  }),
+);
+
+/** Ordered membership. Deleting a Bot profile removes its memberships. */
+export const botGroupMembers = sqliteTable(
+  'bot_group_members',
+  {
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    /** Highest group message sequence already delivered to this Bot's group lane. */
+    lastSeenSequence: integer('last_seen_sequence').notNull().default(0),
+    joinedAt: integer('joined_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.groupId, t.botId] }),
+    idxBot: index('idx_bot_group_members_bot').on(t.botId),
+  }),
+);
+
+/** The group's authoritative multi-author timeline. Author names are snapshots. */
+export const botGroupMessages = sqliteTable(
+  'bot_group_messages',
+  {
+    id: text('id').primaryKey(),
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    kind: text('kind', { enum: ['message', 'round-end', 'notice'] })
+      .notNull()
+      .default('message'),
+    authorKind: text('author_kind', { enum: ['user', 'bot', 'system'] }).notNull(),
+    /** Not a foreign key: messages outlive the authoring Bot. */
+    authorBotId: text('author_bot_id'),
+    authorName: text('author_name').notNull().default(''),
+    content: text('content').notNull().default(''),
+    mentionsJson: text('mentions_json').notNull().default('{"all":false,"botIds":[]}'),
+    noticeCode: text('notice_code'),
+    /** Renderer idempotency key for user messages. */
+    clientId: text('client_id'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqGroupSequence: uniqueIndex('uniq_bot_group_messages_group_sequence').on(
+      t.groupId,
+      t.sequence,
+    ),
+    uniqGroupClient: uniqueIndex('uniq_bot_group_messages_group_client')
+      .on(t.groupId, t.clientId)
+      .where(sql`${t.clientId} IS NOT NULL`),
   }),
 );
 

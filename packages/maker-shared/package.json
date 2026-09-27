@@ -77,6 +77,7 @@
     "./codex-usage-buckets": "./src/codexUsageBuckets.ts",
     "./botCollaboration": "./src/botCollaboration.ts",
     "./botDirectMessage": "./src/botDirectMessage.ts",
+    "./botGroupChat": "./src/botGroupChat.ts",
     "./botDelegation": "./src/botDelegation.ts",
     "./botTimeline": "./src/botTimeline.ts",
     "./remote-desktop-viewer": "./src/remote-desktop/viewerRuntime.js",

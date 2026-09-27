@@ -53,6 +53,12 @@ export type DbTxName =
   | 'bots.deleteProfile'
   | 'bots.prepareProfileDeletion'
   | 'bots.persistSessionPermission'
+  | 'bots.createGroupLane'
+  | 'botGroups.create'
+  | 'botGroups.setMembers'
+  | 'botGroups.delete'
+  | 'botGroups.archiveLanes'
+  | 'botGroups.appendMessage'
   | 'im.rotateSession'
   | 'wechatActivateBindingEpoch'
   | 'wechatCommitPollBatch'
@@ -784,6 +790,71 @@ export interface BotsCreateDelegationArgs {
   session: BotsReplaceCanonicalSessionArgs['session'];
 }
 
+export interface BotGroupsCreateLaneArgs {
+  botId: string;
+  groupId: string;
+  routeKey: string;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+export interface BotGroupsCreateLaneResult {
+  sessionId: string;
+  created: boolean;
+}
+
+export interface BotGroupsCreateArgs {
+  groupId: string;
+  name: string;
+  botIds: string[];
+  now: number;
+}
+
+export interface BotGroupsSetMembersArgs {
+  groupId: string;
+  botIds: string[];
+  routeKey: string;
+  now: number;
+}
+
+export interface BotGroupsSetMembersResult {
+  archivedSessionIds: string[];
+}
+
+export interface BotGroupsDeleteArgs {
+  groupId: string;
+  routeKey: string;
+  now: number;
+}
+
+export interface BotGroupsArchiveLanesArgs {
+  routeKey: string;
+  /** null archives every member's lane in the group. */
+  botIds: string[] | null;
+  now: number;
+}
+
+export interface BotGroupsAppendMessageArgs {
+  message: {
+    id: string;
+    groupId: string;
+    kind: 'message' | 'round-end' | 'notice';
+    authorKind: 'user' | 'bot' | 'system';
+    authorBotId: string | null;
+    authorName: string;
+    content: string;
+    mentionsJson: string;
+    noticeCode: string | null;
+    clientId: string | null;
+    createdAt: number;
+  };
+}
+
+export interface BotGroupsAppendMessageResult {
+  id: string;
+  sequence: number;
+  created: boolean;
+}
+
 export interface BotsReopenDelegationArgs {
   worktreePath?: string | null;
   maxActiveChildren: number;
@@ -1223,6 +1294,12 @@ export type DbTxArgsByName = {
   'bots.deleteProfile': BotsDeleteProfileArgs;
   'bots.prepareProfileDeletion': { botId: string };
   'bots.persistSessionPermission': { sessionId: string; mode: string };
+  'bots.createGroupLane': BotGroupsCreateLaneArgs;
+  'botGroups.create': BotGroupsCreateArgs;
+  'botGroups.setMembers': BotGroupsSetMembersArgs;
+  'botGroups.delete': BotGroupsDeleteArgs;
+  'botGroups.archiveLanes': BotGroupsArchiveLanesArgs;
+  'botGroups.appendMessage': BotGroupsAppendMessageArgs;
   'im.rotateSession': ImRotateSessionArgs;
   wechatActivateBindingEpoch: WechatActivateBindingEpochArgs;
   wechatCommitPollBatch: WechatCommitPollBatchArgs;
@@ -1302,6 +1379,12 @@ export type DbTxResultByName = {
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
   'bots.prepareProfileDeletion': undefined;
   'bots.persistSessionPermission': { updated: boolean };
+  'bots.createGroupLane': BotGroupsCreateLaneResult;
+  'botGroups.create': undefined;
+  'botGroups.setMembers': BotGroupsSetMembersResult;
+  'botGroups.delete': { archivedSessionIds: string[] };
+  'botGroups.archiveLanes': { archivedSessionIds: string[] };
+  'botGroups.appendMessage': BotGroupsAppendMessageResult;
   'im.rotateSession': ImRotateSessionResult;
   wechatActivateBindingEpoch: WechatActivateBindingEpochResult;
   wechatCommitPollBatch: WechatCommitPollBatchResult;

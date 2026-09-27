@@ -2724,6 +2724,8 @@ export interface SessionChatState {
   lastStopWasSideTask: boolean;
   /** Successful automatic private replies remain in history without completion alerts. */
   lastStopWasPrivateReply?: boolean;
+  /** The last turn ran in a hidden Bot group lane; the group chat owns its alerts. */
+  lastStopWasGroupLane?: boolean;
   /**
    * 后台 subagent「唤醒桥接」标记(claude-code 专用)。
    *
@@ -2930,6 +2932,7 @@ function createInitialState(): SessionChatState {
     planModeRev: 0,
     lastStopWasSideTask: false,
     lastStopWasPrivateReply: false,
+    lastStopWasGroupLane: false,
     pendingTaskWake: 0,
     pendingTaskWakeDuringTurn: 0,
     pendingTaskWakeStarted: false,
@@ -6089,6 +6092,7 @@ export function handleStreamEvent(
         pendingRemoteDesktopConfirmation: null,
         pendingRemoteDesktopConfirmationQueue: [],
         lastStopWasPrivateReply: (incomingMeta ?? state.lastAgentMeta)?.botPrivateReply === true,
+        lastStopWasGroupLane: (incomingMeta ?? state.lastAgentMeta)?.botGroupLane === true,
         // agent-meta: turn 结束清空，下一 turn 重新累积。
         lastAgentMeta: null,
         queueAbortPending: false,
@@ -7001,6 +7005,7 @@ function handleStatusUpdate(
     // 真实 turn 的起/止都把 side-task 标记复位(它只描述「最近一次 stop」)。
     lastStopWasSideTask: false,
     lastStopWasPrivateReply: update.isRunning ? false : state.lastStopWasPrivateReply,
+    lastStopWasGroupLane: update.isRunning ? false : state.lastStopWasGroupLane,
     // 唤醒桥接:仅在 wake turn 真正启动(isRunning:true)时消费一个计数,或 wake turn
     // 失败时消费——后者表现为 Done + !isRunning 且主 turn 已经结束
     // (state.agentStatus.isRunning 已为 false),此时 isTurnStart 永远不会
@@ -17107,6 +17112,8 @@ export const makerChatStore = {
   wasLastStopSideTask,
   wasLastStopPrivateReply: (sessionId: string): boolean =>
     sessions.get(sessionId)?.lastStopWasPrivateReply === true,
+  wasLastStopGroupLane: (sessionId: string): boolean =>
+    sessions.get(sessionId)?.lastStopWasGroupLane === true,
   /** 输入框推荐后台完成配对用的 non-creating turn 起点。 */
   getPromptRecommendationRunStartedAt,
   /** 输入框推荐后台完成资格的 non-creating 终态快照。 */

@@ -7903,6 +7903,102 @@
       "empty": "There are no messages to view yet.",
       "limitReached": "This teammate conversation reached its limit; both teammates returned to their main tasks"
     },
+    "groupChat": {
+      "memberSeparator": ", ",
+      "memberCount_one": "{{count}} teammate",
+      "memberCount_other": "{{count}} teammates",
+      "nameLabel": "Group Name",
+      "waitingConfirm": "{{name}} is waiting for your go-ahead",
+      "loadFailedTitle": "Couldn’t Load This Group Chat",
+      "loadFailedDescription": "Cindy can’t read this group chat right now. Try again, or go back to Teammates.",
+      "unavailableTitle": "This Group Chat Is No Longer Available",
+      "unavailableDescription": "It may have been deleted. Go back to Teammates to open another group chat or teammate.",
+      "sidebar": {
+        "title": "Group Chats",
+        "empty": "No messages yet",
+        "preview": "{{name}}: {{text}}",
+        "previewYou": "You: {{text}}",
+        "waiting": "Waiting for your go-ahead"
+      },
+      "create": {
+        "title": "New Group Chat",
+        "description": "Put a few teammates in one group. Say something and they’ll chime in together.",
+        "namePlaceholder": "e.g. Weekend Trip",
+        "nameRequired": "Enter a group name",
+        "membersLabel": "Choose Teammates",
+        "selectedCount_one": "{{count}} selected, up to {{max}}",
+        "selectedCount_other": "{{count}} selected, up to {{max}}",
+        "minMembers": "Choose at least {{min}} teammates",
+        "notEnoughBots": "You need at least {{min}} available teammates to start a group chat. Add a teammate first.",
+        "submit": "Create Group Chat",
+        "failed": "Couldn’t create the group chat. Try again in a moment."
+      },
+      "memberStatus": {
+        "paused": "Paused",
+        "unavailable": "Unavailable"
+      },
+      "mention": {
+        "all": "Everyone",
+        "allHint": "Everyone replies",
+        "label": "Mention a teammate"
+      },
+      "composer": {
+        "label": "Group chat message",
+        "placeholder": "Say something to the group. @ a teammate to have only them reply…",
+        "noMembers": "No teammates here can reply right now. Add one in group settings.",
+        "tooLong": "This message is too long. The limit is {{max}} characters.",
+        "sendFailed": "Message not sent. Try again in a moment.",
+        "stopFailed": "Couldn’t stop this round. Try again.",
+        "stop": "Stop This Round"
+      },
+      "timeline": {
+        "loadEarlier": "Show Earlier Messages",
+        "loadEarlierFailed": "Couldn’t load earlier messages. Try again.",
+        "emptyTitle": "No messages in this group yet",
+        "emptyDescription": "Say something to get started and your teammates will join in. @ a teammate to have only them reply.",
+        "roundEnded": "Teammates are done",
+        "continue": "Continue Discussion",
+        "continueFailed": "Couldn’t continue the discussion. Try again."
+      },
+      "notice": {
+        "memberFailed": "{{name}} couldn’t reply this time",
+        "memberTimeout": "{{name}} took too long to reply and was skipped this time",
+        "memberUnavailable": "{{name}} is unavailable and didn’t speak this time"
+      },
+      "settings": {
+        "open": "Group Settings",
+        "title": "Group Settings",
+        "members": "Members",
+        "remove": "Remove",
+        "removeNamed": "Remove {{name}} from the group",
+        "minMembers": "A group chat needs at least {{min}} teammates",
+        "maxMembers": "Up to {{max}}",
+        "noMoreBots": "No other teammates are available to add",
+        "nameSaveFailed": "Couldn’t save the group name. The previous name was kept.",
+        "membersSaveFailed": "Couldn’t update members. Try again.",
+        "replyMode": "When No One Is @Mentioned",
+        "replyModeAll": "Anyone Can Reply",
+        "replyModeMentioned": "Only @Mentioned Reply",
+        "replyModeNote": "Teammates with nothing to add stay quiet. Each round runs up to 3 passes and 10 messages, then waits for you to click “Continue Discussion”.",
+        "replyModeSaveFailed": "Couldn’t save the reply setting. Try again.",
+        "delete": "Delete Group Chat",
+        "deleteNote": "Only this group chat and its messages are deleted. The teammates, their memory, and their private chats aren’t affected.",
+        "deleteConfirmTitle": "Delete “{{name}}”?",
+        "deleteFailed": "Couldn’t delete the group chat. Try again in a moment.",
+        "speakingMode": "Speaking order",
+        "speakingModeAuto": "Automatic",
+        "speakingModeSequential": "One at a time",
+        "speakingModeAutoNote": "Without @mentions or with @Everyone, teammates think at the same time in the first pass, then reply one after another. Mentioned teammates answer in the order you mentioned them.",
+        "speakingModeSequentialNote": "One teammate speaks at a time, and each one sees the replies before it.",
+        "speakingModeSaveFailed": "Couldn't save the speaking order. Try again."
+      },
+      "errors": {
+        "memberLimit": "A group chat needs 2–6 teammates",
+        "memberUnavailable": "One of these teammates is unavailable. Choose another and try again.",
+        "notFound": "This group chat no longer exists",
+        "hostNotReady": "Cindy is still getting ready. Try again in a moment."
+      }
+    },
     "joined": {
       "today": "Joined today",
       "yesterday": "Joined yesterday",
