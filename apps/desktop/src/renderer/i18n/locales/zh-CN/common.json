@@ -7972,7 +7972,15 @@
         "empty": "还没有消息",
         "preview": "{{name}}：{{text}}",
         "previewYou": "你：{{text}}",
-        "waiting": "在等你确认"
+        "waiting": "在等你确认",
+        "planProposed": "{{name}}：安排好了，等你开始",
+        "planProposedAnonymous": "安排好了，等你开始",
+        "planRunning": "分工 {{step}}/{{total}} · {{name}}正在做",
+        "planRunningNoStep": "{{name}}正在做",
+        "planPlanning": "{{name}}正在安排…",
+        "planStepDone": "{{name}}做完了，等你继续",
+        "planStepFailed": "{{name}}没做完",
+        "planWaitingAnonymous": "分工停下了，等你看看"
       },
       "create": {
         "title": "新建群聊",
@@ -8003,7 +8011,17 @@
         "tooLong": "消息太长了，最多 {{max}} 个字",
         "sendFailed": "消息没有发出去，请稍后重试",
         "stopFailed": "没能停下这一轮，请再试一次",
-        "stop": "停止这一轮"
+        "stop": "停止这一轮",
+        "more": "更多操作",
+        "division": "安排分工",
+        "divisionDescription": "让负责人先分好工，伙伴们一步步做",
+        "divisionBusy": "正在分工，做完或停止后才能安排新的",
+        "divisionTag": "分工",
+        "removeDivision": "去掉分工",
+        "placeholderDivision": "说说要做成什么，负责人会先分好工…",
+        "placeholderPlanProposed": "想换人或改步骤，直接说…",
+        "placeholderPlanWaiting": "想让{{name}}改改，直接说…",
+        "placeholderPlanRunning": "说的话会带给正在做的{{name}}…"
       },
       "timeline": {
         "loadEarlier": "查看更早的消息",
@@ -8012,12 +8030,28 @@
         "emptyDescription": "说一句话开始，伙伴们会接着聊。@ 某位伙伴就只让它回答。",
         "roundEnded": "伙伴们说完了",
         "continue": "继续讨论",
-        "continueFailed": "没能继续讨论，请再试一次"
+        "continueFailed": "没能继续讨论，请再试一次",
+        "nextStep": "下一步：",
+        "continuePlan": "继续",
+        "continuePlanFailed": "没能继续下一步，请再试一次",
+        "stepFailed": "{{name}}没做完",
+        "retryStep": "重试",
+        "retryFailed": "没能重试这一步，请再试一次",
+        "endPlan": "结束分工",
+        "planDone_one": "{{count}} 步都做完了",
+        "planDone_other": "{{count}} 步都做完了",
+        "planDoneGeneric": "分工做完了"
       },
       "notice": {
         "memberFailed": "{{name}}这次没能回复",
         "memberTimeout": "{{name}}太久没有回复，这次先跳过",
-        "memberUnavailable": "{{name}}现在不可用，这次没有发言"
+        "memberUnavailable": "{{name}}现在不可用，这次没有发言",
+        "planFailed": "{{name}}没排出分工，可以再试一次",
+        "planStopped": "分工已停止",
+        "workdirUnavailable": "{{name}}找不到工作目录",
+        "stepFailed": "{{name}}这一步出错了，没做完",
+        "stepTimeout": "{{name}}太久没做完，这一步先停下",
+        "stepUnavailable": "{{name}}现在不可用，这一步没法做"
       },
       "settings": {
         "open": "群设置",
@@ -8044,13 +8078,55 @@
         "speakingModeSequential": "始终轮流",
         "speakingModeAutoNote": "没有 @ 人或 @所有人时，第一圈大家同时想，之后轮流接话；@ 了伙伴就按 @ 的先后轮流。",
         "speakingModeSequentialNote": "每次只有一位伙伴发言，后说的能看到前面的回答。",
-        "speakingModeSaveFailed": "发言方式没能保存，请再试一次"
+        "speakingModeSaveFailed": "发言方式没能保存，请再试一次",
+        "setOrganizer": "设为负责人",
+        "setOrganizerNamed": "把 {{name}} 设为负责人",
+        "organizerNote": "负责人帮你安排谁做哪一步，默认是第一位伙伴。",
+        "organizerSaveFailed": "负责人没能更换，请再试一次",
+        "projectDir": "项目文件夹",
+        "projectDirNone": "没选",
+        "projectDirChoose": "选择",
+        "projectDirChange": "更换",
+        "projectDirClear": "清除",
+        "projectDirNote": "分工做事时，伙伴们在这里干活。不选也行，会用这个群自己的文件夹；选了 git 项目，每次分工会新开一个 worktree 和分支，不动你手上的代码。",
+        "projectDirSaveFailed": "项目文件夹没能保存，确认文件夹还在后再试"
       },
       "errors": {
         "memberLimit": "一个群需要 2–6 位伙伴",
         "memberUnavailable": "有伙伴现在不可用，换一位再试",
         "notFound": "这个群聊已不存在",
-        "hostNotReady": "Cindy 还在准备中，请稍后重试"
+        "hostNotReady": "Cindy 还在准备中，请稍后重试",
+        "planOpen": "正在分工，做完或停止后才能安排新的",
+        "planClosed": "这个安排已经结束或更新了"
+      },
+      "organizer": "负责人",
+      "plan": {
+        "intro_one": "这件事分 {{count}} 步，我这样分工：",
+        "intro_other": "这件事分 {{count}} 步，我这样分工：",
+        "missing": "这个安排已经读不到了",
+        "start": "开始",
+        "dismiss": "不用了",
+        "editHint": "想换人或改步骤，直接说",
+        "pauseNote": "每做完一步会停下来，等你点「继续」。",
+        "superseded": "已更新",
+        "dismissed": "不用了",
+        "stopped": "已停止",
+        "stepDone": "做完了",
+        "stepRunning": "正在做",
+        "stepFailed": "没做完",
+        "stepPending": "还没开始",
+        "stepMenuTitle": "谁来做这一步",
+        "removeStep": "删掉这一步",
+        "keepOneStep": "至少留一步",
+        "startFailed": "没能开始分工，请再试一次",
+        "dismissFailed": "没能结束这个安排，请再试一次",
+        "editFailed": "这一步没改成，请再试一次"
+      },
+      "speaking": {
+        "planning": "正在安排…"
+      },
+      "files": {
+        "openFailed": "文件没能打开，可能已被移动或删除"
       }
     },
     "joined": {

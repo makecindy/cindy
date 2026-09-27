@@ -34,8 +34,11 @@ import {
   botGroupsAppendMessage,
   botGroupsArchiveLanes,
   botGroupsCreate,
+  botGroupsCreatePlan,
   botGroupsDelete,
+  botGroupsRemovePlanStep,
   botGroupsSetMembers,
+  botGroupsSettleStep,
 } from './botGroupsTx.js';
 import type { BotGroupsCreateLaneArgs, BotGroupsCreateLaneResult } from '../../client/tx/types.js';
 
@@ -166,6 +169,12 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return botGroupsArchiveLanes(db, txArgs as Parameters<typeof botGroupsArchiveLanes>[1]);
     case 'botGroups.appendMessage':
       return botGroupsAppendMessage(db, txArgs as Parameters<typeof botGroupsAppendMessage>[1]);
+    case 'botGroups.createPlan':
+      return botGroupsCreatePlan(db, txArgs as Parameters<typeof botGroupsCreatePlan>[1]);
+    case 'botGroups.settleStep':
+      return botGroupsSettleStep(db, txArgs as Parameters<typeof botGroupsSettleStep>[1]);
+    case 'botGroups.removePlanStep':
+      return botGroupsRemovePlanStep(db, txArgs as Parameters<typeof botGroupsRemovePlanStep>[1]);
     case 'im.rotateSession':
       return imRotateSession(db, txArgs);
     case 'wechatActivateBindingEpoch':

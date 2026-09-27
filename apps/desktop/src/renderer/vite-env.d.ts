@@ -5273,6 +5273,21 @@ interface ElectronAPI {
     ) => Promise<import('../shared/botGroupChat').BotGroupSendResult>;
     continueBotGroupRound: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     stopBotGroupRound: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    startBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    dismissBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    continueBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    retryBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    editBotGroupPlanStep: (
+      input: import('../shared/botGroupChat').BotGroupPlanEditInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     onBotGroupChanged: (
       cb: (
         payload: import('../shared/botGroupChat').BotGroupChangedPayload,

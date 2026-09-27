@@ -7974,7 +7974,15 @@
         "empty": "No messages yet",
         "preview": "{{name}}: {{text}}",
         "previewYou": "You: {{text}}",
-        "waiting": "Waiting for your go-ahead"
+        "waiting": "Waiting for your go-ahead",
+        "planProposed": "{{name}}: plan ready, waiting for you to start",
+        "planProposedAnonymous": "Plan ready, waiting for you to start",
+        "planRunning": "Work split {{step}}/{{total}} · {{name}} is working",
+        "planRunningNoStep": "{{name}} is working on a step",
+        "planPlanning": "{{name}} is splitting the work…",
+        "planStepDone": "{{name}} is done, waiting for you to continue",
+        "planStepFailed": "{{name}} didn’t finish",
+        "planWaitingAnonymous": "Work split paused, waiting for you"
       },
       "create": {
         "title": "New Group Chat",
@@ -8005,7 +8013,17 @@
         "tooLong": "This message is too long. The limit is {{max}} characters.",
         "sendFailed": "Message not sent. Try again in a moment.",
         "stopFailed": "Couldn’t stop this round. Try again.",
-        "stop": "Stop This Round"
+        "stop": "Stop This Round",
+        "more": "More Actions",
+        "division": "Split the Work",
+        "divisionDescription": "The organizer splits the work first, then teammates take it step by step",
+        "divisionBusy": "A work split is underway. Finish or stop it before starting another.",
+        "divisionTag": "Work split",
+        "removeDivision": "Remove Work Split",
+        "placeholderDivision": "Describe what to get done. The organizer will split the work first…",
+        "placeholderPlanProposed": "To change who does what, just say so…",
+        "placeholderPlanWaiting": "Want {{name}} to change something? Just say so…",
+        "placeholderPlanRunning": "What you say goes to {{name}}, who’s working on it…"
       },
       "timeline": {
         "loadEarlier": "Show Earlier Messages",
@@ -8014,12 +8032,28 @@
         "emptyDescription": "Say something to get started and your teammates will join in. @ a teammate to have only them reply.",
         "roundEnded": "Teammates are done",
         "continue": "Continue Discussion",
-        "continueFailed": "Couldn’t continue the discussion. Try again."
+        "continueFailed": "Couldn’t continue the discussion. Try again.",
+        "nextStep": "Next:",
+        "continuePlan": "Start Next Step",
+        "continuePlanFailed": "Couldn’t start the next step. Try again.",
+        "stepFailed": "{{name}} didn’t finish",
+        "retryStep": "Retry Step",
+        "retryFailed": "Couldn’t retry this step. Try again.",
+        "endPlan": "End Work Split",
+        "planDone_one": "The step is done",
+        "planDone_other": "All {{count}} steps are done",
+        "planDoneGeneric": "Work split finished"
       },
       "notice": {
         "memberFailed": "{{name}} couldn’t reply this time",
         "memberTimeout": "{{name}} took too long to reply and was skipped this time",
-        "memberUnavailable": "{{name}} is unavailable and didn’t speak this time"
+        "memberUnavailable": "{{name}} is unavailable and didn’t speak this time",
+        "planFailed": "{{name}} couldn’t work out a split. Try again.",
+        "planStopped": "Work split stopped",
+        "workdirUnavailable": "{{name}} can’t find the working directory",
+        "stepFailed": "{{name}} ran into a problem and didn’t finish this step",
+        "stepTimeout": "{{name}} took too long, so this step was stopped",
+        "stepUnavailable": "{{name}} is unavailable and can’t do this step"
       },
       "settings": {
         "open": "Group Settings",
@@ -8046,13 +8080,55 @@
         "speakingModeSequential": "One at a time",
         "speakingModeAutoNote": "Without @mentions or with @Everyone, teammates think at the same time in the first pass, then reply one after another. Mentioned teammates answer in the order you mentioned them.",
         "speakingModeSequentialNote": "One teammate speaks at a time, and each one sees the replies before it.",
-        "speakingModeSaveFailed": "Couldn't save the speaking order. Try again."
+        "speakingModeSaveFailed": "Couldn't save the speaking order. Try again.",
+        "setOrganizer": "Make Organizer",
+        "setOrganizerNamed": "Make {{name}} the organizer",
+        "organizerNote": "The organizer decides who does each step. By default, it’s the first teammate.",
+        "organizerSaveFailed": "Couldn’t change the organizer. Try again.",
+        "projectDir": "Project Folder",
+        "projectDirNone": "None selected",
+        "projectDirChoose": "Choose Folder",
+        "projectDirChange": "Change Folder",
+        "projectDirClear": "Clear Folder",
+        "projectDirNote": "Teammates work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
+        "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again."
       },
       "errors": {
         "memberLimit": "A group chat needs 2–6 teammates",
         "memberUnavailable": "One of these teammates is unavailable. Choose another and try again.",
         "notFound": "This group chat no longer exists",
-        "hostNotReady": "Cindy is still getting ready. Try again in a moment."
+        "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
+        "planOpen": "A work split is underway. Finish or stop it before starting another.",
+        "planClosed": "This plan has already ended or been updated."
+      },
+      "organizer": "Organizer",
+      "plan": {
+        "intro_one": "This takes {{count}} step. Here’s who does it:",
+        "intro_other": "This takes {{count}} steps. Here’s who does what:",
+        "missing": "This plan is no longer available",
+        "start": "Start Plan",
+        "dismiss": "Skip Plan",
+        "editHint": "To change who does what, just say so",
+        "pauseNote": "Work pauses after each step until you click “Start Next Step”.",
+        "superseded": "Updated",
+        "dismissed": "Skipped",
+        "stopped": "Stopped",
+        "stepDone": "Done",
+        "stepRunning": "In progress",
+        "stepFailed": "Not finished",
+        "stepPending": "Not started",
+        "stepMenuTitle": "Who should do this step",
+        "removeStep": "Remove This Step",
+        "keepOneStep": "Keep at least one",
+        "startFailed": "Couldn’t start the plan. Try again.",
+        "dismissFailed": "Couldn’t end this plan. Try again.",
+        "editFailed": "Couldn’t change this step. Try again."
+      },
+      "speaking": {
+        "planning": "Splitting the work…"
+      },
+      "files": {
+        "openFailed": "Couldn’t open the file. It may have been moved or deleted."
       }
     },
     "joined": {

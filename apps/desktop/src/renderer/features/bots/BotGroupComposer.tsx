@@ -7,14 +7,25 @@
  * 文字发送失败后重发沿用同一个 clientId，main 会返回第一次写入的那条消息。一轮进行
  * 中输入框为空时，发送按钮变成停止；有文字时照常发送——插话本身就会作废当前一轮
  * （docs/product-rules/bot-group-chat.md §4.4）。
+ *
+ * 「+」菜单里的「安排分工」（§7.2）给输入框加上「分工」标签：带标签发出的消息一定交给
+ * 负责人出安排（`division: true`），发出后标签清掉。安排进行中或等继续时不能再安排新的，
+ * 菜单项置灰并说明原因。占位文字跟随未结束的安排，告诉用户这时说的话会交给谁。
  */
 import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { Users } from 'lucide-react';
+import { Plus, Users, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SendButton } from '@/components/new-chat/SendButton';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Tip } from '@/components/ui/tooltip';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { BOT_GROUP_MESSAGE_MAX_CHARS, type BotGroupMemberView } from '../../../shared/botGroupChat';
@@ -26,7 +37,12 @@ import {
   resolveBotGroupMentions,
   type BotGroupTrackedMention,
 } from './botGroupMentions';
-import { botGroupErrorKey, isActiveBotGroupMember } from './botGroupPresentation';
+import {
+  botGroupErrorKey,
+  isActiveBotGroupMember,
+  isBotGroupDivisionBlocked,
+  type BotGroupComposerPlanState,
+} from './botGroupPresentation';
 import { botGroupApi } from './botGroupStore';
 
 type MentionOption =
@@ -41,11 +57,14 @@ export function BotGroupComposer({
   groupId,
   members,
   running,
+  planState = null,
   onSent,
 }: {
   groupId: string;
   members: readonly BotGroupMemberView[];
   running: boolean;
+  /** The group's open plan, for placeholders and the 「安排分工」 gate. */
+  planState?: BotGroupComposerPlanState | null;
   /** Called after main accepted the message, so the view can re-read at once. */
   onSent: () => void;
 }) {
@@ -58,12 +77,18 @@ export function BotGroupComposer({
   const [dismissedStart, setDismissedStart] = useState<number | null>(null);
   const [tracked, setTracked] = useState<BotGroupTrackedMention[]>([]);
   const [stopping, setStopping] = useState(false);
+  /** 「分工」 tag from 「+」→「安排分工」: this message goes to the organizer for a plan. */
+  const [division, setDivision] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textRef = useRef(text);
+  textRef.current = text;
+  const focusInputOnMenuCloseRef = useRef(false);
   const pendingCaretRef = useRef<number | null>(null);
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
   /** Idempotency key for the text currently being (re)sent. */
-  const attemptRef = useRef<{ text: string; clientId: string } | null>(null);
+  const attemptRef = useRef<{ text: string; clientId: string; division: boolean } | null>(null);
 
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
   const allLabel = t('bots.groupChat.mention.all');
@@ -87,6 +112,7 @@ export function BotGroupComposer({
   const hasMembers = activeMembers.length > 0;
   const canSend = trimmed.length > 0 && !tooLong && hasMembers;
   const showStop = running && trimmed.length === 0;
+  const divisionBlocked = isBotGroupDivisionBlocked(planState);
 
   // Auto-grow; the CSS max height caps it and turns on scrolling.
   useLayoutEffect(() => {
@@ -129,10 +155,11 @@ export function BotGroupComposer({
       toast.error(t('bots.groupChat.composer.sendFailed'));
       return;
     }
+    // The tag changes what main does with the text, so it is part of the idempotency key.
     const attempt =
-      attemptRef.current?.text === trimmed
+      attemptRef.current?.text === trimmed && attemptRef.current.division === division
         ? attemptRef.current
-        : { text: trimmed, clientId: crypto.randomUUID() };
+        : { text: trimmed, clientId: crypto.randomUUID(), division };
     attemptRef.current = attempt;
     const mentions = resolveBotGroupMentions(trimmed, {
       members: members.map((member) => ({ botId: member.botId, name: member.name })),
@@ -147,8 +174,11 @@ export function BotGroupComposer({
     setCaret(0);
     setTracked([]);
     setDismissedStart(null);
+    setDivision(false);
     const owner = getDataOwnerGeneration();
     const restore = () => {
+      // The tag comes back only with its own draft, never onto newly typed text.
+      if (attempt.division && !textRef.current) setDivision(true);
       setText((current) => (current ? current : draft));
     };
     try {
@@ -157,6 +187,7 @@ export function BotGroupComposer({
         text: attempt.text,
         mentions,
         clientId: attempt.clientId,
+        ...(attempt.division ? { division: true } : {}),
       });
       if (!isDataOwnerGenerationCurrent(owner)) return;
       if (!result.ok) {
@@ -198,6 +229,19 @@ export function BotGroupComposer({
       ? t('bots.groupChat.composer.tooLong', { max: BOT_GROUP_MESSAGE_MAX_CHARS })
       : null;
   const actionLabel = showStop ? t('bots.groupChat.composer.stop') : t('bots.send');
+  const moreLabel = t('bots.groupChat.composer.more');
+  const removeDivisionLabel = t('bots.groupChat.composer.removeDivision');
+  const placeholder = !hasMembers
+    ? t('bots.groupChat.composer.noMembers')
+    : division
+      ? t('bots.groupChat.composer.placeholderDivision')
+      : planState?.kind === 'proposed'
+        ? t('bots.groupChat.composer.placeholderPlanProposed')
+        : planState?.kind === 'running' && planState.botName
+          ? t('bots.groupChat.composer.placeholderPlanRunning', { name: planState.botName })
+          : planState?.kind === 'waiting' && planState.stepDone && planState.botName
+            ? t('bots.groupChat.composer.placeholderPlanWaiting', { name: planState.botName })
+            : t('bots.groupChat.composer.placeholder');
 
   return (
     <div className="shrink-0 px-5 pb-4 pt-2">
@@ -245,6 +289,30 @@ export function BotGroupComposer({
           </div>
         ) : null}
         <div className="flex flex-col gap-2 rounded-xl border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)] px-3.5 pb-2.5 pt-3 transition-colors focus-within:border-[var(--chat-input-border-focus)]">
+          {division ? (
+            <div className="flex">
+              <span
+                data-testid="bot-group-division-tag"
+                className="inline-flex h-6 select-none items-center gap-1 rounded-full bg-[var(--surface-chip)] pl-2 pr-0.5 text-12 font-medium text-[var(--text-primary)]"
+              >
+                <Users size={12} aria-hidden className="text-[var(--text-secondary)]" />
+                {t('bots.groupChat.composer.divisionTag')}
+                <Tip text={removeDivisionLabel}>
+                  <button
+                    type="button"
+                    aria-label={removeDivisionLabel}
+                    onClick={() => {
+                      setDivision(false);
+                      textareaRef.current?.focus();
+                    }}
+                    className="flex h-5 w-5 items-center justify-center rounded-full text-[var(--text-tertiary)] outline-none transition-colors hover:bg-[var(--button-primary-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  >
+                    <X size={12} />
+                  </button>
+                </Tip>
+              </span>
+            </div>
+          ) : null}
           <textarea
             ref={textareaRef}
             value={text}
@@ -253,9 +321,7 @@ export function BotGroupComposer({
             aria-autocomplete="list"
             aria-controls={popoverOpen ? listboxId : undefined}
             aria-activedescendant={popoverOpen ? `${listboxId}-${activeIndex}` : undefined}
-            placeholder={
-              hasMembers ? t('bots.groupChat.composer.placeholder') : t('bots.groupChat.composer.noMembers')
-            }
+            placeholder={placeholder}
             onChange={(event) => {
               const value = event.target.value;
               const nextCaret = event.target.selectionStart ?? value.length;
@@ -297,14 +363,73 @@ export function BotGroupComposer({
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 void send();
+                return;
+              }
+              // Backspace at the very start of an empty input takes the 「分工」 tag off.
+              if (event.key === 'Backspace' && division && !text) {
+                event.preventDefault();
+                setDivision(false);
               }
             }}
             className="max-h-60 min-h-6 w-full resize-none overflow-y-auto bg-transparent text-15 leading-[1.6] text-[var(--chat-input-text)] outline-none placeholder:text-[var(--chat-input-placeholder)] focus-visible:outline-none"
           />
           <div className="flex min-h-7 items-center justify-between gap-3">
-            <span className="min-w-0 truncate text-12 text-[var(--text-tertiary)]" aria-live="polite">
-              {hint}
-            </span>
+            <div className="flex min-w-0 items-center gap-2">
+              <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+                <DropdownMenuTrigger asChild>
+                  <Tip text={moreLabel}>
+                    <button
+                      type="button"
+                      aria-label={moreLabel}
+                      className={cn(
+                        'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] outline-none transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                        menuOpen && 'bg-[var(--surface-chip)] text-[var(--text-primary)]',
+                      )}
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </Tip>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  side="top"
+                  align="start"
+                  sideOffset={8}
+                  className={cn(MENU_CONTENT_CLASS, 'w-72')}
+                  onCloseAutoFocus={(event) => {
+                    if (!focusInputOnMenuCloseRef.current) return;
+                    focusInputOnMenuCloseRef.current = false;
+                    event.preventDefault();
+                    textareaRef.current?.focus();
+                  }}
+                >
+                  <DropdownMenuItem
+                    disabled={divisionBlocked}
+                    className={cn(MENU_ITEM_CLASS, 'h-auto items-start gap-2.5 py-2')}
+                    onSelect={() => {
+                      focusInputOnMenuCloseRef.current = true;
+                      setDivision(true);
+                    }}
+                  >
+                    <Users size={16} aria-hidden className="mt-0.5 shrink-0 text-[var(--text-secondary)]" />
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span className="text-13 font-medium text-[var(--text-primary)]">
+                        {t('bots.groupChat.composer.division')}
+                      </span>
+                      <span className="text-12 leading-normal text-[var(--text-tertiary)]">
+                        {t(
+                          divisionBlocked
+                            ? 'bots.groupChat.composer.divisionBusy'
+                            : 'bots.groupChat.composer.divisionDescription',
+                        )}
+                      </span>
+                    </span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <span className="min-w-0 truncate text-12 text-[var(--text-tertiary)]" aria-live="polite">
+                {hint}
+              </span>
+            </div>
             <Tip text={actionLabel}>
               <SendButton
                 disabled={showStop ? stopping : !canSend}

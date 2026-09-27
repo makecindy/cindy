@@ -41,7 +41,8 @@ Bot Profile
 每条伙伴 Session 必须能反查唯一的 Bot owner 与 Profile 版本。伙伴启动的后台任务是普通
 Cindy Session，以父任务关系回到发起伙伴，但不冒充该伙伴或另一个伙伴的主任务。
 伙伴在群聊里使用独立的群专线 Session（`role = 'group'`），与主任务共享 Profile 与 Home，
-不进入主时间线；规则见 [伙伴群聊](bot-group-chat.md)。
+不进入主时间线；群里分工时的每一步由同为 `role = 'group'` 的分工 Session 完成（工作目录见下文例外）。
+规则见 [伙伴群聊](bot-group-chat.md)。
 
 ## 3. 长期会话生命周期
 
@@ -114,7 +115,9 @@ Cindy 应用，也不取消伙伴已委派的独立任务。操作中禁用重�
   索引、版本与运行期快照一致；不得把这种维护约定描述成对原始文件工具的强制隔离。
 - `workspace/` 是伙伴跨 Session 复用的唯一默认工作区。伙伴不直接绑定代码项目、不占用
   worktree——仓库级或长时间的重活通过 `start_session_task` 交给一条真正的 Cindy 任务完成
-  （见第 6.1 节）。
+  （见第 6.1 节）。唯一例外是伙伴群聊的分工 Session：它在该安排记录的群工作目录里干活，
+  git 项目时共用该安排的 worktree；工作目录每次启动都按安排记录核对，失败不回退 Home，
+  规则见 [`bot-group-chat.md`](bot-group-chat.md) 第 7 节。
 - 上下文压缩、模型 fallback、失败补偿和删除临时任务不得移动或删除 Home 内容。
 - 远端运行必须使用远端实际存在且归属于该 Bot 的 Home；在远端 Home 尚未完成供给前，不得把
   本机路径写进提示词或伪装成可访问目录。远端自有 Skill 未装配时，共享指南不引导本机 Skill

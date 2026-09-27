@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { BotGroupSummary } from '../../../../shared/botGroupChat';
+import type { BotGroupOpenPlanSummary, BotGroupSummary } from '../../../../shared/botGroupChat';
 
 vi.mock('@/hooks/useProviderOnboarding', () => ({
   useProviderOnboarding: () => ({ visible: false }),
@@ -116,10 +116,26 @@ function group(overrides: Partial<BotGroupSummary> = {}): BotGroupSummary {
       { botId: 'mimi', name: '咪咪', avatar: '', avatarColor: 'red', status: 'active' },
       { botId: 'xiaoman', name: '小满', avatar: '', avatarColor: 'blue', status: 'active' },
     ],
+    organizerBotId: 'mimi',
+    projectDir: null,
     lastMessage: { authorKind: 'bot', authorName: '阿布', preview: '下午\n有小概率阵雨', createdAt: 10 },
     speakingBotIds: [],
+    planningBotId: null,
+    openPlan: null,
     createdAt: 1,
     updatedAt: 10,
+    ...overrides,
+  };
+}
+
+function openPlan(overrides: Partial<BotGroupOpenPlanSummary> = {}): BotGroupOpenPlanSummary {
+  return {
+    id: 'p1',
+    status: 'waiting',
+    currentStep: 0,
+    stepCount: 3,
+    currentBotName: '咪咪',
+    currentStepStatus: 'done',
     ...overrides,
   };
 }
@@ -185,6 +201,71 @@ describe('BotsSidebar group chats', () => {
     // The teammate row keeps its private-chat preview.
     expect(screen.getByText('咪咪 private preview')).toBeTruthy();
     expect(screen.getAllByText('generation:lane-mimi')).toHaveLength(1);
+  });
+
+  it('previews a plan waiting for 开始 or for 继续 / 重试 instead of the latest message', async () => {
+    mocks.groups = [
+      group({ id: 'g1', name: '官网', openPlan: openPlan({ status: 'proposed', currentStep: null }) }),
+      group({ id: 'g2', name: '周报', updatedAt: 9, openPlan: openPlan() }),
+      group({
+        id: 'g3',
+        name: '海报',
+        updatedAt: 8,
+        openPlan: openPlan({ currentStep: 1, currentBotName: '小满', currentStepStatus: 'failed' }),
+      }),
+      group({
+        id: 'g4',
+        name: '旧版',
+        updatedAt: 7,
+        openPlan: openPlan({ currentBotName: null, currentStepStatus: null }),
+      }),
+    ];
+    await renderSidebar();
+    expect(screen.getByText('bots.groupChat.sidebar.planProposed:{"name":"咪咪"}')).toBeTruthy();
+    expect(screen.getByText('bots.groupChat.sidebar.planStepDone:{"name":"咪咪"}')).toBeTruthy();
+    expect(screen.getByText('bots.groupChat.sidebar.planStepFailed:{"name":"小满"}')).toBeTruthy();
+    expect(screen.getByText('bots.groupChat.sidebar.planWaitingAnonymous')).toBeTruthy();
+    // The latest message only comes back once no plan needs the user.
+    expect(screen.queryByText(/sidebar\.preview:/)).toBeNull();
+    expect(screen.queryByTestId('bot-group-running')).toBeNull();
+  });
+
+  it('shows the step in progress as 分工 k/n in the running style', async () => {
+    mocks.groups = [
+      group({
+        speakingBotIds: ['mimi'],
+        openPlan: openPlan({ status: 'running', currentStep: 1, currentStepStatus: 'running' }),
+      }),
+    ];
+    mocks.islandActivity = new Map([
+      ['lane-mimi', { sessionId: 'lane-mimi', phase: 'running', workingPhase: 'editing' }],
+    ]);
+    await renderSidebar();
+    const running = screen.getByTestId('bot-group-running');
+    expect(running.textContent).toBe('bots.groupChat.sidebar.planRunning:{"step":2,"total":3,"name":"咪咪"}');
+    expect(running.className).toContain('text-[var(--status-bar-accent)]');
+  });
+
+  it('shows the organizer working out a plan in the running style', async () => {
+    mocks.groups = [group({ speakingBotIds: ['xiaoman'], planningBotId: 'xiaoman' })];
+    await renderSidebar();
+    expect(screen.getByTestId('bot-group-running').textContent).toBe(
+      'bots.groupChat.sidebar.planPlanning:{"name":"小满"}',
+    );
+  });
+
+  it('keeps the confirmation hint when the teammate doing a step waits for the user', async () => {
+    mocks.groups = [
+      group({
+        speakingBotIds: ['mimi'],
+        openPlan: openPlan({ status: 'running', currentStepStatus: 'running' }),
+      }),
+    ];
+    mocks.islandActivity = new Map([['lane-mimi', { sessionId: 'lane-mimi', phase: 'needs-interaction' }]]);
+    await renderSidebar();
+    const running = screen.getByTestId('bot-group-running');
+    expect(running.textContent).toContain('咪咪');
+    expect(running.textContent).toContain('bots.groupChat.sidebar.waiting');
   });
 
   it('never sends system notifications for group lanes', async () => {

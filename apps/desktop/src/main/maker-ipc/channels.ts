@@ -792,6 +792,11 @@ export const MAKER_INVOKE = {
   BOT_GROUP_SEND: 'maker:bot-group:send',
   BOT_GROUP_CONTINUE: 'maker:bot-group:continue',
   BOT_GROUP_STOP: 'maker:bot-group:stop',
+  BOT_GROUP_PLAN_START: 'maker:bot-group:plan-start',
+  BOT_GROUP_PLAN_DISMISS: 'maker:bot-group:plan-dismiss',
+  BOT_GROUP_PLAN_CONTINUE: 'maker:bot-group:plan-continue',
+  BOT_GROUP_PLAN_RETRY: 'maker:bot-group:plan-retry',
+  BOT_GROUP_PLAN_EDIT: 'maker:bot-group:plan-edit',
   BOT_LIFECYCLE_ACTION: 'maker:bot-lifecycle:action',
 } as const;
 

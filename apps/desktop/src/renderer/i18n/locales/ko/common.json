@@ -7972,7 +7972,15 @@
         "empty": "아직 메시지가 없습니다",
         "preview": "{{name}}: {{text}}",
         "previewYou": "나: {{text}}",
-        "waiting": "확인 대기 중"
+        "waiting": "확인 대기 중",
+        "planProposed": "{{name}}: 계획이 준비됐어요. 시작을 기다리는 중",
+        "planProposedAnonymous": "계획이 준비됐어요. 시작을 기다리는 중",
+        "planRunning": "역할 분담 {{step}}/{{total}} · {{name}} 님이 작업 중",
+        "planRunningNoStep": "{{name}} 님이 작업 중",
+        "planPlanning": "{{name}} 님이 역할을 나누는 중…",
+        "planStepDone": "{{name}} 님이 마쳤어요. 다음 단계를 기다리는 중",
+        "planStepFailed": "{{name}} 님이 끝내지 못했어요",
+        "planWaitingAnonymous": "역할 분담이 멈췄어요"
       },
       "create": {
         "title": "새 그룹 채팅",
@@ -8003,7 +8011,17 @@
         "tooLong": "메시지가 너무 깁니다. 최대 {{max}}자까지 보낼 수 있습니다",
         "sendFailed": "메시지를 보내지 못했습니다. 잠시 후 다시 시도하세요",
         "stopFailed": "이번 라운드를 멈추지 못했습니다. 다시 시도하세요",
-        "stop": "이번 라운드 중지"
+        "stop": "이번 라운드 중지",
+        "more": "더 보기",
+        "division": "역할 분담하기",
+        "divisionDescription": "담당자가 먼저 역할을 나누고, 동료들이 한 단계씩 진행합니다",
+        "divisionBusy": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
+        "divisionTag": "역할 분담",
+        "removeDivision": "역할 분담 해제",
+        "placeholderDivision": "하고 싶은 일을 적어 주세요. 담당자가 먼저 역할을 나눕니다…",
+        "placeholderPlanProposed": "담당이나 단계를 바꾸려면 그냥 말해 주세요…",
+        "placeholderPlanWaiting": "{{name}} 님에게 고칠 점이 있으면 그냥 말해 주세요…",
+        "placeholderPlanRunning": "보내는 말은 작업 중인 {{name}} 님에게 전달됩니다…"
       },
       "timeline": {
         "loadEarlier": "이전 메시지 보기",
@@ -8012,12 +8030,28 @@
         "emptyDescription": "한마디 하면 동료들이 이어서 대화합니다. @로 동료를 지정하면 그 동료만 답합니다.",
         "roundEnded": "동료들이 말을 마쳤습니다",
         "continue": "토론 계속하기",
-        "continueFailed": "토론을 이어 가지 못했습니다. 다시 시도하세요"
+        "continueFailed": "토론을 이어 가지 못했습니다. 다시 시도하세요",
+        "nextStep": "다음 단계:",
+        "continuePlan": "다음 단계 시작",
+        "continuePlanFailed": "다음 단계를 시작하지 못했습니다. 다시 시도하세요",
+        "stepFailed": "{{name}} 님이 끝내지 못했습니다",
+        "retryStep": "다시 시도",
+        "retryFailed": "이 단계를 다시 시도하지 못했습니다. 잠시 후 다시 시도하세요",
+        "endPlan": "역할 분담 끝내기",
+        "planDone_one": "{{count}}단계를 모두 마쳤습니다",
+        "planDone_other": "{{count}}단계를 모두 마쳤습니다",
+        "planDoneGeneric": "역할 분담을 마쳤습니다"
       },
       "notice": {
         "memberFailed": "{{name}} 님이 이번에는 답하지 못했습니다",
         "memberTimeout": "{{name}} 님의 답이 너무 늦어 이번에는 건너뛰었습니다",
-        "memberUnavailable": "{{name}} 님을 지금 사용할 수 없어 이번에는 발언하지 않았습니다"
+        "memberUnavailable": "{{name}} 님을 지금 사용할 수 없어 이번에는 발언하지 않았습니다",
+        "planFailed": "{{name}} 님이 역할 분담을 정하지 못했습니다. 다시 시도해 보세요",
+        "planStopped": "역할 분담을 중지했습니다",
+        "workdirUnavailable": "{{name}} 님이 작업 디렉터리를 찾지 못했습니다",
+        "stepFailed": "{{name}} 님이 오류로 이 단계를 끝내지 못했습니다",
+        "stepTimeout": "{{name}} 님의 작업이 너무 오래 걸려 이 단계를 멈췄습니다",
+        "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다"
       },
       "settings": {
         "open": "그룹 설정",
@@ -8044,13 +8078,55 @@
         "speakingModeSequential": "항상 차례대로",
         "speakingModeAutoNote": "멘션이 없거나 @모두일 때는 첫 순서에서 모두 동시에 생각하고, 이후에는 차례대로 이어서 말합니다. 멘션한 동료는 멘션한 순서대로 답합니다.",
         "speakingModeSequentialNote": "한 번에 한 동료만 말하며, 뒤에 말하는 동료는 앞의 답을 보고 답합니다.",
-        "speakingModeSaveFailed": "발언 순서를 저장하지 못했습니다. 다시 시도해 주세요."
+        "speakingModeSaveFailed": "발언 순서를 저장하지 못했습니다. 다시 시도해 주세요.",
+        "setOrganizer": "담당자로 지정",
+        "setOrganizerNamed": "{{name}} 님을 담당자로 지정",
+        "organizerNote": "담당자가 각 단계를 누가 맡을지 정합니다. 기본값은 첫 번째 동료입니다.",
+        "organizerSaveFailed": "담당자를 바꾸지 못했습니다. 다시 시도하세요",
+        "projectDir": "프로젝트 폴더",
+        "projectDirNone": "선택 안 함",
+        "projectDirChoose": "폴더 선택",
+        "projectDirChange": "폴더 변경",
+        "projectDirClear": "지우기",
+        "projectDirNote": "역할 분담으로 일할 때 동료들이 여기서 작업합니다. 선택하지 않아도 되며, 그러면 이 그룹 채팅 전용 폴더를 사용합니다. git 프로젝트를 선택하면 역할 분담마다 새 worktree와 브랜치를 만들어, 지금 작업 중인 코드는 건드리지 않습니다.",
+        "projectDirSaveFailed": "프로젝트 폴더를 저장하지 못했습니다. 폴더가 아직 있는지 확인한 뒤 다시 시도하세요"
       },
       "errors": {
         "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
         "memberUnavailable": "사용할 수 없는 동료가 있습니다. 다른 동료를 골라 다시 시도하세요",
         "notFound": "이 그룹 채팅은 더 이상 존재하지 않습니다",
-        "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요"
+        "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요",
+        "planOpen": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
+        "planClosed": "이 계획은 이미 끝났거나 업데이트되었습니다"
+      },
+      "organizer": "담당자",
+      "plan": {
+        "intro_one": "이 일은 {{count}}단계로 나눠서 이렇게 분담할게요:",
+        "intro_other": "이 일은 {{count}}단계로 나눠서 이렇게 분담할게요:",
+        "missing": "이 계획을 더 이상 불러올 수 없습니다",
+        "start": "시작하기",
+        "dismiss": "필요 없어요",
+        "editHint": "담당이나 단계를 바꾸려면 그냥 말해 주세요",
+        "pauseNote": "한 단계가 끝날 때마다 멈추고, ‘다음 단계 시작’을 누를 때까지 기다립니다.",
+        "superseded": "업데이트됨",
+        "dismissed": "사용 안 함",
+        "stopped": "중지됨",
+        "stepDone": "완료",
+        "stepRunning": "진행 중",
+        "stepFailed": "끝내지 못함",
+        "stepPending": "시작 전",
+        "stepMenuTitle": "이 단계를 맡을 동료",
+        "removeStep": "이 단계 삭제",
+        "keepOneStep": "최소 한 단계는 남겨야 합니다",
+        "startFailed": "역할 분담을 시작하지 못했습니다. 다시 시도하세요",
+        "dismissFailed": "이 계획을 끝내지 못했습니다. 다시 시도하세요",
+        "editFailed": "이 단계를 바꾸지 못했습니다. 다시 시도하세요"
+      },
+      "speaking": {
+        "planning": "역할을 나누는 중…"
+      },
+      "files": {
+        "openFailed": "파일을 열지 못했습니다. 이동되었거나 삭제되었을 수 있습니다"
       }
     },
     "joined": {

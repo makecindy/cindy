@@ -59,6 +59,9 @@ export type DbTxName =
   | 'botGroups.delete'
   | 'botGroups.archiveLanes'
   | 'botGroups.appendMessage'
+  | 'botGroups.createPlan'
+  | 'botGroups.settleStep'
+  | 'botGroups.removePlanStep'
   | 'im.rotateSession'
   | 'wechatActivateBindingEpoch'
   | 'wechatCommitPollBatch'
@@ -813,6 +816,8 @@ export interface BotGroupsSetMembersArgs {
   groupId: string;
   botIds: string[];
   routeKey: string;
+  /** 分工 Sessions (`<prefix><planId>`) of removed members are archived with their lanes. */
+  planRouteKeyPrefix?: string;
   now: number;
 }
 
@@ -823,6 +828,7 @@ export interface BotGroupsSetMembersResult {
 export interface BotGroupsDeleteArgs {
   groupId: string;
   routeKey: string;
+  planRouteKeyPrefix?: string;
   now: number;
 }
 
@@ -834,19 +840,69 @@ export interface BotGroupsArchiveLanesArgs {
 }
 
 export interface BotGroupsAppendMessageArgs {
-  message: {
+  message: BotGroupsMessageRow;
+}
+
+export interface BotGroupsMessageRow {
+  id: string;
+  groupId: string;
+  kind: 'message' | 'round-end' | 'notice' | 'plan' | 'plan-end';
+  authorKind: 'user' | 'bot' | 'system';
+  authorBotId: string | null;
+  authorName: string;
+  content: string;
+  mentionsJson: string;
+  noticeCode: string | null;
+  clientId: string | null;
+  planId?: string | null;
+  filesJson?: string;
+  createdAt: number;
+}
+
+/** Posts a 安排卡: supersedes the group's other proposed plans in the same transaction. */
+export interface BotGroupsCreatePlanArgs {
+  plan: {
     id: string;
     groupId: string;
-    kind: 'message' | 'round-end' | 'notice';
-    authorKind: 'user' | 'bot' | 'system';
-    authorBotId: string | null;
-    authorName: string;
-    content: string;
-    mentionsJson: string;
-    noticeCode: string | null;
-    clientId: string | null;
-    createdAt: number;
+    requestText: string;
+    organizerBotId: string;
+    organizerName: string;
   };
+  steps: Array<{ botId: string; botName: string; task: string }>;
+  message: BotGroupsMessageRow;
+  now: number;
+}
+
+export interface BotGroupsCreatePlanResult {
+  messageId: string;
+  sequence: number;
+  supersededPlanIds: string[];
+}
+
+/**
+ * Settles one step and the plan together, optionally posting the step's hand-off or a
+ * notice. Guarded by the expected plan status so a stopped plan never flips back.
+ */
+export interface BotGroupsSettleStepArgs {
+  planId: string;
+  position: number;
+  expectedPlanStatus: 'running';
+  stepStatus: 'done' | 'failed';
+  planStatus: 'waiting' | 'done';
+  message: BotGroupsMessageRow | null;
+  /** Appended after `message` when the last step finishes. */
+  endMessage: BotGroupsMessageRow | null;
+  now: number;
+}
+
+export interface BotGroupsSettleStepResult {
+  settled: boolean;
+}
+
+export interface BotGroupsRemovePlanStepArgs {
+  planId: string;
+  position: number;
+  now: number;
 }
 
 export interface BotGroupsAppendMessageResult {
@@ -1300,6 +1356,9 @@ export type DbTxArgsByName = {
   'botGroups.delete': BotGroupsDeleteArgs;
   'botGroups.archiveLanes': BotGroupsArchiveLanesArgs;
   'botGroups.appendMessage': BotGroupsAppendMessageArgs;
+  'botGroups.createPlan': BotGroupsCreatePlanArgs;
+  'botGroups.settleStep': BotGroupsSettleStepArgs;
+  'botGroups.removePlanStep': BotGroupsRemovePlanStepArgs;
   'im.rotateSession': ImRotateSessionArgs;
   wechatActivateBindingEpoch: WechatActivateBindingEpochArgs;
   wechatCommitPollBatch: WechatCommitPollBatchArgs;
@@ -1385,6 +1444,9 @@ export type DbTxResultByName = {
   'botGroups.delete': { archivedSessionIds: string[] };
   'botGroups.archiveLanes': { archivedSessionIds: string[] };
   'botGroups.appendMessage': BotGroupsAppendMessageResult;
+  'botGroups.createPlan': BotGroupsCreatePlanResult;
+  'botGroups.settleStep': BotGroupsSettleStepResult;
+  'botGroups.removePlanStep': { removed: boolean };
   'im.rotateSession': ImRotateSessionResult;
   wechatActivateBindingEpoch: WechatActivateBindingEpochResult;
   wechatCommitPollBatch: WechatCommitPollBatchResult;

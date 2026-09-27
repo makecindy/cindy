@@ -564,6 +564,10 @@ export const botGroups = sqliteTable(
     speakingMode: text('speaking_mode', { enum: ['auto', 'sequential'] })
       .notNull()
       .default('auto'),
+    /** Chosen 负责人; not a foreign key, an unavailable choice falls back to the first member. */
+    organizerBotId: text('organizer_bot_id'),
+    /** 项目文件夹 for 分工 steps; null uses the group's own folder under userData. */
+    projectDir: text('project_dir'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -602,7 +606,7 @@ export const botGroupMessages = sqliteTable(
       .notNull()
       .references(() => botGroups.id, { onDelete: 'cascade' }),
     sequence: integer('sequence').notNull(),
-    kind: text('kind', { enum: ['message', 'round-end', 'notice'] })
+    kind: text('kind', { enum: ['message', 'round-end', 'notice', 'plan', 'plan-end'] })
       .notNull()
       .default('message'),
     authorKind: text('author_kind', { enum: ['user', 'bot', 'system'] }).notNull(),
@@ -614,6 +618,10 @@ export const botGroupMessages = sqliteTable(
     noticeCode: text('notice_code'),
     /** Renderer idempotency key for user messages. */
     clientId: text('client_id'),
+    /** 分工 plan this message belongs to (安排卡, step hand-off, plan end). */
+    planId: text('plan_id'),
+    /** Step hand-off files relative to the plan's work directory. */
+    filesJson: text('files_json').notNull().default('[]'),
     createdAt: integer('created_at').notNull(),
   },
   (t) => ({
@@ -624,6 +632,57 @@ export const botGroupMessages = sqliteTable(
     uniqGroupClient: uniqueIndex('uniq_bot_group_messages_group_client')
       .on(t.groupId, t.clientId)
       .where(sql`${t.clientId} IS NOT NULL`),
+  }),
+);
+
+/** A 分工 plan: the organizer's steps and where they run (docs/product-rules/bot-group-chat.md §7). */
+export const botGroupPlans = sqliteTable(
+  'bot_group_plans',
+  {
+    id: text('id').primaryKey(),
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    status: text('status', {
+      enum: ['proposed', 'running', 'waiting', 'done', 'stopped', 'dismissed', 'superseded'],
+    }).notNull(),
+    /** The user's request the plan answers; step inputs quote it. */
+    requestText: text('request_text').notNull(),
+    organizerBotId: text('organizer_bot_id').notNull(),
+    organizerName: text('organizer_name').notNull(),
+    currentStep: integer('current_step'),
+    /** Resolved at 开始: the group folder, the project folder or the plan's worktree. */
+    workDir: text('work_dir'),
+    branch: text('branch'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxGroupCreated: index('idx_bot_group_plans_group_created').on(t.groupId, t.createdAt),
+  }),
+);
+
+export const botGroupPlanSteps = sqliteTable(
+  'bot_group_plan_steps',
+  {
+    planId: text('plan_id')
+      .notNull()
+      .references(() => botGroupPlans.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    /** Not a foreign key: the plan keeps the name snapshot when a Bot is removed. */
+    botId: text('bot_id').notNull(),
+    botName: text('bot_name').notNull(),
+    task: text('task').notNull(),
+    status: text('status', { enum: ['pending', 'running', 'done', 'failed'] })
+      .notNull()
+      .default('pending'),
+    /** Latest hand-off message of this step (a redo replaces it). */
+    resultMessageId: text('result_message_id'),
+    startedAt: integer('started_at'),
+    finishedAt: integer('finished_at'),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.planId, t.position] }),
   }),
 );
 

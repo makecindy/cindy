@@ -1,5 +1,5 @@
 /**
- * 伙伴群聊列表的 renderer 镜像。
+ * 伙伴群聊列表的 renderer 镜像，以及分工（安排）操作的调用入口。
  *
  * 权威数据在 main（当前账号本地库的 bot_groups / members / messages），这里只缓存
  * `listBotGroups()` 的最新一份摘要，供侧栏「群聊」分组与群设置抽屉读取。main 每次
@@ -14,7 +14,13 @@ import {
   isDataOwnerGenerationCurrent,
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
-import type { BotGroupSummary } from '../../../shared/botGroupChat';
+import type {
+  BotGroupMutationResult,
+  BotGroupPlanAction,
+  BotGroupPlanActionInput,
+  BotGroupPlanEditInput,
+  BotGroupSummary,
+} from '../../../shared/botGroupChat';
 
 export interface BotGroupListSnapshot {
   groups: readonly BotGroupSummary[];
@@ -78,6 +84,7 @@ export function refreshBotGroups(): void {
     requestGeneration === generation && isDataOwnerGenerationCurrent(requestOwner);
   const request = (async () => {
     try {
+      // Every change kind re-reads the list, including 'plan' (open-plan status in the row).
       const result = await api.listBotGroups();
       if (!isCurrent()) return;
       // 失败时保留上一份列表：侧栏不因一次读失败把所有群清空。
@@ -134,6 +141,48 @@ export function subscribeBotGroups(listener: () => void): () => void {
 
 export function useBotGroupList(): BotGroupListSnapshot {
   return useSyncExternalStore(subscribeBotGroups, getBotGroupListSnapshot, getBotGroupListSnapshot);
+}
+
+const NOT_READY: BotGroupMutationResult = { ok: false, errorCode: 'HOST_NOT_READY', message: '' };
+
+/**
+ * Run a 分工 action (开始 / 不用了 / 继续 / 重试) on a plan. Main pushes a `'plan'`
+ * change afterwards, which every mounted surface re-reads; the list is refreshed here
+ * as well so the sidebar follows at once. Resolves null when the data owner changed
+ * while the call was in flight — the answer belongs to another account.
+ */
+export async function runBotGroupPlanAction(
+  action: BotGroupPlanAction,
+  input: BotGroupPlanActionInput,
+): Promise<BotGroupMutationResult | null> {
+  const api = botGroupApi();
+  const call =
+    action === 'start'
+      ? api?.startBotGroupPlan
+      : action === 'dismiss'
+        ? api?.dismissBotGroupPlan
+        : action === 'continue'
+          ? api?.continueBotGroupPlan
+          : api?.retryBotGroupPlan;
+  if (!api || typeof call !== 'function') return NOT_READY;
+  return settlePlanMutation(() => call(input));
+}
+
+/** Reassign or remove a step of a proposed plan. */
+export async function editBotGroupPlanStep(input: BotGroupPlanEditInput): Promise<BotGroupMutationResult | null> {
+  const api = botGroupApi();
+  if (!api || typeof api.editBotGroupPlanStep !== 'function') return NOT_READY;
+  return settlePlanMutation(() => api.editBotGroupPlanStep(input));
+}
+
+async function settlePlanMutation(
+  run: () => Promise<BotGroupMutationResult>,
+): Promise<BotGroupMutationResult | null> {
+  const requestOwner = getDataOwnerGeneration();
+  const result = await run();
+  if (!isDataOwnerGenerationCurrent(requestOwner)) return null;
+  if (result.ok) refreshBotGroups();
+  return result;
 }
 
 /** Test-only reset of the module state. */

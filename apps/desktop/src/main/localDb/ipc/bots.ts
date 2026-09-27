@@ -88,7 +88,7 @@ import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
 import { generateBotCreationDraft, readBotCreationDraft, generateBotCreationAvatar } from '../../maker-ipc/botCreationDraft.js';
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation.js';
-import { botGroupLaneRouteKey } from '../../../shared/botGroupChat.js';
+import { botGroupLaneRouteKey, botGroupPlanRouteKey } from '../../../shared/botGroupChat.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
@@ -285,16 +285,23 @@ export type EnsureBotGroupLaneResult =
  * The Bot's hidden lane for one group chat (docs/product-rules/bot-group-chat.md).
  * Same Profile, Home workspace and model chain as the canonical Chat; never a
  * second canonical Session and never visible in the task list.
+ *
+ * With `plan`, the Bot's 分工 Session for that plan instead (§7.4): same Profile and
+ * model chain, but it works in the plan's recorded work directory. A worktree plan
+ * passes the Session id the worktree was registered for.
  */
 export async function ensureBotGroupLaneSession(input: {
   botId: string;
   groupId: string;
   title: string;
+  plan?: { planId: string; workDir: string; sessionId?: string };
 }): Promise<EnsureBotGroupLaneResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
-  const routeKey = botGroupLaneRouteKey(input.groupId);
+  const routeKey = input.plan
+    ? botGroupPlanRouteKey(input.groupId, input.plan.planId)
+    : botGroupLaneRouteKey(input.groupId);
   const [existing] = await db
     .select({ sessionId: botSessionLinks.sessionId })
     .from(botSessionLinks)
@@ -325,10 +332,12 @@ export async function ensureBotGroupLaneSession(input: {
   const config = parseJson(profileVersion.capabilitiesJson);
   const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
-  const workspaceKind = 'dialogue' as const;
-  const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const workspaceKind = input.plan ? ('project' as const) : ('dialogue' as const);
+  const workingDir = input.plan
+    ? input.plan.workDir
+    : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
   const now = Date.now();
-  const sessionId = resolveBusinessSessionId(undefined);
+  const sessionId = resolveBusinessSessionId(input.plan?.sessionId);
   const row = {
     ...sessionCreateToRow(
       sessionId,
