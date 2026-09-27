@@ -159,7 +159,13 @@
     "loadFailed": "圖片載入失敗",
     "retryLoadImage": "重試載入圖片",
     "retry": "重試",
-    "closeImage": "關閉圖片"
+    "closeImage": "關閉圖片",
+    "discardAnnotationTitle": "放棄標註？",
+    "discardAnnotationBody": "未儲存的筆跡將會遺失。",
+    "continueAnnotating": "繼續標註",
+    "discardAnnotation": "放棄標註",
+    "annotateUnavailableTitle": "暫時無法標註",
+    "annotateImageUnavailable": "標註圖片（暫不可用）"
   },
   "queue": {
     "continueSystemInstruction": "繼續未完成的任務(系統指令)",

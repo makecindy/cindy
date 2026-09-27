@@ -159,7 +159,13 @@
     "loadFailed": "이미지 로드 실패",
     "retryLoadImage": "이미지 로드 재시도",
     "retry": "재시도",
-    "closeImage": "이미지 닫기"
+    "closeImage": "이미지 닫기",
+    "discardAnnotationTitle": "주석을 버릴까요?",
+    "discardAnnotationBody": "저장하지 않은 획은 사라집니다.",
+    "continueAnnotating": "계속 주석 달기",
+    "discardAnnotation": "버리기",
+    "annotateUnavailableTitle": "지금은 주석을 달 수 없음",
+    "annotateImageUnavailable": "이미지에 주석 (현재 사용 불가)"
   },
   "queue": {
     "continueSystemInstruction": "완료되지 않은 작업 계속(시스템 지시)",

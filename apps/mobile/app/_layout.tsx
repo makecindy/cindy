@@ -38,6 +38,7 @@ import {
 } from '@/device-link/DeviceLinkContext';
 import { PushNotificationsBridge } from '@/notifications/PushNotificationsBridge';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
+import { OutsideTapProvider } from '@/platform/OutsideTap';
 // import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
 import '@/i18n';
 import { LocaleProvider } from '@/i18n/useLocale';
@@ -446,6 +447,7 @@ function RootLayout() {
   }
   return (
     <GestureHandlerRootView style={styles.gestureRoot}>
+      <OutsideTapProvider>
       <SafeAreaProvider>
         <AdaptiveWindowProvider>
         <ThemeProvider>
@@ -467,6 +469,7 @@ function RootLayout() {
         </ThemeProvider>
         </AdaptiveWindowProvider>
       </SafeAreaProvider>
+      </OutsideTapProvider>
     </GestureHandlerRootView>
   );
 }

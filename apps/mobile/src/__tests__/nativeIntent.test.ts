@@ -47,11 +47,11 @@ describe('mobile native deep-link redirects', () => {
     }
   });
 
-  it('routes the Share Extension handoff into a new conversation', () => {
+  it('waits for a pending batch on cold start and preserves the warm share handoff', () => {
     expect(redirectSystemPath({
       path: 'cindycn://expo-sharing',
       initial: true,
-    })).toBe('/sessions/new');
+    })).toBe('/');
     expect(redirectSystemPath({
       path: '/expo-sharing?source=share-extension',
       initial: false,

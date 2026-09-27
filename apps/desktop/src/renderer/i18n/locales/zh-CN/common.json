@@ -6565,7 +6565,12 @@
     },
     "daily": {
       "title": "近 30 天每日 token",
-      "subtitle": "按模型堆叠"
+      "subtitle": "按模型堆叠",
+      "tooltip": {
+        "unit": "token",
+        "more_one": "另有 {{count}} 个模型",
+        "more_other": "另有 {{count}} 个模型"
+      }
     },
     "byAgent": {
       "title": "按 Agent / harness",
@@ -9330,6 +9335,14 @@
       "annotateDiscard": "放弃标注",
       "annotateSave": "保存标注",
       "annotateSaveFailed": "保存标注失败",
+      "annotateRedo": "重做",
+      "annotateDiscardConfirmTitle": "放弃本次标注？",
+      "annotateDiscardConfirmDescription": "将恢复到打开时的标注。",
+      "annotateDiscardConfirmAction": "放弃",
+      "annotateDiscardConfirmCancel": "继续标注",
+      "annotateBurnFailedNotSent": "标注图片合成失败，消息未发送。可重试，或移除标注后发送。",
+      "annotateBurnFailedNotSaved": "标注图片合成失败，修改未保存。可重试，或移除标注后保存。",
+      "annotateBurnFailedSentOriginal": "标注图片合成失败，已发送不含标注的原图。",
       "prevImage": "上一张",
       "nextImage": "下一张",
       "openModel": "打开模型",

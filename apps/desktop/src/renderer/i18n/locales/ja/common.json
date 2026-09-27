@@ -6565,7 +6565,12 @@
     },
     "daily": {
       "title": "直近 30 日の日次トークン",
-      "subtitle": "モデル別の積み上げ"
+      "subtitle": "モデル別の積み上げ",
+      "tooltip": {
+        "unit": "トークン",
+        "more_one": "ほか {{count}} モデル",
+        "more_other": "ほか {{count}} モデル"
+      }
     },
     "byAgent": {
       "title": "Agent / harness 別",
@@ -9330,6 +9335,14 @@
       "annotateDiscard": "注釈を破棄",
       "annotateSave": "注釈を保存",
       "annotateSaveFailed": "注釈の保存に失敗しました",
+      "annotateRedo": "やり直す",
+      "annotateDiscardConfirmTitle": "注釈の変更を破棄しますか？",
+      "annotateDiscardConfirmDescription": "注釈はこの画像を開いたときの状態に戻ります。",
+      "annotateDiscardConfirmAction": "破棄",
+      "annotateDiscardConfirmCancel": "注釈を続ける",
+      "annotateBurnFailedNotSent": "画像への注釈の合成に失敗したため、メッセージは送信されませんでした。再試行するか、注釈を削除してから送信してください。",
+      "annotateBurnFailedNotSaved": "画像への注釈の合成に失敗したため、変更は保存されませんでした。再試行するか、注釈を削除してから保存してください。",
+      "annotateBurnFailedSentOriginal": "画像への注釈の合成に失敗したため、注釈なしの元画像を送信しました。",
       "prevImage": "前の画像",
       "nextImage": "次の画像",
       "openModel": "モデルを開く",

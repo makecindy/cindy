@@ -6565,7 +6565,12 @@
     },
     "daily": {
       "title": "최근 30일 일별 토큰",
-      "subtitle": "모델별 누적"
+      "subtitle": "모델별 누적",
+      "tooltip": {
+        "unit": "토큰",
+        "more_one": "외 {{count}}개 모델",
+        "more_other": "외 {{count}}개 모델"
+      }
     },
     "byAgent": {
       "title": "Agent / harness별",
@@ -9330,6 +9335,14 @@
       "annotateDiscard": "주석 취소",
       "annotateSave": "주석 저장",
       "annotateSaveFailed": "주석 저장에 실패했습니다",
+      "annotateRedo": "다시 실행",
+      "annotateDiscardConfirmTitle": "주석 변경 사항을 버릴까요?",
+      "annotateDiscardConfirmDescription": "주석이 이 이미지를 열었을 때의 상태로 돌아갑니다.",
+      "annotateDiscardConfirmAction": "버리기",
+      "annotateDiscardConfirmCancel": "계속 주석 달기",
+      "annotateBurnFailedNotSent": "이미지에 주석을 합성하지 못해 메시지를 보내지 않았습니다. 다시 시도하거나 주석을 제거한 후 보내세요.",
+      "annotateBurnFailedNotSaved": "이미지에 주석을 합성하지 못해 변경 사항을 저장하지 않았습니다. 다시 시도하거나 주석을 제거한 후 저장하세요.",
+      "annotateBurnFailedSentOriginal": "이미지에 주석을 합성하지 못해 주석 없는 원본 이미지를 보냈습니다.",
       "prevImage": "이전 이미지",
       "nextImage": "다음 이미지",
       "openModel": "모델 열기",

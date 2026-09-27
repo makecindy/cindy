@@ -19,6 +19,7 @@
     "imageNotAnnotatable": "這張圖片暫不支援標註或轉發。",
     "downloadOriginalFailed": "下載原圖失敗(HTTP {{status}})。",
     "annotationSaveFailed": "標註儲存失敗",
+    "replacementPending": "這張圖片的上一次修改尚未上傳完成，請等待完成，或在輸入框上方重試或移除後再編輯。",
     "tryAgain": "請重試。",
     "sendToChat": "傳送到對話",
     "save": "儲存",
@@ -42,6 +43,7 @@
     }
   },
   "upload": {
+    "shareReceiveFailed": "未能完成分享檔案的接收。請檢查儲存空間，然後重新開啟此頁面重試。",
     "emptyFile": "這個檔案為空，不能作為附件傳送。",
     "fileTooLarge": "檔案超過 {{size}} MB，暫不能作為附件傳送。",
     "cancelled": "附件上傳已取消。",
@@ -86,6 +88,7 @@
     "sessionNotConnected": "語音識別會話尚未連線。",
     "loginRequired": "請先登入 {{appName}} 後再使用語音輸入。",
     "serviceUnavailable": "當前區域未配置 {{appName}} 語音服務。",
+    "rateLimited": "語音請求過於頻繁，請稍後再試。",
     "realtimeUnsupported": "手機版即時語音暫不支援 {{detail}} ASR。",
     "realtimeAuthUnsupported": "手機版即時語音暫不支援 {{auth}} ASR 鑑權。",
     "realtimeProtocolUnsupported": "手機版即時語音暫不支援 {{detail}} ASR 協議。",

@@ -19,6 +19,7 @@
     "imageNotAnnotatable": "这张图片暂不支持标注或转发。",
     "downloadOriginalFailed": "下载原图失败(HTTP {{status}})。",
     "annotationSaveFailed": "标注保存失败",
+    "replacementPending": "这张图片的上一次修改还未上传完成，请等待完成，或在输入框上方重试或移除后再编辑。",
     "tryAgain": "请重试。",
     "sendToChat": "发送到对话",
     "save": "保存",
@@ -42,6 +43,7 @@
     }
   },
   "upload": {
+    "shareReceiveFailed": "未能完成分享文件的接收。请检查存储空间，然后重新打开此页面重试。",
     "emptyFile": "这个文件为空，不能作为附件发送。",
     "fileTooLarge": "文件超过 {{size}} MB，暂不能作为附件发送。",
     "cancelled": "附件上传已取消。",
@@ -86,6 +88,7 @@
     "sessionNotConnected": "语音识别会话尚未连接。",
     "loginRequired": "请先登录 {{appName}} 后再使用语音输入。",
     "serviceUnavailable": "当前区域未配置 {{appName}} 语音服务。",
+    "rateLimited": "语音请求过于频繁，请稍后重试。",
     "realtimeUnsupported": "手机版实时语音暂不支持 {{detail}} ASR。",
     "realtimeAuthUnsupported": "手机版实时语音暂不支持 {{auth}} ASR 鉴权。",
     "realtimeProtocolUnsupported": "手机版实时语音暂不支持 {{detail}} ASR 协议。",

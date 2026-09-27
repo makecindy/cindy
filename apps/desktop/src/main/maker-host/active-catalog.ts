@@ -255,11 +255,9 @@ let xdCodexAnthropicBridgeModelIds = new Set<string>();
 
 /**
  * Anthropic(Claude.ai 订阅)的**发现清单**:由 host 的 anthropic 发现流程注入
- * (登录时 HTTP `/v1/models` + 会话 init 时 SDK supportedModels 捕获,见
- * maker-host/model-discovery/anthropic.ts)。2026-08-02 起 discovery 是「已验证
- * 可用性」证据层,不再独占存在性:registry 显式实体化条目(policy 门禁见
- * model-plane/modelPlanePolicy.ts)即使未被发现也进目录——presence 与
- * entitlement 分离,选不选得中由连接态与运行期共同决定。
+ * (会话 init 与主动探测的 SDK supportedModels,见 maker-host/model-discovery/anthropic.ts)。
+ * 它是 anthropic root 成员的唯一来源:registry 只给其中的型号补资料、标 retired,
+ * 不补入 SDK 没返回的型号(2026-09-27 起)。
  */
 let anthropicModels: CatalogModel[] = [];
 
@@ -772,6 +770,14 @@ export interface CindyModelEffortBaseline {
   defaultEffort: Effort | null;
 }
 
+/**
+ * 返回目录为该 Anthropic 订阅型号登记的名称(按精确 route modelId 命中);未登记返回 null。
+ * 只供动态发现把 SDK 的系列简称解析为具体型号、并为其取显示名;不授予存在性。
+ */
+export function getCindyAnthropicModelName(modelId: string): string | null {
+  return buildEffectiveRegistryMetaIndex().get(modelId)?.name ?? null;
+}
+
 /** 返回当前目录的已知上下文窗口；只供动态发现缺少上游明确值时兜底。 */
 export function getCindyModelContextWindow(modelId: string): number | null {
   return buildEffectiveRegistryMetaIndex().get(modelId)?.contextWindow ?? null;
@@ -863,12 +869,13 @@ function assembleRoot(
   agent: RootAgentKind,
   models: readonly CatalogModel[],
   plan: ModelPlaneRegistryPlan,
+  materializeRegistry: boolean,
   preserveDeclarationOrder = false,
   connectionId = providerId,
   accountModels: readonly CatalogModel[] = [],
 ): CatalogModel[] {
   const rootPlan = plan.roots.get(rootPlanKey(providerId, agent));
-  let out = applyRootRegistryPlan(models, rootPlan);
+  let out = applyRootRegistryPlan(models, rootPlan, materializeRegistry);
   // The subscription Registry historically stores a working default in
   // contextWindow. Codex's separate native maximum must survive that overlay.
   // Apply before user overrides so full local additions still win as a unit.
@@ -1290,8 +1297,8 @@ function computeMerged(): Catalog {
   // 每个 allowlist 供应商:registry presence 实体化/overlay + retired 标记 → 本地
   // override(local 永远最高)→ wire bridge 从最终 root 统一重算；Pi 不参与。
   // 优先级:local addition/patch > registry 显式字段 > discovery 显式值 > 静态兜底。
-  // 注:anthropic 的 discovery 快照非空时整表以它为基线(登录态权威);registry
-  // 实体化条目在未登录时也保持 presence——能否选中由连接态门控,presence ≠ entitlement。
+  // 成员只来自供应商返回的清单:registry 只给已返回的型号补资料、标 retired,不补
+  // 账号没返回的型号(2026-09-27 起;xAI 尚无账号快照时的静态兼容路径除外)。
   providers = providers.map((p) => {
     if (isOpenAiSubscriptionProvider(p)) {
       // 独立 ChatGPT 账号把 app-server 清单按返回顺序写进自己的配置(无 sortOrder),
@@ -1303,8 +1310,10 @@ function computeMerged(): Catalog {
           : discoveredAccountCodex.length > 0 || p.auth.native !== 'codex'
             ? discoveredAccountCodex
             : (p.models.codex ?? []);
+      // 成员只来自账号清单(本机 Codex 的 models_cache / app-server model/list,独立账号
+      // 写入自身配置);registry 不补账号没返回的型号。
       const root = assembleRoot(
-        'openai', 'codex', p.models.codex ?? [], plan, false, p.id, accountCodex,
+        'openai', 'codex', p.models.codex ?? [], plan, false, false, p.id, accountCodex,
       );
       const withRoot: Provider = { ...p, models: { ...p.models, codex: root } };
       const remoteExcluded =
@@ -1340,8 +1349,11 @@ function computeMerged(): Catalog {
         agent: 'claude-code',
         models: CatalogModel[],
       ): CatalogModel[] => {
-        const additions = (plan.consumerAdditions.get(consumerPlanKey('openai', agent)) ?? []).map(
-          (model) =>
+        // 消费端变体(如 [1m])只跟随账号已返回的上游型号出现。
+        const rootIds = new Set(root.map((model) => model.id));
+        const additions = (plan.consumerAdditions.get(consumerPlanKey('openai', agent)) ?? [])
+          .filter(({ upstreamModelId }) => rootIds.has(upstreamModelId))
+          .map(({ model }) =>
             toChatgptBridgeModel(
               applyLocalConsumerOverrides(
                 p.id,
@@ -1379,12 +1391,17 @@ function computeMerged(): Catalog {
       // Claude 订阅只供 Claude Code(内置 CLI 用它自己的登录),不向 Codex / Pi 投影。
       const accountModels = p.id === 'anthropic' ? anthropicModels : [];
       const seed = accountModels.length > 0 ? accountModels : (p.models['claude-code'] ?? []);
-      const root = assembleRoot('anthropic', 'claude-code', seed, plan, false, p.id, accountModels);
+      // 成员只来自 Claude Code SDK 返回的清单;registry 不补 SDK 没返回的型号。
+      const root = assembleRoot(
+        'anthropic', 'claude-code', seed, plan, false, false, p.id, accountModels,
+      );
       return { ...p, models: { 'claude-code': root } };
     }
     if (providerCatalogId(p) === 'xai') {
       const discovered = p.id === 'xai' ? xaiDiscoveredModels : xaiAccountModels.get(p.id) ?? null;
-      const useAccountMembership = discovered !== null;
+      // 成功但为空的快照不当作成员清单(与 Anthropic 丢弃空 SDK 结果同口径):更可能是上游
+      // 格式或账号状态异常,按尚无快照走静态兼容路径,不把整个 xAI 清单清空。
+      const useAccountMembership = discovered !== null && discovered.length > 0;
       const accountModels = discovered ?? [];
       // The bundled-only fallback uses the packaged Claude/Codex list as its own membership seed.
       // A loaded server Catalog keeps its legacy static membership for old server compatibility;
@@ -1400,8 +1417,15 @@ function computeMerged(): Catalog {
       const codexSeed = authoritativeMembers
         ? materializeXaiAccountModels(p, 'codex', authoritativeMembers)
         : (p.models.codex ?? []);
-      const claudeRoot = assembleRoot('xai', 'claude-code', claudeSeed, plan, true, p.id);
-      const codexRoot = assembleRoot('xai', 'codex', codexSeed, plan, true, p.id);
+      // 有账号快照时成员以它为准;只有尚无快照(未绑定账号发现)时才沿用静态声明 +
+      // registry 实体化的兼容路径。
+      const materializeXaiRegistry = !useAccountMembership;
+      const claudeRoot = assembleRoot(
+        'xai', 'claude-code', claudeSeed, plan, materializeXaiRegistry, true, p.id,
+      );
+      const codexRoot = assembleRoot(
+        'xai', 'codex', codexSeed, plan, materializeXaiRegistry, true, p.id,
+      );
       const claudeAccountRoot = useAccountMembership
         ? preserveNonGrok46DiscoveryEfforts(claudeRoot, accountModels)
         : claudeRoot;

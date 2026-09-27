@@ -1,32 +1,48 @@
 /**
  * imageAnnotationModel.ts — 图片圈点标注的纯函数层(手机版)。
  * ---------------------------------------------------------------------------
- * 与桌面版 lightboxAnnotations.ts(PR #792)同构:笔迹一律存**归一化坐标**
- * (0..1,相对图片自然尺寸),显示(SVG overlay)与烧录(WebView canvas)共用
- * 同一映射,所见即所得。视觉参数(红 #FF3B30 + 白描边、线宽 0.5% 短边)与
- * 桌面完全一致,保证同一张标注图在两端观感一致。
+ * 笔迹一律存**归一化坐标**(0..1,相对图片自然尺寸),显示(SVG overlay)与
+ * 烧录(WebView canvas)共用同一映射,所见即所得。视觉参数、线宽公式、归一化与
+ * 采点过滤、SVG path 与 canvas 重放算法全部来自跨端共享核心
+ * `@cindy/maker-shared/image-annotation`(与桌面同一份实现)。
  *
  * 手机版特有的部分:
  *   - contain 布局计算(RN 没有 getBoundingClientRect,显示矩形要从容器尺寸、
  *     自然尺寸与 lightbox 的 translate/scale 状态推导);
- *   - WebView 烧录 HTML 生成(RN 无 DOM canvas,烧录在隐藏 WebView 里重放,
- *     算法与桌面 drawStrokesOnCanvas 逐行对应)。
+ *   - WebView 烧录 HTML 生成与协议(RN 无 DOM canvas,烧录在隐藏 WebView 里
+ *     重放,重放脚本内联共享核心的 ANNOTATION_CANVAS_SCRIPT);
+ *   - 烧录前的源图预处理规划(Android 解不了的格式先转码、超大图先预缩);
+ *   - mime 嗅探与直传白名单。
  * 全部无副作用,node 可单测;React 组件只做事件采集与状态管理。
  */
 
-/** 一条手绘笔迹:归一化坐标点序列(0..1,相对图片自然尺寸)。 */
-export interface AnnotationStroke {
-  points: Array<{ x: number; y: number }>;
-}
+import {
+  ANNOTATION_CANVAS_SCRIPT,
+  INTERRUPTED_STROKE_DISCARD_SCREEN_PX,
+  annotationStrokeToSvgPath,
+  annotationStrokeWidth,
+  annotationOutlineWidth,
+  normalizeAnnotationPoint as normalizeSharedAnnotationPoint,
+  shouldAppendAnnotationPoint,
+  type AnnotationStroke,
+} from '@cindy/maker-shared/image-annotation';
+import { MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE } from '@/session/mobileImagePreprocess';
 
-/** 标注笔迹主色(红,语义豁免色系;与桌面 ANNOTATION_STROKE_COLOR 一致)。 */
-export const ANNOTATION_STROKE_COLOR = '#FF3B30';
-export const ANNOTATION_OUTLINE_COLOR = 'rgba(255,255,255,0.9)';
-
-/** 白描边相对红线的宽度倍率(桌面同值)。 */
-export const ANNOTATION_OUTLINE_WIDTH_RATIO = 1.8;
-/** 采集时的最小点距(归一化):小于该距离的 move 点丢弃,抑制点数爆炸。 */
-export const MIN_POINT_DISTANCE_RATIO = 0.002;
+// 视觉参数与纯函数的唯一真相源是跨端共享核心(@cindy/maker-shared/image-annotation);
+// 这里只做薄 re-export,既有调用点与测试不必改导入路径。
+export {
+  ANNOTATION_OUTLINE_COLOR,
+  ANNOTATION_OUTLINE_WIDTH_RATIO,
+  ANNOTATION_STROKE_COLOR,
+  MIN_POINT_DISTANCE_RATIO,
+} from '@cindy/maker-shared/image-annotation';
+export {
+  annotationOutlineWidth,
+  annotationStrokeToSvgPath,
+  annotationStrokeWidth,
+  shouldAppendAnnotationPoint,
+};
+export type { AnnotationStroke };
 
 /**
  * 烧录 canvas 的边长上限:iOS WKWebView 的 canvas 有约 16MP 的硬限制,超限
@@ -34,10 +50,6 @@ export const MIN_POINT_DISTANCE_RATIO = 0.002;
  * 发送链路本就有 2048 降采样,此处只是烧录阶段的安全钳)。
  */
 export const ANNOTATION_MAX_BURN_DIMENSION = 4096;
-
-function clamp01(v: number): number {
-  return Math.min(1, Math.max(0, v));
-}
 
 /** 图片显示矩形(容器坐标系,px)。 */
 export interface AnnotationDisplayRect {
@@ -97,62 +109,80 @@ export function annotationDisplayRect(
 
 /**
  * 触点(容器坐标)→ 归一化图片坐标。越界点钳制到边缘(画到图外时贴边),
- * 与桌面 normalizePoint 语义一致。
+ * 坐标量化到 4 位小数——实现见共享核心,这里只收窄参数类型。
  */
 export function normalizeAnnotationPoint(
   pointX: number,
   pointY: number,
   rect: AnnotationDisplayRect,
 ): { x: number; y: number } | null {
-  if (rect.width <= 0 || rect.height <= 0) return null;
-  return {
-    x: clamp01((pointX - rect.left) / rect.width),
-    y: clamp01((pointY - rect.top) / rect.height),
-  };
+  return normalizeSharedAnnotationPoint(pointX, pointY, rect);
+}
+
+/** 采点的屏幕像素阈值:移动不足该距离的 move 事件丢弃。 */
+export const ANNOTATION_MIN_POINT_SCREEN_PX = 1.5;
+
+/**
+ * 按当前显示矩形把屏幕像素阈值换算成归一化最小点距(传给
+ * shouldAppendAnnotationPoint)。用长边换算:任一方向上相距超过
+ * {@link ANNOTATION_MIN_POINT_SCREEN_PX} 屏幕像素的点都不会被丢——放大作画时
+ * 阈值随之变细保住精度,1x 下不再逐事件记录。矩形非法时退回共享默认阈值。
+ */
+export function annotationMinPointDistanceForRect(
+  rect: Pick<AnnotationDisplayRect, 'width' | 'height'>,
+  screenPx = ANNOTATION_MIN_POINT_SCREEN_PX,
+): number | undefined {
+  const longEdge = Math.max(rect.width, rect.height);
+  if (!(longEdge > 0) || !Number.isFinite(longEdge)) return undefined;
+  return screenPx / longEdge;
 }
 
 /**
- * 是否应把新点追加进笔迹:与上一点距离(归一化)超过阈值才收,
- * 抑制高频 touch move 造成的点数爆炸。首点恒收。
+ * 进行中笔迹的屏幕路径长度阈值:第二根手指落下导致单指画笔手势被取消时,
+ * 短于它的半笔视为捏合起手的误触(点 / 小短线)丢弃;单指点按(手势正常结束)
+ * 与真正的笔画不受影响。
  */
-export function shouldAppendAnnotationPoint(
-  stroke: AnnotationStroke,
-  point: { x: number; y: number },
-  minDistance = MIN_POINT_DISTANCE_RATIO,
+export const ANNOTATION_MULTI_TOUCH_DISCARD_SCREEN_PX = INTERRUPTED_STROKE_DISCARD_SCREEN_PX;
+
+/**
+ * 画笔手势结束时是否丢弃进行中的一笔:仅当手势非正常结束(第二根手指落下使
+ * 单指画笔手势被取消)且屏幕路径长度短于阈值。
+ */
+export function shouldDiscardInterruptedStroke(
+  gestureSucceeded: boolean,
+  screenPathLength: number,
 ): boolean {
-  const last = stroke.points[stroke.points.length - 1];
-  if (!last) return true;
-  return Math.hypot(point.x - last.x, point.y - last.y) >= minDistance;
+  return !gestureSucceeded && screenPathLength < ANNOTATION_MULTI_TOUCH_DISCARD_SCREEN_PX;
 }
 
 /**
- * 烧录/显示用线宽(像素,相对图片自然尺寸):0.5% 短边,4px 下限、24px 上限。
- * 与桌面 annotationStrokeWidth 同公式。
+ * 两组笔迹是否与基线一致(放弃确认用):逐条按引用比较——笔迹一旦落下就是
+ * 不可变对象,新画 / 撤销都会改变数组成员或长度。
  */
-export function annotationStrokeWidth(naturalWidth: number, naturalHeight: number): number {
-  const base = Math.min(naturalWidth, naturalHeight) * 0.005;
-  return Math.min(24, Math.max(4, Math.round(base)));
-}
-
-/**
- * 归一化笔迹 → SVG path `d`(映射到 width×height 像素空间)。
- * 单点笔迹(点按)画一个极短线段,配合 round linecap 呈现为圆点。
- */
-export function annotationStrokeToSvgPath(
-  stroke: AnnotationStroke,
-  width: number,
-  height: number,
-): string {
-  const pts = stroke.points;
-  if (pts.length === 0) return '';
-  const fmt = (p: { x: number; y: number }) =>
-    `${(p.x * width).toFixed(1)} ${(p.y * height).toFixed(1)}`;
-  if (pts.length === 1) {
-    const x = pts[0].x * width;
-    const y = pts[0].y * height;
-    return `M ${x.toFixed(1)} ${y.toFixed(1)} L ${(x + 0.1).toFixed(1)} ${y.toFixed(1)}`;
+export function annotationStrokesEqual(
+  a: readonly AnnotationStroke[],
+  b: readonly AnnotationStroke[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
   }
-  return `M ${fmt(pts[0])} ${pts.slice(1).map((p) => `L ${fmt(p)}`).join(' ')}`;
+  return true;
+}
+
+/**
+ * 烧录 canvas 尺寸(与 WebView 内的安全钳同公式):长边超过
+ * {@link ANNOTATION_MAX_BURN_DIMENSION} 时等比缩到上限内。
+ */
+export function annotationBurnCanvasSize(
+  naturalWidth: number,
+  naturalHeight: number,
+): { width: number; height: number } {
+  const cap = Math.min(1, ANNOTATION_MAX_BURN_DIMENSION / Math.max(naturalWidth, naturalHeight));
+  return {
+    width: Math.max(1, Math.round(naturalWidth * cap)),
+    height: Math.max(1, Math.round(naturalHeight * cap)),
+  };
 }
 
 /** 烧录任务输入(RN → WebView)。 */
@@ -163,6 +193,12 @@ export interface AnnotationBurnInRequest {
   base64: string;
   mimeType: string;
   strokes: readonly AnnotationStroke[];
+  /**
+   * 笔迹线宽 / 坐标所在的逻辑像素空间(可选)。源图已被预缩时传入「未预缩时
+   * 的 canvas 尺寸」,WebView 在该空间内按共享算法重放后等比缩到实际 canvas,
+   * 线宽相对图片的比例与未预缩时一致。缺省 = 实际 canvas 尺寸。
+   */
+  strokeSpace?: { width: number; height: number };
 }
 
 /** 烧录回包(WebView → RN,JSON 字符串经 postMessage)。 */
@@ -208,47 +244,36 @@ export function buildAnnotationBurnInInvocation(request: AnnotationBurnInRequest
 }
 
 /**
- * 烧录 WebView 的宿主 HTML。canvas 重放算法与桌面 drawStrokesOnCanvas 逐行
- * 对应:round cap/join、两遍绘制(先全部白描边、再全部红线,保证交叉处不出现
- * 白边压红线的断裂),单点画极短线段呈圆点。JPEG 源保持 JPEG(照片转 PNG 体积
- * 爆炸),其余输出 PNG。
+ * 烧录 WebView 的宿主 HTML。笔迹重放直接内联共享核心的
+ * ANNOTATION_CANVAS_SCRIPT(cindyDrawAnnotationStrokes:round cap/join、先全部
+ * 白描边再全部红线、单点画极短线段呈圆点),与 SVG 预览 / 桌面烧录同一实现。
+ * JPEG 源保持 JPEG(照片转 PNG 体积爆炸),其余输出 PNG。
  */
 export function buildAnnotationBurnInHtml(): string {
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body>
 <script>
+${ANNOTATION_CANVAS_SCRIPT}
+</script>
+<script>
 (function () {
   'use strict';
-  var STROKE_COLOR = ${JSON.stringify(ANNOTATION_STROKE_COLOR)};
-  var OUTLINE_COLOR = ${JSON.stringify(ANNOTATION_OUTLINE_COLOR)};
-  var OUTLINE_RATIO = ${ANNOTATION_OUTLINE_WIDTH_RATIO};
   var MAX_DIMENSION = ${ANNOTATION_MAX_BURN_DIMENSION};
 
   function post(msg) {
     window.ReactNativeWebView.postMessage(JSON.stringify(msg));
   }
 
-  function strokeWidthFor(width, height) {
-    var base = Math.min(width, height) * 0.005;
-    return Math.min(24, Math.max(4, Math.round(base)));
-  }
-
-  function drawPass(ctx, strokes, width, height, color, lineWidth) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth;
-    for (var s = 0; s < strokes.length; s++) {
-      var pts = strokes[s].points;
-      if (!pts || pts.length === 0) continue;
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x * width, pts[0].y * height);
-      if (pts.length === 1) {
-        ctx.lineTo(pts[0].x * width + 0.1, pts[0].y * height);
-      } else {
-        for (var i = 1; i < pts.length; i++) {
-          ctx.lineTo(pts[i].x * width, pts[i].y * height);
-        }
-      }
-      ctx.stroke();
+  function drawStrokes(ctx, request, width, height) {
+    var space = request.strokeSpace;
+    if (space && space.width > 0 && space.height > 0 && (space.width !== width || space.height !== height)) {
+      // 源图已预缩:在未预缩的逻辑空间内重放(线宽按逻辑尺寸计算),再等比缩到实际 canvas。
+      ctx.save();
+      ctx.scale(width / space.width, height / space.height);
+      cindyDrawAnnotationStrokes(ctx, request.strokes, space.width, space.height);
+      ctx.restore();
+    } else {
+      cindyDrawAnnotationStrokes(ctx, request.strokes, width, height);
     }
   }
 
@@ -275,11 +300,7 @@ export function buildAnnotationBurnInHtml(): string {
             return;
           }
           ctx.drawImage(img, 0, 0, width, height);
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-          var strokeWidth = strokeWidthFor(width, height);
-          drawPass(ctx, request.strokes, width, height, OUTLINE_COLOR, Math.round(strokeWidth * OUTLINE_RATIO));
-          drawPass(ctx, request.strokes, width, height, STROKE_COLOR, strokeWidth);
+          drawStrokes(ctx, request, width, height);
           var outMime = request.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png';
           var dataUrl = canvas.toDataURL(outMime, 0.92);
           var comma = dataUrl.indexOf(',');
@@ -403,4 +424,101 @@ export function canAnnotateImageMime(mimeType: string | undefined): boolean {
   const lower = mimeType.toLowerCase();
   if (!lower.startsWith('image/')) return false;
   return lower !== 'image/gif' && lower !== 'image/svg+xml';
+}
+
+/** Android 系统 WebView 解不了(或不稳定)的位图格式:烧录前先用原生 manipulator 转码。 */
+const ANDROID_WEBVIEW_UNDECODABLE_MIMES = new Set([
+  'image/heic',
+  'image/heif',
+  'image/heic-sequence',
+  'image/heif-sequence',
+  'image/avif',
+]);
+/** Android 转码 HEIC / HEIF / AVIF 的 JPEG 质量(高质量,体积可控)。 */
+export const ANDROID_TRANSCODE_JPEG_QUALITY = 0.92;
+/** 烧录前允许交给原生 manipulator 预缩的格式(未知 / 矢量 / 动图一律走原路径)。 */
+const MANIPULATOR_PRESCALE_MIMES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  ...ANDROID_WEBVIEW_UNDECODABLE_MIMES,
+]);
+
+/** 烧录前的源图预处理方案(expo-image-manipulator 执行)。 */
+export interface AnnotationBurnSourcePlan {
+  /** 等比缩放目标(只给长边一维);null = 只转码不缩尺寸。 */
+  resize: { width: number } | { height: number } | null;
+  /**
+   * 中间产物格式:JPEG 源保持 JPEG(最高质量);Android 转码的 HEIC / HEIF / AVIF
+   * 一律高质量 JPEG(照片格式,无损 PNG 在无尺寸提示时可达数十 MB);其余预缩
+   * 为无损 PNG(保透明,长边已钳到上限)。
+   */
+  format: 'jpeg' | 'png';
+  compress: number;
+  /**
+   * 预缩后笔迹重放的逻辑空间(= 未预缩时 WebView 会用的 canvas 尺寸),
+   * 保证线宽相对图片的比例与未预缩时一致;只转码不缩时为 null。
+   */
+  strokeSpace: { width: number; height: number } | null;
+}
+
+/**
+ * 决定烧录前要不要先把源图交给原生 manipulator 处理。返回 null = 原样交给
+ * WebView(与既有路径完全一致)。
+ *
+ * - Android 系统 WebView 解不了 HEIC / HEIF / AVIF:先转码(HEIC / HEIF 转高质量
+ *   JPEG 控制体积,AVIF 可能带透明、转无损 PNG),否则用户画完才得到解码失败。
+ * - 已知尺寸长边超过上传上限(2048)的大图:先按上传同口径缩到上限,WebView
+ *   只需解码 / 注入 / 烧录一张小图(内存与注入体积按像素数下降)。
+ *   尺寸未知时不预缩(不为探测尺寸额外解码),维持原路径。
+ */
+export function planAnnotationBurnSource(input: {
+  mimeType: string;
+  platformOS: string;
+  naturalWidth?: number | null;
+  naturalHeight?: number | null;
+}): AnnotationBurnSourcePlan | null {
+  const mime = input.mimeType.trim().toLowerCase();
+  if (!MANIPULATOR_PRESCALE_MIMES.has(mime)) return null;
+  const width = positiveDimension(input.naturalWidth);
+  const height = positiveDimension(input.naturalHeight);
+  const transcode = input.platformOS === 'android' && ANDROID_WEBVIEW_UNDECODABLE_MIMES.has(mime);
+  const prescale = width > 0 && height > 0 && Math.max(width, height) > MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE;
+  if (!transcode && !prescale) return null;
+  // HEIC/HEIF(相机照片,无透明通道)转 JPEG 控制体积;AVIF 可能带透明(贴纸等),
+  // 保持 PNG 以免透明区变黑(体积由调用方的源文件上限兜底)。
+  const transcodeToJpeg = transcode && mime !== 'image/avif';
+  return {
+    resize: prescale
+      ? (width >= height ? { width: MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE } : { height: MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE })
+      : null,
+    format: mime === 'image/jpeg' || transcodeToJpeg ? 'jpeg' : 'png',
+    compress: transcodeToJpeg ? ANDROID_TRANSCODE_JPEG_QUALITY : 1,
+    strokeSpace: prescale ? annotationBurnCanvasSize(width, height) : null,
+  };
+}
+
+/**
+ * 校验 manipulator 预缩产物:尺寸有效、长边不超上限、宽高比与提示尺寸一致
+ * (提示来自 lightbox 解码尺寸;方向或尺寸对不上说明提示不可信,放弃预缩回退
+ * 原路径,绝不带着错误的线宽空间烧录)。
+ */
+export function isAnnotationBurnSourceResultUsable(
+  plan: AnnotationBurnSourcePlan,
+  result: { width: number; height: number },
+  hint: { width?: number | null; height?: number | null },
+): boolean {
+  if (!(result.width > 0) || !(result.height > 0)) return false;
+  if (!plan.resize) return true;
+  if (Math.max(result.width, result.height) > MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE) return false;
+  const hintWidth = positiveDimension(hint.width);
+  const hintHeight = positiveDimension(hint.height);
+  if (!hintWidth || !hintHeight) return false;
+  const expected = hintWidth / hintHeight;
+  const actual = result.width / result.height;
+  return Math.abs(actual - expected) / expected <= 0.02;
+}
+
+function positiveDimension(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
 }

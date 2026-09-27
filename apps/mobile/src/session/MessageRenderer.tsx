@@ -5222,8 +5222,10 @@ function OrcaCollabCard({ card, screenWidth, blockKey }: {
   const { accountGeneration } = useAuth();
   // Remember manual expansions using the
   // existing bounded block store, including across native route reconstruction.
+  // Key prefix orca-expanded- (not the old orca-toggled-): dispatch cards used to default open, so a
+  // remembered legacy toggle meant "collapsed"; never reinterpret it as "expanded".
   const [expanded, toggleExpanded] = useFoldableExpandedState(
-    `orca-toggled-${JSON.stringify([accountGeneration, blockKey, card.variant])}`, false,
+    `orca-expanded-${JSON.stringify([accountGeneration, blockKey, card.variant])}`, false,
   );
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -7022,8 +7024,10 @@ function MessagePayloadModal({
           </View>
           {annotatePayload && annotateImages ? (
             // 嵌套标注层:必须渲染在本 Modal 的 children 内(见 annotatePayload 注释)。
+            // 入口本身就是「标注」:打开即进标注模式;放弃标注直接回图表(对齐桌面)。
             <ImageLightbox
               annotation={annotateLightboxAnnotation}
+              autoAnnotate
               images={annotateImages}
               initialUrl={annotatePayload.media.url}
               onClose={closeAnnotatePayload}

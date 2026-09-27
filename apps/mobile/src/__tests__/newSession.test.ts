@@ -2038,9 +2038,15 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('getAccessToken: () => auth.getAccessToken(),');
     expect(newSource).toContain('refreshAccessToken: () => auth.refreshAccessToken(),');
     expect(newSource).toContain('apiFetch: auth.apiFetch,');
-    expect(newSource).toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
-    expect(newSource).toContain('const prewarmedVoicePromise = takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null);');
-    expect(newSource).toContain('prewarmedVoicePromise.then((voice) => getMobileVoiceInputHistoryForHost(selectedDeviceId, voice?.credential.settings?.voiceInputHistory))');
+    expect(newSource).toContain('const prewarmedVoice = await (takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null));');
+    // 语音历史与词典快照只服务润色提示:后台读取,不挡在开麦之前。
+    expect(newSource).not.toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
+    expect(newSource).toContain('void getMobileVoiceInputHistoryForHost(selectedDeviceId, prewarmedVoice?.credential.settings?.voiceInputHistory)');
+    expect(newSource).toContain('localVoiceInputHistory: () => localVoiceInputHistory,');
+    // 停止后 150ms 内保持录音胶囊,超过才显示处理转圈。
+    expect(newSource).toContain('expanded: voiceIsListening || voiceStartPending || voiceProcessingIndicator.stopping,');
+    // 停止期保持胶囊外观,只有与语音无关的禁用原因(创建中)才置灰。
+    expect(newSource).toContain('(creating || (voiceIsProcessing && !voiceProcessingIndicator.stopping)) && styles.disabled,');
     expect(newSource).not.toContain('MobileVoiceServiceMode');
     expect(newSource).not.toContain('LiteLlm');
     expect(newSource).toContain('?? createMobileCindyVoiceCredential(selectedDeviceId);');

@@ -183,10 +183,12 @@ export function consumeIncomingShareBatch(id: string): boolean {
   if (getMobileAuthOwner().switching || !currentBatch || currentBatch.id !== id
     || !currentBatch.owner.accountKey || !isMobileAuthOwnerCurrent(currentBatch.owner)) return false;
   const consumed = currentBatch;
+  // Do not expose a removable attachment until consumption is durable. On failure
+  // keep the mailbox entry so focusing the screen again can retry the handoff.
+  consumed.acknowledge();
   pendingBatches.shift();
   currentBatch = pendingBatches[0] ?? null;
   emit();
-  acknowledgeBatch(consumed);
   return true;
 }
 

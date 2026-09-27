@@ -489,6 +489,11 @@ export interface RefreshLocalModelsOptions {
    * session hosts never need a credential-mode switch.
    */
   credentialMode?: AgentCredentialMode;
+  /**
+   * Claude Code:把本次读到的 SDK `supportedModels()` 原样交给调用方,而不是全局
+   * 捕获监听器,让调用方按发起时的登录代际决定是否采用。
+   */
+  onSupportedModels?: (models: unknown[]) => void;
 }
 
 export interface ClaudeSubagentTaskRegistration {

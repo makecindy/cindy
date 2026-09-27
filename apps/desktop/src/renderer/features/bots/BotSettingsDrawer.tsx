@@ -76,6 +76,12 @@ export function BotSettingsDrawer() {
       navigate('/bots', { replace: true });
       return;
     }
+    // A paused or failed teammate has no chat behind the drawer: its page reopens
+    // settings, so dropping the query alone would bounce straight back. Close to the list.
+    if (bot && bot.status !== 'active') {
+      navigate('/bots/list', { replace: true });
+      return;
+    }
     setSearchParams(
       (current) => {
         const next = new URLSearchParams(current);

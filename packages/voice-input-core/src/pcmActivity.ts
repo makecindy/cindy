@@ -1,3 +1,19 @@
+// Local PCM16 sound evidence shared by every voice host. Neither check is a
+// speech classifier: both keep plausible sound rather than risk quiet words.
+
+// Conservative silence check for "the whole recording was silent" decisions.
+// PCM16 RMS 32 is about -60 dBFS; a short peak also keeps a very brief sound.
+export function hasPcmSound(pcm: ArrayBuffer): boolean {
+  if (pcm.byteLength % 2 !== 0) return true; // Unknown data must not be discarded.
+  const samples = new Int16Array(pcm);
+  let energy = 0;
+  for (const sample of samples) {
+    if (Math.abs(sample) >= 128) return true;
+    energy += sample * sample;
+  }
+  return samples.length > 0 && energy >= samples.length * 32 * 32;
+}
+
 /** Local evidence for stop-time ASR finalization, not a speech classifier.
  * Measure 1 ms RMS buckets across packet boundaries. A 20 ms window must
  * contain 16 ms of quiet sound or 6 ms of stronger sound. Isolated impulses
@@ -26,10 +42,12 @@ export class StopSoundActivity {
     this.samplesPerMs = Math.max(1, Math.round(sampleRate / 1000));
   }
 
-  append(pcm: Buffer): void {
+  /** Little-endian PCM16 on the clock the ASR receives. */
+  append(pcm: Uint8Array): void {
     const t = StopSoundActivity.thresholds;
-    for (let offset = 0; offset + 1 < pcm.length; offset += 2) {
-      const value = pcm.readInt16LE(offset);
+    const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+    for (let offset = 0; offset + 1 < pcm.byteLength; offset += 2) {
+      const value = view.getInt16(offset, true);
       this.samples++;
       this.bucketSamples++;
       this.energy += value * value;

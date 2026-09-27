@@ -134,6 +134,7 @@ interface UseCCAgentChatReturn {
       slashCommandRanges?: SlashCommandRange[];
       beforeEnqueue?: () => Promise<boolean>;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+      annotationBurnFailure?: 'abort';
     },
   ) => Promise<boolean>;
   compactSession: (
@@ -159,6 +160,7 @@ interface UseCCAgentChatReturn {
       slashCommandRanges?: SlashCommandRange[];
       beforeEnqueue?: () => Promise<boolean>;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+      annotationBurnFailure?: 'abort';
     },
   ) => Promise<boolean>;
   steerQueuedMessage: (clientId: string) => Promise<boolean>;
@@ -422,6 +424,7 @@ export function useCCAgentChat(
         slashCommandRanges?: SlashCommandRange[];
         beforeEnqueue?: () => Promise<boolean>;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+        annotationBurnFailure?: 'abort';
       },
     ): Promise<boolean> => {
       if (!sessionId) return Promise.resolve(false);
@@ -478,6 +481,7 @@ export function useCCAgentChat(
         slashCommandRanges?: SlashCommandRange[];
         beforeEnqueue?: () => Promise<boolean>;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+        annotationBurnFailure?: 'abort';
       },
     ) => {
       if (!sessionId) return Promise.resolve(false);

@@ -20,6 +20,8 @@ import { useStableTranslation as useTranslation } from '@/hooks/useStableTransla
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { AnnotationStrokesSvg } from '@/components/chat/AnnotationStrokesSvg';
+import { isAnnotationBurnInError } from '@/lib/annotationBurnIn';
 import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';
 import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
 import { AttachmentTypeThumb } from './AttachmentTypeThumb';
@@ -489,6 +491,11 @@ interface ChatInputProps {
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
       /** 发送因补选目录暂缓时，由父组件在后续真正受理后完成原 composer 的清理。 */
       onDeferredAccepted?: () => void;
+      /**
+       * 标注烧录失败时中止发送而非降级发原图。仅在已有任务的发送上传：此时
+       * 返回 false 会由本组件把点击时的正文、附件与笔迹原样恢复，用户可直接重试。
+       */
+      annotationBurnFailure?: 'abort';
     },
   ) => boolean | void | Promise<boolean | void>;
   /** Session ID for binding workingDir. When absent, folder picker is hidden. */
@@ -5906,6 +5913,7 @@ export function ChatInput({
               ...(usedGhost ? { onAccepted: markRecentPluginUsage } : {}),
               ...(onRemoteOptimisticFailure ? { onRemoteOptimisticFailure } : {}),
               onDeferredAccepted,
+              ...(sourceSessionId ? { annotationBurnFailure: 'abort' as const } : {}),
             },
           );
         } catch (error) {
@@ -6000,7 +6008,11 @@ export function ChatInput({
       if (!saved) toast.error(t('ipcError.INTERNAL'));
     } catch (error) {
       log.warn('queue edit rejected:', error instanceof Error ? error.message : String(error));
-      toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' })));
+      toast.error(
+        isAnnotationBurnInError(error)
+          ? t('chat.media.annotateBurnFailedNotSaved')
+          : t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' })),
+      );
     } finally {
       setSendDispatchInFlight(false);
     }
@@ -9819,6 +9831,12 @@ function ThumbnailItem({
   // Lightbox state is local to each item so multiple thumbnails don't fight.
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [textLightboxOpen, setTextLightboxOpen] = useState(false);
+  // 缩略图自然尺寸:标注叠加层的 viewBox 基准(onLoad 取得,换图时重置)。
+  const [thumbNaturalSize, setThumbNaturalSize] = useState<{
+    src: string;
+    width: number;
+    height: number;
+  } | null>(null);
   const isDownloadOnly =
     isDangerousAttachmentName(file.name) || isDangerousAttachmentName(file.path);
 
@@ -9865,6 +9883,7 @@ function ThumbnailItem({
   // (上限 220px)。判定条件必须与下面渲染分支一致——缓存写失败、既无 url 也无
   // base64 的图片同样落到文件卡分支。
   const isImageThumb = file.category === 'image' && Boolean(file.url || file.base64);
+  const thumbSrc = file.url ?? `data:${file.mimeType};base64,${file.base64}`;
   // 副行是「类型 · 大小」;无扩展名(Makefile 之类)或 size 缺失时按存在的部分给。
   // file.size 是拖入那一刻的快照:文件在托盘期间被改写后,发出去的是新内容,卡片
   // 却还报旧字节数。缩略图复核时 main 会把当前 stat 大小一并带回,这里优先用它。
@@ -9906,11 +9925,37 @@ function ThumbnailItem({
         {file.category === 'image' && (file.url || file.base64) ? (
           <span className="relative block h-full w-full">
             <img
-              src={file.url ?? `data:${file.mimeType};base64,${file.base64}`}
+              src={thumbSrc}
               alt={file.name}
               className="h-full w-full rounded-lg object-cover"
               draggable={false}
+              onLoad={(event) => {
+                setThumbNaturalSize({
+                  src: thumbSrc,
+                  width: event.currentTarget.naturalWidth,
+                  height: event.currentTarget.naturalHeight,
+                });
+              }}
             />
+            {file.annotationStrokes?.length &&
+            thumbNaturalSize?.src === thumbSrc &&
+            thumbNaturalSize.width > 0 &&
+            thumbNaturalSize.height > 0 ? (
+              // 缩略图是 object-cover:SVG 以 xMidYMid slice 做同样的居中裁切,笔迹与
+              // 图片严格对齐;外层圆角裁剪与图片圆角一致。
+              <span
+                className="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
+                aria-hidden
+              >
+                <AnnotationStrokesSvg
+                  strokes={file.annotationStrokes}
+                  naturalWidth={thumbNaturalSize.width}
+                  naturalHeight={thumbNaturalSize.height}
+                  preserveAspectRatio="xMidYMid slice"
+                  className="block h-full w-full"
+                />
+              </span>
+            ) : null}
             {file.annotationStrokes && file.annotationStrokes.length > 0 ? (
               <span
                 className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full"
@@ -9974,8 +10019,9 @@ function ThumbnailItem({
         <ImageHoverPreview
           open={isHovered}
           anchorRef={thumbRef}
-          src={file.url ?? `data:${file.mimeType};base64,${file.base64}`}
+          src={thumbSrc}
           alt={file.name}
+          annotationStrokes={file.annotationStrokes}
         />
       ) : null}
       {isHovered &&

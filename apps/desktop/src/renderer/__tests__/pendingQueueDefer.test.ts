@@ -81,6 +81,8 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 
 import { makerChatStore, type QueuedMessage } from '@/lib/makerChatStore';
+import { AnnotationBurnInError } from '@/lib/annotationBurnIn';
+import { toast } from '@/lib/toast';
 
 const MODEL = 'claude-opus-4-7';
 const EFFORT = 'medium';
@@ -1163,5 +1165,255 @@ describe('renderer input queue facade', () => {
     await flushPromises();
 
     expect(ok).toBe(false);
+  });
+});
+
+describe('annotation burn-in in the renderer send / queue-edit paths', () => {
+  /** 最近一次物化调用的选项(mock 签名只声明了 files,这里按真实签名取第三参)。 */
+  function materializeOptions(): Record<string, unknown> | undefined {
+    const call = annotationBurnInMocks.materialize.mock.calls.at(-1) as unknown as
+      | [unknown, unknown, Record<string, unknown> | undefined]
+      | undefined;
+    return call?.[2];
+  }
+  const strokes = [{ points: [{ x: 0.2, y: 0.8 }, { x: 0.4, y: 0.6 }] }];
+  const editContent = {
+    text: 'edited text',
+    mentions: [],
+    hasQuotes: false,
+    agentReferences: [],
+    pastedTextRanges: [],
+    slashCommandRanges: [],
+  };
+
+  function annotatedQueueItem(burnedUrl: string) {
+    const sourceUrl = 'cindy-media://blobs/source.jpg';
+    const item = queued(`q-annotated-${Math.random().toString(36).slice(2, 8)}`, 'old text');
+    item.files = [{
+      id: 'annotated-image',
+      name: 'shot-annotated.png',
+      originalName: 'shot-annotated.png',
+      path: 'C:\\images\\shot.jpg',
+      ext: '.png',
+      size: 123,
+      category: 'image',
+      mimeType: 'image/png',
+      url: burnedUrl,
+      annotated: true,
+      annotationRegions: [{ x0: 0.2, y0: 0.6, x1: 0.4, y1: 0.8 }],
+    }];
+    const retryFile: AttachedFile = {
+      ...item.files[0],
+      annotationSourceUrl: sourceUrl,
+      annotationStrokes: strokes,
+      cacheUrlShared: true,
+    };
+    item.chatMessage.retryFiles = [retryFile];
+    // 队列编辑草稿里的可编辑态(queueMessageToComposerEditDraft 的产物形态)。
+    const editableFile: AttachedFile = {
+      ...item.files[0],
+      path: sourceUrl,
+      url: sourceUrl,
+      ext: '.jpg',
+      mimeType: 'image/jpeg',
+      annotated: undefined,
+      annotationRegions: undefined,
+      annotationStrokes: strokes.map((stroke) => ({
+        points: stroke.points.map((point) => ({ ...point })),
+      })),
+      cacheUrlShared: true,
+      stagedPathShared: true,
+    };
+    return { item, retryFile, editableFile };
+  }
+
+  it('reuses the queued burned bitmap when only the text of a queued message changed', async () => {
+    const sid = `annotated-reuse-${Math.random().toString(36).slice(2, 8)}`;
+    const burnedUrl = 'cindy-media://blobs/burned.png';
+    const { item, retryFile, editableFile } = annotatedQueueItem(burnedUrl);
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: editContent,
+      files: [editableFile],
+    });
+
+    expect(saved).toBe(true);
+    const [materializeInput] = annotationBurnInMocks.materialize.mock.calls.at(-1) ?? [];
+    // 交给物化的是队列里的烧录附件本身(retryFile,含所有权标记与元数据),不再重烧。
+    expect(materializeInput?.[0]).toBe(retryFile);
+    const replacement = input.updateContent.mock.calls.at(-1)?.[2] as unknown as QueuedMessage;
+    expect(replacement.files?.[0]).toMatchObject({
+      url: burnedUrl,
+      annotated: true,
+      annotationRegions: [{ x0: 0.2, y0: 0.6, x1: 0.4, y1: 0.8 }],
+    });
+    expect(replacement.chatMessage.retryFiles?.[0]).toMatchObject({
+      url: burnedUrl,
+      annotationSourceUrl: 'cindy-media://blobs/source.jpg',
+      cacheUrlShared: true,
+    });
+    for (const call of cleanupCachedImages.mock.calls as unknown as Array<[string[]]>) {
+      expect(call[0]).not.toContain(burnedUrl);
+      expect(call[0]).not.toContain('cindy-media://blobs/source.jpg');
+    }
+  });
+
+  it('re-burns when the strokes changed or the burned file is a legacy xdt-image', async () => {
+    const changedSid = `annotated-changed-${Math.random().toString(36).slice(2, 8)}`;
+    const changed = annotatedQueueItem('cindy-media://blobs/burned.png');
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(changedSid, { pendingQueue: [changed.item] }));
+    const changedFile = {
+      ...changed.editableFile,
+      annotationStrokes: [{ points: [{ x: 0.5, y: 0.5 }] }],
+    };
+    await makerChatStore.updateQueueItemContent(changedSid, changed.item.clientId, {
+      content: editContent,
+      files: [changedFile],
+    });
+    expect(annotationBurnInMocks.materialize.mock.calls.at(-1)?.[0]?.[0]).toBe(changedFile);
+
+    const legacySid = `annotated-legacy-${Math.random().toString(36).slice(2, 8)}`;
+    const legacy = annotatedQueueItem('xdt-image://session/burned.png');
+    projectionHandler?.(projection(legacySid, { pendingQueue: [legacy.item] }));
+    await makerChatStore.updateQueueItemContent(legacySid, legacy.item.clientId, {
+      content: editContent,
+      files: [legacy.editableFile],
+    });
+    expect(annotationBurnInMocks.materialize.mock.calls.at(-1)?.[0]?.[0]).toBe(
+      legacy.editableFile,
+    );
+  });
+
+  it('aborts a queue edit on burn-in failure without touching the queued item', async () => {
+    const sid = `annotated-abort-${Math.random().toString(36).slice(2, 8)}`;
+    const { item, editableFile } = annotatedQueueItem('cindy-media://blobs/burned.png');
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+    annotationBurnInMocks.materialize.mockRejectedValueOnce(
+      new AnnotationBurnInError('shot.png', new Error('decode failed')),
+    );
+    const changedFile = { ...editableFile, annotationStrokes: [{ points: [{ x: 0.5, y: 0.5 }] }] };
+
+    await expect(
+      makerChatStore.updateQueueItemContent(sid, item.clientId, {
+        content: editContent,
+        files: [changedFile],
+      }),
+    ).rejects.toBeInstanceOf(AnnotationBurnInError);
+    expect(materializeOptions()).toMatchObject({
+      burnFailure: 'abort',
+    });
+    expect(input.updateContent).not.toHaveBeenCalled();
+    expect(input.updateText).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(sid).pendingQueue[0]).toBe(item);
+  });
+
+  it('aborts an interactive local send on burn-in failure: returns false, no enqueue, error toast', async () => {
+    const sid = `annotated-send-abort-${Math.random().toString(36).slice(2, 8)}`;
+    const errorToast = vi.spyOn(toast, 'error');
+    annotationBurnInMocks.materialize.mockRejectedValueOnce(
+      new AnnotationBurnInError('shot.png', new Error('decode failed')),
+    );
+    const file: AttachedFile = {
+      id: 'tray-image',
+      name: 'shot.png',
+      path: 'C:\\images\\shot.png',
+      ext: '.png',
+      size: 1,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'cindy-media://blobs/tray.png',
+      annotationStrokes: strokes,
+    };
+
+    const ok = await makerChatStore.sendMessage(sid, 'look here', MODEL, EFFORT, PERM, WD, [file], undefined, {
+      annotationBurnFailure: 'abort',
+    });
+    await flushPromises();
+
+    expect(ok).toBe(false);
+    expect(materializeOptions()).toMatchObject({
+      burnFailure: 'abort',
+    });
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(sid).messages).toHaveLength(0);
+    expect(errorToast).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not claim "sent without annotations" when the fallback send is not accepted', async () => {
+    const sid = `annotated-send-fallback-rejected-${Math.random().toString(36).slice(2, 8)}`;
+    const warningToast = vi.spyOn(toast, 'warning');
+    (
+      annotationBurnInMocks.materialize as unknown as ReturnType<typeof vi.fn>
+    ).mockImplementationOnce(
+      async (
+        files: readonly AttachedFile[] | undefined,
+        _sessionId: string,
+        opts?: { onFallback?: (count: number) => void },
+      ) => {
+        opts?.onFallback?.(1);
+        return files ? files.map((f) => ({ ...f, annotationStrokes: undefined })) : undefined;
+      },
+    );
+    const file: AttachedFile = {
+      id: 'tray-image',
+      name: 'shot.png',
+      path: 'C:\\images\\shot.png',
+      ext: '.png',
+      size: 1,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'cindy-media://blobs/tray.png',
+      annotationStrokes: strokes,
+    };
+
+    const ok = await makerChatStore.sendMessage(sid, 'look here', MODEL, EFFORT, PERM, WD, [file], undefined, {
+      beforeEnqueue: async () => false,
+    });
+    await flushPromises();
+
+    expect(ok).toBe(false);
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(warningToast).not.toHaveBeenCalled();
+  });
+
+  it('keeps the fallback (and warns) for sends that did not opt into aborting', async () => {
+    const sid = `annotated-send-fallback-${Math.random().toString(36).slice(2, 8)}`;
+    const warningToast = vi.spyOn(toast, 'warning');
+    (
+      annotationBurnInMocks.materialize as unknown as ReturnType<typeof vi.fn>
+    ).mockImplementationOnce(
+      async (
+        files: readonly AttachedFile[] | undefined,
+        _sessionId: string,
+        opts?: { onFallback?: (count: number) => void },
+      ) => {
+        opts?.onFallback?.(1);
+        return files ? files.map((f) => ({ ...f, annotationStrokes: undefined })) : undefined;
+      },
+    );
+    const file: AttachedFile = {
+      id: 'tray-image',
+      name: 'shot.png',
+      path: 'C:\\images\\shot.png',
+      ext: '.png',
+      size: 1,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'cindy-media://blobs/tray.png',
+      annotationStrokes: strokes,
+    };
+
+    await makerChatStore.sendMessage(sid, 'look here', MODEL, EFFORT, PERM, WD, [file]);
+    await flushPromises();
+
+    expect(materializeOptions()).toMatchObject({
+      burnFailure: 'fallback',
+    });
+    expect(input.enqueue).toHaveBeenCalledTimes(1);
+    expect(warningToast).toHaveBeenCalledTimes(1);
   });
 });

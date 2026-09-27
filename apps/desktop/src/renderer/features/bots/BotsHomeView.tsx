@@ -47,6 +47,7 @@ import {
 import { BotRosterView } from './BotRosterView';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
+import { normalizeBotName } from '../../../shared/botCreation';
 import {
   botEntryTarget,
   createBotCanonicalSessionWithRetry,
@@ -106,6 +107,10 @@ export function BotSettings({
   const navigate = useNavigate();
   const [name, setName] = useState(bot.name);
   const [description, setDescription] = useState(bot.description);
+  const profiles = useBotProfiles();
+  // Same identity rule as creation and the host: NFKC, trimmed, case-insensitive.
+  const nameTaken = !!name.trim() && profiles.some((other) => other.id !== bot.id && other.status !== 'archived'
+    && normalizeBotName(other.name) === normalizeBotName(name));
   const [portraitRetryFailed, setPortraitRetryFailed] = useState(false);
   const [identitySource, setIdentitySource] = useState(bot.identitySource ?? '');
   const [userContextSource, setUserContextSource] = useState(bot.userContextSource ?? '');
@@ -435,7 +440,12 @@ export function BotSettings({
           ) : (
             <span />
           )}
-          {autosave.status === 'saving' ? (
+          {nameTaken ? (
+            // The host rejects the rename; say why instead of a generic save failure and a futile retry.
+            <p className="text-11 text-[var(--text-danger)]" role="alert">
+              {t('bots.guided.duplicateName')}
+            </p>
+          ) : autosave.status === 'saving' ? (
             <span
               role="status"
               className="inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)]"

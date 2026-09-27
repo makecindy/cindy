@@ -120,6 +120,7 @@ const ATTACHED_FILE_SNAPSHOT_KEYS = [
   'textContent',
   'truncated',
   'annotated',
+  'baseAnnotated',
   'annotationSourceUrl',
   'cacheUrlShared',
   'stagedPathShared',

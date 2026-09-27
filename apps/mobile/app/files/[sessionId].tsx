@@ -549,6 +549,9 @@ export default function RemoteFileBrowserScreen() {
         displayUri,
         strokes,
         mimeType: context.mimeType,
+        ...(context.naturalWidth && context.naturalHeight
+          ? { naturalWidth: context.naturalWidth, naturalHeight: context.naturalHeight }
+          : {}),
       });
       setLightbox(null);
       router.navigate({

@@ -73,14 +73,23 @@ Pi 走 `providers[].models.pi`（用户补丁 perAgent.pi 另属合法 schema）
 详细字段及成员空值规则以 [模型资料优先级](../product-rules/model-metadata-precedence.md) 为唯一正本。
 
 <a id="ordering"></a>
-## 模型排序：账号优先，目录兜底
+## 模型排序与成员：以账号为准
 
-OpenAI（Codex 订阅）与 Anthropic（Claude 订阅）的 root 有账号模型清单时，`sortOrder` 以账号
+OpenAI（Codex 订阅）与 Anthropic（Claude 订阅）的 root **成员只来自账号清单**：Registry 只给
+已返回的型号补资料、标退役，不补入账号没返回的型号；没有账号清单时名单为空。`sortOrder` 以账号
 返回顺序为准：Codex 取 `models_cache.json` 的 `priority` 或 app-server `model/list` 的返回位置，
-Claude 取 SDK `supportedModels()` 的返回位置。只在 Registry 里有、账号没返回的模型按 Registry
-`sortOrder` 接在其后。装配时重写为连续 `sortOrder`，选择器、设置页、新对话默认与 Claude Code
+Claude 取 SDK `supportedModels()` 的返回位置。用户本地 addition 按 Registry / 本地 `sortOrder`
+接在其后。装配时重写为连续 `sortOrder`，选择器、设置页、新对话默认与 Claude Code
 bridge 共用这一顺序；OpenAI 订阅的 Pi 清单成员与能力仍来自 Pi 目录，但同样按账号顺序排列，
-并沿用 Registry 条目的 `defaultEnabled: false`；用户本地 `sortOrder` patch 仍最高。拿不到账号清单时才用 Registry `sortOrder`。
+并沿用 Registry 条目的 `defaultEnabled: false`；用户本地 `sortOrder` patch 仍最高。
+
+Claude 订阅没有 HTTP 清单接口，清单来自内置 Claude Code 的 SDK `supportedModels()`：会话启动时
+捕获；此外 maker 就绪、登录／认领 Claude 登录以及手动刷新时，用本机 CLI 起一个空闲 Query 只读
+清单（不发消息、不产生模型调用）。SDK 对每个系列的当前型号常只给简称（`opus` / `sonnet` /
+`default`）并把版本写在说明里（如 “Opus 5.5 · …”）；简称按说明拼出 `claude-<系列>-<主>-<次>`。
+Registry 尚未登记的新版本照样显示（资料用未知模型默认值，并记日志提示补登记），**绝不映射到
+相邻旧版本**；说明里读不出版本时才跳过。SDK 的 displayName 只有系列名（如 “Fable”）时不作为
+型号名称，改用 Registry 名称，Registry 未登记则按 ID 推导（`claude-fable-5-2` → “Fable 5.2”）。
 xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受此规则影响。
 第三方 API key 连接（MiMo、Kimi Code 等预设及自定义端点）没有 sortOrder，按连接配置里的
 顺序排：首次添加用接口返回的顺序；之后刷新发现的新型号排在已有型号之前（保持接口返回的

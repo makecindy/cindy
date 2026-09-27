@@ -389,6 +389,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const completionInFlight = new Map<string, Promise<void>>();
   const interactionRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const cleanupRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const resumeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Live resolver handles remain process-local; the user-visible waiting
    * summary and paused status are persisted on the delegation row. */
   const pendingInteractions = new Map<string, BotDelegationPendingInteraction & {
@@ -884,7 +885,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       const initialReceiptSessionId = originalParent?.id
         ?? await requesterLiveSessionId(params.requestingBotId, null);
       if (!initialReceiptSessionId) {
-        scheduleCompletionRetry(params, attempt);
+        if (!(await holdCompletionForStoppedRequester(params))) scheduleCompletionRetry(params, attempt);
         return false;
       }
       let receiptSessionId: string = initialReceiptSessionId;
@@ -938,6 +939,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         return false;
       }
       const targetSessionId = await requesterLiveSessionId(params.requestingBotId, params.parentSessionId);
+      if (!targetSessionId && await holdCompletionForStoppedRequester(params)) return false;
       if (!targetSessionId) {
         log.warn('defer Bot delegation wake-up: requester has no live task', {
           delegationId: params.id,
@@ -1023,6 +1025,72 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     timer.unref?.();
     completionRetryTimers.set(params.id, timer);
   }
+
+  /**
+   * A paused, archived or deleted requester cannot take the wake-up until it is
+   * active again. Keep the run pending (the result card is already in its timeline)
+   * but stop the backoff loop: resuming the teammate or the next restore delivers it.
+   */
+  async function holdCompletionForStoppedRequester(
+    params: Parameters<typeof deliverCompletion>[0],
+  ): Promise<boolean> {
+    const [profile] = await getDbClient().drizzle.select({ status: botProfiles.status }).from(botProfiles)
+      .where(eq(botProfiles.id, params.requestingBotId)).limit(1);
+    if (profile && profile.status !== 'paused' && profile.status !== 'archived' && profile.status !== 'deleting') {
+      return false;
+    }
+    clearCompletionRetryTimer(params.id);
+    log.info('hold Bot Session task completion until its requester is active', {
+      delegationId: params.id,
+      requesterStatus: profile?.status ?? 'missing',
+    });
+    return true;
+  }
+
+  /**
+   * Deliver the completions a paused teammate missed; called when it resumes.
+   * Held completions have no backoff loop of their own, so a transient failure
+   * here retries with the same backoff instead of waiting for the next launch.
+   */
+  const resumeCompletionDelivery = async (botId: string, attempt = 0): Promise<void> => {
+    const pending = resumeRetryTimers.get(botId);
+    if (pending) {
+      clearTimeout(pending);
+      resumeRetryTimers.delete(botId);
+    }
+    try {
+      const db = getDbClient().drizzle;
+      const rows = await db.select({ id: botDelegations.id }).from(botDelegations).where(and(
+        eq(botDelegations.requestingBotId, botId),
+        inArray(botDelegations.status, ['completed', 'failed', 'cancelled', 'timed-out']),
+        isNull(botDelegations.completionDeliveredAt),
+      ));
+      for (const { id } of rows) {
+        await withTaskOperation(id, async () => {
+          const [current] = await db.select().from(botDelegations).where(eq(botDelegations.id, id)).limit(1);
+          if (!current || isActiveDelegation(current.status as DelegationStatus) || current.completionDeliveredAt !== null) return;
+          const row = await repairDelegationParent(current);
+          await deliverCompletion({
+            ...row,
+            status: row.status as Extract<DelegationStatus, 'completed' | 'failed' | 'cancelled' | 'timed-out'>,
+            artifacts: parseArtifacts(row.outputArtifactsJson),
+          });
+        });
+      }
+    } catch (error) {
+      log.warn('resume Bot task completion delivery failed; retrying', {
+        botId,
+        attempt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      const timer = setTimeout(() => {
+        resumeRetryTimers.delete(botId);
+        void resumeCompletionDelivery(botId, attempt + 1);
+      }, Math.min(MAX_RETRY_DELAY_MS, 1_000 * 2 ** Math.min(attempt, 6)));
+      timer.unref?.();
+      resumeRetryTimers.set(botId, timer);
+    }
+  };
 
   /**
    * 发起伙伴此刻活着的那条任务：优先冻结的父任务；若它已被恢复流程替换，改投
@@ -3814,6 +3882,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     interactionRetryTimers.clear();
     for (const timer of cleanupRetryTimers.values()) clearTimeout(timer);
     cleanupRetryTimers.clear();
+    for (const timer of resumeRetryTimers.values()) clearTimeout(timer);
+    resumeRetryTimers.clear();
   };
 
   return {
@@ -3845,6 +3915,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     handleInteractionStart,
     handleInteractionEnd,
     restore,
+    resumeCompletionDelivery: (botId: string) => resumeCompletionDelivery(botId),
     dispose,
   };
 }

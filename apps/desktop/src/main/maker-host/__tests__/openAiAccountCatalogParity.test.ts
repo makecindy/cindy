@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, type CatalogModel } from '@cindy/model-providers';
 import {
-  getActiveCatalog, setActiveCatalog, setCustomProviders, setDiscoveredCodexModels,
+  clearDiscoveredProviderModels, getActiveCatalog, setActiveCatalog, setCustomProviders,
+  setDiscoveredCodexModels, setDiscoveredProviderModels,
   setLocalCatalogOverrides, setCustomProviderConfigs, setDiscoveredProviderMediaModels,
   setOpenAiImagesApiKeyConfigured,
 } from '../active-catalog.js';
@@ -16,6 +17,20 @@ function account() {
     } },
   }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
 }
+/**
+ * OpenAI 订阅成员只来自账号清单(Registry 不补型号)。这里的清单只报成员、
+ * discoveredMetadata 为空，资料由 Registry 决定。
+ */
+function accountListModels(ids: readonly string[]): CatalogModel[] {
+  return ids.map((id): CatalogModel => ({
+    id, name: id, group: 'gpt', contextWindow: 272000, efforts: [], defaultEffort: null,
+    discoveredMetadata: {},
+  }));
+}
+/** 内置 openai 连接的本机 Codex 账号清单。 */
+function seedBuiltinAccount(...ids: string[]): void {
+  setDiscoveredCodexModels(accountListModels(ids));
+}
 function entry(providerId: string, agent: 'codex' | 'claude-code' | 'pi', id: string) {
   return getActiveCatalog().providers.find(p => p.id === providerId)!.models[agent]!.find(m => m.id === id)!;
 }
@@ -24,6 +39,7 @@ afterEach(() => {
   setOpenAiImagesApiKeyConfigured(false);
   setCustomProviders([]);
   setDiscoveredCodexModels([]);
+  clearDiscoveredProviderModels();
   setDiscoveredProviderMediaModels('openai', null);
   setDiscoveredProviderMediaModels(accountId, null);
   setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
@@ -153,7 +169,10 @@ describe('OpenAI account catalog identity', () => {
     provider.models.pi = slugs.map(slug => ({ id: `chatgpt/${slug}`, name: slug,
       contextWindow: 400000, efforts: [], defaultEffort: null, piApi: 'openai-responses' }));
     setActiveCatalog(catalog, { authorityCatalog: catalog });
+    // 两个连接的账号发现都返回 Pro/Cyber(Registry 不再替账号补型号)。
+    seedBuiltinAccount(...slugs);
     setCustomProviders([account()]);
+    setDiscoveredProviderModels(accountId, 'codex', accountListModels(slugs));
     for (const providerId of ['openai', accountId]) {
       for (const agent of ['codex', 'claude-code', 'pi'] as const) {
         for (const slug of slugs) {
@@ -199,7 +218,7 @@ describe('OpenAI account catalog identity', () => {
     expect(entry('api-independent', 'codex', 'gpt-local-fixture')).toBeUndefined();
     expect(getActiveCatalog().providers.some(p => p.id === 'not-added-yet')).toBe(false);
   });
-  it('projects public Codex/Claude membership and explicit server Pi entries to every account', () => {
+  it('projects the same account Codex/Claude membership and explicit server Pi entries to every account', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     const remotePi: CatalogModel = {
       id: 'chatgpt/gpt-parity-fixture', name: 'Server Pi fixture', group: 'gpt',
@@ -207,7 +226,10 @@ describe('OpenAI account catalog identity', () => {
     };
     catalog.providers.find(p => p.id === 'openai')!.models.pi = [remotePi];
     setActiveCatalog(catalog, { authorityCatalog: catalog });
+    // 两个连接的账号返回同一清单(同一份发现证据)时，三个 Harness 的投影逐项一致。
+    seedBuiltinAccount('gpt-5.6-luna');
     setCustomProviders([account()]);
+    setDiscoveredProviderModels(accountId, 'codex', accountListModels(['gpt-5.6-luna']));
     const providers = getActiveCatalog().providers;
     const original = providers.find(p => p.id === 'openai')!;
     const second = providers.find(p => p.id === accountId)!;
@@ -216,6 +238,7 @@ describe('OpenAI account catalog identity', () => {
       expect([...ids].sort()).toEqual(original.models[agent]!.map(m => m.id).sort());
       expect(new Set(ids).size).toBe(ids.length);
     }
+    expect(second.models.codex!.map(m => m.id)).toEqual(['gpt-5.6-luna']);
     expect(entry(accountId, 'pi', remotePi.id)).toMatchObject(remotePi);
     expect(second.id).not.toBe(original.id);
     expect(second.auth).toEqual({ method: 'oauth', native: 'codex' });
@@ -223,6 +246,7 @@ describe('OpenAI account catalog identity', () => {
 
   it('keeps connection-specific local metadata patches separate through catalog refresh', () => {
     setActiveCatalog(BUNDLED_CATALOG);
+    seedBuiltinAccount('gpt-5.6-luna');
     setCustomProviders([account()]);
     setLocalCatalogOverrides(sanitizeModelCatalogOverrides({ patches: {
       'openai:gpt-5.6-luna': { base: { contextWindow: 111111 } },
@@ -243,6 +267,7 @@ describe('OpenAI account catalog identity', () => {
     const configured = account();
     const model = configured.models.codex![0]!;
     model.userModelConfig = { ...model.userModelConfig!, contextWindow };
+    seedBuiltinAccount('gpt-5.6-luna');
     setCustomProviders([configured]);
     expect(entry(accountId, 'codex', 'gpt-5.6-luna').contextWindow).toBe(contextWindow);
     expect(entry(accountId, 'claude-code', 'chatgpt/gpt-5.6-luna').contextWindow).toBe(contextWindow);
@@ -265,6 +290,8 @@ it('applies server Pi replacement, removal and missing-field fallback equally to
   }
   openai.models.pi = [];
   setActiveCatalog(structuredClone(catalog), { authorityCatalog: structuredClone(catalog) });
+  // 内置连接的 Codex 成员只来自账号清单；账号发现也不能复活显式清空的 Pi。
+  seedBuiltinAccount('gpt-5.6-luna');
   for (const providerId of ['openai', accountId]) {
     expect(getActiveCatalog().providers.find(p => p.id === providerId)!.models.pi).toEqual([]);
     expect(getActiveCatalog().providers.find(p => p.id === providerId)!.models.codex?.length).toBeGreaterThan(0);
@@ -283,6 +310,7 @@ it('legacy Pi defaults cannot override Registry definitions or per-account user 
   openai.models.pi = [{ id: 'chatgpt/gpt-5.6-luna', name: 'Remote Luna', contextWindow: 123456,
     efforts: ['low'], defaultEffort: 'low', piApi: 'openai-responses' }];
   setActiveCatalog(catalog, { authorityCatalog: catalog });
+  seedBuiltinAccount('gpt-5.6-luna');
   setCustomProviders([account()]);
   setLocalCatalogOverrides(sanitizeModelCatalogOverrides({ patches: {
     [`${accountId}:chatgpt/gpt-5.6-luna`]: { perAgent: { pi: { contextWindow: 234567 } } },

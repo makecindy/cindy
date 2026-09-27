@@ -81,8 +81,6 @@ import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import {
-  extractExt,
-  getMimeType,
   type AttachedFile,
   type MentionedResource,
   type SerializedAttachedFile,
@@ -210,9 +208,15 @@ import {
 import { parseReconnectAttemptMessage } from '@/utils/networkError';
 
 import {
+  isAnnotationBurnInError,
   materializeAnnotatedAttachmentsForSend,
   needsAnnotationMaterialize,
 } from '@/lib/annotationBurnIn';
+import {
+  annotationStrokesEqual,
+  queuedAnnotationEditMeta,
+  toEditableAnnotatedAttachment,
+} from '@/lib/annotationRestore';
 
 const log = createLogger('CcAgentChatStore');
 // perf-baseline(与 MessageStream / sidebar 的 perf/session-switch 探针同通道):
@@ -13390,18 +13394,19 @@ function buildQueuedMessage(
   };
 }
 
+/** 返回物化结果是否已交给 outbox(记录已被清除 / 撤销时为 false)。 */
 function completeRemoteOptimisticMaterialization(
   sessionId: string,
   clientId: string,
   buildMaterializedQueued: () => QueuedMessage,
-): void {
+): boolean {
   const record = remoteOptimisticSendRecords(sessionId)?.get(clientId);
   if (
     !record ||
     !record.materializationPending ||
     !isRemoteOptimisticSendRegistered(sessionId, record)
   ) {
-    return;
+    return false;
   }
 
   const previousQueued = record.queued;
@@ -13439,6 +13444,7 @@ function completeRemoteOptimisticMaterialization(
   delete record.onMaterializationReady;
   onMaterializationReady?.(queued);
   pumpRemoteOptimisticSendsAfterCurrent(sessionId);
+  return true;
 }
 
 function extractSessionRefs(
@@ -13691,8 +13697,12 @@ function queuedContentProjectionMatches(
 function cleanupUnacceptedQueueEditMaterialization(
   originalFiles: readonly AttachedFile[],
   preparedFiles: readonly AttachedFile[],
+  queuedFiles: readonly AttachedFile[] = [],
 ): void {
-  const originalUrls = new Set(originalFiles.map((file) => file.url).filter(Boolean));
+  // 仍被原队列消息引用的文件(含免重烧复用的烧录图)绝不是本次编辑新生成的。
+  const originalUrls = new Set(
+    [...originalFiles, ...queuedFiles].map((file) => file.url).filter(Boolean),
+  );
   const generatedUrls = preparedFiles
     .map((file) => file.url)
     .filter((url): url is string => Boolean(url) && !originalUrls.has(url));
@@ -13782,6 +13792,28 @@ function cleanupAcceptedQueueEditMaterializationSources(
   });
 }
 
+/**
+ * 队列中可"免重烧复用"的烧录附件(按附件 id):队列消息的 retryFile 描述的正是
+ * 这张烧录图(annotationRestore 配对规则),且烧录图是 `cindy-media://` 内容寻址
+ * 文件——渲染进程的缓存清理 IPC 从不物理删除 cindy-media(见 image-cache:cleanup-files),
+ * 复用后无论编辑被接受还是拒绝,都不会有清理路径删掉仍被队列 / 新消息引用的字节。
+ * 旧版 xdt-image:// 烧录图按文件删除,保守起见不复用、照旧重烧。
+ * 返回的是 retryFile 本身:保留原图与笔迹(下次编辑仍可还原)和标注区域。
+ */
+function reusableQueuedAnnotatedFiles(queued: QueuedMessage): Map<string, AttachedFile> {
+  const retryFilesById = new Map(
+    (queued.chatMessage.retryFiles ?? []).map((file) => [file.id, file]),
+  );
+  const reusable = new Map<string, AttachedFile>();
+  for (const file of queued.files ?? []) {
+    const retryFile = retryFilesById.get(file.id);
+    if (!retryFile || !queuedAnnotationEditMeta(file, retryFile)) continue;
+    if (!file.url?.startsWith('cindy-media://')) continue;
+    reusable.set(file.id, retryFile);
+  }
+  return reusable;
+}
+
 function queueEditFilesMatch(
   left: readonly AttachedFile[] | undefined,
   right: readonly AttachedFile[] | undefined,
@@ -13801,6 +13833,7 @@ function queueEditFilesMatch(
       textContent: file.textContent,
       truncated: file.truncated,
       annotated: file.annotated,
+      baseAnnotated: file.baseAnnotated,
       annotationSourceUrl: file.annotationSourceUrl,
       annotationStrokes: file.annotationStrokes,
     }));
@@ -13815,29 +13848,10 @@ function queueEditFilesRemainUnchanged(
   const retryFilesById = new Map(
     (queued.chatMessage.retryFiles ?? []).map((file) => [file.id, file]),
   );
+  // 与输入框编辑草稿同一套还原规则(annotationRestore),比较口径才一致。
   const editableQueuedFiles = (queued.files ?? []).map((file) => {
-    const retryFile = retryFilesById.get(file.id);
-    const annotationSourceUrl =
-      file.annotated === true &&
-      retryFile?.annotated === true &&
-      retryFile.path === file.path &&
-      retryFile.url === file.url &&
-      retryFile.annotationSourceUrl &&
-      retryFile.annotationStrokes?.length
-        ? retryFile.annotationSourceUrl
-        : null;
-    if (!annotationSourceUrl || !retryFile?.annotationStrokes) return file;
-    const sourceExt = extractExt(annotationSourceUrl) || file.ext;
-    const editableFile = { ...file };
-    delete editableFile.annotated;
-    return {
-      ...editableFile,
-      path: annotationSourceUrl,
-      url: annotationSourceUrl,
-      ext: sourceExt,
-      mimeType: getMimeType(sourceExt, 'image'),
-      annotationStrokes: retryFile.annotationStrokes,
-    };
+    const meta = queuedAnnotationEditMeta(file, retryFilesById.get(file.id));
+    return meta ? toEditableAnnotatedAttachment(file, meta) : file;
   });
   return queueEditFilesMatch(editableQueuedFiles, editedFiles);
 }
@@ -13872,15 +13886,30 @@ async function updateQueueItemContent(
   const { content, files } = update;
   if (!content.text.trim() && files.length === 0) return false;
   const queuedFilesById = new Map((queued.files ?? []).map((file) => [file.id, file]));
+  const reusableBurnedFiles = reusableQueuedAnnotatedFiles(queued);
   const filesForMaterialization = files.map((file) => {
+    // 只改了文字、标注原样的图:直接沿用队列里已烧录的附件(retryFile 原样,含其
+    // 所有权标记与原图 / 笔迹元数据),不重新解码 / 编码。
+    const reused = reusableBurnedFiles.get(file.id);
+    if (
+      reused &&
+      file.url === reused.annotationSourceUrl &&
+      file.path === reused.annotationSourceUrl &&
+      annotationStrokesEqual(file.annotationStrokes, reused.annotationStrokes)
+    ) {
+      return reused;
+    }
     const queuedFile = queuedFilesById.get(file.id);
     if (!queuedFile || queuedFile.url !== file.url || queuedFile.path !== file.path) return file;
     return { ...file, cacheUrlShared: undefined, stagedPathShared: undefined };
   });
   const remoteMediaSession = isRemoteMediaSession(sessionId);
+  // 队列编辑是交互式保存:烧录失败即中止(抛出,输入框里的编辑与笔迹原样保留,
+  // 由 ChatInput 提示),不再悄悄把原图存进队列。此时尚未改动任何队列状态。
   const preparedFiles =
     (await materializeAnnotatedAttachmentsForSend(filesForMaterialization, sessionId, {
       stripAnnotationMeta: remoteMediaSession,
+      burnFailure: 'abort',
     })) ?? [];
 
   const textUnchanged = content.text === queued.text;
@@ -13956,11 +13985,11 @@ async function updateQueueItemContent(
         ));
         usedTextFallback = true;
       } catch (fallbackError) {
-        cleanupUnacceptedQueueEditMaterialization(files, preparedFiles);
+        cleanupUnacceptedQueueEditMaterialization(files, preparedFiles, queued.files ?? []);
         throw fallbackError;
       }
     } else {
-      cleanupUnacceptedQueueEditMaterialization(files, preparedFiles);
+      cleanupUnacceptedQueueEditMaterialization(files, preparedFiles, queued.files ?? []);
       throw error;
     }
   }
@@ -13971,7 +14000,7 @@ async function updateQueueItemContent(
   const updated = queuedContentProjectionMatches(accepted, acceptedReplacement);
   if (updated && accepted) {
     if (usedTextFallback) {
-      cleanupUnacceptedQueueEditMaterialization(files, preparedFiles);
+      cleanupUnacceptedQueueEditMaterialization(files, preparedFiles, queued.files ?? []);
     } else {
       cleanupAcceptedQueueEditReplacements(
         queued.files ?? [],
@@ -13988,7 +14017,7 @@ async function updateQueueItemContent(
       );
     }
   } else {
-    cleanupUnacceptedQueueEditMaterialization(files, preparedFiles);
+    cleanupUnacceptedQueueEditMaterialization(files, preparedFiles, queued.files ?? []);
   }
   return updated;
 }
@@ -14184,11 +14213,60 @@ type SendMessageOpts = {
   beforeEnqueue?: () => Promise<boolean>;
   /** 远程乐观发送在稍后确认永久失败时恢复 composer。 */
   onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+  /**
+   * 标注烧录失败时中止本次发送(返回 false、提示用户、不产生任何消息),而不是
+   * 降级发原图。只有「返回 false 必定原样保留草稿」的调用方才能传(输入框对
+   * 已有任务的发送);缺省保持降级 + 提示。device-link 乐观发送气泡已上屏,
+   * 一律降级。
+   */
+  annotationBurnFailure?: 'abort';
 };
 
 /** remote(SSH / device-link)会话:标注编辑数据指向控制端本地缓存,发送时剥离。 */
 function isRemoteMediaSession(sessionId: string): boolean {
   return Boolean(getOrCreateState(sessionId).remoteHostId ?? getStickySessionDeviceId(sessionId));
+}
+
+/**
+ * 烧录降级提示:无法安全中止的发送路径发出了不含标注的原图,必须让用户知道。
+ * 只在消息确实交出后调用(本机:dispatch 受理;device-link:物化结果进入 outbox),
+ * 未发出的消息不能提示"已发送原图"。
+ */
+function notifyAnnotationBurnFallback(): void {
+  toast.warning(i18n.t('chat.media.annotateBurnFailedSentOriginal'));
+}
+
+/**
+ * 本机 / SSH 发送的标注物化:`annotationBurnFailure: 'abort'` 时烧录失败即中止
+ * (提示 + 返回 false,调用方原样恢复草稿与笔迹供重试);否则降级发原图并提示。
+ * 物化发生在 dispatch 之前,中止时尚未产生气泡、队列项或落库。
+ */
+function runLocalAnnotatedSend(
+  sessionId: string,
+  files: AttachedFile[] | undefined,
+  burnFailure: 'abort' | undefined,
+  dispatch: (prepared: AttachedFile[] | undefined) => Promise<boolean>,
+): Promise<boolean> {
+  let fellBack = false;
+  return runRemoteOptimisticMaterialization(
+    null,
+    materializeAnnotatedAttachmentsForSend(files, sessionId, {
+      stripAnnotationMeta: isRemoteMediaSession(sessionId),
+      burnFailure: burnFailure === 'abort' ? 'abort' : 'fallback',
+      onFallback: () => {
+        fellBack = true;
+      },
+    }),
+    async (prepared) => {
+      const accepted = await dispatch(prepared);
+      if (accepted && fellBack) notifyAnnotationBurnFallback();
+      return accepted;
+    },
+  ).catch((error: unknown) => {
+    if (!isAnnotationBurnInError(error)) throw error;
+    toast.error(i18n.t('chat.media.annotateBurnFailedNotSent'));
+    return false;
+  });
 }
 
 /**
@@ -14295,24 +14373,34 @@ function sendMessage(
         void accepted.then(
           (optimisticallyAccepted) => {
             if (!optimisticallyAccepted) return;
+            // 气泡已上屏、输入框已清空:烧录失败不中止,降级发原图;物化结果进入
+            // outbox 后再提示(被 /clear 等撤销的消息不提示)。
+            let fellBack = false;
             void materializeAnnotatedAttachmentsForSend(files, sessionId, {
               stripAnnotationMeta,
+              onFallback: () => {
+                fellBack = true;
+              },
             })
               .then((prepared) => {
-                completeRemoteOptimisticMaterialization(sessionId, identity.clientId, () =>
-                  buildQueuedMessage(
-                    sessionId,
-                    text,
-                    model,
-                    effort,
-                    permissionMode,
-                    workingDir,
-                    prepared,
-                    mentions,
-                    opts,
-                    identity,
-                  ),
+                const handedOff = completeRemoteOptimisticMaterialization(
+                  sessionId,
+                  identity.clientId,
+                  () =>
+                    buildQueuedMessage(
+                      sessionId,
+                      text,
+                      model,
+                      effort,
+                      permissionMode,
+                      workingDir,
+                      prepared,
+                      mentions,
+                      opts,
+                      identity,
+                    ),
                 );
+                if (handedOff && fellBack) notifyAnnotationBurnFallback();
               })
               .catch((error) => {
                 const record = remoteOptimisticSendRecords(sessionId)?.get(identity.clientId);
@@ -14325,11 +14413,10 @@ function sendMessage(
         );
         return accepted;
       }
-      return runRemoteOptimisticMaterialization(
-        null,
-        materializeAnnotatedAttachmentsForSend(files, sessionId, {
-          stripAnnotationMeta: isRemoteMediaSession(sessionId),
-        }),
+      return runLocalAnnotatedSend(
+        sessionId,
+        files,
+        opts?.annotationBurnFailure,
         (prepared) =>
           sendMessageCore(
             sessionId,
@@ -14637,6 +14724,8 @@ function steerMessage(
     slashCommandRanges?: SlashCommandRange[];
     beforeEnqueue?: () => Promise<boolean>;
     onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+    /** 见 SendMessageOpts.annotationBurnFailure。 */
+    annotationBurnFailure?: 'abort';
   },
 ): Promise<boolean> {
   if (!sessionId || (!text.trim() && (!files || files.length === 0)) || !workingDir) {
@@ -14710,24 +14799,34 @@ function steerMessage(
         void accepted.then(
           (optimisticallyAccepted) => {
             if (!optimisticallyAccepted) return;
+            // 气泡已上屏、输入框已清空:烧录失败不中止,降级发原图;物化结果进入
+            // outbox 后再提示(被 /clear 等撤销的消息不提示)。
+            let fellBack = false;
             void materializeAnnotatedAttachmentsForSend(files, sessionId, {
               stripAnnotationMeta,
+              onFallback: () => {
+                fellBack = true;
+              },
             })
               .then((prepared) => {
-                completeRemoteOptimisticMaterialization(sessionId, identity.clientId, () =>
-                  buildQueuedMessage(
-                    sessionId,
-                    text,
-                    model,
-                    effort,
-                    permissionMode,
-                    workingDir,
-                    prepared,
-                    mentions,
-                    opts,
-                    identity,
-                  ),
+                const handedOff = completeRemoteOptimisticMaterialization(
+                  sessionId,
+                  identity.clientId,
+                  () =>
+                    buildQueuedMessage(
+                      sessionId,
+                      text,
+                      model,
+                      effort,
+                      permissionMode,
+                      workingDir,
+                      prepared,
+                      mentions,
+                      opts,
+                      identity,
+                    ),
                 );
+                if (handedOff && fellBack) notifyAnnotationBurnFallback();
               })
               .catch((error) => {
                 const record = remoteOptimisticSendRecords(sessionId)?.get(identity.clientId);
@@ -14740,11 +14839,10 @@ function steerMessage(
         );
         return accepted;
       }
-      return runRemoteOptimisticMaterialization(
-        null,
-        materializeAnnotatedAttachmentsForSend(files, sessionId, {
-          stripAnnotationMeta: isRemoteMediaSession(sessionId),
-        }),
+      return runLocalAnnotatedSend(
+        sessionId,
+        files,
+        opts?.annotationBurnFailure,
         (prepared) =>
           steerMessageCore(
             sessionId,

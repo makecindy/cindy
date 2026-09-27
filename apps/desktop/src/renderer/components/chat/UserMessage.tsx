@@ -56,7 +56,11 @@ import type {
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '../../../shared/agentInputQueue';
 import type { PersistedSessionReferenceMetadata } from '../../../shared/sessionReferenceMetadata';
-import { buildRewindDraftAttachments } from '@/lib/rewindDraftAttachments';
+import {
+  buildRewindDraftAttachments,
+  startRewindSourceProbe,
+  type RewindSourceProbe,
+} from '@/lib/rewindDraftAttachments';
 import {
   useAgentCapabilities,
   type AgentKind as MakerAgentKind,
@@ -1237,11 +1241,15 @@ export function UserMessage({
   // dialog opens → preview dryRun → user confirm → commit → close, the whole
   // span counts as "rewinding" for the action-bar Loader2). Reset on close.
   const [rewindOpen, setRewindOpen] = useState(false);
+  // 带可再编辑标注的历史图:确认框打开时就预探测未烧录原图是否还在,提交时
+  // 同步取结果(丢失的退回烧录图),草稿仍在提交当下一次写完。
+  const rewindSourceProbeRef = useRef<RewindSourceProbe<UserImageItem> | null>(null);
 
   const handleRewind = useCallback(() => {
     if (!sessionId || !messageClientId) return;
+    rewindSourceProbeRef.current = images ? startRewindSourceProbe(images) : null;
     setRewindOpen(true);
-  }, [sessionId, messageClientId]);
+  }, [sessionId, messageClientId, images]);
 
   const handleRewindCommitted = useCallback(
     (session: Session) => {
@@ -1251,7 +1259,10 @@ export function UserMessage({
       // reload it disappears from the list; the composer keeps the draft so
       // the user can edit and re-send.
       const draftText = quoteDraftDocument ?? textToTiptapDoc(bubbleBody);
-      const draftAttachments = buildRewindDraftAttachments({ images, files });
+      const probe = rewindSourceProbeRef.current;
+      rewindSourceProbeRef.current = null;
+      const draftImages = probe && probe.images === images ? probe.imagesForDraft() : images;
+      const draftAttachments = buildRewindDraftAttachments({ images: draftImages, files });
       if (draftText || draftAttachments.length > 0) {
         saveComposerDraft(sessionId, {
           text: draftText,

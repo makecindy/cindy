@@ -159,7 +159,13 @@
     "loadFailed": "图片加载失败",
     "retryLoadImage": "重试加载图片",
     "retry": "重试",
-    "closeImage": "关闭图片"
+    "closeImage": "关闭图片",
+    "discardAnnotationTitle": "放弃标注？",
+    "discardAnnotationBody": "未保存的笔迹将会丢失。",
+    "continueAnnotating": "继续标注",
+    "discardAnnotation": "放弃标注",
+    "annotateUnavailableTitle": "暂时无法标注",
+    "annotateImageUnavailable": "标注图片（暂不可用）"
   },
   "queue": {
     "continueSystemInstruction": "继续未完成的任务(系统指令)",

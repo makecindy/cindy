@@ -17,7 +17,7 @@
 import { WECHAT_APP_ID, WECHAT_UNIVERSAL_LINK } from '@/config/env';
 import { isWechatSdkCallback } from '@/auth/wechatCallback';
 
-export function redirectSystemPath({ path }: { path: string; initial: boolean }): string {
+export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string {
   try {
     // OpenSDK 的授权及 Universal Link 校验回调也会被 Expo Linking 广播给 Router。
     // 它们由原生 delegate 消费，不能当页面显示（更不能在 404 中展示 code）。
@@ -31,7 +31,9 @@ export function redirectSystemPath({ path }: { path: string; initial: boolean })
     const pathname = noScheme.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
     // 命中 OAuth 回调 → 回首页；Share Extension → 新建任务；其余深链原样放行。
     if (pathname === '/auth') return '/';
-    if (pathname === '/expo-sharing') return '/sessions/new';
+    // A restored launch URL is not proof of an unconsumed share. On cold start,
+    // let IncomingShareBridge navigate only after reading an actual pending batch.
+    if (pathname === '/expo-sharing') return initial ? '/' : '/sessions/new';
     return path;
   } catch {
     return path;
