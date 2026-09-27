@@ -5014,7 +5014,7 @@ describe('market detail 响应身份绑定', () => {
       sizeBytes: 42,
     });
     await expect(
-      h2.service.install(enterprise.id, reviewedInstallOptions(enterprise)),
+      h2.service.install(enterprise.id, reviewedInstallOptions(enterprise), TEST_INSTALL_CONTEXT),
     ).rejects.toThrow('[PRECONDITION_FAILED]');
     expect(runtime.install).not.toHaveBeenCalled();
   });
