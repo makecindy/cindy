@@ -396,7 +396,9 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
   expect(stored.env).not.toHaveProperty('EXCLUDED');
   expect(JSON.stringify(stored)).not.toContain('fake-absent-from-selected-content');
   expect(stored.documents).toEqual(Object.fromEntries(documents.map(item => [item.view.id, item.text])));
-  expect(stored.pendingImport).toBeUndefined();
+  await vi.waitFor(async () => {
+    expect((await h.store.read(h.root, result.botId, () => {}))?.pendingImport).toBeUndefined();
+  });
 });
 
 it('persists redacted routine fields and retains identical publication masks across a handover retry after restart', async () => {
