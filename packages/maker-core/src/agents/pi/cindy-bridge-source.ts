@@ -3578,7 +3578,7 @@ function registerCindyQuestionTool(pi: any): void {
   pi.registerTool({
     name: 'ask_user_question',
     label: 'Ask a question',
-    description: 'Ask the user for missing information or a choice and wait for their answer. Use this instead of claiming in text that a task is waiting. The parent of a Session task can relay the answer. Do not infer an answer from cancellation.',
+    description: 'Ask the user for missing information or a choice and wait for their answer. Use this instead of claiming in text that a task is waiting. The parent of a Session task can relay the answer. Do not infer an answer from cancellation. Do not add an "Other"/「其他」 escape option — the question UI always offers its own free-text answer entry.',
     parameters: {
       type: 'object',
       properties: {
