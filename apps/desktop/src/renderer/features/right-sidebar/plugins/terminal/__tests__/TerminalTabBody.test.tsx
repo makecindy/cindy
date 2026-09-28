@@ -116,4 +116,34 @@ describe('TerminalTabBody sidebar visibility', () => {
     expect(fit).toHaveBeenCalled();
     expect(resize).toHaveBeenCalledWith('terminal-1', 100, 24);
   });
+
+  it('drops an already queued fit when the sidebar collapses before its animation frame', () => {
+    let frame: FrameRequestCallback | undefined;
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frame = callback;
+      return 1;
+    });
+    const ctx = makeContext();
+    const view = render(
+      <TerminalTabBody
+        state={{ created: true, exited: null, title: '', shellId: '', shellDisplayName: '' }}
+        ctx={ctx}
+        active
+        shellVisible
+      />,
+    );
+
+    entry.terminal.cols = 2;
+    view.rerender(
+      <TerminalTabBody
+        state={{ created: true, exited: null, title: '', shellId: '', shellDisplayName: '' }}
+        ctx={ctx}
+        active
+        shellVisible={false}
+      />,
+    );
+    frame?.(0);
+
+    expect(resize).not.toHaveBeenCalled();
+  });
 });

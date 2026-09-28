@@ -182,7 +182,7 @@ export function TerminalTabBody({ state, ctx, active, shellVisible = true }: Pro
     if (!entry) return;
     // 切到本 tab 时 fit 一下,因为后台 tab 的 layout 可能没跟上侧栏宽度变化
     requestAnimationFrame(() => {
-      if (!aliveRef.current || !entryRef.current) return;
+      if (!aliveRef.current || !entryRef.current || !shellVisibleRef.current) return;
       fitAndPushSize(entryRef.current, tabId);
       entryRef.current.terminal.focus();
     });
