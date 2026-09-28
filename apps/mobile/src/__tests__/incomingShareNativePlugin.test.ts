@@ -17,19 +17,35 @@ const template = readFileSync(
   "utf8",
 );
 
-it("runs the generated Swift launch and feedback behavior", () => {
-  if (spawnSync("swiftc", ["--version"], { encoding: "utf8" }).status !== 0)
-    return;
+it("runs the generated Swift launch and feedback behavior", ({ skip }) => {
+  const started = performance.now();
+  console.info("[share-feedback] START swiftc --version (timeout=15000ms)");
+  const compiler = spawnSync("swiftc", ["--version"], {
+    encoding: "utf8",
+    timeout: 15_000,
+    killSignal: "SIGKILL",
+  });
+  console.info(
+    `[share-feedback] END swiftc --version (${Math.round(performance.now() - started)}ms, status=${compiler.status}, error=${(compiler.error as NodeJS.ErrnoException | undefined)?.code ?? "none"})`,
+  );
+  if ((compiler.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT")
+    return skip();
+  if (compiler.error) throw compiler.error;
+  expect(compiler.status, compiler.stderr).toBe(0);
   const script = join(
     dirname(fileURLToPath(import.meta.url)),
     "../../scripts/test-incoming-share-feedback.mjs",
   );
   const output = execFileSync(process.execPath, [script], {
     encoding: "utf8",
-    timeout: 60_000,
+    stdio: ["ignore", "pipe", "inherit"],
+    // The script bounds compilation at 120s and execution at 10s. Leave room
+    // for Node startup and cleanup; Vitest also needs the compiler probe budget.
+    timeout: 150_000,
+    killSignal: "SIGKILL",
   });
   expect(output).toContain("PASS: generated Swift share feedback");
-}, 60_000);
+}, 180_000);
 
 describe("incoming share native file ownership", () => {
   it("isolates both file-copy and raw-image paths without changing display names", () => {
