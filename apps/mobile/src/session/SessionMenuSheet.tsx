@@ -101,6 +101,14 @@ export interface SessionExtraDirBrowserState {
   path: string;
 }
 
+export interface SessionMenuWorkerActions {
+  /**
+   * 查不到自身记录时为 undefined。确认弹窗在详情面板仍展开时弹出(iOS 原生 sheet 正在收起时
+   * 弹 Alert 会丢),确认后由 onConfirmed 收起面板。
+   */
+  onArchive?: (onConfirmed: () => void) => void;
+}
+
 export interface SessionMenuSheetProps {
   tagDeviceId?: string;
   providerName?: string;
@@ -113,7 +121,6 @@ export interface SessionMenuSheetProps {
   initialView: SessionMenuView;
   session: RemoteSession;
   busy: boolean;
-  readOnlyReason?: string | null;
   onContextError(error: string | null): void;
   /**
    * 账号级限额快照(被控端 `maker:usage:account` 原始返回,unknown 防御解析)。
@@ -137,6 +144,11 @@ export interface SessionMenuSheetProps {
   onOpenWorkspace(): void;
   onOpenSharing?: () => void;
   onLeaveSharing?: () => void;
+  /**
+   * 协同 Worker 任务的专属操作。Worker 任务的详情只保留与 Worker 相关的入口(返回 Lead、
+   * 设为焦点、归档 Worker),不出现共享、重命名、置顶、标签、搜索、打开目录等普通任务功能。
+   */
+  worker?: SessionMenuWorkerActions;
   leavingSharing?: boolean;
   onTogglePinned(): void;
   onArchive(): void;
@@ -158,7 +170,6 @@ export function SessionMenuSheet({
   initialView,
   session,
   busy,
-  readOnlyReason,
   onContextError,
   accountUsage,
   codexRateLimits,
@@ -174,6 +185,7 @@ export function SessionMenuSheet({
   onOpenWorkspace,
   onOpenSharing,
   onLeaveSharing,
+  worker,
   leavingSharing = false,
   onTogglePinned,
   onArchive,
@@ -330,13 +342,12 @@ export function SessionMenuSheet({
     return base;
   }, [copiedKey, t]);
 
-  const writeDisabled = busy || !!readOnlyReason;
-  const header = buildSessionMenuHeader(session, { readOnlyReason });
+  const header = buildSessionMenuHeader(session);
   const actions = buildSessionMenuActions({
     archived: session.status === 'archived',
     pinned: !!session.pinnedAt,
     busy,
-    writeDisabled,
+    writeDisabled: busy,
   });
 
   const submitRename = useCallback(() => {
@@ -489,10 +500,16 @@ export function SessionMenuSheet({
   );
   const workspace = buildSessionInfoWorkspace(session);
   const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
-  const showExtraDirs = !sharedGuest && sessionInfoShowsExtraDirs(session);
+  // 协同 Worker 任务:只保留与 Worker 相关的入口(见 SessionMenuWorkerActions)。
+  const workerMode = !messageOnly && session.orcaRole === 'worker';
+  const showExtraDirs = !sharedGuest && !workerMode && sessionInfoShowsExtraDirs(session);
 
+  // 协同 Worker 的生命周期只能经所属 Lead 的协同面板(归档 Worker / 结束协同)走 Orca 服务;
+  // 通用归档 / 删除会绕过团队状态与焦点收尾。桌面同样不给 Worker 这两个入口。
+  const lifecycleHidden = sharedGuest || session.orcaRole === 'worker';
   const mainActions = messageOnly ? [] : actions.filter((action) => sharedGuest ? action.id === 'copyLink' : action.id !== 'delete' && action.id !== 'archive');
-  const deleteAction = messageOnly ? undefined : sharedGuest ? undefined : actions.find((action) => action.id === 'delete');
+  const listedActions = workerMode ? [] : mainActions;
+  const deleteAction = messageOnly ? undefined : lifecycleHidden ? undefined : actions.find((action) => action.id === 'delete');
 
   const confirmCodexReset = useCallback(() => {
     if (!resetSummary?.canReset || codexResetBusy) return;
@@ -531,7 +548,7 @@ export function SessionMenuSheet({
               }}
               onSubmitEditing={submitRename}
               placeholder={t('session.menu.titlePlaceholder')}
-              placeholderTextColor={colors.textTertiary}
+              placeholderTextColor={colors.textPlaceholder}
               returnKeyType="done"
               selectTextOnFocus
               style={styles.renameInput}
@@ -561,8 +578,7 @@ export function SessionMenuSheet({
       ) : (
         <>
           {(header.chips.length > 0 ||
-            (!messageOnly && !!session.tags?.length) ||
-            !!readOnlyReason) && (
+            (!messageOnly && !!session.tags?.length)) && (
             <View style={styles.headerBlock} testID="session.menuHeader">
               {!messageOnly && !!session.tags?.length && (
                 <View
@@ -586,16 +602,16 @@ export function SessionMenuSheet({
                   ))}
                 </View>
               ) : null}
-              {readOnlyReason ? (
-                <Text style={styles.readOnlyText} testID="session.menuReadOnlyNotice">
-                  {readOnlyReason}</Text>
-              ) : null}
             </View>
                 )}
 
           {!messageOnly ? <SessionUsageSummary providerName={providerName} session={session} usage={menuUsage} contextUsage={contextUsage} onPress={openInfo} translucent={Platform.OS === 'ios'} /> : null}
 
-          {!messageOnly && isSharedTaskPeer(session.deviceLinkDeviceId) && onLeaveSharing ? (
+          {workerMode ? (
+            <WorkerMenuActions onClose={onClose} worker={worker} />
+          ) : null}
+
+          {workerMode ? null : !messageOnly && isSharedTaskPeer(session.deviceLinkDeviceId) && onLeaveSharing ? (
             Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
               label: t('sharedTask.leave'), danger: true, disabled: leavingSharing,
               onPress: onLeaveSharing, testID: 'session.leaveSharingButton',
@@ -614,14 +630,14 @@ export function SessionMenuSheet({
             </View>
           ) : null}
           {Platform.OS === 'ios' ? (
-            <SessionDetailsNativeActions actions={mainActions.map(action => ({
+            <SessionDetailsNativeActions actions={listedActions.map(action => ({
               label: action.id === 'copyLink' ? copyLabel(action.label, 'copyLink', t('session.menu.linkCopied')) : action.label,
               disabled: action.disabled,
               testID: action.testID,
               onPress: () => handleAction(action),
             }))} />
           ) : <View style={styles.actionGroup}>
-            {mainActions.map((action) => (
+            {listedActions.map((action) => (
               <MenuActionRow
                 key={action.id}
                 disabled={action.disabled}
@@ -635,7 +651,7 @@ export function SessionMenuSheet({
             ))}
           </View>}
 
-          {onOpenSearch ? (
+          {onOpenSearch && !workerMode ? (
             Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
               label: t('session.presentation.overview.actions.search.label'),
               onPress: onOpenSearch,
@@ -645,19 +661,19 @@ export function SessionMenuSheet({
             </View>
           ) : null}
 
-          {!messageOnly && (
+          {!messageOnly && !workerMode && (
             <TaskTagsPanel
               key={`${tagDeviceId ?? session.deviceLinkDeviceId}:${session.id}`}
               session={session}
               deviceId={tagDeviceId}
-              disabled={busy || !!readOnlyReason}
+              disabled={busy}
               expanded={false}
               onExpandedChange={(open) => {
                 if (open) tagsSheet.open();
               }}
             />
           )}
-          {!messageOnly &&
+          {!messageOnly && session.orcaRole !== 'worker' &&
             actions
               .filter((action) => action.id === 'archive')
               .map((action) =>
@@ -772,12 +788,14 @@ export function SessionMenuSheet({
           <Text style={styles.infoSectionTitle}>{workspace.label}</Text>
           <InfoRow label={workspace.name} mono value={workspace.path} />
           <View style={styles.infoActionRow}>
-            <MenuPillButton
-              label={t('session.menu.openDir')}
-              disabled={sharedGuest}
-              onPress={onOpenWorkspace}
-              testID="session.openWorkspaceButton"
-            />
+            {workerMode ? null : (
+              <MenuPillButton
+                label={t('session.menu.openDir')}
+                disabled={sharedGuest}
+                onPress={onOpenWorkspace}
+                testID="session.openWorkspaceButton"
+              />
+            )}
             <MenuPillButton
               label={copyLabel(t('session.menu.copyPath'), 'workspacePath')}
               onPress={() => copyValue('workspacePath', workspace.path)}
@@ -800,7 +818,7 @@ export function SessionMenuSheet({
                 <View key={dir} style={styles.extraDirRow} testID="session.extraDirRow">
                   <Text numberOfLines={1} style={styles.extraDirPath}>{dir}</Text>
                   <MenuPillButton
-                    disabled={writeDisabled}
+                    disabled={busy}
                     label={t('session.menu.remove')}
                     onPress={() => removeExtraDir(dir)}
                     testID="session.extraDirRemoveButton"
@@ -814,7 +832,7 @@ export function SessionMenuSheet({
           ) : null}
           <View style={styles.infoActionRow}>
             <MenuPillButton
-              disabled={writeDisabled || !!extraDirBrowser?.loading}
+              disabled={busy || !!extraDirBrowser?.loading}
               label={extraDirBrowser?.open ? t('session.menu.collapseRemoteDir') : t('session.menu.browseRemoteDir')}
               onPress={onToggleExtraDirBrowser}
               testID="session.extraDirsBrowseToggle"
@@ -832,13 +850,13 @@ export function SessionMenuSheet({
               </Text>
               <View style={styles.infoActionRow}>
                 <MenuPillButton
-                  disabled={writeDisabled || extraDirBrowser.loading || !extraDirBrowser.parent}
+                  disabled={busy || extraDirBrowser.loading || !extraDirBrowser.parent}
                   label={t('session.menu.parentDir')}
                   onPress={() => extraDirBrowser.parent && onLoadExtraDirPath(extraDirBrowser.parent)}
                   testID="session.extraDirsBrowseParentButton"
                 />
                 <MenuPillButton
-                  disabled={writeDisabled || extraDirBrowser.loading || !extraDirBrowser.path}
+                  disabled={busy || extraDirBrowser.loading || !extraDirBrowser.path}
                   label={t('session.menu.addCurrentDir')}
                   onPress={() => addExtraDir(extraDirBrowser.path)}
                   testID="session.extraDirsBrowseAddCurrent"
@@ -853,7 +871,7 @@ export function SessionMenuSheet({
                     <Pressable
                       accessibilityLabel={t('session.menu.enterRemoteDir', { name: entry.name })}
                       accessibilityRole="button"
-                      disabled={writeDisabled || extraDirBrowser.loading}
+                      disabled={busy || extraDirBrowser.loading}
                       onPress={() => onLoadExtraDirPath(entry.path)}
                       style={({ pressed }) => [styles.browseEntryButton, pressed && styles.pressed]}
                     >
@@ -863,7 +881,7 @@ export function SessionMenuSheet({
                       </Text>
                     </Pressable>
                     <MenuPillButton
-                      disabled={writeDisabled || extraDirBrowser.loading}
+                      disabled={busy || extraDirBrowser.loading}
                       label={t('session.menu.add')}
                       onPress={() => addExtraDir(entry.path)}
                       testID="session.extraDirsBrowseAddEntry"
@@ -908,7 +926,7 @@ export function SessionMenuSheet({
     <TaskTagsSheet
       session={session}
       deviceId={tagDeviceId}
-      disabled={busy || !!readOnlyReason}
+      disabled={busy}
       visible={tagsSheet.visible}
       onClose={tagsSheet.close}
       onClosed={tagsSheet.closed}
@@ -1006,6 +1024,48 @@ function menuActionIcon(action: SessionMenuAction, session: Pick<RemoteSession, 
   }
 }
 
+/**
+ * 协同 Worker 任务的详情操作:只有归档 Worker。返回 Lead 走左上角返回与输入框上方的协同条;
+ * 「焦点」只影响电脑端协同面板展开哪个 Worker,手机上不提供。
+ */
+function WorkerMenuActions({
+  worker,
+  onClose,
+}: {
+  worker: SessionMenuWorkerActions | undefined;
+  onClose(): void;
+}) {
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  const onArchive = worker?.onArchive;
+  if (!onArchive) return null;
+  // 确认弹窗在面板仍展开时弹出,确认后由 onClose 收起(见 SessionMenuWorkerActions.onArchive)。
+  const archive = () => onArchive(onClose);
+  if (Platform.OS === 'ios') {
+    return (
+      <SessionDetailsNativeActions
+        actions={[{
+          label: t('session.collab.archiveConfirm'),
+          danger: true,
+          onPress: archive,
+          testID: 'session.workerArchive',
+        }]}
+      />
+    );
+  }
+  return (
+    <View style={styles.actionGroup} testID="session.workerActions">
+      <MenuActionRow
+        danger
+        icon={Archive}
+        label={t('session.collab.archiveConfirm')}
+        onPress={archive}
+        testID="session.workerArchive"
+      />
+    </View>
+  );
+}
+
 function MenuActionRow({
   danger = false,
   disabled = false,
@@ -1025,7 +1085,7 @@ function MenuActionRow({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const color = danger ? colors.destructive : colors.sheetActionText;
+  const color = danger ? colors.destructive : colors.textPrimary;
   return (
     <Pressable
       accessibilityLabel={label}
@@ -1126,6 +1186,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
       textAlign: 'center',
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.semibold,
     },
     chipRow: {
@@ -1146,17 +1207,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     chipText: {
       color: colors.textSecondary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
     metaLine: {
       textAlign: 'center',
       color: colors.textSecondary,
-      fontSize: typeScale.caption,
-      lineHeight: lineHeight.caption,
-    },
-    readOnlyText: {
-      textAlign: 'center',
-      color: colors.textTertiary,
       fontSize: typeScale.caption,
       lineHeight: lineHeight.caption,
     },
@@ -1175,11 +1231,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
       paddingHorizontal: spacing.lg,
     },
     actionLabel: {
-      color: colors.sheetActionText,
+      color: colors.textPrimary,
       flexShrink: 1,
-      fontSize: typeScale.listBody,
-      fontWeight: fontWeight.semibold,
-      lineHeight: lineHeight.listBody,
+      fontSize: typeScale.bodySmall,
+      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.bodySmall,
     },
     actionLabelDanger: {
       color: colors.destructive,
@@ -1216,7 +1272,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     },
     renameErrorText: {
       color: colors.errorText,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
     },
     infoBody: {
@@ -1239,7 +1295,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     infoSectionTitle: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
-      fontWeight: fontWeight.medium,
+      fontWeight: fontWeight.semibold,
       lineHeight: lineHeight.caption,
     },
     refreshButton: {
@@ -1254,7 +1310,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     infoLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,
-      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
     },
     infoValue: {
       color: colors.textPrimary,
@@ -1267,7 +1324,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     },
     infoCaption: {
       color: colors.textSecondary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
     },
     infoActionRow: {
@@ -1294,6 +1351,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flex: 1,
     fontFamily: monoFont,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     minWidth: 0,
   },
   browsePanel: {
@@ -1329,11 +1387,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     browseEntryName: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
     browseEntryPath: {
       color: colors.textTertiary,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       marginTop: 2,
     },
     pillButton: {
@@ -1353,6 +1413,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     pillButtonText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   pillButtonTextPrimary: {

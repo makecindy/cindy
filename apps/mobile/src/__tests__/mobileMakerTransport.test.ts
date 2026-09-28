@@ -329,6 +329,16 @@ describe("mobile maker transport", () => {
       "maker:rewind:commit",
       "maker:message:delete",
       "maker:close-session",
+      "maker:plugins:get-state",
+      "maker:session:enable-orca",
+      "maker:session:disable-orca",
+      "maker:worker:create",
+      "maker:worker:switch-focus",
+      "maker:worker:acknowledge-done",
+      "maker:worker:archive",
+      "maker:collaboration-settings:get",
+      "local-db:orca-workflows:list-workers-by-lead",
+      "local-db:orca-workflows:get-by-worker-session",
       "maker:schedule:list",
       "maker:schedule:get",
       "maker:schedule:list-templates",
@@ -404,6 +414,35 @@ describe("mobile maker transport", () => {
     ]);
   });
 
+  it("routes Orca collaboration calls with desktop preload argument shapes", async () => {
+    const { calls, maker } = harness();
+    const options = { workerAgent: "codex" as const, role: "developer", label: "developer", workerPermissionMode: "auto" as const };
+
+    await maker.orca.getCollabPolicy("/repo", "project");
+    await maker.orca.enable("lead-1", options);
+    await maker.orca.createWorker({ leadSessionId: "lead-1", role: "reviewer", label: "reviewer", agent: "pi", workerPermissionMode: "auto" });
+    await maker.orca.listWorkers("lead-1");
+    await maker.orca.getTeamByWorkerSession("worker-1");
+    await maker.orca.switchFocus("lead-1", "w-1");
+    await maker.orca.acknowledgeDone("lead-1", "w-1");
+    await maker.orca.archiveWorker("lead-1", "w-1");
+    await maker.orca.getCollaborationSettings();
+    await maker.orca.disable("lead-1");
+
+    expect(calls.map(({ channel, args }) => ({ channel, args }))).toEqual([
+      { channel: "maker:plugins:get-state", args: ["collab", "/repo", "project"] },
+      { channel: "maker:session:enable-orca", args: ["lead-1", options] },
+      { channel: "maker:worker:create", args: [{ leadSessionId: "lead-1", role: "reviewer", label: "reviewer", agent: "pi", workerPermissionMode: "auto" }] },
+      { channel: "local-db:orca-workflows:list-workers-by-lead", args: ["lead-1"] },
+      { channel: "local-db:orca-workflows:get-by-worker-session", args: ["worker-1"] },
+      { channel: "maker:worker:switch-focus", args: [{ leadSessionId: "lead-1", workerIdOrLabel: "w-1" }] },
+      { channel: "maker:worker:acknowledge-done", args: [{ leadSessionId: "lead-1", workerId: "w-1" }] },
+      { channel: "maker:worker:archive", args: [{ leadSessionId: "lead-1", workerId: "w-1" }] },
+      { channel: "maker:collaboration-settings:get", args: [] },
+      { channel: "maker:session:disable-orca", args: ["lead-1"] },
+    ]);
+  });
+
   it("routes message reads and sends with desktop preload argument order", async () => {
     const { calls, maker } = harness();
 
@@ -443,7 +482,7 @@ describe("mobile maker transport", () => {
       {
         deviceId: "dev-1",
         channel: "maker:list-active",
-        args: [{ summary: true }],
+        args: [{ summary: true, snapshotVersion: 2 }],
       },
     ]);
   });

@@ -19,7 +19,6 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, AlertCircle, Play, Upload, Sparkles, Waypoints } from 'lucide-react';
 
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -28,13 +27,7 @@ import * as sessionService from '@/lib/sessionService';
 import { buildCodexSyncWarning } from '@/utils/codexAuthSync';
 import { remoteSshHostsStore } from '@/lib/remoteSshHostsStore';
 import {
-  getCachedProvidersSnapshot,
-  hasProvidersSnapshotLoadFailed,
-} from '@/lib/providersSnapshotStore';
-import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
-import { getProviderModelEffort, getProviderModelFast } from '@/state/providerModelMemory';
-import {
-  resolveSshSessionModelSelection,
+  loadSshSessionModelSelection,
   sshModelSelectionErrorKeys,
 } from '@/features/cc-agent/sshSessionModelSelection';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -393,20 +386,9 @@ export function StartRemoteSessionPanel({ hostId }: StartRemoteSessionPanelProps
     setBusy(true);
     try {
       const owner = getDataOwnerGeneration();
-      const resolveSelection = () => {
-        const snapshot = getCachedProvidersSnapshot();
-        const prefs = getDraft().lastByVendor.codex;
-        return resolveSshSessionModelSelection({
-          providers: snapshot?.providers ?? [],
-          loading: !snapshot,
-          loadFailed: hasProvidersSnapshotLoadFailed(),
-          agentKind: 'codex',
-          preferred: { ...prefs, fastMode: getFastModeForModel(prefs.model) },
-          getPresetEffort: getProviderModelEffort,
-          getPresetFast: getProviderModelFast,
-        });
-      };
-      const initialSelection = resolveSelection();
+      const resolveSelection = () => loadSshSessionModelSelection(hostId);
+      const initialSelection = await resolveSelection();
+      if (!isDataOwnerGenerationCurrent(owner)) return;
       if (!initialSelection.ok) {
         toast.error(t(sshModelSelectionErrorKeys[initialSelection.reason]));
         return;
@@ -445,9 +427,10 @@ export function StartRemoteSessionPanel({ hostId }: StartRemoteSessionPanelProps
       //                    IPC fires on first user prompt, threading
       //                    remoteHostId + workingDir into agent.startSession.
       // Directory validation/confirmation may take time. Re-read the catalog and
-      // preferences before inserting; never persist a stale or another owner's route.
+      // remote defaults before inserting; never persist a stale or another owner's route.
       if (!isDataOwnerGenerationCurrent(owner)) return;
-      const selection = resolveSelection();
+      const selection = await resolveSelection();
+      if (!isDataOwnerGenerationCurrent(owner)) return;
       if (!selection.ok) {
         toast.error(t(sshModelSelectionErrorKeys[selection.reason]));
         return;

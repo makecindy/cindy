@@ -62,8 +62,15 @@ describe('deriveNavRailEntries', () => {
         automationOrigin: { kind: 'scheduler', scheduleId: 'schedule-1' },
       }),
       msg({ clientId: 'u3', role: 'user', content: '普通提问', automationOrigin: undefined }),
+      // 其他任务经工具发来的消息不是每轮重复的调度 prompt,保持普通刻度。
+      msg({
+        clientId: 'u4',
+        role: 'user',
+        content: '任务发来',
+        automationOrigin: { kind: 'session', senderSessionId: 'caller' },
+      }),
     ]);
-    expect(entries.map((entry) => entry.isAutomation)).toEqual([false, true, false]);
+    expect(entries.map((entry) => entry.isAutomation)).toEqual([false, true, false, false]);
   });
 
   it('运行中插话(delivery=steer)不算新一轮,不产生刻度', () => {

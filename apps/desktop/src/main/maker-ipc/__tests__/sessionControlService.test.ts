@@ -170,6 +170,36 @@ describe('session control domain service', () => {
     ).toBe(explicit);
   });
 
+  it('snapshots the dispatcher title for the receiver source label', () => {
+    expect(
+      sessionQueueOriginForDispatcher({
+        dispatcherSessionId: 'caller',
+        dispatcherSessionTitle: '  Release checklist  ',
+        message: 'follow-up',
+      }),
+    ).toEqual({
+      kind: 'session',
+      senderSessionId: 'caller',
+      displayText: 'follow-up',
+      senderSessionTitle: 'Release checklist',
+    });
+    expect(
+      sessionQueueOriginForDispatcher({
+        dispatcherSessionId: 'caller',
+        dispatcherSessionTitle: '   ',
+        message: 'follow-up',
+      }),
+    ).not.toHaveProperty('senderSessionTitle');
+    expect(
+      sessionQueueOriginForDispatcher({
+        dispatcherSessionId: 'bot-task',
+        dispatcherSessionTitle: 'Weekly feedback',
+        dispatcherBot: { id: 'bot-1', name: 'Cindy' },
+        message: 'follow-up',
+      }),
+    ).toMatchObject({ senderBotId: 'bot-1', senderBotName: 'Cindy' });
+  });
+
   it('shares queue lifecycle while enforcing sender ownership and preserving identity', async () => {
     const { deps, service } = setup();
     await expect(
@@ -241,6 +271,24 @@ describe('session control domain service', () => {
       );
     },
   );
+
+  it('keeps the host attachment envelope when the sender edits its own attachment item', () => {
+    const queued = item({ kind: 'session', senderSessionId: 'caller', displayText: 'before' });
+    queued.files = [{ name: 'notes.txt', path: '/repo/notes.txt', category: 'file' } as never];
+    queued.persistedContent = JSON.stringify({
+      text: 'before',
+      images: [],
+      files: [{ name: 'notes.txt', path: '/repo/notes.txt' }],
+    });
+
+    const updated = rebuildSessionQueueItem(queued, 'replacement');
+
+    expect(JSON.parse(updated.persistedContent)).toMatchObject({
+      text: 'replacement',
+      files: [{ name: 'notes.txt', path: '/repo/notes.txt' }],
+    });
+    expect(updated.origin).toMatchObject({ kind: 'session', displayText: 'replacement' });
+  });
 
   it('keeps renderer composer envelopes intact when rebuilding a non-session queue item', () => {
     const queued = item();

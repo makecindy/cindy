@@ -162,27 +162,6 @@ export function RemoteDesktopViewerWindow() {
       )}
     </span>
   );
-  const controlPrompt = !state?.controlling && (
-    <div className="flex flex-col gap-2" role="status">
-      <p>
-        {t(
-          !state?.ready
-            ? 'remoteDesktop.connecting'
-            : state.controlPending
-              ? 'remoteDesktop.viewer.controlPending'
-              : 'remoteDesktop.viewer.controlRequired',
-        )}
-      </p>
-      <Button
-        variant="secondary"
-        disabled={!state?.ready || !state.caps?.canControl || state.controlPending}
-        loading={state?.controlPending}
-        onClick={() => void controller.current?.setControl(true)}
-      >
-        {t('remoteDesktop.takeControl')}
-      </Button>
-    </div>
-  );
   const preference = (key: 'privacyScreen' | 'hostMute' | 'clipboardSync' | 'lockOnExit') =>
     state && (
       <div className="remote-viewer-preference" key={key}>
@@ -243,8 +222,8 @@ export function RemoteDesktopViewerWindow() {
                       ? 'remoteDesktop.lockingOnExit'
                       : 'remoteDesktop.disconnecting',
                   )
-                : state?.ready
-                  ? t(state.controlling ? 'remoteDesktop.controlling' : 'remoteDesktop.viewOnly')
+                : state?.ready && state.controlling
+                  ? t('remoteDesktop.controlling')
                   : t('remoteDesktop.connecting')}
             </span>
             {state?.ready && (
@@ -479,7 +458,6 @@ export function RemoteDesktopViewerWindow() {
               )}
               {preference('hostMute')}
             </div>
-            {controlPrompt}
             {network && <div className="remote-viewer-panel-section">{network}</div>}
           </ViewerPanel>
           <ViewerPanel
@@ -523,7 +501,6 @@ export function RemoteDesktopViewerWindow() {
             <p>
               {t('remoteDesktop.viewer.clipboardShortcutHint', { modifier: isMac ? '⌘' : 'Ctrl' })}
             </p>
-            {controlPrompt}
           </ViewerPanel>
           <ViewerPanel
             label={t('remoteDesktop.viewer.securityPanel')}
@@ -540,10 +517,7 @@ export function RemoteDesktopViewerWindow() {
                 <>
                   {isMac && state.caps?.platform === 'darwin' && (
                     <div className="flex flex-col gap-2">
-                      <label
-                        className="flex items-center justify-between gap-3"
-                        htmlFor="viewer-autoUnlock"
-                      >
+                      <label className="remote-viewer-toggle-row" htmlFor="viewer-autoUnlock">
                         <span>{t('remoteDesktop.autoUnlock')}</span>
                         <Switch
                           id="viewer-autoUnlock"
@@ -556,10 +530,7 @@ export function RemoteDesktopViewerWindow() {
                       </label>
                       <p>{t('remoteDesktop.autoUnlockHint')}</p>
                       {state.credential?.autoUnlock && (
-                        <label
-                          className="flex items-center justify-between gap-3"
-                          htmlFor="viewer-biometric"
-                        >
+                        <label className="remote-viewer-toggle-row" htmlFor="viewer-biometric">
                           <span>{t('remoteDesktop.biometricVerification')}</span>
                           <Switch
                             id="viewer-biometric"
@@ -595,7 +566,6 @@ export function RemoteDesktopViewerWindow() {
                 </>
               )}
             </div>
-            {controlPrompt}
           </ViewerPanel>
         </div>
         {!isMac && <WindowControls onClose={requestClose} />}
@@ -626,51 +596,57 @@ export function RemoteDesktopViewerWindow() {
             <span id="mouse-wheel-grip" />
           </Button>
         </div>
-        {!state?.closing && (!state?.ready || state?.error || state?.status === 'reconnecting') && (
-          <div className="remote-viewer-connection" role="status">
-            <span>
-              {state?.error
-                ? t(
+        {!state?.closing &&
+          (!state?.ready ||
+            !state.controlling ||
+            state.error ||
+            state.status === 'reconnecting') && (
+            <div className="remote-viewer-connection" role="status">
+              <span>
+                {state?.error
+                  ? t(
+                      state.error === 'connectionBusy' && state.caps?.connectionTakeover
+                        ? 'remoteDesktop.connectionBusyTakeover'
+                        : `remoteDesktop.${state.error}`,
+                    )
+                  : t(
+                      state?.controlPending
+                        ? 'remoteDesktop.viewer.controlPending'
+                        : state?.status === 'reconnecting'
+                          ? 'remoteDesktop.reconnecting'
+                          : 'remoteDesktop.connecting',
+                    )}
+              </span>
+              {state?.error && (
+                <Button
+                  variant="secondary"
+                  className={action}
+                  onClick={() => controller.current?.retry()}
+                >
+                  {t(
                     state.error === 'connectionBusy' && state.caps?.connectionTakeover
-                      ? 'remoteDesktop.connectionBusyTakeover'
-                      : `remoteDesktop.${state.error}`,
-                  )
-                : t(
-                    state?.status === 'reconnecting'
-                      ? 'remoteDesktop.reconnecting'
-                      : 'remoteDesktop.connecting',
+                      ? 'remoteDesktop.takeoverConnection'
+                      : 'remoteDesktop.connect',
                   )}
-            </span>
-            {state?.error && (
-              <Button
-                variant="secondary"
-                className={action}
-                onClick={() => controller.current?.retry()}
-              >
-                {t(
-                  state.error === 'connectionBusy' && state.caps?.connectionTakeover
-                    ? 'remoteDesktop.takeoverConnection'
-                    : 'remoteDesktop.connect',
-                )}
-              </Button>
-            )}
-            {state?.error === 'permissionHint' && (
-              <Button
-                variant="secondary"
-                className={action}
-                onClick={() => {
-                  void controller.current
-                    ?.permissionGuide()
-                    .then(() => setNotice(t('remoteDesktop.permissionGuideOpened')))
-                    .catch(() => setNotice(t('remoteDesktop.permissionActionFailed')));
-                  setSettings('security');
-                }}
-              >
-                {t('remoteDesktop.openGuideOnComputer')}
-              </Button>
-            )}
-          </div>
-        )}
+                </Button>
+              )}
+              {state?.error === 'permissionHint' && (
+                <Button
+                  variant="secondary"
+                  className={action}
+                  onClick={() => {
+                    void controller.current
+                      ?.permissionGuide()
+                      .then(() => setNotice(t('remoteDesktop.permissionGuideOpened')))
+                      .catch(() => setNotice(t('remoteDesktop.permissionActionFailed')));
+                    setSettings('security');
+                  }}
+                >
+                  {t('remoteDesktop.openGuideOnComputer')}
+                </Button>
+              )}
+            </div>
+          )}
         {isFullscreen && network && <div className="remote-viewer-network-overlay">{network}</div>}
         {(notice || state?.safety.notice || state?.safety.privacyActive) && (
           <div className="remote-viewer-feedback" role="status">
@@ -779,9 +755,8 @@ function ViewerTool({
   disabled?: boolean;
   pressed?: boolean;
 }) {
-  const { t } = useTranslation();
   return (
-    <Tip text={disabled ? t('remoteDesktop.viewer.controlRequired') : label} side="bottom">
+    <Tip text={label} side="bottom">
       <Button
         variant="secondary"
         className="remote-viewer-icon"

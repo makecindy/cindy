@@ -135,10 +135,11 @@ function normalizeStringList(value: unknown): string[] {
 export interface BotSessionProjection {
   id: string;
   title: string;
-  kind: 'chat' | 'worker' | 'history';
+  /** `group` is a hidden group-chat lane; see botGroupLane.ts before counting sessions. */
+  kind: 'chat' | 'worker' | 'history' | 'group';
   updatedAt: number;
   status?: 'active' | 'archived' | 'deleted';
-  role?: 'canonical' | 'delegation' | 'history';
+  role?: 'canonical' | 'delegation' | 'history' | 'group';
   profileVersion?: number;
   runtimeSnapshot?: {
     profileVersion: number;
@@ -785,6 +786,19 @@ export function refreshBotProfiles(): void {
   emit();
   hydrated = false;
   trackHydration();
+}
+
+/**
+ * Wait for the current owner's profiles outside the Bots views. The module-level
+ * hydration can run before sign-in, and an owner change clears the projection
+ * without reloading it; `refresh` also re-reads a projection that is already loaded.
+ */
+export async function ensureBotProfilesLoaded(refresh = false): Promise<BotProfile[]> {
+  ensureProfileOwner();
+  if (refresh) refreshBotProfiles();
+  else if (!profileListLoaded && !hydrated) trackHydration();
+  await waitForHydration();
+  return getBotProfiles();
 }
 
 /** Replaces an avatar using gallery bytes, or the host file chooser when omitted. */

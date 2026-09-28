@@ -6,16 +6,23 @@ import { SheetSurface } from './SheetSurface';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from './contextSheetModel';
 import type { ComposerSheetProps } from './ComposerSheet';
 export type CompanionSheetProps = ComposerSheetProps & { preventDismiss?: boolean };
+/**
+ * Android shell with the iOS dismissal contract (`interactiveDismissDisabled`): while a draft is
+ * unsaved or a submit is in flight, the backdrop, the grabber and the system back key neither close
+ * nor prompt. The system back key stays the in-page Back when a secondary page offers one.
+ */
 export function CompanionSheet({ visible, title, onClose, onClosed, onBack, children, footer, testID, preventDismiss }: CompanionSheetProps) {
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [surfaceEpoch, setSurfaceEpoch] = useState(0);
-  const close = () => { if (preventDismiss) setSurfaceEpoch(value => value + 1); onClose(); };
+  // A blocked drag-dismiss remounts the surface so it springs back to its detent.
+  const dismiss = () => { if (preventDismiss) setSurfaceEpoch(value => value + 1); else onClose(); };
+  const requestClose = () => { if (onBack) onBack(); else if (!preventDismiss) onClose(); };
   const [snap, setSnap] = useState<ContextSheetSnap>('half');
   useEffect(() => { if (visible) setSnap('half'); }, [visible]);
   const heights = useMemo(() => computeContextSheetSnapHeights({ screenHeight: height, safeAreaTopInset: insets.top }), [height, insets.top]);
-  return <SheetModal visible={visible} onBackdropPress={close} onRequestClose={onBack ?? onClose} onClosed={onClosed} keyboardAvoiding keyboardAvoidingBehavior="height">
-    <SheetSurface key={surfaceEpoch} title={title} heights={heights} snap={snap} onSnapChange={setSnap} bottomInset={insets.bottom} onClose={close} onBack={onBack} footer={footer} testID={testID}>
+  return <SheetModal visible={visible} onBackdropPress={() => { if (!preventDismiss) onClose(); }} onRequestClose={requestClose} onClosed={onClosed} keyboardAvoiding keyboardAvoidingBehavior="height">
+    <SheetSurface key={surfaceEpoch} title={title} heights={heights} snap={snap} onSnapChange={setSnap} bottomInset={insets.bottom} onClose={dismiss} onBack={onBack} footer={footer} testID={testID}>
       {children}
     </SheetSurface>
   </SheetModal>;

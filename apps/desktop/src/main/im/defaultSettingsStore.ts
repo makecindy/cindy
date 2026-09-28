@@ -265,6 +265,19 @@ export function writeImDefaultSettingsPatch(
   return readImDefaultSettingsState(channel);
 }
 
+/**
+ * 合并后的设置预览(不写盘) —— 保存前比较路由指纹用: 只改权限档等不动路由默认的
+ * 保存, 不该被阻塞式回填(PR #5155 review P2)。
+ */
+export function previewImDefaultSettingsPatch(
+  patch: ImDefaultSettingsPatch,
+  channel?: ImDefaultSettingsChannel,
+): ImDefaultSettings {
+  const document = store.read();
+  const current = channel ? document.channels[channel] : document.global;
+  return mergeSettingsPatch(current, patch);
+}
+
 export function resetImDefaultSettings(): ImDefaultSettings {
   return store.reset().global;
 }

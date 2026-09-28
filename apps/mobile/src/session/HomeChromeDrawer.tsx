@@ -66,7 +66,6 @@ export function HomeChromeDrawer({
   onOpenSearch,
   onOpenAccounts,
   onOpenDevices,
-  onOpenSharedSession,
   onOpenSettings,
   onLogout,
   loggingOut = false,
@@ -82,7 +81,6 @@ export function HomeChromeDrawer({
   onOpenSearch(): void;
   onOpenAccounts(): void;
   onOpenDevices(): void;
-  onOpenSharedSession?(): void;
   onOpenSettings(): void;
   onLogout(): void;
   loggingOut?: boolean;
@@ -344,16 +342,6 @@ export function HomeChromeDrawer({
             <Text numberOfLines={1} style={styles.menuLabel}>{t('devices.management.title')}</Text>
           </Pressable>
 
-          {onOpenSharedSession && <Pressable
-            accessibilityLabel={t('sharedTask.join')}
-            accessibilityRole="button"
-            onPress={onOpenSharedSession}
-            style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
-          >
-            <UsersRound color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-            <Text numberOfLines={1} style={styles.menuLabel}>{t('sharedTask.join')}</Text>
-          </Pressable>}
-
           <Pressable
             accessibilityLabel={t("devices.list.a11y.openSettings")}
             accessibilityRole="button"
@@ -472,6 +460,7 @@ const makeStyles = (colors: ThemeColors) =>
     avatarText: {
       color: colors.textPrimary,
       fontSize: typeScale.subtitle,
+      lineHeight: lineHeight.subtitle,
       fontWeight: fontWeight.medium,
     },
     accountTexts: {

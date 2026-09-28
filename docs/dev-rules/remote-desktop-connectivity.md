@@ -228,6 +228,10 @@ Mobile export/share and requested HTML resources use this policy. Directory list
 keeps the existing `remote-op` and separates complete enumeration from display
 filtering. Bounded text previews retain binary detection, truncation and gzip;
 they are preview projections rather than whole-file downloads.
+The first directory/text request uses the existing WSS path immediately and starts
+one background file-peer setup. Ready peers carry subsequent reads on a separate
+bounded data channel; transport failure falls back to WSS, while a host error remains
+a host error. The same authorized dispatch runs on the host for either transport.
 
 Whole-file reads request `prepareOnly` after host authorization. Up to 64 KiB,
 including empty files, returns inline bytes; larger files attempt the reusable
@@ -257,7 +261,7 @@ still own their copied files independently from the short-lived transfer staging
 An `open` request resolves the same authorized media URL as OSS. Only Main resolves
 paths, checks the effective size limit and opens the descriptor. The renderer sees
 an opaque one-use ticket. Files are limited to 2 GiB, transferred in 16 KiB blocks
-with at most 16 outstanding blocks, and checked for exact size, offsets and source
+with at most 64 outstanding blocks on negotiated `files-v2` (1 MiB), and checked for exact size, offsets and source
 stat changes through EOF. This is not a persistent content-hash cache. Changed files
 fail and follow the existing fallback behavior. Each source and sink rechecks its
 connection owner; revoking one controller closes only that controller's transfers.
@@ -308,6 +312,50 @@ local browser probe does not establish deployed TURN, physical phone, network
 switching or release-build acceptance; test those separately with matching accounts
 and record versions and the actual selected path.
 
+### Automatic acceleration and fallback
+
+Protocol version 1 remains unchanged. Optional `caps.streaming` selects `files-v2`
+and its separate `reads-v1` request channel; an old host uses `files-v1` with the
+original 16-block batches. V2 replenishes credit after every 32 completed sink
+writes, overlapping network reads and disk writes without unbounded buffering.
+The request channel caps each payload at 4 MiB and outstanding requests at four.
+It accepts directory/text reads, clipboard read/write chunks, and negotiated
+attachment staging only. Clipboard begin/copy/commit and ordinary mutations stay
+on WSS. Identical clipboard staging writes can be replayed after a lost response;
+commit remains single-use, so fallback cannot paste twice.
+
+Failed peer attempts enter per-device cooldown: 30 seconds initially, exponential
+backoff capped at five minutes. Queued transfers provide a single retry after the
+cooldown; success resets the backoff. Cancellation/account changes reject instead
+of starting OSS. Cooldown has no background polling and does not stop another
+device's connection. Local diagnostics record selected direct/relay path, transport
+protocol, RTT, setup time, bytes, transfer time, throughput and fallback stage;
+candidate addresses, paths and payloads are not added to these metrics.
+
+Optional `caps.attachments` enables controller-to-host byte staging for Desktop and
+Mobile, complementing the existing host-to-controller download path. Staging failure
+abandons the upload and falls back to OSS before the message is sent. Shared-task
+guests continue using their existing OSS scope. New peer references are sent only
+to a capable host. The receiving Main process checks size and SHA-256 before returning
+the reference, then normal message acceptance materializes it through the existing
+media/file ownership logic. Message acceptance itself remains on WSS.
+
+The host inbox lives under the current owner's userData namespace. Tickets bind to
+the source controller and are rechecked when materialized. Completed staging survives
+host restarts for seven days; incomplete staging expires after an hour. Admission
+sweeps expired entries and bounds retained reservations to 4 GiB / 128 uploads, with
+space for the consumer copy plus 256 MiB. This inbox is transport staging, not a new
+media store. Mobile retains local source bytes in its durable outbox for retry.
+
+Reproducible local probe: `node scripts/file-peer-smoke.mjs <Chrome> --benchmark`
+adds a 1 ms timer to each simulated source/sink bridge operation. On 2026-09-26,
+the 8 MiB case took 4433 ms with V1 and 2834 ms with V2 (about 36% less elapsed
+time). Local ICE setup was 203 / 124 ms respectively; these figures exclude cloud
+signaling, TURN config fetch and app cold start and are not a WAN speed claim.
+The `--large` probe also passed 101 MiB, exact bytes, EOF, sink failure, fragmented
+Unicode RPC, four concurrent RPCs and RPC during file transfer. Actual Mobile
+WebView/native I/O, deployed TURN and network switching still require device QA.
+
 Large-file transport retains protocol version 1 and advertises optional `caps.maxBytes`.
 Old peers keep their previous limits and rejected peer reads retain the existing OSS fallback.
 Both receivers reserve disk space for the incoming file and its consumer copy plus 256 MiB
@@ -316,3 +364,32 @@ commands use a 60-second deadline renewed by successful disk writes rather than 
 total deadline. Mobile on-demand HTTP requests allow up to two hours including queueing,
 transfer and response consumption; cancellation/backgrounding still closes them immediately.
 This does not add Range streaming or make very large HTML document parsing memory-bounded.
+
+### Unattended peer-transfer acceptance
+
+Run `pnpm test:peer-transfer` from an installed checkout (Node 22.12+, pnpm).
+No login, second device or manual network toggling is needed. The runner discovers
+Chrome (or installs Playwright Chromium), runs shared/Desktop/Mobile business
+tests and type checks, checks the generated WebView source, then exercises the
+production browser runtime with V1/V2, 101 MiB files, Unicode RPC and a slow bridge.
+It installs pinned `node-turn@0.0.6` into an isolated temporary directory, starts
+a UDP TURN server bound only to loopback with random in-memory credentials, and
+forces relay-only ICE. Selected-pair stats must report `relay`; direct connectivity
+cannot silently make the relay test pass. This fixture is not a shipping dependency.
+
+The fault probe disconnects a real peer during a random 2 MiB transfer, validates
+the HTTP fallback's SHA-256 through the production file-read policy, confirms
+repeated reads skip peer during cooldown, advances an injected cooldown clock,
+and verifies recovery, slow writes, cancellation, reverse attachment staging and
+connection isolation. HTTP storage and attachment receiver are test adapters;
+real Main attachment persistence/ownership and clipboard replay behavior are
+covered separately by the business tests. These are layered integration tests,
+not a full logged-in app UI test.
+
+Each stage has a deadline; failures exit nonzero. Children and fixture directories
+are cleaned up automatically. A unique OS temporary directory retains stage logs,
+`report.json` (including browser measurements) and `report.md`; its path is printed.
+The report explicitly excludes deployed TURN, TURN TCP/TLS, WAN NAT, physical
+network switching, real OSS and native iOS/Android WebView. A local pass must not
+be presented as passing those environments. No user files or account credentials
+are read by this runner.

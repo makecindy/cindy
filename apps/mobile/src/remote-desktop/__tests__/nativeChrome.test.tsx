@@ -119,6 +119,7 @@ vi.mock("@/theme", () => ({
   navigationChrome: { target: 44, clear: { dark: { foreground: '#FFFFFF', scrim: 'rgba(0, 0, 0, 0.35)', selected: 'rgba(255, 255, 255, 0.18)' }, light: { foreground: '#000000', scrim: 'rgba(255, 255, 255, 0.35)', selected: 'rgba(0, 0, 0, 0.10)' } } },
   iconSize: { action: 24 },
   typeScale: { body: 16, caption: 12 },
+  lineHeight: { body: 22, caption: 18 },
   iconStroke: { regular: 2 },
   fontWeight: { semibold: "600" },
   spacing: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 },

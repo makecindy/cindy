@@ -19,6 +19,7 @@
     "imageNotAnnotatable": "This image can't be annotated or forwarded.",
     "downloadOriginalFailed": "Could not download the original image (HTTP {{status}}).",
     "annotationSaveFailed": "Could not save annotation",
+    "replacementPending": "Your last change to this image hasn't finished uploading. Wait for it to finish, or retry or remove it above the input, then edit again.",
     "tryAgain": "Try again.",
     "sendToChat": "Send to Chat",
     "save": "Save",
@@ -42,6 +43,7 @@
     }
   },
   "upload": {
+    "shareReceiveFailed": "Couldn't finish receiving the shared files. Free up storage, then reopen this screen to retry.",
     "emptyFile": "This file is empty and can't be sent as an attachment.",
     "fileTooLarge": "The file exceeds {{size}} MB and can't be sent as an attachment for now.",
     "cancelled": "Attachment upload cancelled.",
@@ -86,6 +88,7 @@
     "sessionNotConnected": "The speech recognition session is not connected yet.",
     "loginRequired": "Sign in to {{appName}} before using voice input.",
     "serviceUnavailable": "The {{appName}} voice service is not configured for this region.",
+    "rateLimited": "Too many voice requests. Wait a moment, then try again.",
     "realtimeUnsupported": "Mobile realtime voice does not support {{detail}} ASR yet.",
     "realtimeAuthUnsupported": "Mobile realtime voice does not support {{auth}} ASR authentication yet.",
     "realtimeProtocolUnsupported": "Mobile realtime voice does not support the {{detail}} ASR protocol yet.",

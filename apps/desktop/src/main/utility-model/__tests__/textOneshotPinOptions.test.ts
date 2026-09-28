@@ -474,7 +474,15 @@ describe('resolveOneshotCatalogModel', () => {
   });
 });
 
-it.each(['claude', 'xai', 'codex'] as const)('lists an independent %s account using its own pin identity', (native) => {
+it('never lists a retired independent Claude account as a quick-answer pin', () => {
+  const p = provider({ id: 'claude-work', source: 'user', agents: ['codex'],
+    auth: { method: 'oauth', native: 'claude' },
+    routing: { codex: { upstream: 'https://account.example/v1', authStrategy: 'provider-oauth-header' } },
+    models: { codex: [chat('gpt-5.5', { mode: 'chat' })] } });
+  expect(buildTextOneshotPinOptions(catalogOf(p), undefined)).toEqual([]);
+});
+
+it.each(['xai', 'codex'] as const)('lists an independent %s account using its own pin identity', (native) => {
   const p = provider({ id: `${native}-work`, source: 'user', agents: ['codex'],
     auth: { method: 'oauth', native },
     routing: { codex: { upstream: 'https://account.example/v1', authStrategy: 'provider-oauth-header' } },

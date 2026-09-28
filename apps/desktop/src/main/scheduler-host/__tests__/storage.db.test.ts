@@ -1848,3 +1848,28 @@ it('bounds history chunk reads while preserving run costs and schedule totals', 
     expect(peak).toBe(1);
   } finally { harness.close(); }
 });
+
+
+it('deduplicates only identical unrecovered failures across persistent history', async () => {
+  const h = createStorageHarness();
+  try {
+    await h.storage.insert(baseSchedule());
+    const failed: ScheduleRun = { id: 'failure', scheduleId: 'sch-1', firedAt: 1, status: 'failed', errorMsg: 'pre-run hook failed with exit code 1' };
+    await h.storage.insertRun(failed);
+    const next = { ...failed, id: 'next', firedAt: 1000 };
+    expect(await h.storage.hasUnrecoveredMatchingFailure(failed)).toBe(false);
+    expect(await h.storage.hasUnrecoveredMatchingFailure(next)).toBe(true);
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next, errorMsg: 'different failure' })).toBe(false);
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next, scheduleId: 'another' })).toBe(false);
+    // More than a UI page of skipped/backoff checks must not reset the error fingerprint.
+    for (let i = 2; i < 65; i++) await h.storage.insertRun({ id: `skip-${i}`, scheduleId: 'sch-1', firedAt: i, status: 'skipped' });
+    expect(await h.storage.hasUnrecoveredMatchingFailure(next)).toBe(true);
+    await h.storage.insertRun({ id: 'healthy', scheduleId: 'sch-1', firedAt: 66, status: 'skipped', preRunHookResult: {
+      status: 'skipped', decision: 'skip', exitCode: 2, timedOut: false, aborted: false, checkSucceeded: true, durationMs: 1, stdout: 'CINDY_PRECHECK_OK', stderr: '', stdoutTruncated: false, stderrTruncated: false,
+    } });
+    expect(await h.storage.hasUnrecoveredMatchingFailure(next)).toBe(false);
+    await h.storage.insertRun({ ...failed, id: 'execution', firedAt: 67, errorMsg: 'model unavailable' });
+    await h.storage.insertRun({ id: 'recovered', scheduleId: 'sch-1', firedAt: 68, status: 'success' });
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next, errorMsg: 'model unavailable' })).toBe(false);
+  } finally { h.close(); }
+});

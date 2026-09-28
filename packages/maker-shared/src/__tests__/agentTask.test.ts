@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   applyAgentTaskUpdateEvent,
   buildAgentTaskCardModel,
+  buildSubagentRunStatusIndex,
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
   isAgentTaskToolName,
   isSubagentSpawnToolName,
+  lookupSubagentRunStatus,
   mergeAgentTaskUpdate,
   PI_SUBAGENT_TOOL_NAME,
   normalizeAgentTaskUpdate,
@@ -16,6 +18,16 @@ import {
 } from '../agentTask.js';
 
 const NOW = '2026-06-24T00:00:00.000Z';
+
+/** Verbatim async launch receipt from Claude Code 2.1.280 (agent/output ids shortened). */
+const CLAUDE_2_1_280_ASYNC_RECEIPT = [
+  'Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)',
+  "agentId: aedc178c75c770875 (internal ID - do not mention to user. Use SendMessage with to: 'aedc178c75c770875', summary: '<5-10 word recap>' to continue this agent.)",
+  'The agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives — do not report, assume, or predict them; continue other work or respond to the user in the meantime.',
+  "Do not duplicate this agent's work — avoid working with the same files or topics it is using.",
+  'output_file: /private/tmp/claude-501/project/session/tasks/aedc178c75c770875.output',
+  'Do NOT Read or tail this file via the shell tool — it is the full subagent JSONL transcript and reading it will overflow your context. If the user asks for progress, say the agent is still running; you\'ll get a completion notification.',
+].join('\n');
 
 describe('isAgentTaskToolName', () => {
   it('matches Task / Agent / collab:* and nothing else', () => {
@@ -59,6 +71,18 @@ describe('subagentSpawnResultIndicatesRunning', () => {
     expect(subagentSpawnResultIndicatesRunning('Task', null)).toBe(false);
     expect(subagentSpawnResultIndicatesRunning('collab:spawnAgent', undefined)).toBe(false);
     expect(subagentSpawnResultIndicatesRunning('subagent', undefined)).toBe(false);
+  });
+
+  it('recognises the Claude Code 2.1.280 async launch receipt', () => {
+    expect(subagentSpawnResultIndicatesRunning('Agent', CLAUDE_2_1_280_ASYNC_RECEIPT)).toBe(true);
+    expect(subagentSpawnResultIndicatesRunning('Task', CLAUDE_2_1_280_ASYNC_RECEIPT)).toBe(true);
+  });
+
+  it('does not treat a final Agent answer that quotes the receipt opener as a launch', () => {
+    expect(subagentSpawnResultIndicatesRunning(
+      'Agent',
+      'Async agent launched successfully. That is what the log said; the fix is done.',
+    )).toBe(false);
   });
 
   it('recognises the durable PI launch receipt', () => {
@@ -112,6 +136,65 @@ describe('deriveAgentTaskStatus', () => {
     expect(deriveAgentTaskStatus(undefined, 'done', {
       persistedStatus: 'cancelled' as never,
     })).toBe('completed');
+  });
+
+  it('keeps a live running task running when the durable run is running, whatever the result text', () => {
+    expect(deriveAgentTaskStatus('running', 'Some future receipt wording', {
+      durableStatus: 'running',
+    })).toBe('running');
+  });
+
+  it('lets a durable terminal run outrank a stale running update and the result text', () => {
+    expect(deriveAgentTaskStatus('running', 'Some future receipt wording', {
+      durableStatus: 'failed',
+    })).toBe('failed');
+    expect(deriveAgentTaskStatus(undefined, 'receipt', { durableStatus: 'stopped' })).toBe('stopped');
+  });
+
+  it('does not let a durable running record pin a spinner without a live update', () => {
+    expect(deriveAgentTaskStatus(undefined, 'receipt', { durableStatus: 'running' })).toBe('completed');
+  });
+
+  it('lets a live terminal update close a durable run that has not caught up yet', () => {
+    expect(deriveAgentTaskStatus('completed', 'receipt', { durableStatus: 'running' })).toBe('completed');
+  });
+
+  it('keeps the persisted tool-call status above the durable run', () => {
+    expect(deriveAgentTaskStatus('running', 'x', {
+      persistedStatus: 'completed',
+      durableStatus: 'running',
+    })).toBe('completed');
+  });
+});
+
+describe('buildSubagentRunStatusIndex / lookupSubagentRunStatus', () => {
+  it('indexes a run under its parent tool-use id, logical id and aliases', () => {
+    const index = buildSubagentRunStatusIndex([{
+      parentToolUseId: 'toolu_1',
+      logicalAgentId: 'agent-1',
+      identityAliases: ['alias-1'],
+      status: 'running',
+      updatedAt: 1,
+    }]);
+    expect(lookupSubagentRunStatus(index, 'toolu_1')).toBe('running');
+    expect(lookupSubagentRunStatus(index, undefined, { taskId: 'agent-1' })).toBe('running');
+    expect(lookupSubagentRunStatus(index, undefined, { taskId: 'x', parentToolUseId: 'alias-1' }))
+      .toBe('running');
+    expect(lookupSubagentRunStatus(index, 'toolu_other')).toBeUndefined();
+    expect(lookupSubagentRunStatus(undefined, 'toolu_1')).toBeUndefined();
+  });
+
+  it('keeps the most recently updated run when two runs share an alias', () => {
+    const index = buildSubagentRunStatusIndex([
+      { parentToolUseId: 'toolu_1', status: 'running', updatedAt: 20 },
+      { parentToolUseId: 'toolu_1', status: 'completed', updatedAt: 10 },
+    ]);
+    expect(lookupSubagentRunStatus(index, 'toolu_1')).toBe('running');
+  });
+
+  it('skips runs with an unknown status', () => {
+    const index = buildSubagentRunStatusIndex([{ parentToolUseId: 'toolu_1', status: 'queued' }]);
+    expect(index.size).toBe(0);
   });
 });
 
@@ -381,6 +464,40 @@ describe('buildAgentTaskCardModel', () => {
         provider: 'claude-code',
         taskId: 'agent-1',
         parentToolUseId: 'agent-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+  });
+
+  it('REPRO: keeps a Claude Code 2.1.280 async Agent running and hides its receipt', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Agent',
+      toolInput: { prompt: 'keep working' },
+      result: CLAUDE_2_1_280_ASYNC_RECEIPT,
+      update: {
+        provider: 'claude-code',
+        taskId: 'aedc178c75c770875',
+        parentToolUseId: 'toolu_1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+    expect(model.summary).toBeUndefined();
+  });
+
+  it('keeps an async Agent running from the durable run even if the receipt wording changes again', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Agent',
+      toolInput: { prompt: 'keep working' },
+      result: 'Background agent queued. id=abc',
+      durableStatus: 'running',
+      update: {
+        provider: 'claude-code',
+        taskId: 'abc',
+        parentToolUseId: 'toolu_1',
         status: 'running',
       },
     });

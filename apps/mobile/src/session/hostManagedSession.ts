@@ -15,6 +15,7 @@ export function isHostManagedSession(
 export function useHostManagedSession(
   scope: string,
   session: Pick<RemoteSession, 'source'> | null | undefined,
+  pendingValue = true,
 ): boolean {
   const [observed, setObserved] = useState<{ scope: string; managed: boolean | null }>(
     () => ({ scope, managed: session ? isHostManagedSession(session) : null }),
@@ -25,6 +26,7 @@ export function useHostManagedSession(
   if (observed.scope !== scope || observed.managed !== managed) {
     setObserved({ scope, managed });
   }
-  // Before the first authoritative snapshot, do not flash task-only controls.
-  return managed !== false;
+  // Controls stay conservative before a snapshot; transcript callers require
+  // confirmed ownership so ordinary task history is never filtered on load.
+  return managed ?? pendingValue;
 }

@@ -19,6 +19,7 @@
     "imageNotAnnotatable": "이 이미지는 주석이나 전달을 지원하지 않습니다.",
     "downloadOriginalFailed": "원본 이미지를 다운로드하지 못했습니다(HTTP {{status}}).",
     "annotationSaveFailed": "주석을 저장하지 못했습니다",
+    "replacementPending": "이 이미지의 이전 변경 사항이 아직 업로드되지 않았습니다. 완료될 때까지 기다리거나 입력창 위에서 다시 시도하거나 삭제한 후 편집하세요.",
     "tryAgain": "다시 시도하세요.",
     "sendToChat": "대화로 보내기",
     "save": "저장",
@@ -42,6 +43,7 @@
     }
   },
   "upload": {
+    "shareReceiveFailed": "공유 파일 수신을 완료하지 못했습니다. 저장 공간을 확인한 후 이 화면을 다시 열어 재시도해 주세요.",
     "emptyFile": "이 파일은 비어 있어 첨부 파일로 보낼 수 없습니다.",
     "fileTooLarge": "파일이 {{size}} MB를 초과하여 지금은 첨부 파일로 보낼 수 없습니다.",
     "cancelled": "첨부 파일 업로드를 취소했습니다.",
@@ -86,6 +88,7 @@
     "sessionNotConnected": "음성 인식 세션이 아직 연결되지 않았습니다.",
     "loginRequired": "음성 입력을 사용하기 전에 {{appName}}에 로그인하세요.",
     "serviceUnavailable": "현재 지역에는 {{appName}} 음성 서비스가 구성되어 있지 않습니다.",
+    "rateLimited": "음성 요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
     "realtimeUnsupported": "모바일 실시간 음성은 아직 {{detail}} ASR을 지원하지 않습니다.",
     "realtimeAuthUnsupported": "모바일 실시간 음성은 아직 {{auth}} ASR 인증을 지원하지 않습니다.",
     "realtimeProtocolUnsupported": "모바일 실시간 음성은 아직 {{detail}} ASR 프로토콜을 지원하지 않습니다.",

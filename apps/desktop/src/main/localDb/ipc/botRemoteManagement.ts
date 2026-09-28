@@ -3,7 +3,7 @@ import { botRemoteResourceFromSource } from './botRemoteResourceProjection.js';
 import { inspectAppDefaultModel } from '../../maker-ipc/appDefaultModelControl.js';
 import type { BotModelRoute } from '../../../shared/botModelChain.js';
 import { createBotRemoteSettingsResource } from './botRemoteSettingsResource.js';
-import { createBotProfile, createBotCanonicalSession, getBotRemoteResourceSource, getBotRemoteSettingsSource, setBotProfileAvatar, updateBotProfile } from './bots.js';
+import { createBotProfile, createBotCanonicalSession, getBotMemoryService, getBotRemoteResourceSource, getBotRemoteSettingsSource, setBotProfileAvatar, updateBotProfile } from './bots.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { listBotSkillsForBot, readBotSkillForBot, saveBotSkillForSession, deleteBotSkillForBot } from '../../maker-ipc/botSkillService.js';
@@ -81,6 +81,13 @@ const getEditor = createBotRemoteEditors({ ...deps,
   },
   async capabilities(callerSessionId, kind) {
     return listBotSettingsCapabilities({ callerSessionId, kind });
+  },
+  // Resolved per call: the same service (locks, refresh coalescing) as the local Memory page.
+  memory: {
+    list: (botId, query) => getBotMemoryService().list(botId, query),
+    read: (botId, filename) => getBotMemoryService().read(botId, filename),
+    update: input => getBotMemoryService().update(input),
+    delete: input => getBotMemoryService().delete(input),
   },
 }, settings.bindResource);
 async function getInvitation(context: RemoteResourceHostContext, botId: string) {

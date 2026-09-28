@@ -276,7 +276,7 @@ export function useMobileLocalAttachments(
       if (candidate.kind === 'image') assertMobileImageSize(size);
       else assertMobileDocumentSize(size);
     },
-    upload: (candidate, fileUri, opts) => uploadMobileAttachmentFromFile(candidate, fileUri, { ...opts, sharedTaskId: candidate.sharedTaskId }),
+    upload: (candidate, fileUri, opts) => uploadMobileAttachmentFromFile(candidate, fileUri, { ...opts, sharedTaskId: candidate.sharedTaskId, deviceId: candidate.deviceId }),
     discard: (attachment, token) => discardMobileUploadedAttachment(attachment, {
       getToken: () => token === undefined ? optionsRef.current.getAccessToken() : Promise.resolve(token),
     }),
@@ -295,6 +295,8 @@ export function useMobileLocalAttachments(
           getToken: () => optionsRef.current.getAccessToken(),
         });
         if (candidate.cleanupLocalUris) void candidate.cleanupLocalUris(localUris).catch(() => undefined);
+        // 结果被拒收 = 任务被放弃:让自行生成输入文件的调用方回收(见 onAbandoned)。
+        try { candidate.onAbandoned?.(); } catch { /* 回收失败不影响管线 */ }
         return;
       }
       // 发送后气泡的本地缩略图兜底:消息里持久化的是 cindy-oss-attach:// 中转引用,
@@ -329,6 +331,7 @@ export function useMobileLocalAttachments(
       uploadedSourcesRef.current.set(attachment.id, {
         ...candidate, uri: stageUri, name: attachment.name, mimeType: attachment.mimeType,
         size: attachment.size, resolve: undefined, skipPreprocess: true, cleanupLocalUris: undefined,
+        onAbandoned: undefined,
       });
       optionsRef.current.onUploaded(attachment, deliveredCandidate, localId);
       if (candidate.cleanupLocalUris) {
@@ -380,15 +383,19 @@ export function useMobileLocalAttachments(
     candidates: readonly MobileLocalAttachmentUploadCandidate[],
     opts: { token: string | Promise<string | null> },
   ) => {
-    if (!isAttachmentScopeActive()) return;
+    if (!isAttachmentScopeActive()) {
+      // 作用域已失效,任务不会入队:视同放弃,让自行生成输入文件的调用方回收。
+      for (const candidate of candidates) {
+        try { candidate.onAbandoned?.(); } catch { /* 回收失败不影响管线 */ }
+      }
+      return;
+    }
     controller.enqueue(
-      attachmentScopeKey == null
-        ? candidates
-        : candidates.map((candidate) => ({
+      candidates.map((candidate) => ({
             ...candidate,
-            attachmentScopeGeneration,
-            attachmentScopeKey,
+            ...(attachmentScopeKey == null ? {} : { attachmentScopeGeneration, attachmentScopeKey }),
             sharedTaskId: parseSharedTaskPeer(optionsRef.current.deviceId ?? '')?.sharedTaskId,
+            deviceId: optionsRef.current.deviceId,
           })),
       opts,
     );

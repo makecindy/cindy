@@ -3,15 +3,21 @@ import { collectMobileMarkdownImages } from './messageMarkdown';
 import type { MobileMessageRenderItem } from './messageRenderModel';
 
 const isDelivery = (item: MobileMessageRenderItem) => item.type === 'tool_media' && item.tools.some(tool => !!tool.media?.length || !!tool.files?.length)
-  || item.type === 'message' && (!!item.message.attachments?.length || !!item.message.media?.length
+  || item.type === 'message' && (item.message.companion?.kind === 'task' && item.message.companion.meta.role === 'delegation-result'
+    || !!item.message.attachments?.length || !!item.message.media?.length
     || !!item.message.files?.length || collectMobileMarkdownImages(item.message.body).length > 0);
+
+const expandWorkGroups = (items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] =>
+  items.flatMap(item => item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);
 
 /** Presentation only. The host's persisted messages and lazy history remain intact. */
 export function companionConversationItems(items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] {
+  // The main timeline folds earlier background-wake seals into work groups; teammate chats
+  // still show every sealed reply, so find sealed runs with tools/thinking as boundaries.
   const sealed = new Set<string>();
   let sealedRun = false;
   let nextAssistantAt: number | null = null;
-  for (const item of [...items].reverse()) {
+  for (const item of expandWorkGroups(items).reverse()) {
     if (item.type !== 'message' || item.message.kind !== 'assistant' || !item.message.body.trim() || item.message.systemCardType) {
       sealedRun = false;
       nextAssistantAt = null;
@@ -31,7 +37,16 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
   // A later delivery is already the result. Do not restore its unsealed preamble.
   const deliveredAfter = new Set<string>();
   let delivery = false;
+  let nextMessageAt: number | null = null;
   for (const item of [...flattened].reverse()) {
+    if (item.type === 'message') {
+      const createdAt = Date.parse(item.message.createdAt);
+      if (Number.isFinite(createdAt)) {
+        // A receipt in a newer loaded window cannot suppress an older reply.
+        if (nextMessageAt !== null && nextMessageAt - createdAt > HISTORY_GAP_SPLIT_MS) delivery = false;
+        nextMessageAt = createdAt;
+      }
+    }
     if (item.type === 'message' && item.message.kind === 'user') delivery = false;
     else if (isDelivery(item)) delivery = true;
     else if (delivery) deliveredAfter.add(item.key);
@@ -41,6 +56,11 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
       || item.type === 'subagent_group' || item.type === 'todo') return false;
     if (item.type !== 'message') return true;
     const message = item.message;
+    // Desktop drops persisted synthetic resume separators from teammate chats; only the live
+    // reconnect card (still in progress) remains. The composer status carries recovery copy.
+    if (message.isSyntheticTrigger && message.systemCardType === 'auto-resume') {
+      return message.systemCardData?.live === true;
+    }
     if (message.systemCardType) return true;
     if (message.kind === 'thinking' || message.kind === 'tool') return false;
     return message.kind !== 'assistant' || message.turnCompleted || sealed.has(item.key) || isDelivery(item)

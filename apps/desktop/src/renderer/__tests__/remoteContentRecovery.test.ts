@@ -10,6 +10,37 @@ function deferred<T>() {
 }
 afterEach(() => vi.useRealTimers());
 describe('remote content recovery', () => {
+  it('keeps cleanup passive until a new eligible trigger, then coalesces recovery behind the stale request', async () => {
+    vi.useFakeTimers();
+    const old = deferred<boolean>();
+    const ack = deferred<void>();
+    const reconcile = vi.fn().mockReturnValueOnce(old.promise).mockResolvedValue(true);
+    const subscribe = vi.fn().mockResolvedValueOnce(undefined).mockReturnValue(ack.promise);
+    const changed = vi.fn();
+    const recovery = createRemoteContentRecovery({ subscribe, reconcile, changed, completed: vi.fn() });
+    recovery.request();
+    await vi.advanceTimersByTimeAsync(0);
+    recovery.invalidate(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(changed).not.toHaveBeenCalledWith('ready');
+    recovery.request(true);
+    recovery.request(true);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    old.resolve(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(changed).not.toHaveBeenCalledWith('ready');
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    recovery.request(true);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    ack.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(changed).toHaveBeenLastCalledWith('ready');
+    recovery.dispose();
+    recovery.request(true);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+  });
+
   it('waits for both subscription ACK and an applied snapshot, coalescing triggers', async () => {
     vi.useFakeTimers();
     const ack = deferred<void>();

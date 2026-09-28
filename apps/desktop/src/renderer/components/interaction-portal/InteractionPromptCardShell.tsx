@@ -17,6 +17,12 @@ interface InteractionPromptCardShellProps {
   headerLeading?: ReactNode;
   minimizeDisabled?: boolean;
   children: ReactNode;
+  /**
+   * Rendered between the scroll region and the footer, outside the scrollport
+   * so it stays visible while long content scrolls. Used for permanent entries
+   * that must always remain reachable (see DESIGN.md §4 catalog dialogs).
+   */
+  pinnedContent?: ReactNode;
   footer?: ReactNode;
   className?: string;
 }
@@ -39,6 +45,7 @@ export function InteractionPromptCardShell({
   headerLeading,
   minimizeDisabled = false,
   children,
+  pinnedContent,
   footer,
   className,
 }: InteractionPromptCardShellProps) {
@@ -112,6 +119,7 @@ export function InteractionPromptCardShell({
         >
           {children}
         </div>
+        {pinnedContent}
         {footer}
       </div>
     </div>

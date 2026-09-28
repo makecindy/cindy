@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { apiFetchRaw } from '@/api/client';
+import { installPeerUpload } from '@/device-link/peerFileRegistry';
+import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { i18n } from '@/i18n';
 import { buildAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
@@ -22,6 +24,41 @@ const readFileChunk = vi.fn(async (_uri: string, _position: number, length: numb
 );
 
 describe('mobileAttachmentUpload', () => {
+  it('uploads prepared bytes to the captured peer without presigning OSS', async () => {
+    const apiFetch = vi.fn();
+    const peer = vi.fn(async (_device, _uri, metadata) => buildPeerAttachmentRef({ ...metadata, ticket: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }));
+    const off = installPeerUpload(peer);
+    try {
+      const attachment = await uploadMobileAttachmentFromFile({ name: 'a.txt', size: 4, mimeType: 'text/plain' }, 'file:///source', {
+        deviceId: 'host-a', token: 'token', deps: { apiFetch, readFileChunk },
+      });
+      expect(peer.mock.calls[0][0]).toBe('host-a');
+      expect(parsePeerAttachmentRef(attachment.path)?.size).toBe(4);
+      expect(apiFetch).not.toHaveBeenCalled();
+    } finally { off(); }
+  });
+  it('never starts OSS after a cancelled peer upload', async () => {
+    const apiFetch = vi.fn();
+    const off = installPeerUpload(async () => { throw new Error('FILE_PEER_CANCELLED'); });
+    try {
+      await expect(uploadMobileAttachmentFromFile({ name: 'a.txt', size: 4 }, 'file:///source', {
+        deviceId: 'host-a', token: 'token', deps: { apiFetch, readFileChunk },
+      })).rejects.toThrow('CANCELLED');
+      expect(apiFetch).not.toHaveBeenCalled();
+    } finally { off(); }
+  });
+  it('falls back to OSS when the peer adapter declines an upload', async () => {
+    const apiFetch = vi.fn(async () => ({ putUrl: 'https://oss.example/upload', key: 'cindy/device-link/u/a.txt' }));
+    const uploadFile = vi.fn(async () => ({ status: 200 }));
+    const off = installPeerUpload(async () => null);
+    try {
+      const attachment = await uploadMobileAttachmentFromFile({ name: 'a.txt', size: 4 }, 'file:///source', {
+        deviceId: 'host-a', token: 'token', deps: { apiFetch: apiFetch as unknown as typeof apiFetchRaw, uploadFile, readFileChunk },
+      });
+      expect(parseAttachmentOssRef(attachment.path)?.ossKey).toBe('cindy/device-link/u/a.txt');
+      expect(uploadFile).toHaveBeenCalledOnce();
+    } finally { off(); }
+  });
   it('presigns against the captured shared task rather than the private account namespace', async () => {
     const apiFetch = vi.fn(async () => ({ putUrl: 'https://oss.example/upload', key: 'cindy/device-link/shared-task/task/u/file.png', expiresAt: '2026-09-16T12:00:00Z' }));
     await presignMobileAttachmentUpload({ name: 'file.png', size: 10, mimeType: 'image/png' }, {

@@ -539,9 +539,9 @@ export function catalogSurfaces() {
     {
       id: 'desktop.bots',
       platform: 'desktop',
-      title: '伙伴（列表 / 对话 / 设置 / 历史 / 伙伴私聊）',
+      title: '伙伴（列表 / 对话 / 设置 / 历史 / 伙伴私聊 / 群聊）',
       productionEntry:
-        'hash `/bots`、`/bots/list`、`/bots/:botId`、`/bots/roster` 及伙伴当前/历史任务、伙伴私聊路由（BotsFeatureLayout）',
+        'hash `/bots`、`/bots/list`、`/bots/:botId`、`/bots/roster` 及伙伴当前/历史任务、伙伴私聊、伙伴群聊路由（BotsFeatureLayout）',
       reachableComponents: [
         'BotsHomeView',
         'BotsListView',
@@ -550,6 +550,9 @@ export function catalogSurfaces() {
         'RemoteBotSessionView',
         'BotHistorySessionView',
         'BotDirectMessageView',
+        'BotGroupChatView',
+        'BotGroupSettingsDrawer',
+        'BotGroupCreateDialog',
         'BotSettingsDrawer',
         'BotBasicProfileFields',
         'BotModelChainEditor',
@@ -567,6 +570,7 @@ export function catalogSurfaces() {
         '/bots/:botId/history/:sessionId',
         '/bots/:botId/session/:sessionId',
         '/bots/roster',
+        '/bots/groups/:groupId',
         '/bots/remote/:deviceId/:botId',
       ],
       routeEntryComponents: {
@@ -577,6 +581,7 @@ export function catalogSurfaces() {
         '/bots/:botId/history/:sessionId': 'BotHistorySessionView',
         '/bots/:botId/session/:sessionId': 'BotSessionView',
         '/bots/roster': 'BotRosterView',
+        '/bots/groups/:groupId': 'BotGroupChatView',
         '/bots/remote/:deviceId/:botId': 'RemoteBotSessionView',
       },
     },
@@ -1398,11 +1403,11 @@ export function mobileCatalogSurfaces() {
     ['remote-desktop', '远程桌面', ['devices/desktop/[deviceId].tsx']],
     ['resources', '远程资源列表与详情', ['resources/[collectionId].tsx', 'resources/[collectionId]/[resourceId].tsx']],
     ['companions.direct', '伙伴私聊回看', ['companions/direct/[threadId].tsx']],
+    ['companions.groups', '伙伴群聊与分工', ['companions/groups/[groupId].tsx']],
     ['chat.session', '任务内容与输入', ['sessions/[sessionId].tsx']],
     ['chat.sharing', '共享任务邀请与成员', ['shared-session.tsx']],
     ['chat.new', '新建任务', ['sessions/new.tsx']],
     ['files', '任务文件与预览', ['files/[sessionId].tsx', 'files/preview/[sessionId].tsx']],
-    ['automations', '自动化', ['automations/[deviceId].tsx']],
     ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx']],
     ['auth', '登录与添加账号', ['(auth)/login.tsx', 'add-account.tsx']],
     ['account-deletion', '账号注销', ['account-deletion.tsx']],
@@ -1428,6 +1433,7 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
   const excluded = new Map([
     ['_layout.tsx', 'layout; visible mounted feedback is a separate overlay surface'],
     ['+native-intent.ts', 'native intent routing; no screen'],
+    ['automations/[deviceId].tsx', 'legacy automation link redirect; no screen'],
     ['splash-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED preview; not production UI'],
     ['listperf.tsx', '__DEV__ list performance harness; not production UI'],
   ]);

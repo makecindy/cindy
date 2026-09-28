@@ -40,6 +40,22 @@ function systemOrderError(status = 400, message = 'System message must be at the
   return new Response(JSON.stringify({ error: { message, type: 'BadRequestError' } }), { status });
 }
 
+/**
+ * Google 的 OpenAI 兼容层经由 AI SDK 抛出的形状:外层套一层 Responses/Anthropic 风格的
+ * error,真正的 AI SDK 错误被二次编码进 message 字符串里的一层 JSON。
+ */
+function googleSystemOrderError(): Response {
+  const functionality = "'system messages are only supported at the beginning of the conversation' functionality not supported.";
+  return new Response(JSON.stringify({
+    error: {
+      message: JSON.stringify({
+        error: { message: functionality, type: 'AI_UnsupportedFunctionalityError' },
+      }),
+      type: 'invalid_request_error',
+    },
+  }), { status: 400 });
+}
+
 // Reduced shape of the real Codex capture: instructions + developer, user, user.
 // Exact captured text is replayed separately against the official Qwen template.
 function leadingSystemRequest(): ResponsesRequest {
@@ -239,6 +255,99 @@ describe('createResponsesChatHandler', () => {
     expect(res.status).toBe(status);
     expect(onUpstreamError).toHaveBeenCalledOnce();
     expect(res.listenerCount('close')).toBe(0);
+  });
+
+  // Claude Code 的 mid-conversation-system(#3583 的 Google 版本):顶层 instructions 与
+  // agent 列表先进 system,随后 user 轮次之后还会再来一条 system。Google 的 OpenAI 兼容层
+  // 是会话级限制,只并前缀救不了它——必须把中段 system 一并提到开头,否则整轮 400 且下一轮
+  // 复现,会话卡死。
+  it('hoists a mid-conversation system message when the upstream only accepts a leading one', async () => {
+    const bodies: ChatCompletionsRequest[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      if (bodies.length === 1) return googleSystemOrderError();
+      return streamResponse([{ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }]);
+    });
+    const onUpstreamError = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      buildHeaders: async () => ({}),
+      capabilities: { reasoningField: 'reasoning_effort' },
+      onUpstreamError,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'google/gemini-3.8-flash',
+        instructions: 'You are an interactive agent.',
+        input: [
+          { role: 'user', content: 'system-reminder: context' },
+          { role: 'system', content: 'Available agent types for the Agent tool' },
+          { role: 'user', content: 'hello' },
+        ],
+      },
+      res: res as never,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    // 中段 system 与开头 instructions 合成唯一首条 system,user 顺序保持。
+    expect(bodies[1].messages).toEqual([
+      {
+        role: 'system',
+        content: 'You are an interactive agent.\n\nAvailable agent types for the Agent tool',
+      },
+      { role: 'user', content: 'system-reminder: context' },
+      { role: 'user', content: 'hello' },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.chunks.join('')).toContain('event: response.completed');
+  });
+
+  it('does not widen the Qwen prefix retry into a mid-conversation hoist', async () => {
+    // `System message must be at the beginning.` 来自模板运行器,只约束开头连续段;
+    // 中段 system 不该被这条措辞牵着走(既有保守策略)。
+    const fetchImpl = vi.fn(async () => systemOrderError());
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://vllm.example/v1', buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'qwen3.8-27b-fp8',
+        instructions: 'base instructions',
+        input: [
+          { role: 'user', content: 'hello' },
+          { role: 'system', content: 'later instructions' },
+        ],
+      },
+      res: res as never,
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(400);
+  });
+
+  it('retries a Google leading-system rejection twice at most', async () => {
+    const fetchImpl = vi.fn(async () => googleSystemOrderError());
+    const onUpstreamError = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      buildHeaders: async () => ({}),
+      onUpstreamError,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'google/gemini-3.8-flash',
+        instructions: 'base',
+        input: [
+          { role: 'user', content: 'hello' },
+          { role: 'system', content: 'later' },
+        ],
+      },
+      res: res as never,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(400);
+    expect(onUpstreamError).toHaveBeenCalledOnce();
   });
 
   it.each([400, 401, 503])('reports only the final error when the compatibility retry fails with %s', async (status) => {

@@ -179,8 +179,9 @@ gh-cli、oidc-token 或账号 vault 写入；临时 Node Secret 卡只允许其�
   保持上游独立 RPC 行为，不自动弹卡或结束后台进程。已停止的调用不能迟到启用新授权。
 - 两端 Desktop 必须支持 v3。旧版仍可使用原本的远控及执行设备本地设置；新授权动作
   不走旧通道/明文降级，不会替用户清空已有凭据。
-- Mobile 当前只可查看/取消既有卡片，未实现本机回调与保密输入；在连接该设备的新版
-  Desktop 完成。网站 Cookie/全量 vault 同步不在范围。
+- Mobile 是目标电脑的遥控器：配置卡保留查看/取消，并提供进入目标电脑远程桌面的入口。
+  用户在电脑端 UI 完成输入、浏览器登录和授权；回调、交换及凭据保存全部在电脑执行。
+  手机不实现插件凭据表单、OAuth 回调或授权码转发。网站 Cookie/全量 vault 同步不在范围。
 - Auth、relay、CIS、Model Access 不需要本功能的新服务接口或部署；双方客户端需升级。
 
 ### 各端范围与后续门禁
@@ -188,7 +189,7 @@ gh-cli、oidc-token 或账号 vault 写入；临时 Node Secret 卡只允许其�
 | 场景 | 本 PR 的处理 |
 | --- | --- |
 | Desktop → Desktop Device Link | 已适配：新私有通道经同账号授权、卡片绑定及签名握手；原有 invoke/push 规则不放宽。 |
-| Mobile → Desktop Device Link | 保留既有只读配置状态、取消和完成状态。手机侧保密输入、设备码操作与浏览器回调尚未适配，必须在 PR 链接专门的跟踪 issue 后才能满足上游延期要求，不能把这三项写成已支持。 |
+| Mobile → Desktop Device Link | 配置卡提供目标电脑远程桌面入口，保留状态与取消；手机仅通过既有远程画面与输入控制电脑。无手机授权桥接，不依赖新的 Google 移动客户端或手机回调；共享任务访客及终态卡片不提供远控入口。 |
 | SSH 工作区 | 本 PR 不新增 SSH 凭据转发或远端插件安装。SSH 的 Agent/workdir 仍经 maker-remote-ssh、cc-manager 与 remote-file-service；插件由提供 MCP 的 Desktop Host 管理，授权仅改变该 Host 的连接。SSH 主机没有本桥的 Desktop 身份、OS 密钥存储和 Device Link peer，不能把它当作另一个被控 Desktop，也不向其 HOME/workdir 复制本机凭据。原有远端文件、网络与 Forge 限制保留。 |
 
 故障范围：单卡片取消/超时只收口该事务；单 peer 失效只取消该 peer 的事务；账号退出

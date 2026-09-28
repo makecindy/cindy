@@ -12,6 +12,10 @@ import { expandedRegistryEntries, providerMediaField } from '@cindy/model-provid
  *  - transforms:投影期的 ID/能力变换(chatgpt/ 前缀、effort 封顶、fast=false),
  *    硬约束最后收口。共享变换与拓扑都集中在本模块,目录装配和续跑描述符不得各写一套。
  *
+ * 2026-09-27 起 root 的**成员只来自供应商返回的清单**:registry 对已返回的型号提供资料
+ * overlay 与 retired 标记,不再补入账号没返回的型号(见 applyRootRegistryPlan 的
+ * materialize)。唯一例外是 xAI 尚无账号快照、只能靠静态声明的兼容路径。
+ *
  * Pi 不在 wire enum(protocol MODEL_ACCESS_AGENTS 只有 claude-code/codex)，也不从这两个
  * harness 复制。本模块仅承担旧 Registry 根／桥接投影。Pi 消费 Server 的显式 models.pi，缺字段才
  * 使用随包兜底；三个 Harness 的元数据仍经共同合并层处理。
@@ -116,16 +120,18 @@ const VALID_EFFORTS: ReadonlySet<string> = new Set([
 ]);
 type Effort = CatalogModel['efforts'][number];
 
-/** Claude 的 OpenAI bridge 默认收起的旧型号;与既有目录行为保持一致。 */
-const BRIDGE_DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4', 'gpt-5.4-mini']);
-
-/** OpenAI Codex root → Claude bridge。 */
+/**
+ * OpenAI Codex root → Claude bridge。bridge 的默认可见性由 consumer overlay 统一处理
+ * (默认关闭，Registry perAgent 可显式打开),这里不再按型号写死例外。
+ */
 export function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
-  return {
-    ...model,
-    id: `${CHATGPT_MODEL_PREFIX}${model.id}`,
-    ...(BRIDGE_DEFAULT_HIDDEN_SLUGS.has(model.id) ? { defaultEnabled: false } : {}),
-  };
+  return { ...model, id: `${CHATGPT_MODEL_PREFIX}${model.id}` };
+}
+
+/** 同一上游型号的消费端变体;upstreamModelId 是它在 canonical root 中的官方 id。 */
+export interface ConsumerAddition {
+  model: CatalogModel;
+  upstreamModelId: string;
 }
 
 /** 单 root 的 registry 消费计划:先算好,合并期零决策。 */
@@ -159,8 +165,9 @@ export interface ModelPlaneRegistryPlan {
    * 这类条目用不同 canonical entry id 表达独立选择，但 route.modelId 仍保持厂商官方
    * model id。旧客户端会因没有 canonical root 而安全忽略；理解该语义的新客户端只在
    * route 明确授权的 bridge 中物化，不污染 canonical root（尤其不改 Codex）。
+   * 变体只在其上游 modelId 已由账号返回（存在于 canonical root）时物化。
    */
-  consumerAdditions: Map<string, CatalogModel[]>;
+  consumerAdditions: Map<string, ConsumerAddition[]>;
   warnings: ModelPlaneWarning[];
 }
 
@@ -325,7 +332,7 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
         }
         const key = consumerPlanKey(route.providerId, 'claude-code');
         const additions = plan.consumerAdditions.get(key) ?? [];
-        additions.push(materialized);
+        additions.push({ model: materialized, upstreamModelId: route.modelId });
         plan.consumerAdditions.set(key, additions);
         continue;
       }
@@ -551,13 +558,17 @@ function toMaterializedModel(
 }
 
 /**
- * 把 root 计划应用到清单:overlay 已存在条目(registry > discovery),追加实体化
- * 新条目,并给 discovery 回补的 retired 同名条目打 'retired' 标记(local addition
- * 的复活豁免由 localCatalogOverrides 在其后处理)。返回新数组,输入不变。
+ * 把 root 计划应用到清单:overlay 已存在条目(registry > discovery),并给 discovery
+ * 回补的 retired 同名条目打 'retired' 标记(local addition 的复活豁免由
+ * localCatalogOverrides 在其后处理)。返回新数组,输入不变。
+ *
+ * `materialize` 决定是否追加账号没返回的 registry 实体。供应商清单是成员的唯一来源:
+ * OpenAI / Anthropic 订阅恒为 false;xAI 只在尚无账号快照、只能靠静态声明时为 true。
  */
 export function applyRootRegistryPlan(
   models: readonly CatalogModel[],
   rootPlan: RootRegistryPlan | undefined,
+  materialize: boolean,
 ): CatalogModel[] {
   if (!rootPlan) return [...models];
   const existingIds = new Set(models.map((m) => m.id));
@@ -566,6 +577,7 @@ export function applyRootRegistryPlan(
     const overlaid = overlay ? applyExistingRegistryOverlay(m, overlay) : m;
     return rootPlan.retired.has(m.id) ? { ...overlaid, status: 'retired' as const } : overlaid;
   });
+  if (!materialize) return out;
   for (const addition of rootPlan.additions) {
     if (existingIds.has(addition.id)) continue; // 已有条目走 overlay,不重复追加。
     out.push(addition);

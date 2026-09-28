@@ -15,8 +15,8 @@
  *  返给调用方 (size 接近上限, 提示 LLM consolidate)。
  *
  * 时序:
- *  fs 操作不加锁 — 同一 workdir 下多 session 并发写概率极低, 真撞了 OS 文件 lock 兜底,
- *  最坏情况 MEMORY.md 短暂不一致, rebuildIndex 幂等可恢复。要 ACID 加 SQLite 太重。
+ *  同一宿主进程内按目录串行写入与删除，界面版本检查和伙伴工具写入共享互斥。
+ *  不宣称保护外部编辑器或其它进程直接修改文件。
  */
 
 import { createHash } from 'node:crypto';
@@ -42,6 +42,9 @@ const INDEX_FILENAME = 'MEMORY.md';
 const META_FILENAME = 'meta.json';
 const SHARD_EXT = '.md';
 const SLUG_REGEX = /^[a-z0-9_-]+$/;
+
+// Multiple store instances for the same directory must share the mutation queue.
+const mutationQueues = new Map<string, Promise<unknown>>();
 
 /**
  * 把 workdir 绝对路径转成 sanitize 后的目录名 (Claude Code 风格)。
@@ -301,7 +304,47 @@ export class MemoryStorage {
    */
   async write(opts: WriteOptions): Promise<WriteResult> {
     this.validateOpts(opts);
-    const filename = buildFilename(opts.type, opts.name);
+    return this.mutate(() => this.writeFile(opts, buildFilename(opts.type, opts.name)));
+  }
+
+  /** Edit a known file in place, including legacy names rejected for new shards. */
+  async update(
+    filename: string,
+    expectedUpdatedAt: string,
+    changes: Pick<WriteOptions, 'title' | 'description' | 'body'>,
+  ): Promise<MemoryRecord> {
+    return this.mutate(async () => {
+      const current = await this.checkVersion(filename, expectedUpdatedAt);
+      await this.writeFile({
+        ...changes, type: current.frontmatter.type, name: current.slug, mode: 'update',
+      }, filename);
+      // Return the revision this edit wrote, never a subsequent tool write.
+      return this.read(filename);
+    });
+  }
+
+  private async mutate<T>(run: () => Promise<T>): Promise<T> {
+    const key = path.resolve(this.dir);
+    const previous = mutationQueues.get(key) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(run);
+    mutationQueues.set(key, next);
+    try {
+      return await next;
+    } finally {
+      if (mutationQueues.get(key) === next) mutationQueues.delete(key);
+    }
+  }
+
+  private async checkVersion(filename: string, expected: string): Promise<MemoryRecord> {
+    const current = await this.read(filename);
+    if (current.frontmatter.updatedAt !== expected) {
+      throw new MemoryError('version-conflict', 'Memory changed since it was opened');
+    }
+    return current;
+  }
+
+  private async writeFile(opts: WriteOptions, filename: string): Promise<WriteResult> {
+    this.validateOpts(opts);
     const fullPath = path.join(this.dir, filename);
 
     let nextBody = opts.body;
@@ -334,7 +377,8 @@ export class MemoryStorage {
         title: opts.title || parsed.frontmatter.title,
         description: opts.description || parsed.frontmatter.description,
         type: opts.type,
-        updatedAt: new Date().toISOString(),
+        // A second write in the same millisecond must still invalidate old editors.
+        updatedAt: new Date(Math.max(Date.now(), (Date.parse(parsed.frontmatter.updatedAt) || 0) + 1)).toISOString(),
       };
     }
 
@@ -368,7 +412,14 @@ export class MemoryStorage {
     return result;
   }
 
-  async delete(filename: string): Promise<void> {
+  async delete(filename: string, expectedUpdatedAt?: string): Promise<void> {
+    return this.mutate(async () => {
+      if (expectedUpdatedAt !== undefined) await this.checkVersion(filename, expectedUpdatedAt);
+      await this.deleteFile(filename);
+    });
+  }
+
+  private async deleteFile(filename: string): Promise<void> {
     this.assertSafeFilename(filename);
     const fullPath = path.join(this.dir, filename);
     // 删除前复核 (review #2388 Codex 14th P1): 单次预检只保护 delete 开始瞬间,

@@ -46,6 +46,25 @@ export function isExplicitScheduleModelUnavailable(
 }
 
 /**
+ * First required template parameter the scheduler engine would reject.
+ * Empty string is not "provided" and falls back to a non-empty default, matching
+ * applyTemplateParams. Whitespace is provided: the engine inserts it as-is.
+ */
+export function missingRequiredTemplateParamLabel(
+  template: Pick<ScheduleTemplate, 'parameters'>,
+  values: Record<string, string>,
+): string | null {
+  for (const parameter of template.parameters ?? []) {
+    if (!parameter.required) continue;
+    const raw = values[parameter.key];
+    const provided = Object.prototype.hasOwnProperty.call(values, parameter.key) && raw !== '';
+    const hasDefault = parameter.default !== undefined && parameter.default !== '';
+    if (!provided && !hasDefault) return parameter.label || parameter.key;
+  }
+  return null;
+}
+
+/**
  * Resolve the provider represented by the schedule picker. An empty stored
  * providerId means "use the effective source", not "use the utility fallback
  * chain", so generation must materialize that source before crossing IPC.

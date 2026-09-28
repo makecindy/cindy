@@ -1132,6 +1132,65 @@ describe('normalizeRemoteMessages', () => {
     ]);
   });
 
+  it('reads the sending session of tool-sent and Orca messages without mixing it into automation', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'tool-sent',
+        role: 'user',
+        content: 'please review',
+        agentMeta: {
+          origin: {
+            kind: 'session',
+            senderSessionId: 'caller',
+            displayText: 'please review',
+            senderSessionTitle: 'Release checklist',
+          },
+        },
+      }),
+      message({
+        id: 'orca-report',
+        role: 'user',
+        content: JSON.stringify({ orcaSource: 'worker', content: 'Done' }),
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Reviewer', senderSessionId: 'worker-1' } },
+      }),
+      message({
+        id: 'teammate-sent',
+        role: 'user',
+        content: 'please sort feedback',
+        agentMeta: {
+          origin: {
+            kind: 'session',
+            senderSessionId: 'bot-task',
+            displayText: 'please sort feedback',
+            senderSessionTitle: 'Weekly feedback',
+            senderBotId: 'bot-1',
+            senderBotName: 'Cindy',
+          },
+        },
+      }),
+      message({
+        id: 'shared-guest',
+        role: 'user',
+        content: 'redacted by host',
+        agentMeta: { origin: { kind: 'session' } },
+      }),
+      message({
+        id: 'legacy-orca',
+        role: 'user',
+        content: 'legacy',
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Lead' } },
+      }),
+    ]);
+
+    expect(items.map((item) => [item.source.id, item.sessionOrigin, item.automationOrigin])).toEqual([
+      ['tool-sent', { senderSessionId: 'caller', senderSessionTitle: 'Release checklist' }, undefined],
+      ['orca-report', { senderSessionId: 'worker-1' }, undefined],
+      ['teammate-sent', { senderSessionId: 'bot-task', senderSessionTitle: 'Weekly feedback', senderBotName: 'Cindy' }, undefined],
+      ['shared-guest', {}, undefined],
+      ['legacy-orca', undefined, undefined],
+    ]);
+  });
+
   it.each(['telegram', 'slack', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk'])(
     'ignores additive local %s context metadata and retains ordinary user presentation',
     (im) => {

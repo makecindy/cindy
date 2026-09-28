@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ key: 'account:1', endpoint: 'https://relay.example.test', authenticated: true, boundary: false, accountId: 'owner', region: 'global', token: 'test-old-token' }));
 const http = vi.hoisted(() => vi.fn());
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.key, isAppSessionBoundaryPending: () => state.boundary }));
-vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ isAuthenticated: state.authenticated }),
+vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ isAuthenticated: state.authenticated, user: { name: 'Account Guest' } }),
   getCurrentUserId: () => state.accountId, getActiveAuthRealm: () => state.region, getAccessToken: () => state.token }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => state.endpoint }));
 vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: http }));
@@ -15,6 +15,24 @@ beforeEach(() => {
   http.mockReset();
 });
 describe('sharedTask Main HTTP adapter', () => {
+  it('adds a fragment invitation link without changing the legacy invite result', async () => {
+    const invitation = 'A'.repeat(43);
+    http.mockResolvedValue({ sharedTaskId: 'shared', invitation });
+    await expect(sharedTaskApi.invite('shared')).resolves.toEqual({ sharedTaskId: 'shared', invitation,
+      invitationLink: state.endpoint + '/shared-task/join#' + invitation });
+  });
+  it('joins a link using the account nickname even when an old caller supplies a custom name', async () => {
+    const invitation = 'A'.repeat(43);
+    http.mockResolvedValue({ sharedTaskId: 'shared', memberId: 'member', status: 'joined', created: true });
+    await sharedTaskApi.join(state.endpoint + '/shared-task/join#' + invitation, 'Custom name');
+    expect(http).toHaveBeenCalledWith('/api/device-link/shared-tasks/join', expect.objectContaining({
+      body: { invitation, displayName: 'Account Guest' },
+    }));
+  });
+  it('rejects another service before making any request', async () => {
+    await expect(sharedTaskApi.join('https://other.example.test/shared-task/join#' + 'A'.repeat(43), 'Guest')).rejects.toThrow('REGION_MISMATCH');
+    expect(http).not.toHaveBeenCalled();
+  });
   it.each([['NOT_FOUND', 'NOT_FOUND'], ['PERMISSION_DENIED', 'PERMISSION_DENIED'],
     ['INVALID_PARAMS', 'INVALID_PARAMS'], ['NETWORK_ERROR', 'DEVICE_LINK_NOT_CONNECTED']])(
     'retains actionable %s across the Electron boundary without leaking details', async (code, ipcCode) => {

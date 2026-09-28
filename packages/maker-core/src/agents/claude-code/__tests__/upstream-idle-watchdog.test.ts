@@ -83,7 +83,7 @@ function createControlledStream() {
   const items: unknown[] = [];
   let waiter: { resolve: (r: IteratorResult<unknown>) => void; reject: (e: unknown) => void } | null = null;
   let ended = false;
-  let failure: unknown = null;
+  const failure: unknown = null;
 
   function pump(): void {
     if (!waiter) return;
@@ -153,7 +153,7 @@ async function startSessionWithStream(model = 'claude-opus-4-6') {
     if (prompt) {
       void (async () => {
         try {
-          for await (const _ of prompt) { /* discard — 只对齐 pending 语义 */ }
+          for await (const item of prompt) { void item; /* discard — 只对齐 pending 语义 */ }
         } catch { /* end / abort 都算正常收尾 */ }
       })();
     }
@@ -418,6 +418,101 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
 });
 
 describe('Claude Code tool-loop guard runtime integration', () => {
+  const editErrors = [
+    'The required parameter `file_path` is missing',
+    'String to replace not found in file.',
+    'Found 2 matches of the string to replace, but replace_all is false.',
+    'No changes to make: old_string and new_string are exactly the same.',
+  ];
+
+  it.each(editErrors.flatMap(output => [
+    { output, parentToolUseId: undefined },
+    { output, parentToolUseId: 'toolu_edit_agent' },
+  ]))('allows changing Edit inputs after repeated errors: $output, parent=$parentToolUseId', async ({ output, parentToolUseId }) => {
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await handle.send({ type: 'user', content: 'correct the edit and continue' });
+      for (let i = 0; i < 20; i++) {
+        const id = `edit-${i}`;
+        // Keep the file fixed (or consistently absent for missing-field
+        // errors). Each corrected attempt/result is a separate SDK batch.
+        stream.emit({
+          type: 'assistant', parent_tool_use_id: parentToolUseId ?? null,
+          message: { role: 'assistant', content: [{
+            type: 'tool_use', id, name: 'Edit',
+            input: {
+              ...(output === editErrors[0] ? {} : { file_path: 'electron-main.mjs' }),
+              old_string: `before-${i}`,
+              new_string: output === editErrors[3] ? `before-${i}` : `after-${i}`,
+            },
+          }] },
+        });
+        stream.emit({
+          type: 'user', parent_tool_use_id: parentToolUseId ?? null,
+          message: { role: 'user', content: [{
+            type: 'tool_result', tool_use_id: id, content: output, is_error: true,
+          }] },
+        });
+        await pumpUntil(() => events.filter(e => e.type === 'tool_result_full').length === i + 1, 'failed edit delivered');
+        expect(toolLoopError(events)).toBeUndefined();
+        expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+        expect(handle.isTurnRunning?.()).toBe(true);
+      }
+      expect(events.filter(e => e.type === 'tool_result_full').map(e => e.data)).toEqual(
+        Array.from({ length: 20 }, (_, i) => expect.objectContaining({
+          toolUseId: `edit-${i}`, fullText: output,
+        })),
+      );
+      stream.emit(successResult());
+      await pumpUntil(() => handle.isTurnRunning?.() === false, 'correcting turn completed');
+      expect(toolLoopError(events)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
+  it.each([undefined, 'toolu_edit_agent'])('still interrupts four identical failed edits, parent=%s', async (parentToolUseId) => {
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await handle.send({ type: 'user', content: 'edit the file' });
+      for (let i = 0; i < 4; i++) {
+        const id = `same-edit-${i}`;
+        stream.emit({
+          type: 'assistant', parent_tool_use_id: parentToolUseId ?? null,
+          message: { role: 'assistant', content: [{
+            type: 'tool_use', id, name: 'Edit',
+            input: { file_path: 'electron-main.mjs', old_string: 'same', new_string: 'same' },
+          }] },
+        });
+        stream.emit({
+          type: 'user', parent_tool_use_id: parentToolUseId ?? null,
+          message: { role: 'user', content: [{
+            type: 'tool_result', tool_use_id: id, content: editErrors[3], is_error: true,
+          }] },
+        });
+        await pumpUntil(() => events.filter(e => e.type === 'tool_result_full').length === i + 1, 'identical edit delivered');
+        if (i < 3) {
+          expect(toolLoopError(events)).toBeUndefined();
+          expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+        }
+      }
+      await pumpUntil(() => fakeQuery.interrupt.mock.calls.length === 1, 'identical edit interrupted');
+      expect(toolLoopError(events)).toMatchObject({ data: {
+        reason: 'tool_use_loop_detected', loopKind: 'consecutive', loopCount: 4,
+      } });
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
   it('并发 subagent 的相同调用按 parent 隔离，不会聚合成会话级死循环', async () => {
     const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream(
       'claude-opus-5',

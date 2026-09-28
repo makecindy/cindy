@@ -127,8 +127,9 @@ describe("iOS chrome presenters stay on the system menu path", () => {
     expect(iosTitle).toContain("{title}");
     expect(iosTitle).not.toContain("eyebrow");
     expect(iosTitle).not.toContain("subtitle");
-    expect(simpleHeader).toContain("eyebrow={eyebrow}");
-    expect(simpleHeader).toContain("subtitle={subtitle}");
+    // Android 自绘 ScreenHeader 跟随 iOS:同样不显示 eyebrow / subtitle。
+    expect(simpleHeader).not.toContain("eyebrow={eyebrow}");
+    expect(simpleHeader).not.toContain("subtitle={subtitle}");
   });
 
   it("keeps Android fallback sheets and Maestro header anchors", () => {
@@ -152,10 +153,6 @@ describe("iOS chrome presenters stay on the system menu path", () => {
       resolve(process.cwd(), "app/account-deletion.tsx"),
       "utf8",
     );
-    const automations = readTextLf(
-      resolve(process.cwd(), "app/automations/[deviceId].tsx"),
-      "utf8",
-    );
     const deviceDetail = readTextLf(
       resolve(process.cwd(), "app/devices/[deviceId].tsx"),
       "utf8",
@@ -174,8 +171,7 @@ describe("iOS chrome presenters stay on the system menu path", () => {
     expect(accountDeletion).toContain(
       'backTestID="accountDeletion.backButton"',
     );
-    expect(automations).toContain("<SimpleStackHeader");
-    expect(automations).toContain('backTestID="automations.backButton"');
+    expect(deviceDetail).not.toContain('eyebrow=');
     expect(deviceDetail).toContain("<SimpleStackHeader");
     expect(deviceDetail).toContain('backTestID="deviceDetail.backButton"');
     expect(deviceDetail).toContain("<SessionOptionsPresenter");

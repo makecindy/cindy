@@ -1,3 +1,4 @@
+import type { PreRunHookConfig } from "./types.js";
 import { nextRun } from "./engine/cron.js";
 
 /** Sources describe events, independently of the connector transporting them. */
@@ -21,7 +22,8 @@ export interface RoutineEvent {
 
 export type RoutineTrigger =
   | { id: string; kind: "cron"; expression: string; timezone: string }
-  | { id: string; kind: "interval"; intervalMs: number }
+  | { id: string; kind: "interval"; intervalMs: number; anchorMs?: number }
+  | { id: string; kind: "once"; at: number }
   | {
       id: string;
       kind: "event";
@@ -44,6 +46,10 @@ export interface Routine {
   prompt: string;
   enabled: boolean;
   triggers: RoutineTrigger[];
+  /** Omitted on legacy rules: preserve their existing silent behavior; new omissions persist false. */
+  silentWhenIdle?: boolean;
+  /** null explicitly removes the check; omission preserves it on older clients. */
+  preRunHook?: PreRunHookConfig | null;
   revision: number;
   createdAt: number;
   updatedAt: number;
@@ -51,7 +57,7 @@ export interface Routine {
 
 export type RoutineInput = Pick<
   Routine,
-  "name" | "prompt" | "enabled" | "triggers"
+  "name" | "prompt" | "enabled" | "triggers" | "silentWhenIdle" | "preRunHook"
 >;
 
 function record(value: unknown): Record<string, unknown> {
@@ -95,7 +101,15 @@ export function parseRoutineInput(value: unknown): RoutineInput {
       ) {
         throw new Error("Interval must be an integer of at least one minute");
       }
-      return { id, kind: "interval", intervalMs: Number(trigger.intervalMs) };
+      if (trigger.anchorMs !== undefined && (!Number.isSafeInteger(trigger.anchorMs) || Number(trigger.anchorMs) < 0))
+        throw new Error("Invalid interval anchor");
+      return { id, kind: "interval", intervalMs: Number(trigger.intervalMs),
+        ...(trigger.anchorMs === undefined ? {} : { anchorMs: Number(trigger.anchorMs) }) };
+    }
+    if (trigger.kind === "once") {
+      if (!Number.isSafeInteger(trigger.at) || Number(trigger.at) < 0)
+        throw new Error("Invalid one-time trigger");
+      return { id, kind: "once", at: Number(trigger.at) };
     }
     if (
       trigger.kind !== "event" ||
@@ -129,7 +143,20 @@ export function parseRoutineInput(value: unknown): RoutineInput {
   if (new Set(triggers.map((trigger) => trigger.id)).size !== triggers.length) {
     throw new Error("Trigger IDs must be unique");
   }
+  if (input.silentWhenIdle !== undefined && typeof input.silentWhenIdle !== "boolean")
+    throw new Error("silentWhenIdle must be boolean");
+  let preRunHook: PreRunHookConfig | null | undefined;
+  if (input.preRunHook === null) preRunHook = null;
+  else if (input.preRunHook !== undefined) {
+    const hook = record(input.preRunHook);
+    if (hook.timeoutMs !== undefined && (!Number.isSafeInteger(hook.timeoutMs) || Number(hook.timeoutMs) <= 0))
+      throw new Error("Invalid pre-run check timeout");
+    preRunHook = { command: string(hook.command, 32_000),
+      ...(hook.timeoutMs === undefined ? {} : { timeoutMs: Number(hook.timeoutMs) }) };
+  }
   return {
+    ...(input.silentWhenIdle === undefined ? {} : { silentWhenIdle: input.silentWhenIdle as boolean }),
+    ...(preRunHook === undefined ? {} : { preRunHook }),
     name: string(input.name, 200),
     prompt: string(input.prompt, 100_000),
     enabled: input.enabled,
@@ -232,7 +259,10 @@ export function nextRoutineTriggerAt(
   from: number,
 ): number | undefined {
   if (trigger.kind === "event") return undefined;
+  if (trigger.kind === "once") return trigger.at > from ? trigger.at : undefined;
   return trigger.kind === "interval"
-    ? from + trigger.intervalMs
+    ? trigger.anchorMs === undefined ? from + trigger.intervalMs
+      : trigger.anchorMs > from ? trigger.anchorMs
+        : trigger.anchorMs + (Math.floor((from - trigger.anchorMs) / trigger.intervalMs) + 1) * trigger.intervalMs
     : nextRun(trigger.expression, from, trigger.timezone);
 }

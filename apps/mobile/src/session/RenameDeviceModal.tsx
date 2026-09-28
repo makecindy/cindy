@@ -65,7 +65,7 @@ export function RenameDeviceModal({
               if (canSave) onConfirm();
             }}
             placeholder={t('devices.list.renameDevice.placeholder')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             returnKeyType="done"
             selectTextOnFocus
             style={styles.renameDeviceInput}
@@ -112,7 +112,7 @@ export function RenameDeviceModal({
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
-    error: { color: colors.destructive, fontSize: typeScale.body },
+    error: { color: colors.destructive, fontSize: typeScale.body, lineHeight: lineHeight.body },
     renameDeviceBackdrop: {
       alignItems: 'center',
       backgroundColor: colors.overlay,
@@ -133,8 +133,8 @@ const makeStyles = (colors: ThemeColors) =>
     renameDeviceTitle: {
       color: colors.textPrimary,
       fontSize: typeScale.title,
-      fontWeight: fontWeight.medium,
-      lineHeight: lineHeight.subtitle,
+      fontWeight: fontWeight.semibold,
+      lineHeight: lineHeight.title,
     },
     renameDeviceInput: {
       backgroundColor: colors.surface,

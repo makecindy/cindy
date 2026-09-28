@@ -16,6 +16,7 @@ import {
   botSkillsDir,
   deleteBotSkill,
   listBotSkills,
+  importBotSkillFiles,
   normalizeBotSkillSlug,
   parseBotSkillFile,
   readBotSkill,
@@ -287,4 +288,21 @@ describe('隔离 — 一个伙伴的技能不进另一个伙伴的目录', () =>
     const root = botSkillRootDir(userDataDir, '../escape');
     expect(path.relative(path.join(userDataDir, 'bots'), root)).toBe('-escape');
   });
+});
+
+it('imports real skill resources and preserves a user edit when the import is retried', async () => {
+  const files = [
+    { name: 'SKILL.md', bytes: Buffer.from('---\nname: imported\ndescription: A source skill\n---\nRun scripts/report.sh'), executable: false },
+    { name: 'scripts/report.sh', bytes: Buffer.from('#!/bin/sh\ncat ../templates/report.txt'), executable: true },
+    { name: 'templates/report.txt', bytes: Buffer.from('Source template'), executable: false },
+  ];
+  await importBotSkillFiles(userDataDir, 'bot-1', 'imported', files, () => {});
+  await importBotSkillFiles(userDataDir, 'bot-1', 'imported', files, () => {});
+  expect((await listBotSkills(userDataDir, 'bot-1')).map(row => row.slug)).toEqual(['imported']);
+  const folder = path.join(botSkillsDir(userDataDir, 'bot-1'), 'imported');
+  expect(await fs.readFile(path.join(folder, 'scripts/report.sh'))).toEqual(files[1]!.bytes);
+  if (process.platform !== 'win32') expect((await fs.stat(path.join(folder, 'scripts/report.sh'))).mode & 0o100).toBe(0o100);
+  await fs.writeFile(path.join(folder, 'templates/report.txt'), 'User changed it');
+  await expect(importBotSkillFiles(userDataDir, 'bot-1', 'imported', files, () => {})).rejects.toThrow('Imported skill was edited');
+  expect(await fs.readFile(path.join(folder, 'templates/report.txt'), 'utf8')).toBe('User changed it');
 });

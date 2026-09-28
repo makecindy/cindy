@@ -1,3 +1,4 @@
+import { botGroupReadKey, isBotGroupUnread, seedBotGroupReadState } from '../botReadState';
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -76,6 +77,22 @@ describe('Bot read positions', () => {
     // Idempotent: a second pass must not push the existing positions forward.
     expect(seedMissingBotReadState(['bot-1', 'bot-2'], 12_000)).toBe(false);
     expect(getBotLastReadAt('bot-1')).toBe(5_000);
+  });
+
+  it('keeps group watermarks on list refresh/restart, prunes deletion, and observes another window', () => {
+    setBotReadStateOwner('owner-1');
+    seedBotGroupReadState([{ id: 'g', lastReplyAt: 100 }]);
+    seedBotGroupReadState([{ id: 'g', lastReplyAt: 200 }]);
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(true);
+    resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+    expect(getBotLastReadAt(botGroupReadKey('g'))).toBe(100);
+    const listener = vi.fn(); const off = subscribeBotReadState(listener);
+    window.localStorage.setItem('cindy.bots.readState.v1.owner-1', JSON.stringify({ 'group:g': 200 }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'cindy.bots.readState.v1.owner-1' }));
+    expect(listener).toHaveBeenCalledOnce();
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(false);
+    seedBotGroupReadState([]); expect(getBotLastReadAt(botGroupReadKey('g'))).toBeNull();
+    off();
   });
 
   it('prunes read positions for Bots that no longer exist', () => {

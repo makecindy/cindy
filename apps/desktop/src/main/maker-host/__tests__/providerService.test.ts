@@ -3,12 +3,30 @@ import { describe, it, expect, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField } from '@cindy/model-providers';
 
 import { checkModelRoute } from '../model-route-guard.js';
-import { createProviderService } from '../provider-service.js';
+import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
 
 /** 注入内置 bundled 目录作为「当前生效目录」(桌面端真实注入的是 active-catalog 的 getActiveCatalog)。 */
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  it('snapshot mode suppresses side effects and skips both account presentation readers', async () => {
+    const read = vi.fn((_options: ConnectionReadOptions) => true);
+    const account = vi.fn(async () => ({ source: 'unknown' as const }));
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: read, anthropic: read, openai: read, xai: read },
+      openAiAccountInfo: account,
+      subscriptionAccountInfo: account,
+    });
+    await svc.listProviders({ allowSideEffects: true, snapshotOnly: true });
+    expect(read).toHaveBeenCalledTimes(4);
+    for (const [options] of read.mock.calls) {
+      expect(options).toMatchObject({ allowSideEffects: false, snapshotOnly: true });
+    }
+    expect(account).not.toHaveBeenCalled();
+    await svc.listProviders();
+    expect(account).toHaveBeenCalled();
+  });
   it('uses managed provider configuration names instead of stale presentation overrides', async () => {
     const provider = buildUserProvider({
       id: 'cindy-local-ollama', name: 'Ollama', auth: { method: 'none' },

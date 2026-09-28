@@ -1,4 +1,9 @@
 import type { Effort } from '@/lib/userPreferences.types';
+import {
+  DEFAULT_ORCA_WORKER_AGENT,
+  DEFAULT_ORCA_WORKER_EFFORT,
+  DEFAULT_ORCA_WORKER_MODELS,
+} from '@cindy/maker-shared/orca-team';
 
 import {
   DEFAULT_ORCA_WORKER_PERMISSION_MODE,
@@ -28,12 +33,12 @@ export interface WorkerCreationPrefs {
   workerPermissionMode: OrcaWorkerPermissionMode;
 }
 
+// 首次默认值与手机端共用(@cindy/maker-shared/orca-team),两端「创建 Worker」同一套规则。
 export const DEFAULT_WORKER_CREATION_PREFS: WorkerCreationPrefs = {
-  lastAgent: 'codex',
-  codex: { model: 'codex/gpt-5.5', effort: 'high', fast: false, providerId: null },
-  'claude-code': { model: 'claude-opus-4-7', effort: 'high', fast: false, providerId: null },
-  // pi worker 默认模型与 orcaWorkerCreationService.resolveWorkerConfig 的 pi 分支一致。
-  pi: { model: 'claude-sonnet-4-6', effort: 'high', fast: false, providerId: null },
+  lastAgent: DEFAULT_ORCA_WORKER_AGENT,
+  codex: { model: DEFAULT_ORCA_WORKER_MODELS.codex, effort: DEFAULT_ORCA_WORKER_EFFORT as Effort, fast: false, providerId: null },
+  'claude-code': { model: DEFAULT_ORCA_WORKER_MODELS['claude-code'], effort: DEFAULT_ORCA_WORKER_EFFORT as Effort, fast: false, providerId: null },
+  pi: { model: DEFAULT_ORCA_WORKER_MODELS.pi, effort: DEFAULT_ORCA_WORKER_EFFORT as Effort, fast: false, providerId: null },
   workerPermissionMode: DEFAULT_ORCA_WORKER_PERMISSION_MODE,
 };
 

@@ -76,7 +76,9 @@ describe('mobile message list container', () => {
     expect(source).toContain('if (token.key !== itemKeyRef.current) return;');
     expect(source).toContain('maxTextRunInlineFragments: ANDROID_SELECTABLE_TEXT_RUN_MAX_INLINE_FRAGMENTS');
     expect(listSource).toContain('onFirstVisibleItemChanged={handleFirstVisibleItemChangedRef.current}');
-    expect(listSource).not.toContain('onViewableItemsChanged=');
+    // Companion receipts observe visible rows through a ref, without broadcasting cell visibility.
+    // Ordinary tasks retain cell-local viewability and have no list-level receipt observer.
+    expect(listSource).toContain('onViewableItemsChanged={companion ? handleCompanionViewableItems : undefined}');
     // 上滑加载:LegendList 近顶阈值触发自动预取(替代手搓的滚动 metric 判定)。
     expect(listSource).toContain('onStartReached={handleStartReached}');
     // 自动预取必须是电平判定(shouldAutoLoadEarlier + 多时机重评估),不许退回只吃 onStartReached
@@ -212,7 +214,8 @@ describe('mobile message list container', () => {
     const focusEffectStart = source.indexOf('// 深链/搜索:滚到指定消息');
     const focusEffectEnd = source.indexOf('// 新消息红点', focusEffectStart);
     const focusEffectSource = source.slice(focusEffectStart, focusEffectEnd);
-    expect(focusEffectSource).toContain('if (!listRevealed) return;');
+    // Entry/focus ordering is executed in messageEntryPositioning.test.ts:
+    // a linked row now positions before reveal, without a preceding tail seek.
     expect(focusEffectSource).toContain('userScrollForOlderRef.current = true');
     expect(focusEffectSource).toContain('lastAutoLoadEarlierKeyRef.current = null');
   });

@@ -16,7 +16,7 @@ vi.mock('react-native', async () => {
 });
 vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
-  return { useFocusEffect: (effect: () => void | (() => void)) => useEffect(effect, [effect]), useRouter: () => h.router, useLocalSearchParams: () => h.params };
+  return { Redirect: ({ href }: { href: string }) => { useEffect(() => h.router.replace(href), [href]); return null; }, useFocusEffect: (effect: () => void | (() => void)) => useEffect(effect, [effect]), useRouter: () => h.router, useLocalSearchParams: () => h.params };
 });
 vi.mock('react-i18next', () => ({ useTranslation: () => h.translation }));
 vi.mock('react-native-safe-area-context', async () => { const { createElement: el } = await import('react'); return { SafeAreaView: ({ children }: any) => el('div', {}, children) }; });
@@ -31,7 +31,7 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: h.ge
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
-vi.mock('@/device-link/remoteResources', () => ({ getRemoteResource: h.read, invokeRemoteResourceAction: h.action }));
+vi.mock('@/device-link/remoteResources', async (importOriginal) => ({ ...await importOriginal<typeof import('../device-link/remoteResources')>(), getRemoteResource: h.read, invokeRemoteResourceAction: h.action }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { getSessionDeviceId: () => null, upsertDeviceSession: h.upsert } }));
 vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) }));
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: vi.fn() }));
@@ -41,7 +41,7 @@ const resource = (stage: string) => ({ ref: { collectionId: 'teammates', kind: '
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 beforeEach(() => {
-  vi.clearAllMocks(); h.generation = 1;
+  vi.clearAllMocks(); h.generation = 1; h.params.collectionId = 'teammates';
   h.link.onRemoteResourceChanged.mockImplementation(callback => { h.push = callback; return () => { h.push = null; }; });
   h.link.invoke.mockResolvedValue({ id: 'chat-1', source: 'bot' });
   container = document.createElement('div'); root = createRoot(container);
@@ -74,4 +74,30 @@ it('ignores a late ready response from the previous account', async () => {
   await act(async () => finish(resource('ready')));
   expect(h.router.replace).not.toHaveBeenCalled();
   expect(h.upsert).not.toHaveBeenCalled();
+});
+it('keeps a failed preparation on screen with an inline notice when its retry fails', async () => {
+  h.read.mockResolvedValue(resource('failed'));
+  h.action.mockRejectedValue(new Error('[DEVICE_UNRESPONSIVE] mac'));
+  await act(async () => root.render(createElement(Screen)));
+  expect(container.textContent).toContain('devices.companions.invitation.failed');
+  expect(container.textContent).not.toContain('devices.companions.invitation.background');
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="remoteResourceResolver.retryInvitation"]')!.click());
+  expect(container.querySelector('[data-testid="remoteResourceResolver.preparation"]')).not.toBeNull();
+  expect(container.textContent).toContain('devices.companions.invitation.retryFailed');
+  expect(container.textContent).not.toContain('DEVICE_UNRESPONSIVE');
+});
+it('reassures the user while preparing and shows the live stage beside the spinner', async () => {
+  h.read.mockResolvedValue(resource('profile'));
+  await act(async () => root.render(createElement(Screen)));
+  expect(container.textContent).toContain('devices.companions.invitation.background');
+  expect(container.querySelector('[data-testid="remoteResourceResolver.preparationStage"]')?.textContent).toBe('devices.companions.invitation.profile');
+});
+
+it('redirects stale routine links without reading or subscribing to the host', async () => {
+  h.params.collectionId = 'routines';
+  await act(async () => root.render(createElement(Screen)));
+  expect(h.router.replace).toHaveBeenCalledWith('/devices');
+  expect(h.read).not.toHaveBeenCalled();
+  expect(h.action).not.toHaveBeenCalled();
+  expect(h.link.onRemoteResourceChanged).not.toHaveBeenCalled();
 });

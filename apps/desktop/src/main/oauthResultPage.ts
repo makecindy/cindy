@@ -24,7 +24,7 @@ export type OAuthResultPageTheme = 'light' | 'dark';
 
 /** 业务来源(三层 adapter 之一,PR3)。目前仅 desktop-login 切换到 wave4 新品牌卡。 */
 export type OAuthResultPageKind =
-  'desktop-login' | 'ghost-oauth' | 'claude-oauth' | 'xai-oauth' | 'generic-oauth';
+  'desktop-login' | 'ghost-oauth' | 'xai-oauth' | 'generic-oauth';
 
 /** 视觉三分类(三层 adapter 之三,callback-pages-classification.md 页壳改造点 1)。 */
 export type OAuthResultVisualKind = 'success' | 'failure' | 'neutral';

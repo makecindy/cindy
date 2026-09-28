@@ -95,12 +95,24 @@ describe("move_session MCP", () => {
           await call({ session_id: "target", working_dir: null }),
         ).toMatchObject({ errorCode: "NO_SESSION_CONTEXT" });
         sessionId = "caller";
-        for (const denied of ["bot", "restricted"] as const) {
-          surface = denied;
-          expect(
-            await call({ session_id: "target", working_dir: null }),
-          ).toMatchObject({ ok: false });
-        }
+        // Bot surface now includes project/session management.
+        surface = "bot";
+        expect(
+          await call({ session_id: "target", working_dir: null }),
+        ).toMatchObject({
+          ok: true,
+          workspace_kind: "dialogue",
+        });
+        expect(moveSession).toHaveBeenLastCalledWith({
+          callerSessionId: "caller",
+          sessionId: "target",
+          workingDir: null,
+        });
+        moveSession.mockClear();
+        surface = "restricted";
+        expect(
+          await call({ session_id: "target", working_dir: null }),
+        ).toMatchObject({ ok: false });
         expect(moveSession).not.toHaveBeenCalled();
       } finally {
         await client.close();

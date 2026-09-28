@@ -25,8 +25,9 @@ function restorableMode(mode: number): number {
   return mode & (process.platform === 'win32' ? 0o666 : 0o777);
 }
 
-export async function inventoryWorktree(root: string): Promise<Record<string, FileEvidence>> {
+export async function inventoryWorktree(root: string, maxBytes?: number): Promise<Record<string, FileEvidence>> {
   const files: Record<string, FileEvidence> = Object.create(null);
+  let bytes = 0;
   const walk = async (directory: string): Promise<void> => {
     for (const name of await fs.readdir(directory)) {
       if (directory === root && name === '.git') continue;
@@ -40,6 +41,8 @@ export async function inventoryWorktree(root: string): Promise<Record<string, Fi
         files[relative] = { kind: 'directory', hash: '', mode };
         await walk(absolute);
       } else if (stat.isFile()) {
+        bytes += stat.size;
+        if (maxBytes !== undefined && bytes > maxBytes) throw new Error('MIGRATION_FILE_TOO_LARGE');
         const hash = createHash('sha256');
         for await (const chunk of createReadStream(absolute)) hash.update(chunk);
         files[relative] = { kind: 'file', hash: hash.digest('hex'), mode };
@@ -76,16 +79,27 @@ function decryptArchive(archive: WorktreeRecoveryArchive, key: Uint8Array) {
 }
 
 /** Fully authenticate before any restore is allowed to emit plaintext files. */
-export async function verifyRecoveryArchive(archive: WorktreeRecoveryArchive, directory: string, key: Uint8Array): Promise<void> {
+export async function verifyRecoveryArchive(archive: WorktreeRecoveryArchive, directory: string, key: Uint8Array, maxBytes?: number): Promise<void> {
   const files: Record<string, FileEvidence> = Object.create(null);
   const entries: Promise<void>[] = [];
+  const seen = new Set<string>();
+  let bytes = 0;
   const parser = tar.t({
     strict: true,
     onReadEntry(entry) {
+      bytes += entry.size ?? 0;
+      if (maxBytes !== undefined && bytes > maxBytes) throw new Error('MIGRATION_FILE_TOO_LARGE');
       const name = path.normalize(entry.path).replace(/[\\/]+$/, '');
+      // An empty tree is represented by its root directory header (tar rejects zero-entry archives).
+      if (name === '.' && entry.type === 'Directory' && Object.keys(archive.files).length === 0) {
+        entry.resume();
+        return;
+      }
       if (path.isAbsolute(name) || name === '..' || name.startsWith(`..${path.sep}`) || name === '.git') {
         throw new Error('unsafe worktree archive entry');
       }
+      if (!Object.hasOwn(archive.files, name) || seen.has(name)) throw new Error('unexpected worktree archive entry');
+      seen.add(name);
       const check = (async () => {
         if (files[name]) throw new Error('duplicate worktree archive entry');
         const hash = createHash('sha256');
@@ -114,22 +128,26 @@ export async function verifyRecoveryArchive(archive: WorktreeRecoveryArchive, di
   if (!sameWorktreeFiles(files, archive.files)) throw new Error('archive content does not match worktree inventory');
 }
 
-export async function createRecoveryArchive(root: string, resourceId: string, directory: string, key: Uint8Array, encryptedKey: string, iv: Uint8Array): Promise<WorktreeRecoveryArchive> {
-  const files = await inventoryWorktree(root);
+export async function createRecoveryArchive(root: string, resourceId: string, directory: string, key: Uint8Array, encryptedKey: string, iv: Uint8Array, maxBytes?: number): Promise<WorktreeRecoveryArchive> {
+  const files = await inventoryWorktree(root, maxBytes);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   const file = `${resourceId}-${randomUUID()}.tar.gz.enc`;
   await fs.mkdir(directory, { recursive: true });
   const target = archivePath(directory, { file });
   try {
+    const names = Object.keys(files);
+    // Keep one root header for an empty tree; noDirRecurse prevents capturing later additions.
+    const packOptions = { cwd: root, gzip: true, follow: false, noDirRecurse: true, strict: true };
+    const contents = tar.c(packOptions, names.length ? names : ['.']);
     await pipeline(
-      tar.c({ cwd: root, gzip: true, follow: false, noDirRecurse: true, strict: true }, Object.keys(files)),
+      contents,
       cipher,
       createWriteStream(target, { flags: 'wx', mode: 0o600 }),
     );
     const handle = await fs.open(target, 'r+');
     try { await handle.sync(); } finally { await handle.close(); }
     const archive = { file, encryptedKey, iv: Buffer.from(iv).toString('base64'), tag: cipher.getAuthTag().toString('base64'), files };
-    await verifyRecoveryArchive(archive, directory, key);
+    await verifyRecoveryArchive(archive, directory, key, maxBytes);
     if (!sameWorktreeFiles(await inventoryWorktree(root), files)) throw new Error('worktree changed during archive');
     return archive;
   } catch (error) {
@@ -139,8 +157,8 @@ export async function createRecoveryArchive(root: string, resourceId: string, di
 }
 
 /** Authenticate first; keep mode fills only missing bytes of a verified partial restore. */
-export async function extractRecoveryArchive(archive: WorktreeRecoveryArchive, staging: string, keep: boolean, directory: string, key: Uint8Array): Promise<void> {
-  await verifyRecoveryArchive(archive, directory, key);
+export async function extractRecoveryArchive(archive: WorktreeRecoveryArchive, staging: string, keep: boolean, directory: string, key: Uint8Array, maxBytes?: number): Promise<void> {
+  await verifyRecoveryArchive(archive, directory, key, maxBytes);
   await pipeline(
     createReadStream(archivePath(directory, archive)), decryptArchive(archive, key),
     tar.x({ cwd: staging, strict: true, preservePaths: false, unlink: !keep, keep }),

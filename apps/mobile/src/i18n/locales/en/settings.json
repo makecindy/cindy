@@ -10,7 +10,7 @@
     },
     "title": "Debug logs",
     "record": "Record debug logs",
-    "hint": "Record phone connection, recovery, scrolling, keyboard and performance details. Off by default; keeps up to 7 days and 8 MB. Never uploaded automatically.",
+    "hint": "Record phone connection, recovery, file preview and playback, scrolling, keyboard and performance details. Off by default; keeps up to 7 days and 8 MB. Never uploaded automatically.",
     "export": "Export debug logs",
     "clear": "Clear logs",
     "busy": "Working…",
@@ -23,6 +23,16 @@
     "uploadSucceeded": "Uploaded. Code {{code}}."
   },
   "title": "Settings",
+  "appearance": {
+    "title": "Appearance",
+    "modeLabel": "Appearance Mode",
+    "options": {
+      "system": "Auto (follow system)",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "saveFailed": "Failed to save appearance mode. The previous setting will return after restart."
+  },
   "language": {
     "title": "Language",
     "hint": "Affects the app UI only. Agent replies follow the agent's own language settings.",
@@ -51,6 +61,9 @@
     "testFlightUpdateManaged": "TestFlight manages test build updates",
     "testFlightNoContentUpdate": "No content updates are available. Check TestFlight for new test builds.",
     "testFlightContentUpdateUnavailable": "This build cannot check for content updates. Check TestFlight for new test builds.",
+    "googlePlayUpdateManaged": "Google Play manages app version updates",
+    "googlePlayNoContentUpdate": "No content updates are available. Check Google Play for new app versions.",
+    "googlePlayContentUpdateUnavailable": "This build cannot check for content updates. Check Google Play for new app versions.",
     "bundleUpdateFound": "App package update available",
     "upToDate": "Already up to date",
     "bundleUpToDateNoOta": "App package is up to date; this version does not support OTA updates",

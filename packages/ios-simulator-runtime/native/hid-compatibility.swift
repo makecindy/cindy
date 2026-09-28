@@ -30,15 +30,17 @@ enum NativeHIDError: Error {
     }
 }
 
-/// Mirror SimulatorKit's screen-addressed digitizer routing, not a version
-/// allowlist. Legacy SimulatorKit used the fixed main-display target 0x32.
-/// Screen-based SimulatorKit uses 0x40000000 | screenID (or target 1 for
-/// indirect displays). Missing modern metadata must not fall back to 0x32:
-/// the legacy client can accept that message without delivering any touches.
+/// The screen API alone does not imply screen-addressed HID. Xcode 26's
+/// SimulatorKit exposes it but still uses 0x32 for the type-0 built-in display;
+/// Xcode 27 uses screen-addressed input. Keep that previously verified route.
+/// Use DTXcode from the loaded framework, not the iOS runtime version or the
+/// ambient Xcode selection. This selects the wire format, not an admission
+/// allowlist. A wrong target can crash backboardd or silently drop input.
 func nativeHIDTarget(
     screenClass: AnyClass?,
     screen: AnyObject?,
-    expectedScreenID: UInt32?
+    expectedScreenID: UInt32?,
+    simulatorKitBuildXcode: String? = nil
 ) throws -> UInt32 {
     let screenSelector = NSSelectorFromString("screen")
     guard let screenClass else { throw NativeHIDError.targetUnavailable }
@@ -66,7 +68,20 @@ func nativeHIDTarget(
         throw NativeHIDError.targetUnavailable
     }
     let screenType = getType(properties, typeSelector)
-    return screenType == 1 || screenType == 2 ? 1 : 0x40000000 | screenID
+    switch screenType {
+    case 0:
+        // Never probe this by sending both targets: a successful send can
+        // still kill the receiver, and replaying a touch is not safe.
+        guard let simulatorKitBuildXcode,
+              let buildXcode = UInt(simulatorKitBuildXcode), buildXcode > 0 else {
+            throw NativeHIDError.targetUnavailable
+        }
+        return buildXcode < 2700 ? 0x32 : 0x40000000 | screenID
+    case 1, 2:
+        return 1
+    default:
+        return 0x40000000 | screenID
+    }
 }
 
 /// The framework completes asynchronously, even though the helper's wire

@@ -32,6 +32,7 @@ import { createLogger } from '../logger';
 import { getMaker } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
 import { readImDefaultSettings } from './defaultSettingsStore';
+import { fingerprintImDefaultSettings, type ImDefaultRoute } from './shared/channelDefaultRoute';
 import type { ImOrchestratorConfig } from './shared/types';
 
 const log = createLogger('im:defaults');
@@ -43,6 +44,8 @@ export interface ResolvedImSessionDefaults {
   providerId: string | null;
   permissionMode: PermissionMode;
   fastMode: boolean;
+  /** 本次解析所读原始设置的指纹(与上面的值出自同一次读取), 写进任务的跟随记录。 */
+  fingerprint: string;
 }
 
 export function getImDefaultEffortFor(
@@ -99,6 +102,31 @@ export async function resolveImSessionDefaults(
     providerId,
     permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
     fastMode: false,
+    fingerprint: fingerprintImDefaultSettings(raw),
+  };
+}
+
+/** 渠道当前原始设置的指纹 —— 不读供应商列表, 供每条消息的廉价比对。 */
+export function readImDefaultSettingsFingerprint(channel?: ImDefaultSettingsChannel): string {
+  return fingerprintImDefaultSettings(readImDefaultSettings(channel));
+}
+
+/**
+ * 保存的原始默认路由 —— **不经过**模型可用性回落 / 来源改道。
+ *
+ * `resolveImSessionDefaults` 在旧默认失效(来源断开、模型停用/下架)时会把落点
+ * 挪到别的可用路由上; 而历史任务记录的是当年真实落到的旧路由。给「按旧默认认领
+ * 历史任务」这类值比较用的必须是这份原始值, 否则旧默认一坏就永远匹配不到
+ * (PR #5155 review P2)。
+ */
+export function readImRawDefaultRoute(channel?: ImDefaultSettingsChannel): ImDefaultRoute {
+  const raw = readImDefaultSettings(channel);
+  const settings = raw.agents[raw.agentKind];
+  return {
+    agentKind: raw.agentKind,
+    model: settings.model,
+    providerId: settings.providerId?.trim() || null,
+    effort: settings.effort,
   };
 }
 

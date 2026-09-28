@@ -16,6 +16,7 @@ import {
   isCodexCustomProviderNamespacePath,
   parseCodexCustomProviderPath,
   relativeProviderRequestPath,
+  registerCodexScopedCustomProviderRoutes,
   resolveCodexCustomProviderModelProviderId,
   setCodexAppliedCustomProviderRoutes,
   toCodexCustomProviderHostRoutes,
@@ -369,5 +370,25 @@ describe('Codex custom Provider identity', () => {
       '/responses',
     );
     expect(relativeProviderRequestPath('https://provider.example/v1', '//evil')).toBeNull();
+  });
+});
+
+
+describe('scoped Host capabilities', () => {
+  it('keeps capability snapshots until their own Host retires', () => {
+    const routes = deriveCodexCustomProviderRoutes(catalog());
+    const releaseOld = registerCodexScopedCustomProviderRoutes('external:1', routes);
+    const releaseNew = registerCodexScopedCustomProviderRoutes('external:2', routes);
+    try {
+      setCodexAppliedCustomProviderRoutes([]);
+      expect(hasCodexAppliedCustomProviderCapability('provider-alpha', 'imageGeneration')).toBe(true);
+      releaseOld();
+      expect(hasCodexAppliedCustomProviderCapability('provider-alpha', 'imageGeneration')).toBe(true);
+      releaseNew();
+      expect(hasCodexAppliedCustomProviderCapability('provider-alpha', 'imageGeneration')).toBe(false);
+    } finally {
+      releaseOld();
+      releaseNew();
+    }
   });
 });

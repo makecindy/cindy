@@ -106,8 +106,13 @@ pnpm --filter mobile test:smoke
 
 ### 中国大陆版微信个人登录
 
-- 复用 `xdt-wechat-login`：iOS/Android 拉起微信取临时 code，再由 auth-server 交换。
-  PC 使用同一服务端的网站应用扫码入口。登录结果统一进入手机号补绑或身份选择流程。
+- 仅 iOS 中国大陆版登录页恢复微信入口；开关位于
+  `src/auth/mobileSocialLoginMode.ts`。入口要求构建包含微信 AppID 与 Universal Link，
+  并由 OpenSDK 确认已安装微信；Global 与 Android 均不显示。开关只影响 JS 行为，
+  不额外触发原生冷更。
+- iOS 复用 `xdt-wechat-login` 拉起微信取临时 code，再由 auth-server 交换；Android
+  原生能力保留，但本轮不显示入口。PC 使用同一服务端的网站应用扫码入口。登录结果
+  统一进入手机号补绑或身份选择流程。
 - 在 Mobile `.env`（本地）或打包机环境中成对填写
   `EXPO_PUBLIC_CINDY_WECHAT_APP_ID` 与 `EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK`，
   说明与空值占位见 `apps/mobile/.env.example`。AppID 必须匹配服务端
@@ -116,14 +121,40 @@ pnpm --filter mobile test:smoke
 - 仅 cn 和显式配置的 dev 构建消费微信配置；Global 忽略残留值。全空关闭入口，
   半配置或非法 Universal Link 在原生配置生成前报错。首次启用需重新出原生包，
   仅 OTA 无法添加回调配置；按下方冷更规则比对 fingerprint。
-- 真机验证 iOS Universal Link/AASA、Android 包名/签名与 WXEntryActivity，覆盖
+- iOS config plugin 按[微信官方接入说明](https://developers.weixin.qq.com/doc/oplatform/Mobile_App/Access_Guide/iOS.html)
+  生成 `weixin`、`weixinULAPI`、`weixinURLParamsAPI` 三项查询白名单，并保留 AppID URL Scheme
+  与 Universal Link 的 Associated Domains。遗漏白名单需重建原生包，不能通过 JS 热更补齐。
+- 真机验收需验证 iOS Universal Link/AASA，覆盖
   同意授权、取消、未安装微信、回到前台超时后重试。iOS Simulator 不支持微信授权。
-  iOS 登录页仅在 OpenSDK 确认已安装微信后显示微信入口；Android 保持入口可见，点击时
-  再由原生桥确认微信是否可用。凭据获取前仍须二次检查安装状态，不能只依赖页面显隐。
-  未绑手机号须短信验证，已绑用户免短信；用同一微信在 PC 和两种手机上确认账号一致。
+  iOS 登录页在回到前台时重新检查安装状态；凭据获取前仍须二次检查，不能只依赖页面显隐。
+  未绑手机号须短信验证，已绑用户免短信；用同一微信在 PC 和 iPhone 上确认账号一致。
+
+- 微信 OpenSDK 的 `oauth` / `refreshToken` 回调会同时到达原生 delegate 与 Expo Router；
+  Universal Link 校验还会回跳配置路径下的 `<AppID>/?_wechat_sdk_biz_data=…`，Router 可能
+  将 HTTPS 链接转成 Cindy scheme 或路径形式，这些形式也必须识别；仅按路径与参数名分类，
+  不解析 SDK 的不透明 payload。
+  `app/+native-intent.ts` 只负责将这些非页面链接送回首页，避免 404 展示授权参数。
+  微信 code/state 仍只由原生 SDK 校验，不得复用 auth-server `/auth` 的 PKCE 交换。
+  真机回归需分别覆盖微信已在后台与微信冷启动，确认回跳后继续完成登录而非进入错误页。
 
 - 模拟器与真机排错：
   [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md)。
+
+## iOS 入站分享的消费与取消
+
+- 分享副本使用每次分享独立的 `cindy-share-<UUID>` 目录。新建页领取前保留原生
+  记录；领取必须先完成持久确认，之后才把附件交给上传管线。
+- 原生记录清除失败时保留待接收批次，在既有附件错误行说明失败，重新进入页面可重试。
+  不写每文件处理标记，不尝试部分领取，避免回滚失败隐藏尚未领取的附件。
+  已领取附件的原生记录已清除，因此用户移除附件后，即使副本清理失败也不会重放。
+- 仅经可读目录列表确认不存在的副本才过滤；目录暂不可读不能视为文件已删除。
+  主动重新分享同一文件仍可领取。临时副本沿用原有取消及七天过期回收流程。
+- 冷启动分享链接先进入首页，由信箱确认待接收内容后跳转，旧启动链接本身不能再次打开
+  新建页。原生异常的具体原因只写无文件内容的诊断状态，不把路径或文件名写入日志。
+
+实现：`src/session/incomingShareNative.ts`、`incomingShare.ts`、`incomingShareCleanup.ts`
+与 `IncomingShareBridge.tsx`。回归：`src/__tests__/incomingShare*.test.ts` 和
+`nativeIntent.test.ts`。上述 TS 层修复不修改原生配置或模块，不需要为此改变 runtime fingerprint。
 
 ## 原生配置与 runtime fingerprint(冷更边界)
 
@@ -154,6 +185,13 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 
 ### 判断哪些改动会动指纹
 
+- 远控凭证共享目录默认参与指纹，但 `fingerprint.config.cjs` 明确列出的六个
+  `#if os(macOS)` 文件及三个桌面入口目录不参与。共享 Swift、手机密码表单、资源、
+  podspec 和未列出的新文件仍参与；不要按 `Mac*` 文件名通配排除。
+  `fingerprintConfig.test.ts` 校验排除文件的完整 macOS 编译保护，并使用 Expo 哈希器
+  验证两端的排除项与保留项。移除平台保护或让手机依赖这些文件前，必须同步移除排除项。
+  **首次采用此边界仍改变旧指纹**，须随计划内原生发版迁移；它只避免迁移后桌面专用
+  修改反复触发手机冷更，不为旧安装包伪造兼容 runtime，也不豁免上面的冷更确认门。
 - 改 `app.json` / `app.config.js` 前先判断是否会动指纹。被哈希的是**解析后的
   ExpoConfig**(app.config.js 的输出),不是源文件本身:凡进入 resolved config 的字段,
   改了值就会变指纹;只有被 app.config.js **覆写 / 剥离、传不到 resolved config** 的值才指纹
@@ -178,7 +216,17 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 
 启动检查、设置页与强制更新屏共用 `src/update/useBundleUpdatePrompt.ts` 的安装出口。
 Android 8 及以上的新原生包优先应用内下载 HTTPS APK；Android 7、旧包缺少
-`CindyAppInstaller`，或安装地址是网页时，继续使用浏览器。权限只由自建构建的 `app.config.js` 声明，商店构建不声明。
+`CindyAppInstaller`，或安装地址是网页时，继续使用浏览器。权限由自建构建的
+`app.config.js` 声明；同流程生成的官网 APK 和 Google Play AAB 当前共享这一原生配置，
+EAS 商店构建不声明。
+
+Global 自建 APK 与 Google Play AAB 共用自建 OTA 配置和原生构建流程，不能仅凭
+`IS_OTA_SELFHOST` 判断整包更新渠道。Android 原生安装桥读取系统记录的 installer：
+Google Play 安装跳过官网 `/latest` APK 整包提示，由 Google Play 管理原生包更新；
+JS OTA 仍按现有通道检查，设置页手动检查只报告内容更新。遗留强更目标的安装按钮也
+只能打开该应用在 Google Play 的页面。官网 APK 安装继续使用下述应用内更新流程。
+这项原生查询改变 Android runtime fingerprint，旧 Play 包必须经一次 Play 冷更后才具备
+可靠的安装来源识别能力；不能把 JS OTA 当作旧包已经修复。
 
 - 已授权直接下载；未授权先显示说明与「去授权 / 浏览器下载 / 稍后」，用户点「去授权」
   才打开系统设置。返回后读取实际权限；拒绝不会循环申请，可选择浏览器下载。

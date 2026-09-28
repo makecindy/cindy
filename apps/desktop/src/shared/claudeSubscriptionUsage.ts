@@ -277,6 +277,44 @@ export function parseClaudeUnifiedRateLimitHeaders(
   };
 }
 
+/**
+ * 解析 Claude Code SDK 的 `rate_limit_event.rate_limit_info`(CLI 从同一组 unified headers
+ * 解析出的额度信息;订阅会话由 CLI 直连 Anthropic,host 只能从这里拿到余量)。
+ *
+ * 每条事件只描述一个窗口(rateLimitType);只认 5h / 7d 总窗口,分模型周窗口与 overage
+ * 不在 headers 口径内,跳过。按 headers 源(`unified-headers`)的增量语义合并。
+ * utilization 与 headers 同为 0.0-1.0 分数(>1 时按已是百分比处理);resetsAt 为 epoch
+ * 秒(误给毫秒时折算)。无可用窗口也无状态时返回 null。
+ */
+export function parseClaudeSdkRateLimitInfo(
+  info: unknown,
+  now: number,
+): ClaudeSubscriptionUsageSnapshot | null {
+  if (!isPlainObject(info)) return null;
+  const status = toOptionalString(info.status);
+  const rateLimitType = toOptionalString(info.rateLimitType);
+  const rawUtilization = toFiniteNumber(info.utilization);
+  const utilization = rawUtilization === null
+    ? null
+    : clampPercent(rawUtilization <= 1 ? rawUtilization * 100 : rawUtilization);
+  const rawResetsAt = toFiniteNumber(info.resetsAt);
+  const resetsAt = rawResetsAt === null || rawResetsAt <= 0
+    ? null
+    : Math.floor(rawResetsAt > 1e12 ? rawResetsAt / 1000 : rawResetsAt);
+  const window = utilization === null ? null : { utilization, resetsAt };
+  const fiveHour = rateLimitType === 'five_hour' ? window : null;
+  const sevenDay = rateLimitType === 'seven_day' ? window : null;
+  if (!fiveHour && !sevenDay && !status) return null;
+  return {
+    fiveHour,
+    sevenDay,
+    rateLimitStatus: status,
+    representativeClaim: rateLimitType === 'five_hour' || rateLimitType === 'seven_day' ? rateLimitType : null,
+    source: 'unified-headers',
+    updatedAt: now,
+  };
+}
+
 // ── 双源合并 ─────────────────────────────────────────────────────────────────
 
 /**

@@ -164,13 +164,13 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.textPrimary,
       fontSize: typeScale.headline,
       lineHeight: lineHeight.headline,
-      fontWeight: fontWeight.medium,
+      fontWeight: fontWeight.semibold,
     },
     footerTitle: {
       color: colors.textPrimary,
       fontSize: typeScale.title,
-      lineHeight: lineHeight.subtitle,
-      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.title,
+      fontWeight: fontWeight.semibold,
     },
     copy: {
       color: colors.textSecondary,
@@ -215,7 +215,7 @@ const makeStyles = (colors: ThemeColors) =>
     },
     footnote: {
       color: colors.textTertiary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
       textAlign: "center",
       marginTop: spacing.xl,

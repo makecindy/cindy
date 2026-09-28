@@ -1303,6 +1303,11 @@ describe('claude generation pause boundaries', () => {
       queue,
       ctx,
     );
+    translateSdkMessage(
+      { type: 'stream_event', event: { type: 'message_stop' } },
+      queue,
+      ctx,
+    );
     expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(false);
 
     translateSdkMessage(
@@ -1494,6 +1499,11 @@ describe('claude generation pause boundaries', () => {
       ctx,
     );
     translateSdkMessage(
+      { type: 'stream_event', event: { type: 'message_stop' } },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
       {
         type: 'stream_event',
         parent_tool_use_id: 'toolu-agent',
@@ -1610,6 +1620,14 @@ describe('claude generation pause boundaries', () => {
       queue,
       ctx,
     );
+    // The assistant envelope precedes its request's message_delta; only the
+    // request boundary proves the usage never came.
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(false);
+    translateSdkMessage(
+      { type: 'stream_event', event: { type: 'message_stop' } },
+      queue,
+      ctx,
+    );
     expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(true);
 
     translateSdkMessage(
@@ -1658,6 +1676,110 @@ describe('claude generation pause boundaries', () => {
     });
     resetClaudeGenerationTiming(ctx.rt.generation);
     vi.useRealTimers();
+  });
+
+  it('keeps parent live tok/s when per-block assistant envelopes precede message_delta beside a background subagent', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const send = (msg: Record<string, unknown>) => translateSdkMessage(msg as never, queue, ctx);
+    const main = (event: Record<string, unknown>) => send({ type: 'stream_event', event });
+    const child = (event: Record<string, unknown>) =>
+      send({ type: 'stream_event', parent_tool_use_id: 'toolu-bg', event });
+
+    // Claude Code yields one assistant envelope per finished content block,
+    // carrying message_start usage; the request's output usage arrives later.
+    main({ type: 'message_start', message: { id: 'msg_p1', model: 'claude-sonnet-4.5', usage: { input_tokens: 10, output_tokens: 3 } } });
+    main({
+      type: 'content_block_start',
+      index: 1,
+      content_block: { type: 'tool_use', id: 'toolu-bg', name: 'Agent', input: {} },
+    });
+    send({
+      type: 'assistant',
+      message: { id: 'msg_p1', content: [{ type: 'thinking', thinking: 'plan' }], usage: { output_tokens: 3 } },
+    });
+    // The tool_use block is last; its envelope lands right before message_delta.
+    vi.setSystemTime(1_500);
+    send({
+      type: 'assistant',
+      message: {
+        id: 'msg_p1',
+        content: [{ type: 'tool_use', id: 'toolu-bg', name: 'Agent', input: { run_in_background: true } }],
+        usage: { output_tokens: 3 },
+      },
+    });
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(false);
+    main({ type: 'message_delta', usage: { output_tokens: 100 } });
+    main({ type: 'message_stop' });
+    send({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'toolu-bg', content: 'Async agent launched successfully.' }] },
+    });
+
+    vi.setSystemTime(1_600);
+    main({ type: 'message_start', message: { id: 'msg_p2', model: 'claude-sonnet-4.5', usage: { input_tokens: 12, output_tokens: 3 } } });
+    child({ type: 'message_start', message: { id: 'msg_c1', model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } } });
+    child({ type: 'message_delta', usage: { output_tokens: 400 } });
+    send({
+      type: 'assistant',
+      message: { id: 'msg_p2', content: [{ type: 'text', text: 'working on it' }], usage: { output_tokens: 3 } },
+    });
+    vi.setSystemTime(2_100);
+    main({ type: 'message_delta', usage: { output_tokens: 150 } });
+    main({ type: 'message_stop' });
+    child({ type: 'message_stop' });
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+    expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(false);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    send({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      num_turns: 2,
+      usage: { input_tokens: 27, output_tokens: 650 },
+    });
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+    const generating = events.filter(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Generating...',
+    );
+    expect(generating.every((event) => (event.data as { generationReliable?: boolean }).generationReliable)).toBe(true);
+    expect(generating.at(-1)?.data).toMatchObject({
+      outputTokens: 250,
+      // 1000→1500 first request; the clock resumes at the async-launch
+      // tool_result (1500) and runs to the second message_delta (2100).
+      generationDurationMs: 1_100,
+      generationReliable: true,
+    });
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    expect(doneStatus?.data).toMatchObject({ outputTokens: 250, generationReliable: true });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
+  it('settles a parent request that never sent message_stop at the next main message_start', () => {
+    for (const withDelta of [true, false]) {
+      const ctx = createTranslatorCtx();
+      const queue = createAsyncQueue<AgentEvent>();
+      const main = (event: Record<string, unknown>) =>
+        translateSdkMessage({ type: 'stream_event', event } as never, queue, ctx);
+      main({ type: 'message_start', message: { id: 'msg_a', model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } });
+      translateSdkMessage(
+        { type: 'assistant', message: { id: 'msg_a', content: [{ type: 'text', text: 'a' }] } } as never,
+        queue,
+        ctx,
+      );
+      if (withDelta) main({ type: 'message_delta', usage: { output_tokens: 40 } });
+      main({ type: 'message_start', message: { id: 'msg_b', model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } });
+      expect(ctx.rt.generation.parentStreamedOutputIncomplete).toBe(!withDelta);
+      resetClaudeGenerationTiming(ctx.rt.generation);
+    }
   });
 
   it('does not freeze the next turn when a previous turn left an unresolved tool id', () => {

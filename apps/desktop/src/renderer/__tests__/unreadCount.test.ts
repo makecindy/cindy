@@ -144,3 +144,11 @@ describe('countUnreadAdded', () => {
     ).toBe(0);
   });
 });
+
+it('counts new result receipts in history, but not replayed receipts or paginated old cards', () => {
+  const messages = [{ clientId: 'older-result', role: 'assistant' }, { clientId: 'anchor', role: 'assistant' },
+    { clientId: 'user-input', role: 'user' }, { clientId: 'result-1', role: 'assistant' },
+    { clientId: 'hidden-wake', role: 'user', isSyntheticTrigger: true }, { clientId: 'result-2', role: 'assistant' }];
+  expect(countUnreadAdded({ prevIds: new Set(['anchor']), messages, nearBottom: false })).toBe(2);
+  expect(countUnreadAdded({ prevIds: new Set(messages.map(message => message.clientId)), messages, nearBottom: false })).toBe(0);
+});
