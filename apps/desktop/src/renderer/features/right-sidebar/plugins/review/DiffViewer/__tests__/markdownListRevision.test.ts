@@ -50,9 +50,11 @@ describe('buildMarkdownListRevision — 无序列表', () => {
     const before = '- 甲\n\n- 乙\n\n- 丙\n';
     const after = '- 甲\n\n- 乙\n\n- 丙\n\n- 丁\n';
     expect(buildMarkdownListRevision(before, after)).toBeNull();
-    // 计划层依旧不会静默丢结构：它走块级 removed + added。
+    // 计划层不再整块回退：通用词级路径接手，项符号与项间空行原样保留、只标新增项
+    // （列表 loose / tight 已进结构校验，静默收紧会被拦住）。
     const plan = buildMarkdownPreviewPlan(after, before);
-    expect(plan.segments.map((segment) => segment.kind)).toContain('removed');
+    expect(plan.segments.map((segment) => segment.kind)).toEqual(['revision']);
+    expect(plan.segments[0].content).toBe('- 甲\n\n- 乙\n\n- 丙\n\n- {++丁++}');
   });
 
   it('keeps the ordered-list numbering intact', () => {

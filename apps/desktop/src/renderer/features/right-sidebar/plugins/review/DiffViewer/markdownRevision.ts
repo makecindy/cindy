@@ -93,6 +93,11 @@ interface DiffSlice {
   after: SourceRange | null;
   /** 改动片段里出现行内语法字符：可能只拿到定界符的一半，逐片段注入会拆坏结构。 */
   dangerous: boolean;
+  /**
+   * 标记不能包住的片段（列表项符号 `- ` / `1. `）：原样输出。标记插在行首会把符号
+   * 变成普通文本（项结构消失 / 变成上一项的懒续行），折叠器消费不到标记 → 校验残留。
+   */
+  bare?: boolean;
 }
 
 /** 最外层行内结构跨度。 */
@@ -195,6 +200,11 @@ function injectSlices(
       text += slice.value;
       continue;
     }
+    // 列表项符号等「不能包」的片段原样输出（见 splitListMarkers）。
+    if (slice.bare) {
+      text += slice.value;
+      continue;
+    }
     // 纯空白改动（换行 / 空格）不挂标记：标记只会产生空的下划线 / 删除线噪声，
     // 直连保留在输出里即可（渲染上等价于未改）。
     if (slice.value.trim() === '') {
@@ -205,6 +215,75 @@ function injectSlices(
     marks += 1;
   }
   return { text, marks };
+}
+
+/** 行首的列表项符号（`- ` / `1. `）：标记不能把它包进去，见 splitListMarkers。 */
+const LIST_MARKER_PATTERN = /^(?: {0,3})(?:[-*+]|\d{1,9}[.)])[ \t]+/;
+
+/** 把片段按「值 + 在原侧源码里的偏移」拆出一个新片段。 */
+function slicePiece(
+  slice: DiffSlice,
+  value: string,
+  offset: number,
+  bare: boolean,
+): DiffSlice {
+  const shift = (range: SourceRange | null): SourceRange | null =>
+    range
+      ? { start: range.start + offset, end: range.start + offset + value.length }
+      : null;
+  return {
+    value,
+    added: slice.added,
+    removed: slice.removed,
+    before: shift(slice.before),
+    after: shift(slice.after),
+    dangerous: slice.dangerous && INLINE_SYNTAX_PATTERN.test(value),
+    bare,
+  };
+}
+
+/**
+ * 把改动片段里的**行首列表项符号**拆成原样输出的片段。
+ *
+ * 标记插在行首会把符号变成普通文本（`{++- 项…++}` 里的项不再是列表项 / 变成上一项的
+ * 懒续行），折叠器消费不到标记 → 校验残留 → 整块回退（实机 `docs/progress.md`：整份
+ * 进度日志是一个 loose list，加一行就被整块标成修订）。列表路径
+ * （buildMarkdownListRevision）只接手 tight list，loose list 会落回通用路径，
+ * 所以这里兜住：符号原样输出，标记只包住项正文（`- {++项正文++}`）。
+ */
+function splitListMarkers(
+  slices: readonly DiffSlice[],
+  before: string,
+  after: string,
+): DiffSlice[] {
+  const out: DiffSlice[] = [];
+  for (const slice of slices) {
+    const source = slice.added ? after : before;
+    const range = slice.added ? slice.after : slice.before;
+    if ((!slice.added && !slice.removed) || !range) {
+      out.push(slice);
+      continue;
+    }
+    let cursor = 0;
+    while (cursor < slice.value.length) {
+      const rest = slice.value.slice(cursor);
+      const atLineStart =
+        cursor === 0
+          ? range.start === 0 || source[range.start - 1] === '\n'
+          : slice.value[cursor - 1] === '\n';
+      const marker = atLineStart ? LIST_MARKER_PATTERN.exec(rest) : null;
+      if (marker) {
+        out.push(slicePiece(slice, marker[0], cursor, true));
+        cursor += marker[0].length;
+        continue;
+      }
+      const newline = rest.indexOf('\n');
+      const end = newline === -1 ? slice.value.length : cursor + newline + 1;
+      out.push(slicePiece(slice, slice.value.slice(cursor, end), cursor, false));
+      cursor = end;
+    }
+  }
+  return out;
 }
 
 /**
@@ -232,7 +311,7 @@ export function buildMarkdownRevision(before: string, after: string): string | n
     );
   }
 
-  const slices = sliceDiff(before, after);
+  const slices = splitListMarkers(sliceDiff(before, after), before, after);
   // 花括号在改动片段里时两种注入都救不了（标记内容不允许出现 `{` / `}`）：整块回退。
   if (slices.some((slice) => (slice.added || slice.removed) && /[{}]/.test(slice.value))) {
     return null;
@@ -525,19 +604,34 @@ function assembleSpanAware(
   while (index < parts.length) {
     const region = regions.find((span) => insideSpan(index, span));
     if (region) {
+      // 区域开头若是列表项符号等「不能包」的片段，先原样输出（标记不能包住 `- `）。
+      let prefix = '';
+      if (parts[index].bare) {
+        prefix = parts[index].value;
+        index += 1;
+      }
       let oldText = '';
       let stop = index;
       while (stop < parts.length && insideSpan(stop, region)) {
-        if (parts[stop].before && !parts[stop].added) oldText += parts[stop].value;
+        if (parts[stop].before && !parts[stop].added && !parts[stop].bare) {
+          oldText += parts[stop].value;
+        }
         stop += 1;
       }
-      text += `{--${oldText}--}{++${after.slice(region.start, region.end)}++}`;
+      const start = parts[index]?.after?.start ?? region.start;
+      text += `${prefix}{--${oldText}--}{++${after.slice(start, region.end)}++}`;
       marks += 2;
       index = stop;
       continue;
     }
     const part = parts[index];
     if (!part.added && !part.removed) {
+      text += part.value;
+      index += 1;
+      continue;
+    }
+    // 列表项符号等「不能包」的片段原样输出（见 splitListMarkers）。
+    if (part.bare) {
       text += part.value;
       index += 1;
       continue;
@@ -786,7 +880,7 @@ function validateRevision(injected: string, referenceSource: string): boolean {
   if (!injectedTree || !referenceTree) return false;
   remarkReviewAnnotations()(injectedTree);
   if (hasUnconsumedReviewMarks(injectedTree)) return false;
-  return topLevelSignature(injectedTree) === topLevelSignature(referenceTree);
+  return topLevelStructureMatches(injectedTree, referenceTree);
 }
 
 /**
@@ -816,4 +910,23 @@ export function parseRevisionTree(source: string): Root | null {
 /** 顶层块类型签名：用于比对修订版与参照版本的结构是否一致。 */
 export function topLevelSignature(tree: Root): string {
   return tree.children.map((child) => child.type).join('|');
+}
+
+/** 顶层 list 的 loose 标记（按出现顺序）。 */
+function listSpreadOf(tree: Root): boolean[] {
+  return tree.children
+    .filter((child) => child.type === 'list')
+    .map((child) => (child as { spread?: boolean }).spread === true);
+}
+
+/**
+ * 顶层结构一致：块类型序列相同，且修订版没有把 loose list **静默收紧**。
+ *
+ * 反向（参照侧 tight、修订侧 loose）允许：删除项时修订版保留的是旧版结构（含项间空行），
+ * 本来就比新版松；只有「参照是 loose 而修订变 tight」才是标记把空行吃掉的结构变化。
+ */
+export function topLevelStructureMatches(injectedTree: Root, referenceTree: Root): boolean {
+  if (topLevelSignature(injectedTree) !== topLevelSignature(referenceTree)) return false;
+  const injected = listSpreadOf(injectedTree);
+  return listSpreadOf(referenceTree).every((loose, index) => !loose || injected[index] !== false);
 }

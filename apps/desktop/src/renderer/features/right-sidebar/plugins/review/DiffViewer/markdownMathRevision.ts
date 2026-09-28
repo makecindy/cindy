@@ -35,7 +35,7 @@ import {
   REVISION_MAX_SOURCE_CHARS,
   REVISION_MIN_UNCHANGED_RATIO,
   taskMarkers,
-  topLevelSignature,
+  topLevelStructureMatches,
   unchangedTextRatio,
 } from './markdownRevision';
 
@@ -599,7 +599,7 @@ function validateMathRevision(injected: string, reference: string): boolean {
   if (hasUnconsumedReviewMarks(injectedTree)) return false;
   const referenceTree = parseRevisionTree(reference);
   if (!referenceTree) return false;
-  if (topLevelSignature(injectedTree) !== topLevelSignature(referenceTree)) return false;
+  if (!topLevelStructureMatches(injectedTree, referenceTree)) return false;
   return mathNodesAreRenderable(injectedTree, injected);
 }
 

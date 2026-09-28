@@ -95,6 +95,28 @@ describe('buildMarkdownRevision', () => {
     ).toBe('目标（{--建筑 / --}**车辆 / 人{--物--}{++员++}**）面对威胁，尾部{--甲乙丙--}{++**甲乙丙**++}。');
   });
 
+  it('marks only the added line of a loose list (regression)', () => {
+    // 实机 `docs/progress.md`：整份进度日志是一个 **loose list**（项间有空行），列表
+    // 路径按设计不接手；通用路径把标记插在行首会把 `- ` 变成普通文本（项结构消失 /
+    // 变成上一项的懒续行），折叠器消费不到标记 → 校验残留 → 整块回退。
+    // 现在项符号拆成原样输出的片段，标记只包住项正文。
+    expect(
+      buildMarkdownRevision(
+        '- 2026-09-15：**批次 1**：xxx\n\n- 2026-09-16：**批次 2**：yyy\n',
+        '- 2026-09-15：**批次 1**：xxx\n\n- 2026-09-16：**批次 2**：yyy\n\n- 2026-09-28：**新**：zzz（`abc`）。\n',
+      ),
+    ).toBe(
+      '- 2026-09-15：**批次 1**：xxx\n\n- 2026-09-16：**批次 2**：yyy\n\n- {++2026-09-28：**新**：zzz（`abc`）。\n++}',
+    );
+    // 删除项同理：项符号留在标记外。
+    expect(
+      buildMarkdownRevision(
+        '- 2026-09-15：**批次 1**：xxx\n\n- 2026-09-16：**批次 2**：yyy\n',
+        '- 2026-09-15：**批次 1**：xxx\n',
+      ),
+    ).toBe('- 2026-09-15：**批次 1**：xxx\n\n- {--2026-09-16：**批次 2**：yyy\n--}');
+  });
+
   it('revises a bold-wrapped word change without falling back to the block (regression)', () => {
     // 实机反馈：新版给关键词加粗（`（**车辆 / 人员**）`）时，词级 diff 把 `**` 的
     // 开符 / 闭符切成独立改动片段；逐片段注入后 CommonMark 把这半对定界符配对到
