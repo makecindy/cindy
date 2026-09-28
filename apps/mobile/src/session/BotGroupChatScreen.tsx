@@ -110,12 +110,33 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
   const stickToBottom = useRef(true);
   const group = chat.state.kind === 'ready' ? chat.state.group : null;
   const focused = useIsFocused();
+  const viewportOwner = `${user?.id ?? ''}:${accountGeneration}:${deviceId}:${groupId}`;
+  const viewport = useRef({ owner: viewportOwner, group, measuredGroup: null as typeof group,
+    contentHeight: 0, viewportHeight: 0, offsetY: 0 });
+  if (viewport.current.owner !== viewportOwner) {
+    viewport.current = { owner: viewportOwner, group, measuredGroup: null, contentHeight: 0, viewportHeight: 0, offsetY: 0 };
+    stickToBottom.current = true;
+  } else if (viewport.current.group !== group) {
+    if (!viewport.current.group || !group) {
+      // Loading/error unmounts the ScrollView; its next instance starts unmeasured.
+      viewport.current.contentHeight = 0;
+      viewport.current.viewportHeight = 0;
+      viewport.current.offsetY = 0;
+    }
+    viewport.current.group = group;
+    viewport.current.measuredGroup = null;
+  }
   const acknowledge = useCallback(() => {
     if (!focused || AppState.currentState !== 'active' || !stickToBottom.current || !group) return;
+    const measured = viewport.current;
+    // An intended scrollToEnd has not necessarily reached its destination yet.
+    if (measured.owner !== viewportOwner || measured.measuredGroup !== group
+      || measured.viewportHeight <= 0 || measured.contentHeight <= 0
+      || measured.contentHeight - measured.offsetY - measured.viewportHeight >= STICK_TO_BOTTOM_PX) return;
     const at = group.messages.reduce((latest, message) => message.kind === 'message' && message.authorKind === 'bot'
       ? Math.max(latest, message.createdAt) : latest, 0);
     if (at > 0) void markRemoteResourceRead(user?.id ?? '', deviceId, groupId, at);
-  }, [focused, group, user?.id, deviceId, groupId]);
+  }, [focused, group, user?.id, deviceId, groupId, viewportOwner]);
   useEffect(() => {
     const frame = requestAnimationFrame(acknowledge);
     const subscription = AppState.addEventListener('change', state => { if (state === 'active') acknowledge(); });
@@ -200,6 +221,8 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    Object.assign(viewport.current, { measuredGroup: group, contentHeight: contentSize.height,
+      offsetY: contentOffset.y, viewportHeight: layoutMeasurement.height });
     stickToBottom.current = contentSize.height - contentOffset.y - layoutMeasurement.height < STICK_TO_BOTTOM_PX;
     acknowledge();
   };
@@ -258,7 +281,13 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
       {!chat.online ? <Text accessibilityRole="alert" style={styles.offline} testID="botGroup.offlineNote">{t('devices.resources.hostOffline')}</Text> : null}
       <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={styles.timeline} keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive" onScroll={onScroll} scrollEventThrottle={64}
-        onContentSizeChange={() => { if (stickToBottom.current) scrollRef.current?.scrollToEnd({ animated: false }); }}
+        onLayout={event => { viewport.current.viewportHeight = event.nativeEvent.layout.height; acknowledge(); }}
+        onContentSizeChange={(_width, height) => {
+          viewport.current.contentHeight = height;
+          viewport.current.measuredGroup = group;
+          if (stickToBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
+          acknowledge();
+        }}
         testID="botGroup.timeline">
         <BotGroupTimeline group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           continuing={continuing} planPending={planPending}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement as el, useEffect, useRef } from 'react';
+import { act, createElement as el, useEffect, useImperativeHandle, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
@@ -13,13 +13,20 @@ const h = vi.hoisted(() => ({
   inputs: {} as Record<string, any>,
   teammates: { rows: [] as any[], loading: false, failed: false },
   uuid: 0,
+  scroll: null as any,
+  scrollToEnd: vi.fn(),
+  markRead: vi.fn(),
 }));
 
 vi.mock('react-native', () => {
   const box = (tag: string) => ({ children, testID, accessibilityLabel }: any) =>
     el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel }, children);
   return {
-    View: box('div'), ScrollView: box('div'), KeyboardAvoidingView: box('div'),
+    View: box('div'), ScrollView: ({ ref, children, ...props }: any) => {
+      h.scroll = props;
+      useImperativeHandle(ref, () => ({ scrollToEnd: h.scrollToEnd }));
+      return el('div', { 'data-testid': props.testID }, children);
+    }, KeyboardAvoidingView: box('div'),
     Pressable: ({ children, onPress, disabled, testID, accessibilityLabel }: any) => el('button',
       { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress },
       typeof children === 'function' ? children({ pressed: false }) : children),
@@ -56,6 +63,7 @@ vi.mock('@/theme', () => ({
 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' }, accountGeneration: 1 }) }));
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: h.leave }));
+vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
 vi.mock('@/platform/chrome', () => ({ showConfirm: h.confirm }));
 vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
@@ -177,9 +185,54 @@ beforeEach(() => {
   node = document.createElement('div');
   root = createRoot(node);
 });
-afterEach(async () => { await act(async () => root.unmount()); });
+afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
 describe('group timeline', () => {
+  it('waits for measured tail positioning before acknowledging replies, including new snapshots', async () => {
+    vi.useFakeTimers();
+    await render();
+    await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => {
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
+      h.scroll.onContentSizeChange(400, 2000);
+    });
+    expect(h.scrollToEnd).toHaveBeenCalled();
+    expect(h.markRead).not.toHaveBeenCalled();
+    const scroll = (offsetY: number, contentHeight = 2000) => h.scroll.onScroll({ nativeEvent: {
+      contentOffset: { y: offsetY }, contentSize: { height: contentHeight }, layoutMeasurement: { height: 500 },
+    } });
+    await act(async () => scroll(0));
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => scroll(1500));
+    expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'g1', 7000);
+    h.markRead.mockClear();
+    const next = group();
+    next.messages.push(message('new-reply', 10, { content: 'New reply' }));
+    await render(next);
+    await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => h.scroll.onContentSizeChange(400, 2500));
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => scroll(2000, 2500));
+    expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'g1', 10000);
+    h.markRead.mockClear();
+    await act(async () => scroll(0, 2500));
+    const newer = { ...next, messages: [...next.messages, message('newer-reply', 11, { content: 'Unread above tail' })] };
+    await render(newer);
+    await act(async () => h.scroll.onContentSizeChange(400, 3000));
+    expect(h.markRead).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges a short conversation only after both native dimensions are measured', async () => {
+    vi.useFakeTimers();
+    await render();
+    await act(async () => { await vi.advanceTimersByTimeAsync(32); h.scroll.onContentSizeChange(400, 300); });
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } }));
+    expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'g1', 7000);
+  });
+
   it('renders messages, notices, round ends and plan ends like the desktop timeline', async () => {
     await render();
     expect(byId('botGroup.message.user')?.textContent).toBe('@咪咪 帮我做官网');

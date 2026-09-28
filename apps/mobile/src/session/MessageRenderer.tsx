@@ -78,6 +78,7 @@ import {
   useRecyclingState,
   useViewability,
   type LegendListMetrics,
+  type OnViewableItemsChangedInfo,
   type LegendListRef,
   type ViewToken as LegendListViewToken,
 } from '@legendapp/list/react-native';
@@ -355,6 +356,7 @@ import {
   shouldAutoLoadEarlier,
   shouldPreserveMobileHistoryBrowseIntent,
   shouldUnpinMobileFollowOnDrag,
+  mobileMessageListNearBottomThreshold,
 } from '@/session/messageScroll';
 import { createMobileTailFollower, type MobileTailFollower } from '@/session/messageTailFollower';
 import {
@@ -927,9 +929,11 @@ export function MessageRenderer({
   // onStartReached 回调、以及先于 reset effect 定义的 eligibility effect,都可能带着上个会话的
   // 「上翻意图」与去重记录先跑——冷开短窗口会在无用户操作时误触发自动拉历史(review P2)。
   // setState 类复位(浮标/红点等)不参与该竞态,仍留在下方 effect。
+  const visibleCompanionReplyKeysRef = useRef(new Set<string>());
   const prevScrollResetKeyRef = useRef(scrollResetKey);
   if (prevScrollResetKeyRef.current !== scrollResetKey) {
     prevScrollResetKeyRef.current = scrollResetKey;
+    visibleCompanionReplyKeysRef.current.clear();
     listMetricsRef.current = { footerSize: 0, headerSize: 0 };
     nearBottomRef.current = reopeningPosition?.atEnd ?? true;
     isDraggingRef.current = false;
@@ -997,20 +1001,38 @@ export function MessageRenderer({
     isAwayFromBottomRef.current = next;
     setIsAwayFromBottomState(next);
   }, []);
+  const companionReplyTimes = useMemo(() => {
+    const times = new Map<string, number>();
+    if (companion) for (const item of items) {
+      if (item.type !== 'message' || item.message.kind !== 'assistant') continue;
+      const stamp = new Date(item.message.createdAt).getTime();
+      if (Number.isFinite(stamp)) times.set(item.key, stamp);
+    }
+    return times;
+  }, [companion, items]);
+  const acknowledgeCompanionRead = useCallback(() => {
+    if (!companion || !onCompanionReadThrough || !listRevealed || !initialAnchorDoneRef.current
+      || isSessionStreaming || !historyActiveRef.current || !nearBottomRef.current
+      || isReadingPositionActive?.() === false) return;
+    const { contentHeight, viewportHeight, offsetY } = scrollMetricsRef.current;
+    // Follow intent starts true before native layout; it is not proof of having read the tail.
+    if (viewportHeight <= 0 || contentHeight <= 0
+      || contentHeight - viewportHeight - offsetY > mobileMessageListNearBottomThreshold(bottomOverlayHeight)) return;
+    let at = 0;
+    for (const key of visibleCompanionReplyKeysRef.current) at = Math.max(at, companionReplyTimes.get(key) ?? 0);
+    if (at > 0) onCompanionReadThrough(at);
+  }, [companion, onCompanionReadThrough, listRevealed, isSessionStreaming, isReadingPositionActive, companionReplyTimes, bottomOverlayHeight]);
+  const acknowledgeCompanionReadRef = useRef(acknowledgeCompanionRead);
+  acknowledgeCompanionReadRef.current = acknowledgeCompanionRead;
+  const handleCompanionViewableItems = useCallback(({ viewableItems }: OnViewableItemsChangedInfo<MobileMessageRenderItem>) => {
+    visibleCompanionReplyKeysRef.current = new Set(viewableItems.filter(item => item.isViewable).map(item => item.key));
+    acknowledgeCompanionReadRef.current();
+  }, []);
   useEffect(() => {
-    if (!companion || !onCompanionReadThrough || isAwayFromBottom || isSessionStreaming) return;
-    const acknowledge = () => {
-      if (!nearBottomRef.current || isReadingPositionActive?.() === false) return;
-      const at = items.reduce((latest, item) => {
-        if (item.type !== 'message' || item.message.kind !== 'assistant') return latest;
-        const stamp = new Date(item.message.createdAt).getTime();
-        return Number.isFinite(stamp) ? Math.max(latest, stamp) : latest;
-      }, 0);
-      if (at > 0) onCompanionReadThrough(at);
-    };
-    const frame = requestAnimationFrame(acknowledge);
+    if (!companion || !onCompanionReadThrough) return;
+    const frame = requestAnimationFrame(acknowledgeCompanionRead);
     return () => cancelAnimationFrame(frame);
-  }, [companion, onCompanionReadThrough, isAwayFromBottom, isSessionStreaming, isReadingPositionActive, items]);
+  }, [acknowledgeCompanionRead, companion, onCompanionReadThrough, isAwayFromBottom]);
   const [previousUserTarget, setPreviousUserTarget] = useState<
     ReturnType<typeof previousUserMessageJumpTarget>
   >(null);
@@ -2270,6 +2292,7 @@ export function MessageRenderer({
         setPreviousUserTarget(null);
       }
     }
+    acknowledgeCompanionReadRef.current();
     // 拖动进近顶区时 onStartReached 边沿可能早已被消费(见 attemptAutoLoadEarlier 注释),
     // 滚动事件兜底重评估;前置短路让稳态滚动只付 1~2 次 ref 比较的成本。
     attemptAutoLoadEarlier(metrics);
@@ -2440,6 +2463,7 @@ export function MessageRenderer({
     scrollMetricsRef.current = { ...scrollMetricsRef.current, viewportHeight };
     markMobileMvcpSettle();
     if (nearBottomRef.current) runStickToLatestVerify();
+    acknowledgeCompanionReadRef.current();
   }, [markMobileMvcpSettle, runStickToLatestVerify]);
 
   const handleListMetricsChange = useCallback((metrics: LegendListMetrics) => {
@@ -2487,6 +2511,7 @@ export function MessageRenderer({
       return;
     }
     getTailFollower().contentChanged();
+    acknowledgeCompanionReadRef.current();
   }, [
     getTailFollower,
     reconcileReopeningAnchor,
@@ -2789,6 +2814,7 @@ export function MessageRenderer({
         testID={testID ?? 'message.list'}
         viewabilityConfig={viewabilityConfigRef.current}
         onFirstVisibleItemChanged={handleFirstVisibleItemChangedRef.current}
+        onViewableItemsChanged={companion ? handleCompanionViewableItems : undefined}
       />
       </Animated.View>
       {isAwayFromBottom && previousUserTarget && previousUserButtonTop !== null ? (
