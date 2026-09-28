@@ -792,6 +792,16 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain(
       "runtimeAgentKind === 'pi' && atomicSelection?.thinking !== undefined",
     );
+    // 提交写入镜像后同步本机 renderer 记忆：renderer 的全量快照才会带上该选择，
+    // 镜像里的钉子得以撤销（否则会长期压住被控端后来的显式改动）。
+    const rememberThinking = registerSource.slice(
+      registerSource.indexOf('rememberThinkingIntent: ({'),
+      registerSource.indexOf('bootstrapSwitchedSession: async (sessionId, opts)'),
+    );
+    expect(rememberThinking).toContain(
+      'setThinkingEnabledInMemory(agentKind, providerId, model, thinking)',
+    );
+    expect(rememberThinking).toContain('DRAFT_PREF_APPLY');
   });
 
   it('only relinks retained cross-host writers without rewriting native history', () => {

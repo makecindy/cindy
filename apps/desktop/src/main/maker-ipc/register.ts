@@ -8589,6 +8589,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
     rememberThinkingIntent: ({ agentKind, providerId, model, thinking }) => {
       setThinkingEnabledInMemory(agentKind, providerId, model, thinking);
+      // 同步本机 renderer 的记忆：主进程写的只是镜像，renderer 才是 providerModelMemory
+      // 的真相源。不写回这一笔，renderer 的全量快照会一直「尚未包含该选择」，提交时写入
+      // 的钉子也就撤不掉，反而会长期压住用户在被控端后来的显式改动（Greptile P1）。
+      broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
+        agent: agentKind,
+        providerId: providerId ?? '',
+        modelId: model,
+        active: false,
+        thinking,
+      });
     },
     bootstrapSwitchedSession: async (sessionId, opts) => {
       // 切换已提交,从 DB 行(新引擎值)重建 live session。resumeSessionId 直接取
