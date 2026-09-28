@@ -267,6 +267,49 @@ export function isBotGroupNoReplyPrefix(text: string): boolean {
   return trimmed.length === 0 || BOT_GROUP_NO_REPLY_SENTINEL.startsWith(trimmed);
 }
 
+// ---- Controllers (phones) — docs/product-rules/bot-group-chat.md §8 -------------
+
+/**
+ * Groups reach controllers through the Remote Resource protocol (collection below), not
+ * dedicated channels. The host keeps every rule; controllers only render and invoke actions.
+ */
+export const BOT_GROUP_REMOTE_COLLECTION_ID = 'bot-groups';
+export const BOT_GROUP_REMOTE_RESOURCE_KIND = 'bot-group';
+/** Block primitive whose `data` is `BotGroupRemoteChatData`; only sent to controllers declaring it. */
+export const BOT_GROUP_CHAT_PRIMITIVE = 'bot-group-chat';
+/** Collection item link to each member (`teammates` resource), in member order. */
+export const BOT_GROUP_MEMBER_LINK_REL = 'member';
+
+/**
+ * Remote actions. `create` is collection-level ({ name, botIds }); the others target a group:
+ * `send` ({ text, mentions, clientId, division? }), `continue`, `stop`, `update`
+ * ({ name?, replyMode?, speakingMode?, organizerBotId? } — never a host path),
+ * `set-members` ({ botIds }), `delete`, `plan-start` / `plan-dismiss` / `plan-continue` /
+ * `plan-retry` ({ planId }) and `plan-edit` ({ planId, position, action, botId? }).
+ * A refused action fails with the `BotGroupErrorCode` as its message.
+ */
+export type BotGroupRemoteActionId =
+  | 'create'
+  | 'send'
+  | 'continue'
+  | 'stop'
+  | 'update'
+  | 'set-members'
+  | 'delete'
+  | 'plan-start'
+  | 'plan-dismiss'
+  | 'plan-continue'
+  | 'plan-retry'
+  | 'plan-edit';
+
+/**
+ * The group as a controller sees it. Host paths never leave the computer: `projectDir`
+ * and every plan `workDir` are null, and `projectDirName` names the folder.
+ */
+export interface BotGroupRemoteChatData extends BotGroupDetail {
+  projectDirName: string | null;
+}
+
 export const BOT_GROUP_CLIENT_ID_PREFIX = 'bot-group:';
 
 export const BOT_GROUP_CLIENT_ID = {

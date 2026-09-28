@@ -867,6 +867,11 @@
       "feishuHint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
       "feishuDisabledHint": "需要先在「飞书 / Lark 机器人」中配置 bot 并向它发送一条消息以完成绑定。",
       "feishuAria": "切换任务完成的飞书通知",
+      "botGroupPlan": {
+        "stepDone": "{{name}}做完了「{{task}}」，等你继续",
+        "stepFailed": "{{name}}没做完「{{task}}」，可以重试",
+        "planDone": "分工全部做完了，最后一步是{{name}}的「{{task}}」"
+      },
       "sessionEvent": {
         "untitled": "未命名任务",
         "done": "已完成 ✓",

@@ -127,6 +127,11 @@ export interface BotGroupChatServiceDeps {
   workDir?: Pick<BotGroupWorkDir, 'prepare' | 'snapshot' | 'changedFiles' | 'trashGroupFolder'>;
   /** Existing local directory usable as a 项目文件夹 (same rules as new-task projects). */
   validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string }>;
+  /**
+   * A 分工 step stopped for the user: finished (继续, or the whole plan is done) or not
+   * finished (重试). Phones are notified from here (bot-group-chat.md §8.3).
+   */
+  onStepSettled?: (event: BotGroupStepSettledEvent, ownerScope?: DataOwnerBroadcastScope) => void;
   captureOwnerScope?: () => DataOwnerBroadcastScope;
   isOwnerScopeCurrent?: (scope: DataOwnerBroadcastScope) => boolean;
   onChanged?: (payload: BotGroupChangedPayload, ownerScope?: DataOwnerBroadcastScope) => void;
@@ -135,6 +140,18 @@ export interface BotGroupChatServiceDeps {
   memberTurnTimeoutMs?: number;
   stepTurnTimeoutMs?: number;
   log?: { warn: (message: string, meta?: Record<string, unknown>) => void };
+}
+
+export interface BotGroupStepSettledEvent {
+  groupId: string;
+  groupName: string;
+  planId: string;
+  position: number;
+  botName: string;
+  task: string;
+  outcome: 'done' | 'failed';
+  /** The last step finished: the whole plan is done. */
+  planDone: boolean;
 }
 
 interface MemberRow {
@@ -1244,7 +1261,21 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         endMessage: done && isLast ? messageRow({ groupId, kind: 'plan-end', authorKind: 'system', planId }) : null,
         now: now(),
       });
-      if (result.settled) emit(groupId, 'messages', scope);
+      if (!result.settled) return;
+      emit(groupId, 'messages', scope);
+      const group = await readGroup(groupId);
+      if (group && scopeIsCurrent(scope)) {
+        deps.onStepSettled?.({
+          groupId,
+          groupName: group.name,
+          planId,
+          position,
+          botName: authorName,
+          task: step.task,
+          outcome: outcome.kind,
+          planDone: done && isLast,
+        }, scope);
+      }
     };
 
     try {

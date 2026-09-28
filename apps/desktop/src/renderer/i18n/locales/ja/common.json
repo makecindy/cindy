@@ -867,6 +867,11 @@
       "feishuHint": "連携済みの Feishu または Lark ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
       "feishuDisabledHint": "先に「Feishu / Lark ボット」で設定し、ボットに 1 度メッセージを送ってバインドを完了してください。",
       "feishuAria": "セッション完了時の Feishu 通知を切り替え",
+      "botGroupPlan": {
+        "stepDone": "{{name}} が「{{task}}」を終えました。続行を待っています",
+        "stepFailed": "{{name}} は「{{task}}」を終えられませんでした。再試行できます",
+        "planDone": "役割分担がすべて完了しました（最後は {{name}} の「{{task}}」）"
+      },
       "sessionEvent": {
         "untitled": "無題のセッション",
         "done": "完了しました ✓",

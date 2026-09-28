@@ -753,6 +753,34 @@ describe('botGroupChatService 分工', () => {
     expect(lanePrompt.prompt).toContain('not in your own workspace');
   });
 
+  it('reports every settled step so phones can be told', async () => {
+    const onStepSettled = vi.fn();
+    let fail = true;
+    const harness = createHarness((botId) => (botId === 'xiaoman' && fail ? null : '好了'), {
+      decidePlan: async () => ({ needsPlan: true, steps: [{ botId: 'mimi', task: '策划' }, { botId: 'xiaoman', task: '设计' }] }),
+      workDir: fakeWorkDir(),
+      onStepSettled,
+    });
+    const groupId = await createGroup(harness);
+    const plan = await proposePlan(harness, groupId);
+    await harness.service.startPlan({ groupId, planId: plan.id });
+    await waitForIdle(harness, groupId);
+    await harness.service.continuePlan({ groupId, planId: plan.id });
+    await vi.waitFor(() => expect(harness.dispatches.at(-1)!.botId).toBe('xiaoman'));
+    const call = harness.dispatches.at(-1)!;
+    await harness.service.settleLaneTurn({ sessionId: call.sessionId, activeInputClientId: call.clientId, outcome: 'error', resultText: '' });
+    await waitForIdle(harness, groupId);
+    fail = false;
+    await harness.service.retryPlan({ groupId, planId: plan.id });
+    await waitForIdle(harness, groupId);
+    expect(onStepSettled.mock.calls.map(([event]) => [event.botName, event.task, event.outcome, event.planDone])).toEqual([
+      ['咪咪', '策划', 'done', false],
+      ['小满', '设计', 'failed', false],
+      ['小满', '设计', 'done', true],
+    ]);
+    expect(onStepSettled.mock.calls[0]![0]).toMatchObject({ groupId, groupName: '周末出游', planId: plan.id, position: 0 });
+  });
+
   it('a plain message after a step asks the same Bot to redo it, and later steps read the new hand-off', async () => {
     const replies: Record<string, string[]> = { mimi: ['第一版', '第二版'], xiaoman: ['设计好了'] };
     const harness = createHarness((botId) => replies[botId]!.shift() ?? 'x', { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir() });

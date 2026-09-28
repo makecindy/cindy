@@ -867,6 +867,11 @@
       "feishuHint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
       "feishuDisabledHint": "First set up the bot in \"Feishu / Lark Bot\" and DM it once to complete binding.",
       "feishuAria": "Toggle session-done FeiShu notifications",
+      "botGroupPlan": {
+        "stepDone": "{{name}} finished “{{task}}” — continue when ready",
+        "stepFailed": "{{name}} didn't finish “{{task}}” — you can retry",
+        "planDone": "The work split is done; the last step was {{name}}’s “{{task}}”"
+      },
       "sessionEvent": {
         "untitled": "Untitled session",
         "done": "Completed ✓",

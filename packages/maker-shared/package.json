@@ -81,6 +81,8 @@
     "./botCollaboration": "./src/botCollaboration.ts",
     "./botDirectMessage": "./src/botDirectMessage.ts",
     "./botGroupChat": "./src/botGroupChat.ts",
+    "./botGroupMentions": "./src/botGroupMentions.ts",
+    "./botGroupPresentation": "./src/botGroupPresentation.ts",
     "./botDelegation": "./src/botDelegation.ts",
     "./botTimeline": "./src/botTimeline.ts",
     "./remote-desktop-viewer": "./src/remote-desktop/viewerRuntime.js",

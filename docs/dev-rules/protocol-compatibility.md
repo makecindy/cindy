@@ -468,6 +468,20 @@ canonical 主任务时，宿主额外追加 `resourceCollectionId=teammates&reso
 不识别它们的旧控制端仍按普通任务打开。拼接后超过 `NOTIFY_DEEP_LINK_MAX_LENGTH` 时回退为原深链。
 委派的独立 Session 任务和普通任务不带这组参数。不修改 notify 帧结构、relay 或协议版本。
 
+## 伙伴群聊手机端（Remote Resource 与群推送深链）
+
+群聊以新的 Remote Resource collection `bot-groups`（`resourceKind: bot-group`，无 placement）接入控制端，
+列表项的 `links` 以 rel `member` 指向 `teammates` 中的成员。新增可移植原语 `bot-group-chat`：主机只对声明它的
+控制端在 `get` 中输出该块，`data` 为 `@cindy/maker-shared/botGroupChat` 的 `BotGroupRemoteChatData`
+（主机路径置空，只给文件夹名）；未声明的控制端只拿到 `markdown` 块的可读摘要。动作 id 见同文件
+`BotGroupRemoteActionId`，被拒时以群聊错误码作为 registry 错误 message。变化沿用
+`maker:remote-resources:changed`（collection + 该群 ref）。
+
+分工停下时的手机推送沿用 notify 帧与 `session-needs-reply` 类别，深链为
+`/companions/groups/<groupId>?deviceId=<hostDeviceId>`，`collapseId` 为 `(设备, 群)` 摘要。旧手机不识别该深链，
+点开只进入 App；旧主机没有该 collection，新手机不显示群聊入口。未新增 channel、allowlist、relay 类型、
+notify 类别或协议版本，服务端无需升级；Mobile 无原生 fingerprint 变更。
+
 ## 伙伴记忆远程页面与资源内搜索
 
 伙伴设置主资源（声明 `form` 的控制端）追加 `memories` list 块，入口指向 `settings:<botId>/memory`；

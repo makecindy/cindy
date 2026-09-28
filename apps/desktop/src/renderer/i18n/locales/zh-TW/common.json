@@ -867,6 +867,11 @@
       "feishuHint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
       "feishuDisabledHint": "需要先在「飛書 / Lark 機器人」中配置 bot 並向它傳送一條訊息以完成繫結。",
       "feishuAria": "切換任務完成的飛書通知",
+      "botGroupPlan": {
+        "stepDone": "{{name}}做完了「{{task}}」，等你繼續",
+        "stepFailed": "{{name}}沒做完「{{task}}」，可以重試",
+        "planDone": "分工全部做完了，最後一步是{{name}}的「{{task}}」"
+      },
       "sessionEvent": {
         "untitled": "未命名任務",
         "done": "已完成 ✓",
