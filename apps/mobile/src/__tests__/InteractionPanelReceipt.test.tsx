@@ -107,6 +107,43 @@ it('keeps multiple selections and the free answer when moving back, remounting, 
   expect(readAskUserDraft(requestId)).toBeNull();
 });
 
+it('replaces a model-authored "Other" option with the single host custom input', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'ask_user_question', requestId, questions: [
+      { question: 'Which approach?', options: [{ label: 'Approach A' }, { label: '其他（回复说明）' }] },
+    ],
+  } }]);
+  await act(async () => root.render(<Harness />));
+  // 模型选项被宿主入口取代:只剩 option.1 + 自定义入口,不再有 option.2。
+  expect(host.querySelector('[data-testid="interaction.ask.option.1"]')).not.toBeNull();
+  expect(host.querySelector('[data-testid="interaction.ask.option.2"]')).toBeNull();
+  await click('interaction.ask.showCustomButton');
+  await type('interaction.ask.customInput', 'Use approach C first');
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await click('interaction.ask.submitButton');
+  expect(resolveInteraction.mock.calls[0][1]).toMatchObject({
+    kind: 'ask_user_question',
+    answers: { 'Which approach?': 'Use approach C first' },
+  });
+});
+
+it('shows the direct free-text input when every option is an "Other" entry', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'ask_user_question', requestId, questions: [
+      { question: 'Which approach?', options: [{ label: '其他（回复说明）' }, { label: 'Other (please specify)' }] },
+    ],
+  } }]);
+  await act(async () => root.render(<Harness />));
+  expect(host.querySelector('[data-testid="interaction.ask.option.1"]')).toBeNull();
+  await type('interaction.ask.textInput', 'Something specific');
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await click('interaction.ask.submitButton');
+  expect(resolveInteraction.mock.calls[0][1]).toMatchObject({
+    kind: 'ask_user_question',
+    answers: { 'Which approach?': 'Something specific' },
+  });
+});
+
 it.each([true, false])('preserves edited plan and feedback through rejected receipt (approve=%s)', async (approve) => {
   remoteSessionStore.setPendingInteractions('s1', [{ request: {
     kind: 'plan_review', requestId, plan: '# Original plan\nRead the file.',

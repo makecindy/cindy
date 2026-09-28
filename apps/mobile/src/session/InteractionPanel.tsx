@@ -58,6 +58,7 @@ import {
   selectionFromAnswer,
   sessionScopedPermissionSuggestions,
   sortPendingInteractions,
+  visibleAskOptions,
   type AskQuestion,
   type PermissionReviewPresentation,
   type PlanReviewEvidencePresentation,
@@ -837,7 +838,10 @@ function AskUserQuestionCard({
       skipNextQuestionSyncRef.current = false;
       return;
     }
-    const next = selectionFromAnswer(current, answers[answerKey(current)]);
+    const next = selectionFromAnswer(
+      { ...current, options: visibleAskOptions(current.options) },
+      answers[answerKey(current)],
+    );
     setSelectedLabels(next.selectedLabels);
     setCustomInput(next.customInput);
     setShowCustomInput(next.showCustomInput);
@@ -881,7 +885,7 @@ function AskUserQuestionCard({
   if (!current) return null;
 
   const isLast = currentIndex === questions.length - 1;
-  const options = current.options ?? [];
+  const options = visibleAskOptions(current.options);
   const isMulti = current.multiSelect === true;
   const currentAnswerKey = answerKey(current);
   const existingAnswer = answers[currentAnswerKey];
@@ -905,7 +909,7 @@ function AskUserQuestionCard({
       draftCompletedRef.current = true;
       // Optimistic dismissal unmounts this form immediately. Save the final
       // choice now so a refused/lost receipt can restore exactly this draft.
-      const finalSelection = selectionFromAnswer(current, answer);
+      const finalSelection = selectionFromAnswer({ ...current, options }, answer);
       saveAskUserDraft(requestId, {
         answers: nextAnswers, currentIndex,
         customInput: finalSelection.customInput,
