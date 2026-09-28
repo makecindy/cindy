@@ -11,7 +11,7 @@ export function isOpenRouterModelsUrl(value: string): boolean {
   } catch { return false; }
 }
 
-/** Codex manifests use { effort, description }; Sub2API's Grok list uses { value, label }.
+/** Codex manifests use { effort, description }; Sub2API and grok-pool use { value, label }.
  * Missing/malformed lists remain unknown; an explicit empty or none-only list stays empty.
  */
 function declaredReasoningEfforts(value: unknown, key: "effort" | "value") {
@@ -142,7 +142,9 @@ export function parseModelsListResponse(
             ? record.default_effort
             : record.default_reasoning_level !== undefined
               ? record.default_reasoning_level
-              : record.reasoningEffort;
+              : record.reasoningEffort !== undefined
+                ? record.reasoningEffort
+                : record.reasoning_effort;
     const modalities = record.modalities ??
       (Array.isArray(architecture?.input_modalities) && Array.isArray(architecture?.output_modalities)
         ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined);
@@ -186,6 +188,8 @@ export function parseModelsListResponse(
         declaredReasoningEfforts(record.supported_reasoning_levels, "effort") ??
         (record.supportsReasoningEffort === false
           ? [] : declaredReasoningEfforts(record.reasoningEfforts, "value")) ??
+        (record.supports_reasoning_effort === false
+          ? [] : declaredReasoningEfforts(record.reasoning_efforts, "value")) ??
         (isVercel && Array.isArray(record.reasoning_options)
           ? record.reasoning_options.find((option: unknown) =>
               option && typeof option === 'object' && (option as { type?: unknown }).type === 'effort')?.values

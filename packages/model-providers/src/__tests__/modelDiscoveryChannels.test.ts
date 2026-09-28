@@ -270,6 +270,67 @@ describe('Sub2API Grok model discovery', () => {
   });
 });
 
+describe('grok-pool snake_case reasoning discovery', () => {
+  it.each(['grok-4.7', 'grok-4.7-pool', 'team-model'])('imports and refreshes %s across engines', id => {
+    const efforts = ['xhigh', 'high', 'medium', 'low'];
+    const discovered = parseModelsListResponse({ data: [{
+      id, supports_reasoning_effort: true, reasoning_effort: 'high',
+      reasoning_efforts: efforts.map(value => ({ id: value, value, label: value, default: value === 'high' })),
+    }] })!;
+    expect(discovered[0].discoveredMetadata).toMatchObject({ efforts, defaultEffort: 'high' });
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels(
+      [{ id, name: id, discoveredMetadata: {} }], discovered,
+    )));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      for (const modelRegistry of [undefined, BUNDLED_CATALOG.modelRegistry]) {
+        const provider = buildUserProvider({ id: 'grok-pool', name: 'Pool', runtimes: {
+          [agent]: { baseUrl: 'https://pool.example/v1', models },
+        } }, { modelRegistry });
+        expect(provider.models[agent]?.[0]).toMatchObject({ id, efforts, defaultEffort: 'high' });
+      }
+    }
+    const overridden = mergeDiscoveredRuntimeModels([{ id, name: id, reasoning: false }], discovered);
+    expect(buildUserProvider({ id: 'grok-pool', name: 'Pool', runtimes: {
+      codex: { baseUrl: 'https://pool.example/v1', models: overridden },
+    } }).models.codex?.[0]).toMatchObject({ efforts: [], defaultEffort: null });
+  });
+
+  it('distinguishes unknown, disabled, empty, invalid and none-only declarations', () => {
+    const entries = [
+      { supports_reasoning_effort: true, reasoning_effort: 'high' },
+      { supports_reasoning_effort: false, reasoning_efforts: [{ value: 'high' }] },
+      { reasoning_efforts: [] },
+      { reasoning_efforts: [{ label: 'High' }] },
+      { reasoning_efforts: ['high', 'invalid'] },
+      { reasoning_efforts: ['none'], reasoning_effort: 'none' },
+      { reasoning_efforts: ['none', 'low', 'high', 'high'], reasoning_effort: null },
+      { reasoning_efforts: null, reasoning_effort: 'invalid' },
+    ];
+    const models = parseModelsListResponse({ data: entries.map((entry, i) => ({ id: `model-${i}`, ...entry })) })!;
+    expect(models.map(model => model.discoveredMetadata?.efforts))
+      .toEqual([undefined, [], [], undefined, undefined, [], ['low', 'high'], undefined]);
+    expect(models[5].discoveredMetadata?.defaultEffort).toBeNull();
+    expect(models[6].discoveredMetadata?.defaultEffort).toBeNull();
+    expect(models[7].discoveredMetadata?.defaultEffort).toBeUndefined();
+  });
+
+  it('preserves existing field precedence including explicit empty and null values', () => {
+    const entries = [
+      { reasoning: { supportedEfforts: [], defaultEffort: null } },
+      { supported_reasoning_levels: [], default_reasoning_level: null },
+      { reasoningEfforts: [], reasoningEffort: null },
+      { supportsReasoningEffort: false, reasoningEffort: null },
+      { reasoningEfforts: [{ value: 'low' }], reasoningEffort: 'low' },
+    ];
+    const models = parseModelsListResponse({ data: entries.map((entry, i) => ({
+      id: `model-${i}`, supports_reasoning_effort: true,
+      reasoning_efforts: [{ value: 'high' }], reasoning_effort: 'high', ...entry,
+    })) })!;
+    expect(models.map(model => model.discoveredMetadata?.efforts)).toEqual([[], [], [], [], ['low']]);
+    expect(models.map(model => model.discoveredMetadata?.defaultEffort)).toEqual([null, null, null, null, 'low']);
+  });
+});
+
 describe('Sub2API manifest capabilities', () => {
   it('preserves vision, Fast and capacity separately through save and refresh for every engine', () => {
     const discovered = parseModelsListResponse({ models: [{ slug: 'private-model',
