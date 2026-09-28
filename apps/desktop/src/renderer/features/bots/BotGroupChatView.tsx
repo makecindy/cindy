@@ -25,6 +25,7 @@ import {
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
+import { ControlledBanner, useControlledBy, useComposerCollapsed } from '@/features/remote-device/ControlledBanner';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import type {
   BotGroupDetail,
@@ -103,6 +104,11 @@ export function BotGroupChatView() {
 
 function BotGroupChatContent({ groupId }: { groupId: string }) {
   const { t, i18n } = useTranslation();
+  const controlledBy = useControlledBy();
+  const hasControlledBanner = controlledBy.length > 0;
+  // Groups have no single task session; namespace their existing composer UI state.
+  const controlledBannerKey = `bot-group:${groupId}`;
+  const controlledBannerCollapsed = useComposerCollapsed(controlledBannerKey);
   const navigate = useNavigate();
   const location = useLocation();
   const [state, setState] = useState<GroupViewState>({ kind: 'loading' });
@@ -246,7 +252,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   }, [group?.name, headerMembers, openSettings, separator, settingsLabel]);
   useRegisterContentHeader(header);
 
-  // Follow new messages only while the reader is already at the bottom.
+  // Follow new messages and banner viewport changes only while the reader is at the bottom.
   const lastSequence = messages[messages.length - 1]?.sequence ?? 0;
   // Several Bots think at once in a broadcast round's first circle; the key follows the set.
   const speakingKey =
@@ -261,7 +267,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
       return;
     }
     if (stickToBottomRef.current) element.scrollTop = element.scrollHeight;
-  }, [lastSequence, speakingKey, messages.length]);
+  }, [lastSequence, speakingKey, messages.length, hasControlledBanner, controlledBannerCollapsed]);
 
   // Markdown, code blocks and avatars finish layout after the first paint; keep a reader
   // who is at the bottom pinned there while the content grows.
@@ -531,6 +537,14 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
           ))}
         </div>
       </div>
+      {hasControlledBanner && (
+        // Like teammate chats, keep the collapsed breathing light above the composer.
+        <div className="shrink-0 px-5 pt-2">
+          <div className="mx-auto flex w-full max-w-[760px] justify-center px-2">
+            <ControlledBanner placement="composer" sessionId={controlledBannerKey} />
+          </div>
+        </div>
+      )}
       <BotGroupComposer
         groupId={group.id}
         members={group.members}
