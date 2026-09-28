@@ -1,5 +1,6 @@
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
+import { classifyHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { listProjects, renameProject, removeProject } from './projectManagement.js';
@@ -41,6 +42,7 @@ import { feishuIm, wechatIm } from '../im';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
+import { checkAppUpdateForAgent } from '../updateService.js';
 import { getScheduler } from '../scheduler-host/index.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
 import { searchSessionsFn } from '../maker-host/session-search.js';
@@ -91,6 +93,7 @@ import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
 import { getLearnController } from '../learn-host/index.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
+import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
 
 export interface DesktopMcpProvidersDeps {
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'>;
@@ -112,11 +115,15 @@ export interface DesktopMcpProvidersDeps {
     sessionId: string,
     sessionInstanceId: string,
   ) => GhostGrantLiveSessionState | null;
+  /** Agent 发起插件安装时向该任务投宿主权限确认卡；缺失时安装 fail closed。 */
+  requestHostPermission?: CindyGhostsHostDeps['requestHostPermission'];
   /** Reject stale, remote, or already-closed Session tool contexts. */
   isCurrentLocalSessionInstance?: (
     sessionId: string,
     sessionInstanceId: string | undefined,
   ) => boolean;
+  /** Current live session, including sessions whose agent runs over SSH. */
+  isCurrentGrokLoginCaller?: (sessionId: string, sessionInstanceId: string) => boolean;
   /** 把工具结果图片转成文字描述（视觉桥，最佳努力）。缺失 = 不处理。
    *  返回结构区分「有意跳过」(skipped:true, 视觉桥未开/模型不命中, 不告警)与
    *  「真正尝试但失败」(skipped:false + null, 计入 attemptedCount 供告警)。 */
@@ -381,7 +388,32 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      appUpdate: {
+        isCurrentSession: (sessionId, sessionInstanceId) =>
+          deps.isCurrentLocalSessionInstance?.(sessionId, sessionInstanceId) === true,
+        check: checkAppUpdateForAgent,
+      },
       logger: createLogger('mcp/cindy_helper'),
+      grokLogin: {
+        start: async (context) => {
+          if (!context.sessionId || !context.sessionInstanceId
+            || !deps.isCurrentGrokLoginCaller?.(context.sessionId, context.sessionInstanceId))
+            throw new Error('Stale Grok login caller');
+          return startGrokDeviceLogin();
+        },
+        status: async (context) => {
+          if (!context.sessionId || !context.sessionInstanceId
+            || !deps.isCurrentGrokLoginCaller?.(context.sessionId, context.sessionInstanceId))
+            throw new Error('Stale Grok login caller');
+          return grokDeviceLoginStatus();
+        },
+        cancel: async (context) => {
+          if (!context.sessionId || !context.sessionInstanceId
+            || !deps.isCurrentGrokLoginCaller?.(context.sessionId, context.sessionInstanceId))
+            throw new Error('Stale Grok login caller');
+          return cancelGrokDeviceLogin();
+        },
+      },
       sessionTags: async (callerSessionId, request) => {
         const result = await executeTaskTags(request, callerSessionId);
         return ['update', 'delete'].includes(request.action) ? { ...result, sessions: [] } : result;
@@ -478,18 +510,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
         if (!dbClient) return 'restricted';
-        const [owned] = await dbClient.drizzle
-          .select({ role: botSessionLinks.role })
-          .from(botSessionLinks)
-          .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-          .where(
-            and(
-              eq(botSessionLinks.sessionId, sessionId),
-              eq(sessions.source, 'bot'),
-            ),
-          )
+        const [row] = await dbClient.drizzle
+          .select({ source: sessions.source, botId: botSessionLinks.botId })
+          .from(sessions)
+          .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+          .where(eq(sessions.id, sessionId))
           .limit(1);
-        return owned ? 'bot' : 'default';
+        return classifyHelperSurface(row?.source, Boolean(row?.botId));
       },
       sessionQueue: {
         listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
@@ -660,6 +687,16 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
           return svc.stopSessionTask(callerSessionId, taskId, mode);
+        },
+        inspectSessionTaskRoute: async ({ callerSessionId, taskId }) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Session task service not initialized' };
+          return svc.inspectSessionTaskRoute(callerSessionId, taskId);
+        },
+        advanceSessionTaskRoute: async ({ callerSessionId, taskId, expectedGeneration, selectionToken }) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Session task service not initialized' };
+          return svc.advanceSessionTaskRoute(callerSessionId, taskId, expectedGeneration, selectionToken);
         },
       },
       botMessaging: {
@@ -910,6 +947,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           pluginMarket: getPluginMarketService(),
           getAppVersion: deps.getAppVersion,
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
+          requestHostPermission: deps.requestHostPermission,
           createMediaDownloadContext: deps.createMediaDownloadContext,
           describeToolResultImage: deps.describeToolResultImage,
           onToolResultImagesFailed: deps.onToolResultImagesFailed,

@@ -264,7 +264,7 @@ export function InstallTargetPicker({
             event.stopPropagation();
             if (installingRef.current || event.isComposing || event.keyCode === 229) event.preventDefault();
           }}
-          onPointerDownOutside={(event) => { if (installingRef.current) event.preventDefault(); }}
+          onPointerDownOutside={(event) => event.preventDefault()}
         >
         <div
           className="flex items-start justify-between gap-3"

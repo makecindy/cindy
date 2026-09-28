@@ -1,6 +1,7 @@
 import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 export { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 import { placeBotTaskCardsAfterIntroduction } from '@cindy/maker-shared/botCollaboration';
+import { describeToolUse, sourcePathCandidatesFromDescriptor } from '@cindy/maker-shared/tool-use-descriptor';
 /**
  * MessageStream
  * ---------------------------------------------------------------------------
@@ -36,6 +37,7 @@ import {
   renderHistoryView,
   historyPrefetchThreshold,
   historyViewLeaves,
+  historyWorkSummaries,
 } from '@cindy/maker-shared/message-window';
 import {
   getRemoteHistoryView,
@@ -76,7 +78,11 @@ import {
 } from './markdownImageTargets';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
-import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
+import {
+  isAgentTaskToolName,
+  lookupSubagentRunStatus,
+  type SubagentRunStatusIndex,
+} from '@cindy/maker-shared/agent-task';
 
 import type {
   AgentTaskUpdate,
@@ -407,6 +413,8 @@ interface MessageStreamProps {
    *  so message-level controls can gate features unsupported on remote
    *  (e.g. rewind on cc-remote daemon sessions). */
   remoteHostId?: string | null;
+  /** Task origin. Personal WeChat must not be told to switch to Full access. */
+  sessionSource?: string | null;
   /** Session working directory; passed down so MarkdownRenderer / UserMessage
    *  can resolve relative paths in markdown links and inline @-chips
    *  (text-lightbox-trigger-extension F1 / F2). Stable within a session
@@ -435,6 +443,8 @@ interface MessageStreamProps {
   /** The task shell remains, but all prior message content was intentionally cleared. */
   historyCleared?: boolean;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
+  /** Host `subagent_runs` status of this task's Subagents (local tasks only). */
+  subagentRunStatuses?: SubagentRunStatusIndex;
   /** Kept for API compatibility. v2 — no longer threaded into render items
    *  (AgentActionsBlock + ThinkingCard manage their own per-block expand
    *  state via useExpandedBlockMemory). The session-level "is streaming"
@@ -1451,6 +1461,7 @@ export function buildRenderItems(
     turnChangeSets?: readonly TurnChangeSetSummary[];
     /** Session working directory for opaque generated-file fallback chips. */
     workingDir?: string;
+    historyArtifacts?: readonly import('@cindy/maker-shared/message-window').HistoryFileArtifact[];
     /** Bot-owned Session: show newly created files as deliverables, not an engineering diff card. */
     botSessionId?: string;
     /** Reuse image Markdown extraction for completed assistant messages across stream batches. */
@@ -1458,6 +1469,8 @@ export function buildRenderItems(
     /** Keep the stored preparation report out of its own task's visible timeline. */
     cindyMakeSessionId?: string;
     cindyMakeCompletionInComposer?: boolean;
+    /** Durable Subagent status; a terminal record outranks the paired result text. */
+    subagentRunStatuses?: SubagentRunStatusIndex;
   },
 ): {
   items: RenderItem[];
@@ -1812,10 +1825,40 @@ export function buildRenderItems(
     }
     const workingDir = opts?.workingDir ?? '';
     if (workingDir) {
+      const start = Date.parse(messages[lo]?.createdAt ?? '');
+      const end = Date.parse(messages[hi]?.createdAt ?? '');
+      const artifacts = (opts?.historyArtifacts ?? []).filter((artifact) => {
+        const time = Date.parse(artifact.createdAt);
+        return !(Number.isFinite(start) && time < start || Number.isFinite(end) && time >= end);
+      });
+      const editedPaths = new Set(artifacts.filter((file) => file.exclude && file.ready)
+        .map((file) => pathKey(resolveToolFilePath(file.path, workingDir))));
+      for (const artifact of artifacts) {
+        const path = resolveToolFilePath(artifact.path, workingDir);
+        const normalized = pathKey(path);
+        if (artifact.exclude) {
+          if (artifact.exclude === 'all' && artifact.ready) generatedByPath.delete(normalized);
+          continue;
+        }
+        if (artifact.source === 'command' && editedPaths.has(normalized)) continue;
+        if (exactPaths.has(normalized) && changeSets.length > 0) continue;
+        const previous = generatedByPath.get(normalized);
+        if (previous?.source === 'tool' && artifact.source === 'command') continue;
+        generatedByPath.set(normalized, { path, name: basename(path), source: artifact.source, ready: artifact.ready });
+      }
       for (const file of collectCachedGeneratedFiles(slice, workingDir)) {
         const normalized = pathKey(file.path);
         if (exactPaths.has(normalized) && changeSets.length > 0) continue;
         generatedByPath.set(normalized, file);
+      }
+      // Delivery tools stay as visible source rows. Preserve their existing
+      // intermediate-file suppression for paths produced by deferred tools too.
+      for (const message of slice) {
+        if (message.role !== 'tool_use') continue;
+        const descriptor = describeToolUse(message.toolName ?? '', message.toolInput);
+        for (const path of sourcePathCandidatesFromDescriptor(descriptor)) {
+          generatedByPath.delete(pathKey(resolveToolFilePath(path, workingDir)));
+        }
       }
     }
     const generatedFiles = [...generatedByPath.values()];
@@ -1922,6 +1965,11 @@ export function buildRenderItems(
           j++;
         }
         const update = findTaskUpdate(taskUpdates, msg);
+        const durableStatus = lookupSubagentRunStatus(
+          opts?.subagentRunStatuses,
+          msg.toolUseId,
+          update,
+        );
         if (msg.toolUseId) renderedTaskKeys.add(msg.toolUseId);
         if (update?.taskId) renderedTaskKeys.add(update.taskId);
         if (update?.parentToolUseId) renderedTaskKeys.add(update.parentToolUseId);
@@ -1931,6 +1979,7 @@ export function buildRenderItems(
           toolCall: msg,
           update,
           ...(msg.agentTaskStatus ? { persistedStatus: msg.agentTaskStatus } : {}),
+          ...(durableStatus ? { durableStatus } : {}),
           ...(result !== undefined && !shouldHideToolResult(toolName, result) ? { result } : {}),
           ...(resultTsMs !== undefined ? { resultTsMs } : {}),
         });
@@ -2211,10 +2260,12 @@ export function buildRenderItems(
         continue;
       }
       seenTaskIds.add(update.taskId);
+      const durableStatus = lookupSubagentRunStatus(opts?.subagentRunStatuses, undefined, update);
       const item: AgentTaskRenderItem = {
         type: 'agent_task',
         key: `task-update-${primaryKey}`,
         update,
+        ...(durableStatus ? { durableStatus } : {}),
       };
       const itemMs = renderItemStartMs(item);
       if (itemMs === null) {
@@ -2265,6 +2316,7 @@ export function buildCachedRenderItems(
     opts?.turnChangeSets,
     opts?.workingDir,
     opts?.botSessionId,
+    opts?.subagentRunStatuses,
   ];
   const index = recentRenderProjections.findIndex((entry) =>
     entry.dependencies.every((value, i) => Object.is(value, dependencies[i])),
@@ -2458,6 +2510,7 @@ function renderWorkGroupChild(
     sessionTitle?: string | null;
     agentKind?: 'cc' | 'codex' | 'pi';
     remoteHostId?: string | null;
+    sessionSource?: string | null;
     isSessionStreaming: boolean;
     firstUserMessageClientId: string | null;
     lastUserMessageClientId: string | null;
@@ -2482,6 +2535,7 @@ function renderWorkGroupChild(
         update={item.update}
         result={item.result}
         persistedStatus={item.persistedStatus}
+        durableStatus={item.durableStatus}
         sessionAgentKind={props.agentKind}
         {...(props.sessionId ? { sessionId: props.sessionId } : {})}
         subagentModel={
@@ -2505,6 +2559,7 @@ function renderWorkGroupChild(
         sessionTitle={props.sessionTitle}
         agentKind={props.agentKind}
         remoteHostId={props.remoteHostId}
+        sessionSource={props.sessionSource}
         sessionRunning={props.isSessionStreaming}
         assistantForkBlocked={shouldBlockAssistantFork(
           props.isSessionStreaming,
@@ -2536,6 +2591,7 @@ export function MessageStream({
   sessionTitle,
   agentKind,
   remoteHostId,
+  sessionSource,
   workingDir,
   assistantAvatar,
   simplifiedBotConversation = false,
@@ -2546,6 +2602,7 @@ export function MessageStream({
   historyLoaded,
   historyCleared = false,
   taskUpdates,
+  subagentRunStatuses,
   isSessionStreaming = false,
   continuationTurnClientId = null,
   continuationInFlightProjectionCapability = 'unknown',
@@ -2801,6 +2858,7 @@ export function MessageStream({
       markdownImageTargetCache: markdownImageTargetCacheRef.current,
       cindyMakeSessionId,
       cindyMakeCompletionInComposer,
+      subagentRunStatuses,
     });
     if (historyView && historySnapshot?.ready) {
       const results = new Map(built.singleResultMap);
@@ -2816,15 +2874,17 @@ export function MessageStream({
           (row.isPendingPersist === true ||
             !!row.blockedByGhost ||
             !!row.localSendPrecedingClientIds),
-        build: (rows) => {
+        build: (rows, _streaming, historyArtifacts) => {
           // History chunks are freshly assembled arrays, not reusable source snapshots.
           const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
             historyWindowIncomplete: true,
+            historyArtifacts,
             workingDir,
             botSessionId: simplifiedBotConversation ? sessionId : undefined,
             markdownImageTargetCache: markdownImageTargetCacheRef.current,
             cindyMakeSessionId,
             cindyMakeCompletionInComposer,
+            subagentRunStatuses,
           });
           for (const [key, value] of chunk.singleResultMap) results.set(key, value);
           return groupWorkRuns(chunk.items, isSessionStreaming);
@@ -2880,6 +2940,7 @@ export function MessageStream({
     handoff,
     isSessionStreaming,
     taskUpdates,
+    subagentRunStatuses,
     ghostCardSnapshot,
     historyLoaded,
     hasMoreMessages,
@@ -2900,7 +2961,15 @@ export function MessageStream({
   );
   // subagent-model-chip: parentToolUseId(Agent/Task 行 id)→ 子代理模型,
   // 供 AgentActionsBlock 给 Agent/Task 行反查并渲染模型 chip。
-  const subagentModelByToolUseId = useMemo(() => buildSubagentModelMap(messages), [messages]);
+  const subagentModelByToolUseId = useMemo(() => {
+    const models = buildSubagentModelMap(messages);
+    for (const summary of historyWorkSummaries(historySnapshot?.items ?? [])) {
+      if (summary.parentToolUseId && summary.model && !models.has(summary.parentToolUseId)) {
+        models.set(summary.parentToolUseId, summary.model);
+      }
+    }
+    return models;
+  }, [messages, historySnapshot?.items]);
 
   // work-group pass:把最终回答前的工作过程折叠成 work_group,无最终回答时
   // 继续走旧的 tool_segment + thinking 折叠兼容路径。
@@ -5916,6 +5985,7 @@ export function MessageStream({
                           update={item.update}
                           result={item.result}
                           persistedStatus={item.persistedStatus}
+                          durableStatus={item.durableStatus}
                           sessionAgentKind={agentKind}
                           {...(sessionId ? { sessionId } : {})}
                           subagentModel={
@@ -5965,6 +6035,7 @@ export function MessageStream({
                               sessionTitle,
                               agentKind,
                               remoteHostId,
+                              sessionSource,
                               isSessionStreaming,
                               firstUserMessageClientId,
                               lastUserMessageClientId,
@@ -6110,6 +6181,7 @@ export function MessageStream({
                         localFileRefs={localFileRefs}
                         assistantAvatar={assistantAvatar}
                         simplifiedBotConversation={simplifiedBotConversation}
+                        sessionSource={sessionSource}
                       />
                     );
                     const highlightClass =
@@ -6295,6 +6367,7 @@ const MessageItem = memo(function MessageItem({
   localFileRefs,
   assistantAvatar,
   simplifiedBotConversation,
+  sessionSource,
 }: {
   message: ChatMessage;
   toolResult?: string;
@@ -6346,6 +6419,7 @@ const MessageItem = memo(function MessageItem({
   assistantAvatar?: ReactNode;
   /** 伙伴对话消息操作栏使用轻量常显变体。 */
   simplifiedBotConversation?: boolean;
+  sessionSource?: string | null;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
   // 「已自动继续」分隔线,必须在 synthetic early-return 之前检查,否则分隔线被吞。
@@ -6501,6 +6575,7 @@ const MessageItem = memo(function MessageItem({
           reason={message.errorReason}
           providerId={message.errorProviderId}
           toolLoop={message.toolLoop}
+          sessionSource={sessionSource}
         />
       );
     case 'thinking':

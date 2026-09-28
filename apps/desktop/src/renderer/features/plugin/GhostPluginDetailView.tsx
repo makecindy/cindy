@@ -15,35 +15,15 @@ import {
   AppWindow,
   AlertTriangle,
   ArrowUp,
-  Bot,
   ChevronDown,
   Copy,
-  Cpu,
   Download,
   MessageCircle,
-  FileCode2,
-  FilePen,
   FolderOpen,
-  FolderPlus,
-  Globe,
-  GraduationCap,
-  KeyRound,
   LayoutTemplate,
-  Library,
-  MapPin,
-  Megaphone,
-  MessageCircleQuestion,
   MoreVertical,
-  PanelLeft,
-  PanelRight,
-  Radio,
-  Smartphone,
-  Sparkles,
-  Terminal,
   Trash2,
-  Wrench,
   X,
-  type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -62,7 +42,6 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
-import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import {
   isOfficialGhostId,
@@ -75,6 +54,7 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { IOSSimulatorPreferences } from './IOSSimulatorPreferences';
 import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
 import { ghostPrimaryAction } from './lib/ghostPluginViewModel';
+import { permissionItemIcon } from './lib/permissionItemIcon';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 import './plugin-motion.css';
 
@@ -107,44 +87,6 @@ interface GhostPluginDetailViewProps {
   onExport?: () => void;
   toggleDisabled: boolean;
   onIconLoadError?: () => void;
-}
-
-const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
-  cindy: Sparkles,
-  agent: Bot,
-  node: Cpu,
-  tool: Wrench,
-  command: Terminal,
-  panel: PanelRight,
-  'main-view': AppWindow,
-  code: FileCode2,
-  subscribe: Radio,
-  card: LayoutTemplate,
-  network: Globe,
-  notify: Megaphone,
-  confirm: MessageCircleQuestion,
-  fs: FilePen,
-  library: Library,
-  'session-context': MapPin,
-  pick: FolderOpen,
-  preview: AppWindow,
-  skill: GraduationCap,
-  'ios-simulator': Smartphone,
-  workspace: FolderPlus,
-};
-
-/** Chooses a visual affordance without changing the host-owned permission title or meaning. */
-function permissionItemIcon(item: GhostPermissionItem): LucideIcon {
-  if (item.labelKey === 'panelLeft') return PanelLeft;
-  if (
-    item.labelKey === 'networkSecret' ||
-    item.labelKey === 'networkSecretOauth' ||
-    item.labelKey === 'networkSecretGhCli' ||
-    item.labelKey === 'networkSecretIdentity'
-  ) {
-    return KeyRound;
-  }
-  return PERMISSION_ICON[item.kind];
 }
 
 const DETAIL_SECTION_CLASS = 'mt-10';
@@ -1032,6 +974,7 @@ function DialogFrame({ children }: { children: ReactNode }) {
         style={WINDOW_NO_DRAG_STYLE}
       />
       <Dialog.Content
+        onPointerDownOutside={(event) => event.preventDefault()}
         className="fixed left-1/2 top-1/2 z-[10000] flex max-h-[70vh] w-[calc(100vw-48px)] max-w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)] focus:outline-none"
         style={WINDOW_NO_DRAG_STYLE}
       >

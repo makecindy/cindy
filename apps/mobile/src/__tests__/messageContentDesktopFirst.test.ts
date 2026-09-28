@@ -108,9 +108,13 @@ describe('mobile message content desktop-first surface', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
     const tokenSource = readFileSync(resolve(process.cwd(), 'src/theme/tokens.ts'), 'utf8');
 
-    expect(tokenSource).toContain('code: 15');
+    expect(tokenSource).toContain('bodySmall: 15');
     expect(source).toContain('messageText: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge }');
-    expect(source.match(/fontSize: typeScale\.code/g)).toHaveLength(4);
+    // 行内代码、代码块、表格、待办四处保持 15 号(bodySmall,原 code 档)。
+    for (const name of ['markdownInlineCode', 'markdownCodeText', 'markdownTableCell', 'todoText']) {
+      const block = source.match(new RegExp(`\\n\\s*${name}: \\{[^{}]*\\}`))?.[0] ?? '';
+      expect(block, name).toContain('fontSize: typeScale.bodySmall');
+    }
   });
 
   it('keeps message content readable on iPad and phone landscape', () => {

@@ -16,9 +16,10 @@ export function projectScheduleSidebarIndex(
     const existing = next.get(run.sessionId);
     const unreadRunIds = existing?.unreadRunIds ? [...existing.unreadRunIds] : [];
     const unreadFailedRunIds = existing?.unreadFailedRunIds ? [...existing.unreadFailedRunIds] : [];
-    // 只对未读 run 累加(与 isUnreadScheduleRun 对齐)。failed / interrupted
-    // 未读 run 拉高本 session 的 urgency 让侧栏涂红而不是涂绿。
-    const isRunUnread = isUnreadScheduleRun(run);
+    // Match the in-task warning: recovered failures stay in history, but must
+    // not keep a red dot (or become a false completion dot after recovery).
+    const isUnreadFailure = activeFailures.has(run.runId) && isUnreadFailedScheduleRun(run);
+    const isRunUnread = isUnreadScheduleRun(run) && (run.status === 'success' || isUnreadFailure);
     if (isRunUnread) unreadRunIds.push(run.runId);
     let latestFailedRun = existing?.latestFailedRun;
     if (activeFailures.has(run.runId)) {
@@ -27,7 +28,7 @@ export function projectScheduleSidebarIndex(
         latestFailedRun = candidate;
     }
     let latestUnreadFailedRunId = existing?.latestUnreadFailedRunId;
-    if (isUnreadFailedScheduleRun(run)) {
+    if (isUnreadFailure) {
       unreadFailedRunIds.push(run.runId);
       const firedAt = run.firedAt ?? 0;
       if (firedAt >= (latestUnreadFailedFiredAt.get(run.sessionId) ?? Number.NEGATIVE_INFINITY)) {

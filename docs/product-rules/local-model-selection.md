@@ -35,12 +35,14 @@
 当前候选、推荐和门槛读取活动 Registry；不要根据文档中的旧型号表重建名单。
 2026-09-05 的型号取舍、量化标签、性能来源和未验证项保留在
 [历史证据快照](../model-catalog-history.md)，它不是今天的推荐清单。
+最近一轮网页研究、包装核验及未验证项见
+[2026-09-24 复核](../local-model-audit-2026-09-24.md)。
 架构、代码导航和完整发布步骤见 [模型配置与下发](../dev-rules/model-catalog-maintenance.md)。
 
 ## 实现边界与以后更新
 
-- 数据正本：Server 的 `model-access-server/catalog/providers.json` 中
-  `modelRegistry.localModels`；客户端离线副本位于
+- 数据正本：Server 的 `model-access-server/catalog/source/registry/local-models.json`
+  分片（由 `scripts/generateCatalog.mjs` 组装为 `modelRegistry.localModels`）；客户端离线副本位于
   `packages/model-providers/catalog/model-registry.json` 的 `localModels`。
   算法入口仍为 `apps/desktop/src/shared/localModelRuntime.ts`。
   `featuredIds` 按能力、速度顺序列推荐；`models` 中的候选不会自动补位。
@@ -59,7 +61,7 @@
 
 以下是双方需满足的协议合同，是否已部署按 [发布验收](../dev-rules/model-catalog-maintenance.md#release) 核对。
 
-- 复用现有匿名目录接口，客户端请求 `registrySchemaVersion=4`，本地域为
+- 复用现有匿名目录接口，当前客户端请求 `registrySchemaVersion=5&registryMedia=1`，本地域为
   `modelRegistry.localModels = { version: 1, models, featuredIds }`。共享 Registry
   的 `updatedAt`、校验、缓存与刷新事件，不另建请求或持久化层。
 - 服务端下发名称、搜索别名、具体包装、内存提示、五语简介、证据链接及推荐顺序。
@@ -68,14 +70,16 @@
   的三个 Qwen3.8 27B 标签，远程数据不能提供命令、路径或任意下载 URL。
 - 明确的空 `models` / `featuredIds` 分别撤下目录 / 推荐；字段缺失表示旧服务端，
   使用随包本地域。网络失败、非法数据和 revision 冲突沿用已有合法快照。
-- 发布顺序为服务端先行、客户端随后。旧客户端默认收到 Registry V2；显式请求
-  V1/V2/V3 时剥离新字段。各响应版本有独立内容 ETag，不能跨版本误命中 304。
+- 发布顺序为服务端先行、客户端随后。未声明 media 能力的旧客户端收到冻结目录；
+  默认为 Registry V2，显式请求 V1/V2/V3 时剥离本地域。声明 media 能力的 V4/V5
+  响应才包含本轮更新。各响应版本有独立内容 ETag，不能跨版本误命中 304。
 - 每次先在 Server 正本更新取舍记录和本地域，增加整个 Registry 的 `updatedAt`，
   再把完整 Registry（含 `baseModels` 与 `modelRef`）同步到客户端离线副本，核对同 revision、同内容。
   同步不改写用户显式档位或供应商实报默认档；历次同步状态见历史记录，不能当作生产发布证据。
   后续服务端 revision 必须高于已发布版本，禁止只复制本地域或使用相同 revision 发布不同内容。
 - 本地与云端接入可用 `modelRef` 引用同一公共型号；量化包装、内存与推荐证据独立留在本地域。
   用户文件可覆盖推荐及单项资料，优先级见 [模型资料优先级](model-metadata-precedence.md)。
-- 若生产配置了 `MODEL_CATALOG_URL`，还须同步该覆盖源；只修改制品内置目录不能证明
-  线上生效。部署后核对 V4 响应、旧版响应与新客户端刷新；离线首次启动核对随包兜底。
+- 当前 Server 源码从分片生成并仅加载制品内目录，已不读取 `MODEL_CATALOG_URL`；
+  这不证明目标环境已部署该版本。部署后核对带 media 能力的 V4/V5 响应、旧版冻结响应
+  与新客户端刷新；离线首次启动核对随包兜底。
 - 目录撤下或调整顺序不卸载、切换用户模型，也不修改已有供应商和执行中的配置。

@@ -199,7 +199,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
       )}
     >
       {/* Title row: heading + type toggle */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="cindy-segmented-row">
         <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
           {t('issueAgent.confirm.title')}
         </p>

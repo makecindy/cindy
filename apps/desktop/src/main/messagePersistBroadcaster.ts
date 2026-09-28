@@ -2070,9 +2070,12 @@ export function onStandaloneTextEvent(
  */
 export function onAssistantTextEvent(
   sessionId: string,
-  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown },
+  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown; phase?: string; runtimeRecovery?: boolean },
   agentMeta: AgentMeta | null,
 ): string | undefined {
+  if (typeof data.phase === 'string' || data.runtimeRecovery === true) {
+    agentMeta = { ...agentMeta, assistantPhase: data.runtimeRecovery === true ? 'commentary' : data.phase as string };
+  }
   const rawText = typeof data.text === 'string' ? data.text : '';
   const isFinal = data.isFinal === true;
   const isFullText = data.isFullText === true;

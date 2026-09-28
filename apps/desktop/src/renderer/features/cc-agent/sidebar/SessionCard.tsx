@@ -1,4 +1,5 @@
 import { SessionTaskMenu } from './SessionTaskMenu';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
 import { Button } from '@/components/ui/button';
 /**
@@ -163,6 +164,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
   const ordinalBadge = useSessionOrdinalBadge(session.id);
   const ordinalBadgeLabel = navigationOnly ? null : ordinalBadge;
+  const canOpenTaskMenu = !navigationOnly || isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
   const islandActivity = useAgentIslandActivity(session.id);
   // list 变体与文字模式共用右侧状态优先级:
@@ -557,25 +559,14 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     session.status !== 'archived';
 
   const moveToProjectSubmenu = canMoveToProject ? (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
-        <span className="flex-1">{t('ccAgent.sidebar.sessionMenu.moveToProject')}</span>
-        <ChevronRight size={14} className="ml-2 shrink-0 text-[var(--cmd-palette-item-meta)]" />
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent
-        sideOffset={4}
-        className={cn(MENU_SUB_CONTENT_CLASS, 'w-[320px] overflow-hidden')}
-      >
-        <SessionProjectMoveSubmenu
-          projectOptions={projectOptions}
-          currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
-          isDialogue={session.workspaceKind === 'dialogue'}
-          onSelectProject={handleMoveToProjectSelect}
-          onBrowseProject={handleMoveToProjectBrowse}
-          onMoveToDialogue={handleMoveToDialogue}
-        />
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
+    <SessionProjectMoveSubmenu
+      projectOptions={projectOptions}
+      currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
+      isDialogue={session.workspaceKind === 'dialogue'}
+      onSelectProject={handleMoveToProjectSelect}
+      onBrowseProject={handleMoveToProjectBrowse}
+      onMoveToDialogue={handleMoveToDialogue}
+    />
   ) : null;
 
   const statusIconNode = (
@@ -689,8 +680,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
         }
         e.preventDefault();
         e.stopPropagation();
-        if (navigationOnly) return;
-        prefetchRemovalPreflight();
+        if (!canOpenTaskMenu) return;
+        if (!navigationOnly) prefetchRemovalPreflight();
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
       className={cn(
@@ -1078,7 +1069,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       )}
 
       {/* 右键菜单——与 SessionItem 同款 coordinate-anchored DropdownMenu */}
-      {!navigationOnly && !isEditing && (
+      {canOpenTaskMenu && !isEditing && (
         <DropdownMenu
           open={menuPos !== null}
           onOpenChange={(open) => {

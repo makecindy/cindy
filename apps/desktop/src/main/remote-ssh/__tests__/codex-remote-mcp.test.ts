@@ -364,6 +364,87 @@ describe('mergeManagedMcpBlock helper-scalar residue (#4776)', () => {
     return parsed;
   };
 
+  /**
+   * The *actual* output of the old merge after N refreshes (#4946): it stopped stripping the
+   * managed table at `enabled`, kept that scalar group beneath whatever table preceded the
+   * managed block (here the project table) and appended the rebuilt block at EOF — so the
+   * orphan groups stack up *before* BEGIN, not after END.
+   */
+  const legacyPrefixResidue = (orphanCopies: number): string[] => [
+    'model = "gpt-5.5"',
+    '',
+    '[projects."/home/u/repo"]',
+    'trust_level = "trusted"',
+    '',
+    ...Array.from({ length: orphanCopies }, () => [
+      'enabled = false',
+      'startup_timeout_sec = 600',
+      'tool_timeout_sec = 600',
+      '',
+    ]).flat(),
+    BEGIN,
+    '# cindy-token-fingerprint: fp-old',
+    '[mcp_servers.cindy_orca]',
+    'url = "http://127.0.0.1:47000/mcp/cindy_orca"',
+    'bearer_token_env_var = "LIZI_MCP_TOKEN"',
+    '',
+    '[mcp_servers.cindy_helper]',
+    'url = "http://127.0.0.1:47000/mcp/cindy_helper"',
+    'bearer_token_env_var = "LIZI_MCP_TOKEN"',
+    'enabled = false',
+    'startup_timeout_sec = 600',
+    'tool_timeout_sec = 600',
+    END,
+    '',
+  ];
+
+  it('recovers duplicated helper scalars the old merge left before the begin marker (#4946)', () => {
+    const broken = legacyPrefixResidue(3).join('\n');
+    // Three old refreshes → three copies under the project table → duplicate keys, codex refuses to start.
+    expect(() => parseToml(broken)).toThrow();
+    let config = broken;
+    for (let refresh = 0; refresh < 5; refresh += 1) {
+      const { next, strippedUserServers } = mergeManagedMcpBlock(config, block, { serverNames: HELPER_SERVERS });
+      expect(strippedUserServers, `refresh ${refresh}`).toEqual([]);
+      expect(() => parseToml(next), `refresh ${refresh}`).not.toThrow();
+      const parsed = parseToml(next) as Record<string, any>;
+      expect(parsed.model).toBe('gpt-5.5');
+      expect(parsed.projects['/home/u/repo'].trust_level).toBe('trusted');
+      // The orphan groups never belonged to the project table; none of them may survive there.
+      expect(parsed.projects['/home/u/repo'].enabled, `refresh ${refresh}`).toBeUndefined();
+      expect(parsed.projects['/home/u/repo'].startup_timeout_sec, `refresh ${refresh}`).toBeUndefined();
+      expect(parsed.mcp_servers.cindy_helper.enabled).toBe(false);
+      expect(next.match(/# >>> cindy-remote-mcp/g), `refresh ${refresh}`).toHaveLength(1);
+      config = next;
+    }
+    expect(mergeManagedMcpBlock(config, block, { serverNames: HELPER_SERVERS }).changed).toBe(false);
+  });
+
+  it('keeps a single legitimate user scalar group that sits before the begin marker (#4946)', () => {
+    // A user-authored table right before the managed block: unique keys, valid TOML — must not be touched.
+    const config = [
+      'model = "gpt-5.5"',
+      '',
+      '[mcp_servers.my_custom]',
+      'url = "http://127.0.0.1:22222/mcp/my_custom"',
+      'enabled = true',
+      'startup_timeout_sec = 30',
+      '',
+      BEGIN,
+      '# cindy-token-fingerprint: fp-old',
+      '[mcp_servers.cindy_orca]',
+      'url = "http://127.0.0.1:47000/mcp/cindy_orca"',
+      'bearer_token_env_var = "LIZI_MCP_TOKEN"',
+      END,
+      '',
+    ].join('\n');
+    const { next } = mergeManagedMcpBlock(config, block, { serverNames: HELPER_SERVERS });
+    const parsed = parseToml(next) as Record<string, any>;
+    expect(parsed.mcp_servers.my_custom.enabled).toBe(true);
+    expect(parsed.mcp_servers.my_custom.startup_timeout_sec).toBe(30);
+    expect(parsed.mcp_servers.my_custom.url).toBe('http://127.0.0.1:22222/mcp/my_custom');
+  });
+
   it('stays valid TOML across five refreshes starting from the pre-fix layout', () => {
     let config = [...USER_LINES, ...legacyManaged(1)].join('\n');
     for (let refresh = 0; refresh < 5; refresh += 1) {

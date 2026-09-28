@@ -177,15 +177,16 @@ import { HomeSuggestionList } from './HomeSuggestionList';
 import { type HomeSuggestionId, homeSuggestionPromptKey } from './homeSuggestions';
 import {
   buildHomeTaskCatalog,
+  pluginSuggestionComposerText,
   readPluginRecommendationSnapshot,
   type HomeTaskSuggestion,
 } from './pluginHomeSuggestions';
+import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
   startPendingPluginSuggestion,
   takePendingPluginSuggestion,
   type PluginSuggestionRequest,
 } from './pendingPluginSuggestion';
-import { expandGhostCommand } from '@/cindy-brain/ghostCommand';
 import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import {
@@ -282,7 +283,7 @@ import { makeMirrorAccessors, replaceScope, clearScope } from '@/state/deviceLin
 import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
 import { resolveNewMakerDraftRightSidebar } from './newMakerDraftRightSidebar';
 import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
-import { resolveSshSessionModelSelection, SshModelSelectionError } from './sshSessionModelSelection';
+import { loadSshSessionModelSelection, SshModelSelectionError } from './sshSessionModelSelection';
 import { closeAllTabs as closeRightSidebarTabs } from '@/features/right-sidebar/store';
 import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-workers/actions';
 import { normalizeProjectKey } from './lib/projectGrouping';
@@ -684,6 +685,8 @@ export function NewMakerDraftRoute() {
           ? 'ccAgent.draft.remoteProviderUnsupported'
           : code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
             ? 'ccAgent.draft.remoteNativeOauthUnavailable'
+            : code === 'CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE'
+            ? 'ccAgent.draft.claudeSubscriptionWorkspaceOverride'
             : // 轮 40-w4-t3 HIGH:远端 Pi 会话启动时 Cindy AI gateway endpoint
               // 未就绪 —— main 侧已映射同名 IPC code, 这里走已存在 5 语言的
               // logic.errors.remoteError.REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE
@@ -2379,8 +2382,9 @@ export function NewMakerDraftRoute() {
       // 立即建会话记录并 navigate 过去。建会话约定与本文件其它 createSession 路径一致
       // (createSession + makerChatStore.setSessionRuntime + navigate)。
       //
-      // SSH uses the controller catalog; device-link keeps its own discovery path.
-      const selection = resolveSshSessionModelSelection({
+      // Codex reads the selected SSH host; other harnesses retain their existing routing.
+      const sshOwner = getDataOwnerGeneration();
+      const selection = await loadSshSessionModelSelection(target.hostId, {
         providers: localProviders,
         loading: localProvidersLoading,
         loadFailed: localProvidersLoadFailed,
@@ -2393,6 +2397,7 @@ export function NewMakerDraftRoute() {
         },
         getPresetEffort: getProviderModelEffort,
       });
+      if (!isDataOwnerGenerationCurrent(sshOwner)) return;
       if (!selection.ok) {
         throw new SshModelSelectionError(selection.reason);
       }
@@ -4991,32 +4996,58 @@ export function NewMakerDraftRoute() {
     return proceed;
   }, [vendorAuthGate]);
 
-  const handleHomeSuggestion = useCallback(
-    (id: HomeSuggestionId) => {
-      if (sendInFlightRef.current) return;
-      const prompt = t(homeSuggestionPromptKey(id));
-      void handleSend(
-        prompt,
-        draftInitialModel,
-        (draftInitialEffort ?? 'medium') as Effort,
-        chatInitialPermissionMode,
-        attachmentState.attachments,
-        undefined,
-        {
-          providerId: chatInitialProviderId,
-          recoveryDraftDoc: plainTextToTiptapDoc(prompt),
-        },
-      );
+  // 首页任务建议:悬停只在输入框里预览 prompt,点击把完整 prompt 填进输入框交给用户
+  // 改写后自己发送,不再直接替用户发出。填入走草稿存储的外部写入通道,ChatInput 订阅后
+  // 替换正文并把光标放到末尾;附件等其余草稿内容原样保留。输入框锁定(发送中 / 语音占用)
+  // 时不写入,免得覆盖进行中的语音稿或待发正文。预览与填入共用同一份文字计算。
+  const [suggestionPreview, setSuggestionPreview] = useState<string | null>(null);
+  const composerMutationLockedRef = useRef(false);
+  const handleComposerMutationLockChange = useCallback((locked: boolean) => {
+    composerMutationLockedRef.current = locked;
+  }, []);
+  const fillComposerWithSuggestion = useCallback((prompt: string): boolean => {
+    if (sendInFlightRef.current || composerMutationLockedRef.current) return false;
+    const existing = getComposerDraft(NEW_MAKER_DRAFT_KEY);
+    saveComposerDraft(NEW_MAKER_DRAFT_KEY, {
+      ...existing,
+      text: plainTextToTiptapDoc(prompt),
+      attachments: existing?.attachments ?? [],
+    });
+    return true;
+  }, []);
+  // 一条建议「点击后会填入的文字」的唯一计算:视觉预览与读屏描述都用它,点击填入走同一个
+  // pluginSuggestionComposerText。插件可用时带 $指令(或插件调用说明);需要先安装的插件
+  // 点击后走安装引导、不会立即填入,只显示建议本身。插件清单变化时随之重算。
+  // 可用插件表按插件清单与工作目录缓存:filterGhostsForWorkdir 会同步查询目录禁用表,
+  // 不能在每次渲染 / 每条建议上重复调用。
+  const installedGhosts = useInstalledGhosts();
+  const usableSuggestionGhosts = useMemo(
+    () =>
+      new Map(
+        filterGhostsForWorkdir(installedGhosts, effectiveWorkingDir)
+          .filter((g) => g.enabled)
+          .map((g) => [g.manifest.id, g]),
+      ),
+    [effectiveWorkingDir, installedGhosts],
+  );
+  const suggestionComposerText = useCallback(
+    (suggestion: HomeTaskSuggestion) => {
+      const ghost = suggestion.pluginId
+        ? usableSuggestionGhosts.get(suggestion.pluginId)
+        : undefined;
+      return ghost ? pluginSuggestionComposerText(suggestion.prompt, ghost, t) : suggestion.prompt;
     },
-    [
-      attachmentState.attachments,
-      chatInitialPermissionMode,
-      chatInitialProviderId,
-      draftInitialEffort,
-      draftInitialModel,
-      handleSend,
-      t,
-    ],
+    [t, usableSuggestionGhosts],
+  );
+  const handleSuggestionPreview = useCallback(
+    (suggestion: HomeTaskSuggestion | null) =>
+      setSuggestionPreview(suggestion ? suggestionComposerText(suggestion) : null),
+    [suggestionComposerText],
+  );
+
+  const handleHomeSuggestion = useCallback(
+    (id: HomeSuggestionId) => fillComposerWithSuggestion(t(homeSuggestionPromptKey(id))),
+    [fillComposerWithSuggestion, t],
   );
 
   const pluginSuggestionFlight = useRef(false);
@@ -5105,28 +5136,12 @@ export function NewMakerDraftRoute() {
           navigate(`${route}&recommendation=${encodeURIComponent(nonce)}`);
           return;
         }
-        const recoveryPrompt = ghost.manifest.command
-          ? `$${ghost.manifest.command} ${suggestion.prompt}`
-          : `${suggestion.prompt}\n\n${t('newChat.pluginSuggestions.usePlugin', { name: ghost.manifest.name, id: ghost.manifest.id })}`;
-        // Retry goes through ChatInput, which expands $commands itself.
-        const prompt = ghost.manifest.command
-          ? expandGhostCommand(recoveryPrompt, [ghost])
-          : recoveryPrompt;
-        await handleSend(
-          prompt,
-          request.model,
-          request.effort,
-          request.permissionMode,
-          request.files,
-          undefined,
-          {
-            providerId: request.providerId,
-            recoveryDraftDoc: plainTextToTiptapDoc(recoveryPrompt),
-            onAccepted: () => {
-              void window.electronAPI.ghosts.markUsed(ghost.manifest.id).catch(() => undefined);
-            },
-          },
-        );
+        // 填进输入框而不是直接发送;ChatInput 发送时会自己展开 $command。无指令插件发送时
+        // 识别不出所用插件,所以选中插件建议并成功填入即记一次最近使用(有指令的插件发送时
+        // 还会再记一次,只刷新时间,不影响排序语义)。
+        if (fillComposerWithSuggestion(pluginSuggestionComposerText(suggestion.prompt, ghost, t))) {
+          void window.electronAPI.ghosts.markUsed(ghost.manifest.id).catch(() => undefined);
+        }
       } catch {
         if (pluginSuggestionMounted.current)
           toast.error(t('newChat.pluginSuggestions.unavailable'));
@@ -5135,7 +5150,7 @@ export function NewMakerDraftRoute() {
       }
     },
     [
-      handleSend,
+      fillComposerWithSuggestion,
       i18n.language,
       i18n.resolvedLanguage,
       isDeviceLinkDraft,
@@ -5153,20 +5168,10 @@ export function NewMakerDraftRoute() {
         ownerId: dataOwnerId,
         targetKey: pluginSuggestionTargetKey,
         workingDir: effectiveWorkingDir,
-        model: draftInitialModel,
-        effort: (draftInitialEffort ?? 'medium') as Effort,
-        permissionMode: chatInitialPermissionMode,
-        providerId: chatInitialProviderId,
-        files: attachmentState.attachments,
       });
     },
     [
-      attachmentState.attachments,
-      chatInitialPermissionMode,
-      chatInitialProviderId,
       dataOwnerId,
-      draftInitialEffort,
-      draftInitialModel,
       effectiveWorkingDir,
       pluginSuggestionTargetKey,
       runPluginSuggestion,
@@ -5403,6 +5408,8 @@ export function NewMakerDraftRoute() {
                     visualVariant="create-agent"
                     compactToolbar
                     placeholder={t('newChat.chatInput.createAgentPlaceholder')}
+                    previewPrompt={suggestionPreview}
+                    onMutationLockChange={handleComposerMutationLockChange}
                     sessionId={undefined}
                     initialWorkingDir={effectiveWorkingDir}
                     remoteHostId={draft.remoteHostId ?? null}
@@ -5576,6 +5583,8 @@ export function NewMakerDraftRoute() {
                     onSelect={handleHomeSuggestion}
                     includePlugins={!isRemoteProjectDraft && !isDeviceLinkDraft}
                     onPluginSelect={handlePluginSuggestion}
+                    onPreviewChange={handleSuggestionPreview}
+                    composerTextFor={suggestionComposerText}
                   />
                 )}
                 {/* 首页「新建目标」弹窗:无 sessionId → onCreate 建会话并 setGoal(见 handleCreateGoal)。

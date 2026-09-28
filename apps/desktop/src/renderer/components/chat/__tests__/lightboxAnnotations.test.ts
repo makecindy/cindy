@@ -4,6 +4,7 @@ import {
   ANNOTATION_STROKE_COLOR,
   annotationStrokeWidth,
   drawStrokesOnCanvas,
+  extendDraftSvgPath,
   normalizePoint,
   shouldAppendPoint,
   strokeToSvgPath,
@@ -25,6 +26,10 @@ describe('normalizePoint', () => {
   it('returns null for a degenerate rect', () => {
     expect(normalizePoint(1, 1, { left: 0, top: 0, width: 0, height: 100 })).toBeNull();
   });
+
+  it('quantizes captured coordinates to 4 decimals (shared core)', () => {
+    expect(normalizePoint(100 + 400 / 3, 50 + 200 / 7, rect)).toEqual({ x: 0.3333, y: 0.1429 });
+  });
 });
 
 describe('shouldAppendPoint', () => {
@@ -42,6 +47,11 @@ describe('annotationStrokeWidth', () => {
     expect(annotationStrokeWidth(200, 100)).toBe(4); // 0.5 → floor 4
     expect(annotationStrokeWidth(4000, 2000)).toBe(10);
     expect(annotationStrokeWidth(20000, 20000)).toBe(24); // capped
+  });
+
+  it('thickens very long screenshots so the mark survives model downscaling', () => {
+    // 1000×8000:旧公式只有 5px,缩到 1568 长边后不足 1px;共享核心保证 ≥3px。
+    expect(annotationStrokeWidth(1000, 8000)).toBeGreaterThan(5);
   });
 });
 
@@ -101,5 +111,27 @@ describe('drawStrokesOnCanvas', () => {
     const { ctx, calls } = fakeCtx();
     drawStrokesOnCanvas(ctx, [{ points: [] }], 100, 100);
     expect(calls.filter((c) => c === 'beginPath')).toHaveLength(0);
+  });
+});
+
+describe('extendDraftSvgPath', () => {
+  it('builds the in-progress path incrementally, identical to strokeToSvgPath', () => {
+    const points: Array<{ x: number; y: number }> = [];
+    let cache = null as ReturnType<typeof extendDraftSvgPath> | null;
+    const samples = [
+      { x: 0.1, y: 0.1 },
+      { x: 0.2, y: 0.15 },
+      { x: 0.33333, y: 0.4 },
+      { x: 0.9, y: 0.95 },
+      { x: 1, y: 0 },
+    ];
+    for (const sample of samples) {
+      points.push(sample);
+      cache = extendDraftSvgPath(points, 640, 480, cache);
+      expect(cache.d).toBe(strokeToSvgPath({ points: [...points] }, 640, 480));
+    }
+    // 尺寸变化时全量重算。
+    cache = extendDraftSvgPath(points, 320, 240, cache);
+    expect(cache.d).toBe(strokeToSvgPath({ points: [...points] }, 320, 240));
   });
 });

@@ -1,3 +1,4 @@
+import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -392,6 +393,37 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  it('suppresses scheduled content before persistence and delivery while preserving unrelated replies', async () => {
+    const h = harness();
+    const close = beginQuietScheduledOutput('check', 'check-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'check-run' };
+    try {
+      h.emit(event('text', { text: 'I will check now', isFinal: false }, { turnOrigin: origin }));
+      h.emit(event('text', { text: 'No changes', isFinal: true }, { turnOrigin: origin }));
+      h.emit(event('text', { text: 'Standalone progress' }, { turnOrigin: origin, standaloneText: true }));
+      h.emit(event('tool_use', { id: 'tool', name: 'check', input: {} }, { turnOrigin: origin }));
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('onStandaloneTextEvent')).not.toHaveBeenCalled();
+      expect(h.deps.broadcastToAllWindows).not.toHaveBeenCalled();
+      h.emit(event('text', { text: 'Interactive reply', isFinal: true }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalled();
+    } finally { close(); await h.dispose(); }
+  });
+
+  it('keeps redacted terminal fields redacted for quiet scheduler output', async () => {
+    const h = harness();
+    const close = beginQuietScheduledOutput('check', 'redaction-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'redaction-run' };
+    h.deps.redactEventForRenderer.mockImplementation(value => ({ ...value, data: { result: 'redacted result', metadata: 'safe' } }));
+    try {
+      h.emit(event('done', { result: 'No changes', metadata: 'private diagnostic' }, { turnOrigin: origin }));
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('private diagnostic');
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('redacted result');
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain('safe');
+    } finally { close(); await h.dispose(); }
+  });
+
   it('delivers Pi notices as durable rows without entering model streaming or turn bookkeeping', async () => {
     const h = harness();
     h.deps.redactEventForRenderer.mockImplementation((value) => value);
@@ -1517,6 +1549,23 @@ describe('Bot adapters in the shared event pipeline', () => {
     expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
       event: expect.objectContaining({ type: 'done', agentMeta: expect.objectContaining({ botPrivateReply: true }) }),
     }));
+  });
+
+  it('attributes group-lane turns as private and hands the terminal to the group chat', async () => {
+    const h = harness();
+    const settleLaneTurn = vi.fn(async () => true);
+    (h.deps as unknown as { botGroupChatServiceHolder: unknown }).botGroupChatServiceHolder = { settleLaneTurn };
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-group:g1:turn:bot-a');
+    h.emit(event('text', { text: '我来补充' }));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenLastCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ agentMeta: expect.objectContaining({ botPrivateReply: true, botGroupLane: true }) }),
+    }));
+    h.emit(event('done', { result: '我来补充' }));
+    await microtasks();
+    expect(settleLaneTurn).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'task', activeInputClientId: 'bot-group:g1:turn:bot-a', outcome: 'done', resultText: '我来补充',
+    }));
+    await h.dispose();
   });
 
   it('carries a pending follow-up into task settlement and remembers compact boundaries without rebuilding early', async () => {

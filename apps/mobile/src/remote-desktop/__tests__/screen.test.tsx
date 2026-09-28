@@ -3516,6 +3516,48 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
     expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
   });
+  it.each(["resolve", "reject", "native fallback"])("isolates renewed control from an old input %s", async (outcome) => {
+    if (outcome === "native fallback") fixture.nativeMedia = true;
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    let settleOld!: () => void;
+    let settleNew!: () => void;
+    if (outcome === "native fallback") {
+      fixture.nativeInput.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+        settleOld = () => resolve(false);
+      })).mockResolvedValue(false);
+    }
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "input" && req.sequence === 1) return new Promise((resolve, reject) => {
+        settleOld = () => outcome === "reject" ? reject(new Error("DESKTOP_VIEW_ONLY")) : resolve({});
+      });
+      if (req.op === "input" && req.sequence === 2) return new Promise((resolve) => {
+        settleNew = () => resolve({});
+      });
+      return original(...args);
+    });
+    const input = (sequence: number) => fixture.message!({ nativeEvent: { data: JSON.stringify({
+      type: "input", epoch: "lease", sequence, events: [{ kind: "move", x: 0.5, y: 0.5 }],
+    }) } });
+    await act(async () => input(1));
+    await act(async () => fixture.message!({ nativeEvent: { data: JSON.stringify({ type: "inputOverflow", epoch: "lease" }) } }));
+    act(() => button("operations").click());
+    await act(async () => button("viewOnly").click());
+    await act(async () => button("viewOnly").click());
+    await act(async () => input(2));
+    expect(requests().filter(r => r.op === "input").map(r => r.sequence)).toContain(2);
+    await act(async () => settleOld());
+    expect(sent().filter(m => m.type === "control").at(-1)).toEqual({ type: "control", enabled: true });
+    expect(sent()).not.toContainEqual({ type: "ack", epoch: "lease", sequence: 1 });
+    await act(async () => input(3));
+    expect(requests().filter(r => r.op === "input").map(r => r.sequence)).not.toContain(3);
+    if (outcome === "native fallback") expect(requests().filter(r => r.op === "input").map(r => r.sequence)).not.toContain(1);
+    await act(async () => settleNew());
+    await act(async () => input(4));
+    expect(requests().filter(r => r.op === "input").map(r => r.sequence)).toContain(4);
+    expect(requests().filter(r => r.op === "stop")).toHaveLength(0);
+  });
   it("retries a timed-out overflow release when the host still reports control", async () => {
     await connect();
     const original = fixture.invoke.getMockImplementation()!;

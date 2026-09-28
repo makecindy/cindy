@@ -3,12 +3,14 @@ import { createReadStream } from 'node:fs';
 import { mkdtemp, open, rm, statfs, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { IncomingMessage } from 'node:http';
+import type { Readable } from 'node:stream';
 
 export interface OversizedBody {
   filePath: string;
   bytes: number;
   signal: AbortSignal;
+  /** The upstream limit is unknown: externalize all eligible attachments once. */
+  upstreamRejected?: boolean;
   /** Account for decoded/published file allocation overhead while recovery is active. */
   reserveAttachment?: () => Promise<void>;
 }
@@ -46,7 +48,7 @@ async function reserveDisk(bytes: number): Promise<number> {
 
 /** Normal requests remain byte-for-byte unchanged. Only overflow spills to disk. */
 export async function collectRecoverableBody(
-  req: IncomingMessage,
+  req: Readable,
   limit: number,
   recover: (body: OversizedBody) => Promise<Buffer | null>,
   signal: AbortSignal,
@@ -309,7 +311,7 @@ export async function recoverInlineAttachments(
     let estimatedBytes = body.bytes;
     let replaced = 0;
     for (const candidate of candidates) {
-      if (estimatedBytes <= targetBytes) break;
+      if (!body.upstreamRejected && estimatedBytes <= targetBytes) break;
       body.signal.throwIfAborted();
       const part = parts.get(candidate.marker)!;
       await body.reserveAttachment?.();

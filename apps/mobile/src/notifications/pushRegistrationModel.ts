@@ -47,16 +47,55 @@ export function buildPushTokenRegistrationBody(opts: {
   };
 }
 
+const BOT_GROUP_DEEP_LINK = /^\/companions\/groups\/([^/?#]+)\?([^#]*)$/;
+const MAX_DEEP_LINK_ID_CHARS = 256;
+
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) < 0x20 || value.charCodeAt(index) === 0x7f) return true;
+  }
+  return false;
+}
+
+function decodedDeepLinkId(value: string): string | null {
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded && decoded.length <= MAX_DEEP_LINK_ID_CHARS && !hasControlCharacter(decoded) ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * 从通知 data 中解析深链。只接受桌面端契约内的应用内路径(/sessions/...),
- * 拒绝任意 URL / 其它路径 —— 推送 payload 经第三方通道,按不可信输入对待。
+ * 分工一步停下时的群聊提醒(bot-group-chat.md §8.3):`/companions/groups/<groupId>?deviceId=<id>`。
+ * 形状逐项校验:群 id 必须是规范编码的单段路径,查询串只能有一个非空的 deviceId,不带片段;
+ * 通过后按规范形式重建,绝不原样转发。
+ */
+function parseBotGroupDeepLink(deepLink: string): string | null {
+  const match = BOT_GROUP_DEEP_LINK.exec(deepLink);
+  if (!match) return null;
+  const [, encodedGroupId, query] = match;
+  const groupId = decodedDeepLinkId(encodedGroupId!);
+  if (!groupId || encodeURIComponent(groupId) !== encodedGroupId) return null;
+  const params = new URLSearchParams(query);
+  const keys = [...params.keys()];
+  if (keys.length !== 1 || keys[0] !== 'deviceId') return null;
+  const deviceId = params.get('deviceId') ?? '';
+  if (!deviceId || deviceId.length > MAX_DEEP_LINK_ID_CHARS || hasControlCharacter(deviceId)) return null;
+  return `/companions/groups/${encodeURIComponent(groupId)}?deviceId=${encodeURIComponent(deviceId)}`;
+}
+
+/**
+ * 从通知 data 中解析深链。只接受桌面端契约内的应用内路径(/sessions/... 与群聊
+ * /companions/groups/...),拒绝任意 URL / 其它路径 —— 推送 payload 经第三方通道,按不可信输入对待。
  */
 export function parseNotificationDeepLink(data: unknown): string | null {
   if (!data || typeof data !== 'object') return null;
   const deepLink = (data as Record<string, unknown>).deepLink;
   if (typeof deepLink !== 'string') return null;
-  if (!deepLink.startsWith('/sessions/')) return null;
   if (deepLink.includes('://') || deepLink.startsWith('//')) return null;
+  if (deepLink.startsWith('/companions/groups/')) return parseBotGroupDeepLink(deepLink);
+  if (!deepLink.startsWith('/sessions/')) return null;
   return deepLink;
 }
 

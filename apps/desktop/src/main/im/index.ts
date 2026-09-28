@@ -59,6 +59,10 @@ import { ipcMain, BrowserWindow, dialog, type IpcMainEvent } from 'electron';
 import { and, eq, like, ne, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
+import {
+  captureSessionRuntimeControlOwnerEpoch,
+  sessionRuntimeControlOwnerEpochMatches,
+} from '../maker-ipc/sessionRuntimeControl.js';
 import { sessions } from '../localDb/schema';
 import {
   im,
@@ -78,6 +82,8 @@ import { wireWechatOrchestrator } from './wechat';
 import { wireWecomOrchestrator } from './wecom';
 import { resetTelegramGroupContextCursors } from './telegram/groupWindow';
 import { getImOrchestrator, listImOrchestrators } from './shared/orchestrator';
+import { backfillLegacyImDefaultRoutes, backfillLegacyImDefaultRoutesAtStartup } from './shared/channelDefaultRouteSync';
+import type { ImDefaultSettingsChannel } from '../../shared/imDefaultSettings';
 import { createSerializedConnectionLifecycle } from './connectionLifecycle';
 import {
   activateImAccountBoundary,
@@ -89,7 +95,7 @@ import {
 import { configureImAccountScope } from './accountScopeBridge';
 import type { ImOrchestratorConfig } from './shared/types';
 import { bindingStore, executeDetach } from './binding';
-import { IM_DEFAULT_EFFORT_OVERRIDES, IM_DEFAULT_SETTINGS } from '../../shared/imDefaultSettings';
+import { IM_DEFAULT_EFFORT_OVERRIDES, IM_DEFAULT_SETTINGS, IM_DEFAULT_SETTINGS_CHANNELS } from '../../shared/imDefaultSettings';
 import { getAuthState } from '../authManager';
 import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 
@@ -626,6 +632,53 @@ configureImAccountScope({
  * `feishuBot:save` kept failing with `[IM_NOT_READY]` (the account boundary is
  * activated inside `im.init()`), with no way out but manually updating.
  */
+/**
+ * 渠道默认即将被保存 / 恢复: 先给上线前建的、仍在用旧默认的任务补跟随记录,
+ * 让它们在下一条消息时换到新默认。只处理指定渠道(各渠道设置相互独立, 全局
+ * 设置只给官方 hook 用)。
+ *
+ * 补录失败**必须挡住本次保存**(PR #5155 review P2): 记录补不上就提交新默认的话,
+ * 还停在旧默认上的老任务之后只能按新默认匹配, 永久失去跟随资格。抛错让调用方
+ * 放弃本次保存, 用户重试即可; 不把失败当已完成。
+ */
+export async function prepareImDefaultSettingsChange(
+  channel: ImDefaultSettingsChannel | undefined,
+): Promise<void> {
+  if (!channel) return;
+  const config = getImOrchestrator(channel)?.adapter.config;
+  if (!config) return;
+  // owner 边界(PR #5155 review P1): 回填跨多个 await, 期间登出/换号会让全局
+  // getDbClient 指向新 owner —— 进入时捕获 owner epoch 与 DbClient, 回填全程复用
+  // 同一客户端; 结束后校验边界未变, 变了就失败重试, 绝不把 A 发起的保存写进 B。
+  const ownerEpoch = captureSessionRuntimeControlOwnerEpoch();
+  const dbClient = getDbClient();
+  try {
+    await backfillLegacyImDefaultRoutes(channel, config, dbClient);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`default route backfill failed for ${channel} (blocking settings save): ${msg}`);
+    throw new Error(msg);
+  }
+  if (!sessionRuntimeControlOwnerEpochMatches(ownerEpoch)) {
+    log.warn(`default route backfill raced an owner switch for ${channel}; save aborted for retry`);
+    throw new Error('app session owner changed during backfill; retry the save');
+  }
+}
+
+/**
+ * 启动期一次性补齐各渠道历史任务的跟随记录: 枚举有 orchestrator 配置的渠道,
+ * 交给 backfillLegacyImDefaultRoutesAtStartup 逐个 best-effort 补齐。
+ */
+export async function backfillImDefaultRoutesAtStartup(): Promise<void> {
+  await backfillLegacyImDefaultRoutesAtStartup(
+    IM_DEFAULT_SETTINGS_CHANNELS.flatMap((source) => {
+      const config = getImOrchestrator(source)?.adapter.config;
+      return config ? [{ source, config }] : [];
+    }),
+    getDbClient(),
+  );
+}
+
 export function startImConnection(): void {
   if (connectionLifecycle.isStarted()) {
     log.info('startImConnection: already started, skip');
@@ -640,6 +693,11 @@ export function startImConnection(): void {
   }
 
   log.info('startImConnection: kicking off im.init()');
+  // 启动期补齐历史任务的跟随记录(见 backfillLegacyImDefaultRoutesAtStartup):
+  // 从未保存/重置过渠道设置的升级老任务等不到设置保存触发回填, 趁当前基线还能
+  // 识别先补一次, 不依赖用户以后主动保存(PR #5155 review P2)。后台 best-effort,
+  // 不挡连接; DbClient 同样要求 localDb 已 ensureReady, 时序保证同下。
+  void backfillImDefaultRoutesAtStartup();
   // 先 preload binding 表, 再 init bot WS。preload 必须在 init 之前完成 ——
   // bot 上线后第一个进来的消息会经 runAgentTurn 同步查 bindingStore.get(),
   // 此时 forward map 必须已经填好, 否则会被当成"没接管"误路由到默认 session。

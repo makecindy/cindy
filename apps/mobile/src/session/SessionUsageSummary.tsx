@@ -271,7 +271,7 @@ const makeStyles = (colors: ThemeColors) =>
     note: {
       color: colors.textTertiary,
       fontSize: typeScale.micro,
-      lineHeight: lineHeight.caption,
+      lineHeight: lineHeight.micro,
     },
     metrics: {
       borderTopWidth: StyleSheet.hairlineWidth,

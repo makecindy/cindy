@@ -166,7 +166,7 @@ describe('Bot task route recovery', () => {
     expect(source).toContain('window.electronAPI.localDb.bots.list(');
     expect(source).toContain('lastReadAtByBotId: { [botId]: lastReadAt }');
     expect(source).toContain('botMentions={gate.mentions}');
-    expect(source).toContain('botIdentity={gate.identity}');
+    expect(source).toContain('botIdentity={identity ?? gate.identity}');
     expect(source).toContain('botUnreadBoundaryAt={gate.unreadBoundaryAt}');
   });
 

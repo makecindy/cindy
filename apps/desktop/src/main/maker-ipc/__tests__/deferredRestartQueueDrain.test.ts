@@ -5,12 +5,11 @@
  * Issue 形态:全局 Codex 凭证/运行时变更被延期,已有会话里的后续消息进入
  * 持久化输入队列,但延期重启兑现、报告"唤醒 N 个会话"之后,消息既没落
  * `messages` 也没产生第二次派发 —— 静默滞留。此前 service 与 coordinator
- * 只各自有单元测试,唤醒链路(register 的 onApplied → wakeSession 接线、
- * hasPendingCredentialSwitch 的 isPending 联动)从未被串起来测过;drain 被
+ * 只各自有单元测试,唤醒链路与队列门从未被串起来测过;drain 被
  * gate 挡住时也零日志,断点无从定位。
  *
  * 本文件用**真实的两个模块**接线(mock 只到 deps 边界),覆盖:
- *  1. 基线端到端:pending 门挡住 → 重启兑现(关旧 Session)→ wake → 恰好
+ *  1. 等待全局空闲不挡输入；实际重启 → 关旧 Session → wake → 恰好
  *     派发一次、恰好落一条 user message、退出 snapshot;
  *  2. 竞态排列 a:wake 在 ensureQueueRestored 仍在读取期间到达;
  *  3. 竞态排列 b:close cleanup 吞掉已排程的 wake-drain(register 接线的
@@ -28,7 +27,7 @@ import type {
 import { DeferredCodexRestartService } from '../deferredCodexRestart.js';
 import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';
 import {
-  createDeferredRestartAppliedWake,
+  createDeferredRestartSettledWake,
   createDeferredRestartQueueGate,
 } from '../deferredRestartQueueWiring.js';
 import type {
@@ -153,6 +152,7 @@ function createRestartHarness() {
   let running = false;
   let live = true;
   let busyOtherSession = false;
+  let pendingCredentialSwitch = false;
   const projections: AgentInputProjection[] = [];
   let loadQueueSnapshot: ((sessionId: string) => Promise<AgentInputQueuedMessage[]>) | null = null;
 
@@ -174,9 +174,9 @@ function createRestartHarness() {
       if (!await applyRuntime()) return;
       await restartImpl();
     },
-    hasBusyLocalCodexSession: () => busyOtherSession,
+    hasBusyLocalCodexSession: () => busyOtherSession || running,
     listLocalCodexSessionIds: () => live ? [SID] : [],
-    onApplied: createDeferredRestartAppliedWake({
+    onQueueGateReleased: createDeferredRestartSettledWake({
       wakeSession: (sessionId, reason) => coordinator.wakeSession(sessionId, reason),
     }),
     retryDelayMs: 60_000,
@@ -202,9 +202,8 @@ function createRestartHarness() {
     getSdkSessionId: vi.fn(async () => 'sdk-session'),
     hasAssistantProgressAfter: () => Promise.resolve(false),
     hasPendingCredentialSwitch: createDeferredRestartQueueGate({
-      hasPendingCredentialSwitchEntry: () => false,
-      isDeferredRestartPending: () => service.isPending(),
-      listActiveSessions: () => live ? [{ id: SID, agentKind: 'codex', remoteHostId: null }] : [],
+      hasPendingCredentialSwitchEntry: () => pendingCredentialSwitch,
+      isSessionRestarting: (sessionId) => service.isSessionRestarting(sessionId),
     }),
     emitProjection: (projection) => {
       projections.push(projection);
@@ -222,6 +221,24 @@ function createRestartHarness() {
     sendToAgent,
     persistQueueSnapshot,
     projections,
+    beginRestart() {
+      const hold = deferred<void>();
+      const previousRestart = restartImpl;
+      restartImpl = async () => {
+        await hold.promise;
+        await previousRestart();
+      };
+      service.schedule('memory-change');
+      const attempt = service.flushBeforeLocalCodexSessionStart();
+      return async () => {
+        hold.resolve();
+        await attempt;
+        await flush();
+      };
+    },
+    setPendingCredentialSwitch(value: boolean) {
+      pendingCredentialSwitch = value;
+    },
     setRunning(value: boolean) {
       running = value;
     },
@@ -267,14 +284,59 @@ beforeEach(() => {
 });
 
 describe('deferred Codex restart × input queue drain (#2506)', () => {
-  it('端到端:pending 门挡住的后续消息在重启兑现后恰好派发一次并落库', async () => {
+  it.each(['Codex Browser capability routing changed', 'memory-change', 'subagent-spawn-config-change'])(
+    'dispatches an idle session follow-up while another session delays %s', async (reason) => {
+      const h = createRestartHarness();
+      await h.coordinator.ensureQueueRestored(h.SID);
+      h.setBusyOtherSession(true);
+      h.service.schedule(reason);
+      await h.service.flushBeforeLocalCodexSessionStart();
+
+      expect(h.coordinator.shouldQueueNewTurn(h.SID)).toBe(false);
+      h.coordinator.enqueue(h.SID, makeItem('idle-follow-up', 'continue the completed task'));
+      await flush();
+
+      expect(h.service.isPending()).toBe(true);
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+      expect(mocks.createMessage).toHaveBeenCalledOnce();
+      expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual([]);
+
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(h.SID, 'done');
+      h.service.onSessionSettled();
+      h.coordinator.enqueue(h.SID, makeItem('next-follow-up', 'keep going'));
+      await flush();
+      expect(h.service.isPending()).toBe(true);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(mocks.createMessage).toHaveBeenCalledTimes(2);
+      expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual([]);
+      h.service.clear();
+    },
+  );
+
+  it('still waits for this session credential switch after a global restart settles', async () => {
+    const h = createRestartHarness();
+    await h.coordinator.ensureQueueRestored(h.SID);
+    h.setPendingCredentialSwitch(true);
+    const finishRestart = h.beginRestart();
+    h.coordinator.enqueue(h.SID, makeItem('credential-follow-up', 'use the selected account'));
+    await finishRestart();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['credential-follow-up']);
+
+    h.setPendingCredentialSwitch(false);
+    h.coordinator.wakeSession(h.SID, 'credential-switch-applied');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(mocks.createMessage).toHaveBeenCalledOnce();
+  });
+
+  it('端到端:实际重启期间的后续消息在收口后恰好派发一次并落库', async () => {
     const h = createRestartHarness();
     await h.coordinator.ensureQueueRestored(h.SID);
     mocks.logger.debug.mockClear();
 
-    // 另一会话忙 → 重启延期挂起;本会话上一轮已完成(running=false)。
-    h.setBusyOtherSession(true);
-    h.service.schedule('memory-change');
+    const finishRestart = h.beginRestart();
     expect(h.service.isPending()).toBe(true);
 
     // 用户在已有会话发后续消息:进入队列 + 写入 snapshot,但不落 messages、不派发。
@@ -283,15 +345,12 @@ describe('deferred Codex restart × input queue drain (#2506)', () => {
     expect(h.sendToAgent).not.toHaveBeenCalled();
     expect(mocks.createMessage).not.toHaveBeenCalled();
     expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['m-1']);
-    // 诊断:被 pending 门挡住的 drain 必须留痕(此前零日志 → 静默滞留)。
+    // 诊断:实际重启期间的 drain 必须留痕。
     expect(
       drainBlockedLogs().some((meta) => meta.gate === 'credential-switch-gate'),
     ).toBe(true);
 
-    // 挡路会话结束 → 延期重启兑现:关旧 Session → 清 pending 门 → onApplied 唤醒。
-    h.setBusyOtherSession(false);
-    h.service.onSessionSettled();
-    await flush();
+    await finishRestart();
 
     expect(h.service.isPending()).toBe(false);
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
@@ -310,29 +369,38 @@ describe('deferred Codex restart × input queue drain (#2506)', () => {
       const h = createRestartHarness();
       await h.coordinator.ensureQueueRestored(h.SID);
       h.service.schedule('memory-change');
-      h.coordinator.enqueue(h.SID, makeItem('retry-message', 'resume after retry'));
-      await flush();
-      expect(h.sendToAgent).not.toHaveBeenCalled();
+      const hold = deferred<void>();
       let first = true;
       h.setRestartImpl(async () => {
         h.coordinator.onSessionClosed(h.SID);
         h.setLive(false);
         if (!first) return;
         first = false;
+        await hold.promise;
         if (failure === 'busy') throw new CodexCredentialModeSwitchBusyError([]);
         if (failure === 'bridge-failure') throw new Error('bridge preparation failed');
         h.service.schedule(failure, failure === 'new-runtime' ? async () => {} : undefined);
       });
-      await h.service.flushBeforeLocalCodexSessionStart();
+      const attempt = h.service.flushBeforeLocalCodexSessionStart();
+      await flush();
+      // The old session is gone, but its bridge is still being replaced.
+      h.coordinator.enqueue(h.SID, makeItem('retry-message', 'resume after retry'));
+      await flush();
+      expect(h.service.isSessionRestarting(h.SID)).toBe(true);
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+      hold.resolve();
+      await attempt;
+      await flush();
       expect(h.service.isPending()).toBe(true);
       expect(h.service.listGatedSessionIds()).toEqual([h.SID]);
-      expect(h.sendToAgent).not.toHaveBeenCalled();
-      await h.service.flushBeforeLocalCodexSessionStart();
-      await flush();
-      expect(h.service.isPending()).toBe(false);
+      expect(h.service.isSessionRestarting(h.SID)).toBe(false);
+      // A failed or superseded refresh must not hold input until another retry.
       expect(h.sendToAgent).toHaveBeenCalledOnce();
       expect(mocks.createMessage).toHaveBeenCalledOnce();
       expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual([]);
+      h.setRunning(false);
+      await h.service.flushBeforeLocalCodexSessionStart();
+      expect(h.service.isPending()).toBe(false);
     },
   );
 
@@ -387,22 +455,21 @@ describe('deferred Codex restart × input queue drain (#2506)', () => {
     const h = createRestartHarness();
     await h.coordinator.ensureQueueRestored(h.SID);
 
-    h.setBusyOtherSession(true);
-    h.service.schedule('memory-change');
+    const finishRestart = h.beginRestart();
     h.coordinator.enqueue(h.SID, makeItem('m-1', 'queued before close race'));
     await flush();
     expect(h.sendToAgent).not.toHaveBeenCalled();
 
     // 门已清除(重启已兑现),但 wake 的 microtask 尚未执行时 close cleanup 到达:
     // cancelScheduledDrain 会作废这次 wake —— 单靠这一次 wake 消息就永久滞留。
-    h.setBusyOtherSession(false);
     h.service.clear();
+    await finishRestart();
     h.coordinator.wakeSession(h.SID, 'deferred-codex-restart-applied');
     h.coordinator.onSessionClosed(h.SID);
     await flush();
     expect(h.sendToAgent).not.toHaveBeenCalled();
 
-    // register 接线的正确性前提正在于此:onApplied 严格发生在 restart(全部
+    // register 接线的正确性前提正在于此:队列唤醒严格发生在 restart(全部
     // close)之后,wake 不会落进 close 窗口。补一次 close 之后的 wake 即派发。
     h.coordinator.wakeSession(h.SID, 'deferred-codex-restart-applied');
     await flush();
@@ -414,15 +481,12 @@ describe('deferred Codex restart × input queue drain (#2506)', () => {
     const h = createRestartHarness();
     await h.coordinator.ensureQueueRestored(h.SID);
 
-    h.setBusyOtherSession(true);
-    h.service.schedule('memory-change');
+    const finishRestart = h.beginRestart();
     h.coordinator.enqueue(h.SID, makeItem('m-1', 'exactly once'));
     await flush();
 
     // 重启兑现 → wake;紧跟两次冗余 wake(如另一来源的 superseded 唤醒)。
-    h.setBusyOtherSession(false);
-    h.service.onSessionSettled();
-    await flush();
+    await finishRestart();
     h.coordinator.wakeSession(h.SID, 'deferred-codex-restart-superseded');
     h.coordinator.wakeSession(h.SID, 'deferred-codex-restart-applied');
     await flush();
@@ -432,13 +496,15 @@ describe('deferred Codex restart × input queue drain (#2506)', () => {
     // 用户清空队列后才到达的迟到 wake:无派发、无落库、无崩溃。
     const h2 = createRestartHarness();
     await h2.coordinator.ensureQueueRestored(h2.SID);
-    h2.service.schedule('memory-change');
+    const finishSecondRestart = h2.beginRestart();
     h2.coordinator.enqueue(h2.SID, makeItem('m-2', 'cleared before wake'));
     await flush();
     h2.coordinator.remove(h2.SID, 'm-2');
     h2.service.clear();
     h2.coordinator.wakeSession(h2.SID, 'deferred-codex-restart-applied');
     await flush();
+    expect(h2.sendToAgent).not.toHaveBeenCalled();
+    await finishSecondRestart();
     expect(h2.sendToAgent).not.toHaveBeenCalled();
   });
 });
@@ -455,20 +521,19 @@ describe('register.ts 真实接线经由共享工厂(源码断言,#2506)', () =>
     expect(registerSource).toMatch(
       /hasPendingCredentialSwitch:\s*createDeferredRestartQueueGate\(\{/,
     );
-    // 三个 dep 都在同一接线块里:凭证切换登记表、重启 pending、活跃会话来源。
+    // 凭证切换登记与实际重启范围分别检查；不能改回全局 pending 门。
     const gateBlock = registerSource.slice(
       registerSource.indexOf('hasPendingCredentialSwitch: createDeferredRestartQueueGate'),
     );
     const gateHead = gateBlock.slice(0, 600);
     expect(gateHead).toContain('pendingCredentialSwitchHolder?.has(sessionId) === true');
-    expect(gateHead).toContain('deferredCodexRestartHolder?.isPending() === true');
-    expect(gateHead).toContain('maker.listActiveSessions()');
+    expect(gateHead).toContain('deferredCodexRestartHolder?.isSessionRestarting(sessionId) === true');
   });
 
-  it('DeferredCodexRestartService 的 onApplied 经由 createDeferredRestartAppliedWake', () => {
-    expect(registerSource).toMatch(/onApplied:\s*createDeferredRestartAppliedWake\(\{/);
+  it('DeferredCodexRestartService releases the queue after every settled attempt', () => {
+    expect(registerSource).toMatch(/onQueueGateReleased:\s*createDeferredRestartSettledWake\(\{/);
     const wakeBlock = registerSource.slice(
-      registerSource.indexOf('onApplied: createDeferredRestartAppliedWake'),
+      registerSource.indexOf('onQueueGateReleased: createDeferredRestartSettledWake'),
     );
     expect(wakeBlock.slice(0, 300)).toContain('inputCoordinator.wakeSession(sessionId, reason)');
   });

@@ -10,7 +10,7 @@
     },
     "title": "Debug 日誌",
     "record": "記錄 Debug 日誌",
-    "hint": "記錄手機上的連線、恢復、捲動、鍵盤與效能細節。預設關閉，最多保留 7 天、8 MB，不會自動上傳。",
+    "hint": "記錄手機上的連線、恢復、檔案預覽與播放、捲動、鍵盤與效能細節。預設關閉，最多保留 7 天、8 MB，不會自動上傳。",
     "export": "匯出 Debug 日誌",
     "clear": "清空日誌",
     "busy": "處理中…",
@@ -23,6 +23,16 @@
     "uploadSucceeded": "上傳成功，編號 {{code}}。"
   },
   "title": "設定",
+  "appearance": {
+    "title": "外觀",
+    "modeLabel": "顯示模式",
+    "options": {
+      "system": "跟隨系統",
+      "light": "淺色",
+      "dark": "深色"
+    },
+    "saveFailed": "顯示模式沒有儲存成功，重新開啟後會恢復之前的設定"
+  },
   "language": {
     "title": "語言",
     "hint": "僅影響應用介面。Agent 回覆語言由 Agent 自身決定。",

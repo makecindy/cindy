@@ -238,8 +238,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   headerTitle: {
     color: colors.textTertiary,
     flex: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.semibold,
     lineHeight: lineHeight.caption,
   },
   resetButton: {
@@ -250,12 +250,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   resetText: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   sectionLabel: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.semibold,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
@@ -283,7 +284,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   itemMeta: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   divider: {
     backgroundColor: colors.border,

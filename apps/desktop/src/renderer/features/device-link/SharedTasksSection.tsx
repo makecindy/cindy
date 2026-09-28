@@ -151,7 +151,7 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
   if (!isAuthenticated) return null;
   return <>{(owned.length > 0 || joined.length > 0) && <section className="mx-3 mb-2 border-b border-[var(--border-default)] pb-3" aria-label={t('sharedTask.title')}
     onContextMenu={event => {
-      // Shared entries have no context menu; do not open the sidebar's blank-space menu.
+      // Task rows handle their own menus; group whitespace must not open the sidebar menu.
       event.preventDefault();
       event.stopPropagation();
     }}>

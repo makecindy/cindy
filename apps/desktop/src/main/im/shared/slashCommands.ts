@@ -22,7 +22,7 @@ import {
 } from '@cindy/model-providers';
 import { createLogger } from '../../logger';
 
-import { resetSessionToDefaults } from './sessionRepo';
+import { resetImSessionToChannelDefaults } from './channelDefaultRouteSync';
 import type { ImSessionRepo } from './sessionRepo';
 import type { ImCardBuilders } from './cardBuilders';
 import type { ImTurnRunner } from './turnRunner';
@@ -303,7 +303,7 @@ export function createSlashHandlers(
         const row =
           existing ?? (await repo.createSession(ctx.botContextId, ctx.userId, undefined, prepared));
         if (existing) {
-          await resetSessionToDefaults(row.id, adapter.config, prepared, adapter.channel);
+          await resetImSessionToChannelDefaults(row.id, adapter.config, prepared, adapter.channel);
         }
         await turnRunner.disposeOneSession(row.id);
         await safeSendText(ctx, ui.slash.new);

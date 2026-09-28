@@ -678,7 +678,7 @@ export function TelegramGroupActivationSettings({
         </div>
       ) : (
         groups.map((group) => (
-          <div key={group.chatId} className="flex items-center justify-between gap-3">
+          <div key={group.chatId} className="cindy-segmented-row">
             <div className="min-w-0 flex-1">
               <div className="truncate text-12 font-medium text-[var(--settings-section-title)]">
                 {group.chatName || group.chatId}

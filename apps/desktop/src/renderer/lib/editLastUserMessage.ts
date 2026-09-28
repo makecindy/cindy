@@ -43,6 +43,8 @@ import { expandGhostCommand } from '@/cindy-brain/ghostCommand';
 import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
 import {
   buildRewindDraftAttachments,
+  dropMissingAnnotationSources,
+  hasRestorableAnnotationSources,
   type RewindDraftImage,
 } from '@/lib/rewindDraftAttachments';
 import type { AttachedFile } from '@/lib/fileTypes';
@@ -205,8 +207,13 @@ export async function commitEditAndResend(
   opts: CommitEditAndResendOptions,
   deps: CommitEditAndResendDeps = defaultDeps,
 ): Promise<boolean> {
+  // 带可再编辑标注的历史图:原图已被清理的退回烧录图(否则重发时无法重新烧录)。
+  const images =
+    opts.images && hasRestorableAnnotationSources(opts.images)
+      ? await dropMissingAnnotationSources(opts.images)
+      : opts.images;
   const attachments = buildRewindDraftAttachments({
-    images: opts.images,
+    images,
     files: opts.files,
   });
   // 空文本 + 无附件的重发会被 sendMessage 静默 no-op,那样就变成"只回退没重发"

@@ -6,7 +6,7 @@ const h = vi.hoisted(() => ({
   auth: { user: { id: 'owner' }, accountGeneration: 1 }, revoked: new Set<string>(),
   translation: { t: (key: string) => key, i18n: { language: 'en' } },
   link: { status: 'online', connectionEpoch: 1, presenceVersion: 1, invoke: vi.fn(), openLink: vi.fn(), readDeviceList: vi.fn() },
-  list: { items: [], loading: false, refreshing: false, error: null, isOnline: vi.fn(() => true), refresh: vi.fn() },
+  list: { items: [] as import('@/device-link/remoteResources').HostedRemoteCollectionItem[], loading: false, refreshing: false, error: null, isOnline: vi.fn(() => true), refresh: vi.fn() },
 }));
 vi.mock('react-native', () => ({ AppState: { addEventListener: () => ({ remove() {} }) } }));
 vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (effect: any) => useEffect(effect, [effect]) }; });
@@ -25,7 +25,7 @@ let result: ReturnType<typeof useTeammateRoster>;
 function Probe() { result = useTeammateRoster(); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 beforeEach(() => {
-  vi.clearAllMocks(); h.link.openLink.mockResolvedValue(undefined); h.link.status = 'online'; h.link.connectionEpoch = 1; h.auth.accountGeneration = 1;
+  vi.clearAllMocks(); h.list.items = []; h.revoked.clear(); h.link.openLink.mockResolvedValue(undefined); h.link.status = 'online'; h.link.connectionEpoch = 1; h.auth.accountGeneration = 1;
   h.list.isOnline.mockReturnValue(true);
   h.link.readDeviceList.mockResolvedValue({ devices: ['old', 'new'].map(deviceId => ({ device: { deviceId, name: deviceId }, canOpen: true, state: 'online' })) });
   h.link.invoke.mockImplementation(async (deviceId) => ({ protocolVersion: 1, collections: [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', ...(deviceId === 'new' ? { actions: [{ id: 'open-create', label: 'Create' }] } : {}) }] }));
@@ -59,4 +59,34 @@ it('does not request the manifest until the host link is established', async () 
   await act(async () => release.forEach(resolve => resolve()));
   expect(result.targets.map(host => host.deviceId)).toEqual(['old', 'new']);
   expect(result.createTargets.map(host => host.deviceId)).toEqual(['new']);
+});
+
+it('shows cached teammates while host discovery is pending, then removes revoked hosts', async () => {
+  h.list.items = [{ key: 'old:bot', host: { deviceId: 'old', deviceName: 'Old' }, item: {
+    ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' }, revision: '1', display: { title: 'Cached' }, links: [],
+  } }];
+  h.link.readDeviceList.mockReturnValue(new Promise(() => {}));
+  await render();
+  expect(result.items).toHaveLength(1); expect(result.loading).toBe(false);
+  expect(result.authoritative).toBe(false); expect(result.isOnline(h.list.items[0].host)).toBe(false);
+  h.revoked = new Set(['old']); await render();
+  expect(result.items).toEqual([]);
+});
+
+it('exposes only computers whose manifest advertises group chats, keeping them through a failed read', async () => {
+  const manifest = (groups: boolean) => ({ protocolVersion: 1, collections: [
+    { id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope' },
+    ...(groups ? [{ id: 'bot-groups', title: 'Group Chats', resourceKind: 'bot-group' }] : []),
+  ] });
+  h.link.invoke.mockImplementation(async (deviceId) => manifest(deviceId === 'new'));
+  await render();
+  expect(result.groupTargets).toEqual([{ deviceId: 'new', deviceName: 'new' }]);
+  // A transient manifest failure keeps the computer's groups; an older desktop never gains them.
+  h.link.invoke.mockImplementation(async (deviceId) => { if (deviceId === 'new') throw new Error('timeout'); return manifest(false); });
+  h.link.connectionEpoch++; await render();
+  expect(result.groupTargets.map((host) => host.deviceId)).toEqual(['new']);
+  // A computer that answers without the collection drops it.
+  h.link.invoke.mockImplementation(async () => manifest(false));
+  h.link.connectionEpoch++; await render();
+  expect(result.groupTargets).toEqual([]);
 });

@@ -33,7 +33,8 @@ import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import { i18n } from '@/i18n';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { formatRemoteError } from '@/device-link/remoteStatus';
-import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import type { MobileMakerTransport, MobileOrcaEnableOptions } from '@/device-link/mobileMakerTransport';
+import { describeOrcaError, enableOrcaTeam, rememberOrcaStartFailure, type OrcaWorkerFormValue } from '@/session/orcaTeam';
 import { buildQueuedTextMessage } from '@/session/inputProjection';
 import {
   extractMobileSessionReferences,
@@ -87,6 +88,13 @@ export interface NewSessionCreationParams {
   /** 老协议 plan 档一次性语义:enqueue 后要恢复的底层权限档(null = 不需要)。 */
   legacyPlanRestore: string | null;
   /**
+   * 新建即开启协同:createSession 之后、首条消息入队之前开启(首轮 Lead 才有协同工具)。
+   * 失败不阻断创建 —— 任务照单任务继续,原因经 rememberOrcaStartFailure 交给会话页提示。
+   */
+  orcaEnable?: MobileOrcaEnableOptions;
+  /** 协同草稿原值:create-failed「返回编辑」时随草稿带回新建页,不让协同设置静默丢失。 */
+  collabDraft?: OrcaWorkerFormValue;
+  /**
    * 手机两步 worktree 流程第一步已创建的受管目录。create-failed 重试继续复用它；
    * 用户放弃返回编辑时先按 sessionId + path 补偿回收，再把原项目目录回填表单。
    */
@@ -133,6 +141,7 @@ export interface NewSessionCreationTask {
   readonly draft: NewSessionDraft;
   readonly attachments: readonly RemoteSerializedAttachment[];
   readonly firstMessageClientId: string;
+  readonly collabDraft?: OrcaWorkerFormValue;
   readonly precreatedWorktree?: {
     path: string;
     recoveryKey: string;
@@ -300,6 +309,7 @@ export function startNewSessionCreation(params: NewSessionCreationParams): void 
     draft: params.draft,
     attachments: params.attachments,
     firstMessageClientId,
+    collabDraft: params.collabDraft,
     precreatedWorktree: params.precreatedWorktree,
     firstMessageSessionRefs,
     precreatedWorktreeSessionCreateStarted: false,
@@ -521,6 +531,8 @@ export interface StashedNewSessionDraft {
    * 少了什么、需要重新选(review P1)。
    */
   notice?: string | null;
+  /** 返回编辑时恢复的协同草稿(null = 这次没开协同)。 */
+  collabDraft: OrcaWorkerFormValue | null;
 }
 
 let stashedDraft: StashedNewSessionDraft | null = null;
@@ -554,6 +566,7 @@ export function stashNewSessionDraftForEdit(
       : baseDraft,
     attachments: override?.attachments ?? task.attachments,
     notice: override?.notice ?? null,
+    collabDraft: task.collabDraft ?? null,
   };
 }
 
@@ -986,6 +999,20 @@ async function runPipeline(task: InternalTask): Promise<void> {
     } catch (error) {
       if (isStaleNewSessionOwnerError(error)) throw error;
       freshSession = null;
+    }
+
+    // 重跑管线(enqueue 失败后重试)时团队可能已建成:权威行已是 Lead 就不再开启。
+    if (params.orcaEnable && freshSession?.orcaRole !== 'lead') {
+      assertTaskOwnerCurrent(task);
+      try {
+        await enableOrcaTeam(maker, sessionId, params.orcaEnable);
+        assertTaskOwnerCurrent(task);
+        remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { orcaRole: 'lead' });
+      } catch (error) {
+        if (isStaleNewSessionOwnerError(error)) throw error;
+        rememberOrcaStartFailure(sessionId, describeOrcaError(error, null));
+      }
+      assertTaskOwnerCurrent(task);
     }
 
     if (params.planModeArm && !params.transport.handoffFirstMessage) {

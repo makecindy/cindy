@@ -1597,6 +1597,11 @@ export class Session {
     return this.handle.model;
   }
 
+  /** Codex-only: 当前会话实际绑定的本地 host 身份。 */
+  get codexHostKey(): string | undefined {
+    return this.handle.codexHostKey;
+  }
+
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   get codexProxyActive(): boolean | undefined {
     return this.handle.codexProxyActive;
@@ -2159,8 +2164,8 @@ export class Session {
       toolLoopGuard: this.agentKind === 'claude-code' ? null : new ToolLoopGuard({
         // These normalized events do not identify model-response batches.
         // Distinct malformed calls can belong to one parallel attempt, so do
-        // not enable the retry-count rule without that evidence. Claude keeps
-        // its existing batch-aware contract rule; repetition rules stay active.
+        // not enable the retry-count rule without that evidence. Claude also
+        // disables category-only retries; repetition rules stay active.
         contractConsecutiveLimit: Number.POSITIVE_INFINITY,
       }),
       pendingToolLoop: null,

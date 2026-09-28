@@ -343,7 +343,7 @@ describe('mobile home desktop-first surface', () => {
 
     // E5M 状态色设计定稿(2026-07-17):teal 族 #00D9C5 → #19D2C1,statusReady 随 awaiting 同步。
     expect(tokenSource).toContain("statusReady: '#19D2C1'");
-    expect(tokenSource).toContain("homeListFab: '#ECEDEF'");
+    expect(tokenSource).toContain("homeListFab: '#E6E6E6'");
     expect(tokenSource).not.toContain(`${removedListTokenPrefix}Background`);
     expect(tokenSource).not.toContain(`${removedListTokenPrefix}Divider`);
     expect(primitivesSource).toContain('tone === \'ready\' && styles.statusDotReady');
@@ -351,8 +351,8 @@ describe('mobile home desktop-first surface', () => {
     expect(primitivesSource).toContain('pulsing && {');
     expect(primitivesSource).toContain('scale: pulse.interpolate');
     expect(primitivesSource).not.toContain('statusDotReady: {\n    backgroundColor: colors.textPrimary');
-    expect(homeSource).toContain("return item.available && (item.state === 'ready' || item.state === 'busy') ? 'online' : 'offline';");
-    expect(homeSource).toContain("tone={status === 'online' ? 'ready' : 'off'}");
+    // 范围菜单已跟随 iOS 系统下拉,不再画设备在线点(见 DeviceMenuItem 断言)。
+    expect(homeSource).not.toContain("tone={status === 'online' ? 'ready' : 'off'}");
   });
 
   it('mirrors the desktop sidebar Agent identity slot and running treatment', () => {
@@ -433,8 +433,8 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('saveDeviceIdentityCache(result.cache)');
     expect(source).toContain('loadDeviceSessionScheduleIndex(deviceId, invoke,');
     expect(source).toContain('replaceSessionScheduleIndexEntries(');
-    expect(source).toContain("invoke<unknown[]>(device.deviceId, 'maker:list-active', [");
-    expect(source).toContain("{ summary: true }");
+    expect(source).toContain("invoke<unknown>(device.deviceId, 'maker:list-active', [");
+    expect(source).toContain("{ summary: true, snapshotVersion: 2 }");
     expect(source).toContain('if (isOptionalActiveSessionSnapshotError(err)) return null;');
     expect(source).toContain('function isOptionalActiveSessionSnapshotError(error: unknown): boolean');
     expect(source).toContain('if (isAccessRevokedError(error) || isDeviceOfflineError(error)) return false;');
@@ -512,13 +512,18 @@ describe('mobile home desktop-first surface', () => {
       'const showConnectionRow = selectedDeviceDisconnected || resolveConnectionBannerVisibility(',
     );
     expect(source).toContain('homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)');
-    expect(source).toContain("connectionStates={deviceConnectionStates}");
     expect(source).toContain('function DeviceMenuItem');
-    expect(source).toContain("tone={status === 'online' ? 'ready' : 'off'}");
     expect(source).not.toContain('function DeviceConnectionSpinner');
-    expect(source).not.toContain("connectionState === 'syncing' ? <DeviceConnectionSpinner /> : null");
     expect(source).not.toContain('deviceConnectionSpinner');
-    expect(source).toContain("connectionState === 'failed' ? <View style={styles.deviceConnectionFailedRing} /> : null");
+    // 范围菜单跟随 iOS 系统下拉:自绘回退也不画在线点 / 同步脉冲 / 失败圈。
+    const deviceMenuItem = source.slice(
+      source.indexOf('function DeviceMenuItem'),
+      source.indexOf('function RevokedAccessTip'),
+    );
+    expect(deviceMenuItem).not.toContain('<StatusDot');
+    expect(deviceMenuItem).not.toContain('connectionState');
+    expect(source).not.toContain('connectionStates={deviceConnectionStates}');
+    expect(source).not.toContain('deviceConnectionFailedRing');
   });
 
   it('keeps project and session rows at desktop sidebar information density', () => {

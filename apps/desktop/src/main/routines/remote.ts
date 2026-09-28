@@ -260,7 +260,7 @@ export function registerRoutineRemoteResources(management?: ReturnType<typeof cr
                     ? `${trigger.expression} · ${trigger.timezone}`
                     : trigger.kind === 'interval'
                       ? `${trigger.intervalMs / 60000} min`
-                      : `${trigger.sourceId} · ${trigger.eventType}`,
+                      : trigger.kind === 'once' ? new Date(trigger.at).toISOString() : `${trigger.sourceId} · ${trigger.eventType}`,
               })),
             },
           ],
@@ -291,7 +291,7 @@ export function registerRoutineRemoteResources(management?: ReturnType<typeof cr
                   ? `${trigger.expression} · ${trigger.timezone}`
                   : trigger.kind === 'interval'
                     ? `${trigger.intervalMs / 60000} min`
-                    : `${trigger.sourceId} · ${trigger.eventType}\n${trigger.filters.map((filter) => `${filter.field} ${filter.operator} ${filter.value}`).join('\n')}`,
+                    : trigger.kind === 'once' ? new Date(trigger.at).toISOString() : `${trigger.sourceId} · ${trigger.eventType}\n${trigger.filters.map((filter) => `${filter.field} ${filter.operator} ${filter.value}`).join('\n')}`,
               )
               .join('\n\n'),
           },

@@ -41,7 +41,7 @@ export function RenameSessionModal({
               if (canSave) onConfirm();
             }}
             placeholder={t('devices.list.renameSession.placeholder')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             returnKeyType="done"
             selectTextOnFocus
             style={styles.input}
@@ -95,8 +95,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   title: {
     color: colors.textPrimary,
     fontSize: typeScale.title,
-    fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.subtitle,
+    fontWeight: fontWeight.semibold,
+    lineHeight: lineHeight.title,
   },
   input: {
     backgroundColor: colors.surface,

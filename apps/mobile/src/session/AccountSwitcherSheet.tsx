@@ -282,12 +282,14 @@ const makeStyles = (colors: ThemeColors) =>
     addLabel: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
     loading: { paddingVertical: spacing.xl },
     error: {
       color: colors.statusError,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.sm,
       textAlign: 'center',

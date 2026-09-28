@@ -212,7 +212,8 @@ describe('mobile message list container', () => {
     const focusEffectStart = source.indexOf('// 深链/搜索:滚到指定消息');
     const focusEffectEnd = source.indexOf('// 新消息红点', focusEffectStart);
     const focusEffectSource = source.slice(focusEffectStart, focusEffectEnd);
-    expect(focusEffectSource).toContain('if (!listRevealed) return;');
+    // Entry/focus ordering is executed in messageEntryPositioning.test.ts:
+    // a linked row now positions before reveal, without a preceding tail seek.
     expect(focusEffectSource).toContain('userScrollForOlderRef.current = true');
     expect(focusEffectSource).toContain('lastAutoLoadEarlierKeyRef.current = null');
   });

@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown } from 'lucide-react';
 import type { PiKernelInstallRequest, PiKernelState } from '../../../shared/piKernel';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { Spinner } from '@/components/ui/spinner';
+import { HARNESS_MENU_ITEM_CLASS, HarnessMenuFootnote, HarnessVersionMenuItem, HarnessVersionMenuRow } from './HarnessVersionMenuRow';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 
@@ -79,35 +78,20 @@ export function PiKernelVersionRow() {
   const checkError = failed || state?.upstream.error || state?.official.error;
   const update = newer(upstream?.version, state?.currentVersion ?? null);
   const status = busy ? k(state?.operation?.phase ?? 'lookup') : checking ? k('checking') : checkError ? k('checkFailed') : update ? k('available') : '';
-  const itemClass = 'min-h-9 gap-3 rounded-lg px-3 text-13';
 
   return <>
-    <div className="flex min-h-[52px] items-center justify-between gap-3 px-[18px] py-2" data-testid="pi-kernel-row">
-      <span className="shrink-0 text-13 text-[var(--settings-section-sublabel)]">{t('settings.about.piVersionLabel')}</span>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button type="button" aria-label={k('manage')} className="-mr-2 flex min-h-9 min-w-0 items-center gap-2 rounded-full px-2 text-13 font-medium text-[var(--settings-section-title)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]">
-            <span className="truncate">{state?.currentVersion ?? t(`settings.about.version.${state ? 'notReady' : failed ? 'unknown' : 'loading'}`)}</span>
-            {status && <span role="status" className="flex shrink-0 items-center gap-1 text-12 font-normal text-[var(--settings-section-sublabel)]">{(busy || checking) && <Spinner size={12} />}{status}</span>}
-            <ChevronDown size={13} aria-hidden className="shrink-0" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" sideOffset={6} className="z-[10000] w-[272px] max-w-[calc(100vw-24px)] rounded-xl p-1.5 shadow-none">
-          <DropdownMenuItem className={itemClass} disabled={busy || !upstream || (!!state?.currentVersion && !newer(upstream.version, state.currentVersion))} onSelect={() => upstream && setTarget({ source: 'upstream', version: upstream.version })}>
-            <span className="flex-1">{k('update')}</span><span className="text-12 text-[var(--text-secondary)]">{upstream?.version ?? '—'}</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem className={itemClass} disabled={busy || !official} onSelect={() => official && setTarget({ source: 'official', version: official.version })}>
-            <span className="flex-1">{k('restore')}</span><span className="text-12 text-[var(--text-secondary)]">{official?.version ?? '—'}</span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className={itemClass} disabled={busy || checking} onSelect={() => void refresh(true)}>{checking ? k('checking') : k('check')}</DropdownMenuItem>
-          <DropdownMenuItem className={itemClass} disabled={!upstream?.releaseUrl} onSelect={() => {
-            if (upstream?.releaseUrl) void window.electronAPI.openExternal(upstream.releaseUrl).then(result => { if (!result.success) toast.error(k('openFailed')); }).catch(() => toast.error(k('openFailed')));
-          }}>{k('releaseNotes')}</DropdownMenuItem>
-          {state?.upstream.checkedAt && <p className="px-3 py-1.5 text-11 text-[var(--text-secondary)]">{t('settings.about.piKernel.checkedAt', { time: new Date(state.upstream.checkedAt).toLocaleString(i18n.language) })}</p>}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+    <HarnessVersionMenuRow label={t('settings.about.piVersionLabel')} manageLabel={k('manage')} testId="pi-kernel-row"
+      version={state?.currentVersion ?? t(`settings.about.version.${state ? 'notReady' : failed ? 'unknown' : 'loading'}`)}
+      status={status} pending={busy || checking}>
+      <HarnessVersionMenuItem label={k('update')} version={upstream?.version} disabled={busy || !upstream || (!!state?.currentVersion && !newer(upstream.version, state.currentVersion))} onSelect={() => upstream && setTarget({ source: 'upstream', version: upstream.version })} />
+      <HarnessVersionMenuItem label={k('restore')} version={official?.version} disabled={busy || !official} onSelect={() => official && setTarget({ source: 'official', version: official.version })} />
+      <DropdownMenuSeparator />
+      <DropdownMenuItem className={HARNESS_MENU_ITEM_CLASS} disabled={busy || checking} onSelect={() => void refresh(true)}>{checking ? k('checking') : k('check')}</DropdownMenuItem>
+      <DropdownMenuItem className={HARNESS_MENU_ITEM_CLASS} disabled={!upstream?.releaseUrl} onSelect={() => {
+        if (upstream?.releaseUrl) void window.electronAPI.openExternal(upstream.releaseUrl).then(result => { if (!result.success) toast.error(k('openFailed')); }).catch(() => toast.error(k('openFailed')));
+      }}>{k('releaseNotes')}</DropdownMenuItem>
+      {state?.upstream.checkedAt && <HarnessMenuFootnote>{t('settings.about.piKernel.checkedAt', { time: new Date(state.upstream.checkedAt).toLocaleString(i18n.language) })}</HarnessMenuFootnote>}
+    </HarnessVersionMenuRow>
     <ConfirmDialog open={!!target} onOpenChange={open => { if (!open) setTarget(null); }} presentation="standard" cancelFirst
       title={t(`settings.about.piKernel.${target?.source === 'official' ? 'restoreTitle' : 'updateTitle'}`, { version: target?.version })}
       description={k(target?.source === 'official' ? 'restoreDescription' : 'updateDescription')}

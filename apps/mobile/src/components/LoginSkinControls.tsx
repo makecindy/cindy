@@ -1057,14 +1057,29 @@ export function LoginMethodRow({
   accessibilityLabel?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
-  if (hasNativeLoginButtons) return <LoginNativeButton label={title} subtitle={subtitle}
-    accessibilityLabel={accessibilityLabel} showLabel artworkSize={LOGIN_METHOD_ROW.leftIcon.size}
-    trailingArtwork={<ShareIcon />}
+  const rowContent = <View
+    pointerEvents="none"
+    style={[StyleSheet.absoluteFill, disabled && styles.disabledText]}
+  >
+    <View style={icon === 'person' ? styles.methodRowPersonIcon : styles.methodRowLeftIcon}>
+      {icon === 'person' ? <PersonIcon /> : <EnterpriseIcon />}
+    </View>
+    <View style={styles.methodRowTextBox}>
+      <Text
+        numberOfLines={1}
+        style={[styles.methodRowTitle, disabled && styles.methodRowDisabledTitle]}
+      >
+        {title}
+      </Text>
+      {subtitle != null ? <Text numberOfLines={1} style={styles.methodRowSubtitle}>{subtitle}</Text> : null}
+    </View>
+    <View style={styles.methodRowRightIcon}><ShareIcon /></View>
+  </View>;
+  if (hasNativeLoginButtons) return <LoginNativeButton label={title}
+    accessibilityLabel={accessibilityLabel} content={rowContent}
     onPress={onPress} disabled={disabled} testID={testID}
     width={LOGIN_METHOD_ROW.width} height={LOGIN_METHOD_ROW.height} fontSize={LOGIN_METHOD_ROW.titleFont}
-    style={{ position: 'absolute', left: LOGIN_METHOD_ROW.x, top }}>
-    {icon === 'person' ? <PersonIcon /> : <EnterpriseIcon />}
-  </LoginNativeButton>;
+    style={{ position: 'absolute', left: LOGIN_METHOD_ROW.x, top }} />;
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel ?? title}
@@ -1077,28 +1092,7 @@ export function LoginMethodRow({
     >
       {({ pressed }) => (
         <>
-          <View
-            style={
-              icon === 'person'
-                ? styles.methodRowPersonIcon
-                : styles.methodRowLeftIcon
-            }
-          >
-            {icon === 'person' ? <PersonIcon /> : <EnterpriseIcon />}
-          </View>
-          <View style={styles.methodRowTextBox}>
-            <Text numberOfLines={1} style={styles.methodRowTitle}>
-              {title}
-            </Text>
-            {subtitle != null ? (
-              <Text numberOfLines={1} style={styles.methodRowSubtitle}>
-                {subtitle}
-              </Text>
-            ) : null}
-          </View>
-          <View style={styles.methodRowRightIcon}>
-            <ShareIcon />
-          </View>
+          {rowContent}
           <StateOverlay
             cornerRadius={LOGIN_METHOD_ROW.radius}
             pressed={pressed && !disabled}
@@ -1658,6 +1652,9 @@ const makeStyles = (colors: ThemeColors) =>
     color: colors.login.controlText,
     fontSize: LOGIN_METHOD_ROW.titleFont,
     fontWeight: fontWeight.bold,
+  },
+  methodRowDisabledTitle: {
+    color: colors.login.secondaryText,
   },
   methodRowSubtitle: {
     color: colors.login.secondaryText,

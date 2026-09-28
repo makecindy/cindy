@@ -3,7 +3,7 @@ import { Image, Pressable, StyleSheet, View } from 'react-native';
 import { ImagePlus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
-import { iconSize, radius, spacing, typeScale, useThemedStyles, type ThemeColors, useTheme } from '@/theme';
+import { iconSize, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import portraits from '../../assets/bot-presets/portrait-gallery.json';
 
 // Bundled copies of the desktop picker: Cindy first, followed by the same sixteen portraits.
@@ -59,5 +59,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   choice: { width: 60, height: 60, padding: 3, borderWidth: 1, borderColor: 'transparent', borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
   image: { width: 52, height: 52, borderRadius: radius.pill },
   upload: { width: 52, height: 52, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface },
-  note: { color: colors.textSecondary, fontSize: typeScale.footnote },
+  note: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

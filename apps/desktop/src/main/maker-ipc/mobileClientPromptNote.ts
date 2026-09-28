@@ -170,13 +170,15 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
     !('signal' in opts) &&
     !('turnPermissionPolicy' in opts) &&
     !('toolsDisabled' in opts) &&
-    !('origin' in opts)
+    !('origin' in opts) &&
+    !('uiLanguage' in opts)
   ) {
     return opts;
   }
   const {
     fromMobileClient: _ignoredMobile,
     fromDeviceLinkClient: _ignoredDeviceLink,
+    uiLanguage: _ignoredUiLanguage,
     expectedInputGeneration: _ignoredGeneration,
     expectedTurnSession: _ignoredTurnSession,
     expectedTurnGeneration: _ignoredTurnGeneration,

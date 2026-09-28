@@ -112,10 +112,11 @@ describe('CCAgentSessionView 接线不变式', () => {
       /if \(optimisticallyClearRemoteComposer\) \{\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n){2}\s*optimisticComposerRestored = false;\s*clearSentComposer\(\{ preserveNewerContent: true \}\);\s*\} else \{[\s\S]*?clearSentComposer\(\{ preserveNewerContent: true \}\);\s*\}/,
     );
   });
-  it('已有远程 session 断线时跳过来源门禁，远程草稿与本地任务仍保留门禁', () => {
+  it('已有设备互联任务与保留原路由的 SSH 任务跳过来源门禁，草稿与本地任务仍保留门禁', () => {
     expect(chatInputSrc).toContain(
-      'const enforceConnectedSourceGate = !sessionId || !deviceLinkDeviceId;',
+      'const enforceConnectedSourceGate = (!sessionId || !deviceLinkDeviceId) && !preserveSshCodexRoute;',
     );
+    expect(chatInputSrc).toContain('const preserveSshCodexRoute = !!sessionId && !!sshCodexHostId &&');
     expect(chatInputSrc).toMatch(
       /const noConnectedSource =\s*enforceConnectedSourceGate &&\s*!!currentModelAgentKind/,
     );
@@ -149,7 +150,8 @@ describe('CCAgentSessionView 接线不变式', () => {
       resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'SessionTaskMenu.tsx'),
       'utf8',
     );
-    expect(menuSource).toContain("item('openInNewWindow', onOpenInNewWindow, writeBlocked)");
+    expect(menuSource).toContain('const ownerActionsBlocked = writeBlocked || guest');
+    expect(menuSource).toContain("item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)");
     expect(menuSource).toContain('disabled={disabled}');
   });
   it('live / 历史错误横幅都携带 SSH 与 device-link 执行端归属', () => {

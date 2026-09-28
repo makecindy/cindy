@@ -296,8 +296,8 @@ export default function SharedSessionScreen() {
         <View style={styles.footer}><SharedTaskAction grow action={{ label: t('sharedTask.closeCurrent'), tone: 'danger', disabled: busy, onPress: () => confirm(t('sharedTask.closeOneTitle'), t('sharedTask.closeOneBody'), t('sharedTask.closeAllKeep'), t('sharedTask.close'), async () => { await host({ action: 'close', sharedTaskId: detail.sharedTaskId }); }) }} /></View>
       </> : <>
         <Text style={styles.intro}>{t('sharedTask.joinIntro')}</Text>
-        <View style={styles.field}><Text style={styles.label}>{t('sharedTask.invitation')}</Text><TextInput accessibilityLabel={t('sharedTask.invitation')} placeholder={t('sharedTask.invitationPlaceholder')} placeholderTextColor={colors.textTertiary} style={[styles.input, styles.invitation]} value={invitation} onChangeText={setInvitation} multiline textAlignVertical="top" autoCapitalize="none" autoCorrect={false} editable={!busy} /></View>
-        <View style={styles.field}><Text style={styles.label}>{t('sharedTask.joinNickname')}</Text><TextInput accessibilityLabel={t('sharedTask.joinNickname')} placeholder={t('sharedTask.nicknamePlaceholder')} placeholderTextColor={colors.textTertiary} style={styles.input} value={name} onChangeText={setName} maxLength={32} editable={!busy} /></View>
+        <View style={styles.field}><Text style={styles.label}>{t('sharedTask.invitation')}</Text><TextInput accessibilityLabel={t('sharedTask.invitation')} placeholder={t('sharedTask.invitationPlaceholder')} placeholderTextColor={colors.textPlaceholder} style={[styles.input, styles.invitation]} value={invitation} onChangeText={setInvitation} multiline textAlignVertical="top" autoCapitalize="none" autoCorrect={false} editable={!busy} /></View>
+        <View style={styles.field}><Text style={styles.label}>{t('sharedTask.joinNickname')}</Text><TextInput accessibilityLabel={t('sharedTask.joinNickname')} placeholder={t('sharedTask.nicknamePlaceholder')} placeholderTextColor={colors.textPlaceholder} style={styles.input} value={name} onChangeText={setName} maxLength={32} editable={!busy} /></View>
         <View style={styles.noticeBox}><Users size={iconSize.sm} color={colors.textTertiary} /><Text style={[styles.smallMuted, styles.grow]}>{t('sharedTask.joinNotice')}</Text></View>
         <View style={styles.footer}><SharedTaskAction grow action={{ label: t('sharedTask.join'), tone: 'primary', busy, disabled: !invitation.trim() || !name.trim(), onPress: () => void run(async (current) => {
           if (!/^[A-Za-z0-9_-]{43}$/.test(invitation.trim()) || name.trim().length > 32) { setNotice(t('sharedTask.invalid')); return; }
@@ -310,13 +310,13 @@ export default function SharedSessionScreen() {
   </SharedTaskScreen>;
 }
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  intro: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.listBody, marginBottom: spacing.lg },
+  intro: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, marginBottom: spacing.lg },
   small: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  smallMuted: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  taskTitle: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.listBody, fontWeight: fontWeight.medium },
+  smallMuted: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  taskTitle: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   metadata: { color: colors.textTertiary, fontSize: typeScale.micro, lineHeight: lineHeight.micro },
-  caption: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, marginBottom: spacing.sm },
-  noticeText: { color: colors.errorText, fontSize: typeScale.caption, lineHeight: lineHeight.caption, marginBottom: spacing.md },
+  caption: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, marginBottom: spacing.sm },
+  noticeText: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, marginBottom: spacing.md },
   taskRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.control, padding: spacing.md, marginVertical: spacing.sm },
   copyBox: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.control, padding: spacing.md, marginVertical: spacing.lg },
   noticeBox: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, backgroundColor: colors.surfaceChip, borderRadius: radius.control, padding: spacing.md, marginVertical: spacing.lg },
@@ -326,17 +326,17 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   badge: { borderRadius: radius.pill, backgroundColor: colors.surfaceChip, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
   grow: { flex: 1 },
   field: { gap: spacing.xs, marginBottom: spacing.lg },
-  label: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
-  input: { minHeight: 44, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, color: colors.textPrimary, backgroundColor: colors.surface, fontSize: typeScale.listBody, lineHeight: lineHeight.listBody },
+  label: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+  input: { minHeight: 44, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, color: colors.textPrimary, backgroundColor: colors.surface, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   invitation: { minHeight: 82, borderRadius: radius.control },
   person: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 48, paddingVertical: spacing.sm },
-  personName: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.listBody, fontWeight: fontWeight.medium },
-  peopleTitle: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, marginTop: spacing.lg, marginBottom: spacing.xs },
+  personName: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+  peopleTitle: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, marginTop: spacing.lg, marginBottom: spacing.xs },
   avatar: { width: 28, height: 28, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, backgroundColor: colors.surfaceChip, alignItems: 'center', justifyContent: 'center' },
   empty: { alignItems: 'center', paddingVertical: spacing.xl, paddingHorizontal: spacing.xs },
   largeIcon: { width: 44, height: 44, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.lg },
-  emptyTitle: { color: colors.textPrimary, fontSize: typeScale.listBody, lineHeight: lineHeight.listBody, fontWeight: fontWeight.medium, textAlign: 'center' },
-  emptyCopy: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, textAlign: 'center', maxWidth: 280, marginTop: spacing.sm, marginBottom: spacing.lg },
+  emptyTitle: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium, textAlign: 'center' },
+  emptyCopy: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center', maxWidth: 280, marginTop: spacing.sm, marginBottom: spacing.lg },
   rule: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginVertical: spacing.lg },
   footer: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
 });

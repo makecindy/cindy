@@ -67,6 +67,7 @@ import {
   BaseAgent,
   MAIN_OWNED_SEND_CONTEXT,
   PINNED_SKILL_INVOCATION,
+  PI_REQUEST_BODY_RECOVERY_EXHAUSTED,
   PiManagedPackageMutationCancelledError,
   PiManagedPackageMutationFailedError,
   projectPiPackageCommandDiagnostic,
@@ -232,6 +233,7 @@ import {
   activePiHistoryFromTree,
   findPiTreeEntry,
   normalizePiSessionTree,
+  piRetryBranch,
   piContextTokensFromTree,
   userDraftTextFromPiEntry,
 } from './session-tree.js';
@@ -1900,9 +1902,8 @@ export class PiAgent extends BaseAgent {
     return {
       switchModel: { supported: true },
       availableModels: [],
-      // Pi 的 ChatGPT 模型经 Desktop responses bridge 调用。Fast 状态由 host 按
-      // sessionId 注入 bridge prefs,再映射为 Codex `service_tier: priority`；实际
-      // 是否显示开关仍由目录里该 (provider, model, pi) 的 supportsFastMode 门控。
+      // ChatGPT 订阅由 Desktop bridge 注入 Fast；自定义直连由原生请求钩子读取
+      // 本运行时偏好，映射 service_tier: priority。两者均由该连接的能力声明门控。
       hasFastMode: true,
       effort: { supported: true },
       effortLevels: [
@@ -3231,6 +3232,17 @@ export class PiAgent extends BaseAgent {
       runtimeDir,
       `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}${remote ? `-${permissionSnapshotHash}` : ''}.json`,
     );
+    const fastModels = nativeProviders.flatMap(provider => provider.models
+      .filter(model => model.supportsFastMode === true)
+      .map(model => ({ provider: provider.id, id: model.wireId ?? model.id })));
+    // Fast is host-owned state. The bridge reads it over RPC; no writable file
+    // (or replayable snapshot) can authorize a paid request tier.
+    let requestPrefsClosed = false;
+    let nativeFastEnabled = opts.getPriceVariant?.() === 'priority';
+    const updateRequestPrefs = (fast = opts.getPriceVariant ? opts.getPriceVariant() === 'priority' : nativeFastEnabled): void => {
+      if (requestPrefsClosed) throw new Error('Pi request preferences are closed');
+      nativeFastEnabled = fast;
+    };
     let activeToolsDisabled = false;
     let textOnlyPolicyReady = false;
     const textOnlyInput = (text: string): string => {
@@ -3254,6 +3266,7 @@ export class PiAgent extends BaseAgent {
     const cleanupRuntimeFiles = (): void => {
       if (runtimeFilesCleaned) return;
       runtimeFilesCleaned = true;
+      requestPrefsClosed = true;
       void rmPath(permissionFile);
       void rmPath(subagentRuntimeFile);
     };
@@ -3361,6 +3374,7 @@ export class PiAgent extends BaseAgent {
       return run;
     };
     await writePermissionFile(requestedPermissionSnapshot);
+    updateRequestPrefs();
 
     // 子代理运行期快照的写入:代际串行,最新意图胜出(理由同权限档 —— 并发/连续 setModel
     // 时无串行的 writeFile 可能让较早的模型写在较新的之后落盘,子代理就会读到过期模型)。
@@ -3778,6 +3792,7 @@ export class PiAgent extends BaseAgent {
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
     ctx.getPriceVariant = opts.getPriceVariant;
+    ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
     ctx.workingContextWindow = startupWorkingContextWindow;
     const contextModeRoot = findContextModePackageRoot([
       ...nativePackageRoots,
@@ -5095,7 +5110,8 @@ export class PiAgent extends BaseAgent {
       // 键名可能含 API key，须纳入 piSecretEnvNames 剥离面。
       // 传当前 session model：未命中视觉桥目标模型的 Pi 模型不注入 env、不注册
       // vision 工具（零干扰，不因别的模型配置了视觉桥而改变本模型工具面）。
-      const visionBridgeEnv = this.deps.resolvePiVisionBridgeEnv?.(opts.model) ?? null;
+      // sessionId 供 OpenCode Go 后端确定性派生会话头（spawn env 必须稳定）。
+      const visionBridgeEnv = this.deps.resolvePiVisionBridgeEnv?.(opts.model, opts.sessionId) ?? null;
       // 这些值必须留在 Pi 父进程，供 models.json 的 $ENV 请求期解析及 bridge
       // client 使用；cindy-bridge 用该**仅含变量名**的清单在 bash spawn 边界剥离
       // 真值，阻止 LLM shell 绕过工具审批直连 localhost proxy/MCP 或盗用 BYOM key。
@@ -5117,6 +5133,7 @@ export class PiAgent extends BaseAgent {
         // 扩展照旧现读快照,能力不受影响。
         CINDY_SUBAGENT_ENV.runtimeFile,
         CINDY_SUBAGENT_ENV.ownerId,
+        'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
         // 受管工具路径同属控制面：不得让获批 bash 改写/替换后影响后续自动放行的 grep/find。
         ...(managedRipgrepPath ? [PI_MANAGED_RG_PATH_ENV] : []),
       ]));
@@ -5128,6 +5145,8 @@ export class PiAgent extends BaseAgent {
       // 失败(fail-closed)直接传播 —— 用户显式开启代理却静默直连是安全语义缺陷
       // (R2 MCP BUG-2):隧道 arm 失败应让会话启动失败,而非绕过代理。
       const proxyEnv = remote && this.deps.getRemotePiAgentProxyEnv ? await this.deps.getRemotePiAgentProxyEnv(opts.remoteHostId!) : null;
+      const companionEnvironment = opts.botRuntimeProfile && !remote && opts.sessionId
+        ? await this.deps.resolveSessionEnvironment?.(opts.sessionId) : undefined;
       const spawnEnv: NodeJS.ProcessEnv = {
         ...(remote ? {} : process.env),
         ...(typeof this.deps.runtimeConfig.behaviorFlags === 'function'
@@ -5153,6 +5172,7 @@ export class PiAgent extends BaseAgent {
         PI_CODING_AGENT_DIR: configHome,
         [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
+        ...(fastModels.length > 0 ? { CINDY_PI_FAST_MODELS: JSON.stringify(fastModels) } : {}),
         CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
         // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
@@ -5208,6 +5228,7 @@ export class PiAgent extends BaseAgent {
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
+      companionEnvironment?.assertCurrent?.();
       piSpawnStartedAt = Date.now();
       const { transport } = await this.createTransport(
         {
@@ -5249,6 +5270,8 @@ export class PiAgent extends BaseAgent {
               resolver: interactionResolver,
               permissionMode,
               currentModelIds: [mutableModel, mutableWireModel],
+              readNativeFast: (provider, model) => !requestPrefsClosed && nativeFastEnabled &&
+                fastModels.some(candidate => candidate.provider === provider && candidate.id === model),
               workspaceRoots: [opts.workingDir],
               readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
               writableRoots: [opts.workingDir, ...mutableWritableDirs],
@@ -6734,6 +6757,7 @@ export class PiAgent extends BaseAgent {
       async send(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'send');
         await waitForSessionRpcIdle();
+        updateRequestPrefs();
         rejectIfCancelled(sendOpts, 'send');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         // 本轮策略覆盖:无策略显式清 null,不继承上一轮渠道策略(§7.2.5);内部续跑
@@ -6804,6 +6828,48 @@ export class PiAgent extends BaseAgent {
           if (images.length > 0) command.images = images;
           // send 语义 = 排队开新 turn;pi streaming 中裸 prompt 会被拒,补 followUp。
           if (ctx.isStreaming) command.streamingBehavior = 'followUp';
+          if (sendOpts?.retryTranscriptUserEntryId && !ctx.isStreaming) {
+            await runExclusivePiRpc(async () => {
+              const before = await proc.request({ type: 'get_tree' });
+              if (!before.success) throw new TurnDispatchRejectedError('Pi retry history unavailable');
+              const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId!);
+              if (!branch) return;
+              rejectIfCancelled(sendOpts, 'send');
+              // Native navigation preserves the old failed branch in the append-only
+              // transcript. Only the active model context is replaced by this retry.
+              const payload = encodeURIComponent(JSON.stringify({ entryId: sendOpts.retryTranscriptUserEntryId }));
+              const switched = await proc.request({ type: 'prompt', message: `/cindy-branch-switch ${payload}` });
+              const after = await proc.request({ type: 'get_tree' });
+              if (!switched.success || !after.success || normalizePiSessionTree(after.data).leafId !== branch.parentId) {
+                throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');
+              }
+              rejectIfCancelled(sendOpts, 'send');
+              if (branch.requestTooLarge) {
+                // A user-requested retry after a byte-limit rejection gets one native
+                // compaction attempt. Never invent a provider byte/token threshold.
+                try {
+                  const result = await requestPiCompact();
+                  rejectIfCancelled(sendOpts, 'send');
+                  if (result.noop) {
+                    throw new Error('Pi cannot compact the request rejected with HTTP 413');
+                  }
+                } catch (error) {
+                  rejectIfCancelled(sendOpts, 'send');
+                  // The original failed response already proved a byte-limit
+                  // rejection. Any non-cancelled compaction failure leaves that
+                  // recovery incomplete, even if its own error is a timeout.
+                  if (!opts.remoteHostId) {
+                    nativeAutoCompactNeedsRollover = true;
+                    // A rejected send can close this runtime. Preserve the specific
+                    // recovery evidence in the durable error, not just this handle.
+                    throw new Error(`${PI_REQUEST_BODY_RECOVERY_EXHAUSTED}: ${String(error)}`);
+                  }
+                  throw error;
+                }
+              }
+              rejectIfCancelled(sendOpts, 'send');
+            });
+          }
           const userEntriesBefore = sendOpts?.onTranscriptUserEntry
             ? await readPiUserEntryIds()
             : null;
@@ -7277,6 +7343,11 @@ export class PiAgent extends BaseAgent {
           () => {},
         );
         return run;
+      },
+
+      async setFastMode(enabled: boolean): Promise<void> {
+        if (reviewMode) return;
+        updateRequestPrefs(enabled);
       },
 
       async setEffort(effort: Effort): Promise<void> {
@@ -7917,6 +7988,7 @@ export class PiAgent extends BaseAgent {
       resolver: InteractionResolver | null;
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
       currentModelIds: readonly string[];
+      readNativeFast?: (provider: string, model: string) => boolean;
       workspaceRoots: string[];
       readRoots: string[];
       writableRoots: string[];
@@ -7983,6 +8055,22 @@ export class PiAgent extends BaseAgent {
         message.slice(0, MAX_PI_EXTENSION_NOTIFICATION_LENGTH),
         event,
       );
+      return;
+    }
+
+    // Internal, read-only query over the existing stdio/SSH RPC response channel.
+    // Caller input selects an exact model; it can never supply or update Fast intent.
+    if (method === 'input' && event.title === 'cindy:request-preferences') {
+      const context = getPermissionCtx();
+      let fast = false;
+      try {
+        const requested = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '');
+        if (!context.isPermissionContextClosed() && !context.isAccountBoundaryTornDown() &&
+            typeof requested?.provider === 'string' && typeof requested?.model === 'string') {
+          fast = context.readNativeFast?.(requested.provider, requested.model) === true;
+        }
+      } catch { /* Invalid queries never enable a paid tier. */ }
+      proc.send({ type: 'extension_ui_response', id, value: JSON.stringify({ fast }) });
       return;
     }
 

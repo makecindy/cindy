@@ -59,7 +59,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexShrink: 1,
     fontSize: typeScale.caption,
     fontWeight: fontWeight.regular,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
   },
   pressed: { opacity: 0.7 },
 });

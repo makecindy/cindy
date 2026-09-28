@@ -40,6 +40,7 @@ import {
 } from '@cindy/model-providers';
 import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
+import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import {
   Activity,
   AlertCircle,
@@ -145,7 +146,7 @@ import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/
 import { ChatDisplaySnapshotProvider } from '@/components/chat/ChatDisplaySnapshotContext';
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
 import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
-import { useAttachments } from '@/hooks/useAttachments';
+import { cleanupRemovedCachedImage, useAttachments } from '@/hooks/useAttachments';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { SessionContentHeaderRegistration } from './SessionContentHeader';
 import { resolveSessionInterruptCandidate } from './sessionInterruptBannerModel';
@@ -210,6 +211,7 @@ import {
   makerChatStore,
   type AgentTaskUpdate,
   type MessageDeliveryMode,
+  type QueuedMessage,
 } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
@@ -240,6 +242,14 @@ import {
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { AttachedFile, ComposerBotMention, MentionedResource } from '@/lib/fileTypes';
 import { serializeAttachedFiles } from '@/lib/messageAttachmentPayload';
+import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
+import {
+  isQueueComposerEditCurrent,
+  queueMessageToComposerEditDraft,
+  rebaseQueueComposerEditContentAfterSlashCommandRewrite,
+  type QueueComposerEditState,
+} from '@/lib/queueComposerEdit';
+import type { SerializedComposerContent } from '@/components/new-chat/composerContentSerialization';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
@@ -272,6 +282,9 @@ import {
   type RecoverableHandoffKind,
 } from '@/state/pendingFirstMessage';
 import {
+  clearDraftAndNotify as clearComposerDraftAndNotify,
+  discardDraft as discardComposerDraft,
+  getDraft as getComposerDraft,
   saveDraft as saveComposerDraft,
   getDraftPresence as getComposerDraftPresence,
   plainTextToTiptapDoc,
@@ -1044,6 +1057,13 @@ export function CCAgentSessionView({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
+  // Durable Subagent status for the chat cards. Wait until ownership resolves:
+  // an unresolved task must not read this machine's store for a remote task.
+  const subagentRunStatuses = useSubagentRunStatusIndex({
+    sessionId,
+    deviceId: rightSidebarDeviceLinkDeviceId,
+    enabled: rightSidebarDeviceLinkDeviceId !== undefined,
+  });
 
   /**
    * Does this task own durable Pi Subagent runs?
@@ -1431,7 +1451,27 @@ export function CCAgentSessionView({
   // Attachments are managed here so the entire content area can act as a drop zone.
   // image-local-cache: pass sessionId so addFiles/addClipboardImage can cache
   // images into userData/cc-agent/images/{sessionId}/ via IPC.
-  const attachmentState = useAttachments(sessionId);
+  const [queueComposerEdit, setQueueComposerEdit] = useState<QueueComposerEditState | null>(null);
+  const activeQueueComposerEdit =
+    queueComposerEdit?.sessionId === sessionId ? queueComposerEdit : null;
+  const queueComposerEditRef = useRef(queueComposerEdit);
+  queueComposerEditRef.current = queueComposerEdit;
+  const currentSessionIdRef = useRef(sessionId);
+  currentSessionIdRef.current = sessionId;
+  const queueComposerEditSavingRef = useRef(false);
+  const queueComposerEditCleanupRef = useRef<{
+    edit: QueueComposerEditState;
+    files: readonly AttachedFile[];
+  } | null>(null);
+  const composerDraftKey = activeQueueComposerEdit?.draftKey ?? sessionId;
+  const attachmentState = useAttachments(sessionId, composerDraftKey);
+  const queueComposerEditAttachmentsRef = useRef<readonly AttachedFile[]>([]);
+  queueComposerEditAttachmentsRef.current = attachmentState.attachments;
+  const isCurrentQueueComposerEdit = useCallback(
+    (edit: QueueComposerEditState) =>
+      isQueueComposerEditCurrent(queueComposerEditRef.current, currentSessionIdRef.current, edit),
+    [],
+  );
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
   const resetFullAreaDragState = useCallback(() => {
@@ -1780,9 +1820,91 @@ export function CCAgentSessionView({
     setQueueInteractionLock,
     setQueueEditLock,
     removeFromQueue,
-    updateQueueItem,
+    updateQueueItemContent,
     chatDisplaySnapshot,
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
+  const clearQueueComposerEditDraft = useCallback(
+    (edit: NonNullable<typeof queueComposerEdit>, files: readonly AttachedFile[]) => {
+      const originalIds = new Set(edit.originalAttachmentIds);
+      const addedFiles = files.filter((file) => !originalIds.has(file.id));
+      for (const file of addedFiles) cleanupRemovedCachedImage(file);
+      cleanupStagedChatAttachmentFiles(addedFiles);
+      discardComposerDraft(edit.draftKey);
+    },
+    [],
+  );
+  const clearQueueComposerEditDraftWithFiles = useCallback(
+    (edit: QueueComposerEditState, files: readonly AttachedFile[]) => {
+      const filesById = new Map(files.map((file) => [file.id, file]));
+      for (const file of getComposerDraft(edit.draftKey)?.attachments ?? []) {
+        filesById.set(file.id, file);
+      }
+      clearQueueComposerEditDraft(edit, [...filesById.values()]);
+    },
+    [clearQueueComposerEditDraft],
+  );
+
+  const beginQueueComposerEdit = useCallback(
+    (entry: QueuedMessage) => {
+      if (!sessionId || activeQueueComposerEdit) return;
+      const prepared = queueMessageToComposerEditDraft(sessionId, entry);
+      const nextEdit = {
+        sessionId,
+        clientId: entry.clientId,
+        draftKey: prepared.draftKey,
+        originalAttachmentIds: prepared.originalAttachmentIds,
+      };
+      saveComposerDraft(prepared.draftKey, prepared.draft);
+      queueComposerEditRef.current = nextEdit;
+      setQueueComposerEdit(nextEdit);
+    },
+    [activeQueueComposerEdit, sessionId],
+  );
+
+  const cancelQueueComposerEdit = useCallback(() => {
+    if (queueComposerEditSavingRef.current) return;
+    const edit = activeQueueComposerEdit;
+    if (!edit || !isCurrentQueueComposerEdit(edit)) return;
+    clearQueueComposerEditDraft(edit, attachmentState.attachments);
+    attachmentState.clearFiles();
+    queueComposerEditRef.current = null;
+    setQueueComposerEdit(null);
+  }, [
+    activeQueueComposerEdit,
+    attachmentState,
+    clearQueueComposerEditDraft,
+    isCurrentQueueComposerEdit,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      const edit = queueComposerEditRef.current;
+      if (!edit || edit.sessionId !== sessionId) return;
+      const files = [...queueComposerEditAttachmentsRef.current];
+      if (queueComposerEditSavingRef.current) {
+        queueComposerEditCleanupRef.current = { edit, files };
+        return;
+      }
+      clearQueueComposerEditDraftWithFiles(edit, files);
+      queueComposerEditRef.current = null;
+    };
+  }, [clearQueueComposerEditDraftWithFiles, sessionId]);
+
+  useEffect(() => {
+    if (queueComposerEdit && queueComposerEdit.sessionId !== sessionId) {
+      setQueueComposerEdit(null);
+    }
+  }, [queueComposerEdit, sessionId]);
+
+  useEffect(() => {
+    if (
+      activeQueueComposerEdit &&
+      !pendingQueue.some((entry) => entry.clientId === activeQueueComposerEdit.clientId)
+    ) {
+      cancelQueueComposerEdit();
+    }
+  }, [activeQueueComposerEdit, cancelQueueComposerEdit, pendingQueue]);
+
   const remoteMakeCards = useSessionResourceCards({
     deviceId: session?.source === 'cindy-make' && session.status === 'active' && !session.clearedAt
       ? remoteDeviceId : undefined,
@@ -3225,6 +3347,69 @@ export function CCAgentSessionView({
     ],
   );
 
+  const submitQueueComposerEdit = useCallback(
+    async (clientId: string, content: SerializedComposerContent, files: AttachedFile[]) => {
+      const edit = activeQueueComposerEdit;
+      if (!edit || edit.clientId !== clientId || queueComposerEditSavingRef.current) return false;
+      queueComposerEditSavingRef.current = true;
+      let rowDisappeared = false;
+      let updateSucceeded = false;
+      try {
+        const slashDispatch = await maybeDispatchDesktopSlashCommand(content.text, files, {
+          allowDesktopDispatch: false,
+          piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+        });
+        const contentForSave = rebaseQueueComposerEditContentAfterSlashCommandRewrite(
+          content,
+          slashDispatch.message,
+        );
+        const updated = await updateQueueItemContent(clientId, { content: contentForSave, files });
+        if (!updated) {
+          rowDisappeared = !makerChatStore
+            .getSnapshot(edit.sessionId)
+            .pendingQueue.some((entry) => entry.clientId === clientId);
+          return false;
+        }
+        updateSucceeded = true;
+        clearComposerDraftAndNotify(edit.draftKey);
+        if (!isCurrentQueueComposerEdit(edit)) return true;
+        attachmentState.clearFiles();
+        queueComposerEditRef.current = null;
+        setQueueComposerEdit(null);
+        return true;
+      } finally {
+        queueComposerEditSavingRef.current = false;
+        const pendingCleanup =
+          queueComposerEditCleanupRef.current?.edit.draftKey === edit.draftKey
+            ? queueComposerEditCleanupRef.current
+            : null;
+        if (pendingCleanup) queueComposerEditCleanupRef.current = null;
+        if (!updateSucceeded && pendingCleanup) {
+          queueMicrotask(() =>
+            clearQueueComposerEditDraftWithFiles(edit, [...pendingCleanup.files, ...files]),
+          );
+        } else if (rowDisappeared && !pendingCleanup) {
+          queueMicrotask(() => {
+            if (isCurrentQueueComposerEdit(edit)) {
+              cancelQueueComposerEdit();
+              return;
+            }
+            clearQueueComposerEditDraftWithFiles(edit, files);
+          });
+        }
+      }
+    },
+    [
+      activeQueueComposerEdit,
+      attachmentState,
+      cancelQueueComposerEdit,
+      clearQueueComposerEditDraftWithFiles,
+      isCurrentQueueComposerEdit,
+      maybeDispatchDesktopSlashCommand,
+      updateQueueItemContent,
+    ],
+  );
+
   const handleWorkingDirChange = useCallback(
     (newDir: string | null) => {
       // ChatInput already persists workingDir to server; we just refresh our local copy.
@@ -3456,6 +3641,7 @@ export function CCAgentSessionView({
         slashCommandRanges?: SlashCommandRange[];
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
         onDeferredAccepted?: () => void;
+        annotationBurnFailure?: 'abort';
       },
     ) => {
       if (readOnly) return false;
@@ -3680,6 +3866,10 @@ export function CCAgentSessionView({
           ? { onRemoteOptimisticFailure: opts.onRemoteOptimisticFailure }
           : {}),
         ...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {}),
+        // 输入框在返回 false 时会原样恢复草稿:标注烧录失败可安全中止(见 SendMessageOpts)。
+        ...(opts?.annotationBurnFailure
+          ? { annotationBurnFailure: opts.annotationBurnFailure }
+          : {}),
       };
       if (deliveryMode === 'steer') {
         const followStartGeneration = readSendFollowCancelGeneration(sessionId);
@@ -4547,6 +4737,7 @@ export function CCAgentSessionView({
       // 消息下方 Fork / Rewind icon 的显示 (Codex rewind=false → 隐藏)。
       agentKind={session?.agentKind}
       remoteHostId={session?.remoteHostId ?? null}
+      sessionSource={session?.source}
       // text-lightbox-trigger-extension F1/F2: cwd flows from session
       // owner down through MessageStream → AssistantMessage / UserMessage.
       // The spec guarantees `session.workingDir` is set; `?? ''` is purely
@@ -4562,6 +4753,7 @@ export function CCAgentSessionView({
       historyLoaded={historyLoaded}
       historyCleared={Boolean(session?.clearedAt)}
       taskUpdates={taskUpdates}
+      subagentRunStatuses={subagentRunStatuses}
       isSessionStreaming={isStreaming}
       continuationTurnClientId={continuationTurnClientId}
       continuationInFlightProjectionCapability={continuationInFlightProjectionCapability}
@@ -4999,6 +5191,7 @@ export function CCAgentSessionView({
                   deviceLinkDeviceId={remoteDeviceId}
                   modelId={session?.model}
                   providerId={session?.providerId}
+                  sessionSource={session?.source}
                   onViewBalance={canAccessBilling ? handleViewBalance : undefined}
                   errorSourceProviderId={errorTailMsg?.errorProviderId ?? null}
                   onSwitchToClaudeSubscription={
@@ -5075,6 +5268,7 @@ export function CCAgentSessionView({
                 deviceLinkDeviceId={remoteDeviceId}
                 modelId={session?.model}
                 providerId={session?.providerId}
+                sessionSource={session?.source}
                 onSwitchToClaudeSubscription={
                   canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
                 }
@@ -5322,13 +5516,18 @@ export function CCAgentSessionView({
                   onStop={handleStopSession}
                   pendingQueue={pendingQueue}
                   disabled={readOnly || remoteHandoffPreparing || session?.source === 'review'}
-                  settingsLocked={readOnly || session?.source === 'review'}
+                  settingsLocked={
+                    readOnly || session?.source === 'review' || Boolean(activeQueueComposerEdit)
+                  }
                   queuePaused={queuePaused}
                   queueExpanded={queueExpanded}
                   onQueueExpandedChange={setQueueExpanded}
                   onQueueResume={resumeQueue}
                   onQueueRemove={removeFromQueue}
-                  onQueueEdit={updateQueueItem}
+                  queueEditingClientId={activeQueueComposerEdit?.clientId ?? null}
+                  onQueueEditBegin={beginQueueComposerEdit}
+                  onQueueEditSubmit={submitQueueComposerEdit}
+                  onQueueEditCancel={cancelQueueComposerEdit}
                   onQueueSteer={steerQueuedMessage}
                   onQueueReorder={moveQueueItem}
                   onQueueInteractionLock={setQueueInteractionLock}
@@ -5350,6 +5549,7 @@ export function CCAgentSessionView({
                   onEffortDidChange={handleEffortDidChange}
                   onPermissionModeDidChange={handlePermissionModeDidChange}
                   attachmentState={attachmentState}
+                  draftKey={composerDraftKey}
                   externalDragOver={isDragOver}
                   onComposerDropHandled={resetFullAreaDragState}
                   vendorKey={normalizeDbAgentKind(displayAgentKind)}

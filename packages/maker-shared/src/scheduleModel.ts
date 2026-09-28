@@ -124,7 +124,9 @@ export function displayRunsForMobile(list: readonly RemoteScheduleRun[]): Remote
 }
 
 export function countUnreadRuns(list: readonly RemoteScheduleRun[], now = Date.now()): number {
-  return list.filter((run) => isUnreadRun(run, now)).length;
+  const activeFailures = activeScheduleFailures(list);
+  return list.filter((run) => isUnreadRun(run, now)
+    && (run.status === 'success' || activeFailures.has(run.id))).length;
 }
 
 export function summarizeAutomationOverview(

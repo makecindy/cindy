@@ -212,6 +212,9 @@ export function useSessionRunningStatus(
         // error 立刻处理:队列会被 abort,不存在"下一条自动接着跑"的场景;红角标 +
         // 系统通知(onSessionError,由 renderer 侧 gate focus)都马上触发,不走
         // debounce。出错永不静默:失败的后台 turn 不能伪装成正常完成或悄无声息消失。
+        // 伙伴群专线的回合由群聊承接:回复进群,失败在群里显示轻提示。这条隐藏
+        // Session 不在任何列表里,挂上的角标用户永远点不掉(docs/product-rules/bot-group-chat.md §3)。
+        if (makerChatStore.wasLastStopGroupLane(sessionId)) continue;
         if (hasError) {
           // 即使是当前活跃会话也挂红角标:红点跟随「告警未处理」而非「是否看到」,
           // 横幅就在眼前时列表同样亮点(2026-07 统一决策)。不能沿用「活跃会话不亮」

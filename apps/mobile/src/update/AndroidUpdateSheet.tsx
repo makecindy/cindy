@@ -4,7 +4,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { ContextSheet } from '@/session/ContextSheet';
-import { spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { lineHeight, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { androidInstaller } from './androidInstaller';
 
 /** Mounted outside the business tree so forced updates have the same working installer. */
@@ -61,5 +61,5 @@ export function AndroidUpdateSheet() {
 }
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   content: { gap: spacing.lg, padding: spacing.lg },
-  status: { color: colors.textPrimary, fontSize: typeScale.body },
+  status: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
 });

@@ -241,12 +241,25 @@ describe('terminalErrorText', () => {
     });
     expect(notice).toContain('自动审批暂时无法给出判断');
     // 必须说清操作的去向 —— 现在是转交用户确认,不再是静默拒绝。
-    expect(notice).toContain('转由你来确认');
-    // 必须给出用户能做的事,否则等于只说"又失败了"。
-    expect(notice).toContain('默认权限');
+    expect(notice).toContain('由你确认');
+    // 少打断只指向完全访问。默认权限在三条 Harness 上都不等于少确认。
+    expect(notice).toContain('完全访问');
+    expect(notice).toContain('风险更高');
+    expect(notice).not.toContain('默认权限');
     // 不得把 [CODE] 前缀或英文原文推给渠道用户。
     expect(notice).not.toContain('AUTO_REVIEW_UNAVAILABLE');
     expect(notice).not.toContain('Auto-review could not');
+  });
+
+  it('个人微信不建议切到完全访问', () => {
+    const notice = turnRetryNotice({
+      message: '[AUTO_REVIEW_UNAVAILABLE] Auto-review could not reach a decision',
+      isTerminal: false,
+    }, { channel: 'wechat' });
+    expect(notice).toContain('个人微信不能使用「完全访问」');
+    expect(notice).toContain('直接确认');
+    expect(notice).not.toContain('想少被打断');
+    expect(notice).not.toContain('默认权限');
   });
 
   it('确认卡没送到 → 渠道侧说明这次不是用户拒绝', () => {

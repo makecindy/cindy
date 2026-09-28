@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';
 
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
@@ -180,13 +181,14 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerCardActive = (canUseComposer && composerFocused)');
     expect(source).toContain('|| permissionSheetOpen');
     // 2026-07-29 用户裁决:权限入口是 composer 左侧图标钮 + 独立浮窗
-    // (MobilePermissionPickerList 由本 screen 直挂 SheetSurface);
+    // (两端都经 NativePermissionSheet:点选先关浮窗,关闭完成后再生效);
     // 浮窗打开时仍属于 composer 激活态,不能因输入框失焦把底排收起。
     // 2026-08:模型药丸改到左侧组(权限/计划右侧),避免发送/停止出现时横向跳动。
     // ModelPickerSheet 的 header 权限入口隐藏(hidePermissionTrigger),不再双入口。
     expect(source).not.toContain('testID="session.composerPermissionButton"');
     expect(source).toContain('testID="session.permissionIndicator"');
-    expect(source).toContain('<MobilePermissionPickerList');
+    expect(source).toContain('<NativePermissionSheet');
+    expect(source).not.toContain('<MobilePermissionPickerList');
     expect(source).toContain('hidePermissionTrigger');
     expect(source).toContain('setPermissionSheetOpen(false)');
     expect(source).toContain('testID="session.composerModelButton"');
@@ -223,13 +225,18 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('reconnectAttempt={remoteSessionRunStatus.reconnectAttempt}');
     expect(source).toContain('sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}');
     expect(source).toContain('startedAt={composerActivityStartedAtMs}');
+    expect(source).toContain('rateStartedAt={remoteSessionRunStatus.startedAt}');
+    expect(source).toContain('streaming={isSessionStreaming}');
+    expect(source).toContain('startedAt: samplerStartedAt,');
     expect(source).toContain('tokenUsage={composerActivityTokenUsage}');
     expect(source).toContain('outputTokens={remoteSessionRunStatus.outputTokens}');
     expect(source).toContain('generationDurationMs={remoteSessionRunStatus.generationDurationMs}');
     expect(source).toContain('ArrowDown');
-    expect(source).toContain('{!sideTaskRunning && showUsageMeta ? (');
+    expect(source).toContain('const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt);');
+    expect(source).toContain('const canShowRateDetails = !showElapsedOnly');
+    expect(source).toContain('enabled={canShowRateDetails}');
     expect(source).toContain('generationActive={remoteSessionRunStatus.generationActive}');
-    expect(source).toContain('const showUsageMeta = Boolean(rateText) || tokenUsage > 0;');
+    expect(source).toContain('const showUsageMeta = !showElapsedOnly && (Boolean(rateText) || tokenUsage > 0);');
     expect(source).toContain("t('session.screen.tokenCount'");
     expect(source).toContain("t('session.screen.tokenCountFull'");
     expect(source).toContain("t('session.screen.tokenRate'");
@@ -244,7 +251,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('composerActivityMetaText');
     expect(source).toContain('composerActivityFrame');
     expect(source).toContain('marginTop: spacing.lg');
-    expect(source).toContain('height: 25');
+    // The formerly passive rate is now a touch target, with a full 44pt status row.
+    expect(source).toMatch(/composerActivityStatus: \{[^}]*minHeight: 44/s);
     expect(source).toContain('composerActivityStatusText');
     expect(source).toContain('composerActivityProgressText');
     expect(composerStatusCallIndex).toBeGreaterThan(-1);
@@ -318,7 +326,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('if (!visualOpenSearch) return;');
     expect(source).toContain('setSearchOpen(true);');
     expect(source).toContain('if (visualSearchQuery !== null) setSearchQuery(visualSearchQuery);');
-    expect(source).toContain('autoFocus={MOBILE_VISUAL_MOCK_ENABLED && visible}');
+    // 任务内搜索两端打开即聚焦(与 iOS SessionSearchNative 一致),不再只限视觉演示包。
+    expect(source).toContain('autoFocus={visible}');
     expect(composerInputSource).toContain('autoFocus={visualFocusComposer}');
     expect(composerInputSource).toContain('cursorColor={colors.inputCaret}');
     expect(composerInputSource).toContain('selectionColor={colors.inputCaret}');
@@ -380,6 +389,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('onLayout={handleBottomOverlayLayout}');
     expect(source).toContain('bottomOverlayHeight={bottomOverlayHeight}');
     expect(source).toContain('styles.sessionBottomLayer,');
+    expect(source).toContain("sessionOperationLayout.composerSlot === 'editable' && { overflow: 'visible' }");
     expect(source).toContain('testID="session.bottomLayer"');
     expect(source).toContain('testID="session.bottomContent"');
     expect(source).toContain("paddingBottom: sessionOperationLayout.composerSlot === 'pending-interaction'");
@@ -443,7 +453,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const handleComposerInputPressIn = useCallback(() => {');
     expect(source).toContain('onPressIn={handleComposerInputPressIn}');
     expect(source).toContain("placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}");
-    expect(source).toContain('placeholderTextColor={colors.textTertiary}');
+    expect(source).toContain('placeholderTextColor={colors.textPlaceholder}');
     expect(source).toContain('inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}');
     expect(source).toContain('styles.voiceDraftOverlay');
     expect(voiceDraftOverlayStyle).toContain('...StyleSheet.absoluteFill');
@@ -510,8 +520,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('<VoiceMicWaveCaret color={colors.statusReady} inline />');
     // 语音态占位文案就是普通态 TextInput 的 placeholder,必须与 placeholderTextColor 同源,
     // 否则一进语音态这行字会变色(2026-07-31 用户定案:不再用 statusReady 蓝绿)。
-    expect(source).toContain('placeholderTextColor={colors.textTertiary}');
-    expect(source).toContain('voiceDraftListeningText: {\n    color: colors.textTertiary,');
+    expect(source).toContain('placeholderTextColor={colors.textPlaceholder}');
+    expect(source).toContain('voiceDraftListeningText: {\n    color: colors.textPlaceholder,');
     expect(source).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
     expect(source).toContain('finishVoiceRecordingRef.current?.();');
     expect(source).toContain('const voiceStopInFlightRef = useRef(false);');
@@ -630,9 +640,11 @@ describe('mobile session composer desktop-first surface', () => {
     // fresh (credential already resolved, WebSocket already connecting) and
     // falls back to building the managed credential itself otherwise. 手机语音
     // 只保留 Cindy 官方托管路径:BYOK/穿透已删除。
-    expect(source).toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
-    expect(source).toContain('const prewarmedVoicePromise = takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null);');
-    expect(source).toContain('prewarmedVoicePromise.then((voice) => getMobileVoiceInputHistoryForHost(deviceId, voice?.credential.settings?.voiceInputHistory))');
+    expect(source).toContain('const prewarmedVoice = await (takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null));');
+    // 语音历史与词典快照只服务润色提示:后台读取,不挡在开麦之前。
+    expect(source).not.toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
+    expect(source).toContain('void getMobileVoiceInputHistoryForHost(deviceId, prewarmedVoice?.credential.settings?.voiceInputHistory)');
+    expect(source).toContain('void hydrateMobileVoiceDictionary(deviceId).catch(() => undefined);');
     expect(source).not.toContain('MobileVoiceServiceMode');
     expect(source).not.toContain('LiteLlm');
     expect(source).toContain('?? createMobileCindyVoiceCredential(deviceId);');
@@ -645,7 +657,6 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),');
     expect(source).toContain('voiceContext.createRefinerTarget(providerId, options),');
     expect(source).toContain('voiceContext.warmRefiner(input),');
-    expect(source).toContain('getMobileVoiceInputHistoryForHost(deviceId, voice?.credential.settings?.voiceInputHistory)');
     // Device link is opened non-blocking (not awaited): dictation goes through the
     // cloud ASR proxy and does not need the link, so it must not gate mic start.
     expect(source).toContain('void openLink(deviceId).catch(() => undefined);');
@@ -666,7 +677,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('allowStoredFallback: !forceRefresh');
     expect(source).toContain('getMobileVoiceInputHistoryForHost');
     expect(source).toContain('recordMobileVoiceInputHistoryForHost');
-    expect(source).toContain('localVoiceInputHistory,');
+    expect(source).toContain('localVoiceInputHistory: () => localVoiceInputHistory,');
     expect(source).toContain('recordHistory: (text) => recordMobileVoiceInputHistoryForHost(deviceId, text)');
     expect(source).toContain('updateHistoryEntry: (entryId, text) => updateMobileVoiceInputHistoryEntryForHost(deviceId, entryId, text)');
     expect(source).not.toContain('styles.sendButtonStop');
@@ -761,7 +772,23 @@ describe('mobile session composer desktop-first surface', () => {
     // 计时输入含 pressIn 乐观 pending(按下即录的即时反馈,对齐桌面 activeRecording)。
     // expanded 含乐观 pending(按下即展开),counting 只认真实采集——启动链路
     // (权限弹窗等)不计入录音时长(review P1)。
-    expect(source).toContain('expanded: voiceIsListening || voiceStartPending,');
+    // 停止后 150ms 内仍保持胶囊(stopping),超过才换处理转圈(对齐桌面)。
+    expect(source).toContain('expanded: voiceIsListening || voiceStartPending || voiceProcessingIndicator.stopping,');
+    expect(source).toContain('{voiceProcessingIndicator.showProcessing ? (');
+    // 停止期不置灰:共享布局在语音处理中恒把 voice.disabled 设为 true,不能拿它判断,
+    // 只有与语音无关的禁用原因(发送中)才置灰(新建任务页对应 creating)。
+    expect(buildSessionComposerLayout({
+      attachmentBusy: false,
+      attachmentCount: 0,
+      attachmentPickerOpen: false,
+      canStop: false,
+      draftText: '',
+      queueBusy: false,
+      sending: false,
+      voiceState: 'submitting',
+    }).voice.disabled).toBe(true);
+    expect(source).toContain('disabledStyle={voiceProcessingIndicator.stopping && !sending ? null : undefined}');
+    expect(source).not.toContain('voiceProcessingIndicator.stopping && !composerLayout.voice.disabled');
     expect(source).toContain('counting: voiceIsListening,');
     expect(source).toContain('const voiceStartedOnPressInRef = useRef(false);');
     // pending 世代守卫:切会话后旧启动收尾不得塌掉新录音的乐观胶囊(review P1)。

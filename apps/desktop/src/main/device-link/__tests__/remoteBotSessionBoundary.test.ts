@@ -55,6 +55,15 @@ it('fails closed for incomplete batch results, rejects hidden gets and clears a 
   expect(batch).toHaveBeenCalledTimes(1);
 });
 
+it('filters hidden runtime rows inside a complete active-session snapshot', async () => {
+  setRemoteBotSessionLookup(async (id) => id === 'hidden' ? 'hidden' : 'ordinary');
+  expect(await projectRemoteSessionResult('maker:list-active', {
+    format: 'active-sessions-v2', sessions: [
+      { sessionId: 'visible' }, { sessionId: 'hidden' },
+    ],
+  })).toEqual({ format: 'active-sessions-v2', sessions: [{ sessionId: 'visible' }] });
+});
+
 
 it('filters batch detail reads using the shared fresh visibility lookup', async () => {
   let hidden = false;

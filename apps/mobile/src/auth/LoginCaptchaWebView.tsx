@@ -117,7 +117,7 @@ export function LoginCaptchaWebView({
               justifyContent: 'center',
             }}
           >
-            <Text style={{ color: login.loginError, fontSize: typeScale.footnote, textAlign: 'center' }}>
+            <Text style={{ color: login.loginError, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' }}>
               {loginText('captchaFailed')}
             </Text>
             {hasNativeLoginButtons ? <LoginNativeButton
@@ -136,7 +136,7 @@ export function LoginCaptchaWebView({
               }}
               testID="login.captcha.retry"
             >
-              <Text style={{ color: login.linkText, fontSize: typeScale.footnote }}>
+              <Text style={{ color: login.linkText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
                 {loginText('captchaRetry')}
               </Text>
             </Pressable>
@@ -202,7 +202,7 @@ export function LoginCaptchaWebView({
           }}
           testID="login.captcha.cancel"
         >
-          <Text style={{ color: login.secondaryText, fontSize: typeScale.footnote }}>
+          <Text style={{ color: login.secondaryText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
             {loginText('captchaCancel')}
           </Text>
         </Pressable>

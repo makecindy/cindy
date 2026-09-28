@@ -219,9 +219,7 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
             if (savingRef.current || event.isComposing || event.keyCode === 229)
               event.preventDefault();
           }}
-          onPointerDownOutside={(event) => {
-            if (savingRef.current) event.preventDefault();
-          }}
+          onPointerDownOutside={(event) => event.preventDefault()}
         >
           <div className="flex shrink-0 items-center gap-2.5 p-4">
             <Sparkles size={20} className="shrink-0 text-[var(--settings-section-title)]" />

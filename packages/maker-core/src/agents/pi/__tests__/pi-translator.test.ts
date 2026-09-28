@@ -980,7 +980,10 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
   });
 
-  it('hands exhausted network retries back to the user instead of host auto-resume', () => {
+  it.each([
+    'The operation timed out.',
+    "Error Code null: Service temporarily unavailable. The model's availability is currently degraded.",
+  ])('hands exhausted network retries back to the user instead of host auto-resume: %s', (finalError) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
 
@@ -989,7 +992,7 @@ describe('pi translator', () => {
       ev({
         type: 'auto_retry_end',
         success: false,
-        finalError: 'The operation timed out.',
+        finalError,
       }),
       queue,
       ctx,
@@ -1003,7 +1006,7 @@ describe('pi translator', () => {
     );
     expect(terminalErrors).toHaveLength(1);
     expect(terminalErrors[0]?.data).toMatchObject({
-      message: 'The operation timed out.',
+      message: finalError,
       reason: 'pi-gateway-drop',
     });
     expect(events.find((event) => event.type === 'done')?.data)
@@ -1435,6 +1438,23 @@ describe('pi translator', () => {
     }));
     translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+  });
+
+  it.each(['standard', 'priority'] as const)('uses the native execution receipt (%s) instead of the Fast preference', priceVariant => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.getPriceVariant = () => 'priority';
+    ctx.resolveUsagePriceVariant = vi.fn(() => priceVariant);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', model: 'grok-4.7', content: [{ type: 'text', text: 'OK' }],
+      usage: { input: 20, output: 5, cacheRead: 10 },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(ctx.resolveUsagePriceVariant).toHaveBeenCalledWith({ inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 });
+    expect((events.find(event => event.type === 'done')!.data as { usage: { segments: unknown[] } }).usage.segments)
+      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant })]);
   });
 
   it('locks the Pi price variant from bridge usage metadata at each provider request boundary', () => {

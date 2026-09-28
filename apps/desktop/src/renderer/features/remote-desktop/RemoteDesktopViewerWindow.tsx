@@ -540,10 +540,7 @@ export function RemoteDesktopViewerWindow() {
                 <>
                   {isMac && state.caps?.platform === 'darwin' && (
                     <div className="flex flex-col gap-2">
-                      <label
-                        className="flex items-center justify-between gap-3"
-                        htmlFor="viewer-autoUnlock"
-                      >
+                      <label className="remote-viewer-toggle-row" htmlFor="viewer-autoUnlock">
                         <span>{t('remoteDesktop.autoUnlock')}</span>
                         <Switch
                           id="viewer-autoUnlock"
@@ -556,10 +553,7 @@ export function RemoteDesktopViewerWindow() {
                       </label>
                       <p>{t('remoteDesktop.autoUnlockHint')}</p>
                       {state.credential?.autoUnlock && (
-                        <label
-                          className="flex items-center justify-between gap-3"
-                          htmlFor="viewer-biometric"
-                        >
+                        <label className="remote-viewer-toggle-row" htmlFor="viewer-biometric">
                           <span>{t('remoteDesktop.biometricVerification')}</span>
                           <Switch
                             id="viewer-biometric"

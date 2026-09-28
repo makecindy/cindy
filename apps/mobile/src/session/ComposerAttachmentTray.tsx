@@ -19,7 +19,7 @@ import type { RemoteSerializedAttachment } from '@/session/types';
 import type { PendingLocalAttachmentUpload } from '@/session/mobileLocalAttachmentUpload';
 import { attachmentDisplayLabel, pendingUploadDisplayLabel } from '@/session/attachments';
 import { ANNOTATION_OUTLINE_COLOR, ANNOTATION_STROKE_COLOR } from '@/session/imageAnnotationModel';
-import { fontWeight, iconSize, iconStroke, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 /** 输入卡内的缩略图为正方形(产品决策,不用横长方)。 */
 const THUMB_SIZE = 72;
@@ -324,6 +324,7 @@ function makeTrayStyles(colors: ThemeColors) {
     thumbFailedText: {
       color: colors.ctaText,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       fontWeight: fontWeight.semibold,
     },
     // 标注角标:左下角红底画笔(标注红为语义豁免色,跨主题恒定,引语义常量)。
@@ -364,6 +365,7 @@ function makeTrayStyles(colors: ThemeColors) {
     chipText: {
       color: colors.textPrimary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       maxWidth: 220,
     },
     chipRemove: {
@@ -396,6 +398,7 @@ function makeTrayStyles(colors: ThemeColors) {
     collapsedBadgeFallbackText: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.semibold,
     },
     collapsedBadgeOverlay: {
@@ -412,6 +415,7 @@ function makeTrayStyles(colors: ThemeColors) {
     collapsedBadgeOverlayText: {
       color: colors.ctaText,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       fontWeight: fontWeight.semibold,
     },
   };

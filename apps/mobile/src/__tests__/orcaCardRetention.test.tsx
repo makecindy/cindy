@@ -29,8 +29,7 @@ const bindings = {
 const Card = new Function(...Object.keys(bindings), `${compiled}; return OrcaCollabCard;`)(...Object.values(bindings));
 
 describe('worker card reading state', () => {
-  it.each(['report', 'dispatch'])('remembers %s toggles across remounts, independently per card/account', async (variant) => {
-    const defaultExpanded = variant === 'dispatch';
+  it.each(['report', 'dispatch'])('starts %s collapsed and remembers toggles across remounts, independently per card/account', async (variant) => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     __test_internals.reset(); generation = 1;
     const container = document.createElement('div');
@@ -39,17 +38,26 @@ describe('worker card reading state', () => {
       card={{ variant, title: 'Worker', body: 'Long report' }} />));
     try {
       await show('pc/task/a');
-      expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe(String(defaultExpanded));
+      expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe('false');
+      expect(container.textContent).not.toContain('Long report');
       await act(async () => container.querySelector('button')!.click());
+      expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe('true');
+      expect(container.textContent).toContain('Long report');
       await act(async () => root.render(null));
       await show('pc/task/b');
-      expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe(String(defaultExpanded));
+      expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe('false');
       await act(async () => root.render(null));
       await show('pc/task/a');
-      expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe(String(!defaultExpanded));
-      expect(container.textContent?.includes('Long report')).toBe(!defaultExpanded);
+      expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe('true');
+      expect(container.textContent).toContain('Long report');
       generation = 2; await show('pc/task/a');
-      expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe(String(defaultExpanded));
+      expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe('false');
+      generation = 1; await show('pc/task/a');
+      await act(async () => container.querySelector('button')!.click());
+      await act(async () => root.render(null));
+      await show('pc/task/a');
+      expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe('false');
+      expect(container.textContent).not.toContain('Long report');
     } finally { await act(async () => root.unmount()); __test_internals.reset(); }
   });
 });

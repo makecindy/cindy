@@ -19,6 +19,7 @@
     "imageNotAnnotatable": "この画像は注釈や転送に対応していません。",
     "downloadOriginalFailed": "元の画像をダウンロードできませんでした（HTTP {{status}}）。",
     "annotationSaveFailed": "注釈を保存できませんでした",
+    "replacementPending": "この画像への前回の変更はまだアップロードが完了していません。完了するまで待つか、入力欄の上で再試行または削除してから編集してください。",
     "tryAgain": "もう一度お試しください。",
     "sendToChat": "チャットに送信",
     "save": "保存",
@@ -42,6 +43,7 @@
     }
   },
   "upload": {
+    "shareReceiveFailed": "共有ファイルの受信を完了できませんでした。ストレージの空き容量を確認し、この画面を開き直して再試行してください。",
     "emptyFile": "このファイルは空のため、添付ファイルとして送信できません。",
     "fileTooLarge": "ファイルが {{size}} MB を超えているため、現在は添付ファイルとして送信できません。",
     "cancelled": "添付ファイルのアップロードをキャンセルしました。",
@@ -86,6 +88,7 @@
     "sessionNotConnected": "音声認識セッションがまだ接続されていません。",
     "loginRequired": "音声入力を使用する前に {{appName}} にログインしてください。",
     "serviceUnavailable": "現在の地域では {{appName}} 音声サービスが設定されていません。",
+    "rateLimited": "音声リクエストが多すぎます。しばらく待ってから再試行してください。",
     "realtimeUnsupported": "モバイル版のリアルタイム音声は {{detail}} ASR にまだ対応していません。",
     "realtimeAuthUnsupported": "モバイル版のリアルタイム音声は {{auth}} ASR 認証にまだ対応していません。",
     "realtimeProtocolUnsupported": "モバイル版のリアルタイム音声は {{detail}} ASR プロトコルにまだ対応していません。",

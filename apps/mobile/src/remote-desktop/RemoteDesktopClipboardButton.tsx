@@ -121,6 +121,7 @@ export function RemoteDesktopClipboardButton({
     <>
     <NativePullDownMenu
       actions={actions}
+      disabled={!enabled || busy}
       onAction={(action) => {
         void run(action);
       }}

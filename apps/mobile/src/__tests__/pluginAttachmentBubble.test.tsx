@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { createElement, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
@@ -7,11 +8,12 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('react-native', async () => {
   const React = await import('react');
   const view = ({ children, testID, accessibilityLabel }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel }, children);
-  class Value { constructor(public value: number) {} interpolate() { return 0; } setValue() {} }
+  class Value { constructor(public value: number) {} interpolate() { return 0; } setValue() {} stopAnimation() {} }
   return {
     View: view, Text: view, Pressable: view, ScrollView: view, Modal: () => null,
     Image: Object.assign(view, { getSize() {} }), ActivityIndicator: view,
-    Animated: { Value, View: view, Text: view, createAnimatedComponent: (c: any) => c },
+    Animated: { Value, View: view, Text: view, createAnimatedComponent: (c: any) => c,
+      timing: () => ({ start() {}, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
     StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
     Easing: { linear: (n: number) => n, bezier: () => (n: number) => n },
@@ -104,5 +106,37 @@ describe('partner work feedback', () => {
     const completed = renderToStaticMarkup(<MessageRenderer items={done} companion companionWorkingLabel="Saving memory…" />);
     expect(completed).not.toContain('Saving memory…');
     expect(completed).toContain('message.workGroupToggle');
+  });
+});
+
+function renderClient(element: ReturnType<typeof createElement>): string {
+  const { act } = require('react') as typeof import('react');
+  const { createRoot } = require('react-dom/client') as typeof import('react-dom/client');
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  act(() => root.render(element));
+  const html = host.innerHTML;
+  act(() => root.unmount());
+  return html;
+}
+
+describe('partner conversation presentation', () => {
+  it('hangs replies from the partner portrait and stamps five-minute groups like Desktop', () => {
+    const messages = [
+      msg('u1', 'user', 'Hi', { createdAt: '2026-01-01T09:00:00Z' }),
+      msg('a1', 'assistant', 'Hello', { createdAt: '2026-01-01T09:01:00Z' }),
+      msg('u2', 'user', 'Later', { createdAt: '2026-01-01T09:10:00Z' }),
+    ];
+    const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: false });
+    const portrait = <i data-testid="partner-portrait" />;
+    const html = renderClient(<MessageRenderer items={items} companion companionAvatar={portrait} />);
+    // 09:00 opens a group, 09:01 joins it, 09:10 opens the next one.
+    expect(html.match(/companion\.timeGroup/g)).toHaveLength(2);
+    expect(html.match(/companion\.replyRow/g)).toHaveLength(1);
+    expect(html.match(/partner-portrait/g)).toHaveLength(1);
+    const ordinary = renderClient(<MessageRenderer items={items} companionAvatar={portrait} />);
+    expect(ordinary).not.toContain('companion.timeGroup');
+    expect(ordinary).not.toContain('companion.replyRow');
   });
 });

@@ -105,8 +105,10 @@ describe('Windows Git PATH PowerShell probes', () => {
     expect(script).toContain('[void]$pending.Add(4321)');
     expect(script).toContain('Get-CimInstance Win32_Process');
     expect(script).toContain('ParentProcessId = ');
+    expect(script).toContain('-ErrorAction SilentlyContinue');
     expect(script).toContain('$descendants.Count - 1');
-    expect(script).toContain('Stop-Process -Id ([int]$descendants[$index]) -Force');
+    expect(script).toContain('Stop-Process -Id $childProcessId -Force');
+    expect(script).toContain('taskkill.exe /PID $childProcessId /F /T');
     expect(script).not.toContain('C:\\');
     expect(() => buildWindowsDescendantCleanupScript(0)).toThrow(RangeError);
   });
@@ -246,24 +248,22 @@ describe('Windows Git PATH PowerShell probes', () => {
 
         terminateWindowsPowerShellDescendants(powershell, coordinatorPid);
 
-        execFileSync(
-          powershell,
-          [
-            '-NoLogo',
-            '-NoProfile',
-            '-NonInteractive',
-            '-Command',
-            [
-              '$deadline = [DateTime]::UtcNow.AddSeconds(8)',
-              `while (Get-Process -Id ${childPid} -ErrorAction SilentlyContinue) {`,
-              '  if ([DateTime]::UtcNow -ge $deadline) { exit 1 }',
-              '  Start-Sleep -Milliseconds 50',
-              '}',
-            ].join('\n'),
-          ],
-           // PowerShell startup can exceed five seconds on a busy hosted Windows runner;
-           // the in-script deadline (8s) plus startup must fit the exec timeout.
-           { stdio: 'ignore', timeout: 15_000, windowsHide: true },
+        // EncodedCommand avoids Windows argv splitting of a multi-line -Command.
+        // Poll until the orphaned child is gone; a live child after cleanup is a real leak.
+        const livenessCommand = Buffer.from(
+          `if (Get-Process -Id ${childPid} -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }`,
+          'utf16le',
+        ).toString('base64');
+        await vi.waitFor(
+          () => {
+            const liveness = spawnSync(
+              powershell,
+              ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', livenessCommand],
+              { stdio: 'ignore', timeout: 10_000, windowsHide: true },
+            );
+            expect(liveness.status).toBe(0);
+          },
+          { timeout: 8_000, interval: 50 },
         );
       } finally {
         if (coordinatorPid) {

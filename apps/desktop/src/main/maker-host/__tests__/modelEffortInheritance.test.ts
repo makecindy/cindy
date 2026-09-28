@@ -33,6 +33,12 @@ describe('model effort inheritance through the execution catalog', () => {
         }];
       }
       setActiveCatalog(catalog);
+      // Codex/Claude membership comes only from the account list; it reports the
+      // model without capability metadata, so shared defaults decide the tiers.
+      setDiscoveredCodexModels([{
+        id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', contextWindow: 272_000,
+        efforts: [], defaultEffort: null, discoveredMetadata: {},
+      }]);
       const models = openAiModels();
       for (const agent of ['claude-code', 'codex', 'pi'] as const) {
         const model = models[agent]!.find(m => m.id === (agent === 'codex' ? 'gpt-5.6-sol' : 'chatgpt/gpt-5.6-sol'))!;

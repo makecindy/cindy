@@ -384,6 +384,7 @@ export function AddProviderWizard({
     offersManagedOllamaInstall(window.electronAPI.platform),
   );
   const [loggingIn, setLoggingIn] = useState(false);
+  const [xaiDeviceLogin, setXaiDeviceLogin] = useState(false);
   const genericOAuthProviderId =
     sel?.kind === 'oauth' && sel.provider.auth.oauth ? sel.provider.id : null;
   const genericDeviceFlow =
@@ -396,7 +397,7 @@ export function AddProviderWizard({
     beginOwnedLogin: beginGenericOwnedLogin,
     cancelOwnedLogin: cancelGenericOwnedLogin,
   } = useProviderOAuthDeviceCode(genericOAuthProviderId, {
-    observeProgress: genericDeviceFlow || (sel?.kind === 'oauth' && sel.provider.id === 'openai'),
+    observeProgress: genericDeviceFlow || (sel?.kind === 'oauth' && ['openai', 'xai'].includes(sel.provider.id)),
     browserLoginRef: accountLoginRef,
   });
   // Step 3 拉取态
@@ -766,8 +767,10 @@ export function AddProviderWizard({
       const result = await window.electronAPI.maker.claudeOAuthLogin(loginKey);
       if (localLoginRef.current !== login) return;
       if (result.ok) onDone('anthropic');
-      else if (result.reason !== 'login_cancelled') toast.error(t('settings.providers.localAccount.unavailable'));
-    } catch { if (localLoginRef.current === login) toast.error(t('settings.providers.localAccount.unavailable')); }
+      else if (result.reason === 'local_unavailable') toast.error(t('settings.providers.localAccount.unavailable'));
+      else if (result.reason === 'not_a_subscription') toast.error(t('settings.connections.claude.toast.notSubscription'));
+      else if (result.reason !== 'login_cancelled') toast.error(t('settings.connections.claude.toast.loginFailed'));
+    } catch { if (localLoginRef.current === login) toast.error(t('settings.connections.claude.toast.loginFailed')); }
     finally {
       if (localLoginRef.current === login) {
         localLoginRef.current = null;
@@ -778,14 +781,15 @@ export function AddProviderWizard({
 
   // ── OAuth 授权（渠道登录后进入模型选择，原生订阅沿用已有流程）────────────────────
   const handleAuthorize = useCallback(
-    async (override?: ProviderView) => {
-      const selected = override ?? (sel?.kind === 'oauth' ? sel.provider : undefined);
+    async (method: 'browser' | 'device' = 'browser') => {
+      const selected = sel?.kind === 'oauth' ? sel.provider : undefined;
       if (!selected) return;
       const attempt = ++oauthAttemptRef.current;
       let id = selected.id;
       const preset = presets.find(p => p.id === id && providerPresetOAuth(p.id));
       clearGenericDeviceCode();
       setLoggingIn(true);
+      setXaiDeviceLogin(selected.id === 'xai' && method === 'device');
       try {
         let ok = false;
         if (id === 'openai' || id === 'anthropic' || id === 'xai' || preset) {
@@ -803,7 +807,10 @@ export function AddProviderWizard({
             }, {});
             created = true;
             if (accountLoginRef.current !== login) return;
-            const result = await window.electronAPI.maker.providerOAuthLogin(id, { ownerId: login.ownerId });
+            const result = await window.electronAPI.maker.providerOAuthLogin(id, {
+              ownerId: login.ownerId,
+              ...(brand === 'xai' ? { method } : {}),
+            });
             if (accountLoginRef.current !== login || result.reason === 'login_cancelled') return;
             // A late success belongs to a cancelled wizard until ownership is checked.
             // Keep ok false so finally also removes credentials committed before cancellation.
@@ -870,7 +877,10 @@ export function AddProviderWizard({
         toast.error(t('settings.providers.wizard.authorizeFailed', { name: selected.name }));
       } finally {
         // A cancelled account login may settle after a retry or local login has started.
-        if (!accountLoginRef.current && !localLoginRef.current) setLoggingIn(false);
+        if (oauthAttemptRef.current === attempt && !accountLoginRef.current && !localLoginRef.current) {
+          setLoggingIn(false);
+          setXaiDeviceLogin(false);
+        }
       }
     },
     [sel, presets, clearGenericDeviceCode, beginGenericOwnedLogin, onDone, t],
@@ -894,6 +904,7 @@ export function AddProviderWizard({
     else cancelGenericOwnedLogin();
     clearGenericDeviceCode();
     setLoggingIn(false);
+    setXaiDeviceLogin(false);
   }, [sel, clearGenericDeviceCode, cancelGenericOwnedLogin]);
 
   /** 关闭向导:授权等待中先取消再关,不留挂起的 login runner。保存中不能关，避免删掉正在落盘的 OAuth 连接。 */
@@ -903,13 +914,7 @@ export function AddProviderWizard({
     onClose();
   }, [loggingIn, cancelAuthorize, onClose]);
 
-  // 遮罩关闭的防误触:从输入框按下、拖到弹窗外松开时,浏览器把合成 click 派发到
-  // 按下点与松开点的最近公共祖先(= 遮罩),target === currentTarget 成立但用户
-  // 并无关闭意图。记录按下是否始于遮罩,按下与松开都在遮罩上才关闭
-  // (PR #1102 review 第七轮)。
-  const overlayMouseDownOnSelfRef = useRef(false);
-
-  // Esc 关闭(DESIGN.md §4:弹窗关闭 = 取消按钮 / Esc / 点遮罩;本弹窗未用 Radix,需自行监听)。
+  // Esc 关闭(本弹窗未用 Radix,需自行监听)。
   // CJK 输入法组合期间的 Esc 是「取消候选词」,不是关闭命令(isComposing / 遗留
   // keyCode 229),与仓库其他 CJK 输入场景同口径(PR #1102 review 第六轮)。
   useEffect(() => {
@@ -1312,7 +1317,9 @@ export function AddProviderWizard({
             return {
               id: m.id,
               name: m.name,
-              defaultEnabled: m.checked,
+              // Selecting a model follows native-engine defaults; it is not an
+              // explicit opt-in to every compatibility engine carrying the model.
+              ...(!m.checked ? { defaultEnabled: false } : {}),
               discoveredMetadata,
               ...(m.discoveredCosts?.[agent] ? { discoveredCost: m.discoveredCosts[agent] } : {}),
               ...(presetModel?.mode ? { mode: presetModel.mode } : {}),
@@ -1419,16 +1426,8 @@ export function AddProviderWizard({
     (!presetNeedsApiKey || apiKey.trim().length > 0);
 
   return (
-    // DESIGN.md §4 Dialog:关闭 = 底部「取消」/ Esc / 点遮罩,不设右上角 ×(与 ConfirmDialog 同构)。
     <div
       className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
-      onMouseDown={(e) => {
-        overlayMouseDownOnSelfRef.current = e.target === e.currentTarget;
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget && overlayMouseDownOnSelfRef.current) handleClose();
-        overlayMouseDownOnSelfRef.current = false;
-      }}
     >
       <div
         className="flex max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border"
@@ -1792,7 +1791,8 @@ export function AddProviderWizard({
                         {t('settings.providers.openai.useLocalAccount')}
                       </Button>
                     )}
-                    {sel.provider.id === 'anthropic' && !providers.some(p => p.id === 'anthropic' && !p.removed && (p.connected || p.removed === false)) && (
+                    {/* Claude 订阅唯一入口:已添加时点它等同重新连接本机 Claude Code 登录。 */}
+                    {sel.provider.id === 'anthropic' && (
                       <Button
                         variant="secondary"
                         size="lg"
@@ -1802,15 +1802,23 @@ export function AddProviderWizard({
                         {t('settings.providers.localAccount.useClaude')}
                       </Button>
                     )}
-                    <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize()}>
-                      {t(
-                        ['openai', 'anthropic', 'xai'].includes(sel.provider.id)
-                            ? 'settings.providers.openai.addIndependentAccount'
-                            : sel.provider.auth.oauth?.flow === 'device-code'
-                              ? 'settings.providers.wizard.authorizeWithDeviceCode'
-                              : 'settings.providers.button.authorize',
-                      )}
-                    </Button>
+                    {/* Claude 订阅只能经内置 Claude Code 自己的登录使用,不提供独立账号。 */}
+                    {sel.provider.id !== 'anthropic' && (
+                      <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize()}>
+                        {t(
+                          ['openai', 'xai'].includes(sel.provider.id)
+                              ? 'settings.providers.openai.addIndependentAccount'
+                              : sel.provider.auth.oauth?.flow === 'device-code'
+                                ? 'settings.providers.wizard.authorizeWithDeviceCode'
+                                : 'settings.providers.button.authorize',
+                        )}
+                      </Button>
+                    )}
+                    {sel.provider.id === 'xai' && (
+                      <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize('device')}>
+                        {t('settings.connections.xai.deviceLogin')}
+                      </Button>
+                    )}
                   </>
                 )}
                 {/* 替代路径:API 用户没有订阅,OAuth 对其是错误路径——切到该渠道的
@@ -1834,7 +1842,7 @@ export function AddProviderWizard({
                   </Button>
                 )}
               </div>
-              {genericDeviceFlow && loggingIn && (
+              {(genericDeviceFlow || xaiDeviceLogin) && loggingIn && (
                 <OAuthDeviceCodeCard deviceCode={genericDeviceCode} />
               )}
               {loggingIn && browserUrl && <OAuthBrowserLink url={browserUrl} />}

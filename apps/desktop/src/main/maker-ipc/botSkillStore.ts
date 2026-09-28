@@ -32,6 +32,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 /** 一个技能在磁盘上的完整形态。 */
 export interface BotSkillRecord {
@@ -482,6 +483,60 @@ export async function saveBotSkill(
     record: { slug, name, description, updatedAt, body, dirPath: skillDir, filePath },
     created,
   };
+}
+
+/** Shared preflight for imports, before creating a profile or persisting its checkpoint. */
+export function validateBotSkillFiles(slug: string,
+  files: readonly { name: string; bytes: Buffer; executable: boolean }[]): void {
+  if (!normalizeBotSkillSlug(slug) || normalizeBotSkillSlug(slug) !== slug)
+    throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill');
+  const entrypoint = files.find(file => file.name === 'SKILL.md');
+  if (!entrypoint || entrypoint.bytes.length > BOT_SKILL_MAX_BODY_BYTES)
+    throw new BotSkillStoreError('SKILL_BODY_TOO_LARGE', 'Invalid skill entrypoint');
+  for (const file of files) {
+    if (file.name.includes('\\') || file.name.split('/').some(part => !part || part === '.' || part === '..') || path.isAbsolute(file.name))
+      throw new BotSkillStoreError('INVALID_ARGS', 'Invalid skill resource');
+  }
+}
+
+/** Import a selected real skill with its scripts/templates; keep the native SKILL.md bytes. */
+export async function importBotSkillFiles(userDataDir: string, botId: string, slug: string,
+  files: readonly { name: string; bytes: Buffer; executable: boolean }[], assertOwner: () => void): Promise<void> {
+  validateBotSkillFiles(slug, files);
+  const existing = await listBotSkills(userDataDir, botId);
+  assertOwner();
+  if (!existing.some(skill => skill.slug === slug) && existing.length >= BOT_SKILL_MAX_COUNT)
+    throw new BotSkillStoreError('SKILL_LIMIT_REACHED', 'Too many selected skills');
+  await ensureLayout(userDataDir, botId);
+  assertOwner();
+  const target = resolveSkillDir(userDataDir, botId, slug);
+  const temporary = path.join(botSkillRootDir(userDataDir, botId), `.import-skill-${randomUUID()}`);
+  await fs.mkdir(temporary, { mode: 0o700 });
+  try {
+    for (const file of files) {
+      const output = path.join(temporary, ...file.name.split('/'));
+      await fs.mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
+      assertOwner();
+      await fs.writeFile(output, file.bytes, { flag: 'wx', mode: file.executable ? 0o700 : 0o600 });
+    }
+    assertOwner();
+    try { await fs.rename(temporary, target); }
+    catch (error) {
+      if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      // Resume after a committed rename, without overwriting a later user edit.
+      if (!(await fs.lstat(target)).isDirectory()) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill folder');
+      for (const file of files) {
+        const entry = path.join(target, ...file.name.split('/'));
+        const resolved = await fs.realpath(entry);
+        const relative = path.relative(await fs.realpath(target), resolved);
+        if (relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill resource');
+        const stat = await fs.lstat(entry);
+        if (!stat.isFile() || !(await fs.readFile(entry)).equals(file.bytes))
+          throw new BotSkillStoreError('INVALID_ARGS', 'Imported skill was edited');
+      }
+    }
+    assertOwner();
+  } finally { await fs.rm(temporary, { recursive: true, force: true }); }
 }
 
 /** 删除一个技能。不存在时返回 false,不抛 —— 重复删除是安全的。 */

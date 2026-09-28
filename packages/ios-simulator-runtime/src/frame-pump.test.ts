@@ -379,4 +379,66 @@ describe("IOSSimulatorH264FramePump", () => {
     );
     pump.clear("instance-a");
   });
+
+  it("skips the queued restart when visibility flips off before the predecessor task settles", async () => {
+    const driver = nativeDriverWithStreams([]);
+    driver.streamNativeFrames.mockImplementation(
+      async ({ signal, onFrame }) => {
+        await onFrame(h264Frame(0));
+        await new Promise<void>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return {
+          frameCount: 1,
+          byteCount: 6,
+          startedAt: "now",
+          firstFrameAt: "now",
+          endedAt: "now",
+          endReason: "aborted",
+        };
+      },
+    );
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const pump = new IOSSimulatorH264FramePump();
+      const base = {
+        instanceId: "instance-a",
+        driver,
+      };
+      const profileA = {
+        encoding: "h264" as const,
+        framesPerSecond: 5,
+        scalingPercent: 50,
+      };
+      const profileB = {
+        encoding: "h264" as const,
+        framesPerSecond: 10,
+        scalingPercent: 70,
+      };
+      pump.setVisible({ ...base, generation: 1, profile: profileA, visible: true });
+      await vi.waitFor(() =>
+        expect(pump.snapshot("instance-a")?.latestFrame?.sequence).toBe(1),
+      );
+      // Profile change queues the restart behind the still-running generation-1
+      // task; hiding before that task settles nulls entry.controller while the
+      // deferred run() has not executed yet.
+      pump.setVisible({ ...base, generation: 2, profile: profileB, visible: true });
+      const paused = pump.setVisible({
+        ...base,
+        generation: 2,
+        profile: profileB,
+        visible: false,
+      });
+      expect(paused.state).toBe("paused");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(rejections).toEqual([]);
+      expect(pump.snapshot("instance-a")?.state).toBe("paused");
+      pump.clear("instance-a");
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });

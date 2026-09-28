@@ -14,8 +14,9 @@
  *     远程路由、失败自愈全部由 PrRefsContext 单点负责;返回值按当前会话过滤,
  *     语义与旧实现一致(切会话/断链即空)。
  *
- * 约束:dialogue 会话(workspaceKind !== 'project')不启用——workingDir 是对话自有目录,
- * 分支语义无意义。SSH 与 device-link 远程会话则把查询发往真实执行端。
+ * 项目任务与 dialogue 会话同等对待:对话目录不是 git 仓库时 head 自然为空,Agent 进入
+ * 仓库工作时由遥测解析出真实分支;PR 引用来自消息里的 GitHub 链接,与本地仓库无关。
+ * SSH 与 device-link 远程会话则把查询发往真实执行端。
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -58,7 +59,7 @@ async function invokeRemoteGitContext<T>(
 }
 
 export interface SessionGitContext {
-  /** 当前分支信息;null = 非 git 目录 / dialogue 会话 / 尚未加载。 */
+  /** 当前分支信息;null = 非 git 目录 / 尚未加载。 */
   head: GitHeadInfo | null;
   /** head 的来源,决定徽标对分支的信任度(telemetry/worktree/remote 可信,workingDir 让位 PR)。 */
   branchSource: GitContextDirSource;
@@ -67,13 +68,6 @@ export interface SessionGitContext {
   /** key = `${owner}/${repo}#${prNumber}`(小写 owner/repo)。仅含本会话引用的条目。 */
   prStatuses: Map<string, PrStatusResult>;
 }
-
-const EMPTY: SessionGitContext = {
-  head: null,
-  branchSource: null,
-  prRefs: [],
-  prStatuses: new Map(),
-};
 
 export function useSessionGitContext(session: Session): SessionGitContext {
   const sessionId = session.id;
@@ -86,7 +80,6 @@ export function useSessionGitContext(session: Session): SessionGitContext {
   const deviceLinkDeviceId =
     session.deviceLinkDeviceId ?? getStickySessionDeviceId(sessionId) ?? null;
   const remoteHostId = session.remoteHostId ?? null;
-  const isProjectSession = session.workspaceKind === 'project';
   const isDeviceLinkSession = Boolean(deviceLinkDeviceId);
   const isSshSession = Boolean(remoteHostId) && !isDeviceLinkSession;
   const isLocalSession = !isDeviceLinkSession && !isSshSession;
@@ -102,11 +95,6 @@ export function useSessionGitContext(session: Session): SessionGitContext {
 
   // ── 分支:getForSession 解析真实工作目录 + 可换目录的 HEAD watch ──
   useEffect(() => {
-    if (!isProjectSession) {
-      setHead(null);
-      setBranchSource(null);
-      return;
-    }
     // A single header instance can survive session switches. Clear the old
     // task's branch immediately so a failed remote invoke cannot leave stale
     // Git context beside the newly selected title.
@@ -197,7 +185,6 @@ export function useSessionGitContext(session: Session): SessionGitContext {
     };
   }, [
     sessionId,
-    isProjectSession,
     isLocalSession,
     isSshSession,
     isDeviceLinkSession,
@@ -214,12 +201,12 @@ export function useSessionGitContext(session: Session): SessionGitContext {
   const { registerPrConsumer } = usePrActions();
   const sharedPrRefs = usePrRefsForSession(sessionId);
   const { statuses: allStatuses } = usePrStatuses(sessionId);
-  useEffect(() => {
-    if (!isProjectSession) return undefined;
-    return registerPrConsumer(sessionId, deviceLinkDeviceId ?? undefined);
-  }, [isProjectSession, sessionId, deviceLinkDeviceId, registerPrConsumer]);
+  useEffect(
+    () => registerPrConsumer(sessionId, deviceLinkDeviceId ?? undefined),
+    [sessionId, deviceLinkDeviceId, registerPrConsumer],
+  );
 
-  const prRefs = isProjectSession ? sharedPrRefs : EMPTY.prRefs;
+  const prRefs = sharedPrRefs;
   // 状态已按会话隔离;再按本会话前 MAX_STATUS_QUERIES 条引用过滤,
   // 保住旧契约「prStatuses 只含本会话条目」(消费方有 size 判断)。
   const prStatuses = useMemo(() => {
@@ -232,6 +219,5 @@ export function useSessionGitContext(session: Session): SessionGitContext {
     return map;
   }, [prRefs, allStatuses]);
 
-  if (!isProjectSession) return EMPTY;
   return { head, branchSource, prRefs, prStatuses };
 }

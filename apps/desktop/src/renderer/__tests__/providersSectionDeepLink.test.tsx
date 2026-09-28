@@ -299,7 +299,7 @@ describe('ProvidersSection — 深链定位', () => {
   );
 
   it.each(['subscriptionAccount', 'openAiAccount'] as const)(
-    'collapses usage on %s changes but retains expansion on quota refresh',
+    'shows usage windows without a details disclosure across %s changes',
     async (identityField) => {
       const account = { title: 'ChatGPT', windows: [{ key: 'weekly', title: 'Weekly', window: { utilization: 20 }, detail: 'Weekly usage details' }] };
       vi.mocked(useProviderSubscriptionCard).mockReturnValue(account);
@@ -309,16 +309,13 @@ describe('ProvidersSection — 深链定位', () => {
       });
       providersState.providers = [provider];
       const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
-      fireEvent.click(await screen.findByRole('button', { name: 'quotaCard.usageTitle' }));
-      const refresh = () => view.rerender(
-        <MemoryRouter><ProvidersSection /></MemoryRouter>,
-      );
-      vi.mocked(useProviderSubscriptionCard).mockReturnValue({ ...account, updatedAt: Date.now() });
-      refresh();
-      expect(screen.getByRole('button', { name: 'quotaCard.usageTitle' }).getAttribute('aria-expanded')).toBe('true');
+      const usage = await screen.findByTestId('provider-usage-module');
+      expect(within(usage).getByRole('progressbar', { name: 'Weekly' })).toBeTruthy();
+      expect(within(usage).queryByText('Weekly usage details')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'quotaCard.usageTitle' })).toBeNull();
       providersState.providers = [{ ...provider, [identityField]: { source: 'oauth', identity: 'second@example.test' } }];
-      refresh();
-      expect(screen.getByRole('button', { name: 'quotaCard.usageTitle' }).getAttribute('aria-expanded')).toBe('false');
+      view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      expect(within(screen.getByTestId('provider-usage-module')).getByRole('progressbar', { name: 'Weekly' })).toBeTruthy();
     },
   );
 

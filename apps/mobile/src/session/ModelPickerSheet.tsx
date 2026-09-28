@@ -7,7 +7,7 @@
 import { UnifiedModelPickerSheet, type UnifiedMobilePickerOptions } from './UnifiedModelPickerSheet';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Search } from 'lucide-react-native';
+import { ChevronRight, Search, X } from 'lucide-react-native';
 import {
   Animated,
   Platform,
@@ -45,14 +45,14 @@ import {
   type ModelPickerSheetView,
 } from '@/session/modelPickerSheetModel';
 import { rowFastEditable } from '@/session/modelPickerRows';
-import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
+import { permissionPresentation } from '@/session/permissionPresentation';
 import {
   buildMobileModelSections,
   flattenProviderSections,
   type ProviderModelRow,
 } from '@/session/providerModelSections';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import {
   mobileAgentLabel,
   type MobileSessionAgentKind,
@@ -349,12 +349,24 @@ function LegacyModelPickerSheet({
         onFocus={Platform.OS === 'android' ? () => setPrimarySnap('full') : undefined}
         onChangeText={setQuery}
         placeholder={t('models.picker.searchPlaceholder')}
-        placeholderTextColor={colors.textTertiary}
+        placeholderTextColor={colors.textPlaceholder}
         ref={searchInputRef}
         style={styles.searchInput}
         testID={`${testID}.search`}
         value={query}
       />
+      {query ? (
+        <Pressable
+          accessibilityLabel={t('devices.detail.search.clearA11y')}
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={() => setQuery('')}
+          style={({ pressed }) => [styles.searchClear, pressed && { opacity: 0.6 }]}
+          testID={`${testID}.search.clear`}
+        >
+          <X color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        </Pressable>
+      ) : null}
     </View>
   );
 
@@ -386,33 +398,32 @@ function LegacyModelPickerSheet({
     </View>
   );
 
-  // 权限入口:header 右侧「图标 + 文案 + 下拉箭头」,与桌面 composer 的 PermissionSelector
-  // trigger 同构——透明底、整体着色(中性 = textSecondary,auto / bypass = 语义色),点开二级
-  // 权限选择。按产品反馈刻意轻量化——不占列表整行,浮窗主体只留模型。
-  const permissionColor = permissionAccentColor(permission.accent, colors);
-  const permissionTrigger = (
+  // 权限入口:与 iOS ModelPickerNativeHeader 同构的独立「权限」行(标题 + 副标题为当前模式),
+  // 位于搜索之后、模型列表之前;点开二级权限选择。Android 外观沿用 RN 自绘行 + chevron。
+  const permissionRowDisabled = permissionDisabled || browsingOtherAgent;
+  const permissionRow = hidePermissionTrigger ? null : (
     <Pressable
       accessibilityLabel={t('models.picker.permissionModeAccessibility', { mode: permissionLabel })}
       accessibilityRole="button"
-      accessibilityState={{ disabled: permissionDisabled || browsingOtherAgent }}
-      disabled={permissionDisabled || browsingOtherAgent}
-      hitSlop={6}
+      accessibilityState={{ disabled: permissionRowDisabled }}
+      disabled={permissionRowDisabled}
       onPress={() => openSecondary({ kind: 'permission' })}
       style={({ pressed }) => [
-        styles.permissionTrigger,
-        (permissionDisabled || browsingOtherAgent) && styles.permissionTriggerDisabled,
+        styles.permissionRow,
+        permissionRowDisabled && styles.permissionRowDisabled,
         pressed && { opacity: 0.6 },
       ]}
       testID={`${testID}.permissionTrigger`}
     >
-      <permission.Icon color={permissionColor} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      <Text
-        numberOfLines={1}
-        style={[styles.permissionTriggerLabel, { color: permissionColor }]}
-      >
-        {permissionLabel}
-      </Text>
-      <ChevronDown color={permissionColor} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      <View style={styles.permissionRowMain}>
+        <Text numberOfLines={1} style={styles.permissionRowTitle}>
+          {t('models.picker.permissionTitle')}
+        </Text>
+        <Text numberOfLines={1} style={styles.permissionRowSubtitle}>
+          {permissionLabel}
+        </Text>
+      </View>
+      <ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
     </Pressable>
   );
 
@@ -514,7 +525,6 @@ function LegacyModelPickerSheet({
     >
       <SheetSurface
         bottomInset={insets.bottom}
-        headerTrailing={hidePermissionTrigger ? undefined : permissionTrigger}
         heights={heights}
         onClose={onClose}
         onSnapChange={handlePrimarySnapChange}
@@ -524,6 +534,7 @@ function LegacyModelPickerSheet({
         testID={testID}
         title={t('models.picker.title')}
       >
+        {permissionRow}
         {noResults ? (
           <Text style={styles.noResults} testID={`${testID}.noResults`}>{t('models.picker.noResults')}</Text>
         ) : (
@@ -586,7 +597,14 @@ function makeStyles(colors: ThemeColors) {
       gap: spacing.sm,
       marginBottom: spacing.xs,
       minHeight: 36,
-      paddingHorizontal: spacing.md,
+      paddingLeft: spacing.md,
+      paddingRight: spacing.xs,
+    },
+    searchClear: {
+      alignItems: 'center' as const,
+      height: 36,
+      justifyContent: 'center' as const,
+      width: 36,
     },
     searchInput: {
       color: colors.textPrimary,
@@ -598,6 +616,7 @@ function makeStyles(colors: ThemeColors) {
     noResults: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.md,
       textAlign: 'center' as const,
@@ -607,25 +626,36 @@ function makeStyles(colors: ThemeColors) {
     },
     agentSwitchHint: {
       color: colors.textTertiary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingHorizontal: spacing.xs,
     },
-    // 对齐桌面 PermissionSelector trigger:透明底 + gap 4 + 13px 文案,整体随权限档着色。
-    permissionTrigger: {
+    // 独立「权限」行:行标题 body 500 + 当前模式副标题(短元数据),整行可点。
+    permissionRow: {
       alignItems: 'center' as const,
-      borderRadius: radius.pill,
+      borderBottomColor: colors.border,
+      borderBottomWidth: StyleSheet.hairlineWidth,
       flexDirection: 'row' as const,
-      gap: 4,
-      height: 36,
-      justifyContent: 'flex-end' as const,
-      paddingHorizontal: 2,
+      gap: spacing.md,
+      minHeight: 52,
     },
-    permissionTriggerLabel: {
-      fontSize: typeScale.footnote,
+    permissionRowMain: {
+      flex: 1,
+      minWidth: 0,
+    },
+    permissionRowTitle: {
+      color: colors.textPrimary,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
+      fontWeight: fontWeight.medium,
+    },
+    permissionRowSubtitle: {
+      color: colors.textSecondary,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.regular,
-      maxWidth: 120,
     },
-    permissionTriggerDisabled: {
+    permissionRowDisabled: {
       opacity: 0.5,
     },
   };

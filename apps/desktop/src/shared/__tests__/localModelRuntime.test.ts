@@ -34,6 +34,13 @@ describe('localModelRuntime', () => {
     expect(detectOllamaPackaging('qwen3.8:27b-mlx')).toBe('mlx');
     expect(detectOllamaPackaging('gemma4:e4b-mlx')).toBe('mlx');
     expect(detectOllamaPackaging('qwen3.8:27b')).toBe('q4');
+    expect(detectOllamaPackaging('laguna-s-2.1:nvfp4')).toBe('nvfp4');
+    expect(detectOllamaPackaging('laguna-s-2.1:q4_K_M')).toBe('q4');
+    expect(detectOllamaPackaging('qwen3.8-flash-next:125b-a6b-q4_K_M')).toBe('q4');
+    expect(detectOllamaPackaging('qwen3.8-flash-next:125b-a6b-nvfp4')).toBe('nvfp4');
+    expect(detectOllamaPackaging('laguna-s-2.1:q8_0')).toBeNull();
+    expect(detectOllamaPackaging('unknown:nvfp40')).toBeNull();
+    expect(detectOllamaPackaging('unknown:q40')).toBeNull();
     expect(detectOllamaPackaging('qwen3-coder:30b')).toBeNull();
   });
 
@@ -103,7 +110,7 @@ describe('localModelRuntime', () => {
     const host = { platform: 'darwin' as const, arch: 'arm64', totalmemBytes: 128 * 1024 ** 3 };
     const catalog = resolveCuratedOllamaCatalog(host);
     expect(pickFeaturedOllamaModels(host).map((model) => model.id)).toEqual(['qwen38-27b']);
-    expect(catalog).toHaveLength(7);
+    expect(catalog).toHaveLength(8);
     expect(filterCuratedOllamaModels(catalog, '通义').map((model) => model.id)).toContain(
       'qwen38-27b',
     );
@@ -141,7 +148,7 @@ describe('localModelRuntime', () => {
     );
   });
 
-  it('uses platform-specific download sizes and excludes Apple-only candidates elsewhere', () => {
+  it('uses platform-specific downloads for large candidates without promoting them', () => {
     const host = { platform: 'darwin' as const, arch: 'arm64', totalmemBytes: 256 * 1024 ** 3 };
     const apple = resolveCuratedOllamaCatalog(host);
     const windows = resolveCuratedOllamaCatalog({ ...host, platform: 'win32', arch: 'x64' });
@@ -155,8 +162,25 @@ describe('localModelRuntime', () => {
       sizeBytes: 6594474236,
       appleSiliconOnly: false,
     });
-    expect(windows.some((model) => model.id === 'qwen38-flash-next')).toBe(false);
-    expect(apple.some((model) => model.id === 'qwen38-flash-next')).toBe(true);
+    expect(windows.find((model) => model.id === 'qwen38-flash-next')).toMatchObject({
+      libraryName: 'qwen3.8-flash-next:125b-a6b-q4_K_M',
+      appleSiliconOnly: false,
+    });
+    expect(apple.find((model) => model.id === 'qwen38-flash-next')).toMatchObject({
+      libraryName: 'qwen3.8-flash-next:125b-mlx',
+      appleSiliconOnly: true,
+    });
+    expect(apple.find((model) => model.id === 'laguna-s21-118b')).toMatchObject({
+      libraryName: 'laguna-s-2.1:nvfp4',
+      appleSiliconOnly: true,
+      minUnifiedMemoryGb: 128,
+    });
+    expect(windows.find((model) => model.id === 'laguna-s21-118b')).toMatchObject({
+      libraryName: 'laguna-s-2.1:q4_K_M',
+      appleSiliconOnly: false,
+      minUnifiedMemoryGb: 192,
+    });
+    expect(pickFeaturedOllamaModels(host).map((model) => model.id)).toEqual(['qwen38-27b']);
   });
 
   it('rejects invalid platform metadata and preserves bundled fallback', () => {

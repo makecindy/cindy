@@ -11,6 +11,9 @@ const state = vi.hoisted(() => ({
   props: {} as Record<string, (...args: any[]) => void>,
   mounts: 0,
   unregister: vi.fn(),
+  unregisterInvoke: vi.fn(),
+  unregisterUpload: vi.fn(),
+  unregisterReset: vi.fn(),
   install: vi.fn(),
   goBack: vi.fn(),
   goForward: vi.fn(),
@@ -39,6 +42,9 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ conn
 vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://example.test', getActiveMobileSessionRealm: () => 'global' }));
 vi.mock('@/device-link/peerFileRegistry', () => ({
   installPeerFileDownload: (...args: unknown[]) => { state.install(...args); return state.unregister; },
+  installPeerInvoke: () => state.unregisterInvoke,
+  installPeerUpload: () => state.unregisterUpload,
+  installPeerReset: () => state.unregisterReset,
   clearPeerMedia() {}, recordPeerMedia: vi.fn(),
 }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -46,6 +52,7 @@ let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount()); root = undefined;
   state.mounts = 0; state.install.mockClear(); state.unregister.mockClear();
+  state.unregisterInvoke.mockClear(); state.unregisterUpload.mockClear(); state.unregisterReset.mockClear();
   state.goBack.mockClear(); state.goForward.mockClear();
   state.inject.mockClear();
 });
@@ -78,6 +85,9 @@ it.each(['onContentProcessDidTerminate', 'onRenderProcessGone'])('recreates peer
   const old = state.props;
   act(() => old[event]());
   expect(state.unregister).toHaveBeenCalledTimes(1);
+  expect(state.unregisterInvoke).toHaveBeenCalledTimes(1);
+  expect(state.unregisterUpload).toHaveBeenCalledTimes(1);
+  expect(state.unregisterReset).toHaveBeenCalledTimes(1);
   expect(state.mounts).toBe(2);
   act(() => { old[event](); old.onMessage({ nativeEvent: { data: '{"type":"ready"}' } }); });
   expect(state.mounts).toBe(2);

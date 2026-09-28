@@ -110,6 +110,7 @@ vi.mock('../TelegramBehaviorSettings', () => ({
 }));
 
 import { deriveAlias, HookConnectionsSection, workspaceRowsToMap } from '../HookConnectionsSection';
+import { SettingsSearchNavigationContext } from '../SettingsSearchNavigation';
 import { resetXUsageNoticeMemoryState } from '@/state/xUsageNotice';
 
 /** 渠道卡收起时内容卸载(Collapse), 交互前先点开对应卡的头部行。 */
@@ -251,6 +252,31 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     await waitFor(() => expect(workspacePrefsEditor.render).toHaveBeenCalled());
     expect(workspacePrefsEditor.render).toHaveBeenCalledWith(
       expect.objectContaining({ alias: 'chat', maxVisibleModelRows: undefined }),
+    );
+  });
+
+  it('expands an official channel selected by settings search', async () => {
+    ipc.get.mockResolvedValue({ hook: BASE_HOOK });
+
+    render(
+      <SettingsSearchNavigationContext.Provider
+        value={{
+          entry: {
+            id: 'imBot.cindy.telegram',
+            tab: 'im-bot',
+            targetId: 'cindy-im-telegram',
+            titleKey: 'settings.tina.prefs.providerTelegram',
+            sectionKey: 'settings.imBot.groups.cindy',
+          },
+          activation: 1,
+        }}
+      >
+        <HookConnectionsSection />
+      </SettingsSearchNavigationContext.Provider>,
+    );
+
+    expect((await screen.findByRole('button', { name: TELEGRAM_CARD })).getAttribute('aria-expanded')).toBe(
+      'true',
     );
   });
 
