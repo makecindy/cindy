@@ -990,7 +990,10 @@ export function selectionFromAnswer(question: AskQuestion, answer: string | unde
 export function isFreeTextAskOptionLabel(label: string): boolean {
   const normalized = label.trim().toLowerCase();
   if (!normalized) return false;
-  return /^(?:其他(?:答案|选项)?|其它(?:答案|选项)?|other|others|something else|その他|기타)(?=$|[\s\u3000（(【[：:，,、.。\-—－…])/.test(normalized);
+  // "Other" / "Other (please specify)" / "其他（回复说明）" are escape hatches;
+  // "Other tasks" / "その他の質問" are substantive options. A bare space must not
+  // count as the boundary — only end-of-label or a separator/parenthesis does.
+  return /^(?:其他(?:答案|选项)?|其它(?:答案|选项)?|other|others|something else|その他|기타)(?=$|\s*[（(【[：:，,、.。\-—－…])/.test(normalized);
 }
 
 /**

@@ -362,14 +362,19 @@ describe('interaction shared model', () => {
     expect(isFreeTextAskOptionLabel('其他选项（请说明）')).toBe(true);
     expect(isFreeTextAskOptionLabel('其他: 请填写')).toBe(true);
     expect(isFreeTextAskOptionLabel('Other')).toBe(true);
+    expect(isFreeTextAskOptionLabel('Others')).toBe(true);
     expect(isFreeTextAskOptionLabel('Other (please specify)')).toBe(true);
+    expect(isFreeTextAskOptionLabel('Other: please specify')).toBe(true);
     expect(isFreeTextAskOptionLabel('Something else…')).toBe(true);
     expect(isFreeTextAskOptionLabel('その他')).toBe(true);
     expect(isFreeTextAskOptionLabel('기타')).toBe(true);
     // 普通选项不能被误判。
     expect(isFreeTextAskOptionLabel('其他任务')).toBe(false);
     expect(isFreeTextAskOptionLabel('其他供应商')).toBe(false);
+    expect(isFreeTextAskOptionLabel('Other tasks')).toBe(false);
+    expect(isFreeTextAskOptionLabel('Other providers')).toBe(false);
     expect(isFreeTextAskOptionLabel('Otherwise')).toBe(false);
+    expect(isFreeTextAskOptionLabel('その他の質問')).toBe(false);
     expect(isFreeTextAskOptionLabel('Rearrange layout')).toBe(false);
     expect(isFreeTextAskOptionLabel('')).toBe(false);
     expect(isFreeTextAskOptionLabel('   ')).toBe(false);

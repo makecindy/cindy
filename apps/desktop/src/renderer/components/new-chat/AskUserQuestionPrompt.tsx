@@ -390,6 +390,15 @@ function AskUserQuestionForm({
     setShowCustomInput(false);
   }, [customInput, isMultiSelect, advance]);
 
+  // ── Direct free-text answer when no option rows render ──
+  // Multi-select keeps the documented JSON-array encoding (`["text"]`), otherwise
+  // the answer cannot be parsed back when the user returns to edit this question.
+  const submitDirectAnswer = useCallback(() => {
+    const trimmed = customInput.trim();
+    if (!trimmed) return;
+    advance(isMultiSelect ? JSON.stringify([trimmed]) : trimmed);
+  }, [customInput, isMultiSelect, advance]);
+
   // ── Keyboard shortcuts ──
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -758,7 +767,7 @@ function AskUserQuestionForm({
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
-                  if (customInput.trim()) advance(customInput.trim());
+                  submitDirectAnswer();
                 }
                 if (e.key === 'Escape') {
                   e.preventDefault();
@@ -776,7 +785,7 @@ function AskUserQuestionForm({
             <Tip text={isLastQuestion ? null : t('chat.askUserQuestion.next')}>
               <button
                 type="button"
-                onClick={() => customInput.trim() && advance(customInput.trim())}
+                onClick={submitDirectAnswer}
                 disabled={!customInput.trim()}
                 data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
                 aria-label={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}

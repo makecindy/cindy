@@ -163,6 +163,28 @@ describe('AskUserQuestionPrompt model-authored "Other" options', () => {
     expect(scrollRegion.contains(view.getByText('Type something else…'))).toBe(false);
   });
 
+  it('keeps the JSON array encoding for a multi-select question whose options were all replaced', () => {
+    const { view, onAnswer } = renderAskUser({
+      requestId: 'req-only-others-multi',
+      questions: [
+        {
+          question: 'Which approaches?',
+          multiSelect: true,
+          options: [{ label: '其他（回复说明）' }, { label: 'Other (please specify)' }],
+        },
+      ],
+    });
+
+    const input = view.getByPlaceholderText('Type your answer…') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'Approach C' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    // 多选题必须继续使用 JSON 数组编码，否则返回编辑时恢复逻辑解析不到答案。
+    expect(onAnswer).toHaveBeenCalledWith('req-only-others-multi', {
+      'Which approaches?': JSON.stringify(['Approach C']),
+    });
+  });
+
   it('keeps ordinary labels on the click-to-submit path', () => {
     const { view, onAnswer } = renderAskUser({
       requestId: 'req-normal',
