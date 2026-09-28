@@ -459,7 +459,7 @@ import {
 } from './botDirectMessageService.js';
 import { createBotGroupChatService, type BotGroupChatService } from './botGroupChatService.js';
 import { createBotGroupPlanDecider } from './botGroupPlanDecider.js';
-import { registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
+import { botGroupMembersVisibleRemotely, registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
 import { broadcastBotGroupRemoteResourceChanged } from './botGroupRemoteResourceInvalidation.js';
 import { getBotGroupStepNotificationBody } from '../sessionNotificationCopy.js';
 import { createBotGroupWorkDir } from './botGroupWorkDir.js';
@@ -9984,12 +9984,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onStepSettled: (event, scope) => {
       const ownerScope = scope as ReturnType<typeof captureDataOwnerBroadcastScope> | undefined;
       if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
-      sendMobileBotGroupNotify({
-        groupId: event.groupId,
-        title: event.groupName,
-        body: getBotGroupStepNotificationBody(event),
-        eventId: `${event.planId}:${event.position}:${event.outcome}:${Date.now()}`,
-        generation: getMobileNotifyGeneration(),
+      const generation = getMobileNotifyGeneration();
+      // Same boundary as the phone's group list: a group with a hidden member never reaches it.
+      void botGroupMembersVisibleRemotely(event.memberBotIds).then((visible) => {
+        if (!visible || (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope))) return;
+        sendMobileBotGroupNotify({
+          groupId: event.groupId,
+          title: event.groupName,
+          body: getBotGroupStepNotificationBody(event),
+          eventId: `${event.planId}:${event.position}:${event.outcome}:${Date.now()}`,
+          generation,
+        });
+      }).catch((error: unknown) => {
+        log.warn('bot group step push skipped', { error: error instanceof Error ? error.message : String(error) });
       });
     },
     log,

@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ sqlite: null as import('better-sqlite3').Database | null }));
+const h = vi.hoisted(() => ({ sqlite: null as import('better-sqlite3').Database | null, ownerCurrent: (): boolean => true }));
 
 vi.mock('../../localDb/client/current.js', async () => {
   const { drizzle } = await import('drizzle-orm/better-sqlite3');
@@ -9,11 +9,12 @@ vi.mock('../../localDb/client/current.js', async () => {
 });
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => ({ owner: 'a' }),
-  isDataOwnerBroadcastScopeCurrent: () => true,
+  isDataOwnerBroadcastScopeCurrent: () => h.ownerCurrent(),
 }));
 
 import { remoteResourceRegistry } from '../../device-link/remoteResourceRegistry.js';
 import {
+  botGroupMembersVisibleRemotely,
   botGroupRemoteChatData,
   botGroupRemoteItem,
   botGroupRemotePreview,
@@ -106,6 +107,7 @@ describe('bot group remote resources', () => {
       CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, hidden_at INTEGER, status TEXT NOT NULL);
       INSERT INTO bot_profiles VALUES ('mimi', NULL, 'active'), ('abu', NULL, 'active'), ('ghost', 5, 'active');
     `);
+    h.ownerCurrent = () => true;
     for (const fn of Object.values(service)) fn.mockReset();
     service.getGroup.mockResolvedValue({ ok: true, group: detail() });
     for (const name of ['updateGroup', 'setMembers', 'deleteGroup', 'continueRound', 'stopRound', 'startPlan', 'dismissPlan', 'continuePlan', 'retryPlan', 'editPlanStep'] as const) {
@@ -206,6 +208,27 @@ describe('bot group remote resources', () => {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'stop', resourceRef: ref('g1'),
     })).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(service.stopRound).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing once the computer has switched accounts during the checks', async () => {
+    // The first owner check runs after the visibility reads; by then the account has changed.
+    h.ownerCurrent = () => false;
+    await expect(remoteResourceRegistry.invoke(context, {
+      client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'create',
+      input: { name: '新群', botIds: ['mimi', 'abu'] },
+    })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(service.createGroup).not.toHaveBeenCalled();
+    await expect(remoteResourceRegistry.invoke(context, {
+      client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'set-members', resourceRef: ref('g1'),
+      input: { botIds: ['mimi', 'abu'] },
+    })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(service.setMembers).not.toHaveBeenCalled();
+  });
+
+  it('applies the same member rule to anything else a phone hears about a group', async () => {
+    await expect(botGroupMembersVisibleRemotely(['mimi', 'abu'])).resolves.toBe(true);
+    await expect(botGroupMembersVisibleRemotely(['mimi', 'ghost'])).resolves.toBe(false);
+    await expect(botGroupMembersVisibleRemotely(['mimi', 'gone'])).resolves.toBe(false);
   });
 
   it('creates a group and navigates the phone to it', async () => {

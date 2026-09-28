@@ -145,6 +145,8 @@ export interface BotGroupChatServiceDeps {
 export interface BotGroupStepSettledEvent {
   groupId: string;
   groupName: string;
+  /** Every member of the group, so a controller push can apply the same visibility rule as its list. */
+  memberBotIds: string[];
   planId: string;
   position: number;
   botName: string;
@@ -1268,6 +1270,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         deps.onStepSettled?.({
           groupId,
           groupName: group.name,
+          memberBotIds: members.map((member) => member.botId),
           planId,
           position,
           botName: authorName,

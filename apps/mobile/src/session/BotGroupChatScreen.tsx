@@ -6,7 +6,7 @@
  * 每次电脑推送变化就重读，不在本地拼时间线。分工的安排卡、交接文件、「下一步 · 继续」
  * 「没做完 · 重试」见 BotGroupPlan.tsx；正在发言的伙伴与它待确认的操作见 BotGroupSpeakerRow。
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -116,6 +116,18 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
   }, [group?.members, identity]);
 
   const leave = useCallback(() => goBackGuarded(router, '/devices'), [router]);
+
+  // The computer announces a deleted group before the delete returns, so the phone can re-read
+  // it as gone first. That unmounts the settings sheet before it reports closing; leave anyway.
+  const hasGroup = group !== null;
+  const hasGroupRef = useRef(hasGroup);
+  useEffect(() => {
+    hasGroupRef.current = hasGroup;
+    if (!hasGroup && leaveAfterSettings.current) { leaveAfterSettings.current = false; leave(); }
+  }, [hasGroup, leave]);
+  const onGroupDeleted = useCallback(() => {
+    if (hasGroupRef.current) { leaveAfterSettings.current = true; setSettings(false); } else leave();
+  }, [leave]);
 
   const report = useCallback((error: unknown, fallbackKey: string) => {
     Alert.alert(chat.online ? botGroupActionErrorText(t, error, fallbackKey) : t('devices.resources.hostOffline'));
@@ -252,7 +264,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
     {group ? <BotGroupSettingsSheet visible={settings} group={group} host={host} identityFor={identityFor} online={chat.online}
       act={chat.act} onClose={() => setSettings(false)}
       onClosed={() => { if (leaveAfterSettings.current) { leaveAfterSettings.current = false; leave(); } }}
-      onDeleted={() => { leaveAfterSettings.current = true; setSettings(false); }} /> : null}
+      onDeleted={onGroupDeleted} /> : null}
   </SafeAreaView>;
 }
 

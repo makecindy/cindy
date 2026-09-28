@@ -779,6 +779,8 @@ describe('botGroupChatService 分工', () => {
       ['小满', '设计', 'done', true],
     ]);
     expect(onStepSettled.mock.calls[0]![0]).toMatchObject({ groupId, groupName: '周末出游', planId: plan.id, position: 0 });
+    // The whole group, so the push can apply the phone's member-visibility rule.
+    expect([...onStepSettled.mock.calls[0]![0].memberBotIds].sort()).toEqual(['abu', 'mimi', 'xiaoman']);
   });
 
   it('a plain message after a step asks the same Bot to redo it, and later steps read the new hand-off', async () => {

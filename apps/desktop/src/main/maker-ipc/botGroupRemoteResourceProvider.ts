@@ -214,6 +214,12 @@ async function visibleGroups<T extends Pick<BotGroupSummary, 'members'>>(groups:
   return groups.filter((group) => group.members.every((member) => visibility.get(member.botId) === true));
 }
 
+/** The same rule for anything else that reaches a phone about a group, such as a step push. */
+export async function botGroupMembersVisibleRemotely(memberBotIds: readonly string[]): Promise<boolean> {
+  const visibility = await remoteVisibility(memberBotIds);
+  return memberBotIds.every((botId) => visibility.get(botId) === true);
+}
+
 async function assertBotsVisible(botIds: readonly string[]): Promise<void> {
   const visibility = await remoteVisibility(botIds);
   if (botIds.some((botId) => visibility.get(botId) !== true)) {
@@ -292,14 +298,22 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
     },
 
     async invoke(_context, request): Promise<RemoteActionInvokeResponse> {
-      const current = requireService();
+      // Checks read the current account's data; a switch before the write must not let them
+      // authorize a change to the next account.
+      const scope = captureDataOwnerBroadcastScope();
+      const ownerService = (): BotGroupChatService => {
+        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
+        return requireService();
+      };
       const actionId = request.actionId as BotGroupRemoteActionId;
       const input = recordOf(request.input);
+      const botIdsInput = (): string[] =>
+        Array.isArray(input.botIds) ? input.botIds.filter((id): id is string => typeof id === 'string') : [];
 
       if (actionId === 'create') {
-        const botIds = Array.isArray(input.botIds) ? input.botIds.filter((id): id is string => typeof id === 'string') : [];
+        const botIds = botIdsInput();
         await assertBotsVisible(botIds);
-        const created = await current.createGroup({ name: input.name, botIds });
+        const created = await ownerService().createGroup({ name: input.name, botIds });
         if (!created.ok) refuse(created);
         return {
           effects: [
@@ -313,8 +327,12 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
         ? request.resourceRef.id
         : null;
       if (!groupId) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
-      // Every action re-checks that the phone may still see this group.
+      // Every action re-checks that the phone may still see this group, and any teammate it names.
       await readVisibleGroup(groupId);
+      if (actionId === 'update' && typeof input.organizerBotId === 'string') await assertBotsVisible([input.organizerBotId]);
+      if (actionId === 'set-members') await assertBotsVisible(botIdsInput());
+      if (actionId === 'plan-edit' && typeof input.botId === 'string') await assertBotsVisible([input.botId]);
+      const current = ownerService();
       const planInput = { groupId, planId: input.planId };
       let result: { ok: true } | BotGroupFailure;
       switch (actionId) {
@@ -339,16 +357,12 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId'] as const) {
             if (input[key] !== undefined) patch[key] = input[key];
           }
-          if (typeof patch.organizerBotId === 'string') await assertBotsVisible([patch.organizerBotId]);
           result = await current.updateGroup(patch);
           break;
         }
-        case 'set-members': {
-          const botIds = Array.isArray(input.botIds) ? input.botIds.filter((id): id is string => typeof id === 'string') : [];
-          await assertBotsVisible(botIds);
-          result = await current.setMembers({ groupId, botIds });
+        case 'set-members':
+          result = await current.setMembers({ groupId, botIds: botIdsInput() });
           break;
-        }
         case 'delete':
           result = await current.deleteGroup(groupId);
           if (!result.ok) refuse(result);
@@ -366,7 +380,6 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           result = await current.retryPlan(planInput);
           break;
         case 'plan-edit':
-          if (typeof input.botId === 'string') await assertBotsVisible([input.botId]);
           result = await current.editPlanStep({ ...planInput, position: input.position, action: input.action, botId: input.botId });
           break;
         default:

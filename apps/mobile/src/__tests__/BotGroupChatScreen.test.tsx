@@ -423,6 +423,22 @@ describe('group settings', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('delete', {});
     expect(byId('botGroup.settings')).toBeNull();
     expect(h.leave).toHaveBeenCalledOnce();
+    // The later re-read that finds the group gone does not leave a second time.
+    await render(null, 'missing');
+    expect(h.leave).toHaveBeenCalledOnce();
+  });
+
+  it('still leaves when the group reads as gone before the delete returns', async () => {
+    let finish!: () => void;
+    h.chat.act.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ effects: [] }); }));
+    await openSettings();
+    await click('botGroup.settings.delete');
+    // The computer's change announcement re-reads the group first, which unmounts the sheet.
+    await render(null, 'missing');
+    expect(byId('botGroup.settings')).toBeNull();
+    expect(h.leave).not.toHaveBeenCalled();
+    await act(async () => { finish(); });
+    expect(h.leave).toHaveBeenCalledOnce();
   });
 });
 
