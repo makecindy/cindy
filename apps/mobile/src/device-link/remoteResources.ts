@@ -21,6 +21,7 @@ import {
   type RemoteActionDescriptor,
   type RemoteResourceBlock,
 } from '@cindy/device-link';
+import { BOT_GROUP_CHAT_PRIMITIVE } from '@cindy/maker-shared/botGroupChat';
 
 import { normalizeRemoteActions, normalizeRemoteBlocks } from './remoteResourceContent';
 import type { RemoteInvoke } from './mobileMakerTransport';
@@ -30,6 +31,18 @@ export const MOBILE_REMOTE_RESOURCE_PRIMITIVES = [
   'session-link',
   'session-controls',
 ] as const;
+
+/**
+ * Primitives whose whole block data is kept for a dedicated screen that asked for them
+ * (`getRemoteResource(..., supportedPrimitives)`); ordinary resource views never get it.
+ * The screen still validates that data before using it.
+ */
+const RICH_REMOTE_RESOURCE_PRIMITIVES: readonly string[] = [
+  'form',
+  'routine-list',
+  'routine-detail',
+  BOT_GROUP_CHAT_PRIMITIVE,
+];
 
 /** Routines remain a desktop feature; other portable collections stay available. */
 export function isMobileRemoteCollectionSupported(collectionId: string): boolean {
@@ -356,7 +369,7 @@ export async function getRemoteResource(
   }
   const source = recordOf(raw);
   // Rich forms are consumed only by the dedicated editor, never ordinary resource views.
-  if (supportedPrimitives.some(primitive => ['form', 'routine-list', 'routine-detail'].includes(primitive))) return {
+  if (supportedPrimitives.some(primitive => RICH_REMOTE_RESOURCE_PRIMITIVES.includes(primitive))) return {
     ...normalized, actions: normalizeRemoteActions(source?.actions), blocks: normalizeRemoteBlocks(source?.blocks),
   };
   const actions: RemoteActionDescriptor[] = Array.isArray(source?.actions)

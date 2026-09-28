@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   parsePluginOauthRequest,
   type PluginOauthOffer,
@@ -310,6 +310,20 @@ describe('shared authorization transaction lifecycle', () => {
 
 describe('real local loopback callback and cloud-owned account exchange', () => {
   it('stores only on the cloud Host; callback state/PKCE and redirect remain the original transaction', async () => {
+    let sockets: ReturnType<typeof ephemeralCallbackPorts> | undefined;
+    let redirectUri = '';
+    onTestFinished(async () => {
+      try {
+        await Promise.all([...(sockets?.servers.values() ?? [])].map(server =>
+          new Promise<void>((resolve) => {
+            server.close(() => resolve());
+            server.closeAllConnections();
+          }),
+        ));
+      } finally {
+        sockets?.listen.mockRestore();
+      }
+    });
     const vault = new Map<string, string>();
     const wire: unknown[] = [];
     let challenge = '';
@@ -332,6 +346,7 @@ describe('real local loopback callback and cloud-owned account exchange', () => 
         const form = new URLSearchParams(String(init?.body));
         exchangeCount++;
         expect(form.get('code')).toBe('synthetic-code');
+        expect(form.get('redirect_uri')).toBe(redirectUri);
         expect(createHash('sha256').update(form.get('code_verifier')!).digest('base64url')).toBe(
           challenge,
         );
@@ -351,6 +366,14 @@ describe('real local loopback callback and cloud-owned account exchange', () => 
       bind: async () => ({ ghostId: 'test-plugin', current: () => true }),
       run: () => {
         const remote = getRemoteOauthContext()!;
+        const authorize = remote.authorize.bind(remote);
+        vi.spyOn(remote, 'authorize').mockImplementation((offer, signal) => {
+          redirectUri = offer.callbackUrl;
+          // Cloud and controller represent different machines. Keep the offered
+          // authority intact while giving the controller an independently owned socket.
+          sockets = ephemeralCallbackPorts(Number(new URL(offer.callbackUrl).port));
+          return authorize(offer, signal);
+        });
         accountRun = manager
           .connectAccount(
             'test-plugin',
@@ -390,10 +413,11 @@ describe('real local loopback callback and cloud-owned account exchange', () => 
         openExternal: async (raw) => {
           const authorize = new URL(raw);
           challenge = authorize.searchParams.get('code_challenge')!;
+          expect(authorize.searchParams.get('redirect_uri')).toBe(redirectUri);
           const url = new URL(authorize.searchParams.get('redirect_uri')!);
           url.searchParams.set('state', authorize.searchParams.get('state')!);
           url.searchParams.set('code', 'synthetic-code');
-          const response = await fetch(url);
+          const response = await sockets!.fetch(url.toString());
           expect(response.status).toBe(200);
           expect(await response.text()).toContain('callback received');
         },

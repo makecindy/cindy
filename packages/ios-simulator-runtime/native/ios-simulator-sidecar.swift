@@ -2042,10 +2042,13 @@ let nativeHIDInjector: NativeHIDInjector?
 if productHIDRequested,
    frameworkProbe.hid,
    let device = retainedExactSimulatorDevice,
+   let screenClass = NSClassFromString("_TtC12SimulatorKit15SimDeviceScreen"),
    let target = try? nativeHIDTarget(
-       screenClass: NSClassFromString("_TtC12SimulatorKit15SimDeviceScreen"),
+       screenClass: screenClass,
        screen: retainedFramebufferScreen,
-       expectedScreenID: retainedFramebufferScreenID
+       expectedScreenID: retainedFramebufferScreenID,
+       simulatorKitBuildXcode: Bundle(for: screenClass)
+           .object(forInfoDictionaryKey: "DTXcode") as? String
    ) {
     nativeHIDInjector = try? NativeHIDInjector(device: device, target: target)
 } else {

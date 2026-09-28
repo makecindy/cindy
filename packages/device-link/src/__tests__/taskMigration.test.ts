@@ -12,16 +12,49 @@ import {
 } from "../invokePolicy.js";
 
 describe("task copy protocol", () => {
+  it("accepts a source session estimate without accepting arbitrary paths", () => {
+    expect(
+      parseTaskMigrationRequest({
+        action: "estimate",
+        sessionId: "source",
+        path: "/private",
+      }),
+    ).toEqual({ action: "estimate", sessionId: "source" });
+    expect(() =>
+      parseTaskMigrationRequest({
+        action: "estimate",
+        sessionId: "../private",
+      }),
+    ).toThrow();
+  });
   it("cannot dispatch the previous ownership-handoff protocol", () => {
     expect(TASK_MIGRATION_CHANNEL).toBe("maker:task-copy");
     expect(REMOTE_INVOKE_ALLOWLIST.has("maker:task-migration")).toBe(false);
-    expect(() => parseTaskMigrationRequest({ action: "activate", id: "01234567-0123-4123-a123-012345678901", sourceSessionId: "source" })).toThrow();
+    expect(() =>
+      parseTaskMigrationRequest({
+        action: "activate",
+        id: "01234567-0123-4123-a123-012345678901",
+        sourceSessionId: "source",
+      }),
+    ).toThrow();
   });
   it("accepts only explicit project or dialogue moves on the narrow host action", () => {
     for (const workingDir of [null, "/projects/new", "C:/projects/new"])
-      expect(parseTaskMigrationRequest({ action: "move-project", sessionId: "task", workingDir })).toEqual({ action: "move-project", sessionId: "task", workingDir });
+      expect(
+        parseTaskMigrationRequest({
+          action: "move-project",
+          sessionId: "task",
+          workingDir,
+        }),
+      ).toEqual({ action: "move-project", sessionId: "task", workingDir });
     for (const workingDir of [undefined, "", "bad\0path", 12])
-      expect(() => parseTaskMigrationRequest({ action: "move-project", sessionId: "task", workingDir })).toThrow();
+      expect(() =>
+        parseTaskMigrationRequest({
+          action: "move-project",
+          sessionId: "task",
+          workingDir,
+        }),
+      ).toThrow();
   });
   it("exposes only the narrow remote business channel, without automatic write retries", () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has(TASK_MIGRATION_CHANNEL)).toBe(true);

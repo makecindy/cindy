@@ -1,6 +1,6 @@
 import { readWorkingPhase } from '@cindy/maker-shared';
 import { TeammateGenerationLabel } from './TeammateGenerationLabel';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactElement } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { RefreshCw, TriangleAlert } from 'lucide-react-native';
@@ -33,10 +33,12 @@ export interface TeammateListProps {
   embedded?: boolean;
   autoFocusSearch?: boolean;
   onInteract?(): void;
+  /** Home only: the 「群聊」 section under the teammates, filtered by the same search text. */
+  renderFooter?(query: string): ReactElement | null;
 }
 /** Flat identity list shared by home, collection route and the name picker. No host headings or groups. */
 export function TeammateList({ items, loading, refreshing, error, isOnline, connectionState, onRefresh, onSelect,
-  current = null, embedded = false, autoFocusSearch = false, onInteract }: TeammateListProps) {
+  current = null, embedded = false, autoFocusSearch = false, onInteract, renderFooter }: TeammateListProps) {
   const { t, i18n } = useTranslation();
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -109,10 +111,11 @@ export function TeammateList({ items, loading, refreshing, error, isOnline, conn
       </View>
     </Pressable>;
   };
-  if (embedded) return <View testID="teammates.list">{header}{rows.length ? rows.map(renderRow) : empty}</View>;
+  const footer = renderFooter?.(query) ?? null;
+  if (embedded) return <View testID="teammates.list">{header}{rows.length ? rows.map(renderRow) : empty}{footer}</View>;
   return <FlatList style={styles.list} contentContainerStyle={styles.content} data={rows} keyExtractor={(row) => row.key}
     keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" onScrollBeginDrag={onInteract} testID="teammates.list"
-    ListHeaderComponent={header} ListEmptyComponent={empty} renderItem={({ item }) => renderRow(item)}
+    ListHeaderComponent={header} ListEmptyComponent={empty} ListFooterComponent={footer} renderItem={({ item }) => renderRow(item)}
     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.textSecondary} />} />;
 }
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({

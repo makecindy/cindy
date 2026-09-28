@@ -435,6 +435,7 @@ interface MessageStreamProps {
   simplifiedBotConversation?: boolean;
   /** Bot read position captured before entry marks the conversation read. */
   botUnreadBoundaryAt?: number | null;
+  onBotReadThrough?: (at: number) => void;
   messages: ChatMessage[];
   /** This task's preparation card is shown in the composer, including after history reload. */
   cindyMakeSessionId?: string;
@@ -2596,6 +2597,7 @@ export function MessageStream({
   assistantAvatar,
   simplifiedBotConversation = false,
   botUnreadBoundaryAt = null,
+  onBotReadThrough,
   messages,
   cindyMakeSessionId,
   cindyMakeCompletionInComposer,
@@ -4098,6 +4100,28 @@ export function MessageStream({
   // 点击按钮 / 自动回底 / 切换会话 → 归零。
   const [isNearBottom, setIsNearBottom] = useState<boolean>(true);
   const [unreadCount, setUnreadCount] = useState<number>(0);
+  // Only the rendered tail of a canonical Bot chat acknowledges replies. History
+  // navigation, background windows and streaming work never move its read position.
+  useEffect(() => {
+    if (!onBotReadThrough || !historyLoaded || !isNearBottom || isSessionStreaming) return;
+    const acknowledge = () => {
+      if (restoringRef.current || document.visibilityState !== 'visible' || !document.hasFocus() || !isNearBottomRef.current) return;
+      const at = allRenderItems.reduce((latest, item) => {
+        if (item.type !== 'message' || item.message.role !== 'assistant' || item.message.isStreaming) return latest;
+        const stamp = new Date(item.message.createdAt ?? '').getTime();
+        return Number.isFinite(stamp) ? Math.max(latest, stamp) : latest;
+      }, 0);
+      if (at > 0) onBotReadThrough(at);
+    };
+    const frame = requestAnimationFrame(acknowledge);
+    window.addEventListener('focus', acknowledge);
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('focus', acknowledge);
+      document.removeEventListener('visibilitychange', acknowledge);
+    };
+  }, [onBotReadThrough, historyLoaded, isNearBottom, isSessionStreaming, allRenderItems]);
   /** 上一次 render 已见过的 clientId 集合，用于 O(n) diff 出"首次出现"的消息。 */
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
 

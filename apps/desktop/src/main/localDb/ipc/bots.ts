@@ -574,16 +574,50 @@ function normalizeBotModelCapabilitiesOrThrow(
 }
 
 /** How many candidate rows the preview query inspects (see below). */
-const CANONICAL_PREVIEW_SCAN = 5;
+const CANONICAL_PREVIEW_SCAN = 100;
+
+/** The transcript also accepts persisted usage/cost as a legacy turn seal. */
+function canonicalReplyCompleted() {
+  return sql`(json_extract(${messages.agentMeta}, '$.turnCompleted') = 1
+    OR json_extract(${messages.agentMeta}, '$.turnMoney.amount') > 0
+    OR json_extract(${messages.agentMeta}, '$.turnCostUsd') > 0
+    OR json_type(${messages.agentMeta}, '$.turnUsageDetails') IS NOT NULL)`;
+}
+
+/** Visibility shared by the local unread count and remote reply watermark. */
+function canonicalReplyVisibility() {
+  return [
+    sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.assistantPhase') IS NOT 'commentary')`,
+    sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.parentToolUseId') IS NULL)`,
+    sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.parent_tool_use_id') IS NULL)`,
+    // A completed reply remains visible even when the same turn continues with tools.
+    // Only unsealed pre-tool narration is hidden by the companion transcript.
+    // Bound the lookup to this user turn so a later task cannot hide an old reply.
+    sql`(${canonicalReplyCompleted()} OR NOT EXISTS (
+      SELECT 1 FROM messages AS subsequent_tool
+      WHERE subsequent_tool.session_id = ${messages.sessionId}
+        AND subsequent_tool.created_at > ${messages.createdAt}
+        AND subsequent_tool.rewind_at IS NULL
+        AND subsequent_tool.role IN ('tool_use', 'tool_result', 'thinking')
+        AND NOT EXISTS (SELECT 1 FROM messages AS next_input
+          WHERE next_input.session_id = ${messages.sessionId}
+            AND next_input.role = 'user' AND next_input.rewind_at IS NULL
+            AND next_input.created_at > ${messages.createdAt}
+            AND next_input.created_at < subsequent_tool.created_at
+            AND (next_input.agent_meta IS NULL OR json_extract(next_input.agent_meta, '$.autoResume') IS NOT 1)
+            AND (next_input.agent_meta IS NULL OR json_extract(next_input.agent_meta, '$.delivery') IS NOT 'steer'))
+    ))`,
+  ];
+}
 
 /**
  * Latest visible message of a Bot's canonical chat, for the Bots list rows.
  *
- * Read-only projection, same visibility rules as the sidebar preview of an
- * ordinary task (`LATEST_MSG_CONTENT_SQL` in `ipc/sessions.ts`): only
+ * Read-only Bot projection with the ordinary preview
+ * boundaries plus companion reply visibility: only
  * user / assistant rows, no rewind-truncated rows, no hidden auto-resume
- * prompts, and nothing before the session's `/clear` boundary. One indexed
- * query per Bot on `idx_messages_session_created`, no join.
+ * prompts, and nothing before the session's `/clear` boundary. Indexed
+ * batches skip empty content without hiding a preceding real reply.
  *
  * A small window instead of `LIMIT 1`: `content` is a serialized structure, and
  * rows whose text cannot be extracted (attachment-only sends, synthetic UI
@@ -597,37 +631,43 @@ async function readCanonicalChatPreview(
 ): Promise<{ preview: string | null; createdAt: number | null; role: BotChatRole | null }> {
   if (!canonicalSessionId) return { preview: null, createdAt: null, role: null };
   const running = getMakerIfReady()?.getSession(canonicalSessionId)?.isTurnRunning?.() === true;
-  const rows = await db
-    .select({
-      role: messages.role,
-      content: messages.content,
-      createdAt: messages.createdAt,
-    })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, canonicalSessionId),
-        repliesOnly ? eq(messages.role, 'assistant') : inArray(messages.role, ['user', 'assistant']),
-        // During generation, prose blocks are progress. Only a sealed answer is a reply preview.
-        ...(running ? [sql`(${messages.role} != 'assistant' OR json_extract(${messages.agentMeta}, '$.turnCompleted') = 1)`] : []),
-        isNull(messages.rewindAt),
-        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
-        sql`(${messages.agentMeta} IS NULL OR json_type(${messages.agentMeta}, '$.botDirectMessage') IS NULL)`,
-        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.botPrivateReply') IS NOT 1)`,
-        ...(clearedAt !== null ? [gt(messages.createdAt, clearedAt)] : []),
-      ),
-    )
-    .orderBy(desc(messages.createdAt))
-    .limit(CANONICAL_PREVIEW_SCAN);
-  for (const row of rows) {
-    const preview = extractMessagePreview(row.content, row.role);
-    if (preview) {
-      return {
-        preview,
-        createdAt: row.createdAt ?? null,
-        role: row.role === 'user' ? 'user' : 'assistant',
-      };
+  let offset = 0;
+  for (;;) {
+    const rows = await db
+      .select({
+        role: messages.role,
+        content: messages.content,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.sessionId, canonicalSessionId),
+          repliesOnly ? eq(messages.role, 'assistant') : inArray(messages.role, ['user', 'assistant']),
+          or(eq(messages.role, 'user'), and(...canonicalReplyVisibility())),
+          // During generation, prose blocks are progress. Only a sealed answer is a reply preview.
+          ...(running ? [sql`(${messages.role} != 'assistant' OR ${canonicalReplyCompleted()})`] : []),
+          isNull(messages.rewindAt),
+          sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+          sql`(${messages.agentMeta} IS NULL OR json_type(${messages.agentMeta}, '$.botDirectMessage') IS NULL)`,
+          sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.botPrivateReply') IS NOT 1)`,
+          ...(clearedAt !== null ? [gt(messages.createdAt, clearedAt)] : []),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(CANONICAL_PREVIEW_SCAN).offset(offset);
+    for (const row of rows) {
+      const preview = extractMessagePreview(row.content, row.role);
+      if (preview) {
+        return {
+          preview,
+          createdAt: row.createdAt ?? null,
+          role: row.role === 'user' ? 'user' : 'assistant',
+        };
+      }
     }
+    if (rows.length < CANONICAL_PREVIEW_SCAN) break;
+    offset += rows.length;
   }
   return { preview: null, createdAt: null, role: null };
 }
@@ -644,8 +684,8 @@ const CANONICAL_UNREAD_SCAN = 100;
  * Bot-to-Bot conversation traces are never "unread". The remaining visibility
  * rules are exactly the preview's (no rewind-truncated rows, no hidden
  * auto-resume prompts, nothing before the `/clear` boundary). One indexed
- * range scan per Bot on `idx_messages_session_created`, capped at
- * `CANONICAL_UNREAD_SCAN` rows.
+ * range scan per Bot on `idx_messages_session_created`, stopping after
+ * `CANONICAL_UNREAD_SCAN` visible replies; empty rows cannot consume the cap.
  */
 async function countCanonicalUnread(
   db: ReturnType<typeof getDbClient>['drizzle'],
@@ -655,22 +695,32 @@ async function countCanonicalUnread(
 ): Promise<number> {
   if (!canonicalSessionId || lastReadAt === null) return 0;
   const boundary = clearedAt !== null ? Math.max(clearedAt, lastReadAt) : lastReadAt;
-  const rows = await db
-    .select({ id: messages.id })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, canonicalSessionId),
-        eq(messages.role, 'assistant'),
-        isNull(messages.rewindAt),
-        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
-        sql`(${messages.agentMeta} IS NULL OR json_type(${messages.agentMeta}, '$.botDirectMessage') IS NULL)`,
-        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.botPrivateReply') IS NOT 1)`,
-        gt(messages.createdAt, boundary),
-      ),
-    )
-    .limit(CANONICAL_UNREAD_SCAN);
-  return rows.length;
+  const running = getMakerIfReady()?.getSession(canonicalSessionId)?.isTurnRunning?.() === true;
+  let count = 0;
+  let offset = 0;
+  for (;;) {
+    const rows = await db
+      .select({ content: messages.content })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.sessionId, canonicalSessionId),
+          eq(messages.role, 'assistant'),
+          ...(running ? [canonicalReplyCompleted()] : []),
+          ...canonicalReplyVisibility(),
+          isNull(messages.rewindAt),
+          sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+          sql`(${messages.agentMeta} IS NULL OR json_type(${messages.agentMeta}, '$.botDirectMessage') IS NULL)`,
+          sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.botPrivateReply') IS NOT 1)`,
+          gt(messages.createdAt, boundary),
+        ),
+      )
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(CANONICAL_UNREAD_SCAN).offset(offset);
+    count += rows.filter(row => Boolean(extractMessagePreview(row.content, 'assistant'))).length;
+    if (count >= CANONICAL_UNREAD_SCAN || rows.length < CANONICAL_UNREAD_SCAN) return Math.min(count, CANONICAL_UNREAD_SCAN);
+    offset += rows.length;
+  }
 }
 
 async function readProfile(

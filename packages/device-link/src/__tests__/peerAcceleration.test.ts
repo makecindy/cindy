@@ -43,6 +43,26 @@ describe("peer acceleration policy", () => {
     ).toBe(false);
     expect(canUsePeerInvoke("maker:send", [{}])).toBe(false);
   });
+  it("reports only acknowledged chunks, not bytes merely read or rejected", async () => {
+    const progress = vi.fn();
+    let writes = 0;
+    await expect(
+      uploadPeerAttachment(
+        { size: 2 * 1024 * 1024, sha256: "a".repeat(64) },
+        async () => "YQ==",
+        async (request) => {
+          if (request.op === "begin")
+            return { ticket: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" };
+          if (request.op === "write" && ++writes === 2)
+            throw new Error("disconnected");
+          return {};
+        },
+        () => {},
+        progress,
+      ),
+    ).rejects.toThrow("disconnected");
+    expect(progress.mock.calls).toEqual([[1024 * 1024]]);
+  });
   it("finishes byte staging before returning a reference; cancellation never finishes", async () => {
     const ticket = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     const metadata = { size: 1, sha256: "a".repeat(64), originalName: "a.txt" };

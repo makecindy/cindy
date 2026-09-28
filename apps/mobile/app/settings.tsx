@@ -98,6 +98,7 @@ import { DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL } from '@cindy/maker-shared/de
 import type { MobileVoiceDictionarySnapshotResult } from '@cindy/maker-shared/device-link-contract';
 import { buildMobileUpdateInfoRows, currentMobileOtaVersion } from '@/settings/updateInfo';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
+import { isGooglePlayInstallation } from '@/update/androidInstallSource';
 import {
   manualUpdateCheckMessage,
   runManualUpdateCheck,
@@ -271,19 +272,22 @@ export default function SettingsScreen() {
     auto: false,
     channel: updateChannel.channel,
   });
+  const playManagedUpdates = Platform.OS === 'android' && isGooglePlayInstallation();
   const bundleCheckEnabled = shouldCheckBundleUpdate({
     isSelfHosted: IS_OTA_SELFHOST,
     isReviewMode: REVIEW_MODE,
     isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+    isGooglePlayInstallation: playManagedUpdates,
   });
   const updateCheckEnabled = bundleCheckEnabled || updatesEnabled;
   // 保存未翻译的结果，语言切换触发重渲染时用当前 t() 重新生成提示。
   const updateMessage = useMemo(
     () => updateOutcome && manualUpdateCheckMessage(updateOutcome, {
       isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+      isGooglePlayInstallation: playManagedUpdates,
       t,
     }),
-    [t, updateOutcome],
+    [playManagedUpdates, t, updateOutcome],
   );
 
   const aboutSection = overview.sections.find((section) => section.id === 'about');
@@ -970,7 +974,7 @@ export default function SettingsScreen() {
   const updateButtonLabel = updatePhase === 'checking' ? t('settings.version.checking')
     : updatePhase === 'downloading' ? t('settings.version.updating')
     : t(
-      IS_TESTFLIGHT_BUILD
+      IS_TESTFLIGHT_BUILD || playManagedUpdates
         ? 'settings.version.testFlightCheckAction'
         : 'settings.version.checkAction',
     );
@@ -1056,6 +1060,11 @@ export default function SettingsScreen() {
                     {t('settings.version.testFlightUpdateManaged')}
                   </Text>
                 ) : null}
+                {playManagedUpdates ? (
+                  <Text style={styles.rowDetail} numberOfLines={2} testID="settings.googlePlayUpdateHint">
+                    {t('settings.version.googlePlayUpdateManaged')}
+                  </Text>
+                ) : null}
                 {updateMessage ? (
                   <Text style={styles.rowDetail} numberOfLines={2} testID="settings.updateMessage">{updateMessage}</Text>
                 ) : !REVIEW_MODE && !updatesEnabled ? (
@@ -1063,7 +1072,9 @@ export default function SettingsScreen() {
                     {t(
                       IS_TESTFLIGHT_BUILD
                         ? 'settings.version.testFlightContentUpdateUnavailable'
-                        : 'settings.version.devNoOta',
+                        : playManagedUpdates
+                          ? 'settings.version.googlePlayContentUpdateUnavailable'
+                          : 'settings.version.devNoOta',
                     )}
                   </Text>
                 ) : null}
@@ -1074,12 +1085,12 @@ export default function SettingsScreen() {
                   action={{
                     accessibilityLabel: updateBusy
                       ? t(
-                        IS_TESTFLIGHT_BUILD
+                        IS_TESTFLIGHT_BUILD || playManagedUpdates
                           ? 'settings.version.testFlightCheckingAccessibility'
                           : 'settings.version.checkingAccessibility',
                       )
                       : t(
-                        IS_TESTFLIGHT_BUILD
+                        IS_TESTFLIGHT_BUILD || playManagedUpdates
                           ? 'settings.version.testFlightCheckAction'
                           : 'settings.version.checkAction',
                       ),

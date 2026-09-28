@@ -282,6 +282,7 @@ describe('botGroupChatService', () => {
       });
     }
     const group = await waitForIdle(harness, groupId);
+    expect(group.lastReplyAt).toBe(Math.max(...group.messages.filter(m => m.authorKind === 'bot' && m.kind === 'message').map(m => m.createdAt)));
     // Second circle takes turns and sees the whole first circle.
     expect(harness.dispatches.slice(3).map((call) => call.botId)).toEqual(['xiaoman', 'abu', 'mimi']);
     expect(harness.dispatches[3]!.prompt).toContain('咪咪的看法');
@@ -751,6 +752,36 @@ describe('botGroupChatService 分工', () => {
     expect(lanePrompt.sessionId).toBe('lane-xiaoman');
     expect(lanePrompt.prompt).toContain(JSON.stringify(path.join('/work/site-wt', '需求说明.md')).slice(1, -1));
     expect(lanePrompt.prompt).toContain('not in your own workspace');
+  });
+
+  it('reports every settled step so phones can be told', async () => {
+    const onStepSettled = vi.fn();
+    let fail = true;
+    const harness = createHarness((botId) => (botId === 'xiaoman' && fail ? null : '好了'), {
+      decidePlan: async () => ({ needsPlan: true, steps: [{ botId: 'mimi', task: '策划' }, { botId: 'xiaoman', task: '设计' }] }),
+      workDir: fakeWorkDir(),
+      onStepSettled,
+    });
+    const groupId = await createGroup(harness);
+    const plan = await proposePlan(harness, groupId);
+    await harness.service.startPlan({ groupId, planId: plan.id });
+    await waitForIdle(harness, groupId);
+    await harness.service.continuePlan({ groupId, planId: plan.id });
+    await vi.waitFor(() => expect(harness.dispatches.at(-1)!.botId).toBe('xiaoman'));
+    const call = harness.dispatches.at(-1)!;
+    await harness.service.settleLaneTurn({ sessionId: call.sessionId, activeInputClientId: call.clientId, outcome: 'error', resultText: '' });
+    await waitForIdle(harness, groupId);
+    fail = false;
+    await harness.service.retryPlan({ groupId, planId: plan.id });
+    await waitForIdle(harness, groupId);
+    expect(onStepSettled.mock.calls.map(([event]) => [event.botName, event.task, event.outcome, event.planDone])).toEqual([
+      ['咪咪', '策划', 'done', false],
+      ['小满', '设计', 'failed', false],
+      ['小满', '设计', 'done', true],
+    ]);
+    expect(onStepSettled.mock.calls[0]![0]).toMatchObject({ groupId, groupName: '周末出游', planId: plan.id, position: 0 });
+    // The whole group, so the push can apply the phone's member-visibility rule.
+    expect([...onStepSettled.mock.calls[0]![0].memberBotIds].sort()).toEqual(['abu', 'mimi', 'xiaoman']);
   });
 
   it('a plain message after a step asks the same Bot to redo it, and later steps read the new hand-off', async () => {

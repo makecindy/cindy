@@ -10,26 +10,24 @@
     "failed": "작업을 이동할 수 없습니다. 작업을 중지하고 대상 폴더를 확인한 후 다시 시도하세요."
   },
   "taskMigration": {
-    "title": "다른 컴퓨터로 복사…",
-    "description": "대상 컴퓨터에 독립된 사본을 만듭니다. 원본 작업과 파일은 유지됩니다.",
+    "title": "{{name}}로 복사",
+    "description": "{{name}}에 작업 사본을 만듭니다.",
     "bindingsNotice": "자동 실행과 메시지 연결은 원본 컴퓨터에 남으며 복사되지 않습니다.",
     "limits": "두 컴퓨터 모두 이 기능을 지원하고 원격 제어가 켜져 있어야 합니다. 먼저 이 폴더를 사용하는 작업을 중지하세요. 복사 전에 대상 컴퓨터의 디스크 여유 공간과 사용 가능한 메모리를 확인합니다. 대상 컴퓨터의 모델 설정을 사용하며 Cindy 로그인 정보와 컴퓨터 설정은 전송하지 않습니다.",
-    "device": "대상 컴퓨터",
+    "device": "복사 위치",
     "project": "저장 위치",
     "newFolder": "새 폴더를 만들며 기존 파일은 덮어쓰지 않습니다.",
     "defaultFolder": "Cindy 기본 위치",
     "noDevices": "사용 가능한 컴퓨터가 없습니다. 다른 컴퓨터를 연결하고 두 컴퓨터 모두 원격 제어를 켜세요.",
-    "background": "이 창을 닫아도 작업 메뉴에서 다시 열 수 있습니다. 중단된 경우 같은 복사을 재시도하세요.",
-    "openTarget": "대상 컴퓨터의 작업 열기",
+    "openTarget": "새로 복사한 작업 열기",
     "close": "닫기",
-    "cancel": "복사 취소",
-    "retry": "복사 재시도",
+    "cancel": "취소",
     "start": "작업 복사",
-    "failed": "복사을 완료하지 못했습니다. 원본 파일은 유지됩니다. 두 컴퓨터를 확인한 후 다시 시도하세요.",
+    "failed": "복사가 완료되지 않았습니다. 두 컴퓨터를 확인한 후 다시 복사하세요.",
     "stages": {
       "preparing": "스냅샷 준비 중…",
       "transferring": "파일 전송 및 검증 중…",
-      "complete": "복사가 완료되었습니다. 원본 작업과 파일은 유지됩니다.",
+      "complete": "복사 완료",
       "cancelled": "복사이 취소되었습니다.",
       "receiving": "파일 수신 중…",
       "active": "이 컴퓨터에서 작업을 계속할 수 있습니다."
@@ -48,7 +46,21 @@
       "MIGRATION_UNSUPPORTED": "두 컴퓨터 모두 작업 복사을 지원하는 버전으로 업데이트하세요.",
       "MIGRATION_TASK_QUEUED": "이 작업에 대기 중인 메시지가 있습니다. 처리하거나 삭제한 후 복사하세요.",
       "MIGRATION_SOURCE_CHANGED": "준비 중 원본 작업이 변경되었습니다. 복사를 다시 시도하세요."
-    }
+    },
+    "successTitle": "복사 완료",
+    "successDescription": "{{name}}에 복사했습니다.",
+    "copyingTitle": "{{name}}로 복사 중",
+    "keepOpen": "{{name}}로 복사 중입니다. 완료될 때까지 기다려 주세요.",
+    "failureTitle": "복사 실패",
+    "failureDescription": "창을 닫은 후 작업 메뉴에서 새로 복사할 수 있습니다.",
+    "finishing": "{{name}}에서 수신, 검증 및 작업 생성 중…",
+    "transferProgress": "업로드 {{sent}} / {{total}} · 평균 {{speed}}/s (수신 미완료)",
+    "thisComputer": "이 컴퓨터",
+    "selectedComputer": "선택한 컴퓨터",
+    "estimating": "파일 수와 크기 계산 중…",
+    "fileSummary": "프로젝트 파일: {{count}}개, 총 {{size}}",
+    "estimateNote": "숨김 파일을 포함한 복사 전 예상치입니다. 별도로 복사하는 Git 기록, 작업 대화 및 첨부 파일은 제외됩니다. 파일 변경에 따라 최종 크기가 달라질 수 있습니다.",
+    "estimateFailed": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요."
   },
   "sharedTask": {
     "manageSharing": "공유 관리",
@@ -189,6 +201,7 @@
     "allow": "원격 데스크톱 허용",
     "allowHint": "같은 계정의 기기에서 이 컴퓨터의 모든 앱을 보고 조작하도록 허용합니다. 위의 기기 제어도 켜주세요.",
     "permissionHint": "컴퓨터 시스템 설정에서 화면 기록과 손쉬운 사용을 허용한 후 다시 연결하세요.",
+    "controlUnavailable": "원격 컴퓨터에서 입력을 받을 수 없습니다. 제어 권한과 연결을 확인한 다음 다시 연결하세요.",
     "beingControlled": "데스크톱을 원격으로 제어 중",
     "beingViewed": "데스크톱을 원격으로 보는 중",
     "disconnect": "연결 끊기",
@@ -867,6 +880,11 @@
       "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
       "feishuDisabledHint": "먼저 \"Feishu / Lark 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
       "feishuAria": "세션 완료 Feishu 알림 전환",
+      "botGroupPlan": {
+        "stepDone": "{{name}} 님이 「{{task}}」를 끝냈어요. 계속을 기다려요",
+        "stepFailed": "{{name}} 님이 「{{task}}」를 끝내지 못했어요. 다시 시도할 수 있어요",
+        "planDone": "역할 분담이 모두 끝났어요. 마지막은 {{name}} 님의 「{{task}}」"
+      },
       "sessionEvent": {
         "untitled": "제목 없는 세션",
         "done": "완료됨 ✓",
@@ -1536,6 +1554,11 @@
         "label": "음성 입력 빠른 시작",
         "hint": "사용 후 잠시 마이크를 대기 상태로 유지해 단축키나 버튼을 누른 뒤 녹음이 시작되기까지의 시간을 줄입니다. 보통 약 100 ms 빨라집니다. 30분 동안 다시 사용하지 않으면 마이크를 자동으로 해제합니다.",
         "ariaLabel": "음성 입력 빠른 시작 전환"
+      },
+      "composerLongPress": {
+        "label": "입력창 길게 눌러 음성 입력",
+        "hint": "입력창에서 마우스 왼쪽 버튼을 잠시 길게 누르면 음성 입력이 시작되고, 버튼을 놓으면 종료되어 텍스트가 입력됩니다.",
+        "ariaLabel": "입력창 길게 눌러 음성 입력 전환"
       },
       "refinement": {
         "enabled": {
@@ -7633,6 +7656,8 @@
   },
   "sidebar": {
     "backToSessions": "세션으로 돌아가기",
+    "taskAttentionCount": "확인이 필요한 작업: {{count}}",
+    "teammateUnreadCount": "읽지 않은 채팅: {{count}}",
     "vendorReadiness": {
       "loading": "사용 가능 여부 확인 중",
       "ready": "준비됨",

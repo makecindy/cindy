@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { createElement, useState } from 'react';
+import { act, createElement, useImperativeHandle, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
+
+const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any, renders: 0 }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
@@ -13,7 +15,7 @@ vi.mock('react-native', async () => {
     View: view, Text: view, Pressable: view, ScrollView: view, Modal: () => null,
     Image: Object.assign(view, { getSize() {} }), ActivityIndicator: view,
     Animated: { Value, View: view, Text: view, createAnimatedComponent: (c: any) => c,
-      timing: () => ({ start() {}, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
+      timing: () => ({ start(callback: any) { viewportHarness.finishReveal = callback; }, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
     StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
     Easing: { linear: (n: number) => n, bezier: () => (n: number) => n },
@@ -22,7 +24,12 @@ vi.mock('react-native', async () => {
   };
 });
 vi.mock('@legendapp/list/react-native', () => ({
-  LegendList: ({ data, renderItem }: any) => data.map((item: any, index: number) => createElement('section', { key: item.key }, renderItem({ item, index }))),
+  LegendList: ({ data, renderItem, ref, ...props }: any) => {
+    viewportHarness.renders += 1;
+    viewportHarness.list = { ...props, data };
+    useImperativeHandle(ref, () => ({ scrollToEnd() {}, scrollToOffset() {}, getState() { return undefined; } }));
+    return data.map((item: any, index: number) => createElement('section', { key: item.key }, renderItem({ item, index })));
+  },
   useRecyclingState: (initial: any) => useState(initial), useViewability: () => {},
 }));
 vi.mock('lucide-react-native', () => ({
@@ -61,6 +68,7 @@ vi.mock('@/session/messageActions', async (original) => ({ ...await original<obj
 
 import { MessageRenderer } from '@/session/MessageRenderer';
 import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
+import { companionConversationItems } from '@/session/companionConversationPresentation';
 import type { RemoteMessage } from '@/session/types';
 const msg = (id: string, role: RemoteMessage['role'], content: unknown, extra: Partial<RemoteMessage> = {}): RemoteMessage => ({ id, clientId: id, sessionId: 's', role, content, toolUseId: null, agentMeta: null, createdAt: '2026-01-01T00:00:00Z', ...extra });
 
@@ -138,5 +146,76 @@ describe('partner conversation presentation', () => {
     const ordinary = renderClient(<MessageRenderer items={items} companionAvatar={portrait} />);
     expect(ordinary).not.toContain('companion.timeGroup');
     expect(ordinary).not.toContain('companion.replyRow');
+  });
+});
+
+describe('companion native read position', () => {
+  it('leaves ordinary task lists without the companion viewability observer', () => {
+    const acknowledge = vi.fn();
+    const items = buildMobileMessageRenderItems([msg('a', 'assistant', 'Task reply')], { isSessionStreaming: false });
+    renderClient(<MessageRenderer items={items} onCompanionReadThrough={acknowledge} />);
+    expect(viewportHarness.list.onViewableItemsChanged).toBeUndefined();
+    expect(acknowledge).not.toHaveBeenCalled();
+  });
+
+  it('keeps unseen replies unread until reveal, measured tail and row visibility agree', async () => {
+    const { createRoot } = await import('react-dom/client');
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    vi.useFakeTimers();
+    const root = createRoot(document.createElement('div'));
+    const acknowledge = vi.fn();
+    let active = true;
+    const isActive = () => active;
+    const messages = [msg('a1', 'assistant', 'First reply', { agentMeta: { turnCompleted: true } }),
+      msg('a2', 'assistant', 'Latest reply', { agentMeta: { turnCompleted: true }, createdAt: '2026-01-01T00:01:00Z' })];
+    const items = companionConversationItems(buildMobileMessageRenderItems(messages, { isSessionStreaming: false }));
+    const visible = (rows = items) => viewportHarness.list.onViewableItemsChanged({ viewableItems: rows.map((item, index) => ({
+      item, key: item.key, index, containerId: index, isViewable: true,
+    })), changed: [], start: 0, end: rows.length, startBuffered: 0, endBuffered: rows.length });
+    const scroll = (offsetY: number) => viewportHarness.list.onScroll({ nativeEvent: {
+      contentSize: { height: 2000 }, layoutMeasurement: { height: 500 }, contentOffset: { y: offsetY },
+    } });
+    try {
+      await act(async () => root.render(<MessageRenderer items={items} companion onCompanionReadThrough={acknowledge} isReadingPositionActive={isActive} />));
+      await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+      expect(acknowledge).not.toHaveBeenCalled();
+      await act(async () => { visible(); scroll(0); });
+      expect(acknowledge).not.toHaveBeenCalled();
+      // Even the native opacity fallback completing is not proof of reaching the tail.
+      await act(async () => { viewportHarness.finishReveal?.({ finished: true }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+      expect(acknowledge).not.toHaveBeenCalled();
+      const first = items.filter(item => item.type === 'message' && item.message.source.clientId === 'a1');
+      expect(first).toHaveLength(1);
+      await act(async () => { visible(first); scroll(1500); });
+      expect(acknowledge).toHaveBeenLastCalledWith(Date.parse(messages[0].createdAt));
+      acknowledge.mockClear();
+      active = false;
+      await act(async () => visible());
+      expect(acknowledge).not.toHaveBeenCalled();
+      active = true;
+      const rendersBeforeVisibility = viewportHarness.renders;
+      await act(async () => visible());
+      expect(acknowledge).toHaveBeenLastCalledWith(Date.parse(messages[1].createdAt));
+      // A receipt must not broadcast visible keys and rerender the mounted message window.
+      expect(viewportHarness.renders).toBe(rendersBeforeVisibility);
+      acknowledge.mockClear();
+      await act(async () => root.render(<MessageRenderer items={items} companion scrollResetKey="another-chat"
+        onCompanionReadThrough={acknowledge} isReadingPositionActive={isActive} />));
+      await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+      expect(acknowledge).not.toHaveBeenCalled();
+      await act(async () => {
+        visible();
+        viewportHarness.list.onLayout({ nativeEvent: { layout: { height: 500 } } });
+        viewportHarness.list.onContentSizeChange(400, 300);
+      });
+      expect(acknowledge).not.toHaveBeenCalled();
+      await act(async () => { viewportHarness.finishReveal?.({ finished: true }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+      expect(acknowledge).toHaveBeenLastCalledWith(Date.parse(messages[1].createdAt));
+    } finally {
+      await act(async () => root.unmount());
+      vi.useRealTimers();
+    }
   });
 });

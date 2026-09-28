@@ -384,7 +384,7 @@ module.exports = (context = {}) => {
       ...next,
       android: {
         ...next.android,
-        // Only APK self-distribution requests permission to install updates.
+        // Self-hosted APK and AAB share native config; Play installs skip APK updates at runtime.
         permissions: [...new Set([
           ...(next.android.permissions || []),
           'android.permission.REQUEST_INSTALL_PACKAGES',

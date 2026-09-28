@@ -223,7 +223,13 @@ export async function restoreWorkspace(
     // Rebuild Git metadata locally; never copy source .git links, hooks, credentials or config.
     await gitExec(['init', '--template=', target], directory);
     await gitExec(
-      ['fetch', '--no-tags', '--no-write-fetch-head', path.join(directory, 'repository.bundle'), git.ref],
+      [
+        'fetch',
+        '--no-tags',
+        '--no-write-fetch-head',
+        path.join(directory, 'repository.bundle'),
+        git.ref,
+      ],
       target,
     );
     if (git.headRef) {
@@ -234,4 +240,31 @@ export async function restoreWorkspace(
     // Restore index separately from working files, retaining staged-only and unstaged changes.
     await gitExec(['read-tree', git.indexTree], target);
   }
+}
+
+/** Read-only pre-copy inventory: includes hidden/ignored files, never follows links.
+ * Root Git metadata is rebuilt separately by snapshotWorkspace, not copied as files.
+ */
+export async function estimateWorkspace(
+  root: string,
+  check: () => void,
+): Promise<{ fileCount: number; bytes: number }> {
+  root = await fs.realpath(root);
+  const result = { fileCount: 0, bytes: 0 };
+  async function walk(directory: string): Promise<void> {
+    for (const name of await fs.readdir(directory)) {
+      check();
+      if (directory === root && name === '.git') continue;
+      const file = path.join(directory, name);
+      const stat = await fs.lstat(file);
+      if (stat.isDirectory()) await walk(file);
+      else if (stat.isFile() || stat.isSymbolicLink()) {
+        result.fileCount++;
+        result.bytes += stat.size;
+      } else throw new Error('MIGRATION_NONPORTABLE_PATH');
+    }
+  }
+  await walk(root);
+  check();
+  return result;
 }

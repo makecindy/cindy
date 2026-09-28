@@ -25,6 +25,7 @@ import {
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
+import { ControlledBanner, useControlledBy, useComposerCollapsed } from '@/features/remote-device/ControlledBanner';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import type {
   BotGroupDetail,
@@ -64,6 +65,7 @@ import {
   openBotGroupPlan,
 } from './botGroupPresentation';
 import { botGroupApi, editBotGroupPlanStep, runBotGroupPlanAction } from './botGroupStore';
+import { botGroupReadKey, markBotRead } from './botReadState';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from './botConversationTimeline';
 
 type GroupViewState =
@@ -102,6 +104,11 @@ export function BotGroupChatView() {
 
 function BotGroupChatContent({ groupId }: { groupId: string }) {
   const { t, i18n } = useTranslation();
+  const controlledBy = useControlledBy();
+  const hasControlledBanner = controlledBy.length > 0;
+  // Groups have no single task session; namespace their existing composer UI state.
+  const controlledBannerKey = `bot-group:${groupId}`;
+  const controlledBannerCollapsed = useComposerCollapsed(controlledBannerKey);
   const navigate = useNavigate();
   const location = useLocation();
   const [state, setState] = useState<GroupViewState>({ kind: 'loading' });
@@ -114,6 +121,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const readOwner = useRef(getDataOwnerGeneration());
   const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
 
   useEffect(() => {
@@ -133,6 +141,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         const result = await api.getBotGroup(groupId);
         if (!isCurrent()) return;
         if (result.ok) {
+          readOwner.current = owner;
           setState((previous) =>
             previous.kind === 'ready'
               ? { ...previous, group: result.group }
@@ -179,6 +188,18 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
     () => (state.kind === 'ready' ? mergeBotGroupMessages(state.older, state.group.messages) : []),
     [state],
   );
+  const acknowledge = useCallback(() => {
+    if (!isDataOwnerGenerationCurrent(readOwner.current) || !stickToBottomRef.current || document.visibilityState !== 'visible' || !document.hasFocus()) return;
+    const at = messages.reduce((latest, message) => message.kind === 'message' && message.authorKind === 'bot'
+      ? Math.max(latest, message.createdAt) : latest, 0);
+    if (at > 0) markBotRead(botGroupReadKey(groupId), at);
+  }, [groupId, messages]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(acknowledge);
+    window.addEventListener('focus', acknowledge);
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener('focus', acknowledge); document.removeEventListener('visibilitychange', acknowledge); };
+  }, [acknowledge]);
   const plans = useMemo(
     () => (state.kind === 'ready' ? mergeBotGroupPlans(state.olderPlans, state.group.plans) : []),
     [state],
@@ -231,7 +252,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   }, [group?.name, headerMembers, openSettings, separator, settingsLabel]);
   useRegisterContentHeader(header);
 
-  // Follow new messages only while the reader is already at the bottom.
+  // Follow new messages and banner viewport changes only while the reader is at the bottom.
   const lastSequence = messages[messages.length - 1]?.sequence ?? 0;
   // Several Bots think at once in a broadcast round's first circle; the key follows the set.
   const speakingKey =
@@ -246,7 +267,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
       return;
     }
     if (stickToBottomRef.current) element.scrollTop = element.scrollHeight;
-  }, [lastSequence, speakingKey, messages.length]);
+  }, [lastSequence, speakingKey, messages.length, hasControlledBanner, controlledBannerCollapsed]);
 
   // Markdown, code blocks and avatars finish layout after the first paint; keep a reader
   // who is at the bottom pinned there while the content grows.
@@ -426,6 +447,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         onScroll={(event) => {
           const element = event.currentTarget;
           stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+          acknowledge();
         }}
         className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-6"
       >
@@ -515,6 +537,14 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
           ))}
         </div>
       </div>
+      {hasControlledBanner && (
+        // Like teammate chats, keep the collapsed breathing light above the composer.
+        <div className="shrink-0 px-5 pt-2">
+          <div className="mx-auto flex w-full max-w-[760px] justify-center px-2">
+            <ControlledBanner placement="composer" sessionId={controlledBannerKey} />
+          </div>
+        </div>
+      )}
       <BotGroupComposer
         groupId={group.id}
         members={group.members}

@@ -22,6 +22,7 @@ import { useRemoteBots } from './useRemoteBots';
 import { cn } from '@/lib/utils';
 import { readBotCollaborationMeta } from '../../../shared/botCollaboration';
 import { isActiveDelegationStatus, useBotDelegation } from './botDelegationLive';
+import { BOT_TASK_CARD_CLASS, BotTaskCardHeader } from './BotTaskCardHeader';
 
 /**
  * 「用时」是说给人听的，不是给日志看的：中文界面里 `8s` 和「用时」并排是两套语言。
@@ -219,21 +220,8 @@ function SessionTaskCardBody({
   );
 
   return (
-    <div ref={observeCard} className="my-2 w-full max-w-[560px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-12">
-      <div className="flex items-start gap-3">
-        <div
-          title={taskTitle}
-          className="min-w-0 flex-1 line-clamp-2 break-words text-14 font-medium leading-5 text-[var(--text-primary)]"
-        >
-          {taskTitle}
-        </div>
-        <span
-          className={cn('flex shrink-0 items-center gap-1.5 text-12 leading-5', taskStatusClass)}
-        >
-          <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
-          {statusLabel}
-        </span>
-      </div>
+    <div ref={observeCard} className={BOT_TASK_CARD_CLASS}>
+      <BotTaskCardHeader title={taskTitle} status={statusLabel} statusClass={taskStatusClass} />
       <div className="mt-1 flex min-h-4 flex-wrap items-center gap-x-3 gap-y-1 text-[var(--text-tertiary)]">
         {duration ? <span className="tabular-nums">{duration}</span> : null}
         {artifacts.length > 0 ? (

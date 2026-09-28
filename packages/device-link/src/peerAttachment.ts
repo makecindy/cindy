@@ -52,6 +52,7 @@ export async function uploadPeerAttachment(
   read: (offset: number, length: number) => Promise<string>,
   invoke: (request: Record<string, unknown>) => Promise<unknown>,
   check: () => void,
+  onProgress?: (bytes: number) => void,
 ): Promise<string> {
   check();
   const { ticket } = (await invoke({ op: "begin", ...metadata })) as {
@@ -68,6 +69,7 @@ export async function uploadPeerAttachment(
       );
       check();
       await invoke({ op: "write", ticket, offset, data });
+      onProgress?.(Math.min(offset + 1024 * 1024, metadata.size));
     }
     check();
     await invoke({ op: "finish", ticket });

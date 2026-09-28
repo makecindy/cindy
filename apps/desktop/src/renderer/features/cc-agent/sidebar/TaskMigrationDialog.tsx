@@ -31,22 +31,27 @@ export function TaskMigrationDialog({
   const [project, setProject] = useState(destination?.project ?? '');
   const [status, setStatus] = useState<TaskMigrationView | null>(null);
   const [busy, setBusy] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [readyTarget, setReadyTarget] = useState('');
   const [error, setError] = useState('');
+  const [pollError, setPollError] = useState('');
   const [self, setSelf] = useState('');
+  const [estimate, setEstimate] = useState<TaskMigrationView['estimate']>();
+  const [estimateError, setEstimateError] = useState(false);
   const pending = useRef(false);
+  const observingCopy = useRef(!destination);
+  const previousCopy = useRef<string | undefined>(undefined);
   const mutationEpoch = useRef(0);
   const owner = useRef(getDataOwnerGeneration()).current;
   const live = useRef(true);
   const current = () => live.current && isDataOwnerGenerationCurrent(owner);
   const request = (command: TaskMigrationRequest) =>
     window.electronAPI.deviceLink.taskMigration(session.deviceLinkDeviceId ?? null, command);
+  const errorCode = (e: unknown) =>
+    /\bMIGRATION_[A-Z_]+\b/.exec(e instanceof Error ? e.message : String(e))?.[0] ??
+    'MIGRATION_FAILED';
   const showError = (e: unknown) => {
-    if (current())
-      setError(
-        /\bMIGRATION_[A-Z_]+\b/.exec(e instanceof Error ? e.message : String(e))?.[0] ??
-          'MIGRATION_FAILED',
-      );
+    if (current()) setError(errorCode(e));
   };
   useEffect(() => {
     live.current = true;
@@ -56,12 +61,28 @@ export function TaskMigrationDialog({
       const epoch = mutationEpoch.current;
       try {
         const next = await request({ action: 'status', sessionId: session.id });
-        if (!disposed && current() && epoch === mutationEpoch.current && !pending.current)
-          setStatus(next);
+        if (!disposed && current() && epoch === mutationEpoch.current && !pending.current) {
+          if (!observingCopy.current) {
+            if (epoch === 0) previousCopy.current = next.targetSessionId;
+            const newCopy =
+              epoch > 0 && next.targetSessionId && next.targetSessionId !== previousCopy.current;
+            const unfinished =
+              next.stage && !['complete', 'active', 'cancelled'].includes(next.stage);
+            if (newCopy || unfinished) {
+              observingCopy.current = true;
+              // A changed copy ID recovers a lost start acknowledgement, even if already complete.
+              if (newCopy) setError('');
+            }
+          }
+          // A fresh menu selection starts a new copy, not the previous success screen.
+          setStatus(observingCopy.current ? next : { supported: true, deviceId: next.deviceId });
+          setPollError('');
+        }
       } catch (e) {
-        if (!disposed) showError(e);
+        if (!disposed && current() && epoch === mutationEpoch.current && !pending.current)
+          setPollError(errorCode(e));
       }
-      if (!disposed && current()) timer = setTimeout(() => void poll(), 2000);
+      if (!disposed && current()) timer = setTimeout(() => void poll(), 1000);
     };
     void Promise.all([
       window.electronAPI.deviceLink.listDevices(),
@@ -114,20 +135,28 @@ export function TaskMigrationDialog({
       disposed = true;
     };
   }, [target, self]);
-  const act = async (command: TaskMigrationRequest) => {
+  const act = async (command: TaskMigrationRequest, dismissOnSuccess = false) => {
     if (pending.current || !current()) return;
     pending.current = true;
     mutationEpoch.current++;
+    setStarting(command.action === 'start');
     setBusy(true);
     setError('');
     try {
       const next = await request(command);
-      if (current()) setStatus(next);
+      if (current()) {
+        if (command.action === 'start') observingCopy.current = true;
+        setStatus(next);
+        if (dismissOnSuccess) onDismiss();
+      }
     } catch (e) {
       showError(e);
     } finally {
       pending.current = false;
-      if (current()) setBusy(false);
+      if (current()) {
+        setBusy(false);
+        setStarting(false);
+      }
     }
   };
   const started = !!status?.stage && !['cancelled', 'active', 'complete'].includes(status.stage);
@@ -160,17 +189,77 @@ export function TaskMigrationDialog({
       showError(e);
     } finally {
       pending.current = false;
-      if (current()) setBusy(false);
+      if (current()) {
+        setBusy(false);
+        setStarting(false);
+      }
     }
   };
-  const failure = error || status?.error;
+  const complete = status?.stage === 'complete' || status?.stage === 'active';
+  const copying = starting || !!status?.running;
+  const failure =
+    error || pollError || status?.error || (started && !copying ? 'MIGRATION_FAILED' : '');
+  const confirming = !started && !complete && !failure && !busy;
+  useEffect(() => {
+    if (!confirming) return;
+    let disposed = false;
+    setEstimate(undefined);
+    setEstimateError(false);
+    void request({ action: 'caps' })
+      .then(async (caps) => {
+        if (!caps.copyEstimate) throw new Error('Estimate unavailable');
+        return request({ action: 'estimate', sessionId: session.id });
+      })
+      .then((result) => {
+        if (
+          !result.estimate ||
+          !Number.isSafeInteger(result.estimate.fileCount) ||
+          result.estimate.fileCount < 0 ||
+          !Number.isSafeInteger(result.estimate.bytes) ||
+          result.estimate.bytes < 0
+        )
+          throw new Error('Invalid estimate');
+        if (!disposed && current()) setEstimate(result.estimate);
+      })
+      .catch(() => {
+        if (!disposed && current()) setEstimateError(true);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [confirming, session.id, session.deviceLinkDeviceId]);
+  const displayDevice =
+    status?.targetDeviceId && observingCopy.current ? status.targetDeviceId : target;
+  const computerName =
+    displayDevice === self || (displayDevice === destination?.deviceId && destination?.isSelf)
+      ? t('taskMigration.thisComputer')
+      : (devices.find((device) => device.deviceId === displayDevice)?.name ??
+        (displayDevice === destination?.deviceId
+          ? destination.deviceName
+          : t('taskMigration.selectedComputer')));
+  const closeCancels = started && !status?.running;
+  const dismiss = () => {
+    if (pending.current || copying) return;
+    if (closeCancels) void act({ action: 'cancel', sessionId: session.id }, true);
+    else onDismiss();
+  };
+  const progress = status?.progress;
+  const percent =
+    progress && progress.totalBytes > 0
+      ? Math.min(100, Math.max(0, Math.floor((progress.sentBytes / progress.totalBytes) * 100)))
+      : undefined;
+  const bytes = (value: number) => {
+    if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+    if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+    return `${(Math.max(0, value) / 1024).toFixed(1)} KB`;
+  };
   const errorKey =
     failure && t(`taskMigration.errors.${failure}`, { defaultValue: t('taskMigration.failed') });
   return (
     <Dialog.Root
       open
       onOpenChange={(open) => {
-        if (!open) onDismiss();
+        if (!open) dismiss();
       }}
     >
       <Dialog.Portal>
@@ -185,24 +274,33 @@ export function TaskMigrationDialog({
           onKeyDown={(e) => e.stopPropagation()}
         >
           <Dialog.Title className="text-lg font-medium text-[var(--confirm-title)]">
-            {t('taskMigration.title')}
+            {t(
+              complete
+                ? 'taskMigration.successTitle'
+                : copying
+                  ? 'taskMigration.copyingTitle'
+                  : failure
+                    ? 'taskMigration.failureTitle'
+                    : 'taskMigration.title',
+              { name: computerName },
+            )}
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-sm text-[var(--confirm-desc)]">
-            {t('taskMigration.description')}
+            {complete
+              ? t('taskMigration.successDescription', { name: computerName })
+              : copying
+                ? t('taskMigration.keepOpen', { name: computerName })
+                : failure
+                  ? t('taskMigration.failureDescription')
+                  : t('taskMigration.description', { name: computerName })}
           </Dialog.Description>
-          <p className="mt-2 text-sm text-[var(--confirm-desc)]">
-            {t('taskMigration.bindingsNotice')}
-          </p>
-          {!started && destination && (
+          {confirming && (
+            <p className="mt-2 text-sm text-[var(--confirm-desc)]">
+              {t('taskMigration.bindingsNotice')}
+            </p>
+          )}
+          {confirming && destination && (
             <div className="mt-4 space-y-2 text-sm text-[var(--confirm-title)]">
-              <p>
-                {t('taskMigration.device')}: {destination.deviceName}
-                {(destination.isSelf || destination.deviceId === self) && (
-                  <span className="ml-2 text-[var(--confirm-desc)]">
-                    {t('settings.devices.thisDevice')}
-                  </span>
-                )}
-              </p>
               <p className="break-all">
                 {t('taskMigration.project')}:{' '}
                 {destination.project ?? t('taskMigration.defaultFolder')}
@@ -210,7 +308,7 @@ export function TaskMigrationDialog({
               <p className="text-[var(--confirm-desc)]">{t('taskMigration.newFolder')}</p>
             </div>
           )}
-          {!started && !destination && (
+          {confirming && !destination && (
             <div className="mt-4 flex flex-col gap-3">
               <p className="text-sm text-[var(--confirm-desc)]">{t('taskMigration.limits')}</p>
               <FormField label={t('taskMigration.device')}>
@@ -251,56 +349,72 @@ export function TaskMigrationDialog({
               </FormField>
             </div>
           )}
-          {started && (
-            <p className="mt-4 text-sm text-[var(--confirm-title)]" role="status">
-              {t(`taskMigration.stages.${status?.stage}`)}
-            </p>
+          {confirming && (
+            <div className="mt-4 text-sm">
+              <p
+                role="status"
+                className={estimateError ? 'text-[var(--error-fg)]' : 'text-[var(--confirm-title)]'}
+              >
+                {estimateError
+                  ? t('taskMigration.estimateFailed')
+                  : estimate
+                    ? t('taskMigration.fileSummary', {
+                        count: estimate.fileCount,
+                        size: bytes(estimate.bytes),
+                      })
+                    : t('taskMigration.estimating')}
+              </p>
+              {estimate && (
+                <p className="mt-2 text-[var(--confirm-desc)]">{t('taskMigration.estimateNote')}</p>
+              )}
+            </div>
+          )}
+          {copying && (
+            <div className="mt-4 space-y-2">
+              <p className="text-sm text-[var(--confirm-title)]" role="status">
+                {t(
+                  progress?.phase === 'finishing'
+                    ? 'taskMigration.finishing'
+                    : `taskMigration.stages.${status?.stage ?? 'preparing'}`,
+                  { name: computerName },
+                )}
+              </p>
+              <progress
+                className="w-full accent-[var(--confirm-title)]"
+                aria-label={t('taskMigration.copyingTitle', { name: computerName })}
+                max={100}
+                value={percent}
+              />
+              {progress?.phase === 'sending' && (
+                <p className="text-sm tabular-nums text-[var(--confirm-desc)]">
+                  {t('taskMigration.transferProgress', {
+                    sent: bytes(progress.sentBytes),
+                    total: bytes(progress.totalBytes),
+                    speed: bytes(progress.bytesPerSecond),
+                  })}
+                </p>
+              )}
+            </div>
           )}
           {failure && (
             <p className="mt-3 text-sm text-[var(--error-fg)]" role="alert">
               {errorKey}
             </p>
           )}
-          {started && (
-            <p className="mt-3 text-sm text-[var(--confirm-desc)]">
-              {t('taskMigration.background')}
-            </p>
-          )}
-          {status?.stage === 'complete' && status.targetSessionId && (
-            <div className="mt-3">
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            {!copying && (
+              <Button variant="secondary" disabled={busy} onClick={dismiss}>
+                {t(confirming ? 'taskMigration.cancel' : 'taskMigration.close')}
+              </Button>
+            )}
+            {complete && status?.targetSessionId && (
               <Button disabled={busy} onClick={() => void openTarget()}>
                 {t('taskMigration.openTarget')}
               </Button>
-            </div>
-          )}
-          <div className="mt-4 flex flex-wrap justify-end gap-2">
-            <Button variant="secondary" onClick={onDismiss}>
-              {t('taskMigration.close')}
-            </Button>
-            {started &&
-              !status?.running &&
-              ['preparing', 'transferring'].includes(status?.stage ?? '') && (
-                <>
-                  {status?.stage === 'preparing' && (
-                    <Button
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() => void act({ action: 'cancel', sessionId: session.id })}
-                    >
-                      {t('taskMigration.cancel')}
-                    </Button>
-                  )}
-                  <Button
-                    disabled={busy}
-                    onClick={() => void act({ action: 'retry', sessionId: session.id })}
-                  >
-                    {t('taskMigration.retry')}
-                  </Button>
-                </>
-              )}
-            {!started && (
+            )}
+            {confirming && (
               <Button
-                disabled={!status || busy || readyTarget !== target || !target}
+                disabled={!status || !estimate || busy || readyTarget !== target || !target}
                 onClick={() =>
                   void act({
                     action: 'start',

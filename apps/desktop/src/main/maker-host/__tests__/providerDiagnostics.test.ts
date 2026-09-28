@@ -134,6 +134,45 @@ describe('buildProbeRequest', () => {
     });
   });
 
+  it('adds the OpenCode Go session header to the probe request', () => {
+    const { url, init } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      modelId: 'deepseek-v4.1-flash',
+      apiKey: 'go-secret',
+    });
+    expect(url).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
+    expect(headers.authorization).toBe('Bearer go-secret');
+  });
+
+  it('recognizes an OpenCode Go preset on a mirror base URL', () => {
+    const { init } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://mirror.example/v1',
+      catalogPresetId: 'opencode-go',
+      modelId: 'deepseek-v4.1-flash',
+      apiKey: 'go-secret',
+    });
+    const headers = init.headers as Record<string, string>;
+    expect(headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('leaves other presets on mirror base URLs without the session header', () => {
+    const { init } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://mirror.example/v1',
+      catalogPresetId: 'moonshot',
+      modelId: 'kimi-k2',
+      apiKey: 'sk-mirror',
+    });
+    expect((init.headers as Record<string, string>)['x-opencode-session']).toBeUndefined();
+  });
+
   it('Codex Anthropic Messages probe matches runtime joining for a versioned base URL', () => {
     const { url } = buildProbeRequest({
       agent: 'codex',

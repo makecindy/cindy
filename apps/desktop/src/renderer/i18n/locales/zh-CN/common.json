@@ -10,26 +10,24 @@
     "failed": "无法移动任务。请停止任务，检查目标目录后重试。"
   },
   "taskMigration": {
-    "title": "复制到其他电脑…",
-    "description": "在目标电脑创建独立副本，原任务和文件保留。",
+    "title": "复制到{{name}}",
+    "description": "将在{{name}}创建任务副本。",
     "bindingsNotice": "自动任务和消息渠道仍在源电脑运行，不会随任务复制。",
     "limits": "两台电脑都需支持此功能并开启远程控制。请先停止使用该目录的任务。复制前会检查目标电脑的磁盘空间和可用内存。目标电脑使用自己的模型设置，不传输 Cindy 登录凭证和机器设置。",
-    "device": "目标电脑",
-    "project": "目标位置",
+    "device": "复制到",
+    "project": "保存位置",
     "newFolder": "新建文件夹，不覆盖已有文件。",
     "defaultFolder": "Cindy 默认位置",
     "noDevices": "暂无可用电脑。请连接另一台电脑，并在两台电脑上开启远程控制。",
-    "background": "可以关闭窗口，稍后从任务菜单重新打开。中断后请重试同一次复制。",
-    "openTarget": "打开目标电脑上的任务",
+    "openTarget": "打开新复制的任务",
     "close": "关闭",
-    "cancel": "取消复制",
-    "retry": "重试复制",
+    "cancel": "取消",
     "start": "复制任务",
-    "failed": "复制未完成，源文件已保留。请检查两台电脑后重试。",
+    "failed": "复制未完成，请检查两台电脑后重新复制。",
     "stages": {
       "preparing": "正在准备快照…",
       "transferring": "正在传输并校验文件…",
-      "complete": "复制完成，原任务和文件保留。",
+      "complete": "复制成功",
       "cancelled": "已取消复制。",
       "receiving": "正在接收文件…",
       "active": "任务已可在此电脑继续。"
@@ -48,7 +46,21 @@
       "MIGRATION_UNSUPPORTED": "请将两台电脑更新至支持任务复制的版本。",
       "MIGRATION_TASK_QUEUED": "此任务有排队中的消息，请先完成或移除这些消息再复制。",
       "MIGRATION_SOURCE_CHANGED": "准备期间源任务发生变化，请重试复制。"
-    }
+    },
+    "successTitle": "复制成功",
+    "successDescription": "已复制到{{name}}。",
+    "copyingTitle": "正在复制到{{name}}",
+    "keepOpen": "正在复制到{{name}}，请等待完成。",
+    "failureTitle": "复制失败",
+    "failureDescription": "关闭后可从任务菜单重新发起复制。",
+    "finishing": "{{name}}正在接收、校验并创建任务…",
+    "transferProgress": "上传进度 {{sent}} / {{total}} · 平均 {{speed}}/s（尚未完成接收）",
+    "thisComputer": "本机",
+    "selectedComputer": "所选电脑",
+    "estimating": "正在统计文件数量和大小…",
+    "fileSummary": "项目文件：{{count}} 个，共 {{size}}",
+    "estimateNote": "复制前估算，含隐藏文件；不含另行复制的 Git 历史、任务对话及附件。文件变化可能影响最终大小。",
+    "estimateFailed": "无法统计文件。请检查任务所在电脑的连接和版本，然后关闭重试。"
   },
   "sharedTask": {
     "manageSharing": "共享管理",
@@ -189,6 +201,7 @@
     "allow": "允许远程桌面",
     "allowHint": "允许已登录的同账号设备查看和操作这台电脑的所有应用。需同时开启上方的设备控制。",
     "permissionHint": "请在电脑的系统设置中允许屏幕录制和辅助功能，然后重新连接。",
+    "controlUnavailable": "远端电脑暂时无法接受操作，请检查远端控制权限和连接，然后重新连接。",
     "beingControlled": "桌面正在被远程控制",
     "beingViewed": "桌面正在被远程查看",
     "disconnect": "断开连接",
@@ -867,6 +880,11 @@
       "feishuHint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
       "feishuDisabledHint": "需要先在「飞书 / Lark 机器人」中配置 bot 并向它发送一条消息以完成绑定。",
       "feishuAria": "切换任务完成的飞书通知",
+      "botGroupPlan": {
+        "stepDone": "{{name}}做完了「{{task}}」，等你继续",
+        "stepFailed": "{{name}}没做完「{{task}}」，可以重试",
+        "planDone": "分工全部做完了，最后一步是{{name}}的「{{task}}」"
+      },
       "sessionEvent": {
         "untitled": "未命名任务",
         "done": "已完成 ✓",
@@ -1536,6 +1554,11 @@
         "label": "快速启动语音输入",
         "hint": "用完后让麦克风短暂待命，缩短按下快捷键或按钮到开始录音的等待；通常可快约 100 毫秒。若 30 分钟内没有再次使用，会自动释放麦克风。",
         "ariaLabel": "切换快速启动语音输入"
+      },
+      "composerLongPress": {
+        "label": "长按输入框语音输入",
+        "hint": "在输入框里按住鼠标左键片刻即开始语音输入，松开后结束并填入文字。",
+        "ariaLabel": "切换长按输入框语音输入"
       },
       "refinement": {
         "enabled": {
@@ -7633,6 +7656,8 @@
   },
   "sidebar": {
     "backToSessions": "返回任务",
+    "taskAttentionCount": "{{count}} 个任务待关注",
+    "teammateUnreadCount": "{{count}} 段对话未读",
     "vendorReadiness": {
       "loading": "正在检查可用状态",
       "ready": "已就绪",

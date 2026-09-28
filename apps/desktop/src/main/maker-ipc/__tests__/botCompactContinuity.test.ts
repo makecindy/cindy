@@ -102,7 +102,8 @@ describe('Hermes capability epoch', () => {
   });
 
   it('只有指纹变化才复用安全的原地 runtime 重建，不换 canonical Session id', () => {
-    expect(register).toContain('if (!snapshot?.runtimeEpochChanged) return');
+    expect(register).toContain('prepareBotCapabilityEpochBeforeSend(live,');
+    expect(register).toContain('return !!snapshot?.runtimeEpochChanged');
     expect(register).toContain('botCompactRuntimeRefreshCoordinator.noteBoundary(live)');
     expect(register).toContain('maker.getSession(expectedSession.id) === expectedSession');
   });

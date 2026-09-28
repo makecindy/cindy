@@ -267,3 +267,25 @@ it('preserves additive public generation state without interpreting unknown futu
   expect(normalizeRemoteCollectionItems(input(), 'teammates')[0].display.generation).toBeUndefined();
   expect(normalizeRemoteCollectionItems(input({ phase: {}, startedAt: Infinity }), 'teammates')[0].display.generation).toBeUndefined();
 });
+
+describe('bot group chat block', () => {
+  const ref = { collectionId: 'bot-groups', kind: 'bot-group', id: 'g1' };
+  const response = {
+    ref, revision: '1', display: { title: '官网介绍页' }, links: [],
+    blocks: [{ id: 'chat', primitive: 'bot-group-chat', fallbackMarkdown: '**阿布**: 写好了', data: { id: 'g1', messages: [{ id: 'm1' }] } }],
+  };
+
+  it('keeps the structured group data only for the screen that declared the primitive', async () => {
+    const invoke = vi.fn(async () => response) as RemoteInvoke;
+    const resource = await getRemoteResource(invoke, targets[0], ref, 'zh-CN', ['bot-group-chat']);
+    expect(resource.blocks?.[0]).toEqual(response.blocks[0]);
+    const request = (invoke as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![2] as [{ client: { primitives: string[] } }];
+    expect(request[0].client.primitives).toEqual([...MOBILE_REMOTE_RESOURCE_PRIMITIVES, 'bot-group-chat']);
+  });
+
+  it('never hands the group data to an ordinary resource view', async () => {
+    const invoke = vi.fn(async () => response) as RemoteInvoke;
+    const resource = await getRemoteResource(invoke, targets[0], ref);
+    expect(resource.blocks?.[0]).toEqual({ id: 'chat', primitive: 'bot-group-chat', fallbackMarkdown: '**阿布**: 写好了' });
+  });
+});

@@ -95,7 +95,7 @@ function CompanionMessageCardContent({ message, renderMarkdown }: {
   const card = message.companion;
   if (!card) return null;
   if (card.kind === 'task' && card.meta.role === 'delegation-result') {
-    return <CompanionTaskResultCard meta={card.meta} deviceId={deviceId} renderMarkdown={renderMarkdown} />;
+    return <CompanionTaskResultCard meta={card.meta} deviceId={deviceId} parentSessionId={message.source.sessionId} renderMarkdown={renderMarkdown} />;
   }
   if (card.kind === 'task' && card.meta.role === 'delegation-request') {
     return (

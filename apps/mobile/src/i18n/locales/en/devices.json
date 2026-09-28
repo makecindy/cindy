@@ -528,6 +528,8 @@
     "viewAllRuns": "View all {{count}} runs"
   },
   "companions": {
+    "taskAttentionCount": "Tasks needing attention: {{count}}",
+    "unreadChatCount": "Unread chats: {{count}}",
     "messageSent": "Message sent to background task",
     "sentTo": "Sent a message to {{name}}",
     "receivedFrom": "Message from {{name}}",

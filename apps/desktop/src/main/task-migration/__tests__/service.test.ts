@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   boundaryBusy: false,
   drain: vi.fn(),
   exported: vi.fn(),
+  uploadedProgress: vi.fn(),
   loseReply: '' as string,
   importsFail: false,
   siblingRunning: false,
@@ -101,9 +102,11 @@ vi.mock('../../device-link/filePeer', () => ({ tryUploadPeerAttachment: async ()
 vi.mock('../../device-link/mediaTransfer', () => ({
   MAX_MEDIA_BYTES: 2 * 1024 ** 3,
   removeRemote: (key: string) => state.remove(key),
-  uploadLocalFile: async (file: string) => {
+  uploadLocalFile: async (file: string, opts: { onProgress?: (bytes: number) => void }) => {
     const bytes = await fs.readFile(file),
       key = `migration/${state.files.size}`;
+    opts.onProgress?.(bytes.length);
+    await state.uploadedProgress(bytes.length);
     state.files.set(key, file);
     return { key, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
   },
@@ -192,6 +195,7 @@ vi.mock('../../session-share/sessionShareImport', () => ({
   },
 }));
 vi.mock('../workspace', () => ({
+  estimateWorkspace: async () => ({ fileCount: 1, bytes: 8 }),
   snapshotWorkspace: async (source: string, directory: string) => {
     state.snapshot();
     await fs.mkdir(directory, { recursive: true });
@@ -227,6 +231,7 @@ describe('resumable cross-computer copy', () => {
     state.boundaryBusy = false;
     state.drain.mockReset();
     state.exported.mockClear();
+    state.uploadedProgress.mockReset();
     state.root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-migration-service-')),
     );
@@ -467,6 +472,61 @@ describe('resumable cross-computer copy', () => {
     expect(await fs.readFile(path.join(secondDir, 'draft'), 'utf8')).toBe('original');
     expect(receipt().workingDir).not.toBe(firstDir);
     expect(receipt().workingDir).not.toBe(secondDir);
+  });
+  it('estimates each physical team workspace once without exporting or uploading', async () => {
+    await team();
+    const result = await requestTaskMigration({ action: 'estimate', sessionId: 'fork' });
+    expect(result.estimate).toEqual({ fileCount: 2, bytes: 16 });
+    expect(state.exported).not.toHaveBeenCalled();
+    expect(state.files.size).toBe(0);
+  });
+  it('acknowledges start and retry with the registered running state', async () => {
+    state.noSpace = true;
+    expect((await start()).running).toBe(true);
+    expect((await settled()).error).toBe('MIGRATION_NO_SPACE');
+    const retry = await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    expect(retry.running).toBe(true);
+    await settled();
+  });
+  it('reports actual upload bytes across files, then drops live telemetry on completion', async () => {
+    let sent = 0;
+    state.uploadedProgress.mockImplementation(async (size: number) => {
+      sent += size;
+      const status = await requestTaskMigration({ action: 'status', sessionId: 'fork' });
+      expect(status.running).toBe(true);
+      expect(status.progress?.phase).toBe('sending');
+      expect(status.progress?.sentBytes).toBe(sent);
+      expect(status.progress!.totalBytes).toBeGreaterThanOrEqual(sent);
+      expect(status.progress!.bytesPerSecond).toBeGreaterThan(0);
+    });
+    await start();
+    const result = await settled();
+    expect(result.stage).toBe('complete');
+    expect(state.uploadedProgress).toHaveBeenCalled();
+    expect(result.progress).toBeUndefined();
+  });
+  it('closing a failed transfer removes source staging without deleting an already committed target', async () => {
+    state.loseReply = 'receive';
+    await start();
+    const result = await settled();
+    expect(result.stage).toBe('transferring');
+    const target = state.rows.get('B')!.get(result.targetSessionId!)!;
+    const targetFile = path.join(target.workingDir as string, 'draft');
+    expect(await fs.readFile(targetFile, 'utf8')).toBe('original');
+    const uploadedKeys = [...state.files.keys()];
+    expect(uploadedKeys.length).toBeGreaterThan(0);
+    state.remove.mockClear();
+    expect((await requestTaskMigration({ action: 'cancel', sessionId: 'fork' })).stage).toBe(
+      'cancelled',
+    );
+    expect(state.remove.mock.calls.map(([key]) => key)).toEqual(uploadedKeys);
+    await expect(
+      fs.stat(path.join(state.root, 'A', 'task-copies', 'outgoing', result.targetSessionId!)),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(targetFile, 'utf8')).toBe('original');
+    expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
+    await start();
+    expect((await settled()).stage).toBe('complete');
   });
   it('rejects insufficient destination space before uploading and remains cancellable', async () => {
     state.noSpace = true;

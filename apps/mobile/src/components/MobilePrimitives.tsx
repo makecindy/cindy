@@ -587,6 +587,7 @@ export function MainWindowActionButton({
   action,
   density = 'default',
   grow = false,
+  hitSlop,
   style,
   textStyle,
   buttonRef,
@@ -594,6 +595,8 @@ export function MainWindowActionButton({
   action: MainWindowAction;
   density?: MainWindowActionDensity;
   grow?: boolean;
+  /** Compact buttons (38pt) inside content rows extend their touch target to 44pt this way. */
+  hitSlop?: PressableProps['hitSlop'];
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
   buttonRef?: Ref<View>;
@@ -606,6 +609,7 @@ export function MainWindowActionButton({
   return (
     <Pressable
       ref={buttonRef}
+      hitSlop={hitSlop}
       accessibilityLabel={action.accessibilityLabel ?? action.label}
       accessibilityRole="button"
       accessibilityState={{

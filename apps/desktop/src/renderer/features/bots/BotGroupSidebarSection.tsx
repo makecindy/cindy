@@ -10,7 +10,7 @@
  * 某一步进行中写「分工 k/n · 谁 正在做」，两者同样用运行中标记；安排待开始、做完一步
  * 等继续或没做完时，第二行换成对应的提示，提醒用户回来看看。
  */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Plus, Sparkles, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -30,6 +30,9 @@ import {
   type BotGroupSidebarPlanPreview,
 } from './botGroupPresentation';
 import { useBotGroupList } from './botGroupStore';
+import { isBotGroupUnread, subscribeBotReadState, getBotLastReadAtMap } from './botReadState';
+import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
+const readRevision = () => JSON.stringify(getBotLastReadAtMap());
 import { formatBotListTimestamp } from './botListDisplay';
 import type { BotProfile } from './botStore';
 
@@ -63,6 +66,7 @@ export function BotGroupSidebarSection({
 }) {
   const { t } = useTranslation();
   const { groups } = useBotGroupList();
+  useSyncExternalStore(subscribeBotReadState, readRevision, readRevision);
   const sorted = useMemo(() => sortBotGroups(groups), [groups]);
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -206,6 +210,7 @@ export function BotGroupSidebarSection({
                   )}
                 >
                   {timestamp}
+                  <NavigationCountBadge count={isBotGroupUnread(group) ? 1 : 0} label={t('sidebar.teammateUnreadCount', { count: 1 })} className="ml-auto mt-1 w-fit" />
                 </span>
               </button>
             );

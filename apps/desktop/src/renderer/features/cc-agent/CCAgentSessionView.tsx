@@ -519,6 +519,7 @@ interface CCAgentSessionViewProps {
   botIdentity?: BotChatBinding;
   /** Entry-time read boundary for a Bot chat; preserved after the live read position advances. */
   botUnreadBoundaryAt?: number | null;
+  onBotReadThrough?: (at: number) => void;
 }
 
 /**
@@ -771,6 +772,7 @@ export function CCAgentSessionView({
   botMentions,
   botIdentity,
   botUnreadBoundaryAt,
+  onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
@@ -4747,6 +4749,7 @@ export function CCAgentSessionView({
       assistantAvatar={botAssistantAvatar}
       simplifiedBotConversation={Boolean(botChatIdentity)}
       botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}
+      onBotReadThrough={viewVisible ? onBotReadThrough : undefined}
       messages={messages}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
       cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}

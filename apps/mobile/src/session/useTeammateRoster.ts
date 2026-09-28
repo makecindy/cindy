@@ -11,6 +11,7 @@ import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-li
 import { discoverRemoteHomeCollections, remoteResourceDiscoveryTargets,
   type RemoteHomeCollection, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { hasBotGroupCollection } from './botGroupRemote';
 import { useRemoteResourceList } from './useRemoteResourceList';
 import { startBoundedStartupRead } from './mobileHomeStartup';
 
@@ -26,9 +27,12 @@ export function useTeammateRoster(enabled = true) {
   const binding = `${user?.id ?? ''}:${accountGeneration}`;
   const ownerRef = useRef(binding); ownerRef.current = binding;
   const generation = useRef(0);
+  // Hosts whose manifest advertises group chats (bot-group-chat.md §8); an older desktop never does.
+  const lastGroupTargets = useRef<{ binding: string; targets: RemoteResourceHostTarget[] }>({ binding: '', targets: NO_TARGETS });
   const [discovery, setDiscovery] = useState<{
-    binding: string; ready: boolean; loading: boolean; targets: RemoteResourceHostTarget[]; createTargets: RemoteResourceHostTarget[]; error: string | null;
-  }>({ binding: '', ready: false, loading: true, targets: NO_TARGETS, createTargets: NO_TARGETS, error: null });
+    binding: string; ready: boolean; loading: boolean; targets: RemoteResourceHostTarget[]; createTargets: RemoteResourceHostTarget[];
+    groupTargets: RemoteResourceHostTarget[]; error: string | null;
+  }>({ binding: '', ready: false, loading: true, targets: NO_TARGETS, createTargets: NO_TARGETS, groupTargets: NO_TARGETS, error: null });
   const discover = useCallback(async () => {
     const expected = ++generation.current;
     const current = () => ownerRef.current === binding && generation.current === expected;
@@ -38,6 +42,8 @@ export function useTeammateRoster(enabled = true) {
     let collections: RemoteHomeCollection[] = snapshot.home;
     let error: string | null = null;
     const createTargets: RemoteResourceHostTarget[] = [];
+    const previousGroupTargets = lastGroupTargets.current.binding === binding ? lastGroupTargets.current.targets : NO_TARGETS;
+    let groupTargets = previousGroupTargets;
     try {
       if (status !== 'online') throw new Error(t('devices.resources.hostOffline'));
       const response = await readDeviceList();
@@ -50,11 +56,15 @@ export function useTeammateRoster(enabled = true) {
       collections = collections.map((collection) => ({ ...collection,
         targets: collection.targets.filter((host) => targets.some((target) => target.deviceId === host.deviceId)),
       }));
+      const answered = new Set<string>();
+      const advertisingGroups = new Set<string>();
       collections = await discoverRemoteHomeCollections(async <T,>(deviceId: string, channel: string, args?: unknown[]) => {
         await openLink(deviceId);
         const response = await invoke<T>(deviceId, channel, args);
         if (channel === REMOTE_RESOURCE_MANIFEST_CHANNEL) {
           const manifest = response as RemoteResourceManifestResponse | null;
+          answered.add(deviceId);
+          if (hasBotGroupCollection(manifest)) advertisingGroups.add(deviceId);
           if (manifest?.collections?.some((collection) => collection.id === TEAMMATE_COLLECTION_ID
             && collection.resourceKind === 'bot' && collection.actions?.some((action) => action.id === 'open-create'))) {
             const host = targets.find((target) => target.deviceId === deviceId);
@@ -64,11 +74,16 @@ export function useTeammateRoster(enabled = true) {
         return response;
       }, targets, i18n.language, collections);
       if (!current()) return;
+      // A host that did not answer this time keeps its groups until it answers again.
+      groupTargets = targets.filter((target) => advertisingGroups.has(target.deviceId)
+        || (!answered.has(target.deviceId) && previousGroupTargets.some((host) => host.deviceId === target.deviceId)));
       void cacheRemoteResourceHome(user?.id ?? '', collections);
     } catch (cause) { error = formatRemoteError(cause); }
     if (!current()) return;
     const targets = collections.find((collection) => collection.id === TEAMMATE_COLLECTION_ID && collection.resourceKind === 'bot')?.targets ?? NO_TARGETS;
-    setDiscovery({ binding, ready: true, loading: false, createTargets, targets: targets.filter((host) => !revoked.has(host.deviceId)), error });
+    groupTargets = groupTargets.filter((host) => !revoked.has(host.deviceId));
+    lastGroupTargets.current = { binding, targets: groupTargets };
+    setDiscovery({ binding, ready: true, loading: false, createTargets, targets: targets.filter((host) => !revoked.has(host.deviceId)), groupTargets, error });
   }, [binding, i18n.language, invoke, openLink, readDeviceList, revoked, status, t, user?.id]);
   useFocusEffect(useCallback(() => {
     if (!enabled) return;
@@ -85,6 +100,9 @@ export function useTeammateRoster(enabled = true) {
   return { ...list, items,
     isOnline: (host: RemoteResourceHostTarget) => ready && !revoked.has(host.deviceId) && list.isOnline(host),
     targets: ready ? discovery.targets : NO_TARGETS,
+    /** Computers with group chats; empty until discovery ran, and for older desktops. */
+    // Stable reference (revocation is applied at discovery and again to the listed rows).
+    groupTargets: ready ? discovery.groupTargets : NO_TARGETS,
     createTargets: ready && status === 'online' ? discovery.createTargets.filter((host) => !revoked.has(host.deviceId) && list.isOnline(host)) : NO_TARGETS,
     authoritative: ready && !discovery.loading && !list.loading && !list.syncing && status === 'online' && !discovery.error && (!discovery.targets.length || !list.error),
     loading: items.length === 0 && (!ready || list.loading),

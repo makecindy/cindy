@@ -49,7 +49,12 @@ import { getDesktopProviderService } from '../maker-host/createDesktopProviderSe
 import { pickEnabledFallbackModel } from '../maker-host/model-route-guard';
 import { advanceHandoff, canCancelHandoff, type MigrationHandoff } from './handoff';
 import { migrationScope, type MigrationRecord, type IncomingMigration } from './journal';
-import { snapshotWorkspace, restoreWorkspace, type PortableWorkspace } from './workspace';
+import {
+  snapshotWorkspace,
+  restoreWorkspace,
+  estimateWorkspace,
+  type PortableWorkspace,
+} from './workspace';
 
 import { memoryBudget, assertMemoryCapacity, assertDiskCapacity } from './resources';
 import { sendParts, receiveParts } from './transferParts';
@@ -62,7 +67,7 @@ type MoveProject = (
 // Bootstrap supplies the existing business handler; importing maker IPC here creates a cycle.
 let moveProjectOnHost: MoveProject | undefined;
 let sourceBoundary: { isBusy(sessionId: string): boolean; drain(): Promise<void> } | undefined;
-const running = new Set<string>();
+const running = new Map<string, { progress?: TaskMigrationView['progress'] }>();
 const errorCode = (error: unknown): string => {
   if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') return 'MIGRATION_NO_SPACE';
   const message = error instanceof Error ? error.message : '';
@@ -145,6 +150,7 @@ function view(scope: Scope, record: MigrationRecord | null): TaskMigrationView {
       ? {
           stage: record.stage,
           running: running.has(`${scope.root}:${record.sessionId}`),
+          progress: running.get(`${scope.root}:${record.sessionId}`)?.progress,
           ...(record.kind === 'outgoing'
             ? {
                 targetDeviceId: record.targetDeviceId,
@@ -355,18 +361,28 @@ async function sendFile(
   device: string,
   file: string,
   artifacts = path.dirname(file),
+  onProgress?: (bytes: number) => void,
 ): Promise<MigrationFile> {
   const space = await fs.statfs(path.dirname(file));
   const partBytes = Math.floor(
     Math.min(FILE_PEER_MAX_BYTES, MAX_MEDIA_BYTES, (space.bavail * space.bsize) / 4),
   );
-  return sendParts(file, partBytes, (part) => sendPart(scope, device, part, artifacts));
+  let completed = 0;
+  return sendParts(file, partBytes, async (part) => {
+    const result = await sendPart(scope, device, part, artifacts, (bytes) =>
+      onProgress?.(completed + bytes),
+    );
+    completed += result.size;
+    onProgress?.(completed);
+    return result;
+  });
 }
 async function sendPart(
   scope: Scope,
   device: string,
   file: string,
   artifacts: string,
+  onProgress?: (bytes: number) => void,
 ): Promise<MigrationFileRef> {
   scope.assertCurrent();
   const peer = await tryUploadPeerAttachment(
@@ -375,6 +391,7 @@ async function sendPart(
     'application/octet-stream',
     (deviceId, channel, args) =>
       remoteInvoke(deviceId, channel, args, { preSend: scope.assertCurrent }),
+    onProgress,
   );
   scope.assertCurrent();
   if (peer) {
@@ -382,7 +399,8 @@ async function sendPart(
     if (!result) throw new Error('MIGRATION_TRANSFER_FAILED');
     return { ref: peer, size: result.size, sha256: result.sha256 };
   }
-  const result = await uploadLocalFile(file, { maxBytes: (await fs.stat(file)).size });
+  onProgress?.(0); // OSS fallback starts this part again, not a second completed part.
+  const result = await uploadLocalFile(file, { maxBytes: (await fs.stat(file)).size, onProgress });
   scope.assertCurrent();
   const keysFile = path.join(artifacts, 'transfer-keys.json');
   const keys = JSON.parse(readAtomicFileSync(keysFile) ?? '[]') as string[];
@@ -434,6 +452,7 @@ async function preflight(
     { action: 'preflight', targetProject: record.targetProject, resources },
     scope,
   );
+  return resources;
 }
 async function checkTargetResources(
   scope: Scope,
@@ -481,22 +500,36 @@ async function transfer(scope: Scope, record: MigrationHandoff) {
     }
   }
   scope.assertCurrent();
-  await preflight(scope, record, workspace, directory);
+  const resources = await preflight(scope, record, workspace, directory);
+  const live = running.get(`${scope.root}:${record.sessionId}`)!;
+  const startedAt = Date.now();
+  let completed = 0;
+  live.progress = {
+    phase: 'sending',
+    sentBytes: 0,
+    totalBytes: resources.transferBytes,
+    bytesPerSecond: 0,
+  };
+  const send = async (file: string, artifacts = path.dirname(file)) => {
+    const result = await sendFile(scope, record.targetDeviceId, file, artifacts, (bytes) => {
+      const sentBytes = Math.min(resources.transferBytes, completed + bytes);
+      live.progress = {
+        phase: 'sending',
+        sentBytes,
+        totalBytes: resources.transferBytes,
+        bytesPerSecond: (sentBytes * 1000) / Math.max(1, Date.now() - startedAt),
+      };
+    });
+    completed += result.size;
+    return result;
+  };
   const files: MigrationFiles = {
-    session: await sendFile(scope, record.targetDeviceId, path.join(directory, 'session.cshare')),
-    workspace: await sendFile(
-      scope,
-      record.targetDeviceId,
-      path.join(directory, workspace.archive.file),
-    ),
-    manifest: await sendFile(scope, record.targetDeviceId, path.join(directory, 'workspace.json')),
+    session: await send(path.join(directory, 'session.cshare')),
+    workspace: await send(path.join(directory, workspace.archive.file)),
+    manifest: await send(path.join(directory, 'workspace.json')),
     ...(workspace.git
       ? {
-          repository: await sendFile(
-            scope,
-            record.targetDeviceId,
-            path.join(directory, 'repository.bundle'),
-          ),
+          repository: await send(path.join(directory, 'repository.bundle')),
         }
       : {}),
   };
@@ -505,25 +538,16 @@ async function transfer(scope: Scope, record: MigrationHandoff) {
     for (const [index, entry] of workspace.additionalWorkspaces.entries()) {
       const dir = workspaceDirectory(directory, index + 1);
       files.additionalWorkspaces.push({
-        workspace: await sendFile(
-          scope,
-          record.targetDeviceId,
-          path.join(dir, entry.archive.file),
-          directory,
-        ),
+        workspace: await send(path.join(dir, entry.archive.file), directory),
         ...(entry.git
           ? {
-              repository: await sendFile(
-                scope,
-                record.targetDeviceId,
-                path.join(dir, 'repository.bundle'),
-                directory,
-              ),
+              repository: await send(path.join(dir, 'repository.bundle'), directory),
             }
           : {}),
       });
     }
   }
+  live.progress = { ...live.progress!, phase: 'finishing', bytesPerSecond: 0 };
   const result = await invoke(
     record.targetDeviceId,
     {
@@ -538,10 +562,24 @@ async function transfer(scope: Scope, record: MigrationHandoff) {
   if (result.stage !== 'active') throw new Error('MIGRATION_TARGET_NOT_READY');
 }
 
+async function cleanupOutgoing(scope: Scope, record: MigrationHandoff) {
+  const directory = path.join(scope.root, 'outgoing', record.id);
+  const keys = JSON.parse(
+    readAtomicFileSync(path.join(directory, 'transfer-keys.json')) ?? '[]',
+  ) as string[];
+  for (const key of keys) {
+    scope.assertCurrent();
+    // Reuse the existing best-effort deletion and OSS lifecycle backstop.
+    await removeRemote(key);
+  }
+  scope.assertCurrent();
+  await fs.rm(directory, { recursive: true, force: true });
+}
+
 function launch(scope: Scope, record: MigrationHandoff & { kind: 'outgoing' }) {
   const key = `${scope.root}:${record.sessionId}`;
   if (running.has(key)) return;
-  running.add(key);
+  running.set(key, {});
   void withCrossProcessLock(
     path.join(scope.root, `source-${record.sessionId}.lock`),
     { label: 'task-migration', waitMs: 0 },
@@ -554,19 +592,7 @@ function launch(scope: Scope, record: MigrationHandoff & { kind: 'outgoing' }) {
         save: async (next) => scope.save({ ...next, kind: 'outgoing' }),
         prepare: (r) => prepare(scope, r),
         import: (r) => transfer(scope, r),
-        cleanup: async (r) => {
-          const directory = path.join(scope.root, 'outgoing', r.id);
-          const keys = JSON.parse(
-            readAtomicFileSync(path.join(directory, 'transfer-keys.json')) ?? '[]',
-          ) as string[];
-          for (const key of keys) {
-            scope.assertCurrent();
-            // Existing OSS lifecycle rules backstop best-effort remote deletion.
-            await removeRemote(key);
-          }
-          scope.assertCurrent();
-          await fs.rm(directory, { recursive: true, force: true });
-        },
+        cleanup: (r) => cleanupOutgoing(scope, r),
       });
     },
   )
@@ -876,6 +902,20 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
       },
     };
   }
+  if (request.action === 'estimate') {
+    const members = await sourceGroup(scope, request.sessionId);
+    const roots = new Set(
+      await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
+    );
+    const estimate = { fileCount: 0, bytes: 0 };
+    for (const root of roots) {
+      const next = await estimateWorkspace(root, scope.assertCurrent);
+      estimate.fileCount += next.fileCount;
+      estimate.bytes += next.bytes;
+    }
+    scope.assertCurrent();
+    return { ...view(scope, null), estimate };
+  }
   if (request.action === 'preflight') {
     await checkTargetResources(scope, request.targetProject, request.resources);
     return view(scope, null);
@@ -887,6 +927,7 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
       ...view(scope, null),
       projects: await projects(scope),
       teamMigration: true,
+      copyEstimate: true,
       agents: (['cc', 'codex', 'pi'] as const).filter(
         (agent) => !!pickEnabledFallbackModel(providers, agent === 'cc' ? 'claude-code' : agent),
       ),
@@ -933,10 +974,7 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
               throw new Error('MIGRATION_CANNOT_CANCEL');
             const cancelled = { ...record, stage: 'cancelled' as const, error: undefined };
             // Keep the journal retryable until its staging data is gone.
-            await fs.rm(path.join(scope.root, 'outgoing', record.id), {
-              recursive: true,
-              force: true,
-            });
+            await cleanupOutgoing(scope, record);
             scope.assertCurrent();
             scope.save(cancelled);
             return view(scope, cancelled);
@@ -995,7 +1033,11 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
       ),
   );
   // Release admission before starting the background operation on the same lock.
-  if (nextCopy) launch(scope, nextCopy);
+  if (nextCopy) {
+    launch(scope, nextCopy);
+    // Start/retry acknowledgements must include the operation just registered by launch.
+    return view(scope, nextCopy);
+  }
   return result;
 }
 

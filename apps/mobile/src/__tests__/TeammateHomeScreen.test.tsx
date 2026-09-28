@@ -11,7 +11,10 @@ const h = vi.hoisted(() => ({
   nav: { hydrated: true, lastTeammate: null as LastTeammateIdentity | null, mode: 'teammates' as HomeMode,
     restoreLastTeammate: true, saveFailed: false, openTeammate: vi.fn(), rememberTeammate: vi.fn(), setMode: vi.fn() },
   roster: { createTargets: [], authoritative: true, items: [] as HostedRemoteCollectionItem[], loading: false, refreshing: false, error: null as string | null,
-    isOnline: vi.fn(() => true), refresh: vi.fn() },
+    isOnline: vi.fn(() => true), refresh: vi.fn(), groupTargets: [] as { deviceId: string; deviceName: string }[] },
+  groups: { items: [] as HostedRemoteCollectionItem[], supported: false, isOnline: () => true, refresh: vi.fn() },
+  groupTargetsSeen: [] as unknown[],
+  section: {} as any,
 }));
 vi.mock('react-native', async () => {
   const { createElement: el } = await import('react');
@@ -33,6 +36,8 @@ vi.mock('@/session/AccountSwitcherSheet', () => ({ AccountSwitcherSheet: (props:
 vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: () => null }));
 vi.mock('@/session/TeammateList', () => ({ TeammateList: (props: unknown) => { h.list = props; return null; } }));
 vi.mock('@/session/useTeammateRoster', () => ({ useTeammateRoster: () => ({ ...h.roster }) }));
+vi.mock('@/session/useBotGroupRoster', () => ({ useBotGroupRoster: (targets: unknown) => { h.groupTargetsSeen.push(targets); return h.groups; } }));
+vi.mock('@/session/BotGroupList', () => ({ BotGroupSection: (props: unknown) => { h.section = props; return null; } }));
 vi.mock('@/session/useTeammateNavigation', async original => {
   const actual = await original<typeof import('@/session/useTeammateNavigation')>();
   return { useTeammateNavigation: () => h.realNavigation ? actual.useTeammateNavigation() : { ...h.nav } };
@@ -138,5 +143,36 @@ describe('explicit sidebar entry through the home page', () => {
     await renderHome();
     expect(h.push).toHaveBeenCalledOnce();
     expect(h.push.mock.calls[0][0].params.resourceId).toBe('writer');
+  });
+});
+
+describe('group chats section', () => {
+  const group: HostedRemoteCollectionItem = { key: 'mac:g1', host: { deviceId: 'mac', deviceName: 'Mac' },
+    item: { ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g1' }, revision: '1', display: { title: '官网' }, links: [] } };
+  afterEach(() => { h.roster.groupTargets = []; h.groups = { items: [], supported: false, isOnline: () => true, refresh: vi.fn() }; h.section = {}; });
+
+  it('hides the section when no computer supports group chats (older desktops)', async () => {
+    h.nav.lastTeammate = null; await render();
+    expect(h.list.renderFooter('')).toBeNull();
+  });
+
+  it('lists the discovered computers’ groups and opens a group on its computer', async () => {
+    h.nav.lastTeammate = null;
+    h.roster.groupTargets = [{ deviceId: 'mac', deviceName: 'Mac' }, { deviceId: 'pc', deviceName: 'PC' }];
+    h.groups = { items: [group], supported: true, isOnline: (host: { deviceId: string }) => host.deviceId === 'mac', refresh: vi.fn() } as any;
+    await render();
+    expect(h.groupTargetsSeen.at(-1)).toBe(h.roster.groupTargets);
+    const footer = h.list.renderFooter('官');
+    expect(footer).not.toBeNull();
+    await act(async () => { root!.render(footer); });
+    expect(h.section.items).toEqual([group]);
+    expect(h.section.query).toBe('官');
+    // Only online computers can host a new group.
+    expect(h.section.createTargets).toEqual([{ deviceId: 'mac', deviceName: 'Mac' }]);
+    await act(async () => h.section.onOpen(group));
+    expect(h.push).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', deviceId: 'mac', deviceName: 'Mac' } });
+    await act(async () => h.section.onOpenCreated({ deviceId: 'pc', deviceName: 'PC' }, 'g2'));
+    expect(h.push).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g2', deviceId: 'pc', deviceName: 'PC' } });
+    expect(h.nav.openTeammate).not.toHaveBeenCalled();
   });
 });

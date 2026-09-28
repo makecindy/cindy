@@ -10,26 +10,24 @@
     "failed": "無法移動任務。請停止任務，檢查目標目錄後重試。"
   },
   "taskMigration": {
-    "title": "複製到其他電腦…",
-    "description": "在目標電腦建立獨立副本，原任務和檔案保留。",
+    "title": "複製到{{name}}",
+    "description": "將在{{name}}建立任務副本。",
     "bindingsNotice": "自動任務和訊息管道仍在來源電腦執行，不會隨任務複製。",
     "limits": "兩台電腦都需支援此功能並開啟遠端控制。請先停止使用該目錄的任務。複製前會檢查目標電腦的磁碟空間和可用記憶體。目標電腦使用自己的模型設定，不傳輸 Cindy 登入憑證和電腦設定。",
-    "device": "目標電腦",
-    "project": "目標位置",
+    "device": "複製到",
+    "project": "儲存位置",
     "newFolder": "建立新資料夾，不覆寫現有檔案。",
     "defaultFolder": "Cindy 預設位置",
     "noDevices": "目前沒有可用電腦。請連接另一台電腦，並在兩台電腦上開啟遠端控制。",
-    "background": "可以關閉視窗，稍後從任務選單重新開啟。中斷後請重試同一次複製。",
-    "openTarget": "開啟目標電腦上的任務",
+    "openTarget": "開啟新複製的任務",
     "close": "關閉",
-    "cancel": "取消複製",
-    "retry": "重試複製",
+    "cancel": "取消",
     "start": "複製任務",
-    "failed": "複製未完成，來源檔案已保留。請檢查兩台電腦後重試。",
+    "failed": "複製未完成，請檢查兩台電腦後重新複製。",
     "stages": {
       "preparing": "正在準備快照…",
       "transferring": "正在傳輸並驗證檔案…",
-      "complete": "複製完成，原任務和檔案保留。",
+      "complete": "複製成功",
       "cancelled": "已取消複製。",
       "receiving": "正在接收檔案…",
       "active": "任務已可在此電腦繼續。"
@@ -48,7 +46,21 @@
       "MIGRATION_UNSUPPORTED": "請將兩台電腦更新至支援任務複製的版本。",
       "MIGRATION_TASK_QUEUED": "此任務有排隊中的訊息，請先完成或移除這些訊息再複製。",
       "MIGRATION_SOURCE_CHANGED": "準備期間來源任務發生變更，請重試複製。"
-    }
+    },
+    "successTitle": "複製成功",
+    "successDescription": "已複製到{{name}}。",
+    "copyingTitle": "正在複製到{{name}}",
+    "keepOpen": "正在複製到{{name}}，請等待完成。",
+    "failureTitle": "複製失敗",
+    "failureDescription": "關閉後可從任務選單重新發起複製。",
+    "finishing": "{{name}}正在接收、驗證並建立任務…",
+    "transferProgress": "上傳進度 {{sent}} / {{total}} · 平均 {{speed}}/s（尚未完成接收）",
+    "thisComputer": "本機",
+    "selectedComputer": "所選電腦",
+    "estimating": "正在統計檔案數量和大小…",
+    "fileSummary": "專案檔案：{{count}} 個，共 {{size}}",
+    "estimateNote": "複製前估算，含隱藏檔案；不含另行複製的 Git 歷史、任務對話及附件。檔案變化可能影響最終大小。",
+    "estimateFailed": "無法統計檔案。請檢查任務所在電腦的連線和版本，然後關閉重試。"
   },
   "sharedTask": {
     "manageSharing": "共享管理",
@@ -189,6 +201,7 @@
     "allow": "允許遠端桌面",
     "allowHint": "允許已登入的同帳號裝置檢視和操作這台電腦的所有應用程式。需同時開啟上方的裝置控制。",
     "permissionHint": "請在電腦的系統設定中允許螢幕錄製和輔助使用，然後重新連線。",
+    "controlUnavailable": "遠端電腦暫時無法接受操作，請檢查遠端控制權限和連線，然後重新連線。",
     "beingControlled": "桌面正在被遠端控制",
     "beingViewed": "桌面正在被遠端檢視",
     "disconnect": "中斷連線",
@@ -867,6 +880,11 @@
       "feishuHint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
       "feishuDisabledHint": "需要先在「飛書 / Lark 機器人」中配置 bot 並向它傳送一條訊息以完成繫結。",
       "feishuAria": "切換任務完成的飛書通知",
+      "botGroupPlan": {
+        "stepDone": "{{name}}做完了「{{task}}」，等你繼續",
+        "stepFailed": "{{name}}沒做完「{{task}}」，可以重試",
+        "planDone": "分工全部做完了，最後一步是{{name}}的「{{task}}」"
+      },
       "sessionEvent": {
         "untitled": "未命名任務",
         "done": "已完成 ✓",
@@ -1536,6 +1554,11 @@
         "label": "快速啟動語音輸入",
         "hint": "用完後讓麥克風短暫待命，縮短按下快捷鍵或按鈕到開始錄音的等待；通常可快約 100 毫秒。若 30 分鐘內沒有再次使用，會自動釋放麥克風。",
         "ariaLabel": "切換快速啟動語音輸入"
+      },
+      "composerLongPress": {
+        "label": "長按輸入框語音輸入",
+        "hint": "在輸入框裡按住滑鼠左鍵片刻即開始語音輸入，放開後結束並填入文字。",
+        "ariaLabel": "切換長按輸入框語音輸入"
       },
       "refinement": {
         "enabled": {
@@ -7633,6 +7656,8 @@
   },
   "sidebar": {
     "backToSessions": "返回任務",
+    "taskAttentionCount": "{{count}} 個任務待關注",
+    "teammateUnreadCount": "{{count}} 段對話未讀",
     "vendorReadiness": {
       "loading": "正在檢查可用狀態",
       "ready": "已就緒",

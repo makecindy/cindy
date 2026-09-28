@@ -37,11 +37,11 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
     .find(row => row.host.deviceId === deviceId && row.item.ref.id === resourceId && row.item.ref.kind === resourceKind)?.item;
   const resource = display?.identity === identity ? display.resource : cached ?? null;
   const ready = !required || (focused && AppState.currentState === 'active' && status === 'online' && verified === binding && metadataVerified);
-  useEffect(() => {
-    if (ready && canMarkRead && resourceKind === 'bot' && resource) {
-      void markRemoteResourceRead(user?.id ?? '', deviceId, resourceId, resource.display.lastReplyAt ?? 0);
+  const markReadThrough = useCallback((at: number) => {
+    if (current.current === binding && AppState.currentState === 'active' && ready && canMarkRead && resourceKind === 'bot' && resource && Number.isFinite(at) && at > 0) {
+      void markRemoteResourceRead(user?.id ?? '', deviceId, resourceId, Math.min(at, resource.display.lastReplyAt ?? 0));
     }
-  }, [canMarkRead, deviceId, ready, resource, resourceId, resourceKind, user?.id]);
+  }, [binding, canMarkRead, deviceId, ready, resource, resourceId, resourceKind, user?.id]);
   useFocusEffect(useCallback(() => {
     if (!collectionId || !resourceId || !resourceKind || !deviceId || status !== 'online') return;
     setVerified(null);
@@ -108,5 +108,5 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
     void load();
     return () => { disposed = true; setVerified(null); offPush(); offTopic(); appState.remove(); if (timer) clearTimeout(timer); };
   }, [attempt, binding, collectionId, deviceId, deviceName, identity, invoke, i18n.language, onRemoteResourceChanged, resourceId, resourceKind, router, sessionId, status, subscribe, t, unsubscribe, user?.id]));
-  return { resource, ready, error: failure?.binding === binding ? failure.message : null, retry };
+  return { resource, ready, markReadThrough, error: failure?.binding === binding ? failure.message : null, retry };
 }

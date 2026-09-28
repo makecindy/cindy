@@ -9,6 +9,7 @@ vi.mock('react-i18next', () => ({
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  read: undefined as undefined | ((at: number) => void),
   params: { botId: 'bot-1', sessionId: 'session-1' } as Record<string, string | undefined>,
 }));
 
@@ -17,9 +18,10 @@ vi.mock('react-router-dom', () => ({
   useParams: () => mocks.params,
 }));
 vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
-  CCAgentSessionView: ({ botUnreadBoundaryAt }: { botUnreadBoundaryAt?: number | null }) => (
-    <div data-testid="chat" data-unread-boundary={botUnreadBoundaryAt ?? ''} />
-  ),
+  CCAgentSessionView: ({ botUnreadBoundaryAt, onBotReadThrough }: { botUnreadBoundaryAt?: number | null; onBotReadThrough?: (at: number) => void }) => {
+    mocks.read = onBotReadThrough;
+    return <div data-testid="chat" data-unread-boundary={botUnreadBoundaryAt ?? ''} />;
+  },
 }));
 
 import { BotSessionView } from '../BotSessionView';
@@ -81,41 +83,33 @@ afterEach(() => {
 });
 
 describe('Bot conversation read position', () => {
-  it('marks the conversation read as soon as the chat is mounted', async () => {
-    render(<BotSessionView />);
-
-    await waitFor(() => expect(getBotLastReadAt('bot-1')).toBe(10_000));
+  it('waits for a rendered reply rather than marking a mounted chat read to wall-clock time', async () => {
+    const view = render(<BotSessionView />);
+    await waitFor(() => expect(view.getByTestId('chat')).toBeTruthy());
+    expect(getBotLastReadAt('bot-1')).toBeNull();
+    act(() => mocks.read?.(3_000));
+    expect(getBotLastReadAt('bot-1')).toBe(3_000);
+    act(() => mocks.read?.(2_000));
+    expect(getBotLastReadAt('bot-1')).toBe(3_000);
   });
-
-  it('preserves the entry read position for the unread divider while marking the chat read', async () => {
+  it('preserves the entry boundary and ignores message arrival without a viewport receipt', async () => {
     markBotRead('bot-1', 5_000);
     installElectronApi(readyBot, { ...readyBot, unreadCount: 2 });
-
     const view = render(<BotSessionView />);
-
-    // Rendering the divider can precede the passive effect that advances the read position.
-    await waitFor(() => {
-      expect(view.getByTestId('chat').dataset.unreadBoundary).toBe('5000');
-      expect(getBotLastReadAt('bot-1')).toBe(10_000);
-    });
+    await waitFor(() => expect(view.getByTestId('chat').dataset.unreadBoundary).toBe('5000'));
+    act(() => messageListeners.forEach(listener => listener({ sessionId: 'session-1' })));
+    expect(getBotLastReadAt('bot-1')).toBe(5_000);
+    act(() => mocks.read?.(7_000));
+    expect(getBotLastReadAt('bot-1')).toBe(7_000);
+    expect(view.getByTestId('chat').dataset.unreadBoundary).toBe('5000');
   });
-
-  it('keeps advancing the read position while the user is watching the chat', async () => {
-    render(<BotSessionView />);
-    await waitFor(() => expect(messageListeners.length).toBe(1));
-
-    vi.setSystemTime(20_000);
-    act(() => {
-      for (const listener of messageListeners) listener({ sessionId: 'session-1' });
-    });
-    expect(getBotLastReadAt('bot-1')).toBe(20_000);
-
-    // A row belonging to another task must not mark this Bot read.
-    vi.setSystemTime(30_000);
-    act(() => {
-      for (const listener of messageListeners) listener({ sessionId: 'other-session' });
-    });
-    expect(getBotLastReadAt('bot-1')).toBe(20_000);
+  it('opening an older Bot task cannot acknowledge the canonical chat', async () => {
+    markBotRead('bot-1', 5_000);
+    installElectronApi({ ...readyBot, sessions: [{ id: 'session-1', kind: 'chat', role: 'history', status: 'active' }] });
+    const view = render(<BotSessionView />);
+    await waitFor(() => expect(view.getByTestId('chat')).toBeTruthy());
+    expect(mocks.read).toBeUndefined();
+    expect(getBotLastReadAt('bot-1')).toBe(5_000);
   });
 
   it('does not mark anything read when the Bot task cannot be opened', async () => {

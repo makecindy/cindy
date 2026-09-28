@@ -40,7 +40,7 @@ export type TaskMigrationRequest =
       targetDeviceId: string;
       targetProject?: string | null;
     }
-  | { action: "status" | "retry" | "cancel"; sessionId: string }
+  | { action: "status" | "retry" | "cancel" | "estimate"; sessionId: string }
   | {
       action: "receive";
       id: string;
@@ -64,7 +64,16 @@ export interface TaskMigrationView {
     | "cancelled"
     | "receiving"
     | "active";
+  estimate?: { fileCount: number; bytes: number };
+  copyEstimate?: true;
   running?: boolean;
+  /** Optional live source-side upload telemetry; absent on older hosts. Never persisted. */
+  progress?: {
+    phase: "sending" | "finishing";
+    sentBytes: number;
+    totalBytes: number;
+    bytesPerSecond: number;
+  };
   targetDeviceId?: string;
   targetSessionId?: string;
   error?: string;
@@ -127,11 +136,11 @@ export function parseTaskMigrationRequest(
   }
 
   if (
-    ["status", "retry", "cancel"].includes(String(r.action)) &&
+    ["status", "retry", "cancel", "estimate"].includes(String(r.action)) &&
     id(r.sessionId)
   )
     return {
-      action: r.action as "status" | "retry" | "cancel",
+      action: r.action as "status" | "retry" | "cancel" | "estimate",
       sessionId: r.sessionId,
     };
   if (
@@ -146,11 +155,7 @@ export function parseTaskMigrationRequest(
       targetDeviceId: r.targetDeviceId,
       targetProject: r.targetProject as string | null,
     };
-  if (
-    r.action === "receipt" &&
-    uuid(r.id) &&
-    id(r.sourceSessionId)
-  )
+  if (r.action === "receipt" && uuid(r.id) && id(r.sourceSessionId))
     return { action: r.action, id: r.id, sourceSessionId: r.sourceSessionId };
   if (
     r.action === "receive" &&

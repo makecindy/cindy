@@ -528,6 +528,8 @@
     "viewAllRuns": "실행 {{count}}회 모두 보기"
   },
   "companions": {
+    "taskAttentionCount": "확인이 필요한 작업: {{count}}",
+    "unreadChatCount": "읽지 않은 채팅: {{count}}",
     "messageSent": "백그라운드 작업에 메시지를 보냈습니다",
     "sentTo": "{{name}}에게 메시지를 보냄",
     "receivedFrom": "{{name}}의 메시지",

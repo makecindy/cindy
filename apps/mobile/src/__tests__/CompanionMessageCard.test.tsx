@@ -696,3 +696,34 @@ it('shows the peer portrait and current name from the cached roster in the priva
   expect(node.querySelector('[data-testid="peer-avatar"]')?.textContent).toBe('Aster Renamed');
   await cache.clearRemoteResourceCache();
 });
+
+it.each([false, true])('uses the %s receipt title source without replacing frozen results with live state', async (frozen) => {
+  const receipt = { ...message, companion: { kind: 'task', meta: { ...message.companion!.meta,
+    role: 'delegation-result', objective: 'Full execution instructions',
+    result: { ...(frozen ? { title: 'Original title' } : {}), runSequence: 1, status: 'completed',
+      text: 'Original result', artifacts: [] },
+  } } } as NormalizedRemoteMessage;
+  h.invoke.mockResolvedValue({ ok: true, delegations: [{ id: 'job', title: 'Known task title', status: 'running', resultSummary: 'New output' }] });
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: receipt })));
+  expect(node.textContent).toContain(frozen ? 'Original title' : 'Known task title');
+  expect(node.textContent).not.toContain('Full execution instructions');
+  expect(node.textContent).toContain('devices.companions.status.completed');
+  expect(node.textContent).not.toContain('devices.companions.status.running');
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).toContain('Original result');
+  expect(node.textContent).not.toContain('New output');
+  if (frozen) expect(h.invoke).not.toHaveBeenCalled();
+});
+
+it('keeps legacy results available when their task cannot be read', async () => {
+  const receipt = { ...message, companion: { kind: 'task', meta: { ...message.companion!.meta,
+    role: 'delegation-result', objective: 'First line\nOther instructions',
+    result: { runSequence: 1, status: 'failed', text: 'Saved result', artifacts: [] },
+  } } } as NormalizedRemoteMessage;
+  h.invoke.mockRejectedValue(new Error('offline'));
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: receipt })));
+  expect(node.textContent).toContain('First line');
+  expect(node.textContent).not.toContain('Other instructions');
+  await act(async () => node.querySelector('button')!.click());
+  expect(node.textContent).toContain('Saved result');
+});

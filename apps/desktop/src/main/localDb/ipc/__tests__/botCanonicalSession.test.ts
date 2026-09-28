@@ -3321,6 +3321,36 @@ describe('Bots list unread projection', () => {
     expect(await unreadFor('bot-1', { 'bot-1': 4_000 })).toBe(0);
   });
 
+  it('excludes commentary, pre-tool narration, empty and private rows from both badges and remote reply watermarks', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'progress', role: 'assistant', content: 'Checking', createdAt: 2000 });
+    insertMessage(sessionId, { id: 'tool', role: 'tool_use', content: { name: 'Read' }, createdAt: 2100 });
+    insertMessage(sessionId, { id: 'answer', role: 'assistant', content: 'Result', agentMeta: { turnCompleted: true }, createdAt: 3000 });
+    insertMessage(sessionId, { id: 'commentary', role: 'assistant', content: 'Working', agentMeta: { assistantPhase: 'commentary' }, createdAt: 4000 });
+    insertMessage(sessionId, { id: 'child', role: 'assistant', content: 'Tool child', agentMeta: { parentToolUseId: 'tool-1' }, createdAt: 5000 });
+    for (let i = 0; i < 105; i++) insertMessage(sessionId, { id: `empty-${i}`, role: 'assistant', content: '', createdAt: 6000 + i });
+    expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+    expect((await getBotRemoteResourceSource('bot-1')).lastReplyAt).toBe(3000);
+    // Empty rows cannot consume the unread cap and hide the real reply.
+    expect(await unreadFor('bot-1', { 'bot-1': 3000 })).toBe(0);
+  });
+
+  it.each([
+    { turnCompleted: true },
+    { turnUsageDetails: { totalTokens: 12 } },
+    { turnMoney: { amount: 0.01, currency: 'USD' } },
+    { turnCostUsd: 0.01 },
+  ])('retains a completed visible reply before continuation tools (%j)', async (seal) => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'reply', role: 'assistant', content: 'Completed reply', agentMeta: seal, createdAt: 2000 });
+    insertMessage(sessionId, { id: 'tool', role: 'tool_use', content: { name: 'Read' }, createdAt: 2100 });
+    expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+    const remote = await getBotRemoteResourceSource('bot-1');
+    expect(remote.lastReplyAt).toBe(2000);
+    expect(remote.lastMessagePreview).toBe('Completed reply');
+    expect(await unreadFor('bot-1', { 'bot-1': 2000 })).toBe(0);
+  });
+
   it('reports zero when the caller has no read position for that Bot', async () => {
     const sessionId = await canonicalFor('bot-1');
     insertMessage(sessionId, {
@@ -4028,6 +4058,58 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { runtime.delegation.dispose(); }
   });
 
+  it.each(['paused-bot', 'archived-bot', 'archived-parent', 'history-link'] as const)(
+    'reads saved task titles for %s without allowing task operations', async (state) => {
+      await seedPair();
+      const other = await invoke('local-db:bots:create-canonical-session', {
+        botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      });
+      const runtime = createDelegationRuntime();
+      try {
+        const started = await runtime.delegation.startSessionTask({
+          callerSessionId: 'session-1', objective: 'A long execution instruction',
+        });
+        if (!started.ok) throw new Error('Task did not start');
+        h.sqlite!.prepare('UPDATE sessions SET title = ? WHERE id = ?').run('Saved task title', started.childSessionId);
+        if (state === 'paused-bot' || state === 'archived-bot') {
+          h.sqlite!.prepare("UPDATE bot_profiles SET status = ? WHERE id = 'bot-a'")
+            .run(state === 'paused-bot' ? 'paused' : 'archived');
+        } else if (state === 'archived-parent') {
+          h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = 'session-1'").run();
+        } else {
+          h.sqlite!.prepare("UPDATE bot_session_links SET role = 'history', archived_at = 1 WHERE session_id = 'session-1'").run();
+        }
+        expect(await runtime.delegation.listDelegations('session-1')).toMatchObject({
+          ok: true, delegations: [{ id: started.delegationId, title: 'Saved task title' }],
+        });
+        expect(await runtime.delegation.listDelegations(other.session.id)).toMatchObject({ ok: true, delegations: [] });
+        expect(await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Must not start' }))
+          .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+        expect(await runtime.delegation.cancelDelegation('session-1', started.delegationId))
+          .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+        expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'message', text: 'Must not continue' }))
+          .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+        expect(runtime.started).toHaveLength(1);
+      } finally { runtime.dispose(); }
+    },
+  );
+
+  it.each(['deleted-parent', 'deleting-bot', 'ordinary-task', 'group-link', 'missing-link'] as const)(
+    'rejects task title list reads from %s', async (state) => {
+      await seedPair();
+      if (state === 'deleted-parent') h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = 'session-1'").run();
+      if (state === 'deleting-bot') h.sqlite!.prepare("UPDATE bot_profiles SET status = 'deleting' WHERE id = 'bot-a'").run();
+      if (state === 'ordinary-task') h.sqlite!.prepare("UPDATE sessions SET source = 'desktop' WHERE id = 'session-1'").run();
+      if (state === 'group-link') h.sqlite!.prepare("UPDATE bot_session_links SET role = 'group' WHERE session_id = 'session-1'").run();
+      if (state === 'missing-link') h.sqlite!.prepare("DELETE FROM bot_session_links WHERE session_id = 'session-1'").run();
+      const runtime = createDelegationRuntime();
+      try {
+        expect(await runtime.delegation.listDelegations('session-1'))
+          .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+      } finally { runtime.dispose(); }
+    },
+  );
+
   it.each(['cc', 'codex'])('starts a child on the actual %s route after its Bot changes engines', async (agentKind) => {
     await seedPair();
     const runtime = createDelegationRuntime({
@@ -4399,6 +4481,40 @@ describe('Bot Session task end-to-end runtime', () => {
       await runtime.delegation.messageSessionTask('session-1', task.delegationId, { ...input, idempotencyKey: 'later-supplement' });
       await runtime.delegation.messageSessionTask('session-1', task.delegationId, input);
       expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(3);
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['done', 'error'] as const)('continues after %s only once runtime stop is confirmed', async outcome => {
+    await seedPair();
+    let execution = { instanceId: 'native-terminal-test', generation: 1 };
+    const runtime = createDelegationRuntime({ taskControl: true, readSessionExecution: () => execution });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish the requested work.' });
+      if (!task.ok) throw new Error('missing task');
+      const previous = { ...execution };
+      // A terminal receipt can precede native/Host tail settlement. It alone
+      // must never grant permission to start another execution.
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome, execution,
+        resultText: outcome === 'done' ? 'Completed.' : undefined,
+        error: outcome === 'error' ? 'Provider failed.' : undefined,
+        pendingInputClientIds: [], hadPendingInputAtTerminal: false });
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({
+        task: { status: outcome === 'done' ? 'completed' : 'failed', control: { state: 'terminal', stop_status: 'unconfirmed' } },
+      });
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', mode: 'queue', text: 'Continue safely.' }))
+        .toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      await runtime.settleChild(task.childSessionId, 'Native tail settled.', previous);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({
+        task: { control: { stop_status: 'stopped' } },
+      });
+      execution = { ...execution, generation: 2 };
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', mode: 'queue', text: 'Continue safely.' }))
+        .toMatchObject({ ok: true, childSessionId: task.childSessionId, resumed: true });
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome, execution: previous,
+        resultText: 'Late old result.', error: 'Late old failure.' });
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ task: { status: 'running' } });
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(2);
+      expect(runtime.abortSession).not.toHaveBeenCalled();
     } finally { runtime.dispose(); }
   });
 
@@ -5172,6 +5288,164 @@ describe('Bot Session task end-to-end runtime', () => {
       await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'done', execution, resultText: 'Old duplicate.' });
       expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
         .toMatchObject({ task: { status: 'queued' } });
+    } finally { runtime.dispose(); }
+  });
+
+  it('keeps the full original objective and each ordered follow-up once across 70 executions', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime();
+    const objective = 'Original objective\n' + 'O'.repeat(11_981);
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective });
+      if (!task.ok) throw new Error('missing task');
+      for (let index = 1; index <= 70; index += 1) {
+        await runtime.settleChild(task.childSessionId, 'R'.repeat(8_000));
+        const text = `Follow-up ${index}: ` + 'F'.repeat(3_960) + '\nKEEP THIS END';
+        const result = await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text });
+        expect(result).toMatchObject({ ok: true, childSessionId: task.childSessionId });
+        const sent = runtime.dispatch.mock.calls.filter(([input]) => input.targetSessionId === task.childSessionId).at(-1)![0];
+        expect(sent.persistedContent).toBe(text);
+        expect(sent.message.split(objective)).toHaveLength(2);
+        expect(sent.message.split(text)).toHaveLength(2);
+        expect(sent.message).not.toContain('Previous objective:');
+        expect(sent.message).not.toContain('R'.repeat(100));
+        if (index > 1) expect(sent.message).not.toContain(`Follow-up ${index - 1}: `);
+        expect(h.sqlite!.prepare('SELECT objective FROM bot_delegations WHERE id = ?').pluck().get(task.delegationId)).toBe(objective);
+      }
+      const inputs = h.sqlite!.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid").all(task.childSessionId) as Array<{ content: string }>;
+      expect(inputs).toHaveLength(71);
+      expect(inputs[0].content).toBe(objective);
+      for (let index = 1; index <= 70; index += 1) expect(inputs[index].content.startsWith(`Follow-up ${index}: `)).toBe(true);
+    } finally { runtime.dispose(); }
+  });
+
+  it('keeps active queued supplements ordered and deduplicated without changing the objective', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ readSessionExecution: () => ({ instanceId: 'fixture-runtime', generation: 1 }) });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Stable objective.' });
+      if (!task.ok) throw new Error('missing task');
+      for (const index of [1, 1, 2, 2]) {
+        expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId,
+          { kind: 'message', text: `Queued requirement ${index}.`, idempotencyKey: `input-${index}` })).toMatchObject({ ok: true });
+      }
+      const inputs = h.sqlite!.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid").all(task.childSessionId);
+      expect(inputs).toEqual([{ content: 'Stable objective.' }, { content: 'Queued requirement 1.' }, { content: 'Queued requirement 2.' }]);
+      expect(h.sqlite!.prepare('SELECT objective FROM bot_delegations WHERE id = ?').pluck().get(task.delegationId)).toBe('Stable objective.');
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(3);
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['pause', 'cancel'] as const)('blocks old dispatch timers and late completion after a follow-up is %s before acceptance', async mode => {
+    vi.useFakeTimers();
+    await seedPair();
+    let unavailable = false;
+    const runtime = createDelegationRuntime({ taskControl: true, transientUnavailable: () => unavailable });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Stable objective.' });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.settleChild(task.childSessionId, 'Initial work done.');
+      unavailable = true;
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId,
+        { kind: 'message', text: 'Deferred follow-up.' })).toMatchObject({ ok: true, queued: true });
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, mode)).toMatchObject({ ok: true });
+      const started = runtime.started.filter(turn => turn.sessionId === task.childSessionId).length;
+      unavailable = false;
+      runtime.advance(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'done',
+        expectedRunSequence: 1, resultText: 'Old duplicate result.' });
+      await runtime.delegation.restore();
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(started);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({
+        task: { status: mode === 'pause' ? 'queued' : 'cancelled' },
+      });
+      if (mode === 'pause') {
+        expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId,
+          { kind: 'message', text: 'Must not release pause.' })).toMatchObject({ ok: false, errorCode: 'TASK_PAUSED' });
+      }
+    } finally { runtime.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['available', 'missing', 'rewound', 'cleared'] as const)('continues legacy nested objectives safely with %s initial input', async history => {
+    await seedPair();
+    const runtime = createDelegationRuntime();
+    const objective = 'Keep the original\n  formatting and Requester follow-up: literal text.';
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.settleChild(task.childSessionId, 'Old work done.');
+      const legacy = ('Continue the same Session task with the requester’s follow-up.\n\nPrevious objective:\n').repeat(60) + 'truncated legacy text';
+      h.sqlite!.prepare("UPDATE bot_delegations SET objective = ?, run_sequence = 5, permission_snapshot_json = json_remove(permission_snapshot_json, '$.taskInput') WHERE id = ?").run(legacy, task.delegationId);
+      const firstId = `bot-delegation-start:${task.delegationId}`;
+      if (history === 'missing') h.sqlite!.prepare('DELETE FROM messages WHERE session_id = ? AND client_id = ?').run(task.childSessionId, firstId);
+      if (history === 'rewound') h.sqlite!.prepare('UPDATE messages SET rewind_at = 20000 WHERE session_id = ? AND client_id = ?').run(task.childSessionId, firstId);
+      if (history === 'cleared') h.sqlite!.prepare('UPDATE sessions SET cleared_at = 20000 WHERE id = ?').run(task.childSessionId);
+      const oldRows = h.sqlite!.prepare('SELECT id, content FROM messages WHERE session_id = ? ORDER BY rowid').all(task.childSessionId);
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'Only this new request.' })).toMatchObject({ ok: true });
+      const sent = runtime.dispatch.mock.calls.filter(([input]) => input.targetSessionId === task.childSessionId).at(-1)![0];
+      expect(sent.persistedContent).toBe('Only this new request.');
+      expect(sent.message).not.toContain(legacy);
+      if (history === 'available') expect(sent.message).toContain(objective);
+      else {
+        expect(sent.message).toContain('could not be recovered');
+        expect(sent.message).not.toContain(objective);
+      }
+      expect(h.sqlite!.prepare('SELECT objective FROM bot_delegations WHERE id = ?').pluck().get(task.delegationId)).toBe(history === 'available' ? objective : legacy);
+      expect(h.sqlite!.prepare('SELECT id, content FROM messages WHERE session_id = ? ORDER BY rowid').all(task.childSessionId).slice(0, oldRows.length)).toEqual(oldRows);
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['queued', 'accepted'] as const)('restores the correct follow-up after restart at the %s boundary without replaying completed actions', async boundary => {
+    await seedPair();
+    let unavailable = false;
+    const before = createDelegationRuntime({ transientUnavailable: () => unavailable });
+    const objective = 'Stable original objective.';
+    const text = 'Now verify the existing change; do not apply it again.';
+    const task = await before.delegation.startSessionTask({ callerSessionId: 'session-1', objective });
+    if (!task.ok) throw new Error('missing task');
+    await before.settleChild(task.childSessionId, 'The tool already applied the change.');
+    before.advance(1_000);
+    unavailable = boundary === 'queued';
+    expect(await before.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text })).toMatchObject({ ok: true });
+    before.dispose();
+    const after = createDelegationRuntime({ startTime: 20_000, taskControl: true,
+      readSessionExecution: () => ({ instanceId: 'restored-runtime', generation: 1 }) });
+    try {
+      await after.delegation.restore();
+      const sent = after.dispatch.mock.calls.filter(([input]) => input.targetSessionId === task.childSessionId);
+      expect(sent).toHaveLength(1);
+      expect(sent[0][0].message).toContain(objective);
+      expect(sent[0][0].message).toContain(text);
+      if (boundary === 'queued') expect(sent[0][0].persistedContent).toBe(text);
+      else {
+        expect(sent[0][0].message).toContain('Do not repeat completed tool actions');
+        expect(sent[0][0].persistedContent).not.toBe(text);
+        expect(sent[0][0].persistedContent).not.toBe(objective);
+      }
+      await after.delegation.restore();
+      expect(after.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(1);
+      expect(h.sqlite!.prepare("SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user' AND content = ?").pluck().get(task.childSessionId, text)).toBe(1);
+    } finally { after.dispose(); }
+  });
+
+  it.each([false, true])('starts only an explicit new follow-up after confirmed cancellation (previously paused: %s)', async paused => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Original task.' });
+      if (!task.ok) throw new Error('missing task');
+      if (paused) await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'cancel')).toMatchObject({ ok: true, control: { state: 'cancelling' } });
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'Too early.' })).toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      await runtime.settleChild(task.childSessionId, 'Cancelled.');
+      const count = runtime.started.filter(turn => turn.sessionId === task.childSessionId).length;
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'done', resultText: 'Late callback.' });
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(count);
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'New explicitly requested work.' })).toMatchObject({ ok: true });
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(count + 1);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ task: { status: 'running', control: { state: 'active' } } });
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: false, errorCode: 'NOT_PAUSED' });
     } finally { runtime.dispose(); }
   });
 
@@ -6036,7 +6310,7 @@ describe('Bot Session task end-to-end runtime', () => {
     await seedPair();
     const runtime = createDelegationRuntime({ collectArtifacts: async () => [{ path: 'report.pdf', absolutePath: '/reports/report.pdf', status: 'added' }] });
     try {
-      const first = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'First report' });
+      const first = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'First report instructions', title: 'First report' });
       const second = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Second report' });
       if (!first.ok || !second.ok) throw new Error('Tasks did not start');
       h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id IN (?, ?)').run('/child-task', first.childSessionId, second.childSessionId);
@@ -6049,6 +6323,7 @@ describe('Bot Session task end-to-end runtime', () => {
         .all('session-1', 'bot-delegation-result:%') as { agent_meta: string }[];
       expect(results).toHaveLength(2);
       expect(results.every(row => JSON.parse(row.agent_meta).botCollaboration.result.workingDir === '/child-task')).toBe(true);
+      expect(results.map(row => JSON.parse(row.agent_meta).botCollaboration.result.title).sort()).toEqual(['First report', 'Second report']);
       expect(results.map(row => JSON.parse(row.agent_meta).botCollaboration.result.text).sort()).toEqual([
         '![chart](https://example.com/chart.png)', '[Report](https://example.com/report.pdf)',
       ].sort());
@@ -6245,6 +6520,7 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(runtime.dispatch.mock.calls.at(-1)?.[0].clientId).toBe(`bot-delegation-start:${started.delegationId}:2`);
       expect(h.sqlite!.prepare('SELECT content FROM messages WHERE session_id = ? AND role = ?').all(started.childSessionId, 'assistant'))
         .toContainEqual({ content: '第一版结果。' });
+      h.sqlite!.prepare('UPDATE sessions SET title = ? WHERE id = ?').run('月报与风险清单', continued.childSessionId);
       await runtime.settleChild(continued.childSessionId, '第二版结果，含风险清单。');
 
       const receipts = h.sqlite!.prepare(
@@ -6269,8 +6545,8 @@ describe('Bot Session task end-to-end runtime', () => {
       ).all('session-1', `bot-delegation-result:${started.delegationId}:%`) as Array<{ client_id: string; agent_meta: string }>;
       const workingDir = h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').pluck().get(started.childSessionId);
       expect(resultCards.map(row => JSON.parse(row.agent_meta).botCollaboration.result)).toEqual([
-        { workingDir, runSequence: 1, status: 'completed', text: '第一版结果。', artifacts: [] },
-        { workingDir, runSequence: 2, status: 'completed', text: '第二版结果，含风险清单。', artifacts: [] },
+        { title: '月报', workingDir, runSequence: 1, status: 'completed', text: '第一版结果。', artifacts: [] },
+        { title: '月报与风险清单', workingDir, runSequence: 2, status: 'completed', text: '第二版结果，含风险清单。', artifacts: [] },
       ]);
       expect(h.sqlite!.prepare('SELECT COUNT(*) AS n FROM messages WHERE client_id = ?')
         .get(`bot-delegation-request:${started.delegationId}`)).toEqual({ n: 1 });
@@ -6278,7 +6554,7 @@ describe('Bot Session task end-to-end runtime', () => {
         runtime.delegation.getSessionTask('session-1', started.delegationId),
       ).resolves.toMatchObject({
         ok: true,
-        task: { title: '月报', status: 'completed', result: '第二版结果，含风险清单。' },
+        task: { title: '月报与风险清单', status: 'completed', result: '第二版结果，含风险清单。' },
       });
     } finally {
       runtime.dispose();

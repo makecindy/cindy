@@ -621,6 +621,7 @@ export async function tryUploadPeerAttachment(
   source: string | Buffer,
   mimeType: string | undefined,
   invoke: Invoke,
+  onProgress?: (bytes: number) => void,
 ): Promise<string | null> {
   refreshCooldownOwner();
   const owner = captureDataOwnerBroadcastScope();
@@ -675,6 +676,7 @@ export async function tryUploadPeerAttachment(
           return response.result;
         },
         check,
+        onProgress,
       );
       const ms = Date.now() - transferStartedAt;
       log.debug(

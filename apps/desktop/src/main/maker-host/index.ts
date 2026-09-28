@@ -2308,7 +2308,7 @@ export function getMaker(): Maker {
       },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
-      resolvePiVisionBridgeEnv: (model) =>
+      resolvePiVisionBridgeEnv: (model, sessionId) =>
         buildPiVisionBridgeEnv(
           {
             getProviderById: (providerId) =>
@@ -2320,6 +2320,7 @@ export function getMaker(): Maker {
             fetch: outboundFetch,
           },
           model,
+          sessionId,
         ),
       // 远端 Pi:给 session 标 remoteHostId 的, PiAgent 通过这个钩子拿远端
       // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),

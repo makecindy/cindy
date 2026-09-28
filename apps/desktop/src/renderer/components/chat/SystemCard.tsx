@@ -1383,7 +1383,7 @@ export function SystemCard({
     case 'bot-session-task-message':
       return <BotSessionTaskMessageTrace data={data} />;
     case 'bot-session-task-result':
-      return <BotSessionTaskResultCard data={data} />;
+      return <BotSessionTaskResultCard data={data} sessionId={sessionId} />;
     case 'bot-session-task':
       return <BotSessionTaskCard data={data} sessionId={sessionId} />;
     case 'bot-authorization':

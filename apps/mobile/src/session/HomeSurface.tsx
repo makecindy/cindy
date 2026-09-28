@@ -1,3 +1,4 @@
+import { usePublishHomeScheduleUnread } from './HomeUnreadContext';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import type { HomeMode } from './homeViewPreferenceStore';
 import { TaskTagDots } from '@/session/TaskTags';
@@ -6,7 +7,7 @@ import { HomeNewTaskButton } from './HomeNewTaskButton';
 import { useRetainedHomeState, getHomeViewSession } from './homeViewSession';
 import { rememberRecentTask } from './recentTasks';
 import { homeListStyles, SessionStatusMark } from '@/session/HomeListVisuals';
-import { useHeaderHeight } from "expo-router/react-navigation";
+import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
 import { SessionHeaderNativeBlur } from "@/session/SessionHeaderNativeControls";
 import { RemoteTaskSuggestions } from '@/session/RemoteTaskSuggestions';
 import { isTaskSuggestionsSyncPending, useRemoteTaskSuggestionsPresentation } from '@/session/useRemoteTaskSuggestionsPresentation';
@@ -260,7 +261,7 @@ import { useSessionListActions } from '@/session/useSessionListActions';
 import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
 import type { RemoteSession } from '@/session/types';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, iconStroke, lineHeight, navigationChrome, radius, spacing, typeScale } from '@/theme/tokens';
 
 const LIST_LIMIT = 200;
 // Keep the device-link channel responsive while All Sessions hydrates several
@@ -378,7 +379,7 @@ const ActiveHomeSession = createContext<string | undefined>(undefined);
 export function MobileHome(props: MobileHomeProps) {
   const screenFocused = useIsFocused();
   const { accountGeneration } = useAuth();
-  return <RemoteSessionStoreSubscriptionGate enabled={screenFocused && props.active !== false}>
+  return <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
     <ActiveHomeSession.Provider value={props.currentSessionId}>
       <HomeScreenContent key={accountGeneration} {...props} />
     </ActiveHomeSession.Provider>
@@ -397,7 +398,9 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   const viewSession = getHomeViewSession();
   const [restoredView] = useState(() => viewSession.has('preferencesHydrated'));
   const routeFocused = useIsFocused();
-  const screenFocused = routeFocused && active;
+  // The task mirror also feeds navigation while the teammate pane is visible.
+  // Only read/sync work stays active; native headers and list presentation remain pane-scoped.
+  const screenFocused = routeFocused;
   const screenFocusedRef = useRef(screenFocused);
   screenFocusedRef.current = screenFocused;
   const styles = useThemedStyles(makeStyles);
@@ -500,7 +503,8 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   const remoteHomeCollectionsRef = useRef<RemoteHomeCollection[]>([]);
   remoteHomeCollectionsRef.current = remoteHomeCollections;
   const selectedDeviceIdRef = useRef<string | null>(selectedDeviceId);
-  selectedDeviceIdRef.current = selectedDeviceId;
+  // Hidden task pane synchronizes every host for its destination badge, independent of UI filters.
+  selectedDeviceIdRef.current = active ? selectedDeviceId : null;
   const [searchOpen, setSearchOpen] = useRetainedHomeState(viewSession, 'searchOpen', false);
   const [searchFilterOpen, setSearchFilterOpen] = useState(false);
   // 恢复偏好时暂存的设备名:设备列表尚未同步回来前表头用它兜底,避免显示成占位文案。
@@ -589,7 +593,11 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
     for (const deviceId of unresponsiveDevices) merged[deviceId] = 'failed';
     return merged;
   }, [rawDeviceConnectionStates, unresponsiveDevices]);
+  const publishScheduleUnread = usePublishHomeScheduleUnread();
   const [scheduleIndex, setScheduleIndex] = useState<Map<string, RemoteSessionScheduleInfo>>(() => new Map());
+  useEffect(() => {
+    publishScheduleUnread(new Set([...scheduleIndex].filter(([, info]) => info.unreadCount > 0).map(([id]) => id)));
+  }, [scheduleIndex, publishScheduleUnread]);
   const scheduleMirrorInvalidations = useRemoteScheduleMirrorInvalidations();
 
   // Clear the entire account-owned Home projection before paint. The generation ref is already
@@ -798,7 +806,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
             const epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId);
             const list = await invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
               LIST_LIMIT,
-              remoteListStatusFilter(statusFilter),
+              active ? remoteListStatusFilter(statusFilter) : 'active',
               { includePinned: true, fresh: true },
             ]);
             return [list, epoch] as const;
@@ -890,7 +898,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         superseded: false,
       };
     }
-  }, 'foreground'), [HOME_LIST_SUBSCRIPTION_OWNER, homeCacheUserId, invoke, isCurrentHomeSyncTarget, markDeviceOffline, refreshDeviceScheduleIndex, statusFilter, subscribe, updateDeviceConnectionState]);
+  }, 'foreground'), [HOME_LIST_SUBSCRIPTION_OWNER, homeCacheUserId, invoke, isCurrentHomeSyncTarget, markDeviceOffline, refreshDeviceScheduleIndex, statusFilter, active, subscribe, updateDeviceConnectionState]);
 
   const hydrateDeviceSessions = useCallback((
     device: DeviceView,
@@ -1480,8 +1488,8 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
       canOpen: item.canOpen,
       deviceId: item.device.deviceId,
     })),
-    selectedDeviceId,
-  ) : [], [deviceRows, screenFocused, selectedDeviceId]);
+    active ? selectedDeviceId : null,
+  ) : [], [deviceRows, screenFocused, selectedDeviceId, active]);
   const homeSyncDeviceIdSet = useMemo(() => new Set(homeSyncDeviceIds), [homeSyncDeviceIds]);
   const homeSyncRows = useMemo(
     () => deviceRows.filter((item) => homeSyncDeviceIdSet.has(item.device.deviceId)),
@@ -1490,7 +1498,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
 
   useEffect(() => {
     const expectedAccountGeneration = accountGeneration;
-    const selectedDeviceIdAtStart = selectedDeviceId;
+    const selectedDeviceIdAtStart = selectedDeviceIdRef.current;
     const diff = reconcileHomeDeviceSyncScope(homeSyncDeviceIds);
     if (diff.acquire.length === 0) return;
     const acquireIds = new Set(diff.acquire);
@@ -2570,7 +2578,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   const nativeHomeHeader = !embedded && usesNativeStackHeader();
   const homeGeometry = useAdaptiveWindow();
   const keepMenuTopLeft = nativeHomeHeader && homeGeometry.barEdge !== 'none';
-  const nativeHeaderHeight = useHeaderHeight();
+  const nativeHeaderHeight = useOptionalHeaderHeight();
   const chromeHeight = nativeHomeHeader
     ? nativeHeaderHeight + (headerHeight ?? 0)
     : (headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT);
@@ -2825,6 +2833,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         <View style={{ paddingTop: nativeHomeHeader ? 0 : embedded ? spacing.lg : edgePadding.paddingTop }}>
         {nativeHomeHeader ? null : (
         <View style={styles.homeHeader}>
+        <View style={[styles.headerLeadingActions, embedded && styles.headerEmbeddedActions]}>
         <HomeHeaderGlassButton
           accessibilityLabel={onDismiss ? t('home.drawer.closeA11y') : t('devices.list.a11y.openMenu')}
           onPress={onDismiss ?? openChromeMenu}
@@ -2832,6 +2841,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         >
           <>{onDismiss ? <X color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} /> : <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />}</>
         </HomeHeaderGlassButton>
+        </View>
         {showRemoteGuide ? (
           // 引导态没有可筛选的范围:正中只留品牌标题。
           <View style={styles.headerTitleWrap} testID="devices.title">
@@ -2860,9 +2870,9 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
           </NativePullDownMenu>
         )}
         {showRemoteGuide ? (
-          <View style={styles.headerIconButton} />
+          <View style={[styles.headerActions, embedded && styles.headerEmbeddedActions]} />
         ) : (
-          <View style={styles.headerActions}>
+          <View style={[styles.headerActions, embedded && styles.headerEmbeddedActions]}>
             {selectedDeviceId && !embedded ? (
               <HomeHeaderGlassButton accessibilityLabel={t('remoteDesktop.title')} onPress={openSelectedRemoteDesktop} testID="home.remoteDesktopButton">
                 <Monitor color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
@@ -2929,7 +2939,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
       </View>
 
       {residentList.enabled ? (
-        <ResidentHomeList focused={screenFocused} top={chromeHeight}
+        <ResidentHomeList focused={screenFocused && active} top={chromeHeight}
           left={embedded ? 0 : edgePadding.paddingLeft} right={embedded ? 0 : edgePadding.paddingRight}>
           <ActiveHomeSession.Provider value={activeHomeSession}>
               <View pointerEvents="box-none" style={{ flex: 1, paddingLeft: embedded ? 0 : edgePadding.paddingLeft, paddingRight: embedded ? 0 : edgePadding.paddingRight }}>
@@ -4563,17 +4573,27 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
   },
-  headerIconButton: {
-    alignItems: 'center',
+  headerLeadingActions: {
+    // Match the trailing two-button slot so the title is centered on the
+    // screen, even when selecting a device reveals the remote-desktop action.
+    alignItems: 'flex-start',
     flexShrink: 0,
-    height: 44,
+    height: navigationChrome.target,
     justifyContent: 'center',
-    width: 44,
+    width: navigationChrome.target * 2 + spacing.xs,
   },
   headerActions: {
     alignItems: 'center',
     flexDirection: 'row',
+    flexShrink: 0,
     gap: spacing.xs,
+    justifyContent: 'flex-end',
+    width: navigationChrome.target * 2 + spacing.xs,
+  },
+  headerEmbeddedActions: {
+    // Embedded drawers never show the remote-desktop action. Keep both sides
+    // symmetric without reserving space for a second button that cannot appear.
+    width: navigationChrome.target,
   },
   // 菜单外层替标题占住顶栏中间的剩余宽度,长设备名在这里截断而不是挤开右侧按钮。
   headerTitleSlot: {

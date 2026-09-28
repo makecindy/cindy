@@ -11,11 +11,15 @@ import { useGuardedPush } from '@/utils/useGuardedPush';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, spacing, typeScale } from '@/theme/tokens';
 import { AccountSwitcherSheet } from './AccountSwitcherSheet';
+import { BotGroupSection } from './BotGroupList';
+import { botGroupRoute } from './botGroupNavigation';
 import { HomeChromeDrawer } from './HomeChromeDrawer';
 import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
 import { TeammateCreateButton } from './TeammateCreateButton';
 import { TeammateList } from './TeammateList';
+import { useHomeRoster } from './HomeUnreadContext';
 import { useTeammateRoster } from './useTeammateRoster';
+import { useBotGroupRoster } from './useBotGroupRoster';
 import { useTeammateNavigation } from './useTeammateNavigation';
 import { findLastTeammate } from './teammateNavigation';
 import { remoteSessionStore } from './remoteSessionStore';
@@ -30,7 +34,11 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
   const focused = routeFocused && active;
   const push = useGuardedPush();
   const navigation = useTeammateNavigation();
-  const roster = useTeammateRoster(focused);
+  const sharedRoster = useHomeRoster();
+  const ownRoster = useTeammateRoster(focused && !sharedRoster);
+  const ownGroups = useBotGroupRoster(ownRoster.groupTargets, focused && !sharedRoster);
+  const roster = sharedRoster?.roster ?? ownRoster;
+  const groups = sharedRoster?.groups ?? ownGroups;
   const resumed = useRef(false);
   const wasFocused = useRef(focused);
   const [drawer, setDrawer] = useState(false);
@@ -85,8 +93,14 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
     {navigation.saveFailed ? <Text accessibilityRole="alert" style={styles.notice}>{t('devices.companions.preferenceSaveFailed')}</Text> : null}
     <TeammateList key={searchEpoch} {...roster} current={navigation.lastTeammate} autoFocusSearch={searchEpoch > 0}
       onInteract={() => { resumed.current = true; }}
-      onRefresh={() => { resumed.current = true; void roster.refresh(); }}
-      onSelect={(item) => { resumed.current = true; void navigation.openTeammate(item); }} />
+      onRefresh={() => { resumed.current = true; void roster.refresh(); if (groups.supported) void groups.refresh(); }}
+      onSelect={(item) => { resumed.current = true; void navigation.openTeammate(item); }}
+      renderFooter={(query) => groups.supported || groups.items.length > 0 ? <BotGroupSection items={groups.items} query={query}
+        isOnline={groups.isOnline} createTargets={roster.groupTargets.filter(groups.isOnline)}
+        preferredDeviceId={navigation.lastTeammate?.deviceId}
+        onInteract={() => { resumed.current = true; }}
+        onOpen={(row) => { resumed.current = true; Keyboard.dismiss(); push(botGroupRoute(row.host, row.item.ref.id)); }}
+        onOpenCreated={(host, groupId) => { resumed.current = true; push(botGroupRoute(host, groupId)); }} /> : null} />
     <HomeChromeDrawer open={drawer} user={auth.user} loggingOut={loggingOut} mode="teammates"
       onModeChange={(mode) => afterDrawer(() => { void navigation.setMode(mode); })}
       onClose={() => { pending.current = null; setDrawer(false); }} onClosed={finishOverlay}

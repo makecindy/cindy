@@ -47,7 +47,7 @@ describe('task copy progress', () => {
     };
     await expect(advanceHandoff(f.record, f.deps)).rejects.toThrow('lost acknowledgement');
     expect(f.durable().stage).toBe('transferring');
-    expect(canCancelHandoff(f.record)).toBe(false);
+    expect(canCancelHandoff(f.record)).toBe(true);
   });
   it('replays the idempotent import when cleanup was interrupted', async () => {
     const f = fixture('transferring');
@@ -68,9 +68,10 @@ describe('task copy progress', () => {
     expect(f.calls).toEqual(['import', 'cleanup']);
     expect(f.record.stage).toBe('transferring');
   });
-  it('allows cancellation only before any target import could have started', () => {
+  it('allows abandoning either unfinished source stage without rolling back the target', () => {
     expect(canCancelHandoff(fixture().record)).toBe(true);
-    for (const stage of ['transferring', 'complete', 'cancelled'] as const)
+    expect(canCancelHandoff(fixture('transferring').record)).toBe(true);
+    for (const stage of ['complete', 'cancelled'] as const)
       expect(canCancelHandoff(fixture(stage).record)).toBe(false);
   });
 });
