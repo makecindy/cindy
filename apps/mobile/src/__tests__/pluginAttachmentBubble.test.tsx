@@ -3,7 +3,7 @@ import { act, createElement, useImperativeHandle, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
-const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any }));
+const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any, renders: 0 }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
@@ -25,6 +25,7 @@ vi.mock('react-native', async () => {
 });
 vi.mock('@legendapp/list/react-native', () => ({
   LegendList: ({ data, renderItem, ref, ...props }: any) => {
+    viewportHarness.renders += 1;
     viewportHarness.list = { ...props, data };
     useImperativeHandle(ref, () => ({ scrollToEnd() {}, scrollToOffset() {}, getState() { return undefined; } }));
     return data.map((item: any, index: number) => createElement('section', { key: item.key }, renderItem({ item, index })));
@@ -149,6 +150,14 @@ describe('partner conversation presentation', () => {
 });
 
 describe('companion native read position', () => {
+  it('leaves ordinary task lists without the companion viewability observer', () => {
+    const acknowledge = vi.fn();
+    const items = buildMobileMessageRenderItems([msg('a', 'assistant', 'Task reply')], { isSessionStreaming: false });
+    renderClient(<MessageRenderer items={items} onCompanionReadThrough={acknowledge} />);
+    expect(viewportHarness.list.onViewableItemsChanged).toBeUndefined();
+    expect(acknowledge).not.toHaveBeenCalled();
+  });
+
   it('keeps unseen replies unread until reveal, measured tail and row visibility agree', async () => {
     const { createRoot } = await import('react-dom/client');
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -185,8 +194,11 @@ describe('companion native read position', () => {
       await act(async () => visible());
       expect(acknowledge).not.toHaveBeenCalled();
       active = true;
+      const rendersBeforeVisibility = viewportHarness.renders;
       await act(async () => visible());
       expect(acknowledge).toHaveBeenLastCalledWith(Date.parse(messages[1].createdAt));
+      // A receipt must not broadcast visible keys and rerender the mounted message window.
+      expect(viewportHarness.renders).toBe(rendersBeforeVisibility);
       acknowledge.mockClear();
       await act(async () => root.render(<MessageRenderer items={items} companion scrollResetKey="another-chat"
         onCompanionReadThrough={acknowledge} isReadingPositionActive={isActive} />));

@@ -76,7 +76,9 @@ describe('mobile message list container', () => {
     expect(source).toContain('if (token.key !== itemKeyRef.current) return;');
     expect(source).toContain('maxTextRunInlineFragments: ANDROID_SELECTABLE_TEXT_RUN_MAX_INLINE_FRAGMENTS');
     expect(listSource).toContain('onFirstVisibleItemChanged={handleFirstVisibleItemChangedRef.current}');
-    expect(listSource).not.toContain('onViewableItemsChanged=');
+    // Companion receipts observe visible rows through a ref, without broadcasting cell visibility.
+    // Ordinary tasks retain cell-local viewability and have no list-level receipt observer.
+    expect(listSource).toContain('onViewableItemsChanged={companion ? handleCompanionViewableItems : undefined}');
     // 上滑加载:LegendList 近顶阈值触发自动预取(替代手搓的滚动 metric 判定)。
     expect(listSource).toContain('onStartReached={handleStartReached}');
     // 自动预取必须是电平判定(shouldAutoLoadEarlier + 多时机重评估),不许退回只吃 onStartReached
