@@ -528,6 +528,8 @@
     "viewAllRuns": "檢視全部 {{count}} 次執行"
   },
   "companions": {
+    "taskAttentionCount": "{{count}} 個任務待關注",
+    "unreadChatCount": "{{count}} 段對話未讀",
     "messageSent": "已向背景任務傳送訊息",
     "sentTo": "已傳訊息給 {{name}}",
     "receivedFrom": "訊息來自 {{name}}",

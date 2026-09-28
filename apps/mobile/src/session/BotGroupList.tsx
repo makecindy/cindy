@@ -4,13 +4,14 @@
  * 给的预览（安排状态或最近一条消息，已按语言给好）；有伙伴正在说话、安排或做事时，预览前
  * 加运行中标记。只在至少一台电脑支持群聊时出现（旧版桌面没有这个集合）。
  */
-import { useRef, useState } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Plus, Sparkles } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import { Text } from '@/components/AppText';
 import { useAuth } from '@/auth/AuthContext';
+import { isRemoteResourceUnread, subscribeRemoteResourceCache, remoteResourceCacheRevision } from '@/device-link/remoteResourceCache';
 import type { HostedRemoteCollectionItem, RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
@@ -55,7 +56,10 @@ function BotGroupRow({ row, online, onPress }: { row: HostedRemoteCollectionItem
   const styles = useThemedStyles(makeStyles);
   const now = useMinuteNow();
   const identityFor = useBotGroupIdentities(row.host.deviceId);
+  const { user } = useAuth();
+  useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
   const display = row.item.display;
+  const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt);
   const title = resolveRemoteText(display.title, i18n.language);
   const preview = display.preview ? parseMobileMarkdownInlines(resolveRemoteText(display.preview, i18n.language))
     .map((inline) => inline.type === 'image' ? inline.alt : inline.text).join('').replace(/\s+/g, ' ').trim() : '';
@@ -66,7 +70,7 @@ function BotGroupRow({ row, online, onPress }: { row: HostedRemoteCollectionItem
     ? formatRemoteSessionSidebarTime(new Date(display.timestamp).toISOString(), now) : '';
   const offline = online ? '' : t('devices.resources.hostOffline');
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled: !online }}
-    accessibilityLabel={[title, running ? t('groupChat.list.running') : '', summary, time, offline].filter(Boolean).join(', ')}
+    accessibilityLabel={[title, unread ? t('devices.companions.unread') : '', running ? t('groupChat.list.running') : '', summary, time, offline].filter(Boolean).join(', ')}
     disabled={!online} onPress={onPress} style={({ pressed }) => [styles.row, pressed && styles.pressed]}
     testID={`botGroups.item.${row.host.deviceId}.${row.item.ref.id}`}>
     <BotGroupDuoAvatar deviceId={row.host.deviceId} members={members} online={online} />
@@ -74,6 +78,7 @@ function BotGroupRow({ row, online, onPress }: { row: HostedRemoteCollectionItem
       <View style={styles.titleRow}>
         <Text numberOfLines={1} style={styles.title}>{title}</Text>
         {time ? <Text numberOfLines={1} style={styles.time}>{time}</Text> : null}
+        {unread ? <View style={styles.unread} accessibilityLabel={t('devices.companions.unread')} /> : null}
       </View>
       <View style={styles.previewRow}>
         {running ? <Sparkles size={iconSize.xs} color={colors.statusAccent} testID="botGroups.running" /> : null}
@@ -144,6 +149,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   pressed: { opacity: 0.72 },
   body: { flex: 1, minWidth: 0, alignSelf: 'stretch', justifyContent: 'center', gap: spacing.xs,
     borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: 18 },
+  unread: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: colors.textPrimary },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   title: { flex: 1, color: colors.textPrimary, fontSize: typeScale.subtitle, fontWeight: fontWeight.medium, lineHeight: lineHeight.listTitle },
   previewRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },

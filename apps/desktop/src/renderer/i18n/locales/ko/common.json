@@ -7638,6 +7638,8 @@
   },
   "sidebar": {
     "backToSessions": "세션으로 돌아가기",
+    "taskAttentionCount": "확인이 필요한 작업: {{count}}",
+    "teammateUnreadCount": "읽지 않은 채팅: {{count}}",
     "vendorReadiness": {
       "loading": "사용 가능 여부 확인 중",
       "ready": "준비됨",

@@ -282,6 +282,7 @@ describe('botGroupChatService', () => {
       });
     }
     const group = await waitForIdle(harness, groupId);
+    expect(group.lastReplyAt).toBe(Math.max(...group.messages.filter(m => m.authorKind === 'bot' && m.kind === 'message').map(m => m.createdAt)));
     // Second circle takes turns and sees the whole first circle.
     expect(harness.dispatches.slice(3).map((call) => call.botId)).toEqual(['xiaoman', 'abu', 'mimi']);
     expect(harness.dispatches[3]!.prompt).toContain('咪咪的看法');

@@ -3321,6 +3321,20 @@ describe('Bots list unread projection', () => {
     expect(await unreadFor('bot-1', { 'bot-1': 4_000 })).toBe(0);
   });
 
+  it('excludes commentary, pre-tool narration, empty and private rows from both badges and remote reply watermarks', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'progress', role: 'assistant', content: 'Checking', agentMeta: { turnCompleted: true }, createdAt: 2000 });
+    insertMessage(sessionId, { id: 'tool', role: 'tool_use', content: { name: 'Read' }, createdAt: 2100 });
+    insertMessage(sessionId, { id: 'answer', role: 'assistant', content: 'Result', agentMeta: { turnCompleted: true }, createdAt: 3000 });
+    insertMessage(sessionId, { id: 'commentary', role: 'assistant', content: 'Working', agentMeta: { assistantPhase: 'commentary' }, createdAt: 4000 });
+    insertMessage(sessionId, { id: 'child', role: 'assistant', content: 'Tool child', agentMeta: { parentToolUseId: 'tool-1' }, createdAt: 5000 });
+    for (let i = 0; i < 105; i++) insertMessage(sessionId, { id: `empty-${i}`, role: 'assistant', content: '', createdAt: 6000 + i });
+    expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+    expect((await getBotRemoteResourceSource('bot-1')).lastReplyAt).toBe(3000);
+    // Empty rows cannot consume the unread cap and hide the real reply.
+    expect(await unreadFor('bot-1', { 'bot-1': 3000 })).toBe(0);
+  });
+
   it('reports zero when the caller has no read position for that Bot', async () => {
     const sessionId = await canonicalFor('bot-1');
     insertMessage(sessionId, {

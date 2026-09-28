@@ -1,3 +1,4 @@
+import { usePublishHomeScheduleUnread } from './HomeUnreadContext';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import type { HomeMode } from './homeViewPreferenceStore';
 import { TaskTagDots } from '@/session/TaskTags';
@@ -378,7 +379,7 @@ const ActiveHomeSession = createContext<string | undefined>(undefined);
 export function MobileHome(props: MobileHomeProps) {
   const screenFocused = useIsFocused();
   const { accountGeneration } = useAuth();
-  return <RemoteSessionStoreSubscriptionGate enabled={screenFocused && props.active !== false}>
+  return <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
     <ActiveHomeSession.Provider value={props.currentSessionId}>
       <HomeScreenContent key={accountGeneration} {...props} />
     </ActiveHomeSession.Provider>
@@ -397,7 +398,9 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   const viewSession = getHomeViewSession();
   const [restoredView] = useState(() => viewSession.has('preferencesHydrated'));
   const routeFocused = useIsFocused();
-  const screenFocused = routeFocused && active;
+  // The task mirror also feeds navigation while the teammate pane is visible.
+  // Only read/sync work stays active; native headers and list presentation remain pane-scoped.
+  const screenFocused = routeFocused;
   const screenFocusedRef = useRef(screenFocused);
   screenFocusedRef.current = screenFocused;
   const styles = useThemedStyles(makeStyles);
@@ -500,7 +503,8 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   const remoteHomeCollectionsRef = useRef<RemoteHomeCollection[]>([]);
   remoteHomeCollectionsRef.current = remoteHomeCollections;
   const selectedDeviceIdRef = useRef<string | null>(selectedDeviceId);
-  selectedDeviceIdRef.current = selectedDeviceId;
+  // Hidden task pane synchronizes every host for its destination badge, independent of UI filters.
+  selectedDeviceIdRef.current = active ? selectedDeviceId : null;
   const [searchOpen, setSearchOpen] = useRetainedHomeState(viewSession, 'searchOpen', false);
   const [searchFilterOpen, setSearchFilterOpen] = useState(false);
   // 恢复偏好时暂存的设备名:设备列表尚未同步回来前表头用它兜底,避免显示成占位文案。
@@ -589,7 +593,11 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
     for (const deviceId of unresponsiveDevices) merged[deviceId] = 'failed';
     return merged;
   }, [rawDeviceConnectionStates, unresponsiveDevices]);
+  const publishScheduleUnread = usePublishHomeScheduleUnread();
   const [scheduleIndex, setScheduleIndex] = useState<Map<string, RemoteSessionScheduleInfo>>(() => new Map());
+  useEffect(() => {
+    publishScheduleUnread(new Set([...scheduleIndex].filter(([, info]) => info.unreadCount > 0).map(([id]) => id)));
+  }, [scheduleIndex, publishScheduleUnread]);
   const scheduleMirrorInvalidations = useRemoteScheduleMirrorInvalidations();
 
   // Clear the entire account-owned Home projection before paint. The generation ref is already
@@ -798,7 +806,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
             const epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId);
             const list = await invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
               LIST_LIMIT,
-              remoteListStatusFilter(statusFilter),
+              active ? remoteListStatusFilter(statusFilter) : 'active',
               { includePinned: true, fresh: true },
             ]);
             return [list, epoch] as const;
@@ -890,7 +898,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         superseded: false,
       };
     }
-  }, 'foreground'), [HOME_LIST_SUBSCRIPTION_OWNER, homeCacheUserId, invoke, isCurrentHomeSyncTarget, markDeviceOffline, refreshDeviceScheduleIndex, statusFilter, subscribe, updateDeviceConnectionState]);
+  }, 'foreground'), [HOME_LIST_SUBSCRIPTION_OWNER, homeCacheUserId, invoke, isCurrentHomeSyncTarget, markDeviceOffline, refreshDeviceScheduleIndex, statusFilter, active, subscribe, updateDeviceConnectionState]);
 
   const hydrateDeviceSessions = useCallback((
     device: DeviceView,
@@ -1480,8 +1488,8 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
       canOpen: item.canOpen,
       deviceId: item.device.deviceId,
     })),
-    selectedDeviceId,
-  ) : [], [deviceRows, screenFocused, selectedDeviceId]);
+    active ? selectedDeviceId : null,
+  ) : [], [deviceRows, screenFocused, selectedDeviceId, active]);
   const homeSyncDeviceIdSet = useMemo(() => new Set(homeSyncDeviceIds), [homeSyncDeviceIds]);
   const homeSyncRows = useMemo(
     () => deviceRows.filter((item) => homeSyncDeviceIdSet.has(item.device.deviceId)),
@@ -1490,7 +1498,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
 
   useEffect(() => {
     const expectedAccountGeneration = accountGeneration;
-    const selectedDeviceIdAtStart = selectedDeviceId;
+    const selectedDeviceIdAtStart = selectedDeviceIdRef.current;
     const diff = reconcileHomeDeviceSyncScope(homeSyncDeviceIds);
     if (diff.acquire.length === 0) return;
     const acquireIds = new Set(diff.acquire);
@@ -2929,7 +2937,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
       </View>
 
       {residentList.enabled ? (
-        <ResidentHomeList focused={screenFocused} top={chromeHeight}
+        <ResidentHomeList focused={screenFocused && active} top={chromeHeight}
           left={embedded ? 0 : edgePadding.paddingLeft} right={embedded ? 0 : edgePadding.paddingRight}>
           <ActiveHomeSession.Provider value={activeHomeSession}>
               <View pointerEvents="box-none" style={{ flex: 1, paddingLeft: embedded ? 0 : edgePadding.paddingLeft, paddingRight: embedded ? 0 : edgePadding.paddingRight }}>

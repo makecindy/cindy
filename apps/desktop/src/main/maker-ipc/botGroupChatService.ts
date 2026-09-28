@@ -624,11 +624,16 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       .where(and(eq(botGroupMessages.groupId, groupId), eq(botGroupMessages.kind, 'message')))
       .orderBy(desc(botGroupMessages.sequence))
       .limit(1);
-    return { latest, latestSpoken };
+    const [latestReply] = await db.select({ createdAt: botGroupMessages.createdAt })
+      .from(botGroupMessages)
+      .where(and(eq(botGroupMessages.groupId, groupId), eq(botGroupMessages.authorKind, 'bot'),
+        eq(botGroupMessages.kind, 'message')))
+      .orderBy(desc(botGroupMessages.sequence)).limit(1);
+    return { latest, latestSpoken, lastReplyAt: latestReply?.createdAt ?? 0 };
   };
 
   const summarize = async (group: GroupRow): Promise<BotGroupSummary> => {
-    const [members, { latestSpoken }, openPlan] = await Promise.all([
+    const [members, { latestSpoken, lastReplyAt }, openPlan] = await Promise.all([
       readMembers(group.id),
       latestMessages(group.id),
       readOpenPlan(group.id),
@@ -657,6 +662,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         }
         : null,
       planningBotId: planning && !planning.cancelled ? planning.organizerBotId : null,
+      lastReplyAt,
       lastMessage: latestSpoken
         ? {
             authorKind: latestSpoken.authorKind,

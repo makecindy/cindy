@@ -143,6 +143,7 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
       subtitle: group.members.map((member) => member.name).join('、'),
       ...(preview ? { preview } : {}),
       timestamp: group.lastMessage?.createdAt ?? group.updatedAt,
+      lastReplyAt: group.lastReplyAt,
       ...(busy ? { generation: { phase: 'processing', startedAt: null } } : {}),
     },
     links: group.members.map((member) => ({

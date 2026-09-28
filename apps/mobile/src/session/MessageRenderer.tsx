@@ -624,6 +624,7 @@ const COMPANION_AVATAR_GAP = 10;
 
 interface MessageActions {
   companion?: boolean;
+  onCompanionReadThrough?: (at: number) => void;
   companionWorkingLabel?: string | null;
   /** Teammate portrait beside its replies (Desktop withAssistantAvatar). */
   companionAvatar?: ReactNode;
@@ -735,6 +736,7 @@ export function MessageRenderer({
   queueFooter,
   scrollResetKey,
   isReadingPositionActive,
+  onCompanionReadThrough,
   syncingWhileEmpty,
   testID,
   devExposeList,
@@ -995,6 +997,20 @@ export function MessageRenderer({
     isAwayFromBottomRef.current = next;
     setIsAwayFromBottomState(next);
   }, []);
+  useEffect(() => {
+    if (!companion || !onCompanionReadThrough || isAwayFromBottom || isSessionStreaming) return;
+    const acknowledge = () => {
+      if (!nearBottomRef.current || isReadingPositionActive?.() === false) return;
+      const at = items.reduce((latest, item) => {
+        if (item.type !== 'message' || item.message.kind !== 'assistant') return latest;
+        const stamp = new Date(item.message.createdAt).getTime();
+        return Number.isFinite(stamp) ? Math.max(latest, stamp) : latest;
+      }, 0);
+      if (at > 0) onCompanionReadThrough(at);
+    };
+    const frame = requestAnimationFrame(acknowledge);
+    return () => cancelAnimationFrame(frame);
+  }, [companion, onCompanionReadThrough, isAwayFromBottom, isSessionStreaming, isReadingPositionActive, items]);
   const [previousUserTarget, setPreviousUserTarget] = useState<
     ReturnType<typeof previousUserMessageJumpTarget>
   >(null);

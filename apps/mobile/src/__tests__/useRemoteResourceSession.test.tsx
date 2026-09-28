@@ -71,11 +71,23 @@ function Probe({ canMarkRead }: { canMarkRead: boolean }) {
 async function render(canMarkRead = false) {
   if (!root) { container = document.createElement('div'); root = createRoot(container); }
   await act(async () => root!.render(createElement(Probe, { canMarkRead })));
+  // A viewport receipt is separate from loading/entering the chat.
+  result.markReadThrough(200);
 }
 beforeEach(() => { vi.clearAllMocks(); h.auth.accountGeneration = 1; h.metadataVerified = true; h.focused = true; h.language = "en"; h.resourceId = 'bot-1'; h.sessionId = 'task-1'; h.link.status = 'online'; h.link.connectionEpoch = 1; h.store.getSessionDeviceId.mockReturnValue(undefined); });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 
 describe('companion task visibility refresh', () => {
+  it('does not acknowledge on entry and never acknowledges beyond the rendered tail', async () => {
+    h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { lastReplyAt: 200 } });
+    container = document.createElement('div'); root = createRoot(container);
+    await act(async () => root!.render(createElement(Probe, { canMarkRead: true })));
+    expect(h.markRead).not.toHaveBeenCalled();
+    result.markReadThrough(100);
+    expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'bot-1', 100);
+    result.markReadThrough(300);
+    expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'bot-1', 200);
+  });
   it('does not mark read until the entered task has rendered its synchronized history', async () => {
     h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { lastReplyAt: 200 } });
     await render(false);

@@ -155,6 +155,8 @@ export interface BotGroupSummary {
   /** 项目文件夹; null means the group's own folder. */
   projectDir: string | null;
   lastMessage: BotGroupLastMessage | null;
+  /** Latest visible Bot reply, independent of user messages and runtime activity. Older hosts omit it. */
+  lastReplyAt?: number;
   speakingBotIds: string[];
   /** The organizer while it works out a plan (sidebar 「正在安排」). */
   planningBotId: string | null;

@@ -7640,6 +7640,8 @@
   },
   "sidebar": {
     "backToSessions": "Back to sessions",
+    "taskAttentionCount": "Tasks needing attention: {{count}}",
+    "teammateUnreadCount": "Unread chats: {{count}}",
     "vendorReadiness": {
       "loading": "Checking availability",
       "ready": "Ready",

@@ -7638,6 +7638,8 @@
   },
   "sidebar": {
     "backToSessions": "返回任務",
+    "taskAttentionCount": "{{count}} 個任務待關注",
+    "teammateUnreadCount": "{{count}} 段對話未讀",
     "vendorReadiness": {
       "loading": "正在檢查可用狀態",
       "ready": "已就緒",

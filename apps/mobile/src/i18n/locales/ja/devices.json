@@ -528,6 +528,8 @@
     "viewAllRuns": "すべての実行 {{count}} 回を表示"
   },
   "companions": {
+    "taskAttentionCount": "確認が必要なタスク：{{count}}",
+    "unreadChatCount": "未読のチャット：{{count}}",
     "messageSent": "バックグラウンドタスクにメッセージを送信しました",
     "sentTo": "{{name}} にメッセージを送信",
     "receivedFrom": "{{name}} からのメッセージ",

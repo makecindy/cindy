@@ -1,3 +1,5 @@
+import { useNavigationAttention } from '@/lib/navigationAttentionStore';
+import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { botRosterLabel } from '../../../shared/botCreation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -53,21 +55,16 @@ import {
   formatBotListTimestamp,
   formatBotUnreadBadge,
 } from './botListDisplay';
-import { subscribeBotReadState } from './botReadState';
 import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
 import {
   canonicalBotSessionId,
   duplicateBotProfile,
-  refreshBotProfiles,
   setBotHidden,
   setBotPinned,
   useBotProfiles,
   useBotUnreadCounts,
   type BotProfile,
 } from './botStore';
-
-/** Debounce for message-driven refreshes: one turn writes many rows. */
-const MESSAGE_REFRESH_DEBOUNCE_MS = 800;
 
 /**
  * 未读药丸。用的是登记在 DESIGN.md §10 的窄作用域 token `--bot-unread-bg` /
@@ -81,6 +78,7 @@ const UNREAD_BADGE_CLASS =
 function BotsSidebarContent() {
   const { navigateToView } = useActiveMainView();
   const { t } = useTranslation();
+  const navigationCounts = useNavigationAttention();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { botId, sessionId, deviceId, groupId } = useParams();
@@ -251,53 +249,6 @@ function BotsSidebarContent() {
   // 曾经这里还按 bot 逐个拉 `getBotHealth` 只为在行尾画一个状态图标。图标下线之后
   // 这一轮 N 次 IPC 也一起下线——列表不再为一个不显示的东西查询。
 
-  // A chat list has to move when a message lands. There is no Bot-scoped
-  // message push, so reuse the existing localDb message broadcast and only
-  // refresh when the row belongs to a Bot task (a normal Cindy chat must not
-  // make the Bots list re-query).
-  useEffect(() => {
-    const botSessionIds = new Set<string>();
-    for (const bot of bots) {
-      for (const session of withoutBotGroupLanes(bot.sessions)) botSessionIds.add(session.id);
-    }
-    if (botSessionIds.size === 0) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const subscribe = window.electronAPI?.localDb?.messages?.onCreated;
-    if (typeof subscribe !== 'function') return;
-    const unsubscribe = subscribe((payload: unknown) => {
-      const sessionId = (payload as { sessionId?: unknown } | null)?.sessionId;
-      if (typeof sessionId !== 'string' || !botSessionIds.has(sessionId)) return;
-      if (timer) return;
-      timer = setTimeout(() => {
-        timer = null;
-        refreshBotProfiles();
-      }, MESSAGE_REFRESH_DEBOUNCE_MS);
-    });
-    return () => {
-      if (timer) clearTimeout(timer);
-      unsubscribe?.();
-    };
-  }, [bots]);
-
-  // Unread counts are computed main-side against the read positions this
-  // renderer owns, so a read position moving (the user opened a Bot chat, or
-  // kept watching one) has to re-ask for the list. Same debounce as the
-  // message feed: a streaming turn advances the position row by row.
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const unsubscribe = subscribeBotReadState(() => {
-      if (timer) return;
-      timer = setTimeout(() => {
-        timer = null;
-        refreshBotProfiles();
-      }, MESSAGE_REFRESH_DEBOUNCE_MS);
-    });
-    return () => {
-      if (timer) clearTimeout(timer);
-      unsubscribe();
-    };
-  }, []);
-
   const renderBotContextMenu = (bot: BotProfile, selected: boolean) => (
     <DropdownMenu
       open={contextMenu?.botId === bot.id}
@@ -388,6 +339,8 @@ function BotsSidebarContent() {
           <SidebarIconButton
             icon={ArrowLeft}
             label={t('sidebar.backToSessions')}
+            aria-description={navigationCounts.tasks > 0 ? t('sidebar.taskAttentionCount', { count: navigationCounts.tasks }) : undefined}
+            badge={<NavigationCountBadge count={navigationCounts.tasks} label={t('sidebar.taskAttentionCount', { count: navigationCounts.tasks })} />}
             onClick={() => navigateToView('cc-agent')}
           />
         )}

@@ -31,6 +31,7 @@ vi.mock('react-native', () => {
   };
 });
 vi.mock('expo-router', () => ({
+  useIsFocused: () => true,
   Stack: { Screen: () => null },
   useRouter: () => ({ back: vi.fn(), replace: vi.fn() }),
   useFocusEffect: (effect: () => void) => useEffect(effect, [effect]),

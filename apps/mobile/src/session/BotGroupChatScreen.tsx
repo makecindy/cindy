@@ -42,6 +42,9 @@ import {
   openBotGroupPlan,
 } from '@cindy/maker-shared/botGroupPresentation';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from '@cindy/maker-shared/botTimeline';
+import { markRemoteResourceRead } from '@/device-link/remoteResourceCache';
+import { useIsFocused } from 'expo-router';
+import { AppState } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton, MainWindowEmptyState } from '@/components/MobilePrimitives';
@@ -106,6 +109,18 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
   const scrollRef = useRef<ScrollView>(null);
   const stickToBottom = useRef(true);
   const group = chat.state.kind === 'ready' ? chat.state.group : null;
+  const focused = useIsFocused();
+  const acknowledge = useCallback(() => {
+    if (!focused || AppState.currentState !== 'active' || !stickToBottom.current || !group) return;
+    const at = group.messages.reduce((latest, message) => message.kind === 'message' && message.authorKind === 'bot'
+      ? Math.max(latest, message.createdAt) : latest, 0);
+    if (at > 0) void markRemoteResourceRead(user?.id ?? '', deviceId, groupId, at);
+  }, [focused, group, user?.id, deviceId, groupId]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(acknowledge);
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') acknowledge(); });
+    return () => { cancelAnimationFrame(frame); subscription.remove(); };
+  }, [acknowledge]);
   // The list row seeds the header while the first read is in flight (display only).
   const cachedRow = group ? null : readRemoteCollectionCache(`${user?.id ?? ''}:${accountGeneration}`, BOT_GROUP_REMOTE_COLLECTION_ID)
     .find((row) => row.host.deviceId === deviceId && row.item.ref.id === groupId) ?? null;
@@ -186,6 +201,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     stickToBottom.current = contentSize.height - contentOffset.y - layoutMeasurement.height < STICK_TO_BOTTOM_PX;
+    acknowledge();
   };
 
   const title = group?.name ?? (cachedRow ? resolveRemoteText(cachedRow.item.display.title, i18n.language) : '');

@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FeatureSidebarSlotProvider, useFeatureContentHeader } from '../../feature-context';
+import { markBotRead, getBotLastReadAt, botGroupReadKey, resetBotReadStateForTests } from '../botReadState';
 import { BotGroupChatView } from '../BotGroupChatView';
 import type {
   BotGroupChangedPayload,
@@ -694,4 +695,30 @@ describe('BotGroupChatView', () => {
       await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
     });
   });
+});
+
+ it('acknowledges only visible group replies at the tail and preserves new replies while reading above it', async () => {
+  resetBotReadStateForTests();
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  markBotRead(botGroupReadKey('g1'), 100);
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+    msg({ id: 'b', authorKind: 'bot', content: 'First reply', createdAt: 200 }),
+    msg({ id: 'u', sequence: 2, content: 'My message', createdAt: 900 }),
+  ] }) });
+  const view = renderView();
+  try {
+    await screen.findByText('First reply');
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    const scroll = view.container.querySelector('.overflow-y-auto.px-5') as HTMLElement;
+    Object.defineProperties(scroll, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 100 } });
+    scroll.scrollTop = 0; fireEvent.scroll(scroll);
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'new', authorKind: 'bot', content: 'New reply', createdAt: 1200 })] }) });
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await screen.findByText('New reply');
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    scroll.scrollTop = 900; fireEvent.scroll(scroll);
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(1200);
+  } finally { focus.mockRestore(); resetBotReadStateForTests(); }
 });

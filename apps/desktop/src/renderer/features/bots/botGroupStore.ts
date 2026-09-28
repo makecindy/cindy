@@ -8,6 +8,7 @@
  * 一律丢弃（electron-security-and-process-boundaries §4–5：renderer 不持有真相）。
  */
 import { useSyncExternalStore } from 'react';
+import { seedBotGroupReadState } from './botReadState';
 
 import {
   getDataOwnerGeneration,
@@ -87,6 +88,7 @@ export function refreshBotGroups(): void {
       // Every change kind re-reads the list, including 'plan' (open-plan status in the row).
       const result = await api.listBotGroups();
       if (!isCurrent()) return;
+      if (result.ok) seedBotGroupReadState(result.groups);
       // 失败时保留上一份列表：侧栏不因一次读失败把所有群清空。
       applySnapshot(result.ok ? { groups: result.groups, loaded: true } : { ...snapshot, loaded: true });
     } catch {

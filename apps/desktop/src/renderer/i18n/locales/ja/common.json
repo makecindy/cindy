@@ -7638,6 +7638,8 @@
   },
   "sidebar": {
     "backToSessions": "セッションに戻る",
+    "taskAttentionCount": "確認が必要なタスク：{{count}}",
+    "teammateUnreadCount": "未読のチャット：{{count}}",
     "vendorReadiness": {
       "loading": "利用可否を確認中",
       "ready": "準備完了",
