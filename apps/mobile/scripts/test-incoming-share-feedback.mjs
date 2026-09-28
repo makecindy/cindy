@@ -18,7 +18,15 @@ function runPhase(phase, command, args, timeout) {
     console.error(
       `[share-feedback] PASS ${phase} (${Math.round(performance.now() - started)}ms)`,
     );
+    return true;
   } catch (error) {
+    // Compilation doubles as the capability check: a separate --version process
+    // can time out before the real test starts. Only a missing compiler may skip.
+    if (phase === "compile" && error.code === "ENOENT") {
+      console.error("[share-feedback] SKIP compile (swiftc not found)");
+      process.exitCode = 77;
+      return false;
+    }
     console.error(
       `[share-feedback] FAIL ${phase} (${Math.round(performance.now() - started)}ms, ${error.code ?? `exit ${error.status}`})`,
     );
@@ -160,8 +168,9 @@ try {
   writeFileSync(file, harness);
   // Allow cold Swift compilation extra headroom on shared CI runners. Keep the
   // behavior executable's budget short: its clock and callbacks are simulated.
-  runPhase("compile", "swiftc", [file, "-o", join(dir, "test")], 120_000);
-  runPhase("execute", join(dir, "test"), [], 10_000);
+  if (runPhase("compile", "swiftc", [file, "-o", join(dir, "test")], 120_000)) {
+    runPhase("execute", join(dir, "test"), [], 10_000);
+  }
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
