@@ -501,7 +501,7 @@ export function AppearanceSection() {
       </h2>
 
       {/* Theme card — rounded 12, Card bg, 1px Board, padding 20 */}
-      <div
+      <div id="settings-search-settings-appearance-themeLabel"
         className={cn(
           'flex flex-col gap-[14px] rounded-xl p-5',
           'bg-[var(--settings-theme-card-bg)]',
@@ -509,7 +509,7 @@ export function AppearanceSection() {
         )}
       >
         {/* Appearance mode */}
-        <p
+        <p id="settings-search-settings-appearance-modeLabel"
           className="text-13 font-medium text-[var(--settings-section-sublabel)]"
           style={{ letterSpacing: '0.12px' }}
         >
@@ -577,7 +577,7 @@ export function AppearanceSection() {
         />
 
         <div className="flex flex-col gap-2 pt-1">
-          <p
+          <p id="settings-search-settings-appearance-localThemes-title"
             className="text-13 font-medium text-[var(--settings-section-sublabel)]"
             style={{ letterSpacing: '0.12px' }}
           >
@@ -622,7 +622,7 @@ export function AppearanceSection() {
         ) : null}
       </div>
 
-      <div
+      <div id="settings-search-settings-appearance-font-uiFamily-label"
         className={cn(
           'flex flex-col gap-[14px] rounded-xl p-5',
           'bg-[var(--settings-theme-card-bg)]',
@@ -646,7 +646,7 @@ export function AppearanceSection() {
         <div className="flex flex-col gap-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p
+              <p id="settings-search-settings-appearance-font-uiSize-label"
                 className="text-13 font-medium text-[var(--settings-section-sublabel)]"
                 style={{ letterSpacing: '0.12px' }}
               >
@@ -708,7 +708,8 @@ export function AppearanceSection() {
 
         <div className="h-px bg-[var(--settings-input-border)]" />
 
-        <FontFamilyPicker
+        <div id="settings-search-settings-appearance-font-codeFamily-label">
+          <FontFamilyPicker
           label={t('settings.appearance.font.codeFamily.label')}
           description={t('settings.appearance.font.codeFamily.description')}
           ariaLabel={t('settings.appearance.font.codeFamily.aria')}
@@ -719,14 +720,15 @@ export function AppearanceSection() {
           previewFallbackFamily="var(--app-font-code-default)"
           onChange={setCodeFamily}
           onReset={resetCodeFamily}
-        />
+          />
+        </div>
 
         <div className="h-px bg-[var(--settings-input-border)]" />
 
         <div className="flex flex-col gap-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p
+              <p id="settings-search-settings-appearance-font-codeSize-label"
                 className="text-13 font-medium text-[var(--settings-section-sublabel)]"
                 style={{ letterSpacing: '0.12px' }}
               >
@@ -796,9 +798,9 @@ export function AppearanceSection() {
           'border border-[var(--settings-theme-card-border)]',
         )}
       >
-        <div className="flex items-center justify-between gap-3">
+        <div className="cindy-segmented-row">
           <div className="flex min-w-0 flex-col gap-1">
-            <p
+            <p id="settings-search-settings-appearance-sidebarCardMode-label"
               className="text-13 font-medium text-[var(--settings-section-sublabel)]"
               style={{ letterSpacing: '0.12px' }}
             >
@@ -821,9 +823,9 @@ export function AppearanceSection() {
           />
         </div>
 
-        <div className="flex items-center justify-between gap-3">
+        <div className="cindy-segmented-row">
           <div className="flex min-w-0 flex-col gap-1">
-            <p
+            <p id="settings-search-settings-appearance-sidebarMainListMode-label"
               className="text-13 font-medium text-[var(--settings-section-sublabel)]"
               style={{ letterSpacing: '0.12px' }}
             >
@@ -845,9 +847,9 @@ export function AppearanceSection() {
           />
         </div>
 
-        <div className="flex items-center justify-between gap-3">
+        <div className="cindy-segmented-row">
           <div className="flex min-w-0 flex-col gap-1">
-            <p
+            <p id="settings-search-settings-appearance-ghostPanelRestore-label"
               className="text-13 font-medium text-[var(--settings-section-sublabel)]"
               style={{ letterSpacing: '0.12px' }}
             >

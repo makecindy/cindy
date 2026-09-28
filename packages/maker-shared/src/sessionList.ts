@@ -643,7 +643,12 @@ export function buildSessionScheduleIndex(
       const firedAt = toMillis(run.firedAt);
       const existing = index.get(run.sessionId);
       const unreadRunIds = existing ? [...existing.unreadRunIds] : [];
-      if (isUnreadScheduleRun(run)) unreadRunIds.push(run.id);
+      // A recovered failure remains in history, but no longer represents an
+      // unread task result. Use the same recovery set as the in-task notice.
+      const isUnreadFailure = activeFailures.has(run.id) && isUnreadFailedScheduleRun(run);
+      if (isUnreadScheduleRun(run) && (run.status === 'success' || isUnreadFailure)) {
+        unreadRunIds.push(run.id);
+      }
       const candidate = activeFailures.has(run.id) ? { runId: run.id, firedAt, scheduleId: run.scheduleId, failureKind: classifyScheduleFailure(run) } : undefined;
       const latestFailedRun = candidate && (!existing?.latestFailedRun || compareFailedScheduleRuns(candidate, existing.latestFailedRun) > 0)
         ? candidate : existing?.latestFailedRun;
@@ -657,7 +662,7 @@ export function buildSessionScheduleIndex(
         unreadRunIds,
         unreadCount: unreadRunIds.length,
         latestFailedRun,
-        hasUnreadFailedRun: existing?.hasUnreadFailedRun === true || isUnreadFailedScheduleRun(run),
+        hasUnreadFailedRun: existing?.hasUnreadFailedRun === true || isUnreadFailure,
         running,
         latestRunAt: Math.max(existing?.latestRunAt ?? 0, firedAt),
       });

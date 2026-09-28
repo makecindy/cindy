@@ -24,6 +24,7 @@ import { isCindyGatewayProxyTokenInvalidError, isResponsesLiteParallelToolCallsE
 import {
   isStreamInterruptedErrorMessage,
 } from '@/utils/streamInterruptError';
+import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
 import { decodeRemoteErrorMessage, remoteErrorI18nKey } from '../../lib/makerChatStore';
 import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
 import { getToolLoopI18nKey } from './toolLoopI18n';
@@ -34,6 +35,7 @@ export function ErrorMessageCard({
   reason,
   providerId,
   toolLoop,
+  sessionSource,
   kind = 'reply-error',
 }: {
   message: string;
@@ -43,11 +45,16 @@ export function ErrorMessageCard({
   providerId?: string;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails;
+  /** 当前任务来源。个人微信不能建议切到完全访问。 */
+  sessionSource?: string | null;
 }) {
   const { t, i18n } = useTranslation();
   const [showRaw, setShowRaw] = useState(false);
   const decoded = decodeRemoteErrorMessage(message);
-  const remoteKey = remoteErrorI18nKey(message);
+  const parsedRemoteKey = remoteErrorI18nKey(message);
+  const remoteKey = parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
+    ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource)
+    : parsedRemoteKey;
   const remoteGuidance = remoteKey && i18n.exists(remoteKey) ? t(remoteKey) : undefined;
   const i18nKey = reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
   const isStreamInterrupted = isStreamInterruptedErrorMessage(message, reason);

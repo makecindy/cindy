@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { parseRemoteResourceGetRequest } from '@cindy/device-link';
 const h = vi.hoisted(() => ({
   invoke: vi.fn(),
+  markRead: vi.fn(),
   pin: vi.fn(),
   merge: vi.fn(),
   view: vi.fn(),
@@ -13,7 +14,7 @@ const h = vi.hoisted(() => ({
 vi.mock('react-router-dom', () => ({ useParams: () => ({ deviceId: 'home', botId: 'writer' }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../useRemoteBots', () => ({
-  markRemoteBotRead: vi.fn(),
+  markRemoteBotRead: h.markRead,
   useRemoteBots: () => [
     {
       id: 'writer',
@@ -45,6 +46,7 @@ vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
 }));
 import { RemoteBotSessionView } from '../RemoteBotSessionView';
 beforeEach(() => {
+  h.markRead.mockClear();
   h.online = true;
   h.lastReplyAt = 0;
   h.pin.mockReset();
@@ -78,12 +80,15 @@ it('resolves the latest canonical task and pins its host before mounting writabl
       botIdentity: expect.objectContaining({ id: 'writer', sessionId: 'new-canonical' }),
     }),
   );
+  expect(h.markRead).not.toHaveBeenCalled();
   const identity = h.view.mock.lastCall![0].botIdentity;
   const requestCount = h.invoke.mock.calls.length;
   h.lastReplyAt = 123;
   rerender(<RemoteBotSessionView />);
   expect(h.view.mock.lastCall![0].botIdentity).toBe(identity);
   expect(h.invoke).toHaveBeenCalledTimes(requestCount);
+  act(() => h.view.mock.lastCall![0].onBotReadThrough(100));
+  expect(h.markRead).toHaveBeenLastCalledWith('home', 'writer', 100);
   h.online = false;
   rerender(<RemoteBotSessionView />);
   await waitFor(() =>

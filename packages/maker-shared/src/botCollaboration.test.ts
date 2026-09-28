@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { placeBotTaskCardsAfterIntroduction } from './botCollaboration.js';
+import { placeBotTaskCardsAfterIntroduction, readBotCollaborationMeta } from './botCollaboration.js';
 
 describe('task card placement', () => {
   const classify = (s: string) =>
@@ -33,4 +33,17 @@ it('uses the launch explanation even if a preliminary reply preceded dispatch', 
   const classify = (s: string) => s === 'user' ? 'boundary' as const : s === 'card' ? 'task' as const : 'prose' as const;
   expect(placeBotTaskCardsAfterIntroduction(['user', 'Looking into it', 'card', 'Started the background task'], classify))
     .toEqual(['user', 'Looking into it', 'Started the background task', 'card']);
+});
+
+describe('result receipt title compatibility', () => {
+  const receipt = { v: 1, role: 'delegation-result', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Cindy',
+    toBotId: null, toBotName: 'Cindy', parentSessionId: 'parent', childSessionId: 'child', objective: 'Instructions',
+    result: { runSequence: 1, status: 'completed', text: 'Result', artifacts: [] } };
+  it('reads old receipts and preserves an optional frozen title', () => {
+    expect(readBotCollaborationMeta(receipt)?.result).toEqual(receipt.result);
+    expect(readBotCollaborationMeta({ ...receipt, result: { ...receipt.result, title: 'Task title' } })?.result?.title).toBe('Task title');
+  });
+  it('rejects a malformed title without turning it into UI text', () => {
+    expect(readBotCollaborationMeta({ ...receipt, result: { ...receipt.result, title: 42 } })).toBeNull();
+  });
 });

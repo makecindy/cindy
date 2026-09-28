@@ -41,6 +41,7 @@ import type { PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
 import { prStatusKey, MAX_STATUS_QUERIES, PR_STATUS_REFRESH_INTERVAL_MS } from '@/lib/prStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import { isRemoteDeviceMarkedDisconnected } from '@/features/device-link/remoteProjectsStore';
+import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('PrRefsContext');
@@ -399,6 +400,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         // 设备明确断线时不发注定失败的隧道调用(fail-open:shard 缺失照常尝试)。
         // 不写任何状态,重连后的下一个触发点(周期 / 聚焦 / 引用到位)自然恢复。
         if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return;
+        if (deviceId && unresponsiveDevicesStore.has(deviceId)) return;
         const results = deviceId
           ? ((await window.electronAPI.deviceLink.invoke(deviceId, 'git-context:pr-status', [
               { sessionId, queries },
@@ -441,6 +443,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     // 断线判定本地同步可得,先看一眼再发(2026-08-13 用户裁决)。fail-open:
     // shard 缺失(尚未建立 / 设备已移除)照常尝试,语义见 isRemoteDeviceMarkedDisconnected。
     if (isRemoteDeviceMarkedDisconnected(deviceId)) return;
+    if (unresponsiveDevicesStore.has(deviceId)) return;
     const gen = ownerGenRef.current;
     // 同代在飞才挡(见 inFlightSessions 注释)。
     if (remoteRefsInFlight.current.get(sessionId) === gen) return;

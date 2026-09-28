@@ -22,6 +22,7 @@ import { getMobileNotifyGeneration, sendMobileSessionNotify } from '../device-li
 import type { WecomGroupNotificationPublisher } from '../wecomGroupNotification';
 
 export interface DesktopNotifierDeps {
+  hasUnrecoveredMatchingFailure?: (run: ScheduleRun) => Promise<boolean>;
   getMainWindow: () => BrowserWindow | null;
   feishuIm: FeishuIM;
   logger: Logger;
@@ -41,6 +42,15 @@ export class DesktopNotifier implements Notifier {
     // 链路代次在任何 await 之前捕获:飞书分支的 await 期间可能发生登出/换号,
     // 发送侧按代次不一致丢弃,旧账号调度的通知不会进新账号的链路。
     const generation = getMobileNotifyGeneration();
+    if (schedule.silentWhenIdle && run.status === 'failed') {
+      try {
+        if (await this.deps.hasUnrecoveredMatchingFailure?.(run)) return;
+      } catch (error) {
+        // A failed history lookup must never hide the original failure.
+        this.deps.logger.warn?.('scheduler failure dedup lookup failed', error);
+      }
+    }
+    if (getMobileNotifyGeneration() !== generation) return;
     if (
       schedule.notify.desktop &&
       this.deps.shouldNotifyDesktop() &&

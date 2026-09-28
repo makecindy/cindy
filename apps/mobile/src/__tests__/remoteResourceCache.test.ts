@@ -13,6 +13,26 @@ const rows = (deviceId: string, lastReplyAt: number) => [{
   item: { ref: { collectionId: 'teammates', kind: 'bot', id: 'writer' }, display: { title: 'Writer', lastReplyAt }, revision: '1', links: [] },
 }];
 beforeEach(async () => { await clearRemoteResourceCache(); disk.clear(); });
+it('does not restore routines from an old offline snapshot while retaining companions', async () => {
+  const home = [
+    { id: 'routines', title: '例行任务', resourceKind: 'routine', targets: [{ deviceId: 'home', deviceName: 'Home' }] },
+    { id: 'teammates', title: 'Companions', resourceKind: 'bot', targets: [{ deviceId: 'home', deviceName: 'Home' }] },
+  ];
+  disk.set('cindy.remoteResources.v1.alice', JSON.stringify({
+    home,
+    items: { teammates: rows('home', 100), routines: [{
+      ...rows('home', 100)[0],
+      item: { ref: { collectionId: 'routines', kind: 'routine', id: 'daily' }, display: { title: 'Daily' }, revision: '1', links: [] },
+    }] },
+    read: {},
+  }));
+  const snapshot = await readRemoteResourceSnapshot('alice');
+  expect(snapshot.home.map((item) => item.id)).toEqual(['teammates']);
+  expect(snapshot.items.routines).toBeUndefined();
+  expect(snapshot.items.teammates).toHaveLength(1);
+  await cacheRemoteResourceHome('alice', home);
+  expect((await readRemoteResourceSnapshot('alice')).home.map((item) => item.id)).toEqual(['teammates']);
+});
 it('keeps device-qualified read positions and treats only later host replies as unread', async () => {
   await cacheRemoteResourceItems('alice', 'teammates', [...rows('home', 100), ...rows('office', 100)]);
   expect(isRemoteResourceUnread('alice', 'home', 'writer', 100)).toBe(false);

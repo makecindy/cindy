@@ -137,6 +137,14 @@ export const CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1 = 'maker-event-batch-v1'
 /** Accepts ordered current-text snapshots and history repair hints, including after backpressure. */
 export const CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1 = 'session-text-snapshot-v1';
 
+/**
+ * 后台链路(link-open / link-accept 双向声明)。控制端在本机没有订阅对端任何 topic 时建链
+ * 即声明:被控端不装 legacy `'*'` 兼容订阅 —— 不亮被控横幅、不转发推送、不挡无人值守更新
+ * 重启 —— 直到控制端显式 subscribe。被控端在 link-accept 声明支持;旧被控端忽略该能力,
+ * 照旧装 legacy `'*'`,只读类后台请求须先确认对端支持(见 desktop remoteBackgroundInvoke)。
+ */
+export const DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1 = 'background-link-v1';
+
 export interface LinkAcceptPayload {
   appVersion: string;
   /** 被控端 allowlist 的指纹,便于控制端探测版本差异 */

@@ -19,14 +19,7 @@ import { useTranslation } from 'react-i18next';
 import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { ConnectionNoticeProvider } from '@/components/ConnectionNoticeOverlay';
-import {
-  fontWeight,
-  radius,
-  spacing,
-  typeScale,
-  useThemedStyles,
-  type ThemeColors,
-} from '@/theme';
+import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, type ThemeColors } from '@/theme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AdaptiveWindowProvider } from '@/platform/AdaptiveWindow';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
@@ -45,6 +38,7 @@ import {
 } from '@/device-link/DeviceLinkContext';
 import { PushNotificationsBridge } from '@/notifications/PushNotificationsBridge';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
+import { OutsideTapProvider } from '@/platform/OutsideTap';
 // import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
 import '@/i18n';
 import { LocaleProvider } from '@/i18n/useLocale';
@@ -86,6 +80,8 @@ import { IncomingShareBridge } from '@/session/IncomingShareBridge';
 import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 
+const holdSplash = () => undefined;
+
 function NavigationGate() {
   const windowGeometry = useAdaptiveWindow();
   // Establish chrome before push starts, rather than revealing a hidden bar after mount.
@@ -94,7 +90,7 @@ function NavigationGate() {
   const auth = useAuth();
   const router = useRouter();
   const segments = useSegments();
-  const { mode, colors } = useTheme();
+  const { mode, colors, preferenceReady } = useTheme();
   const { releaseSplash, splashActive } = useStartupSplash();
   // iOS 状态栏样式走 react-native-screens 的 VC-based 通道(Info.plist 已翻
   // UIViewControllerBasedStatusBarAppearance=YES):iOS 27 起 UIKit 不再接受
@@ -118,7 +114,8 @@ function NavigationGate() {
 
   // 登录与本机首页偏好就绪、默认入口重定向完成后再释放常驻 splash。
   // 深链不经过 index；同样在这里释放，避免先露出任务再跳回伙伴。
-  useHomeEntrySplashRelease(releaseSplash);
+  // 显示模式偏好读回前不释放，避免已选浅色 / 深色的用户先看到系统外观再切换。
+  useHomeEntrySplashRelease(preferenceReady ? releaseSplash : holdSplash);
 
   // 启动链走完 = 本次热更 reload(如果有)确实落地:清掉 reload 闸门记录。
   // 只在目标 update 已成为当前运行版本时才清,判定在 markStartupOtaLaunchSuccess 内。
@@ -450,6 +447,7 @@ function RootLayout() {
   }
   return (
     <GestureHandlerRootView style={styles.gestureRoot}>
+      <OutsideTapProvider>
       <SafeAreaProvider>
         <AdaptiveWindowProvider>
         <ThemeProvider>
@@ -471,6 +469,7 @@ function RootLayout() {
         </ThemeProvider>
         </AdaptiveWindowProvider>
       </SafeAreaProvider>
+      </OutsideTapProvider>
     </GestureHandlerRootView>
   );
 }
@@ -553,11 +552,13 @@ const makeGateStyles = (colors: ThemeColors) =>
     title: {
       color: colors.textPrimary,
       fontSize: typeScale.title,
-      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.title,
+      fontWeight: fontWeight.semibold,
     },
     subtitle: {
       color: colors.textSecondary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       textAlign: 'center',
     },
     retryButton: {
@@ -571,8 +572,9 @@ const makeGateStyles = (colors: ThemeColors) =>
       opacity: 0.7,
     },
     retryLabel: {
-      color: colors.surface,
+      color: colors.ctaText,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
   });

@@ -87,6 +87,12 @@ import type { AutoReviewDelegate, AutoReviewDecision, AutoReviewRequest } from '
 import type { ReviewableAction } from './shared/auto-review.js';
 import type { ClaudeSubagentModelAccessResult } from './claude-code/subagent-model-access.js';
 
+export type CodexLocalAuthPolicyResolution = 'isolated' | 'legacy-shared' | {
+  policy: 'isolated' | 'legacy-shared';
+  /** Synchronous check of the host routing transaction that produced this policy. */
+  isCurrent: () => boolean;
+};
+
 export interface AgentCapabilityAdditions {
   /** Extra models exposed by the host for this agent. Existing built-in ids are ignored. */
   availableModels?: readonly ModelDescriptor[];
@@ -218,6 +224,8 @@ export interface PiNativeModelCost {
 
 /** BYOM:写进 pi models.json 的一个模型(原生 provider 块内)。 */
 export interface PiNativeModelSpec {
+  /** Current connection's explicit support for OpenAI priority service tier. */
+  supportsFastMode?: boolean;
   /** Cindy/public model id used by provider-aware routing and the UI. */
   id: string;
   /** PI provider's native model id; omitted when it is identical to id. */
@@ -460,6 +468,8 @@ export interface LocalAgentProcessRegistration {
 }
 
 export interface CodexLocalCredentialModeSwitchContext {
+  /** Exact local host being replaced; omitted by legacy hosts. */
+  hostKey?: string;
   fromMode?: AgentCredentialMode;
   /**
    * 当前 host 的归一化生效形态(createHost 时按 auth fallback 推出并登记)。
@@ -479,6 +489,11 @@ export interface RefreshLocalModelsOptions {
    * session hosts never need a credential-mode switch.
    */
   credentialMode?: AgentCredentialMode;
+  /**
+   * Claude Code:把本次读到的 SDK `supportedModels()` 原样交给调用方,而不是全局
+   * 捕获监听器,让调用方按发起时的登录代际决定是否采用。
+   */
+  onSupportedModels?: (models: unknown[]) => void;
 }
 
 export interface ClaudeSubagentTaskRegistration {
@@ -672,6 +687,8 @@ export interface PiSubagentRunnerLaunchRequest {
 }
 
 export interface AgentDeps {
+  /** Opaque companion credential identity, freshly resolved at startup. No values enter the harness. */
+  resolveSessionEnvironment?: (sessionId: string) => Promise<{ identity: string; assertCurrent?(): void } | undefined>;
   /** Cindy-only local Skill overrides. Freeze at native runtime startup; never apply to SSH. */
   getDisabledSkillPaths?: () => readonly string[];
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
@@ -908,9 +925,11 @@ export interface AgentDeps {
    * cindy-bridge 的 vision 工具读取。缺省 = 不注入（视觉桥工具不可用，零干扰）。
    * model 参数供 host 按 session 模型判定是否命中视觉桥目标模型——未命中返回 null，
    * 保证非目标/已有视觉能力的 Pi 模型不注册 vision 工具、不改变工具面（零干扰）。
+   * sessionId 供需要上游会话头的后端（OpenCode Go）确定性派生头值：spawn env 必须
+   * 同 session 重建逐字节稳定（pi-harness §4.10），不得用随机值。
    * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
    */
-  resolvePiVisionBridgeEnv?: (model: string) => Record<string, string> | null;
+  resolvePiVisionBridgeEnv?: (model: string, sessionId?: string) => Record<string, string> | null;
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native
@@ -967,6 +986,13 @@ export interface AgentDeps {
     modelId: string,
   ) => number | null;
 
+  /** Local disk-auth policy, independent of the actual Provider credential mode. */
+  resolveCodexLocalAuthPolicy?: (
+    providerId: string | null | undefined,
+    modelId: string,
+    signal?: AbortSignal,
+  ) => CodexLocalAuthPolicyResolution | Promise<CodexLocalAuthPolicyResolution>;
+
   /**
    * Per-model requested context window (user override first, explicit provider default second).
    * A one-session native catalog permits this window without changing sibling routes.
@@ -1008,6 +1034,9 @@ export interface AgentDeps {
       accountHostKey?: string;
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
+      /** Frozen disk OAuth policy; independent of the actual Provider credential. */
+      localAuthPolicy?: 'isolated' | 'legacy-shared';
+      hostScopeKey?: string;
       /** Original session request when the shared host was upgraded to a credential superset. */
       requestedCredentialMode?: AgentCredentialMode;
       /** Marks app-server work that must not share the normal local task host. */
@@ -1722,6 +1751,9 @@ export class TurnDispatchUnconfirmedError extends Error {
   }
 }
 
+/** Persistable evidence that native Pi compaction could not recover an upstream byte limit. */
+export const PI_REQUEST_BODY_RECOVERY_EXHAUSTED = 'PI_REQUEST_BODY_RECOVERY_EXHAUSTED';
+
 /** The provider explicitly rejected the turn before accepting any work. */
 export class TurnDispatchRejectedError extends Error {
   readonly code = 'TURN_DISPATCH_REJECTED';
@@ -1785,6 +1817,13 @@ export interface StartSessionOptions {
    * prices already-started requests with the tariff they actually used.
    */
   getPriceVariant?: () => 'standard' | 'priority';
+  /** Match completed proxy usage to its actual execution tariff, before preference-based pricing. */
+  resolveUsagePriceVariant?: (usage: {
+    threadId?: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+  }) => 'standard' | 'priority' | undefined;
   /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
   thinkingEnabled?: boolean;
   /**
@@ -1968,6 +2007,8 @@ export interface SendOptions {
    * 回调失败不得改变已经接受的 provider dispatch 结果。
    */
   onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
+  /** Exact accepted Pi input replaced by a zero-output retry; never match by text. */
+  retryTranscriptUserEntryId?: string;
   /**
    * 当前用户的展示名 (host / renderer 在调 send 时提供)。仅用于 turn-start 时
    * push status event 的文案 — agent 拼成 "<userName> Just Wait ..." 让 UI 个人化;
@@ -2074,6 +2115,11 @@ export interface BackgroundTaskSnapshot {
    * Omitted snapshots default to claude-code.
    */
   provider?: 'pi' | 'claude-code';
+  /**
+   * SDK 为该任务写入的输出文件(task_started 的 output_file)。主进程据此按
+   * (会话, 任务) 读取后台命令的最近输出,调用方不能自带路径。
+   */
+  outputFile?: string;
 }
 
 /**
@@ -2145,6 +2191,8 @@ export interface AgentSessionHandle {
   ): () => void;
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   readonly codexProxyActive?: boolean;
+  /** Local runtime identity, never serialized to the remote wire protocol. */
+  readonly codexHostKey?: string;
   /**
    * Codex-only: thread/start 或 thread/resume 响应确认的实际 model provider。
    * 这是 thread 级冻结身份，不随 thread/settings/update 的模型切换改变。
@@ -2605,6 +2653,13 @@ export abstract class BaseAgent {
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
     void opts;
     return this.throwNotSupported('forkSdkSession', 'sdk-missing');
+  }
+
+  async requiresCodexThreadHostTransfer(
+    opts: Pick<StartSessionOptions, 'sessionId' | 'model' | 'providerId' | 'reviewMode' | 'remoteHostId'> & { threadId: string },
+  ): Promise<boolean> {
+    void opts;
+    return false;
   }
 
   // ── Auth 透传到 deps.auth ────────────────────────────────────────────────

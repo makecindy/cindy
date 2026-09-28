@@ -12,7 +12,7 @@ vi.mock('electron', () => ({
 }));
 
 // Budget reconciliation does not exercise native account credential IO.
-vi.mock('../subscription-account-auth.js', () => ({ readClaudeAccountOAuth: () => null }));
+vi.mock('../subscription-account-auth.js', () => ({ subscriptionAccountKind: () => null }));
 
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: {

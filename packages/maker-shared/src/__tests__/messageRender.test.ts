@@ -204,8 +204,8 @@ describe('message render shared model', () => {
     expect(todo.todos).toEqual([{ content: 'Implement', status: 'completed', activeForm: undefined }]);
   });
 
-  it('keeps every sealed SDK-turn summary visible across a background auto-continuation', () => {
-    const items = buildMessageRenderItems([
+  function backgroundContinuation(mainSummary: string): MessageRenderItem<FixtureMessage>[] {
+    return buildMessageRenderItems([
       message({ kind: 'user', source: source('user', 'start', 1), body: 'start', label: 'user' }),
       message({
         kind: 'thinking',
@@ -215,8 +215,8 @@ describe('message render shared model', () => {
       }),
       message({
         kind: 'assistant',
-        source: source('main-summary', 'formal summary', 4),
-        body: 'formal summary',
+        source: source('main-summary', mainSummary, 4),
+        body: mainSummary,
         label: 'assistant',
         turnCompleted: true,
       }),
@@ -234,6 +234,19 @@ describe('message render shared model', () => {
         turnCompleted: true,
       }),
     ]);
+  }
+
+  // 后台唤醒(异步子 Agent、后台 shell)会在同一个 user turn 里盖多次 seal;
+  // 只有最后一次是收尾正文,更早的短句按过程文字折叠。
+  it('folds earlier short sealed replies when background work auto-continues the turn', () => {
+    const items = backgroundContinuation('Agents are still running; waiting for them.');
+
+    expect(items.map((item) => item.type)).toEqual(['message', 'work_group', 'message']);
+    expect(expectType(items[2], 'message').message.key).toBe('gate-followup');
+  });
+
+  it('keeps an earlier sealed delivery-prose summary visible across a background auto-continuation', () => {
+    const items = backgroundContinuation('## Summary\n\n- implemented\n- tested\n- verified');
 
     expect(items.map((item) => item.type)).toEqual([
       'message',

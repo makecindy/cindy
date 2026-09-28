@@ -12,10 +12,10 @@ import type { LoginNativeButtonProps } from './LoginNativeButton';
 export const hasNativeLoginButtons = true;
 
 /** Login's scaled layout owns the frame; SwiftUI owns activation and feedback.
- * RNHostView is reserved for existing brand artwork, never an inner Pressable. */
+ * RNHostView renders existing artwork and the fixed method-row layout, never an inner Pressable. */
 export function LoginNativeButton({ label, onPress, disabled, busy, testID,
   width, height, fontSize, style, variant = 'secondary', subtitle, children, trailingArtwork,
-  artworkSize = fontSize, showLabel = !children, accessibilityLabel: spokenLabel, selected,
+  artworkSize = fontSize, showLabel = !children, accessibilityLabel: spokenLabel, selected, content,
 }: LoginNativeButtonProps) {
   const { colors, mode } = useTheme();
   const prominent = variant === 'primary' || variant === 'circle';
@@ -35,7 +35,9 @@ export function LoginNativeButton({ label, onPress, disabled, busy, testID,
       foregroundStyle(foreground), accessibilityLabel(spokenLabel ?? label), disabledModifier(inert),
       ...(selected ? [accessibilityAddTraits(['isSelected'])] : []),
     ]}>
-      <HStack spacing={fontSize / 2}>
+      {content ? <VStack modifiers={[frame({ width, height })]}>
+        <RNHostView><View pointerEvents="none" style={{ width, height }}>{content}</View></RNHostView>
+      </VStack> : <HStack spacing={fontSize / 2}>
         {children ? <VStack modifiers={[frame({ width: artworkSize, height: artworkSize })]}>
           <RNHostView><View pointerEvents="none" style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>{children}</View></RNHostView>
         </VStack> : null}
@@ -48,7 +50,7 @@ export function LoginNativeButton({ label, onPress, disabled, busy, testID,
           <RNHostView><View pointerEvents="none" style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>{trailingArtwork}</View></RNHostView>
         </VStack> : null}
         {selected ? <Image systemName="checkmark" size={fontSize} /> : null}
-      </HStack>
+      </HStack>}
     </Button>
   </Host>;
 }

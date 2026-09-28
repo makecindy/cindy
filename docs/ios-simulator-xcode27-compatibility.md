@@ -44,9 +44,13 @@ registry version 为 2，旧 Xcode 26.4 记录保留。
   传给 WDA 构建、启动、Native 沙箱及 Helper。即使启动期间全局 Xcode 选择变化，同一实例
   及其恢复仍使用原绑定；新实例的新环境检查才读取新选择。未提供路径的旧内部调用保留
   启动时解析行为，不修改机器级选择。
-- HID 目标根据所选 SimulatorKit 的屏幕 API 与实际屏幕属性推导，和 framebuffer 绑定
-  同一 screenID，不按版本号特判。旧 API 缺少 `screen` selector 时保留 legacy target；
-  新 API 存在但属性缺失/屏幕身份不匹配时关闭输入能力，不盲发 legacy target。
+- HID 目标根据所选 SimulatorKit 的协议代际与实际屏幕属性推导，和 framebuffer 绑定
+  同一 screenID。旧 API 缺少 `screen` selector 时保留 legacy target；有屏幕 API 时
+  仍须区分 `screenType`：类型 0 在 Xcode 26 使用 `0x32`，Xcode 27 继续已验证的
+  `0x40000000 | screenID`；1/2 使用间接输入的 target 1，其余按 screenID 寻址。
+  类型 0 的代际来自实际装入的 SimulatorKit bundle 的 `DTXcode`，不从 iOS 版本或全局
+  Xcode 选择猜测；缺少有效代际、屏幕属性或屏幕身份不匹配时关闭输入能力。
+  这是消息格式兼容分支，不改变 Host 对未登记组合的准入策略，也不试发/重放两种目标。
 - Indigo 构造器内部也维护接触状态，因此串行范围包含消息构造、提交和完成；完成等待
   最多 1 秒，回调独立队列执行，NSError 原始内容不进入 Host 协议。
 - 完成等待超时会在释放串行锁前永久隔离该 Helper 的输入注入器；排队及后续的触控、取消、
@@ -147,3 +151,34 @@ runner 与全部 required workspace 单测通过；Desktop typecheck、Runtime `
 - 未运行最终 Developer ID 签名、公证后的 packaged native release gate。本地 ad-hoc
   结果不能代替该门禁，也不能把 WDA 锁屏 smoke 的失败标成通过。
   发版仍按 [正式发版说明](ios-simulator-release-guide.md) 重建、签名与公证整个应用。
+
+## 2026-09-28：Xcode 26.6 内置屏幕触控回归
+
+在 macOS `26.4 / 25E246`、Xcode `26.6 / 17F113`、iOS `26.5 / 23F77`、arm64 下，
+原逻辑将带有 `screen` API 的内置屏幕（`screenType=0`、`screenID=1`）误发往
+`0x40000001`。第一笔事件导致 `backboardd` 在
+`SimHIDVirtualServiceManager serviceForIndigoHIDData:` 断言崩溃；HID Mach port 随后从
+send right 变成 dead name，后续事件返回 `machPortInvalid`，Host 显示
+`Native HID could not send a gesture sample.`。这也会连带中断 WDA 和当前页面。
+
+本机 SimulatorKit（`DTXcode=2660`）的 digitizer 路由明确将类型 0 映射到 `0x32`；
+屏幕 API 的存在与此并不冲突。补齐旧工具链分支，同时保留 Xcode 27 已验证的寻址方式，
+以及间接输入和屏幕身份核验，并增加实际共用 Swift 源码的回归断言。
+临时错误/端口诊断已移除，未修改沙箱、Helper 控制协议或设备所有权规则。
+
+修复后的 required sandbox HID smoke 在独立临时设备上通过单指路径、实时拖动、双指、
+取消、进程崩溃后的重新连接与触摸释放断言；边缘系统手势仍未验证通过。测试结束回收
+自身设备。此次没有 Xcode 27 安装，未重复该工具链的实机验收，也未替换运行中的 Cindy
+签名 Helper；正式应用生效仍需完整重建和签名。
+
+随后在当前 worktree 的 Global dev 隔离客户端中加载修复版 sidecar，复用现有
+iPhone 17 Pro / iOS 26.5 设备完成端到端验收。用户确认设备控制授权后，打开已有登录态的
+`com.xd.cindy`，展开设备菜单并从 XD-PC 切换至 Home-PC，再关闭开发警告提示；
+连续五次点击均由 Host 返回 `backend: native-hid`，切换后任务列表与标题同步更新。
+验收结束时实例仍为 `ready / healthy`、generation 未变化，Native HID 与 H.264 路由均为
+`active`。截图来自 dev 内嵌模拟器实时画布，未替换正式客户端。
+
+随后补齐首页标题宽度预算中的原生工具栏间距，在同一 dev 客户端和设备上连续切换
+Home-PC → XD-PC → 长名称设备 → XD-PC → Home-PC，全程未重载页面。各次标题保持
+居中，长名称正常省略；Home-PC 切换前后的文字与箭头边界一致。此次目检为深色、竖屏；
+未验证 iOS 浅色、横屏或 Duo 布局。Mobile 只调整 TSX 布局，不修改原生配置或依赖。

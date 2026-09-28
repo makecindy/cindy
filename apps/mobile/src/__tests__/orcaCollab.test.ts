@@ -270,7 +270,10 @@ describe('MessageRenderer wires the orca card', () => {
     // F4:透传 screenWidth,使 CollabCardShell layout 随屏宽响应(与 SubagentCard 一致)。
     expect(source).toContain('<OrcaCollabCard card={item.message.orcaCard} screenWidth={actions.screenWidth}');
     expect(source).toContain('blockKey={JSON.stringify([actions.remoteDeviceId, item.key])}');
-    expect(source).toContain("controlledExpanded={(card.variant === 'dispatch') !== toggled}");
+    expect(source).toContain('controlledExpanded={expanded}');
+    // Legacy `orca-toggled-` entries meant "collapsed" for dispatch cards; do not read them.
+    expect(source).toContain('`orca-expanded-${JSON.stringify([accountGeneration, blockKey, card.variant])}`');
+    expect(source).not.toContain('`orca-toggled-');
     expect(source).toContain('onControlledToggle={toggleExpanded}');
     expect(source).toContain('testID={`message.orcaCard.${card.variant}`}');
   });

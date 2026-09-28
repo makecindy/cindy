@@ -156,6 +156,7 @@ function buildSubagentGroup(
     : undefined;
   return {
     type: 'subagent_group',
+    sourceClientId: agent.source.clientId,
     key: `subagent-${id ?? agent.key}`,
     header: { description, subagentType },
     childItems,

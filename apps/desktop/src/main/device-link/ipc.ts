@@ -25,7 +25,7 @@ import {
 import { serverApiFetch, ServerApiError } from '../serverApiClient';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
-import type { IpcErrorCode } from '../../shared/ipc-errors';
+import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
 import { decodeRemoteHistory } from '../../shared/remoteHistoryCache';
 import {
   DEVICE_LINK_INVOKE,
@@ -61,7 +61,8 @@ import {
   waitForNewerControllerDisplayNameDirectoryRefresh,
 } from './index';
 import { getActiveControllers } from './dispatch';
-import { rewriteOutboundMedia } from './outboundMedia';
+import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
+import { tryUploadPeerAttachment } from './filePeer';
 import { parseSharedTaskPeer } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import {
@@ -96,6 +97,8 @@ import {
   resetAll as resetSubscriptionRefcount,
 } from './subscriptionRefcount';
 import { createLogger } from '../logger';
+import { onQuit } from '../lifecycle';
+import { createDeviceLinkIpcDiagnostics } from './ipcDiagnostics';
 import { getAppCapabilities } from '../appCapabilities.js';
 
 const log = createLogger('device-link:ipc');
@@ -663,22 +666,35 @@ export async function handleInvoke(
     try {
       const peer = parseSharedTaskPeer(normalizedDeviceId);
       let existing: ReadonlySet<string> | undefined;
-      if (peer?.role === 'host' && channel === 'maker:input:update-content') {
+      let projectionUnavailable = false;
+      if ((!peer || peer.role === 'host') && channel === 'maker:input:update-content') {
         const projection = await deps.invoke(normalizedDeviceId, 'maker:input:get-projection', [callArgs[0]]);
-        if (!projection.ok) throw new Error(projection.error.message);
-        const value = projection.result as { sessionId?: string; pendingQueue?: Array<{ clientId: string; files?: Array<{ path?: string; url?: string }> }> };
-        if (value?.sessionId !== callArgs[0] || !Array.isArray(value.pendingQueue)) throw new Error('Invalid shared input projection');
-        const item = value.pendingQueue.find((row) => row.clientId === callArgs[1]);
-        if (!item) throw new Error('Queued message is no longer pending');
-        existing = new Set((item.files ?? []).flatMap((file) => [file.path, file.url].filter((ref): ref is string => typeof ref === 'string')));
-        assertControlTargetEnabled(deps, normalizedDeviceId);
+        if (projection.ok) {
+          const value = projection.result as { sessionId?: string; pendingQueue?: Array<{ clientId: string; files?: Array<{ path?: string; url?: string }> }> };
+          if (value?.sessionId !== callArgs[0] || !Array.isArray(value.pendingQueue)) throw new Error('Invalid input projection');
+          const item = value.pendingQueue.find((row) => row.clientId === callArgs[1]);
+          if (!item) throw new Error('Queued message is no longer pending');
+          existing = new Set((item.files ?? []).flatMap((file) => [file.path, file.url].filter((ref): ref is string => typeof ref === 'string')));
+          assertControlTargetEnabled(deps, normalizedDeviceId);
+        } else if (projection.error.code !== 'CHANNEL_NOT_ALLOWED') {
+          throw new Error(projection.error.message);
+        } else {
+          projectionUnavailable = true;
+        }
       }
-      callArgs = await withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
-        () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs));
-    } catch (err) {
-      throwIpcError(
-        'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
-        err instanceof Error ? err.message : String(err),
+      if (projectionUnavailable) {
+        throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Queued content editing is not supported by the target device');
+      }
+      callArgs = await withPeerAttachmentUpload((source, mime) => peer ? Promise.resolve(null) : tryUploadPeerAttachment(normalizedDeviceId, source, mime, deps.invoke), () =>
+        withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
+          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs)));
+     } catch (err) {
+       if (isIpcError(err) && err.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+         throw err;
+       }
+       throwIpcError(
+         'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+         err instanceof Error ? err.message : String(err),
       );
     }
     assertControlTargetEnabled(deps, normalizedDeviceId);
@@ -1279,6 +1295,13 @@ export async function retryUnsubscribeAfterWindowGone(
 // ─── 注册(Electron adapter)──────────────────────────────────────────────────
 
 export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): void {
+  const diagnosticsLog = createLogger('device-link:ipc-diagnostics');
+  const diagnostics = createDeviceLinkIpcDiagnostics((event, fields) =>
+    diagnosticsLog.info(event, fields),
+  );
+  // Submit the final partial interval at shutdown start, giving the async log
+  // writer the subsequent cleanup phases to drain before app.exit().
+  onQuit('device-link-ipc-diagnostics', diagnostics.flush, 'sync');
   const deviceCodes = new LocalDeviceCodeSessions();
   const deviceCodeScope = (event: import('electron').IpcMainInvokeEvent): string => {
     assertTrustedAppRendererEvent(event);
@@ -1368,20 +1391,20 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleDeleteDevice(deps, p.deviceId);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.OPEN_LINK, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.OPEN_LINK, (e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
-    return handleOpenLink(deps, p.deviceId);
+    return handleOpenLink(diagnostics.forWindow(deps, e.sender.id), p.deviceId);
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.CLOSE_LINK, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleCloseLink(deps, p.deviceId);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.INVOKE, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.INVOKE, (e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; channel?: unknown; args?: unknown };
-    return handleInvoke(deps, p.deviceId, p.channel, p.args);
+    return handleInvoke(diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.channel, p.args);
   });
   // 多窗口订阅引用计数:每个发起订阅的窗口(WebContents)挂一次 'destroyed' 清理,
   // 窗口关闭时释放它持有的全部引用,聚合出降零 topics 才向 relay 发 unsubscribe
@@ -1396,8 +1419,13 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       for (const { deviceId, topics } of recordWindowGone(windowId)) {
         // 窗口已销毁、无 ref 可恢复 → 用有限退避主动重试,堵住 unsubscribe 一次失败后被控端
         // 对已无 UI 订阅的 topic 持续推送的泄漏(见 retryUnsubscribeAfterWindowGone)。
-        if (topics.length > 0)
-          void retryUnsubscribeAfterWindowGone(deps.unsubscribe, deviceId, topics);
+        if (topics.length > 0) {
+          void retryUnsubscribeAfterWindowGone(
+            diagnostics.forWindow(deps, windowId).unsubscribe,
+            deviceId,
+            topics,
+          );
+        }
       }
     });
   };
@@ -1405,12 +1433,14 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; topics?: unknown };
     attachWindowCleanup(e.sender);
-    return handleSubscribe(deps, p.deviceId, p.topics, e.sender.id);
+    return handleSubscribe(diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.topics, e.sender.id);
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.UNSUBSCRIBE, (e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; topics?: unknown };
-    return handleUnsubscribe(deps, p.deviceId, p.topics, e.sender.id);
+    return handleUnsubscribe(
+      diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.topics, e.sender.id,
+    );
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.DISCONNECT_ALL, (e) => {
     assertTrustedAppRendererEvent(e);

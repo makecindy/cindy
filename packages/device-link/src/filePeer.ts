@@ -10,6 +10,7 @@ export type FilePeerRequest =
   | { action: "caps" }
   | { action: "offer"; sdp: string }
   | { action: "open"; connection: string; url: string }
+  | { action: "attachment"; connection: string; request: Record<string, unknown> }
   | { action: "close"; connection: string };
 
 export interface FilePeerFile {
@@ -34,6 +35,8 @@ export function parseFilePeerRequest(value: unknown): FilePeerRequest {
     throw new Error("INVALID_FILE_PEER_REQUEST");
   if (v.action === "close")
     return { action: "close", connection: v.connection };
+  if (v.action === "attachment" && v.request && typeof v.request === "object" && !Array.isArray(v.request))
+    return { action: "attachment", connection: v.connection, request: v.request as Record<string, unknown> };
   if (
     v.action === "open" &&
     typeof v.url === "string" &&

@@ -32,6 +32,7 @@ import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
 import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfirmHost';
+import { GhostInstallConsentHost } from '@/cindy-brain/GhostInstallConsentHost';
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
@@ -47,6 +48,7 @@ import { installCcMgrUpgradeListener } from '@/state/ccMgrUpgradeStore';
 import {
   preloadLocalCatalogSnapshot,
   refreshLocalCatalogSnapshot,
+  startLocalCatalogRecovery,
 } from '@/lib/localCatalogSnapshot';
 import { useResyncAgentIslandSettingsAfterLogin } from '@/hooks/useAgentIslandSettings';
 import {
@@ -177,6 +179,7 @@ function MakerBootstrap() {
   }, [dataOwnerId, dataOwnerRecoveryEpoch]);
 
   useEffect(() => {
+    const stopCatalogRecovery = startLocalCatalogRecovery();
     makerChatStore.syncActiveTurnsFromMain();
     // main 先提交 active catalog + capabilities 再广播；renderer 收到任一目录/鉴权变化后
     // 联合重拉 providers 与两份 capabilities，整组成功且代际最新时才切换。
@@ -186,6 +189,7 @@ function MakerBootstrap() {
     const offAuth = window.electronAPI.maker.auth.onStateChanged(refresh);
     const offProviders = window.electronAPI.maker.onProvidersChanged(refresh);
     return () => {
+      stopCatalogRecovery();
       offAuth?.();
       offProviders?.();
     };
@@ -418,6 +422,7 @@ export function App() {
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                           <GhostConfirmDialogHost />
                           <ForgeOidcInstallConfirmHost />
+                          <GhostInstallConsentHost />
                           <PluginPublisherConfirmHost />
                           <OwnerScopedRouter />
                         </EnvCheckGuard>

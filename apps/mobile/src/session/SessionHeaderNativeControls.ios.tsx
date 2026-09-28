@@ -31,6 +31,7 @@ import {
 import {
   iconSize,
   iconStroke,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -97,7 +98,7 @@ export function SessionHeaderNativeTitle({ title,
     borderRadius: radius.pill,
     minHeight: 44,
     justifyContent: "center" as const,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.xs / 2,
     overflow: "hidden" as const,
   };
   const label = (
@@ -107,6 +108,7 @@ export function SessionHeaderNativeTitle({ title,
       style={{
         color: colors.textPrimary,
         fontSize: typeScale.body,
+        lineHeight: lineHeight.body,
         fontWeight: fontWeight.semibold,
         textAlign: "center",
         flexShrink: 1,
@@ -121,7 +123,7 @@ export function SessionHeaderNativeTitle({ title,
     <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
       <View style={style}>
         <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} />
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
+        <View style={{ flexDirection: "row", minWidth: 0, alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
           {pinned ? <Pin color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
           {label}
           <TaskTagDots
@@ -134,7 +136,7 @@ export function SessionHeaderNativeTitle({ title,
         </View>
         {notice ? (
           <Text numberOfLines={1} testID="session.headerNotice"
-            style={{ color: colors.textSecondary, fontSize: typeScale.micro, textAlign: "center" }}>
+            style={{ color: colors.textSecondary, fontSize: typeScale.micro, lineHeight: lineHeight.micro, textAlign: "center" }}>
             {notice}
           </Text>
         ) : null}
@@ -160,6 +162,7 @@ export function SessionHeaderNativeActions({
   onDetails,
   onDesktop,
   onAction,
+  detailsOnly = false,
 }: SessionHeaderNativeActionsProps) {
   const { colors, mode } = useTheme();
   const groupStyle = useNativeGlassGroupStyle();
@@ -173,12 +176,13 @@ export function SessionHeaderNativeActions({
       colorScheme={mode}
       seedColor={colors.textPrimary}
       ignoreSafeArea="all"
-      style={{ width: navigationChrome.target * 3, height: navigationChrome.target }}
+      style={{ width: navigationChrome.target * (detailsOnly ? 1 : 3), height: navigationChrome.target }}
     >
       <HStack
         spacing={0}
         modifiers={groupStyle}
       >
+        {detailsOnly ? null : <>
         <Button
           onPress={onDesktop}
           testID="session.remoteDesktop"
@@ -204,6 +208,7 @@ export function SessionHeaderNativeActions({
         >
           <SessionHeaderIcon icon={Folder} color={colors.textPrimary} />
         </Button>
+        </>}
         <Button
           label={moreLabel}
           systemImage="ellipsis"

@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   readPermissionMode: vi.fn(async () => 'auto'),
   updatePermissionMode: vi.fn(async () => {}),
   updateModelEffort: vi.fn(async () => {}),
+  markManualOverride: vi.fn(async () => {}),
   getSessionProvider: vi.fn<() => string | null>(() => null),
   setSessionProvider: vi.fn(),
   isSessionInTurn: vi.fn(() => false),
@@ -83,6 +84,9 @@ vi.mock('../sessionRepo', () => ({
   touchUserSent: vi.fn(async () => {}),
   updateModelEffort: mocks.updateModelEffort,
   updatePermissionMode: mocks.updatePermissionMode,
+}));
+vi.mock('../manualRouteOverride', () => ({
+  markImSessionManualRouteOverride: mocks.markManualOverride,
 }));
 vi.mock('../../../maker-host/session-provider-store', () => ({
   getSessionProvider: mocks.getSessionProvider,
@@ -824,6 +828,62 @@ describe('model:pick 持久化失败', () => {
       expect.objectContaining({ body: slackUi.cards.model.failed('runtime rejected') }),
     );
     expect(mocks.cancelPendingAgentSwitchForSession).not.toHaveBeenCalled();
+  });
+
+  it('选择落地后才写「脱离跟随」手动墓碑', async () => {
+    // 「单独改过」按选择行为判定、不看取值相等(同值重选也永久脱离),
+    // 但必须在选择真正落地后写(PR #5155 review P2)。
+    const im = makeIm();
+
+    await pressModelPick(im);
+
+    expect(mocks.markManualOverride).toHaveBeenCalledWith('sess-target');
+    expect(mocks.cancelPendingAgentSwitchForSession).toHaveBeenCalledWith('sess-target');
+  });
+
+  it('失败回滚的选择不写手动墓碑', async () => {
+    // 若在 updateModelEffort 里立碑, 失败回滚(同一函数)会让失败的选择永久脱离
+    // 默认跟随(PR #5155 review P2)。
+    mocks.readModelRouteSnapshot.mockResolvedValueOnce({
+      model: 'claude-sonnet-4-6',
+      effort: 'medium',
+      providerId: 'openrouter',
+    });
+    mocks.applyRuntimeSetModelChange.mockRejectedValueOnce(new Error('runtime rejected'));
+    const im = makeIm();
+
+    await pressModelPick(im);
+
+    expect(mocks.markManualOverride).not.toHaveBeenCalled();
+    expect(mocks.cancelPendingAgentSwitchForSession).not.toHaveBeenCalled();
+  });
+
+  it('墓碑写失败按选择失败处理: 整体回滚并报错', async () => {
+    mocks.readModelRouteSnapshot.mockResolvedValueOnce({
+      model: 'claude-sonnet-4-6',
+      effort: 'medium',
+      providerId: 'openrouter',
+    });
+    mocks.markManualOverride.mockRejectedValueOnce(new Error('db closed'));
+    const im = makeIm();
+
+    await pressModelPick(im);
+
+    expect(mocks.updateModelEffort).toHaveBeenNthCalledWith(
+      2,
+      'sess-target',
+      'claude-sonnet-4-6',
+      'medium',
+      'openrouter',
+    );
+    // 延迟凭证切换登记也要一并撤销, 否则 turn 收口仍会应用已报失败的选择
+    // (PR #5155 review P2)。
+    expect(mocks.clearPendingCredentialSwitchForSession).toHaveBeenCalledWith('sess-target');
+    expect(mocks.cancelPendingAgentSwitchForSession).not.toHaveBeenCalled();
+    expect(im.updateInteractiveCard).toHaveBeenCalledWith(
+      'model-card',
+      expect.objectContaining({ body: slackUi.cards.model.failed('db closed') }),
+    );
   });
 
   it('live setEffort 失败时恢复 route store 和 live model', async () => {

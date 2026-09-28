@@ -306,6 +306,15 @@ describe('progressive push snapshots', () => {
     expect(route).toBe('/sessions/a?deviceId=d&notificationResponse=id%3Apush%262#tail');
     expect(notificationRecoveryRoute('/sessions/a', '1')).toBe('/sessions/a?notificationResponse=1');
   });
+
+  it('keeps the teammate resource params a host adds so the chat opens as that teammate', () => {
+    const route = notificationRecoveryRoute(
+      '/sessions/chat?deviceId=mac&resourceCollectionId=teammates&resourceId=bot%2F1&resourceKind=bot', 'id:1');
+    const query = new URLSearchParams(route.split('?')[1]);
+    expect(route.startsWith('/sessions/chat?')).toBe(true);
+    expect(Object.fromEntries(query)).toEqual({ deviceId: 'mac', resourceCollectionId: 'teammates',
+      resourceId: 'bot/1', resourceKind: 'bot', notificationResponse: 'id:1' });
+  });
 });
 
 describe('superseded recovery reads', () => {

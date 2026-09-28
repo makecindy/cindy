@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { decodeRemoteErrorMessage, remoteErrorMessageForBanner } from '@/lib/makerChatStore';
+import { i18n } from '@/i18n';
 
 describe('decodeRemoteErrorMessage', () => {
   it.each([
@@ -34,9 +35,16 @@ describe('decodeRemoteErrorMessage', () => {
     );
   });
 
-  it('decodes remote agent errors while preserving fallback text for missing keys', () => {
-    expect(decodeRemoteErrorMessage('[REMOTE_UNKNOWN] fallback message')).toBe('fallback message');
-    expect(remoteErrorMessageForBanner('[REMOTE_UNKNOWN] fallback message')).toBe('fallback message');
+  it('summarizes unknown remote codes in the interface language instead of upstream fallback text', () => {
+    const summary = i18n.t('ipcError.INTERNAL');
+    expect(decodeRemoteErrorMessage('[REMOTE_UNKNOWN] fallback message')).toBe(summary);
+    expect(remoteErrorMessageForBanner('[REMOTE_UNKNOWN] fallback message')).toBe(summary);
+    expect(summary).not.toContain('fallback message');
+  });
+
+  it('keeps an explicit fallback for missing keys that are not error copy', () => {
+    expect(i18n.t('not.a.real.key', { defaultValue: 'keep me' })).toBe('keep me');
+    expect(i18n.t('models.options.effortLevels.not-a-real-effort', { defaultValue: '' })).toBe('');
   });
 
   it('keeps known codes available to live and tail banners while other callers still get translated text', () => {

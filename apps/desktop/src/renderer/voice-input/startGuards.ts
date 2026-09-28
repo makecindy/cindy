@@ -14,7 +14,7 @@ export type VoiceInputStartGuardsResult =
       permission: Extract<VoiceInputPermissionResult, { ok: true }>;
       accessibility: Extract<VoiceInputPermissionResult, { ok: true }>;
       readiness: VoiceInputReadinessResult;
-      permissionSource: 'cache' | 'async';
+      permissionSource: 'cache' | 'capture';
       accessibilitySource: 'cache';
       readinessSource: 'cache' | 'async';
     }
@@ -24,7 +24,7 @@ export type VoiceInputStartGuardsResult =
       permission: VoiceInputPermissionResult;
       accessibility: VoiceInputPermissionResult;
       readiness: VoiceInputReadinessResult;
-      permissionSource: 'cache' | 'async';
+      permissionSource: 'cache' | 'capture';
       accessibilitySource: 'cache';
       readinessSource: 'cache' | 'async';
     };
@@ -72,13 +72,12 @@ export async function requestRendererMicrophonePermission(): Promise<VoiceInputP
 }
 
 /**
- * Resolve the two gates that must pass before voice input is allowed.
+ * Check service/accessibility readiness alongside local capture.
  *
- * The synchronous cache is only trusted for positive results. Negative or
- * missing cache values take the existing async path so a just-finished Codex
- * login or a freshly granted microphone permission is not hidden by stale
- * state. Main still verifies readiness in `voice-input:start`; this helper only
- * removes avoidable IPC latency from the renderer-to-microphone critical path.
+ * The capture engine's getUserMedia is the microphone permission request and
+ * authoritative check, including first use and revocation. Never open a probe
+ * stream here: closing it then reopening capture costs a second device startup
+ * and loses anything spoken into the probe. Main still verifies service auth.
  */
 export async function resolveVoiceInputStartGuards(
   options: VoiceInputStartGuardsOptions = {},
@@ -89,25 +88,18 @@ export async function resolveVoiceInputStartGuards(
     ? cachedSystemPermissions.accessibility
     : ({ ok: true, status: 'not-required' } as const);
   const cachedReadiness = window.electronAPI.voiceInput.getReadinessCached();
-  // A positive OS permission snapshot is sufficient for the start guard. The
-  // real capture engine calls getUserMedia immediately after this gate and is
-  // the authoritative revocation check; opening a second, short-lived stream
-  // here made every Windows recording pay the microphone cold-start cost twice.
-  // Keep the async path for missing/negative/unknown snapshots so newly granted
-  // permission still takes effect without restarting the app.
-  const shouldVerifyPermission = !cachedPermission.ok
-    || cachedPermission.status !== 'granted';
-  const permissionSource = shouldVerifyPermission ? 'async' : 'cache';
+  const permissionSource = cachedPermission.ok && cachedPermission.status === 'granted'
+    ? 'cache' : 'capture';
   const readinessSource = cachedReadiness?.ok ? 'cache' : 'async';
 
-  const permissionPromise: Promise<VoiceInputPermissionResult> = shouldVerifyPermission
-    ? requestRendererMicrophonePermission()
-    : Promise.resolve(cachedPermission);
+  const permission: VoiceInputPermissionResult = permissionSource === 'cache'
+    ? cachedPermission
+    : { ok: true, status: 'checked-by-capture' };
   const readinessPromise: Promise<VoiceInputReadinessResult> = cachedReadiness?.ok
     ? Promise.resolve(cachedReadiness)
     : window.electronAPI.voiceInput.getReadiness();
 
-  const [permission, readiness] = await Promise.all([permissionPromise, readinessPromise]);
+  const readiness = await readinessPromise;
   if (!permission.ok) {
     return {
       ok: false,

@@ -3,6 +3,7 @@ import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projec
 import type { RemoteMoney } from '@/session/remoteMoney';
 import type { MobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
 import type { MobileToolInputProjection } from '@/session/messageToolPayloadProjection';
+import type { AnnotationRegion } from '@cindy/maker-shared/image-annotation';
 
 export type RemoteSessionStatus = 'active' | 'archived' | 'deleted';
 export type RemoteMessageRole =
@@ -180,6 +181,13 @@ export interface RemoteSerializedAttachment {
    * 与桌面 AgentInputSerializedFile.annotated 同一契约。
    */
   annotated?: boolean;
+  /**
+   * 可选(向后兼容):标注区域,由笔迹归纳的归一化外接框(0..1,原点左上),与桌面
+   * AgentInputSerializedFile.annotationRegions 同一契约、同一归纳算法
+   * (summarizeAnnotationRegions)。新被控端校验后在标注说明里补一句每张图圈在哪;
+   * 旧被控端忽略。
+   */
+  annotationRegions?: AnnotationRegion[];
 }
 
 export interface QueuedRemoteMessage {
@@ -201,6 +209,8 @@ export interface QueuedRemoteMessage {
   /** 与桌面队列契约镜像；目标桌面据此禁止缺失快照时按自己的设备坐标重解引用。 */
   sessionReferencesRequireTrustedSnapshot?: boolean;
   userName?: string;
+  /** Interface language of this phone. The desktop stamps it only for a remote turn. */
+  uiLanguage?: string;
   createOpts: {
     agentKind: 'claude-code' | 'codex' | 'pi';
     workingDir: string;

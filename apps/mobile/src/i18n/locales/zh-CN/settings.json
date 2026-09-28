@@ -10,7 +10,7 @@
     },
     "title": "Debug 日志",
     "record": "记录 Debug 日志",
-    "hint": "记录手机上的连接、恢复、滚动、键盘与性能细节。默认关闭，最多保留 7 天、8 MB，不会自动上传。",
+    "hint": "记录手机上的连接、恢复、文件预览与播放、滚动、键盘与性能细节。默认关闭，最多保留 7 天、8 MB，不会自动上传。",
     "export": "导出 Debug 日志",
     "clear": "清空日志",
     "busy": "处理中…",
@@ -23,6 +23,16 @@
     "uploadSucceeded": "上传成功，编号 {{code}}。"
   },
   "title": "设置",
+  "appearance": {
+    "title": "外观",
+    "modeLabel": "显示模式",
+    "options": {
+      "system": "跟随系统",
+      "light": "浅色",
+      "dark": "深色"
+    },
+    "saveFailed": "显示模式没有保存成功，重新打开后会恢复之前的设置"
+  },
   "language": {
     "title": "语言",
     "hint": "仅影响应用界面。Agent 回复语言由 Agent 自身决定。",
@@ -51,6 +61,9 @@
     "testFlightUpdateManaged": "测试版安装更新由 TestFlight 管理",
     "testFlightNoContentUpdate": "当前没有可用的内容更新。新测试版本请在 TestFlight 中查看。",
     "testFlightContentUpdateUnavailable": "当前构建无法检查内容更新。新测试版本请在 TestFlight 中查看。",
+    "googlePlayUpdateManaged": "应用版本更新由 Google Play 管理",
+    "googlePlayNoContentUpdate": "当前没有可用的内容更新。新应用版本请在 Google Play 中查看。",
+    "googlePlayContentUpdateUnavailable": "当前构建无法检查内容更新。新应用版本请在 Google Play 中查看。",
     "bundleUpdateFound": "发现整包更新",
     "upToDate": "已是最新版本",
     "bundleUpToDateNoOta": "整包已是最新，当前版本不支持热更新",

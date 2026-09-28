@@ -1,5 +1,7 @@
 import { Button } from '@/components/ui/button';
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -118,12 +120,14 @@ interface VoiceInputSelectProps<T extends string> {
 }
 
 interface VoiceInputCardProps {
+  id?: string;
   title: ReactNode;
   action?: ReactNode;
   children: ReactNode;
 }
 
 interface VoiceInputInlineSettingRowProps {
+  id?: string;
   label: ReactNode;
   labelAction?: ReactNode;
   hint?: ReactNode;
@@ -297,9 +301,10 @@ function VoiceInputSelect<T extends string>({
   );
 }
 
-function VoiceInputCard({ title, action, children }: VoiceInputCardProps) {
+function VoiceInputCard({ id, title, action, children }: VoiceInputCardProps) {
   return (
     <section
+      id={id}
       className={cn(
         'flex flex-col gap-4 rounded-xl p-4',
         'bg-[var(--settings-theme-card-bg)]',
@@ -322,6 +327,7 @@ function VoiceInputCard({ title, action, children }: VoiceInputCardProps) {
 }
 
 function VoiceInputInlineSettingRow({
+  id,
   label,
   labelAction,
   hint,
@@ -330,6 +336,7 @@ function VoiceInputInlineSettingRow({
 }: VoiceInputInlineSettingRowProps) {
   return (
     <div
+      id={id}
       className={cn(
         'grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(220px,320px)] sm:items-center',
         className,
@@ -1023,6 +1030,7 @@ function VoiceInputCollapsibleTextarea({
 }
 
 export function VoiceInputSection() {
+  const { entry: searchEntry, activation } = useSettingsSearchNavigation();
   const { t, i18n } = useTranslation();
   const supportsGlobalShortcutSetting = window.electronAPI.platform !== 'linux';
   const supportsSystemAudioMuteSetting =
@@ -1034,10 +1042,13 @@ export function VoiceInputSection() {
     setMuteSystemAudio,
     setPlayInteractionSound,
     setFastActivationEnabled,
+    setComposerLongPressEnabled,
+    resetComposerLongPressEnabled,
     setRefinementEnabled,
     setRefinementInstructions,
     setAutoDictionaryEnabled,
     setDictionarySyncEnabled,
+    resetDictionarySyncEnabled,
     addDictionaryEntry: addDictionarySettingEntry,
     importDictionaryEntries: importDictionarySettingEntries,
     editDictionaryEntry: editDictionarySettingEntry,
@@ -1055,6 +1066,11 @@ export function VoiceInputSection() {
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [refinementRulesExpanded, setRefinementRulesExpanded] = useState(false);
   const [customDictionaryExpanded, setCustomDictionaryExpanded] = useState(false);
+  useLayoutEffect(() => {
+    if (searchEntry?.id === 'settings.voiceInput.refinement.instructions.label') setRefinementRulesExpanded(true);
+    if (searchEntry?.id === 'settings.voiceInput.refinement.dictionary.label') setCustomDictionaryExpanded(true);
+    if (searchEntry?.id === 'settings.voiceInput.history.label') setHistoryExpanded(true);
+  }, [searchEntry, activation]);
   const [dictionaryFilter, setDictionaryFilter] = useState<DictionaryFilter>('all');
   const [dictionarySearchExpanded, setDictionarySearchExpanded] = useState(false);
   const [dictionarySearch, setDictionarySearch] = useState('');
@@ -1950,6 +1966,7 @@ export function VoiceInputSection() {
 
       <VoiceInputCard title={t('settings.voiceInput.sections.basics')}>
         <VoiceInputInlineSettingRow
+          id="settings-search-settings-voiceInput-language-label"
           label={t('settings.voiceInput.language.label')}
           hint={t('settings.voiceInput.language.hint')}
         >
@@ -1962,6 +1979,7 @@ export function VoiceInputSection() {
         </VoiceInputInlineSettingRow>
 
         <VoiceInputInlineSettingRow
+          id="settings-search-settings-voiceInput-microphone-label"
           label={t('settings.voiceInput.microphone.label')}
           labelAction={
             <VoiceInputPermissionBadge
@@ -1983,6 +2001,7 @@ export function VoiceInputSection() {
         </VoiceInputInlineSettingRow>
 
         <VoiceInputInlineSettingRow
+          id="settings-search-settings-voiceInput-shortcut-label"
           label={t('settings.voiceInput.shortcut.label')}
           labelAction={
             shouldShowInputMonitoringBadge({
@@ -2072,7 +2091,7 @@ export function VoiceInputSection() {
         <div className="flex items-center justify-between gap-5">
           <div className="flex min-w-0 flex-col gap-1">
             <div className="flex min-w-0 items-center gap-2">
-              <p
+              <p id="settings-search-settings-voiceInput-refinement-enabled-label"
                 className="min-w-0 text-13 font-medium text-[var(--settings-section-title)]"
                 style={{ letterSpacing: '0.12px' }}
               >
@@ -2102,7 +2121,7 @@ export function VoiceInputSection() {
         </div>
 
         {settings.refinementEnabled ? (
-          <div className="flex flex-col gap-4 border-t border-[var(--settings-theme-card-border)] pt-4">
+          <div id="settings-search-settings-voiceInput-refinement-instructions-label" className="flex flex-col gap-4 border-t border-[var(--settings-theme-card-border)] pt-4">
             <VoiceInputCollapsibleTextarea
               id="voice-input-refinement-instructions"
               label={t('settings.voiceInput.refinement.instructions.label')}
@@ -2122,7 +2141,7 @@ export function VoiceInputSection() {
             <div className="border-t border-[var(--settings-theme-card-border)] pt-4">
               <div className="flex items-center justify-between gap-4">
                 <div className="flex min-w-0 flex-col gap-1">
-                  <p
+                  <p id="settings-search-settings-voiceInput-refinement-dictionary-label"
                     className="text-13 font-medium text-[var(--settings-section-title)]"
                     style={{ letterSpacing: '0.12px' }}
                   >
@@ -2147,12 +2166,6 @@ export function VoiceInputSection() {
                     }
                     setCustomDictionaryExpanded(!customDictionaryExpanded);
                   }}
-                  className={cn(
-                    'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-12 font-medium transition-colors',
-                    'border border-[var(--settings-btn-secondary-border)]',
-                    'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
-                    'hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                  )}
                 >
                   <span>
                     {t(
@@ -2202,11 +2215,21 @@ export function VoiceInputSection() {
                       </p>
                     </div>
 
-                    <Switch
-                      checked={settings.dictionarySyncEnabled}
-                      onCheckedChange={setDictionarySyncEnabled}
-                      aria-label={t('settings.voiceInput.refinement.dictionary.deviceSync.ariaLabel')}
-                    />
+                    <div className="flex shrink-0 items-center gap-2">
+                      <DefaultOverrideControls
+                        isCustomized={settings.dictionarySyncEnabledOverride != null}
+                        onReset={() => {
+                          void resetDictionarySyncEnabled().then((ok) => {
+                            if (ok) toast.success(t('settings.defaults.restored'));
+                          });
+                        }}
+                      />
+                      <Switch
+                        checked={settings.dictionarySyncEnabled}
+                        onCheckedChange={setDictionarySyncEnabled}
+                        aria-label={t('settings.voiceInput.refinement.dictionary.deviceSync.ariaLabel')}
+                      />
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2316,6 +2339,7 @@ export function VoiceInputSection() {
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                       />
                       <Dialog.Content
+                        onPointerDownOutside={(event) => event.preventDefault()}
                         className={cn(
                           'fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
                           'rounded-[18px] border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
@@ -2631,7 +2655,7 @@ export function VoiceInputSection() {
         {supportsSystemAudioMuteSetting ? (
           <div className="flex items-center justify-between gap-5">
             <div className="flex min-w-0 flex-col gap-1">
-              <p
+              <p id="settings-search-settings-voiceInput-muteSystemAudio-label"
                 className="text-13 font-medium text-[var(--settings-section-title)]"
                 style={{ letterSpacing: '0.12px' }}
               >
@@ -2659,7 +2683,7 @@ export function VoiceInputSection() {
           supportsSystemAudioMuteSetting && 'border-t border-[var(--settings-theme-card-border)]',
         )}>
           <div className="flex min-w-0 flex-col gap-1">
-            <p
+            <p id="settings-search-settings-voiceInput-fastActivation-label"
               className="text-13 font-medium text-[var(--settings-section-title)]"
               style={{ letterSpacing: '0.12px' }}
             >
@@ -2679,7 +2703,37 @@ export function VoiceInputSection() {
 
         <div className="flex items-center justify-between gap-5 border-t border-[var(--settings-theme-card-border)] pt-4">
           <div className="flex min-w-0 flex-col gap-1">
-            <p
+            <p id="settings-search-settings-voiceInput-composerLongPress-label"
+              className="text-13 font-medium text-[var(--settings-section-title)]"
+              style={{ letterSpacing: '0.12px' }}
+            >
+              {t('settings.voiceInput.composerLongPress.label')}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.voiceInput.composerLongPress.hint')}
+            </p>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+            <DefaultOverrideControls
+              isCustomized={settings.composerLongPressEnabledOverride != null}
+              onReset={() => {
+                void resetComposerLongPressEnabled().then((ok) => {
+                  if (ok) toast.success(t('settings.defaults.restored'));
+                });
+              }}
+            />
+            <Switch
+              checked={settings.composerLongPressEnabled}
+              onCheckedChange={setComposerLongPressEnabled}
+              aria-label={t('settings.voiceInput.composerLongPress.ariaLabel')}
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-5 border-t border-[var(--settings-theme-card-border)] pt-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p id="settings-search-settings-voiceInput-interactionSound-label"
               className="text-13 font-medium text-[var(--settings-section-title)]"
               style={{ letterSpacing: '0.12px' }}
             >
@@ -2699,6 +2753,7 @@ export function VoiceInputSection() {
       </VoiceInputCard>
 
       <VoiceInputCard
+        id="settings-search-voice-usage-data"
         title={t('settings.voiceInput.sections.usageData')}
         action={
           <Button
@@ -2769,7 +2824,7 @@ export function VoiceInputSection() {
               'transition-colors hover:opacity-90',
             )}
           >
-            <span
+            <span id="settings-search-settings-voiceInput-history-label"
               className="text-13 font-medium text-[var(--settings-section-title)]"
               style={{ letterSpacing: '0.12px' }}
             >

@@ -1286,13 +1286,13 @@ describe('provider:custom:* CRUD handlers', () => {
     const saved = await listCustomProviders();
     expect(saved).toHaveLength(1);
     expect(saved[0]?.runtimes.codex?.models).toEqual([
-      { id: 'fetched-model', name: 'Fetched Model' },
+      { id: 'fetched-model', name: 'Fetched Model', discoveredMetadata: { name: 'Fetched Model' } },
     ]);
   });
 
   it.each([
     { ok: false, models: [] },
-    { ok: true, models: Array.from({ length: 257 }, (_, i) => ({ id: `m${i}`, name: 'Model' })) },
+    { ok: true, models: Array.from({ length: 10001 }, (_, i) => ({ id: `m${i}`, name: 'Model' })) },
     { ok: true, models: [{ id: 'x'.repeat(257), name: 'Model' }] },
     { ok: true, models: [{ id: 'model', name: 'x'.repeat(257) }] },
   ])('saves only the connection and key when discovery fails or exceeds bounds ($models.length models)', async (fetched) => {
@@ -4048,6 +4048,41 @@ describe('provider:oauth mutation ordering', () => {
     owner.generation--;
     await harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, 'account-a', { releaseOwner: true, ownerId: 'attempt-a' });
     progress('https://auth.openai.com/authorize?late=1');
+    expect(send).toHaveBeenCalledTimes(1);
+    finish({ ok: false });
+    await login;
+  });
+
+  it('routes Grok device codes only to the owning renderer', async () => {
+    const harness = new IpcHarness();
+    const send = vi.fn();
+    let progress!: (code: { userCode: string; verificationUrl: string; expiresAt: number }) => void;
+    let finish!: (result: { ok: boolean }) => void;
+    let receivedMethod: string | undefined;
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ ...owner }),
+      assertTrustedSender: (event: any) => { event.sender.send = send; },
+      oauthLogin: async (_id, _current, _onBrowserUrl, method, onDeviceCode) => {
+        receivedMethod = method;
+        progress = onDeviceCode!;
+        return new Promise(resolve => { finish = resolve; });
+      },
+    }));
+    await expect(harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_LOGIN,
+      'grok-account', { method: 'device' })).rejects.toThrow(/INVALID_PARAMS/);
+    const login = harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'grok-account', {
+      ownerId: 'attempt-grok', method: 'device',
+    });
+    await vi.waitFor(() => expect(progress).toBeDefined());
+    expect(receivedMethod).toBe('device');
+    progress({ userCode: 'ABCD-1234', verificationUrl: 'https://auth.x.ai/device', expiresAt: 12345 });
+    expect(send).toHaveBeenCalledExactlyOnceWith(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+      providerId: 'grok-account', phase: 'device-code', userCode: 'ABCD-1234',
+      verificationUrl: 'https://auth.x.ai/device', expiresAt: 12345,
+    });
+    owner.generation++;
+    progress({ userCode: 'LATE-1234', verificationUrl: 'https://auth.x.ai/device', expiresAt: 12345 });
     expect(send).toHaveBeenCalledTimes(1);
     finish({ ok: false });
     await login;

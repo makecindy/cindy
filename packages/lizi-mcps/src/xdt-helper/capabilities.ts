@@ -28,6 +28,16 @@ export interface CapabilityEntry {
 
 export const CAPABILITIES: readonly CapabilityEntry[] = [
   {
+    key: 'grok-login',
+    title: 'Grok / SuperGrok 授权登录',
+    oneLiner: 'Grok 有浏览器跳转和设备短码两种登录方式；agent 可发授权页与短码并查询完成状态。',
+    detail: [
+      '浏览器跳转登录在设置的 Grok 连接卡中可用。',
+      '设备码登录适合远程协助：agent 通过 cindy_helper 的 auth 类 start_grok_device_login 取得 xAI 授权页和短码，发给用户；用户在授权页输入短码并确认，Cindy 在本机自动轮询并保存凭证。',
+      'agent 可用 get_grok_login_status 查询连接状态，用户要求停止时可用 cancel_grok_device_login。长期 access token 和 refresh token 不会出现在工具返回值或聊天里；不要要求用户粘贴长期凭证。',
+    ].join(' '),
+  },
+  {
     key: 'about-cindy',
     title: `${BRAND_NAME} 自身信息(产品身份 / 开源仓库 / 源码位置)`,
     oneLiner: `${BRAND_NAME} 是什么、谁做的、开不开源、源码在哪、agent 跑在哪、版本号怎么查, 以及模型接入(官方服务 / 复用 Coding Plan / 自带 API key / 本地模型)与分区域官网下载定价。`,

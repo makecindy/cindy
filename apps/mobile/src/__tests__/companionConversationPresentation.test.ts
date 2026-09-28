@@ -29,6 +29,16 @@ it('keeps all contiguous blocks of a sealed final answer', () => {
   const text = items.filter(item => item.type === 'message').map(item => item.message.body);
   expect(text).toEqual(['Help', 'Part one', 'Part two']);
 });
+it('keeps every sealed reply block after a continuation even when the main timeline folds earlier seals', () => {
+  const items = bodies([...base,
+    row('a4', 'assistant', 'First block'), row('a5', 'assistant', 'First reply', { turnCompleted: true }),
+    row('t6', 'tool_use', { toolName: 'Read', toolUseId: 't6', input: { path: 'private' } }),
+    row('r7', 'tool_result', { toolUseId: 't6', result: 'more technical details' }),
+    row('a8', 'assistant', 'Second reply', { turnCompleted: true }),
+  ], false);
+  const text = items.filter(item => item.type === 'message').map(item => item.message.body);
+  expect(text).toEqual(['Help', 'First block', 'First reply', 'Second reply']);
+});
 it('keeps delivered attachments without their preamble', () => {
   const items = bodies([...base, row('a4', 'assistant', '![Picture](https://example.com/picture.png)')], false);
   expect(JSON.stringify(items)).toContain('picture.png');
@@ -61,4 +71,49 @@ it.each([false, true])('does not seal old commentary across an unloaded history 
   // through the existing per-turn fallback, independently of the newer seal.
   expect(texts([messages[0], at(row('u2', 'user', 'New question'), currentStart - 1), ...messages.slice(1)]))
     .toEqual(['Old commentary', 'New question', 'Current answer, first part', 'Current answer, last part']);
+});
+
+const receipt = row('r6', 'assistant', '', { botCollaboration: {
+  v: 1, role: 'delegation-result', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Aster',
+  toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Brief',
+  result: { runSequence: 1, status: 'completed', text: 'The completed brief', artifacts: [] },
+} });
+it.each([false, true])('keeps the result receipt without resurrecting its preamble (streaming=%s)', (running) => {
+  const items = bodies([...base, receipt], running);
+  expect(JSON.stringify(items)).toContain('The completed brief');
+  expect(JSON.stringify(items)).not.toContain('Public progress');
+});
+it.each([false, true])('does not suppress an older reply across a history gap before a receipt (streaming=%s)', (running) => {
+  const oldReply = row('a1', 'assistant', 'Earlier useful reply');
+  const laterReceipt = { ...receipt, createdAt: new Date(1001 + HISTORY_GAP_SPLIT_MS + 1).toISOString() };
+  const messages = [oldReply, laterReceipt];
+  for (const source of [messages, [oldReply, { ...row('u2', 'user', 'New request'), createdAt: laterReceipt.createdAt }, laterReceipt]]) {
+    const items = bodies(source, running);
+    expect(JSON.stringify(items)).toContain('Earlier useful reply');
+    expect(JSON.stringify(items)).toContain('The completed brief');
+  }
+});
+it.each([{ turnCompleted: true }, { turnUsageDetails: { totalTokens: 12 } }])('keeps persisted and live answers with completion seal %j', (seal) => {
+  const complete = [...base, row('a7', 'assistant', 'Delivered answer', seal)];
+  for (const running of [true, false]) {
+    const items = bodies(complete, running);
+    expect(items.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Delivered answer']);
+    expect(items.some(item => item.type === 'work_group' || item.type === 'tool_group')).toBe(false);
+  }
+});
+
+it('drops persisted auto-resume separators like Desktop, keeping only the live reconnect card', () => {
+  const resumed = [...base, row('u4', 'user', 'continue', { autoResume: true, autoResumeInfo: { attempt: 1, maxAttempts: 3 } }),
+    row('a5', 'assistant', 'Answer', { turnCompleted: true })];
+  const isResumeCard = (item: ReturnType<typeof bodies>[number]) => item.type === 'message' && item.message.systemCardType === 'auto-resume';
+  // Ordinary tasks keep the separator; the teammate projection hides the persisted one.
+  expect(buildMobileMessageRenderItems(resumed, { isSessionStreaming: false }).some(isResumeCard)).toBe(true);
+  const items = bodies(resumed, false);
+  expect(items.some(isResumeCard)).toBe(false);
+  // The hidden separator still ends the interrupted turn, whose useful partial prose stays readable.
+  expect(items.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Public progress', 'Answer']);
+  const live = companionConversationItems(buildMobileMessageRenderItems(base, {
+    isSessionStreaming: true, autoResumePending: { attempt: 2, maxAttempts: 3 },
+  }));
+  expect(live.filter(isResumeCard)).toHaveLength(1);
 });

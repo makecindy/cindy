@@ -68,6 +68,8 @@ vi.mock('../cindy-media/blobStore.js', () => ({
 }));
 
 const downloadToFile = vi.hoisted(() => vi.fn(async () => {}));
+const copyPeerAttachment = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('../device-link/peerAttachmentStore', () => ({ copyPeerAttachment }));
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../device-link/mediaTransfer.js', () => ({ downloadToFile, removeRemote }));
 
@@ -81,8 +83,27 @@ import {
   materializeQueuedOssAttachments,
 } from '../maker-ipc/normalizeAttachments';
 import { buildAttachmentOssRef } from '../../shared/attachmentOssRef';
+import { buildPeerAttachmentRef } from '@cindy/device-link';
 
 const ATTACHMENT_SHA256 = 'a'.repeat(64);
+
+describe('peer attachment materialization', () => {
+  it('ingests a staged image through existing media ownership without touching OSS', async () => {
+    const metadata = { ticket: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', size: 11, sha256: ATTACHMENT_SHA256, mimeType: 'image/png' };
+    const ref = buildPeerAttachmentRef(metadata);
+    const result = await materializeQueuedOssAttachments('sess-1', {
+      files: [{ path: ref, url: ref, mimeType: 'image/png', category: 'image', ext: '.png' }],
+      persistedContent: JSON.stringify({ images: [{ url: ref }] }),
+    }) as { files: Array<{ url: string }>; persistedContent: string };
+    expect(copyPeerAttachment).toHaveBeenCalledWith(metadata, expect.any(String));
+    expect(copyPeerAttachment).toHaveBeenCalledTimes(1);
+    expect(result.files[0].url).toBe(BLOB_URL);
+    expect(JSON.parse(result.persistedContent).images[0].url).toBe(BLOB_URL);
+    expect(ingestMedia).toHaveBeenCalledOnce();
+    expect(downloadToFile).not.toHaveBeenCalled();
+    expect(removeRemote).not.toHaveBeenCalled();
+  });
+});
 
 describe('queued attachment cleanup regression', () => {
   it('cleans earlier materialized OSS objects when a later integrity ref rejects the queue', async () => {

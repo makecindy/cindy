@@ -382,11 +382,14 @@ describe('session runtime control wiring', () => {
     const axisValidation = setModel.indexOf('if (atomicSelection) {');
     expect(axisValidation).toBeGreaterThan(-1);
     expect(setModel).not.toContain("if (internalOptions.source !== 'user' && atomicSelection)");
+    // 用户 picker 选择按显式能力校验; 配置跟随(configStaged)带的是任务已有的
+    // 档位/Fast(Fast 根本不在渠道默认里), 不是用户对目标模型的显式选择 ——
+    // 目标模型不支持时轴收敛而不是拒(PR #5155 review P2)。
     expect(setModel).toContain(
-      "internalOptions.source === 'user' || internalOptions.effortExplicit === true",
+      'effortExplicit:\n            (internalOptions.source === \'user\' && internalOptions.configStaged !== true) ||\n            internalOptions.effortExplicit === true',
     );
     expect(setModel).toContain(
-      "internalOptions.source === 'user' || internalOptions.fastExplicit === true",
+      'fastExplicit:\n            (internalOptions.source === \'user\' && internalOptions.configStaged !== true) ||\n            internalOptions.fastExplicit === true',
     );
     expect(setModel).toContain("allowFixedEffortPlaceholder: internalOptions.source === 'user'");
     expect(axisValidation).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));
@@ -758,14 +761,15 @@ describe('session runtime control wiring', () => {
     );
   });
 
-  it('resumes native Codex history across credentials and reserves window rebuilding for send', () => {
-    const body = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
-    expect(body).not.toContain('forkSdkSession(');
-    expect(body).not.toContain('relinkCodexProviderThread(');
+  it('only relinks retained cross-host writers without rewriting native history', () => {
+    const body = handlerBody(registerSource, 'const handleSetModel = async (', 'const recoverRemoteRuntimeAxisPersistence');
+    expect(body).toContain('requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer(');
+    expect(body).toContain('...(canTransferThread ? {');
+    expect(body).toContain('relinkCodexProviderThread(');
+    expect(body).toContain('stripEncryptedReasoning: false');
+    expect(body).toContain('commitCodexThreadTransfer(transferDb!.client, sourceSnapshot');
+    expect(body).toMatch(/if \(result\.persistedRoute === true && isDeviceLinkInvoke\(\)\) \{\s*markRemoteSettingPersistedInsideHandler\(response\);/);
+    expect(body).toContain('getCurrentDbClientSnapshot()?.clientEpoch !== transferDb.clientEpoch');
     expect(body).not.toContain('prepareNativeSessionRecovery(');
     expect(body).toContain('codexAuthInjection: getCodexProxyAuthInjectionState()');
     expect(body).toContain('confirmedTargetPressure:');
@@ -899,7 +903,7 @@ describe('session runtime control wiring', () => {
     const retainedRecovery = handlerBody(
       setModel,
       'const reconcileRetainedLiveProfile = async (): Promise<void> => {',
-      'try {\n        const result = routeExplicit',
+      'const transferDb = getCurrentDbClientSnapshot();',
     );
     const capabilityLookup = retainedRecovery.indexOf(
       'const retainedProviders = await getDesktopProviderService().listProviders({',

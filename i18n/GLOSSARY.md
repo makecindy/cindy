@@ -283,6 +283,10 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
 
+### Group chat
+
+伙伴群聊：用户把 2–6 位伙伴放进一个群，用户说一句，伙伴们按规则接话（docs/product-rules/bot-group-chat.md）。群是独立对象，不是任务，也不是某位伙伴的主任务；群里的单条往来仍叫「消息」（见 task-and-conversation-naming）。英文分两层：侧栏标题与按钮用 Title Case（Group Chats、New Group Chat），句中用小写 group chat——故 checkCase 为 false。zh-CN 短句里可简称「群」（群名称、群设置）。与企业微信「群机器人」（wecom-group-bot）等 IM 平台的群概念无关。先登记为 proposed：第一阶段刚落地，等 UI 走查后再定。
+
 ### Harness
 
 用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。
@@ -290,6 +294,10 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 ### Hunyuan
 
 模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。
+
+### Invitation Code
+
+共享任务加入表单中由房主提供、访客输入的代码；用户要求明确称为邀请码，避免被理解为任意邀请文本。
 
 ### iOS Simulator
 
@@ -366,6 +374,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 ### OpenClaw
 
 腾讯授权页可能展示的外部产品名称，客户端仅按原品牌名展示；先登记为 proposed，待产品术语评审后再决定是否固化。
+
+### Organizer
+
+伙伴群聊里负责出安排、改安排的那位成员（docs/product-rules/bot-group-chat.md §7.1）：群设置里指定，未指定或已不可用时由成员顺序里第一位可用的伙伴担任。英文**不得**写作 Lead——Lead 是 Orca 协同的角色名（见 lead 条目）。标签与按钮用 Title Case（Organizer、Make Organizer），句中用小写 organizer，故 checkCase 为 false。先登记为 proposed：第二阶段刚落地，等 UI 走查后再定。
 
 ### Overview
 
@@ -556,6 +568,10 @@ Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自�
 ### withdraw (a reply)
 
 用户在 X 上让 Cindy 删掉它那条公开回帖的动作(在回帖下回 /delete)。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 四语只有这一处用例, 等更多用例出现后再定 decided。
+
+### Work split
+
+伙伴群聊第二阶段：负责人把一件事分成几步派给群里的伙伴，用户点「开始」后伙伴一位接一位做，每做完一步停下等用户点「继续」（docs/product-rules/bot-group-chat.md §7）。英文动作说法 split the work（输入框「+」菜单「安排分工」= Split the Work），名词 work split；句中小写，故 checkCase 为 false。**不得**译作「协同 / 協同 / Collaboration」（Orca 多 Agent 协同的功能名，见 collaboration 条目）、「协作」（共享任务）或「接力」。分工里的每一步叫「一步 / step」，不叫「任务」（见 task-and-conversation-naming）；负责人出的方案叫「安排 / plan」。先登记为 proposed：第二阶段刚落地，等 UI 走查后再定。
 
 ## 怎么加一条术语
 

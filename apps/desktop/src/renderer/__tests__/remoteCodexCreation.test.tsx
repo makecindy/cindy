@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StartRemoteSessionPanel } from '@/components/settings/RemoteHostDetail';
 import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   stat: vi.fn(),
   mkdir: vi.fn(),
   prefs: vi.fn(),
+  listModels: vi.fn(),
   devices: [],
   sessions: [
     { remoteHostId: 'remote-mac', workspaceKind: 'project', workingDir: '/Users/test/project' },
@@ -51,12 +52,7 @@ vi.mock('@/state/providerModelMemory', () => ({
 }));
 
 function publish(models = [sshModel('available-model')]) {
-  commitProvidersSnapshot(beginProvidersRefresh(), {
-    dataOwnerId: 'owner',
-    ownerGeneration: 1,
-    providerOrder: ['openai'],
-    providers: [sshNativeCodexProvider(models)],
-  });
+  mocks.listModels.mockResolvedValue([sshNativeCodexProvider(models)]);
 }
 function start() {
   render(<StartRemoteSessionPanel hostId="remote-mac" />);
@@ -67,6 +63,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   setDataOwnerGeneration('owner', 1);
   invalidateProvidersSnapshot();
+  mocks.listModels.mockReset();
   publish();
   mocks.prefs.mockReturnValue({ model: 'gpt-5.5-codex', providerId: null, effort: 'medium' });
   mocks.create.mockResolvedValue({ id: 'new-task' });
@@ -78,6 +75,7 @@ beforeEach(() => {
     configurable: true,
     value: {
       remoteSsh: {
+        listCodexModels: mocks.listModels,
         statRemotePath: mocks.stat,
         mkdirPRemote: mocks.mkdir,
         list: async () => ({
@@ -118,23 +116,18 @@ afterEach(cleanup);
 
 describe('settings remote Codex creation', () => {
   it.each(['xd', 'custom-responses', 'openai-second'])(
-    'rejects the saved %s route before directory or database changes',
+    'uses the remote default instead of forwarding the saved local %s route',
     async (providerId) => {
       mocks.prefs.mockReturnValue({ model: 'available-model', providerId, effort: 'low' });
       start();
-      await waitFor(() =>
-        expect(mocks.error).toHaveBeenCalledWith(
-          'settings.remote.startSession.unsupportedCodexSource',
-        ),
-      );
-      expect(mocks.stat).not.toHaveBeenCalled();
-      expect(mocks.mkdir).not.toHaveBeenCalled();
-      expect(mocks.create).not.toHaveBeenCalled();
-      expect(mocks.navigate).not.toHaveBeenCalled();
+      await waitFor(() => expect(mocks.create).toHaveBeenCalled());
+      expect(mocks.listModels).toHaveBeenCalledWith('remote-mac');
+      expect(mocks.create.mock.calls[0][0]).toMatchObject({ model: 'available-model', providerId: 'openai' });
+      expect(mocks.error).not.toHaveBeenCalled();
     },
   );
 
-  it('does not create a gateway-only task even with no saved provider', async () => {
+  it('uses the remote native catalog even when the controller has only a gateway', async () => {
     commitProvidersSnapshot(beginProvidersRefresh(), {
       dataOwnerId: 'owner',
       ownerGeneration: 1,
@@ -142,13 +135,9 @@ describe('settings remote Codex creation', () => {
       providers: [sshProvider('xd', [sshModel('codex/gpt-5.6-luna')])],
     });
     start();
-    await waitFor(() =>
-      expect(mocks.error).toHaveBeenCalledWith(
-        'settings.remote.startSession.unsupportedCodexSource',
-      ),
-    );
-    expect(mocks.stat).not.toHaveBeenCalled();
-    expect(mocks.create).not.toHaveBeenCalled();
+    await waitFor(() => expect(mocks.create).toHaveBeenCalled());
+    expect(mocks.create.mock.calls[0][0]).toMatchObject({ model: 'available-model', providerId: 'openai' });
+    expect(mocks.error).not.toHaveBeenCalled();
   });
 
   it('creates with a catalog model, pinned provider and calibrated tuning', async () => {
@@ -167,31 +156,29 @@ describe('settings remote Codex creation', () => {
     });
   });
 
-  it('keeps valid saved preferences', async () => {
-    publish([sshModel('first'), sshModel('chosen', { supportsFastMode: true })]);
+  it('uses remote defaults even when the local native preference is available remotely', async () => {
+    publish([sshModel('first', { supportsFastMode: true }), sshModel('chosen', { supportsFastMode: true })]);
     mocks.prefs.mockReturnValue({ model: 'chosen', providerId: 'openai', effort: 'low' });
     start();
     await waitFor(() => expect(mocks.create).toHaveBeenCalled());
     expect(mocks.create.mock.calls[0][0]).toMatchObject({
-      model: 'chosen',
+      model: 'first',
       providerId: 'openai',
-      effort: 'low',
-      fastMode: true,
+      effort: 'high',
+      fastMode: false,
     });
+    expect(mocks.prefs).not.toHaveBeenCalled();
   });
 
-  it.each(['loading', 'failed', 'empty', 'bridge'] as const)(
-    'blocks %s catalogs before directory or database changes',
+  it.each(['failed', 'empty', 'bridge'] as const)(
+    'blocks %s remote catalogs before directory or database changes',
     async (state) => {
-      if (state === 'loading') invalidateProvidersSnapshot();
-      if (state === 'failed') failProvidersRefresh(beginProvidersRefresh());
+      if (state === 'failed') mocks.listModels.mockRejectedValue(new Error('offline'));
       if (state === 'empty') publish([]);
       if (state === 'bridge') publish([sshModel('chatgpt/local-only')]);
       start();
       const suffix =
-        state === 'loading'
-          ? 'modelCatalogLoading'
-          : state === 'failed'
+        state === 'failed'
             ? 'modelCatalogFailed'
             : 'noCompatibleModel';
       await waitFor(() =>
@@ -203,6 +190,26 @@ describe('settings remote Codex creation', () => {
       expect(mocks.navigate).not.toHaveBeenCalled();
     },
   );
+
+  it.each(['loading', 'failed'] as const)('ignores a %s controller catalog', async (state) => {
+    if (state === 'loading') invalidateProvidersSnapshot();
+    else failProvidersRefresh(beginProvidersRefresh());
+    start();
+    await waitFor(() => expect(mocks.create).toHaveBeenCalled());
+    expect(mocks.create.mock.calls[0][0].model).toBe('available-model');
+  });
+
+  it('waits for remote discovery before touching directories or creating a task', async () => {
+    let finish!: (value: ReturnType<typeof sshNativeCodexProvider>[]) => void;
+    mocks.listModels.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    start();
+    await waitFor(() => expect(mocks.listModels).toHaveBeenCalled());
+    expect(mocks.stat).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect((screen.getByRole('button') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finish([sshNativeCodexProvider([sshModel('available-model')])]));
+    await waitFor(() => expect(mocks.create).toHaveBeenCalled());
+  });
 
   it('rechecks model availability after waiting for the remote directory', async () => {
     mocks.stat.mockImplementation(async () => {

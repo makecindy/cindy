@@ -4,9 +4,10 @@ import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
+import { useDeviceProviders } from '@/hooks/useDeviceProviders';
+import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import { cn } from '@/lib/utils';
 import {
   BOT_MODEL_CHAIN_MAX,
   type BotHarness,
@@ -37,6 +38,7 @@ export function BotModelChainEditor({
   disabled = false,
   hiddenVendors = [],
   remote = false,
+  deviceId,
   label,
   onRestoreDefault,
   onNavigateToProviders,
@@ -46,12 +48,15 @@ export function BotModelChainEditor({
   disabled?: boolean;
   hiddenVendors?: MakerVendor[];
   remote?: boolean;
+  /** Device-link target; `remote` alone denotes the existing SSH restrictions. */
+  deviceId?: string;
   label?: string;
   onRestoreDefault?: () => void;
   onNavigateToProviders?: () => void;
 }) {
   const { t } = useBotTranslation();
-  const { availableVendors, loaded } = useAvailableAgents();
+  const { availableVendors, loaded } = useAvailableAgents(deviceId);
+  const catalog = useDeviceProviders(deviceId);
   const [expanded, setExpanded] = useState(false);
   const [pendingRoute, setPendingRoute] = useState<BotModelRoute | null>(null);
   const routes = value.slice(0, BOT_MODEL_CHAIN_MAX);
@@ -59,15 +64,22 @@ export function BotModelChainEditor({
   const onChange = (next: BotModelRoute[]) => {
     if (!disabled) onValueChange(next);
   };
-  // All local entry points, including empty-chain recovery, use the runtime
-  // roster. Remote callers supply their own device's hiddenVendors instead.
+  // Keep the local roster gate and SSH hiddenVendors contract. Device-link
+  // rosters are advisory until loaded: a failed request must not block editing
+  // the target device's independently loaded provider catalog.
+  const waitingForLocalRoster = !remote && !deviceId && !loaded;
   const visibleVendors = (['pi', 'codex', 'cc'] as const)
     .filter((vendor) => !hiddenVendors.includes(vendor))
-    .filter((vendor) => remote || (loaded && availableVendors.has(vendor)));
+    .filter(
+      (vendor) =>
+        (remote && !deviceId) ||
+        (deviceId && !loaded) ||
+        (loaded && availableVendors.has(vendor)),
+    );
   const unifiedAgents = visibleVendors.map(agentKindFor);
 
   const replace = (index: number, patch: Partial<BotModelRoute>) => {
-    if (disabled || (!remote && !loaded)) return;
+    if (disabled || waitingForLocalRoster) return;
     if (pendingRoute && index === routes.length) {
       const next = { ...pendingRoute, ...patch };
       if (next.model && routes.length < BOT_MODEL_CHAIN_MAX) {
@@ -95,7 +107,9 @@ export function BotModelChainEditor({
     );
     const vendor = unused ?? visibleVendors[0];
     if (!vendor) return;
-    const route = defaultRoute(vendor);
+    const route = deviceId
+      ? { harness: harnessFor(vendor), model: '', providerId: null, effort: '', fastMode: false }
+      : defaultRoute(vendor);
     if (route.model) onChange([...routes, route]);
     else setPendingRoute(route);
   };
@@ -103,21 +117,23 @@ export function BotModelChainEditor({
   const picker = (route: BotModelRoute, index: number) => (
     <div className="min-w-0 flex-1">
       <ModelSelector
-        disabled={disabled || (!remote && !loaded)}
+        disabled={disabled || waitingForLocalRoster}
+        deviceId={deviceId}
         vendorKey={vendorFor(route.harness)}
         modelId={route.model}
         effort={route.effort}
         currentProviderId={route.providerId}
+        agentIdentity={{ vendorKey: vendorFor(route.harness), state: 'current' }}
         triggerVariant="toolbar"
         popoverSide="bottom"
         ariaContext={t('bots.modelChain.routeLabel', { index: index + 1 })}
-        excludeSubscriptionDirect={remote}
-        excludeChatBridgedCodex={remote}
+        excludeSubscriptionDirect={remote && !deviceId}
+        excludeChatBridgedCodex={remote && !deviceId}
         fastMode={route.fastMode}
         onModelChange={(model) => replace(index, { model })}
         onEffortChange={(effort) => replace(index, { effort })}
         onFastModeChange={(fastMode) => replace(index, { fastMode })}
-        onNavigateToProviders={remote ? undefined : onNavigateToProviders}
+        onNavigateToProviders={remote || deviceId ? undefined : onNavigateToProviders}
         configurationEnabled
         unifiedPanel
         unifiedAgents={unifiedAgents}
@@ -133,6 +149,20 @@ export function BotModelChainEditor({
         }}
         unknownModelLabel={(model) => t('bots.modelUnavailable', { model })}
       />
+      {deviceId && route.providerId
+        ? (() => {
+            const provider = catalog.providers.find((item) => item.id === route.providerId);
+            return provider ? (
+              <p className="mt-1 break-words px-2 text-12 text-[var(--text-secondary)]">
+                {providerAccountLabel(
+                  providerDisplayName(provider, t),
+                  provider.openAiAccount?.identity?.trim() ||
+                    provider.subscriptionAccount?.identity?.trim(),
+                )}
+              </p>
+            ) : null;
+          })()
+        : null}
     </div>
   );
   return (
@@ -244,7 +274,6 @@ export function BotModelChainEditor({
                 {t('bots.model.restoreDefault')}
               </Button>
             ) : null}
-            <p className="text-11 leading-5">{t('bots.modelChain.description')}</p>
           </div>
         ) : null}
       </details>

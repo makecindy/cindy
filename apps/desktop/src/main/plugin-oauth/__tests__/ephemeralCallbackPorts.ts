@@ -3,7 +3,7 @@ import type { AddressInfo, ListenOptions } from 'node:net';
 import { expect, vi } from 'vitest';
 
 /** Keep real HTTP handlers/sockets, but allocate ports at bind time, not with a racy probe. */
-export function ephemeralCallbackPorts() {
+export function ephemeralCallbackPorts(expectedPort = 12345) {
   const servers = new Map<string, http.Server>();
   const ports = new Map<string, number>();
   const original = http.Server.prototype.listen;
@@ -12,9 +12,9 @@ export function ephemeralCallbackPorts() {
     ...args: unknown[]
   ) {
     const options = args[0] as ListenOptions;
-    // 12345 is only the logical callback authority, never an OS port reservation.
+    // The offered port is only the logical callback authority, never an OS reservation.
     // Conflict tests restore this spy and retain an actual listen(0) owner.
-    expect(options).toMatchObject({ port: 12345, ipv6Only: options.host === '::1' });
+    expect(options).toMatchObject({ port: expectedPort, ipv6Only: options.host === '::1' });
     expect(['127.0.0.1', '::1']).toContain(options.host);
     servers.set(options.host!, this);
     this.once('listening', () => ports.set(options.host!, (this.address() as AddressInfo).port));

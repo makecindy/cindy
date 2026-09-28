@@ -20,6 +20,7 @@ import {
   writeDbSlimmingRequest,
   writeDbSlimmingResult,
 } from './maintenanceStore';
+import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from './sharedTaskClosureSql';
 
 const TEMP_SPACE_MARGIN_BYTES = 64 * 1024 * 1024;
 const SQLITE_SIDECAR_SUFFIXES = ['-wal', '-shm', '-journal'] as const;
@@ -750,6 +751,48 @@ function compactWorkingCopy(
               )`,
             )
             .run(...activeResetBoundaryParameters);
+        }
+        // Cleared ordinary tasks must not remain as empty entries in local or
+        // remote lists. Bot-owned timelines keep their separate lifecycle.
+        activeDb.exec(
+          `UPDATE sessions SET status = 'deleted'
+            WHERE id IN (
+              SELECT id FROM temp.db_slimming_targets WHERE status = 'active'
+            )${sessionColumns.has('source') ? " AND COALESCE(source, '') != 'bot'" : ''}`,
+        );
+        if (tableExists(activeDb, 'agent_input_queue_snapshots')) {
+          activeDb.exec(
+            `DELETE FROM agent_input_queue_snapshots
+              WHERE session_id IN (
+                SELECT s.id FROM sessions s
+                JOIN temp.db_slimming_targets t ON t.id = s.id
+                WHERE t.status = 'active' AND s.status = 'deleted'
+              )`,
+          );
+        }
+        if (tableExists(activeDb, 'shared_task_events')) {
+          // Persist closure in the same transaction; relay recovery consumes
+          // this existing journal after the compacted database is installed.
+          const sharedTasks = activeDb
+            .prepare(
+              `SELECT DISTINCT e.session_id AS sessionId
+               FROM shared_task_events e
+               JOIN temp.db_slimming_targets t ON t.id = e.session_id
+               JOIN sessions s ON s.id = t.id
+              WHERE t.status = 'active' AND s.status = 'deleted'`,
+            )
+            .all() as Array<{ sessionId: string }>;
+          const closeSharedTask = activeDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL);
+          const commitPreparedClose = activeDb.prepare(
+            `UPDATE shared_task_events SET terminal = 1
+             WHERE session_id = ? AND kind = 'local-close' AND revision = 0 AND terminal = 0`,
+          );
+          for (const { sessionId } of sharedTasks) {
+            closeSharedTask.run(Math.floor(request.scannedAt), sessionId);
+            // An interrupted preparation may already occupy the unique fence.
+            // Commit it together with deletion so relay recovery can retry it.
+            commitPreparedClose.run(sessionId);
+          }
         }
       }
       if (messagesFtsDeleteTriggerSql) activeDb.exec(messagesFtsDeleteTriggerSql);

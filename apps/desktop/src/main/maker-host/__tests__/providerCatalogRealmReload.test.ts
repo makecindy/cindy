@@ -117,10 +117,12 @@ vi.mock('../auth-adapters.js', () => ({
     hasCodexOAuthLoginUnbound: () => false,
   },
 }));
-vi.mock('../claude-credentials-store.js', () => ({
-  hasClaudeAiOAuth: () => false,
-  hasClaudeAiOAuthUnbound: () => false,
+vi.mock('../claude-native-auth.js', () => ({
+  hasClaudeNativeLogin: () => false,
+  hasClaudeNativeLoginUnbound: () => false,
 }));
+vi.mock('../claude-native-connection.js', () => ({ readClaudeNativeLogin: async () => null }));
+vi.mock('../claude-native-cli.js', () => ({ readClaudeCliLoginStatus: async () => ({ loggedIn: false }) }));
 vi.mock('../grok-oauth-login.js', () => ({
   getGrokAccessToken: h.getGrokAccessToken,
   peekGrokAccessToken: () => null,

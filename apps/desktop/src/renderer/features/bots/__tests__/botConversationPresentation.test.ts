@@ -88,6 +88,17 @@ describe('teammate final-result presentation', () => {
     }
   });
 
+  it('keeps a persisted task result receipt visible while process rows are hidden', () => {
+    const receipt = message('receipt', 'assistant', '', {
+      systemCardType: 'bot-session-task-result',
+      systemCardData: { botCollaboration: { role: 'delegation-result' } },
+    });
+    const input = [message('u', 'user'), message('progress', 'assistant'), tool('t'), receipt];
+    for (const streaming of [true, false]) {
+      expect(allKeys(project(input, streaming))).toEqual(['msg-u', 'msg-receipt']);
+    }
+  });
+
   it('retains a later explanation after partial delivery and ignores unverified file candidates', () => {
     const result = project([message('u', 'user'),
       message('file', 'assistant', '', { files: [{ name: 'partial.pdf', path: '/partial.pdf' }] }),
@@ -177,4 +188,16 @@ describe('teammate final-result presentation', () => {
     expect(deferred.retry).not.toHaveBeenCalled();
     expect(group.deferred).toBe(deferred);
   });
+});
+
+it('keeps appended result receipts visible while the teammate is busy, across hidden wakeups', () => {
+  const input = [message('old-card', 'assistant', '', { systemCardType: 'bot-session-task' }),
+    message('new-input', 'user'),
+    message('result-1', 'assistant', '', { systemCardType: 'bot-session-task-result' }),
+    message('wake', 'user', '', { isSyntheticTrigger: true }),
+    message('result-2', 'assistant', '', { systemCardType: 'bot-session-task-result' }),
+    message('working', 'assistant')];
+  const result = project(input, true);
+  expect(result.filter(item => item.type === 'message' && item.message.systemCardType === 'bot-session-task-result').map(item => item.key))
+    .toEqual(['msg-result-1', 'msg-result-2']);
 });

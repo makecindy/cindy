@@ -244,7 +244,8 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean },
     ): Promise<GateResult> => {
       if (options?.purpose === 'voice-input') {
-        const readiness = await window.electronAPI.voiceInput.getReadiness();
+        const cached = window.electronAPI.voiceInput.getReadinessCached();
+        const readiness = cached?.ok ? cached : await window.electronAPI.voiceInput.getReadiness();
         if (readiness.ok) return { proceed: true };
 
         const dialogCopy = pickVoiceInputDialogCopy(copy, readiness);

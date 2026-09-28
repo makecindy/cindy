@@ -41,6 +41,7 @@ export interface RemoteScheduleWriteInput {
   targetSessionId?: string;
   persistentSession?: boolean;
   silentWhenIdle?: boolean;
+  preRunHook?: { command: string; timeoutMs?: number } | null;
   notify: RemoteScheduleNotifyConfig;
 }
 
@@ -112,6 +113,7 @@ export interface RemoteSchedule {
   targetSessionId?: string;
   persistentSession?: boolean;
   silentWhenIdle?: boolean;
+  preRunHook?: { command: string; timeoutMs?: number } | null;
   notify?: RemoteScheduleNotifyConfig;
   status: RemoteScheduleStatus;
   createdAt?: RemoteTimestamp;

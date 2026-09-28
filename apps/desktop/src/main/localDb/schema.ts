@@ -190,6 +190,12 @@ export const sessions = sqliteTable(
     imBotContextId: text('im_bot_context_id'),
     imUserId: text('im_user_id'),
     /**
+     * 个人 IM 渠道任务「跟随渠道默认」的记录(JSON,见 im/shared/channelDefaultRoute.ts)。
+     * 渠道建任务 / `/new` / 跟随切换成功时写入;当前路由与记录不一致 = 用户单独改过。
+     * NULL = 无记录(非 IM 任务或本列上线前建的任务)。
+     */
+    imDefaultRoute: text('im_default_route'),
+    /**
      * 本 session 创建时是否注入了 project-context 知识（来自 .cindy/project-knowledge/）。
      * 仅在创建瞬间由 main IPC 写入；后续不变。
      * Render 端用此字段决定 sidebar stripe / chat header chip 显示。
@@ -338,7 +344,10 @@ export const botProfileVersions = sqliteTable(
   }),
 );
 
-/** Canonical, delegation-linked and archived/history Session projections for a Bot. */
+/**
+ * Canonical, delegation-linked, group-lane and archived/history Session projections for a Bot.
+ * A `group` link is the Bot's hidden lane in one Bot group (`route_key = group:<groupId>`).
+ */
 export const botSessionLinks = sqliteTable(
   'bot_session_links',
   {
@@ -351,7 +360,7 @@ export const botSessionLinks = sqliteTable(
       .references(() => sessions.id, { onDelete: 'cascade' }),
     /** ProfileVersion pinned when this Session became canonical/delegation-linked. */
     profileVersion: integer('profile_version').notNull().default(1),
-    role: text('role', { enum: ['canonical', 'history', 'delegation'] }).notNull(),
+    role: text('role', { enum: ['canonical', 'history', 'delegation', 'group'] }).notNull(),
     routeKey: text('route_key'),
     createdAt: integer('created_at').notNull(),
     archivedAt: integer('archived_at'),
@@ -486,7 +495,7 @@ export const botDirectMessageThreads = sqliteTable(
   'bot_direct_message_threads',
   {
     id: text('id').primaryKey(),
-    /** Local Bot ids or deviceId::botId addresses, lexically ordered. Lifecycle deletion guards shared history. */
+    /** Local Bot ids or deviceId::botId addresses, lexically ordered. Deletion keeps these rows. */
     botAId: text('bot_a_id').notNull(),
     botBId: text('bot_b_id').notNull(),
     status: text('status', { enum: ['active', 'closed'] })
@@ -544,6 +553,142 @@ export const botDirectMessages = sqliteTable(
       t.sequence,
     ),
     idxThreadCreated: index('idx_bot_direct_messages_thread_created').on(t.threadId, t.createdAt),
+  }),
+);
+
+/** A user-owned group chat of local Bots (docs/product-rules/bot-group-chat.md). */
+export const botGroups = sqliteTable(
+  'bot_groups',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    /** Who answers a user message without @mentions: every member or nobody. */
+    replyMode: text('reply_mode', { enum: ['all', 'mentioned'] })
+      .notNull()
+      .default('all'),
+    /** `auto`: broadcast rounds think in parallel first; `sequential`: always one at a time. */
+    speakingMode: text('speaking_mode', { enum: ['auto', 'sequential'] })
+      .notNull()
+      .default('auto'),
+    /** Chosen 负责人; not a foreign key, an unavailable choice falls back to the first member. */
+    organizerBotId: text('organizer_bot_id'),
+    /** 项目文件夹 for 分工 steps; null uses the group's own folder under userData. */
+    projectDir: text('project_dir'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxUpdated: index('idx_bot_groups_updated').on(t.updatedAt),
+  }),
+);
+
+/** Ordered membership. Deleting a Bot profile removes its memberships. */
+export const botGroupMembers = sqliteTable(
+  'bot_group_members',
+  {
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    /** Highest group message sequence already delivered to this Bot's group lane. */
+    lastSeenSequence: integer('last_seen_sequence').notNull().default(0),
+    joinedAt: integer('joined_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.groupId, t.botId] }),
+    idxBot: index('idx_bot_group_members_bot').on(t.botId),
+  }),
+);
+
+/** The group's authoritative multi-author timeline. Author names are snapshots. */
+export const botGroupMessages = sqliteTable(
+  'bot_group_messages',
+  {
+    id: text('id').primaryKey(),
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    kind: text('kind', { enum: ['message', 'round-end', 'notice', 'plan', 'plan-end'] })
+      .notNull()
+      .default('message'),
+    authorKind: text('author_kind', { enum: ['user', 'bot', 'system'] }).notNull(),
+    /** Not a foreign key: messages outlive the authoring Bot. */
+    authorBotId: text('author_bot_id'),
+    authorName: text('author_name').notNull().default(''),
+    content: text('content').notNull().default(''),
+    mentionsJson: text('mentions_json').notNull().default('{"all":false,"botIds":[]}'),
+    noticeCode: text('notice_code'),
+    /** Renderer idempotency key for user messages. */
+    clientId: text('client_id'),
+    /** 分工 plan this message belongs to (安排卡, step hand-off, plan end). */
+    planId: text('plan_id'),
+    /** Step hand-off files relative to the plan's work directory. */
+    filesJson: text('files_json').notNull().default('[]'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqGroupSequence: uniqueIndex('uniq_bot_group_messages_group_sequence').on(
+      t.groupId,
+      t.sequence,
+    ),
+    uniqGroupClient: uniqueIndex('uniq_bot_group_messages_group_client')
+      .on(t.groupId, t.clientId)
+      .where(sql`${t.clientId} IS NOT NULL`),
+  }),
+);
+
+/** A 分工 plan: the organizer's steps and where they run (docs/product-rules/bot-group-chat.md §7). */
+export const botGroupPlans = sqliteTable(
+  'bot_group_plans',
+  {
+    id: text('id').primaryKey(),
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    status: text('status', {
+      enum: ['proposed', 'running', 'waiting', 'done', 'stopped', 'dismissed', 'superseded'],
+    }).notNull(),
+    /** The user's request the plan answers; step inputs quote it. */
+    requestText: text('request_text').notNull(),
+    organizerBotId: text('organizer_bot_id').notNull(),
+    organizerName: text('organizer_name').notNull(),
+    currentStep: integer('current_step'),
+    /** Resolved at 开始: the group folder, the project folder or the plan's worktree. */
+    workDir: text('work_dir'),
+    branch: text('branch'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxGroupCreated: index('idx_bot_group_plans_group_created').on(t.groupId, t.createdAt),
+  }),
+);
+
+export const botGroupPlanSteps = sqliteTable(
+  'bot_group_plan_steps',
+  {
+    planId: text('plan_id')
+      .notNull()
+      .references(() => botGroupPlans.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    /** Not a foreign key: the plan keeps the name snapshot when a Bot is removed. */
+    botId: text('bot_id').notNull(),
+    botName: text('bot_name').notNull(),
+    task: text('task').notNull(),
+    status: text('status', { enum: ['pending', 'running', 'done', 'failed'] })
+      .notNull()
+      .default('pending'),
+    /** Latest hand-off message of this step (a redo replaces it). */
+    resultMessageId: text('result_message_id'),
+    startedAt: integer('started_at'),
+    finishedAt: integer('finished_at'),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.planId, t.position] }),
   }),
 );
 
@@ -1616,6 +1761,26 @@ export const dailyModelUsage = sqliteTable(
   (t) => ({
     // day 开头 → 近 N 天范围扫描直接走 PK 索引, 无需额外 index。
     pk: primaryKey({ columns: [t.day, t.agentKind, t.model, t.costCurrency] }),
+  }),
+);
+
+/**
+ * 每日按任务 token 用量 (daily_session_usage) — 支撑用量历史「最耗 token 的任务」按所选
+ * 时间范围统计。与 daily_model_usage 同一处写入 (每个 turn done 后, 三个 harness 共用),
+ * 只记 token 合计。历史数据不 backfill: 上线后从 0 开始积累。
+ */
+export const dailySessionUsage = sqliteTable(
+  'daily_session_usage',
+  {
+    /** 本地时区 YYYY-MM-DD 字符串 (localDayKey)。 */
+    day: text('day').notNull(),
+    sessionId: text('session_id').notNull(),
+    tokens: integer('tokens').notNull().default(0),
+    /** 最后一次更新的 unix ms。 */
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.day, t.sessionId] }),
   }),
 );
 
