@@ -76,11 +76,23 @@ describe('buildMarkdownRevision', () => {
 
   it('keeps a formatting-only change visible when the same block also has text edits (regression)', () => {
     // Greptile P2：同一段里既新增加粗又在别处改文字时，新增的 `**` 留作上下文会让
-    // 加粗这处完全不可见（文字标记让候选过了校验）。此时不采纳语法感知候选，
-    // 交给区域候选把格式变化标成「旧删除 + 新新增」。
+    // 加粗这处完全不可见（文字标记让候选过了校验）。此时把该跨度折成「旧内容删除 +
+    // 新跨度新增」，格式变化就能看见。
     expect(buildMarkdownRevision('见 甲乙 文档 尾部旧', '见 **甲乙** 文档 尾部新')).toBe(
       '见 {--甲乙--}{++**甲乙**++} 文档 尾部{--旧--}{++新++}',
     );
+  });
+
+  it('handles a fine content change and a pure formatting addition in the same block (regression)', () => {
+    // 同一段里两种「新增格式」跨度的写法互相独立：有内容改动的跨度留白定界符、只标内容，
+    // 纯格式新增的跨度折成旧/新一对 —— 粗粒度不会拖累细粒度那一处（实机文档里两处
+    // 改动的段落同时出现时踩到过）。
+    expect(
+      buildMarkdownRevision(
+        '目标（建筑 / 车辆 / 人物）面对威胁，尾部甲乙丙。',
+        '目标（**车辆 / 人员**）面对威胁，尾部**甲乙丙**。',
+      ),
+    ).toBe('目标（{--建筑 / --}**车辆 / 人{--物--}{++员++}**）面对威胁，尾部{--甲乙丙--}{++**甲乙丙**++}。');
   });
 
   it('revises a bold-wrapped word change without falling back to the block (regression)', () => {

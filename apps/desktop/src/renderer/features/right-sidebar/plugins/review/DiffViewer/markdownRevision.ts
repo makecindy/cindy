@@ -404,16 +404,36 @@ function contentRanges(span: InlineSpan): SourceRange[] {
   return out;
 }
 
+/** 把新版侧的区间映射回旧版侧（只有对齐片段映射得出；纯新增片段没有旧版对应）。 */
+function mapToBefore(parts: readonly DiffSlice[], range: SourceRange): SourceRange[] {
+  const out: SourceRange[] = [];
+  let cursor = 0;
+  for (const part of parts) {
+    if (part.after) {
+      const start = Math.max(part.after.start, range.start);
+      const end = Math.min(part.after.end, range.end);
+      if (end > start && part.before) {
+        const offset = start - part.after.start;
+        out.push({
+          start: part.before.start + offset,
+          end: part.before.start + offset + (end - start),
+        });
+      }
+      cursor = part.after.end;
+    } else if (part.before && cursor >= range.start && cursor <= range.end) {
+      out.push({ start: part.before.start, end: part.before.end });
+    }
+  }
+  return out;
+}
+
 /**
- * 新版侧「可以留作上下文的**新增**格式定界符」区间。
- *
- * 只有同时满足两条才算：
- *  1. 区间内容是纯定界符（`**` / `~~` / `_` 连写）；
- *  2. 旧版**同一段内容上没有别的行内结构** —— 否则这是结构变化（`[link](u)` →
- *     `**link**`），定界符留作上下文会让新侧不再有「插入」标记、旧结构只剩零碎
- *     删除线；那种情况交给区域注入整体标「旧删除 + 新新增」。
+ * 新版侧「新增格式」的跨度：内容是纯定界符（`**` / `~~` / `_` 连写），定界符片段是
+ * **新增**的（旧版本来就有同样格式时不需要标记），且旧版同一段内容上没有别的行内结构
+ * （`[link](u)` → `**link**` 属于结构变化，交给区域注入整体替换）。
  */
 function contextFormatSpans(
+  parts: readonly DiffSlice[],
   source: string,
   beforeSpans: readonly InlineSpan[],
   afterSpans: readonly InlineSpan[],
@@ -424,9 +444,19 @@ function contextFormatSpans(
       /^[*_~]+$/.test(source.slice(range.start, range.end)),
     );
     if (delimiters.length === 0) continue;
-    const content = contentRanges(span);
+    const added = delimiters.every((range) =>
+      parts.some(
+        (part) =>
+          part.added &&
+          part.after &&
+          part.after.start >= range.start &&
+          part.after.end <= range.end,
+      ),
+    );
+    if (!added) continue;
+    const beforeRanges = contentRanges(span).flatMap((range) => mapToBefore(parts, range));
     const structuredBefore = beforeSpans.some((other) =>
-      content.some((range) => other.start < range.end && other.end > range.start),
+      beforeRanges.some((range) => other.start < range.end && other.end > range.start),
     );
     if (structuredBefore) continue;
     out.push({ span, delimiters });
@@ -438,52 +468,95 @@ function contextFormatSpans(
  * 跨度语法感知注入：逐片段标记，但**新增**的纯格式定界符片段原样输出 —— 它本来就
  * 是新版源码的一部分（新版本来就带这个格式），把它裹进 `{++…++}` 只会逼着标记去覆盖
  * 完整定界符对，从而把中间未改的正文也卷进来（用户实机反馈：`车辆 / 人` 没动却被标）。
- * 其余新增 / 删除片段照旧标记；放不下标记的内容由调用方的校验拦下。
  *
- * `coversFormatting` 是另一条纪律：定界符留作上下文的前提是该处**格式变化本来就能看出来**
- * （跨度内容里至少有一个内容标记）。`见 甲乙 … 尾部旧` → `见 **甲乙** … 尾部新` 这种
- * 「加粗新增 + 别处文字修改」的段落里，文字改动会让整个候选通过校验，但加粗这一处
- * 会完全不可见（Greptile P2）—— 此时不采纳语法感知候选，交给区域候选把格式变化标出来。
+ * 每个「新增格式」跨度分两种写法：
+ *  - 跨度里本来就有内容改动 → 定界符留白，只标内容改动（实机：`（{--建筑 / --}**车辆 / 人{--物--}{++员++}**）`）；
+ *  - 跨度是纯格式新增（里面没有别的改动）→ 折成一对「旧内容删除 + 新跨度新增」，
+ *    保证格式变化本身看得见（Greptile P2：`见 甲乙 … 尾部旧` → `见 **甲乙** … 尾部新`）。
+ * 跨度由内向外判定：内层跨度先定写法，外层就能看见它带来的标记。
  */
 function assembleSpanAware(
   parts: readonly DiffSlice[],
+  after: string,
   formats: ReadonlyArray<{ span: InlineSpan; delimiters: readonly SourceRange[] }>,
-): { text: string; marks: number; coversFormatting: boolean } {
-  const marked: SourceRange[] = [];
+): { text: string; marks: number } {
+  // 片段在新版源码里的锚点：删除片段没有新版区间，挂在当前光标位置。
+  const anchors: number[] = [];
+  let cursor = 0;
+  for (const part of parts) {
+    anchors.push(part.after ? part.after.start : cursor);
+    if (part.after) cursor = part.after.end;
+  }
+  const insideSpan = (index: number, span: InlineSpan): boolean => {
+    const range = parts[index].after;
+    if (range) return range.start >= span.start && range.end <= span.end;
+    const anchor = anchors[index];
+    return anchor > span.start && anchor < span.end;
+  };
+  const insideRange = (index: number, range: SourceRange): boolean => {
+    const own = parts[index].after;
+    if (own) return own.start >= range.start && own.end <= range.end;
+    const anchor = anchors[index];
+    return anchor > range.start && anchor <= range.end;
+  };
+
+  const regionSpans: InlineSpan[] = [];
+  let delimiters = formats.flatMap((format) => [...format.delimiters]);
+  for (const { span, delimiters: own } of [...formats].sort(
+    (left, right) =>
+      left.span.end - left.span.start - (right.span.end - right.span.start),
+  )) {
+    const hasContentChange = parts.some(
+      (part, index) =>
+        (part.added || part.removed) &&
+        part.value.trim() !== '' &&
+        insideSpan(index, span) &&
+        !delimiters.some((range) => insideRange(index, range)),
+    );
+    if (hasContentChange) continue;
+    regionSpans.push(span);
+    delimiters = delimiters.filter((range) => !own.includes(range));
+  }
+
+  const regions = [...regionSpans].sort((left, right) => left.start - right.start);
   let text = '';
   let marks = 0;
-  for (const part of parts) {
-    if (!part.added && !part.removed) {
-      text += part.value;
+  let index = 0;
+  while (index < parts.length) {
+    const region = regions.find((span) => insideSpan(index, span));
+    if (region) {
+      let oldText = '';
+      let stop = index;
+      while (stop < parts.length && insideSpan(stop, region)) {
+        if (parts[stop].before && !parts[stop].added) oldText += parts[stop].value;
+        stop += 1;
+      }
+      text += `{--${oldText}--}{++${after.slice(region.start, region.end)}++}`;
+      marks += 2;
+      index = stop;
       continue;
     }
-    const range = part.after;
-    if (
-      part.added &&
-      range !== null &&
-      formats.some(({ delimiters }) =>
-        delimiters.some(
-          (delimiter) => range.start >= delimiter.start && range.end <= delimiter.end,
-        ),
-      )
-    ) {
+    const part = parts[index];
+    if (!part.added && !part.removed) {
       text += part.value;
+      index += 1;
+      continue;
+    }
+    if (part.added && delimiters.some((range) => insideRange(index, range))) {
+      text += part.value;
+      index += 1;
       continue;
     }
     if (part.value.trim() === '') {
       text += part.value;
+      index += 1;
       continue;
     }
     text += part.added ? `{++${part.value}++}` : `{--${part.value}--}`;
-    if (part.after) marked.push(part.after);
     marks += 1;
+    index += 1;
   }
-  const coversFormatting = formats.every(({ span }) =>
-    contentRanges(span).some((range) =>
-      marked.some((other) => other.start < range.end && other.end > range.start),
-    ),
-  );
-  return { text, marks, coversFormatting };
+  return { text, marks };
 }
 
 /**
@@ -523,12 +596,11 @@ function buildStructuralRevisions(
 
   const spanAware = assembleSpanAware(
     parts,
-    contextFormatSpans(after, beforeSpans, afterSpans),
+    after,
+    contextFormatSpans(parts, after, beforeSpans, afterSpans),
   );
-  // 一个标记都没有时不采纳：纯格式新增（只有定界符变了）会让改动完全不可见，
-  // 那种情况按既定口径继续走区域注入（旧删除 + 新新增）；格式变化没有被内容
-  // 标记覆盖时同理（见 assembleSpanAware 的 coversFormatting）。
-  if (spanAware.marks > 0 && spanAware.coversFormatting) candidates.push(spanAware.text);
+  // 一个标记都没有时不采纳（纯空白改动等），交给后面的块级口径。
+  if (spanAware.marks > 0) candidates.push(spanAware.text);
 
   const clusters = changedClusters(parts);
   if (clusters.length > 0) {
