@@ -227,7 +227,9 @@ Server 对应入口为 `model-access-server/src/routes/modelCatalog.ts`、`servi
   不对鉴权、限流或服务异常做静默回退。新预设随客户端 bundled 合并，旧线上目录缺少该
   条目也不会遮掉它；不改变已有自定义连接地址。
 - 通用解析器兼容 `supported_reasoning_levels/default_reasoning_level` 与 Grok 的
-  `reasoningEfforts/reasoningEffort/supportsReasoningEffort`；同时读取 `input_modalities`、
+  `reasoningEfforts/reasoningEffort/supportsReasoningEffort`，以及 OpenAI 风格的 snake_case 扩展字段
+  `reasoning_efforts/reasoning_effort/supports_reasoning_effort`（仅在已有格式未提供对应值时补充）；
+  导入、刷新及用户覆盖的回归见 [modelDiscoveryChannels.test.ts](../../packages/model-providers/src/__tests__/modelDiscoveryChannels.test.ts)。同时读取 `input_modalities`、
   `service_tiers` 中的 `priority` 和 `max_context_window`。未声明或非法值保持未知，空列表
   与显式 false 保持关闭，不根据供应商品牌猜能力。
 - `max_context_window` 仅作为连接实报的 `discoveredMetadata.contextWindowMax` 持久化并投影
