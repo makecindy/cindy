@@ -5205,6 +5205,164 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { runtime.dispose(); }
   });
 
+  it('keeps the full original objective and each ordered follow-up once across 70 executions', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime();
+    const objective = 'Original objective\n' + 'O'.repeat(11_981);
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective });
+      if (!task.ok) throw new Error('missing task');
+      for (let index = 1; index <= 70; index += 1) {
+        await runtime.settleChild(task.childSessionId, 'R'.repeat(8_000));
+        const text = `Follow-up ${index}: ` + 'F'.repeat(3_960) + '\nKEEP THIS END';
+        const result = await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text });
+        expect(result).toMatchObject({ ok: true, childSessionId: task.childSessionId });
+        const sent = runtime.dispatch.mock.calls.filter(([input]) => input.targetSessionId === task.childSessionId).at(-1)![0];
+        expect(sent.persistedContent).toBe(text);
+        expect(sent.message.split(objective)).toHaveLength(2);
+        expect(sent.message.split(text)).toHaveLength(2);
+        expect(sent.message).not.toContain('Previous objective:');
+        expect(sent.message).not.toContain('R'.repeat(100));
+        if (index > 1) expect(sent.message).not.toContain(`Follow-up ${index - 1}: `);
+        expect(h.sqlite!.prepare('SELECT objective FROM bot_delegations WHERE id = ?').pluck().get(task.delegationId)).toBe(objective);
+      }
+      const inputs = h.sqlite!.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid").all(task.childSessionId) as Array<{ content: string }>;
+      expect(inputs).toHaveLength(71);
+      expect(inputs[0].content).toBe(objective);
+      for (let index = 1; index <= 70; index += 1) expect(inputs[index].content.startsWith(`Follow-up ${index}: `)).toBe(true);
+    } finally { runtime.dispose(); }
+  });
+
+  it('keeps active queued supplements ordered and deduplicated without changing the objective', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ readSessionExecution: () => ({ instanceId: 'fixture-runtime', generation: 1 }) });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Stable objective.' });
+      if (!task.ok) throw new Error('missing task');
+      for (const index of [1, 1, 2, 2]) {
+        expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId,
+          { kind: 'message', text: `Queued requirement ${index}.`, idempotencyKey: `input-${index}` })).toMatchObject({ ok: true });
+      }
+      const inputs = h.sqlite!.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid").all(task.childSessionId);
+      expect(inputs).toEqual([{ content: 'Stable objective.' }, { content: 'Queued requirement 1.' }, { content: 'Queued requirement 2.' }]);
+      expect(h.sqlite!.prepare('SELECT objective FROM bot_delegations WHERE id = ?').pluck().get(task.delegationId)).toBe('Stable objective.');
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(3);
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['pause', 'cancel'] as const)('blocks old dispatch timers and late completion after a follow-up is %s before acceptance', async mode => {
+    vi.useFakeTimers();
+    await seedPair();
+    let unavailable = false;
+    const runtime = createDelegationRuntime({ taskControl: true, transientUnavailable: () => unavailable });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Stable objective.' });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.settleChild(task.childSessionId, 'Initial work done.');
+      unavailable = true;
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId,
+        { kind: 'message', text: 'Deferred follow-up.' })).toMatchObject({ ok: true, queued: true });
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, mode)).toMatchObject({ ok: true });
+      const started = runtime.started.filter(turn => turn.sessionId === task.childSessionId).length;
+      unavailable = false;
+      runtime.advance(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'done',
+        expectedRunSequence: 1, resultText: 'Old duplicate result.' });
+      await runtime.delegation.restore();
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(started);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({
+        task: { status: mode === 'pause' ? 'queued' : 'cancelled' },
+      });
+      if (mode === 'pause') {
+        expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId,
+          { kind: 'message', text: 'Must not release pause.' })).toMatchObject({ ok: false, errorCode: 'TASK_PAUSED' });
+      }
+    } finally { runtime.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['available', 'missing', 'rewound', 'cleared'] as const)('continues legacy nested objectives safely with %s initial input', async history => {
+    await seedPair();
+    const runtime = createDelegationRuntime();
+    const objective = 'Keep the original\n  formatting and Requester follow-up: literal text.';
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.settleChild(task.childSessionId, 'Old work done.');
+      const legacy = ('Continue the same Session task with the requester’s follow-up.\n\nPrevious objective:\n').repeat(60) + 'truncated legacy text';
+      h.sqlite!.prepare("UPDATE bot_delegations SET objective = ?, run_sequence = 5, permission_snapshot_json = json_remove(permission_snapshot_json, '$.taskInput') WHERE id = ?").run(legacy, task.delegationId);
+      const firstId = `bot-delegation-start:${task.delegationId}`;
+      if (history === 'missing') h.sqlite!.prepare('DELETE FROM messages WHERE session_id = ? AND client_id = ?').run(task.childSessionId, firstId);
+      if (history === 'rewound') h.sqlite!.prepare('UPDATE messages SET rewind_at = 20000 WHERE session_id = ? AND client_id = ?').run(task.childSessionId, firstId);
+      if (history === 'cleared') h.sqlite!.prepare('UPDATE sessions SET cleared_at = 20000 WHERE id = ?').run(task.childSessionId);
+      const oldRows = h.sqlite!.prepare('SELECT id, content FROM messages WHERE session_id = ? ORDER BY rowid').all(task.childSessionId);
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'Only this new request.' })).toMatchObject({ ok: true });
+      const sent = runtime.dispatch.mock.calls.filter(([input]) => input.targetSessionId === task.childSessionId).at(-1)![0];
+      expect(sent.persistedContent).toBe('Only this new request.');
+      expect(sent.message).not.toContain(legacy);
+      if (history === 'available') expect(sent.message).toContain(objective);
+      else {
+        expect(sent.message).toContain('could not be recovered');
+        expect(sent.message).not.toContain(objective);
+      }
+      expect(h.sqlite!.prepare('SELECT objective FROM bot_delegations WHERE id = ?').pluck().get(task.delegationId)).toBe(history === 'available' ? objective : legacy);
+      expect(h.sqlite!.prepare('SELECT id, content FROM messages WHERE session_id = ? ORDER BY rowid').all(task.childSessionId).slice(0, oldRows.length)).toEqual(oldRows);
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['queued', 'accepted'] as const)('restores the correct follow-up after restart at the %s boundary without replaying completed actions', async boundary => {
+    await seedPair();
+    let unavailable = false;
+    const before = createDelegationRuntime({ transientUnavailable: () => unavailable });
+    const objective = 'Stable original objective.';
+    const text = 'Now verify the existing change; do not apply it again.';
+    const task = await before.delegation.startSessionTask({ callerSessionId: 'session-1', objective });
+    if (!task.ok) throw new Error('missing task');
+    await before.settleChild(task.childSessionId, 'The tool already applied the change.');
+    before.advance(1_000);
+    unavailable = boundary === 'queued';
+    expect(await before.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text })).toMatchObject({ ok: true });
+    before.dispose();
+    const after = createDelegationRuntime({ startTime: 20_000, taskControl: true,
+      readSessionExecution: () => ({ instanceId: 'restored-runtime', generation: 1 }) });
+    try {
+      await after.delegation.restore();
+      const sent = after.dispatch.mock.calls.filter(([input]) => input.targetSessionId === task.childSessionId);
+      expect(sent).toHaveLength(1);
+      expect(sent[0][0].message).toContain(objective);
+      expect(sent[0][0].message).toContain(text);
+      if (boundary === 'queued') expect(sent[0][0].persistedContent).toBe(text);
+      else {
+        expect(sent[0][0].message).toContain('Do not repeat completed tool actions');
+        expect(sent[0][0].persistedContent).not.toBe(text);
+        expect(sent[0][0].persistedContent).not.toBe(objective);
+      }
+      await after.delegation.restore();
+      expect(after.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(1);
+      expect(h.sqlite!.prepare("SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user' AND content = ?").pluck().get(task.childSessionId, text)).toBe(1);
+    } finally { after.dispose(); }
+  });
+
+  it.each([false, true])('starts only an explicit new follow-up after confirmed cancellation (previously paused: %s)', async paused => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Original task.' });
+      if (!task.ok) throw new Error('missing task');
+      if (paused) await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'cancel')).toMatchObject({ ok: true, control: { state: 'cancelling' } });
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'Too early.' })).toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      await runtime.settleChild(task.childSessionId, 'Cancelled.');
+      const count = runtime.started.filter(turn => turn.sessionId === task.childSessionId).length;
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'done', resultText: 'Late callback.' });
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(count);
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'New explicitly requested work.' })).toMatchObject({ ok: true });
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(count + 1);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ task: { status: 'running', control: { state: 'active' } } });
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: false, errorCode: 'NOT_PAUSED' });
+    } finally { runtime.dispose(); }
+  });
+
   it('rechecks explicit archive inside the continuation transaction', async () => {
     await seedPair();
     let childId = '';
