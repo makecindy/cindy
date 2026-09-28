@@ -778,9 +778,17 @@ describe('sendToSession ordering', () => {
     );
     expectOrder(resumeBranch, '...directoryGrantsForRuntime(storedExtraDirs),', 'await bootstrapSession(opts);');
     expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
-    expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
-    expect(switchFocusIpcBlock).toContain('const didResume = await resumeOrcaWorkerSessionIfMissing(target);');
-    expect(switchFocusMcpBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
+    expect(serviceDepsBlock).toContain('await orcaWorkerResumeScheduler.request(target);');
+    // focus 切换是纯 UI 操作：resume 只能后台调度，不能在 IPC / MCP handler 里同步 await
+    // 冷启动（首次切 dormant worker 的 ~5s 卡顿回归点）。
+    expect(switchFocusIpcBlock).toContain(
+      'orcaWorkerResumeScheduler.requestInBackground(target, (err) => {',
+    );
+    expect(switchFocusIpcBlock).not.toContain('await resumeOrcaWorkerSessionIfMissing(target)');
+    expect(switchFocusMcpBlock).toContain(
+      'orcaWorkerResumeScheduler.requestInBackground(target, (err) => {',
+    );
+    expect(switchFocusMcpBlock).not.toContain('await resumeOrcaWorkerSessionIfMissing(target)');
   });
 
   it('keeps IPC and MCP createWorker delegated to the shared lifecycle service', () => {
