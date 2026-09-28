@@ -8975,8 +8975,6 @@ export default function SessionScreen() {
               });
             }}
             worker={collab.isWorker ? {
-              onOpenLead: collab.workerLeadSessionId ? collab.openLead : undefined,
-              onSetFocus: collab.workerSelf && !collab.workerSelf.focused ? () => void collab.setSelfFocus() : undefined,
               onArchive: collab.workerSelf ? (onConfirmed) => collab.confirmArchiveSelf(onConfirmed) : undefined,
             } : undefined}
             onRegenerateTitle={() => maker.regenerateSessionTitle(sessionId)}

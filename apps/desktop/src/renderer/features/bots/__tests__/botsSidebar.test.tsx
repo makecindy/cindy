@@ -17,6 +17,7 @@ vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }) }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: translate, i18n: { resolvedLanguage: 'en' } }),
 }));

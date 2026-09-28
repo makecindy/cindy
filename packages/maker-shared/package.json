@@ -16,6 +16,7 @@
     "./chat-quotes": "./src/chatQuotes.ts",
     "./command-display": "./src/commandDisplay.ts",
     "./client-endpoints": "./src/clientEndpoints.ts",
+    "./companion-import": "./src/companionImport.ts",
     "./composer-palette": "./src/composerPalette.ts",
     "./conversation-search": "./src/conversationSearch.ts",
     "./device-list": "./src/deviceList.ts",

@@ -1,3 +1,4 @@
+import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
 import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
 import { mergeByokNativeConfigs } from '../model-access/byokProvider.js';
@@ -1862,6 +1863,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   }
   log.info('pi agent enabled', { binaryPath });
   return new PiAgent({
+    resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
     getDisabledSkillPaths: readDisabledSkillPaths,
     resolveModelContextLimit: (providerId, modelId) => {
       const catalog = getActiveCatalog();

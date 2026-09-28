@@ -409,6 +409,7 @@ describe('orcaTeamStore', () => {
         feishu_bot_app_id TEXT,
         im_bot_context_id TEXT,
         im_user_id TEXT,
+        im_default_route TEXT,
         used_project_context INTEGER NOT NULL DEFAULT 0,
         codex_history_has_product_prompt INTEGER,
         codex_plan_json TEXT,

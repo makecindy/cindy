@@ -687,6 +687,8 @@ export interface PiSubagentRunnerLaunchRequest {
 }
 
 export interface AgentDeps {
+  /** Opaque companion credential identity, freshly resolved at startup. No values enter the harness. */
+  resolveSessionEnvironment?: (sessionId: string) => Promise<{ identity: string; assertCurrent?(): void } | undefined>;
   /** Cindy-only local Skill overrides. Freeze at native runtime startup; never apply to SSH. */
   getDisabledSkillPaths?: () => readonly string[];
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */

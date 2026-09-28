@@ -4309,13 +4309,13 @@
       "defaults": {
         "title": "新对话配置",
         "channelDescriptions": {
-          "feishu": "飞书新对话会使用这组 Agent 和模型；已有私聊发送 /new 后应用。",
+          "feishu": "飞书新对话会使用这组 Agent 和模型；已有任务若没单独改过模型，会在收到下一条消息时切换过来。",
           "slack": "Slack 新 thread 会使用这组 Agent 和模型。",
-          "discord": "Discord 新对话会使用这组 Agent 和模型；已有私聊发送 /new 后应用。",
-          "wechat": "微信新对话会使用这组 Agent、模型和权限模式；已有私聊发送 /new 后应用。",
-          "telegram": "Telegram 新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
-          "dingtalk": "钉钉新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
-          "wecom": "企业微信新对话会使用这组 Agent、模型和权限模式；已有对话发送 /new 后应用。"
+          "discord": "Discord 新对话会使用这组 Agent 和模型；已有任务若没单独改过模型，会在收到下一条消息时切换过来。",
+          "wechat": "微信新对话会使用这组 Agent、模型和权限模式；已有任务若没单独改过模型，会在收到下一条消息时换用这组 Agent 和模型，权限模式仍在已有私聊发送 /new 后应用。",
+          "telegram": "Telegram 新对话会使用这组 Agent 和模型；已有任务若没单独改过模型，会在收到下一条消息时切换过来。",
+          "dingtalk": "钉钉新对话会使用这组 Agent 和模型；已有任务若没单独改过模型，会在收到下一条消息时切换过来。",
+          "wecom": "企业微信新对话会使用这组 Agent、模型和权限模式；已有任务若没单独改过模型，会在收到下一条消息时换用这组 Agent 和模型，权限模式仍在已有对话发送 /new 后应用。"
         },
         "agentLabel": "Agent",
         "agentUnsupportedOnChannelHint": "{{agent}} Agent 不支持此渠道的逐条权限确认，消息将无法处理。请改用 Claude Code 或 Codex。",
@@ -7972,7 +7972,15 @@
         "empty": "还没有消息",
         "preview": "{{name}}：{{text}}",
         "previewYou": "你：{{text}}",
-        "waiting": "在等你确认"
+        "waiting": "在等你确认",
+        "planProposed": "{{name}}：安排好了，等你开始",
+        "planProposedAnonymous": "安排好了，等你开始",
+        "planRunning": "分工 {{step}}/{{total}} · {{name}}正在做",
+        "planRunningNoStep": "{{name}}正在做",
+        "planPlanning": "{{name}}正在安排…",
+        "planStepDone": "{{name}}做完了，等你继续",
+        "planStepFailed": "{{name}}没做完",
+        "planWaitingAnonymous": "分工停下了，等你看看"
       },
       "create": {
         "title": "新建群聊",
@@ -8003,7 +8011,17 @@
         "tooLong": "消息太长了，最多 {{max}} 个字",
         "sendFailed": "消息没有发出去，请稍后重试",
         "stopFailed": "没能停下这一轮，请再试一次",
-        "stop": "停止这一轮"
+        "stop": "停止这一轮",
+        "more": "更多操作",
+        "division": "安排分工",
+        "divisionDescription": "让负责人先分好工，伙伴们一步步做",
+        "divisionBusy": "正在分工，做完或停止后才能安排新的",
+        "divisionTag": "分工",
+        "removeDivision": "去掉分工",
+        "placeholderDivision": "说说要做成什么，负责人会先分好工…",
+        "placeholderPlanProposed": "想换人或改步骤，直接说…",
+        "placeholderPlanWaiting": "想让{{name}}改改，直接说…",
+        "placeholderPlanRunning": "说的话会带给正在做的{{name}}…"
       },
       "timeline": {
         "loadEarlier": "查看更早的消息",
@@ -8012,12 +8030,28 @@
         "emptyDescription": "说一句话开始，伙伴们会接着聊。@ 某位伙伴就只让它回答。",
         "roundEnded": "伙伴们说完了",
         "continue": "继续讨论",
-        "continueFailed": "没能继续讨论，请再试一次"
+        "continueFailed": "没能继续讨论，请再试一次",
+        "nextStep": "下一步：",
+        "continuePlan": "继续",
+        "continuePlanFailed": "没能继续下一步，请再试一次",
+        "stepFailed": "{{name}}没做完",
+        "retryStep": "重试",
+        "retryFailed": "没能重试这一步，请再试一次",
+        "endPlan": "结束分工",
+        "planDone_one": "{{count}} 步都做完了",
+        "planDone_other": "{{count}} 步都做完了",
+        "planDoneGeneric": "分工做完了"
       },
       "notice": {
         "memberFailed": "{{name}}这次没能回复",
         "memberTimeout": "{{name}}太久没有回复，这次先跳过",
-        "memberUnavailable": "{{name}}现在不可用，这次没有发言"
+        "memberUnavailable": "{{name}}现在不可用，这次没有发言",
+        "planFailed": "{{name}}没排出分工，可以再试一次",
+        "planStopped": "分工已停止",
+        "workdirUnavailable": "{{name}}找不到工作目录",
+        "stepFailed": "{{name}}这一步出错了，没做完",
+        "stepTimeout": "{{name}}太久没做完，这一步先停下",
+        "stepUnavailable": "{{name}}现在不可用，这一步没法做"
       },
       "settings": {
         "open": "群设置",
@@ -8044,13 +8078,55 @@
         "speakingModeSequential": "始终轮流",
         "speakingModeAutoNote": "没有 @ 人或 @所有人时，第一圈大家同时想，之后轮流接话；@ 了伙伴就按 @ 的先后轮流。",
         "speakingModeSequentialNote": "每次只有一位伙伴发言，后说的能看到前面的回答。",
-        "speakingModeSaveFailed": "发言方式没能保存，请再试一次"
+        "speakingModeSaveFailed": "发言方式没能保存，请再试一次",
+        "setOrganizer": "设为负责人",
+        "setOrganizerNamed": "把 {{name}} 设为负责人",
+        "organizerNote": "负责人帮你安排谁做哪一步，默认是第一位伙伴。",
+        "organizerSaveFailed": "负责人没能更换，请再试一次",
+        "projectDir": "项目文件夹",
+        "projectDirNone": "没选",
+        "projectDirChoose": "选择",
+        "projectDirChange": "更换",
+        "projectDirClear": "清除",
+        "projectDirNote": "分工做事时，伙伴们在这里干活。不选也行，会用这个群自己的文件夹；选了 git 项目，每次分工会新开一个 worktree 和分支，不动你手上的代码。",
+        "projectDirSaveFailed": "项目文件夹没能保存，确认文件夹还在后再试"
       },
       "errors": {
         "memberLimit": "一个群需要 2–6 位伙伴",
         "memberUnavailable": "有伙伴现在不可用，换一位再试",
         "notFound": "这个群聊已不存在",
-        "hostNotReady": "Cindy 还在准备中，请稍后重试"
+        "hostNotReady": "Cindy 还在准备中，请稍后重试",
+        "planOpen": "正在分工，做完或停止后才能安排新的",
+        "planClosed": "这个安排已经结束或更新了"
+      },
+      "organizer": "负责人",
+      "plan": {
+        "intro_one": "这件事分 {{count}} 步，我这样分工：",
+        "intro_other": "这件事分 {{count}} 步，我这样分工：",
+        "missing": "这个安排已经读不到了",
+        "start": "开始",
+        "dismiss": "不用了",
+        "editHint": "想换人或改步骤，直接说",
+        "pauseNote": "每做完一步会停下来，等你点「继续」。",
+        "superseded": "已更新",
+        "dismissed": "不用了",
+        "stopped": "已停止",
+        "stepDone": "做完了",
+        "stepRunning": "正在做",
+        "stepFailed": "没做完",
+        "stepPending": "还没开始",
+        "stepMenuTitle": "谁来做这一步",
+        "removeStep": "删掉这一步",
+        "keepOneStep": "至少留一步",
+        "startFailed": "没能开始分工，请再试一次",
+        "dismissFailed": "没能结束这个安排，请再试一次",
+        "editFailed": "这一步没改成，请再试一次"
+      },
+      "speaking": {
+        "planning": "正在安排…"
+      },
+      "files": {
+        "openFailed": "文件没能打开，可能已被移动或删除"
       }
     },
     "joined": {
@@ -8144,6 +8220,41 @@
           "prompt": "一个温暖、幽默的伙伴，愿意听我说生活中的小事，不急着给建议。"
         }
       }
+    },
+    "import": {
+      "title": "导入伙伴",
+      "entry": "从其他 Agent 导入",
+      "description": "选择要从 Hermes 或 OpenClaw 带来的内容。",
+      "empty": "这台电脑上没有找到已安装的 Agent。",
+      "personality": "性格与做事习惯",
+      "memory": "关于你的记忆",
+      "skills": "技能",
+      "connections": "环境与连接",
+      "automations": "自动化",
+      "paused": "导入后仍停用",
+      "itemAttention": "需要处理",
+      "takeover": "检查通过后，由伙伴接管自动化",
+      "takeoverNote": "数据连接验证通过后才暂停原任务。取消所需依赖时，原任务继续运行。",
+      "submit": "导入",
+      "back": "上一步",
+      "open": "打开伙伴",
+      "running": "正在导入并检查连接…",
+      "complete": "导入完成",
+      "attention": "部分内容需要处理，详见下方。",
+      "error": "未能完成导入，可按原选择重试。",
+      "keptAtSource": "尚未完成接管",
+      "retry": "重新检查",
+      "missingSelection": "没有选择这项自动化所需的内容。",
+      "authRefresh": "原授权的续期方式尚需接通。",
+      "toolMapping": "原来的工具限制尚需对应，暂不接管。",
+      "modelMapping": "原来的模型配置尚需对应。",
+      "contextMapping": "原来的工作目录或关联上下文尚需对应。",
+      "deliveryFailed": "尚未验证原来的发送位置。",
+      "sourceChanged": "原任务已变化，请重新读取。",
+      "credentialFailed": "凭证未能安全保存。",
+      "scriptMissing": "缺少这项任务所需的脚本。",
+      "sourceCommand": "找不到原 Agent 的控制命令。",
+      "readFailed": "尚未验证这项任务实际需要的数据查询。"
     }
   },
   "common": {

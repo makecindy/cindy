@@ -1415,6 +1415,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 网关白名单字面比对,裸名必 403。钉到会话自身 wire 模型(唯一确定已授权);
     // 裸名会话(订阅直连/自定义中继)不传,CLI 默认行为零变化。
     const smallFastModel = opts.model.includes('/') ? sdkModel : undefined;
+    const companionEnvironment = opts.botRuntimeProfile && !opts.remoteHostId && opts.sessionId
+      ? await this.deps.resolveSessionEnvironment?.(opts.sessionId) : undefined;
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
       nativeCliAuth,
@@ -3963,6 +3965,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const botOwnSkillPluginRoots = reviewMode
         ? []
         : [...new Set(opts.botRuntimeProfile?.skillPolicy.ownSkillPluginRoots ?? [])];
+      companionEnvironment?.assertCurrent?.();
       const query = sdkQuery({
         prompt: inputQueue as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {

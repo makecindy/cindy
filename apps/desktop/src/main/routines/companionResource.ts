@@ -44,7 +44,7 @@ export async function getBotRoutineRemoteResource(id: string): Promise<RemoteRes
       triggers: triggers.map((trigger) => trigger.kind === 'cron'
         ? { kind: trigger.kind, expression: trigger.expression, timezone: trigger.timezone }
         : trigger.kind === 'interval' ? { kind: trigger.kind, intervalMs: trigger.intervalMs }
-          : { kind: trigger.kind, sourceId: trigger.sourceId, eventType: trigger.eventType }),
+          : trigger.kind === 'once' ? { kind: trigger.kind, at: trigger.at } : { kind: trigger.kind, sourceId: trigger.sourceId, eventType: trigger.eventType }),
     }));
     return { ...base, blocks: [{ id: 'routines', primitive: 'routine-list', fallbackMarkdown: items.map((r) => r.name).join('\n') || '—', data: { items } }],
       actions: [{ id: 'routine-create', label: text('New Routine', '新例行任务', '新例行任務', '新しいルーティン', '새 루틴') }] };

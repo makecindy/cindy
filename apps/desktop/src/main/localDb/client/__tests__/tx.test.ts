@@ -90,6 +90,7 @@ CREATE TABLE sessions (
   source TEXT NOT NULL DEFAULT 'desktop',
   im_bot_context_id TEXT,
   im_user_id TEXT,
+  im_default_route TEXT,
   remote_host_id TEXT,
   active_turn_started_at INTEGER,
   last_turn_ended_at INTEGER,
@@ -2916,6 +2917,7 @@ describe('db worker tx handlers', () => {
           fastMode: false,
           agentKind: 'pi',
           providerId: 'xai',
+          imDefaultRoute: 'default-route-record',
           source: 'telegram',
           imBotContextId: 'bot',
           imUserId: 'user',
@@ -2926,7 +2928,7 @@ describe('db worker tx handlers', () => {
       expect(result).toEqual({ previousStatus: 'active' });
       await expect(
         client.query(
-          `SELECT id, status, im_bot_context_id, im_user_id
+          `SELECT id, status, im_bot_context_id, im_user_id, im_default_route
            FROM sessions WHERE id IN ('telegram-old', 'telegram-new') ORDER BY id`,
         ),
       ).resolves.toEqual([
@@ -2935,12 +2937,14 @@ describe('db worker tx handlers', () => {
           status: 'active',
           im_bot_context_id: 'bot',
           im_user_id: 'user',
+          im_default_route: 'default-route-record',
         },
         {
           id: 'telegram-old',
           status: 'archived',
           im_bot_context_id: null,
           im_user_id: null,
+          im_default_route: null,
         },
       ]);
       await expect(client.query('SELECT * FROM im_bindings')).resolves.toEqual([]);

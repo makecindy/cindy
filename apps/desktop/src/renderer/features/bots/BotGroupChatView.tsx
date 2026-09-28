@@ -2,9 +2,12 @@
  * 群聊页：顶栏（成员头像、群名、成员名单、群设置入口）+ 多作者时间线 + 输入框。
  *
  * 数据全部来自 main（docs/product-rules/bot-group-chat.md §3）：进入时读一页最新消息，
- * 之后每条 `onBotGroupChanged` 推送都整页重读，renderer 不自己拼时间线。加载沿用
- * BotDirectMessageView 的新鲜度护栏：请求代次 + data owner 代次 + 推送 owner 戳，
- * 过期响应一律丢弃。更早的消息按需翻页，合并进当前时间线。
+ * 之后每条 `onBotGroupChanged` 推送（含分工的 `'plan'`）都整页重读，renderer 不自己拼
+ * 时间线。加载沿用 BotDirectMessageView 的新鲜度护栏：请求代次 + data owner 代次 + 推送
+ * owner 戳，过期响应一律丢弃。更早的消息按需翻页，连同其引用的安排合并进当前时间线。
+ *
+ * 分工（§7）：安排卡、交接文件与「下一步 · 继续」「没做完 · 重试」见 BotGroupPlan.tsx；
+ * 这里只负责把安排快照接到对应消息上，并调用 main 的安排操作。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, CircleAlert, RefreshCcw, Settings2, Sparkles } from 'lucide-react';
@@ -27,6 +30,10 @@ import type {
   BotGroupDetail,
   BotGroupMemberView,
   BotGroupMessageView,
+  BotGroupPlanAction,
+  BotGroupPlanStepView,
+  BotGroupPlanView,
+  BotGroupSpeakerActivity,
 } from '../../../shared/botGroupChat';
 import { useRegisterContentHeader } from '../feature-context';
 import { BotAvatar } from './BotAvatar';
@@ -34,14 +41,29 @@ import { BotGenerationLabel } from './BotGenerationLabel';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
 import { BotGroupComposer } from './BotGroupComposer';
 import { BotGroupPendingInteraction } from './BotGroupPendingInteraction';
+import {
+  BotGroupHandoffFiles,
+  BotGroupOrganizerTag,
+  BotGroupPlanCard,
+  BotGroupPlanEndDivider,
+  BotGroupPlanFollowUpRow,
+  type BotGroupFollowUpAction,
+  type BotGroupPlanCardAction,
+} from './BotGroupPlan';
 import { splitBotGroupMentionSegments } from './botGroupMentions';
 import {
   BOT_GROUP_SETTINGS_PARAM,
+  botGroupComposerPlanState,
+  botGroupErrorKey,
   botGroupMemberNames,
+  botGroupNoticeKey,
+  botGroupPlanFollowUp,
   continuableRoundEndId,
   mergeBotGroupMessages,
+  mergeBotGroupPlans,
+  openBotGroupPlan,
 } from './botGroupPresentation';
-import { botGroupApi } from './botGroupStore';
+import { botGroupApi, editBotGroupPlanStep, runBotGroupPlanAction } from './botGroupStore';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from './botConversationTimeline';
 
 type GroupViewState =
@@ -51,10 +73,22 @@ type GroupViewState =
       group: BotGroupDetail;
       /** Pages loaded through 「查看更早的消息」, merged under the latest page. */
       older: BotGroupMessageView[];
+      /** Plans referenced by the older pages; the latest read wins on overlap. */
+      olderPlans: BotGroupPlanView[];
       olderHasMore: boolean;
     }
   | { kind: 'missing' }
   | { kind: 'error' };
+
+/** Toast copy when a plan action fails without a more specific cause. */
+const PLAN_ACTION_FAILED: Record<BotGroupPlanAction, string> = {
+  start: 'bots.groupChat.plan.startFailed',
+  dismiss: 'bots.groupChat.plan.dismissFailed',
+  continue: 'bots.groupChat.timeline.continuePlanFailed',
+  retry: 'bots.groupChat.timeline.retryFailed',
+};
+
+type PlanPending = { planId: string; action: BotGroupPlanAction | 'edit' };
 
 /** Stable identity for header memoization; member arrays are new on every read. */
 function memberKey(members: readonly BotGroupMemberView[]): string {
@@ -74,6 +108,8 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const [reloadVersion, setReloadVersion] = useState(0);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [continuing, setContinuing] = useState(false);
+  const [planPending, setPlanPending] = useState<PlanPending | null>(null);
+  const planPendingRef = useRef(false);
   const loadRef = useRef<() => void>(() => {});
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -100,7 +136,13 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
           setState((previous) =>
             previous.kind === 'ready'
               ? { ...previous, group: result.group }
-              : { kind: 'ready', group: result.group, older: [], olderHasMore: result.group.hasMoreBefore },
+              : {
+                  kind: 'ready',
+                  group: result.group,
+                  older: [],
+                  olderPlans: [],
+                  olderHasMore: result.group.hasMoreBefore,
+                },
           );
         } else if (result.errorCode === 'NOT_FOUND') {
           setState({ kind: 'missing' });
@@ -135,6 +177,10 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const group = state.kind === 'ready' ? state.group : null;
   const messages = useMemo(
     () => (state.kind === 'ready' ? mergeBotGroupMessages(state.older, state.group.messages) : []),
+    [state],
+  );
+  const plans = useMemo(
+    () => (state.kind === 'ready' ? mergeBotGroupPlans(state.olderPlans, state.group.plans) : []),
     [state],
   );
   const hasMoreBefore =
@@ -237,6 +283,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
           ? {
               ...previous,
               older: mergeBotGroupMessages(result.group.messages, previous.older),
+              olderPlans: mergeBotGroupPlans(result.group.plans, previous.olderPlans),
               olderHasMore: result.group.hasMoreBefore,
             }
           : previous,
@@ -261,6 +308,53 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
       toast.error(t('bots.groupChat.timeline.continueFailed'));
     } finally {
       setContinuing(false);
+    }
+  };
+
+  /** 开始 / 不用了 / 继续 / 重试 / 结束分工; main pushes 'plan' and the view re-reads. */
+  const runPlanAction = async (action: BotGroupPlanAction, planId: string) => {
+    if (planPendingRef.current) return;
+    planPendingRef.current = true;
+    setPlanPending({ planId, action });
+    stickToBottomRef.current = true;
+    try {
+      const result = await runBotGroupPlanAction(action, { groupId, planId });
+      if (!result) return;
+      if (!result.ok) toast.error(t(botGroupErrorKey(result.errorCode, PLAN_ACTION_FAILED[action])));
+      loadRef.current();
+    } catch {
+      toast.error(t(PLAN_ACTION_FAILED[action]));
+    } finally {
+      planPendingRef.current = false;
+      setPlanPending(null);
+    }
+  };
+
+  const editPlanStep = async (
+    planId: string,
+    step: BotGroupPlanStepView,
+    action: 'reassign' | 'remove',
+    botId?: string,
+  ) => {
+    if (planPendingRef.current) return;
+    planPendingRef.current = true;
+    setPlanPending({ planId, action: 'edit' });
+    try {
+      const result = await editBotGroupPlanStep({
+        groupId,
+        planId,
+        position: step.position,
+        action,
+        ...(botId ? { botId } : {}),
+      });
+      if (!result) return;
+      if (!result.ok) toast.error(t(botGroupErrorKey(result.errorCode, 'bots.groupChat.plan.editFailed')));
+      loadRef.current();
+    } catch {
+      toast.error(t('bots.groupChat.plan.editFailed'));
+    } finally {
+      planPendingRef.current = false;
+      setPlanPending(null);
     }
   };
 
@@ -307,6 +401,9 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   }
 
   const memberById = new Map(group.members.map((member) => [member.botId, member]));
+  const planById = new Map(plans.map((plan) => [plan.id, plan]));
+  const openPlan = openBotGroupPlan({ openPlan: group.openPlan, plans });
+  const followUp = botGroupPlanFollowUp(openPlan);
   const continueId = continuableRoundEndId(messages, group.round);
   const timeGroups = collectBotMessageTimeGroups(
     messages.map((message) => ({ clientId: message.id, createdAt: message.createdAt })),
@@ -316,9 +413,11 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const speakers = running
     ? group.round.speakers.flatMap((speaker) => {
         const member = memberById.get(speaker.botId);
-        return member ? [{ member, sessionId: speaker.sessionId }] : [];
+        return member ? [{ member, sessionId: speaker.sessionId, activity: speaker.activity }] : [];
       })
     : [];
+  const pendingFor = (planId: string | null) =>
+    planId && planPending?.planId === planId ? planPending.action : null;
 
   return (
     <main className="flex h-full min-w-0 flex-col overflow-hidden bg-[var(--surface)]">
@@ -367,16 +466,52 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
                 <BotGroupTimelineItem
                   message={message}
                   member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
+                  members={group.members}
                   mentionLabels={mentionLabels}
                   canContinue={message.id === continueId}
                   continuing={continuing}
                   onContinue={() => void continueRound()}
+                  plan={message.planId ? planById.get(message.planId) : undefined}
+                  planActionable={
+                    message.kind === 'plan' &&
+                    openPlan !== null &&
+                    openPlan.id === message.planId &&
+                    openPlan.status === 'proposed'
+                  }
+                  planReassignable={
+                    message.kind === 'plan' &&
+                    openPlan !== null &&
+                    openPlan.id === message.planId &&
+                    openPlan.status === 'waiting'
+                  }
+                  planPending={planCardPending(pendingFor(message.planId))}
+                  onPlanAction={(action) => {
+                    if (message.planId) void runPlanAction(action, message.planId);
+                  }}
+                  onEditStep={(step, action, botId) => {
+                    if (message.planId) void editPlanStep(message.planId, step, action, botId);
+                  }}
                 />
               </div>
             );
           })}
-          {speakers.map(({ member, sessionId }) => (
-            <BotGroupSpeakingRow key={member.botId} speaker={member} sessionId={sessionId} />
+          {openPlan && followUp ? (
+            <BotGroupPlanFollowUpRow
+              followUp={followUp}
+              members={group.members}
+              pending={followUpPending(pendingFor(openPlan.id))}
+              onContinue={() => void runPlanAction('continue', openPlan.id)}
+              onRetry={() => void runPlanAction('retry', openPlan.id)}
+              onEnd={() => void runPlanAction('dismiss', openPlan.id)}
+            />
+          ) : null}
+          {speakers.map(({ member, sessionId, activity }) => (
+            <BotGroupSpeakingRow
+              key={`${member.botId}:${activity}`}
+              speaker={member}
+              sessionId={sessionId}
+              activity={activity}
+            />
           ))}
         </div>
       </div>
@@ -384,6 +519,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         groupId={group.id}
         members={group.members}
         running={running}
+        planState={botGroupComposerPlanState(openPlan)}
         onSent={() => {
           stickToBottomRef.current = true;
           loadRef.current();
@@ -393,20 +529,44 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   );
 }
 
+function planCardPending(action: PlanPending['action'] | null): BotGroupPlanCardAction | null {
+  return action === 'start' || action === 'dismiss' || action === 'edit' ? action : null;
+}
+
+function followUpPending(action: PlanPending['action'] | null): BotGroupFollowUpAction | null {
+  return action === 'continue' || action === 'retry' || action === 'dismiss' ? action : null;
+}
+
 function BotGroupTimelineItem({
   message,
   member,
+  members,
   mentionLabels,
   canContinue,
   continuing,
   onContinue,
+  plan,
+  planActionable,
+  planReassignable,
+  planPending,
+  onPlanAction,
+  onEditStep,
 }: {
   message: BotGroupMessageView;
   member: BotGroupMemberView | undefined;
+  members: readonly BotGroupMemberView[];
   mentionLabels: readonly string[];
   canContinue: boolean;
   continuing: boolean;
   onContinue: () => void;
+  /** Snapshot of the plan this message belongs to (安排卡, hand-off or plan end). */
+  plan: BotGroupPlanView | undefined;
+  planActionable: boolean;
+  /** The open plan stopped after a step: a step not yet done can change hands before 继续 / 重试. */
+  planReassignable: boolean;
+  planPending: BotGroupPlanCardAction | null;
+  onPlanAction: (action: 'start' | 'dismiss') => void;
+  onEditStep: (step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
 }) {
   const { t } = useTranslation();
   if (message.kind === 'round-end') {
@@ -423,16 +583,13 @@ function BotGroupTimelineItem({
       </div>
     );
   }
+  if (message.kind === 'plan-end') {
+    return <BotGroupPlanEndDivider stepCount={plan ? plan.steps.length : null} />;
+  }
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || member?.name || '';
-    const text =
-      message.noticeCode === 'member-failed'
-        ? t('bots.groupChat.notice.memberFailed', { name })
-        : message.noticeCode === 'member-timeout'
-          ? t('bots.groupChat.notice.memberTimeout', { name })
-          : message.noticeCode === 'member-unavailable'
-            ? t('bots.groupChat.notice.memberUnavailable', { name })
-            : message.content;
+    const key = botGroupNoticeKey(message.noticeCode, message.planId !== null);
+    const text = key ? t(key, { name }) : message.content;
     return <p className="text-center text-12 text-[var(--text-tertiary)]">{text}</p>;
   }
   if (message.authorKind === 'user') {
@@ -463,16 +620,39 @@ function BotGroupTimelineItem({
     avatar: member?.avatar ?? null,
     avatarColor: member?.avatarColor ?? null,
   };
+  const isPlanCard = message.kind === 'plan';
+  const hasText = message.content.trim().length > 0;
   return (
     <article className="flex min-w-0 items-start gap-2.5">
       <BotAvatar bot={author} size="sm" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="select-none text-13 font-medium leading-7 text-[var(--text-primary)]">
-          {author.name}
+        <span className="flex min-w-0 select-none items-center gap-2">
+          <span className="min-w-0 truncate text-13 font-medium leading-7 text-[var(--text-primary)]">
+            {author.name}
+          </span>
+          {isPlanCard ? <BotGroupOrganizerTag /> : null}
         </span>
-        <div className={`min-w-0 text-[var(--msg-assistant-text)] ${CHAT_BODY_CLASS}`}>
-          <MarkdownRenderer workingDir="" content={message.content} allowPrivilegedLinks={false} />
-        </div>
+        {isPlanCard ? (
+          <BotGroupPlanCard
+            plan={plan}
+            members={members}
+            actionable={planActionable}
+            reassignable={planReassignable}
+            pending={planPending}
+            onStart={() => onPlanAction('start')}
+            onDismiss={() => onPlanAction('dismiss')}
+            onEditStep={onEditStep}
+          />
+        ) : (
+          <>
+            {hasText ? (
+              <div className={`min-w-0 text-[var(--msg-assistant-text)] ${CHAT_BODY_CLASS}`}>
+                <MarkdownRenderer workingDir="" content={message.content} allowPrivilegedLinks={false} />
+              </div>
+            ) : null}
+            <BotGroupHandoffFiles files={message.files} workDir={plan?.workDir ?? null} />
+          </>
+        )}
       </div>
     </article>
   );
@@ -481,14 +661,21 @@ function BotGroupTimelineItem({
 function BotGroupSpeakingRow({
   speaker,
   sessionId,
+  activity: speakerActivity,
 }: {
   speaker: BotGroupMemberView;
   sessionId: string | null;
+  activity: BotGroupSpeakerActivity;
 }) {
+  const { t } = useTranslation();
   const activity = useAgentIslandActivity(sessionId ?? '');
   const waiting = activity?.phase === 'needs-interaction';
   return (
-    <article data-testid="bot-group-speaking" className="flex min-w-0 items-start gap-2.5">
+    <article
+      data-testid="bot-group-speaking"
+      data-activity={speakerActivity}
+      className="flex min-w-0 items-start gap-2.5"
+    >
       <BotAvatar bot={speaker} size="sm" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <span className="select-none text-13 font-medium leading-7 text-[var(--text-primary)]">
@@ -502,11 +689,16 @@ function BotGroupSpeakingRow({
           >
             <Sparkles size={14} className="shrink-0 -translate-y-px" aria-hidden />
             <span className="min-w-0 truncate">
-              <BotGenerationLabel
-                sessionId={sessionId ?? undefined}
-                phase={activity?.workingPhase ?? 'thinking'}
-                startedAt={activity?.startedAtMs ?? null}
-              />
+              {speakerActivity === 'planning' ? (
+                // The organizer's decision runs outside any Session, so there is no live phase to show.
+                t('bots.groupChat.speaking.planning')
+              ) : (
+                <BotGenerationLabel
+                  sessionId={sessionId ?? undefined}
+                  phase={activity?.workingPhase ?? 'thinking'}
+                  startedAt={activity?.startedAtMs ?? null}
+                />
+              )}
             </span>
           </p>
         ) : null}

@@ -5,6 +5,7 @@ import {
 import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readChunkedSecret, writeChunkedSecret } from './chunkedSecretFile.js';
 
 import { storedCustomProviderId } from '@cindy/model-providers';
 
@@ -29,6 +30,7 @@ import {
 } from '../../shared/providerSecrets.js';
 import {
   getActiveAppSession,
+  isAppSessionBoundaryPending,
   dataOwnerStorageKey,
   LOCAL_DATA_OWNER_ID,
 } from '../appSessionState.js';
@@ -82,6 +84,7 @@ function secretDir(): string {
 }
 
 const DYNAMIC_SECRET_PREFIXES = [
+  'bot_environment_',
   'byok_cache_',
   CUSTOM_MCP_SECRET_PREFIX,
   CUSTOM_PROVIDER_HEADER_SECRET_PREFIX,
@@ -923,3 +926,50 @@ export const byokSnapshotSecretIo = {
     return electronSecretIo.write(key, value);
   },
 };
+
+/** Host-only companion environment. The key is never admitted by renderer safe-storage IPC. */
+export const botEnvironmentSecretIo = {
+  has(key: string): boolean {
+    if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) throw new Error('Invalid companion secret key');
+    const scoped = resolveOwnerScopedSecretStorageKey(key);
+    if (!scoped) throw new Error('Companion credential storage unavailable');
+    try { return fs.readdirSync(secretDir()).some(name => name === `${scoped}.enc` || companionTemporaryFile(name, scoped)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+  },
+  async read(key: string, assertCurrent?: () => void): Promise<string | null> {
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
+    return readChunkedSecret(path.join(secretDir(), `${scoped}.enc`), scoped, companionCipher, assertOwner);
+  },
+  async write(key: string, value: string, assertCurrent?: () => void): Promise<boolean> {
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
+    await writeChunkedSecret(path.join(secretDir(), `${scoped}.enc`), scoped, value, companionCipher, assertOwner);
+    return true;
+  },
+  remove(key: string): boolean {
+    if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) return false;
+    const scoped = resolveOwnerScopedSecretStorageKey(key);
+    if (!scoped) return false;
+    try {
+      // Remove encrypted leftovers from a hard crash as well as the committed file.
+      for (const name of fs.readdirSync(secretDir())) if (companionTemporaryFile(name, scoped)) fs.unlinkSync(path.join(secretDir(), name));
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false; }
+    return electronSecretIo.remove(key).success;
+  },
+};
+
+const companionCipher = { encrypt: (value: string) => safeStorage.encryptString(value), decrypt: (value: Buffer) => safeStorage.decryptString(value) };
+function companionTemporaryFile(name: string, scoped: string): boolean {
+  return name.startsWith(`${scoped}.enc.`) && /^[a-f0-9-]{36}\.tmp$/.test(name.slice(scoped.length + 5));
+}
+function companionSecretScope(key: string, assertCurrent: () => void = () => {}) {
+  if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) throw new Error('Invalid companion secret key');
+  const scoped = resolveOwnerScopedSecretStorageKey(key);
+  const generation = getActiveAppSession().generation;
+  const assertOwner = () => {
+    assertCurrent();
+    if (!scoped || isAppSessionBoundaryPending() || resolveOwnerScopedSecretStorageKey(key) !== scoped || getActiveAppSession().generation !== generation)
+      throw new Error('Companion credential owner changed');
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('Companion credential storage unavailable');
+  };
+  assertOwner(); return { scoped: scoped!, assertOwner };
+}

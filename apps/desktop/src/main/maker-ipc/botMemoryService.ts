@@ -190,6 +190,38 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
   }
 
   return {
+    /** Deterministic source-document import; uses the same index, FTS and owner fence as settings. */
+    async importDocument(botId: string, id: string, title: string, text: string, type: 'user' | 'reference' = 'reference'): Promise<void> {
+      if (!/^[a-z0-9_-]{1,40}$/.test(id) || !text.trim()) throwIpcError('INVALID_PARAMS', 'Invalid imported memory');
+      const { store, owner } = await storeOf(botId);
+      const chunks: string[] = [];
+      let chunk = '', bytes = 0;
+      for (const char of text) {
+        const size = Buffer.byteLength(char, 'utf8');
+        if (bytes + size > BOT_MEMORY_BODY_MAX_BYTES) { chunks.push(chunk); chunk = ''; bytes = 0; }
+        chunk += char; bytes += size;
+      }
+      if (chunk) chunks.push(chunk);
+      for (const [index, body] of chunks.entries()) {
+        if (!body.trim()) continue;
+        const name = `import_${id}_${index}`;
+        await serialized(`${botId}/${type}_${name}.md`, async () => {
+          owner.assertCurrent?.();
+          const existing = await store.read(`${type}_${name}.md`).catch(error => {
+            if (error instanceof MemoryError && error.code === 'not-found') return null;
+            throw error;
+          });
+          if (existing) {
+            if (existing.body.trim() !== body.trim()) throwIpcError('PRECONDITION_FAILED', 'Imported memory was edited');
+            return;
+          }
+          await store.write({ type, name, title: Array.from(title).slice(0, BOT_MEMORY_TITLE_MAX).join(''),
+            description: botMemoryDescriptionFromBody(body) || title.slice(0, DESCRIPTION_MAX), body });
+          owner.assertCurrent?.();
+        });
+      }
+      scheduleRefresh(owner);
+    },
     async list(botId: string, rawQuery?: unknown): Promise<BotMemorySummary[]> {
       const { store } = await storeOf(botId);
       const query = typeof rawQuery === 'string' ? rawQuery.trim().slice(0, 200) : '';

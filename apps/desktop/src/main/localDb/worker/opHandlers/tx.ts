@@ -34,8 +34,11 @@ import {
   botGroupsAppendMessage,
   botGroupsArchiveLanes,
   botGroupsCreate,
+  botGroupsCreatePlan,
   botGroupsDelete,
+  botGroupsRemovePlanStep,
   botGroupsSetMembers,
+  botGroupsSettleStep,
 } from './botGroupsTx.js';
 import type { BotGroupsCreateLaneArgs, BotGroupsCreateLaneResult } from '../../client/tx/types.js';
 
@@ -166,6 +169,12 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return botGroupsArchiveLanes(db, txArgs as Parameters<typeof botGroupsArchiveLanes>[1]);
     case 'botGroups.appendMessage':
       return botGroupsAppendMessage(db, txArgs as Parameters<typeof botGroupsAppendMessage>[1]);
+    case 'botGroups.createPlan':
+      return botGroupsCreatePlan(db, txArgs as Parameters<typeof botGroupsCreatePlan>[1]);
+    case 'botGroups.settleStep':
+      return botGroupsSettleStep(db, txArgs as Parameters<typeof botGroupsSettleStep>[1]);
+    case 'botGroups.removePlanStep':
+      return botGroupsRemovePlanStep(db, txArgs as Parameters<typeof botGroupsRemovePlanStep>[1]);
     case 'im.rotateSession':
       return imRotateSession(db, txArgs);
     case 'wechatActivateBindingEpoch':
@@ -2168,8 +2177,8 @@ function imRotateSession(
     `INSERT INTO sessions (
       id, title, working_dir, workspace_kind, model, effort, permission_mode,
       fast_mode, status, agent_kind, provider_id, source, im_bot_context_id,
-      im_user_id, created_at, updated_at, user_send_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      im_user_id, im_default_route, created_at, updated_at, user_send_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const retirePrevious = db.prepare(
     `UPDATE sessions
@@ -2202,6 +2211,7 @@ function imRotateSession(
       expectString(session.source, 'session.source'),
       expectString(session.imBotContextId, 'session.imBotContextId'),
       expectString(session.imUserId, 'session.imUserId'),
+      nullableString(session.imDefaultRoute),
       now,
       now,
       now,

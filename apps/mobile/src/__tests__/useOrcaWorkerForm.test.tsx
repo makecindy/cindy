@@ -139,11 +139,11 @@ it('opens a Worker on tap and keeps the long-press action menu within three butt
   act(() => collab!.openWorker(worker));
   expect(openSession).toHaveBeenCalledWith('s-1');
   expect(alert.mock.calls.length).toBe(alertsBefore);
-  // 长按才弹管理操作,单层且不超过三个按钮。
+  // 长按才弹管理操作:手机上只有归档(焦点是电脑端协同面板的展示,不在手机上切换)。
   act(() => collab!.showWorkerActions(worker));
-  expect(alert.mock.calls.at(-1)![2]!.length).toBeLessThanOrEqual(3);
+  expect(alert.mock.calls.at(-1)![2]!.map((button) => button.style)).toEqual(['destructive', 'cancel']);
   act(() => collab!.showWorkerActions({ ...worker, focused: true }));
-  expect(alert.mock.calls.at(-1)![2]!.length).toBeLessThanOrEqual(3);
+  expect(alert.mock.calls.at(-1)![2]!.map((button) => button.style)).toEqual(['destructive', 'cancel']);
 });
 
 it('moves an untouched form off an Agent the computer does not have', async () => {
@@ -333,11 +333,10 @@ it('restores the remembered Agent after a device switch instead of the previous 
   expect(latest!.form.agent).toBe('claude-code');
 });
 
-it('lets a Worker task focus itself and archive itself back to the Lead', async () => {
+it('lets a Worker task archive itself back to the Lead', async () => {
   const { Alert } = await import('react-native');
   const { useSessionOrcaCollab } = await import('@/session/useSessionOrcaCollab');
   let collab: ReturnType<typeof useSessionOrcaCollab> | null = null;
-  const switchFocus = vi.fn(async () => ({}));
   const archiveWorker = vi.fn(async () => ({}));
   const maker = {
     ...fakeMaker(),
@@ -345,7 +344,6 @@ it('lets a Worker task focus itself and archive itself back to the Lead', async 
       listWorkers: vi.fn(async () => [{ id: 'w-1', sessionId: 'worker-1', role: 'tester', focused: false }]),
       getCollaborationSettings: vi.fn(async () => ({})),
       getTeamByWorkerSession: vi.fn(async () => ({ leadSessionId: 'lead-1' })),
-      switchFocus,
       archiveWorker,
     },
   } as unknown as MobileMakerTransport;
@@ -362,8 +360,6 @@ it('lets a Worker task focus itself and archive itself back to the Lead', async 
   await act(async () => { await flush(); });
   expect(collab!.workerLeadSessionId).toBe('lead-1');
   expect(collab!.workerSelf?.workerId).toBe('w-1');
-  await act(async () => { await collab!.setSelfFocus(); });
-  expect(switchFocus).toHaveBeenCalledWith('lead-1', 'w-1');
   // 确认弹窗先弹出(详情面板还开着),确认后才收起面板再归档。
   const closeMenu = vi.fn();
   act(() => collab!.confirmArchiveSelf(closeMenu));

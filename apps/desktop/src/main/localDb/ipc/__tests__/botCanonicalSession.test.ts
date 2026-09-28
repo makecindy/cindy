@@ -285,6 +285,7 @@ function createDb(filename = ':memory:'): void {
       codex_plan_json TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
+      im_default_route TEXT,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
       last_turn_ended_at INTEGER,

@@ -2,7 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ account: 1, view: {} as any, create: {} as any, model: {} as any, picker: {} as any, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), close: vi.fn(), closed: vi.fn(), push: vi.fn(), created: vi.fn(), deleted: vi.fn() }));
+const h = vi.hoisted(() => ({ account: 1, view: {} as any, create: {} as any, model: {} as any, picker: {} as any, importing: null as any, importMounts: 0, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), close: vi.fn(), closed: vi.fn(), push: vi.fn(), created: vi.fn(), deleted: vi.fn() }));
 vi.mock('react-native', () => ({ Platform: { OS: 'ios' }, StyleSheet: { create: (v: unknown) => v }, View: 'div', Alert: { alert: vi.fn() }, Image: 'img', Pressable: 'button', ScrollView: 'div', Switch: 'input', ActivityIndicator: 'progress' }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }) }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'test-id' }));
@@ -23,6 +23,15 @@ vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: (
 vi.mock('@/session/companionProfileData', async original => ({ ...await original<object>(), loadCompanionProfile: (...args: unknown[]) => h.read(...args) }));
 vi.mock('@/session/CompanionProfileNativeView', () => ({ CompanionProfileNativeView: (p: any) => { h.view = p; return p.models; } }));
 vi.mock('@/session/CompanionCreateNativeView', () => ({ CompanionCreateNativeView: (p: any) => { h.create = p; return null; } }));
+vi.mock('@/session/CompanionImportSheet', async () => {
+  const { useEffect, useState } = await import('react');
+  return { CompanionImportSheet: (p: any) => {
+    const [mount] = useState(() => ++h.importMounts);
+    h.importing = { ...p, mount };
+    useEffect(() => () => { h.importing = null; }, []);
+    return null;
+  } };
+});
 vi.mock('@/session/CompanionModelChain', () => ({ readCompanionModelChain: (v: string) => JSON.parse(v || '[]'), CompanionModelChain: (p: any) => { h.model = p; return null; }, CompanionModelPicker: (p: any) => { h.picker = p; return null; } }));
 import { CompanionProfileSheet, CompanionCreateSheet } from '@/session/CompanionProfileSheet';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -84,10 +93,23 @@ it('ignores a late save response after changing accounts', async () => {
   expect(h.close).not.toHaveBeenCalled(); expect(h.view.page).toBe('home'); expect(h.view.receipt).toBeNull(); expect(h.view.dirty).toBe(false);
 });
 
-async function renderCreate(online = true) {
+async function renderCreate(online = true, visible = true) {
   root ??= createRoot(document.createElement('div'));
-  await act(async () => root!.render(createElement(CompanionCreateSheet, { visible: true, deviceId: 'host', deviceName: 'Mac', collectionId: 'teammates', online, onClose: h.close, onCreated: h.created })));
+  await act(async () => root!.render(createElement(CompanionCreateSheet, { visible, deviceId: 'host', deviceName: 'Mac', collectionId: 'teammates', online, onClose: h.close, onCreated: h.created })));
 }
+it('returns to native creation after closing import and remounts import only on a fresh entry', async () => {
+  h.read.mockResolvedValue({ resource: { ...resource, actions: [{ id: 'open-agent-import', label: 'Import' }] }, panels: [panel] });
+  await renderCreate(); await act(async () => h.create.onImport());
+  await act(async () => h.create.onClosed());
+  const mount = h.importing.mount;
+  await renderCreate(false); await renderCreate(true);
+  expect(h.importing.mount).toBe(mount);
+  await act(async () => h.importing.onClose());
+  await renderCreate(true, false); await renderCreate(true, true);
+  expect(h.importing).toBeNull(); expect(h.create.visible).toBe(true);
+  await act(async () => h.create.onImport()); await act(async () => h.create.onClosed());
+  expect(h.importing.mount).not.toBe(mount);
+});
 it('keeps one selected portrait and creation intent through an ambiguous ACK and reconnect', async () => {
   await renderCreate(); const portrait = h.create.values.avatarImageBase64;
   expect(portrait.length).toBeGreaterThan(100); expect(portrait.length).toBeLessThan(55000);

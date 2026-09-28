@@ -1,13 +1,18 @@
 /**
- * 群聊界面的纯展示逻辑：排序、成员名单、错误文案 key 与轮次标记。与组件分开，
- * 便于不挂 DOM 做单测。
+ * 群聊界面的纯展示逻辑：排序、成员名单、错误文案 key、轮次标记与分工（安排、下一步、
+ * 交接文件）的判定。与组件分开，便于不挂 DOM 做单测。
  */
 import {
   BOT_GROUP_MAX_MEMBERS,
   BOT_GROUP_MIN_MEMBERS,
+  isBotGroupPlanOpen,
+  type BotGroupDetail,
   type BotGroupErrorCode,
   type BotGroupMemberView,
   type BotGroupMessageView,
+  type BotGroupNoticeCode,
+  type BotGroupPlanStepView,
+  type BotGroupPlanView,
   type BotGroupSummary,
 } from '../../../shared/botGroupChat';
 
@@ -77,9 +82,170 @@ const ERROR_KEYS: Partial<Record<BotGroupErrorCode, string>> = {
   MEMBER_UNAVAILABLE: 'bots.groupChat.errors.memberUnavailable',
   NOT_FOUND: 'bots.groupChat.errors.notFound',
   HOST_NOT_READY: 'bots.groupChat.errors.hostNotReady',
+  PLAN_OPEN: 'bots.groupChat.errors.planOpen',
+  PLAN_CLOSED: 'bots.groupChat.errors.planClosed',
 };
 
 /** Specific error copy when main names a cause the user can act on. */
 export function botGroupErrorKey(errorCode: BotGroupErrorCode | null | undefined, fallback: string): string {
   return (errorCode && ERROR_KEYS[errorCode]) || fallback;
+}
+
+// ---- 分工 (docs/product-rules/bot-group-chat.md §7) --------------------------
+
+/** Merge plan snapshots from an older page under the latest read; the latest wins. */
+export function mergeBotGroupPlans(
+  older: readonly BotGroupPlanView[],
+  latest: readonly BotGroupPlanView[],
+): BotGroupPlanView[] {
+  const byId = new Map<string, BotGroupPlanView>();
+  for (const plan of older) byId.set(plan.id, plan);
+  for (const plan of latest) byId.set(plan.id, plan);
+  return [...byId.values()];
+}
+
+/** The group's open plan with its steps, when main sent it along with the detail. */
+export function openBotGroupPlan(
+  group: Pick<BotGroupDetail, 'openPlan' | 'plans'>,
+): BotGroupPlanView | null {
+  const openId = group.openPlan?.id;
+  if (!openId) return null;
+  const plan = group.plans.find((candidate) => candidate.id === openId);
+  return plan && isBotGroupPlanOpen(plan.status) ? plan : null;
+}
+
+/** The step main reports as current (running, being redone, or last finished / failed). */
+export function currentBotGroupPlanStep(plan: BotGroupPlanView): BotGroupPlanStepView | null {
+  if (plan.currentStep === null) return null;
+  return plan.steps.find((step) => step.position === plan.currentStep) ?? null;
+}
+
+export type BotGroupPlanFollowUp =
+  | { kind: 'continue'; next: BotGroupPlanStepView }
+  | { kind: 'retry'; failed: BotGroupPlanStepView };
+
+/**
+ * What the timeline offers under a plan that stopped after a step: 「下一步 · 继续」
+ * when the step finished and another one waits, 「没做完 · 重试」 when it failed.
+ */
+export function botGroupPlanFollowUp(plan: BotGroupPlanView | null): BotGroupPlanFollowUp | null {
+  if (!plan || plan.status !== 'waiting') return null;
+  const current = currentBotGroupPlanStep(plan);
+  if (!current) return null;
+  if (current.status === 'failed') return { kind: 'retry', failed: current };
+  if (current.status !== 'done') return null;
+  const index = plan.steps.indexOf(current);
+  const next = plan.steps.slice(index + 1).find((step) => step.status === 'pending');
+  return next ? { kind: 'continue', next } : null;
+}
+
+/** Composer copy that follows the open plan (placeholder and the 「安排分工」 gate). */
+export type BotGroupComposerPlanState =
+  | { kind: 'proposed' }
+  | { kind: 'running'; botName: string }
+  | { kind: 'waiting'; botName: string; stepDone: boolean };
+
+export function botGroupComposerPlanState(plan: BotGroupPlanView | null): BotGroupComposerPlanState | null {
+  if (!plan) return null;
+  if (plan.status === 'proposed') return { kind: 'proposed' };
+  const current = currentBotGroupPlanStep(plan);
+  const botName = current?.botName.trim() ?? '';
+  if (plan.status === 'running') return { kind: 'running', botName };
+  if (plan.status === 'waiting') return { kind: 'waiting', botName, stepDone: current?.status === 'done' };
+  return null;
+}
+
+/** A plan that is running or waiting blocks a new 「安排分工」 (main answers PLAN_OPEN). */
+export function isBotGroupDivisionBlocked(state: BotGroupComposerPlanState | null): boolean {
+  return state?.kind === 'running' || state?.kind === 'waiting';
+}
+
+const NOTICE_KEYS: Record<BotGroupNoticeCode, string> = {
+  'member-failed': 'bots.groupChat.notice.memberFailed',
+  'member-timeout': 'bots.groupChat.notice.memberTimeout',
+  'member-unavailable': 'bots.groupChat.notice.memberUnavailable',
+  'plan-failed': 'bots.groupChat.notice.planFailed',
+  'plan-stopped': 'bots.groupChat.notice.planStopped',
+  'workdir-unavailable': 'bots.groupChat.notice.workdirUnavailable',
+};
+
+/** Member notices inside a plan are about a step, not a chat reply. */
+const STEP_NOTICE_KEYS: Partial<Record<BotGroupNoticeCode, string>> = {
+  'member-failed': 'bots.groupChat.notice.stepFailed',
+  'member-timeout': 'bots.groupChat.notice.stepTimeout',
+  'member-unavailable': 'bots.groupChat.notice.stepUnavailable',
+};
+
+export function botGroupNoticeKey(code: BotGroupNoticeCode | null, planScoped: boolean): string | null {
+  if (!code) return null;
+  return (planScoped ? STEP_NOTICE_KEYS[code] : undefined) ?? NOTICE_KEYS[code] ?? null;
+}
+
+/**
+ * Absolute path of a hand-off file, or null when the entry could leave the plan's
+ * work directory. Main lists files relative to `workDir` with POSIX separators;
+ * the join follows the work directory's own separator so Windows paths stay native.
+ */
+export function botGroupPlanFilePath(workDir: string | null, file: string): string | null {
+  if (!workDir || !file) return null;
+  if (file.startsWith('/') || file.includes('\\') || /^[A-Za-z]:/.test(file)) return null;
+  const segments = file.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) return null;
+  const windows = /^[A-Za-z]:[\\/]/.test(workDir) || workDir.startsWith('\\\\');
+  const separator = windows ? '\\' : '/';
+  const base = workDir.replace(/[\\/]+$/, '');
+  return `${base}${separator}${segments.join(separator)}`;
+}
+
+export type BotGroupSidebarPlanPreview =
+  /** Running treatment: the organizer is working out a plan. */
+  | { kind: 'planning'; botName: string }
+  /** Running treatment: a step is in progress. `step` is 1-based. */
+  | { kind: 'running'; botName: string; step: number | null; total: number }
+  | { kind: 'proposed'; organizerName: string }
+  | { kind: 'step-done'; botName: string }
+  | { kind: 'step-failed'; botName: string }
+  /** Waiting, but main did not name the step (older host or a removed step). */
+  | { kind: 'waiting' };
+
+/** Running previews take the speaking row's place (orange sparkles). */
+export function isRunningBotGroupSidebarPreview(
+  preview: BotGroupSidebarPlanPreview | null,
+): preview is Extract<BotGroupSidebarPlanPreview, { kind: 'planning' | 'running' }> {
+  return preview?.kind === 'planning' || preview?.kind === 'running';
+}
+
+/**
+ * Sidebar line for the group's plan: the organizer working out a plan, a step in
+ * progress, a plan waiting for 开始, or a step waiting for 继续 / 重试. Null falls back
+ * to the speaking row or the latest message.
+ */
+export function botGroupSidebarPlanPreview(group: BotGroupSummary): BotGroupSidebarPlanPreview | null {
+  const memberName = (botId: string | null) =>
+    group.members.find((member) => member.botId === botId)?.name.trim() ?? '';
+  if (group.planningBotId) return { kind: 'planning', botName: memberName(group.planningBotId) };
+  const plan = group.openPlan;
+  if (!plan) return null;
+  const botName = plan.currentBotName?.trim() ?? '';
+  if (plan.status === 'running') {
+    return {
+      kind: 'running',
+      botName,
+      step: plan.currentStep === null ? null : plan.currentStep + 1,
+      total: plan.stepCount,
+    };
+  }
+  if (plan.status === 'proposed') return { kind: 'proposed', organizerName: memberName(group.organizerBotId) };
+  if (plan.status === 'waiting') {
+    if (botName && plan.currentStepStatus === 'done') return { kind: 'step-done', botName };
+    if (botName && plan.currentStepStatus === 'failed') return { kind: 'step-failed', botName };
+    return { kind: 'waiting' };
+  }
+  return null;
+}
+
+/** Last path segment for compact labels (project folder, file chips). */
+export function botGroupPathBasename(path: string): string {
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
 }

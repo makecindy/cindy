@@ -1,13 +1,29 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 
-import { and, asc, desc, eq, gt, inArray, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, lt, ne } from 'drizzle-orm';
 
 import type { DataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
-import { botGroupMembers, botGroupMessages, botGroups, botProfiles, messages } from '../localDb/schema.js';
+import {
+  botGroupMembers,
+  botGroupMessages,
+  botGroupPlanSteps,
+  botGroupPlans,
+  botGroups,
+  botProfiles,
+  messages,
+} from '../localDb/schema.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
+import {
+  buildPlanStepBrief,
+  type PlanDecision,
+  type PlanDecisionInput,
+  type PlanDecisionMode,
+} from './botGroupDivision.js';
+import type { BotGroupWorkDir } from './botGroupWorkDir.js';
 import {
   BOT_GROUP_CLIENT_ID,
   BOT_GROUP_MAX_MEMBERS,
@@ -16,7 +32,9 @@ import {
   BOT_GROUP_NAME_MAX_CHARS,
   BOT_GROUP_PAGE_SIZE,
   botGroupLaneRouteKey,
+  botGroupPlanRouteKeyPrefix,
   isBotGroupNoReplyText,
+  isBotGroupPlanOpen,
   type BotGroupChange,
   type BotGroupChangedPayload,
   type BotGroupCreateResult,
@@ -32,8 +50,13 @@ import {
   type BotGroupMessageView,
   type BotGroupMutationResult,
   type BotGroupNoticeCode,
+  type BotGroupPlanAction,
+  type BotGroupPlanStatus,
+  type BotGroupPlanStepStatus,
+  type BotGroupPlanView,
   type BotGroupReplyMode,
   type BotGroupSendResult,
+  type BotGroupSpeaker,
   type BotGroupSpeakingMode,
   type BotGroupSummary,
 } from '../../shared/botGroupChat.js';
@@ -47,6 +70,10 @@ const MAX_DELTA_MESSAGE_CHARS = 4_000;
 const MAX_BOT_REPLY_CHARS = 16_000;
 const PREVIEW_CHARS = 80;
 const MAX_ID_CHARS = 128;
+/** docs/product-rules/bot-group-chat.md §7.4: a step may run long; time waiting on the user is not counted. */
+const STEP_TURN_TIMEOUT_MS = 2 * 60 * 60_000;
+const MAX_PLAN_RECENT_MESSAGES = 12;
+const MAX_PROJECT_DIR_CHARS = 4_096;
 
 type DispatchResult =
   | { ok: true; targetSessionId: string; wakeKind: string }
@@ -69,7 +96,13 @@ export interface BotGroupLaneTerminal {
 }
 
 export interface BotGroupChatServiceDeps {
-  ensureLane: (input: { botId: string; groupId: string; title: string }) => Promise<LaneResult>;
+  /** With `plan`, the Bot's 分工 Session for that plan (bot-group-chat.md §7.4). */
+  ensureLane: (input: {
+    botId: string;
+    groupId: string;
+    title: string;
+    plan?: { planId: string; workDir: string; sessionId?: string };
+  }) => Promise<LaneResult>;
   /** Same hidden, durable input path as Bot DMs. */
   dispatch: (params: {
     targetSessionId: string;
@@ -86,12 +119,21 @@ export interface BotGroupChatServiceDeps {
   syncLanePermission?: (laneSessionId: string, botId: string) => Promise<void>;
   hasPendingInteraction?: (sessionId: string) => boolean;
   readReplyText?: (sessionId: string, messageClientId: string) => Promise<string | null>;
+  /**
+   * The organizer's forced 要不要分工 decision (§7.2): a structured answer already
+   * validated against the members, or null when no usable answer came back.
+   */
+  decidePlan?: (input: PlanDecisionInput, signal: AbortSignal) => Promise<PlanDecision | null>;
+  workDir?: Pick<BotGroupWorkDir, 'prepare' | 'snapshot' | 'changedFiles' | 'trashGroupFolder'>;
+  /** Existing local directory usable as a 项目文件夹 (same rules as new-task projects). */
+  validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string }>;
   captureOwnerScope?: () => DataOwnerBroadcastScope;
   isOwnerScopeCurrent?: (scope: DataOwnerBroadcastScope) => boolean;
   onChanged?: (payload: BotGroupChangedPayload, ownerScope?: DataOwnerBroadcastScope) => void;
   now?: () => number;
   createId?: () => string;
   memberTurnTimeoutMs?: number;
+  stepTurnTimeoutMs?: number;
   log?: { warn: (message: string, meta?: Record<string, unknown>) => void };
 }
 
@@ -100,6 +142,7 @@ interface MemberRow {
   position: number;
   lastSeenSequence: number;
   name: string;
+  description: string;
   avatar: string;
   avatarColor: string;
   status: string;
@@ -110,9 +153,14 @@ interface GroupRow {
   name: string;
   replyMode: BotGroupReplyMode;
   speakingMode: BotGroupSpeakingMode;
+  organizerBotId: string | null;
+  projectDir: string | null;
   createdAt: number;
   updatedAt: number;
 }
+
+type PlanRow = typeof botGroupPlans.$inferSelect;
+type StepRow = typeof botGroupPlanSteps.$inferSelect;
 
 type TurnOutcome =
   | { kind: 'reply'; text: string }
@@ -136,8 +184,29 @@ interface ActiveRound {
   dropped: Set<string>;
 }
 
+/** The organizer working out whether (and how) to split the latest request. */
+interface PlanningState {
+  cancelled: boolean;
+  organizerBotId: string;
+  abort: AbortController;
+}
+
+/** The one 分工 step in progress (docs/product-rules/bot-group-chat.md §7.4). */
+interface ActiveStep {
+  groupId: string;
+  planId: string;
+  position: number;
+  botId: string;
+  sessionId: string | null;
+  cancelled: boolean;
+  /** User messages sent while the step runs; the same Bot continues with them. */
+  notes: string[];
+}
+
 interface GroupRuntime {
   round: ActiveRound | null;
+  planning: PlanningState | null;
+  step: ActiveStep | null;
   /** Serializes user actions (send / continue / stop / membership / delete). */
   tail: Promise<unknown>;
 }
@@ -171,6 +240,35 @@ function memberStatus(status: string | null | undefined): BotGroupMemberStatus {
   return status === 'active' || status === 'paused' || status === 'error' || status === 'archived' || status === 'deleting'
     ? status
     : 'missing';
+}
+
+function parseFiles(json: string | null | undefined): string[] {
+  try {
+    const raw = JSON.parse(json ?? '[]') as unknown;
+    return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function planStatus(status: string): BotGroupPlanStatus {
+  return status === 'proposed' || status === 'running' || status === 'waiting' || status === 'done'
+    || status === 'stopped' || status === 'dismissed' || status === 'superseded'
+    ? status
+    : 'stopped';
+}
+
+function stepStatus(status: string): BotGroupPlanStepStatus {
+  return status === 'running' || status === 'done' || status === 'failed' ? status : 'pending';
+}
+
+/** Effective 负责人 (§7.1): the chosen member while usable, else the first usable member. */
+export function effectiveOrganizer<T extends { botId: string; status: string }>(
+  chosen: string | null,
+  members: readonly T[],
+): T | null {
+  const usable = members.filter((member) => member.status === 'active');
+  return usable.find((member) => member.botId === chosen) ?? usable[0] ?? null;
 }
 
 function parseMentions(json: string): BotGroupMention {
@@ -260,7 +358,8 @@ export function buildMemberTurnPrompt(input: {
   botName: string;
   peerNames: string[];
   mentioned: 'you' | 'everyone' | null;
-  messages: Array<{ from: string; text: string }>;
+  /** `files`: absolute paths of what a 分工 step produced (they live in the plan's work directory). */
+  messages: Array<{ from: string; text: string; files?: string[] }>;
   omitted: number;
   /** The Bot's previous turn in this group was stopped or timed out before it was posted. */
   previousTurnInterrupted?: boolean;
@@ -279,6 +378,9 @@ export function buildMemberTurnPrompt(input: {
     untrustedJsonBlock(input.messages),
   );
   if (input.omitted > 0) lines.push(`(${input.omitted} earlier messages were omitted.)`);
+  if (input.messages.some((message) => message.files && message.files.length > 0)) {
+    lines.push("Files listed with a message were made during a 分工 step and live at those paths, not in your own workspace; open them there when you need them.");
+  }
   if (input.previousTurnInterrupted) {
     lines.push('Your previous turn in this group was stopped before it was posted; the group never saw it.');
   }
@@ -309,6 +411,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
   const now = deps.now ?? Date.now;
   const createId = deps.createId ?? randomUUID;
   const turnTimeoutMs = deps.memberTurnTimeoutMs ?? MEMBER_TURN_TIMEOUT_MS;
+  const stepTimeoutMs = deps.stepTurnTimeoutMs ?? STEP_TURN_TIMEOUT_MS;
   const runtimes = new Map<string, GroupRuntime>();
   const waiters = new Map<string, LaneWaiter>();
   /** Lanes whose last group turn was stopped or timed out; the next prompt says so once. */
@@ -324,7 +427,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
   const runtimeFor = (groupId: string): GroupRuntime => {
     let runtime = runtimes.get(groupId);
     if (!runtime) {
-      runtime = { round: null, tail: Promise.resolve() };
+      runtime = { round: null, planning: null, step: null, tail: Promise.resolve() };
       runtimes.set(groupId, runtime);
     }
     return runtime;
@@ -358,6 +461,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         position: botGroupMembers.position,
         lastSeenSequence: botGroupMembers.lastSeenSequence,
         name: botProfiles.displayName,
+        description: botProfiles.description,
         avatar: botProfiles.avatar,
         avatarColor: botProfiles.avatarColor,
         status: botProfiles.status,
@@ -387,8 +491,105 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     content: row.content,
     mentions: parseMentions(row.mentionsJson),
     noticeCode: (row.noticeCode as BotGroupNoticeCode | null) ?? null,
+    planId: row.planId ?? null,
+    files: parseFiles(row.filesJson),
     createdAt: row.createdAt,
   });
+
+  // ---- plans -------------------------------------------------------------
+
+  const readPlan = async (planId: string): Promise<PlanRow | null> => {
+    const [row] = await getDbClient().drizzle.select().from(botGroupPlans).where(eq(botGroupPlans.id, planId)).limit(1);
+    return row ?? null;
+  };
+
+  const readSteps = (planId: string): Promise<StepRow[]> =>
+    getDbClient()
+      .drizzle.select()
+      .from(botGroupPlanSteps)
+      .where(eq(botGroupPlanSteps.planId, planId))
+      .orderBy(asc(botGroupPlanSteps.position));
+
+  /**
+   * A plan left `running` without a step in this process was interrupted by a restart
+   * or crash (§7.6): its step becomes 没做完 and the plan waits for 重试.
+   */
+  const recoverInterrupted = async (plan: PlanRow): Promise<PlanRow> => {
+    if (plan.status !== 'running' || runtimes.get(plan.groupId)?.step?.planId === plan.id) return plan;
+    const db = getDbClient().drizzle;
+    const at = now();
+    await db
+      .update(botGroupPlanSteps)
+      .set({ status: 'failed', finishedAt: at })
+      .where(and(eq(botGroupPlanSteps.planId, plan.id), eq(botGroupPlanSteps.status, 'running')));
+    const updated = await db
+      .update(botGroupPlans)
+      .set({ status: 'waiting', updatedAt: at })
+      .where(and(eq(botGroupPlans.id, plan.id), eq(botGroupPlans.status, 'running')))
+      .returning();
+    return updated[0] ?? (await readPlan(plan.id)) ?? plan;
+  };
+
+  /** The group's open plan as stored, without restart recovery (callers that own the step). */
+  const readOpenPlanRow = async (groupId: string): Promise<PlanRow | null> => {
+    const [row] = await getDbClient()
+      .drizzle.select()
+      .from(botGroupPlans)
+      .where(and(eq(botGroupPlans.groupId, groupId), inArray(botGroupPlans.status, ['proposed', 'running', 'waiting'])))
+      .orderBy(desc(botGroupPlans.createdAt))
+      .limit(1);
+    return row ?? null;
+  };
+
+  const readOpenPlan = async (groupId: string): Promise<PlanRow | null> => {
+    const row = await readOpenPlanRow(groupId);
+    return row ? recoverInterrupted(row) : null;
+  };
+
+  const toPlanView = (plan: PlanRow, steps: StepRow[]): BotGroupPlanView => ({
+    id: plan.id,
+    status: planStatus(plan.status),
+    organizerBotId: plan.organizerBotId,
+    organizerName: plan.organizerName,
+    steps: steps.map((step) => ({
+      position: step.position,
+      botId: step.botId,
+      botName: step.botName,
+      task: step.task,
+      status: stepStatus(step.status),
+    })),
+    currentStep: plan.currentStep ?? null,
+    workDir: plan.workDir ?? null,
+    branch: plan.branch ?? null,
+    createdAt: plan.createdAt,
+    updatedAt: plan.updatedAt,
+  });
+
+  const readPlanViews = async (planIds: string[]): Promise<BotGroupPlanView[]> => {
+    if (planIds.length === 0) return [];
+    const db = getDbClient().drizzle;
+    const plans = await db.select().from(botGroupPlans).where(inArray(botGroupPlans.id, planIds));
+    const steps = await db
+      .select()
+      .from(botGroupPlanSteps)
+      .where(inArray(botGroupPlanSteps.planId, planIds))
+      .orderBy(asc(botGroupPlanSteps.position));
+    return plans.map((plan) => toPlanView(plan, steps.filter((step) => step.planId === plan.id)));
+  };
+
+  /** Bots busy in the group now: repliers, the organizer while planning, and the working step. */
+  const speakersOf = (groupId: string): BotGroupSpeaker[] => {
+    const runtime = runtimes.get(groupId);
+    const list: BotGroupSpeaker[] = [...(runtime?.round?.speakers.entries() ?? [])]
+      .map(([botId, sessionId]) => ({ botId, sessionId, activity: 'reply' as const }));
+    if (runtime?.planning && !runtime.planning.cancelled) {
+      list.push({ botId: runtime.planning.organizerBotId, sessionId: null, activity: 'planning' });
+    }
+    if (runtime?.step && !runtime.step.cancelled) {
+      list.push({ botId: runtime.step.botId, sessionId: runtime.step.sessionId, activity: 'step' });
+    }
+    return list;
+  };
 
   const latestMessages = async (groupId: string) => {
     const db = getDbClient().drizzle;
@@ -408,13 +609,35 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
   };
 
   const summarize = async (group: GroupRow): Promise<BotGroupSummary> => {
-    const [members, { latestSpoken }] = await Promise.all([readMembers(group.id), latestMessages(group.id)]);
+    const [members, { latestSpoken }, openPlan] = await Promise.all([
+      readMembers(group.id),
+      latestMessages(group.id),
+      readOpenPlan(group.id),
+    ]);
+    const openSteps = openPlan ? await readSteps(openPlan.id) : [];
+    const currentStep = openSteps.find((step) => step.position === openPlan?.currentStep) ?? null;
+    const planning = runtimes.get(group.id)?.planning;
     return {
       id: group.id,
       name: group.name,
       replyMode: group.replyMode,
       speakingMode: group.speakingMode,
       members: members.map(toMemberView),
+      organizerBotId: effectiveOrganizer(group.organizerBotId, members)?.botId ?? null,
+      projectDir: group.projectDir,
+      openPlan: openPlan
+        ? {
+          id: openPlan.id,
+          status: planStatus(openPlan.status),
+          currentStep: openPlan.currentStep ?? null,
+          stepCount: openSteps.length,
+          currentBotName: currentStep
+            ? members.find((member) => member.botId === currentStep.botId)?.name ?? currentStep.botName
+            : null,
+          currentStepStatus: currentStep ? stepStatus(currentStep.status) : null,
+        }
+        : null,
+      planningBotId: planning && !planning.cancelled ? planning.organizerBotId : null,
       lastMessage: latestSpoken
         ? {
             authorKind: latestSpoken.authorKind,
@@ -423,7 +646,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
             createdAt: latestSpoken.createdAt,
           }
         : null,
-      speakingBotIds: [...(runtimes.get(group.id)?.round?.speakers.keys() ?? [])],
+      speakingBotIds: [...new Set(speakersOf(group.id).map((speaker) => speaker.botId))],
       createdAt: group.createdAt,
       updatedAt: group.updatedAt,
     };
@@ -439,22 +662,37 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     mentions?: BotGroupMention;
     noticeCode?: BotGroupNoticeCode | null;
     clientId?: string | null;
-  }) =>
-    getDbClient().tx('botGroups.appendMessage', {
-      message: {
-        id: createId(),
-        groupId: message.groupId,
-        kind: message.kind,
-        authorKind: message.authorKind,
-        authorBotId: message.authorBotId ?? null,
-        authorName: message.authorName ?? '',
-        content: message.content ?? '',
-        mentionsJson: JSON.stringify(message.mentions ?? { all: false, botIds: [] }),
-        noticeCode: message.noticeCode ?? null,
-        clientId: message.clientId ?? null,
-        createdAt: now(),
-      },
-    });
+    planId?: string | null;
+    files?: string[];
+  }) => getDbClient().tx('botGroups.appendMessage', { message: messageRow(message) });
+
+  const messageRow = (message: {
+    groupId: string;
+    kind: BotGroupMessageKind;
+    authorKind: 'user' | 'bot' | 'system';
+    authorBotId?: string | null;
+    authorName?: string;
+    content?: string;
+    mentions?: BotGroupMention;
+    noticeCode?: BotGroupNoticeCode | null;
+    clientId?: string | null;
+    planId?: string | null;
+    files?: string[];
+  }) => ({
+    id: createId(),
+    groupId: message.groupId,
+    kind: message.kind,
+    authorKind: message.authorKind,
+    authorBotId: message.authorBotId ?? null,
+    authorName: message.authorName ?? '',
+    content: message.content ?? '',
+    mentionsJson: JSON.stringify(message.mentions ?? { all: false, botIds: [] }),
+    noticeCode: message.noticeCode ?? null,
+    clientId: message.clientId ?? null,
+    planId: message.planId ?? null,
+    filesJson: JSON.stringify(message.files ?? []),
+    createdAt: now(),
+  });
 
   const postNotice = async (groupId: string, member: MemberRow, notice: BotGroupNoticeCode, scope?: DataOwnerBroadcastScope) => {
     if (!scopeIsCurrent(scope)) return;
@@ -486,7 +724,12 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     return true;
   };
 
-  const waitForTurn = (sessionId: string, waiter: LaneWaiter, promise: Promise<TurnOutcome>): Promise<TurnOutcome> =>
+  const waitForTurn = (
+    sessionId: string,
+    waiter: LaneWaiter,
+    promise: Promise<TurnOutcome>,
+    timeoutMs: number,
+  ): Promise<TurnOutcome> =>
     new Promise<TurnOutcome>((resolve) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
       const arm = () => {
@@ -500,7 +743,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           interruptedLanes.add(sessionId);
           void deps.abortLane(sessionId).catch(() => undefined);
           resolve({ kind: 'failed', notice: 'member-timeout' });
-        }, turnTimeoutMs);
+        }, timeoutMs);
       };
       arm();
       void promise.then((outcome) => {
@@ -548,15 +791,30 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     // the others' replies yet, so progress is tracked by delivery, never by authorship.
     const others = delta.filter((row) => row.authorBotId !== member.botId);
     const recent = others.slice(-MAX_DELTA_MESSAGES);
+    // A step hand-off names files relative to its plan's work directory; a lane works in
+    // the Bot's Home, so it gets the real location instead of guessing (§7.4).
+    const planIds = [...new Set(recent.filter((row) => row.planId && parseFiles(row.filesJson).length > 0).map((row) => row.planId!))];
+    const workDirs = new Map(
+      planIds.length > 0
+        ? (await db.select({ id: botGroupPlans.id, workDir: botGroupPlans.workDir }).from(botGroupPlans).where(inArray(botGroupPlans.id, planIds)))
+          .filter((row): row is { id: string; workDir: string } => !!row.workDir)
+          .map((row) => [row.id, row.workDir] as const)
+        : [],
+    );
     const prompt = buildMemberTurnPrompt({
       groupName: group.name,
       botName: member.name,
       peerNames: peers.filter((peer) => peer.botId !== member.botId).map((peer) => peer.name),
       mentioned,
-      messages: recent.map((row) => ({
-        from: row.authorKind === 'user' ? 'user' : row.authorName,
-        text: clampChars(row.content, MAX_DELTA_MESSAGE_CHARS),
-      })),
+      messages: recent.map((row) => {
+        const workDir = row.planId ? workDirs.get(row.planId) : undefined;
+        const files = workDir ? parseFiles(row.filesJson).map((file) => path.join(workDir, ...file.split('/'))) : [];
+        return {
+          from: row.authorKind === 'user' ? 'user' : row.authorName,
+          text: clampChars(row.content, MAX_DELTA_MESSAGE_CHARS),
+          ...(files.length > 0 ? { files } : {}),
+        };
+      }),
       omitted: others.length - recent.length,
       previousTurnInterrupted: interruptedLanes.delete(lane.sessionId),
     });
@@ -568,47 +826,68 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     round.speakers.set(member.botId, lane.sessionId);
     emit(group.id, 'round', scope);
 
-    const clientId = BOT_GROUP_CLIENT_ID.memberTurn(group.id, createId(), member.botId);
+    return dispatchAndWait({
+      groupId: group.id,
+      sessionId: lane.sessionId,
+      prompt,
+      clientId: BOT_GROUP_CLIENT_ID.memberTurn(group.id, createId(), member.botId),
+      timeoutMs: turnTimeoutMs,
+      isCancelled: () => round.cancelled,
+      afterDispatch: async () => {
+        if (!scopeIsCurrent(scope)) return;
+        await db
+          .update(botGroupMembers)
+          .set({ lastSeenSequence: deliveredThrough })
+          .where(and(
+            eq(botGroupMembers.groupId, group.id),
+            eq(botGroupMembers.botId, member.botId),
+            lt(botGroupMembers.lastSeenSequence, deliveredThrough),
+          ));
+      },
+    });
+  };
+
+  /** One hidden turn in a lane or 分工 Session, settled by `settleLaneTurn` or the timeout. */
+  const dispatchAndWait = async (turn: {
+    groupId: string;
+    sessionId: string;
+    prompt: string;
+    clientId: string;
+    timeoutMs: number;
+    isCancelled: () => boolean;
+    afterDispatch?: () => Promise<void>;
+  }): Promise<TurnOutcome> => {
     let settle!: (outcome: TurnOutcome) => void;
     const settled = new Promise<TurnOutcome>((resolve) => { settle = resolve; });
-    const waiter: LaneWaiter = { groupId: group.id, clientId, accepted: false, settle };
+    const waiter: LaneWaiter = { groupId: turn.groupId, clientId: turn.clientId, accepted: false, settle };
     // Register before dispatch: an idle lane may finish before dispatch returns.
-    cancelWaiter(lane.sessionId);
-    waiters.set(lane.sessionId, waiter);
+    cancelWaiter(turn.sessionId);
+    waiters.set(turn.sessionId, waiter);
     let dispatched: DispatchResult;
     try {
       dispatched = await deps.dispatch({
-        targetSessionId: lane.sessionId,
-        message: prompt,
-        persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${prompt}`,
-        clientId,
+        targetSessionId: turn.sessionId,
+        message: turn.prompt,
+        persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${turn.prompt}`,
+        clientId: turn.clientId,
         onAccepted: () => { waiter.accepted = true; },
       });
     } catch (error) {
       dispatched = { ok: false, errorCode: 'DISPATCH_FAILED', message: error instanceof Error ? error.message : String(error) };
     }
     if (!dispatched.ok) {
-      if (waiters.get(lane.sessionId) === waiter) waiters.delete(lane.sessionId);
-      deps.log?.warn('Bot group member turn was not accepted', { groupId: group.id, errorCode: dispatched.errorCode });
-      return round.cancelled ? { kind: 'cancelled' } : { kind: 'failed', notice: 'member-failed' };
+      if (waiters.get(turn.sessionId) === waiter) waiters.delete(turn.sessionId);
+      deps.log?.warn('Bot group turn was not accepted', { groupId: turn.groupId, errorCode: dispatched.errorCode });
+      if (turn.isCancelled()) return { kind: 'cancelled' };
+      return { kind: 'failed', notice: dispatched.errorCode === 'BOT_GROUP_WORKDIR_UNAVAILABLE' ? 'workdir-unavailable' : 'member-failed' };
     }
-    if (scopeIsCurrent(scope)) {
-      await db
-        .update(botGroupMembers)
-        .set({ lastSeenSequence: deliveredThrough })
-        .where(and(
-          eq(botGroupMembers.groupId, group.id),
-          eq(botGroupMembers.botId, member.botId),
-          lt(botGroupMembers.lastSeenSequence, deliveredThrough),
-        ))
-        .catch(() => undefined);
-    }
-    if (round.cancelled) {
+    await turn.afterDispatch?.().catch(() => undefined);
+    if (turn.isCancelled()) {
       // A newer round may already own this lane; only withdraw this turn's waiter.
-      if (waiters.get(lane.sessionId) === waiter) cancelWaiter(lane.sessionId);
+      if (waiters.get(turn.sessionId) === waiter) cancelWaiter(turn.sessionId);
       return { kind: 'cancelled' };
     }
-    return waitForTurn(lane.sessionId, waiter, settled);
+    return waitForTurn(turn.sessionId, waiter, settled, turn.timeoutMs);
   };
 
   const runRound = async (input: {
@@ -708,6 +987,494 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     void runRound({ ...input, scope: input.scope });
   };
 
+
+  // ---- 分工 (docs/product-rules/bot-group-chat.md §7) -----------------------
+
+  type StepNotes = { kind: 'redo' | 'more' | 'retry'; texts: string[] };
+
+  const cancelPlanning = (groupId: string): boolean => {
+    const runtime = runtimes.get(groupId);
+    const planning = runtime?.planning;
+    if (!runtime || !planning) return false;
+    planning.cancelled = true;
+    planning.abort.abort();
+    runtime.planning = null;
+    return true;
+  };
+
+  /** Abort the step in progress; the plan row is settled by the caller. */
+  const haltStep = async (groupId: string): Promise<ActiveStep | null> => {
+    const runtime = runtimes.get(groupId);
+    const step = runtime?.step;
+    if (!runtime || !step) return null;
+    step.cancelled = true;
+    runtime.step = null;
+    if (step.sessionId) {
+      cancelWaiter(step.sessionId);
+      await deps.abortLane(step.sessionId).catch((error) =>
+        deps.log?.warn('Bot group plan step abort failed', { groupId, error: String(error) }));
+    }
+    return step;
+  };
+
+  /** 停止 / 结束分工: the plan ends; finished steps and their files stay. */
+  const stopPlan = async (groupId: string, scope?: DataOwnerBroadcastScope): Promise<boolean> => {
+    // Read before halting: once the step leaves memory, restart recovery would take it for a crash.
+    const plan = await readOpenPlanRow(groupId);
+    await haltStep(groupId);
+    if (!plan || plan.status === 'proposed') return false;
+    const db = getDbClient().drizzle;
+    const at = now();
+    // Stopping is the user's choice, not a failure: the interrupted step simply did not happen.
+    await db
+      .update(botGroupPlanSteps)
+      .set({ status: 'pending', finishedAt: null })
+      .where(and(eq(botGroupPlanSteps.planId, plan.id), eq(botGroupPlanSteps.status, 'running')));
+    const updated = await db
+      .update(botGroupPlans)
+      .set({ status: 'stopped', updatedAt: at })
+      .where(and(eq(botGroupPlans.id, plan.id), inArray(botGroupPlans.status, ['running', 'waiting'])))
+      .returning({ id: botGroupPlans.id });
+    if (updated.length === 0 || !scopeIsCurrent(scope)) return updated.length > 0;
+    await appendMessage({ groupId, kind: 'notice', authorKind: 'system', noticeCode: 'plan-stopped', planId: plan.id });
+    emit(groupId, 'messages', scope);
+    emit(groupId, 'plan', scope);
+    return true;
+  };
+
+  /** Latest ordinary chat messages before `beforeSequence` (plan hand-offs excluded), oldest first. */
+  const recentChat = async (groupId: string, beforeSequence: number) => {
+    const rows = await getDbClient()
+      .drizzle.select()
+      .from(botGroupMessages)
+      .where(and(
+        eq(botGroupMessages.groupId, groupId),
+        eq(botGroupMessages.kind, 'message'),
+        lt(botGroupMessages.sequence, beforeSequence),
+      ))
+      .orderBy(desc(botGroupMessages.sequence))
+      .limit(MAX_PLAN_RECENT_MESSAGES);
+    return rows
+      .filter((row) => !row.planId)
+      .reverse()
+      .map((row) => ({ from: row.authorKind === 'user' ? 'user' : row.authorName, text: row.content }));
+  };
+
+  /**
+   * The organizer's decision runs outside the group's action queue so Stop and new
+   * messages are never held up; its result is committed back inside the queue, and
+   * only while it has not been superseded.
+   */
+  const startPlanning = (input: {
+    group: GroupRow;
+    organizer: MemberRow;
+    members: MemberRow[];
+    mode: PlanDecisionMode;
+    requestText: string;
+    requestSequence: number;
+    revisePlan: PlanRow | null;
+    /** `auto` only: the ordinary round when no split is needed. */
+    fallback: (() => void) | null;
+    scope?: DataOwnerBroadcastScope;
+  }) => {
+    const runtime = runtimeFor(input.group.id);
+    const planning: PlanningState = { cancelled: false, organizerBotId: input.organizer.botId, abort: new AbortController() };
+    runtime.planning = planning;
+    emit(input.group.id, 'round', input.scope);
+    void runPlanning(planning, input);
+  };
+
+  const runPlanning = async (
+    planning: PlanningState,
+    input: Parameters<typeof startPlanning>[0],
+  ): Promise<void> => {
+    const groupId = input.group.id;
+    let decision: PlanDecision | null = null;
+    try {
+      const usable = input.members.filter((member) => member.status === 'active');
+      const currentSteps = input.revisePlan
+        ? (await readSteps(input.revisePlan.id)).map((step) => ({ botId: step.botId, task: step.task }))
+        : undefined;
+      if (deps.decidePlan && !planning.cancelled) {
+        decision = await deps.decidePlan({
+          mode: input.mode,
+          groupName: input.group.name,
+          organizerName: input.organizer.name,
+          members: usable.map((member) => ({ botId: member.botId, name: member.name, description: member.description })),
+          recent: await recentChat(groupId, input.requestSequence),
+          request: input.requestText,
+          currentSteps,
+        }, planning.abort.signal);
+      }
+    } catch (error) {
+      deps.log?.warn('Bot group plan decision failed', { groupId, error: String(error) });
+      decision = null;
+    }
+    await serialize(groupId, async () => {
+      const runtime = runtimeFor(groupId);
+      if (planning.cancelled || disposed || !scopeIsCurrent(input.scope)) return;
+      if (runtime.planning === planning) runtime.planning = null;
+      emit(groupId, 'round', input.scope);
+      // No plan: an automatic check chats as usual; an explicit request always hears why.
+      const noPlan = async () => {
+        if (input.mode === 'auto') {
+          input.fallback?.();
+          return;
+        }
+        await appendMessage({
+          groupId,
+          kind: 'notice',
+          authorKind: 'system',
+          authorBotId: input.organizer.botId,
+          authorName: input.organizer.name,
+          noticeCode: 'plan-failed',
+        });
+        emit(groupId, 'messages', input.scope);
+      };
+      if (!decision?.needsPlan) return noPlan();
+      const members = await readMembers(groupId);
+      const byId = new Map(members.filter((member) => member.status === 'active').map((member) => [member.botId, member]));
+      const steps = decision.steps.filter((step) => byId.has(step.botId));
+      // Members may have left or paused while the organizer was deciding.
+      if (steps.length === 0) return noPlan();
+      const planId = createId();
+      try {
+        await getDbClient().tx('botGroups.createPlan', {
+          plan: {
+            id: planId,
+            groupId,
+            requestText: input.revisePlan?.requestText ?? input.requestText,
+            organizerBotId: input.organizer.botId,
+            organizerName: input.organizer.name,
+          },
+          steps: steps.map((step) => ({ botId: step.botId, botName: byId.get(step.botId)!.name, task: step.task })),
+          message: messageRow({
+            groupId,
+            kind: 'plan',
+            authorKind: 'bot',
+            authorBotId: input.organizer.botId,
+            authorName: input.organizer.name,
+            planId,
+          }),
+          now: now(),
+        });
+      } catch (error) {
+        deps.log?.warn('Bot group plan could not be saved', { groupId, error: String(error) });
+        return noPlan();
+      }
+      emit(groupId, 'messages', input.scope);
+      emit(groupId, 'plan', input.scope);
+    }).catch((error) => deps.log?.warn('Bot group planning commit failed', { groupId, error: String(error) }));
+  };
+
+  /** Marks the step running (memory first, so a restart check never mistakes it) and runs it. */
+  const beginStep = async (
+    plan: PlanRow,
+    step: StepRow,
+    notes: StepNotes | null,
+    scope?: DataOwnerBroadcastScope,
+  ): Promise<void> => {
+    const runtime = runtimeFor(plan.groupId);
+    const active: ActiveStep = {
+      groupId: plan.groupId,
+      planId: plan.id,
+      position: step.position,
+      botId: step.botId,
+      sessionId: null,
+      cancelled: false,
+      notes: [],
+    };
+    runtime.step = active;
+    const db = getDbClient().drizzle;
+    const at = now();
+    await db
+      .update(botGroupPlans)
+      .set({ status: 'running', currentStep: step.position, updatedAt: at })
+      .where(eq(botGroupPlans.id, plan.id));
+    await db
+      .update(botGroupPlanSteps)
+      .set({ status: 'running', startedAt: at, finishedAt: null })
+      .where(and(eq(botGroupPlanSteps.planId, plan.id), eq(botGroupPlanSteps.position, step.position)));
+    emit(plan.groupId, 'plan', scope);
+    emit(plan.groupId, 'round', scope);
+    void runStep(active, notes, scope);
+  };
+
+  const runStep = async (active: ActiveStep, initialNotes: StepNotes | null, scope?: DataOwnerBroadcastScope) => {
+    const { groupId, planId, position } = active;
+    const runtime = runtimeFor(groupId);
+    let leftoverNotes: string[] = [];
+    const live = () => !active.cancelled && !disposed && scopeIsCurrent(scope) && runtime.step === active;
+
+    const settle = async (outcome: { kind: 'done'; text: string; files: string[] } | { kind: 'failed'; notice: BotGroupNoticeCode }) => {
+      if (!live()) return;
+      const steps = await readSteps(planId);
+      const step = steps.find((row) => row.position === position);
+      if (!step) return;
+      const members = await readMembers(groupId);
+      const authorName = members.find((member) => member.botId === step.botId)?.name ?? step.botName;
+      const done = outcome.kind === 'done';
+      const isLast = position === steps.length - 1;
+      const result = await getDbClient().tx('botGroups.settleStep', {
+        planId,
+        position,
+        expectedPlanStatus: 'running',
+        stepStatus: done ? 'done' : 'failed',
+        planStatus: done && isLast ? 'done' : 'waiting',
+        message: outcome.kind === 'done'
+          ? messageRow({
+            groupId,
+            kind: 'message',
+            authorKind: 'bot',
+            authorBotId: step.botId,
+            authorName,
+            content: clampChars(outcome.text, MAX_BOT_REPLY_CHARS),
+            planId,
+            files: outcome.files,
+          })
+          : messageRow({
+            groupId,
+            kind: 'notice',
+            authorKind: 'system',
+            authorBotId: step.botId,
+            authorName,
+            noticeCode: outcome.notice,
+            planId,
+          }),
+        endMessage: done && isLast ? messageRow({ groupId, kind: 'plan-end', authorKind: 'system', planId }) : null,
+        now: now(),
+      });
+      if (result.settled) emit(groupId, 'messages', scope);
+    };
+
+    try {
+      const plan = await readPlan(planId);
+      if (!plan || plan.status !== 'running') return;
+      const steps = await readSteps(planId);
+      const step = steps.find((row) => row.position === position);
+      const group = await readGroup(groupId);
+      if (!step || !group) return;
+      const members = await readMembers(groupId);
+      const member = members.find((row) => row.botId === step.botId);
+      if (!member || member.status !== 'active') return await settle({ kind: 'failed', notice: 'member-unavailable' });
+
+      let workDir = plan.workDir;
+      let branch = plan.branch;
+      let ownerSessionId: string | undefined;
+      if (!workDir) {
+        const prepared = deps.workDir
+          ? await deps.workDir.prepare({ groupId, projectDir: group.projectDir })
+            .catch((error: unknown) => ({ ok: false as const, message: String(error) }))
+          : ({ ok: false as const, message: 'work directory service unavailable' });
+        if (!live()) return;
+        if (!prepared.ok) {
+          deps.log?.warn('Bot group plan work directory unavailable', { groupId, message: prepared.message });
+          return await settle({ kind: 'failed', notice: 'workdir-unavailable' });
+        }
+        workDir = prepared.workDir;
+        branch = prepared.branch;
+        ownerSessionId = prepared.ownerSessionId ?? undefined;
+        await getDbClient()
+          .drizzle.update(botGroupPlans)
+          .set({ workDir, branch, updatedAt: now() })
+          .where(eq(botGroupPlans.id, planId));
+      }
+
+      const lane = await deps.ensureLane({
+        botId: step.botId,
+        groupId,
+        title: group.name,
+        plan: { planId, workDir, sessionId: ownerSessionId },
+      });
+      if (!live()) return;
+      if (!lane.ok) return await settle({ kind: 'failed', notice: 'member-unavailable' });
+      active.sessionId = lane.sessionId;
+      emit(groupId, 'round', scope);
+      try {
+        await deps.syncLanePermission?.(lane.sessionId, step.botId);
+      } catch (error) {
+        deps.log?.warn('Bot group plan session permission sync failed', { groupId, error: String(error) });
+        return await settle({ kind: 'failed', notice: 'member-failed' });
+      }
+
+      const before = deps.workDir ? await deps.workDir.snapshot(workDir).catch(() => new Map<string, string>()) : new Map<string, string>();
+      let notes = initialNotes;
+      let text = '';
+      let files: string[] = [];
+      for (;;) {
+        if (!live()) return;
+        const brief = await buildBrief(plan, group, member, position, workDir, branch, notes);
+        const outcome = await dispatchAndWait({
+          groupId,
+          sessionId: lane.sessionId,
+          prompt: brief,
+          clientId: BOT_GROUP_CLIENT_ID.planStep(groupId, planId, position, createId()),
+          timeoutMs: stepTimeoutMs,
+          isCancelled: () => !live(),
+        });
+        if (!live() || outcome.kind === 'cancelled') return;
+        if (outcome.kind === 'failed') return await settle({ kind: 'failed', notice: outcome.notice });
+        text = outcome.kind === 'reply' ? outcome.text : '';
+        if (active.notes.length === 0) {
+          files = deps.workDir ? await deps.workDir.changedFiles(workDir, before).catch(() => []) : [];
+          // Notes sent while the files were being listed still belong to this step.
+          if (active.notes.length === 0) break;
+        }
+        notes = { kind: 'more', texts: active.notes.splice(0) };
+      }
+      await settle({ kind: 'done', text, files });
+      // Anything sent while the hand-off was being saved becomes a redo of this step (below).
+      leftoverNotes = active.notes.splice(0);
+    } catch (error) {
+      deps.log?.warn('Bot group plan step failed', { groupId, error: String(error) });
+      await settle({ kind: 'failed', notice: 'member-failed' }).catch(() => undefined);
+    } finally {
+      if (runtime.step === active) runtime.step = null;
+      emit(groupId, 'plan', scope);
+      emit(groupId, 'round', scope);
+      if (leftoverNotes.length > 0 && !active.cancelled && !disposed) {
+        const texts = leftoverNotes;
+        void serialize(groupId, async () => {
+          const plan = await readOpenPlan(groupId);
+          if (!plan || plan.id !== planId || plan.status !== 'waiting' || plan.currentStep !== position) return;
+          const step = (await readSteps(planId)).find((row) => row.position === position && row.status === 'done');
+          if (step) await beginStep(plan, step, { kind: 'redo', texts }, scope);
+        }).catch((error) => deps.log?.warn('Bot group late step notes were not delivered', { groupId, error: String(error) }));
+      }
+    }
+  };
+
+  const buildBrief = async (
+    plan: PlanRow,
+    group: GroupRow,
+    member: MemberRow,
+    position: number,
+    workDir: string,
+    branch: string | null,
+    notes: StepNotes | null,
+  ): Promise<string> => {
+    const steps = await readSteps(plan.id);
+    const resultIds = steps
+      .filter((step) => step.position < position && step.resultMessageId)
+      .map((step) => step.resultMessageId!);
+    const results = resultIds.length > 0
+      ? await getDbClient().drizzle.select().from(botGroupMessages).where(inArray(botGroupMessages.id, resultIds))
+      : [];
+    const { latest } = await latestMessages(group.id);
+    return buildPlanStepBrief({
+      groupName: group.name,
+      botName: member.name,
+      request: plan.requestText,
+      steps: steps.map((step) => ({
+        position: step.position,
+        botName: step.botName,
+        task: step.task,
+        status: step.position === position ? 'running' : step.status,
+      })),
+      position,
+      handoffs: steps
+        .filter((step) => step.position < position)
+        .map((step) => {
+          const message = results.find((row) => row.id === step.resultMessageId);
+          return {
+            position: step.position,
+            botName: message?.authorName || step.botName,
+            note: message?.content ?? '',
+            files: parseFiles(message?.filesJson),
+          };
+        }),
+      recent: await recentChat(group.id, (latest?.sequence ?? 0) + 1),
+      workDir,
+      branch,
+      userNotes: notes ?? undefined,
+    });
+  };
+
+  const readPlanActionInput = (input: unknown) => {
+    const raw = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    return { groupId: readId(raw.groupId), planId: readId(raw.planId), raw };
+  };
+
+  const planAction = async (action: BotGroupPlanAction, input: unknown): Promise<BotGroupMutationResult> => {
+    const { groupId, planId } = readPlanActionInput(input);
+    if (!groupId || !planId) return failure('INVALID_PARAMS', '参数无效');
+    return serialize(groupId, async () => {
+      const plan = await readOpenPlan(groupId);
+      if (!plan || plan.id !== planId) return failure('PLAN_CLOSED', '这个安排已经结束或被替换');
+      const steps = await readSteps(planId);
+      const current = plan.currentStep === null ? null : steps.find((step) => step.position === plan.currentStep) ?? null;
+      const scope = captureScope();
+      if (action === 'start') {
+        if (plan.status !== 'proposed' || !steps[0]) return failure('PLAN_CLOSED', '这个安排已经开始了');
+        await beginStep(plan, steps[0], null, scope);
+        return { ok: true } as const;
+      }
+      if (action === 'dismiss') {
+        if (plan.status === 'proposed') {
+          await getDbClient()
+            .drizzle.update(botGroupPlans)
+            .set({ status: 'dismissed', updatedAt: now() })
+            .where(and(eq(botGroupPlans.id, planId), eq(botGroupPlans.status, 'proposed')));
+          emit(groupId, 'plan', scope);
+          return { ok: true } as const;
+        }
+        if (plan.status === 'waiting') {
+          await stopPlan(groupId, scope);
+          return { ok: true } as const;
+        }
+        return failure('PLAN_CLOSED', '分工正在进行，请先停止');
+      }
+      if (plan.status !== 'waiting' || !current) return failure('PLAN_CLOSED', '现在不能这样操作');
+      if (action === 'continue') {
+        const next = steps.find((step) => step.position === current.position + 1);
+        if (current.status !== 'done' || !next) return failure('PLAN_CLOSED', '现在不能继续');
+        await beginStep(plan, next, null, scope);
+        return { ok: true } as const;
+      }
+      if (current.status !== 'failed') return failure('PLAN_CLOSED', '这一步已经做完了');
+      await beginStep(plan, current, null, scope);
+      return { ok: true } as const;
+    });
+  };
+
+  const editPlanStep = async (input: unknown): Promise<BotGroupMutationResult> => {
+    const { groupId, planId, raw } = readPlanActionInput(input);
+    const position = typeof raw.position === 'number' && Number.isInteger(raw.position) ? raw.position : null;
+    if (!groupId || !planId || position === null) return failure('INVALID_PARAMS', '参数无效');
+    return serialize(groupId, async () => {
+      const plan = await readOpenPlan(groupId);
+      if (!plan || plan.id !== planId || (plan.status !== 'proposed' && plan.status !== 'waiting')) {
+        return failure('PLAN_CLOSED', '现在不能修改这个安排');
+      }
+      const scope = captureScope();
+      if (raw.action === 'remove') {
+        if (plan.status !== 'proposed') return failure('PLAN_CLOSED', '只能在开始前删掉步骤');
+        const { removed } = await getDbClient().tx('botGroups.removePlanStep', { planId, position, now: now() });
+        if (!removed) return failure('INVALID_PARAMS', '至少要留一步');
+      } else if (raw.action === 'reassign') {
+        const botId = readId(raw.botId);
+        const member = botId ? (await readMembers(groupId)).find((row) => row.botId === botId && row.status === 'active') : null;
+        if (!member) return failure('MEMBER_UNAVAILABLE', '这位伙伴现在不能接这一步');
+        // After 开始, only a step not yet done can change hands (e.g. its Bot left, then 重试).
+        const reassignable: Array<'pending' | 'failed'> = plan.status === 'proposed' ? ['pending'] : ['pending', 'failed'];
+        const updated = await getDbClient()
+          .drizzle.update(botGroupPlanSteps)
+          .set({ botId: member.botId, botName: member.name })
+          .where(and(
+            eq(botGroupPlanSteps.planId, planId),
+            eq(botGroupPlanSteps.position, position),
+            inArray(botGroupPlanSteps.status, reassignable),
+          ))
+          .returning({ position: botGroupPlanSteps.position });
+        if (updated.length === 0) return failure('PLAN_CLOSED', '这一步已经做完或不存在');
+      } else {
+        return failure('INVALID_PARAMS', '参数无效');
+      }
+      emit(groupId, 'plan', scope);
+      return { ok: true } as const;
+    });
+  };
+
   const settleLaneTurn = async (terminal: BotGroupLaneTerminal): Promise<boolean> => {
     const waiter = waiters.get(terminal.sessionId);
     if (!waiter) return false;
@@ -762,8 +1529,12 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     const hasMoreBefore = page.length > limit;
     const messages = page.slice(0, limit).reverse().map(toMessageView);
     const summary = await summarize(group);
-    const round = runtimes.get(groupId)?.round ?? null;
+    const runtime = runtimes.get(groupId);
+    const round = runtime?.round ?? null;
+    const speakers = speakersOf(groupId);
     const { latest } = await latestMessages(groupId);
+    const planIds = new Set(messages.map((message) => message.planId).filter((id): id is string => !!id));
+    if (summary.openPlan) planIds.add(summary.openPlan.id);
     return {
       ok: true,
       group: {
@@ -771,10 +1542,11 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         messages,
         hasMoreBefore,
         round: {
-          status: round ? 'running' : 'idle',
-          speakers: [...(round?.speakers.entries() ?? [])].map(([botId, sessionId]) => ({ botId, sessionId })),
+          status: round || runtime?.planning || runtime?.step ? 'running' : 'idle',
+          speakers,
           canContinue: !round && latest?.kind === 'round-end',
         },
+        plans: await readPlanViews([...planIds]),
       } satisfies BotGroupDetail,
     };
   };
@@ -831,6 +1603,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       name?: string;
       replyMode?: BotGroupReplyMode;
       speakingMode?: BotGroupSpeakingMode;
+      organizerBotId?: string | null;
+      projectDir?: string | null;
       updatedAt: number;
     } = { updatedAt: now() };
     if (raw.name !== undefined) {
@@ -845,6 +1619,30 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     if (raw.speakingMode !== undefined) {
       if (raw.speakingMode !== 'auto' && raw.speakingMode !== 'sequential') return failure('INVALID_PARAMS', '发言方式无效');
       patch.speakingMode = raw.speakingMode;
+    }
+    if (raw.organizerBotId !== undefined) {
+      if (raw.organizerBotId === null) {
+        patch.organizerBotId = null;
+      } else {
+        const botId = readId(raw.organizerBotId);
+        const members = botId ? await readMembers(groupId) : [];
+        if (!botId || !members.some((member) => member.botId === botId)) return failure('INVALID_PARAMS', '负责人必须是群成员');
+        patch.organizerBotId = botId;
+      }
+    }
+    if (raw.projectDir !== undefined) {
+      if (raw.projectDir === null) {
+        patch.projectDir = null;
+      } else {
+        if (typeof raw.projectDir !== 'string' || !raw.projectDir || raw.projectDir.length > MAX_PROJECT_DIR_CHARS) {
+          return failure('INVALID_PARAMS', '项目文件夹无效');
+        }
+        const checked = deps.validateProjectDir
+          ? await deps.validateProjectDir(raw.projectDir).catch(() => ({ ok: false as const, message: '' }))
+          : ({ ok: false as const, message: '' });
+        if (!checked.ok) return failure('INVALID_PARAMS', checked.message || '项目文件夹不可用');
+        patch.projectDir = checked.dir;
+      }
     }
     const scope = captureScope();
     const updated = await getDbClient()
@@ -871,12 +1669,19 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       if (unavailable) return unavailable;
       const scope = captureScope();
       const removed = members.filter((member) => !botIds.includes(member.botId)).map((member) => member.botId);
-      const speakers = runtimes.get(groupId)?.round?.speakers;
+      const runtime = runtimes.get(groupId);
+      const speakers = runtime?.round?.speakers;
       if (speakers && removed.some((botId) => speakers.has(botId))) await cancelRound(groupId, scope);
+      if (runtime?.planning && removed.includes(runtime.planning.organizerBotId)) cancelPlanning(groupId);
+      if (runtime?.step && removed.includes(runtime.step.botId)) await stopPlan(groupId, scope);
       let archived: string[];
       try {
         archived = (await getDbClient().tx('botGroups.setMembers', {
-          groupId, botIds, routeKey: botGroupLaneRouteKey(groupId), now: now(),
+          groupId,
+          botIds,
+          routeKey: botGroupLaneRouteKey(groupId),
+          planRouteKeyPrefix: botGroupPlanRouteKeyPrefix(groupId),
+          now: now(),
         })).archivedSessionIds;
       } catch (error) {
         return txFailure(error);
@@ -893,16 +1698,24 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     return serialize(groupId, async () => {
       const scope = captureScope();
       await cancelRound(groupId, scope);
+      cancelPlanning(groupId);
+      await haltStep(groupId);
       let archived: string[];
       try {
         archived = (await getDbClient().tx('botGroups.delete', {
-          groupId, routeKey: botGroupLaneRouteKey(groupId), now: now(),
+          groupId,
+          routeKey: botGroupLaneRouteKey(groupId),
+          planRouteKeyPrefix: botGroupPlanRouteKeyPrefix(groupId),
+          now: now(),
         })).archivedSessionIds;
       } catch (error) {
         return txFailure(error);
       }
       runtimes.delete(groupId);
       if (archived.length > 0) await deps.closeLanes?.(archived).catch(() => undefined);
+      // The group's own folder goes to the system trash, never straight to deletion (§7.5).
+      await deps.workDir?.trashGroupFolder(groupId).catch((error) =>
+        deps.log?.warn('Bot group folder could not be moved to trash', { groupId, error: String(error) }));
       emit(groupId, 'deleted', scope);
       return { ok: true } as const;
     });
@@ -940,21 +1753,27 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     const inputMentions: BotGroupMention | null = rawMentions
       ? { all: rawMentions.all === true, botIds: readBotIds(rawMentions.botIds) ?? [] }
       : null;
+    const division = raw.division === true;
     return serialize(groupId, async () => {
       const group = await readGroup(groupId);
       if (!group) return failure('NOT_FOUND', '群聊不存在');
       const members = await readMembers(groupId);
       const mentions = resolveGroupMentions(text, inputMentions, members);
+      const openPlan = await readOpenPlan(groupId);
+      if (division && openPlan && openPlan.status !== 'proposed') {
+        return failure('PLAN_OPEN', '群里还有没做完的分工，请先做完或结束');
+      }
       const scope = captureScope();
-      let appended: { id: string; created: boolean };
+      let appended: { id: string; sequence: number; created: boolean };
       try {
         appended = await appendMessage({ groupId, kind: 'message', authorKind: 'user', content: text, mentions, clientId });
       } catch (error) {
         return txFailure(error);
       }
       if (!appended.created) return { ok: true, messageId: appended.id } as const;
-      // A new user message supersedes whatever the group was doing.
+      // A new user message supersedes whatever the group was saying or deciding.
       await cancelRound(groupId, scope);
+      if (cancelPlanning(groupId)) emit(groupId, 'round', scope);
       emit(groupId, 'messages', scope);
       for (const member of members) {
         if (member.status !== 'active' && mentions.botIds.includes(member.botId)) {
@@ -962,13 +1781,53 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         }
       }
       const responders = respondersFor(group, members, mentions);
-      startRound({
+      const chatRound = () => startRound({
         groupId,
         responders,
         mentions,
         parallelFirstCircle: isParallelBroadcast(group, mentions, responders),
         scope,
       });
+      // Naming specific Bots is ordinary chat; everything else goes through 分工 routing (§7.2–7.4),
+      // including 「@所有人」 and groups where only mentioned Bots reply.
+      const direct = mentions.botIds.length > 0;
+      if (direct && !division) {
+        chatRound();
+        return { ok: true, messageId: appended.id } as const;
+      }
+      const organizer = effectiveOrganizer(group.organizerBotId, members);
+      const planning = (mode: PlanDecisionMode, revisePlan: PlanRow | null, fallback: (() => void) | null) => {
+        if (!organizer) {
+          fallback?.();
+          return;
+        }
+        startPlanning({
+          group,
+          organizer,
+          members,
+          mode,
+          requestText: text,
+          requestSequence: appended.sequence,
+          revisePlan,
+          fallback,
+          scope,
+        });
+      };
+      if (division) {
+        planning('forced', null, null);
+      } else if (openPlan?.status === 'proposed') {
+        planning('revise', openPlan, null);
+      } else if (openPlan?.status === 'running') {
+        const step = runtimes.get(groupId)?.step;
+        if (step && step.planId === openPlan.id) step.notes.push(text);
+      } else if (openPlan?.status === 'waiting') {
+        const current = (await readSteps(openPlan.id)).find((step) => step.position === openPlan.currentStep);
+        if (current) await beginStep(openPlan, current, { kind: current.status === 'failed' ? 'retry' : 'redo', texts: [text] }, scope);
+      } else if (deps.decidePlan && members.filter((member) => member.status === 'active').length >= 2) {
+        planning('auto', null, chatRound);
+      } else {
+        chatRound();
+      }
       return { ok: true, messageId: appended.id } as const;
     });
   };
@@ -1002,7 +1861,10 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     const groupId = readId(groupIdInput);
     if (!groupId) return failure('INVALID_PARAMS', 'groupId 无效');
     return serialize(groupId, async () => {
-      await cancelRound(groupId, captureScope());
+      const scope = captureScope();
+      await cancelRound(groupId, scope);
+      if (cancelPlanning(groupId)) emit(groupId, 'round', scope);
+      if (runtimes.get(groupId)?.step) await stopPlan(groupId, scope);
       return { ok: true } as const;
     });
   };
@@ -1013,6 +1875,14 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       if (runtime.round) {
         runtime.round.cancelled = true;
         for (const sessionId of runtime.round.speakers.values()) cancelWaiter(sessionId);
+      }
+      if (runtime.planning) {
+        runtime.planning.cancelled = true;
+        runtime.planning.abort.abort();
+      }
+      if (runtime.step) {
+        runtime.step.cancelled = true;
+        cancelWaiter(runtime.step.sessionId);
       }
       runtimes.delete(groupId);
     }
@@ -1029,6 +1899,11 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     sendMessage,
     continueRound,
     stopRound,
+    startPlan: (input: unknown) => planAction('start', input),
+    dismissPlan: (input: unknown) => planAction('dismiss', input),
+    continuePlan: (input: unknown) => planAction('continue', input),
+    retryPlan: (input: unknown) => planAction('retry', input),
+    editPlanStep,
     settleLaneTurn,
     dispose,
   };

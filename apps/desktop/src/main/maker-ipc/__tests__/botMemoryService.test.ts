@@ -219,3 +219,15 @@ describe('botMemoryDescriptionFromBody', () => {
     expect(Array.from(botMemoryDescriptionFromBody('长'.repeat(500)))).toHaveLength(200);
   });
 });
+
+it('imports long original memory into the real index without losing Unicode, and retries once', async () => {
+  const { service } = setup();
+  const original = '记得我的偏好🙂。'.repeat(900);
+  await service.importDocument('bot-1', 'source-memory', '原有记忆', original);
+  await service.importDocument('bot-1', 'source-memory', '原有记忆', original);
+  const entries = (await service.list('bot-1')).filter(row => row.filename.startsWith('reference_import_source-memory_')).sort((a, b) => a.filename.localeCompare(b.filename));
+  expect(entries.length).toBeGreaterThan(1);
+  const restored = await Promise.all(entries.map(row => storage.read(row.filename)));
+  expect(restored.map(row => row.body).join('')).toBe(original);
+  expect(await fs.readFile(path.join(dir, 'MEMORY.md'), 'utf8')).toContain(entries[0]!.filename);
+});

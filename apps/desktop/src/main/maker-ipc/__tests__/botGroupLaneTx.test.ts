@@ -86,6 +86,17 @@ describe('Bot group lane transactions', () => {
       .toEqual({ source: 'bot', status: 'active' });
   });
 
+  it('creates a separate 分工 Session per plan that works in the plan directory', () => {
+    tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey: 'group:g1', session: laneSession('lane-1') } });
+    const step = { ...laneSession('step-1'), workingDir: '/work/site-wt', workspaceKind: 'project' };
+    expect(tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey: 'group:g1:plan:p1', session: step } }))
+      .toEqual({ sessionId: 'step-1', created: true });
+    expect(db.prepare("SELECT working_dir, workspace_kind FROM sessions WHERE id = 'step-1'").get())
+      .toEqual({ working_dir: '/work/site-wt', workspace_kind: 'project' });
+    expect(db.prepare("SELECT route_key FROM bot_session_links WHERE session_id = 'step-1'").get())
+      .toEqual({ route_key: 'group:g1:plan:p1' });
+  });
+
   it('refuses lanes for non-members and unavailable Bots', () => {
     expect(() => tx(db, {
       name: 'bots.createGroupLane',

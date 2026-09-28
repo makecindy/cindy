@@ -1,5 +1,6 @@
 /**
- * 群设置抽屉：群名称、成员（移出 / 添加伙伴）、没有 @ 人时的回复方式、删除群聊。
+ * 群设置抽屉：群名称、成员（移出 / 添加伙伴 / 设为负责人）、项目文件夹、没有 @ 人时的
+ * 回复方式、发言方式、删除群聊。
  *
  * 与 BotSettingsDrawer 同一个外壳：由路由上的 `?groupSettings=1` 打开，群聊页留在下面；
  * 点遮罩不关闭，Esc（IME 组合中除外）与右上角关闭按钮关闭。每项改动立即提交给 main，
@@ -8,7 +9,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Plus, X } from 'lucide-react';
+import { Folder, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { matchPath, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
@@ -29,11 +30,13 @@ import {
 } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
+import { BotGroupOrganizerTag } from './BotGroupPlan';
 import {
   BOT_GROUP_MAX_MEMBERS,
   BOT_GROUP_MIN_MEMBERS,
   BOT_GROUP_SETTINGS_PARAM,
   botGroupErrorKey,
+  botGroupPathBasename,
   isActiveBotGroupMember,
 } from './botGroupPresentation';
 import { botGroupApi, refreshBotGroups, useBotGroupList } from './botGroupStore';
@@ -107,8 +110,11 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
   const [membersError, setMembersError] = useState<string | null>(null);
   const [replyModeError, setReplyModeError] = useState<string | null>(null);
   const [speakingModeError, setSpeakingModeError] = useState<string | null>(null);
+  const [projectDirError, setProjectDirError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'members' | 'replyMode' | 'speakingMode' | 'delete' | null>(null);
+  const [busy, setBusy] = useState<
+    'members' | 'organizer' | 'projectDir' | 'replyMode' | 'speakingMode' | 'delete' | null
+  >(null);
   const [picking, setPicking] = useState(false);
   const nameFocusedRef = useRef(false);
   const savingNameRef = useRef(false);
@@ -178,6 +184,55 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
     setBusy(null);
     setMembersError(failure);
     if (!failure) setPicking(false);
+  };
+
+  const setOrganizer = async (organizerBotId: string) => {
+    if (busy || organizerBotId === group.organizerBotId) return;
+    setBusy('organizer');
+    setMembersError(null);
+    const failure = await mutate(
+      (api) => api.updateBotGroup({ groupId: group.id, organizerBotId }),
+      'bots.groupChat.settings.organizerSaveFailed',
+    );
+    setBusy(null);
+    setMembersError(failure);
+  };
+
+  const setProjectDir = async (projectDir: string | null) => {
+    setBusy('projectDir');
+    setProjectDirError(null);
+    const failure = await mutate(
+      (api) => api.updateBotGroup({ groupId: group.id, projectDir }),
+      'bots.groupChat.settings.projectDirSaveFailed',
+    );
+    setBusy(null);
+    setProjectDirError(failure);
+  };
+
+  /** Same system folder picker as choosing a project for a new task; main re-validates. */
+  const chooseProjectDir = async () => {
+    if (busy) return;
+    const dialog = window.electronAPI?.dialog;
+    if (typeof dialog?.showOpenDirectory !== 'function') {
+      setProjectDirError(t('bots.groupChat.settings.projectDirSaveFailed'));
+      return;
+    }
+    setBusy('projectDir');
+    setProjectDirError(null);
+    let picked: string | null = null;
+    try {
+      const result = await dialog.showOpenDirectory(group.projectDir ? { defaultPath: group.projectDir } : undefined);
+      picked = result.success ? result.path : null;
+    } catch {
+      setBusy(null);
+      setProjectDirError(t('bots.groupChat.settings.projectDirSaveFailed'));
+      return;
+    }
+    if (!picked || picked === group.projectDir) {
+      setBusy(null);
+      return;
+    }
+    await setProjectDir(picked);
   };
 
   const setReplyMode = async (replyMode: BotGroupReplyMode) => {
@@ -278,7 +333,24 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
                 className="flex min-h-11 items-center gap-2.5 border-b border-[var(--border-default)] px-3 py-2 text-13 text-[var(--text-primary)]"
               >
                 <BotAvatar bot={member} size="sm" className={isActiveBotGroupMember(member) ? undefined : 'opacity-60'} />
-                <span className="min-w-0 flex-1 truncate">{member.name}</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="min-w-0 truncate">{member.name}</span>
+                  {member.botId === group.organizerBotId ? <BotGroupOrganizerTag /> : null}
+                </span>
+                {member.botId !== group.organizerBotId && isActiveBotGroupMember(member) ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    tone="quiet"
+                    size="xs"
+                    compact
+                    disabled={busy !== null}
+                    aria-label={t('bots.groupChat.settings.setOrganizerNamed', { name: member.name })}
+                    onClick={() => void setOrganizer(member.botId)}
+                  >
+                    {t('bots.groupChat.settings.setOrganizer')}
+                  </Button>
+                ) : null}
                 {!isActiveBotGroupMember(member) ? (
                   <span className="shrink-0 text-12 text-[var(--text-tertiary)]">
                     {t(
@@ -352,9 +424,74 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
               </div>
             ) : null}
           </div>
+          <p className="text-12 leading-normal text-[var(--text-tertiary)]">
+            {t('bots.groupChat.settings.organizerNote')}
+          </p>
           {membersError ? (
             <p role="alert" className="text-12 text-[var(--error-fg)]">
               {membersError}
+            </p>
+          ) : null}
+        </section>
+
+        <section className="flex flex-col gap-2" aria-labelledby="bot-group-settings-project">
+          <h3 id="bot-group-settings-project" className="text-13 font-medium text-[var(--settings-section-title)]">
+            {t('bots.groupChat.settings.projectDir')}
+          </h3>
+          <div className="overflow-hidden rounded-xl border border-[var(--border-default)]">
+            <div
+              data-testid="bot-group-project-dir"
+              className="flex min-h-11 items-center gap-2.5 px-3 py-2 text-13 text-[var(--text-primary)]"
+            >
+              <Folder size={16} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
+              {group.projectDir ? (
+                <Tip text={group.projectDir}>
+                  <span className="min-w-0 flex-1 truncate">
+                    {botGroupPathBasename(group.projectDir)}
+                  </span>
+                </Tip>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-[var(--text-tertiary)]">
+                  {t('bots.groupChat.settings.projectDirNone')}
+                </span>
+              )}
+              {group.projectDir ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  tone="quiet"
+                  size="xs"
+                  compact
+                  disabled={busy !== null}
+                  onClick={() => void setProjectDir(null)}
+                >
+                  {t('bots.groupChat.settings.projectDirClear')}
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="secondary"
+                tone="quiet"
+                size="xs"
+                compact
+                disabled={busy !== null}
+                loading={busy === 'projectDir'}
+                onClick={() => void chooseProjectDir()}
+              >
+                {t(
+                  group.projectDir
+                    ? 'bots.groupChat.settings.projectDirChange'
+                    : 'bots.groupChat.settings.projectDirChoose',
+                )}
+              </Button>
+            </div>
+          </div>
+          <p className="text-12 leading-normal text-[var(--text-tertiary)]">
+            {t('bots.groupChat.settings.projectDirNote')}
+          </p>
+          {projectDirError ? (
+            <p role="alert" className="text-12 text-[var(--error-fg)]">
+              {projectDirError}
             </p>
           ) : null}
         </section>

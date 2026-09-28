@@ -382,11 +382,14 @@ describe('session runtime control wiring', () => {
     const axisValidation = setModel.indexOf('if (atomicSelection) {');
     expect(axisValidation).toBeGreaterThan(-1);
     expect(setModel).not.toContain("if (internalOptions.source !== 'user' && atomicSelection)");
+    // 用户 picker 选择按显式能力校验; 配置跟随(configStaged)带的是任务已有的
+    // 档位/Fast(Fast 根本不在渠道默认里), 不是用户对目标模型的显式选择 ——
+    // 目标模型不支持时轴收敛而不是拒(PR #5155 review P2)。
     expect(setModel).toContain(
-      "internalOptions.source === 'user' || internalOptions.effortExplicit === true",
+      'effortExplicit:\n            (internalOptions.source === \'user\' && internalOptions.configStaged !== true) ||\n            internalOptions.effortExplicit === true',
     );
     expect(setModel).toContain(
-      "internalOptions.source === 'user' || internalOptions.fastExplicit === true",
+      'fastExplicit:\n            (internalOptions.source === \'user\' && internalOptions.configStaged !== true) ||\n            internalOptions.fastExplicit === true',
     );
     expect(setModel).toContain("allowFixedEffortPlaceholder: internalOptions.source === 'user'");
     expect(axisValidation).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));

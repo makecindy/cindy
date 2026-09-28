@@ -511,12 +511,13 @@ function localSessionHostIdentity(input: {
   customContext: boolean;
   storage?: { sqliteHome: string; historyHome: string };
   policy: 'isolated' | 'legacy-shared';
+  environmentIdentity?: string;
 }): string {
   const base = input.accountSessionHost
     ? `local-account:${input.accountProviderId ?? 'openai'}:session:${input.sessionId}`
     : input.reviewMode ? localReviewHostKey(input.sessionId)
       : input.customContext ? localCustomContextHostKey(input.sessionId) : hostKey(input.remoteHostId);
-  return codexLocalAuthHostIdentity(base + (input.storage
+  return codexLocalAuthHostIdentity(base + (input.environmentIdentity ? `:environment:${input.environmentIdentity}` : '') + (input.storage
     ? `:storage:${input.storage.sqliteHome}:history:${input.storage.historyHome}` : ''), input.policy);
 }
 
@@ -4974,9 +4975,12 @@ assertRouteCurrent();
       ? await this.deps.resolveCodexThreadStorage?.(opts.resumeSessionId)
       : undefined;
     const sessionSqliteHome = sessionStorage?.sqliteHome;
+    const companionEnvironment = opts.botRuntimeProfile && !opts.remoteHostId && sid
+      ? await this.deps.resolveSessionEnvironment?.(sid) : undefined;
     const resolveSessionHostKey = (): string => localSessionHostIdentity({
       sessionId: sid, remoteHostId: opts.remoteHostId, accountSessionHost, accountProviderId,
       reviewMode, customContext: usesCustomContextHost, storage: sessionStorage, policy: localAuthPolicy,
+      environmentIdentity: companionEnvironment?.identity,
     });
     let currentHostKey = resolveSessionHostKey();
     let releaseHostBindingLease: (() => void) | null = null;
@@ -4998,12 +5002,13 @@ assertRouteCurrent();
       if (!routeSelection.isCurrent()) throw new CodexRouteSelectionChangedError();
       acquireHostBindingLeaseIfNeeded();
       return await this.getHost(opts.remoteHostId, credentialMode, {
+        ...(companionEnvironment ? { keyOverride: currentHostKey } : {}),
         ...(accountProviderId ? { providerId: accountProviderId } : {}),
         ...(sessionSqliteHome ? { sqliteHome: sessionSqliteHome } : {}),
         ...(sessionStorage ? { historyHome: sessionStorage.historyHome } : {}),
         ...(accountSessionHost || reviewMode || usesCustomContextHost || sessionSqliteHome ? { keyOverride: currentHostKey } : {}),
         ignoreBindingLeases: 1,
-        routeIsCurrent: routeSelection.isCurrent,
+        routeIsCurrent: () => { companionEnvironment?.assertCurrent?.(); return routeSelection.isCurrent(); },
         routeSignal: startupRouteSignal,
         ...(localAuthPolicy === 'isolated' || reviewMode || usesCustomContextHost
           ? { keyOverride: currentHostKey }
@@ -14700,12 +14705,14 @@ assertRouteCurrent();
         : await this.deps.resolveCodexThreadContextWindow?.(opts.providerId, opts.model);
       const accountProviderId = this.deps.isCodexAccountProvider?.(opts.providerId) ? opts.providerId! : undefined;
       const storage = await this.deps.resolveCodexThreadStorage?.(opts.threadId);
+      const companionEnvironment = opts.sessionId
+        ? await this.deps.resolveSessionEnvironment?.(opts.sessionId) : undefined;
       const targetKey = localSessionHostIdentity({
         sessionId: opts.sessionId ?? '', accountProviderId,
         accountSessionHost: accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true,
         reviewMode: opts.reviewMode === true,
         customContext: typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0,
-        storage, policy: selection.policy,
+        storage, policy: selection.policy, environmentIdentity: companionEnvironment?.identity,
       });
       if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
       for (const [key, host] of hosts) {

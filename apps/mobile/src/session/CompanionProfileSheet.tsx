@@ -1,3 +1,4 @@
+import { CompanionImportSheet } from './CompanionImportSheet';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
@@ -412,6 +413,10 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const [importing, setImporting] = useState(false);
+  const [openingImport, setOpeningImport] = useState(false);
+  const openImport = () => setOpeningImport(true);
+  const creationClosed = () => { if (openingImport) { setOpeningImport(false); setImporting(true); } else onClosed?.(); };
   const [data, setData] = useState<CompanionProfileData | null>(null);
   const [values, setValues] = useState<ProfileValues>({ name: '', avatarImageBase64: '' });
   const [loading, setLoading] = useState(false);
@@ -448,7 +453,7 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
     finally { if (current.current === sequence) setLoading(false); }
   };
   useEffect(() => {
-    if (visible) { requestId.current = null; setPortraitChanged(false); setNameTaken(false); setUnconfirmed(false); setValues({ name: '', avatarImageBase64: randomCompanionPortrait() }); }
+    if (visible) { setImporting(false); setOpeningImport(false); requestId.current = null; setPortraitChanged(false); setNameTaken(false); setUnconfirmed(false); setValues({ name: '', avatarImageBase64: randomCompanionPortrait() }); }
   }, [visible]);
   useEffect(() => {
     setData(null); setError(false);
@@ -492,17 +497,19 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
       setBusy(false);
     }
   };
-  if (Platform.OS === 'ios') return <CompanionCreateNativeView deviceName={deviceName} nameTaken={nameTaken} duplicate={duplicate} locked={unconfirmed} visible={visible} onClose={close} onClosed={onClosed} panel={data?.panels[0]} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} />;
+  if (importing) return <CompanionImportSheet visible={visible} onClose={onClose} onClosed={onClosed} deviceId={deviceId} deviceName={deviceName} online={online} onCreated={onCreated} />;
+  if (Platform.OS === 'ios') return <CompanionCreateNativeView onImport={data?.resource.actions?.some(action => action.id === 'open-agent-import') ? openImport : undefined} deviceName={deviceName} nameTaken={nameTaken} duplicate={duplicate} locked={unconfirmed} visible={visible && !openingImport} onClose={close} onClosed={creationClosed} panel={data?.panels[0]} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} />;
   const panel = data?.panels[0];
   const notice = !online ? t('devices.companionProfile.offline', { deviceName }) : error || duplicate ? t(duplicate || nameTaken ? 'devices.companionProfile.nameTaken' : 'devices.companionProfile.createFailed') : null;
   // Same gate as iOS: a live, enabled host action, a name and a portrait.
   const blocked = busy || !online || !panel?.action || !!panel.action.disabled || typeof values.name !== 'string' || !values.name.trim() || !values.avatarImageBase64 || duplicate;
-  return <CompanionSheet visible={visible} onClose={close} onClosed={onClosed} preventDismiss={dirty || busy} title={t('devices.companionProfile.create')}>
+  return <CompanionSheet visible={visible && !openingImport} onClose={close} onClosed={creationClosed} preventDismiss={dirty || busy} title={t('devices.companionProfile.create')}>
     <View style={styles.content}>
       {notice ? <Text accessibilityRole={online ? 'alert' : undefined} style={styles.note}>{notice}</Text> : null}
       {loading ? <ActivityIndicator accessibilityLabel={t('devices.resources.loading')} color={colors.textSecondary} style={styles.spinner} /> : null}
       {panel ? <CompanionProfileForm panel={panel} values={values} onChange={change} disabled={busy || !online || unconfirmed} /> : null}
       {!panel && online && !loading ? <MainWindowActionButton action={{ label: t('devices.resources.retry'), disabled: busy, onPress: () => void reload() }} /> : null}
+      {data?.resource.actions?.some(action => action.id === 'open-agent-import') ? <MainWindowActionButton action={{ label: t('devices.companionImport.entry'), disabled: busy || !online || unconfirmed, onPress: openImport }} /> : null}
       <MainWindowActionButton action={{ label: t('devices.companionProfile.create'), busy, disabled: blocked, onPress: () => void submit() }} />
       {/* The explicit exit while a draft blocks dismissal; `close` still asks before discarding. */}
       <MainWindowActionButton action={{ label: t('devices.common.cancel'), disabled: busy, onPress: close }} />

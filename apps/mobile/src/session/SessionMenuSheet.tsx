@@ -22,8 +22,6 @@ import {
   Archive,
   ArchiveRestore,
   Copy,
-  CornerUpLeft,
-  Crosshair,
   Link2,
   LogOut,
   Pencil,
@@ -104,10 +102,6 @@ export interface SessionExtraDirBrowserState {
 }
 
 export interface SessionMenuWorkerActions {
-  /** 查不到所属 Lead 时为 undefined(入口不出现)。 */
-  onOpenLead?: () => void;
-  /** 已是焦点 / 查不到自身记录时为 undefined。 */
-  onSetFocus?: () => void;
   /**
    * 查不到自身记录时为 undefined。确认弹窗在详情面板仍展开时弹出(iOS 原生 sheet 正在收起时
    * 弹 Alert 会丢),确认后由 onConfirmed 收起面板。
@@ -614,14 +608,7 @@ export function SessionMenuSheet({
           {!messageOnly ? <SessionUsageSummary providerName={providerName} session={session} usage={menuUsage} contextUsage={contextUsage} onPress={openInfo} translucent={Platform.OS === 'ios'} /> : null}
 
           {workerMode ? (
-            <WorkerMenuActions
-              onClose={onClose}
-              worker={worker}
-              onRun={(action) => {
-                onClose();
-                action();
-              }}
-            />
+            <WorkerMenuActions onClose={onClose} worker={worker} />
           ) : null}
 
           {workerMode ? null : !messageOnly && isSharedTaskPeer(session.deviceLinkDeviceId) && onLeaveSharing ? (
@@ -1037,48 +1024,44 @@ function menuActionIcon(action: SessionMenuAction, session: Pick<RemoteSession, 
   }
 }
 
-/** 协同 Worker 任务的详情操作:返回 Lead / 设为焦点 / 归档 Worker(各自可用时才出现)。 */
+/**
+ * 协同 Worker 任务的详情操作:只有归档 Worker。返回 Lead 走左上角返回与输入框上方的协同条;
+ * 「焦点」只影响电脑端协同面板展开哪个 Worker,手机上不提供。
+ */
 function WorkerMenuActions({
   worker,
-  onRun,
   onClose,
 }: {
   worker: SessionMenuWorkerActions | undefined;
-  onRun(action: () => void): void;
   onClose(): void;
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const rows = [
-    worker?.onOpenLead ? { key: 'lead', icon: CornerUpLeft, label: t('session.collab.backToLead'), danger: false, run: worker.onOpenLead, testID: 'session.workerBackToLead', keepOpen: false } : null,
-    worker?.onSetFocus ? { key: 'focus', icon: Crosshair, label: t('session.collab.setFocus'), danger: false, run: worker.onSetFocus, testID: 'session.workerSetFocus', keepOpen: false } : null,
-    worker?.onArchive ? { key: 'archive', icon: Archive, label: t('session.collab.archiveConfirm'), danger: true, run: () => worker.onArchive?.(onClose), testID: 'session.workerArchive', keepOpen: true } : null,
-  ].filter((row): row is NonNullable<typeof row> => row !== null);
-  if (rows.length === 0) return null;
+  const onArchive = worker?.onArchive;
+  if (!onArchive) return null;
+  // 确认弹窗在面板仍展开时弹出,确认后由 onClose 收起(见 SessionMenuWorkerActions.onArchive)。
+  const archive = () => onArchive(onClose);
   if (Platform.OS === 'ios') {
     return (
       <SessionDetailsNativeActions
-        actions={rows.map((row) => ({
-          label: row.label,
-          danger: row.danger,
-          onPress: () => (row.keepOpen ? row.run() : onRun(row.run)),
-          testID: row.testID,
-        }))}
+        actions={[{
+          label: t('session.collab.archiveConfirm'),
+          danger: true,
+          onPress: archive,
+          testID: 'session.workerArchive',
+        }]}
       />
     );
   }
   return (
     <View style={styles.actionGroup} testID="session.workerActions">
-      {rows.map((row) => (
-        <MenuActionRow
-          danger={row.danger}
-          icon={row.icon}
-          key={row.key}
-          label={row.label}
-          onPress={() => (row.keepOpen ? row.run() : onRun(row.run))}
-          testID={row.testID}
-        />
-      ))}
+      <MenuActionRow
+        danger
+        icon={Archive}
+        label={t('session.collab.archiveConfirm')}
+        onPress={archive}
+        testID="session.workerArchive"
+      />
     </View>
   );
 }

@@ -9,6 +9,7 @@ import type {
   BotGroupChangedPayload,
   BotGroupDetail,
   BotGroupMessageView,
+  BotGroupPlanView,
 } from '../../../../shared/botGroupChat';
 
 const mocks = vi.hoisted(() => ({
@@ -17,6 +18,12 @@ const mocks = vi.hoisted(() => ({
   sendBotGroupMessage: vi.fn(),
   stopBotGroupRound: vi.fn(),
   continueBotGroupRound: vi.fn(),
+  startBotGroupPlan: vi.fn(),
+  dismissBotGroupPlan: vi.fn(),
+  continueBotGroupPlan: vi.fn(),
+  retryBotGroupPlan: vi.fn(),
+  editBotGroupPlanStep: vi.fn(),
+  openPath: vi.fn(),
   pushes: [] as Array<(payload: BotGroupChangedPayload, stamp?: unknown) => void>,
   toastError: vi.fn(),
 }));
@@ -71,6 +78,8 @@ function msg(overrides: Partial<BotGroupMessageView>): BotGroupMessageView {
     content: '',
     mentions: { all: false, botIds: [] },
     noticeCode: null,
+    planId: null,
+    files: [],
     createdAt: 1_700_000_000_000,
     ...overrides,
   };
@@ -86,10 +95,15 @@ function detail(overrides: Partial<BotGroupDetail> = {}): BotGroupDetail {
       { botId: 'mimi', name: '咪咪', avatar: '', avatarColor: 'red', status: 'active' },
       { botId: 'xiaoman', name: '小满', avatar: '', avatarColor: 'blue', status: 'active' },
     ],
+    organizerBotId: 'mimi',
+    projectDir: null,
     lastMessage: null,
     speakingBotIds: [],
+    planningBotId: null,
+    openPlan: null,
     createdAt: 1,
     updatedAt: 1,
+    plans: [],
     messages: [
       msg({ id: 'u1', sequence: 1, content: '@小满 帮我查余票' }),
       msg({
@@ -116,6 +130,59 @@ function detail(overrides: Partial<BotGroupDetail> = {}): BotGroupDetail {
   };
 }
 
+function plan(overrides: Partial<BotGroupPlanView> = {}): BotGroupPlanView {
+  return {
+    id: 'p1',
+    status: 'proposed',
+    organizerBotId: 'mimi',
+    organizerName: '咪咪',
+    steps: [
+      { position: 0, botId: 'mimi', botName: '咪咪', task: '想清楚这页讲什么', status: 'pending' },
+      { position: 1, botId: 'xiaoman', botName: '小满', task: '画设计稿', status: 'pending' },
+    ],
+    currentStep: null,
+    workDir: null,
+    branch: null,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+const planCard = msg({
+  id: 'plan-1',
+  sequence: 10,
+  kind: 'plan',
+  authorKind: 'bot',
+  authorBotId: 'mimi',
+  authorName: '咪咪',
+  planId: 'p1',
+});
+
+function openSummary(planView: BotGroupPlanView): NonNullable<BotGroupDetail['openPlan']> {
+  const current = planView.steps.find((step) => step.position === planView.currentStep) ?? null;
+  return {
+    id: planView.id,
+    status: planView.status,
+    currentStep: planView.currentStep,
+    stepCount: planView.steps.length,
+    currentBotName: current?.botName ?? null,
+    currentStepStatus: current?.status ?? null,
+  };
+}
+
+/** The group with one plan card; `planView` decides whether it is still open. */
+function withPlan(planView: BotGroupPlanView, extra: BotGroupMessageView[] = [], overrides: Partial<BotGroupDetail> = {}) {
+  const open = ['proposed', 'running', 'waiting'].includes(planView.status);
+  return detail({
+    messages: [msg({ id: 'u1', sequence: 1, content: '帮我做官网介绍页' }), planCard, ...extra],
+    plans: [planView],
+    openPlan: open ? openSummary(planView) : null,
+    round: { status: 'idle', speakers: [], canContinue: false },
+    ...overrides,
+  });
+}
+
 function HeaderSlot() {
   return <header data-testid="content-header">{useFeatureContentHeader()}</header>;
 }
@@ -137,15 +204,27 @@ beforeEach(() => {
   mocks.sendBotGroupMessage.mockReset().mockResolvedValue({ ok: true, messageId: 'u2' });
   mocks.stopBotGroupRound.mockReset().mockResolvedValue({ ok: true });
   mocks.continueBotGroupRound.mockReset().mockResolvedValue({ ok: true });
+  mocks.startBotGroupPlan.mockReset().mockResolvedValue({ ok: true });
+  mocks.dismissBotGroupPlan.mockReset().mockResolvedValue({ ok: true });
+  mocks.continueBotGroupPlan.mockReset().mockResolvedValue({ ok: true });
+  mocks.retryBotGroupPlan.mockReset().mockResolvedValue({ ok: true });
+  mocks.editBotGroupPlanStep.mockReset().mockResolvedValue({ ok: true });
+  mocks.openPath.mockReset().mockResolvedValue({ success: true });
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
+      openPath: (...args: unknown[]) => mocks.openPath(...args),
       maker: {
         listBotGroups: vi.fn(async () => ({ ok: true, groups: [] })),
         getBotGroup: (...args: unknown[]) => mocks.getBotGroup(...args),
         sendBotGroupMessage: (...args: unknown[]) => mocks.sendBotGroupMessage(...args),
         stopBotGroupRound: (...args: unknown[]) => mocks.stopBotGroupRound(...args),
         continueBotGroupRound: (...args: unknown[]) => mocks.continueBotGroupRound(...args),
+        startBotGroupPlan: (...args: unknown[]) => mocks.startBotGroupPlan(...args),
+        dismissBotGroupPlan: (...args: unknown[]) => mocks.dismissBotGroupPlan(...args),
+        continueBotGroupPlan: (...args: unknown[]) => mocks.continueBotGroupPlan(...args),
+        retryBotGroupPlan: (...args: unknown[]) => mocks.retryBotGroupPlan(...args),
+        editBotGroupPlanStep: (...args: unknown[]) => mocks.editBotGroupPlanStep(...args),
         onBotGroupChanged: (cb: (payload: BotGroupChangedPayload, stamp?: unknown) => void) => {
           mocks.pushes.push(cb);
           return () => {
@@ -196,7 +275,11 @@ describe('BotGroupChatView', () => {
       ok: true,
       group: detail({
         speakingBotIds: ['mimi'],
-        round: { status: 'running', speakers: [{ botId: 'mimi', sessionId: 'lane-mimi' }], canContinue: false },
+        round: {
+          status: 'running',
+          speakers: [{ botId: 'mimi', sessionId: 'lane-mimi', activity: 'reply' }],
+          canContinue: false,
+        },
       }),
     });
     renderView();
@@ -221,7 +304,10 @@ describe('BotGroupChatView', () => {
         speakingBotIds: ['mimi', 'xiaoman'],
         round: {
           status: 'running',
-          speakers: [{ botId: 'mimi', sessionId: 'lane-mimi' }, { botId: 'xiaoman', sessionId: 'lane-xiaoman' }],
+          speakers: [
+            { botId: 'mimi', sessionId: 'lane-mimi', activity: 'reply' },
+            { botId: 'xiaoman', sessionId: 'lane-xiaoman', activity: 'reply' },
+          ],
           canContinue: false,
         },
       }),
@@ -282,5 +368,330 @@ describe('BotGroupChatView', () => {
     await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
     act(() => mocks.pushes.forEach((push) => push({ groupId: 'g1', change: 'deleted' })));
     expect(await screen.findByText('bots.groupChat.unavailableTitle')).toBeTruthy();
+  });
+
+  describe('分工', () => {
+    it('shows the organizer’s plan card and starts or skips the open plan', async () => {
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(plan()) });
+      renderView();
+      const card = await screen.findByTestId('bot-group-plan');
+      expect(card.textContent).toContain('bots.groupChat.plan.intro');
+      expect(card.textContent).toContain('想清楚这页讲什么');
+      expect(card.textContent).toContain('画设计稿');
+      expect(screen.getByText('bots.groupChat.organizer')).toBeTruthy();
+      expect(screen.getByText('bots.groupChat.plan.editHint')).toBeTruthy();
+      expect(screen.getByText('bots.groupChat.plan.pauseNote')).toBeTruthy();
+      expect(screen.getByRole('textbox').getAttribute('placeholder')).toBe(
+        'bots.groupChat.composer.placeholderPlanProposed',
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.plan.start' }));
+      await waitFor(() => expect(mocks.startBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
+      await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
+
+      await waitFor(() =>
+        expect(
+          (screen.getByRole('button', { name: 'bots.groupChat.plan.dismiss' }) as HTMLButtonElement).disabled,
+        ).toBe(false),
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.plan.dismiss' }));
+      await waitFor(() => expect(mocks.dismissBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
+    });
+
+    it('explains a failed plan action and re-reads the group', async () => {
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(plan()) });
+      mocks.startBotGroupPlan.mockResolvedValue({ ok: false, errorCode: 'PLAN_CLOSED', message: '' });
+      renderView();
+      fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.plan.start' }));
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.errors.planClosed'));
+      await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
+    });
+
+    it('hands a step to another teammate or removes it from the step menu', async () => {
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(plan()) });
+      renderView();
+      const steps = await screen.findAllByTestId('bot-group-plan-step');
+      fireEvent.pointerDown(steps[1]!, { button: 0, ctrlKey: false });
+      expect(await screen.findByText('bots.groupChat.plan.stepMenuTitle')).toBeTruthy();
+      fireEvent.click(screen.getByRole('menuitem', { name: '咪咪' }));
+      await waitFor(() =>
+        expect(mocks.editBotGroupPlanStep).toHaveBeenCalledWith({
+          groupId: 'g1',
+          planId: 'p1',
+          position: 1,
+          action: 'reassign',
+          botId: 'mimi',
+        }),
+      );
+
+      await waitFor(() =>
+        expect((screen.getAllByTestId('bot-group-plan-step')[0] as HTMLButtonElement).disabled).toBe(false),
+      );
+      fireEvent.pointerDown(screen.getAllByTestId('bot-group-plan-step')[0]!, { button: 0, ctrlKey: false });
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'bots.groupChat.plan.removeStep' }));
+      await waitFor(() =>
+        expect(mocks.editBotGroupPlanStep).toHaveBeenLastCalledWith({
+          groupId: 'g1',
+          planId: 'p1',
+          position: 0,
+          action: 'remove',
+        }),
+      );
+    });
+
+    it('keeps the last step: removing it is disabled with a reason', async () => {
+      const single = plan({ steps: [plan().steps[0]!] });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(single) });
+      renderView();
+      const [step] = await screen.findAllByTestId('bot-group-plan-step');
+      fireEvent.pointerDown(step!, { button: 0, ctrlKey: false });
+      const remove = await screen.findByRole('menuitem', { name: /bots\.groupChat\.plan\.removeStep/ });
+      expect(remove.getAttribute('aria-disabled')).toBe('true');
+      expect(remove.textContent).toContain('bots.groupChat.plan.keepOneStep');
+    });
+
+    it('offers the next step after a hand-off and opens its files inside the work directory', async () => {
+      const waiting = plan({
+        status: 'waiting',
+        currentStep: 0,
+        workDir: '/work/site',
+        steps: [
+          { ...plan().steps[0]!, status: 'done' },
+          { ...plan().steps[1]!, status: 'pending' },
+        ],
+      });
+      const handoff = msg({
+        id: 'h1',
+        sequence: 11,
+        authorKind: 'bot',
+        authorBotId: 'mimi',
+        authorName: '咪咪',
+        content: '想好了，页面分三段',
+        planId: 'p1',
+        files: ['docs/页面想法.md', '../secret.txt'],
+      });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(waiting, [handoff]) });
+      renderView();
+
+      const row = await screen.findByTestId('bot-group-plan-follow-up');
+      expect(row.textContent).toContain('bots.groupChat.timeline.nextStep');
+      expect(row.textContent).toContain('小满');
+      expect(row.textContent).toContain('画设计稿');
+      // Started plans are read-only: no 开始, and the done step is ticked.
+      expect(screen.queryByRole('button', { name: 'bots.groupChat.plan.start' })).toBeNull();
+      expect(screen.getByTestId('bot-group-plan').textContent).toContain('bots.groupChat.plan.stepDone');
+      expect(screen.getByRole('textbox').getAttribute('placeholder')).toBe(
+        'bots.groupChat.composer.placeholderPlanWaiting:咪咪',
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: '页面想法.md' }));
+      await waitFor(() => expect(mocks.openPath).toHaveBeenCalledWith('/work/site/docs/页面想法.md'));
+      // An entry that would leave the work directory never reaches the OS.
+      fireEvent.click(screen.getByRole('button', { name: 'secret.txt' }));
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.files.openFailed'));
+      expect(mocks.openPath).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.timeline.continuePlan' }));
+      await waitFor(() => expect(mocks.continueBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
+      await waitFor(() =>
+        expect(
+          (screen.getByRole('button', { name: 'bots.groupChat.timeline.endPlan' }) as HTMLButtonElement).disabled,
+        ).toBe(false),
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.timeline.endPlan' }));
+      await waitFor(() => expect(mocks.dismissBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
+    });
+
+    it('lets a step that did not finish change hands before 重试, without removing steps', async () => {
+      const failed = plan({
+        status: 'waiting',
+        currentStep: 1,
+        steps: [
+          { ...plan().steps[0]!, status: 'done' },
+          { ...plan().steps[1]!, status: 'failed' },
+        ],
+      });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(failed) });
+      renderView();
+      const steps = await screen.findAllByTestId('bot-group-plan-step');
+      expect(steps[0]!.tagName).toBe('DIV');
+      expect(steps[1]!.tagName).toBe('BUTTON');
+      fireEvent.pointerDown(steps[1]!, { button: 0, ctrlKey: false });
+      fireEvent.click(await screen.findByRole('menuitem', { name: '咪咪' }));
+      await waitFor(() =>
+        expect(mocks.editBotGroupPlanStep).toHaveBeenCalledWith({
+          groupId: 'g1',
+          planId: 'p1',
+          position: 1,
+          action: 'reassign',
+          botId: 'mimi',
+        }),
+      );
+      fireEvent.pointerDown(screen.getAllByTestId('bot-group-plan-step')[1]!, { button: 0, ctrlKey: false });
+      await screen.findByText('bots.groupChat.plan.stepMenuTitle');
+      expect(screen.queryByRole('menuitem', { name: /bots\.groupChat\.plan\.removeStep/ })).toBeNull();
+    });
+
+    it('offers a retry when a step did not finish', async () => {
+      const failed = plan({
+        status: 'waiting',
+        currentStep: 1,
+        steps: [
+          { ...plan().steps[0]!, status: 'done' },
+          { ...plan().steps[1]!, status: 'failed' },
+        ],
+      });
+      const notice = msg({
+        id: 'n-step',
+        sequence: 12,
+        kind: 'notice',
+        authorKind: 'system',
+        authorName: '小满',
+        noticeCode: 'member-timeout',
+        planId: 'p1',
+      });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(failed, [notice]) });
+      renderView();
+      const row = await screen.findByTestId('bot-group-plan-follow-up');
+      expect(row.textContent).toContain('bots.groupChat.timeline.stepFailed:小满');
+      // A member notice inside a plan talks about the step, not a chat reply.
+      expect(screen.getByText('bots.groupChat.notice.stepTimeout:小满')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.timeline.retryStep' }));
+      await waitFor(() => expect(mocks.retryBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
+    });
+
+    it('closes a finished plan with a divider and shows plan notices', async () => {
+      const done = plan({
+        status: 'done',
+        currentStep: 1,
+        steps: plan().steps.map((step) => ({ ...step, status: 'done' as const })),
+      });
+      const extra = [
+        msg({ id: 'end', sequence: 13, kind: 'plan-end', authorKind: 'system', planId: 'p1' }),
+        msg({ id: 'nf', sequence: 14, kind: 'notice', authorKind: 'system', authorName: '咪咪', noticeCode: 'plan-failed' }),
+        msg({ id: 'ns', sequence: 15, kind: 'notice', authorKind: 'system', noticeCode: 'plan-stopped' }),
+        msg({
+          id: 'nw',
+          sequence: 16,
+          kind: 'notice',
+          authorKind: 'system',
+          authorName: '小满',
+          noticeCode: 'workdir-unavailable',
+          planId: 'p1',
+        }),
+      ];
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(done, extra) });
+      renderView();
+      expect((await screen.findByTestId('bot-group-plan-end')).textContent).toBe('bots.groupChat.timeline.planDone');
+      expect(screen.getByText('bots.groupChat.notice.planFailed:咪咪')).toBeTruthy();
+      expect(screen.getByText(/^bots\.groupChat\.notice\.planStopped/)).toBeTruthy();
+      expect(screen.getByText('bots.groupChat.notice.workdirUnavailable:小满')).toBeTruthy();
+      expect(screen.queryByTestId('bot-group-plan-follow-up')).toBeNull();
+      expect(screen.getByTestId('bot-group-plan').getAttribute('data-plan-status')).toBe('done');
+      expect(screen.getByRole('textbox').getAttribute('placeholder')).toBe('bots.groupChat.composer.placeholder');
+    });
+
+    it('marks replaced and skipped plans instead of offering actions', async () => {
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(plan({ status: 'superseded' })) });
+      renderView();
+      expect(await screen.findByText('bots.groupChat.plan.superseded')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'bots.groupChat.plan.start' })).toBeNull();
+      expect(screen.queryAllByRole('button').some((button) => button.dataset.testid === 'bot-group-plan-step')).toBe(false);
+    });
+
+    it('shows who is planning or doing a step, with the step’s pending confirmation', async () => {
+      mocks.getBotGroup.mockResolvedValue({
+        ok: true,
+        group: detail({
+          speakingBotIds: ['mimi', 'xiaoman'],
+          round: {
+            status: 'running',
+            speakers: [
+              { botId: 'mimi', sessionId: null, activity: 'planning' },
+              { botId: 'xiaoman', sessionId: 'plan-xiaoman', activity: 'step' },
+            ],
+            canContinue: false,
+          },
+        }),
+      });
+      renderView();
+      const rows = await screen.findAllByTestId('bot-group-speaking');
+      expect(rows.map((row) => row.getAttribute('data-activity'))).toEqual(['planning', 'step']);
+      // The row already names the Bot; planning has no Session phase, a step shows its live phase.
+      expect(rows[0]!.textContent).toContain('bots.groupChat.speaking.planning');
+      expect(rows[0]!.textContent).not.toContain('bots.groupChat.speaking.planning:');
+      expect(rows[1]!.textContent).not.toContain('bots.groupChat.speaking.planning');
+      expect(screen.getAllByTestId('pending-interaction').map((node) => node.textContent)).toEqual(['plan-xiaoman']);
+    });
+
+    it('sends a message tagged 安排分工 with division: true and clears the tag', async () => {
+      renderView();
+      const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
+        button: 0,
+        ctrlKey: false,
+      });
+      fireEvent.click(await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ }));
+      expect(screen.getByTestId('bot-group-division-tag').textContent).toContain('bots.groupChat.composer.divisionTag');
+      expect(input.getAttribute('placeholder')).toBe('bots.groupChat.composer.placeholderDivision');
+
+      fireEvent.change(input, { target: { value: '做一个官网介绍页' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+      expect(mocks.sendBotGroupMessage.mock.calls[0]![0]).toMatchObject({
+        groupId: 'g1',
+        text: '做一个官网介绍页',
+        division: true,
+      });
+      expect(screen.queryByTestId('bot-group-division-tag')).toBeNull();
+
+      // Without the tag the flag is not sent at all.
+      fireEvent.change(input, { target: { value: '谢谢' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(2));
+      expect(mocks.sendBotGroupMessage.mock.calls[1]![0]).not.toHaveProperty('division');
+    });
+
+    it('puts the draft and its tag back when main refuses a second plan', async () => {
+      mocks.sendBotGroupMessage.mockResolvedValue({ ok: false, errorCode: 'PLAN_OPEN', message: '' });
+      renderView();
+      const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
+        button: 0,
+        ctrlKey: false,
+      });
+      fireEvent.click(await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ }));
+      fireEvent.change(input, { target: { value: '再排一次' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.errors.planOpen'));
+      expect(input.value).toBe('再排一次');
+      expect(screen.getByTestId('bot-group-division-tag')).toBeTruthy();
+    });
+
+    it('disables 安排分工 with a reason while a plan is under way', async () => {
+      const running = plan({
+        status: 'running',
+        currentStep: 0,
+        steps: [{ ...plan().steps[0]!, status: 'running' }, plan().steps[1]!],
+      });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(running) });
+      renderView();
+      const input = await screen.findByRole('textbox');
+      expect(input.getAttribute('placeholder')).toBe('bots.groupChat.composer.placeholderPlanRunning:咪咪');
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
+        button: 0,
+        ctrlKey: false,
+      });
+      const item = await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ });
+      expect(item.getAttribute('aria-disabled')).toBe('true');
+      expect(item.textContent).toContain('bots.groupChat.composer.divisionBusy');
+    });
+
+    it('re-reads the timeline on a plan change', async () => {
+      renderView();
+      await screen.findByText('周六 8:10 有票');
+      act(() => mocks.pushes.forEach((push) => push({ groupId: 'g1', change: 'plan' })));
+      await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
+    });
   });
 });

@@ -111,6 +111,8 @@ function message(overrides: Partial<BotGroupMessageView>): BotGroupMessageView {
     content: '',
     mentions: { all: false, botIds: [] },
     noticeCode: null,
+    planId: null,
+    files: [],
     createdAt: 1,
     ...overrides,
   };
@@ -141,8 +143,12 @@ describe('group presentation', () => {
       replyMode: 'all',
       speakingMode: 'auto',
       members: [],
+      organizerBotId: null,
+      projectDir: null,
       lastMessage: lastAt ? { authorKind: 'user', authorName: '', preview: '', createdAt: lastAt } : null,
       speakingBotIds: [],
+      planningBotId: null,
+      openPlan: null,
       createdAt: 0,
       updatedAt,
     });

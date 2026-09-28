@@ -11,7 +11,12 @@
  */
 
 import { createLogger } from '../../logger';
-import { acquirePendingAgentSwitchForDirectSend } from '../../maker-ipc/register';
+import {
+  acquirePendingAgentSwitchForDirectSend,
+  acquirePendingAgentSwitchForImSend,
+  registerSwitchedSessionVendorOptionsResolver,
+} from '../../maker-ipc/register';
+import { createImChannelDefaultRouteSync } from './channelDefaultRouteSync';
 import { createImSessionRepo, type ImSessionRepo } from './sessionRepo';
 import { createCardBuilders, type ImCardBuilders } from './cardBuilders';
 import { createTurnRunner, type ImTurnRunner } from './turnRunner';
@@ -72,9 +77,22 @@ export function createImOrchestrator(adapter: ImChannelAdapter): ImOrchestrator 
     projectSwitching: adapter.projectSwitching === true,
   });
   const cards = createCardBuilders(adapter.ui, repo.getDefaultEffortFor);
-  const turnRunner = createTurnRunner(adapter, repo, cards, {
-    acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+  const defaultRouteSync = createImChannelDefaultRouteSync({
+    source: adapter.sessions.source,
+    config: adapter.config,
+    isRouteUsable: (route) => turnRunner.hasAuthForRoute(route),
   });
+  const turnRunner = createTurnRunner(adapter, repo, cards, {
+    acquirePendingAgentSwitch: (sessionId, opts) =>
+      opts?.channelOwned
+        ? acquirePendingAgentSwitchForImSend(sessionId, () => defaultRouteSync.syncUnderLock(sessionId))
+        : acquirePendingAgentSwitchForDirectSend(sessionId),
+    channelDefaultRoute: defaultRouteSync,
+  });
+  // 切换引擎重建会话时补回本渠道的 vendorOptions(bot 专属工具依赖它)。
+  registerSwitchedSessionVendorOptionsResolver((sessionId) =>
+    turnRunner.vendorOptionsForSession(sessionId),
+  );
   const slash = createSlashHandlers(adapter, repo, cards, turnRunner);
   const attachMessageHandler = createMessageHandler(adapter, slash, turnRunner);
 

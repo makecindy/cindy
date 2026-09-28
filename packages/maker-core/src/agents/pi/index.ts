@@ -5144,6 +5144,8 @@ export class PiAgent extends BaseAgent {
       // 失败(fail-closed)直接传播 —— 用户显式开启代理却静默直连是安全语义缺陷
       // (R2 MCP BUG-2):隧道 arm 失败应让会话启动失败,而非绕过代理。
       const proxyEnv = remote && this.deps.getRemotePiAgentProxyEnv ? await this.deps.getRemotePiAgentProxyEnv(opts.remoteHostId!) : null;
+      const companionEnvironment = opts.botRuntimeProfile && !remote && opts.sessionId
+        ? await this.deps.resolveSessionEnvironment?.(opts.sessionId) : undefined;
       const spawnEnv: NodeJS.ProcessEnv = {
         ...(remote ? {} : process.env),
         ...(typeof this.deps.runtimeConfig.behaviorFlags === 'function'
@@ -5225,6 +5227,7 @@ export class PiAgent extends BaseAgent {
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
+      companionEnvironment?.assertCurrent?.();
       piSpawnStartedAt = Date.now();
       const { transport } = await this.createTransport(
         {

@@ -639,32 +639,19 @@ export function useSessionOrcaCollab(params: {
   }, [runTeamAction, sessionId]);
 
   /**
-   * 长按 Worker 行:管理操作(点按直接打开 Worker,不弹窗)。Android 原生 Alert 最多三个
-   * 按钮:已是焦点时「归档 / 取消」,否则「设为焦点 / 归档 / 取消」。
+   * 长按 Worker 行:管理操作(点按直接打开 Worker,不弹窗)。手机上只提供归档;「焦点」只决定
+   * 电脑端协同面板展开哪个 Worker,手机上不提供切换。
    */
   const showWorkerActions = useCallback((worker: OrcaTeamWorker) => {
-    const name = orcaWorkerDisplayName(worker);
-    const cancel = { text: i18n.t('session.collab.cancel'), style: 'cancel' as const };
-    const archive = {
-      text: i18n.t('session.collab.archive'),
-      style: 'destructive' as const,
-      onPress: () => confirmArchive(worker),
-    };
-    if (worker.focused) {
-      Alert.alert(name, orcaWorkerStatusLabel(worker.status), [archive, cancel]);
-      return;
-    }
-    const setFocus = {
-      text: i18n.t('session.collab.setFocus'),
-      onPress: () => {
-        void runTeamAction(
-          () => makerRef.current.orca.switchFocus(sessionId, worker.workerId),
-          'session.collab.errors.switchFailed',
-        );
+    Alert.alert(orcaWorkerDisplayName(worker), orcaWorkerStatusLabel(worker.status), [
+      {
+        text: i18n.t('session.collab.archive'),
+        style: 'destructive',
+        onPress: () => confirmArchive(worker),
       },
-    };
-    Alert.alert(name, orcaWorkerStatusLabel(worker.status), [setFocus, archive, cancel]);
-  }, [confirmArchive, runTeamAction, sessionId]);
+      { text: i18n.t('session.collab.cancel'), style: 'cancel' },
+    ]);
+  }, [confirmArchive]);
 
   const confirmEndTeam = useCallback(() => {
     Alert.alert(
@@ -698,19 +685,6 @@ export function useSessionOrcaCollab(params: {
 
   // ─── Worker 任务自身的操作(详情菜单) ─────────────────────────────────────
   const refreshWorkerTeam = workerTeam.refresh;
-  const setSelfFocus = useCallback(async () => {
-    if (!workerLeadSessionId || !workerSelf) return;
-    try {
-      await makerRef.current.orca.switchFocus(workerLeadSessionId, workerSelf.workerId);
-    } catch (err) {
-      Alert.alert(describeOrcaError(
-        isOrcaAmbiguousTimeout(err) ? new Error('[ORCA_ACTION_UNCONFIRMED] timed out') : err,
-        'session.collab.errors.switchFailed',
-      ));
-    } finally {
-      void refreshWorkerTeam();
-    }
-  }, [refreshWorkerTeam, workerLeadSessionId, workerSelf]);
 
   /** 归档自身:确认弹窗在调用方的面板上直接弹出;用户确认后先调 onConfirmed(如收起详情面板)再归档。 */
   const confirmArchiveSelf = useCallback((onConfirmed?: () => void) => {
@@ -768,7 +742,6 @@ export function useSessionOrcaCollab(params: {
     /** Worker 任务自身在团队里的记录;查不到(老被控端 / 读取中)为 null,Worker 操作不出现。 */
     workerSelf,
     refreshWorkerSelf: refreshWorkerTeam,
-    setSelfFocus,
     confirmArchiveSelf,
     workerForm,
     busy,
