@@ -269,6 +269,7 @@ type VoiceInputDictionaryAdviceInput =
 type VoiceInputDictionaryLearningAction =
   import('@cindy/voice-input-core').DictationDictionaryLearningAction;
 type VoiceInputSettingsData = import('../shared/voiceInputData').VoiceInputSettings;
+type VoiceInputSettingsPatchData = import('../shared/voiceInputData').VoiceInputSettingsPatch;
 type VoiceInputHistoryEntryData = import('../shared/voiceInputData').VoiceInputHistoryEntry;
 type VoiceInputDataSnapshot = import('../shared/voiceInputData').VoiceInputDataSnapshot;
 type VoiceInputProviderKindData = import('../shared/voiceInputAsrProfiles').VoiceInputProviderKind;
@@ -1831,7 +1832,7 @@ interface ElectronAPI {
       settingsRaw?: string | null;
       historyRaw?: string | null;
     }) => VoiceInputDataSnapshot;
-    updateSettings: (patch: Partial<VoiceInputSettingsData>) => Promise<VoiceInputSettingsData>;
+    updateSettings: (patch: VoiceInputSettingsPatchData) => Promise<VoiceInputSettingsData>;
     updateShortcutSetting: (shortcut: VoiceInputShortcut | null) => Promise<
       | {
           ok: true;

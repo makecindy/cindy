@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -1041,10 +1042,13 @@ export function VoiceInputSection() {
     setMuteSystemAudio,
     setPlayInteractionSound,
     setFastActivationEnabled,
+    setComposerLongPressEnabled,
+    resetComposerLongPressEnabled,
     setRefinementEnabled,
     setRefinementInstructions,
     setAutoDictionaryEnabled,
     setDictionarySyncEnabled,
+    resetDictionarySyncEnabled,
     addDictionaryEntry: addDictionarySettingEntry,
     importDictionaryEntries: importDictionarySettingEntries,
     editDictionaryEntry: editDictionarySettingEntry,
@@ -2211,11 +2215,21 @@ export function VoiceInputSection() {
                       </p>
                     </div>
 
-                    <Switch
-                      checked={settings.dictionarySyncEnabled}
-                      onCheckedChange={setDictionarySyncEnabled}
-                      aria-label={t('settings.voiceInput.refinement.dictionary.deviceSync.ariaLabel')}
-                    />
+                    <div className="flex shrink-0 items-center gap-2">
+                      <DefaultOverrideControls
+                        isCustomized={settings.dictionarySyncEnabledOverride != null}
+                        onReset={() => {
+                          void resetDictionarySyncEnabled().then((ok) => {
+                            if (ok) toast.success(t('settings.defaults.restored'));
+                          });
+                        }}
+                      />
+                      <Switch
+                        checked={settings.dictionarySyncEnabled}
+                        onCheckedChange={setDictionarySyncEnabled}
+                        aria-label={t('settings.voiceInput.refinement.dictionary.deviceSync.ariaLabel')}
+                      />
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2685,6 +2699,36 @@ export function VoiceInputSection() {
             onCheckedChange={setFastActivationEnabled}
             aria-label={t('settings.voiceInput.fastActivation.ariaLabel')}
           />
+        </div>
+
+        <div className="flex items-center justify-between gap-5 border-t border-[var(--settings-theme-card-border)] pt-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p id="settings-search-settings-voiceInput-composerLongPress-label"
+              className="text-13 font-medium text-[var(--settings-section-title)]"
+              style={{ letterSpacing: '0.12px' }}
+            >
+              {t('settings.voiceInput.composerLongPress.label')}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.voiceInput.composerLongPress.hint')}
+            </p>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+            <DefaultOverrideControls
+              isCustomized={settings.composerLongPressEnabledOverride != null}
+              onReset={() => {
+                void resetComposerLongPressEnabled().then((ok) => {
+                  if (ok) toast.success(t('settings.defaults.restored'));
+                });
+              }}
+            />
+            <Switch
+              checked={settings.composerLongPressEnabled}
+              onCheckedChange={setComposerLongPressEnabled}
+              aria-label={t('settings.voiceInput.composerLongPress.ariaLabel')}
+            />
+          </div>
         </div>
 
         <div className="flex items-center justify-between gap-5 border-t border-[var(--settings-theme-card-border)] pt-4">
