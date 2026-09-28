@@ -4484,6 +4484,40 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { runtime.dispose(); }
   });
 
+  it.each(['done', 'error'] as const)('continues after %s only once runtime stop is confirmed', async outcome => {
+    await seedPair();
+    let execution = { instanceId: 'native-terminal-test', generation: 1 };
+    const runtime = createDelegationRuntime({ taskControl: true, readSessionExecution: () => execution });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish the requested work.' });
+      if (!task.ok) throw new Error('missing task');
+      const previous = { ...execution };
+      // A terminal receipt can precede native/Host tail settlement. It alone
+      // must never grant permission to start another execution.
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome, execution,
+        resultText: outcome === 'done' ? 'Completed.' : undefined,
+        error: outcome === 'error' ? 'Provider failed.' : undefined,
+        pendingInputClientIds: [], hadPendingInputAtTerminal: false });
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({
+        task: { status: outcome === 'done' ? 'completed' : 'failed', control: { state: 'terminal', stop_status: 'unconfirmed' } },
+      });
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', mode: 'queue', text: 'Continue safely.' }))
+        .toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      await runtime.settleChild(task.childSessionId, 'Native tail settled.', previous);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({
+        task: { control: { stop_status: 'stopped' } },
+      });
+      execution = { ...execution, generation: 2 };
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', mode: 'queue', text: 'Continue safely.' }))
+        .toMatchObject({ ok: true, childSessionId: task.childSessionId, resumed: true });
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome, execution: previous,
+        resultText: 'Late old result.', error: 'Late old failure.' });
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ task: { status: 'running' } });
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(2);
+      expect(runtime.abortSession).not.toHaveBeenCalled();
+    } finally { runtime.dispose(); }
+  });
+
   it('collects artifacts using only inputs accepted in the reopened run', async () => {
     await seedPair();
     let execution = { instanceId: 'native', generation: 1 };

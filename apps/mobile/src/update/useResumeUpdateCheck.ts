@@ -15,6 +15,7 @@ import {
   REVIEW_MODE,
 } from '@/config/env';
 import { shouldCheckBundleUpdate } from './bundleUpdate';
+import { isGooglePlayInstallation } from './androidInstallSource';
 import { fetchLatestRelease } from './fetchLatestRelease';
 import { createResumeUpdateChecker } from './resumeUpdateCheck';
 import { promptBundleUpdate } from './useBundleUpdatePrompt';
@@ -29,6 +30,7 @@ export function useResumeUpdateCheck(
     isSelfHosted: IS_OTA_SELFHOST,
     isReviewMode: REVIEW_MODE,
     isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+    isGooglePlayInstallation: isGooglePlayInstallation(),
   });
 
   useEffect(() => {

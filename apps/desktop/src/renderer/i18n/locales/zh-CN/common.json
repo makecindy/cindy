@@ -189,6 +189,7 @@
     "allow": "允许远程桌面",
     "allowHint": "允许已登录的同账号设备查看和操作这台电脑的所有应用。需同时开启上方的设备控制。",
     "permissionHint": "请在电脑的系统设置中允许屏幕录制和辅助功能，然后重新连接。",
+    "controlUnavailable": "远端电脑暂时无法接受操作，请检查远端控制权限和连接，然后重新连接。",
     "beingControlled": "桌面正在被远程控制",
     "beingViewed": "桌面正在被远程查看",
     "disconnect": "断开连接",

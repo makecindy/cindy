@@ -189,6 +189,7 @@
     "allow": "允許遠端桌面",
     "allowHint": "允許已登入的同帳號裝置檢視和操作這台電腦的所有應用程式。需同時開啟上方的裝置控制。",
     "permissionHint": "請在電腦的系統設定中允許螢幕錄製和輔助使用，然後重新連線。",
+    "controlUnavailable": "遠端電腦暫時無法接受操作，請檢查遠端控制權限和連線，然後重新連線。",
     "beingControlled": "桌面正在被遠端控制",
     "beingViewed": "桌面正在被遠端檢視",
     "disconnect": "中斷連線",

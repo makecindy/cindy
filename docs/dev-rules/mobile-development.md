@@ -216,7 +216,17 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 
 启动检查、设置页与强制更新屏共用 `src/update/useBundleUpdatePrompt.ts` 的安装出口。
 Android 8 及以上的新原生包优先应用内下载 HTTPS APK；Android 7、旧包缺少
-`CindyAppInstaller`，或安装地址是网页时，继续使用浏览器。权限只由自建构建的 `app.config.js` 声明，商店构建不声明。
+`CindyAppInstaller`，或安装地址是网页时，继续使用浏览器。权限由自建构建的
+`app.config.js` 声明；同流程生成的官网 APK 和 Google Play AAB 当前共享这一原生配置，
+EAS 商店构建不声明。
+
+Global 自建 APK 与 Google Play AAB 共用自建 OTA 配置和原生构建流程，不能仅凭
+`IS_OTA_SELFHOST` 判断整包更新渠道。Android 原生安装桥读取系统记录的 installer：
+Google Play 安装跳过官网 `/latest` APK 整包提示，由 Google Play 管理原生包更新；
+JS OTA 仍按现有通道检查，设置页手动检查只报告内容更新。遗留强更目标的安装按钮也
+只能打开该应用在 Google Play 的页面。官网 APK 安装继续使用下述应用内更新流程。
+这项原生查询改变 Android runtime fingerprint，旧 Play 包必须经一次 Play 冷更后才具备
+可靠的安装来源识别能力；不能把 JS OTA 当作旧包已经修复。
 
 - 已授权直接下载；未授权先显示说明与「去授权 / 浏览器下载 / 稍后」，用户点「去授权」
   才打开系统设置。返回后读取实际权限；拒绝不会循环申请，可选择浏览器下载。

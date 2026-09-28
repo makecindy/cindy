@@ -189,6 +189,7 @@
     "allow": "Allow remote desktop",
     "allowHint": "Allow your signed-in devices to view and operate all apps on this computer. Also enable device control above.",
     "permissionHint": "On the computer, allow screen recording and accessibility in system settings, then reconnect.",
+    "controlUnavailable": "The remote computer cannot accept input. Check its control permissions and connection, then reconnect.",
     "beingControlled": "Your desktop is being controlled",
     "beingViewed": "Your desktop is being viewed",
     "disconnect": "Disconnect",
