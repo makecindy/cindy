@@ -254,6 +254,44 @@ describe('performSessionAgentSwitch', () => {
     });
   });
 
+  it('inherits the staged Pi thinking intent when a same-target cross-engine intent is re-registered', async () => {
+    const pendingSwitches = createPendingAgentSwitchRegistry();
+    const { deps } = makeDeps({
+      pendingSwitches,
+      getSessionRow: async () => ({ ...makeRow() }),
+    });
+
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'pi',
+      model: 'deepseek-v4.1-flash',
+      providerId: 'opencode-go',
+      thinking: false,
+    });
+    expect(pendingSwitches.get('s1')?.thinking).toBe(false);
+
+    // 只改档位的重登记（旧调用方/只带 effort）不带思考意图：同一目标必须继承，
+    // 否则登记快照被覆盖成 undefined，发送回放时 Pi 新会话会按默认值重新开思考。
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'pi',
+      model: 'deepseek-v4.1-flash',
+      providerId: 'opencode-go',
+      effort: 'high',
+    });
+    expect(pendingSwitches.get('s1')?.thinking).toBe(false);
+
+    // 改选到别的模型 = 换目标：旧目标的开关不适用，不继承，避免串给新模型。
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'pi',
+      model: 'deepseek-v4.2-flash',
+      providerId: 'opencode-go',
+      effort: 'high',
+    });
+    expect(pendingSwitches.get('s1')?.thinking).toBeUndefined();
+  });
+
   it('keeps the config-staged identity through resume-fallback recovery re-entry', async () => {
     // 渠道默认触发的跨引擎切换若走 resume 回落恢复, 恢复意图必须保留 configStaged ——
     // 否则被通用路径消费时当成用户选择打上 manual 墓碑, 任务永久脱离跟随

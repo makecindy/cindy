@@ -555,8 +555,22 @@ export async function performSessionAgentSwitch(
 
   // 意图制:外部调用(非 applyNow)一律只登记意图——空闲/运行中同一语义,
   // 用户反复改选零成本;renderer 乐观显示意图,真切换在下一条消息发送时刻执行。
-  // 重复登记 = 覆盖(同一意图的最新表达)。
+  // 重复登记 = 覆盖(同一意图的最新表达);但只改档位/Fast 的重登记(旧调用方不带
+  // 思考意图)仍指向同一目标时继承旧值——登记快照被覆盖成 undefined 后,发送回放
+  // 会丢掉思考开关。目标已换则不继承:旧目标的开关不适用于新目标。
   if (!params.applyNow && deps.pendingSwitches) {
+    const existingIntent = deps.pendingSwitches.get?.(sessionId);
+    const sameTarget =
+      existingIntent !== undefined &&
+      existingIntent.targetAgentKind === targetAgentKind &&
+      existingIntent.model === model &&
+      (existingIntent.providerId ?? null) === (normalizedProviderId ?? null);
+    const thinking =
+      typeof params.thinking === 'boolean'
+        ? params.thinking
+        : sameTarget
+          ? existingIntent?.thinking
+          : undefined;
     const intent: PendingAgentSwitchIntent = {
       ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
       ...(params.configStaged === true ? { configStaged: true } : {}),
@@ -565,7 +579,7 @@ export async function performSessionAgentSwitch(
       providerId: normalizedProviderId,
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
       ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
-      ...(typeof params.thinking === 'boolean' ? { thinking: params.thinking } : {}),
+      ...(typeof thinking === 'boolean' ? { thinking } : {}),
     };
     deps.pendingSwitches.set(sessionId, intent);
     deps.onPendingSwitchChanged?.(sessionId, projectPendingAgentSwitchIntent(intent));
