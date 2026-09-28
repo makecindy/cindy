@@ -576,15 +576,24 @@ function normalizeBotModelCapabilitiesOrThrow(
 /** How many candidate rows the preview query inspects (see below). */
 const CANONICAL_PREVIEW_SCAN = 100;
 
+/** The transcript also accepts persisted usage/cost as a legacy turn seal. */
+function canonicalReplyCompleted() {
+  return sql`(json_extract(${messages.agentMeta}, '$.turnCompleted') = 1
+    OR json_extract(${messages.agentMeta}, '$.turnMoney.amount') > 0
+    OR json_extract(${messages.agentMeta}, '$.turnCostUsd') > 0
+    OR json_type(${messages.agentMeta}, '$.turnUsageDetails') IS NOT NULL)`;
+}
+
 /** Visibility shared by the local unread count and remote reply watermark. */
 function canonicalReplyVisibility() {
   return [
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.assistantPhase') IS NOT 'commentary')`,
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.parentToolUseId') IS NULL)`,
     sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.parent_tool_use_id') IS NULL)`,
-    // A pre-tool preamble is hidden by the companion transcript too.
+    // A completed reply remains visible even when the same turn continues with tools.
+    // Only unsealed pre-tool narration is hidden by the companion transcript.
     // Bound the lookup to this user turn so a later task cannot hide an old reply.
-    sql`NOT EXISTS (
+    sql`(${canonicalReplyCompleted()} OR NOT EXISTS (
       SELECT 1 FROM messages AS subsequent_tool
       WHERE subsequent_tool.session_id = ${messages.sessionId}
         AND subsequent_tool.created_at > ${messages.createdAt}
@@ -597,7 +606,7 @@ function canonicalReplyVisibility() {
             AND next_input.created_at < subsequent_tool.created_at
             AND (next_input.agent_meta IS NULL OR json_extract(next_input.agent_meta, '$.autoResume') IS NOT 1)
             AND (next_input.agent_meta IS NULL OR json_extract(next_input.agent_meta, '$.delivery') IS NOT 'steer'))
-    )`,
+    ))`,
   ];
 }
 
@@ -637,7 +646,7 @@ async function readCanonicalChatPreview(
           repliesOnly ? eq(messages.role, 'assistant') : inArray(messages.role, ['user', 'assistant']),
           or(eq(messages.role, 'user'), and(...canonicalReplyVisibility())),
           // During generation, prose blocks are progress. Only a sealed answer is a reply preview.
-          ...(running ? [sql`(${messages.role} != 'assistant' OR json_extract(${messages.agentMeta}, '$.turnCompleted') = 1)`] : []),
+          ...(running ? [sql`(${messages.role} != 'assistant' OR ${canonicalReplyCompleted()})`] : []),
           isNull(messages.rewindAt),
           sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
           sql`(${messages.agentMeta} IS NULL OR json_type(${messages.agentMeta}, '$.botDirectMessage') IS NULL)`,
@@ -697,7 +706,7 @@ async function countCanonicalUnread(
         and(
           eq(messages.sessionId, canonicalSessionId),
           eq(messages.role, 'assistant'),
-          ...(running ? [sql`json_extract(${messages.agentMeta}, '$.turnCompleted') = 1`] : []),
+          ...(running ? [canonicalReplyCompleted()] : []),
           ...canonicalReplyVisibility(),
           isNull(messages.rewindAt),
           sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
