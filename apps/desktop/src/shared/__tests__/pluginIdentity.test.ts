@@ -6,6 +6,7 @@ import {
   findConflictingGhostCommand,
   findInstalledGhostByIdentity,
   findInstalledGhostByInstanceId,
+  findInstalledGhostForDeliveryTarget,
   isGhostInstanceId,
   formatInstalledGhostAmbiguity,
   resolveInstalledGhost,
@@ -127,6 +128,27 @@ describe('plugin logical identity', () => {
       ghost: enterprise,
     });
     expect(formatInstalledGhostAmbiguity('helper', [root, enterprise])).toContain('root/helper');
+  });
+
+  it('does not let a delivery target inherit a same-name instance from another namespace', () => {
+    const root = { manifest: { id: 'helper' }, namespace: null };
+    const enterprise = { manifest: { id: 'helper' }, namespace: 'acme' };
+    expect(findInstalledGhostForDeliveryTarget([root], { ghostId: 'helper' })).toEqual(root);
+    expect(
+      findInstalledGhostForDeliveryTarget([root, enterprise], { ghostId: 'helper' }),
+    ).toBeUndefined();
+    expect(
+      findInstalledGhostForDeliveryTarget([root, enterprise], {
+        ghostId: 'helper',
+        namespace: 'acme',
+      }),
+    ).toEqual(enterprise);
+    expect(
+      findInstalledGhostForDeliveryTarget([root, enterprise], {
+        ghostId: 'helper',
+        namespace: null,
+      }),
+    ).toEqual(root);
   });
 
   it('encodes vault-safe storage parts without moving root files', () => {

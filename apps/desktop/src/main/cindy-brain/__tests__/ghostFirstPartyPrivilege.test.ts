@@ -217,6 +217,19 @@ describe('resolveGhostFirstPartyPrivilege', () => {
       hostPrimitiveEligible: false,
       basis: 'market-organization-current',
     });
+    expect(
+      resolveGhostFirstPartyPrivilege(
+        facts({
+          ghostId: 'helper',
+          marketRecord: market({ scope: 'organization', organizationId: 'org-acme' }),
+          currentOrganization: { organizationId: 'org-acme', pluginPrefix: null },
+        }),
+      ),
+    ).toEqual({
+      brokerEligible: true,
+      hostPrimitiveEligible: false,
+      basis: 'market-organization-current',
+    });
   });
 
   it('denies same-manifest organization packages when Release and approved package bytes differ', () => {
@@ -261,7 +274,7 @@ describe('resolveGhostFirstPartyPrivilege', () => {
     });
   });
 
-  it('denies an official-looking org plugin whose prefix does not belong to the current org', () => {
+  it('does not let an official-looking name veto a trusted current-org market plugin', () => {
     expect(
       resolveGhostFirstPartyPrivilege(
         facts({
@@ -271,9 +284,9 @@ describe('resolveGhostFirstPartyPrivilege', () => {
         }),
       ),
     ).toEqual({
-      brokerEligible: false,
+      brokerEligible: true,
       hostPrimitiveEligible: false,
-      basis: 'denied-unknown-origin',
+      basis: 'market-organization-current',
     });
   });
 
@@ -325,7 +338,7 @@ describe('resolveGhostFirstPartyPrivilege', () => {
     ).toEqual({
       brokerEligible: true,
       hostPrimitiveEligible: false,
-      basis: 'forge-current-org-prefix',
+      basis: 'forge-current-org',
     });
     expect(
       resolveGhostFirstPartyPrivilege(
@@ -349,7 +362,20 @@ describe('resolveGhostFirstPartyPrivilege', () => {
           installOrigin: 'agent-forge',
         }),
       ).brokerEligible,
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      resolveGhostFirstPartyPrivilege(
+        facts({
+          ghostId: 'helper',
+          currentOrganization: { organizationId: 'org-acme', pluginPrefix: null },
+          installOrigin: 'agent-forge',
+        }),
+      ),
+    ).toEqual({
+      brokerEligible: true,
+      hostPrimitiveEligible: false,
+      basis: 'forge-current-org',
+    });
   });
 
   it('lets explicit Forge self-test win over every stale or foreign market-row shape', () => {
@@ -371,7 +397,7 @@ describe('resolveGhostFirstPartyPrivilege', () => {
       ).toEqual({
         brokerEligible: true,
         hostPrimitiveEligible: false,
-        basis: 'forge-current-org-prefix',
+        basis: 'forge-current-org',
       });
     }
   });

@@ -31,7 +31,7 @@
  * provisioning content matching and `approveTrustedBundledInstall`. That is
  * the same strength as today's `isOfficialGhostId(id)`.
  */
-import { PLUGIN_PREFIX_PATTERN, type PluginScope } from '@cindy/plugin-protocol';
+import type { PluginScope } from '@cindy/plugin-protocol';
 
 import { isOfficialGhostId } from '../../shared/ghost.js';
 
@@ -48,7 +48,7 @@ export type GhostFirstPartyBasis =
   | 'builtin-official'
   | 'market-public'
   | 'market-organization-current'
-  | 'forge-current-org-prefix'
+  | 'forge-current-org'
   | 'denied-alias'
   | 'denied-foreign-org'
   | 'denied-unknown-origin';
@@ -83,15 +83,6 @@ export interface GhostFirstPartyFacts {
   currentOrganization: GhostFirstPartyCurrentOrganization | null;
   /** 仅显式 ghost_forge_install 写入 agent-forge；其它入口均为 manual。 */
   installOrigin: 'manual' | 'agent-forge';
-}
-
-function matchesCurrentOrgPrefix(
-  ghostId: string,
-  currentOrganization: GhostFirstPartyCurrentOrganization | null,
-): boolean {
-  const prefix = currentOrganization?.pluginPrefix;
-  if (!prefix || !PLUGIN_PREFIX_PATTERN.test(prefix)) return false;
-  return ghostId.startsWith(`${prefix}-`);
 }
 
 function isCurrentOrganizationRecord(
@@ -148,21 +139,20 @@ export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): Gh
     return deny('denied-alias');
   }
 
-  // 企业作者的显式 Forge 自测资格来自本次安装来源与当前组织前缀，和市场账本
+  // 企业作者的显式 Forge 自测资格来自本次安装来源与当前组织身份，和市场账本
   // 是否已有同 id、是否仍标记 installed 无关。它只开放 Broker / oidc-token，
   // 宿主原语仍保持拒绝。
   if (
-    facts.installOrigin === 'agent-forge' &&
-    matchesCurrentOrgPrefix(facts.ghostId, facts.currentOrganization)
+    facts.installOrigin === 'agent-forge' && facts.currentOrganization
   ) {
-    return allow('forge-current-org-prefix', false);
+    return allow('forge-current-org', false);
   }
 
   const record = facts.marketRecord;
   if (record !== null) {
     if (!record.installed) {
       // Uninstalled ledger rows stay denied. Explicit Forge self-test is
-      // decided above from origin + org prefix, before this market branch.
+      // decided above from origin + current organization, before this market branch.
       return deny('denied-unknown-origin');
     }
     if (record.scope === 'public' && record.source === 'market') {
@@ -183,9 +173,6 @@ export function resolveGhostFirstPartyPrivilege(facts: GhostFirstPartyFacts): Gh
         return deny('denied-foreign-org');
       }
       if (!marketInstallationMatchesApprovedPackage(record, facts.currentOrganization)) {
-        return deny('denied-unknown-origin');
-      }
-      if (!matchesCurrentOrgPrefix(facts.ghostId, facts.currentOrganization)) {
         return deny('denied-unknown-origin');
       }
       return allow('market-organization-current', false);

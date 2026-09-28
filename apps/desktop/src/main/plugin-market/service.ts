@@ -1667,9 +1667,7 @@ export class PluginMarketService {
             ? { mode: 'unprompted' }
             : await obtainGhostInstallConsent(
                 consent,
-                getGhostManager()
-                  .list()
-                  .find((ghost) => ghost.manifest.id === plugin.ghostId),
+                installedGhostMatchingMarketPlugin(plugin),
                 packed.inspected.manifest,
                 packed.inspected.packageSha256,
               );
@@ -2142,9 +2140,7 @@ export class PluginMarketService {
           ? { mode: 'unprompted' }
           : await obtainGhostInstallConsent(
               options.consent,
-              getGhostManager()
-                .list()
-                .find((ghost) => ghost.manifest.id === plugin.ghostId),
+              installedGhostMatchingMarketPlugin(plugin),
               inspected.manifest,
               inspected.packageSha256,
             );

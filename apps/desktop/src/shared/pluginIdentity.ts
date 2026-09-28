@@ -362,6 +362,25 @@ export function resolveInstalledGhost<
   return { status: 'ambiguous', candidates };
 }
 
+/**
+ * Pick the installed instance a delivery/install target should update.
+ * Known namespace (including root null) matches that identity only.
+ * Omitted namespace is allowed only when ghostId is unique; two same-name
+ * instances must not silently share consent or an update.
+ */
+export function findInstalledGhostForDeliveryTarget<
+  T extends { manifest: { id: string }; namespace?: string | null },
+>(ghosts: readonly T[], target: { ghostId: string; namespace?: string | null }): T | undefined {
+  if (hasDeliveryNamespace(target)) {
+    return findInstalledGhostByIdentity(
+      ghosts,
+      createPluginLogicalIdentity(target.namespace, target.ghostId),
+    );
+  }
+  const resolved = resolveInstalledGhost(ghosts, target.ghostId);
+  return resolved.status === 'unique' ? resolved.ghost : undefined;
+}
+
 export function installedGhostNamespaceLabel(ghost: { namespace?: string | null }): string | null {
   return hasDeliveryNamespace(ghost) ? ghost.namespace : null;
 }

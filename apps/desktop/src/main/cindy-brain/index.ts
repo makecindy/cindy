@@ -110,6 +110,7 @@ import {
   findConflictingGhostCommand,
   findInstalledGhostByIdentity,
   findInstalledGhostByInstanceId,
+  findInstalledGhostForDeliveryTarget,
   installedGhostLogicalIdentity,
   installedGhostPhysicalKeys,
   installedGhostPhysicalRelId,
@@ -6083,7 +6084,12 @@ async function installAndDockLocked(
   // 复核，确认后同 id 被别处装上或包内容变化都不能沿用这次确认。
   assertGhostInstallConsent(
     opts.consent.decision,
-    manager.list().find((ghost) => ghost.manifest.id === opts.ghostId),
+    findInstalledGhostForDeliveryTarget(
+      manager.list(),
+      Object.prototype.hasOwnProperty.call(opts, 'namespace')
+        ? { ghostId: opts.ghostId, namespace: opts.namespace ?? null }
+        : { ghostId: opts.ghostId },
+    ),
     opts.consent.manifest,
     opts.expectedPackageSha256,
   );
@@ -6324,6 +6330,7 @@ export async function installOrUpdateLocalGhostPackageFromForge(
   const user = authState.isAuthenticated ? authState.user : null;
   const membershipKind = user?.membershipKind ?? 'personal';
   const installOrigin = forgeInstallOriginForMembership(membershipKind);
+  const forgeNamespace = membershipKind === 'org' && user?.orgSlug ? user.orgSlug : undefined;
   rejectUnauthorizedTokenBroker(
     inspected.manifest,
     installOrigin ? { installOrigin } : undefined,
@@ -6331,7 +6338,12 @@ export async function installOrUpdateLocalGhostPackageFromForge(
   // 首装与扩权更新先在任务里请用户确认；权限没变多的更新不打扰。
   const consent = await obtainGhostInstallConsent(
     { mode: 'prompt', prompt: expected.consentPrompt, initiator: 'agent', origin: 'forge' },
-    manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id),
+    findInstalledGhostForDeliveryTarget(
+      manager.list(),
+      forgeNamespace !== undefined
+        ? { ghostId: inspected.manifest.id, namespace: forgeNamespace }
+        : { ghostId: inspected.manifest.id },
+    ),
     inspected.manifest,
     inspected.packageSha256,
   );
@@ -6358,7 +6370,12 @@ export async function installOrUpdateLocalGhostPackageFromForge(
     // 确认已在 owner 租约外完成；落位再用 packing 时钉住的 owner 取租约。
     const releaseMutation = beginGhostMutation(expected.mutationOwner);
     try {
-      const installed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
+      const installed = findInstalledGhostForDeliveryTarget(
+        manager.list(),
+        forgeNamespace !== undefined
+          ? { ghostId: inspected.manifest.id, namespace: forgeNamespace }
+          : { ghostId: inspected.manifest.id },
+      );
       if (!installed) {
         return {
           ghost: await installAndDockLocked(manager, cindyFilePath, {
@@ -6367,6 +6384,7 @@ export async function installOrUpdateLocalGhostPackageFromForge(
             expectedPackageSha256: expected.packageSha256,
             consent: { decision: consent, manifest: inspected.manifest },
             ...(installOrigin ? { installOrigin } : {}),
+            ...(forgeNamespace !== undefined ? { namespace: forgeNamespace } : {}),
           }).then((ghost) => {
             try {
               markGhostRecommendationInstalled(ghost.manifest.id);
@@ -8063,7 +8081,7 @@ export function registerGhostIpc(): void {
         initiator: 'user',
         origin: 'local-file',
       },
-      manager.list().find((ghost) => ghost.manifest.id === probe.manifest.id),
+      findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: probe.manifest.id }),
       probe.manifest,
       probe.packageSha256,
     );
@@ -8128,6 +8146,9 @@ export function registerGhostIpc(): void {
     rejectBrokerWithoutDeclaredRedirectPort(inspected.manifest);
     rejectUnauthorizedTokenBroker(inspected.manifest);
     // 新版本权限变多时先请用户确认；权限没变多的更新不打扰。
+    const existingForUpdate =
+      manager.list().find((ghost) => ghostInstallApprovalToken(ghost.approval) === expectedInstalledApproval)
+      ?? findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: inspected.manifest.id });
     const consent = await obtainGhostInstallConsent(
       {
         mode: 'prompt',
@@ -8135,7 +8156,7 @@ export function registerGhostIpc(): void {
         initiator: 'user',
         origin: 'local-file',
       },
-      manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id),
+      existingForUpdate,
       inspected.manifest,
       inspected.packageSha256,
     );
