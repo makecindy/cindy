@@ -4,10 +4,12 @@ import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { FileText } from 'lucide-react-native';
 import type { BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
+import type { BotDelegationListResult } from '@cindy/maker-shared/botDelegation';
+import { useRemoteCompanionQuery } from './useRemoteCompanionQuery';
 import { Text } from '@/components/AppText';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { ChatFilePathContext, type ChatFilePathContextValue, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import type { RemotePathStatResult } from '@/device-link/mobileMakerTransport';
@@ -98,10 +100,11 @@ function useResultFileContext(deviceId: string, childSessionId: string | null | 
   }, [childSessionId, deviceId, invoke, openLink, parent, router, workdir]);
 }
 
-/** A frozen execution receipt (Desktop BotSessionTaskResultCard); expanding never restarts or fetches the task. */
-export function CompanionTaskResultCard({ meta, deviceId, renderMarkdown }: {
+/** Frozen result data; legacy receipts may read the existing task title only. */
+export function CompanionTaskResultCard({ meta, deviceId, parentSessionId, renderMarkdown }: {
   meta: BotCollaborationMeta;
   deviceId: string;
+  parentSessionId?: string;
   /** The conversation's own Markdown renderer, so links, code and file chips read like a reply. */
   renderMarkdown?: (text: string) => ReactNode;
 }) {
@@ -112,14 +115,29 @@ export function CompanionTaskResultCard({ meta, deviceId, renderMarkdown }: {
   const styles = useThemedStyles(makeStyles);
   const result = meta.result;
   const fileContext = useResultFileContext(deviceId, meta.childSessionId, result?.workingDir ?? undefined);
+  const { value } = useRemoteCompanionQuery<BotDelegationListResult>(deviceId,
+    'maker:bot-delegations:list', [parentSessionId ?? meta.parentSessionId],
+    { enabled: Boolean(result && !result.title?.trim() && (parentSessionId ?? meta.parentSessionId)) });
+  const row = value?.ok && Array.isArray(value.delegations)
+    ? value.delegations.find((item) => item.id === meta.delegationId) : undefined;
   if (!result) return null;
+  const title = result.title?.trim() || row?.title?.trim() || meta.objective.trim().split('\n')[0] || t('devices.companions.backgroundTask');
+  const statusColor = result.status === 'completed' ? colors.statusDone
+    : result.status === 'cancelled' ? colors.textTertiary : colors.statusError;
   return <View style={styles.card} testID="companion.taskResult">
+    <View style={styles.header}>
+      <Text numberOfLines={2} style={styles.title}>{title}</Text>
+      <View style={styles.status}>
+        <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+        <Text style={styles.statusLabel}>{t(`devices.companions.status.${result.status}`)}</Text>
+      </View>
+    </View>
     <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded(!expanded)}
-      style={({ pressed }) => [styles.summary, pressed && mobileInteractionStyles.pressed]}>
-      <FileText size={iconSize.md} color={colors.textSecondary} />
-      <Text numberOfLines={1} style={styles.title}>{meta.objective}</Text>
-      <Text numberOfLines={1} style={styles.secondary}>{t(`devices.companions.status.${result.status}`)}</Text>
-      <Text numberOfLines={1} style={styles.view}>{t('devices.companions.viewResult')}</Text>
+      style={({ pressed }) => [styles.touchTarget, pressed && mobileInteractionStyles.pressed]}>
+      <View style={styles.action}>
+        <FileText size={iconSize.sm} color={colors.textPrimary} />
+        <Text style={styles.view}>{t('devices.companions.viewResult')}</Text>
+      </View>
     </Pressable>
     {expanded && <View style={styles.content}>
       {result.text ? renderMarkdown
@@ -143,13 +161,20 @@ export function CompanionTaskResultCard({ meta, deviceId, renderMarkdown }: {
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   card: { marginVertical: spacing.sm, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-    backgroundColor: colors.surfaceElevated, borderRadius: radius.container, overflow: 'hidden' },
-  summary: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  title: { flex: 1, minWidth: 0, fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },
+    backgroundColor: colors.surfaceElevated, borderRadius: radius.container, padding: spacing.md, gap: spacing.xs },
+  header: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  status: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexShrink: 0 },
+  statusDot: { width: 6, height: 6, borderRadius: radius.pill },
+  statusLabel: { fontSize: typeScale.caption, lineHeight: lineHeight.caption, color: colors.textTertiary },
+  touchTarget: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start', maxWidth: '100%' },
+  action: { minHeight: 32, minWidth: 104, paddingHorizontal: spacing.md, paddingVertical: spacing.xs,
+    gap: spacing.xs, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: radius.pill },
+  title: { flex: 1, minWidth: 0, fontSize: typeScale.subtitle, lineHeight: lineHeight.subtitle, fontWeight: fontWeight.medium, color: colors.textPrimary },
   secondary: { flexShrink: 0, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textSecondary },
-  view: { flexShrink: 0, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textPrimary },
+  view: { flexShrink: 1, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium, color: colors.textPrimary },
   body: { fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },
-  content: { paddingHorizontal: spacing.md, paddingVertical: spacing.md, gap: spacing.sm,
+  content: { paddingTop: spacing.md, gap: spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   file: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   fileLabel: { flex: 1, minWidth: 0, fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },

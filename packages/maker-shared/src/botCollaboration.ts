@@ -43,6 +43,8 @@ export interface BotCollaborationMeta {
   /** 委派目标摘要，用于卡片折叠态文案。 */
   objective: string;
   result?: {
+    /** Task title at completion; older receipts fall back to the known task title. */
+    title?: string;
     /** Child task directory on its host; used to resolve remote artifact links. */
     workingDir?: string;
     runSequence: number;
@@ -90,6 +92,7 @@ export function readBotCollaborationMeta(value: unknown): BotCollaborationMeta |
   if (receipt.role === 'delegation-result' && (!receipt.result || !Number.isSafeInteger(receipt.result.runSequence)
     || receipt.result.runSequence < 1 || !['completed', 'failed', 'cancelled', 'timed-out'].includes(receipt.result.status)
     || (receipt.result.workingDir !== undefined && typeof receipt.result.workingDir !== 'string')
+    || (receipt.result.title !== undefined && typeof receipt.result.title !== 'string')
     || (receipt.result.error !== undefined && typeof receipt.result.error !== 'string')
     || typeof receipt.result.text !== 'string' || !Array.isArray(receipt.result.artifacts)
     || receipt.result.artifacts.some((file) => !file || typeof file.absolutePath !== 'string'))) return null;

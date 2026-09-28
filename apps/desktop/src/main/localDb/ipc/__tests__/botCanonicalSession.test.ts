@@ -4058,6 +4058,58 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { runtime.delegation.dispose(); }
   });
 
+  it.each(['paused-bot', 'archived-bot', 'archived-parent', 'history-link'] as const)(
+    'reads saved task titles for %s without allowing task operations', async (state) => {
+      await seedPair();
+      const other = await invoke('local-db:bots:create-canonical-session', {
+        botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      });
+      const runtime = createDelegationRuntime();
+      try {
+        const started = await runtime.delegation.startSessionTask({
+          callerSessionId: 'session-1', objective: 'A long execution instruction',
+        });
+        if (!started.ok) throw new Error('Task did not start');
+        h.sqlite!.prepare('UPDATE sessions SET title = ? WHERE id = ?').run('Saved task title', started.childSessionId);
+        if (state === 'paused-bot' || state === 'archived-bot') {
+          h.sqlite!.prepare("UPDATE bot_profiles SET status = ? WHERE id = 'bot-a'")
+            .run(state === 'paused-bot' ? 'paused' : 'archived');
+        } else if (state === 'archived-parent') {
+          h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = 'session-1'").run();
+        } else {
+          h.sqlite!.prepare("UPDATE bot_session_links SET role = 'history', archived_at = 1 WHERE session_id = 'session-1'").run();
+        }
+        expect(await runtime.delegation.listDelegations('session-1')).toMatchObject({
+          ok: true, delegations: [{ id: started.delegationId, title: 'Saved task title' }],
+        });
+        expect(await runtime.delegation.listDelegations(other.session.id)).toMatchObject({ ok: true, delegations: [] });
+        expect(await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Must not start' }))
+          .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+        expect(await runtime.delegation.cancelDelegation('session-1', started.delegationId))
+          .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+        expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'message', text: 'Must not continue' }))
+          .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+        expect(runtime.started).toHaveLength(1);
+      } finally { runtime.dispose(); }
+    },
+  );
+
+  it.each(['deleted-parent', 'deleting-bot', 'ordinary-task', 'group-link', 'missing-link'] as const)(
+    'rejects task title list reads from %s', async (state) => {
+      await seedPair();
+      if (state === 'deleted-parent') h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = 'session-1'").run();
+      if (state === 'deleting-bot') h.sqlite!.prepare("UPDATE bot_profiles SET status = 'deleting' WHERE id = 'bot-a'").run();
+      if (state === 'ordinary-task') h.sqlite!.prepare("UPDATE sessions SET source = 'desktop' WHERE id = 'session-1'").run();
+      if (state === 'group-link') h.sqlite!.prepare("UPDATE bot_session_links SET role = 'group' WHERE session_id = 'session-1'").run();
+      if (state === 'missing-link') h.sqlite!.prepare("DELETE FROM bot_session_links WHERE session_id = 'session-1'").run();
+      const runtime = createDelegationRuntime();
+      try {
+        expect(await runtime.delegation.listDelegations('session-1'))
+          .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+      } finally { runtime.dispose(); }
+    },
+  );
+
   it.each(['cc', 'codex'])('starts a child on the actual %s route after its Bot changes engines', async (agentKind) => {
     await seedPair();
     const runtime = createDelegationRuntime({
@@ -6224,7 +6276,7 @@ describe('Bot Session task end-to-end runtime', () => {
     await seedPair();
     const runtime = createDelegationRuntime({ collectArtifacts: async () => [{ path: 'report.pdf', absolutePath: '/reports/report.pdf', status: 'added' }] });
     try {
-      const first = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'First report' });
+      const first = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'First report instructions', title: 'First report' });
       const second = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Second report' });
       if (!first.ok || !second.ok) throw new Error('Tasks did not start');
       h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id IN (?, ?)').run('/child-task', first.childSessionId, second.childSessionId);
@@ -6237,6 +6289,7 @@ describe('Bot Session task end-to-end runtime', () => {
         .all('session-1', 'bot-delegation-result:%') as { agent_meta: string }[];
       expect(results).toHaveLength(2);
       expect(results.every(row => JSON.parse(row.agent_meta).botCollaboration.result.workingDir === '/child-task')).toBe(true);
+      expect(results.map(row => JSON.parse(row.agent_meta).botCollaboration.result.title).sort()).toEqual(['First report', 'Second report']);
       expect(results.map(row => JSON.parse(row.agent_meta).botCollaboration.result.text).sort()).toEqual([
         '![chart](https://example.com/chart.png)', '[Report](https://example.com/report.pdf)',
       ].sort());
@@ -6433,6 +6486,7 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(runtime.dispatch.mock.calls.at(-1)?.[0].clientId).toBe(`bot-delegation-start:${started.delegationId}:2`);
       expect(h.sqlite!.prepare('SELECT content FROM messages WHERE session_id = ? AND role = ?').all(started.childSessionId, 'assistant'))
         .toContainEqual({ content: '第一版结果。' });
+      h.sqlite!.prepare('UPDATE sessions SET title = ? WHERE id = ?').run('月报与风险清单', continued.childSessionId);
       await runtime.settleChild(continued.childSessionId, '第二版结果，含风险清单。');
 
       const receipts = h.sqlite!.prepare(
@@ -6457,8 +6511,8 @@ describe('Bot Session task end-to-end runtime', () => {
       ).all('session-1', `bot-delegation-result:${started.delegationId}:%`) as Array<{ client_id: string; agent_meta: string }>;
       const workingDir = h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').pluck().get(started.childSessionId);
       expect(resultCards.map(row => JSON.parse(row.agent_meta).botCollaboration.result)).toEqual([
-        { workingDir, runSequence: 1, status: 'completed', text: '第一版结果。', artifacts: [] },
-        { workingDir, runSequence: 2, status: 'completed', text: '第二版结果，含风险清单。', artifacts: [] },
+        { title: '月报', workingDir, runSequence: 1, status: 'completed', text: '第一版结果。', artifacts: [] },
+        { title: '月报与风险清单', workingDir, runSequence: 2, status: 'completed', text: '第二版结果，含风险清单。', artifacts: [] },
       ]);
       expect(h.sqlite!.prepare('SELECT COUNT(*) AS n FROM messages WHERE client_id = ?')
         .get(`bot-delegation-request:${started.delegationId}`)).toEqual({ n: 1 });
@@ -6466,7 +6520,7 @@ describe('Bot Session task end-to-end runtime', () => {
         runtime.delegation.getSessionTask('session-1', started.delegationId),
       ).resolves.toMatchObject({
         ok: true,
-        task: { title: '月报', status: 'completed', result: '第二版结果，含风险清单。' },
+        task: { title: '月报与风险清单', status: 'completed', result: '第二版结果，含风险清单。' },
       });
     } finally {
       runtime.dispose();
