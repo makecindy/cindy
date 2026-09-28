@@ -789,6 +789,23 @@ describe('sendToSession ordering', () => {
       'orcaWorkerResumeScheduler.requestInBackground(target, (err) => {',
     );
     expect(switchFocusMcpBlock).not.toContain('await resumeOrcaWorkerSessionIfMissing(target)');
+    // 关闭协同 / 归档 / 显式 idle 与冷启动交错时，唤醒必须可取消，并在 bootstrap
+    // 返回后关掉刚拉起的 session（review P1：不得把已归档 worker 留在运行态）。
+    expect(resumeBranch).toContain('if (resumeOpts?.isCancelled?.()) return false;');
+    expect(resumeBranch).toContain('await maker.closeSession(resumedSession.id).catch((err) => {');
+    expect(serviceDepsBlock).toContain(
+      'cancelWorkerResume: (sessionId) => orcaWorkerResumeScheduler.cancel(sessionId),',
+    );
+  });
+
+  it('cancels pending worker resumes before releasing runtimes', () => {
+    const disableOrcaBlock = extractBetween(
+      source,
+      'async function disableOrcaInternal',
+      'ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA',
+    );
+    expect(disableOrcaBlock).toContain('orcaWorkerResumeScheduler.cancel(w.sessionId);');
+    expect(orcaTeamServiceSource).toContain('deps.cancelWorkerResume?.(worker.sessionId);');
   });
 
   it('keeps IPC and MCP createWorker delegated to the shared lifecycle service', () => {

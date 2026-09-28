@@ -230,6 +230,8 @@ export interface OrcaTeamServiceDeps {
     worker: OrcaWorkerRecordSnapshot,
     link: OrcaWorkerLinkSnapshot,
   ): Promise<void>;
+  /** 取消该 worker session 尚未落地的后台唤醒（focus 预热）；释放 runtime 前调用。 */
+  cancelWorkerResume?(sessionId: string): void;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
@@ -1195,6 +1197,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           };
         }
       }
+      // 显式 idle 会释放 runtime；先取消未落地的后台预热，避免释放后被重新拉起。
+      deps.cancelWorkerResume?.(worker.sessionId);
       clearRuntimeState(worker.sessionId);
       if (!params.expectedStatus) {
         await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker');
@@ -1231,6 +1235,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     clearRuntimeState(worker.sessionId);
     deps.forgetWorkerSession?.(worker.sessionId);
     deferredDoneAcknowledgements.delete(worker.id);
+    // 归档会释放 runtime；先取消未落地的后台预热，避免归档后被重新拉起（review P1）。
+    deps.cancelWorkerResume?.(worker.sessionId);
     await deps.cancelWorkerSessionOperations(worker.sessionId);
     await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');
     await deps.archiveWorkerSession(worker.sessionId);

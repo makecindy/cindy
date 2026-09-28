@@ -106,4 +106,93 @@ describe('createOrcaWorkerResumeScheduler', () => {
     await expect(scheduler.request({ sessionId: 'worker-1' })).resolves.toBe(true);
     expect(resume).toHaveBeenCalledTimes(2);
   });
+
+  it('aborts a cancelled resume before it starts booting', async () => {
+    let releaseLock!: () => void;
+    const lockGate = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const resume = vi.fn(async (_target: unknown, isCancelled: () => boolean) => {
+      return !isCancelled();
+    });
+    const scheduler = createOrcaWorkerResumeScheduler({
+      resume,
+      withSessionLock: async (_sessionId, task) => {
+        await lockGate;
+        return task();
+      },
+    });
+
+    const pending = scheduler.request({ sessionId: 'worker-1' });
+    await Promise.resolve();
+    scheduler.cancel('worker-1');
+    releaseLock();
+
+    await expect(pending).resolves.toBe(false);
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(resume.mock.calls[0]?.[1]?.()).toBe(true);
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+
+  it('lets the resume implementation observe cancellation after bootstrap', async () => {
+    let releaseBoot!: () => void;
+    const bootGate = new Promise<void>((resolve) => {
+      releaseBoot = resolve;
+    });
+    const resume = vi.fn(async (_target: unknown, isCancelled: () => boolean) => {
+      await bootGate;
+      return !isCancelled();
+    });
+    const scheduler = createOrcaWorkerResumeScheduler({
+      resume,
+      withSessionLock: (_sessionId, task) => task(),
+    });
+
+    const pending = scheduler.request({ sessionId: 'worker-1' });
+    await Promise.resolve();
+    scheduler.cancel('worker-1');
+    releaseBoot();
+
+    await expect(pending).resolves.toBe(false);
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+
+  it('keeps a cancelled in-flight entry deduplicated until it settles', async () => {
+    let releaseLock!: () => void;
+    const lockGate = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const resume = vi.fn(async (_target: unknown, isCancelled: () => boolean) => !isCancelled());
+    const scheduler = createOrcaWorkerResumeScheduler({
+      resume,
+      withSessionLock: async (_sessionId, task) => {
+        await lockGate;
+        return task();
+      },
+    });
+
+    const first = scheduler.request({ sessionId: 'worker-1' });
+    await Promise.resolve();
+    scheduler.cancel('worker-1');
+    const second = scheduler.request({ sessionId: 'worker-1' });
+    expect(second).toBe(first);
+    expect(resume).toHaveBeenCalledTimes(0);
+
+    releaseLock();
+    await expect(first).resolves.toBe(false);
+    expect(scheduler.pendingCount()).toBe(0);
+
+    // A settled cancelled entry must not poison the next request.
+    await expect(scheduler.request({ sessionId: 'worker-1' })).resolves.toBe(true);
+    expect(resume).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores cancel for sessions without an in-flight resume', () => {
+    const scheduler = createOrcaWorkerResumeScheduler({
+      resume: async () => true,
+      withSessionLock: (_sessionId, task) => task(),
+    });
+    expect(() => scheduler.cancel('worker-1')).not.toThrow();
+    expect(scheduler.pendingCount()).toBe(0);
+  });
 });

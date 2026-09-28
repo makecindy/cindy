@@ -7373,14 +7373,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   // switchFocus 和 sendToWorker 都可能唤醒 idle worker；统一走这里才能保留 extraDirs。
-  async function resumeOrcaWorkerSessionIfMissing(target: {
-    id: string;
-    teamId: string;
-    leadSessionId: string;
-    sessionId: string;
-  }): Promise<boolean> {
+  // resumeOpts.isCancelled：关闭协同 / 归档 / 显式 idle 会取消尚未落地的唤醒；冷启动前与
+  // bootstrap 返回后都要检查，已经拉起的 runtime 要自己关掉（review P1）。
+  async function resumeOrcaWorkerSessionIfMissing(
+    target: {
+      id: string;
+      teamId: string;
+      leadSessionId: string;
+      sessionId: string;
+    },
+    resumeOpts?: { isCancelled?: () => boolean },
+  ): Promise<boolean> {
     const live = maker.getSession(target.sessionId);
     if (live) return false;
+    if (resumeOpts?.isCancelled?.()) return false;
 
     const db = getDbClient().drizzle;
     const [row] = await db
@@ -7389,6 +7395,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       .where(eq(sessions.id, target.sessionId))
       .limit(1);
     if (!row) return false;
+    // 归档 / 删除后的 worker 不允许被唤醒：关闭协同与 archive 可能和后台预热交错。
+    if (row.status !== 'active') return false;
+    if (resumeOpts?.isCancelled?.()) return false;
 
     const workerVendorOptions = {
       orcaRole: 'worker' as const,
@@ -7419,22 +7428,55 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ...(writableDirs.length > 0 ? { writableDirs } : {}),
     });
     await ensureRemoteReadyForSessionStart({ createOpts: opts });
+    if (resumeOpts?.isCancelled?.()) return false;
     const { session: resumedSession } = await bootstrapSession(opts);
+    // 关闭协同 / 归档 / 显式 idle 可能和冷启动交错：bootstrap 返回后必须重新确认这次
+    // 唤醒仍然有效，否则关掉刚拉起的 runtime，不能把已归档 worker 留在运行态。
+    if (resumeOpts?.isCancelled?.() || !(await isOrcaWorkerSessionResumable(target.sessionId))) {
+      await maker.closeSession(resumedSession.id).catch((err) => {
+        log.warn('orcaWorkerResume: cancelled after bootstrap, close failed', {
+          sessionId: resumedSession.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+      return false;
+    }
     await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
     return true;
+  }
+
+  /** 唤醒后的会话仍必须是 active；读不到状态按不可唤醒处理（fail-closed）。 */
+  async function isOrcaWorkerSessionResumable(sessionId: string): Promise<boolean> {
+    try {
+      const [row] = await getDbClient()
+        .drizzle.select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      return row?.status === 'active';
+    } catch (err) {
+      log.warn('orcaWorkerResume: read session status failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
 
   // focus 切换是纯 UI 操作,不再同步等待冷启动(2026-09 实报: 首次切到 dormant worker
   // 要等 ~5s)。resume 仍要发生,但转后台并走共享调度器: per-session 去重 + 与发送路径
   // 共用 sendToSession 锁,避免并发双 bootstrap(实现与不变量见 orcaWorkerResumeScheduler.ts)。
   const orcaWorkerResumeScheduler = createOrcaWorkerResumeScheduler({
-    resume: async (target: {
-      id: string;
-      teamId: string;
-      leadSessionId: string;
-      sessionId: string;
-    }) => {
-      const didResume = await resumeOrcaWorkerSessionIfMissing(target);
+    resume: async (
+      target: {
+        id: string;
+        teamId: string;
+        leadSessionId: string;
+        sessionId: string;
+      },
+      isCancelled,
+    ) => {
+      const didResume = await resumeOrcaWorkerSessionIfMissing(target, { isCancelled });
       if (didResume) {
         log.info('orcaWorkerResume: resumed idle worker (session only, no status change)', {
           workerId: target.id,
@@ -10973,6 +11015,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     const workers = await listWorkersByLead(leadSessionId);
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
+    // 先取消尚未落地的后台预热：关闭流程不等待 sendToSession 锁，若不取消，等锁中或
+    // 冷启动中的 resume 会在归档之后把 worker 重新拉活（review P1）。
+    for (const w of workers) {
+      orcaWorkerResumeScheduler.cancel(w.sessionId);
+    }
     for (const w of activeWorkers) {
       orcaTeamService.clearAutoBridgeState(w.sessionId);
       await cancelIOSSimulatorSessionOperations(w.sessionId);
@@ -11154,6 +11201,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 与 focus 后台预热共享同一套去重/锁:派活不会和切换触发两次 bootstrap。
       await orcaWorkerResumeScheduler.request(target);
     },
+    // 归档 / 显式 idle 会释放 runtime；先取消未落地的后台预热，避免释放后被重新拉起。
+    cancelWorkerResume: (sessionId) => orcaWorkerResumeScheduler.cancel(sessionId),
     updateWorkerStatus,
     markWorkerIdle: async (workerId) => {
       const now = Date.now();
