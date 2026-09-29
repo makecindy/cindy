@@ -51,7 +51,10 @@ vi.mock('electron-store', () => ({ default: class {
   set(key: string, value: unknown) { this.values.set(key, value); }
   delete(key: string) { this.values.delete(key); }
 } }));
-vi.mock('../../../maker-ipc/appDefaultModelControl.js', () => ({ validateBotTaskModel: vi.fn(async () => true) }));
+vi.mock('../../../maker-ipc/appDefaultModelControl.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../../maker-ipc/appDefaultModelControl.js')>(),
+  validateBotTaskModel: vi.fn(async () => true),
+}));
 
 const h = await vi.hoisted(async () => {
   const { mkdtempSync } = await import('node:fs');
