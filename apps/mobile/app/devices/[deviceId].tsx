@@ -253,6 +253,13 @@ function DeviceDetailScreenContent() {
   const [scheduleIndex, setScheduleIndex] = useState<Map<string, RemoteSessionScheduleInfo>>(
     () => new Map(),
   );
+  // 同一离线代次可能伴随 session store 的多次 emit。记录已经消费过的会话，
+  // 防止 effect 因 sessions 引用变化反复 setState 形成 React 更新环；同代次
+  // 后来才出现的会话仍须增量失效，避免恢复前显示陈旧的 running 状态。
+  const consumedScheduleMirrorInvalidationsRef = useRef(new Map<string, {
+    generation: number;
+    sessionIds: Set<string>;
+  }>());
   const {
     actionSheetSession,
     closeRenameSession,
@@ -268,10 +275,21 @@ function DeviceDetailScreenContent() {
   } = useSessionListActions();
 
   useEffect(() => {
-    if (!deviceId || !scheduleMirrorInvalidations.has(deviceId)) return;
+    const generation = deviceId ? scheduleMirrorInvalidations.get(deviceId) : undefined;
+    if (!deviceId || generation === undefined) return;
+    const current = consumedScheduleMirrorInvalidationsRef.current.get(deviceId);
+    const consumed = current?.generation === generation
+      ? current.sessionIds
+      : new Set<string>();
+    const sessionIds = sessions
+      .map((session) => session.id)
+      .filter((sessionId) => !consumed.has(sessionId));
+    if (sessionIds.length === 0) return;
+    for (const sessionId of sessionIds) consumed.add(sessionId);
+    consumedScheduleMirrorInvalidationsRef.current.set(deviceId, { generation, sessionIds: consumed });
     setScheduleIndex((current) => invalidateRunningSessionScheduleEntries(
       current,
-      sessions.map((session) => session.id),
+      sessionIds,
     ));
   }, [deviceId, scheduleMirrorInvalidations, sessions]);
 
