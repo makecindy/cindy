@@ -1,3 +1,5 @@
+import { ScriptTarget, transpileModule } from 'typescript';
+import { canResumeAfterRuntimeFallback } from '../../../maker-ipc/botCandidateRecovery';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
 import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../../maker-host/newMakerDefaultsCache';
@@ -224,7 +226,7 @@ import {
 } from '../../../maker-ipc/botProfileRuntime';
 import { createBotLifecycleService } from '../../../maker-ipc/botLifecycleService';
 import { createBotDirectMessageService } from '../../../maker-ipc/botDirectMessageService';
-import { createBotDelegationService, discardDelegationQueuedInputs } from '../../../maker-ipc/botDelegationService';
+import { createBotDelegationService, discardDelegationQueuedInputs, hasExplicitSessionTaskModel } from '../../../maker-ipc/botDelegationService';
 import {
   BOT_DELEGATION_MAX_DISPATCH_ATTEMPTS,
 } from '../../../maker-ipc/botDelegationDispatchOutcome';
@@ -4145,6 +4147,36 @@ describe('Bot Session task end-to-end runtime', () => {
     }
   });
 
+  // Execute the production fallback entry with the real delegation snapshot query.
+  // Native engine mutation is unnecessary: an unpinned task reaches the catalog picker.
+  function automaticTaskFallback() {
+    const source = readFileSync(new URL('../../../maker-ipc/register.ts', import.meta.url), 'utf8');
+    const body = source.slice(source.indexOf('  const maybeApplySessionRuntimeFallback ='),
+      source.indexOf('  const sessionControlService ='));
+    const pick = vi.fn(() => null);
+    const deps = {
+      hasExplicitSessionTaskModel,
+      captureSessionRuntimeControlOwnerEpoch: () => 1,
+      readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'openai', model: 'gpt-6-astra' },
+        control: { generation: 1, visitedRoutes: [], fallbackHop: 0 } }),
+      canApplyAutomaticRuntimeSelection: () => true,
+      readBotFallbackCandidate: async () => ({ isBot: false, candidate: null }),
+      readSessionRuntimeFallbackSettings: () => ({ enabled: true }),
+      getDesktopProviderService: () => ({ listProviders: async () => [] }),
+      getActiveCatalog: () => ({}),
+      pickSessionRuntimeFallback: pick,
+      log: { warn: vi.fn() },
+    };
+    const js = transpileModule(`${body}\nreturn maybeApplySessionRuntimeFallback;`, {
+      compilerOptions: { target: ScriptTarget.ES2022 },
+    }).outputText;
+    const apply = new Function(...Object.keys(deps), js)(...Object.values(deps)) as
+      (id: string, attempt: number, token: number, requireRouteChange?: boolean) => Promise<{
+        session: null; outcome: 'unchanged' | 'exhausted';
+      }>;
+    return { apply, pick };
+  }
+
   it.each([
     { harness: 'claude', agentKind: 'cc', model: 'claude-opus-5-5', providerId: 'anthropic' },
     { harness: 'codex', agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' },
@@ -4180,6 +4212,21 @@ describe('Bot Session task end-to-end runtime', () => {
       if (!inherited.ok) throw new Error(inherited.message);
       expect(runtime.started).toContainEqual({ sessionId: inherited.childSessionId, agentKind: 'pi', model: 'primary-model', providerId: 'primary-provider', effort: 'low', fastMode: 1 });
       expect(runtime.started[0]?.model).toBe(selection.model);
+      const recovery = automaticTaskFallback();
+      for (const attempt of [1, 2, 3]) {
+        const fallback = await recovery.apply(result.childSessionId, attempt, attempt);
+        expect(fallback.outcome).toBe('unchanged');
+        expect(canResumeAfterRuntimeFallback(false, fallback)).toBe(true);
+      }
+      const required = await recovery.apply(result.childSessionId, 2, 4, true);
+      expect(required.outcome).toBe('exhausted');
+      expect(canResumeAfterRuntimeFallback(true, required)).toBe(false);
+      expect(recovery.pick).not.toHaveBeenCalled();
+      await recovery.apply(inherited.childSessionId, 1, 1);
+      expect(recovery.pick).not.toHaveBeenCalled();
+      await recovery.apply(inherited.childSessionId, 2, 2);
+      expect(recovery.pick).toHaveBeenCalledOnce();
+
       await runtime.settleChild(result.childSessionId, 'Task complete.');
       expect(await runtime.delegation.inspectSessionTaskRoute('session-1', result.delegationId)).toMatchObject({ ok: true, next: null, selectionToken: null });
       expect(await runtime.delegation.advanceSessionTaskRoute('session-1', result.delegationId, 1, 'anything')).toMatchObject({ ok: false, errorCode: 'NO_CONFIGURED_ROUTE' });
@@ -4203,6 +4250,9 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(result.ok).toBe(true); if (!result.ok) throw new Error(result.message);
       expect(resolveTaskModelSelection).toHaveBeenCalledWith(selection);
       expect(result.modelRoute).toEqual(chosen);
+      const recovery = automaticTaskFallback();
+      expect((await recovery.apply(result.childSessionId, 2, 2)).outcome).toBe('unchanged');
+      expect(recovery.pick).not.toHaveBeenCalled();
       expect(runtime.started).toContainEqual({ sessionId: result.childSessionId, agentKind, model: route.model, providerId: route.providerId, effort: 'high', fastMode: 1 });
       const next = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Use the saved default.' });
       expect(next.ok).toBe(true); if (!next.ok) throw new Error(next.message);

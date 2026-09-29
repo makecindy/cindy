@@ -245,6 +245,16 @@ function parseRecord(value: string | null | undefined): Record<string, unknown> 
   }
 }
 
+/** Use the creation snapshot, not today's companion settings, during recovery. */
+export async function hasExplicitSessionTaskModel(sessionId: string): Promise<boolean> {
+  const [row] = await getDbClient().drizzle
+    .select({ permissionSnapshotJson: botDelegations.permissionSnapshotJson })
+    .from(botDelegations)
+    .where(eq(botDelegations.childSessionId, sessionId))
+    .limit(1);
+  return !!parseRecord(row?.permissionSnapshotJson).taskModelOverride;
+}
+
 /** Mutable execution hold lives beside the frozen plan, without changing its authority fields. */
 interface SessionTaskPause {
   token: string;
