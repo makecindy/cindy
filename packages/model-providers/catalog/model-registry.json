@@ -1,7 +1,34 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-26T12:00:00.005Z",
+  "updatedAt": "2026-09-29T18:20:00.001Z",
   "models": [
+    {
+      "id": "openai/gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
+      "status": "active",
+      "sortOrder": 14,
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-6.1-sol",
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": true
+          }
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-6.1-sol",
+      "perAgent": {
+        "codex": {
+          "contextWindow": 272000
+        },
+        "claude-code": {
+          "contextWindow": 272000,
+          "efforts": ["low", "medium", "high", "xhigh", "max"]
+        }
+      }
+    },
     {
       "id": "openai/gpt-6-sol",
       "name": "GPT-6 Sol",
@@ -2870,6 +2897,17 @@
     ]
   },
   "baseModels": [
+    {
+      "id": "openai/gpt-6.1-sol",
+      "aliases": ["gpt-6.1-sol"],
+      "defaults": {
+        "name": "GPT-6.1 Sol",
+        "group": "gpt",
+        "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+        "defaultEffort": "medium",
+        "supportsImageInput": true
+      }
+    },
     {
       "id": "openai/gpt-6-sol",
       "aliases": ["gpt-6-sol"],
