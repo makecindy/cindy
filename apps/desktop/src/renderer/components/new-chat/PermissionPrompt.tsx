@@ -13,7 +13,7 @@
  *   Esc         → Deny
  */
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
@@ -137,11 +137,21 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
   // ── Action handlers ──
 
+  // P1 security: freeze the requestId this instance was mounted for. The parent
+  // remounts PermissionPrompt per card via key={permission.requestId}, so this
+  // ref always equals the card the user is looking at; callbacks created below
+  // carry the identity the user actually acted on. Never rewrite it during
+  // render: if a stale instance were ever reused for the promoted card, a late
+  // click must keep A's id and be rejected by the store's head-of-queue check
+  // instead of silently approving B (review #4005).
+  const capturedRequestId = useRef(permission.requestId);
+
   const handleAllowOnce = useCallback(() => {
     if (submitting) return;
     onRespond({
       behavior: 'allow',
-    });
+      requestId: capturedRequestId.current,
+    } as CCAgentPermissionResult);
   }, [onRespond, submitting]);
 
   const handleAlwaysAllow = useCallback(() => {
@@ -154,7 +164,8 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       behavior: 'allow',
       updatedPermissions: sessionSuggestions,
       decisionClassification: 'user_permanent',
-    });
+      requestId: capturedRequestId.current,
+    } as CCAgentPermissionResult);
   }, [canAlwaysAllowForSession, handleAllowOnce, onRespond, sessionSuggestions, submitting]);
 
   const handleDeny = useCallback(() => {
@@ -163,8 +174,15 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       behavior: 'deny',
       message: 'User denied',
       decisionClassification: 'user_reject',
-    });
+      requestId: capturedRequestId.current,
+    } as CCAgentPermissionResult);
   }, [onRespond, submitting]);
+
+  // 平台级双击识别:MouseEvent.detail 是浏览器按 OS 双击间隔(用户可配置,任意时长)
+  // 统计的连续点击计数,第二击 detail>1。双击第二击落在推广后的新卡上时,必须当作
+  // 同一手势的一部分忽略 —— 事件驱动,不依赖固定的 renderer 计时器作为权限边界。
+  // 注意:detail 按点击位置+间隔判定,不受组件 remount(key)影响,覆盖任何配置。
+  const ignoreRepeatedClick = (e: ReactMouseEvent) => e.detail > 1;
 
   // ── Keyboard shortcuts ──
 
@@ -176,6 +194,14 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+      if (e.repeat) {
+        // Suppress Chromium's native button click activation on held Enter.
+        // Without preventDefault(), the browser fires click events on the
+        // focused <button> for repeated Enter keydowns, bypassing the global
+        // shortcut guard and approving/denying newly promoted cards.
+        if (e.key === 'Enter' || e.key === 'Escape') e.preventDefault();
+        return;
+      }
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         handleAlwaysAllow();
@@ -252,7 +278,10 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           pressFeedback={false}
           variant="secondary"
           size="lg"
-          onClick={handleDeny}
+          onClick={(e) => {
+            if (ignoreRepeatedClick(e)) return;
+            handleDeny();
+          }}
           disabled={submitting}
           className={secondaryActionClass}
         >
@@ -281,7 +310,10 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
               pressFeedback={false}
               variant="secondary"
               size="lg"
-              onClick={handleAlwaysAllow}
+              onClick={(e) => {
+                if (ignoreRepeatedClick(e)) return;
+                handleAlwaysAllow();
+              }}
               disabled={submitting}
               className={cn(secondaryActionClass, 'min-w-0 max-w-[min(100%,460px)]')}
             >
@@ -305,7 +337,10 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           pressFeedback={false}
           variant="secondary"
           size="lg"
-          onClick={handleAllowOnce}
+          onClick={(e) => {
+            if (ignoreRepeatedClick(e)) return;
+            handleAllowOnce();
+          }}
           disabled={submitting}
           className={allowActionClass}
         >

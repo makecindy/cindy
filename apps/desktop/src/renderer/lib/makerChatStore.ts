@@ -716,6 +716,28 @@ export interface PendingPermission {
   submissionFailed?: boolean;
 }
 
+function parsePendingPermissionRequest(
+  request: Record<string, unknown> | undefined,
+): PendingPermission | null {
+  if (!request || request.kind !== 'permission' || typeof request.requestId !== 'string') {
+    return null;
+  }
+  const metadata = request.metadata as Record<string, unknown> | undefined;
+  return {
+    requestId: request.requestId,
+    toolName: typeof request.toolName === 'string' ? request.toolName : '',
+    input:
+      request.input && typeof request.input === 'object'
+        ? (request.input as Record<string, unknown>)
+        : {},
+    title: typeof request.title === 'string' ? request.title : undefined,
+    displayName: typeof request.displayName === 'string' ? request.displayName : undefined,
+    description: typeof request.description === 'string' ? request.description : undefined,
+    suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
+    autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+  };
+}
+
 /** F7.2: Pending ask-user-question data — holds ALL questions for the wizard. */
 export interface PendingAskUser {
   requestId: string;
@@ -2593,8 +2615,13 @@ export interface SessionChatState {
   historyLoaded: boolean;
   /** SDK-internal session id; null until the first `init` message of a turn lands. */
   sdkSessionId: string | null;
-  /** F-PERM-2: Currently pending permission request; null when none. */
+  /** F-PERM-2: Currently displayed permission request; null when none. */
   pendingPermission: PendingPermission | null;
+  /**
+   * Additional permission requests from the same turn, kept FIFO instead of
+   * overwriting the displayed request when Claude emits parallel tool_use calls.
+   */
+  pendingPermissionQueue: PendingPermission[];
   /** F7.2: Currently pending ask-user-question; null when none. */
   pendingAskUser: PendingAskUser | null;
   /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
@@ -2905,6 +2932,7 @@ function createInitialState(): SessionChatState {
     streamingClientId: null,
     streamingText: '',
     pendingPermission: null,
+    pendingPermissionQueue: [],
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -2989,6 +3017,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   historyLoaded: true,
   sdkSessionId: null,
   pendingPermission: null,
+  pendingPermissionQueue: [],
   pendingAskUser: null,
   pendingPluginSetup: null,
   pendingPluginSetupQueue: [],
@@ -3042,6 +3071,71 @@ const sessions = new Map<string, SessionChatState>();
 // ordinary state updates to proceed.
 let nextSessionIncarnation = 1;
 const sessionIncarnations = new Map<string, number>();
+/**
+ * Session-scoped permission response guard.
+ * Prevents double-click / key-repeat from approving the newly promoted permission
+ * card within the gesture-dedupe window (300ms after IPC settle).
+ */
+/** Maps sessionId → requestId of the in-flight permission response. */
+const permissionResponseInFlight = new Map<string, string>();
+/**
+ * Gesture dedupe window: prevents double-click from approving the newly promoted card.
+ * Must cover the platform double-click interval — Windows defaults to 500ms, so a
+ * second click of a double-click (350–500ms) after A resolves must not land on B.
+ */
+const PERMISSION_RESPONSE_GUARD_WINDOW_MS = 500;
+/** Timer per session for gesture dedupe release (purge / dismissal cleanup). */
+const permissionResponseGuardTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Rearm gesture-dedupe window when a dismissal arrives.
+ * Keeps the session-level guard active and restarts the timer. This prevents
+ * A's delayed click from approving the newly promoted B within the gesture window.
+ * After the window expires, B can be responded to normally.
+ */
+function rearmPermissionResponseGuard(sessionId: string): void {
+  if (!permissionResponseInFlight.has(sessionId)) return;
+  // Keep the existing requestId — only restart the dedupe timer.
+  const timer = permissionResponseGuardTimers.get(sessionId);
+  if (timer !== undefined) clearTimeout(timer);
+  const next = setTimeout(
+    () => releasePermissionResponseGuard(sessionId),
+    PERMISSION_RESPONSE_GUARD_WINDOW_MS,
+  );
+  permissionResponseGuardTimers.set(sessionId, next);
+}
+
+/**
+ * Release the gesture-dedupe timer after IPC settle.
+ * Idempotent — safe to call even if guard was already cleared.
+ */
+function releasePermissionResponseGuard(sessionId: string): void {
+  const timer = permissionResponseGuardTimers.get(sessionId);
+  if (timer !== undefined) clearTimeout(timer);
+  permissionResponseGuardTimers.delete(sessionId);
+  permissionResponseInFlight.delete(sessionId);
+}
+
+/**
+ * Arm gesture-dedupe window after IPC settle.
+ * @param requestId  The permission request that just settled.
+ *                   Only this request may arm the guard — a stale
+ *                   caller whose requestId no longer matches the
+ *                   in-flight entry must not overwrite the guard.
+ */
+function armPermissionResponseGuard(sessionId: string, requestId: string): void {
+  // Ownership check: if a newer request already took over, do not interfere.
+  const current = permissionResponseInFlight.get(sessionId);
+  if (current !== undefined && current !== requestId) return;
+  const timer = permissionResponseGuardTimers.get(sessionId);
+  if (timer !== undefined) clearTimeout(timer);
+  const next = setTimeout(
+    () => releasePermissionResponseGuard(sessionId),
+    PERMISSION_RESPONSE_GUARD_WINDOW_MS,
+  );
+  permissionResponseGuardTimers.set(sessionId, next);
+  permissionResponseInFlight.set(sessionId, requestId);
+}
 const listeners = new Map<string, Set<() => void>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
 
@@ -3526,6 +3620,10 @@ function _purgeSession(sessionId: string): void {
   // 交接中的迟到 continuation，且不写入 /clear 的历史时间边界。
   bumpRendererClearGeneration(sessionId);
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
+  permissionResponseInFlight.delete(sessionId);
+  const purgeTimer = permissionResponseGuardTimers.get(sessionId);
+  if (purgeTimer !== undefined) clearTimeout(purgeTimer);
+  permissionResponseGuardTimers.delete(sessionId);
   clearWakeBridgeReconcileTimer(sessionId);
   cancelIdlePlanDiscovery(sessionId);
   sessions.delete(sessionId);
@@ -6081,6 +6179,7 @@ export function handleStreamEvent(
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
+        pendingPermissionQueue: [],
         pendingAskUser: keepAskUserAcrossDone ? state.pendingAskUser : null,
         continuationTurnClientId: null,
         // F-AUQ-MIN-5: viewerState lives with pendingAskUser — when the
@@ -6313,6 +6412,7 @@ export function handleStreamEvent(
         // the 'done' path to consume — reset it explicitly on error so the
         // accumulated delta text doesn't linger in memory.
         pendingPermission: null,
+        pendingPermissionQueue: [],
         pendingAskUser: null,
         // F-AUQ-MIN-5: same reset as the 'done' path.
         askUserViewerState: 'expanded',
@@ -6349,24 +6449,34 @@ export function handleStreamEvent(
         suggestions?: unknown[];
         autoReviewUnavailable?: boolean;
       };
+      const permission: PendingPermission = {
+        requestId: data.requestId,
+        toolName: data.toolName,
+        input: data.input,
+        title: data.title,
+        displayName: data.displayName,
+        description: data.description,
+        suggestions: data.suggestions,
+        autoReviewUnavailable: data.autoReviewUnavailable === true,
+      };      if (
+        state.pendingPermission?.requestId === permission.requestId ||
+        state.pendingPermissionQueue.some((item) => item.requestId === permission.requestId)
+      ) {
+        return state;
+      }
+      // A newer request supersedes a card whose decision is in flight: that
+      // receipt race is already lost, so the newest authoritative request takes
+      // the head (upstream semantics — a failure snapshot must not resurrect it).
+      if (state.pendingPermission?.submitting) {
+        return { ...state, pendingPermission: permission };
+      }
+      // FIFO: an actionable card keeps the head; parallel requests queue behind.
       return {
         ...state,
-        pendingPermission: {
-          requestId: data.requestId,
-          toolName: data.toolName,
-          input: data.input,
-          title: data.title,
-          displayName: data.displayName,
-          description: data.description,
-          suggestions: data.suggestions,
-          autoReviewUnavailable: data.autoReviewUnavailable === true,
-          ...(state.pendingPermission?.requestId === data.requestId
-            ? {
-                submitting: state.pendingPermission.submitting,
-                submissionFailed: state.pendingPermission.submissionFailed,
-              }
-            : {}),
-        },
+        pendingPermission: state.pendingPermission ?? permission,
+        pendingPermissionQueue: state.pendingPermission
+          ? [...state.pendingPermissionQueue, permission]
+          : state.pendingPermissionQueue,
       };
     }
 
@@ -6384,7 +6494,20 @@ export function handleStreamEvent(
           ? (data.decision as Record<string, unknown>)
           : null;
       if (state.pendingPermission?.requestId === data.requestId) {
-        return { ...state, pendingPermission: null };
+        const [nextPermission = null, ...remainingPermissions] = state.pendingPermissionQueue;
+        return {
+          ...state,
+          pendingPermission: nextPermission,
+          pendingPermissionQueue: remainingPermissions,
+        };
+      }
+      if (state.pendingPermissionQueue.some((item) => item.requestId === data.requestId)) {
+        return {
+          ...state,
+          pendingPermissionQueue: state.pendingPermissionQueue.filter(
+            (item) => item.requestId !== data.requestId,
+          ),
+        };
       }
       if (state.pendingPluginSetup?.requestId === data.requestId) {
         const [nextSetup = null, ...remainingSetups] = state.pendingPluginSetupQueue;
@@ -6807,6 +6930,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     // boundary; user queued input remains available for the next owner.
     pendingQueue: finalized.pendingQueue.filter((item) => item.autoResume !== true),
     pendingPermission: null,
+    pendingPermissionQueue: [],
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -8420,6 +8544,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       decision: dismissPayload.decision,
     };
     const sessionId = payload.sessionId;
+    // 交互被撤回/对端已解决/本端 resolve 回显:旧权限卡的响应链终结。不能
+    // 无条件释放 guard —— A 被 resolve 时 main 同步广播 dismissal,立即释放
+    // 会让双击第二击误批新推广的 B(security P1)。重新武装 gesture 窗口:
+    // 既挡住 A 的迟到输入,又不依赖旧 RPC settle(可达 ~30s)才放行 B 的真实
+    // 响应。guard 不在场时(远端撤回)no-op,不影响新卡即时响应。
+    // Dismissal: rearm guard to block A's delayed click within gesture window.
+    rearmPermissionResponseGuard(sessionId);
     setState(sessionId, (s) =>
       handleStreamEvent(s, { sessionId, type: 'permission_dismissed', data }),
     );
@@ -10098,7 +10229,13 @@ function reconcilePendingInteractions(
       // a Device Link reconnect cannot leave cards that the Host already closed.
       // Permissions also need subtraction after a lost decision receipt.
       const authoritativePluginSetupIds = new Set<string>();
+
+      const authoritativePermissions = list
+        .map((item) => parsePendingPermissionRequest(item?.request))
+        .filter((permission): permission is PendingPermission => permission !== null);
+
       const authoritativePermissionIds = new Set<string>();
+
       const authoritativeRemoteDesktopConfirmationIds = new Set<string>();
       for (const item of list) {
         const request = item?.request;
@@ -10123,10 +10260,36 @@ function reconcilePendingInteractions(
         }
       }
       if (!isCurrentInteractionReconcile()) return 0;
+      // Capture the old pending permission before reconciliation so we can
+      // release the stale permissionResponseInFlight guard when the snapshot
+      // advances (P1: device-link reconnects while a permission request was
+      // in flight — the old guard blocks every action on the new request).
+      const oldPendingPermission = getOrCreateState(sessionId).pendingPermission;
       setState(sessionId, (state) => {
-        const nextPermission = state.pendingPermission &&
-          authoritativePermissionIds.has(state.pendingPermission.requestId)
-          ? state.pendingPermission : null;
+
+        // Permission snapshots are authoritative too. In particular, do not
+        // append the snapshot behind a stale displayed request: a renderer can
+        // miss A's dismissal, reconnect while B is pending, and otherwise keep
+        // showing A forever while B waits in the new FIFO queue.
+        const existingPermissions = [
+          ...(state.pendingPermission ? [state.pendingPermission] : []),
+          ...state.pendingPermissionQueue,
+        ];
+        const existingByRequestId = new Map(
+          existingPermissions.map((permission) => [permission.requestId, permission]),
+        );
+        const reconciledPermissions = authoritativePermissions.map(
+          (permission) => existingByRequestId.get(permission.requestId) ?? permission,
+        );
+        const nextPermission = reconciledPermissions[0] ?? null;
+        const nextPermissionQueue = reconciledPermissions.slice(1);
+        const permissionChanged =
+          state.pendingPermission !== nextPermission ||
+          state.pendingPermissionQueue.length !== nextPermissionQueue.length ||
+          state.pendingPermissionQueue.some(
+            (permission, index) => permission !== nextPermissionQueue[index],
+          );
+
         const currentSurvives =
           state.pendingPluginSetup !== null &&
           authoritativePluginSetupIds.has(state.pendingPluginSetup.requestId);
@@ -10175,6 +10338,7 @@ function reconcilePendingInteractions(
           );
 
         if (
+          !permissionChanged &&
           !currentChanged &&
           !queueChanged &&
           nextPermission === state.pendingPermission &&
@@ -10187,6 +10351,9 @@ function reconcilePendingInteractions(
         return {
           ...state,
           pendingPermission: nextPermission,
+
+          pendingPermissionQueue: nextPermissionQueue,
+
           pendingPluginSetup: nextCurrent,
           pendingPluginSetupQueue: survivingQueue,
           pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
@@ -10196,6 +10363,18 @@ function reconcilePendingInteractions(
           pendingRemoteDesktopConfirmationQueue: remainingRemoteConfirmations,
         };
       });
+      // P1 security: When the authoritative snapshot replaces the displayed
+      // permission (e.g. device-link reconnects while old request A was in
+      // flight), we must use requestId-based comparison — not reference equality
+      // — because reconciliation may recreate the permission object with the
+      // same requestId.  If the permission actually changed (different
+      // requestId), rearm the gesture window to protect the newly promoted card.
+      const newPendingPermission = getOrCreateState(sessionId).pendingPermission;
+      const oldRequestId = oldPendingPermission?.requestId;
+      const newRequestId = newPendingPermission?.requestId;
+      if (permissionResponseInFlight.has(sessionId) && oldRequestId !== newRequestId && oldRequestId != null) {
+        rearmPermissionResponseGuard(sessionId);
+      }
       for (const item of list) {
         if (!isCurrentInteractionReconcile()) return 0;
         applyInteractionRequestRef?.(
@@ -10849,18 +11028,17 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
 async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
   const existing = remoteOptimisticPumps.get(sessionId);
   if (existing) return existing;
-  // Self-reference is intentional: a detached clear/owner generation must not
-  // keep draining after a newer pump replaces this Promise in the registry.
-  // eslint-disable-next-line prefer-const
-  let run!: Promise<void>;
-  run = (async () => {
+  // The holder avoids a temporal-dead-zone type error while allowing the async
+  // body to compare its identity with a newer pump after its first await.
+  const runRef: { promise?: Promise<void> } = {};
+  const run = (async () => {
     while (true) {
       const record = firstUnacceptedRemoteOptimisticSend(sessionId);
       if (!record || record.dispatching) return;
       const prepared = await prepareRemoteOptimisticSend(sessionId, record);
       if (prepared.kind === 'deferred') return;
       if (prepared.kind === 'cancelled') {
-        if (remoteOptimisticPumps.get(sessionId) !== run) return;
+        if (remoteOptimisticPumps.get(sessionId) !== runRef.promise) return;
         continue;
       }
       if (prepared.kind === 'failed') {
@@ -10875,7 +11053,7 @@ async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
       // the active pump to dispatch them deterministically. A clear/owner boundary,
       // however, detaches the old pump so it cannot race a newer generation.
       if (result.kind === 'cancelled') {
-        if (remoteOptimisticPumps.get(sessionId) !== run) return;
+        if (remoteOptimisticPumps.get(sessionId) !== runRef.promise) return;
         continue;
       }
       if (result.kind === 'failed') {
@@ -10884,8 +11062,9 @@ async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
       }
     }
   })().finally(() => {
-    if (remoteOptimisticPumps.get(sessionId) === run) remoteOptimisticPumps.delete(sessionId);
+    if (remoteOptimisticPumps.get(sessionId) === runRef.promise) remoteOptimisticPumps.delete(sessionId);
   });
+  runRef.promise = run;
   remoteOptimisticPumps.set(sessionId, run);
   return run;
 }
@@ -15314,6 +15493,7 @@ function stopSession(
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      pendingPermissionQueue: [],
       continuationTurnClientId: null,
       pendingAskUser: null,
       // F-AUQ-MIN-5: Stop session — pending question is gone, reset viewer.
@@ -15792,6 +15972,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      pendingPermissionQueue: [],
       pendingAskUser: null,
       pendingPluginSetup: null,
       pendingPluginSetupQueue: [],
@@ -16218,12 +16399,17 @@ function respondToPluginSetup(
 /**
  * Keep the card until the host acknowledges the decision (or dismisses it).
  */
-function respondToPermission(sessionId: string, result: CCAgentPermissionResult): void {
+function respondToPermission(
+  sessionId: string,
+  result: CCAgentPermissionResult,
+  capturedRequestId?: string,
+): void {
   if (!sessionId) return;
   const state = getOrCreateState(sessionId);
   if (!state.pendingPermission || state.pendingPermission.submitting) return;
 
-  const { requestId } = state.pendingPermission;
+  const requestId = capturedRequestId ?? state.pendingPermission.requestId;
+
   const owner = getDataOwnerGeneration();
   const messagesEpoch = _messagesEpoch.get(sessionId) ?? 0;
   const authorityEpoch = _inputProjectionAuthorityEpoch.get(sessionId) ?? 0;
@@ -16235,10 +16421,17 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
     (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === authorityEpoch &&
     remoteProjectsStore.getSessionDeviceId(sessionId) === origin &&
     (!stickyDevice || !isRemoteTerminalSessionTombstoned(sessionId, stickyDevice));
-  const hasCurrentCard = () => isCurrent() &&
-    sessions.get(sessionId)?.pendingPermission?.requestId === requestId;
+  const hasCurrentCard = () => isCurrent() && sessions.get(sessionId)?.pendingPermission?.requestId === requestId;
+  // The guard doubles as the duplicate-gesture gate: if the same requestId is
+  // already armed (double-click / key repeat), this response is a duplicate.
+  if (permissionResponseInFlight.get(sessionId) === requestId) return;
+  // Any other session guard entry also blocks (cross-request duplicate input).
+  if (permissionResponseInFlight.has(sessionId) &&
+      permissionResponseInFlight.get(sessionId) !== requestId) return;
   bumpInteractionReconcileEpoch(sessionId);
 
+  // Receipt protocol: keep the card on screen with submitting=true until the
+  // host acknowledges the decision (or dismisses it).
   setState(sessionId, (s) => ({
     ...s,
     pendingPermission: { ...s.pendingPermission!, submitting: true, submissionFailed: false },
@@ -16259,6 +16452,10 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
       if (timer) clearTimeout(timer);
     }
   };
+  // Reserve the guard immediately so a synchronous duplicate (double-click)
+  // is blocked before IPC settles — then the ownership-checked arm in the
+  // receipt path hands the window over for the gesture-dedupe span.
+  permissionResponseInFlight.set(sessionId, requestId);
   void (async () => {
     try {
       const receipt = await withReceiptTimeout(() => makerApiFor(sessionId).resolveInteraction(requestId, {
@@ -16270,20 +16467,39 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
           ? result.updatedPermissions
           : undefined,
       }));
-      if (!hasCurrentCard()) return;
+      if (!hasCurrentCard()) {
+        // The card was dismissed/replaced mid-flight; still arm the dedupe
+        // window so a late input for the old card cannot authorize a new one.
+        armPermissionResponseGuard(sessionId, requestId);
+        return;
+      }
       if (receipt?.accepted === true) {
         bumpInteractionReconcileEpoch(sessionId);
-        setState(sessionId, (s) => ({ ...s, pendingPermission: null }));
+        // FIFO promote: the decision was accepted — show the next queued card.
+        setState(sessionId, (s) => {
+          const [nextPermission = null, ...remainingPermissions] = s.pendingPermissionQueue;
+          return {
+            ...s,
+            pendingPermission: nextPermission,
+            pendingPermissionQueue: remainingPermissions,
+          };
+        });
+        armPermissionResponseGuard(sessionId, requestId);
         return;
       }
       if (receipt?.accepted === false) {
         bumpInteractionReconcileEpoch(sessionId);
         setState(sessionId, (s) => ({ ...s, pendingPermission: null }));
         toast.warning(i18n.t('newChat.permissionPrompt.requestEnded'));
+        armPermissionResponseGuard(sessionId, requestId);
         return;
       }
       throw new Error('Missing permission receipt');
     } catch (err) {
+      // Failure path: the card must be retryable immediately — release the
+      // guard instead of arming the dedupe window (an uncertain reply must
+      // not lock the user out of retrying).
+      releasePermissionResponseGuard(sessionId);
       if (!hasCurrentCard()) return;
       log.warn('Permission decision receipt unavailable', err);
       toast.warning(i18n.t('newChat.permissionPrompt.submissionFailed'));

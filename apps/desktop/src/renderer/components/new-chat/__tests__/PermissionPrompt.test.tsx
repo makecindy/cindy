@@ -68,7 +68,8 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
     rerender(<PermissionPrompt permission={{ ...request, submitting: false, submissionFailed: true }} onRespond={onRespond} />);
     expect(screen.getByRole('status').textContent).toBe('newChat.permissionPrompt.submissionFailed');
     fireEvent.click(screen.getByRole('button', { name: /allowOnce/ }));
-    expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow' });
+    // P1: the component freezes and reports the requestId it was mounted for.
+    expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow', requestId: 'req-1' });
   });
 
   it('把规则范围写进按钮文案', () => {
@@ -180,6 +181,7 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
       behavior: 'allow',
       updatedPermissions: [bashRule],
       decisionClassification: 'user_permanent',
+      requestId: 'req-1',
     });
   });
 
@@ -192,6 +194,63 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
     expect(onRespond).toHaveBeenCalledWith(
       expect.objectContaining({ decisionClassification: 'user_permanent' }),
     );
+  });
+
+  it('repeated keydown events (e.repeat) are ignored', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={permission([bashRule])} onRespond={onRespond} />);
+
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', repeat: false });
+    expect(onRespond).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', repeat: true });
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', repeat: true });
+    expect(onRespond).toHaveBeenCalledTimes(1);
+  });
+
+  // 身份必须在 mount 时冻结:父组件用 key={requestId} remount 每张卡,复用旧实例
+  // 只可能是异常路径。若真被复用,迟到手势必须继续带 A 的 id,由 store 的队首校验
+  // 拒绝(而不是把新卡的 id 当成新的用户决定) —— #4005「A 的迟到响应不得作用于 B」。
+  it('复用旧实例时冻结手势身份,不把 requestId 改写为下一张卡', () => {
+    const onRespond = vi.fn();
+    const first = permission();
+    const second = { ...permission(), requestId: 'req-2', input: { command: 'git status' } };
+    const { rerender } = render(<PermissionPrompt permission={first} onRespond={onRespond} />);
+
+    rerender(<PermissionPrompt permission={second} onRespond={onRespond} />);
+    fireEvent.click(screen.getByText('agentIsland.native.allowOnce'));
+
+    // 仍带着 mount 时的 req-1,不会变成 req-2。
+    expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow', requestId: 'req-1' });
+  });
+
+  it('Escape repeat is also ignored', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={permission([bashRule])} onRespond={onRespond} />);
+
+    fireEvent.keyDown(window, { key: 'Escape', code: 'Escape', repeat: false });
+    expect(onRespond).toHaveBeenCalledTimes(1);
+    expect(onRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: 'deny' }),
+    );
+
+    fireEvent.keyDown(window, { key: 'Escape', code: 'Escape', repeat: true });
+    expect(onRespond).toHaveBeenCalledTimes(1);
+  });
+
+  // 平台级双击识别:MouseEvent.detail 由浏览器按 OS 双击间隔(任意配置)统计,第二击
+  // detail>1。双击第二击落在推广后的新卡上时不得当作新决定 —— 不依赖固定 renderer
+  // 计时器,因此覆盖用户配置的超长双击间隔。
+  it('双击第二击(MouseEvent.detail>1)不触发授权', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={permission([bashRule])} onRespond={onRespond} />);
+
+    fireEvent.click(screen.getByText('agentIsland.native.allowOnce'), { detail: 1 });
+    expect(onRespond).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText('agentIsland.native.allowOnce'), { detail: 2 });
+    fireEvent.click(screen.getByText('agentIsland.native.allowOnce'), { detail: 3 });
+    expect(onRespond).toHaveBeenCalledTimes(1);
   });
 });
 
