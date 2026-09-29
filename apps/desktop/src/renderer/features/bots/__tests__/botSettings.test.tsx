@@ -450,13 +450,13 @@ describe('Bot settings profile consolidation', () => {
     await act(async () => { fireEvent.click(task.getByTestId('codex-model-selector')); });
     await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
     const saved = mocks.updateBotProfile.mock.calls.at(-1)![1].capabilities;
-    expect(saved.taskModelOverride).toEqual({ harness: 'codex', providerId: 'custom', model: 'custom-model', effort: 'high', fastMode: false });
+    expect(saved).toHaveProperty('taskModelOverride', { harness: 'codex', providerId: 'custom', model: 'custom-model', effort: 'high', fastMode: false });
     expect(saved).not.toHaveProperty('modelChainOverride');
     expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe('claude-x');
     mocks.updateBotProfile.mockClear();
     await act(async () => { fireEvent.click(task.getByRole('button', { name: 'bots.model.inheritPrimary' })); });
     await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
-    expect(mocks.updateBotProfile.mock.calls.at(-1)![1].capabilities.taskModelOverride).toBeNull();
+    expect(mocks.updateBotProfile.mock.calls.at(-1)![1].capabilities).toHaveProperty('taskModelOverride', null);
     expect(task.getByTestId('current-model').textContent).toBe('claude-x');
   });
 
