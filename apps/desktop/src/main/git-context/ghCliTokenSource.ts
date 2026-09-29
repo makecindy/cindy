@@ -107,7 +107,9 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
     const bin = resolveGhBinary();
     return new Promise<GhCliTokenReadResult>((resolve) => {
       try {
-        execFileFn(bin, ['auth', 'token'], { timeout: GH_TIMEOUT_MS }, (err, stdout) => {
+        // All consumers target public GitHub. Do not pick an enterprise token
+        // when GH_HOST or the CLI's default host points elsewhere.
+        execFileFn(bin, ['auth', 'token', '--hostname', 'github.com'], { timeout: GH_TIMEOUT_MS }, (err, stdout) => {
           if (err) {
             // 失败只 debug 级记录;原因分类留给 UI 决定引导动作。
             const reason = classifyExecError(err);

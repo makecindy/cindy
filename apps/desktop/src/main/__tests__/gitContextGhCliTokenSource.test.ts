@@ -25,6 +25,7 @@ describe('createGhCliTokenSource', () => {
     });
     expect(await src.readToken()).toBe('gho_abc123');
     expect(execFileFn.mock.calls[0][0]).toBe('/opt/homebrew/bin/gh');
+    expect(execFileFn.mock.calls[0][1]).toEqual(['auth', 'token', '--hostname', 'github.com']);
   });
 
   it('候选都不存在时退回裸 gh(win32 用 gh.exe)', async () => {

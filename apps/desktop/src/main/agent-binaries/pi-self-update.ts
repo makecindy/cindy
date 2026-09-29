@@ -8,6 +8,7 @@ import { download } from '../downloader/index.js';
 import { extractMakeToolArchive } from '../cindy-make/toolArchive.js';
 import { isBinaryVersionNotOlder, probeBinaryVersion } from './binary-version-probe.js';
 import { createLogger } from '../logger.js';
+import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 
 const log = createLogger('pi-self-update');
 
@@ -31,10 +32,26 @@ export interface PiBinaryUpdateDeps {
 }
 export const piBinaryUpdateDefaults: PiBinaryUpdateDeps = {
   fetchRelease: async signal => {
+    signal.throwIfAborted();
+    // Reuse the host's GitHub login source; a missing/unavailable login must not
+    // prevent checking this public release. Never pass the token to downloads.
+    const token = await getSharedGhCliTokenSource().readToken().catch(() => null);
+    signal.throwIfAborted();
+    const url = 'https://api.github.com/repos/earendil-works/pi/releases/latest';
     // Match the Electron downloader's system-proxy/PAC-aware network stack.
-    const response = await net.fetch('https://api.github.com/repos/earendil-works/pi/releases/latest', {
-      signal, headers: { Accept: 'application/vnd.github+json' },
+    let response = await net.fetch(url, {
+      signal, redirect: 'error',
+      headers: { Accept: 'application/vnd.github+json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     });
+    // A revoked/restricted login must not make public releases less accessible.
+    // Retry once without credentials, within the original caller's deadline.
+    if (token && (response.status === 401 || response.status === 403)) {
+      await response.body?.cancel();
+      signal.throwIfAborted();
+      response = await net.fetch(url, {
+        signal, redirect: 'error', headers: { Accept: 'application/vnd.github+json' },
+      });
+    }
     if (!response.ok) throw new Error(`Pi release lookup failed (${response.status})`);
     return response.json();
   },
