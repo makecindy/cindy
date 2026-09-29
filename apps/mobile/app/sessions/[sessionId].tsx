@@ -5588,7 +5588,13 @@ export default function SessionScreen() {
       if (isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId) setError(formatRemoteError(err));
     });
   };
-  const outboxDisplayItems = useMemo(() => outboxItems.map(outboxDisplayItem), [outboxItems]);
+  const outboxDisplayItems = useMemo(() => outboxItems.map((item) => {
+    const record = findDurableOutboxRecord(item.clientId);
+    return {
+      ...outboxDisplayItem(item),
+      canCancel: !(record?.creation && !record.prepared && !record.template),
+    };
+  }), [outboxItems, deviceId, sessionId]);
 
   // Legacy creation tasks have no app-owned first record. Never downgrade durable follow-ups
   // into the old ephemeral draft recovery; new creation tasks use the branch above.
