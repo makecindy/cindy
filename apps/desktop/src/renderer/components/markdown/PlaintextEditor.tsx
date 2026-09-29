@@ -72,6 +72,7 @@ import { getCodeMirrorLanguage } from './codemirrorLanguages';
 import {
   clamp,
   findMarkdownTableAtLine,
+  findMarkdownTableAtLineInDoc,
   markdownTableDecorationField,
   collectMarkdownTableHiddenRanges,
   runHistoryCommandPreservingScroll,
@@ -81,6 +82,7 @@ import {
 import {
   markdownMermaidDecorationField,
   mermaidLocaleFacet,
+  findMermaidBlocks,
 } from './markdownMermaidLivePreview';
 import {
   imageBaseDirFacet,
@@ -242,16 +244,20 @@ export const searchHighlightField = StateField.define<DecorationSet>({
 
 /**
  * 收集"用户看不见"的 doc 区间,搜索命中落在其中就丢弃,保证搜索条的命中
- * 计数与真正画出来的高亮一一对应。markdown 之外的文件没有任何 replace
- * widget,直接返回空数组。
+ * 计数与真正画出来的高亮**一一对应** —— 用户要的是"搜到的就一定能看见",
+ * 宁可少报一个不可见的命中,也不要报一个点不到的高亮。
+ * markdown 之外的文件没有任何 replace widget / conceal,直接返回空数组。
  *
  * - 表格:结构字符(分隔行、竖线、padding)由表格模块给出;单元格文字由表格
  *   widget 负责高亮,所以**不**在这里排除整个表格块。
  * - 图片:预览只渲染 <img>,alt 文本不可见,整块排除。
- * - mermaid:图上的 label 是可见的(用户搜的往往就是它),保留命中,只是
- *   暂时无法在 SVG 里定位高亮 —— 详见 markdownMermaidLivePreview 顶部说明。
+ * - mermaid:整块是异步渲染出的 SVG,源码区间到图上文字没有可计算的映射
+ *   (详见 markdownMermaidLivePreview 顶部说明),无法在图内定位高亮 → 整块排除。
+ * - conceal 标记(标题 `#`、列表符号、`**`、反引号、引用 `>`、分割线、围栏
+ *   标记行):live preview 把它们替换成 widget / 空白,命中的字符不存在于
+ *   屏幕上 → 按静态口径排除。
  */
-function collectHiddenSearchRanges(
+export function collectDocSearchHiddenRanges(
   doc: EditorView['state']['doc'],
   isMarkdown: boolean,
 ): DocSearchHiddenRange[] {
@@ -259,7 +265,54 @@ function collectHiddenSearchRanges(
   return [
     ...collectMarkdownTableHiddenRanges(doc),
     ...findImageTargets(doc).map((target) => ({ from: target.from, to: target.to })),
+    ...findMermaidBlocks(doc).map((block) => ({ from: block.from, to: block.to })),
+    ...collectMarkdownConcealedRanges(doc),
   ];
+}
+
+/**
+ * 被 live preview conceal 掉的字符区间(静态口径:编辑器未聚焦、无 reveal)。
+ *
+ * 搜索期间焦点在搜索框输入,`markdownLivePreviewPlugin` 的 reveal 判定
+ * (`getLineRevealRanges`,依赖 `view.hasFocus` + 光标)此时恒为空,所以
+ * "无 reveal 时被 conceal 的字符"就是搜索时真实的隐藏集。直接复用
+ * `addMarkdownConcealDecorations` 的判定逻辑(mini builder 只收区间),
+ * 不另写一套正则 —— 两处判定漂移比多一点计算危险得多。
+ */
+function collectMarkdownConcealedRanges(
+  doc: EditorView['state']['doc'],
+): DocSearchHiddenRange[] {
+  const out: DocSearchHiddenRange[] = [];
+  const fenceLines = computeFenceLineRoles(doc);
+  // 表格块的行是连续的,记住上一次的行号上界,避免每行都重扫表格。
+  let tableLinesThrough = 0;
+  for (let number = 1; number <= doc.lines; number++) {
+    const line = doc.line(number);
+    const role = fenceLines.get(number);
+    // 围栏块内部的行保持原文显示,不做 conceal。
+    if (role === 'body') continue;
+    // 围栏开栏 / 闭栏行整行被空 marker 覆盖。
+    if (role === 'first' || role === 'last') {
+      if (line.text.length > 0) out.push({ from: line.from, to: line.to });
+      continue;
+    }
+    // 表格行的 conceal 由表格 widget 负责(单元格文字是可见的,必须留下命中),
+    // 判定与 markdownLivePreviewPlugin 完全一致。行形状近似的写法会漏判
+    // 真正的表格块,也会误判带竖线的普通行。
+    if (number <= tableLinesThrough) continue;
+    const tableBlock = findMarkdownTableAtLineInDoc(doc, number);
+    if (tableBlock) {
+      tableLinesThrough = doc.lineAt(tableBlock.to).number;
+      continue;
+    }
+    addMarkdownConcealDecorations(collectOnlyBuilder(out), line.from, line.text, []);
+  }
+  return out;
+}
+
+/** 只实现 `add` 的 RangeSetBuilder 替身:把 conceal 区间收进数组。 */
+function collectOnlyBuilder(out: DocSearchHiddenRange[]): RangeSetBuilder<Decoration> {
+  return { add: (from: number, to: number) => void out.push({ from, to }) } as unknown as RangeSetBuilder<Decoration>;
 }
 
 class MarkdownMarkerWidget extends WidgetType {
@@ -1115,11 +1168,11 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
           while (!cursor.next().done) {
             scanned.push({ from: cursor.value.from, to: cursor.value.to, active: false });
           }
-          // 丢掉用户看不见的区间(表格结构字符 / 图片 alt):命中计数必须等于
-          // 真正画得出来的高亮,否则搜索条会报一个点不到的高亮。
+          // 丢掉用户看不见的区间(表格结构字符 / 图片 alt / mermaid 块 /
+          // conceal 标记):命中计数必须等于真正画得出来的高亮。
           const out = filterVisibleDocSearchRanges(
             scanned,
-            collectHiddenSearchRanges(doc, isMarkdownRef.current),
+            collectDocSearchHiddenRanges(doc, isMarkdownRef.current),
           );
           matchesRef.current = out;
           // Render all matches; no active until setActive() picks one.

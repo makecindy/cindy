@@ -2,12 +2,13 @@
  * markdownMermaidLivePreview — render ```mermaid fenced blocks as SVG inside
  * the doc-mode CodeMirror editor (workdir-browse → FileBodyView).
  *
- * 搜索高亮的已知限制:mermaid 块同样是 `Decoration.replace({block: true,
- * widget})`,源码区间上的 `cm-doc-search-match` mark 装饰不会渲染。图上的
- * label 文字是用户看得见的、也确实是他们会搜的内容,所以**命中保留**(计数
- * 与跳转仍然正确),只是暂时无法像 markdown 表格那样在 DOM 里补高亮 —— label
- * 到 SVG 文本节点的可靠映射尚不存在。与表格相反,图片语法整块排除(alt 在
- * 预览里不渲染)。口径集中在 PlaintextEditor.collectHiddenSearchRanges。
+ * 搜索命中的口径:mermaid 块**整块不命中**。它是
+ * `Decoration.replace({block: true, widget})` + 异步渲染的 SVG,源码区间到图
+ * 上文字没有可计算的映射(label 由解析 + 布局产出,源码里的 `A[开始]` 只留
+ * 「开始」,方括号是语法;渲染还会 `replaceChildren` 整块替换、SVG 还有主题
+ * 缓存),所以无法在图内定位高亮。既然画不出高亮,就不计入命中 —— 口径统一
+ * 在 PlaintextEditor.collectDocSearchHiddenRanges(与图片 alt、conceal 标记同批)。
+ * 需要看图里的文字请用 hover 工具条的 Edit Source(源码视图)。
  *
  * Implementation shape mirrors `markdownTableLivePreview`:
  *   - StateField scans the whole doc on docChange (not on selection/viewport

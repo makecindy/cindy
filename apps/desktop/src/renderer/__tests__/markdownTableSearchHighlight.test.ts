@@ -17,7 +17,10 @@ import {
   collectMarkdownTableHiddenRanges,
   markdownTableDecorationField,
 } from '@/components/markdown/markdownTableLivePreview';
-import { searchHighlightField } from '@/components/markdown/PlaintextEditor';
+import {
+  collectDocSearchHiddenRanges,
+  searchHighlightField,
+} from '@/components/markdown/PlaintextEditor';
 import {
   docSearchRangesField,
   filterVisibleDocSearchRanges,
@@ -32,6 +35,27 @@ const DOC = [
   '| --- | --- |',
   '| alpha | ready |',
   '| beta | blocked |',
+].join('\n');
+
+const DOC_WITH_MERMAID = [
+  'intro alpha',
+  '',
+  '```mermaid',
+  'graph TD',
+  '  A[alpha] --> B[结束]',
+  '```',
+  '',
+  'tail alpha',
+].join('\n');
+
+const DOC_WITH_MARKUP = [
+  '# alpha heading',
+  '',
+  '- alpha bullet',
+  '',
+  'plain **alpha** text with `alpha` code',
+  '',
+  '> alpha quote',
 ].join('\n');
 
 /** TableWidget 是模块私有的,测试按结构取它暴露的两个成员。 */
@@ -53,11 +77,11 @@ function findMatches(query: string, doc: CodeMirrorText): DocSearchRange[] {
   return out;
 }
 
-/** 复刻 PlaintextEditor.findAll 的可见性口径(表格结构字符 + 图片 alt)。 */
+/** 复刻 PlaintextEditor.findAll 的可见性口径(直接调用生产实现)。 */
 function visibleMatches(query: string, doc: CodeMirrorText = docOf()): DocSearchRange[] {
   return filterVisibleDocSearchRanges(
     findMatches(query, doc),
-    collectMarkdownTableHiddenRanges(doc),
+    collectDocSearchHiddenRanges(doc, true),
   );
 }
 
@@ -130,6 +154,45 @@ describe('markdown table hidden ranges (search visibility)', () => {
     const doc = docOf('plain text without tables');
     expect(collectMarkdownTableHiddenRanges(doc)).toEqual([]);
     expect(visibleMatches('plain', doc)).toHaveLength(1);
+  });
+});
+
+describe('search only matches text the user can see', () => {
+  it('drops mermaid block matches because the figure cannot be highlighted', () => {
+    const doc = docOf(DOC_WITH_MERMAID);
+    // 源码里有 3 处 alpha(正文 2 + 图内 label 1)
+    expect(findMatches('alpha', doc)).toHaveLength(3);
+    // 去掉 mermaid 块后只剩正文两处,且它们都真的画得出高亮
+    const visible = visibleMatches('alpha', doc);
+    expect(visible).toHaveLength(2);
+    for (const range of visible) {
+      expect(doc.lineAt(range.from).text).toContain('alpha');
+    }
+    // 图内其它 label 文字也不再命中
+    expect(visibleMatches('开始', doc)).toEqual([]);
+  });
+
+  it('drops concealed markdown markers but keeps the text around them', () => {
+    const doc = docOf(DOC_WITH_MARKUP);
+    // `#`、`> `、`**`、反引号都被 live preview 换成 widget / 空白
+    expect(visibleMatches('#', doc)).toEqual([]);
+    expect(visibleMatches('> ', doc)).toEqual([]);
+    expect(visibleMatches('**', doc)).toEqual([]);
+    expect(visibleMatches('`', doc)).toEqual([]);
+    // 正文文字全保留(标题 / 列表 / 强体 / 行内代码 / 引用)
+    expect(visibleMatches('alpha', doc)).toHaveLength(5);
+  });
+
+  it('leaves non-mermaid fenced code alone', () => {
+    const doc = docOf(['```js', 'const alpha = 1;', '```', '', 'alpha tail'].join('\n'));
+    // 围栏内是普通文本(不做 conceal),两处都该命中
+    expect(visibleMatches('alpha', doc)).toHaveLength(2);
+  });
+
+  it('never filters anything for non-markdown documents', () => {
+    const doc = docOf(['# alpha', '- alpha', '```mermaid', 'graph TD', '```'].join('\n'));
+    expect(collectDocSearchHiddenRanges(doc, false)).toEqual([]);
+    expect(visibleMatches('alpha', doc)).toHaveLength(2);
   });
 });
 

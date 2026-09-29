@@ -119,7 +119,9 @@ export function findMarkdownTableAtLine(
   return findMarkdownTableAtLineInDoc(view.state.doc, lineNumber);
 }
 
-function findMarkdownTableAtLineInDoc(
+// 导出给搜索可见性口径用:PlaintextEditor 收集 conceal 区间时要与实际渲染
+// 用完全相同的表格判定(而不是 `isMarkdownTableSourceLine` 那种行形状近似)。
+export function findMarkdownTableAtLineInDoc(
   doc: EditorView['state']['doc'],
   lineNumber: number,
 ): MarkdownTableBlock | null {

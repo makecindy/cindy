@@ -8,8 +8,12 @@
  * "1/2",但表格里的那一处永远没有高亮。命中位置因此必须能被 widget 自己
  * 读到,由 widget 在自己的 DOM 里补画高亮(见 markdownTableLivePreview)。
  *
- * 可见性口径由各 live-preview 模块自己提供区间(`collectMarkdownTableHiddenRanges`
- * 等),本文件只提供命中集合的存取与纯过滤,不反向依赖任何渲染模块,避免循环。
+ * 可见性口径由 PlaintextEditor.collectDocSearchHiddenRanges 集中提供(表格
+ * 结构字符、图片、mermaid、conceal 标记),本文件只提供命中集合的存取与纯
+ * 过滤,不反向依赖任何渲染模块,避免循环。
+ *
+ * 口径的底线:命中的东西用户一定看得见。报一个看不见也点不到的命中,比
+ * 少报一个不可见字符更糟。
  */
 import { StateEffect, StateField } from '@codemirror/state';
 
