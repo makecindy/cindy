@@ -992,6 +992,9 @@ export default function SessionScreen() {
   > | null>(null);
   const messageScreenFocusedRef = useRef(false);
   const messageAppActiveRef = useRef(AppState.currentState === 'active');
+  // Stable: MessageRenderer re-runs its companion read acknowledgement when this changes.
+  const isReadingPositionActive = useCallback(
+    () => messageScreenFocusedRef.current && messageAppActiveRef.current, []);
   const handledMessageReloadRevisionRef = useRef(0);
   const [messageReloadRevision, setMessageReloadRevision] = useState(0);
   useFocusEffect(
@@ -9536,7 +9539,7 @@ export default function SessionScreen() {
                       </>
                     )}
                     scrollResetKey={sessionId}
-                    isReadingPositionActive={() => messageScreenFocusedRef.current && messageAppActiveRef.current}
+                    isReadingPositionActive={isReadingPositionActive}
                     syncingWhileEmpty={syncingWhileEmpty}
                     testID="session.messageList"
                   />

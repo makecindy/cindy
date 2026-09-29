@@ -59,10 +59,15 @@ async function update(userId: string, change: (snapshot: Snapshot) => void): Pro
   const next = previous.then(async () => {
     const snapshot = await readRemoteResourceSnapshot(userId);
     if (expected !== epoch) return;
+    const before = JSON.stringify(snapshot);
     change(snapshot);
     const cleaned = normalize(snapshot);
-    snapshots.set(userId, cleaned); emit();
     const raw = JSON.stringify(cleaned);
+    snapshots.set(userId, cleaned);
+    // An unchanged cache must stay silent: subscribers re-render on every emit, and an
+    // open companion chat re-acknowledges its read position on render (a JS render loop).
+    if (raw === before) return;
+    emit();
     if (raw.length > MAX_CHARS) return;
     await AsyncStorage.setItem(PREFIX + userId, raw).catch(() => undefined);
     if (expected !== epoch) await AsyncStorage.removeItem(PREFIX + userId).catch(() => undefined);
