@@ -4358,6 +4358,10 @@
         "$type": "color",
         "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG_HSL}"
       },
+      "sidebar-item-active-border": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
+      },
       "splash-bg": {
         "$type": "color",
         "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG_HSL}"

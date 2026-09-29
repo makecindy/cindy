@@ -294,3 +294,9 @@ describe('theme-import 模板 · Markdown token 只在源主题提供时才产�
     expect(out['md-strong-fg']).toBe('#d19a66');
   });
 });
+
+describe('One Dark Pro sidebar selection', () => {
+  it('uses its existing accent as a visible selected-row border', () => {
+    expect(oneDarkPro.colors['sidebar-item-active-border']).toBe('#61afef');
+  });
+});

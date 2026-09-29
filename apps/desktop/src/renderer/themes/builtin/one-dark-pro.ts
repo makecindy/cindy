@@ -121,6 +121,7 @@ const GENERATED_OVERRIDES = {
   "settings-theme-auto-dark": "#282c34",
   "sidebar-action-icon": "220 9% 40%",
   "sidebar-item-active": "220 14% 20%",
+  "sidebar-item-active-border": "#61afef",
   "splash-bg": "220 13% 18%",
   "splash-text": "220 6% 53%",
   "splash-text-destructive": "219 14% 71%",
@@ -133,7 +134,6 @@ const GENERATED_OVERRIDES = {
   "form-field-hint": "#8b909a",
 } as const;
 // END GENERATED DS-8: theme
-
 
 
 export const oneDarkPro: Theme = {
