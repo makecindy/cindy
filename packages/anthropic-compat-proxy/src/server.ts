@@ -1697,6 +1697,38 @@ function forward(
             const hasSsePrefix = pendingText.startsWith('event:')
               || pendingText.startsWith('data:')
               || SSE_PREFIX_RE.test(pendingText);
+            // A field prefix alone cannot dispatch an event: wait for a
+            // data-containing block to end in a blank line, including across
+            // chunks. Scan only newly appended text so a large valid first
+            // event cannot turn into repeated whole-buffer work.
+            if (hasSsePrefix) {
+              while (true) {
+                const boundary = [
+                  { value: '\n\n', offset: pendingText.indexOf('\n\n', inferredSseBoundarySearchOffset) },
+                  { value: '\n\r\n', offset: pendingText.indexOf('\n\r\n', inferredSseBoundarySearchOffset) },
+                  { value: '\r\n\n', offset: pendingText.indexOf('\r\n\n', inferredSseBoundarySearchOffset) },
+                  { value: '\r\n\r\n', offset: pendingText.indexOf('\r\n\r\n', inferredSseBoundarySearchOffset) },
+                ].filter((candidate) => candidate.offset !== -1)
+                  .sort((left, right) => left.offset - right.offset)[0];
+                if (!boundary) {
+                  // Retain three trailing characters to catch a delimiter
+                  // split across chunks (\n\n or \r\n\r\n).
+                  inferredSseBoundarySearchOffset = Math.max(
+                    inferredSseEventStart,
+                    pendingText.length - 3,
+                  );
+                  break;
+                }
+                const completeEvent = pendingText.slice(inferredSseEventStart, boundary.offset);
+                inferredSseEventStart = boundary.offset + boundary.value.length;
+                inferredSseBoundarySearchOffset = inferredSseEventStart;
+                if (SSE_DATA_FIELD_RE.test(completeEvent)) {
+                  respHeaders['content-type'] = 'text/event-stream';
+                  commitStreamResponse();
+                  return;
+                }
+              }
+            }
             const pendingCap = hasSsePrefix
               ? STREAM_GATE_INFERRED_EVENT_CAP_BYTES
               : STREAM_GATE_PENDING_CAP_BYTES;
@@ -1709,37 +1741,6 @@ function forward(
               rejectInvalidStreamResponse(code, { bytes: totalBytes });
               upstreamReq.destroy(new Error(`invalid streaming response (${code})`));
               return;
-            }
-            // A field prefix alone cannot dispatch an event: wait for a
-            // data-containing block to end in a blank line, including across
-            // chunks. Scan only newly appended text so a large valid first
-            // event cannot turn into repeated whole-buffer work.
-            if (hasSsePrefix) {
-              while (true) {
-                const lfEnd = pendingText.indexOf('\n\n', inferredSseBoundarySearchOffset);
-                const crlfEnd = pendingText.indexOf('\r\n\r\n', inferredSseBoundarySearchOffset);
-                const hasLf = lfEnd !== -1;
-                const hasCrlf = crlfEnd !== -1;
-                if (!hasLf && !hasCrlf) {
-                  // Retain three trailing characters to catch a delimiter
-                  // split across chunks (\n\n or \r\n\r\n).
-                  inferredSseBoundarySearchOffset = Math.max(
-                    inferredSseEventStart,
-                    pendingText.length - 3,
-                  );
-                  break;
-                }
-                const eventEnd = !hasCrlf || (hasLf && lfEnd < crlfEnd) ? lfEnd : crlfEnd;
-                const delimiterLength = eventEnd === lfEnd ? 2 : 4;
-                const completeEvent = pendingText.slice(inferredSseEventStart, eventEnd);
-                inferredSseEventStart = eventEnd + delimiterLength;
-                inferredSseBoundarySearchOffset = inferredSseEventStart;
-                if (SSE_DATA_FIELD_RE.test(completeEvent)) {
-                  respHeaders['content-type'] = 'text/event-stream';
-                  commitStreamResponse();
-                  return;
-                }
-              }
             }
             // A valid prefix is waiting only for the terminator of its first data
             // event; do not also apply the generic non-SSE 64 KiB limit below.
