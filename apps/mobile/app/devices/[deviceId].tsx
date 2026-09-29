@@ -319,6 +319,10 @@ function DeviceDetailScreenContent() {
       // A successful sessions:list is authoritative reachability evidence even when relay
       // presence was not replayed. Retire both offline caches before the schedule reload.
       remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
+      // clearDeviceMirrorInvalidation drops the visible marker and its generation can
+      // restart from 1 on the next offline cycle. Forget this cycle's consumption so
+      // a subsequent disconnect still invalidates the sessions already on this page.
+      consumedScheduleMirrorInvalidationsRef.current.delete(deviceId);
       invalidateOfflineScheduleIndexFailureFor(deviceId);
       // 节流缓存与首页共用同一 key(deviceId):两页交替浏览时不重复全量拉取(单飞 + TTL,
       // 拥塞背景见 scheduleIndex 注释)。
