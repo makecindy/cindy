@@ -4922,6 +4922,14 @@ interface ElectronAPI {
           codex: number;
           claude: number;
           existing: number;
+          managedDialogue?: number;
+          claudeReasons?: {
+            unreadable: number;
+            internal: number;
+            noEvents: number;
+            windowLimit: number;
+            invalidId: number;
+          };
         };
         currentProjectDirs: string[];
       }>;
