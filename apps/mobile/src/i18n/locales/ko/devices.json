@@ -677,6 +677,8 @@
     "artifactsEmpty": "아직 결과물이 없습니다. 팀원에게 만들어 달라고 요청하세요.",
     "openSourceTask": "원본 세션 열기",
     "modelFollowsDefault": "현재 기본 모델 후보 사용",
+    "taskModel": "세션 모델",
+    "taskInheritsPrimary": "기본 모델 상속",
     "modelOverride": "이 팀원의 개별 모델 후보 사용 중",
     "modelsUnavailable": "사용 가능한 모델이 없습니다. 컴퓨터에서 이 팀원의 모델 설정을 확인한 후 새로 고치세요.",
     "artifactsRecovery": "메시지 카드에서 파일을 열거나 {{deviceName}}에서 파일을 확인하세요.",

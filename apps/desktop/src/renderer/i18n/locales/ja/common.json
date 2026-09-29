@@ -7824,6 +7824,10 @@
     },
     "model": {
       "description": "このパートナーが使用するモデルを選びます。",
+      "primary": "メインモデル",
+      "task": "セッション用モデル",
+      "inheritPrimary": "メインモデルを継承",
+      "inheritingPrimary": "新しいバックグラウンドセッションはメインモデルを継承します",
       "restoreDefault": "デフォルトのモデルに戻す"
     },
     "modelChain": {

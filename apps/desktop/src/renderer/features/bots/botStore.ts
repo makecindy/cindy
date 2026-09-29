@@ -41,6 +41,8 @@ export interface BotCapabilities {
   modelChain: BotModelRoute[];
   /** null follows the global Bot default; an array is this Bot's explicit chain. */
   modelChainOverride?: BotModelRoute[] | null;
+  /** Independent background-task route; absent/null inherits the live primary model. */
+  taskModelOverride?: BotModelRoute | null;
   skillMode: 'inherit' | 'allowlist';
   /**
    * @deprecated 旧版“跟随全局”配置的兼容字段。Bot 已不继承全局 Skill，

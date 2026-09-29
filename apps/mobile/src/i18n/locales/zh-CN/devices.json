@@ -677,6 +677,8 @@
     "artifactsEmpty": "还没有成果，可以让伙伴创作一些内容。",
     "openSourceTask": "打开来源任务",
     "modelFollowsDefault": "跟随当前默认模型链",
+    "taskModel": "任务模型",
+    "taskInheritsPrimary": "继承主模型",
     "modelOverride": "使用此伙伴的自定义模型链",
     "modelsUnavailable": "暂无可用模型，请在电脑上检查此伙伴的模型设置后刷新。",
     "artifactsRecovery": "请从消息卡中打开文件，或在 {{deviceName}} 上浏览文件。",

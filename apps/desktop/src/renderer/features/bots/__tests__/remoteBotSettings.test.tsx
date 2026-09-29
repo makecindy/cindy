@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
@@ -146,9 +146,22 @@ async function open() {
   const view = render(<RemoteBotSettings bot={bot} beforeCloseRef={close} onDeleted={vi.fn()} />);
   await waitFor(() => expect(screen.getByRole('button', { name: 'Models' })).toBeTruthy());
   fireEvent.click(screen.getByRole('button', { name: 'Models' }));
-  await waitFor(() => expect(screen.getByText('Choose account')).toBeTruthy());
+  await waitFor(() => expect(screen.getAllByText('Choose account').length).toBeGreaterThan(0));
   return view;
 }
+it('saves an independent task route to the owning host without changing the primary', async () => {
+  const remote = resource();
+  remote.actions[0].fields.push({ id: 'taskModel', label: 'Task model', kind: 'multiline' }, { id: 'taskFollowsPrimary', label: 'Inherit primary', kind: 'toggle' });
+  Object.assign(remote.blocks[0].data.values, { taskModel: JSON.stringify(chain), taskFollowsPrimary: true });
+  h.invoke.mockImplementation(async (_: string, channel: string) => channel === REMOTE_RESOURCE_GET_CHANNEL ? remote : { effects: [] });
+  await open();
+  expect(h.model.deviceId).toBe('host');
+  fireEvent.click(within(screen.getByTestId('bot-task-model-controls')).getByText('Choose account'));
+  fireEvent.click(screen.getByText('bots.save'));
+  await waitFor(() => expect(h.invoke).toHaveBeenCalledWith('host', REMOTE_RESOURCE_INVOKE_CHANNEL, [expect.objectContaining({
+    input: { taskFollowsPrimary: false, taskModel: JSON.stringify([{ harness: 'codex', model: 'gpt-6', providerId: 'openai:remote-account', effort: 'high', fastMode: true }]) },
+  })]));
+});
 it('saves the complete model route on the selected host using a renewed opaque action', async () => {
   await open();
   expect(h.model.deviceId).toBe('host');
@@ -205,7 +218,7 @@ it('applies a draft only through Save and asks before closing or going back with
   h.confirm.mockResolvedValueOnce(false);
   fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
   await waitFor(() => expect(h.confirm).toHaveBeenCalledTimes(2));
-  expect(screen.getByText('Choose account')).toBeTruthy();
+  expect(screen.getAllByText('Choose account').length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Models' })).toBeTruthy());
   await act(async () => {

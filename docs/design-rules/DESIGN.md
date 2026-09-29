@@ -296,6 +296,15 @@ recovery content may fill the explanation slot without replacing the header layo
 Identity, state, action semantics and pending implementation are defined in
 [供应商设置](../product-rules/provider-settings.md). This contract does not declare existing headers migrated.
 
+### Teammate model settings
+
+The existing model page groups the primary model and task model by purpose. Both use the shared
+model picker, retaining provider account, Harness, thinking level and Fast. The primary backup chain
+stays folded; the task model is a single route. Task settings start in “Inherit Primary Model” and
+provide a compact restore action after an explicit selection. Desktop separates the two groups with
+the semantic border token; mobile uses the existing grouped spacing and inheritance switch.
+Reuse themed controls for Light/Dark; this contract does not claim runtime visual verification.
+
 ### Inputs & Forms
 
 ```

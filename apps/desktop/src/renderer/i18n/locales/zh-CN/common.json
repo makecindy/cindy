@@ -7824,6 +7824,10 @@
     },
     "model": {
       "description": "选择这个伙伴使用的模型。",
+      "primary": "主模型",
+      "task": "任务模型",
+      "inheritPrimary": "继承主模型",
+      "inheritingPrimary": "继承主模型，用于新建后台任务",
       "restoreDefault": "恢复默认模型"
     },
     "modelChain": {

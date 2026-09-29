@@ -68,6 +68,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const [page, setPage] = useState('home');
   const [modelStage, setModelStage] = useState<'profile' | 'closing-profile' | 'picker' | 'closing-picker'>('profile');
   const [modelIndex, setModelIndex] = useState(0);
+  const [modelPurpose, setModelPurpose] = useState<'primary' | 'task'>('primary');
   const [editor, setEditor] = useState<CompanionProfileData | null>(null);
   const [editorPanel, setEditorPanel] = useState<string | null>(null);
   const [editorResourceId, setEditorResourceId] = useState('');
@@ -300,8 +301,26 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const memoryPage = <CompanionMemoryPage memory={memory} online={online} botName={name} memoryEnabled={actionPanel('memory')?.values.memory !== false} />;
   const modelValues = editing ? values : panel?.values ?? {};
   const changeValues = (next: ProfileValues) => { if (!editing) draftBase.current = panel?.values ?? {}; setValues(next); setEditing(true); };
-  const models = <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={changeValues}
-    onPick={index => { setModelIndex(index); setModelStage('closing-profile'); }} />;
+  const taskValues = {
+    modelChain: modelValues.taskFollowsPrimary === true
+      ? JSON.stringify(readCompanionModelChain(modelValues.modelChain).slice(0, 1))
+      : modelValues.taskModel,
+    followsDefault: modelValues.taskFollowsPrimary === true,
+  };
+  const pickModel = (purpose: 'primary' | 'task', index: number) => {
+    setModelPurpose(purpose); setModelIndex(index); setModelStage('closing-profile');
+  };
+  const models = <View style={{ gap: spacing.lg }}>
+    <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={changeValues}
+      onPick={index => pickModel('primary', index)} />
+    {panel?.action?.fields?.some(field => field.id === 'taskModel') && <View style={{ gap: spacing.sm }}>
+      <Text style={{ fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium, color: colors.textPrimary }}>{t('devices.companionProfile.taskModel')}</Text>
+      <CompanionModelChain single deviceId={deviceId} values={taskValues} disabled={busy || !online || !panel?.action}
+        inheritanceLabel={t('devices.companionProfile.taskInheritsPrimary')}
+        onChange={next => changeValues({ ...modelValues, taskFollowsPrimary: next.followsDefault === true, taskModel: String(next.modelChain ?? '[]') })}
+        onPick={index => pickModel('task', index)} />
+    </View>}
+  </View>;
   const afterClosed = () => {
     if (modelStage === 'closing-profile') { setModelStage('picker'); return; }
     const taskId = pendingTask.current; pendingTask.current = null;
@@ -316,9 +335,13 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const confirm = (target: ProfilePanel | null) => { setConfirmation(target); if (target && (target.id === 'delete' || page === 'home')) { setValues({}); setEditing(false); } };
   const selectEditorPanel = (item: ProfilePanel) => { setEditorPanel(item.id); setValues(item.values); setEditing(false); };
   const retry = () => { if (page === 'editor') void retryEditor(); else void refresh(); };
-  const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={readCompanionModelChain(modelValues.modelChain)[modelIndex]}
+  const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={readCompanionModelChain(modelPurpose === 'task' ? taskValues.modelChain : modelValues.modelChain)[modelIndex]}
     onClose={() => setModelStage('closing-picker')} onClosed={() => setModelStage('profile')}
-    onSelect={route => { const chain = readCompanionModelChain(modelValues.modelChain);
+    onSelect={route => {
+      if (modelPurpose === 'task') {
+        changeValues({ ...modelValues, taskModel: JSON.stringify([route]), taskFollowsPrimary: false }); return true;
+      }
+      const chain = readCompanionModelChain(modelValues.modelChain);
       if (chain.some((item, index) => index !== modelIndex && item.harness === route.harness && item.model === route.model && item.providerId === route.providerId)) return false;
       chain[modelIndex] = route; changeValues({ ...modelValues, modelChain: JSON.stringify(chain), followsDefault: false }); return true; }} />;
 

@@ -184,3 +184,23 @@ it('rejects invalid, duplicate and oversized model chains without modifying the 
   }
   expect(f.deps.update).not.toHaveBeenCalled();
 });
+
+
+it('saves and clears a task model without changing the primary model', async () => {
+  const f = fixture();
+  const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
+  let resource = await f.get();
+  expect((resource.blocks?.find(block => block.id === 'models')?.data as any).values.taskFollowsPrimary).toBe(true);
+  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false, taskModel: JSON.stringify([route]) }));
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { taskModelOverride: route } }, 3);
+  resource = await f.get();
+  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: true }));
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { taskModelOverride: null } }, 4);
+});
+
+it('rejects task model submissions that discard the harness identity', async () => {
+  const f = fixture(); const resource = await f.get();
+  await expect(f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false,
+    taskModel: JSON.stringify([{ model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false }]) }))).rejects.toThrow();
+  expect(f.deps.update).not.toHaveBeenCalled();
+});
