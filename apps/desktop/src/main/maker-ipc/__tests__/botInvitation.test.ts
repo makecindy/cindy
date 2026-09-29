@@ -309,7 +309,9 @@ describe('companion invitation with SQLite and real skill files', () => {
     seed({ draft });
     queueBotInvitation('bot-1');
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    // CI shards run this file under heavy parallel load; the real fs+DB
+    // pipeline (skills → avatar → welcome → ready) can exceed the default 1s.
+    await vi.waitFor(() => expect(state().stage).toBe('ready'), { timeout: 15_000 });
     expect(h.generate).not.toHaveBeenCalled();
     expect(await readBotSkill(h.root, 'bot-1', 'develop-characters')).toMatchObject(
       draft.skills[0],
@@ -331,7 +333,7 @@ describe('companion invitation with SQLite and real skill files', () => {
     seed({ stage: 'skills', draft });
     await seedBotSkillIfMissing(h.root, 'bot-1', { ...draft.skills[0]!, body: '用户自己的方法' });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await vi.waitFor(() => expect(state().stage).toBe('ready'), { timeout: 15_000 });
     expect(h.generate).not.toHaveBeenCalled();
     expect((await readBotSkill(h.root, 'bot-1', 'develop-characters'))?.body).toBe(
       '用户自己的方法',
