@@ -172,8 +172,10 @@ function isMarkdownTableSeparator(text: unknown): boolean {
 
 /**
  * 表格里"看得见但不是单元格文字"的区间:分隔行 `| --- | --- |`、单元格之间
- * 的竖线、行首行尾空白。搜索命中落在这些区间时既没有可见文字、也不该计入
- * 命中数(否则搜索条会报一个用户永远看不到的高亮)。
+ * 的竖线、行首行尾空白,以及单元格内部的 inline 标记字符(渲染时被换成
+ * `<strong>` / `<code>` / `<br>`,星号与反引号本身不显示)。搜索命中落在这些
+ * 区间时既没有可见文字、也不该计入命中数(否则搜索条会报一个用户永远看不到
+ * 的高亮)。
  *
  * markdown 表格是 block replace widget,这些区间由本函数按 doc 坐标提供,
  * 调用方(PlaintextEditor.findAll)据此过滤命中集合。
@@ -203,27 +205,108 @@ function complementOfCellTextRanges(
   block: MarkdownTableBlock,
 ): Array<{ from: number; to: number }> {
   const visible: Array<{ from: number; to: number }> = [];
+  const hidden: Array<{ from: number; to: number }> = [];
   const firstLine = doc.lineAt(block.from).number;
   const lastLine = doc.lineAt(block.to).number;
   for (let number = firstLine; number <= lastLine; number++) {
     const line = doc.line(number);
-    // 分隔行渲染成表格边框,`---` 不对应任何可见文字 → 整行算隐藏。
+    // 分隔行渲染成表格边框,`---` / `:` 不对应任何可见文字 → 整行算隐藏。
     if (isMarkdownTableSeparator(line.text)) continue;
     for (const cell of splitMarkdownTableRowWithRanges(line.text, line.from)) {
-      if (cell.contentTo > cell.contentFrom) {
-        visible.push({ from: cell.contentFrom, to: cell.contentTo });
-      }
+      if (cell.contentTo <= cell.contentFrom) continue;
+      visible.push({ from: cell.contentFrom, to: cell.contentTo });
+      hidden.push(...collectCellInlineMarkerRanges(cell));
     }
   }
   visible.sort((a, b) => a.from - b.from);
-
-  const out: Array<{ from: number; to: number }> = [];
+  // 补集(块级结构字符)+ 单元格内部的 inline 标记字符,最后合并去重。
+  const out: Array<{ from: number; to: number }> = [...hidden];
   let cursor = block.from;
   for (const span of visible) {
     if (span.from > cursor) out.push({ from: cursor, to: span.from });
     cursor = Math.max(cursor, span.to);
   }
   if (cursor < block.to) out.push({ from: cursor, to: block.to });
+  return mergeRanges(out);
+}
+
+/**
+ * 单元格内联标记的一个 token。`contentStart/contentEnd` 是标记内部的可见内容
+ * 区间(strong 的两个 `**`、code 的两个反引号、`<br>` 整段),`start/end` 是整段
+ * 范围。渲染与搜索可见性都从这里取,避免两套正则各自演化。
+ */
+type InlineMarkdownToken = {
+  kind: 'strong' | 'code' | 'break';
+  start: number;
+  end: number;
+  contentStart: number;
+  contentEnd: number;
+};
+
+const INLINE_MARKDOWN_RE = /(\*\*([^*\n]+)\*\*|`([^`\n]+)`|<br\s*\/?>)/gi;
+
+function matchInlineMarkdownTokens(source: string): InlineMarkdownToken[] {
+  const tokens: InlineMarkdownToken[] = [];
+  for (const match of source.matchAll(INLINE_MARKDOWN_RE)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    if (match[0].toLowerCase().startsWith('<br')) {
+      // `<br>` 整段变成换行,自身不显示。
+      tokens.push({ kind: 'break', start, end, contentStart: start, contentEnd: end });
+      continue;
+    }
+    const markerLength = match[2] != null ? 2 : 1;
+    tokens.push({
+      kind: match[2] != null ? 'strong' : 'code',
+      start,
+      end,
+      contentStart: start + markerLength,
+      contentEnd: end - markerLength,
+    });
+  }
+  return tokens;
+}
+
+/**
+ * 单元格内部的"被标记吃掉"字符:`**x**` 的两个星号、`` `c` `` 的反引号、
+ * `<br>` 整段 —— 渲染时它们变成 `<strong>` / `<code>` / 换行,屏幕上不显示。
+ *
+ * 用与 `buildRenderedCellSegments` 同一份 token 解析(不另写正则、不靠渲染
+ * 偏移映射反推),所以标记规则变了这里自动跟着变。
+ *
+ * 口径前提:按"未 reveal"计算。reveal 只发生在单元格正在编辑时(光标附近
+ * 标记显形),而搜索时焦点在搜索框,不存在 reveal。
+ */
+function collectCellInlineMarkerRanges(
+  cell: { text: string; contentFrom: number; contentTo: number },
+): Array<{ from: number; to: number }> {
+  const text = cell.text.trim();
+  const tokens = matchInlineMarkdownTokens(text);
+  if (tokens.length === 0) return [];
+  const out: Array<{ from: number; to: number }> = [];
+  const base = cell.contentFrom;
+  for (const token of tokens) {
+    if (token.kind === 'break') {
+      out.push({ from: base + token.start, to: base + token.end });
+      continue;
+    }
+    out.push({ from: base + token.start, to: base + token.contentStart });
+    out.push({ from: base + token.contentEnd, to: base + token.end });
+  }
+  return out;
+}
+
+function mergeRanges(ranges: Array<{ from: number; to: number }>): Array<{ from: number; to: number }> {
+  const sorted = [...ranges].sort((a, b) => a.from - b.from || a.to - b.to);
+  const out: Array<{ from: number; to: number }> = [];
+  for (const span of sorted) {
+    const last = out[out.length - 1];
+    if (last && span.from <= last.to) {
+      last.to = Math.max(last.to, span.to);
+      continue;
+    }
+    out.push({ ...span });
+  }
   return out;
 }
 
@@ -1256,7 +1339,8 @@ function renderInlineMarkdown(
 /**
  * 把 cell 源码切成渲染片段(纯文本 / strong / code / 换行)。坐标推进规则
  * 必须与 `sourceOffsetToRenderedOffset` 一致(标记本身不占渲染长度,`<br>`
- * 占 1),否则高亮会错位。
+ * 占 1),否则高亮会错位。内联标记的切分与搜索可见性口径共用
+ * `matchInlineMarkdownTokens`。
  */
 function buildRenderedCellSegments(
   source: string,
@@ -1265,7 +1349,6 @@ function buildRenderedCellSegments(
   const segments: RenderedCellSegment[] = [];
   let pos = 0;
   let rendered = 0;
-  const pattern = /(\*\*([^*\n]+)\*\*|`([^`\n]+)`|<br\s*\/?>)/gi;
 
   const pushText = (text: string): void => {
     if (text.length === 0) return;
@@ -1273,39 +1356,19 @@ function buildRenderedCellSegments(
     rendered += text.length;
   };
 
-  for (const match of source.matchAll(pattern)) {
-    const start = match.index ?? 0;
-    const end = start + match[0].length;
-    if (start > pos) pushText(source.slice(pos, start));
-    if (match[0].toLowerCase().startsWith('<br')) {
+  for (const token of matchInlineMarkdownTokens(source)) {
+    if (token.start > pos) pushText(source.slice(pos, token.start));
+    if (token.kind === 'break') {
       segments.push({ kind: 'break', renderedFrom: rendered, renderedTo: rendered + 1 });
       rendered += 1;
-      pos = end;
-      continue;
+    } else if (shouldRevealInlineMarkdown(token.start, token.end, revealRanges)) {
+      pushText(source.slice(token.start, token.end));
+    } else {
+      const text = source.slice(token.contentStart, token.contentEnd);
+      segments.push({ kind: token.kind, text, renderedFrom: rendered, renderedTo: rendered + text.length });
+      rendered += text.length;
     }
-    if (shouldRevealInlineMarkdown(start, end, revealRanges)) {
-      pushText(match[0]);
-      pos = end;
-      continue;
-    }
-    if (match[2] != null) {
-      segments.push({
-        kind: 'strong',
-        text: match[2],
-        renderedFrom: rendered,
-        renderedTo: rendered + match[2].length,
-      });
-      rendered += match[2].length;
-    } else if (match[3] != null) {
-      segments.push({
-        kind: 'code',
-        text: match[3],
-        renderedFrom: rendered,
-        renderedTo: rendered + match[3].length,
-      });
-      rendered += match[3].length;
-    }
-    pos = end;
+    pos = token.end;
   }
   if (pos < source.length) pushText(source.slice(pos));
   return segments;

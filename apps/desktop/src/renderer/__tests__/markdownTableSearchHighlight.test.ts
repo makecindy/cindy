@@ -183,6 +183,31 @@ describe('search only matches text the user can see', () => {
     expect(visibleMatches('alpha', doc)).toHaveLength(5);
   });
 
+  it('drops table structure and cell-level inline markers, keeps cell words', () => {
+    const doc = docOf(
+      [
+        '| h1 | h2 |',
+        '| :--- | ---: |',
+        '| **x** | y |',
+        '| a \\| b | `c` |',
+        '| <br> d | e |',
+      ].join('\n'),
+    );
+    // 块级结构字符:竖线 / 分隔行 / 对齐冒号
+    expect(visibleMatches('-', doc)).toEqual([]);
+    expect(visibleMatches(':', doc)).toEqual([]);
+    // 单元格内的 inline 标记:星号、反引号、<br> 本身不显示
+    expect(visibleMatches('**', doc)).toEqual([]);
+    expect(visibleMatches('`', doc)).toEqual([]);
+    expect(visibleMatches('<br>', doc)).toEqual([]);
+    // 被标记包住的文字、转义竖线、普通单元格文字都照常命中
+    expect(visibleMatches('x', doc)).toHaveLength(1);
+    expect(visibleMatches('y', doc)).toHaveLength(1);
+    expect(visibleMatches('c', doc)).toHaveLength(1);
+    expect(visibleMatches('e', doc)).toHaveLength(1);
+    expect(visibleMatches('\\|', doc)).toHaveLength(1);
+  });
+
   it('leaves non-mermaid fenced code alone', () => {
     const doc = docOf(['```js', 'const alpha = 1;', '```', '', 'alpha tail'].join('\n'));
     // 围栏内是普通文本(不做 conceal),两处都该命中
