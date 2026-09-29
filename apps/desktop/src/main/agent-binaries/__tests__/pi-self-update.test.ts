@@ -74,6 +74,27 @@ describe('Pi release lookup authentication', () => {
     expect(electronFetch).toHaveBeenNthCalledWith(2, url, { signal, redirect: 'error', headers });
   });
 
+  it.each([401, 403])('still retries anonymously when the rejected response (%s) stream has errored', async status => {
+    readToken.mockResolvedValue(token);
+    const body = new ReadableStream({ start(controller) { controller.error(new Error('network stream failed')); } });
+    electronFetch.mockResolvedValueOnce(new Response(body, { status })).mockResolvedValueOnce(success());
+    const signal = new AbortController().signal;
+    await expect(piBinaryUpdateDefaults.fetchRelease(signal)).resolves.toEqual(release());
+    expect(electronFetch).toHaveBeenCalledTimes(2);
+    expect(electronFetch).toHaveBeenNthCalledWith(2, url, { signal, redirect: 'error', headers });
+  });
+
+  it('keeps caller cancellation authoritative when response cleanup also fails', async () => {
+    readToken.mockResolvedValue(token);
+    const controller = new AbortController();
+    electronFetch.mockImplementationOnce(async () => {
+      controller.abort();
+      return new Response(new ReadableStream({ start(stream) { stream.error(new Error('network stream failed')); } }), { status: 401 });
+    });
+    await expect(piBinaryUpdateDefaults.fetchRelease(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(electronFetch).toHaveBeenCalledTimes(1);
+  });
+
   it.each([null, token])('bounds retries when anonymous access is also rate limited (login=%s)', async login => {
     readToken.mockResolvedValue(login);
     electronFetch.mockImplementation(async () => new Response('rate limited', { status: 403 }));

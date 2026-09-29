@@ -46,7 +46,8 @@ export const piBinaryUpdateDefaults: PiBinaryUpdateDeps = {
     // A revoked/restricted login must not make public releases less accessible.
     // Retry once without credentials, within the original caller's deadline.
     if (token && (response.status === 401 || response.status === 403)) {
-      await response.body?.cancel();
+      // Stream cleanup can fail independently of the release lookup.
+      await response.body?.cancel().catch(() => undefined);
       signal.throwIfAborted();
       response = await net.fetch(url, {
         signal, redirect: 'error', headers: { Accept: 'application/vnd.github+json' },
