@@ -39,6 +39,9 @@ vi.mock('@/session/useCompanionGenerationCopy', () => ({
 }));
 vi.mock('@/session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: any) => el('span', { 'data-testid': 'status' }, text) }));
 
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
+vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: () => null }));
+vi.mock('@/session/ThinkingDots', () => ({ ThinkingDots: () => null }));
 import { BotGroupSpeakerRow } from '@/session/BotGroupSpeakerRow';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

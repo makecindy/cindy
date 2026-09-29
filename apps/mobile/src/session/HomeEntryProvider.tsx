@@ -3,6 +3,8 @@ import { useGlobalSearchParams, usePathname } from 'expo-router';
 import { useAuth } from '@/auth/AuthContext';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { homeEntryForRoute, readHomeEntry, saveHomeEntry, type CompanionListHref } from './homeEntryPreference';
+import { readHomeNavigationPreferences, type HomeNavigationPreferences } from './homeViewPreferenceStore';
+import { homeNavigationOwner } from './useHomeMode';
 
 const HomeEntryContext = createContext<{ ready: boolean; href: CompanionListHref | null }>({ ready: false, href: null });
 export const useHomeEntry = () => useContext(HomeEntryContext);
@@ -33,9 +35,15 @@ export function HomeEntryProvider({ children }: { children: ReactNode }) {
     if (!auth.initialized || !auth.isAuthenticated || !owner.accountKey) return;
     let cancelled = false;
     const initialRoute = route.current;
-    void readHomeEntry(owner.accountKey, owner.accountId).then((destination) => {
+    void Promise.all([
+      readHomeEntry(owner.accountKey, owner.accountId),
+      readHomeNavigationPreferences(homeNavigationOwner(auth.user)).catch((): HomeNavigationPreferences => ({})),
+    ]).then(([destination, navigation]) => {
       if (cancelled || !isMobileAuthOwnerCurrent(owner)) return;
-      setSnapshot({ owner, href: initialRoute.pathname === '/' && route.current === initialRoute ? destination : null });
+      // In teammate mode the home already is the teammate list: restoring the older collection route
+      // would stack a second list on top, whose Back then runs into the home's last-teammate restore.
+      const restored = navigation.mode === 'teammates' ? null : destination;
+      setSnapshot({ owner, href: initialRoute.pathname === '/' && route.current === initialRoute ? restored : null });
     });
     return () => { cancelled = true; };
     // Route changes deliberately do not restart hydration: explicit navigation wins.

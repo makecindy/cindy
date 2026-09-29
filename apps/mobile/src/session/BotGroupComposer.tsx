@@ -36,7 +36,7 @@ import {
 import { Text } from '@/components/AppText';
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
-import { iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { iconStroke, motionDuration, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { BOT_GROUP_STEP_AVATAR_SIZE, BotGroupAvatar } from './BotGroupAvatars';
 import { BotGroupMenu } from './BotGroupMenu';
@@ -46,6 +46,7 @@ import { ContextSheet, ContextSheetGroup, ContextSheetRow } from './ContextSheet
 import { RecentPhotosStrip } from './ContextSheetMediaViews';
 import { ImageLightbox } from './ImageLightbox';
 import { ComposerToolbarLeftGroup, ComposerToolbarSpacer, MobileComposerInputRow } from './MobileComposerInputRow';
+import { CompanionFadeIn } from './CompanionEntering';
 import { nextBotGroupSendAttempt, type BotGroupSendAttempt } from './botGroupRemote';
 import { canBrowsePhotoLibraryDirectly } from './photoLibraryPolicy';
 import type { RemoteSerializedAttachment } from './types';
@@ -275,7 +276,10 @@ export function BotGroupComposer({
   return <View style={styles.wrap} testID="botGroup.composer">
     {pickerOpen && query ? <View style={styles.picker} accessibilityLabel={t('groupChat.mention.label')} testID="botGroup.mentionPicker">
       <ScrollView keyboardShouldPersistTaps="always" style={styles.pickerScroll}>
-        {options.map((option) => <Pressable key={option.kind === 'all' ? 'all' : option.member.botId} accessibilityRole="button"
+        {/* M9: candidates ease in one after another, 30ms apart, fast 150ms from 4pt below. */}
+        {options.map((option, index) => <CompanionFadeIn key={option.kind === 'all' ? 'all' : option.member.botId} play distance={4}
+          duration={motionDuration.fast} delay={index * 30}>
+          <Pressable accessibilityRole="button"
           accessibilityLabel={option.label} onPress={() => choose(option)}
           style={({ pressed }) => [styles.pickerRow, pressed && mobileInteractionStyles.pressed]}
           testID={`botGroup.mention.${option.kind === 'all' ? 'all' : option.member.botId}`}>
@@ -284,7 +288,8 @@ export function BotGroupComposer({
             : <BotGroupAvatar deviceId={deviceId} identity={identityFor(option.member.botId, option.member.name)} size={BOT_GROUP_STEP_AVATAR_SIZE} online={online} />}
           <Text numberOfLines={1} style={styles.pickerName}>{option.label}</Text>
           {option.kind === 'all' ? <Text numberOfLines={1} style={styles.pickerHint}>{t('groupChat.mention.allHint')}</Text> : null}
-        </Pressable>)}
+          </Pressable>
+        </CompanionFadeIn>)}
       </ScrollView>
     </View> : null}
     {hint ? <Text accessibilityLiveRegion="polite" style={styles.hint}>{hint}</Text> : null}

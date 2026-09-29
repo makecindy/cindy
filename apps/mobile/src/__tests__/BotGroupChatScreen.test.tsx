@@ -40,6 +40,10 @@ vi.mock('react-native', () => {
     Alert: { alert: h.alert },
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
+    Keyboard: { dismiss: () => {} },
+    Animated: { View: box('div'), Value: class { setValue() {} interpolate() { return this; } }, timing: () => ({ start() {}, stop() {} }),
+      loop: () => ({ start() {}, stop() {} }), sequence: () => ({}) },
+    Easing: { inOut: () => undefined, ease: undefined, bezier: () => undefined },
   };
 });
 vi.mock('expo-router', () => ({
@@ -60,11 +64,12 @@ vi.mock('react-i18next', async (importOriginal) => ({
 }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
-  ['ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image']
+  ['ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
+    'Layers', 'ListChecks', 'Ellipsis', 'ChevronRight', 'ChevronDown']
     .map((name) => [name, () => null]),
 ));
-vi.mock('@/theme', () => ({
-  useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }), fontWeight: {}, iconStroke: {}, monoFont: 'mono',
+vi.mock('@/theme', async () => ({
+  ...await import('@/theme/tokens'), useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }), monoFont: 'mono',
 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
@@ -110,7 +115,7 @@ vi.mock('@/session/CompanionSheet', () => ({
 }));
 vi.mock('@/session/BotGroupAvatars', () => ({
   BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_STEP_AVATAR_SIZE: 24, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BOT_GROUP_ROW_AVATAR_SIZE: 32,
-  BotGroupAvatar: () => null, BotGroupAvatarStack: () => null,
+  BotGroupAvatar: () => null, BotGroupDuoAvatar: () => null,
   useBotGroupIdentities: () => (botId: string, fallbackName = '', member?: { name: string }) => ({ botId, name: fallbackName || member?.name || botId }),
 }));
 vi.mock('@/session/BotGroupSpeakerRow', () => ({
@@ -180,6 +185,9 @@ vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () 
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: () => h.teammates }));
 vi.mock('@/session/useBotGroupChat', () => ({ useBotGroupChat: () => h.chat }));
 
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
+vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: () => null }));
+vi.mock('@/session/ThinkingDots', () => ({ ThinkingDots: () => null }));
 import { BotGroupChatScreen } from '@/session/BotGroupChatScreen';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -381,7 +389,7 @@ describe('group timeline', () => {
       steps: [{ ...data.plans[0]!.steps[0]!, status: 'done' }, { ...data.plans[0]!.steps[1]!, status: 'failed' }] };
     await render(data);
     expect(byId('botGroup.followUp.retry')?.textContent).toContain('groupChat.timeline.retryStep');
-    expect(node.textContent).toContain('groupChat.timeline.stepFailed(name=阿布)');
+    expect(node.textContent).toContain('groupChat.followUp.failedStep(step=2)');
     await click('botGroup.followUp.retry');
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-retry', { planId: 'p1' });
   });
@@ -665,10 +673,11 @@ describe('group settings', () => {
     await act(async () => { h.inputs['botGroup.settings.name'].onChangeText('新名字'); });
     await act(async () => { h.inputs['botGroup.settings.name'].onBlur(); });
     expect(h.chat.act).toHaveBeenLastCalledWith('update', { name: '新名字' });
-    expect(byId('botGroup.settings.organizer.mimi')).toBeNull();
-    await click('botGroup.settings.organizer.abu');
+    // The organizer is not offered again; each member row opens its own menu.
+    expect(byId('botGroup.settings.memberMenu.mimi.action.organizer:mimi')).toBeNull();
+    await click('botGroup.settings.memberMenu.abu.action.organizer:abu');
     expect(h.chat.act).toHaveBeenLastCalledWith('update', { organizerBotId: 'abu' });
-    await click('botGroup.settings.remove.xiaoman');
+    await click('botGroup.settings.memberMenu.xiaoman.action.remove:xiaoman');
     expect(h.chat.act).toHaveBeenLastCalledWith('set-members', { botIds: ['mimi', 'abu'] });
     await click('botGroup.settings.add');
     // Current members are not offered again.
@@ -695,7 +704,7 @@ describe('group settings', () => {
     const data = group();
     data.members = data.members.slice(0, 2);
     await openSettings(data);
-    expect(byId('botGroup.settings.remove.abu')?.disabled).toBe(true);
+    expect(byId('botGroup.settings.memberMenu.abu.action.remove:abu')?.disabled).toBe(true);
   });
 
   it('deletes after the system confirmation, then leaves once the sheet has closed', async () => {

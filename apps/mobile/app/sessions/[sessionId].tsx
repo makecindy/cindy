@@ -16,7 +16,7 @@ import { getActiveMobileSessionRealm } from '@/config/env';
 import { FailedScheduleNotice } from '@/session/FailedScheduleNotice';
 import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
 import { CompanionHeader } from '@/session/CompanionHeader';
-import { CompanionNavigationDrawer } from '@/session/CompanionNavigationDrawer';
+import { useHiddenHistoryChase } from '@/session/hiddenHistoryChase';
 import { collectCompanionPluginInvocations } from '@/session/pluginInvocations';
 import { COMPANION_STATUS_AVATAR_SIZE, CompanionWorkingStatus, useCompanionDisplayResource, useCompanionWorkingLabel } from '@/session/CompanionWorkingStatus';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
@@ -696,6 +696,13 @@ const SESSION_ACTION_TEST_IDS = {
   usage: 'session.usageButton',
 } satisfies Record<SessionActionStripActionId, string>;
 const COMPOSER_CONTROL_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
+/**
+ * The companion chat draws its own header row (back, identity, settings). Hide the native bar the
+ * task header may have configured while the entry was still resolving, so its title and sync
+ * spinner never sit on top of the companion identity. Stable object: expo-router applies screen
+ * options in a layout effect.
+ */
+const COMPANION_NATIVE_HEADER_OPTIONS = { headerShown: false, headerTitle: '' } as const;
 const COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT;
 const COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD = 34;
 const COMPOSER_INPUT_LINE_HEIGHT = MOBILE_COMPOSER_INPUT_LINE_HEIGHT;
@@ -2269,12 +2276,6 @@ export default function SessionScreen() {
     companionResource?.ref.kind === 'bot' ? { source: 'bot' } : currentSession,
     false,
   );
-  const companionNavigationScope = JSON.stringify([auth.accountGeneration, deviceId, sessionId, companionResource?.ref.id, shareSelectionActive]);
-  const [companionNavigation, setCompanionNavigation] = useState({ scope: companionNavigationScope, open: false });
-  // Reused routes must not carry an open drawer (or a queued action) into another companion.
-  if (companionNavigation.scope !== companionNavigationScope) {
-    setCompanionNavigation({ scope: companionNavigationScope, open: false });
-  }
   const lastAckKeyRef = useRef<string | null>(null);
   const sessionResourceCards = useSessionResourceCards(
     deviceId, deviceName, sessionId, currentSession?.source, remoteSessionRunning,
@@ -5702,6 +5703,18 @@ export default function SessionScreen() {
     () => mergePendingSendItems(companionChat ? companionConversationItems(renderWindow.items) : renderWindow.items, pendingSendItems, optimisticClientIds),
     [companionChat, pendingSendItems, renderWindow.items, optimisticClientIds],
   );
+  const canLoadEarlierHistory = (historyView.snapshot.ready ? historyView.snapshot.hasMore : hasOlderMessages && messages.length > 0)
+    && !isScheduleDetail;
+  // A window of only hidden rows (a teammate's scheduled prompts) renders nothing and cannot scroll back:
+  // page older history until something shows. See hiddenHistoryChase.ts.
+  const chasingHiddenHistory = useHiddenHistoryChase({
+    scope: `${auth.accountGeneration}:${deviceId}:${sessionId}`,
+    enabled: appStateActive && remoteHistoryAvailable && !isScheduleDetail,
+    visibleCount: messageListItems.length,
+    canLoadEarlier: canLoadEarlierHistory,
+    loading: historyView.snapshot.ready ? historyView.snapshot.loading : loading || loadingEarlier,
+    cursor: historyView.snapshot.ready ? historyView.snapshot.nextCursor : oldestLoadedMessageCursor,
+  }, () => { void loadEarlierMessages(); });
   // Task links and notifications carry no teammate resource; the cached roster row supplies name and avatar.
   const companionDisplay = useCompanionDisplayResource(deviceId, sessionId, companionResource, companionChat);
   const companionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionDisplay?.ref.id ?? '',
@@ -8881,12 +8894,12 @@ export default function SessionScreen() {
     <>
     <Stack.Screen options={{ gestureEnabled: !sessionListDrawerOverlayMounted }} />
     {companionChat && companionResource && !shareSelectionActive ? <>
-      <SystemNavigationBack label={t('shared.back')} onPress={goBackToHome} />
+      <Stack.Screen options={COMPANION_NATIVE_HEADER_OPTIONS} />
       <CompanionHeader key={`${auth.accountGeneration}:${deviceId}:${companionResource.ref.id}`}
         resource={companionResource} deviceId={deviceId} deviceName={deviceName} online={!remoteUnavailableReason} controlsReady={companionEntry.ready}
+        working={!!companionWorkingLabel}
         onSearch={() => setSearchOpen(true)}
-        onBack={goBackToHome}
-        onOpenNavigation={() => setCompanionNavigation({ scope: companionNavigationScope, open: true })} />
+        onBack={goBackToHome} />
     </> : <SessionHeaderBar
               horizontalSystemHeader={horizontalSystemHeader}
               currentSession={currentSession}
@@ -9447,7 +9460,7 @@ export default function SessionScreen() {
                     topOverlayHeight={topOverlayHeight}
                     busyAction={messageActionBusy?.kind ?? null}
                     busyClientId={messageActionBusy?.clientId ?? null}
-                    canLoadEarlier={(historyView.snapshot.ready ? historyView.snapshot.hasMore : hasOlderMessages && messages.length > 0) && !isScheduleDetail}
+                    canLoadEarlier={canLoadEarlierHistory}
                     emptyTestID="session.messageList.empty"
                     focusedItemKey={focusedMessageItemKey ?? null}
                     focusedRequestKey={focusedMessageRequestKey}
@@ -9494,6 +9507,7 @@ export default function SessionScreen() {
                           embedded
                           companion={companionChat}
                           companionIdentity={companionInteractionIdentity}
+                          hangFromAvatar
                           collapse={pendingInteractionCollapse} deviceId={deviceId} sessionId={sessionId}
                           interactions={pending} activeRequestId={pendingInteractionActiveRequestId}
                           onActiveRequestIdChange={setPendingInteractionActiveRequestId}
@@ -9537,7 +9551,7 @@ export default function SessionScreen() {
                     )}
                     scrollResetKey={sessionId}
                     isReadingPositionActive={() => messageScreenFocusedRef.current && messageAppActiveRef.current}
-                    syncingWhileEmpty={syncingWhileEmpty}
+                    syncingWhileEmpty={syncingWhileEmpty || chasingHiddenHistory}
                     testID="session.messageList"
                   />
                 </ChatFilePathContext.Provider>
@@ -9974,12 +9988,6 @@ export default function SessionScreen() {
           open={(paneLayout.persistent && !sessionListDrawerOverlayMounted) || sessionListDrawerOpen}
           width={paneLayout.persistent && !sessionListDrawerOverlayMounted ? paneLayout.sidebarWidth : sessionListDrawerWidthRef.current}
         />
-        {companionChat && companionResource && !shareSelectionActive ? (
-          <CompanionNavigationDrawer key={companionNavigationScope}
-            open={companionNavigation.scope === companionNavigationScope && companionNavigation.open}
-            onClose={() => setCompanionNavigation({ scope: companionNavigationScope, open: false })}
-            onSearch={() => setSearchOpen(true)} />
-        ) : null}
       </MessageHistoryOverlay>
     </View>
   );

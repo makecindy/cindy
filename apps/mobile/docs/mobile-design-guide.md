@@ -49,12 +49,13 @@
 | `betaChannelBadgeBackground` | `#DF0C27` | `#DF0C27` | Beta 渠道开关已打开时,当前版本旁的状态徽标底色 |
 | `betaChannelBadgeForeground` | `#FFFFFF` | `#FFFFFF` | Beta 渠道状态徽标文字,与底色对比度 4.98:1 |
 | `permAutoAccent` | `#417CDD` | `#417CDD` | 自动审批权限模式强调 |
+| `botUnread` | `#417CDD` | `#417CDD` | **仅限**伙伴列表的未读点(桌面 `--bot-unread-bg` 的移动端镜像,见 `DESIGN.md` Bot Unread Badge) |
 | `errorText` | `#0F0F0F` | `#EDEDED` | 错误说明文字(跟随 textPrimary) |
 | `errorBorder` | `#858581` | `#8A8A8A` | 错误边框(跟随 borderStrong) |
 | `overlay` | rgba(38,38,38,.35) | rgba(0,0,0,.45) | modal / lightbox 背板 |
 
 **规则:**
-- **语义不变色**(`statusReady` / `statusAccent` / `betaChannelBadgeBackground` / `betaChannelBadgeForeground`)跨 light / dark 一致——它们是状态语义,不随主题漂移。Beta 红色只用于设置页当前版本旁的渠道徽标,不得扩展为装饰色、错误色或 CTA。
+- **语义不变色**(`statusReady` / `statusAccent` / `betaChannelBadgeBackground` / `betaChannelBadgeForeground` / `botUnread`)跨 light / dark 一致——它们是状态语义,不随主题漂移。Beta 红色只用于设置页当前版本旁的渠道徽标,不得扩展为装饰色、错误色或 CTA。
 - **浅色卡片主要靠描边分层**:页面提亮到 `#F9F9F6` 后,近白卡片相对页面只剩 1.05 的色差(桌面 1.12)。新增浮起面(卡片 / 列表行 / 浮层 / 输入容器)**必须带 1px `border`**,不要只靠 `surfaceElevated` 的填充色差;需要“沉下去”的块(选中底、展开块、代码卡)用比页面更暗的档。
 - **文字三档由深到浅**:正文 → 二级 → 三级,在所在底色上都 ≥ 4.5:1(`themeTokens.test.ts` 守护)。占位字单独用 `textPlaceholder`,比三级更淡但 ≥ 3:1,只给输入框占位字用。新增文字不要拿 `textTertiary` 当“更弱的二级”以外的用途,也不要为了“更淡”自行调低透明度。
 - **CTA 在 dark 反相为近白**:`cta` 近白底 + `ctaText` 深字。注意别让近白 pill 看起来像 disabled——新增主操作 / 选中态后在 dark 下目检。
@@ -232,6 +233,24 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 首页「所有任务」下拉只负责范围筛选：点设备名直接切换到该设备的任务，不得为补充管理动作改成设备子菜单或增加一次确认。设备详情、重命名与删除集中在左侧抽屉的「设备管理」页；列表不画进入箭头或重命名图标。所有设备无论在线、离线或未开启远程控制，都能点进资料详情，再重命名或删除；右滑显示重命名、左滑显示删除，删除需系统确认。iOS 使用系统原生列表与滑动操作。删除使用服务端接口，在线设备当前需先离线才能删除，不以本地隐藏代替删除。iOS 原生菜单与自绘回退、Android 遵守同一交互边界。
 
 ---
+
+### 伙伴列表行与伙伴卡片(2026-09-29 定稿)
+
+伙伴页的行与聊天里的卡片各有一个共享组件,新入口直接复用,不要另画一套:
+
+- **列表行 `CompanionListRow`**:私聊与群聊同一种行。行高 78,头像 44(群为双人叠放 `BotGroupDuoAvatar`),
+  分隔线只画在文字列下方(从 72 到屏幕右缘)、最后一行不画;右上时间位只放一样东西:时间,或工作中的中性
+  转圈;第二行是预览,等你确认 / 需要关注 / 离线时在预览前加前缀词(正文色 500),不用彩色点。未读只用
+  `botUnread` 蓝点(主机只给「有没有未读」,没有条数);在线状态用头像右下的 `CompanionPresenceDot`,离线头像
+  降透明度;两个伙伴同名时名字后加「· 电脑名」。首次读取慢时显示同几何的骨架行。
+- **聊天顶栏 `ChatIdentityHeader`**:私聊与群聊共用。返回 + 32 标记 + 标题 16/22 600 + 副标题 12/18
+  三级色 + 设置;点身份区与设置打开同一份资料 / 设置。私聊副标题保留设备名,离线时前面加「离线 ·」。
+- **卡片外壳**:`surfaceElevated` 底 + 1px `border` + `radius.container` + 内边距 16。眉题 13/18 medium 二级色,
+  标题 16/22 medium,状态行 13/18 二级色;只有运行中(`statusAccent` 呼吸)与失败(`statusError`)带颜色。
+- **卡片按钮 `CompanionCardButton`**:高 38(hitSlop 补到 44)、pill、15/20 medium,**文字始终居中**;一行里等宽
+  平分,次要在左、主操作在右;次要按钮用 `surfaceChip` 填充不加描边。不要在卡片里写 `textAlign: 'left'` 的按钮。
+- **动效**:新消息与卡片用 `CompanionEntering` / `CompanionFadeIn`(RN `Animated`,原生驱动,只动 opacity /
+  transform,系统减弱动效时静止);工作中用 `CompanionPresenceRing` + `ThinkingDots`,不另写循环动画。
 
 ## 5. 间距 / 圆角 / 触控 / 安全区
 

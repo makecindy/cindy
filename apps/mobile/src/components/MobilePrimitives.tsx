@@ -59,6 +59,7 @@ export function MainWindowOptionButton({
   accessibilityLabel,
   accessibilityRole = 'button',
   accessibilityState,
+  badge,
   density = 'compact',
   disabled = false,
   label,
@@ -71,6 +72,8 @@ export function MainWindowOptionButton({
   accessibilityLabel?: string;
   accessibilityRole?: AccessibilityRole;
   accessibilityState?: AccessibilityState;
+  /** Neutral count after the label (e.g. the drawer's 「任务 3」); keep the full number in accessibilityLabel. */
+  badge?: string;
   density?: MainWindowActionDensity;
   disabled?: boolean;
   label: string;
@@ -95,6 +98,7 @@ export function MainWindowOptionButton({
         styles.mainOptionButton,
         compact && styles.mainOptionButtonCompact,
         variant === 'segmented' && styles.mainOptionButtonSegmented,
+        badge ? styles.mainOptionButtonWithBadge : null,
         selected && styles.mainOptionButtonSelected,
         pressed && styles.pressed,
         interactionDisabled && styles.disabled,
@@ -112,6 +116,11 @@ export function MainWindowOptionButton({
       >
         {label}
       </Text>
+      {badge ? (
+        <View style={[styles.mainOptionBadge, selected && styles.mainOptionBadgeSelected]} testID={testID ? `${testID}.badge` : undefined}>
+          <Text numberOfLines={1} style={[styles.mainOptionBadgeText, selected && styles.mainOptionBadgeTextSelected]}>{badge}</Text>
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -869,6 +878,36 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   mainOptionButtonSelected: {
     backgroundColor: colors.cta,
     borderColor: colors.cta,
+  },
+  mainOptionButtonWithBadge: {
+    flexDirection: 'row',
+    gap: spacing.xs + 2,
+  },
+  // Neutral count chip (desktop NavigationCountBadge): raised on the unselected segment, inverse on the selected one.
+  mainOptionBadge: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    justifyContent: 'center',
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: spacing.xs + 1,
+  },
+  mainOptionBadgeSelected: {
+    backgroundColor: colors.ctaText,
+    borderColor: colors.ctaText,
+  },
+  mainOptionBadgeText: {
+    color: colors.textPrimary,
+    fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
+    fontWeight: fontWeight.semibold,
+    fontVariant: ['tabular-nums'],
+  },
+  mainOptionBadgeTextSelected: {
+    color: colors.cta,
   },
   // 选项文字按 §3「行标题、选项、按钮」16/22 500;紧凑档取「面板操作项」15/20 500。选中只换色。
   mainOptionButtonText: {

@@ -3,7 +3,6 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeChromeDrawer } from '@/session/HomeChromeDrawer';
-import { CompanionNavigationDrawer } from '@/session/CompanionNavigationDrawer';
 
 /**
  * HomeChromeDrawer 行为测试:Android 独立窗口(Modal)的挂载、返回键接管、
@@ -214,28 +213,5 @@ describe('Android home drawer window and close lifecycle', () => {
     expect(container.querySelector('[data-testid="home.chromeDrawer"]')).toBeNull();
     // onClosed 只在窗口真正卸载后触发一次:调用方的延后动作以此为信号执行。
     expect(props.onClosed).toHaveBeenCalledOnce();
-  });
-
-  it('opens search through the deferred action and survives a back press during the exit animation', async () => {
-    const onSearch = vi.fn();
-    const onClose = vi.fn();
-    const host = (open: boolean) => (
-      <CompanionNavigationDrawer open={open} onClose={onClose} onSearch={onSearch} />
-    );
-    await act(async () => root.render(host(true)));
-    await act(async () => {
-      (container.querySelector('[data-testid="home.chromeDrawer.search"]') as HTMLElement).click();
-    });
-    // 动作延后到抽屉完全关闭后执行,关闭请求先回到调用方。
-    expect(onSearch).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledOnce();
-    await act(async () => root.render(host(false)));
-    // 退场期间的返回键不得清掉待执行动作。
-    await act(async () => h.modal!.onRequestClose());
-    expect(h.emit).toHaveBeenCalledExactlyOnceWith('hardwareBackPress');
-    expect(onSearch).not.toHaveBeenCalled();
-    await finishTiming();
-    expect(onSearch).toHaveBeenCalledOnce();
-    expect(container.querySelector('[data-testid="home.chromeDrawer"]')).toBeNull();
   });
 });

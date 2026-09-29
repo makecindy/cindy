@@ -24,7 +24,6 @@ import {
   Animated,
   AppState,
   Platform,
-  Easing,
   Modal,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -54,7 +53,6 @@ import {
   FolderOpen,
   FileText,
   Hammer,
-  LoaderCircle,
   Menu,
   Monitor,
   MessagesSquare,
@@ -256,6 +254,7 @@ import {
 } from '@/session/scheduleIndex';
 import { createScheduleIndexDeferRegistry } from '@/session/scheduleIndexDefer';
 import { latestMobileSessionRow, resolveMobileSessionRowStatus } from '@/session/sessionRightStatus';
+import { SessionRightSpinner } from '@/session/SessionRightSpinner';
 import { AutomationTimerIcon } from '@/session/AutomationTimerIcon';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
@@ -4433,8 +4432,6 @@ function automationGroupPreview(item: RemoteSessionListItem, sessionCount: numbe
 
 // 状态提醒点已移到行右侧(替代时间位,与桌面一致),行首图标只保留 vendor 标识 +
 // running 呼吸 + 草稿铅笔,不再叠角标点。
-/** 行右侧 running spinner —— 与桌面 SessionItem 右槽同款:LoaderCircle(即桌面的
- *  lucide Loader2)圆弧图标,1s linear 无限旋转(Tailwind animate-spin 同参数)。 */
 /**
  * 行右侧相对时间标签(「刚刚 / N 分钟前」)的独家保鲜叶子:行主体 memo 化后不再逐
  * emit 重渲染,时间标签失去偶然保鲜会无限期冻结(review P1);而把分钟订阅挂在行
@@ -4447,41 +4444,6 @@ function SessionRelativeTime({ lastActivityAt, style }: { lastActivityAt: string
     <Text style={style} numberOfLines={1}>
       {formatRemoteSessionSidebarTime(lastActivityAt)}
     </Text>
-  );
-}
-
-function SessionRightSpinner({ testID }: { testID?: string }) {
-  const { colors } = useTheme();
-  const { t } = useTranslation();
-  const spin = useRef(new Animated.Value(0)).current;
-  // 常驻循环:减弱动态效果(含首帧未知)下静止,只显示静态图标。
-  const reduceMotion = useReduceMotionEnabled();
-  useEffect(() => {
-    if (reduceMotion !== false) return;
-    const loop = Animated.loop(
-      Animated.timing(spin, {
-        duration: motionDuration.spinnerCycle,
-        easing: Easing.linear,
-        toValue: 1,
-        useNativeDriver: true,
-        isInteraction: false,
-      }),
-    );
-    loop.start();
-    return () => {
-      loop.stop();
-      spin.setValue(0);
-    };
-  }, [reduceMotion, spin]);
-  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
-  return (
-    <Animated.View
-      accessibilityLabel={t('devices.list.a11y.running')}
-      style={{ transform: [{ rotate }] }}
-      testID={testID}
-    >
-      <LoaderCircle color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-    </Animated.View>
   );
 }
 

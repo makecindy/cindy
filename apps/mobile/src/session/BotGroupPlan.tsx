@@ -1,24 +1,27 @@
 /**
  * 群聊里的分工（docs/product-rules/bot-group-chat.md §7，对照桌面 BotGroupPlan.tsx）：
- * 负责人的安排卡、交接消息下的文件、时间线末尾的「下一步 · 继续」「没做完 · 重试」与
- * 「N 步都做完了」。
+ * 负责人的安排卡、交接消息下的文件、时间线末尾的「下一步」「没做完」卡与「N 步都做完了」。
  *
- * 安排卡一步一行（编号或状态、头像、名字 + 做什么），行间不画分隔线。只有群里未结束的
- * 那张卡能操作：待开始时点某一步换人或删掉，下面是小号「开始」「不用了」；做完一步停下时，
- * 还没做或没做完的步骤仍可换人。按钮是可见 38pt 的紧凑档，hitSlop 补到 44pt 热区。
+ * 安排卡、下一步、没做完都用伙伴卡片的统一外壳（K1 / K9）：眉题写「分工」和进度，标题写要做的事，
+ * 步骤一行一个（编号或状态、头像、名字 + 做什么），行间不画分隔线，底部是等宽的两个按钮
+ * （CompanionCardButton，可见 38pt，hitSlop 补到 44pt）。只有群里未结束的那张卡能操作：待开始时
+ * 点某一步换人或删掉；做完一步停下时，还没做或没做完的步骤仍可换人。
  *
  * 交接文件在电脑的工作目录里，手机不打开，点一下说明去电脑上看。
  */
 import type { ReactNode } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
-import { CircleAlert, CircleCheck, CircleDashed, FileText, Sparkles } from 'lucide-react-native';
+import { Alert, Animated as RNAnimated, Easing, Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { CircleAlert, CircleCheck, CircleDashed, FileText, ListChecks } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { botGroupPathBasename, isActiveBotGroupMember, type BotGroupPlanFollowUp } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupMemberView, BotGroupPlanStepView, BotGroupPlanView } from '@cindy/maker-shared/botGroupChat';
 import { Text } from '@/components/AppText';
-import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { motionDuration, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { CompanionFadeIn } from './CompanionEntering';
+import { CompanionCardActions, CompanionCardButton } from './CompanionCardButton';
 import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import {
   BOT_GROUP_INLINE_AVATAR_SIZE,
@@ -50,14 +53,32 @@ function started(plan: BotGroupPlanView): boolean {
   return plan.status !== 'proposed' && plan.status !== 'superseded' && plan.status !== 'dismissed';
 }
 
+/** The running step: an 8pt Heart Orange dot breathing like every running mark. */
+function RunningDot() {
+  const styles = useThemedStyles(makeStyles);
+  const animate = useReduceMotionEnabled() === false;
+  const opacity = useRef(new RNAnimated.Value(1)).current;
+  useEffect(() => {
+    if (!animate) { opacity.setValue(1); return; }
+    const step = (toValue: number) => RNAnimated.timing(opacity, { toValue, duration: 750, easing: Easing.inOut(Easing.ease), useNativeDriver: true });
+    const loop = RNAnimated.loop(RNAnimated.sequence([step(0.3), step(1)]));
+    loop.start();
+    return () => loop.stop();
+  }, [animate, opacity]);
+  return <RNAnimated.View style={[styles.runningDot, { opacity }]} testID="botGroup.plan.running" />;
+}
+
 /** 16pt leading mark: the step number before 开始, its live status afterwards. */
 function StepLead({ plan, step, index }: { plan: BotGroupPlanView; step: BotGroupPlanStepView; index: number }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   if (!started(plan)) return <Text style={styles.stepNumber}>{index + 1}</Text>;
-  if (step.status === 'done') return <CircleCheck size={iconSize.md} color={colors.textSecondary} />;
-  // Same running mark as the speaking row (Heart Orange).
-  if (step.status === 'running') return <Sparkles size={iconSize.sm} color={colors.statusAccent} />;
+  // M8: a finished step's check eases in (fast 150ms, from 0.6) when it changes while on screen.
+  if (step.status === 'done') return <CompanionFadeIn play={started(plan) && plan.status !== 'done'} distance={0} scaleFrom={0.6} duration={motionDuration.fast}>
+    <CircleCheck size={iconSize.md} color={colors.textSecondary} />
+  </CompanionFadeIn>;
+  // K7: running breathes in Heart Orange, the list's running language.
+  if (step.status === 'running') return <RunningDot />;
   if (step.status === 'failed') return <CircleAlert size={iconSize.md} color={colors.errorText} />;
   return <CircleDashed size={iconSize.md} color={colors.textTertiary} />;
 }
@@ -116,8 +137,9 @@ export function BotGroupPlanCard({
   onDismiss(): void;
   onEditStep(step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string): void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   if (!plan) return <Text style={styles.note}>{t('groupChat.plan.missing')}</Text>;
   const muted = plan.status === 'superseded' || plan.status === 'dismissed';
   const finalNote = plan.status === 'superseded' ? 'groupChat.plan.superseded'
@@ -125,9 +147,22 @@ export function BotGroupPlanCard({
       : plan.status === 'stopped' ? 'groupChat.plan.stopped' : null;
   const busy = pending !== null;
   const candidates = members.filter(isActiveBotGroupMember);
-  return <View testID="botGroup.plan" style={styles.planColumn}>
-    <Text selectable style={styles.planIntro}>{t('groupChat.plan.intro', { count: plan.steps.length })}</Text>
-    <View style={styles.card} testID={`botGroup.plan.${plan.status}`}>
+  const steps = plan.steps.length;
+  const done = plan.steps.filter((step) => step.status === 'done').length;
+  const progress = plan.status === 'proposed' ? t('groupChat.plan.awaitingStart')
+    : plan.status === 'running' ? t('groupChat.plan.progressRunning', { current: Math.min(done + 1, steps), total: steps })
+    : plan.status === 'waiting' ? t('groupChat.plan.progressDone', { done, total: steps })
+    : plan.status === 'done' ? t('groupChat.plan.allDone')
+    : finalNote ? t(finalNote) : '';
+  // K9: one card — eyebrow with progress, the plan as its title, steps, then the decision.
+  return <View testID="botGroup.plan" style={[styles.card, muted && styles.cardMuted]}>
+    <View style={styles.eyebrow}>
+      <ListChecks size={iconSize.sm} color={colors.textSecondary} />
+      <Text style={styles.eyebrowText}>{t('groupChat.plan.eyebrow', { count: steps })}</Text>
+      {progress ? <Text style={styles.eyebrowStatus} testID={finalNote ? 'botGroup.plan.finalNote' : `botGroup.plan.${plan.status}`}>{progress}</Text> : null}
+    </View>
+    <Text selectable style={styles.planTitle}>{t('groupChat.plan.intro', { count: steps })}</Text>
+    <View style={styles.steps}>
       {plan.steps.map((step, index) => {
         const identity = identityFor(step.botId, step.botName);
         const editable = online && (actionable || (reassignable && (step.status === 'pending' || step.status === 'failed')));
@@ -173,15 +208,17 @@ export function BotGroupPlanCard({
           </Pressable>}
         </BotGroupMenu>;
       })}
-      {actionable ? <View style={styles.actions}>
-        <MainWindowActionButton density="compact" hitSlop={BOT_GROUP_COMPACT_HIT_SLOP}
-          action={{ label: t('groupChat.plan.start'), tone: 'primary', busy: pending === 'start', disabled: busy || !online, onPress: onStart, testID: 'botGroup.plan.start' }} />
-        <MainWindowActionButton density="compact" hitSlop={BOT_GROUP_COMPACT_HIT_SLOP}
-          action={{ label: t('groupChat.plan.dismiss'), busy: pending === 'dismiss', disabled: busy || !online, onPress: onDismiss, testID: 'botGroup.plan.dismiss' }} />
-      </View> : null}
     </View>
-    {actionable ? <Text style={styles.note}>{t('groupChat.plan.pauseNote')}</Text>
-      : finalNote ? <Text style={styles.note} testID="botGroup.plan.finalNote">{t(finalNote)}</Text> : null}
+    {actionable ? <>
+      {/* Two sentences: Chinese and Japanese run them together, other languages need a space. */}
+      <Text style={styles.note}>{[t('groupChat.plan.pauseNote'), t('groupChat.plan.editHint')].join(/^(zh|ja)/.test(i18n.language) ? '' : ' ')}</Text>
+      <CompanionCardActions>
+        <CompanionCardButton label={t('groupChat.plan.dismiss')} busy={pending === 'dismiss'} disabled={busy || !online}
+          onPress={onDismiss} testID="botGroup.plan.dismiss" />
+        <CompanionCardButton primary label={t('groupChat.plan.start')} busy={pending === 'start'} disabled={busy || !online}
+          onPress={onStart} testID="botGroup.plan.start" />
+      </CompanionCardActions>
+    </> : null}
   </View>;
 }
 
@@ -225,57 +262,72 @@ export function BotGroupPlanEndDivider({ stepCount }: { stepCount: number | null
   </BotGroupDivider>;
 }
 
-/** Under an open plan that stopped after a step: continue with the next one, or retry. */
-export function BotGroupPlanFollowUpRow({ followUp, identityFor, deviceId, online, pending, onContinue, onRetry, onEnd }: {
+/**
+ * Under an open plan that stopped after a step (K9): the same card shell as every companion card —
+ * what comes next (or what did not finish), then 「结束分工」 and the primary 「继续 / 重试」.
+ */
+export function BotGroupPlanFollowUpRow({ followUp, identityFor, deviceId, online, pending, stepNumber, stepTotal, onContinue, onRetry, onEnd }: {
   followUp: BotGroupPlanFollowUp;
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
   online: boolean;
   pending: BotGroupFollowUpAction | null;
+  /** 1-based position of the step shown, and how many steps the plan has. */
+  stepNumber: number;
+  stepTotal: number;
   onContinue(): void;
   onRetry(): void;
   onEnd(): void;
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   const step = followUp.kind === 'continue' ? followUp.next : followUp.failed;
   const identity = identityFor(step.botId, step.botName);
   const busy = pending !== null;
   const primary = followUp.kind === 'continue' ? 'continue' : 'retry';
-  const label = followUp.kind === 'continue'
-    ? `${t('groupChat.timeline.nextStep')}${identity.name} ${step.task}`
-    : t('groupChat.timeline.stepFailed', { name: identity.name });
-  return <View style={styles.followUp} testID={`botGroup.followUpRow.${followUp.kind}`}>
-    <View style={styles.followUpText} accessible accessibilityLabel={label}>
-      {followUp.kind === 'continue' ? <>
-        <Text style={styles.followUpLead}>{t('groupChat.timeline.nextStep')}</Text>
-        <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} />
-        <Text numberOfLines={1} style={styles.followUpLabel}>
-          <Text style={styles.followUpName}>{identity.name}</Text>{' '}{step.task}
-        </Text>
-      </> : <Text numberOfLines={1} style={styles.followUpLabel}>{label}</Text>}
+  const failed = followUp.kind === 'retry';
+  const label = failed
+    ? t('groupChat.timeline.stepFailed', { name: identity.name })
+    : `${t('groupChat.timeline.nextStep')}${identity.name} ${step.task}`;
+  return <View style={styles.card} testID={`botGroup.followUpRow.${followUp.kind}`}>
+    <View style={styles.eyebrow} accessible accessibilityLabel={label}>
+      {failed ? <CircleAlert size={iconSize.sm} color={colors.statusError} /> : <ListChecks size={iconSize.sm} color={colors.textSecondary} />}
+      <Text style={styles.eyebrowText}>{failed ? t('groupChat.followUp.failedStep', { step: stepNumber }) : t('groupChat.followUp.next')}</Text>
+      <Text style={styles.eyebrowStatus}>{`${stepNumber} / ${stepTotal}`}</Text>
     </View>
-    <MainWindowActionButton density="compact" hitSlop={BOT_GROUP_COMPACT_HIT_SLOP} action={{
-      label: t(followUp.kind === 'continue' ? 'groupChat.timeline.continuePlan' : 'groupChat.timeline.retryStep'),
-      tone: 'primary', busy: pending === primary, disabled: busy || !online,
-      onPress: followUp.kind === 'continue' ? onContinue : onRetry, testID: `botGroup.followUp.${primary}`,
-    }} />
-    <MainWindowActionButton density="compact" hitSlop={BOT_GROUP_COMPACT_HIT_SLOP} action={{
-      label: t('groupChat.timeline.endPlan'), busy: pending === 'dismiss', disabled: busy || !online,
-      onPress: onEnd, testID: 'botGroup.followUp.end',
-    }} />
+    <View style={styles.who}>
+      <View style={styles.whoAvatar}><BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} /></View>
+      <Text numberOfLines={2} style={styles.whoText}><Text style={styles.whoName}>{identity.name}</Text>{` ${step.task}`}</Text>
+    </View>
+    <CompanionCardActions>
+      <CompanionCardButton label={t('groupChat.timeline.endPlan')} busy={pending === 'dismiss'} disabled={busy || !online}
+        onPress={onEnd} testID="botGroup.followUp.end" />
+      <CompanionCardButton primary label={t(failed ? 'groupChat.timeline.retryStep' : 'groupChat.timeline.continuePlan')}
+        busy={pending === primary} disabled={busy || !online}
+        onPress={failed ? onRetry : onContinue} testID={`botGroup.followUp.${primary}`} />
+    </CompanionCardActions>
   </View>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   organizerBadge: { borderRadius: radius.pill, backgroundColor: colors.surfaceChip, paddingHorizontal: spacing.sm, flexShrink: 0 },
   organizerBadgeText: { color: colors.textSecondary, fontSize: typeScale.micro, lineHeight: lineHeight.micro, fontWeight: fontWeight.semibold },
-  planColumn: { gap: spacing.sm, minWidth: 0 },
-  planIntro: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge },
-  // Floating card: 1px border on the elevated surface (mobile guide §2), no row dividers.
+  // K1 card shell: raised surface, hairline border, radius 12, padding 16; steps have no row dividers.
   card: { backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.container, paddingVertical: spacing.xs, overflow: 'hidden' },
-  stepRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44, paddingHorizontal: spacing.md },
+    borderRadius: radius.container, padding: spacing.lg, gap: spacing.xs, overflow: 'hidden' },
+  cardMuted: { opacity: 0.6 },
+  eyebrow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs + 2, minHeight: lineHeight.caption },
+  eyebrowText: { flex: 1, minWidth: 0, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+  eyebrowStatus: { flexShrink: 0, color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontVariant: ['tabular-nums'] },
+  planTitle: { marginTop: 2, color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+  steps: { marginTop: spacing.xs },
+  stepRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 40 },
+  runningDot: { width: 8, height: 8, borderRadius: radius.pill, backgroundColor: colors.statusAccent },
+  who: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, marginTop: 2 },
+  whoAvatar: { marginTop: 1 },
+  whoText: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
+  whoName: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
   stepLead: { width: iconSize.md, alignItems: 'center', justifyContent: 'center' },
   stepNumber: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontVariant: ['tabular-nums'] },
   stepText: { flex: 1, minWidth: 0, color: colors.textSecondary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
@@ -283,8 +335,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   stepTextMuted: { color: colors.textTertiary, fontWeight: fontWeight.regular },
   stepStatus: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, flexShrink: 0 },
   muted: { opacity: 0.6 },
-  actions: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.md, paddingTop: spacing.xs, paddingBottom: spacing.sm },
-  note: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  note: { marginTop: spacing.xs, color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   files: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   fileChip: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, minHeight: 32, maxWidth: '100%',
     paddingHorizontal: spacing.md, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth,
@@ -293,9 +344,4 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   divider: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 44 },
   dividerLine: { flex: 1, minWidth: spacing.xl, height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
   dividerText: { flexShrink: 1, color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
-  followUp: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44 },
-  followUpText: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-  followUpLead: { flexShrink: 0, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  followUpLabel: { flexShrink: 1, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  followUpName: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
 });
