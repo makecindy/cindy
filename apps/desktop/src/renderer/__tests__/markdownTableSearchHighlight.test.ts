@@ -14,6 +14,7 @@ import { EditorView, type DecorationSet, type WidgetType } from '@codemirror/vie
 import { SearchCursor } from '@codemirror/search';
 
 import {
+  collectMarkdownTableBlocks,
   collectMarkdownTableHiddenRanges,
   markdownTableDecorationField,
 } from '@/components/markdown/markdownTableLivePreview';
@@ -214,6 +215,25 @@ describe('search only matches text the user can see', () => {
     expect(visibleMatches('alpha', doc)).toHaveLength(2);
   });
 
+  it('drops cells beyond the rendered column count', () => {
+    // 表头 2 列 → 渲染模型截掉数据行的第 3 列,那一列没有单元格可高亮
+    const doc = docOf(['| h1 | h2 |', '| --- | --- |', '| a | b | c |', '| d | e | f |'].join('\n'));
+    expect(visibleMatches('c', doc)).toEqual([]);
+    expect(visibleMatches('f', doc)).toEqual([]);
+    // 前两列照常命中
+    expect(visibleMatches('a', doc)).toHaveLength(1);
+    expect(visibleMatches('b', doc)).toHaveLength(1);
+  });
+
+  it('stays linear on documents full of pipes that are not tables', () => {
+    // 含竖线但没有分隔行 → 不是表格;两路判定都不得把它当表格反复扫描
+    const lines: string[] = [];
+    for (let index = 0; index < 200; index++) lines.push(`| pipe line ${index} | tail`);
+    const doc = docOf(lines.join('\n'));
+    expect(collectMarkdownTableBlocks(doc)).toEqual([]);
+    expect(visibleMatches('pipe', doc)).toHaveLength(200);
+  });
+
   it('never filters anything for non-markdown documents', () => {
     const doc = docOf(['# alpha', '- alpha', '```mermaid', 'graph TD', '```'].join('\n'));
     expect(collectDocSearchHiddenRanges(doc, false)).toEqual([]);
@@ -299,9 +319,14 @@ describe('markdown table widget search highlight', () => {
     cell.tabIndex = -1;
     cell.focus();
     cell.textContent = 'alpha edited';
-    dispatchRanges(view, visibleMatches('ready'));
+    // 新查询仍命中这个 cell,但起点不同 → dataset 要跟着变
+    dispatchRanges(view, visibleMatches('lpha'));
+    view.requestMeasure();
 
     expect(cell.textContent).toBe('alpha edited');
+    // dataset 必须已经存了新查询的高亮:失焦重画才不会回到旧查询
+    // (project-search 跳转不聚焦搜索框,新命中会在 cell 仍聚焦时到达)
+    expect(cell.dataset.searchHighlights).toBe('1:5');
     cell.blur();
     view.destroy();
   });

@@ -182,13 +182,31 @@ function isMarkdownTableSeparator(text: unknown): boolean {
  */
 export function collectMarkdownTableHiddenRanges(
   doc: EditorView['state']['doc'],
+  blocks: MarkdownTableBlock[] = collectMarkdownTableBlocks(doc),
 ): Array<{ from: number; to: number }> {
   const out: Array<{ from: number; to: number }> = [];
+  for (const block of blocks) {
+    out.push(...complementOfCellTextRanges(doc, block));
+  }
+  return out;
+}
+
+/**
+ * 一次性线性扫描出全文的表格块。搜索可见性口径有多个消费者(表格结构字符、
+ * conceal 行判定),共用这一份结果 —— 逐行各自调 `findMarkdownTableAtLineInDoc`
+ * 会让每行都重扫整段,大文档上变成平方级(每次输入都跑一遍)。
+ *
+ * 块内行整段跳过,所以每个候选行只被探测一次。
+ */
+export function collectMarkdownTableBlocks(
+  doc: EditorView['state']['doc'],
+): MarkdownTableBlock[] {
+  const blocks: MarkdownTableBlock[] = [];
   let line = doc.line(1);
   while (line.number <= doc.lines) {
     const block = findMarkdownTableAtLineInDoc(doc, line.number);
     if (block) {
-      out.push(...complementOfCellTextRanges(doc, block));
+      blocks.push(block);
       const blockEndLine = doc.lineAt(block.to).number;
       if (blockEndLine >= doc.lines) break;
       line = doc.line(blockEndLine + 1);
@@ -197,7 +215,7 @@ export function collectMarkdownTableHiddenRanges(
     if (line.to >= doc.length) break;
     line = doc.line(line.number + 1);
   }
-  return out;
+  return blocks;
 }
 
 function complementOfCellTextRanges(
@@ -206,13 +224,24 @@ function complementOfCellTextRanges(
 ): Array<{ from: number; to: number }> {
   const visible: Array<{ from: number; to: number }> = [];
   const hidden: Array<{ from: number; to: number }> = [];
+  // 渲染模型会把超出列数的 cell 截掉(normalizeCells),那些文字没有对应单元格
+  // 可高亮 —— 宽度超出的行必须整段算隐藏,否则搜索条会报点不到的高亮。
+  const renderedColumns = getColumnCount(block.model);
   const firstLine = doc.lineAt(block.from).number;
   const lastLine = doc.lineAt(block.to).number;
   for (let number = firstLine; number <= lastLine; number++) {
     const line = doc.line(number);
     // 分隔行渲染成表格边框,`---` / `:` 不对应任何可见文字 → 整行算隐藏。
     if (isMarkdownTableSeparator(line.text)) continue;
-    for (const cell of splitMarkdownTableRowWithRanges(line.text, line.from)) {
+    const cells = splitMarkdownTableRowWithRanges(line.text, line.from);
+    for (let index = 0; index < cells.length; index++) {
+      const cell = cells[index];
+      if (index >= renderedColumns) {
+        if (cell.contentTo > cell.contentFrom) {
+          hidden.push({ from: cell.contentFrom, to: cell.contentTo });
+        }
+        continue;
+      }
       if (cell.contentTo <= cell.contentFrom) continue;
       visible.push({ from: cell.contentFrom, to: cell.contentTo });
       hidden.push(...collectCellInlineMarkerRanges(cell));
@@ -1475,11 +1504,14 @@ function applyTableSearchHighlights(
         ? block.model.header[columnIndex]
         : block.model.rows[rowIndex - 1]?.[columnIndex];
     if (!modelCell) continue;
+    const ranges = computeCellSearchRanges(modelCell, highlights, block.from);
+    // dataset 一定要先写:编辑中的 cell 只暂缓重绘,不能暂缓"新高亮是多少"。
+    // 否则失焦后 renderTableCells 会拿旧区间重画,搜索条是新查询、单元格却回到
+    // 上一轮的高亮(project-search 跳转不聚焦搜索框,这条路径是真实存在的)。
+    cell.dataset.searchHighlights = serializeSearchRanges(ranges);
     // 正在编辑 / 输入法组合中的单元格不重绘:重绘会打断用户输入与光标。
     // 高亮在 focusout 后由 renderTableCells 补回。
     if (isComposingTableCell(cell) || document.activeElement === cell) continue;
-    const ranges = computeCellSearchRanges(modelCell, highlights, block.from);
-    cell.dataset.searchHighlights = serializeSearchRanges(ranges);
     renderInlineMarkdown(cell, cell.dataset.sourceText ?? '', [], ranges);
   }
 }

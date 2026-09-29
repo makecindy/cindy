@@ -56,15 +56,43 @@ export interface DocSearchHiddenRange {
   to: number;
 }
 
-/** 丢掉任何与不可见区间相交的命中,使"命中计数"与"可见高亮"始终一致。 */
+/**
+ * 丢掉任何与不可见区间相交的命中,使"命中计数"与"可见高亮"始终一致。
+ *
+ * `ranges` 按位置递增(SearchCursor 从 0 扫到 doc.length),所以先把 hidden
+ * 排序合并再用双指针扫一遍即可 —— 早先的 `hidden.some(...)` 是 O(n×m),长文档
+ * 里隐藏标记多 + 命中多时每次输入都要重扫,会让搜索框发涩。
+ */
 export function filterVisibleDocSearchRanges(
   ranges: DocSearchRange[],
   hidden: DocSearchHiddenRange[],
 ): DocSearchRange[] {
-  if (hidden.length === 0) return ranges;
-  return ranges.filter(
-    (range) => !hidden.some((span) => range.from < span.to && range.to > span.from),
-  );
+  if (hidden.length === 0 || ranges.length === 0) return ranges;
+  const merged = mergeHiddenRanges(hidden);
+  const out: DocSearchRange[] = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    while (cursor < merged.length && merged[cursor].to <= range.from) cursor++;
+    const next = merged[cursor];
+    // 与下一个隐藏区间相交 → 不可见;不相交时保留并不推进游标(后面的命中可能才相交)。
+    if (next && next.from < range.to) continue;
+    out.push(range);
+  }
+  return out;
+}
+
+function mergeHiddenRanges(ranges: DocSearchHiddenRange[]): DocSearchHiddenRange[] {
+  const sorted = [...ranges].sort((a, b) => a.from - b.from || a.to - b.to);
+  const out: DocSearchHiddenRange[] = [];
+  for (const span of sorted) {
+    const last = out[out.length - 1];
+    if (last && span.from <= last.to) {
+      last.to = Math.max(last.to, span.to);
+      continue;
+    }
+    out.push({ ...span });
+  }
+  return out;
 }
 
 /** 取出落在 [from, to) 内的命中(表格 widget 用它在自己 DOM 里补画高亮)。 */

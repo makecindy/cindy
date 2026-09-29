@@ -72,11 +72,12 @@ import { getCodeMirrorLanguage } from './codemirrorLanguages';
 import {
   clamp,
   findMarkdownTableAtLine,
-  findMarkdownTableAtLineInDoc,
   markdownTableDecorationField,
+  collectMarkdownTableBlocks,
   collectMarkdownTableHiddenRanges,
   runHistoryCommandPreservingScroll,
   tableMenuLabelsFacet,
+  type MarkdownTableBlock,
   type TableMenuLabels,
 } from './markdownTableLivePreview';
 import {
@@ -262,11 +263,13 @@ export function collectDocSearchHiddenRanges(
   isMarkdown: boolean,
 ): DocSearchHiddenRange[] {
   if (!isMarkdown) return [];
+  // 表格块只扫一次:表格结构字符与 conceal 行判定共用同一份结果。
+  const blocks = collectMarkdownTableBlocks(doc);
   return [
-    ...collectMarkdownTableHiddenRanges(doc),
+    ...collectMarkdownTableHiddenRanges(doc, blocks),
     ...findImageTargets(doc).map((target) => ({ from: target.from, to: target.to })),
     ...findMermaidBlocks(doc).map((block) => ({ from: block.from, to: block.to })),
-    ...collectMarkdownConcealedRanges(doc),
+    ...collectMarkdownConcealedRanges(doc, blocks),
   ];
 }
 
@@ -281,11 +284,17 @@ export function collectDocSearchHiddenRanges(
  */
 function collectMarkdownConcealedRanges(
   doc: EditorView['state']['doc'],
+  tableBlocks: MarkdownTableBlock[],
 ): DocSearchHiddenRange[] {
   const out: DocSearchHiddenRange[] = [];
   const fenceLines = computeFenceLineRoles(doc);
-  // 表格块的行是连续的,记住上一次的行号上界,避免每行都重扫表格。
-  let tableLinesThrough = 0;
+  // 表格块的行号区间是有序的,用游标线性推进 —— 不逐行重扫表格探测
+  // (那会让含竖线但不是表格的段落变成平方级,每次输入都跑一遍)。
+  const tableRanges = tableBlocks.map((block) => ({
+    fromLine: doc.lineAt(block.from).number,
+    toLine: doc.lineAt(block.to).number,
+  }));
+  let tableIndex = 0;
   for (let number = 1; number <= doc.lines; number++) {
     const line = doc.line(number);
     const role = fenceLines.get(number);
@@ -297,12 +306,15 @@ function collectMarkdownConcealedRanges(
       continue;
     }
     // 表格行的 conceal 由表格 widget 负责(单元格文字是可见的,必须留下命中),
-    // 判定与 markdownLivePreviewPlugin 完全一致。行形状近似的写法会漏判
-    // 真正的表格块,也会误判带竖线的普通行。
-    if (number <= tableLinesThrough) continue;
-    const tableBlock = findMarkdownTableAtLineInDoc(doc, number);
-    if (tableBlock) {
-      tableLinesThrough = doc.lineAt(tableBlock.to).number;
+    // 判定与 markdownLivePreviewPlugin 一致:用同一份表格块结果。
+    while (tableIndex < tableRanges.length && tableRanges[tableIndex].toLine < number) {
+      tableIndex++;
+    }
+    if (
+      tableIndex < tableRanges.length &&
+      number >= tableRanges[tableIndex].fromLine &&
+      number <= tableRanges[tableIndex].toLine
+    ) {
       continue;
     }
     addMarkdownConcealDecorations(collectOnlyBuilder(out), line.from, line.text, []);
