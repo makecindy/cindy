@@ -41,7 +41,6 @@ import {
   EditorSelection,
   Prec,
   RangeSetBuilder,
-  StateEffect,
   StateField,
 } from '@codemirror/state';
 import {
@@ -74,6 +73,7 @@ import {
   clamp,
   findMarkdownTableAtLine,
   markdownTableDecorationField,
+  collectMarkdownTableHiddenRanges,
   runHistoryCommandPreservingScroll,
   tableMenuLabelsFacet,
   type TableMenuLabels,
@@ -86,7 +86,15 @@ import {
   imageBaseDirFacet,
   imageLocaleFacet,
   markdownImageDecorationField,
+  findImageTargets,
 } from './markdownImageLivePreview';
+import {
+  docSearchRangesField,
+  filterVisibleDocSearchRanges,
+  setDocSearchRangesEffect,
+  type DocSearchHiddenRange,
+  type DocSearchRange,
+} from './docSearchRanges';
 import { computeFenceLineRoles, type FenceLineRole } from './markdownFenceLines';
 import { getPlaintextEditorChrome } from './plaintextEditorChrome';
 import { useIsDarkMode } from './useIsDarkMode';
@@ -204,37 +212,55 @@ function detectLargeDoc(doc: string): { largeDoc: boolean; longLine: boolean } {
   return { largeDoc, longLine };
 }
 
-// ── CodeMirror search highlight: StateField + StateEffect ──────────────────
-// The effect carries the active set of `{from, to, active}` ranges; the field
-// rebuilds a DecorationSet from it. Decoupling search state from the editor
-// state means clearing is just dispatching an empty effect — no extra refs.
-type SearchRange = { from: number; to: number; active: boolean };
-
-const setSearchRangesEffect = StateEffect.define<SearchRange[]>();
-
+// ── CodeMirror search highlight: mark decoration over the shared ranges ────
+// 命中集合本身挂在 docSearchRangesField 上(见 docSearchRanges.ts):markdown
+// 表格是 block replace widget,需要读到同一份命中才能在自己的 DOM 里补高亮。
+// 这里只负责把命中翻译成 CodeMirror 的 mark decoration。
 const matchDeco = Decoration.mark({ class: 'cm-doc-search-match' });
 const activeDeco = Decoration.mark({ class: 'cm-doc-search-match cm-doc-search-active' });
 
-const searchHighlightField = StateField.define<DecorationSet>({
+// 导出供测试直接复用:测试要验证"正文 mark 高亮与表格 widget 高亮同时存在",
+// 若测试自己重写一份 decoration 就会与生产实现漂移。
+export const searchHighlightField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(value, tr) {
     let next = value.map(tr.changes);
     for (const e of tr.effects) {
-      if (e.is(setSearchRangesEffect)) {
-        const ranges = e.value;
-        if (ranges.length === 0) {
-          next = Decoration.none;
-        } else {
-          next = Decoration.set(
-            ranges.map((r) => (r.active ? activeDeco : matchDeco).range(r.from, r.to)),
-          );
-        }
-      }
+      if (!e.is(setDocSearchRangesEffect)) continue;
+      // 直接用 effect 载荷(而不是回读 field):纯 code / 纯文本文档不注册
+      // docSearchRangesField,那里也要能正常高亮。
+      const ranges = e.value;
+      next =
+        ranges.length === 0
+          ? Decoration.none
+          : Decoration.set(ranges.map((r) => (r.active ? activeDeco : matchDeco).range(r.from, r.to)));
     }
     return next;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
+
+/**
+ * 收集"用户看不见"的 doc 区间,搜索命中落在其中就丢弃,保证搜索条的命中
+ * 计数与真正画出来的高亮一一对应。markdown 之外的文件没有任何 replace
+ * widget,直接返回空数组。
+ *
+ * - 表格:结构字符(分隔行、竖线、padding)由表格模块给出;单元格文字由表格
+ *   widget 负责高亮,所以**不**在这里排除整个表格块。
+ * - 图片:预览只渲染 <img>,alt 文本不可见,整块排除。
+ * - mermaid:图上的 label 是可见的(用户搜的往往就是它),保留命中,只是
+ *   暂时无法在 SVG 里定位高亮 —— 详见 markdownMermaidLivePreview 顶部说明。
+ */
+function collectHiddenSearchRanges(
+  doc: EditorView['state']['doc'],
+  isMarkdown: boolean,
+): DocSearchHiddenRange[] {
+  if (!isMarkdown) return [];
+  return [
+    ...collectMarkdownTableHiddenRanges(doc),
+    ...findImageTargets(doc).map((target) => ({ from: target.from, to: target.to })),
+  ];
+}
 
 class MarkdownMarkerWidget extends WidgetType {
   constructor(
@@ -987,6 +1013,10 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
     const currentLocale = i18nInst.language;
     const editorChrome = getPlaintextEditorChrome(language);
     const isMarkdown = editorChrome === 'markdown';
+    // search handle 建成 mount-only 的 useMemo(identity 稳定),isMarkdown 变化后
+    // 读不到新值 —— 用 ref 保鲜,与 onChange/onScroll 同一套路。
+    const isMarkdownRef = useRef(isMarkdown);
+    isMarkdownRef.current = isMarkdown;
     // UI chrome 分三种:
     //   - code: monospace + 行号;parser 存在时才语法高亮。
     //   - markdown: sans 排版 + markdown parser/highlight + 无行号。
@@ -1028,7 +1058,7 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
 
     // Cached search positions — written by findAll(), read by setActive().
     // Use a ref so search ops don't trigger re-renders.
-    const matchesRef = useRef<{ from: number; to: number }[]>([]);
+    const matchesRef = useRef<DocSearchRange[]>([]);
 
     // readOnly 用 Compartment 包起来,让 preview↔edit 可以 reconfigure 而不
     // remount。否则父组件靠 key 切换 readOnly 会让 CodeMirror 整个销毁重建,
@@ -1073,7 +1103,7 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
           if (!view) return 0;
           if (!query) {
             matchesRef.current = [];
-            view.dispatch({ effects: setSearchRangesEffect.of([]) });
+            view.dispatch({ effects: setDocSearchRangesEffect.of([]) });
             return 0;
           }
           const doc = view.state.doc;
@@ -1081,17 +1111,19 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
           // the search term and the doc, so lowercase both sides → ascii-CI.
           // Unicode folding could be added later if needed.
           const cursor = new SearchCursor(doc, query, 0, doc.length, (s) => s.toLowerCase());
-          const out: { from: number; to: number }[] = [];
+          const scanned: DocSearchRange[] = [];
           while (!cursor.next().done) {
-            out.push({ from: cursor.value.from, to: cursor.value.to });
+            scanned.push({ from: cursor.value.from, to: cursor.value.to, active: false });
           }
+          // 丢掉用户看不见的区间(表格结构字符 / 图片 alt):命中计数必须等于
+          // 真正画得出来的高亮,否则搜索条会报一个点不到的高亮。
+          const out = filterVisibleDocSearchRanges(
+            scanned,
+            collectHiddenSearchRanges(doc, isMarkdownRef.current),
+          );
           matchesRef.current = out;
           // Render all matches; no active until setActive() picks one.
-          view.dispatch({
-            effects: setSearchRangesEffect.of(
-              out.map((r) => ({ from: r.from, to: r.to, active: false })),
-            ),
-          });
+          view.dispatch({ effects: setDocSearchRangesEffect.of(out) });
           return out.length;
         },
         setActive: (index: number): void => {
@@ -1105,7 +1137,7 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
           view.dispatch({
             effects: [
               EditorView.scrollIntoView(matches[index].from, { y: 'center' }),
-              setSearchRangesEffect.of(
+              setDocSearchRangesEffect.of(
                 matches.map((r, i) => ({ from: r.from, to: r.to, active: i === index })),
               ),
             ],
@@ -1115,7 +1147,7 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
           matchesRef.current = [];
           const view = cmViewRef.current;
           if (!view) return;
-          view.dispatch({ effects: setSearchRangesEffect.of([]) });
+          view.dispatch({ effects: setDocSearchRangesEffect.of([]) });
         },
       }),
       [],
@@ -1198,6 +1230,9 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
         ...highlightExtensions,
         ...(initialConfig.isMarkdown
           ? [
+              // 命中集合先于表格 decoration 挂上:markdownTableDecorationField
+              // 的 update 要在同一次事务里读到它(搜索变化 → 重建 widget)。
+              docSearchRangesField,
               markdownTableDecorationField,
               tableLabelsCompartment.of(tableMenuLabelsFacet.of(tableMenuLabelsRef.current)),
               markdownFormattingKeymap,

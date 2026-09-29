@@ -1,0 +1,73 @@
+/**
+ * docSearchRanges — 文档内搜索命中的共享 state 契约。
+ *
+ * 为什么需要一个挂在 state 上的共享契约:markdown live preview 把表格 /
+ * mermaid / 图片整块换成 `Decoration.replace({block: true, widget})`。widget
+ * 覆盖区间内的文档文本不再由 CodeMirror 的行视图渲染,落在同一区间上的
+ * `Decoration.mark`(`cm-doc-search-match`)无处可显示 —— 搜索条会报
+ * "1/2",但表格里的那一处永远没有高亮。命中位置因此必须能被 widget 自己
+ * 读到,由 widget 在自己的 DOM 里补画高亮(见 markdownTableLivePreview)。
+ *
+ * 可见性口径由各 live-preview 模块自己提供区间(`collectMarkdownTableHiddenRanges`
+ * 等),本文件只提供命中集合的存取与纯过滤,不反向依赖任何渲染模块,避免循环。
+ */
+import { StateEffect, StateField } from '@codemirror/state';
+
+export interface DocSearchRange {
+  from: number;
+  to: number;
+  active: boolean;
+}
+
+/** 一次搜索运行的完整命中集合(含 active 标记)。派发空数组 = 清除高亮。 */
+export const setDocSearchRangesEffect = StateEffect.define<DocSearchRange[]>();
+
+/**
+ * 命中集合的单一真相源。
+ *
+ * 挂在 state 上而不是组件 ref 上,是为了让 live preview 的 decoration field
+ * 能在同一次事务里读到它(doc 变化时映射位置、搜索变化时重画 widget 高亮)。
+ * 纯 code / 纯文本文件可以只注册 mark decoration 而不注册本 field,读取方
+ * 一律用 `field(…, false)` 容忍缺席。
+ */
+export const docSearchRangesField = StateField.define<DocSearchRange[]>({
+  create: () => [],
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setDocSearchRangesEffect)) return e.value;
+    }
+    if (!tr.docChanged || value.length === 0) return value;
+    // 编辑模式下用户敲字会挪动命中位置:跟随 changes 映射,避免高亮落在
+    // 错位的字符上(两端分别向外/向内贴边,保持区间语义)。
+    return value.map((range) => ({
+      ...range,
+      from: tr.changes.mapPos(range.from, 1),
+      to: tr.changes.mapPos(range.to, -1),
+    }));
+  },
+});
+
+export interface DocSearchHiddenRange {
+  from: number;
+  to: number;
+}
+
+/** 丢掉任何与不可见区间相交的命中,使"命中计数"与"可见高亮"始终一致。 */
+export function filterVisibleDocSearchRanges(
+  ranges: DocSearchRange[],
+  hidden: DocSearchHiddenRange[],
+): DocSearchRange[] {
+  if (hidden.length === 0) return ranges;
+  return ranges.filter(
+    (range) => !hidden.some((span) => range.from < span.to && range.to > span.from),
+  );
+}
+
+/** 取出落在 [from, to) 内的命中(表格 widget 用它在自己 DOM 里补画高亮)。 */
+export function selectDocSearchRangesWithin(
+  ranges: DocSearchRange[],
+  from: number,
+  to: number,
+): DocSearchRange[] {
+  return ranges.filter((range) => range.from < to && range.to > from);
+}
