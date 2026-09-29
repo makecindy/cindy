@@ -95,11 +95,20 @@ export function buildMobileMessageListExtraData(
 
 /** 待发送气泡是否处于展开态；生产渲染与状态转换测试共用同一判据。 */
 export function isPendingSendItemSelected(
-  item: Pick<MobilePendingSendItem, 'actions' | 'clientId' | 'phase'>,
+  item: Pick<MobilePendingSendItem, 'actions' | 'clientId' | 'phase' | 'queueIndex'>,
   selectedClientId: string | null,
 ): boolean {
-  const interactive = item.actions !== null || item.phase === 'failed';
-  return interactive && selectedClientId === item.clientId;
+  return isPendingSendItemInteractive(item) && selectedClientId === item.clientId;
+}
+
+/** Local outbox rows can be cancelled before desktop accepts them; settled rows cannot. */
+export function isPendingSendItemInteractive(
+  item: Pick<MobilePendingSendItem, 'actions' | 'phase' | 'queueIndex'>,
+): boolean {
+  return item.actions !== null
+    || item.phase === 'uploading'
+    || item.phase === 'failed'
+    || (item.phase === 'sending' && item.queueIndex === null);
 }
 
 export function pendingSendItemKey(clientId: string): string {
