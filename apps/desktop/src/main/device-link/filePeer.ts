@@ -89,10 +89,132 @@ const replies = new Map<
     resolve(value?: string): void;
     reject(error: Error): void;
     timer: ReturnType<typeof setTimeout>;
+    /** Diagnostics probe: transfer progress must never refresh its timeout. */
+    probe?: boolean;
   }
 >();
 const host = new DesktopCaptureWindow(() => stopFilePeers(), 'files');
 let starting: Promise<void> | null = null;
+/** Transfers slower than one sample interval log runtime stats once per interval. */
+const PROGRESS_SAMPLE_MS = 1_000;
+/** After EOF, keep sampling until the data channel buffer drains, at most this long. */
+const DRAIN_SAMPLE_MS = 30_000;
+const monitors = new Map<string, { connection: string; stop(): void }>();
+
+/**
+ * Diagnostics-only stats probe. Unlike command(), it neither renews the idle timer nor
+ * stops the connection on timeout, and its pending entry is marked `probe` so transfer
+ * chunks cannot stretch the 5s budget. Sampling can neither keep alive nor break a
+ * transfer.
+ */
+function probeStats(connection: string): Promise<string | null> {
+  if (!connections.has(connection) || !host.contents || host.contents.isDestroyed())
+    return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const id = randomUUID();
+    const timer = setTimeout(() => {
+      replies.delete(id);
+      resolve(null);
+    }, 5_000);
+    timer.unref();
+    replies.set(id, {
+      connection,
+      resolve: (value) => resolve(value ?? null),
+      reject: () => resolve(null),
+      timer,
+      probe: true,
+    });
+    try {
+      host.contents!.send(FILE_PEER_LOCAL.COMMAND, id, { action: 'stats', connection });
+    } catch {
+      replies.delete(id);
+      clearTimeout(timer);
+      resolve(null);
+    }
+  });
+}
+function bufferedAmountOf(stats: string | null): number | null {
+  try {
+    const value = stats ? JSON.parse(stats)?.channel?.bufferedAmount : undefined;
+    return typeof value === 'number' ? value : null;
+  } catch {
+    return null;
+  }
+}
+function startMonitor(key: string, connection: string, sample: () => Promise<boolean>) {
+  monitors.get(key)?.stop();
+  let busy = false;
+  const timer = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void sample()
+      .then((keep) => {
+        if (!keep) stop();
+      }, stop)
+      .finally(() => {
+        busy = false;
+      });
+  }, PROGRESS_SAMPLE_MS);
+  timer.unref();
+  const stop = () => {
+    clearInterval(timer);
+    if (monitors.get(key)?.stop === stop) monitors.delete(key);
+  };
+  monitors.set(key, { connection, stop });
+  return stop;
+}
+/** Host → controller send: progress while reading, then SCTP buffer drain after EOF. */
+function monitorSend(ticket: string, s: Source) {
+  const tag = `conn=${short(s.connection)}`;
+  // Only one file drains a connection at a time: bufferedAmount covers the whole
+  // channel, so a previous file's monitor cannot attribute the next transfer's
+  // buffered bytes once its send starts.
+  for (const [key, monitor] of [...monitors])
+    if (key.startsWith('send:') && monitor.connection === s.connection) {
+      log.debug(`send drain superseded ${tag} ticket=${short(ticket)}`);
+      monitor.stop();
+    }
+  void probeStats(s.connection).then((stats) =>
+    log.debug(`send start ${tag} size=${s.size} stats=${stats ?? 'unavailable'}`),
+  );
+  let eofAt: number | undefined;
+  startMonitor(`send:${ticket}`, s.connection, async () => {
+    if (sources.get(ticket) !== s) {
+      // Closed before EOF: stopConnection already logged the unfinished byte count.
+      if (s.offset < s.size || !connections.has(s.connection)) return false;
+      eofAt ??= Date.now();
+    }
+    const stats = await probeStats(s.connection);
+    const now = Date.now();
+    if (!stats) {
+      // One failed probe skips its sample only; monitoring continues while the
+      // transfer (or the bounded drain phase) is still active.
+      if (eofAt !== undefined && now - eofAt >= DRAIN_SAMPLE_MS) {
+        log.debug(`send drain unobserved ${tag} buffered=unknown afterEofMs=${now - eofAt}`);
+        return false;
+      }
+      return true;
+    }
+    log.debug(
+      `send progress ${tag} sent=${s.offset}/${s.size}B elapsedMs=${now - s.openedAt}` +
+        (eofAt === undefined ? '' : ` afterEofMs=${now - eofAt}`) +
+        ` stats=${stats}`,
+    );
+    if (eofAt === undefined) return true;
+    const buffered = bufferedAmountOf(stats);
+    if (buffered === 0) {
+      log.debug(`send drained ${tag} ms=${now - s.openedAt} afterEofMs=${now - eofAt}`);
+      return false;
+    }
+    if (buffered === null || now - eofAt >= DRAIN_SAMPLE_MS) {
+      log.debug(
+        `send drain unobserved ${tag} buffered=${buffered ?? 'unknown'} afterEofMs=${now - eofAt}`,
+      );
+      return false;
+    }
+    return true;
+  });
+}
 
 function touch(id: string) {
   const c = connections.get(id);
@@ -143,6 +265,7 @@ function stopConnection(id: string, reason: string) {
     );
   else log.debug(`closed ${detail}`);
   clearTimeout(c.timer);
+  for (const monitor of [...monitors.values()]) if (monitor.connection === id) monitor.stop();
   const out = outgoing.get(c.peer);
   if (out?.id === id) {
     outgoing.delete(c.peer);
@@ -343,7 +466,7 @@ async function handleFilePeerRequest(
           } as Record<string, string>
         )[ext] ??
         'application/octet-stream';
-      sources.set(ticket, {
+      const source: Source = {
         connection: r.connection,
         file,
         size: stat.size,
@@ -351,7 +474,9 @@ async function handleFilePeerRequest(
         offset: 0,
         busy: false,
         openedAt: Date.now(),
-      });
+      };
+      sources.set(ticket, source);
+      monitorSend(ticket, source);
       return { ticket, size: stat.size, mimeType };
     } catch (error) {
       await file.close();
@@ -429,9 +554,11 @@ export function registerFilePeerIpc() {
         touch(connection);
         if (sources.get(ticket) !== s) throw new Error('FILE_PEER_CLOSED');
         s.offset += bytes.length;
-        // Receive deadlines measure stalled disk/network progress, not total file duration.
+        // Receive deadlines measure stalled disk/network progress, not total file
+        // duration. Diagnostic probes keep their own 5s budget instead: chunk
+        // refreshes must not stretch a stalled getStats() past its timeout.
         for (const pending of replies.values())
-          if (pending.connection === s.connection) pending.timer.refresh();
+          if (pending.connection === s.connection && !pending.probe) pending.timer.refresh();
         if (!bytes.length) {
           sources.delete(ticket);
           await s.file.close();
@@ -476,9 +603,9 @@ export function registerFilePeerIpc() {
         if (written.bytesWritten !== bytes.length || sinks.get(id) !== s)
           throw new Error('FILE_PEER_CLOSED');
         s.offset += bytes.length;
-        // Receive deadlines measure stalled disk/network progress, not total file duration.
+        // Same as READ: transfer progress never refreshes diagnostic probe timers.
         for (const pending of replies.values())
-          if (pending.connection === s.connection) pending.timer.refresh();
+          if (pending.connection === s.connection && !pending.probe) pending.timer.refresh();
       } finally {
         s.busy = false;
       }
@@ -575,7 +702,7 @@ async function receivePeerFile(
       out.remote = remote;
       await command({ action: 'answer', connection: id, sdp: r.sdp });
       log.debug(
-        `connected peer=${short(peer)} setupMs=${Date.now() - startedAt} stats=${await command({ action: 'stats', connection: id })}`,
+        `connected peer=${short(peer)} setupMs=${Date.now() - startedAt} stats=${(await probeStats(id)) ?? 'unavailable'}`,
       );
     }
     step = 'open';
@@ -600,6 +727,16 @@ async function receivePeerFile(
     sinks.set(sink, { connection: id, file: handle, offset: 0, size: file.size, busy: false });
     step = 'receive';
     const transferStartedAt = Date.now();
+    const stopProgress = startMonitor(`receive:${sink}`, id, async () => {
+      const stats = await probeStats(id);
+      // One failed probe skips its sample only; stopProgress() below bounds the
+      // monitor, so a stats hiccup cannot silence the rest of the transfer.
+      if (!stats) return sinks.has(sink);
+      log.debug(
+        `receive progress peer=${short(peer)} conn=${short(id)} written=${sinks.get(sink)?.offset ?? '?'}/${file.size}B elapsedMs=${Date.now() - transferStartedAt} stats=${stats}`,
+      );
+      return sinks.has(sink);
+    });
     try {
       await command({
         action: 'receive',
@@ -615,6 +752,7 @@ async function receivePeerFile(
       )
         throw new Error('FILE_PEER_SIZE');
     } finally {
+      stopProgress();
       sinks.delete(sink);
       await handle.close().catch(() => {});
     }

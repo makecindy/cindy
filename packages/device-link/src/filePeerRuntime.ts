@@ -6,6 +6,39 @@ export interface FilePeerRuntimeBridge {
   invoke?(connection: string, payload: string): Promise<string>;
 }
 
+/** Diagnostics only: application-level progress of the latest receive on a peer. */
+interface ReceiveProgress {
+  size: number;
+  startedAt: number;
+  received: number;
+  written: number;
+  queued: number;
+  queuedMax: number;
+  granted: number;
+  writes: number;
+  writeMs: number;
+  writeMaxMs: number;
+  lastDataAt: number;
+}
+/** Diagnostics only: application-level progress of the latest files-v2 send on a peer. */
+interface SendProgress {
+  startedAt: number;
+  sent: number;
+  credit: number;
+  reads: number;
+  readMs: number;
+  readMaxMs: number;
+  creditWaitMs: number;
+  waitingSince: number | null;
+}
+interface PeerState {
+  pc: RTCPeerConnection;
+  dc: RTCDataChannel | null;
+  busy: boolean;
+  recv?: ReceiveProgress;
+  send?: SendProgress;
+}
+
 /**
  * Trusted browser transport, also serialized into Mobile's isolated transport WebView.
  * Keep the factory self-contained: no credentials, paths, imports or user HTML enter it.
@@ -20,10 +53,7 @@ function rpcTimeoutMs(value: unknown): number {
 }
 
 export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
-  const peers = new Map<
-    string,
-    { pc: RTCPeerConnection; dc: RTCDataChannel | null; busy: boolean }
-  >();
+  const peers = new Map<string, PeerState>();
   const chunkBytes = 16384;
   const maxBytes = 2147483648;
   const rpcPeers = new Map<
@@ -160,7 +190,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
   function create(id: string, servers: RTCIceServer[]) {
     if (peers.has(id) || peers.size >= 4) throw new Error("FILE_PEER_BUSY");
     const pc = new RTCPeerConnection({ iceServers: servers });
-    const p = { pc, dc: null as RTCDataChannel | null, busy: false };
+    const p: PeerState = { pc, dc: null, busy: false };
     peers.set(id, p);
     pc.onconnectionstatechange = () => {
       if (["failed", "closed", "disconnected"].includes(pc.connectionState))
@@ -243,14 +273,26 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
             while (source && source.credit > 0) {
               const current = source;
               current.credit--;
+              const readStartedAt = Date.now();
               const bytes = decode(
                 await bridge.read(id, current.ticket, current.offset),
               );
               if (peers.get(id) !== p || channel.readyState !== "open") return;
               channel.send(bytes.buffer);
               current.offset += bytes.length;
+              if (p.send) {
+                const ms = Date.now() - readStartedAt;
+                p.send.reads++;
+                p.send.readMs += ms;
+                p.send.readMaxMs = Math.max(p.send.readMaxMs, ms);
+                p.send.sent = current.offset;
+                p.send.credit = current.credit;
+              }
               if (!bytes.length) source = undefined;
             }
+            // Out of credit before EOF: the receiver has not confirmed enough writes yet.
+            if (source && p.send && p.send.waitingSince === null)
+              p.send.waitingSince = Date.now();
           } catch {
             close(id);
           } finally {
@@ -272,9 +314,26 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
               if (source || !/^[a-f0-9-]{36}$/.test(r.ticket) || r.offset !== 0)
                 throw new Error();
               source = { ticket: r.ticket, offset: 0, credit: r.credit };
+              p.send = {
+                startedAt: Date.now(),
+                sent: 0,
+                credit: r.credit,
+                reads: 0,
+                readMs: 0,
+                readMaxMs: 0,
+                creditWaitMs: 0,
+                waitingSince: null,
+              };
             } else {
               if (!source || source.credit + r.credit > 64) throw new Error();
               source.credit += r.credit;
+              if (p.send) {
+                p.send.credit = source.credit;
+                if (p.send.waitingSince !== null) {
+                  p.send.creditWaitMs += Date.now() - p.send.waitingSince;
+                  p.send.waitingSince = null;
+                }
+              }
             }
             void pump();
           } catch {
@@ -391,6 +450,20 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
           let ended = false,
             settled = false;
           let writes = Promise.resolve();
+          const progress: ReceiveProgress = {
+            size,
+            startedAt: Date.now(),
+            received: 0,
+            written: 0,
+            queued: 0,
+            queuedMax: 0,
+            granted,
+            writes: 0,
+            writeMs: 0,
+            writeMaxMs: 0,
+            lastDataAt: 0,
+          };
+          p.recv = progress;
           let timer = setTimeout(
             () => done(new Error("FILE_PEER_TIMEOUT")),
             60000,
@@ -422,13 +495,22 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
             }
             received += bytes.length;
             ended = bytes.length === 0;
+            progress.received = received;
+            progress.queued = queued;
+            progress.queuedMax = Math.max(progress.queuedMax, queued);
+            progress.lastDataAt = Date.now();
             writes = writes
               .then(async () => {
                 if (settled) return;
                 if (!bytes.length) {
+                  // The zero-byte EOF block leaves the queue like any other block,
+                  // so a completed receive reports no pending writes.
+                  queued--;
+                  progress.queued = queued;
                   done();
                   return;
                 }
+                const writeStartedAt = Date.now();
                 let binary = "";
                 for (const byte of bytes) binary += String.fromCharCode(byte);
                 await bridge.write(sink, written, btoa(binary));
@@ -436,6 +518,12 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
                 if (peers.get(id) !== p) throw new Error("FILE_PEER_CLOSED");
                 written += bytes.length;
                 queued--;
+                const writeMs = Date.now() - writeStartedAt;
+                progress.writes++;
+                progress.writeMs += writeMs;
+                progress.writeMaxMs = Math.max(progress.writeMaxMs, writeMs);
+                progress.written = written;
+                progress.queued = queued;
                 clearTimeout(timer);
                 timer = setTimeout(
                   () => done(new Error("FILE_PEER_TIMEOUT")),
@@ -446,6 +534,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
                   const credit = Math.min(32, blocks - granted);
                   dc!.send(JSON.stringify({ credit }));
                   granted += credit;
+                  progress.granted = granted;
                   replenished = 0;
                 }
               })
@@ -549,6 +638,57 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
       const remote = selected?.remoteCandidateId
         ? entries.get(selected.remoteCandidateId)
         : undefined;
+      // Diagnostics beyond the original four fields: counters, candidate kinds and
+      // application progress only. Addresses, ports, URLs and payloads never leave here.
+      // Engines expose different subsets; absent metrics are omitted, never reported as 0.
+      const pick = (
+        source: Record<string, unknown> | undefined,
+        keys: string[],
+      ) => {
+        if (!source) return undefined;
+        const out: Record<string, number | string> = {};
+        for (const key of keys) {
+          const value = source[key];
+          if (typeof value === "number" && Number.isFinite(value))
+            out[key] = Math.round(value);
+          else if (typeof value === "string" && value.length <= 32)
+            out[key] = value;
+        }
+        return Object.keys(out).length ? out : undefined;
+      };
+      let transport: Record<string, unknown> | undefined;
+      let channel: Record<string, unknown> | undefined;
+      // Gathered candidate kinds and pair states explain why ICE settled on relay.
+      const count = (bucket: Record<string, number>, key: unknown) => {
+        const name =
+          typeof key === "string" && key.length <= 16 ? key : "other";
+        bucket[name] = (bucket[name] ?? 0) + 1;
+      };
+      const candidates = {
+        local: {} as Record<string, number>,
+        remote: {} as Record<string, number>,
+        pairs: {} as Record<string, number>,
+        // Client→TURN transport of each gathered relay candidate (udp / tcp / tls).
+        localRelay: {} as Record<string, number>,
+      };
+      report.forEach((entry) => {
+        if (entry.type === "transport" && entry.selectedCandidatePairId)
+          transport = entry;
+        if (entry.type === "data-channel" && entry.label === p.dc?.label)
+          channel = entry;
+        if (entry.type === "local-candidate") {
+          count(candidates.local, entry.candidateType);
+          if (entry.candidateType === "relay")
+            count(candidates.localRelay, entry.relayProtocol);
+        }
+        if (entry.type === "remote-candidate")
+          count(candidates.remote, entry.candidateType);
+        if (entry.type === "candidate-pair")
+          count(candidates.pairs, entry.state);
+      });
+      const now = Date.now();
+      const recv = p.recv;
+      const send = p.send;
       return JSON.stringify({
         path: !selected
           ? "unknown"
@@ -562,6 +702,70 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
             ? Math.round(selected.currentRoundTripTime * 1000)
             : null,
         streaming: p.dc?.label === "files-v2",
+        local: pick(local, [
+          "candidateType",
+          "protocol",
+          "relayProtocol",
+          "networkType",
+        ]),
+        remote: pick(remote, ["candidateType", "protocol"]),
+        candidates,
+        pair: pick(selected as Record<string, unknown> | undefined, [
+          "state",
+          "bytesSent",
+          "bytesReceived",
+          "packetsSent",
+          "packetsReceived",
+          "packetsDiscardedOnSend",
+          "availableOutgoingBitrate",
+          "availableIncomingBitrate",
+          "requestsSent",
+          "responsesReceived",
+          "consentRequestsSent",
+        ]),
+        transport: pick(transport, [
+          "dtlsState",
+          "bytesSent",
+          "bytesReceived",
+          "packetsSent",
+          "packetsReceived",
+          "selectedCandidatePairChanges",
+        ]),
+        channel: {
+          ...pick(channel, [
+            "messagesSent",
+            "bytesSent",
+            "messagesReceived",
+            "bytesReceived",
+          ]),
+          bufferedAmount: p.dc?.bufferedAmount,
+        },
+        receive: recv && {
+          size: recv.size,
+          elapsedMs: now - recv.startedAt,
+          received: recv.received,
+          written: recv.written,
+          queued: recv.queued,
+          queuedMax: recv.queuedMax,
+          granted: recv.granted,
+          writes: recv.writes,
+          writeAvgMs: recv.writes
+            ? Math.round(recv.writeMs / recv.writes)
+            : null,
+          writeMaxMs: recv.writeMaxMs,
+          idleMs: recv.lastDataAt ? now - recv.lastDataAt : null,
+        },
+        send: send && {
+          elapsedMs: now - send.startedAt,
+          sent: send.sent,
+          credit: send.credit,
+          reads: send.reads,
+          readAvgMs: send.reads ? Math.round(send.readMs / send.reads) : null,
+          readMaxMs: send.readMaxMs,
+          creditWaitMs:
+            send.creditWaitMs +
+            (send.waitingSince === null ? 0 : now - send.waitingSince),
+        },
       });
     },
     offer,

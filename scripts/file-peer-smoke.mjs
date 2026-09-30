@@ -131,6 +131,34 @@ try {
             const ms = Math.max(1, Math.round(performance.now() - start));
             transfers.push({ size, ms, bytesPerSecond: Math.round(size * 1000 / ms) });
           }
+          let diagnostics = null;
+          if (streaming) {
+            // Progress diagnostics describe the last transfer and carry no addresses or URLs.
+            const last = sizes[sizes.length - 1];
+            const rawReceiver = await client.stats("client");
+            const rawSender = await host.stats("host");
+            if (/"(?:address|ip|port|url|relatedAddress|relatedPort|foundation|usernameFragment)"/.test(rawReceiver + rawSender))
+              throw new Error("stats expose candidate addresses");
+            const receiver = JSON.parse(rawReceiver);
+            const sender = JSON.parse(rawSender);
+            const r = receiver.receive, s = sender.send;
+            if (!r || r.size !== last || r.received !== last || r.written !== last ||
+                r.writes !== Math.ceil(last / 16384) || r.queued !== 0 || !(r.queuedMax >= 1))
+              throw new Error("receive progress differs");
+            if (!s || s.sent !== last || s.reads !== Math.ceil(last / 16384) + 1 || !(s.creditWaitMs >= 0))
+              throw new Error("send progress differs");
+            if (!(receiver.pair?.bytesReceived >= last) || typeof receiver.channel?.bufferedAmount !== "number")
+              throw new Error("transport counters missing");
+            if (receiver.local?.candidateType === undefined || receiver.path !== expectedPath ||
+                !(receiver.candidates?.local?.[receiver.local.candidateType] >= 1) ||
+                !(receiver.candidates?.pairs?.succeeded >= 1) ||
+                typeof receiver.candidates?.localRelay !== "object")
+              throw new Error("candidate kind missing");
+            diagnostics = {
+              receive: r, send: s, pair: receiver.pair, local: receiver.local,
+              candidates: receiver.candidates,
+            };
+          }
           sourceSize = 10;
           sourceOffset = 0;
           outputSize = 0;
@@ -150,6 +178,7 @@ try {
             setupMs,
             stats,
             transfers,
+            diagnostics,
           };
         } finally {
           host.dispose();

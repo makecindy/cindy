@@ -10,6 +10,7 @@ const mock = vi.hoisted(() => ({
   iceConfig: vi.fn(async () => []),
   ready: vi.fn(async () => {}),
   replyDelay: 0,
+  sent: [] as string[],
   commandReply: vi.fn((_action: string) => 'v=0'),
   now: undefined as number | undefined,
   receiving: undefined as undefined | { sink: string; reply: () => void },
@@ -46,6 +47,7 @@ vi.mock('../../remote-desktop/captureWindow', () => ({
         isDestroyed: () => false,
         send: (_channel: string, id: string, c: { action: string; sink?: string }) => {
           if (c.action !== 'close') {
+            mock.sent.push(c.action);
             const reply = () =>
               mock.handlers.get('file-peer:host:reply')!({}, id, true, mock.commandReply(c.action));
             if (c.action === 'receive') {
@@ -229,6 +231,7 @@ describe('authorized file peer source', () => {
     mock.current = true;
     mock.receiving = undefined;
     mock.now = undefined;
+    mock.sent.length = 0;
     mock.iceConfig.mockReset().mockResolvedValue([]);
     mock.ready.mockReset().mockResolvedValue();
     mock.replyDelay = 0;
@@ -451,6 +454,98 @@ describe('authorized file peer source', () => {
       const next = await open(connection);
       await vi.advanceTimersByTimeAsync(61_000);
       await expect(read(connection, next.ticket, 0)).rejects.toThrow('FILE_PEER_BLOCK');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('samples send progress without renewing the idle deadline and stops with the connection', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const { connection } = await connect();
+      const { ticket } = await open(connection);
+      mock.commandReply.mockClear();
+      await vi.advanceTimersByTimeAsync(3_000);
+      const samples = () => mock.commandReply.mock.calls.filter(([action]) => action === 'stats');
+      expect(samples().length).toBeGreaterThanOrEqual(3);
+      await vi.advanceTimersByTimeAsync(58_000);
+      await expect(read(connection, ticket, 0)).rejects.toThrow('FILE_PEER_BLOCK');
+      mock.commandReply.mockClear();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(samples()).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('keeps a transfer usable when a diagnostics stats probe stalls', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const { connection } = await connect();
+      mock.replyDelay = 20_000;
+      const { ticket } = await open(connection);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(await read(connection, ticket, 0)).toBe(Buffer.from('hello').toString('base64'));
+      expect(await read(connection, ticket, 5)).toBe('');
+      expect((await open(connection)).ticket).toEqual(expect.any(String));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('keeps sampling after a failed stats probe while the transfer runs', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const { connection } = await connect();
+      // Every stats reply stalls past the 5s probe budget: each sample times out.
+      mock.replyDelay = 20_000;
+      const { ticket } = await open(connection);
+      await vi.advanceTimersByTimeAsync(30_000);
+      // A transient stats failure skips one sample instead of silencing the rest
+      // of the transfer: probes keep flowing (old code sent exactly two).
+      expect(mock.sent.filter((action) => action === 'stats').length).toBeGreaterThanOrEqual(5);
+      expect(await read(connection, ticket, 0)).toBe(Buffer.from('hello').toString('base64'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('does not let transfer chunks stretch a stalled stats probe past its budget', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      await truncate(file, 100_000);
+      mock.resolve.mockResolvedValue({ absPath: file, mimeType: 'text/plain', maxBytes: 100_000 });
+      const { connection } = await connect();
+      mock.replyDelay = 20_000;
+      const { ticket, size } = await open(connection);
+      expect(size).toBe(100_000);
+      // Chunks keep arriving well within 5s; a shared timer would let them refresh
+      // the stalled probe forever and skip every later sample.
+      for (let offset = 0; ; offset += 16_384) {
+        await vi.advanceTimersByTimeAsync(3_000);
+        const base64 = await read(connection, ticket, Math.min(offset, size));
+        if (!base64) break;
+      }
+      expect(mock.sent.filter((action) => action === 'stats').length).toBeGreaterThanOrEqual(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('attributes channel drain to one file at a time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      mock.commandReply.mockImplementation((action) =>
+        action === 'stats' ? JSON.stringify({ channel: { bufferedAmount: 5 } }) : 'v=0',
+      );
+      const { connection } = await connect();
+      const first = await open(connection);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await read(connection, first.ticket, 0)).toBe(Buffer.from('hello').toString('base64'));
+      expect(await read(connection, first.ticket, 5)).toBe('');
+      // The first file is still draining (bufferedAmount stays above zero) when the
+      // next transfer starts and owns the channel buffer.
+      await vi.advanceTimersByTimeAsync(1_000);
+      await open(connection);
+      mock.sent.length = 0;
+      await vi.advanceTimersByTimeAsync(3_000);
+      // Only the new file samples now; a superseded drain monitor would double the rate.
+      expect(mock.sent.filter((action) => action === 'stats').length).toBeLessThanOrEqual(4);
     } finally {
       vi.useRealTimers();
     }

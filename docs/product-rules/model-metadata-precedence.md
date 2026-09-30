@@ -214,6 +214,6 @@ Server `catalog/providers.json` 是数据正本；客户端 `catalog/model-regis
 
 复用当前目录接口与 Registry V4 协商，不增加请求或数据库表。旧 V1/V2/V3 客户端收到展开后的旧字段；不同资料的多条路由在兼容响应中拆成独立条目，保留上游 ID，额外条目使用派生目录 ID。旧协议不支持的公共引用、覆盖指令与图片字段被移除，空默认以缺省表达。
 
-供应商总容量与客户端工作预算分开：既有 GPT 272K 工作预算继续保留；这里的 `contextWindowMax` 指客户端 CatalogModel 投影，不是 Server 字段。Registry 资料中的 contextWindow 与合法 perAgent 工作默认分别维护；用户显式窗口覆盖仍优先。协议和实际执行能力门禁继续由运行时负责，元数据不能解锁未实现协议或伪造可售性。
+供应商总容量与客户端工作预算分开：所有来源 OpenAI 聊天模型的至多 272K 工作默认继续保留（含第三方、自定义与组织连接，用户显式设置优先）；这里的 `contextWindowMax` 指客户端 CatalogModel 投影，不是 Server 字段。Registry 资料中的 contextWindow 与合法 perAgent 工作默认分别维护；用户显式窗口覆盖仍优先。协议和实际执行能力门禁继续由运行时负责，元数据不能解锁未实现协议或伪造可售性。
 
 验收至少覆盖缺字段继承、供应商优先、force 修正、用户最高、显式 false/null/空数组、未知供应商公共识别、刷新与保存、旧版解析、离线与坏快照回退。模型推荐标准另见 [本地模型筛选](local-model-selection.md)，仍只按能力、速度和实际运行内存筛选。
