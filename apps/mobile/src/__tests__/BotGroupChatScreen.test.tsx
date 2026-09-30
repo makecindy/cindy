@@ -4,6 +4,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 
+type KeyboardState = { height: number; visible: boolean; transition: { current: null } };
+
 const h = vi.hoisted(() => ({
   chat: null as any,
   alert: vi.fn(),
@@ -16,6 +18,9 @@ const h = vi.hoisted(() => ({
   scroll: null as any,
   scrollToEnd: vi.fn(),
   markRead: vi.fn(),
+  platform: 'ios' as 'ios' | 'android',
+  window: { width: 390, height: 844 } as { width: number; height: number },
+  keyboard: { height: 0, visible: false, transition: { current: null } } as KeyboardState,
   // Fake of the shared upload pipeline (useMobileLocalAttachments).
   local: null as any,
   discarded: [] as any[],
@@ -23,8 +28,9 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('react-native', () => {
-  const box = (tag: string) => ({ children, testID, accessibilityLabel }: any) =>
-    el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel }, children);
+  const box = (tag: string) => ({ children, testID, accessibilityLabel, style }: any) =>
+    el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel,
+      'data-style': style === undefined ? undefined : JSON.stringify(style) }, children);
   return {
     View: box('div'), ScrollView: ({ ref, children, ...props }: any) => {
       h.scroll = props;
@@ -36,9 +42,9 @@ vi.mock('react-native', () => {
       typeof children === 'function' ? children({ pressed: false }) : children),
     ActivityIndicator: () => el('i', { 'data-testid': 'spinner' }),
     StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
-    Platform: { OS: 'ios', select: (value: any) => value.ios },
+    Platform: { get OS() { return h.platform; }, select: (value: any) => value[h.platform] },
     Alert: { alert: h.alert },
-    useWindowDimensions: () => ({ width: 390, height: 844 }),
+    useWindowDimensions: () => h.window,
     AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
   };
 });
@@ -48,7 +54,11 @@ vi.mock('expo-router', () => ({
   useRouter: () => ({ back: vi.fn(), replace: vi.fn() }),
   useFocusEffect: (effect: () => void) => useEffect(effect, [effect]),
 }));
-vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: any) => el('main', null, children) }));
+vi.mock('react-native-safe-area-context', () => ({
+  SafeAreaView: ({ children }: any) => el('main', null, children),
+  useSafeAreaInsets: () => ({ top: 0, bottom: h.platform === 'android' ? 60 : 0, left: 0, right: 0 }),
+}));
+vi.mock('@/session/useMobileKeyboardState', () => ({ useMobileKeyboardState: () => h.keyboard }));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({
@@ -247,6 +257,8 @@ beforeEach(() => {
   h.uuid = 0; h.inputs = {}; h.teammates = { rows: [], loading: false, failed: false };
   h.chat = { reload: vi.fn(), act: vi.fn(async () => ({ effects: [] })), online: true };
   h.discarded = []; h.deleted = [];
+  h.platform = 'ios'; h.window = { width: 390, height: 844 };
+  h.keyboard = { height: 0, visible: false, transition: { current: null } };
   h.local = {
     options: null, setPending: null,
     addImages: vi.fn(), addDocument: vi.fn(), addPastedImages: vi.fn(), enqueueUploads: vi.fn(),
@@ -738,5 +750,56 @@ describe('offline computer', () => {
     expect(byId('botGroup.plan.start')?.disabled).toBe(true);
     expect(byId('botGroup.continue')?.disabled).toBe(true);
     expect(h.row.editable).toBe(false);
+  });
+});
+
+describe('android keyboard avoidance', () => {
+  const containerStyle = () => byId('botGroup.timeline')?.parentElement?.getAttribute('data-style') ?? '';
+  const showKeyboard = async (height: number) => {
+    h.keyboard = { height, visible: true, transition: { current: null } };
+    await act(async () => { root.render(el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' })); });
+  };
+
+  it('reserves the keyboard height under the composer when the system did not resize', async () => {
+    h.platform = 'android';
+    await render();
+    await showKeyboard(700);
+    // 键盘 700 − 外层 SafeAreaView 已扣的 60；edge-to-edge 下窗口没缩，所以全额让出。
+    expect(containerStyle()).toContain('"paddingBottom":640');
+  });
+
+  it('leaves no padding while the keyboard is closed', async () => {
+    h.platform = 'android';
+    await render();
+    expect(containerStyle()).not.toContain('paddingBottom');
+  });
+
+  it('does not double-compensate after the system already resized the window', async () => {
+    h.platform = 'android';
+    await render();
+    await showKeyboard(700);
+    expect(containerStyle()).toContain('"paddingBottom":640');
+    // 系统已经按 adjustResize 缩了窗口（全高 844 − 当前 144 = 700），不再重复让出。
+    h.window = { width: 390, height: 144 };
+    await showKeyboard(700);
+    expect(containerStyle()).not.toContain('paddingBottom');
+  });
+
+  it('keeps the tail visible when the keyboard shrinks the message viewport', async () => {
+    h.platform = 'android';
+    vi.useFakeTimers();
+    await render();
+    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    h.keyboard = { height: 700, visible: true, transition: { current: null } };
+    await act(async () => { root.render(el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' })); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+    expect(h.scrollToEnd).toHaveBeenCalled();
+  });
+
+  it('leaves iOS to KeyboardAvoidingView', async () => {
+    h.platform = 'ios';
+    await render();
+    await showKeyboard(700);
+    expect(containerStyle()).not.toContain('paddingBottom');
   });
 });

@@ -16,13 +16,14 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  useWindowDimensions,
   View,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { ChevronLeft, Settings2 } from 'lucide-react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import {
@@ -81,8 +82,10 @@ import { BotGroupSpeakerRow } from './BotGroupSpeakerRow';
 import { botGroupActionErrorText } from './botGroupCopy';
 import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
 import type { ResolveRemoteMediaFn } from './remoteMedia';
+import { androidComposerKeyboardBottomPadding } from './mobileComposerKeyboardAvoidance';
 import { useBotGroupChat } from './useBotGroupChat';
 import { useBotGroupRemoteMedia } from './useBotGroupRemoteMedia';
+import { useMobileKeyboardState } from './useMobileKeyboardState';
 
 /** Toast copy when a plan action fails without a more specific cause. */
 const PLAN_ACTION_FAILED: Record<BotGroupPlanAction, string> = {
@@ -102,6 +105,23 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
   const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { user, accountGeneration } = useAuth();
+  // Android 键盘避让：edge-to-edge 下系统不再缩窗（见 mobileComposerKeyboardAvoidance.ts），
+  // 群聊页必须自己让出键盘高度，否则输入框被键盘盖住；iOS 仍走 KAV padding，两条路不叠加。
+  const keyboard = useMobileKeyboardState();
+  const insets = useSafeAreaInsets();
+  const window = useWindowDimensions();
+  // 全高按宽度分桶取最大值：横竖屏切换时旧的全高不能拿来算缩窗，否则旋转后误判。
+  const restingWindow = useRef({ width: 0, height: 0 });
+  if (restingWindow.current.width !== window.width) restingWindow.current = { width: window.width, height: window.height };
+  else restingWindow.current.height = Math.max(restingWindow.current.height, window.height);
+  const keyboardBottomPadding = Platform.OS === 'android'
+    ? androidComposerKeyboardBottomPadding({
+      keyboardHeight: keyboard.height,
+      bottomInset: insets.bottom,
+      restingWindowHeight: restingWindow.current.height,
+      windowHeight: window.height,
+    })
+    : 0;
   const host = useMemo<RemoteResourceHostTarget>(() => ({ deviceId, deviceName: deviceName || deviceId }), [deviceId, deviceName]);
   const chat = useBotGroupChat(host, groupId);
   const identity = useBotGroupIdentities(deviceId);
@@ -147,6 +167,12 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
     const subscription = AppState.addEventListener('change', state => { if (state === 'active') acknowledge(); });
     return () => { cancelAnimationFrame(frame); subscription.remove(); };
   }, [acknowledge]);
+  // 键盘弹起把消息视口压矮：贴底时补一次滚到底，否则最后一条被顶出视野（与长会话贴底口径一致）。
+  useEffect(() => {
+    if (!keyboard.visible || !stickToBottom.current) return;
+    const frame = requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
+    return () => cancelAnimationFrame(frame);
+  }, [keyboard.visible, group]);
   // The list row seeds the header while the first read is in flight (display only).
   const cachedRow = group ? null : readRemoteCollectionCache(`${user?.id ?? ''}:${accountGeneration}`, BOT_GROUP_REMOTE_COLLECTION_ID)
     .find((row) => row.host.deviceId === deviceId && row.item.ref.id === groupId) ?? null;
@@ -284,7 +310,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
       </MainWindowEmptyState>
     </View>;
   } else {
-    body = <KeyboardAvoidingView style={styles.flex} enabled={Platform.OS === 'ios'} behavior="padding">
+    const timelineAndComposer = (<>
       {!chat.online ? <Text accessibilityRole="alert" style={styles.offline} testID="botGroup.offlineNote">{t('devices.resources.hostOffline')}</Text> : null}
       <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={styles.timeline} keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive" onScroll={onScroll} scrollEventThrottle={64}
@@ -306,7 +332,12 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
       <BotGroupComposer members={group.members} identityFor={identityFor} deviceId={deviceId} online={chat.online}
         running={group.round.status === 'running'} planState={botGroupComposerPlanState(openBotGroupPlan(group))}
         attachmentsSupported={group.supportsAttachments === true} onSend={send} onStop={stop} />
-    </KeyboardAvoidingView>;
+    </>);
+    // iOS 交给 KAV padding；Android 已被上面的显式留白接管，两者不叠加（避免双算上抬）。
+    body = Platform.OS === 'ios'
+      ? <KeyboardAvoidingView style={styles.flex} behavior="padding">{timelineAndComposer}</KeyboardAvoidingView>
+      : <View style={[styles.flex, keyboardBottomPadding > 0 && { paddingBottom: keyboardBottomPadding }]}
+        >{timelineAndComposer}</View>;
   }
 
   return <SafeAreaView style={styles.screen} edges={['top', 'left', 'right', 'bottom']} testID="botGroup.screen">
