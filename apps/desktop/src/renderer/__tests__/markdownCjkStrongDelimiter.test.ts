@@ -100,10 +100,15 @@ describe('MarkdownRenderer — remarkCjkFriendly source contract', () => {
     resolve(__dirname, '..', 'components', 'chat', 'MarkdownRenderer.tsx'),
     'utf8',
   );
+  // 插件链清单的单一事实源（渲染与修订校验同源），见文件头说明。
+  const pipelineSource = readFileSync(
+    resolve(__dirname, '..', 'components', 'chat', 'markdownPluginPipeline.ts'),
+    'utf8',
+  );
 
   it('两条 remark 插件链都在 remarkGfm 之后注册 remarkCjkFriendly', () => {
-    const pluginArrays = source.match(/const REMARK_PLUGINS\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
-    const privilegedArrays = source.match(/const REMARK_PLUGINS_PRIVILEGED\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
+    const pluginArrays = pipelineSource.match(/const MARKDOWN_REMARK_PLUGINS\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
+    const privilegedArrays = pipelineSource.match(/const MARKDOWN_REMARK_PLUGINS_PRIVILEGED\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
     for (const plugins of [pluginArrays, privilegedArrays]) {
       expect(plugins).toContain('remarkCjkFriendly');
       expect(plugins.indexOf('remarkGfm')).toBeLessThan(plugins.indexOf('remarkCjkFriendly'));

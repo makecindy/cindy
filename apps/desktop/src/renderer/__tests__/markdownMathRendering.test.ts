@@ -121,27 +121,38 @@ describe('MarkdownRenderer — math 接线 source contract', () => {
     resolve(__dirname, '..', 'components', 'chat', 'MarkdownRenderer.tsx'),
     'utf8',
   );
+  // 插件链清单的单一事实源（渲染与修订校验同源），见文件头说明。
+  const pipelineSource = readFileSync(
+    resolve(__dirname, '..', 'components', 'chat', 'markdownPluginPipeline.ts'),
+    'utf8',
+  );
 
   it('remarkMath 注册进两条 remark 插件链', () => {
-    const pluginArrays = source.match(/const REMARK_PLUGINS\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
-    const privilegedArrays = source.match(/const REMARK_PLUGINS_PRIVILEGED\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
+    const pluginArrays = pipelineSource.match(/const MARKDOWN_REMARK_PLUGINS\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
+    const privilegedArrays = pipelineSource.match(/const MARKDOWN_REMARK_PLUGINS_PRIVILEGED\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
     expect(pluginArrays).toContain('remarkMath');
     expect(privilegedArrays).toContain('remarkMath');
   });
 
   it('remarkStrictInlineMath 注册且排在 remarkMath 之后(松散配对降级)', () => {
-    const pluginArrays = source.match(/const REMARK_PLUGINS\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
+    const pluginArrays = pipelineSource.match(/const MARKDOWN_REMARK_PLUGINS\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
     expect(pluginArrays.indexOf('remarkStrictInlineMath')).toBeGreaterThan(pluginArrays.indexOf('remarkMath'));
-    const privileged = source.match(/const REMARK_PLUGINS_PRIVILEGED\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
+    const privileged = pipelineSource.match(/const MARKDOWN_REMARK_PLUGINS_PRIVILEGED\b[^=]*= \[[\s\S]*?\];/)?.[0] ?? '';
     expect(privileged).toContain('remarkStrictInlineMath');
   });
 
   it('rehypeKatex 注册且排在 rehypeHighlight 之前', () => {
-    const rehypeArray = source.match(/const REHYPE_PLUGINS[\s\S]*?\];/)?.[0] ?? '';
+    // rehype 链 2026-09-20 起集中在 markdownPluginPipeline.ts（审查页与聊天页同一份）。
+    const rehypeArray =
+      pipelineSource.match(/function buildRehypePlugins\([\s\S]*?\n(?=export const MARKDOWN_REHYPE_PLUGINS)/)?.[0] ?? '';
     const katexIdx = rehypeArray.indexOf('rehypeKatex');
     const highlightIdx = rehypeArray.indexOf('rehypeHighlight');
     expect(katexIdx).toBeGreaterThan(-1);
     expect(highlightIdx).toBeGreaterThan(katexIdx);
+    // 审查页专用插件必须紧跟 rehypeKatex（它处理的是 KaTeX 输出）。
+    const marksIdx = rehypeArray.indexOf('rehypeReviewMathMarks');
+    expect(marksIdx).toBeGreaterThan(katexIdx);
+    expect(marksIdx).toBeLessThan(rehypeArray.indexOf('rehypeHighlight'));
   });
 
   it('normalizeMathDelimiters 在渲染前调用且 emitSourceLines 走保行数模式', () => {
