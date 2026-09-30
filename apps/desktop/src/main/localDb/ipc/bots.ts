@@ -59,6 +59,7 @@ import {
 import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.js';
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
+import { readBotWorkbench } from '../../maker-ipc/botWorkbenchService.js';
 import {
   NEW_BOT_DEFAULT_PI_EFFORT,
   NEW_BOT_DEFAULT_PI_MODEL,
@@ -2085,6 +2086,14 @@ export function registerBotIpc(): void {
     owner.assertCurrent();
     return result;
   };
+  ipcMain.handle('local-db:bots:workbench:get', async (event, rawBotId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const owner = captureBotOperationOwner();
+    const workbench = await readBotWorkbench(owner.userDataDir, botId);
+    owner.assertCurrent();
+    return workbench;
+  });
   ipcMain.handle('local-db:bots:memory:list', async (event, rawBotId: unknown, rawQuery: unknown) => {
     assertTrustedAppRendererEvent(event);
     const botId = readText(rawBotId, 'botId', 128, true);

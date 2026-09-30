@@ -4782,6 +4782,9 @@ interface ElectronAPI {
         session: import('@/lib/ccAgent.types').Session;
       }>;
       history: (botId: string) => Promise<unknown[]>;
+      workbench: {
+        get: (botId: string) => Promise<import('../shared/botWorkbench').BotWorkbench | null>;
+      };
       memory: {
         list: (
           botId: string,
@@ -5318,6 +5321,7 @@ interface ElectronAPI {
     onBotProfileChanged: (
       cb: (payload: { botId: string; change: 'created' | 'updated' }) => void,
     ) => () => void;
+    onBotWorkbenchChanged: (cb: (payload: { botId: string }) => void) => () => void;
     runBotLifecycleAction: (
       request: import('../shared/botLifecycle').BotLifecycleActionRequest,
     ) => Promise<import('../shared/botLifecycle').BotLifecycleActionResult>;

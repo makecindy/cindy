@@ -10,6 +10,7 @@ import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import { getBotLastReadAt, markBotRead } from './botReadState';
 import { useBotProfiles } from './botStore';
+import { BotWorkbench } from './BotWorkbench';
 import type { BotChatIdentity } from './BotSessionContentHeader';
 import type { BotChatBinding } from './botChatPresentation';
 import { useBotIslandVisibleSession } from './useBotIslandVisibleSession';
@@ -256,6 +257,9 @@ function BotSessionGateView() {
           onBotReadThrough={gate.isCanonical ? onReadThrough : undefined}
         />
       </div>
+      {gate.isCanonical && botId && sessionId ? (
+        <BotWorkbench botId={botId} botName={(identity ?? gate.identity).name} sessionId={sessionId} />
+      ) : null}
     </main>
   );
 }

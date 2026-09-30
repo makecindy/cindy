@@ -7742,6 +7742,23 @@
     }
   },
   "bots": {
+    "workbench": {
+      "title": "작업대",
+      "updated": "{{time}} 업데이트",
+      "guideTitle": "{{name}}에게 일 맡기기",
+      "guideBody": "작업 디렉터리를 주거나 메일과 캘린더를 연결하면, 따라가고 있는 일이 여기에 표시됩니다.",
+      "moreTitle": "{{name}}에게 더 맡기기",
+      "dir": "작업 디렉터리",
+      "dirHint": "코드 저장소, 아트 에셋, 기획 표 모두 가능",
+      "mail": "메일",
+      "mailHint": "답장할 메일을 찾아 초안 작성",
+      "calendar": "캘린더",
+      "calendarHint": "회의 자료를 미리 준비",
+      "dirPrompt": "이 작업 디렉터리를 맡아 주세요: {{path}}\n먼저 파악해 주세요: 어떤 일인지, 무엇이 진행 중인지, 어디에 주의가 필요한지. 그다음 update_workbench로 오른쪽 작업대를 업데이트해 주세요.",
+      "mailPrompt": "메일을 연결해서 최근에 답장이나 처리가 필요한 메일을 확인하고, update_workbench로 작업대에 카드를 추가해 주세요.",
+      "calendarPrompt": "캘린더를 연결해서 오늘과 내일 일정을 확인하고, 준비가 필요한 회의를 작업대에 넣어 주세요.",
+      "sendFailed": "{{name}}에게 보내지 못했습니다. 다시 시도해 주세요."
+    },
     "remoteSettings": {
       "empty": "아직 항목이 없습니다.",
       "loadFailed": "설정을 불러오지 못했습니다. 다시 시도하세요.",

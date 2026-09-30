@@ -70,6 +70,7 @@ import {
   listBotSkillsForSession,
   saveBotSkillForSession,
 } from '../maker-ipc/botSkillService.js';
+import { updateBotWorkbenchForSession } from '../maker-ipc/botWorkbenchService.js';
 import {
   patchSessionMetaInDb,
   renameSessionTitlesInDb,
@@ -802,6 +803,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       botSkills: {
         save: (params) => saveBotSkillForSession(params),
         list: (params) => listBotSkillsForSession(params),
+      },
+      botWorkbench: {
+        update: (params) => updateBotWorkbenchForSession(params),
       },
       skillhub: createSkillhubAgentTools({
         isCurrentSession: (context) => !!context.sessionId

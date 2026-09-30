@@ -142,6 +142,15 @@ export {
   type BotSkillToolDeps,
 } from './bot_skills.js';
 export {
+  registerBotWorkbenchTools,
+  WORKBENCH_MAX_CARDS,
+  WORKBENCH_MAX_ROWS,
+  type BotWorkbenchCallbacks,
+  type BotWorkbenchToolDeps,
+  type WorkbenchCardWire,
+  type WorkbenchRowWire,
+} from './bot_workbench.js';
+export {
   registerCreateTeammateTool,
   type CreateTeammateCallbacks,
 } from './create_teammate.js';

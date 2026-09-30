@@ -7742,6 +7742,23 @@
     }
   },
   "bots": {
+    "workbench": {
+      "title": "工作台",
+      "updated": "{{time}} 更新",
+      "guideTitle": "給{{name}}一些工作",
+      "guideBody": "給它一個工作目錄，或者連上郵箱和日曆，它會把正在跟進的事放在這裡。",
+      "moreTitle": "給{{name}}更多工作",
+      "dir": "工作目錄",
+      "dirHint": "程式碼倉庫、美術資源、企劃表格都可以",
+      "mail": "郵箱",
+      "mailHint": "看看要回的郵件，幫你起草",
+      "calendar": "日曆",
+      "calendarHint": "提前準備會議資料",
+      "dirPrompt": "請接手這個工作目錄：{{path}}\n先把它摸清楚：這是什麼工作、現在在做哪些事、哪裡需要注意。然後用 update_workbench 更新右側的工作台。",
+      "mailPrompt": "幫我連上郵箱，看看最近需要我回覆或處理的郵件，然後用 update_workbench 在工作台裡加一張卡。",
+      "calendarPrompt": "幫我連上日曆，看看今天和明天的安排，把需要準備的會議放進工作台。",
+      "sendFailed": "沒能發給{{name}}，請重試"
+    },
     "remoteSettings": {
       "empty": "暫無內容",
       "loadFailed": "無法讀取設定，請重試。",

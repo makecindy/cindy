@@ -951,6 +951,8 @@ export const MAKER_PUSH = {
   BOT_GROUP_CHANGED: 'maker:bot-group:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
   BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
+  /** Bot workbench cards changed (payload: { botId }). */
+  BOT_WORKBENCH_CHANGED: 'maker:bot-workbench:changed',
   BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,

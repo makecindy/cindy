@@ -7742,6 +7742,23 @@
     }
   },
   "bots": {
+    "workbench": {
+      "title": "工作台",
+      "updated": "{{time}} 更新",
+      "guideTitle": "给{{name}}一些工作",
+      "guideBody": "给它一个工作目录，或者连上邮箱和日历，它会把正在跟进的事放在这里。",
+      "moreTitle": "给{{name}}更多工作",
+      "dir": "工作目录",
+      "dirHint": "代码仓、美术资源、策划表格都可以",
+      "mail": "邮箱",
+      "mailHint": "看看要回的邮件，帮你起草",
+      "calendar": "日历",
+      "calendarHint": "提前准备会议材料",
+      "dirPrompt": "请接手这个工作目录：{{path}}\n先把它摸清楚：这是什么工作、现在在做哪些事、哪里需要注意。然后用 update_workbench 更新右侧的工作台。",
+      "mailPrompt": "帮我连上邮箱，看看最近需要我回复或处理的邮件，然后用 update_workbench 在工作台里加一张卡。",
+      "calendarPrompt": "帮我连上日历，看看今天和明天的安排，把需要准备的会议放进工作台。",
+      "sendFailed": "没能发给{{name}}，请重试"
+    },
     "remoteSettings": {
       "empty": "暂无内容",
       "loadFailed": "无法读取设置，请重试。",
