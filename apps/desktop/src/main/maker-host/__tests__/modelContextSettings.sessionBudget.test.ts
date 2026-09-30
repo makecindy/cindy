@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Catalog } from '@cindy/model-providers';
 
@@ -10,6 +14,19 @@ vi.mock('../model-context-limit-store.js', () => ({
   writeModelContextLimit: vi.fn(),
   isModelContextLimitCustomized: () => mockModelLimit !== null,
 }));
+// 预算文件必须落临时目录：这些用例会真写预算，绝不能碰真实 userData。
+const budgetState = vi.hoisted(() => ({ dir: '' }));
+vi.mock('../../appSessionState.js', async () => {
+  const nodePath = await import('node:path');
+  return {
+    ownerScopedUserDataPath: (...parts: string[]): string => nodePath.join(budgetState.dir, ...parts),
+    // 预算 store 的 owner 隔离读它；测试里固定成同一个 key 即可。
+    activeOwnerScopeKey: (): string => 'test-owner',
+    getActiveAppSession: () => ({ dataOwnerId: 'test-owner', generation: 1 }),
+    dataOwnerStorageKey: (ownerId: string): string => ownerId,
+  };
+});
+
 vi.mock('../catalog-to-descriptors.js', async () => {
   const shared = await import('../../../shared/sessionContextWindow.js');
   return {
@@ -18,7 +35,8 @@ vi.mock('../catalog-to-descriptors.js', async () => {
   };
 });
 
-import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds } from '../model-context-settings';
+import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, applySessionContextWindowBudgetToCreateOpts } from '../model-context-settings';
+import { writeSessionContextWindowBudget } from '../session-context-budget-store';
 
 /** 目录里 1M 物理上限、默认工作窗口 200K 的路由（服务端压低过默认值）。 */
 const catalog: Pick<Catalog, 'providers'> = {
@@ -73,6 +91,9 @@ function resolve(sessionBudget?: number | null): number | null {
 
 beforeEach(() => {
   mockModelLimit = null;
+  if (!budgetState.dir) {
+    budgetState.dir = mkdtempSync(path.join(os.tmpdir(), 'ctx-budget-opts-'));
+  }
 });
 
 describe('resolveConfiguredContextWindow with a session budget', () => {
@@ -279,5 +300,54 @@ describe('resolveSessionContextWindowBounds', () => {
       maxEffectiveWindow: null,
       effectiveWindowsReported: true,
     });
+  });
+});
+
+describe('applySessionContextWindowBudgetToCreateOpts', () => {
+  afterEach(() => {
+    if (budgetState.dir) {
+      rmSync(budgetState.dir, { recursive: true, force: true });
+      budgetState.dir = '';
+    }
+  });
+
+  const optsFor = (over: Record<string, unknown> = {}) => ({
+    agentKind: 'claude-code' as const,
+    providerId: 'xd',
+    model: 'long-window-model',
+    ...over,
+  }) as {
+    contextWindowBudget?: number | null;
+    agentKind: 'claude-code';
+    providerId?: string | null;
+    model?: string | null;
+  };
+
+  it('读已存档位并按目录上限收敛后写进创建参数', async () => {
+    // worker 唤醒 / 进程重启后的恢复路径靠这一步把预算带回引擎：缺了它，Pi 的
+    // compaction.reserveTokens 会写成无预算值、阈值退回满窗（2026-09-30 实测）。
+    writeSessionContextWindowBudget('sess-1', 500_000);
+    const opts = optsFor();
+    await applySessionContextWindowBudgetToCreateOpts('sess-1', opts, catalog);
+    expect(opts.contextWindowBudget).toBe(500_000);
+  });
+
+  it('调用方显式带值时按同一口径收敛（压到目录物理上限内）', async () => {
+    const opts = optsFor({ contextWindowBudget: 4_000_000 });
+    await applySessionContextWindowBudgetToCreateOpts('sess-1', opts, catalog);
+    expect(opts.contextWindowBudget).toBe(1_000_000);
+  });
+
+  it('未自定义时不留字段（引擎回退默认，旧行为零变化）', async () => {
+    const opts = optsFor();
+    await applySessionContextWindowBudgetToCreateOpts('sess-never-set', opts, catalog);
+    expect('contextWindowBudget' in opts).toBe(false);
+  });
+
+  it('路由未定型（无 model）时不透传未收敛的值', async () => {
+    writeSessionContextWindowBudget('sess-2', 500_000);
+    const opts = optsFor({ model: undefined });
+    await applySessionContextWindowBudgetToCreateOpts('sess-2', opts, catalog);
+    expect('contextWindowBudget' in opts).toBe(false);
   });
 });

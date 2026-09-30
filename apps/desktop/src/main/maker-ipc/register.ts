@@ -36,7 +36,7 @@ import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.j
 import { readSshCodexModelList, assertSshCodexModel, isVerifiedSshCodexResume } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
-import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget } from '../maker-host/model-context-settings.js';
+import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts } from '../maker-host/model-context-settings.js';
 import { isSessionContextWindowBudgetCustomized, readSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
 import { MAX_CONTEXT_WINDOW_BUDGET, MIN_CONTEXT_WINDOW_BUDGET } from '../../shared/sessionContextWindowBudget.js';
 import { getCodexHome } from '../maker-host/auth-adapters.js';
@@ -7375,6 +7375,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ...(writableDirs.length > 0 ? { writableDirs } : {}),
     });
     await ensureRemoteReadyForSessionStart({ createOpts: opts });
+    // 任务级窗口预算：worker 唤醒这条路径自己拼 opts，不经过 createSession 的
+    // prepareStartOptions 预算注入。缺这一步，预算会在「引擎进程重启」时静默丢失：
+    // 档位卡仍按 50% 显示（宿主投影照算），而 Pi 的压缩阈值退回满窗，任务在预算
+    // 窗口内跑到 100% 以上也不自动压缩（2026-09-30 实测：reserveTokens 写成无预算值）。
+    // 与钩子同一份收敛口径（resolveConfiguredContextWindow），不许分叉。
+    await applySessionContextWindowBudgetToCreateOpts(target.sessionId, opts, getActiveCatalog());
     const { session: resumedSession } = await bootstrapSession(opts);
     await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
     return true;

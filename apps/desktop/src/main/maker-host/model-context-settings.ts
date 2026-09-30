@@ -2,6 +2,7 @@ import type { AgentKind, Catalog } from '@cindy/model-providers';
 
 import { desktopMakerLogger } from './logger-adapter.js';
 import { readSessionContextWindowBudget } from './session-context-budget-store.js';
+import { normalizeContextWindowBudget } from '../../shared/sessionContextWindowBudget.js';
 import { desktopCodexAuthAdapter, readClaudeApiKey } from './auth-adapters.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import { gatewayDefaultRouteDecision } from './provider-route.js';
@@ -58,6 +59,50 @@ export async function readStoredSessionContextWindowBudget(sessionId: string): P
     });
     return null;
   }
+}
+
+/**
+ * 把「本任务的工作上下文预算」写进会话创建参数（`opts.contextWindowBudget`）。
+ *
+ * 口径唯一：调用方（远程 / IM / 定时任务）显式带值时同样按目录物理上限与模型级上限
+ * 重新收敛；未带则读本任务已保存的档位。按「未自定义」处理时不留下该字段，引擎回退
+ * 到模型级上限 / 目录默认（旧行为零变化）；收敛不出值时**删掉**字段而不是透传未收敛的
+ * 数字（引擎侧按「已收敛」信任，部分引擎甚至不做 >0 校验）。
+ *
+ * 为什么抽出来：会话启动有多个入口（createSession 的 prepareStartOptions 钩子、worker
+ * 唤醒时的 resumeOrcaWorkerSessionIfMissing、goal 恢复…）。曾经只有钩子那一条注入预算，
+ * worker 唤醒路径自己拼 opts 且不带预算 —— 预算就在「引擎进程重启」时静默丢失：档位卡仍
+ * 显示 50%（宿主投影照算），而 Pi 的压缩阈值退回满窗（compaction.reserveTokens 写成无预算
+ * 值），于是任务在预算窗口内跑到 100% 以上也不自动压缩（实测 reserveTokens=50000 ⇒
+ * 阈值 950K，而预算窗口只有 500K）。每条入口都必须过这里，口径不许分叉。
+ */
+export async function applySessionContextWindowBudgetToCreateOpts(
+  sessionId: string,
+  opts: {
+    contextWindowBudget?: number | null;
+    agentKind: AgentKind;
+    providerId?: string | null;
+    model?: string | null;
+  },
+  catalog: Pick<Catalog, 'providers'>,
+): Promise<void> {
+  const explicitBudget = normalizeContextWindowBudget(opts.contextWindowBudget);
+  const requestedBudget = explicitBudget ?? await readStoredSessionContextWindowBudget(sessionId);
+  if (requestedBudget === null) {
+    delete opts.contextWindowBudget;
+    return;
+  }
+  // 未定型路由（无 model）时不做收敛：宁可不带预算（引擎回退默认），也不把
+  // 未收敛的值透传给引擎。
+  if (typeof opts.model !== 'string' || opts.model.length === 0) {
+    delete opts.contextWindowBudget;
+    return;
+  }
+  const resolvedBudget = resolveConfiguredContextWindow(
+    catalog, opts.agentKind, opts.providerId ?? null, opts.model, requestedBudget,
+  );
+  if (resolvedBudget !== null) opts.contextWindowBudget = resolvedBudget;
+  else delete opts.contextWindowBudget;
 }
 
 /**
