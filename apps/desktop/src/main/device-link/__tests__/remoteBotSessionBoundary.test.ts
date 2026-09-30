@@ -1,7 +1,18 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { projectRemoteSessionResult, setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
+import {
+  assertRemoteBotInvocationAllowed,
+  projectRemoteSessionResult, setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 
 afterEach(() => setRemoteBotSessionLookup(null));
+
+it.each(['turn-list', 'turn-get'])('rechecks nested %s targets before returning remote snapshots', async (op) => {
+  let hidden = false;
+  setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'visible');
+  const args = [{ op, payload: { sessionId: 'task', ids: ['set'] } }];
+  await assertRemoteBotInvocationAllowed(args, 'git-review:remote-op');
+  hidden = true;
+  await expect(assertRemoteBotInvocationAllowed(args, 'git-review:remote-op')).rejects.toThrow('[NOT_FOUND]');
+});
 
 it('bounds single-lookup adapters, deduplicates checks and preserves collection order', async () => {
   let active = 0;
@@ -44,6 +55,15 @@ it('fails closed for incomplete batch results, rejects hidden gets and clears a 
   expect(batch).toHaveBeenCalledTimes(1);
 });
 
+it('filters hidden runtime rows inside a complete active-session snapshot', async () => {
+  setRemoteBotSessionLookup(async (id) => id === 'hidden' ? 'hidden' : 'ordinary');
+  expect(await projectRemoteSessionResult('maker:list-active', {
+    format: 'active-sessions-v2', sessions: [
+      { sessionId: 'visible' }, { sessionId: 'hidden' },
+    ],
+  })).toEqual({ format: 'active-sessions-v2', sessions: [{ sessionId: 'visible' }] });
+});
+
 
 it('filters batch detail reads using the shared fresh visibility lookup', async () => {
   let hidden = false;
@@ -53,4 +73,65 @@ it('filters batch detail reads using the shared fresh visibility lookup', async 
   hidden = true;
   expect(await projectRemoteSessionResult('local-db:sessions:get-many', [{ id: 's' }])).toEqual([]);
   expect(batch).toHaveBeenCalledTimes(2);
+});
+
+it('checks every target of a label batch and filters only task rows in label results', async () => {
+  setRemoteBotSessionLookup(async (id) => (id === 'hidden' ? 'hidden' : 'ordinary'));
+  await expect(
+    assertRemoteBotInvocationAllowed(
+      [{ action: 'attach', sessionIds: ['ordinary', 'hidden'], tagIds: ['label'] }],
+      'local-db:task-tags:execute',
+    ),
+  ).rejects.toThrow('[NOT_FOUND]');
+  const tags = [{ id: 'hidden', name: 'A label ID is not a task ID' }];
+  expect(
+    await projectRemoteSessionResult('local-db:task-tags:execute', {
+      tags,
+      sessions: [
+        { sessionId: 'ordinary', tags: [] },
+        { sessionId: 'hidden', tags: [] },
+      ],
+    }),
+  ).toEqual({ tags, sessions: [{ sessionId: 'ordinary', tags: [] }] });
+});
+
+it.each(['get', 'attach', 'detach'])('checks normalized task IDs for tag %s', async (action) => {
+  setRemoteBotSessionLookup(async (id) => (id === 'hidden' ? 'hidden' : 'missing'));
+  await expect(
+    assertRemoteBotInvocationAllowed(
+      [{ action, sessionIds: [' hidden '], tagIds: ['label'] }],
+      'local-db:task-tags:execute',
+    ),
+  ).rejects.toThrow('[NOT_FOUND]');
+});
+
+it.each([
+  undefined, [], [''], ['   '], [123], ['x'.repeat(129)],
+  Array.from({ length: 101 }, () => 'same'),
+  Array.from({ length: 10000 }, (_, i) => `session-${i}`),
+])('rejects malformed tag targets before any authorization lookup (%#)', async (sessionIds) => {
+  const lookup = vi.fn(async () => 'ordinary' as const);
+  setRemoteBotSessionLookup(lookup);
+  await expect(assertRemoteBotInvocationAllowed(
+    [{ action: 'get', sessionIds }], 'local-db:task-tags:execute',
+  )).rejects.toThrow('[INVALID_PARAMS]');
+  expect(lookup).not.toHaveBeenCalled();
+});
+
+it('bounds normalized tag authorization and ignores unrelated object references', async () => {
+  const lookup = vi.fn(async () => 'ordinary' as const);
+  setRemoteBotSessionLookup(lookup);
+  const sessionIds = Array.from({ length: 100 }, (_, i) => ` ${String(i).padStart(128, 'x')} `);
+  await assertRemoteBotInvocationAllowed(
+    [{ action: 'get', sessionIds, sessionId: 'unused', session: { id: 'unused' } }],
+    'local-db:task-tags:execute',
+  );
+  expect(lookup).toHaveBeenCalledTimes(100);
+  expect(lookup).toHaveBeenNthCalledWith(1, sessionIds[0].trim(), 'session');
+  lookup.mockClear();
+  await assertRemoteBotInvocationAllowed(
+    [{ action: 'attach', sessionIds: [' task ', 'task'], tagIds: ['label'] }],
+    'local-db:task-tags:execute',
+  );
+  expect(lookup).toHaveBeenCalledTimes(1);
 });

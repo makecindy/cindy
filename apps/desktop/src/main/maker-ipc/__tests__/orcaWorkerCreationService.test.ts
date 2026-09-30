@@ -16,6 +16,37 @@ import type { DispatchWorkerTaskResult, OrcaWorkerStatus } from '../orcaTeamServ
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
+import { sshCodexWorkerRoutingContext } from '../orcaProviderRoutingContext';
+import type { ProviderView } from '@cindy/model-providers';
+
+describe('SSH Codex Worker catalog', () => {
+  it.each([undefined, 'remote-next', 'controller-only'])('uses remote membership and defaults for %s', async (model) => {
+    const models = ['remote-default', 'remote-lead', 'remote-next'].map((id) => ({
+      id, efforts: ['low'], defaultEffort: 'low', supportsFastMode: false,
+    }));
+    const routing = sshCodexWorkerRoutingContext([{ name: 'Remote', models: { codex: models } } as ProviderView]);
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({ id: 'lead-1', agentKind: 'codex' as const, workspaceKind: 'project' as const,
+        workingDir: '/srv/repo', model: 'remote-lead', effort: 'low', permissionMode: 'default',
+        fastMode: false, providerId: 'openai', remoteHostId: 'remote-builder' })),
+      getProviderRoutingContext: vi.fn(async () => routing),
+      getWorkerDefaults: vi.fn(() => ({ model: 'controller-only', providerId: 'xd', effort: 'high' })),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', agent: 'codex', model });
+    expect(deps.getProviderRoutingContext).toHaveBeenCalledWith('codex', 'remote-builder');
+    expect(deps.getAvailableModels).not.toHaveBeenCalled();
+    expect(deps.getWorkerDefaults).not.toHaveBeenCalled();
+    if (model === 'controller-only') {
+      expect(result.ok).toBe(false);
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    } else {
+      expect(result.ok).toBe(true);
+      expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+        model: model ?? 'remote-lead', providerId: 'openai', remoteHostId: 'remote-builder', effort: 'low', fastMode: false,
+      }));
+    }
+  });
+});
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const WORKER_SESSION_ID = '123e4567-e89b-42d3-a456-426614174000';
@@ -496,7 +527,8 @@ describe('OrcaWorkerCreationService', () => {
       message: expect.stringContaining('gpt-unknown'),
     });
 
-    expect(deps.getLeadSessionRow).not.toHaveBeenCalled();
+    expect(deps.getLeadSessionRow).toHaveBeenCalledWith('lead-1');
+    expect(deps.getWorkerDefaults).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
   });
 
@@ -886,7 +918,9 @@ describe('OrcaWorkerCreationService', () => {
       message: expect.stringContaining('Claude Code'),
     });
 
-    expect(deps.getLeadSessionRow).not.toHaveBeenCalled();
+    // Read the Lead host to scope the catalog, but do not create any state.
+    expect(deps.getLeadSessionRow).toHaveBeenCalledWith('lead-1');
+    expect(deps.getWorkerDefaults).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
     expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
     expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();

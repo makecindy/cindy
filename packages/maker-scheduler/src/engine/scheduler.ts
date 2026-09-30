@@ -80,8 +80,8 @@ function validateScheduleExecutionShape(
   if (schedule.workspaceKind !== 'project' || !schedule.workingDir?.trim()) {
     throw new Error('script execution requires a local project workspace');
   }
-  if (schedule.useWorktree || schedule.targetSessionId || schedule.persistentSession) {
-    throw new Error('script execution does not support worktrees or bound sessions');
+  if (schedule.useWorktree || schedule.persistentSession) {
+    throw new Error('script execution does not support worktrees or persistent sessions');
   }
   // silentWhenIdle 的静默协议依赖 agent 在会话里调 silence 工具,script 任务无
   // agent、该语义整体不适用;显式传入按不支持字段拒绝(UI 提交层恒为 false)。
@@ -1321,6 +1321,8 @@ export class Scheduler extends EventEmitter {
       scriptConfig: normalizeScriptConfig(input.scriptConfig),
       manual,
       persistentSession: input.persistentSession ?? false,
+      // A missing choice may be a reminder, even when a pre-run hook gates delivery.
+      // Only a caller that knows this is a check may opt into quiet reporting.
       silentWhenIdle: input.silentWhenIdle ?? false,
       status: 'active',
       createdAt: now,
@@ -1382,6 +1384,12 @@ export class Scheduler extends EventEmitter {
     }
     const existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
+    // Agent-only quiet reporting does not apply when changing to script mode.
+    // Keep explicit invalid combinations subject to the existing validation.
+    if (patch.executionMode === 'script' && existing.executionMode !== 'script'
+      && patch.silentWhenIdle === undefined) {
+      updates.silentWhenIdle = false;
+    }
     // 换引擎(agentKind 变了)时,上一引擎的 model / providerId / effort 是另一套模型
     // 目录里的路由,对新引擎没有意义,patch 没显式给就丢弃(带 key 的 undefined →
     // storage 清列 NULL),让任务回到新引擎的默认路由。否则陈旧路由会被原样带过去:

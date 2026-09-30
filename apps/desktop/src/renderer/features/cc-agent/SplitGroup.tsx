@@ -815,7 +815,7 @@ const SplitPaneView = memo(function SplitPaneView({
   const isOwner = pane.key === ownerPaneKey;
   const viewSessionId = pane.sessionId;
   const session = sessionsById.get(viewSessionId) ?? null;
-  const title = session ? getSessionDisplayTitle(session, unnamedTitle) : loadingTitle;
+  const title = session ? getSessionDisplayTitle(session, unnamedTitle, t) : loadingTitle;
 
   return (
     <SplitDropTarget

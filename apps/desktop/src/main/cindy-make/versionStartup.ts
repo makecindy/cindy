@@ -11,6 +11,7 @@ import { observeDesktopStartupResult } from '../devStartupStatus.js';
 import { defaultPtySpawn } from '../terminal/ptyFactory.js';
 import { makeTestEnvironment } from './testRunner.js';
 import { getMakeRuntimeSourceIdentity } from './runtimeVersion.js';
+import { cleanupPersonalVersions } from './personalVersionCleanup.js';
 import { versionEntryArguments } from './versionLaunchArguments.js';
 import {
   getCindyVersionLockScope,
@@ -29,6 +30,7 @@ import {
   selectedVersion,
   selectVersion,
   verifyPersonalVersion,
+  verifyPersonalVersionSync,
   versionDirectory,
   versionError,
   versionsRoot,
@@ -46,6 +48,7 @@ const FLAGS = {
   request: '--cindy-version-launch=',
   helper: '--cindy-version-helper=',
 };
+const RESTORE_ORIGINAL_FLAG = '--cindy-version-original';
 export interface VersionLaunchRequest {
   protocol: 1;
   id: string;
@@ -64,6 +67,8 @@ let currentId = 'original';
 let request: VersionLaunchRequest | undefined;
 let helper = false;
 let switching = false;
+/** Selection decided during dispatch; persisted by finishCindyVersionStartup() once the registry lock may be taken. */
+let deferredSelection: 'original' | undefined;
 let inheritedProfile: VersionProfile | undefined;
 let forwardedArguments: string[] = [];
 let bufferedUrls: string[] = [];
@@ -389,6 +394,33 @@ export function recordCindyVersionActive(): void {
     scope,
   });
 }
+/**
+ * Called by bootstrap-electron once this process owns the single-instance lock. Registry
+ * writes that take the cross-process lock (real I/O) live here, not in
+ * dispatchCindyVersionStartup(): that function runs before bootstrap-electron is loaded and
+ * must not yield to the event loop, or Electron becomes ready before bootstrap installs its
+ * privileged schemes and 'ready' listener.
+ */
+export function finishCindyVersionStartup(): void {
+  recordCindyVersionActive();
+  if (helper) return;
+  const profile = app.getPath('userData');
+  const selection = deferredSelection;
+  deferredSelection = undefined;
+  void (async () => {
+    if (selection) await selectVersion(profile, selection);
+    if (
+      currentId === 'original' &&
+      !request &&
+      fs.existsSync(path.join(versionsRoot(profile), 'original.json'))
+    )
+      await rememberOriginalVersion();
+  })().catch((error) => {
+    log.warn('Failed to update the recorded original version', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
 
 /** Helper is a separate headless Electron process, so it survives normal app shutdown without RunAsNode. */
 export async function startVersionHandoff(
@@ -397,7 +429,10 @@ export async function startVersionHandoff(
 ): Promise<void> {
   if (switching) throw versionError('busy');
   const profile = currentVersionProfile();
-  const original = readOriginalVersion(profile.userData);
+  // Startup dispatch precedes the asynchronous original.json refresh. Use this
+  // process's identity so an upgrade cannot launch a now-incompatible personal app.
+  const original =
+    currentId === 'original' ? describeOriginalVersion() : readOriginalVersion(profile.userData);
   if (!original) throw versionError('unavailable');
   if (targetId !== 'original') await verifyPersonalVersion(profile.userData, targetId, original);
   else if (
@@ -429,6 +464,8 @@ export async function startVersionHandoff(
     const pending = path.join(versionsRoot(profile.userData), 'pending.json');
     const previous = readVersionJson<{ id: string; pid: number }>(pending);
     if (previous && pidAlive(previous.pid)) throw versionError('busy');
+    if (currentId === 'original')
+      writeVersionJson(path.join(versionsRoot(profile.userData), 'original.json'), original);
     writeVersionJson(versionRequestPath(profile.userData, item.id), item);
     writeVersionJson(pending, { id: item.id, pid: process.pid });
   });
@@ -612,7 +649,42 @@ async function runVersionHelper(item: VersionLaunchRequest): Promise<void> {
   }
 }
 
-/** Called after dev profile resolution, before the database, single-instance lock and main windows. */
+/**
+ * A handoff that failed after Electron became ready cannot fall back to opening the original in
+ * this process: bootstrap-electron is not loaded yet and its pre-ready registrations would be
+ * rejected. Reset the selection so the next launch opens the original, then leave.
+ */
+async function recoverOriginalAfterReady(profile: string): Promise<true> {
+  await selectVersion(profile, 'original').catch(() => {});
+  if (app.isPackaged) {
+    app.relaunch({
+      args: [
+        ...process.argv.slice(1).filter((arg) => arg !== RESTORE_ORIGINAL_FLAG),
+        RESTORE_ORIGINAL_FLAG,
+      ],
+    });
+    app.exit(0);
+    return true;
+  }
+  // Dev cannot relaunch itself: Forge/Vite exit with this process. The dev runner reports the
+  // exit; the reset selection makes the next start open the original.
+  process.stderr.write(
+    '[cindy] personal version handoff failed after Electron became ready; ' +
+      'the selection was reset to the original. Start Dev again.\n',
+  );
+  app.exit(1);
+  return true;
+}
+
+/**
+ * Called after dev profile resolution, before the database, single-instance lock and main windows.
+ *
+ * Every path that returns false continues into bootstrap-electron, whose module top level
+ * registers privileged schemes and the 'ready' listener; both require Electron not to be ready
+ * yet. Those paths therefore never yield to the event loop: registry reads are synchronous,
+ * the personal-version self-check hashes synchronously, and registry writes are deferred to
+ * finishCindyVersionStartup(). Only paths that end in app.exit() may await real I/O.
+ */
 export async function dispatchCindyVersionStartup(): Promise<boolean> {
   if (helper && request) {
     try {
@@ -649,14 +721,13 @@ export async function dispatchCindyVersionStartup(): Promise<boolean> {
     }
     setCindyVersionLockScope('profile');
   }
+  const restoreOriginal = process.argv.includes(RESTORE_ORIGINAL_FLAG);
   if (currentId !== 'original') {
     const original = readOriginalVersion(profile);
     if (!original) throw versionError('unavailable');
-    await verifyPersonalVersion(profile, currentId, original);
+    verifyPersonalVersionSync(profile, currentId, original);
     if (!request) {
-      const selected = process.argv.includes('--cindy-version-original')
-        ? 'original'
-        : selectedVersion(profile);
+      const selected = restoreOriginal ? 'original' : selectedVersion(profile);
       if (selected !== currentId) {
         await startVersionHandoff(selected);
         app.exit(0);
@@ -669,19 +740,22 @@ export async function dispatchCindyVersionStartup(): Promise<boolean> {
     !request &&
     fs.existsSync(path.join(versionsRoot(profile), 'original.json'))
   ) {
+    if (restoreOriginal) deferredSelection = 'original';
     try {
-      await rememberOriginalVersion();
-      if (process.argv.includes('--cindy-version-original'))
-        await selectVersion(profile, 'original');
-      const selected = selectedVersion(profile);
+      const selected = restoreOriginal ? 'original' : selectedVersion(profile);
       if (selected !== 'original') {
         await startVersionHandoff(selected);
         app.exit(0);
         return true;
       }
-    } catch {
-      await selectVersion(profile, 'original').catch(() => {});
-      log.warn('Personal version selection unavailable; opening the original');
+    } catch (error) {
+      deferredSelection = 'original';
+      log.warn('Personal version selection unavailable; opening the original', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // A failure before the handoff's first real I/O (unreadable selection, missing version
+      // directory) leaves Electron not ready, so the original can still open in this process.
+      if (app.isReady()) return recoverOriginalAfterReady(profile);
     }
   }
   return false;
@@ -698,4 +772,6 @@ export async function markCindyVersionReady(): Promise<void> {
     const pending = path.join(versionsRoot(request!.profile.userData), 'pending.json');
     if (readVersionJson<{ id: string }>(pending)?.id === request!.id) fs.unlinkSync(pending);
   });
+  // Retire older applications; cleanup keeps the helper's bundle until it exits.
+  await cleanupPersonalVersions(request.profile.userData);
 }

@@ -14,13 +14,44 @@ import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import type { Session } from '@/lib/ccAgent.types';
 import { cindyMakeWorktreeName, formatCindyMakeTitle } from '@/lib/cindyMakeTitle';
-import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
+import {
+  CINDY_MAKE_MERGE_SESSION_SOURCE,
+  isCindyMakeFamilySource,
+} from '../../../../shared/cindyMakeMerge';
+import { formatCindyMakeMergeTitle } from '../../../../shared/cindyMakeMergeTitle';
+import { SUPPORTED_LOCALES } from '../../../../shared/locale';
 
 import {
   getAutomationSessionDisplayTitle,
   isScheduledSession,
   SCHEDULE_TITLE_PREFIX,
 } from './scheduledSessionGrouping';
+
+const MAKE_MERGE_TITLE_KEYS = [
+  'cindyMake.merge.taskTitle',
+  'cindyMake.history.mergeTaskTitle',
+  'cindyMake.history.revertTaskTitle',
+] as const;
+
+type TranslateSessionTitle = (key: string, options?: { lng: string }) => string;
+
+/** Recognize old default titles in their creation language without rewriting saved or custom names. */
+function getLegacyMakeTitleKey(
+  session: Session,
+  translate?: TranslateSessionTitle,
+): string | undefined {
+  if (session.source !== CINDY_MAKE_MERGE_SESSION_SOURCE) return undefined;
+  const worktree = cindyMakeWorktreeName(session.workingDir);
+  const title = formatCindyMakeTitle(session.title, worktree);
+  return MAKE_MERGE_TITLE_KEYS.find(
+    (key) =>
+      title === formatCindyMakeTitle(key, worktree) ||
+      (translate &&
+        SUPPORTED_LOCALES.some(
+          (lng) => title === formatCindyMakeTitle(translate(key, { lng }), worktree),
+        )),
+  );
+}
 
 /**
  * 「空草稿会话」—— 标题仍是哨兵且一条消息都没有。
@@ -38,6 +69,7 @@ export function isEmptyDraftSession(session: Session): boolean {
  *
  * `unnamedLabel` 传已解析的 i18n 文案(`ccAgent.common.unnamedSession`)——与
  * `autoTitleFallbackLabels()` 同款:纯函数不碰 i18n 实例,好测也好复用。
+ * `translate` 由当前界面传入，给旧版 Cindy Make 默认冲突标题补上翻译和创建时间。
  *
  * 兜底条件**只看标题是不是哨兵、不看消息数**,比 {@link isEmptyDraftSession} 更宽:
  * 自动起名失败(离线 / 模型不可用)或纯附件首条消息连描述都合成不出来时,会话有消息
@@ -51,10 +83,18 @@ export function isEmptyDraftSession(session: Session): boolean {
  * 英文占位、且在意它逐字显示」这一种情形;而放宽条件换掉的是自动起名失败时英文哨兵
  * 直接漏给用户看 —— 那是本 PR 存在的理由。故按现状取舍(PR #1031 review,第 11 轮)。
  */
-export function getSessionDisplayTitle(session: Session, unnamedLabel: string): string {
+export function getSessionDisplayTitle(
+  session: Session,
+  unnamedLabel: string,
+  translate?: TranslateSessionTitle,
+): string {
   if (isDefaultDraftSessionTitle(session.title)) return unnamedLabel;
   if (isCindyMakeFamilySource(session.source)) {
-    return formatCindyMakeTitle(session.title, cindyMakeWorktreeName(session.workingDir));
+    const key = getLegacyMakeTitleKey(session, translate);
+    const title = key
+      ? formatCindyMakeMergeTitle(translate ? translate(key) : key, session.createdAt)
+      : session.title;
+    return formatCindyMakeTitle(title, cindyMakeWorktreeName(session.workingDir));
   }
   return getAutomationSessionDisplayTitle(session);
 }
@@ -96,11 +136,15 @@ export function toStoredSessionTitle(session: Session, editedTitle: string): str
  *   - `[Schedule] xxx` 前缀被剥掉(既有 case);
  *   - 哨兵标题被换成本地化的「未命名任务」(本次新增,同一个坑)。
  *   - Cindy Make 的旧前缀被替换为工作目录短标记。
+ *   - Cindy Make 默认冲突处理标题被补上翻译或创建时间。
  */
-export function canHighlightSessionDisplayTitle(session: Session): boolean {
+export function canHighlightSessionDisplayTitle(
+  session: Session,
+  translate?: TranslateSessionTitle,
+): boolean {
   return (
     !isScheduledSession(session) &&
     !isDefaultDraftSessionTitle(session.title) &&
-    getSessionDisplayTitle(session, '') === session.title
+    getSessionDisplayTitle(session, '', translate) === session.title
   );
 }

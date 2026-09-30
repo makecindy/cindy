@@ -46,13 +46,6 @@ function makeTree(): { root: string; slot: string; version: string; staging: str
   return { root, slot, version, staging };
 }
 
-async function waitFor(predicate: () => boolean, attempts = 100): Promise<void> {
-  for (let i = 0; i < attempts; i += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
-
 /** 给"推迟的删除"留出执行窗口,用于断言它**没有**发生。 */
 async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -72,7 +65,7 @@ describe('cacheLease 删除守卫', () => {
     expect(fs.existsSync(tree.version)).toBe(true);
 
     releaseCachePath(tree.version);
-    await waitFor(() => !fs.existsSync(tree.version));
+    await settleCachePathRemovals(tree.version);
     expect(fs.existsSync(tree.version)).toBe(false);
   });
 
@@ -83,7 +76,8 @@ describe('cacheLease 删除守卫', () => {
       expect(await removeCachePath(tree.slot)).toBe(false);
       expect(fs.readFileSync(path.join(tree.version, 'file.txt'), 'utf8')).toBe('content');
     });
-    await waitFor(() => !fs.existsSync(tree.slot));
+    // Lease release starts async rm; await it instead of imposing a disk-speed deadline.
+    await settleCachePathRemovals(tree.slot);
     expect(fs.existsSync(tree.slot)).toBe(false);
   });
 
@@ -96,7 +90,7 @@ describe('cacheLease 删除守卫', () => {
       expect(await removeCachePath(sibling)).toBe(false);
       expect(fs.existsSync(sibling)).toBe(true);
     });
-    await waitFor(() => !fs.existsSync(sibling));
+    await settleCachePathRemovals(sibling);
     expect(fs.existsSync(sibling)).toBe(false);
   });
 
@@ -178,7 +172,7 @@ describe('cacheLease 删除守卫', () => {
     expect(fs.existsSync(tree.version)).toBe(true);
 
     releaseCachePath(tree.version);
-    await waitFor(() => !fs.existsSync(tree.version));
+    await settleCachePathRemovals(tree.version);
     expect(fs.existsSync(tree.version)).toBe(false);
   });
 });

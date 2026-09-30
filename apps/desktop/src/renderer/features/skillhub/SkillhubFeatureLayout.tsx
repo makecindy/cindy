@@ -71,7 +71,9 @@ export function useSkillhubStoreSync(): void {
     const itemKeys: Array<{ name: string; key: string }> = [];
     for (const s of skills) {
       if (s.kind !== 'skill') continue;
-      const sync = syncResults.get(skillhubCatalogKey(s.name, s.registryEntry?.catalogScope));
+      const name = s.registrySkillName ?? s.name;
+      const catalogKey = skillhubCatalogKey(name, s.registryEntry?.catalogScope);
+      const sync = syncResults.get(catalogKey);
       if (!sync?.exists || !sync.isMine) continue;
       const serverAuthorId = sync.authorId ?? '';
       if (!serverAuthorId) continue; // server 没回 authorId 就别回填
@@ -88,10 +90,10 @@ export function useSkillhubStoreSync(): void {
         );
         if (!needsAuthorId && !needsOrigin) continue;
       }
-      const key = `${s.name}\u0000${s.absolutePath}\u0000${serverAuthorId}`;
+      const key = `${catalogKey}\u0000${s.absolutePath}\u0000${serverAuthorId}`;
       if (reconciledKeysRef.current.has(key)) continue;
       items.push({
-        name: s.name,
+        name,
         absolutePath: s.absolutePath,
         version: latestVersion,
         authorId: serverAuthorId,
@@ -99,7 +101,7 @@ export function useSkillhubStoreSync(): void {
           ? { folderHash: sync.folderHash }
           : {}),
       });
-      itemKeys.push({ name: s.name, key });
+      itemKeys.push({ name, key });
     }
     if (items.length === 0) {
       return;

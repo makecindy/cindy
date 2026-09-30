@@ -1,13 +1,21 @@
+import { createByokCache } from './byokCache.js';
+import { byokSnapshotSecretIo } from '../secrets/providerSecretStore.js';
+import { registerByokIpc } from './byokIpc.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { createByokRuntime } from './byokRuntime.js';
+import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import { app, BrowserWindow, ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
 import * as authManager from '../authManager.js';
+import { isExternalOrganizationByokUser } from './organizationManaged.js';
 import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { getCodexProxyAuthInjectionState } from '../maker-host/codex-proxy-host.js';
 import {
   prepareCodexForAuthModeChange,
+  prepareCodexForCustomProviderHostChange,
   finalizeCodexAfterAuthModeChange,
   cancelCodexAuthModeChange,
 } from '../maker-host/index.js';
@@ -343,6 +351,51 @@ function scheduleModelsSync(): void {
 let syncInstance: CredentialsSync | null = null;
 let foregroundRefreshListener: (() => void) | null = null;
 
+/**
+ * 企业 Provider 目录的刷新形态与 Cindy 自有目录一致:窗口聚焦触发 + 5 分钟节流,
+ * 不挂后台定时轮询。登录 / 冷启动 / 换号 / 换区域不受节流约束(见 noteAuthState)。
+ */
+export const BYOK_FOREGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
+let lastByokSyncStartedAt = 0;
+type ByokRuntime = ReturnType<typeof createByokRuntime>;
+let byokCodexHostRefreshQueued = false;
+let byokCodexHostRefreshRunning = false;
+
+/** Coalesce directory/key changes and retire only the local Codex Host. */
+function scheduleByokCodexHostRefresh(): void {
+  byokCodexHostRefreshQueued = true;
+  if (byokCodexHostRefreshRunning) return;
+  byokCodexHostRefreshRunning = true;
+  void (async () => {
+    try {
+      while (byokCodexHostRefreshQueued) {
+        byokCodexHostRefreshQueued = false;
+        let prepared = false;
+        try {
+          await prepareCodexForCustomProviderHostChange();
+          prepared = true;
+          await finalizeCodexAfterAuthModeChange();
+        } catch (error) {
+          log.warn('enterprise Codex Host refresh failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          if (prepared) cancelCodexAuthModeChange();
+        }
+      }
+    } finally {
+      byokCodexHostRefreshRunning = false;
+    }
+  })();
+}
+
+function scheduleByokSync(byok: ByokRuntime, force = false): void {
+  const now = Date.now();
+  if (!force && now - lastByokSyncStartedAt < BYOK_FOREGROUND_REFRESH_INTERVAL_MS) return;
+  lastByokSyncStartedAt = now;
+  void byok.sync();
+}
+
 function getSync(): CredentialsSync {
   if (!syncInstance) {
     syncInstance = createCredentialsSync({
@@ -457,6 +510,11 @@ function mapServerError(err: unknown): never {
  */
 export function initModelAccess(): void {
   const sync = getSync();
+  const byok = createByokRuntime(
+    broadcastReferenceModelPricing,
+    createByokCache(byokSnapshotSecretIo),
+    scheduleByokCodexHostRefresh,
+  );
 
   const noteAuthState = (
     isAuthenticated: boolean,
@@ -479,6 +537,14 @@ export function initModelAccess(): void {
     lastAuthUserId = isAuthenticated ? (userId ?? lastAuthUserId) : null;
     lastAuthRealm = isAuthenticated ? (realm ?? lastAuthRealm) : null;
     sync.handleAuthChange({ isAuthenticated, userId, realm });
+    const user = authManager.getAuthState().user;
+    byok.setOwner(isAuthenticated && userId && isExternalOrganizationByokUser(user) ? {
+      scope: JSON.stringify([authGeneration, userId, realm, user.orgId]),
+      cacheScope: JSON.stringify([userId, realm, user.orgId]),
+      organizationId: user.orgId,
+    } : null);
+    // 身份切换/登录是显式事件,不受聚焦节流约束。
+    scheduleByokSync(byok, true);
   };
 
   authManager.onAuthStateChange((state) => {
@@ -494,12 +560,21 @@ export function initModelAccess(): void {
     noteAuthState(true, initial.user?.id ?? null, authManager.getActiveAuthRealm());
   }
   foregroundRefreshListener = () => {
+    scheduleByokSync(byok);
     if (!lastAuthUserId || getSync().getStatus().state !== 'ok') return;
     if (Date.now() - lastModelsSyncStartedAt < XD_MODELS_FOREGROUND_REFRESH_INTERVAL_MS) return;
     scheduleModelsSync();
   };
   app.on('browser-window-focus', foregroundRefreshListener);
   ipcMain.handle('model-access:get-status', () => getModelAccessStatus());
+  registerByokIpc(ipcMain, {
+    getStatus: () => byok.getStatus(),
+    // 设置页的显式刷新不受节流限制,但要记时间戳,避免紧接着的聚焦再拉一轮。
+    sync: () => {
+      lastByokSyncStartedAt = Date.now();
+      return byok.sync();
+    },
+  }, assertTrustedAppRendererEvent);
 
   ipcMain.handle('model-access:retry', async (): Promise<ModelAccessStatus> => {
     if (!getAppCapabilities().canUseCindyGateway) {
@@ -522,6 +597,8 @@ export function initModelAccess(): void {
 
 /** 仅测试:重置单例。 */
 export function resetModelAccessForTest(): void {
+  lastByokSyncStartedAt = 0;
+  byokCodexHostRefreshQueued = false;
   if (foregroundRefreshListener) {
     app.removeListener('browser-window-focus', foregroundRefreshListener);
     foregroundRefreshListener = null;

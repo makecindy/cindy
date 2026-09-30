@@ -17,7 +17,7 @@
  * SSH 主机摘要由本组件自取轻量快照(list + onStatusChanged),不侵入 RemoteSection。
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronRight } from 'lucide-react';
@@ -27,6 +27,7 @@ import { MyDevicesPanel } from './MyDevicesPanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 
 /** SSH 状态 → 摘要状态点的优先级:有已连接给绿,其次进行中给橙,再次失败给红,否则灰。 */
 const SSH_PROGRESS_STATUSES: ReadonlySet<RemoteHostSnapshot['status']> = new Set([
@@ -36,6 +37,7 @@ const SSH_PROGRESS_STATUSES: ReadonlySet<RemoteHostSnapshot['status']> = new Set
 ]);
 
 function CollapsibleSubSection({
+  id,
   title,
   summary,
   dotColor,
@@ -44,6 +46,7 @@ function CollapsibleSubSection({
   pinned,
   children,
 }: {
+  id?: string;
   title: string;
   /** 收起态 header 右侧的状态摘要;null = 数据未就绪,整块不显示(避免闪一帧错误状态)。 */
   summary: string | null;
@@ -55,7 +58,7 @@ function CollapsibleSubSection({
   children: ReactNode;
 }) {
   return (
-    <section className="flex flex-col gap-3">
+    <section id={id} className="flex flex-col gap-3">
       <button
         type="button"
         onClick={onToggle}
@@ -136,6 +139,7 @@ function sshSummary(
 }
 
 export function RemoteControlSection() {
+  const { entry, activation } = useSettingsSearchNavigation();
   const { t } = useTranslation();
   const { mode } = useAuth();
   const location = useLocation();
@@ -146,19 +150,26 @@ export function RemoteControlSection() {
   // 深链 ?section=devices 必须在首帧就是展开态:放到 effect 里会先画一帧收起,
   // 再把下方内容顶开一格。
   const [devicesOpen, setDevicesOpen] = useState(
-    () => new URLSearchParams(location.search).get('section') === 'devices',
+    () => ['devices', 'remoteControl.devices'].includes(new URLSearchParams(location.search).get('section') ?? ''),
   );
-  const [sshOpen, setSshOpen] = useState(false);
+  const [sshOpen, setSshOpen] = useState(
+    () => new URLSearchParams(location.search).get('section') === 'remoteControl.ssh',
+  );
 
   // SSH 主机轻量快照 —— 只为收起态摘要服务。RemoteSection 内部自管自己的一份;
   // 这里不外提它的状态是有意的(979 行组件不为一行摘要重构)。
   const [hosts, setHosts] = useState<RemoteHostSnapshot[] | null>(null);
 
   useEffect(() => {
-    if (new URLSearchParams(location.search).get('section') === 'devices') {
+    if (['devices', 'remoteControl.devices'].includes(new URLSearchParams(location.search).get('section') ?? '')) {
       setDevicesOpen(true);
     }
   }, [location.search]);
+
+  useLayoutEffect(() => {
+    if (entry?.targetId === 'settings-search-target-remote-ssh') setSshOpen(true);
+    if (entry?.targetId === 'settings-search-target-remote-devices') setDevicesOpen(true);
+  }, [entry, activation]);
 
   const collapseRequestedRef = useRef(false);
   const toggleDevices = useCallback(() => {
@@ -177,7 +188,7 @@ export function RemoteControlSection() {
     collapseRequestedRef.current = false;
 
     const next = new URLSearchParams(location.search);
-    if (next.get('section') !== 'devices') return;
+    if (!['devices', 'remoteControl.devices'].includes(next.get('section') ?? '')) return;
     next.delete('section');
     const search = next.toString();
     navigate(
@@ -240,6 +251,7 @@ export function RemoteControlSection() {
         {deviceLinkAvailable ? (
           <>
             <CollapsibleSubSection
+              id="settings-search-target-remote-devices"
               title={t('settings.remoteControl.sections.myDevices')}
               summary={devSumText}
               dotColor={null}
@@ -256,6 +268,7 @@ export function RemoteControlSection() {
         ) : null}
 
         <CollapsibleSubSection
+          id="settings-search-target-remote-ssh"
           title={t('settings.remoteControl.sections.ssh')}
           summary={sshSum?.text ?? null}
           dotColor={sshSum?.dot ?? null}

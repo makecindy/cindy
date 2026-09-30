@@ -11,6 +11,7 @@ import type { MobileMessageRenderItem, MobileWorkChildItem } from '@/session/mes
 import { logUnhandledRenderItem } from '@/session/assertNever';
 import { applySentAttachmentThumbOverlay } from '@/session/sentAttachmentThumbStore';
 import { i18n } from '@/i18n';
+import { svgAttachmentForDisplay } from '@/session/messageAttachments';
 
 export interface MobileMessageGalleryImage {
   key: string;
@@ -60,10 +61,11 @@ export function collectMobileMessageGalleryImages(
 
   const visitMessage = (message: NormalizedRemoteMessage, keyPrefix: string, includeBodyImages: boolean) => {
     message.attachments?.forEach((rawAttachment, index) => {
-      if (rawAttachment.kind !== 'image' || !rawAttachment.uri) return;
+      const displayAttachment = svgAttachmentForDisplay(rawAttachment, workdir, message.key, remoteHostId, sessionId);
+      if (displayAttachment.kind !== 'image' || !displayAttachment.uri) return;
       // 与 AttachmentStrip 同源 overlay(cindy-oss-attach:// → 本地缩略兜底):气泡
       // 点开时 initialUrl 是替换后的 file://,图集条目必须同步替换才能匹配进翻页组。
-      const attachment = applySentAttachmentThumbOverlay(rawAttachment);
+      const attachment = applySentAttachmentThumbOverlay(displayAttachment);
       const payload = buildAttachmentPayload(attachment);
       if (payload.kind === 'media') push(`${keyPrefix}:attachment:${index}`, attachment.name, payload);
     });

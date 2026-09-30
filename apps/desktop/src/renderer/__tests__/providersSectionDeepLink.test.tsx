@@ -137,6 +137,8 @@ vi.mock('@/components/settings/useProviderSubscriptionCard', () => ({
   useProviderSubscriptionCard: vi.fn(() => null),
 }));
 
+vi.mock('@/components/settings/LlamaCppProviderDetail', () => ({ LlamaCppProviderDetail: () => null }));
+
 vi.mock('@/components/settings/OllamaProviderDetail', () => ({ OllamaProviderDetail: () => null }));
 
 function makeProvider(id: string, over?: Partial<ProviderView>): ProviderView {
@@ -200,6 +202,7 @@ beforeEach(() => {
       onProviderOAuthProgress: vi.fn(() => () => undefined),
       auth: { logout: codexAuthActions.logout },
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
+      llamaCppStatus: vi.fn(async () => ({ installed: false, supported: true, running: false, models: [] })),
       localModelStatus: vi.fn(async () => ({ kind: 'ready' })),
       onLocalModelStatus: vi.fn(() => () => undefined),
       requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
@@ -254,10 +257,19 @@ describe('ProvidersSection — 深链定位', () => {
     },
   );
 
-  it.each(['anthropic', 'xai', 'cindy-local-ollama'])('shows the saved name in both sidebar and detail header for %s', async (id) => {
+  it('uses the same local header and empty model treatment for llama.cpp', async () => {
+    providersState.providers = [makeProvider('cindy-local-llamacpp', { name: 'llama.cpp', source: 'user', auth: { method: 'none' }, connected: true })];
+    renderAt('?tab=providers&connect=cindy-local-llamacpp');
+    expect(await screen.findByText(/^settings\.providers\.local\.subtitle/)).toBeTruthy();
+    expect(screen.queryByText('settings.providers.detail.emptyModelsConnected')).toBeNull();
+    expect(screen.queryByText('settings.providers.pill.configured')).toBeNull();
+    expect(await screen.findByText('settings.providers.llamacpp.startOnUse')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.providers.custom.editAria' })).toBeNull();
+  });
+  it.each(['anthropic', 'xai', 'cindy-local-ollama', 'cindy-local-llamacpp'])('shows the saved name in both sidebar and detail header for %s', async (id) => {
     providersState.providers = [makeProvider(id, {
       name: 'My renamed provider', connected: true,
-      source: id === 'cindy-local-ollama' ? 'user' : 'builtin',
+      source: id.startsWith('cindy-local-') ? 'user' : 'builtin',
     })];
     renderAt(`?tab=providers&connect=${id}`);
     await waitFor(() => expect(screen.getAllByText('My renamed provider').length).toBeGreaterThanOrEqual(2));
@@ -299,7 +311,7 @@ describe('ProvidersSection — 深链定位', () => {
   );
 
   it.each(['subscriptionAccount', 'openAiAccount'] as const)(
-    'collapses usage on %s changes but retains expansion on quota refresh',
+    'shows usage windows without a details disclosure across %s changes',
     async (identityField) => {
       const account = { title: 'ChatGPT', windows: [{ key: 'weekly', title: 'Weekly', window: { utilization: 20 }, detail: 'Weekly usage details' }] };
       vi.mocked(useProviderSubscriptionCard).mockReturnValue(account);
@@ -309,16 +321,13 @@ describe('ProvidersSection — 深链定位', () => {
       });
       providersState.providers = [provider];
       const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
-      fireEvent.click(await screen.findByRole('button', { name: 'quotaCard.usageTitle' }));
-      const refresh = () => view.rerender(
-        <MemoryRouter><ProvidersSection /></MemoryRouter>,
-      );
-      vi.mocked(useProviderSubscriptionCard).mockReturnValue({ ...account, updatedAt: Date.now() });
-      refresh();
-      expect(screen.getByRole('button', { name: 'quotaCard.usageTitle' }).getAttribute('aria-expanded')).toBe('true');
+      const usage = await screen.findByTestId('provider-usage-module');
+      expect(within(usage).getByRole('progressbar', { name: 'Weekly' })).toBeTruthy();
+      expect(within(usage).queryByText('Weekly usage details')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'quotaCard.usageTitle' })).toBeNull();
       providersState.providers = [{ ...provider, [identityField]: { source: 'oauth', identity: 'second@example.test' } }];
-      refresh();
-      expect(screen.getByRole('button', { name: 'quotaCard.usageTitle' }).getAttribute('aria-expanded')).toBe('false');
+      view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      expect(within(screen.getByTestId('provider-usage-module')).getByRole('progressbar', { name: 'Weekly' })).toBeTruthy();
     },
   );
 
@@ -833,6 +842,32 @@ describe('ProvidersSection — 深链定位', () => {
     await waitFor(() => expect(document.querySelector('[data-deep-link-target="true"]')).not.toBeNull());
     expect(customDialogSpy).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it('keeps enterprise models visible inside the unified detail layout without connection editing', async () => {
+    const status = { state: 'ready', providers: [{ providerId: 'byok-team', state: 'ready' }] } as const;
+    const retryByok = vi.fn(async () => status);
+    Object.assign(window.electronAPI, {
+      modelAccess: { getByokStatus: vi.fn(async () => status), retryByok },
+    });
+    providersState.providers = [makeProvider('byok-team', {
+      name: 'Enterprise Provider', source: 'organization',
+      connected: true, agents: ['codex'], auth: { method: 'managed' },
+      models: { codex: [{
+        id: 'byok-team/company-chat', name: 'Company Chat', contextWindow: 128000,
+        efforts: [], defaultEffort: null,
+      }] },
+    })];
+    renderAt('?tab=providers&connect=byok-team&model=byok-team%2Fcompany-chat&agent=codex');
+
+    await screen.findByRole('switch', { name: 'Company Chat' });
+    await waitFor(() => expect(document.querySelector('[data-deep-link-target="true"]')).not.toBeNull());
+    expect(customDialogSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'settings.providers.models.refreshAria' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.providers.custom.editAria' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.byok.refresh' }));
+    await waitFor(() => expect(retryByok).toHaveBeenCalledOnce());
+    expect(updateCustomProvider).not.toHaveBeenCalled();
   });
 
   it('connect=<目录外 id> → 视为 preset id,向导 preset entry 打开', async () => {

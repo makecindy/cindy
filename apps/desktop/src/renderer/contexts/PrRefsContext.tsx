@@ -41,6 +41,7 @@ import type { PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
 import { prStatusKey, MAX_STATUS_QUERIES, PR_STATUS_REFRESH_INTERVAL_MS } from '@/lib/prStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import { isRemoteDeviceMarkedDisconnected } from '@/features/device-link/remoteProjectsStore';
+import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('PrRefsContext');
@@ -188,7 +189,8 @@ function createPrCacheStore(): PrCacheStore {
       notify();
     },
     clearAll() {
-      if (refsBySession.size === 0 && statusesBySession.size === 0 && refreshErrors.size === 0) return;
+      if (refsBySession.size === 0 && statusesBySession.size === 0 && refreshErrors.size === 0)
+        return;
       refreshErrors.clear();
       refsBySession.clear();
       statusesBySession.clear();
@@ -399,6 +401,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         // 设备明确断线时不发注定失败的隧道调用(fail-open:shard 缺失照常尝试)。
         // 不写任何状态,重连后的下一个触发点(周期 / 聚焦 / 引用到位)自然恢复。
         if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return;
+        if (deviceId && unresponsiveDevicesStore.has(deviceId)) return;
         const results = deviceId
           ? ((await window.electronAPI.deviceLink.invoke(deviceId, 'git-context:pr-status', [
               { sessionId, queries },
@@ -441,6 +444,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     // 断线判定本地同步可得,先看一眼再发(2026-08-13 用户裁决)。fail-open:
     // shard 缺失(尚未建立 / 设备已移除)照常尝试,语义见 isRemoteDeviceMarkedDisconnected。
     if (isRemoteDeviceMarkedDisconnected(deviceId)) return;
+    if (unresponsiveDevicesStore.has(deviceId)) return;
     const gen = ownerGenRef.current;
     // 同代在飞才挡(见 inFlightSessions 注释)。
     if (remoteRefsInFlight.current.get(sessionId) === gen) return;
@@ -504,7 +508,11 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     const gen = ownerGenRef.current;
     if (localRefsInFlight.current.get(sessionId) === gen) return;
     const fetchedAt = localRefsFetchedAt.current.get(sessionId);
-    if (!refsFailed && fetchedAt !== undefined && Date.now() - fetchedAt < PR_STATUS_REFRESH_INTERVAL_MS - 5_000) {
+    if (
+      !refsFailed &&
+      fetchedAt !== undefined &&
+      Date.now() - fetchedAt < PR_STATUS_REFRESH_INTERVAL_MS - 5_000
+    ) {
       return;
     }
     localRefsInFlight.current.set(sessionId, gen);
@@ -559,6 +567,14 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   // 与聊天顶栏同一节拍的兜底刷新:周期 + 窗口聚焦。首查失败自愈;merged/closed
   // 等远端状态变化也随节拍收敛(main / 被控端各有 60s TTL,重复查询便宜)。
   useEffect(() => {
+    const unsubscribe = window.electronAPI.gitContext.onGithubConnected?.(() => {
+      // Discard pre-login responses, including requests still in flight. Both
+      // sidebar and header consumers immediately read the new identity.
+      ownerGenRef.current += 1;
+      for (const [sessionId, entry] of prConsumers.current) {
+        refreshConsumer(sessionId, entry.deviceId);
+      }
+    });
     const refreshAll = () => {
       // 失焦/隐藏时跳过周期刷新:没人在看,后台空转的查询(GitHub 配额 +
       // device-link 隧道)纯属浪费;下面的 focus 监听会在回到前台的瞬间全量补一次,
@@ -572,6 +588,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     const interval = setInterval(refreshAll, PR_STATUS_REFRESH_INTERVAL_MS);
     window.addEventListener('focus', refreshAll);
     return () => {
+      unsubscribe?.();
       clearInterval(interval);
       window.removeEventListener('focus', refreshAll);
     };

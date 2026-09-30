@@ -191,6 +191,57 @@ test('hasAsciiEllipsis: 识别三点省略号', () => {
 
 const glossary = JSON.parse(fs.readFileSync(path.join(ROOT, 'i18n', 'glossary.json'), 'utf8'));
 
+test('Desktop billing: 金额和余额文案不得恢复 Credits / 点数', () => {
+  // PR #1053 的裁决只约束 Cindy 计费文案，不扫描 ChatGPT / Codex 原生 credits。
+  // 保留 billing.comparison.credits 等 key；检查的是用户看到的值。
+  const credits = glossary.terms.find((term) => term.id === 'credits');
+  assert.ok(credits);
+  const creditMatcher = makeSourceTermMatcher('Credit');
+  const violations = [];
+  for (const locale of glossary.locales) {
+    const file = path.join(
+      ROOT,
+      'apps',
+      'desktop',
+      'src',
+      'renderer',
+      'i18n',
+      'locales',
+      locale,
+      'common.json',
+    );
+    const { billing } = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(
+      billing && typeof billing === 'object',
+      `${locale}: 缺少 billing 文案`,
+    );
+    const scan = (obj, prefix) => {
+      for (const [key, value] of Object.entries(obj)) {
+        const keyPath = `${prefix}.${key}`;
+        if (value && typeof value === 'object') {
+          scan(value, keyPath);
+        } else if (typeof value === 'string') {
+          // Credit card 是支付方式，不是被弃用的计费点数。
+          const prose = stripNonProse(value).replace(/\bcredit cards?\b/gi, '');
+          const translated = credits.translations[locale];
+          if (
+            creditMatcher.test(prose) ||
+            (translated && occursIn(prose, translated))
+          ) {
+            violations.push(`${locale}:${keyPath}: ${value}`);
+          }
+        }
+      }
+    };
+    scan(billing, 'billing');
+  }
+  assert.deepEqual(
+    violations,
+    [],
+    'Cindy 计费文案须使用金额/余额，详见 glossary 的 credits 条目',
+  );
+});
+
 test('glossary.json: id 唯一且格式合法', () => {
   const ids = glossary.terms.map((t) => t.id);
   assert.equal(new Set(ids).size, ids.length, '术语 id 必须唯一——baseline 用它做锚点');

@@ -104,6 +104,7 @@ async function fixture(
     clipboard: async () => {},
     close: async () => {},
     fullscreen: async () => {},
+    resize: async () => {},
     rendererReady: async () => {},
     presentationReady: async () => {},
     inputFocus: async () => {},
@@ -242,6 +243,7 @@ it('keeps a healthy viewer on the same host connected when another viewer times 
       clipboard: async () => {},
       close: async () => {},
       fullscreen: async () => {},
+      resize: async () => {},
       rendererReady: async () => {},
       presentationReady: async () => {},
       inputFocus: async () => {},
@@ -250,7 +252,7 @@ it('keeps a healthy viewer on the same host connected when another viewer times 
           return {
             version: 1,
             enabled: true,
-            canControl: false,
+            canControl: true,
             automaticReconnect: true,
             displays: [{ id: 'one', width: 1280, height: 720 }],
           };
@@ -263,6 +265,7 @@ it('keeps a healthy viewer on the same host connected when another viewer times 
           };
         }
         if (request.op === 'stop') leases.delete(request.lease);
+        if (request.op === 'control' || request.op === 'heartbeat') return { controlling: true };
         return { controlling: false, jpeg: null };
       },
     } satisfies RemoteDesktopViewerApi;

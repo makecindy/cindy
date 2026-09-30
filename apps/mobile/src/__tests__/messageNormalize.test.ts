@@ -542,9 +542,9 @@ describe('normalizeRemoteMessages', () => {
       }),
     ]);
 
-    expect(item.secondaryBody).toBe('Full tool output was released (original size 128 KB)');
+    expect(item.secondaryBody).toBe('完整工具输出已释放（原始大小 128 KB）');
     expect(buildMobileMessageCopyText(item)).toContain(
-      'Full tool output was released (original size 128 KB)',
+      '完整工具输出已释放（原始大小 128 KB）',
     );
     expect(buildMobileMessageCopyText(item)).not.toContain('tool_result_compacted');
   });
@@ -1035,8 +1035,9 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0]).toMatchObject({ kind: 'system', label: 'error' });
     expect(items[0].body).toContain('还没有配置可用的 API Key');
     expect(items[0].body).toContain('设置 → 模型供应商');
-    // 非鉴权错误维持原文
-    expect(items[1].body).toBe('something exploded');
+    // 未分类错误使用本地化摘要，技术原文留给详情。
+    expect(items[1].body).toBe(i18n.t('session.tail.replyFailed'));
+    expect(items[1].rawError).toBe('something exploded');
   });
 
   it('localizes a persisted output limit in message history', () => {
@@ -1128,6 +1129,65 @@ describe('normalizeRemoteMessages', () => {
       ['other-origin', undefined],
       ['missing-id', undefined],
       ['assistant-ignored', undefined],
+    ]);
+  });
+
+  it('reads the sending session of tool-sent and Orca messages without mixing it into automation', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'tool-sent',
+        role: 'user',
+        content: 'please review',
+        agentMeta: {
+          origin: {
+            kind: 'session',
+            senderSessionId: 'caller',
+            displayText: 'please review',
+            senderSessionTitle: 'Release checklist',
+          },
+        },
+      }),
+      message({
+        id: 'orca-report',
+        role: 'user',
+        content: JSON.stringify({ orcaSource: 'worker', content: 'Done' }),
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Reviewer', senderSessionId: 'worker-1' } },
+      }),
+      message({
+        id: 'teammate-sent',
+        role: 'user',
+        content: 'please sort feedback',
+        agentMeta: {
+          origin: {
+            kind: 'session',
+            senderSessionId: 'bot-task',
+            displayText: 'please sort feedback',
+            senderSessionTitle: 'Weekly feedback',
+            senderBotId: 'bot-1',
+            senderBotName: 'Cindy',
+          },
+        },
+      }),
+      message({
+        id: 'shared-guest',
+        role: 'user',
+        content: 'redacted by host',
+        agentMeta: { origin: { kind: 'session' } },
+      }),
+      message({
+        id: 'legacy-orca',
+        role: 'user',
+        content: 'legacy',
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Lead' } },
+      }),
+    ]);
+
+    expect(items.map((item) => [item.source.id, item.sessionOrigin, item.automationOrigin])).toEqual([
+      ['tool-sent', { senderSessionId: 'caller', senderSessionTitle: 'Release checklist' }, undefined],
+      ['orca-report', { senderSessionId: 'worker-1' }, undefined],
+      ['teammate-sent', { senderSessionId: 'bot-task', senderSessionTitle: 'Weekly feedback', senderBotName: 'Cindy' }, undefined],
+      ['shared-guest', {}, undefined],
+      ['legacy-orca', undefined, undefined],
     ]);
   });
 

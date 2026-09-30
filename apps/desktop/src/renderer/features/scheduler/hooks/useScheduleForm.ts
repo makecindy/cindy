@@ -419,9 +419,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     const isHeartbeat = !!tgt;
     if (form.executionMode === 'script') {
       if (!form.workingDir.trim()) return { key: 'scheduler.editor.validation.selectProject' };
-      // 编辑 bound/persistent 任务切到 script 时 targetSessionId 会残留在 form 里
-      // (运行会话控件已隐藏,用户无从清理)——不在这里拦:buildScheduleInput 的
-      // script 分支会把绑定/worktree/静默字段全部清干净,保存即完成模式转换。
+      // Script bindings survive editing; unavailable owners are paused by the host.
     } else if (isHeartbeat) {
       if (tgt === '__pending__') return { key: 'scheduler.editor.validation.selectThread' };
     } else {
@@ -432,8 +430,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         return { key: 'scheduler.editor.validation.reasoningInvalid', values: { values: EFFORT_VALUES.join(' / ') } };
       }
     }
-    // script 模式不展示前置检查区块,buildScheduleInput 的 script 分支也会把它清空
-    // ——若在 agent 模式下开了前置检查但命令留空,切到 script 后这条校验不该沿用,
+    // script 模式保留已有前置检查;切换时命令留空不创建 hook,
     // 否则用户明明看不到该区块也点不到那个开关,却被挡在保存之外。
     if (form.executionMode !== 'script' && form.preRunHookEnabled && !form.preRunHookCommand.trim()) {
       return { key: 'scheduler.editor.validation.preRunHookCommandRequired' };

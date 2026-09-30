@@ -13,7 +13,7 @@ import {
 describe('home project child window', () => {
   it('uses the current native position despite delayed scroll events and transient failed measurements', () => {
     const source = ts.createSourceFile('index.tsx', readFileSync(
-      resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8',
+      resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8',
     ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const tracker = source.statements.find((node): node is ts.FunctionDeclaration => (
       ts.isFunctionDeclaration(node) && node.name?.text === 'HomeProjectWindowAnchorTracker'
@@ -117,7 +117,7 @@ describe('home project child window', () => {
   });
 
   it('keeps layout readiness out of the first-render window gate', () => {
-    const source = readFileSync(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
+    const source = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
     const setupStart = source.indexOf('const windowingEnabled = shouldWindowHomeProjectChildren({');
     const setupEnd = source.indexOf('const scrollY = homeScrollY;', setupStart);
     const setup = source.slice(setupStart, setupEnd);
@@ -139,10 +139,20 @@ describe('home project child window', () => {
   });
 
   it('bounds the outer home list window instead of retaining every flat row', () => {
-    const source = readFileSync(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
+    const source = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
 
-    expect(source).toContain('initialNumToRender={HOME_LIST_INITIAL_RENDER_COUNT}');
-    expect(source).toContain('maxToRenderPerBatch={HOME_LIST_RENDER_BATCH_SIZE}');
+    const readBatch = (attribute: string, platform: string, grouped: boolean) => {
+      const expression = source.match(new RegExp(`${attribute}=\\{([^}]+)\\}`))?.[1];
+      expect(expression).toBeDefined();
+      return new Function('Platform', 'groupByProject', 'HOME_LIST_INITIAL_RENDER_COUNT', 'HOME_LIST_RENDER_BATCH_SIZE',
+        `return (${expression});`)({ OS: platform }, grouped, 12, 12);
+    };
+    for (const platform of ['android', 'ios']) {
+      for (const grouped of [false, true]) {
+        expect(readBatch('initialNumToRender', platform, grouped)).toBe(platform === 'android' && grouped ? 4 : 12);
+        expect(readBatch('maxToRenderPerBatch', platform, grouped)).toBe(platform === 'android' && grouped ? 2 : 12);
+      }
+    }
     expect(source).toContain('updateCellsBatchingPeriod={32}');
     expect(source).toContain('windowSize={HOME_LIST_WINDOW_SIZE}');
   });

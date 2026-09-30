@@ -1,9 +1,9 @@
 import { Slider } from '@/components/ui/slider';
+import { Button, type ButtonProps } from '@/components/ui/button';
 import {
   useEffect,
   useMemo,
   useState,
-  type ButtonHTMLAttributes,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
@@ -988,13 +988,15 @@ export function WorkLouderCodexSettings({
               `settings.shortcuts.workLouderCodex.device.inputMonitoring.${state?.device.inputMonitoringPermission ?? 'unknown'}`,
             )}
             control={
-              <button
+              <Button
+                variant="secondary"
+                size="md"
+                compact
                 type="button"
                 onClick={() => void openInputMonitoringSettings()}
-                className="rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2 text-12 text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
               >
                 {t('settings.shortcuts.workLouderCodex.device.inputMonitoring.open')}
-              </button>
+              </Button>
             }
           />
         </SettingsGroup>
@@ -1065,7 +1067,11 @@ export function WorkLouderCodexSettings({
                   </span>
                 )}
               {guardState?.status === 'recovery-required' ? (
-                <SettingsSecondaryButton disabled={guardSaving} onClick={() => void recoverGuard()}>
+                <SettingsSecondaryButton
+                  loading={guardSaving}
+                  disabled={guardSaving}
+                  onClick={() => void recoverGuard()}
+                >
                   {t('settings.shortcuts.workLouderCodex.codexGuard.recover')}
                 </SettingsSecondaryButton>
               ) : (
@@ -1105,14 +1111,17 @@ function KeyMergeControls({
         label={t('settings.shortcuts.workLouderCodex.layout.merge.split')}
         description={t('settings.shortcuts.workLouderCodex.layout.merge.splitDescription')}
         control={
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             disabled={disabled}
             onClick={onSplit}
-            className="inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 text-12 font-medium text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="shrink-0"
           >
             {t('settings.shortcuts.workLouderCodex.layout.merge.split')}
-          </button>
+          </Button>
         }
       />
     );
@@ -1127,14 +1136,16 @@ function KeyMergeControls({
           label={t(`settings.shortcuts.workLouderCodex.layout.merge.${direction}`)}
           description={t(`settings.shortcuts.workLouderCodex.layout.merge.${direction}Description`)}
           control={
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               disabled={disabled}
               onClick={() => onMerge(direction)}
-              className="inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 text-12 font-medium text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {t(`settings.shortcuts.workLouderCodex.layout.merge.${direction}`)}
-            </button>
+            </Button>
           }
         />
       ))}
@@ -1347,23 +1358,18 @@ function SettingsResetButton({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button
+      variant="secondary"
+      size="md"
+      compact
       type="button"
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={cn(
-        'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-12 font-medium',
-        'border border-[var(--settings-input-border)]',
-        'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-        'transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)]',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-        'disabled:cursor-not-allowed disabled:opacity-50',
-      )}
     >
       <RotateCcw size={13} aria-hidden />
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -1444,18 +1450,11 @@ function SettingsDivider() {
   return <div className="my-1 h-px bg-[var(--settings-theme-card-border)]" />;
 }
 
-function SettingsSecondaryButton({
-  children,
-  ...props
-}: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'className' | 'type'>) {
+function SettingsSecondaryButton({ children, ...props }: Omit<ButtonProps, 'className' | 'type'>) {
   return (
-    <button
-      {...props}
-      type="button"
-      className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2 text-12 text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-    >
+    <Button variant="secondary" size="md" compact {...props} type="button" className="shrink-0">
       {children}
-    </button>
+    </Button>
   );
 }
 

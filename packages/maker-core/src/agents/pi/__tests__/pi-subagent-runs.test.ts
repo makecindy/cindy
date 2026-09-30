@@ -13,8 +13,10 @@ import {
   verifyPiSubagentRunnerIdentity,
   listPiSubagentRunDiagnostics,
   listPiSubagentRuns,
+  scanPiSubagentRuns,
   acquirePiSubagentLaunchFence,
   clearStalePiSubagentLaunchFence,
+  piSubagentLaunchFenceArtifact,
   isPiSubagentLaunchFenceActive,
   piSubagentDeletedTombstonePath,
   writePiSubagentDeletedTombstone,
@@ -191,6 +193,38 @@ afterEach(async () => {
 });
 
 describe('PI durable subagent run store', () => {
+  it('selects only the newest generation of a logical task before delivering historical payloads', async () => {
+    const root = await makeRoot();
+    const older = status('123e4567-e89b-42d3-a456-4266141740ab', {
+      taskId: 'same-task', state: 'completed', startedAt: 10,
+    });
+    const newer = status('123e4567-e89b-42d3-a456-4266141740ac', {
+      taskId: 'same-task', state: 'completed', startedAt: 20,
+    });
+    await writeStatus(root, older);
+    await writeStatus(root, newer);
+    const discovered = [];
+    for await (const run of scanPiSubagentRuns(root, { latestPerTask: true })) discovered.push(run);
+    expect(discovered.map((run) => run.runId)).toEqual([newer.runId]);
+  });
+
+  it('streams historical status files lazily and closes the directory after early cancellation', async () => {
+    const root = await makeRoot();
+    const ids = ['123e4567-e89b-42d3-a456-4266141740ab', '123e4567-e89b-42d3-a456-4266141740ac'];
+    for (const id of ids) await writeStatus(root, status(id, { state: 'completed' }));
+    const iterator = scanPiSubagentRuns(root);
+    const first = await iterator.next();
+    expect(first.done).toBe(false);
+    // The other status has not been read or retained while the consumer is suspended.
+    const other = ids.find((id) => id !== first.value!.runId)!;
+    await writeFile(path.join(root, other, 'status.json'), 'corrupt');
+    expect((await iterator.next()).done).toBe(true);
+    const early = scanPiSubagentRuns(root);
+    await early.next();
+    await early.return(undefined);
+    await rm(root, { recursive: true, force: true });
+  });
+
   it('records a host-observed runner failure without rewriting completed child results', async () => {
     const root = await makeRoot();
     const runId = '123e4567-e89b-42d3-a456-4266141740ab';
@@ -910,6 +944,10 @@ describe('PI durable subagent run store', () => {
     const foreignLivePid = process.ppid;
     /** A pid that is certainly not running: 2^22 is above every OS pid_max. */
     const deadPid = 4_194_303;
+    /** These cases pin ownership, not stale detection. A default `updatedAt: 20`
+     *  is already expired, so the sync identity probe (Windows: powershell, 5s)
+     *  would starve the 5s test budget. */
+    const live = (): { updatedAt: number } => ({ updatedAt: Date.now() });
 
     async function homeWithRuns(): Promise<{ agentHome: string; root: string }> {
       const agentHome = await makeRoot();
@@ -923,9 +961,11 @@ describe('PI durable subagent run store', () => {
       const foreign = '123e4567-e89b-42d3-a456-426614174061';
       await writeStatus(root, status(mine, {
         runtimeOwnerId: piSubagentRuntimeOwnerId(process.pid, 'scope-mine'),
+        ...live(),
       }));
       await writeStatus(root, status(foreign, {
         runtimeOwnerId: piSubagentRuntimeOwnerId(foreignLivePid, 'scope-foreign'),
+        ...live(),
       }));
 
       // Times out because our own run never goes terminal; what matters is who
@@ -944,6 +984,7 @@ describe('PI durable subagent run store', () => {
       const orphan = '123e4567-e89b-42d3-a456-426614174062';
       await writeStatus(root, status(orphan, {
         runtimeOwnerId: piSubagentRuntimeOwnerId(deadPid, 'scope-crashed'),
+        ...live(),
       }));
 
       await expect(stopAllPiSubagentRunsForExit(agentHome, 150, { hostPid: process.pid }))
@@ -956,7 +997,7 @@ describe('PI durable subagent run store', () => {
     it('fails closed on a legacy owner id that carries no host prefix', async () => {
       const { agentHome, root } = await homeWithRuns();
       const legacy = '123e4567-e89b-42d3-a456-426614174063';
-      await writeStatus(root, status(legacy, { runtimeOwnerId: 'owner-a' }));
+      await writeStatus(root, status(legacy, { runtimeOwnerId: 'owner-a', ...live() }));
 
       await expect(stopAllPiSubagentRunsForExit(agentHome, 150, { hostPid: process.pid }))
         .resolves.toBe(false);
@@ -971,6 +1012,7 @@ describe('PI durable subagent run store', () => {
       const foreign = '123e4567-e89b-42d3-a456-426614174065';
       await writeStatus(root, status(foreign, {
         runtimeOwnerId: piSubagentRuntimeOwnerId(foreignLivePid, 'scope-foreign'),
+        ...live(),
       }));
 
       // Only the foreign run exists: this host has nothing to stop and must not
@@ -982,6 +1024,7 @@ describe('PI durable subagent run store', () => {
 
       await writeStatus(root, status(mine, {
         runtimeOwnerId: piSubagentRuntimeOwnerId(process.pid, 'scope-mine'),
+        ...live(),
       }));
       expect(hasActivePiSubagentRunsSync(agentHome, { hostPid: process.pid })).toBe(true);
       expect(requestStopAllPiSubagentRunsSync(agentHome, { hostPid: process.pid })).toBe(1);
@@ -2049,6 +2092,81 @@ describe('PI durable subagent run store', () => {
         await expect(readFile(piSubagentLaunchFencePath(agentHome, 4_194_303), 'utf8'))
           .rejects.toMatchObject({ code: 'ENOENT' });
         expect(isPiSubagentLaunchFenceActive(agentHome, otherHostPid)).toBe(true);
+      });
+
+      it('names the fence artifacts the runs root may contain, and nothing else', () => {
+        expect(piSubagentLaunchFenceArtifact('.launch-fence.json')).toEqual({ kind: 'published' });
+        expect(piSubagentLaunchFenceArtifact('.launch-fence-10596.json')).toEqual({ kind: 'published' });
+        expect(piSubagentLaunchFenceArtifact(
+          '.launch-fence-10596.json.tmp-10596-89aea6ae-a2c7-4fa4-8856-82503af66389',
+        )).toEqual({ kind: 'staging', writerPid: 10596 });
+        expect(piSubagentLaunchFenceArtifact(
+          '.launch-fence.json.tmp-10596-89aea6ae-a2c7-4fa4-8856-82503af66389',
+        )).toEqual({ kind: 'staging', writerPid: 10596 });
+        // A parent-session directory, a run directory, and near-misses stay out.
+        expect(piSubagentLaunchFenceArtifact('123e4567-e89b-42d3-a456-4266141740e0')).toBeNull();
+        expect(piSubagentLaunchFenceArtifact('session-1')).toBeNull();
+        expect(piSubagentLaunchFenceArtifact('.launch-fence-10596.json.bak')).toBeNull();
+        // Only a numeric pid sits between the prefix and the suffix.
+        expect(piSubagentLaunchFenceArtifact('.launch-fence-backup.json')).toBeNull();
+        expect(piSubagentLaunchFenceArtifact('.launch-fence-.json')).toBeNull();
+        expect(piSubagentLaunchFenceArtifact('.launch-fence-10596x.json')).toBeNull();
+        expect(piSubagentLaunchFenceArtifact(
+          '.launch-fence-backup.json.tmp-10596-89aea6ae-a2c7-4fa4-8856-82503af66389',
+        )).toBeNull();
+        expect(piSubagentLaunchFenceArtifact('.launch-fence-10596.json.tmp-10596-not-a-uuid')).toBeNull();
+        expect(piSubagentLaunchFenceArtifact('status.json.tmp-10596-89aea6ae-a2c7-4fa4-8856-82503af66389')).toBeNull();
+      });
+
+      describe('a staging file a crash left between write and rename', () => {
+        const stagingUuid = '89aea6ae-a2c7-4fa4-8856-82503af66389';
+        const stagingPath = (agentHome: string, writerPid: number, base = `.launch-fence-${writerPid}.json`) => path.join(
+          path.dirname(piSubagentLaunchFencePath(agentHome)),
+          `${base}.tmp-${writerPid}-${stagingUuid}`,
+        );
+        const payload = (hostPid: number, hostStartTimeSec?: number) => `${JSON.stringify({
+          version: 1,
+          hostPid,
+          ...(hostStartTimeSec === undefined ? {} : { hostStartTimeSec }),
+          leaseId: '5ae20afc-0789-4d90-98dc-9f577e05acef',
+          createdAt: 1_789_436_177_945,
+        })}\n`;
+
+        it('sweeps it once its writer is gone, whether complete or half-written', async () => {
+          const agentHome = await makeRoot();
+          await mkdir(path.dirname(piSubagentLaunchFencePath(agentHome)), { recursive: true });
+          const complete = stagingPath(agentHome, 4_194_303);
+          const halfWritten = stagingPath(agentHome, 4_194_303, '.launch-fence.json');
+          await writeFile(complete, payload(4_194_303, 1_789_385_816));
+          await writeFile(halfWritten, '{"version":1,"hostPid":4194');
+          // And one the OS handed our own pid to after the writer crashed.
+          const recycled = stagingPath(agentHome, process.pid);
+          await writeFile(recycled, payload(process.pid, 1));
+
+          await clearStalePiSubagentLaunchFence(agentHome);
+
+          for (const file of [complete, halfWritten, recycled]) {
+            await expect(readFile(file, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+          }
+        });
+
+        it('leaves it alone while its writer is still alive', async () => {
+          const agentHome = await makeRoot();
+          await mkdir(path.dirname(piSubagentLaunchFencePath(agentHome)), { recursive: true });
+          const complete = stagingPath(agentHome, process.pid);
+          await writeFile(complete, payload(process.pid));
+          // Half-written by a live host: the only proof of ownership is the pid
+          // in the name, and that host may be one rename away from publishing.
+          const halfWritten = stagingPath(agentHome, process.pid, '.launch-fence.json');
+          await writeFile(halfWritten, '{"version":1,"hostPid":');
+
+          await clearStalePiSubagentLaunchFence(agentHome);
+
+          await expect(readFile(complete, 'utf8')).resolves.toContain('"version":1');
+          await expect(readFile(halfWritten, 'utf8')).resolves.toBe('{"version":1,"hostPid":');
+          // It never counts as a fence either: only the named path does.
+          expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+        });
       });
 
       it('ignores and sweeps a fence its pid inherited from a previous life', async () => {

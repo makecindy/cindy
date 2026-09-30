@@ -6,6 +6,7 @@ import { useEffect } from 'react';
 import { RemoteDesktopHost } from '@/features/remote-desktop/RemoteDesktopHost';
 
 import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
+import { useNewMakerPrefsOwnerResync } from '@/hooks/useNewMakerPrefsOwnerResync';
 import { useDisableContextMenu } from '@/hooks/useDisableContextMenu';
 import { ThemeProvider } from '@/hooks/useTheme';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
@@ -31,6 +32,7 @@ import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
 import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfirmHost';
+import { GhostInstallConsentHost } from '@/cindy-brain/GhostInstallConsentHost';
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
@@ -46,6 +48,7 @@ import { installCcMgrUpgradeListener } from '@/state/ccMgrUpgradeStore';
 import {
   preloadLocalCatalogSnapshot,
   refreshLocalCatalogSnapshot,
+  startLocalCatalogRecovery,
 } from '@/lib/localCatalogSnapshot';
 import { useResyncAgentIslandSettingsAfterLogin } from '@/hooks/useAgentIslandSettings';
 import {
@@ -176,6 +179,7 @@ function MakerBootstrap() {
   }, [dataOwnerId, dataOwnerRecoveryEpoch]);
 
   useEffect(() => {
+    const stopCatalogRecovery = startLocalCatalogRecovery();
     makerChatStore.syncActiveTurnsFromMain();
     // main 先提交 active catalog + capabilities 再广播；renderer 收到任一目录/鉴权变化后
     // 联合重拉 providers 与两份 capabilities，整组成功且代际最新时才切换。
@@ -185,6 +189,7 @@ function MakerBootstrap() {
     const offAuth = window.electronAPI.maker.auth.onStateChanged(refresh);
     const offProviders = window.electronAPI.maker.onProvidersChanged(refresh);
     return () => {
+      stopCatalogRecovery();
       offAuth?.();
       offProviders?.();
     };
@@ -193,11 +198,12 @@ function MakerBootstrap() {
   // Auth 广播的多个 listener 没有顺序契约；等 AuthContext 提交新 owner 后再预热一次，
   // 保证 provider 快照与 capabilities 不会沿用或提交前一个 owner 的在途结果。
   useEffect(() => {
-    // Early fire-and-forget sends can precede maker IPC registration. Repeat only
-    // after the ready/owner boundary, using the same persisted preference snapshot.
-    syncNewMakerPrefs();
     void preloadLocalCatalogSnapshot();
   }, [dataOwnerId, dataOwnerRecoveryEpoch]);
+  // Early fire-and-forget sends can precede maker IPC registration. Repeat after
+  // the ready/owner boundary and after every owner generation change (same-owner
+  // repairs included, #4469), using the same persisted preference snapshot.
+  useNewMakerPrefsOwnerResync(syncNewMakerPrefs);
   return null;
 }
 
@@ -416,6 +422,7 @@ export function App() {
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                           <GhostConfirmDialogHost />
                           <ForgeOidcInstallConfirmHost />
+                          <GhostInstallConsentHost />
                           <PluginPublisherConfirmHost />
                           <OwnerScopedRouter />
                         </EnvCheckGuard>

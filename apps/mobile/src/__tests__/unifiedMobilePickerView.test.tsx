@@ -9,6 +9,7 @@ vi.mock('react-native', async () => {
   return {
     View, ScrollView: View,
     Pressable: ({ children, onPress, disabled }: any) => el('button', { onClick: onPress, disabled }, children),
+    StyleSheet: { create: (styles: any) => styles, hairlineWidth: 1 },
     useWindowDimensions: () => ({ height: 800 }),
   };
 });
@@ -18,13 +19,14 @@ vi.mock('@/components/AppText', async () => {
 });
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 40, bottom: 20 }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('lucide-react-native', () => Object.fromEntries(['Star', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid'].map(key => [key, () => null])));
+vi.mock('lucide-react-native', () => Object.fromEntries(['Brain', 'Star', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown'].map(key => [key, () => null])));
+vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: ({ children }: any) => children, NativeSwitch: () => null, usesNativePullDownMenu: () => true }));
 vi.mock('@/components/MobileAgentMark', () => ({ MobileAgentMark: () => null }));
 vi.mock('@/session/MobileProviderMark', () => ({ MobileModelIconMark: () => null, MobileProviderMark: () => null }));
 vi.mock('@/session/SheetModal', () => ({ SheetModal: ({ children }: any) => children }));
 vi.mock('@/session/SheetSurface', () => ({ SheetSurface: ({ children }: any) => children }));
 vi.mock('@/session/sessionAgentSwitch', () => ({ mobileAgentLabel: (agent: string) => agent }));
-vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), spacing: {}, radius: {}, iconSize: {} }));
+vi.mock('@/theme', async () => ({ ...(await import('@/theme/tokens')), useTheme: () => ({ colors: {} }), useThemedStyles: (factory: any) => factory({}) }));
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;
 beforeEach(() => {

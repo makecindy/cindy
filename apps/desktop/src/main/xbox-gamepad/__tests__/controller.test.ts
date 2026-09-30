@@ -9,6 +9,21 @@ function enabledSettings() {
 }
 
 describe('XboxGamepadController', () => {
+  it('clears stale helper errors before the next enablement', () => {
+    const controller = new XboxGamepadController({
+      isCindyFrontmost: () => true,
+      dispatch: vi.fn(),
+    });
+    controller.applySettings('xbox', enabledSettings());
+    controller.handleHostMessage({ kind: 'host-error', message: 'helper failed' });
+    controller.applySettings('xbox', createXboxGamepadDefaultSettings());
+    controller.resetHostState();
+    expect(controller.getState().devicePresent).toBeNull();
+    expect(controller.getState().connectionStatus).toBe('disabled');
+    controller.applySettings('xbox', enabledSettings());
+    expect(controller.getState().connectionStatus).toBe('connecting');
+  });
+
   it.each(['lt', 'rt'] as const)(
     'keeps Windows %s voice held across pressure dips until release',
     (trigger) => {

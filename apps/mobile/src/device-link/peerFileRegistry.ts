@@ -1,4 +1,38 @@
 import { FILE_PEER_MAX_BYTES } from '@cindy/device-link';
+import type { InvokeResultPayload } from '@cindy/device-link';
+import type { PeerAttachment } from '@cindy/device-link';
+type PeerUpload = (device: string, uri: string, metadata: Omit<PeerAttachment, 'ticket'>, signal?: AbortSignal) => Promise<string | null>;
+let upload: PeerUpload | null = null;
+let reset: ((device: string) => void) | null = null;
+export function installPeerReset(value: (device: string) => void) {
+  reset = value;
+  return () => { if (reset === value) reset = null; };
+}
+export function resetMobilePeer(device: string) { reset?.(device); }
+export function installPeerUpload(value: PeerUpload) {
+  upload = value;
+  return () => { if (upload === value) upload = null; };
+}
+export async function tryMobilePeerUpload(...args: Parameters<PeerUpload>) { return upload?.(...args) ?? null; }
+/** 读整份文件之前确认直连可用(只查对端能力,不传字节);没有可用传输时视为不可直连。 */
+type PeerUploadProbe = (device: string, size: number) => Promise<boolean>;
+let uploadProbe: PeerUploadProbe | null = null;
+export function installPeerUploadProbe(value: PeerUploadProbe) {
+  uploadProbe = value;
+  return () => { if (uploadProbe === value) uploadProbe = null; };
+}
+export async function canMobilePeerUpload(device: string, size: number) {
+  return uploadProbe ? uploadProbe(device, size).catch(() => false) : false;
+}
+type PeerInvoke = (device: string, channel: string, args: unknown[]) => Promise<InvokeResultPayload | null>;
+let invoke: PeerInvoke | null = null;
+export function installPeerInvoke(value: PeerInvoke) {
+  invoke = value;
+  return () => { if (invoke === value) invoke = null; };
+}
+export async function tryMobilePeerInvoke(device: string, channel: string, args: unknown[]) {
+  return invoke?.(device, channel, args) ?? null;
+}
 export interface LocalPeerMedia {
   ossKey: string;
   size: number;
@@ -48,6 +82,7 @@ type Download = (
   device: string,
   url: string,
   signal?: AbortSignal,
+  trace?: number,
 ) => Promise<LocalPeerMedia | null>;
 let download: Download | null = null;
 export function installPeerFileDownload(value: Download) {
@@ -60,8 +95,9 @@ export async function tryMobilePeerFile(
   device: string,
   url: string,
   signal?: AbortSignal,
+  trace?: number,
 ) {
-  return download?.(device, url, signal) ?? null;
+  return download?.(device, url, signal, trace) ?? null;
 }
 
 /** Budget includes retained files; reserve room for the consumer copy and keep 256 MiB free. */

@@ -5,8 +5,16 @@ import type {
 } from '@/session/messageRenderModel';
 import type { RemoteMessage } from '@/session/types';
 import { deepValueEqual } from '@/utils/valueEquality';
+import type { DeferredHistoryWork } from '@cindy/maker-shared/message-window';
 
 type ReconciledRenderItem = MobileMessageRenderItem | MobileWorkChildItem;
+
+function sameDeferred(a?: DeferredHistoryWork, b?: DeferredHistoryWork): boolean {
+  if (!a || !b) return a === b;
+  return a.owner === b.owner && a.key === b.key && a.revision === b.revision
+    && a.expanded === b.expanded && a.loading === b.loading && a.failed === b.failed
+    && a.previewComplete === b.previewComplete;
+}
 
 /**
  * Reuse semantically unchanged message-row view models between render-model rebuilds.
@@ -131,6 +139,7 @@ function reconcileRenderItem(
         && prior.durationMs === next.durationMs
         && prior.isStreaming === next.isStreaming
         && prior.startedAtMs === next.startedAtMs
+        && sameDeferred(prior.deferred, next.deferred)
       ) {
         return prior;
       }
@@ -146,6 +155,7 @@ function reconcileRenderItem(
         && prior.summary === next.summary
         && prior.status === next.status
         && prior.durationMs === next.durationMs
+        && sameDeferred(prior.deferred, next.deferred)
       ) {
         return prior;
       }

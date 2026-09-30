@@ -3,19 +3,51 @@ import ApplicationServices
 import AppKit
 import IOKit.graphics
 import Security
+import Darwin
 
 #if !DESKTOP_INPUT_TEST
 // This guard precedes every entrypoint, including selection and permission UI.
 guard let inputCaller = DesktopInputCaller.authenticate() else { exit(77) }
 #endif
 
+// Both one-shot and persistent queries recheck the OS session on every read.
+func clipboardCounter(portable: Bool) -> String {
+  let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+  guard let session = session, !(session["CGSSessionScreenIsLocked"] as? Bool ?? false) else { return "unavailable" }
+  if portable && (NSPasteboard.general.pasteboardItems?.count ?? 0) > 1 { return "unsupported" }
+  return String(NSPasteboard.general.changeCount)
+}
+#if !DESKTOP_INPUT_TEST
+if CommandLine.arguments == [CommandLine.arguments[0], "--clipboard-counter"] {
+  // Bounded input and idle exit also release the process if Main disappears.
+  var bytes: [UInt8] = []
+  while true {
+    var descriptor = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+    guard poll(&descriptor, 1, 5000) > 0 else { exit(0) }
+    var byte: UInt8 = 0
+    guard read(STDIN_FILENO, &byte, 1) == 1 else { exit(0) }
+    if byte != 10 {
+      bytes.append(byte)
+      if bytes.count > 32 { exit(2) }
+      continue
+    }
+    autoreleasepool {
+      guard inputCaller.code() != nil else { exit(77) }
+      let parts = String(bytes: bytes, encoding: .utf8)?.split(separator: " ") ?? []
+      guard parts.count == 2, parts[0].count <= 16, UInt64(parts[0]) != nil,
+        parts[1] == "0" || parts[1] == "1" else { exit(2) }
+      print("\(parts[0]) \(clipboardCounter(portable: parts[1] == "1"))"); fflush(stdout)
+    }
+    bytes.removeAll(keepingCapacity: true)
+  }
+}
+#endif
 // Expose only the clipboard change counter, never clipboard content on stdout.
 if CommandLine.arguments.count == 2 && ["--clipboard-version", "--clipboard-content-version"].contains(CommandLine.arguments[1]) {
-  let session = CGSessionCopyCurrentDictionary() as? [String: Any]
-  guard let session = session, !(session["CGSSessionScreenIsLocked"] as? Bool ?? false) else { exit(2) }
-  if CommandLine.arguments[1] == "--clipboard-content-version",
-    (NSPasteboard.general.pasteboardItems?.count ?? 0) > 1 { exit(3) }
-  print(NSPasteboard.general.changeCount); exit(0)
+  let value = clipboardCounter(portable: CommandLine.arguments[1] == "--clipboard-content-version")
+  if value == "unavailable" { exit(2) }
+  if value == "unsupported" { exit(3) }
+  print(value); exit(0)
 }
 
 // Read the actual accessibility selection instead of attributing arbitrary

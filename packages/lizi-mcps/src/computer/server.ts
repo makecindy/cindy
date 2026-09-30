@@ -792,6 +792,9 @@ export function createComputerMcpServer(
             : {}),
           data: {
             message: err instanceof Error ? err.message : String(err),
+            ...((err as { inputProgress?: unknown })?.inputProgress
+              ? { input_progress: (err as { inputProgress: unknown }).inputProgress }
+              : {}),
             ...((err as { outcomeUnknown?: boolean })?.outcomeUnknown
               ? { outcome_unknown: true, next_step: "fresh_state" }
               : {}),

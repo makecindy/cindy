@@ -17,6 +17,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
+import type { StartSessionOptions } from '../base-agent.js';
 import type { Logger } from '../../interfaces/logger.js';
 import { PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
 import {
@@ -95,6 +96,7 @@ export interface PiTranslateContext {
   logger: Logger;
   /** Host-owned live tariff selector fallback when the provider response has no accepted tier. */
   getPriceVariant?: () => 'standard' | 'priority';
+  resolveUsagePriceVariant?: StartSessionOptions['resolveUsagePriceVariant'];
   /** get_state 拿到的 contextWindow(模型切换时更新)。 */
   contextWindow: number;
   /** Applied compaction budget; separate from the native request capacity. */
@@ -716,8 +718,13 @@ export function translatePiEvent(
       if (!message || message.role !== 'assistant') return;
       const pendingPriceVariant = ctx.pendingPriceVariants.shift();
       const reportedPriceVariant = priceVariantFromServiceTier(message.usage?.service_tier);
+      const executionPriceVariant = message.usage && ctx.resolveUsagePriceVariant?.({
+        inputTokens: (message.usage.input ?? 0) + (message.usage.cacheRead ?? 0) + (message.usage.cacheWrite ?? 0),
+        outputTokens: message.usage.output ?? 0,
+        cacheReadTokens: message.usage.cacheRead ?? 0,
+      });
       const priceVariant =
-        pendingPriceVariant ?? reportedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard';
+        executionPriceVariant ?? pendingPriceVariant ?? reportedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard';
       applyUsage(ctx, message.usage, message.model, priceVariant);
       const hadGenerationHeartbeat = ctx.generationHeartbeatAt > 0;
       samplePiGenerationHeartbeat(ctx);

@@ -33,6 +33,7 @@ vi.mock('../ownerScopedStorage.js', () => ({
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings.js';
 import {
   __testing,
+  previewImDefaultSettingsPatch,
   readImDefaultSettings,
   readImDefaultSettingsState,
   resetImDefaultSettings,
@@ -74,6 +75,20 @@ describe('im default settings store', () => {
       effort: 'medium',
     });
     expect(normalized.agents['claude-code']).toEqual(IM_DEFAULT_SETTINGS.agents['claude-code']);
+  });
+
+  it('previews a patch merge without writing (route-change gate for the blocking backfill)', () => {
+    writeImDefaultSettingsPatch({ agents: { codex: { providerId: null, model: 'gpt-5.5', effort: 'high' } } }, 'feishu');
+    const before = readImDefaultSettings('feishu');
+
+    const merged = previewImDefaultSettingsPatch({ groupPermissionMode: 'bypassPermissions' }, 'feishu');
+
+    // 合并结果包含补丁效果, 路由轴与现状一致 —— 调用方据此判断路由指纹是否变化。
+    expect(merged.groupPermissionMode).toBe('bypassPermissions');
+    expect(merged.agentKind).toBe(before.agentKind);
+    expect(merged.agents).toEqual(before.agents);
+    // 预览不写盘。
+    expect(readImDefaultSettings('feishu')).toEqual(before);
   });
 
   it('persists only the changed agent override so untouched agents keep inheriting future defaults', () => {

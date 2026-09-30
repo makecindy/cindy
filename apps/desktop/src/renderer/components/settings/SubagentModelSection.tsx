@@ -227,7 +227,7 @@ export function SubagentModelSection() {
           <div className="flex min-w-0 items-start gap-2">
             <CodexMark size={16} className="mt-0.5 shrink-0 text-[var(--text-secondary)]" />
             <div className="flex min-w-0 flex-col gap-1">
-              <span className="text-14 font-medium text-[var(--text-primary)]">
+              <span id="settings-search-settings-subagentModels-smartRouting-label" className="text-14 font-medium text-[var(--text-primary)]">
                 {t('settings.subagentModels.smartRouting.label')}
               </span>
               <span className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">

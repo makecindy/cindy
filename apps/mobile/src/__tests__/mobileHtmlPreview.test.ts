@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   contents: new Map<string, Uint8Array>(),
   removed: [] as string[],
+  released: [] as string[],
   remote: vi.fn(),
   start: vi.fn(),
   stop: vi.fn(),
@@ -33,6 +34,13 @@ vi.mock("@/session/remoteAbsFileFetch", () => ({
 vi.mock("@/device-link/remoteRetry", () => ({
   withTransientRemoteRetry: (operation: () => unknown) => operation(),
 }));
+// Releasing a direct-transfer result deletes its staged file, as the real registry does.
+vi.mock("@/device-link/peerFileRegistry", () => ({
+  releasePeerMedia: (uri: string) => {
+    mocks.released.push(uri);
+    mocks.contents.delete(uri);
+  },
+}));
 vi.mock("expo-file-system", () => {
   class Directory {
     uri: string;
@@ -54,6 +62,13 @@ vi.mock("expo-file-system", () => {
     }
     async bytes() {
       return mocks.contents.get(this.uri);
+    }
+    // Asynchronous like expo-file-system's File.copy: the source is read after a tick.
+    async copy(target: { uri: string }) {
+      await new Promise((done) => setTimeout(done, 0));
+      const source = mocks.contents.get(this.uri);
+      if (!source) throw new Error("ENOENT");
+      mocks.contents.set(target.uri, source);
     }
     write(text: string | Uint8Array) {
       mocks.contents.set(
@@ -100,6 +115,12 @@ function setup() {
   };
   return { deps, listDir, caps };
 }
+/** Files above the inline limit arrive as a staged local file owned by the peer registry. */
+async function stagedDirectTransfer(_deps: unknown, path: string) {
+  const url = "file:///peer/" + path.split("/").pop();
+  mocks.contents.set(url, bytes);
+  return { url, size: bytes.length };
+}
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.demand = false;
@@ -108,6 +129,7 @@ beforeEach(() => {
   mocks.resolveRequest.mockResolvedValue(true);
   mocks.contents.clear();
   mocks.removed.length = 0;
+  mocks.released.length = 0;
   mocks.start.mockResolvedValue("http://127.0.0.1:43123/__cindy/token");
   mocks.stop.mockResolvedValue(undefined);
   mocks.pause.mockResolvedValue(undefined);
@@ -180,6 +202,25 @@ describe("mobile HTML preview preparation", () => {
     await preview.close();
     expect(mocks.stop).toHaveBeenCalledTimes(1);
     expect(mocks.contents.size).toBe(0);
+  });
+  it("finishes copying direct-transfer files before releasing their staged source", async () => {
+    const { deps } = setup();
+    mocks.remote.mockImplementation(stagedDirectTransfer);
+    const preview = await prepareMobileHtmlPreview(
+      "/site/index.html",
+      deps,
+      new AbortController().signal,
+    );
+    expect(mocks.start).toHaveBeenCalledOnce();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.released).toEqual([
+      "file:///peer/index.html",
+      "file:///peer/second.html",
+    ]);
+    expect(mocks.contents.size).toBe(2);
+    for (const content of mocks.contents.values())
+      expect(new TextDecoder().decode(content)).toContain("Content-Security-Policy");
+    await preview.close();
   });
   it("rejects old peers before enumeration or download", async () => {
     const { deps, caps, listDir } = setup();
@@ -289,6 +330,18 @@ describe("on-demand mobile HTML previews", () => {
     await preview.close();
     expect(mocks.listeners.size).toBe(0);
     expect(mocks.contents.size).toBe(0);
+  });
+
+  it("serves a direct-transfer resource only after its copy completes", async () => {
+    const { deps } = setup();
+    mocks.remote.mockImplementation(stagedDirectTransfer);
+    const preview = await prepareMobileHtmlPreview("/site/index.html", deps, new AbortController().signal);
+    request("a", "index.html");
+    await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith(token, "a", "0", "text/html", 200));
+    expect(mocks.released).toEqual(["file:///peer/index.html"]);
+    expect(mocks.contents.size).toBe(1);
+    expect(new TextDecoder().decode([...mocks.contents.values()][0])).toContain("Content-Security-Policy");
+    await preview.close();
   });
 
   it("reuses a materialized path instead of fetching cache-busted repeats", async () => {

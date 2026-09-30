@@ -219,9 +219,7 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
             if (savingRef.current || event.isComposing || event.keyCode === 229)
               event.preventDefault();
           }}
-          onPointerDownOutside={(event) => {
-            if (savingRef.current) event.preventDefault();
-          }}
+          onPointerDownOutside={(event) => event.preventDefault()}
         >
           <div className="flex shrink-0 items-center gap-2.5 p-4">
             <Sparkles size={20} className="shrink-0 text-[var(--settings-section-title)]" />
@@ -418,7 +416,7 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
               size="lg"
               disabled={saving}
               onClick={close}
-              className="bg-transparent border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]"
+              palette="confirmation"
             >
               {t('settings.mcp.cancel')}
             </Button>
@@ -427,7 +425,8 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
               size="lg"
               loading={saving}
               onClick={() => void handleSave()}
-              className="min-w-[96px] border-transparent bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] enabled:hover:border-transparent enabled:active:border-transparent enabled:hover:bg-[var(--confirm-btn-primary-hover)] enabled:active:bg-[var(--confirm-btn-primary-hover)]"
+              palette="confirmation"
+              className="min-w-[96px]"
             >
               {t('settings.mcp.save')}
             </Button>

@@ -228,7 +228,8 @@ final class RemoteDesktopVideoView: ExpoView, AVPictureInPictureControllerDelega
           UIApplication.shared.applicationState == .active else { return }
     let current = RemoteDesktopReceiver(epoch: epoch, audio: config["audio"] as? Bool == true,
                                         trickle: config["trickleIce"] as? Bool == true,
-                                        net: config["net"] as? [String: Any] ?? [:])
+                                        net: config["net"] as? [String: Any] ?? [:],
+                                        diagnostics: config["diagnostics"] as? Bool == true)
     receiver = current
     lastCapability = nil
     current.isPresenting = { [weak self] in self?.presenting == true && self?.pip?.isPictureInPictureActive == true }

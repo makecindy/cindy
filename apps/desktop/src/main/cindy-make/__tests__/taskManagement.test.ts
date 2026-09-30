@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 const h = vi.hoisted(() => ({
   row: undefined as Record<string, unknown> | undefined,
   borrowers: [] as Array<{ id: string; status: string }>,
@@ -15,9 +16,12 @@ const h = vi.hoisted(() => ({
   forget: vi.fn(),
   patch: vi.fn(),
   recycle: vi.fn(),
+  where: vi.fn(),
 }));
 vi.mock('electron', () => ({ app: { getPath: () => h.profile } }));
-vi.mock('../historyOwner.js', () => ({ captureMakeHistoryStore: () => ({ seed: vi.fn(), end: vi.fn() }) }));
+vi.mock('../historyOwner.js', () => ({
+  captureMakeHistoryStore: () => ({ seed: vi.fn(), end: vi.fn() }),
+}));
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => {
     if (!h.dbReady) throw new Error('DbClient not ready');
@@ -58,6 +62,7 @@ vi.mock('../taskCleanup.js', async (original) => ({
 }));
 import {
   configureCindyMakeTaskManagement,
+  cleanupCompletedMakeMergeTask,
   manageCindyMakeTask,
   recycleCindyMakeTask,
   refreshCindyMakeTaskIntegration,
@@ -77,7 +82,10 @@ const client = {
               : [];
       const query = {
         from: () => query,
-        where: () => query,
+        where: (condition: unknown) => {
+          h.where(condition);
+          return query;
+        },
         limit: async () => read(),
         then: (resolve: (value: unknown) => unknown) => Promise.resolve(read()).then(resolve),
       };
@@ -117,7 +125,7 @@ beforeEach(() => {
   h.clean.mockResolvedValue(true);
   h.persist.mockResolvedValue({});
   h.patch.mockImplementation(async (_id, patch) => Object.assign(h.row!, patch));
-  h.recycle.mockResolvedValue(undefined);
+  h.recycle.mockReset().mockResolvedValue(undefined);
   configureCindyMakeTaskManagement({
     isAlive: () => h.alive,
     isRunning: () => h.running,
@@ -126,6 +134,78 @@ beforeEach(() => {
   });
 });
 describe('Cindy Make task management', () => {
+  it('checks borrowers using the stored Windows path spelling', async () => {
+    const nativePath = path.win32.join('C:/profile', 'cindy-make', 'merge-worktrees', 'run');
+    Object.assign(h.row!, {
+      source: 'cindy-make-merge',
+      workingDir: 'C:/profile/cindy-make/merge-worktrees/run',
+    });
+    h.borrowers = [{ id: 'other', status: 'active' }];
+    const cleanup = vi.fn(async () => true);
+    expect(await cleanupCompletedMakeMergeTask('session', nativePath, () => true, cleanup)).toBe(
+      false,
+    );
+    expect(new SQLiteSyncDialect().sqlToQuery(h.where.mock.calls.at(-1)![0]).params).toEqual([
+      'C:/profile/cindy-make/merge-worktrees/run',
+    ]);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+  it.each([false, true])(
+    'archives a conflict task and waits for shutdown before cleanup (explicit stop=%s)',
+    async (stopRunning) => {
+      Object.assign(h.row!, { source: 'cindy-make-merge', status: 'active' });
+      h.alive = true;
+      h.running = stopRunning;
+      let closed!: () => void;
+      h.recycle.mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          closed = resolve;
+        });
+        h.alive = false;
+        h.running = false;
+      });
+      const cleanup = vi.fn(async (current: () => boolean) => current());
+      const pending = cleanupCompletedMakeMergeTask(
+        'session',
+        String(h.row!.workingDir),
+        () => true,
+        cleanup,
+        stopRunning,
+      );
+      await vi.waitFor(() => expect(h.recycle).toHaveBeenCalled());
+      expect(h.patch).toHaveBeenCalledWith('session', { status: 'archived', pinnedAt: null });
+      expect(cleanup).not.toHaveBeenCalled();
+      closed();
+      expect(await pending).toBe(true);
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(h.forget).not.toHaveBeenCalled();
+    },
+  );
+  it.each(['running', 'alive', 'borrower', 'owner', 'database', 'restored', 'editing-task'])(
+    'preserves a completed merge directory when cleanup is blocked by %s',
+    async (reason) => {
+      Object.assign(h.row!, { source: 'cindy-make-merge', status: 'archived' });
+      if (reason === 'running') h.running = true;
+      if (reason === 'alive') h.alive = true;
+      if (reason === 'borrower') h.borrowers = [{ id: 'other', status: 'active' }];
+      if (reason === 'editing-task') h.row!.source = 'cindy-make';
+      h.recycle.mockImplementationOnce(async () => {
+        if (reason === 'owner') h.current = false;
+        if (reason === 'database') h.dbReady = false;
+        if (reason === 'restored') h.row!.status = 'active';
+      });
+      const cleanup = vi.fn(async () => true);
+      expect(
+        await cleanupCompletedMakeMergeTask(
+          'session',
+          String(h.row!.workingDir),
+          () => true,
+          cleanup,
+        ),
+      ).toBe(false);
+      expect(cleanup).not.toHaveBeenCalled();
+    },
+  );
   it('keeps a workspace intact while an isolated test process is using it', async () => {
     configureCindyMakeTaskManagement({
       isAlive: () => false,

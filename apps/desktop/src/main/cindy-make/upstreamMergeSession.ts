@@ -15,6 +15,7 @@ import {
   type CindyMakeMergeState,
 } from '../../shared/cindyMakeMerge.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import { formatCindyMakeMergeTitle } from '../../shared/cindyMakeMergeTitle.js';
 import { dispatchCindyMakeMergeTask } from './taskRuntime.js';
 import { mergeError, mergeWorktree } from './upstreamMerge.js';
 import { t } from '../i18n.js';
@@ -100,6 +101,7 @@ export async function ensureUpstreamMergeSession(
   }
   // Bind the ID before INSERT, so retries after a crash never create a second task.
   bind(id);
+  const createdAt = Date.now();
   const row =
     existing ??
     sessionCreateToRow(
@@ -107,25 +109,31 @@ export async function ensureUpstreamMergeSession(
       {
         ...options,
         agentKind: normalizeDbAgentKind(options?.agentKind),
-        title: t(
-          state.feature
-            ? state.feature.action === 'revert'
-              ? 'cindyMake.history.revertTaskTitle'
-              : 'cindyMake.history.mergeTaskTitle'
-            : 'cindyMake.merge.taskTitle',
+        title: formatCindyMakeMergeTitle(
+          t(
+            state.feature
+              ? state.feature.action === 'revert'
+                ? 'cindyMake.history.revertTaskTitle'
+                : 'cindyMake.history.mergeTaskTitle'
+              : 'cindyMake.merge.taskTitle',
+          ),
+          createdAt,
         ),
         workingDir,
         workspaceKind: 'project',
         source: CINDY_MAKE_MERGE_SESSION_SOURCE,
       },
-      Date.now(),
+      createdAt,
     );
   if (!existing) {
     await db.insert(sessions).values(row);
     check();
     emitSessionCreated(id);
   }
-  const clientId = `cindy-make-merge-first-${state.id}`;
+  // Keep the original first-step key for restored tasks. A later delta gets
+  // one new message in this same task, not another task borrowing its worktree.
+  const step = state.feature?.nextStep ?? 0;
+  const clientId = `cindy-make-merge-first-${state.id}${step > 0 ? `-step-${step}` : ''}`;
   const [first] = await db
     .select({ id: messages.id })
     .from(messages)
@@ -133,7 +141,12 @@ export async function ensureUpstreamMergeSession(
     .limit(1);
   check();
   // A persisted first message belongs to the ordinary retry/continue UI, not another dispatch.
-  if (!first && row.status === 'active' && row.clearedAt === null) {
+  if (
+    !first &&
+    row.status === 'active' &&
+    row.clearedAt === null &&
+    !(existing && state.error === 'interrupted')
+  ) {
     await dispatchCindyMakeMergeTask(
       id,
       upstreamMergePrompt(state),

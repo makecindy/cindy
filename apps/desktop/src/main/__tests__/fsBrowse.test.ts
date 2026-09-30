@@ -2,7 +2,8 @@
  * fsBrowse.test.ts —— 本机目录浏览纯函数(项目选择器 / device-link 隧道用)。
  *
  * 覆盖:list-dir 只回目录(含 hidden,对齐 SSH `ls -A`)、每项带 host-native 绝对 path、
- * `~` 展开、parent 计算、根 parent=null;stat 三态;mkdir-p 幂等;错误走 throwIpcError。
+ * `~` 展开、parent 计算、根 parent=null;Windows 追加可选 drives(非 Windows 不枚举、枚举
+ * 为空时省略;超出等待预算时省略 drives 并标 drivesPending);stat 三态;mkdir-p 幂等;错误走 throwIpcError。
  * 断言使用 host-native path 语义;mock node:fs / node:os。
  */
 import path from 'node:path';
@@ -22,8 +23,12 @@ vi.mock('node:fs', () => ({
   promises: { readdir: h.readdir, stat: h.stat, mkdir: h.mkdir },
 }));
 vi.mock('node:os', () => ({ homedir: h.homedir }));
+vi.mock('../logger.js', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
 
 import { expandHome, listDir, statPath, mkdirP } from '../fsBrowse/ipc.js';
+import { buildDriveOptions } from '../fsBrowse/windowsDrives.js';
 
 /** 造一个 Dirent-ish。 */
 function dirent(name: string, kind: 'dir' | 'file' | 'symlink') {
@@ -84,7 +89,57 @@ describe('listDir', () => {
 
   it('readdir 失败 → throwIpcError(FS_BROWSE_FAILED)', async () => {
     h.readdir.mockRejectedValueOnce(new Error('EACCES'));
-    await expect(listDir('/root/secret')).rejects.toThrow('[FS_BROWSE_FAILED]');
+    await expect(listDir('/root/secret', { platform: 'darwin' })).rejects.toThrow('[FS_BROWSE_FAILED]');
+  });
+
+  it('Windows:追加 drives(盘符根 + 当前盘标记由 buildDriveOptions 生成)', async () => {
+    h.readdir.mockResolvedValueOnce([]);
+    // 盘符根是 Windows wire 格式(被控端 host-native),固定写反斜杠。resolvedPath 由宿主
+    // path 决定(Windows 开发机上会落在某个盘),当前盘标记的细节见 fsBrowseWindowsDrives.test。
+    const roots = ['C:\\', 'D:\\'];
+    const listDriveRoots = vi.fn().mockResolvedValue(roots);
+    const res = await listDir('~', { platform: 'win32', listDriveRoots });
+    expect(listDriveRoots).toHaveBeenCalledTimes(1);
+    expect(res.drives).toEqual(buildDriveOptions(roots, res.resolvedPath));
+    expect(res.drives?.map((d) => d.path)).toEqual(expect.arrayContaining(roots));
+    expect(res).not.toHaveProperty('drivesPending');
+  });
+
+  it('非 Windows 不枚举盘符,也不带 drives 字段', async () => {
+    h.readdir.mockResolvedValueOnce([]);
+    const listDriveRoots = vi.fn().mockResolvedValue(['C:\\']);
+    const res = await listDir('~', { platform: 'darwin', listDriveRoots });
+    expect(listDriveRoots).not.toHaveBeenCalled();
+    expect(res).not.toHaveProperty('drives');
+  });
+
+  it('Windows 盘符枚举为空 / 失败 → 省略 drives,目录列表照常返回', async () => {
+    h.readdir.mockResolvedValue([dirent('Code', 'dir')]);
+    const empty = await listDir('~', { platform: 'win32', listDriveRoots: async () => [] });
+    expect(empty).not.toHaveProperty('drives');
+    expect(empty).not.toHaveProperty('drivesPending');
+    const failed = await listDir('~', {
+      platform: 'win32',
+      listDriveRoots: () => Promise.reject(new Error('boom')),
+    });
+    expect(failed.entries.map((e) => e.name)).toEqual(['Code']);
+    expect(failed).not.toHaveProperty('drives');
+    expect(failed).not.toHaveProperty('drivesPending');
+  });
+
+  it('Windows 盘符枚举超出等待预算 → 先不带 drives 返回,并标记 pending 供控制端刷新', async () => {
+    vi.useFakeTimers();
+    try {
+      h.readdir.mockResolvedValueOnce([]);
+      const pending = listDir('~', { platform: 'win32', listDriveRoots: () => new Promise<string[]>(() => {}) });
+      await vi.advanceTimersByTimeAsync(1_500);
+      const res = await pending;
+      expect(res.resolvedPath).toBe(HOME);
+      expect(res).not.toHaveProperty('drives');
+      expect(res.drivesPending).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

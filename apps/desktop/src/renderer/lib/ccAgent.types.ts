@@ -34,12 +34,42 @@ export type NativeForkAnchor = {
  * 而非用户手动输入。scheduler runner 落库时写入 agentMeta.origin，
  * renderer 据此在气泡上渲染"由自动化任务发送"标签。
  */
-export interface MessageAutomationOrigin {
+export interface MessageSchedulerOrigin {
   kind: 'scheduler';
   scheduleId: string;
   scheduleName?: string;
   runId?: string;
 }
+
+/**
+ * 另一个任务经工具（send_to_session / steer_session / 伙伴委派 / Orca 协同等）
+ * 发来的消息。renderer 渲染「由任务「X」发送」标签，点击跳到来源任务。
+ */
+export interface MessageSessionOrigin {
+  kind: 'session';
+  /**
+   * 来源任务 id。共享任务访客收到的来源已由主机脱敏、不带 id（见 main
+   * device-link/sharedTaskMessageOrigin），此时标签只显示通用文案且不可点击。
+   */
+  senderSessionId?: string;
+  /** 发送时的来源任务标题快照；实时标题拿不到时回退用。 */
+  senderSessionTitle?: string;
+  /** 来源任务属于某个伙伴时：标签显示伙伴名与头像（名字优先取实时资料，其次用快照）。 */
+  senderBotId?: string;
+  senderBotName?: string;
+}
+
+/** 非用户手动输入、需要在气泡上标出来源的消息。 */
+export type MessageAutomationOrigin = MessageSchedulerOrigin | MessageSessionOrigin;
+
+/**
+ * agentMeta.origin 的持久化形态（host 写入，见 shared/agentInputQueue 的 origin）。
+ * orca 条目的卡片标题来自 content JSON；这里只关心能否定位发送方任务。
+ */
+export type StoredMessageOrigin =
+  | MessageSchedulerOrigin
+  | (MessageSessionOrigin & { displayText?: string })
+  | { kind: 'orca'; senderLabel?: string; displayText?: string; senderSessionId?: string };
 
 /**
  * Claude Code SDK 元信息——按消息类型不同填不同子集。
@@ -52,6 +82,9 @@ export interface MessageAutomationOrigin {
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
+  /** Provider text phase, retained to exclude commentary from notification previews. */
+  assistantPhase?: string;
   uuid?: string;
   parentUuid?: string;
   /** Claude transcript chain parent. Do not confuse with parentUuid, which is parent_tool_use_id. */
@@ -74,6 +107,8 @@ export interface CcMeta {
   // result / host turn 边界
   /** Host 在 done 边界写到该 SDK turn 最后一条 assistant 上的持久化收尾标记。 */
   turnCompleted?: boolean;
+  /** Frozen task results bound by the host to this successful reply. */
+  botTaskResults?: import('../../shared/botCollaboration').BotCollaborationMeta[];
   numTurns?: number;
   durationMs?: number;
   durationApiMs?: number;
@@ -95,9 +130,9 @@ export interface CcMeta {
 
   /**
    * Host-side origin marker（与 delivery 同类，非 SDK 字段）。
-   * scheduler 注入的 user 消息携带；用户手动输入的消息无此字段。
+   * scheduler / 工具 / Orca 注入的 user 消息携带；用户手动输入的消息无此字段。
    */
-  origin?: MessageAutomationOrigin;
+  origin?: StoredMessageOrigin;
 
   /**
    * Host-side silent-stop 自动续跑标记(与 delivery 同类,非 SDK 字段)。
@@ -210,6 +245,8 @@ export interface CcMeta {
    */
   /** Automatic reply to a private Bot message; retained without unread attention. */
   botPrivateReply?: boolean;
+  /** Turn of a Bot's hidden group-chat lane; the group chat surfaces its result and failures. */
+  botGroupLane?: boolean;
   botAuthorization?: import('../../shared/botAuthorization').BotAuthorizationCard;
   botDirectMessage?: import('../../shared/botDirectMessage').BotDirectMessageMeta;
 
@@ -253,6 +290,7 @@ export interface CcMeta {
 export type AgentMeta = CcMeta;
 
 export interface Session {
+  tags?: import('@cindy/maker-shared').TaskTag[];
   id: string;
   userId: string;
   title: string;
@@ -408,7 +446,8 @@ export interface SessionRuntimePendingProjection {
 // 内存(coordinator projection + store.error),事后点进会话毫无痕迹,红点无从追溯。
 // 'agent_switch':session 内 agent 引擎切换边界行(session-agent-switch,main 落库)。
 // content 为 AgentSwitchContent;渲染成分隔条(可展开查看交接摘要),不是对话正文。
-export type MessageRole = 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'ask_user' | 'plan_review' | 'thinking' | 'error' | 'agent_switch';
+export type MessageRole =
+  | 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'ask_user' | 'plan_review' | 'thinking' | 'error' | 'agent_switch';
 
 /**
  * role='agent_switch' 行的 content 结构(JSON 存于 messages.content)。

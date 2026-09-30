@@ -1,3 +1,5 @@
+import type { WorkingPhase } from './workingStatus.js';
+
 /**
  * Canonical session control-plane status projection.
  *
@@ -55,6 +57,8 @@ export interface SessionActivitySnapshot {
    * Optional on the wire so older device-link snapshots remain readable.
    */
   currentTurnActive?: boolean;
+  /** Public generation category; never assistant prose, tool arguments or reasoning. */
+  workingPhase?: WorkingPhase;
   recordStatus?: SessionRecordStatus;
   startedAtMs: number | null;
   lastActivityAtMs: number | null;

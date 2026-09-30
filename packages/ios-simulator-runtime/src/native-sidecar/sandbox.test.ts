@@ -36,6 +36,46 @@ afterEach(async () => {
 });
 
 describe("IOSSimulator native sidecar sandbox", () => {
+  it("limits relocated Xcode framework access to SimulatorKit, including paths with spaces", () => {
+    const profile = createIOSSimulatorNativeSidecarSandboxProfile({
+      policy: createIOSSimulatorNativeSidecarSandboxPolicy({
+        platform: "darwin",
+        homeDirectory: "/Users/example",
+        temporaryRoot: DARWIN_TEMPORARY_ROOT,
+        developerDirectory: "/Volumes/Tools/Xcode Beta.app/Contents/Developer",
+      }),
+      binaryPath: "/opt/cindy/ios-simulator-sidecar",
+      simulatorUdid: UDID,
+      architecture: "arm64",
+      temporaryDirectory: DARWIN_TEMPORARY_DIRECTORY,
+    });
+    expect(profile).toContain(
+      '(subpath "/Volumes/Tools/Xcode Beta.app/Contents/SharedFrameworks/SimulatorKit.framework")',
+    );
+    expect(profile).not.toContain(
+      '(subpath "/Volumes/Tools/Xcode Beta.app/Contents/SharedFrameworks")',
+    );
+    expect(profile).not.toContain("/Applications/Xcode.app");
+    expect(profile).not.toContain('(subpath "/Volumes/Tools")');
+  });
+
+  it("requires the host to resolve its selection before constructing a sandbox profile", () => {
+    expect(() =>
+      createIOSSimulatorNativeSidecarSandboxProfile({
+        policy: createIOSSimulatorNativeSidecarSandboxPolicy({
+          platform: "darwin",
+          // Keep this missing-Xcode check independent of the test host's paths.
+          homeDirectory: "/Users/example",
+          temporaryRoot: DARWIN_TEMPORARY_ROOT,
+        }),
+        binaryPath: "/opt/cindy/ios-simulator-sidecar",
+        simulatorUdid: UDID,
+        architecture: "arm64",
+        temporaryDirectory: DARWIN_TEMPORARY_DIRECTORY,
+      }),
+    ).toThrow("developerDirectory must be absolute");
+  });
+
   it("builds a deny-by-default, stdio-only profile without network or broad user-data access", async () => {
     const temp = DARWIN_TEMPORARY_DIRECTORY;
     const policy = createIOSSimulatorNativeSidecarSandboxPolicy({
@@ -179,6 +219,7 @@ describe("IOSSimulator native sidecar sandbox", () => {
           policy: createIOSSimulatorNativeSidecarSandboxPolicy({
             platform: "darwin",
             temporaryRoot: os.tmpdir(),
+            developerDirectory: "/Applications/Xcode.app/Contents/Developer",
           }),
           binaryPath: "/bin/cat",
           simulatorUdid: UDID,

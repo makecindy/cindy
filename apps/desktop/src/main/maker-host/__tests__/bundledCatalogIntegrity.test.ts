@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
-import { getActiveCatalog, setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
+import { BUNDLED_CATALOG, type Catalog, type CatalogModel } from '@cindy/model-providers';
+import {
+  getActiveCatalog,
+  setActiveCatalog,
+  setAnthropicDiscoveredModels,
+  setDiscoveredCodexModels,
+  setXdGatewayModels,
+} from '../active-catalog.js';
 
 import { filterLegacyGptContextProfiles } from '../legacy-context-profiles.js';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
@@ -9,13 +15,45 @@ import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 // source fields are not required blindly: unknown is distinct from false/zero.
 afterEach(() => {
   setDiscoveredCodexModels([]);
+  setAnthropicDiscoveredModels([]);
   setXdGatewayModels([]);
   setActiveCatalog(BUNDLED_CATALOG);
 });
 
+/**
+ * OpenAI 订阅成员只来自账号清单(Registry 不补型号)。模拟 app-server model/list 只报
+ * 成员、不报窗口/档位的形态:discoveredMetadata 为空，资料全部由 Registry 决定。
+ */
+function seedCodexAccount(...ids: string[]): void {
+  setDiscoveredCodexModels(ids.map((id): CatalogModel => ({
+    id, name: id, group: 'gpt', contextWindow: 272_000, efforts: [], defaultEffort: null,
+    discoveredMetadata: {},
+  })));
+}
+
 describe('bundled model settings integrity', () => {
   it('keeps every projected model structurally usable with a supported default', () => {
     setActiveCatalog(BUNDLED_CATALOG);
+    // 订阅成员只来自账号清单；让账号返回 Registry 登记的全部订阅型号，覆盖每条 overlay。
+    const routeIds = (providerId: string, agent: 'codex' | 'claude-code') => [
+      ...new Set(
+        (BUNDLED_CATALOG.modelRegistry?.models ?? []).flatMap((entry) =>
+          entry.status === 'retired' || (entry.mode !== undefined && entry.mode !== 'chat')
+            ? []
+            : entry.routes
+                .filter((route) => route.providerId === providerId && route.agents.includes(agent))
+                .map((route) => route.modelId),
+        ),
+      ),
+    ];
+    const codexIds = routeIds('openai', 'codex');
+    const anthropicIds = routeIds('anthropic', 'claude-code');
+    expect(codexIds.length).toBeGreaterThan(0);
+    expect(anthropicIds.length).toBeGreaterThan(0);
+    seedCodexAccount(...codexIds);
+    setAnthropicDiscoveredModels(anthropicIds.map((id): CatalogModel => ({
+      id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null, discoveredMetadata: {},
+    })));
     const catalog = getActiveCatalog();
     let checked = 0;
     for (const provider of catalog.providers) {
@@ -99,6 +137,8 @@ it('keeps Gateway restrictions, unknown tiers and discounted prices independent 
 
 it('removes GPT window presets from new choices while preserving runtime history and custom providers', () => {
   setActiveCatalog(BUNDLED_CATALOG);
+  // [1m] 消费端变体只跟随账号返回的上游型号出现。
+  seedCodexAccount('gpt-5.6-sol');
   const runtime = getActiveCatalog();
   const openai = runtime.providers.find((p) => p.id === 'openai')!;
   const legacy = openai.models['claude-code']!.find((m) => m.id.endsWith('[1m]'))!;
@@ -120,7 +160,8 @@ it('removes GPT window presets from new choices while preserving runtime history
 
 it('keeps ordinary GPT defaults at 272K while exposing the catalog capacity without a native cache', () => {
   setActiveCatalog(BUNDLED_CATALOG);
-  setDiscoveredCodexModels([]);
+  // 账号清单只报成员(无 native models_cache 的窗口)，窗口资料由 Registry 补。
+  seedCodexAccount('gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna');
   const provider = getActiveCatalog().providers.find((p) => p.id === 'openai')!;
   for (const id of ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
     for (const agent of ['codex', 'claude-code'] as const) {

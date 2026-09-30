@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
 import {
+  createdNote,
   registerSendToSessionTool,
   type SendToSessionCallback,
 } from '../xdt-helper/send_to_session.js';
@@ -75,10 +76,28 @@ describe('send_to_session tool', () => {
     expect(sendToSession).not.toHaveBeenCalled();
   });
 
-  it('target_session_id 非 uuid → INVALID_ARGS', async () => {
+  // session id 是不透明字符串(见 apps/desktop/src/main/sessionIds.ts):新建 desktop
+  // session 是 UUID,历史行可能是 cuid2 或 IM 确定性 id。工具层校验格式会让 UUID
+  // session 无法 jump 回 cuid/IM session,使 handoff 变成单向。
+  it.each([
+    ['cuid2', 'v9lsxy1qlojy6x3z3y7drhxh'],
+    ['IM 确定性 id', 'feishu_cli_abc_ou_xyz'],
+  ])('target_session_id 为非 UUID 的 %s → 透传给 host, 不在 schema 层拦截', async (_kind, id) => {
     const { registry, sendToSession } = setup();
     const res = await registry.call('send_to_session', {
-      target_session_id: 'not-a-uuid',
+      target_session_id: id,
+      message: 'hi',
+    });
+    expect(res.isError).toBeUndefined();
+    expect(sendToSession).toHaveBeenCalledWith(
+      expect.objectContaining({ targetSessionId: id }),
+    );
+  });
+
+  it('target_session_id 为空串 → INVALID_ARGS, host 不被调', async () => {
+    const { registry, sendToSession } = setup();
+    const res = await registry.call('send_to_session', {
+      target_session_id: '',
       message: 'hi',
     });
     expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
@@ -104,10 +123,52 @@ describe('send_to_session tool', () => {
       target_session_id: 'tgt-1',
       agent_kind: 'claude-code',
       wake_kind: 'created',
+      note: createdNote('tgt-1'),
       target_title: 'issue #1',
       target_last_user_send_at: null,
       worktree_path: null,
     });
+  });
+
+  it('create 返回的 note 明确写出「已新建任务 <id>」与「本轮已触发」, 不能被误读为已投给既有任务 (#4884)', async () => {
+    const { registry } = setup();
+    const res = await registry.call('send_to_session', { message: '漏传了收件任务' });
+    const payload = parse(res) as { wake_kind: string; note: string };
+    expect(payload.wake_kind).toBe('created');
+    expect(payload.note).toContain('已新建任务 tgt-1');
+    expect(payload.note).toContain('本轮已触发');
+    expect(payload.note).toContain('不是投递到既有任务');
+    expect(payload.note).toContain('list_sessions');
+  });
+
+  it('jump 成功返回不带 note(resumed / already-active / queued 都是投给既有任务)', async () => {
+    for (const wakeKind of ['resumed', 'already-active', 'queued'] as const) {
+      const { registry } = setup({
+        result: {
+          ok: true,
+          targetSessionId: UUID,
+          agentKind: 'codex',
+          wakeKind,
+          targetTitle: 'Existing',
+          targetLastUserSendAt: null,
+        },
+      });
+      const res = await registry.call('send_to_session', {
+        target_session_id: UUID,
+        message: '增量',
+      });
+      expect(parse(res)).not.toHaveProperty('note');
+    }
+  });
+
+  it('工具描述开头就是硬规则: 发给已有任务时 target_session_id 必传, 不知道 id 先 list_sessions (#4884)', () => {
+    const { registry } = setup();
+    const tool = registry.list('handoff').find((t) => t.name === 'send_to_session');
+    expect(tool).toBeDefined();
+    const firstParagraph = tool!.description.split('\n')[0] ?? '';
+    expect(firstParagraph).toContain('target_session_id 必传');
+    expect(firstParagraph).toContain('list_sessions');
+    expect(firstParagraph).toContain('wake_kind=created');
   });
 
   it('create + use_worktree=true → host 收到 useWorktree=true, worktree_path 回显', async () => {

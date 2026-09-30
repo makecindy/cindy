@@ -198,7 +198,11 @@ describe('remote desktop authority and lifecycle', () => {
     expect(foreground.deps.stopVideo).toHaveBeenCalledOnce();
     const revoked = harness();
     const presentation = await revoked.start();
-    await revoked.controller.request('phone', { op: 'presentation', lease: presentation.lease, enabled: true });
+    await revoked.controller.request('phone', {
+      op: 'presentation',
+      lease: presentation.lease,
+      enabled: true,
+    });
     revoked.revoke();
     revoked.controller.signalingLost('phone');
     revoked.controller.viewHeartbeat(presentation.lease);
@@ -213,7 +217,9 @@ describe('remote desktop authority and lifecycle', () => {
     h.controller.stopByUser();
     h.controller.viewHeartbeat(lease);
     expect(h.deps.stopVideo).toHaveBeenCalledOnce();
-    await expect(h.controller.request('phone', { op: 'heartbeat', lease })).rejects.toThrow('DESKTOP_STOPPED');
+    await expect(h.controller.request('phone', { op: 'heartbeat', lease })).rejects.toThrow(
+      'DESKTOP_STOPPED',
+    );
   });
   it('does not publish selected geometry or resume control before it is observed', async () => {
     const h = harness();
@@ -504,6 +510,7 @@ describe('remote desktop authority and lifecycle', () => {
     const h = harness(),
       { lease } = await h.start();
     let finish!: (version: string) => void;
+    h.deps.stopClipboardVersion = vi.fn();
     h.deps.clipboardVersion = () =>
       new Promise((resolve) => {
         finish = resolve;
@@ -518,9 +525,11 @@ describe('remote desktop authority and lifecycle', () => {
     );
     const read = h.controller.request('phone', { op: 'clipboardVersion', lease });
     await h.controller.request('phone', { op: 'clipboardSync', lease, enabled: false });
+    expect(h.deps.stopClipboardVersion).toHaveBeenCalledOnce();
     finish('12');
     await expect(read).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
     h.controller.stop();
+    expect(h.deps.stopClipboardVersion).toHaveBeenCalledTimes(2);
   });
   it('restores privacy on lease expiry and invalidates an older enable after disable', async () => {
     const h = harness(),

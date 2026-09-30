@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
+import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Tip } from '@/components/ui/tooltip';
 import { MakeDoctorReportCard } from '@/components/chat/CindyMakeDoctorCard';
 import {
   getDataOwnerGeneration,
@@ -33,8 +36,10 @@ export function CindyMakePreflightDialog({
   const [attempt, setAttempt] = useState(0);
   const [starting, setStarting] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
   const submitting = useRef(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const mounted = useRef(false);
   const owner = useRef(getDataOwnerGeneration());
   const returnFocus = useRef(
@@ -80,6 +85,7 @@ export function CindyMakePreflightDialog({
     if (
       !current() ||
       submitting.current ||
+      confirmClose ||
       report?.status !== 'completed' ||
       !['found', 'notFound'].includes(report.upstream?.status ?? '')
     )
@@ -122,17 +128,35 @@ export function CindyMakePreflightDialog({
     }
   };
 
+  const requestClose = () => {
+    if (!submitting.current) setConfirmClose(true);
+  };
+  const closeLabel = t(starting ? 'cindyMake.preflight.creating' : 'common.dismiss');
+  // Read the live report while confirmation is open: preparation may finish
+  // before the user decides, changing what closing will actually stop.
+  const closeStage =
+    !report || report.status === 'running'
+      ? report?.upstream?.status === 'searching'
+        ? 'upstream'
+        : report?.source?.status === 'preparing'
+          ? 'source'
+          : 'environment'
+      : report.status === 'completed' &&
+          ['found', 'notFound'].includes(report.upstream?.status ?? '')
+        ? 'ready'
+        : 'incomplete';
+
   return (
-    <Dialog.Root open onOpenChange={(open) => !submitting.current && onOpenChange(open)}>
+    <Dialog.Root open onOpenChange={(open) => !open && requestClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
         <Dialog.Content
           ref={contentRef}
           tabIndex={-1}
-          className="fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)] outline-none"
+          className="fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-hidden rounded-xl bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)] outline-none"
           onOpenAutoFocus={(event) => {
             // The report and Continue action arrive asynchronously. Start at the
-            // readable content instead of making Cancel the initial action.
+            // readable content instead of making Close the initial action.
             event.preventDefault();
             contentRef.current?.focus({ preventScroll: true });
           }}
@@ -145,48 +169,85 @@ export function CindyMakePreflightDialog({
               event.preventDefault();
           }}
         >
-          <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">
-            {t('cindyMake.title')}
-          </Dialog.Title>
-          <Dialog.Description className="whitespace-pre-wrap break-words text-13 text-[var(--confirm-desc)]">
-            {request}
-          </Dialog.Description>
-          {report && (
-            <MakeDoctorReportCard
-              report={report}
-              request={request}
-              startingCode={starting}
-              onChoose={(choice) => {
-                if (submitting.current) return;
-                if (choice === 'wait') onOpenChange(false);
-                else void start();
-              }}
-              onRecheck={() => {
-                if (!submitting.current && current()) {
-                  setFailed(false);
-                  setAttempt((value) => value + 1);
-                }
-              }}
-              onStop={() => {
-                if (current())
-                  void cancelMakeDoctor(report.runId, report.mode).catch(() =>
-                    toast.error(t('cindyMakeDoctor.failed')),
-                  );
-              }}
-            />
-          )}
-          {failed && (
-            <p role="alert" className="text-13 text-[var(--error-fg)]">
-              {t('cindyMake.code.preparationFailed')}
-            </p>
-          )}
-          <div className="flex justify-end">
-            <Dialog.Close asChild>
-              <Button variant="secondary" disabled={starting}>
-                {t('settings.cindyMake.create.cancel')}
-              </Button>
-            </Dialog.Close>
+          <div className="flex shrink-0 items-center justify-between gap-4">
+            <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">
+              {t('cindyMake.title')}
+            </Dialog.Title>
+            <Tip text={closeLabel} contentClassName="z-[10002]">
+              <span className="inline-flex">
+                <Button
+                  ref={closeButtonRef}
+                  variant="secondary"
+                  className="w-8 border-transparent bg-transparent px-0 text-[var(--confirm-desc)]"
+                  disabled={starting}
+                  aria-label={closeLabel}
+                  onClick={requestClose}
+                >
+                  <X size={16} aria-hidden />
+                </Button>
+              </span>
+            </Tip>
           </div>
+          <div className="min-h-0 space-y-4 overflow-y-auto">
+            <Dialog.Description className="whitespace-pre-wrap break-words text-13 text-[var(--confirm-desc)]">
+              {request}
+            </Dialog.Description>
+            {report && (
+              <MakeDoctorReportCard
+                report={report}
+                request={request}
+                startingCode={starting}
+                showUpstreamActions={false}
+                onRecheck={() => {
+                  if (!submitting.current && !confirmClose && current()) {
+                    setFailed(false);
+                    setAttempt((value) => value + 1);
+                  }
+                }}
+                onStop={() => {
+                  if (!confirmClose && current())
+                    void cancelMakeDoctor(report.runId, report.mode).catch(() =>
+                      toast.error(t('cindyMakeDoctor.failed')),
+                    );
+                }}
+              />
+            )}
+            {failed && (
+              <p role="alert" className="text-13 text-[var(--error-fg)]">
+                {t('cindyMake.code.preparationFailed')}
+              </p>
+            )}
+          </div>
+          {report?.status === 'completed' &&
+            ['found', 'notFound'].includes(report.upstream?.status ?? '') && (
+              <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                <Button
+                  variant="primary"
+                  className="border-[var(--border-default)] enabled:hover:border-[var(--button-primary-hover)] enabled:active:border-[var(--button-primary-pressed)]"
+                  disabled={starting || confirmClose}
+                  loading={starting}
+                  onClick={() => void start()}
+                >
+                  {t('cindyMake.upstream.personal')}
+                </Button>
+              </div>
+            )}
+          <ConfirmDialog
+            open={confirmClose}
+            onOpenChange={(open) => {
+              setConfirmClose(open);
+              if (!open)
+                requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
+            }}
+            title={t('cindyMake.preflight.closeTitle')}
+            description={t(`cindyMake.preflight.closeDescription.${closeStage}`)}
+            confirmText={t('cindyMake.preflight.closeConfirm')}
+            cancelText={t('cindyMake.preflight.keepOpen')}
+            zIndex={10002}
+            onConfirm={() => {
+              if (!submitting.current) onOpenChange(false);
+            }}
+          />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

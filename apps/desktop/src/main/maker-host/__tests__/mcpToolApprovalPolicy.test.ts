@@ -88,6 +88,36 @@ describe('desktop Claude read-only allowlist', () => {
 });
 
 describe('desktop MCP approval policy', () => {
+  it('never lets import discovery grant reusable approval to start a migration', () => {
+    for (const operation of ['sources', 'preview', 'status', 'start', undefined]) {
+      for (const toolName of ['import_agent', undefined]) {
+        expect(getDesktopMcpToolApprovalPolicy({ serverName: 'companion_import', toolName,
+          toolParams: { operation, selection: { takeover: true } },
+        })).toBe('prompt-each-time');
+      }
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__companion_import__import_agent');
+  });
+
+  it('does not let a server grant authorize later imported credential-bearing commands', () => {
+    for (const command of ['python scripts/report.py', 'printf "$TOKEN" | base64', 'env > credentials.txt']) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'companion_connections', toolName: 'run_command', toolParams: { command } })).toBe('prompt-each-time');
+    }
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'companion_connections', toolParams: { command: 'python scripts/report.py' } })).toBe('prompt-each-time');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__companion_connections__run_command');
+  });
+
+  it('does not share imported connection approvals across tools or connections', () => {
+    for (const toolName of ['c_example_read_data', 'c_example_delete_data', 'c_other_send_message', undefined]) {
+      expect(getDesktopMcpToolApprovalPolicy({
+        serverName: 'companion_connections', toolName, toolParams: { id: 'item-1' },
+      })).toBe('prompt-each-time');
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools().some((tool) => tool.startsWith('mcp__companion_connections__'))).toBe(false);
+    // The restriction belongs to the multiplexed import bridge, not every MCP.
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'third_party', toolName: 'read_data' })).toBe('prompt');
+  });
+
   it('keeps known safe contacts calls trusted', () => {
     expect(
       getDesktopMcpToolApprovalPolicy({
@@ -451,9 +481,30 @@ describe('Cindy market action authorization', () => {
   });
 });
 
-describe('helper task workspace authorization', () => {
+describe('helper task workspace and SkillHub publication authorization', () => {
   const policy = (toolName: string | undefined, toolParams?: unknown) =>
     getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName, toolParams });
+
+  it.each([
+    { mode: 'create', visibility: 'public' },
+    { mode: 'create', visibility: 'private' },
+    { mode: 'create', visibility: 'shared', visible_slugs: ['engineering'] },
+    { mode: 'update' },
+  ])('reviews each publication with %j across payload representations', (publication) => {
+    const input = { ...publication, path: 'skills/release-notes', name: 'release-notes' };
+    for (const args of [input, JSON.stringify(input)]) {
+      expect(policy('publish_skill', args)).toBe('prompt-each-time');
+      for (const name of ['publish_skill', ' publish_skill ']) {
+        const params = { name, args };
+        for (const toolName of ['call_tool', undefined]) {
+          expect(policy(toolName, params)).toBe('prompt-each-time');
+          expect(policy(toolName, JSON.stringify(params))).toBe('prompt-each-time');
+        }
+      }
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__publish_skill');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
+  });
 
   it('reviews each move across progressive payload representations', () => {
     for (const working_dir of ['/project', null]) {
@@ -489,8 +540,13 @@ describe('helper task workspace authorization', () => {
       'rename_project',
       'remove_project',
       'send_to_session',
+      'search_skills',
+      'list_my_published_skills',
+      'get_skill_publish_status',
     ]) {
+      expect(policy(name, {})).toBe('auto-approve');
       expect(policy('call_tool', { name, args: {} })).toBe('auto-approve');
+      expect(policy(undefined, JSON.stringify({ name, args: {} }))).toBe('auto-approve');
     }
   });
 });
@@ -532,5 +588,27 @@ describe('Orca Worker directory authorization', () => {
     }
     expect(policy('create_workers', {})).toBe('prompt-each-time');
     expect(policy('create_workers', { workers: [null] })).toBe('prompt-each-time');
+  });
+});
+
+
+describe('teammate pre-run command approval', () => {
+  it.each(['schedule_set_pre_run_hook', 'routine_save'])('reviews %s through direct and progressive calls', (name) => {
+    const args = { preRunHook: { command: 'node check.mjs' } };
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: name, toolParams: args })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool', toolParams: { name, args } })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams: { name, args } })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams: JSON.stringify({ name, args: JSON.stringify(args) }) })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'routine_list', toolParams: {} })).toBe('auto-approve');
+  });
+
+  it('does not mistake an unnamed direct script or routine input for a safe progressive call', () => {
+    const policy = (toolParams: unknown) =>
+      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams });
+    expect(policy({ script: 'process.exit(2)' })).toBe('prompt-each-time');
+    expect(policy({ name: 'routine_list', prompt: 'Check PRs', enabled: true,
+      triggers: [], preRunHook: { command: 'node check.mjs' } })).toBe('prompt-each-time');
+    expect(policy({ name: 'routine_list', args: {}, preRunHook: { command: 'node check.mjs' } })).toBe('prompt-each-time');
+    expect(policy({ name: 'routine_list', args: {} })).toBe('auto-approve');
   });
 });

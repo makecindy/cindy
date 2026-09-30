@@ -1704,7 +1704,7 @@ describe('FORGE_GUIDE', () => {
 
   it('documents library capabilities as a sessionless support list with stable failure reasons', () => {
     expect(FORGE_GUIDE).toContain("op: 'capabilities'");
-    expect(FORGE_GUIDE).toContain("operations:['clipboardWrite','saveAs']");
+    expect(FORGE_GUIDE).toContain("operations:['clipboardWrite','saveAs','staging.begin'");
     expect(FORGE_GUIDE).toContain('不等于此刻有窗口 / 已授权 / 库可用');
     expect(FORGE_GUIDE).toContain('全部字符串');
     expect(FORGE_GUIDE).toContain('数组内混入');
@@ -2065,6 +2065,8 @@ describe('FORGE_GUIDE', () => {
       'gh-cli',
       'gh auth token',
       'hostAvailable',
+      'hostManagedSetup',
+      '字段缺失或为 false 时保留旧版设置页的连接提示',
       // 多连接(connections,2026-07-14):声明形态 / 设置页协议 / 主机受信确认。
       'connections',
       '/connections',

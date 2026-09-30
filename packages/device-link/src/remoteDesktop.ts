@@ -176,6 +176,8 @@ export interface RemoteDesktopLease {
   lease: string;
   display: RemoteDesktopDisplay;
   controlling: boolean;
+  /** Acknowledges the requested virtual mode when OS logical geometry differs. */
+  viewerDisplayRequest?: { width: number; height: number };
 }
 export type RemoteDesktopRequest =
   | { op: "windowAction"; lease: string; action: "list" | "desktop" }

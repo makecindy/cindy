@@ -227,21 +227,22 @@ describe('SessionCard review regressions', () => {
 
   it('keeps archive confirmation pills clear of time and ordinal overlays', () => {
     expect(sessionCardSource).toContain('w-max min-w-14');
-    expect(sessionCardSource).toContain('whitespace-nowrap text-11 font-semibold');
     expect(sessionCardSource).toContain(
-      'invisible col-start-1 row-start-1 inline-flex h-[22px] w-max min-w-14 items-center justify-center whitespace-nowrap rounded-full px-[9px] text-11 font-semibold',
+      'invisible col-start-1 row-start-1 w-max min-w-14 whitespace-nowrap',
     );
     expect(sessionCardSource).not.toContain(
       'invisible col-start-1 row-start-1 inline-block h-[22px] w-14',
     );
     expect(sessionItemSource).toContain('invisible col-start-1 row-start-1 inline-block h-6 w-14');
-    expect(sessionItemSource).toContain(
-      'absolute right-0 top-0 flex h-6 w-14 items-center justify-center rounded-md text-xs font-medium',
+    expect(sessionItemSource).toMatch(
+      /<Button\s+variant="secondary"\s+tone="danger-surface"\s+size="xs"\s+compact[\s\S]*?className="absolute right-0 top-0 w-14"/,
     );
     expect(sessionCardSource).toContain(
       '!isEditing && !archivePending && ordinalBadgeLabel != null',
     );
-    expect(sessionCardSource).toContain("archivePending && 'invisible opacity-0'");
+    expect(sessionCardSource).toContain(
+      "archivePending && 'invisible opacity-0 w-0 overflow-hidden'",
+    );
   });
 
   it('keeps running card previews stable instead of streaming compact activity text', () => {

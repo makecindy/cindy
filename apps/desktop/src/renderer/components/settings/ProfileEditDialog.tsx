@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -155,18 +156,15 @@ export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps
               </div>
             )}
             <div className="flex flex-col items-start gap-1.5">
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
                 type="button"
                 onClick={() => void handleChooseAvatar()}
-                className={cn(
-                  'rounded-full border border-[var(--settings-input-border)] px-3 py-1 text-12',
-                  'text-[var(--settings-input-text)] transition-colors',
-                  'hover:bg-[var(--confirm-btn-secondary-hover)]',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                )}
               >
                 {t('settings.userProfile.edit.changeAvatar')}
-              </button>
+              </Button>
               {canResetAvatar && (
                 <button
                   type="button"

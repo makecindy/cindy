@@ -62,6 +62,17 @@ export function getVendorAsset(manifest: Manifest, manifestField: string): Vendo
   };
 }
 
+const ASSET_PLATFORM_IN_PATH = /\/(linux-x64|linux-arm64|darwin-arm64|darwin-x64|win32-x64|win32-arm64)\//;
+
+/**
+ * True when the asset is not pinned to a different platform.
+ * Older manifests omit the platform segment and stay installable.
+ */
+export function vendorAssetMatchesPlatform(asset: VendorAsset, platformKey: string): boolean {
+  const assetPlatform = asset.file.match(ASSET_PLATFORM_IN_PATH)?.[1];
+  return !assetPlatform || assetPlatform === platformKey;
+}
+
 /**
  * 拼接完整下载 URL。
  * 等价于现有 `${getBaseUrl()}/${asset.file}` 写法。

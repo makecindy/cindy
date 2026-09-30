@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * VisibilityEditorDialog — 「管理可见性」弹窗,对齐 SkillHub 工作台同名能力。
  *
@@ -10,7 +11,6 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Globe, Lock, Users, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSkillhubIdentityPolicy } from '../hooks/useSkillhubIdentityPolicy';
@@ -137,6 +137,7 @@ export function VisibilityEditorDialog({
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
             'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
             'w-full max-w-[480px] rounded-xl',
@@ -241,40 +242,31 @@ export function VisibilityEditorDialog({
           </div>
 
           <div className="flex items-center justify-end gap-2 p-4">
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               onClick={() => onOpenChange(false)}
-              className={cn(
-                'inline-flex h-8 items-center justify-center rounded-full px-4',
-                'text-sm font-normal border bg-[var(--cmd-palette-bg)]',
-                'border-[var(--confirm-btn-secondary-border)] text-[var(--settings-btn-secondary-text)]',
-                'hover:bg-[var(--surface-hover)] transition-colors',
-              )}
             >
               {t('skillhub.publishDialog.cancel')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="cta"
+              size="md"
+              compact
+              loading={saving}
               type="button"
               disabled={loading || saving || Boolean(loadError) || !tierAllowed || readOnly
                 || (tier === 'public' && currentTier !== 'public' && publicReview?.status === 'pending')}
               onClick={() => void handleSave()}
-              className={cn(
-                'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-4',
-                'text-sm font-medium leading-none',
-                'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]',
-                'hover:bg-[var(--lightbox-cta-hover)] transition-colors',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
             >
-              {saving ? <Spinner size={14} /> : null}
-              {saving
-                ? t('skillhub.visibilityEditor.saving')
-                : tier === 'public' && currentTier !== 'public'
+              { tier === 'public' && currentTier !== 'public'
                   ? publicReview?.status === 'pending'
                     ? t('skillhub.visibilityEditor.waitingReview')
                     : t('skillhub.visibilityEditor.submitReview')
                   : t('skillhub.visibilityEditor.save')}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

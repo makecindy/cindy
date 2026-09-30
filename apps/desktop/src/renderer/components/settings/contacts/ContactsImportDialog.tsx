@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ContactsImportDialog — 通讯录批量导入流程(三步: 选来源 → 预览勾选 → 结果)。
  *
@@ -285,20 +286,19 @@ export function ContactsImportDialog({ open, onOpenChange }: Props) {
                       'text-[var(--settings-input-text)] placeholder:text-[var(--settings-section-desc)]',
                     )}
                   />
-                  <button
+                  <Button
+                    variant="cta"
+                    size="md"
+                    compact
+                    loading={loading}
                     type="button"
                     disabled={loading || checkedCount === 0}
                     onClick={() => void runImport()}
-                    className={cn(
-                      'h-8 shrink-0 rounded-lg px-3.5 text-13 font-medium',
-                      'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                      'disabled:cursor-not-allowed disabled:opacity-40',
-                    )}
                   >
                     {loading
                       ? t('settings.contacts.import.running')
                       : t('settings.contacts.import.run', { count: checkedCount })}
-                  </button>
+                  </Button>
                 </div>
               </>
             )}
@@ -341,13 +341,16 @@ export function ContactsImportDialog({ open, onOpenChange }: Props) {
                     {t('settings.contacts.import.skipped', { count: summary.skipped.length })}
                   </p>
                 )}
-                <button
+                <Button
+                  variant="secondary"
+                  size="md"
+                  compact
                   type="button"
                   onClick={() => handleOpenChange(false)}
-                  className="h-8 self-end rounded-lg bg-[var(--settings-input-bg)] px-3.5 text-13 text-[var(--settings-section-title)]"
+                  className="self-end"
                 >
                   {t('settings.contacts.manager.closeAria')}
-                </button>
+                </Button>
               </div>
             )}
           </div>

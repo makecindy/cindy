@@ -51,6 +51,8 @@ export interface PersonalVersion {
   protocol: 1;
   id: string;
   profile: VersionProfile;
+  /** User-facing Cindy Make label. Older snapshots may not have this field. */
+  version?: string;
   title: string;
   commit: string;
   tree?: string;
@@ -127,7 +129,8 @@ export function readOriginalVersion(profile: string): OriginalVersion | null {
     throw versionError('unavailable');
   return value;
 }
-export function readPersonalVersion(profile: string, id: string): PersonalVersion {
+/** Publication facts outlive retired application files and still protect build rollback. */
+export function readPersonalVersionRecord(profile: string, id: string): PersonalVersion {
   const directory = versionDirectory(profile, id);
   assertVersionDirectory(profile, directory);
   const item = readVersionJson<PersonalVersion>(path.join(directory, 'version.json'));
@@ -143,6 +146,11 @@ export function readPersonalVersion(profile: string, id: string): PersonalVersio
   if (
     typeof item.title !== 'string' ||
     item.title.length > 4096 ||
+    (item.version !== undefined &&
+      (typeof item.version !== 'string' ||
+        item.version.length < 1 ||
+        item.version.length > 128 ||
+        !/^Cindy Make [A-Za-z0-9-]{8}$/.test(item.version))) ||
     typeof item.builtAt !== 'string' ||
     !Number.isFinite(Date.parse(item.builtAt)) ||
     typeof item.commit !== 'string' ||
@@ -156,11 +164,32 @@ export function readPersonalVersion(profile: string, id: string): PersonalVersio
   for (const rel of [item.executable, item.resources]) {
     if (typeof rel !== 'string' || path.isAbsolute(rel) || rel.split(/[\/\\]/).includes('..'))
       throw versionError('unavailable');
+  }
+  return item;
+}
+export function readPersonalVersion(profile: string, id: string): PersonalVersion {
+  const item = readPersonalVersionRecord(profile, id);
+  const directory = versionDirectory(profile, id);
+  for (const rel of [item.executable, item.resources]) {
     const full = path.join(directory, rel);
     if (!sameVersionPath(fs.realpathSync(full), path.join(fs.realpathSync(directory), rel)))
       throw versionError('unavailable');
   }
   return item;
+}
+/** A published snapshot is durable even if history registration was interrupted. */
+export function hasPublishedPersonalVersionCommit(profile: string, commit: string): boolean {
+  const root = path.join(versionsRoot(profile), 'versions');
+  if (!fs.existsSync(root)) return false;
+  assertVersionDirectory(profile, root);
+  return fs.readdirSync(root).some((id) => {
+    if (!VERSION_ID.test(id) || !fs.existsSync(path.join(root, id, 'version.json'))) return false;
+    try {
+      return readPersonalVersionRecord(profile, id).commit === commit;
+    } catch {
+      return false;
+    }
+  });
 }
 export function migrationIdentity(directory: string): string {
   return createHash('sha256')
@@ -170,6 +199,22 @@ export function migrationIdentity(directory: string): string {
 export async function fileDigest(file: string): Promise<string> {
   const hash = createHash('sha256');
   for await (const data of originalFs.createReadStream(file)) hash.update(data);
+  return hash.digest('hex');
+}
+/** Same digest as fileDigest without touching the event loop; only for the pre-ready startup path. */
+export function fileDigestSync(file: string): string {
+  const hash = createHash('sha256');
+  const fd = originalFs.openSync(file, 'r');
+  try {
+    const chunk = Buffer.allocUnsafe(1024 * 1024);
+    for (;;) {
+      const read = originalFs.readSync(fd, chunk, 0, chunk.length, null);
+      if (read === 0) break;
+      hash.update(chunk.subarray(0, read));
+    }
+  } finally {
+    originalFs.closeSync(fd);
+  }
   return hash.digest('hex');
 }
 export function runnableBundlePaths(
@@ -212,15 +257,14 @@ export function publishPersonalVersion(profile: string, id: string): void {
   const staged = readVersionJson<PersonalVersion>(path.join(directory, 'staged.json'));
   if (!staged || staged.id !== id) throw versionError('unavailable');
   writeVersionJson(path.join(directory, 'version.json'), staged);
+  // The slot changes only after the complete application has been saved. UUIDs are
+  // private immutable generations, not additional user-selectable personal versions.
+  writeVersionJson(path.join(versionsRoot(profile), 'personal.json'), { id });
   try {
     fs.unlinkSync(path.join(directory, 'staged.json'));
   } catch {}
 }
-export async function verifyPersonalVersion(
-  profile: string,
-  id: string,
-  original: OriginalVersion,
-): Promise<PersonalVersion> {
+function personalVersionVerification(profile: string, id: string, original: OriginalVersion) {
   const item = readPersonalVersion(profile, id);
   const root = versionDirectory(profile, id);
   if (
@@ -232,13 +276,49 @@ export async function verifyPersonalVersion(
   const resources = path.join(root, item.resources);
   if (
     readVersionJson<{ version: number }>(path.join(resources, 'cindy-version-protocol.json'))
-      ?.version !== CINDY_VERSION_PROTOCOL ||
-    (await fileDigest(path.join(root, item.executable))) !== item.executableHash ||
-    (await fileDigest(path.join(resources, 'app.asar'))) !== item.applicationHash ||
-    migrationIdentity(path.join(resources, 'drizzle')) !== item.migrationHash
+      ?.version !== CINDY_VERSION_PROTOCOL
   )
     throw versionError('unavailable');
-  return item;
+  return {
+    executable: path.join(root, item.executable),
+    application: path.join(resources, 'app.asar'),
+    finish(executableHash: string, applicationHash: string): PersonalVersion {
+      if (
+        executableHash !== item.executableHash ||
+        applicationHash !== item.applicationHash ||
+        migrationIdentity(path.join(resources, 'drizzle')) !== item.migrationHash
+      )
+        throw versionError('unavailable');
+      return item;
+    },
+  };
+}
+export async function verifyPersonalVersion(
+  profile: string,
+  id: string,
+  original: OriginalVersion,
+): Promise<PersonalVersion> {
+  const verification = personalVersionVerification(profile, id, original);
+  return verification.finish(
+    await fileDigest(verification.executable),
+    await fileDigest(verification.application),
+  );
+}
+/**
+ * Startup self-check of a launched personal version. It runs before bootstrap-electron is
+ * loaded, and that module must still see Electron as not ready, so the digests are computed
+ * without yielding to the event loop.
+ */
+export function verifyPersonalVersionSync(
+  profile: string,
+  id: string,
+  original: OriginalVersion,
+): PersonalVersion {
+  const verification = personalVersionVerification(profile, id, original);
+  return verification.finish(
+    fileDigestSync(verification.executable),
+    fileDigestSync(verification.application),
+  );
 }
 export async function withVersionStore<T>(profile: string, run: () => Promise<T>): Promise<T> {
   const root = versionsRoot(profile);
@@ -269,40 +349,62 @@ export function listPersonalVersions(
   profile: string,
   original: OriginalVersion | null,
 ): CindyVersionInfo[] {
+  const id = personalVersionId(profile);
+  return id ? [describePersonalVersion(profile, id, original)] : [];
+}
+
+/** Old registries have no slot yet; adopt their newest runnable generation on read. */
+export function personalVersionId(profile: string): string | undefined {
+  const slot = readVersionJson<{ id: string | null }>(
+    path.join(versionsRoot(profile), 'personal.json'),
+  );
+  if (slot) {
+    if (slot.id === null) return undefined;
+    if (typeof slot.id !== 'string' || !VERSION_ID.test(slot.id)) throw versionError('unavailable');
+    return slot.id;
+  }
   const root = path.join(versionsRoot(profile), 'versions');
-  if (!fs.existsSync(root)) return [];
+  if (!fs.existsSync(root)) return undefined;
   assertVersionDirectory(profile, root);
+  return fs
+    .readdirSync(root)
+    .filter((id) => VERSION_ID.test(id))
+    .flatMap((id) => {
+      try {
+        return [readPersonalVersion(profile, id)];
+      } catch {
+        return [];
+      }
+    })
+    .sort((a, b) => Date.parse(b.builtAt) - Date.parse(a.builtAt) || b.id.localeCompare(a.id))[0]
+    ?.id;
+}
+
+export function describePersonalVersion(
+  profile: string,
+  id: string,
+  original: OriginalVersion | null,
+): CindyVersionInfo {
   let fingerprint: string | undefined;
   try {
     if (original)
       fingerprint =
         original.migrationHash ?? migrationIdentity(path.join(original.resources, 'drizzle'));
   } catch {}
-  return fs
-    .readdirSync(root)
-    .filter((id) => VERSION_ID.test(id))
-    .flatMap<CindyVersionInfo>((id) => {
-      if (!fs.existsSync(path.join(root, id, 'version.json'))) return [];
-      try {
-        const item = readPersonalVersion(profile, id);
-        return [
-          {
-            id,
-            kind: 'personal' as const,
-            title: item.title,
-            commit: item.commit,
-            builtAt: item.builtAt,
-            available: true,
-            compatible:
-              item.migrationHash === fingerprint &&
-              item.profile.region === original?.profile.region,
-          },
-        ];
-      } catch {
-        return [{ id, kind: 'personal' as const, available: false, compatible: false }];
-      }
-    })
-    .sort((a, b) => (b.builtAt ?? '').localeCompare(a.builtAt ?? ''));
+  try {
+    const item = readPersonalVersion(profile, id);
+    return {
+      id,
+      kind: 'personal',
+      commit: item.commit,
+      builtAt: item.builtAt,
+      available: true,
+      compatible:
+        item.migrationHash === fingerprint && item.profile.region === original?.profile.region,
+    };
+  } catch {
+    return { id, kind: 'personal', available: false, compatible: false };
+  }
 }
 
 /** Copy the complete signed bundle unchanged; macOS framework symlinks stay inside it. */
@@ -348,6 +450,7 @@ export async function retainPersonalVersion(input: {
       protocol: 1,
       id,
       profile: input.profile,
+      version: `Cindy Make ${id.slice(0, 8)}`,
       title: input.title,
       commit: input.commit,
       ...(input.tree ? { tree: input.tree } : {}),

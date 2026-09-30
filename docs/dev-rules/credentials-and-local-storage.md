@@ -21,7 +21,9 @@
   `safeStorage` 边界。不要新增自定义明文凭证文件，也不要把秘密下放给 Renderer、插件
   或不受信任页面。
 - 可信 Node Worker 的显式例外：`node.secretBindings[].oauthSecret` 只能引用本插件
-  已声明的 OAuth key。Host 根据本次 `authAccount`（省略时为默认账号）刷新并注入
+  已声明的 OAuth key；这是调用时的凭证解析边界，不是发布或安装的能力支持门禁。
+  引用尚不可用时保留声明，在调用时返回不支持／配置错误，不读取其他插件凭证。
+  Host 根据本次 `authAccount` 刷新并注入
   短期 access token；不得注入 refresh token、返回 Renderer/Agent、写日志或落盘。
   Worker 启动第三方 CLI 时仅用该次子进程环境传递，不修改全局环境或复用他账号配置。
   这是高权限 Node 的受审查信任边界，不是系统沙箱或对恶意 Worker 的隔离保证。
@@ -30,10 +32,64 @@
 - 插件自定义的账号昵称、展示偏好和业务配置属于插件数据，使用现有隔离 `/kv`，
   不扩充 Host OAuth 账号模型、凭证库或专用接口。插件按账号 ID 合并这些数据用于展示
   和选择账号；传给 Host 的授权身份仍是账号 ID，不能用昵称替代。
+- 远程声明式 API Key/PAT 可通过 [签名输入桥](../remote-plugin-oauth.md) 的密码卡一次性
+  提交；专用本机 IPC 验证设备、插件、卡片、完整字段展示后加密交给目标 Host 原 executor。
+  只写已声明的单个 user Secret，不读回、不批量同步、不开放账号 vault。值只短暂存在于
+  输入组件/Main 调用中，不进入 Renderer store、Agent、普通远控、日志或历史。CLI PKCE
+  的私有回调也只交给发起的可信 Node RPC，不能返回沙箱 main.js 或业务 stdout。
 - access token 等只需短期使用的秘密优先保留在内存中。日志、错误、遥测和调试输出不得
   包含凭证明文、完整鉴权头或可直接复用的授权材料。
 - 测试只使用明显无效的假凭证，不读取或复制开发者真实的 `HOME`、Agent home、
   Electron userData 或系统凭证目录。
+
+## Claude 订阅只经 Claude Code 自己的登录
+
+Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；第三方应用不得提供
+Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此只做内置 CLI 的外壳：
+
+- 登录只拉起内置 CLI 的 `claude auth login --claudeai`，登录态只读
+  `claude auth status --json`。凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
+  Cindy 不读取、不复制、不刷新它。CLI 按配置目录区分凭证库，所以本机 CLI 的会话（任何来源）
+  与登录检查都不得设 `CLAUDE_CONFIG_DIR`（dev 多实例也用默认目录），否则会看不到本机已有的
+  Claude Code 登录；SSH 远端的配置目录由远端 cc-manager 自己管理，不在此列。
+  只有 Claude.ai 订阅账号的 OAuth 登录算「Claude 订阅」；CLI 用 Console 账号、API Key、
+  apiKeyHelper、中转 token 或第三方云登录时按 `not_a_subscription` 处理，也不替用户改 CLI 的登录。
+- 登录态读取不得阻塞与订阅无关的路径：启动只在已连接时等待，列表类读取用缓存并后台刷新，
+  读失败有退避。
+- 订阅会话由 SDK 拉起同一个 CLI，自己读凭证、直连 Anthropic：不设 `ANTHROPIC_BASE_URL`、
+  不设 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`、不注入任何 token；认证 env 中的凭证键在
+  合并后一律剥除（maker-core env-builder `nativeCliAuth`）。Host 只可补代理 env：代理 env
+  给的 HTTP 代理原样继承；系统代理或 SOCKS5 时 `HTTPS_PROXY` 指向本机只接受 CONNECT 的回环
+  端口，它对每个目标重新按系统代理 / PAC 决定直连或走代理（env 作用于整棵进程树，含 Bash
+  工具里的 git / npm，内网例外必须照旧直连），明文 HTTP 不下发代理。都是 TCP 隧道，TLS
+  端到端，代理、转发端口与 Cindy 都看不到凭证。
+- 订阅会话不设 host 接管标记，CLI 会直接应用工作区 `.claude/settings.json` /
+  `settings.local.json` 的 env（SDK 模式没有工作区信任确认，也不像 Claude Desktop 那样剥掉
+  项目级上游 / 鉴权键）。所以对 CLI 实际加载的项目级设置（工作目录的两份文件，加上主仓库
+  根目录的 `settings.local.json`）设闸（maker-core `workspace-settings-guard`）：
+  - 每次拉起 CLI 进程前（含会话中途重建）命中就拒绝启动；
+  - 会话运行中，任何设置变更（ConfigChange hook）与 Cindy 触发的 flag settings 应用（切模型 /
+    effort / fast）前都整体复查；命中即判会话已污染，阻止这次变更并结束当前 CLI 进程——被拒
+    的文件还在磁盘上，CLI 之后任何一次全量重读都会读到它，不能只拦一次；
+  - 订阅会话禁用 EnterWorktree（它会把项目根挪到未检查、也不被 watcher 监视的目录）；
+  - 解析不了的文件按命中处理（读不懂不等于 CLI 不应用）。
+  命中范围是改写上游、鉴权或 TLS 信任的键，代理、模型、权限与 hooks 不拦。
+- 未指定来源的会话：有网关 key 走网关；没有时只有 Anthropic 一方模型交给本机登录，其它模型
+  仍经 loopback proxy 按模型路由。loopback proxy 从不转发订阅流量：显式订阅会话或无 Cindy
+  凭证的 claude-* 请求到了 proxy 一律本地拒绝。
+- 订阅只对本机 `claude-code` 开放：Codex / Pi 不列订阅模型，Codex 显式选中时本地拒绝；
+  SSH 远端、辅助 one-shot（标题、自动复核等）不使用订阅。订阅会话的子代理请求同样由 CLI
+  直连，只注入 Anthropic 一方的子代理模型覆写。
+- 「断开」只撤销 Cindy 的使用许可（`nativeProviderAuthBinding`），不登出 CLI。
+  旧版独立 Claude 账号已停用，但不删除其已存凭证。
+- 套餐余量由内置 CLI 的 `get_usage` 控制请求查询（CLI 用自己的登录发请求，拉起时不读
+  项目级设置、不起 MCP、不落会话记录），会话内的 SDK `rate_limit_event` 做增量刷新；
+  模型列表来自 SDK `supportedModels` 与 Registry；
+  不得为此恢复用订阅 token 直接调用 Anthropic API。
+- 实现见 [claude-native-cli.ts](../../apps/desktop/src/main/maker-host/claude-native-cli.ts)、
+  [env-builder.ts](../../packages/maker-core/src/agents/claude-code/env-builder.ts)；回归见
+  [claudeAuthAdapterOAuthEnv.test.ts](../../apps/desktop/src/main/maker-host/__tests__/claudeAuthAdapterOAuthEnv.test.ts)
+  与 [env-builder.test.ts](../../packages/maker-core/src/agents/claude-code/__tests__/env-builder.test.ts)。
 
 ## Linux Hyprland / Omarchy 凭证后端
 
@@ -88,11 +144,17 @@
 | 可丢弃的临时数据 | `app.getPath('temp')` 或 `os.tmpdir()` 下的任务专属目录 |
 | 测试生成物 | `os.tmpdir()` 下通过 `mkdtemp` 创建的独立目录，并在测试结束时清理 |
 | Skill 卸载清理回执 | `app.getPath('userData')/skillhub/uninstall-cleanups/<token>.json`，记录操作 owner、旧文件/注册/偏好身份与完成阶段；跨窗口和重启保留，当前 owner 重试完成后删除，不作为授权凭据 |
+| 跨 profile 的 Cindy 内置 Skill 副本 | `app.getPath('appData')/Cindy/shared-system-skills`，只保存随应用发布、可由 bundle 重建的官方 Skill；Global、China、dev 与 isolated profile 共用稳定物理路径，更新和共享发现链接必须持有下述互斥锁 |
 | 跨 profile 的共享 Skill 文件互斥 | `app.getPath('appData')/Cindy/shared-skill-mutation-locks`，仅存文件锁及未完成操作的 token/名称哈希，保证正式版/dev/isolated 共用；短期锁复用既有崩溃回收，持久屏障必须等对应清理完成后删除，读取损坏只阻止相关名称 |
 | 跨 profile 的 worktree 借用租约 | `app.getPath('appData')/Cindy/shared-worktree-runtime-leases`，模拟器工程借用时在原 profile 租约之外发布共享副本；回收器同时读取两处，源目录 I/O 结束后显式释放，释放失败由现有 `.release` 回执重试；不能因进程退出就移除保护 |
 | 旧版 worktree 回收器兼容锁 | 验证 linked worktree 的 Git 元数据与反向链接后，在源目录外的 `<commonGitDir>/worktrees/<id>/locked` 创建 Git 标准锁，避免构建中的 `git clean` 删除保护；旧版删除/池化复用已识别此锁。不覆盖用户锁，仅当最后一个共享借用结束且自建文件身份和内容仍匹配时删除。清理失败在共享租约 `.release` 中保留路径及原文件身份，由现有维护重试；旧回执仍按原身份清理 `.worktree-keep` |
 | 跨 profile 的 worktree 回收日志位置 | `app.getPath('appData')/Cindy/shared-worktree-recycle-journals`，按日志目录哈希登记原 profile 日志位置，启动日志监听和写入回收记录前原子发布；借用方只读目标资源的原始日志，不复制恢复状态、不代替 owner 执行恢复。索引跨重启保留，原日志不存在时不产生回收意图 |
 | 用户明确导出的文件 | 用户选择或任务明确指定的目标路径 |
+
+- 内置 Skill 的官方身份只授予当前 manifest 已提交且指纹匹配的 bundle：`.active` 必须是
+  指向该版本的合法链接，版本目录与 Skill 内容不能经替换的符号链接越界。物化失败或目录
+  存在本身不构成官方身份；扫描、命令标记与 Learn 发现共用经验证的描述符。异常占位内容
+  不覆盖、不认领。实现与回归见 `maker-host/built-in-skills.ts` 及其同名单测。
 
 - 禁止把 `process.cwd()`、仓库根或源码目录作为 userData、凭证目录或临时目录的默认回退。
   特别不要写 `process.env.TEMP ?? process.cwd()` 一类跨平台会落入仓库的逻辑。

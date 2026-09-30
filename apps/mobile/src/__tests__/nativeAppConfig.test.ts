@@ -22,6 +22,8 @@ const managedEnvKeys = [
   'EXPO_PUBLIC_CINDY_GOOGLE_WEB_CLIENT_ID',
   'EXPO_PUBLIC_CINDY_GOOGLE_IOS_CLIENT_ID',
   'EXPO_PUBLIC_CINDY_GOOGLE_IOS_URL_SCHEME',
+  'EXPO_PUBLIC_CINDY_WECHAT_APP_ID',
+  'EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK',
   'CINDY_USE_LOCAL_REGION_CONFIG',
   'CINDY_SELF_HOST_REGIONS_FILE',
   'CINDY_MOBILE_OTA_NATIVE',
@@ -49,6 +51,58 @@ afterEach(() => {
 });
 
 describe('mobile native app config', () => {
+  it('generates all three official WeChat query schemes without dropping existing callbacks', async () => {
+    const withWechatLogin = require(resolve(process.cwd(), 'modules/xdt-wechat-login/plugin/index.js'));
+    const config = withWechatLogin({ name: 'Test app', slug: 'test-app' }, {
+      appId: 'wx-test-mobile',
+      universalLink: 'https://login.example.com/app/',
+    });
+    const result = await config.mods.ios.infoPlist({
+      ...config,
+      modResults: {
+        LSApplicationQueriesSchemes: ['existing-app', 'weixin'],
+        CFBundleURLTypes: [{ CFBundleURLSchemes: ['cindycn'] }],
+      },
+      modRequest: { platform: 'ios', modName: 'infoPlist' },
+    });
+    expect(result.modResults.LSApplicationQueriesSchemes).toEqual([
+      'existing-app', 'weixin', 'weixinULAPI', 'weixinURLParamsAPI',
+    ]);
+    expect(result.modResults.CFBundleURLTypes).toEqual([
+      { CFBundleURLSchemes: ['cindycn'] },
+      { CFBundleURLName: 'wx-test-mobile', CFBundleURLSchemes: ['wx-test-mobile'] },
+    ]);
+  });
+
+  it('enables the existing WeChat SDK plugin only for configured CN builds', () => {
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = 'cn';
+    expect(buildConfig().plugins).not.toContainEqual(expect.arrayContaining(['xdt-wechat-login/plugin']));
+    process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID = ' wx-test-mobile ';
+    process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK = ' https://login.example.com/wechat/ ';
+    expect(buildConfig().plugins).toContainEqual([
+      'xdt-wechat-login/plugin',
+      { appId: 'wx-test-mobile', universalLink: 'https://login.example.com/wechat/' },
+    ]);
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = 'global';
+    expect(buildConfig().plugins).not.toContainEqual(expect.arrayContaining(['xdt-wechat-login/plugin']));
+  });
+
+  it.each([
+    ['wx-test-mobile', ''],
+    ['', 'https://login.example.com/wechat/'],
+    ['wx-test-mobile', 'http://login.example.com/wechat/'],
+    ['wx-test-mobile', 'not-a-url'],
+    ['wx-test-mobile', 'https://user:pass@login.example.com/wechat/'],
+    ['wx-test-mobile', 'https://login.example.com/wechat/?source=build'],
+    ['wx-test-mobile', 'https://login.example.com/wechat/#callback'],
+  ])('rejects incomplete or invalid WeChat config before native generation (%s, %s)', (appId, link) => {
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = 'cn';
+    process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID = appId;
+    process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK = link;
+    expect(() => buildConfig()).toThrow(/EXPO_PUBLIC_CINDY_WECHAT/);
+  });
   it('defaults to the CN app identity and requires an explicit Global build', () => {
     const appJson = JSON.parse(
       readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'),

@@ -2,17 +2,25 @@ import { HistoryViewController, isHistoryViewUnavailable } from '@cindy/maker-sh
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import type { RemoteMessage } from './types';
 import { clearHistoryDisk, historyDiskAuthority, readHistoryDisk, writeHistoryDisk } from './remoteHistoryDiskCache';
-import { historyValueBytes } from './historyDiskStore';
+import { getRecentTasks, recentTaskKey, subscribeRecentTasks } from './recentTasks';
+import { clearMessageReadingPositions } from './messageReadingPosition';
 
-// Retain only recently visited views in memory. The existing account/device and
-// session reclamation boundaries own invalidation. Older views remain in the disk LRU.
-export const MAX_INACTIVE_HISTORY_VIEWS = 8;
-const MAX_INACTIVE_HISTORY_BYTES = 4 * 1024 * 1024;
+// Data and resident message lists share the same five-task retention policy.
 type Reader = Pick<MobileMakerTransport, 'readHistoryView' | 'readWorkDetails' | 'setHistoryExpanded'>;
 type Entry = { deviceId: string; sessionId: string; reader: Reader;
-  view: HistoryViewController<RemoteMessage>; consumers: number; bytes: number };
+  view: HistoryViewController<RemoteMessage>; consumers: number };
 const views = new Map<string, Entry>();
 const keyFor = (deviceId: string, sessionId: string) => JSON.stringify([deviceId, sessionId]);
+
+function pruneDetachedViews() {
+  const retained = new Set(getRecentTasks().map(task => recentTaskKey(task.params)));
+  for (const [key, entry] of views) {
+    // A live route still owns its controller. Release it when that route unmounts;
+    // never create a second controller for an existing consumer.
+    if (!entry.consumers && !retained.has(key)) views.delete(key);
+  }
+}
+subscribeRecentTasks(pruneDetachedViews);
 
 export function findRemoteHistoryView(deviceId: string, sessionId: string) {
   return views.get(keyFor(deviceId, sessionId))?.view;
@@ -22,7 +30,7 @@ export function getRemoteHistoryView(deviceId: string, sessionId: string, reader
   const key = keyFor(deviceId, sessionId);
   const existing = views.get(key);
   if (existing) return existing;
-  const entry: Entry = { deviceId, sessionId, reader, consumers: 0, bytes: 0,
+  const entry: Entry = { deviceId, sessionId, reader, consumers: 0,
     view: new HistoryViewController<RemoteMessage>({
       page: (before) => entry.reader.readHistoryView(sessionId, before),
       details: (ref, after) => entry.reader.readWorkDetails(sessionId, ref, after),
@@ -75,34 +83,20 @@ export function mountRemoteHistoryView(entry: Entry, reader: Reader, active: boo
     entry.view.setActive(false);
     const key = keyFor(entry.deviceId, entry.sessionId);
     if (views.get(key) !== entry) return;
-    const snapshot = entry.view.getSnapshot();
-    // Bound accounting work before allocating a serialization of large details.
-    entry.bytes = Math.min(MAX_INACTIVE_HISTORY_BYTES + 1,
-      2 * historyValueBytes([snapshot.items, snapshot.details, snapshot.expanded], MAX_INACTIVE_HISTORY_BYTES));
-    views.delete(key);
-    views.set(key, entry);
-    let count = 0;
-    let bytes = 0;
-    for (const candidate of views.values()) {
-      if (!candidate.consumers) { count++; bytes += candidate.bytes; }
-    }
-    for (const [candidateKey, candidate] of views) {
-      if (count <= MAX_INACTIVE_HISTORY_VIEWS && bytes <= MAX_INACTIVE_HISTORY_BYTES) break;
-      if (candidate.consumers) continue;
-      views.delete(candidateKey);
-      count--; bytes -= candidate.bytes;
-    }
+    pruneDetachedViews();
   };
 }
 
 /** Hard boundaries also invalidate reads already held by mounted consumers. */
 export function resetRemoteHistoryViews(deviceId: string | undefined, sessionId: string): void {
+  clearMessageReadingPositions(deviceId, sessionId);
   for (const entry of views.values()) {
     if (entry.sessionId === sessionId && (deviceId === undefined || entry.deviceId === deviceId)) entry.view.reset();
   }
 }
 
 export function clearRemoteHistoryViews(deviceId?: string, sessionId?: string): void {
+  clearMessageReadingPositions(deviceId, sessionId);
   for (const [key, entry] of views) {
     if (deviceId !== undefined && entry.deviceId !== deviceId) continue;
     if (sessionId !== undefined && entry.sessionId !== sessionId) continue;

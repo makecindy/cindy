@@ -17,6 +17,7 @@ const harness = vi.hoisted(() => ({
   environment: vi.fn(),
   source: vi.fn(),
   prepareSource: vi.fn(),
+  syncSource: vi.fn(),
   workspace: vi.fn(),
   install: vi.fn(),
   send: vi.fn(),
@@ -44,6 +45,9 @@ vi.mock('../sourcePreparation.js', () => ({
 vi.mock('../taskWorkspace.js', () => ({
   createCindyMakeWorktree: harness.workspace,
   installCindyMakeWorktree: harness.install,
+}));
+vi.mock('../upstreamMergeRuntime.js', () => ({
+  syncSourceBeforeCindyMakeTask: harness.syncSource,
 }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => client }));
 vi.mock('../../localDb/ipc/messages.js', () => ({
@@ -168,6 +172,7 @@ beforeEach(() => {
     return report;
   });
   harness.source.mockResolvedValue({ status: 'ready', path: '/source', branch: 'cindy-personal' });
+  harness.syncSource.mockResolvedValue(undefined);
   harness.workspace.mockImplementation(async (userData, runId) => ({
     path: sourcePaths.makeTaskWorktreePath(userData, runId),
     branch: 'cindy-make/' + runId,
@@ -179,6 +184,61 @@ beforeEach(() => {
 });
 
 describe('Cindy Make task runtime', () => {
+  it('updates the personal source before creating the task worktree', async () => {
+    const start = input();
+    initialReads();
+    await startCindyMakeTask(start, 1);
+    await cindyMakeManager.waitForTask(start.runId);
+    expect(harness.syncSource).toHaveBeenCalledWith(
+      expect.any(AbortSignal),
+      expect.objectContaining({ agentKind: 'codex', model: 'origin-model' }),
+    );
+    expect(harness.syncSource.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.workspace.mock.invocationCallOrder[0],
+    );
+    expect(harness.send).toHaveBeenCalledOnce();
+  });
+
+  it('publishes a distinct personal source update phase while the task waits', async () => {
+    const start = input();
+    initialReads();
+    let finishSync!: () => void;
+    harness.syncSource.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSync = resolve;
+        }),
+    );
+    await startCindyMakeTask(start, 1);
+    await vi.waitFor(() =>
+      expect(cindyMakeManager.taskReport(start.runId)).toMatchObject({
+        status: 'running',
+        task: { phase: 'updatingSource' },
+      }),
+    );
+    expect(harness.workspace).not.toHaveBeenCalled();
+    finishSync();
+    await cindyMakeManager.waitForTask(start.runId);
+    expect(harness.send).toHaveBeenCalledOnce();
+  });
+
+  it('does not create a worktree or start the task when source update fails', async () => {
+    const start = input();
+    initialReads();
+    harness.syncSource.mockRejectedValueOnce(
+      Object.assign(new Error('conflict'), { code: 'busy' }),
+    );
+    await startCindyMakeTask(start, 1);
+    await cindyMakeManager.waitForTask(start.runId);
+    expect(harness.workspace).not.toHaveBeenCalled();
+    expect(harness.install).not.toHaveBeenCalled();
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(cindyMakeManager.taskReport(start.runId)).toMatchObject({
+      status: 'failed',
+      task: { phase: 'updatingSource' },
+    });
+  });
+
   it.each([false, true])(
     'retries from history without origin identity after restart=%s',
     async (restart) => {

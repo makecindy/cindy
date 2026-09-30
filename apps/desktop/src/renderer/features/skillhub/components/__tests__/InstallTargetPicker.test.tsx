@@ -55,7 +55,7 @@ it('does not dismiss or repeat installation while the selected operation is pend
 
 it('consumes Escape so an underlying window-level handler cannot close the host surface', async () => {
   window.electronAPI = { skillhub: { registry: { getByName: vi.fn().mockResolvedValue({ success: false }) } } } as never;
-  // SkillhubMarketPreviewPanel keeps a window-level Escape listener mounted
+  // SkillhubMarketDetailView keeps a window-level Escape listener mounted
   // while the picker is stacked on top; the picker must consume the key
   // itself instead of letting it reach the host surface.
   const underlying = vi.fn();

@@ -94,6 +94,7 @@ export interface DesktopControllerDeps {
     options?: { sync?: boolean; version?: string },
   ): Promise<RemoteClipboardContent | { version: string } | void>;
   clipboardVersion?(): Promise<string>;
+  stopClipboardVersion?(): void;
   privacyScreen?(enabled: boolean, isCurrent: () => boolean): Promise<void>;
   stopPrivacyScreen?(): void;
   hostMute?(enabled: boolean): Promise<void>;
@@ -142,6 +143,7 @@ export class RemoteDesktopController {
     this.privacyGeneration++;
     this.privacyOperation = null;
     this.syncGeneration++;
+    this.deps.stopClipboardVersion?.();
     if (this.active) this.active.clipboardSync = false;
     try {
       this.deps.stopPrivacyScreen?.();
@@ -228,7 +230,12 @@ export class RemoteDesktopController {
   signalingLost(peer?: string): void {
     this.tick();
     const active = this.active;
-    if (active && (!peer || active.peer === peer) && active.backgroundViewing && !active.controlling)
+    if (
+      active &&
+      (!peer || active.peer === peer) &&
+      active.backgroundViewing &&
+      !active.controlling
+    )
       return;
     this.stop(peer);
   }
@@ -608,6 +615,7 @@ export class RemoteDesktopController {
           this.clipboardTransfer.resetSync();
         }
         active.clipboardSync = request.enabled;
+        if (!request.enabled) this.deps.stopClipboardVersion?.();
         return { enabled: request.enabled };
       }
       case 'hostMute': {
@@ -698,7 +706,16 @@ export class RemoteDesktopController {
           active.controlling = false;
           this.controlGeneration++;
           this.deps.changed();
-          return { lease: active.lease, display, controlling: false };
+          return {
+            lease: active.lease,
+            display,
+            controlling: false,
+            ...(request.op === 'viewerDisplay'
+              ? {
+                  viewerDisplayRequest: { width: request.width, height: request.height },
+                }
+              : {}),
+          };
         } catch (error) {
           if (this.active === active) this.stop(peer);
           throw error;

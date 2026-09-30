@@ -44,7 +44,9 @@ Grok 的 MCP 后端 state TTL 不能直接套给 Grok 订阅登录或所有插�
 - SSH Agent 不因该工具获得本机凭证；请求要求可交互的本机伙伴主任务。远端 Pi 仍可发现和调用
   实际可用插件，但缺配置时不承诺聊天授权卡或完成通知；指向可信 Desktop 的插件连接页，
   用户确认配置完成后再重试。手机控制本机伙伴仍保留原授权卡与自动续接。
-- 没有修改 device-link 重试、relay 或断链恢复；故障范围是单张卡。
+- 远程设备的插件 OAuth 可通过 [Desktop 回调桥](../remote-plugin-oauth.md) 完成；使用专用
+  Host 事务，普通远程 setup/Secret 提交仍拒绝。先探测能力，旧端不回退通用 invoke。
+  relay 路由及重试机制不变；断链取消对应 peer 的在途授权，不影响其它 peer。
 
 ## 完成提交边界
 

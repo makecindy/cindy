@@ -134,7 +134,7 @@ function SessionPreviewCard({ preview }: { preview: PreviewState }) {
           isRunning ? 'text-[var(--cmd-palette-item-meta)]' : 'text-foreground',
         )}
       >
-        {getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'))}
+        {getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'), t)}
       </div>
       {body && (
         <div
@@ -292,7 +292,7 @@ export function RailNav({
         const hasUnread = notifications.has(session.id) || remoteLamp?.tone != null;
         // 瓷砖短标签、aria-label、悬浮预览卡都用同一个显示标题:置顶一条刚建的会话时
         // 原始标题是内部哨兵,原样用会让 rail 上出现 "New Maker"(短标签甚至会截成 "New")。
-        const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));
+        const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'), t);
         return (
           <button
             key={session.id}

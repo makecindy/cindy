@@ -31,6 +31,12 @@ const MAX_EARLY_STREAM_EVENTS_PER_STREAM = 4;
 const MAX_EARLY_STREAMS = 8;
 const MAX_EARLY_STREAM_BYTES = 32 * 1024 * 1024;
 const MAX_CLOSED_STREAMS = 64;
+// Frames the Helper may still deliver after the Host stopped a stream locally
+// and before the Helper's own terminal `streamEnd` arrives. Acknowledged
+// streams are back-pressured one frame at a time, so a single frame can be in
+// flight; unacknowledged streams get a small fixed allowance instead.
+const MAX_LATE_FRAMES_AFTER_LOCAL_STOP_ACKNOWLEDGED = 1;
+const MAX_LATE_FRAMES_AFTER_LOCAL_STOP_UNACKNOWLEDGED = 8;
 const MAX_LOCALLY_SETTLED_REQUESTS = 256;
 
 export type IOSSimulatorNativeSidecarChannelState =
@@ -194,6 +200,12 @@ interface PendingRequest {
   removeAbortListener: () => void;
 }
 
+interface ClosedStreamState {
+  simulatorUdid: string;
+  generation: number;
+  lateFrameAllowance: number;
+}
+
 interface StreamState {
   streamId: string;
   command: IOSSimulatorNativeSidecarCommand;
@@ -311,10 +323,7 @@ export class IOSSimulatorNativeSidecarChannel implements IOSSimulatorNativeSidec
   readonly #locallySettledRequestIds = new Set<string>();
   readonly #streams = new Map<string, StreamState>();
   readonly #earlyStreamEvents = new Map<string, EarlyStreamEvent[]>();
-  readonly #closedStreams = new Map<
-    string,
-    { simulatorUdid: string; generation: number }
-  >();
+  readonly #closedStreams = new Map<string, ClosedStreamState>();
   #process: IOSSimulatorNativeSidecarManagedProcess | null = null;
   #state: IOSSimulatorNativeSidecarChannelState = "idle";
   #requestSequence = 0;
@@ -852,7 +861,9 @@ export class IOSSimulatorNativeSidecarChannel implements IOSSimulatorNativeSidec
       const decoded = decodeIOSSimulatorNativeSidecarStreamFrame(frame);
       const state = this.#streams.get(decoded.metadata.streamId);
       if (!state) {
-        if (this.#closedStreams.has(decoded.metadata.streamId)) {
+        const closed = this.#closedStreams.get(decoded.metadata.streamId);
+        if (closed) {
+          if (this.#consumeLateFrameAllowance(closed, decoded)) return;
           throw new IOSSimulatorNativeSidecarProtocolError(
             `Native sidecar emitted a frame for closed stream ${decoded.metadata.streamId}`,
           );
@@ -884,6 +895,7 @@ export class IOSSimulatorNativeSidecarChannel implements IOSSimulatorNativeSidec
               "Native sidecar closed-stream identity does not match",
             );
           }
+          this.#markHelperEnded(end.streamId);
           return;
         }
         this.#bufferEarlyStreamEvent(end.streamId, { kind: "end", end }, 0);
@@ -1001,7 +1013,9 @@ export class IOSSimulatorNativeSidecarChannel implements IOSSimulatorNativeSidec
         ) {
           if (state.awaitStreamEndAfterMaxFrames) return;
           this.#sendStopStream(state);
-          this.#finishStream(state, "max-frames");
+          this.#finishStream(state, "max-frames", undefined, {
+            helperEnded: false,
+          });
         }
       })
       .catch((error) => {
@@ -1024,7 +1038,15 @@ export class IOSSimulatorNativeSidecarChannel implements IOSSimulatorNativeSidec
       );
     }
     state.tail = state.tail.then(() => {
-      this.#finishStream(state, end.reason, end.message);
+      if (state.finished) {
+        // A local stop already settled the stream while a frame callback was
+        // still running; the Helper's end still closes the late-frame window.
+        this.#markHelperEnded(state.streamId);
+        return;
+      }
+      this.#finishStream(state, end.reason, end.message, {
+        helperEnded: true,
+      });
     });
   }
 
@@ -1075,7 +1097,7 @@ export class IOSSimulatorNativeSidecarChannel implements IOSSimulatorNativeSidec
     state.stopping = true;
     this.#sendStopStream(state);
     state.tail = state.tail.then(() => {
-      this.#finishStream(state, reason);
+      this.#finishStream(state, reason, undefined, { helperEnded: false });
     });
   }
 
@@ -1092,13 +1114,14 @@ export class IOSSimulatorNativeSidecarChannel implements IOSSimulatorNativeSidec
   #finishStream(
     state: StreamState,
     reason: IOSSimulatorStreamStats["endReason"],
-    message?: string,
+    message: string | undefined,
+    options: { helperEnded: boolean },
   ): void {
     if (state.finished) return;
     state.finished = true;
     state.removeAbortListener();
     this.#streams.delete(state.streamId);
-    this.#rememberClosedStream(state);
+    this.#rememberClosedStream(state, options);
     state.resolve({
       frameCount: state.frameCount,
       byteCount: state.byteCount,
@@ -1115,15 +1138,30 @@ export class IOSSimulatorNativeSidecarChannel implements IOSSimulatorNativeSidec
     state.finished = true;
     state.removeAbortListener();
     this.#streams.delete(state.streamId);
-    this.#rememberClosedStream(state);
+    this.#rememberClosedStream(state, { helperEnded: false });
     state.reject(error);
   }
 
-  #rememberClosedStream(state: StreamState): void {
+  /**
+   * Records a closed-stream tombstone. When the Host ended the stream itself
+   * (abort, max-frames, local error) the Helper cannot take back frames that
+   * already crossed stdio, so a bounded number of late frames are tolerated
+   * until the Helper's own `streamEnd` arrives. Streams the Helper ended stay
+   * strictly fail-closed.
+   */
+  #rememberClosedStream(
+    state: StreamState,
+    options: { helperEnded: boolean },
+  ): void {
     this.#closedStreams.delete(state.streamId);
     this.#closedStreams.set(state.streamId, {
       simulatorUdid: state.command.simulatorUdid,
       generation: state.command.generation,
+      lateFrameAllowance: options.helperEnded
+        ? 0
+        : state.acknowledgeFrames
+          ? MAX_LATE_FRAMES_AFTER_LOCAL_STOP_ACKNOWLEDGED
+          : MAX_LATE_FRAMES_AFTER_LOCAL_STOP_UNACKNOWLEDGED,
     });
     while (this.#closedStreams.size > MAX_CLOSED_STREAMS) {
       const oldest = this.#closedStreams.keys().next().value as
@@ -1131,6 +1169,30 @@ export class IOSSimulatorNativeSidecarChannel implements IOSSimulatorNativeSidec
       if (oldest === undefined) break;
       this.#closedStreams.delete(oldest);
     }
+  }
+
+  /**
+   * The Helper confirmed the stream is over; anything after this is
+   * unsolicited traffic again.
+   */
+  #markHelperEnded(streamId: string): void {
+    const closed = this.#closedStreams.get(streamId);
+    if (closed) closed.lateFrameAllowance = 0;
+  }
+
+  #consumeLateFrameAllowance(
+    closed: ClosedStreamState,
+    decoded: DecodedStreamFrame,
+  ): boolean {
+    if (closed.lateFrameAllowance <= 0) return false;
+    if (
+      decoded.metadata.simulatorUdid !== closed.simulatorUdid ||
+      decoded.metadata.generation !== closed.generation
+    ) {
+      return false;
+    }
+    closed.lateFrameAllowance -= 1;
+    return true;
   }
 
   #recordCrash(): void {

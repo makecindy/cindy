@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * SshKeySetupDialog — the "Setup SSH key" wizard.
  *
@@ -19,7 +20,6 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X, Copy, Key, KeyRound, Lock, Plus, Server, CheckCircle2, Circle, Unlock, Eye, EyeOff, AlertTriangle } from 'lucide-react';
 
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
@@ -212,6 +212,7 @@ export function SshKeySetupDialog({ hostId, hostInline, open, onOpenChange, onKe
           style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.4))' }}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className="fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl flex flex-col"
           style={{
             backgroundColor: 'var(--surface-elevated, #ffffff)',
@@ -279,17 +280,10 @@ export function SshKeySetupDialog({ hostId, hostInline, open, onOpenChange, onKe
             style={{ borderTop: '1px solid var(--border-default, #d4d4d4)' }}
           >
             <Dialog.Close asChild>
-              <button
-                type="button"
-                className="flex h-8 items-center rounded-full px-[14px] text-13 leading-none font-medium border"
-                style={{
-                  backgroundColor: 'var(--settings-btn-secondary-bg)',
-                  borderColor: 'var(--settings-btn-secondary-border)',
-                  color: 'var(--settings-btn-secondary-text)',
-                }}
+              <Button variant="secondary" size="md" compact type="button"
               >
                 <span className="relative top-px">{t('settings.remote.keys.done')}</span>
-              </button>
+              </Button>
             </Dialog.Close>
           </div>
         </Dialog.Content>
@@ -350,27 +344,19 @@ function KeyList({
         >
           {t('settings.remote.keys.pickOrGenerate')}
         </p>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
+          loading={generating}
           type="button"
           onClick={onToggleGenerate}
           disabled={generating}
-          className={cn(
-            'flex h-7 items-center gap-1 rounded-full px-3 text-12 leading-none font-medium border',
-            generating && 'cursor-not-allowed opacity-60',
-          )}
-          style={{
-            backgroundColor: showGenerateForm
-              ? 'transparent'
-              : 'var(--settings-btn-secondary-bg)',
-            borderColor: 'var(--settings-btn-secondary-border)',
-            color: 'var(--settings-btn-secondary-text)',
-          }}
-        >
-          {generating ? <Spinner size={12} /> : <Plus size={12} />}
+        > <Plus size={12} />
           <span className="relative top-px">{showGenerateForm
             ? t('settings.remote.keys.cancelGenerate')
             : t('settings.remote.keys.generateButton')}</span>
-        </button>
+        </Button>
       </div>
 
       <div
@@ -471,20 +457,18 @@ function KeyList({
                 </div>
               </button>
               {!key.inAgent && (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  compact
                   type="button"
                   onClick={() => onUnlock(key.privateKeyPath)}
-                  className="self-center flex h-7 items-center gap-1 rounded-full px-3 text-11 leading-none font-medium border shrink-0"
+                  className="self-center"
                   title={t('settings.remote.keys.unlockTip')}
-                  style={{
-                    backgroundColor: 'var(--settings-btn-secondary-bg)',
-                    borderColor: 'var(--settings-btn-secondary-border)',
-                    color: 'var(--settings-btn-secondary-text)',
-                  }}
                 >
                   <Unlock size={11} />
                   <span className="relative top-px">{t('settings.remote.keys.unlockButton')}</span>
-                </button>
+                </Button>
               )}
             </div>
           );
@@ -601,39 +585,30 @@ function GenerateForm({ generating, onSubmit, onCancel }: GenerateFormProps) {
       )}
 
       <div className="flex justify-end gap-2 pt-1">
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
           type="button"
           onClick={onCancel}
           disabled={generating}
-          className="flex h-7 items-center rounded-full px-3 text-12 leading-none font-medium border"
-          style={{
-            backgroundColor: 'transparent',
-            borderColor: 'var(--settings-btn-secondary-border)',
-            color: 'var(--settings-btn-secondary-text)',
-          }}
         >
           <span className="relative top-px">{t('settings.remote.add.cancel')}</span>
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
+          loading={generating}
           type="button"
           onClick={() => onSubmit({
             name: name.trim() || undefined,
             passphrase: encrypt ? pass : undefined,
           })}
           disabled={!canSubmit}
-          className={cn(
-            'flex h-7 items-center gap-1 rounded-full px-3 text-12 leading-none font-medium border',
-            !canSubmit && 'cursor-not-allowed opacity-60',
-          )}
-          style={{
-            backgroundColor: 'var(--settings-btn-secondary-bg)',
-            borderColor: 'var(--settings-btn-secondary-border)',
-            color: 'var(--settings-btn-secondary-text)',
-          }}
-        >
-          {generating ? <Spinner size={11} /> : <Plus size={11} />}
+        > <Plus size={11} />
           <span className="relative top-px">{t('settings.remote.keys.generateSubmit')}</span>
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -673,6 +648,7 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
           style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.5))' }}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className="fixed left-1/2 top-1/2 z-[60] w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl"
           style={{
             backgroundColor: 'var(--surface-elevated, #ffffff)',
@@ -719,17 +695,15 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
           <div className="flex justify-end gap-2 px-5 py-3"
                style={{ borderTop: '1px solid var(--border-default, #d4d4d4)' }}>
             <Dialog.Close asChild>
-              <button type="button"
-                      className="flex h-7 items-center rounded-full px-3 text-12 leading-none font-medium border"
-                      style={{
-                        backgroundColor: 'transparent',
-                        borderColor: 'var(--settings-btn-secondary-border)',
-                        color: 'var(--settings-btn-secondary-text)',
-                      }}>
+              <Button variant="secondary" size="sm" compact type="button">
                 <span className="relative top-px">{t('settings.remote.add.cancel')}</span>
-              </button>
+              </Button>
             </Dialog.Close>
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
+              compact
+              loading={submitting}
               type="button"
               disabled={!pass || submitting}
               onClick={async () => {
@@ -737,19 +711,9 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
                 await onSubmit(privateKeyPath, pass);
                 setSubmitting(false);
               }}
-              className={cn(
-                'flex h-7 items-center gap-1 rounded-full px-3 text-12 leading-none font-medium border',
-                (!pass || submitting) && 'cursor-not-allowed opacity-60',
-              )}
-              style={{
-                backgroundColor: 'var(--settings-btn-secondary-bg)',
-                borderColor: 'var(--settings-btn-secondary-border)',
-                color: 'var(--settings-btn-secondary-text)',
-              }}
-            >
-              {submitting ? <Spinner size={11} /> : <Unlock size={11} />}
+            > <Unlock size={11} />
               <span className="relative top-px">{t('settings.remote.keys.unlockSubmit')}</span>
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>
@@ -936,19 +900,10 @@ function CodeBlock({
         >
           {label}
         </span>
-        <button
-          type="button"
-          onClick={onCopy}
-          className="flex h-6 items-center gap-1 rounded-full px-2 text-11 border"
-          style={{
-            backgroundColor: 'transparent',
-            borderColor: 'var(--settings-btn-secondary-border)',
-            color: 'var(--settings-btn-secondary-text)',
-          }}
-        >
+        <Button variant="secondary" size="xs" compact type="button" onClick={onCopy}>
           <Copy size={10} aria-hidden="true" />
           {t('settings.remote.keys.copyButton')}
-        </button>
+        </Button>
       </div>
       <pre
         className="max-h-32 overflow-auto rounded-md border p-2.5 text-11 leading-relaxed whitespace-pre-wrap break-all"
@@ -1054,6 +1009,7 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
           style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.5))' }}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className="fixed left-1/2 top-1/2 z-[60] w-[520px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl flex flex-col"
           style={{
             backgroundColor: 'var(--surface-elevated, #ffffff)',
@@ -1154,17 +1110,9 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
             style={{ borderTop: '1px solid var(--border-default, #d4d4d4)' }}
           >
             <Dialog.Close asChild>
-              <button
-                type="button"
-                className="flex h-7 items-center rounded-full px-3 text-12 leading-none font-medium border"
-                style={{
-                  backgroundColor: 'var(--settings-btn-secondary-bg)',
-                  borderColor: 'var(--settings-btn-secondary-border)',
-                  color: 'var(--settings-btn-secondary-text)',
-                }}
-              >
+              <Button variant="secondary" size="sm" compact type="button">
                 <span className="relative top-px">{t('settings.remote.keys.agentTrouble.close')}</span>
-              </button>
+              </Button>
             </Dialog.Close>
           </div>
         </Dialog.Content>

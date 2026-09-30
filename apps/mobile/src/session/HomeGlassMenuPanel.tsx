@@ -5,8 +5,10 @@
  * 无系统玻璃时回退 BlurBackdrop + sheet 色卡片。
  */
 import { GlassView } from 'expo-glass-effect';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { controlRegion } from '@/platform/windowGeometry';
 import type { ReactNode } from 'react';
-import { Animated, Modal, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Animated, Modal, Pressable, ScrollView, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { useLiquidGlassAvailable } from '@/session/useLiquidGlassAvailable';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -30,7 +32,7 @@ export function HomeGlassMenuPanel({
   return (
     <Pressable
       onPress={() => undefined}
-      style={[styles.shell, liquidGlass ? styles.shellGlass : styles.shellSolid, style]}
+      style={[styles.shell, liquidGlass ? styles.shellGlass : styles.shellSolid, style, { maxWidth: '100%' }]}
       testID={testID}
     >
       {liquidGlass ? (
@@ -71,16 +73,20 @@ export function HomeMenuScrim({
   visible: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const geometry = useAdaptiveWindow();
+  const region = controlRegion(geometry);
   return (
-    <Modal animationType="none" onShow={onShow} transparent visible={visible} onRequestClose={onClose}>
+    <Modal supportedOrientations={["portrait", "portrait-upside-down", "landscape-left", "landscape-right"]} animationType="none" onShow={onShow} transparent visible={visible} onRequestClose={onClose}>
       <View style={styles.layer}>
         <Animated.View pointerEvents="none" style={[styles.dim, { opacity: progress }]} />
         <Pressable
           onPress={onClose}
-          style={[styles.hit, { paddingTop: topOffset }]}
+          style={[styles.hit, { paddingTop: Math.max(region.y, Math.min(topOffset, region.y + region.height - 100)),
+            paddingLeft: region.x + spacing.lg, paddingRight: geometry.width - region.x - region.width + spacing.lg,
+            paddingBottom: geometry.height - region.y - region.height }]}
           testID={backdropTestID}
         >
-          {children}
+          <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>{children}</ScrollView>
         </Pressable>
       </View>
     </Modal>
@@ -102,6 +108,7 @@ const makeStyles = (colors: ThemeColors) =>
       borderWidth: StyleSheet.hairlineWidth,
     },
     glass: {
+      maxWidth: '100%',
       borderRadius: radius.container,
       overflow: 'hidden',
       width: MENU_WIDTH,

@@ -192,6 +192,24 @@ test("login-all-hifi embeds generated truth as a script-safe static literal", ()
 	assert.deepEqual(JSON.parse(match[1]), readJson("docs/design-previews/login-all-hifi/truth.json"));
 });
 
+test("login QA preview countdowns match Desktop and Mobile product constants", () => {
+	const desktopMs = Number(readText("apps/desktop/src/renderer/components/login/loginDesignTokens.ts")
+		.match(/RESEND_COUNTDOWN_MS\s*=\s*([\d_]+)/)?.[1].replaceAll("_", ""));
+	const mobileSeconds = Number(readText("apps/mobile/src/auth/loginSkinLayout.ts")
+		.match(/RESEND_COUNTDOWN_SECONDS\s*=\s*([\d_]+)/)?.[1].replaceAll("_", ""));
+	assert.ok(desktopMs > 0 && mobileSeconds > 0);
+	assert.equal(desktopMs, mobileSeconds * 1000);
+	for (const demo of ["login-flow-hifi", "login-all-hifi"]) {
+		const dir = `docs/design-previews/${demo}`;
+		const truth = readJson(`${dir}/truth.json`);
+		const block = readText(`${dir}/index.html`).match(/<script id="qa-truth"[^>]*>([\s\S]*?)<\/script>/);
+		assert.ok(block, `${demo} must embed truth`);
+		assert.deepEqual(JSON.parse(block[1].replace(/^const RAW = /, "")), truth);
+		assert.equal((truth.desk ?? truth).constants.resendCountdownMs.value, desktopMs, demo);
+		if (truth.mobile) assert.equal(truth.mobile.constants.resendSeconds.value, mobileSeconds, demo);
+	}
+});
+
 test("current locale-aware QA artifacts cover every supported locale", () => {
 	const supportedLocales = readSupportedLocales("apps/desktop/src/shared/locale.ts");
 	assert.deepEqual(

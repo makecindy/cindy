@@ -62,7 +62,7 @@ Var cindyDirectoryMessage
 
 !macro customHeader
   !ifndef BUILD_UNINSTALLER
-    !include "installer-directory-messages.nsh"
+    !include "${BUILD_RESOURCES_DIR}\installer-directory-messages.nsh"
 
     Function CindyGetUserSid
       StrCpy $cindyUserSid ""

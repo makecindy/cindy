@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -34,7 +35,10 @@ export function HomeZeroModelAction({
             {t(cloud ? 'onboarding.homeZeroModel.cloudDesc' : 'onboarding.homeZeroModel.desc')}
           </p>
         </div>
-        <button
+        <Button
+          variant="cta"
+          size="lg"
+          compact
           type="button"
           data-testid="home-zero-model-cta"
           onClick={() => {
@@ -44,15 +48,10 @@ export function HomeZeroModelAction({
             }
             void signInToCindy();
           }}
-          className={cn(
-            'inline-flex h-[34px] shrink-0 items-center justify-center rounded-full border-0 px-[18px]',
-            'bg-[var(--accent-cta-bg)] text-13 font-medium text-[var(--accent-pure-cta-fg)]',
-            'transition-colors hover:bg-[var(--accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface-elevated)]',
-            narrow && 'self-end',
-          )}
+          className={cn(narrow && 'self-end')}
         >
           {t(cloud ? 'onboarding.homeZeroModel.cloudCta' : 'onboarding.homeZeroModel.cta')}
-        </button>
+        </Button>
       </div>
       <button
         type="button"

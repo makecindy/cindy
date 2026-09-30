@@ -247,7 +247,11 @@ describe('AuthContext captcha 闸接线(静态源码断言)', () => {
   it('captcha 重试与取消动作都提供至少 44×44 的触控目标', () => {
     for (const testId of ['login.captcha.retry', 'login.captcha.cancel']) {
       const marker = `testID="${testId}"`;
-      const markerIndex = captchaWebViewSource.indexOf(marker);
+      const nativeMarkerIndex = captchaWebViewSource.indexOf(marker);
+      const nativeStart = captchaWebViewSource.lastIndexOf('<LoginNativeButton', nativeMarkerIndex);
+      expect(nativeStart).toBeGreaterThan(-1);
+      expect(captchaWebViewSource.slice(nativeStart, nativeMarkerIndex)).toContain('height={44}');
+      const markerIndex = captchaWebViewSource.lastIndexOf(marker);
       const actionStart = captchaWebViewSource.lastIndexOf('<Pressable', markerIndex);
       const actionSource = captchaWebViewSource.slice(actionStart, markerIndex);
       expect(markerIndex).toBeGreaterThan(-1);

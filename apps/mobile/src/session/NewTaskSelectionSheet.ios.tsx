@@ -1,19 +1,19 @@
-import { Button, Image, ProgressView, Text, Toggle } from '@expo/ui/swift-ui';
-import { buttonStyle, controlSize, disabled, font, foregroundStyle, frame } from '@expo/ui/swift-ui/modifiers';
+import { Button, Image, Picker, ProgressView, Text, Toggle } from '@expo/ui/swift-ui';
+import { disabled, font, foregroundStyle, frame, pickerStyle, tag, tint } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { iconSize, useTheme } from '@/theme';
 import { ComposerSheet } from './ComposerSheet';
 import { ComposerNativeRow } from './ComposerNativeRow';
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
 import { newSessionText } from './newSessionMessages';
-import { useLiquidGlassAvailable } from './useLiquidGlassAvailable';
+import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import type { NewTaskSelectionSheetProps } from './NewTaskSelectionSheet';
 
 /** One full-width native presentation, including navigation into remote folders. */
 export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const glass = useLiquidGlassAvailable();
+  const glassStyle = useNativeGlassButtonStyle({ prominent: true });
   const browsing = p.page === 'directory';
   const unavailable = p.busy || p.loading;
   const icon = (name: 'laptopcomputer' | 'folder' | 'bubble.left' | 'folder.badge.plus' | 'chevron.right' | 'arrow.up') =>
@@ -30,7 +30,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
       footer={browsing ? (
         <Button
           onPress={() => { if (p.path && !unavailable && !p.error) p.onChoose(p.path); }}
-          modifiers={[buttonStyle(glass ? 'glassProminent' : 'borderedProminent'), controlSize('large'), disabled(unavailable || !p.path || !!p.error)]}
+          modifiers={[...glassStyle, disabled(unavailable || !p.path || !!p.error)]}
           testID="newSession.remoteBrowseSelectCurrent"
         >
           <Text modifiers={[frame({ maxWidth: Infinity, minHeight: 44 })]}>{t('session.new.useCurrent')}</Text>
@@ -65,8 +65,14 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           <ComposerNativeRow title={t('session.new.parentDir')} leading={icon('arrow.up')}
             disabled={!p.parent || unavailable} onPress={() => { if (p.parent) p.onEnter(p.parent); }}
             testID="newSession.remoteBrowseParentButton" />
+          {p.drives.length ? <Picker label={t('session.new.drive')}
+            selection={p.drives.find(drive => drive.current)?.path ?? ''}
+            onSelectionChange={(next: string) => { if (next && !unavailable) p.onEnter(next); }}
+            modifiers={[pickerStyle('menu'), disabled(unavailable)]} testID="newSession.remoteBrowseDrivePicker">
+            {p.drives.map(drive => <Text key={drive.path} modifiers={[tag(drive.path)]}>{drive.name}</Text>)}
+          </Picker> : null}
           <Toggle label={newSessionText('showHiddenDirectories')} isOn={p.showHidden}
-            onIsOnChange={p.onShowHidden} modifiers={[disabled(p.busy)]} testID="newSession.remoteBrowseShowHidden" />
+            onIsOnChange={p.onShowHidden} modifiers={[disabled(p.busy), tint(colors.inputCaret)]} testID="newSession.remoteBrowseShowHidden" />
         </Section>
         {p.loading ? <Section><ProgressView /></Section> : null}
         {p.error ? <Section><Text modifiers={[foregroundStyle(colors.errorText)]}>{p.error}</Text></Section> : null}

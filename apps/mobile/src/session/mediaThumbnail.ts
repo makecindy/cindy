@@ -86,6 +86,9 @@ export function mediaThumbnailPhase(
   hasResolver: boolean,
 ): MediaThumbnailPhase {
   if (media.kind !== 'image') return { kind: 'fallback', reason: 'not-image' };
+  // A direct URL can still fail to decode or expire. Keep the same fallback
+  // frame instead of leaving an empty Image marked as ready to preview.
+  if (state.status === 'error') return { kind: 'fallback', reason: 'error' };
   if (media.previewable && media.url) return { kind: 'direct' };
   if (!media.url || !isDesktopLocalMediaUrl(media.url)) {
     return { kind: 'fallback', reason: 'not-desktop-url' };
@@ -96,6 +99,5 @@ export function mediaThumbnailPhase(
     if (!state.media.previewable) return { kind: 'fallback', reason: 'unsupported-mime' };
     return { kind: 'resolved', uri: state.media.url };
   }
-  if (state.status === 'error') return { kind: 'fallback', reason: 'error' };
   return { kind: 'resolving' };
 }

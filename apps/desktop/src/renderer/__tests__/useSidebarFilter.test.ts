@@ -381,10 +381,23 @@ describe('taskInfoFields（任务行右侧信息复选）', () => {
     expect(loadTaskInfoFields()).toEqual(['time', 'cost']);
   });
 
+  it('标签不再是任务信息项：旧存储里的 tags 静默丢弃，其余选择与顺序保留', () => {
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['cost', 'time', 'pr']));
+    expect(loadTaskInfoFields()).toEqual(['cost', 'time', 'pr']);
+    localStorage.setItem(TASK_INFO_KEY, '[]');
+    expect(loadTaskInfoFields()).toEqual([]);
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['time', 'tags']));
+    expect(loadTaskInfoFields()).toEqual(['time']);
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 1, fields: ['tags', 'time'] }));
+    expect(loadTaskInfoFields()).toEqual(['time']);
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 1, fields: ['tags'] }));
+    expect(loadTaskInfoFields()).toEqual([]);
+  });
+
   it('falls back to default on broken JSON or shape mismatch', () => {
     localStorage.setItem(TASK_INFO_KEY, '{not-json');
     expect(loadTaskInfoFields()).toEqual(['time']);
-    localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ fields: ['time'] }));
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ fields: ['cost'] }));
     expect(loadTaskInfoFields()).toEqual(['time']);
   });
 

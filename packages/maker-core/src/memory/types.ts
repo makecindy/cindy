@@ -52,6 +52,8 @@ export interface MemoryFrontmatter {
   type: MemoryType;
   /** ISO 8601 string */
   updatedAt: string;
+  /** Exact imported body length in UTF-16 units; absent on legacy/authored shards. */
+  bodyLength?: number;
 }
 
 /** 解析后的内存记录 (storage.list / read 返回) */
@@ -61,7 +63,7 @@ export interface MemoryRecord {
   /** 去掉 <type>_ 前缀和 .md 后缀, e.g. 'response_style' */
   slug: string;
   frontmatter: MemoryFrontmatter;
-  /** body 不含 frontmatter, 已 trim */
+  /** Body excludes storage frontmatter; imports retain their original whitespace. */
   body: string;
   /** 文件大小 (bytes), 用作 size warning 判断 */
   sizeBytes: number;
@@ -81,6 +83,8 @@ export interface WriteOptions {
   body: string;
   /** 'create' 撞名拒绝; 'update' 覆盖; 'append' 追加。默认 'create' */
   mode?: WriteMode;
+  /** Host import preserves whitespace and nested source frontmatter verbatim. */
+  preserveBody?: boolean;
 }
 
 export type WriteWarning = 'shard-size-exceeded' | 'index-size-exceeded';
@@ -139,6 +143,7 @@ export type MemoryErrorCode =
   | 'description-too-long'
   | 'title-too-long'
   | 'description-has-newline'
+  | 'version-conflict'
   | 'already-exists'
   | 'not-found'
   | 'path-traversal'

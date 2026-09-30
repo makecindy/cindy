@@ -43,6 +43,8 @@ export interface UseFeishuBotReturn {
   errorMessage: string | null;
   /** 是否已有持久化凭证（独立于当前连接状态） */
   hasSavedCreds: boolean;
+  /** 初次从 main 读取状态已经结束，搜索导航可以安全地选择未绑定服务。 */
+  hasLoadedState: boolean;
   /** 已绑定的 owner openId（仅显示用，可能为 null） */
   ownerOpenId: string | null;
 
@@ -92,6 +94,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
     () => cachedState?.errorMessage ?? null,
   );
   const [hasSavedCreds, setHasSavedCreds] = useState(() => cachedState?.hasSavedCreds ?? false);
+  const [hasLoadedState, setHasLoadedState] = useState(false);
   const [ownerOpenId, setOwnerOpenId] = useState<string | null>(
     () => cachedState?.ownerOpenId ?? null,
   );
@@ -158,6 +161,8 @@ export function useFeishuBot(): UseFeishuBotReturn {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error('getState failed:', msg);
+    } finally {
+      setHasLoadedState(true);
     }
   }, []);
 
@@ -399,6 +404,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
     status,
     errorMessage,
     hasSavedCreds,
+    hasLoadedState,
     ownerOpenId,
     lifecycleAnnouncement,
     setLifecycleAnnouncement,

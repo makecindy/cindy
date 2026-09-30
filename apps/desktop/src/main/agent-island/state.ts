@@ -1,3 +1,5 @@
+import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
+import { isCompactingWorkingStatus, publicToolPhase, publicToolResultPhase, type WorkingPhase } from '@cindy/maker-shared';
 import {
   parseReconnectAttemptMessage,
   type AgentEvent,
@@ -119,6 +121,8 @@ interface AgentIslandSessionState {
   detailSource: 'tool' | 'status' | 'interaction' | null;
   /** Localized transient reconnect progress; kept separate from tool/interaction detail. */
   reconnectStatus: string | null;
+  workingPhase?: WorkingPhase;
+  workingTools: Map<string, WorkingPhase>;
   currentToolUseId: string | null;
   toolDetailUntil: number | null;
   phase: AgentIslandSessionPhase;
@@ -482,6 +486,8 @@ export function applyAgentIslandUserPrompt(
   applyMeta(session, meta);
   markSessionRunning(state, session, now);
   session.phase = 'running';
+  session.workingPhase = 'thinking';
+  session.workingTools.clear();
   session.interactionKind = undefined;
   session.detail = '';
   session.detailSource = null;
@@ -570,17 +576,35 @@ export function applyAgentIslandEvent(
   // still running, so do not create/update an island entry or trigger any
   // completion transition here; the unclaimed terminal tail will do that.
   if (isTurnContinuationBoundaryEvent(event)) return false;
+  const parentToolUseId = asRecord(event.data)?.parentToolUseId;
+  const foreground = event.turnScope !== 'background' && !(typeof parentToolUseId === 'string' && isSubagentParentToolUseId(parentToolUseId));
+  if (event.type === 'thinking' && !foreground) return false;
   const assistantText = event.type === 'text' ? assistantTextFromEvent(event) : null;
   if (event.type === 'text' && !assistantText) return false;
 
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
+  if (event.type === 'compact_boundary') {
+    if (!foreground || !session.running || session.workingPhase !== 'compacting') return false;
+    session.workingPhase = 'thinking';
+    session.lastActivityAt = now;
+    return true;
+  }
+  if (event.type === 'thinking') {
+    // Observe only the event kind. Repeated reasoning deltas neither change
+    // public status nor wake the roster/resource subscribers.
+    if (!session.running || session.workingPhase === 'thinking' || session.workingPhase?.startsWith('reviewing-')) return false;
+    session.workingPhase = 'thinking';
+    session.lastActivityAt = now;
+    return true;
+  }
   if (event.type !== 'error') {
     session.reconnectStatus = null;
   }
   session.lastActivityAt = now;
 
   if (event.type === 'text') {
+    if (foreground) session.workingPhase = 'replying';
     clearToolDetail(session);
     const isFinal = asRecord(event.data)?.isFinal === true;
     const line = applyAssistantTextLine(session, assistantText ?? '', isFinal);
@@ -603,6 +627,9 @@ export function applyAgentIslandEvent(
       return true;
     }
     if (isRunning === true) {
+      if (!session.running) { session.workingPhase = 'thinking'; session.workingTools.clear(); }
+      if (isCompactingWorkingStatus(status)) session.workingPhase = 'compacting';
+      else if (status && session.workingPhase === 'compacting') session.workingPhase = 'thinking';
       markSessionRunning(state, session, now);
       if (session.pendingInteractionIds.size === 0) {
         session.phase = 'running';
@@ -638,6 +665,10 @@ export function applyAgentIslandEvent(
     const toolName = firstNonEmptyString(data?.toolName, data?.name);
     const toolUseId = toolUseIdsFromEvent(event)[0] ?? null;
     const toolInput = data?.input;
+    if (foreground) {
+      session.workingPhase = publicToolPhase(toolName, toolInput);
+      if (toolUseId) session.workingTools.set(toolUseId, session.workingPhase);
+    }
     const toolDescription = toolName
       ? formatIslandToolDetail(toolName, toolInput, { wording: state.toolWording }, data ?? undefined)
       : firstNonEmptyString(data?.description, data?.toolDescription);
@@ -663,6 +694,12 @@ export function applyAgentIslandEvent(
 
   if (event.type === 'tool_result') {
     const toolUseIds = toolUseIdsFromEvent(event);
+    const phase = toolUseIds.map(id => session.workingTools.get(id)).find(Boolean);
+    if (foreground) for (const id of toolUseIds) session.workingTools.delete(id);
+    if (foreground && session.workingPhase !== 'compacting') {
+      session.workingPhase = [...session.workingTools.values()].at(-1)
+        ?? publicToolResultPhase(phase ?? session.workingPhase ?? 'processing');
+    }
     if (
       session.currentToolUseId
       && (toolUseIds.length === 0 || toolUseIds.includes(session.currentToolUseId))
@@ -2201,6 +2238,8 @@ function getOrCreateSession(
     currentToolUseId: null,
     toolDetailUntil: null,
     phase: 'running',
+    workingPhase: 'thinking',
+    workingTools: new Map(),
     agentKind: meta.agentKind ?? 'agent',
     pendingInteractionIds: new Set(),
     pendingInteractionKinds: new Map(),
@@ -2236,6 +2275,7 @@ function getOrCreateSession(
 function cloneSession(session: AgentIslandSessionState): AgentIslandSessionState {
   return {
     ...session,
+    workingTools: new Map(session.workingTools),
     pendingInteractionIds: new Set(session.pendingInteractionIds),
     pendingInteractionKinds: new Map(session.pendingInteractionKinds),
     pendingInteractionDetails: new Map(session.pendingInteractionDetails),
@@ -2307,6 +2347,7 @@ function toSnapshot(session: AgentIslandSessionState): AgentIslandSessionSnapsho
     compactDetail: compactDetailForSession(session),
     messagePreview: session.messagePreview?.line ?? null,
     phase: session.phase,
+    workingPhase: session.running && session.phase === 'running' ? session.workingPhase : undefined,
     agentKind: session.agentKind,
     interactionKind: session.interactionKind,
     permissionAction: session.permissionRequestId
@@ -2328,7 +2369,9 @@ function isAttentionSession(session: AgentIslandSessionState): boolean {
 }
 
 function isIslandRelevantEvent(event: AgentEvent): boolean {
-  return event.type === 'status'
+  return event.type === 'compact_boundary'
+    || event.type === 'thinking'
+    || event.type === 'status'
     || event.type === 'text'
     || event.type === 'tool_use'
     || event.type === 'tool_result'

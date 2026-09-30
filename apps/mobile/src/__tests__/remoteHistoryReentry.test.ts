@@ -1,8 +1,9 @@
+import { MAX_RECENT_TASKS, rememberRecentTask } from '@/session/recentTasks';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { projectHistoryView, type HistoryViewPage } from '@cindy/maker-shared/message-window';
 import { clearRemoteHistoryViews, findRemoteHistoryView, getRemoteHistoryView,
-  mountRemoteHistoryView, MAX_INACTIVE_HISTORY_VIEWS } from '../session/remoteHistoryViews';
+  mountRemoteHistoryView } from '../session/remoteHistoryViews';
 import { remoteSessionStore } from '../session/remoteSessionStore';
 import { buildMobileHistoryRenderItems } from '../session/mobileHistoryRender';
 import type { RemoteMessage, RemoteSession } from '../session/types';
@@ -16,6 +17,7 @@ const reader = () => ({ readHistoryView: vi.fn(async () => page()),
   setHistoryExpanded: vi.fn(async () => undefined) });
 const releases: Array<() => void> = [];
 function mount(entry: ReturnType<typeof getRemoteHistoryView>, source = reader()) {
+  rememberRecentTask({ pathname: '/sessions/[sessionId]', params: { deviceId: entry.deviceId, sessionId: entry.sessionId, deviceName: 'PC' } });
   const release = mountRemoteHistoryView(entry, source, true);
   releases.push(release);
   return () => { releases.splice(releases.indexOf(release), 1); release(); };
@@ -152,24 +154,30 @@ describe('history reentry', () => {
   it('isolates device identities and evicts oldest detached views without removing the mounted view', async () => {
     const active = getRemoteHistoryView('other', 's', reader());
     mount(active);
-    for (let i = 0; i <= MAX_INACTIVE_HISTORY_VIEWS; i++) {
+    for (let i = 0; i <= MAX_RECENT_TASKS; i++) {
       const entry = getRemoteHistoryView('d', String(i), reader());
       const release = mount(entry);
       await entry.view.refresh();
       release();
     }
     expect(findRemoteHistoryView('d', '0')).toBeUndefined();
-    expect(findRemoteHistoryView('d', String(MAX_INACTIVE_HISTORY_VIEWS))).toBeDefined();
+    expect(findRemoteHistoryView('d', String(MAX_RECENT_TASKS))).toBeDefined();
     expect(findRemoteHistoryView('other', 's')).toBe(active.view);
   });
 
-  it('does not retain an oversized history window after unmount', async () => {
+  it('keeps large histories with the five resident lists and drops them on shared eviction', async () => {
     const source = reader();
     source.readHistoryView.mockResolvedValue(page('x'.repeat(3 * 1024 * 1024)));
     const entry = getRemoteHistoryView('d', 's', source);
     const release = mount(entry, source);
     await entry.view.refresh();
     release();
+    expect(findRemoteHistoryView('d', 's')).toBe(entry.view);
+    for (let i = 0; i < MAX_RECENT_TASKS; i++) {
+      rememberRecentTask({ pathname: '/sessions/[sessionId]', params: {
+        deviceId: 'd', deviceName: 'PC', sessionId: `replacement-${i}`,
+      } });
+    }
     expect(findRemoteHistoryView('d', 's')).toBeUndefined();
   });
 

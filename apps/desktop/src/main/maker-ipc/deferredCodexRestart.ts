@@ -15,12 +15,11 @@ import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-
  *   turn done/error / 会话关闭(register.ts 接线)→ onSessionSettled:
  *     仍有本地 Codex 会话在 turn 内 → 静默保留 pending,等下一个边界;
  *     全部空闲 → restart 先持有全部本地 host 的启动守卫并软关闭会话，再在
- *     守卫内执行 applyRuntime、替换 bridge，最后 onApplied 唤醒被 pending 门
- *     挡住的输入队列。
- *   排队门:pending 期间本地 Codex live 会话的输入队列被 coordinator 的
- *     hasPendingCredentialSwitch 谓词(register.ts 扩展)挡住 —— 否则排队消息
- *     会在旧 host 上接续开新 turn,重启被无限顺延(review P1 2026-07-23)。
- *     未 spawn 的会话不挡:fresh spawn 本来就读新设置。
+ *     守卫内执行 applyRuntime、替换 bridge，最后释放队列门并唤醒输入队列。
+ *   排队门只覆盖实际重启中的会话，包括刚软关闭的会话。等待其它任务空闲
+ *   期间不挡消息，否则一个长任务会冻结所有已打开任务的后续输入。
+ *   持续有任务运行时设置可以延后生效；不以冻结任务来强迫出现全局空闲。
+ *   重启失败也释放队列门，保留 pending 交给既有空闲边界与定时器重试。
  *   自愈兜底:stop/interrupt 可能只发 status idle 不发 done/error,事件路径
  *   不触发 —— 周期定时器重试,杜绝「事件丢失 → 永不生效」。
  *
@@ -45,11 +44,13 @@ export interface DeferredCodexRestartDeps {
   hasBusyLocalCodexSession: () => boolean;
   /**
    * 兑现前采集当前本地 Codex live 会话 id —— restart 会把它们全部关闭,收口后
-   * 通过 onApplied 逐个唤醒(它们的输入队列此前被 pending 门挡着,漏唤 = 冻结)。
+   * 通过 onQueueGateReleased 逐个唤醒，包括重启失败前已关闭的会话。
    */
   listLocalCodexSessionIds: () => string[];
-  /** 兑现成功后回调:唤醒被 pending 门挡住的会话输入队列。 */
+  /** 兑现成功后回调。 */
   onApplied?: (sessionIds: string[]) => void;
+  /** 实际重启尝试结束后释放输入，不把失败后的等待重试变成全局输入锁。 */
+  onQueueGateReleased?: (sessionIds: string[]) => void;
   /** 自愈兜底重试间隔覆写(测试用)。 */
   retryDelayMs?: number;
   logger?: {
@@ -79,6 +80,10 @@ export class DeferredCodexRestartService {
 
   isPending(): boolean {
     return this.pending;
+  }
+
+  isSessionRestarting(sessionId: string): boolean {
+    return this.pending && this.applying && this.pendingSessionIds.has(sessionId);
   }
 
   /**
@@ -154,7 +159,7 @@ export class DeferredCodexRestartService {
   }
 
   /**
-   * 当前被 pending 门挡住及此前重试已关闭的本地 Codex 会话名单。立即路径覆盖 pending
+   * 本次重启涉及及此前重试已关闭的本地 Codex 会话名单。立即路径覆盖 pending
    * 登记时,调用方在 prepare 关会话**前**采集,clear 后逐个补唤醒 —— 门谓词变
    * false 不会自己触发 drain,漏唤 = 队列停到下一次无关唤醒(review P1
    * 2026-07-23)。无 pending 时为空;facade 暂不可读时保留已采集名单，owner clear 会清空。
@@ -174,12 +179,14 @@ export class DeferredCodexRestartService {
   private async tryApply(): Promise<void> {
     if (!this.pending || this.applying) return;
     const gen = this.generation;
+    let wakeSessionIds: string[] = [];
     this.applying = true;
     try {
       // deps 走 dynamic Maker facade,owner 边界期间会抛 —— 整段兜住,
       // 靠兜底定时器(或边界时的 clear())收口,不产生 unhandled rejection。
       if (this.deps.hasBusyLocalCodexSession()) return;
       for (const id of this.deps.listLocalCodexSessionIds()) this.pendingSessionIds.add(id);
+      wakeSessionIds = [...this.pendingSessionIds];
       await this.deps.restart(async () => {
         if (gen !== this.generation) return false;
         // Claim inside the startup guard: a runtime callback can close the
@@ -237,6 +244,18 @@ export class DeferredCodexRestartService {
       }
     } finally {
       this.applying = false;
+      // Close cleanup may cancel an already scheduled drain. Wake only after
+      // the complete attempt settles, even when it failed or a newer setting
+      // remains pending. Never wake queues belonging to a previous owner.
+      if (gen === this.generation && wakeSessionIds.length > 0) {
+        try {
+          this.deps.onQueueGateReleased?.(wakeSessionIds);
+        } catch (err) {
+          this.deps.logger?.warn('deferred codex restart: queue wake failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
     }
   }
 

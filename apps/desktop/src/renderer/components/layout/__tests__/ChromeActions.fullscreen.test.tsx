@@ -23,6 +23,9 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 }));
 
 import { ChromeActions } from '../ChromeActions';
+vi.mock('@/features/device-link/useSharedTaskTasks', () => ({ useSharedTaskTasks: vi.fn() }));
+vi.mock('@/features/device-link/JoinSharedTaskDialog', () => ({ JoinSharedTaskDialog: () => null }));
+vi.mock('@/features/device-link/SharedTaskEndedNotice', () => ({ SharedTaskEndedNotice: () => null }));
 
 afterEach(() => {
   cleanup();

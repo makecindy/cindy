@@ -33,6 +33,8 @@ const numericKeys = [
   "operation",
   "elapsedMs",
   "foregroundElapsedMs",
+  "wallElapsedMs",
+  "lifecycleElapsedMs",
   "count",
 ];
 const phases = ["subscription", "history", "pending", "projection", "goal"];

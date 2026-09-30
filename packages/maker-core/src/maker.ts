@@ -29,6 +29,7 @@ import type {
   AgentBuiltinCommand,
   ListAgentSkillsOptions,
   ListAgentSkillsResult,
+  ListRuntimeSkillsOptions,
 } from './types/palette.js';
 import type {
   ListCustomizationsOptions,
@@ -1396,6 +1397,22 @@ export class Maker {
     return filter(await mergePiRuntimeSkillStatuses(result, session.getRuntimeCapabilities()));
   }
 
+  /** Host-only runtime view used when a capability must match the live engine winner. */
+  async listAgentRuntimeSkills(
+    agentKind: AgentKind,
+    opts: ListRuntimeSkillsOptions & { sessionId?: string },
+  ): Promise<ListAgentSkillsResult> {
+    const { sessionId, ...agentOpts } = opts;
+    const agent = this.requireAgent(agentKind);
+    const session = sessionId ? this.getSession(sessionId) : undefined;
+    const result = await agent.listRuntimeSkills(agentOpts);
+    return agent.filterActiveSkillCommands(
+      result,
+      agentOpts.remoteHostId ?? session?.remoteHostId ?? undefined,
+      session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined,
+    );
+  }
+
   /** ChatInput `@` palette entries, routed by agent kind. */
   async scanAtResources(
     agentKind: AgentKind,
@@ -1462,6 +1479,12 @@ export class Maker {
    */
   async forkSdkSession(agentKind: AgentKind, opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
     return this.requireAgent(agentKind).forkSdkSession(opts);
+  }
+
+  async requiresCodexThreadHostTransfer(
+    opts: Parameters<BaseAgent['requiresCodexThreadHostTransfer']>[0],
+  ): Promise<boolean> {
+    return this.requireAgent('codex').requiresCodexThreadHostTransfer(opts);
   }
 
   // ── Agent 鉴权 ───────────────────────────────────────────────────────────

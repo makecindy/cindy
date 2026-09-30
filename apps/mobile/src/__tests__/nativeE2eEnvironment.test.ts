@@ -127,8 +127,6 @@ describe('native e2e environment', () => {
     expect(runner).toContain("process.env.XDT_MOBILE_E2E_EXPO_TERMINATE_BEFORE_OPEN ?? 'true'");
     expect(runner).toContain("process.env.XDT_MOBILE_E2E_EXPO_OPEN_BEFORE_TEST ?? 'true'");
     expect(runner).toContain("if (expoUrl && expoTerminateBeforeOpen === 'true') terminateExpoApp(platform);");
-    expect(runner).toContain('function expoUrlWithRoute(url, route)');
-    expect(runner).toContain('XDT_MOBILE_E2E_HOST_AUTOMATIONS_URL');
     expect(runner).toContain('function terminateExpoApp(platform)');
     expect(runner).toContain('function terminateApp(targetAppId, platform)');
     expect(runner).toContain('function launchNativeApp(targetAppId, platform)');
@@ -213,7 +211,7 @@ describe('native e2e environment', () => {
     expect(localSmoke).toContain('async function assertExpoReady(url');
     expect(localSmoke).toContain('Expo Go native E2E needs Metro before Maestro opens the app.');
     expect(localSmoke).toContain('EXPO_PUBLIC_XDT_API_BASE_URL: apiBase');
-    expect(localSmoke).toContain("&& (flowSuite === 'visual' || flowSuite === 'full' || flowSuite === 'file' || flowSuite === 'automations')");
+    expect(localSmoke).toContain("&& (flowSuite === 'visual' || flowSuite === 'full' || flowSuite === 'file')");
     expect(localSmoke).toContain("flowSuite === 'visual' ? `${mockHostDeviceId}-${flowSlug(flow)}` : mockHostDeviceId");
     expect(localSmoke).toContain("if (flowSuite === 'full' && flow === 'fixture_controls_smoke.yaml') return 'controls';");
     expect(localSmoke).toContain("if (suite === 'controls') return 'controls';");

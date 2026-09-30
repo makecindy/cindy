@@ -154,3 +154,61 @@ describe("viewer display dimensions", () => {
     expect(session.lease?.display.width).toBe(3840);
   });
 });
+
+const adjustedLease = {
+  lease: "lease",
+  controlling: false,
+  display: { id: "virtual", width: 960, height: 710 },
+  viewerDisplayRequest: { width: 1920, height: 1420 },
+};
+async function adjustedSession(result: unknown) {
+  const session = new RemoteDesktopViewerSession((async (request) => {
+    if (request.op === "capabilities")
+      return { version: 1, enabled: true, displays: [{ id: "1" }] };
+    if (request.op === "start")
+      return {
+        lease: "lease",
+        controlling: false,
+        display: { id: "1", width: 2560, height: 1440 },
+      };
+    if (request.op === "control") return { controlling: request.enabled };
+    return result;
+  }) as DesktopViewerRequest);
+  await session.connect({ isCurrent: () => true });
+  await session.control(true);
+  return session;
+}
+it("accepts acknowledged OS logical geometry and releases control until reacquired", async () => {
+  const session = await adjustedSession(adjustedLease);
+  await expect(session.fitDisplay(1920, 1420)).resolves.toMatchObject({
+    display: adjustedLease.display,
+    controlling: false,
+  });
+  await session.control(true);
+  expect(session.lease?.controlling).toBe(true);
+});
+it.each([
+  { viewerDisplayRequest: undefined },
+  { viewerDisplayRequest: { width: 1920, height: 1080 } },
+  { display: { id: "virtual", width: 960, height: 540 } },
+  { display: { id: "virtual", width: 960.5, height: 710 } },
+  { display: { id: "", width: 960, height: 710 } },
+  { display: { id: "virtual", width: 0, height: 0 } },
+  { lease: "stale" },
+  { controlling: true },
+])(
+  "rejects unacknowledged, invalid or stale adjusted geometry: %j",
+  async (patch) => {
+    const session = await adjustedSession({ ...adjustedLease, ...patch });
+    await expect(session.fitDisplay(1920, 1420)).rejects.toThrow(
+      "INVALID_RESPONSE",
+    );
+    expect(session.lease?.display.id).toBe("1");
+  },
+);
+it("keeps explicit system modes exact even with a virtual-display acknowledgement", async () => {
+  const session = await adjustedSession(adjustedLease);
+  await expect(session.fitDisplay(1920, 1420, false, "mode")).rejects.toThrow(
+    "INVALID_RESPONSE",
+  );
+});

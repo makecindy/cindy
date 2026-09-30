@@ -108,6 +108,23 @@ describe('Local Skill management', () => {
     expect(screen.getByText('skillhub.management.managedElsewhere')).toBeTruthy();
   });
 
+  it('allows a built-in Skill to be disabled but not uninstalled', async () => {
+    render(<LocalSkillControls skill={{ ...skill, builtIn: true, canUninstall: false }} />);
+    const control = screen.getByRole('switch') as HTMLButtonElement;
+    expect(control.disabled).toBe(false);
+    fireEvent.click(control);
+    await waitFor(() => expect(mocks.setEnabled).toHaveBeenCalledWith({
+      absolutePath: skill.absolutePath,
+      skillId: skill.id,
+      enabled: false,
+    }));
+    fireEvent.keyDown(screen.getByRole('button', { name: 'skillhub.management.moreLabel' }), {
+      key: 'Enter',
+    });
+    expect(await screen.findByText('skillhub.management.builtInManaged')).toBeTruthy();
+    expect((await screen.findByRole('menuitem')).getAttribute('aria-disabled')).toBe('true');
+  });
+
   it('offers a cleanup retry with the Main receipt after partial cleanup', async () => {
     mocks.uninstall.mockResolvedValueOnce({ success: true, cleanupToken: 'receipt' });
     render(<LocalSkillControls skill={skill} />);

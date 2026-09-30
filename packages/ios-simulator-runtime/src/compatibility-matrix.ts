@@ -61,33 +61,49 @@ interface IOSSimulatorNativeReleaseCompatibilityCase {
   };
 }
 
-export const IOS_SIMULATOR_NATIVE_RELEASE_COMPATIBILITY_VERSION = 1;
+export const IOS_SIMULATOR_NATIVE_RELEASE_COMPATIBILITY_VERSION = 2;
 
 /**
- * Host-owned release promotion registry. Entries are exact combinations that
- * completed the sandboxed framebuffer, H.264, HID, recovery, and WDA fallback
- * gates. New Xcode or runtime builds stay unknown until their evidence is
- * reviewed and a new exact entry is checked in.
+ * Host-owned, per-capability release registry. Positive verdicts require the
+ * corresponding functional gates, including sandbox and recovery/fallback.
+ * A loaded symbol or an accepted HID command is not proof of input delivery.
+ * New builds stay unknown until an exact entry with evidence is checked in.
  */
-const IOS_SIMULATOR_NATIVE_RELEASE_COMPATIBILITY_CASES =
-  Object.freeze<readonly IOSSimulatorNativeReleaseCompatibilityCase[]>([
-    {
-      id: "darwin-25.3.0_xcode-26.4-17E192_ios-26.4-23E244_arm64",
-      hostOsRelease: "25.3.0",
-      xcodeProductVersion: "26.4",
-      xcodeBuildVersion: "17E192",
-      runtimeIdentifier:
-        "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
-      runtimeBuildVersion: "23E244",
-      architecture: "arm64",
-      capabilities: {
-        sidecar: true,
-        h264Stream: true,
-        continuousInput: true,
-        multiTouch: true,
-      },
+const IOS_SIMULATOR_NATIVE_RELEASE_COMPATIBILITY_CASES = Object.freeze<
+  readonly IOSSimulatorNativeReleaseCompatibilityCase[]
+>([
+  {
+    id: "darwin-25.3.0_xcode-26.4-17E192_ios-26.4-23E244_arm64",
+    hostOsRelease: "25.3.0",
+    xcodeProductVersion: "26.4",
+    xcodeBuildVersion: "17E192",
+    runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
+    runtimeBuildVersion: "23E244",
+    architecture: "arm64",
+    capabilities: {
+      sidecar: true,
+      h264Stream: true,
+      continuousInput: true,
+      multiTouch: true,
     },
-  ]);
+  },
+  {
+    // Functional evidence and limits: docs/ios-simulator-xcode27-compatibility.md.
+    id: "darwin-27.0.0_xcode-27.0-27A266a_ios-27.0-24A434_arm64",
+    hostOsRelease: "27.0.0",
+    xcodeProductVersion: "27.0",
+    xcodeBuildVersion: "27A266a",
+    runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+    runtimeBuildVersion: "24A434",
+    architecture: "arm64",
+    capabilities: {
+      sidecar: true,
+      h264Stream: true,
+      continuousInput: true,
+      multiTouch: true,
+    },
+  },
+]);
 
 export class IOSSimulatorCompatibilityMatrixError extends Error {
   constructor(message: string) {
@@ -278,9 +294,7 @@ export function resolveIOSSimulatorNativeReleaseCompatibility(
     matchedCaseId: matched.id,
     sidecar: promotedVerdict(matched.capabilities.sidecar),
     h264Stream: promotedVerdict(matched.capabilities.h264Stream),
-    continuousInput: promotedVerdict(
-      matched.capabilities.continuousInput,
-    ),
+    continuousInput: promotedVerdict(matched.capabilities.continuousInput),
     multiTouch: promotedVerdict(matched.capabilities.multiTouch),
   };
 }

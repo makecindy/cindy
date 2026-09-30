@@ -1,6 +1,6 @@
 import { BrowserWindow } from 'electron';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 
 import {
   BOT_REMOTE_RESOURCE_KIND,
@@ -82,7 +82,7 @@ export function scheduleBotRemoteResourceChangedForSession(
       .from(botSessionLinks)
       .where(and(
         eq(botSessionLinks.sessionId, sessionId),
-        eq(botSessionLinks.role, 'canonical'),
+        inArray(botSessionLinks.role, ['canonical', 'delegation']),
         isNull(botSessionLinks.archivedAt),
       ))
       .limit(1)

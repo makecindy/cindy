@@ -18,7 +18,7 @@ describe('plugin motion design contracts', () => {
     expect(previewCardRule).not.toContain('color-mix');
   });
 
-  it('wraps recommended filters against the actual catalog content width', () => {
+  it('keeps recommended filters on one line against the actual catalog content width', () => {
     const contentQueryStart = pluginMotionCss.indexOf(
       '@container plugin-management-content (max-width: 720px)',
     );
@@ -32,6 +32,7 @@ describe('plugin motion design contracts', () => {
     expect(contentQuery).toContain('.plugin-catalog-toolbar');
     expect(contentQuery).toContain('flex-direction: column;');
     expect(contentQuery).toContain('.plugin-catalog-filters');
-    expect(contentQuery).toContain('flex-wrap: wrap;');
+    expect(contentQuery).toContain('width: auto;');
+    expect(contentQuery).not.toContain('flex-wrap: wrap;');
   });
 });

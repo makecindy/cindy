@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getCindyMakeTestRecovery,
   getCindyMakeComposerPhase,
   getCindyMakePendingTest,
   getCindyMakePreparation,
@@ -87,6 +88,102 @@ describe('Cindy Make waiting-for-test card', () => {
         }),
       ).toBeNull();
     }
+  });
+});
+
+describe('Cindy Make test flow recovery', () => {
+  const continued: ChatMessage = {
+    clientId: 'old-completion',
+    role: 'assistant',
+    content: '',
+    systemCardType: 'cindy-make-complete',
+    systemCardData: { reportedAt: 123, commit: 'a'.repeat(40), continuedAt: 456 },
+  };
+  const request: ChatMessage = { clientId: 'edit', role: 'user', content: 'edit again' };
+  const reply: ChatMessage = {
+    clientId: 'reply',
+    role: 'assistant',
+    content: 'Done',
+    turnCompleted: true,
+  };
+  const select = (messages: ChatMessage[]) =>
+    getCindyMakeTestRecovery({
+      session: { ...session, status: 'active' },
+      messages,
+      busy: false,
+      historyLoaded: true,
+    });
+
+  it('offers checks after Continue Editing, including when reopening without another edit', () => {
+    expect(
+      getCindyMakePendingTest({
+        session: { ...session, status: 'active' },
+        messages: [continued],
+        busy: false,
+      }),
+    ).toBeNull();
+    expect(select([continued])).toBe('old-completion');
+  });
+
+  it('recovers a later successful reply without report_complete and yields to a fresh completion', () => {
+    expect(select([continued, request])).toBeNull();
+    expect(select([continued, request, reply])).toBe('reply');
+    const fresh = {
+      ...continued,
+      clientId: 'new-completion',
+      systemCardData: { reportedAt: 789, commit: 'b'.repeat(40) },
+    };
+    expect(select([continued, request, reply, fresh])).toBeNull();
+    expect(select([continued, request, reply, fresh, request, reply])).toBe('reply');
+    expect(select([request, reply])).toBe('reply');
+  });
+
+  it('does not mistake incomplete, failed, or nested replies for a finished editing turn', () => {
+    expect(select([continued, request, { ...reply, turnCompleted: undefined }])).toBeNull();
+    expect(select([continued, request, { ...reply, turnCompleted: false }])).toBeNull();
+    expect(select([continued, request, { ...reply, parentToolUseId: 'subagent' }])).toBeNull();
+    expect(select([continued, request, reply, request])).toBeNull();
+  });
+
+  it('waits for loaded idle history and leaves non-active Make tasks alone', () => {
+    const base = {
+      session: { ...session, status: 'active' as const },
+      messages: [continued, request, reply],
+      busy: false,
+      historyLoaded: true,
+    };
+    expect(getCindyMakeTestRecovery({ ...base, busy: true })).toBeNull();
+    expect(getCindyMakeTestRecovery({ ...base, historyLoaded: false })).toBeNull();
+    for (const extra of [
+      { source: 'desktop' as const },
+      { status: 'archived' as const },
+      { clearedAt: '2026-09-19T10:00:00Z' },
+    ]) {
+      expect(
+        getCindyMakeTestRecovery({ ...base, session: { ...base.session, ...extra } }),
+      ).toBeNull();
+    }
+  });
+
+  it('keeps optional actions available after Continue Editing and follows the latest result', () => {
+    const base = {
+      session: { ...session, status: 'active' as const },
+      busy: false,
+      historyLoaded: true,
+    };
+    expect(getCindyMakeTestRecovery({ ...base, messages: [continued] })).toBe(continued.clientId);
+    expect(
+      getCindyMakeTestRecovery({
+        ...base,
+        messages: [continued, request, reply],
+      }),
+    ).toBe(reply.clientId);
+    expect(
+      getCindyMakeTestRecovery({
+        ...base,
+        messages: [continued, request, reply, request, { ...reply, clientId: 'next-reply' }],
+      }),
+    ).toBe('next-reply');
   });
 });
 

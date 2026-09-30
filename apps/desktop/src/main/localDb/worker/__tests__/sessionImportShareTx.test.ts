@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { tx } from '../opHandlers/tx.js';
@@ -151,6 +153,7 @@ describe('tx session.importShare', () => {
   beforeEach(() => {
     db = new Database(':memory:');
     createTables(db);
+    db.exec(readFileSync(resolve(process.cwd(), 'drizzle/0114_shared_task_events.sql'), 'utf8'));
   });
 
   afterEach(() => {
@@ -353,7 +356,11 @@ describe('tx session.importShare', () => {
       replaceSessions?: Array<{ id: string; status: 'active' | 'archived' }>;
     }).replaceSessions = [{ id: 'existing-session', status: 'active' }];
 
+    db.prepare(
+      "INSERT INTO shared_task_events (shared_task_id, session_id, revision, kind, terminal, recorded_at) VALUES ('old-share', 'existing-session', 1, 'authority', 0, 1)",
+    ).run();
     tx(db, args);
+    expect(db.prepare("SELECT terminal FROM shared_task_events WHERE shared_task_id = 'old-share' ORDER BY id DESC LIMIT 1").get()).toEqual({ terminal: 1 });
 
     expect(
       db.prepare('SELECT status FROM sessions WHERE id = ?').get('existing-session'),
@@ -404,7 +411,11 @@ describe('tx session.importShare', () => {
     }).replaceSessions = [{ id: 'existing-session', status: 'active' }];
     (args.args.orca.workers[0].session as Record<string, unknown>).title = 42;
 
+    db.prepare(
+      "INSERT INTO shared_task_events (shared_task_id, session_id, revision, kind, terminal, recorded_at) VALUES ('old-share', 'existing-session', 1, 'authority', 0, 1)",
+    ).run();
     expect(() => tx(db, args)).toThrow();
+    expect(db.prepare("SELECT terminal FROM shared_task_events WHERE shared_task_id = 'old-share' ORDER BY id DESC LIMIT 1").get()).toEqual({ terminal: 0 });
 
     expect(
       db.prepare('SELECT status FROM sessions WHERE id = ?').get('existing-session'),

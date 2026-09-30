@@ -1,11 +1,12 @@
 import path from 'node:path';
-import { mkdir, readFile, realpath } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import type {
   CindyMakeMergeError,
   CindyMakeMergeState,
   MakeFeatureMergePlan,
 } from '../../shared/cindyMakeMerge.js';
 import { CINDY_PERSONAL_BRANCH, makeSourceCheckoutPath, makeSourceRoot } from './sourcePaths.js';
+import { removeMergeWorktreeResidue } from './mergeCleanupResidue.js';
 
 import {
   snapshotContent,
@@ -98,6 +99,236 @@ export async function verifyMergeWorktree(
     throw mergeError('unavailable');
   }
   return worktree;
+}
+
+/** Remove a completed candidate worktree and its disposable branch ref. */
+export async function cleanupMergedCandidate(
+  userData: string,
+  state: CindyMakeMergeState,
+  git: MergeGit,
+  canCleanup: () => boolean = () => !state.sessionId,
+): Promise<boolean> {
+  if (
+    state.status !== 'merged' ||
+    !canCleanup() ||
+    !state.commit ||
+    !COMMIT.test(state.commit) ||
+    !state.tree ||
+    !/^[0-9a-f]{40,64}$/i.test(state.tree)
+  )
+    return false;
+  git = ownedGit(git, canCleanup);
+  const worktree = mergeWorktree(userData, state.id);
+  const branchRef = 'refs/heads/' + mergeBranch(state.id);
+  const source = await assertSource(userData, git);
+  const exists = (target: string) =>
+    lstat(target).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    });
+  const branchTip = async () => {
+    try {
+      return (
+        await git(['rev-parse', '--verify', '--quiet', branchRef + '^{commit}'], source)
+      ).trim();
+    } catch (error) {
+      if ((error as { exitCode?: number }).exitCode !== 1) throw error;
+      return undefined;
+    }
+  };
+  const unregistered = async () =>
+    !(await git(['worktree', 'list', '--porcelain', '-z'], source))
+      .split('\0')
+      .some(
+        (entry) =>
+          entry === 'branch ' + branchRef ||
+          (entry.startsWith('worktree ') && samePath(entry.slice(9), worktree)),
+      );
+  const workspace = await exists(worktree);
+  let tip = await branchTip();
+  const legacy = !state.strategy && !state.feature;
+  if (!workspace && !tip) return unregistered();
+  if (tip && tip !== state.commit && !legacy) return false;
+  if ((await git(['rev-parse', state.commit + '^{tree}'], source)).trim() !== state.tree)
+    return false;
+  try {
+    await git(['merge-base', '--is-ancestor', state.commit, CINDY_PERSONAL_BRANCH], source);
+  } catch (error) {
+    if ((error as { exitCode?: number }).exitCode !== 1) throw error;
+    // Packaging may already have restored the source while a Windows file lock deferred cleanup.
+    const retained = (
+      await git(['rev-parse', '--verify', 'refs/cindy-make/failed-builds/' + state.commit], source)
+    ).trim();
+    if (retained !== state.commit) return false;
+  }
+  let removalError: unknown;
+  const marker = path.join(worktree, '.git');
+  const retainLegacyTip = async () => {
+    if (legacy && tip)
+      await git(
+        ['update-ref', 'refs/cindy-make/backups/' + state.id + '/legacy-merge/' + tip, tip],
+        source,
+      );
+  };
+  if (workspace && (await exists(marker))) {
+    if (!tip) return false;
+    await verifyMergeWorktree(userData, state, git);
+    if (
+      (await snapshotContent(git, worktree)) !== state.tree ||
+      (await git(['rev-parse', 'HEAD'], worktree)).trim() !== tip
+    )
+      return false;
+    if (legacy) {
+      // Old file-only adoption committed in the personal checkout, leaving the
+      // candidate dirty and sometimes still in its original merge. Finish only
+      // that already-adopted tree, retaining its distinct history before removal.
+      if (
+        (await gitOperationExists(git, worktree, 'MERGE_HEAD')) &&
+        (await git(['rev-parse', 'MERGE_HEAD'], worktree)).trim() !== state.upstreamCommit
+      )
+        return false;
+      const normalized = await commitLocalFiles(
+        git,
+        worktree,
+        'Cindy Make: preserve completed legacy merge',
+        true,
+        state.tree,
+      );
+      tip = normalized.commit;
+      await retainLegacyTip();
+    } else await assertNoGitOperation(git, worktree);
+    // Git also refuses tracked/untracked edits made after the snapshot check.
+    try {
+      await git(['-c', 'core.longpaths=true', 'worktree', 'remove', worktree], source);
+    } catch (error) {
+      removalError = error;
+    }
+  }
+
+  if (!(await unregistered()) || (await exists(marker))) {
+    if (removalError) throw removalError;
+    return false;
+  }
+  // A successful Git exit does not prove the physical directory is gone. Older
+  // cleanups could also delete the ref first; adoption still has to be retained.
+  if ((await exists(worktree)) && !(await removeMergeWorktreeResidue(worktree, canCleanup)))
+    return false;
+  if (!(await unregistered())) return false;
+  // Keep the exact branch until the directory is gone, and preserve a changed tip.
+  await retainLegacyTip();
+  if (tip) await git(['update-ref', '--no-deref', '-d', branchRef, tip], source);
+  else if (await branchTip()) return false;
+  return true;
+}
+
+/** Discard only an unassigned update candidate, never the personal checkout or a task's work. */
+export async function cancelUpstreamMerge(
+  userData: string,
+  state: CindyMakeMergeState,
+  git: MergeGit,
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
+  if (
+    state.feature ||
+    state.sessionId ||
+    !['conflict', 'failed', 'cancelled'].includes(state.status)
+  )
+    throw mergeError('unavailable');
+  git = ownedGit(git, isCurrent);
+  const worktree = mergeWorktree(userData, state.id);
+  const source = await assertSource(userData, git);
+  const branchRef = 'refs/heads/' + mergeBranch(state.id);
+  const workspace = await lstat(worktree).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  });
+  let tip: string;
+  if (workspace) {
+    await verifyMergeWorktree(userData, state, git);
+    if (
+      (await gitOperationExists(git, worktree, 'rebase-merge')) ||
+      (await gitOperationExists(git, worktree, 'rebase-apply'))
+    ) {
+      await git(['rebase', '--abort'], worktree);
+    } else if (await gitOperationExists(git, worktree, 'MERGE_HEAD')) {
+      await git(['merge', '--abort'], worktree);
+    }
+    await assertNoGitOperation(git, worktree);
+    tip = (await git(['rev-parse', 'HEAD'], worktree)).trim();
+    // No force: unexpected edits, untracked files and worktree locks must survive.
+    await git(['worktree', 'remove', worktree], source);
+  } else {
+    // A crash may leave only the branch, or may have completed both cleanup steps.
+    tip = (
+      await git(['rev-parse', '--verify', branchRef + '^{commit}'], source).catch((error) => {
+        if ((error as { exitCode?: number }).exitCode === 128) return '';
+        throw error;
+      })
+    ).trim();
+    if (!tip) return;
+  }
+  if (!COMMIT.test(tip)) throw mergeError('unavailable');
+  const worktrees = await git(['worktree', 'list', '--porcelain', '-z'], source);
+  if (worktrees.split('\0').includes('branch ' + branchRef)) throw mergeError('busy');
+  await git(['update-ref', '--no-deref', '-d', branchRef, tip], source);
+}
+
+/** Discard a confirmed, stopped build candidate. Original task/source checkouts are never removed. */
+export async function discardFeatureMerge(
+  userData: string,
+  state: CindyMakeMergeState,
+  git: MergeGit,
+  canCleanup: () => boolean,
+): Promise<boolean> {
+  if (!(state.feature || state.taskOwned) || !state.cancellationRequested || !canCleanup())
+    return false;
+  git = ownedGit(git, canCleanup);
+  const source = await assertSource(userData, git);
+  const worktree = mergeWorktree(userData, state.id);
+  const branchRef = 'refs/heads/' + mergeBranch(state.id);
+  const exists = (target: string) =>
+    lstat(target).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    });
+  const tip = (
+    await git(['rev-parse', '--verify', '--quiet', branchRef + '^{commit}'], source).catch(
+      (error) => {
+        if ((error as { exitCode?: number }).exitCode === 1) return '';
+        throw error;
+      },
+    )
+  ).trim();
+  const marker = path.join(worktree, '.git');
+  let removalError: unknown;
+  if (await exists(marker)) {
+    if (!COMMIT.test(tip)) return false;
+    await verifyMergeWorktree(userData, state, git);
+    // Conflict edits are disposable only on this explicit cancellation path,
+    // after the resolver has exited. A single force still respects worktree locks.
+    try {
+      await git(['-c', 'core.longpaths=true', 'worktree', 'remove', '--force', worktree], source);
+    } catch (error) {
+      removalError = error;
+    }
+  }
+  const unregistered = async () =>
+    !(await git(['worktree', 'list', '--porcelain', '-z'], source))
+      .split('\0')
+      .some(
+        (entry) =>
+          entry === 'branch ' + branchRef ||
+          (entry.startsWith('worktree ') && samePath(entry.slice(9), worktree)),
+      );
+  if (!(await unregistered()) || (await exists(marker))) {
+    if (removalError) throw removalError;
+    return false;
+  }
+  if ((await exists(worktree)) && !(await removeMergeWorktreeResidue(worktree, canCleanup)))
+    return false;
+  if (!(await unregistered())) return false;
+  if (tip) await git(['update-ref', '--no-deref', '-d', branchRef, tip], source);
+  return true;
 }
 
 /** Rebase only in the retained candidate, then move the clean personal checkout to its result. */
@@ -386,7 +617,9 @@ export async function prepareUpstreamMerge(
   initial: CindyMakeMergeState,
   git: MergeGit,
   publish: (state: CindyMakeMergeState) => Promise<void>,
+  isCurrent: () => boolean = () => true,
 ): Promise<CindyMakeMergeState> {
+  git = ownedGit(git, isCurrent);
   const worktree = mergeWorktree(userData, initial.id);
   if (!COMMIT.test(initial.upstreamCommit)) throw mergeError('unavailable');
   const source = await assertSource(userData, git);
@@ -401,11 +634,21 @@ export async function prepareUpstreamMerge(
     () => '',
   );
   if (main.trim()) {
-    // A customized local main is never reset behind the user's back.
+    // A customized local main is never reset behind the user's back. Distinguish
+    // a main that is simply newer than the selected target from a divergent one:
+    // the former is normal when a Dev checkout is compared with an older release.
     try {
       await git(['merge-base', '--is-ancestor', main.trim(), initial.upstreamCommit], source);
-    } catch {
-      throw mergeError('localMain');
+    } catch (error) {
+      // Git exit 1 means "not an ancestor"; other failures cannot prove divergence.
+      if ((error as { exitCode?: number }).exitCode !== 1) throw error;
+      try {
+        await git(['merge-base', '--is-ancestor', initial.upstreamCommit, main.trim()], source);
+      } catch (error) {
+        if ((error as { exitCode?: number }).exitCode !== 1) throw error;
+        throw mergeError('localMain');
+      }
+      throw mergeError('localMainAhead');
     }
     await git(['update-ref', `refs/cindy-make/backups/${initial.id}/main`, main.trim()], source);
   }
@@ -478,5 +721,5 @@ export async function prepareUpstreamMerge(
   }
   // Rebase does not replay edits introduced only in a merge commit. Never silently adopt their loss.
   if (state.rebaseReview) return { ...state, status: 'conflict' };
-  return applyUpstreamMerge(userData, state, git);
+  return applyUpstreamMerge(userData, state, git, isCurrent);
 }

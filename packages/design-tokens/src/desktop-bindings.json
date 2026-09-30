@@ -2143,6 +2143,58 @@
     "segmented-hover-bg": {
       "light": "component.defaults.segmented-hover-bg.light",
       "dark": "component.defaults.segmented-hover-bg.dark"
+    },
+    "task-tag-red": {
+      "light": "semantic.defaults.task-tag-red.light",
+      "dark": "semantic.defaults.task-tag-red.dark"
+    },
+    "task-tag-orange": {
+      "light": "semantic.defaults.task-tag-orange.light",
+      "dark": "semantic.defaults.task-tag-orange.dark"
+    },
+    "task-tag-yellow": {
+      "light": "semantic.defaults.task-tag-yellow.light",
+      "dark": "semantic.defaults.task-tag-yellow.dark"
+    },
+    "task-tag-green": {
+      "light": "semantic.defaults.task-tag-green.light",
+      "dark": "semantic.defaults.task-tag-green.dark"
+    },
+    "task-tag-blue": {
+      "light": "semantic.defaults.task-tag-blue.light",
+      "dark": "semantic.defaults.task-tag-blue.dark"
+    },
+    "task-tag-purple": {
+      "light": "semantic.defaults.task-tag-purple.light",
+      "dark": "semantic.defaults.task-tag-purple.dark"
+    },
+    "task-tag-gray": {
+      "light": "semantic.defaults.task-tag-gray.light",
+      "dark": "semantic.defaults.task-tag-gray.dark"
+    },
+    "task-tag-pink": {
+      "light": "semantic.defaults.task-tag-pink.light",
+      "dark": "semantic.defaults.task-tag-pink.dark"
+    },
+    "task-tag-coral": {
+      "light": "semantic.defaults.task-tag-coral.light",
+      "dark": "semantic.defaults.task-tag-coral.dark"
+    },
+    "task-tag-teal": {
+      "light": "semantic.defaults.task-tag-teal.light",
+      "dark": "semantic.defaults.task-tag-teal.dark"
+    },
+    "task-tag-indigo": {
+      "light": "semantic.defaults.task-tag-indigo.light",
+      "dark": "semantic.defaults.task-tag-indigo.dark"
+    },
+    "task-tag-white": {
+      "light": "semantic.defaults.task-tag-white.light",
+      "dark": "semantic.defaults.task-tag-white.dark"
+    },
+    "task-tag-white-check": {
+      "light": "semantic.defaults.task-tag-white-check.light",
+      "dark": "semantic.defaults.task-tag-white-check.dark"
     }
   },
   "retained": {

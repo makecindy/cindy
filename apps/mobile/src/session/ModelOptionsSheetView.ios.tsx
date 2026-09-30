@@ -1,6 +1,7 @@
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
 import { Text, Toggle } from '@expo/ui/swift-ui';
-import { disabled } from "@expo/ui/swift-ui/modifiers";
+import { disabled, tint } from "@expo/ui/swift-ui/modifiers";
+import { useTheme } from "@/theme";
 import { useTranslation } from "react-i18next";
 import type { ModelOptionsSheetViewProps } from "./ModelOptionsSheetView";
 import { ComposerNativeRow } from "./ComposerNativeRow";
@@ -15,6 +16,7 @@ import {
 } from "./modelPickerRows";
 export function ModelOptionsSheetView(p: ModelOptionsSheetViewProps) {
   const { t } = useTranslation();
+  const { colors } = useTheme();
   useDraftModelMemoryVersion();
   useSessionModelMirrorVersion();
   const meta = buildRowMetaLine({
@@ -78,7 +80,8 @@ export function ModelOptionsSheetView(p: ModelOptionsSheetViewProps) {
                   value,
                 );
             }}
-            modifiers={[disabled(!!p.disabled)]}
+            // 表单 Toggle 显式用统一开关蓝,不继承 Host 的 textPrimary 黑白 seed。
+            modifiers={[disabled(!!p.disabled), tint(colors.inputCaret)]}
             testID={`${p.testID}.fastToggle`}
           />
         </Section>

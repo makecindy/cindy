@@ -63,9 +63,9 @@ describe('resolveNewMakerDefaultTuple', () => {
     { defaultEffort: 'max', efforts: ['low', 'medium', 'high'], expected: 'high' },
     { defaultEffort: undefined, efforts: [], expected: null },
   ])('keeps a usable model with incomplete or stale effort metadata: %j', ({ defaultEffort, efforts, expected }) => {
-    const candidate = { ...model('gpt-5.6-sol'), defaultEffort, efforts } as CatalogModel;
+    const candidate = { ...model('gpt-6-astra'), defaultEffort, efforts } as CatalogModel;
     expect(resolve([provider({ id: 'openai', access: 'subscription', models: { codex: [candidate] } })]))
-      .toMatchObject({ model: 'gpt-5.6-sol', effort: expected });
+      .toMatchObject({ model: 'gpt-6-astra', effort: expected });
   });
 
   it('没有来源或清单仍在加载时不编造默认组合', () => {
@@ -87,13 +87,13 @@ describe('resolveNewMakerDefaultTuple', () => {
         id: 'openai',
         access: 'subscription',
         models: {
-          codex: [{ ...model('chatgpt/gpt-5.6-sol', 'medium'), efforts: ['medium', 'high'] }],
+          codex: [{ ...model('chatgpt/gpt-6-astra', 'medium'), efforts: ['medium', 'high'] }],
         },
       }),
       expected: {
         vendor: 'codex',
         providerId: 'openai',
-        model: 'chatgpt/gpt-5.6-sol',
+        model: 'chatgpt/gpt-6-astra',
         effort: 'medium',
       },
     },
@@ -102,12 +102,12 @@ describe('resolveNewMakerDefaultTuple', () => {
       source: provider({
         id: 'anthropic',
         access: 'subscription',
-        models: { 'claude-code': [model('claude-opus-5')] },
+        models: { 'claude-code': [model('claude-opus-5-5')] },
       }),
       expected: {
         vendor: 'cc',
         providerId: 'anthropic',
-        model: 'claude-opus-5',
+        model: 'claude-opus-5-5',
         effort: 'high',
       },
     },
@@ -140,7 +140,7 @@ describe('resolveNewMakerDefaultTuple', () => {
     expect(resolve([source])).toEqual(expected);
   });
 
-  it('Gateway 优先于全部订阅，与来源清单顺序无关', () => {
+  it('Opus → Astra → Gateway，与来源清单顺序无关', () => {
     const gateway = provider({
       id: 'xd',
       access: 'managed',
@@ -151,21 +151,24 @@ describe('resolveNewMakerDefaultTuple', () => {
     const anthropic = provider({
       id: 'anthropic',
       access: 'subscription',
-      models: { 'claude-code': [model('claude-opus-5')] },
+      models: { 'claude-code': [model('claude-opus-5-5')] },
     });
     const openai = provider({
       id: 'openai',
       access: 'subscription',
-      models: { codex: [model('chatgpt/gpt-5.6-sol')] },
+      models: { codex: [model('chatgpt/gpt-6-astra')] },
     });
     for (const sources of [
       [gateway, anthropic, openai],
       [openai, anthropic, gateway],
     ]) {
-      expect(resolve(sources)).toMatchObject({ vendor: 'pi', providerId: 'xd' });
+      expect(resolve(sources)).toMatchObject({ vendor: 'cc', providerId: 'anthropic', model: 'claude-opus-5-5' });
     }
-    // 无 Gateway 时保留订阅之间的稳定回退顺序。
-    expect(resolve([anthropic, openai])).toMatchObject({ providerId: 'openai' });
+    expect(resolve([anthropic, openai])).toMatchObject({ providerId: 'anthropic' });
+    expect(resolve([gateway, openai])).toMatchObject({ providerId: 'openai', vendor: 'codex' });
+    expect(resolve([gateway])).toMatchObject({ providerId: 'xd', vendor: 'pi' });
+    expect(resolve([anthropic, openai, gateway], new Set(['codex', 'pi']))).toMatchObject({ providerId: 'openai', vendor: 'codex' });
+    expect(resolve([anthropic, openai, gateway], new Set(['pi']))).toMatchObject({ providerId: 'xd', vendor: 'pi' });
   });
 
   it('本机 xAI 订阅也不压过 Gateway 推荐组合', () => {
@@ -197,13 +200,13 @@ describe('resolveNewMakerDefaultTuple', () => {
     'unmarked',
     'no-image',
     'no-pi',
-  ] as const)('Gateway 不可用（%s）时回退订阅', (reason) => {
+  ] as const)('Gateway 不可用（%s）时排除该路由，保留订阅', (reason) => {
     const gatewayModel = model('z-ai/glm-5.3-flash', 'high', ['pi'], ['text', 'image']);
     const gateway = provider({ id: 'xd', access: 'managed', models: { pi: [gatewayModel] } });
     const openai = provider({
       id: 'openai',
       access: 'subscription',
-      models: { codex: [model('gpt-5.6-sol')] },
+      models: { codex: [model('gpt-6-astra')] },
     });
     if (reason === 'disconnected') gateway.connected = false;
     if (reason === 'suspended') gateway.suspended = true;
@@ -213,6 +216,7 @@ describe('resolveNewMakerDefaultTuple', () => {
     if (reason === 'unmarked') gatewayModel.newSessionDefault = undefined;
     if (reason === 'no-image') gatewayModel.modalities = { input: ['text'], output: ['text'] };
     const agents = reason === 'no-pi' ? new Set(['cc', 'codex'] as const) : allAgents;
+    expect(resolve([gateway], agents)).toBeNull();
     expect(resolve([gateway, openai], agents)).toMatchObject({
       providerId: 'openai',
       vendor: 'codex',
@@ -236,11 +240,22 @@ describe('resolveNewMakerDefaultTuple', () => {
     });
   });
 
+  it('does not put Opus or Astra on another harness when their native harness is absent', () => {
+    const anthropic = provider({ id: 'anthropic', access: 'subscription', models: {
+      'claude-code': [model('claude-opus-5-5')], pi: [model('claude-opus-5-5')], codex: [model('claude-opus-5-5')],
+    } });
+    const openai = provider({ id: 'openai', access: 'subscription', models: {
+      codex: [model('gpt-6-astra')], pi: [model('gpt-6-astra')], 'claude-code': [model('gpt-6-astra')],
+    } });
+    expect(resolve([anthropic], new Set(['codex', 'pi']))).toBeNull();
+    expect(resolve([openai], new Set(['cc', 'pi']))).toBeNull();
+  });
+
   it('发现失败的订阅不压过健康 Gateway', () => {
     const failedOpenai = provider({
       id: 'openai',
       access: 'subscription',
-      models: { codex: [model('chatgpt/gpt-5.6-sol')] },
+      models: { codex: [model('chatgpt/gpt-6-astra')] },
       failed: true,
     });
     const gateway = provider({
@@ -291,7 +306,7 @@ describe('resolveNewMakerDefaultTuple', () => {
     const openai = provider({
       id: 'openai',
       access: 'subscription',
-      models: { codex: [model('chatgpt/gpt-5.6-sol', 'medium')] },
+      models: { codex: [model('chatgpt/gpt-6-astra', 'medium')] },
     });
     expect(resolve([openai])).toMatchObject({ effort: 'medium' });
   });

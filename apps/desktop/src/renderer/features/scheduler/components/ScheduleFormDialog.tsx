@@ -10,6 +10,7 @@ import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
 import { extractIpcError } from '@/utils/ipcError';
 import { Tip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import {
@@ -35,6 +36,7 @@ import {
   buildHookCommandForScriptFile,
   canSubmitSessionBinding,
   isExplicitScheduleModelUnavailable,
+  missingRequiredTemplateParamLabel,
   needsBoundSessionGenerationRouteResolution,
   parsePreRunHookTimeoutMs,
   resolveScheduleGenerationProviderId,
@@ -522,13 +524,18 @@ export function ScheduleFormDialog({
     }
     let input = toInput();
     if (selectedTemplate && !promptDirty) {
+      const missingLabel = missingRequiredTemplateParamLabel(selectedTemplate, paramValues);
+      if (missingLabel) {
+        toast.warning(t('scheduler.editor.validation.templateParamRequired', { label: missingLabel }));
+        return;
+      }
       try {
         input = {
           ...input,
           prompt: applyTemplateParams(selectedTemplate.prompt ?? '', paramValues, selectedTemplate.parameters),
         };
-      } catch (e) {
-        toast.warning(e instanceof Error ? e.message : String(e));
+      } catch {
+        toast.warning(t('scheduler.editor.validation.templateApplyFailed'));
         return;
       }
     }
@@ -1110,10 +1117,13 @@ export function ScheduleFormDialog({
                     >
                       <FolderOpen size={14} aria-hidden />
                     </button>
-                    {/* 超时刻意不做进 UI(规则 20:高级细节):数据层仍支持 timeoutMs
-                        (MCP / agent 可设),未设 = 不限时(无默认超时);
-                        表单状态里隐形往返,编辑不丢 MCP 设过的值。 */}
-                    <button
+                        {/* 项目自动化(.cindy/automations/schedules.json)的 config schema 尚无
+                            executionMode/scriptConfig 字段,展示切换器会让 script 配置被静默丢弃
+                            ——该形态下隐藏,项目自动化对 script 模式的支持另行迭代。 */}
+                    <Button
+                      variant={hookGenOpen ? 'primary' : 'secondary'}
+                      size="lg"
+                      compact
                       type="button"
                       onClick={() => {
                         setHookGenOpen((v) => !v);
@@ -1121,35 +1131,24 @@ export function ScheduleFormDialog({
                         setHookGenFailure(null);
                       }}
                       aria-expanded={hookGenOpen}
-                      className={cn(
-                        'inline-flex h-[38px] shrink-0 items-center gap-1.5 rounded-full border px-3.5',
-                        'text-12 font-medium transition-colors focus:outline-none',
-                        hookGenOpen
-                          ? 'border-[var(--confirm-btn-secondary-border)] bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)]'
-                          : 'border-[var(--settings-input-border)] text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
-                      )}
                     >
                       <Sparkles size={12} aria-hidden />
                       {form.preRunHookCommand.trim()
                         ? t('scheduler.editor.preRunHook.aiModify')
                         : t('scheduler.editor.preRunHook.aiCreate')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void runHookTest()}
-                      disabled={hookTesting || !form.preRunHookCommand.trim()}
-                      className={cn(
-                        'inline-flex h-[38px] shrink-0 items-center gap-1.5 rounded-full border border-[var(--settings-input-border)] px-3.5',
-                        'text-12 font-medium text-[var(--settings-btn-secondary-text)] transition-colors',
-                        'hover:bg-[var(--surface-hover)] focus:outline-none',
-                        'disabled:cursor-not-allowed disabled:opacity-50',
-                      )}
-                    >
-                      <Play size={12} aria-hidden />
-                      {hookTesting
-                        ? t('scheduler.editor.preRunHook.testing')
-                        : t('scheduler.editor.preRunHook.test')}
-                    </button>
+                    </Button>
+                        <Button
+                          variant="secondary"
+                          size="lg"
+                          loading={hookTesting}
+                          type="button"
+                          onClick={() => void runHookTest()}
+                          disabled={hookTesting || !form.preRunHookCommand.trim()}
+                          className="shrink-0"
+                        >
+                          <Play size={12} aria-hidden />
+                          {t('scheduler.editor.preRunHook.test')}
+                        </Button>
                   </div>
                   {/* AI 生成内联面板:描述想要的检查条件 → 生成脚本落盘 → 命令回填 */}
                   {hookGenOpen && (
@@ -1196,60 +1195,54 @@ export function ScheduleFormDialog({
                               </ul>
                             </div>
                           )}
-                          <button
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            compact
                             type="button"
                             onClick={() => {
                               onOpenChange(false);
                               navigate('/settings?tab=providers');
                             }}
-                            className={cn(
-                              'mt-2 inline-flex h-7 select-none items-center rounded-full border px-3 text-11 font-medium',
-                              'border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-                              'text-[var(--settings-btn-secondary-text)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                            )}
+                            className="mt-2 select-none"
                           >
                             {t('scheduler.editor.preRunHook.aiFailure.openProviders')}
-                          </button>
+                          </Button>
                         </div>
                       )}
                       <div className="flex items-center justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setHookGenOpen(false);
-                            setHookGenDesc('');
-                            setHookGenFailure(null);
-                          }}
-                          disabled={hookGenerating}
-                          className={cn(
-                            'inline-flex h-8 items-center rounded-full px-3 text-12',
-                            'text-[var(--cmd-palette-item-meta)] transition-colors',
-                            'hover:bg-[var(--surface-hover)] hover:text-[var(--msg-assistant-text)]',
-                            'focus:outline-none disabled:opacity-50',
-                          )}
-                        >
-                          {t('scheduler.editor.preRunHook.aiCancel')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void runHookGenerate()}
-                          disabled={hookGenerating || !hookGenDesc.trim()}
-                          className={cn(
-                            'inline-flex h-8 items-center gap-1.5 rounded-full px-4 text-12 font-medium',
-                            'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)] transition-opacity',
-                            'focus:outline-none disabled:cursor-not-allowed disabled:opacity-50',
-                          )}
-                        >
-                          {hookGenerating && (
-                            <span
-                              aria-hidden
-                              className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current"
-                            />
-                          )}
-                          {hookGenerating
-                            ? t('scheduler.editor.preRunHook.aiGenerating')
-                            : t('scheduler.editor.preRunHook.aiGenerate')}
-                        </button>
+                            <Button
+                              variant="secondary"
+                              size="md"
+                              tone="quiet"
+                              compact
+                              type="button"
+                              onClick={() => {
+                                setHookGenOpen(false);
+                                setHookGenDesc('');
+                                setHookGenFailure(null);
+                              }}
+                              disabled={hookGenerating}
+                            >
+                              {t('scheduler.editor.preRunHook.aiCancel')}
+                            </Button>
+                            <Button
+                              variant="cta"
+                              size="md"
+                              compact
+                              loading={hookGenerating}
+                              type="button"
+                              onClick={() => void runHookGenerate()}
+                              disabled={hookGenerating || !hookGenDesc.trim()}
+                            >
+                              {hookGenerating && (
+                                <span
+                                  aria-hidden
+                                  className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current"
+                                />
+                              )}
+                              {t('scheduler.editor.preRunHook.aiGenerate')}
+                            </Button>
                       </div>
                     </div>
                   )}
@@ -1290,29 +1283,33 @@ export function ScheduleFormDialog({
             </div>
             )}
 
-            {/* script 模式的提交行:agent 模式的提交按钮长在下方 prompt footer 里,
-                script 模式不渲染 prompt 区块,需要独立的提交入口。 */}
+              {/* 项目自动化(.cindy/automations/schedules.json)的 config schema 尚无
+                  executionMode/scriptConfig 字段,展示切换器会让 script 配置被静默丢弃
+                  ——该形态下隐藏,项目自动化对 script 模式的支持另行迭代。 */}
             {isScriptMode && (
               <div className="flex shrink-0 justify-end">
-                <button
-                  type="button"
-                  aria-label={isEdit ? t('scheduler.editor.promptDialog.saveAria') : t('scheduler.editor.promptDialog.createAria')}
-                  onClick={() => void handleSubmit()}
-                  disabled={submitting}
-                  className={cn(
-                    'flex h-[34px] min-w-[68px] shrink-0 items-center justify-center rounded-full px-4',
-                    'text-sm font-medium leading-none',
-                    'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                    'disabled:opacity-50',
-                  )}
-                >
-                  {submitLabel}
-                </button>
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    loading={submitting}
+                    type="button"
+                    aria-label={
+                      isEdit
+                        ? t('scheduler.editor.promptDialog.saveAria')
+                        : t('scheduler.editor.promptDialog.createAria')
+                    }
+                    onClick={() => void handleSubmit()}
+                    disabled={submitting}
+                    className="min-w-[68px] shrink-0"
+                  >
+                    {submitLabel}
+                  </Button>
               </div>
             )}
 
-            {/* 提示词编辑框固定高度(内容超出在 textarea 内滚动),不随其它区块展开被挤压;
-                弹窗整体高度随内容自适应,超过 max-h 时由 body 滚动承接 */}
+              {/* 项目自动化(.cindy/automations/schedules.json)的 config schema 尚无
+                  executionMode/scriptConfig 字段,展示切换器会让 script 配置被静默丢弃
+                  ——该形态下隐藏,项目自动化对 script 模式的支持另行迭代。 */}
             {!isScriptMode && (
             <div className="flex shrink-0 flex-col gap-2">
               <div className="flex items-center gap-2">
@@ -1389,24 +1386,27 @@ export function ScheduleFormDialog({
                       }}
                     />
                   </div>
-                  <button
-                    type="button"
-                    aria-label={isEdit ? t('scheduler.editor.promptDialog.saveAria') : t('scheduler.editor.promptDialog.createAria')}
-                    onClick={() => void handleSubmit()}
-                    disabled={submitting}
-                    className={cn(
-                      'flex h-[34px] min-w-[68px] shrink-0 items-center justify-center rounded-full px-4',
-                      'text-sm font-medium leading-none',
-                      'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                      'disabled:opacity-50',
-                    )}
-                  >
-                    {submitLabel}
-                  </button>
+                      <Button
+                        variant="primary"
+                        size="lg"
+                        loading={submitting}
+                        type="button"
+                        aria-label={
+                          isEdit
+                            ? t('scheduler.editor.promptDialog.saveAria')
+                            : t('scheduler.editor.promptDialog.createAria')
+                        }
+                        onClick={() => void handleSubmit()}
+                        disabled={submitting}
+                        className="min-w-[68px] shrink-0"
+                      >
+                        {submitLabel}
+                      </Button>
                 </div>
               </div>
-              {/* 绑定形态下显式选了模型:把 runner setModel 的副作用说出口 ——
-                  下次触发会把绑定会话切到该模型,这是用户决策需要的信息。 */}
+                  {/* 项目自动化(.cindy/automations/schedules.json)的 config schema 尚无
+                      executionMode/scriptConfig 字段,展示切换器会让 script 配置被静默丢弃
+                      ——该形态下隐藏,项目自动化对 script 模式的支持另行迭代。 */}
               {isBound && form.model.trim() !== '' && (
                 <p className="px-1 text-11 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
                   {t('scheduler.editor.runSession.switchModelHint')}

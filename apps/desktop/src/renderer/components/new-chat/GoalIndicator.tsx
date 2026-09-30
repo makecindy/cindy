@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * GoalIndicator —— 会话内 /goal 进行中的状态 chip(composer 上方)。
  *
@@ -177,30 +178,23 @@ function GoalEditor({
           )}
           <div className="flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
-              <button
-                type="button"
-                className="h-8 rounded-full border px-3 text-12 transition-colors hover:bg-[var(--surface-elevated)]"
-                style={{
-                  backgroundColor: 'var(--surface-elevated)',
-                  borderColor: 'var(--border-default)',
-                  color: 'var(--text-primary)',
-                }}
-                disabled={saving}
-              >
+              <Button variant="secondary" size="md" compact type="button" disabled={saving}>
                 {t('goal.editGoal.cancel')}
-              </button>
+              </Button>
             </AlertDialog.Cancel>
-            <button
+            <Button
+              variant="cta"
+              size="md"
+              compact
+              loading={saving}
               type="button"
-              className="h-8 rounded-full px-4 text-12 font-medium transition-opacity hover:opacity-85 disabled:opacity-45"
-              style={{ backgroundColor: 'var(--accent-cta-bg-pure)', color: 'var(--accent-pure-cta-fg)' }}
               disabled={saving || !isValid}
               onClick={() => {
                 void save();
               }}
             >
-              {saving ? t('goal.editGoal.saving') : t('goal.editGoal.save')}
-            </button>
+              {t('goal.editGoal.save')}
+            </Button>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>

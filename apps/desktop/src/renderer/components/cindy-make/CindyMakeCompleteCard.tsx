@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Check, CircleAlert } from 'lucide-react';
+import { Check, CircleAlert, CircleHelp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
@@ -10,16 +10,20 @@ export function CindyMakeCompleteCard({
   composer = false,
   heading,
   description,
+  detail,
   busy,
   failed,
+  needsCheck,
   children,
 }: {
   data?: Record<string, unknown>;
   composer?: boolean;
   heading?: string;
   description?: string;
+  detail?: ReactNode;
   busy?: boolean;
   failed?: boolean;
+  needsCheck?: boolean;
   children?: ReactNode;
 }) {
   const { t, i18n } = useTranslation();
@@ -61,7 +65,9 @@ export function CindyMakeCompleteCard({
           {busy ? (
             <Spinner size={18} />
           ) : failed ? (
-            <CircleAlert size={18} className="text-[var(--status-danger)]" aria-hidden />
+            <CircleAlert size={18} className="text-[var(--error-fg)]" aria-hidden />
+          ) : needsCheck ? (
+            <CircleHelp size={18} className="text-[var(--text-secondary)]" aria-hidden />
           ) : (
             <Check size={18} className="text-[var(--status-success)]" aria-hidden />
           )}
@@ -73,6 +79,7 @@ export function CindyMakeCompleteCard({
               {description ?? t('cindyMake.complete.description')}
             </p>
           </div>
+          {detail}
           {meta.length > 0 && (
             <p className="mt-2 break-words text-12 text-[var(--text-secondary)]">
               {meta.join(' · ')}

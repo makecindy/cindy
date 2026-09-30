@@ -21,7 +21,14 @@ try {
   );
   const input = join(directory, "ReceiverTests.swift");
   const executable = join(directory, "receiver-tests");
-  writeFileSync(input, source + "\n" + fixture);
+  const numbers = readFileSync(
+    new URL(
+      "../modules/cindy-remote-presentation/ios/RemoteDesktopBridgeNumber.swift",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  writeFileSync(input, numbers + "\n" + source + "\n" + fixture);
   execFileSync(
     "xcrun",
     ["swiftc", "-parse-as-library", input, "-o", executable],

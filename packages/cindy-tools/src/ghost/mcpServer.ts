@@ -899,12 +899,14 @@ export async function handleGhostCall(
     setup_plan?: GhostSetupPlanInput;
   },
   agentToolUseId?: string,
+  signal?: AbortSignal,
 ): Promise<McpTextResult> {
   try {
     const result = await deps.callGhostTool({
       ghostId: input.ghost_id,
       tool: input.tool,
       args: input.args ?? {},
+      ...(signal ? { signal } : {}),
       ...(input.grant_only === true ? { grantOnly: true } : {}),
       ...(input.attachments && input.attachments.length > 0
         ? { attachments: input.attachments }
@@ -1243,12 +1245,12 @@ export function createCindyGhostsMcpServer(
 
   if (deps.connectAccount) server.tool(
     "connect_account",
-    "Request an account connection card in a teammate conversation. For a built-in Grok account use kind=host, id=grok; for an installed plugin use kind=plugin and its real ghost_id. Do not invent connectors, URLs or credentials. The card returns immediately; finish unrelated work and end the turn. The Host resumes you after authorization succeeds. Grok login does not authorize X or change your model.",
-    { kind: z.enum(["host", "plugin"]), id: z.string().min(1).max(256), reauthorize: z.boolean().optional().describe("Only for an explicit reconnect request or a known authorization/scope failure") },
-    async ({ kind, id, reauthorize }) => {
+    "Request an account connection for an installed plugin in the current conversation: kind=plugin and its real ghost_id. The Host presents its supported setup card, including protected manual connection forms, without calling a plugin business tool. Use reauthorize=true when the user asks to reconnect, replace a token, update authorization, or reconfigure an existing connection; saved configuration must not skip that request. Ordinary tasks wait until setup completes or is cancelled; teammate tasks may return a pending card immediately, then the Host resumes them after authorization. Follow the returned status and do not infer provider access from setup readiness. Only if the Host reports no supported setup action, follow the installed plugin's documented login method on the machine running the task. Never request credentials in chat or tool arguments. Built-in Grok login (kind=host, id=grok) remains available only in teammate conversations and does not authorize X or change your model. Do not invent connectors, URLs or credentials.",
+    { kind: z.enum(["host", "plugin"]), id: z.string().min(1).max(256), reauthorize: z.boolean().optional().describe("Reopen supported setup for an explicit reconnect, token replacement, authorization update or reconfiguration request, or a known authorization/scope failure") },
+    async ({ kind, id, reauthorize }, extra) => {
       if (kind === "host" && id !== "grok") return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, errorCode: "UNSUPPORTED_CONNECTION" }) }], isError: true };
       try {
-        const result = await deps.connectAccount!(kind === "host" ? { kind, id: "grok", reauthorize } : { kind, id, reauthorize });
+        const result = await deps.connectAccount!(kind === "host" ? { kind, id: "grok", reauthorize } : { kind, id, reauthorize }, extra.signal);
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch {
         return { content: [{ type: "text" as const, text: JSON.stringify({ ok: false, errorCode: "CONNECTION_UNAVAILABLE" }) }], isError: true };
@@ -1327,7 +1329,7 @@ export function createCindyGhostsMcpServer(
         ),
     },
     async (input, extra) =>
-      handleGhostCall(deps, input, extractAgentToolUseId(extra)),
+      handleGhostCall(deps, input, extractAgentToolUseId(extra), extra.signal),
   );
 
   server.tool(
