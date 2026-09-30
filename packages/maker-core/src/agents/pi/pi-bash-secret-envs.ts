@@ -17,6 +17,11 @@
 export const PI_BASH_STATIC_SECRET_ENV_NAMES = [
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
+  // 模型请求偏好档（BYOM / thinking 档快照）与 Fast 模型清单：同样属于
+  // 父进程专用控制面，不得继承进可被 LLM 调用的 bash 子进程（上游 #52xx 补入，
+  // 本 PR 把名单抽成单一来源时必须一并带上，否则后台命令能读到前台读不到的键）。
+  'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+  'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
   'CINDY_PI_PACKAGE_MANAGEMENT',
   // 后台命令通道的 bearer:一次获批的 bash / 后台命令子进程拿到它就能伪造控制请求,

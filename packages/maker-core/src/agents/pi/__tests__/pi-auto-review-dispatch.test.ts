@@ -3590,6 +3590,17 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       `const SECRET_ENV_NAMES = new Set<string>(${JSON.stringify(PI_BASH_STATIC_SECRET_ENV_NAMES)});`,
     );
     expect(PI_BASH_STATIC_SECRET_ENV_NAMES).toContain('CINDY_PI_PERMISSION_FILE');
+    // 模型请求偏好档与 Fast 模型清单也是父进程专用控制面：它们在 bridge 生成代码
+    // 与后台命令 env 两条路径上都会被剥离。抽成单一来源后，合并上游时新增的名字
+    // 必须一并进这个名单（否则可被 LLM 调用的 bash 子进程会读到它们）。
+    for (const name of [
+      'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+      'CINDY_PI_FAST_MODELS',
+      'CINDY_PI_TURN_TOOL_POLICY',
+      'CINDY_PI_BACKGROUND_COMMANDS',
+    ]) {
+      expect(PI_BASH_STATIC_SECRET_ENV_NAMES).toContain(name);
+    }
     expect(path.normalize(captured.env.CINDY_PI_BASH_PACKAGE_HOME as string)).toBe(
       path.normalize(path.join(configHome, 'bash-package-home')),
     );
