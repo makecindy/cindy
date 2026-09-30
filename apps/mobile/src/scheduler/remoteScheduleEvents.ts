@@ -49,9 +49,19 @@ export const remoteScheduleEventStore = {
   apply(deviceId: string, payload?: unknown): void {
     if (!deviceId) return;
     const projection = projectScheduleEvent(payload);
-    const prev = snapshots.get(deviceId) ?? emptySnapshot;
     const clearsUnread = projection.unreadImpact === 'may-clear-schedule'
       || projection.unreadImpact === 'clear-all';
+    // 不要求任何刷新、也不带 run 状态的事件(runtime-state 高频诊断)不换快照:否则挂载屏
+    // 每次都重渲染,且会覆盖上一个可操作事件(如 completed)的 lastProjection。
+    if (
+      projection.refresh.runRefresh.mode === 'none'
+      && !projection.refresh.scheduleList
+      && !projection.refresh.sessionIndex
+      && !projection.refresh.unreadSummary
+      && projection.unreadImpact === 'none'
+      && projection.runPatch.status === 'unknown'
+    ) return;
+    const prev = snapshots.get(deviceId) ?? emptySnapshot;
     // Invalidate once before notifying all screens. Consumer-local force loads
     // otherwise launch competing scans for the same authoritative event.
     if (projection.refresh.sessionIndex || projection.refresh.scheduleList || clearsUnread) {

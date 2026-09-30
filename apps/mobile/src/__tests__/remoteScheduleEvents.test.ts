@@ -178,6 +178,33 @@ describe('remote schedule event store', () => {
     expect(remoteScheduleEventStore.getSnapshot('dev-1').lastProjection?.refresh.runRefresh).toEqual({ mode: 'all' });
   });
 
+  it('ignores runtime-state diagnostics without invalidating, notifying, or replacing the last projection', () => {
+    remoteScheduleEventStore.apply('dev-1', {
+      type: 'completed', scheduleId: 'sched-1', runId: 'run-1', sessionId: 'chat-1',
+    });
+    const before = remoteScheduleEventStore.getSnapshot('dev-1');
+    const invalidationVersion = getScheduleIndexInvalidationVersion('dev-1');
+    const sub = vi.fn();
+    const off = remoteScheduleEventStore.subscribe(sub);
+    try {
+      remoteScheduleEventStore.apply('dev-1', { type: 'runtime-state', snapshot: { inFlight: 0 } });
+      expect(sub).not.toHaveBeenCalled();
+      expect(remoteScheduleEventStore.getSnapshot('dev-1')).toBe(before);
+      expect(getScheduleIndexInvalidationVersion('dev-1')).toBe(invalidationVersion);
+
+      // 未知的新类型仍走保守的全量刷新。
+      remoteScheduleEventStore.apply('dev-1', { type: 'future-event' });
+      expect(sub).toHaveBeenCalledTimes(1);
+      expect(getScheduleIndexInvalidationVersion('dev-1')).toBe(invalidationVersion + 1);
+      expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({
+        runsVersion: before.runsVersion + 1,
+        scheduleListVersion: before.scheduleListVersion + 1,
+        sessionIndexVersion: before.sessionIndexVersion + 1,
+        unreadVersion: before.unreadVersion + 1,
+      });
+    } finally { off(); }
+  });
+
   it('unreadClearVersion 只随未读清除类事件(read / all-read)递增', () => {
     // fired / completed 属非清除类(none / may-increase),不 bump。
     remoteScheduleEventStore.apply('dev-1', { type: 'fired', scheduleId: 'sched-1', runId: 'run-1' });
