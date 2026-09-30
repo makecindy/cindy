@@ -5,6 +5,7 @@ import {
   connectionIssueHint,
   connectionIssueTitle,
   describeRemoteComposerBlockingError,
+  shouldLatchOutboxHoldForSyncError,
   describeRemoteError,
   formatRemoteError,
   humanizeRemoteError,
@@ -82,6 +83,13 @@ describe('remoteStatus', () => {
     expect(describeRemoteComposerBlockingError("[CHANNEL_NOT_ALLOWED] channel 'x'"))
       .toContain('版本不支持');
     expect(describeRemoteComposerBlockingError(null)).toBeNull();
+    expect(describeRemoteComposerBlockingError('unknown failure')).toBeNull();
+    expect(describeRemoteComposerBlockingError('OUTBOX_STORAGE_INVALID')).toBeNull();
+    expect(describeRemoteComposerBlockingError('[BAD_REQUEST] nope')).toBeNull();
+    expect(shouldLatchOutboxHoldForSyncError('[INVOKE_TIMEOUT] timed out')).toBe(true);
+    expect(shouldLatchOutboxHoldForSyncError('[ACCESS_REVOKED] revoked')).toBe(true);
+    expect(shouldLatchOutboxHoldForSyncError('unknown failure')).toBe(false);
+    expect(shouldLatchOutboxHoldForSyncError('OUTBOX_STORAGE_INVALID')).toBe(false);
   });
 
   it('localizes Stop connection recovery errors without dropping their structured classification', async () => {

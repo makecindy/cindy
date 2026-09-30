@@ -128,6 +128,7 @@ import {
   humanizeRemoteError,
   isAutoRecoveringRemoteError,
   isPreconditionFailedRemoteError,
+  shouldLatchOutboxHoldForSyncError,
 } from '@/device-link/remoteStatus';
 import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
@@ -3194,7 +3195,12 @@ export default function SessionScreen() {
       applyComposerDocument(nextDocument);
       setComposerDraftHydrated(true);
     }).catch((error) => {
-      if (!cancelled) setError(formatRemoteError(error));
+      if (cancelled || appliedRouteDraftRef.current !== key) return;
+      // Draft/outbox recovery is local. Leaving hydrated false makes send()
+      // return before it reads the composer, so every conversation looks stuck
+      // behind the sync-failed banner.
+      setComposerDraftHydrated(true);
+      console.debug('[composer] draft hydration failed; composer stays writable', error);
     });
     return () => {
       cancelled = true;
@@ -3677,9 +3683,10 @@ export default function SessionScreen() {
       if (!syncRun.isStale() && messageAuthorityCurrent()) {
         const formatted = formatRemoteError(err);
         setSyncError(formatted);
-        // 两类失败都写入 hold 且不能清门：瞬态错误继续自动重试，确定性错误保留
-        // 手动同步入口；共享 UI error 被其它操作清掉时也不会变成不可见的永久自锁。
-        latchOutboxTransportHold(formatted);
+        // Transient failures keep retrying and deterministic refusals keep the
+        // manual sync gate. Unclassified failures stay on the banner only, so
+        // pushes can keep updating the transcript while sends still go out.
+        if (shouldLatchOutboxHoldForSyncError(formatted)) latchOutboxTransportHold(formatted);
         // Useful siblings have settled; preserve full-sync failure for callers.
         throw err;
       }
