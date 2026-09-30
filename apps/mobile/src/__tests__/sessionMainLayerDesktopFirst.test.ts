@@ -30,7 +30,8 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(syncingSource).not.toContain('setTimeout');
     expect(rendererSource).toContain('ListEmptyComponent={syncingWhileEmpty');
     expect(rendererSource).toContain('<SyncingMessages />');
-    expect(routeSource).toContain('syncingWhileEmpty={syncingWhileEmpty}');
+    // Also syncing while a window of only hidden rows pages back (hiddenHistoryChase).
+    expect(routeSource).toContain('syncingWhileEmpty={syncingWhileEmpty || chasingHiddenHistory}');
   });
 
   it('keeps the unsynced session state focused on the current action', () => {

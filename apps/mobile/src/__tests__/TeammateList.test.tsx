@@ -2,25 +2,42 @@
 import { act, createElement as el } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+const h = vi.hoisted(() => ({ awaiting: new Set<string>() }));
 vi.mock('react-native', () => ({
   View: ({ children, testID, style }: any) => el('div', { 'data-testid': testID, style: Object.assign({}, ...[style].flat().filter(Boolean)) }, children),
-  Pressable: ({ children, testID, accessibilityLabel, accessibilityState, disabled, onPress }: any) => el('button', { 'data-testid': testID, 'aria-label': accessibilityLabel, 'aria-selected': accessibilityState?.selected, disabled, onClick: onPress }, children),
-  ActivityIndicator: () => null, RefreshControl: () => null,
+  Pressable: ({ children, testID, accessibilityLabel, disabled, onPress, style }: any) => el('button', { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress,
+    style: Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat().filter(Boolean)) }, children),
+  ActivityIndicator: () => null, RefreshControl: () => null, Image: () => null,
+  Animated: { View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children), Value: class { setValue() {} }, timing: () => ({ start() {}, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({}) },
+  Easing: { inOut: () => undefined, ease: undefined },
   StyleSheet: { create: (v: unknown) => v, hairlineWidth: 1 },
   FlatList: ({ ListHeaderComponent, ListEmptyComponent, data, renderItem }: any) => el('div', null, ListHeaderComponent, data.length ? data.map((item: any) => renderItem({ item })) : ListEmptyComponent),
 }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: async () => ({ blocks: [] }) }) }));
-vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {} }));
-vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => el('span', null, children), TextInput: ({ testID, autoFocus }: any) => el('input', { 'data-testid': testID, 'data-autofocus': String(autoFocus) }) }));
+vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {
+  subscribe: () => () => {},
+  getSessionLiveActivity: (id: string) => h.awaiting.has(id) ? { phase: 'needs-interaction' } : null,
+  getPendingInteractions: () => [],
+} }));
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
+vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: ({ active }: any) => active ? el('i', { 'data-testid': 'ring' }) : null }));
+vi.mock('@/session/SessionRightSpinner', () => ({ SessionRightSpinner: ({ testID }: any) => el('i', { 'data-testid': testID }) }));
+vi.mock('@/session/BotGroupList', () => ({ OFFLINE_AVATAR_OPACITY: 0.45,
+  BotGroupListRow: ({ row, onPress }: any) => el('button', { 'data-testid': `group.${row.item.ref.id}`, onClick: onPress }, row.item.display.title) }));
+vi.mock('@/components/AppText', () => ({ Text: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children), TextInput: ({ testID, autoFocus }: any) => el('input', { 'data-testid': testID, 'data-autofocus': String(autoFocus) }) }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowEmptyState: ({ title, copy }: any) => el('div', null, title, copy),
   RemoteListSyncingPlaceholder: ({ testID }: any) => el('div', { 'data-testid': testID }),
   StatusDot: ({ tone }: any) => el('i', { 'data-testid': 'status-dot', 'data-tone': tone }) }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
-vi.mock('lucide-react-native', () => ({ RefreshCw: () => null, Search: () => null, X: () => null, TriangleAlert: ({ testID, accessibilityLabel }: any) => el('i', { 'data-testid': testID, 'aria-label': accessibilityLabel }) }));
+vi.mock('lucide-react-native', () => ({ RefreshCw: () => null, Search: () => null, X: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' } }) }));
-vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: { statusDone: 'green', statusError: 'red', textTertiary: 'gray' } }), typeScale: { footnote: 12 }, lineHeight: {}, fontWeight: {} }));
+vi.mock('@/theme', async () => {
+  const tokens = await import('@/theme/tokens');
+  const colors = { ...tokens.lightColors, statusDone: 'green', statusError: 'red', textTertiary: 'gray' };
+  return { ...tokens, useThemedStyles: (factory: (value: typeof colors) => unknown) => factory(colors), useTheme: () => ({ colors }) };
+});
 vi.mock('@/session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: any) => el('span', null, text) }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ isRemoteResourceUnread: () => false }));
 vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => '' }));
@@ -32,15 +49,6 @@ const item = { key: 'host:bot', host: { deviceId: 'host', deviceName: 'Computer 
 let root: Root; let node: HTMLDivElement;
 beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); });
 afterEach(async () => { await act(async () => root.unmount()); });
-it('highlights the current identity only in the picker, not on the single-column home list', async () => {
-  const current = { deviceId: 'host', collectionId: 'teammates', resourceKind: 'bot' as const, resourceId: 'bot' };
-  const selected = () => node.querySelector('[data-testid="teammates.item.host.bot"]')?.getAttribute('aria-selected');
-  const props = { items: [item], error: null, isOnline: () => true, loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), current };
-  await act(async () => root.render(el(TeammateList, props)));
-  expect(selected()).toBe('false');
-  await act(async () => root.render(el(TeammateList, { ...props, embedded: true })));
-  expect(selected()).toBe('true');
-});
 async function render(error: string | null, online = true) {
   await act(async () => root.render(el(TeammateList, { items: [item], error, isOnline: () => online, loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
 }
@@ -107,7 +115,50 @@ it('falls back to the description, then an invitation, and flags a teammate that
     loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
   expect(node.textContent).toContain('Weekly reports');
   expect(node.textContent).toContain('devices.companions.startChat');
+  // Attention reads as words before the preview (no colored flag in the time slot).
   const flags = node.querySelectorAll('[data-testid="teammate.attention"]');
   expect(flags).toHaveLength(1);
-  expect(flags[0].getAttribute('aria-label')).toBe('Needs attention');
+  expect(flags[0].textContent).toBe('Needs attention · ');
+});
+
+it('keeps every row 78pt with the divider on the text column, none under the last row', async () => {
+  const second = { ...item, key: 'host:second', item: { ...item.item, ref: { ...item.item.ref, id: 'second' }, display: { title: 'Aster', preview: 'Hi' } } };
+  await act(async () => root.render(el(TeammateList, { items: [item, second], error: null, isOnline: () => true,
+    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  const rows = [...node.querySelectorAll('[data-testid^="teammates.item."]')] as HTMLElement[];
+  expect(rows.map((row) => row.style.height)).toEqual(['78px', '78px']);
+  const bodies = rows.map((row) => row.children[1] as HTMLElement);
+  expect(bodies[0].style.borderBottomWidth).toBe('1px');
+  expect(bodies[1].style.borderBottomWidth).toBe('');
+});
+
+it('shows the computer name only when two teammates share a name, on the title line', async () => {
+  const twin = { ...item, key: 'other:bot', host: { deviceId: 'other', deviceName: 'Office iMac' } };
+  await act(async () => root.render(el(TeammateList, { items: [item, twin], error: null, isOnline: () => true,
+    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  expect(node.textContent).toContain('· Computer identity');
+  expect(node.textContent).toContain('· Office iMac');
+});
+
+it('prefixes a teammate stopped on a question or permission with 「等你确认」', async () => {
+  const waiting = { ...item, item: { ...item.item, links: [{ rel: 'conversation', target: { kind: 'session' as const, sessionId: 's1' } }] } };
+  h.awaiting = new Set(['s1']);
+  await act(async () => root.render(el(TeammateList, { items: [waiting], error: null, isOnline: () => true,
+    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true })));
+  expect(node.textContent).toContain('devices.companions.awaiting · Last reply');
+  h.awaiting = new Set();
+});
+
+it('mixes group chats into the list by latest activity', async () => {
+  const older = { ...item, item: { ...item.item, display: { title: 'Mimi', preview: 'Old', timestamp: 1 } } };
+  const group = { key: 'host:g1', host: item.host, item: { ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'g1' }, revision: '1', links: [],
+    display: { title: 'Launch', timestamp: 5 } } };
+  const onGroup = vi.fn();
+  await act(async () => root.render(el(TeammateList, { items: [older], error: null, isOnline: () => true,
+    loading: false, refreshing: false, onRefresh: vi.fn(), onSelect: vi.fn(), embedded: true,
+    groups: { items: [group], isOnline: () => true, onSelect: onGroup } })));
+  const order = [...node.querySelectorAll('[data-testid^="teammates.item."], [data-testid^="group."]')].map((entry) => entry.getAttribute('data-testid'));
+  expect(order).toEqual(['group.g1', 'teammates.item.host.bot']);
+  await act(async () => (node.querySelector('[data-testid="group.g1"]') as HTMLButtonElement).click());
+  expect(onGroup).toHaveBeenCalledWith(group);
 });

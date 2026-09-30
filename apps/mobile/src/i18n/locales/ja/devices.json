@@ -628,7 +628,14 @@
     },
     "viewResult": "結果を見る",
     "noWrittenResult": "テキストの結果はありません。",
-    "errorDetails": "エラー詳細"
+    "errorDetails": "エラー詳細",
+    "createTeammate": "新しい仲間",
+    "createMenu": "新規作成",
+    "searchWithGroups": "仲間とグループを検索",
+    "awaiting": "確認待ち",
+    "emptyCopyCreate": "仲間は話した内容を覚えていて、パソコンで作業も手伝えます。",
+    "taskResult": "タスクの結果",
+    "collapseResult": "結果を閉じる"
   },
   "companionProfile": {
     "avatar": "アバター",
@@ -677,6 +684,8 @@
     "artifactsEmpty": "成果物はまだありません。チームメイトに作成を頼んでみましょう。",
     "openSourceTask": "元のセッションを開く",
     "modelFollowsDefault": "現在のデフォルトモデル候補を使用",
+    "taskModel": "セッション用モデル",
+    "taskInheritsPrimary": "メインモデルを継承",
     "modelOverride": "このチームメイト固有のモデル候補を使用",
     "modelsUnavailable": "利用可能なモデルがありません。パソコンでこのチームメイトのモデル設定を確認し、更新してください。",
     "artifactsRecovery": "メッセージカードからファイルを開くか、{{deviceName}} でファイルを参照してください。",

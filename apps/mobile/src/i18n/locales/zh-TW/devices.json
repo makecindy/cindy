@@ -628,7 +628,14 @@
     },
     "viewResult": "查看結果",
     "noWrittenResult": "沒有文字結果。",
-    "errorDetails": "錯誤詳情"
+    "errorDetails": "錯誤詳情",
+    "createTeammate": "新增夥伴",
+    "createMenu": "新增",
+    "searchWithGroups": "搜尋夥伴和群聊",
+    "awaiting": "等你確認",
+    "emptyCopyCreate": "夥伴會記得你們聊過的事，也能幫你在電腦上做事。",
+    "taskResult": "任務結果",
+    "collapseResult": "收起結果"
   },
   "companionProfile": {
     "avatar": "頭像",
@@ -677,6 +684,8 @@
     "artifactsEmpty": "還沒有成果，可以讓夥伴創作一些內容。",
     "openSourceTask": "開啟來源任務",
     "modelFollowsDefault": "跟隨目前預設模型鏈",
+    "taskModel": "任務模型",
+    "taskInheritsPrimary": "繼承主模型",
     "modelOverride": "使用此夥伴的自訂模型鏈",
     "modelsUnavailable": "暫無可用模型，請在電腦上檢查此夥伴的模型設定後重新整理。",
     "artifactsRecovery": "請從訊息卡中開啟檔案，或在 {{deviceName}} 上瀏覽檔案。",

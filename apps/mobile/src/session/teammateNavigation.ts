@@ -8,14 +8,6 @@ export function teammateIdentity(hosted: HostedRemoteCollectionItem): LastTeamma
     resourceKind: 'bot', resourceId: hosted.item.ref.id,
   } : null;
 }
-export function sameTeammate(a: LastTeammateIdentity | null, b: LastTeammateIdentity | null): boolean {
-  return !!a && !!b && a.deviceId === b.deviceId && a.collectionId === b.collectionId
-    && a.resourceKind === b.resourceKind && a.resourceId === b.resourceId;
-}
-/** Never guess the default from a display name or use another teammate when the saved one is gone. */
-export function findLastTeammate(last: LastTeammateIdentity | null, items: readonly HostedRemoteCollectionItem[]) {
-  return items.find((item) => sameTeammate(last, teammateIdentity(item))) ?? null;
-}
 export function teammateResourceRoute(hosted: HostedRemoteCollectionItem, locale: string) {
   const conversation = hosted.item.links.find(link => link.rel === 'conversation')?.target;
   // The link is a display/navigation hint only. The destination revalidates the

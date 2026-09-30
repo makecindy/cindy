@@ -7824,6 +7824,10 @@
     },
     "model": {
       "description": "選擇這位夥伴使用的模型。",
+      "primary": "主模型",
+      "task": "任務模型",
+      "inheritPrimary": "繼承主模型",
+      "inheritingPrimary": "繼承主模型，用於新建背景任務",
       "restoreDefault": "恢復預設模型"
     },
     "modelChain": {

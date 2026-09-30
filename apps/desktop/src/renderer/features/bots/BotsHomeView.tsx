@@ -57,6 +57,7 @@ import {
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
+import { BotTaskModelEditor } from './BotTaskModelEditor';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotRoutines } from './BotRoutines';
 import { BotMemorySettings } from './BotMemorySettings';
@@ -575,40 +576,48 @@ export function BotSettings({
           aria-label={t('bots.settingsTabs.model')}
         >
           <div data-testid="bot-model-controls" className="min-w-0">
-            <BotModelChainEditor
-              label={t('bots.settingsTabs.model')}
-              hiddenVendors={hiddenVendors}
-              onRestoreDefault={() => {
-                const modelChain = getEffectiveBotModelChain();
-                const primary = modelChain[0];
-                setCapabilities((current) => ({
-                  ...current,
-                  ...(primary ?? { model: '', providerId: null, effort: '', fastMode: false }),
-                  modelOverride: null,
-                  modelChain,
-                  modelChainOverride: null,
-                }));
+            <div data-testid="bot-primary-model-controls">
+              <BotModelChainEditor
+                label={t('bots.model.primary')}
+                hiddenVendors={hiddenVendors}
+                onRestoreDefault={() => {
+                  const modelChain = getEffectiveBotModelChain();
+                  const primary = modelChain[0];
+                  setCapabilities((current) => ({
+                    ...current,
+                    ...(primary ?? { model: '', providerId: null, effort: '', fastMode: false }),
+                    modelOverride: null,
+                    modelChain,
+                    modelChainOverride: null,
+                  }));
+                  autosave.onEdit('instant');
+                }}
+                value={displayedModelChain}
+                onChange={(modelChain) => {
+                  const primary = modelChain[0];
+                  if (!primary) return;
+                  setCapabilities((current) => ({
+                    ...current,
+                    ...primary,
+                    modelChain,
+                    modelChainOverride: modelChain,
+                    modelOverride: {
+                      model: primary.model,
+                      providerId: primary.providerId,
+                      effort: primary.effort,
+                      fastMode: primary.fastMode,
+                    },
+                  }));
+                  autosave.onEdit('instant');
+                }}
+              />
+            </div>
+            <BotTaskModelEditor value={capabilities.taskModelOverride ?? null}
+              inheritedRoute={displayedModelChain[0]} hiddenVendors={hiddenVendors}
+              onChange={taskModelOverride => {
+                setCapabilities(current => ({ ...current, taskModelOverride }));
                 autosave.onEdit('instant');
-              }}
-              value={displayedModelChain}
-              onChange={(modelChain) => {
-                const primary = modelChain[0];
-                if (!primary) return;
-                setCapabilities((current) => ({
-                  ...current,
-                  ...primary,
-                  modelChain,
-                  modelChainOverride: modelChain,
-                  modelOverride: {
-                    model: primary.model,
-                    providerId: primary.providerId,
-                    effort: primary.effort,
-                    fastMode: primary.fastMode,
-                  },
-                }));
-                autosave.onEdit('instant');
-              }}
-            />
+              }} />
           </div>
         </section>
         {page === 'capabilities' && (

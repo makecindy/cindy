@@ -450,6 +450,7 @@ import { createAgentResourceSettingsIpc } from './agent-resource-settings-ipc.js
 import {
   createBotDelegationService,
   discardDelegationQueuedInputs,
+  hasExplicitSessionTaskModel,
   type BotDelegationService,
 } from './botDelegationService.js';
 import { createBotSessionTaskRouteBridge } from './botSessionTaskRouteBridge.js';
@@ -12128,6 +12129,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Do not let a later infrastructure retry replace that pending intent.
       if (profiles.control.pending ||
           !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) return { session: null, outcome: 'superseded' };
+      // Ordinary delegated tasks have no Bot link. Their explicit creation route
+      // still forbids automatic model replacement, while same-route retries remain valid.
+      const explicitTaskModel = await hasExplicitSessionTaskModel(sessionId);
+      if (!isCurrent()) return { session: null, outcome: 'superseded' };
+      if (explicitTaskModel) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
       // Bot routes are explicit and ordered. They switch on the first recoverable
       // failure and never depend on the generic Session fallback toggle/catalog
       // guesser. Ordinary Sessions keep their existing second-attempt behavior.
@@ -12383,7 +12389,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         baselineProfile: profiles.baseline,
         effectiveProfile: profiles.effective,
         pendingMutation: profiles.pendingMutation,
-        fallbackEnabled: botFallback.isBot
+        fallbackEnabled: await hasExplicitSessionTaskModel(sessionId) ? false : botFallback.isBot
           ? botFallback.candidate !== null
           : readSessionRuntimeFallbackSettings().enabled,
       };

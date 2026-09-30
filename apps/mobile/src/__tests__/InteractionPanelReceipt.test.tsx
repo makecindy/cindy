@@ -12,6 +12,7 @@ import { forwardNavigationLock } from '@/utils/navigationLock';
 
 const { resolveInteraction, invoke, push } = vi.hoisted(() => ({ resolveInteraction: vi.fn(), invoke: vi.fn(), push: vi.fn() }));
 const { routeParams } = vi.hoisted(() => ({ routeParams: {} as { deviceId?: string; sessionId?: string } }));
+const { textLayouts } = vi.hoisted(() => ({ textLayouts: new Map<string, (event: { nativeEvent: { lines: unknown[] } }) => void>() }));
 vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
   return { useLocalSearchParams: () => routeParams, useRouter: () => ({ push }),
@@ -28,7 +29,12 @@ vi.mock('react-native', async () => {
   const view = (tag: string) => ({ children, onPress, disabled, testID }: {
     children?: ReactNode; onPress?: () => void; disabled?: boolean; testID?: string;
   }) => createElement(tag, { onClick: onPress, disabled, 'data-testid': testID }, children);
-  return { View: view('div'), Text: view('span'), Pressable: view('button'),
+  // Text keeps its onTextLayout so a test can report how many lines a label took.
+  const Text = ({ children, onTextLayout }: { children?: ReactNode; onTextLayout?: (event: { nativeEvent: { lines: unknown[] } }) => void }) => {
+    if (onTextLayout) textLayouts.set(String(children), onTextLayout);
+    return createElement('span', null, children);
+  };
+  return { View: view('div'), Text, Pressable: view('button'),
     ScrollView: view('div'), Image: () => null,
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
@@ -268,6 +274,35 @@ it.each(['allowOnce', 'deny'])('companion permission preserves complete evidence
   resolveInteraction.mockResolvedValueOnce({ accepted: true });
   await act(async () => host.querySelector<HTMLButtonElement>(`[data-testid="interaction.permission.${action}Button"]`)!.click());
   expect(host.querySelector('[data-testid="interaction.permission.card"]')).toBeNull();
+});
+
+it('companion permission shows the whole input when no single field leads, never the 500-character preview', async () => {
+  const tail = 'unique-tail-' + 'y'.repeat(40);
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId: 'permission-mcp', toolName: 'mcp__notes__append',
+    input: { body: 'z'.repeat(600), target: tail },
+  } }]);
+  await act(async () => root.render(<Harness companion />));
+  expect(host.textContent).toContain(tail);
+});
+
+it('stacks teammate card buttons one per row once any label would wrap at equal width', async () => {
+  textLayouts.clear();
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId: 'p-wrap', toolName: 'Read', input: { path: '/tmp/qa.txt' },
+    suggestions: [{ destination: 'session', rules: [{ toolName: 'Read' }] }],
+  } }]);
+  await act(async () => root.render(<Harness companion />));
+  const stacked = () => host.querySelector('[data-testid="interaction.actions.stacked"]');
+  await act(async () => textLayouts.get('interaction.permission.deny')!({ nativeEvent: { lines: [{}] } }));
+  expect(stacked()).toBeNull();
+  // A long label (English 「Always allow this session」 on a narrow card) takes two lines.
+  await act(async () => textLayouts.get('interaction.permission.alwaysAllow')!({ nativeEvent: { lines: [{}, {}] } }));
+  expect(stacked()).not.toBeNull();
+  // Ordinary task cards keep their own layout.
+  textLayouts.clear();
+  await act(async () => root.render(<Harness />));
+  expect(textLayouts.size).toBe(0);
 });
 
 it('preserves session-only persistent permission and the high-risk confirmation step', async () => {

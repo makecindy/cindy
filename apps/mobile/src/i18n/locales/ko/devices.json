@@ -628,7 +628,14 @@
     },
     "viewResult": "결과 보기",
     "noWrittenResult": "텍스트 결과가 없습니다.",
-    "errorDetails": "오류 정보"
+    "errorDetails": "오류 정보",
+    "createTeammate": "새 동료",
+    "createMenu": "새로 만들기",
+    "searchWithGroups": "동료와 그룹 검색",
+    "awaiting": "확인 필요",
+    "emptyCopyCreate": "동료는 나눈 이야기를 기억하고 컴퓨터에서 일도 도와줘요.",
+    "taskResult": "작업 결과",
+    "collapseResult": "결과 접기"
   },
   "companionProfile": {
     "avatar": "아바타",
@@ -677,6 +684,8 @@
     "artifactsEmpty": "아직 결과물이 없습니다. 팀원에게 만들어 달라고 요청하세요.",
     "openSourceTask": "원본 세션 열기",
     "modelFollowsDefault": "현재 기본 모델 후보 사용",
+    "taskModel": "세션 모델",
+    "taskInheritsPrimary": "기본 모델 상속",
     "modelOverride": "이 팀원의 개별 모델 후보 사용 중",
     "modelsUnavailable": "사용 가능한 모델이 없습니다. 컴퓨터에서 이 팀원의 모델 설정을 확인한 후 새로 고치세요.",
     "artifactsRecovery": "메시지 카드에서 파일을 열거나 {{deviceName}}에서 파일을 확인하세요.",

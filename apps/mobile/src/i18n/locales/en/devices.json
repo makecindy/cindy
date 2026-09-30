@@ -628,7 +628,14 @@
     },
     "viewResult": "View Result",
     "noWrittenResult": "No written result.",
-    "errorDetails": "Error details"
+    "errorDetails": "Error details",
+    "createTeammate": "New teammate",
+    "createMenu": "New",
+    "searchWithGroups": "Search teammates and groups",
+    "awaiting": "Needs your OK",
+    "emptyCopyCreate": "Teammates remember what you talked about and can get things done on your computer.",
+    "taskResult": "Task result",
+    "collapseResult": "Hide result"
   },
   "companionProfile": {
     "avatar": "Avatar",
@@ -677,6 +684,8 @@
     "artifactsEmpty": "No artifacts yet. Ask your teammate to create something.",
     "openSourceTask": "Open Source Session",
     "modelFollowsDefault": "Follow the default model chain",
+    "taskModel": "Task Model",
+    "taskInheritsPrimary": "Inherit Primary Model",
     "modelOverride": "Using this teammate’s own model chain",
     "modelsUnavailable": "No usable models. Check this teammate’s model settings on your computer, then refresh.",
     "artifactsRecovery": "Open files from the message cards, or browse them on {{deviceName}}.",

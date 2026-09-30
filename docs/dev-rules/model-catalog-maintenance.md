@@ -95,8 +95,14 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 顺序排：首次添加用接口返回的顺序；之后刷新发现的新型号排在已有型号之前（保持接口返回的
 相对顺序），已有型号位置不动（`mergeDiscoveredRuntimeModels`）。
 
-新对话默认模型不跟排序绑定的例外只有服务端按区域下发的 `newSessionDefault`；公共 Registry 的
+来源内的默认推荐可由服务端按区域下发的 `newSessionDefault` 指定；公共 Registry 的
 同名字段不进入活动目录。未标记时取排序第一的默认可见模型，即账号返回的第一个可见模型。
+
+未手动选择模型时，客户端出厂来源顺序为 Claude 订阅 Opus 5.5（Claude Code）、
+Codex 订阅 Astra（Codex）、Cindy 推荐模型（Pi），最后保留 xAI 回退。
+策略在 `apps/desktop/src/shared/newMakerDefaultTuple.ts`；连接、型号和对应引擎必须实际可用，
+不能为了满足推荐而把 Opus / Astra 放入另一个引擎。用户手动选择及型号开关始终优先，
+不修改已有任务的运行配置；伙伴默认复用应用选择，不另造一套来源优先级。
 
 设置页管理列表组内与选择器同序：组内每项都带 `sortOrder` 时按它排；只要有一项缺失，退回
 按系列名 A–Z、同系列版本号降序，避免局部权重把新型号压到旧策展位置之后。

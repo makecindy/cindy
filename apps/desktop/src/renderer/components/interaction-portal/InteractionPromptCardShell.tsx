@@ -25,6 +25,9 @@ interface InteractionPromptCardShellProps {
   pinnedContent?: ReactNode;
   footer?: ReactNode;
   className?: string;
+  /** Receives the card's outer element (restore button or expanded card) so a
+   * feature can tell its own controls apart from the rest of the page. */
+  rootRef?: (node: HTMLElement | null) => void;
 }
 
 /**
@@ -48,10 +51,12 @@ export function InteractionPromptCardShell({
   pinnedContent,
   footer,
   className,
+  rootRef,
 }: InteractionPromptCardShellProps) {
   if (collapsible && viewerState === 'minimized') {
     return (
       <button
+        ref={rootRef}
         type="button"
         onClick={() => onViewerStateChange('expanded')}
         aria-label={restoreAriaLabel}
@@ -85,6 +90,7 @@ export function InteractionPromptCardShell({
 
   return (
     <div
+      ref={rootRef}
       className={cn(
         'w-full rounded-[12px] border p-[16px]',
         'border-[var(--ask-card-border)] bg-[var(--ask-card-bg)]',

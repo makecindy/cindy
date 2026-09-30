@@ -16,6 +16,7 @@ import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { sharedTaskAuthorName } from '@cindy/maker-shared';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from '@cindy/maker-shared/botTimeline';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
+import { CompanionEntering } from '@/session/CompanionEntering';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
 import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
@@ -3022,13 +3023,20 @@ const RenderItemView = memo(function RenderItemView({
   }
   const groupTimestamp = actions.companion && item.type === 'message'
     ? actions.companionTimeGroups?.get(item.key) : undefined;
-  // Desktop keeps the persistent task card on the replies' column with an invisible avatar.
+  // K1: every companion card (task, result, teammate-message pill) hangs on the replies' column,
+  // left-aligned with the reply text behind an invisible avatar.
   const alignWithReplies = !!actions.companionAvatar && actions.companion && item.type === 'message'
-    && item.message.companion?.kind === 'task' && item.message.companion.meta.role === 'delegation-request';
+    && !!item.message.companion;
+  const aligned = alignWithReplies ? <View style={styles.companionAvatarInset}>{node}</View> : node;
+  // Companion chats: a new message or finished reply eases in once (M4 / M5); everything else stays still.
+  const entering = actions.companion && item.type === 'message' && !item.message.systemCardType
+    && (item.message.kind === 'user' || item.message.kind === 'assistant')
+    ? <CompanionEntering key={item.key} id={item.key} createdAt={item.message.createdAt} kind={item.message.kind === 'user' ? 'send' : 'reply'}>{aligned}</CompanionEntering>
+    : aligned;
   return (
     <View style={focused ? styles.focusedItem : undefined} testID={focused ? 'message.focusedItem' : undefined}>
       {groupTimestamp !== undefined ? <CompanionTimeGroupStamp timestamp={groupTimestamp} /> : null}
-      {alignWithReplies ? <View style={styles.companionAvatarInset}>{node}</View> : node}
+      {entering}
     </View>
   );
 });

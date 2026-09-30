@@ -998,6 +998,30 @@ describe("direct Bot MCP tools", () => {
     }
   });
 
+  it.each(['claude-code', 'codex', 'pi'] as const)('passes one-task model selection and its receipt through %s', async agentKind => {
+    const modelRoute = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: true };
+    const start = vi.fn(async () => ({ ok: true as const, delegationId: 'task', childSessionId: 'child', modelRoute }));
+    const unavailable = vi.fn(async () => ({ ok: false as const, errorCode: 'UNEXPECTED', message: 'unused' }));
+    const server = createXdtHelperMcpServer({ resolveSurface: async () => 'bot',
+      sessionTasks: { startSessionTask: start, getSessionTask: unavailable, messageSessionTask: unavailable, stopSessionTask: unavailable },
+    }, { agentKind, workingDir: '/bot', sessionId: 'parent' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'task-model-test', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      for (const model_selection of [{ model: 'astra' }, { id: 'route', harness: 'pi' }]) {
+        const invalid = await client.callTool({ name: 'call_tool', arguments: { name: 'start_session_task', args: { instruction: 'Work', model_selection } } });
+        expect(invalid.isError).toBe(true);
+      }
+      expect(start).not.toHaveBeenCalled();
+      const result = await client.callTool({ name: 'call_tool', arguments: { name: 'start_session_task', args: {
+        instruction: 'Work', model_selection: { id: 'route', effort: 'high', fast_mode: true },
+      } } });
+      expect(start).toHaveBeenCalledWith(expect.objectContaining({ callerSessionId: 'parent', modelSelection: { id: 'route', effort: 'high', fastMode: true } }));
+      expect(parsePayload(result)).toMatchObject({ ok: true, model_route: modelRoute });
+    } finally { await client.close(); await server.close(); }
+  });
+
   it.each(["claude-code", "codex"] as const)("exposes and executes tasks on %s without discovery", async (agentKind) => {
     let sessionId: string | undefined = "bot-parent";
     const start = vi.fn(async () => ({ ok: true as const, taskId: "task-1" }));

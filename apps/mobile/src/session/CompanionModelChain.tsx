@@ -26,7 +26,7 @@ export function readCompanionModelChain(value: unknown): CompanionModelRoute[] {
     return rows;
   } catch { return []; }
 }
-export function CompanionModelChain({ deviceId, values, onChange, onPick, disabled }: { deviceId: string; values: ProfileValues; onChange(values: ProfileValues): void; onPick(index: number): void; disabled: boolean }) {
+export function CompanionModelChain({ deviceId, values, onChange, onPick, disabled, single = false, inheritanceLabel }: { deviceId: string; values: ProfileValues; onChange(values: ProfileValues): void; onPick(index: number): void; disabled: boolean; single?: boolean; inheritanceLabel?: string }) {
   const { t } = useTranslation(); const { colors } = useTheme();
   const catalog = useDeviceProviders(deviceId);
   // Only a ready catalog for this device may name a route. Never borrow a cached other-device account.
@@ -51,11 +51,11 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
       {!following && index > 0 ? <Pressable accessibilityRole="button" accessibilityLabel={t('devices.companionProfile.removeModel')} disabled={disabled} style={styles.hit} onPress={() => update(chain.filter((_, i) => index !== i))}><MinusCircle size={iconSize.lg} color={colors.textSecondary} /></Pressable> : null}
     </View>;
   };
-  const addRow = !following && chain.length < 5 ? <Pressable accessibilityRole="button" disabled={disabled} style={styles.row} onPress={() => onPick(chain.length)}><Plus size={iconSize.action} color={colors.textPrimary} /><Text style={{ ...styles.title, color: colors.textPrimary }}>{t('devices.companionProfile.addModel')}</Text></Pressable> : null;
+  const addRow = !following && chain.length < (single ? 1 : 5) ? <Pressable accessibilityRole="button" disabled={disabled} style={styles.row} onPress={() => onPick(chain.length)}><Plus size={iconSize.action} color={colors.textPrimary} /><Text style={{ ...styles.title, color: colors.textPrimary }}>{t('devices.companionProfile.addModel')}</Text></Pressable> : null;
   return <View style={{ gap: spacing.sm }}>
-    <View style={styles.row}><Text style={{ ...styles.title, color: colors.textPrimary, flex: 1 }}>{t('devices.companionProfile.modelFollowsDefault')}</Text><NativeSwitch accessibilityLabel={t('devices.companionProfile.modelFollowsDefault')} value={following} disabled={disabled} onValueChange={value => onChange({ ...values, followsDefault: value })} seedColor={colors.inputCaret} /></View>
+    <View style={styles.row}><Text style={{ ...styles.title, color: colors.textPrimary, flex: 1 }}>{inheritanceLabel ?? t('devices.companionProfile.modelFollowsDefault')}</Text><NativeSwitch accessibilityLabel={inheritanceLabel ?? t('devices.companionProfile.modelFollowsDefault')} value={following} disabled={disabled} onValueChange={value => onChange({ ...values, followsDefault: value })} seedColor={colors.inputCaret} /></View>
     {chain.length ? routeRow(chain[0], 0) : addRow}
-    {chain.length ? <>
+    {chain.length && !single ? <>
       {/* The backup chain stays folded inside this editor, as on Desktop. */}
       <Pressable accessibilityRole="button" accessibilityState={{ expanded: showBackups }} onPress={() => setShowBackups(value => !value)} style={styles.row} testID="companionModels.backups">
         <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, flex: 1 }}>{t('devices.companionProfile.backupModels', { count: chain.length - 1 })}</Text>

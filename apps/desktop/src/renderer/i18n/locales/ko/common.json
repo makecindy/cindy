@@ -7824,6 +7824,10 @@
     },
     "model": {
       "description": "이 팀원이 사용할 모델을 선택합니다.",
+      "primary": "기본 모델",
+      "task": "세션 모델",
+      "inheritPrimary": "기본 모델 상속",
+      "inheritingPrimary": "새 백그라운드 세션은 기본 모델을 상속합니다",
       "restoreDefault": "기본 모델로 되돌리기"
     },
     "modelChain": {
