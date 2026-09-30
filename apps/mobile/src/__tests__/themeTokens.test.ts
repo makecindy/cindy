@@ -35,6 +35,17 @@ function contrastRatio(fg: string, bg: string): number {
 }
 
 describe('theme tokens', () => {
+  it('keeps pinned text readable on both the group and active-row surfaces', () => {
+    for (const colors of [lightColors, darkColors]) {
+      for (const background of [colors.pinnedSectionBackground, colors.pinnedSectionSelected]) {
+        for (const foreground of [colors.textPrimary, colors.textSecondary]) {
+          expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+      expect(colors.pinnedSectionBackground).not.toBe(colors.surface);
+      expect(colors.pinnedSectionSelected).not.toBe(colors.pinnedSectionBackground);
+    }
+  });
   it('file tile micro labels meet normal-text contrast on both attachment surfaces', () => {
     for (const colors of [lightColors, darkColors]) {
       for (const background of [colors.surface, colors.surfaceElevated]) {

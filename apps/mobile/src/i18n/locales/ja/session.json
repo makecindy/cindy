@@ -505,6 +505,8 @@
     "referenceCount": "{{num}} 件",
     "referenceTruncated": "切り詰め済み",
     "pinnedSection": "ピン留め",
+    "otherTasks": "その他のセッション",
+    "pinnedRunning": "{{count}} 件実行中",
     "extraDirsSummary": "追加ディレクトリ {{num}} 件",
     "noExtraDirsSummary": "追加ディレクトリはありません",
     "attachmentUploadFailed": "添付のアップロードに失敗しました。再試行するか、このメッセージを削除してください。",

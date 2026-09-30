@@ -66,6 +66,24 @@ The interface is built from a three-tier layer system that applies symmetrically
 
 用户确认的任务标签色板为红、橙、黄、绿、蓝、紫、灰、粉、珊瑚、青、靛蓝、白共十二色。只用于标签色球与编辑色板，表示用户分类，不表示任务运行状态。色球为圆形、细描边，选中时勾位于球内；白色在 Light/Dark 中均保持白色，用独立深色勾保证对比度。Desktop 使用 `task-tag-*` 语义 token；Mobile 使用对应 `taskTag*` 色板字段。默认面板只显示选择列表，添加或编辑后才显示名称和两行六列色板，不显示双击编辑提示。
 
+### Mobile pinned task group (user-approved 2026-09-28)
+
+The mobile home list and its resident task drawer use a sage-green pinned group.
+This is group identity, not success, running, or selection status. The only consumers
+of Mobile's `pinnedSectionBackground` / `pinnedSectionBorder` / `pinnedSectionSelected`
+are this group's header, rows, nested automation rows and swipe backing. Both themes
+are defined in `apps/mobile/src/theme/tokens.ts`; text retains neutral tokens.
+
+The approved content outline is 18 px when expanded and 14 px when collapsed,
+with 12 px side insets. It is a scoped exception to the generic container tiers;
+`pinnedSectionMetrics` owns these values. The header's hit region is at least 44 px;
+collapsed it is 52 px and keeps the pin, total and right chevron, with a running
+count only when nonzero. The whole header toggles the existing retained state.
+Expanded rows share one continuous fill with only the final row rounding the bottom.
+Keep row virtualization and swipe actions. Hide redundant row pins only inside this
+group; search and other lists retain their pin indicators. Non-pinned tasks follow
+a localized “Other tasks” divider when present. Ordinary row backgrounds stay unchanged.
+
 ### Chip & Button Neutrals
 
 Small interactive chips (button backgrounds, tag pills, avatar fills, selected-nav pills) sit outside the layer system — they're foreground elements, not background layers.

@@ -119,7 +119,10 @@
     "taskTagTeal": "#53a89d",
     "taskTagIndigo": "#7c83cf",
     "taskTagWhite": "#ffffff",
-    "taskTagWhiteCheck": "#525252"
+    "taskTagWhiteCheck": "#525252",
+    "pinnedSectionBackground": "#E4ECDF",
+    "pinnedSectionBorder": "#CAD6C3",
+    "pinnedSectionSelected": "#CDDCC5"
   },
   "dark": {
     "surface": "#121212",
@@ -240,6 +243,9 @@
     "taskTagTeal": "#75bfb4",
     "taskTagIndigo": "#999fdf",
     "taskTagWhite": "#ffffff",
-    "taskTagWhiteCheck": "#525252"
+    "taskTagWhiteCheck": "#525252",
+    "pinnedSectionBackground": "#39463B",
+    "pinnedSectionBorder": "#546450",
+    "pinnedSectionSelected": "#425044"
   }
 }

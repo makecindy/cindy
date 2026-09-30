@@ -1,3 +1,6 @@
+import type { TaskTagRequest } from '@cindy/maker-shared';
+import type { SessionMetaPatch } from '@/device-link/mobileMakerTransport';
+import { VisualMockSessionState } from './visualMockSessionState';
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { ApiError, type ApiFetchOptions } from '@/api/client';
@@ -66,6 +69,16 @@ export const visualMockUser: MobileUser = {
 let realDataSnapshot: VisualRealDataSnapshot | null = null;
 let realDataLoadPromise: Promise<VisualRealDataSnapshot | null> | null = null;
 let didWarnRealDataLoad = false;
+const sessionStates = new Map<string, VisualMockSessionState>();
+function sessionState(deviceId: string, snapshot = realDataSnapshot): VisualMockSessionState {
+  let state = sessionStates.get(deviceId);
+  if (!state) {
+    state = new VisualMockSessionState(snapshot?.sessions ?? visualMockSessions('all'));
+    sessionStates.set(deviceId, state);
+  }
+  return state;
+}
+
 const deletedDeviceIds = new Set<string>();
 const renamedDevices = new Map<string, string>();
 
@@ -128,7 +141,7 @@ export function seedVisualMockStore(): void {
   const seededRealData = seedRealDataStore(realDataSnapshot);
   if (seededRealData) return;
 
-  const sessions = visualMockSessions();
+  const sessions = sessionState(VISUAL_MOCK_DEVICE_ID).list();
   remoteSessionStore.setDeviceIdentity(visualMockDevices().map((device) => ({
     deviceId: device.deviceId,
     name: device.name,
@@ -198,12 +211,24 @@ async function visualMockInvoke<T = unknown>(
   args: unknown[] = [],
 ): Promise<T> {
   const realData = await loadVisualRealDataSnapshot();
+  const state = sessionState(_deviceId, realData);
+  switch (channel) {
+    case 'local-db:sessions:list':
+      return state.list(args[1] as string | undefined) as T;
+    case 'local-db:sessions:get':
+      return state.get(String(args[0] ?? realData?.selectedSessionId ?? VISUAL_MOCK_SESSION_ID)) as T;
+    case 'local-db:sessions:patch-meta': {
+      const updated = state.patch(String(args[0]), args[1] as SessionMetaPatch);
+      return updated as T;
+    }
+    case 'local-db:task-tags:execute': {
+      const result = state.execute(args[0] as TaskTagRequest);
+      remoteSessionStore.setDeviceSessions(_deviceId, realData?.device.name ?? VISUAL_MOCK_DEVICE_NAME, state.list('all'));
+      return result as T;
+    }
+  }
   if (realData) {
     switch (channel) {
-      case 'local-db:sessions:list':
-        return realDataSessions(realData, args[0] as string | undefined) as T;
-      case 'local-db:sessions:get':
-        return realDataSession(realData, String(args[0] ?? realData.selectedSessionId ?? '')) as T;
       case 'local-db:messages:list':
         return (realData.messagesBySession[String(args[0] ?? realData.selectedSessionId ?? '')] ?? []) as T;
       case 'local-db:messages:view': {
@@ -223,10 +248,6 @@ async function visualMockInvoke<T = unknown>(
     case 'maker:predict-prompt':
       return { prompt: (args[0] as { sessionId?: string } | undefined)?.sessionId === 'visual-prompt-recommendation'
         ? '继续跟进 PR #4670' : null } as T;
-    case 'local-db:sessions:list':
-      return visualMockSessions(args[0] as string | undefined) as T;
-    case 'local-db:sessions:get':
-      return visualMockSession(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
     case 'local-db:messages:list':
       return visualMockMessages(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
     case 'local-db:messages:view': {
@@ -369,7 +390,7 @@ function seedRealDataStore(snapshot: VisualRealDataSnapshot | null): boolean {
     deviceId: device.deviceId,
     name: device.name,
   })));
-  remoteSessionStore.setDeviceSessions(snapshot.device.deviceId, snapshot.device.name, snapshot.sessions);
+  remoteSessionStore.setDeviceSessions(snapshot.device.deviceId, snapshot.device.name, sessionState(snapshot.device.deviceId, snapshot).list('all'));
   for (const session of snapshot.sessions) {
     remoteSessionStore.setMessages(session.id, snapshot.messagesBySession[session.id] ?? []);
     remoteSessionStore.setInputProjection(session.id, realDataProjection(snapshot, session.id));
@@ -380,18 +401,6 @@ function seedRealDataStore(snapshot: VisualRealDataSnapshot | null): boolean {
   }
   remoteSessionStore.setActiveSessionSnapshots(snapshot.device.deviceId, []);
   return true;
-}
-
-function realDataSessions(snapshot: VisualRealDataSnapshot, statusFilter?: string): RemoteSession[] {
-  if (statusFilter === 'automation') return snapshot.sessions.filter((session) => session.source === 'scheduler');
-  if (statusFilter === 'archived') return snapshot.sessions.filter((session) => session.status === 'archived');
-  return snapshot.sessions;
-}
-
-function realDataSession(snapshot: VisualRealDataSnapshot, sessionId: string): RemoteSession {
-  return snapshot.sessions.find((session) => session.id === sessionId)
-    ?? snapshot.sessions.find((session) => session.id === snapshot.selectedSessionId)
-    ?? snapshot.sessions[0];
 }
 
 function realDataProjection(snapshot: VisualRealDataSnapshot, sessionId: string): InputProjection {

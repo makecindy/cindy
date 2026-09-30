@@ -505,6 +505,8 @@
     "referenceCount": "{{num}} 條",
     "referenceTruncated": "已截斷",
     "pinnedSection": "置頂",
+    "otherTasks": "其他任務",
+    "pinnedRunning": "{{count}} 執行中",
     "extraDirsSummary": "當前 {{num}} 個附加目錄",
     "noExtraDirsSummary": "當前沒有附加目錄",
     "attachmentUploadFailed": "附件上傳失敗，可重試或刪除這條訊息。",

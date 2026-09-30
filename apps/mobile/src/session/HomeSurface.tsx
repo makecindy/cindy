@@ -1,3 +1,5 @@
+import { PinnedSectionContext, usePinnedSection } from './PinnedSectionContext';
+import { pinnedSectionMetrics } from '@/theme/tokens';
 import { usePublishHomeScheduleUnread } from './HomeUnreadContext';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import type { HomeMode } from './homeViewPreferenceStore';
@@ -1850,6 +1852,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   const sharedGroup = useMemo(() => splitSharedHomeGroup(home, ownedSharedTasks, {
     sessions: homeSessions, searchQuery, statusFilter,
   }), [home, ownedSharedTasks, homeSessions, searchQuery, statusFilter]);
+  const pinnedRunningCount = sharedGroup.home.pinned.filter(item => runningSessionIds.has(item.session.id)).length;
   const sharedRows = shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? [] : sharedGroup.rows;
   const homeSections = useMemo(
     () => buildHomeSections(sharedGroup.home, groupByProject, pinnedCollapsed, {
@@ -2415,9 +2418,10 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
 
   // 置顶组与项目组一致:点表头收起/展开,共用同一条收起动画。
   const togglePinned = useCallback(() => {
+    swipeRegistry.closeOpenRow();
     configureCollapseAnimation();
     setPinnedCollapsed((collapsed) => !collapsed);
-  }, []);
+  }, [setPinnedCollapsed, swipeRegistry]);
 
   const openProjectSessions = useCallback((project: MobileHomeProjectGroup) => {
     if (!project.deviceId) return;
@@ -2450,7 +2454,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   }) => (
     <HomeListRow
       expandedAutomationGroups={expandedAutomationGroups}
-      isLastPinnedRow={section.key === 'pinned' && index === section.data.length - 1 && sections.length > 1}
+      isLastPinnedRow={section.key === 'pinned' && index === section.data.length - 1}
       item={item}
       machineIdentity={isFolderHomeRow(item) ? projectMachineIdentities.get(item.project.key) : undefined}
       nextIsBlock={isBlockHomeRow(section.data[index + 1])}
@@ -2712,30 +2716,40 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
           if (section.key !== 'pinned' || !section.title) return null;
           return (
             <Pressable
-              accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: sharedGroup.home.pinned.length })}
+              accessibilityLabel={[
+                t('devices.list.a11y.pinnedConversations', { count: sharedGroup.home.pinned.length }),
+                pinnedCollapsed && pinnedRunningCount > 0
+                  ? t('session.row.pinnedRunning', { count: pinnedRunningCount })
+                  : null,
+              ].filter(Boolean).join(', ')}
               accessibilityRole="button"
               accessibilityState={{ expanded: !pinnedCollapsed }}
               onPress={togglePinned}
-              style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}
+              style={({ pressed }) => [styles.pinnedHeader, pinnedCollapsed && styles.pinnedHeaderCollapsed, pressed && styles.pressed]}
               testID="home.pinnedHeader"
             >
+              <Pin color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.thin} />
+              <Text style={styles.pinnedTitle} numberOfLines={1}>{section.title}</Text>
+              {pinnedCollapsed && pinnedRunningCount > 0 ? (
+                <Text style={styles.pinnedCount} numberOfLines={1}>
+                  {t('session.row.pinnedRunning', { count: pinnedRunningCount })}
+                </Text>
+              ) : null}
+              <Text style={styles.pinnedCount} numberOfLines={1}>{sharedGroup.home.pinned.length}</Text>
               {pinnedCollapsed ? (
-                <ChevronRight color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+                <ChevronRight color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.regular} />
               ) : (
-                <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+                <ChevronDown color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.regular} />
               )}
-              <Pin color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
-              <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
-              <Text style={styles.projectCount} numberOfLines={1}>{sharedGroup.home.pinned.length}</Text>
             </Pressable>
           );
         }}
-        renderSectionFooter={({ section }) => section.key === 'pinned' && sections.length > 1
-          // 置顶区底部一根全宽线,把置顶对话与下面的其他对话分开(仅当下方还有其他分区时才画;
-          // 下方首行是块时不画 —— 块自己的全宽顶线就是这根分割线)。
-          && !isBlockHomeRow(sections[1]?.data[0]) ? (
-            <View style={styles.pinnedFooter} testID="home.pinnedFooter" />
-          ) : null}
+        renderSectionFooter={({ section }) => section.key === 'pinned' && sections.length > 1 ? (
+          <View style={styles.pinnedFooter} testID="home.pinnedFooter">
+            <Text style={styles.otherTasksTitle}>{t('session.row.otherTasks')}</Text>
+            <View style={styles.otherTasksRule} />
+          </View>
+        ) : null}
         ListEmptyComponent={
           sharedRows.length > 0 ? null : initialHomeLoading || taskSuggestionsPending ? (
             <HomeInitialLoadingState
@@ -3909,7 +3923,7 @@ function HomeListRowInner({
   swipe,
 }: {
   expandedAutomationGroups: readonly string[];
-  /** 置顶组展开态:行进入置顶卡片内的缩进/描边形态(CINDY list 视觉)。 */
+  /** Close the outline even when pinned is the only section. */
   isLastPinnedRow: boolean;
   item: HomeRow;
   machineIdentity?: HomeProjectMachineIdentity;
@@ -3936,6 +3950,7 @@ function HomeListRowInner({
   showAllDialogue: boolean;
   swipe: SessionSwipeControls;
 }) {
+  const styles = useThemedStyles(makeStyles);
   if (isFolderHomeRow(item)) {
     return (
       <ProjectRow
@@ -3981,8 +3996,7 @@ function HomeListRowInner({
   // 普通会话行(含置顶区)在这里挂滑动操作;自动化组行不挂 —— 组行代表多次运行,
   // 「置顶/归档这一组」语义含混,但其展开的子行经 swipe 透传同样可滑。
   // 项目组子行 / 自动化子行的滑动在各自渲染路径内包裹;选择态不传 swipe。
-  if (item.item.automationGroup || !conversationSearchAllowsLocalWrites(item.item)) return row;
-  return (
+  const content = item.item.automationGroup || !conversationSearchAllowsLocalWrites(item.item) ? row : (
     <SwipeableSessionRow
       onArchive={onArchive}
       onShowOptions={onShowOptions}
@@ -3994,6 +4008,13 @@ function HomeListRowInner({
       {row}
     </SwipeableSessionRow>
   );
+  return item.source === 'pinned' ? (
+    <PinnedSectionContext.Provider value={true}>
+      <View style={[styles.pinnedRow, isLastPinnedRow && styles.pinnedRowLast]}>
+        {content}
+      </View>
+    </PinnedSectionContext.Provider>
+  ) : content;
 }
 
 // 导出给项目作用域的设备详情页(app/devices/[deviceId].tsx)复用,保证两处会话行视觉一致。
@@ -4071,6 +4092,7 @@ function HomeSessionRowInner({
   testID: string;
   titleTestIDPrefix?: string;
 }) {
+  const inPinnedSection = usePinnedSection();
   const activeSessionId = useContext(ActiveHomeSession);
   const active = item.session.id === activeSessionId || !!(activeSessionId && item.automationGroup?.sessionIds.includes(activeSessionId));
   const styles = useThemedStyles(makeStyles);
@@ -4099,7 +4121,7 @@ function HomeSessionRowInner({
   // 对齐桌面多绑定语义:只有同一会话的所有 schedule 都 paused / expired，
   // 才在 Timer 固定槽位叠 Pause 角标；任一 active 绑定仍保留普通 Timer。
   const scheduleStopped = item.scheduleInfo?.allSchedulesStopped === true;
-  const showPinned = !!item.session.pinnedAt;
+  const showPinned = !!item.session.pinnedAt && !inPinnedSection;
   // 自动化组行:同一任务的多次运行折叠而成(共享层 groupAutomationListItems 产出)。
   // 没接展开回调的调用点退化为普通行为(点击打开 primary 会话)。
   // 块模式:组行 + 展开的子行整体包在一个上下全宽线的块里;组行自身不再画缩进分割线
@@ -4143,6 +4165,7 @@ function HomeSessionRowInner({
       style={blockMode
         ? [
           styles.automationGroupBlock,
+          inPinnedSection && styles.pinnedSurface,
           suppressBlockTopBorder && styles.automationGroupBlockNoTop,
         ]
         : undefined}
@@ -4162,7 +4185,8 @@ function HomeSessionRowInner({
         onPress={handlePress}
         style={({ pressed }) => [
           styles.sessionListRow,
-          active && { backgroundColor: colors.surfaceChip },
+          inPinnedSection && styles.pinnedSurface,
+          active && { backgroundColor: inPinnedSection ? colors.pinnedSectionSelected : colors.surfaceChip },
           !showPreviewLine && styles.sessionListRowSingleLine,
           indented && styles.sessionListRowIndented,
           deepIndented && styles.sessionListRowDeepIndented,
@@ -4223,6 +4247,7 @@ function HomeSessionRowInner({
         ) : null}
         <View style={[
           styles.sessionListContent,
+          inPinnedSection && styles.pinnedDivider,
           (hideDivider || blockMode || (!!group && groupExpanded)) && styles.sessionListContentNoDivider,
         ]}>
           <View style={styles.sessionTitleRow}>
@@ -4236,7 +4261,7 @@ function HomeSessionRowInner({
             >
               {item.title}
             </Text>
-            <TaskTagDots tags={item.session.tags} surfaceColor={colors.surface} />
+            <TaskTagDots tags={item.session.tags} surfaceColor={inPinnedSection ? colors.pinnedSectionBackground : colors.surface} />
             {sourceLabel ? (
               <Text
                 ellipsizeMode="tail"
@@ -4248,7 +4273,7 @@ function HomeSessionRowInner({
               </Text>
             ) : null}
             {rightStatus === 'time' ? (
-              <SessionRelativeTime lastActivityAt={item.lastActivityAt} style={styles.sessionTime} />
+              <SessionRelativeTime lastActivityAt={item.lastActivityAt} style={[styles.sessionTime, inPinnedSection && styles.pinnedMetadata]} />
             ) : (
               // 统一 18×18 定位槽(对齐桌面 size-4 槽的做法):点(10)与 spinner(15)
               // 尺寸不同,裸放会导致两者横/纵中心不一致,先居中到同一槽再谈对齐。
@@ -4354,6 +4379,7 @@ function AutomationGroupChildren({
   testID: string;
   titleTestIDPrefix?: string;
 }) {
+  const inPinnedSection = usePinnedSection();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -4367,7 +4393,7 @@ function AutomationGroupChildren({
   });
   const hasViewAllRow = hiddenCount > 0 && !!onOpenGroup;
   return (
-    <View style={styles.automationGroupChildren} testID={childrenTestID ?? `${testID}.automationGroupChildren`}>
+    <View style={[styles.automationGroupChildren, inPinnedSection && styles.pinnedSurface]} testID={childrenTestID ?? `${testID}.automationGroupChildren`}>
       {visibleItems.map((child, index) => {
         const row = (
           <HomeSessionRow
@@ -4773,8 +4799,73 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingBottom: LEGACY_HOME_LIST_BOTTOM_RESERVE,
     paddingTop: 0,
   },
-  // 置顶区收尾线:回 XD-Maker 原版 hairline(换肤卡片化曾置 0,通栏回退一并恢复)。
-  pinnedFooter: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
+  pinnedHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 44,
+    marginHorizontal: spacing.md,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.pinnedSectionBackground,
+    borderColor: colors.pinnedSectionBorder,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: 0,
+    borderTopLeftRadius: pinnedSectionMetrics.expandedRadius,
+    borderTopRightRadius: pinnedSectionMetrics.expandedRadius,
+    overflow: 'hidden',
+  },
+  pinnedHeaderCollapsed: {
+    minHeight: pinnedSectionMetrics.collapsedHeight,
+    borderRadius: pinnedSectionMetrics.collapsedRadius,
+    borderTopLeftRadius: pinnedSectionMetrics.collapsedRadius,
+    borderTopRightRadius: pinnedSectionMetrics.collapsedRadius,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  pinnedTitle: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
+  },
+  pinnedMetadata: { color: colors.textSecondary },
+  pinnedCount: {
+    color: colors.textSecondary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
+    paddingHorizontal: spacing.sm,
+  },
+  pinnedRow: {
+    marginHorizontal: spacing.md,
+    backgroundColor: colors.pinnedSectionBackground,
+    borderColor: colors.pinnedSectionBorder,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+  },
+  pinnedRowLast: {
+    borderBottomLeftRadius: pinnedSectionMetrics.expandedRadius,
+    borderBottomRightRadius: pinnedSectionMetrics.expandedRadius,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  pinnedSurface: { backgroundColor: colors.pinnedSectionBackground },
+  pinnedDivider: { borderBottomColor: colors.pinnedSectionBorder },
+  pinnedFooter: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginHorizontal: spacing.xl,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
+  otherTasksTitle: {
+    color: colors.textTertiary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
+  },
+  otherTasksRule: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
   initialLoadingState: {
     alignItems: 'center',
     gap: spacing.sm,

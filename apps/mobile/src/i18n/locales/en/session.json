@@ -505,6 +505,8 @@
     "referenceCount": "{{num}} messages",
     "referenceTruncated": "Truncated",
     "pinnedSection": "Pinned",
+    "otherTasks": "Other tasks",
+    "pinnedRunning": "{{count}} running",
     "extraDirsSummary": "{{num}} additional directories",
     "noExtraDirsSummary": "No additional directories",
     "attachmentUploadFailed": "Attachment upload failed; retry or delete this message.",

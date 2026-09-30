@@ -21,6 +21,7 @@
  *    避免拆手势树。读取失败时才回退到 Animated listener 的最近值。
  */
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { usePinnedSection } from './PinnedSectionContext';
 import { Animated, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import {
   ClassicSwipeable as Swipeable,
@@ -89,6 +90,7 @@ function SwipeableSessionRowInner({
   children,
 }: SwipeableSessionRowProps) {
   const rowKey = session.id;
+  const inPinnedSection = usePinnedSection();
   const pinnedAt = session.pinnedAt;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -283,8 +285,8 @@ function SwipeableSessionRowInner({
   return (
     <Swipeable
       ref={methodsRef}
-      childrenContainerStyle={{ backgroundColor: colors.surface }}
-      containerStyle={{ backgroundColor: colors.surface }}
+      childrenContainerStyle={{ backgroundColor: inPinnedSection ? colors.pinnedSectionBackground : colors.surface }}
+      containerStyle={{ backgroundColor: inPinnedSection ? colors.pinnedSectionBackground : colors.surface }}
       onSwipeableClose={handleClose}
       onSwipeableOpenStartDrag={handleOpenStartDrag}
       onSwipeableWillOpen={handleWillOpen}

@@ -3539,6 +3539,27 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeReset)).toBe(false);
   });
 
+  it('rejects a pre-write list arriving after an unchanged local unpin acknowledgement', () => {
+    const original = session('s1', { pinnedAt: '2026-09-28T00:00:00.000Z' });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [original]);
+    const otherEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-2');
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { pinnedAt: null });
+    // Unpin requests a reseed before the remote write finishes. Its list can
+    // still contain original, but arrive after the pending write was released.
+    const staleEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { pinnedAt: null });
+    if (remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', staleEpoch)) {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [original]);
+    }
+    expect(remoteSessionStore.getSessions()[0].pinnedAt).toBeNull();
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', staleEpoch)).toBe(false);
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-2', otherEpoch)).toBe(true);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });
+    const archiveRead = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', archiveRead)).toBe(false);
+  });
+
   it('fences an older whole-list snapshot after valid session usage pushes', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
 

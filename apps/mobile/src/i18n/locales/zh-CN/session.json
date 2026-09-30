@@ -501,6 +501,8 @@
     "referenceCount": "{{num}} 条",
     "referenceTruncated": "已截断",
     "pinnedSection": "置顶",
+    "otherTasks": "其他任务",
+    "pinnedRunning": "{{count}} 运行中",
     "extraDirsSummary": "当前 {{num}} 个附加目录",
     "noExtraDirsSummary": "当前没有附加目录",
     "attachmentUploadFailed": "附件上传失败，可重试或删除这条消息。",

@@ -65,6 +65,16 @@
 
 ---
 
+### 置顶分区（2026-09-28 用户确认）
+
+首页与常驻任务侧栏的置顶分区使用独立鼠尾草绿背景，颜色取
+`pinnedSectionBackground / pinnedSectionBorder / pinnedSectionSelected`，深浅两套值均由
+`src/theme/tokens.ts` 定义。此处是分组身份色，不复用运行或成功状态色；普通列表继续使用 base token。
+展开轮廓 18、收起轮廓 14 的限定几何取 `pinnedSectionMetrics`，不扩散到通用圆角阶梯。
+收起后仅保留 52 高的绿色标题栏，普通任务上移，数量与已有运行状态摘要仍可见。
+组内时间与预览用 `textSecondary`，保证绿色背景上的对比度；标题保留 `textPrimary`。
+完整边界见 [DESIGN.md](../../../docs/design-rules/DESIGN.md#mobile-pinned-task-group-user-approved-2026-09-28)。
+
 ## 3. 字体与排版
 
 排版是过去最乱的一块(各屏自造了 ~19 个字号 + ~13 个行高)。现在收敛到一套阶梯,**优先用 token 不写裸数字**。

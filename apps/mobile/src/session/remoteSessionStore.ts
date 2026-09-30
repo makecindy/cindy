@@ -3308,6 +3308,12 @@ export const remoteSessionStore = {
   },
 
   applySessionPatch(deviceId: string, sessionId: string, patch: Partial<RemoteSession>): void {
+    // Fence reads started before a local metadata write or its acknowledgement.
+    // Even an unchanged acknowledgement must invalidate a pre-write snapshot:
+    // pending-field protection ends when the write settles.
+    if (['title', 'status', 'pinnedAt'].some((key) => Object.prototype.hasOwnProperty.call(patch, key))) {
+      bumpDeviceSessionListMutationEpoch(deviceId);
+    }
     const shard = shards.get(deviceId);
     if (!shard) {
       if (patch.status === 'active') reseedHandlers.get(deviceId)?.forEach((handler) => handler());

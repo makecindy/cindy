@@ -21,6 +21,7 @@
  *    worklet 拖动中触发 —— 手指还按着时行被移除会拆手势树。
  */
 import { memo, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { usePinnedSection } from "./PinnedSectionContext";
 import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
 import {
   ReanimatedSwipeable as Swipeable,
@@ -111,6 +112,7 @@ function SwipeableSessionRowInner({
   children,
 }: SwipeableSessionRowProps) {
   const rowKey = session.id;
+  const inPinnedSection = usePinnedSection();
   const pinnedAt = session.pinnedAt;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -244,8 +246,8 @@ function SwipeableSessionRowInner({
   return (
     <Swipeable
       ref={methodsRef}
-      childrenContainerStyle={{ backgroundColor: colors.surface }}
-      containerStyle={{ backgroundColor: colors.surface }}
+      childrenContainerStyle={{ backgroundColor: inPinnedSection ? colors.pinnedSectionBackground : colors.surface }}
+      containerStyle={{ backgroundColor: inPinnedSection ? colors.pinnedSectionBackground : colors.surface }}
       onSwipeableClose={handleClose}
       onSwipeableOpenStartDrag={handleOpenStartDrag}
       onSwipeableWillOpen={handleWillOpen}

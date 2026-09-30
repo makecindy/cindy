@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SwipeableProps } from "@/platform/gestureHandler";
 import type { RemoteSession } from "@/session/types";
 import { SwipeableSessionRow } from "@/session/SwipeableSessionRow.ios";
+import { PinnedSectionContext } from "@/session/PinnedSectionContext";
 
 const runtime = vi.hoisted(() => ({
   translation: { value: 0 },
@@ -111,7 +112,7 @@ vi.mock("@/session/swipeRowRegistry", () => ({
 vi.mock("@/theme", () => ({
   iconSize: { swipeAction: 24 },
   iconStroke: { regular: 2 },
-  useTheme: () => ({ colors: {} }),
+  useTheme: () => ({ colors: { surface: "ordinary", pinnedSectionBackground: "pinned" } }),
   useThemedStyles: (make: (colors: object) => unknown) => make({}),
 }));
 vi.mock("@/theme/tokens", () => ({
@@ -127,15 +128,17 @@ const controls = {
   onShowOptions: vi.fn(),
   registry: { onRowOpen: vi.fn(), onRowClose: vi.fn(), closeOpenRow: vi.fn() },
 };
-function render(id: string) {
+function render(id: string, inPinnedSection = false) {
   act(() =>
     root.render(
+      <PinnedSectionContext.Provider value={inPinnedSection}>
       <SwipeableSessionRow
         {...controls}
         session={{ id, status: "active" } as RemoteSession}
       >
         row
-      </SwipeableSessionRow>,
+      </SwipeableSessionRow>
+      </PinnedSectionContext.Provider>,
     ),
   );
 }
@@ -156,6 +159,14 @@ beforeEach(() => {
 afterEach(() => act(() => root.unmount()));
 
 describe("iOS swipe runtime contracts (mocked native boundary)", () => {
+  it("keeps both swipe layers green only inside the pinned group, including when a slot is reused", () => {
+    render("a", true);
+    expect(runtime.props?.containerStyle).toEqual({ backgroundColor: "pinned" });
+    expect(runtime.props?.childrenContainerStyle).toEqual({ backgroundColor: "pinned" });
+    render("a", false);
+    expect(runtime.props?.containerStyle).toEqual({ backgroundColor: "ordinary" });
+    expect(runtime.props?.childrenContainerStyle).toEqual({ backgroundColor: "ordinary" });
+  });
   it.each([
     ["left", -260, "onArchive"],
     ["right", 260, "onTogglePin"],

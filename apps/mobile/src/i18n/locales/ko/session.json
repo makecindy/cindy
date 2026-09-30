@@ -501,6 +501,8 @@
     "referenceCount": "{{num}}건",
     "referenceTruncated": "잘림",
     "pinnedSection": "고정됨",
+    "otherTasks": "기타 세션",
+    "pinnedRunning": "{{count}}개 실행 중",
     "extraDirsSummary": "추가 디렉터리 {{num}}개",
     "noExtraDirsSummary": "추가 디렉터리 없음",
     "attachmentUploadFailed": "첨부 업로드에 실패했습니다. 다시 시도하거나 이 메시지를 삭제하세요.",

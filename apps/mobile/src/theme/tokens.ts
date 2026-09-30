@@ -52,6 +52,10 @@ export interface ThemeColors {
   surfaceListRow: string;
   /** List 展开项目 block 专用底色 */
   surfaceListExpanded: string;
+  /** Pinned group identity, independent of running and selection status. */
+  pinnedSectionBackground: string;
+  pinnedSectionBorder: string;
+  pinnedSectionSelected: string;
   /** List 行首品牌箭头 active 小图形色(非按钮红) */
   activeGlyph: string;
   /** Chat / task code card 专用底色 */
@@ -422,6 +426,9 @@ export const lightColors: ThemeColors = {
   surfaceGlassPanel: '#FFFFFC',
   surfaceListRow: '#FFFFFC',
   surfaceListExpanded: '#EAEAE6',
+  pinnedSectionBackground: '#E4ECDF',
+  pinnedSectionBorder: '#CAD6C3',
+  pinnedSectionSelected: '#CDDCC5',
   activeGlyph: '#DF0C27',
   chatCodeSurface: '#F1F1EC',
   chatCodeBorder: '#CCCCC8',
@@ -511,6 +518,9 @@ export const darkColors: ThemeColors = {
   surfaceGlassPanel: '#242424',
   surfaceListRow: '#1E1E1E',
   surfaceListExpanded: '#121212',
+  pinnedSectionBackground: '#39463B',
+  pinnedSectionBorder: '#546450',
+  pinnedSectionSelected: '#425044',
   activeGlyph: '#A61629',
   chatCodeSurface: '#1A1A1A',
   chatCodeBorder: '#383838',
@@ -584,6 +594,9 @@ export const spacing = {
   xl: 24,
   xxl: 32,
 } as const;
+
+/** Pinned content outline approved 2026-09-28; not a new global radius tier. */
+export const pinnedSectionMetrics = { expandedRadius: 18, collapsedRadius: 14, collapsedHeight: 52 } as const;
 
 /**
  * 圆角四档,对齐桌面 docs/design-rules/cindy-design-system.md 三档(8 内层控件 / 12 容器 / pill)+ 移动端微元素档:
