@@ -62,7 +62,10 @@ describe('all OpenAI routes share the daily context default', () => {
     const provider = buildUserProvider(config(mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: ids.map(id => ({
       id, context_window: 872_000,
     })) })!)));
-    setCustomProviders([{ ...provider, source }]);
+    // Legacy catalogs may omit source; current providers require an explicit source.
+    if (source === undefined) Reflect.deleteProperty(provider, 'source');
+    else provider.source = source;
+    setCustomProviders([provider]);
     for (const agent of agents) for (const id of ids) {
       expect(row(agent, id)).toMatchObject({ contextWindow: 272_000, contextWindowMax: 872_000 });
     }
@@ -77,8 +80,9 @@ describe('all OpenAI routes share the daily context default', () => {
     setActiveCatalog(catalog);
     const models = parseModelsListResponse({ data: [{ id: 'deployment-astra' }] })!;
     setCustomProviderConfigs([config(models), {
-      id: 'custom:router', name: 'Router', catalogPresetId: 'openrouter',
+      id: 'custom:router', name: 'Router',
       runtimes: Object.fromEntries(agents.map(agent => [agent, {
+        catalogPresetId: 'openrouter',
         baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat',
         models: mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: [{ id: 'openai/gpt-6-astra', context_length: 1_050_000 }] })!),
       }])),
