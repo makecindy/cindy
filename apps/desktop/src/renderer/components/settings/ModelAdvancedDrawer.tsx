@@ -313,7 +313,9 @@ export function ModelAdvancedDrawer({
    * 档位组合用固定候选（与目录 Effort 全集同序）而不是自由输入：组合爆炸（2^7）无法
    * 列举，而真实诉求只有「沿用厂商 / 声明常见的几档」两类。勾选语义 = 该模型支持这一档。
    */
-  const THINKING_TIER_CHOICES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+  // 与目录 Effort 全集同序（含 ultra：它是合法 Effort，IPC 与 Pi 映射都接受）。
+  // 漏掉它会让「已有含 ultra 的声明」在用户勾选其它档位时被按这份列表重建 → 静默删除。
+  const THINKING_TIER_CHOICES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
   const setThinkingTiers = async (tiers: string[] | null) => {
     // 已经是该状态就别再写一次：免掉一次空写入引起的全量目录刷新与广播。各引擎键分叉时
     // 必须放行 —— 否则「重选当前项」被 no-op 挡掉，分叉永远修不掉。
@@ -324,7 +326,13 @@ export function ModelAdvancedDrawer({
           tiers.length === (thinking.value?.length ?? -1) &&
           tiers.every((tier) => thinking.value?.includes(tier));
     if (already && !thinking.diverged) return;
-    const persisted = await thinking.setTiers(tiers, tiers?.[0] ?? null);
+    // 默认档**不猜**：沿用读回回来的既有默认档（仍在新集合内才继续沿用），用户没有
+    // 单独改默认档的入口，猜「排序第一档」会把厂商声明的默认（如 max）静默改成 low。
+    const keptDefault =
+      tiers !== null && thinking.defaultEffort && tiers.includes(thinking.defaultEffort)
+        ? thinking.defaultEffort
+        : null;
+    const persisted = await thinking.setTiers(tiers, keptDefault);
     if (!persisted) {
       const reason = thinking.errorReason;
       toast.error(

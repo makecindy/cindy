@@ -4594,6 +4594,50 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("realigns the thinking tier snapshot when the user declares tiers on the current model", async () => {
+    // 用户在设置里给**当前**模型声明思考档位后，活着的子进程仍是启动时的零档位快照：
+    // activeEffortSnapshot 是 startSession 一次性解析的，Pi 的 set_model 不重读 models.json。
+    // 切模（含同路由 no-op）是用户可见的自然同步点，必须在这里对齐，否则 thinking 通道
+    // 永远开不出来、推理继续漏进正文，只有重开会话才生效。
+    const declared = { tiers: [] as string[] | undefined };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "tier-realign",
+              name: "Tier Realign",
+              baseUrl: "http://tier-realign.test",
+              api: "openai-completions",
+              // 目录声明支持思考但只给 high 一档：启动快照非空，便于观察对齐行为。
+              models: [{ id: "model-a", input: ["text"], thinkingLevelMap: { high: "high" } }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelCatalogThinkingTiers: (providerId, modelId) =>
+        providerId === "tier-realign" && modelId === "model-a" ? declared.tiers : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "thinking-tier-realign",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "tier-realign",
+    });
+
+    // 用户声明了更多档位 → 同路由 setModel(no-op) 必须把快照对齐过去。
+    declared.tiers = ["low", "high", "max"];
+    captured.requests.length = 0;
+    await handle.setModel!("model-a", { providerId: "tier-realign" });
+
+    // 快照对齐后 setEffort 不再被「零档位快照」挡住：会真的发出 set_thinking_level。
+    await handle.setEffort!("max");
+    const requestTypes = captured.requests.map((request) => request.type);
+    expect(requestTypes).toContain("set_thinking_level");
+    await handle.close();
+  });
+
   it("rejects images when the declaration flips to unsupported without a model switch", async () => {
     // 反向对账：会话启动时快照是「支持图片」，用户后来把声明改成不支持且不切模 ——
     // 先查快照就放行会把图片发给一个已声明不支持的模型。对账必须在信任快照之前跑。

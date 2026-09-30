@@ -2126,18 +2126,28 @@ export function registerProviderHandlers(
       }
     });
   }
-  /** 多目标读回：与图片输入同口径 —— 展示值优先取运行期真正消费档位的引擎(Pi)那一侧。 */
+  /**
+   * 多目标读回。展示值**只认运行期真正消费档位的那一侧（Pi）**：Pi 侧「跟随供应商」
+   * 就显示跟随，不能回落到别的引擎的声明上 —— 那会把 Codex 的值说成 Pi 的实际状态。
+   * 没有任何 Pi 侧目标时（该行没有 Pi 投影）才退回首个非空值。
+   *
+   * 档位数组按**内容**比较而非引用：每次读盘都会造新数组，引用比较会把「两侧声明
+   * 完全一致」永远误判成 diverged，进而让「重选当前项」触发无效落盘与整目录刷新。
+   */
   const readCatalogThinkingTargets = (targets: readonly ModelPriceOverrideTarget[]) => {
     const { read } = requireCatalogThinkingDeps();
     const views = targets.map((target) => read(target));
     const piIndex = targets.findIndex((target) => target.agent === 'pi');
-    const ordered = piIndex >= 0 ? [views[piIndex]!, ...views.filter((_, i) => i !== piIndex)] : views;
-    const firstNonNull = ordered.find((view) => view.value !== null)?.value ?? null;
-    const head = views[0]!;
+    const sameTiers = (a: string[] | null, b: string[] | null): boolean =>
+      a === b || (a !== null && b !== null && a.length === b.length && a.every((t, i) => t === b[i]));
+    const primary = piIndex >= 0 ? views[piIndex]! : views[0]!;
+    const value = primary.value ?? (piIndex >= 0 ? null : views.find((view) => view.value !== null)?.value ?? null);
     return {
-      value: firstNonNull,
+      value,
+      // 默认档跟着展示值那一侧走：写入侧靠它避免猜「排序第一档」把厂商默认改掉。
+      ...(value !== null ? { defaultEffort: primary.defaultEffort ?? null } : {}),
       isCustomized: views.some((view) => view.isCustomized),
-      ...(views.some((view) => view.value !== head.value || view.isCustomized !== head.isCustomized)
+      ...(views.some((view) => !sameTiers(view.value, primary.value) || view.isCustomized !== primary.isCustomized)
         ? { diverged: true }
         : {}),
     };
@@ -2165,8 +2175,11 @@ export function registerProviderHandlers(
   const parseCatalogThinkingTiers = (input: unknown): Effort[] | null => {
     const value = (input as { value?: unknown }).value;
     if (value === null) return null;
-    if (!Array.isArray(value) || value.length === 0) {
-      throwIpcError('INVALID_PARAMS', 'thinking tiers must be a non-empty array or null');
+    // 空数组是三态里的「显式不支持思考」，不是非法输入：底层 sanitize 明确支持
+    // `efforts: []` 配 `defaultEffort: null`（localCatalogOverrides 的 additionModelFor
+    // 同款分支）。把它一并拒掉会让抽屉的第三态永远存不下来，用户只看到保存失败。
+    if (!Array.isArray(value)) {
+      throwIpcError('INVALID_PARAMS', 'thinking tiers must be an array or null');
     }
     const tiers = value.map((tier) => {
       if (typeof tier !== 'string' || !VALID_THINKING_TIERS.has(tier as Effort)) {
@@ -2188,6 +2201,7 @@ export function registerProviderHandlers(
     if (tiers === null || !tiers.includes(raw as Effort)) {
       throwIpcError('INVALID_PARAMS', 'default thinking tier must be one of the declared tiers');
     }
+    // unreachable：上面的 includes 已保证 tiers 非空时 defaultEffort 在集合内。
     return raw as Effort;
   };
 

@@ -6474,6 +6474,47 @@ export class PiAgent extends BaseAgent {
       }
       await reloadImageCapabilityIntoChild(nextModel, rollbackBaseline);
     };
+
+    /**
+     * 思考档位对账:重新读活动目录里该模型**最终**的档位集合,对齐活会话的
+     * `activeEffortSnapshot`。
+     *
+     * 为什么必须做:`activeEffortSnapshot` 是 startSession 一次性解析的,Pi 的 set_model 又
+     * 不重读 models.json —— 用户在设置里声明档位后,活着的子进程仍是零档位快照,thinking
+     * 通道开不出来(推理继续漏进正文),只有重开会话才生效。切模是用户可见的自然同步点,
+     * 与图片能力对账放在同一位置(no-op 早退之前)。
+     *
+     * 只对齐**档位集合**(决定通道是否存在),不代用户改档位记忆:`set_thinking_level` 的
+     * 具体档位仍由会话自己的 effort 决定。拿不到结论(undefined)时保持快照不变,不猜。
+     */
+    const refreshThinkingTiersOnSwitch = async (
+      nextModel: string,
+      nextRequestedProviderId: string | null | undefined,
+    ): Promise<void> => {
+      const specProviderId = resolveProviderForModel(nextModel, nextRequestedProviderId);
+      if (specProviderId === PI_PROVIDER_ID) {
+        // 网关路由的档位不在本机声明面内(设置里没有该入口)。
+        return;
+      }
+      const declared = this.deps.readModelCatalogThinkingTiers?.(
+        resolveSourceProvider(specProviderId),
+        nextModel,
+      );
+      if (!declared) return;
+      // 与快照同口径(启动时也是这批档位);声明为空数组 = 显式「不支持思考」,同样要落定。
+      const next = [...declared] as Effort[];
+      const current = activeEffortSnapshot ?? [];
+      if (current.length === next.length && current.every((tier, index) => tier === next[index])) {
+        return;
+      }
+      activeEffortSnapshot = next;
+      deps.logger.info('pi: thinking tiers realigned from the active catalog', {
+        model: nextModel,
+        providerId: specProviderId,
+        from: current,
+        to: next,
+      });
+    };
     const switchModel = async (
       model: string,
       setOpts?: { providerId?: string | null; effort?: Effort },
@@ -6528,6 +6569,9 @@ export class PiAgent extends BaseAgent {
           );
         }
       };
+      // 思考档位对账同样必须在同路由 no-op **之前**(与图片能力同一位置):否则用户
+      // 「声明完不动模型」永远走那条早返回,活着的子进程仍是启动时的零档位快照。
+      await refreshThinkingTiersOnSwitch(model, requestedProviderId);
       // 能力对账必须在同路由 no-op **之前**:心跳与「声明后切回同模型」走的都是那条早返回。
       // 无目录变化时这里只花一次内存查找(见函数注释),心跳不受影响。
       await refreshImageCapabilityOnSwitch(model, requestedProviderId);

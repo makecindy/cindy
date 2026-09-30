@@ -13,6 +13,8 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import type { Effort } from '@cindy/model-providers';
+
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-catalog-thinking-test-'));
 const owner = { current: 'owner-a' };
 
@@ -45,6 +47,7 @@ function writeOwnerFile(value: unknown): void {
 describe('model-catalog-override-store / 思考档位声明', () => {
   it('写入落到 base patch，读回 isCustomized 区分「跟随目录」与「显式声明」', async () => {
     owner.current = 'owner-thinking-write';
+    // 未声明时读回不带 defaultEffort 键（没有声明就没有默认档可言）。
     expect(readModelCatalogThinking(target)).toEqual({ value: null, isCustomized: false });
 
     await setModelCatalogThinking(target, [...TIERS], 'max');
@@ -52,7 +55,12 @@ describe('model-catalog-override-store / 思考档位声明', () => {
       efforts: [...TIERS],
       defaultEffort: 'max',
     });
-    expect(readModelCatalogThinking(target)).toEqual({ value: [...TIERS], isCustomized: true });
+    // 读回带上默认档：写入侧靠它沿用既有默认，而不是猜「排序第一档」。
+    expect(readModelCatalogThinking(target)).toEqual({
+      value: [...TIERS],
+      defaultEffort: 'max',
+      isCustomized: true,
+    });
 
     // 换一组档位 = 数组整体替换，不与旧值合并。
     await setModelCatalogThinking(target, ['low', 'high'], 'high');
@@ -64,6 +72,7 @@ describe('model-catalog-override-store / 思考档位声明', () => {
     await setModelCatalogThinking(target, [...TIERS], 'max');
     await setModelCatalogThinking(target, null);
     expect(readModelCatalogOverrides().patches[key]).toBeUndefined();
+    // 未声明时读回不带 defaultEffort 键（没有声明就没有默认档可言）。
     expect(readModelCatalogThinking(target)).toEqual({ value: null, isCustomized: false });
   });
 
@@ -145,6 +154,51 @@ describe('model-catalog-override-store / 思考档位声明', () => {
     await setModelCatalogThinking(piTarget, [...TIERS], 'max');
     expect(readModelCatalogThinkingDivergence([piTarget, codexTarget]).diverged).toBe(true);
 
+    await setModelCatalogThinking(codexTarget, [...TIERS], 'max');
+    expect(readModelCatalogThinkingDivergence([piTarget, codexTarget]).diverged).toBe(false);
+  });
+
+  it('空数组 = 显式「不支持思考」必须能存下来（三态的第三态）', async () => {
+    owner.current = 'owner-thinking-explicit-off';
+    // sanitize 明确支持 efforts: [] 配 defaultEffort: null；写入面不能把它当非法输入。
+    await setModelCatalogThinking(target, [], null);
+    // 空集合必须显式带 defaultEffort: null：sanitize 的自洽校验要求「空集合 ⇒ 无默认档」。
+    expect(readModelCatalogOverrides().patches[key]?.base).toEqual({ efforts: [], defaultEffort: null });
+    expect(readModelCatalogThinking(target)).toMatchObject({ value: [], isCustomized: true });
+
+    // 复位回「跟随目录」后条目整条删除。
+    await setModelCatalogThinking(target, null);
+    expect(readModelCatalogOverrides().patches[key]).toBeUndefined();
+  });
+
+  it('读回带上默认档，写入侧才能不猜（否则会把厂商默认静默改成排序第一档）', async () => {
+    owner.current = 'owner-thinking-default-echo';
+    await setModelCatalogThinking(target, [...TIERS], 'max');
+    // 厂商默认是 max，读回必须原样带回，UI 才能沿用而不是猜 low。
+    expect(readModelCatalogThinking(target)).toMatchObject({
+      value: [...TIERS],
+      defaultEffort: 'max',
+    });
+  });
+
+  it('含 ultra 的声明不会被后续写入静默删掉', async () => {
+    owner.current = 'owner-thinking-ultra';
+    const withUltra: Effort[] = [...TIERS, 'ultra'];
+    await setModelCatalogThinking(target, withUltra, 'max');
+    // 换成不含 ultra 的集合是用户的显式选择，应当照做。
+    await setModelCatalogThinking(target, ['low', 'high'], 'low');
+    expect(readModelCatalogThinking(target).value).toEqual(['low', 'high']);
+    // 但仅声明默认档、集合不变时，ultra 必须原样留着。
+    await setModelCatalogThinking(target, withUltra, 'max');
+    expect(readModelCatalogThinking(target).value).toContain('ultra');
+  });
+
+  it('分叉判定按内容比较：两侧声明完全一致不算分叉', async () => {
+    owner.current = 'owner-thinking-div-content';
+    const piTarget = { providerId: 'openai', agent: 'pi' as const, modelId: 'chatgpt/gpt-5.6-sol' };
+    const codexTarget = { providerId: 'openai', agent: 'codex' as const, modelId: 'gpt-5.6-sol' };
+    // 两个不同 key 各写一次、内容相同：每次读盘都是新数组，引用比较会永远误判分叉。
+    await setModelCatalogThinking(piTarget, [...TIERS], 'max');
     await setModelCatalogThinking(codexTarget, [...TIERS], 'max');
     expect(readModelCatalogThinkingDivergence([piTarget, codexTarget]).diverged).toBe(false);
   });

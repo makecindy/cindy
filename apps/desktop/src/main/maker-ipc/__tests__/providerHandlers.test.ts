@@ -3535,10 +3535,36 @@ describe('model catalog thinking handlers', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, { ...target, value: ['low', 'low'] }),
     ).rejects.toThrow(/INVALID_PARAMS.*must not repeat/);
-    await expect(
-      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, { ...target, value: [] }),
-    ).rejects.toThrow(/INVALID_PARAMS.*non-empty array or null/);
+    expect(deps.writeModelCatalogThinking).not.toHaveBeenCalled();
+  });
 
+  it('accepts an empty tier array as the explicit "no thinking" state', async () => {
+    // 三态的第三态必须能存下来：底层 sanitize 支持 efforts: [] 配 defaultEffort: null，
+    // 把它当非法输入会让用户永远无法声明「该模型不支持思考」。
+    const harness = new IpcHarness();
+    const deps = thinkingDeps();
+    registerProviderHandlers(harness, deps);
+
+    await harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, {
+      ...target,
+      value: [],
+      defaultEffort: null,
+    });
+    expect(deps.writeModelCatalogThinking).toHaveBeenCalledWith([target], [], null);
+  });
+
+  it('rejects a default tier that is absent from an explicitly empty declaration', async () => {
+    const harness = new IpcHarness();
+    const deps = thinkingDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, {
+        ...target,
+        value: [],
+        defaultEffort: 'high',
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS.*must be one of the declared tiers/);
     expect(deps.writeModelCatalogThinking).not.toHaveBeenCalled();
   });
 

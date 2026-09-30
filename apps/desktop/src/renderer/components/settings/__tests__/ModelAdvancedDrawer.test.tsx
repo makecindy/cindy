@@ -195,7 +195,9 @@ describe('model advanced editor', () => {
       expect(target.providerId).toBe('fixture');
       expect(target.modelId).toBe('gpt-6');
       expect(tiers).toEqual(['high']);
-      expect(defaultTier).toBe('high');
+      // 首次声明没有既有默认档可沿用 → 留 null 让运行期按目录默认回退，
+      // 而不是猜「排序第一档」（那会把厂商默认如 max 静默改成 high）。
+      expect(defaultTier).toBeNull();
       // 连接配置不得被这条路径改写。
       expect(window.electronAPI.maker.updateCustomProvider).not.toHaveBeenCalled();
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }

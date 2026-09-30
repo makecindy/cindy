@@ -26,6 +26,12 @@ export interface ModelCatalogThinkingTarget extends ModelPriceOverrideTarget {
 export interface ModelCatalogThinkingView {
   /** null = 没有本地声明(跟随供应商实报)。 */
   value: string[] | null;
+  /**
+   * 本机声明里的默认档。`value` 非 null 时才有意义。
+   * 必须读回：否则用户在抽屉里改档位时无从知道当前默认是哪一档，写入侧只能猜一个
+   * （例如「排序第一档」），那会把厂商声明的默认静默改掉且用户无从修正。
+   */
+  defaultEffort?: string | null;
   isCustomized: boolean;
   /**
    * 该行各引擎的声明**不一致**(手工改文件 / 旧版单键写入留下的存量数据)。展示值取运行期

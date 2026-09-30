@@ -328,7 +328,9 @@ export function readModelCatalogThinking(target: ModelCatalogThinkingStoreTarget
   const overrides = readModelCatalogOverrides();
   const entry = overrides.patches[patchKey(target.providerId, target.modelId)];
   const value = effectiveThinking(entry, target.agent);
-  return value === undefined ? { value: null, isCustomized: false } : { value: value.efforts, isCustomized: true };
+  return value === undefined
+    ? { value: null, isCustomized: false }
+    : { value: value.efforts, defaultEffort: value.defaultEffort, isCustomized: true };
 }
 
 /**

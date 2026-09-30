@@ -896,6 +896,19 @@ export interface AgentDeps {
   readModelCatalogImageCapability?: (providerId: string, modelId: string) => boolean | undefined;
 
   /**
+   * Pi-only:该模型在**活动目录**里最终的思考档位集合(目录与本机 override 合并后的结论)。
+   *
+   * 为什么需要它:`activeEffortSnapshot` 是 startSession 一次性解析的,而 Pi 的 set_model
+   * 不重读 models.json —— 用户在设置里给当前模型声明档位后,活着的子进程仍是启动时的
+   * 零档位快照,于是 thinking 通道开不出来(思考继续漏进正文),必须重开会话才生效。
+   * 与 readModelCatalogImageCapability 同一形状:切模是用户可见的自然同步点,在这里
+   * 重新读一次活动目录即可对齐,无需重建子进程。
+   *
+   * 返回 undefined = 拿不到结论,调用方保持现状不猜。
+   */
+  readModelCatalogThinkingTiers?: (providerId: string, modelId: string) => readonly string[] | undefined;
+
+  /**
    * Pi-only:按实际 provider/model 路由解析运行时描述符。用于启动前校验已持久化 effort，
    * 以及恢复已 retired 模型时补齐当前 session 的私有 models.json；结果不得进入公开
    * availableModels 或授予新选择准入。

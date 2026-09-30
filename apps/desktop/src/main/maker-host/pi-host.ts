@@ -2028,6 +2028,18 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       const declaredInput = model.modalities?.input;
       return declaredInput === undefined ? true : declaredInput.includes('image');
     },
+    // 该模型在活动目录里最终的思考档位集合（目录与本机 override 合并后的结论）。
+    // 活会话的 activeEffortSnapshot 是启动时解析的，Pi 的 set_model 不重读 models.json，
+    // 用户声明档位后必须靠这个钩子在切模点对齐，否则 thinking 通道开不出来。
+    // provider/model 不在目录里 → undefined，调用方保持现状不猜。
+    readModelCatalogThinkingTiers: (providerId, modelId) => {
+      const model = getActiveCatalog()
+        .providers.find((provider) => provider.id === providerId)
+        ?.models.pi?.find((entry) => entry.id === modelId);
+      if (!model) return undefined;
+      // 目录未声明档位（efforts 为空）→ 拿不到结论，交给调用方保持快照不变。
+      return model.efforts.length > 0 ? [...model.efforts] : undefined;
+    },
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
     // `cindy` is the gateway fallback block even when the session starts on a subscription or

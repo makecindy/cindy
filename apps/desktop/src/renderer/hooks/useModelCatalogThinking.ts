@@ -11,7 +11,7 @@ import type {
 } from '../../shared/modelCatalogThinking';
 
 const log = createLogger('UseModelCatalogThinking');
-const EMPTY: ModelCatalogThinkingView = { value: null, isCustomized: false };
+const EMPTY: ModelCatalogThinkingView = { value: null, defaultEffort: null, isCustomized: false };
 
 /**
  * 取给用户看的失败原因：main 的 `[CODE] message` 去掉机器码前缀。main 只在这条路径上带
