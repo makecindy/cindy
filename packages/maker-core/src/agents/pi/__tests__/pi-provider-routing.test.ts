@@ -4596,6 +4596,742 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("picks up an image-capability declaration made after session start when the user switches models", async () => {
+    // 会话启动时目录未声明图片能力(快照 input=['text'])，带图消息被客户端门拒收；用户随后在
+    // 设置里声明(本机目录 override，只落在活动目录)。旧会话的快照与 models.json 都还是启动时
+    // 那份，所以要借切模这个同步点：同路由 setModel(心跳走的也是这条)先做能力对账，不一致就
+    // 热写 models.json 并 switch_session 让子进程 ModelConfig.load 重载。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-declared",
+              name: "Native Declared",
+              baseUrl: "http://declared.test",
+              api: "openai-completions",
+              models: [{ id: "local-model", input: ["text"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      // 活动目录(含本机 override)的声明：未声明 undefined / 声明后 true。
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-declared" && modelId === "local-model" && declared.image
+          ? true
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-declared-after-start",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-declared",
+    });
+    const imagePath = path.join(cwd, "declared.png");
+    writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY4YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const imageMessage = {
+      type: "user" as const,
+      content: [
+        {
+          type: "image" as const,
+          path: imagePath,
+          managedUrl: "xdt-image://pi-managed/declared.png",
+        },
+      ],
+    };
+    const readNativeInput = (): string[] => {
+      const modelsJson = JSON.parse(
+        readFileSync(
+          path.join(captured.env.PI_CODING_AGENT_DIR as string, "models.json"),
+          "utf8",
+        ),
+      ) as {
+        providers: Record<string, { models: Array<{ id: string; input: string[] }> }>;
+      };
+      const block =
+        modelsJson.providers["native-declared"] ??
+        modelsJson.providers["cindy-byom-native-declared"];
+      return block!.models.find((entry) => entry.id === "local-model")!.input;
+    };
+
+    // 基线：声明前客户端门拒收，请求根本不出去，models.json 也没有 image。
+    captured.requests.length = 0;
+    await expect(handle.send(imageMessage)).rejects.toMatchObject({
+      code: "PI_IMAGE_INPUT_UNSUPPORTED",
+    });
+    expect(captured.requests).toHaveLength(0);
+    expect(readNativeInput()).toEqual(["text"]);
+
+    // 用户在设置里声明「支持图片输入」(目录变化，快照不变)。
+    declared.image = true;
+
+    // 切模(目标 = 当前同路由，与心跳同路径)触发对账：热写 + 子进程重载。
+    captured.requests.length = 0;
+    await handle.setModel!("local-model", { providerId: "native-declared" });
+    expect(readNativeInput()).toEqual(["text", "image"]);
+    expect(captured.requests.map((request) => request.type)).toContain("switch_session");
+
+    // 同一条消息现在放行。
+    captured.requests.length = 0;
+    await handle.send(imageMessage);
+    expect(captured.requests).toContainEqual(
+      expect.objectContaining({
+        type: "prompt",
+        images: [expect.objectContaining({ type: "image" })],
+      }),
+    );
+    await handle.close();
+  });
+
+  it("does not rewrite models.json or reload the runtime when the catalog already matches the snapshot", async () => {
+    // 心跳会反复以同路由下发 setModel；声明与会话快照一致时必须零 I/O —— 不热写、不 switch_session。
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-vision",
+              name: "Native Vision",
+              baseUrl: "http://vision.test",
+              api: "openai-completions",
+              models: [{ id: "local-model", input: ["text", "image"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: () => true,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-already-matches",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-vision",
+    });
+    const modelsPath = path.join(
+      captured.env.PI_CODING_AGENT_DIR as string,
+      "models.json",
+    );
+    const before = readFileSync(modelsPath, "utf8");
+    captured.requests.length = 0;
+    await handle.setModel!("local-model", { providerId: "native-vision" });
+    expect(readFileSync(modelsPath, "utf8")).toBe(before);
+    expect(captured.requests.map((request) => request.type)).not.toContain("switch_session");
+    await handle.close();
+  });
+
+  it("refreshes on the first image send when a capability declaration appears after session start without a model switch", async () => {
+    // 声明可能发生在会话启动之后、且用户不切模直接发图：客户端门在拒收前就地补一次能力
+    // 对账(与切模路径同一函数、同一失败语义)，补上即放行；盘上 models.json 同步热写、
+    // 子进程 switch_session 重载。未声明时仍拒收(见另一用例的基线)，且对账零副作用。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-send-refresh",
+              name: "Native Send Refresh",
+              baseUrl: "http://send-refresh.test",
+              api: "openai-completions",
+              models: [{ id: "local-model", input: ["text"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: () => (declared.image ? true : undefined),
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-declared-send-only",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-send-refresh",
+    });
+    const imagePath = path.join(cwd, "send-refresh.png");
+    writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY4YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const imageMessage = {
+      type: "user" as const,
+      content: [
+        {
+          type: "image" as const,
+          path: imagePath,
+          managedUrl: "xdt-image://pi-managed/send-refresh.png",
+        },
+      ],
+    };
+    const modelsPath = path.join(
+      captured.env.PI_CODING_AGENT_DIR as string,
+      "models.json",
+    );
+    const readSendRefreshInput = (): string[] => {
+      const modelsJson = JSON.parse(readFileSync(modelsPath, "utf8")) as {
+        providers: Record<string, { models: Array<{ id: string; input: string[] }> }>;
+      };
+      const block =
+        modelsJson.providers["native-send-refresh"] ??
+        modelsJson.providers["cindy-byom-native-send-refresh"];
+      return block!.models.find((entry) => entry.id === "local-model")!.input;
+    };
+    expect(readSendRefreshInput()).toEqual(["text"]);
+
+    // 会话启动后才声明；不切模，直接发图。
+    declared.image = true;
+    captured.requests.length = 0;
+    await handle.send(imageMessage);
+
+    // 对账生效：盘上热写 + 子进程重载 + prompt 带图放行。
+    expect(readSendRefreshInput()).toEqual(["text", "image"]);
+    expect(captured.requests.map((request) => request.type)).toContain("switch_session");
+    expect(captured.requests).toContainEqual(
+      expect.objectContaining({
+        type: "prompt",
+        images: [expect.objectContaining({ type: "image" })],
+      }),
+    );
+    await handle.close();
+  });
+
+  it("keeps the session route when a late capability declaration is reconciled on a same-route model switch", async () => {
+    // switch_session 按进程启动时的 --provider/--model 重建 AgentSession：对账里如果只
+    // switch_session 而不重放当前路由，会话内切过模的会话会被静默拽回启动路由 —— 同路由
+    // no-op 与发图都不会再打 set_model，提示词发给错误的模型且没有任何报错。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-route-keep",
+              name: "Native Route Keep",
+              baseUrl: "http://route-keep.test",
+              api: "openai-completions",
+              models: [
+                { id: "model-a", input: ["text"] },
+                { id: "model-b", input: ["text"] },
+              ],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-route-keep" && modelId === "model-b" && declared.image
+          ? true
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-route-keep",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-route-keep",
+    });
+    await handle.setModel!("model-b", { providerId: "native-route-keep" });
+    expect(captured.runtimeModel).toBe("model-b");
+
+    // 会话里已切到 model-b；用户此刻声明图片能力，下一次心跳以同路由 setModel(model-b)
+    // 触发对账（与 no-op 分支同路径）。
+    declared.image = true;
+    captured.requests.length = 0;
+    await handle.setModel!("model-b", { providerId: "native-route-keep" });
+
+    // 对账生效，且子进程仍在 model-b（而不是被 switch_session 拽回 model-a）。
+    expect(captured.runtimeModel).toBe("model-b");
+    const requestTypes = captured.requests.map((request) => request.type);
+    expect(requestTypes).toContain("switch_session");
+    expect(requestTypes.indexOf("set_model")).toBeGreaterThan(
+      requestTypes.indexOf("switch_session"),
+    );
+    await handle.close();
+  });
+
+  it("realigns the thinking tier snapshot when the user declares tiers on the current model", async () => {
+    // 用户在设置里给**当前**模型声明思考档位后，活着的子进程仍是启动时的零档位快照：
+    // activeEffortSnapshot 是 startSession 一次性解析的，Pi 的 set_model 不重读 models.json。
+    // 切模（含同路由 no-op）是用户可见的自然同步点，必须在这里对齐，否则 thinking 通道
+    // 永远开不出来、推理继续漏进正文，只有重开会话才生效。
+    const declared = { tiers: [] as string[] | undefined };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "tier-realign",
+              name: "Tier Realign",
+              baseUrl: "http://tier-realign.test",
+              api: "openai-completions",
+              // 目录声明支持思考但只给 high 一档：启动快照非空，便于观察对齐行为。
+              models: [{ id: "model-a", input: ["text"], thinkingLevelMap: { high: "high" } }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelCatalogThinkingTiers: (providerId, modelId) =>
+        providerId === "tier-realign" && modelId === "model-a" ? declared.tiers : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "thinking-tier-realign",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "tier-realign",
+    });
+
+    // 用户声明了更多档位 → 同路由 setModel(no-op) 必须把快照对齐过去。
+    declared.tiers = ["low", "high", "max"];
+    captured.requests.length = 0;
+    await handle.setModel!("model-a", { providerId: "tier-realign" });
+
+    // 快照对齐后 setEffort 不再被「零档位快照」挡住：会真的发出 set_thinking_level。
+    await handle.setEffort!("max");
+    const requestTypes = captured.requests.map((request) => request.type);
+    expect(requestTypes).toContain("set_thinking_level");
+    await handle.close();
+  });
+
+  it("preflights a freshly declared effort tier against the catalog, not the frozen startup snapshot", async () => {
+    // 用户在设置里给 model-b 声明了新档位 max，随即带 effort=max 切模。启动时冻结的
+    // nextEffortSnapshot 里没有 max，若预检用它就会在 RPC 发出前误判「不可用」→ 切模失败。
+    // 预检必须用对账读到的目录结论；活动快照仍只在切模成功后落定。
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "tier-preflight",
+              name: "Tier Preflight",
+              baseUrl: "http://tier-preflight.test",
+              api: "openai-completions",
+              models: [
+                { id: "model-a", input: ["text"], thinkingLevelMap: { high: "high" } },
+                { id: "model-b", input: ["text"], thinkingLevelMap: { low: "low" } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      // model-b 的目录最终档位含 max（用户刚声明的），而随包目录只给了 low。
+      readModelCatalogThinkingTiers: (providerId, modelId) =>
+        providerId === "tier-preflight" && modelId === "model-b"
+          ? ["low", "medium", "high", "max"]
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "thinking-tier-preflight",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "tier-preflight",
+    });
+
+    // 带新声明的 effort 切模：预检放行、set_model 发出、会话落到 model-b。
+    await handle.setModel!("model-b", { providerId: "tier-preflight", effort: "max" });
+    expect(captured.runtimeModel).toBe("model-b");
+
+    // 切模成功后活动快照已含新档位，随后 setEffort(max) 能真的下发。
+    captured.requests.length = 0;
+    await handle.setEffort!("max");
+    expect(
+      captured.requests.filter((request) => request.type === "set_thinking_level"),
+    ).not.toHaveLength(0);
+    await handle.close();
+  });
+
+  it("does not realign the thinking tier snapshot when the model switch fails", async () => {
+    // 对账发生在切模的最早入口（成员校验 / effort 校验 / set_model RPC 之前）。若在那里
+    // 就改写 activeEffortSnapshot，set_model 被拒后子进程仍停在旧模型，快照却已是失败
+    // 目标的档位 —— 随后的思考开关与 effort 校验会按错误模型执行。落定只允许在成功路径。
+    //
+    // 用 set_model RPC 失败（success:false）而不是「模型不在目录」：后者对账返回
+    // undefined、压根不进污染分支，测不到东西。
+    const declared = { tiers: ["low", "medium", "high", "max"] as string[] | undefined };
+    // 只拦 set_model；get_state 等其余命令必须走默认桩，否则会话起不来。
+    const defaultHandler = captured.requestHandler;
+    captured.requestHandler = async (command) => {
+      if (command.type === "set_model") return { success: false, error: "injected failure" };
+      return defaultHandler
+        ? await defaultHandler(command)
+        : command.type === "get_state"
+          ? { success: true, data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } } }
+          : { success: true, data: {} };
+    };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "tier-rollback",
+              name: "Tier Rollback",
+              baseUrl: "http://tier-rollback.test",
+              api: "openai-completions",
+              models: [
+                { id: "model-a", input: ["text"], thinkingLevelMap: { high: "high" } },
+                { id: "model-b", input: ["text"], thinkingLevelMap: { low: "low" } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelCatalogThinkingTiers: (providerId, modelId) =>
+        providerId === "tier-rollback" && modelId === "model-b" ? declared.tiers : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "thinking-tier-rollback",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "tier-rollback",
+    });
+
+    // 切到 model-b（目录里有，声明了四档），但 set_model 失败 → 仍停在 model-a。
+    await expect(handle.setModel!("model-b", { providerId: "tier-rollback" })).rejects.toThrow();
+    expect(captured.runtimeModel).toBe("model-a");
+
+    // 快照必须仍是 model-a 的（只有 high）。若被 model-b 的四档污染，max 会被当合法档位
+    // 直接下发；快照仍是 model-a 时 assertStartupEffortAllowed 必须拒 —— 抛错即证据。
+    // （报错文案随上游演进，这里只断言「拒绝」这个事实，不锁死具体措辞。）
+    captured.requests.length = 0;
+    await expect(handle.setEffort!("max")).rejects.toThrow(/set_thinking_level refused/);
+    expect(
+      captured.requests.filter((request) => request.type === "set_thinking_level"),
+    ).toHaveLength(0);
+    await handle.close();
+  });
+
+  it("rejects images when the declaration flips to unsupported without a model switch", async () => {
+    // 反向对账：会话启动时快照是「支持图片」，用户后来把声明改成不支持且不切模 ——
+    // 先查快照就放行会把图片发给一个已声明不支持的模型。对账必须在信任快照之前跑。
+    const declared = { image: true };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-revoke",
+              name: "Native Revoke",
+              baseUrl: "http://revoke.test",
+              api: "openai-completions",
+              models: [{ id: "local-model", input: ["text", "image"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: () => declared.image,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-revoked-after-start",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-revoke",
+    });
+    const imagePath = path.join(cwd, "revoke.png");
+    writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY4YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const imageMessage = {
+      type: "user" as const,
+      content: [
+        {
+          type: "image" as const,
+          path: imagePath,
+          managedUrl: "xdt-image://pi-managed/revoke.png",
+        },
+      ],
+    };
+    const readRevokeInput = (): string[] => {
+      const modelsJson = JSON.parse(
+        readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, "models.json"), "utf8"),
+      ) as { providers: Record<string, { models: Array<{ id: string; input: string[] }> }> };
+      const block =
+        modelsJson.providers["native-revoke"] ?? modelsJson.providers["cindy-byom-native-revoke"];
+      return block!.models.find((entry) => entry.id === "local-model")!.input;
+    };
+
+    // 基线：声明支持时放行。
+    captured.requests.length = 0;
+    await handle.send(imageMessage);
+    expect(captured.requests.map((request) => request.type)).toContain("prompt");
+
+    // 改成「不支持图片」，不切模直接发图：必须拒收，且盘上快照同步回纯文本。
+    declared.image = false;
+    captured.requests.length = 0;
+    await expect(handle.send(imageMessage)).rejects.toMatchObject({
+      code: "PI_IMAGE_INPUT_UNSUPPORTED",
+    });
+    expect(captured.requests.map((request) => request.type)).not.toContain("prompt");
+    expect(readRevokeInput()).toEqual(["text"]);
+    await handle.close();
+  });
+
+  it("restores image support when the user returns to following the catalog", async () => {
+    // 用户先显式声明「不支持」（会话快照被写成纯文本），随后改回「跟随供应商」：override 被删、
+    // 声明读回 undefined。此时目录未声明 = 默认支持（上游 #4854），旧会话必须恢复支持图片 ——
+    // 否则只能重开任务。关键在于区分「改回继承」与「目录自己标了 input:['text']」：两者在
+    // readModelImageInput 看来都是 undefined，只有活动目录的最终结论(readModelCatalogImageCapability)
+    // 能分辨，所以对账在目录未声明时必须查这个钩子。
+    const declared = { image: true as boolean | null };  // null = 改回跟随供应商（未声明）
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-restore",
+              name: "Native Restore",
+              baseUrl: "http://restore.test",
+              api: "openai-completions",
+              // 目录本身不标 input（未声明 = 支持），所以“恢复继承”应当回到支持。
+              models: [{ id: "local-model", input: ["text", "image"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      // 目录 spec 说支持（input 含 image），用户先显式声明不支持、随后改回继承。
+      // readModelImageInput 只回报“显式声明了什么”，两种状态在它看来都是 undefined。
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-restore" && modelId === "local-model" && declared.image !== null
+          ? declared.image
+          : undefined,
+      // 活动目录的最终结论：未声明 → 默认支持。
+      readModelCatalogImageCapability: (providerId, modelId) =>
+        providerId === "native-restore" && modelId === "local-model" ? true : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-restored-after-inherit",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-restore",
+    });
+    const imagePath = path.join(cwd, "restore.png");
+    writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY4YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const imageMessage = {
+      type: "user" as const,
+      content: [
+        {
+          type: "image" as const,
+          path: imagePath,
+          managedUrl: "xdt-image://pi-managed/restore.png",
+        },
+      ],
+    };
+    const readRestoreInput = (): string[] => {
+      const modelsJson = JSON.parse(
+        readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, "models.json"), "utf8"),
+      ) as { providers: Record<string, { models: Array<{ id: string; input: string[] }> }> };
+      const block =
+        modelsJson.providers["native-restore"] ?? modelsJson.providers["cindy-byom-native-restore"];
+      return block!.models.find((entry) => entry.id === "local-model")!.input;
+    };
+
+    // 先显式声明「不支持」：目录 spec 说支持，但用户声明压过它 → 快照被写成纯文本，带图被拒收。
+    declared.image = false;
+    captured.requests.length = 0;
+    await handle.setModel!("local-model", { providerId: "native-restore" });
+    await expect(handle.send(imageMessage)).rejects.toMatchObject({
+      code: "PI_IMAGE_INPUT_UNSUPPORTED",
+    });
+    expect(readRestoreInput()).toEqual(["text"]);
+
+    // 用户改回「跟随供应商」：声明读回 undefined，目录未声明 = 默认支持。
+    declared.image = null;
+    captured.requests.length = 0;
+    await handle.setModel!("local-model", { providerId: "native-restore" });
+    expect(readRestoreInput()).toEqual(["text", "image"]);
+
+    // 旧会话恢复支持图片输入，无需重开任务。
+    captured.requests.length = 0;
+    await handle.send(imageMessage);
+    expect(captured.requests).toContainEqual(
+      expect.objectContaining({
+        type: "prompt",
+        images: [expect.objectContaining({ type: "image" })],
+      }),
+    );
+    await handle.close();
+  });
+
+  it("skips the route replay when read-back already matches (spawn-only routes)", async () => {
+    // spawn 能靠 custom model id 跑在 Pi 自带目录没有的路由上，对这种路由重发 set_model 会
+    // 被 Pi 拒（见 switchModel 开头同路由 no-op 的说明）；而重放失败会 terminate 整个任务 ——
+    // 只改一个能力声明就杀掉正在跑的任务。switch_session 后先 get_state 读回，读回已经等于
+    // 当前路由时不得再发 set_model。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-spawn-only",
+              name: "Native Spawn Only",
+              baseUrl: "http://spawn-only.test",
+              api: "openai-completions",
+              models: [{ id: "local-model", input: ["text"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-spawn-only" && modelId === "local-model" && declared.image
+          ? true
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-spawn-only-route",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-spawn-only",
+    });
+
+    declared.image = true;
+    captured.requests.length = 0;
+    // 真机上的 spawn-only 路由：任何 set_model 都会被拒。
+    captured.requestHandler = async (command) =>
+      command.type === "set_model"
+        ? { success: false, error: 'Model "local-model" not found for provider "xai"' }
+        : { success: true, data: {} };
+    await handle.setModel!("local-model", { providerId: "native-spawn-only" });
+
+    const requestTypes = captured.requests.map((request) => request.type);
+    expect(requestTypes).toContain("switch_session");
+    expect(requestTypes).not.toContain("set_model");
+    expect(captured.closes).toBe(0);
+    // 会话仍然可用：对账后路由没被拽走。
+    expect(captured.runtimeModel).toBe("local-model");
+    await handle.send({ type: "user", content: "still alive" });
+    expect(captured.requests.map((request) => request.type)).toContain("prompt");
+    await handle.close();
+  });
+
+  it("terminates the session when the route cannot be replayed onto a different model", async () => {
+    // 会话内切过模：switch_session 会把子进程拽回启动路由，读回与当前路由不一致就必须重放。
+    // 重放被拒 = 子进程确实跑在错误的路由上，继续用会把提示词静默发给错误的模型 ——
+    // 保留 pending 重试也修不好，只能 fail-closed 终止（且不留下“已重载”的错误结论）。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-route-lost",
+              name: "Native Route Lost",
+              baseUrl: "http://route-lost.test",
+              api: "openai-completions",
+              models: [
+                { id: "model-a", input: ["text"] },
+                { id: "model-b", input: ["text"] },
+              ],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-route-lost" && modelId === "model-b" && declared.image
+          ? true
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-route-replay-rejected",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-route-lost",
+    });
+    await handle.setModel!("model-b", { providerId: "native-route-lost" });
+    expect(captured.runtimeModel).toBe("model-b");
+
+    declared.image = true;
+    const baselineSetModels = captured.requests.filter(
+      (request) => request.type === "set_model",
+    ).length;
+    captured.requestHandler = async (command) =>
+      command.type === "get_state" && captured.runtimeModel === "model-b"
+        ? { success: true, data: { model: { provider: "native-route-lost", id: "model-b" } } }
+        : command.type === "set_model"
+          ? { success: false, error: 'Model "model-b" not found for provider "native-route-lost"' }
+          : { success: true, data: {} };
+    await expect(
+      handle.setModel!("model-b", { providerId: "native-route-lost" }),
+    ).rejects.toThrow(/PI_CATALOG_RELOAD_UNCONFIRMED/);
+    expect(captured.closes).toBe(1);
+    expect(
+      captured.requests.filter((request) => request.type === "set_model").length,
+    ).toBeGreaterThan(baselineSetModels);
+    await handle.close();
+  });
+
+  it("replays the previous route but lands on the new model when switching models", async () => {
+    // 非 no-op 切模：对账在 set_model 之前跑，重放恢复的是**旧**路由，随后切模再指向目标 ——
+    // 最终必须落在目标模型上，不能因为对账的重放把切模吃掉。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-switch-route",
+              name: "Native Switch Route",
+              baseUrl: "http://switch-route.test",
+              api: "openai-completions",
+              models: [
+                { id: "model-a", input: ["text"] },
+                { id: "model-b", input: ["text"] },
+              ],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-switch-route" && modelId === "model-b" && declared.image
+          ? true
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-switch-lands-on-target",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-switch-route",
+    });
+
+    // 目标模型 model-b 的声明与会话快照不一致 → 切模路径里先对账后切模。
+    declared.image = true;
+    captured.requests.length = 0;
+    await handle.setModel!("model-b", { providerId: "native-switch-route" });
+    expect(captured.runtimeModel).toBe("model-b");
+    const requestTypes = captured.requests.map((request) => request.type);
+    expect(requestTypes).toContain("switch_session");
+    expect(requestTypes.lastIndexOf("set_model")).toBeGreaterThan(
+      requestTypes.indexOf("switch_session"),
+    );
+    await handle.close();
+  });
+
   it("waits through Pi preflight compaction when accepting a prompt", async () => {
     const agent = new PiAgent(
       byomDeps(async () => ({ providers: [], env: {} })),

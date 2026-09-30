@@ -344,9 +344,10 @@
     "MODEL_SWITCH_TASK_RUNNING": "모델이 전환되지 않았습니다. 현재 작업이 아직 실행 중입니다. 이번 응답이 끝난 후 다시 시도하세요.",
     "MODEL_WINDOW_PREPARATION_IN_PROGRESS": "모델이 전환되지 않았습니다. 현재 작업의 컨텍스트를 정리하고 있습니다. 완료된 후 다시 시도하세요.",
     "SESSION_RUNNING": "이 세션은 현재 작업을 실행 중입니다. 잠시 후 다시 시도해 주세요.",
-    "PI_IMAGE_INPUT_UNSUPPORTED": "현재 Pi 모델에는 이미지 입력이 활성화되어 있지 않습니다. 이미지를 지원하는 모델로 전환하세요. 사용자 지정 모델이라면 제공자 설정에서 ‘이미지 입력 지원’을 켠 다음 새 Pi 작업을 시작하세요.",
+    "PI_IMAGE_INPUT_UNSUPPORTED": "현재 Pi 모델에는 이미지 입력이 활성화되어 있지 않습니다. 이미지를 지원하는 모델로 전환하세요. 사용자 지정 모델이라면 제공자 설정에서 ‘이미지 입력 지원’을 켠 다음 모델을 한 번 전환하거나 새 Pi 작업을 시작하세요.",
     "CREDENTIAL_SWITCH_BUSY": "다른 Codex 작업이 실행 중이어서 이번 제공자 전환은 적용되지 않았습니다(세션은 기존 제공자를 유지합니다). 다른 작업이 끝난 후 다시 시도해 주세요.",
-    "PI_CATALOG_RELOAD_UNCONFIRMED": "모델 카탈로그 다시 로드가 확인되지 않아 이 작업을 종료했습니다. 작업을 다시 연 뒤 모델을 전환하세요.",
+    "PI_CATALOG_RELOAD_UNCONFIRMED": "모델 카탈로그 다시 로드가 확인되지 않아 이 작업을 종료했습니다. 작업을 다시 연 뒤 다시 시도하세요.",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "이미지 입력 능력 변경을 적용하지 못했습니다. 변경이 롤백되었거나 나중에 다시 시도됩니다. 다시 시도하고, 계속 실패하면 작업을 다시 열어 주세요.",
     "REMOTE_WORKDIR_INVALID": "원격 프로젝트 경로가 올바르지 않습니다. 프로젝트 폴더를 다시 선택하세요.",
     "REMOTE_WORKDIR_NOT_FOUND": "원격 프로젝트 폴더가 없습니다. 프로젝트 폴더를 다시 선택하세요.",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "원격 프로젝트 경로가 폴더가 아닙니다. 프로젝트 폴더를 다시 선택하세요.",
@@ -2321,6 +2322,14 @@
           "capability": "기능",
           "capabilityHint": "이 공급업체가 명시한 기능을 우선합니다. 이미지 지원 정보가 없으면 모델 이름으로 추정합니다.",
           "imageInput": "이미지 입력",
+          "imageInputOverride": {
+            "label": "이미지 입력 능력 선언",
+            "inherit": "제공자 따르기",
+            "declaredTrue": "이미지 입력 지원",
+            "declaredFalse": "이미지 입력 미지원",
+            "saveFailed": "이미지 입력 능력 저장 실패",
+            "saveFailedWithReason": "이미지 입력 능력 저장 실패: {{message}}"
+          },
           "supported": "지원",
           "unsupported": "지원 안 함",
           "undeclared": "선언되지 않음",
@@ -2389,7 +2398,37 @@
           },
           "codexContextUnknown": "CLI 설정을 읽을 수 없음",
           "codexContextValues": "전체 {{total}} · 사용 가능 {{usable}} · 자동 압축 {{compact}} tokens",
-          "contextLimitGptHint": "GPT는 기본적으로 최대 272K를 사용하며 여기서 1M으로 변경할 수 있습니다. Codex는 창과 자동 압축 임계값을 함께 적용하고 5%의 여유를 유지합니다. 실제 용량은 모델 서비스에 따라 다릅니다."
+          "contextLimitGptHint": "GPT는 기본적으로 최대 272K를 사용하며 여기서 1M으로 변경할 수 있습니다. Codex는 창과 자동 압축 임계값을 함께 적용하고 5%의 여유를 유지합니다. 실제 용량은 모델 서비스에 따라 다릅니다.",
+          "thinking": {
+            "on": "사고 지원",
+            "off": "사고 미지원"
+          },
+          "thinkingOverride": {
+            "label": "사고 등급 선언",
+            "inherit": "제공자 따르기",
+            "declared": "선언됨",
+            "sourceHint": "카탈로그에 사고 등급이 없습니다. 모델이 실제로 추론한다면 여기에서 선언하세요",
+            "saveFailed": "사고 선언을 저장하지 못했습니다",
+            "saveFailedWithReason": "사고 선언을 저장하지 못했습니다: {{reason}}",
+            "tiers": {
+              "minimal": "최소",
+              "low": "낮음",
+              "medium": "보통",
+              "high": "높음",
+              "xhigh": "매우 높음",
+              "max": "최대"
+            }
+          },
+          "thinkingLabel": "사고",
+          "thinkingTier": {
+            "minimal": "최소",
+            "low": "낮음",
+            "medium": "보통",
+            "high": "높음",
+            "xhigh": "매우 높음",
+            "max": "최대",
+            "ultra": "최고"
+          }
         },
         "kindFilter": {
           "all": "전체",

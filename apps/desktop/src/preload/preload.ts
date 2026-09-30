@@ -6320,6 +6320,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
       owner: import('../shared/modelContextLimit').ModelContextLimitOwner,
     ): Promise<import('../shared/modelContextLimit').ModelContextLimitView> =>
       ipcRenderer.invoke('maker:model-context-limit:set', target, limit, owner),
+    /**
+     * 单模型思考档位的本地目录 override(设置 → 模型 → 高级设置)。
+     * tiers=null 表示「跟随供应商」;写入后 main 会重注 active-catalog 并广播。
+     */
+    getModelCatalogThinking: (
+      target: import('../shared/modelCatalogThinking').ModelCatalogThinkingTarget,
+    ): Promise<import('../shared/modelCatalogThinking').ModelCatalogThinkingView> =>
+      ipcRenderer.invoke('maker:model-catalog-thinking:get', target),
+    setModelCatalogThinking: (
+      target: import('../shared/modelCatalogThinking').ModelCatalogThinkingTarget,
+      tiers: string[] | null,
+      defaultTier?: string | null,
+    ): Promise<void> =>
+      ipcRenderer.invoke('maker:model-catalog-thinking:set', {
+        ...target,
+        value: tiers,
+        defaultEffort: defaultTier ?? null,
+      }),
+
+    getModelCatalogImageInput: (
+      target: import('../shared/modelCatalogImageInput').ModelCatalogImageInputTarget,
+    ): Promise<import('../shared/modelCatalogImageInput').ModelCatalogImageInputView> =>
+      ipcRenderer.invoke('maker:model-catalog-image-input:get', target),
+    setModelCatalogImageInput: (
+      target: import('../shared/modelCatalogImageInput').ModelCatalogImageInputTarget,
+      value: boolean | null,
+    ): Promise<import('../shared/modelCatalogImageInput').ModelCatalogImageInputView> =>
+      ipcRenderer.invoke('maker:model-catalog-image-input:set', { ...target, value }),
     resetModelContextLimit: (
       target: import('../shared/modelContextLimit').ModelContextLimitTarget,
       owner: import('../shared/modelContextLimit').ModelContextLimitOwner,

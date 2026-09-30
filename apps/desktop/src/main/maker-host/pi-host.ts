@@ -2015,6 +2015,45 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     },
     registerPiProxySession,
     resolvePiNativeProviders: (ctx) => resolvePiNativeProviders(ctx),
+    // 旧会话切模时的能力对账读这里：活动目录已含本机 override 合并(applyExistingModelLocalPatch
+    // 在末位，local 永远最高)，所以用户刚声明的「图片输入」能被读到。查不到(provider/model
+    // 不在目录)返回 undefined → 调用方按「未声明」不动会话快照。
+    readModelImageInput: (providerId, modelId) =>
+      getActiveCatalog()
+        .providers.find((provider) => provider.id === providerId)
+        ?.models.pi?.find((model) => model.id === modelId)?.supportsImageInput,
+    // 目录未声明时的**最终结论**（与 resolvePiNativeProviders 的 input 映射同一口径：
+    // supportsImageInput 未声明 → 默认支持，显式 false → 不支持）。能力对账靠它区分
+    // 「用户改回跟随供应商，该恢复支持」与「目录自己标了不支持，应保持纯文本」—— 这两种
+    // 状态在 supportsImageInput 上都是 undefined，只有最终 input 能分辨。
+    // provider/model 不在目录里 → undefined，调用方保持现状不翻转。
+    readModelCatalogImageCapability: (providerId, modelId) => {
+      const model = getActiveCatalog()
+        .providers.find((provider) => provider.id === providerId)
+        ?.models.pi?.find((entry) => entry.id === modelId);
+      if (!model) return undefined;
+      if (model.supportsImageInput !== undefined) return model.supportsImageInput;
+      // 未声明 → 落到默认结论。口径与 resolvePiNativeProviders 的 input 映射一致
+      // (`supportsImageInput === undefined ? template?.input ?? ['text','image']`)：
+      // 目录若用 modalities.input 明确列了能力就以它为准，否则默认支持。
+      const declaredInput = model.modalities?.input;
+      return declaredInput === undefined ? true : declaredInput.includes('image');
+    },
+    // 该模型在活动目录里最终的思考档位集合（目录与本机 override 合并后的结论）。
+    // 活会话的 activeEffortSnapshot 是启动时解析的，Pi 的 set_model 不重读 models.json，
+    // 用户声明档位后必须靠这个钩子在切模点对齐，否则 thinking 通道开不出来。
+    // provider/model 不在目录里 → undefined，调用方保持现状不猜。
+    readModelCatalogThinkingTiers: (providerId, modelId) => {
+      const model = getActiveCatalog()
+        .providers.find((provider) => provider.id === providerId)
+        ?.models.pi?.find((entry) => entry.id === modelId);
+      // 模型不在目录里 → 拿不到结论，调用方保持快照不变。
+      if (!model) return undefined;
+      // `efforts: []` 是**有效结论**：用户在设置里显式声明了「该模型不支持思考」。
+      // 把它折成 undefined 会让对账退回「保持旧快照」，于是刚保存的关闭声明在当前
+      // 会话不生效（仍按启动时的非空档位继续发 set_thinking_level）。
+      return [...model.efforts];
+    },
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiRuntimeModels: opts.resolvePiRuntimeModels,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
