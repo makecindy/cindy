@@ -15,7 +15,8 @@ export function HomeModeSwitch({ mode, onModeChange }: { mode: HomeMode; onModeC
     <View style={styles.switch} testID="home.modeSwitch">
       {(['tasks', 'teammates'] as const).map((value) => (
         <MainWindowOptionButton key={value} accessibilityRole="tab" density="default" variant="segmented"
-          label={`${t(value === 'tasks' ? 'devices.companions.tasks' : 'devices.companions.title')}${counts[value] > 0 ? ` · ${counts[value] > 99 ? '99+' : counts[value]}` : ''}`}
+          label={t(value === 'tasks' ? 'devices.companions.tasks' : 'devices.companions.title')}
+          badge={counts[value] > 0 ? (counts[value] > 99 ? '99+' : String(counts[value])) : undefined}
           accessibilityLabel={`${t(value === 'tasks' ? 'devices.companions.tasks' : 'devices.companions.title')}${counts[value] > 0 ? `, ${t(value === 'tasks' ? 'devices.companions.taskAttentionCount' : 'devices.companions.unreadChatCount', { count: counts[value] })}` : ''}`}
           onPress={() => onModeChange(value)} selected={value === mode} style={styles.option}
           testID={`home.mode.${value}`} />

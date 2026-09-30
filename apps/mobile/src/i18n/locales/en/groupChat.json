@@ -110,7 +110,13 @@
     "dismissFailed": "Couldn’t end this plan. Try again.",
     "editFailed": "Couldn’t change this step. Try again.",
     "editStepHint": "Reassign or remove this step",
-    "reassignStepHint": "Reassign this step"
+    "reassignStepHint": "Reassign this step",
+    "eyebrow_one": "Plan · {{count}} step",
+    "eyebrow_other": "Plan · {{count}} steps",
+    "awaitingStart": "Waiting for you",
+    "progressRunning": "Working {{current}} / {{total}}",
+    "progressDone": "Done {{done}} / {{total}}",
+    "allDone": "All done"
   },
   "speaking": {
     "planning": "Splitting the work…",
@@ -153,7 +159,8 @@
     "projectDirNone": "None selected",
     "projectDirNote": "Teammates work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
     "add": "Add teammate",
-    "projectDirOnComputer": "Choose or change it on your computer"
+    "projectDirOnComputer": "Choose or change it on your computer",
+    "memberActions": "Actions for {{name}}"
   },
   "errors": {
     "memberLimit": "A group chat needs 2–6 teammates",
@@ -162,5 +169,9 @@
     "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
     "planOpen": "A work split is underway. Finish or stop it before starting another.",
     "planClosed": "This plan has already ended or been updated."
+  },
+  "followUp": {
+    "next": "Plan · Next step",
+    "failedStep": "Step {{step}} didn't finish"
   }
 }

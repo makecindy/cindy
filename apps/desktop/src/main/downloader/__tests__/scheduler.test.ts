@@ -18,6 +18,7 @@ vi.mock('../../logger', () => ({
 }));
 
 import { Scheduler } from '../scheduler';
+import { createDownloader, download } from '../index';
 
 let root: string;
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -76,6 +77,27 @@ describe('downloader scheduler queued cancellation', () => {
     mocks.withRetry.mockImplementation(async (run: () => Promise<unknown>) => run());
   });
 
+  it('bulk consumer queues cannot block the host download queue', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    mocks.executeOnce.mockImplementation(async (ctx: { opts: { url: string; sha256: string } }) => {
+      if (ctx.opts.url.includes('bulk')) await gate;
+      return { size: 1, sha256: ctx.opts.sha256 };
+    });
+    const bulk = createDownloader();
+    const pending = bulk(options('https://bulk.invalid', '/tmp/cindy-bulk', HASH_A));
+    try {
+      await expect(
+        download(options('https://host.invalid', '/tmp/cindy-host', HASH_B)),
+      ).resolves.toMatchObject({ sha256: HASH_B });
+    } finally {
+      release();
+    }
+    await pending;
+  });
+
   it('rejects an aborted queued task immediately instead of waiting behind an active download', async () => {
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => {
@@ -129,4 +151,33 @@ describe('downloader scheduler queued cancellation', () => {
     await expect(second).resolves.toMatchObject({ sha256: HASH_B });
     expect(scheduler.listActive()).toEqual([]);
   });
+});
+
+it('cancels the scheduler cache hash without entering transport or retry', async () => {
+  const abort = new AbortController();
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  mocks.computeHash.mockImplementation(
+    (_path, signal: AbortSignal) =>
+      new Promise((_resolve, reject) => {
+        // The scheduler hashes under its own active-budget signal, linked to the caller's.
+        expect(signal.aborted).toBe(false);
+        signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+        entered();
+      }),
+  );
+  mocks.withRetry.mockClear();
+  mocks.executeOnce.mockClear();
+  const scheduler = new Scheduler({ maxConcurrent: 1 });
+  const result = scheduler.enqueue(
+    options('https://example.invalid/cache', __filename, HASH_A, abort.signal),
+  );
+  const rejected = expect(result).rejects.toMatchObject({ code: 'ABORTED' });
+  await ready;
+  abort.abort();
+  await rejected;
+  expect(mocks.withRetry).not.toHaveBeenCalled();
+  expect(mocks.executeOnce).not.toHaveBeenCalled();
 });

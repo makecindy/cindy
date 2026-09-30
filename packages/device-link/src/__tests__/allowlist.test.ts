@@ -396,6 +396,8 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'maker:interaction-request',
       'maker:interaction-dismissed',
       'maker:auto-permission:fallback',
+      'maker:session-credential-switch-applied',
+      'maker:session-credential-switch-failed',
       'maker:provider:changed',
       'maker:agents:changed',
       'maker:schedule:event',

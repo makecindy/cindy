@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { motionDuration, motionEasing, radius, spacing } from '@/theme/tokens';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { useVoicePillWidthStyle } from './voicePillWidthMotion';
 import {
   COMPOSER_SINGLE_LINE_HEIGHT,
   COMPOSER_TEXT_HORIZONTAL_PADDING,
@@ -442,7 +443,9 @@ export function ComposerToolbarSpacer() {
  */
 export function ComposerToolbarVoiceSlot({ width }: { width?: number }) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
-  return <View style={[styles.toolbarVoiceSlot, width != null && { width }]} />;
+  // 与语音按钮外框(VoicePillWidthFrame)同一条宽度过渡,左邻按钮随之平滑让位。
+  const widthStyle = useVoicePillWidthStyle(width ?? MOBILE_COMPOSER_CONTROL_SIZE);
+  return <Reanimated.View style={[styles.toolbarVoiceSlot, widthStyle]} />;
 }
 
 export interface ComposerResizeGrabberProps {

@@ -8359,6 +8359,11 @@
       "automationInvalid": "The automation definition could not be converted; it was not created.",
       "itemFailed": "This item is unfinished. Retry or view import details.",
       "chatPartial": "Your teammate is created, but some content was not fully saved. The items below still need attention; other content and chat remain available."
+    },
+    "learning": {
+      "memory": "Remembered: {{title}}",
+      "skillCreated": "Created skill: {{title}}",
+      "skillUpdated": "Updated skill: {{title}}"
     }
   },
   "common": {
@@ -9075,6 +9080,7 @@
       "credentialSwitchDeferred": "Model provider switched — it takes effect after the current task finishes.",
       "effortRuntimeDirty": "Reasoning effort is still updating. Wait a moment, then send again.",
       "credentialSwitchApplied": "Model provider switch is now in effect.",
+      "credentialSwitchFailed": "Model provider switch failed. Choose the model again.",
       "modelSwitchContextGuard": {
         "title": "This model can't fit the current conversation",
         "warnToast": "This conversation already uses {{used}} — about {{pct}}% of the new model's {{total}} capacity",

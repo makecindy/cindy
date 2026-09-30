@@ -1,0 +1,542 @@
+diff --git a/packages/coding-agent/docs/rpc-commands.md b/packages/coding-agent/docs/rpc-commands.md
+index 24f6032..894f2fc 100644
+--- a/packages/coding-agent/docs/rpc-commands.md
++++ b/packages/coding-agent/docs/rpc-commands.md
+@@ -269,6 +269,20 @@ Response contains an array of full [Model](#model-object) objects:
+ }
+ ```
+ 
++### refresh_models
++
++Reload `models.json` without replacing the session. This command does not perform network model discovery. It preserves the current model selection, extension instances, and queued messages. Use `set_model` after a successful refresh to apply a changed descriptor, even when the provider and model ID are unchanged.
++
++```json
++{"type": "refresh_models"}
++```
++
++Response data contains `models` (the available model snapshot), `aborted`, and `errors` (provider IDs mapped to error messages). Treat `aborted: true` or nonempty `errors` as an incomplete refresh; `success: true` only means the refresh command ran. A malformed model configuration returns a failed response.
++
++```json
++{"type": "response", "command": "refresh_models", "success": true, "data": {"models": [], "aborted": false, "errors": {}}}
++```
++
+ ## Thinking
+ 
+ ### set_thinking_level
+@@ -416,6 +430,18 @@ Response:
+ {"type": "response", "command": "set_auto_compaction", "success": true}
+ ```
+ 
++### set_compaction_reserve_tokens
++
++Set a non-negative safe integer reserve for the live session. `null` clears the runtime override and restores the configured value for the current model. The override applies to manual and automatic compaction without reloading extensions or changing queued messages. It is not saved to `settings.json` or carried into another session.
++
++```json
++{"type": "set_compaction_reserve_tokens", "reserveTokens": 32000}
++```
++
++```json
++{"type": "response", "command": "set_compaction_reserve_tokens", "success": true, "data": {"reserveTokens": 32000}}
++```
++
+ ## Retry
+ 
+ ### set_auto_retry
+diff --git a/packages/coding-agent/docs/rpc.md b/packages/coding-agent/docs/rpc.md
+index a39cc8d..e48d34f 100644
+--- a/packages/coding-agent/docs/rpc.md
++++ b/packages/coding-agent/docs/rpc.md
+@@ -156,6 +156,7 @@ The detailed references formerly on this page now have dedicated pages. These an
+ <a id="set_model"></a>
+ <a id="cycle_model"></a>
+ <a id="get_available_models"></a>
++<a id="refresh_models"></a>
+ <a id="set_thinking_level"></a>
+ <a id="cycle_thinking_level"></a>
+ <a id="get_available_thinking_levels"></a>
+@@ -163,6 +164,7 @@ The detailed references formerly on this page now have dedicated pages. These an
+ <a id="set_follow_up_mode"></a>
+ <a id="compact"></a>
+ <a id="set_auto_compaction"></a>
++<a id="set_compaction_reserve_tokens"></a>
+ <a id="set_auto_retry"></a>
+ <a id="abort_retry"></a>
+ <a id="bash"></a>
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index 4aaf3c2..7d22670 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -31,6 +31,7 @@ import {
+ 	runToolCall,
+ 	type ThinkingLevel,
+ } from "@earendil-works/pi-agent-core";
++import type { ModelsRefreshResult } from "@earendil-works/pi-ai";
+ import { contentText, getCurrentSystemMessage, retryDelayMs } from "@earendil-works/pi-ai";
+ import type {
+ 	AssistantMessage,
+@@ -382,6 +383,23 @@ export class AgentSession {
+ 	private _compactionAbortController: AbortController | undefined = undefined;
+ 	private _autoCompactionAbortController: AbortController | undefined = undefined;
+ 	private _overflowRecoveryAttempted = false;
++	private _runtimeCompactionReserveTokens: number | undefined;
++
++	/** Override the reserve for this live session without reloading its extensions or queues. */
++	setRuntimeCompactionReserveTokens(value: number | null): number {
++		if (value !== null && (!Number.isSafeInteger(value) || value < 0)) {
++			throw new Error("Compaction reserve tokens must be a non-negative safe integer or null.");
++		}
++		this._runtimeCompactionReserveTokens = value === null ? undefined : value;
++		return this.getEffectiveCompactionSettings(this.model).reserveTokens;
++	}
++
++	private getEffectiveCompactionSettings(model?: Model<any>): ReturnType<SettingsManager["getCompactionSettings"]> {
++		const settings = this.settingsManager.getCompactionSettings(model);
++		return this._runtimeCompactionReserveTokens === undefined
++			? settings
++			: { ...settings, reserveTokens: this._runtimeCompactionReserveTokens };
++	}
+ 
+ 	// Branch summarization state
+ 	private _branchSummaryAbortController: AbortController | undefined = undefined;
+@@ -488,6 +506,11 @@ export class AgentSession {
+ 		return this._modelRuntime;
+ 	}
+ 
++	/** Reload the local model catalogue while retaining this session and its extensions. */
++	async refreshModels(): Promise<ModelsRefreshResult> {
++		return this._modelRuntime.refresh({ allowNetwork: false });
++	}
++
+ 	private async _getRequiredRequestAuth(
+ 		model: Model<any>,
+ 		signal?: AbortSignal,
+@@ -728,7 +751,7 @@ export class AgentSession {
+ 		return shouldCompact(
+ 			estimateProjectedContextTokens(projection, this.sessionManager.getBranch()).tokens,
+ 			model.contextWindow,
+-			this.settingsManager.getCompactionSettings(this.model),
++			this.getEffectiveCompactionSettings(this.model),
+ 		);
+ 	}
+ 
+@@ -2689,7 +2712,7 @@ export class AgentSession {
+ 				throw new Error(formatNoModelSelectedMessage());
+ 			}
+ 
+-			const settings = this.settingsManager.getCompactionSettings(model);
++			const settings = this.getEffectiveCompactionSettings(model);
+ 			const pathEntries = this.sessionManager.getBranch();
+ 
+ 			const preparation = prepareCompaction(pathEntries, settings);
+@@ -2864,7 +2887,7 @@ export class AgentSession {
+ 		skipAbortedCheck = true,
+ 		toolResults: AgentMessage[] = [],
+ 	): Promise<boolean> {
+-		const settings = this.settingsManager.getCompactionSettings(this.model);
++		const settings = this.getEffectiveCompactionSettings(this.model);
+ 		if (!settings.enabled) return false;
+ 
+ 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
+@@ -3011,7 +3034,7 @@ export class AgentSession {
+ 	 */
+ 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+ 		const model = this.model;
+-		const settings = this.settingsManager.getCompactionSettings(model);
++		const settings = this.getEffectiveCompactionSettings(model);
+ 		let abortController: AbortController | undefined;
+ 		let started = false;
+ 		let fromExtension = false;
+diff --git a/packages/coding-agent/src/modes/rpc/rpc-client.ts b/packages/coding-agent/src/modes/rpc/rpc-client.ts
+index 94ee29f..66e6c29 100644
+--- a/packages/coding-agent/src/modes/rpc/rpc-client.ts
++++ b/packages/coding-agent/src/modes/rpc/rpc-client.ts
+@@ -281,6 +281,12 @@ export class RpcClient {
+ 		return this.getData<{ models: ModelInfo[] }>(response).models;
+ 	}
+ 
++	/** Reload models.json without replacing the current session. Never probes the network. */
++	async refreshModels(): Promise<{ models: ModelInfo[]; aborted: boolean; errors: Record<string, string> }> {
++		const response = await this.send({ type: "refresh_models" });
++		return this.getData(response);
++	}
++
+ 	/**
+ 	 * Set thinking level.
+ 	 */
+@@ -333,6 +339,12 @@ export class RpcClient {
+ 		await this.send({ type: "set_auto_compaction", enabled });
+ 	}
+ 
++	/** Override the live session's compaction reserve; null restores configured settings. */
++	async setCompactionReserveTokens(reserveTokens: number | null): Promise<number> {
++		const response = await this.send({ type: "set_compaction_reserve_tokens", reserveTokens });
++		return this.getData<{ reserveTokens: number }>(response).reserveTokens;
++	}
++
+ 	/**
+ 	 * Set auto-retry enabled/disabled.
+ 	 */
+diff --git a/packages/coding-agent/src/modes/rpc/rpc-mode.ts b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+index 1c0995d..88f52e7 100644
+--- a/packages/coding-agent/src/modes/rpc/rpc-mode.ts
++++ b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+@@ -490,6 +490,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 				return success(id, "get_available_models", { models });
+ 			}
+ 
++			case "refresh_models": {
++				const result = await session.refreshModels();
++				return success(id, "refresh_models", {
++					models: session.modelRuntime.getAvailableSnapshot(),
++					aborted: result.aborted,
++					errors: Object.fromEntries([...result.errors].map(([provider, cause]) => [provider, cause.message])),
++				});
++			}
++
+ 			// =================================================================
+ 			// Thinking
+ 			// =================================================================
+@@ -540,6 +549,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 				return success(id, "set_auto_compaction");
+ 			}
+ 
++			case "set_compaction_reserve_tokens": {
++				const reserveTokens = session.setRuntimeCompactionReserveTokens(command.reserveTokens);
++				return success(id, "set_compaction_reserve_tokens", { reserveTokens });
++			}
++
+ 			// =================================================================
+ 			// Retry
+ 			// =================================================================
+diff --git a/packages/coding-agent/src/modes/rpc/rpc-types.ts b/packages/coding-agent/src/modes/rpc/rpc-types.ts
+index 7fc7151..cea41e5 100644
+--- a/packages/coding-agent/src/modes/rpc/rpc-types.ts
++++ b/packages/coding-agent/src/modes/rpc/rpc-types.ts
+@@ -33,6 +33,7 @@ export type RpcCommand =
+ 	| { id?: string; type: "set_model"; provider: string; modelId: string }
+ 	| { id?: string; type: "cycle_model" }
+ 	| { id?: string; type: "get_available_models" }
++	| { id?: string; type: "refresh_models" }
+ 
+ 	// Thinking
+ 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
+@@ -46,6 +47,7 @@ export type RpcCommand =
+ 	// Compaction
+ 	| { id?: string; type: "compact"; customInstructions?: string }
+ 	| { id?: string; type: "set_auto_compaction"; enabled: boolean }
++	| { id?: string; type: "set_compaction_reserve_tokens"; reserveTokens: number | null }
+ 
+ 	// Retry
+ 	| { id?: string; type: "set_auto_retry"; enabled: boolean }
+@@ -159,6 +161,13 @@ export type RpcResponse =
+ 			success: true;
+ 			data: { models: Model<any>[] };
+ 	  }
++	| {
++			id?: string;
++			type: "response";
++			command: "refresh_models";
++			success: true;
++			data: { models: Model<any>[]; aborted: boolean; errors: Record<string, string> };
++	  }
+ 
+ 	// Thinking
+ 	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }
+@@ -184,6 +193,13 @@ export type RpcResponse =
+ 	// Compaction
+ 	| { id?: string; type: "response"; command: "compact"; success: true; data: CompactionResult }
+ 	| { id?: string; type: "response"; command: "set_auto_compaction"; success: true }
++	| {
++			id?: string;
++			type: "response";
++			command: "set_compaction_reserve_tokens";
++			success: true;
++			data: { reserveTokens: number };
++	  }
+ 
+ 	// Retry
+ 	| { id?: string; type: "response"; command: "set_auto_retry"; success: true }
+diff --git a/packages/coding-agent/test/rpc-prompt-response-semantics.test.ts b/packages/coding-agent/test/rpc-prompt-response-semantics.test.ts
+index 98325b1..fa5df38 100644
+--- a/packages/coding-agent/test/rpc-prompt-response-semantics.test.ts
++++ b/packages/coding-agent/test/rpc-prompt-response-semantics.test.ts
+@@ -1,4 +1,4 @@
+-import { existsSync, mkdirSync, rmSync } from "node:fs";
++import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { Agent } from "@earendil-works/pi-agent-core";
+@@ -17,7 +17,7 @@ import type { LoadExtensionsResult } from "../src/core/extensions/index.ts";
+ import { SessionManager } from "../src/core/session-manager.ts";
+ import { SettingsManager } from "../src/core/settings-manager.ts";
+ import { runRpcMode } from "../src/modes/rpc/rpc-mode.ts";
+-import { createInMemoryModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
++import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
+ import { createTestExtensionsResult, createTestResourceLoader } from "./utilities.ts";
+ 
+ const rpcIo = vi.hoisted(() => ({
+@@ -103,6 +103,7 @@ async function createRuntimeHost(options: {
+ 	extensionsResult?: LoadExtensionsResult;
+ }): Promise<{
+ 	runtimeHost: AgentSessionRuntime;
++	modelsPath: string;
+ 	cleanup: () => Promise<void>;
+ }> {
+ 	const tempDir = join(tmpdir(), `pi-rpc-prompt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+@@ -135,7 +136,8 @@ async function createRuntimeHost(options: {
+ 	const sessionManager = SessionManager.inMemory();
+ 	const settingsManager = SettingsManager.create(tempDir, tempDir);
+ 	const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
+-	const modelRegistry = await createInMemoryModelRegistry(authStorage);
++	const modelsPath = join(tempDir, "models.json");
++	const modelRegistry = await createModelRegistry(authStorage, modelsPath);
+ 	if (options.withAuth) {
+ 		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
+ 	}
+@@ -160,6 +162,7 @@ async function createRuntimeHost(options: {
+ 
+ 	return {
+ 		runtimeHost,
++		modelsPath,
+ 		cleanup: async () => {
+ 			try {
+ 				await session.abort();
+@@ -176,16 +179,18 @@ async function createRuntimeHost(options: {
+ 
+ async function startRpcMode(options: Parameters<typeof createRuntimeHost>[0]): Promise<{
+ 	lineHandler: (line: string) => void;
++	session: AgentSession;
++	modelsPath: string;
+ 	cleanup: () => Promise<void>;
+ }> {
+ 	rpcIo.outputLines = [];
+ 	rpcIo.lineHandler = undefined;
+ 
+-	const { runtimeHost, cleanup } = await createRuntimeHost(options);
++	const { runtimeHost, modelsPath, cleanup } = await createRuntimeHost(options);
+ 	void runRpcMode(runtimeHost);
+ 	await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+ 
+-	return { lineHandler: rpcIo.lineHandler!, cleanup };
++	return { lineHandler: rpcIo.lineHandler!, session: runtimeHost.session, modelsPath, cleanup };
+ }
+ 
+ describe("RPC prompt response semantics", () => {
+@@ -194,6 +199,76 @@ describe("RPC prompt response semantics", () => {
+ 		rpcIo.lineHandler = undefined;
+ 	});
+ 
++	it("refreshes model metadata and compaction reserve without replacing session state", async () => {
++		const { lineHandler, session, modelsPath, cleanup } = await startRpcMode({ withAuth: true, responseDelayMs: 0 });
++		try {
++			const current = session.model!;
++			const runner = session.extensionRunner;
++			await session.followUp("keep queued");
++			writeFileSync(
++				modelsPath,
++				JSON.stringify({
++					providers: {
++						[current.provider]: {
++							modelOverrides: { [current.id]: { contextWindow: current.contextWindow + 1000 } },
++						},
++					},
++				}),
++			);
++			lineHandler(JSON.stringify({ id: "refresh", type: "refresh_models" }));
++			await vi.waitFor(() =>
++				expect(parseOutputLines(rpcIo.outputLines)).toContainEqual(
++					expect.objectContaining({
++						id: "refresh",
++						success: true,
++						command: "refresh_models",
++						data: expect.objectContaining({ aborted: false, errors: {} }),
++					}),
++				),
++			);
++			expect(session.model).toBe(current);
++			lineHandler(
++				JSON.stringify({ id: "same-id", type: "set_model", provider: current.provider, modelId: current.id }),
++			);
++			await vi.waitFor(() =>
++				expect(parseOutputLines(rpcIo.outputLines)).toContainEqual(
++					expect.objectContaining({
++						id: "same-id",
++						success: true,
++						command: "set_model",
++						data: expect.objectContaining({ contextWindow: current.contextWindow + 1000 }),
++					}),
++				),
++			);
++			lineHandler(JSON.stringify({ id: "reserve", type: "set_compaction_reserve_tokens", reserveTokens: 32000 }));
++			await vi.waitFor(() =>
++				expect(parseOutputLines(rpcIo.outputLines)).toContainEqual(
++					expect.objectContaining({
++						id: "reserve",
++						success: true,
++						command: "set_compaction_reserve_tokens",
++						data: { reserveTokens: 32000 },
++					}),
++				),
++			);
++			lineHandler(JSON.stringify({ id: "invalid", type: "set_compaction_reserve_tokens", reserveTokens: -1 }));
++			await vi.waitFor(() =>
++				expect(parseOutputLines(rpcIo.outputLines)).toContainEqual(
++					expect.objectContaining({
++						id: "invalid",
++						success: false,
++						command: "set_compaction_reserve_tokens",
++					}),
++				),
++			);
++			expect(session.extensionRunner).toBe(runner);
++			expect(session.pendingMessageCount).toBe(1);
++			expect(session.model?.contextWindow).toBe(current.contextWindow + 1000);
++		} finally {
++			await cleanup();
++		}
++	});
++
+ 	it("emits one failure response when prompt preflight rejects", async () => {
+ 		const { lineHandler, cleanup } = await startRpcMode({
+ 			withAuth: false,
+diff --git a/packages/coding-agent/test/suite/agent-session-compaction-model-overrides.test.ts b/packages/coding-agent/test/suite/agent-session-compaction-model-overrides.test.ts
+index c606bca..3887337 100644
+--- a/packages/coding-agent/test/suite/agent-session-compaction-model-overrides.test.ts
++++ b/packages/coding-agent/test/suite/agent-session-compaction-model-overrides.test.ts
+@@ -33,6 +33,99 @@ describe("AgentSession compaction model overrides", () => {
+ 		while (harnesses.length) harnesses.pop()?.cleanup();
+ 	});
+ 
++	it("changes the live compaction reserve without replacing extensions or queued input", async () => {
++		const observed: number[] = [];
++		let extensionLoads = 0;
++		const harness = await createHarness({
++			models: [{ id: "faux-1", contextWindow: 4000 }],
++			tools: [],
++			settings: { compaction: { reserveTokens: 10, keepRecentTokens: 150 } },
++			extensionFactories: [
++				(pi) => {
++					extensionLoads++;
++					pi.on("session_before_compact", (event) => {
++						observed.push(event.preparation.settings.reserveTokens);
++						return {
++							compaction: {
++								summary: "runtime reserve summary",
++								firstKeptEntryId: event.preparation.firstKeptEntryId,
++								tokensBefore: event.preparation.tokensBefore,
++							},
++						};
++					});
++				},
++			],
++		});
++		harnesses.push(harness);
++		seedHistory(harness);
++		await harness.session.followUp("queued follow-up");
++		const sessionFile = harness.session.sessionFile;
++		const extensionRunner = harness.session.extensionRunner;
++		expect(harness.session.setRuntimeCompactionReserveTokens(2000)).toBe(2000);
++		expect(() => harness.session.setRuntimeCompactionReserveTokens(-1)).toThrow();
++		expect(() => harness.session.setRuntimeCompactionReserveTokens(Number.MAX_SAFE_INTEGER + 1)).toThrow();
++		expect(harness.session.pendingMessageCount).toBe(1);
++		await harness.session.compact();
++		expect(observed).toEqual([2000]);
++		expect(harness.session.extensionRunner).toBe(extensionRunner);
++		expect(harness.session.sessionFile).toBe(sessionFile);
++		expect(harness.session.pendingMessageCount).toBe(1);
++		expect(extensionLoads).toBe(1);
++		expect(harness.session.setRuntimeCompactionReserveTokens(null)).toBe(10);
++		expect(harness.settingsManager.getCompactionReserveTokens()).toBe(10);
++	});
++
++	it("reports incomplete model refresh without changing the selected model", async () => {
++		const harness = await createHarness({ models: [{ id: "faux-1" }], tools: [] });
++		harnesses.push(harness);
++		const selected = harness.session.model;
++		const failure = new Error("provider unavailable");
++		const refresh = vi.spyOn(harness.session.modelRuntime, "refresh").mockResolvedValue({
++			aborted: false,
++			errors: new Map([["faux", failure]]),
++		});
++
++		expect(await harness.session.refreshModels()).toEqual({
++			aborted: false,
++			errors: new Map([["faux", failure]]),
++		});
++		expect(refresh).toHaveBeenCalledWith({ allowNetwork: false });
++		expect(harness.session.model).toBe(selected);
++	});
++
++	it("applies the runtime reserve to the next pre-prompt compaction threshold", async () => {
++		const preparations: number[] = [];
++		const harness = await createHarness({
++			models: [{ id: "faux-1", contextWindow: 4000 }],
++			tools: [],
++			settings: { compaction: { enabled: true, reserveTokens: 10, keepRecentTokens: 150 } },
++			extensionFactories: [
++			(pi) => {
++				pi.on("session_before_compact", (event) => {
++					preparations.push(event.preparation.settings.reserveTokens);
++					return {
++						compaction: {
++							summary: "runtime threshold summary",
++							firstKeptEntryId: event.preparation.firstKeptEntryId,
++							tokensBefore: event.preparation.tokensBefore,
++						},
++					};
++				});
++			},
++			],
++		});
++		harnesses.push(harness);
++		seedHistory(harness, 2500);
++		harness.setResponses([fauxAssistantMessage("first"), fauxAssistantMessage("second")]);
++		await harness.session.prompt("before reserve update");
++		expect(preparations).toEqual([]);
++		seedHistory(harness, 2500);
++		harness.session.setRuntimeCompactionReserveTokens(2000);
++		await harness.session.prompt("after reserve update");
++		expect(preparations).toEqual([2000]);
++		expect(harness.eventsOfType("compaction_end")).toHaveLength(1);
++	});
++
+ 	it.each(["manual", "pre-prompt", "post-run", "overflow"] as const)(
+ 		"uses model token settings for %s compaction and extension preparation",
+ 		async (path) => {
+diff --git a/packages/coding-agent/test/rpc-client-runtime-refresh.test.ts b/packages/coding-agent/test/rpc-client-runtime-refresh.test.ts
+new file mode 100644
+index 0000000..5437df1
+--- /dev/null
++++ b/packages/coding-agent/test/rpc-client-runtime-refresh.test.ts
+@@ -0,0 +1,31 @@
++import { describe, expect, it, vi } from "vitest";
++import { RpcClient } from "../src/modes/rpc/rpc-client.ts";
++
++type ClientTransport = {
++	send: (command: { type: string; reserveTokens?: number | null }) => Promise<unknown>;
++	getData: <T>(response: unknown) => T;
++};
++
++describe("RpcClient runtime refresh", () => {
++	it("uses the public refresh and live compaction commands", async () => {
++		const client = new RpcClient();
++		const transport = client as unknown as ClientTransport;
++		const send = vi.fn(async (command: { type: string; reserveTokens?: number | null }) => ({
++			data:
++				command.type === "refresh_models"
++					? { models: [], aborted: false, errors: {} }
++					: { reserveTokens: command.reserveTokens === null ? 16384 : command.reserveTokens },
++		}));
++		transport.send = send;
++		transport.getData = <T>(response: unknown): T => (response as { data: T }).data;
++
++		expect(await client.refreshModels()).toEqual({ models: [], aborted: false, errors: {} });
++		expect(await client.setCompactionReserveTokens(32000)).toBe(32000);
++		expect(await client.setCompactionReserveTokens(null)).toBe(16384);
++		expect(send.mock.calls.map(([command]) => command)).toEqual([
++			{ type: "refresh_models" },
++			{ type: "set_compaction_reserve_tokens", reserveTokens: 32000 },
++			{ type: "set_compaction_reserve_tokens", reserveTokens: null },
++		]);
++	});
++});

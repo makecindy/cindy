@@ -628,7 +628,14 @@
     },
     "viewResult": "查看结果",
     "noWrittenResult": "没有文字结果。",
-    "errorDetails": "错误详情"
+    "errorDetails": "错误详情",
+    "createTeammate": "新建伙伴",
+    "createMenu": "新建",
+    "searchWithGroups": "搜索伙伴和群聊",
+    "awaiting": "等你确认",
+    "emptyCopyCreate": "伙伴会记得你们聊过的事，也能帮你在电脑上做事。",
+    "taskResult": "任务结果",
+    "collapseResult": "收起结果"
   },
   "companionProfile": {
     "avatar": "头像",

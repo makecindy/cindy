@@ -47,6 +47,10 @@
     "cancel": "現在のモデルを維持",
     "confirm": "切り替えて続行"
   },
+  "switchOutcome": {
+    "applied": "モデルプロバイダーの切り替えが有効になりました。",
+    "failed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。"
+  },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} のモデルを表示",
     "confirmTitle": "{{agent}} に切り替えますか?",

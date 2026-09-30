@@ -178,7 +178,7 @@ function storeError(cause: unknown): { ok: false; errorCode: string; message: st
  * 不打断当前轮、授权卡或后台工作；未配置刷新桥的宿主仍诚实返回 next-session。
  */
 export async function saveBotSkillForSession(
-  params: { callerSessionId: string; name: string; description: string; body: string; slug?: string },
+  params: { callerSessionId: string; name: string; description: string; body: string; slug?: string; expectedUpdatedAt?: string | null },
   deps: BotSkillServiceDeps = {},
 ): Promise<
   BotSkillResult<{
@@ -196,6 +196,7 @@ export async function saveBotSkillForSession(
       name: params.name,
       description: params.description,
       body: params.body,
+      expectedUpdatedAt: params.expectedUpdatedAt,
       ...(params.slug ? { slug: params.slug } : {}),
     });
     assertOwnerBoundary(deps, boundary);

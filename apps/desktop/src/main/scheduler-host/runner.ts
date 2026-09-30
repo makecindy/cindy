@@ -228,6 +228,9 @@ export interface SchedulerQueueDeps {
     persistedContent: string;
     inheritTargetPlanMode?: boolean;
     origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId: string };
+    /** Runs under the send lock before the queued Session is captured. */
+    onPreparing?: () => Promise<void>;
+    onPreparationFailed?: (error: unknown) => void;
     onAccepted: (queuedPermissions?: {
       permissionMode?: string;
       planMode?: boolean;
@@ -269,6 +272,14 @@ export interface MakerScheduleRunnerDeps {
   ) => Promise<(() => void) | ScheduledModelSelectionLease>;
   /** Resolve the same provider-specific snapshot for fresh explicit choices. */
   resolveModelSelection?: (selection: ScheduledModelSelection) => Promise<ScheduledModelSelection>;
+  /** Apply Pi's route and context-window transaction while the send lock is held. */
+  applyPiModelSelectionUnderLock?: (
+    sessionId: string,
+    model: string,
+    providerId: string | null,
+    previousRoute: { model: string; providerId: string | null },
+    options?: { refreshPiConfiguration?: boolean; source?: 'user' | 'agent' },
+  ) => Promise<{ status: 'applied' | 'deferred' }>;
   /** 新建可见会话落库后通知本机窗口与 device-link 列表订阅者。 */
   onSessionCreated?: (sessionId: string) => void;
   /** 可选:撞忙排队桥。未注入时心跳撞忙回退为顺延(deferFire)旧行为。 */
@@ -885,6 +896,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           holder.releaseAgentSwitchLock?.();
           holder.releaseAgentSwitchLock = undefined;
           return await this.fireHeartbeatViaQueue(schedule, ctx, sessionId, holder, {
+            agentKind: meta?.agentKind,
             model: meta?.model,
             effort: meta?.effort,
             fastMode: meta?.fastMode,
@@ -1155,6 +1167,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (
         liveSession &&
         credentialSwitchInput &&
+        liveSession.agentKind !== 'pi' &&
         shouldCloseSessionForCredentialSwitch(credentialSwitchInput)
       ) {
         // provider store 可能已先于 runtime 被覆盖。若 live thread 连「当前已登记路由」
@@ -1214,6 +1227,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (
         reusedLiveSession &&
         liveSession &&
+        liveSession.agentKind !== 'pi' &&
         (await liveSession.requiresModelSwitchRebuild?.(model, { providerId: nextProviderId })) ===
           true
       ) {
@@ -1245,6 +1259,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
         });
       }
     }
+    if (isHeartbeat && effectiveAgentKind === 'pi' && !reusedLiveSession && resumeSessionId) {
+      if (!this.deps.applyPiModelSelectionUnderLock) {
+        throw new Error('Scheduled Pi model selection is not available');
+      }
+      const applied = await this.deps.applyPiModelSelectionUnderLock(
+        sessionId, model, createProviderId,
+        { model: heartbeatModel ?? model, providerId: heartbeatProviderId },
+        { refreshPiConfiguration: true, source: 'agent' },
+      );
+      if (applied.status !== 'applied') throw new Error('Scheduled Pi model selection was deferred');
+      resumeSessionId = (await this.deps.maker.getSessionMeta(sessionId))?.sdkSessionId ?? undefined;
+    }
     // The worktree path can also await filesystem work, so cancellation may
     // have arrived after the preceding guard.  Never create a late session.
     throwIfFireAborted(ctx.signal, 'session creation');
@@ -1254,30 +1280,29 @@ export class MakerScheduleRunner implements ScheduleRunner {
         return this.deferFire(schedule, sessionId, 'routine-permission-unavailable');
       throwIfFireAborted(ctx.signal, 'session creation');
     }
+    const createSessionOpts = {
+      id: sessionId,
+      agentKind: effectiveAgentKind,
+      workingDir,
+      model,
+      effort: reconciledEffort,
+      fastMode,
+      permissionMode:
+        routinePermissions?.permissionMode ??
+        heartbeatPermissions?.permissionMode ??
+        defaultPermissionModeForSchedule(),
+      ...((routinePermissions ?? heartbeatPermissions)
+        ? { planMode: (routinePermissions ?? heartbeatPermissions)!.planMode }
+        : {}),
+      title: isHeartbeat ? undefined : `[Schedule] ${schedule.name}`,
+      resumeSessionId,
+      // Explicit null means Cindy's default route for Pi.
+      providerId: createProviderId,
+      vendorOptions: { source: 'scheduler' as const },
+    };
     let session: Awaited<ReturnType<Maker['createSession']>>;
     try {
-      session = await this.deps.maker.createSession({
-        id: sessionId,
-        agentKind: effectiveAgentKind,
-        workingDir,
-        model,
-        effort: reconciledEffort,
-        fastMode,
-        permissionMode:
-          routinePermissions?.permissionMode ??
-          heartbeatPermissions?.permissionMode ??
-          defaultPermissionModeForSchedule(),
-        ...((routinePermissions ?? heartbeatPermissions)
-          ? { planMode: (routinePermissions ?? heartbeatPermissions)!.planMode }
-          : {}),
-        title: isHeartbeat ? undefined : `[Schedule] ${schedule.name}`,
-        resumeSessionId,
-        // Pi distinguishes an explicit null (Cindy default route) from undefined
-        // (legacy model-based native-provider fallback). Preserve the scheduler's
-        // default-route null when spawning a fresh Pi session.
-        providerId: createProviderId,
-        vendorOptions: { source: 'scheduler' },
-      });
+      session = await this.deps.maker.createSession(createSessionOpts);
     } catch (err) {
       if (err instanceof CredentialModeSwitchBusyError) {
         // fresh Codex 也共用本地 credential mode，撞上其它本地 Codex turn 时按撞忙处理。
@@ -1314,10 +1339,29 @@ export class MakerScheduleRunner implements ScheduleRunner {
       null;
     const mustSyncReusedPiRoute = reusedLiveSession && effectiveAgentKind === 'pi';
     let modelSwitchApplied = true;
-    if (heartbeatModelChanged || mustSyncReusedPiRoute) {
+    if ((heartbeatModelChanged && effectiveAgentKind !== 'pi') || mustSyncReusedPiRoute) {
       try {
         if (mustSyncReusedPiRoute) {
-          await session.setModel(model, { providerId: reusedPiRouteProviderId });
+          if (!this.deps.applyPiModelSelectionUnderLock) {
+            throw new Error('Scheduled Pi model selection is not available');
+          }
+          const applied = await this.deps.applyPiModelSelectionUnderLock(
+            session.id, model, reusedPiRouteProviderId,
+            { model: session.model, providerId: getSessionProvider(session.id) ?? heartbeatProviderId },
+            { refreshPiConfiguration: true, source: 'agent' },
+          );
+          if (applied.status !== 'applied') throw new Error('Scheduled Pi model selection was deferred');
+          // A protected window handoff can retire the old Pi handle. Resume from
+          // the transaction's persisted native checkpoint before this fire sends.
+          if (this.deps.maker.getSession(session.id) !== session) {
+            const latest = await this.deps.maker.getSessionMeta(session.id);
+            session = await this.deps.maker.createSession({
+              ...createSessionOpts,
+              model,
+              providerId: reusedPiRouteProviderId,
+              resumeSessionId: latest?.sdkSessionId ?? undefined,
+            });
+          }
         } else {
           await session.setModel(model);
         }
@@ -1520,6 +1564,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         session.id,
         holder,
         {
+          agentKind: session.agentKind,
           model: session.model ?? model,
           effort: runtimeReconciledEffort,
           fastMode,
@@ -1542,6 +1587,37 @@ export class MakerScheduleRunner implements ScheduleRunner {
             : undefined,
         },
       );
+    }
+
+    // Resolve Pi's last provider change before listener, abort and handoff
+    // state bind to the Session instance. The transaction may retire it.
+    if (effectiveAgentKind === 'pi' && this.deps.checkModelRoute) {
+      const currentProviderId = getSessionProvider(session.id);
+      const verdict = await this.deps.checkModelRoute('pi', runtimeModel, currentProviderId);
+      if (verdict.kind === 'reject') {
+        throw new Error(`schedule route unavailable: ${describeModelRouteRejection(verdict.reason, runtimeModel, currentProviderId)} (${verdict.reason})`);
+      }
+      if (verdict.kind === 'reroute' && shouldApplyExclusiveProviderRerouteLive(currentProviderId)) {
+        if (!this.deps.applyPiModelSelectionUnderLock) {
+          throw new Error('Scheduled Pi model selection is not available');
+        }
+        const applied = await this.deps.applyPiModelSelectionUnderLock(
+          session.id, runtimeModel, verdict.providerId,
+          { model: session.model, providerId: currentProviderId },
+          { refreshPiConfiguration: true, source: 'agent' },
+        );
+        if (applied.status !== 'applied') throw new Error('Scheduled Pi model selection was deferred');
+        if (this.deps.maker.getSession(session.id) !== session) {
+          const latest = await this.deps.maker.getSessionMeta(session.id);
+          session = await this.deps.maker.createSession({
+            ...createSessionOpts,
+            model: runtimeModel,
+            providerId: verdict.providerId,
+            resumeSessionId: latest?.sdkSessionId ?? undefined,
+          });
+        }
+        setSessionProvider(session.id, verdict.providerId);
+      }
     }
 
     // 4.5.4 只有直发降级路径需要把取消映射到 session.abort()。生产队列路径由
@@ -1643,6 +1719,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // fire 在入口改道(reroutedProviderId)并经凭证切换重建正确收敛;同凭证
           // 形态的改道热换即可生效(PR #744 review 第二十七轮)。
           if (
+            effectiveAgentKind !== 'pi' &&
             shouldCloseSessionForCredentialSwitch({
               agentKind: session.agentKind,
               remoteHostId: session.remoteHostId,
@@ -1661,14 +1738,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             );
           }
           if (effectiveAgentKind === 'pi') {
-            try {
-              await session.setModel(runtimeModel, { providerId: verdict.providerId });
-            } catch (err) {
-              throw new Error(
-                `schedule Pi route sync failed after pre-dispatch reroute (model "${runtimeModel}", provider "${verdict.providerId}"): ${err instanceof Error ? err.message : String(err)}`,
-                { cause: err },
-              );
-            }
+            throw new Error('schedule Pi route changed after pre-dispatch preparation');
           }
           setSessionProvider(session.id, verdict.providerId);
         }
@@ -2004,6 +2074,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     /** 绑定会话的当前路由基线(meta.model / meta.effort / sessions.provider_id)。 */
     routingBaseline: {
       model?: string;
+      agentKind?: AgentKind;
       effort?: string;
       fastMode?: boolean;
       resolvedSelection?: ScheduledModelSelection;
@@ -2045,6 +2116,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     holder: EphemeralSessionHolder,
     routingBaseline: {
       model?: string;
+      agentKind?: AgentKind;
       effort?: string;
       fastMode?: boolean;
       resolvedSelection?: ScheduledModelSelection;
@@ -2062,6 +2134,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       scheduleName: schedule.name,
       runId: ctx.runId,
     } as const;
+    let preparedPiRoute: { model: string; providerId: string | null } | null = null;
 
     // "Open session" 尽早可用(sessionId 已知,无需等派发)。
     if (!options?.sessionAlreadyBound) {
@@ -2182,6 +2255,16 @@ export class MakerScheduleRunner implements ScheduleRunner {
           ? `${UI_ACTION_TRIGGER_PREFIX}${schedule.prompt}`
           : schedule.prompt,
       origin,
+      onPreparing: async () => {
+        const preparingLive = this.deps.maker.getSession(sessionId);
+        if ((preparingLive?.agentKind ?? routingBaseline.agentKind ?? schedule.agentKind) !== 'pi') return;
+        preparedPiRoute = await this.prepareQueuedPiRouting(
+          schedule, sessionId, preparingLive, routingBaseline,
+        );
+      },
+      onPreparationFailed: (error) => {
+        failDispatch(error instanceof Error ? error : new Error(String(error)));
+      },
       onAccepted: async (queuedPermissions) => {
         dispatched = true;
         // Queue admission happens while another (possibly user-driven)
@@ -2257,7 +2340,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // (PR #972 review P2)。凭证形态需要切换的场景无法热切；当前路由仍一致时
         // 跳过并留日志，thread/store 已错配时 fail-closed。
         try {
-          await this.applyQueuedHeartbeatRouting(schedule, live, routingBaseline);
+          await this.applyQueuedHeartbeatRouting(schedule, live, routingBaseline, preparedPiRoute);
         } catch (err) {
           if (
             err instanceof QueuedRouteDisabledError ||
@@ -2577,6 +2660,52 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * setModel / setEffort 成功才落库 meta,失败保留旧值让下轮重试(与直发路径的
    * 复用会话语义一致)。
    */
+  private async prepareQueuedPiRouting(
+    schedule: Schedule,
+    sessionId: string,
+    live: ReturnType<Maker['getSession']>,
+    baseline: {
+      model?: string;
+      resolvedSelection?: ScheduledModelSelection;
+      providerId: string | null;
+    },
+  ): Promise<{ model: string; providerId: string | null }> {
+    const model = schedule.model?.trim() || baseline.model?.trim() || live?.model ||
+      defaultModelFor('pi');
+    const currentProviderId = getSessionProvider(sessionId) ?? baseline.providerId;
+    const explicitProviderId = schedule.providerId?.trim() || null;
+    const routeProviderId = explicitProviderId ?? currentProviderId;
+    let providerId = routeProviderId;
+    if (this.deps.checkModelRoute) {
+      const verdict = await this.deps.checkModelRoute('pi', model, routeProviderId);
+      if (verdict.kind === 'reject') {
+        throw new QueuedRouteDisabledError(
+          `schedule route unavailable: ${describeModelRouteRejection(verdict.reason, model, routeProviderId)} (${verdict.reason})`,
+        );
+      }
+      if (verdict.kind === 'reroute' && shouldApplyExclusiveProviderRerouteLive(routeProviderId)) {
+        providerId = verdict.providerId;
+      }
+    }
+    const resolved = baseline.resolvedSelection;
+    if (resolved && (resolved.agentKind !== 'pi' || resolved.model !== model ||
+      resolved.providerId !== providerId)) {
+      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
+    }
+    if (!this.deps.applyPiModelSelectionUnderLock) {
+      throw new QueuedPiRouteSyncError('Scheduled Pi model selection is not available');
+    }
+    const applied = await this.deps.applyPiModelSelectionUnderLock(
+      sessionId, model, providerId,
+      { model: live?.model ?? baseline.model ?? model, providerId: currentProviderId },
+      { refreshPiConfiguration: true, source: 'agent' },
+    );
+    if (applied.status !== 'applied') {
+      throw new QueuedPiRouteSyncError('Scheduled Pi model selection was deferred');
+    }
+    return { model, providerId };
+  }
+
   private async applyQueuedHeartbeatRouting(
     schedule: Schedule,
     live: NonNullable<ReturnType<Maker['getSession']>>,
@@ -2587,6 +2716,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
+    preparedPiRoute: { model: string; providerId: string | null } | null = null,
   ): Promise<void> {
     const explicitModel = schedule.model?.trim() ? schedule.model : undefined;
     const targetModel =
@@ -2663,6 +2793,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       );
     }
     if (
+      live.agentKind !== 'pi' &&
       shouldCloseSessionForCredentialSwitch({
         agentKind: live.agentKind,
         remoteHostId: live.remoteHostId,
@@ -2707,6 +2838,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       return;
     }
     if (
+      live.agentKind !== 'pi' &&
       (await live.requiresModelSwitchRebuild?.(targetModel, { providerId: nextProviderId })) ===
       true
     ) {
@@ -2726,8 +2858,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // Pi BYOM 无效，即使 model 字符串没变也不能跳过。
     const mustSyncPiNativeRoute =
       live.agentKind === 'pi' && (explicitModel !== undefined || applyProviderId !== null);
+    if (live.agentKind === 'pi') {
+      // The full window transaction already ran before the send captured this
+      // Session. A later route drift must fail before vendor dispatch.
+      if (!preparedPiRoute || live.model !== preparedPiRoute.model ||
+        getSessionProvider(live.id) !== preparedPiRoute.providerId ||
+        targetModel !== preparedPiRoute.model || nextProviderId !== preparedPiRoute.providerId) {
+        throw new QueuedPiRouteSyncError('Scheduled Pi route changed after preparation');
+      }
+    }
     let modelApplied = true;
-    if (modelChanged || mustSyncPiNativeRoute) {
+    if (live.agentKind !== 'pi' && (modelChanged || mustSyncPiNativeRoute)) {
       try {
         if (mustSyncPiNativeRoute) {
           await live.setModel(targetModel, { providerId: nextProviderId });

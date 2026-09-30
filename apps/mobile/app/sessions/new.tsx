@@ -265,6 +265,7 @@ import {
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
+import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
@@ -3881,48 +3882,51 @@ export default function NewRemoteSessionScreen() {
   ) : null;
 
   const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
-    <Pressable
-      accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.new.voiceInput')}
-      accessibilityRole="button"
-      accessibilityState={{ busy: voiceIsProcessing || undefined, disabled: creating || undefined }}
-      disabled={creating || voiceIsProcessing}
-      hitSlop={10}
-      onPress={() => {
-        if (voiceStartedOnPressInRef.current) {
-          // 本次按下已在 pressIn 起录:松手不当作「再点一下停止」。
+    <VoicePillWidthFrame hitSlop={10} width={voiceRecordingTimer.pillWidth}>
+      <Pressable
+        accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.new.voiceInput')}
+        accessibilityRole="button"
+        accessibilityState={{ busy: voiceIsProcessing || undefined, disabled: creating || undefined }}
+        disabled={creating || voiceIsProcessing}
+        hitSlop={10}
+        onPress={() => {
+          if (voiceStartedOnPressInRef.current) {
+            // 本次按下已在 pressIn 起录:松手不当作「再点一下停止」。
+            voiceStartedOnPressInRef.current = false;
+            return;
+          }
+          toggleVoiceRecording();
+        }}
+        onPressIn={handleVoiceButtonPressIn}
+        onTouchCancel={() => {
+          // 手势被系统/滚动打断:撤销这次按下误触发的录音(与会话页同语义,
+          // 正常松手不触发;cancelVoiceForDeviceSwitch 会作废在途启动并释放音频)。
+          if (!voiceStartedOnPressInRef.current) return;
           voiceStartedOnPressInRef.current = false;
-          return;
-        }
-        toggleVoiceRecording();
-      }}
-      onPressIn={handleVoiceButtonPressIn}
-      onTouchCancel={() => {
-        // 手势被系统/滚动打断:撤销这次按下误触发的录音(与会话页同语义,
-        // 正常松手不触发;cancelVoiceForDeviceSwitch 会作废在途启动并释放音频)。
-        if (!voiceStartedOnPressInRef.current) return;
-        voiceStartedOnPressInRef.current = false;
-        cancelVoiceForDeviceSwitch();
-      }}
-      style={({ pressed }) => [
-        styles.composerIconButton,
-        buttonStyle,
-        // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening。
-        voiceRecordingTimer.label !== null && styles.composerIconButtonActive,
-        voiceRecordingTimer.label !== null && { width: voiceRecordingTimer.pillWidth },
-        (creating || (voiceIsProcessing && !voiceProcessingIndicator.stopping)) && styles.disabled,
-        pressed && styles.pressed,
-      ]}
-      testID="newSession.voiceButton"
-    >
-      {voiceProcessingIndicator.showProcessing ? (
-        <ActivityIndicator color={colors.textSecondary} size="small" />
-      ) : voiceRecordingTimer.label !== null ? (
-        // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面/会话页),点胶囊任意位置停止。
-        <VoiceRecordingPillContent label={voiceRecordingTimer.label} testID="newSession.voiceRecordingPill" />
-      ) : (
-        <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      )}
-    </Pressable>
+          cancelVoiceForDeviceSwitch();
+        }}
+        style={({ pressed }) => [
+          styles.composerIconButton,
+          buttonStyle,
+          // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening。
+          voiceRecordingTimer.label !== null && styles.composerIconButtonActive,
+          // 宽度由外框 VoicePillWidthFrame 驱动(录音胶囊展开 / 收回的过渡),按钮撑满外框。
+          styles.voicePillFill,
+          (creating || (voiceIsProcessing && !voiceProcessingIndicator.stopping)) && styles.disabled,
+          pressed && styles.pressed,
+        ]}
+        testID="newSession.voiceButton"
+      >
+        {voiceProcessingIndicator.showProcessing ? (
+          <ActivityIndicator color={colors.textSecondary} size="small" />
+        ) : voiceRecordingTimer.label !== null ? (
+          // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面/会话页),点胶囊任意位置停止。
+          <VoiceRecordingPillContent label={voiceRecordingTimer.label} testID="newSession.voiceRecordingPill" />
+        ) : (
+          <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        )}
+      </Pressable>
+    </VoicePillWidthFrame>
   );
 
   // 切 agent:跟随该 agent 的最近会话 → 否则该 agent 列表最上面 → 否则内置默认(见 pickAgentDefaultRuntime),
@@ -7283,6 +7287,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },
+  // 语音按钮撑满 VoicePillWidthFrame,宽度由外框的过渡驱动;裁剪保证展开初段
+  // 红点 + 计时尚未装下时不会溢出盖住左邻控件。
+  voicePillFill: { overflow: 'hidden', width: '100%' },
   composerIconButton: {
     alignItems: 'center',
     backgroundColor: colors.sheetActionSurface,

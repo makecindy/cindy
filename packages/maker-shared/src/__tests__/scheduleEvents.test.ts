@@ -168,6 +168,34 @@ describe('shared scheduler event projection', () => {
     });
   });
 
+  it('treats desktop runtime-state diagnostics as a no-refresh event instead of unknown', () => {
+    const payload = {
+      type: 'runtime-state',
+      snapshot: {
+        schedulerInstanceId: 'sched-instance',
+        inFlight: 1,
+        slotsInUse: 1,
+        maxConcurrentRuns: 8,
+        inFlightRuns: [],
+        waitingSchedules: [],
+      },
+    };
+    expect(normalizeSchedulerEvent(payload)).toEqual({ type: 'runtime-state' });
+    // snapshot 形状不参与投影:缺失或畸形都不能退回 unknown 的全量刷新。
+    expect(normalizeSchedulerEvent({ type: 'runtime-state' })).toEqual({ type: 'runtime-state' });
+    expect(projectScheduleEvent(payload)).toEqual({
+      event: { type: 'runtime-state' },
+      refresh: {
+        runRefresh: { mode: 'none' },
+        scheduleList: false,
+        sessionIndex: false,
+        unreadSummary: false,
+      },
+      runPatch: { scheduleId: null, runId: null, sessionId: null, status: 'unknown' },
+      unreadImpact: 'none',
+    });
+  });
+
   it('decides whether a selected schedule should refresh its run list', () => {
     expect(shouldRefreshRunsForSchedule({ mode: 'none' }, 'sched-1')).toBe(false);
     expect(shouldRefreshRunsForSchedule({ mode: 'all' }, 'sched-1')).toBe(true);

@@ -3,6 +3,7 @@
  * Bot profile 与 Session 归属只在这里写入 SQLite；renderer 只读取投影，
  * 不维护第二份资料或决定 canonical Session。
  */
+import { listBotSkillsForBot } from '../../maker-ipc/botSkillService.js';
 import { provisionDefaultBot } from '../../maker-ipc/botDefaultProvisioning.js';
 import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../shared/botTemplatePreset.js';
 import fs from 'node:fs/promises';
@@ -2085,6 +2086,17 @@ export function registerBotIpc(): void {
     owner.assertCurrent();
     return result;
   };
+  // Local settings read; remote clients already use settings:<botId>/skills.
+  ipcMain.handle('local-db:bots:skills:list', async (event, rawBotId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const owner = captureBotOperationOwner();
+    await getBotRemoteSettingsSource(botId);
+    owner.assertCurrent();
+    const skills = await listBotSkillsForBot(botId);
+    owner.assertCurrent();
+    return skills;
+  });
   ipcMain.handle('local-db:bots:memory:list', async (event, rawBotId: unknown, rawQuery: unknown) => {
     assertTrustedAppRendererEvent(event);
     const botId = readText(rawBotId, 'botId', 128, true);

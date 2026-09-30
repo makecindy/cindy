@@ -22,6 +22,12 @@ export interface DownloadOptions {
   /** Defaults to follow. A predicate is checked before every redirect request. */
   redirect?: 'follow' | 'error';
   isUrlAllowed?: (url: string) => boolean;
+  /**
+   * Optional single-hop request implementation. Defaults to Electron net (system proxy).
+   * Callers fetching untrusted URLs inject a guarded fetch (SSRF / DNS pinning). It must
+   * not follow redirects: the transport validates every hop with `isUrlAllowed` first.
+   */
+  request?: DownloadRequest;
   /** Defaults to true. False discards partial data after failure/cancellation. */
   resume?: boolean;
   /** Defaults to replace. Exclusive publication never overwrites an existing file. */
@@ -32,6 +38,8 @@ export interface DownloadOptions {
   onRetry?: (e: RetryEvent) => void;
   /** Fired once per attempt that resumes from a non-zero offset. */
   onResume?: (e: ResumeEvent) => void;
+  /** Fired once all bytes of an attempt have arrived, before SHA-256 verification. */
+  onVerifying?: () => void;
   /** Caller can abort the in-flight download (queued, executing, or backing off). */
   signal?: AbortSignal;
   /** Logger; falls back to console when omitted. */
@@ -41,6 +49,12 @@ export interface DownloadOptions {
   /** Override timeout strategy. */
   timeout?: Partial<TimeoutConfig>;
 }
+
+/** One request without redirect following; `release` frees per-request resources. */
+export type DownloadRequest = (
+  url: string,
+  init: RequestInit,
+) => Promise<{ response: Response; release?: () => Promise<void> }>;
 
 export interface DownloadResult {
   /** Final file path (== targetPath when resolve fires). */

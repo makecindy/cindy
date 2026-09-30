@@ -628,7 +628,14 @@
     },
     "viewResult": "View Result",
     "noWrittenResult": "No written result.",
-    "errorDetails": "Error details"
+    "errorDetails": "Error details",
+    "createTeammate": "New teammate",
+    "createMenu": "New",
+    "searchWithGroups": "Search teammates and groups",
+    "awaiting": "Needs your OK",
+    "emptyCopyCreate": "Teammates remember what you talked about and can get things done on your computer.",
+    "taskResult": "Task result",
+    "collapseResult": "Hide result"
   },
   "companionProfile": {
     "avatar": "Avatar",

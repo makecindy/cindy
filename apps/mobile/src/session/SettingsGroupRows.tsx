@@ -5,7 +5,7 @@
  * 行宽 60% 内)。行标题 16/22 500 textPrimary,取值 16/22 400 textSecondary,
  * 说明 13/18 400 textSecondary;分组标题 13/18 600 textTertiary。
  */
-import { Children, Fragment, isValidElement, type ReactNode } from 'react';
+import { Children, isValidElement, type ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { ChevronDown, ChevronRight } from 'lucide-react-native';
 import { Text } from '@/components/AppText';
@@ -13,6 +13,8 @@ import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { NativeSwitch } from '@/platform/chrome';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+
+import { DisclosureItem, useDisclosurePrepare } from './listDisclosureTransition';
 
 export const useSettingsRowStyles = () => useThemedStyles(makeSettingsRowStyles);
 
@@ -37,8 +39,10 @@ export function SettingsGroup({
   // Children.toArray 会丢弃 null/false 并给每个 child 赋稳定 key(沿用元素自身 key),
   // 比 key={index} 更稳:后续插入/重排行时不会让无关行 remount。
   const rows = Children.toArray(children);
+  // 分组、卡片与行都挂列表过渡:可折叠分组展开 / 收起时,卡片从折叠行下拉开、下方分组
+  // 平滑让位,收起的行最后淡掉(页面需包在 ListDisclosureScope 里,否则无动画)。
   return (
-    <View style={styles.group} testID={testID}>
+    <DisclosureItem style={styles.group} testID={testID}>
       {title ? (
         <View style={styles.groupTitleRow}>
           <Text accessibilityRole="header" style={styles.groupTitle}>{title}</Text>
@@ -46,19 +50,19 @@ export function SettingsGroup({
         </View>
       ) : null}
       {rows.length > 0 ? (
-        <View style={styles.card}>
+        <DisclosureItem style={styles.card}>
           {rows.map((row, index) => (
-            <Fragment key={isValidElement(row) && row.key != null ? row.key : index}>
+            <DisclosureItem exit key={isValidElement(row) && row.key != null ? row.key : index}>
               {index > 0 ? <View style={styles.divider} /> : null}
               {row}
-            </Fragment>
+            </DisclosureItem>
           ))}
-        </View>
+        </DisclosureItem>
       ) : null}
       {footer && rows.length > 0 ? (
         <Text style={styles.groupFooter}>{footer}</Text>
       ) : null}
-    </View>
+    </DisclosureItem>
   );
 }
 
@@ -176,6 +180,7 @@ export function SettingsDisclosureRow({
 }) {
   const styles = useSettingsRowStyles();
   const { colors } = useTheme();
+  const prepareDisclosure = useDisclosurePrepare();
   const Chevron = expanded ? ChevronDown : ChevronRight;
   return (
     <Pressable
@@ -183,6 +188,7 @@ export function SettingsDisclosureRow({
       accessibilityRole="button"
       accessibilityState={{ expanded }}
       onPress={onPress}
+      onPressIn={() => prepareDisclosure()}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
       testID={testID}
     >

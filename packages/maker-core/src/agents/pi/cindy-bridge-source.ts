@@ -135,6 +135,12 @@ try {
 function withoutPiSecrets(env: Record<string, string | undefined>): Record<string, string | undefined> {
   const clean = { ...env };
   for (const name of SECRET_ENV_NAMES) delete clean[name];
+  // A provider added after session start was absent from the original host-generated list.
+  for (const name of Object.keys(clean)) {
+    if (/^CINDY_PI_KEY_[A-Z0-9_]+$/.test(name)
+      || name === 'CINDY_PI_SESSION_TOKEN' || name === 'CINDY_PI_API_KEY'
+      || name === 'CINDY_PI_OPENAI_PROXY_KEY' || name === 'CINDY_PI_XAI_PROXY_API_KEY') delete clean[name];
+  }
   return clean;
 }
 
@@ -3670,7 +3676,35 @@ ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
 export default async function cindyBridge(pi: any) {
   installTextOnlyTurnPolicy(pi);
-  await registerCindyNativeProviderAdapters(pi);
+  const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi);
+  pi.registerCommand('cindy-native-provider-refresh', {
+    description: 'Cindy internal native provider refresh',
+    handler: async (args: string, ctx: any) => {
+      const nonce = args.trim();
+      if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) return;
+      let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | undefined;
+      let mutationStarted = false;
+      try {
+        const raw = await ctx.ui.input('cindy:provider-refresh', JSON.stringify({ nonce }));
+        const snapshot = parseCindyProviderRefreshSnapshot(raw, nonce);
+        if (!snapshot) {
+          code = 'INVALID_PAYLOAD';
+        } else {
+          mutationStarted = true;
+          await nativeProviderAdapters.refresh(snapshot, ctx, SECRET_ENV_NAMES);
+        }
+      } catch {
+        code = mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
+      }
+      // RPC prompt swallows extension command exceptions. The host must see an
+      // explicit, nonce-bound receipt before accepting a refreshed catalog.
+      try {
+        await ctx.ui.input('cindy:provider-refresh-ack', JSON.stringify(
+          code ? { nonce, ok: false, code } : { nonce, ok: true },
+        ));
+      } catch { /* A missing receipt forces the host to retire this process. */ }
+    },
+  });
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
   pi.on('before_provider_request', async (event, ctx) => {
     const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;

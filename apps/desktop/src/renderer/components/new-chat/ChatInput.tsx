@@ -399,7 +399,7 @@ import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGes
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
-import { makerApiFor, makerApiForDevice, makerApiForSticky } from '@/lib/makerTransport';
+import { makerApiFor, makerApiForDevice, makerApiForSticky, subscribeRemoteCredentialSwitchOutcome } from '@/lib/makerTransport';
 import { SESSION_LINK_DROP_MIME } from '@/lib/sessionLinkDrop';
 
 const log = createLogger('ChatInput');
@@ -1287,9 +1287,28 @@ export function ChatInput({
     if (!sessionId) return;
     return window.electronAPI.maker.onSessionCredentialSwitchApplied((payload) => {
       if (payload.sessionId !== sessionId) return;
+      if (deviceLinkDeviceId || getSessionDeviceId(sessionId)) return;
       toast.success(t('newChat.chatInput.credentialSwitchApplied'), { duration: 3000 });
     });
-  }, [sessionId, t]);
+  }, [deviceLinkDeviceId, sessionId, t]);
+  useEffect(() => {
+    if (!sessionId) return;
+    return window.electronAPI.maker.onSessionCredentialSwitchFailed((payload) => {
+      if (payload.sessionId !== sessionId) return;
+      if (deviceLinkDeviceId || getSessionDeviceId(sessionId)) return;
+      toast.error(t('newChat.chatInput.credentialSwitchFailed'), { duration: 6000 });
+    });
+  }, [deviceLinkDeviceId, sessionId, t]);
+  useEffect(() => {
+    if (!sessionId) return;
+    return subscribeRemoteCredentialSwitchOutcome(sessionId, deviceLinkDeviceId ?? undefined, (outcome) => {
+      if (outcome.kind === 'applied') {
+        toast.success(t('newChat.chatInput.credentialSwitchApplied'), { duration: 3000 });
+      } else {
+        toast.error(t('newChat.chatInput.credentialSwitchFailed'), { duration: 6000 });
+      }
+    });
+  }, [deviceLinkDeviceId, sessionId, t]);
   // F-QUEUE-1 — preserve prior semantics
   const showStopButton = isAgentBusy ?? isStreaming;
   const { confirm: confirmDialog } = useConfirmDialog();

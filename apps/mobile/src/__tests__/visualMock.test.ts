@@ -10,7 +10,91 @@ vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {
   setInputProjection: vi.fn(), setPendingInteractions: vi.fn(), setActiveSessionSnapshots: vi.fn(),
 } }));
 beforeEach(() => { vi.resetModules(); config.MOBILE_VISUAL_MOCK_REALDATA_URL = ''; });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+
+it('waits for all 1,000 imported tasks before seeding and publishing their device identity', async () => {
+  vi.useFakeTimers();
+  config.MOBILE_VISUAL_MOCK_REALDATA_URL = 'https://fixture.invalid/snapshot.json';
+  let resolveFetch!: (value: unknown) => void;
+  vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { resolveFetch = resolve; })));
+  const mock = await import('@/debug/visualMock');
+  const { remoteSessionStore: store } = await import('@/session/remoteSessionStore');
+  const ready = mock.prepareVisualMockDeviceLinkContext();
+  expect(mock.prepareVisualMockDeviceLinkContext()).toBe(ready);
+  expect(store.setDeviceSessions).not.toHaveBeenCalled();
+  const sessions = Array.from({ length: 1000 }, (_, i) => ({ id: `imported-${i}` }));
+  resolveFetch({ ok: true, json: async () => ({ schema: 'cindy-mobile-visual-realdata-v1',
+    device: { deviceId: 'real-device', name: 'Imported 1000' }, sessions, messagesBySession: {} }) });
+  const link = await ready;
+  expect(store.setDeviceSessions).toHaveBeenCalledExactlyOnceWith('real-device', 'Imported 1000', sessions);
+  expect(store.setMessages).toHaveBeenCalledTimes(1000);
+  expect(link.lastPresenceSnapshot).toMatchObject({ deviceId: 'real-device', deviceName: 'Imported 1000' });
+  expect((await link.readDeviceList()).devices.find(device => device.deviceId === 'real-device')?.name).toBe('Imported 1000');
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each(['fetch', 'body'])('falls back when snapshot %s stalls and ignores a late response', async (phase) => {
+  vi.useFakeTimers();
+  config.MOBILE_VISUAL_MOCK_REALDATA_URL = 'https://fixture.invalid/snapshot.json';
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  let resolveStalled!: (value: unknown) => void;
+  const stalled = new Promise(resolve => { resolveStalled = resolve; });
+  const fetchMock = vi.fn(() => phase === 'fetch' ? stalled : Promise.resolve({ ok: true, json: () => stalled }));
+  vi.stubGlobal('fetch', fetchMock);
+  const mock = await import('@/debug/visualMock');
+  const { remoteSessionStore: store } = await import('@/session/remoteSessionStore');
+  const ready = mock.prepareVisualMockDeviceLinkContext();
+  await vi.advanceTimersByTimeAsync(mock.VISUAL_REALDATA_TIMEOUT_MS - 1);
+  expect(store.setDeviceSessions).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  const link = await ready;
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(fetch).mock.calls[0][1]?.signal?.aborted).toBe(true);
+  expect(link.lastPresenceSnapshot?.deviceId).toBe(mock.VISUAL_MOCK_DEVICE_ID);
+  expect((await link.readDeviceList()).devices.some(device => device.deviceId === mock.VISUAL_MOCK_DEVICE_ID)).toBe(true);
+  expect(store.setDeviceSessions).toHaveBeenCalledExactlyOnceWith(
+    mock.VISUAL_MOCK_DEVICE_ID, mock.VISUAL_MOCK_DEVICE_NAME, expect.any(Array),
+  );
+  const sessions = await link.invoke<unknown[]>(mock.VISUAL_MOCK_DEVICE_ID, 'local-db:sessions:list');
+  expect(sessions.length).toBeGreaterThan(0);
+  const snapshot = { schema: 'cindy-mobile-visual-realdata-v1',
+    device: { deviceId: 'late-device', name: 'Late import' }, sessions: [{ id: 'late-session' }], messagesBySession: {} };
+  resolveStalled(phase === 'fetch' ? { ok: true, json: async () => snapshot } : snapshot);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'local-db:sessions:list')).toEqual(sessions);
+  expect(store.setDeviceSessions).toHaveBeenCalledTimes(1);
+  expect(mock.createVisualMockDeviceLinkContext().lastPresenceSnapshot?.deviceId).toBe(mock.VISUAL_MOCK_DEVICE_ID);
+  expect(mock.prepareVisualMockDeviceLinkContext()).toBe(ready);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each(['network', 'http', 'invalid'])('uses a consistent demo device after a %s failure', async (failure) => {
+  vi.useFakeTimers();
+  config.MOBILE_VISUAL_MOCK_REALDATA_URL = 'https://fixture.invalid/snapshot.json';
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.stubGlobal('fetch', vi.fn(() => failure === 'network' ? Promise.reject(new Error('offline'))
+    : Promise.resolve({ ok: failure !== 'http', status: 503, json: async () => ({}) })));
+  const mock = await import('@/debug/visualMock');
+  const link = await mock.prepareVisualMockDeviceLinkContext();
+  const { remoteSessionStore: store } = await import('@/session/remoteSessionStore');
+  expect(link.lastPresenceSnapshot?.deviceId).toBe(mock.VISUAL_MOCK_DEVICE_ID);
+  expect(store.setDeviceSessions).toHaveBeenCalledExactlyOnceWith(
+    mock.VISUAL_MOCK_DEVICE_ID, mock.VISUAL_MOCK_DEVICE_NAME, expect.any(Array),
+  );
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('supplies the task tag catalog required when opening session options', async () => {
+  const mock = await import('@/debug/visualMock');
+  const link = mock.createVisualMockDeviceLinkContext();
+  expect(await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'local-db:task-tags:execute', [{ action: 'list' }]))
+    .toMatchObject({ tags: [], sessions: [] });
+  expect(await link.invoke(mock.VISUAL_MOCK_DEVICE_ID, 'local-db:task-tags:execute',
+    [{ action: 'get', sessionIds: ['session-primary'] }]))
+    .toMatchObject({ tags: [], sessions: [{ sessionId: 'session-primary', tags: [] }] });
+});
 
 it('projects imported history rows without falling back to synthetic messages', async () => {
   config.MOBILE_VISUAL_MOCK_REALDATA_URL = 'https://fixture.invalid/snapshot.json';

@@ -47,6 +47,10 @@
     "cancel": "保留当前模型",
     "confirm": "切换并继续"
   },
+  "switchOutcome": {
+    "applied": "模型来源切换已生效。",
+    "failed": "模型来源切换失败，请重新选择。"
+  },
   "agentSwitch": {
     "browseAccessibility": "浏览 {{agent}} 模型",
     "confirmTitle": "切换到 {{agent}}？",
