@@ -1890,11 +1890,13 @@ function computeMerged(): Catalog {
           b.modelRegistry, metadataProviderId, rootId,
           agent === 'pi' ? undefined : agent as RootAgentKind,
         )?.entry.modelRef ?? findBaseModel(b.modelRegistry, rootId)?.id;
-        // Known public aliases/deployments use modelRef; new GPT/Codex/o-series
-        // IDs remain covered before the next catalog release. Protocol alone
-        // cannot identify an OpenAI model (many other vendors use it).
-        const openAiModel = identity?.startsWith('openai/') ||
-          /^(?:(?:codex|openai|chatgpt)\/)?(?:gpt-|codex-|o\d+(?:[.-]|$))/.test(model.id);
+        // Known public identities take precedence, including other vendors using
+        // GPT-like aliases. Only unresolved GPT/Codex/o-series IDs fall back to
+        // family names before the next catalog release; protocol alone never
+        // identifies a vendor, and arbitrary private namespaces remain excluded.
+        const openAiModel = identity !== undefined
+          ? identity.startsWith('openai/')
+          : /^(?:(?:codex|openai|chatgpt)\/)?(?:gpt-|codex-|o\d+(?:[.-]|$))/.test(model.id);
         if (!openAiModel || model.userModelConfig?.contextWindow !== undefined ||
             (identity && localOverrides.baseModels?.[identity]?.contextWindow !== undefined) ||
             hasLocalContextWindowOverride(localOverrides, provider.id, rootId,

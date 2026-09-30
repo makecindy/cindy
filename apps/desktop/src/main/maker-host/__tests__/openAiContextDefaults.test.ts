@@ -99,6 +99,30 @@ describe('all OpenAI routes share the daily context default', () => {
     for (const agent of agents) expect(row(agent)).toMatchObject({ contextWindow: 272_000, contextWindowMax: 872_000 });
   });
 
+  it.each(['user', 'organization'] as const)('keeps known non-OpenAI identities ahead of GPT-like names on %s connections', source => {
+    const catalog = structuredClone(BUNDLED_CATALOG) as Catalog;
+    catalog.modelRegistry!.baseModels!.push({
+      id: 'other/vendor-model', aliases: ['codex-other', 'o99'],
+      defaults: { contextWindow: 1_000_000, contextWindowMax: 1_000_000 },
+    });
+    catalog.modelRegistry!.models.push({
+      id: 'relay/other-deployment', name: 'Other vendor', modelRef: 'other/vendor-model',
+      routes: [{ providerId: 'custom:sub2api', modelId: 'gpt-6-astra', agents: ['claude-code', 'codex'] }],
+    });
+    setActiveCatalog(catalog);
+    const ids = ['gpt-6-astra', 'codex-other', 'o99'];
+    const models = mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: ids.map(id => ({
+      id, context_window: 1_000_000, max_context_window: 1_000_000,
+    })) })!);
+    const provider = buildUserProvider(config(models), { modelRegistry: catalog.modelRegistry });
+    provider.source = source;
+    setCustomProviders([provider]);
+    for (const agent of agents) for (const id of ids) {
+      expect(row(agent, id)).toMatchObject({ contextWindow: 1_000_000, contextWindowMax: 1_000_000 });
+      expect(resolveModelDefaultContextWindow(getActiveCatalog(), agent, 'custom:sub2api', id)).toBe(1_000_000);
+    }
+  });
+
   it('preserves manual model windows and connection/engine patches, and restores the current default', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const models = discovery().map(model => ({ ...model, contextWindow: 800_000 }));
