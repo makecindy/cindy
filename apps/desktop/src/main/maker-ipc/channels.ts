@@ -280,6 +280,8 @@ export const MAKER_INVOKE = {
    * value=null 表示删除 override、回到跟随供应商。设置类写操作：仅本机主页面可调，
    * **不进 device-link allowlist**(远程改被控端全局设置越权)。
    */
+  MODEL_CATALOG_THINKING_GET: 'maker:model-catalog-thinking:get',
+  MODEL_CATALOG_THINKING_SET: 'maker:model-catalog-thinking:set',
   MODEL_CATALOG_IMAGE_INPUT_GET: 'maker:model-catalog-image-input:get',
   MODEL_CATALOG_IMAGE_INPUT_SET: 'maker:model-catalog-image-input:set',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调

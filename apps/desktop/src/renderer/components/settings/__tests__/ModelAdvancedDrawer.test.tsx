@@ -144,6 +144,63 @@ describe('model advanced editor', () => {
     expect(screen.getByText(/Chat Completions/)).toBeTruthy();
   });
 
+  it('disables the thinking declaration for organization-managed providers', () => {
+    // 企业托管：能力由管理员下发，本机 override 是最高优先级，必须在控件上就拦住。
+    // （按钮禁用挡不住受信 renderer 直调，IPC 侧另有 PERMISSION_DENIED 兜底。）
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      updateCustomProvider: vi.fn(async () => ({ ok: true })),
+      getModelCatalogThinking: vi.fn(async () => ({ value: null, isCustomized: false })),
+      setModelCatalogThinking: vi.fn(async () => undefined),
+    } } });
+    // 企业托管的判定口径是 source === 'organization'（isOrganizationManagedProvider）。
+    const managed = { ...buildUserProvider({ id: 'corp', name: 'Corp', runtimes: {
+      codex: { baseUrl: 'https://corp.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat',
+        models: [{ id: 'corp-model', name: 'Corp Model', route: { baseUrl: 'https://corp.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat' } }] },
+    } }), connected: true, source: 'organization' } as ProviderView;
+    try {
+      render(drawer(managed.models.codex![0], 'high', ['high'], managed));
+      const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.thinkingOverride.label' });
+      expect((trigger as HTMLButtonElement).disabled).toBe(true);
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('declares thinking tiers as a local catalog override instead of editing the connection', async () => {
+    // 目录把该模型声明成零档位（不支持思考），用户从高级设置里补上真实档位。
+    const setTiers = vi.fn(async () => undefined);
+    const getView = vi.fn(async () => ({ value: null, isCustomized: false }));
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      updateCustomProvider: vi.fn(async () => ({ ok: true })),
+      getModelCatalogThinking: getView,
+      setModelCatalogThinking: setTiers,
+    } } });
+    const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
+      codex: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat',
+        models: [{ id: 'gpt-6', name: 'GPT-6', efforts: [] as never, route: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat' } }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      fireEvent.keyDown(
+        screen.getByRole('button', { name: 'settings.providers.models.advanced.thinkingOverride.label' }),
+        { key: 'ArrowDown' },
+      );
+      const high = await screen.findByRole('menuitemcheckbox', { name: 'settings.providers.models.advanced.thinkingTier.high' });
+      fireEvent.click(high);
+      await waitFor(() => expect(setTiers).toHaveBeenCalledTimes(1));
+      // 写入的是目录 override（不是连接配置），且带上目标行全部引擎的 id。
+      const [target, tiers, defaultTier] = setTiers.mock.calls[0]! as unknown as [
+        { providerId: string; modelId: string; relatedTargets?: unknown[] }, string[] | null, string | null,
+      ];
+      expect(target.providerId).toBe('fixture');
+      expect(target.modelId).toBe('gpt-6');
+      expect(tiers).toEqual(['high']);
+      expect(defaultTier).toBe('high');
+      // 连接配置不得被这条路径改写。
+      expect(window.electronAPI.maker.updateCustomProvider).not.toHaveBeenCalled();
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
   it('saves protocol selection to the selected engine and model without writing derived model limits', async () => {
     const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
     const previous = window.electronAPI;

@@ -2359,7 +2359,36 @@
           },
           "codexContextUnknown": "CLI configuration unavailable",
           "codexContextValues": "Total {{total}} · Usable {{usable}} · Auto-compact {{compact}} tokens",
-          "contextLimitGptHint": "GPT defaults to at most 272K; you can set it to 1M here. Codex applies the window and automatic compaction threshold together, retaining 5% headroom. Actual capacity depends on the model service."
+          "contextLimitGptHint": "GPT defaults to at most 272K; you can set it to 1M here. Codex applies the window and automatic compaction threshold together, retaining 5% headroom. Actual capacity depends on the model service.",
+          "thinking": {
+            "on": "Supports thinking",
+            "off": "No thinking"
+          },
+          "thinkingOverride": {
+            "label": "Declare thinking tiers",
+            "inherit": "Follow provider",
+            "declared": "Declared",
+            "sourceHint": "The catalog reports no thinking tiers; declare them here if the model actually reasons",
+            "saveFailed": "Failed to save the thinking declaration",
+            "saveFailedWithReason": "Failed to save the thinking declaration: {{reason}}",
+            "tiers": {
+              "minimal": "Minimal",
+              "low": "Low",
+              "medium": "Medium",
+              "high": "High",
+              "xhigh": "Extra high",
+              "max": "Max"
+            }
+          },
+          "thinkingLabel": "Thinking",
+          "thinkingTier": {
+            "minimal": "Minimal",
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High",
+            "xhigh": "Extra high",
+            "max": "Max"
+          }
         },
         "kindFilter": {
           "all": "All",

@@ -3431,6 +3431,136 @@ describe('provider:custom:* CRUD handlers', () => {
   });
 });
 
+describe('model catalog thinking handlers', () => {
+  const target = { providerId: 'opencode-go', agent: 'pi' as const, modelId: 'space-bunny-free' };
+
+  function thinkingDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps {
+    return makeDeps({
+      listProviders: async () => [catalogView('opencode-go', { pi: ['space-bunny-free'] })],
+      readModelCatalogThinking: vi.fn(() => ({ value: null, isCustomized: false })),
+      writeModelCatalogThinking: vi.fn(async () => {}),
+      syncLocalCatalogOverrides: vi.fn(() => {}),
+      ...over,
+    });
+  }
+
+  it('writes the declared tiers, re-syncs the catalog and broadcasts', async () => {
+    const harness = new IpcHarness();
+    const deps = thinkingDeps();
+    registerProviderHandlers(harness, deps);
+
+    await harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, {
+      ...target,
+      value: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'max',
+    });
+    expect(deps.writeModelCatalogThinking).toHaveBeenCalledWith(
+      [target],
+      ['low', 'medium', 'high', 'xhigh', 'max'],
+      'max',
+    );
+    // 写盘不会自动生效：必须重读 override 注入活动目录并刷新/广播。
+    expect(deps.syncLocalCatalogOverrides).toHaveBeenCalledTimes(1);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes null through as the "follow the catalog" reset without a membership check', async () => {
+    const harness = new IpcHarness();
+    const deps = thinkingDeps();
+    registerProviderHandlers(harness, deps);
+
+    // 目录漂移后指向已下架 id 的陈旧 override 必须能清掉，因此复位不做成员校验。
+    await harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, {
+      ...target,
+      modelId: 'retired-model',
+      value: null,
+    });
+    expect(deps.writeModelCatalogThinking).toHaveBeenCalledWith(
+      [{ providerId: 'opencode-go', agent: 'pi', modelId: 'retired-model' }],
+      null,
+      null,
+    );
+  });
+
+  it('rejects enterprise-managed providers so the organization stays authoritative', async () => {
+    // 组织托管供应商的能力由管理员下发；override 是本机最高优先级，不加这道门就能让运行期
+    // 能力偏离企业配置。价格 override 已有同款拒绝，这里必须对齐。
+    const harness = new IpcHarness();
+    const deps = thinkingDeps({
+      listProviders: async () => [catalogView('corp-gateway', { pi: ['corp-model'] })],
+      isOrganizationManagedProviderId: (providerId: string) => providerId === 'corp-gateway',
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, {
+        ...target,
+        providerId: 'corp-gateway',
+        modelId: 'corp-model',
+        value: ['high'],
+        defaultEffort: 'high',
+      }),
+    ).rejects.toThrow(/PERMISSION_DENIED.*managed by your organization/);
+    expect(deps.writeModelCatalogThinking).not.toHaveBeenCalled();
+  });
+
+  it('rejects gateway rows and self-inconsistent tier sets at the IPC boundary', async () => {
+    const harness = new IpcHarness();
+    const deps = thinkingDeps();
+    registerProviderHandlers(harness, deps);
+
+    // 网关模型的能力由服务端目录控制。
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, {
+        ...target,
+        providerId: 'xd',
+        value: ['high'],
+        defaultEffort: 'high',
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS.*server-controlled/);
+
+    // 默认档不在声明的档位集合里 → 写下去只会被 sanitize 判整条无效，必须在边界就拒。
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, {
+        ...target,
+        value: ['low', 'high'],
+        defaultEffort: 'max',
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS.*must be one of the declared tiers/);
+
+    // 非法档位名 / 重复档位 / 空集合。
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, { ...target, value: ['turbo'] }),
+    ).rejects.toThrow(/INVALID_PARAMS.*invalid thinking tier/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, { ...target, value: ['low', 'low'] }),
+    ).rejects.toThrow(/INVALID_PARAMS.*must not repeat/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_SET, { ...target, value: [] }),
+    ).rejects.toThrow(/INVALID_PARAMS.*non-empty array or null/);
+
+    expect(deps.writeModelCatalogThinking).not.toHaveBeenCalled();
+  });
+
+  it('reads every engine id of the row and prefers the Pi side for display', async () => {
+    const harness = new IpcHarness();
+    const read = vi.fn((t: { agent?: string }) =>
+      t.agent === 'pi'
+        ? { value: ['low', 'high'], isCustomized: true }
+        : { value: null, isCustomized: false },
+    );
+    const deps = thinkingDeps({ readModelCatalogThinking: read as never });
+    registerProviderHandlers(harness, deps);
+
+    const view = await harness.invoke(MAKER_INVOKE.MODEL_CATALOG_THINKING_GET, {
+      ...target,
+      relatedTargets: [{ providerId: 'opencode-go', agent: 'codex', modelId: 'gpt-5.6-sol' }],
+    });
+    // 展示值取运行期真正消费 thinking 档位的那一侧（Pi），并把「一边声明、一边跟随」报成分叉。
+    expect(view).toMatchObject({ value: ['low', 'high'], isCustomized: true, diverged: true });
+  });
+});
+
 describe('model catalog image input handlers', () => {
   const target = { providerId: 'opencode-go', agent: 'pi' as const, modelId: 'mimo-v2.6-flash' };
 

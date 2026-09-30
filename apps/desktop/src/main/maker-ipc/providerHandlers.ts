@@ -27,6 +27,7 @@ import {
   storedCustomProviderId,
   type AgentKind,
   type CustomProviderConfig,
+  type Effort,
   type ProviderModelDiscoveryFailure,
   type ProviderPreset,
   type ProviderView,
@@ -46,6 +47,7 @@ import type {
   ModelPriceOverrideTarget,
   ModelPriceOverrideView,
 } from '../../shared/modelPriceOverride.js';
+import type { ModelCatalogThinkingView } from '../../shared/modelCatalogThinking.js';
 import type { MoneyCurrency } from '../../shared/regionalMoney.js';
 import {
   MAX_PROVIDER_ORDER_ID_LENGTH,
@@ -454,6 +456,21 @@ export interface ProviderHandlerDeps {
    * isCustomized 让 UI 区分「跟随目录」与「显式声明了一个等于目录的值」。
    * 可选 —— 未注入(单测最小桩)时对应 handler 报 INTERNAL 而不是静默成功。
    */
+  /**
+   * 单模型思考档位的本地目录 override。tiers=null 删除 override(回到跟随目录)；
+   * isCustomized 让 UI 区分「跟随目录」与「显式声明了一个等于目录的值」。
+   * 可选 —— 未注入(单测最小桩)时对应 handler 报 INTERNAL 而不是静默成功。
+   */
+  readModelCatalogThinking?(target: ModelPriceOverrideTarget): ModelCatalogThinkingView;
+  /**
+   * 写入该行**全部引擎**的 id(桥接两端 id 不同：运行期消费 thinking 档位的 pi 侧与主展示
+   * 引擎不同，只写一边会让声明对运行期完全无效)。单次调用内原子写所有 key。
+   */
+  writeModelCatalogThinking?(
+    targets: readonly ModelPriceOverrideTarget[],
+    tiers: readonly Effort[] | null,
+    defaultEffort?: Effort | null,
+  ): void | Promise<void>;
   readModelCatalogImageInput?(target: ModelPriceOverrideTarget): ModelCatalogImageInputView;
   /**
    * 写入该行**全部引擎**的 id(桥接两端 id 不同：运行期消费能力的 pi 侧与主展示引擎不同，
@@ -2109,6 +2126,132 @@ export function registerProviderHandlers(
       }
     });
   }
+  /** 多目标读回：与图片输入同口径 —— 展示值优先取运行期真正消费档位的引擎(Pi)那一侧。 */
+  const readCatalogThinkingTargets = (targets: readonly ModelPriceOverrideTarget[]) => {
+    const { read } = requireCatalogThinkingDeps();
+    const views = targets.map((target) => read(target));
+    const piIndex = targets.findIndex((target) => target.agent === 'pi');
+    const ordered = piIndex >= 0 ? [views[piIndex]!, ...views.filter((_, i) => i !== piIndex)] : views;
+    const firstNonNull = ordered.find((view) => view.value !== null)?.value ?? null;
+    const head = views[0]!;
+    return {
+      value: firstNonNull,
+      isCustomized: views.some((view) => view.isCustomized),
+      ...(views.some((view) => view.value !== head.value || view.isCustomized !== head.isCustomized)
+        ? { diverged: true }
+        : {}),
+    };
+  };
+  /** 目录认可的思考档位全集；IPC 边界用它挡住非法档位，避免写出必然被 sanitize 丢弃的条目。 */
+  const VALID_THINKING_TIERS = new Set<Effort>([
+    'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
+  ]);
+  const requireCatalogThinkingDeps = (): {
+    read: NonNullable<ProviderHandlerDeps['readModelCatalogThinking']>;
+    write: NonNullable<ProviderHandlerDeps['writeModelCatalogThinking']>;
+  } => {
+    if (!deps.readModelCatalogThinking || !deps.writeModelCatalogThinking) {
+      throwIpcError('INTERNAL', 'model catalog thinking override is not wired');
+    }
+    return {
+      read: deps.readModelCatalogThinking,
+      write: deps.writeModelCatalogThinking,
+    };
+  };
+  /**
+   * 思考档位的合法档位集合与目录同源(Effort)。非法档位在 IPC 边界就拒 —— 写下去只会被
+   * sanitize 判成整条无效，用户界面表现为「保存了但没生效」，真正原因不落在任何界面上。
+   */
+  const parseCatalogThinkingTiers = (input: unknown): Effort[] | null => {
+    const value = (input as { value?: unknown }).value;
+    if (value === null) return null;
+    if (!Array.isArray(value) || value.length === 0) {
+      throwIpcError('INVALID_PARAMS', 'thinking tiers must be a non-empty array or null');
+    }
+    const tiers = value.map((tier) => {
+      if (typeof tier !== 'string' || !VALID_THINKING_TIERS.has(tier as Effort)) {
+        throwIpcError('INVALID_PARAMS', `invalid thinking tier '${String(tier)}'`);
+      }
+      return tier as Effort;
+    });
+    if (new Set(tiers).size !== tiers.length) {
+      throwIpcError('INVALID_PARAMS', 'thinking tiers must not repeat');
+    }
+    return tiers;
+  };
+  const parseCatalogThinkingDefault = (input: unknown, tiers: Effort[] | null): Effort | null => {
+    const raw = (input as { defaultEffort?: unknown }).defaultEffort;
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw !== 'string' || !VALID_THINKING_TIERS.has(raw as Effort)) {
+      throwIpcError('INVALID_PARAMS', `invalid default thinking tier '${String(raw)}'`);
+    }
+    if (tiers === null || !tiers.includes(raw as Effort)) {
+      throwIpcError('INVALID_PARAMS', 'default thinking tier must be one of the declared tiers');
+    }
+    return raw as Effort;
+  };
+
+  registry.handle(MAKER_INVOKE.MODEL_CATALOG_THINKING_GET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const targets = parseCatalogImageInputTargets(input);
+    // 读不做目录成员校验：目录漂移后 UI 仍要能显示并清掉指向已下架 id 的陈旧 override。
+    return readCatalogThinkingTargets(targets);
+  });
+
+  registry.handle(
+    MAKER_INVOKE.MODEL_CATALOG_THINKING_SET,
+    async (event, input: unknown) => {
+      assertTrustedProviderMutationSender(event);
+      const targets = parseCatalogImageInputTargets(input);
+      const target = targets[0]!;
+      const tiers = parseCatalogThinkingTiers(input);
+      const defaultEffort = parseCatalogThinkingDefault(input, tiers);
+      const { write } = requireCatalogThinkingDeps();
+      // 网关模型的能力声明由服务端目录控制，不开放本机 override：按钮已 disable，但受信
+      // renderer 能绕过按钮直接调 preload，所以在这里再拒一次（与图片输入 override 同一道门）。
+      if (target.providerId === 'xd') {
+        throwIpcError('INVALID_PARAMS', 'Cindy AI Gateway model capabilities are server-controlled');
+      }
+      // 组织托管供应商的能力由管理员下发：override 是本机最高优先级，不加这道门就能让运行期
+      // 能力偏离企业配置。与价格 override 同一位置、同一错误码（UI 侧也一并禁用控件）。
+      if (deps.isOrganizationManagedProviderId(target.providerId)) {
+        throwIpcError('PERMISSION_DENIED', 'Enterprise model capabilities are managed by your organization');
+      }
+      const ownerAtIngress = captureProviderOwnerSession();
+      return withProviderConfigMutation(target.providerId, () =>
+        enqueuePriceMutation(async () => {
+          // 目录成员校验必须在队列内：它带着 await，放在队列外会拿旧账号目录校验、再把结果
+          // 落到新账号的文件里（与价格/上下文上限/图片输入这几个姊妹 handler 同一顺序）。
+          // value=null 是「恢复跟随目录」，不校验成员 —— 目录漂移后的陈旧 override 必须能清掉。
+          if (tiers !== null) {
+            for (const candidate of targets) await requirePriceTargetModel(candidate);
+          }
+          assertProviderMutationOwner(
+            ownerAtIngress,
+            'active account changed before persisting thinking override',
+          );
+          try {
+            await write(targets, tiers, defaultEffort);
+          } catch (err) {
+            log.warn('model catalog thinking override persist failed', {
+              providerId: target.providerId,
+              modelId: target.modelId,
+              tiers,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            throwIpcError('INTERNAL', 'failed to persist model catalog thinking override');
+          }
+          // 写盘不会自动生效：先重读 override 注入活动目录，再刷新目录并广播
+          // PROVIDER_CHANGED（不是 pricing 通道 —— 档位变了要让 renderer 重拉 provider
+          // 视图，抽屉据此把「跟随供应商」的括注刷新成新值）。
+          deps.syncLocalCatalogOverrides?.();
+          await refreshCatalogAfterCommit();
+          deps.broadcastChanged();
+        }),
+      );
+    },
+  );
+
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, createProviderFromInput);
 
   async function updateProviderFromInput(

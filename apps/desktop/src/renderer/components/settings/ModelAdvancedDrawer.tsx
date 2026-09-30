@@ -26,7 +26,16 @@ import { useTranslation } from 'react-i18next';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { providerViewToCustomProviderConfig, updateCustomProvider } from '@/lib/customProviders';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+} from '@/components/ui/dropdown-menu';
 import { MODEL_HARNESS_COLOR } from '@/lib/modelHarnessPresentation';
 import { ModelCompatibilityNotice } from '@/components/new-chat/ModelCompatibilityNotice';
 import { MODEL_PROTOCOL_LABEL, MODEL_PROTOCOL_OPTIONS } from '@/lib/modelProtocolLabel';
@@ -38,6 +47,7 @@ import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { useModelCatalogImageInput } from '@/hooks/useModelCatalogImageInput';
+import { useModelCatalogThinking } from '@/hooks/useModelCatalogThinking';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
   isModelEnabled,
@@ -280,6 +290,50 @@ export function ModelAdvancedDrawer({
     };
   }, [open, primaryAgent, primaryModel, provider.id, row]);
   const imageInput = useModelCatalogImageInput(imageInputTarget);
+  // 思考档位的本地声明。目标形状与图片输入完全一致：必须覆盖该行全部引擎的 id ——
+  // 运行期真正消费 thinking 档位的是 Pi，桥接投影两端 id 不同，只写主展示引擎会让声明
+  // 对运行期无效、UI 却显示「已声明」。
+  const thinkingTarget = useMemo(() => {
+    if (!open || !primaryAgent || !primaryModel) return null;
+    const relatedTargets = (row?.avail ?? [])
+      .filter((agent) => agent !== primaryAgent)
+      .flatMap((agent) => {
+        const model = row?.byAgent[agent];
+        return model ? [{ providerId: provider.id, agent, modelId: model.id }] : [];
+      });
+    return {
+      providerId: provider.id,
+      agent: primaryAgent,
+      modelId: primaryModel.id,
+      ...(relatedTargets.length > 0 ? { relatedTargets } : {}),
+    };
+  }, [open, primaryAgent, primaryModel, provider.id, row]);
+  const thinking = useModelCatalogThinking(thinkingTarget);
+  /**
+   * 档位组合用固定候选（与目录 Effort 全集同序）而不是自由输入：组合爆炸（2^7）无法
+   * 列举，而真实诉求只有「沿用厂商 / 声明常见的几档」两类。勾选语义 = 该模型支持这一档。
+   */
+  const THINKING_TIER_CHOICES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+  const setThinkingTiers = async (tiers: string[] | null) => {
+    // 已经是该状态就别再写一次：免掉一次空写入引起的全量目录刷新与广播。各引擎键分叉时
+    // 必须放行 —— 否则「重选当前项」被 no-op 挡掉，分叉永远修不掉。
+    const already =
+      tiers === null
+        ? !thinking.isCustomized
+        : thinking.isCustomized &&
+          tiers.length === (thinking.value?.length ?? -1) &&
+          tiers.every((tier) => thinking.value?.includes(tier));
+    if (already && !thinking.diverged) return;
+    const persisted = await thinking.setTiers(tiers, tiers?.[0] ?? null);
+    if (!persisted) {
+      const reason = thinking.errorReason;
+      toast.error(
+        reason
+          ? t('settings.providers.models.advanced.thinkingOverride.saveFailedWithReason', { reason })
+          : t('settings.providers.models.advanced.thinkingOverride.saveFailed'),
+      );
+    }
+  };
   // 'inherit' = 删除本机 override，回到跟随供应商。失败由 hook 回读真值，这里只负责提示。
   const setImageInput = async (next: string) => {
     const value = next === 'inherit' ? null : next === 'true';
@@ -957,6 +1011,80 @@ export function ModelAdvancedDrawer({
                               {t('settings.providers.models.advanced.imageInputOverride.declaredFalse')}
                             </DropdownMenuRadioItem>
                           </DropdownMenuRadioGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </Row>
+                    <Row label={t('settings.providers.models.advanced.thinkingLabel')}>
+                      {/*
+                        思考档位三态声明：目录说「不支持思考」时，Pi 客户端就没有 thinking
+                        通道，模型推理只能随 content 返回、被当成普通正文渲染（用户看到的是
+                        「思考被写进正文」）。此前没有任何入口能声明这件事。勾选语义 = 该模型
+                        支持这一档；「跟随供应商」删除本机 override。
+                      */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            // xd 的能力由服务端目录决定、组织托管供应商的能力由管理员下发：两者
+                            // 本机都不可覆盖，控件保留但禁用（与同抽屉其他不可改项一致）；
+                            // Main IPC 侧另有 INVALID_PARAMS / PERMISSION_DENIED 拒写兜底。
+                            disabled={
+                              thinking.saving ||
+                              provider.id === 'xd' ||
+                              isOrganizationManagedProvider(provider)
+                            }
+                            aria-label={t('settings.providers.models.advanced.thinkingOverride.label')}
+                            title={
+                              (primaryModel.efforts?.length ?? 0) > 0
+                                ? t('settings.providers.models.advanced.catalogCapabilities')
+                                : t('settings.providers.models.advanced.thinkingOverride.sourceHint')
+                            }
+                            className="inline-flex items-center gap-1 rounded-full px-2 py-1 hover:bg-[var(--surface-hover)]"
+                          >
+                            <CapabilityValue
+                              state={(primaryModel.efforts?.length ?? 0) > 0}
+                              label={
+                                (primaryModel.efforts?.length ?? 0) > 0
+                                  ? t('settings.providers.models.advanced.thinking.on')
+                                  : t('settings.providers.models.advanced.thinking.off')
+                              }
+                            />
+                            <span className="text-11 text-[var(--text-tertiary)]">
+                              {thinking.isCustomized
+                                ? t('settings.providers.models.advanced.thinkingOverride.declared')
+                                : t('settings.providers.models.advanced.thinkingOverride.inherit')}
+                            </span>
+                            <ChevronDown size={12} className="inline" aria-hidden />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="z-[10003]" align="end">
+                          <DropdownMenuItem onSelect={() => void setThinkingTiers(null)}>
+                            {t('settings.providers.models.advanced.thinkingOverride.inherit')}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          {THINKING_TIER_CHOICES.map((tier) => {
+                            const active = thinking.value?.includes(tier) ?? false;
+                            return (
+                              <DropdownMenuCheckboxItem
+                                key={tier}
+                                checked={active}
+                                onSelect={(event) => {
+                                  // 多选：preventDefault 关掉 Radix 的自动关闭，用户可以连续勾多档。
+                                  event.preventDefault();
+                                  const next = active
+                                    ? (thinking.value ?? []).filter((item) => item !== tier)
+                                    : THINKING_TIER_CHOICES.filter((item) =>
+                                        item === tier || (thinking.value ?? []).includes(item),
+                                      );
+                                  // 空组合 = 「明确不支持思考」，必须走 null 之外的显式空数组：
+                                  // null 是「跟随供应商」，两者语义不同。
+                                  void setThinkingTiers(next.length > 0 ? next : []);
+                                }}
+                              >
+                                {t(`settings.providers.models.advanced.thinkingTier.${tier}`)}
+                              </DropdownMenuCheckboxItem>
+                            );
+                          })}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </Row>

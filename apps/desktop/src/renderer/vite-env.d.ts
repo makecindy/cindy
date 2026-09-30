@@ -5661,6 +5661,14 @@ interface ElectronAPI {
       limit: number | null,
       owner: import('../shared/modelContextLimit').ModelContextLimitOwner,
     ) => Promise<import('../shared/modelContextLimit').ModelContextLimitView>;
+    getModelCatalogThinking: (
+      target: import('../shared/modelCatalogThinking').ModelCatalogThinkingTarget,
+    ) => Promise<import('../shared/modelCatalogThinking').ModelCatalogThinkingView>;
+    setModelCatalogThinking: (
+      target: import('../shared/modelCatalogThinking').ModelCatalogThinkingTarget,
+      tiers: string[] | null,
+      defaultTier?: string | null,
+    ) => Promise<void>;
     getModelCatalogImageInput: (
       target: import('../shared/modelCatalogImageInput').ModelCatalogImageInputTarget,
     ) => Promise<import('../shared/modelCatalogImageInput').ModelCatalogImageInputView>;
