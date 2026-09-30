@@ -40,6 +40,8 @@ export interface RsbWindowContext {
 /** main → 子窗口的命令推送(如主窗终端快捷键转发 / detached RSB 内定位文件)。 */
 export type RsbWindowCommand =
   | { type: 'open-routines-tab'; sessionId: string; botId: string }
+  /** 伙伴主任务页:确保「工作台」标签存在(不存在时创建并展开右侧栏)。 */
+  | { type: 'open-bot-workbench-tab'; sessionId: string; botId: string }
   | { type: 'open-terminal'; sessionId: string }
   | { type: 'toggle-review-tab'; sessionId: string }
   | { type: 'open-web-browser'; sessionId: string; url: string }

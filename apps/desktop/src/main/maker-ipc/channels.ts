@@ -961,7 +961,7 @@ export const MAKER_PUSH = {
   BOT_GROUP_CHANGED: 'maker:bot-group:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
   BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
-  /** Bot workbench cards changed (payload: { botId }). */
+  /** 伙伴工作台已接手的项目变化(payload: { botId });renderer 收到后重读项目列表。 */
   BOT_WORKBENCH_CHANGED: 'maker:bot-workbench:changed',
   BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',
   /**

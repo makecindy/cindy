@@ -2279,6 +2279,18 @@
         "ko": "초대 코드"
       },
       "note": "共享任务加入表单中由房主提供、访客输入的代码；用户要求明确称为邀请码，避免被理解为任意邀请文本。"
+    },
+    {
+      "id": "bot-workbench",
+      "status": "proposed",
+      "en": "Workbench",
+      "translations": {
+        "zh-CN": "工作台",
+        "zh-TW": "工作台",
+        "ja": "ワークベンチ",
+        "ko": "작업대"
+      },
+      "note": "伙伴主任务右侧栏里的标签：主人交给伙伴的项目，以及项目里的任务、自动化与产出（docs/product-rules/cindy-bots-runtime.md「工作台」一节）。只指这个伙伴视图，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。"
     }
   ]
 }

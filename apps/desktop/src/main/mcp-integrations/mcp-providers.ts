@@ -70,7 +70,7 @@ import {
   listBotSkillsForSession,
   saveBotSkillForSession,
 } from '../maker-ipc/botSkillService.js';
-import { updateBotWorkbenchForSession } from '../maker-ipc/botWorkbenchService.js';
+import { runBotWorkbenchTool, type BotWorkbenchSendDeps } from '../maker-ipc/botWorkbenchTools.js';
 import {
   patchSessionMetaInDb,
   renameSessionTitlesInDb,
@@ -166,6 +166,25 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       }
     };
   }
+
+  const workbenchSend: BotWorkbenchSendDeps = {
+    sendToSession: wrap(async (svc, { targetSessionId, message, dispatcherSessionId }) => {
+      const result = await svc.sendToSession({ targetSessionId, message, dispatcherSessionId });
+      return result.ok
+        ? {
+            ok: true as const,
+            wakeKind: result.wakeKind,
+            ...(result.queuedMessageId ? { queuedMessageId: result.queuedMessageId } : {}),
+          }
+        : { ok: false as const, errorCode: result.errorCode, message: result.message };
+    }),
+    stopSessionTurn: wrap(async (svc, params) => {
+      const result = await svc.stopSessionTurn(params);
+      return result.ok
+        ? { ok: true as const, status: result.status }
+        : { ok: false as const, errorCode: result.errorCode, message: result.message };
+    }),
+  };
 
   const providers = createLiziMcpProviders({
     // 先传完整内置列表；按会话启停由下面的 isEnabled 包装处理。
@@ -815,8 +834,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
         list: (params) => listBotSkillsForSession(params),
       },
+      // 工作台:伙伴继续 / 停止主人交给它的项目里的任务。授权在 botWorkbenchAccess 里逐次
+      // 确定性校验;投递与停止复用 send_to_session / stop_session_turn 的同一条宿主路径。
       botWorkbench: {
-        update: (params) => updateBotWorkbenchForSession(params),
+        get: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.get(params)),
+        continueTask: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.continueTask(params)),
+        stopTask: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.stopTask(params)),
       },
       skillhub: createSkillhubAgentTools({
         isCurrentSession: (context) => !!context.sessionId

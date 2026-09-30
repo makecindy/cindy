@@ -19,4 +19,5 @@ import './subagents';
 import './background-tasks';
 import './resource-usage';
 import './routines';
+import './bot-workbench';
 import './cindy-make';

@@ -1,64 +1,61 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
-import {
-  CalendarDays,
-  ChevronDown,
-  ChevronRight,
-  Circle,
-  CircleCheck,
-  CircleX,
-  File,
-  FileImage,
-  FileSpreadsheet,
-  FileText,
-  Folder,
-  FolderOpen,
-  GitBranch,
-  LoaderCircle,
-  Mail,
-  Plus,
-  X,
-} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { CircleCheck, CirclePause, Clock3, Folder, FolderOpen, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { getLatestMessageTodoState, isPlanUserBoundary } from '@cindy/maker-shared/message-render';
 
 import { Button } from '@/components/ui/button';
+import { FileTypeTile } from '@/components/ui/file-type-tile';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { collectCachedGeneratedFiles } from '@/components/chat/generatedFilesProjection';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { useCCSessions } from '@/hooks/useCCSessions';
+import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
 import * as sessionService from '@/lib/sessionService';
+import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import type { BotDelegationView } from '../../../shared/botDelegation';
-import type {
-  BotWorkbench as BotWorkbenchData,
-  BotWorkbenchCard,
-  BotWorkbenchDirectory,
-  BotWorkbenchRow,
+import { cronToHuman } from '@/features/scheduler/lib/cronToHuman';
+import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
+import { formatNextRun } from '@/features/scheduler/lib/formatters';
+import { schedulesStore, useSchedulesSnapshot } from '@/features/scheduler/lib/schedulesStore';
+import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
+import {
+  BOT_WORKBENCH_MAX_DIRECTORIES,
+  isCaseInsensitivePlatform,
+  type BotWorkbench as BotWorkbenchData,
+  type WorkbenchTaskState,
 } from '../../../shared/botWorkbench';
-import { isActiveDelegationStatus, useBotDelegations } from './botDelegationLive';
+import { useBotDelegations } from './botDelegationLive';
 import { isBotPrimaryGeneratedFile } from './botGeneratedArtifacts';
+import { useBotProfiles } from './botStore';
+import {
+  buildWorkbenchProjectOptions,
+  buildWorkbenchTiles,
+  collectBotHiddenSessionIds,
+  type WorkbenchProjectOption,
+  type WorkbenchTile,
+} from './botWorkbenchProjection';
 
 /**
- * 伙伴工作台:常驻在伙伴对话右侧的一列统一卡片(参照 Cowork 的 Progress / Outputs / Context)。
+ * 伙伴工作台(右侧栏的一个标签,只对本机伙伴主任务提供)。
  *
- * - 进度、产出、工作来源由宿主从真实状态实时派生:计划步骤、后台任务、生成的文件、
- *   主人交给伙伴的目录。选完目录立刻出现,不等模型。
- * - 伙伴经 `update_workbench` 写入的卡片是它对这份工作的理解,排在进度之后。
- * - 卡片上的按钮 = 以主人身份给伙伴发一句话。
+ * - 没接手项目时:从已有项目里选一个 →「交给<伙伴>」,两次点击完成接手;
+ * - 接手后:项目胶囊、一行汇总、两列等高的任务格、最近产出。
+ * 任务格全部由宿主投影(见 botWorkbenchProjection),不经过模型;格子唯一的操作是
+ * 打开对应任务 / 自动化。
  */
+
+/** 默认展示几格;「全部 N」展开其余。 */
+const DEFAULT_TILE_COUNT = 6;
+const MAX_OUTPUTS = 4;
 
 type ChatStore = typeof import('@/lib/makerChatStore').makerChatStore;
 type ChatSnapshot = ReturnType<ChatStore['getSnapshot']>;
+type Translate = (key: string, options?: Record<string, unknown>) => string;
 
-const COLLAPSE_KEY = 'cindy.botWorkbench.collapsed';
-const RECENT_TASK_MS = 24 * 60 * 60 * 1_000;
-const MAX_RECENT_TASKS = 3;
-const MAX_OUTPUTS = 6;
-
-/**
- * 发送链路(makerChatStore)初始化较重,且依赖完整 i18n 实例;工作台在挂载后再加载它,
- * 不拖慢伙伴页首屏,也不让只渲染伙伴页的轻量环境被连带初始化。
- */
+/** 发送链路初始化较重;工作台挂载后再加载,不拖慢伙伴页首屏。 */
 function useChatStore(): ChatStore | null {
   const [store, setStore] = useState<ChatStore | null>(null);
   useEffect(() => {
@@ -84,16 +81,6 @@ function useChatSnapshot(store: ChatStore | null, sessionId: string): ChatSnapsh
   return useSyncExternalStore(subscribe, read, read);
 }
 
-function readCollapsed(): Record<string, boolean> {
-  try {
-    const raw = window.localStorage.getItem(COLLAPSE_KEY);
-    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : {};
-  } catch {
-    return {};
-  }
-}
-
 function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -104,314 +91,9 @@ function useNow(active: boolean): number {
   return now;
 }
 
-export function BotWorkbench({
-  botId,
-  botName,
-  sessionId,
-}: {
-  botId: string;
-  botName: string;
-  sessionId: string;
-}) {
-  const { t, i18n } = useTranslation();
-  const navigate = useNavigate();
-  const store = useChatStore();
-  const chat = useChatSnapshot(store, sessionId);
-  const delegations = useBotDelegations(sessionId);
-  const [workbench, setWorkbench] = useState<BotWorkbenchData | null>(null);
-  const [workingDir, setWorkingDir] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readCollapsed);
-
-  const toggle = useCallback((key: string) => {
-    setCollapsed((previous) => {
-      const next = { ...previous, [key]: !previous[key] };
-      try {
-        window.localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next));
-      } catch {
-        /* 折叠状态只是偏好,写不进去就算了 */
-      }
-      return next;
-    });
-  }, []);
-
-  const api = window.electronAPI?.localDb?.bots?.workbench;
-
-  const load = useCallback(() => {
-    if (!api) return;
-    void api
-      .get(botId)
-      .then((next) => setWorkbench(next))
-      .catch(() => {});
-  }, [api, botId]);
-
-  useEffect(() => {
-    setWorkbench(null);
-    load();
-    const off = window.electronAPI?.maker?.onBotWorkbenchChanged?.((payload) => {
-      if (payload.botId === botId) load();
-    });
-    // 目录的分支与改动数是现算的:回到窗口时刷新一次,不做轮询。
-    const onFocus = () => load();
-    window.addEventListener('focus', onFocus);
-    return () => {
-      off?.();
-      window.removeEventListener('focus', onFocus);
-    };
-  }, [botId, load]);
-
-  useEffect(() => {
-    let alive = true;
-    void sessionService
-      .get(sessionId)
-      .then((row) => {
-        if (alive) setWorkingDir(row.workingDir ?? null);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [sessionId]);
-
-  const sendToBot = useCallback(
-    async (text: string) => {
-      if (sending) return;
-      setSending(true);
-      try {
-        const [chatStore, row] = await Promise.all([
-          store ?? import('@/lib/makerChatStore').then((module) => module.makerChatStore),
-          sessionService.get(sessionId),
-        ]);
-        const sent = row.workingDir
-          ? await chatStore.sendMessage(sessionId, text, row.model, row.effort, row.permissionMode, row.workingDir)
-          : false;
-        if (!sent) toast.error(t('bots.workbench.sendFailed', { name: botName }));
-      } catch {
-        toast.error(t('bots.workbench.sendFailed', { name: botName }));
-      } finally {
-        setSending(false);
-      }
-    },
-    [botName, sending, sessionId, store, t],
-  );
-
-  const giveDirectory = useCallback(async () => {
-    const picked = await window.electronAPI.dialog?.showOpenDirectory();
-    const dirPath = picked?.success ? picked.path : null;
-    if (!dirPath || !api) return;
-    const added = await api.addDirectory(botId, dirPath).catch(() => null);
-    if (!added?.ok) {
-      toast.error(
-        added?.errorCode === 'TOO_MANY'
-          ? t('bots.workbench.tooManyDirs', { name: botName })
-          : t('bots.workbench.dirUnavailable'),
-      );
-      return;
-    }
-    const name = dirPath.split(/[\\/]/).filter(Boolean).pop() ?? dirPath;
-    void sendToBot(t('bots.workbench.dirPrompt', { name, path: dirPath }));
-  }, [api, botId, botName, sendToBot, t]);
-
-  const removeDirectory = useCallback(
-    (dirPath: string) => {
-      void api?.removeDirectory(botId, dirPath).catch(() => {});
-    },
-    [api, botId],
-  );
-
-  const openTask = useCallback(
-    (childSessionId: string) => navigate(`/cc-agent/${encodeURIComponent(childSessionId)}`),
-    [navigate],
-  );
-
-  const progress = useMemo(() => deriveProgress(chat, delegations), [chat, delegations]);
-  const outputs = useMemo(() => deriveOutputs(chat, delegations, workingDir), [chat, delegations, workingDir]);
-  const now = useNow(progress.tasks.some((task) => isActiveDelegationStatus(task.status)));
-  const cards = workbench?.cards ?? [];
-  const directories = workbench?.directories ?? [];
-  const streaming = chat?.isStreaming ?? false;
-
-  const connectors = [
-    { key: 'mail', icon: Mail, onClick: () => void sendToBot(t('bots.workbench.mailPrompt')) },
-    { key: 'calendar', icon: CalendarDays, onClick: () => void sendToBot(t('bots.workbench.calendarPrompt')) },
-  ] as const;
-
-  return (
-    <aside
-      aria-label={t('bots.workbench.title')}
-      className="hidden w-[336px] shrink-0 flex-col gap-3 overflow-y-auto py-4 pl-1 pr-4 min-[1180px]:flex"
-    >
-      <Section
-        title={t('bots.workbench.progress')}
-        collapsed={collapsed.progress}
-        onToggle={() => toggle('progress')}
-      >
-        {progress.steps.length === 0 && progress.tasks.length === 0 && !streaming ? (
-          <Empty>{t('bots.workbench.progressEmpty', { name: botName })}</Empty>
-        ) : (
-          <div className="flex flex-col gap-0.5">
-            {progress.steps.map((step, index) => (
-              <StepRow key={`${step.content}-${index}`} status={step.status} animated={streaming}>
-                {step.status === 'in_progress' && step.activeForm ? step.activeForm : step.content}
-              </StepRow>
-            ))}
-            {progress.steps.length === 0 && streaming ? (
-              <StepRow status="in_progress" animated>
-                {t('bots.workbench.working', { name: botName })}
-              </StepRow>
-            ) : null}
-            {progress.tasks.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                now={now}
-                onOpen={task.childSessionId ? () => openTask(task.childSessionId!) : undefined}
-              />
-            ))}
-          </div>
-        )}
-      </Section>
-
-      {cards.map((card, index) => (
-        <WorkCard
-          key={`${card.title}-${index}`}
-          card={card}
-          updatedAt={index === 0 ? workbench?.updatedAt ?? null : null}
-          language={i18n.language}
-          collapsed={collapsed[`card:${card.title}`]}
-          onToggle={() => toggle(`card:${card.title}`)}
-          disabled={sending}
-          onAction={sendToBot}
-        />
-      ))}
-
-      <Section
-        title={t('bots.workbench.outputs')}
-        collapsed={collapsed.outputs}
-        onToggle={() => toggle('outputs')}
-      >
-        {outputs.length === 0 ? (
-          <Empty>{t('bots.workbench.outputsEmpty', { name: botName })}</Empty>
-        ) : (
-          <div className="flex flex-col gap-0.5">
-            {outputs.map((file) => (
-              <button
-                key={file.path}
-                type="button"
-                title={file.path}
-                onClick={() => void window.electronAPI.openPath?.(file.path)}
-                className={ROW_BUTTON_CLASS}
-              >
-                <FileGlyph name={file.name} />
-                <span className="min-w-0 flex-1 truncate text-13 leading-5 text-[var(--text-primary)]">{file.name}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </Section>
-
-      <Section
-        title={t('bots.workbench.context')}
-        collapsed={collapsed.context}
-        onToggle={() => toggle('context')}
-      >
-        {directories.length === 0 ? (
-          <Empty>{t('bots.workbench.contextEmpty', { name: botName })}</Empty>
-        ) : null}
-        <div className="flex flex-col gap-0.5">
-          {directories.map((dir) => (
-            <DirectoryRow key={dir.path} dir={dir} language={i18n.language} onRemove={() => removeDirectory(dir.path)} />
-          ))}
-          <SourceButton icon={FolderOpen} label={t('bots.workbench.dir')} hint={t('bots.workbench.dirHint')} disabled={sending} onClick={giveDirectory} />
-          {connectors.map(({ key, icon, onClick }) => (
-            <SourceButton
-              key={key}
-              icon={icon}
-              label={t(`bots.workbench.${key}`)}
-              hint={t(`bots.workbench.${key}Hint`)}
-              disabled={sending}
-              onClick={onClick}
-            />
-          ))}
-        </div>
-      </Section>
-    </aside>
-  );
-}
-
-// ─── 派生:全部来自宿主已有的真实状态 ────────────────────────────────
-
-interface ProgressView {
-  steps: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string }>;
-  tasks: BotDelegationView[];
-}
-
-function deriveProgress(chat: ChatSnapshot | null, delegations: readonly BotDelegationView[]): ProgressView {
-  const messages = chat?.messages ?? [];
-  let steps: ProgressView['steps'] = [];
-  if (messages.length > 0) {
-    const state = getLatestMessageTodoState(messages);
-    // 计划只属于最近一次真实的主人发言;主人换了话题,旧计划就退场。
-    let lastUser = -1;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (isPlanUserBoundary(messages[index])) {
-        lastUser = index;
-        break;
-      }
-    }
-    if (state.insertion && state.latestPlanIndex > lastUser) steps = state.insertion.todos;
-  }
-  const cutoff = Date.now() - RECENT_TASK_MS;
-  const sorted = [...delegations].sort((a, b) => b.createdAt - a.createdAt);
-  const active = sorted.filter((task) => isActiveDelegationStatus(task.status));
-  const recent = sorted
-    .filter((task) => !isActiveDelegationStatus(task.status) && (task.completedAt ?? task.updatedAt) >= cutoff)
-    .slice(0, MAX_RECENT_TASKS);
-  return { steps, tasks: [...active, ...recent] };
-}
-
-interface OutputFile {
-  path: string;
-  name: string;
-}
-
-function deriveOutputs(
-  chat: ChatSnapshot | null,
-  delegations: readonly BotDelegationView[],
-  workingDir: string | null,
-): OutputFile[] {
-  const out: OutputFile[] = [];
-  const seen = new Set<string>();
-  const push = (file: OutputFile) => {
-    if (out.length >= MAX_OUTPUTS || seen.has(file.path)) return;
-    seen.add(file.path);
-    out.push(file);
-  };
-  // 后台任务交回的文件在前(它们是明确交付的成果),再补本对话里伙伴新建的文件。
-  for (const task of [...delegations].sort((a, b) => b.createdAt - a.createdAt)) {
-    for (const artifact of task.artifacts) {
-      if (!artifact.absolutePath || artifact.status === 'deleted') continue;
-      const name = artifact.absolutePath.split(/[\\/]/).pop() ?? artifact.path;
-      if (isBotPrimaryGeneratedFile({ path: artifact.absolutePath, name, source: 'tool' })) {
-        push({ path: artifact.absolutePath, name });
-      }
-    }
-  }
-  if (chat && workingDir && chat.messages.length > 0) {
-    const files = collectCachedGeneratedFiles(chat.messages, workingDir);
-    for (let index = files.length - 1; index >= 0; index -= 1) {
-      const file = files[index];
-      if (file.source !== 'tool' || file.ready === false) continue;
-      if (isBotPrimaryGeneratedFile(file, workingDir)) push({ path: file.path, name: file.name });
-    }
-  }
-  return out;
-}
-
-function relativeTime(iso: string, language: string): string | null {
-  const at = Date.parse(iso);
-  if (!Number.isFinite(at)) return null;
-  const minutes = Math.round((at - Date.now()) / 60_000);
+function relativeTime(ms: number, language: string, now: number): string | null {
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const minutes = Math.round((ms - now) / 60_000);
   const format = new Intl.RelativeTimeFormat(language, { numeric: 'auto', style: 'short' });
   if (Math.abs(minutes) < 60) return format.format(minutes, 'minute');
   const hours = Math.round(minutes / 60);
@@ -419,295 +101,709 @@ function relativeTime(iso: string, language: string): string | null {
   return format.format(Math.round(hours / 24), 'day');
 }
 
-// ─── 统一卡片 ───────────────────────────────────────────────────────
+function elapsed(startedAtMs: number, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - startedAtMs) / 1_000));
+  const minutes = Math.floor(seconds / 60);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return minutes >= 60
+    ? `${Math.floor(minutes / 60)}:${pad(minutes % 60)}:${pad(seconds % 60)}`
+    : `${minutes}:${pad(seconds % 60)}`;
+}
 
-const ROW_BUTTON_CLASS =
-  'group -mx-2 flex min-h-8 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50';
+function listFormat(items: string[], language: string): string {
+  try {
+    return new Intl.ListFormat(language, { style: 'long', type: 'conjunction' }).format(items);
+  } catch {
+    return items.join(', ');
+  }
+}
 
-function Section({
-  title,
-  meta,
-  collapsed,
-  onToggle,
-  children,
-}: {
-  title: string;
-  meta?: string | null;
-  collapsed?: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
+function useWorkbenchDirectories(botId: string): BotWorkbenchData | null {
+  const [data, setData] = useState<BotWorkbenchData | null>(null);
+  useEffect(() => {
+    const api = window.electronAPI?.localDb?.bots?.workbench;
+    if (!api) {
+      setData({ directories: [] });
+      return;
+    }
+    let alive = true;
+    const load = () => {
+      const owner = getDataOwnerGeneration();
+      void api
+        .get(botId)
+        .then((next) => {
+          if (alive && isDataOwnerGenerationCurrent(owner)) setData(next ?? { directories: [] });
+        })
+        .catch(() => {
+          if (alive) setData((previous) => previous ?? { directories: [] });
+        });
+    };
+    setData(null);
+    load();
+    const off = window.electronAPI?.maker?.onBotWorkbenchChanged?.((payload) => {
+      if (payload.botId === botId) load();
+    });
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, [botId]);
+  return data;
+}
+
+export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: string }) {
+  const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
+  const profiles = useBotProfiles();
+  const botName = profiles.find((profile) => profile.id === botId)?.name ?? '';
+  const workbench = useWorkbenchDirectories(botId);
+  const { sessions } = useCCSessions({ includeArchived: 'active' });
+  const delegations = useBotDelegations(sessionId);
+  const activityMap = useAgentIslandActivityMap();
+  const attentionKinds = useSessionAttentionKinds();
+  const schedules = useSchedulesSnapshot();
+  const chatStore = useChatStore();
+  const chat = useChatSnapshot(chatStore, sessionId);
+  const caseInsensitive = isCaseInsensitivePlatform(window.electronAPI?.platform);
+  const inSidebarWindow = isSidebarWindow();
+
+  useEffect(() => {
+    void schedulesStore.ensure().catch(() => {});
+  }, []);
+
+  const directories = useMemo(() => workbench?.directories ?? [], [workbench]);
+  const projectDirs = useMemo(() => directories.map((dir) => dir.path), [directories]);
+  const hiddenIds = useMemo(() => collectBotHiddenSessionIds(profiles), [profiles]);
+  const erroredIds = useMemo(
+    () => new Set([...attentionKinds].filter(([, kind]) => kind === 'error').map(([id]) => id)),
+    [attentionKinds],
+  );
+
+  const tiles = useMemo(
+    () =>
+      buildWorkbenchTiles({
+        sessions,
+        hiddenIds,
+        projectDirs,
+        caseInsensitive,
+        delegations,
+        activity: activityMap,
+        erroredIds,
+        schedules: schedules ?? [],
+      }),
+    [sessions, hiddenIds, projectDirs, caseInsensitive, delegations, activityMap, erroredIds, schedules],
+  );
+
+  const [adding, setAdding] = useState(false);
+  const picking = workbench !== null && (directories.length === 0 || adding);
+  const now = useNow(tiles.some((tile) => tile.state === 'running' && tile.startedAtMs !== null));
+
+  const openTile = useCallback(
+    (tile: WorkbenchTile) => {
+      if (tile.type === 'session') {
+        void resolveSessionRoute(tile.id).then((target) => navigate(target));
+      } else {
+        navigate(scheduleFocusPath(tile.id));
+      }
+    },
+    [navigate],
+  );
+
+  const [chatWorkingDir, setChatWorkingDir] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void sessionService
+      .get(sessionId)
+      .then((row) => {
+        if (alive) setChatWorkingDir(row.workingDir ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [sessionId]);
+
+  // 产出:后台任务交回的文件在前(明确交付的成果),再补主任务对话里伙伴新建的文件。
+  const outputs = useMemo(() => {
+    const out: Array<{ path: string; name: string }> = [];
+    const seen = new Set<string>();
+    const push = (file: { path: string; name: string }) => {
+      if (out.length >= MAX_OUTPUTS || seen.has(file.path)) return;
+      seen.add(file.path);
+      out.push(file);
+    };
+    for (const task of [...delegations].sort((a, b) => b.createdAt - a.createdAt)) {
+      for (const artifact of task.artifacts) {
+        if (!artifact.absolutePath || artifact.status === 'deleted') continue;
+        const name = artifact.absolutePath.split(/[\\/]/).pop() ?? artifact.path;
+        if (isBotPrimaryGeneratedFile({ path: artifact.absolutePath, name, source: 'tool' })) {
+          push({ path: artifact.absolutePath, name });
+        }
+      }
+    }
+    if (chat && chatWorkingDir && chat.messages.length > 0) {
+      const files = collectCachedGeneratedFiles(chat.messages, chatWorkingDir);
+      for (let index = files.length - 1; index >= 0; index -= 1) {
+        const file = files[index];
+        if (file.source !== 'tool' || file.ready === false) continue;
+        if (isBotPrimaryGeneratedFile(file, chatWorkingDir)) push({ path: file.path, name: file.name });
+      }
+    }
+    return out;
+  }, [chat, chatWorkingDir, delegations]);
+
+  if (workbench === null) {
+    return (
+      <div className="flex h-full items-center justify-center bg-[var(--surface)]">
+        <Spinner size={16} className="text-[var(--text-tertiary)]" role="status" aria-label={t('ccAgent.common.loading')} />
+      </div>
+    );
+  }
+
   return (
-    <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={!collapsed}
-        className="flex w-full items-center gap-2 rounded-xl px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-      >
-        <h3 className="min-w-0 flex-1 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{title}</h3>
-        {meta ? <span className="max-w-[50%] shrink-0 truncate text-12 text-[var(--text-tertiary)]">{meta}</span> : null}
-        <ChevronDown
-          size={14}
-          className={cn('shrink-0 text-[var(--text-tertiary)] transition-transform', collapsed && '-rotate-90')}
+    <div className="h-full min-h-0 overflow-y-auto overflow-x-hidden bg-[var(--surface)]">
+      {picking ? (
+        <ProjectPicker
+          botId={botId}
+          botName={botName}
+          sessionId={sessionId}
+          sessions={sessions}
+          hiddenIds={hiddenIds}
+          schedules={schedules ?? []}
+          excludeDirs={projectDirs}
+          onCancel={directories.length > 0 ? () => setAdding(false) : undefined}
+          onHandedOver={() => setAdding(false)}
         />
-      </button>
-      {collapsed ? null : <div className="px-4 pb-3">{children}</div>}
+      ) : (
+        <>
+          <ProjectCapsules
+            botId={botId}
+            botName={botName}
+            directories={directories}
+            onAdd={directories.length < BOT_WORKBENCH_MAX_DIRECTORIES ? () => setAdding(true) : undefined}
+          />
+          <Summary tiles={tiles} />
+        </>
+      )}
+
+      {!picking ? (
+        <TaskSection
+          tiles={tiles}
+          now={now}
+          language={i18n.language}
+          onOpen={inSidebarWindow ? undefined : openTile}
+        />
+      ) : null}
+
+      {!picking ? (
+        <section className="border-t border-[var(--border-default)] px-5 pb-5">
+          <h3 className="flex h-11 items-center text-16 font-medium leading-6 text-[var(--text-primary)]">
+            {t('bots.workbench.outputs')}
+          </h3>
+          {outputs.length === 0 ? (
+            <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">
+              {t('bots.workbench.outputsEmpty', { name: botName })}
+            </p>
+          ) : (
+            <div className="grid grid-cols-4 gap-2.5">
+              {outputs.map((file) => (
+                <button
+                  key={file.path}
+                  type="button"
+                  title={file.path}
+                  onClick={() => void window.electronAPI.openPath?.(file.path)}
+                  className="group flex min-w-0 flex-col items-center gap-1.5 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  <span className="flex h-[52px] w-full items-center justify-center rounded-xl border border-[var(--border-default)] transition-colors group-hover:bg-[var(--surface-hover)]">
+                    <FileTypeTile name={file.name} />
+                  </span>
+                  <span className="w-full truncate text-center text-12 leading-4 text-[var(--text-secondary)]">
+                    {file.name}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+// ─── 空状态:把一个项目交给伙伴 ─────────────────────────────────────
+
+type ProjectOptionsInput = Parameters<typeof buildWorkbenchProjectOptions>[0];
+
+function ProjectPicker({
+  botId,
+  botName,
+  sessionId,
+  sessions,
+  hiddenIds,
+  schedules,
+  excludeDirs,
+  onCancel,
+  onHandedOver,
+}: {
+  botId: string;
+  botName: string;
+  sessionId: string;
+  sessions: ProjectOptionsInput['sessions'];
+  hiddenIds: ReadonlySet<string>;
+  schedules: ProjectOptionsInput['schedules'];
+  excludeDirs: readonly string[];
+  onCancel?: () => void;
+  onHandedOver: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const platform = window.electronAPI?.platform ?? '';
+  const caseInsensitive = isCaseInsensitivePlatform(platform);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [now] = useState(() => Date.now());
+
+  const options = useMemo(
+    () =>
+      buildWorkbenchProjectOptions({
+        sessions,
+        hiddenIds,
+        schedules,
+        localPlatform: platform,
+        caseInsensitive,
+        excludeDirs,
+      }),
+    [sessions, hiddenIds, schedules, platform, caseInsensitive, excludeDirs],
+  );
+  const chosen = options.find((option) => option.dir === selected) ?? null;
+
+  const handOver = useCallback(
+    async (dir: string, name: string) => {
+      const api = window.electronAPI?.localDb?.bots?.workbench;
+      if (busy || !api) return;
+      setBusy(true);
+      const owner = getDataOwnerGeneration();
+      try {
+        // 1. 记下这个项目:这一次点击就是主人对该项目任务的授权。
+        const added = await api.addDirectory(botId, dir).catch(() => null);
+        if (!added?.ok) {
+          toast.error(
+            added?.errorCode === 'TOO_MANY'
+              ? t('bots.workbench.tooManyDirs', { name: botName, count: BOT_WORKBENCH_MAX_DIRECTORIES })
+              : t('bots.workbench.dirUnavailable'),
+          );
+          return;
+        }
+        onHandedOver();
+        // 2. 以主人身份告诉伙伴一声;怎么接手写在伙伴的工具说明里,用户可见的消息只说人话。
+        const [chatStore, row] = await Promise.all([
+          import('@/lib/makerChatStore').then((module) => module.makerChatStore),
+          sessionService.get(sessionId),
+        ]);
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        const sent = row.workingDir
+          ? await chatStore.sendMessage(
+              sessionId,
+              t('bots.workbench.handoverMessage', { project: name }),
+              row.model,
+              row.effort,
+              row.permissionMode,
+              row.workingDir,
+            )
+          : false;
+        if (!sent) toast.error(t('bots.workbench.sendFailed', { name: botName }));
+      } catch {
+        toast.error(t('bots.workbench.sendFailed', { name: botName }));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [botId, botName, busy, onHandedOver, sessionId, t],
+  );
+
+  const pickFolder = useCallback(async () => {
+    const picked = await window.electronAPI.dialog?.showOpenDirectory();
+    const dirPath = picked?.success ? picked.path : null;
+    if (!dirPath) return;
+    const name = dirPath.split(/[\\/]/).filter(Boolean).pop() ?? dirPath;
+    await handOver(dirPath, name);
+  }, [handOver]);
+
+  const grant = chosen ? grantText(chosen, botName, i18n.language, t) : null;
+
+  return (
+    <section className="px-5 pb-5 pt-3">
+      <div className="flex items-start gap-2">
+        <h2 className="min-w-0 flex-1 text-18 font-medium leading-[26px] text-[var(--text-primary)]">
+          {t('bots.workbench.emptyTitle', { name: botName })}
+        </h2>
+        {onCancel ? (
+          <Button variant="secondary" size="sm" tone="quiet" compact onClick={onCancel}>
+            {t('bots.workbench.cancelAdd')}
+          </Button>
+        ) : null}
+      </div>
+      <p className="mt-1 text-13 leading-5 text-[var(--text-tertiary)]">
+        {t('bots.workbench.emptyDescription', { name: botName })}
+      </p>
+      <div
+        className="mt-4 flex flex-col gap-2"
+        role="radiogroup"
+        aria-label={t('bots.workbench.emptyTitle', { name: botName })}
+      >
+        {options.map((option) => (
+          <button
+            key={option.dir}
+            type="button"
+            role="radio"
+            aria-checked={selected === option.dir}
+            disabled={busy}
+            title={option.dir}
+            onClick={() => setSelected(option.dir)}
+            className={cn(
+              'flex h-[68px] w-full items-center gap-3 rounded-xl border px-3.5 text-left outline-none transition-colors',
+              'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60',
+              selected === option.dir
+                ? 'border-[var(--text-tertiary)] bg-[var(--surface-hover)]'
+                : 'border-[var(--border-default)] enabled:hover:bg-[var(--surface-hover)]',
+            )}
+          >
+            <Folder size={18} strokeWidth={1.8} className="shrink-0 text-[var(--text-secondary)]" aria-hidden />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate text-14 font-medium leading-[22px] text-[var(--text-primary)]">{option.name}</span>
+              <span className="truncate text-12 leading-[18px] text-[var(--text-tertiary)]">
+                {projectCounts(option, t)}
+              </span>
+            </span>
+            <span className="shrink-0 text-12 text-[var(--text-tertiary)]">
+              {relativeTime(option.latestActivityMs, i18n.language, now)}
+            </span>
+          </button>
+        ))}
+        {options.length === 0 ? (
+          <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">
+            {t('bots.workbench.noProjects', { name: botName })}
+          </p>
+        ) : null}
+      </div>
+      {chosen && grant ? (
+        <div className="mt-4">
+          <p className="text-13 leading-5 text-[var(--text-secondary)]">{grant}</p>
+          <Button
+            variant="cta"
+            size="lg"
+            className="mt-3"
+            loading={busy}
+            disabled={busy}
+            onClick={() => void handOver(chosen.dir, chosen.name)}
+          >
+            {t('bots.workbench.handOver', { name: botName })}
+          </Button>
+        </div>
+      ) : null}
+      <Button
+        variant="secondary"
+        size="sm"
+        tone="quiet"
+        compact
+        className="-ml-3 mt-2.5"
+        disabled={busy}
+        onClick={() => void pickFolder()}
+      >
+        <FolderOpen size={14} aria-hidden />
+        {t('bots.workbench.pickFolder')}
+      </Button>
     </section>
   );
 }
 
-function Empty({ children }: { children: ReactNode }) {
-  return <p className="pb-1 text-12 leading-[18px] text-[var(--text-tertiary)]">{children}</p>;
+function projectCounts(option: WorkbenchProjectOption, t: Translate): string {
+  const parts = [t('bots.workbench.projectTasks', { count: option.taskCount })];
+  if (option.automationCount > 0) parts.push(t('bots.workbench.projectAutomations', { count: option.automationCount }));
+  return parts.join(' · ');
 }
 
-function StepRow({
-  status,
-  animated,
-  children,
+function grantText(option: WorkbenchProjectOption, botName: string, language: string, t: Translate): string {
+  const items = [
+    option.taskCount > 0 ? t('bots.workbench.grantTasks', { count: option.taskCount }) : '',
+    option.automationCount > 0 ? t('bots.workbench.grantAutomations', { count: option.automationCount }) : '',
+  ].filter(Boolean);
+  const scope = items.length > 0 ? listFormat(items, language) : t('bots.workbench.grantEverything');
+  return t('bots.workbench.grant', { name: botName, project: option.name, scope });
+}
+
+// ─── 已接手:项目胶囊 + 汇总 ─────────────────────────────────────────
+
+const ICON_BUTTON_CLASS =
+  'flex shrink-0 items-center justify-center rounded-full outline-none transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
+
+function ProjectCapsules({
+  botId,
+  botName,
+  directories,
+  onAdd,
 }: {
-  status: 'pending' | 'in_progress' | 'completed';
-  animated: boolean;
-  children: ReactNode;
+  botId: string;
+  botName: string;
+  directories: BotWorkbenchData['directories'];
+  onAdd?: () => void;
 }) {
+  const { t } = useTranslation();
+  const remove = useCallback(
+    (dirPath: string) => {
+      void window.electronAPI?.localDb?.bots?.workbench?.removeDirectory(botId, dirPath).catch(() => {});
+    },
+    [botId],
+  );
   return (
-    <div className="flex min-h-8 items-start gap-2.5 py-1.5">
-      <span className="flex size-5 shrink-0 items-center justify-center">
-        {status === 'completed' ? (
-          <CircleCheck size={16} strokeWidth={1.6} className="text-[var(--text-tertiary)]" />
-        ) : status === 'in_progress' ? (
-          <Spinner icon={LoaderCircle} size={16} strokeWidth={1.6} spinning={animated} className="text-[var(--text-primary)]" />
-        ) : (
-          <Circle size={16} strokeWidth={1.6} className="text-[var(--text-tertiary)]" />
-        )}
+    <div className="flex flex-wrap items-center gap-2 px-5 pt-3">
+      {directories.map((dir) => (
+        <span
+          key={dir.path}
+          title={dir.exists ? dir.path : t('bots.workbench.dirMissing')}
+          className={cn(
+            'inline-flex h-8 min-w-0 max-w-full items-center gap-1.5 rounded-full bg-[var(--surface-chip)] pl-3 pr-1 text-13',
+            dir.exists ? 'text-[var(--text-primary)]' : 'text-[var(--text-danger)]',
+          )}
+        >
+          <Folder size={14} strokeWidth={1.8} aria-hidden className="shrink-0" />
+          <span className="min-w-0 truncate">{dir.name}</span>
+          <Tip text={t('bots.workbench.removeProject', { name: botName, project: dir.name })}>
+            <button
+              type="button"
+              onClick={() => remove(dir.path)}
+              aria-label={t('bots.workbench.removeProject', { name: botName, project: dir.name })}
+              className={cn(ICON_BUTTON_CLASS, 'size-6 text-[var(--text-tertiary)]')}
+            >
+              <X size={12} aria-hidden />
+            </button>
+          </Tip>
+        </span>
+      ))}
+      {onAdd ? (
+        <Tip text={t('bots.workbench.addProject', { name: botName })}>
+          <button
+            type="button"
+            onClick={onAdd}
+            aria-label={t('bots.workbench.addProject', { name: botName })}
+            className={cn(ICON_BUTTON_CLASS, 'size-8 border border-dashed border-[var(--text-tertiary)] text-[var(--text-tertiary)]')}
+          >
+            <Plus size={14} aria-hidden />
+          </button>
+        </Tip>
+      ) : null}
+    </div>
+  );
+}
+
+function Summary({ tiles }: { tiles: readonly WorkbenchTile[] }) {
+  const { t } = useTranslation();
+  const sessions = tiles.filter((tile) => tile.type === 'session');
+  const automations = tiles.length - sessions.length;
+  const count = (state: WorkbenchTaskState) => sessions.filter((tile) => tile.state === state).length;
+  const parts = [
+    t('bots.workbench.summaryTasks', { count: sessions.length }),
+    ...(['running', 'waiting', 'queued', 'stopped'] as const)
+      .filter((state) => count(state) > 0)
+      .map((state) => t(`bots.workbench.summary.${state}`, { count: count(state) })),
+    ...(automations > 0 ? [t('bots.workbench.summaryAutomations', { count: automations })] : []),
+  ];
+  return (
+    <p className="truncate px-5 pb-4 pt-2.5 text-13 leading-5 tabular-nums text-[var(--text-secondary)]">
+      {parts.join(' · ')}
+    </p>
+  );
+}
+
+// ─── 任务格 ─────────────────────────────────────────────────────────
+
+function TaskSection({
+  tiles,
+  now,
+  language,
+  onOpen,
+}: {
+  tiles: readonly WorkbenchTile[];
+  now: number;
+  language: string;
+  onOpen?: (tile: WorkbenchTile) => void;
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? tiles : tiles.slice(0, DEFAULT_TILE_COUNT);
+  return (
+    <section className="border-t border-[var(--border-default)]">
+      <div className="flex h-11 items-center gap-1.5 pl-5 pr-3.5">
+        <h3 className="flex-1 text-16 font-medium leading-6 text-[var(--text-primary)]">{t('bots.workbench.tasks')}</h3>
+        {tiles.length > DEFAULT_TILE_COUNT ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            tone="quiet"
+            compact
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? t('bots.workbench.showLess') : t('bots.workbench.showAll', { count: tiles.length })}
+          </Button>
+        ) : null}
+      </div>
+      {tiles.length === 0 ? (
+        <p className="px-5 pb-5 text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.tasksEmpty')}</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-2 px-5 pb-5">
+          {shown.map((tile) => (
+            <TaskTile key={tile.key} tile={tile} now={now} language={language} onOpen={onOpen} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StateIcon({ state }: { state: WorkbenchTaskState }) {
+  const { t } = useTranslation();
+  const label = t(`bots.workbench.state.${state}`);
+  if (state === 'running') {
+    return (
+      <Spinner size={12} strokeWidth={2} role="img" aria-label={label} className="shrink-0 text-[var(--text-secondary)]" />
+    );
+  }
+  if (state === 'waiting' || state === 'queued') {
+    return (
+      <span role="img" aria-label={label} className="flex size-3 shrink-0 items-center justify-center">
+        <span
+          aria-hidden
+          className={
+            state === 'waiting'
+              ? 'size-2 rounded-full bg-[var(--card-status-awaiting)]'
+              : 'size-2.5 rounded-full border border-dashed border-[var(--text-tertiary)]'
+          }
+        />
+      </span>
+    );
+  }
+  const Icon = state === 'stopped' ? CirclePause : state === 'automation' ? Clock3 : CircleCheck;
+  return (
+    <span role="img" aria-label={label} className="flex size-3 shrink-0 items-center justify-center">
+      <Icon
+        size={13}
+        strokeWidth={1.8}
+        aria-hidden
+        className={state === 'done' ? 'text-[var(--card-status-done)]' : 'text-[var(--text-tertiary)]'}
+      />
+    </span>
+  );
+}
+
+function scheduleCycle(
+  schedule: { manual?: boolean; cronExpr?: string; intervalMs?: number },
+  t: Translate,
+  language: string,
+): string | null {
+  if (schedule.manual) return t('bots.workbench.cycle.manual');
+  if (schedule.intervalMs) return t('routines.everyMinutes', { count: Math.round(schedule.intervalMs / 60_000) });
+  if (schedule.cronExpr) {
+    return schedule.cronExpr === '0 * * * *' ? t('routines.hourly') : cronToHuman(schedule.cronExpr, t, language);
+  }
+  return null;
+}
+
+function tileKind(tile: WorkbenchTile, t: Translate, language: string): string {
+  if (tile.type === 'session') {
+    return t(`bots.workbench.kind.${tile.origin === 'delegated' ? 'delegated' : 'existing'}`);
+  }
+  const cycle = scheduleCycle(tile.schedule, t, language);
+  return cycle ? t('bots.workbench.kind.automation', { cycle }) : t('bots.workbench.kind.automationPlain');
+}
+
+function tileLine(tile: WorkbenchTile, t: Translate, now: number): string {
+  const line = tile.line;
+  switch (line.kind) {
+    case 'action':
+    case 'summary':
+      return line.text;
+    case 'waiting':
+      return t('bots.workbench.line.waiting');
+    case 'queued':
+      return t('bots.workbench.line.queued');
+    case 'interrupted':
+      return t('bots.workbench.line.interrupted');
+    case 'errored':
+      return t('bots.workbench.line.errored');
+    case 'failed':
+      return line.text ?? t('bots.workbench.line.failed');
+    case 'next':
+      return formatNextRun(line.at, now, t as Parameters<typeof formatNextRun>[2]) ?? '';
+    case 'manual':
+      return t('bots.workbench.line.manual');
+    case 'paused':
+      return t('bots.workbench.line.paused');
+    default:
+      return '';
+  }
+}
+
+function TaskTile({
+  tile,
+  now,
+  language,
+  onOpen,
+}: {
+  tile: WorkbenchTile;
+  now: number;
+  language: string;
+  onOpen?: (tile: WorkbenchTile) => void;
+}) {
+  const { t } = useTranslation();
+  const time =
+    tile.state === 'running' && tile.startedAtMs
+      ? elapsed(tile.startedAtMs, now)
+      : tile.state === 'done'
+        ? relativeTime(tile.lastActiveMs, language, now)
+        : null;
+  const content = (
+    <>
+      <span className="flex h-[18px] items-center gap-1.5 text-12 leading-[18px] text-[var(--text-tertiary)]">
+        <StateIcon state={tile.state} />
+        <span className="min-w-0 flex-1 truncate">{tileKind(tile, t, language)}</span>
+        {time ? <span className="shrink-0 tabular-nums">{time}</span> : null}
       </span>
       <span
         className={cn(
-          'min-w-0 flex-1 break-words text-13 leading-5',
-          status === 'completed' && 'text-[var(--text-tertiary)]',
-          status === 'in_progress' && 'font-medium text-[var(--text-primary)]',
-          status === 'pending' && 'text-[var(--text-secondary)]',
+          'mt-1 line-clamp-2 h-10 text-14 font-medium leading-5 [overflow-wrap:anywhere]',
+          tile.state === 'done' ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]',
         )}
       >
-        {children}
+        {tile.title}
       </span>
-    </div>
-  );
-}
-
-function formatDuration(t: (key: string, options?: Record<string, unknown>) => string, ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1_000));
-  if (seconds < 60) return t('bots.collab.duration.seconds', { n: seconds });
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return t('bots.collab.duration.minutes', { n: minutes });
-  return t('bots.collab.duration.hoursMinutes', { h: Math.floor(minutes / 60), m: minutes % 60 });
-}
-
-function TaskRow({ task, now, onOpen }: { task: BotDelegationView; now: number; onOpen?: () => void }) {
-  const { t } = useTranslation();
-  const active = isActiveDelegationStatus(task.status);
-  const startedAt = task.acceptedAt ?? task.createdAt;
-  const endedAt = active ? now : task.completedAt ?? task.updatedAt;
-  const failed = task.status === 'failed' || task.status === 'timed-out' || task.status === 'cancelled';
-  const content = (
-    <>
-      <span className="flex size-5 shrink-0 items-center justify-center">
-        {active ? (
-          <Spinner icon={LoaderCircle} size={16} strokeWidth={1.6} className="text-[var(--text-primary)]" />
-        ) : failed ? (
-          <CircleX size={16} strokeWidth={1.6} className="text-[var(--text-tertiary)]" />
-        ) : (
-          <CircleCheck size={16} strokeWidth={1.6} className="text-[var(--text-tertiary)]" />
+      <span
+        className={cn(
+          'mt-auto block h-[18px] truncate text-12 leading-[18px]',
+          tile.state === 'waiting'
+            ? 'text-[var(--text-primary)]'
+            : tile.state === 'running' || tile.state === 'queued'
+              ? 'text-[var(--text-secondary)]'
+              : 'text-[var(--text-tertiary)]',
         )}
+      >
+        {tileLine(tile, t, now)}
       </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className={cn('truncate text-13 leading-5', active ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]')}>
-          {task.title}
-        </span>
-        <span className="truncate text-12 leading-4 text-[var(--text-tertiary)]">
-          {t(`bots.collab.status.${task.status}`, { defaultValue: t('bots.collab.status.unknown') })}
-          {' · '}
-          {formatDuration(t, endedAt - startedAt)}
-        </span>
-      </span>
-      {onOpen ? (
-        <ChevronRight size={14} className="shrink-0 text-[var(--text-tertiary)] opacity-0 transition-opacity group-hover:opacity-100" />
-      ) : null}
     </>
   );
-  return onOpen ? (
-    <button type="button" onClick={onOpen} className={cn(ROW_BUTTON_CLASS, 'items-start')} aria-label={`${task.title} · ${t('bots.collab.watchWork')}`}>
+  const frame =
+    'flex h-[104px] w-full min-w-0 flex-col rounded-xl border border-[var(--border-default)] px-3 py-2.5 text-left';
+  if (!onOpen) return <div className={frame}>{content}</div>;
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(tile)}
+      aria-label={t('bots.workbench.openTask', { title: tile.title, state: t(`bots.workbench.state.${tile.state}`) })}
+      className={cn(
+        frame,
+        'outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+      )}
+    >
       {content}
     </button>
-  ) : (
-    <div className="-mx-2 flex items-start gap-2.5 px-2 py-1.5">{content}</div>
-  );
-}
-
-function WorkCard({
-  card,
-  updatedAt,
-  language,
-  collapsed,
-  onToggle,
-  disabled,
-  onAction,
-}: {
-  card: BotWorkbenchCard;
-  updatedAt: string | null;
-  language: string;
-  collapsed?: boolean;
-  onToggle: () => void;
-  disabled: boolean;
-  onAction: (message: string) => void;
-}) {
-  const when = updatedAt ? relativeTime(updatedAt, language) : null;
-  const meta = [card.source, when].filter(Boolean).join(' · ');
-  return (
-    <Section title={card.title} meta={meta || null} collapsed={collapsed} onToggle={onToggle}>
-      <div className="flex flex-col">
-        {card.rows.map((row, index) => (
-          <WorkRow key={`${row.title}-${index}`} row={row} disabled={disabled} onAction={onAction} />
-        ))}
-      </div>
-    </Section>
-  );
-}
-
-function WorkRow({
-  row,
-  disabled,
-  onAction,
-}: {
-  row: BotWorkbenchRow;
-  disabled: boolean;
-  onAction: (message: string) => void;
-}) {
-  // 状态并入第二行,标题拿满整行宽度;右侧只留主人能点的按钮。
-  const meta = [row.status, row.detail].filter(Boolean).join(' · ');
-  return (
-    <div className="flex items-center gap-3 py-2.5 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-[var(--border-default)]">
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex min-w-0 items-start gap-1.5">
-          {row.flag ? (
-            <span aria-hidden="true" className="mt-[7px] size-1.5 shrink-0 rounded-full bg-[var(--warning-accent)]" />
-          ) : null}
-          <span className="line-clamp-2 text-13 leading-5 text-[var(--text-primary)]" title={row.title}>
-            {row.title}
-          </span>
-        </span>
-        {meta ? (
-          <span className="line-clamp-2 text-12 leading-4 text-[var(--text-tertiary)]" title={meta}>
-            {meta}
-          </span>
-        ) : null}
-      </div>
-      {row.action ? (
-        <Button
-          variant="secondary"
-          size="sm"
-          compact
-          type="button"
-          disabled={disabled}
-          className="shrink-0 px-3 text-12"
-          onClick={() => onAction(row.action!.message)}
-        >
-          {row.action.label}
-        </Button>
-      ) : null}
-    </div>
-  );
-}
-
-function DirectoryRow({
-  dir,
-  language,
-  onRemove,
-}: {
-  dir: BotWorkbenchDirectory;
-  language: string;
-  onRemove: () => void;
-}) {
-  const { t } = useTranslation();
-  const facts: string[] = [];
-  if (!dir.exists) facts.push(t('bots.workbench.dirMissing'));
-  else if (dir.git) {
-    if (dir.git.branch) facts.push(dir.git.branch);
-    facts.push(
-      dir.git.changes > 0 ? t('bots.workbench.dirChanges', { count: dir.git.changes }) : t('bots.workbench.dirClean'),
-    );
-    const last = dir.git.lastCommit ? relativeTime(dir.git.lastCommit.at, language) : null;
-    if (last) facts.push(t('bots.workbench.dirLastCommit', { time: last }));
-  } else facts.push(t('bots.workbench.dirFolder'));
-  return (
-    <div className="group relative">
-      <button
-        type="button"
-        title={dir.path}
-        onClick={() => void window.electronAPI.openPath?.(dir.path)}
-        className={cn(ROW_BUTTON_CLASS, 'w-[calc(100%+16px)] pr-8')}
-      >
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-chip)] text-[var(--text-secondary)]">
-          {dir.git ? <GitBranch size={14} strokeWidth={1.8} /> : <Folder size={14} strokeWidth={1.8} />}
-        </span>
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-13 leading-5 text-[var(--text-primary)]">{dir.name}</span>
-          <span className={cn('truncate text-12 leading-4', dir.exists ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-danger)]')}>
-            {facts.join(' · ')}
-          </span>
-        </span>
-      </button>
-      <button
-        type="button"
-        onClick={onRemove}
-        aria-label={t('bots.workbench.removeDir', { name: dir.name })}
-        className="absolute right-0 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-lg text-[var(--text-tertiary)] opacity-0 outline-none transition-opacity hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:opacity-100 group-hover:opacity-100"
-      >
-        <X size={13} />
-      </button>
-    </div>
-  );
-}
-
-function SourceButton({
-  icon: Icon,
-  label,
-  hint,
-  disabled,
-  onClick,
-}: {
-  icon: typeof Mail;
-  label: string;
-  hint: string;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button type="button" disabled={disabled} onClick={onClick} className={ROW_BUTTON_CLASS}>
-      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-dashed border-[var(--border-default)] text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)]">
-        <Icon size={14} strokeWidth={1.8} />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-13 leading-5 text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]">{label}</span>
-        <span className="truncate text-12 leading-4 text-[var(--text-tertiary)]">{hint}</span>
-      </span>
-      <Plus size={14} className="shrink-0 text-[var(--text-tertiary)] opacity-0 transition-opacity group-hover:opacity-100" />
-    </button>
-  );
-}
-
-function FileGlyph({ name }: { name: string }) {
-  const extension = /\.([^.]+)$/.exec(name)?.[1]?.toLowerCase() ?? '';
-  const Icon = /^(png|jpe?g|gif|webp|svg|avif|heic|bmp|tiff?)$/.test(extension)
-    ? FileImage
-    : /^(csv|tsv|xlsx?|numbers|ods)$/.test(extension)
-      ? FileSpreadsheet
-      : /^(md|txt|pdf|docx?|pages|rtf|html?)$/.test(extension)
-        ? FileText
-        : File;
-  return (
-    <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-chip)] text-[var(--text-secondary)]">
-      <Icon size={14} strokeWidth={1.8} />
-    </span>
   );
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
-import { registerBotWorkbenchTools } from '../xdt-helper/bot_workbench.js';
+import { registerBotWorkbenchTools, type BotWorkbenchCallbacks } from '../xdt-helper/bot_workbench.js';
 
 function parse(result: { content: Array<{ type: string; text?: string }> }) {
   const block = result.content[0];
@@ -9,68 +9,100 @@ function parse(result: { content: Array<{ type: string; text?: string }> }) {
   return JSON.parse(block.text) as Record<string, unknown>;
 }
 
+const snapshot = {
+  projects: [{ name: 'tapmon-art', path: '/w/tapmon-art', exists: true }],
+  tasks: [
+    {
+      id: 'task-1',
+      title: '导出 Android 图标',
+      project: 'tapmon-art',
+      state: 'stopped' as const,
+      kind: 'existing' as const,
+      summary: '只差导出',
+      lastActiveAt: '2026-10-01T00:00:00.000Z',
+    },
+  ],
+  automations: [],
+  counts: { running: 0, waiting: 0, queued: 0, stopped: 1, automation: 0, done: 0 },
+  truncated: false,
+  totalTasks: 1,
+};
+
 function setup(sessionId: string | null = 'bot-session') {
-  const update = vi.fn(async ({ cards }: { cards: unknown[] }) => ({
-    ok: true as const,
-    updatedAt: '2026-09-30T00:00:00.000Z',
-    cardCount: cards.length,
-  }));
+  const callbacks: BotWorkbenchCallbacks = {
+    get: vi.fn(async () => ({ ok: true as const, workbench: snapshot })),
+    continueTask: vi.fn(async ({ taskId }: { taskId: string }) => ({
+      ok: true as const,
+      taskId,
+      delivery: 'queued' as const,
+      queuedMessageId: 'q-1',
+    })),
+    stopTask: vi.fn(async ({ taskId }: { taskId: string }) => ({
+      ok: true as const,
+      taskId,
+      status: 'requested' as const,
+    })),
+  };
   const reg = new XdtHelperToolRegistry();
   registerBotWorkbenchTools(reg, {
     getSessionContext: () => ({ sessionId: sessionId ?? undefined, agentKind: 'claude-code', workingDir: '/w' }),
-    callbacks: { update },
+    callbacks,
   });
-  return { reg, update };
+  return { reg, callbacks };
 }
 
-describe('update_workbench', () => {
-  it('saves cards through the caller Session', async () => {
-    const { reg, update } = setup();
-    const cards = [
-      {
-        title: '资产',
-        source: '星落美术',
-        rows: [
-          { title: '「晨曦」立绘 v2', detail: '被退回：表情太冷', flag: true, status: '草图' },
-          { title: '12 张切图尺寸不符', action: { label: '批量修正', message: '把这 12 张切图按规范重新导出' } },
-        ],
-      },
-    ];
-
-    const result = parse(await reg.call('update_workbench', { cards }));
-
-    expect(result).toMatchObject({ ok: true, cardCount: 1 });
-    expect(update).toHaveBeenCalledWith({ callerSessionId: 'bot-session', cards });
+describe('bot workbench tools', () => {
+  it('reads the workbench through the caller Session only', async () => {
+    const { reg, callbacks } = setup();
+    const result = parse(await reg.call('get_workbench', {}));
+    expect(result).toMatchObject({ ok: true, workbench: { totalTasks: 1 } });
+    expect(callbacks.get).toHaveBeenCalledWith({ callerSessionId: 'bot-session' });
   });
 
-  it('rejects a row that has both a status and an action, or neither', async () => {
-    const { reg, update } = setup();
-    const both = parse(
-      await reg.call('update_workbench', {
-        cards: [{ title: '进度', rows: [{ title: '#4100', status: 'review', action: { label: '推进', message: '推进 #4100' } }] }],
-      }),
-    );
-    const neither = parse(
-      await reg.call('update_workbench', { cards: [{ title: '进度', rows: [{ title: '#4100' }] }] }),
-    );
-
-    expect(both).toMatchObject({ ok: false, errorCode: 'INVALID_ROW' });
-    expect(neither).toMatchObject({ ok: false, errorCode: 'INVALID_ROW' });
-    expect(update).not.toHaveBeenCalled();
-  });
-
-  it('accepts an empty list to clear the workbench', async () => {
-    const { reg, update } = setup();
-    expect(parse(await reg.call('update_workbench', { cards: [] }))).toMatchObject({ ok: true, cardCount: 0 });
-    expect(update).toHaveBeenCalledWith({ callerSessionId: 'bot-session', cards: [] });
-  });
-
-  it('requires a Bot session', async () => {
-    const { reg, update } = setup(null);
-    expect(parse(await reg.call('update_workbench', { cards: [] }))).toMatchObject({
-      ok: false,
-      errorCode: 'NOT_A_BOT_SESSION',
+  it('continues and stops a task by id, never by a caller-supplied Bot or project', async () => {
+    const { reg, callbacks } = setup();
+    expect(parse(await reg.call('continue_workbench_task', { task_id: 'task-1', message: '把剩下的导出做完' })))
+      .toMatchObject({ ok: true, task_id: 'task-1', delivery: 'queued', queued_message_id: 'q-1' });
+    expect(callbacks.continueTask).toHaveBeenCalledWith({
+      callerSessionId: 'bot-session',
+      taskId: 'task-1',
+      message: '把剩下的导出做完',
     });
-    expect(update).not.toHaveBeenCalled();
+    expect(parse(await reg.call('stop_workbench_task', { task_id: 'task-1' })))
+      .toMatchObject({ ok: true, task_id: 'task-1', status: 'requested' });
+    expect(callbacks.stopTask).toHaveBeenCalledWith({ callerSessionId: 'bot-session', taskId: 'task-1' });
+  });
+
+  it('passes host denials through with their error code', async () => {
+    const { reg, callbacks } = setup();
+    vi.mocked(callbacks.continueTask).mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'TASK_OUTSIDE_WORKBENCH',
+      message: '这件任务不在主人交给你的项目里',
+    });
+    expect(parse(await reg.call('continue_workbench_task', { task_id: 'other', message: 'hi' })))
+      .toMatchObject({ ok: false, errorCode: 'TASK_OUTSIDE_WORKBENCH' });
+  });
+
+  it('rejects blank messages before reaching the host', async () => {
+    const { reg, callbacks } = setup();
+    expect(parse(await reg.call('continue_workbench_task', { task_id: 'task-1', message: '   ' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(callbacks.continueTask).not.toHaveBeenCalled();
+  });
+
+  it('requires a bound Bot session', async () => {
+    const { reg, callbacks } = setup(null);
+    expect(parse(await reg.call('get_workbench', {}))).toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+    expect(parse(await reg.call('stop_workbench_task', { task_id: 'task-1' })))
+      .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+    expect(callbacks.get).not.toHaveBeenCalled();
+    expect(callbacks.stopTask).not.toHaveBeenCalled();
+  });
+
+  it('no longer offers the card-writing tool', () => {
+    const { reg } = setup();
+    expect(reg.has('update_workbench')).toBe(false);
+    expect(reg.has('get_workbench')).toBe(true);
   });
 });

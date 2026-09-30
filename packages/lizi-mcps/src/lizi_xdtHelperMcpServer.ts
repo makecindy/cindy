@@ -776,7 +776,10 @@ export interface XdtHelperMcpDeps {
    * the caller Session.
    */
   botSkills?: BotSkillCallbacks;
-  /** Bot workbench cards rendered beside the Bot chat. Host resolves Bot ownership from the caller Session. */
+  /**
+   * Bot workbench: read the projects the owner handed to the Bot and continue / stop tasks
+   * inside them. Host resolves the Bot from the caller Session and authorizes every target.
+   */
   botWorkbench?: BotWorkbenchCallbacks;
   botCapabilities?: BotCapabilityCallbacks;
   /**

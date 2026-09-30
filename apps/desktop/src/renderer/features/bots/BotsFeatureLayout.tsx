@@ -40,14 +40,7 @@ export function BotsFeatureLayout() {
   return (
     <>
       <BotsSidebar />
-      {/* 伙伴页的右侧常驻工作台由 BotSessionView 自己渲染,不接入全局右侧栏。 */}
-      <Outlet
-        context={
-          shellContext
-            ? { ...shellContext, setRightSidebarAvailable: undefined, setRightSidebarSessionId: undefined }
-            : shellContext
-        }
-      />
+      <Outlet context={shellContext} />
       <BotSettingsDrawer />
       <BotGroupSettingsDrawer />
     </>

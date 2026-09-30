@@ -143,12 +143,15 @@ export {
 } from './bot_skills.js';
 export {
   registerBotWorkbenchTools,
-  WORKBENCH_MAX_CARDS,
-  WORKBENCH_MAX_ROWS,
+  WORKBENCH_MESSAGE_MAX_CHARS,
   type BotWorkbenchCallbacks,
+  type BotWorkbenchSnapshotWire,
   type BotWorkbenchToolDeps,
-  type WorkbenchCardWire,
-  type WorkbenchRowWire,
+  type WorkbenchAutomationWire,
+  type WorkbenchProjectWire,
+  type WorkbenchStopStatusWire,
+  type WorkbenchTaskStateWire,
+  type WorkbenchTaskWire,
 } from './bot_workbench.js';
 export {
   registerCreateTeammateTool,
