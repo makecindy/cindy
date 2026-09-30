@@ -20,7 +20,7 @@ export async function listenForOauthCallback(
   deliver: (value: PluginOauthCallback) => Promise<void>,
   assertCurrent: () => void,
   expectedState: string = offer.state,
-): Promise<{ close(): void }> {
+): Promise<{ close(): Promise<void> }> {
   const endpoint = new URL(offer.callbackUrl);
   let consumed = false;
   let closed = false;
@@ -131,13 +131,17 @@ export async function listenForOauthCallback(
       reply(410);
     }
   };
-  const close = () => {
-    if (closed) return;
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    if (closing) return closing;
     closed = true;
-    for (const server of servers) {
-      server.close();
+    // Stop accepting callbacks immediately, but let callers wait until both
+    // families have released their sockets before reusing the callback port.
+    closing = Promise.all(servers.map((server) => new Promise<void>((resolve) => {
+      server.close(() => resolve());
       server.closeAllConnections();
-    }
+    }))).then(() => {});
+    return closing;
   };
   try {
     for (const host of hosts) {
@@ -173,7 +177,7 @@ export async function listenForOauthCallback(
     ready = true;
     return { close };
   } catch {
-    close();
+    await close();
     throw fail();
   }
 }

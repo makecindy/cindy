@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SsrFBlockedError } from '@cindy/browser-control-runtime/ssrf-runtime';
+import type { MediaCapability } from '@cindy/model-providers';
 
 interface MockPreparedGuide extends Record<string, unknown> {
   modelId: string;
@@ -45,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   recover: vi.fn<(owner: string, db: unknown) => Promise<number>>(async () => 0),
   prune: vi.fn(async () => undefined),
   rows: new Map<string, Record<string, unknown>>(),
+  failRequestLog: false,
 }));
 
 vi.mock('../../authManager.js', () => ({
@@ -70,6 +72,19 @@ vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => mocks.db,
   getCurrentDbClientUserId: () => mocks.dbOwnerId,
 }));
+vi.mock('../mediaRequestLog.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../mediaRequestLog.js')>();
+  return {
+    ...actual,
+    mediaRequestParamsForLog: (value: unknown) => {
+      // 只在记录请求 body 时抛错，模拟组装/日志阶段（出站之前）的异常。
+      if (mocks.failRequestLog && typeof value === 'object') {
+        throw new RangeError('Maximum call stack size exceeded');
+      }
+      return actual.mediaRequestParamsForLog(value);
+    },
+  };
+});
 vi.mock('../../maker-host/outbound-fetch.js', () => ({
   outboundFetch: mocks.outboundFetch,
   guardedOutboundFetch: mocks.guardedOutboundFetch,
@@ -224,11 +239,11 @@ function resolvedGuide(op: Record<string, unknown>) {
   };
 }
 
-async function prepare(): Promise<string> {
+async function prepare(capability: MediaCapability = 'image.generate'): Promise<string> {
   const result = await callCindyMedia({
     action: 'prepare',
     modelId: 'image-model',
-    capability: 'image.generate',
+    capability,
   });
   expect(result).toMatchObject({ ok: true, status: 'prepared', model_id: 'image-model' });
   return result.invocation_id as string;
@@ -236,6 +251,7 @@ async function prepare(): Promise<string> {
 
 describe('Cindy Core media invocation state and security boundary', () => {
   beforeEach(() => {
+    mocks.failRequestLog = false;
     mocks.confirm.mockReset().mockResolvedValue(true);
     mocks.currentUserId = `media-user-${crypto.randomUUID()}`;
     mocks.localMode = false;
@@ -653,6 +669,84 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(form.get('model')).toBe('image-model');
     expect(form.get('prompt')).toBe('add snow');
     expect(form.get('image[]')).toBeInstanceOf(Blob);
+  });
+
+  it.each([
+    ['image.generate', 'image'],
+    ['video.image_to_video', 'image'],
+  ] as const)('%s：受管大图（base64 ≥ 2^22 字符）的 multipart 组装与发出回归（#5081）', async (capability, kind) => {
+    const op = operation(
+      {
+        mode: 'sync',
+        media: [{ path: ['data'], encoding: 'base64', kind: 'image' }],
+      },
+      '/v1/images/edits',
+    );
+    mocks.guide.mockResolvedValue(
+      resolvedGuide({
+        ...op,
+        capability,
+        request: {
+          ...op.request,
+          bodyEncoding: 'multipart',
+          maxRequestBytes: 8 * 1024 * 1024,
+          multipartFiles: [{ bodyField: 'image', formField: 'image', kind, maxItems: 1 }],
+        },
+      }),
+    );
+    // 8 字节 PNG 签名 + 3.2MiB 填充 → base64 约 4.47M 字符，覆盖 #5081 报告的阈值之上。
+    const largePng = Buffer.concat([PNG.subarray(0, 8), Buffer.alloc(3.2 * 1024 * 1024, 7)]);
+    mocks.readBlob.mockResolvedValue({ buffer: largePng, mimeType: 'image/png' });
+    mocks.outboundFetch.mockResolvedValue(
+      new Response(JSON.stringify({ data: PNG.toString('base64') }), { status: 200 }),
+    );
+
+    await expect(
+      callCindyMedia({
+        action: 'request',
+        invocationId: await prepare(capability),
+        body: { prompt: 'animate', image: `cindy-media://blobs/${'b'.repeat(64)}.png` },
+      }),
+    ).resolves.toMatchObject({ ok: true, status: 'complete' });
+
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+    const [, init] = mocks.outboundFetch.mock.calls[0];
+    const file = (init.body as FormData).get('image');
+    expect(file).toBeInstanceOf(Blob);
+    expect((file as Blob).size).toBe(largePng.byteLength);
+  });
+
+  it('请求在本地组装阶段抛错时归类为 REQUEST_BUILD_FAILED，可重试且不标记结果未知（#5081）', async () => {
+    mocks.guide.mockResolvedValue(
+      resolvedGuide(
+        operation({
+          mode: 'sync',
+          media: [{ path: ['data'], encoding: 'base64', kind: 'image' }],
+        }),
+      ),
+    );
+    mocks.failRequestLog = true;
+
+    const invocationId = await prepare();
+    await expect(
+      callCindyMedia({ action: 'request', invocationId, body: { prompt: 'cat' } }),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'REQUEST_BUILD_FAILED',
+      retryable: true,
+      outcomeKnown: true,
+    });
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+    // 请求从未出站：invocation 回到 prepared，同一 invocation_id 再次 request 可正常发出。
+    expect(mocks.rows.get(invocationId)?.state).toBe('prepared');
+    mocks.failRequestLog = false;
+    mocks.outboundFetch.mockResolvedValue(
+      new Response(JSON.stringify({ data: PNG.toString('base64') }), { status: 200 }),
+    );
+    await expect(
+      callCindyMedia({ action: 'request', invocationId, body: { prompt: 'cat' } }),
+    ).resolves.toMatchObject({ ok: true, status: 'complete' });
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
   });
 
   it('同步生成成功后下载暂时失败时复用已保存响应，不会再次付费 POST', async () => {

@@ -971,6 +971,44 @@ export function selectionFromAnswer(question: AskQuestion, answer: string | unde
   return { selectedLabels: new Set([answer]), customInput: '', showCustomInput: false };
 }
 
+/**
+ * Option labels that are really the model's own "none of these fit" escape
+ * hatch. Claude Code's native AskUserQuestion prompt tells the model not to add
+ * an "Other" option (the host UI provides a free-text entry automatically), but
+ * harnesses whose tool schema carries no such note still produce labels like
+ * "其他（回复说明）" or "Other (please specify)".
+ *
+ * A host question card must replace such an option with its own free-text
+ * entry instead of rendering (and submitting) the literal label: the model wrote
+ * the option expecting the user's explanation, so receiving only the label back
+ * reads as an empty answer. See `visibleAskOptions`.
+ *
+ * Only a leading "other"-style token is recognized, so labels that merely
+ * mention an explanation inside a substantive choice (e.g. "sensor_height 要改
+ * （回复说明数值）" or "其他任务") are not escape hatches and stay selectable.
+ */
+export function isFreeTextAskOptionLabel(label: string): boolean {
+  const normalized = label.trim().toLowerCase();
+  if (!normalized) return false;
+  // "Other" / "Other (please specify)" / "其他（回复说明）" are escape hatches;
+  // "Other tasks" / "その他の質問" are substantive options. A bare space must not
+  // count as the boundary — only end-of-label or a separator/parenthesis does.
+  return /^(?:其他(?:答案|选项)?|其它(?:答案|选项)?|other|others|something else|その他|기타)(?=$|\s*[（(【[：:，,、.。\-—－…])/.test(normalized);
+}
+
+/**
+ * Options one host question card should render.
+ *
+ * Model-authored free-text entries are dropped: they mean the same thing as the
+ * host's own "type your own answer" row, so rendering both would show duplicate
+ * escape hatches and let a click submit the placeholder label as an answer. The
+ * host row is the single entry that remains (it also covers the case where the
+ * filtered list becomes empty — callers fall back to free-form input).
+ */
+export function visibleAskOptions<T extends { label: string }>(options: readonly T[] | undefined): T[] {
+  return (options ?? []).filter((option) => !isFreeTextAskOptionLabel(option.label));
+}
+
 export function buildAskUserQuestionDecision(answers: Record<string, string>): Record<string, unknown> {
   return { kind: 'ask_user_question', answers };
 }

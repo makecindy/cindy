@@ -4,11 +4,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MobileUser } from '@/auth/AuthContext';
 const h = vi.hoisted(() => ({
-  disk: new Map<string, string>(), push: vi.fn(), dismissTo: vi.fn(), accountGeneration: 1,
+  disk: new Map<string, string>(), push: vi.fn(), dismissTo: vi.fn(), dismiss: vi.fn(), accountGeneration: 1,
   user: { id: 'account', passportId: 'passport', membershipKind: 'personal', orgId: null } as MobileUser,
-  get: vi.fn(), set: vi.fn(),
+  get: vi.fn(), set: vi.fn(), routes: [] as Array<{ name: string; params?: unknown }>,
 }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo }) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo, dismiss: h.dismiss }), useNavigation: () => ({ getState: () => ({ routes: h.routes, index: h.routes.length - 1 }) }) }));
 vi.mock('react-native', () => ({ Keyboard: { dismiss() {} } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: h.user, accountGeneration: h.accountGeneration }) }));
@@ -28,7 +28,7 @@ function Probe() { result = useTeammateNavigation(); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 let serial = 0;
 beforeEach(() => {
-  vi.clearAllMocks(); h.disk.clear(); h.accountGeneration = ++serial;
+  vi.clearAllMocks(); h.routes = []; h.disk.clear(); h.accountGeneration = ++serial;
   h.user = { id: `account-${serial}`, passportId: 'passport', membershipKind: 'personal', orgId: null } as MobileUser;
   h.get.mockImplementation(async (key: string) => h.disk.get(key) ?? null);
   h.set.mockImplementation(async (key: string, value: string) => { h.disk.set(key, value); });
@@ -39,7 +39,9 @@ describe('header/home shared navigation', () => {
     const owner = homeNavigationOwner(h.user);
     await saveHomeNavigationPreferences(owner, { mode: 'teammates', lastTeammate: teammateIdentity(teammate) });
     await render(); expect(result.mode).toBe('teammates'); expect(result.lastTeammate?.resourceId).toBe('writer');
+    expect(result.restoreLastTeammate).toBe(true);
     await act(async () => result.chooseMode('tasks'));
+    expect(result.restoreLastTeammate).toBe(false);
     expect(h.dismissTo).toHaveBeenCalledWith('/devices');
     expect(await readHomeNavigationPreferences(owner)).toEqual({ mode: 'tasks', lastTeammate: teammateIdentity(teammate) });
   });
@@ -104,8 +106,11 @@ describe('header/home shared navigation', () => {
     await render();
     let change!: Promise<void>;
     await act(async () => { change = result.setMode('teammates'); });
+    expect(result.hydrated).toBe(false);
+    expect(result.restoreLastTeammate).toBe(false);
     await act(async () => { finish(JSON.stringify({ mode: 'tasks', lastTeammate: teammateIdentity(teammate) })); await change; });
     expect(result.mode).toBe('teammates'); expect(result.lastTeammate).toEqual(teammateIdentity(teammate));
+    expect(result.restoreLastTeammate).toBe(false);
   });
   it('does not let a hung preference read blank home forever or a late mode hijack the fallback task list', async () => {
     vi.useFakeTimers();
@@ -129,4 +134,26 @@ describe('header/home shared navigation', () => {
     await act(async () => result.setMode('teammates'));
     expect(result.saveFailed).toBe(true); expect(h.push).not.toHaveBeenCalled();
   });
+});
+
+it.each([
+  { routes: [{ name: 'index' }, { name: 'sessions/[sessionId]' }], href: '/' },
+  { routes: [{ name: 'devices/index' }, { name: 'sessions/[sessionId]' }], href: '/devices' },
+  { routes: [{ name: 'resources/[collectionId]', params: { collectionId: 'teammates' } }, { name: 'sessions/[sessionId]' }], href: '/resources/teammates' },
+])('returns to the mounted list at $href instead of replacing the chat with a new home', async ({ routes, href }) => {
+  h.routes = routes;
+  await render();
+  await act(async () => result.chooseMode('teammates'));
+  expect(h.dismiss).toHaveBeenCalledExactlyOnceWith(1);
+  expect(h.dismissTo).not.toHaveBeenCalled();
+});
+it('opens a known conversation directly and seeds its first-frame identity', async () => {
+  const { readRemoteCollectionCache } = await import('@/device-link/remoteResourceAvailability');
+  const linked = { ...teammate, item: { ...teammate.item, links: [{ rel: 'conversation', target: { kind: 'session' as const, sessionId: 'chat' } }] } };
+  await render();
+  await act(async () => result.openTeammate(linked));
+  expect(h.push).toHaveBeenCalledExactlyOnceWith({ pathname: '/sessions/[sessionId]', params: {
+    sessionId: 'chat', deviceId: 'mac', deviceName: 'My Mac', resourceCollectionId: 'teammates', resourceId: 'writer', resourceKind: 'bot',
+  } });
+  expect(readRemoteCollectionCache(`${h.user.id}:${h.accountGeneration}`, 'teammates')[0]).toBe(linked);
 });

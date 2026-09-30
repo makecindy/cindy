@@ -10,6 +10,8 @@ import {
 import type { InputProjection, QueuedRemoteMessage, RemoteImageRef, RemoteSession } from '@/session/types';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { parseMobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
+import { i18n } from '@/i18n';
+import { resolveSystemLocale } from '@/i18n/locale';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   composerDocumentsEqual,
@@ -127,6 +129,7 @@ export function buildQueuedTextMessage(
   clientId = createUuid(),
   options: {
     attachments?: readonly RemoteSerializedAttachment[];
+    planMode?: boolean;
     quotesEncoded?: boolean;
     agentReferences?: AgentInputReference[];
     pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
@@ -153,10 +156,12 @@ export function buildQueuedTextMessage(
     options.agentReferences,
   );
   const createdAt = now.toISOString();
+  const uiLanguage = resolveSystemLocale(i18n.resolvedLanguage || i18n.language);
 
   return {
     clientId,
     text: trimmed,
+    uiLanguage,
     persistedContent,
     ...(attachments.length > 0 ? { files: [...attachments] } : {}),
     ...(options.agentReferences?.length ? { agentReferences: options.agentReferences } : {}),
@@ -178,6 +183,7 @@ export function buildQueuedTextMessage(
     },
     createOpts: {
       agentKind,
+      ...(options.planMode !== undefined ? { planMode: options.planMode } : {}),
       workingDir,
       model: session.model,
       effort,

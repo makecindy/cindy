@@ -103,25 +103,26 @@ export class VoiceInputDataStore {
 
   updateSettings(patch: unknown): VoiceInputSettings {
     const current = this.load();
-    const syncJustEnabled = isRecord(patch)
-      && patch.dictionarySyncEnabled === true
-      && current.settings.dictionarySyncEnabled === false;
-    const syncJustDisabled = isRecord(patch)
-      && patch.dictionarySyncEnabled === false
-      && current.settings.dictionarySyncEnabled === true;
+    // 同步开关的立即广播不能只看布尔 patch:「恢复默认」(传 null)同样会翻转有效值
+    // (比如显式关闭后恢复默认,有效值 false → 当前默认 true),对端可能早已在线,
+    // 必须按更新前后的有效值判断是否跨越开关边界。
+    const syncEnabledBefore = current.settings.dictionarySyncEnabled;
     // 词典三件套的真相在同步状态里,不接受整份覆盖 —— 那会绕过 CRDT,让本地写入
     // 在下一次物化时被静默丢掉。词典变更一律走下面的语义化入口。
     const nextSettings = normalizeVoiceInputSettings({
       ...current.settings,
-      ...stripDictionaryFields(patch),
+      ...translateComposerLongPressPatch(stripDictionaryFields(patch)),
     }, process.platform);
     this.replaceState({
       ...current,
       settings: nextSettings,
     });
-    // 开关刚切到开或关:对端可能早已在线,既没有 presence 事件也没有词典变更。
-    // 打开时立刻推当前投影;关闭时立刻推空表,清掉已经在线的手机缓存。
-    if (syncJustEnabled || syncJustDisabled) notifyDictionaryChanged({ immediate: true });
+    // 开关刚切到开或关(含恢复默认导致的翻转):对端可能早已在线,既没有 presence
+    // 事件也没有词典变更。打开时立刻推当前投影;关闭时立刻推空表,清掉已经在线的
+    // 手机缓存。
+    if (syncEnabledBefore !== nextSettings.dictionarySyncEnabled) {
+      notifyDictionaryChanged({ immediate: true });
+    }
     return cloneSettings(nextSettings);
   }
 
@@ -644,7 +645,7 @@ export class VoiceInputDataStore {
     try {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       const tmp = `${filePath}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf-8');
+      fs.writeFileSync(tmp, JSON.stringify(projectVoiceInputDataForPersist(state), null, 2), 'utf-8');
       fs.renameSync(tmp, filePath);
     } catch (error) {
       log.warn('voice input data write failed', {
@@ -949,6 +950,20 @@ function cloneSettings(settings: VoiceInputSettings): VoiceInputSettings {
   return JSON.parse(JSON.stringify(settings)) as VoiceInputSettings;
 }
 
+/**
+ * 落盘只记录 override。运行时快照里的 `composerLongPressEnabled` / `dictionarySyncEnabled`
+ * 是默认值 + override 合成的有效值;写进文件会把当时的默认钉死,未自定义的用户就跟不上
+ * 后续改默认 —— 尤其是「恢复默认」后残留的旧有效值,将来默认一变就会被
+ * `legacyDictionarySyncOverride()` 重新解释成显式 override。两个字段都只持久化
+ * 各自的 `*Override`。
+ */
+function projectVoiceInputDataForPersist(state: StoredVoiceInputData): unknown {
+  const settings: Record<string, unknown> = { ...state.settings };
+  delete settings.composerLongPressEnabled;
+  delete settings.dictionarySyncEnabled;
+  return { ...state, settings };
+}
+
 function cloneHistory(history: VoiceInputHistoryEntry[]): VoiceInputHistoryEntry[] {
   return JSON.parse(JSON.stringify(history)) as VoiceInputHistoryEntry[];
 }
@@ -1023,6 +1038,23 @@ function stripDictionaryFields(patch: unknown): Record<string, unknown> {
     // 展开合并的,undefined 会被现有值盖掉。
     next.dictionarySyncEnabledOverride = null;
     delete next.dictionarySyncEnabled;
+  }
+  return next;
+}
+
+/**
+ * 长按输入框开关:UI 传有效值,持久化只认 override(规则同上面的同步开关)。
+ * 每次显式拨动都记成 override;`null` = 恢复默认,删掉 override 跟随版本默认值。
+ */
+function translateComposerLongPressPatch(patch: Record<string, unknown>): Record<string, unknown> {
+  if (!('composerLongPressEnabled' in patch)) return patch;
+  const next = { ...patch };
+  const value = next.composerLongPressEnabled;
+  delete next.composerLongPressEnabled;
+  if (typeof value === 'boolean') {
+    next.composerLongPressEnabledOverride = value;
+  } else if (value === null) {
+    next.composerLongPressEnabledOverride = null;
   }
   return next;
 }

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { getRemoteResource, MOBILE_REMOTE_RESOURCE_PRIMITIVES } from '../device-link/remoteResources';
 import { normalizeRemoteActions, normalizeRemoteBlocks } from '../device-link/remoteResourceContent';
-import { getRoutineActionId, parseRoutineDetail } from '../session/companionRoutines';
 import type { RemoteInvoke } from '../device-link/mobileMakerTransport';
 const ref = { collectionId: 'teammates', kind: 'bot', id: 'routine:b/r' };
 const action = { id: 'opaque', label: 'Save', fields: [{ id: 'name', label: 'Name', kind: 'text' }] };
@@ -13,8 +12,8 @@ describe('resource content through the actual mobile API boundary', () => {
   it('retains the complete routine and opaque actions instead of projecting them away as a list item', async () => {
     const invoke = vi.fn(async () => ({ ref, display: { title: 'Daily' }, revision: '1', links: [], actions: [action], blocks: [block] })) as RemoteInvoke;
     const result = await getRemoteResource(invoke, { deviceId: 'host', deviceName: 'Mac' }, ref, 'en', ['routine-detail']);
-    expect(getRoutineActionId(result, 'routine-save')).toBe('opaque');
-    expect(parseRoutineDetail(result.blocks![0]!.data).input).toEqual(block.data.input);
+    expect(result.actions).toEqual([action]);
+    expect(result.blocks).toEqual([block]);
     expect(vi.mocked(invoke).mock.calls[0]![2]).toMatchObject([{ client: { primitives: [...MOBILE_REMOTE_RESOURCE_PRIMITIVES, 'routine-detail'] } }]);
   });
   it('keeps only public invitation progress for the ordinary teammate resolver', async () => {

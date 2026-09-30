@@ -511,7 +511,7 @@ describe('mobile auth-server login', () => {
     );
     const runtimeClear = switchBody.indexOf(
       'await clearAccountScopedRuntimeForSwitch();',
-      targetWrite,
+      latestRead,
     );
     const rollbackWrite = switchBody.indexOf(
       'await restorePersistedAuthSessionRaw(previousSessionRaw);',
@@ -522,7 +522,8 @@ describe('mobile auth-server login', () => {
     expect(latestRead).toBeGreaterThan(serialized);
     expect(activeVaultCommit).toBeGreaterThan(latestRead);
     expect(targetWrite).toBeGreaterThan(activeVaultCommit);
-    expect(runtimeClear).toBeGreaterThan(targetWrite);
+    expect(runtimeClear).toBeGreaterThan(latestRead);
+    expect(runtimeClear).toBeLessThan(activeVaultCommit);
     expect(rollbackWrite).toBeGreaterThan(runtimeClear);
     expect(switchBody.slice(runtimeClear, rollbackWrite)).toContain(
       'activateMobileSessionRealm(realm!);',
@@ -621,7 +622,7 @@ describe('mobile auth-server login', () => {
     ).toBeGreaterThanOrEqual(4);
   });
 
-  it('keeps the added-account vault transaction through runtime cleanup and owner commit', () => {
+  it('clears unscoped caches before persisting a new login identity', () => {
     const authSource = readFileSync(
       resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
       'utf8',
@@ -648,7 +649,7 @@ describe('mobile auth-server login', () => {
     );
     const runtimeClear = acceptBody.indexOf(
       'await clearAccountScopedRuntimeForSwitch();',
-      targetWrite,
+      previousSessionSnapshot,
     );
     const ownerCommit = acceptBody.indexOf(
       'activateMobileSessionRealm(committedRealm);',
@@ -663,7 +664,9 @@ describe('mobile auth-server login', () => {
     expect(previousSessionSnapshot).toBeGreaterThan(serialized);
     expect(vaultTransaction).toBeGreaterThan(previousSessionSnapshot);
     expect(targetWrite).toBeGreaterThan(vaultTransaction);
-    expect(runtimeClear).toBeGreaterThan(targetWrite);
+    expect(runtimeClear).toBeGreaterThan(previousSessionSnapshot);
+    expect(runtimeClear).toBeLessThan(vaultTransaction);
+    expect(acceptBody).toContain('replacesActiveSession || userRef.current === null');
     expect(ownerCommit).toBeGreaterThan(runtimeClear);
     expect(rollback).toBeGreaterThan(ownerCommit);
     expect(acceptBody.slice(rollback)).toContain(
@@ -765,10 +768,13 @@ describe('mobile auth-server login', () => {
       resolve(process.cwd(), 'src/session/AccountSwitcherSheet.tsx'),
       'utf8',
     );
-    expect(sheetSource).toContain('disabled={switchingKey !== null}');
-    expect(sheetSource).not.toContain(
-      'disabled={auth.accountsLoading || switchingKey !== null}',
+    // 「添加账号」改用共享 MainWindowActionButton(action 对象传 disabled):只在切换账号时禁用,
+    // 不因后台同步 savedAccounts(accountsLoading)而阻塞。
+    expect(sheetSource).toMatch(
+      /testID: 'accountSwitcher\.addAccount'/,
     );
+    expect(sheetSource).toContain('disabled: switchingKey !== null,');
+    expect(sheetSource).not.toMatch(/disabled[=:]\s*\{?auth\.accountsLoading/);
     expect(sheetSource).toContain("t('devices.list.alert.actionFailed')");
     expect(sheetSource).toContain('formatRemoteError(error)');
     expect(sheetSource).not.toContain('.catch(() => undefined)\n        .finally');

@@ -165,6 +165,7 @@ const client = {
   },
 };
 beforeEach(() => {
+  cindyMakeManager.setVersionSwitchingProbe(() => false);
   vi.clearAllMocks();
   h.verify.mockReset().mockResolvedValue(undefined);
   h.build.mockReset().mockResolvedValue(installer);
@@ -425,6 +426,12 @@ describe('Cindy Make test IPC ownership and persistence', () => {
     } finally {
       release();
     }
+  });
+  it('does not start a completion build while a version handoff is running', async () => {
+    cindyMakeManager.setVersionSwitchingProbe(() => true);
+    await expect(actCindyMakeTest('session', 'completion', 'build')).rejects.toThrow('unavailable');
+    expect(h.build).not.toHaveBeenCalled();
+    expect(cindyMakeTestController.hasActiveJobs()).toBe(false);
   });
   it('publishes one build identity to Settings and persists cancellation for a reopened card', async () => {
     let release!: () => void;

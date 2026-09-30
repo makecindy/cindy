@@ -172,7 +172,9 @@ describe('signed OAuth transport with explicit peer trust', () => {
     await expect(
       authenticateOauthController({
         ...f.options,
-        target: { ...f.target, expiresAtMs: Date.now() - 1 },
+        // Compare against the fixture clock. Using the wall clock here can
+        // advance past the fixture's frozen value between setup and assertion.
+        target: { ...f.target, expiresAtMs: f.options.now() - 1 },
       }),
     ).rejects.toThrow();
     expect(f.invoke).not.toHaveBeenCalled();

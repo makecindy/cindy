@@ -217,6 +217,7 @@ function toSessionActivityPayload(activity: AgentIslandSessionActivity): Session
   return {
     sessionId: activity.sessionId,
     phase: activity.phase,
+    workingPhase: activity.workingPhase,
     compactDetail: activity.compactDetail,
     interactionKind: activity.interactionKind,
     attention: activity.attention,
@@ -248,6 +249,7 @@ function activitySignature(payload: SessionActivityPayload): string {
   return [
     payload.phase,
     payload.compactDetail,
+    payload.workingPhase,
     payload.interactionKind ?? '',
     payload.attention === true ? '1' : '0',
   ].join('\u0000');

@@ -176,10 +176,9 @@ function MermaidSourceEditor({
         isVisible ? 'opacity-100' : 'opacity-0',
       )}
     >
-      <div
-        className={cn('absolute inset-0', 'bg-[var(--overlay-modal)]')}
-        onClick={() => close(false)}
-      />
+      {/* The scrim does not dismiss: a stray click outside must not discard the
+          draft. Cancel and Escape remain the ways out (DESIGN §4 Dialog). */}
+      <div className={cn('absolute inset-0', 'bg-[var(--overlay-modal)]')} />
       <div
         role="dialog"
         aria-modal="true"
@@ -191,7 +190,6 @@ function MermaidSourceEditor({
           'bg-[var(--surface-elevated)] border border-[var(--border-default)]',
           'shadow-[var(--shadow-menu)]',
         )}
-        onClick={(e) => e.stopPropagation()}
       >
         <div
           className={cn(

@@ -27,6 +27,7 @@ export interface RemoteSessionActivity {
   sessionId: string;
   phase: RemoteSessionActivityPhase;
   compactDetail: string;
+  workingPhase?: string;
   interactionKind?: string;
   attention: boolean;
 }
@@ -62,6 +63,7 @@ function sameActivity(a: RemoteSessionActivity, b: RemoteSessionActivity): boole
   return (
     a.phase === b.phase &&
     a.compactDetail === b.compactDetail &&
+    a.workingPhase === b.workingPhase &&
     a.interactionKind === b.interactionKind &&
     a.attention === b.attention
   );
@@ -151,6 +153,7 @@ export function applyRemoteSessionActivity(deviceId: string, payload: unknown): 
     sessionId,
     phase: p.phase,
     compactDetail: typeof p.compactDetail === 'string' ? p.compactDetail : '',
+    workingPhase: typeof p.workingPhase === 'string' ? p.workingPhase : undefined,
     interactionKind: typeof p.interactionKind === 'string' ? p.interactionKind : undefined,
     attention,
   };

@@ -20,6 +20,11 @@ const state = vi.hoisted(() => ({
   isLoading: false,
   publish: vi.fn().mockResolvedValue(undefined),
 }));
+const botState = vi.hoisted(() => ({ bots: [] as any[], unread: {} as Record<string, number>, groups: [] as any[], remote: [] as any[] }));
+vi.mock('@/features/bots/useBotUnreadSync', () => ({ useBotUnreadSync: () => {} }));
+vi.mock('@/features/bots/botStore', () => ({ useBotProfiles: () => botState.bots, useBotUnreadCounts: () => botState.unread }));
+vi.mock('@/features/bots/botGroupStore', () => ({ useBotGroupList: () => ({ groups: botState.groups }) }));
+vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBotSync: () => {}, useRemoteBots: () => botState.remote }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({}) }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
   getDataOwnerGeneration: () => state.owner,
@@ -62,6 +67,7 @@ import { useSessionDisplayRunningState } from '../features/cc-agent/hooks/useSes
 
 afterEach(() => {
   cleanup();
+  botState.bots = []; botState.unread = {}; botState.groups = []; botState.remote = [];
   vi.unstubAllGlobals();
   state.publish.mockClear();
   state.isLoading = false;
@@ -186,4 +192,20 @@ describe('app badge projection lifecycle', () => {
     view.rerender(<AppBadgeAttentionSync />);
     expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
   });
+});
+
+it('maps each unread chat once and fences all Bot lanes out of event-backed Dock attention', () => {
+  vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
+  botState.bots = [
+    { id: 'bot', status: 'active', sessions: [{ id: 'canonical' }, { id: 'group-lane' }] },
+    { id: 'hidden', hiddenAt: 100, sessions: [{ id: 'hidden-chat' }] },
+    { id: 'archived', status: 'archived', sessions: [{ id: 'old-chat' }] },
+  ];
+  botState.unread = { bot: 8, hidden: 3, archived: 2 };
+  const view = render(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 4,
+    sessionIds: expect.arrayContaining(['canonical', 'group-lane', 'hidden-chat', 'old-chat']) }));
+  botState.unread = {};
+  view.rerender(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
 });

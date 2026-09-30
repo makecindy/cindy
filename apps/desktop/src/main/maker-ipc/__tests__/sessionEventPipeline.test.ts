@@ -1,3 +1,4 @@
+import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -296,6 +297,7 @@ function harness() {
     silentStopTurnLeaseGate: { turnLeaseIdForEvent: vi.fn(() => 'instance:1') },
     agentInputCoordinatorHolder: {
       getActiveInputClientId: vi.fn((): string | null => null),
+      getActiveInputClientIds: vi.fn((): string[] => []),
       getQueueControlSnapshot: vi.fn(() => ({ pendingQueue: [] as unknown[] })),
       onTurnEvent: vi.fn(),
       noteSuppressedTerminalError: vi.fn(),
@@ -392,6 +394,37 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  it('suppresses scheduled content before persistence and delivery while preserving unrelated replies', async () => {
+    const h = harness();
+    const close = beginQuietScheduledOutput('check', 'check-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'check-run' };
+    try {
+      h.emit(event('text', { text: 'I will check now', isFinal: false }, { turnOrigin: origin }));
+      h.emit(event('text', { text: 'No changes', isFinal: true }, { turnOrigin: origin }));
+      h.emit(event('text', { text: 'Standalone progress' }, { turnOrigin: origin, standaloneText: true }));
+      h.emit(event('tool_use', { id: 'tool', name: 'check', input: {} }, { turnOrigin: origin }));
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('onStandaloneTextEvent')).not.toHaveBeenCalled();
+      expect(h.deps.broadcastToAllWindows).not.toHaveBeenCalled();
+      h.emit(event('text', { text: 'Interactive reply', isFinal: true }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalled();
+    } finally { close(); await h.dispose(); }
+  });
+
+  it('keeps redacted terminal fields redacted for quiet scheduler output', async () => {
+    const h = harness();
+    const close = beginQuietScheduledOutput('check', 'redaction-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'redaction-run' };
+    h.deps.redactEventForRenderer.mockImplementation(value => ({ ...value, data: { result: 'redacted result', metadata: 'safe' } }));
+    try {
+      h.emit(event('done', { result: 'No changes', metadata: 'private diagnostic' }, { turnOrigin: origin }));
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('private diagnostic');
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('redacted result');
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain('safe');
+    } finally { close(); await h.dispose(); }
+  });
+
   it('delivers Pi notices as durable rows without entering model streaming or turn bookkeeping', async () => {
     const h = harness();
     h.deps.redactEventForRenderer.mockImplementation((value) => value);
@@ -1413,6 +1446,44 @@ describe('usage through the production event pipeline', () => {
     await h.dispose();
   });
 
+  it.each(['subscription', 'unpriced', 'api'] as const)(
+    'records MiMo Claude Code usage using its billing route (%s)', async (mode) => {
+      const h = harness();
+      pricing(true);
+      effects.fn('getSessionProvider').mockReturnValue('mimo-account');
+      effects.fn('getActiveCatalog').mockReturnValue({ providers: [{
+        id: 'mimo-account', auth: { method: 'apiKey' },
+        access: { kind: mode === 'api' ? 'api' : 'subscription' },
+      }] });
+      if (mode === 'unpriced') {
+        effects.fn('getCodexProviderSubscriptionValuePrice').mockReturnValue(undefined);
+        effects.fn('getSubscriptionDirectValuePrice').mockReturnValue(undefined);
+        effects.fn('getModelPriceQuote').mockReturnValue(undefined);
+      }
+      h.emit(event('done', {
+        total_cost_usd: 2,
+        modelUsageCumulativeStartsAtZero: true,
+        modelUsage: { 'mimo-v2-pro': { inputTokens: 100, outputTokens: 20, costUSD: 2 } },
+        usageSegmentsComplete: true,
+        usageSegments: [{ ...segment, model: 'mimo-v2-pro', cacheReadTokens: 0 }],
+      }, { source: 'claude-code' }));
+      await microtasks();
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+        model: mode === 'api' ? 'mimo-v2-pro' : 'mimo-v2-pro#billing=subscription',
+        inputTokensDelta: 100, outputTokensDelta: 20,
+        money: expect.objectContaining({ kind: mode === 'api' ? 'actual-cost' : 'value-estimate' }),
+      }));
+      expect(effects.fn('recordTurnSpend')).toHaveBeenCalledTimes(mode === 'api' ? 1 : 0);
+      expect(effects.fn('recordSessionTurnSpend')).toHaveBeenCalledTimes(mode === 'api' ? 1 : 0);
+      if (mode === 'subscription') {
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+          money: expect.objectContaining({ kind: 'value-estimate', amount: expect.any(Number) }),
+        }));
+      }
+      await h.dispose();
+    },
+  );
+
   it.each([[false, false], [true, false], [false, true], [true, true]])('keeps independent Claude subscription accounting out of actual spend (fallback=%s, deleted=%s)', async (fallback, deleted) => {
     const h = harness();
     pricing(true);
@@ -1481,6 +1552,23 @@ describe('Bot adapters in the shared event pipeline', () => {
     }));
   });
 
+  it('attributes group-lane turns as private and hands the terminal to the group chat', async () => {
+    const h = harness();
+    const settleLaneTurn = vi.fn(async () => true);
+    (h.deps as unknown as { botGroupChatServiceHolder: unknown }).botGroupChatServiceHolder = { settleLaneTurn };
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-group:g1:turn:bot-a');
+    h.emit(event('text', { text: '我来补充' }));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenLastCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ agentMeta: expect.objectContaining({ botPrivateReply: true, botGroupLane: true }) }),
+    }));
+    h.emit(event('done', { result: '我来补充' }));
+    await microtasks();
+    expect(settleLaneTurn).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'task', activeInputClientId: 'bot-group:g1:turn:bot-a', outcome: 'done', resultText: '我来补充',
+    }));
+    await h.dispose();
+  });
+
   it('carries a pending follow-up into task settlement and remembers compact boundaries without rebuilding early', async () => {
     const h = harness();
     h.emit(event('compact_boundary'));
@@ -1494,4 +1582,16 @@ describe('Bot adapters in the shared event pipeline', () => {
     }));
     expect(h.deps.attemptBotCompactRuntimeRefresh).toHaveBeenCalledWith(h.session, 'event:done');
   });
+});
+
+it('captures task completion inputs before queue advancement and binds only a successful final', async () => {
+  const h = harness();
+  h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['bot-delegation-completion:a', 'human']);
+  h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['bot-delegation-completion:next']);
+  });
+  effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('summary');
+  h.emit(event('done', { status: 'completed', result: 'Summary' }));
+  expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'summary', undefined, ['bot-delegation-completion:a']);
+  await h.dispose();
 });

@@ -1,3 +1,4 @@
+import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
@@ -23,7 +24,6 @@ import {
 import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
   deriveModelsDiscoveryUrl,
-  parseModelsListResponse,
   readCachedGenericOAuthAccessToken,
   refreshGenericOAuthIfNeeded,
 } from './generic-oauth.js';
@@ -271,6 +271,14 @@ export async function fetchProviderModels(
     return { ok: false, code: cls.code, detail: cls.detail };
   }
   if (!res.ok) {
+    // A configured Codex manifest may be unavailable on older compatible gateways.
+    // Retry only the same endpoint without its manifest selector; never retry auth failures.
+    const ordinaryUrl = new URL(url);
+    if ((res.status === 404 || res.status === 405) && ordinaryUrl.searchParams.has('client_version')) {
+      await res.body?.cancel().catch(() => undefined);
+      ordinaryUrl.searchParams.delete('client_version');
+      return fetchProviderModels({ ...spec, modelsUrl: ordinaryUrl.toString() }, fetchImpl);
+    }
     let bodyText = '';
     try {
       bodyText = spec.responseByteLimit === undefined
@@ -295,7 +303,13 @@ export async function fetchProviderModels(
       detail: 'models response is not JSON or exceeds the response limit',
     };
   }
-  const models = parseModelsListResponse(json, url);
+  const pageDeadline = Date.now() + 30_000;
+  const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
+    if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
+    const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
+    if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
+    return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
+  });
   if (!models || models.length === 0) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return {

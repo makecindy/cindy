@@ -1,5 +1,5 @@
 import { retainInvalidatedProviderPresentation, retainProviderPresentationAfterAuthChange } from './provider-presentation-store.js';
-import { subscriptionAccountKind, subscriptionAccountState, readClaudeAccountOAuth, getValidClaudeAccountOAuth } from './subscription-account-auth.js';
+import { subscriptionAccountKind, subscriptionAccountState } from './subscription-account-auth.js';
 /**
  * apps/desktop/src/main/maker-host/auth-adapters.ts
  *
@@ -54,7 +54,6 @@ import {
 import { getCodexCliAuthPath, getPreferredSharedCodexAuthPath, getReleaseCodexAuthPath } from './codex-shared-auth.js';
 
 export { resolveWindowsAclPrincipal } from './codex-auth-link.js';
-import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
 import {
   CODEX_USER_DISCONNECT_REASON,
   clearInvalidatedSystemCodexAuthMarker,
@@ -84,17 +83,11 @@ import {
   CODEX_GATEWAY_ENV_KEY,
   CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY,
 } from './codex-gateway-config.js';
-import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from './claude-gateway-config.js';
-import {
-  hasClaudeAiOAuth,
-} from './claude-credentials-store.js';
-import {
-  disconnectClaudeAiOAuth,
-  getClaudeAiOAuthForSpawn,
-  getValidClaudeAiOAuth,
-  invalidateClaudeOAuthRefresh,
-  setClaudeOAuthInvalidGrantHandler,
-} from './claude-oauth-refresh.js';
+import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from './claude-gateway-config.js';
+import { hasClaudeNativeLogin } from './claude-native-auth.js';
+import { disconnectClaudeNativeLogin, readClaudeNativeLogin } from './claude-native-connection.js';
+import { claudeCliNetworkEnv } from './claude-native-cli.js';
+import { ensureLegacyClaudeConfigMigrated } from './claude-legacy-config-migration.js';
 import { isAnthropicCompatProxyHandleReady } from './anthropic-compat-proxy-host.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
@@ -113,6 +106,7 @@ import {
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
   isNativeProviderAuthBound,
+  captureNativeProviderAuthorizationGeneration,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
   isNativeProviderAuthSharedSystemCredential,
@@ -272,6 +266,14 @@ export function chatgptAccountIdFromIdToken(idToken: string): string | null {
   if (workspaceId) return workspaceId;
   const sub = readChatgptIdTokenClaims(idToken)?.sub;
   return typeof sub === 'string' && sub.length > 0 ? sub : null;
+}
+
+/** HTTP header identity only; workspace/recovery checks must keep the strict parser. */
+export function chatgptAccountIdFromTokens(
+  tokens: { account_id?: unknown; id_token?: unknown } | undefined,
+): string | null {
+  if (typeof tokens?.account_id === 'string' && tokens.account_id.length > 0) return tokens.account_id;
+  return typeof tokens?.id_token === 'string' ? chatgptAccountIdFromIdToken(tokens.id_token) : null;
 }
 
 /**
@@ -551,11 +553,30 @@ export function readClaudeApiKey(): string | null {
 }
 
 /**
- * cc 401 回调(getFreshSubscriptionToken)的总预算。必须显著小于 cc 侧
- * oauth_token_refresh control 请求的 30s 超时(反编译 eqf=30000),超时快速返回 null
- * 让 cc 落磁盘兜底,不把 turn 吊在锁等待 + 慢网络上。
+ * 会话启动判定 Claude 订阅登录态时可接受的缓存年龄。登录态可能在 Cindy 之外变化
+ * (终端里 `claude auth logout`),过期即重读 `claude auth status`(约 0.1–0.3s)。
  */
-export const CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS = 12_000;
+const CLAUDE_CLI_STATUS_MAX_AGE_MS = 60_000;
+
+/**
+ * Claude 订阅(本机 Claude Code 登录)的会话鉴权态。凭证只在 CLI 里:这里只看
+ * CLI 登录态与 Cindy 使用许可,不读、不递任何 token。
+ */
+async function claudeNativeLoginState(): Promise<AuthState> {
+  const login = await readClaudeNativeLogin({ maxAgeMs: CLAUDE_CLI_STATUS_MAX_AGE_MS });
+  return login
+    ? { authenticated: true, identity: 'Claude.ai · OAuth', authSource: 'oauth' }
+    : { authenticated: false, errorReason: 'no_oauth' };
+}
+
+/**
+ * 未指定来源的会话能否交给本机 Claude Code 登录:订阅只服务 Anthropic 一方模型。
+ * 其它模型(用户来源的裸 id 等)CLI 直连会被 Anthropic 拒,仍经 loopback proxy 的
+ * 隐式桥按模型路由(凭证由 host 注入,子进程只带占位 key)。未传模型的旧调用方按可服务处理。
+ */
+function claudeSubscriptionServesModel(model: string | undefined): boolean {
+  return model === undefined || isAnthropicWireModel(model);
+}
 
 /** Claude AuthAdapter —— 只回鉴权 env, endpoint / behavior flag 走 runtime-configs.ts。 */
 export class DesktopClaudeAuthAdapter implements AuthAdapter {
@@ -564,38 +585,17 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   /** invalidate() 触发时把 auth state 推给 renderer(maker-host 装配注入,对齐 codex)。 */
   private onInvalidatedBroadcast?: (reason: string) => void;
 
-  constructor() {
-    // 订阅 refresh token 被服务端作废(锁内确认的 invalid_grant)→ 清态 + 广播重登提示,
-    // 不让用户停在「显示已连接、会话连环 401」的假状态。纯内存接线,构造期零文件系统
-    // 副作用(authAdaptersImportPurity 约定)。
-    setClaudeOAuthInvalidGrantHandler((digest) => {
-      void this.invalidateNativeCredential('claude_oauth_refresh_invalid_grant', digest).catch((error) => {
-        log.warn('claude invalidation cleanup failed', { error: error instanceof Error ? error.message : String(error) });
-      });
-    });
-  }
-
   /** maker-host 注入: invalidate() 触发后给 renderer push auth state。 */
   setOnInvalidatedBroadcast(cb: (reason: string) => void): void {
     this.onInvalidatedBroadcast = cb;
   }
 
   /**
-   * 订阅凭证被服务端作废时：停止刷新、撤销 Cindy 使用许可并广播重新登录提示。
-   * 保留系统 Claude Code 凭证。
+   * 本机 Claude Code 登录已失效(如在终端里 `claude auth logout`):广播重新登录提示。
+   * 不撤销 Cindy 的使用许可 —— 用户在 CLI 里重新登录后无需再到 Cindy 里授权一次。
    */
-  invalidate(reason: string): Promise<void> {
-    return this.invalidateNativeCredential(reason);
-  }
-
-  private async invalidateNativeCredential(reason: string, rejectedCredentialDigest?: string): Promise<void> {
+  async invalidate(reason: string): Promise<void> {
     log.warn('claude auth invalidated', { reason });
-    invalidateClaudeOAuthRefresh();
-    try {
-      unbindNativeProviderAuth('anthropic', { revoked: true, ...(rejectedCredentialDigest ? { rejectedCredentialDigest } : {}) });
-    } catch (error) {
-      log.warn('claude credential revocation could not be persisted', { error: error instanceof Error ? error.message : String(error) });
-    }
     const presentation = retainInvalidatedProviderPresentation('anthropic');
     if (this.onInvalidatedBroadcast) {
       try {
@@ -687,37 +687,30 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
       }
       return { authenticated: true, identity: 'Provider · Proxy', authSource: 'api-key' };
     }
-    // 连了 Claude.ai 订阅(系统 Claude Code 凭证库有 OAuth 登录,或经本 app 浏览器授权写入)
-    // → cc 走 oauth-spawn:子进程携带订阅 OAuth token,因此「Anthropic 订阅」成为本会话可
-    // per-session 选中的来源(选中即直连 api.anthropic.com)。默认仍走网关(网关 key 由 proxy
-    // 旁路按请求注入)。授权≠自动走订阅,要在模型列表显式选中才走。
-    // per-session / 默认路由强依赖 loopback proxy,proxy 没起来直接拒授权,fail-closed ——
-    // 不让「OAuth token + 直连」裸奔(规则 9)。
-    if (hasClaudeAiOAuth()) {
-      if (!isAnthropicCompatProxyHandleReady()) {
-        return { authenticated: false, errorReason: 'proxy_not_ready' };
-      }
-      return { authenticated: true, identity: 'Claude.ai · OAuth', authSource: 'oauth' };
-    }
+    // Claude 订阅:由 CLI 用本机 Claude Code 的登录直连 Anthropic(不经 loopback proxy)。
     if (options?.credentialMode === 'oauth-bearer') {
-      return { authenticated: false, errorReason: 'no_oauth' };
+      return claudeNativeLoginState();
     }
-    // 未连订阅 → gateway-spawn:鉴权前提 = XD 网关 key 存在(现状,字节级不变)。
-    const apiKey = readClaudeApiKey();
-    return apiKey ? { authenticated: true } : { authenticated: false, errorReason: 'no_key' };
+    // 未指定来源:有网关 key 就走网关(与未连订阅时一致);没有才交给本机 Claude Code
+    // 登录(authSource 'oauth' → maker-core 按订阅会话起 CLI,见 env-builder nativeCliAuth)。
+    // 非 Anthropic 模型不交给订阅:不带 authSource,仍经 proxy 隐式桥(getAuthEnv 给占位 key)。
+    if (readClaudeApiKey()) return { authenticated: true };
+    const native = await claudeNativeLoginState();
+    if (!native.authenticated) return { authenticated: false, errorReason: 'no_key' };
+    return claudeSubscriptionServesModel(options?.model) ? native : { authenticated: true };
   }
 
   async triggerLogin(): Promise<AuthState> {
-    // Claude 登录入口在 renderer:gateway 模式走 useApiKey hook 填 gateway key;
-    // oauth 模式走 Settings 里粘贴 `claude setup-token` 产出的 token(CLAUDE_OAUTH_TOKEN_SET IPC)。
-    // main 侧无 spawn 式登录流程,保留此位为扩展位。
-    throw new Error('use renderer (useApiKey / Claude OAuth token paste) to trigger Claude login');
+    // Claude 登录入口在 renderer:网关 key 走 useApiKey hook;Claude 订阅走设置页的
+    // CLAUDE_OAUTH_LOGIN IPC(拉起内置 CLI 的 `claude auth login`,见 claude-native-cli)。
+    throw new Error('use renderer (useApiKey / Claude Code login in Settings) to trigger Claude login');
   }
 
   async logout(): Promise<void> {
     // Only disconnect Cindy's native subscription binding; keep system and Gateway credentials.
-    if (hasClaudeAiOAuth() || isNativeProviderAuthRevoked('anthropic')) {
-      await disconnectClaudeAiOAuth();
+    // 看绑定而不是内存里的 CLI 登录态:登录态未读到时也不能误删网关 key。
+    if (isNativeProviderAuthBound('anthropic') || isNativeProviderAuthRevoked('anthropic')) {
+      await disconnectClaudeNativeLogin();
       return;
     }
     // 经统一 store 移除本机 XD 网关 key。store.remove 把"文件本不存在"视为成功
@@ -736,97 +729,49 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     await this.ensureSharedGlobalSkills();
     const env: Record<string, string> = {};
     if (options?.providerId && subscriptionAccountKind(options.providerId) === 'claude') {
-      const oauth = readClaudeAccountOAuth(options.providerId);
-      if (!oauth) throw new Error('Claude account requires login');
-      Object.assign(env, claudeOAuthSpawnEnv(oauth), { CINDY_CLAUDE_ACCOUNT_PROVIDER_ID: options.providerId });
+      // 独立 Claude 账号已停用(getState 拒绝授权),不递任何凭证。
     } else if (options?.credentialMode === 'gateway-key') {
       const apiKey = readClaudeApiKey();
       if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
     } else if (options?.credentialMode === 'provider-oauth') {
       // 真实供应商凭证只留在 host/proxy;占位 key 仅用于通过 CC CLI 本地鉴权检查。
       env.ANTHROPIC_API_KEY = CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
-    } else if (hasClaudeAiOAuth()) {
-      // 连了订阅(oauth-spawn):经 CLAUDE_CODE_OAUTH_TOKEN 显式把订阅 access token 递给
-      // cc 子进程(官方桌面宿主协议)。cc 2.1.198 起 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
-      // (env-builder 无条件注入) 的语义扩大为「凭证也由 host 全权提供」—— 设了 flag 的子进程
-      // **完全不读**系统凭证库,旧的「不注入、让 cc 自读 ~/.claude」方案在新 CLI 上直接
-      // "Not logged in"(2026-07-03 线上事故:0.0.139 升 cc 2.1.186→2.1.198 后订阅会话全挂)。
-      // token 到期刷新随之转移到 host:getClaudeAiOAuthForSpawn **不阻塞 spawn**——立即
-      // 注入现值,临期只触发后台单飞刷新(新会话首响应不吃刷新 RTT,规则 10);旧 token 若
-      // 已彻底失效,turn 中的 401 由 SDK getOAuthToken 回调走 getFreshSubscriptionToken 兜底。
-      // scopes / subscriptionType / rateLimitTier 一并递入 —— cc env-token 分支默认 scopes 只有
-      // user:inference,不递会丢订阅身份细节(feature gate / beta header 判定用)。
-      // **绝不**注入 ANTHROPIC_API_KEY —— 它与 OAuth 共存会触发 cc 的 shouldDisableAuth 反而
-      // 关掉 Anthropic 鉴权(计划 R4)。provider 路由模型要用的 gateway key 不走子进程 env,
-      // 由本地 proxy 旁路注入(setClaudeProxyGatewayKeyReader)。
-      // (getState 已 gate:无凭证 / proxy 没起来时不授权,不会裸奔到这里 spawn。)
-      const oauth = getClaudeAiOAuthForSpawn();
-      if (oauth?.accessToken) {
-        Object.assign(env, claudeOAuthSpawnEnv(oauth));
-      }
     } else if (options?.credentialMode === 'oauth-bearer') {
-      // 显式订阅模式没有 OAuth 时,getState 已 fail-closed;这里保持不注入 key。
+      // Claude 订阅:不递凭证,CLI 读自己的登录;只补系统代理(CLI 不读系统代理设置)。
+      Object.assign(env, await claudeCliNetworkEnv());
     } else {
+      // 未指定来源:与 getState 同序 —— 有网关 key 走网关;否则 Anthropic 模型交给本机
+      // Claude Code 登录,其它模型经 proxy 隐式桥(只带占位 key,真实凭证由 proxy 注入)。
       const apiKey = readClaudeApiKey();
       if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
+      else if (hasClaudeNativeLogin()) {
+        if (claudeSubscriptionServesModel(options?.model)) Object.assign(env, await claudeCliNetworkEnv());
+        else env.ANTHROPIC_API_KEY = CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
+      }
     }
-    // dev 多实例隔离:设了 XDT_USER_DATA_DIR(device-link 本地联调跑多实例)时,把
-    // Claude Code 的配置目录也切到 userData 下。否则多实例共用全局 ~/.claude
-    // (~/.claude.json / projects 下的 transcripts)会互相干扰,无法当作两台独立设备。
-    // 仅 dev(非 packaged)生效,生产忽略;auth 走 ANTHROPIC_API_KEY,重定向 config
-    // dir 不影响鉴权。process.env 路线行不通(CLAUDE_CONFIG_DIR 在 boot 期被
-    // stripSensitiveAnthropicEnv 清掉),故经 getAuthEnv 注入子进程 env(覆盖优先)。
-    if (process.env.XDT_USER_DATA_DIR && !app.isPackaged && !process.env.CLAUDE_CONFIG_DIR) {
-      env.CLAUDE_CONFIG_DIR = path.join(app.getPath('userData'), 'claude-home');
-    }
+    // 所有来源都用 CLI 默认配置目录(dev 多实例与正式版一致,不设 CLAUDE_CONFIG_DIR):
+    // 订阅会话的凭证库按配置目录区分,隔离会看不到本机已有的 Claude Code 登录。
+    // 旧版 dev 隔离在 <userData>/claude-home 的转录,拉起 CLI 前补拷到默认目录供 resume。
+    await ensureLegacyClaudeConfigMigrated();
     return env;
   }
 
   /**
    * host 侧直连 LLM 调用(oneShot 起标题 / skillReview)的凭证。
    *
-   * 仅连了订阅(oauth-spawn)时需要特殊处理:此时 getAuthEnv() 不带 ANTHROPIC_API_KEY(只注入订阅 token),
-   * oneShot 拿不到 key。固定回 gateway key + **直连 gateway endpoint**(绕开 loopback proxy 的
-   * 路由)—— 避免 oneShot 这种无 system prompt 的轻任务被路由去 api.anthropic.com 撞
-   * claude.ai OAuth 策略(无 Claude Code 身份段会被拒)。
+   * 连了 Claude 订阅时固定回 gateway key + **直连 gateway endpoint**(绕开 loopback proxy 的
+   * 路由)—— host 自己的请求绝不使用订阅(订阅只归 CLI)。
    * 未连订阅回 null → oneShot 走旧路径(getAuthEnv.ANTHROPIC_API_KEY + runtimeConfig.endpoint),零改动。
    */
   async getOneShotAuth(): Promise<{ apiKey: string; baseURL?: string } | null> {
-    if (!hasClaudeAiOAuth()) return null;
+    if (!hasClaudeNativeLogin()) return null;
     const apiKey = readClaudeApiKey();
     if (!apiKey) return null;
     return { apiKey, baseURL: claudeUpstreamEndpoint() };
   }
 
-  /**
-   * cc 子进程 turn 中途 401 时经 SDK oauth_token_refresh control 回调走到这里
-   * (见 maker-core claude-code getOAuthToken 接线)。forceRefresh 语义 = 锁内比对后
-   * 按需刷:凭证库已比失败 token 新 → 直接返回不刷(防多会话同时 401 连环旋转);
-   * 仍旧才单飞刷新;失败返回 null(绝不把已知坏 token 递回去)。
-   *
-   * 超时预算 12s —— 必须显著小于 cc 侧 control 请求的 30s(反编译 eqf=30000):
-   * 超时快速返回 null 让 cc 落磁盘兜底(host 刷新总会写回凭证库,在途刷新即使超过
-   * 预算也会完成写回,cc 第二条恢复路 tengu_oauth_401_recovered_from_disk 能捡到),
-   * 不把整个 turn 吊在一次慢网络上。
-   */
-  async getFreshSubscriptionToken(staleToken?: string, providerId?: string): Promise<string | null> {
-    if (providerId && subscriptionAccountKind(providerId) !== 'claude') return null;
-    const timeout = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS).unref?.(),
-    );
-    // staleToken = 该会话实际撞 401 的那枚(spawn 注入 / 上次回调返回)。库值已比它新
-    // (后台预续期换代)时刷新器直接返回库值,不再消耗一次轮换 —— 防多个长会话对同
-    // 一枚旧 token 群体 401 时串行连环旋转。
-    const refresh = (providerId
-      ? getValidClaudeAccountOAuth(providerId, { forceRefresh: true, staleToken })
-      : getValidClaudeAiOAuth({ forceRefresh: true, staleToken })).then(
-      (oauth) => oauth?.accessToken ?? null,
-    );
-    return Promise.race([refresh, timeout]);
-  }
-
-  // cancelLogin 不实现 —— Claude 走 renderer useApiKey hook 的同步弹窗式登录,
-  // 没有需要 abort 的子进程。BaseAgent.cancelLogin 调到这里时是 no-op (interface 可选)。
+  // getFreshSubscriptionToken 不实现 —— 订阅 token 由 CLI 自己刷新,Cindy 不持有。
+  // cancelLogin 不实现 —— Claude 登录由设置页经 CLAUDE_OAUTH_LOGIN IPC 拉起 CLI(可取消)。
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1769,6 +1714,39 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   captureCredentialGeneration(): string | null {
     const fingerprint = currentCodexCredentialGeneration(path.join(this.codexHome, 'auth.json'));
     return fingerprint ? JSON.stringify(fingerprint) : null;
+  }
+
+  /** Bind a host-owned request to the same credential and durable authorization as native Codex. */
+  captureOAuthDispatchProof(accessToken: string, accountId: string | null, providerId = 'openai'): (() => boolean) | null {
+    const independent = providerId !== 'openai';
+    const authenticated = () => independent
+      ? codexAccountState(providerId).authenticated : this.hasCodexOAuthLoginReadOnly();
+    if (!authenticated()) return null;
+    const home = independent ? codexAccountHome(providerId) : this.codexHome;
+    const authPath = path.join(home, 'auth.json');
+    const credential = () => {
+      const value = currentCodexCredentialGeneration(authPath);
+      return value ? JSON.stringify(value) : null;
+    };
+    // Independent accounts authorize against their existing account record;
+    // inherited OpenAI uses the native provider authorization record.
+    const authorization = () => independent
+      ? JSON.stringify(currentCodexCredentialGeneration(path.join(home, 'account.json')))
+      : captureNativeProviderAuthorizationGeneration('openai');
+    const credentialGeneration = credential();
+    const authorizationGeneration = authorization();
+    if (!credentialGeneration || !authorizationGeneration || authorizationGeneration === 'null') return null;
+    try {
+      const raw = fs.readFileSync(authPath, 'utf8');
+      const auth = JSON.parse(raw) as { tokens?: { access_token?: unknown; account_id?: unknown; id_token?: unknown } };
+      if (auth.tokens?.access_token !== accessToken || chatgptAccountIdFromTokens(auth.tokens) !== accountId) return null;
+    } catch {
+      return null;
+    }
+    const isCurrent = () => authenticated()
+      && credential() === credentialGeneration
+      && authorization() === authorizationGeneration;
+    return isCurrent() ? isCurrent : null;
   }
 
   /** Bracket one account-level RPC with compare-and-commit recovery confirmation. */

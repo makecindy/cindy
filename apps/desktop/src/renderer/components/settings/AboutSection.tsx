@@ -3,12 +3,14 @@
  *
  * 版本号:
  *   - 应用版本号:仅国内版显示,值由 window.electronAPI.appDisplayVersion 同步注入
- *   - Claude Code / Codex / Pi 版本号: spawn 当前应用使用的 binary `--version`
+ *   - Claude Code / Codex 版本号: spawn 当前应用使用的 binary `--version`,再比较当前通道的
+ *     线上版本;菜单样式与 Pi 共用 HarnessVersionMenuRow,更新仍是重启后由启动流程安装
+ *   - Pi 版本号与内核更新由 PiKernelVersionRow 管理
  *
  * 卡片样式与 NotificationSection / FeishuBotSection 同级 (rounded-xl / Board border)。
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ExternalLink, FolderOpen, Upload } from 'lucide-react';
 
@@ -16,22 +18,42 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { useExperimentalFlag } from '@/hooks/useExperimentalFeatures';
 import { useAutoUpdateSettings } from '@/hooks/useAutoUpdateSettings';
 import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
 import { useLogUploadSettings } from '@/hooks/useLogUploadSettings';
 import { extractIpcError } from '@/utils/ipcError';
+import { PiKernelVersionRow } from './PiKernelVersionRow';
+import { HARNESS_MENU_ITEM_CLASS, HarnessMenuFootnote, HarnessVersionMenuItem, HarnessVersionMenuRow } from './HarnessVersionMenuRow';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
 
+type UpdatableAgentKind = 'claude-code' | 'codex';
+
 interface AgentVersionState {
   loading: boolean;
   version: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  checking: boolean;
+  checkFailed: boolean;
+  /** Last successful online comparison (renderer clock); a failed check keeps the previous one. */
+  checkedAt: number | null;
   error?: string;
 }
 
-const INITIAL: AgentVersionState = { loading: true, version: null };
+const INITIAL: AgentVersionState = {
+  loading: true,
+  version: null,
+  latestVersion: null,
+  updateAvailable: false,
+  checking: false,
+  checkFailed: false,
+  checkedAt: null,
+};
 
 const DESKTOP_SOCIAL_LINKS = [
   {
@@ -54,28 +76,77 @@ const DESKTOP_SOCIAL_LINKS = [
   },
 ] as const;
 
-function useAgentBinaryVersion(kind: 'claude-code' | 'codex' | 'pi'): AgentVersionState {
+function useAgentBinaryVersion(kind: UpdatableAgentKind): { state: AgentVersionState; check: () => void } {
   const [state, setState] = useState<AgentVersionState>(INITIAL);
+  const mounted = useRef(false);
+  const checkPending = useRef(false);
+
+  const check = useCallback(() => {
+    if (checkPending.current) return;
+    checkPending.current = true;
+    setState((prev) => ({ ...prev, checking: true }));
+    void window.electronAPI.maker.agent
+      .getBinaryVersion(kind, { checkLatest: true })
+      .then(
+        (latest) => {
+          if (!mounted.current) return;
+          const failed = latest.latestCheckFailed;
+          setState((prev) => ({
+            ...prev,
+            loading: false,
+            version: latest.version,
+            error: latest.error,
+            // Keep the last known channel version and check time so the menu
+            // still shows what we last saw. Do not keep Update enabled: a
+            // harness relaunch re-checks the manifest, so a stale
+            // updateAvailable can confirm a version that is not installable
+            // while offline.
+            latestVersion: failed ? prev.latestVersion : latest.latestVersion,
+            updateAvailable: failed ? false : latest.updateAvailable,
+            checkFailed: failed,
+            checkedAt: failed ? prev.checkedAt : Date.now(),
+            checking: false,
+          }));
+        },
+        () => {
+          if (mounted.current) {
+            setState((prev) => ({ ...prev, checking: false, checkFailed: true, updateAvailable: false }));
+          }
+        },
+      )
+      .finally(() => {
+        checkPending.current = false;
+      });
+  }, [kind]);
 
   useEffect(() => {
+    mounted.current = true;
     let cancelled = false;
+    // Local first so the version shows immediately even offline; the online
+    // comparison follows and only ever adds the update action.
     void window.electronAPI.maker.agent
       .getBinaryVersion(kind)
-      .then((res) => {
-        if (cancelled) return;
-        setState({ loading: false, version: res.version, error: res.error });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        setState({ loading: false, version: null, error: message });
+      .then(
+        (res) => {
+          if (cancelled) return;
+          setState((prev) => ({ ...prev, loading: false, version: res.version, error: res.error }));
+        },
+        (err: unknown) => {
+          if (cancelled) return;
+          const message = err instanceof Error ? err.message : String(err);
+          setState((prev) => ({ ...prev, loading: false, version: null, error: message }));
+        },
+      )
+      .then(() => {
+        if (!cancelled) check();
       });
     return () => {
       cancelled = true;
+      mounted.current = false;
     };
-  }, [kind]);
+  }, [kind, check]);
 
-  return state;
+  return { state, check };
 }
 
 const SEMVER_RE = /\d+\.\d+\.\d+(?:[-+.\w]*)?/;
@@ -95,29 +166,142 @@ export function AgentVersionsRows() {
   const { t } = useTranslation();
   const claudeCode = useAgentBinaryVersion('claude-code');
   const codex = useAgentBinaryVersion('codex');
-  const pi = useAgentBinaryVersion('pi');
 
   return (
     <>
-      <InfoRow
+      <AgentVersionRow
+        kind="claude-code"
+        name="Claude Code"
         label={t('settings.about.claudeCodeVersionLabel')}
-        value={renderVersion(claudeCode, t)}
-        dim={!claudeCode.version}
+        state={claudeCode.state}
+        onCheck={claudeCode.check}
       />
       <Divider />
-      <InfoRow
+      <AgentVersionRow
+        kind="codex"
+        name="Codex"
         label={t('settings.about.codexVersionLabel')}
-        value={renderVersion(codex, t)}
-        dim={!codex.version}
+        state={codex.state}
+        onCheck={codex.check}
       />
       <Divider />
-      <InfoRow
-        label={t('settings.about.piVersionLabel')}
-        value={renderVersion(pi, t)}
-        dim={!pi.version}
-      />
+      <PiKernelVersionRow />
       <Divider />
     </>
+  );
+}
+
+function AgentVersionRow({
+  kind,
+  name,
+  label,
+  state,
+  onCheck,
+}: {
+  kind: UpdatableAgentKind;
+  /** Product name for actions and dialogs; `label` is the row label ("<name> version"). */
+  name: string;
+  label: string;
+  state: AgentVersionState;
+  onCheck: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const currentVersion = state.version ? extractSemver(state.version) : null;
+  const latestVersion = state.latestVersion ? extractSemver(state.latestVersion) : null;
+  // Main decides with the installer's semver ordering: a newer local build never offers a no-op relaunch.
+  const updateAvailable = Boolean(state.updateAvailable && currentVersion && latestVersion);
+  // A later check keeps the last channel version in the menu, but Update must not
+  // confirm a stale result while that check is still in flight.
+  const canUpdate = () => {
+    const next = stateRef.current;
+    return Boolean(
+      !next.checking &&
+        next.updateAvailable &&
+        next.version &&
+        next.latestVersion &&
+        extractSemver(next.version) &&
+        extractSemver(next.latestVersion),
+    );
+  };
+  const status = state.checking
+    ? t('settings.about.harnessChecking')
+    : state.checkFailed
+      ? t('settings.about.harnessCheckFailed')
+      : updateAvailable
+        ? t('settings.about.harnessUpdateAvailable')
+        : '';
+
+  const handleUpdate = async () => {
+    if (!canUpdate() || !currentVersion || !latestVersion) return;
+    const confirmed = await confirm({
+      title: t('settings.about.harnessUpdateTitle', { name }),
+      description: t('settings.about.harnessUpdateDescription', {
+        name,
+        currentVersion,
+        latestVersion,
+      }),
+      confirmText: t('settings.about.harnessUpdateConfirm', { name }),
+      cancelText: t('settings.about.harnessUpdateCancel'),
+      autoFocusConfirm: true,
+    });
+    if (!confirmed) return;
+    if (!canUpdate()) return;
+
+    // Same gate as the app-update banner and the beta-channel restart: a logical
+    // turn, Claude background activity, or Ghost card action must not be killed
+    // by a generic confirmation. A failed probe means we cannot tell, so fail
+    // closed into the interruption warning instead of relaunching.
+    let hasInFlight = true;
+    try {
+      hasInFlight = await window.electronAPI.anyActivityBlockingRelaunch();
+    } catch {
+      hasInFlight = true;
+    }
+    if (hasInFlight) {
+      const interrupt = await confirm({
+        title: t('settings.about.harnessUpdateTitle', { name }),
+        description: t('settings.about.harnessUpdateBusyDescription', { name }),
+        confirmText: t('settings.about.harnessUpdateConfirm', { name }),
+        cancelText: t('settings.about.harnessUpdateCancel'),
+      });
+      if (!interrupt) return;
+    }
+    if (!canUpdate()) return;
+
+    try {
+      await window.electronAPI.relaunchForHarnessUpdate(kind);
+    } catch {
+      toast.error(t('settings.about.harnessUpdateFailed'));
+    }
+  };
+
+  return (
+    <HarnessVersionMenuRow
+      label={label}
+      manageLabel={t('settings.about.harnessManage', { name })}
+      version={renderVersion(state, t)}
+      status={status}
+      pending={state.checking}
+    >
+      <HarnessVersionMenuItem
+        label={t('settings.about.harnessUpdateButton', { name })}
+        version={latestVersion}
+        disabled={!updateAvailable || state.checking}
+        onSelect={() => void handleUpdate()}
+      />
+      <DropdownMenuSeparator />
+      <DropdownMenuItem className={HARNESS_MENU_ITEM_CLASS} disabled={state.checking} onSelect={onCheck}>
+        {state.checking ? t('settings.about.harnessChecking') : t('settings.about.harnessCheck')}
+      </DropdownMenuItem>
+      {state.checkedAt && (
+        <HarnessMenuFootnote>
+          {t('settings.about.harnessCheckedAt', { time: new Date(state.checkedAt).toLocaleString(i18n.language) })}
+        </HarnessMenuFootnote>
+      )}
+    </HarnessVersionMenuRow>
   );
 }
 
@@ -136,7 +320,7 @@ export function AboutSection() {
       </div>
 
       {/* Info Card */}
-      <div
+      <div id="settings-search-settings-about-appVersionLabel"
         className={cn(
           'flex flex-col rounded-xl',
           'bg-[var(--settings-theme-card-bg)]',
@@ -330,7 +514,7 @@ export function AutoUpdateToggleRow() {
     return (
       <div className="flex flex-col gap-1.5 px-[18px] py-4">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-autoUpdateLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.autoUpdateLabel')}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -375,7 +559,7 @@ export function AutoUpdateToggleRow() {
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-autoUpdateLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.autoUpdateLabel')}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -451,7 +635,7 @@ function AnalyticsToggleRow() {
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-analyticsLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.analyticsLabel')}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -500,7 +684,7 @@ function DebugLogToggleRow() {
   return (
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-13 text-[var(--settings-section-sublabel)]">
+        <span id="settings-search-settings-about-debugLogLabel" className="text-13 text-[var(--settings-section-sublabel)]">
           {t('settings.about.debugLogLabel')}
         </span>
         <Switch
@@ -530,7 +714,7 @@ function OpenLogsRow() {
 
   return (
     <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-      <span className="text-13 text-[var(--settings-section-sublabel)]">
+      <span id="settings-search-settings-about-logsDirLabel" className="text-13 text-[var(--settings-section-sublabel)]">
         {t('settings.about.logsDirLabel')}
       </span>
       <Button
@@ -601,7 +785,7 @@ function CrashAutoUploadToggleRow() {
     <div className="flex flex-col gap-1.5 px-[18px] py-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-logUpload-crashAutoLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.logUpload.crashAutoLabel')}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -683,7 +867,7 @@ function UploadLogsRow() {
           文字块中间;与标签对齐才和同页其它「标签 + 按钮」行(日志目录 / 服务条款)读起来一致。 */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-logUpload-uploadLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.logUpload.uploadLabel')}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">

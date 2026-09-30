@@ -47,7 +47,6 @@ import {
   Info,
   LayoutList,
   SlidersHorizontal,
-  Tags,
   Wallet,
   type LucideIcon,
 } from 'lucide-react';
@@ -175,7 +174,6 @@ const PROJECT_ORDER_OPTIONS: ReadonlyArray<Option<FilterProjectOrder>> = [
  * token=Coins、费用=Wallet。
  */
 const TASK_INFO_OPTIONS: ReadonlyArray<Option<TaskInfoField>> = [
-  { value: 'tags', labelKey: 'taskTags.title', Icon: Tags },
   { value: 'time', labelKey: 'ccAgent.sidebar.taskInfo.time', Icon: Clock },
   { value: 'pr', labelKey: 'ccAgent.sidebar.taskInfo.pr', Icon: GitPullRequest },
   { value: 'worktree', labelKey: 'ccAgent.sidebar.taskInfo.worktree', Icon: Folders },

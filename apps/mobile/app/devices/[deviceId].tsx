@@ -32,7 +32,8 @@ import {
 } from '@/components/MobilePrimitives';
 import {
   SimpleStackHeader,
-  simpleScreenSafeAreaEdges,
+  simpleScrollInsetProps,
+  simpleScrollScreenSafeAreaEdges,
 } from '@/platform/chrome';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -450,7 +451,6 @@ function DeviceDetailScreenContent() {
   );
   const bulkConfirmSummary = bulkConfirmAction ? bulkActionSummaries[bulkConfirmAction] : null;
   const selectionMode = selectionRequested || selectedSessionIds.length > 0;
-  const runningAutomationCount = filterCounts.runningAutomation;
   const controlsSummary = useMemo(
     () => remoteSessionControlsSummary(statusFilter, filterCounts),
     [filterCounts, statusFilter, t],
@@ -682,13 +682,11 @@ function DeviceDetailScreenContent() {
       return !automationScopeDir || sessionMatchesProjectDir(item.session.workingDir, automationScopeDir);
     });
     return (
-      <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+      <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
         <SimpleStackHeader
           syncing={!showConnectionBanner && (loading || status === 'connecting')}
           backTestID="deviceDetail.backButton"
-          eyebrow={t('devices.detail.automationScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
-          subtitle={deviceName}
           title={automationScopeName ?? t('devices.detail.automationScope.title')}
           titleTestID="deviceDetail.title"
         />
@@ -704,9 +702,10 @@ function DeviceDetailScreenContent() {
           />
         ) : null}
         <SectionList
+          {...simpleScrollInsetProps}
           sections={runItems.length > 0 ? [{ key: 'automation-runs', title: '', data: runItems }] : []}
           keyExtractor={(item) => item.session.id}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
           stickySectionHeadersEnabled={false}
           renderSectionHeader={() => null}
           contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
@@ -747,7 +746,7 @@ function DeviceDetailScreenContent() {
   if (projectWorkingDir) {
     const projectItems = sections.flatMap((section) => section.data);
     return (
-      <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+      <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
         <SimpleStackHeader
           syncing={!showConnectionBanner && (loading || status === 'connecting')}
           action={{
@@ -765,9 +764,7 @@ function DeviceDetailScreenContent() {
             testID: 'deviceDetail.newSessionButton',
           }}
           backTestID="deviceDetail.backButton"
-          eyebrow={t('devices.detail.projectScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
-          subtitle={`${projectWorkingDir} · ${deviceName}`}
           title={projectName ?? deviceName}
           titleTestID="deviceDetail.title"
         />
@@ -819,12 +816,13 @@ function DeviceDetailScreenContent() {
           )}
         </View>
         <SectionList
+          {...simpleScrollInsetProps}
           sections={displaySections}
           keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
           // Fabric can reattach a clipped Swipeable child before its old native parent removes it.
           // Keep JS virtualization, but avoid the Android native detach/reattach race for this list.
           removeClippedSubviews={false}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
           stickySectionHeadersEnabled={false}
           renderSectionHeader={() => null}
           contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
@@ -870,7 +868,7 @@ function DeviceDetailScreenContent() {
   }
 
   return (
-    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+    <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
       <SimpleStackHeader
         syncing={!showConnectionBanner && (loading || status === 'connecting')}
         action={{
@@ -886,11 +884,7 @@ function DeviceDetailScreenContent() {
           testID: 'deviceDetail.newSessionButton',
         }}
         backTestID="deviceDetail.backButton"
-        eyebrow="Remote Device"
         onBack={() => goBackGuarded(router)}
-        subtitle={projectWorkingDir
-          ? t('devices.detail.subtitle.deviceActive', { deviceName, count: filterCounts.active })
-          : t('devices.detail.subtitle.activeAndProjects', { count: filterCounts.active, projects: filterCounts.projectCount })}
         title={projectName ?? deviceName}
         titleTestID="deviceDetail.title"
       />
@@ -950,27 +944,6 @@ function DeviceDetailScreenContent() {
             variant="pill"
             value={filterCounts.automation}
           />
-          <View
-            style={{ minWidth: windowLayout.metricMinWidth }}
-            testID="deviceDetail.automationActions"
-          >
-            <MainWindowActionButton
-              action={{
-                accessibilityLabel: t('devices.detail.automationsButtonA11y'),
-                label: `${t('devices.detail.plan')}${runningAutomationCount > 0 ? ` · ${runningAutomationCount}` : ''}`,
-                onPress: () => guardedPush({
-                  pathname: '/automations/[deviceId]',
-                  params: { deviceId, name: deviceName },
-                }),
-                testID: 'deviceDetail.automationsButton',
-              }}
-              density="compact"
-              style={{
-                minHeight: windowLayout.metricMinHeight,
-                minWidth: windowLayout.metricMinWidth,
-              }}
-            />
-          </View>
           {loading ? <ActivityIndicator color={colors.textSecondary} /> : null}
         </View>
       </SummaryStrip>
@@ -1185,9 +1158,10 @@ function DeviceDetailScreenContent() {
       </View>
 
       <SectionList
+        {...simpleScrollInsetProps}
         sections={displaySections}
         keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
         stickySectionHeadersEnabled={false}
         contentContainerStyle={[
           styles.listContent,
@@ -1444,32 +1418,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   controlsSummary: {
     color: colors.textSecondary,
     flex: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     minWidth: 0,
   },
   projectSearchChrome: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
-  },
-  searchRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  searchInput: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: colors.textPrimary,
-    flex: 1,
-    fontSize: typeScale.body,
-    minHeight: 44,
-    paddingHorizontal: spacing.lg,
-  },
-  searchCloseButton: {
-    minHeight: 38,
   },
   segmentScroll: {
     marginHorizontal: -spacing.lg,
@@ -1497,8 +1453,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: 2,
     minWidth: 0,
   },
-  selectionText: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
-  selectionMeta: { color: colors.textTertiary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  selectionText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+  selectionMeta: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   bulkConfirmCard: {
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.border,
@@ -1515,10 +1471,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   bulkConfirmText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
-  bulkNotice: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  bulkNotice: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   listContextCard: {
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.border,
@@ -1537,28 +1493,32 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
   listContextCount: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   listContextDetail: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   listContextHint: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   sectionTitle: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     paddingBottom: spacing.xs,
     paddingTop: spacing.md,
   },

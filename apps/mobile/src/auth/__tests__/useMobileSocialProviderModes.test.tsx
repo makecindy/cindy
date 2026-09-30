@@ -37,8 +37,18 @@ import { useMobileSocialProviderModes } from '../useMobileSocialProviderModes';
 
 const providers: SocialProvider[] = ['wechat'];
 
-function Probe() {
-  const modes = useMobileSocialProviderModes({ providers, region: 'cn' });
+function Probe({
+  wechatLoginEnabled,
+  region = 'cn',
+}: {
+  wechatLoginEnabled?: boolean;
+  region?: 'cn' | 'global';
+}) {
+  const modes = useMobileSocialProviderModes({
+    providers,
+    region,
+    wechatLoginEnabled,
+  });
   return (
     <div>
       {[...modes.keys()].map((provider) => (
@@ -51,9 +61,12 @@ function Probe() {
 let host: HTMLDivElement;
 let root: Root;
 
-async function renderProbe() {
+async function renderProbe(
+  wechatLoginEnabled?: boolean,
+  region: 'cn' | 'global' = 'cn',
+) {
   await act(async () => {
-    root.render(<Probe />);
+    root.render(<Probe wechatLoginEnabled={wechatLoginEnabled} region={region} />);
     await Promise.resolve();
   });
 }
@@ -78,22 +91,35 @@ describe('mobile social provider visibility', () => {
     expect(native.listeners.size).toBe(0);
   });
 
-  it('shows WeChat on iOS only after the installation probe succeeds', async () => {
+  it('shows WeChat on iOS after the first successful installation probe', async () => {
     native.available.mockResolvedValue(true);
     await renderProbe();
     expect(wechatButton()).not.toBeNull();
     expect(native.available).toHaveBeenCalledWith('wechat');
   });
 
-  it('hides WeChat on iOS when the installation probe returns false', async () => {
+  it('hides WeChat on Android even when configured and installed', async () => {
+    native.platform = 'android';
+    native.available.mockResolvedValue(true);
+    await renderProbe();
+    expect(wechatButton()).toBeNull();
+    expect(native.available).not.toHaveBeenCalled();
+  });
+
+  it('hides WeChat on Global iOS without probing installation', async () => {
+    native.available.mockResolvedValue(true);
+    await renderProbe(undefined, 'global');
+    expect(wechatButton()).toBeNull();
+    expect(native.available).not.toHaveBeenCalled();
+  });
+
+  it('keeps WeChat hidden on iOS when the installation probe fails', async () => {
     await renderProbe();
     expect(wechatButton()).toBeNull();
   });
 
-  it('refreshes iOS visibility when the app returns to the foreground', async () => {
-    native.available
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
+  it('refreshes iOS WeChat visibility on foreground', async () => {
+    native.available.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     await renderProbe();
     expect(wechatButton()).toBeNull();
 
@@ -106,10 +132,46 @@ describe('mobile social provider visibility', () => {
     expect(native.available).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps configured WeChat visible on Android without probing installation', async () => {
-    native.platform = 'android';
+  it('hides iOS WeChat after it is uninstalled while Cindy is in the background', async () => {
+    native.available.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     await renderProbe();
     expect(wechatButton()).not.toBeNull();
+
+    await act(async () => {
+      for (const listener of native.listeners) listener('active');
+      await Promise.resolve();
+    });
+
+    expect(wechatButton()).toBeNull();
+  });
+
+  it('ignores an older installation probe that completes after a foreground refresh', async () => {
+    let finishFirstProbe!: (installed: boolean) => void;
+    native.available
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+        finishFirstProbe = resolve;
+      }))
+      .mockResolvedValueOnce(false);
+    await renderProbe();
+
+    await act(async () => {
+      for (const listener of native.listeners) listener('active');
+      await Promise.resolve();
+    });
+    await act(async () => {
+      finishFirstProbe(true);
+      await Promise.resolve();
+    });
+
+    expect(wechatButton()).toBeNull();
+    expect(native.available).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not probe or show WeChat when explicitly disabled', async () => {
+    native.available.mockResolvedValue(true);
+    await renderProbe(false);
+    expect(wechatButton()).toBeNull();
     expect(native.available).not.toHaveBeenCalled();
+    expect(native.listeners.size).toBe(0);
   });
 });

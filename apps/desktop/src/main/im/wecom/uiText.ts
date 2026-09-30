@@ -37,7 +37,7 @@ export const ui = {
       const message = `⚠️ 当前企业微信对话使用「${provider}」（${model}），${reason}。`;
       return attached
         ? `${message}\n请在 desktop 修复认证后继续发送消息。`
-        : `${message}\n修改后请发送 \`/new\` 开始新任务。`;
+        : `${message}\n修改“新对话配置”后直接继续发送消息即可；若当前对话单独选过模型，请发送 \`/new\` 开始新任务。`;
     },
     controlInProgress: '🎮 接管选择尚未完成，请先处理上一条交互消息。',
     credentialBusy: '⏳ 本地 Agent 正在运行，暂时不能切换凭证模式，请稍后重试。',

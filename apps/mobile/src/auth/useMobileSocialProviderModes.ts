@@ -7,6 +7,7 @@ import {
   isNativeSocialProviderSupported,
 } from '@/auth/nativeSocial';
 import {
+  MOBILE_WECHAT_LOGIN_ENABLED,
   resolveMobileSocialLoginMode,
   type MobileSocialLoginMode,
 } from '@/auth/mobileSocialLoginMode';
@@ -15,18 +16,33 @@ import {
 export function useMobileSocialProviderModes({
   providers,
   region,
+  wechatLoginEnabled = MOBILE_WECHAT_LOGIN_ENABLED,
 }: {
   providers: readonly SocialProvider[];
   region: AuthRegion;
+  wechatLoginEnabled?: boolean;
 }): ReadonlyMap<SocialProvider, MobileSocialLoginMode> {
   const [iosWechatAvailable, setIosWechatAvailable] = useState(false);
+  const hasWechatProvider = providers.includes('wechat');
 
   useEffect(() => {
-    if (Platform.OS !== 'ios') return;
+    if (
+      !wechatLoginEnabled ||
+      region !== 'cn' ||
+      !hasWechatProvider ||
+      Platform.OS !== 'ios'
+    ) {
+      setIosWechatAvailable(false);
+      return;
+    }
     let cancelled = false;
+    let latestRequest = 0;
     const refresh = async () => {
+      const request = ++latestRequest;
+      setIosWechatAvailable(false);
       const available = await isNativeSocialProviderAvailable('wechat');
-      if (!cancelled) setIosWechatAvailable(available);
+      if (!cancelled && request === latestRequest)
+        setIosWechatAvailable(available);
     };
     void refresh();
     const subscription = AppState.addEventListener('change', (state) => {
@@ -36,7 +52,7 @@ export function useMobileSocialProviderModes({
       cancelled = true;
       subscription.remove();
     };
-  }, []);
+  }, [wechatLoginEnabled, region, hasWechatProvider]);
 
   return useMemo(() => {
     const modes = new Map<SocialProvider, MobileSocialLoginMode>();
@@ -45,6 +61,7 @@ export function useMobileSocialProviderModes({
         provider,
         region,
         platform: Platform.OS,
+        wechatLoginEnabled,
         nativeSupported:
           provider === 'wechat' && Platform.OS === 'ios'
             ? iosWechatAvailable
@@ -53,5 +70,5 @@ export function useMobileSocialProviderModes({
       if (mode) modes.set(provider, mode);
     }
     return modes;
-  }, [iosWechatAvailable, providers, region]);
+  }, [iosWechatAvailable, providers, region, wechatLoginEnabled]);
 }

@@ -17,6 +17,7 @@ import { sessionCreateToRow } from '../localDb/mapper.js';
 import {
   botDelegations,
   botProfiles,
+  botProfileVersions,
   botSessionLinks,
   messages,
   sessions,
@@ -48,6 +49,9 @@ import { BOT_DELEGATION_CLIENT_ID } from '../../shared/botCollaboration.js';
 import { ensureBotWorkspaceDir } from './botProfileFolder.js';
 import type { SessionQueuedMessageControlResult, SessionSteerResult, SessionStopResult } from './sessionControlService.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
+import type { SessionRuntimeProfile } from './sessionRuntimeControl.js';
+import { readBotTaskModelOverride, type BotModelRoute } from '../../shared/botModelChain.js';
+import { validateBotTaskModel, resolveBotTaskModelSelection, type BotTaskModelSelection } from './appDefaultModelControl.js';
 
 const ACTIVE_DELEGATION_STATUSES = ['queued', 'running', 'waiting'] as const;
 /** 一条补充消息的正文上限：够写清「先别做 X，改做 Y」，又不至于变成另一项任务。 */
@@ -176,8 +180,21 @@ export interface BotDelegationServiceDeps {
     typeof sessions.$inferSelect,
     'model' | 'agentKind' | 'providerId' | 'fastMode'
   > & { effort?: (typeof sessions.$inferSelect)['effort'] }) | null;
+  validateTaskModel?: typeof validateBotTaskModel;
+  resolveTaskModelSelection?: typeof resolveBotTaskModelSelection;
   /** null means the live permission is changing or the caller is closing. */
   readCallerPermission?: (sessionId: string) => string | { mode: string; generation: number } | null;
+  /** Narrow, owner-checked bridge to the ordinary Session runtime controller. */
+  taskRoute?: {
+    inspect(callerSessionId: string, childSessionId: string): Promise<
+      | { ok: true; generation: number; current: SessionRuntimeProfile; next: SessionRuntimeProfile | null }
+      | { ok: false; errorCode: string; message: string }
+    >;
+    advance(childSessionId: string, expectedGeneration: number, route: SessionRuntimeProfile): Promise<
+      | { ok: true; status: 'applied' | 'deferred'; generation: number }
+      | { ok: false; errorCode: string; message: string }
+    >;
+  };
   now?: () => number;
   createId?: () => string;
   maxActiveChildren?: number;
@@ -185,6 +202,8 @@ export interface BotDelegationServiceDeps {
 
 /** Start one tracked Cindy Session task from a persistent Bot task. */
 export interface SessionTaskInput {
+  /** One task only; the catalog id includes source and Harness. */
+  modelSelection?: BotTaskModelSelection;
   callerSessionId: string;
   objective: string;
   contextRefs?: string[];
@@ -224,6 +243,16 @@ function parseRecord(value: string | null | undefined): Record<string, unknown> 
   } catch {
     return {};
   }
+}
+
+/** Use the creation snapshot, not today's companion settings, during recovery. */
+export async function hasExplicitSessionTaskModel(sessionId: string): Promise<boolean> {
+  const [row] = await getDbClient().drizzle
+    .select({ permissionSnapshotJson: botDelegations.permissionSnapshotJson })
+    .from(botDelegations)
+    .where(eq(botDelegations.childSessionId, sessionId))
+    .limit(1);
+  return !!parseRecord(row?.permissionSnapshotJson).taskModelOverride;
 }
 
 /** Mutable execution hold lives beside the frozen plan, without changing its authority fields. */
@@ -330,6 +359,33 @@ function parsePendingInteraction(
   }
 }
 
+/** Per-run input is separate from the immutable objective; never store a rendered prompt here. */
+interface SessionTaskInputSnapshot {
+  runSequence: number;
+  originalObjective: string | null;
+  followUp: string | null;
+}
+
+function readSessionTaskInput(row: Pick<DelegationRow, 'permissionSnapshotJson' | 'runSequence'>): SessionTaskInputSnapshot | null {
+  const input = parseRecord(row.permissionSnapshotJson).taskInput as Partial<SessionTaskInputSnapshot> | undefined;
+  if (!input || input.runSequence !== row.runSequence
+    || (input.originalObjective !== null && (typeof input.originalObjective !== 'string'
+      || input.originalObjective.length > MAX_OBJECTIVE_CHARS))
+    || (input.followUp !== null && (typeof input.followUp !== 'string'
+      || input.followUp.length > MAX_INTERJECTION_CHARS))) return null;
+  return input as SessionTaskInputSnapshot;
+}
+
+function taskObjectiveContext(row: Pick<DelegationRow, 'objective' | 'permissionSnapshotJson' | 'runSequence'>): string {
+  const input = readSessionTaskInput(row);
+  const objective = input ? input.originalObjective : row.objective;
+  return [
+    objective !== null ? `Objective:\n${objective}`
+      : 'The original objective could not be recovered from the stored initial input. Consult the existing task history; do not infer it from legacy continuation wrappers.',
+    input?.followUp ? `Requester follow-up:\n${input.followUp}` : '',
+  ].filter(Boolean).join('\n\n');
+}
+
 /**
  * 上下文引用是纯文本指针（文件名、链接、一句背景）,随目标事项进入子任务提示词。
  * 项目绑定退出 v1 后它不再承载路径授权语义:子任务的实际可读写面由它自己的
@@ -377,6 +433,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const completionInFlight = new Map<string, Promise<void>>();
   const interactionRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const cleanupRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const resumeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Live resolver handles remain process-local; the user-visible waiting
    * summary and paused status are persisted on the delegation row. */
   const pendingInteractions = new Map<string, BotDelegationPendingInteraction & {
@@ -788,7 +845,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
    *
    * 投递目标：优先冻结的父任务；父任务已被恢复流程替换时，改投发起 Bot 当前的
    * 主任务。完成信号属于 Bot 本人，不属于损坏的旧任务。两者都不在（Bot 已
-   * 暂停/归档)才放弃投递,此时卡片终态仍然可见,不算静默丢失。
+   * 暂停/归档）时只延后模型唤醒；每次执行的结果回执仍写入冻结的父任务。
    */
   const deliverCompletion = async (params: {
     id: string;
@@ -834,16 +891,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       clearCompletionRetryTimer(params.id);
       return false;
     }
-    const targetSessionId = await requesterLiveSessionId(params.requestingBotId, params.parentSessionId);
-    if (!targetSessionId) {
-      log.warn('skip Bot delegation completion: requester has no live task', {
-        delegationId: params.id,
-        requestingBotId: params.requestingBotId,
-        parentSessionId: params.parentSessionId,
-      });
-      scheduleCompletionRetry(params, attempt);
-      return false;
-    }
     const taskSubject = '后台任务';
     const statusLine =
       params.status === 'completed'
@@ -871,6 +918,82 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         clearCompletionRetryTimer(params.id);
         return false;
       }
+      // Preserve the result in the conversation that started this execution.
+      // Its requester need not still be live to show this receipt in history.
+      // A deleted parent's FK may have been cleared after this completion
+      // snapshot was taken. Recheck existence on every retry, then use the
+      // replacement canonical task if the original history is gone.
+      const originalParent = params.parentSessionId ? await getDbClient().drizzle
+        .select({ id: sessions.id }).from(sessions)
+        .where(eq(sessions.id, params.parentSessionId)).get() : undefined;
+      const initialReceiptSessionId = originalParent?.id
+        ?? await requesterLiveSessionId(params.requestingBotId, null);
+      if (!initialReceiptSessionId) {
+        if (!(await holdCompletionForStoppedRequester(params))) scheduleCompletionRetry(params, attempt);
+        return false;
+      }
+      let receiptSessionId: string = initialReceiptSessionId;
+      const child = params.childSessionId ? await getDbClient().drizzle
+        .select({ workingDir: sessions.workingDir, title: sessions.title }).from(sessions)
+        .where(eq(sessions.id, params.childSessionId)).get() : undefined;
+      // Durable, per-execution receipt: retries reuse the same message identity.
+      // Publish before waking the teammate so queued/hidden model work cannot hide results.
+      const receiptClientId = BOT_DELEGATION_CLIENT_ID.resultRun(params.id, params.runSequence);
+      const persistResultReceipt = async (sessionId: string): Promise<void> => persistTimelineMessage({
+        sessionId,
+        clientId: receiptClientId,
+        role: 'assistant',
+        content: params.resultSummary || params.objective,
+        agentMeta: {
+          botCollaboration: {
+            ...await collaborationMeta(params, 'delegation-result'),
+            parentSessionId: sessionId,
+            result: {
+              ...(child?.title?.trim() ? { title: child.title.trim() } : {}),
+              workingDir: child?.workingDir ?? '',
+              runSequence: params.runSequence,
+              status: sessionTaskViewStatus({ status: params.status, lastError: params.lastError ?? null }),
+              // A receipt is the in-app result, not a lock-screen preview. Keep
+              // image and link targets so a result with no prose remains usable.
+              text: params.resultSummary ?? '',
+              ...(params.lastError ? { error: params.lastError.slice(0, 4_000) } : {}),
+              artifacts: artifacts.filter((file) => file.status !== 'deleted')
+                .map((file) => ({ absolutePath: file.absolutePath })),
+            },
+          },
+        },
+      });
+      await persistResultReceipt(receiptSessionId);
+      const ensureResultReceipt = async (): Promise<boolean> => {
+        const existing = await getDbClient().drizzle.select({ id: messages.id })
+          .from(messages)
+          .where(and(eq(messages.sessionId, receiptSessionId), eq(messages.clientId, receiptClientId)))
+          .get();
+        if (existing) return true;
+        // The parent may have been physically removed after the first write.
+        // Rehome the immutable receipt before accepting its completion wake-up.
+        const replacement = await requesterLiveSessionId(params.requestingBotId, null);
+        if (!replacement) return false;
+        receiptSessionId = replacement;
+        await persistResultReceipt(replacement);
+        return true;
+      };
+      if (!(await completionStillPending())) return false;
+      if (!(await ensureResultReceipt())) {
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
+      const targetSessionId = await requesterLiveSessionId(params.requestingBotId, params.parentSessionId);
+      if (!targetSessionId && await holdCompletionForStoppedRequester(params)) return false;
+      if (!targetSessionId) {
+        log.warn('defer Bot delegation wake-up: requester has no live task', {
+          delegationId: params.id,
+          requestingBotId: params.requestingBotId,
+          parentSessionId: params.parentSessionId,
+        });
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
       const dispatched = await deps.dispatch({
         targetSessionId,
         message: completionMessage,
@@ -885,6 +1008,18 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         scheduleCompletionRetry(params, attempt);
         return false;
       }
+      if (!(await ensureResultReceipt())) {
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
+      // The target may have been deleted while dispatch was accepting the
+      // hidden message. A rehomed receipt alone does not wake its replacement.
+      // Leave this run pending so the stable completion ID is dispatched there.
+      const currentTargetSessionId = await requesterLiveSessionId(params.requestingBotId, params.parentSessionId);
+      if (currentTargetSessionId !== targetSessionId) {
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
       const [marked] = await getDbClient().drizzle
         .update(botDelegations)
         .set({ completionDeliveredAt: now(), updatedAt: now() })
@@ -896,8 +1031,14 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
             ? isNull(botDelegations.childSessionId)
             : eq(botDelegations.childSessionId, params.childSessionId),
           isNull(botDelegations.completionDeliveredAt),
+          sql`exists (select 1 from ${messages} where ${messages.sessionId} = ${receiptSessionId} and ${messages.clientId} = ${receiptClientId})`,
+          sql`exists (select 1 from ${sessions} where ${sessions.id} = ${targetSessionId} and ${sessions.status} = 'active')`,
         ))
         .returning({ id: botDelegations.id });
+      if (!marked && await completionStillPending()) {
+        scheduleCompletionRetry(params, attempt);
+        return false;
+      }
       clearCompletionRetryTimer(params.id);
       return !!marked;
     } catch (error) {
@@ -929,6 +1070,72 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     timer.unref?.();
     completionRetryTimers.set(params.id, timer);
   }
+
+  /**
+   * A paused, archived or deleted requester cannot take the wake-up until it is
+   * active again. Keep the run pending (the result card is already in its timeline)
+   * but stop the backoff loop: resuming the teammate or the next restore delivers it.
+   */
+  async function holdCompletionForStoppedRequester(
+    params: Parameters<typeof deliverCompletion>[0],
+  ): Promise<boolean> {
+    const [profile] = await getDbClient().drizzle.select({ status: botProfiles.status }).from(botProfiles)
+      .where(eq(botProfiles.id, params.requestingBotId)).limit(1);
+    if (profile && profile.status !== 'paused' && profile.status !== 'archived' && profile.status !== 'deleting') {
+      return false;
+    }
+    clearCompletionRetryTimer(params.id);
+    log.info('hold Bot Session task completion until its requester is active', {
+      delegationId: params.id,
+      requesterStatus: profile?.status ?? 'missing',
+    });
+    return true;
+  }
+
+  /**
+   * Deliver the completions a paused teammate missed; called when it resumes.
+   * Held completions have no backoff loop of their own, so a transient failure
+   * here retries with the same backoff instead of waiting for the next launch.
+   */
+  const resumeCompletionDelivery = async (botId: string, attempt = 0): Promise<void> => {
+    const pending = resumeRetryTimers.get(botId);
+    if (pending) {
+      clearTimeout(pending);
+      resumeRetryTimers.delete(botId);
+    }
+    try {
+      const db = getDbClient().drizzle;
+      const rows = await db.select({ id: botDelegations.id }).from(botDelegations).where(and(
+        eq(botDelegations.requestingBotId, botId),
+        inArray(botDelegations.status, ['completed', 'failed', 'cancelled', 'timed-out']),
+        isNull(botDelegations.completionDeliveredAt),
+      ));
+      for (const { id } of rows) {
+        await withTaskOperation(id, async () => {
+          const [current] = await db.select().from(botDelegations).where(eq(botDelegations.id, id)).limit(1);
+          if (!current || isActiveDelegation(current.status as DelegationStatus) || current.completionDeliveredAt !== null) return;
+          const row = await repairDelegationParent(current);
+          await deliverCompletion({
+            ...row,
+            status: row.status as Extract<DelegationStatus, 'completed' | 'failed' | 'cancelled' | 'timed-out'>,
+            artifacts: parseArtifacts(row.outputArtifactsJson),
+          });
+        });
+      }
+    } catch (error) {
+      log.warn('resume Bot task completion delivery failed; retrying', {
+        botId,
+        attempt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      const timer = setTimeout(() => {
+        resumeRetryTimers.delete(botId);
+        void resumeCompletionDelivery(botId, attempt + 1);
+      }, Math.min(MAX_RETRY_DELAY_MS, 1_000 * 2 ** Math.min(attempt, 6)));
+      timer.unref?.();
+      resumeRetryTimers.set(botId, timer);
+    }
+  };
 
   /**
    * 发起伙伴此刻活着的那条任务：优先冻结的父任务；若它已被恢复流程替换，改投
@@ -1074,7 +1281,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
             ${messages.agentMeta} IS NULL
             OR json_extract(${messages.agentMeta}, '$.botCollaboration.role') IS NULL
             OR json_extract(${messages.agentMeta}, '$.botCollaboration.role')
-               NOT IN ('delegation-request', 'interjection')
+               NOT IN ('delegation-request', 'interjection', 'delegation-result')
           )`,
         ),
       )
@@ -1132,7 +1339,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     timers.set(delegationId, timer);
   };
 
-  const resolveCaller = async (callerSessionId: string) => {
+  const resolveLinkedSession = async (callerSessionId: string) => {
     const db = getDbClient().drizzle;
     const [link] = await db
       .select({
@@ -1152,6 +1359,11 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .innerJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
       .where(eq(botSessionLinks.sessionId, callerSessionId))
       .limit(1);
+    return link ?? null;
+  };
+
+  const resolveCaller = async (callerSessionId: string) => {
+    const link = await resolveLinkedSession(callerSessionId);
     if (
       !link
       || link.sessionStatus !== 'active'
@@ -1205,29 +1417,42 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       && !pendingInteractions.get(row.id)?.decisionApplied;
     if (!stillPending()
       || (row.childSessionId && heldSessionIds.has(row.childSessionId))) return;
-    const requesterSessionId = await requesterLiveSessionId(
-      row.requestingBotId,
-      row.parentSessionId,
-    );
-    if (!stillPending() || (row.childSessionId && heldSessionIds.has(row.childSessionId))) return;
     const message = [
       `${UI_ACTION_TRIGGER_PREFIX}[任务需要你处理] task_id: ${row.id}`,
       `类型: ${pending.request.kind}`,
       pending.summary,
+      pending.request.kind === 'permission' ? `请求工具: ${pending.request.toolName}` : '',
       '你是用户的代理。能按用户已表达的意图安全决定，就用 `message_session_task` 直接回答；拿不准才用一句人话问用户。不要让用户去子任务窗口处理，也不要复述内部编号。',
-    ].join('\n\n');
-    const dispatched = requesterSessionId
-      ? await deps.dispatch({
-          targetSessionId: requesterSessionId,
-          message,
-          persistedContent: message,
-          clientId: `bot-delegation-interaction:${row.id}:${pending.requestId}`,
-        }).catch(() => null)
-      : null;
-    if (dispatched?.ok) {
-      clearInteractionRetryTimer(row.id);
-      return;
+    ].filter(Boolean).join('\n\n');
+    try {
+      const requesterSessionId = await requesterLiveSessionId(row.requestingBotId, row.parentSessionId);
+      if (!stillPending() || (row.childSessionId && heldSessionIds.has(row.childSessionId))) return;
+      const dispatched = requesterSessionId
+        ? await deps.dispatch({
+            targetSessionId: requesterSessionId,
+            message,
+            persistedContent: message,
+            clientId: `bot-delegation-interaction:${row.id}:${pending.requestId}`,
+          })
+        : null;
+      if (dispatched?.ok) {
+        // Acceptance in a parent that was deleted or archived during dispatch
+        // does not wake its replacement. The client ID is stable per target,
+        // so retrying is safe even if the first send was merely queued.
+        const currentTarget = await requesterLiveSessionId(row.requestingBotId, row.parentSessionId);
+        if (currentTarget === requesterSessionId || !stillPending()) {
+          clearInteractionRetryTimer(row.id);
+          return;
+        }
+      }
+    } catch (error) {
+      log.warn('Bot task interaction wake-up deferred', {
+        delegationId: row.id,
+        requestId: pending.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
+    if (!stillPending() || (row.childSessionId && heldSessionIds.has(row.childSessionId))) return;
     clearInteractionRetryTimer(row.id);
     const delay = Math.min(MAX_RETRY_DELAY_MS, 1_000 * 2 ** Math.min(attempt, 6));
     const timer = setTimeout(() => {
@@ -1356,13 +1581,16 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     id: string;
     objective: string;
     contextRefsJson: string;
+    permissionSnapshotJson: string;
+    runSequence: number;
   }): string => [
     'You are running an independent Cindy Session task started from the user\'s Bot task.',
     `Task ID: ${row.id}`,
-    `Objective:\n${row.objective}`,
+    taskObjectiveContext(row),
     parseStringArray(row.contextRefsJson).length
       ? `Context references:\n${parseStringArray(row.contextRefsJson).join('\n')}`
       : '',
+    readSessionTaskInput(row)?.followUp ? 'Continue from the existing task history. Apply the new follow-up without repeating completed actions.' : '',
     'Work independently in this task\'s own workspace.',
     'The parent Bot is acting for the user: permission prompts, questions and plan reviews you raise are answered there (or by the user directly). Ask through the normal tools when you genuinely need a decision; otherwise keep going.',
     'Use descriptive filenames instead of generic names such as index, final, or output. If HTML is only a preview or SVG is only a source file, also export a directly viewable PNG or PDF. In the final response, list only user-ready files under a Deliverables heading; list source, preview, and intermediate files separately, and say how the result was verified.',
@@ -1497,8 +1725,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const dispatched = await deps.dispatch({
       targetSessionId: row.childSessionId,
       message: buildDelegationPrompt(row),
-      persistedContent: row.objective,
+      persistedContent: readSessionTaskInput(row)?.followUp ?? row.objective,
       clientId,
+      // 子任务首条消息标出发起委派的父任务，接收方据此渲染可跳转的来源标签。
+      ...(row.parentSessionId ? { dispatcherSessionId: row.parentSessionId } : {}),
       onAccepted: async replayed => {
         if (replayed) { persistedReplay = true; return; }
         const acceptedAt = now();
@@ -1742,13 +1972,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const clientId = `bot-delegation-resume:${row.id}:${resumeEpoch}`;
     const message = [
       'The previous Session task turn was interrupted by a Cindy host restart.',
-      'Inspect the existing task history, continue the original objective, and return the final result.',
+      'Inspect the existing task history and accepted follow-ups, continue the unfinished work, and return the final result. Do not repeat completed tool actions; verify their recorded outcomes before continuing.',
       `Task ID: ${row.id}`,
-      `Objective:\n${row.objective}`,
+      taskObjectiveContext(row),
     ].join('\n\n');
     const recovered = await dispatchTrackedInput(row, {
       message,
-      persistedContent: row.objective,
+      persistedContent: 'Continue the interrupted Session task from its saved history without repeating completed actions.',
       clientId,
     });
     const dispatched = recovered.result;
@@ -1879,6 +2109,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     objective: string;
     contextRefs: string[];
     plan: Omit<BotDelegationPlanSnapshot, 'permission'>;
+    taskModelOverride?: BotModelRoute;
     useWorktree?: boolean;
     session: {
       workingDir: string;
@@ -1947,7 +2178,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       },
     };
     const createdAt = plan.createdAt;
-    const permissionSnapshotJson = JSON.stringify(plan);
+    const permissionSnapshotJson = JSON.stringify({ ...plan,
+      ...(input.taskModelOverride ? { taskModelOverride: input.taskModelOverride } : {}),
+      taskInput: { runSequence: 1, originalObjective: input.objective, followUp: null } satisfies SessionTaskInputSnapshot,
+    });
     const childRow = {
       ...sessionCreateToRow(
         childSessionId,
@@ -1955,7 +2189,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           workspaceKind: input.session.workspaceKind ?? 'dialogue',
           workingDir: input.session.workingDir,
           model: input.session.model,
-          // 后台任务沿用发起伙伴当前任务的模型、来源和执行档位。
+          // Persist the selected task route, including its source, Harness and tuning.
           ...(input.session.effort !== undefined ? { effort: input.session.effort } : {}),
           ...(input.session.fastMode !== undefined ? { fastMode: input.session.fastMode } : {}),
           ...(input.session.providerId !== undefined
@@ -2087,6 +2321,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const startSessionTask = async (
     input: SessionTaskInput,
   ): Promise<BotDelegationResult<{
+    modelRoute: BotModelRoute;
     delegationId: string;
     childSessionId: string;
     /**
@@ -2114,7 +2349,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const createdAt = now();
     const deadlineAt = createdAt + timeoutMs;
 
-    // 子任务承接发起伙伴的实际路由与权限档；一次性工具批准仍只属于原请求。
+    // No override inherits the live route (including fallback), never a stale creation snapshot.
     const [callerSession] = await db
       .select({
         model: sessions.model,
@@ -2130,6 +2365,29 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于任何伙伴' };
     }
     const callerRuntime = deps.readCallerRuntime?.(input.callerSessionId) ?? callerSession;
+    const [profile] = await db.select({ config: botProfileVersions.capabilitiesJson })
+      .from(botProfiles)
+      .innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id),
+        eq(botProfileVersions.version, botProfiles.currentVersion)))
+      .where(eq(botProfiles.id, caller.botId)).limit(1);
+    let taskModel: BotModelRoute | null;
+    try {
+      taskModel = input.modelSelection !== undefined
+        ? await (deps.resolveTaskModelSelection ?? resolveBotTaskModelSelection)(input.modelSelection)
+        : readBotTaskModelOverride(parseRecord(profile?.config).taskModelOverride);
+      if (input.modelSelection === undefined && taskModel && !await (deps.validateTaskModel ?? validateBotTaskModel)(taskModel)) {
+        return { ok: false, errorCode: 'TASK_MODEL_UNAVAILABLE', message: '任务模型不可用，请在伙伴模型设置中重新选择后重试' };
+      }
+    } catch {
+      return { ok: false, errorCode: 'TASK_MODEL_UNAVAILABLE', message: '无法确认任务模型或参数，请重新查询可用模型并检查伙伴模型设置后重试' };
+    }
+    const taskRuntime = taskModel ? {
+      agentKind: taskModel.harness === 'claude' ? 'cc' : taskModel.harness,
+      model: taskModel.model,
+      providerId: taskModel.providerId,
+      effort: taskModel.effort as typeof callerRuntime.effort,
+      fastMode: taskModel.fastMode,
+    } : callerRuntime;
     let workingDir = input.workingDir?.trim() || '';
     if (workingDir) {
       const isDirectory = (() => {
@@ -2167,17 +2425,18 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       objective,
       contextRefs: contextRefs.refs,
       plan,
+      taskModelOverride: taskModel ?? undefined,
       useWorktree: input.useWorktree,
       session: {
         workingDir,
         workspaceKind: input.workingDir?.trim() ? 'project' : 'dialogue',
-        model: callerRuntime.model,
-        ...(callerRuntime.effort ? { effort: callerRuntime.effort } : {}),
-        ...(callerRuntime.fastMode !== null && callerRuntime.fastMode !== undefined
-          ? { fastMode: callerRuntime.fastMode }
+        model: taskRuntime.model,
+        ...(taskRuntime.effort ? { effort: taskRuntime.effort } : {}),
+        ...(taskRuntime.fastMode !== null && taskRuntime.fastMode !== undefined
+          ? { fastMode: taskRuntime.fastMode }
           : {}),
-        ...(callerRuntime.providerId ? { providerId: callerRuntime.providerId } : {}),
-        agentKind: callerRuntime.agentKind as 'cc' | 'codex' | 'pi',
+        ...(taskRuntime.providerId ? { providerId: taskRuntime.providerId } : {}),
+        agentKind: taskRuntime.agentKind as 'cc' | 'codex' | 'pi',
         title: input.title?.trim() || objective.split('\n')[0]!.slice(0, 60),
         source: 'desktop',
       },
@@ -2189,14 +2448,27 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       childSessionId: started.childSessionId,
       status: started.status,
       deadlineAt: started.deadlineAt,
+      modelRoute: {
+        harness: taskRuntime.agentKind === 'codex' ? 'codex' : taskRuntime.agentKind === 'pi' ? 'pi' : 'claude',
+        model: taskRuntime.model,
+        providerId: taskRuntime.providerId ?? null,
+        effort: taskRuntime.effort ?? '',
+        fastMode: Boolean(taskRuntime.fastMode),
+      },
     };
   };
 
   const listDelegations = async (
     callerSessionId: string,
   ): Promise<BotDelegationResult<{ delegations: BotDelegationView[] }>> => {
-    const caller = await resolveCaller(callerSessionId);
-    if (!caller) {
+    // History cards need saved titles even when their chat or teammate is inactive.
+    // Only this read path accepts history links; task operations still use resolveCaller.
+    const caller = await resolveLinkedSession(callerSessionId);
+    if (!caller
+      || caller.sessionSource !== 'bot'
+      || (caller.sessionStatus !== 'active' && caller.sessionStatus !== 'archived')
+      || caller.profileStatus === 'deleting'
+      || !['canonical', 'history', 'delegation'].includes(caller.role)) {
       return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于任何伙伴' };
     }
     const db = getDbClient().drizzle;
@@ -2495,8 +2767,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const requesterName = await requesterDisplayName(caller.botId);
     const recovered = await dispatchTrackedInput(row, {
       dispatcherSessionId: callerSessionId,
+      // 前缀只给子任务里的 AI 看；界面上的来源由消息的来源标签（伙伴头像 + 名字）表达，
+      // 落库正文不再重复。
       message: [`[来自 ${requesterName} 的补充]`, trimmed].join('\n\n'),
-      persistedContent: [`[来自 ${requesterName} 的补充]`, trimmed].join('\n\n'),
+      persistedContent: trimmed,
       clientId: BOT_DELEGATION_CLIENT_ID.interjection(delegationId, row.runSequence > 1 ? `${row.runSequence}:${token}` : token),
     });
     const dispatched = recovered.result;
@@ -2624,12 +2898,31 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       completionTarget: { parentSessionId: callerSessionId },
       limits: { ...oldPlan.limits, deadlineAt },
     };
-    const continuationObjective = [
-      'Continue the same Session task with the requester’s follow-up.',
-      `Previous objective:\n${row.objective.slice(0, 5_000)}`,
-      row.resultSummary ? `Previous result:\n${row.resultSummary.slice(0, 4_000)}` : '',
-      `Requester follow-up:\n${trimmed}`,
-    ].filter(Boolean).join('\n\n').slice(0, MAX_OBJECTIVE_CHARS);
+    const previousInput = readSessionTaskInput(row);
+    let originalObjective = previousInput ? previousInput.originalObjective : row.objective;
+    if (!previousInput && row.runSequence > 1
+      && row.objective.startsWith('Continue the same Session task with the requester’s follow-up.\n\nPrevious objective:\n')) {
+      // Do not parse user text delimiters or rewrite old messages. Only an exact
+      // initial input in this same Session can recover a legacy wrapped goal.
+      const [initial] = await db.select({ content: messages.content }).from(messages)
+        .innerJoin(sessions, eq(sessions.id, messages.sessionId))
+        .where(and(eq(messages.sessionId, row.childSessionId),
+          eq(messages.clientId, `bot-delegation-start:${row.id}`), eq(messages.role, 'user'),
+          isNull(messages.rewindAt),
+          sql`(${sessions.clearedAt} IS NULL OR ${messages.createdAt} > ${sessions.clearedAt})`))
+        .limit(1);
+      originalObjective = initial?.content && initial.content.length <= MAX_OBJECTIVE_CHARS ? initial.content : null;
+    }
+    const taskInput: SessionTaskInputSnapshot = { runSequence: row.runSequence + 1, originalObjective, followUp: trimmed };
+    // Preserve unrecoverable legacy data, but never send its wrappers as a new goal.
+    const continuationObjective = originalObjective ?? row.objective;
+    const nextState: Record<string, unknown> = { ...nextPlan, taskInput, taskAcceptedInputIds: [] };
+    // Explicit new work may reopen a confirmed terminal run. Its old pause and
+    // cancel intents must not hold the new input; run-scoped receipts stay intact.
+    delete nextState.taskCancelRequested;
+    delete nextState.taskPause;
+    delete nextState.taskResume;
+    const nextSnapshot = JSON.stringify(nextState);
     const childSessionId = row.childSessionId;
     try {
       clearCompletionRetryTimer(row.id);
@@ -2642,7 +2935,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         parentSessionId: callerSessionId,
         childSessionId,
         objective: continuationObjective,
-        permissionSnapshotJson: JSON.stringify({ ...nextPlan, taskAcceptedInputIds: [] }),
+        permissionSnapshotJson: nextSnapshot,
         targetBotId: null,
         targetProfileVersion: null,
         session: {
@@ -2695,7 +2988,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         parentSessionId: callerSessionId,
         childSessionId,
         objective: continuationObjective,
-        permissionSnapshotJson: JSON.stringify({ ...nextPlan, taskAcceptedInputIds: [] }),
+        permissionSnapshotJson: nextSnapshot,
         createdAt: reopenedAt,
       };
       if (reopened.previousParentSessionId !== callerSessionId) {
@@ -2938,6 +3231,67 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       },
     };
   });
+
+  const inspectSessionTaskRoute = (callerSessionId: string, taskId: string) =>
+    withTaskOperation(taskId, async () => {
+      const found = await findOwnedSessionTask(callerSessionId, taskId);
+      if (!found.ok) return found;
+      if (!found.row.childSessionId || !deps.taskRoute) {
+        return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task model control is unavailable' };
+      }
+      const [child] = await getDbClient().drizzle.select({ status: sessions.status })
+        .from(sessions).where(eq(sessions.id, found.row.childSessionId)).limit(1);
+      if (child?.status !== 'active') {
+        return { ok: false as const, errorCode: 'CHILD_SESSION_INVALID', message: 'Task Session is no longer active' };
+      }
+      if (isActiveDelegation(found.row.status as DelegationStatus) || deps.taskControl?.isActive(found.row.childSessionId)) {
+        return { ok: false as const, errorCode: 'TASK_ACTIVE', message: 'Finish or stop the current execution before changing its model' };
+      }
+      const inspected = await deps.taskRoute.inspect(callerSessionId, found.row.childSessionId);
+      // An explicit task model has no backup chain. Freeze this at creation so a later
+      // profile edit cannot offer the primary chain to an already-created task.
+      if (inspected.ok && parseRecord(found.row.permissionSnapshotJson).taskModelOverride) {
+        return { ...inspected, next: null, selectionToken: null };
+      }
+      return inspected.ok ? { ...inspected, selectionToken: inspected.next
+        ? createHash('sha256').update(JSON.stringify([inspected.generation, inspected.next])).digest('hex')
+        : null } : inspected;
+    });
+
+  const advanceSessionTaskRoute = (callerSessionId: string, taskId: string, expectedGeneration: number, selectionToken: string) =>
+    withTaskOperation(taskId, async () => {
+      const found = await findOwnedSessionTask(callerSessionId, taskId);
+      if (!found.ok) return found;
+      const row = found.row;
+      if (!row.childSessionId || !deps.taskRoute) {
+        return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task model control is unavailable' };
+      }
+      const [child] = await getDbClient().drizzle.select({ status: sessions.status })
+        .from(sessions).where(eq(sessions.id, row.childSessionId)).limit(1);
+      if (child?.status !== 'active') {
+        return { ok: false as const, errorCode: 'CHILD_SESSION_INVALID', message: 'Task Session is no longer active' };
+      }
+      if (isActiveDelegation(row.status as DelegationStatus) || deps.taskControl?.isActive(row.childSessionId)) {
+        return { ok: false as const, errorCode: 'TASK_ACTIVE', message: 'Finish or stop the current execution before changing its model' };
+      }
+      const inspected = await deps.taskRoute.inspect(callerSessionId, row.childSessionId);
+      if (!inspected.ok) return inspected;
+      if (inspected.generation !== expectedGeneration) {
+        return { ok: false as const, errorCode: 'CONFLICT', message: 'Task model changed; inspect it again before retrying' };
+      }
+      if (!inspected.next || parseRecord(row.permissionSnapshotJson).taskModelOverride) {
+        return { ok: false as const, errorCode: 'NO_CONFIGURED_ROUTE', message: 'No further configured model route is available' };
+      }
+      const currentToken = createHash('sha256')
+        .update(JSON.stringify([inspected.generation, inspected.next])).digest('hex');
+      if (currentToken !== selectionToken) {
+        return { ok: false as const, errorCode: 'CONFLICT', message: 'Configured route changed; inspect it again before retrying' };
+      }
+      if (deps.taskControl?.isActive(row.childSessionId)) {
+        return { ok: false as const, errorCode: 'TASK_ACTIVE', message: 'Task execution restarted before its model could change' };
+      }
+      return deps.taskRoute.advance(row.childSessionId, expectedGeneration, inspected.next);
+    });
 
   const taskControlView = (row: DelegationRow) => {
     const pause = isActiveDelegation(row.status as DelegationStatus) ? readTaskPause(row) : null;
@@ -3647,6 +4001,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     interactionRetryTimers.clear();
     for (const timer of cleanupRetryTimers.values()) clearTimeout(timer);
     cleanupRetryTimers.clear();
+    for (const timer of resumeRetryTimers.values()) clearTimeout(timer);
+    resumeRetryTimers.clear();
   };
 
   return {
@@ -3664,6 +4020,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     },
     listDelegations,
     getSessionTask,
+    inspectSessionTaskRoute,
+    advanceSessionTaskRoute,
     restorePauseForSession,
     messageSessionTask,
     stopSessionTask,
@@ -3676,6 +4034,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     handleInteractionStart,
     handleInteractionEnd,
     restore,
+    resumeCompletionDelivery: (botId: string) => resumeCompletionDelivery(botId),
     dispose,
   };
 }

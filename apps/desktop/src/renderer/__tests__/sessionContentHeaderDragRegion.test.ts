@@ -10,10 +10,10 @@ const gitContextBadgeSource = readFileSync(resolve(ccAgentDir, 'GitContextBadge.
 describe('SessionContentHeader window drag region', () => {
   it('does not mark the whole injected session header as no-drag', () => {
     expect(sessionHeaderSource).toContain(
-      '<div className="flex w-full min-w-0 items-center gap-0.5 pl-1">',
+      '<div className="flex min-w-0 items-center gap-0.5 pl-1">',
     );
     expect(sessionHeaderSource).not.toMatch(
-      /<div\s+className="flex w-full min-w-0 items-center gap-0\.5 pl-1"[\s\S]{0,160}WebkitAppRegion: 'no-drag'/,
+      /<div\s+className="flex min-w-0 items-center gap-0\.5 pl-1"[\s\S]{0,160}WebkitAppRegion: 'no-drag'/,
     );
   });
 

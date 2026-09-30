@@ -440,6 +440,9 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
           if (sender.track?.kind !== 'video' || !command.settings) continue;
           const parameters = sender.getParameters();
           if (!parameters.encodings?.length) continue;
+          // Let WebRTC's congestion controller trade resolution AND frame rate
+          // below the user's ceilings without renegotiating the capture lease.
+          parameters.degradationPreference = 'balanced';
           for (const encoding of parameters.encodings) {
             encoding.maxFramerate = command.settings.fps;
             if (command.settings.bitrate) encoding.maxBitrate = command.settings.bitrate;

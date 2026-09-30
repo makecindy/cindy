@@ -269,7 +269,7 @@ export function StorageManagementCard() {
           <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.overviewDescription')}
           </p>
-          <div
+          <div id="settings-search-settings-about-storage-databaseSectionTitle"
             role="progressbar"
             aria-label={t('settings.about.storage.databaseSectionTitle')}
             aria-valuemin={0}
@@ -290,7 +290,7 @@ export function StorageManagementCard() {
             <strong className="block text-24 font-medium leading-none tracking-[-0.04em] text-[var(--settings-section-title)]">
               {totalBytes === null ? t('settings.about.storage.unknown') : formatBytes(totalBytes)}
             </strong>
-            <span className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
+            <span id="settings-search-settings-about-storage-mediaSectionTitle" className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.databaseUsage', {
                 size: databaseBytes === null
                   ? t('settings.about.storage.unknown')
@@ -424,7 +424,7 @@ export function StorageManagementCard() {
       >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
+            <span id="settings-search-settings-about-storage-cleanupLabel" className="text-13 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.cleanupLabel')}
             </span>
             <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -523,7 +523,7 @@ export function StorageManagementCard() {
       >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
+            <span id="settings-search-settings-about-storage-reconcileLabel" className="text-13 text-[var(--settings-section-sublabel)]">
               {t('settings.about.storage.reconcileLabel')}
             </span>
             <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -846,7 +846,7 @@ function DatabaseSlimmingSection({
     <div className="flex flex-col gap-3 px-[18px] py-4" aria-busy={scanLoading}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-storage-dbSlimmingLabel" className="text-13 text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.dbSlimmingLabel')}
           </span>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -1037,7 +1037,7 @@ function DatabaseSlimmingSection({
         onConfirm={handleSchedule}
       />
 
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+      <div id="settings-search-settings-about-storage-dbSizeWarningThresholdLabel" className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
         <FormField
           id="db-size-warning-threshold"
           label={t('settings.about.storage.dbSizeWarningThresholdLabel')}
@@ -1077,7 +1077,7 @@ function DatabaseSlimmingSection({
           htmlFor="db-size-warning-disabled"
           className="flex min-w-0 cursor-pointer flex-col gap-0.5"
         >
-          <span className="text-12 text-[var(--settings-section-sublabel)]">
+          <span id="settings-search-settings-about-storage-dbSizeWarningDisableLabel" className="text-12 text-[var(--settings-section-sublabel)]">
             {t('settings.about.storage.dbSizeWarningDisableLabel')}
           </span>
           <span className="text-11 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">

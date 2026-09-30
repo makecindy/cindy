@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   head: 'c'.repeat(40),
   tree: 'd'.repeat(40),
   dirty: false,
+  building: false,
+  manualClaimed: false,
   projected: undefined as CindyMakeMergeState | undefined,
   source: {
     status: 'ready',
@@ -118,6 +120,12 @@ vi.mock('../manager.js', () => ({
       }
     },
     isPreparingSource: () => false,
+    isPersonalBuildRunning: () => h.building,
+    claimManualSourceSync: () => {
+      if (h.building || h.manualClaimed) throw Object.assign(new Error('busy'), { code: 'busy' });
+      h.manualClaimed = true;
+      return () => { h.manualClaimed = false; };
+    },
     refreshSourceStatus: async () => {},
   },
 }));
@@ -213,6 +221,8 @@ beforeEach(() => {
   h.head = 'c'.repeat(40);
   h.tree = 'd'.repeat(40);
   h.dirty = false;
+  h.building = false;
+  h.manualClaimed = false;
   h.actualRollback = false;
   h.afterReadError = undefined;
   h.refs = new Map();
@@ -300,6 +310,17 @@ it.each(['dev', 'beta', 'release'] as const)(
     ]);
   },
 );
+it('rejects a manual source sync during a personal build without queuing it', async () => {
+  h.building = true;
+  await expect(actUpstreamMerge({ action: 'update' })).rejects.toThrow('busy');
+  expect(h.fetch).not.toHaveBeenCalled();
+  expect(h.projected).toBeUndefined();
+});
+it('releases the manual source reservation after an update', async () => {
+  h.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ sha: 'f'.repeat(40) })));
+  await actUpstreamMerge({ action: 'update' });
+  expect(h.manualClaimed).toBe(false);
+});
 it('uses the same fresh official sync before a task worktree is created', async () => {
   h.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ sha: 'f'.repeat(40) })));
   await syncSourceBeforeCindyMakeTask(new AbortController().signal);
@@ -317,6 +338,7 @@ it('stops task preparation when latest source cannot be fetched', async () => {
   });
 });
 it('publishes source sync as a distinct personal build step', async () => {
+  h.building = true;
   h.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ sha: 'f'.repeat(40) })));
   const publish = vi.fn(async () => {});
   await syncSourceBeforeCindyMakeBuild(new AbortController().signal, publish);

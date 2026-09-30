@@ -2,13 +2,22 @@ import { describeToolUse, parseToolName } from './toolUseDescriptor.js';
 
 /** Public execution facts only. Never send targets, arguments or reasoning to a model. */
 export const WORKING_PHASES = [
-  'thinking', 'replying', 'processing', 'reading-memory', 'saving-memory',
+  'thinking', 'replying', 'processing', 'compacting', 'reading-memory', 'saving-memory',
   'deleting-memory', 'organizing-memory',
   'reading-file', 'saving-file', 'searching', 'reading-web', 'searching-files',
   'testing', 'checking', 'reviewing-memory', 'reviewing-files', 'reviewing-sources',
   'reviewing-checks',
 ] as const;
 export type WorkingPhase = typeof WORKING_PHASES[number];
+export function readWorkingPhase(value: unknown): WorkingPhase | null {
+  return typeof value === 'string' && (WORKING_PHASES as readonly string[]).includes(value) ? value as WorkingPhase : null;
+}
+
+// These are runtime-owned status values, never assistant prose.
+export function isCompactingWorkingStatus(status: unknown): boolean {
+  return typeof status === 'string' && /^compacting(?: context)?(?:\.{3}|…)?$/i.test(status.trim());
+}
+
 export type PlainAgentPhase = WorkingPhase | 'waiting-input' | 'waiting-approval';
 
 export function publicToolPhase(toolName: unknown, input: unknown): WorkingPhase {
@@ -63,13 +72,13 @@ export function publicToolResultPhase(phase: WorkingPhase): WorkingPhase {
 }
 
 export function hasPublicWorkingSubject(phase: PlainAgentPhase): boolean {
-  return phase !== 'processing' && phase !== 'thinking' && phase !== 'replying'
+  return phase !== 'compacting' && phase !== 'processing' && phase !== 'thinking' && phase !== 'replying'
     && phase !== 'waiting-input' && phase !== 'waiting-approval';
 }
 
 export const WORKING_PHASE_KEYS: Record<WorkingPhase, string> = {
   thinking: 'ccAgent.agentStatus.thinking', replying: 'ccAgent.agentStatus.replying',
-  processing: 'ccAgent.agentStatus.processing',
+  processing: 'ccAgent.agentStatus.processing', compacting: 'ccAgent.agentStatus.organizingConversation',
   'reading-memory': 'ccAgent.agentStatus.readingMemory', 'saving-memory': 'ccAgent.agentStatus.savingMemory',
   'deleting-memory': 'ccAgent.agentStatus.deletingMemory', 'organizing-memory': 'ccAgent.agentStatus.organizingMemory',
   'reading-file': 'ccAgent.agentStatus.readingFile', 'saving-file': 'ccAgent.agentStatus.savingFile',

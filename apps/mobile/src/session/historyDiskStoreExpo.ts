@@ -2,11 +2,11 @@ import { Directory, File, Paths } from 'expo-file-system';
 import type { HistoryDiskIO } from './historyDiskStore';
 
 /** Discardable private app cache: survives restarts, but the OS may reclaim low-storage caches. */
-export function createHistoryDiskIO(): HistoryDiskIO {
-  const directory = new Directory(Paths.cache, 'history-views-v1');
+export function createHistoryDiskIO(directoryName = 'history-views-v1'): HistoryDiskIO {
+  const directory = new Directory(Paths.cache, directoryName);
   return {
     async files() {
-      directory.create({ intermediates: true, idempotent: true });
+      if (!directory.exists) return [];
       return directory.list().filter(item => item instanceof File).map(item => item.name);
     },
     async read(name) {

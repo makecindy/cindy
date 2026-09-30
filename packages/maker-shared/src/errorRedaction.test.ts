@@ -5,9 +5,23 @@ import {
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
   isCindyGatewayProxyTokenInvalidError,
   isGatewayProxyTokenInvalidError,
+  isResponsesLiteParallelToolCallsError,
   matchesDeterministicUsageExhaustionText,
   redactSensitiveText,
+  parseAgentErrorCode,
 } from './errorRedaction.js';
+
+describe('Responses Lite request error classification', () => {
+  it('recognizes the upstream error inside a JSON envelope', () => {
+    expect(isResponsesLiteParallelToolCallsError(JSON.stringify({ error: {
+      message: 'X-OpenAI-Internal-Codex-Responses-Lite requires `parallel_tool_calls` to be false.',
+      type: 'invalid_request_error', param: 'parallel_tool_calls', code: 'unsupported_value',
+    } }))).toBe(true);
+  });
+  it.each(['Invalid API key', 'Unsupported effort value', 'parallel_tool_calls is unsupported', ''])('does not misclassify unrelated errors: %s', message => {
+    expect(isResponsesLiteParallelToolCallsError(message)).toBe(false);
+  });
+});
 
 describe('matchesDeterministicUsageExhaustionText', () => {
   it.each([
@@ -241,5 +255,22 @@ describe('isGatewayProxyTokenInvalidError', () => {
     expect(isCindyGatewayProxyTokenInvalidError({ message, providerId: 'custom-litellm' })).toBe(
       false,
     );
+  });
+});
+
+
+describe('agent error envelopes shared by desktop and mobile', () => {
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE'])(
+    'parses %s directly and inside an IPC error', code => {
+      for (const prefix of ['', "Error invoking remote method 'maker:send': Error: "]) {
+        expect(parseAgentErrorCode(`${prefix}[${code}] first line\nsecond line`)).toEqual({ code, fallback: 'first line\nsecond line' });
+      }
+    },
+  );
+  it('preserves the legacy unknown-REMOTE fallback without treating arbitrary bracket text as a code', () => {
+    expect(parseAgentErrorCode('[REMOTE_FUTURE] diagnostic')).toEqual({ code: 'REMOTE_FUTURE', fallback: 'diagnostic' });
+    expect(parseAgentErrorCode('[REMOTE_FUTURE]')).toEqual({ code: 'REMOTE_FUTURE', fallback: '[REMOTE_FUTURE]' });
+    expect(parseAgentErrorCode('[CUSTOM_ERROR] diagnostic')).toBeNull();
+    expect(parseAgentErrorCode('prose containing [REMOTE_FUTURE] diagnostic')).toBeNull();
   });
 });

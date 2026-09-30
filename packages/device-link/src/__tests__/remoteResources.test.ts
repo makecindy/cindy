@@ -64,6 +64,18 @@ describe('remote resource request parsing', () => {
       .toBeNull();
   });
 
+  it('passes a bounded optional search query through resource reads', () => {
+    const ref = { collectionId: 'teammates', kind: 'bot', id: 'settings:bot-1/memory' };
+    expect(parseRemoteResourceGetRequest({ client, ref, query: '咖啡' })).toEqual({
+      client: { protocolVersion: 1, primitives: ['markdown', 'action'], locale: 'zh-CN' }, ref, query: '咖啡',
+    });
+    // Old controllers never send it; an empty query is the same as no filter.
+    expect(parseRemoteResourceGetRequest({ client, ref })).not.toHaveProperty('query');
+    expect(parseRemoteResourceGetRequest({ client, ref, query: '' })).not.toHaveProperty('query');
+    expect(parseRemoteResourceGetRequest({ client, ref, query: 42 })).toBeNull();
+    expect(parseRemoteResourceGetRequest({ client, ref, query: 'x'.repeat(1_001) })).toBeNull();
+  });
+
   it('validates generic invalidation payload scope', () => {
     expect(parseRemoteResourceChangedPayload({
       collectionId: 'teammates',

@@ -39,10 +39,11 @@ describe('unsupported text preview guard', () => {
   it('guards all TextLightbox entry points that can receive file chips', () => {
     const files = [
       'components/chat/UserMessage.tsx',
+      'components/chat/UserAttachmentChip.tsx',
       'components/chat/MarkdownRenderer.tsx',
       'components/chat/ToolCallCard.tsx',
       'components/chat/AgentActionRow.tsx',
-      'components/new-chat/ChatInput.tsx',
+      'components/new-chat/ComposerAttachments.tsx',
     ];
 
     for (const file of files) {

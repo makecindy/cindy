@@ -81,11 +81,11 @@ describe('applyRuntimeSelectionAxesWithRecovery', () => {
     expect(order).toEqual(['effort', 'fast', 'commit']);
   });
 
-  it('applies only the explicitly requested Fast axis', async () => {
+  it.each(['codex', 'pi'] as const)('applies only the explicitly requested Fast axis for %s', async agentKind => {
     const setEffort = vi.fn(async () => {});
     const setFastMode = vi.fn(async () => {});
     await applyRuntimeSelectionAxesWithRecovery({
-      session: { agentKind: 'codex', setEffort, setFastMode },
+      session: { agentKind, setEffort, setFastMode },
       effort: 'high',
       fastMode: true,
       applyEffort: false,

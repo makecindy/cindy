@@ -306,7 +306,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                   label={t("models.options.fastMode")}
                   isOn={config.fast}
                   onIsOnChange={(fast) => options.onChange({ ...config, fast })}
-                  modifiers={[disabled(p.busy)]}
+                  modifiers={[disabled(p.busy), tint(colors.inputCaret)]}
                   testID={`${p.testID}.fast`}
                 />
               </HStack>

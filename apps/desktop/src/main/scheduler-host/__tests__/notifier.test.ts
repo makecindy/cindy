@@ -4,7 +4,7 @@ import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import type { FeishuIM } from '@cindy/im';
 
 import { showDesktopSessionEvent } from '../../notificationService';
-import { sendMobileSessionNotify } from '../../device-link';
+import { getMobileNotifyGeneration, sendMobileSessionNotify } from '../../device-link';
 import { DesktopNotifier } from '../notifier';
 
 vi.mock('../../notificationService', () => ({
@@ -35,6 +35,7 @@ function run(status: ScheduleRun['status']): ScheduleRun {
 }
 
 function createNotifier(opts?: {
+  hasUnrecoveredMatchingFailure?: (run: ScheduleRun) => Promise<boolean>;
   sendFeishuSessionNotification?: (sessionId: string, text: string) => Promise<void>;
   sendMarkdownText?: ReturnType<typeof vi.fn>;
   shouldNotifyDesktop?: () => boolean;
@@ -50,6 +51,7 @@ function createNotifier(opts?: {
   const warn = vi.fn();
   const publishMarkdown = opts?.publishMarkdown ?? vi.fn(async () => undefined);
   const notifier = new DesktopNotifier({
+    hasUnrecoveredMatchingFailure: opts?.hasUnrecoveredMatchingFailure,
     sendFeishuSessionNotification: opts?.sendFeishuSessionNotification,
     getMainWindow: () => null as BrowserWindow | null,
     feishuIm: {
@@ -275,4 +277,35 @@ describe('Feishu notification origin receipt', () => {
     expect(sendMarkdownText).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalled();
   });
+});
+
+
+it('keeps repeated quiet failures in history without repeating personal or external notifications', async () => {
+  vi.clearAllMocks();
+  const { notifier, sendMarkdownText, publishMarkdown } = createNotifier({ hasUnrecoveredMatchingFailure: async () => true });
+  await notifier.notify({ ...schedule, silentWhenIdle: true, notify: { desktop: true, feishu: true, wecomGroup: true } }, { ...run('failed'), errorMsg: 'check failed' });
+  expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+  expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+  expect(sendMarkdownText).not.toHaveBeenCalled();
+  expect(publishMarkdown).not.toHaveBeenCalled();
+  await notifier.notify({ ...schedule, silentWhenIdle: false }, run('success'));
+  expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
+});
+
+it('still reports a failure if its dedup history cannot be read', async () => {
+  vi.clearAllMocks();
+  const { notifier } = createNotifier({ hasUnrecoveredMatchingFailure: async () => { throw new Error('unavailable'); } });
+  await notifier.notify({ ...schedule, silentWhenIdle: true }, run('failed'));
+  expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
+});
+
+
+it('does not notify a replacement account after the failure history read crosses logout', async () => {
+  vi.clearAllMocks();
+  vi.mocked(getMobileNotifyGeneration).mockReturnValueOnce(7).mockReturnValueOnce(8);
+  const { notifier, sendMarkdownText } = createNotifier({ hasUnrecoveredMatchingFailure: async () => false });
+  await notifier.notify({ ...schedule, silentWhenIdle: true, notify: { desktop: true, feishu: true } }, run('failed'));
+  expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+  expect(sendMarkdownText).not.toHaveBeenCalled();
+  expect(sendMobileSessionNotify).not.toHaveBeenCalled();
 });

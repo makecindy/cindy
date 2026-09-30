@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Linking, Platform } from 'react-native';
+import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
 import { i18n } from '@/i18n';
 import {
@@ -17,6 +18,7 @@ import {
 } from '@/config/env';
 import { fetchLatestRelease } from './fetchLatestRelease';
 import { androidInstaller } from './androidInstaller';
+import { isGooglePlayInstallation } from './androidInstallSource';
 import {
   evaluateBundleUpdate,
   preferredInstallUrl,
@@ -56,8 +58,23 @@ async function openInstall(url: string): Promise<void> {
   }
 }
 
+async function openGooglePlay(packageName: string): Promise<void> {
+  const id = encodeURIComponent(packageName);
+  try {
+    await Linking.openURL(`market://details?id=${id}`);
+  } catch {
+    await openInstall(`https://play.google.com/store/apps/details?id=${id}`);
+  }
+}
+
 /** 普通更新与强更共用的安装出口；旧 Android 包及网页地址保留浏览器回退。 */
 export function openBundleInstall(target: { version?: string; itmsUrl?: string; installUrl?: string }): void {
+  if (Platform.OS === 'android' && isGooglePlayInstallation()) {
+    // A stale forced-update target must never hand a Play install to the APK installer.
+    const packageName = Application.applicationId;
+    if (packageName) void openGooglePlay(packageName);
+    return;
+  }
   if (Platform.OS === 'android' && target.version && target.installUrl
     && androidInstaller.start({ version: target.version, installUrl: target.installUrl })) return;
   const url = preferredInstallUrl(target);
@@ -104,6 +121,7 @@ export function useBundleUpdatePrompt({
     isSelfHosted: IS_OTA_SELFHOST,
     isReviewMode: REVIEW_MODE,
     isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+    isGooglePlayInstallation: isGooglePlayInstallation(),
   });
   const inFlightChannels = useRef(new Set<UpdateChannel>());
   const channelEpochRef = useRef(0);

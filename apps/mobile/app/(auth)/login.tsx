@@ -277,7 +277,7 @@ export function LoginScreen({
   const [ssoVerificationCode, setSsoVerificationCode] = useState('');
   const [bindingContact, setBindingContact] = useState('');
   const [bindingCode, setBindingCode] = useState('');
-  // 42s 重发倒计时(Step 3a 契约):绝对 deadline,进入 verification-code 步骤
+  // 60s 重发倒计时(Step 3a 契约):绝对 deadline,进入 verification-code 步骤
   // (= request-code 成功返回)起算;重发成功重置、失败保持;离开步骤清空。
   const [resendDeadline, setResendDeadline] = useState<number | null>(null);
   const [accountDeletionStatus, setAccountDeletionStatus] =
@@ -1357,6 +1357,11 @@ export function LoginScreen({
   const captchaChallengeOpen = auth.captchaChallenge !== null;
   const deletionBubbleA11yHidden =
     consentDialogOpen || realmConsentOpen || captchaChallengeOpen || handoffPhase !== 'done';
+  // Stack.Screen applies options from a layout effect; keep its object identity
+  // stable while this screen rerenders for auth or device-link state updates.
+  const loginStatusBarOptions = useMemo(() => ({
+    statusBarStyle: stageTheme === 'dark' ? 'light' : 'dark',
+  } as const), [stageTheme]);
 
   return (
     <MobileLoginHandoffStage
@@ -1368,11 +1373,7 @@ export function LoginScreen({
       {!additionalAccount ? <SystemNavigationBack available={!!backAction} disabled={auth.isBusy}
         label={loginText('back')} onPress={() => backAction?.()} /> : null}
       {Platform.OS === 'ios' ? (
-        <Stack.Screen
-          options={{
-            statusBarStyle: stageTheme === 'dark' ? 'light' : 'dark',
-          }}
-        />
+        <Stack.Screen options={loginStatusBarOptions} />
       ) : null}
 
       {additionalAccount && onClose ? (

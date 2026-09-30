@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ files: new Map<string, string>(), failMove: false, failWrite: false }));
+const createDirectory = vi.hoisted(() => vi.fn());
 vi.mock('expo-file-system', () => {
   class Directory {
     uri: string;
     constructor(parent: string, name: string) { this.uri = `${parent}/${name}`; }
-    create() {}
+    create() { createDirectory(); }
+    get exists() { return [...state.files.keys()].some(key => key.startsWith(`${this.uri}/`)); }
+    list() { return [...state.files.keys()].filter(key => key.startsWith(`${this.uri}/`)).map(key => new File(key)); }
   }
   class File {
     uri: string;
@@ -13,6 +16,7 @@ vi.mock('expo-file-system', () => {
       this.uri = name ? `${typeof parent === 'string' ? parent : parent.uri}/${name}` : String(parent);
     }
     get exists() { return state.files.has(this.uri); }
+    get name() { return this.uri.split('/').at(-1)!; }
     text() { return Promise.resolve(state.files.get(this.uri)); }
     delete() { state.files.delete(this.uri); }
     moveSync(destination: File) {
@@ -33,8 +37,15 @@ vi.mock('expo-file-system/legacy', () => ({
 }));
 import { createHistoryDiskIO } from '../session/historyDiskStoreExpo';
 
-beforeEach(() => { state.files.clear(); state.failMove = false; state.failWrite = false; });
+beforeEach(() => { state.files.clear(); state.failMove = false; state.failWrite = false; createDirectory.mockClear(); });
 describe('Expo history disk IO', () => {
+  it('enumerates missing and existing cache directories without creating anything', async () => {
+    const io = createHistoryDiskIO('session-messages-v1');
+    expect(await io.files()).toEqual([]);
+    state.files.set('file:///cache/session-messages-v1/a.json', 'old');
+    expect(await io.files()).toEqual(['a.json']);
+    expect(createDirectory).not.toHaveBeenCalled();
+  });
   it('keeps committed snapshots and the index after moving the staging file', async () => {
     const io = createHistoryDiskIO();
     await io.write('view-a.json', 'first');

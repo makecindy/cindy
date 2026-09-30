@@ -18,6 +18,7 @@ import type {
   RemoteTextFilePreviewResult,
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
 export const VISUAL_MOCK_DEVICE_ID = 'cindy-visual-mock-mac';
@@ -703,7 +704,7 @@ function handleVisualMockFileBrowser(input: unknown): unknown {
       elapsedMs: 8,
     } satisfies FileBrowserListAllFilesResult;
   }
-  if (op === 'readFile') return visualMockReadFile();
+  if (op === 'readFile') return visualMockReadFile(input);
   if (op === 'searchCollect') {
     return {
       matches: [
@@ -754,13 +755,17 @@ function visualMockFileBrowserEntries() {
   ];
 }
 
-function visualMockReadFile(): FileBrowserReadFileResult {
+function visualMockReadFile(input: unknown): FileBrowserReadFileResult {
+  const relPath = input && typeof input === 'object' && 'relPath' in input
+    ? String(input.relPath) : 'visual-report.md';
+  const content = relPath === 'README.md' ? markdownPreviewFixture
+    : '# Next file\n\nSwipe right to return to the Markdown reading fixture.';
   return {
     ok: true,
     data: {
-      relPath: 'visual-report.md',
-      content: '# Visual mock\n\nThis file preview is served by the mobile dev-only visual mock.',
-      size: 78,
+      relPath,
+      content,
+      size: content.length,
       mtimeMs: NOW,
     },
   };

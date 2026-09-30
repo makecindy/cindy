@@ -34,3 +34,25 @@ export function getSessionExternalNotificationText(title: string, kind: SessionE
   // 等 JavaScript replacement token 不能被解释成模板控制符。
   return t(EXTERNAL_KEY_BY_KIND[kind]).replaceAll('{{title}}', () => title);
 }
+
+export function getTeammateNotificationFallback(): string {
+  return t('settings.notifications.sessionEvent.newReply');
+}
+
+/** Phone push body for a 分工 step that stopped for the user (bot-group-chat.md §8.3). */
+export function getBotGroupStepNotificationBody(event: {
+  botName: string;
+  task: string;
+  outcome: 'done' | 'failed';
+  planDone: boolean;
+}): string {
+  const key = event.outcome === 'failed'
+    ? 'settings.notifications.botGroupPlan.stepFailed'
+    : event.planDone
+      ? 'settings.notifications.botGroupPlan.planDone'
+      : 'settings.notifications.botGroupPlan.stepDone';
+  // Function replacements: names and tasks are data, never replacement tokens.
+  return t(key)
+    .replaceAll('{{name}}', () => event.botName)
+    .replaceAll('{{task}}', () => event.task);
+}

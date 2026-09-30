@@ -7,25 +7,21 @@
  */
 
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
-import { scryptSync } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { readSubscriptionAccountUsage, triggerSubscriptionAccountUsage, syncSubscriptionAccountUsage, setSubscriptionAccountUsageBroadcaster } from '../usage/subscriptionAccountUsage.js';
 import { broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { subscriptionAccountKind } from '../maker-host/subscription-account-auth.js';
-import path from 'node:path';
-
-import type { Maker } from '@cindy/maker-core';
+import { setClaudeRateLimitInfoListener, type Maker } from '@cindy/maker-core';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { getCachedBinaryStatus } from '../agent-binaries/index.js';
 import {
   readClaudeAccountUsageSnapshot,
   triggerClaudeAccountUsageRefresh,
 } from '../usage/claudeAccountUsage.js';
 import {
-  ClaudeSubscriptionUsageRateLimitedError,
-  ClaudeSubscriptionUsageUnauthorizedError,
-  fetchClaudeSubscriptionUsageSnapshot,
-} from '../usage/claudeSubscriptionUsage.js';
+  parseClaudeOAuthUsageResponse,
+  parseClaudeSdkRateLimitInfo,
+} from '../../shared/claudeSubscriptionUsage.js';
 import { createClaudeSubscriptionUsageReader } from '../usage/claudeSubscriptionUsageRefresh.js';
 import {
   XaiSubscriptionUsageRateLimitedError,
@@ -40,7 +36,24 @@ import {
   CodexWebUsageUnauthorizedError,
   fetchCodexWebUsageSnapshot,
 } from '../usage/codexWebUsage.js';
+import { app } from 'electron';
+import { requireAppCapability } from '../appCapabilities.js';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
+import { readUsageDeviceRows } from '../usage/usageDeviceRows.js';
+import {
+  configurePeerUsageSync,
+  peerUsageCacheFilePath,
+  withPeerUsageAccessGate,
+  readPeerUsageCacheFile,
+  writePeerUsageCacheFile,
+} from '../usage/peerUsageSync.js';
+import { getAllSpendDays, localDayKey } from '../localDb/dailySpend.js';
+import { getModelUsageSince } from '../localDb/dailyModelUsage.js';
+import { getSessionUsageSince } from '../localDb/dailySessionUsage.js';
+import { readRemoteBotSessionAccessBatch } from '../localDb/ipc/botRemoteSessionAccess.js';
+import { getCurrentDbClientUserId } from '../localDb/client/current.js';
+import { getSelfDeviceId, remoteBackgroundInvoke } from '../device-link/index.js';
+import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import {
   clearClaudeSubscriptionUsageSnapshot,
   clearCodexAccountUsageSnapshot,
@@ -56,10 +69,11 @@ import {
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
 import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
-import { readClaudeAiOAuth } from '../maker-host/claude-credentials-store.js';
+import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
+import { peekClaudeCliLoginStatus } from '../maker-host/claude-native-cli-status.js';
+import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.js';
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
-import { setClaudeRateLimitHeadersListener } from '../maker-host/claude-rate-limit-headers-observer.js';
 import { createCodexRateLimitResetService } from '../usage/codexRateLimitReset.js';
 
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
@@ -68,96 +82,38 @@ import { registerMakerUsageHandlers } from './usageHandlers.js';
 const log = createLogger('maker-ipc:usage');
 
 /**
- * best-effort 提取应用分发的 claude 二进制版本 (oauth/usage 的 User-Agent 用) ——
- * prod 安装路径形如 userData/<installSubdir>/<version>/<binary>, 父目录名即版本;
- * dev LFS bundle 路径提不出来时返回 null, fetch 层用 pin 常量兜底。
+ * 当前 Claude 账号的快照归属指纹(CLI 登录邮箱的 sha256 截断,不含邮箱原文)。同机在
+ * CLI 里换号时据此丢弃上一个账号的持久化快照。未登录 / CLI 没报邮箱时为 null。
  */
-function readClaudeCodeVersionBestEffort(): string | null {
-  try {
-    const status = getCachedBinaryStatus('claude-code');
-    if (!status.binaryPath) return null;
-    const versionDir = path.basename(path.dirname(status.binaryPath));
-    return /^\d+\.\d+/.test(versionDir) ? versionDir : null;
-  } catch {
-    return null;
-  }
+function currentClaudeAccountFingerprint(): string | null {
+  const email = peekClaudeCliLoginStatus()?.email;
+  return email ? createHash('sha256').update(`claude-usage:${email}`).digest('hex').slice(0, 16) : null;
 }
-
-/** scrypt 应用盐 —— 指纹只用于同机快照归属比对, 盐固定即可(不跨机、不防离线爆破)。 */
-const CLAUDE_TOKEN_FINGERPRINT_SALT = 'xdt-claude-subscription-usage-fp-v1';
-
-// token → 指纹的单值缓存: scrypt 是有意的高成本哈希(CodeQL js/insufficient-password-hash
-// 对 token 素材要求 computationally expensive), 缓存后仅换号时重算一次, 常规刷新零开销。
-let _lastFingerprintToken: string | null = null;
-let _lastFingerprint: string | null = null;
-
-// 「当前凭证」内存缓存 —— 给 headers listener 用(它在 proxy 响应热路径的
-// fire-and-forget 回调里, 不允许任何同步 keychain 读 / scrypt 计算)。由
-// readClaudeCredentialsInfo(reader 的后台流程 / IPC 读, 本来就要读凭证库)顺手
-// 刷新; listener 只做内存字符串比较。token 原文用于把 headers 快照绑定到发出
-// 请求的账号: 换号 / 登出瞬间的 in-flight 尾巴响应(请求 token ≠ 当前凭证)直接
-// 丢弃, 不会被错误打上最新账号的指纹落库。
-let _currentClaudeToken: string | null = null;
-let _currentClaudeFingerprint: string | null = null;
-// 是否已读过凭证库 —— 区分「冷启动缓存未就位」(允许落无指纹快照)与「明确登出」
-// (token 缓存为 null 是事实, 登出后的 in-flight 尾巴响应必须丢弃)。
-let _claudeCredentialsKnown = false;
 
 /**
- * OAuth token → 快照归属指纹(scrypt 截 16 hex, 不含 token 原文)——
- * 端点刷新 record 时由 reader 附到快照上, read 换号时据此判定持久化快照过期
- * (同机换账号防串号)。只在 reader 的后台刷新流程调用, 不在任何请求热路径上。
+ * 内置 Claude 订阅的余量 reader。订阅会话由内置 CLI 用自己的登录直连 Anthropic,Cindy
+ * 不持有订阅 token。完整余量(5h / 周 / 分模型周限 / extra usage)由 CLI 的 `get_usage`
+ * 控制请求查询(CLI 自己发请求,节流 / 退避在 reader 内部);会话里 CLI 上报的 SDK
+ * `rate_limit_event`(见 registerMakerUsageIpc 的 setClaudeRateLimitInfoListener)按
+ * headers 源口径增量合并,补 turn 内的实时性。
  */
-function fingerprintClaudeToken(token: string): string {
-  if (token === _lastFingerprintToken && _lastFingerprint) return _lastFingerprint;
-  const fingerprint = scryptSync(token, CLAUDE_TOKEN_FINGERPRINT_SALT, 32)
-    .toString('hex')
-    .slice(0, 16);
-  _lastFingerprintToken = token;
-  _lastFingerprint = fingerprint;
-  return fingerprint;
-}
-
-/** 读订阅凭证 + 顺手刷新「当前凭证」内存缓存(headers listener 消费)。 */
-function readClaudeCredentialsInfo(): {
-  accessToken: string;
-  subscriptionType: string | null;
-} | null {
-  const oauth = readClaudeAiOAuth();
-  _claudeCredentialsKnown = true;
-  if (!oauth) {
-    _currentClaudeToken = null;
-    _currentClaudeFingerprint = null;
-    return null;
-  }
-  _currentClaudeToken = oauth.accessToken;
-  _currentClaudeFingerprint = fingerprintClaudeToken(oauth.accessToken);
-  return {
-    accessToken: oauth.accessToken,
-    subscriptionType: oauth.subscriptionType ?? null,
-  };
-}
-
 const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
-  readCredentials: readClaudeCredentialsInfo,
-  fetchSnapshot: (credentials) =>
-    fetchClaudeSubscriptionUsageSnapshot({
-      accessToken: credentials.accessToken,
-      subscriptionType: credentials.subscriptionType,
-      claudeCodeVersion: readClaudeCodeVersionBestEffort(),
-    }),
+  readAccount: () => (hasClaudeNativeLogin() ? currentClaudeAccountFingerprint() ?? '' : null),
+  fetchSnapshot: async () => {
+    const usage = await readClaudeCliPlanUsage();
+    if (!usage) return 'empty';
+    const snapshot = parseClaudeOAuthUsageResponse(usage.rateLimits, Date.now());
+    // get_usage 是 Experimental:解析不出窗口按形状变化处理,抛错退避并保留已有缓存。
+    if (!snapshot) throw new Error('claude get_usage returned unrecognized rate_limits');
+    const subscriptionType = usage.subscriptionType ?? peekClaudeCliLoginStatus()?.subscriptionType;
+    return subscriptionType ? { ...snapshot, subscriptionType } : snapshot;
+  },
   recordSnapshot: recordClaudeSubscriptionUsageSnapshot,
   clearSnapshot: clearClaudeSubscriptionUsageSnapshot,
   readCachedSnapshot: readClaudeSubscriptionUsageSnapshot,
-  fingerprintToken: fingerprintClaudeToken,
   now: () => Date.now(),
-  isUnauthorizedError: (err) => err instanceof ClaudeSubscriptionUsageUnauthorizedError,
-  isRateLimitedError: (err) => err instanceof ClaudeSubscriptionUsageRateLimitedError,
   onRefreshError: (err) => {
-    log.warn(
-      'claude subscription usage refresh failed:',
-      err instanceof Error ? err.message : String(err),
-    );
+    log.warn('claude subscription usage refresh failed:', err instanceof Error ? err.message : String(err));
   },
 });
 
@@ -171,11 +127,10 @@ export function triggerClaudeSubscriptionUsageRefresh(providerId?: string): void
 }
 
 /**
- * Claude 订阅凭证变化(OAuth 登录 / 登出 / 换号)后的余量同步钩子(bootstrap 的
- * CLAUDE_OAUTH_LOGIN / LOGOUT handler 消费)。复用 read() 的完整语义:
- *   - 登出 → 凭证消失, 清快照并广播 null(chip 立即回占位态);
- *   - 换号 → 指纹校验清掉旧账号快照 + 触发新账号端点刷新;
- *   - 登录 → 刷新指纹缓存 + 触发端点刷新。
+ * Claude 订阅登录态变化(CLI 登录 / 登出 / 换号 / Cindy 断开)后的余量同步钩子(bootstrap
+ * 的 CLAUDE_OAUTH_LOGIN / LOGOUT handler 与 CLI 登录态监听消费):
+ *   - 未连接 → 清快照并广播 null(chip 立即回占位态);
+ *   - 登录 / 换号 → 指纹校验清掉旧账号快照,并经 CLI `get_usage` 拉取新账号余量。
  * renderer 不需要感知 auth 事件, 全靠既有 usage:claude-subscription-changed push。
  */
 export function syncClaudeSubscriptionUsageForAuthChange(providerId?: string): void {
@@ -363,37 +318,51 @@ export function registerMakerUsageIpc(maker: Maker): void {
     readReferenceModelPricing: getReferenceModelPricing,
     readUsageHistory,
     emptyUsageHistory: emptyUsageHistoryPayload,
+    readUsageDeviceRows: (request) =>
+      readUsageDeviceRows(
+        {
+          getAllSpendDays,
+          getModelUsageSince,
+          getSessionUsageSince,
+          // 与 local-db:sessions:list 的远端投影同一判据:hidden(含账号切换中的全拒)不外发。
+          remoteVisibleTaskIds: async (ids) => {
+            const access = await readRemoteBotSessionAccessBatch(ids, 'session');
+            return new Set(ids.filter((id) => (access.get(id) ?? 'hidden') !== 'hidden'));
+          },
+          todayKey: () => localDayKey(),
+        },
+        request,
+      ),
   });
 
-  // proxy 旁路读到订阅直连响应的 unified rate limit headers → 落库 + 广播。
-  // ⚠️ 这条回调由 observer 在响应开始时同步发起, 处于 proxy 热路径 —— 首个 await
-  // 之前的主路径不得有任何同步 IO / scrypt(规则 10), 只做内存读与字符串比较。
-  // 例外:请求 bearer 与缓存 token 不一致时,可能是 Claude Code 刚刷新 OAuth access token
-  // 而缓存尚未更新;这个 rare mismatch 分支允许同步刷新一次凭证缓存,避免把新 token 的
-  // headers 快照持续误丢到下一次 IPC read / throttle 过期。
-  // 快照绑定到发出请求的 token: 请求 bearer 与「当前凭证」缓存不符(换号 / 登出
-  // 瞬间的 in-flight 尾巴, 或登出后缓存已清)→ 丢弃, 不落库不广播; 缓存尚未就位
-  // (冷启动首响应早于任何 read)时保守落一笔无指纹快照, 由随后端点刷新补齐归属。
-  setClaudeRateLimitHeadersListener((snapshot, requestBearerToken) => {
-    let currentToken = _currentClaudeToken;
-    // Cold responses must prove builtin ownership too; an independent account
-    // must never populate the builtin account's cache before its first read.
-    if (!_claudeCredentialsKnown) currentToken = readClaudeCredentialsInfo()?.accessToken ?? null;
-    if (currentToken) {
-      if (requestBearerToken !== currentToken) {
-        currentToken = readClaudeCredentialsInfo()?.accessToken ?? null;
-        if (requestBearerToken !== currentToken) return false; // 归属不符 (换号尾巴), 丢弃
-      }
-      const fingerprint = _currentClaudeFingerprint;
-      void recordClaudeSubscriptionUsageSnapshot(
-        fingerprint ? { ...snapshot, accountFingerprint: fingerprint } : snapshot,
-      );
-      return true;
-    }
-    // token 缓存为 null 且已读过凭证库 = 明确登出 —— 登出后的 in-flight 尾巴响应
-    // 丢弃(auth 钩子已清快照, 落库会残留旧账号数据)。只有冷启动(从未读过凭证,
-    // 首响应早于任何 read)才保守落一笔无指纹快照, 由随后端点刷新补齐归属。
-    return false;
+  // 用量历史「所有设备」范围:经 device-link 拉同账号其它电脑的原始用量行并按账号缓存。
+  // 与设备互联 IPC 入口同一道能力门:未登录或账号切换进行中时,不读设备目录、不开 peer 链路。
+  configurePeerUsageSync(withPeerUsageAccessGate(() =>
+    requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.'), {
+    userId: getCurrentDbClientUserId,
+    selfDeviceId: getSelfDeviceId,
+    listDevices: () => handleListDevices(deviceDirectoryDeps()),
+    // 后台链路:不让被读取的电脑进入受控状态;旧版本在建链后确认不支持时即关闭链路。
+    invoke: (deviceId, channel, args) => remoteBackgroundInvoke(deviceId, channel, args),
+    readCache: (userId) => readPeerUsageCacheFile(peerUsageCacheFilePath(app.getPath('userData'), userId)),
+    writeCache: (userId, contents) =>
+      writePeerUsageCacheFile(peerUsageCacheFilePath(app.getPath('userData'), userId), contents),
+    now: () => Date.now(),
+  }));
+
+  // 订阅会话的 CLI 在会话里上报 SDK rate_limit_event → 落库 + 广播(maker-core 只对本机
+  // Claude 订阅会话转发)。事件晚于登出 / 断开到达时丢弃,不复活刚清掉的快照。
+  setClaudeRateLimitInfoListener((info) => {
+    if (!hasClaudeNativeLogin()) return;
+    const snapshot = parseClaudeSdkRateLimitInfo(info, Date.now());
+    if (!snapshot) return;
+    const fingerprint = currentClaudeAccountFingerprint();
+    const subscriptionType = peekClaudeCliLoginStatus()?.subscriptionType;
+    void recordClaudeSubscriptionUsageSnapshot({
+      ...snapshot,
+      ...(fingerprint ? { accountFingerprint: fingerprint } : {}),
+      ...(subscriptionType ? { subscriptionType } : {}),
+    });
   });
 
   log.info('maker usage IPC handlers registered');

@@ -4,14 +4,14 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostedRemoteCollectionItem, RemoteResourceHostTarget } from '@/device-link/remoteResources';
 const h = vi.hoisted(() => ({
-  auth: { user: { id: 'owner' }, accountGeneration: 1 },
+  auth: { user: { id: 'owner' }, accountGeneration: 1 }, focused: true,
   link: { connectionEpoch: 1, status: 'online', presenceVersion: 1, getPresenceAvailability: vi.fn(() => true as boolean | null),
-    invoke: vi.fn(), openLink: vi.fn(), onRemoteResourceChanged: vi.fn(() => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
+    invoke: vi.fn(), openLink: vi.fn(), onRemoteResourceChanged: vi.fn((_listener: (deviceId: string, payload: { collectionId: string }) => void) => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
   translation: { t: (key: string) => key, i18n: { language: 'en' } },
   list: vi.fn(), cached: [] as HostedRemoteCollectionItem[], persist: vi.fn(), snapshot: vi.fn(),
 }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } }));
-vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (effect: () => void | (() => void)) => useEffect(effect, [effect]) }; });
+vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (effect: () => void | (() => void)) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => h.translation }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
@@ -37,7 +37,7 @@ let result: ReturnType<typeof useRemoteResourceList>;
 function Probe({ enabled = true }: { enabled?: boolean }) { result = useRemoteResourceList('teammates', targets, enabled); return null; }
 async function render(enabled = true) { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe, { enabled }))); }
 beforeEach(() => {
-  vi.clearAllMocks(); h.auth.accountGeneration = 1; h.auth.user.id = 'owner'; h.cached = [];
+  vi.clearAllMocks(); h.auth.accountGeneration = 1; h.auth.user.id = 'owner'; h.cached = []; h.focused = true;
   h.link.status = 'online'; h.link.connectionEpoch = 1; h.link.getPresenceAvailability.mockReturnValue(true);
   h.list.mockResolvedValue({ items: [] }); h.link.openLink.mockResolvedValue(undefined);
   h.snapshot.mockImplementation(async () => ({ home: [], items: { teammates: h.cached }, read: {} }));
@@ -122,4 +122,59 @@ it('waits for each host link before reading and recovers a failed handshake with
   h.link.openLink.mockResolvedValue(undefined); h.link.connectionEpoch++;
   await render();
   expect(result.isOnline(targets[1])).toBe(true);
+});
+
+
+it.each([false, true])('coalesces generation invalidations while reading and drains the latest roster (failed=%s)', async (failed) => {
+  let settle!: (value: unknown) => void;
+  let reject!: (error: Error) => void;
+  h.list.mockReturnValue(new Promise((resolve, fail) => { settle = resolve; reject = fail; }));
+  await render();
+  const notify = h.link.onRemoteResourceChanged.mock.calls.at(-1)![0];
+  await act(async () => { for (let n = 0; n < 20; n++) notify('mac', { collectionId: 'teammates' }); });
+  // Each host has one request, with just one follow-up roster read queued.
+  expect(h.list).toHaveBeenCalledTimes(2);
+  h.list.mockResolvedValue({ items: [item('latest-final')] });
+  await act(async () => failed ? reject(new Error('stale read failed')) : settle({ items: [item('old-phase')] }));
+  expect(h.list).toHaveBeenCalledTimes(4);
+  expect(result.items.map(row => row.item.ref.id)).toEqual(['latest-final', 'latest-final']);
+  expect(result.loading).toBe(false);
+});
+
+it('drops queued invalidations when the picker closes', async () => {
+  let settle!: (value: unknown) => void;
+  h.list.mockReturnValue(new Promise(resolve => { settle = resolve; }));
+  await render();
+  const notify = h.link.onRemoteResourceChanged.mock.calls.at(-1)![0];
+  await act(async () => notify('mac', { collectionId: 'teammates' }));
+  await render(false);
+  await act(async () => settle({ items: [item('late')] }));
+  expect(h.list).toHaveBeenCalledTimes(2);
+  expect(result.items).toEqual([]);
+});
+
+it('retains loaded rows and an empty result on return while refreshing in the background', async () => {
+  h.list.mockResolvedValue({ items: [item('visible')] });
+  await render();
+  const previous = result.items;
+  h.focused = false; await render();
+  let finish!: (value: unknown) => void;
+  h.list.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  h.focused = true; await render();
+  expect(result.items).toBe(previous); expect(result.loading).toBe(false); expect(result.syncing).toBe(true);
+  expect(result.refreshing).toBe(false);
+  await act(async () => finish({ items: [] }));
+  expect(result.items).toEqual([]); expect(result.loading).toBe(false);
+  h.focused = false; await render();
+  h.list.mockReturnValue(new Promise(() => {}));
+  h.focused = true; await render();
+  expect(result.items).toEqual([]); expect(result.loading).toBe(false); expect(result.syncing).toBe(true);
+});
+it('shows disk-cached rows during the first slow network read without claiming authority', async () => {
+  h.cached = [cached(targets[0], 'cached-visible')];
+  h.list.mockReturnValue(new Promise(() => {}));
+  await render();
+  expect(result.items[0].item.ref.id).toBe('cached-visible');
+  expect(result.loading).toBe(false); expect(result.syncing).toBe(true);
+  expect(result.isOnline(targets[0])).toBe(false);
 });

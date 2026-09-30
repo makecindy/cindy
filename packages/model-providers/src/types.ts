@@ -65,8 +65,8 @@ export type CodexCompatibilityWireProtocol = Extract<
   "anthropic-messages" | "openai-chat"
 >;
 
-/** 供应商来源：内置 vs 用户自定义（自定义本轮不实现，类型先留位）。 */
-export type ProviderSource = "builtin" | "user";
+/** 供应商来源：内置 / 用户自定义 / 企业下发。企业连接走自定义路由，但不能当个人连接编辑。 */
+export type ProviderSource = "builtin" | "user" | "organization";
 
 /** 用户连接该供应商的鉴权方式（决定设置页的连接 UI）。
  *  - oauth   : 走 OAuth 登录（Claude.ai 订阅 / Codex 订阅）
@@ -185,6 +185,8 @@ export interface RoutingDescriptor {
    * 缺省按 false 处理；它与模型图片输入能力独立，也不得从模型名推断。
    */
   supportsImageGeneration?: boolean;
+  /** Enterprise BYOK image model binding used by the Codex Images route. */
+  imageModel?: { wireModel: string; litellmModel: string; supportsEdit: boolean };
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
   upstream: string;
   /**
@@ -395,6 +397,10 @@ export interface CatalogModel {
    * 不能读跨 provider 拍平去重后的列表（那只保留首个 provider 的值，会错）。
    */
   supportsFastMode?: boolean;
+  /** Same-provider, same-harness catalog model used for Fast. null explicitly disables mapping.
+   * Unlike a service tier, this changes the upstream model; availability must be checked per account.
+   */
+  fastModelId?: string | null;
   /**
    * 该模型在 Codex 下使用的模型级兼容 bridge 协议。
    *
@@ -497,7 +503,7 @@ export interface Provider {
   id: string;
   /** 展示名。 */
   name: string;
-  /** 内置 vs 用户自定义。 */
+  /** 内置 / 用户自定义 / 企业下发。企业连接走自定义路由，但不能当个人连接编辑。 */
   source: ProviderSource;
   /** ★这家能用在哪些 agent；决定它出现在哪个 agent 的来源列表里 + 路由按哪个 agent 取。 */
   agents: AgentKind[];
@@ -584,10 +590,7 @@ export interface Provider {
  * contextWindow 缺省时由 `buildUserProvider` 使用保守默认；预设可显式携带厂商文档确认的值，
  * 并随用户配置持久化，避免已知长上下文模型被错误降级。
  */
-export interface ProviderRuntimeModelConfig extends Pick<
-  ModelMetadata,
-  "mode" | "modalities" | "officialDocs"
-> {
+export interface ProviderRuntimeModelConfig extends ModelMetadata {
   discoveredMetadata?: ModelMetadata;
   discoveredCost?: ModelCost;
   nameExplicit?: boolean;
@@ -615,6 +618,17 @@ export interface ProviderRuntimeModelConfig extends Pick<
   reasoningDefaultEffort?: PiReasoningEffort;
   /** 思考只有开/关时走开关 UI。 */
   thinkingToggle?: boolean;
+}
+
+/**
+ * 预设推荐模型：三个引擎共用一份清单，数组顺序即推荐顺序（见 `expandPresetModels`）。
+ * 引擎间确有差异时用 `engines` / `engineOverrides` 显式声明，不再为每个引擎各写一份。
+ */
+export interface ProviderPresetModel extends ProviderRuntimeModelConfig {
+  /** 只在这些引擎可用（如协议限制）；缺省 = 预设声明的全部引擎。 */
+  engines?: AgentKind[];
+  /** 引擎专属字段（如 Pi 的推理档位、按模型路由），展开时覆盖共用字段。 */
+  engineOverrides?: Partial<Record<AgentKind, Partial<ProviderRuntimeModelConfig>>>;
 }
 
 /**
@@ -686,6 +700,11 @@ export interface ProviderPreset {
    * 创建后会快照进 CustomProviderConfig，不随预设后续更新。
    */
   authMethod?: "apiKey" | "none";
+  /**
+   * 目录源数据里的共用推荐模型清单。加载时由 `expandPresetModels` 展开进各
+   * `runtimes[agent].models` 并删除本字段；下游始终只读展开后的形状，旧格式照常可用。
+   */
+  models?: ProviderPresetModel[];
   /** per-runtime 预填数据（至少一个）。 */
   runtimes: Partial<Record<AgentKind, ProviderPresetRuntime>>;
 }

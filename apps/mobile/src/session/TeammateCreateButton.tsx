@@ -4,12 +4,12 @@ import { Plus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import type { RemoteResourceRef } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
-import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import type { RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { NativePullDownMenu, usesNativePullDownMenu } from '@/platform/chrome/NativePullDownMenu';
 import { useTheme } from '@/theme';
 import { iconSize, iconStroke } from '@/theme/tokens';
 import { CompanionCreateSheet } from './CompanionProfileSheet';
+import { CompanionSettingsRow } from './CompanionSettingsRow';
 import { CompanionSheet } from './CompanionSheet';
 import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
 import { TEAMMATE_COLLECTION_ID } from './useTeammateRoster';
@@ -44,10 +44,12 @@ function CreateButton({ targets, preferredDeviceId, onInteract, onCreated, accou
     setHost(target); setVisible(true);
   };
   const label = t('devices.companionProfile.create');
+  // The empty state names the next step instead of only reporting that nothing is available.
+  const alertNoHosts = () => Alert.alert(label, t('devices.companions.noCreateHosts'));
   const button = <HomeHeaderGlassButton accessibilityLabel={label} testID="teammates.create"
         onPress={() => {
           onInteract();
-          if (!targets.length) Alert.alert(label, t('devices.resources.noHosts'));
+          if (!targets.length) alertNoHosts();
           else if (targets.length === 1) select(targets[0].deviceId);
           else if (targets.length > 1 && !usesNativePullDownMenu()) setChoosing(true);
         }}>
@@ -59,9 +61,10 @@ function CreateButton({ targets, preferredDeviceId, onInteract, onCreated, accou
     </NativePullDownMenu> : button}
     <CompanionSheet visible={choosing} title={label} onClose={() => { pendingHost.current = null; setChoosing(false); }}
       onClosed={() => { const target = pendingHost.current; pendingHost.current = null; if (target) select(target.deviceId); }}>
-      {ordered.map((target) => <MainWindowActionButton key={target.deviceId} action={{ label: target.deviceName, onPress: () => {
-        pendingHost.current = target; setChoosing(false);
-      } }} />)}
+      {/* Same choice as the header's native menu: one plain row per computer name, not full-width buttons. */}
+      {ordered.map((target) => <CompanionSettingsRow key={target.deviceId} icon={null} label={target.deviceName}
+        testID={`teammates.createHost.${target.deviceId}`}
+        onPress={() => { pendingHost.current = target; setChoosing(false); }} />)}
     </CompanionSheet>
     {host ? <CompanionCreateSheet visible={visible} deviceId={host.deviceId} deviceName={host.deviceName}
       collectionId={TEAMMATE_COLLECTION_ID} online={targets.some((target) => target.deviceId === host.deviceId)}

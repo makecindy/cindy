@@ -79,6 +79,11 @@ import path from 'node:path';
 
 /** 原子写的临时文件序号,进程内自增 —— 见 writeTextAtomic 里的并发说明。 */
 let writeSeq = 0;
+/**
+ * link 报这些错误码表示这个文件系统不支持硬链接:Linux 的 vfat / exFAT 报 EPERM,
+ * macOS 与部分网络盘报 ENOTSUP / EOPNOTSUPP,Windows 的 FAT 系列经 libuv 映射为 EISDIR。
+ */
+const HARD_LINK_UNSUPPORTED_CODES = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EISDIR']);
 const LEGACY_OWNER_CLAIM = '.cindy-owner-claim-v1.json';
 
 /** 单个文本槽的上限。灵魂与画像是「说明」,不是知识库。 */
@@ -214,6 +219,52 @@ async function writeTextAtomic(absPath: string, content: string): Promise<void> 
   }
 }
 
+/**
+ * 「不存在才创建」:补种不能覆盖用户已有的文件,也不能留下写到一半的文件(半截
+ * SOUL.md 会被对账当成正式身份收进数据库)。内容总是先完整写进临时文件,目标路径上
+ * 只会出现完整内容。返回是否真的创建了。
+ *
+ * 常见文件系统:用 link 把临时文件挂到目标 —— 目标已存在时报 EEXIST 而不是替换,
+ * 原子且不替换。
+ *
+ * 不支持硬链接的文件系统(exFAT、部分网络盘):Node 不提供 NOREPLACE 的 rename,不存在
+ * 既原子又不替换的写法。这里确认目标不存在后 rename:崩溃时目标要么不存在要么完整,
+ * 不需要任何「写到一半」的猜测与恢复;代价是确认与 rename 两次系统调用之间若有人恰好
+ * 新建了同名文件会被替换 —— 只在这类文件系统、只在该文件本来缺失时存在。所以只有 link
+ * 明确报「不支持硬链接」时才走这条回退;权限、空间、I/O 等其他错误原样抛出,这次不补种。
+ */
+async function writeTextIfAbsent(absPath: string, content: string): Promise<boolean> {
+  if (Buffer.byteLength(content, 'utf8') > BOT_PROFILE_TEXT_MAX_BYTES) {
+    throw new BotProfileFolderError(
+      'TEXT_TOO_LARGE',
+      `content exceeds ${BOT_PROFILE_TEXT_MAX_BYTES} bytes`,
+    );
+  }
+  await fs.mkdir(path.dirname(absPath), { recursive: true });
+  const tmp = `${absPath}.tmp-${process.pid}-${(writeSeq += 1)}`;
+  try {
+    await fs.writeFile(tmp, content, 'utf8');
+    try {
+      await fs.link(tmp, absPath);
+      return true;
+    } catch (cause) {
+      const code = (cause as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') return false;
+      if (!code || !HARD_LINK_UNSUPPORTED_CODES.has(code)) throw cause;
+    }
+    try {
+      await fs.access(absPath);
+      return false;
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+    }
+    await fs.rename(tmp, absPath);
+    return true;
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+  }
+}
+
 /** 一份摊开的伙伴档案。 */
 export interface BotProfileFolderContent {
   /** 身份(SOUL.md)。 */
@@ -328,7 +379,8 @@ export interface BotProfileFolderMigration {
  * 两件事:
  *
  *   1. 用数据库里的当前值播种 `SOUL.md` / `memories/USER.md` / `config.json`。
- *      **只在没有 SOUL.md 时做**,绝不覆盖用户已经改过的文件。
+ *      **只在没有 SOUL.md 时做**,且只补缺失的那几个文件,绝不覆盖用户已经改过的文件。
+ *      SOUL.md 最后写:它在就代表家已建好,其他槽写失败时下次仍会重试补种。
  *   2. 把 `<userData>/bot-skills/<botId>/` 整个搬成 `<家>/skills` 的邻居
  *      (`.claude-plugin/` 一并带走)。一个伙伴一个家,不该散在两处。
  *
@@ -343,19 +395,31 @@ export async function migrateBotProfileFolder(
 ): Promise<BotProfileFolderMigration> {
   await migrateLegacyBotProfileFolder(userDataDir, legacyUserDataDir, botId);
   const soulPath = resolveInside(userDataDir, botId, SLOT.soul);
+  const at = (relative: string) => resolveInside(userDataDir, botId, relative);
   let seeded = false;
+  let seedFailure: unknown = null;
   try {
     await fs.access(soulPath);
   } catch {
-    await writeBotProfileFolder(userDataDir, botId, {
-      identitySource: seed.identitySource,
-      userContextSource: seed.userContextSource,
-      config: seed.config,
-    });
-    seeded = true;
+    // Seed only what is missing, each slot with an atomic create-if-absent: a hand-edited
+    // USER.md or config.json next to a missing SOUL.md — or a file the user saves in an
+    // editor at this very moment — is the user's content and must not be reset.
+    // SOUL.md goes last: its presence is what marks the Home as seeded, so if a sibling
+    // slot fails the next run still sees SOUL.md missing and retries, instead of
+    // reconciling an absent USER.md as an emptied user profile.
+    try {
+      await writeTextIfAbsent(at(SLOT.userContext), seed.userContextSource);
+      await writeTextIfAbsent(at(SLOT.config), `${JSON.stringify(seed.config, null, 2)}\n`);
+      seeded = await writeTextIfAbsent(soulPath, seed.identitySource);
+    } catch (cause) {
+      seedFailure = cause;
+    }
   }
 
+  // Skills move regardless: a seeding failure (e.g. disk full) must not also strand the
+  // Bot's legacy skills.
   const skillsMoved = await migrateBotSkillsIntoProfileFolder(userDataDir, botId, legacyUserDataDir);
+  if (seedFailure !== null) throw seedFailure;
   return { seeded, skillsMoved };
 }
 

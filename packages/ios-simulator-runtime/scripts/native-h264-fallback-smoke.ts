@@ -7,6 +7,7 @@ import {
   createIOSSimulatorRuntime,
   createIOSSimulatorSimctlLifecycle,
   createIOSSimulatorNativeDevelopmentAdmissionPolicy,
+  createIOSSimulatorNativeSidecarSandboxPolicy,
   createNodeIOSSimulatorCommandRunner,
   HostIOSSimulatorSidecarSupervisor,
   IOSSimulatorFramePump,
@@ -14,6 +15,7 @@ import {
   IOSSimulatorNativeSidecarProcessManager,
   IOSSimulatorStaticSidecarArtifactResolver,
   type IOSSimulatorFramePumpSnapshot,
+  type IOSSimulatorLatestH264Frame,
   type IOSSimulatorSidecarSupervisor,
   WdaProcessManager,
 } from "../src/index.js";
@@ -93,9 +95,19 @@ async function waitForSnapshot(
 let simulatorUdid: string | null = null;
 let wdaManager: WdaProcessManager | null = null;
 let nativeProvider: IOSSimulatorSidecarSupervisor | null = null;
+// Snapshot polling can miss the first frame on a busy host. Capture it at
+// delivery so the keyframe assertion tests the first frame, not an arbitrary P-frame.
+const firstFrames: {
+  initial: IOSSimulatorLatestH264Frame | null;
+  recovered: IOSSimulatorLatestH264Frame | null;
+} = { initial: null, recovered: null };
+let recovering = false;
 const h264Pump = new IOSSimulatorH264FramePump({
   maxReconnectAttempts: 1,
   reconnectDelaysMs: [0],
+  onFrame(frame) {
+    firstFrames[recovering ? "recovered" : "initial"] ??= frame;
+  },
 });
 const jpegPump = new IOSSimulatorFramePump({
   maxReconnectAttempts: 1,
@@ -175,6 +187,9 @@ try {
       new IOSSimulatorNativeSidecarProcessManager({
         binaryPath: artifact.executablePath,
         admissionPolicy,
+        sandboxPolicy: createIOSSimulatorNativeSidecarSandboxPolicy({
+          required: true,
+        }),
       }),
   });
   wdaManager = new WdaProcessManager({
@@ -222,14 +237,14 @@ try {
     },
     visible: true,
   });
-  const h264Streaming = await waitForSnapshot(
+  await waitForSnapshot(
     h264Pump,
     (snapshot) =>
       snapshot.state === "streaming" &&
       snapshot.latestFrame?.encoding === "h264",
     "the first native H.264 frame",
   );
-  const h264Frame = h264Streaming.latestFrame;
+  const h264Frame = firstFrames.initial;
   if (
     h264Frame?.encoding !== "h264" ||
     !h264Frame.keyFrame ||
@@ -274,6 +289,7 @@ try {
   }
   const fallbackLatencyMs = Math.round(performance.now() - disconnectedAt);
 
+  recovering = true;
   const recoveredWda = await wdaManager.recoverNativeSidecar(instanceId, {
     rearm: true,
   });
@@ -293,7 +309,7 @@ try {
     },
     visible: true,
   });
-  const h264Recovered = await waitForSnapshot(
+  await waitForSnapshot(
     h264Pump,
     (snapshot) =>
       snapshot.state === "streaming" &&
@@ -301,7 +317,7 @@ try {
       snapshot.latestFrame.sequence > h264Frame.sequence,
     "the recovered native H.264 frame",
   );
-  const recoveredFrame = h264Recovered.latestFrame;
+  const recoveredFrame = firstFrames.recovered;
   if (
     recoveredFrame?.encoding !== "h264" ||
     !recoveredFrame.keyFrame ||

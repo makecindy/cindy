@@ -41,7 +41,7 @@ export function CindyDevicePicker({
         title: option.deviceName,
         endAdornment: option.unread || !option.online ? (
           <>
-            {!option.online ? <span className="text-11 text-[var(--text-secondary)]">{t('bots.remote.offline')}</span> : null}
+            {!option.online ? <span className="text-11 text-[var(--text-secondary)]">{t('deviceId' in option.bot && option.bot.connectionKnown === false ? 'bots.remote.unknown' : 'bots.remote.offline')}</span> : null}
             {option.unread ? (
               option.unreadCount ? (
                 <span

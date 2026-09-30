@@ -227,6 +227,15 @@ describeMigrationReplay('migration replay', () => {
       expect(tableExists(db, 'wechat_outbox')).toBe(true);
       expect(tableExists(db, 'wechat_file_attachments')).toBe(true);
       expect(tableExists(db, 'schedule_session_latest_runs')).toBe(true);
+      expect(tableExists(db, 'bot_groups')).toBe(true);
+      expect(tableExists(db, 'bot_group_members')).toBe(true);
+      expect(tableExists(db, 'bot_group_messages')).toBe(true);
+      expect(indexExists(db, 'uniq_bot_group_messages_group_sequence')).toBe(true);
+      expect(indexExists(db, 'uniq_bot_group_messages_group_client')).toBe(true);
+      expect(indexExists(db, 'idx_bot_group_members_bot')).toBe(true);
+      expect(tableExists(db, 'bot_group_plans')).toBe(true);
+      expect(tableExists(db, 'bot_group_plan_steps')).toBe(true);
+      expect(indexExists(db, 'idx_bot_group_plans_group_created')).toBe(true);
       expect(indexExists(db, 'idx_messages_active_error_tail')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_running_schedule')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_running_heartbeat')).toBe(true);

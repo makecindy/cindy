@@ -56,6 +56,8 @@
   `docs/product-rules/shared-task-mode.md`；复用 device-link，同账号远控行为不变。
 - 修改伙伴（Bot）的身份、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
   委派协作或伙伴设置前，必须先读 `docs/product-rules/cindy-bots-runtime.md`。
+- 新增或修改伙伴群聊的数据、发言编排、群专线 Session、分工（负责人、安排、分工 Session、群工作目录）、
+  群聊界面或手机端群聊（`bot-groups` 远程资源、群推送深链）前，必须先读 `docs/product-rules/bot-group-chat.md`。
 - 新增或修改 `/review`、Reviewer 任务、成果快照、Finding 协议、复核入口、结果呈现或
   复核生命周期前，必须先读 `docs/product-rules/review-product-direction.md`。
 - 新增或修改按区域（`cn` / `global`）分支的逻辑、构建身份与命名、端点选择、区域相关
@@ -65,6 +67,10 @@
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md`；设计文档索引见
   `docs/design-rules/cindy-design-system.md`。
+- 新增或修改 Mobile（`apps/mobile`）界面上的文字前，必须先查
+  `apps/mobile/docs/mobile-design-guide.md` §3「文字规范速查」：先定角色，再整行照抄字号、
+  行高、字重、字色；五档中性字色、浅色字不配粗字重、11 档字号、必须配行高四条由
+  `typographyTokenDiscipline.test.ts` 守护，角色是否选对靠 review。
 - 做 UI 圆角分类或点击目标尺寸审查时，必须同时读 `docs/design-rules/DESIGN.md §5` 与
   `docs/design-rules/design-governance.md §13`；普通 UI 改动同样适用，不限于设计系统迁移 PR。
 - 新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁脚本，
@@ -176,16 +182,14 @@
   瞬时 commit（不存在于本仓库、GitHub 上查不到该 SHA）；对这类合成 SHA 跑
   `check:dco` 的失败结果不构成缺签证据，不要据此报告 DCO 问题。判定 DCO 是否通过，
   一律以 PR 上的 DCO App check 与真实提交范围（`origin/main..PR head`）的结果为准。
-- **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地
-  跑完仓库根 `pnpm test:unit:related`（只跑这次改动能影响到的单测；改到测试调度、
-  依赖清单、workspace 配置、Vitest 配置或单测 CI 时会自动退回全量 `pnpm test:unit`），
-  并对本次改动涉及的每个 package 跑
-  `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在
-  `package.json` 里的 `name`，如 `desktop`、`@cindy/maker-core`；没有 `typecheck`
-  script 的 package 该步自动跳过），全部通过后才允许提交；任何一项失败都不得提交，
-  必须先修复。GitHub CI 仍跑完整 `pnpm test:unit`。细则与唯一例外（防丢数据的兜底保存）见
-  `docs/dev-rules/development-workflow.md`。
-- 在上述门禁之上按风险追加验证：跨模块、高风险或基础设施改动追加更广泛验证（如
+- **提交前验证**：提交前必须完成与改动风险匹配的测试和相关 package 的类型检查。
+  默认使用根 `pnpm test:unit:related` 选测；已按影响面完成等效定向验证时，不要求为了
+  commit 重跑整仓测试。相关 package 运行
+  `pnpm --filter <包名> run --if-present typecheck`（包名以该 package 的 `package.json`
+  为准）。已执行检查的失败必须修复或明确说明既有故障，未执行项和原因须如实记录。
+  本机资源预算、并发与跨任务排队由使用者或宿主决定，仓库不强制多个 session 串行。
+  GitHub CI 保留完整单测与合并门禁；细则见 `docs/dev-rules/development-workflow.md`。
+- 按风险追加验证：跨模块、高风险或基础设施改动追加更广泛验证（如
   `pnpm test:all`），最终以 CI 门禁为准。不得通过跳过、删除或弱化测试制造通过。
 
 ## 绝对安全底线

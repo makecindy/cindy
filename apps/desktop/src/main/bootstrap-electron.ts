@@ -1,5 +1,8 @@
+import { prepareImportedAutomation, finishImportedAutomation } from './bot-import/automationRuntime.js';
+import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-import/host.js';
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
+import { registerTaskMigrationIpc } from './task-migration/service';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import {
   createLatestSourceVersionReader,
@@ -62,7 +65,7 @@ import {
   type WebContents,
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
-import { getSessionThinkingSnapshots, getHistoryToolName } from './messagePersistBroadcaster';
+import { getSessionThinkingSnapshots, getHistoryToolName, drainPersistQueue } from './messagePersistBroadcaster';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import { rememberResolvedAppTheme, resolveAppThemeIsDark } from './resolved-app-theme';
 import {
@@ -269,6 +272,7 @@ import {
   im,
   feishuIm,
   telegramIm,
+  prepareImDefaultSettingsChange,
   registerTelegramBotConfigIpc,
   startImOrchestrators,
   startImConnection,
@@ -389,6 +393,7 @@ import {
   deliverCindyVersionOpenEvents,
   finishCindyVersionStartup,
   isCindyVersionLaunchPending,
+  isCindyVersionSwitching,
   watchCindyVersionStartupResult,
 } from './cindy-make/versionStartup.js';
 import {
@@ -691,8 +696,9 @@ import { clearModelVisibilityMirror } from './maker-host/model-visibility-mirror
 import { setClaudeSupportedModelsListener } from '@cindy/maker-core';
 import {
   noteAnthropicSdkSupportedModels,
-  refreshAnthropicModelsFromHttp,
   clearAnthropicDiscoveredModels,
+  requestAnthropicModelProbe,
+  syncAnthropicModelsWithClaudeLogin,
 } from './maker-host/model-discovery/anthropic.js';
 import {
   clearXaiDiscoveredModels,
@@ -761,6 +767,7 @@ import {
   registerMakerIpc as registerMakerCoreIpc,
   restoreBotRuntimeForCurrentOwner,
   isSessionTurnPendingCompletion,
+  isSessionInTurn,
   stopOrcaIdleWatcher,
   setGoalClearObserver,
   setGoalDeferredResumeCancelObserver,
@@ -769,6 +776,7 @@ import {
   setGoalAskAnswerObserver,
   withSendToSessionLock,
 } from './maker-ipc/register.js';
+import { moveSessionProjectFromHost } from './mcp-integrations/moveSession.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -801,24 +809,39 @@ import {
   shouldStartReadinessConsumers,
 } from './maker-host/account-provider-readiness-ensure.js';
 import {
+  previewImDefaultSettingsPatch,
   readImDefaultSettingsState,
   resetImDefaultSettings,
   resetImDefaultSettingsGlobal,
   resetImDefaultSettingsChannel,
   writeImDefaultSettingsPatch,
 } from './im/defaultSettingsStore.js';
-import { hasClaudeAiOAuth } from './maker-host/claude-credentials-store.js';
+import { readImDefaultSettingsFingerprint } from './im/defaultSessionSettings.js';
+import { fingerprintImDefaultSettings } from './im/shared/channelDefaultRoute.js';
+import { IM_DEFAULT_SETTINGS } from '../shared/imDefaultSettings.js';
+import { assertOwnerScopeSettledForWrite } from './im/ownerScopedStorage.js';
+import { hasClaudeNativeLogin } from './maker-host/claude-native-auth.js';
 import {
-  disconnectClaudeAiOAuth,
-  reconnectClaudeAiOAuth,
-} from './maker-host/claude-oauth-refresh.js';
-import { beginClaudeLocalLogin, cancelClaudeOAuthLogin } from './maker-host/claude-oauth-login.js';
+  connectClaudeNativeLogin,
+  disconnectClaudeNativeLogin,
+} from './maker-host/claude-native-connection.js';
+import {
+  beginClaudeCliLogin,
+  cancelClaudeCliLogin,
+  onClaudeCliLoginStatusChange,
+  readClaudeCliLoginStatus,
+  runClaudeCliLogin,
+} from './maker-host/claude-native-cli.js';
+import { closeClaudeCliProxyBridge } from './maker-host/claude-cli-proxy-bridge.js';
+import { startLegacyClaudeConfigMigration } from './maker-host/claude-legacy-config-migration.js';
+import { isNativeProviderAuthBound, isNativeProviderAuthRevoked } from './maker-host/nativeProviderAuthBinding.js';
 import {
   runGrokOAuthLogin,
   cancelGrokOAuthLogin,
   logoutGrok,
   hasGrokOAuthLogin,
 } from './maker-host/grok-oauth-login.js';
+import { setGrokDeviceLoginConnectedHandler } from './maker-host/grok-device-login-service.js';
 import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
 import { clearXaiMediaModels } from './maker-host/model-discovery/xai-media.js';
 import {
@@ -1166,6 +1189,7 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
 
 // Live getters preserve account/scheduler replacement without loading Main modules at dispatch time.
 configureRoutineHost({
+  assertImportedAutomationReady: ensureImportedAutomationReady, prepareImportedAutomation, finishImportedAutomation, recoverImports: recoverCompanionImports,
   getBot: getBotRemoteResourceSource,
   getScheduler: getSchedulerIfInitialized,
   getScheduleStorage,
@@ -2573,6 +2597,8 @@ registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
 setAppSessionCommitBoundaryHook(() => {
+  // 进行中的 Claude Code 登录属于旧 owner:结束 CLI 子进程,不让它在新 owner 下完成。
+  cancelClaudeCliLogin();
   clearAllSessionAttention();
   remoteDesktopViewerWindows.reset();
   ghostPanelWindowsController.closeForOwnerChange();
@@ -4680,15 +4706,76 @@ const registerIpcHandlers = () => {
   });
   ipcMain.handle(
     MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_SET,
-    async (_e, patch: unknown, rawChannel: unknown) => {
+    async (event, patch: unknown, rawChannel: unknown) => {
+      // 本 handler 已升级为可批量改任务记录、并在下一条 IM 消息时切任务路由的操作,
+      // 必须先验证调用方是可信主渲染器 —— 不能让被导航到外部页面的 preload 窗口
+      // 改写渠道默认(PR #5155 review P1, 同 SUBAGENT_MODEL_SETTINGS_SET)。
+      assertTrustedAppRendererEvent(event);
+      // owner 边界(PR #5155 review P1): 回填跨多个 await, 期间登出/切号会让落库与
+      // 设置写入漂到别的 owner —— 进入时快照 owner scope; 回填自身已在
+      // prepareImDefaultSettingsChange 内固定 DbClient 并复核 epoch, 这里在写设置
+      // 前的同一同步块内再校验 scope 未变且无 boundary 在途, 不满足失败重试。
+      const ownerScopeKey = activeOwnerScopeKey();
       const channel = parseImDefaultSettingsChannel(rawChannel);
       const parsedPatch = parseImDefaultSettingsPatch(patch);
+      // 仅路由默认实际变化时才要求阻塞式回填(PR #5155 review P2): 只改权限档等
+      // 不动路由指纹的保存不该被无关的供应商目录故障挡下 —— 路由默认没变就不存在
+      // 「提交后丢失回填机会」。
+      const routeDefaultChanged =
+        fingerprintImDefaultSettings(previewImDefaultSettingsPatch(parsedPatch, channel)) !==
+        readImDefaultSettingsFingerprint(channel);
+      // 写新设置之前按旧默认给老任务补跟随记录(见 prepareImDefaultSettingsChange)。
+      // 回填失败必须挡住本次保存: 记录补不上就提交新默认的话, 还停在旧默认上的
+      // 老任务之后只能按新默认匹配, 永久失去跟随资格(PR #5155 review P2)。
+      if (routeDefaultChanged) {
+        try {
+          await prepareImDefaultSettingsChange(channel);
+        } catch (err) {
+          throwIpcError(
+            'INTERNAL',
+            `渠道默认未保存：旧任务的跟随记录补全失败，请重试（${err instanceof Error ? err.message : String(err)}）`,
+          );
+        }
+      }
+      try {
+        assertOwnerScopeSettledForWrite(ownerScopeKey);
+      } catch (err) {
+        throwIpcError(
+          'INTERNAL',
+          `渠道默认未保存：账号切换中，请重试（${err instanceof Error ? err.message : String(err)}）`,
+        );
+      }
       writeImDefaultSettingsPatch(parsedPatch, channel);
       return imDefaultSettingsWire(channel);
     },
   );
-  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_RESET, async (_e, rawChannel: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_RESET, async (event, rawChannel: unknown) => {
+    // 同 SET: 回填会批量改任务记录, 必须先验证调用方(PR #5155 review P1)。
+    assertTrustedAppRendererEvent(event);
+    // 同 SET: 进入时快照 owner scope, 写设置前校验 scope 未变且无 boundary 在途。
+    const ownerScopeKey = activeOwnerScopeKey();
     const channel = parseImDefaultSettingsChannel(rawChannel);
+    // 同 SET: 仅路由默认实际变化时才要求阻塞式回填(PR #5155 review P2)。
+    const routeDefaultChanged =
+      readImDefaultSettingsFingerprint(channel) !== fingerprintImDefaultSettings(IM_DEFAULT_SETTINGS);
+    if (routeDefaultChanged) {
+      try {
+        await prepareImDefaultSettingsChange(channel);
+      } catch (err) {
+        throwIpcError(
+          'INTERNAL',
+          `渠道默认未重置：旧任务的跟随记录补全失败，请重试（${err instanceof Error ? err.message : String(err)}）`,
+        );
+      }
+    }
+    try {
+      assertOwnerScopeSettledForWrite(ownerScopeKey);
+    } catch (err) {
+      throwIpcError(
+        'INTERNAL',
+        `渠道默认未重置：账号切换中，请重试（${err instanceof Error ? err.message : String(err)}）`,
+      );
+    }
     if (channel) {
       resetImDefaultSettingsChannel(channel);
     } else {
@@ -5066,35 +5153,55 @@ const registerIpcHandlers = () => {
     tapWindowBroadcast(MAKER_PUSH.CLAUDE_SESSION_ROUTE_CHANGED, { sessionId, route });
   });
 
-  // ── 本机 Claude Code 订阅：只管理 Cindy 的使用许可 ─────────────────────────
-  // 与鉴权模式开关正交:管理订阅凭证本身(像 Codex 的 OAuth 登录独立于 API 模式)。
+  // ── 本机 Claude Code 订阅:登录交给内置 CLI,Cindy 只管使用许可 ─────────────────
+  // 登录 = 拉起 CLI 的 `claude auth login`(凭证由 CLI 自己保存,与终端 claude 共用);
+  // 断开 = 撤销 Cindy 的使用许可,不登出 CLI。Cindy 不读取、不保存订阅凭证(claude-native-cli)。
   // Anthropic 模型清单动态发现接线(2026-07-19 统一重构):
   //   - active-catalog 统一收口 capabilities 刷新 + revision 广播;
   //   - SDK supportedModels 捕获(maker-core 会话 init 后上报)是能力字段权威。
   setClaudeSupportedModelsListener(noteAnthropicSdkSupportedModels);
+  // CLI 登录态在 Cindy 之外变化(终端里登录 / 登出)时同步连接态;登出与手动断开同款收尾。
+  onClaudeCliLoginStatusChange((status) => {
+    void broadcastClaudeAuthStateChanged();
+    syncClaudeSubscriptionUsageForAuthChange();
+    if (!status.loggedIn) resetProviderModelAutoRefreshCooldowns('anthropic');
+    // 登出清空清单;登录(含在终端里登录)后主动读一次;直接换号先清旧账号再读。
+    syncAnthropicModelsWithClaudeLogin(status);
+  });
+  // 启动时后台读一次(不阻塞):已连接的用户由 provider 目录加载等这次结果;
+  // 从未连接的用户据此自动沿用本机登录。明确断开过的用户不再读。
+  if (!isNativeProviderAuthRevoked('anthropic')) void readClaudeCliLoginStatus();
+  // 旧版 dev 隔离目录 claude-home 的转录补拷到默认 ~/.claude(仅 dev 多实例;后台跑,
+  // 拉起 CLI 前 getAuthEnv 再等它一次)。正式版为 no-op。
+  startLegacyClaudeConfigMigration();
+  // 退出时结束进行中的登录子进程(CLI 的本机回调监听没有超时),并关闭 CLI 的代理桥。
+  app.once('will-quit', () => {
+    cancelClaudeCliLogin();
+    void closeClaudeCliProxyBridge();
+  });
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_STATUS, async () => {
-    return { authorized: hasClaudeAiOAuth() };
+    // 没有使用许可时结论恒为 false,不必拉起 CLI(状态栏等常驻读取对所有用户都会调用)。
+    if (isNativeProviderAuthBound('anthropic')) await readClaudeCliLoginStatus({ maxAgeMs: 30_000 });
+    return { authorized: hasClaudeNativeLogin() };
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGIN, async (event, loginKey?: string) => {
     assertTrustedAppRendererEvent(event);
     const owner = activeOwnerScopeKey();
     if (isAppSessionBoundaryPending() || !getActiveAppSession().dataOwnerId)
       return { ok: false, reason: 'login_cancelled', authorized: false };
-    const signal = beginClaudeLocalLogin(loginKey);
+    const signal = beginClaudeCliLogin(loginKey);
+    const result = await runClaudeCliLogin(signal);
+    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+      return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (!result.ok) return { ok: false, reason: result.reason, authorized: false };
     resetProviderModelAutoRefreshCooldowns('anthropic');
-    await clearAnthropicDiscoveredModels();
-    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
-      return { ok: false, reason: 'login_cancelled', authorized: false };
-    await ensureAnthropicCompatProxyReady();
-    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
-      return { ok: false, reason: 'login_cancelled', authorized: false };
-    if (!reconnectClaudeAiOAuth())
-      return { ok: false, reason: 'local_unavailable', authorized: false };
     // Binding is the commit point; auxiliary refresh must not prolong the cancellable login.
+    connectClaudeNativeLogin();
+    // CLI 登录态变化的监听先于绑定触发,那次探测会因尚未绑定而跳过;绑定后再请求一次。
+    requestAnthropicModelProbe();
     void broadcastClaudeAuthStateChanged();
     syncClaudeSubscriptionUsageForAuthChange();
-    void refreshAnthropicModelsFromHttp();
-    return { ok: true, authorized: hasClaudeAiOAuth() };
+    return { ok: true, authorized: hasClaudeNativeLogin() };
   });
   ipcMain.handle(
     MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGOUT,
@@ -5110,10 +5217,10 @@ const registerIpcHandlers = () => {
       ) {
         throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       }
-      // Cancel pending Cindy login/refresh before revoking the binding; keep native credentials.
+      // Cancel a pending CLI login before revoking the binding; keep the CLI's own login.
       try {
-        cancelClaudeOAuthLogin();
-        await disconnectClaudeAiOAuth();
+        cancelClaudeCliLogin();
+        await disconnectClaudeNativeLogin();
         if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
           return { authorized: false };
         resetProviderModelAutoRefreshCooldowns('anthropic');
@@ -5130,13 +5237,13 @@ const registerIpcHandlers = () => {
       syncClaudeSubscriptionUsageForAuthChange();
       // 模型清单动态发现:登出完成前清空清单 + 删磁盘缓存,并等待旧 SDK 写盘收尾。
       await clearAnthropicDiscoveredModels();
-      return { authorized: hasClaudeAiOAuth() };
+      return { authorized: hasClaudeNativeLogin() };
     },
   );
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_CANCEL, async (event, loginKey?: string) => {
     assertTrustedAppRendererEvent(event);
-    cancelClaudeOAuthLogin(loginKey);
-    return { authorized: hasClaudeAiOAuth() };
+    cancelClaudeCliLogin(loginKey);
+    return { authorized: hasClaudeNativeLogin() };
   });
 
   // 上游作废 xAI 凭证、收口自动登出后,走和手动登出完全一致的 UI 收尾(广播 + 清账号级
@@ -5170,50 +5277,71 @@ const registerIpcHandlers = () => {
     })();
   });
 
+  const finishXaiLogin = async (owner: string): Promise<boolean> => {
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+    void retainProviderPresentationAfterAuthChange('xai');
+    resetProviderModelAutoRefreshCooldowns('xai');
+    await clearXaiSubscriptionUsageSnapshot();
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+    clearXaiDiscoveredModels();
+    await discardXaiModelsDiskCache();
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+    clearXaiMediaModels();
+    clearXaiRateLimitSnapshot();
+    await syncXaiSubscriptionUsageForAuthChange();
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return false;
+    broadcastXaiAuthStateChanged();
+    void refreshXaiModelsFromHttp();
+    void refreshProviderModelsManually('xai').catch((error) => {
+      createLogger('xai-model-refresh').warn('xAI models refresh after login failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return true;
+  };
+  setGrokDeviceLoginConnectedHandler(async (owner) => {
+    await finishXaiLogin(owner);
+  });
+
   // xAI(SuperGrok 订阅)OAuth —— 与 claude-oauth 同形态。登录成功后 bridge 的 xai provider 立即可用
   // (buildHeaders 每请求现取 token);连接态由 renderer refetch listProviders 时现读 hasGrokOAuthLogin。
-  ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGIN, async (event) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGIN, async (event, method?: 'browser' | 'device') => {
     assertTrustedAppRendererEvent(event);
+    if (method !== undefined && method !== 'browser' && method !== 'device')
+      throwIpcError('INVALID_ARGUMENT', 'Invalid xAI login method');
     const owner = activeOwnerScopeKey();
     // reason 是 renderer 决定提示用的结构化数据,不抛 throwIpcError(规则 13 查询型例外)。
     // 登录成功即生效:订阅直连 handler 每请求经 buildHeaders 现取凭证,无需任何"就绪"步骤。
-    const result = await runGrokOAuthLogin();
+    const result = await runGrokOAuthLogin({
+      method,
+      onDeviceCode:
+        method === 'device'
+          ? (code) => {
+              if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return;
+              try {
+                if (!event.sender.isDestroyed())
+                  event.sender.send(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+                    providerId: 'xai',
+                    phase: 'device-code',
+                    ...code,
+                  });
+              } catch {
+                /* window closed while auth continues */
+              }
+            }
+          : undefined,
+    });
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
       return { ok: false, reason: 'login_cancelled', authorized: false };
-    if (result.ok) {
-      void retainProviderPresentationAfterAuthChange('xai');
-      resetProviderModelAutoRefreshCooldowns('xai');
-      // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
-      // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
-      await clearXaiSubscriptionUsageSnapshot();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
-        return { ok: false, reason: 'login_cancelled', authorized: false };
-      // 登录可直接覆盖旧 SuperGrok 账号：先清旧世代内存，再直接读新账号官方清单。
-      // 这里不能先恢复同一 Cindy owner 的磁盘 LKG，否则 A→B 重登会短暂展示 A 的成员。
-      clearXaiDiscoveredModels();
-      await discardXaiModelsDiskCache();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
-        return { ok: false, reason: 'login_cancelled', authorized: false };
-      // 登录可直接覆盖旧账号凭证。先跨授权边界清掉旧账号发现快照，再补拉新账号；
-      // 旧在途请求由 discovery generation + owner scope 双重守卫作废。
-      clearXaiMediaModels();
-      // 登录成功后广播 provider 变更 —— 其它已打开的窗口(聊天/模型选择器等)跟随刷新
-      // xAI 连接态,不再等 remount/手动刷新(对齐 CLAUDE_OAUTH_LOGIN 的 broadcastClaudeAuthStateChanged)。
-      // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
-      clearXaiRateLimitSnapshot();
-      await syncXaiSubscriptionUsageForAuthChange();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
-        return { ok: false, reason: 'login_cancelled', authorized: false };
-      broadcastXaiAuthStateChanged();
-      void refreshXaiModelsFromHttp();
-      void refreshProviderModelsManually('xai').catch((error) => {
-        createLogger('xai-model-refresh').warn('xAI models refresh after login failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-      return { ok: true, authorized: true };
-    }
-    return { ok: false, reason: result.reason ?? 'unknown', authorized: hasGrokOAuthLogin() };
+    if (result.ok)
+      return (await finishXaiLogin(owner))
+        ? { ok: true, authorized: true }
+        : { ok: false, reason: 'login_cancelled', authorized: false };
+    return {
+      ok: false,
+      reason: result.reason ?? 'unknown',
+      authorized: hasGrokOAuthLogin(),
+    };
   });
   ipcMain.handle(
     MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT,
@@ -6316,6 +6444,10 @@ const registerIpcHandlers = () => {
 
     // setClaudeCodePath 已退役 —— agent-binaries.prepare() 成功时已写 lastReadyPath cache;
     // 任何需要 claude binary 路径的地方一律走 getReadyBinaryPath('claude-code')。
+
+    // 启动时那次 CLI 登录态读取往往早于二进制就绪(读不到);就绪后补读一次,结果变化经
+    // onClaudeCliLoginStatusChange 广播,供应商页随之更新连接态。已有结果时是 no-op。
+    if (!isNativeProviderAuthRevoked('anthropic')) void readClaudeCliLoginStatus();
 
     // ── Phase 2: codex 段 ────────────────────────────────────────────────────
     resetBeforeSegment('codex', claudeRes.downloaded === true);
@@ -7647,8 +7779,10 @@ const registerIpcHandlers = () => {
       throwIpcError('PRECONDITION_FAILED', 'unavailable');
     }
   });
+  cindyMakeManager.setVersionSwitchingProbe(isCindyVersionSwitching);
   configureCindyVersions(
     () => cindyMakeTestController.hasActiveJobs() || cindyMakeManager.hasActiveWork(),
+    () => cindyMakeManager.isPersonalBuildRunning(),
   );
   ipcMain.handle('app:cindy-versions-state', async (event) => {
     assertTrustedAppRendererEvent(event);
@@ -9553,6 +9687,13 @@ app.on('ready', async () => {
   // owning modules above; future collections/actions do not add tunnel channels.
   registerRemoteResourcesIpc();
   registerDeviceLinkIpc();
+  registerTaskMigrationIpc((sessionId, workingDir, assertAuthority) =>
+    moveSessionProjectFromHost(isSessionInTurn, sessionId, workingDir, assertAuthority),
+    {
+      isBusy: (id) => isSessionInTurn(id) || isSessionTurnPendingCompletion(id),
+      drain: drainPersistQueue,
+    },
+  );
   registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
   registerFilePeerIpc();
   registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);

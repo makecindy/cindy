@@ -1,4 +1,5 @@
 import { Stack } from 'expo-router';
+import { useMemo } from 'react';
 import { Platform } from 'react-native';
 import { useAdaptiveWindow } from '../AdaptiveWindowContext';
 import { useTheme } from '@/theme';
@@ -16,10 +17,19 @@ export function SystemNavigationBack({ onPress, label, disabled = false, close =
 }) {
   const enabled = useSystemNavigationBack();
   const { colors } = useTheme();
+  // expo-router applies screen options in a layout effect. Keep this object
+  // stable across unrelated store updates, otherwise setOptions can feed a
+  // rerender back into this route indefinitely.
+  const screenOptions = useMemo(() => ({
+    headerShown: enabled && available,
+    headerTransparent: true,
+    headerShadowVisible: false,
+    headerBackVisible: false,
+    headerTitle: '',
+    headerTintColor: colors.textPrimary,
+  }), [available, colors.textPrimary, enabled]);
   return <>
-    <Stack.Screen options={{ headerShown: enabled && available, headerTransparent: true,
-      headerShadowVisible: false, headerBackVisible: false, headerTitle: '',
-      headerTintColor: colors.textPrimary }} />
+    <Stack.Screen options={screenOptions} />
     {enabled && available ? <Stack.Toolbar placement="left">
       <Stack.Toolbar.Button icon={close ? 'xmark' : 'chevron.backward'}
         accessibilityLabel={label} disabled={disabled} onPress={onPress} />

@@ -1,3 +1,5 @@
+import { useNavigationAttention } from '@/lib/navigationAttentionStore';
+import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 /**
  * SidebarTopNav —— 侧栏顶部常驻动作/导航列表(取代原 HorizontalTabbar)。
  * ---------------------------------------------------------------------------
@@ -63,6 +65,7 @@ export function SidebarTopNav({
   section?: SidebarTopNavSection;
 } = {}): React.ReactElement {
   const { t } = useTranslation();
+  const navigationCounts = useNavigationAttention();
   const navigate = useNavigate();
   const location = useLocation();
   const { activeKey, navigateToView } = useActiveMainView();
@@ -132,12 +135,15 @@ export function SidebarTopNav({
   // routes should continue to offer entry to Teammates, not a stale return.
   const isBotsView = location.pathname === '/bots' || location.pathname.startsWith('/bots/');
   const botsActionLabel = t(isBotsView ? 'sidebar.backToSessions' : 'sidebar.tabs.bots');
+  const badgeCount = isBotsView ? navigationCounts.tasks : navigationCounts.teammates;
+  const badgeLabel = t(isBotsView ? 'sidebar.taskAttentionCount' : 'sidebar.teammateUnreadCount', { count: badgeCount });
   const BotsActionIcon = isBotsView ? ArrowLeft : Bot;
   const botsRow = showScrollable ? (
     <button
       onClick={() => navigateToView(isBotsView ? 'cc-agent' : 'bots')}
       className={ROW_CLASS}
       aria-label={botsActionLabel}
+      aria-description={badgeCount > 0 ? badgeLabel : undefined}
     >
       <BotsActionIcon
         size={15}
@@ -145,6 +151,7 @@ export function SidebarTopNav({
         className="shrink-0 text-[var(--sidebar-nav-text)]"
       />
       <span className="leading-none">{botsActionLabel}</span>
+      <NavigationCountBadge count={badgeCount} label={badgeLabel} className="ml-auto" />
     </button>
   ) : null;
   if (section === 'rail') {
@@ -156,6 +163,8 @@ export function SidebarTopNav({
         <SidebarIconButton
           icon={BotsActionIcon}
           label={botsActionLabel}
+          aria-description={badgeCount > 0 ? badgeLabel : undefined}
+          badge={<NavigationCountBadge count={badgeCount} label={badgeLabel} />}
           onClick={() => navigateToView(isBotsView ? 'cc-agent' : 'bots')}
         />
       </div>

@@ -4,10 +4,10 @@ import { claudeBehaviorFlagsForSpawn, claudeToolSearchMode } from '../claude-beh
 import { shouldCloseSessionForCredentialSwitch } from '../codex-credential-switch.js';
 
 describe('claudeBehaviorFlagsForSpawn', () => {
-  it('preserves native subscription flags for independent Claude accounts', () => {
+  it('keeps Tool Search for retired independent Claude accounts; provider-oauth never keeps attribution', () => {
     const flags = claudeBehaviorFlagsForSpawn({ providerId: 'anthropic-work',
       nativeAuth: 'claude', credentialMode: 'provider-oauth', oauthConnected: () => true });
-    expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('1');
+    expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
     expect(flags.ENABLE_TOOL_SEARCH).toBe('auto');
     expect(claudeToolSearchMode('grok-work', 'provider-oauth', 'xai')).toBe('false');
   });
@@ -22,12 +22,11 @@ describe('claudeBehaviorFlagsForSpawn', () => {
     expect(oauthConnected).not.toHaveBeenCalled();
   });
 
-  it('keeps the CLI attribution default for subscription-connected non-gateway spawns (issue #758)', () => {
-    // oauth-bearer / provider-oauth / 未显式指定:claude-* 请求(含分类器 scope-gate
-    // 回落)可能直连 api.anthropic.com,归因块必须保留,否则分类器子请求被上游 429。
+  it('keeps the CLI attribution default for spawns that may use the local Claude Code login (issue #758)', () => {
+    // oauth-bearer / 未显式指定:CLI 可能用本机登录直连 api.anthropic.com,归因块必须保留,
+    // 否则分类器子请求被上游 429。
     const cases = [
       { credentialMode: 'oauth-bearer', providerId: 'anthropic', toolSearch: 'auto' },
-      { credentialMode: 'provider-oauth', providerId: 'openrouter-custom', toolSearch: 'false' },
       { credentialMode: undefined, providerId: undefined, toolSearch: 'auto' },
     ] as const;
     for (const { credentialMode, providerId, toolSearch } of cases) {
@@ -41,6 +40,18 @@ describe('claudeBehaviorFlagsForSpawn', () => {
       expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('1');
       expect(flags.CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS).toBe('1');
       expect(flags.ENABLE_TOOL_SEARCH).toBe(toolSearch);
+    }
+  });
+
+  it('provider-oauth spawns always go through the proxy and disable attribution, subscription or not', () => {
+    for (const oauthConnected of [true, false]) {
+      const flags = claudeBehaviorFlagsForSpawn({
+        credentialMode: 'provider-oauth',
+        providerId: 'openrouter-custom',
+        oauthConnected: () => oauthConnected,
+      });
+      expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
+      expect(flags.ENABLE_TOOL_SEARCH).toBe('false');
     }
   });
 

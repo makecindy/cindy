@@ -9,7 +9,7 @@ const read = (relativePath: string): string =>
 describe('remote Orca Worker creation context', () => {
   it('uses SSH-filtered candidates for remote-project models and provider selection', () => {
     const draft = read('features/cc-agent/NewMakerDraftRoute.tsx');
-    const start = draft.indexOf('const selection = resolveSshSessionModelSelection(');
+    const start = draft.indexOf('const selection = await loadSshSessionModelSelection(');
     const end = draft.indexOf('const newSession = await createSession(', start);
     expect(start).toBeGreaterThan(-1);
     const selection = draft.slice(start, end);
@@ -17,7 +17,8 @@ describe('remote Orca Worker creation context', () => {
     expect(selection).toContain('agentKind: capabilityAgentKind');
     expect(selection).toContain('if (!selection.ok)');
     // Behavioral filtering and source pinning are covered in sshSessionModelSelection.test.ts.
-    expect(read('components/settings/RemoteHostDetail.tsx')).toContain('resolveSshSessionModelSelection(');
+    expect(selection).toContain('target.hostId');
+    expect(read('components/settings/RemoteHostDetail.tsx')).toContain('loadSshSessionModelSelection(hostId)');
   });
   it('scopes capabilities, providers, and the nested model selector to the controlled device', () => {
     const popover = read('features/cc-agent/CreateWorkerPopover.tsx');
@@ -71,7 +72,7 @@ describe('remote Orca Worker creation context', () => {
     // 任一远程路径都不得回退到 controller key 判定。
     expect(selector).toContain('if (!deviceId) {');
     expect(selector).toContain('if (subscriptionDirectDisabledReason(id)) return true;');
-    expect(selector).toContain("if (provider?.source === 'user') return false;");
+    expect(selector).toContain("if (isCustomRoutedProvider(provider)) return false;");
     expect(selector).toContain("return id.startsWith('codex/') && !hasSavedKey;");
     expect(selector).toContain("if (remoteModelListStatus !== 'ready') return true;");
     expect(selector).toContain(

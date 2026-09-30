@@ -1,6 +1,7 @@
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { Button } from '@/components/ui/button';
 import { REMOTE_RESOURCE_GET_CHANNEL, type RemoteResourceGetRequest } from '@cindy/device-link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
@@ -22,8 +23,10 @@ export function RemoteBotSessionView() {
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
   const sessionId = bot?.sessionId;
+  const readOwner = useRef(getDataOwnerGeneration());
   useEffect(() => {
     let disposed = false;
+    const owner = getDataOwnerGeneration();
     setFailed(false);
     if (!deviceId || !bot?.online) return;
     const request: RemoteResourceGetRequest = {
@@ -36,7 +39,7 @@ export function RemoteBotSessionView() {
         REMOTE_RESOURCE_GET_CHANNEL,
         [request],
       );
-      if (disposed) return;
+      if (disposed || !isDataOwnerGenerationCurrent(owner)) return;
       const [resolved] = parseRemoteBots(
         { collectionId: 'teammates', items: [resource] },
         deviceId,
@@ -53,7 +56,7 @@ export function RemoteBotSessionView() {
       const value = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:get', [
         canonicalId,
       ]);
-      if (disposed) return;
+      if (disposed || !isDataOwnerGenerationCurrent(owner)) return;
       // A settings change or reconnect may finish while this GET is in flight.
       // Use the newer mirror when available; never publish the late response.
       const readIsCurrent = isSessionReadCurrent();
@@ -66,6 +69,7 @@ export function RemoteBotSessionView() {
       if (readIsCurrent) remoteProjectsStore.mergeDeviceSessions(deviceId, currentMirror?.deviceLinkDeviceName ?? bot.deviceName, [
         isSessionReadCurrent.mergeActivity(session),
       ]);
+      readOwner.current = owner;
       setReady({ ...resolved, sessionId: canonicalId });
       setValidatedSessionId(sessionId);
     })().catch(() => {
@@ -76,14 +80,12 @@ export function RemoteBotSessionView() {
     };
   }, [deviceId, botId, sessionId, bot?.online, bot?.deviceName, retry]);
 
-  useEffect(() => {
-    const read = () => {
-      if (document.visibilityState === 'visible' && bot && ready?.id === bot.id && ready.deviceId === bot.deviceId && validatedSessionId === bot.sessionId) markRemoteBotRead(bot.deviceId, bot.id, bot.lastReplyAt ?? 0);
-    };
-    read();
-    document.addEventListener('visibilitychange', read);
-    return () => document.removeEventListener('visibilitychange', read);
-  }, [bot?.deviceId, bot?.id, bot?.lastReplyAt, bot?.sessionId, ready?.sessionId, validatedSessionId]);
+  const acknowledge = useCallback((at: number) => {
+    if (isDataOwnerGenerationCurrent(readOwner.current) && bot?.online && !failed && ready?.id === bot.id && ready.deviceId === bot.deviceId
+      && validatedSessionId === bot.sessionId) {
+      markRemoteBotRead(bot.deviceId, bot.id, Math.min(at, bot.lastReplyAt ?? 0));
+    }
+  }, [bot, failed, ready, validatedSessionId]);
 
   if (bot && !failed && ready?.sessionId && ready.id === botId && ready.deviceId === deviceId) {
     return (
@@ -92,6 +94,7 @@ export function RemoteBotSessionView() {
         sessionIdProp={ready.sessionId}
         routeOwner
         botIdentity={ready}
+        onBotReadThrough={acknowledge}
         readOnly={!bot.online || validatedSessionId !== bot.sessionId || failed}
       />
     );

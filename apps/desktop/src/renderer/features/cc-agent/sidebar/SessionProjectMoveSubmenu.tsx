@@ -6,12 +6,13 @@ import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdow
 import { cn } from '@/lib/utils';
 
 export interface SessionProjectMoveSubmenuProps {
+  heading?: string;
   projectOptions: readonly FolderPickerOption[];
   currentWorkingDir?: string | null;
   isDialogue: boolean;
   onSelectProject: (workingDir: string) => void;
-  onBrowseProject: () => void;
-  onMoveToDialogue: () => void;
+  onBrowseProject?: () => void;
+  onMoveToDialogue?: () => void;
 }
 
 function normalizePath(value: string | null | undefined): string | null {
@@ -20,6 +21,7 @@ function normalizePath(value: string | null | undefined): string | null {
 }
 
 export function SessionProjectMoveSubmenu({
+  heading,
   projectOptions,
   currentWorkingDir,
   isDialogue,
@@ -33,7 +35,7 @@ export function SessionProjectMoveSubmenu({
   return (
     <>
       <div className="px-3 py-1.5 text-xs font-medium text-[var(--cmd-palette-item-meta)]">
-        {t('ccAgent.sidebar.sessionMenu.moveToProjectHeading')}
+        {heading ?? t('ccAgent.sidebar.sessionMenu.moveToProjectHeading')}
       </div>
       <div className="pending-queue-scroll -mr-1 max-h-[224px] overflow-x-hidden overflow-y-auto pr-1">
         {projectOptions.length > 0 ? (
@@ -68,23 +70,31 @@ export function SessionProjectMoveSubmenu({
           </div>
         )}
       </div>
-      <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
-      <DropdownMenuItem
-        onSelect={() => onBrowseProject()}
-        className="h-8 px-3 rounded-md text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-      >
-        <FolderPlus size={16} className="mr-2 shrink-0 text-[var(--folder-item-icon)]" />
-        {t('ccAgent.sidebar.sessionMenu.browseProjectFolder')}
-      </DropdownMenuItem>
-      <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
-      <DropdownMenuItem
-        disabled={isDialogue}
-        onSelect={() => onMoveToDialogue()}
-        className="h-8 px-3 rounded-md text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)] data-[disabled]:opacity-50 data-[disabled]:pointer-events-none"
-      >
-        <MessageCircle size={16} className="mr-2 shrink-0 text-[var(--folder-item-icon)]" />
-        {t('ccAgent.sidebar.sessionMenu.moveToDialogue')}
-      </DropdownMenuItem>
+      {(onBrowseProject || onMoveToDialogue) && (
+        <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
+      )}
+      {onBrowseProject && (
+        <DropdownMenuItem
+          onSelect={onBrowseProject}
+          className="h-8 px-3 rounded-md text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+        >
+          <FolderPlus size={16} className="mr-2 shrink-0 text-[var(--folder-item-icon)]" />
+          {t('ccAgent.sidebar.sessionMenu.browseProjectFolder')}
+        </DropdownMenuItem>
+      )}
+      {onMoveToDialogue && (
+        <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
+      )}
+      {onMoveToDialogue && (
+        <DropdownMenuItem
+          disabled={isDialogue}
+          onSelect={onMoveToDialogue}
+          className="h-8 px-3 rounded-md text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)] data-[disabled]:opacity-50 data-[disabled]:pointer-events-none"
+        >
+          <MessageCircle size={16} className="mr-2 shrink-0 text-[var(--folder-item-icon)]" />
+          {t('ccAgent.sidebar.sessionMenu.moveToDialogue')}
+        </DropdownMenuItem>
+      )}
     </>
   );
 }

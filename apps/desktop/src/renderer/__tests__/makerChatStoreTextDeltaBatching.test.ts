@@ -5208,6 +5208,9 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).queueInteractionLocks).toEqual([
       'new-owner-lock',
     ]);
+    // This session remains sticky-remote even after the local remote-project
+    // projection is cleared. Account teardown must not finalize it locally:
+    // the controlled Desktop owns the running task and its steer marker.
     expect(makerChatStore.getSnapshot(SESSION_ID).steeringQueueClientIds).toEqual([
       'already-steering',
     ]);

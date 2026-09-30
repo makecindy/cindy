@@ -18,6 +18,7 @@ import {
   SCHEDULE_INDEX_THROTTLE_TTL_MS,
 } from '@/session/scheduleIndex';
 import type { RemoteSessionScheduleInfo } from '@/session/sessionList';
+import { resolveMobileSessionRightStatus } from '@/session/sessionRightStatus';
 import { markSessionScheduleRunsRead } from '@/session/scheduleRunRead';
 
 function makerWithSchedules(
@@ -35,6 +36,31 @@ function makerWithSchedules(
 }
 
 describe('scheduleIndex', () => {
+  it.each(['lightweight', 'legacy'] as const)('reconciles recovered failure dots with task details through %s reads', async (source) => {
+    const failure = { id: 'failure', runId: 'failure', scheduleId: 'sched-1', scheduleName: 'Check',
+      scheduleStatus: 'active', sessionId: 'task', status: 'failed', firedAt: 1 };
+    const success = { ...failure, id: 'success', runId: 'success', status: 'success', firedAt: 2 };
+    const rows = [failure, success];
+    const maker = makerWithSchedules(async (id) => id === 'sched-1' ? rows : []);
+    const load = async () => source === 'lightweight'
+      ? loadLightweightSessionScheduleIndex('device', vi.fn().mockResolvedValue({ runs: rows }))
+      : loadSessionScheduleIndex(maker);
+    const dot = (info: RemoteSessionScheduleInfo) => resolveMobileSessionRightStatus({
+      livePhase: undefined, liveAttention: false, pendingInteractionCount: 0, running: false,
+      scheduleUnreadCount: info.unreadCount, scheduleHasUnreadFailedRun: info.hasUnreadFailedRun,
+    });
+    const recovered = (await load()).get('task')!;
+    expect(recovered.latestFailedRun).toBeUndefined();
+    expect(dot(recovered)).toBe('done');
+    expect(recovered.unreadRunIds).toEqual(['success']);
+
+    // A fresh failure must still be visible both in the task and on its row.
+    rows.push({ ...failure, id: 'new-failure', runId: 'new-failure', firedAt: 3 });
+    const failed = (await load()).get('task')!;
+    expect(failed.latestFailedRun?.runId).toBe('new-failure');
+    expect(dot(failed)).toBe('error');
+  });
+
   it.each([false, true])('peer recovery invalidates only its success or pending snapshot (pending=%s)', async (pending) => {
     resetScheduleIndexThrottleForTesting();
     let finish!: (value: Map<string, RemoteSessionScheduleInfo>) => void;

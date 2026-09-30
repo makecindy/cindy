@@ -145,7 +145,16 @@ afterEach(async () => {
   else Reflect.deleteProperty(process, 'resourcesPath');
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  if (root) await rm(root, { recursive: true, force: true });
+  if (root)
+    await rm(root, {
+      recursive: true,
+      force: true,
+      // Windows may briefly retain a lock/reclaim entry while the async
+      // version-store cleanup has just completed. Match the production
+      // cleanup retry policy so test teardown does not race that release.
+      maxRetries: 3,
+      retryDelay: 100,
+    });
 });
 function saveOriginal() {
   store.writeVersionJson(path.join(store.versionsRoot(h.profile), 'original.json'), original);

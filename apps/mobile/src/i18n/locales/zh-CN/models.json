@@ -65,7 +65,7 @@
     "restoreRecommended": "恢复推荐",
     "saveFailed": "未能保存，请重试。",
     "configure": "设置",
-    "syncFailed": "收藏未能同步。请重新打开重试；被控电脑可能需要更新。",
+    "syncFailed": "收藏未能同步。请重新打开重试；远程电脑上的 Cindy 可能需要更新。",
     "timeUnit": {
       "day": "天",
       "hour": "小时",

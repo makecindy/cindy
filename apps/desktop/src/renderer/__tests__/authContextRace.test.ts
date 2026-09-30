@@ -74,9 +74,8 @@ describe('AuthContext auth-state races', () => {
     expect(source).toContain('setDataOwnerGeneration(dataOwnerId, ownerGeneration);');
     expect(source).toContain('recentWorkdirsStore.setDataOwner(getDataOwnerGeneration());');
     expect(source).toContain('invalidateProvidersSnapshot();');
-    expect(source).toContain(
-      'publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);',
-    );
+    expect(source).toContain('publishDataOwnerGeneration(');
+    expect(source).toContain('{ finalizeSessions: ownerBoundaryCommitted && !initialOwnerHydration }');
     expect(source).toContain(
       '// Invalidate in-flight remote sends before the confirmation dialog resolves.',
     );

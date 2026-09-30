@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 import {
 	buildDependentMap,
 	collectChangedFiles,
@@ -63,13 +67,13 @@ const packageJsonByCwd = {
 	},
 };
 
-test("isWideFile covers test scheduler, lockfile, and CI workflows", () => {
+test("isWideFile keeps only repository-wide dependency and runner inputs", () => {
 	assert.equal(isWideFile("package.json"), true);
-	assert.equal(isWideFile("apps/desktop/package.json"), true);
+	assert.equal(isWideFile("apps/desktop/package.json"), false);
 	assert.equal(isWideFile("pnpm-lock.yaml"), true);
 	assert.equal(isWideFile("scripts/test-related.mjs"), true);
 	assert.equal(isWideFile("scripts/test-workspaces.config.mjs"), true);
-	assert.equal(isWideFile(".github/workflows/ci.yml"), true);
+	assert.equal(isWideFile(".github/workflows/ci.yml"), false);
 	assert.equal(isWideFile("apps/desktop/src/main/foo.ts"), false);
 });
 
@@ -81,14 +85,14 @@ test("isSkippableFile and isTestFile classify docs versus tests", () => {
 	assert.equal(isTestFile("apps/desktop/src/main/foo.ts"), false);
 });
 
-test("shouldRunTestRunner only when something outside apps/packages changed", () => {
+test("shouldRunTestRunner excludes documentation and workspace-only changes", () => {
 	assert.equal(
 		shouldRunTestRunner(["apps/desktop/src/main/foo.ts"]),
 		false,
 	);
 	assert.equal(
 		shouldRunTestRunner(["docs/dev-rules/desktop-development.md"]),
-		true,
+		false,
 	);
 	assert.equal(shouldRunTestRunner(["scripts/check-i18n.mjs"]), true);
 });
@@ -133,7 +137,7 @@ test("collectChangedFiles unions committed, staged, unstaged, and untracked file
 		base: "base123",
 		baseRef: "origin/main",
 	});
-	assert.deepEqual(calls[0], ["rev-parse", "--verify", "origin/main"]);
+	assert.ok(calls.some((args) => args.join(" ") === "rev-parse --verify upstream/main"));
 });
 
 test("collectChangedFiles falls back when git base cannot be resolved", () => {
@@ -215,8 +219,8 @@ test("planRelatedUnitTests skips markdown-only changes", () => {
 		workspaces,
 		packageJsonByCwd,
 	});
-	assert.equal(plan.mode, "related");
-	assert.equal(plan.runTestRunner, true);
+	assert.equal(plan.mode, "skip");
+	assert.equal(plan.runTestRunner, false);
 	assert.deepEqual(plan.runs, []);
 });
 
@@ -234,15 +238,24 @@ test("planRelatedUnitTests skips when there are no changes", () => {
 	});
 });
 
-test("planRelatedUnitTests drops deleted files from related args", () => {
+test("generated glossary and legal text retain their runner checks without business suites", () => {
+	for (const file of ["i18n/GLOSSARY.md", "docs/legal/notices/desktop-win.txt"]) {
+		const plan = planRelatedUnitTests({ changedFiles: [file], workspaces, packageJsonByCwd });
+		assert.equal(plan.mode, "related", file);
+		assert.equal(plan.runTestRunner, true, file);
+		assert.deepEqual(plan.runs, [], file);
+	}
+});
+
+test("planRelatedUnitTests runs the owner suite when a file is deleted", () => {
 	const plan = planRelatedUnitTests({
 		changedFiles: ["apps/desktop/src/main/gone.ts"],
 		workspaces,
 		packageJsonByCwd,
 		fileExists: () => false,
 	});
-	assert.equal(plan.mode, "skip");
-	assert.deepEqual(plan.runs, []);
+	assert.equal(plan.mode, "related");
+	assert.deepEqual(plan.runs, [{ cwd: "apps/desktop", name: "desktop", relatedFiles: null }]);
 });
 
 test("buildDependentMap and collectTransitiveDependents follow workspace:* edges", () => {
@@ -255,4 +268,62 @@ test("buildDependentMap and collectTransitiveDependents follow workspace:* edges
 		[...collectTransitiveDependents(["apps/desktop"], dependents)],
 		[],
 	);
+});
+
+test("workspace manifest and Vitest configuration changes stay in the affected dependency graph", () => {
+	for (const file of ["packages/maker-core/package.json", "packages/maker-core/vitest.config.ts"]) {
+		const plan = planRelatedUnitTests({ changedFiles: [file], workspaces, packageJsonByCwd });
+		assert.equal(plan.mode, "related");
+		assert.deepEqual(plan.runs.map(({ cwd, relatedFiles }) => [cwd, relatedFiles]), [
+			["apps/desktop", null], ["packages/maker-core", null],
+		]);
+	}
+});
+
+test("workflow edits validate the runner without scheduling every workspace", () => {
+	const plan = planRelatedUnitTests({
+		changedFiles: [".github/workflows/pr-design-basis.yml"], workspaces, packageJsonByCwd,
+	});
+	assert.equal(plan.mode, "related");
+	assert.equal(plan.runTestRunner, true);
+	assert.deepEqual(plan.runs, []);
+});
+
+test("a stale fork does not count upstream commits as local work, including from a worktree", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "related-git-base-"));
+	const repo = path.join(root, "repo");
+	fs.mkdirSync(repo);
+	// Git for Windows cannot open Node's \\.\nul device path as a config file.
+	const globalConfig = path.join(root, "empty.gitconfig");
+	fs.writeFileSync(globalConfig, "");
+	const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: globalConfig };
+	const git = (cwd, args) => execFileSync("git", args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	try {
+		git(repo, ["init", "-b", "main"]);
+		git(repo, ["config", "user.name", "Test"]);
+		git(repo, ["config", "user.email", "test@example.invalid"]);
+		git(repo, ["commit", "--allow-empty", "-m", "base"]);
+		git(repo, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+		fs.writeFileSync(path.join(repo, "upstream.ts"), "export const upstream = true;\n");
+		git(repo, ["add", "upstream.ts"]);
+		git(repo, ["commit", "-m", "upstream change"]);
+		git(repo, ["update-ref", "refs/remotes/upstream/trunk", "HEAD"]);
+		git(repo, ["symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/trunk"]);
+		assert.deepEqual(collectChangedFiles((args) => git(repo, args)).files, []);
+		const worktree = path.join(root, "task");
+		git(repo, ["worktree", "add", "-b", "task", worktree]);
+		fs.writeFileSync(path.join(worktree, "local.ts"), "export const local = true;\n");
+		const result = collectChangedFiles((args) => git(worktree, args));
+		assert.equal(result.baseRef, "refs/remotes/upstream/HEAD");
+		assert.deepEqual(result.files, ["local.ts"]);
+		git(repo, ["symbolic-ref", "--delete", "refs/remotes/upstream/HEAD"]);
+		git(repo, ["update-ref", "refs/remotes/upstream/main", "HEAD"]);
+		assert.deepEqual(collectChangedFiles((args) => git(worktree, args)).files, ["local.ts"]);
+		git(repo, ["update-ref", "-d", "refs/remotes/upstream/main"]);
+		assert.equal(collectChangedFiles((args) => git(worktree, args)).baseRef, "origin/main");
+		git(repo, ["update-ref", "-d", "refs/remotes/origin/main"]);
+		assert.equal(collectChangedFiles((args) => git(worktree, args)).baseRef, "main");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
 });

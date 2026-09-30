@@ -11,8 +11,7 @@
  *      有记忆才讲怎么记。伙伴不需要先去「发现」自己会什么 —— 开局就写在
  *      提示词里。判定信号用 runtime 已解析的 toolset id(等价于 Hermes 的
  *      valid_tool_names)。
- *   3. **技能索引整份进提示词**:每个技能的名字与一句话描述都可见,不靠
- *      模型自己翻目录。
+ *   3. **技能入口进提示词**:小目录直接可见，大目录提供完整检索入口，正文按需读。
  *
  * 为什么必须这么做(2026-08-21 真机实证):伙伴会话里 cindy_docs 明明挂载成功
  * (日志 instance_resolved),但 make_pptx / list_tools 的调用次数是 0 —— 模型
@@ -48,7 +47,7 @@ export interface BotSystemPromptInput {
   /** SOUL:身份正本。空则由调用方兜底。 */
   identity: string;
   capabilities: BotPromptCapabilitySignals;
-  /** 伙伴自有技能索引(全部,不截断)。 */
+  /** 宿主投影的技能入口；原文件与完整目录由存储层保留。 */
   skillIndex: readonly BotPromptSkillIndexEntry[];
   /** 队友名册(见 buildBotTeammateRoster)。没有队友时不传。 */
   teammates?: readonly { id: string; name: string; description?: string | null }[];
@@ -247,10 +246,8 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
 }
 
 /**
- * 技能索引:全部技能的名字 + 一句话描述。
- *
- * 照搬 Hermes 的口径 —— 索引里**不省略任何技能名**。模型看得见名字才知道
- * 自己有这份本事;正文按需再读。
+ * 技能索引:宿主提供的有界运行时目录。大目录由原生检索 Skill 引导按需
+ * 读取完整目录与原文件；此处不再次展开整个存储目录。
  */
 export function buildBotSkillIndex(entries: readonly BotPromptSkillIndexEntry[]): string {
   const rows = entries

@@ -10,7 +10,7 @@
     },
     "title": "Debug logs",
     "record": "Record debug logs",
-    "hint": "Record phone connection, recovery, scrolling, keyboard and performance details. Off by default; keeps up to 7 days and 8 MB. Never uploaded automatically.",
+    "hint": "Record phone connection, recovery, file preview and playback, scrolling, keyboard and performance details. Off by default; keeps up to 7 days and 8 MB. Never uploaded automatically.",
     "export": "Export debug logs",
     "clear": "Clear logs",
     "busy": "Working…",
@@ -19,10 +19,20 @@
     "cancel": "Cancel",
     "exportHint": "Share detailed local logs for troubleshooting. No conversation content or credentials.",
     "options": "Log options",
-    "uploadCopied": "Uploaded. Code {{code}} copied.",
-    "uploadSucceeded": "Uploaded. Code {{code}}."
+    "uploadCopied": "Logs uploaded. Code {{code}} copied",
+    "uploadSucceeded": "Logs uploaded. Code {{code}}"
   },
   "title": "Settings",
+  "appearance": {
+    "title": "Appearance",
+    "modeLabel": "Appearance Mode",
+    "options": {
+      "system": "Auto (follow system)",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "saveFailed": "Failed to save appearance mode. The previous setting will return after restart."
+  },
   "language": {
     "title": "Language",
     "hint": "Affects the app UI only. Agent replies follow the agent's own language settings.",
@@ -37,20 +47,22 @@
   },
   "version": {
     "sectionTitle": "Version",
-    "currentLabel": "Current Version",
-    "bundleVersion": "App package {{version}}",
-    "otaVersion": "OTA version {{version}}",
+    "appVersion": "Version {{version}}",
+    "updateMethodInApp": "Updates: installed in the app, applied after a restart",
+    "updateMethodPackage": "Updates: download and install the new version",
+    "updateMethodUnavailable": "Development build; in-app updates aren’t available",
     "pairedDesktopVersion": "Matching desktop release {{version}}",
-    "devNoOta": "Development build; OTA updates unavailable",
     "checkAction": "Check for Updates",
     "testFlightCheckAction": "Check for Content Updates",
     "checking": "Checking",
-    "updating": "Updating",
     "checkingAccessibility": "Checking for updates",
     "testFlightCheckingAccessibility": "Checking for content updates",
     "testFlightUpdateManaged": "TestFlight manages test build updates",
     "testFlightNoContentUpdate": "No content updates are available. Check TestFlight for new test builds.",
     "testFlightContentUpdateUnavailable": "This build cannot check for content updates. Check TestFlight for new test builds.",
+    "googlePlayUpdateManaged": "Google Play manages app version updates",
+    "googlePlayNoContentUpdate": "No content updates are available. Check Google Play for new app versions.",
+    "googlePlayContentUpdateUnavailable": "This build cannot check for content updates. Check Google Play for new app versions.",
     "bundleUpdateFound": "App package update available",
     "upToDate": "Already up to date",
     "bundleUpToDateNoOta": "App package is up to date; this version does not support OTA updates",
@@ -134,7 +146,8 @@
     "runtime": "Runtime",
     "otaMarker": "OTA Marker",
     "emergencyLaunch": "Emergency Launch",
-    "emergencyLaunchYes": "Yes (OTA cannot apply in this run)"
+    "emergencyLaunchYes": "Yes (OTA cannot apply in this run)",
+    "otaVersion": "OTA version"
   },
   "legal": {
     "sectionTitle": "Legal",
@@ -151,6 +164,8 @@
     "analyticsResetAction": "Reset"
   },
   "account": {
+    "logoutConfirmTitle": "Sign out?",
+    "logoutConfirmRunning": "Some sessions are still running. They keep running on your computer, but this phone stops receiving and controlling them, and every account and local mirror saved on this phone is cleared.",
     "logoutHint": "Signing out clears every account saved on this phone and its local remote mirror. Sessions on your computer are not affected.",
     "logout": "Sign Out",
     "loggingOut": "Signing out",
@@ -183,9 +198,12 @@
     "resetAccessibility": "Restore the default phone name",
     "emptyError": "Device name cannot be empty.",
     "deviceInitializing": "The device is still initializing. Try again later.",
-    "saving": "Saving…",
-    "saved": "Saved.",
-    "restoringDefault": "Restoring the default name…",
-    "restoredDefault": "Restored the default name."
+    "restoredDefault": "Restored the default name.",
+    "resetAction": "Restore Default Name",
+    "clearAccessibility": "Clear name",
+    "discardTitle": "Discard Changes?",
+    "discardBody": "Your changes to the device name haven’t been saved.",
+    "discardConfirm": "Discard Changes",
+    "keepEditing": "Keep Editing"
   }
 }

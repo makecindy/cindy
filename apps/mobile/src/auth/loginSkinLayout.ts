@@ -1,6 +1,6 @@
 /**
  * loginSkinLayout —— 移动端登录皮肤 750 坐标 stage 布局引擎 + 面板内几何常量 +
- * 42s 倒计时纯函数(PR4a,implementation-plan Step 5 WHAT1/WHAT3;**纯数据/纯函数,
+ * 60s 倒计时纯函数(PR4a,implementation-plan Step 5 WHAT1/WHAT3;**纯数据/纯函数,
  * 零 react-native**,node vitest 可直接 import 校验)。
  *
  * 参数权威链(照抄,禁止目测):
@@ -9,7 +9,7 @@
  *    347:2884 / 358:434 实测 inner 几何)与 stage 解析(designHeight clamp [600,1800]);
  *  - 面板内组件几何 = figma-component-spec §4/§5.1,与桌面
  *    apps/desktop/src/renderer/components/login/loginDesignTokens.ts 同源对齐;
- *  - 倒计时 = implementation-plan Step 3a 契约(v5 冻结显示数学,42s 双端拍板)。
+ *  - 倒计时 = DESIGN §16.4(60s 与服务端冷却一致,保留绝对 deadline 显示数学)。
  */
 
 /** 750 设计稿坐标系下的绝对几何框(单位:设计 px)。 */
@@ -677,10 +677,10 @@ export function resolveDeletionBubbleFrame(
 /** disabled 态文字不透明度(figma §4.3 disable 态文字 80%)。 */
 export const LOGIN_DISABLED_TEXT_OPACITY = 0.8;
 
-/* ── 42s 倒计时纯函数(implementation-plan Step 3a 契约,v5 冻结显示数学) ── */
+/* ── 60s 倒计时纯函数(implementation-plan Step 3a 契约,v5 冻结显示数学) ── */
 
-/** 双端拍板 42s(figma §4.7 `42 秒后可重新发送` 247:1614)。 */
-export const RESEND_COUNTDOWN_SECONDS = 42;
+/** 双端 60s,与 auth-server 单目标发送冷却一致(DESIGN §16.4)。 */
+export const RESEND_COUNTDOWN_SECONDS = 60;
 /** tick 周期 1000ms(每 tick 重算,非递减计数)。 */
 export const RESEND_COUNTDOWN_TICK_MS = 1000;
 
@@ -689,7 +689,7 @@ export function createResendDeadline(now: number): number {
   return now + RESEND_COUNTDOWN_SECONDS * 1000;
 }
 
-/** 显示数学(v5 冻结):remaining = max(0, ceil((deadline - now)/1000));首帧显示 42。 */
+/** 显示数学(v5 冻结):remaining = max(0, ceil((deadline - now)/1000));首帧显示 60。 */
 export function resendCountdownRemaining(deadline: number, now: number): number {
   return Math.max(0, Math.ceil((deadline - now) / 1000));
 }

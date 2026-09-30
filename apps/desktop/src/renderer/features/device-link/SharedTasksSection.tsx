@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Crown, FileText, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer, type SharedTaskOwnedItem } from '@cindy/device-link';
-import { Button } from '@/components/ui/button';
 import { SessionCard } from '@/features/cc-agent/sidebar/SessionCard';
 import { SessionItem } from '@/features/cc-agent/sidebar/SessionItem';
 import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
@@ -151,7 +150,7 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
   if (!isAuthenticated) return null;
   return <>{(owned.length > 0 || joined.length > 0) && <section className="mx-3 mb-2 border-b border-[var(--border-default)] pb-3" aria-label={t('sharedTask.title')}
     onContextMenu={event => {
-      // Shared entries have no context menu; do not open the sidebar's blank-space menu.
+      // Task rows handle their own menus; group whitespace must not open the sidebar menu.
       event.preventDefault();
       event.stopPropagation();
     }}>
@@ -161,7 +160,7 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
         {collapsed ? <ChevronRight size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
         {t('sharedTask.title')}
       </button>
-      <Button variant="secondary" className="w-8 shrink-0 border-transparent bg-transparent p-0" aria-label={t('sharedTask.join')} title={t('sharedTask.join')} onClick={() => setJoinOpen(true)}><Plus size={16} aria-hidden /></Button>
+      <button type="button" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]" aria-label={t('sharedTask.join')} title={t('sharedTask.join')} onClick={() => setJoinOpen(true)}><Plus size={15} aria-hidden /></button>
     </div>
     {!collapsed && rows.map(row => {
       if (row.role === 'joined') {

@@ -611,6 +611,8 @@ describe('completion card in the input area', () => {
     await waitFor(() => expect(h.api).toHaveBeenCalledWith('session', 'completion', 'build'));
   });
   it('uses the single personal version from an old completion instead of switching to its historical build', async () => {
+    let releaseVersions!: () => void;
+    const versionsReady = new Promise<void>((resolve) => { releaseVersions = resolve; });
     h.merge = {
       id: 'source-update',
       status: 'conflict',
@@ -626,11 +628,14 @@ describe('completion card in the input area', () => {
     });
     vi.stubGlobal('electronAPI', {
       cindyMakeTest: h.api,
-      getCindyVersions: vi.fn().mockResolvedValue({
-        currentId: 'original',
-        selectedId: 'original',
-        versions: [{ id: 'personal', kind: 'personal', available: true, compatible: true }],
-        switching: false,
+      getCindyVersions: vi.fn(async () => {
+        await versionsReady;
+        return {
+          currentId: 'original',
+          selectedId: 'original',
+          versions: [{ id: 'personal', kind: 'personal', available: true, compatible: true }],
+          switching: false,
+        };
       }),
       actCindyVersion: switchVersion,
     });
@@ -645,9 +650,14 @@ describe('completion card in the input area', () => {
         }}
       />,
     );
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'cindyMake.versions.switchPersonal' }),
-    );
+    const switchPersonal = await screen.findByRole('button', { name: 'cindyMake.versions.switchPersonal' });
+    // The label is visible before the asynchronous version list enables it.
+    expect((switchPersonal as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(switchPersonal);
+    expect(switchVersion).not.toHaveBeenCalled();
+    await act(async () => { releaseVersions(); });
+    await waitFor(() => expect((switchPersonal as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(switchPersonal);
     await waitFor(() => expect(switchVersion).toHaveBeenCalledWith('switch', 'personal'));
     expect(h.api.mock.calls.some(([, , action]) => action === 'open-build')).toBe(false);
   });

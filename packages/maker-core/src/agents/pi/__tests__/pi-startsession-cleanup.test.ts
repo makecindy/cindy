@@ -1707,22 +1707,59 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   });
 
   it('preserves system denial when a durable Subagent approval resolver fails', async () => {
+    const t0 = performance.now();
+    const events: Array<{ t: number; k: string; n?: number }> = [];
+    const mark = (k: string, n?: number): void => {
+      events.push({ t: Math.round(performance.now() - t0), k, ...(n === undefined ? {} : { n }) });
+    };
     const run = pendingSubagentRun({
       toolName: 'write',
       input: { path: 'a.txt' },
     }, {}, 'input');
-    mockRunDiscovery().mockResolvedValue([run]);
-    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
-    const handle = await new PiAgent(buildDeps()).startSession(opts());
-    handle.setInteractionResolver(vi.fn(async () => { throw new Error('resolver failed'); }));
-
-    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
-      expect.any(String),
-      run.taskId,
-      'approval',
-      expect.objectContaining({ value: 'system-deny' }),
-    ), { timeout: 3_000 });
-    await handle.close();
+    const list = mockRunDiscovery().mockImplementation(async () => {
+      mark('list', list.mock.calls.length);
+      return [run];
+    });
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockImplementation(async () => {
+      mark('control', control.mock.calls.length + 1);
+      return 1;
+    });
+    const resolver = vi.fn(async () => {
+      mark('resolver-throw');
+      throw new Error('resolver failed');
+    });
+    let handle: Awaited<ReturnType<PiAgent['startSession']>> | undefined;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession(opts());
+      mark('startSession-returned');
+      mark('resolver-install-start');
+      handle.setInteractionResolver(resolver);
+      mark('resolver-install-end');
+      mark('waitFor-start');
+      try {
+        await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+          expect.any(String),
+          run.taskId,
+          'approval',
+          expect.objectContaining({ value: 'system-deny' }),
+        ), { timeout: 3_000 });
+        mark('waitFor-pass');
+      } catch (err) {
+        mark('waitFor-fail', control.mock.calls.length);
+        console.error('[pi-startsession-cleanup.diag]', JSON.stringify({
+          host: `${process.platform} ${process.version}`,
+          notLinuxProof: process.platform !== 'linux',
+          events,
+          listCalls: list.mock.calls.length,
+          controlCalls: control.mock.calls.length,
+          resolverCalls: resolver.mock.calls.length,
+        }));
+        throw err;
+      }
+    } finally {
+      await handle?.close();
+      mark('handle-closed');
+    }
   });
 
   it('never answers durable Subagent approvals owned by another runtime', async () => {

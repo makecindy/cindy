@@ -439,6 +439,9 @@ export function IOSSimulatorTabBody({
   const pointerGestureRef = useRef<PointerGesture | null>(null);
   const gestureSequenceRef = useRef(0);
   const streamProfileRef = useRef<StreamProfileName>('balanced');
+  // Transport defaults must not replace a profile the user explicitly selected.
+  const streamProfileCustomizedRef = useRef(false);
+  const streamProfileRequestRef = useRef(0);
   const profileRouteRef = useRef<{
     routeKey: string | null;
     viewerToken: string | null;
@@ -1287,6 +1290,7 @@ export function IOSSimulatorTabBody({
       const route = routeFor(attachedInstance);
       const routeKey = `${route.instanceId}:${route.generation}`;
       const viewerIdentity = viewerIdentityRef.current;
+      const requestId = streamProfileRequestRef.current;
       if (!viewerIdentity || viewerIdentity.routeKey !== routeKey) return null;
       if (!(await viewerIdentity.ready)) return null;
       if (viewerIdentityRef.current?.viewerToken !== viewerIdentity.viewerToken) return null;
@@ -1296,7 +1300,11 @@ export function IOSSimulatorTabBody({
         viewerToken: viewerIdentity.viewerToken,
         ...viewerStreamProfile(profileName, useNativeProfile),
       });
-      if (result.ok) {
+      if (
+        result.ok &&
+        requestId === streamProfileRequestRef.current &&
+        viewerIdentityRef.current === viewerIdentity
+      ) {
         nativeProfileAppliedRef.current = useNativeProfile
           ? {
               routeKey: `${route.instanceId}:${route.generation}`,
@@ -1312,21 +1320,32 @@ export function IOSSimulatorTabBody({
   const applyStreamProfile = useCallback(
     async (requested: StreamProfileName) => {
       if (!attachedInstance) return;
+      const requestId = ++streamProfileRequestRef.current;
+      const viewerIdentity = viewerIdentityRef.current;
+      const requestIsCurrent = () =>
+        requestId === streamProfileRequestRef.current &&
+        viewerIdentityRef.current === viewerIdentity;
       const next = requested === 'experimental60' && !nativeH264Active ? 'high' : requested;
       const previous = streamProfile;
+      const previouslyCustomized = streamProfileCustomizedRef.current;
       setStreamProfile(next);
       streamProfileRef.current = next;
+      streamProfileCustomizedRef.current = true;
       setActionError(null);
       try {
         const result = await sendStreamProfile(next, nativeH264Active);
+        if (!requestIsCurrent()) return;
         if (result && !result.ok) {
           setStreamProfile(previous);
           streamProfileRef.current = previous;
+          streamProfileCustomizedRef.current = previouslyCustomized;
           setActionError(formatActionError(result));
         }
       } catch {
+        if (!requestIsCurrent()) return;
         setStreamProfile(previous);
         streamProfileRef.current = previous;
+        streamProfileCustomizedRef.current = previouslyCustomized;
         setActionError(t('rightSidebar.iosSimulator.operationErrorWithRecovery'));
       }
     },
@@ -1378,8 +1397,10 @@ export function IOSSimulatorTabBody({
   }, [attachedInstance, ctx.sessionId, nativeRecoveryPending, refresh, viewerRouteKey]);
 
   useEffect(() => {
+    streamProfileRequestRef.current += 1;
     setStreamProfile('balanced');
     streamProfileRef.current = 'balanced';
+    streamProfileCustomizedRef.current = false;
     nativeProfileAppliedRef.current = null;
     if (!attachedInstance || attachedInstance.lifecycleState !== 'ready') return;
   }, [
@@ -1405,6 +1426,12 @@ export function IOSSimulatorTabBody({
       nativeActive: nativeH264Active,
     };
     profileRouteRef.current = nextRoute;
+    if (
+      previous?.nativeSelected !== nativeH264Selected ||
+      previous?.nativeActive !== nativeH264Active
+    ) {
+      streamProfileRequestRef.current += 1;
+    }
     if (!attachedInstance || attachedInstance.lifecycleState !== 'ready' || !viewerReadyToken)
       return;
     const viewerChanged = previous?.viewerToken !== viewerReadyToken;
@@ -1415,8 +1442,11 @@ export function IOSSimulatorTabBody({
         previous?.nativeSelected ||
         streamProfileRef.current === 'experimental60'
       ) {
-        const nextProfile =
-          streamProfileRef.current === 'experimental60' ? 'high' : streamProfileRef.current;
+        const nextProfile = !streamProfileCustomizedRef.current
+          ? 'balanced'
+          : streamProfileRef.current === 'experimental60'
+            ? 'high'
+            : streamProfileRef.current;
         setStreamProfile(nextProfile);
         streamProfileRef.current = nextProfile;
         void sendStreamProfile(nextProfile, false).catch(() => undefined);
@@ -1429,20 +1459,38 @@ export function IOSSimulatorTabBody({
       }
       return;
     }
+    const nextProfile = streamProfileCustomizedRef.current ? streamProfileRef.current : 'high';
     const applied = nativeProfileAppliedRef.current;
-    if (applied?.routeKey === viewerRouteKey && applied.profile === streamProfileRef.current)
+    if (applied?.routeKey === viewerRouteKey && applied.profile === nextProfile) {
+      setStreamProfile(nextProfile);
+      streamProfileRef.current = nextProfile;
       return;
-    void sendStreamProfile(streamProfileRef.current, true)
+    }
+    const requestId = ++streamProfileRequestRef.current;
+    const viewerIdentity = viewerIdentityRef.current;
+    const requestIsCurrent = () =>
+      requestId === streamProfileRequestRef.current && viewerIdentityRef.current === viewerIdentity;
+    void sendStreamProfile(nextProfile, true)
       .then((result) => {
-        if (result && !result.ok) setActionError(formatActionError(result));
+        if (!requestIsCurrent()) return;
+        if (result?.ok) {
+          setStreamProfile(nextProfile);
+          streamProfileRef.current = nextProfile;
+        } else if (result) {
+          setActionError(formatActionError(result));
+        }
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (requestIsCurrent())
+          setActionError(t('rightSidebar.iosSimulator.operationErrorWithRecovery'));
+      });
   }, [
     attachedInstance,
     formatActionError,
     nativeH264Active,
     nativeH264Selected,
     sendStreamProfile,
+    t,
     viewerReadyToken,
     viewerRouteKey,
   ]);

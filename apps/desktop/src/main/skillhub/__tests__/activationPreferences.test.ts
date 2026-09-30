@@ -112,7 +112,7 @@ describe('Skill activation preferences', () => {
     const descriptor = (await import('../../maker-host/built-in-skills')).builtInSkillDescriptors(root, root)[0]!;
     fs.mkdirSync(descriptor.absolutePath, { recursive: true });
     fs.mkdirSync(path.dirname(descriptor.nativeClaudePath), { recursive: true });
-    fs.rmSync(descriptor.nativeClaudePath, { force: true });
+    fs.rmSync(descriptor.nativeClaudePath, { recursive: true, force: true });
     fs.symlinkSync(
       descriptor.absolutePath,
       descriptor.nativeClaudePath,

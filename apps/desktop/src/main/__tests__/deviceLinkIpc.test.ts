@@ -6,6 +6,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const capabilities = vi.hoisted(() => ({ canUseDeviceLink: true }));
 
+// Transport windows are outside this in-memory IPC handler harness.
+vi.mock('../device-link/filePeer', () => ({
+  tryUploadPeerAttachment: vi.fn(async () => null),
+}));
+
 // electron / serverApiClient / device-link host 全部替换为测试替身,
 // 只测 handler 纯函数体
 vi.mock('electron', () => ({

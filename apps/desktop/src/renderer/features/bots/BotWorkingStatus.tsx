@@ -1,3 +1,6 @@
+import { useAgentIslandActivity } from '@/state/agentIslandActivity';
+import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
+import { readWorkingPhase, WORKING_PHASE_KEYS } from '../../../shared/workingStatus';
 import type { CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage as Message } from '@/lib/makerChatStore';
@@ -7,9 +10,10 @@ import { localizePlainAgentStatus, resolvePlainAgentPhase } from '@/features/cc-
 import { WorkingStatusText } from '@/features/cc-agent/WorkingStatusText';
 
 export function BotWorkingStatus({
-  visible, status, messages, startedAt, foregroundRunning, backgroundWorkActive, avatar, inputWidth, sessionId,
+  visible, status, messages, startedAt, foregroundRunning, backgroundWorkActive, avatar, inputWidth, sessionId, remote,
 }: {
   sessionId?: string;
+  remote?: { deviceId: string; botId: string };
   visible: boolean;
   status: string;
   messages: readonly Message[];
@@ -23,13 +27,18 @@ export function BotWorkingStatus({
   // A Workflow can run alongside the foreground turn. Only background-only
   // work lacks reliable foreground events for a more specific caption.
   const processingOnly = backgroundWorkActive && !foregroundRunning;
-  const phase = processingOnly ? 'processing' : resolvePlainAgentPhase(status, messages, startedAt);
-  const polished = useWorkingStatusCopy(sessionId, startedAt, phase, visible && !processingOnly);
+  const localActivity = useAgentIslandActivity(sessionId ?? '');
+  const remoteActivity = useRemoteSessionActivity(sessionId ?? '', remote?.deviceId);
+  const activity = remote ? remoteActivity : localActivity;
+  const waiting = status === 'Waiting on approval' || status === 'Waiting on input';
+  const sharedPhase = !waiting && activity?.phase === 'running' ? readWorkingPhase(activity.workingPhase) : null;
+  const phase = processingOnly ? 'processing' : sharedPhase ?? resolvePlainAgentPhase(status, messages, startedAt);
+  const polished = useWorkingStatusCopy(sessionId, startedAt, phase, visible && !processingOnly, remote);
   // Terminal events bypass cadence and opacity: never linger with working copy.
   if (!visible) return null;
   const text = processingOnly
     ? t('ccAgent.agentStatus.processing')
-    : localizePlainAgentStatus(status, messages, startedAt, t);
+    : sharedPhase ? t(WORKING_PHASE_KEYS[sharedPhase]) : localizePlainAgentStatus(status, messages, startedAt, t);
   return (
     <div
       data-testid="bot-working-indicator"

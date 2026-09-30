@@ -8,7 +8,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('lucide-react-native', () => ({ Plus: () => null }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: h.account }) }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }) }));
-vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: () => null }));
+vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: (props: any) => createElement('button', { 'data-testid': props.testID, onClick: props.onPress }, props.label) }));
 vi.mock('@/platform/chrome/NativePullDownMenu', () => ({ usesNativePullDownMenu: () => true, NativePullDownMenu: (props: any) => { h.menu = props; return props.children; } }));
 vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: (props: any) => { h.button = props; return null; } }));
 vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: () => null }));
@@ -30,7 +30,8 @@ it('uses real menu hosts, prefers the remembered host, and dispatches receipts a
   await act(async () => { h.sheet.onClosed(); h.sheet.onClosed(); }); expect(h.created).toHaveBeenCalledExactlyOnceWith(hosts[1], ref);
 });
 it('opens the sole capable host, never an empty device', async () => {
-  await render([]); await act(async () => h.button.onPress()); expect(h.sheet).toBeNull(); expect(h.alert).toHaveBeenCalled();
+  await render([]); await act(async () => h.button.onPress()); expect(h.sheet).toBeNull();
+  expect(h.alert).toHaveBeenCalledWith('devices.companionProfile.create', 'devices.companions.noCreateHosts');
   await render([hosts[0]]); await act(async () => h.button.onPress()); expect(h.sheet.deviceId).toBe('mac');
 });
 it('fences late native menu and create dismissal callbacks after account replacement', async () => {

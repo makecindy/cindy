@@ -1,4 +1,4 @@
-import { installPiBinaryUpdate } from './pi-self-update.js';
+import { createPiKernelManager, type PiKernelManager } from './pi-kernel-manager.js';
 /**
  * apps/desktop/src/main/agent-binaries/index.ts
  *
@@ -48,14 +48,15 @@ import {
 } from '../manifestService.js';
 import { ProgressNormalizer } from '../updateProgressNormalizer.js';
 import { createLogger } from '../logger.js';
-import { consumeStartupBinaryUpdateMarker } from './startup-update.js';
+import { consumeStartupBinaryUpdateMarker, type StartupBinaryUpdateScope } from './startup-update.js';
 
-let startupCheckForUpdates: boolean | undefined;
+let startupUpdateScope: StartupBinaryUpdateScope | undefined;
 
-function resolveUpdateCheck(checkForUpdates?: boolean): boolean {
-  startupCheckForUpdates ??= app.isPackaged
+function resolveUpdateCheck(kind: AgentBinaryKind, checkForUpdates?: boolean): boolean {
+  startupUpdateScope ??= app.isPackaged
     && consumeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion());
-  return checkForUpdates ?? startupCheckForUpdates;
+  if (checkForUpdates !== undefined) return checkForUpdates;
+  return startupUpdateScope === true || (Array.isArray(startupUpdateScope) && startupUpdateScope.includes(kind));
 }
 
 /**
@@ -249,13 +250,15 @@ function getBase(kind: AgentBinaryKind): BinaryProvisioner {
 
 const lastReadyPath = new Map<AgentBinaryKind, string>();
 
-/** Called only by the authorized Pi management service while holding its mutation lock. */
+let piKernelManager: PiKernelManager | undefined;
+export function getPiKernelManager(): PiKernelManager {
+  return piKernelManager ??= createPiKernelManager(path.join(app.getPath('userData'), 'pi'),
+    () => lastReadyPath.get('pi'), binary => { lastReadyPath.set('pi', binary); });
+}
+
+/** Managed commands and About use the same installer and durable selection. */
 export async function updateReadyPiBinary(force: boolean): Promise<string> {
-  const current = lastReadyPath.get('pi');
-  if (!current) throw new Error('Pi is not installed in Cindy');
-  const result = await installPiBinaryUpdate(path.join(app.getPath('userData'), 'pi'), current, force);
-  lastReadyPath.set('pi', result.binaryPath);
-  return result.version;
+  return getPiKernelManager().install({ source: 'upstream', force });
 }
 
 export function getReadyBinaryPath(kind: AgentBinaryKind): string | undefined {
@@ -350,6 +353,29 @@ export async function prepare(
   const cfg = CONFIG[kind];
   const { step, totalSteps, broadcastProgress = true, broadcastFailure = true } = opts;
 
+  if (kind === 'pi') {
+    try {
+      const manager = getPiKernelManager();
+      if (manager.hasSelection()) {
+        // Preserve the existing packaged offline policy; an explicit selection only
+        // changes version arbitration, not whether startup requires a manifest.
+        if (app.isPackaged && !await fetchManifest(undefined, opts.signal).catch(() => null)) {
+          lastReadyPath.delete('pi');
+          return { ready: false, error: 'manifest_failed', downloaded: false };
+        }
+        const selected = await manager.selectedBinary(opts.signal);
+        if (selected) {
+          lastReadyPath.set('pi', selected);
+          return { ready: true, path: selected, downloaded: false };
+        }
+      }
+    } catch {
+      // Do not resurrect a higher leftover version after an explicit downgrade.
+      lastReadyPath.delete('pi');
+      return { ready: false, error: 'pi_selection_invalid', downloaded: false };
+    }
+  }
+
   // ── dev mode 短路 (与老 vendor/{claude,codex}/binaryProvisioner.ts 等价) ──
   if (!app.isPackaged) {
     const devPath = findDevBinary({
@@ -365,7 +391,7 @@ export async function prepare(
     return { ready: false, error: `${kind} dev binary not found for ${getPlatformKey()}`, downloaded: false };
   }
 
-  opts = { ...opts, checkForUpdates: resolveUpdateCheck(opts.checkForUpdates) };
+  opts = { ...opts, checkForUpdates: resolveUpdateCheck(kind, opts.checkForUpdates) };
 
   // ── packaged Linux: CDN manifest 段优先,失败静默回落 runtime fallback ─────
   // 2026-08 起 Linux 与 mac/win 同链:scripts 侧发版把 claude/codex 资产上传
@@ -647,7 +673,7 @@ export async function peekNeedsDownload(
 ): Promise<boolean> {
   // dev 模式永不下载 (findDevBinary 命中 / 缺失都不走 OSS)
   if (!app.isPackaged) return false;
-  opts = { ...opts, checkForUpdates: resolveUpdateCheck(opts.checkForUpdates) };
+  opts = { ...opts, checkForUpdates: resolveUpdateCheck(kind, opts.checkForUpdates) };
   // Linux(cc/codex):manifest 有段 → 走通用 CDN peek(与 mac/win 同口径);
   // 无段(旧 canary / 首发渠道)→ 只看私有 fallback 是否已就位(fs 快查)。
   // peek 时 manifest 未缓存则做一次跨 vendor 的短超时探测(3s,single-flight +

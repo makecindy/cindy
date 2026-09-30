@@ -25,7 +25,7 @@ export function CindyDeviceRow({
   current: CindyDeviceOption;
   options: readonly CindyDeviceOption[];
   selected: boolean;
-  subtitle: string;
+  subtitle: ReactNode;
   timestamp: string;
   typing?: boolean;
   onOpen: () => void;
@@ -59,8 +59,7 @@ export function CindyDeviceRow({
       <span className="pointer-events-none relative shrink-0">
         <BotAvatar bot={bot} size="md" />
         <BotConnectionStatus
-          online={current.online}
-          activityLabel={typing ? subtitle : undefined}
+          online={'deviceId' in bot && bot.connectionKnown === false ? null : current.online}
           deviceName={current.label}
         />
       </span>
@@ -91,15 +90,16 @@ export function CindyDeviceRow({
           current={current}
           onSelect={onSelect}
           className={cn(
-            'pointer-events-auto col-span-2 -mx-2 border-0 bg-transparent text-12 text-inherit focus-visible:ring-inset',
-            'enabled:hover:bg-sidebar-item-hover enabled:active:bg-sidebar-item-hover',
+            'pointer-events-auto col-span-2 -mx-2 text-12 text-inherit focus-visible:ring-inset',
+            '[--button-face-bg:transparent] [--button-face-border:transparent] [--button-face-outset:0px]',
+            'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--sidebar-item-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--sidebar-item-hover)]',
             selected &&
-              'enabled:hover:bg-[color-mix(in_srgb,currentColor_10%,transparent)] enabled:active:bg-[color-mix(in_srgb,currentColor_16%,transparent)]',
+              'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,currentColor_10%,transparent)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,currentColor_16%,transparent)]',
           )}
         />
         <span
           className={cn('truncate text-12 leading-4', mutedClass, typing && 'italic')}
-          title={subtitle}
+          title={typeof subtitle === 'string' ? subtitle : undefined}
         >
           {subtitle}
         </span>

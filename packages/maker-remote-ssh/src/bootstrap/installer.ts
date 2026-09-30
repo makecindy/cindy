@@ -17,13 +17,14 @@
 
 import type { RemoteHost } from '../RemoteHost.js';
 import claudeLatest from '../../../../tools/claude/latest.json';
-import codexLatest from '../../../../tools/codex/latest.json';
+import codexLatest from '../../../../tools/codex-package/latest.json';
 import piLatest from '../../../../tools/pi/latest.json';
 import {
   BOOTSTRAP_SH,
   BUNDLED_NODE_VERSION,
   NODE_DIST_BASE_URL_DEFAULT,
   PROBE_BUNDLED_NODE_SH,
+  VERIFY_CODEX_LAYOUT_SH,
   REMOTE_SERVER_SCHEMA_VERSION,
 } from './bootstrap-script.js';
 
@@ -192,6 +193,7 @@ set -u
 AGENT_KIND="${'$'}{1:-}"
 SERVER_VER="${'$'}{2:-v1}"
 CLAUDE_RELEASE="${'$'}{3:-}"
+CODEX_RELEASE="${'$'}{4:-}"
 case "$AGENT_KIND" in
   claude-code) BIN_NAME="claude" ;;
   codex)       BIN_NAME="codex"  ;;
@@ -201,8 +203,9 @@ INSTALL_DIR="$HOME/.xdt-server/$SERVER_VER"
 NODE_DIR="$INSTALL_DIR/node"
 NODE_BIN="$NODE_DIR/bin/node"
 SENTINEL="$INSTALL_DIR/.installed-$AGENT_KIND"
-# codex: standalone install via install.sh -> isolated CODEX_HOME (binary at
-#        $CODEX_HOME/packages/standalone/current/codex). claude-code: npm install
+# codex: official full package via install.sh -> isolated CODEX_HOME.
+# current/codex is the installer's compatibility symlink to bin/codex;
+# legacy standalone installs use the same entrypoint. claude-code: npm install
 #        -> node_modules/.bin/claude. Stay in sync with bootstrap-script.ts.
 if [ "$AGENT_KIND" = "codex" ]; then
   BIN_PATH="$INSTALL_DIR/codex-home/packages/standalone/current/codex"
@@ -215,10 +218,15 @@ ${PROBE_BUNDLED_NODE_SH}
 # when we run --version. If bundled node is missing, the version check will
 # silently fail and we'll report NOT_INSTALLED, which is the right outcome.
 export PATH="$NODE_DIR/bin:$PATH"
+${VERIFY_CODEX_LAYOUT_SH}
 if [ -f "$SENTINEL" ] && { [ -x "$BIN_PATH" ] || [ -f "$BIN_PATH" ]; }; then
+  if [ "$AGENT_KIND" = "codex" ] && ! verify_codex_layout; then
+    printf 'NOT_INSTALLED\n'; exit 0
+  fi
   V="$("$BIN_PATH" --version 2>/dev/null | head -1 || true)"
   if [ -n "$V" ]; then
-    if [ "$AGENT_KIND" != "claude-code" ] || [ "${'$'}{V%% *}" = "$CLAUDE_RELEASE" ]; then
+    if { [ "$AGENT_KIND" != "claude-code" ] || [ "${'$'}{V%% *}" = "$CLAUDE_RELEASE" ]; } &&
+       { [ "$AGENT_KIND" != "codex" ] || [ "${'$'}{V##* }" = "$CODEX_RELEASE" ]; }; then
       printf 'READY %s\n' "$V"
       exit 0
     fi
@@ -234,6 +242,7 @@ printf 'NOT_INSTALLED\n'; exit 0
     agentKind,
     REMOTE_SERVER_SCHEMA_VERSION,
     PINNED_CLAUDE_CODE_VERSION,
+    PINNED_CODEX_RELEASE_VERSION,
   ].map(shellQuoteArg).join(' ');
   const result = await host.exec(`bash -l -s -- ${args}`, {
     input: probeScript,
@@ -605,8 +614,8 @@ function binaryName(kind: RemoteAgentKind): string {
 /**
  * 跟 bootstrap-script.ts / installer.ts probe shell (line 97-101) 的 BIN_PATH
  * 分支保持一致:
- *   - codex 用 install.sh 装成 standalone, 二进制落在 CODEX_HOME 下
- *     ($INSTALL_DIR/codex-home/packages/standalone/current/codex)
+ *   - codex 用 install.sh 安装完整 codex-package，保留官方 current/codex
+ *     兼容入口（新布局指向 bin/codex，旧 standalone 是实际二进制）
  *   - claude-code 走 npm install, 在 $INSTALL_DIR/node_modules/.bin/claude
  * 任一端改路径都要同步 — 否则 RUN_AGENT_ONE_SHOT 等消费 binaryPath 的链路会
  * 执行不存在的路径, 已安装的 agent 也会跑不起来。

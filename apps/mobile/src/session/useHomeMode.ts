@@ -14,9 +14,11 @@ interface Snapshot {
   hydrated: boolean;
   mode: HomeMode;
   lastTeammate: LastTeammateIdentity | null;
+  /** Startup recovery only; explicit mode selection must land on the roster. Never persisted. */
+  restoreLastTeammate: boolean;
   saveFailed: boolean;
 }
-const initial: Snapshot = { hydrated: false, mode: 'tasks', lastTeammate: null, saveFailed: false };
+const initial: Snapshot = { hydrated: false, mode: 'tasks', lastTeammate: null, restoreLastTeammate: true, saveFailed: false };
 interface Entry { snapshot: Snapshot; revision: number; loading?: Promise<void> }
 const entries = new Map<string, Entry>();
 const listeners = new Set<() => void>();
@@ -69,7 +71,12 @@ export function useHomeMode() {
       });
     });
   }, [entry, owner]);
-  const setMode = useCallback((mode: HomeMode) => update({ mode }), [update]);
+  const setMode = useCallback((mode: HomeMode) => {
+    // Fence recovery before hydration publishes a remembered teammate or mounts its pane.
+    // Keeping this in the shared in-memory snapshot also covers route remounts.
+    if (owner) publish(entry, { restoreLastTeammate: false });
+    return update({ mode });
+  }, [entry, owner, update]);
   const rememberTeammate = useCallback((identity: LastTeammateIdentity | null) => update({ lastTeammate: identity }), [update]);
   const selectTeammate = useCallback((identity: LastTeammateIdentity) => update({ mode: 'teammates', lastTeammate: identity }), [update]);
   return { ...snapshot, owner, setMode, rememberTeammate, selectTeammate };

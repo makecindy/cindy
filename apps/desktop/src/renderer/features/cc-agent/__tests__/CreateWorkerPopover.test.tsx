@@ -273,6 +273,24 @@ describe('CreateWorkerPopover', () => {
     expect(initialTask.className).toContain('h-[96px]');
   });
 
+  it('keeps the draft when clicking the scrim and closes via the explicit button', () => {
+    const onClose = vi.fn();
+    render(<CreateWorkerPopover open onClose={onClose} onCreate={vi.fn()} />);
+
+    const initialTask = screen.getByPlaceholderText(
+      'orca.createWorker.initialTaskPlaceholder',
+    ) as HTMLTextAreaElement;
+    fireEvent.change(initialTask, { target: { value: 'Draft a plan' } });
+    const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-10');
+    fireEvent.click(panel!.previousElementSibling!);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(initialTask.value).toBe('Draft a plan');
+
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.closeAria' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it('labels the worker role as a name and exposes an explanation', () => {
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
 

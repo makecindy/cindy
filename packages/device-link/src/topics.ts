@@ -54,6 +54,8 @@ export function parseFsWatchTopic(topic: string): string | null {
 export type SessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
 export interface SessionActivityPayload {
+  /** Optional public generation category; unknown values must use a generic caption. */
+  workingPhase?: string;
   sessionId: string;
   phase: SessionActivityPhase;
   compactDetail: string;

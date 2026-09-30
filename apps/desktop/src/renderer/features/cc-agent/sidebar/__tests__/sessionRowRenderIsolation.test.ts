@@ -66,6 +66,10 @@ vi.mock('react-router-dom', () => ({
   useNavigate: () => vi.fn(),
 }));
 
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ dataOwnerId: 'menu-owner', isAuthenticated: true }),
+}));
+
 vi.mock('@/contexts/PrRefsContext', () => {
   const EMPTY: unknown[] = [];
   // usePrActions 的真实实现保证 value 恒定;mock 同样给稳定引用,

@@ -1,6 +1,7 @@
 import { ChevronLeft } from "lucide-react-native";
 import { Pressable, StyleSheet } from "react-native";
-import { useTheme, iconSize } from "@/theme";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
+import { useTheme, iconSize, iconStroke } from "@/theme";
 
 export function RemoteDesktopBackButton({
   label,
@@ -16,9 +17,10 @@ export function RemoteDesktopBackButton({
       accessibilityLabel={label}
       onPress={onPress}
       testID="remoteDesktop.back"
-      style={styles.button}
+      style={({ pressed }) => [styles.button, pressed && mobileInteractionStyles.pressed]}
     >
-      <ChevronLeft size={iconSize.xl} color={colors.textPrimary} />
+      {/* 与共享 ScreenBackButton 同档:iconSize.action + iconStroke.regular。 */}
+      <ChevronLeft size={iconSize.action} strokeWidth={iconStroke.regular} color={colors.textPrimary} />
     </Pressable>
   );
 }

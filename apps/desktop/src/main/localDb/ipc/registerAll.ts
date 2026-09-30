@@ -1,3 +1,4 @@
+import { registerCompanionImport } from '../../bot-import/registration.js';
 import { registerTaskTagsIpc } from './taskTags';
 import { registerRoutineRemoteResources } from '../../routines/remote.js';
 import { registerRoutinesIpc } from '../../routines/service.js';
@@ -260,6 +261,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
   registerBotIpc();
+  registerCompanionImport();
   registerRoutinesIpc();
   registerRoutineRemoteResources(botRemoteManagement);
   registerBotRemoteResourceProvider(botRemoteManagement);

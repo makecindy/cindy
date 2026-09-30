@@ -134,4 +134,14 @@ describe('nextCronOrMonthlyFire (dispatch)', () => {
     // Standard cron: Feb has no 31, Feb 1 already past → next is March 1 09:00 CST
     expect(result).toBe(Date.UTC(2026, 2, 1, 1, 0));
   });
+
+  it('monthly preset in the DST fall-back overlap does not skip the month', () => {
+    // 2026-11-01 06:31Z = 01:31 EST (second pass of the repeated 01:xx hour).
+    // `45 1 1 * *` fires at wall 01:45 on the 1st; the earlier occurrence
+    // (05:45Z) is in the past, which used to push the fire to Dec 1 and skip
+    // November entirely.
+    const from = Date.UTC(2026, 10, 1, 6, 31, 0);
+    const result = nextCronOrMonthlyFire('45 1 1 * *', from, 'America/New_York');
+    expect(result).toBe(Date.UTC(2026, 10, 1, 6, 45, 0));
+  });
 });

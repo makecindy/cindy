@@ -140,6 +140,7 @@ describe('useFeishuBot', () => {
     const hook = renderHook(() => useFeishuBot());
 
     await waitFor(() => expect(hook.result.current.service).toBe('lark'));
+    expect(hook.result.current.hasLoadedState).toBe(true);
     act(() => {
       hook.result.current.setAppId('cli_1234567890');
       hook.result.current.setAppSecret('sec_test');

@@ -11,11 +11,16 @@
  * true,IPC 返回后一次性填充)。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 
 import type { ProviderView } from '@cindy/model-providers';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { refreshLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
+import {
+  getLocalCatalogFailure,
+  subscribeLocalCatalogFailure,
+  type LocalCatalogFailure,
+} from '@/lib/localCatalogLoadState';
 import {
   getCachedProvidersSnapshot,
   hasProvidersSnapshotLoadFailed,
@@ -28,6 +33,7 @@ export interface UseProvidersReturn {
   providerOrder: string[];
   ownerGeneration: number | null;
   loading: boolean;
+  error: LocalCatalogFailure | null;
   /** A refresh failed; loading still means no usable snapshot for existing readiness guards. */
   loadFailed: boolean;
   refetch: () => Promise<boolean>;
@@ -46,6 +52,7 @@ export interface UseProvidersReturn {
  * 只缓存"快照"不缓存"是否在拉取中",故不破坏 refetch 的现有刷新语义。
  */
 export function useProviders(): UseProvidersReturn {
+  const error = useSyncExternalStore(subscribeLocalCatalogFailure, getLocalCatalogFailure, getLocalCatalogFailure);
   const { dataOwnerId } = getDataOwnerGeneration();
   const [{ snapshot }, setSnapshotState] = useState(() => ({
     snapshot: getCachedProvidersSnapshot(),
@@ -74,6 +81,7 @@ export function useProviders(): UseProvidersReturn {
     providerOrder: currentSnapshot?.providerOrder ?? [],
     ownerGeneration: currentSnapshot?.ownerGeneration ?? null,
     loading: currentSnapshot == null,
+    error,
     loadFailed: hasProvidersSnapshotLoadFailed(),
     refetch,
   };

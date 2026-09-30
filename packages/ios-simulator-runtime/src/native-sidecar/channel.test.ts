@@ -448,6 +448,33 @@ describe("IOSSimulatorNativeSidecarChannel", () => {
     await channel.stop();
   });
 
+  it("rejects pending HID input on helper timeout exit and never replays it after recovery", async () => {
+    const { channel, processes } = harness();
+    await channel.start();
+    const down = channel.request(command("beginTouch"));
+    const move = channel.request(command("moveTouch"));
+    const rejected = Promise.all([
+      expect(down).rejects.toMatchObject({ code: "PROCESS_EXITED" }),
+      expect(move).rejects.toMatchObject({ code: "PROCESS_EXITED" }),
+    ]);
+    processes[0]!.stderr.write("Native HID gesture delivery timed out.\n");
+    processes[0]!.exit(2);
+    await rejected;
+    expect(channel.state).toBe("failed");
+    await expect(channel.request(command("endTouch"))).rejects.toMatchObject({
+      code: "UNAVAILABLE",
+    });
+    expect(processes[0]!.writes).toHaveLength(2);
+    await channel.restart();
+    expect(processes[1]!.writes).toHaveLength(0);
+    const release = channel.request(command("releaseInput"));
+    const request = writtenRequest(processes[1]!.writes[0]!);
+    expect(request.op).toBe("releaseInput");
+    processes[1]!.stdout.write(reply(request.id as string, {}));
+    await release;
+    await channel.stop();
+  });
+
   it("parks after the crash budget and allows explicit re-arm", async () => {
     const { channel, launcher, processes } = harness({ maxCrashes: 2 });
     await channel.start();
@@ -644,6 +671,119 @@ describe("IOSSimulatorNativeSidecarChannel", () => {
       op: "stopStream",
       params: { streamId: "stream-1" },
     });
+    await channel.stop();
+  });
+
+  it("tolerates one in-flight frame after a local stop without terminating the sidecar (#5250)", async () => {
+    const { channel, processes } = harness();
+    await channel.start();
+    const controller = new AbortController();
+    const streamPromise = channel.streamFrames(command("startStream"), {
+      signal: controller.signal,
+      acknowledgeFrames: true,
+      onFrame: () => undefined,
+    });
+    processes[0]!.stdout.write(reply("sidecar-1", { streamId: "stream-1" }));
+    controller.abort();
+    await expect(streamPromise).resolves.toMatchObject({
+      endReason: "aborted",
+    });
+
+    // The Helper produces frames on a background queue; a frame that crossed
+    // stdio before it observed stopStream lands after the Host tombstone.
+    processes[0]!.stdout.write(streamFrame(1));
+    await Promise.resolve();
+    expect(channel.state).toBe("running");
+    expect(channel.crashCount).toBe(0);
+
+    // The Helper's terminal end for the stopped stream is still accepted.
+    processes[0]!.stdout.write(streamEnd("aborted"));
+    await Promise.resolve();
+    expect(channel.state).toBe("running");
+
+    const next = channel.request(command("availability"));
+    await vi.waitFor(() => expect(processes[0]!.writes).toHaveLength(3));
+    processes[0]!.stdout.write(reply("sidecar-3", { ready: true }));
+    await expect(next).resolves.toEqual({ ready: true });
+
+    // Once the Helper confirmed the end, further frames are unsolicited
+    // protocol traffic and keep the fail-closed behavior.
+    processes[0]!.stdout.write(streamFrame(2));
+    await vi.waitFor(() => expect(channel.state).toBe("failed"));
+    expect(channel.crashCount).toBe(1);
+    await channel.stop();
+  });
+
+  it("closes the late-frame window when the Helper end lands behind a local stop in the frame queue (#5253)", async () => {
+    const { channel, processes } = harness();
+    await channel.start();
+    const controller = new AbortController();
+    let releaseFrame!: () => void;
+    const frameGate = new Promise<void>((resolve) => {
+      releaseFrame = resolve;
+    });
+    const streamPromise = channel.streamFrames(command("startStream"), {
+      signal: controller.signal,
+      acknowledgeFrames: true,
+      onFrame: () => frameGate,
+    });
+    processes[0]!.stdout.write(reply("sidecar-1", { streamId: "stream-1" }));
+    // A frame callback is still running when the local stop and then the
+    // Helper's own end are both queued behind it.
+    processes[0]!.stdout.write(streamFrame(1));
+    controller.abort();
+    processes[0]!.stdout.write(streamEnd("aborted"));
+    releaseFrame();
+    await expect(streamPromise).resolves.toMatchObject({
+      endReason: "aborted",
+    });
+
+    // The Helper already confirmed the end, so a further frame is unsolicited.
+    processes[0]!.stdout.write(streamFrame(2));
+    await vi.waitFor(() => expect(channel.state).toBe("failed"));
+    expect(channel.crashCount).toBe(1);
+    await channel.stop();
+  });
+
+  it("fails closed when a locally stopped stream keeps emitting beyond the late-frame budget (#5250)", async () => {
+    const { channel, processes } = harness();
+    await channel.start();
+    const controller = new AbortController();
+    const streamPromise = channel.streamFrames(command("startStream"), {
+      signal: controller.signal,
+      acknowledgeFrames: true,
+      onFrame: () => undefined,
+    });
+    processes[0]!.stdout.write(reply("sidecar-1", { streamId: "stream-1" }));
+    controller.abort();
+    await expect(streamPromise).resolves.toMatchObject({
+      endReason: "aborted",
+    });
+
+    // Acknowledged streams have at most one frame in flight, so a second
+    // late frame means the Helper ignored stopStream.
+    processes[0]!.stdout.write(streamFrame(1));
+    await Promise.resolve();
+    expect(channel.state).toBe("running");
+    processes[0]!.stdout.write(streamFrame(2));
+    await vi.waitFor(() => expect(channel.state).toBe("failed"));
+    expect(channel.crashCount).toBe(1);
+    await channel.stop();
+  });
+
+  it("keeps rejecting late frames for streams the Helper already ended", async () => {
+    const { channel, processes } = harness();
+    await channel.start();
+    const streamPromise = channel.streamFrames(command("startStream"), {
+      onFrame: () => undefined,
+    });
+    processes[0]!.stdout.write(reply("sidecar-1", { streamId: "stream-1" }));
+    processes[0]!.stdout.write(streamEnd("eof"));
+    await expect(streamPromise).resolves.toMatchObject({ endReason: "eof" });
+
+    processes[0]!.stdout.write(streamFrame(1));
+    await vi.waitFor(() => expect(channel.state).toBe("failed"));
+    expect(channel.crashCount).toBe(1);
     await channel.stop();
   });
 

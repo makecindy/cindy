@@ -20,7 +20,13 @@
     "allowOnceAccessibility": "권한 요청 한 번 허용",
     "allowOnceConfirm": "한 번 허용 확인",
     "highRisk": "고위험",
-    "autoReviewUnavailable": "자동 리뷰를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요."
+    "autoReviewUnavailable": "자동 리뷰를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요.",
+    "fullAccessConfirm": {
+      "title": "전체 접근을 활성화할까요?",
+      "description": "전체 접근은 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. {{appName}}가 작업 공간 밖의 파일을 수정하고 네트워크 명령을 묻지 않고 실행할 수 있습니다. 기본 제공 고위험 작업은 계속 확인을 요청합니다.",
+      "confirm": "전체 접근 활성화",
+      "cancel": "현재 권한 유지"
+    }
   },
   "planMode": {
     "label": "플랜 모드",
@@ -197,7 +203,8 @@
     "photoNotReadable": "이 사진은 지금 읽을 수 없습니다(iCloud에서 다운로드가 완료되지 않았을 수 있습니다). 나중에 다시 시도하세요."
   },
   "pluginSetup": {
-    "completeOnDesktop": "원격 컴퓨터에서 설정을 완료하세요. 이 카드는 자동으로 업데이트됩니다.",
+    "remoteDesktop": "데스크톱 열기",
+    "completeOnDesktop": "원격 데스크톱으로 컴퓨터를 조작하여 설정하세요. 로그인, 인증 및 인증 정보 저장은 모두 해당 컴퓨터에서 이루어지며 이 카드는 자동으로 업데이트됩니다.",
     "chooseOne": "설정 방법을 하나 선택하세요",
     "progress": "{{satisfied}}/{{total}} 완료",
     "desktopActionHint": "컴퓨터에서 {{action}}",
@@ -266,7 +273,6 @@
     },
     "queue": {
       "count": "{{count}}개",
-      "readOnlyHint": "협업은 읽기 전용이며 컴퓨터의 요청만 표시합니다.",
       "empty": "대기 중인 요청 없음",
       "hint": {
         "plan_review": "계획을 확인하고 필요하면 수정을 요청하세요. 승인한 뒤 컴퓨터에서 계속 실행합니다.",
@@ -279,6 +285,7 @@
     }
   },
   "companion": {
+    "permissionRequest": "{{name}} 님이 확인을 기다리고 있어요",
     "operation": "작업",
     "details": "세부 정보",
     "fields": {
