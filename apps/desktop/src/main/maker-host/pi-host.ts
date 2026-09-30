@@ -2036,9 +2036,12 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       const model = getActiveCatalog()
         .providers.find((provider) => provider.id === providerId)
         ?.models.pi?.find((entry) => entry.id === modelId);
+      // 模型不在目录里 → 拿不到结论，调用方保持快照不变。
       if (!model) return undefined;
-      // 目录未声明档位（efforts 为空）→ 拿不到结论，交给调用方保持快照不变。
-      return model.efforts.length > 0 ? [...model.efforts] : undefined;
+      // `efforts: []` 是**有效结论**：用户在设置里显式声明了「该模型不支持思考」。
+      // 把它折成 undefined 会让对账退回「保持旧快照」，于是刚保存的关闭声明在当前
+      // 会话不生效（仍按启动时的非空档位继续发 set_thinking_level）。
+      return [...model.efforts];
     },
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,

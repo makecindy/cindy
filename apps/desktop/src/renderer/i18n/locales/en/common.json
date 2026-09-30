@@ -2387,7 +2387,8 @@
             "medium": "Medium",
             "high": "High",
             "xhigh": "Extra high",
-            "max": "Max"
+            "max": "Max",
+            "ultra": "Max+"
           }
         },
         "kindFilter": {

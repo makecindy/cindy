@@ -6487,33 +6487,28 @@ export class PiAgent extends BaseAgent {
      * 只对齐**档位集合**(决定通道是否存在),不代用户改档位记忆:`set_thinking_level` 的
      * 具体档位仍由会话自己的 effort 决定。拿不到结论(undefined)时保持快照不变,不猜。
      */
-    const refreshThinkingTiersOnSwitch = async (
+    const resolveThinkingTiersForSwitch = (
       nextModel: string,
       nextRequestedProviderId: string | null | undefined,
-    ): Promise<void> => {
+    ): { tiers: Effort[]; from: readonly Effort[] } | null => {
       const specProviderId = resolveProviderForModel(nextModel, nextRequestedProviderId);
       if (specProviderId === PI_PROVIDER_ID) {
         // 网关路由的档位不在本机声明面内(设置里没有该入口)。
-        return;
+        return null;
       }
       const declared = this.deps.readModelCatalogThinkingTiers?.(
         resolveSourceProvider(specProviderId),
         nextModel,
       );
-      if (!declared) return;
-      // 与快照同口径(启动时也是这批档位);声明为空数组 = 显式「不支持思考」,同样要落定。
+      if (!declared) return null;
+      // 空数组 = 显式「不支持思考」，同样是有效结论（上一轮把 efforts:[] 当成 undefined
+      // 会让「刚保存的关闭声明」在对账层又退回保留旧快照，关闭不生效）。
       const next = [...declared] as Effort[];
       const current = activeEffortSnapshot ?? [];
       if (current.length === next.length && current.every((tier, index) => tier === next[index])) {
-        return;
+        return null;
       }
-      activeEffortSnapshot = next;
-      deps.logger.info('pi: thinking tiers realigned from the active catalog', {
-        model: nextModel,
-        providerId: specProviderId,
-        from: current,
-        to: next,
-      });
+      return { tiers: next, from: current };
     };
     const switchModel = async (
       model: string,
@@ -6571,7 +6566,20 @@ export class PiAgent extends BaseAgent {
       };
       // 思考档位对账同样必须在同路由 no-op **之前**(与图片能力同一位置):否则用户
       // 「声明完不动模型」永远走那条早返回,活着的子进程仍是启动时的零档位快照。
-      await refreshThinkingTiersOnSwitch(model, requestedProviderId);
+      //
+      // **只算不落定**:这里是切模的最早入口,后面还有目录成员校验 / effort 校验 /
+      // set_model RPC,任何一步失败都会停在旧模型 —— 提前改写快照会让随后的思考开关与
+      // effort 校验按「失败目标」的档位执行。落定交给成功路径(与 nextEffortSnapshot 同一处),
+      // 失败则完全不动(不猜、不回滚,因为从没改过)。
+      const pendingThinkingTiers = resolveThinkingTiersForSwitch(model, requestedProviderId);
+      if (pendingThinkingTiers) {
+        deps.logger.info('pi: thinking tiers will realign from the active catalog', {
+          model,
+          providerId: resolveProviderForModel(model, requestedProviderId),
+          from: pendingThinkingTiers.from,
+          to: pendingThinkingTiers.tiers,
+        });
+      }
       // 能力对账必须在同路由 no-op **之前**:心跳与「声明后切回同模型」走的都是那条早返回。
       // 无目录变化时这里只花一次内存查找(见函数注释),心跳不受影响。
       await refreshImageCapabilityOnSwitch(model, requestedProviderId);
@@ -6581,6 +6589,9 @@ export class PiAgent extends BaseAgent {
         requestedProviderId !== null &&
         Object.is(requestedProviderId, mutableProviderId)
       ) {
+        // 同路由 no-op 不会失败(不发 set_model),所以这里就是安全的落定点:否则
+        // 「声明完不动模型」永远对不上档位快照。
+        if (pendingThinkingTiers) activeEffortSnapshot = pendingThinkingTiers.tiers;
         if (setOpts?.effort) {
           assertStartupEffortAllowed(activeEffortSnapshot, setOpts.effort);
         }
@@ -6795,7 +6806,11 @@ export class PiAgent extends BaseAgent {
       mutableModel = model;
       mutableWireModel = wireModel;
       mutablePiProviderId = provider;
-      activeEffortSnapshot = nextEffortSnapshot;
+      // 成功落定：优先用本次对账读到的目录结论（用户在会话期间声明过），
+      // 否则用启动/切模快照解析出的档位。失败路径走不到这里，快照保持旧模型的值。
+      activeEffortSnapshot = pendingThinkingTiers
+        ? pendingThinkingTiers.tiers
+        : nextEffortSnapshot;
       if (setOpts && Object.hasOwn(setOpts, 'providerId')) {
         mutableProviderId = setOpts.providerId;
       } else if (provider !== PI_PROVIDER_ID) {

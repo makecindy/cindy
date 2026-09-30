@@ -4638,6 +4638,66 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("does not realign the thinking tier snapshot when the model switch fails", async () => {
+    // 对账发生在切模的最早入口（成员校验 / effort 校验 / set_model RPC 之前）。若在那里
+    // 就改写 activeEffortSnapshot，set_model 被拒后子进程仍停在旧模型，快照却已是失败
+    // 目标的档位 —— 随后的思考开关与 effort 校验会按错误模型执行。落定只允许在成功路径。
+    //
+    // 用 set_model RPC 失败（success:false）而不是「模型不在目录」：后者对账返回
+    // undefined、压根不进污染分支，测不到东西。
+    const declared = { tiers: ["low", "medium", "high", "max"] as string[] | undefined };
+    // 只拦 set_model；get_state 等其余命令必须走默认桩，否则会话起不来。
+    const defaultHandler = captured.requestHandler;
+    captured.requestHandler = async (command) => {
+      if (command.type === "set_model") return { success: false, error: "injected failure" };
+      return defaultHandler
+        ? await defaultHandler(command)
+        : command.type === "get_state"
+          ? { success: true, data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } } }
+          : { success: true, data: {} };
+    };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "tier-rollback",
+              name: "Tier Rollback",
+              baseUrl: "http://tier-rollback.test",
+              api: "openai-completions",
+              models: [
+                { id: "model-a", input: ["text"], thinkingLevelMap: { high: "high" } },
+                { id: "model-b", input: ["text"], thinkingLevelMap: { low: "low" } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelCatalogThinkingTiers: (providerId, modelId) =>
+        providerId === "tier-rollback" && modelId === "model-b" ? declared.tiers : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "thinking-tier-rollback",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "tier-rollback",
+    });
+
+    // 切到 model-b（目录里有，声明了四档），但 set_model 失败 → 仍停在 model-a。
+    await expect(handle.setModel!("model-b", { providerId: "tier-rollback" })).rejects.toThrow();
+    expect(captured.runtimeModel).toBe("model-a");
+
+    // 快照必须仍是 model-a 的（只有 high）。若被 model-b 的四档污染，max 会被当合法档位
+    // 直接下发；快照仍是 model-a 时 assertStartupEffortAllowed 必须拒 —— 抛错即证据。
+    captured.requests.length = 0;
+    await expect(handle.setEffort!("max")).rejects.toThrow(/not available in this session/);
+    expect(
+      captured.requests.filter((request) => request.type === "set_thinking_level"),
+    ).toHaveLength(0);
+    await handle.close();
+  });
+
   it("rejects images when the declaration flips to unsupported without a model switch", async () => {
     // 反向对账：会话启动时快照是「支持图片」，用户后来把声明改成不支持且不切模 ——
     // 先查快照就放行会把图片发给一个已声明不支持的模型。对账必须在信任快照之前跑。
