@@ -1302,7 +1302,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('deferSessionRuntimeAxisMutation({');
     expect(setModel).toContain('pendingPatch: pendingAxisPatch');
     expect(registerSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
-    expect(setModel).toContain('const result = routeExplicit');
+    expect(setModel).toMatch(/const result(?::[^;\n]+)? = routeExplicit\s*\? await applyRuntimeSetModelChange\(/);
     expect(setModel).toContain('acceptSessionRuntimeAxisMutation({');
     expect(setModel).toContain("runtimeAgentKind !== 'pi' &&");
     expect(setModel).toContain('(routeExplicit || internalOptions.effortExplicit === true)');
